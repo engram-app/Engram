@@ -39,7 +39,7 @@ defmodule EngramWeb.SearchController do
     tags = params["tags"]
     folder = params["folder"]
     type = params["type"]
-    cross_vault = Map.get(params, "cross_vault", false)
+    cross_vault = parse_bool(params["cross_vault"])
 
     case parse_date_params(params) do
       {:ok, date_opts} ->
@@ -119,6 +119,17 @@ defmodule EngramWeb.SearchController do
   defp parse_mode("keyword"), do: :keyword
   defp parse_mode("vector"), do: :vector
   defp parse_mode(_), do: :hybrid
+
+  # `?cross_vault=false` arrives as the STRING "false", which is truthy in
+  # Elixir — so reading the param raw turned an explicit opt-OUT into an
+  # opt-IN, and then 403'd the caller on the Pro entitlement gate for a
+  # feature they were trying not to use. No CastAndValidate plug runs on this
+  # route, so a JSON body delivers a real boolean and a query string a binary;
+  # both land here. Cast at the boundary and everything downstream keeps its
+  # bare-truthiness reads.
+  defp parse_bool(true), do: true
+  defp parse_bool("true"), do: true
+  defp parse_bool(_), do: false
 
   # When `diversity` is absent or unparseable, return opts unchanged so the
   # SearchProfile default applies. Clamping to [0.0, 1.0] happens downstream

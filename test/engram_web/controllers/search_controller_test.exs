@@ -484,7 +484,7 @@ defmodule EngramWeb.SearchControllerTest do
   # Asserting on the canned response body instead would pass whether or not the
   # filter is applied, which proves nothing.
   # ---------------------------------------------------------------------------
-  describe "POST /search with cross_vault=true" do
+  describe "POST /search with cross_vault" do
     setup %{user: user, vault: vault} do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
       insert(:user_limit_override, user: user, key: "cross_vault_search", value: %{"v" => true})
@@ -553,6 +553,48 @@ defmodule EngramWeb.SearchControllerTest do
         assert %{"match" => %{"any" => ids}} = clause
         assert Enum.sort(ids) == Enum.sort([to_string(vault.id), to_string(vault_b.id)])
         refute to_string(vault_c.id) in ids
+      end
+    end
+
+    # `?cross_vault=false` arrives as the STRING "false", which is truthy in
+    # Elixir — read raw it turned an explicit opt-OUT into an opt-IN (and then
+    # 403'd the caller on the Pro gate for a feature they were opting out of).
+    # The emitted filter is the proof: a single-vault search filters on the ONE
+    # request vault (`match.value`), never the any-match set a cross-vault
+    # search emits.
+    test "cross_vault=false stays single-vault instead of reading as truthy", %{
+      restricted: conn,
+      bypass: bypass,
+      user: user,
+      vault: vault,
+      vault_b: vault_b
+    } do
+      stub(Engram.MockEmbedder, :embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+      test_pid = self()
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+        {:ok, raw, c} = Plug.Conn.read_body(c)
+        send(test_pid, {:qdrant_body, Jason.decode!(raw)})
+
+        c
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{
+            "result" => [chunk("uuid-a", 0.9, "A/a.md", "A", "findme", user, vault.id)]
+          })
+        )
+      end)
+
+      conn = post(conn, "/api/search", %{query: "findme", cross_vault: "false"})
+      assert %{"results" => _} = json_response(conn, 200)
+
+      assert_received {:qdrant_body, body}
+
+      for leg <- body["prefetch"] || [body] do
+        clause = Enum.find(leg["filter"]["must"], &(&1["key"] == "vault_id"))
+        assert clause["match"] == %{"value" => to_string(vault.id)}
+        refute to_string(vault_b.id) in List.wrap(clause["match"]["any"])
       end
     end
 
