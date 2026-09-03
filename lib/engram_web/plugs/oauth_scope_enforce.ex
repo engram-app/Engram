@@ -13,6 +13,9 @@ defmodule EngramWeb.Plugs.OAuthScopeEnforce do
   nil for an unrestricted grant) and `conn.assigns.oauth_scope` (string or
   nil). Never halts — absence of OAuth claims is the normal case for
   API-key / Clerk JWT auth, and means unrestricted.
+
+  The claim shapes are normalized by `Engram.Permissions.scope_ids_from_claims/1`,
+  shared with `UserSocket` so the HTTP and WebSocket assigns cannot drift.
   """
   import Plug.Conn
 
@@ -22,21 +25,10 @@ defmodule EngramWeb.Plugs.OAuthScopeEnforce do
     with ["Bearer " <> token] <- get_req_header(conn, "authorization"),
          {:ok, claims} <- Engram.Accounts.verify_jwt(token) do
       conn
-      |> assign(:oauth_scope_vault_ids, scope_ids(claims))
+      |> assign(:oauth_scope_vault_ids, Engram.Permissions.scope_ids_from_claims(claims))
       |> assign(:oauth_scope, claims["scope"])
     else
       _ -> conn
     end
   end
-
-  # Reads the list claim, falling back to the scalar one so refresh tokens
-  # minted before multi-vault grants shipped keep their binding. An empty
-  # list is treated as unrestricted rather than "no vaults": it is never
-  # written (mint rejects it), so encountering one means a malformed token,
-  # and the surrounding API-key and ownership checks still apply.
-  defp scope_ids(%{"vault_ids" => ids}) when is_list(ids) and ids != [],
-    do: Enum.map(ids, &to_string/1)
-
-  defp scope_ids(%{"vault_id" => id}) when is_binary(id), do: [id]
-  defp scope_ids(_), do: nil
 end

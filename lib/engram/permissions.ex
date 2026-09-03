@@ -25,14 +25,42 @@ defmodule Engram.Permissions do
 
   @type scope :: :all | MapSet.t(String.t())
 
-  @doc "Resolves everything restricting this request into one scope."
-  @spec vault_scope(Plug.Conn.t()) :: scope
-  def vault_scope(conn) do
+  @doc """
+  Resolves everything restricting this request into one scope.
+
+  Takes a `Plug.Conn`, a `Phoenix.Socket`, or a bare assigns map. WebSocket
+  channels have no conn — plugs never run for a socket connect — so accepting
+  assigns directly is what lets HTTP and WS share one implementation instead of
+  growing a second copy for channels.
+  """
+  @spec vault_scope(Plug.Conn.t() | Phoenix.Socket.t() | map()) :: scope
+  def vault_scope(%{assigns: assigns}), do: vault_scope(assigns)
+
+  def vault_scope(assigns) when is_map(assigns) do
     intersect(
-      api_key_scope(conn.assigns[:current_api_key]),
-      oauth_scope(conn.assigns[:oauth_scope_vault_ids])
+      api_key_scope(assigns[:current_api_key]),
+      oauth_scope(assigns[:oauth_scope_vault_ids])
     )
   end
+
+  @doc """
+  Normalizes OAuth vault-scope claims into the assign both transports carry.
+
+  `vault_ids` first, falling back to the legacy scalar `vault_id` so refresh
+  tokens minted before multi-vault grants shipped keep their binding. `nil`
+  means unrestricted. An empty list is treated as unrestricted rather than "no
+  vaults": it is never written (mint rejects it), so encountering one means a
+  malformed token, and the surrounding API-key and ownership checks still apply.
+
+  Public because BOTH `OAuthScopeEnforce` (HTTP) and `UserSocket` (WebSocket)
+  must derive the assign identically — two copies of this would drift.
+  """
+  @spec scope_ids_from_claims(map()) :: [String.t()] | nil
+  def scope_ids_from_claims(%{"vault_ids" => ids}) when is_list(ids) and ids != [],
+    do: Enum.map(ids, &to_string/1)
+
+  def scope_ids_from_claims(%{"vault_id" => id}) when is_binary(id), do: [id]
+  def scope_ids_from_claims(_), do: nil
 
   @spec allows?(scope, map()) :: boolean
   def allows?(:all, _vault), do: true

@@ -40,4 +40,24 @@ defmodule Engram.PermissionsTest do
     assert Permissions.check(:all, %{id: "a"}) == :ok
     assert Permissions.check(MapSet.new(["b"]), %{id: "a"}) == :forbidden
   end
+
+  test "vault_scope/1 reads a conn and a bare assigns map identically" do
+    # A channel carries a Phoenix.Socket, not a conn — plugs never run for a
+    # socket connect — so both shapes must resolve to the same scope.
+    assigns = %{oauth_scope_vault_ids: ["a", "b"]}
+
+    assert Permissions.vault_scope(conn_with(assigns)) == Permissions.vault_scope(assigns)
+    assert Permissions.allows?(Permissions.vault_scope(assigns), %{id: "a"})
+    refute Permissions.allows?(Permissions.vault_scope(assigns), %{id: "c"})
+    assert Permissions.vault_scope(%{}) == :all
+  end
+
+  test "scope_ids_from_claims/1 covers every claim shape" do
+    assert Permissions.scope_ids_from_claims(%{"vault_ids" => ["a", "b"]}) == ["a", "b"]
+    # Empty list is never minted; treat it as unrestricted, not as "no vaults".
+    assert Permissions.scope_ids_from_claims(%{"vault_ids" => []}) == nil
+    # Legacy scalar keeps pre-release refresh tokens bound.
+    assert Permissions.scope_ids_from_claims(%{"vault_id" => "a"}) == ["a"]
+    assert Permissions.scope_ids_from_claims(%{"scope" => "mcp"}) == nil
+  end
 end
