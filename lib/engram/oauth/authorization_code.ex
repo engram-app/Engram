@@ -18,6 +18,10 @@ defmodule Engram.OAuth.AuthorizationCode do
     field :code_challenge_method, :string, default: "S256"
     field :scope, :string
     field :vault_id, Ecto.UUID
+    # Multi-vault grants. NULL = all vaults (including ones created later).
+    # A non-empty list = exactly that set. `vault_id` is dual-written for
+    # single-vault grants until the phase/contract release drops it.
+    field :vault_ids, {:array, Ecto.UUID}
     field :state, :string
     field :expires_at, :utc_datetime
     field :consumed_at, :utc_datetime
@@ -26,7 +30,7 @@ defmodule Engram.OAuth.AuthorizationCode do
   end
 
   @cast_fields ~w(code_hash client_id user_id redirect_uri code_challenge
-                  code_challenge_method scope vault_id state expires_at)a
+                  code_challenge_method scope vault_id vault_ids state expires_at)a
   @required ~w(code_hash client_id user_id redirect_uri code_challenge
                code_challenge_method expires_at)a
 

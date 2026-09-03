@@ -92,4 +92,25 @@ defmodule Engram.OAuthSingleUseTest do
       assert Enum.count(results, &match?({:error, :invalid_grant}, &1)) >= 7
     end
   end
+
+  test "authorization code and refresh token both accept a vault_ids array" do
+    a = Ecto.UUID.generate()
+    b = Ecto.UUID.generate()
+
+    cs =
+      Engram.OAuth.AuthorizationCode.changeset(
+        %Engram.OAuth.AuthorizationCode{},
+        %{vault_ids: [a, b]}
+      )
+
+    assert Ecto.Changeset.get_change(cs, :vault_ids) == [a, b]
+
+    rt =
+      Engram.OAuth.RefreshToken.changeset(
+        %Engram.OAuth.RefreshToken{},
+        %{vault_ids: [a, b]}
+      )
+
+    assert Ecto.Changeset.get_change(rt, :vault_ids) == [a, b]
+  end
 end
