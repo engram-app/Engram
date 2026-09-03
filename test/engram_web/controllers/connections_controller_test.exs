@@ -120,11 +120,13 @@ defmodule EngramWeb.ConnectionsControllerTest do
       assert obs["software_id"] == "engram-vault-sync"
     end
 
-    test "a vault-scoped OAuth token cannot read a non-granted vault's name", %{conn: conn} do
-      # RequireSession gates this route, but it only blocks `current_api_key`.
-      # An OAuth grant authenticates as an internal JWT and passes straight
-      # through, so the vault-name lookup behind this list has to do the
-      # filtering itself.
+    test "a vault-scoped OAuth token is denied outright, leaking no vault name", %{conn: conn} do
+      # This route manages credentials, so an OAuth grant has no business on it
+      # at all — `RequireSession` rejects the grant before the controller runs
+      # (see require_session_test.exs for the escalation that prevents). The
+      # name filter inside `list_for_user/2` is the second layer and is unit-
+      # tested in connections_test.exs; this pins the outer one, and that no
+      # name escapes through the error path either.
       %{user: user, granted: granted, hidden: hidden, client: client} = two_named_vaults()
 
       insert(:oauth_refresh_token,
@@ -142,20 +144,8 @@ defmodule EngramWeb.ConnectionsControllerTest do
         |> put_req_header("authorization", "Bearer #{token}")
         |> get("/api/connections")
 
-      body = json_response(conn, 200)
-
-      # Assert on the NAME, in the whole serialized body — not a row count.
-      # "Secret Client Work" must not appear anywhere in the response.
-      refute Jason.encode!(body) =~ "Secret Client Work"
-
-      row = Enum.find(body, fn r -> r["kind"] == "mcp" end)
-      assert "Personal" in row["vault_names"]
-      # Positional against vault_ids: the ungranted slot is nulled, not dropped,
-      # so the two lists stay index-aligned for the frontend.
-      assert length(row["vault_names"]) == length(row["vault_ids"])
-
-      assert Enum.at(row["vault_names"], Enum.find_index(row["vault_ids"], &(&1 == hidden.id))) ==
-               nil
+      assert %{"error" => "oauth_grant_not_allowed"} = json_response(conn, 403)
+      refute conn.resp_body =~ "Secret Client Work"
     end
 
     test "an ordinary session JWT still sees every granted vault name", %{conn: conn} do
