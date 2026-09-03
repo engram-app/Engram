@@ -12,6 +12,10 @@ defmodule EngramWeb.UserChannelTest do
     {:ok, socket} = connect_as(user)
     {:ok, _, socket} = subscribe_and_join(socket, "user:#{user.id}", %{})
 
+    # `handle_out` resolves the credential's vault scope, which queries
+    # `api_key_vaults` for an API-key-authed socket — from the CHANNEL process.
+    Ecto.Adapters.SQL.Sandbox.allow(Engram.Repo, self(), socket.channel_pid)
+
     %{user: user, other_user: other_user, socket: socket}
   end
 
@@ -133,6 +137,100 @@ defmodule EngramWeb.UserChannelTest do
 
       assert_broadcast "vault_populated", %{vault_id: vault_b_id}
       assert vault_b_id == vault_b.id
+    end
+  end
+
+  # `user:` rides the same socket as `sync:` and `crdt:`, but unlike those it
+  # takes no vault in its topic, so nothing about the JOIN says which vaults the
+  # credential may reach. `vault_created` carries the DECRYPTED vault name and
+  # `vault_populated` a vault id, so an unfiltered fan-out hands a grant scoped
+  # away from a vault the name and existence of that vault.
+  #
+  # These assert on `assert_push`/`refute_push` (what reaches the CLIENT), not
+  # `assert_broadcast` (what reaches the topic). The broadcast still happens for
+  # everyone; `handle_out` is what decides per subscriber, so a test on the
+  # broadcast would pass with the filter deleted.
+  describe "vault scope filters what reaches a subscriber" do
+    # Its own user, NOT the one from the outer setup. `assert_push`/`refute_push`
+    # read the TEST process mailbox, and the outer setup already joined an
+    # unrestricted socket to that user's topic — every broadcast there would
+    # arrive twice and the refutes would fail on the unrestricted copy.
+    setup do
+      grantor = insert(:user)
+      {:ok, grantor} = Engram.Crypto.ensure_user_dek(grantor)
+      in_scope = insert(:vault, user: grantor)
+      out_of_scope = insert(:vault, user: grantor)
+
+      scoped =
+        socket(EngramWeb.UserSocket, "grant_#{grantor.id}", %{
+          current_user: grantor,
+          current_api_key: nil,
+          oauth_scope_vault_ids: [to_string(in_scope.id)]
+        })
+
+      {:ok, _, scoped} = subscribe_and_join(scoped, "user:#{grantor.id}", %{})
+
+      %{grantor: grantor, scoped: scoped, in_scope: in_scope, out_of_scope: out_of_scope}
+    end
+
+    test "a scoped grant does NOT receive vault_created for a vault it cannot see", %{
+      grantor: grantor,
+      out_of_scope: out_of_scope
+    } do
+      EngramWeb.Endpoint.broadcast("user:#{grantor.id}", "vault_created", %{
+        vault_id: out_of_scope.id,
+        name: "Private Journal"
+      })
+
+      refute_push "vault_created", %{}, 200
+    end
+
+    test "a scoped grant DOES receive vault_created for a vault it can see", %{
+      grantor: grantor,
+      in_scope: in_scope
+    } do
+      EngramWeb.Endpoint.broadcast("user:#{grantor.id}", "vault_created", %{
+        vault_id: in_scope.id,
+        name: "Granted"
+      })
+
+      assert_push "vault_created", %{vault_id: pushed}
+      assert pushed == in_scope.id
+    end
+
+    test "vault_populated is filtered the same way", %{
+      grantor: grantor,
+      out_of_scope: out_of_scope
+    } do
+      EngramWeb.Endpoint.broadcast("user:#{grantor.id}", "vault_populated", %{
+        vault_id: out_of_scope.id
+      })
+
+      refute_push "vault_populated", %{}, 200
+    end
+
+    # Over-block guard. An unrestricted credential is the common case — the SPA
+    # FTUX screen blocks on these events, and the plugin's device-flow token
+    # carries no scope claim.
+    test "an unrestricted credential still receives the event", %{
+      grantor: grantor,
+      out_of_scope: vault
+    } do
+      unscoped =
+        socket(EngramWeb.UserSocket, "open_#{grantor.id}", %{
+          current_user: grantor,
+          current_api_key: nil,
+          oauth_scope_vault_ids: nil
+        })
+
+      {:ok, _, _} = subscribe_and_join(unscoped, "user:#{grantor.id}", %{})
+
+      EngramWeb.Endpoint.broadcast("user:#{grantor.id}", "vault_created", %{
+        vault_id: vault.id,
+        name: "Anything"
+      })
+
+      assert_push "vault_created", %{vault_id: _}
     end
   end
 end
