@@ -69,6 +69,7 @@ vi.mock("../config-context", async () => {
 const baseObs: import("../api/queries").Connection = {
 	kind: "obsidian",
 	client_id: "family-1",
+	family_id: "family-1",
 	key_id: null,
 	name: "Obsidian Vault Sync",
 	software_id: "engram-vault-sync",
@@ -91,6 +92,7 @@ const baseObs: import("../api/queries").Connection = {
 const basePat: import("../api/queries").Connection = {
 	kind: "pat",
 	client_id: null,
+	family_id: null,
 	key_id: "7",
 	name: "ci-bot",
 	software_id: null,
@@ -113,6 +115,7 @@ const basePat: import("../api/queries").Connection = {
 const baseMcp: import("../api/queries").Connection = {
 	kind: "mcp",
 	client_id: "client-abc",
+	family_id: "grant-abc",
 	key_id: null,
 	name: "Claude Desktop",
 	software_id: "claude-desktop",
@@ -431,6 +434,34 @@ describe("ConnectionsPage", () => {
 		fireEvent.click(confirmButton);
 		await waitFor(() => expect(mockRevokeDevice).toHaveBeenCalledWith("family-1"));
 		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+	});
+
+	it("revokes only the grant whose Revoke was clicked, not the whole client", async () => {
+		// Two grants of ONE client — the exact case labels exist to
+		// disambiguate. Revoking "work" must not take "laptop" with it.
+		mockRevokeOauth.mockClear();
+		mockConnections.splice(
+			0,
+			mockConnections.length,
+			{ ...baseMcp, name: "laptop", family_id: "grant-laptop" },
+			{ ...baseMcp, name: "work", family_id: "grant-work" },
+		);
+		mockTier = "starter";
+		renderPage();
+
+		const workCard = screen.getByText("work").closest("li")!;
+		fireEvent.click(within(workCard).getByRole("button", { name: /^Revoke$/u }));
+		const confirmButton = screen
+			.getAllByRole("button", { name: /^Revoke$/u })
+			.find((b) => b.closest('[role="dialog"]'))!;
+		fireEvent.click(confirmButton);
+
+		await waitFor(() =>
+			expect(mockRevokeOauth).toHaveBeenCalledWith({
+				clientId: "client-abc",
+				familyId: "grant-work",
+			}),
+		);
 	});
 
 	it("keeps modal open and surfaces error message when revoke fails", async () => {

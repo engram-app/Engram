@@ -740,14 +740,22 @@ export default function ConnectionsPage() {
 				) : (
 					<ul className="space-y-3">
 						{mcp.map((c) => (
-							<li key={`${c.kind}-${c.client_id}`}>
+							// Keyed on the grant, not the client: one client can hold
+							// several grants, and they render as several rows.
+							<li key={`${c.kind}-${c.family_id ?? c.client_id}`}>
 								<ConnectionCard
 									connection={c}
 									onRevoke={() =>
 										setPendingRevoke({
 											name: c.name ?? "this connection",
 											description: "This client will lose access to your account.",
-											onConfirm: () => revokeOauth.mutateAsync(c.client_id!),
+											// family_id scopes the revoke to THIS grant. Without it a
+											// user with two grants for one client loses both.
+											onConfirm: () =>
+												revokeOauth.mutateAsync({
+													clientId: c.client_id!,
+													familyId: c.family_id,
+												}),
 										})
 									}
 								/>

@@ -25,6 +25,7 @@ function conn(over: Partial<Connection>): Connection {
 	return {
 		kind: "mcp",
 		client_id: `client-${over.slug ?? over.name ?? "x"}`,
+		family_id: `family-${over.slug ?? over.name ?? "x"}`,
 		key_id: null,
 		name: "Client",
 		software_id: null,

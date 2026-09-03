@@ -1492,6 +1492,10 @@ export type ConnectionKind = "obsidian" | "mcp" | "pat";
 export interface Connection {
 	kind: ConnectionKind;
 	client_id: string | null;
+	/** The grant lineage this row IS. One OAuth client can hold several grants
+	 *  over different vault sets, each rendered as its own row, so `client_id`
+	 *  alone cannot address the row the user clicked. Null for PATs. */
+	family_id: string | null;
 	key_id: string | null;
 	name: string | null;
 	software_id: string | null;
@@ -1555,10 +1559,20 @@ export function useCreatePat() {
 	});
 }
 
+/** Revokes one grant when `familyId` is given, otherwise the whole client.
+ *  The connections list passes it so Disconnect kills only the row clicked;
+ *  the cap-swap flows (ExistingConnectionsPanel, the OAuth consent page) call
+ *  `api.del` without it on purpose — the cap counts clients, not grants, so a
+ *  per-grant revoke would not free a slot. */
 export function useRevokeOauthConnection() {
 	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: (clientId: string) => api.del(`/connections/oauth/${clientId}`),
+		mutationFn: ({ clientId, familyId }: { clientId: string; familyId?: string | null }) =>
+			api.del(
+				familyId
+					? `/connections/oauth/${clientId}?family_id=${encodeURIComponent(familyId)}`
+					: `/connections/oauth/${clientId}`,
+			),
 		onSuccess: () => qc.invalidateQueries({ queryKey: ["connections"] }),
 	});
 }
