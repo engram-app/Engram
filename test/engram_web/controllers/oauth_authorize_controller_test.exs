@@ -530,8 +530,11 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
 
       assert {:ok, code_row} = OAuth.get_authorization_code_by_raw(query["code"])
       assert Enum.sort(code_row.vault_ids) == Enum.sort([a.id, b.id])
-      # >1 vault: the scalar column stays NULL, because no single id means "A and B".
-      assert is_nil(code_row.vault_id)
+      # >1 vault: the legacy scalar carries the FIRST granted id, never NULL.
+      # NULL reads as "all vaults" to a rolled-back release, which would hand
+      # the client vault c — the one the user declined. Writing an id narrows
+      # instead. `resolve_vaults/2` sorts, so "first" is the lowest id.
+      assert code_row.vault_id == hd(Enum.sort([a.id, b.id]))
     end
 
     test "single-vault grant dual-writes the scalar vault_id", %{conn: conn} do

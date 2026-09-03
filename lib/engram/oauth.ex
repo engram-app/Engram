@@ -538,17 +538,12 @@ defmodule Engram.OAuth do
       %{}
       |> maybe_put("scope", scope)
       |> maybe_put("vault_ids", vault_ids)
-      # Single-vault grants keep emitting the legacy scalar claim so a token
-      # minted here stays readable by a rolled-back release. Multi-vault
-      # grants omit it — there is no scalar that means "A and C", and the old
-      # reader treats a missing claim as unrestricted, so it must never see
-      # one it would misread as narrower than it is.
-      |> then(fn m ->
-        case vault_ids do
-          [only] -> Map.put(m, "vault_id", only)
-          _ -> m
-        end
-      end)
+      # Every restricted grant also emits the legacy scalar claim, carrying the
+      # same first-of-set id the scalar column stores. A rolled-back reader
+      # knows only `vault_id`, and a missing one reads as unrestricted — so
+      # omitting it on a multi-vault grant would WIDEN the token to every
+      # vault. Current readers check `vault_ids` first, so this is inert here.
+      |> maybe_put("vault_id", scalar_vault_id(vault_ids))
 
     Accounts.generate_jwt(user, extras)
   end
@@ -556,12 +551,19 @@ defmodule Engram.OAuth do
   defp maybe_put(map, _k, nil), do: map
   defp maybe_put(map, k, v), do: Map.put(map, k, v)
 
-  # Dual-write for the expand phase: a single-vault grant also populates the
-  # legacy scalar column so a rollback to the previous release still reads a
-  # correct binding. Multi-vault grants leave it NULL — there is no correct
-  # scalar answer, and NULL there means "all vaults" to old code, which is
-  # why multi-vault grants must not be rolled back into.
-  defp scalar_vault_id([only]), do: only
+  # Dual-write for the expand phase. The legacy scalar column exists so a
+  # rollback to the previous release NARROWS a grant instead of widening it:
+  # old code reads only this column, and NULL there means "all vaults". A
+  # multi-vault grant leaving it NULL would hand a rolled-back reader every
+  # vault the user owns, including the ones they explicitly declined on the
+  # consent screen — a privilege escalation caused by an ops action.
+  #
+  # So a multi-vault grant writes its FIRST id. `resolve_vaults/2` sorts, so
+  # "first" is the lowest-sorted id, not an arbitrary one. The trade is
+  # deliberate: after a rollback the user's integration loses the grant's other
+  # vaults until roll-forward. Degraded beats escalated — a permission boundary
+  # fails closed. `:all` (nil) stays NULL; unrestricted is what it already means.
+  defp scalar_vault_id([first | _]), do: first
   defp scalar_vault_id(_), do: nil
 
   # ── Revocation (Phase 6) ─────────────────────────────────────────

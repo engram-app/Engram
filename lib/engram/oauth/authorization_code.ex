@@ -19,8 +19,10 @@ defmodule Engram.OAuth.AuthorizationCode do
     field :scope, :string
     field :vault_id, Ecto.UUID
     # Multi-vault grants. NULL = all vaults (including ones created later).
-    # A non-empty list = exactly that set. `vault_id` is dual-written for
-    # single-vault grants until the phase/contract release drops it.
+    # A non-empty list = exactly that set. `vault_id` above is dual-written
+    # with the FIRST id of that set (see Engram.OAuth.scalar_vault_id/1) so a
+    # rolled-back reader narrows to one vault rather than widening to all,
+    # until the phase/contract release drops it.
     field :vault_ids, {:array, Ecto.UUID}
     # User-typed name for this grant, shown back to them in the connections
     # list. NULL falls back to the OAuth client's own identity.

@@ -5,6 +5,7 @@ defmodule EngramWeb.OAuthTokenControllerTest do
 
   alias Engram.OAuth
   alias Engram.OAuth.RefreshToken
+  alias Engram.Permissions
   alias Engram.Repo
 
   defp hash_token(raw), do: :crypto.hash(:sha256, raw) |> Base.encode16(case: :lower)
@@ -285,8 +286,22 @@ defmodule EngramWeb.OAuthTokenControllerTest do
 
       {:ok, claims} = Engram.Accounts.verify_jwt(body["access_token"])
       assert Enum.sort(claims["vault_ids"]) == Enum.sort([a.id, b.id])
-      # No single id means "A and B" — must not claim a scalar binding.
-      refute Map.has_key?(claims, "vault_id")
+      # The legacy scalar rides along so a rolled-back reader narrows to one
+      # vault instead of reading a missing claim as unrestricted.
+      assert claims["vault_id"] == hd(Enum.sort([a.id, b.id]))
+
+      # ...and it changes NOTHING on this release: both readers check
+      # `vault_ids` first, so the grant still resolves to its FULL set. This is
+      # the regression the scalar could cause, so it is pinned end to end.
+      assert Enum.sort(Permissions.scope_ids_from_claims(claims)) == Enum.sort([a.id, b.id])
+
+      scope =
+        Permissions.vault_scope(%{
+          oauth_scope_vault_ids: Permissions.scope_ids_from_claims(claims)
+        })
+
+      assert Permissions.allows?(scope, %{id: a.id})
+      assert Permissions.allows?(scope, %{id: b.id})
 
       # The label is not a token claim — it exists for the connections list,
       # which reads the refresh-token ROW. Assert on the row at both hops:
@@ -305,6 +320,9 @@ defmodule EngramWeb.OAuthTokenControllerTest do
 
       {:ok, claims2} = Engram.Accounts.verify_jwt(refreshed["access_token"])
       assert Enum.sort(claims2["vault_ids"]) == Enum.sort([a.id, b.id])
+      assert claims2["vault_id"] == hd(Enum.sort([a.id, b.id]))
+
+      assert Enum.sort(Permissions.scope_ids_from_claims(claims2)) == Enum.sort([a.id, b.id])
       # The ROTATION hop. This is a different row than the one asserted above.
       assert %{label: "Work laptop"} = current_refresh_row(user)
     end
