@@ -140,6 +140,66 @@ CI is the gate for the full suite and e2e. **Never merge on red** is unchanged.
 
 See `docs/context/testing-strategy.md` for full strategy, tooling, and CI pipeline.
 
+### A test must be able to fail
+
+A green test is worth nothing until you know what makes it red. Three rules,
+each written after a test in this repo proved nothing for an unknown number of
+runs.
+
+**1. A negative test's name must describe the exact thing being denied, and its
+body must construct that exact case.**
+
+`folders_controller_test.exs` had a case named *"404 when marker doesn't belong
+to caller's vault"* whose body passed `Ecto.UUID.generate()` — an id belonging
+to no vault at all. It proved the not-found path. A controller that looked
+markers up globally and ignored the caller's vault entirely would have passed
+it unchanged (#1562).
+
+If the name says *another vault*, build a marker in another vault. If it says
+*another user*, build another user. "Nonexistent" is a third, separate case.
+
+**2. A test that reaches into another layer's internals must fail loudly when
+the symbol it reaches for is gone.**
+
+The e2e fan-out tests proved delivery by stubbing every alternate path to a
+no-op. Every method name they stubbed had been retired from the plugin, and the
+`typeof` guard skipped what was missing — so they stubbed **nothing**, and four
+"TRUE fan-out proof" tests ran green with the feature dead (#1503, fixed in
+#1559).
+
+Prefer counting a call over disabling its alternatives: a pass-through wrapper
+cannot break the code under test, and a rename leaves the counter at zero
+instead of silently widening what satisfies the assert. Where a test must name
+a foreign symbol, assert the symbol exists — `e2e/conftest.py`'s session-start
+surface check is the pattern.
+
+**3. For a scoping, auth, or boundary test, mutate the guard and watch it go
+red before you trust it.**
+
+Not tooling — by hand, once, at write time. Drop the predicate, run the one
+file, confirm the failure, revert. #1562's vault-scoping case was verified this
+way, and the mutation also revealed that the sibling cross-user case is
+defended by RLS rather than by the query, so it stays green under the same
+mutation. That distinction is invisible without mutating, and it is the
+difference between two tests and one test plus decoration.
+
+### Claims about the system carry their evidence
+
+In PR bodies, issue comments and commit messages, label a claim by how you know
+it: **measured** (with the number and where it came from), **deduced** (from
+code you read — say so), or **assumed**. Do not promote a deduction to a fact
+because it is probably right.
+
+Worked example, both from one afternoon: *"api_only costs ~0 wall clock"* was
+repeated from a comment in `verify.yml` and used to justify a decision; the
+measured step times are 120s (e2e-crdt) and 86s (e2e-clerk) with a 0s follow-on
+wait, so it was on the critical path the whole time. In the same window, *"a
+failed fingerprint yields a green ci"* was stated as fact, and it is a sound
+deduction from the workflow structure that has happened **0 times in 998 runs**.
+Both were wrong to assert flatly; only one was wrong.
+
+A comment in this repo is an assertion, not a measurement. Cite the run id.
+
 ## Quality Tooling
 
 All quality lints are fatal in CI: `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix credo --strict`, `mix sobelow --exit low --skip`, `mix dialyzer`. Configs at `.credo.exs`, `.sobelow-conf`, `.sobelow-skips`, `.dialyzer_ignore.exs`. Historical phase 1-6 ratchet record + threshold rationale at `docs/context/quality-tooling-baseline.md`.
