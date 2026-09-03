@@ -52,6 +52,44 @@ defmodule Engram.PermissionsTest do
     assert Permissions.vault_scope(%{}) == :all
   end
 
+  # Moved here when `Vaults.check_api_key_access/2` was deleted (its last caller
+  # went through `Permissions` in Task 7a/7b). The behaviour it pinned — what an
+  # API key's `api_key_vaults` rows mean — is now `vault_scope/1`'s API-key half,
+  # and these are the only DB-backed cases in this file.
+  describe "vault_scope/1 for an API key" do
+    setup do
+      user = insert(:user)
+      %{user: user, vault: insert(:vault, user: user)}
+    end
+
+    test "no api key (JWT auth) reaches every vault" do
+      assert Permissions.vault_scope(conn_with(%{current_api_key: nil})) == :all
+    end
+
+    test "an unrestricted key (no api_key_vaults rows) reaches every vault", %{user: user} do
+      {:ok, _raw, key} = Engram.Accounts.create_api_key(user, "unrestricted")
+
+      assert Permissions.vault_scope(conn_with(%{current_api_key: key})) == :all
+    end
+
+    test "a restricted key reaches its listed vault and nothing else", %{
+      user: user,
+      vault: vault
+    } do
+      other = insert(:vault, user: user)
+      {:ok, _raw, key} = Engram.Accounts.create_api_key(user, "restricted")
+
+      Engram.Repo.insert_all("api_key_vaults", [
+        %{api_key_id: Ecto.UUID.dump!(key.id), vault_id: Ecto.UUID.dump!(vault.id)}
+      ])
+
+      scope = Permissions.vault_scope(conn_with(%{current_api_key: key}))
+
+      assert Permissions.allows?(scope, vault)
+      refute Permissions.allows?(scope, other)
+    end
+  end
+
   test "scope_ids_from_claims/1 covers every claim shape" do
     assert Permissions.scope_ids_from_claims(%{"vault_ids" => ["a", "b"]}) == ["a", "b"]
     # Empty list is never minted; treat it as unrestricted, not as "no vaults".

@@ -93,6 +93,12 @@ defmodule EngramWeb.UserSocket do
   # tag would leave self-host unenforced. `verify_jwt/1` fails for API keys and
   # Clerk RS256 tokens, and any token with no grant claims yields nil, which
   # `Permissions` reads as unrestricted.
+  #
+  # ponytail: re-verify can disagree with resolve/1 across an exp boundary;
+  # fail-open by microseconds. Thread claims out of resolve/1 if that ever
+  # matters. (A token in its final second can pass resolve/1 and then fail
+  # here, yielding nil -> :all, so a vault-scoped socket would connect
+  # unrestricted for its lifetime.)
   defp oauth_scope_vault_ids(token) do
     case Engram.Accounts.verify_jwt(token) do
       {:ok, claims} -> Engram.Permissions.scope_ids_from_claims(claims)

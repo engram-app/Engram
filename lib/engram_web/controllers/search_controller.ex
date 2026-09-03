@@ -55,6 +55,18 @@ defmodule EngramWeb.SearchController do
           |> then(&if(type, do: Keyword.put(&1, :type, type), else: &1))
           |> Keyword.merge(date_opts)
           |> maybe_put_diversity(params["diversity"])
+          |> then(fn o ->
+            # A cross-vault search deliberately searches PAST the request's
+            # single vault, so VaultPlug's check does not bound it. Narrow to
+            # what the CREDENTIAL may reach. `:all` is genuinely unrestricted
+            # and must not get a filter — adding one there would break
+            # legitimate Pro cross-vault search; anything else becomes an
+            # any-match Qdrant filter over exactly the permitted set.
+            case Engram.Permissions.vault_scope(conn) do
+              :all -> o
+              scope -> Keyword.put(o, :vault_ids, MapSet.to_list(scope))
+            end
+          end)
 
         do_search(conn, user, vault, query, note_limit, cross_vault, opts)
 
