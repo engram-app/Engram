@@ -638,8 +638,8 @@ defmodule EngramWeb.Router do
   # legacy HTTP+SSE transport and aborts on the 406.
   scope "/api", EngramWeb do
     pipe_through :api_any_accept
-    get "/mcp", McpController, :unsupported_transport
-    delete "/mcp", McpController, :unsupported_transport
+    get "/mcp", McpController, :unsupported_transport_get
+    delete "/mcp", McpController, :unsupported_transport_delete
   end
 
   # SPA routes, every path here mounts the React app. The static entries

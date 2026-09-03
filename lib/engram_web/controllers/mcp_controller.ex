@@ -60,7 +60,18 @@ defmodule EngramWeb.McpController do
   # or DELETE to terminate a session. This server is POST-only JSON-RPC and
   # offers neither, so respond 405 with Allow per the MCP spec — not 404,
   # which clients treat as a missing endpoint and abort the connection.
-  def unsupported_transport(conn, _params) do
+  #
+  # One action per verb, deliberately. A single shared action is the shape
+  # `Config.CSRFRoute` flags: a GET route reaching the same controller action as
+  # a state-changing verb is how a mutation gets triggerable by navigation. It
+  # is not a real CSRF here (both answers are a bodyless 405 that changes
+  # nothing), but the router should not carry the shape at all. Keep them split
+  # even though the bodies are identical.
+  def unsupported_transport_get(conn, _params), do: method_not_allowed(conn)
+
+  def unsupported_transport_delete(conn, _params), do: method_not_allowed(conn)
+
+  defp method_not_allowed(conn) do
     conn
     |> put_resp_header("allow", "POST")
     |> send_resp(405, "")
