@@ -1490,6 +1490,31 @@ Where `opts` is built in `search/2`:
 Task 5 already made `vault_ids: []` a hard refusal, so a credential reaching no
 vaults errors rather than searching everything.
 
+- [ ] **Step 3b: Two carried-over minors from Task 7b's review**
+
+Both are in code Task 7b just rewrote, so they belong here rather than in a
+final-review sweep.
+
+**(a) Name the double-verify ceiling.** `user_socket.ex:96-101` verifies the token
+twice: once in `TokenResolver.resolve/1`, once in `oauth_scope_vault_ids/1`. A token
+whose `exp` (second granularity) lapses between the two yields `{:error, _}` → `nil`
+→ `:all`, so a vault-scoped socket connects UNRESTRICTED and stays so for its life.
+The window is microseconds and only for a token in its final second, and the clean
+fix (threading claims out of `resolve/1`) is ruled out by the constraint that its
+signature stay unchanged. Leave the behaviour; name the ceiling in the existing
+comment:
+
+```elixir
+# ponytail: re-verify can disagree with resolve/1 across an exp boundary;
+# fail-open by microseconds. Thread claims out of resolve/1 if that ever matters.
+```
+
+**(b) Add the missing crdt API-key regression test.** `grep api_key_vault_forbidden
+test/` hits only `sync_channel_test.exs:123` and the new scope test — the crdt topic
+has NO API-key-restriction test, and Task 7b rewrote `crdt_channel.ex:168`, the exact
+line that enforces it. An API-key regression there would be silent. Add one test
+mirroring `sync_channel_test.exs:110-129` against `EngramWeb.CrdtChannel`.
+
 - [ ] **Step 4: Delete the superseded check**
 
 `Engram.Vaults.check_api_key_access/2` now has no callers — `VaultPlug` (7a), both
