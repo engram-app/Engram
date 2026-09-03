@@ -80,19 +80,31 @@ defmodule Engram.Search do
     end
   end
 
-  # Fail closed: an explicit empty `vault_ids` list (vault: nil) means the
-  # credential's accessible set is empty, so refuse rather than let it fall
-  # through to unfiltered cross-vault. `vault_ids` omitted entirely keeps its
-  # existing, unrelated meaning (unfiltered cross-vault) — only the explicit
-  # empty-list case is new.
-  defp vault_ids_present?(nil, opts) do
-    case Keyword.get(opts, :vault_ids) do
-      [] -> {:error, :no_accessible_vaults}
+  # Fail closed: an explicit empty `vault_ids` means the credential's accessible
+  # set is empty, so refuse rather than let it fall through to unfiltered
+  # cross-vault (#729). `vault_ids` omitted entirely keeps its existing,
+  # unrelated meaning — only the explicit empty-list case is refused.
+  #
+  # Keyed on whether the search will EFFECTIVELY run cross-vault, not on `vault`
+  # being nil: `do_search_instrumented/4` nils the vault LATER when
+  # `cross_vault: true`, so the REST path — which always passes the concrete
+  # vault VaultPlug resolved — walked straight past the earlier `nil`-only
+  # clause, i.e. the guard was bypassed on exactly the path it was written for.
+  #
+  # Truthiness rather than `== true`: `SearchController` reads `cross_vault`
+  # straight off request params, so `?cross_vault=true` arrives as the STRING
+  # "true". Every other reader of the opt (`cross_vault_entitlement/2`,
+  # `do_search_instrumented/4`) is a bare `if`, so matching on the boolean here
+  # would make this guard the one place that disagrees about what cross-vault
+  # means.
+  defp vault_ids_present?(vault, opts) do
+    cross_vault? = is_nil(vault) or !!Keyword.get(opts, :cross_vault, false)
+
+    case {cross_vault?, Keyword.get(opts, :vault_ids)} do
+      {true, []} -> {:error, :no_accessible_vaults}
       _ -> :ok
     end
   end
-
-  defp vault_ids_present?(_vault, _opts), do: :ok
 
   defp cross_vault_entitlement(user, opts) do
     if Keyword.get(opts, :cross_vault, false) do
