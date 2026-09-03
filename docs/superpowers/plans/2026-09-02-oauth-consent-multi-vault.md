@@ -42,7 +42,9 @@
 - `lib/engram/vector/qdrant.ex` — `build_tenant_filter/1` accepts a list
 - `lib/engram/search.ex` — `vault_ids` opt
 - `lib/engram/permissions.ex` (create) — the single permission source
-- `lib/engram/vaults.ex` — DELETE `check_api_key_access/2` (superseded by Permissions)
+- `lib/engram/vaults.ex` — DELETE `check_api_key_access/2` (Task 7c, after all callers move)
+- `lib/engram_web/user_socket.ex`, `channels/sync_channel.ex`, `channels/crdt_channel.ex` — WS enforcement
+- `lib/engram_web/controllers/search_controller.ex` — narrow cross-vault search to the grant
 - `lib/engram_web/plugs/vault_plug.ex` — enforce the grant
 - `lib/engram_web/router.ex` — mount `OAuthScopeEnforce` on the vault-scoped pipeline
 - `lib/engram_web/controllers/vaults_controller.ex` — filter the list under a bound token
@@ -1282,130 +1284,42 @@ git commit -m "feat(mcp): search a granted vault subset"
 
 ---
 
-### Task 7: Enforce the grant on REST *and* WebSocket
+### Task 7a: Enforce the grant in VaultPlug
 
 **Files:**
 - Modify: `lib/engram_web/plugs/vault_plug.ex:26-34`
 - Modify: `lib/engram_web/router.ex` (vault-scoped pipeline)
-- Modify: `lib/engram_web/user_socket.ex` (assign the OAuth scope at connect)
-- Modify: `lib/engram_web/channels/sync_channel.ex:73,174-176`
-- Modify: `lib/engram_web/channels/crdt_channel.ex:168`
-- Modify: `lib/engram_web/controllers/search_controller.ex:42-59`
-- Modify: `lib/engram/vaults.ex` (DELETE `check_api_key_access/2`)
 - Create: `test/engram_web/plugs/vault_plug_oauth_scope_test.exs`
-- Create: `test/engram_web/channels/channel_oauth_scope_test.exs`
 
-> **A third enforcement gap, found during Task 4 and not in the original spec.**
-> `sync_channel.ex:73` and `crdt_channel.ex:168` check the API key's vault access
-> but never the OAuth grant's, and `UserSocket.accept/4` assigns only
-> `current_user` and `current_api_key` — it never extracts the OAuth claims at
-> all. So a vault-scoped OAuth token joining a sync or CRDT channel is
-> unrestricted. That is the LIVE NOTE-SYNC path, which streams document content,
-> so it matters at least as much as the REST gap this task was written for.
-> Closing it is also what makes the single-source rule true rather than
-> aspirational: two channels hand-calling `check_api_key_access/2` while
-> everything else goes through `Permissions` is exactly the duplication this
-> plan exists to remove.
+**Interfaces:** consumes `Engram.Permissions.vault_scope/1` and `check/2` (Task 4).
 
-**Interfaces:**
-- Consumes: `Engram.Permissions.vault_scope/1` and `check/2` from Task 4.
-- Produces: nothing new. This task deletes a check rather than adding one.
+> Split out of the original Task 7, which grew to three enforcement surfaces and 11
+> steps. Each surface now gets its own review gate — a reviewer can reject the
+> channel work while approving the plug work.
 
-> This is the widest-blast-radius task in the plan: it changes enforcement for
-> every route behind `VaultPlug`, not just the OAuth ones. If CI goes broadly
-> red, start here.
+`Vaults.check_api_key_access/2` is NOT deleted here — the channels still call it
+until Task 7b. Deleting it is Task 7c's last step.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `test/engram_web/plugs/vault_plug_oauth_scope_test.exs`:
+Create `test/engram_web/plugs/vault_plug_oauth_scope_test.exs` exactly as specified
+in the original Task 7 Step 1 (see git history of this plan, commit `7c153de1`, or
+reconstruct from the brief): four cases — a granted vault passes, a vault outside
+the grant 403s, the default-vault fallback is also gated, and an unscoped grant
+reaches every vault.
 
-```elixir
-defmodule EngramWeb.VaultPlugOAuthScopeTest do
-  use EngramWeb.ConnCase, async: true
+The third case is the one that matters most: a header-less request falls back to
+the user's DEFAULT vault, and a grant that excludes the default must not sail
+through on that path.
 
-  # An OAuth access token is an ordinary user JWT with extra claims, so before
-  # this it authenticated against every vault-scoped REST route with no vault
-  # filter at all — the "bound to one vault" grant was enforced on /api/mcp
-  # only. These lock the REST half.
+- [ ] **Step 2: Run it, confirm the two 403 cases return 200**
 
-  setup do
-    user = insert(:user)
-    {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-    granted = insert(:vault, user: user, slug: "granted", is_default: true)
-    other = insert(:vault, user: user, slug: "other")
-    %{user: user, granted: granted, other: other}
-  end
+`mix test test/engram_web/plugs/vault_plug_oauth_scope_test.exs`
 
-  defp scoped(conn, user, vault_ids) do
-    user = ensure_external_id(user)
-    token = Engram.Accounts.generate_jwt(user, %{"scope" => "mcp", "vault_ids" => vault_ids})
-    put_req_header(conn, "authorization", "Bearer #{token}")
-  end
+- [ ] **Step 3: Enforce via Permissions in VaultPlug**
 
-  defp ensure_external_id(%{external_id: ext} = user) when is_binary(ext) and ext != "", do: user
-
-  defp ensure_external_id(user) do
-    {:ok, updated} =
-      user
-      |> Ecto.Changeset.change(external_id: "test-#{user.id}")
-      |> Engram.Repo.update(skip_tenant_check: true)
-
-    updated
-  end
-
-  test "a granted vault passes", %{conn: conn, user: user, granted: granted} do
-    conn =
-      conn
-      |> scoped(user, [granted.id])
-      |> put_req_header("x-vault-id", granted.id)
-      |> get("/api/folders")
-
-    assert conn.status == 200
-  end
-
-  test "a vault outside the grant is 403", %{conn: conn, user: user,
-                                             granted: granted, other: other} do
-    conn =
-      conn
-      |> scoped(user, [granted.id])
-      |> put_req_header("x-vault-id", other.id)
-      |> get("/api/folders")
-
-    assert conn.status == 403
-  end
-
-  test "the default-vault fallback is also gated", %{conn: conn, user: user, other: other} do
-    # granted is the DEFAULT vault; a grant for `other` alone must not let a
-    # header-less request fall back into the default.
-    conn = conn |> scoped(user, [other.id]) |> get("/api/folders")
-    assert conn.status == 403
-  end
-
-  test "an unscoped grant reaches every vault", %{conn: conn, user: user, other: other} do
-    user = ensure_external_id(user)
-    token = Engram.Accounts.generate_jwt(user)
-
-    conn =
-      conn
-      |> put_req_header("authorization", "Bearer #{token}")
-      |> put_req_header("x-vault-id", other.id)
-      |> get("/api/folders")
-
-    assert conn.status == 200
-  end
-end
-```
-
-- [ ] **Step 2: Run the test to verify it fails**
-
-Run: `mix test test/engram_web/plugs/vault_plug_oauth_scope_test.exs`
-Expected: FAIL — the two 403 assertions get 200; the grant is not enforced on REST.
-
-- [ ] **Step 3: Enforce via the unified module in VaultPlug**
-
-In `lib/engram_web/plugs/vault_plug.ex`, replace the `{:ok, vault}` arm of `call/2`. Two
-checks become one — `Permissions.vault_scope/1` has already folded the API-key restriction
-and the OAuth grant together:
+Replace the `{:ok, vault}` arm of `call/2`. Two checks become one — `vault_scope/1`
+has already folded the API-key restriction and the OAuth grant together:
 
 ```elixir
       {:ok, vault} ->
@@ -1418,60 +1332,89 @@ and the OAuth grant together:
         end
 ```
 
-The rejection message deliberately does not say WHICH restriction denied it. Distinguishing
-"this vault exists but your API key lacks it" from "your OAuth grant excludes it" tells an
-unauthorized caller something about vaults it cannot reach, and neither fact is theirs.
+The message deliberately does not say WHICH restriction denied it. Distinguishing
+"this vault exists but your API key lacks it" from "your OAuth grant excludes it"
+tells an unauthorized caller something about vaults it cannot reach.
 
-Replace the moduledoc's restriction bullets with one:
+Replace the moduledoc's two restriction bullets with one naming `Engram.Permissions`.
 
-```elixir
-  - Checks `Engram.Permissions` for whether this request's credential — API key,
-    OAuth grant, or neither — may reach the resolved vault.
+- [ ] **Step 4: Mount OAuthScopeEnforce on the vault-scoped pipeline**
+
+In `lib/engram_web/router.ex`, insert `EngramWeb.Plugs.OAuthScopeEnforce`
+immediately BEFORE `EngramWeb.Plugs.VaultPlug` — VaultPlug reads the assign it
+sets. Without it the grant is enforced on `/api/mcp` only.
+
+- [ ] **Step 5: Run the plug and controller suites**
+
+```
+mix test test/engram_web/plugs/ test/engram_web/controllers/
 ```
 
-Drop the now-unused `alias Engram.Vaults` line only if nothing else in the file uses it
-(`resolve_vault/2` still calls `Vaults.get_vault/2` and `Vaults.get_default_vault/1`, so it
-almost certainly stays).
+Any failure here is a route that was relying on an OAuth token reaching a vault
+outside its grant. Fix the caller, not the check.
 
-- [ ] **Step 4: Assign the OAuth scope at socket connect**
+- [ ] **Step 6: Commit**
 
-`OAuthScopeEnforce` is a Plug — it never runs for WebSocket connections, so the
-socket has no OAuth scope to check. In `lib/engram_web/user_socket.ex`, extract the
-same claims the plug does and assign them in `accept/4`:
+```bash
+git add lib/engram_web/plugs/vault_plug.ex lib/engram_web/router.ex \
+        test/engram_web/plugs/vault_plug_oauth_scope_test.exs
+git commit -m "fix(auth): enforce vault grants in VaultPlug"
+```
+
+---
+
+### Task 7b: Enforce the grant on WebSocket channels
+
+**Files:**
+- Modify: `lib/engram_web/user_socket.ex`
+- Modify: `lib/engram_web/channels/sync_channel.ex:73,174-176`
+- Modify: `lib/engram_web/channels/crdt_channel.ex:168`
+- Create: `test/engram_web/channels/channel_oauth_scope_test.exs`
+
+> **A gap found during Task 4, in neither the spec nor the original plan.**
+> `sync_channel.ex:73` and `crdt_channel.ex:168` check the API key's vault access
+> but never the OAuth grant's, and `UserSocket.accept/4` assigns only
+> `current_user` and `current_api_key` — plugs do not run for socket connects, so
+> it never extracts the OAuth claims at all. A vault-scoped OAuth token joins any
+> vault's `sync:` or `crdt:` topic. That is the live note-sync path, streaming
+> document content.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `test/engram_web/channels/channel_oauth_scope_test.exs` covering, for BOTH
+the `sync:` and `crdt:` topics: a granted vault joins; a vault outside the grant is
+refused; an unscoped token joins anything. Model the join setup on the existing
+channel tests in `test/engram_web/channels/`.
+
+- [ ] **Step 2: Run it, confirm the refusal cases currently join successfully**
+
+- [ ] **Step 3: Assign the OAuth scope at socket connect**
+
+In `lib/engram_web/user_socket.ex`, derive the scope from the token `connect/3`
+ALREADY verified — do not re-verify, and never trust an unverified param. If
+`connect/3` discards the claims after verifying, thread them through rather than
+parsing the token twice. Add to the `accept/4` assigns:
 
 ```elixir
-    assign(socket, %{
-      current_user: user,
-      current_api_key: api_key,
       # Same claims OAuthScopeEnforce surfaces for HTTP. Plugs do not run for
-      # socket connects, so without this the channels below have no OAuth scope
-      # to enforce and a vault-scoped token joins any vault's topic.
-      oauth_scope_vault_ids: oauth_scope_vault_ids(params),
-      ...
-    })
+      # socket connects, so without this the channels have no OAuth scope to
+      # enforce and a vault-scoped token joins any vault's topic.
+      oauth_scope_vault_ids: Engram.Permissions.scope_ids_from_claims(claims),
 ```
 
-Derive it from the same verified token `connect/3` already validated — do NOT
-re-verify or trust an unverified param. If `connect/3` discards the claims after
-verifying, thread them through rather than parsing the token a second time.
+`Permissions.scope_ids_from_claims/1` already exists (Task 4) and is what
+`OAuthScopeEnforce` calls. Use it — a second copy of the normalization would drift.
 
-Reuse the plug's normalization so the two paths cannot drift: `vault_ids` first,
-falling back to the scalar `vault_id`, `nil` for unrestricted. Extract that
-normalization into `Engram.Permissions` (e.g. `scope_ids_from_claims/1`) and have
-BOTH `OAuthScopeEnforce` and `UserSocket` call it. Two copies of this logic is the
-same defect in a new place.
+- [ ] **Step 4: Route both channels through Permissions**
 
-- [ ] **Step 5: Route both channels through Permissions**
-
-`lib/engram_web/channels/sync_channel.ex` — replace the private wrapper at 174-176
-and its call site at 73:
+`sync_channel.ex` — replace the private wrapper at 174-176 and its call site at 73:
 
 ```elixir
   defp check_vault_access(socket, vault),
     do: Engram.Permissions.check(Engram.Permissions.vault_scope(socket.assigns), vault)
 ```
 
-`lib/engram_web/channels/crdt_channel.ex:168` — replace the direct call:
+`crdt_channel.ex:168`:
 
 ```elixir
                 case Engram.Permissions.check(
@@ -1482,37 +1425,61 @@ and its call site at 73:
 
 Both keep their existing rejection shapes; only the check changes.
 
-- [ ] **Step 6: Channel tests**
+- [ ] **Step 5: Run the channel suite**
 
-Create `test/engram_web/channels/channel_oauth_scope_test.exs` covering, for BOTH
-`sync:` and `crdt:` topics: a granted vault joins; a vault outside the grant is
-refused; an unscoped token joins anything. Model the join setup on the existing
-channel tests in `test/engram_web/channels/`.
+```
+mix test test/engram_web/channels/
+```
 
-- [ ] **Step 7: Close the REST cross-vault search hole**
+- [ ] **Step 6: Commit**
 
-A FOURTH gap, found during Task 6 and in neither the spec nor the original plan.
-`lib/engram_web/controllers/search_controller.ex:42` reads `cross_vault` straight
-off caller params and builds Search opts with **no** `vault_ids`. So
-`POST /api/search` with `cross_vault=true` runs `vault: nil` unfiltered — a
-subset-scoped credential gets hits from every vault the user owns. It is gated
-only by the Pro `cross_vault_search` entitlement, which is a billing check, not a
-scope check: a Pro user with a vault-restricted API key, or any multi-vault OAuth
-grant, leaks across the restriction.
+```bash
+git add lib/engram_web/user_socket.ex lib/engram_web/channels/sync_channel.ex \
+        lib/engram_web/channels/crdt_channel.ex \
+        test/engram_web/channels/channel_oauth_scope_test.exs
+git commit -m "fix(auth): enforce vault grants on websockets"
+```
 
-`VaultPlug` does NOT cover this. It authorizes the single `X-Vault-ID` vault; a
-cross-vault search deliberately searches past that vault, so the plug's check is
-irrelevant to the leak.
+---
 
-Narrow the search to the credential's scope. Where `opts` is built:
+### Task 7c: Close the REST cross-vault search hole, then delete the old check
+
+**Files:**
+- Modify: `lib/engram_web/controllers/search_controller.ex:42-59`
+- Modify: `lib/engram/vaults.ex` (DELETE `check_api_key_access/2`)
+- Test: `test/engram_web/controllers/search_controller_test.exs`
+
+> **A fourth gap, found during Task 6, in neither the spec nor the original plan
+> — and live on main today, independent of this branch.**
+> `search_controller.ex:42` reads `cross_vault` straight off caller params and
+> builds Search opts with NO `vault_ids`, so `POST /api/search?cross_vault=true`
+> runs `vault: nil` unfiltered. A subset-restricted API key or a multi-vault OAuth
+> grant gets hits from every vault the user owns. `VaultPlug` does not cover it:
+> the plug authorizes the single `X-Vault-ID` vault, and a cross-vault search
+> deliberately searches past that vault. The only gate is the Pro
+> `cross_vault_search` entitlement, which is billing, not scope.
+
+- [ ] **Step 1: Write the failing test**
+
+In `test/engram_web/controllers/search_controller_test.exs`: a vault-restricted API
+key requesting `cross_vault=true` must not reach a vault outside its set. Follow the
+Bypass-and-capture-the-outbound-filter pattern Task 6 established in
+`mcp_controller_test.exs` — assert on the EMITTED Qdrant filter, not on fixture
+data. A text assertion over a canned response passes whether or not the filter is
+applied, which is exactly the vacuous shape Task 6's review called out.
+
+- [ ] **Step 2: Run it, confirm the emitted filter has no `vault_id` clause**
+
+- [ ] **Step 3: Narrow the search to the credential's scope**
+
+Where `opts` is built in `search/2`:
 
 ```elixir
           |> then(fn o ->
-            # A cross-vault search deliberately searches past the request's
-            # single vault, so VaultPlug's check does not bound it. Narrow it to
-            # what the CREDENTIAL may reach. `:all` means genuinely unrestricted
-            # (Clerk JWT / unrestricted key) and needs no filter; anything else
-            # becomes an any-match Qdrant filter over exactly that set.
+            # A cross-vault search deliberately searches past the request's single
+            # vault, so VaultPlug's check does not bound it. Narrow to what the
+            # CREDENTIAL may reach. `:all` is genuinely unrestricted and needs no
+            # filter; anything else becomes an any-match Qdrant filter.
             case Engram.Permissions.vault_scope(conn) do
               :all -> o
               scope -> Keyword.put(o, :vault_ids, MapSet.to_list(scope))
@@ -1520,65 +1487,32 @@ Narrow the search to the credential's scope. Where `opts` is built:
           end)
 ```
 
-Task 5 already made `vault_ids: []` a hard refusal, so a credential that can reach
-no vaults gets an error rather than an unfiltered search.
+Task 5 already made `vault_ids: []` a hard refusal, so a credential reaching no
+vaults errors rather than searching everything.
 
-**Test** in `test/engram_web/controllers/search_controller_test.exs`: a
-vault-restricted API key requesting `cross_vault=true` must not return hits from a
-vault outside its set. Follow the Bypass-and-capture-the-outbound-filter pattern
-Task 6 established in `mcp_controller_test.exs` — asserting on the emitted Qdrant
-filter is what makes this test load-bearing rather than dependent on fixture data.
+- [ ] **Step 4: Delete the superseded check**
 
-- [ ] **Step 8: Delete the superseded check**
-
-`Engram.Vaults.check_api_key_access/2` now has no callers — `VaultPlug`, both
-channels and `McpController` all route through `Permissions`, which calls
-`accessible_vault_ids/1` directly. Confirm and delete:
+`Engram.Vaults.check_api_key_access/2` now has no callers — `VaultPlug` (7a), both
+channels (7b) and `McpController` (Task 4) all route through `Permissions`. Confirm:
 
 ```bash
 grep -rn "check_api_key_access" lib/ test/
 ```
 
-Every remaining hit must be in `vaults.ex` itself or in a test asserting the old behaviour.
-Delete the function (`vaults.ex:689-694`) and move any test worth keeping to
-`test/engram/permissions_test.exs`. Leaving a second, subtly different way to ask the same
-question is exactly what this task exists to prevent.
-
-`accessible_vault_ids/1` STAYS — it is the API-key half's query, and `Permissions` is now
+Every remaining hit must be in `vaults.ex` itself or a test of the old behaviour.
+Delete the function and move any test worth keeping to `permissions_test.exs`.
+`accessible_vault_ids/1` STAYS — it is the API-key half's query and `Permissions` is
 its only caller.
 
-- [ ] **Step 9: Mount the plug on the vault-scoped pipeline**
+- [ ] **Step 5: Run the search, plug, channel and controller suites**
 
-In `lib/engram_web/router.ex`, find the vault-scoped pipeline (the one ending in `EngramWeb.Plugs.VaultPlug`, near the `RequireOnboarding` mount at line 307) and insert `OAuthScopeEnforce` immediately BEFORE `VaultPlug`:
-
-```elixir
-      # Surfaces the OAuth grant's vault scope so VaultPlug can enforce it.
-      # MUST precede VaultPlug — VaultPlug reads the assign it sets. An OAuth
-      # access token is an ordinary user JWT, so without this the grant is
-      # enforced on /api/mcp only and ignored on every REST route.
-      EngramWeb.Plugs.OAuthScopeEnforce,
-      EngramWeb.Plugs.VaultPlug
-```
-
-- [ ] **Step 10: Run the new tests plus the plug, channel, search and controller suites**
-
-Run: `mix test test/engram_web/plugs/ test/engram_web/controllers/`
-Expected: PASS. Any failure here is a route that was silently relying on an OAuth token reaching a vault outside its grant — fix the caller, do not weaken the check.
-
-- [ ] **Step 11: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add lib/engram/vaults.ex lib/engram/permissions.ex lib/engram_web/plugs/vault_plug.ex \
-        lib/engram_web/router.ex lib/engram_web/user_socket.ex \
-        lib/engram_web/channels/sync_channel.ex lib/engram_web/channels/crdt_channel.ex \
-        lib/engram_web/controllers/search_controller.ex \
-        test/engram_web/plugs/vault_plug_oauth_scope_test.exs \
-        test/engram_web/channels/channel_oauth_scope_test.exs \
+git add lib/engram_web/controllers/search_controller.ex lib/engram/vaults.ex \
         test/engram_web/controllers/search_controller_test.exs
-git commit -m "fix(auth): enforce vault grants on REST and WS"
+git commit -m "fix(search): scope cross-vault search to grant"
 ```
-
----
 
 ### Task 8: Filter the vault list under a bound token
 
