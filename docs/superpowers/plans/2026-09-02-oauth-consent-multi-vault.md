@@ -1996,3 +1996,262 @@ Expected: exactly one `phase/*` label, `phase/expand`. CI hard-fails on zero or 
 - **Task 7 has the widest blast radius.** It changes enforcement for every route behind `VaultPlug`. Broad CI red starts there.
 - **`main` in the parent checkout has an unresolved stash-pop conflict** in `frontend/src/onboarding/onboard-billing-page.tsx` (`stash@{0}: autostash`). It predates this work and is not yours to resolve. This worktree branches off `origin/main` and is unaffected.
 - **Never merge on red**, including diagnosed flakes. No admin bypass.
+
+---
+
+### Task 13: User-supplied connection label
+
+**Files:**
+- Create: `priv/repo/migrations/20260902130000_add_oauth_grant_label_expand.exs`
+- Modify: `lib/engram/oauth/authorization_code.ex`, `lib/engram/oauth/refresh_token.ex` (add `label`)
+- Modify: `lib/engram/oauth.ex` (accept + carry `label`)
+- Modify: `lib/engram_web/controllers/oauth_authorize_controller.ex`
+- Modify: `lib/engram/connections.ex:245` (prefer the user's label)
+- Modify: `frontend/src/api/oauth.ts`, `frontend/src/oauth/oauth-authorize-page.tsx`
+- Test: `test/engram_web/controllers/oauth_authorize_controller_test.exs`, `test/engram/connections_test.exs`, `frontend/src/oauth/oauth-authorize-page.test.tsx`
+
+**Why:** `connections.ex:245` sets `name: identity.display_name || c.client_name` — the
+OAuth client's own identity. Two grants for the same client are indistinguishable in the
+connections list, and multi-vault grants make that worse: "which Claude Code is this, and
+what can it see?" is now a question a user will actually ask. A user-supplied label is the
+only thing that answers it.
+
+**Scope:** OAuth grants only. API keys already carry a user-supplied name
+(`create_api_key(user, name)`), and device connections are identified by their device +
+vault. This closes the one place a connection has no human-chosen name.
+
+**Interfaces:**
+- Consumes: the `vault_ids` consent flow from Tasks 2 and 10.
+- Produces: `oauth_refresh_tokens.label` (text, nullable); the connections payload's `name`
+  prefers it; `OAuthConsentParams.label?: string`.
+
+- [ ] **Step 1: Write the failing tests**
+
+Backend, in `test/engram_web/controllers/oauth_authorize_controller_test.exs`:
+
+```elixir
+    test "a supplied label is stored on the grant", %{conn: conn} do
+      user = insert(:user)
+      _vault = insert(:vault, user: user)
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+
+      params =
+        client.client_id
+        |> valid_params(redirect_uri)
+        |> Map.put("label", "Laptop — work vault")
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      query = conn.resp_body |> Jason.decode!() |> Map.fetch!("redirect_uri")
+              |> URI.parse() |> Map.fetch!(:query) |> URI.decode_query()
+
+      assert {:ok, code_row} = OAuth.get_authorization_code_by_raw(query["code"])
+      assert code_row.label == "Laptop — work vault"
+    end
+
+    test "an over-long label is rejected rather than truncated", %{conn: conn} do
+      user = insert(:user)
+      _vault = insert(:vault, user: user)
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+
+      params =
+        client.client_id
+        |> valid_params(redirect_uri)
+        |> Map.put("label", String.duplicate("x", 200))
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      uri = conn.resp_body |> Jason.decode!() |> Map.fetch!("redirect_uri")
+      assert uri =~ "error=access_denied"
+    end
+```
+
+In `test/engram/connections_test.exs` (reuse the `grant_over/1` helper from Task 9):
+
+```elixir
+  test "the connections list prefers the user's label over the client name" do
+    %{user: user} = grant_over_all_vaults()
+
+    Engram.Repo.update_all(Engram.OAuth.RefreshToken,
+      [set: [label: "My laptop"]], skip_tenant_check: true)
+
+    assert [listed] = Connections.list_for_user(user)
+    assert listed.name == "My laptop"
+  end
+
+  test "an unlabelled grant still falls back to the client identity" do
+    %{user: user} = grant_over_all_vaults()
+
+    assert [listed] = Connections.list_for_user(user)
+    assert is_binary(listed.name)
+    refute listed.name == ""
+  end
+```
+
+Frontend, in `frontend/src/oauth/oauth-authorize-page.test.tsx`:
+
+```typescript
+	it("sends the typed label", async () => {
+		postOAuthConsent.mockResolvedValue({ redirect_uri: "https://client.example/cb?code=x" });
+		renderPage();
+
+		fireEvent.click(await screen.findByRole("checkbox", { name: /Personal/ }));
+		fireEvent.change(screen.getByLabelText(/Name this connection/), {
+			target: { value: "Work laptop" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+		await waitFor(() => expect(postOAuthConsent).toHaveBeenCalled());
+		expect(postOAuthConsent.mock.calls[0][0].label).toBe("Work laptop");
+	});
+
+	it("omits the label when left at the prefilled default", async () => {
+		postOAuthConsent.mockResolvedValue({ redirect_uri: "https://client.example/cb?code=x" });
+		renderPage();
+
+		fireEvent.click(await screen.findByRole("checkbox", { name: /Personal/ }));
+		fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+		await waitFor(() => expect(postOAuthConsent).toHaveBeenCalled());
+		expect(postOAuthConsent.mock.calls[0][0].label).toBeUndefined();
+	});
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+```
+mix test test/engram_web/controllers/oauth_authorize_controller_test.exs test/engram/connections_test.exs
+cd frontend && bun run test oauth-authorize-page
+```
+
+Expected: FAIL — there is no `label` column, no `label` param, and no input.
+
+- [ ] **Step 3: Migration**
+
+Create `priv/repo/migrations/20260902130000_add_oauth_grant_label_expand.exs`:
+
+```elixir
+defmodule Engram.Repo.Migrations.AddOauthGrantLabelExpand do
+  use Ecto.Migration
+
+  # phase/expand — nullable text add, no default, no backfill. The connections
+  # list falls back to the OAuth client's own identity when it is NULL, which
+  # is exactly today's behaviour, so existing grants need no data migration.
+  def change do
+    alter table(:oauth_authorization_codes) do
+      add :label, :string, size: 120
+    end
+
+    alter table(:oauth_refresh_tokens) do
+      add :label, :string, size: 120
+    end
+  end
+end
+```
+
+- [ ] **Step 4: Schema + mint**
+
+Add `field :label, :string` to both schemas and `label` to their cast lists.
+
+In `lib/engram/oauth.ex`, add `label` to the `attrs` map in `mint_authorization_code/3`,
+carry it onto the refresh token beside `vault_ids` at both the code→token and rotation
+sites, and validate it at mint:
+
+```elixir
+  # A label is free text the user typed on the consent screen, rendered back to
+  # them in the connections list. Bound the length rather than truncating —
+  # silently storing something other than what they typed is worse than
+  # refusing. 120 chars matches the column.
+  @max_label_bytes 120
+
+  defp resolve_label(nil), do: {:ok, nil}
+  defp resolve_label(""), do: {:ok, nil}
+
+  defp resolve_label(label) when is_binary(label) do
+    trimmed = String.trim(label)
+
+    cond do
+      trimmed == "" -> {:ok, nil}
+      String.length(trimmed) > @max_label_bytes -> :error
+      true -> {:ok, trimmed}
+    end
+  end
+
+  defp resolve_label(_), do: :error
+```
+
+Thread it through `mint_authorization_code/3` so a bad label takes the same
+`access_denied` path as a bad vault id — one rejection shape for one screen.
+
+- [ ] **Step 5: Controller**
+
+Pass `params["label"]` into `mint_authorization_code/3`.
+
+- [ ] **Step 6: Connections list**
+
+In `lib/engram/connections.ex:245`:
+
+```elixir
+        # The user's own label wins. `identity.display_name` is the CLIENT's
+        # name, which is identical across two grants for the same client — the
+        # exact case a label exists to disambiguate.
+        name: t.label || identity.display_name || c.client_name,
+```
+
+- [ ] **Step 7: Consent UI**
+
+Add `label?: string` to `OAuthConsentParams`. In the consent page, add a labelled text input
+above the vault picker, prefilled with `clientName` via `placeholder` (NOT `value` — a
+prefilled value the user never touched should not be sent as if they chose it):
+
+```tsx
+						<label className="flex flex-col gap-1.5">
+							<span className="font-medium text-foreground text-sm">
+								Name this connection{" "}
+								<span className="font-normal text-muted-foreground">(optional)</span>
+							</span>
+							<input
+								type="text"
+								maxLength={120}
+								value={label}
+								onChange={(e) => setLabel(e.target.value)}
+								placeholder={clientName}
+								className="rounded-lg border border-border bg-background p-2.5 text-sm"
+							/>
+						</label>
+```
+
+with `const [label, setLabel] = useState("")`, and in `runSubmit`:
+
+```typescript
+		const trimmed = label.trim();
+		if (trimmed) {
+			body.label = trimmed;
+		}
+```
+
+- [ ] **Step 8: Run the tests**
+
+```
+mix test test/engram_web/controllers/oauth_authorize_controller_test.exs test/engram/connections_test.exs
+cd frontend && bun run test oauth-authorize-page
+```
+
+Expected: PASS
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add priv/repo/migrations/20260902130000_add_oauth_grant_label_expand.exs \
+        lib/engram/oauth/ lib/engram/oauth.ex lib/engram/connections.ex \
+        lib/engram_web/controllers/oauth_authorize_controller.ex \
+        frontend/src/api/oauth.ts frontend/src/oauth/oauth-authorize-page.tsx \
+        test/ frontend/src/oauth/oauth-authorize-page.test.tsx
+git commit -m "feat(oauth): let users label a connection"
+```
+
+> **Task 12 runs AFTER this task**, not before — the OpenAPI regen and the final gauntlet
+> must cover the label. Both migrations in this PR are `phase/expand`, so the PR still
+> carries exactly one `phase/*` label.
