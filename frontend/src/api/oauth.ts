@@ -19,7 +19,10 @@ export interface OAuthConsentParams {
 	state: string;
 	scope: string;
 	resource?: string;
-	vault_choice: string;
+	// Absent = all vaults, including ones created later. A non-empty array =
+	// exactly those vaults. Never send an empty array — the backend rejects it
+	// rather than widening it to "all".
+	vault_ids?: string[];
 }
 
 export interface OAuthConsentResponse {

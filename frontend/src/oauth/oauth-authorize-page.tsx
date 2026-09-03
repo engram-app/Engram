@@ -73,6 +73,14 @@ function buildCancelUrl(redirectUri: string, state: string): string {
 	return `${redirectUri}${sep}error=access_denied&state=${encodeURIComponent(state)}`;
 }
 
+function countLabel(notes?: number, files?: number): string {
+	const parts = [`${(notes ?? 0).toLocaleString()} notes`];
+	if (files) {
+		parts.push(`${files.toLocaleString()} files`);
+	}
+	return parts.join(" · ");
+}
+
 export default function OAuthAuthorizePage() {
 	const [searchParams] = useSearchParams();
 	const { values, resource, missing } = readParams(searchParams);
@@ -101,17 +109,32 @@ export default function OAuthAuthorizePage() {
 	const connections = useConnections({ enabled: capCheck.atCap });
 	const existingPeer = (connections.data ?? []).find((c): c is Connection => c.kind === clientKind);
 
-	const [pickedVault, setVaultChoice] = useState<string>("vault:*");
-	// A picked vault that no longer exists in the fetched list resolves to "all
-	// vaults". That is a function of the current list, so it is computed here
-	// rather than written back into state from an effect one paint later.
-	const vaultChoice =
-		pickedVault.startsWith("vault:") &&
-		pickedVault !== "vault:*" &&
-		vaultsQuery.data &&
-		!vaultsQuery.data.some((v) => String(v.id) === pickedVault.slice("vault:".length))
-			? "vault:*"
-			: pickedVault;
+	// `null` = the explicit "All vaults" choice, which stays all-vaults as new
+	// ones are created. A Set = exactly those ids. These are different grants,
+	// so the UI keeps them as different controls rather than inferring one
+	// from "every box happens to be checked".
+	const [picked, setPicked] = useState<Set<string> | null>(null);
+
+	// Ids that no longer exist in the fetched list are dropped. That is a
+	// function of the current list, so it is computed here rather than written
+	// back into state from an effect one paint later.
+	const live = vaultsQuery.data;
+	const selected =
+		picked && live
+			? new Set([...picked].filter((id) => live.some((v) => String(v.id) === id)))
+			: picked;
+
+	const toggle = (id: string) => {
+		setPicked((prev) => {
+			const next = new Set(prev ?? []);
+			if (next.has(id)) {
+				next.delete(id);
+			} else {
+				next.add(id);
+			}
+			return next;
+		});
+	};
 	const [submitError, setSubmitError] = useState<string | null>(null);
 	const [submitting, setSubmitting] = useState(false);
 	// At-cap users get a confirm modal before the implicit swap so they see
@@ -179,10 +202,12 @@ export default function OAuthAuthorizePage() {
 			code_challenge_method: values.code_challenge_method,
 			state: values.state,
 			scope: values.scope,
-			vault_choice: vaultChoice,
 		};
 		if (resource) {
 			body.resource = resource;
+		}
+		if (selected && selected.size > 0) {
+			body.vault_ids = [...selected];
 		}
 
 		// If swapping, disconnect the existing connection of the same kind
@@ -277,34 +302,51 @@ export default function OAuthAuthorizePage() {
 							</div>
 						) : null}
 						<fieldset className="flex flex-col gap-2">
-							<legend className="mb-1 font-medium text-foreground text-sm">Which vault?</legend>
+							<legend className="mb-1 font-medium text-foreground text-sm">
+								Which vaults can {clientName} access?
+							</legend>
 							{vaultsQuery.data?.map((v) => {
-								const value = `vault:${v.id}`;
-								const active = vaultChoice === value;
+								const id = String(v.id);
+								const active = Boolean(selected?.has(id));
 								return (
-									<label key={v.id} className={selectableRow(active)}>
+									<label key={id} className={selectableRow(active)}>
 										<input
-											type="radio"
-											name="vault_choice"
-											value={value}
+											type="checkbox"
 											checked={active}
-											onChange={() => setVaultChoice(value)}
+											onChange={() => toggle(id)}
 											className="accent-primary"
 										/>
-										<span className="font-medium text-foreground text-sm">{v.name}</span>
+										<span className="flex min-w-0 flex-1 items-baseline gap-2">
+											<span className="font-medium text-foreground text-sm">{v.name}</span>
+											{v.is_default ? (
+												<span className="text-muted-foreground text-xs">default</span>
+											) : null}
+											{v.description ? (
+												<span className="truncate text-muted-foreground text-xs">
+													{v.description}
+												</span>
+											) : null}
+										</span>
+										<span className="shrink-0 text-muted-foreground text-xs">
+											{countLabel(v.note_count, v.attachment_count)}
+										</span>
 									</label>
 								);
 							})}
-							<label className={selectableRow(vaultChoice === "vault:*")}>
+							<label className={selectableRow(selected === null)}>
 								<input
 									type="radio"
-									name="vault_choice"
-									value="vault:*"
-									checked={vaultChoice === "vault:*"}
-									onChange={() => setVaultChoice("vault:*")}
+									name="all_vaults"
+									checked={selected === null}
+									onChange={() => setPicked(null)}
 									className="accent-primary"
 								/>
-								<span className="font-medium text-foreground text-sm">All vaults</span>
+								<span className="font-medium text-foreground text-sm">
+									All vaults
+									<span className="ml-2 font-normal text-muted-foreground text-xs">
+										including any you create later
+									</span>
+								</span>
 							</label>
 						</fieldset>
 
@@ -327,7 +369,7 @@ export default function OAuthAuthorizePage() {
 							<Button
 								type="button"
 								onClick={handleApprove}
-								disabled={submitting}
+								disabled={submitting || (selected !== null && selected.size === 0)}
 								className="flex-1"
 							>
 								{submitting ? "Approving…" : "Approve"}

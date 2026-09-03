@@ -46,8 +46,22 @@ vi.mock("../api/queries", () => ({
 	useMe: () => ({ data: { email: "todd@example.com" }, isLoading: false }),
 	useVaults: () => ({
 		data: [
-			{ id: 1, name: "Personal" },
-			{ id: 2, name: "Work" },
+			{
+				id: "11111111-1111-1111-1111-111111111111",
+				name: "Personal",
+				description: null,
+				is_default: true,
+				note_count: 1204,
+				attachment_count: 18,
+			},
+			{
+				id: "22222222-2222-2222-2222-222222222222",
+				name: "Work",
+				description: "day job",
+				is_default: false,
+				note_count: 312,
+				attachment_count: 0,
+			},
 		],
 		isLoading: false,
 	}),
@@ -142,7 +156,7 @@ describe("OAuthAuthorizePage", () => {
 			kind: "mcp",
 		});
 		renderAt(VALID_QS);
-		expect(await screen.findByText(/Claude Desktop/u)).toBeInTheDocument();
+		expect(await screen.findByRole("heading", { name: /Claude Desktop/u })).toBeInTheDocument();
 		expect(screen.getByText(/signed in as todd@example.com/iu)).toBeInTheDocument();
 	});
 
@@ -167,7 +181,7 @@ describe("OAuthAuthorizePage", () => {
 			"?client_id=cli&redirect_uri=https://app/cb&response_type=code" +
 			"&code_challenge=abc&code_challenge_method=S256&state=xyz";
 		renderAt(NO_SCOPE_QS);
-		expect(await screen.findByText(/Claude Code/u)).toBeInTheDocument();
+		expect(await screen.findByRole("heading", { name: /Claude Code/u })).toBeInTheDocument();
 		expect(
 			screen.queryByRole("heading", { name: /invalid authorization request/iu }),
 		).not.toBeInTheDocument();
@@ -189,12 +203,15 @@ describe("OAuthAuthorizePage", () => {
 		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
 
 		renderAt(VALID_QS);
-		fireEvent.click(await screen.findByRole("radio", { name: /work/iu }));
+		fireEvent.click(await screen.findByRole("checkbox", { name: /work/iu }));
 		fireEvent.click(screen.getByRole("button", { name: /approve/iu }));
 
 		await waitFor(() =>
 			expect(postOAuthConsent).toHaveBeenCalledWith(
-				expect.objectContaining({ client_id: "cli", vault_choice: "vault:2" }),
+				expect.objectContaining({
+					client_id: "cli",
+					vault_ids: ["22222222-2222-2222-2222-222222222222"],
+				}),
 			),
 		);
 		await waitFor(() => expect(assign).toHaveBeenCalledWith("https://app/cb?code=ok"));
@@ -224,7 +241,7 @@ describe("OAuthAuthorizePage", () => {
 		expect(await screen.findByText(/Approving will disconnect/iu)).toBeInTheDocument();
 		expect(screen.getByText(/Claude Desktop \(old\)/u)).toBeInTheDocument();
 		// Picker + Approve are still rendered (NOT replaced).
-		expect(screen.getByRole("radio", { name: /work/iu })).toBeInTheDocument();
+		expect(screen.getByRole("checkbox", { name: /work/iu })).toBeInTheDocument();
 		const approve = screen.getByRole("button", { name: /approve/iu });
 		expect(approve).toBeInTheDocument();
 
@@ -291,5 +308,75 @@ describe("OAuthAuthorizePage", () => {
 		fireEvent.click(await screen.findByRole("button", { name: /cancel/iu }));
 
 		expect(assign).toHaveBeenCalledWith("https://app/cb?error=access_denied&state=xyz");
+	});
+
+	it("submits only the checked vaults", async () => {
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "cli",
+			client_name: "Claude Desktop",
+			kind: "mcp",
+		});
+		postOAuthConsent.mockResolvedValue({ redirect_uri: "https://client.example/cb?code=x" });
+		renderAt(VALID_QS);
+
+		fireEvent.click(await screen.findByRole("checkbox", { name: /Personal/ }));
+		fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+		await waitFor(() => expect(postOAuthConsent).toHaveBeenCalled());
+		expect(postOAuthConsent.mock.calls[0]![0].vault_ids).toEqual([
+			"11111111-1111-1111-1111-111111111111",
+		]);
+	});
+
+	it("omits vault_ids entirely when All vaults is chosen", async () => {
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "cli",
+			client_name: "Claude Desktop",
+			kind: "mcp",
+		});
+		postOAuthConsent.mockResolvedValue({ redirect_uri: "https://client.example/cb?code=x" });
+		renderAt(VALID_QS);
+
+		fireEvent.click(await screen.findByRole("checkbox", { name: /Personal/ }));
+		fireEvent.click(screen.getByRole("radio", { name: /All vaults/ }));
+		fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+		await waitFor(() => expect(postOAuthConsent).toHaveBeenCalled());
+		expect(postOAuthConsent.mock.calls[0]![0].vault_ids).toBeUndefined();
+	});
+
+	it("disables Approve once the checked vaults drop to zero", async () => {
+		// Default state (nothing touched) is the "All vaults" grant, which is a
+		// valid submission on its own — so Approve starts enabled. Once the user
+		// switches into picking specific vaults and unchecks the last one, that
+		// is a zero-vault grant and must block submission.
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "cli",
+			client_name: "Claude Desktop",
+			kind: "mcp",
+		});
+		renderAt(VALID_QS);
+		const work = await screen.findByRole("checkbox", { name: /Work/ });
+
+		fireEvent.click(work);
+		expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
+
+		fireEvent.click(work);
+		expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
+
+		fireEvent.click(work);
+		expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
+	});
+
+	it("shows counts and the default badge", async () => {
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "cli",
+			client_name: "Claude Desktop",
+			kind: "mcp",
+		});
+		renderAt(VALID_QS);
+		expect(await screen.findByText("1,204 notes · 18 files")).toBeInTheDocument();
+		expect(screen.getByText("default")).toBeInTheDocument();
+		expect(screen.getByText("day job")).toBeInTheDocument();
 	});
 });
