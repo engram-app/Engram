@@ -284,6 +284,46 @@ defmodule EngramWeb.VaultsControllerTest do
       body = conn |> get("/api/vaults") |> json_response(200)
       assert body["vaults"] == []
     end
+
+    test "under a scoped grant lists only the granted deleted vault", %{conn: conn} do
+      user = insert(:user)
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      granted = insert(:vault, user: user, slug: "granted", is_default: true)
+      hidden = insert(:vault, user: user, slug: "hidden")
+      {:ok, _} = Vaults.delete_vault(user, granted.id)
+      {:ok, _} = Vaults.delete_vault(user, hidden.id)
+
+      user = ensure_external_id(user)
+      token = Accounts.generate_jwt(user, %{"scope" => "mcp", "vault_ids" => [granted.id]})
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> get("/api/vaults?deleted=true")
+
+      slugs = conn |> json_response(200) |> Map.fetch!("vaults") |> Enum.map(& &1["slug"])
+      assert slugs == ["granted"]
+    end
+
+    test "an unscoped token still lists every deleted vault", %{conn: conn} do
+      user = insert(:user)
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      vault_a = insert(:vault, user: user, slug: "vault-a", is_default: true)
+      vault_b = insert(:vault, user: user, slug: "vault-b")
+      {:ok, _} = Vaults.delete_vault(user, vault_a.id)
+      {:ok, _} = Vaults.delete_vault(user, vault_b.id)
+
+      user = ensure_external_id(user)
+      token = Accounts.generate_jwt(user, %{"scope" => "mcp"})
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> get("/api/vaults?deleted=true")
+
+      slugs = conn |> json_response(200) |> Map.fetch!("vaults") |> Enum.map(& &1["slug"])
+      assert Enum.sort(slugs) == ["vault-a", "vault-b"]
+    end
   end
 
   describe "POST /api/vaults/:id/restore" do

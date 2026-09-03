@@ -40,7 +40,13 @@ defmodule EngramWeb.VaultsController do
 
   def index(conn, %{"deleted" => "true"}) do
     user = conn.assigns.current_user
-    vaults = Vaults.list_deleted_vaults(user)
+
+    vaults =
+      Engram.Permissions.filter(
+        Engram.Permissions.vault_scope(conn),
+        Vaults.list_deleted_vaults(user)
+      )
+
     counts = Vaults.content_counts_for(user, vaults)
 
     json(conn, %{
