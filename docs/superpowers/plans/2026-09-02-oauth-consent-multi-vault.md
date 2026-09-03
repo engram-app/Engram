@@ -21,6 +21,10 @@
 - **Pre-push gates, run locally from the worktree:** `mix format`, `mix credo`, `mix dialyzer` (dialyzer is local-only, not in CI), and for the frontend `bun run build` plus `./node_modules/.bin/biome check` — NOT `bunx biome`, which resolves the wrong version.
 - **Never pipe a gate command** into `tail`/`head` — the pipeline returns the pager's exit code and a failure reads as green.
 - **Conventional commits**, subject < 50 chars.
+- **One source for permissions.** `Engram.Permissions` (Task 4) is the ONLY place that
+  answers "may this credential reach this vault". No task may add a second check function,
+  and no call site may hand-compose API-key and OAuth restrictions. If a task seems to need
+  its own check, it needs `Permissions` to grow a function instead.
 - All paths below are relative to the worktree root `.worktrees/feat-oauth-consent-multi-vault/`.
 
 ---
@@ -37,7 +41,8 @@
 - `lib/engram_web/controllers/mcp_controller.ex` — set membership; delete the subset dead end
 - `lib/engram/vector/qdrant.ex` — `build_tenant_filter/1` accepts a list
 - `lib/engram/search.ex` — `vault_ids` opt
-- `lib/engram/vaults.ex` — `check_oauth_scope/2`
+- `lib/engram/permissions.ex` (create) — the single permission source
+- `lib/engram/vaults.ex` — DELETE `check_api_key_access/2` (superseded by Permissions)
 - `lib/engram_web/plugs/vault_plug.ex` — enforce the grant
 - `lib/engram_web/router.ex` — mount `OAuthScopeEnforce` on the vault-scoped pipeline
 - `lib/engram_web/controllers/vaults_controller.ex` — filter the list under a bound token
@@ -49,6 +54,7 @@
 - `frontend/src/api/queries.ts` — `Connection.vault_ids`/`vault_names`; delete dead encryption fields
 
 **Tests — created**
+- `test/engram/permissions_test.exs`
 - `test/engram_web/plugs/vault_plug_oauth_scope_test.exs`
 
 **Tests — modified**
@@ -2043,9 +2049,19 @@ Run:
 ```bash
 grep -rn "oauth_scope_vault_id\b" lib/ test/
 grep -rn "vault_choice" lib/ frontend/src/ e2e/ frontend/e2e/
+grep -rn "check_api_key_access\|check_oauth_scope" lib/ test/
+grep -rn "accessible_vault_ids" lib/
 ```
 
-Expected: `oauth_scope_vault_id` (singular) returns nothing — the assign was renamed. `vault_choice` should appear only in the back-compat clause of `parse_vault_selection/1` and its tests. A hit under `frontend/e2e/` is the sweep-gap class that has bitten before; fix it here.
+Expected:
+- `oauth_scope_vault_id` (singular) returns nothing — the assign was renamed.
+- `vault_choice` appears only in the back-compat clause of `parse_vault_selection/1` and its
+  tests. A hit under `frontend/e2e/` is the sweep-gap class that has bitten before; fix it here.
+- `check_api_key_access` returns NOTHING — Task 7 deleted it. `check_oauth_scope` returns
+  nothing either; it was designed out in favour of `Engram.Permissions`. A surviving hit means
+  a second permission source got reintroduced, which the Global Constraints forbid.
+- `accessible_vault_ids` has exactly ONE caller in `lib/`: `Engram.Permissions`. More than one
+  means a call site is bypassing the unified module.
 
 - [ ] **Step 3: Run the backend gauntlet**
 
