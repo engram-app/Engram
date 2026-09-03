@@ -120,6 +120,72 @@ defmodule EngramWeb.Plugs.RequireSessionTest do
     end
   end
 
+  describe "billing writes are session-only" do
+    # A grant to read and write notes is not consent to change what the user
+    # pays. `portal` and `payment-update-transaction` are GETs but each MINTS a
+    # Paddle-hosted bearer URL/transaction over the user's payment methods, so
+    # they are writes in everything but verb.
+    @billing_writes [
+      {:get, "/api/billing/portal"},
+      {:get, "/api/billing/payment-update-transaction"},
+      {:post, "/api/billing/cancel-subscription"},
+      {:post, "/api/billing/reverse-cancel"},
+      {:post, "/api/billing/plan-change/confirm"}
+    ]
+
+    defp request(conn, :get, path), do: get(conn, path)
+    defp request(conn, :post, path), do: post(conn, path, %{})
+
+    test "no billing write is reachable by a grant", %{conn: base, user: user} do
+      for {verb, path} <- @billing_writes do
+        conn =
+          base
+          |> oauth_authed(user, %{"scope" => "mcp"})
+          |> request(verb, path)
+
+        assert %{"error" => "oauth_grant_not_allowed"} = json_response(conn, 403),
+               "#{verb} #{path}"
+      end
+    end
+
+    test "no billing write is reachable by an api key either", %{conn: base, user: user} do
+      # `RequireApiRpsBudget` sits BEFORE `RequireSession` on this pipeline and
+      # 429s a Free user's API key outright, which would green this test without
+      # ever reaching the plug under test. Lift the budget so the 403 is real.
+      grant_api_write!(user)
+      {:ok, raw_key, _} = Engram.Accounts.create_api_key(user, "billing-boundary")
+
+      for {verb, path} <- @billing_writes do
+        conn =
+          base
+          |> put_req_header("authorization", "Bearer #{raw_key}")
+          |> request(verb, path)
+
+        assert %{"error" => "api_key_not_allowed"} = json_response(conn, 403), "#{verb} #{path}"
+      end
+    end
+
+    # The over-block guard: this is the ONLY way a real user changes their plan.
+    test "a first-party session still reaches every billing write", %{conn: base, user: user} do
+      for {verb, path} <- @billing_writes do
+        conn = base |> session_authed(user) |> request(verb, path)
+
+        refute conn.status == 403, "#{verb} #{path} — RequireSession blocked a real session"
+      end
+    end
+
+    # Reads change nothing and mint nothing, so they stay on the open pipeline —
+    # the plugin reads plan state through them. Guard against over-correcting.
+    test "read-only billing stays reachable by a grant", %{conn: conn, user: user} do
+      conn =
+        conn
+        |> oauth_authed(user, %{"scope" => "mcp"})
+        |> get("/api/billing/status")
+
+      assert json_response(conn, 200)["tier"]
+    end
+  end
+
   describe "account-wide primitives are session-only" do
     test "a grant cannot approve its own device flow", %{conn: conn, user: user, vault: vault} do
       # `POST /api/auth/device/start` is PUBLIC, so without this a third-party

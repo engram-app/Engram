@@ -10,6 +10,14 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
     put_req_header(conn, "authorization", "Bearer #{token}")
   end
 
+  # An OAuth-issued access token: the same mint path `/oauth/token` uses, so the
+  # `scope` claim `RequireSession` keys on is present exactly as in production.
+  defp oauth_authed(conn, user, extras) do
+    user = ensure_external_id(user)
+    token = Engram.Accounts.generate_jwt(user, extras)
+    put_req_header(conn, "authorization", "Bearer #{token}")
+  end
+
   defp register_client(redirect_uri \\ "https://claude.ai/api/mcp/auth_callback") do
     {:ok, client} =
       OAuth.register_client(%{
@@ -277,6 +285,74 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
 
       conn = post(conn, "/api/oauth/authorize/consent", params)
       assert conn.status == 401
+    end
+  end
+
+  describe "POST /api/oauth/authorize/consent — session only" do
+    # Consent MINTS an authorization code for whatever `client_id` and vaults
+    # the caller names, and ownership is checked against the USER, not against
+    # the calling credential. `/oauth/register` is public DCR, so off
+    # `RequireSession` a third-party app registers its own client, self-consents
+    # with the grant it already holds, and exchanges for an all-vaults token —
+    # a grant on vault A minting one covering A and B, with no user in the loop.
+    test "a vault-scoped grant cannot self-consent", %{conn: conn} do
+      user = insert(:user)
+      vault_a = insert(:vault, user: user)
+      vault_b = insert(:vault, user: user)
+      client = register_client()
+
+      params =
+        client.client_id
+        |> valid_params(hd(client.redirect_uris))
+        |> Map.put("vault_choice", "vault:#{vault_b.id}")
+
+      conn =
+        conn
+        |> oauth_authed(user, %{"scope" => "mcp", "vault_ids" => [vault_a.id]})
+        |> post("/api/oauth/authorize/consent", params)
+
+      assert %{"error" => "oauth_grant_not_allowed"} = json_response(conn, 403)
+
+      # A 403 that minted the code anyway would be worse than no check.
+      assert Repo.aggregate(Engram.OAuth.AuthorizationCode, :count, skip_tenant_check: true) == 0
+    end
+
+    test "an UNSCOPED (all-vaults) grant cannot self-consent either", %{conn: conn} do
+      user = insert(:user)
+      _vault = insert(:vault, user: user)
+      client = register_client()
+
+      params =
+        client.client_id
+        |> valid_params(hd(client.redirect_uris))
+        |> Map.put("vault_choice", "vault:*")
+
+      conn =
+        conn
+        |> oauth_authed(user, %{"scope" => "mcp"})
+        |> post("/api/oauth/authorize/consent", params)
+
+      assert %{"error" => "oauth_grant_not_allowed"} = json_response(conn, 403)
+    end
+
+    # THE over-block guard. `RequireSession` gates the entire consent flow, so a
+    # false positive here means nobody can approve any OAuth client at all —
+    # the SPA on SaaS (Clerk) and on self-host (`Local.issue_access_token/2`,
+    # which sets no `scope` claim) both land on this route.
+    test "a first-party session still reaches consent", %{conn: conn} do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      client = register_client()
+
+      params =
+        client.client_id
+        |> valid_params(hd(client.redirect_uris))
+        |> Map.put("vault_choice", "vault:#{vault.id}")
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      assert conn.status == 200
+      assert is_binary(Jason.decode!(conn.resp_body)["redirect_uri"])
     end
   end
 
