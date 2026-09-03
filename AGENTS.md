@@ -7,7 +7,7 @@
 
 > **Workspace:** For cross-project work, open `../engram-workspace/` instead. It provides unified context for both plugin and backend.
 
-Engram — AI-powered personal knowledge base built on Obsidian. Your vault remembers everything. Makes your notes queryable by any AI assistant via MCP. SaaS pricing: Free / Starter $7/mo / Pro $14/mo (v3 reanchored 2026-05-31). Pricing rationale in `../engram-workspace/docs/context/pricing-strategy.md`; billing integration details in `docs/context/paddle-integration.md`.
+Engram — AI-powered personal knowledge base built on Obsidian. Your vault remembers everything. Makes your notes queryable by any AI assistant via MCP. SaaS pricing: Free / Starter $7/mo / Pro $14/mo (v3 reanchored 2026-05-31). Pricing rationale in `../engram-workspace/docs/context/pricing-tiers-v2-decisions.md` (the old `pricing-strategy.md` pointer named a file that does not exist); billing integration details in `docs/context/paddle-integration.md`.
 
 ## Issue Tracker
 
@@ -274,11 +274,24 @@ Design spec: `../engram-workspace/docs/superpowers/specs/2026-06-23-logging-taxo
 
 ## Product Tiers
 
-| Tier | Price | Features |
-|------|-------|----------|
-| **Free** | $0 | 1 vault, 1 device (12h swap cooldown), 1GB attachments, manual sync, 10k notes, 5 AI conversations/day, MCP enabled, 90-day inactivity auto-delete |
-| **Starter** | $7/mo ($70/yr) | 5 vaults, unlimited devices, 3GB attachments, real-time SSE sync, 50k notes, 500 AI queries/day, API write access |
-| **Pro** | $14/mo ($140/yr) | 15 vaults, unlimited devices, 15GB attachments, real-time sync, unlimited notes, unlimited AI (10k/day fair-use), priority support, higher API rate |
+**Free $0 / Starter $7-mo ($70-yr) / Pro $14-mo ($140-yr).** Prices are stable;
+the limit matrix is not.
+
+**`Engram.Billing.LimitKeys` is the only source of truth for limits.** Read the
+`@catalog` there. Do not restate the matrix here and do not trust a matrix you
+find in any other doc.
+
+This section used to carry a full feature table. Every line of it went stale
+without anyone noticing, in three separate waves: the 2026-08-24 revision (Free
+is 2 devices not 1, 24h not 12h cooldown, real-time sync on every tier, API keys
+moved to Pro), the `ai_searches_per_day` consolidation that deleted six AI
+meters, and pricing v3.1 (vaults 1/10/unlimited, attachments 1/10/50 GiB). It
+told agents Starter had API write access for roughly a week after that became
+Pro-only. A duplicated matrix is a matrix that drifts, so there is now one copy
+and it is the code.
+
+Decisions and rationale, including why each number is what it is:
+`../engram-workspace/docs/context/pricing-tiers-v2-decisions.md`.
 
 Self-host (no `PADDLE_API_KEY`): free, no billing wiring. See `docs/context/paddle-integration.md`.
 
