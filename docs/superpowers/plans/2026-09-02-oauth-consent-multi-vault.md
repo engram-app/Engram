@@ -658,7 +658,22 @@ git commit -m "feat(oauth): carry vault_ids into access tokens"
 
 **Interfaces:**
 - Consumes: the `vault_ids` JWT claim from Task 3.
-- Produces: `conn.assigns.oauth_scope_vault_ids :: [String.t()] | nil`. The old `oauth_scope_vault_id` assign is **removed** — leaving both invites a caller to check the wrong one.
+- Produces:
+  - `conn.assigns.oauth_scope_vault_ids :: [String.t()] | nil`. The old `oauth_scope_vault_id` assign is **removed** — leaving both invites a caller to check the wrong one.
+  - **`Engram.Permissions`** — the single source of truth every later task calls:
+    - `vault_scope(conn) :: :all | MapSet.t(String.t())`
+    - `allows?(scope, vault) :: boolean`
+    - `check(scope, vault) :: :ok | :forbidden`
+    - `filter(scope, vaults) :: [vault]`
+
+> **This task creates the permission module the rest of the plan depends on.**
+> Three credential kinds authenticate against Engram — a Clerk/local JWT (the
+> user, unrestricted), an API key (optionally restricted via `api_key_vaults`),
+> and an OAuth grant (optionally restricted via the grant's `vault_ids`). Today
+> each carries its own check and every caller composes them by hand. Adding the
+> OAuth vault set as a *second parallel check* would double that. One module
+> owns the question instead, and folder/group permissions extend it later
+> without moving a single call site.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -768,50 +783,155 @@ Replace the body of `lib/engram_web/plugs/oauth_scope_enforce.ex`:
   defp scope_ids(_), do: nil
 ```
 
-- [ ] **Step 4: Switch MCP to set membership**
+- [ ] **Step 4: Create `Engram.Permissions`**
 
-In `lib/engram_web/controllers/mcp_controller.ex`, replace `scope_vaults/2` and `maybe_filter_oauth/2` (lines 411-424):
+Write a failing test first, `test/engram/permissions_test.exs`:
 
 ```elixir
-  defp scope_vaults(vaults, conn) do
-    oauth_bound = conn.assigns[:oauth_scope_vault_ids]
-    # One query for the API key's restricted set, then filter in memory — not a
-    # per-vault DB round-trip.
-    allowed = Engram.Vaults.accessible_vault_ids(conn.assigns[:current_api_key])
+defmodule Engram.PermissionsTest do
+  use Engram.DataCase, async: true
 
-    vaults
-    |> maybe_filter_oauth(oauth_bound)
-    |> filter_api_key(allowed)
+  alias Engram.Permissions
+
+  defp conn_with(assigns), do: %Plug.Conn{assigns: assigns}
+
+  test "no credential restrictions means every vault" do
+    assert Permissions.vault_scope(conn_with(%{})) == :all
   end
 
-  defp maybe_filter_oauth(vaults, nil), do: vaults
-
-  defp maybe_filter_oauth(vaults, bound) when is_list(bound) do
-    set = MapSet.new(bound, &to_string/1)
-    Enum.filter(vaults, &MapSet.member?(set, to_string(&1.id)))
+  test "an OAuth grant narrows to its vault set" do
+    scope = Permissions.vault_scope(conn_with(%{oauth_scope_vault_ids: ["a", "b"]}))
+    assert Permissions.allows?(scope, %{id: "a"})
+    refute Permissions.allows?(scope, %{id: "c"})
   end
+
+  test "restrictions INTERSECT, never union" do
+    # An API key permitted to {a, b} presenting an OAuth grant for {b, c}
+    # may reach only b — the overlap. Taking either side alone would widen
+    # the credential past what one of its two restrictions allows.
+    scope =
+      Permissions.intersect_for_test(
+        MapSet.new(["a", "b"]),
+        MapSet.new(["b", "c"])
+      )
+
+    refute Permissions.allows?(scope, %{id: "a"})
+    assert Permissions.allows?(scope, %{id: "b"})
+    refute Permissions.allows?(scope, %{id: "c"})
+  end
+
+  test "filter/2 keeps only permitted vaults, :all keeps all" do
+    vaults = [%{id: "a"}, %{id: "b"}]
+    assert Permissions.filter(:all, vaults) == vaults
+    assert Permissions.filter(MapSet.new(["b"]), vaults) == [%{id: "b"}]
+  end
+
+  test "check/2 mirrors allows?/2" do
+    assert Permissions.check(:all, %{id: "a"}) == :ok
+    assert Permissions.check(MapSet.new(["b"]), %{id: "a"}) == :forbidden
+  end
+end
+```
+
+Run it, confirm it fails (module does not exist), then create `lib/engram/permissions.ex`:
+
+```elixir
+defmodule Engram.Permissions do
+  @moduledoc """
+  The single source of truth for what a credential may reach.
+
+  Three credential kinds authenticate against Engram: a Clerk/local JWT (the
+  user themselves, unrestricted), an API key (optionally restricted through
+  `api_key_vaults`), and an OAuth grant (optionally restricted through the
+  grant's `vault_ids`). Before this module each kind carried its own check and
+  every caller composed them by hand — `VaultPlug` ran two in sequence,
+  `McpController` chained two filters, and a third kind would have meant
+  finding every site again.
+
+  Every "may this credential reach this vault" question resolves here.
+
+  `vault_scope/1` reads the conn ONCE. Restrictions **intersect**: a credential
+  carrying both an API-key restriction and an OAuth grant gets what BOTH allow,
+  never either alone. Intersection is the only safe composition — taking one
+  side would widen the credential past a restriction it is actually under.
+
+  Folder- and group-level permissions belong here too when they arrive. The
+  scope type widens; the call sites do not move. That is the point.
+  """
+
+  alias Engram.Vaults
+
+  @type scope :: :all | MapSet.t(String.t())
+
+  @doc "Resolves everything restricting this request into one scope."
+  @spec vault_scope(Plug.Conn.t()) :: scope
+  def vault_scope(conn) do
+    intersect(
+      api_key_scope(conn.assigns[:current_api_key]),
+      oauth_scope(conn.assigns[:oauth_scope_vault_ids])
+    )
+  end
+
+  @spec allows?(scope, map()) :: boolean
+  def allows?(:all, _vault), do: true
+  def allows?(scope, vault), do: MapSet.member?(scope, to_string(vault.id))
+
+  @spec check(scope, map()) :: :ok | :forbidden
+  def check(scope, vault), do: if(allows?(scope, vault), do: :ok, else: :forbidden)
+
+  @spec filter(scope, [map()]) :: [map()]
+  def filter(:all, vaults), do: vaults
+  def filter(scope, vaults), do: Enum.filter(vaults, &allows?(scope, &1))
+
+  @doc false
+  # Exposed for the intersection test only — the composition rule is the part
+  # of this module most worth pinning down, and it is otherwise unreachable.
+  def intersect_for_test(a, b), do: intersect(a, b)
+
+  # An API key with no api_key_vaults rows is unrestricted; Vaults returns :all
+  # for that and for nil (non-API-key auth). One query, already batched there.
+  defp api_key_scope(nil), do: :all
+
+  defp api_key_scope(api_key) do
+    case Vaults.accessible_vault_ids(api_key) do
+      :all -> :all
+      ids -> MapSet.new(ids, &to_string/1)
+    end
+  end
+
+  defp oauth_scope(nil), do: :all
+  defp oauth_scope(ids) when is_list(ids), do: MapSet.new(ids, &to_string/1)
+
+  defp intersect(:all, other), do: other
+  defp intersect(other, :all), do: other
+  defp intersect(a, b), do: MapSet.intersection(a, b)
+end
+```
+
+- [ ] **Step 5: Route MCP through it**
+
+In `lib/engram_web/controllers/mcp_controller.ex`, replace `scope_vaults/2`,
+`maybe_filter_oauth/2` and `filter_api_key/2` (lines 411-424) with a single
+delegation — three functions become one:
+
+```elixir
+  # Narrows an already-loaded vault list to what the credential may reach, so a
+  # caller that already has the list (e.g. bare search) doesn't re-query it.
+  defp scope_vaults(vaults, conn),
+    do: Engram.Permissions.filter(Engram.Permissions.vault_scope(conn), vaults)
 ```
 
 Replace `resolve_requested_vault/3` (line 466):
 
 ```elixir
   defp resolve_requested_vault(user, requested, conn) do
-    if granted?(conn.assigns[:oauth_scope_vault_ids], requested) do
-      with {:ok, vault} <- Engram.Vaults.get_vault(user, requested),
-           :ok <- Engram.Vaults.check_api_key_access(conn.assigns[:current_api_key], vault) do
-        {:ok, vault}
-      else
-        _ -> {:error, vault_denied_message(user, requested, conn)}
-      end
+    with {:ok, vault} <- Engram.Vaults.get_vault(user, requested),
+         :ok <- Engram.Permissions.check(Engram.Permissions.vault_scope(conn), vault) do
+      {:ok, vault}
     else
-      {:error, vault_denied_message(user, requested, conn)}
+      _ -> {:error, vault_denied_message(user, requested, conn)}
     end
   end
-
-  defp granted?(nil, _requested), do: true
-
-  defp granted?(bound, requested) when is_list(bound),
-    do: Enum.any?(bound, &(to_string(&1) == to_string(requested)))
 ```
 
 Replace the first `cond` arm of `vault_denied_message/3` (line 485):
@@ -823,7 +943,7 @@ Replace the first `cond` arm of `vault_denied_message/3` (line 485):
           "ones it can reach, or reconnect with a grant that includes this vault."
 ```
 
-- [ ] **Step 5: Fix the bare-call message**
+- [ ] **Step 6: Fix the bare-call message**
 
 In `resolve_mcp_vault/3` (line 455-458), the `_many` branch says "You own multiple vaults", which is wrong for a 2-of-3 grant. Replace it:
 
@@ -836,18 +956,19 @@ In `resolve_mcp_vault/3` (line 455-458), the `_many` branch says "You own multip
 
 Update the corresponding assertion in `test/engram_web/controllers/mcp_oauth_scope_test.exs:136` from `assert text =~ "multiple vaults"` to `assert text =~ "more than one vault"`. That test covers an unscoped token and its *behaviour* is unchanged — only the wording moves.
 
-- [ ] **Step 6: Run the tests**
+- [ ] **Step 7: Run the tests**
 
-Run: `mix test test/engram_web/controllers/mcp_oauth_scope_test.exs test/engram_web/controllers/mcp_controller_test.exs`
+Run: `mix test test/engram/permissions_test.exs test/engram_web/controllers/mcp_oauth_scope_test.exs test/engram_web/controllers/mcp_controller_test.exs`
 Expected: PASS, all of it. The subset-search test at `mcp_controller_test.exs:1058` is driven by a restricted API KEY, not an OAuth grant, so `oauth_scope_vault_ids` is nil there and `maybe_filter_oauth/2` takes its passthrough clause — this task must not change that test's result. If it goes red here, the new membership filter is wrongly catching the nil case; fix that before continuing.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add lib/engram_web/plugs/oauth_scope_enforce.ex \
+git add lib/engram/permissions.ex test/engram/permissions_test.exs \
+        lib/engram_web/plugs/oauth_scope_enforce.ex \
         lib/engram_web/controllers/mcp_controller.ex \
         test/engram_web/controllers/mcp_oauth_scope_test.exs
-git commit -m "feat(mcp): enforce grants as a vault set"
+git commit -m "feat(auth): unify credential vault permissions"
 ```
 
 ---
@@ -1130,14 +1251,14 @@ git commit -m "feat(mcp): search a granted vault subset"
 ### Task 7: Enforce the grant on the REST pipeline
 
 **Files:**
-- Modify: `lib/engram/vaults.ex` (add `check_oauth_scope/2` next to `check_api_key_access/2` at line 689)
 - Modify: `lib/engram_web/plugs/vault_plug.ex:26-34`
 - Modify: `lib/engram_web/router.ex` (vault-scoped pipeline)
+- Modify: `lib/engram/vaults.ex` (DELETE `check_api_key_access/2`)
 - Create: `test/engram_web/plugs/vault_plug_oauth_scope_test.exs`
 
 **Interfaces:**
-- Consumes: `conn.assigns.oauth_scope_vault_ids` from Task 4.
-- Produces: `Engram.Vaults.check_oauth_scope(scope_ids, vault) :: :ok | :forbidden`.
+- Consumes: `Engram.Permissions.vault_scope/1` and `check/2` from Task 4.
+- Produces: nothing new. This task deletes a check rather than adding one.
 
 > This is the widest-blast-radius task in the plan: it changes enforcement for
 > every route behind `VaultPlug`, not just the OAuth ones. If CI goes broadly
@@ -1229,52 +1350,54 @@ end
 Run: `mix test test/engram_web/plugs/vault_plug_oauth_scope_test.exs`
 Expected: FAIL — the two 403 assertions get 200; the grant is not enforced on REST.
 
-- [ ] **Step 3: Add the check function**
+- [ ] **Step 3: Enforce via the unified module in VaultPlug**
 
-In `lib/engram/vaults.ex`, after `check_api_key_access/2` (line 694):
-
-```elixir
-  @doc """
-  Checks a vault against an OAuth grant's vault scope.
-
-  `nil` (no OAuth claims, or an unrestricted grant) permits every vault —
-  API-key and Clerk-JWT auth take this path. A list permits only its members.
-  Mirrors `check_api_key_access/2` so VaultPlug applies both the same way.
-  """
-  @spec check_oauth_scope([String.t()] | nil, map()) :: :ok | :forbidden
-  def check_oauth_scope(nil, _vault), do: :ok
-
-  def check_oauth_scope(scope_ids, vault) when is_list(scope_ids) do
-    if Enum.any?(scope_ids, &(to_string(&1) == to_string(vault.id))),
-      do: :ok,
-      else: :forbidden
-  end
-```
-
-- [ ] **Step 4: Enforce it in VaultPlug**
-
-In `lib/engram_web/plugs/vault_plug.ex`, replace the `{:ok, vault}` arm of `call/2`:
+In `lib/engram_web/plugs/vault_plug.ex`, replace the `{:ok, vault}` arm of `call/2`. Two
+checks become one — `Permissions.vault_scope/1` has already folded the API-key restriction
+and the OAuth grant together:
 
 ```elixir
       {:ok, vault} ->
-        api_key = conn.assigns[:current_api_key]
+        case Engram.Permissions.check(Engram.Permissions.vault_scope(conn), vault) do
+          :ok ->
+            assign(conn, :current_vault, vault)
 
-        with :ok <- Vaults.check_api_key_access(api_key, vault),
-             :ok <- Vaults.check_oauth_scope(conn.assigns[:oauth_scope_vault_ids], vault) do
-          assign(conn, :current_vault, vault)
-        else
           :forbidden ->
             Halt.json(conn, 403, %{error: "Not authorized for this vault"})
         end
 ```
 
-Note the message is now shared by both rejections. That is deliberate: telling an unauthorized caller *which* of the two checks failed distinguishes "this vault exists but your key lacks it" from "your grant excludes it", and neither is theirs to know. Update the moduledoc:
+The rejection message deliberately does not say WHICH restriction denied it. Distinguishing
+"this vault exists but your API key lacks it" from "your OAuth grant excludes it" tells an
+unauthorized caller something about vaults it cannot reach, and neither fact is theirs.
+
+Replace the moduledoc's restriction bullets with one:
 
 ```elixir
-  - If an API key is present in assigns, checks api_key_vaults for vault restrictions.
-  - If the bearer token is an OAuth grant scoped to specific vaults
-    (`oauth_scope_vault_ids`, set by OAuthScopeEnforce), checks membership.
+  - Checks `Engram.Permissions` for whether this request's credential — API key,
+    OAuth grant, or neither — may reach the resolved vault.
 ```
+
+Drop the now-unused `alias Engram.Vaults` line only if nothing else in the file uses it
+(`resolve_vault/2` still calls `Vaults.get_vault/2` and `Vaults.get_default_vault/1`, so it
+almost certainly stays).
+
+- [ ] **Step 4: Delete the superseded check**
+
+`Engram.Vaults.check_api_key_access/2` now has no callers — `Permissions` calls
+`accessible_vault_ids/1` directly. Confirm and delete:
+
+```bash
+grep -rn "check_api_key_access" lib/ test/
+```
+
+Every remaining hit must be in `vaults.ex` itself or in a test asserting the old behaviour.
+Delete the function (`vaults.ex:689-694`) and move any test worth keeping to
+`test/engram/permissions_test.exs`. Leaving a second, subtly different way to ask the same
+question is exactly what this task exists to prevent.
+
+`accessible_vault_ids/1` STAYS — it is the API-key half's query, and `Permissions` is now
+its only caller.
 
 - [ ] **Step 5: Mount the plug on the vault-scoped pipeline**
 
@@ -1299,7 +1422,7 @@ Expected: PASS. Any failure here is a route that was silently relying on an OAut
 ```bash
 git add lib/engram/vaults.ex lib/engram_web/plugs/vault_plug.ex lib/engram_web/router.ex \
         test/engram_web/plugs/vault_plug_oauth_scope_test.exs
-git commit -m "fix(auth): enforce OAuth vault grants on REST"
+git commit -m "fix(auth): enforce vault permissions on REST"
 ```
 
 ---
@@ -1311,8 +1434,8 @@ git commit -m "fix(auth): enforce OAuth vault grants on REST"
 - Test: `test/engram_web/controllers/vaults_controller_test.exs`
 
 **Interfaces:**
-- Consumes: `Engram.Vaults.check_oauth_scope/2` (Task 7); `oauth_scope_vault_ids` (Task 4).
-- Produces: `index_payload/2` — a second arity taking the scope list. The existing `index_payload/1` stays as `index_payload(user, nil)` so `/api/bootstrap` keeps compiling.
+- Consumes: `Engram.Permissions.vault_scope/1` and `filter/2` (Task 4).
+- Produces: `index_payload/2` — a second arity taking a `Permissions.scope`. The existing `index_payload/1` stays as `index_payload(user, :all)` so `/api/bootstrap` keeps compiling.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1352,7 +1475,7 @@ In `lib/engram_web/router.ex`, add `EngramWeb.Plugs.OAuthScopeEnforce` to the us
 In `lib/engram_web/controllers/vaults_controller.ex`, change `index/2` (line 50-52) to pass the scope:
 
 ```elixir
-    payload = index_payload(user, conn.assigns[:oauth_scope_vault_ids])
+    payload = index_payload(user, Engram.Permissions.vault_scope(conn))
 ```
 
 and replace `index_payload/1`:
@@ -1363,15 +1486,15 @@ and replace `index_payload/1`:
   Public so the consolidated `GET /api/bootstrap` endpoint serves the identical
   list shape without the device-link `user_code` extension.
 
-  `scope_ids` narrows the list to an OAuth grant's vaults. Without it a
-  token scoped to one vault could still enumerate the names of every other
+  `scope` narrows the list to what the request's credential may reach. Without
+  it a token scoped to one vault could still enumerate the names of every other
   vault the user owns — the same leak the MCP list path closed in #729.
   """
-  def index_payload(user, scope_ids \\ nil) do
+  def index_payload(user, scope \\ :all) do
     vaults =
       user
       |> Vaults.list_vaults()
-      |> Enum.filter(&(Vaults.check_oauth_scope(scope_ids, &1) == :ok))
+      |> Engram.Permissions.filter(scope)
 
     counts = Vaults.content_counts_for(user, vaults)
     %{vaults: Enum.map(vaults, &vault_json(&1, Map.get(counts, &1.id, @zero_counts)))}
@@ -1385,7 +1508,7 @@ Keep the rest of the original body if it does more than the above — only the `
 Run `grep -rn "index_payload" lib/` and pass the scope at the `/api/bootstrap` call site too:
 
 ```elixir
-    VaultsController.index_payload(user, conn.assigns[:oauth_scope_vault_ids])
+    VaultsController.index_payload(user, Engram.Permissions.vault_scope(conn))
 ```
 
 - [ ] **Step 6: Run the tests**
