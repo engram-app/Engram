@@ -111,8 +111,9 @@ export default function OAuthAuthorizePage() {
 
 	// `null` = the explicit "All vaults" choice, which stays all-vaults as new
 	// ones are created. A Set = exactly those ids. These are different grants,
-	// so the UI keeps them as different controls rather than inferring one
-	// from "every box happens to be checked".
+	// so ticking every box by hand does NOT collapse to `null` — only the
+	// "All vaults" control sets it. The two do render alike (see `active`
+	// below); it is the state, not the checkmarks, that differs.
 	const [picked, setPicked] = useState<Set<string> | null>(null);
 
 	// Ids that no longer exist in the fetched list are dropped. That is a
@@ -124,9 +125,12 @@ export default function OAuthAuthorizePage() {
 			? new Set([...picked].filter((id) => live.some((v) => String(v.id) === id)))
 			: picked;
 
+	// Every box reads as checked under "All vaults", so the first click on one
+	// has to mean "all except this" — seeding from an empty Set would instead
+	// narrow to the single vault the user was trying to remove.
 	const toggle = (id: string) => {
 		setPicked((prev) => {
-			const next = new Set(prev ?? []);
+			const next = new Set(prev ?? (live ?? []).map((v) => String(v.id)));
 			if (next.has(id)) {
 				next.delete(id);
 			} else {
@@ -327,24 +331,9 @@ export default function OAuthAuthorizePage() {
 							<legend className="mb-1 font-medium text-foreground text-sm">
 								Which vaults can {clientName} access?
 							</legend>
-							<label className={selectableRow(selected === null)}>
-								<input
-									type="radio"
-									name="all_vaults"
-									checked={selected === null}
-									onChange={() => setPicked(null)}
-									className="accent-primary"
-								/>
-								<span className="font-medium text-foreground text-sm">
-									All vaults
-									<span className="ml-2 font-normal text-muted-foreground text-xs">
-										including any you create later
-									</span>
-								</span>
-							</label>
 							{vaultsQuery.data?.map((v) => {
 								const id = String(v.id);
-								const active = Boolean(selected?.has(id));
+								const active = selected === null || selected.has(id);
 								return (
 									<label key={id} className={selectableRow(active)}>
 										<input
@@ -370,6 +359,22 @@ export default function OAuthAuthorizePage() {
 									</label>
 								);
 							})}
+							<hr className="my-2 border-border" />
+							<label className={selectableRow(selected === null)}>
+								<input
+									type="radio"
+									name="all_vaults"
+									checked={selected === null}
+									onChange={() => setPicked(null)}
+									className="accent-primary"
+								/>
+								<span className="font-medium text-foreground text-sm">
+									All vaults
+									<span className="ml-2 font-normal text-muted-foreground text-xs">
+										including any you create later
+									</span>
+								</span>
+							</label>
 						</fieldset>
 
 						{Boolean(submitError) && (

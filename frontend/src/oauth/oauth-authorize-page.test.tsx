@@ -203,7 +203,9 @@ describe("OAuthAuthorizePage", () => {
 		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
 
 		renderAt(VALID_QS);
-		fireEvent.click(await screen.findByRole("checkbox", { name: /work/iu }));
+		// Every box starts checked under "All vaults", so picking Work alone
+		// means unchecking Personal.
+		fireEvent.click(await screen.findByRole("checkbox", { name: /personal/iu }));
 		fireEvent.click(screen.getByRole("button", { name: /approve/iu }));
 
 		await waitFor(() =>
@@ -319,7 +321,9 @@ describe("OAuthAuthorizePage", () => {
 		postOAuthConsent.mockResolvedValue({ redirect_uri: "https://client.example/cb?code=x" });
 		renderAt(VALID_QS);
 
-		fireEvent.click(await screen.findByRole("checkbox", { name: /Personal/ }));
+		// Unchecking Work from the all-checked default leaves Personal — the
+		// first click must narrow, not reset the selection to the box clicked.
+		fireEvent.click(await screen.findByRole("checkbox", { name: /Work/ }));
 		fireEvent.click(screen.getByRole("button", { name: "Approve" }));
 
 		await waitFor(() => expect(postOAuthConsent).toHaveBeenCalled());
@@ -395,15 +399,36 @@ describe("OAuthAuthorizePage", () => {
 		});
 		renderAt(VALID_QS);
 		const work = await screen.findByRole("checkbox", { name: /Work/ });
+		const personal = screen.getByRole("checkbox", { name: /Personal/ });
 
 		fireEvent.click(work);
 		expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
 
-		fireEvent.click(work);
+		fireEvent.click(personal);
 		expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
 
-		fireEvent.click(work);
+		fireEvent.click(personal);
 		expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
+	});
+
+	it("checks every vault box under All vaults, and unchecking one keeps the rest", async () => {
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "cli",
+			client_name: "Claude Desktop",
+			kind: "mcp",
+		});
+		renderAt(VALID_QS);
+
+		const work = await screen.findByRole("checkbox", { name: /Work/ });
+		const personal = screen.getByRole("checkbox", { name: /Personal/ });
+		expect(screen.getByRole("radio", { name: /All vaults/ })).toBeChecked();
+		expect(work).toBeChecked();
+		expect(personal).toBeChecked();
+
+		fireEvent.click(work);
+		expect(screen.getByRole("radio", { name: /All vaults/ })).not.toBeChecked();
+		expect(work).not.toBeChecked();
+		expect(personal).toBeChecked();
 	});
 
 	it("shows counts and the default badge", async () => {
