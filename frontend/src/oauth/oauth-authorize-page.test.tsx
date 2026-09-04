@@ -463,7 +463,7 @@ describe("OAuthAuthorizePage", () => {
 	describe("a vault list long enough to need searching", () => {
 		function manyVaults(n: number) {
 			return Array.from({ length: n }, (_, i) => ({
-				id: `0000${i}`.slice(-4).padStart(8, "0") + "-0000-0000-0000-000000000000",
+				id: `${String(i).padStart(8, "0")}-0000-0000-0000-000000000000`,
 				name: i === 0 ? "Personal" : `Project ${i}`,
 				description: null,
 				is_default: i === 0,
@@ -471,6 +471,24 @@ describe("OAuthAuthorizePage", () => {
 				attachment_count: 0,
 			}));
 		}
+
+		// The search field is a second text input on a screen whose real question
+		// is the checkbox list, so it stays behind the toggle until asked for.
+		it("hides the field behind a toggle until it is asked for", async () => {
+			vaultsState.current = manyVaults(12);
+			fetchOAuthClient.mockResolvedValue({
+				client_id: "cli",
+				client_name: "Claude Desktop",
+				kind: "mcp",
+			});
+			renderAt(VALID_QS);
+
+			await screen.findByRole("checkbox", { name: /Personal/ });
+			expect(screen.queryByRole("searchbox")).toBeNull();
+
+			fireEvent.click(screen.getByRole("button", { name: /Search vaults/iu }));
+			expect(screen.getByRole("searchbox", { name: /Search vaults/iu })).toBeInTheDocument();
+		});
 
 		it("stays out of the way while every vault fits on screen", async () => {
 			fetchOAuthClient.mockResolvedValue({
@@ -481,7 +499,8 @@ describe("OAuthAuthorizePage", () => {
 			renderAt(VALID_QS);
 
 			await screen.findByRole("checkbox", { name: /Personal/ });
-			expect(screen.queryByRole("searchbox", { name: /Search vaults/iu })).toBeNull();
+			expect(screen.queryByRole("searchbox")).toBeNull();
+			expect(screen.queryByRole("button", { name: /Search vaults/iu })).toBeNull();
 		});
 
 		it("filters the rows without changing what is selected", async () => {
@@ -496,6 +515,10 @@ describe("OAuthAuthorizePage", () => {
 
 			// Drop one vault, so the grant is an explicit 11-of-12 set.
 			fireEvent.click(await screen.findByRole("checkbox", { name: /Project 5/ }));
+
+			// The count rides with the search field — it exists to account for
+			// selections the filter has hidden, so it has no job before then.
+			fireEvent.click(screen.getByRole("button", { name: /Search vaults/iu }));
 			expect(screen.getByText("11 of 12 selected")).toBeInTheDocument();
 
 			const search = screen.getByRole("searchbox", { name: /Search vaults/iu });
@@ -522,7 +545,8 @@ describe("OAuthAuthorizePage", () => {
 			});
 			renderAt(VALID_QS);
 
-			const search = await screen.findByRole("searchbox", { name: /Search vaults/iu });
+			fireEvent.click(await screen.findByRole("button", { name: /Search vaults/iu }));
+			const search = screen.getByRole("searchbox", { name: /Search vaults/iu });
 			fireEvent.change(search, { target: { value: "zzzz" } });
 
 			expect(screen.getByText(/No vaults match/)).toBeInTheDocument();

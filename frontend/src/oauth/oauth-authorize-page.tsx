@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Search } from "lucide-react";
 import type React from "react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router";
 import { Button } from "@/components/ui/button";
 import {
@@ -154,6 +155,8 @@ export default function OAuthAuthorizePage() {
 	// A picker with four vaults does not need a search box; one with forty is
 	// unusable without it. Only the second case pays for the extra control.
 	const [filter, setFilter] = useState("");
+	const [searching, setSearching] = useState(false);
+	const searchRef = useRef<HTMLInputElement>(null);
 	const showFilter = (live?.length ?? 0) > SEARCH_THRESHOLD;
 	const needle = filter.trim().toLowerCase();
 	const shown =
@@ -350,15 +353,40 @@ export default function OAuthAuthorizePage() {
 						</label>
 
 						<fieldset className="flex flex-col gap-2">
-							<legend className="mb-1 font-medium text-foreground text-sm">
-								Which vaults can {clientName} access?
-							</legend>
-							{showFilter && (
+							{/* The search field is the second text input on a screen whose
+							    actual question is a list of checkboxes, so it stays behind
+							    this toggle rather than sitting open. Long lists are the
+							    minority case even among users who have enough vaults to
+							    reach the threshold. */}
+							<div className="mb-1 flex items-center justify-between gap-2">
+								<legend className="font-medium text-foreground text-sm">
+									Which vaults can {clientName} access?
+								</legend>
+								{showFilter && !searching && (
+									<button
+										type="button"
+										onClick={() => {
+											setSearching(true);
+											// Focus follows the click that opened the field. An
+											// `autoFocus` attribute would steal focus on mount
+											// instead, which is a different and worse thing.
+											requestAnimationFrame(() => searchRef.current?.focus());
+										}}
+										aria-label="Search vaults"
+										className="rounded p-1 text-muted-foreground hover:text-foreground"
+									>
+										<Search className="size-4" />
+									</button>
+								)}
+							</div>
+							{searching ? (
 								<>
 									<input
+										ref={searchRef}
 										type="search"
 										value={filter}
 										onChange={(e) => setFilter(e.target.value)}
+										onBlur={() => filter === "" && setSearching(false)}
 										placeholder="Search vaults"
 										aria-label="Search vaults"
 										className="rounded-lg border border-border bg-background p-2 text-sm"
@@ -372,7 +400,7 @@ export default function OAuthAuthorizePage() {
 											: `${selected.size} of ${live?.length ?? 0} selected`}
 									</p>
 								</>
-							)}
+							) : null}
 							{/* Caps at roughly five rows, then scrolls. "All vaults" is
 							    deliberately outside this box: it is the choice the list is
 							    an alternative to, and it must stay reachable without
