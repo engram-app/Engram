@@ -65,8 +65,14 @@ export function formatPlanPrice(
 export const FREE_TIER = {
 	name: "Free",
 	price: "$0",
-	summary: "10k notes · 1 vault · 1 GB attachments",
-	features: ["10k notes", "1 vault", "1 GB attachments", "2 devices"],
+	// "10k notes" was `notes_cap`, which never binds. The limit that actually
+	// binds on Free is `indexed_notes_cap: 2_000`, and per the v3.1 positioning
+	// that coverage number IS the upgrade lever, so it is the one we state.
+	// Do not say "2,000 most recent": `IndexCap` orders `asc: created_at`, so
+	// the indexed set is the OLDEST 2,000 and it is the user's newest notes
+	// that fall outside.
+	summary: "2,000 notes searchable · 1 vault · 1 GB attachments",
+	features: ["2,000 notes searchable", "1 vault", "1 GB attachments", "2 devices"],
 } as const;
 
 // Single catalog source-of-truth: both onboarding (trial signup) and the
@@ -80,13 +86,20 @@ export const PLAN_CATALOG: Record<PlanTier, PlanCardCatalog> = {
 		name: "Starter",
 		monthlyPrice: 7,
 		annualPrice: 70,
-		features: ["5 vaults", "Unlimited devices", "3 GB attachments", "500 AI queries/day"],
+		features: ["10 vaults", "Unlimited devices", "10 GB attachments", "Unlimited AI searches"],
 	},
 	pro: {
 		name: "Pro",
 		monthlyPrice: 14,
 		annualPrice: 140,
-		features: ["15 vaults", "Unlimited devices", "15 GB attachments", "10,000 AI queries/day"],
+		// Lead with what is actually Pro-ONLY. Unlimited devices and unlimited
+		// AI searches are true here too, but they are table stakes on paid and
+		// listing them made Pro read as "Starter with more storage" at double
+		// the price. `cross_vault_search` and `api_write_enabled` are the two
+		// keys that are genuinely pro-true in `LimitKeys`. Reranking is also
+		// pro-only but ships with RERANKER_BACKEND unset, so it stays off this
+		// list until the backend is actually deployed.
+		features: ["Unlimited vaults", "50 GB attachments", "Cross-vault search", "API access"],
 	},
 };
 

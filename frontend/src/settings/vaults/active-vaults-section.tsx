@@ -128,9 +128,11 @@ export function ActiveVaultsSection() {
 			{Boolean(atCap) && (
 				<aside className="mb-4 flex items-center justify-between gap-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3">
 					<p className="text-foreground text-sm">
-						{/* Cap is per-tier (Free 1, Starter 5), so the banner names the
-						    user's actual plan — it hardcoded "Free" and told a Starter
-						    user at 5 vaults that their Free plan allowed 5. */}
+						{/* Cap is per-tier (Free 1, Starter 10, Pro unlimited), so the
+						    banner names the user's actual plan — it hardcoded "Free" and
+						    told a Starter user at their cap that Free allowed that many.
+						    An unlimited cap arrives as null, which `atCap` rejects via its
+						    `typeof === "number"` guard, so this never renders for Pro. */}
 						Your {planLabel} plan allows {vaultsCap} {vaultsCap === 1 ? "vault" : "vaults"}. Upgrade
 						for more vaults.
 					</p>

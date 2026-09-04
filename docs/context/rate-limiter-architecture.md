@@ -5,7 +5,7 @@ _Last verified: 2026-07-08_
 **TL;DR:** Engram rate limiting is **Postgres + BEAM only, zero Redis**. Two mechanisms, split by limiter character:
 
 - **Short-window abuse/burst limiters** (preauth 60s, auth, `api_rps` 1s, Voyage RPM) → **`EngramWeb.RateLimiter.DistributedETS`**: per-node Hammer ETS counter + `Phoenix.PubSub` broadcast. Eventually consistent, permissive on failure.
-- **Billing-exact daily cap** (`external_ai_searches_per_day` / `inapp_searches_per_day`) → **`Engram.Usage.DailyCap`**: a lazy-refill **token bucket in Postgres** (`usage_buckets`), durable across deploys, with an ETS fast-deny cache.
+- **Billing-exact daily cap** (`ai_searches_per_day`) → **`Engram.Usage.DailyCap`**: a lazy-refill **token bucket in Postgres** (`usage_buckets`), durable across deploys, with an ETS fast-deny cache. Rolling, not calendar-daily: capacity is the allowance and refill is `allowance/86_400` per second, so there is no midnight cliff and no cron. This line used to name `external_ai_searches_per_day` / `inapp_searches_per_day`, which were two of the six keys this single meter replaced.
 
 Backend selection (`EngramWeb.RateLimiter.backend/0`): `:ets` (self-host / dev / test — per-node, no broadcast) | `:distributed_ets` (clustered SaaS prod, keyed on `DNS_CLUSTER_QUERY` in `runtime.exs`).
 

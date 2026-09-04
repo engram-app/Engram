@@ -17,6 +17,7 @@ files triggers the plugin's file watcher, causing unexpected sync events.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import secrets
@@ -61,6 +62,66 @@ def pytest_configure(config):
             "Clerk-gated tests would silently skip. Fix the secret wiring.",
             returncode=1,
         )
+
+# ---------------------------------------------------------------------------
+# Plugin surface contract — what the harness is allowed to reach for
+# ---------------------------------------------------------------------------
+# A helper that names a plugin symbol which has since been RENAMED does not
+# fail. It silently does nothing, and every test built on it goes green while
+# proving nothing. That is not hypothetical; it has happened twice:
+#
+#   * `suppress_fanout_backstops` stubbed three cold-apply method names that had
+#     ALL been retired from the plugin. Its `typeof` guard skipped each missing
+#     one, so it stubbed NOTHING and four "TRUE fan-out proof" tests ran green
+#     with the fan-out dead, for an unknown number of runs (#1503, #1559).
+#   * `accelerate_echo_expiry` reached for `syncEngine.recentlyPushed` after that
+#     path-keyed Map was consolidated into the private `files` TTL store. Dead on
+#     arrival; survivable only because nothing called it (deleted in this change).
+#
+# Asserting the surface once per session is cheaper than debugging a 120s
+# timeout that looks like a product bug. When you add a CDP call touching a new
+# syncEngine member, add it HERE — that is the whole contract, and
+# `e2e/unit/test_plugin_surface_contract.py` fails if the harness drifts from
+# these lists.
+#
+# Hard failure, not a warning, and deliberately so: pairing e2e against a plugin
+# branch missing one of these makes the whole run meaningless, and failing at
+# session start with the symbol named beats a TypeError forty tests deep.
+REQUIRED_ENGINE_METHODS = [
+    "applyPushedNoteUpdate",
+    "catchUp",
+    "flushQueue",
+    "fullSync",
+    "getCatchupSeq",
+    "getLastSync",
+    "getStatus",
+    "goOffline",
+    "goOnline",
+    "handleDelete",
+    "handleModify",
+    "handleRename",
+    "handleStreamEvent",
+    "isRecentlyPushed",
+    "isSyncBlocked",
+    "pullAll",
+    "pushAll",
+    "pushFile",
+    "setSyncBlocked",
+]
+
+REQUIRED_ENGINE_PROPS = [
+    "api",
+    "crdt",
+    "crdtEnrollment",
+    "debounceTimers",
+    "issues",
+    "lastError",
+    "lastSync",
+    "noteIdMap",
+    "offline",
+    "queue",
+    "ready",
+]
 
 # ---------------------------------------------------------------------------
 # Infra circuit breaker — stop the suite when the stack is provably dead
@@ -849,15 +910,22 @@ async def _assert_plugin_surfaces(cdp_a):
             if (typeof p.markSyncGateAccepted !== 'function') missing.push('markSyncGateAccepted');
             if (typeof p.registerVault !== 'function') missing.push('plugin.registerVault');
             if (typeof p.api?.registerVault !== 'function') missing.push('api.registerVault');
-            if (typeof p.syncEngine?.isRecentlyPushed !== 'function') missing.push('isRecentlyPushed');
-            if (typeof p.syncEngine?.handleStreamEvent !== 'function') missing.push('handleStreamEvent');
             if (!(p.syncEngine?.syncState instanceof Map)) missing.push('syncState:Map');
-            // NOT checked here: applyPushedNoteUpdate, the fan-out apply that
-            // arm_fanout_counter() wraps. It belongs to 4 crdt tests, and this
-            // fixture is session-scoped autouse across every suite — a rename
-            // would fail the ~110-test clerk session for a reason with no
-            // bearing on it. The helper raises on its own instead, which is the
-            // same protection scoped to the tests that need it.
+
+            // Lists come from REQUIRED_ENGINE_METHODS / _PROPS in this module —
+            // see their docstrings for why this check exists.
+            for (const m of """ + json.dumps(REQUIRED_ENGINE_METHODS) + """) {
+                if (typeof p.syncEngine?.[m] !== 'function') missing.push(`syncEngine.${m}()`);
+            }
+            // Presence only, and STRICTLY `=== undefined`: `lastSync` is "",
+            // `ready` is false and `noteIdMap` is null in a freshly constructed
+            // engine, so anything looser (falsy, == null) would fail every suite
+            // at session start. Undefined is the failure that matters — a
+            // renamed field reads as undefined and every access downstream
+            // silently no-ops or throws mid-suite.
+            for (const f of """ + json.dumps(REQUIRED_ENGINE_PROPS) + """) {
+                if (p.syncEngine?.[f] === undefined) missing.push(`syncEngine.${f}`);
+            }
             for (const id of cmds) {
                 if (!app.commands.findCommand(`engram-vault-sync:${id}`)) {
                     missing.push(`command:${id}`);
