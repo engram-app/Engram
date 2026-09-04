@@ -1498,6 +1498,9 @@ export interface Connection {
 	family_id: string | null;
 	key_id: string | null;
 	name: string | null;
+	/** The user's own name for this connection. `name` falls back through the
+	 *  client's self-reported and catalog names; this is only ever theirs. */
+	label: string | null;
 	software_id: string | null;
 	software_version: string | null;
 	verified: boolean;

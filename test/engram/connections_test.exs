@@ -935,6 +935,32 @@ defmodule Engram.ConnectionsTest do
       assert is_nil(row.vault_ids)
       refute Map.has_key?(row, :vault_id)
     end
+
+    # `vault_ids` was hardcoded nil for every key, and nil reads as "all
+    # vaults" — so a key restricted to one vault was listed, in the settings
+    # UI, as reaching every vault the user owns.
+    test "a restricted PAT reports the vaults it can actually reach" do
+      user = insert_user()
+      reachable = insert(:vault, user: user)
+      _unreachable = insert(:vault, user: user)
+      key = insert(:api_key, user: user, name: "ci-bot")
+
+      Engram.Repo.insert_all("api_key_vaults", [
+        %{api_key_id: Ecto.UUID.dump!(key.id), vault_id: Ecto.UUID.dump!(reachable.id)}
+      ])
+
+      assert [row] = Connections.list_for_user(user)
+      assert row.vault_ids == [reachable.id]
+      assert row.vault_names == [reachable.name]
+    end
+
+    test "a PAT's name is its own label" do
+      user = insert_user()
+      insert(:api_key, user: user, name: "ci-bot")
+
+      assert [row] = Connections.list_for_user(user)
+      assert row.label == "ci-bot"
+    end
   end
 
   # One MCP client the user authorized TWICE, over different vault sets — the

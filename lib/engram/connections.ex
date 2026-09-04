@@ -260,6 +260,9 @@ defmodule Engram.Connections do
           family_id: Ecto.UUID.t() | nil,
           key_id: integer() | nil,
           name: String.t() | nil,
+          # The user's own string, when they chose one. `name` falls back
+          # through the client's self-reported and catalog names; this does not.
+          label: String.t() | nil,
           software_id: String.t() | nil,
           software_version: String.t() | nil,
           verified: boolean(),
@@ -348,6 +351,11 @@ defmodule Engram.Connections do
         # name, which is identical across two grants for the same client — the
         # exact case a label exists to disambiguate.
         name: t.label || identity.display_name || c.client_name,
+        # Also emitted on its own. `name` collapses three sources, and the web
+        # app prefers the catalog spelling over a client's self-reported one —
+        # which would silently outrank the user's label, the one string they
+        # chose themselves to tell two grants for the same client apart.
+        label: t.label,
         software_id: c.software_id,
         software_version: c.software_version,
         verified: identity.verified,
@@ -380,6 +388,8 @@ defmodule Engram.Connections do
         |> Repo.all()
       end)
 
+    restrictions = api_key_vault_ids(Enum.map(keys, & &1.id))
+
     keys
     |> Enum.map(fn k ->
       %{
@@ -388,12 +398,16 @@ defmodule Engram.Connections do
         family_id: nil,
         key_id: k.id,
         name: k.name,
+        # A key's name IS user-chosen, so it is its own label.
+        label: k.name,
         software_id: nil,
         software_version: nil,
         verified: false,
         logo: nil,
         slug: nil,
-        vault_ids: nil,
+        # Was hardcoded nil, which reads as "all vaults" — a key restricted to
+        # one vault was displayed as reaching every one of them.
+        vault_ids: restrictions[k.id],
         scope: nil,
         last_used_at: k.last_used,
         connected_at: k.created_at,
@@ -405,6 +419,21 @@ defmodule Engram.Connections do
       }
     end)
     |> Enum.sort_by(&(&1.last_used_at || &1.connected_at), {:desc, DateTime})
+  end
+
+  # `api_key_vaults` has no user_id of its own, so RLS cannot scope it; the
+  # ids come from keys already filtered by user_id above. No rows for a key
+  # means unrestricted, which is `nil` on the wire — same as an OAuth grant
+  # with no vault set.
+  defp api_key_vault_ids([]), do: %{}
+
+  defp api_key_vault_ids(key_ids) do
+    from(akv in "api_key_vaults",
+      where: akv.api_key_id in ^Enum.map(key_ids, &Ecto.UUID.dump!/1),
+      select: {type(akv.api_key_id, Ecto.UUID), type(akv.vault_id, Ecto.UUID)}
+    )
+    |> Repo.all(skip_tenant_check: true)
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
   end
 
   defp device_rows(user_id) do
@@ -428,6 +457,8 @@ defmodule Engram.Connections do
         family_id: rt.family_id,
         key_id: nil,
         name: "Obsidian Vault Sync",
+        # Device flow has no consent screen, so no user-chosen label.
+        label: nil,
         software_id: "engram-vault-sync",
         software_version: nil,
         verified: true,

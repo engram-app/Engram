@@ -29,6 +29,54 @@ interface FakeBilling {
 	current_connections: { obsidian: number; mcp: number };
 	device_swap_cooldown_remaining_hours: number | null;
 }
+// Two vaults by default — below SEARCH_THRESHOLD, so the picker renders bare.
+// Tests that need the long-list behaviour swap this out.
+const DEFAULT_VAULTS = [
+	{
+		id: "11111111-1111-1111-1111-111111111111",
+		name: "Personal",
+		description: null,
+		is_default: true,
+		note_count: 1204,
+		attachment_count: 18,
+	},
+	{
+		id: "22222222-2222-2222-2222-222222222222",
+		name: "Work",
+		description: "day job",
+		is_default: false,
+		note_count: 312,
+		attachment_count: 0,
+	},
+];
+const vaultsState = vi.hoisted(() => ({
+	current: [
+		{
+			id: "11111111-1111-1111-1111-111111111111",
+			name: "Personal",
+			description: null,
+			is_default: true,
+			note_count: 1204,
+			attachment_count: 18,
+		},
+		{
+			id: "22222222-2222-2222-2222-222222222222",
+			name: "Work",
+			description: "day job",
+			is_default: false,
+			note_count: 312,
+			attachment_count: 0,
+		},
+	] as Array<{
+		id: string;
+		name: string;
+		description: string | null;
+		is_default: boolean;
+		note_count: number;
+		attachment_count: number;
+	}>,
+}));
+
 const billingState = vi.hoisted(() => ({
 	current: {
 		caps: {
@@ -44,27 +92,7 @@ const billingState = vi.hoisted(() => ({
 
 vi.mock("../api/queries", () => ({
 	useMe: () => ({ data: { email: "todd@example.com" }, isLoading: false }),
-	useVaults: () => ({
-		data: [
-			{
-				id: "11111111-1111-1111-1111-111111111111",
-				name: "Personal",
-				description: null,
-				is_default: true,
-				note_count: 1204,
-				attachment_count: 18,
-			},
-			{
-				id: "22222222-2222-2222-2222-222222222222",
-				name: "Work",
-				description: "day job",
-				is_default: false,
-				note_count: 312,
-				attachment_count: 0,
-			},
-		],
-		isLoading: false,
-	}),
+	useVaults: () => ({ data: vaultsState.current, isLoading: false }),
 	useBillingStatus: () => ({ data: billingState.current }),
 	useConnections: () => ({
 		data: [
@@ -136,6 +164,7 @@ function renderWithProbeAt(qs: string) {
 
 afterEach(() => {
 	vi.clearAllMocks();
+	vaultsState.current = DEFAULT_VAULTS;
 	billingState.current = {
 		caps: {
 			obsidian_connections: null,
@@ -429,6 +458,77 @@ describe("OAuthAuthorizePage", () => {
 		expect(screen.getByRole("radio", { name: /All vaults/ })).not.toBeChecked();
 		expect(work).not.toBeChecked();
 		expect(personal).toBeChecked();
+	});
+
+	describe("a vault list long enough to need searching", () => {
+		function manyVaults(n: number) {
+			return Array.from({ length: n }, (_, i) => ({
+				id: `0000${i}`.slice(-4).padStart(8, "0") + "-0000-0000-0000-000000000000",
+				name: i === 0 ? "Personal" : `Project ${i}`,
+				description: null,
+				is_default: i === 0,
+				note_count: 0,
+				attachment_count: 0,
+			}));
+		}
+
+		it("stays out of the way while every vault fits on screen", async () => {
+			fetchOAuthClient.mockResolvedValue({
+				client_id: "cli",
+				client_name: "Claude Desktop",
+				kind: "mcp",
+			});
+			renderAt(VALID_QS);
+
+			await screen.findByRole("checkbox", { name: /Personal/ });
+			expect(screen.queryByRole("searchbox", { name: /Search vaults/iu })).toBeNull();
+		});
+
+		it("filters the rows without changing what is selected", async () => {
+			vaultsState.current = manyVaults(12);
+			fetchOAuthClient.mockResolvedValue({
+				client_id: "cli",
+				client_name: "Claude Desktop",
+				kind: "mcp",
+			});
+			postOAuthConsent.mockResolvedValue({ redirect_uri: "https://client.example/cb?code=x" });
+			renderAt(VALID_QS);
+
+			// Drop one vault, so the grant is an explicit 11-of-12 set.
+			fireEvent.click(await screen.findByRole("checkbox", { name: /Project 5/ }));
+			expect(screen.getByText("11 of 12 selected")).toBeInTheDocument();
+
+			const search = screen.getByRole("searchbox", { name: /Search vaults/iu });
+			fireEvent.change(search, { target: { value: "Project 1" } });
+
+			// Project 1, 10, 11 match; Personal and Project 5 are hidden.
+			expect(screen.queryByRole("checkbox", { name: /Personal/ })).toBeNull();
+			expect(screen.queryByRole("checkbox", { name: /Project 5/ })).toBeNull();
+			expect(screen.getByRole("checkbox", { name: /Project 10/ })).toBeInTheDocument();
+			// Hiding a row must not deselect it — the count is unmoved.
+			expect(screen.getByText("11 of 12 selected")).toBeInTheDocument();
+
+			fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+			await waitFor(() => expect(postOAuthConsent).toHaveBeenCalled());
+			expect(postOAuthConsent.mock.calls[0]![0].vault_ids).toHaveLength(11);
+		});
+
+		it("keeps All vaults reachable when nothing matches", async () => {
+			vaultsState.current = manyVaults(12);
+			fetchOAuthClient.mockResolvedValue({
+				client_id: "cli",
+				client_name: "Claude Desktop",
+				kind: "mcp",
+			});
+			renderAt(VALID_QS);
+
+			const search = await screen.findByRole("searchbox", { name: /Search vaults/iu });
+			fireEvent.change(search, { target: { value: "zzzz" } });
+
+			expect(screen.getByText(/No vaults match/)).toBeInTheDocument();
+			// It sits outside the filtered list on purpose.
+			expect(screen.getByRole("radio", { name: /All vaults/ })).toBeInTheDocument();
+		});
 	});
 
 	it("shows counts and the default badge", async () => {

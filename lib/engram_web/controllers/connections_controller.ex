@@ -191,6 +191,7 @@ defmodule EngramWeb.ConnectionsController do
       family_id: row.family_id,
       key_id: row.key_id,
       name: row.name,
+      label: row.label,
       software_id: row.software_id,
       software_version: row.software_version,
       verified: row.verified,

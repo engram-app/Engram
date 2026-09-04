@@ -1591,6 +1591,13 @@
             "x-struct": null,
             "x-validate": null
           },
+          "label": {
+            "description": "The user's own name for this connection, when they set one.",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "last_used_at": {
             "format": "date-time",
             "nullable": true,

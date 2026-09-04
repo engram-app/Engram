@@ -28,6 +28,7 @@ function conn(over: Partial<Connection>): Connection {
 		family_id: `family-${over.slug ?? over.name ?? "x"}`,
 		key_id: null,
 		name: "Client",
+		label: null,
 		software_id: null,
 		software_version: null,
 		verified: false,

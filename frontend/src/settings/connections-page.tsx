@@ -63,6 +63,14 @@ interface PendingRevoke {
 
 // ── ConnectionCard ────────────────────────────────────────────
 
+// `null` means every vault, NOT none — shared with the API-key table so the
+// two cannot describe the same restriction differently.
+function vaultLabel(connection: Connection): string {
+	return connection.vault_ids === null
+		? "All vaults"
+		: connection.vault_ids.map((id, i) => connection.vault_names?.[i] ?? `#${id}`).join(", ");
+}
+
 function ConnectionCard({
 	connection,
 	onRevoke,
@@ -70,11 +78,6 @@ function ConnectionCard({
 	connection: Connection;
 	onRevoke: () => void;
 }) {
-	const vaultLabel =
-		connection.vault_ids === null
-			? "All vaults"
-			: connection.vault_ids.map((id, i) => connection.vault_names?.[i] ?? `#${id}`).join(", ");
-
 	return (
 		<article className="group flex items-start rounded-lg border border-border bg-card">
 			{/* <details> wraps the summary + expanded dl. The Revoke button is a
@@ -111,7 +114,8 @@ function ConnectionCard({
 							    so the raw string leaks a local config detail into a list of
 							    vendors. Same reasoning as the brand mark above, already keyed
 							    on slug. */}
-							{(connection.slug ? TOOL_LABELS[connection.slug] : null) ??
+							{connection.label ??
+								(connection.slug ? TOOL_LABELS[connection.slug] : null) ??
 								connection.name ??
 								"Unnamed"}
 							{/* A chip only where it carries information. A recognized
@@ -136,7 +140,7 @@ function ConnectionCard({
 							<strong className="font-semibold">
 								{connection.kind === "obsidian" ? "Vault:" : "Vaults:"}
 							</strong>{" "}
-							{vaultLabel}
+							{vaultLabel(connection)}
 						</div>
 					</div>
 				</summary>
@@ -298,6 +302,7 @@ function PatSection({
 							<thead className="bg-muted text-left text-muted-foreground text-xs uppercase tracking-wide">
 								<tr>
 									<th className="px-4 py-3 font-medium">Name</th>
+									<th className="px-4 py-3 font-medium">Vaults</th>
 									<th className="px-4 py-3 font-medium">Key</th>
 									<th className="px-4 py-3 font-medium">Created</th>
 									<th className="px-4 py-3 font-medium">Last used</th>
@@ -310,6 +315,7 @@ function PatSection({
 										<td className="px-4 py-3 font-medium text-foreground">
 											{p.name || "(unnamed)"}
 										</td>
+										<td className="px-4 py-3 text-muted-foreground">{vaultLabel(p)}</td>
 										<td className="px-4 py-3 font-mono text-muted-foreground text-xs">
 											engram_••••••
 										</td>

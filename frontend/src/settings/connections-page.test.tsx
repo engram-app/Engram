@@ -72,6 +72,7 @@ const baseObs: import("../api/queries").Connection = {
 	family_id: "family-1",
 	key_id: null,
 	name: "Obsidian Vault Sync",
+	label: null,
 	software_id: "engram-vault-sync",
 	software_version: null,
 	verified: true,
@@ -95,6 +96,7 @@ const basePat: import("../api/queries").Connection = {
 	family_id: null,
 	key_id: "7",
 	name: "ci-bot",
+	label: null,
 	software_id: null,
 	software_version: null,
 	verified: false,
@@ -118,6 +120,7 @@ const baseMcp: import("../api/queries").Connection = {
 	family_id: "grant-abc",
 	key_id: null,
 	name: "Claude Desktop",
+	label: null,
 	software_id: "claude-desktop",
 	software_version: "1.2.0",
 	verified: false,
@@ -194,6 +197,51 @@ describe("ConnectionsPage", () => {
 		// getAllBy: the brand mark's <title> carries the product name too.
 		expect(screen.getAllByText("Claude Code").length).toBeGreaterThan(0);
 		expect(screen.queryByText(/\(engram\)/u)).toBeNull();
+	});
+
+	// The catalog spelling beats the client's self-reported name, but it must
+	// NOT beat the user's own. Two grants for the same client both resolve to
+	// the same slug, so preferring the catalog there collapses them into two
+	// rows reading "Claude Code" — erasing the one string that told them apart.
+	it("shows the user's label over the catalog product name", () => {
+		mockConnections.splice(0, mockConnections.length, {
+			...baseMcp,
+			label: "Work laptop",
+			name: "Work laptop",
+			slug: "claude_code",
+			verified: false,
+		});
+		mockTier = "starter";
+		renderPage();
+
+		expect(screen.getByText("Work laptop")).toBeInTheDocument();
+	});
+
+	it("shows a restricted API key's vaults, not All vaults", () => {
+		mockConnections.splice(0, mockConnections.length, {
+			...basePat,
+			name: "ci-bot",
+			vault_ids: ["v1", "v2"],
+			vault_names: ["Personal", "Research"],
+		});
+		mockTier = "starter";
+		renderPage();
+
+		expect(screen.getByText("Personal, Research")).toBeInTheDocument();
+		expect(screen.queryByText("All vaults")).toBeNull();
+	});
+
+	it("says All vaults for an unrestricted API key", () => {
+		mockConnections.splice(0, mockConnections.length, {
+			...basePat,
+			name: "ci-bot",
+			vault_ids: null,
+			vault_names: null,
+		});
+		mockTier = "starter";
+		renderPage();
+
+		expect(screen.getByText("All vaults")).toBeInTheDocument();
 	});
 
 	// No slug means no catalog entry to prefer, so the self-reported name is all

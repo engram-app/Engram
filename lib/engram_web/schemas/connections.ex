@@ -83,6 +83,11 @@ defmodule EngramWeb.Schemas.Connection do
       },
       key_id: %Schema{type: :string, nullable: true},
       name: %Schema{type: :string, nullable: true},
+      label: %Schema{
+        type: :string,
+        nullable: true,
+        description: "The user's own name for this connection, when they set one."
+      },
       software_id: %Schema{type: :string, nullable: true},
       software_version: %Schema{type: :string, nullable: true},
       verified: %Schema{type: :boolean, nullable: true},

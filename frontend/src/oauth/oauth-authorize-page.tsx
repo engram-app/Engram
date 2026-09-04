@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type React from "react";
 import { useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router";
 import { Button } from "@/components/ui/button";
@@ -10,6 +11,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { api } from "../api/client";
@@ -36,6 +38,10 @@ const REQUIRED_PARAMS = [
 // scope-less requests — Claude Code's MCP (re)connect flow omits it — with a
 // dead-end "Invalid authorization request" page. Mirror the backend default.
 const DEFAULT_SCOPE = "mcp";
+
+// Above this many vaults the list gets a search box. Below it, the box is
+// pure clutter — every vault is already on screen.
+const SEARCH_THRESHOLD = 8;
 
 type RequiredParam = (typeof REQUIRED_PARAMS)[number];
 
@@ -79,6 +85,12 @@ function countLabel(notes?: number, files?: number): string {
 		parts.push(`${files.toLocaleString()} files`);
 	}
 	return parts.join(" · ");
+}
+
+// `pe-3` keeps the row borders clear of the overlaid scrollbar.
+function VaultRows({ scroll, children }: { scroll: boolean; children: React.ReactNode }) {
+	const rows = <div className={cn("flex flex-col gap-2", scroll && "pe-3")}>{children}</div>;
+	return scroll ? <ScrollArea className="h-[19rem]">{rows}</ScrollArea> : rows;
 }
 
 export default function OAuthAuthorizePage() {
@@ -139,6 +151,16 @@ export default function OAuthAuthorizePage() {
 			return next;
 		});
 	};
+	// A picker with four vaults does not need a search box; one with forty is
+	// unusable without it. Only the second case pays for the extra control.
+	const [filter, setFilter] = useState("");
+	const showFilter = (live?.length ?? 0) > SEARCH_THRESHOLD;
+	const needle = filter.trim().toLowerCase();
+	const shown =
+		showFilter && needle
+			? (live ?? []).filter((v) => v.name.toLowerCase().includes(needle))
+			: (live ?? []);
+
 	// Prefilled via `placeholder`, never `value`: an untouched default is not a
 	// choice, and only a non-empty typed value is sent.
 	const [label, setLabel] = useState("");
@@ -331,34 +353,72 @@ export default function OAuthAuthorizePage() {
 							<legend className="mb-1 font-medium text-foreground text-sm">
 								Which vaults can {clientName} access?
 							</legend>
-							{vaultsQuery.data?.map((v) => {
-								const id = String(v.id);
-								const active = selected === null || selected.has(id);
-								return (
-									<label key={id} className={selectableRow(active)}>
-										<input
-											type="checkbox"
-											checked={active}
-											onChange={() => toggle(id)}
-											className="accent-primary"
-										/>
-										<span className="flex min-w-0 flex-1 items-baseline gap-2">
-											<span className="font-medium text-foreground text-sm">{v.name}</span>
-											{v.is_default ? (
-												<span className="text-muted-foreground text-xs">default</span>
-											) : null}
-											{v.description ? (
-												<span className="truncate text-muted-foreground text-xs">
-													{v.description}
-												</span>
-											) : null}
-										</span>
-										<span className="shrink-0 text-muted-foreground text-xs">
-											{countLabel(v.note_count, v.attachment_count)}
-										</span>
-									</label>
-								);
-							})}
+							{showFilter && (
+								<>
+									<input
+										type="search"
+										value={filter}
+										onChange={(e) => setFilter(e.target.value)}
+										placeholder="Search vaults"
+										aria-label="Search vaults"
+										className="rounded-lg border border-border bg-background p-2 text-sm"
+									/>
+									{/* Filtering hides rows, it never changes the selection —
+									    so with a needle typed the count is the only way to see
+									    what is still checked off-screen. */}
+									<p aria-live="polite" className="text-muted-foreground text-xs">
+										{selected === null
+											? "All vaults selected"
+											: `${selected.size} of ${live?.length ?? 0} selected`}
+									</p>
+								</>
+							)}
+							{/* Caps at roughly five rows, then scrolls. "All vaults" is
+							    deliberately outside this box: it is the choice the list is
+							    an alternative to, and it must stay reachable without
+							    scrolling past every vault. `pe-3` keeps the row borders clear
+							    of the overlaid scrollbar. */}
+							{/* Radix's viewport is `size-full`, so the Root needs a DEFINITE
+							    height — `max-h` collapses it and the rows spill over the card.
+							    A fixed height would leave a short list sitting in a mostly
+							    empty box, so the wrapper only appears once the list is long
+							    enough to scroll. Same condition as the search box: one
+							    threshold decides "this list needs handling". "All vaults"
+							    stays outside either way — it is the choice the list is an
+							    alternative to, and must not need scrolling to reach. */}
+							<VaultRows scroll={showFilter}>
+								{shown.map((v) => {
+									const id = String(v.id);
+									const active = selected === null || selected.has(id);
+									return (
+										<label key={id} className={selectableRow(active)}>
+											<input
+												type="checkbox"
+												checked={active}
+												onChange={() => toggle(id)}
+												className="accent-primary"
+											/>
+											<span className="flex min-w-0 flex-1 items-baseline gap-2">
+												<span className="font-medium text-foreground text-sm">{v.name}</span>
+												{v.is_default ? (
+													<span className="text-muted-foreground text-xs">default</span>
+												) : null}
+												{v.description ? (
+													<span className="truncate text-muted-foreground text-xs">
+														{v.description}
+													</span>
+												) : null}
+											</span>
+											<span className="shrink-0 text-muted-foreground text-xs">
+												{countLabel(v.note_count, v.attachment_count)}
+											</span>
+										</label>
+									);
+								})}
+								{showFilter && needle && shown.length === 0 && (
+									<p className="p-3 text-muted-foreground text-sm">No vaults match "{filter}".</p>
+								)}
+							</VaultRows>
 							<hr className="my-2 border-border" />
 							<label className={selectableRow(selected === null)}>
 								<input
