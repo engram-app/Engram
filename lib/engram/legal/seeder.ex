@@ -29,6 +29,16 @@ defmodule Engram.Legal.Seeder do
         effective_date: nil,
         changelog:
           "Accuracy fixes: scope clarified to cover the app (not just the marketing site); Grafana Cloud added to sub-processors."
+      },
+      # material: false — this narrows what we collect rather than expanding it,
+      # so it does not raise the acceptance floor and existing users are not
+      # asked to re-accept. See Onboarding: the floor is the latest MATERIAL
+      # version effective now.
+      "2026-09-04" => %{
+        material: false,
+        effective_date: nil,
+        changelog:
+          "Waitlist closed: the site no longer collects email addresses, and we no longer generate SHA-256 email hashes. Turnstile removed from the Cloudflare entry. Addresses already collected are still held for the launch updates they were signed up for."
       }
     }
   }

@@ -20,7 +20,11 @@ defmodule Engram.Legal.SeederTest do
     assert :ok = Seeder.seed()
     assert :ok = Seeder.seed()
     rows = Engram.Repo.all(Engram.Legal.TermsVersion, skip_tenant_check: true)
-    assert length(rows) == 2
+    # One row per manifest entry: terms 2026-05-19, privacy 2026-06-20 and
+    # 2026-09-04. Bump this when a legal version is added — a literal is the
+    # point, since deriving it from the manifest under test would go green
+    # even if seed/0 started duplicating rows.
+    assert length(rows) == 3
   end
 
   test "verify/0 raises when a DB row's hash diverges from the manifest" do
