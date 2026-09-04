@@ -153,13 +153,13 @@ defmodule Engram.ConnectionsTest do
                  verified: false,
                  logo: nil,
                  slug: nil,
-                 vault_id: vid
+                 vault_ids: vids
                }
              ] =
                Connections.list_for_user(user)
 
       assert cid == client.client_id
-      assert vid == vault.id
+      assert vids == [vault.id]
     end
 
     test "identifies claude.ai connector by redirect host" do
@@ -336,7 +336,7 @@ defmodule Engram.ConnectionsTest do
       assert row.software_id == "engram-vault-sync"
       assert row.verified == true
       assert row.logo == "/assets/clients/engram-vault-sync.svg"
-      assert row.vault_id == vault.id
+      assert row.vault_ids == [vault.id]
       assert row.key_id == nil
       assert row.redirect_uris == []
     end
@@ -374,7 +374,7 @@ defmodule Engram.ConnectionsTest do
       assert Connections.list_for_user(user) == []
     end
 
-    test "vault_name resolves to the decrypted vault name" do
+    test "vault_names resolves to the decrypted vault name" do
       user = insert_user()
       # register_vault drives the real encryption pipeline so list_vaults/1 can
       # decrypt the name back. The factory-built :vault has random ciphertext
@@ -389,17 +389,17 @@ defmodule Engram.ConnectionsTest do
       )
 
       [row] = Connections.list_for_user(user)
-      assert row.vault_id == vault.id
-      assert row.vault_name == "Personal"
+      assert row.vault_ids == [vault.id]
+      assert row.vault_names == ["Personal"]
     end
 
-    test "vault_name is nil when the connection references an unknown vault" do
+    test "vault_names entry is nil when the connection references an unknown vault" do
       user = insert_user()
       client = insert(:oauth_client, kind: "mcp")
 
       # Factory inserts a vault row but its ciphertext is random, so
       # Vaults.list_vaults logs a decrypt failure + returns the vault without
-      # a :name. The merge step then yields vault_name: nil, the same shape
+      # a :name. The merge step then yields a nil entry, the same shape
       # the frontend sees when a vault was soft-deleted between the grant and
       # the page render.
       stale = insert(:vault, user: user)
@@ -411,8 +411,34 @@ defmodule Engram.ConnectionsTest do
       )
 
       [row] = Connections.list_for_user(user)
-      assert row.vault_id == stale.id
-      assert row.vault_name == nil
+      assert row.vault_ids == [stale.id]
+      assert row.vault_names == [nil]
+    end
+
+    # `client_name` is the CLIENT's own name and is identical across two grants
+    # for the same client — the exact case a user-typed label exists to
+    # disambiguate, so it wins.
+    test "prefers the user's label over the client name" do
+      user = insert_user()
+      client = insert(:oauth_client, kind: "mcp", client_name: "Claude Desktop")
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        label: "My laptop"
+      )
+
+      assert [%{name: "My laptop"}] = Connections.list_for_user(user)
+    end
+
+    test "an unlabelled grant still falls back to the client identity" do
+      user = insert_user()
+      client = insert(:oauth_client, kind: "mcp", client_name: "Claude Desktop")
+
+      insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id)
+
+      assert [listed] = Connections.list_for_user(user)
+      assert listed.name == "Claude Desktop"
     end
   end
 
@@ -459,6 +485,85 @@ defmodule Engram.ConnectionsTest do
 
       assert {:error, :not_found} =
                Connections.revoke_oauth_family(user.id, stranger_client_id, nil)
+    end
+  end
+
+  describe "revoke_oauth_grant/2" do
+    test "revokes ONE grant and leaves the client's other grant intact" do
+      # The defect this pins: both grants belong to one client, so a
+      # client-wide revoke kills a connection the user never clicked.
+      %{user: user, work: work, personal: personal, work_family: work_family} =
+        two_grants_one_client()
+
+      assert :ok = Connections.revoke_oauth_grant(user.id, work_family)
+
+      assert [survivor] = Connections.list_for_user(user)
+      refute survivor.family_id == work_family
+      assert survivor.vault_ids == [personal.id]
+
+      # And the revoked one is really dead, not merely hidden from the list.
+      assert [revoked] =
+               Engram.Repo.all(
+                 from(t in Engram.OAuth.RefreshToken, where: t.family_id == ^work_family)
+               )
+
+      assert revoked.revoked_at
+      assert revoked.vault_ids == [work.id]
+    end
+
+    test "revokes every token in the family, including rotation successors" do
+      user = insert_user()
+      client = insert(:oauth_client, kind: "mcp")
+      family = Ecto.UUID.generate()
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        family_id: family,
+        consumed_at: DateTime.utc_now(:second)
+      )
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        family_id: family
+      )
+
+      assert :ok = Connections.revoke_oauth_grant(user.id, family)
+      assert Connections.count_active(user.id, :mcp) == 0
+
+      assert Enum.all?(
+               Engram.Repo.all(
+                 from(t in Engram.OAuth.RefreshToken, where: t.family_id == ^family)
+               ),
+               & &1.revoked_at
+             )
+    end
+
+    test "is idempotent, second revoke returns :ok" do
+      %{user: user, work_family: work_family} = two_grants_one_client()
+
+      assert :ok = Connections.revoke_oauth_grant(user.id, work_family)
+      assert :ok = Connections.revoke_oauth_grant(user.id, work_family)
+    end
+
+    test "returns :not_found for a family the user does not own" do
+      %{work_family: work_family} = two_grants_one_client()
+      stranger = insert_user()
+
+      assert {:error, :not_found} = Connections.revoke_oauth_grant(stranger.id, work_family)
+
+      assert {:error, :not_found} =
+               Connections.revoke_oauth_grant(stranger.id, Ecto.UUID.generate())
+    end
+
+    test "the client-wide revoke still takes BOTH grants" do
+      # Kept reachable on purpose: the connection cap counts clients, so
+      # freeing a slot means disconnecting the app, not one of its grants.
+      %{user: user, client: client} = two_grants_one_client()
+
+      assert :ok = Connections.revoke_oauth_family(user.id, client.client_id, nil)
+      assert Connections.list_for_user(user) == []
     end
   end
 
@@ -612,5 +717,321 @@ defmodule Engram.ConnectionsTest do
       # The unbound grant survives, it was never the deleted vault's connection
       assert Connections.count_active(user.id, :mcp) == 1
     end
+
+    test "narrows a multi-vault grant instead of revoking it" do
+      # Deleting B must not cost the user A and C — vaults this grant covers
+      # and the deletion never touched.
+      %{user: user, a: a, b: b, c: c, token: token} = multi_vault_grant()
+
+      assert :ok = Connections.revoke_by_vault(user.id, b.id)
+
+      token = Engram.Repo.get!(Engram.OAuth.RefreshToken, token.id, skip_tenant_check: true)
+      assert is_nil(token.revoked_at)
+      assert Enum.sort(token.vault_ids) == Enum.sort([a.id, c.id])
+    end
+
+    test "revokes once the LAST granted vault is deleted" do
+      %{user: user, a: a, b: b, c: c, token: token} = multi_vault_grant()
+
+      assert :ok = Connections.revoke_by_vault(user.id, b.id)
+      assert :ok = Connections.revoke_by_vault(user.id, c.id)
+      assert :ok = Connections.revoke_by_vault(user.id, a.id)
+
+      token = Engram.Repo.get!(Engram.OAuth.RefreshToken, token.id, skip_tenant_check: true)
+      refute is_nil(token.revoked_at)
+    end
+
+    test "revokes a single-vault array grant outright" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+      client = insert(:oauth_client, kind: "mcp")
+
+      token =
+        insert(:oauth_refresh_token,
+          user_id: user.id,
+          client_id: client.client_id,
+          vault_id: vault.id,
+          vault_ids: [vault.id]
+        )
+
+      assert :ok = Connections.revoke_by_vault(user.id, vault.id)
+
+      token = Engram.Repo.get!(Engram.OAuth.RefreshToken, token.id, skip_tenant_check: true)
+      refute is_nil(token.revoked_at)
+    end
+
+    test "revokes a legacy scalar-only row (vault_ids never written)" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+      client = insert(:oauth_client, kind: "mcp")
+
+      # The shape every grant minted before multi-vault shipped still has on
+      # disk: scalar set, array NULL. It has nothing to narrow.
+      token =
+        insert(:oauth_refresh_token,
+          user_id: user.id,
+          client_id: client.client_id,
+          vault_id: vault.id,
+          vault_ids: nil
+        )
+
+      assert :ok = Connections.revoke_by_vault(user.id, vault.id)
+
+      token = Engram.Repo.get!(Engram.OAuth.RefreshToken, token.id, skip_tenant_check: true)
+      refute is_nil(token.revoked_at)
+    end
+
+    test "leaves an all-vaults grant untouched" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+      client = insert(:oauth_client, kind: "mcp")
+
+      # Both columns NULL = every vault, including ones created later. A vault
+      # deletion narrows nothing and revokes nothing here.
+      token =
+        insert(:oauth_refresh_token,
+          user_id: user.id,
+          client_id: client.client_id,
+          vault_id: nil,
+          vault_ids: nil
+        )
+
+      assert :ok = Connections.revoke_by_vault(user.id, vault.id)
+
+      token = Engram.Repo.get!(Engram.OAuth.RefreshToken, token.id, skip_tenant_check: true)
+      assert is_nil(token.revoked_at)
+      assert is_nil(token.vault_ids)
+    end
+  end
+
+  describe "revoke_oauth_family/3 with array grants" do
+    test "matches a vault held only in vault_ids" do
+      %{user: user, b: b, client: client, token: token} = multi_vault_grant()
+
+      assert :ok = Connections.revoke_oauth_family(user.id, client.client_id, b.id)
+
+      token = Engram.Repo.get!(Engram.OAuth.RefreshToken, token.id, skip_tenant_check: true)
+      refute is_nil(token.revoked_at)
+    end
+
+    test "still matches a legacy scalar-only row" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+      client = insert(:oauth_client, kind: "mcp")
+
+      token =
+        insert(:oauth_refresh_token,
+          user_id: user.id,
+          client_id: client.client_id,
+          vault_id: vault.id,
+          vault_ids: nil
+        )
+
+      assert :ok = Connections.revoke_oauth_family(user.id, client.client_id, vault.id)
+
+      token = Engram.Repo.get!(Engram.OAuth.RefreshToken, token.id, skip_tenant_check: true)
+      refute is_nil(token.revoked_at)
+    end
+
+    test "does not touch a grant that excludes the vault" do
+      %{user: user, client: client, token: token} = multi_vault_grant()
+      other = insert(:vault, user: user)
+
+      assert :ok = Connections.revoke_oauth_family(user.id, client.client_id, other.id)
+
+      token = Engram.Repo.get!(Engram.OAuth.RefreshToken, token.id, skip_tenant_check: true)
+      assert is_nil(token.revoked_at)
+    end
+  end
+
+  describe "list_for_user/2 vault scope" do
+    test "a multi-vault grant is ONE row carrying every vault id and name" do
+      %{user: user, a: a, b: b} = named_multi_vault_grant()
+
+      assert [row] = Connections.list_for_user(user)
+      assert Enum.sort(row.vault_ids) == Enum.sort([a.id, b.id])
+      assert Enum.sort(row.vault_names) == ["Personal", "Work"]
+    end
+
+    test "a scoped caller never sees a non-granted vault's NAME" do
+      # The leak this closes: RequireSession blocks API keys but not an
+      # OAuth-grant internal JWT, so a token scoped to one vault reached the
+      # unfiltered Vaults.list_vaults/1 lookup and read every name off it.
+      %{user: user, a: a, b: b} = named_multi_vault_grant()
+
+      scope = MapSet.new([a.id])
+      assert [row] = Connections.list_for_user(user, scope)
+
+      names = row.vault_names
+      assert "Personal" in names
+      refute "Work" in names
+      # Positional against vault_ids: the out-of-scope slot is nil, not dropped.
+      assert Enum.at(names, Enum.find_index(row.vault_ids, &(&1 == b.id))) == nil
+    end
+
+    test "an all-vaults grant lists with nil vault_ids and nil vault_names" do
+      user = insert_user()
+      client = insert(:oauth_client, kind: "mcp")
+      insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id)
+
+      assert [row] = Connections.list_for_user(user)
+      assert is_nil(row.vault_ids)
+      assert is_nil(row.vault_names)
+    end
+
+    test "two legacy scalar-only grants for one client stay two rows" do
+      # DISTINCT keyed on vault_ids ALONE would collapse these: both carry a
+      # NULL array, so the scalar column has to stay in the key.
+      user = insert_user()
+      client = insert(:oauth_client, kind: "mcp")
+      one = insert(:vault, user: user)
+      two = insert(:vault, user: user)
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_id: one.id
+      )
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_id: two.id
+      )
+
+      ids = user |> Connections.list_for_user() |> Enum.flat_map(& &1.vault_ids)
+      assert Enum.sort(ids) == Enum.sort([one.id, two.id])
+    end
+
+    test "two grants of ONE client are two rows, even over the same vaults" do
+      # Under the old vault-keyed DISTINCT these collapsed into a single row
+      # that no per-grant revoke could clear. `family_id` is what tells them
+      # apart, and the labels are what let the user tell them apart.
+      user = insert_user()
+      client = insert(:oauth_client, kind: "mcp")
+      vault = insert(:vault, user: user)
+
+      for label <- ["laptop", "work"] do
+        insert(:oauth_refresh_token,
+          user_id: user.id,
+          client_id: client.client_id,
+          label: label,
+          vault_id: nil,
+          vault_ids: [vault.id]
+        )
+      end
+
+      rows = Connections.list_for_user(user)
+      assert Enum.sort(Enum.map(rows, & &1.name)) == ["laptop", "work"]
+      assert length(Enum.uniq(Enum.map(rows, & &1.family_id))) == 2
+    end
+
+    test "PAT rows carry the same array shape (nil), never a scalar" do
+      user = insert_user()
+      insert(:api_key, user: user, name: "ci-bot")
+
+      assert [row] = Connections.list_for_user(user)
+      assert row.kind == :pat
+      assert is_nil(row.vault_ids)
+      refute Map.has_key?(row, :vault_id)
+    end
+
+    # `vault_ids` was hardcoded nil for every key, and nil reads as "all
+    # vaults" — so a key restricted to one vault was listed, in the settings
+    # UI, as reaching every vault the user owns.
+    test "a restricted PAT reports the vaults it can actually reach" do
+      user = insert_user()
+      reachable = insert(:vault, user: user)
+      _unreachable = insert(:vault, user: user)
+      key = insert(:api_key, user: user, name: "ci-bot")
+
+      Engram.Repo.insert_all("api_key_vaults", [
+        %{api_key_id: Ecto.UUID.dump!(key.id), vault_id: Ecto.UUID.dump!(reachable.id)}
+      ])
+
+      assert [row] = Connections.list_for_user(user)
+      assert row.vault_ids == [reachable.id]
+      assert row.vault_names == [reachable.name]
+    end
+
+    test "a PAT's name is its own label" do
+      user = insert_user()
+      insert(:api_key, user: user, name: "ci-bot")
+
+      assert [row] = Connections.list_for_user(user)
+      assert row.label == "ci-bot"
+    end
+  end
+
+  # One MCP client the user authorized TWICE, over different vault sets — the
+  # shape multi-vault consent makes reachable, and the one a client-wide
+  # revoke gets wrong.
+  defp two_grants_one_client do
+    user = insert_user()
+    client = insert(:oauth_client, kind: "mcp")
+    work = insert(:vault, user: user)
+    personal = insert(:vault, user: user)
+    work_family = Ecto.UUID.generate()
+
+    insert(:oauth_refresh_token,
+      user_id: user.id,
+      client_id: client.client_id,
+      family_id: work_family,
+      label: "work",
+      vault_id: nil,
+      vault_ids: [work.id]
+    )
+
+    insert(:oauth_refresh_token,
+      user_id: user.id,
+      client_id: client.client_id,
+      label: "laptop",
+      vault_id: nil,
+      vault_ids: [personal.id]
+    )
+
+    %{user: user, client: client, work: work, personal: personal, work_family: work_family}
+  end
+
+  # One active MCP grant covering three vaults, in the post-release shape:
+  # `vault_ids` is authoritative and the scalar is NULL (mint only dual-writes
+  # it for single-vault grants).
+  defp multi_vault_grant do
+    user = insert_user()
+    client = insert(:oauth_client, kind: "mcp")
+    a = insert(:vault, user: user)
+    b = insert(:vault, user: user)
+    c = insert(:vault, user: user)
+
+    token =
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_id: nil,
+        vault_ids: [a.id, b.id, c.id]
+      )
+
+    %{user: user, client: client, a: a, b: b, c: c, token: token}
+  end
+
+  # Same, but two vaults registered through the real encryption pipeline so
+  # their names decrypt back — the factory's random ciphertext yields nil.
+  defp named_multi_vault_grant do
+    user = insert_user()
+    # Free tier caps vaults at 1; this test needs two real ones.
+    insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 5})
+    {:ok, a, _} = Engram.Vaults.register_vault(user, "Personal", Ecto.UUID.generate())
+    {:ok, b, _} = Engram.Vaults.register_vault(user, "Work", Ecto.UUID.generate())
+    client = insert(:oauth_client, kind: "mcp")
+
+    token =
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_id: nil,
+        vault_ids: [a.id, b.id]
+      )
+
+    %{user: user, client: client, a: a, b: b, token: token}
   end
 end

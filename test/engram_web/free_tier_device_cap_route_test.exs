@@ -13,12 +13,17 @@ defmodule EngramWeb.FreeTierDeviceCapRouteTest do
   """
   use EngramWeb.ConnCase, async: false
 
+  # Session token, not an API key: `/auth/device/authorize` sits behind
+  # `RequireSession`, which halts an API key in the router pipeline BEFORE
+  # `EnforceDeviceCap` (a controller plug) can run. The cap is user-scoped and
+  # reads only `:current_user`, so the credential swap changes nothing about
+  # what these tests prove — it just gets the request to the plug.
   setup %{conn: conn} do
-    user = insert(:user)
+    user = insert(:user) |> ensure_external_id()
     vault = insert(:vault, user: user, is_default: true)
-    {:ok, raw_key, _} = Engram.Accounts.create_api_key(user, "test")
+    {:ok, token} = Engram.Auth.Providers.Local.issue_access_token(user.external_id, user.email)
     grant_api_write!(user)
-    authed = put_req_header(conn, "authorization", "Bearer #{raw_key}")
+    authed = put_req_header(conn, "authorization", "Bearer #{token}")
 
     %{conn: authed, user: user, vault: vault}
   end

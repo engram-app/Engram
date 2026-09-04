@@ -39,7 +39,7 @@ defmodule EngramWeb.SearchController do
     tags = params["tags"]
     folder = params["folder"]
     type = params["type"]
-    cross_vault = Map.get(params, "cross_vault", false)
+    cross_vault = parse_bool(params["cross_vault"])
 
     case parse_date_params(params) do
       {:ok, date_opts} ->
@@ -55,8 +55,9 @@ defmodule EngramWeb.SearchController do
           |> then(&if(type, do: Keyword.put(&1, :type, type), else: &1))
           |> Keyword.merge(date_opts)
           |> maybe_put_diversity(params["diversity"])
+          |> then(&if(cross_vault, do: narrow_to_vault_scope(&1, conn), else: &1))
 
-        do_search(conn, user, vault, query, note_limit, cross_vault, opts)
+        do_search(conn, user, vault, query, note_limit, opts)
 
       {:error, param} ->
         conn
@@ -108,6 +109,17 @@ defmodule EngramWeb.SearchController do
   defp parse_mode("vector"), do: :vector
   defp parse_mode(_), do: :hybrid
 
+  # `?cross_vault=false` arrives as the STRING "false", which is truthy in
+  # Elixir — so reading the param raw turned an explicit opt-OUT into an
+  # opt-IN, and then 403'd the caller on the Pro entitlement gate for a
+  # feature they were trying not to use. No CastAndValidate plug runs on this
+  # route, so a JSON body delivers a real boolean and a query string a binary;
+  # both land here. Cast at the boundary and everything downstream keeps its
+  # bare-truthiness reads.
+  defp parse_bool(true), do: true
+  defp parse_bool("true"), do: true
+  defp parse_bool(_), do: false
+
   # When `diversity` is absent or unparseable, return opts unchanged so the
   # SearchProfile default applies. Clamping to [0.0, 1.0] happens downstream
   # in `Engram.Search`.
@@ -120,18 +132,54 @@ defmodule EngramWeb.SearchController do
     end
   end
 
-  # Batch-resolve note ids for the visible page only — runs once after
-  # `Enum.take/2` so we don't pay HMAC + index lookup for over-fetched
-  # chunks that get discarded. Hits without a DB id (e.g. a stale Qdrant
-  # chunk for a soft-deleted note) keep `id: nil`; the client treats
-  # those as legacy-path-only and the LegacyNoteResolver handles
-  # routing.
-  defp attach_ids([], _user, _vault), do: []
+  # A cross-vault search deliberately searches PAST the request's single vault,
+  # so VaultPlug's check does not bound it. Narrow to what the CREDENTIAL may
+  # reach. `:all` is genuinely unrestricted and must not get a filter — adding
+  # one there would break legitimate Pro cross-vault search; anything else
+  # becomes an any-match Qdrant filter over exactly the permitted set.
+  #
+  # Only called on the cross-vault path: a single-vault search is already bound
+  # by VaultPlug's check on X-Vault-ID, `put_vault_filter/3` ignores
+  # `vault_ids` whenever a concrete vault is passed, and VaultPlug has already
+  # paid for this exact scope — so calling it unconditionally bought a second
+  # `api_key_vaults` SELECT on every plain search for a value that is inert.
+  defp narrow_to_vault_scope(opts, conn) do
+    case Engram.Permissions.vault_scope(conn) do
+      :all -> opts
+      scope -> Keyword.put(opts, :vault_ids, MapSet.to_list(scope))
+    end
+  end
 
-  defp attach_ids(hits, user, vault) do
-    paths = Enum.map(hits, & &1.path)
-    id_by_path = Notes.note_ids_for_paths(user, vault, paths)
-    Enum.map(hits, fn hit -> %{hit | id: Map.get(id_by_path, hit.path)} end)
+  # Batch-resolve note ids for the visible page only — runs after `Enum.take/2`
+  # so we don't pay HMAC + index lookup for over-fetched chunks that get
+  # discarded. Results without a DB id (e.g. a stale Qdrant chunk for a
+  # soft-deleted note) keep `id: nil`; the client treats those as
+  # legacy-path-only and the LegacyNoteResolver handles routing.
+  #
+  # Keyed on {vault_id, path} using each RESULT's own vault, not one ambient
+  # vault. The cross-vault path used to pass `vault: nil`, which makes
+  # `Notes.note_ids_for_paths/3` drop its vault predicate and match `path_hmac`
+  # across EVERY vault the user owns — so a path living in two vaults
+  # (`Inbox.md`, a daily note, any convention-driven filename) resolved to
+  # whichever row the reduce saw last. That could be a vault the credential was
+  # scoped away from: not a content leak (follow-up reads are vault-scoped) but
+  # a wrong id and a UUID from outside the very filter this path applies.
+  # Qdrant returns `vault_id` on every hit and `collapse_to_notes` keys on it,
+  # so the correct vault is already in hand. One query per distinct vault on the
+  # page — exactly one for a single-vault search, as before.
+  defp note_ids_by_vault(_user, []), do: %{}
+
+  defp note_ids_by_vault(user, results) do
+    results
+    |> Enum.group_by(& &1.vault_id, & &1.source_path)
+    |> Enum.reject(fn {vault_id, _paths} -> is_nil(vault_id) end)
+    |> Enum.flat_map(fn {vault_id, paths} ->
+      # `note_ids_for_paths/3` reads only the vault's `id`.
+      user
+      |> Notes.note_ids_for_paths(%{id: vault_id}, paths)
+      |> Enum.map(fn {path, id} -> {{vault_id, path}, id} end)
+    end)
+    |> Map.new()
   end
 
   defp derive_folder(path) do
@@ -149,7 +197,7 @@ defmodule EngramWeb.SearchController do
     |> String.replace_suffix(".md", "")
   end
 
-  defp do_search(conn, user, vault, query, note_limit, cross_vault, opts) do
+  defp do_search(conn, user, vault, query, note_limit, opts) do
     case Search.search(user, vault, query, opts) do
       {:error, :search_cap_exceeded, limit} ->
         EngramWeb.LimitResponse.halt(
@@ -161,16 +209,14 @@ defmodule EngramWeb.SearchController do
         )
 
       {:ok, results} ->
-        # `cross_vault` mode passes nil as the vault filter so id lookup
-        # spans all of the user's vaults (matches how the search hits
-        # were sourced).
-        id_lookup_vault = if cross_vault, do: nil, else: vault
+        results = Enum.take(results, note_limit)
+        ids = note_ids_by_vault(user, results)
 
         notes =
           results
           |> Enum.map(fn r ->
             %{
-              id: nil,
+              id: Map.get(ids, {r.vault_id, r.source_path}),
               path: r.source_path,
               title: r.title || derive_title(r.source_path),
               folder: derive_folder(r.source_path),
@@ -180,8 +226,6 @@ defmodule EngramWeb.SearchController do
               match_count: r.match_count
             }
           end)
-          |> Enum.take(note_limit)
-          |> attach_ids(user, id_lookup_vault)
 
         json(conn, %{results: notes})
 

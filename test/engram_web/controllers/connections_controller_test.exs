@@ -14,17 +14,6 @@ defmodule EngramWeb.ConnectionsControllerTest do
     put_req_header(conn, "authorization", "Bearer #{token}")
   end
 
-  defp ensure_external_id(%{external_id: ext} = user) when is_binary(ext) and ext != "", do: user
-
-  defp ensure_external_id(user) do
-    {:ok, updated} =
-      user
-      |> Ecto.Changeset.change(external_id: "test-#{user.id}")
-      |> Engram.Repo.update(skip_tenant_check: true)
-
-    updated
-  end
-
   describe "GET /api/connections" do
     test "returns oauth + pat rows for the authenticated user", %{conn: conn} do
       user = insert(:user)
@@ -119,6 +108,77 @@ defmodule EngramWeb.ConnectionsControllerTest do
       assert obs["client_id"] == family_id
       assert obs["software_id"] == "engram-vault-sync"
     end
+
+    test "a vault-scoped OAuth token is denied outright, leaking no vault name", %{conn: conn} do
+      # This route manages credentials, so an OAuth grant has no business on it
+      # at all — `RequireSession` rejects the grant before the controller runs
+      # (see require_session_test.exs for the escalation that prevents). The
+      # name filter inside `list_for_user/2` is the second layer and is unit-
+      # tested in connections_test.exs; this pins the outer one, and that no
+      # name escapes through the error path either.
+      %{user: user, granted: granted, hidden: hidden, client: client} = two_named_vaults()
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_id: nil,
+        vault_ids: [granted.id, hidden.id]
+      )
+
+      user = ensure_external_id(user)
+      token = Engram.Accounts.generate_jwt(user, %{"scope" => "mcp", "vault_ids" => [granted.id]})
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> get("/api/connections")
+
+      assert %{"error" => "oauth_grant_not_allowed"} = json_response(conn, 403)
+      refute conn.resp_body =~ "Secret Client Work"
+    end
+
+    test "an ordinary session JWT still sees every granted vault name", %{conn: conn} do
+      # The control for the test above: without a grant restriction the same
+      # row carries both names, so the filter is what removed one, not a bug in
+      # the name lookup.
+      %{user: user, granted: granted, hidden: hidden, client: client} = two_named_vaults()
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_id: nil,
+        vault_ids: [granted.id, hidden.id]
+      )
+
+      body =
+        conn
+        |> jwt_authed(user)
+        |> get("/api/connections")
+        |> json_response(200)
+
+      row = Enum.find(body, fn r -> r["kind"] == "mcp" end)
+      assert Enum.sort(row["vault_names"]) == ["Personal", "Secret Client Work"]
+    end
+  end
+
+  # Two vaults registered through the real encryption pipeline so their names
+  # decrypt back (factory vaults carry random ciphertext), plus an MCP client.
+  defp two_named_vaults do
+    user = insert(:user)
+    {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+    insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 5})
+
+    {:ok, granted, _} = Engram.Vaults.register_vault(user, "Personal", Ecto.UUID.generate())
+
+    {:ok, hidden, _} =
+      Engram.Vaults.register_vault(user, "Secret Client Work", Ecto.UUID.generate())
+
+    %{
+      user: user,
+      granted: granted,
+      hidden: hidden,
+      client: insert(:oauth_client, kind: "mcp")
+    }
   end
 
   describe "DELETE /api/connections/oauth/:client_id" do
@@ -209,6 +269,64 @@ defmodule EngramWeb.ConnectionsControllerTest do
       assert conn.status == 404
       # And the foreign user's grant must still be active
       assert Engram.Connections.count_active(other.id, :mcp) == 1
+    end
+
+    test "?family_id= revokes ONE grant and leaves the client's other alive", %{conn: conn} do
+      user = insert(:user)
+      client = insert(:oauth_client, kind: "mcp")
+      work = insert(:vault, user: user)
+      personal = insert(:vault, user: user)
+      work_family = Ecto.UUID.generate()
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        family_id: work_family,
+        label: "work",
+        vault_ids: [work.id]
+      )
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        label: "laptop",
+        vault_ids: [personal.id]
+      )
+
+      conn =
+        conn
+        |> jwt_authed(user)
+        |> delete("/api/connections/oauth/#{client.client_id}?family_id=#{work_family}")
+
+      assert conn.status == 204
+
+      rows =
+        build_conn()
+        |> put_req_header("accept", "application/json")
+        |> jwt_authed(user)
+        |> get("/api/connections")
+        |> json_response(200)
+
+      assert [survivor] = Enum.filter(rows, &(&1["kind"] == "mcp"))
+      assert survivor["name"] == "laptop"
+      assert survivor["family_id"] != work_family
+      assert survivor["vault_ids"] == [personal.id]
+    end
+
+    test "404 for a family_id the user does not own", %{conn: conn} do
+      user = insert(:user)
+      client = insert(:oauth_client, kind: "mcp")
+      insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id)
+
+      conn =
+        conn
+        |> jwt_authed(user)
+        |> delete("/api/connections/oauth/#{client.client_id}?family_id=#{Ecto.UUID.generate()}")
+
+      assert conn.status == 404
+      # The client's own grant is untouched — a bogus family must not fall
+      # back to the client-wide revoke.
+      assert Engram.Connections.count_active(user.id, :mcp) == 1
     end
 
     test "returns 401/403 for API-key-authed requests", %{conn: conn} do

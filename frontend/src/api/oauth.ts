@@ -19,7 +19,15 @@ export interface OAuthConsentParams {
 	state: string;
 	scope: string;
 	resource?: string;
-	vault_choice: string;
+	// Absent = all vaults, including ones created later. A non-empty array =
+	// exactly those vaults. Never send an empty array — the backend rejects it
+	// rather than widening it to "all".
+	vault_ids?: string[];
+	// The user's own name for this connection. Omitted entirely when they left
+	// the input at its prefilled placeholder — a default nobody typed must not
+	// be stored as if they chose it. Over 120 chars is REJECTED by the backend
+	// (access_denied), not truncated.
+	label?: string;
 }
 
 export interface OAuthConsentResponse {

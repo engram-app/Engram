@@ -1,5 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { Search } from "lucide-react";
+import type React from "react";
+import { useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,6 +12,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { api } from "../api/client";
@@ -36,6 +39,10 @@ const REQUIRED_PARAMS = [
 // scope-less requests — Claude Code's MCP (re)connect flow omits it — with a
 // dead-end "Invalid authorization request" page. Mirror the backend default.
 const DEFAULT_SCOPE = "mcp";
+
+// Above this many vaults the list gets a search box. Below it, the box is
+// pure clutter — every vault is already on screen.
+const SEARCH_THRESHOLD = 8;
 
 type RequiredParam = (typeof REQUIRED_PARAMS)[number];
 
@@ -73,6 +80,20 @@ function buildCancelUrl(redirectUri: string, state: string): string {
 	return `${redirectUri}${sep}error=access_denied&state=${encodeURIComponent(state)}`;
 }
 
+function countLabel(notes?: number, files?: number): string {
+	const parts = [`${(notes ?? 0).toLocaleString()} notes`];
+	if (files) {
+		parts.push(`${files.toLocaleString()} files`);
+	}
+	return parts.join(" · ");
+}
+
+// `pe-3` keeps the row borders clear of the overlaid scrollbar.
+function VaultRows({ scroll, children }: { scroll: boolean; children: React.ReactNode }) {
+	const rows = <div className={cn("flex flex-col gap-2", scroll && "pe-3")}>{children}</div>;
+	return scroll ? <ScrollArea className="h-[19rem]">{rows}</ScrollArea> : rows;
+}
+
 export default function OAuthAuthorizePage() {
 	const [searchParams] = useSearchParams();
 	const { values, resource, missing } = readParams(searchParams);
@@ -101,17 +122,51 @@ export default function OAuthAuthorizePage() {
 	const connections = useConnections({ enabled: capCheck.atCap });
 	const existingPeer = (connections.data ?? []).find((c): c is Connection => c.kind === clientKind);
 
-	const [pickedVault, setVaultChoice] = useState<string>("vault:*");
-	// A picked vault that no longer exists in the fetched list resolves to "all
-	// vaults". That is a function of the current list, so it is computed here
-	// rather than written back into state from an effect one paint later.
-	const vaultChoice =
-		pickedVault.startsWith("vault:") &&
-		pickedVault !== "vault:*" &&
-		vaultsQuery.data &&
-		!vaultsQuery.data.some((v) => String(v.id) === pickedVault.slice("vault:".length))
-			? "vault:*"
-			: pickedVault;
+	// `null` = the explicit "All vaults" choice, which stays all-vaults as new
+	// ones are created. A Set = exactly those ids. These are different grants,
+	// so ticking every box by hand does NOT collapse to `null` — only the
+	// "All vaults" control sets it. The two do render alike (see `active`
+	// below); it is the state, not the checkmarks, that differs.
+	const [picked, setPicked] = useState<Set<string> | null>(null);
+
+	// Ids that no longer exist in the fetched list are dropped. That is a
+	// function of the current list, so it is computed here rather than written
+	// back into state from an effect one paint later.
+	const live = vaultsQuery.data;
+	const selected =
+		picked && live
+			? new Set([...picked].filter((id) => live.some((v) => String(v.id) === id)))
+			: picked;
+
+	// Every box reads as checked under "All vaults", so the first click on one
+	// has to mean "all except this" — seeding from an empty Set would instead
+	// narrow to the single vault the user was trying to remove.
+	const toggle = (id: string) => {
+		setPicked((prev) => {
+			const next = new Set(prev ?? (live ?? []).map((v) => String(v.id)));
+			if (next.has(id)) {
+				next.delete(id);
+			} else {
+				next.add(id);
+			}
+			return next;
+		});
+	};
+	// A picker with four vaults does not need a search box; one with forty is
+	// unusable without it. Only the second case pays for the extra control.
+	const [filter, setFilter] = useState("");
+	const [searching, setSearching] = useState(false);
+	const searchRef = useRef<HTMLInputElement>(null);
+	const showFilter = (live?.length ?? 0) > SEARCH_THRESHOLD;
+	const needle = filter.trim().toLowerCase();
+	const shown =
+		showFilter && needle
+			? (live ?? []).filter((v) => v.name.toLowerCase().includes(needle))
+			: (live ?? []);
+
+	// Prefilled via `placeholder`, never `value`: an untouched default is not a
+	// choice, and only a non-empty typed value is sent.
+	const [label, setLabel] = useState("");
 	const [submitError, setSubmitError] = useState<string | null>(null);
 	const [submitting, setSubmitting] = useState(false);
 	// At-cap users get a confirm modal before the implicit swap so they see
@@ -179,10 +234,16 @@ export default function OAuthAuthorizePage() {
 			code_challenge_method: values.code_challenge_method,
 			state: values.state,
 			scope: values.scope,
-			vault_choice: vaultChoice,
 		};
 		if (resource) {
 			body.resource = resource;
+		}
+		if (selected && selected.size > 0) {
+			body.vault_ids = [...selected];
+		}
+		const trimmed = label.trim();
+		if (trimmed) {
+			body.label = trimmed;
 		}
 
 		// If swapping, disconnect the existing connection of the same kind
@@ -276,35 +337,131 @@ export default function OAuthAuthorizePage() {
 								to keep both connected.
 							</div>
 						) : null}
+						<label className="flex flex-col gap-1.5">
+							<span className="font-medium text-foreground text-sm">
+								Name this connection{" "}
+								<span className="font-normal text-muted-foreground">(optional)</span>
+							</span>
+							<input
+								type="text"
+								maxLength={120}
+								value={label}
+								onChange={(e) => setLabel(e.target.value)}
+								placeholder={clientName}
+								className="rounded-lg border border-border bg-background p-2.5 text-sm"
+							/>
+						</label>
+
 						<fieldset className="flex flex-col gap-2">
-							<legend className="mb-1 font-medium text-foreground text-sm">Which vault?</legend>
-							{vaultsQuery.data?.map((v) => {
-								const value = `vault:${v.id}`;
-								const active = vaultChoice === value;
-								return (
-									<label key={v.id} className={selectableRow(active)}>
-										<input
-											type="radio"
-											name="vault_choice"
-											value={value}
-											checked={active}
-											onChange={() => setVaultChoice(value)}
-											className="accent-primary"
-										/>
-										<span className="font-medium text-foreground text-sm">{v.name}</span>
-									</label>
-								);
-							})}
-							<label className={selectableRow(vaultChoice === "vault:*")}>
+							{/* The search field is the second text input on a screen whose
+							    actual question is a list of checkboxes, so it stays behind
+							    this toggle rather than sitting open. Long lists are the
+							    minority case even among users who have enough vaults to
+							    reach the threshold. */}
+							<div className="mb-1 flex items-center justify-between gap-2">
+								<legend className="font-medium text-foreground text-sm">
+									Which vaults can {clientName} access?
+								</legend>
+								{showFilter && !searching && (
+									<button
+										type="button"
+										onClick={() => {
+											setSearching(true);
+											// Focus follows the click that opened the field. An
+											// `autoFocus` attribute would steal focus on mount
+											// instead, which is a different and worse thing.
+											requestAnimationFrame(() => searchRef.current?.focus());
+										}}
+										aria-label="Search vaults"
+										className="rounded p-1 text-muted-foreground hover:text-foreground"
+									>
+										<Search className="size-4" />
+									</button>
+								)}
+							</div>
+							{searching ? (
+								<>
+									<input
+										ref={searchRef}
+										type="search"
+										value={filter}
+										onChange={(e) => setFilter(e.target.value)}
+										onBlur={() => filter === "" && setSearching(false)}
+										placeholder="Search vaults"
+										aria-label="Search vaults"
+										className="rounded-lg border border-border bg-background p-2 text-sm"
+									/>
+									{/* Filtering hides rows, it never changes the selection —
+									    so with a needle typed the count is the only way to see
+									    what is still checked off-screen. */}
+									<p aria-live="polite" className="text-muted-foreground text-xs">
+										{selected === null
+											? "All vaults selected"
+											: `${selected.size} of ${live?.length ?? 0} selected`}
+									</p>
+								</>
+							) : null}
+							{/* Caps at roughly five rows, then scrolls. "All vaults" is
+							    deliberately outside this box: it is the choice the list is
+							    an alternative to, and it must stay reachable without
+							    scrolling past every vault. `pe-3` keeps the row borders clear
+							    of the overlaid scrollbar. */}
+							{/* Radix's viewport is `size-full`, so the Root needs a DEFINITE
+							    height — `max-h` collapses it and the rows spill over the card.
+							    A fixed height would leave a short list sitting in a mostly
+							    empty box, so the wrapper only appears once the list is long
+							    enough to scroll. Same condition as the search box: one
+							    threshold decides "this list needs handling". "All vaults"
+							    stays outside either way — it is the choice the list is an
+							    alternative to, and must not need scrolling to reach. */}
+							<VaultRows scroll={showFilter}>
+								{shown.map((v) => {
+									const id = String(v.id);
+									const active = selected === null || selected.has(id);
+									return (
+										<label key={id} className={selectableRow(active)}>
+											<input
+												type="checkbox"
+												checked={active}
+												onChange={() => toggle(id)}
+												className="accent-primary"
+											/>
+											<span className="flex min-w-0 flex-1 items-baseline gap-2">
+												<span className="font-medium text-foreground text-sm">{v.name}</span>
+												{v.is_default ? (
+													<span className="text-muted-foreground text-xs">default</span>
+												) : null}
+												{v.description ? (
+													<span className="truncate text-muted-foreground text-xs">
+														{v.description}
+													</span>
+												) : null}
+											</span>
+											<span className="shrink-0 text-muted-foreground text-xs">
+												{countLabel(v.note_count, v.attachment_count)}
+											</span>
+										</label>
+									);
+								})}
+								{showFilter && needle && shown.length === 0 && (
+									<p className="p-3 text-muted-foreground text-sm">No vaults match "{filter}".</p>
+								)}
+							</VaultRows>
+							<hr className="my-2 border-border" />
+							<label className={selectableRow(selected === null)}>
 								<input
 									type="radio"
-									name="vault_choice"
-									value="vault:*"
-									checked={vaultChoice === "vault:*"}
-									onChange={() => setVaultChoice("vault:*")}
+									name="all_vaults"
+									checked={selected === null}
+									onChange={() => setPicked(null)}
 									className="accent-primary"
 								/>
-								<span className="font-medium text-foreground text-sm">All vaults</span>
+								<span className="font-medium text-foreground text-sm">
+									All vaults
+									<span className="ml-2 font-normal text-muted-foreground text-xs">
+										including any you create later
+									</span>
+								</span>
 							</label>
 						</fieldset>
 
@@ -327,7 +484,7 @@ export default function OAuthAuthorizePage() {
 							<Button
 								type="button"
 								onClick={handleApprove}
-								disabled={submitting}
+								disabled={submitting || (selected !== null && selected.size === 0)}
 								className="flex-1"
 							>
 								{submitting ? "Approving…" : "Approve"}
@@ -357,7 +514,12 @@ export default function OAuthAuthorizePage() {
 									setShowSwapConfirm(false);
 									await runSubmit(true);
 								}}
-								disabled={submitting}
+								// Mirrors Approve's guard. Unreachable today (the dialog only
+								// opens from an already-guarded Approve and the overlay blocks
+								// the checkboxes behind it), but this is a second submit path
+								// to the same endpoint and its safety must not depend on
+								// modal-blocking behaviour staying true forever.
+								disabled={submitting || (selected !== null && selected.size === 0)}
 								className="w-full"
 							>
 								{submitting ? "Connecting…" : `Disconnect & connect ${clientName}`}

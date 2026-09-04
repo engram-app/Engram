@@ -52,6 +52,36 @@ defmodule EngramWeb.CrdtChannelTest do
   # Socket-native frames: create / delete / catchup
   # ---------------------------------------------------------------------------
 
+  # ---------------------------------------------------------------------------
+  # API key vault restrictions on join
+  #
+  # The crdt: topic streams live document content, so a subset-restricted key
+  # must be refused there exactly as it is on sync: (sync_channel_test.exs).
+  # `crdt_channel.ex`'s check is the only thing enforcing it and a regression
+  # would otherwise be silent — this file's own setup joins with an
+  # unrestricted socket.
+  # ---------------------------------------------------------------------------
+  describe "join/3 with restricted API key" do
+    test "restricted key cannot join an unauthorized vault", %{user: user, vault: vault} do
+      {:ok, vault_b, _} = Vaults.register_vault(user, "Vault B", Ecto.UUID.generate())
+      grant_api_write!(user)
+      {:ok, _raw, api_key_record} = Engram.Accounts.create_api_key(user, "restricted-crdt")
+
+      # Only grant access to vault_b — NOT the vault we then try to join.
+      Repo.insert_all("api_key_vaults", [
+        %{api_key_id: Ecto.UUID.dump!(api_key_record.id), vault_id: Ecto.UUID.dump!(vault_b.id)}
+      ])
+
+      assert {:error, %{reason: "api_key_vault_forbidden"}} =
+               subscribe_and_join(
+                 user_socket(user, api_key_record),
+                 EngramWeb.CrdtChannel,
+                 "crdt:#{user.id}:#{vault.id}",
+                 %{"crdt_proto" => 2}
+               )
+    end
+  end
+
   describe "crdt_create" do
     test "creates a bare row for a client-minted id", %{socket: socket, user: user, vault: vault} do
       id = Ecto.UUID.generate()

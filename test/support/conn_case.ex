@@ -40,6 +40,22 @@ defmodule EngramWeb.ConnCase do
   defdelegate grant_api_write!(user), to: Engram.ApiEntitlementHelpers
 
   @doc """
+  Ensures the user has an `external_id`, which the Local auth provider needs as
+  the JWT `sub`. The factory does not set one, so any test minting a real
+  session or OAuth token for a factory user must call this first.
+  """
+  def ensure_external_id(%{external_id: ext} = user) when is_binary(ext) and ext != "", do: user
+
+  def ensure_external_id(user) do
+    {:ok, updated} =
+      user
+      |> Ecto.Changeset.change(external_id: "test-#{user.id}")
+      |> Engram.Repo.update(skip_tenant_check: true)
+
+    updated
+  end
+
+  @doc """
   Test `setup` callback that builds an API-key-authenticated connection:
   inserts a paid (api_write_enabled) user with a default vault, mints an API
   key, and sets the `Bearer` header. Returns `%{conn, user, vault, api_key}`

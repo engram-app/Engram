@@ -654,7 +654,19 @@ defmodule Engram.Vector.Qdrant do
     type_hmac = Keyword.get(search_opts, :type_hmac)
 
     must = [%{key: "user_id", match: %{value: user_id}}]
-    must = if vault_id, do: must ++ [%{key: "vault_id", match: %{value: vault_id}}], else: must
+    # `vault_id` accepts one id or a set. The set form is what a multi-vault
+    # OAuth grant (and a subset-restricted API key) needs: without it the only
+    # options were one query per vault or dropping the filter entirely, and
+    # dropping it leaks every vault the credential was scoped away from (#729).
+    # `vault_id` is already a keyword payload index (@payload_index_fields), so
+    # `any` needs no new index — same shape as tags_hmac below.
+    must =
+      case vault_id do
+        nil -> must
+        id when is_binary(id) -> must ++ [%{key: "vault_id", match: %{value: id}}]
+        ids when is_list(ids) -> must ++ [%{key: "vault_id", match: %{any: ids}}]
+      end
+
     must = if tags_hmac, do: [%{key: "tags_hmac", match: %{any: tags_hmac}} | must], else: must
 
     must =

@@ -744,58 +744,15 @@ defmodule Engram.VaultsTest do
 
       # The deleted vault's connections vanish from the page immediately (the
       # #764 symptom is the connections list, not just the active count).
-      vault_ids = user |> Connections.list_for_user() |> Enum.map(& &1.vault_id)
+      vault_ids =
+        user |> Connections.list_for_user() |> Enum.flat_map(&(&1.vault_ids || []))
+
       refute gone.id in vault_ids
       assert kept.id in vault_ids
 
       # Both kept-vault token kinds remain active — no collateral revocation.
       assert Connections.count_active(user.id, :mcp) == 1
       assert Connections.count_active(user.id, :obsidian) == 1
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # check_api_key_access/2
-  # ---------------------------------------------------------------------------
-
-  describe "check_api_key_access/2" do
-    test "nil api_key (JWT auth) always returns :ok", %{user: user} do
-      {:ok, vault, _} = Vaults.register_vault(user, "V", Ecto.UUID.generate())
-      assert :ok = Vaults.check_api_key_access(nil, vault)
-    end
-
-    test "unrestricted key (no api_key_vaults rows) returns :ok", %{user: user} do
-      {:ok, vault, _} = Vaults.register_vault(user, "V", Ecto.UUID.generate())
-      {:ok, _raw, api_key} = Engram.Accounts.create_api_key(user, "unrestricted")
-
-      assert :ok = Vaults.check_api_key_access(api_key, vault)
-    end
-
-    test "restricted key with matching vault returns :ok", %{user: user} do
-      {:ok, vault, _} = Vaults.register_vault(user, "V", Ecto.UUID.generate())
-      {:ok, _raw, api_key} = Engram.Accounts.create_api_key(user, "restricted")
-
-      Engram.Repo.insert_all("api_key_vaults", [
-        %{api_key_id: Ecto.UUID.dump!(api_key.id), vault_id: Ecto.UUID.dump!(vault.id)}
-      ])
-
-      assert :ok = Vaults.check_api_key_access(api_key, vault)
-    end
-
-    test "restricted key without matching vault returns :forbidden", %{
-      user: user,
-      other_user: other_user
-    } do
-      {:ok, vault, _} = Vaults.register_vault(user, "V", Ecto.UUID.generate())
-      {:ok, other_vault, _} = Vaults.register_vault(other_user, "Other", Ecto.UUID.generate())
-      {:ok, _raw, api_key} = Engram.Accounts.create_api_key(user, "restricted")
-
-      # Restrict to other vault only
-      Engram.Repo.insert_all("api_key_vaults", [
-        %{api_key_id: Ecto.UUID.dump!(api_key.id), vault_id: Ecto.UUID.dump!(other_vault.id)}
-      ])
-
-      assert :forbidden = Vaults.check_api_key_access(api_key, vault)
     end
   end
 

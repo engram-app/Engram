@@ -188,18 +188,6 @@ defmodule EngramWeb.Plugs.EnforceDeviceCapTest do
       put_req_header(conn, "authorization", "Bearer #{token}")
     end
 
-    defp ensure_external_id(%{external_id: ext} = user) when is_binary(ext) and ext != "",
-      do: user
-
-    defp ensure_external_id(user) do
-      {:ok, updated} =
-        user
-        |> Ecto.Changeset.change(external_id: "test-#{user.id}")
-        |> Engram.Repo.update(skip_tenant_check: true)
-
-      updated
-    end
-
     test "returns 402 concurrent_devices_exceeded when user is at concurrent_devices cap",
          %{conn: conn} do
       user = insert(:user)

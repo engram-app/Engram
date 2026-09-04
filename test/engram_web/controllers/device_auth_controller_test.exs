@@ -7,11 +7,17 @@ defmodule EngramWeb.DeviceAuthControllerTest do
   alias Engram.Repo
   alias Engram.Vaults.WelcomeNote
 
+  # Device approval is SESSION-only: it mints a device refresh token bound to
+  # any vault the user owns (or a brand-new one via vault_id: "new"), so a
+  # delegated credential approving its own device flow is privilege escalation.
+  # `/api/auth/device` (start) is public and `/authorize` sits behind
+  # `RequireSession`. Every real caller — the SPA and the e2e helpers — sends a
+  # session token here; the API key this used to send was test convenience.
   defp create_authed_conn(%{conn: conn}) do
-    user = insert(:user)
-    {:ok, raw_key, _api_key} = Engram.Accounts.create_api_key(user, "test")
+    user = insert(:user) |> ensure_external_id()
+    {:ok, token} = Engram.Auth.Providers.Local.issue_access_token(user.external_id, user.email)
     grant_api_write!(user)
-    authed_conn = put_req_header(conn, "authorization", "Bearer #{raw_key}")
+    authed_conn = put_req_header(conn, "authorization", "Bearer #{token}")
 
     %{conn: conn, authed_conn: authed_conn, user: user}
   end

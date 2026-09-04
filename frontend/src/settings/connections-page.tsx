@@ -1,4 +1,4 @@
-import { Plug } from "lucide-react";
+import { Plug, Search } from "lucide-react";
 import { useRef, useState } from "react";
 import { Link, useLocation } from "react-router";
 import { Button } from "@/components/ui/button";
@@ -61,7 +61,29 @@ interface PendingRevoke {
 	onConfirm: () => Promise<unknown>;
 }
 
+// Below this many connections a search field is pure clutter — every row
+// is already on screen.
+const SEARCH_THRESHOLD = 8;
+
 // ── ConnectionCard ────────────────────────────────────────────
+
+// `null` means every vault, NOT none — shared with the API-key table so the
+// two cannot describe the same restriction differently.
+function vaultLabel(connection: Connection): string {
+	return connection.vault_ids === null
+		? "All vaults"
+		: connection.vault_ids
+				// A name is null when the vault is gone or out of the caller's own
+				// scope. OAuth grants narrow themselves when a vault is deleted, but
+				// `api_key_vaults` rows outlive a soft delete until the purge worker
+				// runs, so a restricted key can outlive its vault by up to the
+				// 30-day restore window. Naming the state beats printing a raw UUID
+				// — and the entry must still be COUNTED, because a key restricted to
+				// one deleted vault would otherwise render empty and read as
+				// unrestricted.
+				.map((_id, i) => connection.vault_names?.[i] ?? "(deleted vault)")
+				.join(", ");
+}
 
 function ConnectionCard({
 	connection,
@@ -70,11 +92,6 @@ function ConnectionCard({
 	connection: Connection;
 	onRevoke: () => void;
 }) {
-	const vaultLabel =
-		connection.vault_id === null
-			? "All vaults"
-			: (connection.vault_name ?? `#${connection.vault_id}`);
-
 	return (
 		<article className="group flex items-start rounded-lg border border-border bg-card">
 			{/* <details> wraps the summary + expanded dl. The Revoke button is a
@@ -111,7 +128,8 @@ function ConnectionCard({
 							    so the raw string leaks a local config detail into a list of
 							    vendors. Same reasoning as the brand mark above, already keyed
 							    on slug. */}
-							{(connection.slug ? TOOL_LABELS[connection.slug] : null) ??
+							{connection.label ??
+								(connection.slug ? TOOL_LABELS[connection.slug] : null) ??
 								connection.name ??
 								"Unnamed"}
 							{/* A chip only where it carries information. A recognized
@@ -136,7 +154,7 @@ function ConnectionCard({
 							<strong className="font-semibold">
 								{connection.kind === "obsidian" ? "Vault:" : "Vaults:"}
 							</strong>{" "}
-							{vaultLabel}
+							{vaultLabel(connection)}
 						</div>
 					</div>
 				</summary>
@@ -257,10 +275,16 @@ function EmptyState({ text }: { text: string }) {
 
 function PatSection({
 	pats,
+	total,
+	filtering,
 	canCreate,
 	onRevoke,
 }: {
 	pats: Connection[];
+	// The unfiltered count. The heading reports what the user HAS, not how many
+	// rows a search left standing.
+	total: number;
+	filtering: boolean;
 	canCreate: boolean;
 	onRevoke: (pat: Connection) => void;
 }) {
@@ -270,7 +294,7 @@ function PatSection({
 
 	return (
 		<SettingsSectionCard
-			title={`API keys (${pats.length})`}
+			title={`API keys (${total})`}
 			headerAction={
 				canCreate ? <Button onClick={() => setShowCreate(true)}>+ New Key</Button> : undefined
 			}
@@ -290,7 +314,13 @@ function PatSection({
 			)}
 
 			{pats.length === 0 ? (
-				<EmptyState text="No API keys yet. Generate one to connect scripts or external tools." />
+				<EmptyState
+					text={
+						filtering
+							? "No matches."
+							: "No API keys yet. Generate one to connect scripts or external tools."
+					}
+				/>
 			) : (
 				<section className="overflow-hidden rounded-lg border border-border bg-card">
 					<div className="overflow-x-auto">
@@ -298,6 +328,7 @@ function PatSection({
 							<thead className="bg-muted text-left text-muted-foreground text-xs uppercase tracking-wide">
 								<tr>
 									<th className="px-4 py-3 font-medium">Name</th>
+									<th className="px-4 py-3 font-medium">Vaults</th>
 									<th className="px-4 py-3 font-medium">Key</th>
 									<th className="px-4 py-3 font-medium">Created</th>
 									<th className="px-4 py-3 font-medium">Last used</th>
@@ -310,6 +341,7 @@ function PatSection({
 										<td className="px-4 py-3 font-medium text-foreground">
 											{p.name || "(unnamed)"}
 										</td>
+										<td className="px-4 py-3 text-muted-foreground">{vaultLabel(p)}</td>
 										<td className="px-4 py-3 font-mono text-muted-foreground text-xs">
 											engram_••••••
 										</td>
@@ -648,6 +680,12 @@ export default function ConnectionsPage() {
 	const revokeDevice = useRevokeDeviceConnection();
 	const revokePat = useRevokePat();
 	const [pendingRevoke, setPendingRevoke] = useState<PendingRevoke | null>(null);
+	// Same rule as the OAuth consent picker: a search field is clutter until
+	// there is enough to search, and even then it stays behind a toggle rather
+	// than sitting open above the thing it filters.
+	const [searching, setSearching] = useState(false);
+	const [filter, setFilter] = useState("");
+	const searchRef = useRef<HTMLInputElement>(null);
 
 	if (isLoading) {
 		return <p className="text-muted-foreground text-sm">Loading…</p>;
@@ -661,21 +699,62 @@ export default function ConnectionsPage() {
 	}
 
 	const list = connections ?? [];
-	const obs = list.filter((c) => c.kind === "obsidian");
-	const mcp = list.filter((c) => c.kind === "mcp");
-	const pats = list.filter((c) => c.kind === "pat");
+	const showSearch = list.length > SEARCH_THRESHOLD;
+	const needle = showSearch ? filter.trim().toLowerCase() : "";
+	// Name and vaults are what a row is recognized by, so they are what it is
+	// found by. `vaultLabel` covers the "All vaults" case too.
+	const matches = (c: Connection) =>
+		!needle || `${c.label ?? ""} ${c.name ?? ""} ${vaultLabel(c)}`.toLowerCase().includes(needle);
 
-	const obsCount =
-		caps.obsidianCap === null ? `${obs.length}` : `${obs.length} / ${caps.obsidianCap}`;
-	const mcpCount = caps.mcpCap === null ? `${mcp.length}` : `${mcp.length} / ${caps.mcpCap}`;
+	const shown = list.filter(matches);
+	const obs = shown.filter((c) => c.kind === "obsidian");
+	const mcp = shown.filter((c) => c.kind === "mcp");
+	const pats = shown.filter((c) => c.kind === "pat");
+
+	// Counted off the FULL list, never the filtered one: "1 / 1" is a plan cap
+	// the user is at, and a filter must not make it read as though a slot freed
+	// up.
+	const obsTotal = list.filter((c) => c.kind === "obsidian").length;
+	const mcpTotal = list.filter((c) => c.kind === "mcp").length;
+	const obsCount = caps.obsidianCap === null ? `${obsTotal}` : `${obsTotal} / ${caps.obsidianCap}`;
+	const mcpCount = caps.mcpCap === null ? `${mcpTotal}` : `${mcpTotal} / ${caps.mcpCap}`;
 
 	return (
 		<article className="space-y-8">
 			<header>
-				<h1 className="font-semibold text-foreground text-xl">Connections</h1>
+				<div className="flex items-start justify-between gap-2">
+					<h1 className="font-semibold text-foreground text-xl">Connections</h1>
+					{showSearch && !searching && (
+						<button
+							type="button"
+							onClick={() => {
+								setSearching(true);
+								// Focus follows the click that opened the field, rather than
+								// an autoFocus attribute stealing it on mount.
+								requestAnimationFrame(() => searchRef.current?.focus());
+							}}
+							aria-label="Search connections"
+							className="rounded p-1 text-muted-foreground hover:text-foreground"
+						>
+							<Search className="size-4" />
+						</button>
+					)}
+				</div>
 				<p className="mt-1 text-muted-foreground text-sm">
 					Manage what's connected to your Engram account.
 				</p>
+				{searching ? (
+					<input
+						ref={searchRef}
+						type="search"
+						value={filter}
+						onChange={(e) => setFilter(e.target.value)}
+						onBlur={() => filter === "" && setSearching(false)}
+						placeholder="Search connections"
+						aria-label="Search connections"
+						className="mt-3 w-full rounded-lg border border-border bg-background p-2 text-sm"
+					/>
+				) : null}
 				<nav aria-label="Connection documentation" className="mt-4 grid gap-2 sm:grid-cols-2">
 					<a
 						href="https://engram.page/docs/integrations/"
@@ -709,7 +788,13 @@ export default function ConnectionsPage() {
 
 			<SettingsSectionCard title={`Obsidian plugins (${obsCount})`}>
 				{obs.length === 0 ? (
-					<EmptyState text="Install the Engram Vault Sync plugin in Obsidian to connect this vault." />
+					<EmptyState
+						text={
+							needle
+								? "No matches."
+								: "Install the Engram Vault Sync plugin in Obsidian to connect this vault."
+						}
+					/>
 				) : (
 					<ul className="space-y-3">
 						{obs.map((c) => (
@@ -736,18 +821,32 @@ export default function ConnectionsPage() {
 
 			<SettingsSectionCard title={`AI tools & integrations (${mcpCount})`}>
 				{mcp.length === 0 ? (
-					<EmptyState text="Connect Claude Desktop, Cursor, or another MCP client to use Engram as a tool." />
+					<EmptyState
+						text={
+							needle
+								? "No matches."
+								: "Connect Claude Desktop, Cursor, or another MCP client to use Engram as a tool."
+						}
+					/>
 				) : (
 					<ul className="space-y-3">
 						{mcp.map((c) => (
-							<li key={`${c.kind}-${c.client_id}`}>
+							// Keyed on the grant, not the client: one client can hold
+							// several grants, and they render as several rows.
+							<li key={`${c.kind}-${c.family_id ?? c.client_id}`}>
 								<ConnectionCard
 									connection={c}
 									onRevoke={() =>
 										setPendingRevoke({
 											name: c.name ?? "this connection",
 											description: "This client will lose access to your account.",
-											onConfirm: () => revokeOauth.mutateAsync(c.client_id!),
+											// family_id scopes the revoke to THIS grant. Without it a
+											// user with two grants for one client loses both.
+											onConfirm: () =>
+												revokeOauth.mutateAsync({
+													clientId: c.client_id!,
+													familyId: c.family_id,
+												}),
 										})
 									}
 								/>
@@ -759,6 +858,8 @@ export default function ConnectionsPage() {
 
 			<PatSection
 				pats={pats}
+				total={list.filter((c) => c.kind === "pat").length}
+				filtering={Boolean(needle)}
 				canCreate={caps.apiWriteEnabled}
 				onRevoke={(p) =>
 					setPendingRevoke({

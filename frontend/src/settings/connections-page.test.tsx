@@ -69,15 +69,17 @@ vi.mock("../config-context", async () => {
 const baseObs: import("../api/queries").Connection = {
 	kind: "obsidian",
 	client_id: "family-1",
+	family_id: "family-1",
 	key_id: null,
 	name: "Obsidian Vault Sync",
+	label: null,
 	software_id: "engram-vault-sync",
 	software_version: null,
 	verified: true,
 	logo: "/x.svg",
 	slug: null,
-	vault_id: "1",
-	vault_name: null,
+	vault_ids: ["1"],
+	vault_names: [null],
 	scope: null,
 	last_used_at: null,
 	connected_at: "2026-05-30T00:00:00Z",
@@ -91,15 +93,17 @@ const baseObs: import("../api/queries").Connection = {
 const basePat: import("../api/queries").Connection = {
 	kind: "pat",
 	client_id: null,
+	family_id: null,
 	key_id: "7",
 	name: "ci-bot",
+	label: null,
 	software_id: null,
 	software_version: null,
 	verified: false,
 	logo: null,
 	slug: null,
-	vault_id: null,
-	vault_name: null,
+	vault_ids: null,
+	vault_names: null,
 	scope: null,
 	last_used_at: null,
 	connected_at: "2026-05-30T00:00:00Z",
@@ -113,15 +117,17 @@ const basePat: import("../api/queries").Connection = {
 const baseMcp: import("../api/queries").Connection = {
 	kind: "mcp",
 	client_id: "client-abc",
+	family_id: "grant-abc",
 	key_id: null,
 	name: "Claude Desktop",
+	label: null,
 	software_id: "claude-desktop",
 	software_version: "1.2.0",
 	verified: false,
 	logo: null,
 	slug: null,
-	vault_id: null,
-	vault_name: null,
+	vault_ids: null,
+	vault_names: null,
 	scope: "notes:read notes:write",
 	last_used_at: null,
 	connected_at: "2026-05-30T00:00:00Z",
@@ -191,6 +197,144 @@ describe("ConnectionsPage", () => {
 		// getAllBy: the brand mark's <title> carries the product name too.
 		expect(screen.getAllByText("Claude Code").length).toBeGreaterThan(0);
 		expect(screen.queryByText(/\(engram\)/u)).toBeNull();
+	});
+
+	describe("search", () => {
+		// Nine keys: one over SEARCH_THRESHOLD, so the toggle appears.
+		function manyPats() {
+			return Array.from({ length: 9 }, (_, i) => ({
+				...basePat,
+				key_id: `k${i}`,
+				name: i === 0 ? "ci-bot" : `script-${i}`,
+			}));
+		}
+
+		it("offers nothing while every connection is already on screen", () => {
+			mockConnections.splice(0, mockConnections.length, { ...basePat, name: "ci-bot" });
+			mockTier = "starter";
+			renderPage();
+
+			expect(screen.queryByRole("button", { name: /Search connections/iu })).toBeNull();
+			expect(screen.queryByRole("searchbox")).toBeNull();
+		});
+
+		it("keeps the field behind a toggle once there is enough to search", () => {
+			mockConnections.splice(0, mockConnections.length, ...manyPats());
+			mockTier = "starter";
+			renderPage();
+
+			expect(screen.queryByRole("searchbox")).toBeNull();
+			fireEvent.click(screen.getByRole("button", { name: /Search connections/iu }));
+			expect(screen.getByRole("searchbox", { name: /Search connections/iu })).toBeInTheDocument();
+		});
+
+		it("filters rows without rewriting the counts", () => {
+			mockConnections.splice(0, mockConnections.length, ...manyPats());
+			mockTier = "starter";
+			renderPage();
+
+			fireEvent.click(screen.getByRole("button", { name: /Search connections/iu }));
+			fireEvent.change(screen.getByRole("searchbox", { name: /Search connections/iu }), {
+				target: { value: "ci-bot" },
+			});
+
+			expect(screen.getByText("ci-bot")).toBeInTheDocument();
+			expect(screen.queryByText("script-3")).toBeNull();
+			// The heading counts what the user HAS. A section header that moved
+			// with the filter would read as though keys had been deleted — and on
+			// the capped sections, as though a plan slot had freed up.
+			expect(screen.getByRole("heading", { name: /API keys \(9\)/iu })).toBeInTheDocument();
+		});
+
+		it("does not tell you to install a plugin when a filter emptied the section", () => {
+			mockConnections.splice(0, mockConnections.length, ...manyPats());
+			mockTier = "starter";
+			renderPage();
+
+			fireEvent.click(screen.getByRole("button", { name: /Search connections/iu }));
+			fireEvent.change(screen.getByRole("searchbox", { name: /Search connections/iu }), {
+				target: { value: "ci-bot" },
+			});
+
+			expect(screen.queryByText(/Install the Engram Vault Sync plugin/iu)).toBeNull();
+			expect(screen.getAllByText("No matches.").length).toBeGreaterThan(0);
+		});
+	});
+
+	// The catalog spelling beats the client's self-reported name, but it must
+	// NOT beat the user's own. Two grants for the same client both resolve to
+	// the same slug, so preferring the catalog there collapses them into two
+	// rows reading "Claude Code" — erasing the one string that told them apart.
+	it("shows the user's label over the catalog product name", () => {
+		mockConnections.splice(0, mockConnections.length, {
+			...baseMcp,
+			label: "Work laptop",
+			name: "Work laptop",
+			slug: "claude_code",
+			verified: false,
+		});
+		mockTier = "starter";
+		renderPage();
+
+		expect(screen.getByText("Work laptop")).toBeInTheDocument();
+	});
+
+	it("shows a restricted API key's vaults, not All vaults", () => {
+		mockConnections.splice(0, mockConnections.length, {
+			...basePat,
+			name: "ci-bot",
+			vault_ids: ["v1", "v2"],
+			vault_names: ["Personal", "Research"],
+		});
+		mockTier = "starter";
+		renderPage();
+
+		expect(screen.getByText("Personal, Research")).toBeInTheDocument();
+		expect(screen.queryByText("All vaults")).toBeNull();
+	});
+
+	// A key restricted to a vault that has been soft-deleted still carries the
+	// id; the name comes back null. Dropping the entry would render the row
+	// empty, which reads as unrestricted — the exact opposite of the truth.
+	it("names a deleted vault rather than printing its id", () => {
+		mockConnections.splice(0, mockConnections.length, {
+			...basePat,
+			name: "ci-bot",
+			vault_ids: ["v1", "v2"],
+			vault_names: ["Personal", null],
+		});
+		mockTier = "starter";
+		renderPage();
+
+		expect(screen.getByText("Personal, (deleted vault)")).toBeInTheDocument();
+		expect(screen.queryByText(/#v2/u)).toBeNull();
+	});
+
+	it("still shows a restriction when its only vault is gone", () => {
+		mockConnections.splice(0, mockConnections.length, {
+			...basePat,
+			name: "ci-bot",
+			vault_ids: ["v1"],
+			vault_names: [null],
+		});
+		mockTier = "starter";
+		renderPage();
+
+		expect(screen.getByText("(deleted vault)")).toBeInTheDocument();
+		expect(screen.queryByText("All vaults")).toBeNull();
+	});
+
+	it("says All vaults for an unrestricted API key", () => {
+		mockConnections.splice(0, mockConnections.length, {
+			...basePat,
+			name: "ci-bot",
+			vault_ids: null,
+			vault_names: null,
+		});
+		mockTier = "starter";
+		renderPage();
+
+		expect(screen.getByText("All vaults")).toBeInTheDocument();
 	});
 
 	// No slug means no catalog entry to prefer, so the self-reported name is all
@@ -390,27 +534,31 @@ describe("ConnectionsPage", () => {
 		mockConnections.splice(
 			0,
 			mockConnections.length,
-			{ ...baseObs, vault_name: "Personal" },
+			{ ...baseObs, vault_names: ["Personal"] },
 			baseMcp,
 		);
 		mockTier = "starter";
 		renderPage();
 		expect(screen.getByText("Vault:")).toBeInTheDocument();
 		expect(screen.getByText(/Personal/u)).toBeInTheDocument();
-		// MCP card: plural + "All vaults" since baseMcp.vault_id is null
+		// MCP card: plural + "All vaults" since baseMcp.vault_ids is null
 		expect(screen.getByText("Vaults:")).toBeInTheDocument();
 		expect(screen.getByText(/All vaults/u)).toBeInTheDocument();
 	});
 
-	it("falls back to #<id> when vault_name is missing", () => {
+	// Used to print the raw id. A vault id is an opaque UUID that means nothing
+	// to the person reading it; what they need to know is that the vault is
+	// gone, and that the connection is still restricted to it.
+	it("names a missing vault instead of printing its id", () => {
 		mockConnections.splice(0, mockConnections.length, {
 			...baseObs,
-			vault_id: "42",
-			vault_name: null,
+			vault_ids: ["42"],
+			vault_names: [null],
 		});
 		mockTier = "starter";
 		renderPage();
-		expect(screen.getByText(/#42/u)).toBeInTheDocument();
+		expect(screen.getByText(/\(deleted vault\)/u)).toBeInTheDocument();
+		expect(screen.queryByText(/#42/u)).toBeNull();
 	});
 
 	it("opens the revoke modal and calls mutateAsync on confirm", async () => {
@@ -431,6 +579,34 @@ describe("ConnectionsPage", () => {
 		fireEvent.click(confirmButton);
 		await waitFor(() => expect(mockRevokeDevice).toHaveBeenCalledWith("family-1"));
 		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+	});
+
+	it("revokes only the grant whose Revoke was clicked, not the whole client", async () => {
+		// Two grants of ONE client — the exact case labels exist to
+		// disambiguate. Revoking "work" must not take "laptop" with it.
+		mockRevokeOauth.mockClear();
+		mockConnections.splice(
+			0,
+			mockConnections.length,
+			{ ...baseMcp, name: "laptop", family_id: "grant-laptop" },
+			{ ...baseMcp, name: "work", family_id: "grant-work" },
+		);
+		mockTier = "starter";
+		renderPage();
+
+		const workCard = screen.getByText("work").closest("li")!;
+		fireEvent.click(within(workCard).getByRole("button", { name: /^Revoke$/u }));
+		const confirmButton = screen
+			.getAllByRole("button", { name: /^Revoke$/u })
+			.find((b) => b.closest('[role="dialog"]'))!;
+		fireEvent.click(confirmButton);
+
+		await waitFor(() =>
+			expect(mockRevokeOauth).toHaveBeenCalledWith({
+				clientId: "client-abc",
+				familyId: "grant-work",
+			}),
+		);
 	});
 
 	it("keeps modal open and surfaces error message when revoke fails", async () => {

@@ -27,7 +27,12 @@ defmodule EngramWeb.ConnectionsController do
 
   def index(conn, _params) do
     user = conn.assigns.current_user
-    json(conn, Enum.map(Connections.list_for_user(user), &serialize/1))
+    # Vault names resolve through the request's grant, not the user's whole
+    # vault list. `RequireSession` now rejects OAuth grants outright, so this is
+    # defence in depth — it still covers a grant whose `scope` claim is NULL,
+    # which the plug cannot discriminate.
+    scope = Engram.Permissions.vault_scope(conn)
+    json(conn, Enum.map(Connections.list_for_user(user, scope), &serialize/1))
   end
 
   operation(:delete_oauth,
@@ -35,11 +40,20 @@ defmodule EngramWeb.ConnectionsController do
     summary: "Revoke an OAuth client connection",
     description:
       "Revokes the refresh tokens for an OAuth client family (e.g. an MCP client) so it can no " <>
-        "longer mint access tokens. Pass `vault_id` to scope the revoke to a single vault; omit it " <>
-        "to revoke the client across all vaults. Session-auth only.",
+        "longer mint access tokens. Pass `family_id` to revoke ONE grant — a client the user " <>
+        "authorized twice has two, and each is its own row in `GET /connections`. Omit it to " <>
+        "disconnect the client entirely, which is what frees a connection-cap slot. `vault_id` " <>
+        "is the older, coarser narrowing and is ignored when `family_id` is given. " <>
+        "Session-auth only.",
     tags: ["Connections"],
     parameters: [
       client_id: [in: :path, type: :string, required: true, description: "OAuth client id"],
+      family_id: [
+        in: :query,
+        type: :string,
+        required: false,
+        description: "Revoke only this grant lineage"
+      ],
       vault_id: [
         in: :query,
         type: :string,
@@ -55,9 +69,18 @@ defmodule EngramWeb.ConnectionsController do
 
   def delete_oauth(conn, %{"client_id" => client_id} = params) do
     user = conn.assigns.current_user
-    vault_id = parse_vault_id(params["vault_id"])
 
-    with :ok <- Connections.revoke_oauth_family(user.id, client_id, vault_id) do
+    # A `family_id` names one grant lineage, so it revokes exactly the row the
+    # user clicked. Without it this stays client-wide: that is the "disconnect
+    # this app entirely" behaviour the cap-swap flows depend on, since the cap
+    # counts clients, not grants.
+    result =
+      case parse_uuid(params["family_id"]) do
+        nil -> Connections.revoke_oauth_family(user.id, client_id, parse_uuid(params["vault_id"]))
+        family_id -> Connections.revoke_oauth_grant(user.id, family_id)
+      end
+
+    with :ok <- result do
       send_resp(conn, 204, "")
     end
   end
@@ -147,31 +170,38 @@ defmodule EngramWeb.ConnectionsController do
     end
   end
 
-  defp parse_vault_id(nil), do: nil
-  defp parse_vault_id(""), do: nil
+  defp parse_uuid(nil), do: nil
+  defp parse_uuid(""), do: nil
 
-  defp parse_vault_id(v) when is_binary(v) do
+  defp parse_uuid(v) when is_binary(v) do
     case Ecto.UUID.cast(v) do
       {:ok, uuid} -> uuid
       :error -> nil
     end
   end
 
-  defp parse_vault_id(_), do: nil
+  defp parse_uuid(_), do: nil
 
   defp serialize(row) do
     %{
       kind: Atom.to_string(row.kind),
       client_id: row.client_id,
+      # The grant this row IS. `client_id` can be shared by several rows; this
+      # is what the row's own Disconnect keys on.
+      family_id: row.family_id,
       key_id: row.key_id,
       name: row.name,
+      label: row.label,
       software_id: row.software_id,
       software_version: row.software_version,
       verified: row.verified,
       logo: row.logo,
       slug: row.slug,
-      vault_id: row.vault_id,
-      vault_name: row.vault_name,
+      # Always arrays (or nil for "all vaults"), on every kind — a payload
+      # where one branch emits a list and another a scalar is a frontend bug
+      # waiting to happen.
+      vault_ids: row.vault_ids,
+      vault_names: row.vault_names,
       scope: row.scope,
       last_used_at: row.last_used_at,
       connected_at: row.connected_at,

@@ -156,6 +156,42 @@ defmodule EngramWeb.VaultsControllerTest do
       assert row["note_count"] == 2
       assert row["attachment_count"] == 1
     end
+
+    test "under a scoped grant lists only the granted vault", %{conn: conn} do
+      user = insert(:user)
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      granted = insert(:vault, user: user, slug: "granted", is_default: true)
+      _hidden = insert(:vault, user: user, slug: "hidden")
+
+      user = ensure_external_id(user)
+      token = Accounts.generate_jwt(user, %{"scope" => "mcp", "vault_ids" => [granted.id]})
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> get("/api/vaults")
+
+      slugs = conn |> json_response(200) |> Map.fetch!("vaults") |> Enum.map(& &1["slug"])
+      assert slugs == ["granted"]
+    end
+
+    test "an unscoped token still lists every vault", %{conn: conn} do
+      user = insert(:user)
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      _vault_a = insert(:vault, user: user, slug: "vault-a", is_default: true)
+      _vault_b = insert(:vault, user: user, slug: "vault-b")
+
+      user = ensure_external_id(user)
+      token = Accounts.generate_jwt(user, %{"scope" => "mcp"})
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> get("/api/vaults")
+
+      slugs = conn |> json_response(200) |> Map.fetch!("vaults") |> Enum.map(& &1["slug"])
+      assert Enum.sort(slugs) == ["vault-a", "vault-b"]
+    end
   end
 
   # `POST /api/vaults` is gone — it created a vault per call with no
@@ -248,6 +284,46 @@ defmodule EngramWeb.VaultsControllerTest do
       body = conn |> get("/api/vaults") |> json_response(200)
       assert body["vaults"] == []
     end
+
+    test "under a scoped grant lists only the granted deleted vault", %{conn: conn} do
+      user = insert(:user)
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      granted = insert(:vault, user: user, slug: "granted", is_default: true)
+      hidden = insert(:vault, user: user, slug: "hidden")
+      {:ok, _} = Vaults.delete_vault(user, granted.id)
+      {:ok, _} = Vaults.delete_vault(user, hidden.id)
+
+      user = ensure_external_id(user)
+      token = Accounts.generate_jwt(user, %{"scope" => "mcp", "vault_ids" => [granted.id]})
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> get("/api/vaults?deleted=true")
+
+      slugs = conn |> json_response(200) |> Map.fetch!("vaults") |> Enum.map(& &1["slug"])
+      assert slugs == ["granted"]
+    end
+
+    test "an unscoped token still lists every deleted vault", %{conn: conn} do
+      user = insert(:user)
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      vault_a = insert(:vault, user: user, slug: "vault-a", is_default: true)
+      vault_b = insert(:vault, user: user, slug: "vault-b")
+      {:ok, _} = Vaults.delete_vault(user, vault_a.id)
+      {:ok, _} = Vaults.delete_vault(user, vault_b.id)
+
+      user = ensure_external_id(user)
+      token = Accounts.generate_jwt(user, %{"scope" => "mcp"})
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> get("/api/vaults?deleted=true")
+
+      slugs = conn |> json_response(200) |> Map.fetch!("vaults") |> Enum.map(& &1["slug"])
+      assert Enum.sort(slugs) == ["vault-a", "vault-b"]
+    end
   end
 
   describe "POST /api/vaults/:id/restore" do
@@ -285,6 +361,31 @@ defmodule EngramWeb.VaultsControllerTest do
   end
 
   describe "POST /api/vaults/:id/purge" do
+    # Purge is session-only (irreversible destruction), so this block swaps the
+    # module's API-key conn for a session token. The key rejection is pinned
+    # below rather than left as an accident of the setup.
+    setup %{conn: conn, user: user} do
+      user = ensure_external_id(user)
+      {:ok, token} = Engram.Auth.Providers.Local.issue_access_token(user.external_id, user.email)
+      %{conn: put_req_header(conn, "authorization", "Bearer #{token}"), user: user}
+    end
+
+    test "rejects an API key — purge needs the human at the keyboard", %{user: user} do
+      {:ok, v, _} = Vaults.register_vault(user, "KeyDoomed", Ecto.UUID.generate())
+      {:ok, _} = Vaults.delete_vault(user, v.id)
+      {:ok, raw_key, _} = Accounts.create_api_key(user, "purge-key")
+      grant_api_write!(user)
+
+      assert %{"error" => "api_key_not_allowed"} =
+               build_conn()
+               |> put_req_header("accept", "application/json")
+               |> put_req_header("authorization", "Bearer #{raw_key}")
+               |> post("/api/vaults/#{v.id}/purge")
+               |> json_response(403)
+
+      assert Engram.Repo.get(Engram.Vaults.Vault, v.id, skip_tenant_check: true)
+    end
+
     test "purges a deleted vault", %{conn: conn, user: user} do
       {:ok, v, _} = Vaults.register_vault(user, "Doomed", Ecto.UUID.generate())
       {:ok, _} = Vaults.delete_vault(user, v.id)
@@ -427,6 +528,151 @@ defmodule EngramWeb.VaultsControllerTest do
       assert body["limit"] == 1
       assert body["current"] == 1
       assert body["upgrade_url"] =~ "/#settings/billing"
+    end
+  end
+
+  describe "per-vault destructive routes honour the grant's scope" do
+    # `delete`/`purge`/`restore` are irreversible and carried NO scope check,
+    # so a grant over vaults A+B could destroy vault C. `show`/`update` leaked
+    # and mutated out-of-scope vaults respectively.
+    setup do
+      user = insert(:user)
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+      granted = insert(:vault, user: user, slug: "granted", is_default: true)
+      outside = insert(:vault, user: user, slug: "outside")
+
+      user = ensure_external_id(user)
+
+      scoped =
+        Accounts.generate_jwt(user, %{"scope" => "mcp", "vault_ids" => [granted.id]})
+
+      unscoped = Accounts.generate_jwt(user, %{"scope" => "mcp"})
+
+      %{user: user, granted: granted, outside: outside, scoped: scoped, unscoped: unscoped}
+    end
+
+    defp bearer(token) do
+      build_conn()
+      |> put_req_header("accept", "application/json")
+      |> put_req_header("authorization", "Bearer #{token}")
+    end
+
+    test "a scoped grant cannot DELETE a vault outside its scope", %{
+      scoped: scoped,
+      outside: outside
+    } do
+      conn = delete(bearer(scoped), ~p"/api/vaults/#{outside.id}")
+
+      assert %{"error" => "Not authorized for this vault"} = json_response(conn, 403)
+      # Still alive — a 403 that soft-deleted it anyway would be the real bug.
+      assert is_nil(
+               Engram.Repo.get!(Engram.Vaults.Vault, outside.id, skip_tenant_check: true).deleted_at
+             )
+    end
+
+    test "NO OAuth grant may purge — irreversible destruction is session-only", %{
+      scoped: scoped,
+      unscoped: unscoped,
+      outside: outside,
+      granted: granted
+    } do
+      # Purge is immediate and unrecoverable, so it is gated on RequireSession
+      # rather than on scope: a grant is consent to read and write notes, not to
+      # destroy a vault beyond recovery. Even an ALL-VAULTS grant is refused,
+      # and even for a vault it plainly covers.
+      for {label, token, vault} <- [
+            {"scoped, out of scope", scoped, outside},
+            {"scoped, IN scope", scoped, granted},
+            {"all-vaults grant", unscoped, outside}
+          ] do
+        conn = post(bearer(token), ~p"/api/vaults/#{vault.id}/purge")
+
+        assert %{"error" => "oauth_grant_not_allowed"} = json_response(conn, 403), label
+        assert Engram.Repo.get(Engram.Vaults.Vault, vault.id, skip_tenant_check: true), label
+      end
+    end
+
+    test "an all-vaults grant is refused PURGE but still allowed DELETE", %{
+      unscoped: unscoped,
+      outside: outside
+    } do
+      # THE distinction, in one test. Same credential, same vault: purge is
+      # refused because it is irreversible; delete is permitted because it is
+      # soft and restorable within 30 days.
+      assert %{"error" => "oauth_grant_not_allowed"} =
+               bearer(unscoped)
+               |> post(~p"/api/vaults/#{outside.id}/purge")
+               |> json_response(403)
+
+      assert %{"deleted" => true} =
+               bearer(unscoped)
+               |> delete(~p"/api/vaults/#{outside.id}")
+               |> json_response(200)
+    end
+
+    test "a session JWT can still purge", %{user: user, outside: outside} do
+      # Over-block guard: purging a deleted vault is a real button in the
+      # settings UI, and the SPA is the only caller. Purge only applies to a
+      # soft-deleted vault — an active one 404s whatever the credential.
+      {:ok, _} = Vaults.delete_vault(user, outside.id)
+      {:ok, token} = Engram.Auth.Providers.Local.issue_access_token(user.external_id, user.email)
+
+      # `purge_vault/2` ENQUEUES Engram.Workers.CleanupVault and returns; the row
+      # is removed by the worker, so asserting the row is gone here would be
+      # asserting against the wrong mechanism. The 200 is the guard's whole
+      # claim: RequireSession let a session through.
+      assert %{"purged" => true} =
+               bearer(token)
+               |> post(~p"/api/vaults/#{outside.id}/purge")
+               |> json_response(200)
+    end
+
+    test "a scoped grant cannot RESTORE a vault outside its scope", %{
+      scoped: scoped,
+      outside: outside
+    } do
+      conn = post(bearer(scoped), ~p"/api/vaults/#{outside.id}/restore")
+
+      assert %{"error" => "Not authorized for this vault"} = json_response(conn, 403)
+    end
+
+    test "a scoped grant cannot SHOW or UPDATE a vault outside its scope", %{
+      scoped: scoped,
+      outside: outside
+    } do
+      # Same leak class Task 8 closed on the index — `show` returned the name
+      # and counts, `update` renamed it.
+      assert %{"error" => "Not authorized for this vault"} =
+               bearer(scoped) |> get(~p"/api/vaults/#{outside.id}") |> json_response(403)
+
+      assert %{"error" => "Not authorized for this vault"} =
+               bearer(scoped)
+               |> patch(~p"/api/vaults/#{outside.id}", %{name: "renamed"})
+               |> json_response(403)
+    end
+
+    test "a scoped grant CAN delete a vault inside its scope", %{
+      scoped: scoped,
+      granted: granted
+    } do
+      # Over-block guard: the check narrows to the grant, it does not forbid
+      # per-vault writes outright.
+      conn = delete(bearer(scoped), ~p"/api/vaults/#{granted.id}")
+
+      assert %{"deleted" => true} = json_response(conn, 200)
+    end
+
+    test "an UNRESTRICTED grant can still delete any of the user's vaults", %{
+      unscoped: unscoped,
+      outside: outside
+    } do
+      # An all-vaults grant is deliberately still allowed here: this is a scope
+      # check, not a session requirement. Deciding otherwise is a product call,
+      # not a security one.
+      conn = delete(bearer(unscoped), ~p"/api/vaults/#{outside.id}")
+
+      assert %{"deleted" => true} = json_response(conn, 200)
     end
   end
 end

@@ -60,7 +60,18 @@ defmodule EngramWeb.McpController do
   # or DELETE to terminate a session. This server is POST-only JSON-RPC and
   # offers neither, so respond 405 with Allow per the MCP spec — not 404,
   # which clients treat as a missing endpoint and abort the connection.
-  def unsupported_transport(conn, _params) do
+  #
+  # One action per verb, deliberately. A single shared action is the shape
+  # `Config.CSRFRoute` flags: a GET route reaching the same controller action as
+  # a state-changing verb is how a mutation gets triggerable by navigation. It
+  # is not a real CSRF here (both answers are a bodyless 405 that changes
+  # nothing), but the router should not carry the shape at all. Keep them split
+  # even though the bodies are identical.
+  def unsupported_transport_get(conn, _params), do: method_not_allowed(conn)
+
+  def unsupported_transport_delete(conn, _params), do: method_not_allowed(conn)
+
+  defp method_not_allowed(conn) do
     conn
     |> put_resp_header("allow", "POST")
     |> send_resp(405, "")
@@ -359,37 +370,26 @@ defmodule EngramWeb.McpController do
     end
   end
 
-  # Picks the vault context for a bare (no vault_id) search. Cross-vault search
-  # (Qdrant with no vault filter) sees EVERY vault the user owns, so it is only
-  # safe when the credential can already reach all of them — otherwise it would
-  # leak vaults the credential was scoped away from (#729).
+  # Picks the vault context for a bare (no vault_id) search. A credential that
+  # reaches exactly one vault searches it directly; anything wider goes through
+  # one Qdrant query carrying an any-match filter over the accessible set, so
+  # the result set can never include a vault the credential was scoped away
+  # from (#729).
   defp search_across_accessible(tool, user, args, conn) do
     # Fetch the vault list ONCE; derive both the accessible set and the total
     # from it (no double query).
     all = Engram.Vaults.list_vaults(user)
     accessible = scope_vaults(all, conn)
 
-    cond do
-      accessible == [] ->
+    case accessible do
+      [] ->
         error_result(no_vault_message_for(all))
 
-      length(accessible) == 1 ->
-        call_tool(tool, user, hd(accessible), args)
+      [only] ->
+        call_tool(tool, user, only, args)
 
-      # Credential reaches every vault → one cross-vault query (no vault filter
-      # == exactly the accessible set here). `{:cross_vault, _}` carries the set
-      # for per-result vault labelling.
-      length(accessible) == length(all) ->
-        call_tool(tool, user, {:cross_vault, accessible}, args)
-
-      # A per-vault-restricted key reaching a >1 subset: cross-vault would leak
-      # the vaults it can't see (Qdrant has no multi-vault filter), so require an
-      # explicit choice. Rare.
-      true ->
-        error_result(
-          "This connection is limited to specific vaults. Pass vault_id to choose one " <>
-            "(call list_vaults to see them)."
-        )
+      many ->
+        call_tool(tool, user, {:cross_vault, many}, args)
     end
   end
 
@@ -398,33 +398,17 @@ defmodule EngramWeb.McpController do
 
   # -- Vault resolution --
 
-  # The single source of truth for "which vaults can THIS credential reach":
-  # an OAuth-bound token sees only its bound vault; a restricted API key only
-  # its permitted vaults; an unrestricted credential all of the user's vaults.
-  # Every vault-scope decision (resolve, set_vault, list_vaults) routes through
-  # here so the privacy boundary is enforced in exactly one place.
+  # "Which vaults can THIS credential reach" — answered by Engram.Permissions,
+  # which intersects the OAuth grant's vault set with the API key's restricted
+  # set (either may be unrestricted). Every vault-scope decision (resolve,
+  # set_vault, list_vaults) routes through here, and here through Permissions,
+  # so the privacy boundary is enforced in exactly one place.
   defp accessible_vaults(user, conn), do: scope_vaults(Engram.Vaults.list_vaults(user), conn)
 
   # Narrows an already-loaded vault list to what the credential may reach, so a
   # caller that already has the list (e.g. bare search) doesn't re-query it.
-  defp scope_vaults(vaults, conn) do
-    oauth_bound = conn.assigns[:oauth_scope_vault_id]
-    # One query for the API key's restricted set, then filter in memory — not a
-    # per-vault DB round-trip.
-    allowed = Engram.Vaults.accessible_vault_ids(conn.assigns[:current_api_key])
-
-    vaults
-    |> maybe_filter_oauth(oauth_bound)
-    |> filter_api_key(allowed)
-  end
-
-  defp maybe_filter_oauth(vaults, nil), do: vaults
-
-  defp maybe_filter_oauth(vaults, bound) when is_binary(bound),
-    do: Enum.filter(vaults, &(to_string(&1.id) == to_string(bound)))
-
-  defp filter_api_key(vaults, :all), do: vaults
-  defp filter_api_key(vaults, ids), do: Enum.filter(vaults, &(&1.id in ids))
+  defp scope_vaults(vaults, conn),
+    do: Engram.Permissions.filter(Engram.Permissions.vault_scope(conn), vaults)
 
   # Resolves which vault a tool call targets. MCP is stateless — there is no
   # active-vault session — so the vault comes from either an explicit `vault_id`
@@ -453,38 +437,33 @@ defmodule EngramWeb.McpController do
 
           _many ->
             {:error,
-             "You own multiple vaults — specify which one. Call list_vaults to see the IDs, " <>
-               "then pass vault_id on this tool call."}
+             "This connection can reach more than one vault — specify which. Call " <>
+               "list_vaults to see the IDs, then pass vault_id on this tool call."}
         end
     end
   end
 
-  # A caller-named vault: enforce OAuth binding + API-key scope with a single
-  # get_vault (not a full list). vault_denied_message re-derives the specific
-  # reason on the error path only.
+  # A caller-named vault: enforce the credential's scope with a single get_vault
+  # (not a full list). vault_denied_message re-derives the specific reason on
+  # the error path only.
   defp resolve_requested_vault(user, requested, conn) do
-    oauth_bound = conn.assigns[:oauth_scope_vault_id]
-
-    if is_binary(oauth_bound) and to_string(requested) != to_string(oauth_bound) do
-      {:error, vault_denied_message(user, requested, conn)}
+    with {:ok, vault} <- Engram.Vaults.get_vault(user, requested),
+         :ok <- Engram.Permissions.check(Engram.Permissions.vault_scope(conn), vault) do
+      {:ok, vault}
     else
-      with {:ok, vault} <- Engram.Vaults.get_vault(user, requested),
-           :ok <- Engram.Vaults.check_api_key_access(conn.assigns[:current_api_key], vault) do
-        {:ok, vault}
-      else
-        _ -> {:error, vault_denied_message(user, requested, conn)}
-      end
+      _ -> {:error, vault_denied_message(user, requested, conn)}
     end
   end
 
-  # Explains why a requested vault isn't reachable — an OAuth binding, an
-  # API-key restriction, or a genuinely unknown vault — so the caller gets
+  # Explains why a requested vault isn't reachable — an OAuth grant's vault set,
+  # an API-key restriction, or a genuinely unknown vault — so the caller gets
   # actionable guidance instead of a flat "not found".
   defp vault_denied_message(user, requested, conn) do
     cond do
-      is_binary(conn.assigns[:oauth_scope_vault_id]) ->
-        "This connection is bound to vault #{conn.assigns.oauth_scope_vault_id} and cannot " <>
-          "access vault #{requested}. Reconnect with an all-vaults grant (or that vault) to switch."
+      is_list(conn.assigns[:oauth_scope_vault_ids]) ->
+        "This connection is authorized for #{length(conn.assigns.oauth_scope_vault_ids)} " <>
+          "vault(s) and cannot access vault #{requested}. Call list_vaults to see which " <>
+          "ones it can reach, or reconnect with a grant that includes this vault."
 
       match?({:ok, _}, Engram.Vaults.get_vault(user, requested)) ->
         "API key does not have access to vault #{requested}"

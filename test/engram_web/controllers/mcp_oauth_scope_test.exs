@@ -29,20 +29,15 @@ defmodule EngramWeb.McpOAuthScopeTest do
     %{conn: conn, user: user, vault_a: vault_a, vault_b: vault_b}
   end
 
-  defp ensure_external_id(%{external_id: ext} = user) when is_binary(ext) and ext != "", do: user
-
-  defp ensure_external_id(user) do
-    {:ok, updated} =
-      user
-      |> Ecto.Changeset.change(external_id: "test-#{user.id}")
-      |> Engram.Repo.update(skip_tenant_check: true)
-
-    updated
-  end
-
   defp oauth_authed(conn, user, vault_id) do
     user = ensure_external_id(user)
     token = Engram.Accounts.generate_jwt(user, %{"scope" => "mcp", "vault_id" => vault_id})
+    put_req_header(conn, "authorization", "Bearer #{token}")
+  end
+
+  defp oauth_authed_multi(conn, user, vault_ids) do
+    user = ensure_external_id(user)
+    token = Engram.Accounts.generate_jwt(user, %{"scope" => "mcp", "vault_ids" => vault_ids})
     put_req_header(conn, "authorization", "Bearer #{token}")
   end
 
@@ -103,7 +98,7 @@ defmodule EngramWeb.McpOAuthScopeTest do
     # Either way the response must surface the bound-vault enforcement.
     response_text = body["result"]["content"] |> Kernel.||([]) |> Enum.map_join(" ", & &1["text"])
     error_msg = body["error"]["message"] || ""
-    assert response_text <> error_msg =~ "bound to vault"
+    assert response_text <> error_msg =~ "cannot access vault #{vault_b.id}"
   end
 
   test "OAuth-bound token cannot confirm a vault outside its binding via set_vault (#729)", %{
@@ -137,7 +132,7 @@ defmodule EngramWeb.McpOAuthScopeTest do
 
     text = ambiguous["result"]["content"] |> Kernel.||([]) |> Enum.map_join(" ", & &1["text"])
     assert ambiguous["result"]["isError"] == true
-    assert text =~ "multiple vaults"
+    assert text =~ "more than one vault"
 
     named =
       build_conn()
@@ -147,5 +142,62 @@ defmodule EngramWeb.McpOAuthScopeTest do
 
     refute Map.has_key?(named, "error")
     refute named["result"]["isError"] == true
+  end
+
+  test "a granted vault in a multi-vault grant routes", %{
+    conn: conn,
+    user: user,
+    vault_a: a,
+    vault_b: b
+  } do
+    conn =
+      conn
+      |> oauth_authed_multi(user, [a.id, b.id])
+      |> call_tool("list_folders", %{"vault_id" => b.id})
+
+    body = json_response(conn, 200)
+    refute Map.has_key?(body, "error")
+    refute body["result"]["isError"] == true
+  end
+
+  test "a vault outside the grant is refused and not echoed as valid", %{
+    conn: conn,
+    user: user,
+    vault_a: a,
+    vault_b: b
+  } do
+    outside = insert(:vault, user: user, slug: "vault-c")
+
+    conn =
+      conn
+      |> oauth_authed_multi(user, [a.id, b.id])
+      |> call_tool("set_vault", %{"vault_id" => outside.id})
+
+    body = json_response(conn, 200)
+    text = body["result"]["content"] |> Kernel.||([]) |> Enum.map_join(" ", & &1["text"])
+
+    assert body["result"]["isError"] == true
+    refute text =~ "is valid"
+  end
+
+  test "list_vaults under a multi-vault grant shows exactly the granted set", %{
+    conn: conn,
+    user: user,
+    vault_a: a
+  } do
+    outside = insert(:vault, user: user, slug: "vault-hidden")
+
+    conn = conn |> oauth_authed_multi(user, [a.id]) |> call_tool("list_vaults", %{})
+
+    text =
+      conn
+      |> json_response(200)
+      |> get_in(["result", "content"])
+      |> Enum.map_join(" ", & &1["text"])
+
+    # Factory vaults carry undecryptable name ciphertext (v.name is nil), and
+    # list_vaults never renders the slug — so the granted set is pinned by id.
+    assert text =~ to_string(a.id)
+    refute text =~ to_string(outside.id)
   end
 end

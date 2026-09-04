@@ -694,6 +694,31 @@ defmodule Engram.SearchTest do
       refute result == {:error, :feature_not_available}
     end
 
+    test "vault_ids: [] fails closed instead of falling through to unfiltered cross-vault",
+         %{user: user} do
+      # No embedder or Bypass expectation is set up: if this fell through to an
+      # unfiltered cross-vault search, either the Mox or the Bypass "no stub"
+      # failure would flag it — the error return alone already proves no
+      # Qdrant query was built or issued.
+      assert {:error, :no_accessible_vaults} =
+               Search.search(user, nil, "query", cross_vault: true, vault_ids: [])
+    end
+
+    # The REST shape the `vault: nil`-only guard missed: SearchController always
+    # passes the concrete vault VaultPlug resolved, and `cross_vault` is nilled
+    # into `vault: nil` only LATER, inside do_search_instrumented/4. Same
+    # no-stub argument as above — a return here proves no Qdrant query was built.
+    test "a concrete vault plus cross_vault: true plus vault_ids: [] still fails closed",
+         %{user: user, vault: vault} do
+      assert {:error, :no_accessible_vaults} =
+               Search.search(user, vault, "query", cross_vault: true, vault_ids: [])
+
+      # `?cross_vault=true` arrives off request params as a STRING, which every
+      # other reader treats as truthy; the guard must agree.
+      assert {:error, :no_accessible_vaults} =
+               Search.search(user, vault, "query", cross_vault: "true", vault_ids: [])
+    end
+
     test "folder marker rows do not appear in search results", %{
       bypass: bypass,
       user: user,

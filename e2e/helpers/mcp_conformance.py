@@ -45,11 +45,24 @@ def extract_authorize_url(line: str) -> str | None:
     return match.group(1).rstrip('"\'') if match else None
 
 
-def approve(authorize_url: str, jwt_token: str, api_url: str, *, vault_choice: str = "vault:*"):
+def approve(
+    authorize_url: str,
+    jwt_token: str,
+    api_url: str,
+    *,
+    vault_choice: str = "vault:*",
+    vault_ids: list[str] | None = None,
+):
     """Approve the CLI's pending authorization and hand the code back to it.
 
     Returns the redirect URI the server issued, after it has been delivered to
     the CLI's loopback listener.
+
+    `vault_ids` scopes the grant to exactly those vaults, matching what the
+    consent screen posts today. `vault_choice` is the single-vault
+    predecessor and stays the default so the back-compat clause keeps its
+    coverage; the server prefers `vault_ids` when both are sent, so only one
+    goes on the wire.
     """
     params = parse_qs(urlparse(authorize_url).query)
 
@@ -69,8 +82,11 @@ def approve(authorize_url: str, jwt_token: str, api_url: str, *, vault_choice: s
         "redirect_uri": one("redirect_uri"),
         "scope": params.get("scope", ["mcp"])[0],
         "response_type": "code",
-        "vault_choice": vault_choice,
     }
+    if vault_ids is None:
+        payload["vault_choice"] = vault_choice
+    else:
+        payload["vault_ids"] = vault_ids
 
     resp = requests.post(
         f"{api_url}/oauth/authorize/consent",

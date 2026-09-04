@@ -28,7 +28,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 import requests
 
-from helpers.billing import grant_test_plan
+from helpers.billing import grant_test_plan, grant_vault_headroom
 
 logger = logging.getLogger(__name__)
 
@@ -90,11 +90,24 @@ def register_client(software_id: str, client_name: str, kind: str | None = None)
     return resp.json()
 
 
-def consent(jwt_token: str, client_id: str, *, vault_choice: str = "vault:*") -> requests.Response:
+def consent(
+    jwt_token: str,
+    client_id: str,
+    *,
+    vault_choice: str = "vault:*",
+    vault_ids: list[str] | None = None,
+) -> requests.Response:
     """POST /api/oauth/authorize/consent — returns the raw Response.
 
     Success (200): JSON body `{redirect_uri: "...?code=..."}`.
     Cap hit (402): JSON body with error details.
+
+    `vault_ids` is the multi-vault shape the consent screen sends today;
+    `vault_choice` is its single-vault predecessor, still accepted for one
+    release and still the default here so the back-compat clause keeps its
+    coverage. When `vault_ids` is given it is sent ALONE — the server prefers
+    it when both are present, so sending both would exercise the precedence
+    rule rather than the scoping.
     """
     payload = {
         "client_id": client_id,
@@ -104,8 +117,11 @@ def consent(jwt_token: str, client_id: str, *, vault_choice: str = "vault:*") ->
         "redirect_uri": "http://127.0.0.1:51234/cb",
         "scope": "mcp",
         "response_type": "code",
-        "vault_choice": vault_choice,
     }
+    if vault_ids is None:
+        payload["vault_choice"] = vault_choice
+    else:
+        payload["vault_ids"] = vault_ids
     return requests.post(
         f"{API_URL}/oauth/authorize/consent",
         json=payload,
@@ -374,6 +390,88 @@ async def test_revoke_oauth_removes_from_list(clerk_client):
         status2 = revoke_oauth(jwt, cid)
         assert status2 == 204, (
             f"expected 204 on second (idempotent) revoke, got {status2}"
+        )
+    finally:
+        clerk_client.delete_user(clerk_user_id)
+
+
+@pytest.mark.asyncio
+async def test_consent_vault_ids_scopes_the_grant_to_those_vaults(clerk_client):
+    """Multi-vault consent, end to end against a live stack.
+
+    Every other consent here posts the legacy `vault_choice`, which can only
+    say "one vault" or "all vaults" — so the `vault_ids` path that the consent
+    screen actually sends had no integration coverage at all. This drives it:
+    three vaults exist, two are granted, and the third must stay unreachable
+    through the resulting access token.
+
+    `create_vault` is used rather than the wizard because the grant, not vault
+    creation, is what is under test.
+    """
+    clerk_user_id, jwt, email = _make_clerk_user(clerk_client)
+    grant_test_plan(email)
+    # Free caps vaults at 1 and this test needs three; the cap itself is
+    # asserted by test_32, so lifting it here removes an unrelated gate.
+    grant_vault_headroom(email)
+    try:
+        ts = _ts()
+        granted_a = create_vault(jwt, f"e2e-granted-a-{ts}")
+        granted_b = create_vault(jwt, f"e2e-granted-b-{ts}")
+        withheld = create_vault(jwt, f"e2e-withheld-{ts}")
+
+        client = register_client(
+            software_id=f"multi-vault-client-{secrets.token_hex(4)}",
+            client_name="Multi Vault Tool",
+            kind="mcp",
+        )
+        cid = client["client_id"]
+
+        resp = consent(jwt, cid, vault_ids=[granted_a, granted_b])
+        assert resp.status_code == 200, (
+            f"multi-vault consent failed: {resp.status_code} {resp.text}"
+        )
+        tokens = exchange_code(cid, _extract_code(resp.json()["redirect_uri"]))
+        access_token = tokens["access_token"]
+        grant_headers = {"Authorization": f"Bearer {access_token}"}
+
+        # 1. The connection the user sees names exactly the two vaults granted.
+        row = next(
+            (r for r in list_connections(jwt) if r["client_id"] == cid), None
+        )
+        assert row is not None, "multi-vault grant not found in /api/connections"
+        assert sorted(row["vault_ids"]) == sorted([granted_a, granted_b]), (
+            f"grant should carry exactly the chosen vaults, got {row['vault_ids']}"
+        )
+
+        # 2. The token itself is scoped, not just the listing: GET /api/vaults
+        #    through the grant filters to the two, never the third.
+        visible = requests.get(f"{API_URL}/vaults", headers=grant_headers, timeout=10)
+        visible.raise_for_status()
+        visible_ids = {v["id"] for v in visible.json()["vaults"]}
+        assert visible_ids == {granted_a, granted_b}, (
+            f"grant-scoped vault list should be the two granted, got {visible_ids}"
+        )
+
+        # 3. And a vault-scoped read is allowed for a granted vault and refused
+        #    for the withheld one. This is the assertion that would catch a
+        #    grant that merely LOOKS scoped: the row and the /vaults filter both
+        #    read the same claim, VaultPlug enforces it.
+        allowed = requests.get(
+            f"{API_URL}/folders",
+            headers={**grant_headers, "X-Vault-ID": str(granted_a)},
+            timeout=10,
+        )
+        assert allowed.status_code == 200, (
+            f"granted vault should be readable, got {allowed.status_code}: {allowed.text}"
+        )
+
+        denied = requests.get(
+            f"{API_URL}/folders",
+            headers={**grant_headers, "X-Vault-ID": str(withheld)},
+            timeout=10,
+        )
+        assert denied.status_code == 403, (
+            f"withheld vault should be 403, got {denied.status_code}: {denied.text}"
         )
     finally:
         clerk_client.delete_user(clerk_user_id)

@@ -1492,15 +1492,25 @@ export type ConnectionKind = "obsidian" | "mcp" | "pat";
 export interface Connection {
 	kind: ConnectionKind;
 	client_id: string | null;
+	/** The grant lineage this row IS. One OAuth client can hold several grants
+	 *  over different vault sets, each rendered as its own row, so `client_id`
+	 *  alone cannot address the row the user clicked. Null for PATs. */
+	family_id: string | null;
 	key_id: string | null;
 	name: string | null;
+	/** The user's own name for this connection. `name` falls back through the
+	 *  client's self-reported and catalog names; this is only ever theirs. */
+	label: string | null;
 	software_id: string | null;
 	software_version: string | null;
 	verified: boolean;
 	logo: string | null;
 	slug: string | null;
-	vault_id: string | null;
-	vault_name: string | null;
+	/** Vaults this connection may reach. Null means all vaults. */
+	vault_ids: string[] | null;
+	/** Positional against `vault_ids`. An entry is null when the vault is gone
+	 *  or outside the caller's own grant scope. */
+	vault_names: (string | null)[] | null;
 	scope: string | null;
 	last_used_at: string | null;
 	connected_at: string | null;
@@ -1552,10 +1562,20 @@ export function useCreatePat() {
 	});
 }
 
+/** Revokes one grant when `familyId` is given, otherwise the whole client.
+ *  The connections list passes it so Disconnect kills only the row clicked;
+ *  the cap-swap flows (ExistingConnectionsPanel, the OAuth consent page) call
+ *  `api.del` without it on purpose — the cap counts clients, not grants, so a
+ *  per-grant revoke would not free a slot. */
 export function useRevokeOauthConnection() {
 	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: (clientId: string) => api.del(`/connections/oauth/${clientId}`),
+		mutationFn: ({ clientId, familyId }: { clientId: string; familyId?: string | null }) =>
+			api.del(
+				familyId
+					? `/connections/oauth/${clientId}?family_id=${encodeURIComponent(familyId)}`
+					: `/connections/oauth/${clientId}`,
+			),
 		onSuccess: () => qc.invalidateQueries({ queryKey: ["connections"] }),
 	});
 }
@@ -1578,9 +1598,7 @@ export function useRevokePat() {
 	});
 }
 
-// Vault types (encryption fields are the ones we care about for settings)
-
-export type EncryptionStatus = "none" | "encrypting" | "encrypted" | "decrypt_pending";
+// Vault types
 
 export interface Vault {
 	id: string;
@@ -1589,23 +1607,10 @@ export interface Vault {
 	slug: string;
 	is_default: boolean;
 	created_at: string;
-	encrypted: boolean;
-	encryption_status: EncryptionStatus;
-	encrypted_at: string | null;
-	decrypt_requested_at: string | null;
-	last_toggle_at: string | null;
-	cooldown_days: number | null;
 	deleted_at?: string | null;
 	purge_at?: string | null;
 	note_count?: number;
 	attachment_count?: number;
-}
-
-export interface EncryptionProgress {
-	processed: number;
-	total: number;
-	status: EncryptionStatus;
-	started_at: string | null;
 }
 
 // Vault hooks
@@ -1638,15 +1643,6 @@ export function useEncryptVault() {
 			qc.invalidateQueries({ queryKey: ["vaults"] });
 			qc.invalidateQueries({ queryKey: ["encryption-progress"] });
 		},
-	});
-}
-
-export function useEncryptionProgress(vaultId: string | undefined, enabled: boolean) {
-	return useQuery({
-		queryKey: ["encryption-progress", vaultId],
-		queryFn: () => api.get<EncryptionProgress>(`/vaults/${vaultId}/encryption_progress`),
-		enabled: enabled && vaultId !== undefined,
-		refetchInterval: enabled ? 3000 : false,
 	});
 }
 

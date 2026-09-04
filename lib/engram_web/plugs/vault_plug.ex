@@ -4,7 +4,7 @@ defmodule EngramWeb.Plugs.VaultPlug do
 
   - If X-Vault-ID is present: fetches that vault and verifies the current user owns it.
   - If absent: falls back to the user's default vault.
-  - If an API key is present in assigns, checks api_key_vaults for vault restrictions.
+  - Restrictions (API key, OAuth grant) are enforced via `Engram.Permissions`.
 
   Sets `conn.assigns.current_vault` on success. Halts with 403/404 on failure.
 
@@ -23,14 +23,12 @@ defmodule EngramWeb.Plugs.VaultPlug do
 
     case resolve_vault(conn, user) do
       {:ok, vault} ->
-        api_key = conn.assigns[:current_api_key]
-
-        case Vaults.check_api_key_access(api_key, vault) do
+        case Engram.Permissions.check(Engram.Permissions.vault_scope(conn), vault) do
           :ok ->
             assign(conn, :current_vault, vault)
 
           :forbidden ->
-            Halt.json(conn, 403, %{error: "API key does not have access to this vault"})
+            Halt.json(conn, 403, %{error: "Not authorized for this vault"})
         end
 
       # A non-UUID X-Vault-ID (e.g. a client sending a stale/placeholder id) is

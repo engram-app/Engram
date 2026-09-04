@@ -67,9 +67,42 @@ defmodule Engram.Search do
     #
     # Ahead of the span because a refused search never ran: counting it in the
     # duration / result-count histograms would skew both.
-    with :ok <- cross_vault_entitlement(user, opts),
+    #
+    # `vault_ids_present?` is ahead of everything else: `vault_ids: []` means
+    # the caller's credential can reach zero vaults, and the one thing that
+    # must never happen is treating that as "no filter" and running an
+    # unfiltered cross-vault search (#729). Refuse before billing/budget even
+    # look at the request, and long before a Qdrant query could be built.
+    with :ok <- vault_ids_present?(vault, opts),
+         :ok <- cross_vault_entitlement(user, opts),
          :ok <- spend_search_budget(user) do
       do_search_instrumented(user, vault, query, opts)
+    end
+  end
+
+  # Fail closed: an explicit empty `vault_ids` means the credential's accessible
+  # set is empty, so refuse rather than let it fall through to unfiltered
+  # cross-vault (#729). `vault_ids` omitted entirely keeps its existing,
+  # unrelated meaning — only the explicit empty-list case is refused.
+  #
+  # Keyed on whether the search will EFFECTIVELY run cross-vault, not on `vault`
+  # being nil: `do_search_instrumented/4` nils the vault LATER when
+  # `cross_vault: true`, so the REST path — which always passes the concrete
+  # vault VaultPlug resolved — walked straight past the earlier `nil`-only
+  # clause, i.e. the guard was bypassed on exactly the path it was written for.
+  #
+  # Truthiness rather than `== true`: `SearchController` reads `cross_vault`
+  # straight off request params, so `?cross_vault=true` arrives as the STRING
+  # "true". Every other reader of the opt (`cross_vault_entitlement/2`,
+  # `do_search_instrumented/4`) is a bare `if`, so matching on the boolean here
+  # would make this guard the one place that disagrees about what cross-vault
+  # means.
+  defp vault_ids_present?(vault, opts) do
+    cross_vault? = is_nil(vault) or !!Keyword.get(opts, :cross_vault, false)
+
+    case {cross_vault?, Keyword.get(opts, :vault_ids)} do
+      {true, []} -> {:error, :no_accessible_vaults}
+      _ -> :ok
     end
   end
 
@@ -164,9 +197,10 @@ defmodule Engram.Search do
   # Cross-vault is a Pro billing feature on the web/API path. The MCP server
   # makes multi-vault search the default for every tier (product decision
   # 2026-07-10), so it passes `allow_cross_vault: true` to bypass the gate.
-  # The MCP caller is responsible for having already narrowed `vault: nil` to
-  # the credential's ACCESSIBLE set (it only enables this when the credential
-  # can reach every vault), so this never widens beyond what the caller may see.
+  # The MCP caller is responsible for narrowing to the credential's ACCESSIBLE
+  # set — either by passing a concrete `vault` or, for a subset, by passing
+  # `vault_ids`, which becomes an any-match Qdrant filter. Neither widens
+  # beyond what the caller may see.
   defp cross_vault_allowed(user, opts) do
     if Keyword.get(opts, :allow_cross_vault, false) do
       :ok
@@ -273,7 +307,7 @@ defmodule Engram.Search do
       {:ok, phase_b_kw} ->
         search_opts =
           [user_id: to_string(user.id), limit: fetch_limit]
-          |> then(&if(vault, do: Keyword.put(&1, :vault_id, to_string(vault.id)), else: &1))
+          |> then(&put_vault_filter(&1, vault, opts))
           |> Keyword.merge(phase_b_kw)
           |> Keyword.merge(date_bounds)
           |> Keyword.put(:with_vector, need_vectors?)
@@ -496,6 +530,30 @@ defmodule Engram.Search do
     ]
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
     |> Enum.map(fn {k, %DateTime{} = dt} -> {k, DateTime.to_unix(dt)} end)
+  end
+
+  # A concrete vault narrows to one id; `vault_ids` narrows to a set (a
+  # multi-vault OAuth grant or a subset-restricted API key); neither means an
+  # unfiltered cross-vault search over everything the user owns.
+  #
+  # Fail-closed note: an empty `vault_ids` list never reaches this function —
+  # `search/4`'s `vault_ids_present?` guard refuses the request before
+  # `do_search_instrumented`/`do_search` runs, so no Qdrant query is ever
+  # built for it. The `ids != []` clause below is what's left over from that
+  # guard (a non-empty list narrows; anything else — including omitted
+  # `vault_ids` — keeps the existing unfiltered cross-vault behavior), not a
+  # second place that decides "empty means unfiltered."
+  defp put_vault_filter(search_opts, %Engram.Vaults.Vault{} = vault, _opts),
+    do: Keyword.put(search_opts, :vault_id, to_string(vault.id))
+
+  defp put_vault_filter(search_opts, nil, opts) do
+    case Keyword.get(opts, :vault_ids) do
+      ids when is_list(ids) and ids != [] ->
+        Keyword.put(search_opts, :vault_id, Enum.map(ids, &to_string/1))
+
+      _ ->
+        search_opts
+    end
   end
 
   # Single-vault search: return the passed-in vault directly — no extra DB query.

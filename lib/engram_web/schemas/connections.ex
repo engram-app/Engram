@@ -71,15 +71,42 @@ defmodule EngramWeb.Schemas.Connection do
     properties: %{
       kind: %Schema{type: :string, example: "oauth"},
       client_id: %Schema{type: :string, nullable: true},
+      family_id: %Schema{
+        type: :string,
+        format: :uuid,
+        nullable: true,
+        description:
+          "The grant lineage this row is. One OAuth client can hold several " <>
+            "grants over different vault sets, each its own row; pass this to " <>
+            "`DELETE /connections/oauth/{client_id}` to revoke only this one. " <>
+            "Null for PATs."
+      },
       key_id: %Schema{type: :string, nullable: true},
       name: %Schema{type: :string, nullable: true},
+      label: %Schema{
+        type: :string,
+        nullable: true,
+        description: "The user's own name for this connection, when they set one."
+      },
       software_id: %Schema{type: :string, nullable: true},
       software_version: %Schema{type: :string, nullable: true},
       verified: %Schema{type: :boolean, nullable: true},
       logo: %Schema{type: :string, nullable: true},
       slug: %Schema{type: :string, nullable: true},
-      vault_id: %Schema{type: :string, format: :uuid, nullable: true},
-      vault_name: %Schema{type: :string, nullable: true},
+      vault_ids: %Schema{
+        type: :array,
+        nullable: true,
+        items: %Schema{type: :string, format: :uuid},
+        description: "Vaults this connection may reach. Null means all vaults."
+      },
+      vault_names: %Schema{
+        type: :array,
+        nullable: true,
+        items: %Schema{type: :string, nullable: true},
+        description:
+          "Positional against `vault_ids`. An entry is null when the vault is " <>
+            "gone or outside the caller's own scope."
+      },
       scope: %Schema{type: :string, nullable: true},
       last_used_at: %Schema{type: :string, format: :"date-time", nullable: true},
       connected_at: %Schema{type: :string, format: :"date-time", nullable: true},

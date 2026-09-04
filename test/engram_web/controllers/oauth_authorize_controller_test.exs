@@ -10,15 +10,12 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
     put_req_header(conn, "authorization", "Bearer #{token}")
   end
 
-  defp ensure_external_id(%{external_id: ext} = user) when is_binary(ext) and ext != "", do: user
-
-  defp ensure_external_id(user) do
-    {:ok, updated} =
-      user
-      |> Ecto.Changeset.change(external_id: "test-#{user.id}")
-      |> Repo.update(skip_tenant_check: true)
-
-    updated
+  # An OAuth-issued access token: the same mint path `/oauth/token` uses, so the
+  # `scope` claim `RequireSession` keys on is present exactly as in production.
+  defp oauth_authed(conn, user, extras) do
+    user = ensure_external_id(user)
+    token = Engram.Accounts.generate_jwt(user, extras)
+    put_req_header(conn, "authorization", "Bearer #{token}")
   end
 
   defp register_client(redirect_uri \\ "https://claude.ai/api/mcp/auth_callback") do
@@ -291,6 +288,74 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
     end
   end
 
+  describe "POST /api/oauth/authorize/consent — session only" do
+    # Consent MINTS an authorization code for whatever `client_id` and vaults
+    # the caller names, and ownership is checked against the USER, not against
+    # the calling credential. `/oauth/register` is public DCR, so off
+    # `RequireSession` a third-party app registers its own client, self-consents
+    # with the grant it already holds, and exchanges for an all-vaults token —
+    # a grant on vault A minting one covering A and B, with no user in the loop.
+    test "a vault-scoped grant cannot self-consent", %{conn: conn} do
+      user = insert(:user)
+      vault_a = insert(:vault, user: user)
+      vault_b = insert(:vault, user: user)
+      client = register_client()
+
+      params =
+        client.client_id
+        |> valid_params(hd(client.redirect_uris))
+        |> Map.put("vault_choice", "vault:#{vault_b.id}")
+
+      conn =
+        conn
+        |> oauth_authed(user, %{"scope" => "mcp", "vault_ids" => [vault_a.id]})
+        |> post("/api/oauth/authorize/consent", params)
+
+      assert %{"error" => "oauth_grant_not_allowed"} = json_response(conn, 403)
+
+      # A 403 that minted the code anyway would be worse than no check.
+      assert Repo.aggregate(Engram.OAuth.AuthorizationCode, :count, skip_tenant_check: true) == 0
+    end
+
+    test "an UNSCOPED (all-vaults) grant cannot self-consent either", %{conn: conn} do
+      user = insert(:user)
+      _vault = insert(:vault, user: user)
+      client = register_client()
+
+      params =
+        client.client_id
+        |> valid_params(hd(client.redirect_uris))
+        |> Map.put("vault_choice", "vault:*")
+
+      conn =
+        conn
+        |> oauth_authed(user, %{"scope" => "mcp"})
+        |> post("/api/oauth/authorize/consent", params)
+
+      assert %{"error" => "oauth_grant_not_allowed"} = json_response(conn, 403)
+    end
+
+    # THE over-block guard. `RequireSession` gates the entire consent flow, so a
+    # false positive here means nobody can approve any OAuth client at all —
+    # the SPA on SaaS (Clerk) and on self-host (`Local.issue_access_token/2`,
+    # which sets no `scope` claim) both land on this route.
+    test "a first-party session still reaches consent", %{conn: conn} do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      client = register_client()
+
+      params =
+        client.client_id
+        |> valid_params(hd(client.redirect_uris))
+        |> Map.put("vault_choice", "vault:#{vault.id}")
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      assert conn.status == 200
+      assert is_binary(Jason.decode!(conn.resp_body)["redirect_uri"])
+    end
+  end
+
   describe "POST /api/oauth/authorize/consent — happy path" do
     test "mints a code and returns JSON redirect_uri with code + state", %{conn: conn} do
       user = insert(:user)
@@ -434,6 +499,256 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
       assert String.starts_with?(json["redirect_uri"], redirect_uri)
       assert json["redirect_uri"] =~ "error=access_denied"
       assert json["redirect_uri"] =~ "state=xyz"
+    end
+  end
+
+  describe "POST /api/oauth/authorize/consent — vault_ids (multi-vault grants)" do
+    test "mints a code carrying every granted vault id", %{conn: conn} do
+      user = insert(:user)
+      a = insert(:vault, user: user, slug: "sel-a")
+      b = insert(:vault, user: user, slug: "sel-b")
+      _c = insert(:vault, user: user, slug: "sel-c")
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+
+      params =
+        client.client_id
+        |> valid_params(redirect_uri)
+        |> Map.put("vault_ids", [a.id, b.id])
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      assert conn.status == 200
+
+      query =
+        conn.resp_body
+        |> Jason.decode!()
+        |> Map.fetch!("redirect_uri")
+        |> URI.parse()
+        |> Map.fetch!(:query)
+        |> URI.decode_query()
+
+      assert {:ok, code_row} = OAuth.get_authorization_code_by_raw(query["code"])
+      assert Enum.sort(code_row.vault_ids) == Enum.sort([a.id, b.id])
+      # >1 vault: the legacy scalar carries the FIRST granted id, never NULL.
+      # NULL reads as "all vaults" to a rolled-back release, which would hand
+      # the client vault c — the one the user declined. Writing an id narrows
+      # instead. `resolve_vaults/2` sorts, so "first" is the lowest id.
+      assert code_row.vault_id == hd(Enum.sort([a.id, b.id]))
+    end
+
+    test "single-vault grant dual-writes the scalar vault_id", %{conn: conn} do
+      user = insert(:user)
+      a = insert(:vault, user: user, slug: "solo")
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+
+      params =
+        client.client_id |> valid_params(redirect_uri) |> Map.put("vault_ids", [a.id])
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      query =
+        conn.resp_body
+        |> Jason.decode!()
+        |> Map.fetch!("redirect_uri")
+        |> URI.parse()
+        |> Map.fetch!(:query)
+        |> URI.decode_query()
+
+      assert {:ok, code_row} = OAuth.get_authorization_code_by_raw(query["code"])
+      assert code_row.vault_ids == [a.id]
+      assert code_row.vault_id == a.id
+    end
+
+    test "one unowned id rejects the WHOLE grant", %{conn: conn} do
+      user = insert(:user)
+      a = insert(:vault, user: user, slug: "mine")
+      stranger = insert(:vault, user: insert(:user), slug: "theirs")
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+
+      params =
+        client.client_id
+        |> valid_params(redirect_uri)
+        |> Map.put("vault_ids", [a.id, stranger.id])
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      assert conn.status == 200
+      uri = conn.resp_body |> Jason.decode!() |> Map.fetch!("redirect_uri")
+      assert uri =~ "error=access_denied"
+
+      # Not a partial grant — nothing was minted at all.
+      assert Engram.Repo.aggregate(Engram.OAuth.AuthorizationCode, :count,
+               skip_tenant_check: true
+             ) == 0
+    end
+
+    test "an empty vault_ids array is rejected, never widened to all", %{conn: conn} do
+      user = insert(:user)
+      _vault = insert(:vault, user: user)
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+
+      params = client.client_id |> valid_params(redirect_uri) |> Map.put("vault_ids", [])
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      uri = conn.resp_body |> Jason.decode!() |> Map.fetch!("redirect_uri")
+      assert uri =~ "error=access_denied"
+    end
+
+    test "vault_ids wins when both it and vault_choice are sent", %{conn: conn} do
+      user = insert(:user)
+      a = insert(:vault, user: user, slug: "wins")
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+
+      params =
+        client.client_id
+        |> valid_params(redirect_uri)
+        |> Map.put("vault_ids", [a.id])
+        |> Map.put("vault_choice", "vault:*")
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      query =
+        conn.resp_body
+        |> Jason.decode!()
+        |> Map.fetch!("redirect_uri")
+        |> URI.parse()
+        |> Map.fetch!(:query)
+        |> URI.decode_query()
+
+      assert {:ok, code_row} = OAuth.get_authorization_code_by_raw(query["code"])
+      assert code_row.vault_ids == [a.id]
+    end
+  end
+
+  describe "POST /api/oauth/authorize/consent — connection label" do
+    test "a supplied label is stored on the grant", %{conn: conn} do
+      user = insert(:user)
+      _vault = insert(:vault, user: user)
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+
+      params =
+        client.client_id
+        |> valid_params(redirect_uri)
+        |> Map.put("label", "  Laptop — work vault  ")
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      query =
+        conn.resp_body
+        |> Jason.decode!()
+        |> Map.fetch!("redirect_uri")
+        |> URI.parse()
+        |> Map.fetch!(:query)
+        |> URI.decode_query()
+
+      assert {:ok, code_row} = OAuth.get_authorization_code_by_raw(query["code"])
+      assert code_row.label == "Laptop — work vault"
+    end
+
+    test "a blank label stores nil rather than an empty string", %{conn: conn} do
+      user = insert(:user)
+      _vault = insert(:vault, user: user)
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+
+      params = client.client_id |> valid_params(redirect_uri) |> Map.put("label", "   ")
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      query =
+        conn.resp_body
+        |> Jason.decode!()
+        |> Map.fetch!("redirect_uri")
+        |> URI.parse()
+        |> Map.fetch!(:query)
+        |> URI.decode_query()
+
+      assert {:ok, code_row} = OAuth.get_authorization_code_by_raw(query["code"])
+      assert is_nil(code_row.label)
+    end
+
+    # Rejected, not truncated: storing something other than what the user typed
+    # and then showing it back to them is worse than refusing the grant.
+    test "an over-long label is rejected rather than truncated", %{conn: conn} do
+      user = insert(:user)
+      _vault = insert(:vault, user: user)
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+
+      params =
+        client.client_id
+        |> valid_params(redirect_uri)
+        |> Map.put("label", String.duplicate("x", 200))
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      uri = conn.resp_body |> Jason.decode!() |> Map.fetch!("redirect_uri")
+      assert uri =~ "error=access_denied"
+    end
+
+    # A grapheme bound is not a size bound. This label is ONE grapheme, so it
+    # sails past the 120-char check, but the combining-mark stack makes it
+    # kilobytes — and the value is re-copied into a new row on every rotation.
+    # Only the byte ceiling catches it.
+    test "a one-grapheme label that is kilobytes of combining marks is rejected", %{conn: conn} do
+      user = insert(:user)
+      _vault = insert(:vault, user: user)
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+
+      zalgo = "e" <> String.duplicate(<<0x0301::utf8>>, 2500)
+      assert String.length(zalgo) == 1
+      assert byte_size(zalgo) > 4096, "the fixture must exceed the byte ceiling to exercise it"
+
+      params = client.client_id |> valid_params(redirect_uri) |> Map.put("label", zalgo)
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      uri = conn.resp_body |> Jason.decode!() |> Map.fetch!("redirect_uri")
+      assert uri =~ "error=access_denied"
+    end
+
+    test "the label survives the code -> refresh-token exchange", %{conn: conn} do
+      user = insert(:user)
+      _vault = insert(:vault, user: user)
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+
+      verifier = "s3cret-code-verifier-value"
+      challenge = :crypto.hash(:sha256, verifier) |> Base.url_encode64(padding: false)
+
+      params =
+        client.client_id
+        |> valid_params(redirect_uri)
+        |> Map.put("code_challenge", challenge)
+        |> Map.put("label", "My laptop")
+
+      conn = conn |> jwt_authed(user) |> post("/api/oauth/authorize/consent", params)
+
+      query =
+        conn.resp_body
+        |> Jason.decode!()
+        |> Map.fetch!("redirect_uri")
+        |> URI.parse()
+        |> Map.fetch!(:query)
+        |> URI.decode_query()
+
+      assert {:ok, _} =
+               OAuth.exchange_authorization_code(%{
+                 "code" => query["code"],
+                 "client_id" => client.client_id,
+                 "redirect_uri" => redirect_uri,
+                 "code_verifier" => verifier
+               })
+
+      assert [%{label: "My laptop"}] =
+               Repo.all(Engram.OAuth.RefreshToken, skip_tenant_check: true)
     end
   end
 

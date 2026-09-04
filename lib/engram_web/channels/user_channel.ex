@@ -12,7 +12,24 @@ defmodule EngramWeb.UserChannel do
 
   use Phoenix.Channel
 
+  alias Engram.Permissions
   alias EngramWeb.ChannelGate
+
+  # `vault_created` carries the DECRYPTED vault name and `vault_populated`
+  # carries a vault id, so both are vault-scoped facts and a credential
+  # restricted away from that vault must not see them. Intercepting is what
+  # gives each subscriber its own decision point; a bare broadcast fans out to
+  # every joined socket on the topic, scoped or not.
+  #
+  # The join itself is NOT refused for a scoped credential, even though that
+  # would be a smaller change: the Obsidian plugin joins `user:{id}` on every
+  # socket open purely to read `plan` off the join reply
+  # (`plugin/src/channel.ts`), and an OAuth-linked install holds a vault-scoped
+  # grant. Refusing the join would strip plan state from exactly those
+  # first-party users. `subscription_activated` is deliberately not intercepted
+  # for the same reason — it names no vault, and it is the plugin's live plan
+  # feed.
+  intercept ["vault_created", "vault_populated"]
 
   @impl true
   def join("user:" <> user_id_str, _params, socket) do
@@ -43,4 +60,16 @@ defmodule EngramWeb.UserChannel do
   # Ignore rather than reply: there is no client request shape to answer.
   @impl true
   def handle_in(_event, _payload, socket), do: {:noreply, socket}
+
+  # Both intercepted events always carry `vault_id`; there is deliberately no
+  # catch-all clause, so adding a third event to `intercept` above without
+  # deciding its scope rule fails loudly rather than fanning out unfiltered.
+  @impl true
+  def handle_out(event, %{vault_id: vault_id} = payload, socket) do
+    if Permissions.allows?(Permissions.vault_scope(socket.assigns), %{id: vault_id}) do
+      push(socket, event, payload)
+    end
+
+    {:noreply, socket}
+  end
 end

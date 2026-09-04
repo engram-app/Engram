@@ -28,6 +28,21 @@ defmodule EngramWeb.BillingControllerTest do
     {:ok, conn: conn, user: user}
   end
 
+  # Billing WRITES and capability mints sit behind `RequireSession`, which
+  # rejects the API key the default setup uses (and any OAuth grant) — changing
+  # what the user pays is not something a delegated credential may do. Those
+  # describes re-auth as a first-party session: same user, legitimate
+  # credential. Read-only billing keeps the API key.
+  setup %{conn: conn, user: user} = ctx do
+    if ctx[:session_auth] do
+      user = ensure_external_id(user)
+      {:ok, token} = Engram.Auth.Providers.Local.issue_access_token(user.external_id, user.email)
+      {:ok, conn: put_req_header(conn, "authorization", "Bearer #{token}")}
+    else
+      :ok
+    end
+  end
+
   describe "GET /api/billing/status" do
     test "returns free-tier status for new user with no subscription", %{conn: conn} do
       # `active` here means "has a paid (Starter/Pro) subscription" — drives the
@@ -247,6 +262,8 @@ defmodule EngramWeb.BillingControllerTest do
   end
 
   describe "GET /api/billing/payment-update-transaction" do
+    @describetag :session_auth
+
     test "returns the transaction id for the overlay", %{conn: conn, user: user} do
       insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
 
@@ -264,6 +281,8 @@ defmodule EngramWeb.BillingControllerTest do
   end
 
   describe "GET /api/billing/portal?action=" do
+    @describetag :session_auth
+
     test "returns the cancel deep link", %{conn: conn, user: user} do
       insert(:subscription,
         user: user,
@@ -287,6 +306,8 @@ defmodule EngramWeb.BillingControllerTest do
   end
 
   describe "POST /api/billing/cancel-subscription" do
+    @describetag :session_auth
+
     test "happy path returns 202 with Paddle payload", %{conn: conn, user: user} do
       insert(:subscription, user: user, paddle_subscription_id: "sub_cancel")
 
@@ -368,6 +389,8 @@ defmodule EngramWeb.BillingControllerTest do
   end
 
   describe "POST /api/billing/reverse-cancel" do
+    @describetag :session_auth
+
     test "happy path returns 202", %{conn: conn, user: user} do
       insert(:subscription, user: user, paddle_subscription_id: "sub_reverse")
 
@@ -445,6 +468,8 @@ defmodule EngramWeb.BillingControllerTest do
   end
 
   describe "POST /api/billing/plan-change/confirm" do
+    @describetag :session_auth
+
     test "happy path returns 202 with Paddle payload", %{conn: conn, user: user} do
       insert(:subscription, user: user, paddle_subscription_id: "sub_confirm")
 

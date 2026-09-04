@@ -675,29 +675,17 @@ defmodule Engram.Vaults do
     |> unwrap_transaction()
   end
 
-  # ── API key access check ────────────────────────────────────────────────
-
-  @doc """
-  Checks whether an API key is allowed to access a given vault.
-
-  - If `api_key` is nil (JWT auth), access is always granted.
-  - If the key has no rows in api_key_vaults, it has unrestricted access.
-  - Otherwise the vault must appear in the key's allowed list.
-
-  Returns `:ok` or `:forbidden`.
-  """
-  def check_api_key_access(api_key, vault) do
-    case accessible_vault_ids(api_key) do
-      :all -> :ok
-      ids -> if vault.id in ids, do: :ok, else: :forbidden
-    end
-  end
+  # ── API key vault restrictions ──────────────────────────────────────────
 
   @doc """
   Returns an API key's vault-restriction set: `:all` for an unrestricted key
   (or `nil`, i.e. non-API-key auth), or the explicit list of permitted vault
-  ids. One query — lets callers filter a vault list in memory instead of one
-  `check_api_key_access/2` round-trip per vault.
+  ids. One query, so a caller filters a vault list in memory rather than
+  round-tripping per vault.
+
+  `Engram.Permissions` is the only caller — it is the single place that answers
+  "may this credential reach this vault", and this is the API-key half of that
+  answer. Do not call it directly from a plug, channel or controller.
   """
   def accessible_vault_ids(nil), do: :all
 

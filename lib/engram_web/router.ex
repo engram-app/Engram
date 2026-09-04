@@ -314,6 +314,10 @@ defmodule EngramWeb.Router do
     pipe_through [
       :api,
       EngramWeb.Plugs.Auth,
+      # Surfaces oauth_scope_vault_ids so GET /vaults can filter its list to
+      # the grant (Engram.Permissions.vault_scope reads this assign). Must run
+      # before anything that resolves the vault list.
+      EngramWeb.Plugs.OAuthScopeEnforce,
       # Stamps app.user_id on the request span right after Auth resolves
       # current_user. No current_vault at this scope, so app.vault_id is
       # simply absent from these spans.
@@ -331,17 +335,14 @@ defmodule EngramWeb.Router do
     get "/user/storage", StorageController, :index
     get "/me", UsersController, :me
     patch "/me", UsersController, :update
-    delete "/me", UsersController, :delete
 
     # Authenticated password change (old + new). Reset (token-gated) is public.
     post "/auth/password/change", PasswordController, :change
 
-    # Device flow authorization (authenticated — web app confirms)
-    post "/auth/device/authorize", DeviceAuthController, :authorize
-
-    # API key management — session/JWT only. An API key (especially a
-    # vault-restricted one) must never be able to enumerate, mint, or
-    # revoke other API keys for the same user.
+    # Credential + account-wide primitives — first-party session only. Neither a
+    # vault-restricted API key nor a third-party OAuth grant may mint, enumerate
+    # or revoke credentials for this user, or delete the account: issuing
+    # yourself a broader credential than your grant is privilege escalation.
     scope "/" do
       pipe_through EngramWeb.Plugs.RequireSession
       get "/api-keys", AuthController, :list_api_keys
@@ -352,6 +353,54 @@ defmodule EngramWeb.Router do
       delete "/connections/device/:family_id", ConnectionsController, :delete_device
       post "/connections/pat", ConnectionsController, :create_pat
       delete "/connections/pat/:id", ConnectionsController, :delete_pat
+
+      # Account deletion is the most account-wide primitive there is.
+      delete "/me", UsersController, :delete
+
+      # Device-flow approval MINTS a device refresh token bound to any vault the
+      # user owns (or a brand-new one via vault_id: "new"). `/auth/device/start`
+      # is public, so without this a third-party grant could start its own
+      # device flow and approve it with its own token — the same escalation as
+      # POST /api-keys. The approval UX is the browser, which always carries a
+      # session; verified against the SPA, the e2e helpers and the plugin.
+      post "/auth/device/authorize", DeviceAuthController, :authorize
+
+      # Purge is IMMEDIATE, irreversible destruction of user data, so it needs
+      # the human at the keyboard rather than an app acting on their behalf.
+      # An OAuth grant — even an all-vaults one — is consent to read and write
+      # notes; it is not consent to destroy a vault beyond recovery. Its sibling
+      # `delete` is soft and restorable (30-day window + a `restore` route), so
+      # that one stays on the per-vault scope check in VaultsController, which
+      # is the right guard for a reversible action.
+      post "/vaults/:id/purge", VaultsController, :purge
+
+      # Billing WRITES and capability mints. A grant to read and write notes is
+      # not consent to change what the user pays. `portal` and
+      # `payment-update-transaction` are GETs, but each MINTS a Paddle-hosted
+      # bearer URL/transaction over the user's payment methods, so they are
+      # writes in everything but verb. Read-only billing stays on the open
+      # pipeline below. Verified callers: the SPA only (frontend/src/api and
+      # billing-page.tsx); no API key or OAuth grant calls these in lib/, test/,
+      # e2e/ or frontend/.
+      get "/billing/portal", BillingController, :customer_portal
+      get "/billing/payment-update-transaction", BillingController, :payment_update_transaction
+      post "/billing/cancel-subscription", BillingController, :cancel_subscription
+      post "/billing/reverse-cancel", BillingController, :reverse_cancel
+      post "/billing/plan-change/confirm", BillingController, :plan_change_confirm
+
+      # Consent MINTS an authorization code for whatever `client_id` and
+      # `vault_ids` the caller passes, and ownership is checked against the USER
+      # rather than the calling credential. `/oauth/register` is public DCR, so
+      # off this pipeline a third-party app could register its own client,
+      # self-consent, and exchange for an all-vaults token with no user in the
+      # loop — a grant scoped to vault A minting one covering A and B.
+      #
+      # Every real caller is a browser under a first-party session: the SPA
+      # (Clerk on SaaS; `Local.issue_access_token/2` on self-host, which sets no
+      # `scope` claim) and the e2e helpers, which authenticate with Clerk
+      # session tokens (`e2e/tests/api_only/test_71_connections.py`,
+      # `e2e/helpers/mcp_conformance.py`).
+      post "/oauth/authorize/consent", OAuthAuthorizeController, :consent
     end
 
     # Vault management (user-level, not vault-scoped)
@@ -361,28 +410,22 @@ defmodule EngramWeb.Router do
     patch "/vaults/:id", VaultsController, :update
     delete "/vaults/:id", VaultsController, :delete
     post "/vaults/:id/restore", VaultsController, :restore
-    post "/vaults/:id/purge", VaultsController, :purge
+    # `/vaults/:id/purge` is NOT here — it sits in the RequireSession block
+    # above. Irreversible destruction is session-only; see the note there.
 
-    # Billing — Paddle checkout opens client-side via paddle.js, so the
-    # backend only exposes status, the public client config, and a portal
-    # redirect.
+    # Billing READS. Paddle checkout opens client-side via paddle.js, so the
+    # backend only exposes status, the public client config, and subscription
+    # history. Everything that CHANGES what the user pays — or mints a
+    # Paddle-hosted capability — sits in the RequireSession block above.
+    # `plan-change/preview` is a POST but changes nothing and mints nothing:
+    # it prices a hypothetical swap, so it stays a read.
     get "/billing/status", BillingController, :status
     get "/billing/usage", BillingController, :usage
     get "/billing/config", BillingController, :config
-    get "/billing/portal", BillingController, :customer_portal
     get "/billing/subscription", BillingController, :subscription_detail
     get "/billing/transactions", BillingController, :transactions
     get "/billing/transactions/:id/invoice", BillingController, :transaction_invoice
-    get "/billing/payment-update-transaction", BillingController, :payment_update_transaction
-    post "/billing/cancel-subscription", BillingController, :cancel_subscription
-    post "/billing/reverse-cancel", BillingController, :reverse_cancel
     post "/billing/plan-change/preview", BillingController, :plan_change_preview
-    post "/billing/plan-change/confirm", BillingController, :plan_change_confirm
-
-    # OAuth consent (Phase 7.A): SPA POSTs here with the user's Bearer
-    # JWT after the React consent UI is approved. Returns JSON
-    # `{redirect_uri: "..."}` so the SPA can `window.location.assign`.
-    post "/oauth/authorize/consent", OAuthAuthorizeController, :consent
   end
 
   # Onboarding scope — same as the user-scoped pipeline above, but WITHOUT
@@ -395,6 +438,10 @@ defmodule EngramWeb.Router do
     pipe_through [
       :api,
       EngramWeb.Plugs.Auth,
+      # Surfaces oauth_scope_vault_ids so GET /bootstrap's embedded vault list
+      # gets the same grant-scoped filtering as GET /vaults — this scope is a
+      # separate pipe_through from the one above, so it needs its own copy.
+      EngramWeb.Plugs.OAuthScopeEnforce,
       # Stamps app.user_id on the request span (no current_vault at this
       # onboarding scope, so app.vault_id stays absent here too).
       EngramWeb.Plugs.TraceUserAttrs,
@@ -475,6 +522,9 @@ defmodule EngramWeb.Router do
     pipe_through [
       :api,
       :authed_api,
+      # Surfaces oauth_scope_vault_ids so VaultPlug's Permissions check sees the
+      # grant — must run before VaultPlug, which reads that assign.
+      EngramWeb.Plugs.OAuthScopeEnforce,
       EngramWeb.Plugs.VaultPlug,
       # Runs last so both current_user and current_vault are resolved:
       # stamps app.user_id AND app.vault_id on the request span.
@@ -588,8 +638,8 @@ defmodule EngramWeb.Router do
   # legacy HTTP+SSE transport and aborts on the 406.
   scope "/api", EngramWeb do
     pipe_through :api_any_accept
-    get "/mcp", McpController, :unsupported_transport
-    delete "/mcp", McpController, :unsupported_transport
+    get "/mcp", McpController, :unsupported_transport_get
+    delete "/mcp", McpController, :unsupported_transport_delete
   end
 
   # SPA routes, every path here mounts the React app. The static entries

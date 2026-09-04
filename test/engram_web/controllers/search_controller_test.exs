@@ -473,6 +473,204 @@ defmodule EngramWeb.SearchControllerTest do
     end
   end
 
+  # ---------------------------------------------------------------------------
+  # cross_vault=true searches PAST the request's X-Vault-ID, so VaultPlug's
+  # single-vault check does not bound it. The only other gate is the Pro
+  # `cross_vault_search` entitlement, which is billing, not scope — so before
+  # this the emitted Qdrant query carried no vault filter at all and a
+  # subset-restricted credential got hits from every vault the user owns.
+  #
+  # These assert on the EMITTED Qdrant filter, captured off the Bypass socket.
+  # Asserting on the canned response body instead would pass whether or not the
+  # filter is applied, which proves nothing.
+  # ---------------------------------------------------------------------------
+  describe "POST /search with cross_vault" do
+    setup %{user: user, vault: vault} do
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+      insert(:user_limit_override, user: user, key: "cross_vault_search", value: %{"v" => true})
+      Engram.Billing.OverrideCache.evict(user.id)
+
+      vault_b = insert(:vault, user: user)
+      vault_c = insert(:vault, user: user)
+
+      {:ok, raw_key, key_rec} = Engram.Accounts.create_api_key(user, "subset-key")
+
+      # Permit A and B only — NOT C.
+      Engram.Repo.insert_all("api_key_vaults", [
+        %{api_key_id: Ecto.UUID.dump!(key_rec.id), vault_id: Ecto.UUID.dump!(vault.id)},
+        %{api_key_id: Ecto.UUID.dump!(key_rec.id), vault_id: Ecto.UUID.dump!(vault_b.id)}
+      ])
+
+      restricted =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{raw_key}")
+        |> put_req_header("x-vault-id", to_string(vault.id))
+
+      %{restricted: restricted, vault_b: vault_b, vault_c: vault_c}
+    end
+
+    test "a subset-restricted key searches exactly its subset, never the whole account", %{
+      restricted: conn,
+      bypass: bypass,
+      user: user,
+      vault: vault,
+      vault_b: vault_b,
+      vault_c: vault_c
+    } do
+      stub(Engram.MockEmbedder, :embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+      test_pid = self()
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+        {:ok, raw, c} = Plug.Conn.read_body(c)
+        send(test_pid, {:qdrant_body, Jason.decode!(raw)})
+
+        c
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{
+            "result" => [
+              chunk("uuid-a", 0.9, "A/a.md", "A", "findme", user, vault.id),
+              chunk("uuid-b", 0.8, "B/b.md", "B", "findme", user, vault_b.id)
+            ]
+          })
+        )
+      end)
+
+      conn = post(conn, "/api/search", %{query: "findme", cross_vault: true})
+      assert %{"results" => results} = json_response(conn, 200)
+      assert length(results) == 2
+
+      # The safety property: every leg of the emitted query carries an any-match
+      # filter over exactly the permitted set. (Default mode is :hybrid, so the
+      # filter rides each `prefetch` leg; `[body]` covers the dense shape.)
+      assert_received {:qdrant_body, body}
+      legs = body["prefetch"] || [body]
+      assert legs != []
+
+      for leg <- legs do
+        clause = Enum.find(leg["filter"]["must"], &(&1["key"] == "vault_id"))
+        assert %{"match" => %{"any" => ids}} = clause
+        assert Enum.sort(ids) == Enum.sort([to_string(vault.id), to_string(vault_b.id)])
+        refute to_string(vault_c.id) in ids
+      end
+    end
+
+    # `?cross_vault=false` arrives as the STRING "false", which is truthy in
+    # Elixir — read raw it turned an explicit opt-OUT into an opt-IN (and then
+    # 403'd the caller on the Pro gate for a feature they were opting out of).
+    # The emitted filter is the proof: a single-vault search filters on the ONE
+    # request vault (`match.value`), never the any-match set a cross-vault
+    # search emits.
+    test "cross_vault=false stays single-vault instead of reading as truthy", %{
+      restricted: conn,
+      bypass: bypass,
+      user: user,
+      vault: vault,
+      vault_b: vault_b
+    } do
+      stub(Engram.MockEmbedder, :embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+      test_pid = self()
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+        {:ok, raw, c} = Plug.Conn.read_body(c)
+        send(test_pid, {:qdrant_body, Jason.decode!(raw)})
+
+        c
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{
+            "result" => [chunk("uuid-a", 0.9, "A/a.md", "A", "findme", user, vault.id)]
+          })
+        )
+      end)
+
+      conn = post(conn, "/api/search", %{query: "findme", cross_vault: "false"})
+      assert %{"results" => _} = json_response(conn, 200)
+
+      assert_received {:qdrant_body, body}
+
+      for leg <- body["prefetch"] || [body] do
+        clause = Enum.find(leg["filter"]["must"], &(&1["key"] == "vault_id"))
+        assert clause["match"] == %{"value" => to_string(vault.id)}
+        refute to_string(vault_b.id) in List.wrap(clause["match"]["any"])
+      end
+    end
+
+    # Narrowing the SEARCH and then resolving ids outside the narrowing defeats
+    # the point: with `vault: nil` the id lookup matched `path_hmac` across every
+    # vault the user owns, so a path present in both a permitted and a
+    # non-permitted vault could return the out-of-scope note's UUID.
+    test "the id comes from the result's own vault, not a same-path note elsewhere", %{
+      restricted: conn,
+      bypass: bypass,
+      user: user,
+      vault: vault,
+      vault_c: vault_c
+    } do
+      stub(Engram.MockEmbedder, :embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      # Same path in both vaults. C is inserted LAST on purpose: the old
+      # vault-blind reduce kept whichever row came back last, so this ordering
+      # is what makes the bug observable rather than a coin flip.
+      permitted = Engram.Fixtures.insert_note!(user, vault, %{"path" => "Inbox.md"})
+      out_of_scope = Engram.Fixtures.insert_note!(user, vault_c, %{"path" => "Inbox.md"})
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+        c
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{
+            "result" => [chunk("uuid-a", 0.9, "Inbox.md", "Inbox", "findme", user, vault.id)]
+          })
+        )
+      end)
+
+      conn = post(conn, "/api/search", %{query: "findme", cross_vault: true})
+      assert %{"results" => [hit]} = json_response(conn, 200)
+
+      assert hit["id"] == permitted.id
+      refute hit["id"] == out_of_scope.id
+    end
+
+    # The over-block is as much a bug as the leak: an unrestricted credential is
+    # entitled to search everything, so it must emit NO vault filter.
+    test "an unrestricted key still searches every vault", %{
+      conn: conn,
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      stub(Engram.MockEmbedder, :embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+      test_pid = self()
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+        {:ok, raw, c} = Plug.Conn.read_body(c)
+        send(test_pid, {:qdrant_body, Jason.decode!(raw)})
+
+        c
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{
+            "result" => [chunk("uuid-a", 0.9, "A/a.md", "A", "findme", user, vault.id)]
+          })
+        )
+      end)
+
+      conn = post(conn, "/api/search", %{query: "findme", cross_vault: true})
+      assert %{"results" => _} = json_response(conn, 200)
+
+      assert_received {:qdrant_body, body}
+
+      for leg <- body["prefetch"] || [body] do
+        refute Enum.any?(leg["filter"]["must"] || [], &(&1["key"] == "vault_id"))
+      end
+    end
+  end
+
   defp chunk(id, score, source_path, title, text, user) do
     chunk(id, score, source_path, title, text, user, default_vault_id(user))
   end

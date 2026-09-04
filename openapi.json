@@ -1559,6 +1559,14 @@
             "x-struct": null,
             "x-validate": null
           },
+          "family_id": {
+            "description": "The grant lineage this row is. One OAuth client can hold several grants over different vault sets, each its own row; pass this to `DELETE /connections/oauth/{client_id}` to revoke only this one. Null for PATs.",
+            "format": "uuid",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "first_ip": {
             "nullable": true,
             "type": "string",
@@ -1579,6 +1587,13 @@
           },
           "kind": {
             "example": "oauth",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "label": {
+            "description": "The user's own name for this connection, when they set one.",
+            "nullable": true,
             "type": "string",
             "x-struct": null,
             "x-validate": null
@@ -1645,16 +1660,29 @@
             "x-struct": null,
             "x-validate": null
           },
-          "vault_id": {
-            "format": "uuid",
+          "vault_ids": {
+            "description": "Vaults this connection may reach. Null means all vaults.",
+            "items": {
+              "format": "uuid",
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            },
             "nullable": true,
-            "type": "string",
+            "type": "array",
             "x-struct": null,
             "x-validate": null
           },
-          "vault_name": {
+          "vault_names": {
+            "description": "Positional against `vault_ids`. An entry is null when the vault is gone or outside the caller's own scope.",
+            "items": {
+              "nullable": true,
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            },
             "nullable": true,
-            "type": "string",
+            "type": "array",
             "x-struct": null,
             "x-validate": null
           },
@@ -5237,7 +5265,7 @@
     "/api/connections/oauth/{client_id}": {
       "delete": {
         "callbacks": {},
-        "description": "Revokes the refresh tokens for an OAuth client family (e.g. an MCP client) so it can no longer mint access tokens. Pass `vault_id` to scope the revoke to a single vault; omit it to revoke the client across all vaults. Session-auth only.",
+        "description": "Revokes the refresh tokens for an OAuth client family (e.g. an MCP client) so it can no longer mint access tokens. Pass `family_id` to revoke ONE grant — a client the user authorized twice has two, and each is its own row in `GET /connections`. Omit it to disconnect the client entirely, which is what frees a connection-cap slot. `vault_id` is the older, coarser narrowing and is ignored when `family_id` is given. Session-auth only.",
         "operationId": "connections-delete-oauth",
         "parameters": [
           {
@@ -5245,6 +5273,17 @@
             "in": "path",
             "name": "client_id",
             "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          },
+          {
+            "description": "Revoke only this grant lineage",
+            "in": "query",
+            "name": "family_id",
+            "required": false,
             "schema": {
               "type": "string",
               "x-struct": null,

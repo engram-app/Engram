@@ -210,51 +210,76 @@ defmodule Engram.OAuth do
   defp check_state_length(_), do: :ok
 
   @doc """
+  Reads a vault selection off consent params.
+
+  `vault_ids` is the current shape. `vault_choice` ("vault:<id>" | "vault:*")
+  is the pre-multi-vault shape and is still accepted for one release so an
+  SPA cached across the deploy keeps working; `vault_ids` wins when both are
+  present. Absent params default to `:all`, matching the previous
+  `params["vault_choice"] || "vault:*"` behaviour.
+  """
+  @spec parse_vault_selection(map()) :: :all | [String.t()] | :invalid
+  def parse_vault_selection(%{"vault_ids" => ids}) when is_list(ids) do
+    if Enum.all?(ids, &is_binary/1), do: ids, else: :invalid
+  end
+
+  def parse_vault_selection(%{"vault_ids" => _}), do: :invalid
+  def parse_vault_selection(%{"vault_choice" => "vault:*"}), do: :all
+  def parse_vault_selection(%{"vault_choice" => "vault:" <> id}), do: [id]
+  def parse_vault_selection(%{"vault_choice" => _}), do: :invalid
+  def parse_vault_selection(_), do: :all
+
+  @doc """
   Mints an authorization code for a validated request + a vault selection.
 
-  `vault_choice` is `"vault:<id>"` or `"vault:*"`. Vault ownership is
-  verified — a user cannot grant an OAuth client access to a vault they
-  do not own.
+  `vault_selection` is `:all` or a list of vault id strings. Ownership is
+  verified for every id — a user cannot grant an OAuth client access to a
+  vault they do not own, and one bad id rejects the whole grant.
+
+  `label` is the optional free-text name the user typed on the consent
+  screen. An unusable one is rejected on the same `access_denied` path as a
+  bad vault id, so the consent screen has one rejection shape.
 
   Returns `{:ok, redirect_url}` (caller 302s) or
   `{:redirect_error, redirect_uri, error_code, state}`.
   """
-  def mint_authorization_code(user, validated, vault_choice) do
-    case resolve_vault(user, vault_choice) do
-      {:ok, vault_id} ->
-        raw_code =
-          "engram_ac_" <>
-            Base.url_encode64(:crypto.strong_rand_bytes(@code_bytes), padding: false)
+  def mint_authorization_code(user, validated, vault_selection, label) do
+    with {:ok, vault_ids} <- resolve_vaults(user, vault_selection),
+         {:ok, label} <- resolve_label(label) do
+      raw_code =
+        "engram_ac_" <>
+          Base.url_encode64(:crypto.strong_rand_bytes(@code_bytes), padding: false)
 
-        expires_at =
-          DateTime.utc_now()
-          |> DateTime.add(@code_ttl_seconds, :second)
-          |> DateTime.truncate(:second)
+      expires_at =
+        DateTime.utc_now()
+        |> DateTime.add(@code_ttl_seconds, :second)
+        |> DateTime.truncate(:second)
 
-        attrs = %{
-          code_hash: hash_code(raw_code),
-          client_id: validated.client_id,
-          user_id: user.id,
-          redirect_uri: validated.redirect_uri,
-          code_challenge: validated.code_challenge,
-          code_challenge_method: validated.code_challenge_method,
-          scope: validated.scope,
-          vault_id: vault_id,
-          state: validated.state,
-          expires_at: expires_at
-        }
+      attrs = %{
+        code_hash: hash_code(raw_code),
+        client_id: validated.client_id,
+        user_id: user.id,
+        redirect_uri: validated.redirect_uri,
+        code_challenge: validated.code_challenge,
+        code_challenge_method: validated.code_challenge_method,
+        scope: validated.scope,
+        vault_id: scalar_vault_id(vault_ids),
+        vault_ids: vault_ids,
+        label: label,
+        state: validated.state,
+        expires_at: expires_at
+      }
 
-        case %AuthorizationCode{}
-             |> AuthorizationCode.changeset(attrs)
-             |> Repo.insert(skip_tenant_check: true) do
-          {:ok, _row} ->
-            {:ok,
-             build_redirect(validated.redirect_uri, %{code: raw_code, state: validated.state})}
+      case %AuthorizationCode{}
+           |> AuthorizationCode.changeset(attrs)
+           |> Repo.insert(skip_tenant_check: true) do
+        {:ok, _row} ->
+          {:ok, build_redirect(validated.redirect_uri, %{code: raw_code, state: validated.state})}
 
-          {:error, changeset} ->
-            {:error, changeset}
-        end
-
+        {:error, changeset} ->
+          {:error, changeset}
+      end
+    else
       :error ->
         {:redirect_error, validated.redirect_uri, "access_denied", validated.state}
     end
@@ -297,6 +322,8 @@ defmodule Engram.OAuth do
              client_id: code_row.client_id,
              user_id: code_row.user_id,
              vault_id: code_row.vault_id,
+             vault_ids: code_row.vault_ids,
+             label: code_row.label,
              scope: code_row.scope,
              # Where the code was actually delivered — already matched against
              # the client's registered list at /authorize. Carried onto the
@@ -377,6 +404,10 @@ defmodule Engram.OAuth do
         client_id: rt.client_id,
         user_id: rt.user_id,
         vault_id: rt.vault_id,
+        vault_ids: rt.vault_ids,
+        # Immutable for the life of the family, like redirect_uri below: a
+        # successor is the SAME grant, and the user named it once.
+        label: rt.label,
         scope: rt.scope,
         # Immutable for the life of the family, like family_id: rotation mints
         # a successor to the SAME grant, and the grant was delivered once.
@@ -389,7 +420,7 @@ defmodule Engram.OAuth do
       {:ok, user} ->
         {:ok,
          %{
-           access_token: issue_access_token(user, rt.scope, rt.vault_id),
+           access_token: issue_access_token(user, rt.scope, grant_vault_ids(rt)),
            refresh_token: refresh_raw,
            token_type: "Bearer",
            expires_in: Engram.Token.ttl_seconds(),
@@ -496,17 +527,44 @@ defmodule Engram.OAuth do
     end
   end
 
-  defp issue_access_token(user, scope, vault_id) do
+  # Reads the grant's effective vault scope, tolerating rows written before
+  # the vault_ids column existed (scalar set, array NULL).
+  defp grant_vault_ids(%{vault_ids: ids}) when is_list(ids) and ids != [], do: ids
+  defp grant_vault_ids(%{vault_id: id}) when is_binary(id), do: [id]
+  defp grant_vault_ids(_), do: nil
+
+  defp issue_access_token(user, scope, vault_ids) do
     extras =
       %{}
       |> maybe_put("scope", scope)
-      |> maybe_put("vault_id", vault_id)
+      |> maybe_put("vault_ids", vault_ids)
+      # Every restricted grant also emits the legacy scalar claim, carrying the
+      # same first-of-set id the scalar column stores. A rolled-back reader
+      # knows only `vault_id`, and a missing one reads as unrestricted — so
+      # omitting it on a multi-vault grant would WIDEN the token to every
+      # vault. Current readers check `vault_ids` first, so this is inert here.
+      |> maybe_put("vault_id", scalar_vault_id(vault_ids))
 
     Accounts.generate_jwt(user, extras)
   end
 
   defp maybe_put(map, _k, nil), do: map
   defp maybe_put(map, k, v), do: Map.put(map, k, v)
+
+  # Dual-write for the expand phase. The legacy scalar column exists so a
+  # rollback to the previous release NARROWS a grant instead of widening it:
+  # old code reads only this column, and NULL there means "all vaults". A
+  # multi-vault grant leaving it NULL would hand a rolled-back reader every
+  # vault the user owns, including the ones they explicitly declined on the
+  # consent screen — a privilege escalation caused by an ops action.
+  #
+  # So a multi-vault grant writes its FIRST id. `resolve_vaults/2` sorts, so
+  # "first" is the lowest-sorted id, not an arbitrary one. The trade is
+  # deliberate: after a rollback the user's integration loses the grant's other
+  # vaults until roll-forward. Degraded beats escalated — a permission boundary
+  # fails closed. `:all` (nil) stays NULL; unrestricted is what it already means.
+  defp scalar_vault_id([first | _]), do: first
+  defp scalar_vault_id(_), do: nil
 
   # ── Revocation (Phase 6) ─────────────────────────────────────────
 
@@ -578,7 +636,7 @@ defmodule Engram.OAuth do
 
   defp build_token_response(user, code_row, refresh_raw, _refresh_row) do
     %{
-      access_token: issue_access_token(user, code_row.scope, code_row.vault_id),
+      access_token: issue_access_token(user, code_row.scope, grant_vault_ids(code_row)),
       refresh_token: refresh_raw,
       token_type: "Bearer",
       expires_in: Engram.Token.ttl_seconds(),
@@ -710,28 +768,74 @@ defmodule Engram.OAuth do
 
   defp check_scope(_params, _redirect_uri), do: :ok
 
-  defp resolve_vault(_user, "vault:*"), do: {:ok, nil}
+  # Resolves a vault selection to the id list stored on the grant.
+  #
+  # `:all` → {:ok, nil} — NULL keeps its existing meaning, including vaults
+  # created after the grant. An explicit list is verified in ONE query; if
+  # any id is unowned, deleted, or unknown, the WHOLE grant fails. Partially
+  # honouring a selection would silently hand out a scope the user never
+  # confirmed on the consent screen.
+  defp resolve_vaults(_user, :all), do: {:ok, nil}
 
-  defp resolve_vault(user, "vault:" <> id_str) do
-    case Ecto.UUID.cast(id_str) do
-      {:ok, id} -> verify_vault_ownership(user, id)
-      :error -> :error
+  defp resolve_vaults(_user, []), do: :error
+
+  defp resolve_vaults(user, ids) when is_list(ids) do
+    casted = Enum.map(ids, &Ecto.UUID.cast/1)
+
+    if Enum.any?(casted, &(&1 == :error)) do
+      :error
+    else
+      wanted = casted |> Enum.map(fn {:ok, id} -> id end) |> Enum.uniq()
+
+      query =
+        from(v in Engram.Vaults.Vault,
+          where: v.id in ^wanted and v.user_id == ^user.id and is_nil(v.deleted_at),
+          select: v.id
+        )
+
+      case Repo.all(query, skip_tenant_check: true) do
+        found when length(found) == length(wanted) -> {:ok, Enum.sort(found)}
+        _ -> :error
+      end
     end
   end
 
-  defp resolve_vault(_user, _), do: :error
+  defp resolve_vaults(_user, _), do: :error
 
-  defp verify_vault_ownership(user, vault_id) do
-    query =
-      from(v in Engram.Vaults.Vault,
-        where: v.id == ^vault_id and v.user_id == ^user.id and is_nil(v.deleted_at)
-      )
+  # A label is free text the user typed on the consent screen, rendered back to
+  # them in the connections list. Bound the length rather than truncating —
+  # silently storing something other than what they typed is worse than
+  # refusing. Blank (or whitespace-only) is not a choice, it is the untouched
+  # default, and stores NULL so the client identity keeps showing through.
+  @max_label_chars 120
 
-    case Repo.one(query, skip_tenant_check: true) do
-      nil -> :error
-      _vault -> {:ok, vault_id}
+  # A grapheme bound is NOT a size bound: one grapheme cluster can carry
+  # arbitrarily many combining marks, so 120 graphemes can be megabytes. The
+  # column is `:text` and the value is re-copied into a new row on every
+  # rotation, so the only other ceiling is Plug.Parsers' 11MB body limit.
+  #
+  # 4096, not 4 bytes/grapheme: measured worst-case REAL graphemes are far
+  # wider than 4 bytes — a tag-sequence flag (🏴󠁧󠁢󠁥󠁮󠁧󠁿) is 28 bytes and a 4-person
+  # ZWJ family is 25, so 120 of them is 3360/3000 bytes. A 480-byte cap would
+  # reject a legitimate all-emoji label. 4096 clears every real sequence while
+  # still refusing the combining-mark stack class (120 such graphemes measured
+  # at 48120 bytes).
+  @max_label_bytes 4096
+
+  defp resolve_label(nil), do: {:ok, nil}
+
+  defp resolve_label(label) when is_binary(label) do
+    trimmed = String.trim(label)
+
+    cond do
+      trimmed == "" -> {:ok, nil}
+      byte_size(trimmed) > @max_label_bytes -> :error
+      String.length(trimmed) > @max_label_chars -> :error
+      true -> {:ok, trimmed}
     end
   end
+
+  defp resolve_label(_), do: :error
 
   defp build_redirect(base, params) do
     cleaned = params |> Enum.reject(fn {_, v} -> is_nil(v) or v == "" end) |> Map.new()

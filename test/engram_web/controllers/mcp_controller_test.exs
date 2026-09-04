@@ -378,7 +378,7 @@ defmodule EngramWeb.McpControllerTest do
 
       assert resp["result"]["isError"] == true
       text = resp["result"]["content"] |> hd() |> Map.get("text")
-      assert text =~ "multiple vaults"
+      assert text =~ "more than one vault"
       assert text =~ "list_vaults"
     end
 
@@ -395,8 +395,8 @@ defmodule EngramWeb.McpControllerTest do
         end)
 
       text = resp["result"]["content"] |> hd() |> Map.get("text")
-      refute text =~ "multiple vaults"
-      refute text =~ "specify which one"
+      refute text =~ "more than one vault"
+      refute text =~ "specify which"
     end
 
     test "a read targets the requested non-default vault", %{conn: conn, vault_b: vault_b} do
@@ -1010,7 +1010,7 @@ defmodule EngramWeb.McpControllerTest do
       conn = call_tool(conn, "list_folders")
       text = tool_text(conn)
 
-      refute text =~ "multiple vaults"
+      refute text =~ "more than one vault"
       refute text =~ "Error:"
     end
 
@@ -1027,21 +1027,29 @@ defmodule EngramWeb.McpControllerTest do
   end
 
   # =========================================================================
-  # Cross-vault search must not leak vaults a restricted credential can't reach.
-  # A key permitted to a >1 SUBSET of the user's vaults cannot cross-vault
-  # search (Qdrant has no multi-vault filter), so it must be told to choose one
-  # rather than silently searching every vault (#729 privacy boundary).
+  # Cross-vault search over a >1 SUBSET returns results from exactly that
+  # subset — never a vault the credential was scoped away from (#729). The
+  # any-match Qdrant vault filter is what makes this safe; before it existed
+  # the only correct answer was to refuse.
   # =========================================================================
 
-  describe "cross-vault search privacy for a subset-restricted key" do
+  describe "cross-vault search for a subset-restricted key" do
     setup do
+      # Per-process override (not Application.put_env) so this stays async-safe.
+      bypass = Bypass.open()
+      Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+      Engram.ServiceConfig.put_override(:qdrant_search_timeout, 30_000)
+
       user = insert(:user)
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+      # Without this the profile downgrades to keyword-only and never issues the
+      # dense query whose filter is under test.
+      :ok = Engram.Fixtures.grant_semantic!(user)
 
       {:ok, va, _} = Engram.Vaults.register_vault(user, "A", Ecto.UUID.generate())
       {:ok, vb, _} = Engram.Vaults.register_vault(user, "B", Ecto.UUID.generate())
-      {:ok, _vc, _} = Engram.Vaults.register_vault(user, "C", Ecto.UUID.generate())
+      {:ok, vc, _} = Engram.Vaults.register_vault(user, "C", Ecto.UUID.generate())
 
       {:ok, api_key, key_rec} = Engram.Accounts.create_api_key(user, "subset-key")
       grant_api_write!(user)
@@ -1052,17 +1060,92 @@ defmodule EngramWeb.McpControllerTest do
         %{api_key_id: Ecto.UUID.dump!(key_rec.id), vault_id: Ecto.UUID.dump!(vb.id)}
       ])
 
-      %{conn: build_conn() |> put_req_header("authorization", "Bearer #{api_key}")}
+      %{
+        conn: build_conn() |> put_req_header("authorization", "Bearer #{api_key}"),
+        bypass: bypass,
+        user: user,
+        va: va,
+        vb: vb,
+        vc: vc
+      }
     end
 
-    test "bare search on a >1 vault subset refuses to cross-vault (asks to choose)",
-         %{conn: conn} do
-      conn = call_tool(conn, "search_notes", %{"query" => "anything"})
-      resp = json_response(conn, 200)
-      text = resp["result"]["content"] |> hd() |> Map.get("text")
+    test "bare search on a >1 vault subset searches exactly that subset",
+         %{conn: conn, bypass: bypass, user: user, va: va, vb: vb, vc: vc} do
+      Mox.stub(Engram.MockEmbedder, :embed_texts, fn _texts, _opts ->
+        {:ok, [[0.1, 0.2, 0.3]]}
+      end)
 
-      assert resp["result"]["isError"] == true
-      assert text =~ "limited to specific vaults"
+      test_pid = self()
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn bconn ->
+        {:ok, raw, bconn} = Plug.Conn.read_body(bconn)
+        send(test_pid, {:qdrant_body, Jason.decode!(raw)})
+
+        bconn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{
+            "result" => %{"points" => [hit(user, va, "uuid-a"), hit(user, vb, "uuid-b")]}
+          })
+        )
+      end)
+
+      conn = call_tool(conn, "search_notes", %{"query" => "findme"})
+      resp = json_response(conn, 200)
+      text = resp["result"]["content"] |> Enum.map_join(" ", & &1["text"])
+
+      refute resp["result"]["isError"] == true
+
+      # The safety property: ONE query, every leg of it carrying an any-match
+      # filter over exactly the accessible set. Not a nil filter, and never a
+      # filter that names C. (MCP defaults to :hybrid, so the filter rides on
+      # each `prefetch` leg; the `[body]` fallback covers the dense shape.)
+      assert_received {:qdrant_body, body}
+      legs = body["prefetch"] || [body]
+      assert legs != []
+
+      for leg <- legs do
+        clause = Enum.find(leg["filter"]["must"], &(&1["key"] == "vault_id"))
+        assert %{"match" => %{"any" => ids}} = clause
+        assert Enum.sort(ids) == Enum.sort([to_string(va.id), to_string(vb.id)])
+        refute to_string(vc.id) in ids
+      end
+
+      # And the rendered hits are labelled with the vaults they came from.
+      assert text =~ to_string(va.id)
+      assert text =~ to_string(vb.id)
+      # C was never granted — it must not appear, even as a label.
+      refute text =~ to_string(vc.id)
+    end
+
+    # A Qdrant point for `vault`, payload-encrypted the way the real indexer
+    # writes it, so the search path can decrypt it back out.
+    defp hit(user, vault, point_id) do
+      {:ok, enc} =
+        Engram.Crypto.encrypt_qdrant_payload(
+          %{text: "findme in #{vault.id}", title: "Findme", heading_path: "Findme"},
+          user,
+          "engram_notes",
+          point_id
+        )
+
+      %{
+        "id" => point_id,
+        "score" => 0.9,
+        "payload" => %{
+          "text" => enc.text,
+          "title" => enc.title,
+          "heading_path" => enc.heading_path,
+          "text_nonce" => enc.text_nonce,
+          "title_nonce" => enc.title_nonce,
+          "heading_path_nonce" => enc.heading_path_nonce,
+          "aad_version" => enc.aad_version,
+          "user_id" => to_string(user.id),
+          "vault_id" => to_string(vault.id)
+        }
+      }
     end
   end
 

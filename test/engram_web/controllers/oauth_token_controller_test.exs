@@ -5,6 +5,7 @@ defmodule EngramWeb.OAuthTokenControllerTest do
 
   alias Engram.OAuth
   alias Engram.OAuth.RefreshToken
+  alias Engram.Permissions
   alias Engram.Repo
 
   defp hash_token(raw), do: :crypto.hash(:sha256, raw) |> Base.encode16(case: :lower)
@@ -33,7 +34,12 @@ defmodule EngramWeb.OAuthTokenControllerTest do
 
   defp mint_code(user, client, redirect_uri, challenge, opts \\ []) do
     state = Keyword.get(opts, :state, "xyz")
-    vault_choice = Keyword.get(opts, :vault_choice, "vault:*")
+
+    vault_choice =
+      case Keyword.fetch(opts, :vault_ids) do
+        {:ok, ids} -> ids
+        :error -> Keyword.get(opts, :vault_choice, :all)
+      end
 
     {:ok, validated} =
       OAuth.validate_authorization_request(%{
@@ -46,10 +52,25 @@ defmodule EngramWeb.OAuthTokenControllerTest do
         "scope" => "mcp"
       })
 
-    {:ok, redirect_url} = OAuth.mint_authorization_code(user, validated, vault_choice)
+    {:ok, redirect_url} =
+      OAuth.mint_authorization_code(user, validated, vault_choice, Keyword.get(opts, :label))
 
     %{query: query} = URI.parse(redirect_url)
     URI.decode_query(query)["code"]
+  end
+
+  # The live grant row — unconsumed + unrevoked is exactly the pair
+  # `Engram.Connections.oauth_rows/1` filters on, so this is the row the
+  # connections list would render.
+  defp current_refresh_row(user) do
+    import Ecto.Query
+
+    Engram.Repo.one!(
+      from(r in Engram.OAuth.RefreshToken,
+        where: r.user_id == ^user.id and is_nil(r.consumed_at) and is_nil(r.revoked_at)
+      ),
+      skip_tenant_check: true
+    )
   end
 
   describe "POST /oauth/token — authorization_code grant" do
@@ -235,6 +256,116 @@ defmodule EngramWeb.OAuthTokenControllerTest do
       conn = post(conn, "/oauth/token", params)
       body = json_response(conn, 400)
       assert body["error"] == "invalid_grant"
+    end
+
+    test "a multi-vault grant round-trips vault_ids and label through exchange and refresh",
+         %{conn: conn} do
+      user = insert(:user)
+      a = insert(:vault, user: user, slug: "tok-a")
+      b = insert(:vault, user: user, slug: "tok-b")
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+      {verifier, challenge} = pkce_pair()
+
+      code =
+        mint_code(user, client, redirect_uri, challenge,
+          vault_ids: [a.id, b.id],
+          label: "Work laptop"
+        )
+
+      body =
+        conn
+        |> post("/oauth/token", %{
+          "grant_type" => "authorization_code",
+          "code" => code,
+          "redirect_uri" => redirect_uri,
+          "client_id" => client.client_id,
+          "code_verifier" => verifier
+        })
+        |> json_response(200)
+
+      {:ok, claims} = Engram.Accounts.verify_jwt(body["access_token"])
+      assert Enum.sort(claims["vault_ids"]) == Enum.sort([a.id, b.id])
+      # The legacy scalar rides along so a rolled-back reader narrows to one
+      # vault instead of reading a missing claim as unrestricted.
+      assert claims["vault_id"] == hd(Enum.sort([a.id, b.id]))
+
+      # ...and it changes NOTHING on this release: both readers check
+      # `vault_ids` first, so the grant still resolves to its FULL set. This is
+      # the regression the scalar could cause, so it is pinned end to end.
+      assert Enum.sort(Permissions.scope_ids_from_claims(claims)) == Enum.sort([a.id, b.id])
+
+      scope =
+        Permissions.vault_scope(%{
+          oauth_scope_vault_ids: Permissions.scope_ids_from_claims(claims)
+        })
+
+      assert Permissions.allows?(scope, %{id: a.id})
+      assert Permissions.allows?(scope, %{id: b.id})
+
+      # The label is not a token claim — it exists for the connections list,
+      # which reads the refresh-token ROW. Assert on the row at both hops:
+      # dropping the carry at either site is otherwise invisible until the
+      # user's connection silently renames itself an hour later.
+      assert %{label: "Work laptop"} = current_refresh_row(user)
+
+      refreshed =
+        build_conn()
+        |> post("/oauth/token", %{
+          "grant_type" => "refresh_token",
+          "refresh_token" => body["refresh_token"],
+          "client_id" => client.client_id
+        })
+        |> json_response(200)
+
+      {:ok, claims2} = Engram.Accounts.verify_jwt(refreshed["access_token"])
+      assert Enum.sort(claims2["vault_ids"]) == Enum.sort([a.id, b.id])
+      assert claims2["vault_id"] == hd(Enum.sort([a.id, b.id]))
+
+      assert Enum.sort(Permissions.scope_ids_from_claims(claims2)) == Enum.sort([a.id, b.id])
+      # The ROTATION hop. This is a different row than the one asserted above.
+      assert %{label: "Work laptop"} = current_refresh_row(user)
+    end
+
+    test "a legacy refresh token with only vault_id still mints a scoped access token",
+         %{conn: conn} do
+      user = insert(:user)
+      a = insert(:vault, user: user, slug: "tok-legacy")
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+      {verifier, challenge} = pkce_pair()
+
+      code = mint_code(user, client, redirect_uri, challenge, vault_ids: [a.id])
+
+      body =
+        conn
+        |> post("/oauth/token", %{
+          "grant_type" => "authorization_code",
+          "code" => code,
+          "redirect_uri" => redirect_uri,
+          "client_id" => client.client_id,
+          "code_verifier" => verifier
+        })
+        |> json_response(200)
+
+      # Simulate a row written before this release: scalar set, array NULL.
+      Engram.Repo.update_all(
+        Engram.OAuth.RefreshToken,
+        [set: [vault_ids: nil]],
+        skip_tenant_check: true
+      )
+
+      refreshed =
+        build_conn()
+        |> post("/oauth/token", %{
+          "grant_type" => "refresh_token",
+          "refresh_token" => body["refresh_token"],
+          "client_id" => client.client_id
+        })
+        |> json_response(200)
+
+      {:ok, claims} = Engram.Accounts.verify_jwt(refreshed["access_token"])
+      assert claims["vault_ids"] == [a.id]
     end
   end
 
