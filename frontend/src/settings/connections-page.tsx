@@ -1,4 +1,4 @@
-import { Plug } from "lucide-react";
+import { Plug, Search } from "lucide-react";
 import { useRef, useState } from "react";
 import { Link, useLocation } from "react-router";
 import { Button } from "@/components/ui/button";
@@ -60,6 +60,10 @@ interface PendingRevoke {
 	description: string;
 	onConfirm: () => Promise<unknown>;
 }
+
+// Below this many connections a search field is pure clutter — every row
+// is already on screen.
+const SEARCH_THRESHOLD = 8;
 
 // ── ConnectionCard ────────────────────────────────────────────
 
@@ -261,10 +265,16 @@ function EmptyState({ text }: { text: string }) {
 
 function PatSection({
 	pats,
+	total,
+	filtering,
 	canCreate,
 	onRevoke,
 }: {
 	pats: Connection[];
+	// The unfiltered count. The heading reports what the user HAS, not how many
+	// rows a search left standing.
+	total: number;
+	filtering: boolean;
 	canCreate: boolean;
 	onRevoke: (pat: Connection) => void;
 }) {
@@ -274,7 +284,7 @@ function PatSection({
 
 	return (
 		<SettingsSectionCard
-			title={`API keys (${pats.length})`}
+			title={`API keys (${total})`}
 			headerAction={
 				canCreate ? <Button onClick={() => setShowCreate(true)}>+ New Key</Button> : undefined
 			}
@@ -294,7 +304,13 @@ function PatSection({
 			)}
 
 			{pats.length === 0 ? (
-				<EmptyState text="No API keys yet. Generate one to connect scripts or external tools." />
+				<EmptyState
+					text={
+						filtering
+							? "No matches."
+							: "No API keys yet. Generate one to connect scripts or external tools."
+					}
+				/>
 			) : (
 				<section className="overflow-hidden rounded-lg border border-border bg-card">
 					<div className="overflow-x-auto">
@@ -654,6 +670,12 @@ export default function ConnectionsPage() {
 	const revokeDevice = useRevokeDeviceConnection();
 	const revokePat = useRevokePat();
 	const [pendingRevoke, setPendingRevoke] = useState<PendingRevoke | null>(null);
+	// Same rule as the OAuth consent picker: a search field is clutter until
+	// there is enough to search, and even then it stays behind a toggle rather
+	// than sitting open above the thing it filters.
+	const [searching, setSearching] = useState(false);
+	const [filter, setFilter] = useState("");
+	const searchRef = useRef<HTMLInputElement>(null);
 
 	if (isLoading) {
 		return <p className="text-muted-foreground text-sm">Loading…</p>;
@@ -667,21 +689,62 @@ export default function ConnectionsPage() {
 	}
 
 	const list = connections ?? [];
-	const obs = list.filter((c) => c.kind === "obsidian");
-	const mcp = list.filter((c) => c.kind === "mcp");
-	const pats = list.filter((c) => c.kind === "pat");
+	const showSearch = list.length > SEARCH_THRESHOLD;
+	const needle = showSearch ? filter.trim().toLowerCase() : "";
+	// Name and vaults are what a row is recognized by, so they are what it is
+	// found by. `vaultLabel` covers the "All vaults" case too.
+	const matches = (c: Connection) =>
+		!needle || `${c.label ?? ""} ${c.name ?? ""} ${vaultLabel(c)}`.toLowerCase().includes(needle);
 
-	const obsCount =
-		caps.obsidianCap === null ? `${obs.length}` : `${obs.length} / ${caps.obsidianCap}`;
-	const mcpCount = caps.mcpCap === null ? `${mcp.length}` : `${mcp.length} / ${caps.mcpCap}`;
+	const shown = list.filter(matches);
+	const obs = shown.filter((c) => c.kind === "obsidian");
+	const mcp = shown.filter((c) => c.kind === "mcp");
+	const pats = shown.filter((c) => c.kind === "pat");
+
+	// Counted off the FULL list, never the filtered one: "1 / 1" is a plan cap
+	// the user is at, and a filter must not make it read as though a slot freed
+	// up.
+	const obsTotal = list.filter((c) => c.kind === "obsidian").length;
+	const mcpTotal = list.filter((c) => c.kind === "mcp").length;
+	const obsCount = caps.obsidianCap === null ? `${obsTotal}` : `${obsTotal} / ${caps.obsidianCap}`;
+	const mcpCount = caps.mcpCap === null ? `${mcpTotal}` : `${mcpTotal} / ${caps.mcpCap}`;
 
 	return (
 		<article className="space-y-8">
 			<header>
-				<h1 className="font-semibold text-foreground text-xl">Connections</h1>
+				<div className="flex items-start justify-between gap-2">
+					<h1 className="font-semibold text-foreground text-xl">Connections</h1>
+					{showSearch && !searching && (
+						<button
+							type="button"
+							onClick={() => {
+								setSearching(true);
+								// Focus follows the click that opened the field, rather than
+								// an autoFocus attribute stealing it on mount.
+								requestAnimationFrame(() => searchRef.current?.focus());
+							}}
+							aria-label="Search connections"
+							className="rounded p-1 text-muted-foreground hover:text-foreground"
+						>
+							<Search className="size-4" />
+						</button>
+					)}
+				</div>
 				<p className="mt-1 text-muted-foreground text-sm">
 					Manage what's connected to your Engram account.
 				</p>
+				{searching ? (
+					<input
+						ref={searchRef}
+						type="search"
+						value={filter}
+						onChange={(e) => setFilter(e.target.value)}
+						onBlur={() => filter === "" && setSearching(false)}
+						placeholder="Search connections"
+						aria-label="Search connections"
+						className="mt-3 w-full rounded-lg border border-border bg-background p-2 text-sm"
+					/>
+				) : null}
 				<nav aria-label="Connection documentation" className="mt-4 grid gap-2 sm:grid-cols-2">
 					<a
 						href="https://engram.page/docs/integrations/"
@@ -715,7 +778,13 @@ export default function ConnectionsPage() {
 
 			<SettingsSectionCard title={`Obsidian plugins (${obsCount})`}>
 				{obs.length === 0 ? (
-					<EmptyState text="Install the Engram Vault Sync plugin in Obsidian to connect this vault." />
+					<EmptyState
+						text={
+							needle
+								? "No matches."
+								: "Install the Engram Vault Sync plugin in Obsidian to connect this vault."
+						}
+					/>
 				) : (
 					<ul className="space-y-3">
 						{obs.map((c) => (
@@ -742,7 +811,13 @@ export default function ConnectionsPage() {
 
 			<SettingsSectionCard title={`AI tools & integrations (${mcpCount})`}>
 				{mcp.length === 0 ? (
-					<EmptyState text="Connect Claude Desktop, Cursor, or another MCP client to use Engram as a tool." />
+					<EmptyState
+						text={
+							needle
+								? "No matches."
+								: "Connect Claude Desktop, Cursor, or another MCP client to use Engram as a tool."
+						}
+					/>
 				) : (
 					<ul className="space-y-3">
 						{mcp.map((c) => (
@@ -773,6 +848,8 @@ export default function ConnectionsPage() {
 
 			<PatSection
 				pats={pats}
+				total={list.filter((c) => c.kind === "pat").length}
+				filtering={Boolean(needle)}
 				canCreate={caps.apiWriteEnabled}
 				onRevoke={(p) =>
 					setPendingRevoke({

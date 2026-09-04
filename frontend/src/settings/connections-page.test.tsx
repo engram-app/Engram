@@ -199,6 +199,68 @@ describe("ConnectionsPage", () => {
 		expect(screen.queryByText(/\(engram\)/u)).toBeNull();
 	});
 
+	describe("search", () => {
+		// Nine keys: one over SEARCH_THRESHOLD, so the toggle appears.
+		function manyPats() {
+			return Array.from({ length: 9 }, (_, i) => ({
+				...basePat,
+				key_id: `k${i}`,
+				name: i === 0 ? "ci-bot" : `script-${i}`,
+			}));
+		}
+
+		it("offers nothing while every connection is already on screen", () => {
+			mockConnections.splice(0, mockConnections.length, { ...basePat, name: "ci-bot" });
+			mockTier = "starter";
+			renderPage();
+
+			expect(screen.queryByRole("button", { name: /Search connections/iu })).toBeNull();
+			expect(screen.queryByRole("searchbox")).toBeNull();
+		});
+
+		it("keeps the field behind a toggle once there is enough to search", () => {
+			mockConnections.splice(0, mockConnections.length, ...manyPats());
+			mockTier = "starter";
+			renderPage();
+
+			expect(screen.queryByRole("searchbox")).toBeNull();
+			fireEvent.click(screen.getByRole("button", { name: /Search connections/iu }));
+			expect(screen.getByRole("searchbox", { name: /Search connections/iu })).toBeInTheDocument();
+		});
+
+		it("filters rows without rewriting the counts", () => {
+			mockConnections.splice(0, mockConnections.length, ...manyPats());
+			mockTier = "starter";
+			renderPage();
+
+			fireEvent.click(screen.getByRole("button", { name: /Search connections/iu }));
+			fireEvent.change(screen.getByRole("searchbox", { name: /Search connections/iu }), {
+				target: { value: "ci-bot" },
+			});
+
+			expect(screen.getByText("ci-bot")).toBeInTheDocument();
+			expect(screen.queryByText("script-3")).toBeNull();
+			// The heading counts what the user HAS. A section header that moved
+			// with the filter would read as though keys had been deleted — and on
+			// the capped sections, as though a plan slot had freed up.
+			expect(screen.getByRole("heading", { name: /API keys \(9\)/iu })).toBeInTheDocument();
+		});
+
+		it("does not tell you to install a plugin when a filter emptied the section", () => {
+			mockConnections.splice(0, mockConnections.length, ...manyPats());
+			mockTier = "starter";
+			renderPage();
+
+			fireEvent.click(screen.getByRole("button", { name: /Search connections/iu }));
+			fireEvent.change(screen.getByRole("searchbox", { name: /Search connections/iu }), {
+				target: { value: "ci-bot" },
+			});
+
+			expect(screen.queryByText(/Install the Engram Vault Sync plugin/iu)).toBeNull();
+			expect(screen.getAllByText("No matches.").length).toBeGreaterThan(0);
+		});
+	});
+
 	// The catalog spelling beats the client's self-reported name, but it must
 	// NOT beat the user's own. Two grants for the same client both resolve to
 	// the same slug, so preferring the catalog there collapses them into two
