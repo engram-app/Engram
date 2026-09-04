@@ -72,7 +72,17 @@ const SEARCH_THRESHOLD = 8;
 function vaultLabel(connection: Connection): string {
 	return connection.vault_ids === null
 		? "All vaults"
-		: connection.vault_ids.map((id, i) => connection.vault_names?.[i] ?? `#${id}`).join(", ");
+		: connection.vault_ids
+				// A name is null when the vault is gone or out of the caller's own
+				// scope. OAuth grants narrow themselves when a vault is deleted, but
+				// `api_key_vaults` rows outlive a soft delete until the purge worker
+				// runs, so a restricted key can outlive its vault by up to the
+				// 30-day restore window. Naming the state beats printing a raw UUID
+				// — and the entry must still be COUNTED, because a key restricted to
+				// one deleted vault would otherwise render empty and read as
+				// unrestricted.
+				.map((_id, i) => connection.vault_names?.[i] ?? "(deleted vault)")
+				.join(", ");
 }
 
 function ConnectionCard({

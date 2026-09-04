@@ -78,11 +78,6 @@ defmodule Engram.Permissions do
   def filter(:all, vaults), do: vaults
   def filter(scope, vaults), do: Enum.filter(vaults, &allows?(scope, &1))
 
-  @doc false
-  # Exposed for the intersection test only — the composition rule is the part
-  # of this module most worth pinning down, and it is otherwise unreachable.
-  def intersect_for_test(a, b), do: intersect(a, b)
-
   # An API key with no api_key_vaults rows is unrestricted; Vaults returns :all
   # for that and for nil (non-API-key auth). One query, already batched there.
   defp api_key_scope(nil), do: :all

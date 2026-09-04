@@ -293,6 +293,37 @@ describe("ConnectionsPage", () => {
 		expect(screen.queryByText("All vaults")).toBeNull();
 	});
 
+	// A key restricted to a vault that has been soft-deleted still carries the
+	// id; the name comes back null. Dropping the entry would render the row
+	// empty, which reads as unrestricted — the exact opposite of the truth.
+	it("names a deleted vault rather than printing its id", () => {
+		mockConnections.splice(0, mockConnections.length, {
+			...basePat,
+			name: "ci-bot",
+			vault_ids: ["v1", "v2"],
+			vault_names: ["Personal", null],
+		});
+		mockTier = "starter";
+		renderPage();
+
+		expect(screen.getByText("Personal, (deleted vault)")).toBeInTheDocument();
+		expect(screen.queryByText(/#v2/u)).toBeNull();
+	});
+
+	it("still shows a restriction when its only vault is gone", () => {
+		mockConnections.splice(0, mockConnections.length, {
+			...basePat,
+			name: "ci-bot",
+			vault_ids: ["v1"],
+			vault_names: [null],
+		});
+		mockTier = "starter";
+		renderPage();
+
+		expect(screen.getByText("(deleted vault)")).toBeInTheDocument();
+		expect(screen.queryByText("All vaults")).toBeNull();
+	});
+
 	it("says All vaults for an unrestricted API key", () => {
 		mockConnections.splice(0, mockConnections.length, {
 			...basePat,
@@ -515,7 +546,10 @@ describe("ConnectionsPage", () => {
 		expect(screen.getByText(/All vaults/u)).toBeInTheDocument();
 	});
 
-	it("falls back to #<id> when a vault name is missing", () => {
+	// Used to print the raw id. A vault id is an opaque UUID that means nothing
+	// to the person reading it; what they need to know is that the vault is
+	// gone, and that the connection is still restricted to it.
+	it("names a missing vault instead of printing its id", () => {
 		mockConnections.splice(0, mockConnections.length, {
 			...baseObs,
 			vault_ids: ["42"],
@@ -523,7 +557,8 @@ describe("ConnectionsPage", () => {
 		});
 		mockTier = "starter";
 		renderPage();
-		expect(screen.getByText(/#42/u)).toBeInTheDocument();
+		expect(screen.getByText(/\(deleted vault\)/u)).toBeInTheDocument();
+		expect(screen.queryByText(/#42/u)).toBeNull();
 	});
 
 	it("opens the revoke modal and calls mutateAsync on confirm", async () => {

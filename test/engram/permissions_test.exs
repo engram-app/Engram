@@ -16,18 +16,38 @@ defmodule Engram.PermissionsTest do
   end
 
   test "restrictions INTERSECT, never union" do
-    # An API key permitted to {a, b} presenting an OAuth grant for {b, c}
-    # may reach only b — the overlap. Taking either side alone would widen
-    # the credential past what one of its two restrictions allows.
+    # An API key permitted to {a, b} presenting an OAuth grant for {b, c} may
+    # reach only b — the overlap. Taking either side alone would widen the
+    # credential past what one of its two restrictions allows.
+    #
+    # Driven through `vault_scope/1`, the function production calls, rather
+    # than reaching into the private intersect: the composition of the two
+    # halves is the part worth pinning, and a test that skips the composition
+    # would pass even if `vault_scope/1` stopped consulting one of them.
+    user = insert(:user)
+    a = insert(:vault, user: user)
+    b = insert(:vault, user: user)
+    c = insert(:vault, user: user)
+    {:ok, _raw, key} = Engram.Accounts.create_api_key(user, "restricted")
+
+    Engram.Repo.insert_all(
+      "api_key_vaults",
+      for v <- [a, b] do
+        %{api_key_id: Ecto.UUID.dump!(key.id), vault_id: Ecto.UUID.dump!(v.id)}
+      end
+    )
+
     scope =
-      Permissions.intersect_for_test(
-        MapSet.new(["a", "b"]),
-        MapSet.new(["b", "c"])
+      Permissions.vault_scope(
+        conn_with(%{
+          current_api_key: key,
+          oauth_scope_vault_ids: [b.id, c.id]
+        })
       )
 
-    refute Permissions.allows?(scope, %{id: "a"})
-    assert Permissions.allows?(scope, %{id: "b"})
-    refute Permissions.allows?(scope, %{id: "c"})
+    refute Permissions.allows?(scope, a)
+    assert Permissions.allows?(scope, b)
+    refute Permissions.allows?(scope, c)
   end
 
   test "filter/2 keeps only permitted vaults, :all keeps all" do
