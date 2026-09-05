@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.25.0](https://github.com/engram-app/Engram/compare/0.24.1...0.25.0) (2026-09-05)
+
+
+### Features
+
+* **billing:** pricing v3.1 vault + storage allowances ([#1566](https://github.com/engram-app/Engram/issues/1566)) ([fc36c1b](https://github.com/engram-app/Engram/commit/fc36c1b4084827a36558a0c29edae00e4a9097fe))
+* **oauth:** multi-vault consent grants ([#1567](https://github.com/engram-app/Engram/issues/1567)) ([0f0680e](https://github.com/engram-app/Engram/commit/0f0680e1a4c58b698e9c1c8434960c9a7bb2333d))
+
+
+### Bug Fixes
+
+* **e2e:** search modal no longer renders a blank-query hint ([#1573](https://github.com/engram-app/Engram/issues/1573)) ([b33dd50](https://github.com/engram-app/Engram/commit/b33dd50ddcaa2e68db3f599ce296d3f1644ca8d4))
+
 ## [0.24.1](https://github.com/engram-app/Engram/compare/0.24.0...0.24.1) (2026-09-03)
 
 
