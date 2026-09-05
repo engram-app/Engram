@@ -8,7 +8,7 @@ _Last verified: 2026-09-05 (live AWS + Qdrant Cloud read, launch-minimum)_
 
 | Store | Identity | Backup mechanism | Verified state (2026-09-05, live) |
 |-------|----------|------------------|------------------------------|
-| **RDS Postgres** | `engram-prod` (PG 18.3, db.t4g.small, 20 GB, single-AZ) | Daily automated snapshots + PITR, 7-day retention, window 08:00–09:00 UTC | ✅ retention = 7d; snapshots present for each of the last 7 days; `LatestRestorableTime` within ~5 min of now |
+| **RDS Postgres** | `engram-prod` (PG 18.3, db.t4g.small, 20 GB, single-AZ) | Daily automated snapshots + PITR, 7-day retention, window 08:00–09:00 UTC | ✅ retention = 7d; **restore drill PASSED — RTO 7m34s, PITR RPO ~4 min, schema byte-identical** |
 | **S3 attachments** | `engram-saas-prod-attachments-751667630925` | Bucket versioning, noncurrent versions expire at 30 days | ✅ versioning **Enabled**; delete→restore proof **PASSED** (see below) |
 | **Qdrant Cloud** | `engram-saas-prod` cluster `0a4bef59-…`, free tier, 1 node, v1.18.2 | **NONE** — free tier has no scheduled backups | ❌ **no backups exist**; recovery is re-embed from Postgres (see below) |
 
@@ -16,14 +16,30 @@ Single-AZ is intentional at launch (RPO/RTO acceptable for a low-customer-count 
 
 ## Verified backup posture
 
-### RDS Postgres — automated snapshots + PITR ✅ (restore drill still owed)
+### RDS Postgres — automated snapshots + PITR ✅, restore drill PASSED
 
 Automated snapshots ON, retention 7 days, backup window 08:00–09:00 UTC. Verified live 2026-09-05 via `aws rds describe-db-snapshots --snapshot-type automated`: one `available` snapshot per day for the full window.
 
-- **RPO** ≈ 5 minutes. PITR is enabled by the same retention setting, so the floor is the transaction-log granularity, not the 24 h snapshot cadence. `LatestRestorableTime` tracked ~5 min behind wall clock at verification time.
-- **RTO** — not yet measured. Estimated tens of minutes for a 20 GB single-AZ restore-to-new-instance plus the `DATABASE_URL` cutover, but **estimated is not measured**.
+**Drill run 2026-09-05 — measured actuals:**
 
-**The restore drill (restore snapshot → throwaway instance → schema diff → record RPO/RTO actuals) is still outstanding.** It is the last open acceptance item on #255 and the only one that provisions billable infrastructure. Paste the actuals into this section when it runs.
+| Metric | Measured | Method |
+|---|---|---|
+| **RTO (restore → `available`)** | **7 min 34 s** | `restore-db-instance-from-db-snapshot` at 08:37:59Z → status `available` at 08:45:33Z |
+| **RPO (PITR)** | **≈ 4 min** | `LatestRestorableTime` 08:33:48Z read at 08:37:36Z |
+| **RPO (snapshot only)** | ≤ 24 h | daily automated snapshot cadence |
+| **Schema fidelity** | **byte-identical** | `pg_dump --schema-only` both sides, 2470 lines each, diff empty except pg_dump 18's per-invocation `\restrict`/`\unrestrict` nonce |
+
+Restored `rds:engram-prod-2026-09-05-08-14` into `engram-prod-drill255` (db.t4g.small, same subnet group + SG, `--no-publicly-accessible`, `--backup-retention-period 0`), reached it through the SSM bastion, diffed, then deleted the instance with `--skip-final-snapshot --delete-automated-backups`. Total billable footprint: one db.t4g.small for ~20 min.
+
+**7 min 34 s is the instance-ready number, not end-to-end DR.** Full recovery adds the `DATABASE_URL` cutover and an ECS service redeploy on top. Budget ~15 min end-to-end and re-measure if the DB ever grows past 20 GB — restore time scales with volume size.
+
+**Content checks:** schema_migrations 51 rows, max version `20260902130000`; 39 tables, 144 indexes, 11 RLS policies, extensions `pg_stat_statements,plpgsql` — all identical to live prod. Row counts differed (restored 8271 notes / 19 vaults vs live 1885 / 11) and the delta reconciled exactly: 8 soft-deleted test vaults holding precisely 6386 notes were force-purged in prod at 08:43 by `CleanupVault` (`"force": true` jobs inserted 08:43:19–08:43:51 — the "delete permanently now" path), i.e. after the 08:14 snapshot. Live vault count matched on both sides. **Verify this kind of delta before accepting it** — a restore that silently holds different rows than you expect is the failure mode this drill exists to catch.
+
+**Gotchas hit while running it, worth knowing before the real thing:**
+
+- `engram-infra-operator` cannot restore (`rds:RestoreDBInstanceFromDBSnapshot` → `AccessDenied`). A real recovery runs from `engram-breakglass`.
+- The bastion has a boot-time 60-minute auto-poweroff (`bastion.tf` user_data) and it stopped once mid-drill. `sudo shutdown -c` after connecting, or expect to restart it and re-establish the tunnel.
+- A dead SSM port-forward can leave the local port bound, so the *next* tunnel silently fails to bind and your `psql` keeps talking to the **previous** host. Confirm which database you are on with `select pg_postmaster_start_time();` before trusting any comparison — a freshly restored instance shows a start time minutes old.
 
 ### S3 attachments — versioning ✅, delete→restore proof PASSED
 
@@ -73,7 +89,7 @@ Each is one paragraph and links out to the canonical runbook. Don't restate rota
 
 **AWS region down (us-east-1).** Single-region at launch — there is no failover. Wait for AWS recovery; post status to the public status page (#252) and hold. Multi-region failover is deliberately out of scope until traffic/SLO justify it.
 
-**RDS Postgres data loss / corruption.** Restore from automated snapshot, or point-in-time to any moment within the 7-day window (RPO ≈ 5 min), to a new instance; then cut the app over by repointing `DATABASE_URL`. The drill that proves this end-to-end is the outstanding #255 item; once run, paste the RPO/RTO actuals into the RDS section above.
+**RDS Postgres data loss / corruption.** Restore from automated snapshot, or point-in-time to any moment within the 7-day window (RPO ≈ 4 min), to a new instance; then cut the app over by repointing `DATABASE_URL`. Drilled 2026-09-05: **7 min 34 s to a usable instance, schema byte-identical** — actuals and the gotchas that cost time are in the RDS section above. Restore from `engram-breakglass`; the operator identity is not authorized.
 
 **S3 attachment loss / accidental delete.** Versioning is on — remove the delete marker (or restore the prior version) for the affected key; proven above. Bulk loss: re-list versions and restore. Recoverable for 30 days only; no cross-region replication at launch.
 
@@ -89,10 +105,12 @@ Each is one paragraph and links out to the canonical runbook. Don't restate rota
 
 Multi-region failover drills, cross-AZ HA testing, full simulation of non-RDS scenarios, and a Paddle data-export procedure are all deferred — see #255 for rationale. Drill RDS only; trust the existing rotation runbooks (linked above) for the rest.
 
-## Remaining acceptance (#255)
+## Acceptance (#255) — COMPLETE
 
 - [x] S3 versioning ON + delete→restore proof (2026-09-05, bytes matched)
 - [x] Qdrant snapshot mechanism verified + retention noted (verdict: none exist; rebuild procedure documented above)
-- [x] RDS snapshot retention verified live (7 days, snapshots present, PITR within ~5 min)
-- [ ] **RDS restore drill → throwaway instance → schema diff → record RPO/RTO actuals here** (billable; needs a human at the keyboard)
+- [x] RDS snapshot retention verified live (7 days, snapshots present, PITR within ~4 min)
+- [x] RDS restore drill → throwaway instance → schema diff → RTO 7m34s, RPO ~4 min (2026-09-05)
 - [x] Cross-linked from `engram-workspace/docs/context/launch-day-procedure.md` pre-flight row 10 + workspace `CLAUDE.md`
+
+**Re-drill when** the DB grows materially past 20 GB, the instance class changes, or multi-AZ is promoted — restore time scales with volume size and the recorded RTO stops being true.
