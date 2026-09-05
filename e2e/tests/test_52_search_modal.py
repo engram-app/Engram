@@ -10,9 +10,12 @@ note within a bounded CI window, which is fundamentally non-deterministic
 is exercised by the deterministic API-level test in ``test_search.py`` /
 ``tests/search.test.ts`` (unit) — there is no value in a flaky e2e duplicate.
 
-Selector notes (verified against src/search-modal.ts):
-- Empty-state paragraph: ``.engram-search-empty``
-  (confirmed renderEmpty() / renderResults() in the source).
+Selector notes (verified against src/search-ui.ts):
+- Results list: ``.engram-search-results`` — present and empty on a blank
+  query. ``renderEmpty()`` clears it and renders nothing else.
+- ``.engram-search-empty`` now appears ONLY for "No results found" after a
+  real query. It no longer marks the blank-query state (Engram-obsidian#503
+  dropped that paragraph as a duplicate of the input placeholder).
 """
 
 from __future__ import annotations
@@ -47,12 +50,19 @@ async def _close_open_modals(cdp) -> None:
 
 
 @pytest.mark.asyncio
-async def test_search_modal_empty_query_shows_hint(cdp_a):
-    """Empty-query state renders the placeholder paragraph.
+async def test_search_modal_empty_query_renders_no_results_row(cdp_a):
+    """Empty-query state renders an EMPTY results list, not a hint paragraph.
 
-    When the input is blank the modal calls renderEmpty() which creates a
-    ``<p class="engram-search-empty">`` with the hint text.  We verify the
-    element is present without making any server round-trips.
+    This used to assert a ``<p class="engram-search-empty">`` reading "Type to
+    search your vault".  That paragraph was removed (Engram-obsidian#503): the
+    search box placeholder already says it, and the sentence pushed the results
+    down the moment anyone started typing.  ``renderEmpty()`` now just clears
+    the list.
+
+    Asserting the ABSENCE alone would pass on a modal that failed to render at
+    all, so this pins the modal is up and its results container exists and is
+    empty.  ``.engram-search-empty`` is still used for "No results found" after
+    a real query, which is why it cannot simply be asserted absent everywhere.
     """
     try:
         await cdp_a.open_search_modal()
@@ -62,12 +72,16 @@ async def test_search_modal_empty_query_shows_hint(cdp_a):
         await cdp_a.type_search_query("")
         await asyncio.sleep(0.5)
 
-        empty_visible = await cdp_a.evaluate(
-            "Boolean(document.querySelector("
-            "'.engram-search-modal .engram-search-empty'))"
+        results_children = await cdp_a.evaluate(
+            "(() => {"
+            "  const r = document.querySelector("
+            "    '.engram-search-modal .engram-search-results');"
+            "  return r ? r.children.length : -1;"
+            "})()"
         )
-        assert empty_visible, (
-            "Empty-state hint (.engram-search-empty) should render for empty query"
+        assert results_children == 0, (
+            "Empty query should leave the results list present but empty; "
+            f"got {results_children} (-1 = container missing, modal did not render)"
         )
     finally:
         await _close_open_modals(cdp_a)
