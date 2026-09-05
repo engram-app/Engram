@@ -35,8 +35,10 @@ defmodule Engram.Workers.OrphanSweep do
   alias Engram.Accounts.User
   alias Engram.Logger.Metadata
   alias Engram.Notes.Chunk
+  alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Storage
+  alias Engram.Vaults.Vault
   alias Engram.Vector.Qdrant
 
   require Logger
@@ -49,6 +51,10 @@ defmodule Engram.Workers.OrphanSweep do
   # the 15-minute timeout; at 4096 it is ~2.4k.
   @point_scroll_limit 4096
   @point_delete_batch 256
+  # Chunk rows probed against Qdrant per round trip (#1576). Smaller than the
+  # id-only scroll above because `has_id` carries every id in the REQUEST body,
+  # not just the response. Validated against prod at this size.
+  @chunk_probe_batch 2048
   # Ceiling on candidates carried in memory for the confirm pass.
   @max_candidates 50_000
   # Above this share of the scanned collection, the diff is telling us the
@@ -66,19 +72,21 @@ defmodule Engram.Workers.OrphanSweep do
   def timeout(_job), do: :timer.minutes(15)
 
   @impl Oban.Worker
-  def perform(%Oban.Job{}) do
+  def perform(%Oban.Job{args: args}) do
     live_ids = live_user_ids()
 
     qdrant_deleted = sweep_qdrant(live_ids)
     s3_deleted = sweep_s3(live_ids)
     points_deleted = sweep_point_orphans()
+    notes_flagged = sweep_missing_points(force: Map.get(args, "force", false))
 
     :telemetry.execute(
       [:engram, :orphan_sweep, :result],
       %{
         qdrant_users_swept: qdrant_deleted,
         s3_prefixes_swept: s3_deleted,
-        qdrant_points_swept: points_deleted
+        qdrant_points_swept: points_deleted,
+        notes_flagged_for_reindex: notes_flagged
       },
       %{}
     )
@@ -86,11 +94,12 @@ defmodule Engram.Workers.OrphanSweep do
     Logger.info(
       "orphan_sweep complete",
       Metadata.with_category(:info, :oban,
-        total_count: qdrant_deleted + s3_deleted + points_deleted,
+        total_count: qdrant_deleted + s3_deleted + points_deleted + notes_flagged,
         result: %{
           qdrant_users_swept: qdrant_deleted,
           s3_prefixes_swept: s3_deleted,
-          qdrant_points_swept: points_deleted
+          qdrant_points_swept: points_deleted,
+          notes_flagged_for_reindex: notes_flagged
         }
       )
     )
@@ -295,6 +304,272 @@ defmodule Engram.Workers.OrphanSweep do
     end)
   end
 
+  # -- Missing points (the Postgres->Qdrant direction) ----------------------
+
+  # #1576. `sweep_point_orphans/0` above answers "does a chunk row still name
+  # this point?". This answers the opposite, and nothing else in the system
+  # does: "does Qdrant still hold the point this chunk row names?".
+  #
+  # It has to be asked because `ReconcileEmbeddings` decides a note is indexed
+  # by comparing `embed_hash` to `content_hash` — two Postgres columns. A
+  # Postgres restore rolls the data and that bookkeeping back together, so they
+  # stay mutually consistent while Qdrant does not: every note re-indexed after
+  # the restore point has vectors under ids that were minted later and deleted
+  # when the rows were, and it still reads as freshly indexed. Silently
+  # unsearchable, forever, with no self-heal.
+  #
+  # Nulling the index hashes is the whole repair. `ReconcileEmbeddings` rebuilds
+  # from there on its next tick, with its own entitlement and poison-cooldown
+  # checks intact — this worker deliberately owns no rebuild path of its own.
+  defp sweep_missing_points(opts) do
+    case scan_chunk_pages(nil, [], 0) do
+      {:ok, [], scanned} ->
+        Logger.info(
+          "orphan_sweep probed chunk points",
+          Metadata.with_category(:info, :oban, total_count: scanned, result: %{missing: 0})
+        )
+
+        0
+
+      {:ok, candidates, scanned} ->
+        Logger.info(
+          "orphan_sweep probed chunk points",
+          Metadata.with_category(:info, :oban,
+            total_count: scanned,
+            result: %{missing: length(candidates)}
+          )
+        )
+
+        confirm_and_flag(candidates, scanned, opts)
+
+      {:error, reason} ->
+        # A Qdrant failure must never read as "every point is gone". Bailing
+        # keeps the ratio guard below from being the only thing between a
+        # transient outage and a corpus-wide re-embed.
+        Logger.error(
+          "orphan_sweep chunk-point probe failed",
+          Metadata.with_category(:error, :oban, reason: Metadata.safe_reason(reason))
+        )
+
+        0
+    end
+  end
+
+  # Keyset paging on `chunks.id`, probing Qdrant once per page. Memory is flat
+  # in the table size: one page of ids plus the (near-empty) candidate list.
+  #
+  # Order matters and is the mirror of the forward pass. Read Postgres FIRST,
+  # probe Qdrant second: `Indexing.commit_index/1` inserts chunk rows and THEN
+  # upserts points, so probing after the read gives the points the longer
+  # window to appear. The other order races outright.
+  defp scan_chunk_pages(after_id, candidates, scanned) do
+    if length(candidates) >= max_missing_candidates() do
+      # Same bound the forward pass keeps, for the same reason: the runaway
+      # check can only run once the walk is done, so without a cap an empty or
+      # repointed collection makes the worker hold a tuple per chunk row for
+      # the entire table before it decides to abort. Not silent — a truncated
+      # run that reads as a clean one is worse than a loud partial one.
+      Logger.warning(
+        "orphan_sweep missing-point candidate cap reached; deferring the rest to the next tick",
+        Metadata.with_category(:warning, :oban, total_count: length(candidates))
+      )
+
+      {:ok, candidates, scanned}
+    else
+      do_scan_chunk_page(after_id, candidates, scanned)
+    end
+  end
+
+  defp do_scan_chunk_page(after_id, candidates, scanned) do
+    case chunk_page(after_id) do
+      [] ->
+        {:ok, candidates, scanned}
+
+      rows ->
+        case qdrant_points_present(Enum.map(rows, fn {_id, _note_id, pid} -> pid end)) do
+          {:ok, present} ->
+            missing =
+              for {_id, note_id, pid} <- rows,
+                  not MapSet.member?(present, pid),
+                  do: {note_id, pid}
+
+            {last_id, _note_id, _pid} = List.last(rows)
+
+            # Prepended, not appended: `candidates ++ missing` re-copies the
+            # accumulator once per page, which is O(n^2) over a walk that only
+            # gets long in the runaway case this is trying to survive. Order
+            # carries no meaning here.
+            scan_chunk_pages(last_id, missing ++ candidates, scanned + length(rows))
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+    end
+  end
+
+  defp confirm_and_flag(candidates, scanned, opts) do
+    forced = Keyword.get(opts, :force, false)
+
+    if not forced and runaway?(MapSet.new(candidates), scanned) do
+      # Same reasoning as the forward pass, pointed the other way and with a
+      # bigger bill attached: if Qdrant is unreachable, empty, or repointed at
+      # the wrong collection, EVERY chunk looks stranded. Acting on that nulls
+      # the whole corpus and re-bills Voyage to rebuild it. A ratio this high
+      # means the premise is broken, not the data.
+      Logger.error(
+        "orphan_sweep aborting: missing-point ratio implies a bad authority, not drift. " <>
+          "If Qdrant is healthy and this follows a Postgres restore, the divergence is real — " <>
+          "re-enqueue with %{\"force\" => true}",
+        Metadata.with_category(:error, :oban,
+          total_count: length(candidates),
+          result: %{scanned: scanned, max_ratio: @max_candidate_ratio}
+        )
+      )
+
+      0
+    else
+      # Second look after a grace window, for the write-order race described on
+      # `scan_chunk_pages/3`: a note indexing right now legitimately has rows
+      # naming points that land moments later.
+      grace()
+
+      still_missing =
+        case qdrant_points_present(Enum.map(candidates, fn {_note_id, pid} -> pid end)) do
+          {:ok, present} ->
+            # Re-read Postgres too, not just Qdrant. `commit_index/1` deletes
+            # the old points BEFORE the old chunk rows, so a note re-indexed
+            # between the scan and here leaves a scanned row whose point is
+            # genuinely gone AND whose row is gone — re-asking Qdrant alone
+            # confirms "missing" and bills a full re-embed of a note that is
+            # correctly indexed. A row that no longer exists proves nothing.
+            live_rows = chunk_point_ids(Enum.map(candidates, fn {_note_id, pid} -> pid end))
+
+            Enum.reject(candidates, fn {_note_id, pid} ->
+              MapSet.member?(present, pid) or not MapSet.member?(live_rows, pid)
+            end)
+
+          {:error, reason} ->
+            # Same rule as the first probe: a failed question is not a "yes".
+            # Logged rather than swallowed, or a Qdrant that fails only on the
+            # confirm pass looks exactly like a clean sweep.
+            Logger.error(
+              "orphan_sweep confirm probe failed; flagging nothing this tick",
+              Metadata.with_category(:error, :oban, reason: Metadata.safe_reason(reason))
+            )
+
+            []
+        end
+
+      flag_notes_for_reindex(Enum.map(still_missing, fn {note_id, _pid} -> note_id end))
+    end
+  end
+
+  defp flag_notes_for_reindex([]), do: 0
+
+  defp flag_notes_for_reindex(note_ids) do
+    # Chunked against Postgres' 65,535 bind-parameter cap, same as
+    # `chunk_point_ids/1`. Candidates are bounded only by the ratio guard, and
+    # an unchunked `in ^ids` raises out of a `max_attempts: 1` worker — killing
+    # the run before its completion log, daily, with nothing flagged.
+    count =
+      note_ids
+      |> Enum.uniq()
+      |> Enum.chunk_every(@id_query_batch)
+      |> Enum.reduce(0, fn batch, acc ->
+        {n, _} =
+          Note
+          |> where([n], n.id in ^batch)
+          |> Repo.update_all(
+            [set: [embed_hash: nil, dense_indexed_hash: nil]],
+            skip_tenant_check: true
+          )
+
+        acc + n
+      end)
+
+    Logger.warning(
+      "orphan_sweep flagged notes for re-index: Qdrant is missing their points",
+      Metadata.with_category(:warning, :oban, total_count: count)
+    )
+
+    count
+  end
+
+  # Live notes in live vaults only. A soft-deleted note's points are removed on
+  # delete, so its rows would read as stranded and get flagged for a rebuild
+  # that then has nothing to rebuild.
+  #
+  # The VAULT check is load-bearing for a different reason: `ReconcileEmbeddings`
+  # joins vaults on `is_nil(deleted_at)`, so a note in a soft-deleted vault can
+  # never be rebuilt. Flagging one means re-nulling and re-warning on every tick
+  # forever, while inflating the runaway ratio — and `CleanupVault` purges
+  # Qdrant points BEFORE its DB transaction, so a restore leaves exactly this
+  # shape: live rows in a soft-deleted vault whose points are already gone.
+  #
+  # skip_tenant_check: cross-tenant by design, same as `chunk_point_ids/1` —
+  # RLS would hide exactly the rows this reconciliation exists to check.
+  defp chunk_page(after_id) do
+    Chunk
+    |> join(:inner, [c], n in Note, on: n.id == c.note_id)
+    |> join(:inner, [c, n], v in Vault, on: v.id == n.vault_id)
+    |> where([c, n, v], is_nil(n.deleted_at) and is_nil(v.deleted_at))
+    |> where([c], not is_nil(c.qdrant_point_id))
+    |> then(fn q -> if after_id, do: where(q, [c], c.id > ^after_id), else: q end)
+    |> order_by([c], asc: c.id)
+    |> limit(^chunk_probe_batch())
+    |> select([c], {c.id, c.note_id, c.qdrant_point_id})
+    |> Repo.all(skip_tenant_check: true)
+  end
+
+  # Which of these ids does Qdrant actually hold? `has_id` against the existing
+  # scroll endpoint — no new client call.
+  #
+  # Batched even though the scan already pages, because the confirm pass hands
+  # in the whole candidate list at once. `has_id` carries every id in the
+  # REQUEST body, so an unbounded call is a multi-megabyte POST, and the answer
+  # is used to decide whether to null hashes — a truncated response reads as
+  # "these ids are missing" and re-embeds notes whose points are fine.
+  defp qdrant_points_present([]), do: {:ok, MapSet.new()}
+
+  defp qdrant_points_present(point_ids) do
+    point_ids
+    |> Enum.uniq()
+    |> Enum.chunk_every(chunk_probe_batch())
+    |> Enum.reduce_while({:ok, MapSet.new()}, fn batch, {:ok, acc} ->
+      case scroll_ids(batch, nil, MapSet.new()) do
+        {:ok, found} -> {:cont, {:ok, MapSet.union(acc, found)}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  # Follows `next_page_offset` rather than trusting one response to carry every
+  # match, the same way `scan_pages/3` does. A `limit` is not a guarantee.
+  defp scroll_ids(batch, offset, acc) do
+    opts = [
+      filter: %{must: [%{has_id: batch}]},
+      limit: length(batch),
+      with_payload: false,
+      with_vector: false
+    ]
+
+    opts = if offset, do: Keyword.put(opts, :offset, offset), else: opts
+
+    case Qdrant.scroll(opts) do
+      {:ok, %{points: points, next_page_offset: next}} ->
+        acc =
+          points
+          |> Enum.map(& &1["id"])
+          |> Enum.filter(&is_binary/1)
+          |> Enum.into(acc)
+
+        if next, do: scroll_ids(batch, next, acc), else: {:ok, acc}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   defp grace do
     case Application.get_env(:engram, :orphan_sweep_point_grace_fun) do
       fun when is_function(fun, 0) -> fun.()
@@ -304,6 +579,15 @@ defmodule Engram.Workers.OrphanSweep do
 
   defp grace_seconds,
     do: Application.get_env(:engram, :orphan_sweep_point_grace_seconds, 60)
+
+  # Overridable for the same reason `grace_seconds/0` is: the paging behaviour
+  # is only observable across more than one page, and seeding 2,048 chunk rows
+  # to prove a cursor advances is a worse test, not a better one.
+  defp chunk_probe_batch,
+    do: Application.get_env(:engram, :orphan_sweep_chunk_probe_batch, @chunk_probe_batch)
+
+  defp max_missing_candidates,
+    do: Application.get_env(:engram, :orphan_sweep_max_missing_candidates, @max_candidates)
 
   defp live_user_ids do
     # Includes soft-deleted users (deleted_at IS NOT NULL but row exists) —
