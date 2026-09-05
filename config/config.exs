@@ -157,9 +157,17 @@ config :engram, Oban,
        # Daily expired-export sweep (#859) — deletes S3 archive blobs past
        # the 7-day download window and flips rows to :expired.
        {"20 5 * * *", Engram.Workers.ExportExpirySweep},
-       # Cross-store orphan sweep — weekly safety net for failed
-       # event-driven Qdrant/S3 deletes. Sun 05:00 UTC, off-peak.
-       {"0 5 * * 0", Engram.Workers.OrphanSweep}
+       # Cross-store reconciliation, 05:00 UTC daily, off-peak. Was weekly when
+       # it only reaped orphans — capacity waste, not wrong answers. It now also
+       # carries the Postgres->Qdrant direction (#1576), which IS correctness: a
+       # note whose points are gone is silently unsearchable and self-heals via
+       # nothing. A week of that is not an acceptable detection window.
+       #
+       # Affordable daily because a pass is O(collection) and the collection is
+       # small. Revisit around 1M points, where a full walk starts costing real
+       # minutes — that is when the walk wants a resumable cursor rather than a
+       # lower frequency.
+       {"0 5 * * *", Engram.Workers.OrphanSweep}
      ]}
   ]
 

@@ -81,7 +81,11 @@ This is acceptable **only because vectors are derived data** — Postgres is gro
    Same shape the billing downgrade path already uses (`Engram.Billing` → `IndexCap.revoke_dense_index/1`), so this is a proven mechanism, not a new one.
 3. **Wait.** `Engram.Workers.ReconcileEmbeddings` runs on the `*/15 * * * *` Oban cron and enqueues at most `@batch_size = 500` `EmbedNote` jobs per tick.
 
-**RTO for a full rebuild ≈ 38 hours** at current volume: 76,352 notes ÷ 500 per tick × 15 min. Search is degraded (keyword-only) for that whole window; note reads and writes are unaffected throughout. To go faster, invoke `ReconcileEmbeddings.perform/1` in a loop from a remote console rather than waiting on cron ticks — the per-tick cap is the binding constraint, not embed throughput. Re-embedding 76k notes re-bills Voyage for the full corpus; budget for it before starting.
+**RTO for a full rebuild ≈ 1 hour** at current volume: ~1,574 live notes ÷ 500 per tick × 15 min ≈ 4 ticks. Search is degraded (keyword-only) for that window; note reads and writes are unaffected throughout. To go faster, invoke `ReconcileEmbeddings.perform/1` in a loop from a remote console — the per-tick cap is the binding constraint, not embed throughput. A full rebuild re-bills Voyage for the whole corpus; budget for it before starting.
+
+> The batch is **notes per tick, not chunks**. An earlier revision of this doc read the Qdrant point count (76,352, taken before an unrelated purge of 8 test vaults) as a note count and put the RTO at 38 hours. Measured 2026-09-05: ~10,400 chunk rows over ~1,574 live notes, about 7 chunks per note. Re-derive from `select count(*) from notes where kind = 'note' and deleted_at is null` rather than from the collection size.
+
+**This whole procedure is for TOTAL collection loss only.** For partial divergence — the far likelier case, and what a Postgres restore produces — do not null every hash. `Engram.Workers.OrphanSweep` reconciles both directions against Qdrant's real point ids on its 05:00 UTC daily tick and flags only the notes that actually lost their points (#1576). Enqueue it on demand instead of waiting.
 
 ## DR scenarios
 
@@ -90,6 +94,10 @@ Each is one paragraph and links out to the canonical runbook. Don't restate rota
 **AWS region down (us-east-1).** Single-region at launch — there is no failover. Wait for AWS recovery; post status to the public status page (#252) and hold. Multi-region failover is deliberately out of scope until traffic/SLO justify it.
 
 **RDS Postgres data loss / corruption.** Restore from automated snapshot, or point-in-time to any moment within the 7-day window (RPO ≈ 4 min), to a new instance; then cut the app over by repointing `DATABASE_URL`. Drilled 2026-09-05: **7 min 34 s to a usable instance, schema byte-identical** — actuals and the gotchas that cost time are in the RDS section above. Restore from `engram-breakglass`; the operator identity is not authorized.
+
+**A Postgres restore is not finished until Qdrant is reconciled.** Restoring rolls back the note data *and* the `embed_hash`/`dense_indexed_hash` bookkeeping about what was sent to Qdrant, together — so they stay mutually consistent while Qdrant does not. Every note re-indexed between the restore point and the failure has vectors under ids that no longer exist, and still reads as freshly indexed. Left alone those notes are silently unsearchable forever; `ReconcileEmbeddings` never notices, because it only ever compares two Postgres columns.
+
+Enqueue `Engram.Workers.OrphanSweep` immediately after the cutover rather than waiting for its 05:00 UTC tick (#1576). It reconciles both directions against Qdrant's real point ids: strays get deleted, and notes whose points are gone get their index hashes nulled so `ReconcileEmbeddings` rebuilds exactly those. **Do not blind-rebuild the whole corpus for this** — the sweep identifies the diverged set, so recovery is proportional to the damage window (minutes of writes at a ~4 min RPO), not 76k notes. Watch for `orphan_sweep aborting: missing-point ratio implies a bad authority` in the logs: that means Qdrant is unreachable or repointed, and nothing was flagged. Fix Qdrant, then re-run.
 
 **S3 attachment loss / accidental delete.** Versioning is on — remove the delete marker (or restore the prior version) for the affected key; proven above. Bulk loss: re-list versions and restore. Recoverable for 30 days only; no cross-region replication at launch.
 
