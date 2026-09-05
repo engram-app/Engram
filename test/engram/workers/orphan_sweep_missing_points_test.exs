@@ -244,9 +244,7 @@ defmodule Engram.Workers.OrphanSweepMissingPointsTest do
   end
 
   test "probes every page when the chunk table exceeds one batch", %{bypass: bypass} do
-    prior = Application.get_env(:engram, :orphan_sweep_chunk_probe_batch)
-    Application.put_env(:engram, :orphan_sweep_chunk_probe_batch, 2)
-    on_exit(fn -> Application.put_env(:engram, :orphan_sweep_chunk_probe_batch, prior) end)
+    put_batch(2)
 
     user = insert(:user)
     vault = insert(:vault, user: user)
@@ -270,6 +268,116 @@ defmodule Engram.Workers.OrphanSweepMissingPointsTest do
 
     assert is_nil(reload(last).embed_hash)
     for {note, _} <- kept, do: assert(reload(note).embed_hash == "cafe")
+  end
+
+  # `Application.get_env/3` returns nil for an explicitly-nil key rather than
+  # falling back to the default, so restoring an absent key with put_env leaves
+  # the batch size nil for the rest of the VM — `LIMIT NULL`, whole-table read,
+  # silently, in every later test. Delete it instead.
+  defp put_batch(size) do
+    prior = Application.get_env(:engram, :orphan_sweep_chunk_probe_batch)
+    Application.put_env(:engram, :orphan_sweep_chunk_probe_batch, size)
+
+    on_exit(fn ->
+      case prior do
+        nil -> Application.delete_env(:engram, :orphan_sweep_chunk_probe_batch)
+        val -> Application.put_env(:engram, :orphan_sweep_chunk_probe_batch, val)
+      end
+    end)
+  end
+
+  defp put_max_candidates(max) do
+    prior = Application.get_env(:engram, :orphan_sweep_max_missing_candidates)
+    Application.put_env(:engram, :orphan_sweep_max_missing_candidates, max)
+
+    on_exit(fn ->
+      case prior do
+        nil -> Application.delete_env(:engram, :orphan_sweep_max_missing_candidates)
+        val -> Application.put_env(:engram, :orphan_sweep_max_missing_candidates, val)
+      end
+    end)
+  end
+
+  defp note_with_missing_point(user, vault) do
+    note = insert(:note, user: user, vault: vault, embed_hash: "cafe", content_hash: "cafe")
+    insert_chunk!(note, Ecto.UUID.generate())
+    note
+  end
+
+  test "a forced run repairs a restore even when most points look missing", %{bypass: bypass} do
+    user = insert(:user)
+    vault = insert(:vault, user: user)
+
+    # The ratio guard exists for an unreachable Qdrant, but a snapshot restore
+    # rolls back up to 24h of writes and trips the same threshold. Without an
+    # override the documented recovery silently never repairs anything.
+    notes = for _ <- 1..101, do: note_with_missing_point(user, vault)
+
+    stub_qdrant(bypass, [])
+
+    assert :ok = perform_job(OrphanSweep, %{"force" => true})
+
+    for note <- notes, do: assert(is_nil(reload(note).embed_hash))
+  end
+
+  test "ignores chunks belonging to a note in a soft-deleted vault", %{bypass: bypass} do
+    user = insert(:user)
+    vault = insert(:vault, user: user, deleted_at: DateTime.utc_now(:second))
+
+    # `ReconcileEmbeddings` joins vaults on `is_nil(deleted_at)`, so a note here
+    # can never be rebuilt. Flagging it means re-nulling and re-warning on every
+    # daily tick forever, and inflating the runaway ratio while doing it.
+    note = note_with_missing_point(user, vault)
+
+    stub_qdrant(bypass, [])
+
+    assert :ok = perform_job(OrphanSweep, %{})
+
+    assert reload(note).embed_hash == "cafe"
+  end
+
+  test "does not flag a note whose chunk row is replaced during the grace window", %{
+    bypass: bypass
+  } do
+    user = insert(:user)
+    vault = insert(:vault, user: user)
+    note = note_with_missing_point(user, vault)
+
+    stub_qdrant(bypass, [])
+
+    # `commit_index/1` deletes the old points BEFORE the old chunk rows, so a
+    # note re-indexed mid-sweep leaves a scanned row whose point is genuinely
+    # gone and whose row is gone too. Re-asking Qdrant alone confirms "missing"
+    # and bills a full re-embed of a correctly-indexed note.
+    prior = Application.get_env(:engram, :orphan_sweep_point_grace_fun)
+
+    Application.put_env(:engram, :orphan_sweep_point_grace_fun, fn ->
+      Repo.delete_all(Chunk, skip_tenant_check: true)
+    end)
+
+    on_exit(fn -> Application.put_env(:engram, :orphan_sweep_point_grace_fun, prior) end)
+
+    assert :ok = perform_job(OrphanSweep, %{})
+
+    assert reload(note).embed_hash == "cafe"
+  end
+
+  test "stops collecting candidates at the cap instead of holding the whole walk", %{
+    bypass: bypass
+  } do
+    put_batch(1)
+    put_max_candidates(2)
+
+    user = insert(:user)
+    vault = insert(:vault, user: user)
+    notes = for _ <- 1..5, do: note_with_missing_point(user, vault)
+
+    stub_qdrant(bypass, [])
+
+    assert :ok = perform_job(OrphanSweep, %{})
+
+    flagged = Enum.count(notes, &is_nil(reload(&1).embed_hash))
+    assert flagged == 2
   end
 
   defp stub_qdrant_agent(bypass, agent) do

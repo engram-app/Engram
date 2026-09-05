@@ -38,6 +38,7 @@ defmodule Engram.Workers.OrphanSweep do
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Storage
+  alias Engram.Vaults.Vault
   alias Engram.Vector.Qdrant
 
   require Logger
@@ -71,13 +72,13 @@ defmodule Engram.Workers.OrphanSweep do
   def timeout(_job), do: :timer.minutes(15)
 
   @impl Oban.Worker
-  def perform(%Oban.Job{}) do
+  def perform(%Oban.Job{args: args}) do
     live_ids = live_user_ids()
 
     qdrant_deleted = sweep_qdrant(live_ids)
     s3_deleted = sweep_s3(live_ids)
     points_deleted = sweep_point_orphans()
-    notes_flagged = sweep_missing_points()
+    notes_flagged = sweep_missing_points(force: Map.get(args, "force", false))
 
     :telemetry.execute(
       [:engram, :orphan_sweep, :result],
@@ -320,7 +321,7 @@ defmodule Engram.Workers.OrphanSweep do
   # Nulling the index hashes is the whole repair. `ReconcileEmbeddings` rebuilds
   # from there on its next tick, with its own entitlement and poison-cooldown
   # checks intact — this worker deliberately owns no rebuild path of its own.
-  defp sweep_missing_points do
+  defp sweep_missing_points(opts) do
     case scan_chunk_pages(nil, [], 0) do
       {:ok, [], scanned} ->
         Logger.info(
@@ -339,7 +340,7 @@ defmodule Engram.Workers.OrphanSweep do
           )
         )
 
-        confirm_and_flag(candidates, scanned)
+        confirm_and_flag(candidates, scanned, opts)
 
       {:error, reason} ->
         # A Qdrant failure must never read as "every point is gone". Bailing
@@ -362,6 +363,24 @@ defmodule Engram.Workers.OrphanSweep do
   # upserts points, so probing after the read gives the points the longer
   # window to appear. The other order races outright.
   defp scan_chunk_pages(after_id, candidates, scanned) do
+    if length(candidates) >= max_missing_candidates() do
+      # Same bound the forward pass keeps, for the same reason: the runaway
+      # check can only run once the walk is done, so without a cap an empty or
+      # repointed collection makes the worker hold a tuple per chunk row for
+      # the entire table before it decides to abort. Not silent — a truncated
+      # run that reads as a clean one is worse than a loud partial one.
+      Logger.warning(
+        "orphan_sweep missing-point candidate cap reached; deferring the rest to the next tick",
+        Metadata.with_category(:warning, :oban, total_count: length(candidates))
+      )
+
+      {:ok, candidates, scanned}
+    else
+      do_scan_chunk_page(after_id, candidates, scanned)
+    end
+  end
+
+  defp do_scan_chunk_page(after_id, candidates, scanned) do
     case chunk_page(after_id) do
       [] ->
         {:ok, candidates, scanned}
@@ -376,7 +395,11 @@ defmodule Engram.Workers.OrphanSweep do
 
             {last_id, _note_id, _pid} = List.last(rows)
 
-            scan_chunk_pages(last_id, candidates ++ missing, scanned + length(rows))
+            # Prepended, not appended: `candidates ++ missing` re-copies the
+            # accumulator once per page, which is O(n^2) over a walk that only
+            # gets long in the runaway case this is trying to survive. Order
+            # carries no meaning here.
+            scan_chunk_pages(last_id, missing ++ candidates, scanned + length(rows))
 
           {:error, reason} ->
             {:error, reason}
@@ -384,15 +407,19 @@ defmodule Engram.Workers.OrphanSweep do
     end
   end
 
-  defp confirm_and_flag(candidates, scanned) do
-    if runaway?(MapSet.new(candidates), scanned) do
+  defp confirm_and_flag(candidates, scanned, opts) do
+    forced = Keyword.get(opts, :force, false)
+
+    if not forced and runaway?(MapSet.new(candidates), scanned) do
       # Same reasoning as the forward pass, pointed the other way and with a
       # bigger bill attached: if Qdrant is unreachable, empty, or repointed at
       # the wrong collection, EVERY chunk looks stranded. Acting on that nulls
       # the whole corpus and re-bills Voyage to rebuild it. A ratio this high
       # means the premise is broken, not the data.
       Logger.error(
-        "orphan_sweep aborting: missing-point ratio implies a bad authority, not drift",
+        "orphan_sweep aborting: missing-point ratio implies a bad authority, not drift. " <>
+          "If Qdrant is healthy and this follows a Postgres restore, the divergence is real — " <>
+          "re-enqueue with %{\"force\" => true}",
         Metadata.with_category(:error, :oban,
           total_count: length(candidates),
           result: %{scanned: scanned, max_ratio: @max_candidate_ratio}
@@ -409,7 +436,17 @@ defmodule Engram.Workers.OrphanSweep do
       still_missing =
         case qdrant_points_present(Enum.map(candidates, fn {_note_id, pid} -> pid end)) do
           {:ok, present} ->
-            Enum.reject(candidates, fn {_note_id, pid} -> MapSet.member?(present, pid) end)
+            # Re-read Postgres too, not just Qdrant. `commit_index/1` deletes
+            # the old points BEFORE the old chunk rows, so a note re-indexed
+            # between the scan and here leaves a scanned row whose point is
+            # genuinely gone AND whose row is gone — re-asking Qdrant alone
+            # confirms "missing" and bills a full re-embed of a note that is
+            # correctly indexed. A row that no longer exists proves nothing.
+            live_rows = chunk_point_ids(Enum.map(candidates, fn {_note_id, pid} -> pid end))
+
+            Enum.reject(candidates, fn {_note_id, pid} ->
+              MapSet.member?(present, pid) or not MapSet.member?(live_rows, pid)
+            end)
 
           {:error, reason} ->
             # Same rule as the first probe: a failed question is not a "yes".
@@ -430,15 +467,25 @@ defmodule Engram.Workers.OrphanSweep do
   defp flag_notes_for_reindex([]), do: 0
 
   defp flag_notes_for_reindex(note_ids) do
-    ids = Enum.uniq(note_ids)
+    # Chunked against Postgres' 65,535 bind-parameter cap, same as
+    # `chunk_point_ids/1`. Candidates are bounded only by the ratio guard, and
+    # an unchunked `in ^ids` raises out of a `max_attempts: 1` worker — killing
+    # the run before its completion log, daily, with nothing flagged.
+    count =
+      note_ids
+      |> Enum.uniq()
+      |> Enum.chunk_every(@id_query_batch)
+      |> Enum.reduce(0, fn batch, acc ->
+        {n, _} =
+          Note
+          |> where([n], n.id in ^batch)
+          |> Repo.update_all(
+            [set: [embed_hash: nil, dense_indexed_hash: nil]],
+            skip_tenant_check: true
+          )
 
-    {count, _} =
-      Note
-      |> where([n], n.id in ^ids)
-      |> Repo.update_all(
-        [set: [embed_hash: nil, dense_indexed_hash: nil]],
-        skip_tenant_check: true
-      )
+        acc + n
+      end)
 
     Logger.warning(
       "orphan_sweep flagged notes for re-index: Qdrant is missing their points",
@@ -448,16 +495,25 @@ defmodule Engram.Workers.OrphanSweep do
     count
   end
 
-  # Live notes only. A soft-deleted note's points are removed on delete, so its
-  # rows would read as stranded and get flagged for a rebuild that then has
-  # nothing to rebuild.
+  # Live notes in live vaults only. A soft-deleted note's points are removed on
+  # delete, so its rows would read as stranded and get flagged for a rebuild
+  # that then has nothing to rebuild.
+  #
+  # The VAULT check is load-bearing for a different reason: `ReconcileEmbeddings`
+  # joins vaults on `is_nil(deleted_at)`, so a note in a soft-deleted vault can
+  # never be rebuilt. Flagging one means re-nulling and re-warning on every tick
+  # forever, while inflating the runaway ratio — and `CleanupVault` purges
+  # Qdrant points BEFORE its DB transaction, so a restore leaves exactly this
+  # shape: live rows in a soft-deleted vault whose points are already gone.
   #
   # skip_tenant_check: cross-tenant by design, same as `chunk_point_ids/1` —
   # RLS would hide exactly the rows this reconciliation exists to check.
   defp chunk_page(after_id) do
     Chunk
     |> join(:inner, [c], n in Note, on: n.id == c.note_id)
-    |> where([c, n], is_nil(n.deleted_at) and not is_nil(c.qdrant_point_id))
+    |> join(:inner, [c, n], v in Vault, on: v.id == n.vault_id)
+    |> where([c, n, v], is_nil(n.deleted_at) and is_nil(v.deleted_at))
+    |> where([c], not is_nil(c.qdrant_point_id))
     |> then(fn q -> if after_id, do: where(q, [c], c.id > ^after_id), else: q end)
     |> order_by([c], asc: c.id)
     |> limit(^chunk_probe_batch())
@@ -466,21 +522,48 @@ defmodule Engram.Workers.OrphanSweep do
   end
 
   # Which of these ids does Qdrant actually hold? `has_id` against the existing
-  # scroll endpoint — no new client call, and `limit` equal to the batch means
-  # one round trip per page.
+  # scroll endpoint — no new client call.
+  #
+  # Batched even though the scan already pages, because the confirm pass hands
+  # in the whole candidate list at once. `has_id` carries every id in the
+  # REQUEST body, so an unbounded call is a multi-megabyte POST, and the answer
+  # is used to decide whether to null hashes — a truncated response reads as
+  # "these ids are missing" and re-embeds notes whose points are fine.
   defp qdrant_points_present([]), do: {:ok, MapSet.new()}
 
   defp qdrant_points_present(point_ids) do
-    ids = Enum.uniq(point_ids)
+    point_ids
+    |> Enum.uniq()
+    |> Enum.chunk_every(chunk_probe_batch())
+    |> Enum.reduce_while({:ok, MapSet.new()}, fn batch, {:ok, acc} ->
+      case scroll_ids(batch, nil, MapSet.new()) do
+        {:ok, found} -> {:cont, {:ok, MapSet.union(acc, found)}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
 
-    case Qdrant.scroll(
-           filter: %{must: [%{has_id: ids}]},
-           limit: length(ids),
-           with_payload: false,
-           with_vector: false
-         ) do
-      {:ok, %{points: points}} ->
-        {:ok, points |> Enum.map(& &1["id"]) |> Enum.filter(&is_binary/1) |> MapSet.new()}
+  # Follows `next_page_offset` rather than trusting one response to carry every
+  # match, the same way `scan_pages/3` does. A `limit` is not a guarantee.
+  defp scroll_ids(batch, offset, acc) do
+    opts = [
+      filter: %{must: [%{has_id: batch}]},
+      limit: length(batch),
+      with_payload: false,
+      with_vector: false
+    ]
+
+    opts = if offset, do: Keyword.put(opts, :offset, offset), else: opts
+
+    case Qdrant.scroll(opts) do
+      {:ok, %{points: points, next_page_offset: next}} ->
+        acc =
+          points
+          |> Enum.map(& &1["id"])
+          |> Enum.filter(&is_binary/1)
+          |> Enum.into(acc)
+
+        if next, do: scroll_ids(batch, next, acc), else: {:ok, acc}
 
       {:error, reason} ->
         {:error, reason}
@@ -502,6 +585,9 @@ defmodule Engram.Workers.OrphanSweep do
   # to prove a cursor advances is a worse test, not a better one.
   defp chunk_probe_batch,
     do: Application.get_env(:engram, :orphan_sweep_chunk_probe_batch, @chunk_probe_batch)
+
+  defp max_missing_candidates,
+    do: Application.get_env(:engram, :orphan_sweep_max_missing_candidates, @max_candidates)
 
   defp live_user_ids do
     # Includes soft-deleted users (deleted_at IS NOT NULL but row exists) —

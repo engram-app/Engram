@@ -97,7 +97,19 @@ Each is one paragraph and links out to the canonical runbook. Don't restate rota
 
 **A Postgres restore is not finished until Qdrant is reconciled.** Restoring rolls back the note data *and* the `embed_hash`/`dense_indexed_hash` bookkeeping about what was sent to Qdrant, together — so they stay mutually consistent while Qdrant does not. Every note re-indexed between the restore point and the failure has vectors under ids that no longer exist, and still reads as freshly indexed. Left alone those notes are silently unsearchable forever; `ReconcileEmbeddings` never notices, because it only ever compares two Postgres columns.
 
-Enqueue `Engram.Workers.OrphanSweep` immediately after the cutover rather than waiting for its 05:00 UTC tick (#1576). It reconciles both directions against Qdrant's real point ids: strays get deleted, and notes whose points are gone get their index hashes nulled so `ReconcileEmbeddings` rebuilds exactly those. **Do not blind-rebuild the whole corpus for this** — the sweep identifies the diverged set, so recovery is proportional to the damage window (minutes of writes at a ~4 min RPO), not 76k notes. Watch for `orphan_sweep aborting: missing-point ratio implies a bad authority` in the logs: that means Qdrant is unreachable or repointed, and nothing was flagged. Fix Qdrant, then re-run.
+Enqueue `Engram.Workers.OrphanSweep` immediately after the cutover rather than waiting for its 05:00 UTC tick (#1576). It reconciles both directions against Qdrant's real point ids: strays get deleted, and notes whose points are gone get their index hashes nulled so `ReconcileEmbeddings` rebuilds exactly those. **Do not blind-rebuild the whole corpus for this** — the sweep identifies the diverged set, so recovery is proportional to the damage window, not the whole note count.
+
+```elixir
+Oban.insert!(Engram.Workers.OrphanSweep.new(%{}))
+```
+
+**If the log says `orphan_sweep aborting: missing-point ratio implies a bad authority`, read it carefully — after a restore it is probably wrong.** The sweep refuses to act when more than 10% of chunks look stranded, because that shape normally means Qdrant is unreachable or repointed rather than that the data drifted. A restore is the one case where a large real divergence is expected: a PITR restore at a ~4 min RPO stays well under the threshold, but a **snapshot** restore rolls back up to 24 h of writes and can legitimately cross it. Confirm Qdrant is healthy and reachable first, then re-enqueue with the override:
+
+```elixir
+Oban.insert!(Engram.Workers.OrphanSweep.new(%{"force" => true}))
+```
+
+Without that flag, the sweep aborts every tick and the notes are never repaired — silently, since an aborted pass flags nothing and otherwise looks like a clean one.
 
 **S3 attachment loss / accidental delete.** Versioning is on — remove the delete marker (or restore the prior version) for the affected key; proven above. Bulk loss: re-list versions and restore. Recoverable for 30 days only; no cross-region replication at launch.
 
