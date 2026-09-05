@@ -67,38 +67,17 @@ defmodule EngramWeb.SpaControllerTest do
     assert body =~ ~s("bootstrap":null)
   end
 
-  test "GET / injects clerkWaitlistMode=false by default", %{conn: conn} do
-    prev = Application.get_env(:engram, :clerk_waitlist_mode)
-    Application.delete_env(:engram, :clerk_waitlist_mode)
-    on_exit(fn -> Application.put_env(:engram, :clerk_waitlist_mode, prev) end)
-
-    body = conn |> get("/") |> response(200)
-    assert body =~ ~s("clerkWaitlistMode":false)
-  end
-
-  test "GET / injects clerkWaitlistMode=true when configured", %{conn: conn} do
-    prev = Application.get_env(:engram, :clerk_waitlist_mode)
-    Application.put_env(:engram, :clerk_waitlist_mode, true)
-    on_exit(fn -> Application.put_env(:engram, :clerk_waitlist_mode, prev) end)
-
-    body = conn |> get("/") |> response(200)
-    assert body =~ ~s("clerkWaitlistMode":true)
+  test "GET / no longer injects clerkWaitlistMode" do
+    # The waitlist flow is gone: sign-up is open. A stale key here would let
+    # the SPA keep branching on a flag nothing sets.
+    conn = build_conn() |> get("/")
+    refute response(conn, 200) =~ "clerkWaitlistMode"
   end
 
   test "GET /oauth/consent renders SPA (consent UI route)", %{conn: conn} do
     conn = get(conn, "/oauth/consent")
     assert conn.status == 200
     assert response(conn, 200) =~ "<!DOCTYPE html>"
-  end
-
-  test "GET /waitlist renders SPA (Clerk waitlist UI route)", %{conn: conn} do
-    # /waitlist is reachable from outside the app (Clerk waitlist invitation
-    # emails, marketing CTAs, bookmarks). The router uses an explicit SPA
-    # whitelist, so /waitlist must be listed or external links 404.
-    conn = get(conn, "/waitlist")
-    assert conn.status == 200
-    assert response(conn, 200) =~ "<!DOCTYPE html>"
-    assert response(conn, 200) =~ "<div id=\"root\">"
   end
 
   test "SPA responses include x-frame-options: DENY (clickjacking guard)", %{conn: conn} do

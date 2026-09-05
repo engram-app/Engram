@@ -33,7 +33,6 @@ function normalize(raw: Record<string, unknown>): EngramConfig {
 		authProvider: provider,
 		clerkPublishableKey: typeof raw.clerkPublishableKey === "string" ? raw.clerkPublishableKey : "",
 		billingEnabled: raw.billingEnabled === true,
-		clerkWaitlistMode: raw.clerkWaitlistMode === true,
 		apiBase: typeof raw.apiBase === "string" ? raw.apiBase : "",
 		wsBase: typeof raw.wsBase === "string" ? raw.wsBase : "",
 		tracingEnabled: raw.tracingEnabled === true,
@@ -48,7 +47,6 @@ function defaultConfig(): EngramConfig {
 			: "local",
 		clerkPublishableKey: import.meta.env.VITE_CLERK_PUBLISHABLE_KEY ?? "",
 		billingEnabled: import.meta.env.VITE_BILLING_ENABLED === "true",
-		clerkWaitlistMode: import.meta.env.VITE_CLERK_WAITLIST_MODE === "true",
 		apiBase: import.meta.env.VITE_API_BASE ?? "",
 		wsBase: import.meta.env.VITE_WS_BASE ?? "",
 		tracingEnabled: import.meta.env.VITE_TRACING_ENABLED === "true",
@@ -59,10 +57,6 @@ export interface EngramConfig {
 	authProvider: "local" | "clerk";
 	clerkPublishableKey: string;
 	billingEnabled: boolean;
-	// Mirrors Clerk Dashboard "Waitlist" sign-up mode. UI flips "Sign up"
-	// CTAs to /waitlist and passes waitlistUrl to <SignIn />. The dashboard
-	// flag is the actual enforcement; this is presentational only.
-	clerkWaitlistMode: boolean;
 	// Runtime API base URL. Empty string = same-origin (selfhost, Phoenix
 	// serves both API and SPA). A full URL = saas (CF Pages serves SPA,
 	// backend hosted elsewhere — e.g. https://api.engram.page).

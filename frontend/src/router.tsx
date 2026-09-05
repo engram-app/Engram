@@ -4,7 +4,6 @@ import AuthGuard from "./auth/auth-guard";
 import CatchAllRoute from "./auth/catch-all-route";
 import SignInPage from "./auth/sign-in";
 import SignUpPage from "./auth/sign-up";
-import WaitlistPage from "./auth/waitlist";
 import { UpgradeDialogProvider } from "./billing/upgrade-dialog-provider";
 import type { EngramConfig } from "./config";
 import LoadingScreen from "./layout/loading-screen";
@@ -137,7 +136,6 @@ export function createAppRouter(_config: EngramConfig): AppRouter {
 				// Public routes
 				{ path: ROUTES.SIGN_IN, element: <SignInPage /> },
 				{ path: ROUTES.SIGN_UP, element: <SignUpPage /> },
-				{ path: ROUTES.WAITLIST, element: <WaitlistPage /> },
 				// Public reset — the one-time token IS the credential.
 				{ path: ROUTES.RESET_PASSWORD, element: suspended(<ResetPasswordPage />) },
 				// Dev-only connector QC gallery — spreads into nothing in production.

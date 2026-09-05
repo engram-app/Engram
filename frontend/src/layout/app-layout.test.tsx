@@ -13,7 +13,6 @@ const testConfig: EngramConfig = {
 	authProvider: "clerk",
 	clerkPublishableKey: "",
 	billingEnabled: true,
-	clerkWaitlistMode: false,
 	apiBase: "",
 	wsBase: "",
 	tracingEnabled: false,

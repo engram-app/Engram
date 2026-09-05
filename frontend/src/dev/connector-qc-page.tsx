@@ -166,7 +166,6 @@ const CONFIG: EngramConfig = {
 	authProvider: "local",
 	clerkPublishableKey: "",
 	billingEnabled: true,
-	clerkWaitlistMode: false,
 	apiBase: "",
 	wsBase: "",
 	tracingEnabled: false,

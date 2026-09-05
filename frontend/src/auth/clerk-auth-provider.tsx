@@ -126,12 +126,8 @@ export default function ClerkAuthProvider({ children }: { children: React.ReactN
 		throw new Error("CLERK_PUBLISHABLE_KEY is required when AUTH_PROVIDER=clerk");
 	}
 
-	// Waitlist mode (Dashboard → Restrictions → Waitlist): point Clerk's
-	// "sign up" CTAs at /waitlist so non-approved users land on the join
-	// form instead of <SignUp />'s "you need to join the waitlist" message.
 	// /sign-up stays alive for invited users following the email ticket.
-	const signUpUrl = config.clerkWaitlistMode ? ROUTES.WAITLIST : ROUTES.SIGN_UP;
-	const waitlistUrl = config.clerkWaitlistMode ? ROUTES.WAITLIST : undefined;
+	const signUpUrl = ROUTES.SIGN_UP;
 
 	return (
 		<ClerkProvider
@@ -143,7 +139,6 @@ export default function ClerkAuthProvider({ children }: { children: React.ReactN
 			telemetry={{ disabled: true }}
 			signInUrl={ROUTES.SIGN_IN}
 			signUpUrl={signUpUrl}
-			waitlistUrl={waitlistUrl}
 			afterSignOutUrl={ROUTES.SIGN_IN}
 			routerPush={(to) => getAppRouter().navigate(toRelativeUrl(to))}
 			routerReplace={(to) => getAppRouter().navigate(toRelativeUrl(to), { replace: true })}

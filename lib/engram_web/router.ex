@@ -662,7 +662,6 @@ defmodule EngramWeb.Router do
     get "/", SpaController, :index
     get "/sign-in", SpaController, :index
     get "/sign-up", SpaController, :index
-    get "/waitlist", SpaController, :index
     # /reset-password is a HARD load by construction: the link is minted
     # server-side (admin/user_controller.ex) and mailed to a user who is
     # locked out, so the SPA must boot from this URL with no prior session.

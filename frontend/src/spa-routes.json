@@ -6,7 +6,6 @@
 		"/",
 		"/sign-in",
 		"/sign-up",
-		"/waitlist",
 		"/reset-password",
 		"/link",
 		"/oauth/consent",

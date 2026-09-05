@@ -24,7 +24,6 @@ describe("loadConfig", () => {
 			authProvider: "clerk",
 			clerkPublishableKey: "pk_test_x",
 			billingEnabled: true,
-			clerkWaitlistMode: false,
 			apiBase: "",
 			wsBase: "",
 		};
@@ -42,7 +41,6 @@ describe("loadConfig", () => {
 					authProvider: "clerk",
 					clerkPublishableKey: "pk_live_x",
 					billingEnabled: true,
-					clerkWaitlistMode: false,
 					apiBase: "https://api.engram.page",
 					wsBase: "wss://api.engram.page",
 				}),
@@ -77,22 +75,11 @@ describe("loadConfig", () => {
 		expect(config.billingEnabled).toBe(false);
 	});
 
-	it("coerces non-boolean clerkWaitlistMode to false from window injection", async () => {
-		(window as { __ENGRAM_CONFIG__?: unknown }).__ENGRAM_CONFIG__ = {
-			authProvider: "clerk",
-			clerkPublishableKey: "pk_test",
-			clerkWaitlistMode: "yes",
-		};
-		const config = await loadConfig();
-		expect(config.clerkWaitlistMode).toBe(false);
-	});
-
 	it("coerces non-string apiBase/wsBase to empty string", async () => {
 		(window as { __ENGRAM_CONFIG__?: unknown }).__ENGRAM_CONFIG__ = {
 			authProvider: "clerk",
 			clerkPublishableKey: "pk_test_x",
 			billingEnabled: true,
-			clerkWaitlistMode: false,
 			apiBase: 123, // wrong type
 			wsBase: { url: "wss://x" }, // wrong type
 		};
