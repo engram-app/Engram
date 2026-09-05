@@ -9,7 +9,6 @@ function makeConfig(apiBase: string, wsBase = ""): EngramConfig {
 		authProvider: "local",
 		clerkPublishableKey: "",
 		billingEnabled: false,
-		clerkWaitlistMode: false,
 		apiBase,
 		wsBase,
 		tracingEnabled: false,
