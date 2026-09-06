@@ -52,6 +52,14 @@ const REHANDSHAKE_MAX_DELAY_MS = 30_000;
  *  the first call in a session always passes. */
 const RESYNC_MIN_INTERVAL_MS = 3000;
 let lastResyncAt = Number.NEGATIVE_INFINITY;
+// What claimed the current window. A `refocus` must not swallow a `reconnect`
+// that follows it: on a laptop wake the crdt triggers resync synchronously,
+// then `installSocketHealthTriggers` coalesces at 500ms and forces a real
+// reconnect whose `socket.onOpen` lands inside the same window. Throttling that
+// away sends STEP1 only over the OLD socket and leaves open docs unhandshaked
+// on the fresh one — deaf until a later trigger that never comes if the user
+// stays in the tab.
+let lastResyncTrigger: ResyncTrigger = "reconnect";
 
 function bumpEpoch(noteId: string): void {
 	docEpochs.set(noteId, (docEpochs.get(noteId) ?? 0) + 1);
@@ -156,6 +164,7 @@ export function stopCrdtSession(): void {
 	rehandshakeTimers.clear();
 	rehandshakeAttempts.clear();
 	lastResyncAt = Number.NEGATIVE_INFINITY;
+	lastResyncTrigger = "reconnect";
 	session.manager.destroy().catch((e) => console.warn("CRDT session teardown error", e));
 	session = null;
 }
@@ -309,21 +318,34 @@ export async function handleFrame(noteId: string, b64: string): Promise<void> {
 	await session.channel.handleFrame(noteId, b64);
 }
 
+/** What woke the resync. Both paths do identical work, but they are very
+ *  different incidents: `reconnect` means the socket actually dropped, while
+ *  `refocus` is a tab regaining visibility with a healthy socket. This line is
+ *  the only trace either leaves in `client_logs`, so one shared wording makes a
+ *  benign tab switch read as a disconnect during prod triage. */
+export type ResyncTrigger = "reconnect" | "refocus";
+
 /** On socket reconnect: clear each open doc's handshake guard and re-enroll it
  *  so a fresh STEP1 is sent. Removes the dependency on the server re-firing
  *  crdt_doc_ready. Open docs are those with a live Awareness entry (created by
  *  openDoc, removed by closeDoc). */
-export function resyncOpenDocs(): void {
+export function resyncOpenDocs(trigger: ResyncTrigger = "reconnect"): void {
 	if (!session) {
 		return;
 	}
 	// Throttle: a reconnect storm fires this many times per second; one full
 	// re-enroll per window recovers, the rest just amplifies the storm.
 	const now = Date.now();
-	if (now - lastResyncAt < RESYNC_MIN_INTERVAL_MS) {
+	// A reconnect always beats a window claimed by a refocus — the two are not
+	// interchangeable, and only the reconnect knows the socket underneath it
+	// changed. Reconnect-after-reconnect stays throttled: that is the storm this
+	// exists to bound.
+	const upgrades = trigger === "reconnect" && lastResyncTrigger === "refocus";
+	if (!upgrades && now - lastResyncAt < RESYNC_MIN_INTERVAL_MS) {
 		return;
 	}
 	lastResyncAt = now;
+	lastResyncTrigger = trigger;
 	// A reconnect (or a tab refocus) is a new connectivity epoch: attempts racked
 	// up against the OLD socket say nothing about this one. Clear the whole map so
 	// every open doc re-handshakes with a full budget — mirrors the plugin's
@@ -332,7 +354,7 @@ export function resyncOpenDocs(): void {
 	rehandshakeAttempts.clear();
 	const ids = [...session.awareness.keys()];
 	if (ids.length > 0) {
-		rlog().info("crdt", `reconnect resync: re-enrolling ${ids.length} open doc(s)`);
+		rlog().info("crdt", `${trigger} resync: re-enrolling ${ids.length} open doc(s)`);
 	}
 	for (const id of ids) {
 		session.enrollment.reset(id); // clears enrolled set + CrdtChannel.initiated guard
@@ -354,15 +376,20 @@ export function resyncOpenDocs(): void {
 export function installCrdtResyncTriggers(): () => void {
 	const onVisible = () => {
 		if (document.visibilityState === "visible") {
-			resyncOpenDocs();
+			resyncOpenDocs("refocus");
 		}
 	};
+	// Named, and NOT `resyncOpenDocs` passed directly: a listener is called with
+	// the Event, which would arrive as the trigger argument and log a FocusEvent.
+	// It also has to be the same reference for removeEventListener to detach it —
+	// an inline arrow here would leak the listener on every cleanup.
+	const onFocus = () => resyncOpenDocs("refocus");
 	// visibilitychange targets document, not window (does not bubble).
 	document.addEventListener("visibilitychange", onVisible);
-	window.addEventListener("focus", resyncOpenDocs);
+	window.addEventListener("focus", onFocus);
 	return () => {
 		document.removeEventListener("visibilitychange", onVisible);
-		window.removeEventListener("focus", resyncOpenDocs);
+		window.removeEventListener("focus", onFocus);
 	};
 }
 

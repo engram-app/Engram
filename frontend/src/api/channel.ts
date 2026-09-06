@@ -491,7 +491,7 @@ export async function connectChannel({ userId, vaultId, getToken, queryClient }:
 	// re-sync) and reconciles the structural views a gap could have staled —
 	// snapshot-diff, like the plugin.
 	socket.onOpen(() => {
-		resyncOpenDocs();
+		resyncOpenDocs("reconnect");
 		backfillStructural(queryClient, vaultId);
 	});
 
