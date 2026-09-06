@@ -309,11 +309,18 @@ export async function handleFrame(noteId: string, b64: string): Promise<void> {
 	await session.channel.handleFrame(noteId, b64);
 }
 
+/** What woke the resync. Both paths do identical work, but they are very
+ *  different incidents: `reconnect` means the socket actually dropped, while
+ *  `refocus` is a tab regaining visibility with a healthy socket. This line is
+ *  the only trace either leaves in `client_logs`, so one shared wording makes a
+ *  benign tab switch read as a disconnect during prod triage. */
+export type ResyncTrigger = "reconnect" | "refocus";
+
 /** On socket reconnect: clear each open doc's handshake guard and re-enroll it
  *  so a fresh STEP1 is sent. Removes the dependency on the server re-firing
  *  crdt_doc_ready. Open docs are those with a live Awareness entry (created by
  *  openDoc, removed by closeDoc). */
-export function resyncOpenDocs(): void {
+export function resyncOpenDocs(trigger: ResyncTrigger = "reconnect"): void {
 	if (!session) {
 		return;
 	}
@@ -332,7 +339,7 @@ export function resyncOpenDocs(): void {
 	rehandshakeAttempts.clear();
 	const ids = [...session.awareness.keys()];
 	if (ids.length > 0) {
-		rlog().info("crdt", `reconnect resync: re-enrolling ${ids.length} open doc(s)`);
+		rlog().info("crdt", `${trigger} resync: re-enrolling ${ids.length} open doc(s)`);
 	}
 	for (const id of ids) {
 		session.enrollment.reset(id); // clears enrolled set + CrdtChannel.initiated guard
@@ -354,15 +361,20 @@ export function resyncOpenDocs(): void {
 export function installCrdtResyncTriggers(): () => void {
 	const onVisible = () => {
 		if (document.visibilityState === "visible") {
-			resyncOpenDocs();
+			resyncOpenDocs("refocus");
 		}
 	};
+	// Named, and NOT `resyncOpenDocs` passed directly: a listener is called with
+	// the Event, which would arrive as the trigger argument and log a FocusEvent.
+	// It also has to be the same reference for removeEventListener to detach it —
+	// an inline arrow here would leak the listener on every cleanup.
+	const onFocus = () => resyncOpenDocs("refocus");
 	// visibilitychange targets document, not window (does not bubble).
 	document.addEventListener("visibilitychange", onVisible);
-	window.addEventListener("focus", resyncOpenDocs);
+	window.addEventListener("focus", onFocus);
 	return () => {
 		document.removeEventListener("visibilitychange", onVisible);
-		window.removeEventListener("focus", resyncOpenDocs);
+		window.removeEventListener("focus", onFocus);
 	};
 }
 

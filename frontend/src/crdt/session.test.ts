@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { remoteLog } from "../observability/remote-log";
 import {
 	__isNoteOpen,
 	clearRehandshakeBackoff,
@@ -115,6 +116,29 @@ describe("crdt session", () => {
 		window.dispatchEvent(new Event("focus"));
 		await new Promise((r) => setTimeout(r, 20));
 		expect(push).not.toHaveBeenCalled();
+	});
+
+	// A refocus and a dropped socket are very different incidents, and this line
+	// is the only trace either leaves in `client_logs`. Emitting the same text
+	// for both means prod triage reads a benign tab switch as a disconnect.
+	it("names the trigger so a refocus is not read as a dropped socket", async () => {
+		const lines: string[] = [];
+		const spy = vi
+			.spyOn(remoteLog, "log")
+			.mockImplementation((_lvl, _cat, message) => lines.push(message));
+
+		startCrdtSession({ vaultId: VAULT, push: () => {} });
+		await openDoc("note.md");
+
+		const remove = installCrdtResyncTriggers();
+		window.dispatchEvent(new Event("focus"));
+		await vi.waitFor(() => expect(lines.length).toBeGreaterThan(0));
+
+		expect(lines.some((l) => l.includes("refocus resync"))).toBe(true);
+		expect(lines.some((l) => l.includes("reconnect resync"))).toBe(false);
+
+		remove();
+		spy.mockRestore();
 	});
 
 	// Finding 1: flattenIfBloated must be skipped for an open note
