@@ -53,13 +53,25 @@ defmodule Engram.Auth.TokenResolver do
   # `signature_error`. Prod carried 6753 of those from three users, pointing an
   # investigation at key rotation when the tokens were simply expired.
   #
-  # Joken verifies the SIGNATURE before it validates claims, so a claim-level
-  # failure proves the signature already checked out — the token is genuinely
-  # ours. `:invalid_azp` is likewise only reachable after `verify_and_validate`
-  # returned `{:ok, _}` (ClerkToken.verify_clerk_jwt/1).
+  # Two different reasons land in this list, so don't read it as one rule:
+  #
+  #   - Claim-level failures and `:invalid_azp` are conclusive because the token
+  #     is provably OURS. Joken verifies the SIGNATURE before it validates
+  #     claims, so a claim failure means the signature already checked out, and
+  #     `:invalid_azp` is only reachable after `verify_and_validate` returned
+  #     `{:ok, _}` (ClerkToken.verify_clerk_jwt/1).
+  #   - `:missing_claims` and `:invalid_signature` are pre-existing entries kept
+  #     for behaviour parity. `:invalid_signature` in particular proves the
+  #     OPPOSITE — it says the token was not verifiable — and is here only
+  #     because it was here before.
   #
   # `:invalid_token` deliberately stays out: it is the parse-failure rescue,
   # which is exactly the "not a provider token" case the fallback is for.
+  #
+  # Self-host is unaffected: `Providers.Local.verify_token` and
+  # `Accounts.verify_jwt` both call `Engram.Token.verify_and_validate`, so the
+  # old fall-through ran the identical verifier twice and returned the identical
+  # error. Only the Clerk path's label changes.
   defp conclusive?(reason) when is_list(reason), do: Keyword.has_key?(reason, :claim)
   defp conclusive?(reason), do: reason in [:missing_claims, :invalid_signature, :invalid_azp]
 
