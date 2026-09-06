@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.25.1](https://github.com/engram-app/Engram/compare/0.25.0...0.25.1) (2026-09-06)
+
+
+### Bug Fixes
+
+* **crdt:** name the resync trigger so a refocus is not read as a disconnect ([#1579](https://github.com/engram-app/Engram/issues/1579)) ([24714a5](https://github.com/engram-app/Engram/commit/24714a5ed6871b131cacca59e8e06c37cb0249d2))
+* **sweep:** reconcile Postgres→Qdrant, not just Qdrant→Postgres ([#1577](https://github.com/engram-app/Engram/issues/1577)) ([bb7b9bd](https://github.com/engram-app/Engram/commit/bb7b9bdff3474c91653d108584de90c226741d99))
+
 ## [0.25.0](https://github.com/engram-app/Engram/compare/0.24.1...0.25.0) (2026-09-05)
 
 
