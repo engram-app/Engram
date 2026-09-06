@@ -129,6 +129,32 @@ export async function captureError(
 	}
 }
 
+/** Bind the Sentry user, or clear it with `null` on sign-out.
+ *
+ *  Sentry events were anonymous until this existed — every issue read
+ *  `userCount: 0`, so "one iPhone reconnecting in a loop" and "every iOS user
+ *  is broken" produced the same two-event issue. The id alone answers that.
+ *
+ *  ID ONLY, deliberately. `sendDefaultPii` is false and this module scrubs
+ *  every URL, header and breadcrumb; the Clerk id is opaque and already the
+ *  join key used for PostHog and the backend's `sub_hash` log metadata, so it
+ *  costs no new PII surface. Email would.
+ *
+ *  Awaits the same lazy singleton as `captureError` and tolerates a null SDK
+ *  (no DSN on self-host, or the chunk failed to load) — this runs on every
+ *  sign-in and must never become an unhandled rejection. */
+export async function setSentryUser(id: string | null): Promise<void> {
+	try {
+		const Sentry = await sentryReady;
+		Sentry?.setUser(id ? { id } : null);
+	} catch (e) {
+		// Same contract as captureError: the telemetry path must not be able to
+		// throw INTO the auth flow. Warned, not swallowed — a broken bind shows
+		// up in the console rather than as a silent anonymous crash stream.
+		console.warn("[sentry] setUser failed:", e);
+	}
+}
+
 /** Replace a URL's path segments and query VALUES with placeholders.
  *
  *  Note paths, titles, attachment filenames and single-use credentials all
@@ -262,6 +288,15 @@ export function sentryInitOptions(dsn: string) {
 		// header out of breadcrumbs even if the SDK's own scrubbing misses
 		// something. Restated for documentation.
 		sendDefaultPii: false,
+		// `inboundFiltersIntegration()` is one of the SDK defaults this options
+		// object merges into, so this needs no extra integration to take effect.
+		//
+		// `runtime.sendMessage` is the WebExtension API. We ship no extension, so
+		// every frame of it is a bug in something the USER installed, surfacing
+		// here only because our global handlers catch it. Keep this list to
+		// patterns actually observed in prod — a speculative blocklist is how a
+		// real error goes missing.
+		ignoreErrors: [/runtime\.sendMessage/],
 		beforeBreadcrumb: scrubBreadcrumb,
 		beforeSend: scrubEvent,
 	};
