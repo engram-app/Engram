@@ -84,6 +84,60 @@ defmodule Engram.Auth.TokenResolverTest do
     assert {:error, _reason} = TokenResolver.resolve(token)
   end
 
+  # ---- Rejection reason fidelity ----
+  #
+  # A Clerk failure that is NOT a signature failure used to fall through the
+  # `{:error, _}` catch-all into the internal HS256 verifier, which of course
+  # also failed — and ITS error is what got logged. Every expired/wrong-azp
+  # Clerk token was therefore reported as `signature_error`, which sent a prod
+  # investigation of 6753 rejections at the wrong root cause entirely.
+  #
+  # Both cases below can only be reached AFTER the RS256 signature verified, so
+  # the token is provably a genuine Clerk token and must never be retried as an
+  # internal JWT.
+
+  @tag capture_log: true
+  test "an expired Clerk JWT reports the expired claim, not a signature error" do
+    claims =
+      Engram.ClerkHelpers.clerk_claims("clerk_exp_user", exp: :os.system_time(:second) - 60)
+
+    token = Engram.ClerkHelpers.sign_clerk_jwt(claims)
+
+    assert {:error, reason} = TokenResolver.resolve(token)
+    assert Engram.Auth.rejection_label(reason) == "claim_invalid:exp"
+  end
+
+  @tag capture_log: true
+  test "a Clerk JWT from an unauthorized party reports invalid_azp" do
+    prev = Application.get_env(:engram, :clerk_authorized_parties)
+    Application.put_env(:engram, :clerk_authorized_parties, ["https://app.engram.page"])
+
+    on_exit(fn ->
+      if prev,
+        do: Application.put_env(:engram, :clerk_authorized_parties, prev),
+        else: Application.delete_env(:engram, :clerk_authorized_parties)
+    end)
+
+    claims = Engram.ClerkHelpers.clerk_claims("clerk_azp_user", azp: "https://evil.example")
+    token = Engram.ClerkHelpers.sign_clerk_jwt(claims)
+
+    assert {:error, reason} = TokenResolver.resolve(token)
+    assert Engram.Auth.rejection_label(reason) == "invalid_azp"
+  end
+
+  # The fallback itself must survive: a token the Clerk provider cannot verify
+  # at all is still retried as an internal JWT, and only reports a signature
+  # failure once THAT also fails.
+  @tag capture_log: true
+  test "a token the Clerk provider cannot verify still falls through to internal JWT" do
+    user = insert(:user)
+    assert {:ok, resolved, :internal_jwt} = TokenResolver.resolve(Accounts.generate_jwt(user))
+    assert resolved.id == user.id
+
+    assert {:error, reason} = TokenResolver.resolve("not.a.valid.jwt")
+    assert Engram.Auth.rejection_label(reason) == "signature_error"
+  end
+
   # ---- Local JWT (provider: local) ----
 
   test "resolves a valid local JWT when provider is local" do
