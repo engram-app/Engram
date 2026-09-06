@@ -52,6 +52,14 @@ const REHANDSHAKE_MAX_DELAY_MS = 30_000;
  *  the first call in a session always passes. */
 const RESYNC_MIN_INTERVAL_MS = 3000;
 let lastResyncAt = Number.NEGATIVE_INFINITY;
+// What claimed the current window. A `refocus` must not swallow a `reconnect`
+// that follows it: on a laptop wake the crdt triggers resync synchronously,
+// then `installSocketHealthTriggers` coalesces at 500ms and forces a real
+// reconnect whose `socket.onOpen` lands inside the same window. Throttling that
+// away sends STEP1 only over the OLD socket and leaves open docs unhandshaked
+// on the fresh one — deaf until a later trigger that never comes if the user
+// stays in the tab.
+let lastResyncTrigger: ResyncTrigger = "reconnect";
 
 function bumpEpoch(noteId: string): void {
 	docEpochs.set(noteId, (docEpochs.get(noteId) ?? 0) + 1);
@@ -156,6 +164,7 @@ export function stopCrdtSession(): void {
 	rehandshakeTimers.clear();
 	rehandshakeAttempts.clear();
 	lastResyncAt = Number.NEGATIVE_INFINITY;
+	lastResyncTrigger = "reconnect";
 	session.manager.destroy().catch((e) => console.warn("CRDT session teardown error", e));
 	session = null;
 }
@@ -327,10 +336,16 @@ export function resyncOpenDocs(trigger: ResyncTrigger = "reconnect"): void {
 	// Throttle: a reconnect storm fires this many times per second; one full
 	// re-enroll per window recovers, the rest just amplifies the storm.
 	const now = Date.now();
-	if (now - lastResyncAt < RESYNC_MIN_INTERVAL_MS) {
+	// A reconnect always beats a window claimed by a refocus — the two are not
+	// interchangeable, and only the reconnect knows the socket underneath it
+	// changed. Reconnect-after-reconnect stays throttled: that is the storm this
+	// exists to bound.
+	const upgrades = trigger === "reconnect" && lastResyncTrigger === "refocus";
+	if (!upgrades && now - lastResyncAt < RESYNC_MIN_INTERVAL_MS) {
 		return;
 	}
 	lastResyncAt = now;
+	lastResyncTrigger = trigger;
 	// A reconnect (or a tab refocus) is a new connectivity epoch: attempts racked
 	// up against the OLD socket say nothing about this one. Clear the whole map so
 	// every open doc re-handshakes with a full budget — mirrors the plugin's

@@ -131,14 +131,20 @@ describe("crdt session", () => {
 		await openDoc("note.md");
 
 		const remove = installCrdtResyncTriggers();
-		window.dispatchEvent(new Event("focus"));
-		await vi.waitFor(() => expect(lines.length).toBeGreaterThan(0));
+		// try/finally, not trailing cleanup: this config sets no restoreMocks, so
+		// a failed assertion here would leave remoteLog mocked and the focus
+		// listener attached for every later test in the file — one real failure
+		// cascading into unrelated ones and hiding its own cause.
+		try {
+			window.dispatchEvent(new Event("focus"));
+			await vi.waitFor(() => expect(lines.length).toBeGreaterThan(0));
 
-		expect(lines.some((l) => l.includes("refocus resync"))).toBe(true);
-		expect(lines.some((l) => l.includes("reconnect resync"))).toBe(false);
-
-		remove();
-		spy.mockRestore();
+			expect(lines.some((l) => l.includes("refocus resync"))).toBe(true);
+			expect(lines.some((l) => l.includes("reconnect resync"))).toBe(false);
+		} finally {
+			remove();
+			spy.mockRestore();
+		}
 	});
 
 	// Finding 1: flattenIfBloated must be skipped for an open note
@@ -475,6 +481,58 @@ describe("crdt session", () => {
 				resyncOpenDocs();
 				await vi.waitFor(() => expect(frames.length).toBe(afterFirst + 1));
 				closeDoc("note-th");
+			} finally {
+				nowSpy.mockRestore();
+			}
+		});
+
+		// On a laptop wake both listener sets fire: the crdt triggers resync
+		// synchronously as "refocus", then `installSocketHealthTriggers` coalesces
+		// at 500ms and forces a real reconnect whose `socket.onOpen` lands inside
+		// the same 3s window. Throttling that away sends STEP1 only over the OLD
+		// socket and leaves open docs unhandshaked on the fresh one — deaf until
+		// some later trigger, which never comes if the user stays in the tab.
+		it("lets a real reconnect through a window a refocus already claimed", async () => {
+			const nowSpy = vi.spyOn(Date, "now").mockReturnValue(2_000_000);
+			try {
+				const frames: string[] = [];
+				startCrdtSession({ vaultId: "v1", push: (_id, b64) => frames.push(b64) });
+				await openDoc("note-wake");
+
+				resyncOpenDocs("refocus");
+				await vi.waitFor(() => expect(frames.length).toBeGreaterThan(0));
+				const afterRefocus = frames.length;
+
+				nowSpy.mockReturnValue(2_000_000 + 800); // well inside the 3s window
+				resyncOpenDocs("reconnect");
+				await vi.waitFor(() => expect(frames.length).toBe(afterRefocus + 1));
+
+				closeDoc("note-wake");
+			} finally {
+				nowSpy.mockRestore();
+			}
+		});
+
+		// The escape hatch above must not become the storm the throttle exists to
+		// stop: onOpen fires many times per second in a reconnect storm.
+		it("still throttles reconnect after reconnect", async () => {
+			const nowSpy = vi.spyOn(Date, "now").mockReturnValue(3_000_000);
+			try {
+				const frames: string[] = [];
+				startCrdtSession({ vaultId: "v1", push: (_id, b64) => frames.push(b64) });
+				await openDoc("note-storm");
+
+				resyncOpenDocs("reconnect");
+				await vi.waitFor(() => expect(frames.length).toBeGreaterThan(0));
+				const afterFirst = frames.length;
+
+				nowSpy.mockReturnValue(3_000_000 + 100);
+				resyncOpenDocs("reconnect");
+				resyncOpenDocs("reconnect");
+				await new Promise((r) => setTimeout(r, 20));
+				expect(frames.length).toBe(afterFirst);
+
+				closeDoc("note-storm");
 			} finally {
 				nowSpy.mockRestore();
 			}
