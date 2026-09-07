@@ -89,7 +89,7 @@ defmodule Engram.MixProject do
       {:postgrex, "~> 0.20"},
       {:uuidv7, "~> 1.0"},
       {:bandit, "~> 1.5"},
-      {:dns_cluster, "~> 0.2.0"},
+      {:dns_cluster, "~> 0.3.0"},
 
       # OpenAPI 3.0 spec generated from controller annotations; served at
       # GET /api/openapi and dumped to openapi.json (drift-gated in CI).
