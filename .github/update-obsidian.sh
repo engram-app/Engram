@@ -19,19 +19,39 @@ OBSIDIAN_VERSION_FILE="$OBSIDIAN_DIR/.obsidian-version"
 
 mkdir -p "$OBSIDIAN_DIR"
 
+command -v jq >/dev/null || {
+  echo "ERROR: jq is required — install it (apt-get install jq)" >&2
+  exit 1
+}
+
 # Obsidian ships mobile-only patch releases (apk asset ONLY) to the same repo, and
 # they take the `releases/latest` slot — v1.13.8 did on 2026-09-07, 404'ing the
 # constructed AppImage URL. So walk the release list and take the newest one that
 # actually publishes an x64 AppImage, reading its real download URL rather than
 # building one from the tag.
-read -r LATEST URL <<<"$(curl -sfL 'https://api.github.com/repos/obsidianmd/obsidian-releases/releases?per_page=20' \
-  | jq -r 'map(select(.prerelease | not) | . as $r | .assets[]
-             | select(.name | test("^Obsidian-[0-9.]+\\.AppImage$"))
-             | "\($r.tag_name | ltrimstr("v")) \(.browser_download_url)")
-           | .[0] // ""')"
+#
+# Three outcomes, deliberately NOT collapsed: a failed request and a failed parse
+# exit 1 so the weekly cron alert fires, while "upstream genuinely has no AppImage
+# in the window" exits 0. Collapsing them is how a scheduled job goes green for
+# months while doing nothing (which is the other half of this commit).
+RELEASES=$(curl -sfL --retry 3 --retry-delay 5 \
+  'https://api.github.com/repos/obsidianmd/obsidian-releases/releases?per_page=20') || {
+  echo "ERROR: could not reach the GitHub releases API — Obsidian NOT updated" >&2
+  exit 1
+}
+
+PICK=$(jq -r 'map(select(.prerelease | not) | . as $r | (.assets // [])[]
+                | select(.name | test("^Obsidian-[0-9.]+\\.AppImage$"))
+                | "\($r.tag_name | ltrimstr("v")) \(.browser_download_url)")
+              | .[0] // ""' <<<"$RELEASES") || {
+  echo "ERROR: could not parse the Obsidian releases feed — Obsidian NOT updated" >&2
+  exit 1
+}
+
+read -r LATEST URL <<<"$PICK"
 
 if [ -z "${LATEST:-}" ] || [ -z "${URL:-}" ]; then
-  echo "WARNING: no AppImage found in the last 20 Obsidian releases — keeping current install" >&2
+  echo "WARNING: last 20 Obsidian releases are all mobile-only — keeping current install" >&2
   exit 0
 fi
 
