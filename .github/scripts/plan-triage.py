@@ -37,7 +37,12 @@ PLANS_GLOB = "docs/superpowers/plans/*.md"
 
 
 def sh(cmd: list[str], check: bool = True, capture: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, check=check, capture_output=capture, text=True)
+    r = subprocess.run(cmd, check=False, capture_output=capture, text=True)
+    if check and r.returncode != 0:
+        # Don't raise CalledProcessError: it dumps the whole argv (a multi-KB issue
+        # body) and drops stderr, which is the only part that says WHY gh failed.
+        sys.exit(f"$ {' '.join(cmd[:3])} … → exit {r.returncode}\n{(r.stderr or '').strip()}")
+    return r
 
 
 def parse_plan(path: str) -> dict:

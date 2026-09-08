@@ -25,7 +25,7 @@ if command -v apt-get &>/dev/null; then
   echo "Installing apt system dependencies (Electron/Obsidian + Xvfb + xmllint)..."
   sudo apt-get update -qq
   sudo apt-get install -y -qq \
-    xvfb xdg-utils libxml2-utils \
+    xvfb xdg-utils libxml2-utils jq \
     libgtk-3-0 libgbm1 libnss3 libxss1 libasound2t64 libxshmfence1 \
     libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
     libxrandr2 libpango-1.0-0 libcairo2 libatk1.0-0 libatk-bridge2.0-0 \

@@ -19,13 +19,19 @@ OBSIDIAN_VERSION_FILE="$OBSIDIAN_DIR/.obsidian-version"
 
 mkdir -p "$OBSIDIAN_DIR"
 
-LATEST=$(curl -sfL https://api.github.com/repos/obsidianmd/obsidian-releases/releases/latest \
-  | grep -oE '"tag_name":[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+"' \
-  | head -1 \
-  | sed -E 's/.*"v([0-9.]+)".*/\1/')
+# Obsidian ships mobile-only patch releases (apk asset ONLY) to the same repo, and
+# they take the `releases/latest` slot — v1.13.8 did on 2026-09-07, 404'ing the
+# constructed AppImage URL. So walk the release list and take the newest one that
+# actually publishes an x64 AppImage, reading its real download URL rather than
+# building one from the tag.
+read -r LATEST URL <<<"$(curl -sfL 'https://api.github.com/repos/obsidianmd/obsidian-releases/releases?per_page=20' \
+  | jq -r 'map(select(.prerelease | not) | . as $r | .assets[]
+             | select(.name | test("^Obsidian-[0-9.]+\\.AppImage$"))
+             | "\($r.tag_name | ltrimstr("v")) \(.browser_download_url)")
+           | .[0] // ""')"
 
-if [ -z "$LATEST" ]; then
-  echo "WARNING: could not query latest Obsidian version — keeping current install" >&2
+if [ -z "${LATEST:-}" ] || [ -z "${URL:-}" ]; then
+  echo "WARNING: no AppImage found in the last 20 Obsidian releases — keeping current install" >&2
   exit 0
 fi
 
@@ -39,7 +45,6 @@ fi
 
 echo "Updating Obsidian: ${INSTALLED:-none} → ${LATEST}"
 
-URL="https://github.com/obsidianmd/obsidian-releases/releases/download/v${LATEST}/Obsidian-${LATEST}.AppImage"
 TMP="${OBSIDIAN_APPIMAGE}.new"
 
 # Download to .new, then atomic-move so a failed download doesn't nuke the working copy

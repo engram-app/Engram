@@ -260,6 +260,10 @@ jobs:
       - name: Run plan triage
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Required: the runner VMs rewrite github.com/engram-app/ URLs to the LAN
+          # git cache, so `gh` can't infer the repo from `git remote -v`.
+          # See docs/context/gh-cli-runner-url-rewrite-and-release-repair.md
+          GH_REPO: ${{ github.repository }}
         run: python .github/scripts/plan-triage.py
 
   # ── Surface JS deps with a newer MAJOR than the current caret-range allows.
