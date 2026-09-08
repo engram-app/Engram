@@ -187,14 +187,13 @@ def open_delete_pr(plan: dict) -> None:
         ]
     )
     # ponytail: this push has never run — no plan carries `status:` frontmatter yet, so
-    # nothing ever reaches here. Two things will bite the first time one does:
-    #   1. The runner VMs rewrite github.com/engram-app/ to the LAN git cache
-    #      (system-wide `insteadOf`, applies to push), while actions/checkout keys its
-    #      credential on the pre-rewrite host — so this pushes unauthenticated to a
-    #      read-only mirror. GH_REPO fixes `gh`, not `git`.
-    #   2. The commit above is unsigned, and main requires signed commits.
-    # Fix both together when a plan first goes `status: shipped`; doing it blind now
-    # means shipping an untestable auth change.
+    # nothing reaches here. The push itself is fine despite the runner VMs' LAN git-cache
+    # `insteadOf`: `git push origin` from these runners is proven daily by verify.yml's
+    # ledger-append (ci-ledger) and release-please's release-v* tag push, both on
+    # self-hosted isolated runners.
+    # What WILL bite is the merge — the commit above is unsigned and main requires signed
+    # commits, so the delete-PR opens but cannot be merged. Sign it when a plan first goes
+    # `status: shipped` and this path can actually be exercised.
     sh(["git", "push", "-u", "origin", branch])
     sh(
         [
