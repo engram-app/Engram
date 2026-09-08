@@ -56,13 +56,29 @@ defmodule EngramWeb.UserSocket do
     conn_id = params["conn_id"]
     device_id = params["device_id"]
     vault_id = params["vault_id"]
+    plugin_version = params["plugin_version"]
 
+    # `plugin_version` is logged HERE and nowhere else. It is the evidence you
+    # read before raising `Engram.PluginVersion.minimum/0`, and this is the one
+    # place where that costs a field per SOCKET rather than a field per request
+    # — the version distribution of everything that syncs, at ~1 line per
+    # client per reconnect. Do not also add it to `RequestLogger`; see the
+    # ingest-cost note there.
+    #
+    # Read it in CLOUDWATCH (`/ecs/engram-saas-prod`), not Loki. This is an
+    # `:info` + `:websocket` line, and while `Logger.Category` lists
+    # `:websocket` in `@info_to_loki`, the Fluent Bit category regex does not
+    # — so info websocket lines reach CloudWatch and NOT Loki. That mismatch is
+    # deliberate and pre-existing (see the NOTE in `category.ex`); do not
+    # widen the routing rule to make this queryable in Grafana without first
+    # deciding the volume.
     Logger.info(
       "ws connect",
       Metadata.with_category(:info, :websocket,
         conn_id: conn_id,
         device_id: device_id,
         vault_id: vault_id,
+        plugin_version: plugin_version,
         user_id: HMAC.hash_user_id(to_string(user.id))
       )
     )
@@ -73,7 +89,8 @@ defmodule EngramWeb.UserSocket do
       oauth_scope_vault_ids: oauth_scope_vault_ids(token),
       conn_id: conn_id,
       device_id: device_id,
-      vault_id_param: vault_id
+      vault_id_param: vault_id,
+      plugin_version: plugin_version
     })
   end
 

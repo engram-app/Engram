@@ -2,21 +2,22 @@ defmodule EngramWeb.ChannelGate do
   @moduledoc """
   The socket-side equivalent of the vault-scoped router pipeline's access
   gates. Both `EngramWeb.SyncChannel` and `EngramWeb.CrdtChannel` call
-  `check/2` from `join/3`.
+  `check/3` from `join/3`.
 
   A Plug takes a `conn` and never runs on a socket, so every rule the pipeline
   enforces has to be re-expressed here or it silently does not apply to sync.
 
   ## What is mirrored, and what is NOT
 
-  The vault scope pipes `:authed_api` (`router.ex:49-60`), which runs
-  **eleven** plugs — not three, and not the shorter list an earlier version of
-  this doc claimed. Below in PIPELINE order, which is also the order `check/2`
+  The vault scope pipes `:authed_api` (`router.ex:49-61`), which runs
+  **twelve** plugs — not three, and not the shorter list an earlier version of
+  this doc claimed. Below in PIPELINE order, which is also the order `check/3`
   applies them; derive one from the other only in that order.
 
   Mirrored:
 
     * `AccountDeleted`            → `account_deleted` (`deleted_at` only) ✅ #1429
+    * `RequirePluginVersion`      → `plugin_upgrade_required` ✅
     * `RotationLockCheck`         → `rotation_in_progress` ✅ #1434
     * `RequireOnboarding`         → `onboarding_required` ✅ #1426
     * `RequireActiveSubscription` → `account_suspended` ✅ #1429
@@ -53,13 +54,13 @@ defmodule EngramWeb.ChannelGate do
       ahead of `ensure_room/3`, i.e. ahead of real side effects. If this is
       ever wanted, gate it where the write happens, not on the frame. #1433.
     * `PreAuthRateLimit` (plug 1) — no equivalent, so there is **no join rate
-      limiter at all**, which is why `check/2` sits behind the free topic
+      limiter at all**, which is why `check/3` sits behind the free topic
       ownership match.
     * `DeviceFingerprint` (4) — no equivalent.
     * `EnforceSearchCap` (10) — no equivalent; there is no channel search.
 
   (`Auth` (2) is not listed above because `UserSocket.connect/3` IS it. That
-  is the plug an 11-vs-10 count trips over — the eleventh in router order is
+  is the plug a 12-vs-11 count trips over — the twelfth in router order is
   `RequireApiWriteEnabled`, the gap declared open above.)
 
   `RequireActiveSubscription` collapses into the suspended check — since
@@ -68,8 +69,18 @@ defmodule EngramWeb.ChannelGate do
   user-scoped and onboarding pipelines, NOT this one.
 
   **Adding a plug to `:authed_api` does not add it here.** Decide explicitly
-  whether sync needs it, then either add it to `check/2` or add it to the NOT
+  whether sync needs it, then either add it to `check/3` or add it to the NOT
   list above with a reason.
+
+  ## Why the plugin-version floor is enforced here and not at `connect/3`
+
+  Refusing the socket outright would be one line instead of a threaded
+  parameter, and it would cover all three channels at once. It is wrong
+  anyway: `connect/3` can only return `:error`, which reaches the client as an
+  anonymous close carrying no payload. A blocked client would retry forever
+  with nothing to show the user, which is the failure mode the whole feature
+  exists to avoid. `check/3` returns a reason map, so the plugin can say
+  "update the plugin" and stop.
 
   ## Why `user:` is not gated
 
@@ -129,8 +140,14 @@ defmodule EngramWeb.ChannelGate do
   # and looked complete while silently skipping the Pricing v2 §G join gate —
   # the identical fail-open shape this module exists to prevent one layer up.
   # Pass `socket.assigns[:current_api_key]`; nil is the JWT case.
-  @spec check(Engram.Accounts.User.t(), term()) :: :ok | {:error, map()}
-  def check(%Engram.Accounts.User{id: user_id}, api_key) do
+  #
+  # `plugin_version` is mandatory for the same reason: an optional third
+  # argument would make `check(user, key)` the convenient call that compiles,
+  # passes dialyzer, and silently skips the compatibility floor. Pass
+  # `socket.assigns[:plugin_version]`; nil (every client that predates the
+  # param, plus the web SPA) is allowed.
+  @spec check(Engram.Accounts.User.t(), term(), String.t() | nil) :: :ok | {:error, map()}
+  def check(%Engram.Accounts.User{id: user_id}, api_key, plugin_version) do
     # One read, shared by both checks — `gate/2` is told not to re-read.
     #
     # No `|| socket_user` fallback: `Accounts.Lifecycle.hard_delete/2` removes
@@ -144,13 +161,14 @@ defmodule EngramWeb.ChannelGate do
         {:error, %{reason: "account_deleted"}}
 
       fresh ->
-        # Precedence mirrors `:authed_api` exactly (router.ex:52-56):
-        # AccountDeleted -> RotationLockCheck -> RequireOnboarding ->
-        # RequireActiveSubscription. Suspension therefore comes AFTER
-        # onboarding, so an account suspended mid-signup reports the same
-        # reason on both transports. Rotation reuses the row already loaded
-        # here via `check_user/1`, so it costs no extra query.
+        # Precedence mirrors `:authed_api` exactly (router.ex:52-57):
+        # AccountDeleted -> RequirePluginVersion -> RotationLockCheck ->
+        # RequireOnboarding -> RequireActiveSubscription. Suspension therefore
+        # comes AFTER onboarding, so an account suspended mid-signup reports
+        # the same reason on both transports. Rotation reuses the row already
+        # loaded here via `check_user/1`, so it costs no extra query.
         with :ok <- deleted(fresh),
+             :ok <- plugin_version(plugin_version),
              :ok <- rotation(fresh),
              :ok <- onboarding(fresh),
              :ok <- suspended(fresh) do
@@ -206,7 +224,7 @@ defmodule EngramWeb.ChannelGate do
   # unselected columns as nil, so a `select:`-projected `get_user/1` yields
   # `%User{deleted_at: nil, suspended_at: nil}` and both clauses match
   # cleanly — every suspended and soft-deleted account would pass, with no
-  # crash and no test failure. `check/2` must keep loading the FULL row; if
+  # crash and no test failure. `check/3` must keep loading the FULL row; if
   # the join cost ever motivates a narrower query, gate on a column list, not
   # on these clauses.
   defp deleted(%{deleted_at: %DateTime{}}), do: {:error, %{reason: "account_deleted"}}
@@ -214,6 +232,23 @@ defmodule EngramWeb.ChannelGate do
 
   defp suspended(%{suspended_at: %DateTime{}}), do: {:error, %{reason: "account_suspended"}}
   defp suspended(%{suspended_at: nil}), do: :ok
+
+  # The socket half of `EngramWeb.Plugs.RequirePluginVersion`. Carries the
+  # same three recovery fields as the 426 body — a client refused at join has
+  # no working REST call left to go ask why.
+  defp plugin_version(reported) do
+    if Engram.PluginVersion.supported?(reported) do
+      :ok
+    else
+      {:error,
+       %{
+         reason: "plugin_upgrade_required",
+         min_version: Engram.PluginVersion.minimum(),
+         your_version: reported,
+         update_url: Engram.PluginVersion.update_url()
+       }}
+    end
+  end
 
   # Best-effort, and deliberately so. This is a DB WRITE on a path that was
   # read-only: an exception here would propagate out of `join/3`, kill the

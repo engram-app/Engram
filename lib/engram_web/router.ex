@@ -50,6 +50,7 @@ defmodule EngramWeb.Router do
     plug EngramWeb.Plugs.PreAuthRateLimit
     plug EngramWeb.Plugs.Auth
     plug EngramWeb.Plugs.AccountDeleted
+    plug EngramWeb.Plugs.RequirePluginVersion
     plug EngramWeb.Plugs.DeviceFingerprint
     plug EngramWeb.Plugs.RotationLockCheck
     plug EngramWeb.Plugs.RequireOnboarding
