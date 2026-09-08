@@ -94,4 +94,34 @@ defmodule Engram.Logger.MetadataTest do
       refute Keyword.has_key?(md, :span_id)
     end
   end
+
+  describe "redact_topic/1" do
+    test "hashes the user segment of a 3-part CRDT/sync topic, keeps prefix + vault" do
+      user_id = Ecto.UUID.generate()
+      vault_id = Ecto.UUID.generate()
+      hashed = Engram.Crypto.HMAC.hash_user_id(user_id)
+
+      for prefix <- ["crdt", "sync"] do
+        redacted = Metadata.redact_topic("#{prefix}:#{user_id}:#{vault_id}")
+        assert redacted == "#{prefix}:#{hashed}:#{vault_id}"
+        refute String.contains?(redacted, user_id)
+        assert String.contains?(redacted, vault_id)
+      end
+    end
+
+    test "hashes the user segment of a 2-part user topic" do
+      user_id = Ecto.UUID.generate()
+      redacted = Metadata.redact_topic("user:#{user_id}")
+      assert redacted == "user:#{Engram.Crypto.HMAC.hash_user_id(user_id)}"
+      refute String.contains?(redacted, user_id)
+    end
+
+    test "leaves a topic without a user segment untouched" do
+      assert Metadata.redact_topic("phoenix") == "phoenix"
+    end
+
+    test "passes non-binary input through" do
+      assert Metadata.redact_topic(nil) == nil
+    end
+  end
 end

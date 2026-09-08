@@ -175,7 +175,7 @@ defmodule EngramWeb.CrdtChannel do
                       Metadata.with_category(:info, :websocket,
                         conn_id: socket.assigns[:conn_id],
                         device_id: socket.assigns[:device_id],
-                        topic: socket.topic,
+                        topic: Metadata.redact_topic(socket.topic),
                         # Skew tripwire for the Notes.untagged_crdt_client_type/0
                         # default, flipped to "web" in #1301. An untagged socket
                         # now gets a SERVER-side link rewrite on rename, which is
@@ -1497,7 +1497,7 @@ defmodule EngramWeb.CrdtChannel do
       Metadata.with_category(:info, :websocket,
         conn_id: socket.assigns[:conn_id],
         device_id: socket.assigns[:device_id],
-        topic: socket.topic,
+        topic: Metadata.redact_topic(socket.topic),
         reason: Metadata.safe_reason(reason)
       )
     )

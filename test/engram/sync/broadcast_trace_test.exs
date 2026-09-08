@@ -33,7 +33,11 @@ defmodule Engram.Sync.BroadcastTraceTest do
       end)
 
     assert log =~ "sync broadcast emit"
-    assert log =~ "sync:user-1:vault-1"
+    # The topic's user segment is HMAC-hashed in the breadcrumb — the raw
+    # account id must not reach the log — while the prefix + vault id remain.
+    assert log =~ Engram.Logger.Metadata.redact_topic("sync:user-1:vault-1")
+    refute log =~ "sync:user-1:vault-1"
+    assert log =~ "vault-1"
     assert log =~ "note_changed"
     assert log =~ "note-abc"
   end
@@ -73,7 +77,8 @@ defmodule Engram.Sync.BroadcastTraceTest do
       end)
 
     assert log =~ "sync broadcast emit"
-    assert log =~ "sync:from-test"
+    assert log =~ Engram.Logger.Metadata.redact_topic("sync:from-test")
+    refute log =~ "sync:from-test"
     assert log =~ "note_changed"
     assert log =~ "from-note"
     # Distinguishes the socket-origin (CRDT/REST push) leg from the fanout leg.
