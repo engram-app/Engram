@@ -1798,7 +1798,7 @@ defmodule EngramWeb.CrdtChannel do
       "crdt_create failed: #{reason}",
       Metadata.with_category(:warning, :websocket,
         note_id: note_id,
-        user_id: socket.assigns.current_user.id,
+        user_id: HMAC.hash_user_id(to_string(socket.assigns.current_user.id)),
         vault_id: socket.assigns.vault.id
       )
     )
@@ -1854,7 +1854,7 @@ defmodule EngramWeb.CrdtChannel do
     Logger.warning(
       "crdt_channel: dropped crdt_index_msg → #{Metadata.safe_reason(reason)}",
       Metadata.with_category(:warning, :sync,
-        user_id: socket.assigns.current_user.id,
+        user_id: HMAC.hash_user_id(to_string(socket.assigns.current_user.id)),
         vault_id: socket.assigns.vault.id
       )
     )
@@ -1870,7 +1870,7 @@ defmodule EngramWeb.CrdtChannel do
     # Attribute the drop to a user + vault so a lost edit can be traced to who
     # hit it (the 2026-07-06 drops carried neither, so they were unattributable).
     attribution = [
-      user_id: socket.assigns.current_user.id,
+      user_id: HMAC.hash_user_id(to_string(socket.assigns.current_user.id)),
       vault_id: socket.assigns.vault.id
     ]
 
