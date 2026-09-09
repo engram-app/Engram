@@ -33,6 +33,7 @@ Implementation notes vs plan draft:
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 
 import pytest
 
@@ -88,6 +89,20 @@ async def test_disable_stops_flush(vault_a, cdp_a, cdp_b, api_sync):
         # which is enough — no extra sleep needed.
         await cdp_a.enable_remote_logging()
 
+        # Bound every /logs read below to THIS test's window.
+        #
+        # `query=` is a client-side substring filter over whatever /logs
+        # returns, and /logs returns the most recent `limit` rows for the USER.
+        # The e2e vault is session-scoped and shared by ~110 tests, all logging
+        # under one account, so a 200-row window is a few seconds of somebody
+        # else's `gap-heal replay` and `rename-trace` noise — this test's own
+        # entries sit far below it and the filter finds nothing.
+        #
+        # That is why this looked like a delivery flake for so long: the
+        # assertion said "no entries reached the server" while the server held
+        # a full page of entries. `since` is a real backend param; use it.
+        since = datetime.now(timezone.utc).isoformat()
+
         # ------------------------------------------------------------------ #
         # Phase 1: generate entries BEFORE disabling — verify they reach the
         # server so we know the pipeline is working, not just suppressed.
@@ -131,7 +146,9 @@ async def test_disable_stops_flush(vault_a, cdp_a, cdp_b, api_sync):
         while asyncio.get_event_loop().time() < deadline_before:
             await cdp_a.flush_remote_logs()
             flushes += 1
-            before_logs = api_sync.list_logs(limit=200, query="E2E/Logging66/before.md")
+            before_logs = api_sync.list_logs(
+                limit=200, since=since, query="E2E/Logging66/before.md"
+            )
             if before_logs:
                 break
             await asyncio.sleep(0.25)
@@ -142,12 +159,13 @@ async def test_disable_stops_flush(vault_a, cdp_a, cdp_b, api_sync):
         # must distinguish them, or it keeps blaming delivery for what is
         # actually a changed log message.
         if not before_logs:
-            any_logs = api_sync.list_logs(limit=200)
+            any_logs = api_sync.list_logs(limit=200, since=since)
             sample = [str(entry.get("message", ""))[:120] for entry in any_logs[:10]]
             assert before_logs, (
                 f"No log entry matching 'E2E/Logging66/before.md' after "
                 f"{flushes} flush attempts over 15 s, but the server holds "
-                f"{len(any_logs)} log row(s) for this user.\n"
+                f"{len(any_logs)} log row(s) for this user since the test "
+                f"started.\n"
                 f"  - {len(any_logs)} > 0 means DELIVERY WORKS and the "
                 f"substring match is stale: some rlog call in the push path "
                 f"stopped including the note path. Fix the marker, not the "
@@ -184,9 +202,17 @@ async def test_disable_stops_flush(vault_a, cdp_a, cdp_b, api_sync):
         await cdp_a.flush_remote_logs()
 
         # Check that no after-disable marker entries reached the server.
-        # We match on the path string "E2E/Logging66/after.md" in log messages,
-        # which the sync engine includes when it logs push/pull events.
-        after_logs = api_sync.list_logs(limit=200, query="E2E/Logging66/after.md")
+        #
+        # This is the test's ACTUAL claim, and it is an assert-ZERO — which
+        # passes for free the moment the query stops being able to find
+        # anything. Before `since` was added, the 200-row window was full of
+        # other tests' logs, so this assertion held whether or not the toggle
+        # worked. The phase-1 assertion above is what keeps it honest: it
+        # proves the same query DOES find this test's own entries when logging
+        # is on, using the same window. Do not weaken one without the other.
+        after_logs = api_sync.list_logs(
+            limit=200, since=since, query="E2E/Logging66/after.md"
+        )
         assert len(after_logs) == 0, (
             f"Expected 0 log entries containing 'E2E/Logging66/after.md' after "
             f"disabling remote logging, but got {len(after_logs)}: {after_logs!r}"
