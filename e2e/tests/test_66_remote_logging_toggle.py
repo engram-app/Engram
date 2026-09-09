@@ -136,15 +136,27 @@ async def test_disable_stops_flush(vault_a, cdp_a, cdp_b, api_sync):
                 break
             await asyncio.sleep(0.25)
 
-        assert before_logs, (
-            f"No pre-disable log entries reached the server after {flushes} "
-            "flush attempts over 15 s. rlog().info(...) calls inside pushFile() "
-            "either didn't fire (engine code change), or the visibilitychange "
-            "flush handler isn't POSTing to /logs, or POST /logs is failing "
-            "server-side (flush() re-buffers on failure, so repeated attempts "
-            "would all have been retried). Inspect src/remote-log.ts flush() "
-            "and the rlog calls in sync.ts."
-        )
+        # `query=` is a CLIENT-SIDE substring match on the message field
+        # (helpers/api.py list_logs) — the backend has no full-text filter. So
+        # "no matching rows" has two very different causes and the assertion
+        # must distinguish them, or it keeps blaming delivery for what is
+        # actually a changed log message.
+        if not before_logs:
+            any_logs = api_sync.list_logs(limit=200)
+            sample = [str(entry.get("message", ""))[:120] for entry in any_logs[:10]]
+            assert before_logs, (
+                f"No log entry matching 'E2E/Logging66/before.md' after "
+                f"{flushes} flush attempts over 15 s, but the server holds "
+                f"{len(any_logs)} log row(s) for this user.\n"
+                f"  - {len(any_logs)} > 0 means DELIVERY WORKS and the "
+                f"substring match is stale: some rlog call in the push path "
+                f"stopped including the note path. Fix the marker, not the "
+                f"flush.\n"
+                f"  - {len(any_logs)} == 0 means nothing is arriving: rlog is "
+                f"disabled, the buffer is empty, or POST /logs is failing "
+                f"(flush() re-buffers on failure, so every attempt retried).\n"
+                f"Most recent messages: {sample}"
+            )
 
         # ------------------------------------------------------------------ #
         # Phase 2: disable remote logging on BOTH sync-pair instances.
