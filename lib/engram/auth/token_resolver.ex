@@ -72,8 +72,28 @@ defmodule Engram.Auth.TokenResolver do
   # `Accounts.verify_jwt` both call `Engram.Token.verify_and_validate`, so the
   # old fall-through ran the identical verifier twice and returned the identical
   # error. Only the Clerk path's label changes.
+  # JokenJwks failures. All four are reachable ONLY after a `kid` was found in
+  # the header (`JokenJwks.before_verify/2` extracts the kid before it looks up
+  # a signer), and our internal HS256 JWTs carry no kid — they halt earlier with
+  # `:no_kid_in_token_header`, which is deliberately NOT listed here because it
+  # is precisely the "try the internal verifier" case.
+  #
+  # `:kid_does_not_match` is a provider signing-key ROTATION. Leaving it out was
+  # the remaining half of the mislabel: the one scenario the 6753-line incident
+  # was misdiagnosed as would itself still have been logged `signature_error`.
+  # `Engram.PromEx.Reliability` already documents `could_not_reach_jwks_url` as
+  # an expected `reason` tag; before this it could never actually be emitted.
+  @jwks_failures [
+    :kid_does_not_match,
+    :no_signers_fetched,
+    :could_not_reach_jwks_url,
+    :jwks_client_http_error
+  ]
+
   defp conclusive?(reason) when is_list(reason), do: Keyword.has_key?(reason, :claim)
-  defp conclusive?(reason), do: reason in [:missing_claims, :invalid_signature, :invalid_azp]
+
+  defp conclusive?(reason),
+    do: reason in ([:missing_claims, :invalid_signature, :invalid_azp] ++ @jwks_failures)
 
   defp authenticate_internal_jwt(token) do
     case Accounts.verify_jwt(token) do

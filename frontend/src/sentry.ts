@@ -54,6 +54,26 @@ const KNOWN_FIRST_SEGMENTS = new Set<string>([
 // null when the chunk itself fails to load (ad-blockers match "sentry" in asset
 // URLs; stale-tab 404s) — callers must tolerate that and it must NOT surface as
 // an unhandled rejection.
+/** Messages we refuse to report, shared by `ignoreErrors` and `captureError`.
+ *
+ *  `runtime.sendMessage` is the WebExtension API. We ship no extension, so
+ *  every frame of it is a bug in something the USER installed, surfacing here
+ *  only because our global handlers catch it. Keep this to patterns actually
+ *  observed in prod — a speculative blocklist is how a real error goes missing. */
+const IGNORED_ERROR_PATTERNS = [/runtime\.sendMessage/];
+
+/** Whether the SDK's inbound filter will discard this error.
+ *
+ *  Exists because `captureException` mints and returns an event id BEFORE the
+ *  filter runs, and `flush()` then resolves true with nothing queued — so the
+ *  delivery gate in `captureError` cannot tell "filtered" from "delivered" and
+ *  would hand the UI a reference id for an event that will never exist in
+ *  Sentry. That is the exact false-positive the gate was written to prevent. */
+function isIgnoredError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	return IGNORED_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+}
+
 const sentryDsn = import.meta.env.VITE_SENTRY_DSN;
 
 type SentrySdk = typeof import("@sentry/react");
@@ -112,6 +132,13 @@ export async function captureError(
 	error: unknown,
 	errorInfo?: ErrorInfo,
 ): Promise<string | undefined> {
+	// Before awaiting the SDK: a filtered event still yields an id from
+	// captureException and an empty, instantly-true flush, so the delivery gate
+	// below cannot catch it. Returning undefined keeps the documented contract —
+	// an id means DELIVERED.
+	if (isIgnoredError(error)) {
+		return;
+	}
 	const Sentry = await sentryReady;
 	if (!Sentry) {
 		return;
@@ -290,13 +317,7 @@ export function sentryInitOptions(dsn: string) {
 		sendDefaultPii: false,
 		// `inboundFiltersIntegration()` is one of the SDK defaults this options
 		// object merges into, so this needs no extra integration to take effect.
-		//
-		// `runtime.sendMessage` is the WebExtension API. We ship no extension, so
-		// every frame of it is a bug in something the USER installed, surfacing
-		// here only because our global handlers catch it. Keep this list to
-		// patterns actually observed in prod — a speculative blocklist is how a
-		// real error goes missing.
-		ignoreErrors: [/runtime\.sendMessage/],
+		ignoreErrors: IGNORED_ERROR_PATTERNS,
 		beforeBreadcrumb: scrubBreadcrumb,
 		beforeSend: scrubEvent,
 	};

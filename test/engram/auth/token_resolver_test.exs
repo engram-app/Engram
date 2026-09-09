@@ -138,6 +138,25 @@ defmodule Engram.Auth.TokenResolverTest do
     assert Engram.Auth.rejection_label(reason) == "signature_error"
   end
 
+  # A Clerk signing-key ROTATION is the scenario the original 6753-line
+  # investigation was misdirected toward, and it was the one case the first
+  # version of `conclusive?/1` still could not see. JokenJwks returns
+  # `:kid_does_not_match` when the token's kid is absent from the JWKS.
+  #
+  # Safe to treat as conclusive because `JokenJwks.before_verify/2` extracts the
+  # kid BEFORE looking up a signer: a token with no kid at all halts earlier
+  # with `:no_kid_in_token_header`. Our internal HS256 JWTs carry no kid, so
+  # they can never reach this branch — which is what the fall-through test
+  # below pins down.
+  @tag capture_log: true
+  test "a Clerk JWT signed with an unknown kid reports the kid mismatch" do
+    claims = Engram.ClerkHelpers.clerk_claims("clerk_rotated_key_user")
+    token = Engram.ClerkHelpers.sign_clerk_jwt_with_kid(claims, "rotated-key-99")
+
+    assert {:error, reason} = TokenResolver.resolve(token)
+    assert Engram.Auth.rejection_label(reason) == "kid_does_not_match"
+  end
+
   # ---- Local JWT (provider: local) ----
 
   test "resolves a valid local JWT when provider is local" do
