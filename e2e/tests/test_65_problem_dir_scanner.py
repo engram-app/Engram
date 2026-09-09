@@ -32,7 +32,9 @@ Implementation pivot (vs plan draft):
 CSS class verification (src/tabs/advanced-tab.ts):
   - Warning Setting rows are tagged with .engram-status-warning (line 150).
   - The "Add to ignores" button text is hard-coded as "Add to ignores" (line 140).
-  - The Settings modal root is .modal-container .modal.mod-settings.
+  - Our settings tab root is .engram-tab-content, in the main window on
+    Obsidian 1.12 (Settings is a modal) and in a separate window on 1.13+.
+    Reads go through cdp.settings_evaluate, which finds whichever it is.
   - Plugin tab panel is opened via app.setting.openTabById('engram-vault-sync').
   - Advanced tab button has data-tab="advanced" (settings.ts line 113).
 """
@@ -111,32 +113,36 @@ async def test_node_modules_detected_and_addable(vault_a, cdp_a):
             }})()
             """
         )
-        # Wait for the settings modal to appear. app.setting.open() and
-        # openTabById() are synchronous in Obsidian — a 3 s ceiling is
-        # already 30× the typical render time.
+        # Wait for OUR settings tab to render. Deliberately not
+        # `.modal-container .modal.mod-settings`: that is 1.12-only markup.
+        # Obsidian 1.13 opens Settings in a separate window where it is not a
+        # modal at all, so the old selector could never match and the failure
+        # blamed the plugin's tab registry for an Obsidian version bump.
+        # `.engram-tab-content` is what settings.ts creates either way.
         settings_open = False
         for _ in range(30):  # 3 s
-            modal_open = await cdp_a.evaluate(
-                "Boolean(document.querySelector('.modal-container .modal.mod-settings'))"
+            tab_rendered = await cdp_a.settings_evaluate(
+                "Boolean(document.querySelector('.engram-tab-content'))"
             )
-            if modal_open:
+            if tab_rendered:
                 settings_open = True
                 break
             await asyncio.sleep(0.1)
         assert settings_open, (
-            "Obsidian settings modal did not open within 3 s. "
-            "app.setting.open() + openTabById() should be synchronous; "
-            "if the modal is missing, Obsidian's setting registry may have "
-            "stopped accepting the engram tab id."
+            "The plugin's settings tab (.engram-tab-content) did not render "
+            "within 3 s. app.setting.open() + openTabById() should be "
+            "synchronous; if it is missing, Obsidian's setting registry may "
+            "have stopped accepting the engram tab id."
         )
 
         # Click the Advanced tab button (data-tab="advanced").
-        clicked_tab = await cdp_a.evaluate(
+        clicked_tab = await cdp_a.settings_evaluate(
             """
             (() => {
-                const btn = document.querySelector(
-                    '.modal-container .modal.mod-settings [data-tab="advanced"]'
-                );
+                // Unscoped: `settings_evaluate` already targets the window
+                // rendering our tab, and the `.modal.mod-settings` wrapper
+                // does not exist when Settings is its own window (1.13+).
+                const btn = document.querySelector('[data-tab="advanced"]');
                 if (!btn) return 'no-tab-btn';
                 btn.click();
                 return 'clicked';
@@ -158,7 +164,7 @@ async def test_node_modules_detected_and_addable(vault_a, cdp_a):
         warning_visible = False
         deadline = asyncio.get_event_loop().time() + 20
         while asyncio.get_event_loop().time() < deadline:
-            warning_visible = await cdp_a.evaluate(
+            warning_visible = await cdp_a.settings_evaluate(
                 "Boolean(document.querySelector('.engram-status-warning'))"
             )
             if warning_visible:
@@ -173,7 +179,7 @@ async def test_node_modules_detected_and_addable(vault_a, cdp_a):
         )
 
         # Click "Add to ignores" inside the warning row for node_modules/.
-        clicked_btn = await cdp_a.evaluate(
+        clicked_btn = await cdp_a.settings_evaluate(
             """
             (() => {
                 const warnings = Array.from(
@@ -211,16 +217,11 @@ async def test_node_modules_detected_and_addable(vault_a, cdp_a):
         )
 
     finally:
-        # Close the settings modal.
-        await cdp_a.evaluate(
-            """
-            document.querySelectorAll('.modal-container .modal').forEach(
-                m => m.dispatchEvent(
-                    new KeyboardEvent('keydown', {key: 'Escape', bubbles: true})
-                )
-            )
-            """
-        )
+        # `app.setting.close()`, not an Escape dispatched at `.modal-container`
+        # in the main window: on Obsidian 1.13 Settings is a separate Electron
+        # window that the main window's DOM cannot reach, so the old teardown
+        # silently left it open for every later test in the session.
+        await cdp_a.close_settings()
         # Restore settings.ignorePatterns to its original value.
         restore = original_patterns if isinstance(original_patterns, str) else ""
         await cdp_a.evaluate(
