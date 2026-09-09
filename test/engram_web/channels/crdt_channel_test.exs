@@ -2050,7 +2050,7 @@ defmodule EngramWeb.CrdtChannelTest do
     # -------------------------------------------------------------------------
 
     test "dropped-frame warning exposes the note_id unredacted for diagnosis",
-         %{socket: socket, doc_id: doc_id} do
+         %{socket: socket, doc_id: doc_id, user: user} do
       # doc_id here is a valid note_id UUID (setup fixture).
       log =
         capture_log(fn ->
@@ -2094,6 +2094,16 @@ defmodule EngramWeb.CrdtChannelTest do
       # carried neither).
       assert log =~ "user_id=", "drop log must carry user_id for attribution: #{inspect(log)}"
       assert log =~ "vault_id=", "drop log must carry vault_id for attribution: #{inspect(log)}"
+
+      # The user_id must be the HMAC digest, never the raw account UUID — other
+      # CRDT log sites (e.g. the crdt_create attribution) already hash it, and a
+      # first-external-user audit found these drop/create-failure lines were the
+      # one place still emitting the cleartext user id.
+      refute String.contains?(log, user.id),
+             "raw user UUID must NOT appear — user_id must be HMAC-hashed: #{inspect(log)}"
+
+      assert String.contains?(log, Engram.Crypto.HMAC.hash_user_id(user.id)),
+             "drop log must carry the HMAC-hashed user_id: #{inspect(log)}"
     end
 
     test "a non-UUID doc_id stays redacted — never leaks a cleartext path",

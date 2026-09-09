@@ -19,10 +19,19 @@ defmodule Engram.Auth.TokenDebugTest do
 
   test "peeks header + claims of an unverified HS256 JWT" do
     # token below is signed with a throwaway secret; TokenDebug must NOT verify it.
-    token = Engram.Auth.TokenDebugTest.Fixtures.hs256(%{"iss" => "engram", "sub" => "user_123"})
+    token =
+      Engram.Auth.TokenDebugTest.Fixtures.hs256(%{
+        "iss" => "engram",
+        "sub" => "user_123",
+        "iat" => 1_700_000_000,
+        "exp" => 1_700_000_900
+      })
+
     md = TokenDebug.metadata(token)
     assert md[:alg] == "HS256"
     assert md[:iss] == "engram"
+    assert md[:iat] == 1_700_000_000
+    assert md[:exp] == 1_700_000_900
     assert md[:sub_hash] == Engram.Crypto.HMAC.hash_user_id("user_123")
     refute md[:sub_hash] == "user_123"
   end
@@ -32,6 +41,8 @@ defmodule Engram.Auth.TokenDebugTest do
              alg: nil,
              kid: nil,
              iss: nil,
+             iat: nil,
+             exp: nil,
              sub_hash: nil
            ]
   end

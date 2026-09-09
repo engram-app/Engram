@@ -20,11 +20,19 @@ defmodule Engram.Auth.TokenDebug do
       alg: header["alg"],
       kid: header["kid"],
       iss: claims["iss"],
+      # `iat`/`exp` are unix epochs, not PII. They discriminate the two causes
+      # of a sustained socket-reject loop that otherwise look identical: a FROZEN
+      # `iat` (unchanged across every reject) means the client is replaying one
+      # token and never calling getToken; an ADVANCING `iat` on a
+      # `signature_error` means fresh tokens are being minted that still fail
+      # verify — i.e. signing-key / JWKS drift, not a stuck client.
+      iat: claims["iat"],
+      exp: claims["exp"],
       sub_hash: hash_sub(claims["sub"])
     ]
   end
 
-  def metadata(_), do: [alg: nil, kid: nil, iss: nil, sub_hash: nil]
+  def metadata(_), do: [alg: nil, kid: nil, iss: nil, iat: nil, exp: nil, sub_hash: nil]
 
   defp safe_peek(fun, token) do
     case fun.(token) do

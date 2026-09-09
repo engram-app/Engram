@@ -168,7 +168,7 @@ defmodule Engram.Sync.Broadcast do
     op = Map.get(payload, "event_type")
 
     Logger.info(
-      "sync broadcast emit topic=#{topic} event=#{event} note_id=#{note_id} op=#{op} mode=#{mode}",
+      "sync broadcast emit topic=#{Metadata.redact_topic(topic)} event=#{event} note_id=#{note_id} op=#{op} mode=#{mode}",
       Metadata.with_category(:info, :sync, note_id: note_id)
     )
   end
