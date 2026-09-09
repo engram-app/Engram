@@ -42,7 +42,65 @@ defmodule Engram.Parsers.Markdown do
         |> build_chunks(folder, title)
       end
 
-    body_chunks ++ frontmatter_chunk(content, folder, title, length(body_chunks))
+    (body_chunks ++ frontmatter_chunk(content, folder, title, length(body_chunks)))
+    |> Enum.flat_map(&enforce_size_cap/1)
+    |> Enum.with_index()
+    |> Enum.map(fn {chunk, idx} -> %{chunk | position: idx} end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Size cap (backstop)
+  # ---------------------------------------------------------------------------
+
+  # Every chunk's `context_text` is sent to Voyage, which rejects an oversized
+  # input with a permanent HTTP 400 — no retry fixes it, so EmbedNote parks the
+  # note on a 6h poison cooldown and ReconcileEmbeddings re-tries it forever
+  # (prod, 2026-09-09: six notes from one import, stuck).
+  #
+  # Two paths above emit unbounded text: `split_text/2` splits on spaces, so a
+  # run with none (base64 data URI, long URL, minified blob, CJK) passes through
+  # whole; and `frontmatter_chunk/4` never consulted a limit at all. Capping here
+  # rather than in each one means every chunk — including any a future path adds
+  # — flows through a single limit.
+  defp enforce_size_cap(%{text: text} = chunk) when byte_size(text) <= @max_chunk_chars do
+    [chunk]
+  end
+
+  defp enforce_size_cap(chunk) do
+    # Both construction sites build `context_text` as
+    # `context_prefix <> "\n\n" <> text`, so the leading bytes that are not the
+    # text are exactly the prefix (plus its separator) — reusable as-is.
+    prefix_len = byte_size(chunk.context_text) - byte_size(chunk.text)
+    prefix = binary_part(chunk.context_text, 0, prefix_len)
+
+    chunk.text
+    |> hard_split(@max_chunk_chars)
+    |> Enum.map(&%{chunk | text: &1, context_text: prefix <> &1})
+  end
+
+  # Split at codepoint boundaries into pieces of at most `max_bytes`. Slicing at
+  # a raw byte offset would cut a multibyte character in half and yield invalid
+  # UTF-8 — and space-free multibyte text (CJK) is precisely the input that gets
+  # here, since it offers the word splitter nothing to split on.
+  defp hard_split(text, max_bytes) do
+    {done, current, _size} =
+      text
+      |> String.codepoints()
+      |> Enum.reduce({[], [], 0}, fn codepoint, {done, current, size} ->
+        next_size = size + byte_size(codepoint)
+
+        # `current != []` keeps a lone codepoint wider than the budget moving
+        # instead of looping forever on a piece it can never shrink.
+        if current != [] and next_size > max_bytes do
+          {[current | done], [codepoint], byte_size(codepoint)}
+        else
+          {done, [codepoint | current], next_size}
+        end
+      end)
+
+    [current | done]
+    |> Enum.reverse()
+    |> Enum.map(&(&1 |> Enum.reverse() |> IO.iodata_to_binary()))
   end
 
   # Frontmatter values used to be stripped before indexing, making every key
@@ -242,10 +300,22 @@ defmodule Engram.Parsers.Markdown do
       Enum.reduce(words, {[], ""}, fn word, {done, acc} ->
         candidate = if acc == "", do: word, else: acc <> " " <> word
 
-        if byte_size(candidate) > max_chars and acc != "" do
-          {[acc | done], word}
-        else
-          {done, candidate}
+        cond do
+          byte_size(candidate) <= max_chars ->
+            {done, candidate}
+
+          # The word alone overflows, so flushing `acc` here would strand it as
+          # a runt chunk — a bare "#" when a heading line is followed by a
+          # space-free run — and the word would still need splitting after.
+          # Cut the combined text instead, which fills the current chunk to the
+          # brim and leaves the remainder as the next accumulator. A runt
+          # embeds to a meaningless vector and still costs a Qdrant point.
+          byte_size(word) > max_chars ->
+            [tail | full] = candidate |> hard_split(max_chars) |> Enum.reverse()
+            {full ++ done, tail}
+
+          true ->
+            {[acc | done], word}
         end
       end)
 

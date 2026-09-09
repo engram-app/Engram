@@ -172,6 +172,25 @@ defmodule Engram.Workers.EmbedNote do
   defp embed_error_status({status, _body}) when is_integer(status), do: status
   defp embed_error_status(_), do: nil
 
+  # The provider's own error string. `status` alone cannot distinguish "input
+  # too long" from a bad model name or a malformed point, so a 400 could only be
+  # diagnosed by guessing from the code — which is exactly what the 2026-09-09
+  # oversized-chunk stall cost us. Read from the provider's error field only
+  # (never the echoed input, which is note text) and truncated, so a chatty
+  # upstream cannot turn one log line into a content leak.
+  @error_detail_limit 200
+
+  defp embed_error_detail({_status, %{"detail" => detail}}) when is_binary(detail) do
+    String.slice(detail, 0, @error_detail_limit)
+  end
+
+  # Qdrant's shape.
+  defp embed_error_detail({_status, %{"status" => %{"error" => error}}}) when is_binary(error) do
+    String.slice(error, 0, @error_detail_limit)
+  end
+
+  defp embed_error_detail(_), do: nil
+
   # Pricing v2 §B — block embeds when the user has exhausted their lifetime
   # token budget. Resolver returns nil for Starter/Pro (unmetered), so this is
   # effectively Free-only. Per-user overrides via Billing.UserLimitOverride.
@@ -328,6 +347,7 @@ defmodule Engram.Workers.EmbedNote do
         note_id: note.id,
         error_kind: error_kind,
         status: status,
+        detail: embed_error_detail(reason),
         cooldown_seconds: cooldown
       )
     )
@@ -399,7 +419,8 @@ defmodule Engram.Workers.EmbedNote do
                     vault_id: note.vault_id,
                     note_id: note.id,
                     error_kind: error_kind,
-                    status: status
+                    status: status,
+                    detail: embed_error_detail(reason)
                   )
                 )
 
