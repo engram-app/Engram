@@ -236,6 +236,11 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/instance/",
     "lib/engram/mailer.ex",
     "lib/engram/oban_facade.ex",
+    # Compares a self-reported client version string against a compile-time
+    # floor. No Repo, no note, no path, no query — the only value it ever holds
+    # is an `X-Plugin-Version` header, and it has no Logger call at all. The
+    # log line that DOES carry that value is in `user_socket.ex`, listed above.
+    "lib/engram/plugin_version.ex",
     "lib/engram/release.ex",
     "lib/engram/release/",
     "lib/engram/repo.ex",
