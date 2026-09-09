@@ -8,13 +8,17 @@ defmodule Engram.Indexing do
 
   import Ecto.Query
 
+  alias Engram.Crypto
   alias Engram.Indexing.IndexCap
   alias Engram.KeywordIndex
+  alias Engram.Logger.Metadata
   alias Engram.Notes.Chunk
   alias Engram.Parsers.Markdown
   alias Engram.Repo
   alias Engram.Search.SearchProfile
   alias Engram.Vector.Qdrant
+
+  require Logger
 
   @default_dims 1024
 
@@ -51,7 +55,7 @@ defmodule Engram.Indexing do
 
     case prepare_index(note, vault, user) do
       {:ok, {:no_chunks, link_rows}} ->
-        case Engram.Crypto.get_dek(user) do
+        case Crypto.get_dek(user) do
           {:ok, _dek} ->
             # `:no_chunks` means this note must end up with ZERO index
             # artifacts, and it is reached two ways: the note was emptied, or
@@ -111,7 +115,6 @@ defmodule Engram.Indexing do
       user = user || Engram.Accounts.get_user_with_subscription!(note.user_id)
 
       if IndexCap.within_cap?(note, user) do
-        context_texts = Enum.map(chunks, & &1.context_text)
         dims = Application.get_env(:engram, :embed_dims, @default_dims)
 
         # Keyword-only tiers never call Voyage. `nil` vectors flow through
@@ -121,10 +124,12 @@ defmodule Engram.Indexing do
         semantic? = SearchProfile.resolve(user).semantic
 
         with :ok <- Qdrant.ensure_collection(collection(), dims),
-             {:ok, filter_key} <- Engram.Crypto.dek_filter_key(user),
-             {:ok, vectors} <- maybe_embed(semantic?, context_texts) do
+             {:ok, filter_key} <- Crypto.dek_filter_key(user),
+             {:ok, content_key} <- Crypto.dek_content_hash_key(user),
+             plan = plan_chunks(note, chunks, content_key),
+             {:ok, vectors} <- maybe_embed(semantic?, embed_texts(plan)) do
           avgdl = Engram.KeywordIndex.Stats.avgdl(note.vault_id)
-          build_prepared(note, user, vault, chunks, vectors, filter_key, avgdl, link_rows)
+          build_prepared(note, user, vault, plan, vectors, filter_key, avgdl, link_rows)
         else
           {:error, :no_dek} = err ->
             emit_no_dek_telemetry(note)
@@ -185,42 +190,105 @@ defmodule Engram.Indexing do
         vault: vault,
         chunk_rows: chunk_rows,
         qdrant_points: qdrant_points,
-        links: link_rows
+        links: link_rows,
+        reused_point_ids: reused_point_ids,
+        stale_point_ids: stale_point_ids,
+        note_payload: note_payload
       }) do
-    # Points first, by id, while the chunk rows still name them — a rename can
-    # have retagged the note row, leaving the hmac filter below matching
-    # nothing and the old points stranded. See `delete_points_for_note/1`.
-    with :ok <- delete_points_for_note(note.id),
-         :ok <-
-           Qdrant.delete_by_note(
-             collection(),
-             to_string(note.user_id),
-             to_string(note.vault_id),
-             encode_hmac(note.path_hmac)
-           ) do
+    # Ordered so that every failure leaves STRAY points (which OrphanSweep
+    # reaps) rather than a chunk row naming a point that is already gone —
+    # which nothing self-heals and which reads as silently missing content.
+    # That means the stale delete goes LAST, after the rows stop naming those
+    # points. Deleting first and crashing before the row write would leave the
+    # next attempt happily "reusing" ids that no longer exist in Qdrant.
+    with :ok <- purge_before_rebuild(note, reused_point_ids),
+         :ok <- upsert_points_batched(qdrant_points),
+         # Reused points keep their vectors AND their ciphertext (every
+         # encrypted field is inside `context_text`, so an equal hmac means an
+         # identical payload), but the note-level filter keys on them are
+         # note-level: a frontmatter tag edit changes ONE chunk while every
+         # other point still answers tag filters with the pre-edit tags. One
+         # PATCH refreshes the lot — the values are identical across a note's
+         # points, which is why `chunk_index` no longer lives in the payload.
+         :ok <- Qdrant.set_payload(collection(), reused_point_ids, note_payload) do
       # skip_tenant_check: trusted internal pipeline, already scoped by note_id/user_id
-      _ =
-        Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id), skip_tenant_check: true)
-
-      _ = Repo.insert_all(Chunk, chunk_rows, skip_tenant_check: true)
+      #
+      # Wholesale rewrite rather than a row-level diff: the rows are local and
+      # cheap, and replacing them all sidesteps every ordering problem with
+      # `chunks_note_id_position_index` when positions shift. One transaction
+      # so OrphanSweep can never scroll a live point during the window where
+      # its row is momentarily absent.
+      {:ok, _} =
+        Repo.transaction(fn ->
+          Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id), skip_tenant_check: true)
+          Repo.insert_all(Chunk, chunk_rows, skip_tenant_check: true)
+        end)
 
       :ok = Engram.Links.replace_links(user, vault, note.id, link_rows)
 
-      # Bounded upsert bodies: thousands of 1024-dim float vectors as one
-      # JSON PUT is tens of MB; Qdrant handles batches fine but the single
-      # request does not.
-      qdrant_points
-      |> Enum.chunk_every(256)
-      |> Enum.reduce_while(:ok, fn batch, :ok ->
-        case Qdrant.upsert_points(collection(), batch) do
-          :ok -> {:cont, :ok}
-          other -> {:halt, other}
-        end
-      end)
-      |> case do
-        :ok -> {:ok, length(chunk_rows)}
-        other -> other
+      drop_stale_points(reused_point_ids, stale_point_ids, note)
+
+      {:ok, length(chunk_rows)}
+    end
+  end
+
+  # Bounded upsert bodies: thousands of 1024-dim float vectors as one JSON PUT
+  # is tens of MB; Qdrant handles batches fine but the single request does not.
+  defp upsert_points_batched(points) do
+    points
+    |> Enum.chunk_every(256)
+    |> Enum.reduce_while(:ok, fn batch, :ok ->
+      case Qdrant.upsert_points(collection(), batch) do
+        :ok -> {:cont, :ok}
+        other -> {:halt, other}
       end
+    end)
+  end
+
+  # Nothing reusable — every chunk is being rebuilt, so keep the belt-and-
+  # braces purge this path has always run: by point id, AND by the path_hmac
+  # filter, which is the only thing that reaches points whose chunk rows were
+  # lost (a Postgres restore rolled back past the embed that wrote them).
+  #
+  # The reuse path cannot run that filter: it matches the note's points
+  # wholesale, including the ones being kept. It relies on `OrphanSweep`'s
+  # point pass for that class instead, which is the same reconciliation on a
+  # weekly tick rather than per index.
+  defp purge_before_rebuild(note, []), do: delete_note_points(note)
+  defp purge_before_rebuild(_note, _reused), do: :ok
+
+  # Already handled wholesale by `purge_before_rebuild/2`.
+  defp drop_stale_points([], _stale, _note), do: :ok
+
+  defp drop_stale_points(_reused, stale, note) do
+    case Qdrant.delete_points(collection(), stale) do
+      :ok ->
+        :ok
+
+      other ->
+        # The index itself is correct; what survives is a stray carrying
+        # deleted content, still searchable until OrphanSweep reaps it. Do NOT
+        # return an error: the rows are already committed and no longer name
+        # these ids, so a retry cannot find them again — it would only redo
+        # correct work. Count it so a rising rate is visible.
+        :telemetry.execute(
+          [:engram, :indexing, :stale_points_leaked],
+          %{count: length(stale)},
+          %{note_id: note.id, user_id: note.user_id, vault_id: note.vault_id}
+        )
+
+        Logger.warning(
+          "indexing_stale_points_leaked",
+          Metadata.with_category(:warning, :search,
+            user_id: note.user_id,
+            vault_id: note.vault_id,
+            note_id: note.id,
+            total_count: length(stale),
+            reason: Metadata.safe_reason(other)
+          )
+        )
+
+        :ok
     end
   end
 
@@ -229,14 +297,38 @@ defmodule Engram.Indexing do
   up old path's points). T3.2 — `path_hmac` is the base64-encoded HMAC of
   the note path; carrying plaintext path through Oban args defeats Phase B
   encryption for the rename window.
+
+  Also drops the note's chunk-reuse markers. This filter deletes points that
+  the note's chunk rows still name, and a same-folder rename of a note with a
+  heading leaves every `context_text` identical — so the re-index that follows
+  would happily "reuse" the ids this call just removed and leave the note
+  silently unsearchable. Forgetting the markers costs one full re-embed of a
+  note that was about to pay for one anyway.
   """
   def delete_points_by_path_hmac(note, path_hmac) do
-    Qdrant.delete_by_note(
-      collection(),
-      to_string(note.user_id),
-      to_string(note.vault_id),
-      path_hmac
+    with :ok <-
+           Qdrant.delete_by_note(
+             collection(),
+             to_string(note.user_id),
+             to_string(note.vault_id),
+             path_hmac
+           ) do
+      forget_chunk_reuse(note.id)
+      :ok
+    end
+  end
+
+  # Clears the reuse fingerprints for a note, forcing its next index to rebuild
+  # every chunk. `nil` is the same "cannot be matched" state a row written
+  # before the column existed is in.
+  defp forget_chunk_reuse(note_id) do
+    Repo.update_all(
+      from(c in Chunk, where: c.note_id == ^note_id and not is_nil(c.context_hmac)),
+      [set: [context_hmac: nil]],
+      skip_tenant_check: true
     )
+
+    :ok
   end
 
   @doc """
@@ -278,16 +370,26 @@ defmodule Engram.Indexing do
   `source_path`. The note row's `path_hmac` is the source of truth.
   """
   def delete_note_index(note) do
-    with :ok <- delete_points_for_note(note.id),
-         :ok <-
-           Qdrant.delete_by_note(
-             collection(),
-             to_string(note.user_id),
-             to_string(note.vault_id),
-             encode_hmac(note.path_hmac)
-           ) do
+    with :ok <- delete_note_points(note) do
       Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id), skip_tenant_check: true)
       :ok
+    end
+  end
+
+  # Every Qdrant point a note could own, removed two ways.
+  #
+  # By id first, while the chunk rows still name them — a rename can have
+  # retagged the note row, leaving the hmac filter below matching nothing and
+  # the old points stranded. See `delete_points_for_note/1`. The filter then
+  # catches the reverse case: points whose rows are already gone.
+  defp delete_note_points(note) do
+    with :ok <- delete_points_for_note(note.id) do
+      Qdrant.delete_by_note(
+        collection(),
+        to_string(note.user_id),
+        to_string(note.vault_id),
+        encode_hmac(note.path_hmac)
+      )
     end
   end
 
@@ -384,10 +486,75 @@ defmodule Engram.Indexing do
     end
   end
 
+  # Decides, per chunk, whether it can keep the point it already has (#1592).
+  #
+  # The fingerprint is over `context_text` — the exact string the embedder is
+  # given ("folder > title > heading\n\ntext") — NOT the bare chunk text. That
+  # distinction is the whole correctness argument: an equal `context_text`
+  # means the dense vector, the sparse vector, `token_count`, and all three
+  # encrypted payload fields (`text`, `title`, `heading_path`, all of which are
+  # inside it) are reusable verbatim. Hashing the bare text instead would
+  # preserve a vector built under a stale title or folder.
+  #
+  # `position` and the char offsets are deliberately NOT in the hash. Inserting
+  # a paragraph shifts every later chunk's offsets while leaving its text
+  # identical, and that is exactly the case reuse exists to catch.
+  #
+  # Matched by multiplicity, not by set membership: a note with two identical
+  # sections has two rows under one hmac and must consume one point each, or
+  # the second chunk silently adopts the first one's point.
+  defp plan_chunks(note, chunks, content_key) do
+    chunks =
+      Enum.map(chunks, fn chunk ->
+        Map.put(chunk, :context_hmac, Crypto.hmac_content_hash(content_key, chunk.context_text))
+      end)
+
+    existing =
+      Chunk
+      |> where([c], c.note_id == ^note.id)
+      |> select([c], {c.context_hmac, c.qdrant_point_id, c.token_count})
+      |> Repo.all(skip_tenant_check: true)
+      |> Enum.reject(fn {_hmac, point_id, _tokens} -> is_nil(point_id) end)
+
+    # A nil hmac is a row written before the column existed, or one whose key
+    # a DEK rotation invalidated. It names a real point that still has to be
+    # cleaned up, so it stays in `existing` — it just can never be matched.
+    by_hmac =
+      existing
+      |> Enum.reject(fn {hmac, _point_id, _tokens} -> is_nil(hmac) end)
+      |> Enum.group_by(
+        fn {hmac, _point_id, _tokens} -> hmac end,
+        fn {_hmac, point_id, tokens} -> {point_id, tokens} end
+      )
+
+    {entries, _left} =
+      Enum.map_reduce(chunks, by_hmac, fn chunk, acc ->
+        case Map.get(acc, chunk.context_hmac) do
+          [{point_id, tokens} | rest] ->
+            {{:reuse, chunk, point_id, tokens}, Map.put(acc, chunk.context_hmac, rest)}
+
+          _none ->
+            {{:embed, chunk}, acc}
+        end
+      end)
+
+    reused = for {:reuse, _chunk, point_id, _tokens} <- entries, do: point_id
+
+    %{
+      entries: entries,
+      stale_point_ids: Enum.map(existing, fn {_h, id, _t} -> id end) -- reused
+    }
+  end
+
+  defp embed_texts(plan), do: for({:embed, chunk} <- plan.entries, do: chunk.context_text)
+
+  defp entry_chunk({:reuse, chunk, _point_id, _tokens}), do: chunk
+  defp entry_chunk({:embed, chunk}), do: chunk
+
   # Encrypt-first: build payloads + encrypt in memory BEFORE any mutation.
   # If any chunk's encryption fails, no Postgres row or Qdrant point is touched
   # and prior state survives for the next Oban retry.
-  defp build_prepared(note, user, vault, chunks, vectors, filter_key, avgdl, link_rows) do
+  defp build_prepared(note, user, vault, plan, vectors, filter_key, avgdl, link_rows) do
     now = DateTime.utc_now(:second)
 
     # Language is a property of the NOTE, not of each chunk. Detecting per chunk
@@ -415,106 +582,141 @@ defmodule Engram.Indexing do
     # token indexing, which is the right answer — YAML keys should not pick a
     # stemmer for prose that doesn't exist.
     language =
-      chunks
+      plan.entries
+      |> Enum.map(&entry_chunk/1)
       |> Enum.reject(&(&1.heading_path == "frontmatter"))
       |> Enum.take(3)
       |> Enum.map_join("\n\n", & &1.text)
       |> detect_language()
 
+    note_payload = note_payload(note)
+    ctx = {note, user, note_payload, filter_key, avgdl, language, now}
+
     prepared =
-      Enum.zip(chunks, vectors)
-      |> Enum.reduce_while({:ok, []}, fn {chunk, vector}, {:ok, acc} ->
-        point_id = Ecto.UUID.generate()
-
-        # One tokenization pass yields both the sparse vector and `doc_len`
-        # (the raw token count, also persisted as `chunks.token_count`).
-        {sparse, doc_len} =
-          KeywordIndex.module().encode_document(chunk.text, filter_key, avgdl, language)
-
-        base_payload = %{
-          user_id: to_string(note.user_id),
-          vault_id: to_string(note.vault_id),
-          title: note.title,
-          heading_path: chunk.heading_path,
-          text: chunk.text,
-          chunk_index: chunk.position,
-          # #590: source_path/folder/tags plaintext intentionally NOT stored.
-          # Qdrant Cloud is a separate breach surface; the cleartext leaked
-          # every user's folder tree + tags. Display values (path/title/tags)
-          # are rehydrated from the `notes` row at search time, keyed by the
-          # chunk's note_id. The *_hmac fields below carry all filter load
-          # (folder/tags/path scoping) without exposing plaintext.
-          path_hmac: encode_hmac(note.path_hmac),
-          folder_hmac: encode_hmac(note.folder_hmac),
-          tags_hmac: Enum.map(note.tags_hmac || [], &Base.encode64/1),
-          type_hmac: encode_hmac(note.type_hmac),
-          # Plaintext by design (spec 2026-07-02): dates are the only
-          # unencrypted frontmatter fields, needed for range filters.
-          fm_timestamp: note.fm_timestamp && DateTime.to_unix(note.fm_timestamp),
-          fm_created: note.fm_created && DateTime.to_unix(note.fm_created)
-        }
-
-        case Engram.Crypto.encrypt_qdrant_payload(base_payload, user, collection(), point_id) do
-          {:ok, payload} ->
-            row = %{
-              note_id: note.id,
-              user_id: note.user_id,
-              vault_id: note.vault_id,
-              position: chunk.position,
-              heading_path: chunk.heading_path,
-              char_start: chunk.char_start,
-              char_end: chunk.char_end,
-              token_count: doc_len,
-              qdrant_point_id: point_id,
-              created_at: now
-            }
-
-            # Omit the dense named vector entirely when there is none —
-            # Qdrant rejects a null vector, and a partial named-vector upsert
-            # is the supported way to store sparse-only points.
-            named_vectors =
-              case vector do
-                nil -> %{"keyword" => sparse}
-                v -> %{"dense" => v, "keyword" => sparse}
-              end
-
-            point = %{
-              id: point_id,
-              vector: named_vectors,
-              payload: payload
-            }
-
-            {:cont, {:ok, [{row, point} | acc]}}
-
-          {:error, reason} = err ->
-            :telemetry.execute(
-              [:engram, :indexing, :encrypt_failed],
-              %{count: 1},
-              %{
-                user_id: note.user_id,
-                vault_id: note.vault_id,
-                note_id: note.id,
-                reason: Engram.Logger.Metadata.safe_reason(reason)
-              }
-            )
-
-            {:halt, err}
+      Enum.reduce_while(plan.entries, {:ok, [], vectors}, fn entry, {:ok, acc, pending} ->
+        case build_entry(entry, ctx, pending) do
+          {:ok, built, rest} -> {:cont, {:ok, [built | acc], rest}}
+          {:error, _reason} = err -> {:halt, err}
         end
       end)
 
-    with {:ok, prepared_pairs} <- prepared do
-      {chunk_rows, qdrant_points} = prepared_pairs |> Enum.reverse() |> Enum.unzip()
+    with {:ok, reversed, _spent} <- prepared do
+      built = Enum.reverse(reversed)
 
       {:ok,
        %{
          note: note,
          user: user,
          vault: vault,
-         chunk_rows: chunk_rows,
-         qdrant_points: qdrant_points,
+         chunk_rows: Enum.map(built, & &1.row),
+         qdrant_points: for(%{point: p} <- built, p != nil, do: p),
+         reused_point_ids: for(%{point: nil, row: row} <- built, do: row.qdrant_point_id),
+         stale_point_ids: plan.stale_point_ids,
+         note_payload: note_payload,
          links: link_rows
        }}
     end
+  end
+
+  # A reused chunk costs nothing but a row: no embed, no tokenizer pass, no
+  # encryption. Its `token_count` rides along from the row it replaces rather
+  # than being recomputed from text that has not changed.
+  defp build_entry({:reuse, chunk, point_id, tokens}, {note, _u, _p, _fk, _a, _l, now}, pending) do
+    {:ok, %{row: chunk_row(note, chunk, point_id, tokens, now), point: nil}, pending}
+  end
+
+  defp build_entry({:embed, chunk}, ctx, [vector | rest]) do
+    {note, user, note_payload, filter_key, avgdl, language, now} = ctx
+    point_id = Ecto.UUID.generate()
+
+    # One tokenization pass yields both the sparse vector and `doc_len`
+    # (the raw token count, also persisted as `chunks.token_count`).
+    {sparse, doc_len} =
+      KeywordIndex.module().encode_document(chunk.text, filter_key, avgdl, language)
+
+    # `chunk_index` used to live here. Nothing ever read it, and dropping it is
+    # what lets a reused point be refreshed for the whole note in ONE
+    # `set_payload` — with a per-chunk key in the payload, every reused point
+    # would need its own call. See `commit_index/1`.
+    base_payload =
+      Map.merge(note_payload, %{
+        title: note.title,
+        heading_path: chunk.heading_path,
+        text: chunk.text
+      })
+
+    case Crypto.encrypt_qdrant_payload(base_payload, user, collection(), point_id) do
+      {:ok, payload} ->
+        # Omit the dense named vector entirely when there is none — Qdrant
+        # rejects a null vector, and a partial named-vector upsert is the
+        # supported way to store sparse-only points.
+        named_vectors =
+          case vector do
+            nil -> %{"keyword" => sparse}
+            v -> %{"dense" => v, "keyword" => sparse}
+          end
+
+        built = %{
+          row: chunk_row(note, chunk, point_id, doc_len, now),
+          point: %{id: point_id, vector: named_vectors, payload: payload}
+        }
+
+        {:ok, built, rest}
+
+      {:error, reason} = err ->
+        :telemetry.execute(
+          [:engram, :indexing, :encrypt_failed],
+          %{count: 1},
+          %{
+            user_id: note.user_id,
+            vault_id: note.vault_id,
+            note_id: note.id,
+            reason: Metadata.safe_reason(reason)
+          }
+        )
+
+        err
+    end
+  end
+
+  defp chunk_row(note, chunk, point_id, token_count, now) do
+    %{
+      note_id: note.id,
+      user_id: note.user_id,
+      vault_id: note.vault_id,
+      position: chunk.position,
+      heading_path: chunk.heading_path,
+      char_start: chunk.char_start,
+      char_end: chunk.char_end,
+      token_count: token_count,
+      qdrant_point_id: point_id,
+      context_hmac: chunk.context_hmac,
+      created_at: now
+    }
+  end
+
+  # The slice of a Qdrant payload that is a property of the NOTE rather than of
+  # the chunk — identical across every point the note owns, which is what makes
+  # refreshing a reused point a single call.
+  #
+  # #590: source_path/folder/tags plaintext intentionally NOT stored. Qdrant
+  # Cloud is a separate breach surface; the cleartext leaked every user's folder
+  # tree + tags. Display values (path/title/tags) are rehydrated from the
+  # `notes` row at search time, keyed by the chunk's note_id. The *_hmac fields
+  # carry all filter load (folder/tags/path scoping) without exposing plaintext.
+  defp note_payload(note) do
+    %{
+      user_id: to_string(note.user_id),
+      vault_id: to_string(note.vault_id),
+      path_hmac: encode_hmac(note.path_hmac),
+      folder_hmac: encode_hmac(note.folder_hmac),
+      tags_hmac: Enum.map(note.tags_hmac || [], &Base.encode64/1),
+      type_hmac: encode_hmac(note.type_hmac),
+      # Plaintext by design (spec 2026-07-02): dates are the only unencrypted
+      # frontmatter fields, needed for range filters.
+      fm_timestamp: note.fm_timestamp && DateTime.to_unix(note.fm_timestamp),
+      fm_created: note.fm_created && DateTime.to_unix(note.fm_created)
+    }
   end
 
   # Encodes a Phase B HMAC binary as base64 for JSON-safe Qdrant payload.

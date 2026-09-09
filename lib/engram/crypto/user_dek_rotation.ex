@@ -191,6 +191,7 @@ defmodule Engram.Crypto.UserDekRotation do
          :ok <- sweep_attachments(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_note_links(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_qdrant(user, old_dek, new_dek),
+         :ok <- clear_chunk_context_hmacs(user),
          :ok <- final_flip(user, new_dek_version, new_wrapped) do
       Logger.info(
         "T3.7 per-user DEK rotation complete",
@@ -853,6 +854,27 @@ defmodule Engram.Crypto.UserDekRotation do
   # resume (a prior crashed run already rotated this point); if both fail,
   # raise. If every field in a point is already under the new DEK, return
   # :unchanged and skip the set_payload call entirely.
+
+  # `chunks.context_hmac` is keyed on the OLD DEK, so after this rotation every
+  # stored value is unmatchable — and unlike every other sweep above, it cannot
+  # be recomputed: the chunk text it fingerprints lives encrypted in Qdrant, not
+  # in Postgres.
+  #
+  # Clearing it is the correct answer rather than a shortcut. `nil` already
+  # means "changed" to `Indexing.plan_chunks/3`, so this user's notes simply
+  # re-embed in full on their next index — exactly the behaviour that predated
+  # #1592 — and the first such index repopulates the column. Leaving stale
+  # values would be the bug: they would never match, so nothing would ever
+  # be reused again for this user.
+  defp clear_chunk_context_hmacs(%User{id: user_id}) do
+    {_count, _} =
+      from(c in Engram.Notes.Chunk,
+        where: c.user_id == ^user_id and not is_nil(c.context_hmac)
+      )
+      |> Repo.update_all([set: [context_hmac: nil]], skip_tenant_check: true)
+
+    :ok
+  end
 
   defp sweep_qdrant(%User{id: user_id}, old_dek, new_dek) do
     collection = Qdrant.collection_name()
