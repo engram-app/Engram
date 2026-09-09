@@ -99,7 +99,7 @@ defmodule EngramWeb.SyncChannel do
       Metadata.with_category(:info, :websocket,
         conn_id: conn_id,
         device_id: device_id,
-        topic: socket.topic,
+        topic: Metadata.redact_topic(socket.topic),
         user_id: HMAC.hash_user_id(to_string(socket.assigns.current_user.id))
       )
 
@@ -133,7 +133,7 @@ defmodule EngramWeb.SyncChannel do
           Metadata.with_category(:warning, :websocket,
             conn_id: conn_id,
             device_id: device_id,
-            topic: socket.topic,
+            topic: Metadata.redact_topic(socket.topic),
             reason: "existing_conn_ids=#{existing}"
           )
         )
@@ -150,7 +150,7 @@ defmodule EngramWeb.SyncChannel do
       Metadata.with_category(:info, :websocket,
         conn_id: socket.assigns[:conn_id],
         device_id: socket.assigns[:device_id],
-        topic: socket.topic,
+        topic: Metadata.redact_topic(socket.topic),
         reason: Metadata.safe_reason(reason)
       )
     )

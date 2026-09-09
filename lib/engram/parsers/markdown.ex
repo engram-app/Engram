@@ -42,14 +42,102 @@ defmodule Engram.Parsers.Markdown do
         |> build_chunks(folder, title)
       end
 
-    body_chunks ++ frontmatter_chunk(content, folder, title, length(body_chunks))
+    (body_chunks ++ frontmatter_chunk(content, folder, title))
+    |> Enum.flat_map(&enforce_size_cap/1)
+    |> Enum.with_index()
+    |> Enum.map(fn {chunk, idx} -> Map.put(chunk, :position, idx) end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Size cap (backstop)
+  # ---------------------------------------------------------------------------
+
+  # Every chunk's `context_text` is sent to Voyage, which rejects an oversized
+  # input with a permanent HTTP 400 — no retry fixes it, so EmbedNote parks the
+  # note on a 6h poison cooldown and ReconcileEmbeddings re-tries it forever
+  # (prod, 2026-09-09: six notes from one import, stuck).
+  #
+  # Two paths above emit unbounded text: `split_text/2` splits on spaces, so a
+  # run with none (base64 data URI, long URL, minified blob, CJK) passes through
+  # whole; and `frontmatter_chunk/3` never consulted a limit at all. Capping here
+  # rather than in each one means every chunk — including any a future path adds
+  # — flows through a single limit.
+  defp enforce_size_cap(%{text: text} = chunk) when byte_size(text) <= @max_chunk_chars do
+    [chunk]
+  end
+
+  defp enforce_size_cap(chunk) do
+    prefix = context_prefix_of(chunk)
+
+    chunk.text
+    |> hard_split(@max_chunk_chars)
+    |> Enum.map(&%{chunk | text: &1, context_text: prefix <> &1})
+  end
+
+  # Both construction sites build `context_text` as
+  # `context_prefix <> "\n\n" <> text`, so the leading bytes that are not the
+  # text are exactly the prefix plus its separator — reusable as-is.
+  #
+  # Checked rather than assumed. This cap exists to hold for paths that do not
+  # exist yet, and a subtraction on a path that builds `context_text` some
+  # other way goes negative and raises inside the parser — which fails the
+  # embed, which lands us back in the poison loop the cap is here to prevent.
+  # Losing a prefix degrades one chunk's context; raising breaks the note.
+  defp context_prefix_of(%{context_text: context_text, text: text}) do
+    if String.ends_with?(context_text, text) do
+      binary_part(context_text, 0, byte_size(context_text) - byte_size(text))
+    else
+      ""
+    end
+  end
+
+  # Split at codepoint boundaries into pieces of at most `max_bytes`. Slicing at
+  # a raw byte offset would cut a multibyte character in half and yield invalid
+  # UTF-8 — and space-free multibyte text (CJK) is precisely the input that gets
+  # here, since it offers the word splitter nothing to split on.
+  # Slices the binary rather than walking `String.codepoints/1`. Materialising
+  # one binary per character costs ~17s of CPU on a 10MB note (measured), and
+  # this runs in an Oban worker at concurrency 5 — the shape of the embed OOM
+  # in #891. Slicing yields sub-binary references and no per-character garbage.
+  defp hard_split(text, max_bytes), do: hard_split(text, max_bytes, [])
+
+  defp hard_split(text, max_bytes, acc) when byte_size(text) <= max_bytes do
+    Enum.reverse([text | acc])
+  end
+
+  defp hard_split(text, max_bytes, acc) do
+    cut = codepoint_boundary(text, max_bytes)
+    <<piece::binary-size(cut), rest::binary>> = text
+    hard_split(rest, max_bytes, [piece | acc])
+  end
+
+  # Walk back while the cut points INTO a character. UTF-8 continuation bytes
+  # are 0b10xxxxxx, so this is at most 3 steps on valid input.
+  #
+  # Backing all the way to 0 means the whole window is continuation bytes —
+  # only reachable on invalid UTF-8, where there is no boundary to find. Take
+  # one byte rather than loop forever: the parser must not be what breaks a
+  # note. Losslessness is unaffected either way, since this only ever slices.
+  defp codepoint_boundary(text, offset) when offset > 0 do
+    if continuation_byte?(text, offset),
+      do: codepoint_boundary(text, offset - 1),
+      else: offset
+  end
+
+  defp codepoint_boundary(_text, _offset), do: 1
+
+  defp continuation_byte?(text, offset) do
+    case text do
+      <<_::binary-size(offset), byte, _::binary>> -> byte in 0x80..0xBF
+      _ -> false
+    end
   end
 
   # Frontmatter values used to be stripped before indexing, making every key
   # invisible to keyword search (spec 2026-07-02). One synthetic chunk carries
   # the raw block into the BM25 leg. char offsets are 0/0: the block sits
   # before the post-frontmatter body that offsets are relative to.
-  defp frontmatter_chunk(content, folder, title, position) do
+  defp frontmatter_chunk(content, folder, title) do
     case Engram.Notes.Frontmatter.split(content) do
       {block, _body} when is_binary(block) and block != "" ->
         context_prefix = build_context_prefix(folder, "#{title} > frontmatter")
@@ -60,8 +148,7 @@ defmodule Engram.Parsers.Markdown do
             context_text: context_prefix <> "\n\n" <> block,
             heading_path: "frontmatter",
             char_start: 0,
-            char_end: 0,
-            position: position
+            char_end: 0
           }
         ]
 
@@ -242,10 +329,22 @@ defmodule Engram.Parsers.Markdown do
       Enum.reduce(words, {[], ""}, fn word, {done, acc} ->
         candidate = if acc == "", do: word, else: acc <> " " <> word
 
-        if byte_size(candidate) > max_chars and acc != "" do
-          {[acc | done], word}
-        else
-          {done, candidate}
+        cond do
+          byte_size(candidate) <= max_chars ->
+            {done, candidate}
+
+          # The word alone overflows, so flushing `acc` here would strand it as
+          # a runt chunk — a bare "#" when a heading line is followed by a
+          # space-free run — and the word would still need splitting after.
+          # Cut the combined text instead, which fills the current chunk to the
+          # brim and leaves the remainder as the next accumulator. A runt
+          # embeds to a meaningless vector and still costs a Qdrant point.
+          byte_size(word) > max_chars ->
+            [tail | full] = candidate |> hard_split(max_chars) |> Enum.reverse()
+            {full ++ done, tail}
+
+          true ->
+            {[acc | done], word}
         end
       end)
 

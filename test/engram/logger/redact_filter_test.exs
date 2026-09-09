@@ -3,6 +3,11 @@ defmodule Engram.Logger.RedactFilterTest do
 
   alias Engram.Logger.RedactFilter
 
+  # Per-module: `:logger` primary filters are a node-wide registry keyed by
+  # name, and `RescueReasonSinkTest` installs one too. Sharing the literal
+  # meant either module's `on_exit` unregistered the other's filter mid-test.
+  @primary_filter :"engram_redact_#{__MODULE__}"
+
   @sentinel "user-content-XYZZYZ-LOGTEST-SECRET"
 
   describe "filter/2" do
@@ -128,8 +133,8 @@ defmodule Engram.Logger.RedactFilterTest do
 
   describe "integration with :logger primary filter" do
     setup do
-      :logger.add_primary_filter(:engram_redact_test, {&RedactFilter.filter/2, []})
-      on_exit(fn -> :logger.remove_primary_filter(:engram_redact_test) end)
+      :logger.add_primary_filter(@primary_filter, {&RedactFilter.filter/2, []})
+      on_exit(fn -> :logger.remove_primary_filter(@primary_filter) end)
       :ok
     end
 

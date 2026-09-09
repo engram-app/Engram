@@ -328,6 +328,7 @@ defmodule Engram.Workers.EmbedNote do
         note_id: note.id,
         error_kind: error_kind,
         status: status,
+        detail: Metadata.upstream_error(reason),
         cooldown_seconds: cooldown
       )
     )
@@ -399,7 +400,8 @@ defmodule Engram.Workers.EmbedNote do
                     vault_id: note.vault_id,
                     note_id: note.id,
                     error_kind: error_kind,
-                    status: status
+                    status: status,
+                    detail: Metadata.upstream_error(reason)
                   )
                 )
 

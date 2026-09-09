@@ -156,6 +156,57 @@ defmodule Engram.IndexingTest do
       assert Enum.all?(batches, &(&1 <= 128)), "oversized embed batch: #{inspect(batches)}"
     end
 
+    test "closes an embed batch on the byte budget, not just the count", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      # Voyage caps a request at 120,000 tokens summed over its inputs, and a
+      # count cannot bound that — tokens per byte swing with the content. 128
+      # full-width chunks of dense, space-free text (base64, minified) is
+      # ~269KB, which is ~134K tokens at 2 bytes/token: a 400 no retry fixes.
+      # A space-free blob is exactly what the chunker's cap now slices into
+      # full-width chunks, so it is the shape that would regress.
+      {:ok, dense_note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Big/Dense.md",
+          "content" => "# Dense\n\n" <> String.duplicate("A", 300_000),
+          "mtime" => 1_000.0
+        })
+
+      test_pid = self()
+
+      Engram.MockEmbedder
+      |> stub(:embed_texts, fn texts ->
+        send(
+          test_pid,
+          {:embed_batch, {length(texts), texts |> Enum.map(&byte_size/1) |> Enum.sum()}}
+        )
+
+        {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+      end)
+
+      Bypass.expect(bypass, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": true}))
+      end)
+
+      assert {:ok, _chunk_count} = Indexing.index_note(dense_note, vault)
+
+      batches = collect_messages(:embed_batch)
+      assert length(batches) >= 2
+
+      Enum.each(batches, fn {count, bytes} ->
+        assert bytes <= 200_000, "embed batch of #{bytes} bytes exceeds the budget"
+        assert count <= 128
+      end)
+
+      # The byte ceiling must be the binding one here — if the count still
+      # closed every batch, the token limit is as unguarded as before.
+      assert Enum.any?(batches, fn {count, _bytes} -> count < 128 end)
+    end
+
     test "upserts Qdrant points in batches of at most 256", %{
       bypass: bypass,
       user: user,

@@ -94,4 +94,81 @@ defmodule Engram.Logger.MetadataTest do
       refute Keyword.has_key?(md, :span_id)
     end
   end
+
+  describe "redact_topic/1" do
+    test "hashes the user segment of a 3-part CRDT/sync topic, keeps prefix + vault" do
+      user_id = Ecto.UUID.generate()
+      vault_id = Ecto.UUID.generate()
+      hashed = Engram.Crypto.HMAC.hash_user_id(user_id)
+
+      for prefix <- ["crdt", "sync"] do
+        redacted = Metadata.redact_topic("#{prefix}:#{user_id}:#{vault_id}")
+        assert redacted == "#{prefix}:#{hashed}:#{vault_id}"
+        refute String.contains?(redacted, user_id)
+        assert String.contains?(redacted, vault_id)
+      end
+    end
+
+    test "hashes the user segment of a 2-part user topic" do
+      user_id = Ecto.UUID.generate()
+      redacted = Metadata.redact_topic("user:#{user_id}")
+      assert redacted == "user:#{Engram.Crypto.HMAC.hash_user_id(user_id)}"
+      refute String.contains?(redacted, user_id)
+    end
+
+    test "leaves a topic without a user segment untouched" do
+      assert Metadata.redact_topic("phoenix") == "phoenix"
+    end
+
+    test "passes non-binary input through" do
+      assert Metadata.redact_topic(nil) == nil
+    end
+  end
+
+  describe "upstream_error/1" do
+    test "surfaces a provider diagnostic from each provider's error field" do
+      # The three shapes that cost us a day of guessing on 2026-09-09.
+      assert Metadata.upstream_error(
+               {400, %{"detail" => "Total number of tokens in the batch exceeds the limit"}}
+             ) == "Total number of tokens in the batch exceeds the limit"
+
+      assert Metadata.upstream_error(
+               {400, %{"status" => %{"error" => "Wrong input: expected dim: 1024, got: 512"}}}
+             ) == "Wrong input: expected dim: 1024, got: 512"
+
+      assert Metadata.upstream_error({400, %{"error" => %{"message" => "Invalid model name"}}}) ==
+               "Invalid model name"
+    end
+
+    test "fails closed on anything shaped like content rather than a diagnostic" do
+      # `:detail` is not in RedactFilter's key set, so nothing downstream
+      # scrubs what this lets through — it has to reject, not truncate.
+      for leaky <- [
+            "# My Private Note\n\nPatient notes follow",
+            "failed on {\"content\": \"secret\"}",
+            "could not embed todd@example.com",
+            "[[Wikilink To A Private Note]]",
+            String.duplicate("a", 201),
+            # `$` matches before a final newline; only `\z` actually rejects it.
+            "looks fine but ends with a newline\n"
+          ] do
+        assert Metadata.upstream_error({400, %{"detail" => leaky}}) == nil,
+               "leaked: #{inspect(leaky)}"
+      end
+    end
+
+    test "returns nil for transport errors and unrecognised bodies" do
+      assert Metadata.upstream_error(%Req.TransportError{reason: :timeout}) == nil
+      assert Metadata.upstream_error({500, "plain string body"}) == nil
+      assert Metadata.upstream_error({400, %{"unexpected" => "shape"}}) == nil
+      assert Metadata.upstream_error(:timeout) == nil
+    end
+
+    test "never reaches into an echoed request body" do
+      # Paddle's shape — Reconciliation documents that the echoed body can
+      # carry customer PII, so this must not mine it.
+      assert Metadata.upstream_error({:paddle_error, 400, %{"customer_email" => "a@b.com"}}) ==
+               nil
+    end
+  end
 end
