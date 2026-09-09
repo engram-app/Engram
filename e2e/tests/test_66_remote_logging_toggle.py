@@ -100,27 +100,50 @@ async def test_disable_stops_flush(vault_a, cdp_a, cdp_b, api_sync):
             "E2E/Logging66/before.md",
             f"# {before_marker}\nbefore content",
         )
-        # Force flush (simulate page hide). flush_remote_logs() already
-        # waits 600 ms internally for the POST /logs round-trip, then we
-        # briefly poll the server. We do NOT retry-flush inside the loop:
-        # the flush already happened, and a real 5 s server-side latency
-        # is a separate bug worth surfacing as a fail.
-        await cdp_a.flush_remote_logs()
-
+        # Force flush (simulate page hide), and RE-flush on every poll
+        # iteration until the entries land.
+        #
+        # An earlier version flushed exactly once, arguing "the flush already
+        # happened, and a real 5 s server-side latency is a separate bug worth
+        # surfacing as a fail". That reasoning is wrong, and it is why this
+        # test was the suite's most persistent flake (#1421).
+        #
+        # rlog only auto-flushes at FLUSH_THRESHOLD = 20 buffered entries
+        # (src/remote-log.ts). One small note generates far fewer, so the
+        # single manual flush is the ONLY thing that can deliver them. Two
+        # ways that one shot is lost, neither of which server-polling can
+        # recover from:
+        #
+        #   * the visibilitychange handler fires before pushFile's rlog calls
+        #     have been buffered — flush() finds an empty buffer, sends
+        #     nothing, and nothing ever flushes again;
+        #   * the POST fails transiently. flush() deliberately puts the
+        #     entries BACK on the buffer for a later flush — but there is no
+        #     later flush, so they sit there until the process ends.
+        #
+        # Re-flushing is idempotent (an empty buffer is a no-op) and costs one
+        # CDP round trip per iteration. It cannot mask real server latency
+        # either: the deadline is unchanged, so a genuinely slow server still
+        # fails here.
         before_logs: list = []
-        deadline_before = asyncio.get_event_loop().time() + 5
+        flushes = 0
+        deadline_before = asyncio.get_event_loop().time() + 15
         while asyncio.get_event_loop().time() < deadline_before:
+            await cdp_a.flush_remote_logs()
+            flushes += 1
             before_logs = api_sync.list_logs(limit=200, query="E2E/Logging66/before.md")
             if before_logs:
                 break
             await asyncio.sleep(0.25)
 
         assert before_logs, (
-            "No pre-disable log entries reached the server within 5 s after "
-            "push_file_now + flush_remote_logs. This means rlog().info(...) "
-            "calls inside pushFile() either didn't fire (engine code change) "
-            "or the visibilitychange flush handler isn't POSTing to /logs. "
-            "Inspect src/remote-log.ts flush() and the rlog calls in sync.ts."
+            f"No pre-disable log entries reached the server after {flushes} "
+            "flush attempts over 15 s. rlog().info(...) calls inside pushFile() "
+            "either didn't fire (engine code change), or the visibilitychange "
+            "flush handler isn't POSTing to /logs, or POST /logs is failing "
+            "server-side (flush() re-buffers on failure, so repeated attempts "
+            "would all have been retried). Inspect src/remote-log.ts flush() "
+            "and the rlog calls in sync.ts."
         )
 
         # ------------------------------------------------------------------ #
