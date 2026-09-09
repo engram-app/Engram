@@ -105,6 +105,12 @@ async def test_activity_log_records_push_then_clears(vault_a, cdp_a, api_sync):
 
     finally:
         # ── Cleanup ──────────────────────────────────────────────────────────
+        # Close Settings so the pane does not leak into later tests. On
+        # Obsidian 1.13 it is a separate window that `dismiss_modals` (which
+        # dispatches Escape in the MAIN window) cannot reach, so without this
+        # the first test to open the Sync Center leaves it open all session
+        # and later reads see a previous test's rendered rows.
+        await cdp_a.close_settings()
         if wrote:
             delete_note(vault_a, path)
         try:

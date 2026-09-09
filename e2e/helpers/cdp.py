@@ -25,10 +25,18 @@ ENGINE_PATH = f"{PLUGIN_PATH}.syncEngine"
 # windows are `app://obsidian.md/...`, and titles are localised.
 MAIN_WINDOW_PROBE = "typeof app !== 'undefined' && !!app.workspace"
 
-# Identifies whichever window currently renders the settings UI. On 1.12 that
-# is the main window (modal); on 1.13+ it is the separate settings window.
-# Callers that query settings DOM must use this, not MAIN_WINDOW_PROBE.
-SETTINGS_WINDOW_PROBE = "!!document.querySelector('.modal-container, .horizontal-tab-content')"
+# Identifies whichever window currently renders OUR settings tab. On 1.12 that
+# is the main window (Settings is a modal); on 1.13+ it is the separate
+# settings window. Callers that query settings DOM must use this, not
+# MAIN_WINDOW_PROBE.
+#
+# `.engram-tab-content` is the container `settings.ts` creates for the plugin's
+# tab. Deliberately NOT `.engram-sync-center`: that class is added by
+# `sync-center-render.ts` to the SHARED tab container and never removed —
+# `contentEl.empty()` clears children, not classes — so it stays true after the
+# user switches to Advanced or Connection, and would answer "is the Sync Center
+# showing" with "has it ever shown".
+SETTINGS_WINDOW_PROBE = "!!document.querySelector('.engram-tab-content')"
 
 
 class CdpError(Exception):
@@ -42,6 +50,9 @@ class CdpClient:
         self._base_url = f"http://{host}:{port}"
         self._ws = None
         self._msg_id = 0
+        # Resolved lazily by `_settings_ws_url`; dropped on any read failure.
+        self._settings_ws = None
+        self._logged_targets = False
 
     def _list_page_targets(self) -> list[dict]:
         resp = requests.get(f"{self._base_url}/json", timeout=5)
@@ -94,6 +105,20 @@ class CdpClient:
         if not targets:
             raise CdpError("No CDP page targets available")
 
+        # Log the target set ONCE per client, at the first resolve. The whole
+        # 1.13 diagnosis rested on one inferred fact — that the extra target is
+        # the settings window — and nobody had a `/json` dump to confirm it,
+        # because nothing ever logged one. One line per Obsidian instance is
+        # cheap; re-deriving this from 15 red tests is not.
+        if not self._logged_targets:
+            self._logged_targets = True
+            logger.info(
+                "[cdp:%s] %d page target(s): %s",
+                self.port,
+                len(targets),
+                ", ".join(f"{t.get('title')!r} <{t.get('url')}>" for t in targets),
+            )
+
         for target in targets:
             if await self._probe_target(target["webSocketDebuggerUrl"], MAIN_WINDOW_PROBE):
                 return target["webSocketDebuggerUrl"]
@@ -119,29 +144,91 @@ class CdpClient:
         ws_url = await self._resolve_ws_url()
         self._ws = await websockets.connect(ws_url)
 
-    async def _settings_evaluate(self, expr: str, timeout: float = 30) -> Any:
-        """Evaluate `expr` in whichever window renders the Sync Center DOM.
+    async def _settings_ws_url(self) -> str:
+        """Debugger URL of the window rendering the plugin's settings tab.
 
-        On Obsidian 1.12 Settings is a modal in the main window, so this
-        resolves to the same target as `evaluate`. On 1.13+ Settings is its own
-        Electron window and the Sync Center DOM lives there — querying the main
-        window returns empty forever, which is how `test_56` came to fail with
-        "Issue ... did not appear in Sync Center within 30s" on a perfectly
-        healthy plugin.
+        On Obsidian 1.12 Settings is a modal in the main window, so this is the
+        same target as `evaluate`. On 1.13+ Settings is its own Electron window
+        and the settings DOM lives there — querying the main window returns
+        empty forever, which is how `test_56` failed with "Issue ... did not
+        appear in Sync Center within 30s" on a perfectly healthy plugin.
 
-        Falls back to the main window when no target has the DOM: "Sync Center
-        is not open" must keep reading as an empty result, not an error, or
-        every assert-empty test turns into a failure.
+        RAISES when no window has it. It must NOT fall back to the main window:
+        on 1.13 that answers every settings query with empty, so
+        `assert groups_after == []` and `assert after == []` — the "the issue
+        is gone" and "Clear emptied the log" assertions — would pass having
+        proven nothing. Conflating "not open" with "empty" is the exact bug
+        this whole change exists to remove; callers that need to wait should
+        poll `wait_for_settings_window`.
 
-        Short-lived connection rather than a second cached one: these are
-        cold-path DOM reads, and a cached settings socket would go stale every
-        time the window closes.
+        The resolved URL is CACHED. `_settings_evaluate` is called from 0.5s
+        polling loops, and re-probing every target on every call costs an HTTP
+        round trip plus a websocket handshake each — up to 10s per iteration
+        against a slow window, which can eat a 30s budget before one real read
+        happens and reproduce the very timeout being fixed. The cache is
+        dropped whenever a read fails, so a closed or replaced window
+        self-heals on the next call.
         """
-        for target in self._list_page_targets():
+        if self._settings_ws is not None:
+            return self._settings_ws
+
+        targets = self._list_page_targets()
+        for target in targets:
             ws_url = target["webSocketDebuggerUrl"]
-            if await self._probe_target(ws_url, "!!document.querySelector('.engram-sync-center')"):
-                return await self._eval_once(ws_url, expr, timeout)
-        return await self.evaluate(expr, timeout=timeout)
+            if await self._probe_target(ws_url, SETTINGS_WINDOW_PROBE):
+                self._settings_ws = ws_url
+                return ws_url
+
+        raise CdpError(
+            f"No window is rendering the plugin settings tab, among {len(targets)} "
+            f"CDP target(s) on port {self.port}. Open it first (open_sync_center / "
+            f"open_settings_tab). Titles/URLs: "
+            + ", ".join(f"{t.get('title')!r} <{t.get('url')}>" for t in targets)
+        )
+
+    async def wait_for_settings_window(self, timeout: float = 10) -> None:
+        """Block until a window renders the settings tab.
+
+        `open_sync_center` runs `executeCommandById` and awaits nothing, so on
+        1.13 the new Electron window is still being created and listed on
+        `/json` when the first read fires. Polling readers used to self-heal on
+        the next iteration; one-shot writes (`click_issue_action`) did not.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                await self._settings_ws_url()
+                return
+            except CdpError:
+                if time.monotonic() >= deadline:
+                    raise
+                await asyncio.sleep(0.25)
+
+    async def settings_evaluate(self, expr: str, timeout: float = 30) -> Any:
+        """Public alias — for tests that query settings DOM directly.
+
+        Anything reading `.modal.mod-settings`, `[data-tab=...]` or a row the
+        plugin renders inside its settings tab must go through here, not
+        `evaluate`. On Obsidian 1.13 that DOM is in a different window, and
+        `evaluate` is now correctly pinned to the main one — so a plain
+        `evaluate` returns empty forever and the test blames the plugin.
+        """
+        return await self._settings_evaluate(expr, timeout)
+
+    async def _settings_evaluate(self, expr: str, timeout: float = 30) -> Any:
+        """Evaluate `expr` in the window rendering the settings tab."""
+        ws_url = await self._settings_ws_url()
+        try:
+            return await self._eval_once(ws_url, expr, timeout)
+        except CdpError:
+            raise
+        except Exception:
+            # Connection-level failure: the window we cached is gone or was
+            # replaced. Drop the cache and re-resolve once, mirroring
+            # `evaluate`'s reconnect-and-retry rather than surfacing a raw
+            # websockets traceback.
+            self._settings_ws = None
+            return await self._eval_once(await self._settings_ws_url(), expr, timeout)
 
     async def _eval_once(self, ws_url: str, expr: str, timeout: float) -> Any:
         """One-shot Runtime.evaluate against an explicit target."""
@@ -1690,11 +1777,18 @@ class CdpClient:
     #     need the plugin to add these attributes.
 
     async def open_sync_center(self) -> None:
-        """Run the open-sync-center command."""
+        """Run the open-sync-center command and wait for the pane to exist.
+
+        `executeCommandById` returns immediately. On Obsidian 1.13 that leaves
+        a new Electron window mid-creation and not yet listed on `/json`, so
+        the first settings read raced it. Polling readers self-healed; one-shot
+        writes like `click_issue_action` did not.
+        """
         await self.evaluate(
             "app.commands.executeCommandById("
             "'engram-vault-sync:open-sync-center')"
         )
+        await self.wait_for_settings_window()
 
     async def get_issue_groups(self) -> list[dict]:
         """Return [{category, count, items: [{path, actions:[...]}]}].
@@ -1823,6 +1917,18 @@ class CdpClient:
     # SELECTOR CONCERNS (see report):
     #   - Plan used .engram-status-bar-item — source uses
     #     .engram-status-bar-clickable — corrected here.
+
+    async def close_settings(self) -> None:
+        """Close Settings, in whichever form this Obsidian uses.
+
+        Nothing in the harness did this. On 1.13 Settings is a separate window,
+        so `dismiss_modals` (which dispatches Escape at `.modal-container` in
+        the MAIN window) cannot reach it — the first test to open the Sync
+        Center leaked it open for the rest of the session, and later reads saw
+        a previous test's rendered rows instead of a fresh pane.
+        """
+        await self.evaluate("app.setting?.close?.()")
+        self._settings_ws = None
 
     async def open_settings_tab(self, tab: str) -> None:
         """Open plugin settings and navigate to a sub-tab.

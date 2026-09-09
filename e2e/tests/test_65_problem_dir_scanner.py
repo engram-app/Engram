@@ -116,7 +116,7 @@ async def test_node_modules_detected_and_addable(vault_a, cdp_a):
         # already 30× the typical render time.
         settings_open = False
         for _ in range(30):  # 3 s
-            modal_open = await cdp_a.evaluate(
+            modal_open = await cdp_a.settings_evaluate(
                 "Boolean(document.querySelector('.modal-container .modal.mod-settings'))"
             )
             if modal_open:
@@ -131,7 +131,7 @@ async def test_node_modules_detected_and_addable(vault_a, cdp_a):
         )
 
         # Click the Advanced tab button (data-tab="advanced").
-        clicked_tab = await cdp_a.evaluate(
+        clicked_tab = await cdp_a.settings_evaluate(
             """
             (() => {
                 const btn = document.querySelector(
@@ -158,7 +158,7 @@ async def test_node_modules_detected_and_addable(vault_a, cdp_a):
         warning_visible = False
         deadline = asyncio.get_event_loop().time() + 20
         while asyncio.get_event_loop().time() < deadline:
-            warning_visible = await cdp_a.evaluate(
+            warning_visible = await cdp_a.settings_evaluate(
                 "Boolean(document.querySelector('.engram-status-warning'))"
             )
             if warning_visible:
@@ -173,7 +173,7 @@ async def test_node_modules_detected_and_addable(vault_a, cdp_a):
         )
 
         # Click "Add to ignores" inside the warning row for node_modules/.
-        clicked_btn = await cdp_a.evaluate(
+        clicked_btn = await cdp_a.settings_evaluate(
             """
             (() => {
                 const warnings = Array.from(
@@ -211,16 +211,11 @@ async def test_node_modules_detected_and_addable(vault_a, cdp_a):
         )
 
     finally:
-        # Close the settings modal.
-        await cdp_a.evaluate(
-            """
-            document.querySelectorAll('.modal-container .modal').forEach(
-                m => m.dispatchEvent(
-                    new KeyboardEvent('keydown', {key: 'Escape', bubbles: true})
-                )
-            )
-            """
-        )
+        # `app.setting.close()`, not an Escape dispatched at `.modal-container`
+        # in the main window: on Obsidian 1.13 Settings is a separate Electron
+        # window that the main window's DOM cannot reach, so the old teardown
+        # silently left it open for every later test in the session.
+        await cdp_a.close_settings()
         # Restore settings.ignorePatterns to its original value.
         restore = original_patterns if isinstance(original_patterns, str) else ""
         await cdp_a.evaluate(
