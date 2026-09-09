@@ -56,15 +56,16 @@ defmodule EngramWeb.UserSocket do
     conn_id = params["conn_id"]
     device_id = params["device_id"]
     vault_id = params["vault_id"]
-    # CLAMPED, because this is an attacker-controlled query param that lands in
+    # BOUNDED, because this is an attacker-controlled query param that lands in
     # Logger metadata, and prod serializes all metadata. Unbounded, any holder
     # of a valid token could push ~10KB (Bandit's request-line cap) per connect
-    # into a long-retention aggregator. Two in-repo precedents do the same to
-    # the same kind of value: `request_logger.ex` truncates `user_agent` to 200
-    # for this exact reason, and `logs.ex` already clamps `plugin_version` to
-    # 128 on the client-log ingest path. 32 is `PluginVersion`'s own bound and
-    # holds every version this repo can emit with room to spare.
-    plugin_version = clamp_version(params["plugin_version"])
+    # into a long-retention aggregator. Two in-repo precedents bound the same
+    # kind of value: `request_logger.ex` truncates `user_agent` to 200 for this
+    # exact reason, and `logs.ex` bounds `plugin_version` to 128 on the
+    # client-log ingest path. 32 is `PluginVersion`'s own bound and holds every
+    # version this repo can emit with room to spare. See `bounded_version/1`
+    # for why it DROPS rather than truncates.
+    plugin_version = bounded_version(params["plugin_version"])
 
     # `plugin_version` is logged HERE and nowhere else. It is the evidence you
     # read before raising `Engram.PluginVersion.minimum/0`, and this is the one
@@ -124,19 +125,33 @@ defmodule EngramWeb.UserSocket do
   # matters. (A token in its final second can pass resolve/1 and then fail
   # here, yielding nil -> :all, so a vault-scoped socket would connect
   # unrestricted for its lifetime.)
-  # Non-binaries (`?plugin_version[]=x` decodes to a list) become nil rather
-  # than riding into the log and the `String.t() | nil` assign as some other
-  # shape. `PluginVersion.supported?/1` allows anything it cannot read, so a
-  # dropped value is allowed either way — this only keeps the assign honest.
-  defp clamp_version(v) when is_binary(v), do: String.slice(v, 0, 32)
-  defp clamp_version(_), do: nil
-
   defp oauth_scope_vault_ids(token) do
     case Engram.Accounts.verify_jwt(token) do
       {:ok, claims} -> Engram.Permissions.scope_ids_from_claims(claims)
       _ -> nil
     end
   end
+
+  # DROP an over-long value; do not truncate it. Two bugs live in the obvious
+  # `String.slice(v, 0, 32)`:
+  #
+  #   * `String.slice/3` counts GRAPHEMES, and a grapheme cluster is unbounded
+  #     in bytes. `"e" <> String.duplicate(<combining acute>, 3000)` is ONE
+  #     grapheme, so the "32-byte" clamp returned 6KB — the exact ingest cost
+  #     this function exists to prevent.
+  #   * Truncating CHANGES THE VERDICT. `PluginVersion.supported?/1` refuses to
+  #     parse anything over 32 bytes and therefore allows it. Truncate first
+  #     and a 40-byte `"1.0.0-" <> 34 a's` becomes a parseable `1.0.0`, which
+  #     is below the floor — so the same client got 200 on REST (raw header)
+  #     and `plugin_upgrade_required` on a channel join (clamped param). The
+  #     gate must see what the CLIENT sent, on both transports.
+  #
+  # Dropping is verdict-identical to passing the raw value through — both end
+  # at `supported?(_) -> true` — and bounds the log. Non-binaries
+  # (`?plugin_version[]=x` decodes to a list) go the same way, which also keeps
+  # the assign honest against its `String.t() | nil` spec.
+  defp bounded_version(v) when is_binary(v) and byte_size(v) <= 32, do: v
+  defp bounded_version(_), do: nil
 
   @impl true
   def id(socket), do: "user_socket:#{socket.assigns.current_user.id}"

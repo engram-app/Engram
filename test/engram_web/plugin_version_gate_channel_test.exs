@@ -117,11 +117,12 @@ defmodule EngramWeb.PluginVersionGateChannelTest do
       assert {:ok, _, _} = join_crdt(ctx.user, ctx.vault.id, "1.28.0")
     end
 
-    # A pre-release of the floor CONTAINS the floor's code. Semver orders it
-    # below; we deliberately do not. Pinned here as well as in the unit test
-    # because this is the path a beta tester actually takes.
-    test "a pre-release build of the floor joins", ctx do
-      assert {:ok, _, _} = join_crdt(ctx.user, ctx.vault.id, "1.28.0-pr.512.g876f2c2")
+    # A PREVIEW of a LATER release. `nextPatch` means a preview of stable
+    # 1.28.0 is named 1.28.1-*, which sorts above a 1.28.0 floor. The
+    # dangerous neighbour — a pre-release OF the floor — is refused, and
+    # pinned in plugin_version_test.exs.
+    test "a preview build above the floor joins", ctx do
+      assert {:ok, _, _} = join_crdt(ctx.user, ctx.vault.id, "1.28.1-pr.512.g876f2c2")
     end
   end
 

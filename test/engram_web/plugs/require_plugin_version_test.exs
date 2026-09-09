@@ -125,12 +125,11 @@ defmodule EngramWeb.Plugs.RequirePluginVersionTest do
       assert json_response(conn, 426)["error"] == "plugin_upgrade_required"
     end
 
-    test "the same route without the header is not refused for that reason", %{conn: conn} do
-      conn = get(conn, ~p"/api/folders")
-
-      # Whatever else this account is missing (onboarding, a vault), the
-      # version floor must not be the thing that stopped it.
-      refute conn.status == 426
+    # `refute conn.status == 426` would pass on a 403, a 500, or a deleted
+    # plug. Assert the route actually SERVED, so this case fails if the
+    # fixture stops producing a request that reaches the controller.
+    test "the same route without the header is served normally", %{conn: conn} do
+      assert json_response(get(conn, ~p"/api/folders"), 200)
     end
   end
 end

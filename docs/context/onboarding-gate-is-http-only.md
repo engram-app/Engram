@@ -47,7 +47,7 @@ Two layers:
   vault-scoped pipeline. Composes lifecycle + onboarding and returns the map to
   reply straight from `join/3`. `SyncChannel` and `CrdtChannel` both call it.
 
-The vault scope pipes `:authed_api` (`router.ex:49-68`), which runs **twelve**
+The vault scope pipes `:authed_api` (`router.ex:49-68`), which runs **eleven**
 plugs — not three. Do not trust a summary that says otherwise; that
 miscount is what let the gaps below go unnoticed.
 
@@ -55,8 +55,8 @@ Listed in **pipeline execution order** (`router.ex:50-67`) — `ChannelGate`'s
 `with` chain follows the same order deliberately, so do not re-sort this.
 
 > This table is a SECOND COPY of the ledger in `channel_gate.ex`'s moduledoc.
-> They drifted once already (this one still said eleven plugs after a twelfth
-> landed). Change both, or delete this one and link there.
+> They have drifted more than once, in both directions. Change both, or delete
+> this one and link there.
 
 | `:authed_api` plug | HTTP | Socket |
 |---|---|---|
@@ -70,7 +70,6 @@ Listed in **pipeline execution order** (`router.ex:50-67`) — `ChannelGate`'s
 | `BumpActivity` | stamps `last_active_at` | ✅ #1429 — load-bearing, see below |
 | `RequirePluginVersion` | 426 `plugin_upgrade_required` | ✅ |
 | `RequireApiRpsBudget` | 429 | ⚠️ #1433 — only the `cap == 0` case, at join |
-| `EnforceSearchCap` | 402 | ❌ |
 | `RequireApiWriteEnabled` | 402 | ❌ — attempted and reverted, see `channel_gate.ex` |
 
 **API-key sockets are gated; JWT sockets are not.** Pricing v2 §G is a

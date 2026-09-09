@@ -9,10 +9,14 @@ defmodule EngramWeb.Plugs.RequirePluginVersion do
   never runs, so `EngramWeb.ChannelGate.check/3` enforces the same floor on
   join. Adding this plug to a pipeline does not gate sockets.
 
-  Placement in `:authed_api`: after `AccountDeleted`, before everything else.
-  A deleted account is terminal and wins, but telling a user to finish
-  onboarding or fix their subscription is useless advice for a client that
-  cannot speak the protocol — upgrade beats every remaining verdict.
+  Placement in `:authed_api`: after `BumpActivity`, i.e. LAST of the account
+  gates. An earlier position gave a nicer message — upgrade beating "finish
+  onboarding", which is useless advice for a client that cannot speak the
+  protocol — and cost liveness. A refused request never reaches `BumpActivity`,
+  so it never stamps `last_active_at`, and `InactivityCleanup` soft-deletes at
+  90 days: a user syncing daily on an old plugin would be deleted for being
+  blocked. `ChannelGate` already refuses that trade for `api_access/2` in as
+  many words, "data loss beats a stale row". Message precedence is worth less.
 
   The version is assigned whether or not the request is refused. It is read by
   nothing today; it exists so a refusal is attributable in a debugger and so a

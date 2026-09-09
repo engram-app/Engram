@@ -34,9 +34,10 @@ defmodule Engram.PluginVersionTest do
     # Over-length fails OPEN and SILENTLY, so a version scheme that outgrows
     # the bound disables the floor with no signal. These pin where the cliff
     # is and prove the real formats clear it with room to spare.
-    test "the length cliff is at 32 bytes" do
-      # 31 bytes: parsed, and refused.
-      refute PluginVersion.supported?("1.0.0" <> String.duplicate(" ", 26))
+    test "the length cliff is at exactly 32 bytes" do
+      # 32 bytes: parsed, and refused. Testing only 31 and 33 leaves the bound
+      # free to drift by one without any test noticing.
+      refute PluginVersion.supported?("1.0.0" <> String.duplicate(" ", 27))
       # 33 bytes: not parsed, and allowed.
       assert PluginVersion.supported?("1.0.0" <> String.duplicate(" ", 28))
     end
@@ -78,28 +79,35 @@ defmodule Engram.PluginVersionTest do
       assert PluginVersion.supported?("1.128.0")
     end
 
-    # A pre-release of the floor CONTAINS the floor's code. Semver says
-    # 1.28.0-beta.1 < 1.28.0; applying that here would refuse every beta
-    # tester and PR reviewer running a build of the very release that fixes
-    # the thing the floor exists for, and send them to a plugin pane with
-    # nothing newer to install.
-    test "a pre-release of the floor is ALLOWED, not ordered below it" do
-      assert PluginVersion.supported?("#{@floor}-beta.1")
-      assert PluginVersion.supported?("#{@floor}-rc.1")
+    # THE case, and it must stay refused. A PR build's version is
+    # `nextPatch(last_release)` — read from the branch's COMMITTED manifest, so
+    # every open PR of any content claims the same triple. Allowing
+    # `X.Y.Z-anything` to satisfy a floor of `X.Y.Z` would wave through a
+    # BRAT-frozen build of a stale pre-fix branch, which is the exact
+    # population the gate exists for. See the moduledoc.
+    test "a pre-release of the floor is REFUSED" do
+      refute PluginVersion.supported?("#{@floor}-beta.1")
+      refute PluginVersion.supported?("#{@floor}-rc.1")
+      refute PluginVersion.supported?("#{@floor}-pr.512.g876f2c2")
     end
 
-    # The exact shapes engram-obsidian-sync/scripts/release-version.mjs emits
-    # and pr-build.yml stamps into manifest.json. Their absence is what let
-    # the semver-ordering bug through the first time.
-    test "the repo's real pre-release formats are allowed" do
-      assert PluginVersion.supported?("1.28.0-beta.3")
-      assert PluginVersion.supported?("1.28.0-pr.512.g876f2c2")
-      assert PluginVersion.supported?("1.29.0-pr.1.gabc1234")
+    # The shapes release-version.mjs ACTUALLY emits. `nextPatch` increments
+    # PATCH, so with stable 1.28.0 a preview is 1.28.1-*, never 1.28.0-*. An
+    # earlier version of this table asserted 1.28.0-* — strings the generator
+    # cannot produce — and so tested nothing about the real hazard.
+    test "the repo's real preview formats sort above a released floor" do
+      assert PluginVersion.supported?("1.28.1-beta.3")
+      assert PluginVersion.supported?("1.28.1-pr.512.g876f2c2")
     end
 
-    test "a pre-release of a version BELOW the floor is still refused" do
+    test "a pre-release of a version BELOW the floor is refused" do
       refute PluginVersion.supported?("1.27.0-beta.1")
       refute PluginVersion.supported?("1.27.9-pr.512.g876f2c2")
+    end
+
+    test "a full release above the floor is allowed" do
+      assert PluginVersion.supported?("1.28.1")
+      assert PluginVersion.supported?("1.29.0")
     end
 
     test "build metadata is ignored" do

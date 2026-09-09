@@ -34,25 +34,38 @@ defmodule Engram.PluginVersion do
   The only thing that is ever blocked is a version we successfully parsed
   and found to be strictly below the floor.
 
-  ## Pre-release tags are DISCARDED, not ordered
+  ## Pre-release tags are ORDERED BELOW their release, and must stay that way
 
-  Comparison is on `{major, minor, patch}` only. Semver says
-  `1.31.0-beta.3 < 1.31.0`, and using that ordering here would have broken the
-  feature on its first real use.
+  Plain semver: `1.28.1-pr.512.gabc1234` is BELOW `1.28.1`. That is what
+  `Version.compare/2` gives and it is what we want. This was briefly changed to
+  compare `{major, minor, patch}` only, on the theory that a preview build is a
+  build OF the release it names and should satisfy that release's floor. That
+  theory is wrong here, and the change opened a hole.
 
-  `engram-obsidian-sync/scripts/release-version.mjs` names a preview build
-  after the release it is previewing: `betaVersion` emits `1.31.0-beta.3` and
-  `prVersion` emits `1.31.0-pr.512.g876f2c2`, and `pr-build.yml` stamps that
-  straight into the shipped `manifest.json`. So the builds that CONTAIN a
-  protocol fix are named below the release that ships it. Under semver
-  ordering, shipping `@minimum "1.31.0"` alongside plugin 1.31.0 would refuse
-  every beta tester and every PR reviewer running a build that already has the
-  fix — and send them to a plugin pane with nothing newer to install.
+  `engram-obsidian-sync/scripts/release-version.mjs` derives a preview version
+  as `nextPatch(stable) <> "-<tag>"`, where `stable` is read by
+  `pr-build.yml` from the **branch's committed `manifest.json`** — which is
+  whatever release-please last published, never the branch's own content. So
+  EVERY open PR, of any age and any content, is stamped
+  `<last-release+1>-pr.<n>.g<sha>`. Two unrelated PRs both claim the same
+  triple. A build named `1.28.1-pr.7.gdeadbee` is "stable 1.28.0 plus one
+  arbitrary branch", not "a build of 1.28.1".
 
-  Discarding the tag means `1.31.0-anything` satisfies a floor of `1.31.0`.
-  The cost is that a pre-release is trusted as if it were its final release,
-  which is correct here: these tags are builds OF that release, not guesses at
-  it.
+  `pr-build.yml` then tells the reviewer to install it via BRAT as a **frozen
+  version**, which never auto-updates. Ship `@minimum "1.28.1"` later and, if
+  the tag were discarded, that reviewer's pre-fix build would report a triple
+  equal to the floor and be waved straight through — the exact population this
+  gate exists for.
+
+  Ordering pre-releases below their release refuses them instead, which is the
+  correct answer: a preview build cannot prove it contains the fix. The cost is
+  that a genuine beta of the fixing release is also refused. Accepted — that
+  population is small, self-selected, and can install the real release; the
+  alternative admits every stale PR build in existence.
+
+  Corollary for whoever raises the floor: do not set it to
+  `nextPatch(current_release)` while PR builds carrying that exact triple are
+  in the wild. Set it to the version release-please actually published.
 
   ## What this can and cannot reach
 
@@ -101,12 +114,6 @@ defmodule Engram.PluginVersion do
   # against this bound for exactly that reason.
   @max_len 32
 
-  # Release-precision floor: {major, minor, patch}, pre-release DISCARDED.
-  @floor (fn ->
-            v = Version.parse!(@minimum)
-            {v.major, v.minor, v.patch}
-          end).()
-
   @spec minimum() :: String.t()
   def minimum, do: @minimum
 
@@ -119,7 +126,9 @@ defmodule Engram.PluginVersion do
   @spec supported?(term()) :: boolean()
   def supported?(reported) when is_binary(reported) and byte_size(reported) <= @max_len do
     case Version.parse(String.trim(reported)) do
-      {:ok, %Version{major: maj, minor: min, patch: patch}} -> {maj, min, patch} >= @floor
+      # Plain semver ordering, pre-releases included — see the moduledoc for
+      # why a `X.Y.Z-pr.N.gSHA` build must NOT satisfy a floor of `X.Y.Z`.
+      {:ok, version} -> Version.compare(version, @minimum) != :lt
       :error -> true
     end
   end

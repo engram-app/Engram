@@ -10,8 +10,10 @@ defmodule EngramWeb.ChannelGate do
   ## What is mirrored, and what is NOT
 
   The vault scope pipes `:authed_api` (`router.ex:49-68`), which runs
-  **twelve** plugs — not three, and not the shorter list an earlier version of
-  this doc claimed. Below in PIPELINE order, which is also the order `check/3`
+  **eleven** plugs — not three, and not the shorter list an earlier version of
+  this doc claimed. (It said "twelve" for a while: that was this list's old
+  miscount, which counted the since-DELETED `EnforceSearchCap` as a pipeline
+  member, carried forward when `RequirePluginVersion` was added.) Below in PIPELINE order, which is also the order `check/3`
   applies them; derive one from the other only in that order.
 
   Mirrored:
@@ -57,12 +59,17 @@ defmodule EngramWeb.ChannelGate do
       limiter at all**, which is why `check/3` sits behind the free topic
       ownership match.
     * `DeviceFingerprint` (4) — no equivalent.
-    * `EnforceSearchCap` — no equivalent, and NOT in `:authed_api` at all
-      (it is applied per-route). There is no channel search either way.
+    * `EnforceSearchCap` — DELETED, along with `Engram.Usage.SearchCap` (see
+      `docs/context/mcp-bypasses-path-shaped-plugs.md`). The cap now lives in
+      `Engram.Search` as a return value, not a plug. Listed only because two
+      earlier versions of this doc counted it as a pipeline member and got the
+      plug count wrong as a result. There is no channel search either way.
 
-  (`Auth` (2) is not listed above because `UserSocket.connect/3` IS it. That
-  is the plug a 12-vs-11 count trips over — the twelfth in router order is
-  `RequireApiWriteEnabled`, the gap declared open above.)
+  (`Auth` (2) is not listed above because `UserSocket.connect/3` IS it. The
+  arithmetic: 7 mirrored + 3 genuinely-not-mirrored (`PreAuthRateLimit`,
+  `DeviceFingerprint`, `RequireApiWriteEnabled`) + `Auth` = 11. The eleventh
+  and last in router order is `RequireApiWriteEnabled`, the gap declared open
+  above.)
 
   `RequireActiveSubscription` collapses into the suspended check — since
   2026-06-07 it passes every tier (Free counts as active) and only rejects
