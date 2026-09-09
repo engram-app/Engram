@@ -112,7 +112,10 @@ class CdpClient:
         # cheap; re-deriving this from 15 red tests is not.
         if not self._logged_targets:
             self._logged_targets = True
-            logger.info(
+            # warning, not info: pytest's default capture shows warnings in
+            # the report and swallows info, and the whole point of this line is
+            # to be readable from a CI log after the fact.
+            logger.warning(
                 "[cdp:%s] %d page target(s): %s",
                 self.port,
                 len(targets),
