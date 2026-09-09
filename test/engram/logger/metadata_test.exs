@@ -118,7 +118,9 @@ defmodule Engram.Logger.MetadataTest do
             "failed on {\"content\": \"secret\"}",
             "could not embed todd@example.com",
             "[[Wikilink To A Private Note]]",
-            String.duplicate("a", 201)
+            String.duplicate("a", 201),
+            # `$` matches before a final newline; only `\z` actually rejects it.
+            "looks fine but ends with a newline\n"
           ] do
         assert Metadata.upstream_error({400, %{"detail" => leaky}}) == nil,
                "leaked: #{inspect(leaky)}"

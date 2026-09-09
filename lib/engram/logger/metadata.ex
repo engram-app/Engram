@@ -189,7 +189,11 @@ defmodule Engram.Logger.Metadata do
 
   # Letters, digits, spaces and the punctuation a diagnostic sentence needs.
   # No newlines, no `{}[]`, no `#`, no `@` — see the fails-closed note above.
-  @upstream_message ~r/^[A-Za-z0-9 ,.:;()'"\/_-]{3,200}$/
+  #
+  # `\A`/`\z`, not `^`/`$`: `$` also matches before a FINAL newline, so
+  # `"message\n"` satisfied the anchors even though the class rejects `\n`.
+  # A lone trailing newline is harmless, but "no newlines" has to mean it.
+  @upstream_message ~r/\A[A-Za-z0-9 ,.:;()'"\/_-]{3,200}\z/
 
   defp safe_upstream_message(msg) when is_binary(msg) do
     if Regex.match?(@upstream_message, msg), do: msg

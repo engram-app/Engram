@@ -95,25 +95,42 @@ defmodule Engram.Parsers.Markdown do
   # a raw byte offset would cut a multibyte character in half and yield invalid
   # UTF-8 — and space-free multibyte text (CJK) is precisely the input that gets
   # here, since it offers the word splitter nothing to split on.
-  defp hard_split(text, max_bytes) do
-    {done, current, _size} =
-      text
-      |> String.codepoints()
-      |> Enum.reduce({[], [], 0}, fn codepoint, {done, current, size} ->
-        next_size = size + byte_size(codepoint)
+  # Slices the binary rather than walking `String.codepoints/1`. Materialising
+  # one binary per character costs ~17s of CPU on a 10MB note (measured), and
+  # this runs in an Oban worker at concurrency 5 — the shape of the embed OOM
+  # in #891. Slicing yields sub-binary references and no per-character garbage.
+  defp hard_split(text, max_bytes), do: hard_split(text, max_bytes, [])
 
-        # `current != []` keeps a lone codepoint wider than the budget moving
-        # instead of looping forever on a piece it can never shrink.
-        if current != [] and next_size > max_bytes do
-          {[current | done], [codepoint], byte_size(codepoint)}
-        else
-          {done, [codepoint | current], next_size}
-        end
-      end)
+  defp hard_split(text, max_bytes, acc) when byte_size(text) <= max_bytes do
+    Enum.reverse([text | acc])
+  end
 
-    [current | done]
-    |> Enum.reverse()
-    |> Enum.map(&(&1 |> Enum.reverse() |> IO.iodata_to_binary()))
+  defp hard_split(text, max_bytes, acc) do
+    cut = codepoint_boundary(text, max_bytes)
+    <<piece::binary-size(cut), rest::binary>> = text
+    hard_split(rest, max_bytes, [piece | acc])
+  end
+
+  # Walk back while the cut points INTO a character. UTF-8 continuation bytes
+  # are 0b10xxxxxx, so this is at most 3 steps on valid input.
+  #
+  # Backing all the way to 0 means the whole window is continuation bytes —
+  # only reachable on invalid UTF-8, where there is no boundary to find. Take
+  # one byte rather than loop forever: the parser must not be what breaks a
+  # note. Losslessness is unaffected either way, since this only ever slices.
+  defp codepoint_boundary(text, offset) when offset > 0 do
+    if continuation_byte?(text, offset),
+      do: codepoint_boundary(text, offset - 1),
+      else: offset
+  end
+
+  defp codepoint_boundary(_text, _offset), do: 1
+
+  defp continuation_byte?(text, offset) do
+    case text do
+      <<_::binary-size(offset), byte, _::binary>> -> byte in 0x80..0xBF
+      _ -> false
+    end
   end
 
   # Frontmatter values used to be stripped before indexing, making every key
