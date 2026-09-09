@@ -158,6 +158,45 @@ defmodule Engram.Logger.Metadata do
 
   def format_location(_other), do: "?"
 
+  @doc """
+  The upstream provider's own error string, or nil.
+
+  `error_kind` + `status` name the CLASS of an upstream failure but not the
+  cause: a Voyage 400 is "batch too large" or "input over the context length"
+  or "bad model", and the status cannot tell them apart. On 2026-09-09 that gap
+  cost a day — six notes sat in an embed poison loop and the only way to guess
+  why was to read the chunker. Surface the provider's own words instead.
+
+  **Fails closed.** The message must be a provider diagnostic, and provider
+  diagnostics are short prose. Anything carrying a newline, a brace, a bracket,
+  a `#` or an `@` is rejected outright rather than truncated, because those are
+  the shapes note content, a URL, an email or an echoed JSON payload take —
+  and `:detail` is NOT in `RedactFilter`'s sensitive-key set, so nothing
+  downstream will scrub what this lets through.
+
+  Only reads a provider's designated error field. It never reaches for an
+  echoed request body: `Engram.Billing.Reconciliation` documents why (a Paddle
+  error body is echoed JSON that can carry customer PII), and that reasoning
+  holds for any provider that mirrors the request back.
+  """
+  @spec upstream_error(term()) :: String.t() | nil
+  def upstream_error({_status, body}), do: upstream_error(body)
+  def upstream_error(%{"detail" => detail}), do: safe_upstream_message(detail)
+  def upstream_error(%{"error" => %{"message" => msg}}), do: safe_upstream_message(msg)
+  def upstream_error(%{"status" => %{"error" => err}}), do: safe_upstream_message(err)
+  def upstream_error(%{"message" => msg}), do: safe_upstream_message(msg)
+  def upstream_error(_other), do: nil
+
+  # Letters, digits, spaces and the punctuation a diagnostic sentence needs.
+  # No newlines, no `{}[]`, no `#`, no `@` — see the fails-closed note above.
+  @upstream_message ~r/^[A-Za-z0-9 ,.:;()'"\/_-]{3,200}$/
+
+  defp safe_upstream_message(msg) when is_binary(msg) do
+    if Regex.match?(@upstream_message, msg), do: msg
+  end
+
+  defp safe_upstream_message(_other), do: nil
+
   # An S3/XML error code, or nil. Accepts ONLY a bare alphabetic identifier, so
   # a message, a URL or a storage key (all of which carry `/`, `.` or spaces)
   # can never qualify.

@@ -42,10 +42,10 @@ defmodule Engram.Parsers.Markdown do
         |> build_chunks(folder, title)
       end
 
-    (body_chunks ++ frontmatter_chunk(content, folder, title, length(body_chunks)))
+    (body_chunks ++ frontmatter_chunk(content, folder, title))
     |> Enum.flat_map(&enforce_size_cap/1)
     |> Enum.with_index()
-    |> Enum.map(fn {chunk, idx} -> %{chunk | position: idx} end)
+    |> Enum.map(fn {chunk, idx} -> Map.put(chunk, :position, idx) end)
   end
 
   # ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ defmodule Engram.Parsers.Markdown do
   #
   # Two paths above emit unbounded text: `split_text/2` splits on spaces, so a
   # run with none (base64 data URI, long URL, minified blob, CJK) passes through
-  # whole; and `frontmatter_chunk/4` never consulted a limit at all. Capping here
+  # whole; and `frontmatter_chunk/3` never consulted a limit at all. Capping here
   # rather than in each one means every chunk — including any a future path adds
   # — flows through a single limit.
   defp enforce_size_cap(%{text: text} = chunk) when byte_size(text) <= @max_chunk_chars do
@@ -67,15 +67,28 @@ defmodule Engram.Parsers.Markdown do
   end
 
   defp enforce_size_cap(chunk) do
-    # Both construction sites build `context_text` as
-    # `context_prefix <> "\n\n" <> text`, so the leading bytes that are not the
-    # text are exactly the prefix (plus its separator) — reusable as-is.
-    prefix_len = byte_size(chunk.context_text) - byte_size(chunk.text)
-    prefix = binary_part(chunk.context_text, 0, prefix_len)
+    prefix = context_prefix_of(chunk)
 
     chunk.text
     |> hard_split(@max_chunk_chars)
     |> Enum.map(&%{chunk | text: &1, context_text: prefix <> &1})
+  end
+
+  # Both construction sites build `context_text` as
+  # `context_prefix <> "\n\n" <> text`, so the leading bytes that are not the
+  # text are exactly the prefix plus its separator — reusable as-is.
+  #
+  # Checked rather than assumed. This cap exists to hold for paths that do not
+  # exist yet, and a subtraction on a path that builds `context_text` some
+  # other way goes negative and raises inside the parser — which fails the
+  # embed, which lands us back in the poison loop the cap is here to prevent.
+  # Losing a prefix degrades one chunk's context; raising breaks the note.
+  defp context_prefix_of(%{context_text: context_text, text: text}) do
+    if String.ends_with?(context_text, text) do
+      binary_part(context_text, 0, byte_size(context_text) - byte_size(text))
+    else
+      ""
+    end
   end
 
   # Split at codepoint boundaries into pieces of at most `max_bytes`. Slicing at
@@ -107,7 +120,7 @@ defmodule Engram.Parsers.Markdown do
   # invisible to keyword search (spec 2026-07-02). One synthetic chunk carries
   # the raw block into the BM25 leg. char offsets are 0/0: the block sits
   # before the post-frontmatter body that offsets are relative to.
-  defp frontmatter_chunk(content, folder, title, position) do
+  defp frontmatter_chunk(content, folder, title) do
     case Engram.Notes.Frontmatter.split(content) do
       {block, _body} when is_binary(block) and block != "" ->
         context_prefix = build_context_prefix(folder, "#{title} > frontmatter")
@@ -118,8 +131,7 @@ defmodule Engram.Parsers.Markdown do
             context_text: context_prefix <> "\n\n" <> block,
             heading_path: "frontmatter",
             char_start: 0,
-            char_end: 0,
-            position: position
+            char_end: 0
           }
         ]
 

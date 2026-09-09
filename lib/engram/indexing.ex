@@ -313,11 +313,21 @@ defmodule Engram.Indexing do
 
   defp doc_embed_model, do: Application.get_env(:engram, :doc_embed_model)
 
-  # Voyage caps inputs per request (1,000 texts / token budget); a large
-  # note's chunks in ONE call is a guaranteed 4xx no retry can fix — the
-  # job then churns through ReconcileEmbeddings forever. 128 matches the
-  # documented batch sweet spot and stays far below every API limit.
+  # Voyage caps a request two ways: 1,000 texts AND 120,000 tokens summed over
+  # them. Blowing either is a 400 no retry can fix, so the job churns through
+  # ReconcileEmbeddings forever.
+  #
+  # A count alone does not bound the token sum, because tokens per byte vary
+  # with the content. 128 chunks of ~2KB is ~269KB, which is ~67K tokens of
+  # English (fine) but ~134K of base64 or minified text (over the limit) — and
+  # dense, space-free content is exactly what the chunker's size cap now slices
+  # into full-width chunks. So bound the bytes too.
+  #
+  # 200KB is 100K tokens at 2 bytes/token, the worst density we expect from
+  # base64/random input. English packs the full 128 long before reaching it, so
+  # this costs nothing on ordinary notes.
   @embed_batch_size 128
+  @embed_batch_bytes 200_000
 
   # `false` yields a nil vector per chunk. Kept as an explicit list (not a bare
   # nil) so build_prepared/8 can zip chunks with vectors either way.
@@ -326,7 +336,7 @@ defmodule Engram.Indexing do
 
   defp embed_for_indexing(texts) do
     texts
-    |> Enum.chunk_every(@embed_batch_size)
+    |> batch_texts()
     |> Enum.reduce_while({:ok, []}, fn batch, {:ok, acc} ->
       case do_embed_batch(batch) do
         {:ok, vectors} -> {:cont, {:ok, [vectors | acc]}}
@@ -340,6 +350,31 @@ defmodule Engram.Indexing do
       other ->
         other
     end
+  end
+
+  # Close a batch on whichever ceiling comes first, count or bytes. A single
+  # text wider than the byte budget still goes out alone rather than looping:
+  # the chunker caps it long before here, and dropping it would silently
+  # unindex the content.
+  defp batch_texts(texts) do
+    Enum.chunk_while(
+      texts,
+      {[], 0, 0},
+      fn text, {batch, count, bytes} ->
+        size = byte_size(text)
+
+        if batch != [] and
+             (count + 1 > @embed_batch_size or bytes + size > @embed_batch_bytes) do
+          {:cont, Enum.reverse(batch), {[text], 1, size}}
+        else
+          {:cont, {[text | batch], count + 1, bytes + size}}
+        end
+      end,
+      fn
+        {[], _count, _bytes} -> {:cont, {[], 0, 0}}
+        {batch, _count, _bytes} -> {:cont, Enum.reverse(batch), {[], 0, 0}}
+      end
+    )
   end
 
   defp do_embed_batch(texts) do

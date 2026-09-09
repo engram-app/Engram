@@ -19,6 +19,15 @@ defmodule Engram.Logger.RescueReasonSinkTest do
   alias Engram.Logger.Metadata
   alias Engram.Logger.RedactFilter
 
+  # Per-module, because `:logger`'s primary filters are a NODE-WIDE registry
+  # keyed by name and this module is `async: true`. `RedactFilterTest` installed
+  # the same literal `:engram_redact_test`, so whichever module finished first
+  # ran `remove_primary_filter/1` on the other's still-running assertions —
+  # `installed?/0` then went false and this file failed with nothing wrong in
+  # the code under test. Deriving the name means a third module cannot
+  # reintroduce the collision by copying the setup block.
+  @primary_filter :"engram_redact_#{__MODULE__}"
+
   @secret "Dear diary, the biopsy came back positive."
 
   defp prod_line(meta, message) do
@@ -241,12 +250,12 @@ defmodule Engram.Logger.RescueReasonSinkTest do
   # These install the real filter and drive the real `:logger` API.
   describe "the primary filter survives everything :logger can hand it" do
     setup do
-      :logger.add_primary_filter(:engram_redact_test, {&RedactFilter.filter/2, []})
-      on_exit(fn -> :logger.remove_primary_filter(:engram_redact_test) end)
+      :logger.add_primary_filter(@primary_filter, {&RedactFilter.filter/2, []})
+      on_exit(fn -> :logger.remove_primary_filter(@primary_filter) end)
       :ok
     end
 
-    defp installed?, do: :engram_redact_test in Keyword.keys(:logger.get_primary_config().filters)
+    defp installed?, do: @primary_filter in Keyword.keys(:logger.get_primary_config().filters)
 
     test "a struct metadata does not remove the filter" do
       assert installed?()
