@@ -9,7 +9,7 @@ defmodule EngramWeb.ChannelGate do
 
   ## What is mirrored, and what is NOT
 
-  The vault scope pipes `:authed_api` (`router.ex:49-61`), which runs
+  The vault scope pipes `:authed_api` (`router.ex:49-68`), which runs
   **twelve** plugs — not three, and not the shorter list an earlier version of
   this doc claimed. Below in PIPELINE order, which is also the order `check/3`
   applies them; derive one from the other only in that order.
@@ -17,11 +17,11 @@ defmodule EngramWeb.ChannelGate do
   Mirrored:
 
     * `AccountDeleted`            → `account_deleted` (`deleted_at` only) ✅ #1429
-    * `RequirePluginVersion`      → `plugin_upgrade_required` ✅
     * `RotationLockCheck`         → `rotation_in_progress` ✅ #1434
     * `RequireOnboarding`         → `onboarding_required` ✅ #1426
     * `RequireActiveSubscription` → `account_suspended` ✅ #1429
     * `BumpActivity`              → liveness stamp ✅ #1429 (see `## Activity`)
+    * `RequirePluginVersion`      → `plugin_upgrade_required` ✅
     * `RequireApiRpsBudget`       → `api_access_not_available`, but ONLY the
       `cap == 0` case ✅ #1433
 
@@ -57,7 +57,8 @@ defmodule EngramWeb.ChannelGate do
       limiter at all**, which is why `check/3` sits behind the free topic
       ownership match.
     * `DeviceFingerprint` (4) — no equivalent.
-    * `EnforceSearchCap` (10) — no equivalent; there is no channel search.
+    * `EnforceSearchCap` — no equivalent, and NOT in `:authed_api` at all
+      (it is applied per-route). There is no channel search either way.
 
   (`Auth` (2) is not listed above because `UserSocket.connect/3` IS it. That
   is the plug a 12-vs-11 count trips over — the twelfth in router order is
@@ -161,20 +162,21 @@ defmodule EngramWeb.ChannelGate do
         {:error, %{reason: "account_deleted"}}
 
       fresh ->
-        # Precedence mirrors `:authed_api` exactly (router.ex:52-57):
-        # AccountDeleted -> RequirePluginVersion -> RotationLockCheck ->
-        # RequireOnboarding -> RequireActiveSubscription. Suspension therefore
-        # comes AFTER onboarding, so an account suspended mid-signup reports
-        # the same reason on both transports. Rotation reuses the row already
-        # loaded here via `check_user/1`, so it costs no extra query.
+        # Precedence mirrors `:authed_api` exactly (router.ex:52-56):
+        # AccountDeleted -> RotationLockCheck -> RequireOnboarding ->
+        # RequireActiveSubscription. Suspension therefore comes AFTER
+        # onboarding, so an account suspended mid-signup reports the same
+        # reason on both transports. Rotation reuses the row already loaded
+        # here via `check_user/1`, so it costs no extra query.
+        # `RequirePluginVersion` is NOT here — it sits after the liveness
+        # stamp below, mirroring router.ex:65. See the note there.
         with :ok <- deleted(fresh),
-             :ok <- plugin_version(plugin_version),
              :ok <- rotation(fresh),
              :ok <- onboarding(fresh),
              :ok <- suspended(fresh) do
           # Liveness stamp sits HERE, between the account gates and the API
           # gates, because that is where `BumpActivity` sits on HTTP
-          # (router.ex:57, ahead of `RequireApiRpsBudget` at :58). A Pro user
+          # (router.ex:57, ahead of `RequireApiRpsBudget` at :66). A Pro user
           # with a PAT integration who downgrades to Free is stamped on every
           # REST call before being refused; stamping after `api_access/2`
           # would leave the socket silent and let `InactivityCleanup` sweep an
@@ -193,7 +195,15 @@ defmodule EngramWeb.ChannelGate do
           # soft-DELETING a blocked-but-active account, and data loss beats a
           # stale row. Revisit if a join limiter lands.
           stamp_activity(user_id)
-          api_access(fresh, api_key)
+
+          # AFTER the stamp, mirroring `RequirePluginVersion` sitting after
+          # `BumpActivity` on HTTP — and for the identical reason the KNOWN
+          # TRADE-OFF above gives: refusing a join without stamping would let
+          # `InactivityCleanup` soft-delete an account that is syncing daily
+          # and merely running an old plugin. Data loss beats a stale row.
+          with :ok <- plugin_version(plugin_version) do
+            api_access(fresh, api_key)
+          end
         end
     end
   end

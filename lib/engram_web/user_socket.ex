@@ -56,7 +56,15 @@ defmodule EngramWeb.UserSocket do
     conn_id = params["conn_id"]
     device_id = params["device_id"]
     vault_id = params["vault_id"]
-    plugin_version = params["plugin_version"]
+    # CLAMPED, because this is an attacker-controlled query param that lands in
+    # Logger metadata, and prod serializes all metadata. Unbounded, any holder
+    # of a valid token could push ~10KB (Bandit's request-line cap) per connect
+    # into a long-retention aggregator. Two in-repo precedents do the same to
+    # the same kind of value: `request_logger.ex` truncates `user_agent` to 200
+    # for this exact reason, and `logs.ex` already clamps `plugin_version` to
+    # 128 on the client-log ingest path. 32 is `PluginVersion`'s own bound and
+    # holds every version this repo can emit with room to spare.
+    plugin_version = clamp_version(params["plugin_version"])
 
     # `plugin_version` is logged HERE and nowhere else. It is the evidence you
     # read before raising `Engram.PluginVersion.minimum/0`, and this is the one
@@ -116,6 +124,13 @@ defmodule EngramWeb.UserSocket do
   # matters. (A token in its final second can pass resolve/1 and then fail
   # here, yielding nil -> :all, so a vault-scoped socket would connect
   # unrestricted for its lifetime.)
+  # Non-binaries (`?plugin_version[]=x` decodes to a list) become nil rather
+  # than riding into the log and the `String.t() | nil` assign as some other
+  # shape. `PluginVersion.supported?/1` allows anything it cannot read, so a
+  # dropped value is allowed either way — this only keeps the assign honest.
+  defp clamp_version(v) when is_binary(v), do: String.slice(v, 0, 32)
+  defp clamp_version(_), do: nil
+
   defp oauth_scope_vault_ids(token) do
     case Engram.Accounts.verify_jwt(token) do
       {:ok, claims} -> Engram.Permissions.scope_ids_from_claims(claims)
