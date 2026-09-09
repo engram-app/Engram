@@ -56,13 +56,38 @@ defmodule EngramWeb.UserSocket do
     conn_id = params["conn_id"]
     device_id = params["device_id"]
     vault_id = params["vault_id"]
+    # BOUNDED, because this is an attacker-controlled query param that lands in
+    # Logger metadata, and prod serializes all metadata. Unbounded, any holder
+    # of a valid token could push ~10KB (Bandit's request-line cap) per connect
+    # into a long-retention aggregator. Two in-repo precedents bound the same
+    # kind of value: `request_logger.ex` truncates `user_agent` to 200 for this
+    # exact reason, and `logs.ex` bounds `plugin_version` to 128 on the
+    # client-log ingest path. 32 is `PluginVersion`'s own bound and holds every
+    # version this repo can emit with room to spare. See `bounded_version/1`
+    # for why it DROPS rather than truncates.
+    plugin_version = bounded_version(params["plugin_version"])
 
+    # `plugin_version` is logged HERE and nowhere else. It is the evidence you
+    # read before raising `Engram.PluginVersion.minimum/0`, and this is the one
+    # place where that costs a field per SOCKET rather than a field per request
+    # — the version distribution of everything that syncs, at ~1 line per
+    # client per reconnect. Do not also add it to `RequestLogger`; see the
+    # ingest-cost note there.
+    #
+    # Read it in CLOUDWATCH (`/ecs/engram-saas-prod`), not Loki. This is an
+    # `:info` + `:websocket` line, and while `Logger.Category` lists
+    # `:websocket` in `@info_to_loki`, the Fluent Bit category regex does not
+    # — so info websocket lines reach CloudWatch and NOT Loki. That mismatch is
+    # deliberate and pre-existing (see the NOTE in `category.ex`); do not
+    # widen the routing rule to make this queryable in Grafana without first
+    # deciding the volume.
     Logger.info(
       "ws connect",
       Metadata.with_category(:info, :websocket,
         conn_id: conn_id,
         device_id: device_id,
         vault_id: vault_id,
+        plugin_version: plugin_version,
         user_id: HMAC.hash_user_id(to_string(user.id))
       )
     )
@@ -73,7 +98,8 @@ defmodule EngramWeb.UserSocket do
       oauth_scope_vault_ids: oauth_scope_vault_ids(token),
       conn_id: conn_id,
       device_id: device_id,
-      vault_id_param: vault_id
+      vault_id_param: vault_id,
+      plugin_version: plugin_version
     })
   end
 
@@ -105,6 +131,27 @@ defmodule EngramWeb.UserSocket do
       _ -> nil
     end
   end
+
+  # DROP an over-long value; do not truncate it. Two bugs live in the obvious
+  # `String.slice(v, 0, 32)`:
+  #
+  #   * `String.slice/3` counts GRAPHEMES, and a grapheme cluster is unbounded
+  #     in bytes. `"e" <> String.duplicate(<combining acute>, 3000)` is ONE
+  #     grapheme, so the "32-byte" clamp returned 6KB — the exact ingest cost
+  #     this function exists to prevent.
+  #   * Truncating CHANGES THE VERDICT. `PluginVersion.supported?/1` refuses to
+  #     parse anything over 32 bytes and therefore allows it. Truncate first
+  #     and a 40-byte `"1.0.0-" <> 34 a's` becomes a parseable `1.0.0`, which
+  #     is below the floor — so the same client got 200 on REST (raw header)
+  #     and `plugin_upgrade_required` on a channel join (clamped param). The
+  #     gate must see what the CLIENT sent, on both transports.
+  #
+  # Dropping is verdict-identical to passing the raw value through — both end
+  # at `supported?(_) -> true` — and bounds the log. Non-binaries
+  # (`?plugin_version[]=x` decodes to a list) go the same way, which also keeps
+  # the assign honest against its `String.t() | nil` spec.
+  defp bounded_version(v) when is_binary(v) and byte_size(v) <= 32, do: v
+  defp bounded_version(_), do: nil
 
   @impl true
   def id(socket), do: "user_socket:#{socket.assigns.current_user.id}"

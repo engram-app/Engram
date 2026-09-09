@@ -20,7 +20,7 @@ selected a plan** synced a full vault from Obsidian, and the plugin displayed it
 normal state rather than a blocked one).
 
 `RequireOnboarding` was wired only on the vault-scoped **router** pipeline
-(`router.ex:55`). It correctly 403'd `/api/notes`, `/api/search`, `/api/folders`.
+(`router.ex:55` today; it moved with later pipeline edits). It correctly 403'd `/api/notes`, `/api/search`, `/api/folders`.
 But a Plug takes a `conn` and **never runs on a socket** — and sync had moved to
 Phoenix Channels. The live path checked token validity (`user_socket.ex`
 `connect/3`), `crdt_proto` version, the DEK rotation lock,
@@ -43,16 +43,20 @@ Two layers:
 - **`Engram.Onboarding.gate/2`** — the onboarding verdict itself. `:ok` or
   `{:error, missing, next_step}`, with `GateCache` pass-caching.
   `EngramWeb.Plugs.RequireOnboarding` is a thin 403-shaping wrapper over it.
-- **`EngramWeb.ChannelGate.check/2`** — the socket-side equivalent of the whole
+- **`EngramWeb.ChannelGate.check/3`** — the socket-side equivalent of the whole
   vault-scoped pipeline. Composes lifecycle + onboarding and returns the map to
   reply straight from `join/3`. `SyncChannel` and `CrdtChannel` both call it.
 
-The vault scope pipes `:authed_api` (`router.ex:49-60`), which runs **eleven**
+The vault scope pipes `:authed_api` (`router.ex:49-68`), which runs **eleven**
 plugs — not three. Do not trust a summary that says otherwise; that
 miscount is what let the gaps below go unnoticed.
 
-Listed in **pipeline execution order** (`router.ex:50-60`) — `ChannelGate`'s
+Listed in **pipeline execution order** (`router.ex:50-67`) — `ChannelGate`'s
 `with` chain follows the same order deliberately, so do not re-sort this.
+
+> This table is a SECOND COPY of the ledger in `channel_gate.ex`'s moduledoc.
+> They have drifted more than once, in both directions. Change both, or delete
+> this one and link there.
 
 | `:authed_api` plug | HTTP | Socket |
 |---|---|---|
@@ -64,8 +68,8 @@ Listed in **pipeline execution order** (`router.ex:50-60`) — `ChannelGate`'s
 | `RequireOnboarding` | 403 `onboarding_required` | ✅ #1426 |
 | `RequireActiveSubscription` | 402 `account_suspended` | ✅ #1429 |
 | `BumpActivity` | stamps `last_active_at` | ✅ #1429 — load-bearing, see below |
+| `RequirePluginVersion` | 426 `plugin_upgrade_required` | ✅ |
 | `RequireApiRpsBudget` | 429 | ⚠️ #1433 — only the `cap == 0` case, at join |
-| `EnforceSearchCap` | 402 | ❌ |
 | `RequireApiWriteEnabled` | 402 | ❌ — attempted and reverted, see `channel_gate.ex` |
 
 **API-key sockets are gated; JWT sockets are not.** Pricing v2 §G is a

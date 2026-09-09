@@ -252,7 +252,7 @@ defmodule EngramWeb.LifecycleGateChannelTest do
 
     # An ENTITLEMENT refusal is the opposite, and deliberately so: the account
     # is healthy, only its API plan is not. HTTP stamps here too — BumpActivity
-    # is router.ex:57, RequireApiRpsBudget is :58 — so a Pro user with a PAT
+    # is router.ex:57, RequireApiRpsBudget is :66 — so a Pro user with a PAT
     # integration who downgrades to Free stays visibly alive on both
     # transports. Stamping after the entitlement gate instead would let
     # InactivityCleanup soft-delete an account generating daily traffic.
