@@ -22,12 +22,17 @@ Implementation notes vs plan draft:
     enable_remote_logging() to ensure the flag is on, then trigger a real sync
     to generate server-observable entries before and after toggling.
   - The backend /logs endpoint has no full-text query param (only level,
-    category, since).  After-disable filtering is done Python-side by substring
-    matching on the message field — see ApiClient.list_logs() in helpers/api.py.
+    category, since).  Attribution is done Python-side — but by DEVICE ID, not
+    by substring: `noteRef()` replaces every path in a log message with an
+    opaque label (`n106`) so vault paths never reach a hosted aggregator, so
+    grepping for a note path can never match. Rows carry `device_id`
+    (logs_controller.ex); see ApiClient.list_logs() in helpers/api.py.
   - The flush threshold for rlog is 20 entries (src/remote-log.ts).  We generate
     25 entries per phase to reliably exceed it.
-  - We use api_sync.list_logs(query="after-disable") to check the server sees
-    zero entries matching the post-disable marker.
+  - Both phases read with `since` AND `device_id`. The e2e vault is
+    session-scoped and shared by ~110 tests logging under one account, so an
+    unfiltered read is mostly other tests' rows — which made the assert-zero
+    below pass for free regardless of whether the toggle worked.
 """
 
 from __future__ import annotations
@@ -66,13 +71,15 @@ async def _set_remote_logging(cdp, enabled: bool) -> None:
 async def test_disable_stops_flush(vault_a, cdp_a, cdp_b, api_sync):
     """Logs generated after diagnosticsEnabled=false do not reach the server.
 
-    Both sync-pair instances are toggled. test_16/66 aside, remote logging is
-    seeded ON suite-wide (helpers/obsidian.py, backend #909), so instance B
-    also logs the receive side of after.md under the SHARED user. list_logs()
-    cannot yet tell A's rows from B's (no per-instance device_id), so proving
-    "disable stops flush" requires silencing both. Once device_id lands
-    (plugin + backend follow-up), tighten this to filter A's rows and assert A
-    goes silent while B keeps logging, a strictly stronger per-client proof.
+    Both sync-pair instances are toggled. Remote logging is seeded ON
+    suite-wide (helpers/obsidian.py, backend #909), so instance B also logs the
+    receive side of after.md under the SHARED user.
+
+    device_id HAS landed — every row carries it (logs_controller.ex) — so the
+    reads below attribute to instance A specifically. B is still silenced,
+    because a full sync between the pair is not the thing under test; the
+    stronger "A goes silent while B keeps logging" variant is now possible and
+    is the natural next step.
     """
     # ------------------------------------------------------------------ #
     # Setup: capture original setting on both instances.
@@ -103,6 +110,12 @@ async def test_disable_stops_flush(vault_a, cdp_a, cdp_b, api_sync):
         # a full page of entries. `since` is a real backend param; use it.
         since = datetime.now(timezone.utc).isoformat()
 
+        # Attribute rows to THIS instance. Every log row carries `device_id`
+        # (logs_controller.ex) — the docstring's "no per-instance device_id"
+        # note is stale.
+        device_a = await cdp_a.evaluate(f"app.plugins.plugins['{PLUGIN_ID}'].deviceId")
+        assert device_a, "Instance A has no deviceId; cannot attribute log rows to it."
+
         # ------------------------------------------------------------------ #
         # Phase 1: generate entries BEFORE disabling — verify they reach the
         # server so we know the pipeline is working, not just suppressed.
@@ -111,6 +124,14 @@ async def test_disable_stops_flush(vault_a, cdp_a, cdp_b, api_sync):
         # Deterministically push a note via the engine — generates rlog
         # entries on the push code path. push_file_now bypasses the watcher
         # debounce so the rlog calls land synchronously.
+        #
+        # NOTE: we do NOT match on the note path. `noteRef()` (src/note-ref.ts)
+        # replaces every path in a log message with an opaque label — `n106`,
+        # `n119` — precisely so vault paths never reach a hosted aggregator.
+        # This test used to grep for "E2E/Logging66/before.md" on the premise
+        # that "the sync engine includes the path when it logs push/pull
+        # events". It does not, and cannot. That is why phase 1 failed: not a
+        # delivery flake, a marker that can never match.
         await cdp_a.push_file_now(
             "E2E/Logging66/before.md",
             f"# {before_marker}\nbefore content",
@@ -146,9 +167,7 @@ async def test_disable_stops_flush(vault_a, cdp_a, cdp_b, api_sync):
         while asyncio.get_event_loop().time() < deadline_before:
             await cdp_a.flush_remote_logs()
             flushes += 1
-            before_logs = api_sync.list_logs(
-                limit=200, since=since, query="E2E/Logging66/before.md"
-            )
+            before_logs = api_sync.list_logs(limit=200, since=since, device_id=device_a)
             if before_logs:
                 break
             await asyncio.sleep(0.25)
@@ -160,19 +179,19 @@ async def test_disable_stops_flush(vault_a, cdp_a, cdp_b, api_sync):
         # actually a changed log message.
         if not before_logs:
             any_logs = api_sync.list_logs(limit=200, since=since)
+            devices = sorted({str(entry.get("device_id")) for entry in any_logs})
             sample = [str(entry.get("message", ""))[:120] for entry in any_logs[:10]]
             assert before_logs, (
-                f"No log entry matching 'E2E/Logging66/before.md' after "
-                f"{flushes} flush attempts over 15 s, but the server holds "
-                f"{len(any_logs)} log row(s) for this user since the test "
-                f"started.\n"
-                f"  - {len(any_logs)} > 0 means DELIVERY WORKS and the "
-                f"substring match is stale: some rlog call in the push path "
-                f"stopped including the note path. Fix the marker, not the "
-                f"flush.\n"
-                f"  - {len(any_logs)} == 0 means nothing is arriving: rlog is "
-                f"disabled, the buffer is empty, or POST /logs is failing "
-                f"(flush() re-buffers on failure, so every attempt retried).\n"
+                f"No log rows from instance A (device {device_a}) after "
+                f"{flushes} flush attempts over 15 s, though the server holds "
+                f"{len(any_logs)} row(s) for this user since the test started.\n"
+                f"  - {len(any_logs)} > 0 with A absent means A specifically is "
+                f"not delivering: rlog disabled, buffer empty, or its POST "
+                f"/logs failing (flush() re-buffers on failure, so every "
+                f"attempt retried).\n"
+                f"  - {len(any_logs)} == 0 means nothing is arriving for anyone "
+                f"— suspect the endpoint, not the plugin.\n"
+                f"Devices seen: {devices}\n"
                 f"Most recent messages: {sample}"
             )
 
@@ -195,6 +214,10 @@ async def test_disable_stops_flush(vault_a, cdp_a, cdp_b, api_sync):
             "E2E/Logging66/after.md",
             f"# {AFTER_MARKER}\nafter content",
         )
+        # The phase-2 window opens BEFORE the work that would generate rows and
+        # AFTER the toggle, so phase 1's own rows cannot satisfy an assert-zero
+        # whose whole job is to prove silence.
+        after_since = datetime.now(timezone.utc).isoformat()
         await cdp_a.trigger_full_sync()
         # Attempt a flush — should be a no-op because rlog is disabled.
         # flush_remote_logs() waits 600 ms internally; that's enough time
@@ -210,11 +233,9 @@ async def test_disable_stops_flush(vault_a, cdp_a, cdp_b, api_sync):
         # worked. The phase-1 assertion above is what keeps it honest: it
         # proves the same query DOES find this test's own entries when logging
         # is on, using the same window. Do not weaken one without the other.
-        after_logs = api_sync.list_logs(
-            limit=200, since=since, query="E2E/Logging66/after.md"
-        )
+        after_logs = api_sync.list_logs(limit=200, since=after_since, device_id=device_a)
         assert len(after_logs) == 0, (
-            f"Expected 0 log entries containing 'E2E/Logging66/after.md' after "
+            f"Expected 0 log rows from instance A (device {device_a}) after "
             f"disabling remote logging, but got {len(after_logs)}: {after_logs!r}"
         )
 
