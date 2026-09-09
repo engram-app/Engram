@@ -375,6 +375,7 @@ class ApiClient:
         level: str = "",
         since: str = "",
         query: str = "",
+        device_id: str = "",
     ) -> list[dict]:
         """GET /logs and return the log entries as a flat list.
 
@@ -384,11 +385,19 @@ class ApiClient:
         ``query`` is a Python-side substring filter applied to the ``message``
         field — the backend /logs endpoint does not support full-text search
         (it accepts ``level``, ``category``, and ``since`` params only).
+
+        ``device_id`` is likewise Python-side, and is the ONLY way to attribute
+        a row to one Obsidian instance. The e2e vault is session-scoped and
+        shared by ~110 tests logging under one account, so an unfiltered read
+        is mostly other tests' traffic — which makes any assert-ZERO over it
+        pass for free. Rows carry `device_id` (logs_controller.ex); use it.
         """
         resp = self.get_logs(level=level, since=since, limit=limit)
         logs = resp.get("logs", [])
         if query:
             logs = [l for l in logs if query in l.get("message", "")]
+        if device_id:
+            logs = [l for l in logs if l.get("device_id") == device_id]
         return logs
 
     def list_folder(self, folder: str = "") -> dict:

@@ -3,7 +3,7 @@
 _Last verified: 2026-06-19_
 
 ## Status
-Working — ordered change-log / cursor-pull sync, shipped 2026-06 (backend PRs #628–#630, plugin #109). Compaction (history GC) is the one unbuilt piece (PR D; `retention_floor` is 0 until then).
+Working — ordered change-log / cursor-pull sync, shipped 2026-06 (backend PRs #628–#630, plugin #109). Compaction (history GC) is unbuilt; its planned watermark input (`vault_device_cursors`) was dropped as dead weight (see below), so a future compaction effort needs a new design, not a revival.
 
 ## What This Is
 How the server lets a client (plugin or web SPA) converge a vault: a per-vault **ordered change-log** the client pulls forward via an opaque cursor, a **manifest** for first-sync/reconciliation, idempotent **bulk** ops, and a **WebSocket channel** for live nudges. The client holds its own position; the server is the ordered source of truth.
@@ -23,7 +23,7 @@ How the server lets a client (plugin or web SPA) converge a vault: a per-vault *
 
 ## Unified change-log pull (`GET /sync/changes`) — HISTORICAL (route removed, #1036)
 1. Decode `cursor` param → `{after_seq, after_id}` (absent = `{0, nil}` first pull; malformed → **400 `invalid_cursor`**).
-2. If `after_seq < retention_floor(vault)` → **410 `history_expired`** (forces a manifest re-sync; floor is 0 until compaction ships).
+2. If `after_seq` predates retention → **410 `history_expired`** (forces a manifest re-sync; no compaction/retention exists yet, so this never fires today).
 3. Fetch **`limit + 1`** from EACH feed (`Notes.list_changes_by_seq`, `Attachments.list_changes_by_seq`) — the `+1` probe lets the merge detect "more exist".
 4. Tag each row `type: "note" | "attachment"`, merge-sort by `{seq, id}`, trim to `limit`, compute `next_cursor` (from the last kept row) + `has_more`.
 5. **Pull-carries-ack:** record the *incoming* cursor's `after_seq` as the device watermark (no-op if no `X-Device-Id`).
@@ -31,8 +31,8 @@ How the server lets a client (plugin or web SPA) converge a vault: a per-vault *
 Params: `limit` (clamped to the per-feed 500 ceiling — a larger limit could skip rows past `next_cursor`), `fields` (note projection: `meta` vs full content), `X-Device-Id` (watermark identity).
 Response: `{ changes: [...], next_cursor, has_more }`.
 
-## Device cursors (`Engram.Sync.DeviceCursor`, table `vault_device_cursors`)
-Composite PK `(vault_id, device_id)`, `last_seq`, `last_seen_at`. It is the **GC/eviction record**, NOT the pagination source — clients hold their own position. `Sync.record_cursor/4` is monotonic (`GREATEST`), so a lagging/out-of-order pull never regresses the watermark. Will drive history compaction (PR D): the min `last_seq` across active devices is the safe retention floor.
+## Device cursors — REMOVED (dead since #1036, dropped 2026-09-08)
+`Engram.Sync.DeviceCursor` / table `vault_device_cursors` used to record a per-(vault, device) GC watermark via `Sync.record_cursor/4`, called from the REST `GET /sync/changes` handler on every pull. #1036 deleted that handler and moved catch-up to `crdt_catchup_since` (the socket path) without porting the write — so from 2026-07-18 on, nothing ever wrote this table again. No reader existed either. Confirmed fully inert (zero live callers) and dropped outright; if compaction (PR D) gets built, it needs a new watermark design against the socket catch-up path, not this table.
 
 ## Manifest (`GET /sync/manifest`)
 Full snapshot for first-sync + drift reconciliation: projects ONLY path-ciphertext + nonce + `content_hash` (not `content_ciphertext` — a 10k-note vault would OOM BEAM otherwise), decrypts paths server-side, sorts. A user with no DEK (zero writes) short-circuits to an empty manifest.
@@ -41,8 +41,7 @@ Full snapshot for first-sync + drift reconciliation: projects ONLY path-cipherte
 Topic `sync:{user_id}:{vault_id}` (join asserts the user owns both). Client→Server: none — all writes ride the `crdt:` channel; unknown frames get a `"gone"` error reply. Server→Client: `note_changed` (via `broadcast_from` — excludes the pushing socket to halve its bandwidth on bulk sync). Presence tracked. **The channel is a live nudge, not the source of truth — catch-up always goes through the seq-ordered pull.** See `channel-event-contract.md` for the event payloads.
 
 ## Key modules
-- `lib/engram/sync.ex` — cursor codec + `record_cursor` + `retention_floor`
-- `lib/engram/sync/device_cursor.ex` — the watermark schema
+- `lib/engram/sync.ex` — cursor codec
 - `lib/engram_web/controllers/sync_controller.ex` — `changes` (unified) + `manifest`
 - `lib/engram/notes.ex` / `attachments.ex` — `list_changes_by_seq/4` (the per-feed queries) + seq stamping on write
 - `lib/engram/vaults.ex` — `next_seq!/1` (the seq source)
@@ -50,7 +49,7 @@ Topic `sync:{user_id}:{vault_id}` (join asserts the user owns both). Client→Se
 
 ## Gotchas
 - **`seq` is per-vault, not global** — never compare seqs across vaults; the cursor is only meaningful within its vault.
-- **The cursor is client-held.** The server's `vault_device_cursors` row is for GC, not for resuming a client — never paginate from it.
+- **The cursor is client-held.** There is no server-side watermark record (`vault_device_cursors` was removed) — never look for one to resume a client from.
 - **`limit` MUST stay ≤ 500.** Each feed hard-caps at 500; a larger limit + the `+1`-probe trim logic would silently skip in-range rows past `next_cursor`.
 - **410 `history_expired`** (once compaction lands) means "your cursor predates retention" → client must re-bootstrap from `/sync/manifest`, not just retry the pull.
 - Notes vs attachments are separate feeds merged at the controller — a note and attachment can never share a seq (both draw from `next_seq!`), which is what makes the merge a total order.

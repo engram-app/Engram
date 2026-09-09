@@ -192,15 +192,29 @@ jobs:
           echo "=== /tmp ==="
           du -sh /tmp/ 2>/dev/null || true
 
-  # ── Keeps the self-hosted runner's pre-extracted Obsidian AppImage at the
-  # latest released version so E2E tests exercise up-to-date Obsidian.
+  # ── Keeps the runner pool's pre-extracted Obsidian AppImage at the latest
+  # released version so E2E tests exercise up-to-date Obsidian.
   # Weekly check (Obsidian ships every 2-4 weeks). `force` input re-downloads
   # even when version matches (used after install corruption).
+  #
+  # One leg per HOST, not per runner. The pool is ~9 runner agents across two
+  # machines (fastraid-N are `fastraid`+`light`, runner-N are `slowraid`+`heavy`),
+  # and all agents on a machine run as the same uid with the same `/home/runner`
+  # — see gotcha #21 in the runner-vm-setup context doc. The script writes to
+  # `$HOME/Applications`, so updating one agent per host updates every agent on
+  # that host. Two legs = full coverage; nine would just be seven no-ops racing
+  # for distinct runners, which `runs-on` can't guarantee anyway (no per-runner
+  # labels). An unpinned single job silently covered only whichever host it
+  # happened to land on, leaving the other stranded on an old version.
   obsidian-update:
     if: |
       github.event.schedule == '0 4 * * 1'
       || github.event.inputs.task == 'obsidian-update'
-    runs-on: [self-hosted, linux, x64, isolated]
+    strategy:
+      fail-fast: false  # one host being wedged must not skip the other
+      matrix:
+        host: [fastraid, slowraid]
+    runs-on: [self-hosted, linux, x64, isolated, "${{ matrix.host }}"]
     permissions:
       contents: read
     steps:
@@ -260,6 +274,10 @@ jobs:
       - name: Run plan triage
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Required: the runner VMs rewrite github.com/engram-app/ URLs to the LAN
+          # git cache, so `gh` can't infer the repo from `git remote -v`.
+          # See docs/context/gh-cli-runner-url-rewrite-and-release-repair.md
+          GH_REPO: ${{ github.repository }}
         run: python .github/scripts/plan-triage.py
 
   # ── Surface JS deps with a newer MAJOR than the current caret-range allows.
