@@ -220,7 +220,14 @@ defmodule Engram.Logs do
             conn_id: entry.conn_id,
             device_id: entry.device_id,
             user_id: hashed_user,
-            client_severity: entry.level
+            client_severity: entry.level,
+            # The whole point of `forced` is answering "does this signal cover
+            # the WHOLE fleet, or only opted-in users?" — and this re-emit is
+            # where that question gets asked, because it is the surface that is
+            # greppable in one Loki query WITHOUT the read-only DB bastion.
+            # Persisting it to client_logs alone would have left the on-call
+            # path exactly as blind as before.
+            forced: entry.forced
           )
 
         # Verbose diagnostic-mode entries opt into Loki per-entry even at :info,

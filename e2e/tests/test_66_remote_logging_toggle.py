@@ -233,7 +233,9 @@ async def test_disable_stops_flush(vault_a, cdp_a, cdp_b, api_sync):
         # worked. The phase-1 assertion above is what keeps it honest: it
         # proves the same query DOES find this test's own entries when logging
         # is on, using the same window. Do not weaken one without the other.
-        after_logs = api_sync.list_logs(limit=200, since=after_since, device_id=device_a)
+        after_logs = api_sync.list_logs(
+            limit=200, since=after_since, device_id=device_a
+        )
 
         # `forced` rows are EXEMPT, and that is the contract — not a concession.
         #
@@ -251,6 +253,23 @@ async def test_disable_stops_flush(vault_a, cdp_a, cdp_b, api_sync):
         #
         # What must still hold is that ORDINARY logging stopped, so the
         # assertion narrows rather than weakens: zero non-forced rows.
+        # The exemption below must not FAIL OPEN. `row.get("forced")` is None
+        # when the field is absent, so if the serializer line were deleted, the
+        # migration rolled back, or the plugin stopped emitting it, every row
+        # would read as unforced and this test would silently revert to the
+        # flat-zero assertion it exists to replace — reappearing as the same
+        # ~2/3 flake instead of a named failure.
+        #
+        # Phase 1 already proved rows arrive in this window, so requiring the
+        # KEY on one of them turns that silent regression into a loud one.
+        assert "forced" in before_logs[0], (
+            "Log rows carry no `forced` field. The forced-provenance plumbing is "
+            "missing somewhere (plugin RemoteLogger, Logs.bound_entry, the "
+            "client_logs column, or LogsController.serialize_log) — without it "
+            "the post-disable assertion below cannot exempt forced anomalies "
+            f"and silently becomes an assert-zero. Row seen: {before_logs[0]!r}"
+        )
+
         unforced = [row for row in after_logs if not row.get("forced")]
         assert len(unforced) == 0, (
             f"Expected 0 NON-FORCED log rows from instance A (device {device_a}) "

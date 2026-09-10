@@ -2287,7 +2287,7 @@
       "UpsertNoteRequest": {
         "example": {
           "content": "# Engram\n\nAn AI-powered personal knowledge base.\n",
-          "mtime": 1718900000.0,
+          "mtime": 1.7189e9,
           "path": "Projects/Engram.md",
           "tags": [
             "project",
