@@ -191,6 +191,7 @@ defmodule Engram.Crypto.UserDekRotation do
          :ok <- sweep_attachments(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_note_links(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_qdrant(user, old_dek, new_dek),
+         :ok <- clear_chunk_context_hmacs(user),
          :ok <- final_flip(user, new_dek_version, new_wrapped) do
       Logger.info(
         "T3.7 per-user DEK rotation complete",
@@ -853,6 +854,34 @@ defmodule Engram.Crypto.UserDekRotation do
   # resume (a prior crashed run already rotated this point); if both fail,
   # raise. If every field in a point is already under the new DEK, return
   # :unchanged and skip the set_payload call entirely.
+
+  # Housekeeping, NOT a correctness guard — do not read it as one.
+  #
+  # `chunks.context_hmac` is keyed on the old DEK's content-hash subkey. The
+  # rotation changes that key, so `Indexing.plan_chunks/3` recomputes every
+  # fingerprint under the new one and no stored value can match regardless of
+  # what this function does. The full re-embed is already guaranteed by the key
+  # change; unlike the other sweeps above, nothing breaks if this never runs.
+  #
+  # It exists because the alternative is carrying values that are known-dead
+  # until each note happens to be re-indexed, and because a column whose
+  # contents silently stopped meaning anything is worth zeroing at the moment it
+  # stops meaning anything.
+  #
+  # The paths where clearing IS load-bearing are the ones that delete points
+  # while leaving rows: `Indexing.delete_points_by_path_hmac/2` (rename) and
+  # `Indexing.forget_chunk_reuse_for_user/1` (account soft-delete). There the
+  # key is unchanged, so a surviving hmac matches and the reused id names a
+  # point that is gone.
+  defp clear_chunk_context_hmacs(%User{id: user_id}) do
+    {_count, _} =
+      from(c in Engram.Notes.Chunk,
+        where: c.user_id == ^user_id and not is_nil(c.context_hmac)
+      )
+      |> Repo.update_all([set: [context_hmac: nil]], skip_tenant_check: true)
+
+    :ok
+  end
 
   defp sweep_qdrant(%User{id: user_id}, old_dek, new_dek) do
     collection = Qdrant.collection_name()
