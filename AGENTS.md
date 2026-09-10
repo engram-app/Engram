@@ -442,6 +442,27 @@ every destructive change. Adding more tools is Tier 2 work; do not preempt.
 - AST extractor: `lib/mix/tasks/engram.migration_drops.ex`
 - CI jobs: `.github/workflows/verify.yml` — `phase-label-required`, `contract-phase-references`, `migrations-immutable`, `Lint new migrations (squawk)`, `Test new migrations roll back (ecto.rollback)`
 
+**Run the squawk gate locally — it is not a CI-only check.** `squawk` is not a
+mix dep, so `lint_migrations.sh` exits "command not found" out of the box and it
+is easy to conclude the check can only run in CI. It cannot; it just needs the
+pinned binary and a scratch DB, which is one round trip cheaper than finding out
+from a red `unit-tests` job (the squawk step runs *before* `mix test`, so a
+failure there means the suite never ran at all):
+
+```bash
+curl -fsSL -o /tmp/squawk https://github.com/sbdchd/squawk/releases/download/v2.54.0/squawk-linux-x64
+chmod +x /tmp/squawk
+createdb squawk_lint   # fresh + empty; the script migrates it
+git fetch -q origin main
+SQUAWK_BIN=/tmp/squawk DATABASE_URL="postgresql://engram:engram@localhost:5432/squawk_lint" \
+  MIX_ENV=test BASE_REF=origin/main bash priv/repo/lint_migrations.sh
+```
+
+Note `add :some_col, :string` renders `varchar(255)` and **fails**
+`prefer-text-field` — resizing a varchar later takes an ACCESS EXCLUSIVE lock.
+Use `:text` for anything without a real length constraint; Postgres stores them
+identically.
+
 ## Context Docs
 
 Grouped index into `docs/context/`. Each entry is a trigger → doc; read the doc itself for full detail.

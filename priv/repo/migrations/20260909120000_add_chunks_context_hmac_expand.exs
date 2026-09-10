@@ -15,9 +15,14 @@ defmodule Engram.Repo.Migrations.AddChunksContextHmacExpand do
   # in Qdrant, not in Postgres, so existing rows cannot be hashed after the
   # fact. `nil` reads as "changed", which degrades exactly to today's
   # full-re-embed behaviour; the first re-index of each note fills it in.
+  # `:text`, not `:string`. Ecto's `:string` renders `varchar(255)`, and squawk's
+  # `prefer-text-field` rejects it: resizing a varchar later takes an ACCESS
+  # EXCLUSIVE lock on a table with one row per indexed chunk. Postgres stores
+  # the two identically, so the cap buys nothing — and the value is a fixed
+  # 64-char hex digest from `Crypto.hmac_content_hash/2` anyway.
   def change do
     alter table(:chunks) do
-      add :context_hmac, :string
+      add :context_hmac, :text
     end
   end
 end
