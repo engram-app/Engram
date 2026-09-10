@@ -26,8 +26,9 @@ defmodule Engram.Indexing do
   defp embedder, do: Application.get_env(:engram, :embedder, Engram.Embedders.Voyage)
 
   @doc """
-  Full pipeline for a note: parse → embed → delete old chunks → upsert new chunks.
-  Returns `{:ok, chunk_count}` or `{:error, reason}`.
+  Full pipeline for a note: parse → diff against the chunks already indexed →
+  embed only the ones whose text changed → apply. Returns `{:ok, chunk_count}`
+  (the note's total chunk count, reused or not) or `{:error, reason}`.
 
   Takes the note's vault for Qdrant tenant scoping. Phase B.4: payload
   encryption is mandatory and unconditional — every Qdrant point's
@@ -127,7 +128,9 @@ defmodule Engram.Indexing do
              {:ok, filter_key} <- Crypto.dek_filter_key(user),
              {:ok, content_key} <- Crypto.dek_content_hash_key(user),
              plan = plan_chunks(note, chunks, content_key),
-             {:ok, vectors} <- maybe_embed(semantic?, embed_texts(plan)) do
+             texts = embed_texts(plan),
+             {:ok, vectors} <- maybe_embed(semantic?, texts),
+             :ok <- ensure_one_vector_per_text(vectors, texts, note) do
           avgdl = Engram.KeywordIndex.Stats.avgdl(note.vault_id)
           build_prepared(note, user, vault, plan, vectors, filter_key, avgdl, link_rows)
         else
@@ -175,8 +178,10 @@ defmodule Engram.Indexing do
   end
 
   @doc """
-  Phase 2 of the indexing pipeline. Applies the prepared structure: deletes
-  old Qdrant points + chunk rows, inserts the new ones, upserts Qdrant points.
+  Phase 2 of the indexing pipeline. Applies the prepared structure: upserts the
+  points for chunks that changed, PATCHes the note-level payload onto the ones
+  being reused, rewrites the chunk rows, and deletes the points nothing names
+  any more.
 
   Caller is responsible for tenant context — non-tenant-scoped callers
   (e.g. `EmbedNote`) run as the superuser role and bypass RLS; tenant-scoped
@@ -271,10 +276,13 @@ defmodule Engram.Indexing do
         # return an error: the rows are already committed and no longer name
         # these ids, so a retry cannot find them again — it would only redo
         # correct work. Count it so a rising rate is visible.
+        # No ids in the metadata: `Engram.PromEx.Indexing` turns this into a
+        # metric, and that module's cardinality contract forbids note/user/
+        # vault tags. Per-note detail belongs in the log line below.
         :telemetry.execute(
           [:engram, :indexing, :stale_points_leaked],
           %{count: length(stale)},
-          %{note_id: note.id, user_id: note.user_id, vault_id: note.vault_id}
+          %{}
         )
 
         Logger.warning(
@@ -316,6 +324,32 @@ defmodule Engram.Indexing do
       forget_chunk_reuse(note.id)
       :ok
     end
+  end
+
+  @doc """
+  Clears every chunk-reuse fingerprint owned by a user, forcing a full rebuild
+  on the next index of each of their notes.
+
+  The invariant behind `context_hmac` is that a marker only survives while the
+  point it names does. Any path that removes a user's Qdrant points **without**
+  removing their chunk rows breaks it, and the break is silent: the next index
+  reuses ids that are no longer in Qdrant and the note goes unsearchable with
+  no error anywhere.
+
+  `Accounts.Lifecycle.soft_delete/2` is such a path — it drops the points and
+  leaves the rows for the later hard-delete sweep. No code today un-soft-deletes
+  an account, so this is a guard rather than a live fix, but the cost is one
+  UPDATE on a path that runs once per account and the failure it prevents is
+  invisible.
+  """
+  def forget_chunk_reuse_for_user(user_id) do
+    Repo.update_all(
+      from(c in Chunk, where: c.user_id == ^user_id and not is_nil(c.context_hmac)),
+      [set: [context_hmac: nil]],
+      skip_tenant_check: true
+    )
+
+    :ok
   end
 
   # Clears the reuse fingerprints for a note, forcing its next index to rebuild
@@ -542,11 +576,42 @@ defmodule Engram.Indexing do
 
     %{
       entries: entries,
+      reused_point_ids: reused,
       stale_point_ids: Enum.map(existing, fn {_h, id, _t} -> id end) -- reused
     }
   end
 
   defp embed_texts(plan), do: for({:embed, chunk} <- plan.entries, do: chunk.context_text)
+
+  # The embedder contract (`Engram.Embedder.embed_texts/1`) promises a vector
+  # list but not that it is the same length as the input, and the Voyage
+  # adapter maps whatever `data` the API returned without counting it.
+  #
+  # This used to be absorbed silently: `Enum.zip(chunks, vectors)` truncated to
+  # the shorter list, so a short response indexed only the leading chunks and
+  # the caller still stamped `embed_hash` — a permanently half-indexed note
+  # with nothing to signal it. Fail the attempt instead. Oban retries, and
+  # `ReconcileEmbeddings` picks the note up if the retries run out.
+  defp ensure_one_vector_per_text(vectors, texts, note) do
+    got = length(vectors)
+    want = length(texts)
+
+    if got == want do
+      :ok
+    else
+      Logger.error(
+        "embed_vector_count_mismatch",
+        Metadata.with_category(:error, :search,
+          user_id: note.user_id,
+          vault_id: note.vault_id,
+          note_id: note.id,
+          result: %{got: got, want: want}
+        )
+      )
+
+      {:error, {:embed_count_mismatch, got, want}}
+    end
+  end
 
   defp entry_chunk({:reuse, chunk, _point_id, _tokens}), do: chunk
   defp entry_chunk({:embed, chunk}), do: chunk
@@ -610,7 +675,11 @@ defmodule Engram.Indexing do
          vault: vault,
          chunk_rows: Enum.map(built, & &1.row),
          qdrant_points: for(%{point: p} <- built, p != nil, do: p),
-         reused_point_ids: for(%{point: nil, row: row} <- built, do: row.qdrant_point_id),
+         # Straight from the plan, not re-derived from `built`. Two independent
+         # derivations of the same list is how "reused" and "not deleted" drift
+         # apart, and the drift is silent: an id in one list but not the other
+         # is either a stray or a row pointing at nothing.
+         reused_point_ids: plan.reused_point_ids,
          stale_point_ids: plan.stale_point_ids,
          note_payload: note_payload,
          links: link_rows

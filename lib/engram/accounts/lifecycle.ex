@@ -16,6 +16,7 @@ defmodule Engram.Accounts.Lifecycle do
   alias Engram.Auth.SessionInvalidator
   alias Engram.Billing.Subscription
   alias Engram.Crypto.HMAC
+  alias Engram.Indexing
   alias Engram.Logger.Metadata
   alias Engram.Mailer
   alias Engram.Repo
@@ -339,6 +340,13 @@ defmodule Engram.Accounts.Lifecycle do
   end
 
   defp drop_qdrant_for_user(user) do
+    # Unconditionally, before the outcome is known: the chunk rows survive this
+    # call (the hard-delete sweep collects them later), and a row whose point is
+    # gone but whose `context_hmac` is intact makes a later re-index "reuse" an
+    # id that no longer exists in Qdrant. See `Indexing.forget_chunk_reuse_for_user/1`.
+    # A partial Qdrant delete is exactly the case that must not keep markers.
+    _ = Indexing.forget_chunk_reuse_for_user(user.id)
+
     case Qdrant.delete_by_user(user.id) do
       :ok ->
         :ok

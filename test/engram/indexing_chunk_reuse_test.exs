@@ -117,6 +117,17 @@ defmodule Engram.IndexingChunkReuseTest do
     note
   end
 
+  defp put_raw(user, vault, path, content) do
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{
+        "path" => path,
+        "content" => content,
+        "mtime" => 1_000.0
+      })
+
+    note
+  end
+
   # Embeds every text handed over, recording them so a test can assert on
   # exactly which chunks were sent to the embedder.
   defp stub_embedder(test_pid) do
@@ -299,6 +310,87 @@ defmodule Engram.IndexingChunkReuseTest do
 
       assert note |> chunk_rows() |> Enum.map(& &1.qdrant_point_id) |> Enum.sort() ==
                Enum.sort(ids)
+    end
+  end
+
+  describe "a note that loses a section" do
+    test "the removed chunk's point is deleted and the survivors are reused", ctx do
+      full = "# Panel\n\n## Ferritin\n\nlow\n\n## Transferrin\n\nnormal\n"
+      trimmed = "# Panel\n\n## Ferritin\n\nlow\n"
+
+      note = put_raw(ctx.user, ctx.vault, "Health/Shrink.md", full)
+      stub_embedder(self())
+
+      assert {:ok, before_count} = Indexing.index_note(note, ctx.vault)
+      before_ids = note |> chunk_rows() |> Enum.map(& &1.qdrant_point_id)
+      _ = embedded_texts()
+      reset(ctx.recorder)
+
+      shrunk = put_raw(ctx.user, ctx.vault, "Health/Shrink.md", trimmed)
+      assert {:ok, after_count} = Indexing.index_note(shrunk, ctx.vault)
+      assert after_count < before_count
+
+      after_ids = shrunk |> chunk_rows() |> Enum.map(& &1.qdrant_point_id)
+
+      assert embedded_texts() == [], "the surviving sections are untouched text"
+      assert Enum.all?(after_ids, &(&1 in before_ids))
+
+      # Every point the note no longer owns must be gone from Qdrant. Missing
+      # this is the "deleted content stays searchable" failure the diff risks.
+      assert Enum.sort(deleted_ids(ctx.recorder)) == Enum.sort(before_ids -- after_ids)
+    end
+  end
+
+  describe "reused rows" do
+    test "carry the previous token_count instead of re-tokenizing", ctx do
+      note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
+      stub_embedder(self())
+
+      assert {:ok, _} = Indexing.index_note(note, ctx.vault)
+      before = note |> chunk_rows() |> Map.new(&{&1.qdrant_point_id, &1.token_count})
+      _ = embedded_texts()
+
+      edited = put_note(ctx.user, ctx.vault, "Ferritin levels recovered to 90 ng/mL.")
+      assert {:ok, _} = Indexing.index_note(edited, ctx.vault)
+
+      reused = edited |> chunk_rows() |> Enum.filter(&Map.has_key?(before, &1.qdrant_point_id))
+      assert reused != []
+
+      # A nil here would poison KeywordIndex.Stats.avgdl for the whole vault.
+      assert Enum.all?(reused, &(&1.token_count == before[&1.qdrant_point_id])),
+             "a reused row must keep the token_count of the row it replaces"
+
+      assert Enum.all?(reused, &(&1.token_count != nil))
+    end
+  end
+
+  describe "a short embedder response" do
+    test "fails the attempt and leaves the previous index untouched", ctx do
+      note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
+      stub_embedder(self())
+
+      assert {:ok, _} = Indexing.index_note(note, ctx.vault)
+      before = note |> chunk_rows() |> Enum.map(&{&1.position, &1.qdrant_point_id})
+      _ = embedded_texts()
+      reset(ctx.recorder)
+
+      # Voyage's adapter maps whatever `data` came back without counting it.
+      # Enum.zip used to absorb the shortfall and index only the leading
+      # chunks, then the caller stamped embed_hash and never revisited.
+      stub(Engram.MockEmbedder, :embed_texts, fn texts ->
+        {:ok, texts |> Enum.drop(1) |> Enum.map(fn _ -> [0.1, 0.2, 0.3] end)}
+      end)
+
+      edited = put_note(ctx.user, ctx.vault, "Ferritin levels recovered to 90 ng/mL.")
+
+      assert {:error, {:embed_count_mismatch, _got, _want}} =
+               Indexing.index_note(edited, ctx.vault)
+
+      assert edited |> chunk_rows() |> Enum.map(&{&1.position, &1.qdrant_point_id}) == before,
+             "a failed embed must not disturb the rows already there"
+
+      assert deleted_ids(ctx.recorder) == [], "nor delete any of their points"
+      assert upserts(ctx.recorder) == []
     end
   end
 end
