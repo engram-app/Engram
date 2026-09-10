@@ -459,11 +459,23 @@ defmodule Engram.Indexing do
   # dense, space-free content is exactly what the chunker's size cap now slices
   # into full-width chunks. So bound the bytes too.
   #
-  # 200KB is 100K tokens at 2 bytes/token, the worst density we expect from
-  # base64/random input. English packs the full 128 long before reaching it, so
-  # this costs nothing on ordinary notes.
+  # The byte ceiling is 120KB, and it is NOT a density estimate. A previous
+  # version of this comment picked 200KB as "100K tokens at 2 bytes/token, the
+  # worst density we expect" — prod disproved it within a day. Six notes from
+  # one import kept failing with `batch has 143526 tokens after truncation`
+  # against the 120,000 ceiling; a batch of at most 200,000 bytes producing
+  # 143,526 tokens is 1.39 bytes/token, well under the assumed floor of 2.
+  #
+  # So do not guess the density. A token never spans less than one byte, so a
+  # batch bounded at 120,000 BYTES is bounded at 120,000 tokens for any content
+  # and any tokenizer — no assumption left to be wrong a third time.
+  #
+  # This costs requests, not money: Voyage bills tokens, and ordinary English
+  # (~4 bytes/token) now packs ~30K tokens per request instead of filling the
+  # allowance. These are background Oban jobs, so the extra round trips are
+  # cheaper than another poison loop.
   @embed_batch_size 128
-  @embed_batch_bytes 200_000
+  @embed_batch_bytes 120_000
 
   # `false` yields a nil vector per chunk. Kept as an explicit list (not a bare
   # nil) so build_prepared/8 can zip chunks with vectors either way.

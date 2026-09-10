@@ -164,9 +164,14 @@ defmodule Engram.IndexingTest do
       # Voyage caps a request at 120,000 tokens summed over its inputs, and a
       # count cannot bound that — tokens per byte swing with the content. 128
       # full-width chunks of dense, space-free text (base64, minified) is
-      # ~269KB, which is ~134K tokens at 2 bytes/token: a 400 no retry fixes.
-      # A space-free blob is exactly what the chunker's cap now slices into
-      # full-width chunks, so it is the shape that would regress.
+      # ~269KB: a 400 no retry fixes. A space-free blob is exactly what the
+      # chunker's cap slices into full-width chunks, so it is the shape that
+      # would regress.
+      #
+      # The ceiling asserted below is 120,000 BYTES, matching the token limit
+      # 1:1 on purpose. A token never spans less than one byte, so that bound
+      # holds for any content. The earlier 200,000 assumed 2 bytes/token and
+      # prod shipped batches at 1.39 — see the constant's comment.
       {:ok, dense_note} =
         Notes.upsert_note(user, vault, %{
           "path" => "Big/Dense.md",
@@ -198,7 +203,7 @@ defmodule Engram.IndexingTest do
       assert length(batches) >= 2
 
       Enum.each(batches, fn {count, bytes} ->
-        assert bytes <= 200_000, "embed batch of #{bytes} bytes exceeds the budget"
+        assert bytes <= 120_000, "embed batch of #{bytes} bytes exceeds the budget"
         assert count <= 128
       end)
 
