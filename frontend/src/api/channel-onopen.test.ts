@@ -41,7 +41,7 @@ describe("connectChannel onOpen — structural backfill", () => {
 	// they refetch current state. This replaced the deleted /sync/changes cursor
 	// feed (backend #1036): folder markers never rode that feed anyway (#976), and
 	// note/attachment structural changes are covered the same snapshot-diff way.
-	it("invalidates folders, folderNotes, folder-notes-by-id, and attachments on (re)connect", async () => {
+	it("stales the vault tree and the dashboard note lists on (re)connect", async () => {
 		const invalidateQueries = vi.fn();
 		const queryClient = { invalidateQueries } as never;
 
@@ -55,16 +55,12 @@ describe("connectChannel onOpen — structural backfill", () => {
 		const registered = onOpen.mock.calls[0]![0] as () => void;
 		registered();
 
-		expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["folders", "v1"] });
+		// The whole sidebar — folders, attachments, every folder's notes — is a
+		// view of this one key, so staling it is the entire catch-up. The old
+		// per-family fan-out (with refetchType "all", because those views had no
+		// observers of their own) is gone with the families.
+		expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["vault-tree", "v1"] });
 		expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["folderNotes", "v1"] });
-		expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["attachments", "v1"] });
-		// The sidebar tree renders note rows from the id-keyed family, and its
-		// expanded-but-observer-less subfolders only refetch under refetchType
-		// "all" (matching flushBatch). Missing this = stale tree membership after
-		// a sleep/offline catch-up until a full reload.
-		expect(invalidateQueries).toHaveBeenCalledWith({
-			queryKey: ["folder-notes-by-id", "v1"],
-			refetchType: "all",
-		});
+		expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["syncManifest", "v1"] });
 	});
 });

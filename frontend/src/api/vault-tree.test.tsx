@@ -327,13 +327,8 @@ describe("the vault tree is the single source for the sidebar views", () => {
 			],
 		};
 
+		// One key. Every view above follows it.
 		await qc.invalidateQueries({ queryKey: ["vault-tree", "42"] });
-		await qc.invalidateQueries({ queryKey: ["folders", "42"] });
-		await qc.invalidateQueries({ queryKey: ["attachments", "42"] });
-		await qc.invalidateQueries({
-			queryKey: ["folder-notes-by-id", "42"],
-			refetchType: "all",
-		});
 
 		await waitFor(() => {
 			// Gone from its old folder...

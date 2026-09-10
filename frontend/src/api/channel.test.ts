@@ -67,13 +67,13 @@ describe("handleNoteChanged", () => {
 
 		// List-level keys must NOT fire synchronously.
 		const syncKeys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey);
-		expect(syncKeys).not.toContainEqual(["folders", "7"]);
+		expect(syncKeys).not.toContainEqual(["vault-tree", "7"]);
 		expect(syncKeys.some((k) => k[0] === "search")).toBe(false);
 
 		vi.advanceTimersByTime(250);
 
 		const keys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey);
-		expect(keys).toContainEqual(["folders", "7"]);
+		expect(keys).toContainEqual(["vault-tree", "7"]);
 		expect(keys).toContainEqual(["folderNotes", "7", "docs"]);
 		expect(keys).toContainEqual(["search", "7"]);
 		// Untargeted folderNotes (whole-prefix) must not be used when the
@@ -123,7 +123,7 @@ describe("handleNoteChanged", () => {
 
 		const calls = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey);
 		const folderNotesCalls = calls.filter((k) => k[0] === "folderNotes");
-		const foldersCalls = calls.filter((k) => k[0] === "folders");
+		const treeCalls = calls.filter((k) => k[0] === "vault-tree");
 		const searchCalls = calls.filter((k) => k[0] === "search");
 
 		expect(folderNotesCalls).toEqual(
@@ -133,45 +133,15 @@ describe("handleNoteChanged", () => {
 			]),
 		);
 		expect(folderNotesCalls).toHaveLength(2);
-		expect(foldersCalls).toHaveLength(1);
+		expect(treeCalls).toHaveLength(1);
 		expect(searchCalls).toHaveLength(1);
 	});
 
-	it("resolves folder-notes-by-id keys from the cached folder tree", () => {
-		const qc = mockQueryClient({
-			folders: [
-				{ id: "f1", parent_id: null, name: "docs", count: 3 },
-				{ id: "f2", parent_id: null, name: "other", count: 1 },
-			],
-		});
-
-		handleNoteChanged(
-			{ event_type: "upsert", path: "docs/a.md", folder: "docs", vault_id: "7" },
-			qc,
-			"7",
-		);
-		vi.advanceTimersByTime(250);
-
-		const keys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey);
-		expect(keys).toContainEqual(["folder-notes-by-id", "7", "f1"]);
-		expect(keys).not.toContainEqual(["folder-notes-by-id", "7", "f2"]);
-	});
-
-	it("targets the by-id root sentinel for a root note (no folder marker)", () => {
-		const qc = mockQueryClient({ folders: [] });
-
-		// Root note: no folder in the payload, derived as '' from the path.
-		handleNoteChanged({ event_type: "upsert", path: "top.md", vault_id: "7" }, qc, "7");
-		vi.advanceTimersByTime(250);
-
-		const keys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey);
-		expect(keys).toContainEqual(["folderNotes", "7", ""]);
-		expect(keys).toContainEqual(["folder-notes-by-id", "7", "root"]);
-		// Root must NOT fall back to the broad whole-prefix invalidation.
-		expect(keys).not.toContainEqual(["folder-notes-by-id", "7"]);
-	});
-
-	it("falls back to broad folder-notes-by-id invalidation when the folder is not in cache", () => {
+	// A note event used to fan out to a per-folder key, which meant resolving
+	// the folder's marker id first — and getting that wrong (a DERIVED folder's
+	// raw id is null) silently invalidated a key nothing reads. There is one key
+	// now, so there is nothing to resolve and nothing to get wrong.
+	it("stales the vault tree once, whatever folder the note is in", () => {
 		const qc = mockQueryClient({ folders: [] });
 
 		handleNoteChanged(
@@ -182,7 +152,7 @@ describe("handleNoteChanged", () => {
 		vi.advanceTimersByTime(250);
 
 		const keys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey);
-		expect(keys).toContainEqual(["folder-notes-by-id", "7"]);
+		expect(keys.filter((k) => k[0] === "vault-tree")).toHaveLength(1);
 	});
 
 	it("derives the folder from the path when the payload omits it (delete events)", () => {
@@ -298,7 +268,7 @@ describe("handleNotesBatch", () => {
 		vi.advanceTimersByTime(250);
 
 		const keys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey);
-		expect(keys).toContainEqual(["folders", "7"]);
+		expect(keys).toContainEqual(["vault-tree", "7"]);
 		expect(keys).toContainEqual(["folderNotes", "7", "docs"]);
 		expect(keys).toContainEqual(["folderNotes", "7", "notes"]);
 	});
@@ -343,42 +313,5 @@ describe("backfillStructural", () => {
 		backfillStructural(qc, "7");
 		const keys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey);
 		expect(keys).toContainEqual(["syncManifest", "7"]);
-	});
-});
-
-// --- Derived-folder invalidation (2026-07-28) --------------------------------
-// A note deleted from another device stayed in the sidebar until a reload.
-// flushBatch read the RAW folders cache and trusted `row.id`, which is null for
-// every DERIVED folder (a folder holding no note directly — most folders). The
-// entry was found, so the broad fallback was skipped, and the invalidation went
-// to the key `["folder-notes-by-id", vaultId, null]`, which nothing reads.
-describe("handleNoteChanged folder invalidation", () => {
-	const idKeyCalls = (qc: { invalidateQueries: ReturnType<typeof vi.fn> }) =>
-		qc.invalidateQueries.mock.calls
-			.map((c) => c[0]?.queryKey)
-			.filter((k: unknown[]) => Array.isArray(k) && k[0] === "folder-notes-by-id");
-
-	it("invalidates a DERIVED folder's id-keyed list via its syn: id", () => {
-		// id: null is what /api/folders returns for a derived folder, and
-		// getQueryData bypasses the select that would map it to syn:<path>.
-		const qc = mockQueryClient({ folders: [{ id: null, name: "Notes" }] });
-
-		handleNoteChanged({ event_type: "delete", path: "Notes/x.md", vault_id: "7" }, qc, "7");
-		vi.runAllTimers();
-
-		expect(idKeyCalls(qc)).toContainEqual(["folder-notes-by-id", "7", "syn:Notes"]);
-	});
-
-	it("resolves a NON-derived folder through its real id, not a syn: id", () => {
-		const qc = mockQueryClient({ folders: [{ id: "real-id", name: "Notes" }] });
-
-		handleNoteChanged(
-			{ event_type: "delete", path: "Notes/x.md", folder: "Notes", vault_id: "7" },
-			qc,
-			"7",
-		);
-		vi.runAllTimers();
-
-		expect(idKeyCalls(qc)).toContainEqual(["folder-notes-by-id", "7", "real-id"]);
 	});
 });

@@ -1,24 +1,9 @@
-import { QueryClient } from "@tanstack/react-query";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { AttachmentSummary, Folder, NoteSummary } from "../../api/queries";
 import { buildLoader, type SortKey } from "./loader";
 
-// A cache miss makes the loader load that folder's note list from the vault
-// tree. Tests that don't seed the tree would otherwise reach the real network;
-// the loader swallows the failure, but the attempt still logs. Fail it fast.
-vi.mock("../../api/client", async () => {
-	const actual = await vi.importActual<typeof import("../../api/client")>("../../api/client");
-	return {
-		...actual,
-		api: {
-			get: vi.fn(() => Promise.reject(new Error("no network in unit tests"))),
-			post: vi.fn(),
-			patch: vi.fn(),
-			del: vi.fn(),
-		},
-		setTokenGetter: vi.fn(),
-	};
-});
+// The loader is a pure function of the arrays it is handed — no QueryClient, no
+// network, no cache miss to fake.
 
 const folders: Folder[] = [
 	{ id: "1", parent_id: null, name: "Projects", count: 2 },
@@ -66,15 +51,7 @@ const rootNote: NoteSummary = {
 	updated_at: "2026-01-03T00:00:00Z",
 };
 
-function makeQc(): QueryClient {
-	const qc = new QueryClient();
-	qc.setQueryData(["folder-notes-by-id", "v", "1"], notesByFolder["1"]);
-	qc.setQueryData(["folder-notes-by-id", "v", "2"], notesByFolder["2"]);
-	return qc;
-}
-
-// Standalone qc for attachment tests (no pre-seeded folder notes)
-const qc = new QueryClient();
+const allNotes: NoteSummary[] = Object.values(notesByFolder).flat();
 
 const att = (path: string): AttachmentSummary => ({
 	id: `att:${path}`,
@@ -88,8 +65,7 @@ const att = (path: string): AttachmentSummary => ({
 it("lists root attachments under ROOT", () => {
 	const loader = buildLoader({
 		folders: [],
-		qc,
-		vaultId: "v1",
+		notes: [],
 		sort: "name-asc",
 		attachments: [att("cover.png")],
 	});
@@ -104,8 +80,7 @@ it("orders root attachments by mtime under modified-desc", () => {
 	const newer: AttachmentSummary = { ...att("new.png"), mtime: 200 };
 	const loader = buildLoader({
 		folders: [],
-		qc,
-		vaultId: "v1",
+		notes: [],
 		sort: "modified-desc",
 		attachments: [older, newer],
 	});
@@ -120,12 +95,10 @@ it("buckets an attachment under its folder", () => {
 	const folders = [{ id: "f1", parent_id: null, name: "img", count: 0 }];
 	const loader = buildLoader({
 		folders,
-		qc,
-		vaultId: "v1",
+		notes: [],
 		sort: "name-asc",
 		attachments: [att("img/a.png")],
 	});
-	qc.setQueryData(["folder-notes-by-id", "v1", "f1"], []);
 	const kids = loader.getChildren("f:f1");
 	expect(kids.map((k) => k.item.kind)).toContain("attachment");
 	const a = kids.find((k) => k.item.kind === "attachment");
@@ -139,29 +112,23 @@ it("does not leak a subfolder attachment into its parent", () => {
 	];
 	const loader = buildLoader({
 		folders,
-		qc,
-		vaultId: "v1",
+		notes: [],
 		sort: "name-asc",
 		attachments: [att("img/sub/deep.png")],
 	});
-	qc.setQueryData(["folder-notes-by-id", "v1", "f1"], []);
 	const kids = loader.getChildren("f:f1");
 	expect(kids.find((k) => k.item.kind === "attachment")).toBeUndefined();
 });
 
-it("shows attachments even while folder notes are still loading (cache miss)", () => {
+it("shows attachments in a folder that holds no notes", () => {
 	const folders = [{ id: "f1", parent_id: null, name: "img", count: 0 }];
-	// A fresh client with no seeded notes cache -> noteChildItems returns null.
-	const freshQc = new QueryClient();
-	const loaderFresh = buildLoader({
+	const loader = buildLoader({
 		folders,
-		qc: freshQc,
-		vaultId: "v1",
+		notes: [],
 		sort: "name-asc",
 		attachments: [att("img/a.png")],
 	});
-	const kids = loaderFresh.getChildren("f:f1");
-	expect(kids.find((k) => k.item.kind === "attachment")).toBeDefined();
+	expect(loader.getChildren("f:f1").find((k) => k.item.kind === "attachment")).toBeDefined();
 });
 
 it("buckets an attachment under a synthetic (syn:) folder", () => {
@@ -170,12 +137,10 @@ it("buckets an attachment under a synthetic (syn:) folder", () => {
 	const folders = [{ id: "syn:pics", parent_id: null, name: "pics", count: 0 }];
 	const loader = buildLoader({
 		folders,
-		qc,
-		vaultId: "v1",
+		notes: [],
 		sort: "name-asc",
 		attachments: [att("pics/a.png")],
 	});
-	qc.setQueryData(["folder-notes-by-id", "v1", "syn:pics"], []);
 	const kids = loader.getChildren("f:syn:pics");
 	const a = kids.find((k) => k.item.kind === "attachment");
 	expect(a?.item).toMatchObject({ path: "pics/a.png" });
@@ -184,8 +149,7 @@ it("buckets an attachment under a synthetic (syn:) folder", () => {
 it("getItem resolves an attachment id to its row, and undefined when absent", () => {
 	const loader = buildLoader({
 		folders: [],
-		qc,
-		vaultId: "v1",
+		notes: [],
 		sort: "name-asc",
 		attachments: [att("cover.png")],
 	});
@@ -197,20 +161,20 @@ it("getItem resolves an attachment id to its row, and undefined when absent", ()
 });
 
 describe("buildLoader", () => {
-	it("root returns top-level folders + root notes from the by-id root cache, sorted", () => {
-		const qc = makeQc();
-		// Root notes live in the one id-keyed cache under the 'root' sentinel.
-		qc.setQueryData(["folder-notes-by-id", "v", "root"], [rootNote]);
-		const loader = buildLoader({ folders, qc, vaultId: "v", sort: "name-asc" as SortKey });
+	it("root returns top-level folders then root-level notes, sorted", () => {
+		const loader = buildLoader({
+			folders,
+			notes: [...allNotes, rootNote],
+			sort: "name-asc" as SortKey,
+		});
 		const children = loader.getChildren("root");
 		expect(children.map((c) => c.itemId)).toEqual(["f:1", "n:300"]);
 	});
 
-	it("root with no cached root list returns folders only", () => {
+	it("root with no root-level notes returns folders only", () => {
 		const loader = buildLoader({
 			folders,
-			qc: makeQc(),
-			vaultId: "v",
+			notes: allNotes,
 			sort: "name-asc" as SortKey,
 		});
 		const children = loader.getChildren("root");
@@ -220,62 +184,30 @@ describe("buildLoader", () => {
 	it("folder children return child folders first then notes", () => {
 		const loader = buildLoader({
 			folders,
-			qc: makeQc(),
-			vaultId: "v",
+			notes: allNotes,
 			sort: "name-asc" as SortKey,
 		});
 		const children = loader.getChildren("f:1");
 		expect(children.map((c) => c.itemId)).toEqual(["f:2", "n:100"]);
 	});
 
-	// On a miss the loader loads the folder's note list through the SAME options
-	// useFolderNotesById builds — one query, one queryFn, derived from the vault
-	// tree. A separately-shaped fetch here is what previously produced cache
-	// entries an invalidation could reach but never refetch.
-	it("cache miss returns [] and loads the folder through the shared derived query", async () => {
-		const qc = new QueryClient();
-		qc.setQueryData(["folder-notes-by-id", "v", "1"], notesByFolder["1"]);
-		// No data for folder id 2; the vault tree it derives from IS cached, so
-		// the load resolves without a request.
-		qc.setQueryData(["vault-tree", "v"], {
-			folders: [{ id: "2", name: "Projects/Sub", count: 1, parent_id: "1" }],
-			notes: [{ id: "200", path: "Projects/Sub/deep.md", created_at: "s", updated_at: "s" }],
-			attachments: [],
+	// There is no miss any more. The loader is handed every note in the vault,
+	// so "this folder holds nothing" is an answer it can give synchronously —
+	// which is what removed the lazy fetch, and with it the window where an
+	// expanded folder rendered empty until a round trip came back.
+	it("answers empty for a folder with no notes, without fetching", () => {
+		const loader = buildLoader({
+			folders: [...folders, { id: "3", parent_id: "1", name: "Projects/Empty", count: 0 }],
+			notes: allNotes,
+			sort: "name-asc" as SortKey,
 		});
-		const loader = buildLoader({ folders, qc, vaultId: "v", sort: "name-asc" as SortKey });
-
-		// Child folders for f:2 = none in fixture; notes not cached → returns []
-		expect(loader.getChildren("f:2")).toEqual([]);
-
-		await vi.waitFor(() => {
-			expect(qc.getQueryData(["folder-notes-by-id", "v", "2"])).toEqual([
-				expect.objectContaining({ id: "200", path: "Projects/Sub/deep.md" }),
-			]);
-		});
-	});
-
-	it("root cache miss loads the root sentinel from the tree", async () => {
-		const qc = new QueryClient();
-		qc.setQueryData(["vault-tree", "v"], {
-			folders: [],
-			notes: [{ id: "300", path: "top.md", created_at: "s", updated_at: "s" }],
-			attachments: [],
-		});
-		const loader = buildLoader({ folders, qc, vaultId: "v", sort: "name-asc" as SortKey });
-		loader.getChildren("root");
-
-		await vi.waitFor(() => {
-			expect(qc.getQueryData(["folder-notes-by-id", "v", "root"])).toEqual([
-				expect.objectContaining({ id: "300", path: "top.md" }),
-			]);
-		});
+		expect(loader.getChildren("f:3")).toEqual([]);
 	});
 
 	it("getItem returns shaped TreeItem for a folder id", () => {
 		const loader = buildLoader({
 			folders,
-			qc: makeQc(),
-			vaultId: "v",
+			notes: allNotes,
 			sort: "name-asc" as SortKey,
 		});
 		expect(loader.getItem("f:1")?.item).toMatchObject({
@@ -289,8 +221,7 @@ describe("buildLoader", () => {
 	it("note sort by modified-desc", () => {
 		const loader = buildLoader({
 			folders,
-			qc: makeQc(),
-			vaultId: "v",
+			notes: allNotes,
 			sort: "modified-desc" as SortKey,
 		});
 		const children = loader.getChildren("f:1");

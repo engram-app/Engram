@@ -9,6 +9,7 @@ import { CrdtOpError } from "./crdt-ops";
 import {
 	type Folder,
 	type Note,
+	notesInFolder,
 	useAcceptTerms,
 	useAppBootstrap,
 	useBacklinks,
@@ -37,6 +38,7 @@ import {
 	useTypes,
 	useUploadAttachment,
 	useVaults,
+	type VaultTree,
 } from "./queries";
 
 vi.mock("sonner", () => ({
@@ -386,7 +388,7 @@ describe("useRenameNote", () => {
 		expect(post).not.toHaveBeenCalledWith("/notes/rename", expect.anything());
 		// onSettled scopes invalidation by vault — broader keys would
 		// touch other vaults' caches needlessly.
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folderNotes", "42"] });
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["note", "42"] });
 	});
@@ -415,7 +417,7 @@ describe("useRenameFolder", () => {
 			old_path: "a",
 			new_path: "b",
 		});
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folderNotes", "42"] });
 	});
 
@@ -442,7 +444,7 @@ describe("useDeleteNote", () => {
 		// server owns path/folder lookups, so the client just supplies the id.
 		expect(crdtDeleteNote).toHaveBeenCalledWith("42");
 		expect(del).not.toHaveBeenCalled();
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folderNotes", "42"] });
 		// onMutate invalidates (not removes) the note's cache, keyed by id, so a
 		// mounted useNote(id) observer on the open note reconnects instead of
@@ -478,7 +480,7 @@ describe("useDuplicateNote", () => {
 			"hello world",
 		);
 		expect(post).not.toHaveBeenCalledWith("/notes", expect.anything());
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folderNotes", "42"] });
 	});
 
@@ -493,7 +495,7 @@ describe("useDuplicateNote", () => {
 	});
 
 	it("mirrors the optimistic placeholder into the tree by-id list", async () => {
-		qc.setQueryData(["folders", "42"], {
+		seedRawFolders({
 			folders: [{ id: "f9", parent_id: null, name: "dst", count: 1 }],
 		});
 		seedFolderNotesById("f9", [{ id: "a", path: "dst/a.md" }]);
@@ -513,11 +515,7 @@ describe("useDuplicateNote", () => {
 		});
 
 		await waitFor(() => {
-			const byId = qc.getQueryData<Array<{ id: string; path: string }>>([
-				"folder-notes-by-id",
-				"42",
-				"f9",
-			]);
+			const byId = notesById("f9");
 			expect(byId?.some((n) => n.path === "dst/a copy.md")).toBe(true);
 		});
 
@@ -525,7 +523,7 @@ describe("useDuplicateNote", () => {
 
 		// After success the placeholder id is swapped for the minted doc_id.
 		await waitFor(() => {
-			const byId = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "f9"]);
+			const byId = notesById("f9");
 			expect(byId?.some((n) => n.id === "real-dup")).toBe(true);
 		});
 	});
@@ -542,14 +540,14 @@ describe("useDeleteFolder", () => {
 		});
 
 		expect(del).toHaveBeenCalledWith("/folders/my%20folder/sub?recursive=true");
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folderNotes", "42"] });
 		// A folder holding only attachments is synthesized from the attachments
 		// cache, not from /api/folders. Skip this and the recursive delete removes
 		// the attachment server-side while the stale cache keeps re-deriving the
 		// folder — the same revert this hook exists to stop.
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["attachments", "42"] });
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folder-notes-by-id", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
 	});
 
 	it("surfaces backend errors as ApiError", async () => {
@@ -569,37 +567,67 @@ describe("useDeleteFolder", () => {
 // caches mutate synchronously on `onMutate`, and `onError` restores the
 // pre-mutation snapshot so a rejected request leaves no visible trace.
 
-function seedFolderNotes(
-	folder: string,
-	notes: Partial<{ id: string; path: string; title: string }>[],
-) {
-	qc.setQueryData(["folderNotes", "42", folder], {
-		notes: notes.map((n, i) => ({
-			id: n.id ?? String(i + 1),
-			path: n.path ?? "",
-			title: n.title ?? "",
-			folder,
-			tags: [],
-			version: 1,
-			mtime: "",
-			created_at: "",
-			updated_at: "",
-		})),
-	});
+const EMPTY_TREE: VaultTree = { folders: [], notes: [], attachments: [] };
+
+// Seed folder rows in wire shape (`{ folders: [...] }`), the way tests wrote
+// them when `['folders']` was its own cache entry.
+function seedRawFolders(payload: {
+	folders: Array<{ id?: string | null; name: string; count: number; parent_id?: string | null }>;
+}) {
+	patchSeededTree((tree) => ({
+		...tree,
+		folders: [
+			...tree.folders.filter((f) => !payload.folders.some((n) => n.name === f.name)),
+			...payload.folders.map((f) => ({
+				id: f.id ?? null,
+				name: f.name,
+				count: f.count,
+				parent_id: f.parent_id ?? null,
+			})),
+		],
+	}));
 }
 
-function seedFolders(folders: Array<{ name: string; count: number }>) {
-	qc.setQueryData(["folders", "42"], { folders });
+function readSeededTree(): VaultTree {
+	return qc.getQueryData<VaultTree>(["vault-tree", "42"]) ?? EMPTY_TREE;
+}
+
+function patchSeededTree(fn: (tree: VaultTree) => VaultTree) {
+	qc.setQueryData<VaultTree>(["vault-tree", "42"], fn(readSeededTree()));
+}
+
+// Folder rows live in the ONE vault-tree entry now. `id: null` is what the
+// wire actually sends for a derived folder (one with no marker row), which is
+// most of them — `selectFolders`/`folderPathForId` map it to `syn:<path>`.
+function seedFolders(folders: Array<{ name: string; count: number; id?: string | null }>) {
+	patchSeededTree((tree) => ({
+		...tree,
+		folders: [
+			...tree.folders.filter((f) => !folders.some((n) => n.name === f.name)),
+			...folders.map((f) => ({
+				id: f.id ?? null,
+				name: f.name,
+				count: f.count,
+				parent_id: null,
+			})),
+		],
+	}));
 }
 
 describe("optimistic rename note", () => {
-	it("removes the note from the old folder cache and inserts into the new folder before the network resolves", async () => {
-		seedFolderNotes("a", [{ path: "a/x.md", title: "X" }]);
-		seedFolderNotes("b", []);
+	// One cache to check: the tree the sidebar renders. Folder counts follow
+	// from where the notes are, so a move out of `a` into `b` fixes both counts
+	// without either being written by hand.
+	const seedRename = () => {
 		seedFolders([
 			{ name: "a", count: 1 },
 			{ name: "b", count: 0 },
 		]);
+		seedFolderNotesById("syn:a", [{ id: "n1", path: "a/x.md" }]);
+	};
+
+	it("re-paths the note and both folder counts before the network resolves", async () => {
+		seedRename();
 
 		// Hold crdt_create so we can inspect the optimistic state.
 		let resolveRename: () => void = () => {};
@@ -615,36 +643,20 @@ describe("optimistic rename note", () => {
 		});
 
 		await waitFor(() => {
-			const oldList = qc.getQueryData<{ notes: Array<{ path: string }> }>([
-				"folderNotes",
-				"42",
-				"a",
-			]);
-			expect(oldList?.notes.map((n) => n.path)).toEqual([]);
+			expect(notesById("syn:a").map((n) => n.path)).toEqual([]);
 		});
+		expect(notesById("syn:b").map((n) => n.path)).toContain("b/x.md");
 
-		const newList = qc.getQueryData<{ notes: Array<{ path: string }> }>(["folderNotes", "42", "b"]);
-		expect(newList?.notes.map((n) => n.path)).toContain("b/x.md");
-
-		const folders = qc.getQueryData<{ folders: Array<{ name: string; count: number }> }>([
-			"folders",
-			"42",
-		]);
-		expect(folders?.folders.find((f) => f.name === "a")?.count).toBe(0);
-		expect(folders?.folders.find((f) => f.name === "b")?.count).toBe(1);
+		const { folders } = readSeededTree();
+		expect(folders.find((f) => f.name === "a")?.count).toBe(0);
+		expect(folders.find((f) => f.name === "b")?.count).toBe(1);
 
 		// Settle the promise so React Query unwinds cleanly.
 		resolveRename();
 	});
 
-	it("restores the pre-mutation cache snapshot when the mutation rejects", async () => {
-		seedFolderNotes("a", [{ path: "a/x.md", title: "X" }]);
-		seedFolderNotes("b", []);
-		seedFolders([
-			{ name: "a", count: 1 },
-			{ name: "b", count: 0 },
-		]);
-
+	it("restores the pre-mutation snapshot when the mutation rejects", async () => {
+		seedRename();
 		crdtCreateNote.mockRejectedValue(new CrdtOpError("create_failed", "crdt_create"));
 
 		const { result } = renderHook(() => useRenameNote(), { wrapper });
@@ -656,33 +668,27 @@ describe("optimistic rename note", () => {
 			}
 		});
 
-		const oldList = qc.getQueryData<{ notes: Array<{ path: string }> }>(["folderNotes", "42", "a"]);
-		expect(oldList?.notes.map((n) => n.path)).toEqual(["a/x.md"]);
-
-		const newList = qc.getQueryData<{ notes: Array<{ path: string }> }>(["folderNotes", "42", "b"]);
-		expect(newList?.notes.map((n) => n.path)).toEqual([]);
-
-		const folders = qc.getQueryData<{ folders: Array<{ name: string; count: number }> }>([
-			"folders",
-			"42",
-		]);
-		expect(folders?.folders.find((f) => f.name === "a")?.count).toBe(1);
-		expect(folders?.folders.find((f) => f.name === "b")?.count).toBe(0);
+		expect(notesById("syn:a").map((n) => n.path)).toEqual(["a/x.md"]);
+		expect(notesById("syn:b")).toEqual([]);
+		expect(readSeededTree().folders.find((f) => f.name === "a")?.count).toBe(1);
 	});
 });
 
 describe("optimistic delete note", () => {
-	it("removes the note from the folder cache before the request resolves", async () => {
-		seedFolderNotes("", [
-			{ id: "1", path: "gone.md", title: "Gone" },
-			{ id: "2", path: "stays.md", title: "Stays" },
-		]);
+	const seedDelete = () => {
 		seedFolders([{ name: "", count: 2 }]);
+		seedFolderNotesById("root", [
+			{ id: "1", path: "gone.md" },
+			{ id: "2", path: "stays.md" },
+		]);
+	};
 
-		let resolveDel!: (v: { doc_id: string }) => void;
+	it("removes the note from the tree before the request resolves", async () => {
+		seedDelete();
+		let resolveDelete: () => void = () => {};
 		crdtDeleteNote.mockReturnValue(
 			new Promise((r) => {
-				resolveDel = r;
+				resolveDelete = () => r({ doc_id: "1" });
 			}),
 		);
 
@@ -692,20 +698,14 @@ describe("optimistic delete note", () => {
 		});
 
 		await waitFor(() => {
-			const list = qc.getQueryData<{ notes: Array<{ path: string }> }>(["folderNotes", "42", ""]);
-			expect(list?.notes.map((n) => n.path)).toEqual(["stays.md"]);
+			expect(notesById("root").map((n) => n.path)).toEqual(["stays.md"]);
 		});
 
-		resolveDel({ doc_id: "1" });
+		resolveDelete();
 	});
 
-	it("restores the cache when the delete fails", async () => {
-		seedFolderNotes("", [
-			{ id: "1", path: "gone.md", title: "Gone" },
-			{ id: "2", path: "stays.md", title: "Stays" },
-		]);
-		seedFolders([{ name: "", count: 2 }]);
-
+	it("restores the tree when the delete fails", async () => {
+		seedDelete();
 		crdtDeleteNote.mockRejectedValue(new CrdtOpError("disconnected", "crdt_delete"));
 
 		const { result } = renderHook(() => useDeleteNote(), { wrapper });
@@ -717,8 +717,11 @@ describe("optimistic delete note", () => {
 			}
 		});
 
-		const list = qc.getQueryData<{ notes: Array<{ path: string }> }>(["folderNotes", "42", ""]);
-		expect(list?.notes.map((n) => n.path).sort()).toEqual(["gone.md", "stays.md"]);
+		expect(
+			notesById("root")
+				.map((n) => n.path)
+				.sort(),
+		).toEqual(["gone.md", "stays.md"]);
 	});
 });
 
@@ -757,12 +760,11 @@ describe("rename note re-paths the note body cache optimistically", () => {
 	// so the early-enroll hazard is gone and `ctx.prevNote` gives onError an exact
 	// rollback.
 	const seed = () => {
-		seedFolderNotes("a", [{ id: "42", path: "a/x.md", title: "X" }]);
-		seedFolderNotes("b", []);
 		seedFolders([
 			{ name: "a", count: 1 },
 			{ name: "b", count: 0 },
 		]);
+		seedFolderNotesById("syn:a", [{ id: "42", path: "a/x.md" }]);
 		seedNoteById("42", { id: "42", path: "a/x.md", folder: "a", title: "X", content: "# X" });
 	};
 
@@ -791,12 +793,10 @@ describe("rename note re-paths the note body cache optimistically", () => {
 		resolveCreate("42");
 	});
 
-	// The sidebar tree renders the id-keyed lists, NOT the path-keyed
-	// `folderNotes` ones onMutate already updated — so it needs its own
-	// optimistic write or the tree row lags a refetch behind the header.
-	it("re-paths the tree's id-keyed list so the sidebar name flips too", async () => {
+	// The sidebar row and the note-body header read different caches, so both
+	// have to flip together or one lags a refetch behind the other.
+	it("re-paths the sidebar row so the tree name flips too", async () => {
 		seed();
-		seedFolderNotesById("9", [{ id: "42", path: "a/x.md", folder: "a" }]);
 		let resolveCreate!: (v: string) => void;
 		crdtCreateNote.mockReturnValue(
 			new Promise((r) => {
@@ -810,16 +810,14 @@ describe("rename note re-paths the note body cache optimistically", () => {
 		});
 
 		await waitFor(() => {
-			const rows = qc.getQueryData<Array<{ path: string }>>(["folder-notes-by-id", "42", "9"]);
-			expect(rows?.[0]?.path).toBe("a/y.md");
+			expect(notesById("syn:a")[0]?.path).toBe("a/y.md");
 		});
 
 		resolveCreate("42");
 	});
 
-	it("restores the id-keyed list when the rename is refused", async () => {
+	it("restores the sidebar row when the rename is refused", async () => {
 		seed();
-		seedFolderNotesById("9", [{ id: "42", path: "a/x.md", folder: "a" }]);
 		crdtCreateNote.mockRejectedValue(new CrdtOpError("create_failed", "crdt_create"));
 
 		const { result } = renderHook(() => useRenameNote(), { wrapper });
@@ -828,8 +826,7 @@ describe("rename note re-paths the note body cache optimistically", () => {
 		});
 
 		await waitFor(() => expect(result.current.isError).toBe(true));
-		const rows = qc.getQueryData<Array<{ path: string }>>(["folder-notes-by-id", "42", "9"]);
-		expect(rows?.[0]?.path).toBe("a/x.md");
+		expect(notesById("syn:a")[0]?.path).toBe("a/x.md");
 	});
 
 	it("rolls the note body cache back to the old path when the rename is refused", async () => {
@@ -851,7 +848,7 @@ describe("rename note re-paths the note body cache optimistically", () => {
 
 describe("rename folder does NOT re-path cached child notes optimistically", () => {
 	it("leaves cached [note, vaultId, *] under the old prefix untouched while in flight", async () => {
-		qc.setQueryData(["folders", "42"], {
+		seedRawFolders({
 			folders: [
 				{ name: "src", count: 2 },
 				{ name: "src/sub", count: 1 },
@@ -875,7 +872,7 @@ describe("rename folder does NOT re-path cached child notes optimistically", () 
 
 		// The folders cache renames optimistically…
 		await waitFor(() => {
-			const folders = qc.getQueryData<{ folders: Folder[] }>(["folders", "42"]);
+			const folders = readSeededTree();
 			expect(folders?.folders.some((f) => f.name === "dst")).toBe(true);
 		});
 		// …but child note caches keep their old paths (no early CRDT re-enroll).
@@ -928,30 +925,46 @@ describe("Folder type", () => {
 //      instantly — important for tree multi-select where the user just
 //      ctrl-clicked five rows and hit delete.
 //   3. Rolls those patches back on error.
-//   4. Invalidates `['folders']` + `['folder-notes-by-id']` on success
+//   4. Invalidates `['vault-tree']` on success
 //      so the server is the eventual source of truth (and so any
 //      server-side cascade we don't model client-side gets reconciled).
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
+// Put notes in the folder the sidebar keys under `folderId`, creating the
+// folder row if the test didn't seed one. Root keys under the ROOT_FOLDER_ID
+// sentinel and has no row at all.
 function seedFolderNotesById(
 	folderId: string,
 	notes: Array<{ id: string; path?: string; folder?: string }>,
 ) {
-	qc.setQueryData(
-		["folder-notes-by-id", "42", folderId],
-		notes.map((n) => ({
-			id: n.id,
-			path: n.path ?? `f${folderId}/n${n.id}.md`,
-			title: `n${n.id}`,
-			folder: n.folder ?? `f${folderId}`,
-			tags: [],
-			version: 1,
-			mtime: "",
-			created_at: "",
-			updated_at: "",
-		})),
-	);
+	const dir =
+		folderId === "root"
+			? ""
+			: folderId.startsWith("syn:")
+				? folderId.slice(4)
+				: (readSeededTree().folders.find((f) => f.id === folderId)?.name ?? `f${folderId}`);
+	if (dir !== "" && !readSeededTree().folders.some((f) => f.name === dir)) {
+		seedFolders([{ name: dir, count: 0, id: folderId.startsWith("syn:") ? null : folderId }]);
+	}
+	patchSeededTree((tree) => ({
+		...tree,
+		notes: [
+			...tree.notes.filter((existing) => !notes.some((n) => n.id === existing.id)),
+			...notes.map((n) => ({
+				id: n.id,
+				path: n.path ?? (dir === "" ? `n${n.id}.md` : `${dir}/n${n.id}.md`),
+				created_at: "",
+				updated_at: "",
+			})),
+		],
+	}));
+}
+
+// What the sidebar renders for a folder — the assertion that used to read a
+// per-folder cache entry directly.
+function notesById(folderId: string) {
+	return notesInFolder(readSeededTree(), folderId);
 }
 
 describe("useBatchDeleteNotes", () => {
@@ -967,7 +980,7 @@ describe("useBatchDeleteNotes", () => {
 		expect(post).not.toHaveBeenCalled();
 	});
 
-	it("optimistically removes ids from every cached folder-notes-by-id list", async () => {
+	it("optimistically removes ids from the tree the sidebar reads", async () => {
 		seedFolderNotesById("5", [{ id: "1" }, { id: "2" }, { id: "3" }]);
 		seedFolderNotesById("6", [{ id: "4" }]);
 
@@ -984,11 +997,11 @@ describe("useBatchDeleteNotes", () => {
 		});
 
 		await waitFor(() => {
-			const list5 = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "5"]);
+			const list5 = notesById("5");
 			expect(list5?.map((n) => n.id)).toEqual(["3"]);
 		});
 
-		const list6 = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "6"]);
+		const list6 = notesById("6");
 		expect(list6?.map((n) => n.id)).toEqual([]);
 
 		resolveDeletes();
@@ -1007,11 +1020,11 @@ describe("useBatchDeleteNotes", () => {
 			}
 		});
 
-		const list = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "5"]);
+		const list = notesById("5");
 		expect(list?.map((n) => n.id).sort()).toEqual(["1", "2", "3"]);
 	});
 
-	it("invalidates folders + folder-notes-by-id on success", async () => {
+	it("invalidates the vault tree on success", async () => {
 		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
 
 		const { result } = renderHook(() => useBatchDeleteNotes(), { wrapper });
@@ -1019,8 +1032,8 @@ describe("useBatchDeleteNotes", () => {
 			await result.current.mutateAsync({ ids: ["1", "2"] });
 		});
 
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folder-notes-by-id", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
 	});
 
 	it("reconciles server truth even on a (partial) failure — Promise.all is not atomic", async () => {
@@ -1041,8 +1054,8 @@ describe("useBatchDeleteNotes", () => {
 			}
 		});
 
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folder-notes-by-id", "42"] });
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
 	});
 
 	it("optimistically strips deleted root notes from the by-id root list", async () => {
@@ -1065,7 +1078,7 @@ describe("useBatchDeleteNotes", () => {
 		});
 
 		await waitFor(() => {
-			const root = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "root"]);
+			const root = notesById("root");
 			expect(root?.map((n) => n.id)).toEqual(["2"]);
 		});
 
@@ -1085,7 +1098,7 @@ describe("useBatchDeleteNotes", () => {
 			}
 		});
 
-		const root = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "root"]);
+		const root = notesById("root");
 		expect(root?.map((n) => n.id)).toEqual(["1"]);
 	});
 });
@@ -1097,7 +1110,6 @@ const MINTED_ID = "01920000-0000-7000-8000-000000000abc";
 describe("useCreateNote — optimistic placeholder", () => {
 	it('inserts a placeholder at root (by-id "root") then swaps it for the real note', async () => {
 		// Root notes share the one id-keyed cache under the 'root' sentinel.
-		qc.setQueryData(["folder-notes-by-id", "42", "root"], []);
 
 		// Hold crdt_create pending so the optimistic placeholder is observable,
 		// then resolve with the minted doc_id (the ok reply echoes the id we sent).
@@ -1110,16 +1122,13 @@ describe("useCreateNote — optimistic placeholder", () => {
 		);
 
 		const { result } = renderHook(() => useCreateNote(), { wrapper });
+		seedRawFolders({ folders: [] });
 		act(() => {
 			result.current.mutate({ folder: "", id: MINTED_ID });
 		});
 
 		await waitFor(() => {
-			const root = qc.getQueryData<Array<{ id: string; title: string }>>([
-				"folder-notes-by-id",
-				"42",
-				"root",
-			]);
+			const root = notesById("root");
 			expect(root).toHaveLength(1);
 			// Final id from the start — not a throwaway that gets swapped later.
 			expect(root?.[0]?.id).toBe(MINTED_ID);
@@ -1132,11 +1141,7 @@ describe("useCreateNote — optimistic placeholder", () => {
 		resolveCreate();
 
 		await waitFor(() => {
-			const root = qc.getQueryData<Array<{ id: string; pending?: boolean }>>([
-				"folder-notes-by-id",
-				"42",
-				"root",
-			]);
+			const root = notesById("root");
 			// Unchanged id; only `pending` settles.
 			expect(root?.[0]?.id).toBe(MINTED_ID);
 			expect(root?.[0]?.pending).toBe(false);
@@ -1150,7 +1155,6 @@ describe("useCreateNote — optimistic placeholder", () => {
 	// block below); reading it as a bare array throws inside onSuccess and
 	// silently kills the navigate call.
 	it("navigates to the vault-scoped route using the raw { vaults } cache shape", async () => {
-		qc.setQueryData(["folder-notes-by-id", "42", "root"], []);
 		qc.setQueryData(["vaults"], { vaults: [{ id: "42", slug: "work" }] });
 
 		const { result } = renderHook(() => useCreateNote(), { wrapper });
@@ -1172,10 +1176,9 @@ describe("useCreateNote — optimistic placeholder", () => {
 	// therefore yielded null for most real-world folders, so the optimistic insert
 	// was skipped entirely and the new note only appeared after a reload.
 	it("inserts a placeholder into a DERIVED folder's list (null id -> syn:)", async () => {
-		qc.setQueryData(["folders", "42"], {
+		seedRawFolders({
 			folders: [{ id: null, parent_id: null, name: "Media", count: 0 }],
 		});
-		qc.setQueryData(["folder-notes-by-id", "42", "syn:Media"], []);
 
 		let resolveCreate: () => void = () => {};
 		crdtCreateNote.mockImplementation(
@@ -1191,11 +1194,7 @@ describe("useCreateNote — optimistic placeholder", () => {
 		});
 
 		await waitFor(() => {
-			const rows = qc.getQueryData<Array<{ id: string; path: string }>>([
-				"folder-notes-by-id",
-				"42",
-				"syn:Media",
-			]);
+			const rows = notesById("syn:Media");
 			expect(rows).toHaveLength(1);
 			expect(rows?.[0]?.path).toBe("Media/Untitled.md");
 			expect(rows?.[0]?.id).toBe(MINTED_ID);
@@ -1204,11 +1203,7 @@ describe("useCreateNote — optimistic placeholder", () => {
 		resolveCreate();
 
 		await waitFor(() => {
-			const rows = qc.getQueryData<Array<{ id: string; pending?: boolean }>>([
-				"folder-notes-by-id",
-				"42",
-				"syn:Media",
-			]);
+			const rows = notesById("syn:Media");
 			expect(rows?.[0]?.pending).toBe(false);
 		});
 	});
@@ -1217,7 +1212,7 @@ describe("useCreateNote — optimistic placeholder", () => {
 	// The create still has to mark it stale, or the note stays invisible until a
 	// reload even after the server confirms it.
 	it("invalidates the target folder's list when it wasn't cached", async () => {
-		qc.setQueryData(["folders", "42"], {
+		seedRawFolders({
 			folders: [{ id: "f9", parent_id: null, name: "Archive", count: 0 }],
 		});
 		const invalidate = vi.spyOn(qc, "invalidateQueries");
@@ -1229,15 +1224,14 @@ describe("useCreateNote — optimistic placeholder", () => {
 
 		await waitFor(() => expect(result.current.isSuccess).toBe(true));
 		expect(invalidate).toHaveBeenCalledWith(
-			expect.objectContaining({ queryKey: ["folder-notes-by-id", "42", "f9"] }),
+			expect.objectContaining({ queryKey: ["vault-tree", "42"] }),
 		);
 	});
 
 	it("inserts a placeholder into the by-id list for a subfolder", async () => {
-		qc.setQueryData(["folders", "42"], {
+		seedRawFolders({
 			folders: [{ id: "f9", parent_id: null, name: "sub", count: 0 }],
 		});
-		qc.setQueryData(["folder-notes-by-id", "42", "f9"], []);
 
 		let resolveCreate: () => void = () => {};
 		crdtCreateNote.mockImplementation(
@@ -1253,7 +1247,7 @@ describe("useCreateNote — optimistic placeholder", () => {
 		});
 
 		await waitFor(() => {
-			const byId = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "f9"]);
+			const byId = notesById("f9");
 			expect(byId).toHaveLength(1);
 			expect(byId?.[0]?.id).toBe(MINTED_ID);
 		});
@@ -1261,13 +1255,12 @@ describe("useCreateNote — optimistic placeholder", () => {
 		resolveCreate();
 
 		await waitFor(() => {
-			const byId = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "f9"]);
+			const byId = notesById("f9");
 			expect(byId?.[0]?.id).toBe(MINTED_ID);
 		});
 	});
 
 	it("bumps the name and retries when crdt_create fails with create_failed (path owned)", async () => {
-		qc.setQueryData(["folder-notes-by-id", "42", "root"], []);
 		// First attempt: the path is already owned → create_failed. Second attempt
 		// (bumped name) succeeds by echoing its minted id.
 		crdtCreateNote
@@ -1292,7 +1285,6 @@ describe("useCreateNote — optimistic placeholder", () => {
 	// filename derived from the link target, instead of taking the "Untitled.md"
 	// default — same mutation/hook as the sidebar "New note" button.
 	it("creates at a caller-supplied name instead of Untitled.md", async () => {
-		qc.setQueryData(["folder-notes-by-id", "42", "root"], []);
 		crdtCreateNote.mockImplementation((docId: string) => Promise.resolve(docId));
 
 		const { result } = renderHook(() => useCreateNote(), { wrapper });
@@ -1304,7 +1296,6 @@ describe("useCreateNote — optimistic placeholder", () => {
 	});
 
 	it("surfaces notes_cap_reached without retrying", async () => {
-		qc.setQueryData(["folder-notes-by-id", "42", "root"], []);
 		crdtCreateNote.mockRejectedValue(new CrdtOpError("notes_cap_reached", "crdt_create"));
 
 		const { result } = renderHook(() => useCreateNote(), { wrapper });
@@ -1364,7 +1355,7 @@ describe("useBatchMoveNotes", () => {
 		});
 
 		await waitFor(() => {
-			const src = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "5"]);
+			const src = notesById("5");
 			expect(src?.map((n) => n.id)).toEqual(["3"]);
 		});
 
@@ -1388,12 +1379,12 @@ describe("useBatchMoveNotes", () => {
 			}
 		});
 
-		const src = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "5"]);
+		const src = notesById("5");
 		expect(src?.map((n) => n.id).sort()).toEqual(["1", "2", "3"]);
 	});
 
 	it("optimistically updates folder counts so the tree rebuilds on a move", async () => {
-		qc.setQueryData(["folders", "42"], {
+		seedRawFolders({
 			folders: [
 				{ id: "5", parent_id: null, name: "src", count: 3 },
 				{ id: "9", parent_id: null, name: "dst", count: 1 },
@@ -1415,7 +1406,7 @@ describe("useBatchMoveNotes", () => {
 		});
 
 		await waitFor(() => {
-			const folders = qc.getQueryData<{ folders: Folder[] }>(["folders", "42"]);
+			const folders = readSeededTree();
 			const byId = Object.fromEntries((folders?.folders ?? []).map((f) => [f.id, f.count]));
 			expect(byId["5"]).toBe(1); // 3 source notes - 2 moved
 			expect(byId["9"]).toBe(3); // 1 target note + 2 moved
@@ -1425,7 +1416,7 @@ describe("useBatchMoveNotes", () => {
 	});
 
 	it("rolls back folder counts on server error", async () => {
-		qc.setQueryData(["folders", "42"], {
+		seedRawFolders({
 			folders: [
 				{ id: "5", parent_id: null, name: "src", count: 3 },
 				{ id: "9", parent_id: null, name: "dst", count: 1 },
@@ -1447,19 +1438,18 @@ describe("useBatchMoveNotes", () => {
 			}
 		});
 
-		const folders = qc.getQueryData<{ folders: Folder[] }>(["folders", "42"]);
+		const folders = readSeededTree();
 		const byId = Object.fromEntries((folders?.folders ?? []).map((f) => [f.id, f.count]));
 		expect(byId["5"]).toBe(3);
 		expect(byId["9"]).toBe(1);
 	});
 
 	it("moves notes to the vault root: appends to the by-id root list, strips the source", async () => {
-		qc.setQueryData(["folders", "42"], {
+		seedRawFolders({
 			folders: [{ id: "5", parent_id: null, name: "src", count: 2 }],
 		});
 		seedFolderNotesById("5", [{ id: "1" }, { id: "2" }]);
 		// Root shares the one id-keyed cache under the 'root' sentinel.
-		qc.setQueryData(["folder-notes-by-id", "42", "root"], []);
 
 		let resolvePost!: (v: unknown) => void;
 		post.mockReturnValue(
@@ -1474,14 +1464,10 @@ describe("useBatchMoveNotes", () => {
 		});
 
 		await waitFor(() => {
-			const root = qc.getQueryData<Array<{ id: string; folder: string }>>([
-				"folder-notes-by-id",
-				"42",
-				"root",
-			]);
+			const root = notesById("root");
 			expect(root?.map((n) => n.id)).toContain("1");
 			expect(root?.find((n) => n.id === "1")?.folder).toBe("");
-			const src = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "5"]);
+			const src = notesById("5");
 			expect(src?.map((n) => n.id)).toEqual(["2"]);
 		});
 
@@ -1489,10 +1475,9 @@ describe("useBatchMoveNotes", () => {
 	});
 
 	it("moves a note FROM the root into a folder (strips the by-id root list)", async () => {
-		qc.setQueryData(["folders", "42"], {
+		seedRawFolders({
 			folders: [{ id: "9", parent_id: null, name: "dst", count: 0 }],
 		});
-		qc.setQueryData(["folder-notes-by-id", "42", "9"], []);
 		seedFolderNotesById("root", [{ id: "1", path: "a.md", folder: "" }]);
 
 		let resolvePost!: (v: unknown) => void;
@@ -1508,9 +1493,9 @@ describe("useBatchMoveNotes", () => {
 		});
 
 		await waitFor(() => {
-			const root = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "root"]);
+			const root = notesById("root");
 			expect(root?.map((n) => n.id)).toEqual([]);
-			const dst = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "9"]);
+			const dst = notesById("9");
 			expect(dst?.map((n) => n.id)).toContain("1");
 		});
 
@@ -1518,7 +1503,7 @@ describe("useBatchMoveNotes", () => {
 	});
 
 	it("moves notes into a DERIVED folder (no marker) keyed under its syn: id", async () => {
-		qc.setQueryData(["folders", "42"], {
+		seedRawFolders({
 			// A derived folder comes back from the backend with a null id; the
 			// optimistic patch must key its note list under syn:<path>, the same id
 			// the loader uses, and bump its count by name (id is null in this cache).
@@ -1528,7 +1513,6 @@ describe("useBatchMoveNotes", () => {
 			] as unknown as Folder[],
 		});
 		seedFolderNotesById("5", [{ id: "1" }, { id: "2" }]);
-		qc.setQueryData(["folder-notes-by-id", "42", "syn:Derived"], []);
 
 		let resolveMove: () => void = () => {};
 		crdtCreateNote.mockReturnValue(
@@ -1547,16 +1531,12 @@ describe("useBatchMoveNotes", () => {
 		});
 
 		await waitFor(() => {
-			const dst = qc.getQueryData<Array<{ id: string; folder: string }>>([
-				"folder-notes-by-id",
-				"42",
-				"syn:Derived",
-			]);
+			const dst = notesById("syn:Derived");
 			expect(dst?.map((n) => n.id)).toContain("1");
 			expect(dst?.find((n) => n.id === "1")?.folder).toBe("Derived");
-			const src = qc.getQueryData<Array<{ id: string }>>(["folder-notes-by-id", "42", "5"]);
+			const src = notesById("5");
 			expect(src?.map((n) => n.id)).toEqual(["2"]);
-			const folders = qc.getQueryData<{ folders: Folder[] }>(["folders", "42"]);
+			const folders = readSeededTree();
 			expect(folders?.folders.find((f) => f.name === "Derived")?.count).toBe(1);
 		});
 
@@ -1569,14 +1549,13 @@ describe("useBatchMoveNotes", () => {
 	it("decrements a DERIVED source folder count when moving notes OUT of it", async () => {
 		// Source is a derived folder (null id in the raw cache, note list keyed
 		// under its syn:<path> loader id). The decrement must match it by name.
-		qc.setQueryData(["folders", "42"], {
+		seedRawFolders({
 			folders: [
 				{ id: null, parent_id: null, name: "Derived", count: 2 },
 				{ id: "9", parent_id: null, name: "dst", count: 0 },
 			] as unknown as Folder[],
 		});
 		seedFolderNotesById("syn:Derived", [{ id: "1" }, { id: "2" }]);
-		qc.setQueryData(["folder-notes-by-id", "42", "9"], []);
 
 		let resolvePost!: (v: unknown) => void;
 		post.mockReturnValue(
@@ -1591,13 +1570,9 @@ describe("useBatchMoveNotes", () => {
 		});
 
 		await waitFor(() => {
-			const folders = qc.getQueryData<{ folders: Folder[] }>(["folders", "42"]);
+			const folders = readSeededTree();
 			expect(folders?.folders.find((f) => f.name === "Derived")?.count).toBe(1);
-			const src = qc.getQueryData<Array<{ id: string }>>([
-				"folder-notes-by-id",
-				"42",
-				"syn:Derived",
-			]);
+			const src = notesById("syn:Derived");
 			expect(src?.map((n) => n.id)).toEqual(["2"]);
 		});
 
@@ -1625,8 +1600,8 @@ describe("useBatchMoveNotes", () => {
 			}
 		});
 
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folder-notes-by-id", "42"] });
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
 	});
 });
 
@@ -1651,7 +1626,7 @@ describe("useBatchDeleteFolders", () => {
 	});
 
 	it("optimistically removes target folders + descendants from the folders cache", async () => {
-		qc.setQueryData(["folders", "42"], {
+		seedRawFolders({
 			folders: [
 				{ id: "7", parent_id: null, name: "top", count: 0 },
 				{ id: "8", parent_id: "7", name: "top/sub", count: 0 },
@@ -1674,13 +1649,15 @@ describe("useBatchDeleteFolders", () => {
 		});
 
 		await waitFor(() => {
-			const folders = qc.getQueryData<{ folders: Folder[] }>(["folders", "42"]);
+			const folders = readSeededTree();
 			expect(folders?.folders.map((f) => f.id).sort()).toEqual(["9"]);
 		});
 
-		// by-id lists for removed folder + descendant are dropped, sibling intact
-		expect(qc.getQueryData(["folder-notes-by-id", "42", "7"])).toBeUndefined();
-		expect(qc.getQueryData(["folder-notes-by-id", "42", "8"])).toBeUndefined();
+		// The notes inside the deleted folder and its descendant go with it —
+		// `removeFolders` matches by path prefix, so the cascade needs no
+		// descendant walk. The sibling is untouched.
+		expect(notesById("7")).toEqual([]);
+		expect(notesById("8")).toEqual([]);
 
 		resolvePost({ deleted: 2 });
 	});
@@ -1692,7 +1669,7 @@ describe("useBatchDeleteFolders", () => {
 	// folder produced no optimistic removal at all, and the row lingered until
 	// the server round-trip landed. Same shape as the #1140 bug.
 	it("optimistically removes a DERIVED folder selected by its synthetic id", async () => {
-		qc.setQueryData(["folders", "42"], {
+		seedRawFolders({
 			folders: [
 				{ id: null, parent_id: null, name: "derived", count: 2 },
 				{ id: "9", parent_id: null, name: "other", count: 0 },
@@ -1711,7 +1688,7 @@ describe("useBatchDeleteFolders", () => {
 		});
 
 		await waitFor(() => {
-			const folders = qc.getQueryData<{ folders: Array<{ name: string }> }>(["folders", "42"]);
+			const folders = readSeededTree();
 			expect(folders?.folders.map((f) => f.name)).toEqual(["other"]);
 		});
 
@@ -1724,7 +1701,7 @@ describe("useBatchDeleteFolders", () => {
 	// matched that `null` against an UNRELATED derived folder elsewhere in the
 	// tree — optimistically deleting a folder the user never selected.
 	it("cascades onto a DERIVED child without taking unrelated derived folders with it", async () => {
-		qc.setQueryData(["folders", "42"], {
+		seedRawFolders({
 			folders: [
 				{ id: "7", parent_id: null, name: "top", count: 0 },
 				// Derived child: no marker row of its own, so the wire sends a null
@@ -1749,7 +1726,7 @@ describe("useBatchDeleteFolders", () => {
 		});
 
 		await waitFor(() => {
-			const folders = qc.getQueryData<{ folders: Array<{ name: string }> }>(["folders", "42"]);
+			const folders = readSeededTree();
 			expect(folders?.folders.map((f) => f.name).sort()).toEqual(["other", "other/keep"]);
 		});
 
@@ -1757,7 +1734,7 @@ describe("useBatchDeleteFolders", () => {
 	});
 
 	it("rolls back the folders cache when the server rejects", async () => {
-		qc.setQueryData(["folders", "42"], {
+		seedRawFolders({
 			folders: [
 				{ id: "7", parent_id: null, name: "top", count: 0 },
 				{ id: "9", parent_id: null, name: "other", count: 0 },
@@ -1774,7 +1751,7 @@ describe("useBatchDeleteFolders", () => {
 			}
 		});
 
-		const folders = qc.getQueryData<{ folders: Folder[] }>(["folders", "42"]);
+		const folders = readSeededTree();
 		expect(folders?.folders.map((f) => f.id).sort()).toEqual(["7", "9"]);
 	});
 
@@ -1783,7 +1760,7 @@ describe("useBatchDeleteFolders", () => {
 		// non-transactional partial delete) makes onError restore the folders while
 		// the server actually dropped them → phantom folders until an unrelated
 		// refetch. Reconciliation must run on the error path too.
-		qc.setQueryData(["folders", "42"], {
+		seedRawFolders({
 			folders: [{ id: "7", parent_id: null, name: "top", count: 0 }],
 		});
 		post.mockRejectedValue(new ApiError(500, "boom"));
@@ -1798,8 +1775,8 @@ describe("useBatchDeleteFolders", () => {
 			}
 		});
 
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folder-notes-by-id", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
 	});
 });
 
@@ -1826,7 +1803,7 @@ describe("useBatchMoveFolders", () => {
 	});
 
 	it("optimistically rewrites parent_id + name prefix for moved folder + descendants", async () => {
-		qc.setQueryData(["folders", "42"], {
+		seedRawFolders({
 			folders: [
 				{ id: "7", parent_id: null, name: "src", count: 0 },
 				{ id: "8", parent_id: "7", name: "src/sub", count: 0 },
@@ -1847,25 +1824,24 @@ describe("useBatchMoveFolders", () => {
 		});
 
 		await waitFor(() => {
-			const folders = qc.getQueryData<{ folders: Folder[] }>(["folders", "42"]);
+			const folders = readSeededTree();
 			expect(folders?.folders.find((f) => f.id === "7")?.name).toBe("dst/src");
 		});
 
-		const folders = qc.getQueryData<{ folders: Folder[] }>(["folders", "42"]);
-		// Moved folder's parent flips to the target.
-		expect(folders?.folders.find((f) => f.id === "7")?.parent_id).toBe("9");
-		// Descendant's path prefix is rewritten; parent_id is unchanged
-		// (still points at id 7).
+		const folders = readSeededTree();
+		// Descendant's path prefix moves with its ancestor.
 		expect(folders?.folders.find((f) => f.id === "8")?.name).toBe("dst/src/sub");
-		expect(folders?.folders.find((f) => f.id === "8")?.parent_id).toBe("7");
 		// Unrelated folder untouched.
 		expect(folders?.folders.find((f) => f.id === "9")?.name).toBe("dst");
+		// `parent_id` is deliberately NOT patched: synthesizeFolders re-derives
+		// every parent link from the path, so the path IS the parent linkage.
+		// See synthesize-folders.test.ts.
 
 		resolvePost({ moved: 2 });
 	});
 
 	it("re-parents a folder under a DERIVED parent (syn: id)", async () => {
-		qc.setQueryData(["folders", "42"], {
+		seedRawFolders({
 			// Derived parent: backend id is null. The moved folder's parent_id must
 			// flip to syn:<path> (the loader id), and its name prefix to the path.
 			folders: [
@@ -1887,10 +1863,7 @@ describe("useBatchMoveFolders", () => {
 		});
 
 		await waitFor(() => {
-			const folders = qc.getQueryData<{ folders: Folder[] }>(["folders", "42"]);
-			const moved = folders?.folders.find((f) => f.id === "7");
-			expect(moved?.name).toBe("Derived/src");
-			expect(moved?.parent_id).toBe("syn:Derived");
+			expect(readSeededTree().folders.find((f) => f.id === "7")?.name).toBe("Derived/src");
 		});
 
 		expect(post).toHaveBeenCalledWith(
@@ -1903,7 +1876,7 @@ describe("useBatchMoveFolders", () => {
 	});
 
 	it("rolls back on error", async () => {
-		qc.setQueryData(["folders", "42"], {
+		seedRawFolders({
 			folders: [
 				{ id: "7", parent_id: null, name: "src", count: 0 },
 				{ id: "8", parent_id: "7", name: "src/sub", count: 0 },
@@ -1920,7 +1893,7 @@ describe("useBatchMoveFolders", () => {
 			}
 		});
 
-		const folders = qc.getQueryData<{ folders: Folder[] }>(["folders", "42"]);
+		const folders = readSeededTree();
 		expect(folders?.folders.find((f) => f.id === "7")?.name).toBe("src");
 		expect(folders?.folders.find((f) => f.id === "7")?.parent_id).toBeNull();
 		expect(folders?.folders.find((f) => f.id === "8")?.name).toBe("src/sub");
@@ -1931,7 +1904,7 @@ describe("useBatchMoveFolders", () => {
 		// non-transactional partial move) runs onError, which restores the
 		// optimistically re-pathed folders the server actually moved → phantom
 		// state until an unrelated refetch. Reconcile on both paths.
-		qc.setQueryData(["folders", "42"], {
+		seedRawFolders({
 			folders: [{ id: "7", parent_id: null, name: "src", count: 0 }],
 		});
 		post.mockRejectedValue(new ApiError(500, "boom"));
@@ -1946,8 +1919,8 @@ describe("useBatchMoveFolders", () => {
 			}
 		});
 
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folder-notes-by-id", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
 	});
 });
 
@@ -2104,9 +2077,9 @@ describe("useRenameAttachment", () => {
 			old_path: "img/a.png",
 			new_path: "img/b.png",
 		});
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folderNotes", "42"] });
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["attachments", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
 	});
 
 	it("surfaces 409 as ApiError", async () => {
@@ -2148,8 +2121,8 @@ describe("useBatchMoveAttachments", () => {
 			await result.current.mutateAsync({ paths: ["a.png"], target_folder: "img" });
 		});
 
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["attachments", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
 	});
 
 	it("reconciles the attachments list on the error path (lost ack after a committed move)", async () => {
@@ -2165,7 +2138,7 @@ describe("useBatchMoveAttachments", () => {
 			}
 		});
 
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["attachments", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
 	});
 });
 
@@ -2198,8 +2171,8 @@ describe("useBatchDeleteAttachments", () => {
 			await result.current.mutateAsync({ paths: ["a.png", "b.png"] });
 		});
 
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["attachments", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
 	});
 
 	it("reconciles the attachments list on the error path (lost ack after a committed delete)", async () => {
@@ -2218,7 +2191,7 @@ describe("useBatchDeleteAttachments", () => {
 			}
 		});
 
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["attachments", "42"] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
 	});
 });
 
@@ -2233,7 +2206,7 @@ describe("useUploadAttachment", () => {
 		return { qc, Wrapper };
 	}
 
-	it("POSTs the upload payload and invalidates folders + folderNotes + attachments", async () => {
+	it("POSTs the upload payload and invalidates the vault tree", async () => {
 		post.mockResolvedValue({ attachment: { id: "a1", path: "pic.png" } });
 		const { qc, Wrapper } = wrapper();
 		const spy = vi.spyOn(qc, "invalidateQueries");
@@ -2254,9 +2227,9 @@ describe("useUploadAttachment", () => {
 			content_base64: "AAAA",
 			mtime: 1_718_000_000,
 		});
-		expect(spy).toHaveBeenCalledWith({ queryKey: ["folders", "42"] });
+		expect(spy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
+		expect(spy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
 		expect(spy).toHaveBeenCalledWith({ queryKey: ["folderNotes", "42"] });
-		expect(spy).toHaveBeenCalledWith({ queryKey: ["attachments", "42"] });
 	});
 });
 

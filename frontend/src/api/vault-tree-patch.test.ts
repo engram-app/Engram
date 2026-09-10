@@ -162,9 +162,9 @@ describe("folders", () => {
 
 describe("attachments", () => {
 	it("moves and removes by path", () => {
-		expect(moveAttachments(TREE, ["Archive/pic.png"], "Empty").attachments[0].path).toBe(
-			"Empty/pic.png",
-		);
+		expect(
+			moveAttachments(TREE, ["Archive/pic.png"], "Empty").attachments.map((a) => a.path),
+		).toContain("Empty/pic.png");
 		expect(removeAttachments(TREE, ["Archive/pic.png"]).attachments.map((a) => a.id)).toEqual([
 			"a2",
 		]);
