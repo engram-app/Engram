@@ -47,53 +47,50 @@ defmodule Engram.Auth.TokenResolver do
   # internal HS256 JWT can only fail — and would REPLACE this reason with that
   # verifier's `:signature_error`.
   #
-  # That mislabel was the whole reason this exists. Only `:missing_claims` and
-  # `:invalid_signature` used to stop here, so an expired Clerk token fell
-  # through, failed HS256 (of course — it is RS256), and got logged as
-  # `signature_error`. Prod carried 6753 of those from three users, pointing an
-  # investigation at key rotation when the tokens were simply expired.
+  # That mislabel is why this exists. Originally only `:missing_claims` and
+  # `:invalid_signature` stopped here, so an expired Clerk token fell through,
+  # failed HS256 (of course — it is RS256), and got logged `signature_error`.
+  # Prod carried 6753 of those from three users, pointing an investigation at
+  # key rotation when the tokens were simply expired.
   #
-  # Two different reasons land in this list, so don't read it as one rule:
+  # INVERTED ON PURPOSE: conclusive by DEFAULT, with an explicit list of the
+  # only errors meaning "this was never a provider token, go try the internal
+  # verifier". The previous version enumerated the conclusive side instead,
+  # copying JokenJwks' atoms out of the dep's source — which made the default
+  # for anything unrecognised "fall through and get relabelled", the very bug
+  # this function fixes. A joken_jwks bump adding or renaming one atom would
+  # have restored it silently, with nothing failing. Enumerating the
+  # fallthrough means an unknown future atom surfaces under its own name.
+  # Wrong-but-visible beats laundered.
   #
-  #   - Claim-level failures and `:invalid_azp` are conclusive because the token
-  #     is provably OURS. Joken verifies the SIGNATURE before it validates
-  #     claims, so a claim failure means the signature already checked out, and
-  #     `:invalid_azp` is only reachable after `verify_and_validate` returned
-  #     `{:ok, _}` (ClerkToken.verify_clerk_jwt/1).
-  #   - `:missing_claims` and `:invalid_signature` are pre-existing entries kept
-  #     for behaviour parity. `:invalid_signature` in particular proves the
-  #     OPPOSITE — it says the token was not verifiable — and is here only
-  #     because it was here before.
+  # Why exactly these two:
   #
-  # `:invalid_token` deliberately stays out: it is the parse-failure rescue,
-  # which is exactly the "not a provider token" case the fallback is for.
+  #   * `:no_kid_in_token_header` — `JokenJwks.before_verify/2` extracts the kid
+  #     BEFORE looking up a signer, and internal tokens (`Engram.Token`) are
+  #     signed with no kid at all. This IS the device-flow / OAuth / MCP path,
+  #     and `test/engram/auth/token_resolver_test.exs` pins it.
+  #   * `:invalid_token` — the parse-failure rescue in
+  #     `ClerkToken.verify_clerk_jwt/1`; a string that is not a JWT at all.
+  #
+  # Everything else reports as itself: claim failures and `:invalid_azp` (both
+  # only reachable AFTER the signature verified, since Joken verifies before it
+  # validates), and every JokenJwks failure including a signing-key rotation
+  # (`:kid_does_not_match`) — the one scenario the 6753-line incident was
+  # misdiagnosed as, which until now would itself have logged `signature_error`.
+  # `Engram.PromEx.Reliability` documents `could_not_reach_jwks_url` as an
+  # expected `reason` tag; before this it could never be emitted.
   #
   # Self-host is unaffected: `Providers.Local.verify_token` and
-  # `Accounts.verify_jwt` both call `Engram.Token.verify_and_validate`, so the
-  # old fall-through ran the identical verifier twice and returned the identical
-  # error. Only the Clerk path's label changes.
-  # JokenJwks failures. All four are reachable ONLY after a `kid` was found in
-  # the header (`JokenJwks.before_verify/2` extracts the kid before it looks up
-  # a signer), and our internal HS256 JWTs carry no kid — they halt earlier with
-  # `:no_kid_in_token_header`, which is deliberately NOT listed here because it
-  # is precisely the "try the internal verifier" case.
-  #
-  # `:kid_does_not_match` is a provider signing-key ROTATION. Leaving it out was
-  # the remaining half of the mislabel: the one scenario the 6753-line incident
-  # was misdiagnosed as would itself still have been logged `signature_error`.
-  # `Engram.PromEx.Reliability` already documents `could_not_reach_jwks_url` as
-  # an expected `reason` tag; before this it could never actually be emitted.
-  @jwks_failures [
-    :kid_does_not_match,
-    :no_signers_fetched,
-    :could_not_reach_jwks_url,
-    :jwks_client_http_error
-  ]
+  # `Accounts.verify_jwt` both bottom out in `Engram.Token.verify_and_validate`,
+  # so the old fallthrough ran the identical verifier twice for an identical
+  # error. Only the Clerk path's label moves.
+  @fall_through_to_internal_jwt [:no_kid_in_token_header, :invalid_token]
 
-  defp conclusive?(reason) when is_list(reason), do: Keyword.has_key?(reason, :claim)
+  defp conclusive?(reason) when is_atom(reason),
+    do: reason not in @fall_through_to_internal_jwt
 
-  defp conclusive?(reason),
-    do: reason in ([:missing_claims, :invalid_signature, :invalid_azp] ++ @jwks_failures)
+  # Joken claim-validation failures arrive as a keyword list.
+  defp conclusive?(_reason), do: true
 
   defp authenticate_internal_jwt(token) do
     case Accounts.verify_jwt(token) do

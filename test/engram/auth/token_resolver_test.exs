@@ -125,17 +125,27 @@ defmodule Engram.Auth.TokenResolverTest do
     assert Engram.Auth.rejection_label(reason) == "invalid_azp"
   end
 
-  # The fallback itself must survive: a token the Clerk provider cannot verify
-  # at all is still retried as an internal JWT, and only reports a signature
-  # failure once THAT also fails.
-  @tag capture_log: true
-  test "a token the Clerk provider cannot verify still falls through to internal JWT" do
+  # The contract that actually matters: a REAL internal JWT still resolves under
+  # the Clerk provider. It carries no `kid`, so JokenJwks halts on
+  # `:no_kid_in_token_header` — one of the two atoms `conclusive?/1` lets fall
+  # through — and the internal HS256 verifier picks it up.
+  test "a device-flow internal JWT still resolves under the Clerk provider" do
     user = insert(:user)
     assert {:ok, resolved, :internal_jwt} = TokenResolver.resolve(Accounts.generate_jwt(user))
     assert resolved.id == user.id
+  end
 
+  # A string that is not a JWT at all reports `token_malformed`.
+  #
+  # This assertion previously demanded `signature_error`, and that was the bug
+  # in miniature: the garbage string was handed to the internal HS256 verifier,
+  # failed there, and wore THAT verifier's label. `token_malformed` is what
+  # actually went wrong. Nothing about auth changed — a malformed string cannot
+  # be a valid internal JWT either, and the test above pins the path that can.
+  @tag capture_log: true
+  test "a string that is not a JWT reports token_malformed, not a signature failure" do
     assert {:error, reason} = TokenResolver.resolve("not.a.valid.jwt")
-    assert Engram.Auth.rejection_label(reason) == "signature_error"
+    assert Engram.Auth.rejection_label(reason) == "token_malformed"
   end
 
   # A Clerk signing-key ROTATION is the scenario the original 6753-line
