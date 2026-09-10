@@ -855,17 +855,24 @@ defmodule Engram.Crypto.UserDekRotation do
   # raise. If every field in a point is already under the new DEK, return
   # :unchanged and skip the set_payload call entirely.
 
-  # `chunks.context_hmac` is keyed on the OLD DEK, so after this rotation every
-  # stored value is unmatchable — and unlike every other sweep above, it cannot
-  # be recomputed: the chunk text it fingerprints lives encrypted in Qdrant, not
-  # in Postgres.
+  # Housekeeping, NOT a correctness guard — do not read it as one.
   #
-  # Clearing it is the correct answer rather than a shortcut. `nil` already
-  # means "changed" to `Indexing.plan_chunks/3`, so this user's notes simply
-  # re-embed in full on their next index — exactly the behaviour that predated
-  # #1592 — and the first such index repopulates the column. Leaving stale
-  # values would be the bug: they would never match, so nothing would ever
-  # be reused again for this user.
+  # `chunks.context_hmac` is keyed on the old DEK's content-hash subkey. The
+  # rotation changes that key, so `Indexing.plan_chunks/3` recomputes every
+  # fingerprint under the new one and no stored value can match regardless of
+  # what this function does. The full re-embed is already guaranteed by the key
+  # change; unlike the other sweeps above, nothing breaks if this never runs.
+  #
+  # It exists because the alternative is carrying values that are known-dead
+  # until each note happens to be re-indexed, and because a column whose
+  # contents silently stopped meaning anything is worth zeroing at the moment it
+  # stops meaning anything.
+  #
+  # The paths where clearing IS load-bearing are the ones that delete points
+  # while leaving rows: `Indexing.delete_points_by_path_hmac/2` (rename) and
+  # `Indexing.forget_chunk_reuse_for_user/1` (account soft-delete). There the
+  # key is unchanged, so a surviving hmac matches and the reused id names a
+  # point that is gone.
   defp clear_chunk_context_hmacs(%User{id: user_id}) do
     {_count, _} =
       from(c in Engram.Notes.Chunk,
