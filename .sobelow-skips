@@ -4,7 +4,7 @@ Config.CSWH: Cross-Site Websocket Hijacking,lib/engram_web/endpoint.ex:30,6F8AC0
 Config.CSWH: Cross-Site Websocket Hijacking,lib/engram_web/endpoint.ex:45,6EA19F5
 Config.HTTPS: HTTPS Not Enabled,config/prod.exs:0,2B5C077
 Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/crypto.ex:581,7EA51D6
-Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/crypto/user_dek_rotation.ex:1433,165416F
+Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/crypto/user_dek_rotation.ex:1440,58BBE92
 Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/notes.ex:4698,441015D
 Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/notes.ex:5073,408825C
 SQL.Query: SQL injection,lib/engram/attachments.ex:1074,41475BB
