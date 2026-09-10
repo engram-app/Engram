@@ -159,6 +159,30 @@ defmodule Engram.Logger.Metadata do
   def format_location(_other), do: "?"
 
   @doc """
+  Redacts the user-id segment of a channel topic for logging.
+
+  Channel topics are `crdt:<user_id>:<vault_id>`, `sync:<user_id>:<vault_id>`,
+  and `user:<user_id>` — so logging `socket.topic` verbatim (join/leave lines,
+  the fanout breadcrumb) puts the raw account UUID in `client_logs` / CloudWatch
+  / Loki, the same cleartext id every other log field takes care to hash. This
+  replaces only the user segment with `HMAC.hash_user_id/1` (the digest used for
+  the `:user_id` metadata everywhere else), so a topic still correlates to a
+  user's other lines by the same key while the vault id and prefix stay intact.
+  """
+  @spec redact_topic(String.t()) :: String.t()
+  def redact_topic(topic) when is_binary(topic) do
+    case String.split(topic, ":") do
+      [prefix, user_id | rest] ->
+        Enum.join([prefix, Engram.Crypto.HMAC.hash_user_id(user_id) | rest], ":")
+
+      _ ->
+        topic
+    end
+  end
+
+  def redact_topic(other), do: other
+
+  @doc """
   The upstream provider's own error string, or nil.
 
   `error_kind` + `status` name the CLASS of an upstream failure but not the

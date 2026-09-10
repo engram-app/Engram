@@ -50,7 +50,11 @@ defmodule EngramWeb.SyncChannel do
   # match, which is free — the gate costs DB round-trips and there is no join
   # rate limiter, so a `sync:<other-user>:<uuid>` probe must not pay for it.
   defp gate_and_join(vault_id_str, params, socket, user) do
-    case ChannelGate.check(user, socket.assigns[:current_api_key]) do
+    case ChannelGate.check(
+           user,
+           socket.assigns[:current_api_key],
+           socket.assigns[:plugin_version]
+         ) do
       :ok -> resolve_vault_and_join(vault_id_str, params, socket, user)
       {:error, payload} -> {:error, payload}
     end
@@ -95,7 +99,7 @@ defmodule EngramWeb.SyncChannel do
       Metadata.with_category(:info, :websocket,
         conn_id: conn_id,
         device_id: device_id,
-        topic: socket.topic,
+        topic: Metadata.redact_topic(socket.topic),
         user_id: HMAC.hash_user_id(to_string(socket.assigns.current_user.id))
       )
 
@@ -129,7 +133,7 @@ defmodule EngramWeb.SyncChannel do
           Metadata.with_category(:warning, :websocket,
             conn_id: conn_id,
             device_id: device_id,
-            topic: socket.topic,
+            topic: Metadata.redact_topic(socket.topic),
             reason: "existing_conn_ids=#{existing}"
           )
         )
@@ -146,7 +150,7 @@ defmodule EngramWeb.SyncChannel do
       Metadata.with_category(:info, :websocket,
         conn_id: socket.assigns[:conn_id],
         device_id: socket.assigns[:device_id],
-        topic: socket.topic,
+        topic: Metadata.redact_topic(socket.topic),
         reason: Metadata.safe_reason(reason)
       )
     )

@@ -148,7 +148,11 @@ defmodule EngramWeb.CrdtChannel do
   defp join_vault("crdt:" <> ids, user, user_id_str, socket) do
     case String.split(ids, ":") do
       [^user_id_str, _vid] ->
-        case ChannelGate.check(user, socket.assigns[:current_api_key]) do
+        case ChannelGate.check(
+               user,
+               socket.assigns[:current_api_key],
+               socket.assigns[:plugin_version]
+             ) do
           :ok -> join_gated_vault("crdt:" <> ids, user, user_id_str, socket)
           {:error, payload} -> {:error, payload}
         end
@@ -175,7 +179,7 @@ defmodule EngramWeb.CrdtChannel do
                       Metadata.with_category(:info, :websocket,
                         conn_id: socket.assigns[:conn_id],
                         device_id: socket.assigns[:device_id],
-                        topic: socket.topic,
+                        topic: Metadata.redact_topic(socket.topic),
                         # Skew tripwire for the Notes.untagged_crdt_client_type/0
                         # default, flipped to "web" in #1301. An untagged socket
                         # now gets a SERVER-side link rewrite on rename, which is
@@ -1497,7 +1501,7 @@ defmodule EngramWeb.CrdtChannel do
       Metadata.with_category(:info, :websocket,
         conn_id: socket.assigns[:conn_id],
         device_id: socket.assigns[:device_id],
-        topic: socket.topic,
+        topic: Metadata.redact_topic(socket.topic),
         reason: Metadata.safe_reason(reason)
       )
     )
@@ -1798,7 +1802,7 @@ defmodule EngramWeb.CrdtChannel do
       "crdt_create failed: #{reason}",
       Metadata.with_category(:warning, :websocket,
         note_id: note_id,
-        user_id: socket.assigns.current_user.id,
+        user_id: HMAC.hash_user_id(to_string(socket.assigns.current_user.id)),
         vault_id: socket.assigns.vault.id
       )
     )
@@ -1854,7 +1858,7 @@ defmodule EngramWeb.CrdtChannel do
     Logger.warning(
       "crdt_channel: dropped crdt_index_msg → #{Metadata.safe_reason(reason)}",
       Metadata.with_category(:warning, :sync,
-        user_id: socket.assigns.current_user.id,
+        user_id: HMAC.hash_user_id(to_string(socket.assigns.current_user.id)),
         vault_id: socket.assigns.vault.id
       )
     )
@@ -1870,7 +1874,7 @@ defmodule EngramWeb.CrdtChannel do
     # Attribute the drop to a user + vault so a lost edit can be traced to who
     # hit it (the 2026-07-06 drops carried neither, so they were unattributable).
     attribution = [
-      user_id: socket.assigns.current_user.id,
+      user_id: HMAC.hash_user_id(to_string(socket.assigns.current_user.id)),
       vault_id: socket.assigns.vault.id
     ]
 

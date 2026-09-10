@@ -55,6 +55,14 @@ defmodule EngramWeb.Router do
     plug EngramWeb.Plugs.RequireOnboarding
     plug EngramWeb.Plugs.RequireActiveSubscription
     plug EngramWeb.Plugs.BumpActivity
+    # AFTER BumpActivity, deliberately. An earlier position gave a nicer
+    # message (upgrade beats "finish onboarding") and cost liveness: a refused
+    # request never stamps `last_active_at`, both transports refuse a
+    # below-floor client, and `InactivityCleanup` soft-deletes at 90 days —
+    # dropping Qdrant points and S3 attachments for someone syncing daily.
+    # `ChannelGate` already refuses that trade for `api_access/2` in as many
+    # words: "data loss beats a stale row". Message precedence is worth less.
+    plug EngramWeb.Plugs.RequirePluginVersion
     plug EngramWeb.Plugs.RequireApiRpsBudget
     plug EngramWeb.Plugs.RequireApiWriteEnabled
   end
