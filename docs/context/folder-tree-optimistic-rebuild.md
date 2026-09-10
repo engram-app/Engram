@@ -1,9 +1,10 @@
 # Context Doc: Web SPA Folder-Tree Optimistic Updates + Rebuild Triggering
 
-_Last verified: 2026-06-13_
+_Last verified: 2026-09-10_
 
 ## Status
-Working — core paths fixed 2026-06-13. Two known optimistic gaps remain (see Gotchas).
+Working — core paths fixed 2026-06-13, GC eviction fixed 2026-09-10. Two known
+optimistic gaps remain (see Gotchas).
 
 ## What This Is
 How the React SPA's left-rail folder tree builds its hierarchy from React Query
@@ -70,6 +71,53 @@ refresh or folder collapse/expand. Four distinct causes, four fixes:
   reads by-id for subfolders → `useDuplicateNote.onMutate` now mirrors the
   placeholder into `['folder-notes-by-id', vaultId, targetFolder.id]` too.
 
+## A cache entry read without a hook has NO observer — so `gcTime` deletes it (2026-09-10)
+
+**The durable lesson, and it is not tree-specific:** a React Query entry that a
+component reads with `qc.getQueryData` / fills with `qc.fetchQuery` — instead of
+subscribing through `useQuery` — has **no observer**. React Query garbage-collects
+any observerless query after `gcTime` (default **5 minutes**). Nothing warns you:
+the read still compiles, still type-checks, and works for the first five minutes
+of every session. And when the same component *also* rebuilds itself off a
+QueryCache subscription, the GC deletion is not a silent cache miss — it is a
+**visible flash of missing data**.
+
+Symptom that led here: the sidebar file tree periodically flashed empty. A
+folder's notes vanished for many seconds every few minutes; folders looked like
+they collapsed and reopened on their own.
+
+The loop, all four steps required:
+
+1. `loader.ts` (`noteChildItems`) reads `['folder-notes-by-id', vaultId, folderId]`
+   with `getQueryData` and fills a miss with `fetchQuery` — **no observer**.
+2. Only the ROOT list has one (`folder-tree.tsx:75`, `useFolderNotesById(ROOT_FOLDER_ID)`),
+   so every **expanded subfolder's** list is observerless and hits the default
+   5-minute `gcTime`.
+3. `use-engram-tree.ts` subscribes to the QueryCache and calls `rebuildTree()` on a
+   `removed` event — i.e. the eviction itself *triggers* a rebuild.
+4. The rebuild re-runs `getChildren`, the loader now misses, and the folder renders
+   with **only its subfolders**. The notes return only after `fetchQuery` →
+   `fetchVaultTree` → a full `/vault/tree` round trip, which `fetchVaultTreeFresh`
+   can retry up to 3 extra times when sync-channel invalidations land mid-flight.
+   Hence the multi-second gap, not a blink.
+
+**Fix:** `gcTime: Number.POSITIVE_INFINITY` on `folderNotesByIdQueryOptions`
+(`frontend/src/api/queries.ts`). Immortal is correct *here* specifically because
+these rows are a derivation of the one vault tree we already keep resident, they
+are keyed by vault, and the whole cache is dropped on a user change
+(`useClearQueryCacheOnUserChange`) — so the entries cannot outlive their tenant.
+
+Regression test: `frontend/src/api/folder-notes-gc.test.ts` — fetches with **no
+observer**, advances fake timers 10 minutes, asserts the data is still cached.
+Note the shape: the test must never mount a hook, or it proves nothing.
+
+**Rule for new query options:** decide the observer question explicitly. If any
+caller reaches the entry through `getQueryData`/`fetchQuery`, either give it a
+non-default `gcTime` or give it a real observer. Do not leave it on the default
+and assume "it's cached". The two consequences of observerlessness are separate
+and you own both: **`invalidateQueries` won't refetch it** (see the Gotchas
+below) and **`gcTime` will delete it**.
+
 ## Failed Approaches / Dead Ends
 - **`onSuccess` invalidation alone** does NOT refresh the tree for by-id lists —
   see the observer gotcha below. The optimistic `onMutate` patch + a rebuild
@@ -88,7 +136,9 @@ refresh or folder collapse/expand. Four distinct causes, four fixes:
   them via `getQueryData` and seeds via `prefetchQuery` / `fetchQuery`. So
   `invalidateQueries` marks them stale but does NOT auto-refetch them — they only
   refetch on the next loader read (folder expand). This is exactly why
-  `onSuccess` invalidation alone didn't refresh the tree.
+  `onSuccess` invalidation alone didn't refresh the tree. The *other* consequence
+  of having no observer — `gcTime` evicting the entry outright — is the 2026-09-10
+  section above; they are the same root cause with two different symptoms.
 
 ### Known remaining gaps (NOT yet fixed)
 - **Root-note batch delete**: `useBatchDeleteNotes` only patches `folder-notes-by-id`
@@ -101,5 +151,6 @@ refresh or folder collapse/expand. Four distinct causes, four fixes:
 - `frontend/src/viewer/tree/use-engram-tree.ts` (`treeStructureKey`, the two rebuild effects)
 - `frontend/src/viewer/tree/loader.ts` (`folderChildren`, `rootChildren`, `noteLoaderItem`)
 - `frontend/src/viewer/folder-tree.tsx` (data sources + `fetchFolderNotes` wiring)
-- `frontend/src/api/queries.ts` (`useBatchMoveNotes`, `useBatchDeleteNotes`, `useDuplicateNote`, `useCreateNote`)
+- `frontend/src/api/queries.ts` (`folderNotesByIdQueryOptions` + its `gcTime`, `useBatchMoveNotes`, `useBatchDeleteNotes`, `useDuplicateNote`, `useCreateNote`)
+- `frontend/src/api/folder-notes-gc.test.ts` (observerless-survival regression test)
 - Related: `docs/context/perf-caching-invalidation.md`
