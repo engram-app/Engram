@@ -1367,6 +1367,12 @@
             "x-struct": null,
             "x-validate": null
           },
+          "forced": {
+            "nullable": true,
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          },
           "created_at": {
             "format": "date-time",
             "nullable": true,
@@ -1966,6 +1972,13 @@
             "x-struct": null,
             "x-validate": null
           },
+          "forced": {
+            "description": "Set by the client when the entry bypassed its diagnostics gate (RemoteLogger.anomaly). Provenance, not severity: it marks a signal that reaches the whole fleet rather than only opted-in users.",
+            "nullable": true,
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          },
           "device_id": {
             "description": "Per-install Obsidian instance id, for per-device attribution.",
             "nullable": true,
@@ -2274,7 +2287,7 @@
       "UpsertNoteRequest": {
         "example": {
           "content": "# Engram\n\nAn AI-powered personal knowledge base.\n",
-          "mtime": 1.7189e9,
+          "mtime": 1718900000.0,
           "path": "Projects/Engram.md",
           "tags": [
             "project",

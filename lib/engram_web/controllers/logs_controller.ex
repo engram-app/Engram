@@ -65,6 +65,7 @@ defmodule EngramWeb.LogsController do
       platform: log.platform,
       device_id: log.device_id,
       conn_id: log.conn_id,
+      forced: log.forced,
       created_at: log.created_at
     }
   end

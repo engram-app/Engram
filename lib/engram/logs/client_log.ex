@@ -25,6 +25,11 @@ defmodule Engram.Logs.ClientLog do
     field :conn_id, :string
     field :device_id, :string
 
+    # Provenance, not severity: this entry bypassed the CLIENT's diagnostics
+    # gate. Lets a reader tell a signal that covers the whole fleet from one
+    # that only covers users who opted in. See RemoteLogger.anomaly/3.
+    field :forced, :boolean, default: false
+
     belongs_to :user, Engram.Accounts.User
 
     timestamps(type: :utc_datetime, inserted_at: :created_at, updated_at: false)

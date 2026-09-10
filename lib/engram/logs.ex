@@ -88,6 +88,7 @@ defmodule Engram.Logs do
           platform: e.platform,
           conn_id: e.conn_id,
           device_id: e.device_id,
+          forced: e.forced,
           created_at: now
         }
       end)
@@ -119,7 +120,8 @@ defmodule Engram.Logs do
       platform: get(entry, "platform", :platform) |> default("") |> clamp(@max_short_chars),
       conn_id: get(entry, "conn_id", :conn_id) |> clamp(@max_short_chars),
       device_id: get(entry, "device_id", :device_id) |> clamp(@max_short_chars),
-      diagnostic: get(entry, "diagnostic", :diagnostic) == true
+      diagnostic: get(entry, "diagnostic", :diagnostic) == true,
+      forced: get(entry, "forced", :forced) == true
     }
   end
 

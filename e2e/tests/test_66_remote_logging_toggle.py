@@ -234,9 +234,29 @@ async def test_disable_stops_flush(vault_a, cdp_a, cdp_b, api_sync):
         # proves the same query DOES find this test's own entries when logging
         # is on, using the same window. Do not weaken one without the other.
         after_logs = api_sync.list_logs(limit=200, since=after_since, device_id=device_a)
-        assert len(after_logs) == 0, (
-            f"Expected 0 log rows from instance A (device {device_a}) after "
-            f"disabling remote logging, but got {len(after_logs)}: {after_logs!r}"
+
+        # `forced` rows are EXEMPT, and that is the contract — not a concession.
+        #
+        # RemoteLogger.anomaly() ships with force: true on purpose: a fresh
+        # install has diagnostics OFF and is the install most likely to hit a
+        # first-sync bug (prod 2026-08-13, 316 of 316 notes dropped with zero
+        # client logs to read). Those entries carry counts and slugs only —
+        # never a path, title or content — so the setting still protects what it
+        # is meant to.
+        #
+        # Asserting a flat zero here made this test fail ~2/3 of runs on main,
+        # because a post-toggle sync legitimately emits
+        # `replay_produced_no_files`. It was nearly misdiagnosed as telemetry
+        # shipping after opt-out. See engram-app/Engram#1598.
+        #
+        # What must still hold is that ORDINARY logging stopped, so the
+        # assertion narrows rather than weakens: zero non-forced rows.
+        unforced = [row for row in after_logs if not row.get("forced")]
+        assert len(unforced) == 0, (
+            f"Expected 0 NON-FORCED log rows from instance A (device {device_a}) "
+            f"after disabling remote logging, but got {len(unforced)}: {unforced!r}\n"
+            f"(forced anomaly rows are exempt by contract; {len(after_logs) - len(unforced)} "
+            f"of the {len(after_logs)} rows in the window were forced)"
         )
 
     finally:
