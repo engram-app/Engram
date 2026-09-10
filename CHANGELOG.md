@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.26.0](https://github.com/engram-app/Engram/compare/0.25.1...0.26.0) (2026-09-10)
+
+
+### Features
+
+* **api:** minimum plugin version floor ([#1588](https://github.com/engram-app/Engram/issues/1588)) ([71beaff](https://github.com/engram-app/Engram/commit/71beaff5da530e22a0b4266f576c744fabf360cf))
+
+
+### Bug Fixes
+
+* **auth:** identify Sentry users, stop relabelling Clerk failures ([#1580](https://github.com/engram-app/Engram/issues/1580)) ([d605fe6](https://github.com/engram-app/Engram/commit/d605fe6cdf4a8e7cfc92e16cb38e0c6e98801e7d))
+* **ci:** fan obsidian-update out over both runner hosts ([#1586](https://github.com/engram-app/Engram/issues/1586)) ([1ec5712](https://github.com/engram-app/Engram/commit/1ec571281547cf9801dd8796851bff5dd5faa37e))
+* **ci:** repair obsidian-update and plan-triage cron jobs ([#1584](https://github.com/engram-app/Engram/issues/1584)) ([0820ffc](https://github.com/engram-app/Engram/commit/0820ffcf0d4cd9aab308c9356e06c6fad3c6206d))
+* **crdt-channel:** hash user_id in logs + record token iat/exp on reject ([#1583](https://github.com/engram-app/Engram/issues/1583)) ([b1f2bc9](https://github.com/engram-app/Engram/commit/b1f2bc95f5f3ba145c74fbf9ba4c642248314936))
+* **e2e:** pick the Obsidian app window, not CDP target 0 ([#1590](https://github.com/engram-app/Engram/issues/1590)) ([f9f318a](https://github.com/engram-app/Engram/commit/f9f318ae7b8dc02dd1be41eb804a76914f8233c8))
+* **search:** cap chunk size so oversized notes stop poisoning embeds ([#1591](https://github.com/engram-app/Engram/issues/1591)) ([fbd48f3](https://github.com/engram-app/Engram/commit/fbd48f32bd16adf1f931f7cf5502800fa30c939b))
+* **sync:** drop dead vault_device_cursors table ([#1582](https://github.com/engram-app/Engram/issues/1582)) ([8de1d49](https://github.com/engram-app/Engram/commit/8de1d49ba0bb40684c9b036f73b8388f07cb1247))
+
+
+### Performance Improvements
+
+* **search:** embed only the chunks that changed ([#1595](https://github.com/engram-app/Engram/issues/1595)) ([851531a](https://github.com/engram-app/Engram/commit/851531aa0fa01e3422724a941a0e52bb3c925ffa)), closes [#1592](https://github.com/engram-app/Engram/issues/1592)
+
 ## [0.25.1](https://github.com/engram-app/Engram/compare/0.25.0...0.25.1) (2026-09-06)
 
 
