@@ -467,15 +467,31 @@ defmodule Engram.Indexing do
   # 143,526 tokens is 1.39 bytes/token, well under the assumed floor of 2.
   #
   # So do not guess the density. A token never spans less than one byte, so a
-  # batch bounded at 120,000 BYTES is bounded at 120,000 tokens for any content
-  # and any tokenizer — no assumption left to be wrong a third time.
+  # byte ceiling bounds the token sum for any content and any tokenizer.
   #
-  # This costs requests, not money: Voyage bills tokens, and ordinary English
-  # (~4 bytes/token) now packs ~30K tokens per request instead of filling the
-  # allowance. These are background Oban jobs, so the extra round trips are
-  # cheaper than another poison loop.
+  # 118KB rather than a flush 120KB because `tokens <= bytes` covers tokens
+  # DERIVED from content, not ones the tokenizer INSERTS: BERT-family models add
+  # ~2 per input ([CLS]/[SEP]), which at 128 inputs is 120,256 — over the line
+  # by a hair that only opens at 1.0 bytes/token. Prod's worst measured is 1.39,
+  # so this is margin against a case we have never seen rather than one we have.
+  # It costs nothing to be actually correct instead of nearly correct.
+  #
+  # The ceiling only binds because `Markdown.enforce_size_cap/1` bounds
+  # `context_text` — text AND prefix. Do not weaken that to a `text`-only cap:
+  # `batch_texts/1` lets a single over-budget input through alone, so one
+  # unbounded `context_text` bypasses this ceiling entirely.
+  #
+  # Cost is requests, not money — Voyage bills tokens. But they are not free:
+  # the byte cap now closes a batch whenever the average chunk exceeds ~937
+  # bytes (120,000/128), which is ordinary prose, not just the base64 case
+  # above; under 200KB that threshold was ~1,562. Prod runs `VOYAGE_RPM=1600`
+  # through the client-side throttle in `Embedders.Voyage.throttle_check/1`,
+  # which synthesizes a 429 that `EmbedNote` answers with a 60s snooze
+  # (`EMBED_429_SNOOZE_SECONDS`). So a bulk import trades wall-clock for
+  # correctness here. That is the right trade against a permanent poison loop,
+  # and the RPM is the knob if it ever bites.
   @embed_batch_size 128
-  @embed_batch_bytes 120_000
+  @embed_batch_bytes 118_000
 
   # `false` yields a nil vector per chunk. Kept as an explicit list (not a bare
   # nil) so build_prepared/8 can zip chunks with vectors either way.
@@ -501,9 +517,16 @@ defmodule Engram.Indexing do
   end
 
   # Close a batch on whichever ceiling comes first, count or bytes. A single
-  # text wider than the byte budget still goes out alone rather than looping:
-  # the chunker caps it long before here, and dropping it would silently
-  # unindex the content.
+  # text wider than the byte budget still goes out alone rather than looping,
+  # because dropping it would silently unindex the content.
+  #
+  # That escape hatch is a REAL hole, not a formality, and the only thing
+  # closing it is `Markdown.enforce_size_cap/1` bounding `context_text` to
+  # ~2.5KB. An earlier version of this comment claimed "the chunker caps it long
+  # before here" while the chunker capped only `text` — so a 200KB heading
+  # prefix rode straight past this ceiling, one oversized batch per chunk. If
+  # that cap ever loosens, this line stops being a safety valve and becomes the
+  # bypass.
   defp batch_texts(texts) do
     Enum.chunk_while(
       texts,
