@@ -630,6 +630,17 @@ export function folderNotesByIdQueryOptions(
 				: tree.notes.filter((n) => folderOf(n.path) === path).map(treeNoteToSummary);
 		},
 		staleTime: FOLDER_NOTES_STALE_MS,
+		// The sidebar tree's loader reads this cache with `getQueryData` and fills
+		// it with `fetchQuery`; only the ROOT list ever gets a mounted observer. So
+		// every expanded SUBFOLDER's list is observerless, and the default 5-minute
+		// gcTime evicted it out from under the tree: the `removed` cache event
+		// rebuilds the tree, the loader misses, and the folder's notes vanish from
+		// the sidebar until a fresh /vault/tree round trip lands (seconds, longer
+		// when `fetchVaultTreeFresh` retries against a live sync channel).
+		// Immortal is right here: the rows are a derivation of the one vault tree
+		// we already keep resident, they are keyed by vault, and the cache is
+		// cleared wholesale on a user change (useClearQueryCacheOnUserChange).
+		gcTime: Number.POSITIVE_INFINITY,
 	};
 }
 
