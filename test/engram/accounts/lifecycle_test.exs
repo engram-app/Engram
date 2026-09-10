@@ -99,6 +99,46 @@ defmodule Engram.Accounts.LifecycleTest do
       assert String.length(hmac) == 64
     end
 
+    test "clears chunk reuse markers, so a restored account cannot reuse deleted points" do
+      # This path drops the user's Qdrant points and deliberately KEEPS their
+      # chunk rows for the later hard-delete sweep. A surviving `context_hmac`
+      # would let a re-index reuse point ids that are no longer in Qdrant —
+      # rows naming nothing, which self-heals through nothing and reads as
+      # silently missing content rather than as an error. See #1592.
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      note = insert(:note, user: user, vault: vault)
+
+      chunk =
+        Repo.insert!(
+          %Engram.Notes.Chunk{
+            note_id: note.id,
+            user_id: user.id,
+            vault_id: vault.id,
+            position: 0,
+            heading_path: "Title",
+            char_start: 0,
+            char_end: 10,
+            token_count: 3,
+            qdrant_point_id: Ecto.UUID.generate(),
+            context_hmac: String.duplicate("a", 64),
+            created_at: DateTime.utc_now(:second)
+          },
+          skip_tenant_check: true
+        )
+
+      expect(Engram.Email.ProviderMock, :send, fn _to, _subject, _html, _opts -> :ok end)
+
+      assert :ok = Lifecycle.soft_delete(user, :user)
+
+      reloaded = Repo.get!(Engram.Notes.Chunk, chunk.id, skip_tenant_check: true)
+      assert is_nil(reloaded.context_hmac)
+
+      # The row itself must SURVIVE — the hard-delete sweep is what collects it,
+      # and deleting it here would be a different (worse) change.
+      assert reloaded.qdrant_point_id == chunk.qdrant_point_id
+    end
+
     test "telemetry carries the passed-in reason atom" do
       user = insert(:user)
 

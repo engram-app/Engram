@@ -219,17 +219,24 @@ defmodule Engram.Workers.OrphanSweep do
         0
 
       true ->
-        # Second look after a grace window. The window exists for ONE reason:
-        # `Indexing.commit_index/1` inserts chunk rows and upserts points in the
-        # same breath, and a tenant-scoped caller wraps that in
+        # Second look after a grace window, for two reasons.
+        #
+        # One: `Indexing.commit_index/1` inserts chunk rows and upserts points
+        # in the same breath, and a tenant-scoped caller wraps that in
         # `Repo.with_tenant/2`, which opens a transaction. Inside it the rows
         # are invisible to this worker's connection while the points are
         # already globally visible — so a page scrolled mid-write yields
         # candidates whose rows land moments later.
         #
-        # It is NOT protection against a re-index reusing point ids: re-index
-        # mints a fresh uuid per chunk, so a candidate id can never come back
-        # that way. Do not delete this as ceremony.
+        # Two (#1592): a re-index no longer mints a fresh uuid per chunk. A
+        # chunk whose text did not change KEEPS its point id, so a candidate id
+        # genuinely can come back — `commit_index/1` deletes the note's rows and
+        # re-inserts them naming the same points. That rewrite is wrapped in one
+        # transaction precisely so this pass never sees the gap, but the grace
+        # re-check is the backstop if it ever does.
+        #
+        # Do not delete this as ceremony. It now guards live data, not a race
+        # that was already impossible.
         grace()
 
         confirmed = MapSet.difference(candidates, chunk_point_ids(MapSet.to_list(candidates)))

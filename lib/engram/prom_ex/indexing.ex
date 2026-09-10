@@ -25,6 +25,11 @@ defmodule Engram.PromEx.Indexing do
     * `engram_prom_ex_indexing_link_rewrite_failures_total` — counter of
       per-source-note link-rewrite failures from `RewriteNoteLinks`
       (rename propagation, #648/#1231), tagged by `:reason`.
+    * `engram_prom_ex_indexing_stale_points_leaked_total` — Qdrant points a
+      re-index failed to delete after its chunk rows stopped naming them
+      (#1592). Each one is deleted content that stays searchable until
+      `OrphanSweep`'s weekly point pass reaps it, so a sustained non-zero rate
+      is a correctness signal, not a performance one. Expected flat zero.
 
   Cardinality contract: only `:outcome`/`:reason` (closed enums). NEVER add
   note_id, user_id, or vault_id.
@@ -34,6 +39,7 @@ defmodule Engram.PromEx.Indexing do
 
   @repath_stop_event [:engram, :indexing, :repath, :stop]
   @link_rewrite_failed_event [:engram, :links, :rewrite, :failed]
+  @stale_points_leaked_event [:engram, :indexing, :stale_points_leaked]
 
   @impl true
   def event_metrics(opts) do
@@ -65,6 +71,15 @@ defmodule Engram.PromEx.Indexing do
               ":reason is a closed set — known pipeline error atoms plus " <>
               ":exception/:other buckets (RewriteNoteLinks.telemetry_failure_reason/1).",
           tags: [:reason]
+        ),
+        sum(
+          metric_prefix ++ [:stale_points_leaked, :total],
+          event_name: @stale_points_leaked_event,
+          measurement: :count,
+          description:
+            "Qdrant points a re-index could not delete once its chunk rows stopped " <>
+              "naming them (#1592) — deleted content still searchable until OrphanSweep " <>
+              "reaps it. Untagged by design; per-note detail is in the log line."
         )
       ]
     )

@@ -10,6 +10,12 @@ defmodule Engram.Notes.Chunk do
     field :char_end, :integer
     field :token_count, :integer
     field :qdrant_point_id, Ecto.UUID
+    # HMAC of the chunk's `context_text` — the exact string handed to the
+    # embedder. Equal hmac means the dense vector, the sparse vector and all
+    # three encrypted payload fields are reusable as-is (#1592). Nil on rows
+    # written before the column existed, and after a DEK rotation invalidates
+    # the key; both read as "changed".
+    field :context_hmac, :string
 
     belongs_to :note, Engram.Notes.Note
     belongs_to :user, Engram.Accounts.User
@@ -27,6 +33,7 @@ defmodule Engram.Notes.Chunk do
       :char_end,
       :token_count,
       :qdrant_point_id,
+      :context_hmac,
       :note_id,
       :user_id,
       :vault_id
