@@ -474,6 +474,8 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 **Indexing & Search**
 - Oban indexing pipeline — dedup/debounce, retry, re-indexing → `docs/context/async-indexing-pipeline.md`
 - Chunking priorities, rejected strategies → `docs/context/chunking-retrieval-strategy.md`
+- An edit re-embeds far more chunks than it changed, or you are about to change how `split_text/2` packs chunks (boundaries cascade to the end of the heading section; paragraph-granularity looks like a free fix and is not) → `docs/context/chunk-boundary-stability.md`
+- Measuring chunk reuse (repeated synthetic paragraphs + `MapSet` gives a wrong answer — match with multiplicity) → `docs/context/chunk-boundary-stability.md`
 - Lingua NIF memory — `low_accuracy_mode` dial, the #891 OOM crash-loop → `docs/context/lingua-language-detection-memory.md`
 
 **Billing & Pricing**
