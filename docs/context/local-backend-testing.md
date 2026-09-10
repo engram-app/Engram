@@ -19,7 +19,64 @@ Runs from the main checkout OR any worktree (it resolves its own repo dir).
 
 ## What it needs
 
-- **Elixir/OTP locally** — `elixir --version` (1.19 / OTP 26 works; project targets 1.17+).
+- **Elixir/OTP locally** — pinned by `.tool-versions` to `erlang 27.3.4.14` +
+  `elixir 1.17.3-otp-27`, the exact pair `Dockerfile` / `ci/compose*.yml` /
+  `verify.yml` build with. Install with `mise install` from the repo root; the
+  Fedora system packages (elixir 1.19 / OTP 26) are NOT sufficient — some deps
+  are OTP 27-only, so an OTP 26 compile fails on code CI builds fine
+  (`cowlib` 2.20.0 uses `?=` maybe-expressions: `syntax error before: '{'`).
+
+  mise builds OTP from source via kerl, which needs Fedora build deps first:
+
+  ```bash
+  sudo dnf install -y ncurses-devel openssl-devel autoconf perl gcc gcc-c++ make
+  mise install
+  ```
+
+  **No local OTP 27 and don't want to build one?** Run any gate in the pinned
+  builder image instead — same toolchain, nothing installed on the host:
+
+  ```bash
+  docker run --rm --network host -v "$PWD":/app -w /app \
+    -v /tmp/engram-bld:/bld -e MIX_BUILD_PATH=/bld/test -e MIX_ENV=test \
+    -e HEX_HOME=/tmp/hex -e MIX_HOME=/tmp/mixhome \
+    -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+    hexpm/elixir:1.17.3-erlang-27.3.4.14-debian-bookworm-20260623-slim \
+    bash -c 'apt-get update -qq && apt-get install -y -qq build-essential git &&
+             mix local.hex --force && mix local.rebar --force &&
+             mix deps.get && mix test
+             rc=$?; chown -R "$HOST_UID:$HOST_GID" /app; exit $rc'
+  ```
+
+  Three things bite here.
+
+  **No C toolchain.** The bare `hexpm/elixir` image ships none, so NIF deps
+  (`bcrypt_elixir`, `y_ex`) die on `"make" not found` until you
+  `apt-get install build-essential`. `verify.yml` carries the same note.
+
+  **`MIX_BUILD_PATH` must point outside the repo**, or the container's artifacts
+  clobber your host `_build`.
+
+  **The container runs as root and `/app` is your working tree.** Anything Mix
+  writes back into the repo — `deps/`, `tmp/`, `priv/plts/` — lands root-owned.
+  All of it is gitignored so nothing shows in `git status`, and you will not
+  notice until:
+
+  ```
+  $ git worktree remove .worktrees/foo --force
+  error: failed to delete '.../.worktrees/foo': Permission denied
+  ```
+
+  …at which point the only way out is `sudo rm -rf`. Hence the trailing
+  `chown -R` above, which must run **after** the gate and preserve its exit code
+  — a bare `&& chown` swallows the failure you were testing for.
+
+  `--network host` is what lets it reach `backend-postgres-1`.
+
+  > The main checkout is safe even though the post-checkout hook hardlinks
+  > `deps/` into every worktree: `mix deps.get` replaces files rather than
+  > writing through the shared inode, so only the worktree's copies flip owner.
+  > Verified — `find deps ! -user "$(id -un)"` in the main checkout returned 0.
 - **Postgres on `localhost:5432`, creds `engram/engram`** — these are the
   defaults baked into `config/test.exs` (used only when `DATABASE_URL` is
   unset). The `backend-postgres-1` docker container already serves this; start
