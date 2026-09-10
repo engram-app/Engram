@@ -84,6 +84,89 @@ defmodule Engram.Auth.TokenResolverTest do
     assert {:error, _reason} = TokenResolver.resolve(token)
   end
 
+  # ---- Rejection reason fidelity ----
+  #
+  # A Clerk failure that is NOT a signature failure used to fall through the
+  # `{:error, _}` catch-all into the internal HS256 verifier, which of course
+  # also failed — and ITS error is what got logged. Every expired/wrong-azp
+  # Clerk token was therefore reported as `signature_error`, which sent a prod
+  # investigation of 6753 rejections at the wrong root cause entirely.
+  #
+  # Both cases below can only be reached AFTER the RS256 signature verified, so
+  # the token is provably a genuine Clerk token and must never be retried as an
+  # internal JWT.
+
+  @tag capture_log: true
+  test "an expired Clerk JWT reports the expired claim, not a signature error" do
+    claims =
+      Engram.ClerkHelpers.clerk_claims("clerk_exp_user", exp: :os.system_time(:second) - 60)
+
+    token = Engram.ClerkHelpers.sign_clerk_jwt(claims)
+
+    assert {:error, reason} = TokenResolver.resolve(token)
+    assert Engram.Auth.rejection_label(reason) == "claim_invalid:exp"
+  end
+
+  @tag capture_log: true
+  test "a Clerk JWT from an unauthorized party reports invalid_azp" do
+    prev = Application.get_env(:engram, :clerk_authorized_parties)
+    Application.put_env(:engram, :clerk_authorized_parties, ["https://app.engram.page"])
+
+    on_exit(fn ->
+      if prev,
+        do: Application.put_env(:engram, :clerk_authorized_parties, prev),
+        else: Application.delete_env(:engram, :clerk_authorized_parties)
+    end)
+
+    claims = Engram.ClerkHelpers.clerk_claims("clerk_azp_user", azp: "https://evil.example")
+    token = Engram.ClerkHelpers.sign_clerk_jwt(claims)
+
+    assert {:error, reason} = TokenResolver.resolve(token)
+    assert Engram.Auth.rejection_label(reason) == "invalid_azp"
+  end
+
+  # The contract that actually matters: a REAL internal JWT still resolves under
+  # the Clerk provider. It carries no `kid`, so JokenJwks halts on
+  # `:no_kid_in_token_header` — one of the two atoms `conclusive?/1` lets fall
+  # through — and the internal HS256 verifier picks it up.
+  test "a device-flow internal JWT still resolves under the Clerk provider" do
+    user = insert(:user)
+    assert {:ok, resolved, :internal_jwt} = TokenResolver.resolve(Accounts.generate_jwt(user))
+    assert resolved.id == user.id
+  end
+
+  # A string that is not a JWT at all reports `token_malformed`.
+  #
+  # This assertion previously demanded `signature_error`, and that was the bug
+  # in miniature: the garbage string was handed to the internal HS256 verifier,
+  # failed there, and wore THAT verifier's label. `token_malformed` is what
+  # actually went wrong. Nothing about auth changed — a malformed string cannot
+  # be a valid internal JWT either, and the test above pins the path that can.
+  @tag capture_log: true
+  test "a string that is not a JWT reports token_malformed, not a signature failure" do
+    assert {:error, reason} = TokenResolver.resolve("not.a.valid.jwt")
+    assert Engram.Auth.rejection_label(reason) == "token_malformed"
+  end
+
+  # A Clerk signing-key ROTATION is the scenario the original 6753-line
+  # investigation was misdirected toward, and it was the one case the first
+  # version of `conclusive?/1` still could not see. JokenJwks returns
+  # `:kid_does_not_match` when the token's kid is absent from the JWKS.
+  #
+  # Safe to treat as conclusive because `JokenJwks.before_verify/2` extracts the
+  # kid BEFORE looking up a signer: a token with no kid at all halts earlier
+  # with `:no_kid_in_token_header`. Our internal HS256 JWTs carry no kid, so
+  # they can never reach this branch — which is what the fall-through test
+  # below pins down.
+  @tag capture_log: true
+  test "a Clerk JWT signed with an unknown kid reports the kid mismatch" do
+    claims = Engram.ClerkHelpers.clerk_claims("clerk_rotated_key_user")
+    token = Engram.ClerkHelpers.sign_clerk_jwt_with_kid(claims, "rotated-key-99")
+
+    assert {:error, reason} = TokenResolver.resolve(token)
+    assert Engram.Auth.rejection_label(reason) == "kid_does_not_match"
+  end
+
   # ---- Local JWT (provider: local) ----
 
   test "resolves a valid local JWT when provider is local" do

@@ -56,3 +56,72 @@ describe("Sentry.init wiring", () => {
 		expect(sentry.sentryReady).toBeNull();
 	});
 });
+
+// The SPA's global handlers catch rejections thrown by the user's browser
+// EXTENSIONS, not just our own code. `runtime.sendMessage` is the WebExtension
+// API — we ship no extension, so any frame of it is someone else's bug landing
+// in our issue stream (ENGRAM-FRONTEND-2, iOS launch day).
+describe("inbound noise filtering", () => {
+	it("hands init an ignoreErrors pattern that matches extension noise", async () => {
+		const init = vi.fn();
+		vi.doMock("@sentry/react", () => ({ init, captureException: vi.fn() }));
+		vi.stubEnv("VITE_SENTRY_DSN", "https://key@example.ingest.sentry.io/1");
+		vi.resetModules();
+
+		const sentry = await import("./sentry");
+		await sentry.sentryReady;
+
+		const options = init.mock.calls[0]?.[0] as { ignoreErrors?: (string | RegExp)[] } | undefined;
+		const ignoreErrors = options?.ignoreErrors;
+		expect(ignoreErrors).toBeDefined();
+		const matches = (msg: string) =>
+			(ignoreErrors ?? []).some((p) => (typeof p === "string" ? msg.includes(p) : p.test(msg)));
+
+		expect(matches("Invalid call to runtime.sendMessage(). Tab not found.")).toBe(true);
+		// Must not swallow our own errors.
+		expect(matches("Cannot read properties of undefined (reading 'notes')")).toBe(false);
+	});
+});
+
+// Sentry events were anonymous (`userCount: 0` on every issue) because the SPA
+// identified the user to PostHog and never to Sentry. Without this you cannot
+// tell one looping device from an outage across every user.
+describe("user identity", () => {
+	it("binds and clears the Sentry user by id", async () => {
+		const setUser = vi.fn();
+		vi.doMock("@sentry/react", () => ({ init: vi.fn(), captureException: vi.fn(), setUser }));
+		vi.stubEnv("VITE_SENTRY_DSN", "https://key@example.ingest.sentry.io/1");
+		vi.resetModules();
+
+		const sentry = await import("./sentry");
+		await sentry.setSentryUser("user_123");
+		expect(setUser).toHaveBeenCalledWith({ id: "user_123" });
+
+		await sentry.setSentryUser(null);
+		expect(setUser).toHaveBeenLastCalledWith(null);
+	});
+
+	// sendDefaultPii is false and every URL/header/breadcrumb in this module is
+	// scrubbed. The id is a Clerk opaque id and is enough to count affected
+	// users; email would be a NEW pii surface that posture deliberately avoids.
+	it("sends no field other than id", async () => {
+		const setUser = vi.fn();
+		vi.doMock("@sentry/react", () => ({ init: vi.fn(), captureException: vi.fn(), setUser }));
+		vi.stubEnv("VITE_SENTRY_DSN", "https://key@example.ingest.sentry.io/1");
+		vi.resetModules();
+
+		const sentry = await import("./sentry");
+		await sentry.setSentryUser("user_123");
+		expect(Object.keys(setUser.mock.calls[0]?.[0] as object)).toEqual(["id"]);
+	});
+
+	// Self-host has no DSN, so sentryReady is null and awaiting it yields null.
+	// This must not throw — it runs on every sign-in.
+	it("no-ops without a DSN", async () => {
+		vi.stubEnv("VITE_SENTRY_DSN", "");
+		vi.resetModules();
+
+		const sentry = await import("./sentry");
+		await expect(sentry.setSentryUser("user_123")).resolves.toBeUndefined();
+	});
+});

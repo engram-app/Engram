@@ -27,6 +27,22 @@ defmodule Engram.ClerkHelpers do
     Jason.encode!(%{"keys" => keys})
   end
 
+  @doc """
+  Signs with the test key but stamps an ARBITRARY `kid` in the header.
+
+  Simulates a provider signing-key rotation: the token is well-formed RS256
+  from the right issuer, but its kid is absent from the cached JWKS.
+  """
+  def sign_clerk_jwt_with_kid(claims, kid) do
+    jws = %{"alg" => "RS256", "kid" => kid}
+
+    {_alg, token} =
+      JOSE.JWK.sign(Jason.encode!(claims), jws, @jwk)
+      |> JOSE.JWS.compact()
+
+    token
+  end
+
   @doc "Signs a JWT with the test RSA private key and returns the compact token string."
   def sign_clerk_jwt(claims) do
     jws = %{"alg" => "RS256", "kid" => @kid}

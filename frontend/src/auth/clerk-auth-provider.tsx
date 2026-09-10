@@ -1,6 +1,5 @@
 import { ClerkProvider, useAuth, useClerk } from "@clerk/react";
 import { dark } from "@clerk/themes";
-import posthog from "posthog-js";
 import { useCallback, useEffect, useMemo } from "react";
 import { setTokenGetter } from "../api/client";
 import { queryClient } from "../api/query-client";
@@ -11,6 +10,7 @@ import { useTheme } from "../theme/theme-provider";
 import { type AuthAdapter, AuthContext } from "./auth-context";
 import { rememberSignupUser } from "./signup-rejection";
 import { useClearQueryCacheOnUserChange } from "./use-clear-query-cache-on-user-change";
+import { useIdentifyUserOnAuthChange } from "./use-identify-user-on-auth-change";
 import { useWipeCrdtOnUserChange } from "./use-wipe-crdt-on-user-change";
 
 // Map Clerk onto Engram's CSS design tokens. The Clerk React components render
@@ -60,21 +60,12 @@ function ClerkAdapterInner({ children }: { children: React.ReactNode }) {
 	const email = clerk.user?.primaryEmailAddress?.emailAddress;
 	const imageUrl = clerk.user?.imageUrl;
 
-	// PostHog identify on auth resolved, reset on sign-out. Firing
-	// `identify` is what binds the anonymous device's prior events to
-	// the real user — missing this step is the single most-common
-	// PostHog integration bug per [[project_observability_stack_plan]].
-	// No-op when PostHog isn't initialized (VITE_POSTHOG_KEY unset).
-	useEffect(() => {
-		if (!isLoaded) {
-			return;
-		}
-		if (isSignedIn && clerkUserId) {
-			posthog.identify(clerkUserId, email ? { email } : undefined);
-		} else if (!isSignedIn) {
-			posthog.reset();
-		}
-	}, [isLoaded, isSignedIn, clerkUserId, email]);
+	useIdentifyUserOnAuthChange({
+		isLoaded,
+		isSignedIn: isSignedIn ?? false,
+		id: clerkUserId,
+		email,
+	});
 	const adapter: AuthAdapter = useMemo(
 		() => ({
 			isLoaded,
