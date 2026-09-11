@@ -1,4 +1,4 @@
-# Frontend file-tree: the two caches, the `select` seam, and the virtualizer
+# Frontend file-tree: the `select` seam, the virtualizer, and the two caches it used to have
 
 Three traps in the SPA's file tree that each produced a user-visible bug during
 the 2026-07-26 tree overhaul (#1121). They look unrelated; two of them are the
@@ -6,7 +6,18 @@ same underlying shape. Written down because none of them fail loudly — every
 one degrades into a plausible-looking "not cached yet" or "correct heights" and
 stays silent.
 
-## 1. There are TWO note-list caches, and the tree renders the second
+## 1. (Historical) There were TWO note-list caches, and the tree rendered the second
+
+> **Superseded by #1601 (2026-09-11).** There is now ONE cache for everything
+> the sidebar shows: `['vault-tree', vaultId]`. `useFolders`, `useAttachments`,
+> `useVaultNotes` and `useSyncManifest` are `select` views of it, the tree
+> loader filters that one note array per folder, and every optimistic mutation
+> patches that one entry. `['folder-notes-by-id']` is gone; only the
+> dashboard's path-keyed `['folderNotes']` survives, on purpose (it renders
+> encrypted tags the tree payload doesn't carry). See
+> `folder-tree-optimistic-rebuild.md`. The section below is kept because the
+> bug shape — "patched one copy, rendered another" — is what drove the
+> collapse, and recurs anywhere data is copied into a second cache.
 
 | Key | Shape | Who reads it |
 |---|---|---|
@@ -32,16 +43,16 @@ if two mutations overlap.
 
 ## 2. `getQueryData` returns PRE-`select` data
 
-`useFolders()` fetches `{ folders: Array<Folder & { id: string | null }> }` and
-applies `select: selectFolders`, which is what maps a **derived** folder's
-`id: null` to a stable `syn:<path>` id.
+`useFolders()` reads the vault tree and applies `select: selectFolders`, which
+is what maps a **derived** folder's `id: null` to a stable `syn:<path>` id.
 
 `select` transforms what the *observer* sees. It does **not** transform the
-cache. So any helper reading `qc.getQueryData(['folders', vaultId])` sees the
-raw payload, nulls included.
+cache. So any helper reading `qc.getQueryData(['vault-tree', vaultId])` sees the
+raw payload, nulls included. (Before #1601 the key was `['folders', vaultId]`;
+the trap is identical.)
 
-`folderIdForPath` did exactly that and returned the raw `id` — `null` for most
-real folders. Every caller reads null as "unknown folder, skip the optimistic
+`folderIdForPath` (since deleted) did exactly that and returned the raw `id` —
+`null` for most real folders. Every caller reads null as "unknown folder, skip the optimistic
 patch", so creating a note in a folder silently did nothing until reload. The
 fix is to apply the same null → `syn:<path>` mapping `selectFolders` does.
 
@@ -51,8 +62,11 @@ fails silently precisely because "no id yet" is a legitimate state.
 
 ### Related: "derived" folders are most folders
 
-`/api/folders` returns any folder that holds no note **directly** with a null
-id. In a vault whose top level is mostly containers, that's nearly all of them.
+The wire gives a folder a null id when it has **no marker row** of its own —
+it is listed only because notes are filed directly in it. A folder with a
+marker carries the marker's id (and is listed even when empty); a folder with
+neither — a pure container of sub-folders — is not on the wire at all and is
+synthesized client-side. Most real folders are the null-id kind.
 Code that treats `syn:` ids as a rare edge case will mis-handle the common path
 — this is what made the folder context menu fall through to the browser's.
 
