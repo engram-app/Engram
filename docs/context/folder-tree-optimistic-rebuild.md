@@ -170,8 +170,16 @@ below) and **`gcTime` will delete it**.
 the tree in one pass (`applyNoteEvents` in `vault-tree-patch.ts`) instead of
 re-downloading the vault. It re-fetches instead only when a patch can't be
 trusted: an attachment event (`kind: "attachment"`, no id), a folder-marker
-delete (no id), no tree cached, or a tree fetch already in flight (its older
-response would land on top of the patch). Deletes are path-guarded because a
+delete (no id), no tree cached, a tree fetch already in flight (its older
+response would land on top of the patch), or **any note moving to a different
+folder**. That last one is the non-obvious one: `rename_folder` broadcasts one
+upsert+delete pair per note and NOTHING about the folder marker, so a patch
+moves the notes but leaves the old marker listed (markers survive empty). A
+plain move out of a marker folder looks identical on the wire and there the
+marker should stay — the client can't distinguish them, so it asks the server.
+Caught by e2e `tree-ops-sync.spec.ts` "rename folder propagates to a second
+tab". If the backend ever emits a `folders.batch` rename event, this fallback
+can narrow to just that event. Deletes are path-guarded because a
 rename is `delete(old) + upsert(new)` with one id in no fixed order.
 
 Folder rows are re-derived from notes after every edit, matching the server:
