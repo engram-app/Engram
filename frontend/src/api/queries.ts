@@ -25,6 +25,10 @@ import { ApiError, api } from "./client";
 import { CrdtOpError } from "./crdt-ops";
 import {
 	baseOf,
+	// Path → parent folder, the same rule the backend uses when computing
+	// `folder` on a NoteSummary. One definition, shared with the tree patches
+	// so a path can't mean two things on the two sides of a mutation.
+	dirOf as folderOf,
 	isUnder,
 	joinPath,
 	moveFolders,
@@ -76,17 +80,13 @@ function fetchNoteById(id: string): Promise<Note> {
  */
 interface TreeContext {
 	tree: VaultTree | undefined;
+	// What the optimistic patch wrote. `onError` restores only if this is still
+	// what's in the cache — see `restoreTree`.
+	patched: VaultTree | undefined;
 }
 
 interface CreateNoteContext extends TreeContext {
 	id: string;
-}
-
-// Path → parent folder. `'a/b/c.md'` → `'a/b'`; `'a.md'` → `''`. Same
-// rule the backend uses when computing `folder` on a NoteSummary.
-function folderOf(path: string): string {
-	const slash = path.lastIndexOf("/");
-	return slash < 0 ? "" : path.slice(0, slash);
 }
 
 // 409/404/etc → human-grade toast copy. Centralised so all four
@@ -277,24 +277,48 @@ async function snapshotTree(
 	return qc.getQueryData<VaultTree>(["vault-tree", vaultId]);
 }
 
+// Returns what it wrote, so `restoreTree` can tell "still mine" from
+// "something else has landed since".
 function patchTree(
 	qc: QueryClient,
 	vaultId: string | null | undefined,
 	fn: (tree: VaultTree) => VaultTree,
-): void {
-	qc.setQueryData<VaultTree>(["vault-tree", vaultId], (tree) => (tree ? fn(tree) : tree));
+): VaultTree | undefined {
+	return qc.setQueryData<VaultTree>(["vault-tree", vaultId], (tree) => (tree ? fn(tree) : tree));
 }
 
-// Restore a snapshot verbatim. `undefined` means the tree wasn't cached when
-// the mutation started, so there is nothing to put back.
+/**
+ * Put a snapshot back, but ONLY if the tree is still exactly what this
+ * mutation left there.
+ *
+ * The identity check is the price of collapsing four caches into one. Before,
+ * two mutations touching different folders snapshotted different entries, so
+ * rolling back one could not undo the other. Now they share an object, and an
+ * unconditional restore would revert whatever landed in between — a second
+ * mutation's optimistic patch, or a refetch carrying newer server state.
+ *
+ * Skipping the restore is the safe branch, not a silent failure: every caller
+ * stales the tree in `onSettled`, so the refetch reconciles. Rolling back to a
+ * computed inverse instead would be worse; an inverse is wrong exactly when
+ * two mutations overlap, which is the case this guard exists for.
+ *
+ * `undefined` means the tree wasn't cached when the mutation started, so there
+ * is nothing to put back.
+ */
 function restoreTree(
 	qc: QueryClient,
 	vaultId: string | null | undefined,
 	snapshot: VaultTree | undefined,
+	patched: VaultTree | undefined,
 ): void {
-	if (snapshot !== undefined) {
-		qc.setQueryData<VaultTree>(["vault-tree", vaultId], snapshot);
+	if (snapshot === undefined) {
+		return;
 	}
+	const current = qc.getQueryData<VaultTree>(["vault-tree", vaultId]);
+	if (patched !== undefined && current !== patched) {
+		return;
+	}
+	qc.setQueryData<VaultTree>(["vault-tree", vaultId], snapshot);
 }
 
 // Types matching backend JSON responses
@@ -750,7 +774,7 @@ export function useCreateNote() {
 				return;
 			}
 			const now = new Date().toISOString();
-			patchTree(qc, vaultId, (t) =>
+			const patched = patchTree(qc, vaultId, (t) =>
 				upsertNote(t, {
 					// The id we're about to send, not a throwaway: the row is
 					// addressable the moment it appears, so clicking it before the ack
@@ -762,7 +786,7 @@ export function useCreateNote() {
 					updated_at: now,
 				}),
 			);
-			return { tree, id };
+			return { tree, patched, id };
 		},
 		onSuccess: ({ id, path }, vars) => {
 			// Settle the pending row onto the confirmed path before the refetch
@@ -795,7 +819,7 @@ export function useCreateNote() {
 			});
 		},
 		onError: (err, _vars, ctx) => {
-			restoreTree(qc, vaultId, ctx?.tree);
+			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
 			if (err instanceof CrdtOpError && err.reason === "notes_cap_reached") {
 				toast.error("You've hit your note limit — upgrade to add more.");
 			} else if (err instanceof CrdtOpError && err.reason === "disconnected") {
@@ -1662,7 +1686,7 @@ export function useRenameNote() {
 			await qc.cancelQueries({ queryKey: noteKey });
 			const prevNote = qc.getQueryData<Note>(noteKey);
 
-			patchTree(qc, vaultId, (t) => renameNotes(t, [{ id, newPath: new_path }]));
+			const patched = patchTree(qc, vaultId, (t) => renameNotes(t, [{ id, newPath: new_path }]));
 
 			// Re-path the note-body cache too, so an open editor's header flips the
 			// moment the user commits instead of lagging until the settle refetch.
@@ -1675,13 +1699,13 @@ export function useRenameNote() {
 					folder: folderOf(new_path),
 				});
 			}
-			return { tree, noteId: id, prevNote };
+			return { tree, patched, noteId: id, prevNote };
 		},
 		onError: (err, _vars, ctx) => {
 			if (!ctx) {
 				return;
 			}
-			restoreTree(qc, vaultId, ctx.tree);
+			restoreTree(qc, vaultId, ctx.tree, ctx.patched);
 			// Undo the optimistic re-path so a refused rename can't leave the
 			// header showing a name the server never accepted.
 			if (ctx.prevNote) {
@@ -1720,15 +1744,17 @@ export function useRenameFolder() {
 		// refetched on next expand.
 		onMutate: async ({ old_path, new_path }) => {
 			const tree = await snapshotTree(qc, vaultId);
-			patchTree(qc, vaultId, (t) => renameFolders(t, [{ oldPath: old_path, newPath: new_path }]));
+			const patched = patchTree(qc, vaultId, (t) =>
+				renameFolders(t, [{ oldPath: old_path, newPath: new_path }]),
+			);
 			// Deliberately NOT re-pathing descendants' `['note', vaultId, id]`
 			// entries: there is no rollback wired for them, so an optimistic flip
 			// would show an unconfirmed path if the rename fails. The settle
 			// refetch below moves them once the server confirms.
-			return { tree };
+			return { tree, patched };
 		},
 		onError: (err, _vars, ctx) => {
-			restoreTree(qc, vaultId, ctx?.tree);
+			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
 			renameErrorToast(err, "folder");
 		},
 		onSettled: () => {
@@ -1762,7 +1788,7 @@ export function useDeleteNote() {
 			await qc.cancelQueries({ queryKey: noteKey });
 			const prevNote = qc.getQueryData<Note>(noteKey);
 
-			patchTree(qc, vaultId, (t) => removeNotes(t, [id]));
+			const patched = patchTree(qc, vaultId, (t) => removeNotes(t, [id]));
 
 			// invalidateQueries, not removeQueries: removeQueries destroys the
 			// cached Query object outright, which orphans any CURRENTLY MOUNTED
@@ -1774,13 +1800,13 @@ export function useDeleteNote() {
 			// gets the 404 and NotePage's `error` branch renders correctly instead
 			// of a frozen, already-deleted note. See e2e "deleting the open note".
 			qc.invalidateQueries({ queryKey: noteKey });
-			return { tree, noteId: id, prevNote };
+			return { tree, patched, noteId: id, prevNote };
 		},
 		onError: (err, _vars, ctx) => {
 			if (!ctx) {
 				return;
 			}
-			restoreTree(qc, vaultId, ctx.tree);
+			restoreTree(qc, vaultId, ctx.tree, ctx.patched);
 			if (ctx.prevNote !== undefined) {
 				qc.setQueryData(["note", vaultId, ctx.noteId], ctx.prevNote);
 			}
@@ -1809,11 +1835,11 @@ export function useDeleteFolder() {
 			// attachments inside them, all go. Attachment-only folders included —
 			// they used to survive the optimistic patch and re-derive themselves
 			// from a stale attachments cache, undoing the delete on screen.
-			patchTree(qc, vaultId, (t) => removeFolders(t, [path]));
-			return { tree };
+			const patched = patchTree(qc, vaultId, (t) => removeFolders(t, [path]));
+			return { tree, patched };
 		},
 		onError: (err, _vars, ctx) => {
-			restoreTree(qc, vaultId, ctx?.tree);
+			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
 			deleteErrorToast(err, "folder");
 		},
 		onSettled: () => {
@@ -1859,7 +1885,7 @@ export function useDuplicateNote() {
 			// onSuccess swaps it for the server-assigned id.
 			const placeholderId = `optimistic-${randomUuid()}`;
 			const now = new Date().toISOString();
-			patchTree(qc, vaultId, (t) =>
+			const patched = patchTree(qc, vaultId, (t) =>
 				upsertNote(t, {
 					id: placeholderId,
 					path: new_path,
@@ -1868,7 +1894,7 @@ export function useDuplicateNote() {
 					updated_at: now,
 				}),
 			);
-			return { tree, placeholderId };
+			return { tree, patched, placeholderId };
 		},
 		onSuccess: (data, _vars, ctx) => {
 			if (!(ctx && data.id)) {
@@ -1888,7 +1914,7 @@ export function useDuplicateNote() {
 			);
 		},
 		onError: (err, _vars, ctx) => {
-			restoreTree(qc, vaultId, ctx?.tree);
+			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
 			const conflict =
 				(err instanceof ApiError && err.status === 409) ||
 				(err instanceof CrdtOpError && err.reason === "create_failed");
@@ -1938,7 +1964,7 @@ export function useBatchDeleteNotes() {
 		},
 		onMutate: async ({ ids }) => {
 			const tree = await snapshotTree(qc, vaultId);
-			patchTree(qc, vaultId, (t) => removeNotes(t, ids));
+			const patched = patchTree(qc, vaultId, (t) => removeNotes(t, ids));
 			// invalidateQueries, not removeQueries: removeQueries destroys the
 			// cached Query object outright, which orphans any CURRENTLY MOUNTED
 			// useNote(id) observer (e.g. NotePage on the note you just deleted) —
@@ -1947,10 +1973,10 @@ export function useBatchDeleteNotes() {
 			for (const id of ids) {
 				qc.invalidateQueries({ queryKey: ["note", vaultId, id] });
 			}
-			return { tree };
+			return { tree, patched };
 		},
 		onError: (_err, _vars, ctx) => {
-			restoreTree(qc, vaultId, ctx?.tree);
+			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
 			toast.error("Batch delete failed.");
 		},
 		onSettled: () => {
@@ -1995,15 +2021,15 @@ export function useBatchMoveNotes() {
 		// had a null id) no longer exist.
 		onMutate: async ({ ids, target_folder }) => {
 			const tree = await snapshotTree(qc, vaultId);
-			patchTree(qc, vaultId, (t) => moveNotes(t, ids, target_folder));
+			const patched = patchTree(qc, vaultId, (t) => moveNotes(t, ids, target_folder));
 			// Deliberately NOT re-pathing the moved notes' `['note', vaultId, id]`
 			// caches: no rollback is wired for them, so an optimistic flip would
 			// show an unconfirmed path if the move fails. The settle refetch
 			// re-paths them once the server confirms.
-			return { tree };
+			return { tree, patched };
 		},
 		onError: (_err, _vars, ctx) => {
-			restoreTree(qc, vaultId, ctx?.tree);
+			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
 			toast.error("Batch move failed.");
 		},
 		onSettled: () => {
@@ -2028,11 +2054,11 @@ export function useBatchDeleteFolders() {
 			// No descendant collection: `removeFolders` matches by path prefix, so
 			// the server's cascade and ours agree without walking a parent_id
 			// chain through rows whose ids are half null.
-			patchTree(qc, vaultId, (t) => removeFolders(t, folderPathsForIds(tree, ids)));
-			return { tree };
+			const patched = patchTree(qc, vaultId, (t) => removeFolders(t, folderPathsForIds(tree, ids)));
+			return { tree, patched };
 		},
 		onError: (_err, _vars, ctx) => {
-			restoreTree(qc, vaultId, ctx?.tree);
+			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
 			toast.error("Batch delete failed.");
 		},
 		onSettled: () => {
@@ -2068,13 +2094,14 @@ export function useBatchMoveFolders() {
 			// sits under one. Skip the optimistic patch and let the server reject
 			// (it has the authoritative check). Frontend silence beats lying.
 			if (sources.some((src) => isUnder(target_parent, src))) {
-				return { tree };
+				// Nothing patched, so nothing to roll back.
+				return { tree, patched: undefined };
 			}
-			patchTree(qc, vaultId, (t) => moveFolders(t, sources, target_parent));
-			return { tree };
+			const patched = patchTree(qc, vaultId, (t) => moveFolders(t, sources, target_parent));
+			return { tree, patched };
 		},
 		onError: (_err, _vars, ctx) => {
-			restoreTree(qc, vaultId, ctx?.tree);
+			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
 			toast.error("Batch move failed.");
 		},
 		onSettled: () => {

@@ -2,15 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { VaultTree } from "./queries";
 import {
 	isUnder,
-	moveAttachments,
 	moveFolders,
 	moveNotes,
-	removeAttachments,
 	removeFolders,
 	removeNotes,
 	renameFolders,
 	renameNotes,
-	upsertFolder,
 	upsertNote,
 } from "./vault-tree-patch";
 
@@ -147,27 +144,10 @@ describe("folders", () => {
 		expect(t.attachments).toEqual([]);
 	});
 
-	it("keeps the marker id when adding a folder, and is idempotent", () => {
-		const t = upsertFolder(TREE, "New", "m-new");
-		expect(t.folders.find((f) => f.name === "New")).toMatchObject({ id: "m-new", count: 0 });
-		expect(upsertFolder(t, "New", "m-new")).toBe(t);
-	});
-
 	it("moves a folder under a new parent, keeping its leaf name", () => {
 		const t = moveFolders(TREE, ["Archive/2023"], "Empty");
 		expect(paths(t)).toContain("Empty/2023/old.md");
 		expect(countOf(t, "Empty/2023")).toBe(1);
-	});
-});
-
-describe("attachments", () => {
-	it("moves and removes by path", () => {
-		expect(
-			moveAttachments(TREE, ["Archive/pic.png"], "Empty").attachments.map((a) => a.path),
-		).toContain("Empty/pic.png");
-		expect(removeAttachments(TREE, ["Archive/pic.png"]).attachments.map((a) => a.id)).toEqual([
-			"a2",
-		]);
 	});
 });
 

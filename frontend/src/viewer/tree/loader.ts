@@ -4,6 +4,7 @@ import {
 	type NoteSummary,
 	ROOT_FOLDER_ID,
 } from "../../api/queries";
+import { dirOf as folderOf } from "../../api/vault-tree-patch";
 import { noteName } from "../../lib/note-name";
 import type { TreeItem } from "./types";
 import { formatItemId, parseItemId, ROOT_ID } from "./types";
@@ -88,11 +89,6 @@ function noteChildItems(deps: LoaderDeps, folderId: string): LoaderItem[] {
 // the full path.
 function folderPathOf(deps: LoaderDeps, folderId: string): string | null {
 	return deps.folders.find((f) => f.id === folderId)?.name ?? null;
-}
-
-function folderOf(path: string): string {
-	const slash = path.lastIndexOf("/");
-	return slash < 0 ? "" : path.slice(0, slash);
 }
 
 function attachmentDir(path: string): string {

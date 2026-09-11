@@ -121,23 +121,6 @@ export function moveNotes(tree: VaultTree, ids: readonly string[], destDir: stri
 }
 
 /**
- * Add a folder row, or leave the tree alone if that path is already present.
- *
- * `id` is the marker id when the caller has one and `null` for a folder that
- * exists only because something is filed in it — the same `null` the wire
- * sends, which `selectFolders` maps to a stable `syn:<path>` id downstream.
- * `parent_id` is deliberately null: `synthesizeFolders` re-derives every
- * parent link from the path, so a value here would be ignored at best.
- */
-export function upsertFolder(tree: VaultTree, path: string, id: string | null = null): VaultTree {
-	if (path === "" || tree.folders.some((f) => f.name === path)) {
-		return tree;
-	}
-	const folders = [...tree.folders, { id, name: path, count: 0, parent_id: null }];
-	return rebuild(tree.notes, folders, tree.attachments);
-}
-
-/**
  * Delete folders and everything filed under them — descendant folder rows, the
  * notes inside, and the attachments inside.
  *
@@ -197,47 +180,6 @@ export function renameFolders(
 /** Move folders into `destDir`, keeping each folder's own leaf name. */
 export function moveFolders(tree: VaultTree, paths: readonly string[], destDir: string): VaultTree {
 	return renameFolders(
-		tree,
-		paths.map((oldPath) => ({ oldPath, newPath: joinPath(destDir, baseOf(oldPath)) })),
-	);
-}
-
-export function upsertAttachment(tree: VaultTree, att: VaultTreeAttachment): VaultTree {
-	const attachments = tree.attachments.some((a) => a.id === att.id)
-		? tree.attachments.map((a) => (a.id === att.id ? att : a))
-		: [...tree.attachments, att];
-	return rebuild(tree.notes, tree.folders, attachments);
-}
-
-/** Attachments are addressed by path, not id, at every call site we have. */
-export function removeAttachments(tree: VaultTree, paths: readonly string[]): VaultTree {
-	const drop = new Set(paths);
-	return rebuild(
-		tree.notes,
-		tree.folders,
-		tree.attachments.filter((a) => !drop.has(a.path)),
-	);
-}
-
-export function renameAttachments(
-	tree: VaultTree,
-	moves: ReadonlyArray<{ oldPath: string; newPath: string }>,
-): VaultTree {
-	const byPath = new Map(moves.map((m) => [m.oldPath, m.newPath]));
-	const attachments = tree.attachments.map((a) => {
-		const next = byPath.get(a.path);
-		return next === undefined || next === a.path ? a : { ...a, path: next };
-	});
-	return rebuild(tree.notes, tree.folders, attachments);
-}
-
-/** Move attachments into `destDir`, keeping each filename. */
-export function moveAttachments(
-	tree: VaultTree,
-	paths: readonly string[],
-	destDir: string,
-): VaultTree {
-	return renameAttachments(
 		tree,
 		paths.map((oldPath) => ({ oldPath, newPath: joinPath(destDir, baseOf(oldPath)) })),
 	);

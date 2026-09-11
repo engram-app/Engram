@@ -188,10 +188,9 @@ export function useEngramTree(deps: Deps) {
 	// When new data lands, the dataLoader returns new ids but HT keeps its
 	// cached item list, so force a rebuild. `inner` changes identity exactly
 	// when one of the loader's inputs did.
-	useEffect(() => {
-		treeRef.current?.rebuildTree();
-	}, []);
-	const lastInner = useRef(inner);
+	// `null`, not `inner`, so the first pass also rebuilds: HT builds its item
+	// list on mount, when the loader usually has nothing yet.
+	const lastInner = useRef<typeof inner | null>(null);
 	useEffect(() => {
 		if (lastInner.current === inner) {
 			return;
