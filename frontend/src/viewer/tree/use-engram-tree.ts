@@ -182,6 +182,13 @@ export function useEngramTree(deps: Deps) {
 	// when one of the loader's inputs did.
 	// `null`, not `inner`, so the first pass also rebuilds: HT builds its item
 	// list on mount, when the loader usually has nothing yet.
+	//
+	// CONTRACT: `folders`, `notes` and `attachments` must keep their reference
+	// until their content changes. They are react-query `select` views, which do
+	// exactly that, but a caller passing a fresh array per render (a `?? []`
+	// default, an unmemoized map, a test stub returning `[]`) turns this into an
+	// endless rebuild → re-render → rebuild loop that freezes the tab. Hoist
+	// empty defaults to module constants, as folder-tree.tsx does.
 	const lastInner = useRef<typeof inner | null>(null);
 	useEffect(() => {
 		if (lastInner.current === inner) {

@@ -648,7 +648,9 @@ describe("optimistic rename note", () => {
 		expect(notesById("syn:b").map((n) => n.path)).toContain("b/x.md");
 
 		const { folders } = readSeededTree();
-		expect(folders.find((f) => f.name === "a")?.count).toBe(0);
+		// `a` is DERIVED (no marker): with its only note gone the server stops
+		// listing it, and so does the tree, rather than showing an empty ghost.
+		expect(folders.find((f) => f.name === "a")).toBeUndefined();
 		expect(folders.find((f) => f.name === "b")?.count).toBe(1);
 
 		// Settle the promise so React Query unwinds cleanly.
@@ -855,10 +857,15 @@ describe("rename folder does NOT re-path cached child notes optimistically", () 
 	it("leaves cached [note, vaultId, *] under the old prefix untouched while in flight", async () => {
 		seedRawFolders({
 			folders: [
-				{ name: "src", count: 2 },
+				{ name: "src", count: 1 },
 				{ name: "src/sub", count: 1 },
 			],
 		});
+		seedTreeNotes([
+			{ id: "10", path: "src/a.md" },
+			{ id: "11", path: "src/sub/b.md" },
+			{ id: "99", path: "other/c.md" },
+		]);
 		seedNoteById("10", { id: "10", path: "src/a.md", folder: "src" });
 		seedNoteById("11", { id: "11", path: "src/sub/b.md", folder: "src/sub" });
 		seedNoteById("99", { id: "99", path: "other/c.md", folder: "other" });
@@ -963,6 +970,16 @@ function seedFolderNotesById(
 				updated_at: "",
 			})),
 		],
+	}));
+}
+
+// Notes at the given paths. A DERIVED folder (null id) is listed by the server
+// only because notes are filed in it, so a test that seeds one with a count
+// must seed the notes too — the tree re-derives folder rows from them.
+function seedTreeNotes(notes: Array<{ id: string; path: string }>) {
+	patchSeededTree((tree) => ({
+		...tree,
+		notes: [...tree.notes, ...notes.map((n) => ({ ...n, created_at: "", updated_at: "" }))],
 	}));
 }
 
@@ -1718,6 +1735,12 @@ describe("useBatchDeleteFolders", () => {
 				{ id: "9", parent_id: null, name: "other", count: 0 },
 			],
 		});
+		seedTreeNotes([
+			{ id: "s1", path: "top/sub/1.md" },
+			{ id: "s2", path: "top/sub/2.md" },
+			{ id: "s3", path: "top/sub/3.md" },
+			{ id: "k1", path: "other/keep/1.md" },
+		]);
 		let resolvePost!: (v: unknown) => void;
 		post.mockReturnValue(
 			new Promise((r) => {

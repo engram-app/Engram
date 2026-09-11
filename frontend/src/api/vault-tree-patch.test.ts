@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { VaultTree } from "./queries";
 import {
+	applyNoteEvents,
 	isUnder,
 	moveFolders,
 	moveNotes,
@@ -148,6 +149,77 @@ describe("folders", () => {
 		const t = moveFolders(TREE, ["Archive/2023"], "Empty");
 		expect(paths(t)).toContain("Empty/2023/old.md");
 		expect(countOf(t, "Empty/2023")).toBe(1);
+	});
+});
+
+describe("derived folder rows", () => {
+	it("adds a row for a folder that only exists because a note landed in it", () => {
+		const t = upsertNote(TREE, note("n9", "Brand/New/x.md"));
+		expect(t.folders.find((f) => f.name === "Brand/New")).toMatchObject({ id: null, count: 1 });
+	});
+
+	it("drops a DERIVED folder once its last note leaves, but keeps an empty MARKER", () => {
+		const t = moveNotes(TREE, ["n3"], "Empty");
+		// Archive/2023 has no marker: the server stops listing it at zero.
+		expect(t.folders.map((f) => f.name)).not.toContain("Archive/2023");
+		// Archive has a marker; it stays listed at zero like any marker folder.
+		const emptied = removeNotes(TREE, ["n1", "n2"]);
+		expect(emptied.folders.find((f) => f.name === "Archive")).toMatchObject({ count: 0 });
+	});
+
+	it("never gives the vault root a row", () => {
+		expect(upsertNote(TREE, note("n9", "root-level.md")).folders.map((f) => f.name)).not.toContain(
+			"",
+		);
+	});
+});
+
+describe("applyNoteEvents", () => {
+	it("returns the SAME tree for an echo of what it already shows", () => {
+		const echo = applyNoteEvents(TREE, [
+			{ kind: "upsert", id: "n1", path: "Archive/a.md", updated_at: "2026-01-01T00:00:00Z" },
+		]);
+		expect(echo).toBe(TREE);
+	});
+
+	// A rename is delete(old path) + upsert(new path) with one id, in no
+	// guaranteed order. Both orders must end with exactly one row, at the new path.
+	it("converges a rename whichever leg arrives first", () => {
+		const del = { kind: "delete", id: "n1", path: "Archive/a.md" } as const;
+		const up = { kind: "upsert", id: "n1", path: "Empty/a.md", updated_at: "u2" } as const;
+		for (const order of [
+			[del, up],
+			[up, del],
+		]) {
+			const rows = applyNoteEvents(TREE, order).notes.filter((n) => n.id === "n1");
+			expect(rows.map((n) => n.path)).toEqual(["Empty/a.md"]);
+		}
+	});
+
+	it("deletes only when the path still matches", () => {
+		const t = applyNoteEvents(TREE, [{ kind: "delete", id: "n1", path: "Archive/a.md" }]);
+		expect(t.notes.map((n) => n.id)).not.toContain("n1");
+		const stale = applyNoteEvents(TREE, [{ kind: "delete", id: "n1", path: "Old/a.md" }]);
+		expect(stale).toBe(TREE);
+	});
+
+	it("inserts a note it has never seen, with its folder", () => {
+		const t = applyNoteEvents(TREE, [
+			{ kind: "upsert", id: "n9", path: "Fresh/x.md", updated_at: "u9" },
+		]);
+		expect(t.notes.find((n) => n.id === "n9")).toMatchObject({
+			path: "Fresh/x.md",
+			created_at: "u9",
+		});
+		expect(t.folders.find((f) => f.name === "Fresh")).toMatchObject({ count: 1 });
+	});
+
+	it("settles an optimistic create when the server's echo arrives", () => {
+		const pendingTree = upsertNote(TREE, { ...note("n9", "Archive/new.md"), pending: true });
+		const t = applyNoteEvents(pendingTree, [
+			{ kind: "upsert", id: "n9", path: "Archive/new.md", updated_at: "2026-01-01T00:00:00Z" },
+		]);
+		expect(t.notes.find((n) => n.id === "n9")?.pending).toBeUndefined();
 	});
 });
 

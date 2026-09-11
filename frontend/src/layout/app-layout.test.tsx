@@ -20,13 +20,18 @@ const testConfig: EngramConfig = {
 
 vi.mock("../api/queries", async () => {
 	const actual = await vi.importActual<typeof import("../api/queries")>("../api/queries");
+	// ONE array, not `[]` per call. The real hook is a react-query `select`,
+	// which hands back the same reference until the data changes, and the
+	// sidebar tree rebuilds on reference change — a fresh array every render
+	// makes it rebuild, re-render and rebuild again, forever.
+	const noFolders: never[] = [];
 	return {
 		...actual,
 		useBillingStatus: () => ({ data: { subscription: { status: "active" } } }),
 		useSearch: () => ({ data: [], isLoading: false, error: null }),
-		// AttachmentUploadProvider reads useFolders for the upload dialog's folder
-		// list; stub it so this layout test makes no real /folders fetch.
-		useFolders: () => ({ data: [] }),
+		// AttachmentUploadProvider and the sidebar read useFolders; stub it so this
+		// layout test makes no real fetch.
+		useFolders: () => ({ data: noFolders }),
 	};
 });
 vi.mock("../api/use-channel", () => ({ useChannel: () => {} }));

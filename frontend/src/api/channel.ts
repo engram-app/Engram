@@ -28,7 +28,8 @@ import {
 	sendCrdtCreateWithContent,
 	sendCrdtDelete,
 } from "./crdt-ops";
-import { invalidateVaultTree } from "./queries";
+import { applyVaultTreeEvents, invalidateVaultTree } from "./queries";
+import type { NoteEvent } from "./vault-tree-patch";
 
 // phoenix.js's own default reconnect steps — kept for the 2nd+ attempt. Only
 // the FIRST reconnect is full-jittered, to de-sync a drained fleet so the
@@ -136,6 +137,11 @@ interface PendingBatch {
 	queryClient: QueryClient;
 	vaultId: string;
 	folders: Set<string>;
+	// Note events the tree can absorb as a patch, applied together at flush.
+	events: NoteEvent[];
+	// Set by any event the tree can't absorb (attachments, folder-marker
+	// deletes with no id): the flush falls back to a full re-fetch.
+	needsRefetch: boolean;
 	timer: ReturnType<typeof setTimeout>;
 }
 
@@ -146,15 +152,31 @@ function folderFromPath(path: string): string {
 	return idx === -1 ? "" : path.slice(0, idx);
 }
 
+// What a note event means to the vault tree, or null when the tree can't
+// absorb it as a patch. Attachment events ride this same channel
+// (`kind: "attachment"`) but address rows by path with no id; a note event with
+// no id is a folder-marker delete. Both fall back to a re-fetch.
+function toNoteEvent(p: NoteChangedPayload): NoteEvent | null {
+	if (p.kind === "attachment" || p.id === undefined) {
+		return null;
+	}
+	if (p.event_type === "delete") {
+		return { kind: "delete", id: p.id, path: p.path };
+	}
+	if (p.event_type === "upsert") {
+		return { kind: "upsert", id: p.id, path: p.path, updated_at: p.updated_at };
+	}
+	return null;
+}
+
 function flushBatch(batch: PendingBatch): void {
 	const { queryClient, vaultId, folders } = batch;
-	// The sidebar's folders, attachments and per-folder note lists are all
-	// `select` views of the ONE vault-tree query, so staling it is the whole
-	// job. This used to be followed by a per-folder fan-out with
-	// `refetchType: "all"` and a broad fallback, purely because those views were
-	// separate cache entries with no observers of their own — an ordinary
-	// invalidation left them stale-but-unfetched forever.
-	invalidateVaultTree(queryClient, vaultId);
+	// The sidebar's folders, attachments and note lists are all `select` views
+	// of the ONE vault-tree query. Patch it with what the events say when that
+	// is trustworthy; re-download the vault only when it isn't.
+	if (batch.needsRefetch || !applyVaultTreeEvents(queryClient, vaultId, batch.events)) {
+		invalidateVaultTree(queryClient, vaultId);
+	}
 	queryClient.invalidateQueries({ queryKey: ["search", vaultId] });
 	// Path-keyed, and NOT derived from the tree: `/folders/list` is its own
 	// endpoint feeding the dashboard folder-browse view, which renders tags the
@@ -250,6 +272,8 @@ export interface NoteChangedPayload {
 	event_type: string;
 	path: string;
 	vault_id: string;
+	// "attachment" on the attachment variant of this event; absent for notes.
+	kind?: string;
 	// Present since backend change_json adds note id. Always invalidate by id
 	// when available — useNote keys by id since the URL-by-id refactor.
 	id?: string;
@@ -307,6 +331,8 @@ export function handleNoteChanged(
 			queryClient,
 			vaultId: activeVaultId,
 			folders: new Set(),
+			events: [],
+			needsRefetch: false,
 			timer: setTimeout(() => {
 				pending = null;
 				flushBatch(batch);
@@ -316,6 +342,12 @@ export function handleNoteChanged(
 	}
 
 	pending.folders.add(payload.folder ?? folderFromPath(payload.path));
+	const event = toNoteEvent(payload);
+	if (event) {
+		pending.events.push(event);
+	} else {
+		pending.needsRefetch = true;
+	}
 
 	for (const listener of listeners) {
 		listener(payload);

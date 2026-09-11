@@ -30,24 +30,48 @@ const rerootPath = (path: string, fromDir: string, toDir: string): string =>
 	path === fromDir ? toDir : joinPath(toDir, path.slice(fromDir.length + 1));
 
 /**
- * Recompute every folder row's `count` from the notes actually in the tree.
+ * Re-derive the folder rows from the notes actually in the tree.
  *
- * `count` is "notes filed directly in this folder" (backend
- * `combine_folders_payload/2`), which is a derivation of `notes`, not
- * independent state. Recomputing it after each edit is why no operation here
- * has to remember to decrement a source folder and increment a destination —
- * that bookkeeping is what the old per-cache patches kept getting wrong.
+ * The server's rule (`combine_folders_payload/2`): a MARKER folder (non-null
+ * id) is listed whether or not it holds anything; a DERIVED folder (null id)
+ * is listed exactly when at least one note is filed directly in it, and
+ * `count` is how many. Both halves are a function of `notes`, so they are
+ * recomputed after every edit rather than adjusted by hand:
+ *
+ * - counts follow the notes, so no operation has to remember to decrement a
+ *   source and increment a destination (what the old per-cache patches kept
+ *   getting wrong);
+ * - a note landing in a folder the tree has never seen gets its row, which is
+ *   what makes a sync event for a note in a NEW folder render at all;
+ * - a derived folder whose last note left disappears, as it will on the next
+ *   fetch anyway, instead of lingering as an empty ghost.
+ *
+ * Ancestors and attachment-only folders are not rows on the wire either;
+ * `synthesizeFolders` adds those downstream, so they are not handled here.
  */
-function recount(folders: VaultTreeFolder[], notes: VaultTreeNote[]): VaultTreeFolder[] {
+function deriveFolders(folders: VaultTreeFolder[], notes: VaultTreeNote[]): VaultTreeFolder[] {
 	const counts = new Map<string, number>();
 	for (const n of notes) {
 		const dir = dirOf(n.path);
 		counts.set(dir, (counts.get(dir) ?? 0) + 1);
 	}
-	return folders.map((f) => {
+	const out: VaultTreeFolder[] = [];
+	for (const f of folders) {
 		const next = counts.get(f.name) ?? 0;
-		return f.count === next ? f : { ...f, count: next };
-	});
+		counts.delete(f.name);
+		if (f.id === null && next === 0) {
+			continue;
+		}
+		out.push(f.count === next ? f : { ...f, count: next });
+	}
+	// Whatever is left holds notes but had no row. The vault root has none on
+	// purpose (its notes hang off the ROOT sentinel), so it never gets one.
+	for (const [name, count] of counts) {
+		if (name !== "") {
+			out.push({ id: null, name, count, parent_id: null });
+		}
+	}
+	return out;
 }
 
 function rebuild(
@@ -55,7 +79,7 @@ function rebuild(
 	folders: VaultTreeFolder[],
 	attachments: VaultTreeAttachment[],
 ): VaultTree {
-	return { folders: recount(folders, notes), notes, attachments };
+	return { folders: deriveFolders(folders, notes), notes, attachments };
 }
 
 export const dirOf = (path: string): string => {
@@ -183,4 +207,56 @@ export function moveFolders(tree: VaultTree, paths: readonly string[], destDir: 
 		tree,
 		paths.map((oldPath) => ({ oldPath, newPath: joinPath(destDir, baseOf(oldPath)) })),
 	);
+}
+
+/**
+ * A note-level change as the sync channel reports it. Only what the tree
+ * needs survives classification; everything else about the event (content,
+ * hashes, tags) belongs to other caches.
+ */
+export type NoteEvent =
+	| { kind: "upsert"; id: string; path: string; updated_at?: string }
+	| { kind: "delete"; id: string; path: string };
+
+/**
+ * Apply a burst of sync-channel note events to the tree in one pass, returning
+ * the SAME tree when none of them changes anything, so observers don't redraw
+ * for an echo of what they already show.
+ *
+ * Deletes are path-guarded. A rename reaches us as `delete(old path)` plus
+ * `upsert(new path)` carrying the SAME id, and nothing orders the two legs.
+ * Deleting by id alone would, when the upsert lands first, delete the note the
+ * rename just moved; matching the path makes the legs commute.
+ *
+ * An upsert for an id the tree lacks inserts it. The event carries no
+ * `created_at`, so a new row borrows `updated_at` until the next fetch; only
+ * the "Created" sort can notice, and only until then.
+ */
+export function applyNoteEvents(tree: VaultTree, events: readonly NoteEvent[]): VaultTree {
+	const byId = new Map(tree.notes.map((n) => [n.id, n]));
+	let changed = false;
+	for (const e of events) {
+		const cur = byId.get(e.id);
+		if (e.kind === "delete") {
+			if (cur?.path === e.path) {
+				byId.delete(e.id);
+				changed = true;
+			}
+			continue;
+		}
+		const updatedAt = e.updated_at ?? cur?.updated_at ?? "";
+		if (cur && cur.path === e.path && cur.updated_at === updatedAt && !cur.pending) {
+			continue;
+		}
+		// Replacing the row also clears `pending`: this is the server confirming
+		// an optimistic create.
+		byId.set(e.id, {
+			id: e.id,
+			path: e.path,
+			created_at: cur?.created_at ?? updatedAt,
+			updated_at: updatedAt,
+		});
+		changed = true;
+	}
+	return changed ? rebuild([...byId.values()], tree.folders, tree.attachments) : tree;
 }

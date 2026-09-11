@@ -7,10 +7,13 @@ import { useSyncManifest } from "./queries";
 
 // Real cache wiring: a real QueryClient + the real channel handler + the real
 // useSyncManifest hook. Only the HTTP layer and the active-vault id are mocked.
-// This is the staleness bug's exact seam — ["syncManifest", vaultId] had zero
-// invalidation sites, so a note created/renamed mid-session never reached the
-// [[ autocomplete list (note-page.tsx derives it as manifest.notes.map(path))
-// until an incidental remount/refocus refetched it.
+//
+// History: `["syncManifest", vaultId]` once had zero invalidation sites, so a
+// note created/renamed mid-session never reached the [[ autocomplete list
+// (note-page.tsx derives it as manifest.notes.map(path)) until an incidental
+// remount refetched it. The inventory is now a view of the vault tree, and the
+// sync channel PATCHES that tree from the event — so the new path must appear
+// with no second request at all.
 
 const { get } = vi.hoisted(() => ({ get: vi.fn() }));
 
@@ -44,47 +47,53 @@ afterEach(() => {
 	qc.clear();
 });
 
+// `/vault/tree` rows; the inventory reads `{ id, path }` off them.
+const note = (id: string, path: string) => ({ id, path, created_at: "c", updated_at: "u" });
+const tree = (...notes: ReturnType<typeof note>[]) => ({ folders: [], notes, attachments: [] });
+
 describe("sync manifest staleness (issue: [[ autocomplete misses new notes)", () => {
 	it("a newly created note appears in the completion paths without remount/refocus", async () => {
-		get.mockResolvedValue({ notes: [{ id: "n1", path: "a.md" }] });
+		get.mockResolvedValue(tree(note("n1", "a.md")));
 		const { result } = renderHook(() => useCompletionPaths(), { wrapper });
 		await waitFor(() => expect(result.current).toEqual(["a.md"]));
 
-		// The server-side create lands (local echo or another device) — the sync
-		// channel delivers note_changed; the NEXT manifest fetch includes the note.
-		get.mockResolvedValue({
-			notes: [
-				{ id: "n1", path: "a.md" },
-				{ id: "n2", path: "new-note.md" },
-			],
-		});
+		// The server-side create lands (local echo or another device) and the
+		// sync channel delivers note_changed.
 		act(() => {
 			handleNoteChanged(
-				{ event_type: "upsert", path: "new-note.md", id: "n2", vault_id: "42" },
+				{ event_type: "upsert", path: "new-note.md", id: "n2", vault_id: "42", updated_at: "u" },
 				qc,
 				"42",
 			);
 		});
 
-		// No remount, no refocus — the invalidation alone must refetch (the
-		// coalescing window is 250ms; waitFor spans it).
+		// No remount, no refocus, no refetch — the event itself carries the path
+		// (the coalescing window is 250ms; waitFor spans it).
 		await waitFor(() => expect(result.current).toContain("new-note.md"));
+		expect(get).toHaveBeenCalledTimes(1);
 	});
 
 	it("a rename updates the completion paths without remount/refocus", async () => {
-		get.mockResolvedValue({ notes: [{ id: "n1", path: "old.md" }] });
+		get.mockResolvedValue(tree(note("n1", "old.md")));
 		const { result } = renderHook(() => useCompletionPaths(), { wrapper });
 		await waitFor(() => expect(result.current).toEqual(["old.md"]));
 
-		get.mockResolvedValue({ notes: [{ id: "n1", path: "new.md" }] });
+		// A rename is a delete of the old path and an upsert of the new one,
+		// carrying the same id.
 		act(() => {
 			handleNoteChanged(
-				{ event_type: "upsert", path: "new.md", id: "n1", vault_id: "42" },
+				{ event_type: "upsert", path: "new.md", id: "n1", vault_id: "42", updated_at: "u2" },
+				qc,
+				"42",
+			);
+			handleNoteChanged(
+				{ event_type: "delete", path: "old.md", id: "n1", vault_id: "42" },
 				qc,
 				"42",
 			);
 		});
 
 		await waitFor(() => expect(result.current).toEqual(["new.md"]));
+		expect(get).toHaveBeenCalledTimes(1);
 	});
 });

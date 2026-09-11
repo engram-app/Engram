@@ -1,4 +1,4 @@
-import type { QueryClient } from "@tanstack/react-query";
+import { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { beacon, tracingEnabled } from "../observability/trace";
 import {
@@ -8,6 +8,7 @@ import {
 	handleNoteChanged,
 	handleNotesBatch,
 } from "./channel";
+import type { VaultTree } from "./queries";
 
 // Stub the tracing gate + beacon buffer; keep the real parseTraceparent so
 // the render beacon's id extraction is exercised end to end. The buffer's
@@ -25,6 +26,10 @@ function mockQueryClient(foldersData?: unknown) {
 	return {
 		invalidateQueries: vi.fn(),
 		getQueryData: vi.fn(() => foldersData),
+		// No tree cached: every flush takes the re-fetch fallback, which is what
+		// these invalidation-shape tests assert. The patch path is tested below
+		// against a real QueryClient.
+		getQueryState: vi.fn(() => undefined),
 	} as unknown as QueryClient & {
 		invalidateQueries: ReturnType<typeof vi.fn>;
 		getQueryData: ReturnType<typeof vi.fn>;
@@ -308,5 +313,96 @@ describe("backfillStructural", () => {
 		backfillStructural(qc, "7");
 		const keys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey);
 		expect(keys).toContainEqual(["vault-tree", "7"]);
+	});
+});
+
+// The sync channel patches the one vault-tree entry instead of re-downloading
+// the whole vault per event burst. These run against a REAL QueryClient,
+// because what matters is what ends up in the cache and whether a refetch was
+// asked for.
+describe("note events patch the vault tree in place", () => {
+	const TREE: VaultTree = {
+		folders: [{ id: "m-docs", name: "docs", count: 1, parent_id: null }],
+		notes: [{ id: "n1", path: "docs/a.md", created_at: "c", updated_at: "u1" }],
+		attachments: [],
+	};
+
+	function setup() {
+		const qc = new QueryClient();
+		qc.setQueryData(["vault-tree", "7"], TREE);
+		const invalidate = vi.spyOn(qc, "invalidateQueries");
+		const treeRefetches = () =>
+			invalidate.mock.calls.filter(([f]) => f?.queryKey?.[0] === "vault-tree").length;
+		const tree = () => qc.getQueryData<VaultTree>(["vault-tree", "7"]);
+		return { qc, invalidate, treeRefetches, tree };
+	}
+
+	const flush = () => vi.advanceTimersByTime(250);
+
+	it("applies a note edit without re-downloading the vault", () => {
+		const { qc, treeRefetches, tree } = setup();
+		handleNoteChanged(
+			{ event_type: "upsert", id: "n1", path: "docs/a.md", updated_at: "u2", vault_id: "7" },
+			qc,
+			"7",
+		);
+		flush();
+		expect(treeRefetches()).toBe(0);
+		expect(tree()?.notes[0]?.updated_at).toBe("u2");
+	});
+
+	it("converges a rename (delete + upsert, one id) to a single row at the new path", () => {
+		const { qc, treeRefetches, tree } = setup();
+		const ev = { vault_id: "7", id: "n1" };
+		handleNoteChanged(
+			{ ...ev, event_type: "upsert", path: "docs/b.md", updated_at: "u2" },
+			qc,
+			"7",
+		);
+		handleNoteChanged({ ...ev, event_type: "delete", path: "docs/a.md" }, qc, "7");
+		flush();
+		expect(treeRefetches()).toBe(0);
+		expect(tree()?.notes.map((n) => n.path)).toEqual(["docs/b.md"]);
+	});
+
+	it("stales the index cap when a note appears or disappears", () => {
+		const { qc, invalidate } = setup();
+		handleNoteChanged(
+			{ event_type: "upsert", id: "n2", path: "docs/new.md", updated_at: "u", vault_id: "7" },
+			qc,
+			"7",
+		);
+		flush();
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["index_status"] });
+	});
+
+	it("falls back to a re-fetch for an attachment event", () => {
+		const { qc, treeRefetches } = setup();
+		handleNoteChanged(
+			{ event_type: "upsert", kind: "attachment", path: "docs/pic.png", vault_id: "7" },
+			qc,
+			"7",
+		);
+		flush();
+		expect(treeRefetches()).toBe(1);
+	});
+
+	// A fetch that started before these events would land its (older) response
+	// on top of the patch and silently undo it. Re-fetching is the only safe
+	// move; the invalidation generation makes the in-flight fetch run again.
+	it("falls back to a re-fetch while a tree fetch is in flight", () => {
+		const { qc, treeRefetches } = setup();
+		void qc.fetchQuery({
+			queryKey: ["vault-tree", "7"],
+			queryFn: () => new Promise<VaultTree>(() => {}),
+			staleTime: 0,
+		});
+		handleNoteChanged(
+			{ event_type: "upsert", id: "n1", path: "docs/a.md", updated_at: "u2", vault_id: "7" },
+			qc,
+			"7",
+		);
+		flush();
+		expect(treeRefetches()).toBe(1);
 	});
 });

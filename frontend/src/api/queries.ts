@@ -25,6 +25,7 @@ import { crdtCreateNote, crdtCreateNoteWithContent, crdtDeleteNote } from "./cha
 import { ApiError, api } from "./client";
 import { CrdtOpError } from "./crdt-ops";
 import {
+	applyNoteEvents,
 	baseOf,
 	// Path → parent folder, the same rule the backend uses when computing
 	// `folder` on a NoteSummary. One definition, shared with the tree patches
@@ -34,6 +35,7 @@ import {
 	joinPath,
 	moveFolders,
 	moveNotes,
+	type NoteEvent,
 	removeFolders,
 	removeNotes,
 	renameFolders,
@@ -532,6 +534,40 @@ export function notesInFolder(tree: VaultTree, folderId: string): NoteSummary[] 
 	}
 	const rows = tree.notes.filter((n) => folderOf(n.path) === path);
 	return rows.length === 0 ? NO_NOTES : rows.map(treeNoteToSummary);
+}
+
+/**
+ * Apply sync-channel note events to the tree IN PLACE — the alternative to
+ * `invalidateVaultTree`, which re-downloads and server-side decrypts the whole
+ * vault for every event burst, and which is why a busy vault used to leave the
+ * sidebar waiting on up to four back-to-back `/vault/tree` fetches.
+ *
+ * Returns false when a patch can't be trusted, and the caller must invalidate:
+ * - no tree cached yet: nothing to patch, and the first fetch includes the change;
+ * - a tree fetch is IN FLIGHT: its response may predate these events and would
+ *   land on top of the patch, silently undoing it. Invalidating instead bumps
+ *   the generation `fetchVaultTreeFresh` checks, so that fetch re-runs.
+ */
+export function applyVaultTreeEvents(
+	qc: QueryClient,
+	vaultId: string | null | undefined,
+	events: readonly NoteEvent[],
+): boolean {
+	const state = qc.getQueryState<VaultTree>(["vault-tree", vaultId]);
+	if (!state?.data || state.fetchStatus === "fetching") {
+		return false;
+	}
+	const next = applyNoteEvents(state.data, events);
+	if (next === state.data) {
+		return true;
+	}
+	qc.setQueryData<VaultTree>(["vault-tree", vaultId], next);
+	// A note appeared or went away, which is what moves the user toward (or back
+	// under) their index cap — the same reason `invalidateVaultTree` stales it.
+	if (next.notes.length !== state.data.notes.length) {
+		qc.invalidateQueries({ queryKey: ["index_status"] });
+	}
+	return true;
 }
 
 export function useVaultNotes(opts: { enabled?: boolean } = {}) {
