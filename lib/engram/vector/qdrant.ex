@@ -461,7 +461,11 @@ defmodule Engram.Vector.Qdrant do
 
     instrument(:delete, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
-        {:ok, %{status: 200}} -> :ok
+        # 404 is a missing COLLECTION, so there is nothing to delete. Missing
+        # point ids come back 200. Treating it as an error made DeleteNoteIndex
+        # (#1608, which retries now rather than swallowing) burn its attempts
+        # on a stack that has never indexed anything.
+        {:ok, %{status: status}} when status in [200, 404] -> :ok
         {:ok, %{status: status, body: body}} -> {:error, {status, body}}
         {:error, reason} -> {:error, reason}
       end
@@ -490,7 +494,8 @@ defmodule Engram.Vector.Qdrant do
 
     instrument(:delete, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
-        {:ok, %{status: 200}} -> :ok
+        # Missing collection: nothing to delete. See `delete_points/2`.
+        {:ok, %{status: status}} when status in [200, 404] -> :ok
         {:ok, %{status: status, body: body}} -> {:error, {status, body}}
         {:error, reason} -> {:error, reason}
       end
@@ -537,7 +542,8 @@ defmodule Engram.Vector.Qdrant do
 
     instrument(:delete, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
-        {:ok, %{status: 200}} -> :ok
+        # Missing collection: nothing to delete. See `delete_points/2`.
+        {:ok, %{status: status}} when status in [200, 404] -> :ok
         {:ok, %{status: status, body: body}} -> {:error, {status, body}}
         {:error, reason} -> {:error, reason}
       end
@@ -561,7 +567,8 @@ defmodule Engram.Vector.Qdrant do
 
     instrument(:delete, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
-        {:ok, %{status: 200}} -> :ok
+        # Missing collection: nothing to delete. See `delete_points/2`.
+        {:ok, %{status: status}} when status in [200, 404] -> :ok
         {:ok, %{status: status, body: body}} -> {:error, {status, body}}
         {:error, reason} -> {:error, reason}
       end

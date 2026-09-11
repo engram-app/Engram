@@ -283,6 +283,43 @@ defmodule Engram.Vector.QdrantTest do
     end
   end
 
+  # Qdrant answers 404 when the COLLECTION is absent, which means there is
+  # nothing to delete. Returning an error there makes DeleteNoteIndex (#1608,
+  # which now retries instead of swallowing) burn its attempts and discard on
+  # a fresh self-host or dev stack that has never indexed anything. Missing
+  # point ids are not this case: those come back 200.
+  describe "deletes against a missing collection" do
+    test "delete_points/2 treats 404 as nothing to delete", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/delete", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(404, ~s({"status":{"error":"Collection not found"}}))
+      end)
+
+      assert :ok = Qdrant.delete_points("test_col", [Ecto.UUID.generate()])
+    end
+
+    test "delete_by_note/4 treats 404 as nothing to delete", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/delete", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(404, ~s({"status":{"error":"Collection not found"}}))
+      end)
+
+      assert :ok = Qdrant.delete_by_note("test_col", "user-1", "vault-1", "stub-hmac-base64")
+    end
+
+    test "a 500 is still an error", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/delete", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(500, ~s({"status":{"error":"boom"}}))
+      end)
+
+      assert {:error, {500, _}} = Qdrant.delete_points("test_col", [Ecto.UUID.generate()])
+    end
+  end
+
   describe "count_by_note/4" do
     test "returns the exact point count for the filter", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/count", fn conn ->
