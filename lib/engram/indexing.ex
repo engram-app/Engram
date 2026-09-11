@@ -40,6 +40,16 @@ defmodule Engram.Indexing do
   commit step inside a per-note `Repo.with_tenant/2`.
   """
   def index_note(note, %Engram.Vaults.Vault{} = vault, user \\ nil) do
+    with {:ok, count, _embedded_bytes} <- index_note_with_usage(note, vault, user),
+         do: {:ok, count}
+  end
+
+  @doc """
+  `index_note/3`, plus the bytes this pass actually sent to the embedder
+  (#1618). Chunk reuse makes that a small part of most edits, and a
+  keyword-only pass sends nothing. Returns `{:ok, chunk_count, embedded_bytes}`.
+  """
+  def index_note_with_usage(note, %Engram.Vaults.Vault{} = vault, user \\ nil) do
     # Resolve identity ONCE for the whole call. This function and
     # prepare_index/3 below both need the same `%User{}`, and both used to
     # fetch it independently — on the embed path that made four `get_user!`
@@ -72,7 +82,7 @@ defmodule Engram.Indexing do
             # Returning the error costs one Oban retry.
             with :ok <- purge_stale_index(note) do
               :ok = Engram.Links.replace_links(user, vault, note.id, link_rows)
-              {:ok, 0}
+              {:ok, 0, 0}
             end
 
           {:error, :no_dek} = err ->
@@ -81,7 +91,8 @@ defmodule Engram.Indexing do
         end
 
       {:ok, prepared} ->
-        commit_index(prepared)
+        with {:ok, count} <- commit_index(prepared),
+             do: {:ok, count, prepared.embedded_bytes}
 
       {:error, _} = err ->
         err
@@ -130,9 +141,16 @@ defmodule Engram.Indexing do
              plan = plan_chunks(note, chunks, content_key, semantic?),
              texts = embed_texts(plan),
              {:ok, vectors} <- maybe_embed(semantic?, texts),
-             :ok <- ensure_one_vector_per_text(vectors, texts, note) do
-          avgdl = Engram.KeywordIndex.Stats.avgdl(note.vault_id)
-          build_prepared(note, user, vault, plan, vectors, filter_key, avgdl, link_rows)
+             :ok <- ensure_one_vector_per_text(vectors, texts, note),
+             avgdl = Engram.KeywordIndex.Stats.avgdl(note.vault_id),
+             {:ok, prepared} <-
+               build_prepared(note, user, vault, plan, vectors, filter_key, avgdl, link_rows) do
+          # What the embedder was actually sent (#1618): reused chunks and
+          # keyword-only passes cost nothing, so the meter must not bill them.
+          embedded_bytes =
+            if semantic?, do: texts |> Enum.map(&byte_size/1) |> Enum.sum(), else: 0
+
+          {:ok, Map.put(prepared, :embedded_bytes, embedded_bytes)}
         else
           {:error, :no_dek} = err ->
             emit_no_dek_telemetry(note)

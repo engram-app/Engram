@@ -136,21 +136,17 @@ defmodule Engram.Workers.EmbedNote do
             case embed_budget_gate(note, user) do
               :ok ->
                 case run_embed(note, user, old_path_hmac_b64) do
-                  {:ok, chunk_count, semantic?} ->
-                    # Charge the embed meter only when Voyage was actually
-                    # called. `chunk_count == 0` is index_note/2's no-chunks
-                    # outcome: the note was empty OR outside the user's
-                    # indexed-note cap, and in neither case did a single token
-                    # get spent. Keyword-only users never call Voyage at all.
+                  {:ok, embedded_bytes} ->
+                    # Charge the embed meter for what Voyage was actually sent
+                    # this pass, not the whole note (#1618). Chunk reuse sends
+                    # only the changed chunks; an empty or over-cap note and a
+                    # keyword-only user send nothing at all.
                     #
-                    # Charging regardless was not merely cosmetic: phantom
-                    # tokens accumulate to the 20M lifetime cap, and
+                    # Charging more was not merely cosmetic: phantom tokens
+                    # accumulate to the 20M lifetime cap, and
                     # embed_budget_gate/2 then cancels indexing entirely — so a
                     # Free user who spent nothing would lose their BM25 index.
-                    _ =
-                      if chunk_count > 0 and semantic? do
-                        record_embed_tokens(note)
-                      end
+                    _ = record_embed_tokens(note.user_id, embedded_bytes)
 
                     :ok
 
@@ -223,17 +219,17 @@ defmodule Engram.Workers.EmbedNote do
     end
   end
 
-  defp record_embed_tokens(%Note{user_id: user_id} = note) do
-    case estimate_note_tokens(note) do
+  defp record_embed_tokens(user_id, embedded_bytes) do
+    case UsageMeters.estimate_tokens(embedded_bytes) do
       0 -> :ok
       tokens -> UsageMeters.add_embed_tokens(user_id, tokens)
     end
   end
 
-  # Token estimate uses the ciphertext byte size. AES-GCM adds a 16-byte
-  # auth tag so we over-count by ~4 tokens per note, which keeps the cap
-  # conservative. Real `usage.total_tokens` from the Voyage response is a
-  # follow-up.
+  # The budget GATE still estimates the whole note: it runs before the pass,
+  # when which chunks will re-embed is not yet known, so it errs towards
+  # blocking. Uses the ciphertext byte size; AES-GCM adds a 16-byte auth tag,
+  # so it over-counts by ~4 tokens per note.
   defp estimate_note_tokens(%Note{content_ciphertext: ct}) when is_binary(ct) do
     UsageMeters.estimate_tokens(ct)
   end
@@ -355,8 +351,8 @@ defmodule Engram.Workers.EmbedNote do
                 Indexing.delete_points_by_path_hmac(decrypted_note, old_path_hmac_b64)
               end
 
-            case Indexing.index_note(decrypted_note, vault, user) do
-              {:ok, count} ->
+            case Indexing.index_note_with_usage(decrypted_note, vault, user) do
+              {:ok, count, embedded_bytes} ->
                 # `user` is the row threaded down from run_and_stamp — the same
                 # one Indexing used to decide whether to call Voyage. Do NOT
                 # re-resolve: a second read lands a DIFFERENT value when a
@@ -365,7 +361,7 @@ defmodule Engram.Workers.EmbedNote do
                 # retries outlives it), and the spend would go unmetered.
                 semantic? = SearchProfile.resolve(user).semantic
                 stamp_embed_hash(note, semantic?, count)
-                {:ok, count, semantic?}
+                {:ok, embedded_bytes}
 
               # Voyage 429 — back off without burning an Oban attempt. Voyage's
               # paid-tier RPM is finite; without this guard five consecutive
