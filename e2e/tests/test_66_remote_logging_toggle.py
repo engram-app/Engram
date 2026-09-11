@@ -253,21 +253,23 @@ async def test_disable_stops_flush(vault_a, cdp_a, cdp_b, api_sync):
         #
         # What must still hold is that ORDINARY logging stopped, so the
         # assertion narrows rather than weakens: zero non-forced rows.
-        # The exemption below must not FAIL OPEN. `row.get("forced")` is None
-        # when the field is absent, so if the serializer line were deleted, the
-        # migration rolled back, or the plugin stopped emitting it, every row
-        # would read as unforced and this test would silently revert to the
-        # flat-zero assertion it exists to replace — reappearing as the same
-        # ~2/3 flake instead of a named failure.
+        # The exemption below must not FAIL OPEN on the BACKEND side.
+        # `row.get("forced")` is None when the key is absent, so a deleted
+        # serializer line or a rolled-back migration would make every row read
+        # as unforced and silently revert this test to the flat-zero assertion
+        # it replaces. Requiring the KEY on a phase-1 row makes that loud.
         #
-        # Phase 1 already proved rows arrive in this window, so requiring the
-        # KEY on one of them turns that silent regression into a loud one.
+        # This does NOT guard the plugin side. The serializer always emits the
+        # key (the column defaults to false), so a plugin that stopped setting
+        # `forced` would pass this check with every row `false`. That half is
+        # guarded by the plugin unit test "a forced anomaly is marked forced on
+        # the wire" (Engram-obsidian tests/remote-log.test.ts).
         assert "forced" in before_logs[0], (
-            "Log rows carry no `forced` field. The forced-provenance plumbing is "
-            "missing somewhere (plugin RemoteLogger, Logs.bound_entry, the "
-            "client_logs column, or LogsController.serialize_log) — without it "
-            "the post-disable assertion below cannot exempt forced anomalies "
-            f"and silently becomes an assert-zero. Row seen: {before_logs[0]!r}"
+            "Log rows carry no `forced` key. The backend half of the "
+            "forced-provenance plumbing is missing (Logs.bound_entry, the "
+            "client_logs column, or LogsController.serialize_log), so the "
+            "post-disable assertion below cannot exempt forced anomalies and "
+            f"silently becomes an assert-zero. Row seen: {before_logs[0]!r}"
         )
 
         unforced = [row for row in after_logs if not row.get("forced")]
