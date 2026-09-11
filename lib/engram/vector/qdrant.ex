@@ -164,8 +164,15 @@ defmodule Engram.Vector.Qdrant do
 
         :__miss__ ->
           case do_ensure_collection(col, dims) do
-            :ok ->
+            {:ok, :verified} ->
               :persistent_term.put({__MODULE__, key}, :ok)
+              :ok
+
+            # Shape and indexes could not be read, so nothing is proven and
+            # nothing is cached: the next caller checks again. Caching it would
+            # strand a node without the payload indexes strict-mode filtering
+            # needs until it restarts, which is the #1609 failure itself.
+            {:ok, :unverified} ->
               :ok
 
             {:error, _} = error ->
@@ -173,7 +180,7 @@ defmodule Engram.Vector.Qdrant do
           end
       end
     else
-      do_ensure_collection(col, dims)
+      with {:ok, _} <- do_ensure_collection(col, dims), do: :ok
     end
   end
 
@@ -197,9 +204,17 @@ defmodule Engram.Vector.Qdrant do
 
   defp do_ensure_collection(col, dims) do
     case create_collection(col, dims) do
-      {:ok, :created} -> ensure_payload_indexes(col, MapSet.new())
-      {:ok, {:exists, indexed}} -> ensure_payload_indexes(col, indexed)
-      {:error, _} = error -> error
+      {:ok, :created} ->
+        with :ok <- ensure_payload_indexes(col, MapSet.new()), do: {:ok, :verified}
+
+      {:ok, {:exists, :unknown}} ->
+        {:ok, :unverified}
+
+      {:ok, {:exists, indexed}} ->
+        with :ok <- ensure_payload_indexes(col, indexed), do: {:ok, :verified}
+
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -248,11 +263,6 @@ defmodule Engram.Vector.Qdrant do
   # collection that already existed: prod indexed only the first four, and
   # strict mode 400'd every folder, tag, type and date filter.
   #
-  # ponytail: `:unknown` (collection_info unreadable) skips the check, and the
-  # memo then holds `:ok` until the node restarts. Another node or the next
-  # boot reconciles; make it retry if a transient read ever strands an index.
-  defp ensure_payload_indexes(_col, :unknown), do: :ok
-
   defp ensure_payload_indexes(col, indexed) do
     keyword = Enum.map(@payload_index_fields, &{&1, "keyword"})
     integer = Enum.map(@integer_payload_index_fields, &{&1, "integer"})
@@ -268,7 +278,12 @@ defmodule Engram.Vector.Qdrant do
   end
 
   defp create_payload_index(col, field, schema) do
-    opts = [json: %{field_name: field, field_schema: schema}] ++ req_opts()
+    # `?wait=true` blocks until the index is built over every existing point,
+    # which on a large collection outlasts the default indexing budget. A
+    # timeout here fails `ensure_collection` (deliberately not memoised), so
+    # every retrying job would re-issue the same build. Give it its own.
+    opts =
+      [json: %{field_name: field, field_schema: schema}, receive_timeout: 120_000] ++ req_opts()
 
     instrument(:create_payload_index, fn ->
       case Req.put("#{base_url()}/collections/#{col}/index?wait=true", opts) do

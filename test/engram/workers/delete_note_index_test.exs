@@ -19,6 +19,7 @@ defmodule Engram.Workers.DeleteNoteIndexTest do
     on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
 
     user = insert(:user)
+    {:ok, user} = Engram.Crypto.ensure_user_dek(user)
     vault = insert(:vault, user: user)
     note = insert(:note, user: user, vault: vault)
 
@@ -35,7 +36,7 @@ defmodule Engram.Workers.DeleteNoteIndexTest do
       skip_tenant_check: true
     )
 
-    %{bypass: bypass, note: note}
+    %{bypass: bypass, user: user, vault: vault, note: note}
   end
 
   defp args(note) do
@@ -65,6 +66,39 @@ defmodule Engram.Workers.DeleteNoteIndexTest do
 
     assert {:error, _} = perform_job(DeleteNoteIndex, args(note))
     assert chunk_count(note) == 1
+  end
+
+  # The edge flip used to run unconditionally. Putting it behind the retryable
+  # Qdrant delete means a brief 5xx burns all three attempts and the deleted
+  # note keeps its outgoing edges forever, since nothing re-enqueues this job.
+  test "drops the note's link edges even when the Qdrant delete fails", %{
+    bypass: bypass,
+    user: user,
+    vault: vault,
+    note: note
+  } do
+    :ok =
+      Engram.Links.replace_links(user, vault, note.id, Engram.Links.Parser.extract("[[Other]]"))
+
+    assert Repo.aggregate(
+             from(l in Engram.Links.NoteLink, where: l.source_note_id == ^note.id),
+             :count,
+             skip_tenant_check: true
+           ) == 1
+
+    Bypass.expect(bypass, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(500, ~s({"status":{"error":"boom"}}))
+    end)
+
+    assert {:error, _} = perform_job(DeleteNoteIndex, args(note))
+
+    assert Repo.aggregate(
+             from(l in Engram.Links.NoteLink, where: l.source_note_id == ^note.id),
+             :count,
+             skip_tenant_check: true
+           ) == 0
   end
 
   test "deletes the rows once Qdrant accepts the delete", %{bypass: bypass, note: note} do

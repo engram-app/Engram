@@ -467,6 +467,13 @@ defmodule Engram.Indexing do
 
   defp doc_embed_model, do: Application.get_env(:engram, :doc_embed_model)
 
+  # `do_embed_batch/1` passes `:doc_embed_model` only when it is set, and the
+  # embedder falls back to `:embed_model` otherwise. The reuse fingerprint has
+  # to name the model actually used, or changing EMBED_MODEL with
+  # DOC_EMBED_MODEL unset leaves every hmac identical and the collection
+  # silently mixes two models' embedding spaces (#1606).
+  defp effective_embed_model, do: doc_embed_model() || Application.get_env(:engram, :embed_model)
+
   # Voyage caps a request two ways: 1,000 texts AND 120,000 tokens summed over
   # them. Blowing either is a 400 no retry can fix, so the job churns through
   # ReconcileEmbeddings forever.
@@ -640,7 +647,7 @@ defmodule Engram.Indexing do
   # downgrade kept vectors the tier no longer grants. The model is in it for
   # the same reason, since another model's vector is not reusable either.
   defp fingerprint(content_key, context_text, true) do
-    Crypto.hmac_content_hash(content_key, "dense:#{doc_embed_model()}\n" <> context_text)
+    Crypto.hmac_content_hash(content_key, "dense:#{effective_embed_model()}\n" <> context_text)
   end
 
   defp fingerprint(content_key, context_text, false) do

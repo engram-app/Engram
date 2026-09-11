@@ -340,8 +340,11 @@ defmodule Engram.Search do
 
               {:ok, final}
             else
-              diversified = MMR.rerank(ranked, limit, diversity)
-              {:ok, rehydrate_display_fields(diversified, user)}
+              # Rehydrate BEFORE the MMR pass so a soft-deleted hit is dropped
+              # while the pool can still backfill its slot. Dropping after left
+              # a page short of `limit` (#1608).
+              live = rehydrate_display_fields(ranked, user)
+              {:ok, MMR.rerank(live, limit, diversity)}
             end
           end
         end

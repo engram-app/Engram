@@ -42,7 +42,7 @@ defmodule Engram.Workers.DeleteNoteIndex do
     case Base.decode64(path_hmac_b64) do
       {:ok, path_hmac} ->
         note = %{id: note_id, user_id: user_id, vault_id: vault_id, path_hmac: path_hmac}
-        delete_index_then_unlink(note, args)
+        unlink_then_delete_index(note, args)
 
       :error ->
         {:discard, "invalid path_hmac base64 for note_id=#{note_id}"}
@@ -64,33 +64,36 @@ defmodule Engram.Workers.DeleteNoteIndex do
   # A failed Qdrant delete is returned so Oban retries it (#1608). Discarding
   # it left both the rows and the points, and the deleted note kept answering
   # searches with nothing left to retry the delete.
-  defp delete_index_then_unlink(%{id: note_id, user_id: user_id, vault_id: vault_id} = note, args) do
-    with :ok <- Indexing.delete_note_index(note) do
-      # #591 — the note is gone: drop its outgoing edges and flip any
-      # incoming edges back to dangling.
-      :ok = Links.on_note_soft_deleted(user_id, note_id)
+  #
+  # The local work runs FIRST, and the retryable remote delete last. Behind the
+  # delete, a brief Qdrant 5xx would burn all three attempts and the note would
+  # keep its outgoing edges forever, since nothing re-enqueues this job. Each
+  # step here is idempotent, so a retry repeating them is free.
+  defp unlink_then_delete_index(%{id: note_id, user_id: user_id, vault_id: vault_id} = note, args) do
+    # #591 — the note is gone: drop its outgoing edges and flip any
+    # incoming edges back to dangling.
+    :ok = Links.on_note_soft_deleted(user_id, note_id)
 
-      # Chain a rebind for the deleted note's OWN basename — a same-
-      # basename sibling elsewhere may now win the shortest-path tiebreak
-      # and should inherit the edges this note is vacating. Only possible
-      # when the enqueueing caller had plaintext in scope to compute the
-      # hmac (see `Notes.delete_note_index_job/2`); otherwise skip — the
-      # edge-flip above already ran regardless. `basename_hmac` (base64) —
-      # never plaintext, same T3.2/H3 invariant as `path_hmac` above.
-      _ = maybe_enqueue_rebind(user_id, vault_id, Map.get(args, "basename_hmac"))
+    # Chain a rebind for the deleted note's OWN basename — a same-
+    # basename sibling elsewhere may now win the shortest-path tiebreak
+    # and should inherit the edges this note is vacating. Only possible
+    # when the enqueueing caller had plaintext in scope to compute the
+    # hmac (see `Notes.delete_note_index_job/2`); otherwise skip — the
+    # edge-flip above already ran regardless. `basename_hmac` (base64) —
+    # never plaintext, same T3.2/H3 invariant as `path_hmac` above.
+    _ = maybe_enqueue_rebind(user_id, vault_id, Map.get(args, "basename_hmac"))
 
-      # Deleting a note frees an indexed-note slot. The note that inherits it
-      # already carries a stamped embed_hash from the pass that skipped it, so
-      # nothing would ever re-index it. No-op for uncapped tiers.
-      #
-      # ENQUEUED, not inline. The sweep is whole-vault, and this worker runs
-      # once per DELETED note — a 5,000-note folder delete ran it 5,000 times
-      # over the same rows. The job is unique per (user, kind) over a 2-minute
-      # window, so a delete burst collapses to one sweep after it settles.
-      _ = IndexCapMaintenance.enqueue(user_id, :backfill_slots)
+    # Deleting a note frees an indexed-note slot. The note that inherits it
+    # already carries a stamped embed_hash from the pass that skipped it, so
+    # nothing would ever re-index it. No-op for uncapped tiers.
+    #
+    # ENQUEUED, not inline. The sweep is whole-vault, and this worker runs
+    # once per DELETED note — a 5,000-note folder delete ran it 5,000 times
+    # over the same rows. The job is unique per (user, kind) over a 2-minute
+    # window, so a delete burst collapses to one sweep after it settles.
+    _ = IndexCapMaintenance.enqueue(user_id, :backfill_slots)
 
-      :ok
-    end
+    Indexing.delete_note_index(note)
   end
 
   defp maybe_enqueue_rebind(_user_id, _vault_id, nil), do: :ok
