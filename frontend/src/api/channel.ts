@@ -156,12 +156,6 @@ function flushBatch(batch: PendingBatch): void {
 	// invalidation left them stale-but-unfetched forever.
 	invalidateVaultTree(queryClient, vaultId);
 	queryClient.invalidateQueries({ queryKey: ["search", vaultId] });
-	// The vault-wide path→id inventory behind [[ autocomplete + /v/:slug/wiki/*
-	// resolution (useSyncManifest). Every note event that reaches this flush can
-	// change it (create/rename/delete — folder ops emit per-note note_changed
-	// too), and it previously had ZERO invalidation sites, so a new/renamed note
-	// stayed missing from autocomplete until an incidental refetch.
-	queryClient.invalidateQueries({ queryKey: ["syncManifest", vaultId] });
 	// Path-keyed, and NOT derived from the tree: `/folders/list` is its own
 	// endpoint feeding the dashboard folder-browse view, which renders tags the
 	// tree payload doesn't carry.
@@ -209,9 +203,6 @@ export function backfillStructural(queryClient: QueryClient, vaultId: string): v
 	// One key covers the sidebar entirely — see flushBatch.
 	invalidateVaultTree(queryClient, vaultId);
 	queryClient.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
-	// The wikilink path inventory misses events during the gap like everything
-	// else — stale it so autocomplete/wiki resolution converge on wake too.
-	queryClient.invalidateQueries({ queryKey: ["syncManifest", vaultId] });
 }
 
 export function clampReconnectJitter(raw: unknown): number | null {

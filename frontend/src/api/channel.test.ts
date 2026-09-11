@@ -81,27 +81,23 @@ describe("handleNoteChanged", () => {
 		expect(keys).not.toContainEqual(["folderNotes", "7"]);
 	});
 
-	// The manifest is the vault-wide path→id inventory behind [[ autocomplete
-	// and /v/:slug/wiki/* resolution. Any note event can change it (create/
-	// rename/delete, incl. per-note events from folder ops), so it rides the
-	// same coalesced flush as the other list-level keys — it had ZERO
-	// invalidation sites before, leaving new/renamed notes invisible to
-	// autocomplete until an incidental refetch.
-	it("invalidates the sync manifest in the coalesced flush", () => {
+	// The `[[` autocomplete inventory used to be its own `['syncManifest']`
+	// query fetched from `/sync/manifest`, needing its own invalidation here or
+	// a new note stayed invisible to autocomplete. It is a view of the tree
+	// now, so staling the tree IS staling it — and there is no second key left
+	// to forget.
+	it("needs no separate invalidation for the wikilink inventory", () => {
 		const qc = mockQueryClient();
 		handleNoteChanged(
 			{ event_type: "upsert", path: "docs/a.md", folder: "docs", vault_id: "7" },
 			qc,
 			"7",
 		);
-
-		const syncKeys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey);
-		expect(syncKeys).not.toContainEqual(["syncManifest", "7"]);
-
 		vi.advanceTimersByTime(250);
 
 		const keys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey);
-		expect(keys).toContainEqual(["syncManifest", "7"]);
+		expect(keys).toContainEqual(["vault-tree", "7"]);
+		expect(keys).not.toContainEqual(["syncManifest", "7"]);
 	});
 
 	it("coalesces a sync burst into one flush per distinct folder", () => {
@@ -306,12 +302,11 @@ describe("handleFoldersBatch", () => {
 
 describe("backfillStructural", () => {
 	// A backgrounded/offline tab misses note events with no replay, so the
-	// reconnect backfill must also stale the manifest — otherwise notes
-	// created elsewhere during the gap stay missing from [[ autocomplete.
-	it("invalidates the sync manifest alongside the structural views", () => {
+	// reconnect backfill has to stale everything structural. That is one key.
+	it("stales the vault tree, which is every structural view", () => {
 		const qc = mockQueryClient();
 		backfillStructural(qc, "7");
 		const keys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey);
-		expect(keys).toContainEqual(["syncManifest", "7"]);
+		expect(keys).toContainEqual(["vault-tree", "7"]);
 	});
 });

@@ -67,6 +67,10 @@ const selectAttachments = (tree: VaultTree): AttachmentSummary[] => tree.attachm
 // than a query per folder and cannot go stale relative to its siblings.
 const selectAllNotes = (tree: VaultTree): NoteSummary[] => tree.notes.map(treeNoteToSummary);
 
+// `ManifestNote` is `{ id, path }`; the tree rows carry those plus timestamps,
+// which callers ignore.
+const selectManifest = (tree: VaultTree) => ({ notes: tree.notes });
+
 // Single source for the by-id note fetch used by useNote's queryFn.
 function fetchNoteById(id: string): Promise<Note> {
 	return api.get<Note>(`/notes/by-id/${id}`);
@@ -439,12 +443,23 @@ export function useAttachments() {
 // on note mount (note-page.tsx) to feed [[ autocomplete (wiki-completion.ts).
 // The 30s staleTime bounds both: link-hopping and repeated note mounts don't
 // re-pull a large vault's manifest more than once per that window.
+/**
+ * The vault-wide path→id inventory behind `[[` autocomplete and
+ * `/v/:slug/wiki/*` resolution.
+ *
+ * A view of the vault tree, NOT a call to `/sync/manifest`. That endpoint is
+ * the plugin's (it carries content hashes, seqs and CRDT heads, and supports a
+ * `since_seq` short-circuit); the web app only ever read `{id, path}` off it,
+ * which the tree already holds. Calling it meant a second decrypt-heavy render
+ * of the entire vault on every vault load, and a second thing to invalidate on
+ * every note event.
+ */
 export function useSyncManifest() {
 	const vaultId = useActiveVaultId();
 	return useQuery({
-		queryKey: ["syncManifest", vaultId],
-		queryFn: () => api.get<{ notes: { id: string; path: string }[] }>("/sync/manifest"),
-		staleTime: 30_000,
+		...vaultTreeQueryOptions(vaultId),
+		enabled: Boolean(vaultId),
+		select: selectManifest,
 	});
 }
 

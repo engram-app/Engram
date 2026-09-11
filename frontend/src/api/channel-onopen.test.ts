@@ -61,6 +61,7 @@ describe("connectChannel onOpen — structural backfill", () => {
 		// observers of their own) is gone with the families.
 		expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["vault-tree", "v1"] });
 		expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["folderNotes", "v1"] });
-		expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["syncManifest", "v1"] });
+		// No `['syncManifest']` line: the `[[` autocomplete inventory is a view of
+		// the tree too, so it converges with it.
 	});
 });
