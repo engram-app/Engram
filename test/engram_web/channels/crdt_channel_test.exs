@@ -1337,7 +1337,21 @@ defmodule EngramWeb.CrdtChannelTest do
       assert CrdtRegistry.lookup(doc_id) == room,
              "the room-free write evicted a room a live client was still using"
 
-      assert_note_content_eventually(user, vault, doc_id, "LIVE-base")
+      # Routed INTO a resident room, the write lands in the room's doc and the
+      # plaintext column converges on the room's checkpoint TIMER, not on the
+      # write. The handshake above sets no activity, so this first write takes
+      # the eager path: a fixed `@default_eager_ms` (250ms) before the
+      # checkpoint even starts. The default 500ms wait left 250ms for the
+      # schedule, the checkpoint transaction and the poll, and a loaded full
+      # suite blew it. Same convergence deadline the roomed leg of the genesis
+      # test already uses; the assertion itself is unchanged.
+      assert_note_content_eventually(
+        user,
+        vault,
+        doc_id,
+        "LIVE-base",
+        System.monotonic_time(:millisecond) + 2_000
+      )
     end
 
     test "rejects an unknown note_id with the same signal crdt_msg sends", %{socket: socket} do
