@@ -132,8 +132,23 @@ defmodule Engram.Vector.Qdrant do
     # against 853 upserts, a 1:1:1 ratio, inside the slowest queue we have
     # (embed averages 738 ms). See #1501.
     #
-    # Keyed on the resolved base URL, not just the collection name, so the
-    # async Bypass suites stay isolated: each test's port is its own key.
+    # Keyed on the resolved base URL, not just the collection name. That was
+    # meant to keep the Bypass suites isolated — "each test's port is its own
+    # key" — and it does not, which is why the memo is OFF under `:test` (see
+    # `memo_enabled?/0`). A port is only unique while it is held: Bypass
+    # releases it on test exit and the OS hands the same number to a later
+    # `Bypass.open/0`, whose key then hits a marker the earlier test wrote.
+    # `ensure_collection/2` returns `:ok` having issued no request at all, and
+    # any test whose only HTTP comes from here dies in `Bypass`'s exit
+    # verification with "No HTTP request arrived at Bypass" — far from the
+    # cause, in a test that did nothing wrong. Measured directly: 8 requests on
+    # a cold memo, 0 after reopening Bypass on the same port.
+    #
+    # A blanket `forget_collection_memo/0` in shared setup is NOT the fix. It
+    # erases the whole namespace, so one async test would clear another's
+    # marker mid-run and add unexpected requests — and `indexing_test.exs` and
+    # `search_test.exs` both use `Bypass.expect_once`. That trades a
+    # missing-request flake for a surplus-request one.
     #
     # ONLY success is memoised. A failure erases the entry so the next caller
     # retries — otherwise one transient Qdrant blip would be cached for the
@@ -146,21 +161,32 @@ defmodule Engram.Vector.Qdrant do
     # transient Qdrant blip into several. Writing only on success closes that
     # window rather than cleaning up after it. Same `{__MODULE__, key}`
     # namespace, so `pt_erase_all/0` still finds these.
-    case :persistent_term.get({__MODULE__, key}, :__miss__) do
-      :ok ->
-        :ok
+    if memo_enabled?() do
+      case :persistent_term.get({__MODULE__, key}, :__miss__) do
+        :ok ->
+          :ok
 
-      :__miss__ ->
-        case do_ensure_collection(col, dims) do
-          :ok ->
-            :persistent_term.put({__MODULE__, key}, :ok)
-            :ok
+        :__miss__ ->
+          case do_ensure_collection(col, dims) do
+            :ok ->
+              :persistent_term.put({__MODULE__, key}, :ok)
+              :ok
 
-          {:error, _} = error ->
-            error
-        end
+            {:error, _} = error ->
+              error
+          end
+      end
+    else
+      do_ensure_collection(col, dims)
     end
   end
+
+  # Defaults to on, so prod and dev keep #1501's saving; `config/test.exs`
+  # turns it off. Switched rather than cleared because a switch cannot be
+  # defeated by test ordering — there is no marker to leak in the first place,
+  # so no async test can observe or erase another's. The one suite that exists
+  # to test the memo turns it back on for itself.
+  defp memo_enabled?, do: Application.get_env(:engram, :ensure_collection_memo, true)
 
   @doc """
   Drop the memoised "this collection is ready" marker for the current node.

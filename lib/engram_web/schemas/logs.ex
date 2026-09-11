@@ -23,6 +23,12 @@ defmodule EngramWeb.Schemas.LogInput do
         type: :string,
         nullable: true,
         description: "WebSocket connection id, correlates client logs to server breadcrumbs."
+      },
+      forced: %Schema{
+        type: :boolean,
+        nullable: true,
+        description:
+          "Set by the client when the entry bypassed its diagnostics gate (RemoteLogger.anomaly). Provenance, not severity: it marks a signal that reaches the whole fleet rather than only opted-in users."
       }
     }
   })
@@ -76,6 +82,7 @@ defmodule EngramWeb.Schemas.LogRecord do
       platform: %Schema{type: :string, nullable: true},
       device_id: %Schema{type: :string, nullable: true},
       conn_id: %Schema{type: :string, nullable: true},
+      forced: %Schema{type: :boolean, nullable: true},
       created_at: %Schema{type: :string, format: :"date-time", nullable: true}
     }
   })

@@ -231,3 +231,12 @@ config :opentelemetry,
 # deleting. Zero in tests: no suite should pay a real minute of sleep, and the
 # race it guards is exercised directly via `:orphan_sweep_point_grace_fun`.
 config :engram, :orphan_sweep_point_grace_seconds, 0
+
+# `Qdrant.ensure_collection/2` memoises "this collection is ready" in
+# :persistent_term, keyed on the base URL — which under test is a Bypass port.
+# Ports are recycled: Bypass frees one on test exit and the OS reissues it, so a
+# later test inherits an earlier test's marker, skips the HTTP call entirely and
+# fails Bypass's exit check with "No HTTP request arrived at Bypass" — nowhere
+# near the test that actually caused it. Off here so no marker is ever written.
+# `QdrantEnsureCollectionMemoTest` re-enables it for its own cases.
+config :engram, :ensure_collection_memo, false

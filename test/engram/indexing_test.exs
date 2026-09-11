@@ -164,9 +164,14 @@ defmodule Engram.IndexingTest do
       # Voyage caps a request at 120,000 tokens summed over its inputs, and a
       # count cannot bound that — tokens per byte swing with the content. 128
       # full-width chunks of dense, space-free text (base64, minified) is
-      # ~269KB, which is ~134K tokens at 2 bytes/token: a 400 no retry fixes.
-      # A space-free blob is exactly what the chunker's cap now slices into
-      # full-width chunks, so it is the shape that would regress.
+      # ~269KB: a 400 no retry fixes. A space-free blob is exactly what the
+      # chunker's cap slices into full-width chunks, so it is the shape that
+      # would regress.
+      #
+      # The ceiling asserted below is 118,000 BYTES, just under the token limit
+      # 1:1 on purpose. A token never spans less than one byte, so that bound
+      # holds for any content. The earlier 200,000 assumed 2 bytes/token and
+      # prod shipped batches at 1.39 — see the constant's comment.
       {:ok, dense_note} =
         Notes.upsert_note(user, vault, %{
           "path" => "Big/Dense.md",
@@ -198,13 +203,69 @@ defmodule Engram.IndexingTest do
       assert length(batches) >= 2
 
       Enum.each(batches, fn {count, bytes} ->
-        assert bytes <= 200_000, "embed batch of #{bytes} bytes exceeds the budget"
+        assert bytes <= 118_000, "embed batch of #{bytes} bytes exceeds the budget"
         assert count <= 128
       end)
 
       # The byte ceiling must be the binding one here — if the count still
       # closed every batch, the token limit is as unguarded as before.
       assert Enum.any?(batches, fn {count, _bytes} -> count < 128 end)
+    end
+
+    test "an oversized heading cannot smuggle a chunk past the byte budget", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      # The batcher lets a single over-budget input through ALONE rather than
+      # dropping it, so anything that inflates one `context_text` past the
+      # ceiling bypasses the ceiling completely — one oversized request per
+      # chunk, 400 on both Voyage limits, poison loop.
+      #
+      # `context_text` is `folder > title > heading_path` + text, and the
+      # heading is a `.+` match on one line. Capping only `text` (as the first
+      # version of the chunk cap did) leaves the prefix unbounded: measured 99
+      # chunks each carrying a 202KB `context_text` behind a correctly-capped
+      # 2048-byte `text`. This asserts the cap covers the prefix too.
+      {:ok, heading_note} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Big/Heading.md",
+          "content" =>
+            "# " <>
+              String.duplicate("A", 200_000) <>
+              "\n\nshort body.\n\n## Sub\n\nanother short body.\n",
+          "mtime" => 1_000.0
+        })
+
+      test_pid = self()
+
+      Engram.MockEmbedder
+      |> stub(:embed_texts, fn texts ->
+        send(test_pid, {:embed_batch, {length(texts), Enum.map(texts, &byte_size/1)}})
+        {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+      end)
+
+      Bypass.expect(bypass, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": true}))
+      end)
+
+      assert {:ok, _chunk_count} = Indexing.index_note(heading_note, vault)
+
+      batches = collect_messages(:embed_batch)
+      assert batches != []
+
+      # No SINGLE input may exceed the budget — that is the escape hatch, and
+      # asserting only on the batch sum would pass while it is wide open.
+      Enum.each(batches, fn {_count, sizes} ->
+        widest = Enum.max(sizes)
+
+        assert widest <= 118_000,
+               "a single embed input of #{widest} bytes bypasses the batch budget"
+
+        assert Enum.sum(sizes) <= 118_000
+      end)
     end
 
     test "upserts Qdrant points in batches of at most 256", %{
