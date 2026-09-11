@@ -146,6 +146,19 @@ it("buckets an attachment under a synthetic (syn:) folder", () => {
 	expect(a?.item).toMatchObject({ path: "pics/a.png" });
 });
 
+// A derived folder (no marker) carries a `syn:<path>` id; the loader must find
+// its notes by the path that id stands for. This is where folder-id → notes
+// resolution lives now that there is no per-folder query to do it.
+it("buckets notes under a synthetic (syn:) folder by its path", () => {
+	const folders = [{ id: "syn:Derived", parent_id: null, name: "Derived", count: 1 }];
+	const loader = buildLoader({
+		folders,
+		notes: [{ ...rootNote, id: "d1", path: "Derived/a.md", folder: "Derived" }, rootNote],
+		sort: "name-asc",
+	});
+	expect(loader.getChildren("f:syn:Derived").map((k) => k.itemId)).toEqual(["n:d1"]);
+});
+
 it("getItem resolves an attachment id to its row, and undefined when absent", () => {
 	const loader = buildLoader({
 		folders: [],

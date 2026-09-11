@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type React from "react";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import { noteName } from "../lib/note-name";
 import { syntheticFolderId } from "../viewer/tree/synthesize-folders";
 import { getActiveVaultId, setActiveVaultId } from "./active-vault";
 import { ApiError } from "./client";
@@ -9,7 +10,6 @@ import { CrdtOpError } from "./crdt-ops";
 import {
 	type Folder,
 	type Note,
-	notesInFolder,
 	useAcceptTerms,
 	useAppBootstrap,
 	useBacklinks,
@@ -26,7 +26,6 @@ import {
 	useDeleteNote,
 	useDeleteVault,
 	useDuplicateNote,
-	useFolderNotesById,
 	useNote,
 	usePlanChangePreview,
 	useRenameAttachment,
@@ -40,6 +39,7 @@ import {
 	useVaults,
 	type VaultTree,
 } from "./queries";
+import { dirOf } from "./vault-tree-patch";
 
 vi.mock("sonner", () => ({
 	toast: {
@@ -905,16 +905,9 @@ describe("rename folder does NOT re-path cached child notes optimistically", () 
 // verbatim. `name` continues to carry the FULL folder path — that
 // shape is load-bearing for existing consumers and stays.
 
-// What these hooks READ (all three derive from one /vault/tree fetch, and the
+// What these hooks READ (all derive from one /vault/tree fetch, and the
 // convergence + no-fan-out invariants) lives in api/vault-tree.test.tsx, which
-// drives them against a real tree payload. Only the gating is asserted here.
-describe("useFolderNotesById", () => {
-	it("disabled when folderId is null", () => {
-		const { result } = renderHook(() => useFolderNotesById(null), { wrapper });
-		expect(result.current.fetchStatus).toBe("idle");
-		expect(get).not.toHaveBeenCalled();
-	});
-});
+// drives them against a real tree payload.
 
 describe("Folder type", () => {
 	it("exposes id (string), parent_id (string | null), name (string), count (number)", () => {
@@ -983,10 +976,20 @@ function seedTreeNotes(notes: Array<{ id: string; path: string }>) {
 	}));
 }
 
-// What the sidebar renders for a folder — the assertion that used to read a
-// per-folder cache entry directly.
+// The notes filed directly in the folder the sidebar keys under `folderId`:
+// the vault root's sentinel, a derived folder's `syn:<path>`, or a marker id.
+// `title` and `folder` are derived from the path, as the tree does.
 function notesById(folderId: string) {
-	return notesInFolder(readSeededTree(), folderId);
+	const tree = readSeededTree();
+	const dir =
+		folderId === "root"
+			? ""
+			: folderId.startsWith("syn:")
+				? folderId.slice(4)
+				: tree.folders.find((f) => f.id === folderId)?.name;
+	return tree.notes
+		.filter((n) => dir !== undefined && dirOf(n.path) === dir)
+		.map((n) => ({ ...n, title: noteName(n.path), folder: dirOf(n.path) }));
 }
 
 describe("useBatchDeleteNotes", () => {

@@ -4,7 +4,7 @@ import type { VaultTree, VaultTreeAttachment, VaultTreeFolder, VaultTreeNote } f
  * Pure, optimistic edits to the ONE vault-tree cache entry.
  *
  * `['vault-tree', vaultId]` is the only client-side copy of the vault's
- * inventory; `useFolders`, `useAttachments`, `useFolderNotesById` and the
+ * inventory; `useFolders`, `useAttachments`, `useVaultNotes` and the
  * sidebar tree loader are all views of it. So a mutation's `onMutate` patches
  * exactly one entry here, and every view follows. That is the whole point:
  * the previous design kept the same note list in four entries and made each

@@ -279,11 +279,6 @@ function folderPathForId(tree: VaultTree, folderId: string): string | null {
 	return tree.folders.find((f) => f.id === folderId)?.name ?? null;
 }
 
-// Stable empty list. `notesInFolder` is a react-query `select`, so returning a
-// fresh `[]` on every call would hand each observer a new reference and
-// re-render every collapsed/empty folder on every tree change.
-const NO_NOTES: NoteSummary[] = [];
-
 /**
  * Snapshot the one cache entry, having stopped anything in flight from
  * clobbering the patch that follows. The whole optimistic protocol is now
@@ -432,7 +427,7 @@ export function useFolderNotes(folder: string, options?: { enabled?: boolean }) 
 			api.get<{ notes: NoteSummary[] }>(`/folders/list?folder=${encodeURIComponent(folder)}`),
 		select: selectNotes,
 		enabled: options?.enabled ?? folder.length > 0,
-		// Same contract as useFolderNotesById: mutations + channel events
+		// Mutations + channel events
 		// invalidate; staleness only spans gaps those already don't cover.
 		staleTime: FOLDER_NOTES_STALE_MS,
 	});
@@ -519,25 +514,6 @@ export function useUploadAttachment() {
 export const ROOT_FOLDER_ID = "root";
 
 /**
- * One folder's notes, as a view of the vault tree.
- *
- * There is no `['folder-notes-by-id', ...]` cache any more. It used to hold a
- * per-folder copy that the sidebar loader filled with `fetchQuery` and read
- * with `getQueryData`, never mounting an observer — so react-query's `gcTime`
- * deleted the folder the user was looking at every five minutes, and every
- * mutation had to hand-patch each copy it could find. Deriving on read costs
- * one filter over an array the client already holds.
- */
-export function notesInFolder(tree: VaultTree, folderId: string): NoteSummary[] {
-	const path = folderPathForId(tree, folderId);
-	if (path === null) {
-		return NO_NOTES;
-	}
-	const rows = tree.notes.filter((n) => folderOf(n.path) === path);
-	return rows.length === 0 ? NO_NOTES : rows.map(treeNoteToSummary);
-}
-
-/**
  * Apply sync-channel note events to the tree IN PLACE — the alternative to
  * `invalidateVaultTree`, which re-downloads and server-side decrypts the whole
  * vault for every event burst, and which is why a busy vault used to leave the
@@ -584,18 +560,6 @@ export function useVaultNotes(opts: { enabled?: boolean } = {}) {
 		...vaultTreeQueryOptions(vaultId),
 		enabled: Boolean(vaultId) && (opts.enabled ?? true),
 		select: selectAllNotes,
-	});
-}
-
-export function useFolderNotesById(folderId: string | null, opts: { enabled?: boolean } = {}) {
-	const vaultId = useActiveVaultId();
-	// Memoized on folderId so react-query can cache the select result; an inline
-	// arrow would re-derive (and hand back a new array) on every render.
-	const select = useCallback((tree: VaultTree) => notesInFolder(tree, folderId ?? ""), [folderId]);
-	return useQuery({
-		...vaultTreeQueryOptions(vaultId),
-		enabled: folderId !== null && Boolean(vaultId) && (opts.enabled ?? true),
-		select,
 	});
 }
 
@@ -647,8 +611,8 @@ export interface VaultTree {
  * One request for the whole tree — see the controller moduledoc for why (this
  * replaced one HTTP round-trip per folder, 20-33 on a real vault).
  *
- * This query IS the source for `useFolders`, `useAttachments` and
- * `useFolderNotesById`: they derive their data from it instead of fetching
+ * This query IS the source for `useFolders`, `useAttachments`,
+ * `useVaultNotes` and `useSyncManifest`: they derive their data from it instead of fetching
  * their own. Nothing writes into those caches sideways, so there is exactly one
  * place a stale sidebar can come from, and exactly one key to invalidate.
  *
@@ -674,7 +638,7 @@ export function vaultTreeQueryOptions(vaultId: string | null | undefined) {
  * Stale the vault tree, and with it every view of it.
  *
  * This is the ONLY sidebar invalidation there is. `useFolders`,
- * `useAttachments`, `useVaultNotes` and `useFolderNotesById` are `select`
+ * `useAttachments`, `useVaultNotes` and `useSyncManifest` are `select`
  * views of this one query, not caches of their own, so there is nothing else
  * to stale and no ordering to get wrong.
  *
