@@ -233,10 +233,51 @@ async def test_disable_stops_flush(vault_a, cdp_a, cdp_b, api_sync):
         # worked. The phase-1 assertion above is what keeps it honest: it
         # proves the same query DOES find this test's own entries when logging
         # is on, using the same window. Do not weaken one without the other.
-        after_logs = api_sync.list_logs(limit=200, since=after_since, device_id=device_a)
-        assert len(after_logs) == 0, (
-            f"Expected 0 log rows from instance A (device {device_a}) after "
-            f"disabling remote logging, but got {len(after_logs)}: {after_logs!r}"
+        after_logs = api_sync.list_logs(
+            limit=200, since=after_since, device_id=device_a
+        )
+
+        # `forced` rows are EXEMPT, and that is the contract — not a concession.
+        #
+        # RemoteLogger.anomaly() ships with force: true on purpose: a fresh
+        # install has diagnostics OFF and is the install most likely to hit a
+        # first-sync bug (prod 2026-08-13, 316 of 316 notes dropped with zero
+        # client logs to read). Those entries carry counts and slugs only —
+        # never a path, title or content — so the setting still protects what it
+        # is meant to.
+        #
+        # Asserting a flat zero here made this test fail ~2/3 of runs on main,
+        # because a post-toggle sync legitimately emits
+        # `replay_produced_no_files`. It was nearly misdiagnosed as telemetry
+        # shipping after opt-out. See engram-app/Engram#1598.
+        #
+        # What must still hold is that ORDINARY logging stopped, so the
+        # assertion narrows rather than weakens: zero non-forced rows.
+        # The exemption below must not FAIL OPEN on the BACKEND side.
+        # `row.get("forced")` is None when the key is absent, so a deleted
+        # serializer line or a rolled-back migration would make every row read
+        # as unforced and silently revert this test to the flat-zero assertion
+        # it replaces. Requiring the KEY on a phase-1 row makes that loud.
+        #
+        # This does NOT guard the plugin side. The serializer always emits the
+        # key (the column defaults to false), so a plugin that stopped setting
+        # `forced` would pass this check with every row `false`. That half is
+        # guarded by the plugin unit test "a forced anomaly is marked forced on
+        # the wire" (Engram-obsidian tests/remote-log.test.ts).
+        assert "forced" in before_logs[0], (
+            "Log rows carry no `forced` key. The backend half of the "
+            "forced-provenance plumbing is missing (Logs.bound_entry, the "
+            "client_logs column, or LogsController.serialize_log), so the "
+            "post-disable assertion below cannot exempt forced anomalies and "
+            f"silently becomes an assert-zero. Row seen: {before_logs[0]!r}"
+        )
+
+        unforced = [row for row in after_logs if not row.get("forced")]
+        assert len(unforced) == 0, (
+            f"Expected 0 NON-FORCED log rows from instance A (device {device_a}) "
+            f"after disabling remote logging, but got {len(unforced)}: {unforced!r}\n"
+            f"(forced anomaly rows are exempt by contract; {len(after_logs) - len(unforced)} "
+            f"of the {len(after_logs)} rows in the window were forced)"
         )
 
     finally:

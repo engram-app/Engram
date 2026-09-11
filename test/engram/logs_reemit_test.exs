@@ -129,6 +129,50 @@ defmodule Engram.LogsReemitTest do
     assert meta[:client_severity] == "error"
   end
 
+  # The re-emit is the surface that is greppable in ONE Loki query without the
+  # read-only DB bastion, so it is where "does this signal cover the whole
+  # fleet, or only opted-in users?" actually gets asked. Persisting `forced` to
+  # client_logs alone would leave the on-call path as blind as before.
+  test "forced provenance reaches the Loki re-emit metadata, not just the DB" do
+    user = insert(:user)
+    parent = self()
+    ref = make_ref()
+    handler_id = :logs_reemit_forced_test_handler
+
+    :logger.add_handler(handler_id, __MODULE__, %{config: %{parent: parent, ref: ref}})
+    on_exit(fn -> :logger.remove_handler(handler_id) end)
+
+    {:ok, 2} =
+      Logs.insert_logs(user, [
+        %{
+          "ts" => DateTime.utc_now() |> DateTime.to_iso8601(),
+          "level" => "warn",
+          "category" => "sync",
+          "message" => "replay_produced_no_files applied=1 files=0",
+          "conn_id" => "c1",
+          "forced" => true
+        },
+        %{
+          "ts" => DateTime.utc_now() |> DateTime.to_iso8601(),
+          "level" => "warn",
+          "category" => "sync",
+          "message" => "ordinary warning",
+          "conn_id" => "c2"
+        }
+      ])
+
+    metas =
+      for _ <- 1..2 do
+        assert_receive {^ref, _level, meta}, 1000
+        {meta[:conn_id], meta[:forced]}
+      end
+      |> Map.new()
+
+    assert metas["c1"] == true
+    # Provenance, not severity: an ordinary warn must not claim the exemption.
+    refute metas["c2"]
+  end
+
   # :logger handler callback
   def log(%{level: level, meta: meta}, %{config: %{parent: parent, ref: ref}}) do
     if meta[:category] == :client and meta[:conn_id] in ["c1", "c2"] do
