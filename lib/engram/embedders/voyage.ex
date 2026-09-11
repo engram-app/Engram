@@ -109,7 +109,18 @@ defmodule Engram.Embedders.Voyage do
       Req.post(
         "#{url}/v1/embeddings",
         [
-          json: %{input: texts, model: model},
+          json: %{
+            input: texts,
+            model: model,
+            # #1614: Voyage prepends its retrieval prompts only when told which
+            # side an input is on, and its docs say not to omit this for
+            # retrieval. Vectors with and without it are compatible, so the
+            # existing index needs no re-embed.
+            input_type: input_type(purpose),
+            # Without this, a non-default EMBED_DIMS disagrees with the 1024-d
+            # vectors Voyage returns and every upsert 400s.
+            output_dimension: ServiceConfig.get(:embed_dims, 1024)
+          },
           headers: [{"authorization", "Bearer #{api_key}"}]
         ] ++ Keyword.merge(request_defaults(purpose), req_opts)
       )
@@ -127,6 +138,9 @@ defmodule Engram.Embedders.Voyage do
         {:error, reason}
     end
   end
+
+  defp input_type(:query), do: "query"
+  defp input_type(_purpose), do: "document"
 
   # Voyage's `/v1/embeddings` 200 response always carries a `usage` object
   # with `total_tokens`. The field is the only billing-relevant signal — no
