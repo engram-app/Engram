@@ -1195,7 +1195,7 @@ describe("useCreateNote — optimistic placeholder", () => {
 		});
 	});
 
-	// `/api/folders` returns DERIVED folders (ones holding no note directly) with
+	// The wire returns DERIVED folders (no marker row; listed because notes sit in them) with
 	// a null id; `selectFolders` maps those to `syn:<path>` for consumers, but the
 	// raw cache keeps the null. Resolving the target folder off the raw cache
 	// therefore yielded null for most real-world folders, so the optimistic insert
