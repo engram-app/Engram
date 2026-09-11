@@ -290,13 +290,13 @@ describe("handleFoldersBatch", () => {
 	it("refetches the folder tree so a folder delete lands live", () => {
 		const qc = mockQueryClient();
 		handleFoldersBatch({ op: "delete", folder: "Gone" }, qc, "7");
-		expect(qc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["folders", "7"] });
+		expect(qc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["vault-tree", "7"] });
 	});
 
 	it("refetches the folder tree so a folder create lands live", () => {
 		const qc = mockQueryClient();
 		handleFoldersBatch({ op: "create", folder: "New/Empty" }, qc, "7");
-		expect(qc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["folders", "7"] });
+		expect(qc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["vault-tree", "7"] });
 	});
 });
 

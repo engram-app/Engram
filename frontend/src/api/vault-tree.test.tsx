@@ -13,7 +13,6 @@ import {
 	useAttachments,
 	useFolderNotesById,
 	useFolders,
-	useVaultTree,
 } from "./queries";
 
 vi.mock("sonner", () => ({
@@ -228,11 +227,10 @@ describe("the vault tree is the single source for the sidebar views", () => {
 	it("does not fetch at all without an active vault id", async () => {
 		activeVault.id = null;
 		const wrapper = wrapperFor(newQc());
-		const { result } = renderHook(
-			() => ({ tree: useVaultTree(), folders: useFolders(), att: useAttachments() }),
-			{ wrapper },
-		);
-		await waitFor(() => expect(result.current.tree.fetchStatus).toBe("idle"));
+		const { result } = renderHook(() => ({ folders: useFolders(), att: useAttachments() }), {
+			wrapper,
+		});
+		await waitFor(() => expect(result.current.folders.fetchStatus).toBe("idle"));
 		expect(get).not.toHaveBeenCalled();
 	});
 

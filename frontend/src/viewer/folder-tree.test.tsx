@@ -2,8 +2,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AttachmentSummary, Folder } from "../api/queries";
 import { FolderTreeProvider, useFolderTreeState } from "../layout/folder-tree-context";
 import FolderTree from "./folder-tree";
+import { synthesizeFolders } from "./tree/synthesize-folders";
 
 // The HT-driven FolderTree's UX is the COMPOSITION of already-tested
 // primitives (loader, useEngramTree, TreeRow, dialogs). These integration
@@ -83,10 +85,28 @@ const {
 
 vi.mock("../api/queries", async () => {
 	const actual = await vi.importActual<typeof import("../api/queries")>("../api/queries");
+	let synthCache: { folders: unknown; attachments: unknown; out: Folder[] } | null = null;
+	const synthesizedFolders = (): Folder[] => {
+		if (synthCache?.folders !== mock.folders || synthCache.attachments !== mock.attachments) {
+			synthCache = {
+				folders: mock.folders,
+				attachments: mock.attachments,
+				out: synthesizeFolders(mock.folders as Folder[], mock.attachments as AttachmentSummary[]),
+			};
+		}
+		return synthCache.out;
+	};
 	return {
 		...actual,
+		// Synthesis is part of what `useFolders` RETURNS now (it moved into the
+		// select so every consumer sees the same complete list), so the stub has
+		// to do it too or these tests exercise a shape the app never sees.
+		//
+		// Memoized on the inputs' identity, like react-query's select result: a
+		// fresh array per render makes useEngramTree rebuild, re-render, and
+		// rebuild again, forever.
 		useFolders: () => ({
-			data: mock.loading || mock.error ? undefined : mock.folders,
+			data: mock.loading || mock.error ? undefined : synthesizedFolders(),
 			isLoading: mock.loading,
 			isError: mock.error,
 		}),

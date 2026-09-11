@@ -386,7 +386,7 @@ export function handleNotesBatch(
 }
 
 /** A folder marker was created/deleted/moved on the server (from the web app or
- *  the plugin). The tree renders from the ["folders", vaultId] query, so a
+ *  the plugin). The sidebar renders from the ["vault-tree", vaultId] query, so a
  *  single invalidation refetches it — the created folder appears, the deleted
  *  one drops — instead of waiting for a full reload. The event is already
  *  vault-scoped by the sync topic, so the payload carries no vault_id to check. */
@@ -395,10 +395,8 @@ export function handleFoldersBatch(
 	queryClient: QueryClient,
 	vaultId: string,
 ): void {
-	// The folders view derives from the vault tree — stale that first or the
-	// refetch below re-derives the pre-event folder list.
+	// The folders view is a `select` of the vault tree, so this is the refetch.
 	invalidateVaultTree(queryClient, vaultId);
-	queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
 }
 
 export async function connectChannel({ userId, vaultId, getToken, queryClient }: ConnectOptions) {

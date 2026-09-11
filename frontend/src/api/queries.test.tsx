@@ -748,18 +748,20 @@ function seedNoteById(id: string, note: Partial<Note>) {
 	} satisfies Note);
 }
 
-describe("rename note re-paths the note body cache optimistically", () => {
-	// An open editor's header reads `['note', vaultId, id]`, so it has to flip
-	// the instant the user commits — waiting for onSettled's refetch reads as lag.
+describe("rename note moves the open note's header optimistically", () => {
+	// An open editor's header reads `useNote(id)`, so it has to flip the instant
+	// the user commits — waiting for onSettled's refetch reads as lag. The rename
+	// only patches the tree; `useNote` overlays the tree's path onto the body,
+	// so these tests observe through the hook, never the raw body cache (which
+	// is deliberately left alone and may hold a stale path).
 	//
-	// This used to be deliberately skipped because the editor keyed its CRDT doc
-	// on `note.path`: re-pathing early made it enroll the new path before the
-	// rename committed, which the CRDT channel bootstrapped into a duplicate note
-	// that then 409'd the rename. note-page.tsx now keys the doc on `note.id`
-	// (stable across a rename) and only reads `path` for display + the `.md` gate,
-	// so the early-enroll hazard is gone and `ctx.prevNote` gives onError an exact
-	// rollback.
+	// Safe because note-page.tsx keys its CRDT doc on `note.id` (stable across a
+	// rename) and only reads `path` for display + the `.md` gate.
 	const seed = () => {
+		// Seeded data is the truth here; a mount-time refetch through the mocked
+		// client would replace it with nothing.
+		qc.setQueryDefaults(["vault-tree"], { staleTime: Number.POSITIVE_INFINITY });
+		qc.setQueryDefaults(["note"], { staleTime: Number.POSITIVE_INFINITY });
 		seedFolders([
 			{ name: "a", count: 1 },
 			{ name: "b", count: 0 },
@@ -768,7 +770,7 @@ describe("rename note re-paths the note body cache optimistically", () => {
 		seedNoteById("42", { id: "42", path: "a/x.md", folder: "a", title: "X", content: "# X" });
 	};
 
-	it("flips [note, vaultId, id] to the new path while the rename is in flight", async () => {
+	it("flips the open note's path while the rename is in flight", async () => {
 		seed();
 		let resolveCreate!: (v: string) => void;
 		crdtCreateNote.mockReturnValue(
@@ -777,18 +779,19 @@ describe("rename note re-paths the note body cache optimistically", () => {
 			}),
 		);
 
-		const { result } = renderHook(() => useRenameNote(), { wrapper });
+		const { result } = renderHook(() => ({ note: useNote("42"), rename: useRenameNote() }), {
+			wrapper,
+		});
 		act(() => {
-			result.current.mutate({ id: "42", old_path: "a/x.md", new_path: "b/y.md" });
+			result.current.rename.mutate({ id: "42", old_path: "a/x.md", new_path: "b/y.md" });
 		});
 
 		await waitFor(() => {
-			expect(qc.getQueryData<Note>(["note", "42", "42"])?.path).toBe("b/y.md");
+			expect(result.current.note.data?.path).toBe("b/y.md");
 		});
-		const cached = qc.getQueryData<Note>(["note", "42", "42"]);
-		expect(cached?.folder).toBe("b");
+		expect(result.current.note.data?.folder).toBe("b");
 		// Body is untouched — only the location moves.
-		expect(cached?.content).toBe("# X");
+		expect(result.current.note.data?.content).toBe("# X");
 
 		resolveCreate("42");
 	});
@@ -829,20 +832,22 @@ describe("rename note re-paths the note body cache optimistically", () => {
 		expect(notesById("syn:a")[0]?.path).toBe("a/x.md");
 	});
 
-	it("rolls the note body cache back to the old path when the rename is refused", async () => {
+	it("moves the open note's path back when the rename is refused", async () => {
 		seed();
 		crdtCreateNote.mockRejectedValue(new CrdtOpError("create_failed", "crdt_create"));
 
-		const { result } = renderHook(() => useRenameNote(), { wrapper });
+		const { result } = renderHook(() => ({ note: useNote("42"), rename: useRenameNote() }), {
+			wrapper,
+		});
 		act(() => {
-			result.current.mutate({ id: "42", old_path: "a/x.md", new_path: "b/y.md" });
+			result.current.rename.mutate({ id: "42", old_path: "a/x.md", new_path: "b/y.md" });
 		});
 
-		await waitFor(() => expect(result.current.isError).toBe(true));
-		const cached = qc.getQueryData<Note>(["note", "42", "42"]);
-		expect(cached?.path).toBe("a/x.md");
-		expect(cached?.folder).toBe("a");
-		expect(cached?.content).toBe("# X");
+		await waitFor(() => expect(result.current.rename.isError).toBe(true));
+		// One rollback (the tree) is the whole story: the header follows it.
+		expect(result.current.note.data?.path).toBe("a/x.md");
+		expect(result.current.note.data?.folder).toBe("a");
+		expect(result.current.note.data?.content).toBe("# X");
 	});
 });
 

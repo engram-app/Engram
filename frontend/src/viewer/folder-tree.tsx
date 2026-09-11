@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router";
 import { toast } from "sonner";
 import {
@@ -27,11 +27,7 @@ import { uuid7 } from "../crdt/uuid7";
 import { useFolderTreeState } from "../layout/folder-tree-context";
 import { copyToClipboard } from "../lib/clipboard";
 import { noteName } from "../lib/note-name";
-import {
-	isSyntheticFolderId,
-	synthesizeFolders,
-	syntheticFolderPath,
-} from "./tree/synthesize-folders";
+import { isSyntheticFolderId, syntheticFolderPath } from "./tree/synthesize-folders";
 import { TreeRowVirtualized } from "./tree/tree-row-virtualized";
 import { parseItemId, ROOT_ID } from "./tree/types";
 import { useEngramTree } from "./tree/use-engram-tree";
@@ -71,10 +67,7 @@ export default function FolderTree() {
 	// instead of going and asking for it.
 	const { data: notes = EMPTY_NOTES } = useVaultNotes();
 	const { data: attachments = EMPTY_ATTACHMENTS } = useAttachments();
-	const allFolders = useMemo(
-		() => synthesizeFolders(folders ?? EMPTY_FOLDERS, attachments),
-		[folders, attachments],
-	);
+	const allFolders = folders ?? EMPTY_FOLDERS;
 	const { sort, pendingFolderRename, requestFolderRename, clearFolderRename, registerCollapseAll } =
 		useFolderTreeState();
 	const params = useParams();

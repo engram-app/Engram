@@ -5,7 +5,7 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@tanstack/react-query";
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
 import { collideBump } from "@/lib/collide-bump";
@@ -15,6 +15,7 @@ import { uuid7 } from "../crdt/uuid7";
 import { noteHref } from "../routes";
 import {
 	isSyntheticFolderId,
+	synthesizeFolders,
 	syntheticFolderId,
 	syntheticFolderPath,
 } from "../viewer/tree/synthesize-folders";
@@ -53,10 +54,24 @@ function encodePathSegments(path: string): string {
 // Drop only the root row; give derived folders a stable synthetic id keyed on
 // their path so the `Folder.id: string` contract holds and they aren't erased
 // from the tree. synthesizeFolders then links parents/ancestors.
+/**
+ * The COMPLETE folder list, ancestors and all.
+ *
+ * `synthesizeFolders` runs here rather than in the sidebar because the wire
+ * list is incomplete in two ways — it omits folders that hold only
+ * sub-folders, and folders that exist only because an attachment is in them —
+ * and it returns every derived folder unparented. The sidebar was the only
+ * consumer that knew to repair that; the search filter, the note-page folder
+ * picker and the attachment upload dialog all read the raw list and quietly
+ * lost those folders. One select, one answer to "what folders are there".
+ */
 const selectFolders = (tree: VaultTree): Folder[] =>
-	tree.folders
-		.filter((f) => f.name !== "")
-		.map((f) => ({ ...f, id: f.id ?? syntheticFolderId(f.name) }));
+	synthesizeFolders(
+		tree.folders
+			.filter((f) => f.name !== "")
+			.map((f) => ({ ...f, id: f.id ?? syntheticFolderId(f.name) })),
+		tree.attachments,
+	);
 
 const selectNotes = (data: { notes: NoteSummary[] }) => data.notes;
 
@@ -277,6 +292,12 @@ async function snapshotTree(
 	qc: QueryClient,
 	vaultId: string | null | undefined,
 ): Promise<VaultTree | undefined> {
+	// This stops an in-flight tree fetch from LANDING on top of the patch below
+	// — query-core discards a cancelled fetch's result whether or not the
+	// queryFn is abortable. It does not stop the request: `fetchVaultTreeFresh`
+	// takes no AbortSignal and `api.get` has no way to pass one, so a whole-vault
+	// server-side decrypt runs to completion for nobody. Correct, wasteful.
+	// Plumbing a signal through the shared client is the fix, not a wider cancel.
 	await qc.cancelQueries({ queryKey: ["vault-tree", vaultId] });
 	return qc.getQueryData<VaultTree>(["vault-tree", vaultId]);
 }
@@ -315,11 +336,14 @@ function restoreTree(
 	snapshot: VaultTree | undefined,
 	patched: VaultTree | undefined,
 ): void {
-	if (snapshot === undefined) {
+	// `patched === undefined` means this mutation never wrote (the tree wasn't
+	// cached, or an early return skipped the patch), so there is nothing of ours
+	// to undo. Treating that as "restore anyway" is how the ONE branch that
+	// patches nothing became the one branch that clobbers unconditionally.
+	if (snapshot === undefined || patched === undefined) {
 		return;
 	}
-	const current = qc.getQueryData<VaultTree>(["vault-tree", vaultId]);
-	if (patched !== undefined && current !== patched) {
+	if (qc.getQueryData<VaultTree>(["vault-tree", vaultId]) !== patched) {
 		return;
 	}
 	qc.setQueryData<VaultTree>(["vault-tree", vaultId], snapshot);
@@ -510,11 +534,11 @@ export function notesInFolder(tree: VaultTree, folderId: string): NoteSummary[] 
 	return rows.length === 0 ? NO_NOTES : rows.map(treeNoteToSummary);
 }
 
-export function useVaultNotes() {
+export function useVaultNotes(opts: { enabled?: boolean } = {}) {
 	const vaultId = useActiveVaultId();
 	return useQuery({
 		...vaultTreeQueryOptions(vaultId),
-		enabled: Boolean(vaultId),
+		enabled: Boolean(vaultId) && (opts.enabled ?? true),
 		select: selectAllNotes,
 	});
 }
@@ -626,14 +650,6 @@ export function invalidateVaultTree(qc: QueryClient, vaultId: string | null | un
 	qc.invalidateQueries({ queryKey: ["index_status"] });
 }
 
-export function useVaultTree() {
-	const vaultId = useActiveVaultId();
-	// `enabled`: ungated, a deep link landing before the bootstrap reconcile
-	// (see reconcileActiveVault) would fetch — and server-side decrypt — the
-	// wrong vault's entire inventory under a key nothing later reads.
-	return useQuery({ ...vaultTreeQueryOptions(vaultId), enabled: Boolean(vaultId) });
-}
-
 export function useNote(id: string | null) {
 	const vaultId = useActiveVaultId();
 	const qc = useQueryClient();
@@ -641,10 +657,31 @@ export function useNote(id: string | null) {
 		(prev: Note | undefined) => prev ?? noteFromVaultTree(qc, vaultId, id),
 		[qc, vaultId, id],
 	);
+
+	// WHERE the note lives comes from the tree, always. The body response
+	// carries a `path` too, but it is a snapshot from whenever the body was
+	// fetched, so a rename used to need a hand-written patch of this cache
+	// (plus its own rollback) just to keep the header from lagging the sidebar.
+	// Overlaying instead means one authority for a note's location: patch the
+	// tree and the header moves with it, roll the tree back and it moves back.
+	//
+	// `title` is deliberately NOT overlaid — the tree derives it from the path
+	// while the server's is the document's H1, and those are different things.
+	//
+	// Memoized on the (referentially stable) notes array so this is one scan per
+	// tree change, not an O(notes) walk on every render of an open note.
+	const { data: notes } = useVaultNotes({ enabled: id !== null });
+	const row = useMemo(() => (id ? notes?.find((n) => n.id === id) : undefined), [notes, id]);
+	const withTreePath = useCallback(
+		(note: Note): Note => (row ? { ...note, path: row.path, folder: row.folder } : note),
+		[row],
+	);
+
 	return useQuery({
 		queryKey: ["note", vaultId, id],
 		queryFn: () => fetchNoteById(id ?? ""),
 		enabled: id !== null,
+		select: withTreePath,
 		// Two different blank-outs, one setting.
 		//
 		// Navigating: the key changes, which without a placeholder drops to
@@ -1685,7 +1722,7 @@ export function useRenameNote() {
 		{ renamed: boolean; old_path: string; new_path: string },
 		CrdtOpError,
 		{ id: string; old_path: string; new_path: string },
-		NoteBodyContext
+		TreeContext
 	>({
 		// Rename/move = crdt_create for a KNOWN live id at a new FREE path — the
 		// backend relocates the row in place (rename-as-move, notes.ex Phase E2),
@@ -1695,37 +1732,17 @@ export function useRenameNote() {
 			await crdtCreateNote(id, new_path);
 			return { renamed: true, old_path, new_path };
 		},
+		// Only the tree is patched. `useNote` reads a note's path off the tree
+		// (see the overlay there), so an open editor's header flips the moment
+		// the user commits and reverts with the tree if the rename is refused —
+		// no second cache to write, and no second rollback to keep in step.
 		onMutate: async ({ id, new_path }) => {
 			const tree = await snapshotTree(qc, vaultId);
-			const noteKey = ["note", vaultId, id] as const;
-			await qc.cancelQueries({ queryKey: noteKey });
-			const prevNote = qc.getQueryData<Note>(noteKey);
-
 			const patched = patchTree(qc, vaultId, (t) => renameNotes(t, [{ id, newPath: new_path }]));
-
-			// Re-path the note-body cache too, so an open editor's header flips the
-			// moment the user commits instead of lagging until the settle refetch.
-			// Safe because note-page.tsx keys its CRDT doc on `note.id` (stable
-			// across a rename) and reads `path` only for display + the `.md` gate.
-			if (prevNote) {
-				qc.setQueryData<Note>(noteKey, {
-					...prevNote,
-					path: new_path,
-					folder: folderOf(new_path),
-				});
-			}
-			return { tree, patched, noteId: id, prevNote };
+			return { tree, patched };
 		},
 		onError: (err, _vars, ctx) => {
-			if (!ctx) {
-				return;
-			}
-			restoreTree(qc, vaultId, ctx.tree, ctx.patched);
-			// Undo the optimistic re-path so a refused rename can't leave the
-			// header showing a name the server never accepted.
-			if (ctx.prevNote) {
-				qc.setQueryData<Note>(["note", vaultId, ctx.noteId], ctx.prevNote);
-			}
+			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
 			renameErrorToast(err, "file");
 		},
 		onSettled: () => {
@@ -2109,7 +2126,8 @@ export function useBatchMoveFolders() {
 			// sits under one. Skip the optimistic patch and let the server reject
 			// (it has the authoritative check). Frontend silence beats lying.
 			if (sources.some((src) => isUnder(target_parent, src))) {
-				// Nothing patched, so nothing to roll back.
+				// Nothing patched, so nothing to roll back — `restoreTree` reads the
+				// undefined `patched` as exactly that and leaves the cache alone.
 				return { tree, patched: undefined };
 			}
 			const patched = patchTree(qc, vaultId, (t) => moveFolders(t, sources, target_parent));

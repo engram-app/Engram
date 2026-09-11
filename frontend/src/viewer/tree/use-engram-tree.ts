@@ -101,14 +101,6 @@ function placeholderItem(itemId: string): Data {
 	};
 }
 
-export function treeStructureKey(
-	folders: Pick<Folder, "id" | "count" | "parent_id">[],
-	sort: SortKey,
-): string {
-	const folderKey = folders.map((f) => `${f.id}:${f.count}:${f.parent_id ?? ""}`).join("|");
-	return `${folderKey}::${sort}`;
-}
-
 export function useEngramTree(deps: Deps) {
 	const treeRef = useRef<ReturnType<typeof useTree<Data>> | null>(null);
 	const inner = useMemo(
