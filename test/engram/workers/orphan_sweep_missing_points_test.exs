@@ -108,6 +108,37 @@ defmodule Engram.Workers.OrphanSweepMissingPointsTest do
     assert is_nil(reloaded.dense_indexed_hash)
   end
 
+  # #1607: chunk reuse (#1595) matches on `context_hmac`. Leaving it set made
+  # the re-index "reuse" the very point ids Qdrant had lost, so nothing was
+  # upserted and the note was stamped indexed again, still unsearchable.
+  test "nulls the flagged note's chunk hmacs so the re-index cannot reuse lost points", %{
+    bypass: bypass
+  } do
+    user = insert(:user)
+    vault = insert(:vault, user: user)
+    note = insert(:note, user: user, vault: vault, embed_hash: "cafe", content_hash: "cafe")
+    chunk = insert_chunk!(note, Ecto.UUID.generate())
+
+    Repo.update_all(where(Chunk, id: ^chunk.id), [set: [context_hmac: "h"]],
+      skip_tenant_check: true
+    )
+
+    kept_note = insert(:note, user: user, vault: vault, embed_hash: "beef", content_hash: "beef")
+    kept_point = Ecto.UUID.generate()
+    kept = insert_chunk!(kept_note, kept_point)
+
+    Repo.update_all(where(Chunk, id: ^kept.id), [set: [context_hmac: "k"]],
+      skip_tenant_check: true
+    )
+
+    stub_qdrant(bypass, [kept_point])
+
+    assert :ok = perform_job(OrphanSweep, %{})
+
+    assert is_nil(Repo.get!(Chunk, chunk.id, skip_tenant_check: true).context_hmac)
+    assert Repo.get!(Chunk, kept.id, skip_tenant_check: true).context_hmac == "k"
+  end
+
   test "leaves a note alone when Qdrant has every point its chunks name", %{bypass: bypass} do
     user = insert(:user)
     vault = insert(:vault, user: user)
