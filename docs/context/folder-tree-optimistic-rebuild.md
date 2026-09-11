@@ -155,14 +155,35 @@ below) and **`gcTime` will delete it**.
   read and the `gcTime` eviction, were the same root cause. Kept here because
   the *class* recurs; the specific cache does not exist any more.
 
-### Known remaining gaps (NOT yet fixed)
-- **`['note', vaultId, id]` still holds `path`/`folder` as well as content**, so
-  `useRenameNote` and `useDeleteNote` hand-sync a second cache with its own
-  rollback. Splitting metadata (from the tree) from content (by id) would remove
-  the last duplicated note field.
-- **`['folderNotes', vaultId, folder]` is still a second copy of note data**,
-  fed by `/folders/list` for the dashboard. It survives only because that screen
-  renders tags and the `/vault/tree` payload carries none.
+### Deliberately NOT consolidated
+- **`['folderNotes', vaultId, folder]` (`/folders/list`) stays a second copy**
+  for the dashboard. That screen renders tags, and tags are ENCRYPTED
+  (`tags_ciphertext`), so adding them to `/vault/tree` means a second per-note
+  decrypt across the whole vault — the exact cost VaultTreeController's
+  moduledoc says the thin tree payload exists to avoid. Don't "finish the
+  consolidation" here without measuring that.
+- **`GET /api/folders` stays** — the plugin calls it. `/folders/list` and
+  `GET /api/attachments` have no web caller left but are public REST surface.
+
+### How sync events reach the tree (#1601)
+`api/channel.ts` coalesces `note_changed` events for 250 ms and applies them to
+the tree in one pass (`applyNoteEvents` in `vault-tree-patch.ts`) instead of
+re-downloading the vault. It re-fetches instead only when a patch can't be
+trusted: an attachment event (`kind: "attachment"`, no id), a folder-marker
+delete (no id), no tree cached, or a tree fetch already in flight (its older
+response would land on top of the patch). Deletes are path-guarded because a
+rename is `delete(old) + upsert(new)` with one id in no fixed order.
+
+Folder rows are re-derived from notes after every edit, matching the server:
+markers always listed, derived folders listed iff a note is filed in them. A
+note arriving in a never-seen folder therefore gets a row, and a derived folder
+whose last note leaves disappears immediately rather than on the next fetch.
+
+**Contract that bites in tests:** the tree rebuilds on reference identity of
+its inputs. Any stub of `useFolders`/`useVaultNotes`/`useAttachments` that
+returns a fresh array per call makes it rebuild forever — a hang, not a
+failure. It hung the whole frontend CI job for 96 minutes once. Hoist the
+stub's array.
 
 ## References
 - `frontend/src/api/queries.ts` (`vaultTreeQueryOptions` and the `select` views over it; `snapshotTree`/`patchTree`/`restoreTree`)
