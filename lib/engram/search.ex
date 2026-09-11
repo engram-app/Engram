@@ -574,7 +574,10 @@ defmodule Engram.Search do
   # #590: Qdrant payloads no longer carry plaintext source_path/tags. Refill
   # them on the final (post-rerank) result set from the encrypted `notes`
   # rows, keyed by qdrant_point_id. Candidates whose note row is missing keep
-  # whatever the payload provided (nil), rather than dropping the hit.
+  # whatever the payload provided (nil), rather than dropping the hit. A hit
+  # whose note is soft-deleted IS dropped: its points outlive the delete until
+  # DeleteNoteIndex succeeds, and they must not answer searches meanwhile
+  # (#1608).
   defp rehydrate_display_fields([], _user), do: []
 
   defp rehydrate_display_fields(results, user) do
@@ -583,13 +586,16 @@ defmodule Engram.Search do
 
     fields_by_qid = Engram.Notes.display_fields_by_qdrant_points(user, qdrant_ids)
 
-    Enum.map(results, fn result ->
+    Enum.flat_map(results, fn result ->
       case Map.get(fields_by_qid, Map.get(result, :qdrant_id)) do
         %{source_path: source_path, tags: tags} ->
-          result |> Map.put(:source_path, source_path) |> Map.put(:tags, tags)
+          [result |> Map.put(:source_path, source_path) |> Map.put(:tags, tags)]
+
+        :deleted ->
+          []
 
         nil ->
-          result
+          [result]
       end
     end)
   end
