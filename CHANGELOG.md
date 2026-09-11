@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.26.1](https://github.com/engram-app/Engram/compare/0.26.0...0.26.1) (2026-09-11)
+
+
+### Bug Fixes
+
+* **frontend:** stop the web sidebar flashing empty; one vault-tree cache, patched by sync events ([#1601](https://github.com/engram-app/Engram/issues/1601)) ([76faa30](https://github.com/engram-app/Engram/commit/76faa301cc57188c6ffd336e571d0958e20ef0f0))
+* **logs:** persist forced provenance; stop test_66 asserting a flat zero ([#1599](https://github.com/engram-app/Engram/issues/1599)) ([fc76050](https://github.com/engram-app/Engram/commit/fc76050fdce3aa67986b51b31266d926d3f51b9e))
+* **search:** bound embed inputs by bytes, not a density guess ([#1600](https://github.com/engram-app/Engram/issues/1600)) ([7a7c304](https://github.com/engram-app/Engram/commit/7a7c304e77d3262bf0e3ccd25d3467393bab7189))
+
 ## [0.26.0](https://github.com/engram-app/Engram/compare/0.25.1...0.26.0) (2026-09-10)
 
 
