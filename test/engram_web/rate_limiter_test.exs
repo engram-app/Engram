@@ -9,6 +9,31 @@ defmodule EngramWeb.RateLimiterTest do
     :ok
   end
 
+  # reset_buckets!/0 must hand back a window with room to burst into. Hammer's
+  # fix_window is epoch-aligned, so a burst started just before a 10s edge
+  # splits and the N+1th request is allowed (two CI reds on 2026-09-11).
+  describe "fresh_window_wait_ms/1" do
+    test "waits past the edge when it is inside the margin" do
+      assert RateLimiter.fresh_window_wait_ms(9_990) == 11
+      assert RateLimiter.fresh_window_wait_ms(9_001) == 1_000
+      # The observed CI split: 17ms before a 10s edge.
+      assert RateLimiter.fresh_window_wait_ms(1_789_000_009_983) == 18
+    end
+
+    test "does not wait with a full margin left" do
+      assert RateLimiter.fresh_window_wait_ms(9_000) == 0
+      assert RateLimiter.fresh_window_wait_ms(0) == 0
+      assert RateLimiter.fresh_window_wait_ms(10_000) == 0
+      assert RateLimiter.fresh_window_wait_ms(4_321) == 0
+    end
+
+    test "reset_buckets!/0 returns with at least the margin before the next edge" do
+      RateLimiter.reset_buckets!()
+      left = 10_000 - rem(System.system_time(:millisecond), 10_000)
+      assert left >= 990, "only #{left}ms left in the window after reset"
+    end
+  end
+
   test "default backend is :ets" do
     Application.delete_env(:engram, RateLimiter)
     assert RateLimiter.backend() == :ets
