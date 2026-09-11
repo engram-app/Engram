@@ -52,19 +52,57 @@ defmodule EngramWeb.RateLimiter do
   end
 
   if Mix.env() == :test do
-    @doc "Wipe every bucket (test setup only). ETS-backed backends only."
-    def reset_buckets! do
-      case backend() do
-        :distributed_ets ->
-          :ets.delete_all_objects(EngramWeb.RateLimiter.DistributedETS.Local)
+    # Every scale a burst-then-deny test runs against is a multiple of 10s
+    # (crdt edit/handshake budget 10s; HTTP, pre-auth, CIMD, telemetry 60s; AI
+    # search 24h), so every window edge of every one of them is a 10s edge.
+    @window_edge_ms 10_000
+    # Longer than any burst takes, even under full-suite load (measured bursts
+    # are 10-20ms), and short enough that the wait is rare: ~10% of calls, and
+    # at most this long.
+    @window_margin_ms 1_000
 
-        _ets ->
-          :ets.delete_all_objects(EngramWeb.RateLimiter.ETS)
+    @doc """
+    Wipe every bucket and return at the start of a fresh window (test setup
+    only). ETS-backed backends only.
+
+    Wiping alone was half the promise. Hammer's `:fix_window` keys a count to
+    `div(now, scale)`, so windows are epoch-aligned, and a burst that starts a
+    few ms before an edge splits across two windows: the N+1th request lands
+    in a new window as count 1 and is allowed. Every caller is a test about to
+    burst and assert the last request is denied, so "fresh buckets" has to
+    mean "with a window ahead to burst into". Measured: a 17ms CRDT burst
+    across `07:22:10.000` (10s window) and an 11ms device-flow burst across
+    `07:24:00.000` (60s window) both went red in one CI run.
+    """
+    def reset_buckets! do
+      try do
+        case backend() do
+          :distributed_ets ->
+            :ets.delete_all_objects(EngramWeb.RateLimiter.DistributedETS.Local)
+
+          _ets ->
+            :ets.delete_all_objects(EngramWeb.RateLimiter.ETS)
+        end
+      rescue
+        # Safe no-op when the backend's ETS table isn't started (e.g. the
+        # :distributed_ets supervisor isn't running under the current test config).
+        ArgumentError -> :ok
       end
-    rescue
-      # Safe no-op when the backend's ETS table isn't started (e.g. the
-      # :distributed_ets supervisor isn't running under the current test config).
-      ArgumentError -> :ok
+
+      case fresh_window_wait_ms(System.system_time(:millisecond)) do
+        0 -> :ok
+        wait -> Process.sleep(wait)
+      end
+
+      :ok
+    end
+
+    @doc false
+    # Pure, so the edge arithmetic is testable without a clock. Same clock and
+    # same `div/rem` shape Hammer's fix_window uses.
+    def fresh_window_wait_ms(now_ms) do
+      left = @window_edge_ms - rem(now_ms, @window_edge_ms)
+      if left < @window_margin_ms, do: left + 1, else: 0
     end
   end
 end

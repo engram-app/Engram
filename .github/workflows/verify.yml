@@ -3094,9 +3094,32 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "Resolved bun latest -> $v"
 
+      # HOME is pointed at runner.temp on EVERY setup-bun step in this repo, and
+      # that is load-bearing. setup-bun@v2 installs to `homedir()/.bun/bin/bun`,
+      # which on the shared self-hosted pool is `/home/runner/.bun/bin/bun`:
+      # the SAME binary every other job on the host execs (the e2e jobs call it
+      # by absolute path). When the requested version differs from what is
+      # there, setup-bun rewrites it IN PLACE (cache restore extracts over it;
+      # the EXDEV fallback is copyFileSync), and any job exec'ing bun in that
+      # window dies with `bun: Text file busy` (exit 126). This job resolves
+      # `latest` while others pin 1.4.0, so the version flip-flops and every
+      # flip is a rewrite. Killed headless-protocol on release 0.26.1 before
+      # a single test ran. A private HOME installs into the job's own temp dir
+      # and puts it first on PATH, so the shared binary is never written.
       - uses: oven-sh/setup-bun@v2
+        env:
+          HOME: ${{ runner.temp }}
         with:
           bun-version: ${{ steps.bun.outputs.version }}
+
+      # Guard the HOME override above: if someone drops it, setup-bun goes back
+      # to rewriting the shared binary and this fails before anything else does.
+      - name: Assert bun is the job-private install
+        run: |
+          got="$(command -v bun)"
+          [ "$got" = "$RUNNER_TEMP/.bun/bin/bun" ] || {
+            echo "::error::bun resolves to $got, not $RUNNER_TEMP/.bun/bin/bun; setup-bun is writing the shared ~/.bun again"; exit 1; }
+          echo "bun -> $got ($(bun --version))"
 
       # Run `bun audit` against frontend/ on every CI trigger. Fail when any
       # critical or high advisory affects a PRODUCTION dependency path. The
@@ -3729,8 +3752,12 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "Resolved bun latest -> $v"
 
+      # Private HOME: never rewrite the shared ~/.bun (see the first setup-bun
+      # step in this file for the Text-file-busy race this prevents).
       - uses: oven-sh/setup-bun@v2
         if: steps.guard.outputs.skip != 'true'
+        env:
+          HOME: ${{ runner.temp }}
         with:
           bun-version: ${{ steps.bun.outputs.version }}
 
@@ -5360,7 +5387,11 @@ jobs:
       # (`bun install --frozen-lockfile` clean, lockfile untouched,
       # `build:saas` green) because this job only runs on main, so no PR can
       # exercise the bump before it deploys.
+      # Private HOME: never rewrite the shared ~/.bun (see the first setup-bun
+      # step in this file for the Text-file-busy race this prevents).
       - uses: oven-sh/setup-bun@v2
+        env:
+          HOME: ${{ runner.temp }}
         with: { bun-version: 1.4.0 }
 
       - name: Install

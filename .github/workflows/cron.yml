@@ -313,7 +313,11 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "Resolved bun latest -> $v"
 
+      # Private HOME: never rewrite the shared ~/.bun (see the first setup-bun
+      # step in verify.yml for the Text-file-busy race this prevents).
       - uses: oven-sh/setup-bun@v2
+        env:
+          HOME: ${{ runner.temp }}
         with:
           bun-version: ${{ steps.bun.outputs.version }}
 
