@@ -229,11 +229,30 @@ describe("movesAcrossFolders", () => {
 		expect(movesAcrossFolders(TREE, [{ kind: "upsert", id: "n1", path: "Other/a.md" }])).toBe(true);
 	});
 
+	// The tree often doesn't know the note (CRDT-origin creates broadcast no
+	// note_changed). The rename's delete leg still gives the move away.
+	it("flags a folder rename of notes the tree has never seen", () => {
+		expect(
+			movesAcrossFolders(TREE, [
+				{ kind: "upsert", id: "ghost", path: "Renamed/x.md" },
+				{ kind: "delete", id: "ghost", path: "Inbox/x.md" },
+			]),
+		).toBe(true);
+	});
+
+	it("flags a delete leg that arrives after its upsert already inserted the row", () => {
+		const after = applyNoteEvents(TREE, [{ kind: "upsert", id: "ghost", path: "Renamed/x.md" }]);
+		expect(movesAcrossFolders(after, [{ kind: "delete", id: "ghost", path: "Inbox/x.md" }])).toBe(
+			true,
+		);
+	});
+
 	it("does not flag an edit, a same-folder rename, a create, or a delete", () => {
 		expect(
 			movesAcrossFolders(TREE, [
 				{ kind: "upsert", id: "n1", path: "Archive/a.md", updated_at: "u2" },
 				{ kind: "upsert", id: "n2", path: "Archive/renamed.md" },
+				{ kind: "delete", id: "n2", path: "Archive/b.md" },
 				{ kind: "upsert", id: "n9", path: "Anywhere/new.md" },
 				{ kind: "delete", id: "n3", path: "Archive/2023/old.md" },
 			]),

@@ -381,6 +381,21 @@ describe("note events patch the vault tree in place", () => {
 		expect(treeRefetches()).toBe(1);
 	});
 
+	// An earlier fallback invalidated the tree and its refetch failed. Patching
+	// now would mark the tree fresh and cancel the refetch it still owes.
+	it("re-fetches instead of patching while a refetch is still owed", async () => {
+		const { qc, treeRefetches } = setup();
+		await qc.invalidateQueries({ queryKey: ["vault-tree", "7"], refetchType: "none" });
+		const before = treeRefetches();
+		handleNoteChanged(
+			{ event_type: "upsert", id: "n1", path: "docs/a.md", updated_at: "u2", vault_id: "7" },
+			qc,
+			"7",
+		);
+		flush();
+		expect(treeRefetches()).toBe(before + 1);
+	});
+
 	it("stales the index cap when a note appears or disappears", () => {
 		const { qc, invalidate } = setup();
 		handleNoteChanged(

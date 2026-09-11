@@ -521,6 +521,8 @@ export const ROOT_FOLDER_ID = "root";
  *
  * Returns false when a patch can't be trusted, and the caller must invalidate:
  * - no tree cached yet: nothing to patch, and the first fetch includes the change;
+ * - the tree is invalidated or errored: a refetch is still owed, and patching
+ *   would mark it fresh and cancel that refetch;
  * - a note moved to a different folder: it may be part of a folder rename,
  *   and the events never say what happened to the folder marker;
  * - a tree fetch is IN FLIGHT: its response may predate these events and would
@@ -534,6 +536,13 @@ export function applyVaultTreeEvents(
 ): boolean {
 	const state = qc.getQueryState<VaultTree>(["vault-tree", vaultId]);
 	if (!state?.data || state.fetchStatus === "fetching") {
+		return false;
+	}
+	// A refetch is still OWED: an earlier fallback invalidated the tree and the
+	// fetch failed, or nothing was observing it yet. `setQueryData` would mark
+	// the tree fresh and clear that debt, so whatever the owed fetch carried (an
+	// attachment, a folder change) would never arrive.
+	if (state.isInvalidated || state.status === "error") {
 		return false;
 	}
 	// A move between folders can hide a folder rename, which the events do not

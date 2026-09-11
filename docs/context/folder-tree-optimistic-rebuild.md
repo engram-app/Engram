@@ -93,11 +93,11 @@ Symptom that led here: the sidebar file tree periodically flashed empty. A
 folder's notes vanished for many seconds every few minutes; folders looked like
 they collapsed and reopened on their own.
 
-The loop, all four steps required:
+The loop as it was before #1601 (none of these symbols exist now), all four steps required:
 
 1. `loader.ts` (`noteChildItems`) reads `['folder-notes-by-id', vaultId, folderId]`
    with `getQueryData` and fills a miss with `fetchQuery` — **no observer**.
-2. Only the ROOT list has one (`folder-tree.tsx:75`, `useFolderNotesById(ROOT_FOLDER_ID)`),
+2. Only the ROOT list had one (`useFolderNotesById(ROOT_FOLDER_ID)` in `folder-tree.tsx`),
    so every **expanded subfolder's** list is observerless and hits the default
    5-minute `gcTime`.
 3. `use-engram-tree.ts` subscribes to the QueryCache and calls `rebuildTree()` on a
@@ -113,7 +113,7 @@ The loop, all four steps required:
 touch the reason an observerless entry existed at all.
 
 **Actual fix (#1601):** the entry was deleted. `useFolders`, `useAttachments`,
-`useVaultNotes` and `useFolderNotesById` are now `select` VIEWS of the one
+`useVaultNotes` and `useSyncManifest` are now `select` VIEWS of the one
 `['vault-tree', vaultId]` query, not caches of their own, and the tree loader
 is a pure function of the arrays the component already holds. A view of an
 observed query cannot be collected out from under its reader, so the failure
@@ -178,8 +178,16 @@ moves the notes but leaves the old marker listed (markers survive empty). A
 plain move out of a marker folder looks identical on the wire and there the
 marker should stay — the client can't distinguish them, so it asks the server.
 Caught by e2e `tree-ops-sync.spec.ts` "rename folder propagates to a second
-tab". If the backend ever emits a `folders.batch` rename event, this fallback
-can narrow to just that event. Deletes are path-guarded because a
+tab". The move is detected from the rename's DELETE leg too (it carries the old
+path), not only from the tree's current row: the tree often doesn't know the
+note at all, because a CRDT-origin create broadcasts no `note_changed`. If the
+backend ever emits a `folders.batch` rename event, this fallback can narrow to
+just that event.
+
+It also re-fetches instead of patching while a refetch is **owed** — the tree
+is `isInvalidated` (an earlier fallback's fetch failed, or nothing observed it
+yet) or in `error`. `setQueryData` marks the entry fresh, so a patch there
+would silently cancel the owed refetch and whatever it was carrying. Deletes are path-guarded because a
 rename is `delete(old) + upsert(new)` with one id in no fixed order.
 
 Folder rows are re-derived from notes after every edit, matching the server:

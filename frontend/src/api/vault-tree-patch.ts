@@ -262,7 +262,7 @@ export function applyNoteEvents(tree: VaultTree, events: readonly NoteEvent[]): 
 }
 
 /**
- * True when any event moves an existing note into a DIFFERENT folder.
+ * True when any event relocates a note into a DIFFERENT folder.
  *
  * The event stream describes notes, never folder markers. A folder rename is
  * broadcast as one upsert+delete pair per note inside it and nothing about the
@@ -272,14 +272,31 @@ export function applyNoteEvents(tree: VaultTree, events: readonly NoteEvent[]): 
  * it is RIGHT to keep the marker — so the client cannot tell the two apart and
  * must ask the server. A rename that keeps the folder can't touch a marker and
  * is safe to patch.
+ *
+ * Comparing only against the tree's current row is not enough: the tree often
+ * does not know the note at all (a CRDT-origin create broadcasts no
+ * `note_changed`, so a note made in Obsidian after this tab loaded is absent).
+ * The rename's DELETE leg carries the old path, so a move is also detected
+ * from the pair itself — within one batch, or across batches once the upsert
+ * leg has inserted the row.
  */
 export function movesAcrossFolders(tree: VaultTree, events: readonly NoteEvent[]): boolean {
-	const byId = new Map(tree.notes.map((n) => [n.id, n]));
+	const known = new Map(tree.notes.map((n) => [n.id, dirOf(n.path)]));
+	const upsertDir = new Map<string, string>();
+	for (const e of events) {
+		if (e.kind === "upsert") {
+			const was = known.get(e.id);
+			if (was !== undefined && was !== dirOf(e.path)) {
+				return true;
+			}
+			upsertDir.set(e.id, dirOf(e.path));
+		}
+	}
 	return events.some((e) => {
-		if (e.kind !== "upsert") {
+		if (e.kind !== "delete") {
 			return false;
 		}
-		const cur = byId.get(e.id);
-		return cur !== undefined && dirOf(cur.path) !== dirOf(e.path);
+		const to = upsertDir.get(e.id) ?? known.get(e.id);
+		return to !== undefined && to !== dirOf(e.path);
 	});
 }
