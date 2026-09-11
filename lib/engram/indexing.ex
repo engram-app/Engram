@@ -127,7 +127,7 @@ defmodule Engram.Indexing do
         with :ok <- Qdrant.ensure_collection(collection(), dims),
              {:ok, filter_key} <- Crypto.dek_filter_key(user),
              {:ok, content_key} <- Crypto.dek_content_hash_key(user),
-             plan = plan_chunks(note, chunks, content_key),
+             plan = plan_chunks(note, chunks, content_key, semantic?),
              texts = embed_texts(plan),
              {:ok, vectors} <- maybe_embed(semantic?, texts),
              :ok <- ensure_one_vector_per_text(vectors, texts, note) do
@@ -572,10 +572,10 @@ defmodule Engram.Indexing do
   # Matched by multiplicity, not by set membership: a note with two identical
   # sections has two rows under one hmac and must consume one point each, or
   # the second chunk silently adopts the first one's point.
-  defp plan_chunks(note, chunks, content_key) do
+  defp plan_chunks(note, chunks, content_key, semantic?) do
     chunks =
       Enum.map(chunks, fn chunk ->
-        Map.put(chunk, :context_hmac, Crypto.hmac_content_hash(content_key, chunk.context_text))
+        Map.put(chunk, :context_hmac, fingerprint(content_key, chunk.context_text, semantic?))
       end)
 
     existing =
@@ -614,6 +614,19 @@ defmodule Engram.Indexing do
       reused_point_ids: reused,
       stale_point_ids: Enum.map(existing, fn {_h, id, _t} -> id end) -- reused
     }
+  end
+
+  # What a point HOLDS is part of the fingerprint, not just its text (#1606).
+  # A keyword-only point has no dense vector: matching it after an upgrade
+  # stamped the note densely indexed with nothing behind the stamp, and a
+  # downgrade kept vectors the tier no longer grants. The model is in it for
+  # the same reason, since another model's vector is not reusable either.
+  defp fingerprint(content_key, context_text, true) do
+    Crypto.hmac_content_hash(content_key, "dense:#{doc_embed_model()}\n" <> context_text)
+  end
+
+  defp fingerprint(content_key, context_text, false) do
+    Crypto.hmac_content_hash(content_key, "sparse\n" <> context_text)
   end
 
   defp embed_texts(plan), do: for({:embed, chunk} <- plan.entries, do: chunk.context_text)
