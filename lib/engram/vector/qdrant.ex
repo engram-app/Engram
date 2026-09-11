@@ -20,8 +20,9 @@ defmodule Engram.Vector.Qdrant do
   # index before any upsert/search/delete. `note_id` is not a live filter key
   # today (deletes resolve via `path_hmac`) but is indexed to match the prod
   # collection + future-proof. See #626. `type_hmac` is the OKF frontmatter
-  # `type` blind index (spec 2026-07-02).
-  @payload_index_fields ~w(user_id vault_id note_id path_hmac type_hmac)
+  # `type` blind index (spec 2026-07-02). `folder_hmac`/`tags_hmac` are the
+  # folder and tag search filters (#1609).
+  @payload_index_fields ~w(user_id vault_id note_id path_hmac type_hmac folder_hmac tags_hmac)
 
   # OKF frontmatter dates are stored plaintext (see build_prepared/6) so
   # Qdrant can range-filter on them; they need an integer payload index
@@ -105,20 +106,15 @@ defmodule Engram.Vector.Qdrant do
   Ensure a collection exists with the given vector dimensions.
   Creates it if missing; no-ops if already present (Qdrant returns 200 either way).
 
-  On a fresh create, also creates the keyword/integer payload indexes every
-  tenant-scoped filter depends on (#626, extended for OKF frontmatter fields).
-  An existing collection already carries them (indexes persist), so the
-  steady-state path skips the work: the only way to lose them is a
-  drop+recreate, which re-enters the create branch.
+  Also creates the keyword/integer payload indexes every tenant-scoped filter
+  depends on (#626, extended for OKF frontmatter fields). On an existing
+  collection it creates only the ones its `payload_schema` lacks (#1609), so
+  a field added to the list later reaches an already-deployed collection on
+  the next boot instead of needing an out-of-band PUT.
 
-  NOTE: `ensure_collection` runs on every note index (see
-  `Indexing.prepare_index/2`), so the `:exists` branch is a hot path. It
-  intentionally does NOT re-run `ensure_payload_indexes/1`, even though that
-  PUT is idempotent, to avoid adding several extra Qdrant round trips to
-  every single note embed. An already-deployed collection that predates a
-  newly-added index field (like this task's `type_hmac`/`fm_timestamp`/
-  `fm_created`) needs that index created once out-of-band, same procedure
-  as #626.
+  Cost: the `payload_schema` comes from the `collection_info` GET the shape
+  check already makes, so a fully indexed collection adds no requests. The
+  whole call is memoised per node (#1501), so this runs once per boot.
   """
   def ensure_collection(col \\ nil, dims) do
     col = col || collection()
@@ -201,8 +197,8 @@ defmodule Engram.Vector.Qdrant do
 
   defp do_ensure_collection(col, dims) do
     case create_collection(col, dims) do
-      {:ok, :created} -> ensure_payload_indexes(col)
-      {:ok, :exists} -> :ok
+      {:ok, :created} -> ensure_payload_indexes(col, MapSet.new())
+      {:ok, {:exists, indexed}} -> ensure_payload_indexes(col, indexed)
       {:error, _} = error -> error
     end
   end
@@ -236,22 +232,34 @@ defmodule Engram.Vector.Qdrant do
   end
 
   # 409 means the collection already exists. Confirm its shape is compatible
-  # and report `:exists` so the caller skips (re-)creating payload indexes,
-  # which an existing collection already carries.
+  # and report which fields it already indexes.
   defp existing_collection(col) do
-    with :ok <- verify_collection_shape(col), do: {:ok, :exists}
+    with {:ok, indexed} <- verify_collection_shape(col), do: {:ok, {:exists, indexed}}
   end
 
-  # Create a payload index per filtered field, right after a fresh
-  # collection create. `?wait=true` blocks until each index is ready so the
-  # first upsert can't race an unbuilt index. Stops at the first failure so a
-  # real error surfaces. Keyword fields are equality/any-match filters;
-  # integer fields (the OKF dates) are range filters.
-  defp ensure_payload_indexes(col) do
+  # Create a payload index for every filtered field the collection lacks.
+  # `?wait=true` blocks until each index is ready so the next upsert or search
+  # can't race an unbuilt one. Stops at the first failure so a real error
+  # surfaces (and is not memoised). Keyword fields are equality/any-match
+  # filters; integer fields (the OKF dates) are range filters.
+  #
+  # Runs on an EXISTING collection too, not just after a fresh create (#1609).
+  # Create-only meant a field added to the list later never reached a
+  # collection that already existed: prod indexed only the first four, and
+  # strict mode 400'd every folder, tag, type and date filter.
+  #
+  # ponytail: `:unknown` (collection_info unreadable) skips the check, and the
+  # memo then holds `:ok` until the node restarts. Another node or the next
+  # boot reconciles; make it retry if a transient read ever strands an index.
+  defp ensure_payload_indexes(_col, :unknown), do: :ok
+
+  defp ensure_payload_indexes(col, indexed) do
     keyword = Enum.map(@payload_index_fields, &{&1, "keyword"})
     integer = Enum.map(@integer_payload_index_fields, &{&1, "integer"})
 
-    Enum.reduce_while(keyword ++ integer, :ok, fn {field, schema}, :ok ->
+    (keyword ++ integer)
+    |> Enum.reject(fn {field, _schema} -> MapSet.member?(indexed, field) end)
+    |> Enum.reduce_while(:ok, fn {field, schema}, :ok ->
       case create_payload_index(col, field, schema) do
         :ok -> {:cont, :ok}
         error -> {:halt, error}
@@ -277,12 +285,12 @@ defmodule Engram.Vector.Qdrant do
   # collection is recreated (wipeable); this guard catches a stale deploy.
   defp verify_collection_shape(col) do
     case collection_info(col) do
-      {:ok, %{"config" => %{"params" => params}}} ->
+      {:ok, %{"config" => %{"params" => params}} = info} ->
         vectors = params["vectors"] || %{}
         sparse = params["sparse_vectors"] || %{}
 
         if is_map(vectors) and Map.has_key?(vectors, "dense") and Map.has_key?(sparse, "keyword") do
-          :ok
+          {:ok, indexed_fields(info)}
         else
           {:error, {:incompatible_collection_schema, col}}
         end
@@ -290,9 +298,11 @@ defmodule Engram.Vector.Qdrant do
       _ ->
         # Couldn't read collection info — don't block indexing on a transient
         # read error; the upsert will surface a real failure if shape is wrong.
-        :ok
+        {:ok, :unknown}
     end
   end
+
+  defp indexed_fields(info), do: MapSet.new(Map.keys(info["payload_schema"] || %{}))
 
   @doc """
   Delete a collection. Idempotent: returns `:ok` for both 200 and 404.
