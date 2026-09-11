@@ -260,3 +260,26 @@ export function applyNoteEvents(tree: VaultTree, events: readonly NoteEvent[]): 
 	}
 	return changed ? rebuild([...byId.values()], tree.folders, tree.attachments) : tree;
 }
+
+/**
+ * True when any event moves an existing note into a DIFFERENT folder.
+ *
+ * The event stream describes notes, never folder markers. A folder rename is
+ * broadcast as one upsert+delete pair per note inside it and nothing about the
+ * marker row itself, so a client patching from events alone keeps the old
+ * marker forever (markers stay listed when empty) next to the new derived
+ * folder. A move out of a marker folder looks identical on the wire, and there
+ * it is RIGHT to keep the marker — so the client cannot tell the two apart and
+ * must ask the server. A rename that keeps the folder can't touch a marker and
+ * is safe to patch.
+ */
+export function movesAcrossFolders(tree: VaultTree, events: readonly NoteEvent[]): boolean {
+	const byId = new Map(tree.notes.map((n) => [n.id, n]));
+	return events.some((e) => {
+		if (e.kind !== "upsert") {
+			return false;
+		}
+		const cur = byId.get(e.id);
+		return cur !== undefined && dirOf(cur.path) !== dirOf(e.path);
+	});
+}

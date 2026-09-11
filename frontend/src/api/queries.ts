@@ -35,6 +35,7 @@ import {
 	joinPath,
 	moveFolders,
 	moveNotes,
+	movesAcrossFolders,
 	type NoteEvent,
 	removeFolders,
 	removeNotes,
@@ -544,6 +545,8 @@ export function notesInFolder(tree: VaultTree, folderId: string): NoteSummary[] 
  *
  * Returns false when a patch can't be trusted, and the caller must invalidate:
  * - no tree cached yet: nothing to patch, and the first fetch includes the change;
+ * - a note moved to a different folder: it may be part of a folder rename,
+ *   and the events never say what happened to the folder marker;
  * - a tree fetch is IN FLIGHT: its response may predate these events and would
  *   land on top of the patch, silently undoing it. Invalidating instead bumps
  *   the generation `fetchVaultTreeFresh` checks, so that fetch re-runs.
@@ -555,6 +558,11 @@ export function applyVaultTreeEvents(
 ): boolean {
 	const state = qc.getQueryState<VaultTree>(["vault-tree", vaultId]);
 	if (!state?.data || state.fetchStatus === "fetching") {
+		return false;
+	}
+	// A move between folders can hide a folder rename, which the events do not
+	// describe (see `movesAcrossFolders`). Only the server knows the markers.
+	if (movesAcrossFolders(state.data, events)) {
 		return false;
 	}
 	const next = applyNoteEvents(state.data, events);

@@ -5,6 +5,7 @@ import {
 	isUnder,
 	moveFolders,
 	moveNotes,
+	movesAcrossFolders,
 	removeFolders,
 	removeNotes,
 	renameFolders,
@@ -220,6 +221,23 @@ describe("applyNoteEvents", () => {
 			{ kind: "upsert", id: "n9", path: "Archive/new.md", updated_at: "2026-01-01T00:00:00Z" },
 		]);
 		expect(t.notes.find((n) => n.id === "n9")?.pending).toBeUndefined();
+	});
+});
+
+describe("movesAcrossFolders", () => {
+	it("flags a note moving to another folder (maybe a folder rename in disguise)", () => {
+		expect(movesAcrossFolders(TREE, [{ kind: "upsert", id: "n1", path: "Other/a.md" }])).toBe(true);
+	});
+
+	it("does not flag an edit, a same-folder rename, a create, or a delete", () => {
+		expect(
+			movesAcrossFolders(TREE, [
+				{ kind: "upsert", id: "n1", path: "Archive/a.md", updated_at: "u2" },
+				{ kind: "upsert", id: "n2", path: "Archive/renamed.md" },
+				{ kind: "upsert", id: "n9", path: "Anywhere/new.md" },
+				{ kind: "delete", id: "n3", path: "Archive/2023/old.md" },
+			]),
+		).toBe(false);
 	});
 });
 

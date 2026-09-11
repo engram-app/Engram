@@ -365,6 +365,22 @@ describe("note events patch the vault tree in place", () => {
 		expect(tree()?.notes.map((n) => n.path)).toEqual(["docs/b.md"]);
 	});
 
+	// A folder rename is broadcast as per-note upsert+delete pairs and NOTHING
+	// about the folder marker, so patching would keep the old folder listed.
+	// Caught by e2e "rename folder propagates to a second tab".
+	it("re-fetches when a note moves to a different folder", () => {
+		const { qc, treeRefetches } = setup();
+		const ev = { vault_id: "7", id: "n1" };
+		handleNoteChanged(
+			{ ...ev, event_type: "upsert", path: "renamed/a.md", updated_at: "u2" },
+			qc,
+			"7",
+		);
+		handleNoteChanged({ ...ev, event_type: "delete", path: "docs/a.md" }, qc, "7");
+		flush();
+		expect(treeRefetches()).toBe(1);
+	});
+
 	it("stales the index cap when a note appears or disappears", () => {
 		const { qc, invalidate } = setup();
 		handleNoteChanged(
@@ -392,7 +408,8 @@ describe("note events patch the vault tree in place", () => {
 	// move; the invalidation generation makes the in-flight fetch run again.
 	it("falls back to a re-fetch while a tree fetch is in flight", () => {
 		const { qc, treeRefetches } = setup();
-		void qc.fetchQuery({
+		// Never resolves: the fetch stays in flight for the rest of the test.
+		qc.prefetchQuery({
 			queryKey: ["vault-tree", "7"],
 			queryFn: () => new Promise<VaultTree>(() => {}),
 			staleTime: 0,
