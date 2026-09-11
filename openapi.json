@@ -1367,6 +1367,12 @@
             "x-struct": null,
             "x-validate": null
           },
+          "forced": {
+            "nullable": true,
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          },
           "created_at": {
             "format": "date-time",
             "nullable": true,
@@ -1963,6 +1969,13 @@
             "description": "WebSocket connection id, correlates client logs to server breadcrumbs.",
             "nullable": true,
             "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "forced": {
+            "description": "Set by the client when the entry bypassed its diagnostics gate (RemoteLogger.anomaly). Provenance, not severity: it marks a signal that reaches the whole fleet rather than only opted-in users.",
+            "nullable": true,
+            "type": "boolean",
             "x-struct": null,
             "x-validate": null
           },
