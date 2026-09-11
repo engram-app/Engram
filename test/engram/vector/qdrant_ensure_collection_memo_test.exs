@@ -19,6 +19,13 @@ defmodule Engram.Vector.QdrantEnsureCollectionMemoTest do
   alias Engram.Vector.Qdrant
 
   setup do
+    # The memo is OFF for the suite at large (`config/test.exs`) because its
+    # base-URL key is a recycled Bypass port, which leaks a "ready" marker
+    # between unrelated tests. This is the one module that exists to test the
+    # memo, so it opts itself back in.
+    Application.put_env(:engram, :ensure_collection_memo, true)
+    on_exit(fn -> Application.put_env(:engram, :ensure_collection_memo, false) end)
+
     # Node-wide memo: clear it around each test so ordering cannot leak a
     # "ready" marker from one case into another.
     Qdrant.forget_collection_memo()

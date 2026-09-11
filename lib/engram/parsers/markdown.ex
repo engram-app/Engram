@@ -10,6 +10,7 @@ defmodule Engram.Parsers.Markdown do
 
   # ~4 chars per token; 512 tokens ≈ 2048 chars
   @max_chunk_chars 2048
+  @max_prefix_bytes 512
 
   @doc """
   Parse markdown content into indexable chunks.
@@ -62,16 +63,41 @@ defmodule Engram.Parsers.Markdown do
   # whole; and `frontmatter_chunk/3` never consulted a limit at all. Capping here
   # rather than in each one means every chunk — including any a future path adds
   # — flows through a single limit.
-  defp enforce_size_cap(%{text: text} = chunk) when byte_size(text) <= @max_chunk_chars do
+  #
+  # The cap covers `context_text`, NOT just `text`, and that distinction is the
+  # whole point: `text` is never what gets embedded. Bounding only `text` left
+  # the prefix — `folder > title > heading_path`, built from a `.+` match on one
+  # heading line and truncated nowhere — free to be arbitrary. A note whose H1
+  # is a 200KB pasted blob gave every one of its 99 chunks a 202KB
+  # `context_text` with a correctly-capped 2048-byte `text`, so each shipped as
+  # its own oversized single-input batch and 400'd on both the per-input and
+  # per-request token limits. Same poison loop, one field to the left.
+  defp enforce_size_cap(%{text: text, context_text: context_text} = chunk)
+       when byte_size(text) <= @max_chunk_chars and
+              byte_size(context_text) - byte_size(text) <= @max_prefix_bytes do
     [chunk]
   end
 
   defp enforce_size_cap(chunk) do
-    prefix = context_prefix_of(chunk)
+    prefix = chunk |> context_prefix_of() |> cap_prefix()
 
     chunk.text
     |> hard_split(@max_chunk_chars)
     |> Enum.map(&%{chunk | text: &1, context_text: prefix <> &1})
+  end
+
+  # A prefix is a breadcrumb, so 512 bytes is already far past any real
+  # `folder > title > h1 > h2`; anything longer is a pathological heading, not
+  # context worth keeping. Truncation goes through `hard_split/2` for the same
+  # reason the text cap does — a raw `binary_part` would halve a multibyte
+  # character, and CJK headings are exactly the input that reaches here.
+  #
+  # The separator is re-appended because `context_prefix_of/1` returns the
+  # prefix WITH its trailing "\n\n", which the truncation cuts off.
+  defp cap_prefix(prefix) when byte_size(prefix) <= @max_prefix_bytes, do: prefix
+
+  defp cap_prefix(prefix) do
+    (prefix |> hard_split(@max_prefix_bytes) |> hd()) <> "\n\n"
   end
 
   # Both construction sites build `context_text` as
