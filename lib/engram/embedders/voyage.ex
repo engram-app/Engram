@@ -105,22 +105,23 @@ defmodule Engram.Embedders.Voyage do
     {req_opts, _} = Keyword.split(opts, [:retry, :max_retries, :receive_timeout])
     purpose = Keyword.get(opts, :purpose, :index)
 
+    body =
+      %{
+        input: texts,
+        model: model,
+        # #1614: Voyage prepends its retrieval prompts only when told which
+        # side an input is on, and its docs say not to omit this for
+        # retrieval. Vectors with and without it are compatible, so the
+        # existing index needs no re-embed.
+        input_type: input_type(purpose)
+      }
+      |> maybe_put_output_dimension()
+
     result =
       Req.post(
         "#{url}/v1/embeddings",
         [
-          json: %{
-            input: texts,
-            model: model,
-            # #1614: Voyage prepends its retrieval prompts only when told which
-            # side an input is on, and its docs say not to omit this for
-            # retrieval. Vectors with and without it are compatible, so the
-            # existing index needs no re-embed.
-            input_type: input_type(purpose),
-            # Without this, a non-default EMBED_DIMS disagrees with the 1024-d
-            # vectors Voyage returns and every upsert 400s.
-            output_dimension: ServiceConfig.get(:embed_dims, 1024)
-          },
+          json: body,
           headers: [{"authorization", "Bearer #{api_key}"}]
         ] ++ Keyword.merge(request_defaults(purpose), req_opts)
       )
@@ -141,6 +142,18 @@ defmodule Engram.Embedders.Voyage do
 
   defp input_type(:query), do: "query"
   defp input_type(_purpose), do: "document"
+
+  # Sent ONLY when an operator set EMBED_DIMS. Without it Voyage returns its
+  # default width, which is what an unconfigured deployment already stores, and
+  # the older models (voyage-2, voyage-law-2, ...) reject the field outright —
+  # sending an unasked-for 1024 would 400 every embed for a self-hoster on one.
+  # A deployment that moves off the default sets EMBED_DIMS and gets it.
+  defp maybe_put_output_dimension(body) do
+    case ServiceConfig.get(:embed_dims) do
+      nil -> body
+      dims -> Map.put(body, :output_dimension, dims)
+    end
+  end
 
   # Voyage's `/v1/embeddings` 200 response always carries a `usage` object
   # with `total_tokens`. The field is the only billing-relevant signal — no

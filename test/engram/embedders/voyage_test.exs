@@ -138,7 +138,19 @@ defmodule Engram.Embedders.VoyageTest do
       expect_body(bypass)
 
       assert {:ok, _} = Voyage.embed_texts(["hello"], purpose: :query)
-      assert_receive {:body, %{"input_type" => "query", "output_dimension" => 1024}}
+      assert_receive {:body, %{"input_type" => "query"}}
+    end
+
+    # Older Voyage models (voyage-2, voyage-law-2, ...) reject output_dimension
+    # outright, and EMBED_DIMS has no default in config, so sending 1024
+    # unasked would 400 every embed for a self-hoster on one of them. Only an
+    # operator who set EMBED_DIMS gets the field.
+    test "omits output_dimension when EMBED_DIMS is not configured", %{bypass: bypass} do
+      expect_body(bypass)
+
+      assert {:ok, _} = Voyage.embed_texts(["hello"])
+      assert_receive {:body, body}
+      refute Map.has_key?(body, "output_dimension")
     end
   end
 
