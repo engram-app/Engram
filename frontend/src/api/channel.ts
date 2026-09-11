@@ -28,7 +28,8 @@ import {
 	sendCrdtCreateWithContent,
 	sendCrdtDelete,
 } from "./crdt-ops";
-import { folderIdForPath, invalidateVaultTree } from "./queries";
+import { applyVaultTreeEvents, invalidateVaultTree } from "./queries";
+import type { NoteEvent } from "./vault-tree-patch";
 
 // phoenix.js's own default reconnect steps — kept for the 2nd+ attempt. Only
 // the FIRST reconnect is full-jittered, to de-sync a drained fleet so the
@@ -136,6 +137,11 @@ interface PendingBatch {
 	queryClient: QueryClient;
 	vaultId: string;
 	folders: Set<string>;
+	// Note events the tree can absorb as a patch, applied together at flush.
+	events: NoteEvent[];
+	// Set by any event the tree can't absorb (attachments, folder-marker
+	// deletes with no id): the flush falls back to a full re-fetch.
+	needsRefetch: boolean;
 	timer: ReturnType<typeof setTimeout>;
 }
 
@@ -146,63 +152,37 @@ function folderFromPath(path: string): string {
 	return idx === -1 ? "" : path.slice(0, idx);
 }
 
+// What a note event means to the vault tree, or null when the tree can't
+// absorb it as a patch. Attachment events ride this same channel
+// (`kind: "attachment"`) but address rows by path with no id; a note event with
+// no id is a folder-marker delete. Both fall back to a re-fetch.
+function toNoteEvent(p: NoteChangedPayload): NoteEvent | null {
+	if (p.kind === "attachment" || p.id === undefined) {
+		return null;
+	}
+	if (p.event_type === "delete") {
+		return { kind: "delete", id: p.id, path: p.path };
+	}
+	if (p.event_type === "upsert") {
+		return { kind: "upsert", id: p.id, path: p.path, updated_at: p.updated_at };
+	}
+	return null;
+}
+
 function flushBatch(batch: PendingBatch): void {
 	const { queryClient, vaultId, folders } = batch;
-	// FIRST — this is the linchpin. `["folders"]`, `["attachments"]` and the
-	// whole `["folder-notes-by-id"]` family are DERIVED from the vault tree, so
-	// invalidating them while the tree is still fresh just re-derives the same
-	// pre-event bytes and nothing converges. Staling the tree first means the
-	// derived refetches below all resolve from one post-event fetch.
-	invalidateVaultTree(queryClient, vaultId);
-	queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
-	queryClient.invalidateQueries({ queryKey: ["search", vaultId] });
-	// The vault-wide path→id inventory behind [[ autocomplete + /v/:slug/wiki/*
-	// resolution (useSyncManifest). Every note event that reaches this flush can
-	// change it (create/rename/delete — folder ops emit per-note note_changed
-	// too), and it previously had ZERO invalidation sites, so a new/renamed note
-	// stayed missing from autocomplete until an incidental refetch.
-	queryClient.invalidateQueries({ queryKey: ["syncManifest", vaultId] });
-
-	// The by-id keys are keyed on folder-marker ids; resolve names through
-	// the cached tree. Unknown folders (just created, tree not refetched
-	// yet) fall back to one broad invalidation.
-	let broadById = false;
-
-	// refetchType "all" (not the default "active"): the tree loader
-	// (viewer/tree/loader.ts) reads these caches with a raw getQueryData check
-	// and only fetches on a genuine cache miss, so a folder whose notes were
-	// loaded once (via fetchQuery/prefetchQuery) but has no live useQuery
-	// observer, meaning any subfolder besides the root (the only one with a
-	// mounted `useFolderNotesById`), would otherwise sit invalidated but
-	// unfetched forever, never converging a cross-tab move/delete into that
-	// folder.
-	for (const folder of folders) {
-		queryClient.invalidateQueries({
-			queryKey: ["folderNotes", vaultId, folder],
-			refetchType: "all",
-		});
-		// Use the SHARED resolver, not a local lookup: reading the raw folders
-		// cache and trusting `row.id` returns null for every DERIVED folder (most
-		// folders), and a found-but-null entry silently invalidated the key
-		// `[..., null]` while skipping the broad fallback below — so a note
-		// deleted on another device stayed in the sidebar until a reload.
-		// folderIdForPath re-applies selectFolders' `syn:<path>` normalisation.
-		const folderId = folderIdForPath(queryClient, vaultId, folder);
-		if (folderId === null) {
-			broadById = true;
-		} else {
-			queryClient.invalidateQueries({
-				queryKey: ["folder-notes-by-id", vaultId, folderId],
-				refetchType: "all",
-			});
-		}
+	// The sidebar's folders, attachments and note lists are all `select` views
+	// of the ONE vault-tree query. Patch it with what the events say when that
+	// is trustworthy; re-download the vault only when it isn't.
+	if (batch.needsRefetch || !applyVaultTreeEvents(queryClient, vaultId, batch.events)) {
+		invalidateVaultTree(queryClient, vaultId);
 	}
-
-	if (broadById) {
-		queryClient.invalidateQueries({
-			queryKey: ["folder-notes-by-id", vaultId],
-			refetchType: "all",
-		});
+	queryClient.invalidateQueries({ queryKey: ["search", vaultId] });
+	// Path-keyed, and NOT derived from the tree: `/folders/list` is its own
+	// endpoint feeding the dashboard folder-browse view, which renders tags the
+	// tree payload doesn't carry.
+	for (const folder of folders) {
+		queryClient.invalidateQueries({ queryKey: ["folderNotes", vaultId, folder] });
 	}
 }
 
@@ -242,22 +222,9 @@ export const RECONNECT_JITTER_MAX_MS = 60_000;
  * /sync/changes cursor feed (backend #1036).
  */
 export function backfillStructural(queryClient: QueryClient, vaultId: string): void {
-	// FIRST — folders/attachments/folder-notes-by-id all derive from it; see the
-	// same note in flushBatch.
+	// One key covers the sidebar entirely — see flushBatch.
 	invalidateVaultTree(queryClient, vaultId);
-	queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
 	queryClient.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
-	queryClient.invalidateQueries({ queryKey: ["attachments", vaultId] });
-	// The wikilink path inventory misses events during the gap like everything
-	// else — stale it so autocomplete/wiki resolution converge on wake too.
-	queryClient.invalidateQueries({ queryKey: ["syncManifest", vaultId] });
-	// The sidebar tree renders note rows from the id-keyed family, not the
-	// name-keyed ["folderNotes"] above (that feeds the dashboard). Its expanded
-	// subfolders have no mounted observer, so a default ("active") invalidate
-	// leaves them stale-but-unfetched forever — refetchType "all" forces the
-	// refetch, exactly as flushBatch does. Without it a sleep/offline catch-up
-	// never converges tree membership until a full page reload.
-	queryClient.invalidateQueries({ queryKey: ["folder-notes-by-id", vaultId], refetchType: "all" });
 }
 
 export function clampReconnectJitter(raw: unknown): number | null {
@@ -305,6 +272,8 @@ export interface NoteChangedPayload {
 	event_type: string;
 	path: string;
 	vault_id: string;
+	// "attachment" on the attachment variant of this event; absent for notes.
+	kind?: string;
 	// Present since backend change_json adds note id. Always invalidate by id
 	// when available — useNote keys by id since the URL-by-id refactor.
 	id?: string;
@@ -362,6 +331,8 @@ export function handleNoteChanged(
 			queryClient,
 			vaultId: activeVaultId,
 			folders: new Set(),
+			events: [],
+			needsRefetch: false,
 			timer: setTimeout(() => {
 				pending = null;
 				flushBatch(batch);
@@ -371,6 +342,12 @@ export function handleNoteChanged(
 	}
 
 	pending.folders.add(payload.folder ?? folderFromPath(payload.path));
+	const event = toNoteEvent(payload);
+	if (event) {
+		pending.events.push(event);
+	} else {
+		pending.needsRefetch = true;
+	}
 
 	for (const listener of listeners) {
 		listener(payload);
@@ -441,7 +418,7 @@ export function handleNotesBatch(
 }
 
 /** A folder marker was created/deleted/moved on the server (from the web app or
- *  the plugin). The tree renders from the ["folders", vaultId] query, so a
+ *  the plugin). The sidebar renders from the ["vault-tree", vaultId] query, so a
  *  single invalidation refetches it — the created folder appears, the deleted
  *  one drops — instead of waiting for a full reload. The event is already
  *  vault-scoped by the sync topic, so the payload carries no vault_id to check. */
@@ -450,10 +427,8 @@ export function handleFoldersBatch(
 	queryClient: QueryClient,
 	vaultId: string,
 ): void {
-	// The folders view derives from the vault tree — stale that first or the
-	// refetch below re-derives the pre-event folder list.
+	// The folders view is a `select` of the vault tree, so this is the refetch.
 	invalidateVaultTree(queryClient, vaultId);
-	queryClient.invalidateQueries({ queryKey: ["folders", vaultId] });
 }
 
 export async function connectChannel({ userId, vaultId, getToken, queryClient }: ConnectOptions) {

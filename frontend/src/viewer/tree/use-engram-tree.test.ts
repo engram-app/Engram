@@ -1,26 +1,11 @@
-import { QueryClient } from "@tanstack/react-query";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { Folder, NoteSummary } from "../../api/queries";
 import { formatItemId } from "./types";
-import { createTreeDataLoader, treeStructureKey, useEngramTree } from "./use-engram-tree";
+import { createTreeDataLoader, useEngramTree } from "./use-engram-tree";
 
-// The tree loader loads a folder's note list from the vault tree on a cache
-// miss. Nothing here seeds that tree, so without this the miss path reaches the
-// real network; the loader swallows the failure, but the attempt still logs.
-vi.mock("../../api/client", async () => {
-	const actual = await vi.importActual<typeof import("../../api/client")>("../../api/client");
-	return {
-		...actual,
-		api: {
-			get: vi.fn(() => Promise.reject(new Error("no network in unit tests"))),
-			post: vi.fn(),
-			patch: vi.fn(),
-			del: vi.fn(),
-		},
-		setTokenGetter: vi.fn(),
-	};
-});
+// No client mock needed: the loader is a pure function of the arrays it is
+// handed, so nothing here can reach the network.
 
 describe("createTreeDataLoader", () => {
 	// An `inner` that knows nothing — models the window where the folders query
@@ -67,28 +52,16 @@ describe("createTreeDataLoader", () => {
 	});
 });
 
-describe("treeStructureKey", () => {
-	it("changes when a folder count changes (so a move rebuilds the tree)", () => {
-		const before = treeStructureKey([{ id: "f1", count: 0, parent_id: null }], "name-asc");
-		const after = treeStructureKey([{ id: "f1", count: 1, parent_id: null }], "name-asc");
-		expect(after).not.toBe(before);
-	});
-
-	it("changes when a folder is reparented (folder move rebuilds the tree)", () => {
-		const before = treeStructureKey([{ id: "f1", count: 0, parent_id: null }], "name-asc");
-		const after = treeStructureKey([{ id: "f1", count: 0, parent_id: "p2" }], "name-asc");
-		expect(after).not.toBe(before);
-	});
-
-	// Root-note changes no longer flow through the structure key — they live in
-	// the id-keyed cache under 'root' and rebuild via the QueryCache subscription
-	// (see the 'rebuilds … by-id list changes' test below).
-
-	it("is stable when nothing structural changes", () => {
-		expect(treeStructureKey([{ id: "f1", count: 2, parent_id: null }], "name-asc")).toBe(
-			treeStructureKey([{ id: "f1", count: 2, parent_id: null }], "name-asc"),
-		);
-	});
+const note = (id: string, path: string): NoteSummary => ({
+	id,
+	path,
+	title: path,
+	folder: path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "",
+	tags: [],
+	version: 1,
+	mtime: "",
+	created_at: "",
+	updated_at: "",
 });
 
 describe("useEngramTree", () => {
@@ -96,8 +69,7 @@ describe("useEngramTree", () => {
 	const scrollRef = { current: null as HTMLDivElement | null };
 	const baseDeps = {
 		folders,
-		qc: new QueryClient(),
-		vaultId: "v",
+		notes: [] as NoteSummary[],
 		sort: "name-asc" as const,
 		scrollParentRef: scrollRef,
 		onRenameCommit: vi.fn(),
@@ -111,127 +83,38 @@ describe("useEngramTree", () => {
 		expect(Array.isArray(result.current.items)).toBe(true);
 	});
 
-	it("rebuilds the tree when a folder-notes-by-id list changes", async () => {
-		const qc = new QueryClient();
-		const { result } = renderHook(() => useEngramTree({ ...baseDeps, qc }));
+	// Rebuild is driven by reference identity of the loader's inputs, which are
+	// `select` views of the one vault-tree query. A note op replaces the notes
+	// array, so the tree redraws without anything having to fingerprint it.
+	it("rebuilds when the notes array changes", async () => {
+		const { result, rerender } = renderHook((props: typeof baseDeps) => useEngramTree(props), {
+			initialProps: baseDeps,
+		});
 		const spy = vi.spyOn(result.current.tree, "rebuildTree");
 
-		// A note op (move/delete/create) mutates a by-id list. The tree must
-		// rebuild from that change alone — its folder structure key is unchanged.
-		act(() => {
-			qc.setQueryData(
-				["folder-notes-by-id", "v", "1"],
-				[
-					{
-						id: "n1",
-						path: "Projects/n1.md",
-						title: "n1",
-						folder: "Projects",
-						tags: [],
-						version: 1,
-						mtime: "",
-						created_at: "",
-						updated_at: "",
-					},
-				],
-			);
-		});
+		rerender({ ...baseDeps, notes: [note("n1", "Projects/n1.md")] });
 
 		await waitFor(() => expect(spy).toHaveBeenCalled());
 	});
 
-	it("does not rebuild again when a by-id list refetches to the SAME notes", async () => {
-		const qc = new QueryClient();
-		const { result } = renderHook(() => useEngramTree({ ...baseDeps, qc }));
+	// The no-op case: a reconnect-driven refetch that lands identical bytes.
+	// react-query's structural sharing hands back the SAME array, so identity
+	// alone is enough to skip the redraw — this is what the old hand-rolled
+	// content fingerprint over every note existed to decide.
+	it("does not rebuild when the same arrays come back", async () => {
+		const notes = [note("n1", "Projects/n1.md")];
+		const props = { ...baseDeps, notes };
+		const { result, rerender } = renderHook((p: typeof baseDeps) => useEngramTree(p), {
+			initialProps: props,
+		});
 		const spy = vi.spyOn(result.current.tree, "rebuildTree");
 
-		const note: NoteSummary = {
-			id: "n1",
-			path: "Projects/n1.md",
-			title: "n1",
-			folder: "Projects",
-			tags: [],
-			version: 1,
-			mtime: "",
-			created_at: "",
-			updated_at: "",
-		};
-		act(() => {
-			qc.setQueryData(["folder-notes-by-id", "v", "1"], [note]);
-		});
-		await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
-
-		// A reconnect-driven backfill refetch that lands the identical list (the
-		// common no-op case) must not redraw the tree a second time.
-		act(() => {
-			qc.setQueryData(["folder-notes-by-id", "v", "1"], [{ ...note }]);
-		});
+		rerender({ ...props });
 		await new Promise((r) => setTimeout(r, 0));
-		expect(spy).toHaveBeenCalledTimes(1);
+		expect(spy).not.toHaveBeenCalled();
 
-		// A genuine change (version bump) still rebuilds.
-		act(() => {
-			qc.setQueryData(["folder-notes-by-id", "v", "1"], [{ ...note, version: 2 }]);
-		});
-		await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
-	});
-
-	// A background write (e.g. a device_type sync touch) can bump `updated_at`
-	// without bumping `version`. The "Modified" sort reads `updated_at`
-	// (loader.ts sortNotes), so the fingerprint has to catch a timestamp-only
-	// change too, or the visible sort order goes stale after a no-op-looking
-	// refetch.
-	it("rebuilds when only updated_at changes (sort order can depend on it)", async () => {
-		const qc = new QueryClient();
-		const { result } = renderHook(() => useEngramTree({ ...baseDeps, qc }));
-		const spy = vi.spyOn(result.current.tree, "rebuildTree");
-
-		const note: NoteSummary = {
-			id: "n1",
-			path: "Projects/n1.md",
-			title: "n1",
-			folder: "Projects",
-			tags: [],
-			version: 1,
-			mtime: "",
-			created_at: "",
-			updated_at: "2026-08-17T00:00:00Z",
-		};
-		act(() => {
-			qc.setQueryData(["folder-notes-by-id", "v", "1"], [note]);
-		});
+		// A genuine change still rebuilds.
+		rerender({ ...baseDeps, notes: [...notes, note("n2", "Projects/n2.md")] });
 		await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
-
-		act(() => {
-			qc.setQueryData(
-				["folder-notes-by-id", "v", "1"],
-				[{ ...note, updated_at: "2026-08-17T00:05:00Z" }],
-			);
-		});
-		await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
-	});
-
-	it('rebuilds the tree when the root note list (by-id "root") changes', async () => {
-		const qc = new QueryClient();
-		const { result } = renderHook(() => useEngramTree({ ...baseDeps, qc }));
-		const spy = vi.spyOn(result.current.tree, "rebuildTree");
-
-		// Root notes now live in the same id-keyed cache under the 'root' sentinel.
-		const note: NoteSummary = {
-			id: "r1",
-			path: "r1.md",
-			title: "r1",
-			folder: "",
-			tags: [],
-			version: 1,
-			mtime: "",
-			created_at: "",
-			updated_at: "",
-		};
-		act(() => {
-			qc.setQueryData(["folder-notes-by-id", "v", "root"], [note]);
-		});
-
-		await waitFor(() => expect(spy).toHaveBeenCalled());
 	});
 });

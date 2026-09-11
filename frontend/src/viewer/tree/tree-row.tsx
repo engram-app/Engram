@@ -9,7 +9,6 @@ import { RenameInput } from "../tree-actions/rename-input";
 import { useLongPress } from "../tree-actions/use-long-press";
 import type { LoaderItem } from "./loader";
 import { TREE_ROW_HEIGHT } from "./row-metrics";
-import { isSyntheticFolderId } from "./synthesize-folders";
 import type { TreeItem } from "./types";
 
 interface Props {
@@ -25,7 +24,6 @@ interface Props {
 	menuOpenId?: string | null;
 	onContextMenu?: (itemId: string, x: number, y: number) => void;
 	onLongPress?: (itemId: string) => void;
-	onFolderHover?: (folderId: string) => void;
 }
 
 function rowClass(instance: ItemInstance<LoaderItem>, active: boolean, menuOpen: boolean): string {
@@ -115,14 +113,7 @@ function Chevron({ open }: { open: boolean }) {
 	);
 }
 
-export function TreeRow({
-	instance,
-	activeId,
-	menuOpenId,
-	onContextMenu,
-	onLongPress,
-	onFolderHover,
-}: Props) {
+export function TreeRow({ instance, activeId, menuOpenId, onContextMenu, onLongPress }: Props) {
 	const itemId = instance.getId();
 	const slug = useActiveVaultSlug();
 	const longPressHandlers = useLongPress({
@@ -187,12 +178,6 @@ export function TreeRow({
 	}
 
 	if (item.kind === "folder") {
-		// A synthetic folder has no backend record, so note-prefetch (id-keyed)
-		// can't run for it. The MENU still opens: `actionsFor` narrows it to the
-		// path-keyed creation actions. Suppressing the handler entirely just
-		// handed the user the browser's own context menu.
-		const isSynthetic = isSyntheticFolderId(item.id);
-		const hoverPrefetch = onFolderHover && !isSynthetic ? () => onFolderHover(item.id) : undefined;
 		return (
 			<button
 				type="button"
@@ -202,8 +187,6 @@ export function TreeRow({
 				// explicitly so the linter sees the role that supports aria-expanded/selected
 				role="treeitem"
 				onContextMenu={contextMenuHandler}
-				onPointerEnter={hoverPrefetch}
-				onFocus={hoverPrefetch}
 				aria-expanded={instance.isExpanded()}
 				aria-selected={instance.isSelected()}
 				className={rowClass(instance, active, menuOpen)}

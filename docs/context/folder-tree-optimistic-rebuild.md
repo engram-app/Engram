@@ -1,9 +1,12 @@
 # Context Doc: Web SPA Folder-Tree Optimistic Updates + Rebuild Triggering
 
-_Last verified: 2026-06-13_
+_Last verified: 2026-09-10_
 
 ## Status
-Working — core paths fixed 2026-06-13. Two known optimistic gaps remain (see Gotchas).
+Working. Core paths fixed 2026-06-13; the GC eviction that flashed the tree
+empty was fixed 2026-09-10 by deleting the cache it lived in (#1601), which
+also collapsed the four note-list caches into one. Two duplicated-state gaps
+remain (see Gotchas).
 
 ## What This Is
 How the React SPA's left-rail folder tree builds its hierarchy from React Query
@@ -16,7 +19,8 @@ item list so optimistic note/folder ops appear without a manual refresh.
 - `frontend/src/viewer/tree/use-engram-tree.ts` — the hook + rebuild triggers
 - `frontend/src/viewer/tree/loader.ts` — hierarchy + note-list reads
 - `frontend/src/viewer/folder-tree.tsx` — wiring (data sources, mutation hooks)
-- `frontend/src/api/queries.ts` — mutation hooks w/ optimistic `onMutate`
+- `frontend/src/api/queries.ts` — the one `['vault-tree']` query, its `select` views, and mutation hooks w/ optimistic `onMutate`
+- `frontend/src/api/vault-tree-patch.ts` — pure tree edits the `onMutate`s apply
 
 ## How It Works
 
@@ -37,23 +41,27 @@ keeps a derived flat item list.
 
 ### When headless-tree recomputes
 HT only rebuilds its flat list on: **mount**, **expandedItems change**, or an
-explicit **`rebuildTree()` / `invalidateChildrenIds()`**. It does NOT react to
-cache writes. So we trigger rebuilds ourselves via two mechanisms in
-`use-engram-tree.ts`:
+explicit **`rebuildTree()`**. It does NOT react to cache writes, so
+`use-engram-tree.ts` triggers the rebuild itself.
 
-1. **`treeStructureKey(folders, sort)`** → a `useEffect` that calls
-   `rebuildTree()` when the key changes. Fingerprints each folder as
-   `id:count:parent_id`, plus sort (the call site also concatenates an
-   `attachmentsFingerprint(...)` onto the result). Keyed (not identity) so
-   spurious churn doesn't spin a max-update-depth loop.
-   **Blind spot**: it does NOT see `folder-notes-by-id` list *contents*. A note
-   op that changes a by-id list without changing any folder count/parent_id will
-   NOT rebuild via the key alone.
-2. **QueryCache subscription** → the same hook subscribes to the query cache and
-   calls `rebuildTree()` (coalesced via `queueMicrotask` so a batch op that
-   patches many lists fires one pass) whenever a `['folder-notes-by-id', vaultId, *]`
-   query is `added` / `removed` / `updated`-with-`success`. This is the general
-   safety net for by-id list changes the structure key misses.
+Since #1601 that is ONE mechanism: a `useEffect` on the memoized loader, which
+changes identity exactly when one of its inputs (`folders`, `notes`,
+`attachments`, `sort`) does. Those are all `select` views of the one vault-tree
+query, and react-query keeps a select result referentially stable until the
+underlying data actually changes — including across a refetch that returns the
+same bytes, via structural sharing. So `!==` is a complete and exact answer to
+"does the tree need redrawing".
+
+**Historical (pre-#1601), because the shape recurs:** there used to be two
+mechanisms — a `treeStructureKey` fingerprint over `id:count:parent_id` plus
+sort, and a QueryCache subscription that rebuilt on any `folder-notes-by-id`
+write. Both existed because the per-folder caches handed out a fresh array on
+every no-op refetch, so identity told you nothing and the subscription needed
+its own content fingerprint (sorted `id:version:path:updated_at:created_at`
+over every note) just to tell a real change from a redundant one. The structure
+key also had a standing blind spot: it never saw note-list *contents*, so a
+note op that changed no folder count would not redraw through it. Collapsing
+the caches removed the blind spot and the fingerprint together.
 
 ## The Bug Class We Fixed (2026-06-13)
 Optimistic note move/delete/duplicate didn't show in the tree until manual
@@ -70,6 +78,60 @@ refresh or folder collapse/expand. Four distinct causes, four fixes:
   reads by-id for subfolders → `useDuplicateNote.onMutate` now mirrors the
   placeholder into `['folder-notes-by-id', vaultId, targetFolder.id]` too.
 
+## A cache entry read without a hook has NO observer — so `gcTime` deletes it (2026-09-10)
+
+**The durable lesson, and it is not tree-specific:** a React Query entry that a
+component reads with `qc.getQueryData` / fills with `qc.fetchQuery` — instead of
+subscribing through `useQuery` — has **no observer**. React Query garbage-collects
+any observerless query after `gcTime` (default **5 minutes**). Nothing warns you:
+the read still compiles, still type-checks, and works for the first five minutes
+of every session. And when the same component *also* rebuilds itself off a
+QueryCache subscription, the GC deletion is not a silent cache miss — it is a
+**visible flash of missing data**.
+
+Symptom that led here: the sidebar file tree periodically flashed empty. A
+folder's notes vanished for many seconds every few minutes; folders looked like
+they collapsed and reopened on their own.
+
+The loop as it was before #1601 (none of these symbols exist now), all four steps required:
+
+1. `loader.ts` (`noteChildItems`) reads `['folder-notes-by-id', vaultId, folderId]`
+   with `getQueryData` and fills a miss with `fetchQuery` — **no observer**.
+2. Only the ROOT list had one (`useFolderNotesById(ROOT_FOLDER_ID)` in `folder-tree.tsx`),
+   so every **expanded subfolder's** list is observerless and hits the default
+   5-minute `gcTime`.
+3. `use-engram-tree.ts` subscribes to the QueryCache and calls `rebuildTree()` on a
+   `removed` event — i.e. the eviction itself *triggers* a rebuild.
+4. The rebuild re-runs `getChildren`, the loader now misses, and the folder renders
+   with **only its subfolders**. The notes return only after `fetchQuery` →
+   `fetchVaultTree` → a full `/vault/tree` round trip, which `fetchVaultTreeFresh`
+   can retry up to 3 extra times when sync-channel invalidations land mid-flight.
+   Hence the multi-second gap, not a blink.
+
+**First fix (shipped, then superseded):** `gcTime: Number.POSITIVE_INFINITY` on
+`folderNotesByIdQueryOptions`. It stopped the bleeding in one line and did not
+touch the reason an observerless entry existed at all.
+
+**Actual fix (#1601):** the entry was deleted. `useFolders`, `useAttachments`,
+`useVaultNotes` and `useSyncManifest` are now `select` VIEWS of the one
+`['vault-tree', vaultId]` query, not caches of their own, and the tree loader
+is a pure function of the arrays the component already holds. A view of an
+observed query cannot be collected out from under its reader, so the failure
+mode is gone rather than suppressed. `['folder-notes-by-id']` no longer exists
+— do not go looking for it.
+
+There is no standalone regression test for the GC behaviour any more, because
+the cache it guarded is gone. The shape it would have needed is still worth
+knowing: fetch with **no observer**, advance fake timers past `gcTime`, assert
+the data survives — and never mount a hook in it, or it proves nothing.
+
+**Rule for new query options:** decide the observer question explicitly. If any
+caller reaches the entry through `getQueryData`/`fetchQuery`, either give it a
+non-default `gcTime` or give it a real observer. Do not leave it on the default
+and assume "it's cached". The two consequences of observerlessness are separate
+and you own both: **`invalidateQueries` won't refetch it** (see the Gotchas
+below) and **`gcTime` will delete it**.
+
 ## Failed Approaches / Dead Ends
 - **`onSuccess` invalidation alone** does NOT refresh the tree for by-id lists —
   see the observer gotcha below. The optimistic `onMutate` patch + a rebuild
@@ -84,22 +146,64 @@ refresh or folder collapse/expand. Four distinct causes, four fixes:
   `signal` opt). So GET queries are not cancellable — `qc.cancelQueries` cannot
   abort an in-flight GET. (Optimistic writes in `onMutate` run after
   `await cancelQueries`; harmless here per the dead-end above.)
-- **`folder-notes-by-id` queries have NO `useQuery` observers.** The loader reads
-  them via `getQueryData` and seeds via `prefetchQuery` / `fetchQuery`. So
-  `invalidateQueries` marks them stale but does NOT auto-refetch them — they only
-  refetch on the next loader read (folder expand). This is exactly why
-  `onSuccess` invalidation alone didn't refresh the tree.
+- **Historical (pre-#1601): `folder-notes-by-id` queries had NO `useQuery`
+  observers.** The loader read them via `getQueryData` and seeded via
+  `prefetchQuery` / `fetchQuery`, so `invalidateQueries` marked them stale but
+  did NOT auto-refetch — they only refreshed on the next folder expand, which is
+  why `onSuccess` invalidation alone didn't update the tree and why the channel
+  needed `refetchType: "all"`. Both consequences of observerlessness, the stale
+  read and the `gcTime` eviction, were the same root cause. Kept here because
+  the *class* recurs; the specific cache does not exist any more.
 
-### Known remaining gaps (NOT yet fixed)
-- **Root-note batch delete**: `useBatchDeleteNotes` only patches `folder-notes-by-id`
-  lists. Root notes live in `folderNotes['']`, so a deleted root note does NOT
-  disappear optimistically.
-- **`useCreateNote` has no optimistic insert** — relies on
-  navigate → auto-expand → fresh fetch to surface the new note.
+### Deliberately NOT consolidated
+- **`['folderNotes', vaultId, folder]` (`/folders/list`) stays a second copy**
+  for the dashboard. That screen renders tags, and tags are ENCRYPTED
+  (`tags_ciphertext`), so adding them to `/vault/tree` means a second per-note
+  decrypt across the whole vault — the exact cost VaultTreeController's
+  moduledoc says the thin tree payload exists to avoid. Don't "finish the
+  consolidation" here without measuring that.
+- **`GET /api/folders` stays** — the plugin calls it. `/folders/list` and
+  `GET /api/attachments` have no web caller left but are public REST surface.
+
+### How sync events reach the tree (#1601)
+`api/channel.ts` coalesces `note_changed` events for 250 ms and applies them to
+the tree in one pass (`applyNoteEvents` in `vault-tree-patch.ts`) instead of
+re-downloading the vault. It re-fetches instead only when a patch can't be
+trusted: an attachment event (`kind: "attachment"`, no id), a folder-marker
+delete (no id), no tree cached, a tree fetch already in flight (its older
+response would land on top of the patch), or **any note moving to a different
+folder**. That last one is the non-obvious one: `rename_folder` broadcasts one
+upsert+delete pair per note and NOTHING about the folder marker, so a patch
+moves the notes but leaves the old marker listed (markers survive empty). A
+plain move out of a marker folder looks identical on the wire and there the
+marker should stay — the client can't distinguish them, so it asks the server.
+Caught by e2e `tree-ops-sync.spec.ts` "rename folder propagates to a second
+tab". The move is detected from the rename's DELETE leg too (it carries the old
+path), not only from the tree's current row: the tree often doesn't know the
+note at all, because a CRDT-origin create broadcasts no `note_changed`. If the
+backend ever emits a `folders.batch` rename event, this fallback can narrow to
+just that event.
+
+It also re-fetches instead of patching while a refetch is **owed** — the tree
+is `isInvalidated` (an earlier fallback's fetch failed, or nothing observed it
+yet) or in `error`. `setQueryData` marks the entry fresh, so a patch there
+would silently cancel the owed refetch and whatever it was carrying. Deletes are path-guarded because a
+rename is `delete(old) + upsert(new)` with one id in no fixed order.
+
+Folder rows are re-derived from notes after every edit, matching the server:
+markers always listed, derived folders listed iff a note is filed in them. A
+note arriving in a never-seen folder therefore gets a row, and a derived folder
+whose last note leaves disappears immediately rather than on the next fetch.
+
+**Contract that bites in tests:** the tree rebuilds on reference identity of
+its inputs. Any stub of `useFolders`/`useVaultNotes`/`useAttachments` that
+returns a fresh array per call makes it rebuild forever — a hang, not a
+failure. It hung the whole frontend CI job for 96 minutes once. Hoist the
+stub's array.
 
 ## References
-- `frontend/src/viewer/tree/use-engram-tree.ts` (`treeStructureKey`, the two rebuild effects)
-- `frontend/src/viewer/tree/loader.ts` (`folderChildren`, `rootChildren`, `noteLoaderItem`)
-- `frontend/src/viewer/folder-tree.tsx` (data sources + `fetchFolderNotes` wiring)
-- `frontend/src/api/queries.ts` (`useBatchMoveNotes`, `useBatchDeleteNotes`, `useDuplicateNote`, `useCreateNote`)
+- `frontend/src/api/queries.ts` (`vaultTreeQueryOptions` and the `select` views over it; `snapshotTree`/`patchTree`/`restoreTree`)
+- `frontend/src/api/vault-tree-patch.ts` (the pure optimistic edits, and why `count` is recomputed rather than adjusted)
+- `frontend/src/viewer/tree/loader.ts` (pure; `folderChildren`, `rootChildren`, `noteChildItems`)
+- `frontend/src/viewer/tree/use-engram-tree.ts` (rebuild keyed on loader-input identity)
 - Related: `docs/context/perf-caching-invalidation.md`

@@ -2,8 +2,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AttachmentSummary, Folder } from "../api/queries";
 import { FolderTreeProvider, useFolderTreeState } from "../layout/folder-tree-context";
 import FolderTree from "./folder-tree";
+import { synthesizeFolders } from "./tree/synthesize-folders";
 
 // The HT-driven FolderTree's UX is the COMPOSITION of already-tested
 // primitives (loader, useEngramTree, TreeRow, dialogs). These integration
@@ -70,7 +72,7 @@ const {
 	// Mutable per-test fixtures (folders + root notes + loading flag + attachments), set in beforeEach.
 	mock: {
 		folders: [] as unknown[],
-		rootNotes: [] as unknown[],
+		notes: [] as unknown[],
 		loading: false,
 		error: false,
 		attachments: [] as unknown[],
@@ -83,20 +85,31 @@ const {
 
 vi.mock("../api/queries", async () => {
 	const actual = await vi.importActual<typeof import("../api/queries")>("../api/queries");
+	let synthCache: { folders: unknown; attachments: unknown; out: Folder[] } | null = null;
+	const synthesizedFolders = (): Folder[] => {
+		if (synthCache?.folders !== mock.folders || synthCache.attachments !== mock.attachments) {
+			synthCache = {
+				folders: mock.folders,
+				attachments: mock.attachments,
+				out: synthesizeFolders(mock.folders as Folder[], mock.attachments as AttachmentSummary[]),
+			};
+		}
+		return synthCache.out;
+	};
 	return {
 		...actual,
+		// Synthesis is part of what `useFolders` RETURNS now (it moved into the
+		// select so every consumer sees the same complete list), so the stub has
+		// to do it too or these tests exercise a shape the app never sees.
+		//
+		// Memoized on the inputs' identity, like react-query's select result: a
+		// fresh array per render makes useEngramTree rebuild, re-render, and
+		// rebuild again, forever.
 		useFolders: () => ({
-			data: mock.loading || mock.error ? undefined : mock.folders,
+			data: mock.loading || mock.error ? undefined : synthesizedFolders(),
 			isLoading: mock.loading,
 			isError: mock.error,
 		}),
-		// `useVaultTree` is deliberately NOT stubbed. It used to be pinned to
-		// `{ data: undefined }`, which meant FolderTree's real call to it was never
-		// exercised anywhere and a broken tree seam sailed through this file into
-		// CI. It runs for real here (no active vault id in these tests, so it stays
-		// `enabled: false` and never fetches — FolderTree only mounts it for its
-		// observer, not its data).
-		//
 		// The hooks below ARE stubbed, so this file proves COMPOSITION only: no
 		// tree payload can reach a row through them. The end-to-end path —
 		// FolderTree rendering folder/note/attachment rows derived from a real
@@ -106,31 +119,8 @@ vi.mock("../api/queries", async () => {
 		// as the only coverage.
 		useAttachments: () => ({ data: mock.attachments, isLoading: false }),
 		useNote: () => ({ data: mock.activeNote, isLoading: false, error: null }),
-		useFolderNotesById: (folderId: string | null) => {
-			// Root notes share the one id-keyed cache under the 'root' sentinel.
-			if (folderId === "root") {
-				return { data: mock.rootNotes, isLoading: false };
-			}
-			if (folderId === "1") {
-				return {
-					data: [
-						{
-							id: "99",
-							path: "Projects/spec.md",
-							title: "spec",
-							folder: "Projects",
-							tags: [],
-							version: 1,
-							mtime: "",
-							created_at: "",
-							updated_at: "",
-						},
-					],
-					isLoading: false,
-				};
-			}
-			return { data: [], isLoading: false };
-		},
+		// One array for the whole vault; the tree filters it per folder itself.
+		useVaultNotes: () => ({ data: mock.notes, isLoading: false }),
 		useRenameNote: () => ({
 			mutate: vi.fn(),
 			mutateAsync: vi.fn(() => Promise.resolve()),
@@ -167,10 +157,6 @@ vi.mock("../api/queries", async () => {
 
 function renderTree() {
 	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	// The loader reads note lists straight from the query cache. Root notes key
-	// under the 'root' sentinel; useActiveVaultId is unset in tests, so the tree
-	// resolves vaultId to ''. Seed it so root notes render without a fetch.
-	qc.setQueryData(["folder-notes-by-id", "", "root"], mock.rootNotes);
 	return render(
 		<QueryClientProvider client={qc}>
 			<MemoryRouter>
@@ -191,7 +177,7 @@ beforeEach(() => {
 	createFolderMutate.mockReset();
 	deleteFolderMutate.mockReset();
 	mock.folders = DEFAULT_FOLDERS.map((f) => ({ ...f }));
-	mock.rootNotes = [{ ...DEFAULT_ROOT_NOTE }];
+	mock.notes = [{ ...DEFAULT_ROOT_NOTE }];
 	mock.loading = false;
 	mock.error = false;
 	mock.attachments = [];
@@ -222,7 +208,7 @@ describe("FolderTree (HT)", () => {
 
 	it("shows root notes even when there are zero folders (new doc at root)", async () => {
 		mock.folders = [];
-		mock.rootNotes = [{ ...DEFAULT_ROOT_NOTE }];
+		mock.notes = [{ ...DEFAULT_ROOT_NOTE }];
 		renderTree();
 		// Must NOT short-circuit to the empty state — the root note is present.
 		expect(screen.queryByText("No notes yet.")).toBeNull();
@@ -231,7 +217,7 @@ describe("FolderTree (HT)", () => {
 
 	it("shows the empty state only when there are no folders AND no root notes", async () => {
 		mock.folders = [];
-		mock.rootNotes = [];
+		mock.notes = [];
 		renderTree();
 		expect(await screen.findByText("No notes yet.")).toBeInTheDocument();
 	});
@@ -252,7 +238,6 @@ describe("FolderTree (HT)", () => {
 
 		function renderWithToolbar() {
 			const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-			qc.setQueryData(["folder-notes-by-id", "", "root"], mock.rootNotes);
 			return render(
 				<QueryClientProvider client={qc}>
 					<MemoryRouter>
@@ -313,7 +298,7 @@ describe("FolderTree (HT)", () => {
 
 		it("when the vault is empty", async () => {
 			mock.folders = [];
-			mock.rootNotes = [];
+			mock.notes = [];
 			renderTree();
 			expect((await screen.findByTestId("folder-tree-root")).className).toContain("flex-1");
 		});
@@ -381,7 +366,7 @@ describe("FolderTree (HT)", () => {
 	// open OUR menu — it used to fall through to the browser's.
 	it("opens our menu on a derived (synthetic) folder, not the browser's", async () => {
 		mock.folders = [];
-		mock.rootNotes = [];
+		mock.notes = [];
 		mock.attachments = [
 			{
 				path: "Media/cover.png",
@@ -408,7 +393,7 @@ describe("FolderTree (HT)", () => {
 
 	it("deletes a derived folder by path, never by its syn: id", async () => {
 		mock.folders = [];
-		mock.rootNotes = [];
+		mock.notes = [];
 		mock.attachments = [
 			{
 				path: "Media/cover.png",
@@ -474,7 +459,7 @@ describe("FolderTree (HT)", () => {
 		// the only way in was the toolbar button.
 		it("still offers creation actions when the vault is empty", async () => {
 			mock.folders = [];
-			mock.rootNotes = [];
+			mock.notes = [];
 			await openRootMenu();
 			expect(screen.getByRole("menuitem", { name: "New note" })).toBeInTheDocument();
 			expect(screen.getByRole("menuitem", { name: "New folder" })).toBeInTheDocument();
@@ -482,7 +467,7 @@ describe("FolderTree (HT)", () => {
 
 		it("creates a note at the vault root when the vault is empty", async () => {
 			mock.folders = [];
-			mock.rootNotes = [];
+			mock.notes = [];
 			await openRootMenu();
 			fireEvent.click(screen.getByRole("menuitem", { name: "New note" }));
 			expect(createNoteMutate).toHaveBeenCalledWith(
@@ -583,7 +568,7 @@ describe("FolderTree (HT)", () => {
 
 	it("renders an attachment row from useAttachments", async () => {
 		mock.folders = [];
-		mock.rootNotes = [];
+		mock.notes = [];
 		mock.attachments = [
 			{
 				id: "cover-1",
@@ -608,13 +593,7 @@ describe("FolderTree (HT)", () => {
 		// one the user came from, which lives somewhere else entirely.
 		mock.activeNote = { ...DEFAULT_ROOT_NOTE, id: "7", path: "archive/old.md", folder: "archive" };
 		const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		qc.setQueryData(["folder-notes-by-id", "", "root"], mock.rootNotes);
-		// The loader reads note children from the cache, not from the hook — seed
-		// Projects' one note so an expand actually renders a row.
-		qc.setQueryData(
-			["folder-notes-by-id", "", "1"],
-			[{ ...DEFAULT_ROOT_NOTE, id: "99", path: "Projects/spec.md", title: "spec" }],
-		);
+		// Projects' one note, so an expand actually renders a row.
 		// A fresh element each time: re-rendering the SAME element object lets
 		// React bail out of the subtree entirely, so the effect would never see
 		// the arriving note.

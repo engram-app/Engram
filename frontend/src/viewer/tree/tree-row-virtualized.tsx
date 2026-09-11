@@ -12,7 +12,6 @@ interface Props {
 	menuOpenId?: string | null;
 	onContextMenu?: (itemId: string, x: number, y: number) => void;
 	onLongPress?: (itemId: string) => void;
-	onFolderHover?: (folderId: string) => void;
 }
 
 export function TreeRowVirtualized({
@@ -23,7 +22,6 @@ export function TreeRowVirtualized({
 	menuOpenId,
 	onContextMenu,
 	onLongPress,
-	onFolderHover,
 }: Props) {
 	const fallback = items[virtualItem.index];
 	if (!fallback) {
@@ -52,7 +50,6 @@ export function TreeRowVirtualized({
 				menuOpenId={menuOpenId}
 				onContextMenu={onContextMenu}
 				onLongPress={onLongPress}
-				onFolderHover={onFolderHover}
 			/>
 		</div>
 	);

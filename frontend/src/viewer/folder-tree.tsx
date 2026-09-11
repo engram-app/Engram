@@ -1,13 +1,10 @@
-import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router";
 import { toast } from "sonner";
-import { useActiveVaultId } from "../api/active-vault";
 import {
 	type AttachmentSummary,
 	type Folder,
-	folderNotesByIdQueryOptions,
-	ROOT_FOLDER_ID,
+	type NoteSummary,
 	useAttachments,
 	useBatchDeleteAttachments,
 	useBatchDeleteFolders,
@@ -19,23 +16,18 @@ import {
 	useCreateNote,
 	useDeleteFolder,
 	useDuplicateNote,
-	useFolderNotesById,
 	useFolders,
 	useNote,
 	useRenameAttachment,
 	useRenameFolder,
 	useRenameNote,
-	useVaultTree,
+	useVaultNotes,
 } from "../api/queries";
 import { uuid7 } from "../crdt/uuid7";
 import { useFolderTreeState } from "../layout/folder-tree-context";
 import { copyToClipboard } from "../lib/clipboard";
 import { noteName } from "../lib/note-name";
-import {
-	isSyntheticFolderId,
-	synthesizeFolders,
-	syntheticFolderPath,
-} from "./tree/synthesize-folders";
+import { isSyntheticFolderId, syntheticFolderPath } from "./tree/synthesize-folders";
 import { TreeRowVirtualized } from "./tree/tree-row-virtualized";
 import { parseItemId, ROOT_ID } from "./tree/types";
 import { useEngramTree } from "./tree/use-engram-tree";
@@ -58,6 +50,7 @@ type MoveRow = { kind: "file"; path: string } | { kind: "folder"; path: string }
 // up an infinite re-render loop in useEngramTree's rebuildTree effect.
 const EMPTY_FOLDERS: Folder[] = [];
 const EMPTY_ATTACHMENTS: AttachmentSummary[] = [];
+const EMPTY_NOTES: NoteSummary[] = [];
 
 type DialogState =
 	| { kind: "none" }
@@ -68,20 +61,15 @@ type DialogState =
 
 export default function FolderTree() {
 	const { data: folders, isLoading, isError } = useFolders();
-	// Root notes share the one id-keyed cache under the ROOT_FOLDER_ID sentinel
-	// (its fetcher hits the path-keyed list endpoint, since the by-id endpoint
-	// needs a real folder id). Subscribing here gives root an observer so
-	// invalidations refetch it; the loader stitches the rows under ROOT.
-	const { data: rootNotes = [] } = useFolderNotesById(ROOT_FOLDER_ID);
+	// Every note in the vault, in one array. These three hooks are all views of
+	// the SAME `['vault-tree']` query, so this is one fetch and one observer set
+	// — and the loader below can answer "what is in this folder" synchronously
+	// instead of going and asking for it.
+	const { data: notes = EMPTY_NOTES } = useVaultNotes();
 	const { data: attachments = EMPTY_ATTACHMENTS } = useAttachments();
-	const allFolders = useMemo(
-		() => synthesizeFolders(folders ?? EMPTY_FOLDERS, attachments),
-		[folders, attachments],
-	);
+	const allFolders = folders ?? EMPTY_FOLDERS;
 	const { sort, pendingFolderRename, requestFolderRename, clearFolderRename, registerCollapseAll } =
 		useFolderTreeState();
-	const vaultId = useActiveVaultId();
-	const qc = useQueryClient();
 	const params = useParams();
 	const selectedNoteId = params.itemId ?? null;
 
@@ -108,23 +96,10 @@ export default function FolderTree() {
 	// Rename handler — TreeRow already wires HT's renaming state. HT calls
 	// back with the new leaf-name; we rebuild the new full path from the
 	// existing item path's folder + new leaf name.
-	// The by-id note cache is spread across many query entries and TanStack types
-	// `state.data` as unknown, so every reader used to assert its shape. Validate
-	// once here instead: a row that fails the check is dropped, not trusted.
-	const cachedNoteRows = (): Array<{ id: string; path: string; title?: string }> =>
-		qc
-			.getQueryCache()
-			.findAll({ queryKey: ["folder-notes-by-id", vaultId] })
-			.flatMap((q) => (Array.isArray(q.state.data) ? q.state.data : []))
-			.filter(
-				(n): n is { id: string; path: string; title?: string } =>
-					typeof n?.id === "string" && typeof n?.path === "string",
-			);
-
 	const onRenameCommit = (itemId: string, newName: string) => {
 		const p = parseItemId(itemId);
 		if (p.kind === "note") {
-			const item = cachedNoteRows().find((n) => n.id === p.id);
+			const item = notes.find((n) => n.id === p.id);
 			if (!item) {
 				return;
 			}
@@ -157,7 +132,7 @@ export default function FolderTree() {
 	// from each note's CURRENT path. Resolve those here (from the by-id cache the
 	// tree renders) BEFORE the optimistic onMutate re-paths the rows.
 	const resolveNotePaths = (ids: string[]): Record<string, string> => {
-		const all = cachedNoteRows();
+		const all = notes;
 		const out: Record<string, string> = {};
 		for (const id of ids) {
 			const p = all.find((n) => n.id === id)?.path;
@@ -211,27 +186,10 @@ export default function FolderTree() {
 		}
 	};
 
-	// Warm a folder's note list on hover, so expansion is instant. Same options
-	// the loader and `useFolderNotesById` build, so it's one query however it's
-	// reached — and a no-op read off the cached vault tree while that is fresh.
-	const prefetchFolderNotes = useCallback(
-		(folderId: string) => {
-			qc.prefetchQuery(folderNotesByIdQueryOptions(qc, vaultId, folderId));
-		},
-		[qc, vaultId],
-	);
-
-	// The one read every view above derives from (see `vaultTreeQueryOptions`).
-	// Mounted here for its OBSERVER, not its data: an observed query refetches
-	// the instant `api/channel.ts` invalidates it, and never gets garbage
-	// collected out from under the derived queries between events.
-	useVaultTree();
-
 	const { tree, virtualizer, items } = useEngramTree({
 		folders: allFolders,
 		attachments,
-		qc,
-		vaultId: vaultId ?? "",
+		notes,
 		sort,
 		scrollParentRef: scrollRef,
 		onRenameCommit,
@@ -400,11 +358,7 @@ export default function FolderTree() {
 	}
 
 	function lookupNote(id: string): { id: string; path: string; title?: string } | undefined {
-		const cached = cachedNoteRows().find((n) => n.id === id);
-		if (cached) {
-			return cached;
-		}
-		return rootNotes.find((n) => n.id === id);
+		return notes.find((n) => n.id === id);
 	}
 
 	// Folder path a creation action targets: the right-clicked folder, or '' for
@@ -661,7 +615,7 @@ export default function FolderTree() {
 	// drop-to-root zone. Swapping the container out for bare text is how an empty
 	// vault ended up with no way in but the toolbar button.
 	const isEmpty =
-		!folders || (allFolders.length === 0 && rootNotes.length === 0 && attachments.length === 0);
+		!folders || (allFolders.length === 0 && notes.length === 0 && attachments.length === 0);
 
 	return (
 		<>
@@ -702,7 +656,6 @@ export default function FolderTree() {
 							menuOpenId={menuOpenId}
 							onContextMenu={handleContextMenu}
 							onLongPress={handleLongPress}
-							onFolderHover={prefetchFolderNotes}
 						/>
 					))}
 				</div>

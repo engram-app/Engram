@@ -1,22 +1,24 @@
-import type { QueryClient } from "@tanstack/react-query";
 import {
 	type AttachmentSummary,
 	type Folder,
-	folderNotesByIdQueryOptions,
 	type NoteSummary,
 	ROOT_FOLDER_ID,
 } from "../../api/queries";
+import { dirOf as folderOf } from "../../api/vault-tree-patch";
 import { noteName } from "../../lib/note-name";
 import type { TreeItem } from "./types";
 import { formatItemId, parseItemId, ROOT_ID } from "./types";
 
 interface LoaderDeps {
 	folders: Folder[];
-	qc: QueryClient;
-	vaultId: string;
+	// Every note in the vault, already derived from the one vault-tree cache by
+	// the caller. The loader used to hold a QueryClient and pull a per-folder
+	// list out of react-query, fetching on a miss — which made it an async data
+	// source that could answer "no notes" for a folder that has some. It is now
+	// a pure function of what the caller already has.
+	notes: NoteSummary[];
 	sort: SortKey;
 	attachments?: AttachmentSummary[];
-	onChildrenLoaded?: (folderId: string) => void;
 }
 
 function folderLoaderItem(deps: LoaderDeps, id: string): LoaderItem | undefined {
@@ -38,20 +40,10 @@ function folderLoaderItem(deps: LoaderDeps, id: string): LoaderItem | undefined 
 }
 
 function noteLoaderItem(deps: LoaderDeps, id: string): LoaderItem | undefined {
-	// Every note list — root (keyed under ROOT_FOLDER_ID) and subfolders — lives
-	// in the one id-keyed cache, so a single scan finds the note.
-	for (const [, list] of deps.qc.getQueriesData<NoteSummary[]>({
-		queryKey: ["folder-notes-by-id"],
-	})) {
-		const hit = list?.find((n) => n.id === id);
-		if (hit) {
-			return {
-				itemId: formatItemId({ kind: "note", id }),
-				item: noteToTreeItem(hit),
-				isFolder: false,
-			};
-		}
-	}
+	const hit = deps.notes.find((n) => n.id === id);
+	return hit
+		? { itemId: formatItemId({ kind: "note", id }), item: noteToTreeItem(hit), isFolder: false }
+		: undefined;
 }
 
 function folderLoaderItems(deps: LoaderDeps, parentId: string | null): LoaderItem[] {
@@ -71,38 +63,32 @@ function folderLoaderItems(deps: LoaderDeps, parentId: string | null): LoaderIte
 		}));
 }
 
-// Note children for a folder id (ROOT_FOLDER_ID for the vault root). Reads the
-// id-keyed cache; on a miss, lazily loads it and asks HT to refetch the branch.
-// Returns null on a cache miss so callers can render folders + attachments
-// (but not notes) while the load is in flight.
+// Note children for a folder id (ROOT_FOLDER_ID for the vault root).
 //
-// The load builds the SAME options `useFolderNotesById` does, so this is one
-// query with one queryFn no matter which side reaches it first — and it costs
-// zero requests whenever the vault tree it derives from is still fresh,
-// including for a folder that holds no notes (the answer is `[]`, not a miss).
-function noteChildItems(deps: LoaderDeps, folderId: string): LoaderItem[] | null {
-	const cached = deps.qc.getQueryData<NoteSummary[]>([
-		"folder-notes-by-id",
-		deps.vaultId,
-		folderId,
-	]);
-	if (!cached) {
-		deps.qc
-			.fetchQuery(folderNotesByIdQueryOptions(deps.qc, deps.vaultId, folderId))
-			// The notes are now in the cache, but HT cached the empty children
-			// list when it first asked. Tell it to refetch this branch.
-			.then(() => deps.onChildrenLoaded?.(folderId))
-			.catch(() => {
-				// Best-effort background load: a failure just leaves the branch to
-				// load lazily on next expand, so swallow the error.
-			});
-		return null;
+// Always an answer, never a miss. The caller holds every note in the vault, so
+// "this folder has no notes" is knowable without asking anyone — which is what
+// removed the lazy fetch, the `onChildrenLoaded` callback and the
+// `invalidateChildrenIds` re-ask that used to follow it.
+function noteChildItems(deps: LoaderDeps, folderId: string): LoaderItem[] {
+	const path = folderId === ROOT_FOLDER_ID ? "" : folderPathOf(deps, folderId);
+	if (path === null) {
+		return [];
 	}
-	return sortNotes(cached, deps.sort).map((n) => ({
+	return sortNotes(
+		deps.notes.filter((n) => folderOf(n.path) === path),
+		deps.sort,
+	).map((n) => ({
 		itemId: formatItemId({ kind: "note", id: n.id }),
 		item: noteToTreeItem(n),
 		isFolder: false,
 	}));
+}
+
+// The folder path a loader id stands for. `deps.folders` is post-`select`, so a
+// derived folder already carries its stable `syn:<path>` id and its `name` IS
+// the full path.
+function folderPathOf(deps: LoaderDeps, folderId: string): string | null {
+	return deps.folders.find((f) => f.id === folderId)?.name ?? null;
 }
 
 function attachmentDir(path: string): string {
@@ -148,19 +134,20 @@ function attachmentItemsForDir(deps: LoaderDeps, dir: string): LoaderItem[] {
 }
 
 function rootChildren(deps: LoaderDeps): LoaderItem[] {
-	const tops = folderLoaderItems(deps, null);
-	const noteItems = noteChildItems(deps, ROOT_FOLDER_ID) ?? [];
-	const attItems = attachmentItemsForDir(deps, "");
-	return [...tops, ...noteItems, ...attItems];
+	return [
+		...folderLoaderItems(deps, null),
+		...noteChildItems(deps, ROOT_FOLDER_ID),
+		...attachmentItemsForDir(deps, ""),
+	];
 }
 
 function folderChildren(deps: LoaderDeps, folderId: string): LoaderItem[] {
-	const childFolders = folderLoaderItems(deps, folderId);
-	const noteItems = noteChildItems(deps, folderId);
-	const folder = deps.folders.find((f) => f.id === folderId);
-	const attItems = folder ? attachmentItemsForDir(deps, folder.name) : [];
-	const notes = noteItems ?? [];
-	return [...childFolders, ...notes, ...attItems];
+	const path = folderPathOf(deps, folderId);
+	return [
+		...folderLoaderItems(deps, folderId),
+		...noteChildItems(deps, folderId),
+		...(path === null ? [] : attachmentItemsForDir(deps, path)),
+	];
 }
 
 function folderCmp(a: Folder, b: Folder, sort: SortKey): number {

@@ -7,14 +7,16 @@ import { FolderTreeProvider } from "../layout/folder-tree-context";
 import FolderTree from "../viewer/folder-tree";
 import { syntheticFolderId } from "../viewer/tree/synthesize-folders";
 import { backfillStructural } from "./channel";
-import {
-	type NoteSummary,
-	ROOT_FOLDER_ID,
-	useAttachments,
-	useFolderNotesById,
-	useFolders,
-	useVaultTree,
-} from "./queries";
+import { type NoteSummary, useAttachments, useFolders, useVaultNotes } from "./queries";
+import { dirOf } from "./vault-tree-patch";
+
+// What the sidebar shows for one folder. The tree loader filters the vault's
+// notes by folder path, so the tests do the same over the REAL `useVaultNotes`
+// view — the per-folder query this used to go through no longer exists.
+function useNotesIn(folderPath: string) {
+	const q = useVaultNotes();
+	return { ...q, data: q.data?.filter((n) => dirOf(n.path) === folderPath) };
+}
 
 vi.mock("sonner", () => ({
 	toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
@@ -137,7 +139,7 @@ describe("the vault tree is the single source for the sidebar views", () => {
 			() => ({
 				folders: useFolders(),
 				attachments: useAttachments(),
-				rootNotes: useFolderNotesById(ROOT_FOLDER_ID),
+				rootNotes: useNotesIn(""),
 			}),
 			{ wrapper },
 		);
@@ -185,13 +187,13 @@ describe("the vault tree is the single source for the sidebar views", () => {
 		]);
 	});
 
-	it("buckets notes by folder id: marker id, root sentinel, and syn:<path> for a folder with no marker", async () => {
+	it("buckets notes by folder: a marker folder, the root, and a folder with no marker", async () => {
 		const wrapper = wrapperFor(newQc());
 		const { result } = renderHook(
 			() => ({
-				projects: useFolderNotesById("f1"),
-				root: useFolderNotesById(ROOT_FOLDER_ID),
-				derived: useFolderNotesById(syntheticFolderId("Derived")),
+				projects: useNotesIn("Projects"),
+				root: useNotesIn(""),
+				derived: useNotesIn("Derived"),
 			}),
 			{ wrapper },
 		);
@@ -208,19 +210,19 @@ describe("the vault tree is the single source for the sidebar views", () => {
 		expect(urls()).toEqual(["/vault/tree"]);
 	});
 
-	it("expanding a folder with zero notes issues NO request", async () => {
+	it("an empty folder is answered from the same one request", async () => {
 		const qc = newQc();
 		const wrapper = wrapperFor(qc);
 		const { result } = renderHook(() => useFolders(), { wrapper });
 		await waitFor(() => expect(result.current.data).toBeDefined());
 		expect(urls()).toEqual(["/vault/tree"]);
 
-		// What the tree loader does on expand: fetch the folder's note list.
-		const empty = renderHook(() => useFolderNotesById("f-empty"), { wrapper });
+		// What the tree loader does on expand: read that folder's notes.
+		const empty = renderHook(() => useNotesIn("Empty"), { wrapper });
 		await waitFor(() => expect(empty.result.current.data).toBeDefined());
 
 		// `[]` is an ANSWER derived from the already-fetched tree, not a miss that
-		// falls through to /api/folders/by-id/f-empty/notes.
+		// falls through to a per-folder request.
 		expect(empty.result.current.data).toEqual([]);
 		expect(urls()).toEqual(["/vault/tree"]);
 	});
@@ -228,11 +230,10 @@ describe("the vault tree is the single source for the sidebar views", () => {
 	it("does not fetch at all without an active vault id", async () => {
 		activeVault.id = null;
 		const wrapper = wrapperFor(newQc());
-		const { result } = renderHook(
-			() => ({ tree: useVaultTree(), folders: useFolders(), att: useAttachments() }),
-			{ wrapper },
-		);
-		await waitFor(() => expect(result.current.tree.fetchStatus).toBe("idle"));
+		const { result } = renderHook(() => ({ folders: useFolders(), att: useAttachments() }), {
+			wrapper,
+		});
+		await waitFor(() => expect(result.current.folders.fetchStatus).toBe("idle"));
 		expect(get).not.toHaveBeenCalled();
 	});
 
@@ -259,7 +260,7 @@ describe("the vault tree is the single source for the sidebar views", () => {
 			return treeCalls === 1 ? firstResponse : Promise.resolve(current);
 		});
 
-		const { result } = renderHook(() => useFolderNotesById("f1"), { wrapper: wrapperFor(qc) });
+		const { result } = renderHook(() => useNotesIn("Projects"), { wrapper: wrapperFor(qc) });
 		await waitFor(() => expect(treeCalls).toBe(1));
 		expect(result.current.data).toBeUndefined();
 
@@ -301,8 +302,8 @@ describe("the vault tree is the single source for the sidebar views", () => {
 		const { result } = renderHook(
 			() => ({
 				folders: useFolders(),
-				projects: useFolderNotesById("f1"),
-				root: useFolderNotesById(ROOT_FOLDER_ID),
+				projects: useNotesIn("Projects"),
+				root: useNotesIn(""),
 			}),
 			{ wrapper },
 		);
@@ -327,13 +328,8 @@ describe("the vault tree is the single source for the sidebar views", () => {
 			],
 		};
 
+		// One key. Every view above follows it.
 		await qc.invalidateQueries({ queryKey: ["vault-tree", "42"] });
-		await qc.invalidateQueries({ queryKey: ["folders", "42"] });
-		await qc.invalidateQueries({ queryKey: ["attachments", "42"] });
-		await qc.invalidateQueries({
-			queryKey: ["folder-notes-by-id", "42"],
-			refetchType: "all",
-		});
 
 		await waitFor(() => {
 			// Gone from its old folder...

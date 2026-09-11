@@ -10,15 +10,9 @@ import {
 	syncDataLoaderFeature,
 } from "@headless-tree/core";
 import { useTree } from "@headless-tree/react";
-import type { QueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef } from "react";
-import {
-	type AttachmentSummary,
-	type Folder,
-	type NoteSummary,
-	ROOT_FOLDER_ID,
-} from "../../api/queries";
+import type { AttachmentSummary, Folder, NoteSummary } from "../../api/queries";
 import { resolveDropMove } from "./drop-redirect";
 import { buildLoader, type LoaderItem, type SortKey } from "./loader";
 import { TREE_SLOT_HEIGHT } from "./row-metrics";
@@ -27,8 +21,7 @@ import { type ParsedItemId, parseItemId, ROOT_ID } from "./types";
 interface Deps {
 	folders: Folder[];
 	attachments?: AttachmentSummary[];
-	qc: QueryClient;
-	vaultId: string;
+	notes: NoteSummary[];
 	sort: SortKey;
 	scrollParentRef: React.RefObject<HTMLDivElement | null>;
 	onRenameCommit: (itemId: string, newName: string) => void;
@@ -39,55 +32,18 @@ interface Deps {
 type Data = LoaderItem;
 
 /**
- * Stable structural fingerprint that drives `rebuildTree()`. Includes each
- * folder's `count` AND `parent_id` (not just its id) so both kinds of move
- * rebuild the tree:
- *  - a note move bumps the source/target folder `count` (see useBatchMoveNotes),
- *  - a folder move reparents it, changing `parent_id`.
- * Without these, headless-tree keeps a stale per-folder child list after a move
- * until the user manually collapses/expands the folder.
+ * Rebuild is driven by REFERENCE identity of the three arrays the loader reads.
  *
- * Note-list changes (including root notes, now keyed under ROOT_FOLDER_ID) are
- * covered separately by the QueryCache subscription below, so they don't need
- * to be fingerprinted here.
+ * They are all `select` views of the one `['vault-tree', vaultId]` entry, and
+ * react-query keeps a select result referentially stable until the underlying
+ * data actually changes — including across a refetch that returns the same
+ * bytes, thanks to structural sharing. So "did anything change?" is `!==`.
+ *
+ * This replaced a hand-rolled content fingerprint (sorted id:version:path:
+ * timestamps over every note) that existed only because the old per-folder
+ * caches handed out a fresh array on every no-op refetch and identity told you
+ * nothing.
  */
-function attachmentsFingerprint(attachments?: AttachmentSummary[]): string {
-	if (!attachments || attachments.length === 0) {
-		return "0";
-	}
-	// length + max(updated_at) is enough: the list is static per fetch, and any
-	// add/remove changes one of the two.
-	let max = "";
-	for (const a of attachments) {
-		if (a.updated_at > max) {
-			max = a.updated_at;
-		}
-	}
-	return `${attachments.length}:${max}`;
-}
-
-// Cheap content fingerprint for a `folder-notes-by-id` list. A reconnect-driven
-// refetch (backfillStructural) hits EVERY loaded folder, whether or not
-// anything actually changed, and each one is a fresh array from a fresh
-// fetch — a reference check alone can't tell a no-op refetch from a real
-// change. Comparing this fingerprint against the last-seen one (below) lets a
-// no-op refetch skip the rebuild instead of redrawing the whole tree for
-// nothing.
-function noteListFingerprint(data: unknown): string {
-	if (!Array.isArray(data)) {
-		return "";
-	}
-	// id/version/path covers identity + content + rename; updated_at/created_at
-	// are ALSO load-bearing even though they never gate identity — sortNotes
-	// (loader.ts) orders "Modified"/"Created" views by them, and a fingerprint
-	// blind to a timestamp-only change (e.g. a background write that bumps
-	// updated_at without bumping version) would skip the rebuild and leave that
-	// sort order stale.
-	return data
-		.map((n: NoteSummary) => `${n.id}:${n.version}:${n.path}:${n.updated_at}:${n.created_at}`)
-		.sort()
-		.join("|");
-}
 
 type TreeLoader = ReturnType<typeof buildLoader>;
 
@@ -145,37 +101,17 @@ function placeholderItem(itemId: string): Data {
 	};
 }
 
-export function treeStructureKey(
-	folders: Pick<Folder, "id" | "count" | "parent_id">[],
-	sort: SortKey,
-): string {
-	const folderKey = folders.map((f) => `${f.id}:${f.count}:${f.parent_id ?? ""}`).join("|");
-	return `${folderKey}::${sort}`;
-}
-
 export function useEngramTree(deps: Deps) {
 	const treeRef = useRef<ReturnType<typeof useTree<Data>> | null>(null);
 	const inner = useMemo(
 		() =>
 			buildLoader({
 				folders: deps.folders,
-				qc: deps.qc,
-				vaultId: deps.vaultId,
+				notes: deps.notes,
 				sort: deps.sort,
 				attachments: deps.attachments,
-				onChildrenLoaded: (folderId) => {
-					const t = treeRef.current;
-					if (!t) {
-						return;
-					}
-					// Root notes hang off the ROOT_ID container, not an `f:<id>` marker.
-					const itemId = folderId === ROOT_FOLDER_ID ? ROOT_ID : `f:${folderId}`;
-					const inst = t.getItemInstance(itemId);
-					// invalidateChildrenIds returns a promise but we don't need to await
-					inst?.invalidateChildrenIds();
-				},
 			}),
-		[deps.folders, deps.qc, deps.vaultId, deps.sort, deps.attachments],
+		[deps.folders, deps.notes, deps.sort, deps.attachments],
 	);
 
 	const dataLoader = useMemo(() => createTreeDataLoader(inner), [inner]);
@@ -241,66 +177,26 @@ export function useEngramTree(deps: Deps) {
 	treeRef.current = tree;
 
 	// HT only computes its flat-item list on mount + on expandedItems change.
-	// When our `useFolders` query lands after mount, the dataLoader returns new
-	// ids but HT keeps its cached (empty) item list. Force a rebuild when the
-	// data shape changes — keyed on stable structural fingerprints so we never
-	// re-trigger from spurious identity churn (rebuildTree → setState → render
-	// would otherwise spin into a max-update-depth loop).
-	const structureKey = `${treeStructureKey(deps.folders, deps.sort)}#${attachmentsFingerprint(deps.attachments)}`;
-	const lastKey = useRef("");
+	// When new data lands, the dataLoader returns new ids but HT keeps its
+	// cached item list, so force a rebuild. `inner` changes identity exactly
+	// when one of the loader's inputs did.
+	// `null`, not `inner`, so the first pass also rebuilds: HT builds its item
+	// list on mount, when the loader usually has nothing yet.
+	//
+	// CONTRACT: `folders`, `notes` and `attachments` must keep their reference
+	// until their content changes. They are react-query `select` views, which do
+	// exactly that, but a caller passing a fresh array per render (a `?? []`
+	// default, an unmemoized map, a test stub returning `[]`) turns this into an
+	// endless rebuild → re-render → rebuild loop that freezes the tab. Hoist
+	// empty defaults to module constants, as folder-tree.tsx does.
+	const lastInner = useRef<typeof inner | null>(null);
 	useEffect(() => {
-		if (lastKey.current === structureKey) {
+		if (lastInner.current === inner) {
 			return;
 		}
-		lastKey.current = structureKey;
+		lastInner.current = inner;
 		tree.rebuildTree();
-	}, [tree, structureKey]);
-
-	// The structure key above only tracks the `folders` cache + root note ids, so
-	// it's blind to per-folder note-list changes. Optimistic note ops (move,
-	// delete, create, duplicate) mutate the `folder-notes-by-id` lists the loader
-	// reads — without this, the tree wouldn't rebuild until a refetch or a manual
-	// collapse/expand. Subscribe to those cache writes and rebuild (coalesced via
-	// a microtask so a batch op that patches many lists triggers a single pass).
-	useEffect(() => {
-		const cache = deps.qc.getQueryCache();
-		let scheduled = false;
-		const schedule = () => {
-			if (scheduled) {
-				return;
-			}
-			scheduled = true;
-			queueMicrotask(() => {
-				scheduled = false;
-				treeRef.current?.rebuildTree();
-			});
-		};
-		// Per-folder last-seen fingerprint, scoped to this effect so it resets
-		// cleanly on a vault switch instead of comparing across vaults.
-		const lastFingerprint = new Map<string, string>();
-		const unsubscribe = cache.subscribe((event) => {
-			const key = event.query.queryKey;
-			if (!Array.isArray(key) || key[0] !== "folder-notes-by-id" || key[1] !== deps.vaultId) {
-				return;
-			}
-			// Data presence/content changes only — ignore fetch-status churn
-			// (pending/error) that would rebuild for no structural reason.
-			if (event.type === "added" || event.type === "removed") {
-				schedule();
-			} else if (event.type === "updated" && event.action.type === "success") {
-				const keyStr = key.join(":");
-				const fingerprint = noteListFingerprint(event.query.state.data);
-				if (lastFingerprint.get(keyStr) === fingerprint) {
-					// A backfill/reconnect refetch that landed the SAME notes — the
-					// common case on a socket hiccup. Nothing to redraw.
-					return;
-				}
-				lastFingerprint.set(keyStr, fingerprint);
-				schedule();
-			}
-		});
-		return unsubscribe;
-	}, [deps.qc, deps.vaultId]);
+	}, [tree, inner]);
 
 	const items = tree.getItems();
 

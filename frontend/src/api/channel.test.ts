@@ -1,4 +1,4 @@
-import type { QueryClient } from "@tanstack/react-query";
+import { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { beacon, tracingEnabled } from "../observability/trace";
 import {
@@ -8,6 +8,7 @@ import {
 	handleNoteChanged,
 	handleNotesBatch,
 } from "./channel";
+import type { VaultTree } from "./queries";
 
 // Stub the tracing gate + beacon buffer; keep the real parseTraceparent so
 // the render beacon's id extraction is exercised end to end. The buffer's
@@ -25,6 +26,10 @@ function mockQueryClient(foldersData?: unknown) {
 	return {
 		invalidateQueries: vi.fn(),
 		getQueryData: vi.fn(() => foldersData),
+		// No tree cached: every flush takes the re-fetch fallback, which is what
+		// these invalidation-shape tests assert. The patch path is tested below
+		// against a real QueryClient.
+		getQueryState: vi.fn(() => undefined),
 	} as unknown as QueryClient & {
 		invalidateQueries: ReturnType<typeof vi.fn>;
 		getQueryData: ReturnType<typeof vi.fn>;
@@ -67,13 +72,13 @@ describe("handleNoteChanged", () => {
 
 		// List-level keys must NOT fire synchronously.
 		const syncKeys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey);
-		expect(syncKeys).not.toContainEqual(["folders", "7"]);
+		expect(syncKeys).not.toContainEqual(["vault-tree", "7"]);
 		expect(syncKeys.some((k) => k[0] === "search")).toBe(false);
 
 		vi.advanceTimersByTime(250);
 
 		const keys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey);
-		expect(keys).toContainEqual(["folders", "7"]);
+		expect(keys).toContainEqual(["vault-tree", "7"]);
 		expect(keys).toContainEqual(["folderNotes", "7", "docs"]);
 		expect(keys).toContainEqual(["search", "7"]);
 		// Untargeted folderNotes (whole-prefix) must not be used when the
@@ -81,27 +86,23 @@ describe("handleNoteChanged", () => {
 		expect(keys).not.toContainEqual(["folderNotes", "7"]);
 	});
 
-	// The manifest is the vault-wide path→id inventory behind [[ autocomplete
-	// and /v/:slug/wiki/* resolution. Any note event can change it (create/
-	// rename/delete, incl. per-note events from folder ops), so it rides the
-	// same coalesced flush as the other list-level keys — it had ZERO
-	// invalidation sites before, leaving new/renamed notes invisible to
-	// autocomplete until an incidental refetch.
-	it("invalidates the sync manifest in the coalesced flush", () => {
+	// The `[[` autocomplete inventory used to be its own `['syncManifest']`
+	// query fetched from `/sync/manifest`, needing its own invalidation here or
+	// a new note stayed invisible to autocomplete. It is a view of the tree
+	// now, so staling the tree IS staling it — and there is no second key left
+	// to forget.
+	it("needs no separate invalidation for the wikilink inventory", () => {
 		const qc = mockQueryClient();
 		handleNoteChanged(
 			{ event_type: "upsert", path: "docs/a.md", folder: "docs", vault_id: "7" },
 			qc,
 			"7",
 		);
-
-		const syncKeys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey);
-		expect(syncKeys).not.toContainEqual(["syncManifest", "7"]);
-
 		vi.advanceTimersByTime(250);
 
 		const keys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey);
-		expect(keys).toContainEqual(["syncManifest", "7"]);
+		expect(keys).toContainEqual(["vault-tree", "7"]);
+		expect(keys).not.toContainEqual(["syncManifest", "7"]);
 	});
 
 	it("coalesces a sync burst into one flush per distinct folder", () => {
@@ -123,7 +124,7 @@ describe("handleNoteChanged", () => {
 
 		const calls = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey);
 		const folderNotesCalls = calls.filter((k) => k[0] === "folderNotes");
-		const foldersCalls = calls.filter((k) => k[0] === "folders");
+		const treeCalls = calls.filter((k) => k[0] === "vault-tree");
 		const searchCalls = calls.filter((k) => k[0] === "search");
 
 		expect(folderNotesCalls).toEqual(
@@ -133,45 +134,15 @@ describe("handleNoteChanged", () => {
 			]),
 		);
 		expect(folderNotesCalls).toHaveLength(2);
-		expect(foldersCalls).toHaveLength(1);
+		expect(treeCalls).toHaveLength(1);
 		expect(searchCalls).toHaveLength(1);
 	});
 
-	it("resolves folder-notes-by-id keys from the cached folder tree", () => {
-		const qc = mockQueryClient({
-			folders: [
-				{ id: "f1", parent_id: null, name: "docs", count: 3 },
-				{ id: "f2", parent_id: null, name: "other", count: 1 },
-			],
-		});
-
-		handleNoteChanged(
-			{ event_type: "upsert", path: "docs/a.md", folder: "docs", vault_id: "7" },
-			qc,
-			"7",
-		);
-		vi.advanceTimersByTime(250);
-
-		const keys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey);
-		expect(keys).toContainEqual(["folder-notes-by-id", "7", "f1"]);
-		expect(keys).not.toContainEqual(["folder-notes-by-id", "7", "f2"]);
-	});
-
-	it("targets the by-id root sentinel for a root note (no folder marker)", () => {
-		const qc = mockQueryClient({ folders: [] });
-
-		// Root note: no folder in the payload, derived as '' from the path.
-		handleNoteChanged({ event_type: "upsert", path: "top.md", vault_id: "7" }, qc, "7");
-		vi.advanceTimersByTime(250);
-
-		const keys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey);
-		expect(keys).toContainEqual(["folderNotes", "7", ""]);
-		expect(keys).toContainEqual(["folder-notes-by-id", "7", "root"]);
-		// Root must NOT fall back to the broad whole-prefix invalidation.
-		expect(keys).not.toContainEqual(["folder-notes-by-id", "7"]);
-	});
-
-	it("falls back to broad folder-notes-by-id invalidation when the folder is not in cache", () => {
+	// A note event used to fan out to a per-folder key, which meant resolving
+	// the folder's marker id first — and getting that wrong (a DERIVED folder's
+	// raw id is null) silently invalidated a key nothing reads. There is one key
+	// now, so there is nothing to resolve and nothing to get wrong.
+	it("stales the vault tree once, whatever folder the note is in", () => {
 		const qc = mockQueryClient({ folders: [] });
 
 		handleNoteChanged(
@@ -182,7 +153,7 @@ describe("handleNoteChanged", () => {
 		vi.advanceTimersByTime(250);
 
 		const keys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey);
-		expect(keys).toContainEqual(["folder-notes-by-id", "7"]);
+		expect(keys.filter((k) => k[0] === "vault-tree")).toHaveLength(1);
 	});
 
 	it("derives the folder from the path when the payload omits it (delete events)", () => {
@@ -298,7 +269,7 @@ describe("handleNotesBatch", () => {
 		vi.advanceTimersByTime(250);
 
 		const keys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey);
-		expect(keys).toContainEqual(["folders", "7"]);
+		expect(keys).toContainEqual(["vault-tree", "7"]);
 		expect(keys).toContainEqual(["folderNotes", "7", "docs"]);
 		expect(keys).toContainEqual(["folderNotes", "7", "notes"]);
 	});
@@ -324,61 +295,146 @@ describe("handleFoldersBatch", () => {
 	it("refetches the folder tree so a folder delete lands live", () => {
 		const qc = mockQueryClient();
 		handleFoldersBatch({ op: "delete", folder: "Gone" }, qc, "7");
-		expect(qc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["folders", "7"] });
+		expect(qc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["vault-tree", "7"] });
 	});
 
 	it("refetches the folder tree so a folder create lands live", () => {
 		const qc = mockQueryClient();
 		handleFoldersBatch({ op: "create", folder: "New/Empty" }, qc, "7");
-		expect(qc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["folders", "7"] });
+		expect(qc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["vault-tree", "7"] });
 	});
 });
 
 describe("backfillStructural", () => {
 	// A backgrounded/offline tab misses note events with no replay, so the
-	// reconnect backfill must also stale the manifest — otherwise notes
-	// created elsewhere during the gap stay missing from [[ autocomplete.
-	it("invalidates the sync manifest alongside the structural views", () => {
+	// reconnect backfill has to stale everything structural. That is one key.
+	it("stales the vault tree, which is every structural view", () => {
 		const qc = mockQueryClient();
 		backfillStructural(qc, "7");
 		const keys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey);
-		expect(keys).toContainEqual(["syncManifest", "7"]);
+		expect(keys).toContainEqual(["vault-tree", "7"]);
 	});
 });
 
-// --- Derived-folder invalidation (2026-07-28) --------------------------------
-// A note deleted from another device stayed in the sidebar until a reload.
-// flushBatch read the RAW folders cache and trusted `row.id`, which is null for
-// every DERIVED folder (a folder holding no note directly — most folders). The
-// entry was found, so the broad fallback was skipped, and the invalidation went
-// to the key `["folder-notes-by-id", vaultId, null]`, which nothing reads.
-describe("handleNoteChanged folder invalidation", () => {
-	const idKeyCalls = (qc: { invalidateQueries: ReturnType<typeof vi.fn> }) =>
-		qc.invalidateQueries.mock.calls
-			.map((c) => c[0]?.queryKey)
-			.filter((k: unknown[]) => Array.isArray(k) && k[0] === "folder-notes-by-id");
+// The sync channel patches the one vault-tree entry instead of re-downloading
+// the whole vault per event burst. These run against a REAL QueryClient,
+// because what matters is what ends up in the cache and whether a refetch was
+// asked for.
+describe("note events patch the vault tree in place", () => {
+	const TREE: VaultTree = {
+		folders: [{ id: "m-docs", name: "docs", count: 1, parent_id: null }],
+		notes: [{ id: "n1", path: "docs/a.md", created_at: "c", updated_at: "u1" }],
+		attachments: [],
+	};
 
-	it("invalidates a DERIVED folder's id-keyed list via its syn: id", () => {
-		// id: null is what /api/folders returns for a derived folder, and
-		// getQueryData bypasses the select that would map it to syn:<path>.
-		const qc = mockQueryClient({ folders: [{ id: null, name: "Notes" }] });
+	function setup() {
+		const qc = new QueryClient();
+		qc.setQueryData(["vault-tree", "7"], TREE);
+		const invalidate = vi.spyOn(qc, "invalidateQueries");
+		const treeRefetches = () =>
+			invalidate.mock.calls.filter(([f]) => f?.queryKey?.[0] === "vault-tree").length;
+		const tree = () => qc.getQueryData<VaultTree>(["vault-tree", "7"]);
+		return { qc, invalidate, treeRefetches, tree };
+	}
 
-		handleNoteChanged({ event_type: "delete", path: "Notes/x.md", vault_id: "7" }, qc, "7");
-		vi.runAllTimers();
+	const flush = () => vi.advanceTimersByTime(250);
 
-		expect(idKeyCalls(qc)).toContainEqual(["folder-notes-by-id", "7", "syn:Notes"]);
-	});
-
-	it("resolves a NON-derived folder through its real id, not a syn: id", () => {
-		const qc = mockQueryClient({ folders: [{ id: "real-id", name: "Notes" }] });
-
+	it("applies a note edit without re-downloading the vault", () => {
+		const { qc, treeRefetches, tree } = setup();
 		handleNoteChanged(
-			{ event_type: "delete", path: "Notes/x.md", folder: "Notes", vault_id: "7" },
+			{ event_type: "upsert", id: "n1", path: "docs/a.md", updated_at: "u2", vault_id: "7" },
 			qc,
 			"7",
 		);
-		vi.runAllTimers();
+		flush();
+		expect(treeRefetches()).toBe(0);
+		expect(tree()?.notes[0]?.updated_at).toBe("u2");
+	});
 
-		expect(idKeyCalls(qc)).toContainEqual(["folder-notes-by-id", "7", "real-id"]);
+	it("converges a rename (delete + upsert, one id) to a single row at the new path", () => {
+		const { qc, treeRefetches, tree } = setup();
+		const ev = { vault_id: "7", id: "n1" };
+		handleNoteChanged(
+			{ ...ev, event_type: "upsert", path: "docs/b.md", updated_at: "u2" },
+			qc,
+			"7",
+		);
+		handleNoteChanged({ ...ev, event_type: "delete", path: "docs/a.md" }, qc, "7");
+		flush();
+		expect(treeRefetches()).toBe(0);
+		expect(tree()?.notes.map((n) => n.path)).toEqual(["docs/b.md"]);
+	});
+
+	// A folder rename is broadcast as per-note upsert+delete pairs and NOTHING
+	// about the folder marker, so patching would keep the old folder listed.
+	// Caught by e2e "rename folder propagates to a second tab".
+	it("re-fetches when a note moves to a different folder", () => {
+		const { qc, treeRefetches } = setup();
+		const ev = { vault_id: "7", id: "n1" };
+		handleNoteChanged(
+			{ ...ev, event_type: "upsert", path: "renamed/a.md", updated_at: "u2" },
+			qc,
+			"7",
+		);
+		handleNoteChanged({ ...ev, event_type: "delete", path: "docs/a.md" }, qc, "7");
+		flush();
+		expect(treeRefetches()).toBe(1);
+	});
+
+	// An earlier fallback invalidated the tree and its refetch failed. Patching
+	// now would mark the tree fresh and cancel the refetch it still owes.
+	it("re-fetches instead of patching while a refetch is still owed", async () => {
+		const { qc, treeRefetches } = setup();
+		await qc.invalidateQueries({ queryKey: ["vault-tree", "7"], refetchType: "none" });
+		const before = treeRefetches();
+		handleNoteChanged(
+			{ event_type: "upsert", id: "n1", path: "docs/a.md", updated_at: "u2", vault_id: "7" },
+			qc,
+			"7",
+		);
+		flush();
+		expect(treeRefetches()).toBe(before + 1);
+	});
+
+	it("stales the index cap when a note appears or disappears", () => {
+		const { qc, invalidate } = setup();
+		handleNoteChanged(
+			{ event_type: "upsert", id: "n2", path: "docs/new.md", updated_at: "u", vault_id: "7" },
+			qc,
+			"7",
+		);
+		flush();
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["index_status"] });
+	});
+
+	it("falls back to a re-fetch for an attachment event", () => {
+		const { qc, treeRefetches } = setup();
+		handleNoteChanged(
+			{ event_type: "upsert", kind: "attachment", path: "docs/pic.png", vault_id: "7" },
+			qc,
+			"7",
+		);
+		flush();
+		expect(treeRefetches()).toBe(1);
+	});
+
+	// A fetch that started before these events would land its (older) response
+	// on top of the patch and silently undo it. Re-fetching is the only safe
+	// move; the invalidation generation makes the in-flight fetch run again.
+	it("falls back to a re-fetch while a tree fetch is in flight", () => {
+		const { qc, treeRefetches } = setup();
+		// Never resolves: the fetch stays in flight for the rest of the test.
+		qc.prefetchQuery({
+			queryKey: ["vault-tree", "7"],
+			queryFn: () => new Promise<VaultTree>(() => {}),
+			staleTime: 0,
+		});
+		handleNoteChanged(
+			{ event_type: "upsert", id: "n1", path: "docs/a.md", updated_at: "u2", vault_id: "7" },
+			qc,
+			"7",
+		);
+		flush();
+		expect(treeRefetches()).toBe(1);
 	});
 });
