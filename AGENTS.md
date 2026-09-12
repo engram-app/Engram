@@ -551,6 +551,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Local dev loop, hot reload, IEx tricks → `docs/context/dev-iteration-loop.md`
 - Preview frontend changes against a locally-running real backend → `docs/context/local-dev-preview-stack.md`
 - Throwaway local Supabase stack to run Studio Security/Performance Advisors against the schema → `docs/context/local-supabase-audit.md`
+- Local Qdrant dies mid-upsert with `Req.TransportError: socket closed` while `docker inspect` still says healthy (SIGILL, not OOM — this host has no AVX2; read `RestartCount`, not `oom`) → `docs/context/local-qdrant-sigill-no-avx2.md`
 - PG18/UUIDv7 prod crash-loop root cause — in-place engine bump vs specced taint+recreate; `verify_schema_baseline/0` guard → `docs/context/pg18-uuidv7-prod-crashloop-2026-06-11.md`
 - `mjml` vs `lingua` rustler_precompiled version conflict — pin override → `docs/context/rustler-precompiled-nif-conflict.md`
 - Worktree hardlinked `deps/`/`_build/` can omit yecc/leex-generated beams (pre-push failures) → `docs/context/worktree-deps-artifact-staleness.md`
