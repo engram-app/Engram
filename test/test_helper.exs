@@ -33,6 +33,22 @@ if System.get_env("QDRANT_INTEGRATION") == "1" do
   if url = System.get_env("QDRANT_URL") do
     Application.put_env(:engram, :qdrant_url, url)
   end
+
+  # Preflight, so an unreachable Qdrant says WHICH url it tried instead of
+  # surfacing as a bare econnrefused inside every test's setup block.
+  resolved = Application.get_env(:engram, :qdrant_url, "http://localhost:6333")
+
+  case Req.get(resolved <> "/healthz", retry: false, receive_timeout: 5_000) do
+    {:ok, %{status: 200}} ->
+      IO.puts("qdrant_integration: #{resolved} reachable")
+
+    other ->
+      IO.warn("""
+      QDRANT_INTEGRATION=1 but #{resolved} is not answering /healthz: #{inspect(other)}
+      Every :qdrant_integration test will fail in setup. Check QDRANT_URL and that
+      the container is still running.
+      """)
+  end
 end
 
 cluster_excluded = if System.get_env("CLUSTER_TESTS") == "1", do: [], else: [:cluster]
