@@ -13,6 +13,7 @@ defmodule Engram.Vector.QdrantStrictModeTest do
   """
   use ExUnit.Case, async: false
 
+  alias Engram.ServiceConfig
   alias Engram.Vector.Qdrant
 
   @moduletag :qdrant_integration
@@ -24,6 +25,13 @@ defmodule Engram.Vector.QdrantStrictModeTest do
   @tag_hmac "dGFnLWhtYWM="
 
   setup do
+    # Per-process override, NOT the global app env. 22 Bypass suites set
+    # `:qdrant_url` globally and `Application.delete_env` it on exit, which
+    # wipes the CI-provided URL for everything that runs after them: the client
+    # then falls back to its compiled localhost:6333 default and every request
+    # here dies with econnrefused against a perfectly healthy container.
+    ServiceConfig.put_override(:qdrant_url, qdrant_url())
+
     col = "engram_strict_#{System.unique_integer([:positive])}"
 
     :ok = Qdrant.ensure_collection(col, @dims)
@@ -108,5 +116,8 @@ defmodule Engram.Vector.QdrantStrictModeTest do
     :ok
   end
 
-  defp qdrant_url, do: Application.get_env(:engram, :qdrant_url, "http://localhost:6333")
+  defp qdrant_url do
+    System.get_env("QDRANT_URL") ||
+      Application.get_env(:engram, :qdrant_url, "http://localhost:6333")
+  end
 end

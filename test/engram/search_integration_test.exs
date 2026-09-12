@@ -6,6 +6,11 @@ defmodule Engram.SearchIntegrationTest do
   @moduletag :qdrant_integration
 
   setup do
+    # Per-process override: the Bypass suites delete the global `:qdrant_url`
+    # on exit, so app env alone leaves this pointed at the compiled
+    # localhost:6333 default once any of them has run.
+    Engram.ServiceConfig.put_override(:qdrant_url, qdrant_url())
+
     Engram.Crypto.DekCache.invalidate_all()
     user = insert(:user)
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
@@ -25,6 +30,11 @@ defmodule Engram.SearchIntegrationTest do
     end)
 
     {:ok, user: user, vault: vault, collection: col}
+  end
+
+  defp qdrant_url do
+    System.get_env("QDRANT_URL") ||
+      Application.get_env(:engram, :qdrant_url, "http://localhost:6333")
   end
 
   test "encrypted vault round-trip: upsert → raw payload is ciphertext → search returns plaintext",
@@ -51,10 +61,8 @@ defmodule Engram.SearchIntegrationTest do
 
     # Not a hardcoded port: CI runs Qdrant on an ephemeral one (see
     # test_helper.exs), so read the same URL the client uses.
-    qdrant_url = Application.get_env(:engram, :qdrant_url, "http://localhost:6333")
-
     {:ok, resp} =
-      Req.post("#{qdrant_url}/collections/#{col}/points/scroll",
+      Req.post("#{qdrant_url()}/collections/#{col}/points/scroll",
         json: %{limit: 10, with_payload: true}
       )
 
