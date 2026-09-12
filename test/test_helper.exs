@@ -25,6 +25,16 @@ ExUnit.configure(capture_log: true)
 qdrant_excluded =
   if System.get_env("QDRANT_INTEGRATION") == "1", do: [], else: [:qdrant_integration]
 
+# `config/runtime.exs` reads QDRANT_URL only outside :test, so the integration
+# tests would otherwise be stuck on the client's compiled-in default port. CI
+# runs its Qdrant on an ephemeral port (same pattern as the postgres container),
+# so honour the env var here when those tests are actually enabled.
+if System.get_env("QDRANT_INTEGRATION") == "1" do
+  if url = System.get_env("QDRANT_URL") do
+    Application.put_env(:engram, :qdrant_url, url)
+  end
+end
+
 cluster_excluded = if System.get_env("CLUSTER_TESTS") == "1", do: [], else: [:cluster]
 
 integration_excluded =

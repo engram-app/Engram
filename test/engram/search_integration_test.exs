@@ -36,13 +36,25 @@ defmodule Engram.SearchIntegrationTest do
         "title" => "Journal"
       })
 
-    {:ok, _n} = Engram.Indexing.index_note(note, vault)
+    # `content`/`title` are VIRTUAL fields: the fixture writes ciphertext only,
+    # so the struct it returns carries content: nil. Indexing that parses zero
+    # chunks and returns {:ok, 0} without ever creating the collection, which
+    # surfaced as a confusing 404 two lines down. EmbedNote decrypts first; so
+    # must this.
+    {:ok, decrypted} = Engram.Crypto.maybe_decrypt_note_fields(note, user)
+
+    assert {:ok, chunk_count} = Engram.Indexing.index_note(decrypted, vault)
+    assert chunk_count > 0, "the note must produce chunks, or nothing below is exercised"
 
     {:ok, info} = Engram.Vector.Qdrant.collection_info(col)
     assert info["points_count"] >= 1
 
+    # Not a hardcoded port: CI runs Qdrant on an ephemeral one (see
+    # test_helper.exs), so read the same URL the client uses.
+    qdrant_url = Application.get_env(:engram, :qdrant_url, "http://localhost:6333")
+
     {:ok, resp} =
-      Req.post("http://localhost:6333/collections/#{col}/points/scroll",
+      Req.post("#{qdrant_url}/collections/#{col}/points/scroll",
         json: %{limit: 10, with_payload: true}
       )
 
