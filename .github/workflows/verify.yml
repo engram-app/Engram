@@ -2358,8 +2358,12 @@ jobs:
             QDRANT_IMAGE="qdrant/qdrant:v1.17.1"
           fi
 
+          # Bind IPv4 explicitly. With a bare `-p 0:6333` docker publishes on
+          # 0.0.0.0 only, while the BEAM resolves `localhost` to ::1 first and
+          # gets ECONNREFUSED — curl falls back to IPv4 and hides it, so the
+          # readiness probe passed while every test failed to connect.
           for attempt in 1 2 3 4 5; do
-            if docker run -d --name "$QDRANT_CONTAINER" -p 0:6333 "$QDRANT_IMAGE"; then
+            if docker run -d --name "$QDRANT_CONTAINER" -p 127.0.0.1:0:6333 "$QDRANT_IMAGE"; then
               break
             fi
             echo "Attempt $attempt: docker run failed (likely port race) — cleaning up + retrying"
@@ -2371,12 +2375,15 @@ jobs:
             fi
           done
 
-          QDRANT_PORT=$(docker port "$QDRANT_CONTAINER" 6333/tcp | head -1 | cut -d: -f2)
+          # `awk -F: '{print $NF}'`, not `cut -d: -f2`: an IPv6 mapping line
+          # ([::]:32768) has several colons and would yield an empty port.
+          QDRANT_PORT=$(docker port "$QDRANT_CONTAINER" 6333/tcp | head -1 | awk -F: '{print $NF}')
           echo "qdrant_port=$QDRANT_PORT" >> "$GITHUB_OUTPUT"
           echo "Qdrant on port $QDRANT_PORT (container: $QDRANT_CONTAINER)"
 
+          # Probe the SAME address the tests use, or it proves nothing.
           for i in $(seq 1 30); do
-            if curl -sf --max-time 2 "http://localhost:${QDRANT_PORT}/healthz" > /dev/null 2>&1; then
+            if curl -sf --max-time 2 "http://127.0.0.1:${QDRANT_PORT}/healthz" > /dev/null 2>&1; then
               echo "Qdrant ready"
               exit 0
             fi
@@ -2422,7 +2429,9 @@ jobs:
           # Opts the `:qdrant_integration` tests in (test_helper.exs excludes
           # them otherwise) and points them at the ephemeral container.
           QDRANT_INTEGRATION: "1"
-          QDRANT_URL: http://localhost:${{ steps.qdrant.outputs.qdrant_port }}
+          # 127.0.0.1, not localhost: the container publishes on IPv4 and the
+          # BEAM would try ::1 first.
+          QDRANT_URL: http://127.0.0.1:${{ steps.qdrant.outputs.qdrant_port }}
         run: |
           for i in $(seq 1 30); do
             if docker exec "$PG_CONTAINER" pg_isready -U engram > /dev/null 2>&1; then
