@@ -82,7 +82,7 @@ Live. This is regenerated from `config/runtime.exs` (the ~90 vars it reads), wit
 | `EMBED_BACKEND` | `voyage` | `voyage` or `ollama` (:85). |
 | `VOYAGE_API_KEY` | unset | Voyage AI key (used when backend = voyage) (:92). |
 | `EMBED_MODEL` | (compile-time) | Override symmetric embed model (:97). |
-| `EMBED_DIMS` | (compile-time) | Override vector dimensions (:101). |
+| `EMBED_DIMS` | (compile-time) | Override vector dimensions (:101). Sent to Voyage as `output_dimension` ONLY when set, because the older models (`voyage-2`, `voyage-3-lite`, `voyage-law-2`, ...) reject that field and would 400 every embed. Set it only on a model that accepts it: the `voyage-4` family, `voyage-3-large`, `voyage-3.5`, `voyage-code-3`. |
 | `DOC_EMBED_MODEL` | falls back to `EMBED_MODEL` | Asymmetric: doc-indexing model (:107). |
 | `QUERY_EMBED_MODEL` | falls back to `EMBED_MODEL` | Asymmetric: query model (:111). |
 | `EMBED_429_SNOOZE_SECONDS` | `60` | Voyage-429 snooze (worker reschedules without burning an attempt) (:118). |

@@ -40,6 +40,16 @@ defmodule Engram.Indexing do
   commit step inside a per-note `Repo.with_tenant/2`.
   """
   def index_note(note, %Engram.Vaults.Vault{} = vault, user \\ nil) do
+    with {:ok, count, _embedded_bytes} <- index_note_with_usage(note, vault, user),
+         do: {:ok, count}
+  end
+
+  @doc """
+  `index_note/3`, plus the bytes this pass actually sent to the embedder
+  (#1618). Chunk reuse makes that a small part of most edits, and a
+  keyword-only pass sends nothing. Returns `{:ok, chunk_count, embedded_bytes}`.
+  """
+  def index_note_with_usage(note, %Engram.Vaults.Vault{} = vault, user \\ nil) do
     # Resolve identity ONCE for the whole call. This function and
     # prepare_index/3 below both need the same `%User{}`, and both used to
     # fetch it independently — on the embed path that made four `get_user!`
@@ -72,7 +82,7 @@ defmodule Engram.Indexing do
             # Returning the error costs one Oban retry.
             with :ok <- purge_stale_index(note) do
               :ok = Engram.Links.replace_links(user, vault, note.id, link_rows)
-              {:ok, 0}
+              {:ok, 0, 0}
             end
 
           {:error, :no_dek} = err ->
@@ -81,7 +91,8 @@ defmodule Engram.Indexing do
         end
 
       {:ok, prepared} ->
-        commit_index(prepared)
+        with {:ok, count} <- commit_index(prepared),
+             do: {:ok, count, prepared.embedded_bytes}
 
       {:error, _} = err ->
         err
@@ -127,12 +138,19 @@ defmodule Engram.Indexing do
         with :ok <- Qdrant.ensure_collection(collection(), dims),
              {:ok, filter_key} <- Crypto.dek_filter_key(user),
              {:ok, content_key} <- Crypto.dek_content_hash_key(user),
-             plan = plan_chunks(note, chunks, content_key),
+             plan = plan_chunks(note, chunks, content_key, semantic?),
              texts = embed_texts(plan),
              {:ok, vectors} <- maybe_embed(semantic?, texts),
-             :ok <- ensure_one_vector_per_text(vectors, texts, note) do
-          avgdl = Engram.KeywordIndex.Stats.avgdl(note.vault_id)
-          build_prepared(note, user, vault, plan, vectors, filter_key, avgdl, link_rows)
+             :ok <- ensure_one_vector_per_text(vectors, texts, note),
+             avgdl = Engram.KeywordIndex.Stats.avgdl(note.vault_id),
+             {:ok, prepared} <-
+               build_prepared(note, user, vault, plan, vectors, filter_key, avgdl, link_rows) do
+          # What the embedder was actually sent (#1618): reused chunks and
+          # keyword-only passes cost nothing, so the meter must not bill them.
+          embedded_bytes =
+            if semantic?, do: texts |> Enum.map(&byte_size/1) |> Enum.sum(), else: 0
+
+          {:ok, Map.put(prepared, :embedded_bytes, embedded_bytes)}
         else
           {:error, :no_dek} = err ->
             emit_no_dek_telemetry(note)
@@ -449,6 +467,13 @@ defmodule Engram.Indexing do
 
   defp doc_embed_model, do: Application.get_env(:engram, :doc_embed_model)
 
+  # `do_embed_batch/1` passes `:doc_embed_model` only when it is set, and the
+  # embedder falls back to `:embed_model` otherwise. The reuse fingerprint has
+  # to name the model actually used, or changing EMBED_MODEL with
+  # DOC_EMBED_MODEL unset leaves every hmac identical and the collection
+  # silently mixes two models' embedding spaces (#1606).
+  defp effective_embed_model, do: doc_embed_model() || Application.get_env(:engram, :embed_model)
+
   # Voyage caps a request two ways: 1,000 texts AND 120,000 tokens summed over
   # them. Blowing either is a 400 no retry can fix, so the job churns through
   # ReconcileEmbeddings forever.
@@ -572,10 +597,10 @@ defmodule Engram.Indexing do
   # Matched by multiplicity, not by set membership: a note with two identical
   # sections has two rows under one hmac and must consume one point each, or
   # the second chunk silently adopts the first one's point.
-  defp plan_chunks(note, chunks, content_key) do
+  defp plan_chunks(note, chunks, content_key, semantic?) do
     chunks =
       Enum.map(chunks, fn chunk ->
-        Map.put(chunk, :context_hmac, Crypto.hmac_content_hash(content_key, chunk.context_text))
+        Map.put(chunk, :context_hmac, fingerprint(content_key, chunk.context_text, semantic?))
       end)
 
     existing =
@@ -614,6 +639,19 @@ defmodule Engram.Indexing do
       reused_point_ids: reused,
       stale_point_ids: Enum.map(existing, fn {_h, id, _t} -> id end) -- reused
     }
+  end
+
+  # What a point HOLDS is part of the fingerprint, not just its text (#1606).
+  # A keyword-only point has no dense vector: matching it after an upgrade
+  # stamped the note densely indexed with nothing behind the stamp, and a
+  # downgrade kept vectors the tier no longer grants. The model is in it for
+  # the same reason, since another model's vector is not reusable either.
+  defp fingerprint(content_key, context_text, true) do
+    Crypto.hmac_content_hash(content_key, "dense:#{effective_embed_model()}\n" <> context_text)
+  end
+
+  defp fingerprint(content_key, context_text, false) do
+    Crypto.hmac_content_hash(content_key, "sparse\n" <> context_text)
   end
 
   defp embed_texts(plan), do: for({:embed, chunk} <- plan.entries, do: chunk.context_text)

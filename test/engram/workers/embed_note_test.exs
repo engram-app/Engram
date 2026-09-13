@@ -66,6 +66,14 @@ defmodule Engram.Workers.EmbedNoteTest do
     Bypass.pass(bypass)
   end
 
+  defp drain_embedded do
+    receive do
+      {:embedded, texts} -> texts ++ drain_embedded()
+    after
+      0 -> []
+    end
+  end
+
   describe "perform/1" do
     test "indexes note and returns :ok", %{bypass: bypass, note: note} do
       Engram.MockEmbedder
@@ -784,6 +792,69 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 
       assert Engram.UsageMeters.lifetime_embed_tokens(user.id) > 0
+    end
+
+    # #1618: since chunk reuse (#1595) a pass embeds only the changed chunks,
+    # but the meter kept billing the whole note on every edit.
+    test "charges only the chunks a pass actually embeds",
+         %{bypass: bypass, user: user, vault: vault} do
+      stub_qdrant(bypass)
+      test_pid = self()
+
+      stub(Engram.MockEmbedder, :embed_texts, fn texts ->
+        send(test_pid, {:embedded, texts})
+        {:ok, Enum.map(texts, fn _ -> List.duplicate(0.1, 3) end)}
+      end)
+
+      body =
+        Enum.map_join(1..6, "\n\n", &"## Section #{&1}\n\n#{String.duplicate("word#{&1} ", 200)}")
+
+      note =
+        Engram.Fixtures.insert_note!(user, vault, %{
+          path: "Test/Long.md",
+          content: "# Long\n\n" <> body
+        })
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+      first = Engram.UsageMeters.lifetime_embed_tokens(user.id)
+      _ = drain_embedded()
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "Test/Long.md",
+          "content" => "# Long\n\n" <> String.replace(body, "word3 ", "edited3 ", global: false),
+          "mtime" => 2_000.0
+        })
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      sent = drain_embedded()
+      assert sent != [], "the edited section must be re-embedded"
+      delta = Engram.UsageMeters.lifetime_embed_tokens(user.id) - first
+      assert delta == Engram.UsageMeters.estimate_tokens(Enum.join(sent))
+      assert delta < div(first, 2)
+    end
+
+    test "a pass that reuses every chunk charges nothing",
+         %{bypass: bypass, user: user, note: note} do
+      stub_qdrant(bypass)
+
+      # Exactly one embed call: the second pass must reach Voyage with nothing.
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts ->
+        {:ok, Enum.map(texts, fn _ -> List.duplicate(0.1, 3) end)}
+      end)
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+      first = Engram.UsageMeters.lifetime_embed_tokens(user.id)
+
+      Repo.update_all(from(n in Note, where: n.id == ^note.id), [set: [embed_hash: nil]],
+        skip_tenant_check: true
+      )
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      assert Engram.UsageMeters.lifetime_embed_tokens(user.id) == first
     end
 
     test "user override raises the cap above the default",

@@ -30,6 +30,9 @@ defmodule Engram.Parsers.Markdown do
   def parse("", _path), do: []
 
   def parse(content, path) do
+    # The frontmatter codec and the heading patterns all expect LF, so a CRLF
+    # note lost its frontmatter chunk and had its body cut short (#1605).
+    content = String.replace(content, "\r\n", "\n")
     folder = extract_folder(path)
     title = Helpers.extract_title(content, path)
     body = strip_frontmatter(content)
@@ -187,11 +190,14 @@ defmodule Engram.Parsers.Markdown do
   # Frontmatter
   # ---------------------------------------------------------------------------
 
+  # The same split `frontmatter_chunk/3` uses, so the body and the frontmatter
+  # chunk always agree on where the block ends. The regex this replaced took a
+  # BYTE length and sliced by GRAPHEME, so each multibyte character in the
+  # frontmatter cut one more from the start of the body, and it missed a
+  # closing fence at EOF that the split accepts, indexing that block twice.
   defp strip_frontmatter(content) do
-    case Regex.run(~r/\A---\s*\n.*?\n---\s*\n/s, content, return: :index) do
-      [{0, len}] -> String.slice(content, len, byte_size(content))
-      _ -> content
-    end
+    {_block, body} = Engram.Notes.Frontmatter.split(content)
+    body
   end
 
   # ---------------------------------------------------------------------------
