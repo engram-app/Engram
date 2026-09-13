@@ -27,7 +27,11 @@ defmodule Engram.Repo.Migrations.AddChunkerVersionToNotesExpand do
 
   def up do
     alter table(:notes) do
-      add :chunker_version, :integer
+      # `:bigint`, not `:integer` — squawk's prefer-bigint-over-int gate fails
+      # the build on a 32-bit int column. A chunker version will never approach
+      # 2^31, but 4 extra bytes on a nullable column is cheaper than an
+      # exception, and the Ecto field stays `:integer` (it reads int8 fine).
+      add :chunker_version, :bigint
     end
   end
 
