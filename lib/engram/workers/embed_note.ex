@@ -12,6 +12,21 @@ defmodule Engram.Workers.EmbedNote do
   (content hasn't changed since last successful embed). On success, sets
   embed_hash = content_hash using an optimistic lock — if content changed
   mid-embed, the update is a no-op and the next job picks up the new version.
+
+  That skip is also gated on `chunker_version` (#1620): content being unchanged
+  is not enough if the chunks were built by an older chunker, so a note stamped
+  with anything other than the current `Markdown.chunker_version/0` is rebuilt
+  rather than skipped. Nothing selects on that column automatically — an
+  operator drives the backfill per vault via `ReindexKeyword`, which does real
+  work on the first run after a version bump and is a no-op on every run after
+  that. Deliberate: it keeps a corpus-wide re-embed an explicit action rather
+  than something a deploy can start.
+
+  This does NOT revive `ReindexKeyword` for its original #605 purpose
+  (re-normalizing BM25 against a drifted `avgdl`, which involves no chunker
+  change and so never makes a note look stale). #1477 stays open for that, and
+  the stale BM25 weights already baked into existing points are NOT repaired
+  here — only the chunk boundaries are.
   """
 
   use Oban.Worker,
@@ -33,6 +48,7 @@ defmodule Engram.Workers.EmbedNote do
   alias Engram.Logger.DecryptFailure
   alias Engram.Logger.Metadata
   alias Engram.Notes.Note
+  alias Engram.Parsers.Markdown
   alias Engram.Repo
   alias Engram.Search.SearchProfile
   alias Engram.UsageMeters
@@ -40,6 +56,13 @@ defmodule Engram.Workers.EmbedNote do
   alias Engram.Workers.BackgroundPriority
 
   require Logger
+
+  # Read at COMPILE time so it can appear in a clause head below — a guard
+  # cannot call `Markdown.chunker_version/0`. The tradeoff is a compile-time
+  # dependency on the parser: bumping the version recompiles this worker, which
+  # is what we want, since a stale copy here would skip the notes the bump
+  # exists to rebuild.
+  @chunker_version Markdown.chunker_version()
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(10)
@@ -55,11 +78,29 @@ defmodule Engram.Workers.EmbedNote do
       {:discard, _reason} = discard ->
         discard
 
-      {:ok, %Note{content_hash: hash, embed_hash: hash, dense_indexed_hash: hash}}
+      {:ok,
+       %Note{
+         content_hash: hash,
+         embed_hash: hash,
+         dense_indexed_hash: hash,
+         chunker_version: @chunker_version
+       }}
       when hash != nil and is_nil(old_path_hmac_b64) ->
-        # Already indexed this exact content WITH dense vectors, no rename
-        # pending — skip.
+        # Already indexed this exact content WITH dense vectors, by the CURRENT
+        # chunker, no rename pending — skip.
         :ok
+
+      # #1620 — content is indexed, but by an older chunker (NULL means older
+      # than the stamp itself). Rebuild regardless of tier: re-chunking a
+      # keyword-only note never reaches the embedder, so it costs no EMBEDDING
+      # spend — it does still cost a decrypt, a re-parse, a Qdrant upsert and a
+      # rewrite of the note's `chunks` rows — and leaving Free users on a
+      # splitter we know emits 2.5MB chunks is the bug.
+      # `run_and_stamp` re-stamps the version, so a given note matches this at
+      # most once per bump — it cannot become a re-embed loop.
+      {:ok, %Note{content_hash: hash, embed_hash: hash, chunker_version: cv} = note}
+      when hash != nil and is_nil(old_path_hmac_b64) and cv != @chunker_version ->
+        run_and_stamp(note, old_path_hmac_b64, job)
 
       {:ok, %Note{content_hash: hash, embed_hash: hash} = note}
       when hash != nil and is_nil(old_path_hmac_b64) ->
@@ -438,15 +479,25 @@ defmodule Engram.Workers.EmbedNote do
     # entitled user: a per-user `indexed_notes_cap` override (a promo grant, a
     # throttled abuser) puts a semantic user over the cap, and nothing but a
     # content edit would ever re-open the note.
+    # `chunker_version` is stamped on BOTH paths, including the keyword-only /
+    # no-chunks one. It records which chunker last ran, not whether vectors were
+    # written, and leaving it NULL after a successful pass would re-select the
+    # note on every future sweep.
     set =
       if semantic? and chunk_count > 0 do
         [
           embed_hash: note.content_hash,
           dense_indexed_hash: note.content_hash,
+          chunker_version: @chunker_version,
           embed_retry_after: nil
         ]
       else
-        [embed_hash: note.content_hash, dense_indexed_hash: nil, embed_retry_after: nil]
+        [
+          embed_hash: note.content_hash,
+          dense_indexed_hash: nil,
+          chunker_version: @chunker_version,
+          embed_retry_after: nil
+        ]
       end
 
     {count, _} =

@@ -28,6 +28,33 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
     end
 
+    test "ignores a stale chunker_version — the cron must never start a mass re-embed" do
+      # #1620 added `notes.chunker_version` and taught EmbedNote to rebuild a
+      # note whose stamp is out of date. This cron was deliberately NOT taught
+      # the same thing: every already-indexed note in prod carries NULL, so
+      # selecting on it here would re-embed the entire corpus of every paying
+      # user on the next 15-minute tick, unprompted, the moment the migration
+      # lands. The backfill is operator-driven per vault instead.
+      #
+      # This is the assertion that protects that property — without it, adding
+      # one `or` to the eligibility query is a silent five-figure Voyage bill.
+      user = insert(:user)
+      insert(:subscription, user: user, tier: "pro", status: "active")
+
+      note =
+        insert(:note,
+          user: user,
+          content_hash: "abc123",
+          embed_hash: "abc123",
+          dense_indexed_hash: "abc123",
+          chunker_version: nil
+        )
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+
+      refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+    end
+
     test "backfills dense vectors for every entitled status, past_due included" do
       # The subscription join is a SQL proxy for the real 4-layer entitlement
       # resolver. A hand-rolled subset that dropped `past_due` stranded the

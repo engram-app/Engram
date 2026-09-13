@@ -11,6 +11,7 @@ defmodule Engram.Workers.EmbedNoteTest do
   alias Engram.Crypto.DekCache
   alias Engram.Notes
   alias Engram.Notes.Note
+  alias Engram.Parsers.Markdown
   alias Engram.Repo
   alias Engram.Workers.EmbedNote
 
@@ -103,14 +104,67 @@ defmodule Engram.Workers.EmbedNoteTest do
     test "skips embedding when both hashes match content_hash", %{note: note} do
       import Ecto.Query
 
+      # `chunker_version` is part of the skip condition since #1620 — a note at
+      # an older version is rebuilt, so this test has to pin the current one to
+      # still be testing the hash-match skip.
       from(n in Note, where: n.id == ^note.id)
       |> Repo.update_all(
-        [set: [embed_hash: note.content_hash, dense_indexed_hash: note.content_hash]],
+        [
+          set: [
+            embed_hash: note.content_hash,
+            dense_indexed_hash: note.content_hash,
+            chunker_version: Markdown.chunker_version()
+          ]
+        ],
         skip_tenant_check: true
       )
 
       # No mock expectations — if it tried to embed, Mox would fail
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+    end
+
+    # #1620 — chunker fixes never reached an already-indexed note. Both hashes
+    # match, so the skip clause returned :ok and the note kept chunks built by
+    # an older splitter forever. A NULL chunker_version is exactly that note:
+    # indexed by a chunker that predates the stamp.
+    test "re-indexes a note whose chunker_version is stale", %{bypass: bypass, note: note} do
+      import Ecto.Query
+
+      from(n in Note, where: n.id == ^note.id)
+      |> Repo.update_all(
+        [
+          set: [
+            embed_hash: note.content_hash,
+            dense_indexed_hash: note.content_hash,
+            chunker_version: nil
+          ]
+        ],
+        skip_tenant_check: true
+      )
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts -> {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)} end)
+
+      stub_qdrant(bypass)
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      assert Repo.get!(Note, note.id, skip_tenant_check: true).chunker_version ==
+               Markdown.chunker_version()
+    end
+
+    test "stamps the current chunker version on success", %{bypass: bypass, note: note} do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts ->
+        {:ok, Enum.map(texts, fn _ -> List.duplicate(0.1, 3) end)}
+      end)
+
+      stub_qdrant(bypass)
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      assert Repo.get!(Note, note.id, skip_tenant_check: true).chunker_version ==
+               Markdown.chunker_version()
     end
 
     test "re-embeds an entitled user's note that has no dense vectors (upgrade backfill)", %{
@@ -154,14 +208,57 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       OverrideCache.evict(note.user_id)
 
+      # Pinned to the current chunker version on purpose: this test is about
+      # TIER gating, not #1620. Left NULL it would match the stale-chunker
+      # clause and rebuild, which would prove nothing about entitlement.
       from(n in Note, where: n.id == ^note.id)
       |> Repo.update_all(
-        [set: [embed_hash: note.content_hash, dense_indexed_hash: nil]],
+        [
+          set: [
+            embed_hash: note.content_hash,
+            dense_indexed_hash: nil,
+            chunker_version: Markdown.chunker_version()
+          ]
+        ],
         skip_tenant_check: true
       )
 
       # No mock expectations — any embed call fails the test.
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+    end
+
+    test "rebuilds a keyword-only user's note when the chunker version is stale", %{
+      bypass: bypass,
+      note: note
+    } do
+      import Ecto.Query
+
+      # A Free user's notes carry the same bad chunks as everyone else's, and
+      # re-chunking them calls no embedder, so #1620 rebuilds them too. The
+      # absence of a Mox expectation is the assertion that Voyage is NOT hit:
+      # the tier gate still holds, only the skip does not.
+      Engram.Repo.delete_all(
+        from(o in Engram.Billing.UserLimitOverride,
+          where: o.user_id == ^note.user_id and o.key == "search_semantic_enabled"
+        )
+      )
+
+      OverrideCache.evict(note.user_id)
+
+      from(n in Note, where: n.id == ^note.id)
+      |> Repo.update_all(
+        [set: [embed_hash: note.content_hash, dense_indexed_hash: nil, chunker_version: nil]],
+        skip_tenant_check: true
+      )
+
+      stub_qdrant(bypass)
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      updated = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert updated.chunker_version == Markdown.chunker_version()
+      # Still keyword-only: the rebuild must not invent dense vectors.
+      assert is_nil(updated.dense_indexed_hash)
     end
 
     test "optimistic lock: does not stamp embed_hash if content changed mid-embed", %{
