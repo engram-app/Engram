@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.3](https://github.com/engram-app/Engram/compare/0.26.2...0.26.3) (2026-09-13)
+
+
+### Bug Fixes
+
+* **search:** rebuild notes whose chunks came from an older chunker ([#1620](https://github.com/engram-app/Engram/issues/1620)) ([#1628](https://github.com/engram-app/Engram/issues/1628)) ([d8e0d2c](https://github.com/engram-app/Engram/commit/d8e0d2cf85206202fb1f03c89bfcf50328ba1f7d))
+
 ## [0.26.2](https://github.com/engram-app/Engram/compare/0.26.1...0.26.2) (2026-09-13)
 
 
