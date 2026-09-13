@@ -186,6 +186,28 @@ defmodule Engram.Parsers.MarkdownTest do
       chunks = Markdown.parse("---\nstatus: done\n---\n", "a/n.md")
       assert [%{heading_path: "frontmatter"}] = chunks
     end
+
+    # #1605: the strip measured the frontmatter in BYTES and sliced the note
+    # in GRAPHEMES, so every multibyte character cut one more from the body.
+    test "multibyte frontmatter keeps the whole body" do
+      content = "---\ntitle: 日本語のノート\n---\nHello world this is the body."
+      [body | _] = Markdown.parse(content, "a/n.md")
+      assert body.text == "Hello world this is the body."
+    end
+
+    test "CRLF frontmatter keeps the whole body and still emits the frontmatter chunk" do
+      content = "---\r\ntitle: T\r\n---\r\nHello world this is the body.\r\n"
+      chunks = Markdown.parse(content, "a/n.md")
+
+      [body | _] = chunks
+      assert body.text == "Hello world this is the body."
+      assert %{text: "title: T\n"} = List.last(chunks)
+    end
+
+    test "a closing fence at EOF is indexed once, as the frontmatter chunk" do
+      chunks = Markdown.parse("---\nstatus: done\n---", "a/n.md")
+      assert [%{heading_path: "frontmatter"}] = chunks
+    end
   end
 
   # ---------------------------------------------------------------------------

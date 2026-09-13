@@ -2279,6 +2279,7 @@ jobs:
 
     env:
       PG_CONTAINER: engram-unit-test-${{ github.run_id }}
+      QDRANT_CONTAINER: engram-unit-test-qdrant-${{ github.run_id }}
 
     steps:
       - name: Reset sparse-checkout leaked from cross-repo jobs
@@ -2339,6 +2340,71 @@ jobs:
           echo "pg_port=$PG_PORT" >> "$GITHUB_OUTPUT"
           echo "Postgres on port $PG_PORT (container: $PG_CONTAINER)"
 
+      # Real Qdrant for the `:qdrant_integration` tests. Those tests existed
+      # but NO job ever set QDRANT_INTEGRATION=1, so they had never run in CI
+      # — and the bug class they catch (prod's Qdrant Cloud enforces strict
+      # mode, which 400s a filter on an un-indexed payload field; see #1609)
+      # is invisible to the Bypass suites, which answer 200 to anything.
+      # Ephemeral + random port, same pattern and port-race retry as postgres.
+      - name: Start ephemeral qdrant
+        id: qdrant
+        run: |
+          docker rm -f "$QDRANT_CONTAINER" 2>/dev/null || true
+
+          if [ -n "${LOCAL_REGISTRY:-}" ]; then
+            QDRANT_IMAGE="${LOCAL_REGISTRY}/qdrant/qdrant:v1.17.1"
+            docker pull "$QDRANT_IMAGE" 2>/dev/null || QDRANT_IMAGE="qdrant/qdrant:v1.17.1"
+          else
+            QDRANT_IMAGE="qdrant/qdrant:v1.17.1"
+          fi
+
+          # Bind IPv4 explicitly. With a bare `-p 0:6333` docker publishes on
+          # 0.0.0.0 only, while the BEAM resolves `localhost` to ::1 first and
+          # gets ECONNREFUSED — curl falls back to IPv4 and hides it, so the
+          # readiness probe passed while every test failed to connect.
+          for attempt in 1 2 3 4 5; do
+            if docker run -d --name "$QDRANT_CONTAINER" -p 127.0.0.1:0:6333 "$QDRANT_IMAGE"; then
+              break
+            fi
+            echo "Attempt $attempt: docker run failed (likely port race) — cleaning up + retrying"
+            docker rm -f "$QDRANT_CONTAINER" 2>/dev/null || true
+            sleep 1
+            if [ "$attempt" = "5" ]; then
+              echo "::error::Qdrant container failed to start after 5 attempts"
+              exit 1
+            fi
+          done
+
+          # `awk -F: '{print $NF}'`, not `cut -d: -f2`: an IPv6 mapping line
+          # ([::]:32768) has several colons and would yield an empty port.
+          QDRANT_PORT=$(docker port "$QDRANT_CONTAINER" 6333/tcp | head -1 | awk -F: '{print $NF}')
+          echo "qdrant_port=$QDRANT_PORT" >> "$GITHUB_OUTPUT"
+          echo "Qdrant on port $QDRANT_PORT (container: $QDRANT_CONTAINER)"
+
+          # Probe the SAME address the tests use, or it proves nothing.
+          for i in $(seq 1 30); do
+            if curl -sf --max-time 2 "http://127.0.0.1:${QDRANT_PORT}/healthz" > /dev/null 2>&1; then
+              echo "Qdrant ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::Qdrant did not become ready in 30s"
+          docker logs "$QDRANT_CONTAINER" 2>&1 | tail -20
+          exit 1
+
+      # The container answered healthz and was still present at teardown, yet
+      # every test got econnrefused minutes later, so it went away in between
+      # and `docker rm -fv` destroyed the evidence. Capture state + logs at the
+      # moment it matters instead of guessing again.
+      - name: Qdrant state before tests
+        run: |
+          docker inspect --format 'status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}' "$QDRANT_CONTAINER"
+          docker port "$QDRANT_CONTAINER" 6333/tcp
+          curl -sS -o /dev/null -w 'healthz=%{http_code}\n' --max-time 5 \
+            "http://127.0.0.1:${{ steps.qdrant.outputs.qdrant_port }}/healthz"
+          docker logs --tail 20 "$QDRANT_CONTAINER" 2>&1 || true
+
       # Restore deps + _build/test compiled by `prebuild-mix`. Cache keys
       # are pinned via the prebuild-mix job's outputs, so this restore
       # matches exactly what was just compiled — `mix test` reuses the
@@ -2372,6 +2438,12 @@ jobs:
       - name: Run Elixir unit tests
         env:
           DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_test
+          # Opts the `:qdrant_integration` tests in (test_helper.exs excludes
+          # them otherwise) and points them at the ephemeral container.
+          QDRANT_INTEGRATION: "1"
+          # 127.0.0.1, not localhost: the container publishes on IPv4 and the
+          # BEAM would try ::1 first.
+          QDRANT_URL: http://127.0.0.1:${{ steps.qdrant.outputs.qdrant_port }}
         run: |
           for i in $(seq 1 30); do
             if docker exec "$PG_CONTAINER" pg_isready -U engram > /dev/null 2>&1; then
@@ -2411,6 +2483,15 @@ jobs:
           # marker skip now saves far more than --stale ever did, because it
           # skips the compile too.
           mix test --warnings-as-errors --slowest 20
+
+      - name: Qdrant state after a test failure
+        if: failure()
+        run: |
+          docker ps -a --filter "name=$QDRANT_CONTAINER" --format '{{.Names}} {{.Status}}'
+          docker inspect --format 'status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} started={{.State.StartedAt}} finished={{.State.FinishedAt}}' "$QDRANT_CONTAINER" || true
+          curl -sS -o /dev/null -w 'healthz=%{http_code}\n' --max-time 5 \
+            "http://127.0.0.1:${{ steps.qdrant.outputs.qdrant_port }}/healthz" || echo "curl failed too"
+          docker logs --tail 50 "$QDRANT_CONTAINER" 2>&1 || true
 
       - name: OpenAPI spec drift gate
         env:
@@ -2480,6 +2561,10 @@ jobs:
       - name: Stop ephemeral postgres
         if: always()
         run: docker rm -fv "$PG_CONTAINER" 2>/dev/null || true
+
+      - name: Stop ephemeral qdrant
+        if: always()
+        run: docker rm -fv "$QDRANT_CONTAINER" 2>/dev/null || true
 
       - name: Clean temp files
         if: always()

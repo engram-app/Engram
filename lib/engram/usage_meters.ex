@@ -88,10 +88,9 @@ defmodule Engram.UsageMeters do
   against the user). Real `usage.total_tokens` from the Voyage response is a
   follow-up.
   """
-  @spec estimate_tokens(binary()) :: non_neg_integer()
-  def estimate_tokens(content) when is_binary(content) do
-    div(byte_size(content) + 3, 4)
-  end
+  @spec estimate_tokens(binary() | non_neg_integer()) :: non_neg_integer()
+  def estimate_tokens(content) when is_binary(content), do: estimate_tokens(byte_size(content))
+  def estimate_tokens(bytes) when is_integer(bytes) and bytes >= 0, do: div(bytes + 3, 4)
 
   def estimate_tokens(_), do: 0
 

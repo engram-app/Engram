@@ -483,6 +483,15 @@ defmodule Engram.Workers.OrphanSweep do
       |> Enum.uniq()
       |> Enum.chunk_every(@id_query_batch)
       |> Enum.reduce(0, fn batch, acc ->
+        # Chunk reuse (#1595) matches on `context_hmac`, so a surviving hmac
+        # makes the re-index "reuse" the very points Qdrant lost and stamp the
+        # note indexed again (#1607). Cleared before the note hashes: a failure
+        # between the two then costs a full re-embed, never a silent no-op.
+        _ =
+          Chunk
+          |> where([c], c.note_id in ^batch)
+          |> Repo.update_all([set: [context_hmac: nil]], skip_tenant_check: true)
+
         {n, _} =
           Note
           |> where([n], n.id in ^batch)

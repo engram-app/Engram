@@ -73,6 +73,9 @@ defmodule Engram.IndexingChunkReuseTest do
     end
   end
 
+  defp restore_env(key, nil), do: Application.delete_env(:engram, key)
+  defp restore_env(key, value), do: Application.put_env(:engram, key, value)
+
   defp requests(recorder), do: recorder |> Agent.get(& &1) |> Enum.reverse()
 
   defp reset(recorder), do: Agent.update(recorder, fn _ -> [] end)
@@ -361,6 +364,72 @@ defmodule Engram.IndexingChunkReuseTest do
              "a reused row must keep the token_count of the row it replaces"
 
       assert Enum.all?(reused, &(&1.token_count != nil))
+    end
+  end
+
+  # #1606: reuse matched on the text alone and ignored what the point holds. A
+  # keyword-only point has no dense vector, so reusing it after an upgrade
+  # stamped the note densely indexed with nothing behind the stamp.
+  describe "a tier change" do
+    test "an upgrade embeds every chunk of a keyword-only index", ctx do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      note = put_raw(user, vault, @path, content("Ferritin levels are low.", "[health]"))
+      stub_embedder(self())
+
+      assert {:ok, count} = Indexing.index_note(note, vault)
+      assert embedded_texts() == [], "a keyword-only user must not reach the embedder"
+      reset(ctx.recorder)
+
+      :ok = Engram.Fixtures.grant_semantic!(user)
+      assert {:ok, ^count} = Indexing.index_note(note, vault)
+
+      assert length(embedded_texts()) == count
+      assert length(upserts(ctx.recorder)) == count
+    end
+
+    # DOC_EMBED_MODEL is optional: unset, the embedder falls back to
+    # EMBED_MODEL. Fingerprinting only the former meant changing EMBED_MODEL
+    # left every hmac identical, so the collection silently mixed two models'
+    # embedding spaces.
+    test "changing EMBED_MODEL invalidates reuse when DOC_EMBED_MODEL is unset", ctx do
+      prior = Application.get_env(:engram, :embed_model)
+      on_exit(fn -> restore_env(:embed_model, prior) end)
+
+      Application.put_env(:engram, :embed_model, "voyage-4-large")
+      note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
+      stub_embedder(self())
+
+      assert {:ok, count} = Indexing.index_note(note, ctx.vault)
+      _ = embedded_texts()
+      reset(ctx.recorder)
+
+      Application.put_env(:engram, :embed_model, "voyage-4-lite")
+      assert {:ok, ^count} = Indexing.index_note(note, ctx.vault)
+
+      assert length(embedded_texts()) == count,
+             "a model change must re-embed every chunk, not reuse the old model's vectors"
+    end
+
+    test "a downgrade rebuilds every point without a dense vector", ctx do
+      note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
+      stub_embedder(self())
+
+      assert {:ok, count} = Indexing.index_note(note, ctx.vault)
+      _ = embedded_texts()
+      reset(ctx.recorder)
+
+      Repo.delete_all(
+        from(o in Engram.Billing.UserLimitOverride, where: o.user_id == ^ctx.user.id)
+      )
+
+      Engram.Billing.OverrideCache.evict(ctx.user.id)
+
+      assert {:ok, ^count} = Indexing.index_note(note, ctx.vault)
+
+      points = upserts(ctx.recorder)
+      assert length(points) == count
+      refute Enum.any?(points, &Map.has_key?(&1["vector"], "dense"))
     end
   end
 

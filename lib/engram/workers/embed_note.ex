@@ -12,6 +12,21 @@ defmodule Engram.Workers.EmbedNote do
   (content hasn't changed since last successful embed). On success, sets
   embed_hash = content_hash using an optimistic lock — if content changed
   mid-embed, the update is a no-op and the next job picks up the new version.
+
+  That skip is also gated on `chunker_version` (#1620): content being unchanged
+  is not enough if the chunks were built by an older chunker, so a note stamped
+  with anything other than the current `Markdown.chunker_version/0` is rebuilt
+  rather than skipped. Nothing selects on that column automatically — an
+  operator drives the backfill per vault via `ReindexKeyword`, which does real
+  work on the first run after a version bump and is a no-op on every run after
+  that. Deliberate: it keeps a corpus-wide re-embed an explicit action rather
+  than something a deploy can start.
+
+  This does NOT revive `ReindexKeyword` for its original #605 purpose
+  (re-normalizing BM25 against a drifted `avgdl`, which involves no chunker
+  change and so never makes a note look stale). #1477 stays open for that, and
+  the stale BM25 weights already baked into existing points are NOT repaired
+  here — only the chunk boundaries are.
   """
 
   use Oban.Worker,
@@ -33,6 +48,7 @@ defmodule Engram.Workers.EmbedNote do
   alias Engram.Logger.DecryptFailure
   alias Engram.Logger.Metadata
   alias Engram.Notes.Note
+  alias Engram.Parsers.Markdown
   alias Engram.Repo
   alias Engram.Search.SearchProfile
   alias Engram.UsageMeters
@@ -40,6 +56,13 @@ defmodule Engram.Workers.EmbedNote do
   alias Engram.Workers.BackgroundPriority
 
   require Logger
+
+  # Read at COMPILE time so it can appear in a clause head below — a guard
+  # cannot call `Markdown.chunker_version/0`. The tradeoff is a compile-time
+  # dependency on the parser: bumping the version recompiles this worker, which
+  # is what we want, since a stale copy here would skip the notes the bump
+  # exists to rebuild.
+  @chunker_version Markdown.chunker_version()
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(10)
@@ -55,11 +78,29 @@ defmodule Engram.Workers.EmbedNote do
       {:discard, _reason} = discard ->
         discard
 
-      {:ok, %Note{content_hash: hash, embed_hash: hash, dense_indexed_hash: hash}}
+      {:ok,
+       %Note{
+         content_hash: hash,
+         embed_hash: hash,
+         dense_indexed_hash: hash,
+         chunker_version: @chunker_version
+       }}
       when hash != nil and is_nil(old_path_hmac_b64) ->
-        # Already indexed this exact content WITH dense vectors, no rename
-        # pending — skip.
+        # Already indexed this exact content WITH dense vectors, by the CURRENT
+        # chunker, no rename pending — skip.
         :ok
+
+      # #1620 — content is indexed, but by an older chunker (NULL means older
+      # than the stamp itself). Rebuild regardless of tier: re-chunking a
+      # keyword-only note never reaches the embedder, so it costs no EMBEDDING
+      # spend — it does still cost a decrypt, a re-parse, a Qdrant upsert and a
+      # rewrite of the note's `chunks` rows — and leaving Free users on a
+      # splitter we know emits 2.5MB chunks is the bug.
+      # `run_and_stamp` re-stamps the version, so a given note matches this at
+      # most once per bump — it cannot become a re-embed loop.
+      {:ok, %Note{content_hash: hash, embed_hash: hash, chunker_version: cv} = note}
+      when hash != nil and is_nil(old_path_hmac_b64) and cv != @chunker_version ->
+        run_and_stamp(note, old_path_hmac_b64, job)
 
       {:ok, %Note{content_hash: hash, embed_hash: hash} = note}
       when hash != nil and is_nil(old_path_hmac_b64) ->
@@ -136,21 +177,17 @@ defmodule Engram.Workers.EmbedNote do
             case embed_budget_gate(note, user) do
               :ok ->
                 case run_embed(note, user, old_path_hmac_b64) do
-                  {:ok, chunk_count, semantic?} ->
-                    # Charge the embed meter only when Voyage was actually
-                    # called. `chunk_count == 0` is index_note/2's no-chunks
-                    # outcome: the note was empty OR outside the user's
-                    # indexed-note cap, and in neither case did a single token
-                    # get spent. Keyword-only users never call Voyage at all.
+                  {:ok, embedded_bytes} ->
+                    # Charge the embed meter for what Voyage was actually sent
+                    # this pass, not the whole note (#1618). Chunk reuse sends
+                    # only the changed chunks; an empty or over-cap note and a
+                    # keyword-only user send nothing at all.
                     #
-                    # Charging regardless was not merely cosmetic: phantom
-                    # tokens accumulate to the 20M lifetime cap, and
+                    # Charging more was not merely cosmetic: phantom tokens
+                    # accumulate to the 20M lifetime cap, and
                     # embed_budget_gate/2 then cancels indexing entirely — so a
                     # Free user who spent nothing would lose their BM25 index.
-                    _ =
-                      if chunk_count > 0 and semantic? do
-                        record_embed_tokens(note)
-                      end
+                    _ = record_embed_tokens(note.user_id, embedded_bytes)
 
                     :ok
 
@@ -223,17 +260,17 @@ defmodule Engram.Workers.EmbedNote do
     end
   end
 
-  defp record_embed_tokens(%Note{user_id: user_id} = note) do
-    case estimate_note_tokens(note) do
+  defp record_embed_tokens(user_id, embedded_bytes) do
+    case UsageMeters.estimate_tokens(embedded_bytes) do
       0 -> :ok
       tokens -> UsageMeters.add_embed_tokens(user_id, tokens)
     end
   end
 
-  # Token estimate uses the ciphertext byte size. AES-GCM adds a 16-byte
-  # auth tag so we over-count by ~4 tokens per note, which keeps the cap
-  # conservative. Real `usage.total_tokens` from the Voyage response is a
-  # follow-up.
+  # The budget GATE still estimates the whole note: it runs before the pass,
+  # when which chunks will re-embed is not yet known, so it errs towards
+  # blocking. Uses the ciphertext byte size; AES-GCM adds a 16-byte auth tag,
+  # so it over-counts by ~4 tokens per note.
   defp estimate_note_tokens(%Note{content_ciphertext: ct}) when is_binary(ct) do
     UsageMeters.estimate_tokens(ct)
   end
@@ -355,8 +392,8 @@ defmodule Engram.Workers.EmbedNote do
                 Indexing.delete_points_by_path_hmac(decrypted_note, old_path_hmac_b64)
               end
 
-            case Indexing.index_note(decrypted_note, vault, user) do
-              {:ok, count} ->
+            case Indexing.index_note_with_usage(decrypted_note, vault, user) do
+              {:ok, count, embedded_bytes} ->
                 # `user` is the row threaded down from run_and_stamp — the same
                 # one Indexing used to decide whether to call Voyage. Do NOT
                 # re-resolve: a second read lands a DIFFERENT value when a
@@ -365,7 +402,7 @@ defmodule Engram.Workers.EmbedNote do
                 # retries outlives it), and the spend would go unmetered.
                 semantic? = SearchProfile.resolve(user).semantic
                 stamp_embed_hash(note, semantic?, count)
-                {:ok, count, semantic?}
+                {:ok, embedded_bytes}
 
               # Voyage 429 — back off without burning an Oban attempt. Voyage's
               # paid-tier RPM is finite; without this guard five consecutive
@@ -442,15 +479,25 @@ defmodule Engram.Workers.EmbedNote do
     # entitled user: a per-user `indexed_notes_cap` override (a promo grant, a
     # throttled abuser) puts a semantic user over the cap, and nothing but a
     # content edit would ever re-open the note.
+    # `chunker_version` is stamped on BOTH paths, including the keyword-only /
+    # no-chunks one. It records which chunker last ran, not whether vectors were
+    # written, and leaving it NULL after a successful pass would re-select the
+    # note on every future sweep.
     set =
       if semantic? and chunk_count > 0 do
         [
           embed_hash: note.content_hash,
           dense_indexed_hash: note.content_hash,
+          chunker_version: @chunker_version,
           embed_retry_after: nil
         ]
       else
-        [embed_hash: note.content_hash, dense_indexed_hash: nil, embed_retry_after: nil]
+        [
+          embed_hash: note.content_hash,
+          dense_indexed_hash: nil,
+          chunker_version: @chunker_version,
+          embed_retry_after: nil
+        ]
       end
 
     {count, _} =

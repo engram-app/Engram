@@ -143,11 +143,12 @@ defmodule Engram.Notes do
   (Qdrant Cloud is a separate breach surface). The canonical values live
   only in the encrypted `notes` row, so search rehydrates them here keyed by
   the `chunks.qdrant_point_id → note_id` mapping. Tenant-scoped + decrypted
-  as one instrumented batch. Point ids with no live note row are omitted —
-  the caller leaves such candidates' display fields untouched.
+  as one instrumented batch. Point ids with no note row are omitted — the
+  caller leaves such candidates' display fields untouched. A point whose note
+  is soft-deleted maps to `:deleted` so the caller can drop the hit (#1608).
   """
   @spec display_fields_by_qdrant_points(Engram.Accounts.User.t(), [String.t()]) ::
-          %{String.t() => %{source_path: String.t() | nil, tags: [String.t()]}}
+          %{String.t() => %{source_path: String.t() | nil, tags: [String.t()]} | :deleted}
   def display_fields_by_qdrant_points(_user, []), do: %{}
 
   def display_fields_by_qdrant_points(user, qdrant_ids) when is_list(qdrant_ids) do
@@ -172,6 +173,9 @@ defmodule Engram.Notes do
     |> Crypto.decrypt_notes_batch(user)
     |> Enum.zip(qids)
     |> Enum.reduce(%{}, fn
+      {{:ok, %{deleted_at: %DateTime{}}}, qid}, acc ->
+        Map.put(acc, to_string(qid), :deleted)
+
       {{:ok, note}, qid}, acc ->
         Map.put(acc, to_string(qid), %{source_path: note.path, tags: note.tags || []})
 

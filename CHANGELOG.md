@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.26.2](https://github.com/engram-app/Engram/compare/0.26.1...0.26.2) (2026-09-13)
+
+
+### Bug Fixes
+
+* **billing:** meter only the bytes a pass actually embeds ([#1618](https://github.com/engram-app/Engram/issues/1618)) ([0f9d965](https://github.com/engram-app/Engram/commit/0f9d9650dd3672712ee90ed27a5bb90113f05280))
+* **search:** clear chunk hmacs when OrphanSweep flags a note for re-index ([#1607](https://github.com/engram-app/Engram/issues/1607)) ([0f9d965](https://github.com/engram-app/Engram/commit/0f9d9650dd3672712ee90ed27a5bb90113f05280))
+* **search:** create missing Qdrant payload indexes so folder, tag, type and date filters work ([#1609](https://github.com/engram-app/Engram/issues/1609)) ([0f9d965](https://github.com/engram-app/Engram/commit/0f9d9650dd3672712ee90ed27a5bb90113f05280))
+* **search:** keep the whole note body when frontmatter has multibyte characters or CRLF ([#1605](https://github.com/engram-app/Engram/issues/1605)) ([0f9d965](https://github.com/engram-app/Engram/commit/0f9d9650dd3672712ee90ed27a5bb90113f05280))
+* **search:** make chunk reuse tier- and model-aware so upgraded users get semantic search ([#1606](https://github.com/engram-app/Engram/issues/1606)) ([0f9d965](https://github.com/engram-app/Engram/commit/0f9d9650dd3672712ee90ed27a5bb90113f05280))
+* **search:** send input_type and output_dimension to Voyage ([#1614](https://github.com/engram-app/Engram/issues/1614)) ([0f9d965](https://github.com/engram-app/Engram/commit/0f9d9650dd3672712ee90ed27a5bb90113f05280))
+* **search:** stop deleted notes answering searches ([#1608](https://github.com/engram-app/Engram/issues/1608)) ([0f9d965](https://github.com/engram-app/Engram/commit/0f9d9650dd3672712ee90ed27a5bb90113f05280))
+
+
+### Performance Improvements
+
+* **search:** make MMR re-ranking linear in the result limit ([#1617](https://github.com/engram-app/Engram/issues/1617)) ([0f9d965](https://github.com/engram-app/Engram/commit/0f9d9650dd3672712ee90ed27a5bb90113f05280))
+
 ## [0.26.1](https://github.com/engram-app/Engram/compare/0.26.0...0.26.1) (2026-09-11)
 
 
