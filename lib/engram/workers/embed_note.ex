@@ -17,16 +17,16 @@ defmodule Engram.Workers.EmbedNote do
   is not enough if the chunks were built by an older chunker, so a note stamped
   with anything other than the current `Markdown.chunker_version/0` is rebuilt
   rather than skipped. Nothing selects on that column automatically — an
-  operator drives the backfill per vault via `ReindexKeyword`, which does real
-  work on the first run after a version bump and is a no-op on every run after
-  that. Deliberate: it keeps a corpus-wide re-embed an explicit action rather
-  than something a deploy can start.
+  operator drives the backfill per vault via `ReindexKeyword`. Deliberate: it
+  keeps a corpus-wide re-embed an explicit action rather than something a deploy
+  can start. Note that `ReindexKeyword` clears these hashes unconditionally, so
+  it is a full re-embed of the vault on EVERY run, not only after a bump.
 
-  This does NOT revive `ReindexKeyword` for its original #605 purpose
-  (re-normalizing BM25 against a drifted `avgdl`, which involves no chunker
-  change and so never makes a note look stale). #1477 stays open for that, and
-  the stale BM25 weights already baked into existing points are NOT repaired
-  here — only the chunk boundaries are.
+  A chunker bump alone does not re-normalize BM25 against a drifted `avgdl`:
+  that involves no chunker change, so it never makes a note look stale here,
+  and chunk reuse would keep the old weights even if it did. `ReindexKeyword`
+  clears both the reuse markers and these hashes to force a genuine rebuild
+  (#1477).
   """
 
   use Oban.Worker,
