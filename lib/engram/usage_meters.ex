@@ -164,16 +164,26 @@ defmodule Engram.UsageMeters do
   """
   @spec recount_notes!(Ecto.UUID.t()) :: non_neg_integer()
   def recount_notes!(user_id) when is_binary(user_id) do
-    count =
-      Repo.one(
-        from(n in Engram.Notes.Note,
-          where:
-            n.user_id == ^user_id and is_nil(n.deleted_at) and
-              n.kind == "note",
-          select: count(n.id)
-        ),
-        skip_tenant_check: true
-      ) || 0
+    # `notes` carries FORCE ROW LEVEL SECURITY. `skip_tenant_check: true`
+    # silences only Engram's app-level guard and leaves `app.current_tenant`
+    # unset, so the policy compares against NULL and filters every row.
+    # Here that is worse than a wrong read: the 0 is UPSERT-ed over a correct
+    # counter below, turning a silent read bug into persisted corruption.
+    #
+    # The Meter upsert that follows keeps `skip_tenant_check: true` — the
+    # `usage_meters` table has no RLS policy (see rls_coverage_test's
+    # no-RLS allowlist), so it is unaffected.
+    {:ok, count} =
+      Repo.with_tenant(user_id, fn ->
+        Repo.one(
+          from(n in Engram.Notes.Note,
+            where:
+              n.user_id == ^user_id and is_nil(n.deleted_at) and
+                n.kind == "note",
+            select: count(n.id)
+          )
+        ) || 0
+      end)
 
     now = DateTime.utc_now()
 

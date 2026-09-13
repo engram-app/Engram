@@ -260,19 +260,38 @@ defmodule Engram.Indexing.IndexCap do
         select: n.id
       )
 
-    count =
-      Repo.one(from(o in subquery(older), select: count(o.id)), skip_tenant_check: true) || 0
+    # `with_tenant` rather than `skip_tenant_check`: `notes` carries FORCE ROW
+    # LEVEL SECURITY, and skipping the app-level guard does NOT set
+    # `app.current_tenant` — the policy then compares against NULL and filters
+    # every row. A zero here computes `0 < cap` and admits the note, so the
+    # failure is PERMISSIVE: every capped user silently over-indexes. Dev and
+    # CI cannot catch it because their superuser bypasses FORCE RLS.
+    #
+    # `with_tenant` is re-entrant for the same tenant, so a caller already
+    # holding the tenant pays nothing; only the tenant-less indexing path
+    # opens the short transaction.
+    {:ok, count} =
+      Repo.with_tenant(note.user_id, fn ->
+        Repo.one(from(o in subquery(older), select: count(o.id))) || 0
+      end)
 
     count < cap
   end
 
   defp live_note_count(user_id) do
-    Repo.one(
-      from(n in Note,
-        where: n.user_id == ^user_id and n.kind == "note" and is_nil(n.deleted_at),
-        select: count(n.id)
-      ),
-      skip_tenant_check: true
-    ) || 0
+    # Same FORCE RLS reasoning as rank_below_cap?/2. A tenant-less read returns
+    # 0, and `/bootstrap` then renders "0 of 0 notes indexed" to a user whose
+    # vault is full — the exact support ticket the cap banner exists to avoid.
+    {:ok, count} =
+      Repo.with_tenant(user_id, fn ->
+        Repo.one(
+          from(n in Note,
+            where: n.user_id == ^user_id and n.kind == "note" and is_nil(n.deleted_at),
+            select: count(n.id)
+          )
+        ) || 0
+      end)
+
+    count
   end
 end
