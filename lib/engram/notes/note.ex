@@ -39,6 +39,11 @@ defmodule Engram.Notes.Note do
     field :content_hash, :string
     field :embed_hash, :string
     field :dense_indexed_hash, :string
+    # #1620 — which chunker built the current index rows. NULL means "a chunker
+    # older than the stamp", which is what makes an already-indexed note
+    # eligible for a rebuild. Unrelated to `:version` above, which is the
+    # sync/conflict counter.
+    field :chunker_version, :integer
     # Poison-loop guard: when a note exhausts its EmbedNote attempts, the worker
     # stamps a cooldown timestamp here. ReconcileEmbeddings skips notes whose
     # cooldown hasn't elapsed, so a permanently-failing note re-bills Voyage at

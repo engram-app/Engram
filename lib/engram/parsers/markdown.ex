@@ -12,6 +12,25 @@ defmodule Engram.Parsers.Markdown do
   @max_chunk_chars 2048
   @max_prefix_bytes 512
 
+  # #1620 — bump when a change alters the chunks `parse/2` emits for input it
+  # already handled: a different split point, different chunk text, different
+  # ordering. Do NOT bump for a change that cannot move a boundary (a typespec,
+  # a comment, a refactor with identical output). Every bump costs one re-embed
+  # pass over the corpus.
+  @chunker_version 1
+
+  @doc """
+  Version of the chunking algorithm in this build (#1620).
+
+  Stamped onto `notes.chunker_version` by `EmbedNote` after a successful index
+  and compared there on the next pass: a note carrying anything else — including
+  NULL, meaning it was indexed before this stamp existed — is rebuilt rather
+  than skipped, which is how a chunker fix reaches notes nobody edits.
+  """
+  # No @spec: the body is a literal, so dialyzer narrows the success typing to
+  # that exact integer and rejects any wider contract as a supertype.
+  def chunker_version, do: @chunker_version
+
   @doc """
   Parse markdown content into indexable chunks.
 
