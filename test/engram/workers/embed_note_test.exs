@@ -227,6 +227,46 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
     end
 
+    test "does not stamp chunker_version when content changed mid-embed", %{
+      bypass: bypass,
+      note: note
+    } do
+      import Ecto.Query
+
+      # A stale-version rebuild that loses the optimistic lock must leave
+      # `chunker_version` alone. Stamping it would assert "the current chunker
+      # built these rows" about chunks that were just superseded by an edit,
+      # and the note would then be skipped forever at a version it never
+      # actually reached.
+      from(n in Note, where: n.id == ^note.id)
+      |> Repo.update_all(
+        [
+          set: [
+            embed_hash: note.content_hash,
+            dense_indexed_hash: note.content_hash,
+            chunker_version: nil
+          ]
+        ],
+        skip_tenant_check: true
+      )
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts ->
+        # Simulate a concurrent edit landing while the embedder is in flight.
+        from(n in Note, where: n.id == ^note.id)
+        |> Repo.update_all([set: [content_hash: "changed_mid_embed"]], skip_tenant_check: true)
+
+        {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+      end)
+
+      stub_qdrant(bypass)
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      updated = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert is_nil(updated.chunker_version)
+    end
+
     test "rebuilds a keyword-only user's note when the chunker version is stale", %{
       bypass: bypass,
       note: note

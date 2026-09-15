@@ -33,6 +33,7 @@ defmodule Engram.Workers.OrphanSweep do
   import Ecto.Query
 
   alias Engram.Accounts.User
+  alias Engram.Indexing
   alias Engram.Logger.Metadata
   alias Engram.Notes.Chunk
   alias Engram.Notes.Note
@@ -474,34 +475,15 @@ defmodule Engram.Workers.OrphanSweep do
   defp flag_notes_for_reindex([]), do: 0
 
   defp flag_notes_for_reindex(note_ids) do
-    # Chunked against Postgres' 65,535 bind-parameter cap, same as
-    # `chunk_point_ids/1`. Candidates are bounded only by the ratio guard, and
-    # an unchunked `in ^ids` raises out of a `max_attempts: 1` worker — killing
-    # the run before its completion log, daily, with nothing flagged.
-    count =
-      note_ids
-      |> Enum.uniq()
-      |> Enum.chunk_every(@id_query_batch)
-      |> Enum.reduce(0, fn batch, acc ->
-        # Chunk reuse (#1595) matches on `context_hmac`, so a surviving hmac
-        # makes the re-index "reuse" the very points Qdrant lost and stamp the
-        # note indexed again (#1607). Cleared before the note hashes: a failure
-        # between the two then costs a full re-embed, never a silent no-op.
-        _ =
-          Chunk
-          |> where([c], c.note_id in ^batch)
-          |> Repo.update_all([set: [context_hmac: nil]], skip_tenant_check: true)
-
-        {n, _} =
-          Note
-          |> where([n], n.id in ^batch)
-          |> Repo.update_all(
-            [set: [embed_hash: nil, dense_indexed_hash: nil]],
-            skip_tenant_check: true
-          )
-
-        acc + n
-      end)
+    # The two UPDATEs, their ordering and their chunking live in
+    # `Indexing.flag_notes_for_rebuild/1` (#1477). This worker and
+    # `ReindexKeyword` carried drifted copies of the same code — same intent,
+    # different batch sizes, and neither filtered out rows whose `context_hmac`
+    # was already NULL. The reuse marker must be cleared BEFORE the note hashes
+    # or a re-index "reuses" the very points Qdrant lost and stamps the note
+    # indexed again (#1607); that rule is now stated once, next to the reuse
+    # logic it protects.
+    count = Indexing.flag_notes_for_rebuild(note_ids)
 
     Logger.warning(
       "orphan_sweep flagged notes for re-index: Qdrant is missing their points",

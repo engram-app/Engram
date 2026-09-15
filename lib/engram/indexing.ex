@@ -13,6 +13,7 @@ defmodule Engram.Indexing do
   alias Engram.KeywordIndex
   alias Engram.Logger.Metadata
   alias Engram.Notes.Chunk
+  alias Engram.Notes.Note
   alias Engram.Parsers.Markdown
   alias Engram.Repo
   alias Engram.Search.SearchProfile
@@ -21,6 +22,11 @@ defmodule Engram.Indexing do
   require Logger
 
   @default_dims 1024
+
+  # Chunked against Postgres' 65,535 bind-parameter cap — one bind per id in
+  # `in ^batch`. A whole vault, or a sweep's candidate set, can exceed that in a
+  # single statement.
+  @id_query_batch 5_000
 
   defp collection, do: Application.get_env(:engram, :qdrant_collection, "obsidian_notes")
   defp embedder, do: Application.get_env(:engram, :embedder, Engram.Embedders.Voyage)
@@ -368,6 +374,60 @@ defmodule Engram.Indexing do
     )
 
     :ok
+  end
+
+  @doc """
+  Flags `note_ids` so their next index rebuilds every chunk from scratch.
+
+  Two clears, in this order, and both are load-bearing:
+
+    * `chunks.context_hmac` — chunk reuse (#1595) matches on it, so a surviving
+      marker makes the "rebuild" reuse the very points it meant to replace. The
+      reuse branch of `build_entry/3` does no embed, no tokenizer pass and no
+      encryption, and discards the `avgdl` it is handed, so a stale BM25 weight
+      and `token_count` would survive verbatim (#1477).
+    * `notes.embed_hash` / `dense_indexed_hash` — `EmbedNote` skips a note whose
+      `embed_hash` still equals its `content_hash`, which is every
+      already-indexed note (#1607).
+
+  Clearing only one of the two is a silent no-op, which is why this is one
+  function rather than a step each caller remembers.
+
+  Markers first: a failure between the two leaves a note that is still skipped
+  but whose points are still named by its rows, so nothing becomes
+  unsearchable. The reverse order strands a note that skips while naming points
+  meant to be rebuilt.
+
+  Callers must scope `note_ids` themselves — this applies to exactly the ids it
+  is given, with RLS bypassed.
+
+  Returns the number of `notes` rows updated.
+  """
+  @spec flag_notes_for_rebuild([Ecto.UUID.t()]) :: non_neg_integer()
+  def flag_notes_for_rebuild([]), do: 0
+
+  def flag_notes_for_rebuild(note_ids) do
+    note_ids
+    |> Enum.uniq()
+    |> Enum.chunk_every(@id_query_batch)
+    |> Enum.reduce(0, fn batch, acc ->
+      # `not is_nil` keeps a re-run from rewriting rows that are already NULL —
+      # dead tuples and WAL for no change.
+      _ =
+        Chunk
+        |> where([c], c.note_id in ^batch and not is_nil(c.context_hmac))
+        |> Repo.update_all([set: [context_hmac: nil]], skip_tenant_check: true)
+
+      {n, _} =
+        Note
+        |> where([n], n.id in ^batch)
+        |> Repo.update_all(
+          [set: [embed_hash: nil, dense_indexed_hash: nil]],
+          skip_tenant_check: true
+        )
+
+      acc + n
+    end)
   end
 
   # Clears the reuse fingerprints for a note, forcing its next index to rebuild
