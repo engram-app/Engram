@@ -167,7 +167,11 @@ defmodule EngramWeb.OAuthTokenController do
         if is_nil(body_secret) and (is_nil(body_id) or body_id == basic_id) do
           {:ok, blank_to_nil(basic_id), blank_to_nil(basic_secret)}
         else
-          {:error, :invalid_client}
+          # The one branch in this module that used to refuse silently, despite
+          # the "Every branch logs" rule above it. A vendor sending its id in
+          # both channels with a typo in one 401s on every exchange, and before
+          # this there was nothing in Loki but the 401 request line (#1643).
+          OAuth.reject_client(basic_id, :basic_and_body_credential_conflict)
         end
 
       :error ->

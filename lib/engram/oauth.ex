@@ -149,9 +149,13 @@ defmodule Engram.OAuth do
           :ok | {:error, :invalid_client | :temporarily_unavailable}
   def authenticate_client(client_id, secret, opts) do
     case get_client(client_id) do
-      {:ok, client} -> check_client_credentials(client, secret, opts)
-      # Unknown client_id is indistinguishable from a bad secret on purpose.
-      {:error, :not_found} -> {:error, :invalid_client}
+      {:ok, client} ->
+        check_client_credentials(client, secret, opts)
+
+      # Indistinguishable from a bad secret ON THE WIRE, on purpose. Our own
+      # logs are the one place the two must be told apart.
+      {:error, :not_found} ->
+        reject_client(client_id, :client_unknown)
     end
   end
 
@@ -241,19 +245,72 @@ defmodule Engram.OAuth do
 
   defp cimd_host(_client), do: "unknown"
 
+  @doc """
+  Logs a non-assertion client refusal, then returns the terminal error.
+
+  The sibling of `reject_assertion/2`, and for the same reason: every refusal on
+  the connect path needs exactly one line, because `mcp-connector-refused`
+  matches by MESSAGE and a branch that logs nothing is unreachable by any
+  filter. Five branches logged nothing — an unknown `client_id` on the token and
+  authorize paths, all three secret outcomes, and the controller's
+  Basic-vs-body conflict — so a vendor with a typo'd id or a stale secret 401'd
+  forever and produced no attributable signal. That is #1633's failure mode one
+  branch over (#1643).
+
+  Public because `EngramWeb.OAuthTokenController` refuses one credential shape
+  before this module is ever reached, and a second helper there would be a
+  second taxonomy to keep in sync with the alert filter.
+  """
+  @spec reject_client(Client.t() | String.t() | nil, atom()) :: {:error, :invalid_client}
+  def reject_client(subject, reason) do
+    log_client_rejection(subject, reason)
+    {:error, :invalid_client}
+  end
+
+  defp log_client_rejection(subject, reason) do
+    Logger.warning(
+      "oauth_client_rejected",
+      Metadata.with_category(:warning, :lifecycle,
+        cimd_host: refusal_host(subject),
+        reason: Metadata.safe_reason(reason)
+      )
+    )
+  end
+
+  defp refusal_host(%Client{} = client), do: cimd_host(client)
+
+  # The host, never the id. A CIMD `client_id` is a URL supplied by an
+  # unauthenticated caller, so logging it whole is the same unbounded-value
+  # mistake `Engram.OAuth.Cimd.log/3` avoids. A DCR id is an opaque UUID with no
+  # triage value at all.
+  defp refusal_host(id) when is_binary(id) do
+    if Cimd.url_shaped?(id), do: URI.parse(id).host || "unknown", else: "unknown"
+  end
+
+  defp refusal_host(_subject), do: "unknown"
+
+  # The three secret outcomes are reported apart because they are three
+  # different diagnoses: the vendor sent the wrong thing, the vendor sent
+  # nothing, or OUR row has no hash to compare against. Collapsing them is what
+  # made a stale secret and a broken registration look identical in Loki.
   defp check_client_secret(client, secret) do
     cond do
       not Client.confidential?(client.token_endpoint_auth_method) ->
-        if is_nil(secret), do: :ok, else: {:error, :invalid_client}
+        if is_nil(secret),
+          do: :ok,
+          else: reject_client(client, :secret_presented_by_public_client)
 
-      is_nil(secret) or is_nil(client.client_secret_hash) ->
-        {:error, :invalid_client}
+      is_nil(secret) ->
+        reject_client(client, :secret_missing)
+
+      is_nil(client.client_secret_hash) ->
+        reject_client(client, :secret_unset_on_client)
 
       Plug.Crypto.secure_compare(hash_code(secret), client.client_secret_hash) ->
         :ok
 
       true ->
-        {:error, :invalid_client}
+        reject_client(client, :secret_mismatch)
     end
   end
 
@@ -751,7 +808,10 @@ defmodule Engram.OAuth do
 
   # ── Internal ─────────────────────────────────────────────────────
 
-  defp fetch_client(nil), do: {:client_error, "invalid_client"}
+  defp fetch_client(nil) do
+    log_client_rejection(nil, :client_id_missing)
+    {:client_error, "invalid_client"}
+  end
 
   # The ONE place that may fetch a CIMD document. A URL-shaped client_id goes to
   # `Cimd.ensure_client/1`, which handles both first contact and TTL refresh.
@@ -765,8 +825,14 @@ defmodule Engram.OAuth do
       end
     else
       case get_client(client_id) do
-        {:ok, client} -> {:ok, client}
-        {:error, :not_found} -> {:client_error, "invalid_client"}
+        {:ok, client} ->
+          {:ok, client}
+
+        # The URL-shaped case never lands here — `Cimd.ensure_client/1` logs
+        # its own `mcp_cimd_rejected`. This is a DCR id we have never issued.
+        {:error, :not_found} ->
+          log_client_rejection(client_id, :client_unknown)
+          {:client_error, "invalid_client"}
       end
     end
   end

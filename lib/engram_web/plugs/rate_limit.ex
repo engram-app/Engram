@@ -2,6 +2,20 @@ defmodule EngramWeb.Plugs.RateLimit do
   @moduledoc """
   Configurable rate-limiting plug backed by `EngramWeb.RateLimiter`.
   Usage: `plug EngramWeb.Plugs.RateLimit, limit: 10, period: 60_000`
+
+  ## `:purpose`
+
+  Tags this mount's limiter telemetry (`Engram.PromEx.RateLimiter`), defaulting
+  to `:http`. The OAuth pipeline passes `:oauth` so a refused connector is
+  attributable: a 429 there means a vendor cannot reach the token or authorize
+  endpoint at all, which is indistinguishable from unrelated traffic under one
+  shared tag.
+
+  A 429 here is deliberately NOT logged, unlike every other refusal on that
+  path (#1643). `/oauth/*` is unauthenticated, so one line per over-limit
+  attempt is unbounded log volume behind a bounded refusal — the same trade
+  `Engram.OAuth.Cimd` already makes for `:rate_limited`. The metric carries the
+  volume; logs stay for anomalies.
   """
 
   alias EngramWeb.Plugs.Halt
@@ -14,16 +28,17 @@ defmodule EngramWeb.Plugs.RateLimit do
   def init(opts) do
     %{
       limit: Keyword.fetch!(opts, :limit),
-      period: Keyword.fetch!(opts, :period)
+      period: Keyword.fetch!(opts, :period),
+      purpose: Keyword.get(opts, :purpose, :http)
     }
   end
 
-  def call(conn, %{limit: limit, period: period}) do
+  def call(conn, %{limit: limit, period: period, purpose: purpose}) do
     effective_limit = effective_limit(limit)
 
     key = rate_limit_key(conn)
 
-    case EngramWeb.RateLimiter.hit(key, period, effective_limit, :http) do
+    case EngramWeb.RateLimiter.hit(key, period, effective_limit, purpose) do
       {:allow, _count} ->
         conn
 

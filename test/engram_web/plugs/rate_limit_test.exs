@@ -63,6 +63,46 @@ defmodule EngramWeb.Plugs.RateLimitTest do
     end
   end
 
+  # A 429 on the OAuth pipeline is a vendor that cannot connect, and it is the
+  # one refusal on that path deliberately left unlogged: /oauth/* is
+  # unauthenticated, so one line per over-limit attempt is unbounded log volume
+  # behind a bounded refusal — the same trade `Engram.OAuth.Cimd` already makes
+  # for `:rate_limited`. The metric tag is what makes it attributable instead
+  # (#1643).
+  describe "purpose tagging" do
+    setup do
+      handler = "rate-limit-purpose-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler,
+        [:engram, :rate_limiter, :hit],
+        fn _event, _measure, meta, _cfg -> send(test_pid, {:hit, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+      :ok
+    end
+
+    test "a 429 on the oauth pipeline is attributable to oauth, not generic http" do
+      for _ <- 1..(@test_limit + 1) do
+        build_conn() |> post("/oauth/token", %{"grant_type" => "password"})
+      end
+
+      conn = build_conn() |> post("/oauth/token", %{"grant_type" => "password"})
+      assert conn.status == 429
+
+      assert_receive {:hit, %{purpose: :oauth, result: :deny}}
+    end
+
+    test "the device-flow limiter keeps its generic http purpose" do
+      build_conn() |> post("/api/auth/device", %{client_id: "test_client"})
+
+      assert_receive {:hit, %{purpose: :http, result: :allow}}
+    end
+  end
+
   describe "rate limit buckets are per-path" do
     test "exhausting device start limit does not affect token poll" do
       for _ <- 1..(@test_limit + 1) do
