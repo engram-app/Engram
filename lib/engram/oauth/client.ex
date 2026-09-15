@@ -102,9 +102,14 @@ defmodule Engram.OAuth.Client do
     timestamps(type: :utc_datetime_usec)
   end
 
+  # `jwks_uri` and `token_endpoint_auth_signing_alg` are deliberately ABSENT.
+  # DCR is an anonymous public POST, and casting them there would persist two
+  # unbounded attacker-controlled strings that no DCR client can ever use (the
+  # auth-method allowlist refuses `private_key_jwt` on that path). CIMD sets
+  # them explicitly in `cimd_changeset/3`, where they came from a document
+  # served by the vendor's own host.
   @cast_fields ~w(redirect_uris client_name scope grant_types response_types
-                  token_endpoint_auth_method jwks_uri token_endpoint_auth_signing_alg
-                  software_id software_version
+                  token_endpoint_auth_method software_id software_version
                   logo_uri tos_uri policy_uri
                   kind first_user_agent first_ip)a
 
@@ -236,13 +241,13 @@ defmodule Engram.OAuth.Client do
         "tos_uri" => document["tos_uri"],
         "policy_uri" => document["policy_uri"],
         "kind" => "mcp",
-        "token_endpoint_auth_method" => document["token_endpoint_auth_method"] || "none",
-        "jwks_uri" => document["jwks_uri"],
-        "token_endpoint_auth_signing_alg" => document["token_endpoint_auth_signing_alg"]
+        "token_endpoint_auth_method" => document["token_endpoint_auth_method"] || "none"
       },
       max_redirect_uris: @max_redirect_uris_cimd,
       auth_methods: @cimd_auth_methods
     )
+    |> put_change(:jwks_uri, document["jwks_uri"])
+    |> put_change(:token_endpoint_auth_signing_alg, document["token_endpoint_auth_signing_alg"])
     |> put_change(:cimd_url, url)
     |> put_change(:cimd_fetched_at, DateTime.utc_now())
     |> validate_length(:cimd_url, max: 2048)

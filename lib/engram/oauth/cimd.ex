@@ -99,6 +99,7 @@ defmodule Engram.OAuth.Cimd do
           | :missing_client_name
           | :confidential_not_supported
           | :jwks_uri_required
+          | :jwks_uri_foreign_origin
           | :no_supported_grant_type
           | :no_supported_response_type
           | :body_too_large
@@ -339,7 +340,7 @@ defmodule Engram.OAuth.Cimd do
   def validate_document(%{"client_id" => id}, url) when id != url,
     do: {:error, :client_id_mismatch}
 
-  def validate_document(document, _url) do
+  def validate_document(document, url) do
     cond do
       not is_map_key(document, "client_id") ->
         {:error, :client_id_mismatch}
@@ -375,6 +376,22 @@ defmodule Engram.OAuth.Cimd do
           not Client.displayable_metadata_uri?(document["jwks_uri"]) ->
         {:error, :jwks_uri_required}
 
+      # The document's binding covers the DOCUMENT. It does not automatically
+      # cover the keys: a document at `vendor.example` may name a `jwks_uri`
+      # anywhere, which silently converts a host binding into an unbounded
+      # delegation — a takeover of the delegate host then impersonates the
+      # client without ever touching the vendor.
+      #
+      # Requiring the same origin closes that, and closes a second gap for
+      # free: the origin was already resolved by `Engram.Http.SsrfGuard` to
+      # fetch this very document, so a same-origin `jwks_uri` cannot name a
+      # port or shape the guard would refuse at token time. Refusing here makes
+      # that legible at authorize, instead of as a mystery 401 on every
+      # subsequent token exchange.
+      document["token_endpoint_auth_method"] == "private_key_jwt" and
+          not same_origin?(document["jwks_uri"], url) ->
+        {:error, :jwks_uri_foreign_origin}
+
       # A secret-based method still refuses. A CIMD client never registered, so
       # no secret was ever minted for it. If we honoured the method the client
       # could never authenticate (its stored hash is nil), and if we silently
@@ -391,6 +408,18 @@ defmodule Engram.OAuth.Cimd do
 
   defp valid_redirect_uris?([_ | _] = uris), do: Enum.all?(uris, &is_binary/1)
   defp valid_redirect_uris?(_), do: false
+
+  # Scheme, host AND port. Comparing hosts alone would admit a `jwks_uri` on a
+  # port the SSRF guard refuses, which passes here and then fails on every token
+  # exchange forever.
+  defp same_origin?(jwks_uri, client_id_url) when is_binary(jwks_uri) do
+    a = URI.parse(jwks_uri)
+    b = URI.parse(client_id_url)
+
+    a.scheme == b.scheme and a.host == b.host and a.port == b.port
+  end
+
+  defp same_origin?(_jwks_uri, _client_id_url), do: false
 
   # Whitespace-only is absent with extra steps — it renders as nothing on the
   # consent screen, which is the whole reason the field is required.

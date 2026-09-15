@@ -174,6 +174,27 @@ defmodule Engram.OAuth.CimdTest do
       end
     end
 
+    # The document's host binding covers the DOCUMENT. Letting it name keys
+    # anywhere converts that binding into an unbounded delegation: taking over
+    # the delegate host would then impersonate the client without ever touching
+    # the vendor. Refused at authorize, where it is legible, rather than as a
+    # mystery 401 on every later token exchange.
+    test "rejects a jwks_uri on a foreign origin" do
+      for foreign <- [
+            "https://evil.example/jwks.json",
+            "https://claude.ai.evil.example/jwks.json",
+            "https://claude.ai:8443/jwks.json"
+          ] do
+        expect(FetcherMock, :fetch, fn @url ->
+          {:ok,
+           document(%{"token_endpoint_auth_method" => "private_key_jwt", "jwks_uri" => foreign})}
+        end)
+
+        assert {:error, :jwks_uri_foreign_origin} = Cimd.ensure_client(@url),
+               "expected jwks_uri #{foreign} to be refused"
+      end
+    end
+
     # ChatGPT's real published connector document, fetched 2026-09-15. Every
     # other fixture in this file is Claude-shaped, which is precisely why a
     # vendor declaring a different auth method was invisible here for weeks.

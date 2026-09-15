@@ -7,10 +7,13 @@ defmodule EngramWeb.OAuthTokenController do
   """
   use EngramWeb, :controller
 
+  alias Engram.Logger.Metadata
   alias Engram.OAuth
   alias Engram.OAuth.Cimd.Jwks
   alias EngramWeb.OAuthMetadata
   alias EngramWeb.RequestMeta
+
+  require Logger
 
   def exchange(conn, %{"grant_type" => "authorization_code"} = params) do
     with {:ok, client_id, secret, assertion} <- client_credentials(conn, params),
@@ -32,6 +35,7 @@ defmodule EngramWeb.OAuthTokenController do
       end
     else
       {:error, :invalid_client} -> invalid_client(conn)
+      {:error, :temporarily_unavailable} -> temporarily_unavailable(conn)
     end
   end
 
@@ -47,6 +51,7 @@ defmodule EngramWeb.OAuthTokenController do
       end
     else
       {:error, :invalid_client} -> invalid_client(conn)
+      {:error, :temporarily_unavailable} -> temporarily_unavailable(conn)
     end
   end
 
@@ -109,15 +114,42 @@ defmodule EngramWeb.OAuthTokenController do
   # An unrecognised `client_assertion_type` is refused rather than ignored:
   # ignoring it would silently fall through to "public client, no credential"
   # and authenticate a caller that believed it was proving something.
+  #
+  # Every branch logs. These rejections happen BEFORE `authenticate_client/3`,
+  # so without a line here the highest-probability interop failure in this path
+  # — a vendor sending a draft-era or whitespace-padded `client_assertion_type`
+  # — 401s forever and produces no evidence anywhere. That is #1633 repeating
+  # one layer down.
   defp assertion_credentials(conn, params, body_id, body_secret, assertion) do
-    valid_type? = blank_to_nil(params["client_assertion_type"]) == Jwks.assertion_type()
-    basic? = Plug.BasicAuth.parse_basic_auth(conn) != :error
+    cond do
+      blank_to_nil(params["client_assertion_type"]) != Jwks.assertion_type() ->
+        reject_malformed(:client_assertion_type_unrecognised)
 
-    if valid_type? and is_nil(body_secret) and not basic? do
-      {:ok, body_id || assertion_issuer(assertion), nil, assertion}
-    else
-      {:error, :invalid_client}
+      not is_nil(body_secret) ->
+        reject_malformed(:secret_presented_with_assertion)
+
+      Plug.BasicAuth.parse_basic_auth(conn) != :error ->
+        reject_malformed(:basic_auth_presented_with_assertion)
+
+      true ->
+        resolve_assertion_client(body_id, assertion)
     end
+  end
+
+  defp resolve_assertion_client(body_id, assertion) do
+    case body_id || assertion_issuer(assertion) do
+      nil -> reject_malformed(:assertion_issuer_unreadable)
+      client_id -> {:ok, client_id, nil, assertion}
+    end
+  end
+
+  defp reject_malformed(reason) do
+    Logger.warning(
+      "oauth_client_assertion_malformed",
+      Metadata.with_category(:warning, :lifecycle, reason: Metadata.safe_reason(reason))
+    )
+
+    {:error, :invalid_client}
   end
 
   # Unverified at this point — it only picks WHICH client's published keys the
@@ -165,6 +197,17 @@ defmodule EngramWeb.OAuthTokenController do
       ["Basic " <> _ | _] -> put_resp_header(conn, "www-authenticate", ~s(Basic realm="oauth"))
       _ -> conn
     end
+  end
+
+  # RFC 6749 §5.2 makes `invalid_client` TERMINAL — the connector stops retrying
+  # and the user sees a permanently dead integration. Our own fetch throttle and
+  # an unreachable vendor JWKS endpoint both clear on their own, so they must be
+  # retryable. Same split `Engram.OAuth.cimd_error/1` already makes on the
+  # authorize path, and the same string it uses.
+  defp temporarily_unavailable(conn) do
+    conn
+    |> put_status(:service_unavailable)
+    |> json(%{error: "temporarily_unavailable"})
   end
 
   defp invalid_request(conn) do
