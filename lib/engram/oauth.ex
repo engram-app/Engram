@@ -299,6 +299,14 @@ defmodule Engram.OAuth do
   defp refusal_reason({:invalid_document, errors}),
     do: "invalid_document fields=#{inspect(errors |> Keyword.keys() |> Enum.uniq())}"
 
+  # The STATUS, not just the tag. `Metadata.safe_reason/1`'s generic tuple
+  # clause renders only the tag, which would make a vendor serving 404 (wrong
+  # path), 403 (blocked) and 503 (down) for its document indistinguishable —
+  # in the telemetry that exists to tell them apart. An HTTP status cannot
+  # carry user data, so rendering it is safe.
+  defp refusal_reason({:http_status, status}) when is_integer(status),
+    do: "http_status #{status}"
+
   defp refusal_reason(reason), do: Metadata.safe_reason(reason)
 
   defp refusal_host(%Client{cimd_url: url}) when is_binary(url), do: Cimd.host_of(url)

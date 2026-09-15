@@ -201,7 +201,8 @@ defmodule Engram.OAuth.Client do
 
   Rather than re-deriving the rule, this BUILDS the row `cimd_changeset/3` would
   persist for the document — the preferred method with the same `|| "none"`
-  default, the supported set through the same `supported_auth_methods/1` filter —
+  default and the same `@cimd_auth_methods` restriction its `validate_inclusion`
+  applies, the supported set through the same `supported_auth_methods/1` filter —
   and asks `assertion_permitted?/1`. Agreement is then structural rather than a
   coincidence of two lists that happen to match today: there is one rule, and the
   only way the two answers can diverge is if the values built here stop matching
@@ -214,12 +215,20 @@ defmodule Engram.OAuth.Client do
   """
   def document_permits_assertion?(document) when is_map(document) do
     assertion_permitted?(%__MODULE__{
-      token_endpoint_auth_method: document["token_endpoint_auth_method"] || "none",
+      token_endpoint_auth_method: cimd_auth_method(document["token_endpoint_auth_method"]),
       token_endpoint_auth_methods_supported: supported_auth_methods(document)
     })
   end
 
   def document_permits_assertion?(_document), do: false
+
+  # `cimd_changeset/3` runs `validate_inclusion` against `@cimd_auth_methods` on
+  # this field, so a document naming a method the CIMD path does not implement is
+  # refused outright. Passing the raw value through would let it answer for a row
+  # that can never exist — harmless while every assertion method is also a CIMD
+  # method, and a silent divergence the day one is not.
+  defp cimd_auth_method(method) when method in @cimd_auth_methods, do: method
+  defp cimd_auth_method(_method), do: "none"
 
   @doc """
   The grant and response types this authorization server actually implements.

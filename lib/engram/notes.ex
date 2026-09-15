@@ -101,8 +101,11 @@ defmodule Engram.Notes do
   # declared here once instead of per transport, where the two could drift.
   @max_note_bytes 10 * 1024 * 1024
 
+  # No @spec, deliberately: dialyzer runs with `:underspecs`, so `pos_integer()`
+  # is a supertype of the literal success typing and a spec tight enough to pass
+  # would only restate the constant. Same call `Engram.OAuth.Client` already
+  # made for `client_name_max_length/0`.
   @doc "Maximum accepted size of a note body, in bytes."
-  @spec max_note_bytes() :: pos_integer()
   def max_note_bytes, do: @max_note_bytes
 
   @doc """

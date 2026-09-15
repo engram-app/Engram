@@ -35,6 +35,20 @@ defmodule Engram.Notes.FrontmatterTest do
       assert Frontmatter.split("---\ntitle: Hi\n--- \nbody\n") ==
                {"title: Hi\n", "body\n"}
     end
+
+    # Obsidian on Windows writes CRLF. The closing-fence patterns have always
+    # tolerated `\r`, but the opening fence matched `"---\n"` literally, so a
+    # CRLF note parsed as "no frontmatter" — and every caller asking "does the
+    # frontmatter declare `title`?" got nil and duplicated the field it was
+    # trying to suppress.
+    test "CRLF frontmatter is recognized on the opening fence" do
+      assert Frontmatter.split("---\r\ntitle: Hi\r\n---\r\nbody\r\n") ==
+               {"title: Hi\r\n", "body\r\n"}
+    end
+
+    test "empty CRLF frontmatter yields an empty block, not nil" do
+      assert Frontmatter.split("---\r\n---\r\nbody\r\n") == {"", "body\r\n"}
+    end
   end
 
   describe "parse/1" do

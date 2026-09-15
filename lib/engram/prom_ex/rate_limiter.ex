@@ -10,7 +10,8 @@ defmodule Engram.PromEx.RateLimiter do
       `[:purpose, :result]` — every allow/deny across both backends, emitted at
       the `EngramWeb.RateLimiter` façade. `purpose` is a bounded atom
       (`:preauth | :http | :oauth | :api_rps | :voyage_embed | :cimd_fetch |
-      :other`); `result` is
+      :ai_search | :other`, the `purpose()` type in `EngramWeb.RateLimiter` —
+      keep the two in step); `result` is
       `:allow | :deny`. Alert on deny-rate spikes per purpose.
     * `[:engram, :rate_limiter, :remote_inc]` → `..._rate_limiter_remote_inc_total`,
       tags `[:result]` (`:applied | :dropped`) — cross-node sync signal from the

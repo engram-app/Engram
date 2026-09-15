@@ -283,8 +283,10 @@ defmodule Engram.Search do
   # Order is the order REST validates them in.
   @date_params [:created_after, :created_before, :updated_after, :updated_before]
 
+  # No @spec: `[atom()]` is a supertype of the literal list's success typing and
+  # dialyzer runs with `:underspecs`. See `Engram.OAuth.Client`'s note on the
+  # same trade for its constant accessors.
   @doc "The date-bound opt keys `search/4` accepts (also their param names)."
-  @spec date_params() :: [atom()]
   def date_params, do: @date_params
 
   defp do_search(user, vault, query, opts) do
