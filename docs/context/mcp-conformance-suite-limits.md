@@ -1,16 +1,30 @@
 # Context Doc: What the MCP conformance suite does and does not prove
 
-_Last verified: 2026-08-05_
+_Last verified: 2026-09-15_
 
 ## Status
-`scripts/mcp-conformance.sh` works and is verified against staging, but is **not yet wired into CI** — run it by hand for now.
+`scripts/mcp-conformance.sh` works and **is wired into CI**: `cron.yml` runs the `mcp-conformance` job daily at 05:40 UTC over a two-cell matrix — staging (`stages: spec,oauth`) and prod (`stages: spec`). It passes.
 
-It briefly rode a daily cron. That was wrong: a cron grades a *deployment*, and on a PR the deployment still runs `main`, so it can never gate the code under review — it reports a regression the morning after it merges. The target is a per-PR gate against the PR's own build; see "Getting it gating" below.
+Note what that matrix reaches. **The OAuth/CIMD stage runs against staging only**; prod gets the RFC 9728 assertions and nothing else, deliberately, because the OAuth stage performs real DCR and CIMD registrations that write client rows.
 
-The two spec violations this doc is about are **already covered by ExUnit** (`mcp_transport_test.exs`, `well_known_controller_test.exs`), which does gate every PR. What is missing is the third-party-client signal, not regression protection for these specific bugs.
+A cron grades a *deployment*, not a PR: on a PR the deployment still runs `main`, so this job can never gate the code under review — it reports a regression the morning after it merges. That reasoning is unchanged, and a per-PR gate against the PR's own build is still the target; see "Getting it gating" below.
+
+The two spec violations this doc is about are **already covered by ExUnit** (`mcp_transport_test.exs`, `well_known_controller_test.exs`), which does gate every PR. What is missing is the third-party-client signal, not regression protection for these specific bugs — and see "CIMD coverage is one vendor's document" for the limit a green cron hides.
 
 ## What This Is
 The MCPJam conformance runner is a **client compatibility tester**, not a spec auditor. It answers "can MCPJam connect to you", and it is deliberately generous about anything it can work around. Twice now that gap has let a real defect sit under a green suite. This doc records where the tool stops and what we assert ourselves, so the next person does not re-derive it.
+
+## CIMD coverage is one vendor's document
+
+`--registration cimd` takes **no client-id argument**: MCPJam's CLI supplies its own published metadata document. So the entire CIMD matrix proves one thing — *MCPJam* can register with us via CIMD — across four protocol versions. It says nothing about any other vendor, because no other vendor's document is ever fetched.
+
+That is not a gap in the runner; it is what a client compatibility tester is. The consequence is the part worth internalising:
+
+> A suite that only exercises clients that already work cannot report a client that does not.
+
+Found the hard way on 2026-09-14. ChatGPT declares `token_endpoint_auth_method: private_key_jwt`; `Engram.OAuth.Cimd` refuses every method but `none`, so each ChatGPT connect 400s at `OAuthAuthorizeController#show`. The daily job ran green against staging **and** prod at 10:56 UTC that morning, ~4.5 hours before a real signup hit the refusal and deleted their account. Zero successful ChatGPT grants had ever been recorded. See #1633 and #1635.
+
+**Rule:** listing a vendor as supported in `docs/context/connections-client-identity.md` is not backed by anything in this suite. Vendor acceptance needs its own check — fetch the vendor's published document and run it through the CIMD validator. That needs no MCPJam, no deployed target and no loopback opt-in, so unlike the `oauth` stage it *can* gate a PR.
 
 ## The trap: green means "a lenient client coped", not "we are compliant"
 
@@ -96,3 +110,6 @@ Remaining work:
 ## Related
 - `docs/context/cimd-vs-dcr-validation-policy.md` — why DCR and CIMD validate differently
 - `docs/context/staging-mcp-oauth-connect.md` — the proxy/route/metadata failure chain for a client that cannot connect at all
+- engram-app/Engram#1633 — ChatGPT refused: CIMD rejects `private_key_jwt`, and we have no `client_assertion` support
+- engram-app/Engram#1634 — discovery advertises `client_secret_post`/`client_secret_basic` that the CIMD path then refuses
+- engram-app/Engram#1635 — CIMD conformance covers exactly one vendor document, so a refused vendor cannot turn it red
