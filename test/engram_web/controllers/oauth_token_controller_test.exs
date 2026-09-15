@@ -2,25 +2,12 @@ defmodule EngramWeb.OAuthTokenControllerTest do
   use EngramWeb.ConnCase, async: true
 
   import Ecto.Query
+  import Engram.OAuthHelpers, only: [code_from_redirect: 1, pkce_pair: 0]
 
   alias Engram.OAuth
   alias Engram.OAuth.RefreshToken
   alias Engram.Permissions
   alias Engram.Repo
-
-  defp hash_token(raw), do: :crypto.hash(:sha256, raw) |> Base.encode16(case: :lower)
-
-  defp pkce_pair do
-    verifier =
-      :crypto.strong_rand_bytes(48)
-      |> Base.url_encode64(padding: false)
-
-    challenge =
-      :crypto.hash(:sha256, verifier)
-      |> Base.url_encode64(padding: false)
-
-    {verifier, challenge}
-  end
 
   defp register_client(redirect_uri \\ "https://claude.ai/api/mcp/auth_callback") do
     {:ok, client} =
@@ -55,8 +42,7 @@ defmodule EngramWeb.OAuthTokenControllerTest do
     {:ok, redirect_url} =
       OAuth.mint_authorization_code(user, validated, vault_choice, Keyword.get(opts, :label))
 
-    %{query: query} = URI.parse(redirect_url)
-    URI.decode_query(query)["code"]
+    code_from_redirect(redirect_url)
   end
 
   # The live grant row — unconsumed + unrevoked is exactly the pair
@@ -216,7 +202,7 @@ defmodule EngramWeb.OAuthTokenControllerTest do
         })
 
       body = json_response(conn, 200)
-      token_hash = hash_token(body["refresh_token"])
+      token_hash = Engram.Crypto.sha256_hex(body["refresh_token"])
 
       row =
         Repo.one!(
@@ -525,7 +511,7 @@ defmodule EngramWeb.OAuthTokenControllerTest do
         })
 
       body = json_response(conn2, 200)
-      new_token_hash = hash_token(body["refresh_token"])
+      new_token_hash = Engram.Crypto.sha256_hex(body["refresh_token"])
 
       new_row =
         Repo.one!(

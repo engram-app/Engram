@@ -3,6 +3,7 @@ defmodule Engram.OAuth.CimdTest do
   # Mox expectations on the fetcher are set from the test process.
   use Engram.DataCase, async: false
 
+  import Engram.OAuthHelpers, only: [code_from_redirect: 1]
   import Mox
 
   alias Engram.OAuth
@@ -861,7 +862,7 @@ defmodule Engram.OAuth.CimdTest do
       assert {:ok, redirect} =
                OAuth.mint_authorization_code(user, validated, [vault.id], nil)
 
-      code = redirect |> URI.parse() |> Map.get(:query) |> URI.decode_query() |> Map.get("code")
+      code = code_from_redirect(redirect)
 
       # The wire client_id here is the URL; the code row holds the UUID. If the
       # comparison were a bare ==, this is where the legitimate client would be
@@ -906,7 +907,7 @@ defmodule Engram.OAuth.CimdTest do
       }
 
       {:ok, redirect} = OAuth.mint_authorization_code(user, validated, [vault.id], nil)
-      code = redirect |> URI.parse() |> Map.get(:query) |> URI.decode_query() |> Map.get("code")
+      code = code_from_redirect(redirect)
 
       assert {:error, :invalid_grant} =
                OAuth.exchange_authorization_code(%{
