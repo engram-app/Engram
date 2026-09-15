@@ -177,9 +177,27 @@ defmodule Engram.OAuth do
     assertion = Keyword.get(opts, :assertion)
 
     cond do
-      not is_nil(secret) -> reject_assertion(client, :secret_presented_with_assertion)
-      is_nil(assertion) -> reject_assertion(client, :assertion_missing)
-      true -> run_assertion_verification(client, assertion, opts)
+      not is_nil(secret) ->
+        reject_assertion(client, :secret_presented_with_assertion)
+
+      # A document declares a PREFERRED method and a permitted SET. ChatGPT
+      # publishes `private_key_jwt` as the former and lists `none` in the
+      # latter, then exchanges as a public client over PKCE — which its own
+      # document allows. Treating the preference as a requirement made that a
+      # terminal `invalid_client`, so the connector got one step further than
+      # the original bug and still died (#1633 follow-up).
+      #
+      # This reads the vendor's host-bound document, not the request, so a
+      # caller still cannot pick its own method. PKCE is enforced on the
+      # exchange either way.
+      is_nil(assertion) and Client.public_auth_permitted?(client) ->
+        :ok
+
+      is_nil(assertion) ->
+        reject_assertion(client, :assertion_missing)
+
+      true ->
+        run_assertion_verification(client, assertion, opts)
     end
   end
 

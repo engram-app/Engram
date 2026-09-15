@@ -196,6 +196,46 @@ defmodule Engram.OAuth.CimdTest do
       end
     end
 
+    # The permitted SET, not just the preferred method. ChatGPT declares
+    # `private_key_jwt` and also lists `none`; without the set on the row,
+    # nothing at token time could know a public exchange was allowed.
+    test "stores the supported auth methods the document advertises" do
+      expect(FetcherMock, :fetch, fn @url ->
+        {:ok,
+         document(%{
+           "token_endpoint_auth_method" => "private_key_jwt",
+           "jwks_uri" => "https://claude.ai/jwks.json",
+           "token_endpoint_auth_methods_supported" => [
+             "none",
+             "private_key_jwt",
+             "client_secret_basic"
+           ]
+         })}
+      end)
+
+      assert {:ok, client} = Cimd.ensure_client(@url)
+
+      # `client_secret_basic` is dropped: the CIMD path refuses it anyway, so
+      # storing it would record a permission that does not exist.
+      assert client.token_endpoint_auth_methods_supported == ["none", "private_key_jwt"]
+      assert Client.public_auth_permitted?(client)
+    end
+
+    # Absent list is `[]`, not NULL, and does NOT grant public auth.
+    test "treats an absent supported list as permitting nothing extra" do
+      expect(FetcherMock, :fetch, fn @url ->
+        {:ok,
+         document(%{
+           "token_endpoint_auth_method" => "private_key_jwt",
+           "jwks_uri" => "https://claude.ai/jwks.json"
+         })}
+      end)
+
+      assert {:ok, client} = Cimd.ensure_client(@url)
+      assert client.token_endpoint_auth_methods_supported == []
+      refute Client.public_auth_permitted?(client)
+    end
+
     # What replaced the same-origin rule. These are shapes `SsrfGuard` refuses
     # at fetch time, so accepting them here would mint a client that 401s on
     # every token exchange forever, with the real reason buried in a fetch the
