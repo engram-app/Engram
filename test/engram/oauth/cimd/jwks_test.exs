@@ -26,6 +26,7 @@ defmodule Engram.OAuth.Cimd.JwksTest do
   @client_url "https://chatgpt.com/oauth/client.json"
   @jwks_uri "https://chatgpt.com/oauth/jwks.json"
   @audience "https://mcp.engram.page/oauth/token"
+  @issuer "https://mcp.engram.page"
   @kid "test-key-1"
 
   # One keypair for the whole module: generating RSA is slow enough that doing it
@@ -101,6 +102,21 @@ defmodule Engram.OAuth.Cimd.JwksTest do
 
       assertion = sign(private, claims(%{"aud" => ["https://elsewhere", @audience]}))
       assert :ok = Jwks.verify_assertion(client(), assertion, [@audience])
+    end
+
+    # RFC 7523 §3 permits EITHER the token endpoint URL or the issuer identifier,
+    # and vendors split on which they send. `auth_opts/2` offers both, but every
+    # other test here passes a single-element list, so nothing held that second
+    # element in place — trimming it would break issuer-form vendors with CI
+    # still green. That is the exact failure this whole series exists to stop.
+    test "accepts the issuer identifier as aud, not just the token endpoint", %{
+      private: private,
+      public: public
+    } do
+      expect_jwks(public)
+
+      assertion = sign(private, claims(%{"aud" => @issuer}))
+      assert :ok = Jwks.verify_assertion(client(), assertion, [@audience, @issuer])
     end
 
     # The whole point of checking `aud`: an assertion minted for another

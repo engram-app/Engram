@@ -166,6 +166,33 @@ defmodule EngramWeb.OAuthTokenAssertionTest do
       assert %{"access_token" => _} = conn |> post("/oauth/token", params) |> json_response(200)
     end
 
+    # The unit test pins that `Jwks` accepts the issuer form; this pins that the
+    # controller actually OFFERS it. `auth_opts/2` builds both audiences from
+    # `OAuthMetadata.base_url/1`, which is the same value discovery advertises as
+    # `issuer` — so a vendor that reads discovery and addresses the issuer must
+    # work. Only an end-to-end exchange proves the two halves agree.
+    test "exchanges a code when aud is the issuer rather than the token endpoint", %{
+      conn: conn,
+      private: private,
+      public: public
+    } do
+      expect(FetcherMock, :fetch, fn @jwks_uri -> {:ok, %{"keys" => [public]}} end)
+
+      user = insert(:user)
+      cimd_client()
+      {verifier, challenge} = pkce_pair()
+      code = mint_code(user, challenge)
+
+      params =
+        exchange_params(code, verifier, %{
+          "client_id" => @client_url,
+          "client_assertion" => assertion(private, %{"aud" => EngramWeb.Endpoint.url()}),
+          "client_assertion_type" => Jwks.assertion_type()
+        })
+
+      assert %{"access_token" => _} = conn |> post("/oauth/token", params) |> json_response(200)
+    end
+
     # The highest-probability real interop failure in this path: a vendor sends a
     # draft-era or whitespace-padded URN. Before this it 401'd forever and logged
     # nothing anywhere.
