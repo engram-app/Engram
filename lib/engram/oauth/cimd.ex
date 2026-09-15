@@ -322,10 +322,24 @@ defmodule Engram.OAuth.Cimd do
   # THE binding. Everything else is metadata; this is what ties the document to
   # the URL, and therefore the client's identity to a host only its vendor can
   # serve from.
-  defp validate_document(%{"client_id" => id}, url) when id != url,
+  @doc """
+  Decides whether a fetched document is one we would accept, without storing it.
+
+  Public because vendor acceptance needs a check of its own. The conformance
+  suite only proves that *MCPJam* can register, since `--registration cimd`
+  supplies MCPJam's own published document and no other vendor's is ever
+  fetched — so a vendor changing its auth method turns nothing red. That is how
+  ChatGPT stayed unable to connect for weeks under a green nightly run (#1635).
+
+  Calling this against a real vendor's published document needs no database, no
+  deployed target and no MCPJam, which is what lets the check gate rather than
+  merely report.
+  """
+  @spec validate_document(map(), String.t()) :: :ok | {:error, reason()}
+  def validate_document(%{"client_id" => id}, url) when id != url,
     do: {:error, :client_id_mismatch}
 
-  defp validate_document(document, _url) do
+  def validate_document(document, _url) do
     cond do
       not is_map_key(document, "client_id") ->
         {:error, :client_id_mismatch}
