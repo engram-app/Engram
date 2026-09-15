@@ -268,6 +268,25 @@ defmodule Engram.Search do
   def effective_mode(_requested, %SearchProfile{semantic: false}), do: :keyword
   def effective_mode(requested, %SearchProfile{}), do: requested
 
+  @doc """
+  Maps a caller-supplied mode string to a search mode (unknown → `:hybrid`).
+
+  The REST `mode` param and the MCP `mode` tool arg are the same closed enum, so
+  the mapping lives beside `effective_mode/2` rather than once per transport.
+  """
+  @spec parse_mode(term()) :: :keyword | :vector | :hybrid
+  def parse_mode("keyword"), do: :keyword
+  def parse_mode("vector"), do: :vector
+  def parse_mode(_), do: :hybrid
+
+  # The opt key IS the request param name, so one list serves both transports.
+  # Order is the order REST validates them in.
+  @date_params [:created_after, :created_before, :updated_after, :updated_before]
+
+  @doc "The date-bound opt keys `search/4` accepts (also their param names)."
+  @spec date_params() :: [atom()]
+  def date_params, do: @date_params
+
   defp do_search(user, vault, query, opts) do
     requested_mode = Keyword.get(opts, :mode, :vector)
     limit = opts |> Keyword.get(:limit, 5) |> clamp_limit()

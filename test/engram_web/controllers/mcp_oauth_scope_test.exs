@@ -47,14 +47,7 @@ defmodule EngramWeb.McpOAuthScopeTest do
     put_req_header(conn, "authorization", "Bearer #{token}")
   end
 
-  defp call_tool(conn, name, args) do
-    post(conn, "/api/mcp", %{
-      "jsonrpc" => "2.0",
-      "id" => 1,
-      "method" => "tools/call",
-      "params" => %{"name" => name, "arguments" => args}
-    })
-  end
+  # `call_tool/3` and `tool_text/1` come from EngramWeb.ConnCase.
 
   test "OAuth-bound vault_id with no args.vault_id routes to bound vault", %{
     conn: conn,
@@ -96,7 +89,7 @@ defmodule EngramWeb.McpOAuthScopeTest do
 
     # MCP wraps tool errors as a result with isError, OR as a JSON-RPC error.
     # Either way the response must surface the bound-vault enforcement.
-    response_text = body["result"]["content"] |> Kernel.||([]) |> Enum.map_join(" ", & &1["text"])
+    response_text = tool_text(conn)
     error_msg = body["error"]["message"] || ""
     assert response_text <> error_msg =~ "cannot access vault #{vault_b.id}"
   end
@@ -113,11 +106,10 @@ defmodule EngramWeb.McpOAuthScopeTest do
       |> call_tool("set_vault", %{"vault_id" => vault_b.id})
 
     body = json_response(conn, 200)
-    text = body["result"]["content"] |> Kernel.||([]) |> Enum.map_join(" ", & &1["text"])
 
     # Must be refused and must NOT echo vault B as valid — it was scoped away.
     assert body["result"]["isError"] == true
-    refute text =~ "is valid"
+    refute tool_text(conn) =~ "is valid"
   end
 
   test "all-vaults grant (no vault_id claim) with multiple vaults must specify a vault", %{
@@ -127,12 +119,10 @@ defmodule EngramWeb.McpOAuthScopeTest do
   } do
     # A vault:* / unscoped token over 2 vaults is ambiguous — fail loud instead
     # of silently defaulting (#985), and succeed once a vault is named.
-    ambiguous =
-      conn |> unscoped_jwt(user) |> call_tool("list_folders", %{}) |> json_response(200)
+    ambiguous_conn = conn |> unscoped_jwt(user) |> call_tool("list_folders", %{})
 
-    text = ambiguous["result"]["content"] |> Kernel.||([]) |> Enum.map_join(" ", & &1["text"])
-    assert ambiguous["result"]["isError"] == true
-    assert text =~ "more than one vault"
+    assert json_response(ambiguous_conn, 200)["result"]["isError"] == true
+    assert tool_text(ambiguous_conn) =~ "more than one vault"
 
     named =
       build_conn()
@@ -174,10 +164,9 @@ defmodule EngramWeb.McpOAuthScopeTest do
       |> call_tool("set_vault", %{"vault_id" => outside.id})
 
     body = json_response(conn, 200)
-    text = body["result"]["content"] |> Kernel.||([]) |> Enum.map_join(" ", & &1["text"])
 
     assert body["result"]["isError"] == true
-    refute text =~ "is valid"
+    refute tool_text(conn) =~ "is valid"
   end
 
   test "list_vaults under a multi-vault grant shows exactly the granted set", %{
@@ -189,11 +178,7 @@ defmodule EngramWeb.McpOAuthScopeTest do
 
     conn = conn |> oauth_authed_multi(user, [a.id]) |> call_tool("list_vaults", %{})
 
-    text =
-      conn
-      |> json_response(200)
-      |> get_in(["result", "content"])
-      |> Enum.map_join(" ", & &1["text"])
+    text = tool_text(conn)
 
     # Factory vaults carry undecryptable name ciphertext (v.name is nil), and
     # list_vaults never renders the slug — so the granted set is pinned by id.
