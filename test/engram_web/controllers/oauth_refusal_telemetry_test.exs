@@ -257,4 +257,44 @@ defmodule EngramWeb.OAuthRefusalTelemetryTest do
       assert log =~ "client_id_missing"
     end
   end
+
+  # Asserted on the structured event, because the metadata IS the diagnosis and
+  # the formatter's allowlist is not what ships to Loki.
+  describe "a refusal line keeps the detail that identifies the failure" do
+    # `Metadata.safe_reason/1`'s generic tuple clause returns only the tag, so
+    # routing CIMD refusals through it made a vendor serving 404 (wrong path),
+    # 403 (blocked) and 503 (down) for its document indistinguishable — in the
+    # telemetry built to tell them apart.
+    test "an HTTP status on a document fetch is rendered, not flattened to its tag" do
+      {_result, events} =
+        LogCapture.with_events(fn ->
+          OAuth.log_refusal(
+            "mcp_cimd_rejected",
+            "https://chatgpt.com/oauth/client.json",
+            {:http_status, 404}
+          )
+        end)
+
+      event = Enum.find(events, &match?({:string, "mcp_cimd_rejected"}, &1.msg))
+
+      assert event, "expected a document-refusal event, got: #{inspect(events)}"
+      assert event.meta[:reason] == "http_status 404"
+      assert event.meta[:cimd_host] == "chatgpt.com"
+    end
+
+    # A DCR client_id is an opaque UUID with no host. The field must still carry
+    # a string: one emitter used to write `nil` here while its siblings wrote
+    # "unknown", giving the alert two shapes for the field it facets on.
+    test "a subject with no host renders \"unknown\", never nil" do
+      {_result, events} =
+        LogCapture.with_events(fn ->
+          OAuth.log_refusal("oauth_client_rejected", Ecto.UUID.generate(), :client_unknown)
+        end)
+
+      event = Enum.find(events, &match?({:string, "oauth_client_rejected"}, &1.msg))
+
+      assert event, "expected a client-refusal event, got: #{inspect(events)}"
+      assert event.meta[:cimd_host] == "unknown"
+    end
+  end
 end

@@ -313,6 +313,61 @@ defmodule EngramWeb.OAuthTokenControllerTest do
       assert %{label: "Work laptop"} = current_refresh_row(user)
     end
 
+    # `grant_attrs/3` copies the grant's fields with `Map.take(@grant_fields)`.
+    # Add a column to `RefreshToken`, forget that list, and rotation silently
+    # drops it — a grant losing its label, scope or vault scoping on the first
+    # refresh, with nothing failing. Asserted field-by-field against the
+    # pre-rotation row rather than against literals, so it keeps holding when
+    # this fixture changes.
+    test "rotation preserves every field the grant carries", %{conn: conn} do
+      user = insert(:user)
+      a = insert(:vault, user: user, slug: "tok-grant-attrs-a")
+      b = insert(:vault, user: user, slug: "tok-grant-attrs-b")
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+      {verifier, challenge} = pkce_pair()
+
+      code =
+        mint_code(user, client, redirect_uri, challenge,
+          vault_ids: [a.id, b.id],
+          label: "Work laptop"
+        )
+
+      body =
+        conn
+        |> post("/oauth/token", %{
+          "grant_type" => "authorization_code",
+          "code" => code,
+          "redirect_uri" => redirect_uri,
+          "client_id" => client.client_id,
+          "code_verifier" => verifier
+        })
+        |> json_response(200)
+
+      granted = current_refresh_row(user)
+
+      build_conn()
+      |> post("/oauth/token", %{
+        "grant_type" => "refresh_token",
+        "refresh_token" => body["refresh_token"],
+        "client_id" => client.client_id
+      })
+      |> json_response(200)
+
+      rotated = current_refresh_row(user)
+
+      refute rotated.id == granted.id, "expected rotation to mint a new row, not update one"
+
+      for field <- [:client_id, :user_id, :vault_id, :vault_ids, :label, :scope, :redirect_uri] do
+        assert Map.fetch!(rotated, field) == Map.fetch!(granted, field),
+               "rotation dropped #{field}"
+      end
+
+      # Immutable across rotation by design: the family is what replay detection
+      # revokes (RFC 6749 §10.4).
+      assert rotated.family_id == granted.family_id
+    end
+
     test "a legacy refresh token with only vault_id still mints a scoped access token",
          %{conn: conn} do
       user = insert(:user)

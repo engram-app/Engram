@@ -49,6 +49,14 @@ defmodule Engram.Notes.FrontmatterTest do
     test "empty CRLF frontmatter yields an empty block, not nil" do
       assert Frontmatter.split("---\r\n---\r\nbody\r\n") == {"", "body\r\n"}
     end
+
+    # Both halves of the CRLF story at once: a `\r\n` opening fence AND a
+    # closing fence at EOF, which goes through `split_trailing/2` rather than
+    # the line pattern. Each half worked on its own, which is exactly how the
+    # opening-fence gap survived unnoticed.
+    test "CRLF frontmatter with the closing fence at EOF" do
+      assert Frontmatter.split("---\r\ntitle: Hi\r\n---") == {"title: Hi\r\n", ""}
+    end
   end
 
   describe "parse/1" do

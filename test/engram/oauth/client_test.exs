@@ -84,6 +84,14 @@ defmodule Engram.OAuth.ClientTest do
        "token_endpoint_auth_method" => "none",
        "token_endpoint_auth_methods_supported" => ["client_secret_basic"]
      }, false},
+
+    # The same filter, on the PREFERRED slot. `cimd_changeset/3` runs
+    # `validate_inclusion` against the CIMD methods here, so a real OAuth method
+    # we do not implement must not answer for a row that could never be stored.
+    # Distinct from the garbage case above: this value IS a valid
+    # `token_endpoint_auth_method`, just not one this path accepts.
+    {"prefers a real method the CIMD path refuses",
+     %{"token_endpoint_auth_method" => "client_secret_basic"}, false},
     {"neither field", %{}, false}
   ]
 
