@@ -13,8 +13,11 @@ defmodule Engram.OAuth do
   """
   import Ecto.Query
   alias Engram.Accounts
+  alias Engram.Logger.Metadata
   alias Engram.OAuth.{AuthorizationCode, Cimd, Client, RefreshToken}
   alias Engram.Repo
+
+  require Logger
 
   @code_bytes 32
   @code_ttl_seconds 600
@@ -128,11 +131,64 @@ defmodule Engram.OAuth do
   """
   @spec authenticate_client(String.t() | nil, String.t() | nil) ::
           :ok | {:error, :invalid_client}
-  def authenticate_client(client_id, secret) do
+  def authenticate_client(client_id, secret), do: authenticate_client(client_id, secret, [])
+
+  @doc """
+  As `authenticate_client/2`, plus RFC 7523 `private_key_jwt` support.
+
+  Opts:
+    * `:assertion` — the raw `client_assertion`, when one was presented.
+    * `:audiences` — values acceptable in the assertion's `aud` claim.
+
+  The registered method still binds in both directions. An assertion-based
+  client MUST present an assertion and MUST NOT present a secret; a client
+  registered `none` must present neither. Letting a caller pick its own
+  authentication method at token time would make the registered one decorative.
+  """
+  @spec authenticate_client(String.t() | nil, String.t() | nil, keyword()) ::
+          :ok | {:error, :invalid_client}
+  def authenticate_client(client_id, secret, opts) do
     case get_client(client_id) do
-      {:ok, client} -> check_client_secret(client, secret)
+      {:ok, client} -> check_client_credentials(client, secret, opts)
       # Unknown client_id is indistinguishable from a bad secret on purpose.
       {:error, :not_found} -> {:error, :invalid_client}
+    end
+  end
+
+  defp check_client_credentials(client, secret, opts) do
+    if Client.assertion_based?(client.token_endpoint_auth_method) do
+      check_client_assertion(client, secret, opts)
+    else
+      check_client_secret(client, secret)
+    end
+  end
+
+  defp check_client_assertion(client, secret, opts) do
+    assertion = Keyword.get(opts, :assertion)
+
+    cond do
+      not is_nil(secret) ->
+        {:error, :invalid_client}
+
+      is_nil(assertion) ->
+        {:error, :invalid_client}
+
+      true ->
+        case Cimd.Jwks.verify_assertion(client, assertion, Keyword.get(opts, :audiences, [])) do
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            # The client is known and its document is fine; something about THIS
+            # assertion is not. That distinction is invisible in the 401, so it
+            # has to be in the logs or the next report is "ChatGPT just fails".
+            Logger.warning(
+              "oauth_client_assertion_rejected",
+              Metadata.with_category(:warning, :lifecycle, reason: inspect(reason))
+            )
+
+            {:error, :invalid_client}
+        end
     end
   end
 

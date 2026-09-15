@@ -98,6 +98,7 @@ defmodule Engram.OAuth.Cimd do
           | :missing_redirect_uris
           | :missing_client_name
           | :confidential_not_supported
+          | :jwks_uri_required
           | :no_supported_grant_type
           | :no_supported_response_type
           | :body_too_large
@@ -346,13 +347,27 @@ defmodule Engram.OAuth.Cimd do
       not valid_client_name?(document["client_name"]) ->
         {:error, :missing_client_name}
 
-      # A CIMD client never registered, so no secret was ever minted for it. If we
-      # honoured a confidential method the client could never authenticate (its
-      # stored hash is nil), and if we silently downgraded to `none` the client
-      # would keep sending a secret that `authenticate_client/2` must then reject
-      # for being present at all. Both failures are opaque; refusing the document
-      # is legible.
-      document["token_endpoint_auth_method"] not in [nil, "none"] ->
+      # `private_key_jwt` authenticates with a signature, not a secret, so the
+      # reasoning below does not reach it: there is nothing to mint. The signing
+      # key comes from the document's own `jwks_uri`, which is bound to a host
+      # only the vendor can serve from — the same argument that binds the
+      # document itself. Without that URI there is no way to verify anything, so
+      # the method is unusable and the refusal is about the document, not us.
+      #
+      # Refusing this outright is what made ChatGPT unable to connect at all
+      # until 2026-09-15; it declares `private_key_jwt` and never negotiates down
+      # even though we advertise `none` first (#1633).
+      document["token_endpoint_auth_method"] == "private_key_jwt" and
+          not Client.displayable_metadata_uri?(document["jwks_uri"]) ->
+        {:error, :jwks_uri_required}
+
+      # A secret-based method still refuses. A CIMD client never registered, so
+      # no secret was ever minted for it. If we honoured the method the client
+      # could never authenticate (its stored hash is nil), and if we silently
+      # downgraded to `none` the client would keep sending a secret that
+      # `authenticate_client/3` must then reject for being present at all. Both
+      # failures are opaque; refusing the document is legible.
+      document["token_endpoint_auth_method"] not in [nil, "none", "private_key_jwt"] ->
         {:error, :confidential_not_supported}
 
       true ->

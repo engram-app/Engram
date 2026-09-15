@@ -26,6 +26,17 @@ defmodule Engram.OAuth.Client do
   # the code to the request that started it. They are not substitutes.
   @valid_auth_methods ~w(none client_secret_post client_secret_basic)
   @confidential_auth_methods ~w(client_secret_post client_secret_basic)
+
+  # CIMD accepts a DIFFERENT set, and the difference is not an oversight.
+  #
+  # `client_secret_*` needs a secret that only registration can mint, so it stays
+  # refused for a client that never registered. `private_key_jwt` needs no minted
+  # secret at all: the client signs an assertion with a key published at its own
+  # `jwks_uri`, bound to the vendor's host by the same argument that binds the
+  # document. DCR keeps refusing it — a stranger POSTing to /oauth/register has
+  # no host-bound document to publish keys in.
+  @cimd_auth_methods ~w(none private_key_jwt)
+  @assertion_auth_methods ~w(private_key_jwt)
   @valid_grant_types ~w(authorization_code refresh_token)
   @valid_response_types ~w(code)
   @loopback_hosts ~w(localhost 127.0.0.1 ::1)
@@ -75,6 +86,12 @@ defmodule Engram.OAuth.Client do
     field :cimd_url, :string
     field :cimd_fetched_at, :utc_datetime_usec
 
+    # Where a `private_key_jwt` client's signing keys live, copied off the
+    # document so the token endpoint can verify an assertion without network I/O
+    # on that path. NULL for every client that authenticates any other way.
+    field :jwks_uri, :string
+    field :token_endpoint_auth_signing_alg, :string
+
     # Read-only metadata populated at DCR time.
     # Queries in Connections use :kind to distinguish MCP vs Obsidian clients.
     field :kind, :string, default: "mcp"
@@ -86,7 +103,8 @@ defmodule Engram.OAuth.Client do
   end
 
   @cast_fields ~w(redirect_uris client_name scope grant_types response_types
-                  token_endpoint_auth_method software_id software_version
+                  token_endpoint_auth_method jwks_uri token_endpoint_auth_signing_alg
+                  software_id software_version
                   logo_uri tos_uri policy_uri
                   kind first_user_agent first_ip)a
 
@@ -95,6 +113,20 @@ defmodule Engram.OAuth.Client do
   @doc "True when the registered auth method requires a client secret."
   @spec confidential?(String.t() | nil) :: boolean()
   def confidential?(method), do: method in @confidential_auth_methods
+
+  @doc """
+  True when the method authenticates with a signed assertion rather than a secret.
+
+  Deliberately NOT folded into `confidential?/1`. That predicate gates the
+  secret comparison in `Engram.OAuth.authenticate_client/3`; answering it `true`
+  for `private_key_jwt` would demand a `client_secret_hash` that is correctly
+  `nil` and reject every assertion-based client.
+  """
+  @spec assertion_based?(String.t() | nil) :: boolean()
+  def assertion_based?(method), do: method in @assertion_auth_methods
+
+  @doc "The auth methods a CIMD document may declare (see `@cimd_auth_methods`)."
+  def cimd_auth_methods, do: @cimd_auth_methods
 
   @doc """
   The grant and response types this authorization server actually implements.
@@ -159,9 +191,7 @@ defmodule Engram.OAuth.Client do
     |> validate_subset(:response_types, @valid_response_types,
       message: "contains an unsupported response_type"
     )
-    |> validate_inclusion(:token_endpoint_auth_method, @valid_auth_methods,
-      message: "must be one of: #{Enum.join(@valid_auth_methods, ", ")}"
-    )
+    |> validate_auth_method(Keyword.get(opts, :auth_methods, @valid_auth_methods))
     |> validate_length(:client_name, max: @client_name_max_length)
     # Attacker-controlled on a public, unauthenticated endpoint; cap to bound
     # row/metadata size.
@@ -183,10 +213,11 @@ defmodule Engram.OAuth.Client do
 
   Two fields are NOT taken from the document:
 
-    * `token_endpoint_auth_method` is forced to `none`. A CIMD client never
-      registered, so no secret was ever minted for it; PKCE is the binding. The
-      caller rejects a document that asks for a confidential method rather than
-      silently downgrading it (see `Engram.OAuth.Cimd`).
+    * `token_endpoint_auth_method` is taken from the document, but only from
+      `@cimd_auth_methods` — `none` or `private_key_jwt`. A secret-based method
+      is refused by the caller rather than silently downgraded, because no
+      secret was ever minted for a client that did not register (see
+      `Engram.OAuth.Cimd`). `private_key_jwt` carries `jwks_uri` across with it.
     * `software_id` is dropped. It would be attributable here — the document is
       served by the vendor's own host — but it buys nothing: after #1156 the
       `software_id` map names only our own plugin. Storing it would re-grow the
@@ -205,9 +236,12 @@ defmodule Engram.OAuth.Client do
         "tos_uri" => document["tos_uri"],
         "policy_uri" => document["policy_uri"],
         "kind" => "mcp",
-        "token_endpoint_auth_method" => "none"
+        "token_endpoint_auth_method" => document["token_endpoint_auth_method"] || "none",
+        "jwks_uri" => document["jwks_uri"],
+        "token_endpoint_auth_signing_alg" => document["token_endpoint_auth_signing_alg"]
       },
-      max_redirect_uris: @max_redirect_uris_cimd
+      max_redirect_uris: @max_redirect_uris_cimd,
+      auth_methods: @cimd_auth_methods
     )
     |> put_change(:cimd_url, url)
     |> put_change(:cimd_fetched_at, DateTime.utc_now())
@@ -226,6 +260,16 @@ defmodule Engram.OAuth.Client do
   #     break the revoke button.
   #   - Anything else: log + default to "mcp" so legitimate typos aren't
   #     hostile UX, but we can grep the logs for "kind drift" later.
+  # The allowlist is a parameter rather than a constant because DCR and CIMD ask
+  # different questions of the same field. Passing it in keeps ONE changeset
+  # rather than growing a second, drift-prone CIMD validation path — the mistake
+  # that caused the 2026-08-04 outage, in the opposite direction.
+  defp validate_auth_method(changeset, allowed) do
+    validate_inclusion(changeset, :token_endpoint_auth_method, allowed,
+      message: "must be one of: #{Enum.join(allowed, ", ")}"
+    )
+  end
+
   defp coerce_kind(changeset) do
     case get_field(changeset, :kind) do
       "mcp" ->

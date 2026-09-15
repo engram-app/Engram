@@ -127,12 +127,80 @@ defmodule Engram.OAuth.CimdTest do
     # Honouring the request would leave it unable to authenticate (nil hash);
     # silently downgrading would make it send a secret we must then reject for
     # being present at all. Both failures are opaque, so refuse the document.
-    test "rejects a document asking for a confidential auth method" do
+    test "rejects a document asking for a secret-based auth method" do
+      for method <- ~w(client_secret_post client_secret_basic) do
+        expect(FetcherMock, :fetch, fn @url ->
+          {:ok, document(%{"token_endpoint_auth_method" => method})}
+        end)
+
+        assert {:error, :confidential_not_supported} = Cimd.ensure_client(@url),
+               "expected #{method} to be refused"
+      end
+    end
+
+    # The regression this whole path exists for. Before #1633 this asserted a
+    # refusal, which is why ChatGPT being unable to connect never turned a test
+    # red: a test that guards a decision passes just as green on the day the
+    # decision becomes wrong.
+    test "accepts private_key_jwt and stores the key location" do
       expect(FetcherMock, :fetch, fn @url ->
-        {:ok, document(%{"token_endpoint_auth_method" => "client_secret_post"})}
+        {:ok,
+         document(%{
+           "token_endpoint_auth_method" => "private_key_jwt",
+           "token_endpoint_auth_signing_alg" => "RS256",
+           "jwks_uri" => "https://claude.ai/oauth/jwks.json"
+         })}
       end)
 
-      assert {:error, :confidential_not_supported} = Cimd.ensure_client(@url)
+      assert {:ok, client} = Cimd.ensure_client(@url)
+      assert client.token_endpoint_auth_method == "private_key_jwt"
+      assert client.jwks_uri == "https://claude.ai/oauth/jwks.json"
+      assert client.token_endpoint_auth_signing_alg == "RS256"
+      # No secret is minted, and none is expected of it.
+      assert is_nil(client.client_secret_hash)
+    end
+
+    # Declaring the method without publishing the keys leaves nothing to verify
+    # against, so the document is unusable rather than us being unable.
+    test "rejects private_key_jwt with no usable jwks_uri" do
+      for jwks <- [nil, "", "not-a-url", "http://claude.ai/jwks.json"] do
+        expect(FetcherMock, :fetch, fn @url ->
+          {:ok,
+           document(%{"token_endpoint_auth_method" => "private_key_jwt", "jwks_uri" => jwks})}
+        end)
+
+        assert {:error, :jwks_uri_required} = Cimd.ensure_client(@url),
+               "expected jwks_uri #{inspect(jwks)} to be refused"
+      end
+    end
+
+    # ChatGPT's real published connector document, fetched 2026-09-15. Every
+    # other fixture in this file is Claude-shaped, which is precisely why a
+    # vendor declaring a different auth method was invisible here for weeks.
+    test "accepts ChatGPT's real published connector document" do
+      url = "https://chatgpt.com/oauth/client.json"
+
+      chatgpt = %{
+        "client_id" => url,
+        "client_uri" => "https://chatgpt.com/",
+        "redirect_uris" => ["https://chatgpt.com/connector_platform_oauth_redirect"],
+        "token_endpoint_auth_method" => "private_key_jwt",
+        "token_endpoint_auth_methods_supported" => ["none", "private_key_jwt"],
+        "grant_types" => ["authorization_code", "refresh_token"],
+        "response_types" => ["code"],
+        "client_name" => "ChatGPT",
+        "logo_uri" => "https://persistent.oaistatic.com/sonic/misc/openai-logo.png",
+        "token_endpoint_auth_signing_alg" => "RS256",
+        "jwks_uri" => "https://chatgpt.com/oauth/jwks.json"
+      }
+
+      expect(FetcherMock, :fetch, fn ^url -> {:ok, chatgpt} end)
+
+      assert {:ok, client} = Cimd.ensure_client(url)
+      assert client.client_name == "ChatGPT"
+      assert client.token_endpoint_auth_method == "private_key_jwt"
+      assert client.jwks_uri == "https://chatgpt.com/oauth/jwks.json"
+      assert client.redirect_uris == ["https://chatgpt.com/connector_platform_oauth_redirect"]
     end
 
     test "stores a public client with no secret even so" do
