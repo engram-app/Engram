@@ -263,6 +263,25 @@ defmodule Engram.OAuth.CimdTest do
       end
     end
 
+    # A `jwks_uri` on a document that permits no assertion method is unusable
+    # decoration. It is dropped, matching how `logo_uri` is handled, rather than
+    # refusing the client over it — and dropping it is also what keeps an
+    # unvalidated string out of the column, since neither `validate_document/2`
+    # jwks arm runs for this document.
+    test "drops a jwks_uri the document cannot use, without refusing the client" do
+      for junk <- ["not-a-url::%%", "https://claude.ai/" <> String.duplicate("a", 4000)] do
+        expect(FetcherMock, :fetch, fn @url ->
+          {:ok, document(%{"token_endpoint_auth_method" => "none", "jwks_uri" => junk})}
+        end)
+
+        assert {:ok, client} = Cimd.ensure_client(@url),
+               "expected an unusable jwks_uri to be dropped, not to refuse the client"
+
+        assert is_nil(client.jwks_uri)
+        Repo.delete!(client, skip_tenant_check: true)
+      end
+    end
+
     # What replaced the same-origin rule. These are shapes `SsrfGuard` refuses
     # at fetch time, so accepting them here would mint a client that 401s on
     # every token exchange forever, with the real reason buried in a fetch the
