@@ -13,34 +13,19 @@ defmodule EngramWeb.McpController do
   @protocol_version "2025-03-26"
 
   # engram-app/engram-infra#340 — closed-set map from tool name strings to
-  # atoms, used as the cardinality-bounded `:tool` tag on MCP PromEx
-  # metrics. Keeps `String.to_atom/1` (atom-table pollution) out of the
-  # hot path while keeping the tag stable. Must stay in sync with every
-  # tool in `Engram.MCP.Tools.list/0` (21 as of #1491/#1492) — a tool
-  # missing here silently degrades to the `:unknown` bucket.
-  @tool_atoms %{
-    "list_vaults" => :list_vaults,
-    "set_vault" => :set_vault,
-    "search_notes" => :search_notes,
-    "list_tags" => :list_tags,
-    "list_folders" => :list_folders,
-    "list_folder" => :list_folder,
-    "create_folder" => :create_folder,
-    "suggest_folder" => :suggest_folder,
-    "get_note" => :get_note,
-    "get_notes" => :get_notes,
-    "create_note" => :create_note,
-    "write_note" => :write_note,
-    "append_to_note" => :append_to_note,
-    "patch_note" => :patch_note,
-    "update_section" => :update_section,
-    "rename_note" => :rename_note,
-    "rename_folder" => :rename_folder,
-    "delete_note" => :delete_note,
-    "delete_folder" => :delete_folder,
-    "move_attachment" => :move_attachment,
-    "get_attachment_upload_target" => :get_attachment_upload_target
-  }
+  # atoms, used as the cardinality-bounded `:tool` tag on MCP PromEx metrics.
+  # Derived from the real roster at COMPILE time, so a new tool can no longer
+  # silently degrade to the `:unknown` bucket by being forgotten here.
+  #
+  # `String.to_atom/1` is safe precisely because this runs at compile time over
+  # a closed list: the atoms intern once while compiling and this module only
+  # reads the finished map afterwards — nothing per-request touches the atom
+  # table, which was the whole objection to `String.to_atom/1` here.
+  @tool_atoms Map.new(Tools.list(), &{&1.name, String.to_atom(&1.name)})
+
+  # The same exempt set the tool definitions use, read once at compile time
+  # rather than restated here (see `dispatch_tool/4`).
+  @vault_exempt Tools.vault_scoping_exempt()
 
   def handle(conn, %{"jsonrpc" => "2.0", "id" => id, "method" => method} = params) do
     result = dispatch(conn, method, params["params"] || %{})
@@ -111,7 +96,7 @@ defmodule EngramWeb.McpController do
     with {:ok, tool} <- Tools.get(name),
          user = conn.assigns.current_user,
          # §E — record origin fingerprint for daily-rollup aggregation.
-         _ = OriginStats.record(user.id, get_req_header_first(conn, "user-agent")),
+         _ = OriginStats.record(user.id, List.first(get_req_header(conn, "user-agent"))),
          :ok <- validate_tool_args(tool, args) do
       dispatch_tool(tool, user, normalize_args(tool, args), conn)
     else
@@ -262,11 +247,7 @@ defmodule EngramWeb.McpController do
         {result, :ok, byte_size_safe(text)}
 
       {:error, msg} ->
-        result =
-          {:ok,
-           %{"content" => [%{"type" => "text", "text" => "Error: #{msg}"}], "isError" => true}}
-
-        {result, :error, byte_size_safe(msg)}
+        {error_result(msg), :error, byte_size_safe(msg)}
     end
   catch
     kind, reason ->
@@ -282,20 +263,13 @@ defmodule EngramWeb.McpController do
         Engram.Logger.Metadata.with_category(:error, :http,
           tool: tool.name,
           kind: kind,
-          reason_label: classify_throw_reason(reason)
+          reason_label: Engram.Telemetry.error_kind(reason)
         )
       )
 
       message = safe_trapped_message(kind, reason, __STACKTRACE__)
 
-      result =
-        {:ok,
-         %{
-           "content" => [%{"type" => "text", "text" => "Error: #{message}"}],
-           "isError" => true
-         }}
-
-      {result, :error, byte_size_safe(message)}
+      {error_result(message), :error, byte_size_safe(message)}
   end
 
   # Builds a client-safe message for a trapped tool-handler failure.
@@ -322,11 +296,6 @@ defmodule EngramWeb.McpController do
   defp byte_size_safe(s) when is_binary(s), do: byte_size(s)
   defp byte_size_safe(_), do: 0
 
-  defp classify_throw_reason(reason) when is_atom(reason), do: reason
-  defp classify_throw_reason(%{__exception__: true} = e), do: e.__struct__
-  defp classify_throw_reason({tag, _}) when is_atom(tag), do: {tag, :_}
-  defp classify_throw_reason(_), do: :unknown
-
   # -- Tool dispatch (vault context) --
 
   # `list_vaults` and `set_vault` don't operate on a single vault's contents, so
@@ -337,14 +306,11 @@ defmodule EngramWeb.McpController do
   # VaultPlug pipeline (see router.ex) — no default-vault 404/403 gates it.
   # `list_vaults` is handed the credential-scoped vault set so it can't advertise
   # vaults this token/key cannot use (#729).
-  defp dispatch_tool(%{name: "list_vaults"} = tool, user, args, conn) do
-    call_tool(tool, user, accessible_vaults(user, conn), args)
-  end
-
-  defp dispatch_tool(%{name: "set_vault"} = tool, user, args, conn) do
-    # set_vault only validates + echoes, but it MUST respect the credential's
-    # scope — it sees the same accessible set as list_vaults, so a bound token
-    # can't confirm the name/existence of a vault it was scoped away from (#729).
+  #
+  # set_vault only validates + echoes, but it MUST respect the credential's
+  # scope — it sees the same accessible set as list_vaults, so a bound token
+  # can't confirm the name/existence of a vault it was scoped away from (#729).
+  defp dispatch_tool(%{name: name} = tool, user, args, conn) when name in @vault_exempt do
     call_tool(tool, user, accessible_vaults(user, conn), args)
   end
 
@@ -376,20 +342,26 @@ defmodule EngramWeb.McpController do
   # the result set can never include a vault the credential was scoped away
   # from (#729).
   defp search_across_accessible(tool, user, args, conn) do
-    # Fetch the vault list ONCE; derive both the accessible set and the total
-    # from it (no double query).
+    case resolve_bare_vault(user, conn) do
+      {:ok, only} -> call_tool(tool, user, only, args)
+      {:many, many} -> call_tool(tool, user, {:cross_vault, many}, args)
+      {:error, msg} -> error_result(msg)
+    end
+  end
+
+  # The credential's vault set for a call that named no vault: exactly one
+  # reachable vault, more than one, or none. Fetches the vault list ONCE and
+  # derives both the accessible set and the empty-set message from it (no second
+  # list_vaults query on the error path), and never widens past the scoped list.
+  # Callers differ only in what they do with `{:many, _}`: a bare search spans
+  # them, everything else fails loud (#985).
+  defp resolve_bare_vault(user, conn) do
     all = Engram.Vaults.list_vaults(user)
-    accessible = scope_vaults(all, conn)
 
-    case accessible do
-      [] ->
-        error_result(no_vault_message_for(all))
-
-      [only] ->
-        call_tool(tool, user, only, args)
-
-      many ->
-        call_tool(tool, user, {:cross_vault, many}, args)
+    case scope_vaults(all, conn) do
+      [only] -> {:ok, only}
+      [] -> {:error, no_vault_message_for(all)}
+      many -> {:many, many}
     end
   end
 
@@ -423,22 +395,15 @@ defmodule EngramWeb.McpController do
         resolve_requested_vault(user, requested, conn)
 
       # Bare call → resolve the credential's sole reachable vault, or fail loud.
-      # Fetch the vault list once and reuse it for the empty-set message (no
-      # second list_vaults query on the error path).
       _ ->
-        all = Engram.Vaults.list_vaults(user)
-
-        case scope_vaults(all, conn) do
-          [only] ->
-            {:ok, only}
-
-          [] ->
-            {:error, no_vault_message_for(all)}
-
-          _many ->
+        case resolve_bare_vault(user, conn) do
+          {:many, _vaults} ->
             {:error,
              "This connection can reach more than one vault — specify which. Call " <>
                "list_vaults to see the IDs, then pass vault_id on this tool call."}
+
+          ok_or_error ->
+            ok_or_error
         end
     end
   end
@@ -499,12 +464,5 @@ defmodule EngramWeb.McpController do
       "id" => id,
       "error" => %{"code" => code, "message" => message}
     })
-  end
-
-  defp get_req_header_first(conn, key) do
-    case Plug.Conn.get_req_header(conn, key) do
-      [v | _] -> v
-      [] -> nil
-    end
   end
 end

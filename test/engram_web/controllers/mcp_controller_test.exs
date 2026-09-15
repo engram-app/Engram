@@ -48,14 +48,7 @@ defmodule EngramWeb.McpControllerTest do
     })
   end
 
-  defp call_tool(conn, name, args \\ %{}) do
-    jsonrpc(conn, "tools/call", %{"name" => name, "arguments" => args})
-  end
-
-  defp tool_text(conn) do
-    resp = json_response(conn, 200)
-    resp["result"]["content"] |> hd() |> Map.get("text")
-  end
+  # `call_tool/3` and `tool_text/1` come from EngramWeb.ConnCase.
 
   # =========================================================================
   # Protocol tests
@@ -377,7 +370,7 @@ defmodule EngramWeb.McpControllerTest do
       resp = json_response(conn, 200)
 
       assert resp["result"]["isError"] == true
-      text = resp["result"]["content"] |> hd() |> Map.get("text")
+      text = tool_text(conn)
       assert text =~ "more than one vault"
       assert text =~ "list_vaults"
     end
@@ -389,12 +382,12 @@ defmodule EngramWeb.McpControllerTest do
       # so the tool errors — but crucially NOT with the navigation fail-loud
       # guard, which proves it routed INTO search rather than refusing. The
       # trapped search-unavailable log is expected here and captured.
-      {resp, _log} =
+      {searched, _log} =
         ExUnit.CaptureLog.with_log(fn ->
-          call_tool(conn, "search_notes", %{"query" => "anything"}) |> json_response(200)
+          call_tool(conn, "search_notes", %{"query" => "anything"})
         end)
 
-      text = resp["result"]["content"] |> hd() |> Map.get("text")
+      text = tool_text(searched)
       refute text =~ "more than one vault"
       refute text =~ "specify which"
     end
@@ -433,8 +426,7 @@ defmodule EngramWeb.McpControllerTest do
 
       resp = json_response(conn, 200)
       assert resp["result"]["isError"] == true
-      text = resp["result"]["content"] |> hd() |> Map.get("text")
-      assert text =~ "Vault not found"
+      assert tool_text(conn) =~ "Vault not found"
     end
 
     test "list_vaults advertises every vault for an unrestricted credential",
@@ -1316,31 +1308,24 @@ defmodule EngramWeb.McpControllerTest do
     end
 
     test "move_attachment is refused when the plan does not grant attachments", %{conn: conn} do
-      resp =
-        json_response(
-          call_tool(conn, "move_attachment", %{
-            "old_path" => "_attachments/a.png",
-            "new_path" => "_attachments/b.png"
-          }),
-          200
-        )
+      conn =
+        call_tool(conn, "move_attachment", %{
+          "old_path" => "_attachments/a.png",
+          "new_path" => "_attachments/b.png"
+        })
 
-      assert resp["result"]["isError"]
-      assert resp["result"]["content"] |> hd() |> Map.get("text") =~ "attachments_enabled"
+      assert json_response(conn, 200)["result"]["isError"]
+      assert tool_text(conn) =~ "attachments_enabled"
     end
 
     test "the gate fires ahead of not_found, so it cannot be probed away", %{conn: conn} do
       text =
-        json_response(
-          call_tool(conn, "move_attachment", %{
-            "old_path" => "_attachments/missing.png",
-            "new_path" => "_attachments/b.png"
-          }),
-          200
-        )
-        |> get_in(["result", "content"])
-        |> hd()
-        |> Map.get("text")
+        conn
+        |> call_tool("move_attachment", %{
+          "old_path" => "_attachments/missing.png",
+          "new_path" => "_attachments/b.png"
+        })
+        |> tool_text()
 
       refute text =~ "not found"
     end
@@ -1366,10 +1351,7 @@ defmodule EngramWeb.McpControllerTest do
       text =
         conn
         |> call_tool("suggest_folder", %{"description" => "vitamin d"})
-        |> json_response(200)
-        |> get_in(["result", "content"])
-        |> hd()
-        |> Map.get("text")
+        |> tool_text()
 
       assert text =~ "ai_searches_per_day"
     end
