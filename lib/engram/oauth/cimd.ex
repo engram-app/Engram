@@ -98,6 +98,8 @@ defmodule Engram.OAuth.Cimd do
           | :missing_redirect_uris
           | :missing_client_name
           | :confidential_not_supported
+          | :jwks_uri_required
+          | :jwks_uri_unfetchable
           | :no_supported_grant_type
           | :no_supported_response_type
           | :body_too_large
@@ -321,10 +323,24 @@ defmodule Engram.OAuth.Cimd do
   # THE binding. Everything else is metadata; this is what ties the document to
   # the URL, and therefore the client's identity to a host only its vendor can
   # serve from.
-  defp validate_document(%{"client_id" => id}, url) when id != url,
+  @doc """
+  Decides whether a fetched document is one we would accept, without storing it.
+
+  Public because vendor acceptance needs a check of its own. The conformance
+  suite only proves that *MCPJam* can register, since `--registration cimd`
+  supplies MCPJam's own published document and no other vendor's is ever
+  fetched — so a vendor changing its auth method turns nothing red. That is how
+  ChatGPT stayed unable to connect for weeks under a green nightly run (#1635).
+
+  Calling this against a real vendor's published document needs no database, no
+  deployed target and no MCPJam, which is what lets the check gate rather than
+  merely report.
+  """
+  @spec validate_document(map(), String.t()) :: :ok | {:error, reason()}
+  def validate_document(%{"client_id" => id}, url) when id != url,
     do: {:error, :client_id_mismatch}
 
-  defp validate_document(document, _url) do
+  def validate_document(document, _url) do
     cond do
       not is_map_key(document, "client_id") ->
         {:error, :client_id_mismatch}
@@ -346,13 +362,52 @@ defmodule Engram.OAuth.Cimd do
       not valid_client_name?(document["client_name"]) ->
         {:error, :missing_client_name}
 
-      # A CIMD client never registered, so no secret was ever minted for it. If we
-      # honoured a confidential method the client could never authenticate (its
-      # stored hash is nil), and if we silently downgraded to `none` the client
-      # would keep sending a secret that `authenticate_client/2` must then reject
-      # for being present at all. Both failures are opaque; refusing the document
-      # is legible.
-      document["token_endpoint_auth_method"] not in [nil, "none"] ->
+      # `private_key_jwt` authenticates with a signature, not a secret, so the
+      # reasoning below does not reach it: there is nothing to mint. The signing
+      # key comes from the document's own `jwks_uri`, which is bound to a host
+      # only the vendor can serve from — the same argument that binds the
+      # document itself. Without that URI there is no way to verify anything, so
+      # the method is unusable and the refusal is about the document, not us.
+      #
+      # Refusing this outright is what made ChatGPT unable to connect at all
+      # until 2026-09-15; it declares `private_key_jwt` and never negotiates down
+      # even though we advertise `none` first (#1633).
+      document["token_endpoint_auth_method"] == "private_key_jwt" and
+          not Client.displayable_metadata_uri?(document["jwks_uri"]) ->
+        {:error, :jwks_uri_required}
+
+      # This required the same ORIGIN until 2026-09-15, to stop a document at
+      # `vendor.example` naming keys anywhere and converting a host binding
+      # into an unbounded delegation. Two things were wrong with that.
+      #
+      # It refused a vendor serving keys from a CDN or a dedicated key host,
+      # which is ordinary practice and which the CIMD draft nowhere forbids —
+      # and the refusal read as the vendor's bug, not ours.
+      #
+      # And the delegation it prevented is one the VENDOR chose. Setting
+      # `jwks_uri` at all requires serving the document at the `client_id` URL,
+      # so an attacker who can point it anywhere already controls the vendor's
+      # own host and needs none of this. The residual risk is to the vendor's
+      # keys, and it is theirs to take; it is not a risk to our users, who
+      # still cannot have a token minted without an auth code they consented to.
+      #
+      # What must still hold is that the URI is one we can actually fetch when
+      # a token exchange arrives. `validate_url/1` is the same rule the fetch
+      # applies, minus the DNS lookup, so a scheme, port or shape the guard
+      # would refuse is caught here — legibly, at authorize — instead of as a
+      # mystery 401 on every later exchange. DNS stays out on purpose: a
+      # resolver blip must not become a permanent verdict on the document.
+      document["token_endpoint_auth_method"] == "private_key_jwt" and
+          SsrfGuard.validate_url(document["jwks_uri"]) != :ok ->
+        {:error, :jwks_uri_unfetchable}
+
+      # A secret-based method still refuses. A CIMD client never registered, so
+      # no secret was ever minted for it. If we honoured the method the client
+      # could never authenticate (its stored hash is nil), and if we silently
+      # downgraded to `none` the client would keep sending a secret that
+      # `authenticate_client/3` must then reject for being present at all. Both
+      # failures are opaque; refusing the document is legible.
+      document["token_endpoint_auth_method"] not in [nil, "none", "private_key_jwt"] ->
         {:error, :confidential_not_supported}
 
       true ->

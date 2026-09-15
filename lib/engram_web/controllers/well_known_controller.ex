@@ -109,8 +109,14 @@ defmodule EngramWeb.WellKnownController do
         # selects its CIMD flow only when this list contains "none", and would
         # otherwise fall back to DCR. The secret-based methods are additive, for
         # server-side connectors that cannot hold a public client.
+        # `private_key_jwt` is CIMD-only: a client that publishes a document can
+        # publish keys in it, a stranger POSTing to /oauth/register cannot. It is
+        # listed here because ChatGPT and other connectors read this list to
+        # decide what to send, and omitting it is what left them with no usable
+        # method at all (#1633).
         token_endpoint_auth_methods_supported: [
           "none",
+          "private_key_jwt",
           "client_secret_post",
           "client_secret_basic"
         ],
