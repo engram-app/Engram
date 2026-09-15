@@ -13,8 +13,11 @@ defmodule Engram.OAuth do
   """
   import Ecto.Query
   alias Engram.Accounts
+  alias Engram.Logger.Metadata
   alias Engram.OAuth.{AuthorizationCode, Cimd, Client, RefreshToken}
   alias Engram.Repo
+
+  require Logger
 
   @code_bytes 32
   @code_ttl_seconds 600
@@ -127,14 +130,94 @@ defmodule Engram.OAuth do
   `nil`. Comparison is constant-time against the stored hash.
   """
   @spec authenticate_client(String.t() | nil, String.t() | nil) ::
-          :ok | {:error, :invalid_client}
-  def authenticate_client(client_id, secret) do
+          :ok | {:error, :invalid_client | :temporarily_unavailable}
+  def authenticate_client(client_id, secret), do: authenticate_client(client_id, secret, [])
+
+  @doc """
+  As `authenticate_client/2`, plus RFC 7523 `private_key_jwt` support.
+
+  Opts:
+    * `:assertion` — the raw `client_assertion`, when one was presented.
+    * `:audiences` — values acceptable in the assertion's `aud` claim.
+
+  The registered method still binds in both directions. An assertion-based
+  client MUST present an assertion and MUST NOT present a secret; a client
+  registered `none` must present neither. Letting a caller pick its own
+  authentication method at token time would make the registered one decorative.
+  """
+  @spec authenticate_client(String.t() | nil, String.t() | nil, keyword()) ::
+          :ok | {:error, :invalid_client | :temporarily_unavailable}
+  def authenticate_client(client_id, secret, opts) do
     case get_client(client_id) do
-      {:ok, client} -> check_client_secret(client, secret)
+      {:ok, client} -> check_client_credentials(client, secret, opts)
       # Unknown client_id is indistinguishable from a bad secret on purpose.
       {:error, :not_found} -> {:error, :invalid_client}
     end
   end
+
+  defp check_client_credentials(client, secret, opts) do
+    cond do
+      Client.assertion_based?(client.token_endpoint_auth_method) ->
+        check_client_assertion(client, secret, opts)
+
+      # An assertion presented to a client that does not authenticate that way.
+      # Accepting it would wave through a caller that believes it proved
+      # something — the same reason an unrecognised `client_assertion_type` is
+      # refused rather than ignored. It also surfaces the deploy window: for up
+      # to the document TTL after release, an existing row may still say `none`.
+      not is_nil(Keyword.get(opts, :assertion)) ->
+        reject_assertion(client, :assertion_not_expected)
+
+      true ->
+        check_client_secret(client, secret)
+    end
+  end
+
+  defp check_client_assertion(client, secret, opts) do
+    assertion = Keyword.get(opts, :assertion)
+
+    cond do
+      not is_nil(secret) -> reject_assertion(client, :secret_presented_with_assertion)
+      is_nil(assertion) -> reject_assertion(client, :assertion_missing)
+      true -> run_assertion_verification(client, assertion, opts)
+    end
+  end
+
+  defp run_assertion_verification(client, assertion, opts) do
+    case Cimd.Jwks.verify_assertion(client, assertion, Keyword.get(opts, :audiences, [])) do
+      :ok -> :ok
+      {:error, reason} -> reject_assertion(client, reason)
+    end
+  end
+
+  # ONE place that turns an assertion refusal into a response, so no branch can
+  # be added silently later. Two things make the line actionable:
+  #
+  #   * the host — "some assertion failed" cannot be triaged; "chatgpt.com's
+  #     assertions fail with :alg_pin_mismatch" can. `Engram.OAuth.Cimd.log/3`
+  #     carries the same label for the same reason.
+  #   * the transient split — a throttle or an unreachable JWKS endpoint is OUR
+  #     side of the wire and clears on its own. RFC 6749 §5.2 makes
+  #     `invalid_client` terminal, so reporting one as the other hands the
+  #     connector a permanent failure for a condition that fixes itself.
+  defp reject_assertion(client, reason) do
+    Logger.warning(
+      "oauth_client_assertion_rejected",
+      Metadata.with_category(:warning, :lifecycle,
+        cimd_host: cimd_host(client),
+        reason: Metadata.safe_reason(reason)
+      )
+    )
+
+    if Cimd.Jwks.transient?(reason),
+      do: {:error, :temporarily_unavailable},
+      else: {:error, :invalid_client}
+  end
+
+  defp cimd_host(%Client{cimd_url: url}) when is_binary(url),
+    do: URI.parse(url).host || "unknown"
+
+  defp cimd_host(_client), do: "unknown"
 
   defp check_client_secret(client, secret) do
     cond do

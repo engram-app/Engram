@@ -56,7 +56,17 @@ cluster_excluded = if System.get_env("CLUSTER_TESTS") == "1", do: [], else: [:cl
 integration_excluded =
   if System.get_env("INTEGRATION_TESTS") == "1", do: [], else: [:integration]
 
-case qdrant_excluded ++ cluster_excluded ++ integration_excluded do
+# - :vendor_conformance makes real outbound HTTPS requests to third-party
+#   vendors (ChatGPT et al) to check their published CIMD documents are still
+#   ones we accept. Excluded by default so a vendor's outage can never block a
+#   merge; it runs on a schedule instead → VENDOR_CONFORMANCE=1.
+vendor_conformance_excluded =
+  if System.get_env("VENDOR_CONFORMANCE") == "1", do: [], else: [:vendor_conformance]
+
+case qdrant_excluded ++
+       cluster_excluded ++
+       integration_excluded ++
+       vendor_conformance_excluded do
   [] -> :ok
   excluded -> ExUnit.configure(exclude: excluded)
 end

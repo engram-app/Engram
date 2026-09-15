@@ -141,20 +141,34 @@ defmodule EngramWeb.WellKnownControllerTest do
       assert "mcp" in body["scopes_supported"]
     end
 
-    test "advertises only public PKCE (none) — no confidential auth methods", %{
+    test "advertises every auth method some registration path accepts", %{
       conn: conn
     } do
       conn = get(conn, "/.well-known/oauth-authorization-server")
       body = json_response(conn, 200)
 
-      # Must match what /oauth/register actually accepts (#282) — advertising
-      # client_secret_* here would tell clients to request a method we 400 on.
-      # "none" must remain advertised: Claude only chooses CIMD when it is,
-      # and every existing public PKCE client depends on it.
+      # This list is the UNION across registration paths, not any single path's
+      # policy. The split is deliberate:
+      #
+      #   none                | DCR and CIMD
+      #   client_secret_post  | DCR only — the secret is minted at registration
+      #   client_secret_basic | DCR only — same reason
+      #   private_key_jwt     | CIMD only — keys come from the document's jwks_uri
+      #
+      # So a client CAN read this list and pick a method its own path refuses.
+      # That mismatch is real and tracked in #1634. It is not fixed by
+      # shortening the list: every entry is genuinely accepted somewhere, and
+      # dropping one silently breaks that path instead. `private_key_jwt` in
+      # particular has to stay — ChatGPT reads this list to decide what to send,
+      # and omitting it is what left it unable to connect at all (#1633).
+      #
+      # "none" must remain FIRST-CLASS: Claude picks CIMD only when it is
+      # advertised, and every existing public PKCE client depends on it.
       assert "none" in body["token_endpoint_auth_methods_supported"]
 
       assert body["token_endpoint_auth_methods_supported"] == [
                "none",
+               "private_key_jwt",
                "client_secret_post",
                "client_secret_basic"
              ]
