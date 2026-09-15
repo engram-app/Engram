@@ -325,9 +325,19 @@ defmodule Engram.OAuth.Cimd do
   and the copy inside this module's own logger had dropped the `|| "unknown"`
   fallback — so one emitter could write `cimd_host: nil` into the field the
   `mcp-connector-refused` alert facets on while every sibling wrote `"unknown"`.
+
+  Guard-narrowed rather than `URI.parse(url).host || "unknown"`: dialyzer
+  cannot prove the `||` discharges the `nil` in `%URI{}.host`, and it runs with
+  `:missing_range` here. Widening the spec to `String.t() | nil` would be the
+  wrong repair — a nil in this field is the drift this function exists to end.
   """
   @spec host_of(String.t()) :: String.t()
-  def host_of(url), do: URI.parse(url).host || "unknown"
+  def host_of(url) do
+    case URI.parse(url) do
+      %URI{host: host} when is_binary(host) -> host
+      _no_host -> "unknown"
+    end
+  end
 
   # THE binding. Everything else is metadata; this is what ties the document to
   # the URL, and therefore the client's identity to a host only its vendor can
