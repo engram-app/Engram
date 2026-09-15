@@ -128,17 +128,6 @@ defmodule Engram.OAuth.Client do
   @spec confidential?(String.t() | nil) :: boolean()
   def confidential?(method), do: method in @confidential_auth_methods
 
-  @doc """
-  True when the method authenticates with a signed assertion rather than a secret.
-
-  Deliberately NOT folded into `confidential?/1`. That predicate gates the
-  secret comparison in `Engram.OAuth.authenticate_client/3`; answering it `true`
-  for `private_key_jwt` would demand a `client_secret_hash` that is correctly
-  `nil` and reject every assertion-based client.
-  """
-  @spec assertion_based?(String.t() | nil) :: boolean()
-  def assertion_based?(method), do: method in @assertion_auth_methods
-
   @doc "The auth methods a CIMD document may declare (see `@cimd_auth_methods`)."
   def cimd_auth_methods, do: @cimd_auth_methods
 
@@ -157,11 +146,44 @@ defmodule Engram.OAuth.Client do
   had the set read off its document, and widening on that absence would grant
   public auth to a client that may never have offered it.
   """
-  def public_auth_permitted?(%__MODULE__{token_endpoint_auth_methods_supported: methods})
-      when is_list(methods),
-      do: "none" in methods
+  def public_auth_permitted?(client), do: "none" in permitted_auth_methods(client)
 
-  def public_auth_permitted?(_client), do: false
+  @doc """
+  True when the client's own document permits authenticating with an assertion.
+
+  The mirror of `public_auth_permitted?/1`, and it exists because the first fix
+  for #1633 only corrected one direction. `assertion_based?/1` reads the
+  PREFERRED method alone, so a document preferring `none` while also supporting
+  `private_key_jwt` had its assertions refused as `:assertion_not_expected` —
+  the same "preference treated as a requirement" mistake, pointing the other
+  way. No vendor is known to publish that shape, which is precisely why it would
+  have sat undiscovered until one did.
+  """
+  def assertion_permitted?(client) do
+    Enum.any?(permitted_auth_methods(client), &(&1 in @assertion_auth_methods))
+  end
+
+  @doc """
+  Every auth method the client's document allows, preferred one included.
+
+  `token_endpoint_auth_method` is a PREFERENCE, not the only permitted value, so
+  the effective set is the union of it and
+  `token_endpoint_auth_methods_supported`. Deriving both predicates from one
+  place is what stops the two halves drifting apart again.
+
+  A row predating the supported-set column yields just `[preferred]`, so NULL
+  still cannot widen anything — it reproduces the behaviour that row shipped
+  with, and repopulates on the next document refetch.
+  """
+  def permitted_auth_methods(%__MODULE__{} = client) do
+    supported = client.token_endpoint_auth_methods_supported || []
+
+    [client.token_endpoint_auth_method | supported]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  def permitted_auth_methods(_client), do: []
 
   @doc """
   The grant and response types this authorization server actually implements.

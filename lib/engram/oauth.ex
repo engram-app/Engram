@@ -157,7 +157,11 @@ defmodule Engram.OAuth do
 
   defp check_client_credentials(client, secret, opts) do
     cond do
-      Client.assertion_based?(client.token_endpoint_auth_method) ->
+      # The PERMITTED set, not the preferred method. Reading the preference here
+      # refused a valid assertion from any document that merely prefers `none`
+      # while also supporting `private_key_jwt` — the mirror of the bug #1639
+      # fixed, and the reason both directions now derive from one function.
+      Client.assertion_permitted?(client) ->
         check_client_assertion(client, secret, opts)
 
       # An assertion presented to a client that does not authenticate that way.
