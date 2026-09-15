@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.26.3](https://github.com/engram-app/Engram/compare/0.26.2...0.26.3) (2026-09-15)
+
+
+### Bug Fixes
+
+* **indexing:** scope note-count reads to a tenant, not skip the guard ([#1632](https://github.com/engram-app/Engram/issues/1632)) ([1f336bf](https://github.com/engram-app/Engram/commit/1f336bfab1bb11417c2ad3cb82ad587c02d17355))
+* **search:** make ReindexKeyword actually re-normalize a vault ([#1477](https://github.com/engram-app/Engram/issues/1477)) ([#1631](https://github.com/engram-app/Engram/issues/1631)) ([4601be9](https://github.com/engram-app/Engram/commit/4601be94c66ffcfeb4a0d06d0a033c87c9bc62e3))
+* **search:** rebuild notes whose chunks came from an older chunker ([#1620](https://github.com/engram-app/Engram/issues/1620)) ([#1628](https://github.com/engram-app/Engram/issues/1628)) ([d8e0d2c](https://github.com/engram-app/Engram/commit/d8e0d2cf85206202fb1f03c89bfcf50328ba1f7d))
+
 ## [0.26.2](https://github.com/engram-app/Engram/compare/0.26.1...0.26.2) (2026-09-13)
 
 
