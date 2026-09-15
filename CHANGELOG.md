@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.27.0](https://github.com/engram-app/Engram/compare/0.26.3...0.27.0) (2026-09-15)
+
+
+### Features
+
+* **oauth:** accept private_key_jwt on CIMD ([#1637](https://github.com/engram-app/Engram/issues/1637)) ([58b157d](https://github.com/engram-app/Engram/commit/58b157d5ba340847fd9eac8162b4778c3947975b)), closes [#1633](https://github.com/engram-app/Engram/issues/1633)
+
+
+### Bug Fixes
+
+* **oauth:** derive both auth directions from the document's permitted set ([#1640](https://github.com/engram-app/Engram/issues/1640)) ([59dcf51](https://github.com/engram-app/Engram/commit/59dcf511dfa1ca6a0d3375a4d30c025fc3553c44)), closes [#1633](https://github.com/engram-app/Engram/issues/1633)
+* **oauth:** honour a CIMD document's permitted auth methods, not just its preferred one ([#1639](https://github.com/engram-app/Engram/issues/1639)) ([20d0f31](https://github.com/engram-app/Engram/commit/20d0f31d9decaae9601a9b628eda683514d92ba7)), closes [#1633](https://github.com/engram-app/Engram/issues/1633)
+* **oauth:** stop persisting a jwks_uri the document cannot use ([#1644](https://github.com/engram-app/Engram/issues/1644)) ([98f6cb6](https://github.com/engram-app/Engram/commit/98f6cb661c13665b8609aa6e040b6ff10eac4609)), closes [#1633](https://github.com/engram-app/Engram/issues/1633)
+
 ## [0.26.3](https://github.com/engram-app/Engram/compare/0.26.2...0.26.3) (2026-09-15)
 
 
