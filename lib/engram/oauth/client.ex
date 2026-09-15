@@ -198,6 +198,14 @@ defmodule Engram.OAuth.Client do
   preferring `none` while supporting `private_key_jwt` skip both `jwks_uri`
   arms, persist an unvalidated URI, and turn every later exchange into a
   retried-forever 503 instead of a legible refusal at authorize.
+
+  Filtered through `@cimd_auth_methods` FIRST, exactly as `supported_auth_methods/1`
+  filters what gets stored. Without that the agreement is a coincidence of the
+  two lists rather than a property: add a method to `@assertion_auth_methods`
+  and not to `@cimd_auth_methods`, and this would answer `true` for a document
+  whose stored row drops the method, so every assertion it then sent would be
+  refused `:assertion_not_expected`. Filtering makes the claim above true
+  instead of merely currently-accurate.
   """
   def document_permits_assertion?(document) when is_map(document) do
     supported =
@@ -206,10 +214,9 @@ defmodule Engram.OAuth.Client do
         _absent -> []
       end
 
-    Enum.any?(
-      [document["token_endpoint_auth_method"] | supported],
-      &(&1 in @assertion_auth_methods)
-    )
+    [document["token_endpoint_auth_method"] | supported]
+    |> Enum.filter(&(&1 in @cimd_auth_methods))
+    |> Enum.any?(&(&1 in @assertion_auth_methods))
   end
 
   def document_permits_assertion?(_document), do: false
@@ -327,7 +334,19 @@ defmodule Engram.OAuth.Client do
       max_redirect_uris: @max_redirect_uris_cimd,
       auth_methods: @cimd_auth_methods
     )
-    |> put_change(:jwks_uri, document["jwks_uri"])
+    # Only stored when the document can actually authenticate with one. A
+    # `jwks_uri` on a document that permits no assertion method is unusable
+    # decoration, and the policy for unusable optional metadata is already
+    # settled directly above for `logo_uri`: DROP it, never refuse the client
+    # over it, because losing decoration must not cost a vendor its connector.
+    #
+    # Bounding its length instead was the wrong shape. It refused the whole
+    # client over a field that client could not use, and it capped size rather
+    # than junk — `"not-a-url::%%"` was still accepted and stored verbatim.
+    # Not storing it removes the unbounded-string concern entirely and keeps the
+    # validated-on-use invariant: a persisted `jwks_uri` has always been through
+    # `displayable_metadata_uri?/1` and `SsrfGuard.validate_url/1` at authorize.
+    |> put_change(:jwks_uri, usable_jwks_uri(document))
     |> put_change(:token_endpoint_auth_signing_alg, document["token_endpoint_auth_signing_alg"])
     |> put_change(:token_endpoint_auth_methods_supported, supported_auth_methods(document))
     |> put_change(:cimd_url, url)
@@ -349,6 +368,14 @@ defmodule Engram.OAuth.Client do
   # column. Only the latter may not be widened. A document declaring
   # `private_key_jwt` and no supported set therefore keeps requiring an
   # assertion, which is the strictest reading of what it offered.
+  # NULL unless the document permits an assertion method. Paired with the two
+  # `validate_document/2` arms that run for exactly the same predicate, this
+  # makes a stored `jwks_uri` mean "already validated", and clears a stale one
+  # on refresh if a vendor narrows its permitted set.
+  defp usable_jwks_uri(document) do
+    if document_permits_assertion?(document), do: document["jwks_uri"]
+  end
+
   defp supported_auth_methods(document) do
     case document["token_endpoint_auth_methods_supported"] do
       methods when is_list(methods) -> Enum.filter(methods, &(&1 in @cimd_auth_methods))

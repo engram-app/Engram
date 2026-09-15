@@ -372,10 +372,12 @@ defmodule Engram.OAuth.Cimd do
       # Refusing this outright is what made ChatGPT unable to connect at all
       # until 2026-09-15; it declares `private_key_jwt` and never negotiates down
       # even though we advertise `none` first (#1633).
-      # The PERMITTED set, matching how the token endpoint routes. Gating on the
-      # preferred method let a document preferring `none` while supporting
-      # `private_key_jwt` skip this arm entirely, then present assertions we had
-      # never checked a `jwks_uri` for.
+      #
+      # Both `jwks_uri` arms read the PERMITTED set, matching how the token
+      # endpoint routes. Keying on the preferred method let a document
+      # preferring `none` while supporting `private_key_jwt` skip them
+      # entirely, then present assertions against a key location we had never
+      # checked.
       Client.document_permits_assertion?(document) and
           not Client.displayable_metadata_uri?(document["jwks_uri"]) ->
         {:error, :jwks_uri_required}
@@ -399,13 +401,12 @@ defmodule Engram.OAuth.Cimd do
       # a token exchange arrives. `validate_url/1` is the same rule the fetch
       # applies, minus the DNS lookup, so a scheme, port or shape the guard
       # would refuse is caught here — legibly, at authorize — instead of as a
-      # mystery 401 on every later exchange. DNS stays out on purpose: a
-      # resolver blip must not become a permanent verdict on the document.
-      # Same predicate as the arm above, and for the same reason: an unfetchable
-      # URI that skipped this check does not fail loudly later. `SsrfGuard`
-      # refuses it at the transport, `jwks.ex` maps that to `:jwks_unavailable`,
-      # and that reason is TRANSIENT — so the connector retries a permanent
-      # misconfiguration forever instead of being told once, here.
+      # mystery 401 on every later exchange. An unfetchable URI that skipped
+      # this check does not fail loudly later: `SsrfGuard` refuses it at the
+      # transport, `jwks.ex` maps that to `:jwks_unavailable`, and that reason
+      # is TRANSIENT, so the connector retries a permanent misconfiguration
+      # forever. DNS stays out on purpose: a resolver blip must not become a
+      # permanent verdict on the document.
       Client.document_permits_assertion?(document) and
           SsrfGuard.validate_url(document["jwks_uri"]) != :ok ->
         {:error, :jwks_uri_unfetchable}
@@ -416,6 +417,21 @@ defmodule Engram.OAuth.Cimd do
       # downgraded to `none` the client would keep sending a secret that
       # `authenticate_client/3` must then reject for being present at all. Both
       # failures are opaque; refusing the document is legible.
+      #
+      # KNOWN WRONG, tracked in #1634: this reads the PREFERRED method while the
+      # token endpoint routes on the permitted SET. A document preferring
+      # `client_secret_basic` but also supporting `none` and `private_key_jwt`
+      # permits two methods we fully implement, publishes usable keys, and is
+      # still refused terminally here. Same "preference treated as a
+      # requirement" defect as #1633/#1639/#1640, pointing a third way.
+      #
+      # Reordering this above the `jwks_uri` arms was tried on 2026-09-15 and
+      # reverted. It only changed WHICH wrong answer came first, and a vendor
+      # sees neither: `cimd_error/1` collapses every non-transient reason to a
+      # bare `invalid_client`, so the atom reaches Loki and nothing else. The
+      # correct fix tests the permitted set and refuses only when the union
+      # contains nothing usable, which also needs `cimd_changeset/3` to store a
+      # permitted method rather than copying the preferred one.
       document["token_endpoint_auth_method"] not in [nil, "none", "private_key_jwt"] ->
         {:error, :confidential_not_supported}
 
