@@ -236,6 +236,33 @@ defmodule Engram.OAuth.CimdTest do
       refute Client.public_auth_permitted?(client)
     end
 
+    # The shape the routing change newly made reachable. Both `jwks_uri` arms
+    # used to gate on the PREFERRED method, so a document merely SUPPORTING
+    # `private_key_jwt` skipped them — persisting an unchecked URI that then
+    # failed as a retried-forever 503 rather than a legible refusal here.
+    #
+    # Every existing case in the two tests above sets the preferred method to
+    # `private_key_jwt`, which is exactly why this gap survived review once.
+    test "applies the jwks_uri checks when private_key_jwt is merely SUPPORTED" do
+      for {jwks, reason} <- [
+            {nil, :jwks_uri_required},
+            {"not-a-url", :jwks_uri_required},
+            {"https://claude.ai:8443/jwks.json", :jwks_uri_unfetchable}
+          ] do
+        expect(FetcherMock, :fetch, fn @url ->
+          {:ok,
+           document(%{
+             "token_endpoint_auth_method" => "none",
+             "token_endpoint_auth_methods_supported" => ["none", "private_key_jwt"],
+             "jwks_uri" => jwks
+           })}
+        end)
+
+        assert {:error, ^reason} = Cimd.ensure_client(@url),
+               "expected supported-only jwks_uri #{inspect(jwks)} to be refused as #{reason}"
+      end
+    end
+
     # What replaced the same-origin rule. These are shapes `SsrfGuard` refuses
     # at fetch time, so accepting them here would mint a client that 401s on
     # every token exchange forever, with the real reason buried in a fetch the

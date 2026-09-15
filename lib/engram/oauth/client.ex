@@ -186,6 +186,35 @@ defmodule Engram.OAuth.Client do
   def permitted_auth_methods(_client), do: []
 
   @doc """
+  `assertion_permitted?/1` for a RAW DOCUMENT, before any row exists.
+
+  `Engram.OAuth.Cimd.validate_document/2` decides at authorize time whether a
+  `jwks_uri` is required and fetchable. Those checks only make sense for a
+  document that can present an assertion, and that question must be answered the
+  SAME way here as it is at token time — otherwise a document passes validation
+  and then cannot authenticate, which is the drift that produced #1640.
+
+  Concretely: gating those checks on the preferred method alone let a document
+  preferring `none` while supporting `private_key_jwt` skip both `jwks_uri`
+  arms, persist an unvalidated URI, and turn every later exchange into a
+  retried-forever 503 instead of a legible refusal at authorize.
+  """
+  def document_permits_assertion?(document) when is_map(document) do
+    supported =
+      case document["token_endpoint_auth_methods_supported"] do
+        methods when is_list(methods) -> methods
+        _absent -> []
+      end
+
+    Enum.any?(
+      [document["token_endpoint_auth_method"] | supported],
+      &(&1 in @assertion_auth_methods)
+    )
+  end
+
+  def document_permits_assertion?(_document), do: false
+
+  @doc """
   The grant and response types this authorization server actually implements.
 
   Exposed for `Engram.OAuth.Cimd`, which INTERSECTS a fetched document against
