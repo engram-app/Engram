@@ -45,13 +45,24 @@ defmodule Engram.OAuth.Cimd.Jwks do
 
   ## Replay
 
-  Bounded by a short `exp` window rather than a `jti` store. The assertion only
-  authenticates the client on a token request, and the thing it guards — the
-  authorization code — is already single-use and PKCE-bound, so a replayed
-  assertion buys an attacker nothing they cannot already do with the code they
-  would need to steal anyway. A `jti` table would be a new write-per-token-request
-  on the hot path for that. Revisit if assertions are ever accepted for anything
-  but this exchange.
+  Bounded by a short `exp` window rather than a `jti` store, so an assertion is
+  replayable for up to `@max_lifetime_seconds + @clock_skew_seconds`.
+
+  The decision stands, but the reason originally written here did not. It argued
+  that the only thing an assertion guards is the authorization code, which is
+  single-use and PKCE-bound. That is true of the `authorization_code` grant and
+  false of `refresh_token`, which also accepts an assertion and has neither a
+  code nor PKCE. An adversarial review caught it.
+
+  What actually holds: replaying an assertion on the refresh grant requires
+  already holding a valid refresh token, and for a CIMD public client that token
+  is by itself sufficient to mint access tokens. So the replay window grants an
+  attacker nothing they do not already have, and a `jti` table would add a write
+  to every token request to close a gap that is not load-bearing.
+
+  Revisit if an assertion ever becomes sufficient on its own, without a code or
+  a refresh token alongside it. That, not "any grant but this one", is the line
+  that matters.
   """
 
   alias Engram.OAuth.Cimd.JwksCache

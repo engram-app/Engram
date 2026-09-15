@@ -372,7 +372,11 @@ defmodule Engram.OAuth.Cimd do
       # Refusing this outright is what made ChatGPT unable to connect at all
       # until 2026-09-15; it declares `private_key_jwt` and never negotiates down
       # even though we advertise `none` first (#1633).
-      document["token_endpoint_auth_method"] == "private_key_jwt" and
+      # The PERMITTED set, matching how the token endpoint routes. Gating on the
+      # preferred method let a document preferring `none` while supporting
+      # `private_key_jwt` skip this arm entirely, then present assertions we had
+      # never checked a `jwks_uri` for.
+      Client.document_permits_assertion?(document) and
           not Client.displayable_metadata_uri?(document["jwks_uri"]) ->
         {:error, :jwks_uri_required}
 
@@ -397,7 +401,12 @@ defmodule Engram.OAuth.Cimd do
       # would refuse is caught here — legibly, at authorize — instead of as a
       # mystery 401 on every later exchange. DNS stays out on purpose: a
       # resolver blip must not become a permanent verdict on the document.
-      document["token_endpoint_auth_method"] == "private_key_jwt" and
+      # Same predicate as the arm above, and for the same reason: an unfetchable
+      # URI that skipped this check does not fail loudly later. `SsrfGuard`
+      # refuses it at the transport, `jwks.ex` maps that to `:jwks_unavailable`,
+      # and that reason is TRANSIENT — so the connector retries a permanent
+      # misconfiguration forever instead of being told once, here.
+      Client.document_permits_assertion?(document) and
           SsrfGuard.validate_url(document["jwks_uri"]) != :ok ->
         {:error, :jwks_uri_unfetchable}
 
