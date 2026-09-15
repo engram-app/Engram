@@ -196,6 +196,73 @@ defmodule Engram.OAuth.CimdTest do
       end
     end
 
+    # The permitted SET, not just the preferred method. ChatGPT declares
+    # `private_key_jwt` and also lists `none`; without the set on the row,
+    # nothing at token time could know a public exchange was allowed.
+    test "stores the supported auth methods the document advertises" do
+      expect(FetcherMock, :fetch, fn @url ->
+        {:ok,
+         document(%{
+           "token_endpoint_auth_method" => "private_key_jwt",
+           "jwks_uri" => "https://claude.ai/jwks.json",
+           "token_endpoint_auth_methods_supported" => [
+             "none",
+             "private_key_jwt",
+             "client_secret_basic"
+           ]
+         })}
+      end)
+
+      assert {:ok, client} = Cimd.ensure_client(@url)
+
+      # `client_secret_basic` is dropped: the CIMD path refuses it anyway, so
+      # storing it would record a permission that does not exist.
+      assert client.token_endpoint_auth_methods_supported == ["none", "private_key_jwt"]
+      assert Client.public_auth_permitted?(client)
+    end
+
+    # Absent list is `[]`, not NULL, and does NOT grant public auth.
+    test "treats an absent supported list as permitting nothing extra" do
+      expect(FetcherMock, :fetch, fn @url ->
+        {:ok,
+         document(%{
+           "token_endpoint_auth_method" => "private_key_jwt",
+           "jwks_uri" => "https://claude.ai/jwks.json"
+         })}
+      end)
+
+      assert {:ok, client} = Cimd.ensure_client(@url)
+      assert client.token_endpoint_auth_methods_supported == []
+      refute Client.public_auth_permitted?(client)
+    end
+
+    # The shape the routing change newly made reachable. Both `jwks_uri` arms
+    # used to gate on the PREFERRED method, so a document merely SUPPORTING
+    # `private_key_jwt` skipped them — persisting an unchecked URI that then
+    # failed as a retried-forever 503 rather than a legible refusal here.
+    #
+    # Every existing case in the two tests above sets the preferred method to
+    # `private_key_jwt`, which is exactly why this gap survived review once.
+    test "applies the jwks_uri checks when private_key_jwt is merely SUPPORTED" do
+      for {jwks, reason} <- [
+            {nil, :jwks_uri_required},
+            {"not-a-url", :jwks_uri_required},
+            {"https://claude.ai:8443/jwks.json", :jwks_uri_unfetchable}
+          ] do
+        expect(FetcherMock, :fetch, fn @url ->
+          {:ok,
+           document(%{
+             "token_endpoint_auth_method" => "none",
+             "token_endpoint_auth_methods_supported" => ["none", "private_key_jwt"],
+             "jwks_uri" => jwks
+           })}
+        end)
+
+        assert {:error, ^reason} = Cimd.ensure_client(@url),
+               "expected supported-only jwks_uri #{inspect(jwks)} to be refused as #{reason}"
+      end
+    end
+
     # What replaced the same-origin rule. These are shapes `SsrfGuard` refuses
     # at fetch time, so accepting them here would mint a client that 401s on
     # every token exchange forever, with the real reason buried in a fetch the

@@ -44,20 +44,23 @@ defmodule EngramWeb.OAuthTokenAssertionTest do
 
   # Inserted directly with a fresh `cimd_fetched_at`, so `Cimd.ensure_client/1`
   # serves it from the row and the authorize step performs no document fetch.
-  defp cimd_client do
+  defp cimd_client(overrides \\ %{}) do
     Repo.insert!(
-      %Client{
-        cimd_url: @client_url,
-        cimd_fetched_at: DateTime.utc_now(),
-        client_name: "ChatGPT",
-        redirect_uris: [@redirect_uri],
-        grant_types: ["authorization_code", "refresh_token"],
-        response_types: ["code"],
-        token_endpoint_auth_method: "private_key_jwt",
-        token_endpoint_auth_signing_alg: "RS256",
-        jwks_uri: @jwks_uri,
-        kind: "mcp"
-      },
+      struct!(
+        %Client{
+          cimd_url: @client_url,
+          cimd_fetched_at: DateTime.utc_now(),
+          client_name: "ChatGPT",
+          redirect_uris: [@redirect_uri],
+          grant_types: ["authorization_code", "refresh_token"],
+          response_types: ["code"],
+          token_endpoint_auth_method: "private_key_jwt",
+          token_endpoint_auth_signing_alg: "RS256",
+          jwks_uri: @jwks_uri,
+          kind: "mcp"
+        },
+        overrides
+      ),
       skip_tenant_check: true
     )
   end
@@ -258,6 +261,84 @@ defmodule EngramWeb.OAuthTokenAssertionTest do
       assert body["error"] == "invalid_client"
     end
 
+    # The defect a real ChatGPT connector hit on staging 2026-09-15, AFTER the
+    # CIMD half was fixed. Their document declares `private_key_jwt` as its
+    # preferred method and ALSO lists `none` in
+    # `token_endpoint_auth_methods_supported`, then exchanges as a public client
+    # over PKCE. Enforcing the preference as a requirement returned a terminal
+    # `invalid_client`, so the connector died one step later than before.
+    #
+    # Every other test in this file supplies an assertion, which is exactly why
+    # the suite stayed green while the real vendor could not connect.
+    test "exchanges without an assertion when the document permits none", %{conn: conn} do
+      user = insert(:user)
+      cimd_client(%{token_endpoint_auth_methods_supported: ["none", "private_key_jwt"]})
+      {verifier, challenge} = pkce_pair()
+      code = mint_code(user, challenge)
+
+      params = exchange_params(code, verifier, %{"client_id" => @client_url})
+
+      body = conn |> post("/oauth/token", params) |> json_response(200)
+      assert is_binary(body["access_token"])
+      assert is_binary(body["refresh_token"])
+    end
+
+    # What keeps the public fallback from becoming a hole. The fallback is only
+    # sound because BOTH public branches are guarded on `is_nil(assertion)`;
+    # reorder that cond, or drop the guard while tidying, and a client sending a
+    # GARBAGE assertion authenticates as public. Nothing pinned that ordering
+    # until this test — the two tests either side of it both still pass if the
+    # guard is removed.
+    test "refuses a malformed assertion even when the document permits none", %{conn: conn} do
+      user = insert(:user)
+      cimd_client(%{token_endpoint_auth_methods_supported: ["none", "private_key_jwt"]})
+      {verifier, challenge} = pkce_pair()
+      code = mint_code(user, challenge)
+
+      params =
+        exchange_params(code, verifier, %{
+          "client_id" => @client_url,
+          "client_assertion" => "not-a-jwt",
+          "client_assertion_type" => Jwks.assertion_type()
+        })
+
+      assert %{"error" => "invalid_client"} =
+               conn |> post("/oauth/token", params) |> json_response(401)
+    end
+
+    # The mirror direction. A document may PREFER `none` and still support
+    # `private_key_jwt`; an assertion from it was refused as
+    # `:assertion_not_expected` because the routing read the preference.
+    test "verifies an assertion when the document only prefers none", %{
+      conn: conn,
+      private: private,
+      public: public
+    } do
+      expect(FetcherMock, :fetch, fn @jwks_uri -> {:ok, %{"keys" => [public]}} end)
+
+      user = insert(:user)
+
+      cimd_client(%{
+        token_endpoint_auth_method: "none",
+        token_endpoint_auth_methods_supported: ["none", "private_key_jwt"]
+      })
+
+      {verifier, challenge} = pkce_pair()
+      code = mint_code(user, challenge)
+
+      params =
+        exchange_params(code, verifier, %{
+          "client_id" => @client_url,
+          "client_assertion" => assertion(private),
+          "client_assertion_type" => Jwks.assertion_type()
+        })
+
+      assert %{"access_token" => _} = conn |> post("/oauth/token", params) |> json_response(200)
+    end
+
+    # The other side of that relaxation: permission comes from the document, not
+    # the request. A client whose document never offered `none` must still be
+    # refused, or the registered method becomes decorative.
     test "refuses a private_key_jwt client presenting no assertion at all", %{conn: conn} do
       user = insert(:user)
       cimd_client()
