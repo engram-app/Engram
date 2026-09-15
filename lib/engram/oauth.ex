@@ -227,23 +227,12 @@ defmodule Engram.OAuth do
   #     `invalid_client` terminal, so reporting one as the other hands the
   #     connector a permanent failure for a condition that fixes itself.
   defp reject_assertion(client, reason) do
-    Logger.warning(
-      "oauth_client_assertion_rejected",
-      Metadata.with_category(:warning, :lifecycle,
-        cimd_host: cimd_host(client),
-        reason: Metadata.safe_reason(reason)
-      )
-    )
+    log_refusal("oauth_client_assertion_rejected", client, reason)
 
     if Cimd.Jwks.transient?(reason),
       do: {:error, :temporarily_unavailable},
       else: {:error, :invalid_client}
   end
-
-  defp cimd_host(%Client{cimd_url: url}) when is_binary(url),
-    do: URI.parse(url).host || "unknown"
-
-  defp cimd_host(_client), do: "unknown"
 
   @doc """
   Logs a non-assertion client refusal, then returns the terminal error.
@@ -267,24 +256,57 @@ defmodule Engram.OAuth do
     {:error, :invalid_client}
   end
 
-  defp log_client_rejection(subject, reason) do
+  defp log_client_rejection(subject, reason),
+    do: log_refusal("oauth_client_rejected", subject, reason)
+
+  @doc """
+  THE emitter for every refusal on the connect path. One metadata shape, so the
+  four message names cannot drift apart.
+
+  They already had. Five emitters across four modules each rebuilt this line by
+  hand, and two had diverged: `Cimd.log/3` omitted the `|| "unknown"` host
+  fallback, so it could emit `cimd_host: nil` where its siblings emit
+  `"unknown"` — two shapes for the one field `mcp-connector-refused` facets on —
+  and the token controller's copy carried no `cimd_host` key at all, so a
+  host-faceted alert silently dropped every malformed-assertion refusal. The
+  message name stays the caller's choice (the alert filter enumerates them, and
+  "malformed" and "rejected" are different diagnoses); the SHAPE does not.
+
+  `subject` is whatever identifies the vendor — a `%Client{}`, a wire
+  `client_id`, a document or `jwks_uri` URL, or `nil`. Only its host is logged:
+  a CIMD `client_id` is a URL supplied by an unauthenticated caller, so logging
+  it whole is an unbounded value in a log field, and a DCR id is an opaque UUID
+  with no triage value.
+  """
+  @spec log_refusal(String.t(), Client.t() | String.t() | nil, term()) :: :ok
+  def log_refusal(event, subject, reason) do
     Logger.warning(
-      "oauth_client_rejected",
+      event,
       Metadata.with_category(:warning, :lifecycle,
         cimd_host: refusal_host(subject),
-        reason: Metadata.safe_reason(reason)
+        reason: refusal_reason(reason)
       )
     )
   end
 
-  defp refusal_host(%Client{} = client), do: cimd_host(client)
+  # Field NAMES, never the changeset messages. Several of those interpolate the
+  # offending value (`"missing scheme: #{uri}"`), which is attacker-supplied on
+  # an unauthenticated endpoint — the same reason the host, not the URL, is
+  # logged. The names are ours, and they are the whole diagnosis: on 2026-08-04
+  # a bare `:invalid_document` left us unable to say which field of a vendor's
+  # document had killed every Claude connection. `Metadata.safe_reason/1`
+  # renders this tuple as a bare ":invalid_document", which is why the clause
+  # has to come first.
+  defp refusal_reason({:invalid_document, errors}),
+    do: "invalid_document fields=#{inspect(errors |> Keyword.keys() |> Enum.uniq())}"
 
-  # The host, never the id. A CIMD `client_id` is a URL supplied by an
-  # unauthenticated caller, so logging it whole is the same unbounded-value
-  # mistake `Engram.OAuth.Cimd.log/3` avoids. A DCR id is an opaque UUID with no
-  # triage value at all.
+  defp refusal_reason(reason), do: Metadata.safe_reason(reason)
+
+  defp refusal_host(%Client{cimd_url: url}) when is_binary(url), do: Cimd.host_of(url)
+  defp refusal_host(%Client{}), do: "unknown"
+
   defp refusal_host(id) when is_binary(id) do
-    if Cimd.url_shaped?(id), do: URI.parse(id).host || "unknown", else: "unknown"
+    if Cimd.url_shaped?(id), do: Cimd.host_of(id), else: "unknown"
   end
 
   defp refusal_host(_subject), do: "unknown"

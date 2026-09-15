@@ -7,13 +7,10 @@ defmodule EngramWeb.OAuthTokenController do
   """
   use EngramWeb, :controller
 
-  alias Engram.Logger.Metadata
   alias Engram.OAuth
   alias Engram.OAuth.Cimd.Jwks
   alias EngramWeb.OAuthMetadata
   alias EngramWeb.RequestMeta
-
-  require Logger
 
   def exchange(conn, %{"grant_type" => "authorization_code"} = params) do
     with {:ok, client_id, secret, assertion} <- client_credentials(conn, params),
@@ -123,13 +120,13 @@ defmodule EngramWeb.OAuthTokenController do
   defp assertion_credentials(conn, params, body_id, body_secret, assertion) do
     cond do
       blank_to_nil(params["client_assertion_type"]) != Jwks.assertion_type() ->
-        reject_malformed(:client_assertion_type_unrecognised)
+        reject_malformed(:client_assertion_type_unrecognised, body_id)
 
       not is_nil(body_secret) ->
-        reject_malformed(:secret_presented_with_assertion)
+        reject_malformed(:secret_presented_with_assertion, body_id)
 
       Plug.BasicAuth.parse_basic_auth(conn) != :error ->
-        reject_malformed(:basic_auth_presented_with_assertion)
+        reject_malformed(:basic_auth_presented_with_assertion, body_id)
 
       true ->
         resolve_assertion_client(body_id, assertion)
@@ -138,17 +135,16 @@ defmodule EngramWeb.OAuthTokenController do
 
   defp resolve_assertion_client(body_id, assertion) do
     case body_id || assertion_issuer(assertion) do
-      nil -> reject_malformed(:assertion_issuer_unreadable)
+      nil -> reject_malformed(:assertion_issuer_unreadable, body_id)
       client_id -> {:ok, client_id, nil, assertion}
     end
   end
 
-  defp reject_malformed(reason) do
-    Logger.warning(
-      "oauth_client_assertion_malformed",
-      Metadata.with_category(:warning, :lifecycle, reason: Metadata.safe_reason(reason))
-    )
-
+  # Through `OAuth.log_refusal/3` rather than a hand-rolled line, which is what
+  # this was: the one refusal emitter on this path with no `cimd_host` key, so a
+  # host-faceted alert dropped every malformed-assertion refusal silently.
+  defp reject_malformed(reason, client_id) do
+    OAuth.log_refusal("oauth_client_assertion_malformed", client_id, reason)
     {:error, :invalid_client}
   end
 

@@ -15,9 +15,11 @@ defmodule EngramWeb.OAuthRefusalTelemetryTest do
   """
   use EngramWeb.ConnCase, async: true
 
+  import Engram.OAuthHelpers, only: [code_from_redirect: 1]
   import ExUnit.CaptureLog
 
   alias Engram.OAuth
+  alias Engram.Test.LogCapture
 
   @message "oauth_client_rejected"
 
@@ -58,8 +60,7 @@ defmodule EngramWeb.OAuthRefusalTelemetryTest do
 
     {:ok, redirect_url} = OAuth.mint_authorization_code(insert(:user), validated, :all, nil)
 
-    code =
-      redirect_url |> URI.parse() |> Map.get(:query) |> URI.decode_query() |> Map.get("code")
+    code = code_from_redirect(redirect_url)
 
     {code, verifier}
   end
@@ -184,6 +185,39 @@ defmodule EngramWeb.OAuthRefusalTelemetryTest do
 
       assert log =~ @message
       assert log =~ "secret_presented_by_public_client"
+    end
+
+    # This branch carried NO `cimd_host` key, so a host-faceted alert or
+    # dashboard dropped every malformed-assertion refusal without a trace. It
+    # emits through `OAuth.log_refusal/3` now, like every sibling.
+    #
+    # Asserted through LogCapture rather than capture_log: `cimd_host` is not in
+    # the formatter's metadata allowlist (config/config.exs), so formatter output
+    # cannot see it. The structured event is what ships to Loki.
+    test "a malformed assertion names the vendor host", %{conn: conn} do
+      {_result, events} =
+        LogCapture.with_events(fn ->
+          conn =
+            exchange(conn, %{
+              "grant_type" => "authorization_code",
+              "code" => "engram_ac_nope",
+              "redirect_uri" => "https://chatgpt.com/connector_platform_oauth_redirect",
+              "client_id" => "https://chatgpt.com/oauth/client.json",
+              "client_assertion" => "not.a.jwt",
+              "client_assertion_type" =>
+                "urn:ietf:params:oauth:client-assertion-type:saml2-bearer",
+              "code_verifier" => "whatever-verifier-value-here"
+            })
+
+          assert %{"error" => "invalid_client"} = json_response(conn, 401)
+        end)
+
+      event =
+        Enum.find(events, &match?({:string, "oauth_client_assertion_malformed"}, &1.msg))
+
+      assert event, "expected a malformed-assertion refusal event, got: #{inspect(events)}"
+      assert event.meta[:cimd_host] == "chatgpt.com"
+      assert event.meta[:reason] == ":client_assertion_type_unrecognised"
     end
   end
 

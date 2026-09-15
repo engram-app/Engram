@@ -186,6 +186,12 @@ config :logger, :default_formatter,
     :body_size,
     :cap,
     :category,
+    # Emitted by every OAuth/MCP refusal via Engram.OAuth.log_refusal/3. Credo's
+    # MissedMetadataKeyInLoggerConfig never flagged it because the key is built
+    # inside Metadata.with_category/3, where the static check cannot see it — so
+    # the field the mcp-connector-refused alert facets on was invisible in dev
+    # and test output. Prod was unaffected (all_except, see config/prod.exs).
+    :cimd_host,
     :clerk_user_id,
     :client_version,
     :column,
