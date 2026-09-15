@@ -59,12 +59,17 @@ defmodule EngramWeb.OAuthAuthorizeController do
             json(conn, %{redirect_uri: redirect_url})
 
           {:redirect_error, redirect_uri, error, state} ->
-            json(conn, %{redirect_uri: build_error_url(redirect_uri, error, state)})
+            json(conn, %{
+              redirect_uri: OAuth.build_redirect(redirect_uri, %{error: error, state: state})
+            })
 
           {:error, _changeset} ->
             json(conn, %{
               redirect_uri:
-                build_error_url(validated.redirect_uri, "server_error", validated.state)
+                OAuth.build_redirect(validated.redirect_uri, %{
+                  error: "server_error",
+                  state: validated.state
+                })
             })
         end
 
@@ -79,7 +84,9 @@ defmodule EngramWeb.OAuthAuthorizeController do
         |> json(%{error: code})
 
       {:redirect_error, redirect_uri, error, state} ->
-        json(conn, %{redirect_uri: build_error_url(redirect_uri, error, state)})
+        json(conn, %{
+          redirect_uri: OAuth.build_redirect(redirect_uri, %{error: error, state: state})
+        })
     end
   end
 
@@ -128,13 +135,7 @@ defmodule EngramWeb.OAuthAuthorizeController do
   end
 
   defp redirect_with_error(conn, redirect_uri, error, state) do
-    location = build_error_url(redirect_uri, error, state)
+    location = OAuth.build_redirect(redirect_uri, %{error: error, state: state})
     conn |> put_status(302) |> redirect(external: location)
-  end
-
-  defp build_error_url(redirect_uri, error, state) do
-    params = %{error: error, state: state} |> Enum.reject(fn {_, v} -> is_nil(v) or v == "" end)
-    sep = if String.contains?(redirect_uri, "?"), do: "&", else: "?"
-    redirect_uri <> sep <> URI.encode_query(params)
   end
 end

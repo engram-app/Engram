@@ -22,17 +22,11 @@ defmodule EngramWeb.OAuthTokenController do
       # against this param. Reading the body directly would fail every
       # Basic-authenticated exchange that omits the redundant body field.
       case OAuth.exchange_authorization_code(Map.put(params, "client_id", client_id), ip: ip) do
-        {:ok, response} ->
-          json(conn, response)
-
-        {:error, _reason} ->
-          conn
-          |> put_status(:bad_request)
-          |> json(%{error: "invalid_grant"})
+        {:ok, response} -> json(conn, response)
+        {:error, _reason} -> invalid_grant(conn)
       end
     else
-      {:error, :invalid_client} -> invalid_client(conn)
-      {:error, :temporarily_unavailable} -> temporarily_unavailable(conn)
+      {:error, reason} -> auth_error(conn, reason)
     end
   end
 
@@ -47,8 +41,7 @@ defmodule EngramWeb.OAuthTokenController do
           invalid_request(conn)
       end
     else
-      {:error, :invalid_client} -> invalid_client(conn)
-      {:error, :temporarily_unavailable} -> temporarily_unavailable(conn)
+      {:error, reason} -> auth_error(conn, reason)
     end
   end
 
@@ -64,13 +57,8 @@ defmodule EngramWeb.OAuthTokenController do
     ip = RequestMeta.format_ip(conn.remote_ip)
 
     case OAuth.rotate_refresh_token(raw_token, client_id, ip: ip) do
-      {:ok, response} ->
-        json(conn, response)
-
-      {:error, _reason} ->
-        conn
-        |> put_status(:bad_request)
-        |> json(%{error: "invalid_grant"})
+      {:ok, response} -> json(conn, response)
+      {:error, _reason} -> invalid_grant(conn)
     end
   end
 
@@ -215,4 +203,20 @@ defmodule EngramWeb.OAuthTokenController do
     |> put_status(:bad_request)
     |> json(%{error: "invalid_request"})
   end
+
+  # RFC 6749 §5.2: a bad grant is 400, and says nothing about WHICH part of the
+  # grant was bad. Both grant types fail this way, and both used to spell it out
+  # inline in a module that already named its other three error shapes.
+  defp invalid_grant(conn) do
+    conn
+    |> put_status(:bad_request)
+    |> json(%{error: "invalid_grant"})
+  end
+
+  # Both `exchange/2` clauses authenticate the client identically, so they fail
+  # identically. Two clauses rather than a catch-all: a reason neither
+  # `authenticate_client/3` nor `client_credentials/2` can return must crash
+  # loudly instead of being reported as one of these two.
+  defp auth_error(conn, :invalid_client), do: invalid_client(conn)
+  defp auth_error(conn, :temporarily_unavailable), do: temporarily_unavailable(conn)
 end
