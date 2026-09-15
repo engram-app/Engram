@@ -46,7 +46,11 @@ defmodule Engram.Http.SsrfGuard do
   @max_url_bytes 2048
 
   @type target :: %{url: String.t(), host: String.t(), ip: :inet.ip_address()}
-  @type reason ::
+  # Split by what it takes to decide them: the shape rules need only the URL,
+  # the resolution rules need a lookup. `validate_url/1` can only ever return
+  # the first set, so promising it might return `:dns_failure` is a lie —
+  # dialyzer reports it as `contract_supertype`, and it is right.
+  @type shape_reason ::
           :invalid_url
           | :url_too_long
           | :not_https
@@ -54,8 +58,8 @@ defmodule Engram.Http.SsrfGuard do
           | :userinfo_present
           | :fragment_present
           | :unsupported_port
-          | :dns_failure
-          | :private_address
+
+  @type reason :: shape_reason() | :dns_failure | :private_address
 
   # Reserved IPv4 ranges (IANA special-purpose registry). 240.0.0.0/4 covers
   # 255.255.255.255, so broadcast needs no separate entry.
@@ -136,6 +140,30 @@ defmodule Engram.Http.SsrfGuard do
   end
 
   def resolve(_), do: {:error, :invalid_url}
+
+  @doc """
+  Applies every rule `resolve/1` does **except** DNS resolution.
+
+  For a caller holding an attacker-supplied URL it will not fetch until later:
+  it can refuse the shapes that could never be fetched at the point the URL is
+  declared, rather than discovering them on every subsequent fetch. `Cimd` uses
+  this on a document's `jwks_uri`, which is named at authorize but not read
+  until a token exchange.
+
+  DNS is deliberately excluded. A name that fails to resolve right now may be
+  fine minutes later, so folding resolution in here would let a transient
+  resolver failure be recorded as a permanent verdict on a vendor's document.
+  Address filtering still happens at fetch time, where `resolve/1` runs.
+  """
+  @spec validate_url(term()) :: :ok | {:error, shape_reason()}
+  def validate_url(url) when is_binary(url) do
+    with :ok <- check_length(url),
+         {:ok, _uri} <- parse(url) do
+      :ok
+    end
+  end
+
+  def validate_url(_), do: {:error, :invalid_url}
 
   defp check_length(url) when byte_size(url) > @max_url_bytes, do: {:error, :url_too_long}
   defp check_length(_), do: :ok

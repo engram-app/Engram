@@ -174,24 +174,48 @@ defmodule Engram.OAuth.CimdTest do
       end
     end
 
-    # The document's host binding covers the DOCUMENT. Letting it name keys
-    # anywhere converts that binding into an unbounded delegation: taking over
-    # the delegate host would then impersonate the client without ever touching
-    # the vendor. Refused at authorize, where it is legible, rather than as a
-    # mystery 401 on every later token exchange.
-    test "rejects a jwks_uri on a foreign origin" do
+    # Serving keys from a CDN or a dedicated key host is ordinary, and the CIMD
+    # draft nowhere requires them to share the document's origin. Naming a
+    # foreign `jwks_uri` already requires serving the document, so an attacker
+    # able to set it has taken the vendor's host and needs none of this.
+    test "accepts a jwks_uri on a different host from the document" do
       for foreign <- [
-            "https://evil.example/jwks.json",
-            "https://claude.ai.evil.example/jwks.json",
-            "https://claude.ai:8443/jwks.json"
+            "https://cdn.claude.ai/jwks.json",
+            "https://keys.example/jwks.json"
           ] do
         expect(FetcherMock, :fetch, fn @url ->
           {:ok,
            document(%{"token_endpoint_auth_method" => "private_key_jwt", "jwks_uri" => foreign})}
         end)
 
-        assert {:error, :jwks_uri_foreign_origin} = Cimd.ensure_client(@url),
-               "expected jwks_uri #{foreign} to be refused"
+        assert {:ok, client} = Cimd.ensure_client(@url),
+               "expected jwks_uri #{foreign} to be accepted"
+
+        assert client.jwks_uri == foreign
+        Repo.delete!(client, skip_tenant_check: true)
+      end
+    end
+
+    # What replaced the same-origin rule. These are shapes `SsrfGuard` refuses
+    # at fetch time, so accepting them here would mint a client that 401s on
+    # every token exchange forever, with the real reason buried in a fetch the
+    # vendor cannot see.
+    test "rejects a jwks_uri the SSRF guard could never fetch" do
+      for unfetchable <- [
+            "https://claude.ai:8443/jwks.json",
+            "https://user:pw@claude.ai/jwks.json",
+            "https://claude.ai/jwks.json#frag"
+          ] do
+        expect(FetcherMock, :fetch, fn @url ->
+          {:ok,
+           document(%{
+             "token_endpoint_auth_method" => "private_key_jwt",
+             "jwks_uri" => unfetchable
+           })}
+        end)
+
+        assert {:error, :jwks_uri_unfetchable} = Cimd.ensure_client(@url),
+               "expected jwks_uri #{unfetchable} to be refused"
       end
     end
 
