@@ -20,11 +20,22 @@ defmodule EngramWeb.McpController do
   #
   # `2025-03-26` stays supported so a client pinned to it keeps working. This
   # list is the negotiation surface — adding a revision means meeting it.
-  @supported_protocol_versions ["2025-06-18", "2025-03-26"]
+  @supported_protocol_versions ["2025-06-18", "2025-03-26", "2024-11-05"]
 
-  # The floor, answered when a client names no version at all. Conservative on
-  # purpose: with nothing to honour, do not push a legacy client forward.
-  @default_protocol_version List.last(@supported_protocol_versions)
+  # `2024-11-05` is on the list for CONTINUITY, not ambition. SDKs released
+  # before ~June 2025 ship `SUPPORTED_PROTOCOL_VERSIONS = ["2025-03-26",
+  # "2024-11-05"]` and ABORT with "Server's protocol version is not supported"
+  # on anything else. Omitting it meant such a client asked for `2024-11-05`,
+  # got `2025-06-18`, and stopped connecting — a client that worked yesterday
+  # breaking on an upgrade it never requested. We meet it trivially: it is
+  # strictly older than what we already serve.
+  #
+  # Answered when a client names no version at all. Pinned to `2025-03-26`
+  # rather than the list's last entry, so the floor does not drift downward
+  # when an older revision is added for compatibility — this is the value the
+  # server answered before negotiation existed, and a versionless client should
+  # see no change.
+  @default_protocol_version "2025-03-26"
 
   # Handshake fields are free text from the far side of the connection, so they
   # are length-bounded before they reach the log — an unbounded `clientInfo` is
@@ -61,9 +72,9 @@ defmodule EngramWeb.McpController do
         conn
         |> put_status(400)
         |> send_jsonrpc_error(
-          params["id"],
+          jsonrpc_id(params["id"]),
           -32_600,
-          "Unsupported MCP protocol version: #{tool_name_label(version)}. " <>
+          "Unsupported MCP protocol version: #{safe_header_label(version)}. " <>
             "Supported: #{Enum.join(@supported_protocol_versions, ", ")}."
         )
 
@@ -176,6 +187,27 @@ defmodule EngramWeb.McpController do
     )
   end
 
+  # JSON-RPC 2.0 allows an id of string, number or null, and nothing else. The
+  # endpoint parses `:multipart` with `pass: ["*/*"]`, so a form part named `id`
+  # WITH A FILENAME arrives as a `%Plug.Upload{}` — a map, so no container guard
+  # catches it, and it has no `Jason.Encoder`, so echoing it raises
+  # `Protocol.UndefinedError` and turns this 400 into a 500. A 500 here is not
+  # cosmetic: it fires Sentry and feeds `HTTPCode_Target_5XX_Count`, the one
+  # status class that actually pages.
+  defp jsonrpc_id(id) when is_binary(id) or is_number(id), do: id
+  defp jsonrpc_id(_id), do: nil
+
+  # A raw header value, unlike a JSON-decoded one, is arbitrary bytes: it need
+  # not be valid UTF-8 and has no length bound short of the server's header
+  # limit. Echoing it unchecked let invalid UTF-8 raise `Jason.EncodeError`
+  # while rendering the 400 — turning the intended refusal into a 500 — and let
+  # a 4 KB header come back verbatim in the error body.
+  # No non-binary clause: `get_req_header/2` only ever yields binaries, and
+  # dialyzer flags the dead branch.
+  defp safe_header_label(value) do
+    if String.valid?(value), do: bounded(value), else: "<invalid>"
+  end
+
   defp bounded(nil), do: "unknown"
 
   # Byte guard FIRST. `String.slice/3` counts graphemes, and a grapheme cluster
@@ -202,6 +234,17 @@ defmodule EngramWeb.McpController do
   # the JSON types are the same closed set.
   defp bounded(value), do: tool_name_label(value)
 
+  # `params` is NOT necessarily a plain map: JSON-RPC 2.0 allows array-form
+  # params (and `[]` is truthy, so `params["params"] || %{}` passes it through),
+  # and the endpoint parses multipart with `pass: ["*/*"]`, so a field named
+  # `params` lands a `%Plug.Upload{}`. `Access` raises on both. Indexing it
+  # directly is the crash `handshake_metadata/1` already guards against; this is
+  # the one other reader, and it must use the same guard.
+  defp requested_protocol_version(params) when is_non_struct_map(params),
+    do: params["protocolVersion"]
+
+  defp requested_protocol_version(_params), do: nil
+
   # -- Method dispatch --
 
   defp dispatch(_conn, "initialize", params) do
@@ -211,7 +254,7 @@ defmodule EngramWeb.McpController do
 
     {:ok,
      %{
-       "protocolVersion" => negotiate_protocol_version(params["protocolVersion"]),
+       "protocolVersion" => requested_protocol_version(params) |> negotiate_protocol_version(),
        "serverInfo" => @server_info,
        "capabilities" => @capabilities
      }}

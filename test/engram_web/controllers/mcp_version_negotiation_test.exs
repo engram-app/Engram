@@ -58,12 +58,47 @@ defmodule EngramWeb.McpVersionNegotiationTest do
       assert initialize(conn, %{"protocolVersion" => "gibberish"}) == newest
     end
 
-    test "a client that names no version gets the oldest we support", %{conn: conn} do
-      # Absent a request there is nothing to honour, and the conservative
-      # answer is the floor — it cannot push a legacy client forward.
-      oldest = List.last(McpController.supported_protocol_versions())
+    test "a client that names no version gets 2025-03-26, unchanged from before", %{conn: conn} do
+      # Pinned, not derived from the list: adding an OLDER revision for
+      # compatibility must not drag the versionless answer down with it.
+      assert initialize(conn, %{}) == "2025-03-26"
+    end
 
-      assert initialize(conn, %{}) == oldest
+    test "2024-11-05 is still negotiable, so pre-June-2025 SDKs keep connecting" do
+      # Those SDKs ship SUPPORTED_PROTOCOL_VERSIONS = ["2025-03-26",
+      # "2024-11-05"] and ABORT on anything else. Dropping it from the surface
+      # meant they asked for 2024-11-05, were answered 2025-06-18, and stopped
+      # connecting — broken by an upgrade they never requested.
+      assert "2024-11-05" in McpController.supported_protocol_versions()
+    end
+
+    test "a legacy client is echoed its own version, not upgraded", %{conn: conn} do
+      assert initialize(conn, %{"protocolVersion" => "2024-11-05"}) == "2024-11-05"
+    end
+
+    test "array-form params do not crash the handshake", %{conn: conn} do
+      # JSON-RPC 2.0 allows them, and `[]` is truthy so it reaches dispatch
+      # intact. Access raises on a non-keyword list.
+      body =
+        conn
+        |> post("/api/mcp", %{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "initialize",
+          "params" => []
+        })
+        |> json_response(200)
+
+      assert body["result"]["protocolVersion"] == "2025-03-26"
+    end
+
+    test "a struct in place of params does not crash the handshake" do
+      # The endpoint parses multipart with `pass: ["*/*"]`, so a file field
+      # named `params` lands a %Plug.Upload{} — which matches %{} but has no
+      # Access implementation.
+      upload = %Plug.Upload{path: "/tmp/x", filename: "x", content_type: "text/plain"}
+
+      assert McpController.handshake_metadata(upload)[:mcp_protocol_served] == "2025-03-26"
     end
 
     test "a non-string version does not crash the handshake", %{conn: conn} do
@@ -113,6 +148,58 @@ defmodule EngramWeb.McpVersionNegotiationTest do
       conn = post(conn, "/api/mcp", %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"})
 
       assert json_response(conn, 200)["result"]["tools"]
+    end
+
+    test "an invalid-UTF-8 header value still yields 400, not a 500", %{conn: conn} do
+      # Raw header bytes are not JSON-decoded values: echoing them into the
+      # error body raised Jason.EncodeError while rendering the refusal.
+      conn =
+        conn
+        |> put_req_header("mcp-protocol-version", <<0xFF, 0xFE, 0x41>>)
+        |> post("/api/mcp", %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"})
+
+      assert json_response(conn, 400)["error"]["message"] =~ "protocol version"
+    end
+
+    test "an oversized header value is not echoed back verbatim", %{conn: conn} do
+      conn =
+        conn
+        |> put_req_header("mcp-protocol-version", String.duplicate("v", 4_000))
+        |> post("/api/mcp", %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"})
+
+      body = json_response(conn, 400)
+
+      assert byte_size(body["error"]["message"]) < 500
+    end
+
+    test "a non-encodable id does not turn the 400 into a 500", %{conn: conn} do
+      # The endpoint parses multipart with `pass: ["*/*"]`, so a form part named
+      # `id` WITH a filename arrives as a %Plug.Upload{}. It is a map, so no
+      # container guard catches it, and it has no Jason.Encoder — echoing it
+      # into the error body raised Protocol.UndefinedError. A 500 here pages:
+      # it feeds HTTPCode_Target_5XX_Count and fires Sentry.
+      upload = %Plug.Upload{path: "/tmp/x", filename: "x", content_type: "text/plain"}
+
+      conn =
+        conn
+        |> put_req_header("mcp-protocol-version", "1999-01-01")
+        |> post("/api/mcp", %{"jsonrpc" => "2.0", "id" => upload, "method" => "tools/list"})
+
+      body = json_response(conn, 400)
+
+      assert body["id"] == nil
+      assert body["error"]["message"] =~ "protocol version"
+    end
+
+    test "a legal id is still echoed", %{conn: conn} do
+      for id <- [7, "abc"] do
+        conn =
+          conn
+          |> put_req_header("mcp-protocol-version", "1999-01-01")
+          |> post("/api/mcp", %{"jsonrpc" => "2.0", "id" => id, "method" => "tools/list"})
+
+        assert json_response(conn, 400)["id"] == id
+      end
     end
 
     test "an unsupported header value is refused rather than ignored", %{conn: conn} do

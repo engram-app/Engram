@@ -15,12 +15,14 @@ defmodule EngramWeb.McpStructuredOutputTest do
   """
   use EngramWeb.ConnCase, async: true
 
+  alias Engram.MCP.Handlers
   alias Engram.MCP.Tools
+  alias Engram.Vaults
 
   setup %{conn: conn} do
     user = insert(:user)
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-    {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test Vault", Ecto.UUID.generate())
+    {:ok, vault, _} = Vaults.register_vault(user, "Test Vault", Ecto.UUID.generate())
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
     grant_api_write!(user)
 
@@ -100,7 +102,7 @@ defmodule EngramWeb.McpStructuredOutputTest do
     # McpError when outputSchema is declared and structuredContent is absent, so
     # this is a hard client failure on the recovery path, not a cosmetic gap.
     test "list_vaults returns structuredContent even with no accessible vaults", %{user: user} do
-      assert {:ok, text, structured} = Engram.MCP.Handlers.handle("list_vaults", user, [], %{})
+      assert {:ok, text, structured} = Handlers.handle("list_vaults", user, [], %{})
 
       assert structured == %{"vaults" => []}
       assert text =~ "No vaults"
@@ -108,10 +110,45 @@ defmodule EngramWeb.McpStructuredOutputTest do
 
     test "list_vaults returns structuredContent with vaults present", %{user: user, vault: vault} do
       assert {:ok, _text, structured} =
-               Engram.MCP.Handlers.handle("list_vaults", user, [vault], %{})
+               Handlers.handle("list_vaults", user, [vault], %{})
 
       assert [%{"id" => id}] = structured["vaults"]
       assert id == to_string(vault.id)
+    end
+  end
+
+  describe "emitted handles" do
+    # The payload advertises `id` and `slug`. Only `id` is claimed as a vault_id
+    # ref, and this is why: resolution puts exact display name before slug
+    # (#1665), so a vault whose slug is ALSO another vault's literal name loses.
+    # A code-mode client feeding a listed handle straight into write_note must
+    # land on the vault it listed.
+    test "every emitted id round-trips to the vault it came from", %{user: user} do
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
+      {:ok, a, _} = Vaults.register_vault(user, "Test Vault", Ecto.UUID.generate())
+      {:ok, b, _} = Vaults.register_vault(user, "test-vault", Ecto.UUID.generate())
+
+      {:ok, _text, %{"vaults" => payload}} =
+        Handlers.handle("list_vaults", user, [a, b], %{})
+
+      for v <- payload do
+        assert {:ok, got} = Vaults.get_vault_by_ref(user, v["id"])
+
+        assert to_string(got.id) == v["id"],
+               ~s(id "#{v["id"]}" resolved to #{got.id})
+      end
+    end
+
+    test "slug is not advertised as a vault_id reference", %{conn: conn} do
+      {:ok, tool} = Tools.get("list_vaults")
+      slug_desc = tool.outputSchema["properties"]["vaults"]["items"]["properties"]["slug"]
+
+      refute slug_desc["description"] =~ "vault_id",
+             "slug is described as a vault_id ref but does not reliably round-trip"
+
+      assert result(conn, "list_vaults")["structuredContent"]["vaults"]
+             |> hd()
+             |> Map.has_key?("slug")
     end
   end
 

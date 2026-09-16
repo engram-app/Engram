@@ -128,10 +128,15 @@ defmodule Engram.MCP.Tools do
                 # this schema would turn a degraded-but-readable listing into a
                 # hard failure — on list_vaults, which is the recovery path.
                 "name" => %{"type" => ["string", "null"], "description" => "Display name"},
-                "slug" => %{
-                  "type" => "string",
-                  "description" => "URL-safe handle; also accepted wherever vault_id is"
-                },
+                # Display only — deliberately NOT advertised as a vault_id ref.
+                # Resolution puts exact display name before slug (#1665), so a
+                # vault whose slug is ALSO another vault's literal name loses:
+                # emit `test-vault` for vault A, pass it back, and it resolves
+                # to the vault literally NAMED "test-vault". `id` is in this
+                # same payload and always round-trips; pointing a code-mode
+                # client at the one handle that does not would be a
+                # wrong-target write.
+                "slug" => %{"type" => "string", "description" => "URL-safe handle"},
                 "is_default" => %{"type" => "boolean"},
                 "description" => %{"type" => ["string", "null"]}
               },
