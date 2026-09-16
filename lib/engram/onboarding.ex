@@ -13,12 +13,15 @@ defmodule Engram.Onboarding do
   alias Engram.Accounts
   alias Engram.Legal
   alias Engram.Legal.VersionCache
+  alias Engram.Logger.Metadata
   alias Engram.Onboarding.Action
   alias Engram.Onboarding.Agreement
   alias Engram.Onboarding.GateCache
   alias Engram.Onboarding.TermsCache
   alias Engram.Repo
   alias Engram.Vaults
+
+  require Logger
 
   @terms_document "terms_of_service"
   @privacy_document "privacy_policy"
@@ -296,6 +299,32 @@ defmodule Engram.Onboarding do
         :ok
 
       true ->
+        # Emitted HERE rather than in `RequireOnboarding`, because both
+        # transports funnel through this function — HTTP via the plug,
+        # sockets via `ChannelGate` — so one line covers both.
+        #
+        # Category `:lifecycle`, NOT `:auth`. The `auth-failure-burst` alert
+        # filters `metadata_category="auth"` at warning severity to catch
+        # credential stuffing; an onboarding refusal is not a credential
+        # failure, and routing it there would false-page a security rule.
+        # `:warning` also guarantees the line reaches Loki
+        # (`Category.loki_ship?/2` is true for warning and above) without
+        # tripping `error-rate`, which matches error severity and up.
+        #
+        # One line per refused request: failing verdicts are never cached
+        # (`GateCache` holds passes only), which is what makes a burst
+        # countable. A user stuck in a retry loop is exactly the shape this
+        # exists to surface — #1666 ran for five hours with no signal at all.
+        Logger.warning(
+          "onboarding refused",
+          Metadata.with_category(:warning, :lifecycle,
+            reason: "onboarding_required",
+            missing: Enum.join(missing, ","),
+            next_step: to_string(next_step),
+            user_id: user.id
+          )
+        )
+
         {:error, missing, next_step}
     end
   end

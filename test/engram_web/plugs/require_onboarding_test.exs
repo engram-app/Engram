@@ -239,6 +239,36 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
     end
   end
 
+  # The refusal was invisible to alerting: the only trace in Loki was a
+  # generic `POST 403` whose route is null and whose path is redacted,
+  # indistinguishable from any other 403. #1666 ran for five hours and
+  # nothing fired.
+  test "a refusal emits a warning that alerting can key on", %{conn: conn} do
+    user = insert(:user, onboarding_profile: %{})
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        conn |> assign(:current_user, user) |> RequireOnboarding.call([])
+      end)
+
+    assert log =~ "onboarding refused"
+    assert log =~ "[warning]"
+  end
+
+  test "a passing request logs no refusal", %{conn: conn} do
+    user = insert(:user, onboarding_profile: %{})
+    {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+    insert(:subscription, user: user, status: "active")
+    {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        conn |> assign(:current_user, user) |> RequireOnboarding.call([])
+      end)
+
+    refute log =~ "onboarding refused"
+  end
+
   test "403 includes Content-Type application/json", %{conn: conn} do
     user = insert(:user, onboarding_profile: %{})
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
