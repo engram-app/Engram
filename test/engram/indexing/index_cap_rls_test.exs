@@ -64,11 +64,17 @@ defmodule Engram.Indexing.IndexCapRlsTest do
         Repo.query!("SELECT set_config('app.current_tenant', '', true)")
         Repo.query!("SET LOCAL ROLE engram_app")
 
-        try do
-          fun.()
-        after
-          Repo.query!("RESET ROLE")
-        end
+        result = fun.()
+
+        # Reset on the SUCCESS path only, deliberately not in an `after`. If
+        # `fun` raises, the transaction is already aborted and `RESET ROLE`
+        # fails with 25P02, masking the real error — and the read paths in this
+        # file CAN raise now that they run against a genuinely filtered result
+        # set: `backfill_freed_slots/1` calls `Accounts.get_user!/1`, and a
+        # missing `engram_app` grant surfaces as 42501. Letting the raise
+        # propagate rolls the transaction back, discarding the SET LOCAL state.
+        Repo.query!("RESET ROLE")
+        result
       end)
 
     result
@@ -94,6 +100,16 @@ defmodule Engram.Indexing.IndexCapRlsTest do
   describe "harness" do
     test "control: the dropped role with no tenant sees zero notes" do
       %{user: user} = capped_user_with_notes(2_000)
+
+      # Mirror the three read tests below by making a superuser call FIRST.
+      # Without it this control guards only the role drop, not the tenant
+      # clear: `capped_user_with_notes/1` builds rows with ExMachina
+      # `insert/2`, and `Repo.insert` routes through neither `with_tenant/2`
+      # nor `prepare_query/3`, so no tenant is ever set and deleting the clear
+      # would leave this green. `counts/1` opens a real `with_tenant/2`, whose
+      # SET LOCAL tenant then leaks forward into this sandbox transaction —
+      # which is the condition the clear exists to undo.
+      assert %{total: 2} = IndexCap.counts(user)
 
       seen =
         as_prod_role(fn ->

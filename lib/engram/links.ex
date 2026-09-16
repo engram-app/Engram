@@ -87,7 +87,7 @@ defmodule Engram.Links do
     # 2026-08-20 prod profile of a 1.7k-note upload measured 65k `notes`
     # SELECTs and 13k `attachments` SELECTs — ~37 per note, one per wikilink.
     with_hmacs = Enum.map(parsed, &{&1, Crypto.hmac_field(filter_key, basename_key(&1.target))})
-    candidates = prefetch_candidates(user, vault, Enum.map(with_hmacs, &elem(&1, 1)))
+    candidates = prefetch_candidates(user, vault, Enum.map(with_hmacs, &elem(&1, 1)), dek)
 
     rows =
       Enum.map(with_hmacs, fn {p, hmac} ->
@@ -179,12 +179,12 @@ defmodule Engram.Links do
   # forfeits `route_resolution/3`'s lazy short-circuit (it no longer skips the
   # second table's *query*, only its filter), which trades at worst one extra
   # query per note against one saved per link.
-  defp prefetch_candidates(user, vault, hmacs) do
+  defp prefetch_candidates(user, vault, hmacs, dek) do
     uniq = Enum.uniq(hmacs)
 
     %{
-      notes: fetch_candidates_by_hmac(user, vault, uniq, :notes),
-      attachments: fetch_candidates_by_hmac(user, vault, uniq, :attachments)
+      notes: fetch_candidates_by_hmac(user, vault, uniq, :notes, dek),
+      attachments: fetch_candidates_by_hmac(user, vault, uniq, :attachments, dek)
     }
   end
 
@@ -244,34 +244,44 @@ defmodule Engram.Links do
   @spec resolve_target(map(), map(), String.t(), String.t()) ::
           {:note, binary()} | {:attachment, binary()} | :dangling
   def resolve_target(user, vault, target, link_type) do
-    # Derived BEFORE the tenant scope, deliberately. `dek_filter_key/1` calls
-    # `Crypto.get_dek/1`, which on a DekCache miss reaches the key provider —
-    # under `KEY_PROVIDER=aws_kms` that is a KMS network RPC, and it would
-    # otherwise block inside the transaction `with_tenant/2` opens, holding a
-    # pooled connection for the round trip. Same rule `replace_links/4`
-    # follows, and the one `rls-enforcement-testing-traps.md` states.
+    # Both keys derived BEFORE the tenant scope, and THREADED through every
+    # helper below. `Crypto.get_dek/1` reaches the key provider on a DekCache
+    # miss — under `KEY_PROVIDER=aws_kms` an HTTPS round trip to KMS, with
+    # `:kms_throttled` an explicit outcome — and inside the transaction
+    # `with_tenant/2` opens that would hold a pooled connection for its
+    # duration. `rls-enforcement-testing-traps.md` states the rule;
+    # `replace_links/4` has always followed it.
     #
-    # This also covers the nested `get_dek/1` calls further down the body: the
-    # derivation here populates the ETS cache, so those are hits.
-    {:ok, filter_key} = Crypto.dek_filter_key(user)
+    # Threaded rather than relying on the derivation warming the ETS cache.
+    # Warming makes the inner calls *probable* hits, not certain ones: the
+    # cache has a TTL (default 1h) and three eviction paths that can land in
+    # between — `UserDekRotation`, `AadRebind`, and the cross-node
+    # `{:dek_evict, user_id}` broadcast, which deletes regardless of TTL.
+    # `decrypt_and_group/3` needs the raw DEK, not the filter key, so passing
+    # only the latter would leave that gap open.
+    #
+    # `dek_filter_key_from_bytes/1` rather than `dek_filter_key/1`: same HMAC,
+    # one `get_dek/1` instead of two.
+    {:ok, dek} = Crypto.get_dek(user)
+    filter_key = Crypto.dek_filter_key_from_bytes(dek)
 
     {:ok, result} =
       Repo.with_tenant(user.id, fn ->
-        do_resolve_target(user, vault, target, link_type, filter_key)
+        do_resolve_target(user, vault, target, link_type, filter_key, dek)
       end)
 
     result
   end
 
-  defp do_resolve_target(user, vault, target, _link_type, filter_key) do
+  defp do_resolve_target(user, vault, target, _link_type, filter_key, dek) do
     key = basename_key(target)
     hmac = Crypto.hmac_field(filter_key, key)
     ext = target |> Path.basename() |> Path.extname() |> String.downcase()
 
     route_resolution(
       ext,
-      fn -> resolve_note_target(user, vault, target, hmac) end,
-      fn -> resolve_attachment_target(user, vault, target, hmac) end
+      fn -> resolve_note_target(user, vault, target, hmac, dek) end,
+      fn -> resolve_attachment_target(user, vault, target, hmac, dek) end
     )
   end
 
@@ -294,31 +304,31 @@ defmodule Engram.Links do
     end
   end
 
-  defp resolve_note_target(user, vault, target, hmac) do
-    fetch_decrypted_candidates(user, vault, hmac, :notes)
+  defp resolve_note_target(user, vault, target, hmac, dek) do
+    fetch_decrypted_candidates(user, vault, hmac, :notes, dek)
     |> resolve_from_candidates(target, :note)
   end
 
-  defp resolve_attachment_target(user, vault, target, hmac) do
-    fetch_decrypted_candidates(user, vault, hmac, :attachments)
+  defp resolve_attachment_target(user, vault, target, hmac, dek) do
+    fetch_decrypted_candidates(user, vault, hmac, :attachments, dek)
     |> resolve_from_candidates(target, :attachment)
   end
 
   # Query + decrypt only (no target-dependent filtering) — the part that's
   # IDENTICAL for every edge sharing an hmac, so `bind_danglers_for_hmac/3`
   # can call this once per table instead of once per edge.
-  defp fetch_decrypted_candidates(user, vault, hmac, table) do
+  defp fetch_decrypted_candidates(user, vault, hmac, table, dek) do
     user
-    |> fetch_candidates_by_hmac(vault, [hmac], table)
+    |> fetch_candidates_by_hmac(vault, [hmac], table, dek)
     |> Map.get(hmac, [])
   end
 
   # Batch form: `%{basename_hmac => [{id, decrypted_path}]}` for a set of
-  # hmacs, one query per table. `fetch_decrypted_candidates/4` is the
+  # hmacs, one query per table. `fetch_decrypted_candidates/5` is the
   # single-hmac projection of this.
-  defp fetch_candidates_by_hmac(_user, _vault, [], _table), do: %{}
+  defp fetch_candidates_by_hmac(_user, _vault, [], _table, _dek), do: %{}
 
-  defp fetch_candidates_by_hmac(user, vault, hmacs, :notes) do
+  defp fetch_candidates_by_hmac(user, vault, hmacs, :notes, dek) do
     from(n in Note,
       where:
         n.user_id == ^user.id and n.vault_id == ^vault.id and n.kind == "note" and
@@ -332,10 +342,10 @@ defmodule Engram.Links do
       }
     )
     |> Repo.all(skip_tenant_check: true)
-    |> decrypt_and_group(user, :notes)
+    |> decrypt_and_group(dek, :notes)
   end
 
-  defp fetch_candidates_by_hmac(user, vault, hmacs, :attachments) do
+  defp fetch_candidates_by_hmac(user, vault, hmacs, :attachments, dek) do
     from(a in Attachment,
       where:
         a.user_id == ^user.id and a.vault_id == ^vault.id and
@@ -349,19 +359,24 @@ defmodule Engram.Links do
       }
     )
     |> Repo.all(skip_tenant_check: true)
-    |> decrypt_and_group(user, :attachments)
+    |> decrypt_and_group(dek, :attachments)
   end
 
-  # One `get_dek/1` per table per note, not one per link. Rows that fail to
-  # decrypt are dropped, same as before. Grouping reverses each bucket's query
-  # order, which `resolve_from_candidates/3` cannot observe: it sorts on
-  # `{String.length(path), path}`, and live rows in one vault have distinct
-  # paths, so that ordering is total and no stable-sort tie survives to break.
-  defp decrypt_and_group([], _user, _table), do: %{}
+  # Takes the DEK rather than deriving it. Every caller reaches here from
+  # inside a `Repo.with_tenant/2` closure, and this used to call
+  # `Crypto.get_dek/1` itself — so a DekCache miss went to the KMS provider
+  # while holding the tenant transaction's connection. The public entry points
+  # derive it before opening the scope and thread it down; see the note on
+  # `resolve_target/4`.
+  #
+  # Rows that fail to decrypt are dropped, same as before. Grouping reverses
+  # each bucket's query order, which `resolve_from_candidates/3` cannot
+  # observe: it sorts on `{String.length(path), path}`, and live rows in one
+  # vault have distinct paths, so that ordering is total and no stable-sort tie
+  # survives to break.
+  defp decrypt_and_group([], _dek, _table), do: %{}
 
-  defp decrypt_and_group(rows, user, table) do
-    {:ok, dek} = Crypto.get_dek(user)
-
+  defp decrypt_and_group(rows, dek, table) do
     Enum.reduce(rows, %{}, fn row, acc ->
       case decrypt_field(
              row.path_ciphertext,
@@ -472,31 +487,32 @@ defmodule Engram.Links do
   @spec pre_rename_candidates(map(), map(), :note | :attachment, binary(), String.t()) ::
           %{notes: [{binary(), String.t()}], attachments: [{binary(), String.t()}]}
   def pre_rename_candidates(user, vault, kind, renamed_id, old_path) do
-    # Outside the scope: see `resolve_target/4` above. Matters more here —
-    # `fetch_decrypted_candidates/4` below calls `get_dek/1` again per table,
-    # and this derivation is what makes those cache hits rather than two more
-    # provider round trips inside the transaction.
-    {:ok, filter_key} = Crypto.dek_filter_key(user)
+    # Outside the scope and threaded down: see `resolve_target/4` above. Both
+    # keys are needed here — the filter key for the hmac, the raw DEK because
+    # `fetch_decrypted_candidates/5` decrypts a path per candidate row, once
+    # per table.
+    {:ok, dek} = Crypto.get_dek(user)
+    filter_key = Crypto.dek_filter_key_from_bytes(dek)
 
     {:ok, result} =
       Repo.with_tenant(user.id, fn ->
-        do_pre_rename_candidates(user, vault, kind, renamed_id, old_path, filter_key)
+        do_pre_rename_candidates(user, vault, kind, renamed_id, old_path, filter_key, dek)
       end)
 
     result
   end
 
-  defp do_pre_rename_candidates(user, vault, kind, renamed_id, old_path, filter_key) do
+  defp do_pre_rename_candidates(user, vault, kind, renamed_id, old_path, filter_key, dek) do
     hmac = Crypto.hmac_field(filter_key, basename_key(old_path))
 
     notes =
       user
-      |> fetch_decrypted_candidates(vault, hmac, :notes)
+      |> fetch_decrypted_candidates(vault, hmac, :notes, dek)
       |> Enum.reject(fn {id, _path} -> id == renamed_id end)
 
     attachments =
       user
-      |> fetch_decrypted_candidates(vault, hmac, :attachments)
+      |> fetch_decrypted_candidates(vault, hmac, :attachments, dek)
       |> Enum.reject(fn {id, _path} -> id == renamed_id end)
 
     case kind do
@@ -567,6 +583,19 @@ defmodule Engram.Links do
   `oban_jobs.args` carries only the opaque HMAC — never the plaintext
   basename (T3.2/H3 invariant).
   """
+  # KNOWN GAP, not fixed here. This derives the filter key itself, so it
+  # reaches `Crypto.get_dek/1` and — on a DekCache miss under
+  # `KEY_PROVIDER=aws_kms` — the KMS provider. Four call sites run it from
+  # INSIDE an enclosing `Repo.with_tenant/2`: `Notes.genesis_relocate_live/6`
+  # (notes.ex:1308, :1319) and `Notes.do_rename_note_inner/5` (notes.ex:2857,
+  # :2864), both deliberately in-transaction so the rebind job commits
+  # atomically with the rename. So the rename path still carries the defect the
+  # nine wrapped entry points no longer do.
+  #
+  # Left alone because fixing it means threading a key through
+  # `genesis_relocate_live/6` and `do_rename_note_inner/5` in `notes.ex`, which
+  # this change-set does not otherwise touch, and re-verifying the rename
+  # paths. Its own change, with its own tests — not a silent omission.
   @spec basename_hmac(Engram.Accounts.User.t(), String.t()) :: binary()
   def basename_hmac(user, key) do
     {:ok, filter_key} = Crypto.dek_filter_key(user)
@@ -582,9 +611,10 @@ defmodule Engram.Links do
   """
   @spec bind_danglers_for_hmac(map(), map(), binary()) :: :ok
   def bind_danglers_for_hmac(user, vault, hmac) do
-    # Outside the scope: see `resolve_target/4` above. This one's transaction
-    # already spans a per-edge decrypt/update loop, so a provider round trip
-    # inside it would hold row locks for the KMS latency on top of the loop.
+    # Outside the scope and threaded down: see `resolve_target/4` above. This
+    # one's transaction already spans a per-edge decrypt/update loop, so a
+    # provider round trip inside it would hold row locks for the KMS latency
+    # on top of the loop.
     {:ok, dek} = Crypto.get_dek(user)
 
     {:ok, result} =
@@ -612,8 +642,8 @@ defmodule Engram.Links do
       # `rebind_edge/6` applies in memory against these shared lists via
       # the same `route_resolution/3` + `resolve_from_candidates/3` rules
       # `resolve_target/4` uses.
-      note_candidates = fetch_decrypted_candidates(user, vault, hmac, :notes)
-      attachment_candidates = fetch_decrypted_candidates(user, vault, hmac, :attachments)
+      note_candidates = fetch_decrypted_candidates(user, vault, hmac, :notes, dek)
+      attachment_candidates = fetch_decrypted_candidates(user, vault, hmac, :attachments, dek)
 
       Enum.each(edges, fn edge ->
         target_text =

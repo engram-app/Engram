@@ -49,6 +49,7 @@ defmodule Engram.Links.LinksRlsTest do
 
   import Ecto.Query
 
+  alias Engram.Crypto.DekCache
   alias Engram.Links
   alias Engram.Links.NoteLink
   alias Engram.Links.Parser
@@ -122,11 +123,16 @@ defmodule Engram.Links.LinksRlsTest do
         Repo.query!("SELECT set_config('app.current_tenant', '', true)")
         Repo.query!("SET LOCAL ROLE engram_app")
 
-        try do
-          fun.()
-        after
-          Repo.query!("RESET ROLE")
-        end
+        result = fun.()
+
+        # Reset on the SUCCESS path only, deliberately not in an `after`. If
+        # `fun` raises, the transaction is already aborted and `RESET ROLE`
+        # would fail with 25P02, replacing the real error with "current
+        # transaction is aborted". Letting the raise propagate instead rolls
+        # the transaction back, which discards the SET LOCAL role and tenant
+        # anyway — so nothing leaks and the original error survives.
+        Repo.query!("RESET ROLE")
+        result
       end)
 
     result
@@ -212,15 +218,47 @@ defmodule Engram.Links.LinksRlsTest do
       assert id == target.id
     end
 
-    test "pre_rename_candidates/5 finds the colliding note",
-         %{user: user, vault: vault, source: source} do
-      assert {:returned, %{notes: [_ | _]}} =
+    test "resolve_target/4 resolves the ATTACHMENT branch too",
+         %{user: user, vault: vault} do
+      # Separate from the note case: `route_resolution/3` tries attachments
+      # FIRST for a non-note extension, so the two branches read different
+      # tables through different helpers. The notes half passing says nothing
+      # about the attachments half, and an unscoped attachment read means every
+      # `![[img.png]]` embed silently dangles.
+      att = Engram.Fixtures.insert_attachment!(user, vault, %{path: "img.png"})
+
+      assert {:returned, {:attachment, id}} =
+               as_prod_role(fn -> Links.resolve_target(user, vault, "img.png", "embed") end),
+             "resolve_target/4 came back :dangling for an attachment that exists — the " <>
+               "`attachments` candidate read was filtered by RLS"
+
+      assert id == att.id
+    end
+
+    test "pre_rename_candidates/5 finds the COMPETING note, not just the renamed one",
+         %{user: user, vault: vault, source: source, target: target} do
+      # Assert on the competing candidate specifically. `%{notes: [_ | _]}`
+      # would be VACUOUS: `do_pre_rename_candidates/7` prepends the renamed row
+      # itself unconditionally for `:note`, so the shape matches even when both
+      # candidate reads come back empty. This test passed against unscoped code
+      # until that was noticed.
+      assert {:returned, %{notes: notes}} =
                as_prod_role(fn ->
                  Links.pre_rename_candidates(user, vault, :note, source.id, "Target.md")
-               end),
-             "pre_rename_candidates/5 returned no notes — a filtered read here makes " <>
-               "pre_rename_winner?/4 answer false for every occurrence, so a rename rewrites " <>
-               "no [[links]] at all"
+               end)
+
+      assert Enum.any?(notes, fn {id, _path} -> id == target.id end),
+             """
+             pre_rename_candidates/5 saw only the renamed row, not the competing one.
+
+               candidates: #{inspect(notes)}
+               expected to contain: #{inspect(target.id)}
+
+             Unscoped, the competing candidate is invisible and
+             pre_rename_winner?/4 answers TRUE unopposed — so occurrences that
+             actually resolved to a DIFFERENT note get rewritten. Silent link
+             corruption on rename, not an absent rewrite.
+             """
     end
 
     test "bind_danglers_for_hmac/3 actually binds the dangler",
@@ -265,6 +303,21 @@ defmodule Engram.Links.LinksRlsTest do
       _ =
         as_prod_role_committing(fn -> Links.on_attachments_soft_deleted(user.id, [att.id]) end)
 
+      # Row count FIRST. `Repo.one(select: col)` returns nil for zero rows just
+      # as it does for one row with a nil column, so the nil assertion below
+      # would also pass if the edge had been DELETED. The contract is
+      # flip-to-dangling and KEEP the row, so it can re-bind if an attachment
+      # reappears at that path.
+      assert Repo.one(
+               from(l in NoteLink,
+                 where: l.source_note_id == ^source.id,
+                 select: count(l.id)
+               ),
+               skip_tenant_check: true
+             ) == 1,
+             "the edge row itself is gone — on_attachments_soft_deleted/2 must flip the edge to " <>
+               "dangling, not delete it, or a re-uploaded attachment never regains its backlinks"
+
       still_pointing =
         Repo.one(
           from(l in NoteLink,
@@ -279,21 +332,90 @@ defmodule Engram.Links.LinksRlsTest do
                "{0, nil} and returned :ok, so embeds render against a dead attachment id"
     end
 
-    test "links_for_note/2 does not return another user's edges", %{user: user} do
-      {:ok, other} = Engram.Fixtures.user_with_dek_fixture()
-      other_vault = insert(:vault, user: other)
-      other_note = Engram.Fixtures.insert_note!(other, other_vault, %{path: "Theirs.md"})
+    # NOTE: a cross-tenant read test was removed from here rather than kept.
+    # It never entered a harness, so it never dropped the role, and the
+    # in-query `l.user_id == ^user.id` filter satisfied it on its own — it
+    # passed against unwrapped code, making it a guard for that filter rather
+    # than evidence of tenant scoping, in a file whose whole purpose is
+    # enforcement. `links_test.exs:442` already covers cross-tenant reads and
+    # is strictly stronger: it queries `Repo.all(NoteLink)` under
+    # `with_tenant(other.id)` with NO in-query user filter, so only the policy
+    # can produce the empty result.
+  end
 
-      :ok =
-        Links.replace_links(other, other_vault, other_note.id, Parser.extract("See [[Target]]."))
+  describe "DEK derivation transaction shape" do
+    # Every RLS test above passes whether the DEK is derived inside or outside
+    # the tenant scope — they exercise scoping only. This pins the OTHER
+    # invariant the fix rests on, the one
+    # `docs/context/rls-enforcement-testing-traps.md` states: external I/O must
+    # sit OUTSIDE the `with_tenant` scope.
+    #
+    # Without it, the natural cleanup — re-inlining
+    # `{:ok, dek} = Crypto.get_dek(user)` into the `do_*` body, since a
+    # threaded parameter reads as noise — silently restores the defect. Under
+    # `KEY_PROVIDER=aws_kms` with a cold DekCache, every single-note response
+    # would then hold a pooled Postgres connection across a KMS HTTPS round
+    # trip, `:kms_throttled` included.
+    #
+    # Probed through `DekCache`'s hit/miss telemetry rather than a stub
+    # provider, because `get_dek/1` dispatches on the blob's provider tag
+    # (`KeyProvider.identify_from_blob/1`), not on `config :engram,
+    # :key_provider` — swapping the config would not intercept a Local-wrapped
+    # blob. A cache MISS is precisely the lookup that reaches the provider, so
+    # it is the one whose transaction state matters.
+    #
+    # Same shape as `attachments_test.exs:128`, which pins the S3 PUT outside
+    # the row transaction.
+    test "a DEK cache miss never happens inside a transaction",
+         %{user: user, source: source} do
+      test_pid = self()
 
-      # Asked as the WRONG user. The tenant scope and the in-query user_id
-      # filter should both refuse this; nothing else pins that they do.
-      assert Links.links_for_note(user, other_note.id) == [],
-             "user A read user B's outgoing edges"
+      :telemetry.attach(
+        {__MODULE__, :dek_probe},
+        [:engram, :crypto, :dek_cache],
+        fn _event, _measurements, %{outcome: outcome}, _config ->
+          send(test_pid, {:dek_lookup, outcome, Repo.in_transaction?()})
+        end,
+        nil
+      )
 
-      assert Links.backlinks_for_note(user, other_note.id) == [],
-             "user A read user B's backlinks"
+      on_exit(fn -> :telemetry.detach({__MODULE__, :dek_probe}) end)
+
+      # Force the miss. Setup warmed the cache, and a hit reaches no provider,
+      # so without this the test would prove nothing.
+      :ok = DekCache.invalidate(user.id)
+
+      _ = Links.links_for_note(user, source.id)
+
+      lookups = drain_dek_lookups([])
+
+      assert lookups != [],
+             "no DekCache lookup was observed at all — either the probe is not attached or " <>
+               "links_for_note/2 no longer derives a DEK, and this test proves nothing"
+
+      in_txn_misses = for {:miss, true} <- lookups, do: :miss
+
+      assert in_txn_misses == [],
+             """
+             A DEK cache miss ran INSIDE a transaction, so the provider unwrap holds a
+             pooled connection for its duration. Under KEY_PROVIDER=aws_kms that is a
+             KMS network RPC, on the hot read path.
+
+               observed lookups (outcome, in_transaction?): #{inspect(lookups)}
+
+             Derive the key at the public entry point, before `Repo.with_tenant/2`,
+             and thread it into the private `do_*` function.
+             """
+    end
+  end
+
+  # Module level, not inside the describe above: ExUnit rejects `defp` within a
+  # `describe` block.
+  defp drain_dek_lookups(acc) do
+    receive do
+      {:dek_lookup, outcome, in_txn} -> drain_dek_lookups([{outcome, in_txn} | acc])
+    after
+      0 -> Enum.reverse(acc)
     end
   end
 end
