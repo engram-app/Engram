@@ -244,15 +244,27 @@ defmodule Engram.Links do
   @spec resolve_target(map(), map(), String.t(), String.t()) ::
           {:note, binary()} | {:attachment, binary()} | :dangling
   def resolve_target(user, vault, target, link_type) do
+    # Derived BEFORE the tenant scope, deliberately. `dek_filter_key/1` calls
+    # `Crypto.get_dek/1`, which on a DekCache miss reaches the key provider —
+    # under `KEY_PROVIDER=aws_kms` that is a KMS network RPC, and it would
+    # otherwise block inside the transaction `with_tenant/2` opens, holding a
+    # pooled connection for the round trip. Same rule `replace_links/4`
+    # follows, and the one `rls-enforcement-testing-traps.md` states.
+    #
+    # This also covers the nested `get_dek/1` calls further down the body: the
+    # derivation here populates the ETS cache, so those are hits.
+    {:ok, filter_key} = Crypto.dek_filter_key(user)
+
     {:ok, result} =
-      Repo.with_tenant(user.id, fn -> do_resolve_target(user, vault, target, link_type) end)
+      Repo.with_tenant(user.id, fn ->
+        do_resolve_target(user, vault, target, link_type, filter_key)
+      end)
 
     result
   end
 
-  defp do_resolve_target(user, vault, target, _link_type) do
+  defp do_resolve_target(user, vault, target, _link_type, filter_key) do
     key = basename_key(target)
-    {:ok, filter_key} = Crypto.dek_filter_key(user)
     hmac = Crypto.hmac_field(filter_key, key)
     ext = target |> Path.basename() |> Path.extname() |> String.downcase()
 
@@ -403,14 +415,16 @@ defmodule Engram.Links do
   """
   @spec live_basename_count(map(), map(), String.t()) :: non_neg_integer()
   def live_basename_count(user, vault, key) do
+    # Outside the scope: see `resolve_target/4` above.
+    {:ok, filter_key} = Crypto.dek_filter_key(user)
+
     {:ok, result} =
-      Repo.with_tenant(user.id, fn -> do_live_basename_count(user, vault, key) end)
+      Repo.with_tenant(user.id, fn -> do_live_basename_count(user, vault, key, filter_key) end)
 
     result
   end
 
-  defp do_live_basename_count(user, vault, key) do
-    {:ok, filter_key} = Crypto.dek_filter_key(user)
+  defp do_live_basename_count(user, vault, key, filter_key) do
     hmac = Crypto.hmac_field(filter_key, key)
 
     notes =
@@ -458,16 +472,21 @@ defmodule Engram.Links do
   @spec pre_rename_candidates(map(), map(), :note | :attachment, binary(), String.t()) ::
           %{notes: [{binary(), String.t()}], attachments: [{binary(), String.t()}]}
   def pre_rename_candidates(user, vault, kind, renamed_id, old_path) do
+    # Outside the scope: see `resolve_target/4` above. Matters more here —
+    # `fetch_decrypted_candidates/4` below calls `get_dek/1` again per table,
+    # and this derivation is what makes those cache hits rather than two more
+    # provider round trips inside the transaction.
+    {:ok, filter_key} = Crypto.dek_filter_key(user)
+
     {:ok, result} =
       Repo.with_tenant(user.id, fn ->
-        do_pre_rename_candidates(user, vault, kind, renamed_id, old_path)
+        do_pre_rename_candidates(user, vault, kind, renamed_id, old_path, filter_key)
       end)
 
     result
   end
 
-  defp do_pre_rename_candidates(user, vault, kind, renamed_id, old_path) do
-    {:ok, filter_key} = Crypto.dek_filter_key(user)
+  defp do_pre_rename_candidates(user, vault, kind, renamed_id, old_path, filter_key) do
     hmac = Crypto.hmac_field(filter_key, basename_key(old_path))
 
     notes =
@@ -563,15 +582,18 @@ defmodule Engram.Links do
   """
   @spec bind_danglers_for_hmac(map(), map(), binary()) :: :ok
   def bind_danglers_for_hmac(user, vault, hmac) do
+    # Outside the scope: see `resolve_target/4` above. This one's transaction
+    # already spans a per-edge decrypt/update loop, so a provider round trip
+    # inside it would hold row locks for the KMS latency on top of the loop.
+    {:ok, dek} = Crypto.get_dek(user)
+
     {:ok, result} =
-      Repo.with_tenant(user.id, fn -> do_bind_danglers_for_hmac(user, vault, hmac) end)
+      Repo.with_tenant(user.id, fn -> do_bind_danglers_for_hmac(user, vault, hmac, dek) end)
 
     result
   end
 
-  defp do_bind_danglers_for_hmac(user, vault, hmac) do
-    {:ok, dek} = Crypto.get_dek(user)
-
+  defp do_bind_danglers_for_hmac(user, vault, hmac, dek) do
     edges =
       Repo.all(
         from(l in NoteLink,
@@ -731,14 +753,18 @@ defmodule Engram.Links do
   """
   @spec links_for_note(map(), binary()) :: [map()]
   def links_for_note(user, note_id) do
-    {:ok, result} = Repo.with_tenant(user.id, fn -> do_links_for_note(user, note_id) end)
-    result
-  end
-
-  defp do_links_for_note(user, note_id) do
+    # Both outside the scope: see `resolve_target/4` above. `reload_for_dek/1`
+    # reads `users`, which carries no RLS policy, so it does not need the
+    # tenant. This is the hottest of the nine — `note_json/2` calls it on every
+    # single-note response.
     user = reload_for_dek(user)
     {:ok, dek} = Crypto.get_dek(user)
 
+    {:ok, result} = Repo.with_tenant(user.id, fn -> do_links_for_note(user, note_id, dek) end)
+    result
+  end
+
+  defp do_links_for_note(user, note_id, dek) do
     edges =
       Repo.all(
         from(l in NoteLink,
@@ -816,14 +842,15 @@ defmodule Engram.Links do
   """
   @spec backlinks_for_note(map(), binary()) :: [map()]
   def backlinks_for_note(user, note_id) do
-    {:ok, result} = Repo.with_tenant(user.id, fn -> do_backlinks_for_note(user, note_id) end)
-    result
-  end
-
-  defp do_backlinks_for_note(user, note_id) do
+    # Both outside the scope: see `resolve_target/4` above.
     user = reload_for_dek(user)
     {:ok, dek} = Crypto.get_dek(user)
 
+    {:ok, result} = Repo.with_tenant(user.id, fn -> do_backlinks_for_note(user, note_id, dek) end)
+    result
+  end
+
+  defp do_backlinks_for_note(user, note_id, dek) do
     edges =
       Repo.all(
         from(l in NoteLink,

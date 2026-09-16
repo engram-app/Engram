@@ -200,5 +200,100 @@ defmodule Engram.Links.LinksRlsTest do
              "the outgoing edge survived on_note_soft_deleted/2 — the DELETE matched zero rows " <>
                "under RLS and reported success, so a deleted note keeps its edges"
     end
+
+    test "resolve_target/4 resolves to the note rather than dangling",
+         %{user: user, vault: vault, target: target} do
+      assert {:returned, {:note, id}} =
+               as_prod_role(fn -> Links.resolve_target(user, vault, "Target", "wikilink") end),
+             "resolve_target/4 came back :dangling — its candidate reads were filtered by RLS, " <>
+               "which makes EVERY new wikilink in the product resolve to a broken link with " <>
+               "nothing logged"
+
+      assert id == target.id
+    end
+
+    test "pre_rename_candidates/5 finds the colliding note",
+         %{user: user, vault: vault, source: source} do
+      assert {:returned, %{notes: [_ | _]}} =
+               as_prod_role(fn ->
+                 Links.pre_rename_candidates(user, vault, :note, source.id, "Target.md")
+               end),
+             "pre_rename_candidates/5 returned no notes — a filtered read here makes " <>
+               "pre_rename_winner?/4 answer false for every occurrence, so a rename rewrites " <>
+               "no [[links]] at all"
+    end
+
+    test "bind_danglers_for_hmac/3 actually binds the dangler",
+         %{user: user, vault: vault, source: source} do
+      # Replace the seeded edge set with a single DANGLING edge, then create its
+      # target. This is the state the rebind worker exists to resolve.
+      :ok = Links.replace_links(user, vault, source.id, Parser.extract("See [[Later]]."))
+      later = Engram.Fixtures.insert_note!(user, vault, %{path: "deep/Later.md"})
+
+      hmac = Links.basename_hmac(user, Links.basename_key("deep/Later.md"))
+
+      # Committing harness: the assertion is about the edge being bound
+      # afterwards, which a rollback would discard.
+      _ = as_prod_role_committing(fn -> Links.bind_danglers_for_hmac(user, vault, hmac) end)
+
+      bound =
+        Repo.one(
+          from(l in NoteLink, where: l.source_note_id == ^source.id, select: l.target_note_id),
+          skip_tenant_check: true
+        )
+
+      assert bound == later.id,
+             "the dangler never bound — the edge read returned empty under RLS, the `edges != []` " <>
+               "guard short-circuited, and the worker reported :ok. Notes created after a link " <>
+               "is written stay permanently unlinked"
+    end
+
+    test "on_attachments_soft_deleted/2 actually clears the attachment edge",
+         %{user: user, vault: vault, source: source} do
+      att = Engram.Fixtures.insert_attachment!(user, vault, %{path: "img.png"})
+      :ok = Links.replace_links(user, vault, source.id, Parser.extract("See [[img.png]]."))
+
+      # Force the edge to point at the attachment rather than relying on
+      # resolution, so a miss here cannot make the test vacuous.
+      {1, _} =
+        from(l in NoteLink, where: l.source_note_id == ^source.id)
+        |> Repo.update_all(
+          [set: [target_attachment_id: att.id, target_note_id: nil]],
+          skip_tenant_check: true
+        )
+
+      _ =
+        as_prod_role_committing(fn -> Links.on_attachments_soft_deleted(user.id, [att.id]) end)
+
+      still_pointing =
+        Repo.one(
+          from(l in NoteLink,
+            where: l.source_note_id == ^source.id,
+            select: l.target_attachment_id
+          ),
+          skip_tenant_check: true
+        )
+
+      assert is_nil(still_pointing),
+             "the edge still points at a deleted attachment — the UPDATE was filtered, reported " <>
+               "{0, nil} and returned :ok, so embeds render against a dead attachment id"
+    end
+
+    test "links_for_note/2 does not return another user's edges", %{user: user} do
+      {:ok, other} = Engram.Fixtures.user_with_dek_fixture()
+      other_vault = insert(:vault, user: other)
+      other_note = Engram.Fixtures.insert_note!(other, other_vault, %{path: "Theirs.md"})
+
+      :ok =
+        Links.replace_links(other, other_vault, other_note.id, Parser.extract("See [[Target]]."))
+
+      # Asked as the WRONG user. The tenant scope and the in-query user_id
+      # filter should both refuse this; nothing else pins that they do.
+      assert Links.links_for_note(user, other_note.id) == [],
+             "user A read user B's outgoing edges"
+
+      assert Links.backlinks_for_note(user, other_note.id) == [],
+             "user A read user B's backlinks"
+    end
   end
 end

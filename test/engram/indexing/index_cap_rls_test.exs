@@ -39,6 +39,8 @@ defmodule Engram.Indexing.IndexCapRlsTest do
 
   use Engram.DataCase, async: false
 
+  import Ecto.Query
+
   alias Engram.Indexing.IndexCap
   alias Engram.Notes.Note
   alias Engram.Repo
@@ -46,9 +48,20 @@ defmodule Engram.Indexing.IndexCapRlsTest do
 
   # Runs `fun` as the non-BYPASSRLS role with NO tenant configured — the exact
   # shape of a prod request reaching these code paths.
+  #
+  # The tenant clear is load-bearing, not hygiene. Several tests below make a
+  # superuser "sanity" call first, and those go through `Repo.with_tenant/2`,
+  # whose `set_config(..., true)` is a SET LOCAL that PERSISTS into the
+  # enclosing sandbox transaction once its savepoint commits — `with_tenant`'s
+  # exit resets only the ROLE, never the tenant. Without this line the role
+  # drop below re-engages RLS while the policy compares against a MATCHING
+  # tenant, so three of the tests in this file passed no matter what the code
+  # did. See the leak-forward trap in
+  # `docs/context/rls-enforcement-testing-traps.md`.
   defp as_prod_role(fun) do
     {:ok, result} =
       Repo.transaction(fn ->
+        Repo.query!("SELECT set_config('app.current_tenant', '', true)")
         Repo.query!("SET LOCAL ROLE engram_app")
 
         try do
@@ -73,6 +86,34 @@ defmodule Engram.Indexing.IndexCapRlsTest do
       insert(:note, user: user, vault: vault, created_at: ~U[2026-01-02 00:00:00Z])
 
     %{user: user, older: older, newer: newer}
+  end
+
+  # CONTROL. Without this the file cannot tell "correctly scoped" from "the
+  # role drop never engaged", which is exactly how the read tests below came to
+  # be vacuous without anyone noticing.
+  describe "harness" do
+    test "control: the dropped role with no tenant sees zero notes" do
+      %{user: user} = capped_user_with_notes(2_000)
+
+      seen =
+        as_prod_role(fn ->
+          Repo.one(
+            from(n in Note, where: n.user_id == ^user.id, select: count(n.id)),
+            skip_tenant_check: true
+          )
+        end)
+
+      assert seen == 0,
+             """
+             Harness is not engaging RLS, so every assertion in this file is meaningless.
+
+               notes visible as engram_app with no tenant: #{inspect(seen)} (expected 0)
+
+             Either SET LOCAL ROLE did not apply, or the tenant was not cleared
+             (a superuser `with_tenant` call earlier in the test leaks its
+             tenant forward), or the role has BYPASSRLS.
+             """
+    end
   end
 
   describe "counts/1 under FORCE RLS" do
