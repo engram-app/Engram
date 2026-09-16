@@ -449,8 +449,9 @@ defmodule EngramWeb.McpController do
         case resolve_bare_vault(user, conn) do
           {:many, _vaults} ->
             {:error,
-             "This connection can reach more than one vault — specify which. Call " <>
-               "list_vaults to see the IDs, then pass vault_id on this tool call."}
+             "This connection can reach more than one vault — specify which. Pass " <>
+               "vault_id on this tool call, as either the vault's name or its UUID. " <>
+               "Call list_vaults to see them."}
 
           ok_or_error ->
             ok_or_error
@@ -462,7 +463,11 @@ defmodule EngramWeb.McpController do
   # (not a full list). vault_denied_message re-derives the specific reason on
   # the error path only.
   defp resolve_requested_vault(user, requested, conn) do
-    with {:ok, vault} <- Engram.Vaults.get_vault(user, requested),
+    # by_ref, not get_vault/2: a model naming the vault it wants ("Engram")
+    # should not have to spend a list_vaults call first just to learn the UUID.
+    # The scope check below is unchanged and still runs on the resolved vault,
+    # so a name cannot reach anything a UUID could not.
+    with {:ok, vault} <- Engram.Vaults.get_vault_by_ref(user, requested),
          :ok <- Engram.Permissions.check(Engram.Permissions.vault_scope(conn), vault) do
       {:ok, vault}
     else
@@ -484,7 +489,8 @@ defmodule EngramWeb.McpController do
         "API key does not have access to vault #{requested}"
 
       true ->
-        "Vault not found: #{requested}. Call list_vaults to see the vault IDs you can use."
+        "Vault not found: #{requested}. vault_id takes a vault's name or its UUID; " <>
+          "call list_vaults to see the ones this connection can use."
     end
   end
 

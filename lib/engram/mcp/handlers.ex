@@ -39,7 +39,7 @@ defmodule Engram.MCP.Handlers do
            "vault-scoped tool call to target a vault. Call list_vaults to see the IDs."}
 
       vault_id ->
-        case Enum.find(accessible, &(to_string(&1.id) == to_string(vault_id))) do
+        case Enum.find(accessible, &vault_ref_matches?(&1, vault_id)) do
           nil ->
             {:error,
              "Vault not found or not accessible: #{vault_id}. Call list_vaults to see the " <>
@@ -833,4 +833,19 @@ defmodule Engram.MCP.Handlers do
   # `Engram.Attachments.validate_max_file_bytes/2`, which fails CLOSED, so an
   # over-permissive number here cannot let an oversized upload through.
   defp render_limit(_), do: "unlimited"
+
+  # Mirrors what `Vaults.get_vault_by_ref/2` does for every other vault-scoped
+  # tool: a UUID matches by id, anything else is slugified and matched against
+  # the slug. Done against the already-loaded accessible list rather than by
+  # calling that function, so the scope filter stays the only source of truth
+  # for what this connection may see.
+  defp vault_ref_matches?(vault, ref) do
+    ref = to_string(ref)
+
+    to_string(vault.id) == ref or
+      case Engram.Vaults.slugify(ref) do
+        "" -> false
+        slug -> vault.slug == slug
+      end
+  end
 end

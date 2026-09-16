@@ -420,6 +420,53 @@ defmodule Engram.Vaults do
     end
   end
 
+  @doc """
+  Like `get_vault/2`, but also accepts a slug or display name.
+
+  For callers that take a vault reference from a human or a model rather than
+  from a previous API response — today, the MCP tool layer, where requiring a
+  UUID forced a `list_vaults` round trip before every vault-scoped call.
+
+  A non-UUID reference is run through `slugify/1` and matched against `slug`,
+  which is unique per user (`vaults_user_id_slug_index`). Going through
+  `slugify/1` rather than comparing raw strings is what makes "Test Vault",
+  "test vault" and "test-vault" all land on the same vault: it is the very
+  function that produced the slug from the name in the first place.
+
+  Display names themselves are encrypted at rest, so there is nothing to match
+  on directly — the slug is the plaintext handle derived from the name.
+  """
+  def get_vault_by_ref(user, ref) when is_binary(ref) do
+    case Ecto.UUID.cast(ref) do
+      {:ok, vault_id} -> get_vault(user, vault_id)
+      :error -> get_vault_by_slug(user, slugify(ref))
+    end
+  end
+
+  def get_vault_by_ref(_user, _ref), do: {:error, :not_found}
+
+  # slugify/1 maps scripts with no ASCII fallback to "", and `unique_slug/3`
+  # never mints an empty slug, so an empty result cannot match — but reject it
+  # up front rather than relying on that invariant holding forever.
+  defp get_vault_by_slug(_user, ""), do: {:error, :not_found}
+
+  defp get_vault_by_slug(user, slug) do
+    user = fresh_user(user)
+
+    result =
+      Repo.with_tenant(user.id, fn ->
+        Repo.one(from(v in active(scoped(user)), where: v.slug == ^slug, select: v.id))
+      end)
+
+    case result do
+      # ponytail: second query, so name resolution reuses get_vault/2's
+      # decryption and scoping rather than duplicating them. Only runs for
+      # non-UUID refs; fold it into one query if that path ever gets hot.
+      {:ok, vault_id} when is_binary(vault_id) -> get_vault(user, vault_id)
+      _ -> {:error, :not_found}
+    end
+  end
+
   defp fetch_vault(user, vault_id) do
     user = fresh_user(user)
 
