@@ -560,6 +560,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - PG18/UUIDv7 prod crash-loop root cause — in-place engine bump vs specced taint+recreate; `verify_schema_baseline/0` guard → `docs/context/pg18-uuidv7-prod-crashloop-2026-06-11.md`
 - `mjml` vs `lingua` rustler_precompiled version conflict — pin override → `docs/context/rustler-precompiled-nif-conflict.md`
 - Worktree hardlinked `deps/`/`_build/` can omit yecc/leex-generated beams (pre-push failures) → `docs/context/worktree-deps-artifact-staleness.md`
+- `git push` from a worktree hangs or is rejected at the pre-push gates, `mix` reports `erts-14`/OTP 26, or `:opentelemetry` fails with `missing_module,opentelemetry_sup` (bare push runs the gates on the system OTP; always `mise exec -- git push`) → `docs/context/worktree-push-otp-mismatch-rebar-dep.md`
 - Tier-4 / Phase F roadmap for AWS KMS provider routing → `docs/context/aws-kms-provider-integration.md`
 
 **Encryption**
