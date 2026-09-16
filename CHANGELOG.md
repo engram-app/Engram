@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.28.0](https://github.com/engram-app/Engram/compare/0.27.2...0.28.0) (2026-09-16)
+
+
+### Features
+
+* **oauth:** daily CIMD document refresh sweep ([#1658](https://github.com/engram-app/Engram/issues/1658)) ([d220055](https://github.com/engram-app/Engram/commit/d220055b5409a966ce9ae137d1734336ba8c55b2)), closes [#1642](https://github.com/engram-app/Engram/issues/1642)
+
+
+### Bug Fixes
+
+* **oauth:** accept CIMD docs by permitted methods ([#1653](https://github.com/engram-app/Engram/issues/1653)) ([0601b2a](https://github.com/engram-app/Engram/commit/0601b2ad8e9f5f58edbea1a160be639a6c8b5e0e)), closes [#1634](https://github.com/engram-app/Engram/issues/1634)
+
 ## [0.27.2](https://github.com/engram-app/Engram/compare/0.27.1...0.27.2) (2026-09-16)
 
 
