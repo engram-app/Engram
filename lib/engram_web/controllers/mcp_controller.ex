@@ -342,7 +342,10 @@ defmodule EngramWeb.McpController do
       # it must still get a usable answer.
       {:ok, text, structured} when is_map(structured) ->
         result = Map.put(text_result(text), "structuredContent", structured)
-        {{:ok, result}, :ok, byte_size_safe(text)}
+        # Both renderings go on the wire, so both count toward the response-size
+        # metric. Reporting only `text` would under-report by roughly half today
+        # and drift further with every tool converted.
+        {{:ok, result}, :ok, byte_size_safe(text) + structured_bytes(structured)}
 
       {:error, msg} ->
         {error_result(msg), :error, byte_size_safe(msg)}
@@ -460,6 +463,13 @@ defmodule EngramWeb.McpController do
       [only] -> {:ok, only}
       [] -> {:error, no_vault_message_for(all)}
       many -> {:many, many}
+    end
+  end
+
+  defp structured_bytes(structured) do
+    case Jason.encode(structured) do
+      {:ok, json} -> byte_size(json)
+      _ -> 0
     end
   end
 

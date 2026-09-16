@@ -122,7 +122,12 @@ defmodule Engram.MCP.Tools do
               "type" => "object",
               "properties" => %{
                 "id" => %{"type" => "string", "description" => "Vault UUID"},
-                "name" => %{"type" => "string", "description" => "Display name"},
+                # Nullable on purpose: `name` is a VIRTUAL field and
+                # `decrypt_vault_if_needed/2` returns the row undecrypted on a
+                # crypto failure, leaving it nil. A client validating against
+                # this schema would turn a degraded-but-readable listing into a
+                # hard failure — on list_vaults, which is the recovery path.
+                "name" => %{"type" => ["string", "null"], "description" => "Display name"},
                 "slug" => %{
                   "type" => "string",
                   "description" => "URL-safe handle; also accepted wherever vault_id is"
@@ -144,9 +149,10 @@ defmodule Engram.MCP.Tools do
     %{
       name: "set_vault",
       description:
-        "Validate and echo a vault by ID. NOTE: this does NOT persist an active " <>
-          "vault — MCP keeps no state between calls. To read or write a specific " <>
-          "vault, pass its vault_id on each tool call. Use list_vaults to discover IDs.",
+        "Validate and echo a vault by name or ID. NOTE: this does NOT persist an " <>
+          "active vault — MCP keeps no state between calls. To read or write a " <>
+          "specific vault, pass its vault_id on each tool call; a vault's name works " <>
+          "there too, so this need not be called first. Use list_vaults to see them.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{

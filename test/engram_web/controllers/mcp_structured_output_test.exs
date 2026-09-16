@@ -93,7 +93,7 @@ defmodule EngramWeb.McpStructuredOutputTest do
 
       assert declared != [], "no tool has been converted yet"
 
-      for name <- declared, name in ["list_vaults"] do
+      for name <- declared do
         result = result(conn, name)
 
         assert is_map(result["structuredContent"]),
