@@ -8,13 +8,6 @@ defmodule EngramWeb.SearchController do
 
   @max_search_limit 50
 
-  @date_params [
-    {"created_after", :created_after},
-    {"created_before", :created_before},
-    {"updated_after", :updated_after},
-    {"updated_before", :updated_before}
-  ]
-
   operation(:search,
     operation_id: "search",
     summary: "Search notes (vector / keyword / hybrid)",
@@ -47,7 +40,7 @@ defmodule EngramWeb.SearchController do
           [
             limit: note_limit,
             cross_vault: cross_vault,
-            mode: parse_mode(params["mode"]),
+            mode: Search.parse_mode(params["mode"]),
             group_by_note: true
           ]
           |> then(&if(tags, do: Keyword.put(&1, :tags, tags), else: &1))
@@ -88,7 +81,9 @@ defmodule EngramWeb.SearchController do
   # skipped; the first param with an unparseable ISO 8601 value halts with
   # its name so the controller can return a 422 naming the offending param.
   defp parse_date_params(params) do
-    Enum.reduce_while(@date_params, {:ok, []}, fn {param, key}, {:ok, acc} ->
+    Enum.reduce_while(Search.date_params(), {:ok, []}, fn key, {:ok, acc} ->
+      param = to_string(key)
+
       case params[param] do
         nil ->
           {:cont, {:ok, acc}}
@@ -104,10 +99,6 @@ defmodule EngramWeb.SearchController do
       end
     end)
   end
-
-  defp parse_mode("keyword"), do: :keyword
-  defp parse_mode("vector"), do: :vector
-  defp parse_mode(_), do: :hybrid
 
   # `?cross_vault=false` arrives as the STRING "false", which is truthy in
   # Elixir — so reading the param raw turned an explicit opt-OUT into an

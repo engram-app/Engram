@@ -3,6 +3,7 @@ defmodule Engram.OAuth.CimdTest do
   # Mox expectations on the fetcher are set from the test process.
   use Engram.DataCase, async: false
 
+  import Engram.OAuthHelpers, only: [code_from_redirect: 1]
   import Mox
 
   alias Engram.OAuth
@@ -127,12 +128,265 @@ defmodule Engram.OAuth.CimdTest do
     # Honouring the request would leave it unable to authenticate (nil hash);
     # silently downgrading would make it send a secret we must then reject for
     # being present at all. Both failures are opaque, so refuse the document.
-    test "rejects a document asking for a confidential auth method" do
+    test "rejects a document asking for a secret-based auth method" do
+      for method <- ~w(client_secret_post client_secret_basic) do
+        expect(FetcherMock, :fetch, fn @url ->
+          {:ok, document(%{"token_endpoint_auth_method" => method})}
+        end)
+
+        assert {:error, :confidential_not_supported} = Cimd.ensure_client(@url),
+               "expected #{method} to be refused"
+      end
+    end
+
+    # #1634. Refusing on the PREFERRED method dead-ended a vendor whose
+    # permitted set named a method we fully implement. The token endpoint routes
+    # on the set, so the set is what decides whether there is a flow left.
+    test "accepts a refused preference when the permitted set names private_key_jwt" do
       expect(FetcherMock, :fetch, fn @url ->
-        {:ok, document(%{"token_endpoint_auth_method" => "client_secret_post"})}
+        {:ok,
+         document(%{
+           "token_endpoint_auth_method" => "client_secret_basic",
+           "token_endpoint_auth_methods_supported" => ["client_secret_basic", "private_key_jwt"],
+           "token_endpoint_auth_signing_alg" => "RS256",
+           "jwks_uri" => "https://claude.ai/oauth/jwks.json"
+         })}
+      end)
+
+      assert {:ok, client} = Cimd.ensure_client(@url)
+      assert client.token_endpoint_auth_method == "private_key_jwt"
+      assert client.token_endpoint_auth_methods_supported == ["private_key_jwt"]
+      assert Client.assertion_permitted?(client)
+    end
+
+    test "accepts a refused preference when the permitted set names none" do
+      expect(FetcherMock, :fetch, fn @url ->
+        {:ok,
+         document(%{
+           "token_endpoint_auth_method" => "client_secret_post",
+           "token_endpoint_auth_methods_supported" => ["client_secret_post", "none"]
+         })}
+      end)
+
+      assert {:ok, client} = Cimd.ensure_client(@url)
+      assert client.token_endpoint_auth_method == "none"
+      assert Client.public_auth_permitted?(client)
+      refute Client.assertion_permitted?(client)
+    end
+
+    # Still refused when the whole permitted set is methods we cannot honour.
+    # No secret was ever minted for a client that did not register, so there is
+    # genuinely no flow left to run.
+    test "rejects a document permitting only secret-based methods" do
+      expect(FetcherMock, :fetch, fn @url ->
+        {:ok,
+         document(%{
+           "token_endpoint_auth_method" => "client_secret_basic",
+           "token_endpoint_auth_methods_supported" => [
+             "client_secret_post",
+             "client_secret_basic"
+           ]
+         })}
       end)
 
       assert {:error, :confidential_not_supported} = Cimd.ensure_client(@url)
+      assert Repo.aggregate(Client, :count) == 0
+    end
+
+    # The regression this whole path exists for. Before #1633 this asserted a
+    # refusal, which is why ChatGPT being unable to connect never turned a test
+    # red: a test that guards a decision passes just as green on the day the
+    # decision becomes wrong.
+    test "accepts private_key_jwt and stores the key location" do
+      expect(FetcherMock, :fetch, fn @url ->
+        {:ok,
+         document(%{
+           "token_endpoint_auth_method" => "private_key_jwt",
+           "token_endpoint_auth_signing_alg" => "RS256",
+           "jwks_uri" => "https://claude.ai/oauth/jwks.json"
+         })}
+      end)
+
+      assert {:ok, client} = Cimd.ensure_client(@url)
+      assert client.token_endpoint_auth_method == "private_key_jwt"
+      assert client.jwks_uri == "https://claude.ai/oauth/jwks.json"
+      assert client.token_endpoint_auth_signing_alg == "RS256"
+      # No secret is minted, and none is expected of it.
+      assert is_nil(client.client_secret_hash)
+    end
+
+    # Declaring the method without publishing the keys leaves nothing to verify
+    # against, so the document is unusable rather than us being unable.
+    test "rejects private_key_jwt with no usable jwks_uri" do
+      for jwks <- [nil, "", "not-a-url", "http://claude.ai/jwks.json"] do
+        expect(FetcherMock, :fetch, fn @url ->
+          {:ok,
+           document(%{"token_endpoint_auth_method" => "private_key_jwt", "jwks_uri" => jwks})}
+        end)
+
+        assert {:error, :jwks_uri_required} = Cimd.ensure_client(@url),
+               "expected jwks_uri #{inspect(jwks)} to be refused"
+      end
+    end
+
+    # Serving keys from a CDN or a dedicated key host is ordinary, and the CIMD
+    # draft nowhere requires them to share the document's origin. Naming a
+    # foreign `jwks_uri` already requires serving the document, so an attacker
+    # able to set it has taken the vendor's host and needs none of this.
+    test "accepts a jwks_uri on a different host from the document" do
+      for foreign <- [
+            "https://cdn.claude.ai/jwks.json",
+            "https://keys.example/jwks.json"
+          ] do
+        expect(FetcherMock, :fetch, fn @url ->
+          {:ok,
+           document(%{"token_endpoint_auth_method" => "private_key_jwt", "jwks_uri" => foreign})}
+        end)
+
+        assert {:ok, client} = Cimd.ensure_client(@url),
+               "expected jwks_uri #{foreign} to be accepted"
+
+        assert client.jwks_uri == foreign
+        Repo.delete!(client, skip_tenant_check: true)
+      end
+    end
+
+    # The permitted SET, not just the preferred method. ChatGPT declares
+    # `private_key_jwt` and also lists `none`; without the set on the row,
+    # nothing at token time could know a public exchange was allowed.
+    test "stores the supported auth methods the document advertises" do
+      expect(FetcherMock, :fetch, fn @url ->
+        {:ok,
+         document(%{
+           "token_endpoint_auth_method" => "private_key_jwt",
+           "jwks_uri" => "https://claude.ai/jwks.json",
+           "token_endpoint_auth_methods_supported" => [
+             "none",
+             "private_key_jwt",
+             "client_secret_basic"
+           ]
+         })}
+      end)
+
+      assert {:ok, client} = Cimd.ensure_client(@url)
+
+      # `client_secret_basic` is dropped: the CIMD path refuses it anyway, so
+      # storing it would record a permission that does not exist.
+      assert client.token_endpoint_auth_methods_supported == ["none", "private_key_jwt"]
+      assert Client.public_auth_permitted?(client)
+    end
+
+    # Absent list is `[]`, not NULL, and does NOT grant public auth.
+    test "treats an absent supported list as permitting nothing extra" do
+      expect(FetcherMock, :fetch, fn @url ->
+        {:ok,
+         document(%{
+           "token_endpoint_auth_method" => "private_key_jwt",
+           "jwks_uri" => "https://claude.ai/jwks.json"
+         })}
+      end)
+
+      assert {:ok, client} = Cimd.ensure_client(@url)
+      assert client.token_endpoint_auth_methods_supported == []
+      refute Client.public_auth_permitted?(client)
+    end
+
+    # The shape the routing change newly made reachable. Both `jwks_uri` arms
+    # used to gate on the PREFERRED method, so a document merely SUPPORTING
+    # `private_key_jwt` skipped them — persisting an unchecked URI that then
+    # failed as a retried-forever 503 rather than a legible refusal here.
+    #
+    # Every existing case in the two tests above sets the preferred method to
+    # `private_key_jwt`, which is exactly why this gap survived review once.
+    test "applies the jwks_uri checks when private_key_jwt is merely SUPPORTED" do
+      for {jwks, reason} <- [
+            {nil, :jwks_uri_required},
+            {"not-a-url", :jwks_uri_required},
+            {"https://claude.ai:8443/jwks.json", :jwks_uri_unfetchable}
+          ] do
+        expect(FetcherMock, :fetch, fn @url ->
+          {:ok,
+           document(%{
+             "token_endpoint_auth_method" => "none",
+             "token_endpoint_auth_methods_supported" => ["none", "private_key_jwt"],
+             "jwks_uri" => jwks
+           })}
+        end)
+
+        assert {:error, ^reason} = Cimd.ensure_client(@url),
+               "expected supported-only jwks_uri #{inspect(jwks)} to be refused as #{reason}"
+      end
+    end
+
+    # A `jwks_uri` on a document that permits no assertion method is unusable
+    # decoration. It is dropped, matching how `logo_uri` is handled, rather than
+    # refusing the client over it — and dropping it is also what keeps an
+    # unvalidated string out of the column, since neither `validate_document/2`
+    # jwks arm runs for this document.
+    test "drops a jwks_uri the document cannot use, without refusing the client" do
+      for junk <- ["not-a-url::%%", "https://claude.ai/" <> String.duplicate("a", 4000)] do
+        expect(FetcherMock, :fetch, fn @url ->
+          {:ok, document(%{"token_endpoint_auth_method" => "none", "jwks_uri" => junk})}
+        end)
+
+        assert {:ok, client} = Cimd.ensure_client(@url),
+               "expected an unusable jwks_uri to be dropped, not to refuse the client"
+
+        assert is_nil(client.jwks_uri)
+        Repo.delete!(client, skip_tenant_check: true)
+      end
+    end
+
+    # What replaced the same-origin rule. These are shapes `SsrfGuard` refuses
+    # at fetch time, so accepting them here would mint a client that 401s on
+    # every token exchange forever, with the real reason buried in a fetch the
+    # vendor cannot see.
+    test "rejects a jwks_uri the SSRF guard could never fetch" do
+      for unfetchable <- [
+            "https://claude.ai:8443/jwks.json",
+            "https://user:pw@claude.ai/jwks.json",
+            "https://claude.ai/jwks.json#frag"
+          ] do
+        expect(FetcherMock, :fetch, fn @url ->
+          {:ok,
+           document(%{
+             "token_endpoint_auth_method" => "private_key_jwt",
+             "jwks_uri" => unfetchable
+           })}
+        end)
+
+        assert {:error, :jwks_uri_unfetchable} = Cimd.ensure_client(@url),
+               "expected jwks_uri #{unfetchable} to be refused"
+      end
+    end
+
+    # ChatGPT's real published connector document, fetched 2026-09-15. Every
+    # other fixture in this file is Claude-shaped, which is precisely why a
+    # vendor declaring a different auth method was invisible here for weeks.
+    test "accepts ChatGPT's real published connector document" do
+      url = "https://chatgpt.com/oauth/client.json"
+
+      chatgpt = %{
+        "client_id" => url,
+        "client_uri" => "https://chatgpt.com/",
+        "redirect_uris" => ["https://chatgpt.com/connector_platform_oauth_redirect"],
+        "token_endpoint_auth_method" => "private_key_jwt",
+        "token_endpoint_auth_methods_supported" => ["none", "private_key_jwt"],
+        "grant_types" => ["authorization_code", "refresh_token"],
+        "response_types" => ["code"],
+        "client_name" => "ChatGPT",
+        "logo_uri" => "https://persistent.oaistatic.com/sonic/misc/openai-logo.png",
+        "token_endpoint_auth_signing_alg" => "RS256",
+        "jwks_uri" => "https://chatgpt.com/oauth/jwks.json"
+      }
+
+      expect(FetcherMock, :fetch, fn ^url -> {:ok, chatgpt} end)
+
+      assert {:ok, client} = Cimd.ensure_client(url)
+      assert client.client_name == "ChatGPT"
+      assert client.token_endpoint_auth_method == "private_key_jwt"
+      assert client.jwks_uri == "https://chatgpt.com/oauth/jwks.json"
+      assert client.redirect_uris == ["https://chatgpt.com/connector_platform_oauth_redirect"]
     end
 
     test "stores a public client with no secret even so" do
@@ -662,7 +916,7 @@ defmodule Engram.OAuth.CimdTest do
       assert {:ok, redirect} =
                OAuth.mint_authorization_code(user, validated, [vault.id], nil)
 
-      code = redirect |> URI.parse() |> Map.get(:query) |> URI.decode_query() |> Map.get("code")
+      code = code_from_redirect(redirect)
 
       # The wire client_id here is the URL; the code row holds the UUID. If the
       # comparison were a bare ==, this is where the legitimate client would be
@@ -707,7 +961,7 @@ defmodule Engram.OAuth.CimdTest do
       }
 
       {:ok, redirect} = OAuth.mint_authorization_code(user, validated, [vault.id], nil)
-      code = redirect |> URI.parse() |> Map.get(:query) |> URI.decode_query() |> Map.get("code")
+      code = code_from_redirect(redirect)
 
       assert {:error, :invalid_grant} =
                OAuth.exchange_authorization_code(%{

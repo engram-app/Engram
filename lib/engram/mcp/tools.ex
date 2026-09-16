@@ -92,6 +92,10 @@ defmodule Engram.MCP.Tools do
     end
   end
 
+  @doc "Tool names that take no `vault_id` — see `@vault_scoping_exempt`."
+  @spec vault_scoping_exempt() :: [String.t()]
+  def vault_scoping_exempt, do: @vault_scoping_exempt
+
   # -- Tool definitions --
 
   defp list_vaults_def do

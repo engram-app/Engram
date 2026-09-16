@@ -19,6 +19,19 @@ defmodule Engram.MCP.HandlersGetNoteTest do
       assert String.contains?(out, content), "note body must be returned verbatim"
     end
 
+    # A Windows vault. While `Frontmatter.split/1` only matched a `\n` opening
+    # fence this returned no frontmatter, so both fields were injected on top of
+    # the ones the note already declared.
+    test "CRLF frontmatter does not re-inject Title or Tags" do
+      content = "---\r\ntitle: My Note\r\ntags:\r\n  - project\r\n---\r\n# My Note\r\n\r\nBody."
+      out = Handlers.format_get_note(note(title: "My Note", tags: ["project"], content: content))
+
+      assert String.starts_with?(out, "**Path:** n.md"),
+             "no injected title/tags before Path block"
+
+      refute String.contains?(out, "**Tags:**"), "Tags should come from frontmatter, not injected"
+    end
+
     test "a note opening with an H2 still gets an injected title (## is not an H1)" do
       content = "## Subheading\n\nBody."
       out = Handlers.format_get_note(note(title: "Real Title", tags: [], content: content))

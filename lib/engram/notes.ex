@@ -96,6 +96,18 @@ defmodule Engram.Notes do
   # tombstone older than the window is allowed through as a genuine re-create.
   @delete_tombstone_window_seconds 60
 
+  # Note-size ceiling. Enforced by every transport that accepts a note body —
+  # REST `upsert` answers 413, the MCP `write_note` tool refuses — so it is
+  # declared here once instead of per transport, where the two could drift.
+  @max_note_bytes 10 * 1024 * 1024
+
+  # No @spec, deliberately: dialyzer runs with `:underspecs`, so `pos_integer()`
+  # is a supertype of the literal success typing and a spec tight enough to pass
+  # would only restate the constant. Same call `Engram.OAuth.Client` already
+  # made for `client_name_max_length/0`.
+  @doc "Maximum accepted size of a note body, in bytes."
+  def max_note_bytes, do: @max_note_bytes
+
   @doc """
   Composable query scope that restricts a `Note` query to kind='note' rows.
   Every site that wants real notes (excluding folder markers) should
