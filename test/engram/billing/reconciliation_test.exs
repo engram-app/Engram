@@ -84,6 +84,41 @@ defmodule Engram.Billing.ReconciliationTest do
       assert %{drift: [], paddle_total: 1, local_total: 0} = Reconciliation.run(7)
     end
 
+    test "logs the canceled-orphan skip at :info so it stays greppable" do
+      # The skip must not be silent. A hard-delete whose best-effort Paddle
+      # cancel FAILED pages while `active`, then Paddle flips it to `canceled`
+      # on its own — at which point this is the only remaining trace that we
+      # billed a deleted customer. It also means a regression that cascades
+      # `subscriptions` rows for live users shows up as volume here.
+      prev_level = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: prev_level) end)
+
+      Engram.Paddle.ClientMock
+      |> expect(:list_subscriptions, fn _since ->
+        {:ok,
+         [
+           paddle_sub(%{
+             "id" => "sub_orphan_logged",
+             "customer_id" => "ctm_orphan_logged",
+             "status" => "canceled"
+           })
+         ]}
+      end)
+
+      {_result, events} = LogCapture.with_events(fn -> Reconciliation.run(7) end)
+
+      skip =
+        Enum.find(events, fn event ->
+          event.meta[:paddle_subscription_id] == "sub_orphan_logged"
+        end)
+
+      assert skip, "expected the canceled-orphan skip to be logged"
+      assert skip.level == :info, "must NOT be :error — that is the page we are silencing"
+      assert skip.meta[:category] == :billing
+      assert skip.meta[:paddle_customer_id] == "ctm_orphan_logged"
+    end
+
     test "still reports :missing_local for a non-canceled Paddle sub with no local row" do
       # The canceled skip above must stay narrow: a `past_due` sub with no
       # local row means we are failing to bill someone Paddle still considers

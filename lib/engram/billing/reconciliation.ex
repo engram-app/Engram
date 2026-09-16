@@ -196,6 +196,24 @@ defmodule Engram.Billing.Reconciliation do
         # `past_due`/`paused`/`active` sub with no local row still pages,
         # which is what catches a hard-delete whose best-effort Paddle cancel
         # failed.
+        #
+        # Logged at :info, NOT dropped silently. Two reasons. (1) That
+        # best-effort cancel failure has a terminal state: we bill a deleted
+        # customer while `active` (which pages), then Paddle eventually flips
+        # it to `canceled` on its own — dunning exhaustion, a portal cancel,
+        # a Paddle-side admin — and this clause would swallow the only
+        # remaining trace of a refund we owe. (2) If the skip ever fires at
+        # volume, a regression is cascading `subscriptions` rows for users
+        # who were never deleted, and a counter that only ever moves on
+        # FAILURE would stay flat through it.
+        Logger.info(
+          "paddle_reconcile_canceled_orphan_skipped",
+          Metadata.with_category(:info, :billing,
+            paddle_subscription_id: paddle_sub["id"],
+            paddle_customer_id: paddle_sub["customer_id"]
+          )
+        )
+
         []
 
       is_nil(local) ->
