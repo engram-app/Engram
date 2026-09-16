@@ -167,7 +167,15 @@ config :engram, Oban,
        # small. Revisit around 1M points, where a full walk starts costing real
        # minutes — that is when the walk wants a resumable cursor rather than a
        # lower frequency.
-       {"0 5 * * *", Engram.Workers.OrphanSweep}
+       {"0 5 * * *", Engram.Workers.OrphanSweep},
+       # Daily CIMD document refresh (#1642). `Cimd.ensure_client/1` is only
+       # reached from the authorize path, so `cimd_fetched_at` measured time
+       # since a user last clicked Connect rather than vendor reachability — and
+       # a client on a 90-day refresh token could hold a document read months
+       # ago. Since that row carries the permitted auth-method set, a vendor
+       # TIGHTENING its document could not land the change until someone
+       # re-authorized. 05:40 keeps it clear of OrphanSweep at 05:00.
+       {"40 5 * * *", Engram.Workers.CimdRefresh}
      ]}
   ]
 
