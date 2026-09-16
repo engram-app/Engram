@@ -144,10 +144,17 @@ defmodule Engram.Crypto.UserDekRotation do
   # Yjs lineage seeded from content on top of it.
   #
   # Best-effort: a failed enqueue must not fail the rotation.
-  defp enqueue_crdt_head_rewarm(user_id) do
-    from(v in Engram.Vaults.Vault, where: v.user_id == ^user_id, select: v.id)
-    |> Repo.all(skip_tenant_check: true)
-    |> Enum.each(fn vault_id ->
+  defp enqueue_crdt_head_rewarm(%User{id: user_id}) do
+    # `vaults` is RLS-scoped, so an unscoped read returns [] and silently
+    # enqueues nothing. The inserts stay OUTSIDE the tenant scope: `oban_jobs`
+    # has no RLS, and `with_tenant/2` drops the connection to `engram_app`.
+    {:ok, vault_ids} =
+      Repo.with_tenant(user_id, fn ->
+        from(v in Engram.Vaults.Vault, where: v.user_id == ^user_id, select: v.id)
+        |> Repo.all(skip_tenant_check: true)
+      end)
+
+    Enum.each(vault_ids, fn vault_id ->
       %{"user_id" => user_id, "vault_id" => vault_id}
       |> Engram.Workers.BackfillCrdtHead.new()
       |> Oban.insert()
@@ -184,7 +191,7 @@ defmodule Engram.Crypto.UserDekRotation do
            provider.rotate_dek(user.encrypted_dek, %{user_id: user_id}),
          new_filter_key = Crypto.dek_filter_key_from_bytes(new_dek),
          :ok <- sweep_notes(user, old_dek, new_dek, new_filter_key, new_dek_version),
-         :ok <- enqueue_crdt_head_rewarm(user_id),
+         :ok <- enqueue_crdt_head_rewarm(user),
          :ok <- sweep_vaults(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_vault_index_states(user, old_dek, new_dek, new_dek_version),
          :ok <- sweep_vault_index_update_log(user, old_dek, new_dek, new_dek_version),
@@ -455,15 +462,20 @@ defmodule Engram.Crypto.UserDekRotation do
   end
 
   defp sweep_attachment_loop(user_id, new_dek_version, old_dek, new_dek, new_filter_key, last_id) do
-    ids =
-      from(a in Engram.Attachments.Attachment,
-        where: a.user_id == ^user_id and a.id > ^last_id,
-        where: is_nil(a.deleted_at),
-        order_by: a.id,
-        limit: ^@batch_size,
-        select: a.id
-      )
-      |> Repo.all(skip_tenant_check: true)
+    # Cursor only. The per-attachment work below does S3 I/O, which must not
+    # run inside a transaction, so each of its DB steps takes its own tenant
+    # scope instead of inheriting one from here.
+    {:ok, ids} =
+      Repo.with_tenant(user_id, fn ->
+        from(a in Engram.Attachments.Attachment,
+          where: a.user_id == ^user_id and a.id > ^last_id,
+          where: is_nil(a.deleted_at),
+          order_by: a.id,
+          limit: ^@batch_size,
+          select: a.id
+        )
+        |> Repo.all(skip_tenant_check: true)
+      end)
 
     case ids do
       [] ->
@@ -472,7 +484,14 @@ defmodule Engram.Crypto.UserDekRotation do
       _ ->
         result =
           Enum.reduce_while(ids, :ok, fn id, :ok ->
-            case rotate_one_attachment(id, new_dek_version, old_dek, new_dek, new_filter_key) do
+            case rotate_one_attachment(
+                   user_id,
+                   id,
+                   new_dek_version,
+                   old_dek,
+                   new_dek,
+                   new_filter_key
+                 ) do
               :ok -> {:cont, :ok}
               {:error, _} = err -> {:halt, err}
             end
@@ -495,10 +514,10 @@ defmodule Engram.Crypto.UserDekRotation do
     end
   end
 
-  defp rotate_one_attachment(att_id, new_dek_version, old_dek, new_dek, new_filter_key) do
-    with {:ok, _} <- mark_pending(att_id, new_dek_version),
+  defp rotate_one_attachment(user_id, att_id, new_dek_version, old_dek, new_dek, new_filter_key) do
+    with {:ok, _} <- mark_pending(user_id, att_id, new_dek_version),
          {:ok, attachment, recrypt_result} <-
-           recrypt_blob(att_id, old_dek, new_dek, new_dek_version) do
+           recrypt_blob(user_id, att_id, old_dek, new_dek, new_dek_version) do
       finalize_attachment(
         attachment,
         new_dek_version,
@@ -510,8 +529,8 @@ defmodule Engram.Crypto.UserDekRotation do
     end
   end
 
-  defp mark_pending(att_id, new_dek_version) do
-    Repo.transaction(fn ->
+  defp mark_pending(user_id, att_id, new_dek_version) do
+    Repo.with_tenant(user_id, fn ->
       case from(a in Engram.Attachments.Attachment, where: a.id == ^att_id)
            |> Repo.update_all([set: [dek_version_pending: new_dek_version]],
              skip_tenant_check: true
@@ -540,28 +559,33 @@ defmodule Engram.Crypto.UserDekRotation do
 
   # Returns {:ok, attachment, {:rotated, new_nonce}} when S3 PUT succeeded (blob now under new DEK)
   # Returns {:ok, attachment, :already_rotated} when blob is already under new DEK (prior crashed run)
-  defp recrypt_blob(att_id, old_dek, new_dek, new_dek_version) do
+  defp recrypt_blob(user_id, att_id, old_dek, new_dek, new_dek_version) do
     # Storage MatchError fix: use Repo.one/2 + nil case for concurrent hard-delete safety
-    attachment =
-      case Repo.one(
-             from(a in Engram.Attachments.Attachment, where: a.id == ^att_id),
-             skip_tenant_check: true
-           ) do
-        nil ->
-          Logger.error(
-            "T3.7 recrypt_blob: attachment row vanished",
-            Metadata.with_category(:error, :crypto,
-              table: :attachments,
-              row_id: att_id,
-              phase: :recrypt_blob
+    #
+    # Tenant scope ends with this read: everything below it is S3 I/O, which
+    # has no business inside a transaction.
+    {:ok, attachment} =
+      Repo.with_tenant(user_id, fn ->
+        case Repo.one(
+               from(a in Engram.Attachments.Attachment, where: a.id == ^att_id),
+               skip_tenant_check: true
+             ) do
+          nil ->
+            Logger.error(
+              "T3.7 recrypt_blob: attachment row vanished",
+              Metadata.with_category(:error, :crypto,
+                table: :attachments,
+                row_id: att_id,
+                phase: :recrypt_blob
+              )
             )
-          )
 
-          raise "T3.7 sweep_attachments: attachment row vanished att_id=#{att_id}"
+            raise "T3.7 sweep_attachments: attachment row vanished att_id=#{att_id}"
 
-        %Engram.Attachments.Attachment{} = a ->
-          a
-      end
+          %Engram.Attachments.Attachment{} = a ->
+            a
+        end
+      end)
 
     ct =
       case Engram.Storage.adapter().get(attachment.storage_key) do
@@ -620,7 +644,7 @@ defmodule Engram.Crypto.UserDekRotation do
          new_filter_key,
          recrypt_result
        ) do
-    Repo.transaction(fn ->
+    Repo.with_tenant(attachment.user_id, fn ->
       meta_updates =
         rewrap_attachment_metadata_columns(
           attachment,
@@ -874,11 +898,15 @@ defmodule Engram.Crypto.UserDekRotation do
   # key is unchanged, so a surviving hmac matches and the reused id names a
   # point that is gone.
   defp clear_chunk_context_hmacs(%User{id: user_id}) do
-    {_count, _} =
-      from(c in Engram.Notes.Chunk,
-        where: c.user_id == ^user_id and not is_nil(c.context_hmac)
-      )
-      |> Repo.update_all([set: [context_hmac: nil]], skip_tenant_check: true)
+    # `chunks` carries FORCE ROW LEVEL SECURITY. Unscoped, this matches zero
+    # rows and still returns :ok — a silent no-op.
+    {:ok, {_count, _}} =
+      Repo.with_tenant(user_id, fn ->
+        from(c in Engram.Notes.Chunk,
+          where: c.user_id == ^user_id and not is_nil(c.context_hmac)
+        )
+        |> Repo.update_all([set: [context_hmac: nil]], skip_tenant_check: true)
+      end)
 
     :ok
   end
@@ -1218,18 +1246,32 @@ defmodule Engram.Crypto.UserDekRotation do
     end
   end
 
+  # Every table swept through here carries FORCE ROW LEVEL SECURITY, so the
+  # cursor read and the batch's writes both need `app.current_tenant` set.
+  # `skip_tenant_check: true` only silences Engram's own `prepare_query/3`
+  # guard — it sets nothing in Postgres and does not scope the query. Without
+  # this wrapper the cursor matches zero rows for every user, the `[] -> :ok`
+  # clause below reads that as "nothing left to sweep", and the rotation
+  # reports success having re-encrypted nothing while `final_flip/3` still
+  # lands (`users` has no RLS). Unrecoverable once the old key is retired.
+  #
+  # Wrapped per batch rather than per sweep: `with_tenant/2` opens a
+  # transaction, and one transaction spanning an entire table's re-encryption
+  # would hold every row lock for the duration of the sweep.
   defp sweep_table_loop(user_id, schema, last_id, fun) do
-    ids = fetch_batch_ids(user_id, schema, last_id)
-
-    case ids do
-      [] ->
-        :ok
-
-      _ ->
-        case fun.(ids) do
-          :ok -> sweep_table_loop(user_id, schema, List.last(ids), fun)
-          {:error, _} = err -> err
+    swept =
+      Repo.with_tenant(user_id, fn ->
+        case fetch_batch_ids(user_id, schema, last_id) do
+          [] -> :done
+          ids -> {:batch, ids, fun.(ids)}
         end
+      end)
+
+    case swept do
+      {:ok, :done} -> :ok
+      {:ok, {:batch, ids, :ok}} -> sweep_table_loop(user_id, schema, List.last(ids), fun)
+      {:ok, {:batch, _ids, {:error, _} = err}} -> err
+      {:error, reason} -> {:error, reason}
     end
   end
 
