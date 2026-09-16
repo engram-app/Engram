@@ -170,6 +170,62 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
     assert body["next_step"] == "billing"
   end
 
+  describe "resume_url" do
+    setup do
+      prev = Application.get_env(:engram, :frontend_base_url)
+      on_exit(fn -> Application.put_env(:engram, :frontend_base_url, prev) end)
+      :ok
+    end
+
+    test "403 body carries an absolute resume_url on the frontend host", %{conn: conn} do
+      Application.put_env(:engram, :frontend_base_url, "https://app.engram.page")
+      user = insert(:user, onboarding_profile: %{})
+
+      conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
+
+      body = Phoenix.ConnTest.json_response(conn, 403)
+      assert body["resume_url"] == "https://app.engram.page/onboard"
+    end
+
+    test "a trailing slash on the configured base does not double up", %{conn: conn} do
+      Application.put_env(:engram, :frontend_base_url, "https://app.engram.page/")
+      user = insert(:user, onboarding_profile: %{})
+
+      conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
+
+      body = Phoenix.ConnTest.json_response(conn, 403)
+      assert body["resume_url"] == "https://app.engram.page/onboard"
+    end
+
+    test "falls back to the endpoint host when no frontend base is configured (self-host)",
+         %{conn: conn} do
+      Application.put_env(:engram, :frontend_base_url, nil)
+      user = insert(:user, onboarding_profile: %{})
+
+      conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
+
+      body = Phoenix.ConnTest.json_response(conn, 403)
+      assert body["resume_url"] == EngramWeb.Endpoint.url() <> "/onboard"
+    end
+
+    test "an empty frontend base is treated as unset, not as a bare /onboard", %{conn: conn} do
+      Application.put_env(:engram, :frontend_base_url, "")
+      user = insert(:user, onboarding_profile: %{})
+
+      conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
+
+      body = Phoenix.ConnTest.json_response(conn, 403)
+      assert body["resume_url"] == EngramWeb.Endpoint.url() <> "/onboard"
+    end
+
+    test "the 401 path carries no resume_url (nothing to resume)", %{conn: conn} do
+      conn = RequireOnboarding.call(conn, [])
+
+      body = Phoenix.ConnTest.json_response(conn, 401)
+      refute Map.has_key?(body, "resume_url")
+    end
+  end
+
   test "403 includes Content-Type application/json", %{conn: conn} do
     user = insert(:user, onboarding_profile: %{})
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])

@@ -1,7 +1,11 @@
 defmodule EngramWeb.Plugs.RequireOnboarding do
   @moduledoc """
   Halts authenticated requests with 403 `{error: "onboarding_required",
-  missing: [...]}` when the user has not completed the signup wizard.
+  missing: [...], next_step: ..., resume_url: ...}` when the user has not
+  completed the signup wizard. `resume_url` is absolute and points at the
+  wizard's resolver, which forwards to whatever step is actually next — a
+  client that surfaces it sends the user somewhere that still works after
+  they finish a step in another tab.
   Onboarding is universal (every account needs profile + vault); the
   `:billing_enabled` flag only affects which steps the wizard runs.
   Self-host (billing off): profile + vault. SaaS: agreement + billing +
@@ -48,9 +52,28 @@ defmodule EngramWeb.Plugs.RequireOnboarding do
             Halt.json(conn, 403, %{
               error: "onboarding_required",
               missing: missing,
-              next_step: next_step
+              next_step: next_step,
+              resume_url: resume_url()
             })
         end
     end
+  end
+
+  # ABSOLUTE, not a path. The consumer that most needs this is an MCP client
+  # that reached us through OAuth and has never seen our host — `/onboard` is
+  # unresolvable there, and a client which renders the error verbatim (most do)
+  # would show the user a dead string. Mirrors the host selection in
+  # `EngramWeb.OAuthAuthorizeController`: the SPA owns `/onboard`, and after the
+  # saas eject it is on app.engram.page while this plug answers on api./mcp.
+  # Self-host leaves `:frontend_base_url` unset and serves both from one origin,
+  # so the endpoint URL is correct there.
+  defp resume_url do
+    base =
+      case Application.get_env(:engram, :frontend_base_url) do
+        url when is_binary(url) and url != "" -> String.trim_trailing(url, "/")
+        _ -> EngramWeb.Endpoint.url()
+      end
+
+    base <> "/onboard"
   end
 end
