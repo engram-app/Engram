@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.2](https://github.com/engram-app/Engram/compare/0.27.1...0.27.2) (2026-09-16)
+
+
+### Bug Fixes
+
+* **billing:** stop paging on canceled subs from deleted accounts ([#1651](https://github.com/engram-app/Engram/issues/1651)) ([6febb1e](https://github.com/engram-app/Engram/commit/6febb1eb99fce0813b2daba443d0cded249d553a))
+
 ## [0.27.1](https://github.com/engram-app/Engram/compare/0.27.0...0.27.1) (2026-09-16)
 
 
