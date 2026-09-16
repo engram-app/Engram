@@ -23,15 +23,24 @@ async function cleanupClerkUser() {
 		return;
 	}
 
-	const resp = await fetch(`${CLERK_API}/users/${state.clerk_user_id}`, {
-		method: "DELETE",
-		headers: { Authorization: `Bearer ${secretKey}` },
-	});
+	// Both users, including the deliberately un-onboarded one. Deleted in a loop
+	// so a failure on the first does not strand the second — Clerk's dev
+	// instance has a 100-user cap and leaked users are what hits it.
+	for (const id of [state.clerk_user_id, state.pending_clerk_user_id]) {
+		if (!id) {
+			continue;
+		}
 
-	if (resp.ok) {
-		console.log(`Clerk test user deleted: ${state.clerk_user_id}`);
-	} else {
-		console.warn(`Failed to delete Clerk user ${state.clerk_user_id}: ${resp.status}`);
+		const resp = await fetch(`${CLERK_API}/users/${id}`, {
+			method: "DELETE",
+			headers: { Authorization: `Bearer ${secretKey}` },
+		});
+
+		if (resp.ok) {
+			console.log(`Clerk test user deleted: ${id}`);
+		} else {
+			console.warn(`Failed to delete Clerk user ${id}: ${resp.status}`);
+		}
 	}
 
 	fs.unlinkSync(AUTH_STATE_PATH);

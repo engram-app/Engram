@@ -326,4 +326,60 @@ export default async function globalSetup() {
 	// RequireOnboarding gates /api/* with 403 `onboarding_required` until the
 	// user has a profile. uses_obsidian=true short-circuits the vault step too.
 	await preCompleteOnboarding(user.id, secretKey);
+
+	// A SECOND user, deliberately left un-onboarded.
+	//
+	// Every fixture in both e2e suites pre-completes onboarding — this file,
+	// e2e/helpers/oauth.py, e2e/helpers/clerk_auth.py — so no test in either
+	// suite has ever BEEN an un-onboarded user. That is structural, and it is
+	// why the MCP-first dead end (#1666) reached production: the harness could
+	// not reach the broken state. The consent-bounce spec needs exactly it.
+	//
+	// `e2e-browser-pending-*` matches the existing `e2e-browser-%@test.com`
+	// cleanup pattern in db-cleanup.ts, so the backend row is collected without
+	// widening that list.
+	const pendingEmail = `e2e-browser-pending-${ts}@test.com`;
+	const pendingPassword = crypto.randomBytes(12).toString("base64url");
+
+	const pendingResp = await fetch(`${CLERK_API}/users`, {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${secretKey}`,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify({
+			email_address: [pendingEmail],
+			username: `e2e-pending-${ts}`,
+			password: pendingPassword,
+			skip_password_checks: true,
+		}),
+	});
+
+	if (!pendingResp.ok) {
+		const body = await pendingResp.text();
+		throw new Error(`Clerk pending-user creation failed: ${pendingResp.status} ${body}`);
+	}
+
+	const pendingUser = await pendingResp.json();
+	console.log(`Clerk un-onboarded user created: ${pendingEmail} (${pendingUser.id})`);
+
+	// Stamped before the readiness probes, same reasoning as the first user: a
+	// flake in them must not leak a Clerk user past teardown.
+	fs.writeFileSync(
+		AUTH_STATE_PATH,
+		JSON.stringify({
+			email,
+			password,
+			clerk_user_id: user.id,
+			pending_email: pendingEmail,
+			pending_password: pendingPassword,
+			pending_clerk_user_id: pendingUser.id,
+			skipped: false,
+		}),
+	);
+
+	await waitUntilSignInReady(pendingUser.id, secretKey);
+	await waitUntilEmailResolvable(pendingEmail, pendingUser.id, secretKey);
+
+	// No preCompleteOnboarding call for this one. That omission IS the fixture.
 }
