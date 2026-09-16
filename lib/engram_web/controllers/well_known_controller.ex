@@ -108,7 +108,11 @@ defmodule EngramWeb.WellKnownController do
         # `none` MUST stay first-class here, not merely present for legacy: Claude
         # selects its CIMD flow only when this list contains "none", and would
         # otherwise fall back to DCR. The secret-based methods are additive, for
-        # server-side connectors that cannot hold a public client.
+        # server-side connectors that cannot hold a public client, and they are
+        # honoured on the DCR path ONLY. A CIMD client never registered, so no
+        # secret exists to check against: its document may LIST them, and #1634
+        # made that non-fatal, but such a client still authenticates with `none`
+        # or `private_key_jwt` regardless of which it prefers.
         # `private_key_jwt` is CIMD-only: a client that publishes a document can
         # publish keys in it, a stranger POSTing to /oauth/register cannot. It is
         # listed here because ChatGPT and other connectors read this list to

@@ -139,6 +139,60 @@ defmodule Engram.OAuth.CimdTest do
       end
     end
 
+    # #1634. Refusing on the PREFERRED method dead-ended a vendor whose
+    # permitted set named a method we fully implement. The token endpoint routes
+    # on the set, so the set is what decides whether there is a flow left.
+    test "accepts a refused preference when the permitted set names private_key_jwt" do
+      expect(FetcherMock, :fetch, fn @url ->
+        {:ok,
+         document(%{
+           "token_endpoint_auth_method" => "client_secret_basic",
+           "token_endpoint_auth_methods_supported" => ["client_secret_basic", "private_key_jwt"],
+           "token_endpoint_auth_signing_alg" => "RS256",
+           "jwks_uri" => "https://claude.ai/oauth/jwks.json"
+         })}
+      end)
+
+      assert {:ok, client} = Cimd.ensure_client(@url)
+      assert client.token_endpoint_auth_method == "private_key_jwt"
+      assert client.token_endpoint_auth_methods_supported == ["private_key_jwt"]
+      assert Client.assertion_permitted?(client)
+    end
+
+    test "accepts a refused preference when the permitted set names none" do
+      expect(FetcherMock, :fetch, fn @url ->
+        {:ok,
+         document(%{
+           "token_endpoint_auth_method" => "client_secret_post",
+           "token_endpoint_auth_methods_supported" => ["client_secret_post", "none"]
+         })}
+      end)
+
+      assert {:ok, client} = Cimd.ensure_client(@url)
+      assert client.token_endpoint_auth_method == "none"
+      assert Client.public_auth_permitted?(client)
+      refute Client.assertion_permitted?(client)
+    end
+
+    # Still refused when the whole permitted set is methods we cannot honour.
+    # No secret was ever minted for a client that did not register, so there is
+    # genuinely no flow left to run.
+    test "rejects a document permitting only secret-based methods" do
+      expect(FetcherMock, :fetch, fn @url ->
+        {:ok,
+         document(%{
+           "token_endpoint_auth_method" => "client_secret_basic",
+           "token_endpoint_auth_methods_supported" => [
+             "client_secret_post",
+             "client_secret_basic"
+           ]
+         })}
+      end)
+
+      assert {:error, :confidential_not_supported} = Cimd.ensure_client(@url)
+      assert Repo.aggregate(Client, :count) == 0
+    end
+
     # The regression this whole path exists for. Before #1633 this asserted a
     # refusal, which is why ChatGPT being unable to connect never turned a test
     # red: a test that guards a decision passes just as green on the day the

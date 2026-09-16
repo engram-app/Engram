@@ -92,6 +92,21 @@ defmodule Engram.OAuth.ClientTest do
     # `token_endpoint_auth_method`, just not one this path accepts.
     {"prefers a real method the CIMD path refuses",
      %{"token_endpoint_auth_method" => "client_secret_basic"}, false},
+
+    # #1634, the third way the same defect points. The preference is one we
+    # refuse, but the permitted SET names one we implement, and the set is what
+    # the token endpoint routes on. Refusing on the preference alone dead-ended
+    # a client that could have authenticated.
+    {"prefers a refused method, permits private_key_jwt",
+     %{
+       "token_endpoint_auth_method" => "client_secret_basic",
+       "token_endpoint_auth_methods_supported" => ["client_secret_basic", "private_key_jwt"]
+     }, true},
+    {"prefers a refused method, permits only none",
+     %{
+       "token_endpoint_auth_method" => "client_secret_post",
+       "token_endpoint_auth_methods_supported" => ["client_secret_post", "none"]
+     }, false},
     {"neither field", %{}, false}
   ]
 
@@ -145,6 +160,81 @@ defmodule Engram.OAuth.ClientTest do
       for not_a_document <- [nil, "private_key_jwt", [], 42] do
         refute Client.document_permits_assertion?(not_a_document)
       end
+    end
+  end
+
+  describe "a refused preference with a permitted set we accept (#1634)" do
+    # What gets STORED, not just what the predicates answer. The preference
+    # cannot go in the column: `validate_inclusion` refuses it, which is how a
+    # connectable client ended up with an invalid changeset.
+    test "stores the assertion method when the document permits one" do
+      stored =
+        row(
+          document(%{
+            "token_endpoint_auth_method" => "client_secret_basic",
+            "token_endpoint_auth_methods_supported" => ["client_secret_basic", "private_key_jwt"]
+          })
+        )
+
+      assert stored.token_endpoint_auth_method == "private_key_jwt"
+    end
+
+    test "stores none when that is all the document permits" do
+      stored =
+        row(
+          document(%{
+            "token_endpoint_auth_method" => "client_secret_post",
+            "token_endpoint_auth_methods_supported" => ["client_secret_post", "none"]
+          })
+        )
+
+      assert stored.token_endpoint_auth_method == "none"
+    end
+
+    test "the changeset is valid, not merely applied" do
+      for supported <- [["none"], ["private_key_jwt"], ["none", "private_key_jwt"]] do
+        changeset =
+          Client.cimd_changeset(
+            %Client{},
+            @url,
+            document(%{
+              "token_endpoint_auth_method" => "client_secret_basic",
+              "token_endpoint_auth_methods_supported" => supported
+            })
+          )
+
+        assert changeset.valid?, "expected supported #{inspect(supported)} to be storable"
+      end
+    end
+
+    # Defence in depth. `Cimd.validate_document/2` refuses these before the
+    # changeset runs, so this is about a direct caller not being able to insert
+    # a client that could never authenticate.
+    test "a document permitting nothing we implement stays invalid" do
+      for overrides <- [
+            %{"token_endpoint_auth_method" => "client_secret_basic"},
+            %{
+              "token_endpoint_auth_method" => "client_secret_basic",
+              "token_endpoint_auth_methods_supported" => []
+            },
+            %{
+              "token_endpoint_auth_method" => "client_secret_basic",
+              "token_endpoint_auth_methods_supported" => ["client_secret_post"]
+            }
+          ] do
+        changeset = Client.cimd_changeset(%Client{}, @url, document(overrides))
+
+        refute changeset.valid?, "expected #{inspect(overrides)} to be refused"
+      end
+    end
+
+    # An absent field has always meant `none` and must keep meaning it: the
+    # permitted-set rule must not turn "unstated" into "nothing usable".
+    test "a document naming no method at all is still storable as none" do
+      changeset = Client.cimd_changeset(%Client{}, @url, document(%{}))
+
+      assert changeset.valid?
+      assert Changeset.apply_changes(changeset).token_endpoint_auth_method == "none"
     end
   end
 

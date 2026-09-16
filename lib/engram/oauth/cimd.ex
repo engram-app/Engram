@@ -437,21 +437,18 @@ defmodule Engram.OAuth.Cimd do
       # `authenticate_client/3` must then reject for being present at all. Both
       # failures are opaque; refusing the document is legible.
       #
-      # KNOWN WRONG, tracked in #1634: this reads the PREFERRED method while the
-      # token endpoint routes on the permitted SET. A document preferring
-      # `client_secret_basic` but also supporting `none` and `private_key_jwt`
-      # permits two methods we fully implement, publishes usable keys, and is
-      # still refused terminally here. Same "preference treated as a
-      # requirement" defect as #1633/#1639/#1640, pointing a third way.
+      # Read off the permitted SET, matching how the token endpoint routes. The
+      # preference alone was read as a requirement until #1634, so a document
+      # naming `client_secret_basic` first was refused terminally even when it
+      # also permitted `private_key_jwt` or `none`, both of which we implement.
+      # Same "preference treated as a requirement" defect as #1633/#1639/#1640,
+      # pointing a third way.
       #
-      # Reordering this above the `jwks_uri` arms was tried on 2026-09-15 and
-      # reverted. It only changed WHICH wrong answer came first, and a vendor
-      # sees neither: `cimd_error/1` collapses every non-transient reason to a
-      # bare `invalid_client`, so the atom reaches Loki and nothing else. The
-      # correct fix tests the permitted set and refuses only when the union
-      # contains nothing usable, which also needs `cimd_changeset/3` to store a
-      # permitted method rather than copying the preferred one.
-      document["token_endpoint_auth_method"] not in [nil, "none", "private_key_jwt"] ->
+      # Empty is the only refusal left, and it is a real one: every method the
+      # document permits would need a secret it never received.
+      # `Client.cimd_changeset/3` stores a member of this same set, so whatever
+      # passes here is what the token endpoint later routes on.
+      Client.document_permitted_auth_methods(document) == [] ->
         {:error, :confidential_not_supported}
 
       true ->
