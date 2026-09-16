@@ -10,7 +10,32 @@ defmodule EngramWeb.McpController do
 
   @server_info %{"name" => "engram", "version" => "0.1.0"}
   @capabilities %{"tools" => %{"listChanged" => false}}
-  @protocol_version "2025-03-26"
+  # Newest first. `2025-06-18` is what makes structured tool output reachable:
+  # `outputSchema` / `structuredContent` landed in that revision, so announcing
+  # only `2025-03-26` left the whole feature unreadable by a conformant client.
+  #
+  # We meet it: no JSON-RPC batching (removed there, we never had it), OAuth
+  # resource-server metadata already shipped, and elicitation / resource links
+  # are optional capabilities we simply do not advertise.
+  #
+  # `2025-03-26` stays supported so a client pinned to it keeps working. This
+  # list is the negotiation surface — adding a revision means meeting it.
+  @supported_protocol_versions ["2025-06-18", "2025-03-26", "2024-11-05"]
+
+  # `2024-11-05` is on the list for CONTINUITY, not ambition. SDKs released
+  # before ~June 2025 ship `SUPPORTED_PROTOCOL_VERSIONS = ["2025-03-26",
+  # "2024-11-05"]` and ABORT with "Server's protocol version is not supported"
+  # on anything else. Omitting it meant such a client asked for `2024-11-05`,
+  # got `2025-06-18`, and stopped connecting — a client that worked yesterday
+  # breaking on an upgrade it never requested. We meet it trivially: it is
+  # strictly older than what we already serve.
+  #
+  # Answered when a client names no version at all. Pinned to `2025-03-26`
+  # rather than the list's last entry, so the floor does not drift downward
+  # when an older revision is added for compatibility — this is the value the
+  # server answered before negotiation existed, and a versionless client should
+  # see no change.
+  @default_protocol_version "2025-03-26"
 
   # Handshake fields are free text from the far side of the connection, so they
   # are length-bounded before they reach the log — an unbounded `clientInfo` is
@@ -32,17 +57,43 @@ defmodule EngramWeb.McpController do
   # rather than restated here (see `dispatch_tool/4`).
   @vault_exempt Tools.vault_scoping_exempt()
 
-  def handle(conn, %{"jsonrpc" => "2.0", "id" => id, "method" => method} = params) do
+  @doc """
+  Entry point for every JSON-RPC call.
+
+  `MCP-Protocol-Version` is required on subsequent HTTP requests from
+  `2025-06-18`. An ABSENT header is fine — it means a pre-2025-06-18 client,
+  which the spec says to treat as `2025-03-26` — but a header naming a revision
+  we do not speak must be refused with 400 rather than silently served as
+  though it were supported, which would leave the client believing we agreed.
+  """
+  def handle(conn, params) do
+    case get_req_header(conn, "mcp-protocol-version") do
+      [version | _] when version not in @supported_protocol_versions ->
+        conn
+        |> put_status(400)
+        |> send_jsonrpc_error(
+          jsonrpc_id(params["id"]),
+          -32_600,
+          "Unsupported MCP protocol version: #{safe_header_label(version)}. " <>
+            "Supported: #{Enum.join(@supported_protocol_versions, ", ")}."
+        )
+
+      _ ->
+        do_handle(conn, params)
+    end
+  end
+
+  defp do_handle(conn, %{"jsonrpc" => "2.0", "id" => id, "method" => method} = params) do
     result = dispatch(conn, method, params["params"] || %{})
     send_jsonrpc(conn, id, result)
   end
 
   # Notification (no id) — acknowledge
-  def handle(conn, %{"jsonrpc" => "2.0", "method" => _method}) do
+  defp do_handle(conn, %{"jsonrpc" => "2.0", "method" => _method}) do
     send_resp(conn, 202, "")
   end
 
-  def handle(conn, _params) do
+  defp do_handle(conn, _params) do
     send_jsonrpc_error(conn, nil, -32_600, "Invalid Request")
   end
 
@@ -68,15 +119,45 @@ defmodule EngramWeb.McpController do
   end
 
   @doc """
+  Protocol revisions this server can speak, newest first.
+
+  Public so tests and the negotiation logic read one list rather than
+  restating it.
+  """
+  @spec supported_protocol_versions() :: [String.t(), ...]
+  def supported_protocol_versions, do: @supported_protocol_versions
+
+  @doc """
+  The revision to answer a handshake with.
+
+  Per the lifecycle spec: echo the requested version when we support it,
+  otherwise answer with the latest we do support. Neither branch fails the
+  handshake — a version mismatch is for the client to act on, not a reason to
+  refuse the connection.
+  """
+  @spec negotiate_protocol_version(term()) :: String.t()
+  def negotiate_protocol_version(requested) when is_binary(requested) do
+    if requested in @supported_protocol_versions,
+      do: requested,
+      else: List.first(@supported_protocol_versions)
+  end
+
+  def negotiate_protocol_version(nil), do: @default_protocol_version
+
+  # A non-string version is a malformed request, not a legacy client, so it
+  # gets the newest rather than the floor.
+  def negotiate_protocol_version(_other), do: List.first(@supported_protocol_versions)
+
+  @doc """
   Structured metadata for the `mcp_handshake` log line.
 
   Public only so it can be unit-tested without asserting on rendered log text.
 
-  We answer `initialize` with a fixed `@protocol_version` and negotiate nothing,
-  so the version the client ASKED for is not otherwise recorded anywhere. That
-  is the fact needed to decide whether a newer protocol revision can drop the
-  legacy path or has to dual-serve it, hence `mcp_protocol_requested` alongside
-  `mcp_protocol_served`.
+  Carries `mcp_protocol_requested` alongside `mcp_protocol_served` so a
+  DOWNGRADE is visible: the two are equal on a normal handshake and differ when
+  a client asked for something outside `supported_protocol_versions/0`. That
+  difference is the signal for when a revision can be retired, and it is not
+  recoverable from anywhere else.
   """
   @spec handshake_metadata(term()) :: keyword()
   # `is_non_struct_map/1`, not `is_map/1`, in BOTH places. Two reasons a
@@ -102,8 +183,29 @@ defmodule EngramWeb.McpController do
       mcp_protocol_requested: bounded(params["protocolVersion"]),
       mcp_client_name: bounded(client["name"]),
       mcp_client_version: bounded(client["version"]),
-      mcp_protocol_served: @protocol_version
+      mcp_protocol_served: negotiate_protocol_version(params["protocolVersion"])
     )
+  end
+
+  # JSON-RPC 2.0 allows an id of string, number or null, and nothing else. The
+  # endpoint parses `:multipart` with `pass: ["*/*"]`, so a form part named `id`
+  # WITH A FILENAME arrives as a `%Plug.Upload{}` — a map, so no container guard
+  # catches it, and it has no `Jason.Encoder`, so echoing it raises
+  # `Protocol.UndefinedError` and turns this 400 into a 500. A 500 here is not
+  # cosmetic: it fires Sentry and feeds `HTTPCode_Target_5XX_Count`, the one
+  # status class that actually pages.
+  defp jsonrpc_id(id) when is_binary(id) or is_number(id), do: id
+  defp jsonrpc_id(_id), do: nil
+
+  # A raw header value, unlike a JSON-decoded one, is arbitrary bytes: it need
+  # not be valid UTF-8 and has no length bound short of the server's header
+  # limit. Echoing it unchecked let invalid UTF-8 raise `Jason.EncodeError`
+  # while rendering the 400 — turning the intended refusal into a 500 — and let
+  # a 4 KB header come back verbatim in the error body.
+  # No non-binary clause: `get_req_header/2` only ever yields binaries, and
+  # dialyzer flags the dead branch.
+  defp safe_header_label(value) do
+    if String.valid?(value), do: bounded(value), else: "<invalid>"
   end
 
   defp bounded(nil), do: "unknown"
@@ -132,6 +234,17 @@ defmodule EngramWeb.McpController do
   # the JSON types are the same closed set.
   defp bounded(value), do: tool_name_label(value)
 
+  # `params` is NOT necessarily a plain map: JSON-RPC 2.0 allows array-form
+  # params (and `[]` is truthy, so `params["params"] || %{}` passes it through),
+  # and the endpoint parses multipart with `pass: ["*/*"]`, so a field named
+  # `params` lands a `%Plug.Upload{}`. `Access` raises on both. Indexing it
+  # directly is the crash `handshake_metadata/1` already guards against; this is
+  # the one other reader, and it must use the same guard.
+  defp requested_protocol_version(params) when is_non_struct_map(params),
+    do: params["protocolVersion"]
+
+  defp requested_protocol_version(_params), do: nil
+
   # -- Method dispatch --
 
   defp dispatch(_conn, "initialize", params) do
@@ -141,7 +254,7 @@ defmodule EngramWeb.McpController do
 
     {:ok,
      %{
-       "protocolVersion" => @protocol_version,
+       "protocolVersion" => requested_protocol_version(params) |> negotiate_protocol_version(),
        "serverInfo" => @server_info,
        "capabilities" => @capabilities
      }}
@@ -150,7 +263,18 @@ defmodule EngramWeb.McpController do
   defp dispatch(_conn, "tools/list", _params) do
     tools =
       Enum.map(Tools.list(), fn t ->
-        %{"name" => t.name, "description" => t.description, "inputSchema" => t.inputSchema}
+        base = %{
+          "name" => t.name,
+          "description" => t.description,
+          "inputSchema" => t.inputSchema
+        }
+
+        # Only for converted tools (#1660). An `outputSchema` a tool cannot
+        # honour is worse than none: a client generates types from it.
+        case t[:outputSchema] do
+          nil -> base
+          schema -> Map.put(base, "outputSchema", schema)
+        end
       end)
 
     {:ok, %{"tools" => tools}}
@@ -324,8 +448,23 @@ defmodule EngramWeb.McpController do
   def run_tool_handler(tool, user, vault, args) do
     case tool.handler.(user, vault, args) do
       {:ok, text} ->
-        result = {:ok, %{"content" => [%{"type" => "text", "text" => text}], "isError" => false}}
-        {result, :ok, byte_size_safe(text)}
+        {{:ok, text_result(text)}, :ok, byte_size_safe(text)}
+
+      # A converted tool (#1660) answers with both renderings. `content` stays
+      # mandatory — `structuredContent` is additive, and a client that ignores
+      # it must still get a usable answer.
+      {:ok, text, structured} when is_map(structured) ->
+        result = Map.put(text_result(text), "structuredContent", structured)
+        # `text` only, deliberately. A previous pass added a second Jason.encode
+        # here so the size metric would count structuredContent too. That was
+        # wrong three ways: prod relabels
+        # `engram_prom_ex_mcp_tool_result_bytes_bucket` to drop (engram-infra
+        # ecs.tf, "ZERO dashboard/alert consumers"), the extra encode costs
+        # ~7.6ms on a 225KB payload for a metric nobody reads, and its error
+        # fallback swallowed the one signal that catches a non-JSON-safe
+        # payload. The metric also documents itself as LLM context cost, which
+        # is `content` — structuredContent is for programmatic use.
+        {{:ok, result}, :ok, byte_size_safe(text)}
 
       {:error, msg} ->
         {error_result(msg), :error, byte_size_safe(msg)}
@@ -445,6 +584,9 @@ defmodule EngramWeb.McpController do
       many -> {:many, many}
     end
   end
+
+  defp text_result(text),
+    do: %{"content" => [%{"type" => "text", "text" => text}], "isError" => false}
 
   defp error_result(msg),
     do: {:ok, %{"content" => [%{"type" => "text", "text" => "Error: #{msg}"}], "isError" => true}}

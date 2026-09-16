@@ -61,14 +61,28 @@ EXIT_ENVIRONMENT = 2
 #               special-use addresses, and the CLI exposes no opt-in (3.18/3.19):
 #               "Refusing outbound OAuth fetch to loopback host". A CI stack is
 #               loopback by construction, so this stage needs a real deployment.
-#   protocol  — genuinely red against us today: `ping` unimplemented,
-#               `localhost-host-rebinding-rejected` (we answer 200 to a
-#               rebinding Host), and we announce protocol 2025-03-26 so
-#               2025-06-18+ fail at `server-initialize`. Real gaps, filed
-#               separately. Turning them on now would block every merge;
-#               excluding the failing checks would be the silent-green this
-#               suite exists to prevent. It graduates to the gate when they are
-#               fixed, not before.
+#   protocol  — still red, and this PR made two cells WORSE, not better.
+#               `server-initialize` no longer fails on 2025-06-18 now that we
+#               negotiate it. But we also enforce the 2025-06-18 MUST: a request
+#               whose `MCP-Protocol-Version` header names a revision we do not
+#               speak gets a hard 400. MCPJam pins that header from its
+#               `--protocol-version` flag rather than from the version the
+#               server negotiated (@mcpjam/sdk `modernHeaders`), and
+#               `scripts/mcp-conformance.sh` iterates 2025-11-25 and 2026-07-28.
+#               Those two cells therefore go from "handshake succeeds,
+#               server-initialize fails" to "every POST is a 400". Nothing in CI
+#               runs them — GATED_STAGES is `spec`, and cron runs spec,oauth —
+#               so this is bookkeeping, which is the whole point of this comment
+#               block.
+#
+#               Also still red: `localhost-host-rebinding-rejected` (we answer
+#               200 to a rebinding Host, Engram#1259). NOT worth fixing:
+#               `ping`, which 2026-07-28 removes outright (SEP-2575) along with
+#               logging/setLevel and roots/list_changed — MCPJam only asks for
+#               it because of the revision we announce. Most capability skips
+#               are resources/prompts/logging, all deprecated in 2026-07-28, so
+#               they resolve to "permanently N/A" rather than to work.
+#               See Engram#1659 for the upgrade.
 #
 # `spec` is not a consolation prize: it is the stage that caught all three
 # discovery bugs on 2026-08-05 while the MCPJam matrix was green.

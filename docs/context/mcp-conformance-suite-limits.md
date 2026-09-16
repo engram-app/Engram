@@ -89,7 +89,11 @@ Refusing outbound OAuth fetch to loopback host "localhost" (no loopback opt-in)
 
 It defends against a hostile MCP server steering a fetch at `169.254.169.254` or a LAN service, which is worth having. There is no workaround from our side: a private LAN address is equally refused, and a hostname resolving to loopback is caught by their DNS revalidation. This stage needs a publicly-addressed deployment.
 
-**`protocol` is red for real reasons** — `ping` unimplemented, no Host-rebinding rejection, and we announce protocol `2025-03-26`. Filed as #1259. It is excluded from the gate rather than having its failing checks excluded, because the latter is the exact silent-green this document is about.
+**`protocol` is red for real reasons** — no Host-rebinding rejection (#1259), and two matrix cells now 400 outright. It is excluded from the gate rather than having its failing checks excluded, because the latter is the exact silent-green this document is about.
+
+We no longer announce `2025-03-26` unconditionally: `initialize` negotiates across `2025-06-18`, `2025-03-26` and `2024-11-05`, so `server-initialize` passes on the first two. In exchange we enforce the 2025-06-18 MUST that an unsupported `MCP-Protocol-Version` header gets a 400 — and MCPJam pins that header from its `--protocol-version` flag rather than from the negotiated answer, so the `2025-11-25` and `2026-07-28` cells of `scripts/mcp-conformance.sh` now fail every POST rather than just `server-initialize`. Expected, not a regression to chase: those revisions are #1659's job.
+
+`ping` is deliberately NOT on the fix list. `2026-07-28` removes it (SEP-2575), so MCPJam only asks because of the revision we announce.
 
 **Gotcha: the CLI writes advisories to STDOUT, ahead of the JSON.** `json.load` on the raw capture therefore fails and the run reports NO SIGNAL — a harness fault wearing a server verdict's clothes. `scripts/lib/report_io.py` locates the document and keeps the preamble (it often explains the failures beneath it). Redirecting stderr does not help; these are stdout.
 

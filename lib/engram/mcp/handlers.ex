@@ -12,18 +12,21 @@ defmodule Engram.MCP.Handlers do
   # (OAuth binding + API-key restrictions), so we never advertise a vault the
   # caller can't actually read or write (#729).
   def handle("list_vaults", _user, vaults, _args) when is_list(vaults) do
-    if vaults == [] do
-      {:ok, "No vaults are accessible with this connection."}
-    else
-      lines =
-        Enum.map(vaults, fn v ->
+    # Structured as well as rendered (#1660). The empty case still carries
+    # `vaults: []` rather than dropping the key — the outputSchema requires it,
+    # and a client generating types from the schema would break on its absence.
+    text =
+      if vaults == [] do
+        "No vaults are accessible with this connection."
+      else
+        Enum.map_join(vaults, "\n", fn v ->
           default = if v.is_default, do: " (default)", else: ""
           desc = if v.description, do: " — #{v.description}", else: ""
           "- **#{v.name}**#{default} (ID: #{v.id})#{desc}"
         end)
+      end
 
-      {:ok, Enum.join(lines, "\n")}
-    end
+    {:ok, text, %{"vaults" => Enum.map(vaults, &vault_payload/1)}}
   end
 
   # `accessible` is the credential-scoped vault set (see the controller's
@@ -880,5 +883,15 @@ defmodule Engram.MCP.Handlers do
       (named = Enum.filter(accessible, &(&1.name == ref))) != [] -> named
       true -> by_slug
     end
+  end
+
+  defp vault_payload(v) do
+    %{
+      "id" => to_string(v.id),
+      "name" => v.name,
+      "slug" => v.slug,
+      "is_default" => v.is_default,
+      "description" => v.description
+    }
   end
 end
