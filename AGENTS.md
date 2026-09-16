@@ -566,6 +566,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Perf caches + invalidation contracts (2026-06-12 audit wave) → `docs/context/perf-caching-invalidation.md`
 - Phase 1-6 lint ratchet history + threshold rationale → `docs/context/quality-tooling-baseline.md`
 - OpenAPI spec pipeline — schema modules, drift-gate CI, HostRewrite/version-recompile gotchas → `docs/context/openapi-docs-pipeline.md`
+- Replacing hand-rolled code with a shared helper (consolidating a PARSER silently drops accepted input shapes no test names — CRLF frontmatter read as "no frontmatter"), or a log metadata key built inside a helper that Credo cannot see → `docs/context/consolidation-drops-undocumented-tolerances.md`
 
 ## Superpowers spec docs → Engram vault (overrides the skill default)
 
