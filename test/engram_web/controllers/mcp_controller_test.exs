@@ -50,6 +50,17 @@ defmodule EngramWeb.McpControllerTest do
 
   # `call_tool/3` and `tool_text/1` come from EngramWeb.ConnCase.
 
+  # Argument validation is a Tool Execution Error, not a Protocol Error: the
+  # MCP spec reserves protocol errors for an unknown tool or a malformed
+  # request, and routes anything the model could fix by retrying with
+  # different arguments through `isError: true` so it can self-correct.
+  defp assert_tool_error(resp) do
+    refute resp["error"],
+           "expected a tool execution error, got a protocol error: #{inspect(resp["error"])}"
+
+    assert resp["result"]["isError"] == true
+  end
+
   # =========================================================================
   # Protocol tests
   # =========================================================================
@@ -142,40 +153,48 @@ defmodule EngramWeb.McpControllerTest do
     # "folder", used to silently fall through to the handler's `|| ""`
     # default and operate on the vault root with no error. Required params
     # must be validated against inputSchema before the handler ever runs.
-    test "tools/call with a missing required argument returns -32_602, not a silent default", %{
-      conn: conn
-    } do
+    test "tools/call with a missing required argument returns a tool error, not a silent default",
+         %{
+           conn: conn
+         } do
       conn = call_tool(conn, "list_folder", %{"path" => "Health"})
       resp = json_response(conn, 200)
 
-      assert resp["error"]["code"] == -32_602
-      assert resp["error"]["message"] =~ "folder"
+      assert_tool_error(resp)
+      assert tool_text(conn) =~ "folder"
     end
 
-    test "delete_folder with a missing required argument returns -32_602, not a vault-root delete",
+    # A rejected call now answers 200 with `isError: true` rather than a
+    # JSON-RPC error, so the response shape alone no longer proves the handler
+    # never ran. Assert the vault is untouched as well — this is the case
+    # #1491/#1492 was about.
+    test "delete_folder with a missing required argument returns a tool error, not a vault-root delete",
          %{conn: conn} do
-      conn = call_tool(conn, "delete_folder", %{"path" => "Health", "recursive" => true})
-      resp = json_response(conn, 200)
+      rejected = call_tool(conn, "delete_folder", %{"path" => "Health", "recursive" => true})
+      resp = json_response(rejected, 200)
 
-      assert resp["error"]["code"] == -32_602
-      assert resp["error"]["message"] =~ "folder"
+      assert_tool_error(resp)
+      assert tool_text(rejected) =~ "folder"
+
+      assert tool_text(call_tool(conn, "list_folder", %{"folder" => "Health"})) =~
+               "Supplements.md"
     end
 
-    test "delete_folder with an explicit null for the required argument returns -32_602, not a vault-root delete",
+    test "delete_folder with an explicit null for the required argument returns a tool error, not a vault-root delete",
          %{conn: conn} do
       conn = call_tool(conn, "delete_folder", %{"folder" => nil, "recursive" => true})
       resp = json_response(conn, 200)
 
-      assert resp["error"]["code"] == -32_602
-      assert resp["error"]["message"] =~ "folder"
+      assert_tool_error(resp)
+      assert tool_text(conn) =~ "folder"
     end
 
-    test "tools/call with non-object arguments returns -32_602, not a 500", %{conn: conn} do
+    test "tools/call with non-object arguments returns a tool error, not a 500", %{conn: conn} do
       conn = call_tool(conn, "delete_folder", "oops")
       resp = json_response(conn, 200)
 
-      assert resp["error"]["code"] == -32_602
-      assert resp["error"]["message"] =~ "object"
+      assert_tool_error(resp)
+      assert tool_text(conn) =~ "object"
     end
 
     # Adversarial-review finding: a zero-required-arg tool (list_tags has no
@@ -183,32 +202,32 @@ defmodule EngramWeb.McpControllerTest do
     # through unrejected, since the old check only ever inspected the
     # tool's `required` list — empty for this tool, so nothing was "missing".
     # It then crashed downstream in resolve_mcp_vault's `args["vault_id"]`.
-    test "tools/call with non-object arguments on a zero-required-arg tool returns -32_602, not a 500",
+    test "tools/call with non-object arguments on a zero-required-arg tool returns a tool error, not a 500",
          %{conn: conn} do
       conn = call_tool(conn, "list_tags", "oops")
       resp = json_response(conn, 200)
 
-      assert resp["error"]["code"] == -32_602
-      assert resp["error"]["message"] =~ "object"
+      assert_tool_error(resp)
+      assert tool_text(conn) =~ "object"
     end
 
-    test "create_folder with the wrong JSON type for a required string arg returns -32_602, not a generic FunctionClauseError",
+    test "create_folder with the wrong JSON type for a required string arg returns a tool error, not a generic FunctionClauseError",
          %{conn: conn} do
       conn = call_tool(conn, "create_folder", %{"folder" => 123})
       resp = json_response(conn, 200)
 
-      assert resp["error"]["code"] == -32_602
-      assert resp["error"]["message"] =~ "folder"
+      assert_tool_error(resp)
+      assert tool_text(conn) =~ "folder"
     end
 
-    test "get_notes with the wrong JSON type for a required array arg returns -32_602", %{
+    test "get_notes with the wrong JSON type for a required array arg returns a tool error", %{
       conn: conn
     } do
       conn = call_tool(conn, "get_notes", %{"paths" => "Health/Supplements.md"})
       resp = json_response(conn, 200)
 
-      assert resp["error"]["code"] == -32_602
-      assert resp["error"]["message"] =~ "paths"
+      assert_tool_error(resp)
+      assert tool_text(conn) =~ "paths"
     end
 
     # Adversarial-review finding: the array-typed check only validated
@@ -216,13 +235,13 @@ defmodule EngramWeb.McpControllerTest do
     # declared `array of string`, so an array of numbers must still be
     # rejected instead of reaching get_notes' own redundant handler-side
     # check.
-    test "get_notes with wrong-typed elements inside a correctly-shaped array returns -32_602",
+    test "get_notes with wrong-typed elements inside a correctly-shaped array returns a tool error",
          %{conn: conn} do
       conn = call_tool(conn, "get_notes", %{"paths" => [1, 2, 3]})
       resp = json_response(conn, 200)
 
-      assert resp["error"]["code"] == -32_602
-      assert resp["error"]["message"] =~ "paths"
+      assert_tool_error(resp)
+      assert tool_text(conn) =~ "paths"
     end
 
     # Adversarial-review finding: only REQUIRED args were type-checked —
@@ -231,20 +250,21 @@ defmodule EngramWeb.McpControllerTest do
     # as silently absent by `is_binary(args["vault_id"])` checks downstream,
     # not rejected — the same silent-wrong-target failure class #1491/#1492
     # targeted, just for an optional field.
-    test "an optional argument with the wrong JSON type returns -32_602, not silent fallback", %{
-      conn: conn
-    } do
+    test "an optional argument with the wrong JSON type returns a tool error, not silent fallback",
+         %{
+           conn: conn
+         } do
       conn = call_tool(conn, "search_notes", %{"query" => "anything", "vault_id" => 12_345})
       resp = json_response(conn, 200)
 
-      assert resp["error"]["code"] == -32_602
-      assert resp["error"]["message"] =~ "vault_id"
+      assert_tool_error(resp)
+      assert tool_text(conn) =~ "vault_id"
     end
 
     # Proves the fix lives at the shared dispatch choke point, not as a
     # per-tool patch that happens to cover list_folder/delete_folder/
     # create_folder/get_notes and nothing else.
-    test "every tool with required arguments rejects an empty arguments map with -32_602", %{
+    test "every tool with required arguments rejects an empty arguments map with a tool error", %{
       conn: conn
     } do
       tools_with_required =
@@ -256,7 +276,7 @@ defmodule EngramWeb.McpControllerTest do
         result_conn = call_tool(conn, tool.name, %{})
         resp = json_response(result_conn, 200)
 
-        assert resp["error"]["code"] == -32_602,
+        assert resp["result"]["isError"] == true,
                "expected #{tool.name} to reject an empty arguments map, got: #{inspect(resp)}"
       end)
     end
@@ -498,8 +518,8 @@ defmodule EngramWeb.McpControllerTest do
       conn = call_tool(conn, "create_folder", %{})
       resp = json_response(conn, 200)
 
-      assert resp["error"]["code"] == -32_602
-      assert resp["error"]["message"] =~ "folder"
+      assert_tool_error(resp)
+      assert tool_text(conn) =~ "folder"
     end
   end
 
@@ -705,8 +725,8 @@ defmodule EngramWeb.McpControllerTest do
         })
 
       resp = json_response(conn, 200)
-      assert resp["error"]["code"] == -32_602
-      assert resp["error"]["message"] =~ "occurrence"
+      assert_tool_error(resp)
+      assert tool_text(conn) =~ "occurrence"
     end
 
     test "returns error when note not found", %{conn: conn} do
@@ -787,8 +807,8 @@ defmodule EngramWeb.McpControllerTest do
         })
 
       resp = json_response(conn, 200)
-      assert resp["error"]["code"] == -32_602
-      assert resp["error"]["message"] =~ "level"
+      assert_tool_error(resp)
+      assert tool_text(conn) =~ "level"
     end
 
     test "returns error when heading not found", %{conn: conn} do

@@ -151,7 +151,14 @@ defmodule EngramWeb.McpController do
         # validate_tool_args threads the tool name through its own error
         # value rather than relying on an outer `tool` binding here.
         emit_rejected_call_telemetry(tool_name, start_mono, msg)
-        {:error, -32_602, msg}
+
+        # A Tool Execution Error, not a Protocol Error. The spec reserves
+        # protocol errors for an unknown tool or a malformed request, and
+        # routes anything the model could fix by retrying with different
+        # arguments through `isError: true` so it can self-correct — a
+        # protocol error just aborts the call (SEP-1303). The rejection is
+        # unchanged: the handler still never runs.
+        error_result(msg)
     end
   end
 
