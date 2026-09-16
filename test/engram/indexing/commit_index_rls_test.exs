@@ -232,7 +232,9 @@ defmodule Engram.Indexing.CommitIndexRlsTest do
       assert [_ | _] = prepared.links,
              "fixture produced no link rows, so insert_all would be a no-op and prove nothing"
 
-      case as_prod_role(fn -> Engram.Links.replace_links(user, vault, note.id, prepared.links) end) do
+      case as_prod_role(fn ->
+             Engram.Links.replace_links(user, vault, note.id, prepared.links)
+           end) do
         {:returned, :ok} ->
           :ok
 
