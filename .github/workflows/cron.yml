@@ -25,6 +25,7 @@ on:
     - cron: '0 14 * * 1'    # plan-triage              (Mon 14:00 UTC)
     - cron: '0 3 * * 6'     # dependency-submission    (Sat 03:00 UTC)
     - cron: '40 5 * * *'    # mcp-conformance          (daily 05:40 UTC)
+    - cron: '10 6 * * *'    # vendor-conformance       (daily 06:10 UTC)
   workflow_dispatch:
     inputs:
       task:
@@ -40,6 +41,7 @@ on:
           - runner-diagnostics
           - dependency-submission
           - mcp-conformance
+          - vendor-conformance
       force:
         description: '(obsidian-update only) Force re-download even if version matches'
         type: boolean
@@ -830,6 +832,178 @@ jobs:
             --data "$(jq -nc --arg c "$CONTENT" '{content:$c}')" \
             "$WEBHOOK"
 
+  # ── Do the vendors we advertise still publish a document we would accept?
+  #
+  # The mcp-conformance job above CANNOT answer this. `--registration cimd`
+  # takes no client-id argument — MCPJam's CLI supplies its OWN published
+  # document — so that entire matrix proves one thing: MCPJam can register with
+  # us, and MCPJam is the one vendor whose document we already accept. A suite
+  # that only exercises clients that already work cannot report a client that
+  # does not. It ran green against staging AND prod at 10:56 UTC on 2026-09-14,
+  # ~4.5h before a real signup hit ChatGPT's refusal and deleted their account
+  # (#1633, #1635).
+  #
+  # `VendorConformanceTest` fetches each vendor's real published document and
+  # runs it through the CIMD validator. It needs no MCPJam, no deployed target
+  # and no loopback opt-in — but it does make real outbound HTTPS to third
+  # parties, which is why it is excluded per-PR behind VENDOR_CONFORMANCE=1 and
+  # lives here instead: a vendor's brief outage must never block a merge.
+  #
+  # A failure is NOT necessarily our bug — read it as "a vendor changed
+  # something and one of us has to move". Discord fires via alert-cron-failure
+  # (this job is in its `needs`); the offending FIELD is in the issue the last
+  # step opens, because the alert can only name the job.
+  vendor-conformance:
+    if: |
+      github.event.schedule == '10 6 * * *'
+      || github.event.inputs.task == 'vendor-conformance'
+    runs-on: [self-hosted, linux, x64, isolated]
+    permissions:
+      contents: read
+      issues: write
+    env:
+      PG_CONTAINER: engram-vendor-conformance-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          clean: false  # Preserve _build/ and deps/ for incremental compilation
+
+      # The test touches no tables, but booting the app starts the Repo, so it
+      # needs a reachable, migrated database. Same ephemeral-container pattern
+      # as verify.yml's unit-tests job, including the port-race retry: `-p
+      # 0:5432` auto-allocates, and another runner on this shared VM can claim
+      # the port between resolve and bind.
+      - name: Start ephemeral postgres
+        id: pg
+        run: |
+          docker rm -f "$PG_CONTAINER" 2>/dev/null || true
+
+          if [ -n "${LOCAL_REGISTRY:-}" ]; then
+            PG_IMAGE="${LOCAL_REGISTRY}/postgres:18.4"
+            docker pull "$PG_IMAGE" 2>/dev/null || PG_IMAGE="postgres:18.4"
+          else
+            PG_IMAGE="postgres:18.4"
+          fi
+
+          for attempt in 1 2 3 4 5; do
+            if docker run -d --name "$PG_CONTAINER" \
+                -e POSTGRES_USER=engram \
+                -e POSTGRES_PASSWORD=engram \
+                -e POSTGRES_DB=engram_test \
+                -p 0:5432 \
+                --health-cmd "pg_isready -U engram" \
+                --health-interval 3s \
+                --health-timeout 3s \
+                --health-retries 10 \
+                "$PG_IMAGE"; then
+              break
+            fi
+            echo "Attempt $attempt: docker run failed (likely port race) — cleaning up + retrying"
+            docker rm -f "$PG_CONTAINER" 2>/dev/null || true
+            sleep 1
+            if [ "$attempt" = "5" ]; then
+              echo "::error::Postgres container failed to start after 5 attempts"
+              exit 1
+            fi
+          done
+
+          PG_PORT=$(docker port "$PG_CONTAINER" 5432/tcp | head -1 | cut -d: -f2)
+          echo "pg_port=$PG_PORT" >> "$GITHUB_OUTPUT"
+          echo "Postgres on port $PG_PORT (container: $PG_CONTAINER)"
+
+      - name: Fetch deps
+        run: mix deps.get --only test
+
+      - name: Check every vendor's published CIMD document
+        id: vendors
+        env:
+          DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_test
+          VENDOR_CONFORMANCE: '1'
+        run: |
+          set -uo pipefail
+          for i in $(seq 1 30); do
+            docker exec "$PG_CONTAINER" pg_isready -U engram > /dev/null 2>&1 && break
+            sleep 1
+          done
+
+          MIX_ENV=test mix ecto.create
+          # Before migrate: the baseline migration's structure dump GRANTs to
+          # engram_app. Mirrors prod entrypoint.sh ordering.
+          MIX_ENV=test mix engram.prepare_database
+          MIX_ENV=test mix ecto.migrate
+
+          # `|| rc=$?` rather than a bare pipeline: GitHub's shell is `bash -e`,
+          # so a failing test would abort this step before rc is recorded and
+          # the issue step below would never fire. pipefail is what makes the
+          # captured status the TEST's and not tee's.
+          rc=0
+          MIX_ENV=test mix test test/engram/oauth/cimd/vendor_conformance_test.exs \
+            2>&1 | tee vendor-conformance.log || rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+      - name: Stop postgres
+        if: always()
+        run: docker rm -f "$PG_CONTAINER" 2>/dev/null || true
+
+      # Gated on rc being SET as well as non-zero: an empty rc means the step
+      # died before the suite ran (no database, deps unresolvable), which is an
+      # environment failure, not a vendor regression. Discord still fires for
+      # those; an issue claiming "a vendor changed" would be a lie.
+      - name: Open or update the vendor regression issue
+        if: failure() && steps.vendors.outputs.rc != '' && steps.vendors.outputs.rc != '0'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs')
+            const log = fs.readFileSync('vendor-conformance.log', 'utf8').slice(-6000)
+            const title =
+              'vendor-conformance: a vendor we advertise publishes a document we refuse'
+            const body = [
+              'The nightly vendor CIMD conformance run failed.',
+              '',
+              'This fetches the documents real vendors publish and asserts we would accept',
+              'them. A failure is NOT necessarily our bug — read it as "a vendor changed',
+              'something and one of us has to move". The assertion message names the field.',
+              '',
+              'The MCPJam suite cannot cover this: its CLI supplies its own published',
+              'document, so it only ever proves MCPJam can register (#1635).',
+              '',
+              '## Output',
+              '',
+              '```',
+              log.trimEnd(),
+              '```',
+              '',
+              '## Where to start',
+              '',
+              '- `test/engram/oauth/cimd/vendor_conformance_test.exs` — the vendor list and what it asserts.',
+              '- `docs/context/mcp-conformance-suite-limits.md` — why the MCPJam matrix stays green through this.',
+              '- `docs/context/cimd-vs-dcr-validation-policy.md` — why DCR and CIMD validate differently.',
+              '',
+              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            ].join('\n')
+
+            const { data: existing } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'mcp', per_page: 100,
+            })
+            const match = existing.find((i) => i.title === title)
+
+            if (match) {
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: match.number, body,
+              })
+              core.info(`Updated existing issue #${match.number}`)
+            } else {
+              const { data: created } = await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body, labels: ['mcp', 'area/auth'],
+              })
+              core.info(`Opened issue #${created.number}`)
+            }
+
   # Scheduled work fails silently by construction: nobody opens a cron run
   # that nobody triggered. These jobs reap orphaned Clerk users and Qdrant
   # collections, keep runner disks from filling, and check MCP conformance —
@@ -850,6 +1024,7 @@ jobs:
       - runner-diagnostics
       - dependency-submission
       - mcp-conformance
+      - vendor-conformance
     runs-on: [self-hosted, linux, x64, isolated, light]
     steps:
       - name: Notify cron failure (alerts)
