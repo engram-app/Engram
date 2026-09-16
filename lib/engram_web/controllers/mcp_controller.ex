@@ -99,7 +99,12 @@ defmodule EngramWeb.McpController do
   defp bounded(value) when is_binary(value),
     do: String.slice(value, 0, @handshake_field_limit)
 
-  defp bounded(value), do: value |> inspect() |> String.slice(0, @handshake_field_limit)
+  # A non-string handshake field is labelled by TYPE, never rendered. Rendering
+  # it would put an arbitrary client-supplied term into Loki, and the value
+  # carries no diagnostic worth that: what matters is that the client sent the
+  # wrong shape. Same treatment `tool_name_label/1` gives a bad tool name, and
+  # the JSON types are the same closed set.
+  defp bounded(value), do: tool_name_label(value)
 
   # -- Method dispatch --
 
