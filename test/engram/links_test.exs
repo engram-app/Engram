@@ -220,9 +220,25 @@ defmodule Engram.LinksTest do
       assert repo_src =~ ~r/pg_advisory_xact_lock/,
              "Repo.advisory_lock!/1 must issue pg_advisory_xact_lock (Task 2 / #1409)"
 
-      assert src =~ ~r/Repo\.transaction/,
+      # The wrapper is now `Repo.with_tenant/2` rather than a bare
+      # `Repo.transaction`: `note_links` carries FORCE ROW LEVEL SECURITY, so
+      # the write has to set `app.current_tenant` as well as hold the lock.
+      #
+      # What this assertion actually cares about is unchanged — the
+      # delete+insert must sit inside a transaction so `pg_advisory_xact_lock`
+      # auto-releases on commit/rollback — so it accepts either wrapper instead
+      # of pinning one spelling.
+      assert src =~ ~r/Repo\.(transaction|with_tenant)\(/,
              "replace_links must wrap delete+insert in a transaction so the advisory " <>
                "lock auto-releases on commit/rollback (Task 2)"
+
+      # And pin the property that makes `with_tenant/2` an acceptable wrapper.
+      # Without this, the assertion above would accept a future `with_tenant/2`
+      # that had stopped opening a transaction, which would silently leave the
+      # advisory lock held for the rest of the connection's session.
+      assert repo_src =~ ~r/defp run_with_tenant.*?transaction\(/s,
+             "Repo.with_tenant/2 must itself open a transaction, otherwise the advisory " <>
+               "lock taken in replace_links would outlive its intended scope"
     end
   end
 

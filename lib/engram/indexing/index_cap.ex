@@ -119,9 +119,24 @@ defmodule Engram.Indexing.IndexCap do
             select: n.id
           )
 
-        {count, _} =
-          from(n in Note, where: n.kind == "note" and n.id in subquery(unindexed))
-          |> Repo.update_all([set: [embed_hash: nil]], skip_tenant_check: true)
+        # `with_tenant` for the same reason as `revoke_dense_index/1`: `notes`
+        # carries FORCE ROW LEVEL SECURITY, and an UPDATE is FILTERED by the
+        # policy's USING clause rather than rejected. Unscoped this reports
+        # `{0, nil}`, skips the telemetry below on its `count > 0` guard, and
+        # returns `:ok` having freed no cap slots at all — so a user who
+        # deleted notes to make room stays stuck at their cap with no error
+        # anywhere.
+        #
+        # Only INSERTs raise 42501, which is why this site outlived the
+        # read-side fix in 1f336bfa.
+        #
+        # The query builders above are pure Ecto structs and touch no
+        # connection, so only the write needs the tenant scope.
+        {:ok, {count, _}} =
+          Repo.with_tenant(user_id, fn ->
+            from(n in Note, where: n.kind == "note" and n.id in subquery(unindexed))
+            |> Repo.update_all([set: [embed_hash: nil]], skip_tenant_check: true)
+          end)
 
         if count > 0 do
           :telemetry.execute(
@@ -155,14 +170,26 @@ defmodule Engram.Indexing.IndexCap do
   """
   @spec revoke_dense_index(Ecto.UUID.t()) :: :ok
   def revoke_dense_index(user_id) when is_binary(user_id) do
-    {count, _} =
-      from(n in Note,
-        where: n.user_id == ^user_id and n.kind == "note" and is_nil(n.deleted_at),
-        where: not is_nil(n.dense_indexed_hash)
-      )
-      |> Repo.update_all([set: [embed_hash: nil, dense_indexed_hash: nil]],
-        skip_tenant_check: true
-      )
+    # `with_tenant` for the same reason as the count reads below, but the
+    # failure mode here is quieter and worse. `notes` carries FORCE ROW LEVEL
+    # SECURITY, and an UPDATE gets its rows filtered by the policy's USING
+    # clause rather than rejected — so unscoped this reports `{0, nil}` and
+    # returns `:ok` having cleared nothing. No error, no telemetry (the
+    # `count > 0` guard below sees 0), and every downgraded user keeps their
+    # dense vectors forever: exactly the cost this function exists to reclaim.
+    #
+    # Only INSERTs raise 42501. That is why this site survived the read-side
+    # fix in 1f336bfa — nothing failed loudly enough to notice.
+    {:ok, {count, _}} =
+      Repo.with_tenant(user_id, fn ->
+        from(n in Note,
+          where: n.user_id == ^user_id and n.kind == "note" and is_nil(n.deleted_at),
+          where: not is_nil(n.dense_indexed_hash)
+        )
+        |> Repo.update_all([set: [embed_hash: nil, dense_indexed_hash: nil]],
+          skip_tenant_check: true
+        )
+      end)
 
     if count > 0 do
       :telemetry.execute(

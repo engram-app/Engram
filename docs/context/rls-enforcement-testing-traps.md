@@ -1,0 +1,418 @@
+# Context Doc: Testing RLS enforcement (five traps)
+
+_Last verified: 2026-09-16_
+
+## Status
+
+Current. Three enforcement test files exist and follow this shape:
+`test/engram/links/links_rls_test.exs` (fullest moduledoc, two harnesses),
+`test/engram/indexing/commit_index_rls_test.exs`,
+`test/engram/indexing/index_cap_rls_test.exs`.
+
+Read this BEFORE writing a test that claims to prove a query is tenant-scoped.
+Every trap below produced a false green for real while these files were written.
+
+## What This Is
+
+How to write a test that actually proves Postgres Row Level Security is
+enforced on a query — and the five ways such a test passes while proving
+nothing. `docs/context/database-schema-rls.md` covers the policies and the
+`Repo.with_tenant/2` model; this doc is only about testing them.
+
+> `database-schema-rls.md`'s "Testing RLS with Ecto.Sandbox" section is the
+> naive version. It is not wrong about `prepare_query/3`, but its example
+> proves nothing about Postgres: it never drops the superuser role, so RLS is
+> not in play, and trap 2 below makes even a role-dropping version leak.
+
+## The checklist
+
+A correct RLS test file has all five. Miss one and green is meaningless.
+
+1. `use Engram.DataCase, async: false` — the role change is connection-global.
+2. A harness that clears the tenant **and** drops the role, in that order.
+3. A **control test** asserting the dropped role sees zero rows.
+4. Assertions on **persisted effect** for `update_all`/`delete_all` — "it
+   didn't raise" is vacuous there.
+5. A rolling-back harness wherever the code can raise; a committing variant
+   only for the filtered-write path.
+
+---
+
+## Trap 1 — only INSERT raises
+
+Under a policy used as both `USING` and `WITH CHECK`, the four statement types
+fail in three different ways:
+
+| Statement | Unscoped behaviour | Visible to the caller? |
+|---|---|---|
+| `INSERT` | rejected, SQLSTATE **42501** | yes, it raises |
+| `UPDATE` | rows **filtered** by `USING`, reports `{0, nil}` | **no** |
+| `DELETE` | rows **filtered** by `USING`, reports `{0, nil}` | **no** |
+| `SELECT` | returns **zero rows** | **no** |
+
+Consequence: a test shaped as "assert this raises" is **vacuous** against
+`update_all`/`delete_all`. There is no exception to catch. From
+`index_cap_rls_test.exs`:
+
+```elixir
+  # Only INSERT raises `42501` under a policy used as both USING and WITH
+  # CHECK. An UPDATE has its rows FILTERED by the USING clause instead, so an
+  # unscoped `update_all` reports `{0, nil}` and the caller returns `:ok`
+  # having changed nothing. There is no exception to catch.
+  #
+  # So these assert the PERSISTED EFFECT, and seed a non-nil value first so the
+  # assertion cannot be satisfied by an empty match. A test that merely checked
+  # "no error was raised" would pass against the broken code.
+```
+
+So: seed a row with a non-nil value, run the function under the dropped role,
+read back **outside** the role, assert the row actually changed or vanished.
+The seeded precondition is load-bearing — if the column were already `nil` the
+assertion would hold no matter what the function did.
+
+```elixir
+      # Precondition, not decoration: if these were already nil the assertions
+      # below would hold no matter what the function did.
+      assert note.embed_hash == "stale-embed"
+      assert note.dense_indexed_hash == "stale-dense"
+
+      assert :ok = as_prod_role(fn -> IndexCap.revoke_dense_index(user.id) end)
+
+      reloaded = Repo.get!(Note, note.id, skip_tenant_check: true)
+
+      assert is_nil(reloaded.dense_indexed_hash),
+             "dense_indexed_hash survived revoke_dense_index/1 — the UPDATE was filtered by " <>
+               "RLS and reported zero rows, so the user keeps paying for dense vectors"
+```
+
+**The silent read is the more damaging half in production**, because the query
+*succeeds*: a note renders with no links and no backlinks, an empty vault is
+reported for a user who has notes, and `live_basename_count/3` answers 0 for a
+basename that is in use. Nothing logs, nothing retries.
+
+## Trap 2 — the sandbox leak-forward (the one that faked coverage)
+
+**This is the important one.** It produced a real false green.
+
+A subtransaction's `SET LOCAL` **persists into the enclosing transaction** once
+the subtransaction commits. Under the Ecto sandbox the whole test runs inside
+ONE outer transaction, so a single `Repo.with_tenant/2` call anywhere earlier in
+a test leaves `app.current_tenant` set for **every later unscoped statement in
+that test**. Production has no enclosing transaction: there `with_tenant/2`
+opens a real top-level transaction, `SET LOCAL` is discarded at its commit, and
+the following statements run with no tenant at all.
+
+Concretely, from `commit_index_rls_test.exs`: a `commit_index/1` RLS test
+**passed while `Links.replace_links/4` was still unscoped and broken**, because
+`commit_index/1` scoped its own chunk write first and `replace_links/4`
+inherited that tenant for free inside the sandbox.
+
+```elixir
+    # `Repo.with_tenant/2` sets the tenant with `set_config(..., true)` — SET
+    # LOCAL. Under the Ecto sandbox its transaction is a SAVEPOINT nested in
+    # this test's outer transaction, and a subtransaction's SET LOCAL PERSISTS
+    # to the enclosing transaction once it commits. So every statement
+    # `commit_index/1` runs AFTER its own tenant block inherits that tenant for
+    # free — including `Links.replace_links/4`.
+    #
+    # Production has no enclosing transaction. [...]
+    #
+    # Net effect: scoping one write inside `commit_index/1` makes the test
+    # above green while the later writes remain unscoped in prod. Each write on
+    # the path therefore needs its own direct test, which is what this one is.
+```
+
+What makes the leak possible at all: `Repo.with_tenant/2`'s exit path resets
+only the **role**, never the tenant (`lib/engram/repo.ex`):
+
+```elixir
+          _ = query!("SELECT set_config('role', 'none', true)", [], source: "tenant_exit")
+```
+
+Two mitigations, **both mandatory**:
+
+**(a) Clear the tenant explicitly, before dropping the role.** Any fixture that
+writes through `with_tenant/2` — `Engram.Fixtures.insert_note!/3`,
+`Notes.upsert_note/3` — has already set one by the time your harness runs.
+
+```elixir
+        Repo.query!("SELECT set_config('app.current_tenant', '', true)")
+        Repo.query!("SET LOCAL ROLE engram_app")
+```
+
+**(b) Every RLS test file needs a CONTROL test.** Without it, green is
+ambiguous between "correctly scoped" and "the role drop never engaged".
+
+```elixir
+    # CONTROL. Without this a green file is ambiguous between "correctly
+    # scoped" and "the role drop never engaged".
+    test "control: the dropped role cannot see the seeded edge", %{source: source} do
+      outcome =
+        as_prod_role(fn ->
+          Repo.one(
+            from(l in NoteLink, where: l.source_note_id == ^source.id, select: count(l.id)),
+            skip_tenant_check: true
+          )
+        end)
+
+      assert outcome == {:returned, 0},
+             """
+             Harness is not engaging RLS, so every assertion in this file is meaningless.
+
+               edges visible as engram_app with no tenant: #{inspect(outcome)} (expected {:returned, 0})
+
+             Either SET LOCAL ROLE did not apply, or the tenant was not cleared
+             (see the tenant-leak trap in the moduledoc), or the role has BYPASSRLS.
+             """
+    end
+```
+
+A related corollary: **do not drive an RLS test through a wrapper that opens its
+own tenant block.** `commit_index_rls_test.exs` cannot go through
+`index_note/2`, because that calls `IndexCap.within_cap?/2` first, whose
+`with_tenant/2` exit runs `set_config('role', 'none', true)` — and by the same
+leak-forward rule that reverts your `engram_app` role to the superuser default
+before the code under test ever runs. Split the pipeline instead: run the
+non-writing half as the superuser, and only the write under the dropped role.
+
+## Trap 3 — two harnesses are required
+
+**Rolling-back harness — mandatory wherever the code under test can raise.** An
+RLS-rejected INSERT aborts the transaction; a trailing `RESET ROLE` then fails
+with SQLSTATE **25P02** and masks the original error. Rolling back discards the
+`SET LOCAL` role and tenant anyway, so there is nothing to reset. Carry the
+outcome out through the rollback value:
+
+```elixir
+  defp as_prod_role(fun) do
+    {:error, outcome} =
+      Repo.transaction(fn ->
+        Repo.query!("SELECT set_config('app.current_tenant', '', true)")
+        Repo.query!("SET LOCAL ROLE engram_app")
+
+        outcome =
+          try do
+            {:returned, fun.()}
+          rescue
+            e -> {:raised, e}
+          end
+
+        Repo.rollback(outcome)
+      end)
+
+    outcome
+  end
+```
+
+**Committing variant — for assertions about persisted effect.** A rollback also
+discards the write under test, so "the row is gone afterwards" can never pass
+under it. Committing is safe **only on the filtered-write path specifically**,
+because filtered `update_all`/`delete_all` never raise:
+
+```elixir
+  # Commit-based variant, for assertions about PERSISTED effect.
+  #
+  # [...] But a rollback also discards the write under test, so an assertion that a
+  # row is GONE can never pass. Committing is safe on this path specifically
+  # because `delete_all`/`update_all` are FILTERED by the policy rather than
+  # rejected, so nothing here raises.
+  defp as_prod_role_committing(fun) do
+    {:ok, result} =
+      Repo.transaction(fn ->
+        Repo.query!("SELECT set_config('app.current_tenant', '', true)")
+        Repo.query!("SET LOCAL ROLE engram_app")
+
+        try do
+          fun.()
+        after
+          Repo.query!("RESET ROLE")
+        end
+      end)
+
+    result
+  end
+```
+
+On the committing path `RESET ROLE` **is** mandatory rather than tidiness: these
+transactions are savepoints under the sandbox, and `RELEASE SAVEPOINT` would
+otherwise leak `engram_app` into the outer sandbox transaction and break later
+tests.
+
+## Trap 4 — why the rest of the suite catches none of this
+
+dev, CI and test all connect as **`engram`**, the cluster bootstrap role:
+`rolsuper = true`, `rolbypassrls = true`, so `row_security_active()` is false.
+Superusers bypass RLS **even when the table carries `FORCE ROW LEVEL SECURITY`**.
+
+So the existing tests over the same functions — `links_test.exs`,
+`indexing_test.exs` — pass, cover the behaviour thoroughly, and prove **nothing
+about enforcement**. `indexing_test.exs` already asserts `index_note/2` writes
+chunk rows and would fail on exactly this bug; it was green throughout.
+
+An RLS test must therefore drop the role:
+
+```elixir
+        Repo.query!("SET LOCAL ROLE engram_app")
+```
+
+`engram_app` is created by `mix engram.prepare_database`, which both the
+`mix test` alias (`mix.exs`) and CI run before migrating:
+
+```elixir
+      test: [
+        "ecto.create --quiet",
+        "engram.prepare_database",
+        "ecto.migrate --quiet",
+        "test"
+      ],
+```
+
+```sql
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'engram_app') THEN
+      CREATE ROLE engram_app NOINHERIT LOGIN;
+    END IF;
+```
+
+No `SUPERUSER`, no `BYPASSRLS` — both absent by default, which is the whole
+point of dropping to it.
+
+Three further facts that matter when reasoning about whether enforcement is
+actually on:
+
+- **`ENABLE` vs `FORCE` are different.** `ENABLE ROW LEVEL SECURITY` exempts
+  the table **owner**; `FORCE ROW LEVEL SECURITY` is what binds the owner too.
+  Our tenant tables carry both (see `database-schema-rls.md`). Neither binds a
+  superuser or a `BYPASSRLS` role.
+- **Role attributes are NOT inherited through role membership.** `BYPASSRLS`
+  and `SUPERUSER` apply only to the role you have actually `SET ROLE`d to.
+  Granting membership in a bypassing role does not confer the bypass, and
+  `engram_app` is `NOINHERIT` besides.
+- **`skip_tenant_check: true` grants no bypass whatsoever.** It suppresses
+  *only* Engram's own application-level guard in `Repo.prepare_query/3`. It sets
+  nothing in Postgres, switches no role, and touches no session state. Code
+  reading `skip_tenant_check: true` as "this query is exempt from RLS" is the
+  root misunderstanding these test files exist to catch.
+
+## Trap 5 — `async: false`
+
+`SET LOCAL ROLE` is **connection-global**. Every RLS test module is
+`use Engram.DataCase, async: false`. Under `async: true` the role change is
+visible to any other test sharing the connection.
+
+Also, do not reach for `@moduletag :integration` to isolate these. That tag is
+excluded unless `INTEGRATION_TESTS=1`, which CI never sets — a tagged file would
+guard nothing. It exists for tests needing a local docker container to drive
+`pg_dump`; these need only the `engram_app` role.
+
+---
+
+## The scoping pattern for fixing call sites
+
+When a test above goes red, the fix is a `do_*` delegation wrapper: the public
+function becomes a `with_tenant/2` call and the original body moves **verbatim**
+into a private `do_*`.
+
+```elixir
+  def live_basename_count(user, vault, key) do
+    {:ok, result} =
+      Repo.with_tenant(user.id, fn -> do_live_basename_count(user, vault, key) end)
+
+    result
+  end
+
+  defp do_live_basename_count(user, vault, key) do
+    # ...original body, unchanged...
+```
+
+**Why this shape:** it only requires editing the `def` line. Long function
+bodies stay untouched, so the diff stays reviewable — no re-indentation noise
+across hundreds of lines, and a reviewer can see at a glance that the body did
+not change. `with_tenant/2` is re-entrant for the same tenant, so private
+helpers need no wrapping of their own and a caller that already holds the tenant
+(e.g. `BackfillNoteLinks`) pays nothing.
+
+Note the `{:ok, result} = ...; result` unwrap: `with_tenant/2` returns
+`{:ok, value}`. Funs passed to it must return **bare** values, not `{:ok, _}` —
+see `docs/context/with-tenant-return-wrapping.md`.
+
+**The one real constraint discovered: external I/O must sit OUTSIDE the
+`with_tenant` scope**, because `with_tenant/2` opens a transaction and holding
+one open across S3 or a job insert is not acceptable. `user_dek_rotation.ex` is
+the worked example — scope the read, then leave:
+
+```elixir
+    # Tenant scope ends with this read: everything below it is S3 I/O, which
+    # has no business inside a transaction.
+```
+
+```elixir
+    # Cursor only. The per-attachment work below does S3 I/O, which must not
+    # run inside a transaction, so each of its DB steps takes its own tenant
+    # scope instead of inheriting one from here.
+```
+
+Oban inserts likewise stay outside, and for a second reason — `oban_jobs` has no
+RLS at all, while `with_tenant/2` would drop the connection to `engram_app`:
+
+```elixir
+    # `vaults` is RLS-scoped, so an unscoped read returns [] and silently
+    # enqueues nothing. The inserts stay OUTSIDE the tenant scope: `oban_jobs`
+    # has no RLS, and `with_tenant/2` drops the connection to `engram_app`.
+```
+
+So the pattern for a function that mixes DB writes with external I/O is several
+short `with_tenant/2` blocks around the DB steps, not one block wrapping the
+whole thing.
+
+## Gotchas
+
+- **A no-op write cannot violate a policy.** `insert_all(_, [])` is a no-op, so
+  a fixture that produces no rows makes the test vacuous. Both link tests assert
+  their fixture produced rows first: `assert [_ | _] = prepared.links, "fixture
+  produced no link rows, so insert_all would be a no-op and prove nothing"`.
+- **Guard against the short-circuit branch.** `prepare_index/3` returns
+  `{:ok, {:no_chunks, link_rows}}` for an empty or over-cap note and
+  `commit_index/1` is never reached, so the test could "pass" having committed
+  nothing. `assert %{chunk_rows: [_ | _]} = prepared` before proceeding.
+- **A bare factory user has no DEK.** `insert(:user)` has no `encrypted_dek`;
+  the first write through `Notes.upsert_note/3` or `Fixtures.insert_note!/3`
+  creates one as a side effect, but the `user` struct you are holding is still
+  the stale pre-DEK copy. Passing it on fails with `{:error, :no_dek}` in setup
+  and takes the whole file down with a failure that looks nothing like RLS. Use
+  `Engram.Fixtures.user_with_dek_fixture/1`, or reload with `Repo.get!/2`.
+- **A dangling edge makes a backlink test vacuous.** `backlinks_for_note/2`
+  filters on `target_note_id`, so force the edge BOUND in setup rather than
+  relying on basename-hmac resolution in the fixture path.
+- **`Bypass.expect/2` requires at least one matching request**, so it belongs in
+  the tests that actually talk to Qdrant. In `setup` it fails the control test,
+  which performs no HTTP at all.
+- **Read-back assertions need `skip_tenant_check: true`** — they run outside any
+  tenant scope, so `prepare_query/3`'s guard would otherwise raise before the
+  query ran.
+
+## Failed Approaches / Dead Ends
+
+- **Asserting "it raises" for an unscoped `update_all`/`delete_all`.** Vacuous —
+  filtered writes report `{0, nil}` and the caller returns `:ok`. This is
+  exactly why both `IndexCap` write sites outlived commit `1f336bfa`, which
+  scoped that module's count *reads* and left the writes behind: nothing failed
+  loudly.
+- **Driving the test through the real entry point** (`index_note/2`). Its
+  `IndexCap.within_cap?/2` prelude opens its own tenant block whose exit resets
+  the role, so the code under test ran as the superuser again.
+- **Trusting one scoped write on a multi-write path.** The sandbox leak-forward
+  makes the later writes inherit the earlier tenant. Every write on the path
+  needs its own direct test.
+- **`@moduletag :integration`.** Never runs in CI; guards nothing.
+
+## References
+
+- `test/engram/links/links_rls_test.exs` — fullest moduledoc, both harnesses
+- `test/engram/indexing/commit_index_rls_test.exs` — the leak-forward false green
+- `test/engram/indexing/index_cap_rls_test.exs` — filtered-write assertions
+- `test/integration/rls_uuid_binding_test.exs` — where the role-drop technique came from
+- `lib/engram/repo.ex` — `with_tenant/2`, `prepare_query/3`, `@tenant_tables`
+- `lib/engram/release.ex` — `engram_app` role creation
+- `lib/engram/crypto/user_dek_rotation.ex` — external I/O outside the tenant scope
+- `docs/context/database-schema-rls.md` — policies, roles, enforcement layers
+- `docs/context/with-tenant-return-wrapping.md` — funs must return bare values

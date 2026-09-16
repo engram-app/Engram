@@ -207,9 +207,16 @@ defmodule Engram.Indexing do
   being reused, rewrites the chunk rows, and deletes the points nothing names
   any more.
 
-  Caller is responsible for tenant context — non-tenant-scoped callers
-  (e.g. `EmbedNote`) run as the superuser role and bypass RLS; tenant-scoped
-  callers wrap this in a short `Repo.with_tenant/2`.
+  Tenant context is handled internally: the chunk rewrite below and
+  `Links.replace_links/4` each open their own `Repo.with_tenant/2`, so this is
+  safe to call with or without an enclosing tenant (`with_tenant/2` is
+  re-entrant for the same tenant, so a scoped caller pays nothing).
+
+  This used to read "non-tenant-scoped callers run as the superuser role and
+  bypass RLS". That was true of every environment and true of nothing in this
+  code: under any role without SUPERUSER or BYPASSRLS the chunk insert raises
+  42501. Scoping each write removes the dependency on how the app happens to
+  connect.
 
   Returns `{:ok, chunk_count}` or `{:error, reason}`.
   """
@@ -240,15 +247,26 @@ defmodule Engram.Indexing do
          # PATCH refreshes the lot — the values are identical across a note's
          # points, which is why `chunk_index` no longer lives in the payload.
          :ok <- Qdrant.set_payload(collection(), reused_point_ids, note_payload) do
-      # skip_tenant_check: trusted internal pipeline, already scoped by note_id/user_id
-      #
       # Wholesale rewrite rather than a row-level diff: the rows are local and
       # cheap, and replacing them all sidesteps every ordering problem with
       # `chunks_note_id_position_index` when positions shift. One transaction
       # so OrphanSweep can never scroll a live point during the window where
       # its row is momentarily absent.
+      #
+      # `with_tenant` rather than a bare `Repo.transaction`: `chunks` carries
+      # FORCE ROW LEVEL SECURITY with a `WITH CHECK` on
+      # `current_setting('app.current_tenant', true)`, and `skip_tenant_check`
+      # suppresses only Engram's own `prepare_query/3` guard — it sets nothing
+      # in Postgres. Unscoped, the INSERT raises 42501 and the DELETE silently
+      # matches zero rows. It has never bitten because every environment
+      # connects as a superuser, which bypasses RLS even when FORCED; that is
+      # an accident of deployment, not a property of this code.
+      #
+      # `with_tenant/2` opens the transaction itself and is re-entrant for the
+      # same tenant, so a tenant-scoped caller pays nothing and the atomicity
+      # the comment above depends on is unchanged.
       {:ok, _} =
-        Repo.transaction(fn ->
+        Repo.with_tenant(note.user_id, fn ->
           Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id), skip_tenant_check: true)
           Repo.insert_all(Chunk, chunk_rows, skip_tenant_check: true)
         end)

@@ -39,22 +39,42 @@ defmodule Engram.Indexing.IndexCapRlsTest do
 
   use Engram.DataCase, async: false
 
+  import Ecto.Query
+
   alias Engram.Indexing.IndexCap
+  alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.UsageMeters
 
   # Runs `fun` as the non-BYPASSRLS role with NO tenant configured — the exact
   # shape of a prod request reaching these code paths.
+  #
+  # The tenant clear is load-bearing, not hygiene. Several tests below make a
+  # superuser "sanity" call first, and those go through `Repo.with_tenant/2`,
+  # whose `set_config(..., true)` is a SET LOCAL that PERSISTS into the
+  # enclosing sandbox transaction once its savepoint commits — `with_tenant`'s
+  # exit resets only the ROLE, never the tenant. Without this line the role
+  # drop below re-engages RLS while the policy compares against a MATCHING
+  # tenant, so three of the tests in this file passed no matter what the code
+  # did. See the leak-forward trap in
+  # `docs/context/rls-enforcement-testing-traps.md`.
   defp as_prod_role(fun) do
     {:ok, result} =
       Repo.transaction(fn ->
+        Repo.query!("SELECT set_config('app.current_tenant', '', true)")
         Repo.query!("SET LOCAL ROLE engram_app")
 
-        try do
-          fun.()
-        after
-          Repo.query!("RESET ROLE")
-        end
+        result = fun.()
+
+        # Reset on the SUCCESS path only, deliberately not in an `after`. If
+        # `fun` raises, the transaction is already aborted and `RESET ROLE`
+        # fails with 25P02, masking the real error — and the read paths in this
+        # file CAN raise now that they run against a genuinely filtered result
+        # set: `backfill_freed_slots/1` calls `Accounts.get_user!/1`, and a
+        # missing `engram_app` grant surfaces as 42501. Letting the raise
+        # propagate rolls the transaction back, discarding the SET LOCAL state.
+        Repo.query!("RESET ROLE")
+        result
       end)
 
     result
@@ -72,6 +92,44 @@ defmodule Engram.Indexing.IndexCapRlsTest do
       insert(:note, user: user, vault: vault, created_at: ~U[2026-01-02 00:00:00Z])
 
     %{user: user, older: older, newer: newer}
+  end
+
+  # CONTROL. Without this the file cannot tell "correctly scoped" from "the
+  # role drop never engaged", which is exactly how the read tests below came to
+  # be vacuous without anyone noticing.
+  describe "harness" do
+    test "control: the dropped role with no tenant sees zero notes" do
+      %{user: user} = capped_user_with_notes(2_000)
+
+      # Mirror the three read tests below by making a superuser call FIRST.
+      # Without it this control guards only the role drop, not the tenant
+      # clear: `capped_user_with_notes/1` builds rows with ExMachina
+      # `insert/2`, and `Repo.insert` routes through neither `with_tenant/2`
+      # nor `prepare_query/3`, so no tenant is ever set and deleting the clear
+      # would leave this green. `counts/1` opens a real `with_tenant/2`, whose
+      # SET LOCAL tenant then leaks forward into this sandbox transaction —
+      # which is the condition the clear exists to undo.
+      assert %{total: 2} = IndexCap.counts(user)
+
+      seen =
+        as_prod_role(fn ->
+          Repo.one(
+            from(n in Note, where: n.user_id == ^user.id, select: count(n.id)),
+            skip_tenant_check: true
+          )
+        end)
+
+      assert seen == 0,
+             """
+             Harness is not engaging RLS, so every assertion in this file is meaningless.
+
+               notes visible as engram_app with no tenant: #{inspect(seen)} (expected 0)
+
+             Either SET LOCAL ROLE did not apply, or the tenant was not cleared
+             (a superuser `with_tenant` call earlier in the test leaks its
+             tenant forward), or the role has BYPASSRLS.
+             """
+    end
   end
 
   describe "counts/1 under FORCE RLS" do
@@ -97,6 +155,73 @@ defmodule Engram.Indexing.IndexCapRlsTest do
       refute IndexCap.within_cap?(newer, user)
 
       refute as_prod_role(fn -> IndexCap.within_cap?(newer, user) end)
+    end
+  end
+
+  # The two tests below cover WRITES, and they are shaped differently from the
+  # read tests above for a reason worth stating.
+  #
+  # Only INSERT raises `42501` under a policy used as both USING and WITH
+  # CHECK. An UPDATE has its rows FILTERED by the USING clause instead, so an
+  # unscoped `update_all` reports `{0, nil}` and the caller returns `:ok`
+  # having changed nothing. There is no exception to catch.
+  #
+  # So these assert the PERSISTED EFFECT, and seed a non-nil value first so the
+  # assertion cannot be satisfied by an empty match. A test that merely checked
+  # "no error was raised" would pass against the broken code.
+  #
+  # This is also why both sites outlived 1f336bfa, which scoped the count reads
+  # in this module and left these two writes behind: nothing failed loudly.
+  describe "revoke_dense_index/1 under FORCE RLS" do
+    test "clears both hashes instead of silently matching zero rows" do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+
+      note =
+        insert(:note,
+          user: user,
+          vault: vault,
+          embed_hash: "stale-embed",
+          dense_indexed_hash: "stale-dense"
+        )
+
+      # Precondition, not decoration: if these were already nil the assertions
+      # below would hold no matter what the function did.
+      assert note.embed_hash == "stale-embed"
+      assert note.dense_indexed_hash == "stale-dense"
+
+      assert :ok = as_prod_role(fn -> IndexCap.revoke_dense_index(user.id) end)
+
+      reloaded = Repo.get!(Note, note.id, skip_tenant_check: true)
+
+      assert is_nil(reloaded.dense_indexed_hash),
+             "dense_indexed_hash survived revoke_dense_index/1 — the UPDATE was filtered by " <>
+               "RLS and reported zero rows, so the user keeps paying for dense vectors"
+
+      assert is_nil(reloaded.embed_hash),
+             "embed_hash survived, so the note never re-enters the reconcile query and the " <>
+               "dense points are never replaced"
+    end
+  end
+
+  describe "backfill_freed_slots/1 under FORCE RLS" do
+    test "frees the slot instead of silently matching zero rows" do
+      user = insert(:user)
+      insert(:user_limit_override, user: user, key: "indexed_notes_cap", value: %{"v" => 2_000})
+      vault = insert(:vault, user: user)
+
+      note = insert(:note, user: user, vault: vault, embed_hash: "stale-embed")
+
+      assert note.embed_hash == "stale-embed"
+
+      assert :ok = as_prod_role(fn -> IndexCap.backfill_freed_slots(user.id) end)
+
+      reloaded = Repo.get!(Note, note.id, skip_tenant_check: true)
+
+      assert is_nil(reloaded.embed_hash),
+             "embed_hash survived backfill_freed_slots/1 — the UPDATE matched zero rows under " <>
+               "RLS, so a user who deleted notes to make room stays stuck at their cap with " <>
+               "no error anywhere"
     end
   end
 

@@ -23,7 +23,12 @@
   # rather than the literal `200` dialyzer infers from the current
   # `@backlinks_limit` value — the spec documents the contract callers (and
   # tests) can rely on, not today's specific cap. Same pattern as above.
-  {"lib/engram/links.ex", :contract_supertype, 727},
+  # NO line number, for the reason recorded on the `embed_note.ex` entry below:
+  # dialyxir line-matches the `@spec`, so any edit ABOVE it in the module
+  # shifts the pin and costs a round-trip. Scoping the RLS wraps in this file
+  # moved it 727 -> 804 and broke it exactly that way. `links.ex` has exactly
+  # one `contract_supertype`, so (file, warning_type) stays narrow.
+  {"lib/engram/links.ex", :contract_supertype},
 
   # `EmbedNote.backfill_priority/0` is intentionally specced as `pos_integer()`
   # rather than the literal `9` dialyzer infers from `@backfill_priority` — the
@@ -35,12 +40,18 @@
   # any edit ABOVE it in this module shifts it — each break costing a full CI
   # round-trip. `embed_note.ex` has exactly one contract_supertype, so scoping
   # to (file, warning_type) stays narrow while surviving unrelated edits.
-  {"lib/engram/workers/embed_note.ex", :contract_supertype},
+  {"lib/engram/workers/embed_note.ex", :contract_supertype}
 
-  # `Links.live_basename_count/3` sums two `Repo.one(select: count(...))`
-  # results. SQL `count()` is always a non-negative integer at runtime, but
-  # `Repo.one/2` types as `term()`, so dialyzer widens the `+` to `number()`
-  # and flags `float()` as missing from the `non_neg_integer()` spec. The
-  # spec states the real contract.
-  {"lib/engram/links.ex", :missing_range, 371}
+  # NOTE: the `Links.live_basename_count/3` `missing_range` pin was REMOVED
+  # here, not re-pointed. It existed because the function summed two
+  # `Repo.one(select: count(...))` results — `Repo.one/2` types as `term()`, so
+  # dialyzer widened the `+` to `number()` and flagged `float()` as missing
+  # from the `non_neg_integer()` spec.
+  #
+  # Scoping the function's body behind `Repo.with_tenant/2` moved the sum into
+  # a private `do_live_basename_count/3`, and the public function now returns
+  # the transaction's result — so the widened arithmetic no longer reaches the
+  # spec and the warning stopped firing. Dialyzer reported it as an unnecessary
+  # skip. Left as a comment rather than silently deleted, because the reasoning
+  # is worth having if the shape ever comes back.
 ]
