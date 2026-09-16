@@ -25,7 +25,7 @@ on:
     - cron: '0 14 * * 1'    # plan-triage              (Mon 14:00 UTC)
     - cron: '0 3 * * 6'     # dependency-submission    (Sat 03:00 UTC)
     - cron: '40 5 * * *'    # mcp-conformance          (daily 05:40 UTC)
-    - cron: '10 6 * * *'    # vendor-conformance       (daily 06:10 UTC)
+    - cron: '40 7 * * *'    # vendor-conformance       (daily 07:40 UTC)
   workflow_dispatch:
     inputs:
       task:
@@ -855,15 +855,38 @@ jobs:
   # step opens, because the alert can only name the job.
   vendor-conformance:
     if: |
-      github.event.schedule == '10 6 * * *'
+      github.event.schedule == '40 7 * * *'
       || github.event.inputs.task == 'vendor-conformance'
-    runs-on: [self-hosted, linux, x64, isolated]
+    # `heavy`, for the same reason verify.yml pins unit-tests there (#355): a
+    # cold `mix compile` of the whole app saturates a VM for minutes, and on a
+    # generic slot it lands next to e2e suites whose delivery budgets are
+    # timing-bounded. 07:40 also keeps it clear of the 06:00 nightly e2e
+    # convergence run — an earlier draft sat 10 minutes inside it.
+    runs-on: [self-hosted, linux, x64, isolated, heavy]
+    # deps.get against hex.pm and a cold compile are both open-ended; the
+    # vendor HTTP itself is bounded at 5s inside HttpFetcher. Without this the
+    # default 360-minute cap would hold a slot through the nightly e2e run.
+    timeout-minutes: 20
     permissions:
       contents: read
       issues: write
     env:
       PG_CONTAINER: engram-vendor-conformance-${{ github.run_id }}
     steps:
+      # MANDATORY before `clean: false` on this label set. `e2e-orphans` runs
+      # hourly on these same runners and checks out with `sparse-checkout`
+      # limited to four e2e/ files; actions/checkout does not clear stale
+      # skip-worktree bits, so landing after it would leave mix.exs and test/
+      # absent. `mix deps.get` then fails, rc is never set, no issue is filed,
+      # and the only signal is a bare "CRON FAILED". Same step verify.yml's
+      # unit-tests and storage-database jobs carry.
+      - name: Reset sparse-checkout leaked from cross-repo jobs
+        run: |
+          if [ -d .git ] && { [ -f .git/info/sparse-checkout ] || [ "$(git config --get core.sparseCheckout 2>/dev/null)" = "true" ]; }; then
+            echo "::warning::Sparse-checkout leak detected — removing .git for fresh clone"
+            rm -rf .git
+          fi
+
       - uses: actions/checkout@v7
         with:
           clean: false  # Preserve _build/ and deps/ for incremental compilation
@@ -878,11 +901,17 @@ jobs:
         run: |
           docker rm -f "$PG_CONTAINER" 2>/dev/null || true
 
-          if [ -n "${LOCAL_REGISTRY:-}" ]; then
-            PG_IMAGE="${LOCAL_REGISTRY}/postgres:18.4"
-            docker pull "$PG_IMAGE" 2>/dev/null || PG_IMAGE="postgres:18.4"
-          else
-            PG_IMAGE="postgres:18.4"
+          # No registry-mirror branch: LOCAL_REGISTRY is a WORKFLOW-level env in
+          # verify.yml, and cron.yml has none, so the branch this was copied
+          # from was dead — every run pulled from Docker Hub anyway, and a
+          # rate-limit surfaced as five "likely port race" retries followed by a
+          # wrong diagnosis. Pull explicitly so a registry problem reads as one.
+          PG_IMAGE="postgres:18.4"
+          if ! docker image inspect "$PG_IMAGE" >/dev/null 2>&1; then
+            docker pull "$PG_IMAGE" || {
+              echo "::error::Could not pull $PG_IMAGE (registry unreachable or rate-limited)"
+              exit 1
+            }
           fi
 
           for attempt in 1 2 3 4 5; do
@@ -898,7 +927,7 @@ jobs:
                 "$PG_IMAGE"; then
               break
             fi
-            echo "Attempt $attempt: docker run failed (likely port race) — cleaning up + retrying"
+            echo "Attempt $attempt: docker run failed (port race or daemon pressure) — cleaning up + retrying"
             docker rm -f "$PG_CONTAINER" 2>/dev/null || true
             sleep 1
             if [ "$attempt" = "5" ]; then
@@ -939,12 +968,29 @@ jobs:
           rc=0
           MIX_ENV=test mix test test/engram/oauth/cimd/vendor_conformance_test.exs \
             2>&1 | tee vendor-conformance.log || rc=$?
+
+          # "No failures found" is not "checks ran" — the trap this whole job
+          # exists to correct. `:vendor_conformance` is excluded by default, so
+          # a dropped VENDOR_CONFORMANCE or a renamed moduletag yields
+          # "2 tests, 0 failures, 2 excluded" and exit 0: permanently green
+          # while covering nothing. With the opt-in working, nothing in this
+          # file is excluded, so any `excluded` in the summary means no signal.
+          summary=$(grep -E '^[0-9]+ (test|tests), ' vendor-conformance.log | tail -1)
+          echo "Summary line: ${summary:-<none found>}"
+          if [ -z "$summary" ] || printf '%s' "$summary" | grep -q 'excluded'; then
+            echo "::error::vendor conformance graded NOTHING (tag excluded, or the suite never ran)"
+            rc=1
+          fi
+
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           exit "$rc"
 
       - name: Stop postgres
         if: always()
-        run: docker rm -f "$PG_CONTAINER" 2>/dev/null || true
+        # -fv, not -f: the donor teardown in verify.yml reclaims PGDATA too.
+        # Without the volume flag every nightly run orphans an anonymous volume
+        # until the weekly prune, and disk-fill on these VMs is a known outage.
+        run: docker rm -fv "$PG_CONTAINER" 2>/dev/null || true
 
       # Gated on rc being SET as well as non-zero: an empty rc means the step
       # died before the suite ran (no database, deps unresolvable), which is an
@@ -957,14 +1003,31 @@ jobs:
           script: |
             const fs = require('fs')
             const log = fs.readFileSync('vendor-conformance.log', 'utf8').slice(-6000)
-            const title =
-              'vendor-conformance: a vendor we advertise publishes a document we refuse'
+
+            // The title is also the dedup key, so it must not assert something
+            // the run did not establish. The test distinguishes these cases in
+            // its own message; a transient 503 at 07:40 filing "we refuse this
+            // vendor" would leave a standing, factually wrong issue that a
+            // later real refusal merely updates.
+            const refused = log.includes('we would REFUSE')
+            const unreachable = log.includes('could not fetch its CIMD document')
+            const title = refused
+              ? 'vendor-conformance: a vendor we advertise publishes a document we refuse'
+              : unreachable
+                ? 'vendor-conformance: a vendor CIMD document could not be fetched'
+                : 'vendor-conformance: the nightly check graded nothing'
+
+            const lede = refused
+              ? 'We would REFUSE a document a vendor we advertise currently publishes. Every connect attempt from that vendor is failing.'
+              : unreachable
+                ? 'A vendor document could not be fetched (timeout, non-200, redirect, or wrong content-type). This is NOT by itself an Engram defect — the vendor may have moved the document, or their endpoint was briefly down.'
+                : 'The run reported no vendor result at all — the tag was excluded or the suite never executed. Treat this as a broken check, not a vendor problem.'
+
             const body = [
-              'The nightly vendor CIMD conformance run failed.',
+              lede,
               '',
               'This fetches the documents real vendors publish and asserts we would accept',
-              'them. A failure is NOT necessarily our bug — read it as "a vendor changed',
-              'something and one of us has to move". The assertion message names the field.',
+              'them. The assertion message names the offending field.',
               '',
               'The MCPJam suite cannot cover this: its CLI supplies its own published',
               'document, so it only ever proves MCPJam can register (#1635).',
@@ -1002,6 +1065,37 @@ jobs:
                 title, body, labels: ['mcp', 'area/auth'],
               })
               core.info(`Opened issue #${created.number}`)
+            }
+
+      # Nothing else would ever close these, so a single bad night would leave a
+      # standing claim that a vendor is broken long after it recovered. A green
+      # run is proof it is not.
+      - name: Resolve the vendor issue on a green run
+        if: success()
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const titles = [
+              'vendor-conformance: a vendor we advertise publishes a document we refuse',
+              'vendor-conformance: a vendor CIMD document could not be fetched',
+              'vendor-conformance: the nightly check graded nothing',
+            ]
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'mcp', per_page: 100,
+            })
+
+            for (const issue of open.filter((i) => titles.includes(i.title))) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `Resolved: the vendor conformance run is green again (${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}).`,
+              })
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issue.number, state: 'closed', state_reason: 'completed',
+              })
+              core.info(`Closed #${issue.number}`)
             }
 
   # Scheduled work fails silently by construction: nobody opens a cron run
