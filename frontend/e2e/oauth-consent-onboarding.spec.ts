@@ -106,18 +106,29 @@ test.describe("MCP-first signup resumes consent after onboarding", () => {
 			timeout: 10_000,
 		});
 
-		// 3. Terms.
-		await page.waitForURL(/\/onboard\/agreement/u, { timeout: 15_000 });
-		await page.getByLabel(/I have read and agree/iu).click();
-		await page.getByRole("button", { name: /^continue$/iu }).click();
+		// 3. The step chain depends on `:billing_enabled`. SaaS runs
+		//    agreement → billing → tools → vault; with billing off, `terms_ok`
+		//    and `subscription_ok` auto-pass and `build_steps/2` yields only
+		//    tools → vault. Handle whichever this environment serves instead of
+		//    assuming, so the spec does not encode one deployment's config.
+		await page.waitForURL(/\/onboard\//u, { timeout: 20_000 });
 
-		// 4. Plan.
-		await page.waitForURL(/\/onboard\/billing/u, { timeout: 20_000 });
-		await page.getByRole("button", { name: /continue with free/iu }).click();
+		// The tool question must never render: the connecting client already
+		// answered it. Asserted before walking the wizard so a failed
+		// pre-answer reports as itself rather than as a later timeout.
+		expect(new URL(page.url()).pathname).not.toBe("/onboard/tools");
 
-		// 5. Straight to the vault step. If the tool question had NOT been
-		//    pre-answered from the connecting client, this lands on
-		//    /onboard/tools and the wait below is what fails.
+		if (new URL(page.url()).pathname === "/onboard/agreement") {
+			await page.getByLabel(/I have read and agree/iu).click();
+			await page.getByRole("button", { name: /^continue$/iu }).click();
+			await page.waitForURL(/\/onboard\/(?:billing|vault)/u, { timeout: 20_000 });
+		}
+
+		if (new URL(page.url()).pathname === "/onboard/billing") {
+			await page.getByRole("button", { name: /continue with free/iu }).click();
+		}
+
+		// 4. The vault step, reached without ever showing tools.
 		await page.waitForURL(/\/onboard\/vault/u, { timeout: 20_000 });
 
 		// 6. First vault.
