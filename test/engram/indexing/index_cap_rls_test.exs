@@ -40,6 +40,7 @@ defmodule Engram.Indexing.IndexCapRlsTest do
   use Engram.DataCase, async: false
 
   alias Engram.Indexing.IndexCap
+  alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.UsageMeters
 
@@ -97,6 +98,73 @@ defmodule Engram.Indexing.IndexCapRlsTest do
       refute IndexCap.within_cap?(newer, user)
 
       refute as_prod_role(fn -> IndexCap.within_cap?(newer, user) end)
+    end
+  end
+
+  # The two tests below cover WRITES, and they are shaped differently from the
+  # read tests above for a reason worth stating.
+  #
+  # Only INSERT raises `42501` under a policy used as both USING and WITH
+  # CHECK. An UPDATE has its rows FILTERED by the USING clause instead, so an
+  # unscoped `update_all` reports `{0, nil}` and the caller returns `:ok`
+  # having changed nothing. There is no exception to catch.
+  #
+  # So these assert the PERSISTED EFFECT, and seed a non-nil value first so the
+  # assertion cannot be satisfied by an empty match. A test that merely checked
+  # "no error was raised" would pass against the broken code.
+  #
+  # This is also why both sites outlived 1f336bfa, which scoped the count reads
+  # in this module and left these two writes behind: nothing failed loudly.
+  describe "revoke_dense_index/1 under FORCE RLS" do
+    test "clears both hashes instead of silently matching zero rows" do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+
+      note =
+        insert(:note,
+          user: user,
+          vault: vault,
+          embed_hash: "stale-embed",
+          dense_indexed_hash: "stale-dense"
+        )
+
+      # Precondition, not decoration: if these were already nil the assertions
+      # below would hold no matter what the function did.
+      assert note.embed_hash == "stale-embed"
+      assert note.dense_indexed_hash == "stale-dense"
+
+      assert :ok = as_prod_role(fn -> IndexCap.revoke_dense_index(user.id) end)
+
+      reloaded = Repo.get!(Note, note.id, skip_tenant_check: true)
+
+      assert is_nil(reloaded.dense_indexed_hash),
+             "dense_indexed_hash survived revoke_dense_index/1 — the UPDATE was filtered by " <>
+               "RLS and reported zero rows, so the user keeps paying for dense vectors"
+
+      assert is_nil(reloaded.embed_hash),
+             "embed_hash survived, so the note never re-enters the reconcile query and the " <>
+               "dense points are never replaced"
+    end
+  end
+
+  describe "backfill_freed_slots/1 under FORCE RLS" do
+    test "frees the slot instead of silently matching zero rows" do
+      user = insert(:user)
+      insert(:user_limit_override, user: user, key: "indexed_notes_cap", value: %{"v" => 2_000})
+      vault = insert(:vault, user: user)
+
+      note = insert(:note, user: user, vault: vault, embed_hash: "stale-embed")
+
+      assert note.embed_hash == "stale-embed"
+
+      assert :ok = as_prod_role(fn -> IndexCap.backfill_freed_slots(user.id) end)
+
+      reloaded = Repo.get!(Note, note.id, skip_tenant_check: true)
+
+      assert is_nil(reloaded.embed_hash),
+             "embed_hash survived backfill_freed_slots/1 — the UPDATE matched zero rows under " <>
+               "RLS, so a user who deleted notes to make room stays stuck at their cap with " <>
+               "no error anywhere"
     end
   end
 

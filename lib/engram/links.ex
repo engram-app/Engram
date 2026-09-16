@@ -112,7 +112,23 @@ defmodule Engram.Links do
         |> put_optional_envelope(:anchor, p.anchor, dek, id)
       end)
 
-    Repo.transaction(fn ->
+    # `with_tenant` rather than a bare transaction: `note_links` carries FORCE
+    # ROW LEVEL SECURITY, and the `skip_tenant_check: true` below silences only
+    # Engram's own `prepare_query/3` guard — it sets nothing in Postgres.
+    # Unscoped, the `insert_all` raises 42501 and the `delete_all` silently
+    # matches zero rows, which is the worse half: a stale edge set survives a
+    # rewrite with no error anywhere.
+    #
+    # Scoped HERE and not at the callers, deliberately. `commit_index/1` calls
+    # this AFTER its own tenant block has committed, and in production that
+    # block is a real top-level transaction whose SET LOCAL is discarded at
+    # commit — so the tenant is already gone by the time this runs. Relying on
+    # a caller's tenant only appears to work under the test sandbox, where
+    # everything shares one outer transaction and the setting leaks forward.
+    #
+    # Re-entrant for the same tenant, so `BackfillNoteLinks` (which already
+    # holds `with_tenant(user_id, ...)`) pays nothing.
+    Repo.with_tenant(user.id, fn ->
       # Serialize concurrent extraction for one source note. Two writers
       # (ExtractNoteLinks fast path + the embed pipeline's commit_index, or
       # duplicate bulk jobs) interleaving this delete+insert under READ
