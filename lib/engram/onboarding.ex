@@ -304,8 +304,20 @@ defmodule Engram.Onboarding do
   # without re-deriving the gate rules. `:tools` collects the questionnaire's
   # tool picks; `:vault` collects the obsidian/fresh source pick and creates
   # (or waits on) the first vault.
-  defp build_steps(billing_active, _profile) do
-    if billing_active, do: [:agreement, :billing, :tools, :vault], else: [:tools, :vault]
+  # `:tools` drops out once answered, because the chain drives a "Step X of N"
+  # header and a step that never renders must not be counted. Nothing in the
+  # wizard pre-answers it, so for a normal signup this is the full chain; the
+  # MCP-first path answers it from the OAuth client before the wizard starts
+  # (the connecting client IS the answer), and without this the header counted
+  # 2-of-4 and then jumped to 4-of-4.
+  #
+  # `:vault` never drops: `OnboardVaultPage` is also where `uses_obsidian` is
+  # collected, so it renders even for a user who already has a vault row.
+  defp build_steps(billing_active, profile) do
+    hosted = if billing_active, do: [:agreement, :billing], else: []
+    tools = if profile_has_tools?(profile), do: [], else: [:tools]
+
+    hosted ++ tools ++ [:vault]
   end
 
   # Self-host (billing_enabled=false) doesn't run a ToS gate — operators own

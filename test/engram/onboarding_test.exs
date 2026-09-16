@@ -153,13 +153,22 @@ defmodule Engram.OnboardingTest do
     end
 
     test "steps stays [:tools, :vault] regardless of profile.uses_obsidian" do
+      # Only `uses_obsidian` is set here, deliberately. This pins that the
+      # SOURCE pick does not reshape the chain; answering `tools` does, and
+      # has its own test below.
       user = insert(:user, onboarding_profile: %{})
-      {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
+      {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true})
       assert %{steps: [:tools, :vault]} = Onboarding.status(user)
 
       user2 = insert(:user, onboarding_profile: %{})
-      {:ok, _} = Onboarding.set_profile(user2, %{uses_obsidian: false, tools: ["claude"]})
+      {:ok, _} = Onboarding.set_profile(user2, %{uses_obsidian: false})
       assert %{steps: [:tools, :vault]} = Onboarding.status(user2)
+    end
+
+    test "steps drops :tools once the questionnaire is answered" do
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.set_profile(user, %{tools: ["claude"]})
+      assert %{steps: [:vault]} = Onboarding.status(user)
     end
   end
 
@@ -217,8 +226,19 @@ defmodule Engram.OnboardingTest do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
       insert(:subscription, user: user, status: "active")
-      {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
+      {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true})
       assert %{steps: [:agreement, :billing, :tools, :vault]} = Onboarding.status(user)
+    end
+
+    # The MCP-first path answers `tools` from the OAuth client before the
+    # wizard starts, so the step never renders. Leaving it in the chain made
+    # the header count 2-of-4 and then jump straight to 4-of-4.
+    test "steps drops :tools once the questionnaire is answered" do
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+      insert(:subscription, user: user, status: "active")
+      {:ok, _} = Onboarding.set_profile(user, %{tools: ["antigravity"]})
+      assert %{steps: [:agreement, :billing, :vault]} = Onboarding.status(user)
     end
 
     test "next_step=billing when terms accepted but no subscription" do
