@@ -23,6 +23,10 @@ import { ROUTES } from "../routes";
 
 const KEY = "engram:pending-oauth";
 
+function isConsentPath(path: string): boolean {
+	return path === ROUTES.OAUTH_CONSENT || path.startsWith(`${ROUTES.OAUTH_CONSENT}?`);
+}
+
 export interface PendingAuthorization {
 	/** The full consent URL, query string included, so `state` and the PKCE
 	 *  challenge survive the detour and the original request is honored. */
@@ -112,7 +116,7 @@ export function pendingCancelUrl(): string | null {
 
 	const query = new URLSearchParams(pending.returnTo.split("?").slice(1).join("?"));
 	const redirectUri = query.get("redirect_uri");
-	if (!redirectUri || !/^https?:\/\//iu.test(redirectUri)) {
+	if (!(redirectUri && /^https?:\/\//iu.test(redirectUri))) {
 		return null;
 	}
 
@@ -134,8 +138,4 @@ export function clearPendingAuthorization(): void {
 	} catch {
 		// Nothing to do, and nothing worth breaking a render over.
 	}
-}
-
-function isConsentPath(path: string): boolean {
-	return path === ROUTES.OAUTH_CONSENT || path.startsWith(`${ROUTES.OAUTH_CONSENT}?`);
 }

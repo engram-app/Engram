@@ -155,22 +155,27 @@ export default function OAuthAuthorizePage() {
 		const slug = clientQuery.data?.slug ?? null;
 		stashPendingAuthorization(location.search, slug, clientQuery.data?.client_name ?? null);
 
-		const bounce = async () => {
-			// Connecting a tool IS the answer to "which tools do you use", so the
-			// questionnaire is pre-answered instead of asked. An unattributable
-			// client, or a write that fails, just means the user sees the step —
-			// the pre-existing behaviour, not a new failure.
+		// Connecting a tool IS the answer to "which tools do you use", so the
+		// questionnaire is pre-answered instead of asked. An unattributable
+		// client, or a write that fails, just means the user sees the step —
+		// the pre-existing behaviour, not a new failure.
+		const preAnswerTools = async () => {
 			if (slug && !onboarding?.profile?.tools?.length) {
 				try {
 					await setProfile.mutateAsync({ tools: [slug] });
 				} catch {
-					// Fall through; the wizard will ask.
+					// Swallowed HERE, not left to the caller: `finally` re-throws,
+					// so a rejection would surface as an unhandled rejection. The
+					// wizard simply asks the question instead.
 				}
 			}
-			navigate("/onboard", { replace: true });
 		};
 
-		void bounce();
+		// `finally`, so the handoff happens whether or not the pre-answer lands.
+		// Stranding someone on a consent screen they cannot use because an
+		// optional convenience failed would be a worse bug than the one this
+		// whole change exists to fix.
+		preAnswerTools().finally(() => navigate("/onboard", { replace: true }));
 	}, [
 		needsOnboarding,
 		missing.length,

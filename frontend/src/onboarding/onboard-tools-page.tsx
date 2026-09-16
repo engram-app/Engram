@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router";
-import { onboardingDoneTarget } from "./onboarding-next";
 import { HelpTip } from "@/components/help-tip";
 import { Checkbox } from "@/components/ui/checkbox";
 import AuthPanel from "@/layout/auth-panel";
@@ -8,6 +7,7 @@ import { heading, selectableRow } from "@/lib/ui-classes";
 import { useOnboardingStatus, useSetOnboardingProfile } from "../api/queries";
 import { useIsFreeTier } from "../billing/use-is-free-tier";
 import LoadingScreen from "../layout/loading-screen";
+import { onboardingDoneTarget } from "./onboarding-next";
 import { NO_AI_TOOL, TOOL_ASSISTANTS, TOOL_CODING, type ToolOption } from "./onboarding-tools";
 import { ToolBadge } from "./tool-icon";
 

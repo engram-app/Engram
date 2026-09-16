@@ -1,13 +1,13 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { Navigate, useNavigate } from "react-router";
-import { onboardingNext } from "./onboarding-next";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { api } from "../api/client";
 import { type OnboardingStatus, useOnboardingStatus } from "../api/queries";
 import BillingPage from "../billing/billing-page";
 import { FREE_TIER } from "../billing/plan-cards";
+import { onboardingNext } from "./onboarding-next";
 
 export default function OnboardBillingPage() {
 	const navigate = useNavigate();

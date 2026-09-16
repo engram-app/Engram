@@ -241,9 +241,7 @@ describe("OAuthAuthorizePage onboarding bounce", () => {
 
 		renderWithProbeAt(VALID_QS);
 
-		await waitFor(() =>
-			expect(setProfileMock).toHaveBeenCalledWith({ tools: ["antigravity"] }),
-		);
+		await waitFor(() => expect(setProfileMock).toHaveBeenCalledWith({ tools: ["antigravity"] }));
 	});
 
 	it("invents no answer for a client it cannot attribute", async () => {

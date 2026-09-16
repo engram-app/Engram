@@ -21,7 +21,5 @@ export function onboardingDoneTarget(): string {
  *  short-circuit the wizard, which is the thing standing between an MCP-first
  *  signup and a grant that works. */
 export function onboardingNext(status: { next_step: OnboardingStep | "done" }): string {
-	return status.next_step === "done"
-		? onboardingDoneTarget()
-		: `/onboard/${status.next_step}`;
+	return status.next_step === "done" ? onboardingDoneTarget() : `/onboard/${status.next_step}`;
 }

@@ -2,7 +2,6 @@ import obsidianMark from "@lobehub/icons-static-svg/icons/obsidian-color.svg?raw
 import { FilePlus2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Navigate, useNavigate } from "react-router";
-import { onboardingDoneTarget } from "./onboarding-next";
 import { useAutofocus } from "@/hooks/use-autofocus";
 import AuthPanel from "@/layout/auth-panel";
 import { heading } from "@/lib/ui-classes";
@@ -15,6 +14,7 @@ import {
 } from "../api/queries";
 import { useConfig } from "../config-context";
 import LoadingScreen from "../layout/loading-screen";
+import { onboardingDoneTarget } from "./onboarding-next";
 import { SyncStatusPill } from "./sync-status-pill";
 import { useVaultReadyEvents } from "./use-vault-ready-events";
 
