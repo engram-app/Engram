@@ -87,6 +87,34 @@ defmodule EngramWeb.McpStructuredOutputTest do
     end
   end
 
+  describe "every branch of a converted handler honours its schema" do
+    # The sweep below calls each tool ONCE, so it only ever exercises whichever
+    # branch that single call lands in. A handler that returns a 2-tuple on some
+    # other branch while still advertising an outputSchema passes it — verified
+    # by reverting list_vaults to a conditional and watching the suite stay
+    # green. Assert the branches directly.
+    #
+    # The empty branch is live in prod: an OAuth grant scoped away from every
+    # vault, a restricted API key, or a brand-new user pre-sync all reach it
+    # (see the #729 scoping in dispatch_tool/4). The official TS SDK raises
+    # McpError when outputSchema is declared and structuredContent is absent, so
+    # this is a hard client failure on the recovery path, not a cosmetic gap.
+    test "list_vaults returns structuredContent even with no accessible vaults", %{user: user} do
+      assert {:ok, text, structured} = Engram.MCP.Handlers.handle("list_vaults", user, [], %{})
+
+      assert structured == %{"vaults" => []}
+      assert text =~ "No vaults"
+    end
+
+    test "list_vaults returns structuredContent with vaults present", %{user: user, vault: vault} do
+      assert {:ok, _text, structured} =
+               Engram.MCP.Handlers.handle("list_vaults", user, [vault], %{})
+
+      assert [%{"id" => id}] = structured["vaults"]
+      assert id == to_string(vault.id)
+    end
+  end
+
   describe "schema and payload agree" do
     test "every tool advertising an outputSchema returns structuredContent", %{conn: conn} do
       declared = for t <- Tools.list(), not is_nil(t[:outputSchema]), do: t.name

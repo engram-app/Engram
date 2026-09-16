@@ -342,10 +342,16 @@ defmodule EngramWeb.McpController do
       # it must still get a usable answer.
       {:ok, text, structured} when is_map(structured) ->
         result = Map.put(text_result(text), "structuredContent", structured)
-        # Both renderings go on the wire, so both count toward the response-size
-        # metric. Reporting only `text` would under-report by roughly half today
-        # and drift further with every tool converted.
-        {{:ok, result}, :ok, byte_size_safe(text) + structured_bytes(structured)}
+        # `text` only, deliberately. A previous pass added a second Jason.encode
+        # here so the size metric would count structuredContent too. That was
+        # wrong three ways: prod relabels
+        # `engram_prom_ex_mcp_tool_result_bytes_bucket` to drop (engram-infra
+        # ecs.tf, "ZERO dashboard/alert consumers"), the extra encode costs
+        # ~7.6ms on a 225KB payload for a metric nobody reads, and its error
+        # fallback swallowed the one signal that catches a non-JSON-safe
+        # payload. The metric also documents itself as LLM context cost, which
+        # is `content` — structuredContent is for programmatic use.
+        {{:ok, result}, :ok, byte_size_safe(text)}
 
       {:error, msg} ->
         {error_result(msg), :error, byte_size_safe(msg)}
@@ -463,13 +469,6 @@ defmodule EngramWeb.McpController do
       [only] -> {:ok, only}
       [] -> {:error, no_vault_message_for(all)}
       many -> {:many, many}
-    end
-  end
-
-  defp structured_bytes(structured) do
-    case Jason.encode(structured) do
-      {:ok, json} -> byte_size(json)
-      _ -> 0
     end
   end
 
