@@ -218,6 +218,19 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
       assert body["resume_url"] == EngramWeb.Endpoint.url() <> "/onboard"
     end
 
+    test "403 carries a human-readable message naming the resume URL", %{conn: conn} do
+      Application.put_env(:engram, :frontend_base_url, "https://app.engram.page")
+      user = insert(:user, onboarding_profile: %{})
+
+      conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
+
+      body = Phoenix.ConnTest.json_response(conn, 403)
+      assert body["message"] =~ "https://app.engram.page/onboard"
+      # Prose, not a field dump. A client that shows the message verbatim must
+      # not be showing the user `missing: ["terms"]`.
+      refute body["message"] =~ "missing"
+    end
+
     test "the 401 path carries no resume_url (nothing to resume)", %{conn: conn} do
       conn = RequireOnboarding.call(conn, [])
 

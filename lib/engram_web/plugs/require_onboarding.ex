@@ -49,11 +49,20 @@ defmodule EngramWeb.Plugs.RequireOnboarding do
             conn
 
           {:error, missing, next_step} ->
+            url = resume_url()
+
+            # A human-readable sentence, not just machine fields. The client
+            # that most needs this renders an unrecognized 403 body as-is, or
+            # not at all — `missing: ["terms"]` means nothing to the person
+            # reading it, and a bare "HTTP 403" means less.
             Halt.json(conn, 403, %{
               error: "onboarding_required",
               missing: missing,
               next_step: next_step,
-              resume_url: resume_url()
+              resume_url: url,
+              message:
+                "Your Engram account setup is not finished. Complete it at #{url}, " <>
+                  "then try again."
             })
         end
     end
