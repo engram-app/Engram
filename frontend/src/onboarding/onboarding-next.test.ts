@@ -23,7 +23,7 @@ describe("onboardingNext", () => {
 	// consent with the request intact, instead of on the dashboard wondering
 	// what happened to the app that sent them.
 	it("returns a finished user to a pending authorization", () => {
-		stashPendingAuthorization(SEARCH, "antigravity");
+		stashPendingAuthorization(SEARCH, "antigravity", "Google Antigravity");
 
 		expect(onboardingNext({ next_step: "done" })).toBe(`/oauth/consent${SEARCH}`);
 	});
@@ -31,7 +31,7 @@ describe("onboardingNext", () => {
 	// A pending authorization must not short-circuit the wizard. It is only
 	// consulted once every step is genuinely done.
 	it("does not divert an unfinished wizard", () => {
-		stashPendingAuthorization(SEARCH, "antigravity");
+		stashPendingAuthorization(SEARCH, "antigravity", "Google Antigravity");
 
 		expect(onboardingNext({ next_step: "billing" })).toBe("/onboard/billing");
 	});
@@ -47,7 +47,7 @@ describe("onboardingDoneTarget", () => {
 	});
 
 	it("is the pending authorization when one exists", () => {
-		stashPendingAuthorization(SEARCH, null);
+		stashPendingAuthorization(SEARCH, null, null);
 
 		expect(onboardingDoneTarget()).toBe(`/oauth/consent${SEARCH}`);
 	});

@@ -31,16 +31,24 @@ export interface PendingAuthorization {
 	 *  attributed. Lets the wizard skip asking which tools you use, which the
 	 *  act of connecting one has already answered. */
 	toolSlug: string | null;
+	/** Display name of the client, so the wizard can say whose authorization
+	 *  is waiting instead of dropping the user into an unexplained signup —
+	 *  the "preserve context" half of interrupting an OAuth flow. */
+	clientName: string | null;
 }
 
-export function stashPendingAuthorization(search: string, toolSlug: string | null): void {
+export function stashPendingAuthorization(
+	search: string,
+	toolSlug: string | null,
+	clientName: string | null,
+): void {
 	if (typeof window === "undefined") {
 		return;
 	}
 	try {
 		window.sessionStorage.setItem(
 			KEY,
-			JSON.stringify({ returnTo: `${ROUTES.OAUTH_CONSENT}${search}`, toolSlug }),
+			JSON.stringify({ returnTo: `${ROUTES.OAUTH_CONSENT}${search}`, toolSlug, clientName }),
 		);
 	} catch {
 		// Storage disabled or full. The user still completes onboarding and
@@ -77,11 +85,44 @@ export function peekPendingAuthorization(): PendingAuthorization | null {
 
 		const toolSlug =
 			"toolSlug" in parsed && typeof parsed.toolSlug === "string" ? parsed.toolSlug : null;
+		const clientName =
+			"clientName" in parsed && typeof parsed.clientName === "string" ? parsed.clientName : null;
 
-		return { returnTo: parsed.returnTo, toolSlug };
+		return { returnTo: parsed.returnTo, toolSlug, clientName };
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * Where to send the client when the user abandons setup instead of finishing.
+ *
+ * OAuth 2.1 expects an interrupted authorization to end in a standards-
+ * compliant response, not a tab the user closes: a refusal is `access_denied`
+ * carrying the original `state`. Null when there is nothing pending, or when
+ * the parked request has no usable redirect — there is nowhere to report to
+ * then, and inventing a destination is how an open redirect gets built by
+ * accident.
+ */
+export function pendingCancelUrl(): string | null {
+	const pending = peekPendingAuthorization();
+	if (!pending) {
+		return null;
+	}
+
+	const query = new URLSearchParams(pending.returnTo.split("?").slice(1).join("?"));
+	const redirectUri = query.get("redirect_uri");
+	if (!redirectUri || !/^https?:\/\//iu.test(redirectUri)) {
+		return null;
+	}
+
+	const answer = new URLSearchParams({ error: "access_denied" });
+	const state = query.get("state");
+	if (state) {
+		answer.set("state", state);
+	}
+
+	return `${redirectUri}${redirectUri.includes("?") ? "&" : "?"}${answer.toString()}`;
 }
 
 export function clearPendingAuthorization(): void {

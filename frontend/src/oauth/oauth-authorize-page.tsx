@@ -153,7 +153,7 @@ export default function OAuthAuthorizePage() {
 		bounced.current = true;
 
 		const slug = clientQuery.data?.slug ?? null;
-		stashPendingAuthorization(location.search, slug);
+		stashPendingAuthorization(location.search, slug, clientQuery.data?.client_name ?? null);
 
 		const bounce = async () => {
 			// Connecting a tool IS the answer to "which tools do you use", so the
