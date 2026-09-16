@@ -12,6 +12,11 @@ defmodule EngramWeb.McpController do
   @capabilities %{"tools" => %{"listChanged" => false}}
   @protocol_version "2025-03-26"
 
+  # Handshake fields are free text from the far side of the connection, so they
+  # are length-bounded before they reach the log — an unbounded `clientInfo` is
+  # billed as log volume on every reconnect.
+  @handshake_field_limit 64
+
   # engram-app/engram-infra#340 — closed-set map from tool name strings to
   # atoms, used as the cardinality-bounded `:tool` tag on MCP PromEx metrics.
   # Derived from the real roster at COMPILE time, so a new tool can no longer
@@ -62,9 +67,47 @@ defmodule EngramWeb.McpController do
     |> send_resp(405, "")
   end
 
+  @doc """
+  Structured metadata for the `mcp_handshake` log line.
+
+  Public only so it can be unit-tested without asserting on rendered log text.
+
+  We answer `initialize` with a fixed `@protocol_version` and negotiate nothing,
+  so the version the client ASKED for is not otherwise recorded anywhere. That
+  is the fact needed to decide whether a newer protocol revision can drop the
+  legacy path or has to dual-serve it, hence `mcp_protocol_requested` alongside
+  `mcp_protocol_served`.
+  """
+  @spec handshake_metadata(map()) :: keyword()
+  def handshake_metadata(params) do
+    client =
+      case params["clientInfo"] do
+        %{} = info -> info
+        _ -> %{}
+      end
+
+    Engram.Logger.Metadata.with_category(:info, :lifecycle,
+      mcp_protocol_requested: bounded(params["protocolVersion"]),
+      mcp_client_name: bounded(client["name"]),
+      mcp_client_version: bounded(client["version"]),
+      mcp_protocol_served: @protocol_version
+    )
+  end
+
+  defp bounded(nil), do: "unknown"
+
+  defp bounded(value) when is_binary(value),
+    do: String.slice(value, 0, @handshake_field_limit)
+
+  defp bounded(value), do: value |> inspect() |> String.slice(0, @handshake_field_limit)
+
   # -- Method dispatch --
 
-  defp dispatch(_conn, "initialize", _params) do
+  defp dispatch(_conn, "initialize", params) do
+    require Logger
+
+    Logger.info("mcp_handshake", handshake_metadata(params))
+
     {:ok,
      %{
        "protocolVersion" => @protocol_version,
