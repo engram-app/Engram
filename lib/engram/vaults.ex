@@ -427,7 +427,8 @@ defmodule Engram.Vaults do
   from a previous API response — today, the MCP tool layer, where requiring a
   UUID forced a `list_vaults` round trip before every vault-scoped call.
 
-  A non-UUID reference is run through `slugify/1` and matched against `slug`,
+  A non-UUID reference is matched against each vault's exact display name via
+  `name_hmac` first, then falls back to `slugify_ref/1` against `slug`,
   which is unique per user (`vaults_user_id_slug_index`). Going through
   `slugify/1` rather than comparing raw strings is what makes "Test Vault",
   "test vault" and "test-vault" all land on the same vault: it is the very
@@ -451,7 +452,7 @@ defmodule Engram.Vaults do
          {:ok, vault} <- get_vault(user, vault_id) do
       {:ok, vault}
     else
-      _ -> get_vault_by_slug(user, ref)
+      _ -> resolve_name_ref(user, ref)
     end
   end
 
@@ -463,6 +464,45 @@ defmodule Engram.Vaults do
   # lookup — the name path silently fails for a whole class of names.
   defp uuid_ref(ref) when byte_size(ref) == 36, do: Ecto.UUID.cast(ref)
   defp uuid_ref(_ref), do: :error
+
+  # Display NAME first, slug only as a fallback.
+  #
+  # `slugify/1` is many-to-one on names (#1665): "Work Notes", "Work-Notes" and
+  # "work_notes" all reduce to `work-notes`, and `unique_slug/3` gives the
+  # second vault `work-notes-2`. Resolving by slug alone therefore strips the
+  # distinction and silently lands on whichever vault won the base slug — a
+  # wrong-target WRITE for `write_note` / `delete_note`, needing nothing more
+  # unusual than two similarly-named vaults.
+  #
+  # Names are encrypted at rest so they cannot be compared in SQL, but
+  # `name_hmac` is maintained for exactly this equality lookup (see
+  # `inject_name_phase_b/3`). An exact name match is the strongest signal a
+  # caller can give, so it wins; two vaults sharing a name is genuinely
+  # ambiguous and refuses rather than guessing. A ref that names no vault falls
+  # through to the slug lookup, which is unique by construction.
+  defp resolve_name_ref(user, ref) do
+    case vaults_named(user, ref) do
+      [vault] -> {:ok, decrypt_vault_if_needed(vault, user)}
+      [_ | _] = many -> {:error, {:ambiguous_ref, Enum.map(many, &to_string(&1.id))}}
+      [] -> get_vault_by_slug(user, ref)
+    end
+  end
+
+  # Returns [] rather than raising when the user has no usable DEK: this is a
+  # read path, and a crypto failure here must degrade to the slug lookup rather
+  # than take down every vault-scoped MCP call.
+  defp vaults_named(user, ref) do
+    with {:ok, filter_key} <- Engram.Crypto.dek_filter_key(user),
+         hmac when is_binary(hmac) <- Engram.Crypto.hmac_field(filter_key, ref),
+         {:ok, rows} <-
+           Repo.with_tenant(user.id, fn ->
+             Repo.all(from(v in active(scoped(user)), where: v.name_hmac == ^hmac))
+           end) do
+      rows
+    else
+      _ -> []
+    end
+  end
 
   defp get_vault_by_slug(user, ref) do
     case slugify_ref(ref) do

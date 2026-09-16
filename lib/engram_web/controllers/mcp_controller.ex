@@ -491,7 +491,7 @@ defmodule EngramWeb.McpController do
   end
 
   # A caller-named vault: enforce the credential's scope with a single get_vault
-  # (not a full list). vault_denied_message re-derives the specific reason on
+  # (not a full list). vault_denied_message/2 re-derives the specific reason on
   # the error path only.
   defp resolve_requested_vault(user, requested, conn) do
     # by_ref, not get_vault/2: a model naming the vault it wants ("Engram")
@@ -502,14 +502,29 @@ defmodule EngramWeb.McpController do
          :ok <- Engram.Permissions.check(Engram.Permissions.vault_scope(conn), vault) do
       {:ok, vault}
     else
-      _ -> {:error, vault_denied_message(user, requested, conn)}
+      # Two vaults share this display name (#1665). Naming the candidates is
+      # what makes the error actionable — but only for a credential that can
+      # already see every vault. For a restricted one it would re-open the
+      # enumeration oracle `vault_denied_message/2` exists to close, so that
+      # path falls through to the same scope-shaped refusal as everything else.
+      {:error, {:ambiguous_ref, ids}} ->
+        if Engram.Permissions.vault_scope(conn) == :all do
+          {:error,
+           "#{length(ids)} vaults are named #{requested}. Pass a UUID or a slug " <>
+             "instead — slugs are unique. Candidates: #{Enum.join(ids, ", ")}."}
+        else
+          {:error, vault_denied_message(requested, conn)}
+        end
+
+      _ ->
+        {:error, vault_denied_message(requested, conn)}
     end
   end
 
   # Explains why a requested vault isn't reachable — an OAuth grant's vault set,
   # an API-key restriction, or a genuinely unknown vault — so the caller gets
   # actionable guidance instead of a flat "not found".
-  defp vault_denied_message(user, requested, conn) do
+  defp vault_denied_message(requested, conn) do
     cond do
       is_list(conn.assigns[:oauth_scope_vault_ids]) ->
         "This connection is authorized for #{length(conn.assigns.oauth_scope_vault_ids)} " <>

@@ -136,6 +136,64 @@ defmodule EngramWeb.McpVaultRefAdversarialTest do
     end
   end
 
+  describe "ambiguous names refuse rather than guess" do
+    test "two vaults sharing a name are named as candidates, not silently picked", %{
+      conn: conn,
+      user: user
+    } do
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
+      {:ok, a, _} = Engram.Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
+      {:ok, b, _} = Engram.Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
+
+      conn = call_tool(conn, "get_note", %{"source_path" => "x.md", "vault_id" => "Notes"})
+      text = tool_text(conn)
+
+      assert json_response(conn, 200)["result"]["isError"] == true
+      assert text =~ to_string(a.id)
+      assert text =~ to_string(b.id)
+      assert text =~ "slug"
+    end
+
+    test "a restricted credential is NOT told the name is ambiguous", %{
+      conn: conn,
+      user: user,
+      vault_a: vault_a,
+      key_row: key_row
+    } do
+      # Naming the candidates is actionable for a credential that can already
+      # list every vault. For a restricted one it re-opens the enumeration
+      # oracle, so it must get the same scope-shaped refusal as anything else.
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
+      {:ok, _, _} = Engram.Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
+      {:ok, _, _} = Engram.Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
+      restrict_key_to!(key_row, vault_a)
+
+      ambiguous =
+        tool_text(call_tool(conn, "get_note", %{"source_path" => "x.md", "vault_id" => "Notes"}))
+
+      invented =
+        tool_text(call_tool(conn, "get_note", %{"source_path" => "x.md", "vault_id" => "Nope"}))
+
+      refute ambiguous =~ "vaults are named"
+
+      assert String.replace(ambiguous, "Notes", "X") == String.replace(invented, "Nope", "X"),
+             "ambiguity leaked to a restricted credential:\n  #{ambiguous}\n  #{invented}"
+    end
+
+    test "set_vault refuses an ambiguous name too", %{conn: conn, user: user} do
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
+      {:ok, a, _} = Engram.Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
+      {:ok, b, _} = Engram.Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
+
+      conn = call_tool(conn, "set_vault", %{"vault_id" => "Notes"})
+      text = tool_text(conn)
+
+      assert json_response(conn, 200)["result"]["isError"] == true
+      assert text =~ to_string(a.id)
+      assert text =~ to_string(b.id)
+    end
+  end
+
   describe "handshake fields are bounded in BYTES" do
     test "a grapheme bomb cannot inflate the log line", _ do
       # `String.slice/3` counts graphemes and a cluster is unbounded, so 64
