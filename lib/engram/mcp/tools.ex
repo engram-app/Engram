@@ -6,11 +6,19 @@ defmodule Engram.MCP.Tools do
 
   alias Engram.MCP.Handlers
 
+  # `outputSchema` is OPTIONAL and added per-tool (#1660). Declaring it is a
+  # promise: a tool that advertises one MUST return `structuredContent` on
+  # success, so the two are added together or not at all. Handlers signal it by
+  # returning the 3-tuple; `run_tool_handler/4` is the only place that cares.
   @type tool_def :: %{
-          name: String.t(),
-          description: String.t(),
-          inputSchema: map(),
-          handler: (map(), map(), map() -> {:ok, String.t()} | {:error, String.t()})
+          required(:name) => String.t(),
+          required(:description) => String.t(),
+          required(:inputSchema) => map(),
+          optional(:outputSchema) => map(),
+          required(:handler) => (map(), map(), map() ->
+                                   {:ok, String.t()}
+                                   | {:ok, String.t(), map()}
+                                   | {:error, String.t()})
         }
 
   # Tools that do NOT operate on a single vault's contents, so they take no
@@ -105,6 +113,29 @@ defmodule Engram.MCP.Tools do
       name: "list_vaults",
       description: "List all vaults owned by the current user with IDs, names, and descriptions.",
       inputSchema: %{"type" => "object", "properties" => %{}},
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "vaults" => %{
+            "type" => "array",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                "id" => %{"type" => "string", "description" => "Vault UUID"},
+                "name" => %{"type" => "string", "description" => "Display name"},
+                "slug" => %{
+                  "type" => "string",
+                  "description" => "URL-safe handle; also accepted wherever vault_id is"
+                },
+                "is_default" => %{"type" => "boolean"},
+                "description" => %{"type" => ["string", "null"]}
+              },
+              "required" => ["id", "name", "slug", "is_default"]
+            }
+          }
+        },
+        "required" => ["vaults"]
+      },
       handler: &Handlers.handle("list_vaults", &1, &2, &3)
     }
   end

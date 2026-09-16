@@ -150,7 +150,18 @@ defmodule EngramWeb.McpController do
   defp dispatch(_conn, "tools/list", _params) do
     tools =
       Enum.map(Tools.list(), fn t ->
-        %{"name" => t.name, "description" => t.description, "inputSchema" => t.inputSchema}
+        base = %{
+          "name" => t.name,
+          "description" => t.description,
+          "inputSchema" => t.inputSchema
+        }
+
+        # Only for converted tools (#1660). An `outputSchema` a tool cannot
+        # honour is worse than none: a client generates types from it.
+        case t[:outputSchema] do
+          nil -> base
+          schema -> Map.put(base, "outputSchema", schema)
+        end
       end)
 
     {:ok, %{"tools" => tools}}
@@ -324,8 +335,14 @@ defmodule EngramWeb.McpController do
   def run_tool_handler(tool, user, vault, args) do
     case tool.handler.(user, vault, args) do
       {:ok, text} ->
-        result = {:ok, %{"content" => [%{"type" => "text", "text" => text}], "isError" => false}}
-        {result, :ok, byte_size_safe(text)}
+        {{:ok, text_result(text)}, :ok, byte_size_safe(text)}
+
+      # A converted tool (#1660) answers with both renderings. `content` stays
+      # mandatory — `structuredContent` is additive, and a client that ignores
+      # it must still get a usable answer.
+      {:ok, text, structured} when is_map(structured) ->
+        result = Map.put(text_result(text), "structuredContent", structured)
+        {{:ok, result}, :ok, byte_size_safe(text)}
 
       {:error, msg} ->
         {error_result(msg), :error, byte_size_safe(msg)}
@@ -445,6 +462,9 @@ defmodule EngramWeb.McpController do
       many -> {:many, many}
     end
   end
+
+  defp text_result(text),
+    do: %{"content" => [%{"type" => "text", "text" => text}], "isError" => false}
 
   defp error_result(msg),
     do: {:ok, %{"content" => [%{"type" => "text", "text" => "Error: #{msg}"}], "isError" => true}}
