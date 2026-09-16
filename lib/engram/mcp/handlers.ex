@@ -39,13 +39,23 @@ defmodule Engram.MCP.Handlers do
            "vault-scoped tool call to target a vault. Call list_vaults to see the IDs."}
 
       vault_id ->
-        case Enum.find(accessible, &(to_string(&1.id) == to_string(vault_id))) do
-          nil ->
+        # `filter`, not `find`: two accessible vaults can share a display name
+        # (#1665), and confirming the first would echo a UUID the caller did not
+        # ask for. Every vault here is already scope-filtered, so naming the
+        # candidates leaks nothing this connection cannot already list.
+        case vaults_matching_ref(accessible, vault_id) do
+          [] ->
             {:error,
              "Vault not found or not accessible: #{vault_id}. Call list_vaults to see the " <>
                "vaults this connection can use."}
 
-          v ->
+          [_, _ | _] = many ->
+            {:error,
+             "#{length(many)} vaults are named #{vault_id}: " <>
+               "#{Enum.map_join(many, ", ", &to_string(&1.id))}. Pass one of those UUIDs, " <>
+               "or a slug — slugs are unique."}
+
+          [v] ->
             {:ok,
              "Vault **#{v.name}** (ID: #{v.id}) is valid. Pass vault_id=\"#{v.id}\" on each " <>
                "tool call to target it — MCP stores no active vault between calls."}
@@ -833,4 +843,42 @@ defmodule Engram.MCP.Handlers do
   # `Engram.Attachments.validate_max_file_bytes/2`, which fails CLOSED, so an
   # over-permissive number here cannot let an oversized upload through.
   defp render_limit(_), do: "unlimited"
+
+  # Mirrors what `Vaults.get_vault_by_ref/2` does for every other vault-scoped
+  # tool: a UUID matches by id, anything else is slugified and matched against
+  # the slug. Done against the already-loaded accessible list rather than by
+  # calling that function, so the scope filter stays the only source of truth
+  # for what this connection may see.
+  # Mirrors `Vaults.get_vault_by_ref/2`'s precedence exactly — UUID, then exact
+  # display name, then slug — because `set_vault` resolves against the
+  # already-scoped list instead of going through that function, and the two
+  # disagreeing is what teaches a model that names are unreliable.
+  #
+  # Name before slug is load-bearing (#1665): with vaults "Test Vault"
+  # (slug `test-vault`) and "Test-Vault" (slug `test-vault-2`), the ref
+  # "Test-Vault" slugifies onto the FIRST vault's slug while being the second's
+  # exact name. Slug-first would confirm the wrong vault.
+  #
+  # `slugify_ref/1`, not `slugify/1`: the latter substitutes the literal "vault"
+  # for a ref that reduces to nothing, which would match the "vault"-slugged
+  # vault for any junk input.
+  #
+  # Returns every match so the caller can refuse an ambiguous one rather than
+  # taking the first. `name` is nil when decryption failed, which matches
+  # nothing — correct, since an unreadable name cannot have been referenced.
+  defp vaults_matching_ref(accessible, ref) do
+    ref = to_string(ref)
+
+    by_slug =
+      case Engram.Vaults.slugify_ref(ref) do
+        {:ok, slug} -> Enum.filter(accessible, &(&1.slug == slug))
+        :error -> []
+      end
+
+    cond do
+      (ids = Enum.filter(accessible, &(to_string(&1.id) == ref))) != [] -> ids
+      (named = Enum.filter(accessible, &(&1.name == ref))) != [] -> named
+      true -> by_slug
+    end
+  end
 end

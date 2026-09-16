@@ -420,6 +420,114 @@ defmodule Engram.Vaults do
     end
   end
 
+  @doc """
+  Like `get_vault/2`, but also accepts a slug or display name.
+
+  For callers that take a vault reference from a human or a model rather than
+  from a previous API response — today, the MCP tool layer, where requiring a
+  UUID forced a `list_vaults` round trip before every vault-scoped call.
+
+  A non-UUID reference is matched against each vault's exact display name via
+  `name_hmac` first, then falls back to `slugify_ref/1` against `slug`,
+  which is unique per user (`vaults_user_id_slug_index`). Going through
+  `slugify/1` rather than comparing raw strings is what makes "Test Vault",
+  "test vault" and "test-vault" all land on the same vault: it is the very
+  function that produced the slug from the name in the first place.
+
+  Display names themselves are encrypted at rest, so there is nothing to match
+  on directly — the slug is the plaintext handle derived from the name.
+  """
+  def get_vault_by_ref(user, ref) when is_binary(ref) do
+    # A UUID string is ITSELF a valid slug (`@slug_format` is alphanumeric
+    # groups joined by hyphens), so a vault may legitimately be named
+    # "550e8400-e29b-41d4-a716-446655440000". The UUID branch must not be
+    # exclusive: on a miss, fall through to the slug lookup. Without this,
+    # `set_vault` (which tries both, ungated) confirmed refs every other tool
+    # rejected — the same self-contradicting-server problem the 36-byte gate
+    # was added to fix, pointing the other way.
+    #
+    # Falling through cannot widen scope: the slug query is user-scoped and
+    # tenant-bound exactly like `get_vault/2`.
+    with {:ok, vault_id} <- uuid_ref(ref),
+         {:ok, vault} <- get_vault(user, vault_id) do
+      {:ok, vault}
+    else
+      _ -> resolve_name_ref(user, ref)
+    end
+  end
+
+  def get_vault_by_ref(_user, _ref), do: {:error, :not_found}
+
+  # Length-gated BEFORE casting. `Ecto.UUID.cast/1` has a `cast(<<_::128>>)`
+  # clause that accepts any RAW 16-byte binary, so a 16-character vault name
+  # ("Engram Workspace") casts to a garbage UUID and never reaches the slug
+  # lookup — the name path silently fails for a whole class of names.
+  defp uuid_ref(ref) when byte_size(ref) == 36, do: Ecto.UUID.cast(ref)
+  defp uuid_ref(_ref), do: :error
+
+  # Display NAME first, slug only as a fallback.
+  #
+  # `slugify/1` is many-to-one on names (#1665): "Work Notes", "Work-Notes" and
+  # "work_notes" all reduce to `work-notes`, and `unique_slug/3` gives the
+  # second vault `work-notes-2`. Resolving by slug alone therefore strips the
+  # distinction and silently lands on whichever vault won the base slug — a
+  # wrong-target WRITE for `write_note` / `delete_note`, needing nothing more
+  # unusual than two similarly-named vaults.
+  #
+  # Names are encrypted at rest so they cannot be compared in SQL, but
+  # `name_hmac` is maintained for exactly this equality lookup (see
+  # `inject_name_phase_b/3`). An exact name match is the strongest signal a
+  # caller can give, so it wins; two vaults sharing a name is genuinely
+  # ambiguous and refuses rather than guessing. A ref that names no vault falls
+  # through to the slug lookup, which is unique by construction.
+  defp resolve_name_ref(user, ref) do
+    case vaults_named(user, ref) do
+      [vault] -> {:ok, decrypt_vault_if_needed(vault, user)}
+      [_ | _] = many -> {:error, {:ambiguous_ref, Enum.map(many, &to_string(&1.id))}}
+      [] -> get_vault_by_slug(user, ref)
+    end
+  end
+
+  # Returns [] rather than raising when the user has no usable DEK: this is a
+  # read path, and a crypto failure here must degrade to the slug lookup rather
+  # than take down every vault-scoped MCP call.
+  defp vaults_named(user, ref) do
+    with {:ok, filter_key} <- Engram.Crypto.dek_filter_key(user),
+         hmac when is_binary(hmac) <- Engram.Crypto.hmac_field(filter_key, ref),
+         {:ok, rows} <-
+           Repo.with_tenant(user.id, fn ->
+             Repo.all(from(v in active(scoped(user)), where: v.name_hmac == ^hmac))
+           end) do
+      rows
+    else
+      _ -> []
+    end
+  end
+
+  defp get_vault_by_slug(user, ref) do
+    case slugify_ref(ref) do
+      :error -> {:error, :not_found}
+      {:ok, slug} -> fetch_vault_id_by_slug(user, slug)
+    end
+  end
+
+  defp fetch_vault_id_by_slug(user, slug) do
+    user = fresh_user(user)
+
+    result =
+      Repo.with_tenant(user.id, fn ->
+        Repo.one(from(v in active(scoped(user)), where: v.slug == ^slug, select: v.id))
+      end)
+
+    case result do
+      # ponytail: second query, so name resolution reuses get_vault/2's
+      # decryption and scoping rather than duplicating them. Only runs for
+      # non-UUID refs; fold it into one query if that path ever gets hot.
+      {:ok, vault_id} when is_binary(vault_id) -> get_vault(user, vault_id)
+      _ -> {:error, :not_found}
+    end
+  end
+
   defp fetch_vault(user, vault_id) do
     user = fresh_user(user)
 
@@ -851,6 +959,31 @@ defmodule Engram.Vaults do
   separately and encrypted.
   """
   def slugify(name) do
+    case slug_base(name) do
+      "" -> "vault"
+      slug -> slug
+    end
+  end
+
+  @doc """
+  The slug a caller-supplied reference reduces to, or `:error` if it reduces to
+  nothing.
+
+  `slugify/1` substitutes the literal `"vault"` for an empty result. That is
+  right at MINT time — every vault needs a slug — and wrong at LOOKUP time: a
+  ref with no ASCII fallback (CJK, Cyrillic, punctuation, emoji, "") would
+  otherwise resolve to whichever vault holds the `"vault"` slug, which by
+  `unique_slug/3` is the user's FIRST such vault. That is a silent
+  wrong-target write, the #1491/#1492 class.
+  """
+  def slugify_ref(name) do
+    case slug_base(name) do
+      "" -> :error
+      slug -> {:ok, slug}
+    end
+  end
+
+  defp slug_base(name) do
     name
     |> to_nfkd()
     |> String.downcase()
@@ -865,10 +998,6 @@ defmodule Engram.Vaults do
     # Truncation can land mid-group and leave a trailing hyphen, which
     # @slug_format rejects.
     |> String.trim("-")
-    |> case do
-      "" -> "vault"
-      slug -> slug
-    end
   end
 
   # `:unicode.characters_to_nfkd_binary/1` returns an {:error, _, _} tuple on

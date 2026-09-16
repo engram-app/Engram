@@ -20,13 +20,16 @@ defmodule Engram.MCP.Tools do
   # MCP is stateless HTTP JSON-RPC: there is no session to hold an "active vault"
   # between tool calls, so every vault-scoped tool advertises an optional
   # `vault_id`. Injected here (not hand-written per tool) so new tools inherit it.
+  # Deliberately NOT `"format" => "uuid"`: the field accepts a vault NAME too,
+  # and advertising a uuid format makes strict clients reject a valid name
+  # before it ever reaches us.
   @vault_id_property %{
     "type" => "string",
-    "format" => "uuid",
     "description" =>
-      "Target vault UUID (call list_vaults to discover IDs). REQUIRED when you own " <>
+      "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own " <>
         "more than one vault — the server keeps no active-vault state between calls, so " <>
-        "it must be passed on every vault-scoped call. Omit only if you have a single vault."
+        "it must be passed on every vault-scoped call. Omit only if you have a single " <>
+        "vault. Call list_vaults if a name does not resolve."
   }
 
   @spec list() :: [tool_def()]
@@ -64,10 +67,9 @@ defmodule Engram.MCP.Tools do
   defp with_vault_id(%{name: "search_notes"} = tool) do
     put_vault_id_property(tool, %{
       "type" => "string",
-      "format" => "uuid",
       "description" =>
-        "Optional: limit the search to a single vault (UUID). Omit to search across " <>
-          "ALL your vaults. Call list_vaults to see IDs."
+        "Optional: limit the search to a single vault, by name (e.g. \"Engram\") or " <>
+          "UUID. Omit to search across ALL your vaults. Call list_vaults to see them."
     })
   end
 
@@ -119,8 +121,7 @@ defmodule Engram.MCP.Tools do
         "properties" => %{
           "vault_id" => %{
             "type" => "string",
-            "format" => "uuid",
-            "description" => "Vault ID (UUID) to set as active"
+            "description" => "Vault to validate — its name (e.g. \"Engram\") or its UUID"
           }
         }
       },
