@@ -56,10 +56,46 @@ defmodule EngramWeb.Plugs.McpErrorEnvelopeTest do
       assert decoded(conn)["error"]["message"] == "Account suspended."
     end
 
-    test "a body with neither message nor error slug still yields a sentence" do
-      conn = send_through(500, %{"whatever" => true})
+    test "a 4xx body with neither message nor error slug still yields a sentence" do
+      conn = send_through(409, %{"whatever" => true})
 
       assert decoded(conn)["error"]["message"] == "The request was refused."
+    end
+
+    # A crash is not a verdict. This is the shape Phoenix renders an unhandled
+    # 500 in, and it matches no refusal clause, so it used to be described as a
+    # refusal. #1666 is what that misreading costs: hours spent retrying a rule
+    # that did not exist.
+    test "a 5xx with no self-describing body reads as a fault, not a refusal" do
+      conn = send_through(500, %{"errors" => %{"detail" => "Internal Server Error"}})
+
+      message = decoded(conn)["error"]["message"]
+
+      assert conn.status == 500
+      assert message =~ "internal error"
+      refute message =~ "refused"
+    end
+
+    test "a 5xx is still wrapped and still carries the original body" do
+      original = %{"errors" => %{"detail" => "Internal Server Error"}}
+      body = decoded(send_through(500, original))
+
+      assert body["jsonrpc"] == "2.0"
+      assert body["error"]["data"] == original
+    end
+
+    # Status alone cannot tell a crash from a deliberate 5xx refusal, so a plug
+    # that wrote its own sentence keeps it. `503 rotating` is the real case.
+    test "a 5xx keeps a message the halting plug wrote itself" do
+      conn = send_through(503, %{"error" => "rotating", "message" => "Keys are rotating."})
+
+      assert decoded(conn)["error"]["message"] == "Keys are rotating."
+    end
+
+    test "a 5xx keeps its slug sentence rather than the generic fault text" do
+      conn = send_through(503, %{"error" => "rotating"})
+
+      assert decoded(conn)["error"]["message"] == "Rotating."
     end
   end
 

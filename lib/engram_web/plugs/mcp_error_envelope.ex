@@ -3,13 +3,17 @@ defmodule EngramWeb.Plugs.McpErrorEnvelope do
   Reshapes pipeline-level refusals on the MCP endpoint into JSON-RPC errors.
 
   `McpController` answers its own failures as JSON-RPC error objects. Every
-  refusal that happens in the *pipeline* never reaches it: `:authed_api` carries
-  seven halting plugs (402 suspended, 402 write-disabled, 403 onboarding, 410
-  deleted, 426 plugin floor, 429 budget, 503 rotating), and each halts with the
-  flat REST body every other API route gets. That body is not a JSON-RPC
-  response, so MCP clients surface a bare "HTTP 403" and drop it — which is how
-  a user can spend hours stuck with the remedy sitting in a field they never
-  see.
+  refusal that happens in the *pipeline* never reaches it: the halting plugs on
+  `:authed_api` (suspended, write-disabled, onboarding, deleted, plugin floor,
+  the two rate limiters, rotating) each halt with the flat REST body every
+  other API route gets. That body is not a JSON-RPC response, so MCP clients
+  surface a bare "HTTP 403" and drop it, which is how a user can spend hours
+  stuck with the remedy sitting in a field they never see.
+
+  Deliberately keyed on STATUS, not on plug identity, so a plug added to the
+  pipeline later is covered without touching this file. Do not re-introduce an
+  enumerated count here: the list above is orientation, and an exact tally
+  rots the moment the pipeline changes.
 
   The status is preserved. Only the body is rewritten, so every existing
   assertion, every log line, and every client that keys off the status is
@@ -60,7 +64,7 @@ defmodule EngramWeb.Plugs.McpErrorEnvelope do
     with ["application/json" <> _] <- Plug.Conn.get_resp_header(conn, "content-type"),
          {:ok, %{} = body} <- decode(conn.resp_body),
          false <- Map.has_key?(body, "jsonrpc") do
-      Plug.Conn.resp(conn, status, encode(body, id))
+      Plug.Conn.resp(conn, status, encode(body, id, status))
     else
       # Not our JSON, or already a JSON-RPC payload. Leave it exactly as it is:
       # a body this plug does not understand is a body it must not mangle.
@@ -70,13 +74,13 @@ defmodule EngramWeb.Plugs.McpErrorEnvelope do
 
   defp envelope(conn, _id), do: conn
 
-  defp encode(body, id) do
+  defp encode(body, id, status) do
     Jason.encode!(%{
       "jsonrpc" => "2.0",
       "id" => id,
       "error" => %{
         "code" => @server_error,
-        "message" => message_for(body),
+        "message" => message_for(body, status),
         # The original body, unaltered. Anything a REST caller could read off
         # the top level is still here, one level down — `resume_url` included.
         "data" => body
@@ -93,16 +97,33 @@ defmodule EngramWeb.Plugs.McpErrorEnvelope do
 
   defp request_id(_), do: nil
 
-  # Prefer a sentence the refusing plug wrote itself. Falling back to the error
-  # slug is mechanical rather than a hand-maintained map on purpose: a lookup
-  # table would silently answer with a stale sentence the first time someone
-  # adds a plug, and "Plugin upgrade required." is a worse failure than nothing
-  # only if it is wrong, which it cannot be — it IS the slug.
-  defp message_for(%{"message" => message}) when is_binary(message) and message != "",
+  # Prefer a sentence the refusing plug wrote itself, INCLUDING on 5xx: the
+  # `503 rotating` halt is a deliberate, well-described refusal, not a crash,
+  # and status alone cannot tell the two apart. Falling back to the error slug
+  # is mechanical rather than a hand-maintained map on purpose: a lookup table
+  # would silently answer with a stale sentence the first time someone adds a
+  # plug.
+  #
+  # The fallback is only as good as the slug. `LimitResponse.halt/5` answers
+  # `error: "limit_exceeded"` with the real cause in a separate `reason` field,
+  # so a suspended account reads "Limit exceeded.", which is imprecise rather
+  # than wrong, and the precise reason still travels in `data`. Give a plug a
+  # `message` if its slug does not stand on its own.
+  defp message_for(%{"message" => message}, _status) when is_binary(message) and message != "",
     do: message
 
-  defp message_for(%{"error" => slug}) when is_binary(slug), do: humanize(slug)
-  defp message_for(_), do: "The request was refused."
+  defp message_for(%{"error" => slug}, _status) when is_binary(slug), do: humanize(slug)
+
+  # Nothing self-describing in the body, and the status says this one is OURS.
+  # Phoenix renders an unhandled 500 through `ErrorJSON` as
+  # `%{"errors" => %{"detail" => ...}}`, matching neither clause above, so this
+  # used to fall through to "The request was refused." Telling users Engram
+  # refused them when Engram actually fell over is the exact misreading #1666
+  # was about: that user spent five hours retrying a rule that did not exist.
+  defp message_for(_body, status) when status >= 500,
+    do: "Engram hit an internal error. This is not a problem with your request; retry shortly."
+
+  defp message_for(_body, _status), do: "The request was refused."
 
   defp humanize(slug) do
     slug

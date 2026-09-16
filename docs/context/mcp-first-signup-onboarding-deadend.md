@@ -4,9 +4,16 @@ _Last verified: 2026-09-16_
 
 ## Status
 
-**Broken** (as of 2026-09-16 — no fix shipped). Two prod accounts confirmed dead-ended,
-both abandoned. Related: [[onboarding-gate-is-http-only]], [[mcp-oauth]],
+**Fixed** by engram-app/Engram#1670 (open, not yet merged as of 2026-09-16). Two prod
+accounts were confirmed dead-ended before the fix, both abandoned; neither has been
+contacted. Related: [[onboarding-gate-is-http-only]], [[mcp-oauth]],
 [[connections-client-identity]], [[mcp-bypasses-path-shaped-plugs]].
+
+The fix has five parts: an actionable `resume_url` in the 403 body; a JSON-RPC
+envelope so MCP clients can actually read that body; a consent-page detour through
+the wizard that parks and then resumes the authorization; the tool question
+pre-answered from the connecting client; and a `lifecycle` log line plus a Loki rule
+(engram-infra#1184) so a recurrence is visible instead of silent for five hours.
 
 ## What this is
 
@@ -98,6 +105,34 @@ the refusal legible.
 - `antigravity` is already a valid `@valid_tools` slug in `Engram.Onboarding` — the
   product knows about this client; only the entry path is missing.
 
+## If you change this again
+
+Two traps, both found in review *after* the fix looked correct and CI was green.
+
+**Ask `gate_ok`, never `next_step`.** Runtime permission and wizard navigation are
+deliberately decoupled, and they **disagree** for obsidian-path users: `derive_gate/3`
+admits them (`vault_required` is false when `uses_obsidian=true`) while `next_step/5`
+pins them at `:vault` until the plugin's first sync creates a vault. The first cut of
+the consent page gated on `next_step !== "done"`, so it bounced exactly those users
+consent → wizard → consent, forever — a brand new dead end of the same class this doc
+exists to describe, introduced by its own fix. `Onboarding.status/1` now publishes
+`gate_ok`, computed by the same `gate_missing/1` that `gate/2` enforces with, so the
+wire answer and the enforced answer cannot drift. Never re-derive the gate rule
+client-side.
+
+**The step chain describes intent, not progress.** `build_steps/2` drops `:tools` only
+when `tools_prefilled` marks it as answered by the OAuth client *before* the wizard
+began. An earlier cut keyed the drop on "the profile has tools", which meant an
+ordinary signup's own answer deleted the step from their own chain mid-wizard:
+self-host rendered "Step 1 of 2" and then "Step 1 of 1", never advancing. `steps` feeds
+a "Step X of N" header, so it has to stay stable across the walk.
+
+A third, smaller one: the `engram:pending-oauth` stash is sessionStorage and therefore
+survives sign-out. It is cleared in `useClearQueryCacheOnUserChange` alongside the
+query cache, because otherwise user A can park an authorization, sign out from the
+wizard header, and user B finishes the wizard onto A's consent screen carrying A's
+`state` and `redirect_uri`.
+
 ## How the audit was run
 
 Read-only bastion, per `engram-infra/docs/context/prod-db-readonly-access.md` (memory
@@ -110,7 +145,14 @@ to `localhost:25432`, psql via
 - `lib/engram_web/router.ex:49-68` — `:authed_api`, shared by REST + MCP scopes
 - `lib/engram_web/router.ex:605-640` — the `/api/mcp` scope
 - `lib/engram_web/plugs/require_onboarding.ex` — 403 shaping over `Onboarding.gate/2`
-- `lib/engram/onboarding.ex` — `gate/2` / `derive_gate/3`, `@valid_tools`
+- `lib/engram/onboarding.ex` — `gate/2` / `derive_gate/3`, `@valid_tools`, and the
+  shared `gate_missing/1` behind both `gate/2` and `status/1`'s `gate_ok`
+- `lib/engram_web/plugs/mcp_error_envelope.ex` — JSON-RPC shaping of pipeline refusals,
+  keyed on status rather than plug identity
+- `frontend/src/oauth/pending-authorization.ts` — the parked-authorization stash
+- `frontend/e2e/oauth-consent-onboarding.spec.ts` — the only browser test that reaches
+  an un-onboarded user through the consent path
+- engram-infra `main/envs/prod/grafana_alerts.tf` — the `onboarding-refused` Loki rule
 - `lib/engram_web/controllers/device_auth_controller.ex:8-21` — the existing
   precedent for relaxing this gate on an entry-point route
 - Issue #364 — "extend signup wizard with plugin-connect + first-sync steps" (the

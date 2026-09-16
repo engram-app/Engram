@@ -134,7 +134,13 @@ export default function OAuthAuthorizePage() {
 	// stay there: the gate redirects to `/onboard/<step>` and would drop the
 	// authorization request on the floor. Bouncing here is what lets the
 	// request survive the detour.
-	const needsOnboarding = Boolean(onboarding && onboarding.next_step !== "done");
+	// `gate_ok`, NOT `next_step === "done"`. The backend decouples the two on
+	// purpose: an obsidian-path user is admitted by the gate while the wizard
+	// parks them on `"vault"` until the plugin first-syncs. Gating on
+	// `next_step` bounced exactly those users consent → wizard → consent
+	// forever, since the wizard had nothing left to collect and the gate had
+	// nothing left to refuse.
+	const needsOnboarding = Boolean(onboarding && !onboarding.gate_ok);
 	const bounced = useRef(false);
 
 	useEffect(() => {
@@ -153,6 +159,11 @@ export default function OAuthAuthorizePage() {
 		bounced.current = true;
 
 		const slug = clientQuery.data?.slug ?? null;
+		// The boolean is deliberately not surfaced. The copy below promises no
+		// automatic return, so a failed stash needs no distinct rendering, and
+		// `onboardingDoneTarget()` already falls back to "/" when nothing was
+		// parked. Reading it into state here would also mean an effect that
+		// synchronously sets state, which the render-compiler lint rejects.
 		stashPendingAuthorization(location.search, slug, clientQuery.data?.client_name ?? null);
 
 		// Connecting a tool IS the answer to "which tools do you use", so the
@@ -162,11 +173,22 @@ export default function OAuthAuthorizePage() {
 		const preAnswerTools = async () => {
 			if (slug && !onboarding?.profile?.tools?.length) {
 				try {
-					await setProfile.mutateAsync({ tools: [slug] });
-				} catch {
+					// `tools_prefilled` marks this as answered BEFORE the wizard,
+					// which is what drops the tools step from the chain. Without
+					// it the backend cannot tell this apart from a user answering
+					// the question themselves.
+					await setProfile.mutateAsync({ tools: [slug], tools_prefilled: true });
+				} catch (err) {
 					// Swallowed HERE, not left to the caller: `finally` re-throws,
 					// so a rejection would surface as an unhandled rejection. The
 					// wizard simply asks the question instead.
+					//
+					// Logged rather than silent: this POST is a cross-file
+					// vocabulary contract (a `LogoAllowlist` slug must exist in
+					// `Onboarding.valid_tools/0`). If those drift, the 422 lands
+					// here and the ONLY other symptom is one vendor's users
+					// seeing a tools step they should not.
+					console.warn("onboarding tool pre-answer failed", slug, err);
 				}
 			}
 		};
@@ -191,7 +213,7 @@ export default function OAuthAuthorizePage() {
 	// Nothing left to resume once they are through. A stash that outlives its
 	// flow would divert a later, unrelated trip through the wizard.
 	useEffect(() => {
-		if (onboarding && onboarding.next_step === "done") {
+		if (onboarding?.gate_ok) {
 			clearPendingAuthorization();
 		}
 	}, [onboarding]);
@@ -304,8 +326,15 @@ export default function OAuthAuthorizePage() {
 			<AuthShell>
 				<AuthPanel className="flex flex-col gap-3">
 					<h1 className={heading}>Finish setting up Engram</h1>
+					{/* States the PURPOSE without promising an automatic return.
+					    The stash is a no-op when storage is disabled or full, and
+					    the previous copy ("you'll come straight back here")
+					    guaranteed a comeback that then quietly ended on the
+					    dashboard with the waiting client never mentioned again.
+					    The wizard banner names the client and offers the cancel,
+					    so under-promising here costs nothing. */}
 					<p className="text-muted-foreground text-sm">
-						Taking you to setup. You'll come straight back here to finish connecting{" "}
+						Taking you to setup so you can finish connecting{" "}
 						<span className="text-primary">{clientQuery.data?.client_name ?? "this app"}</span>.
 					</p>
 				</AuthPanel>

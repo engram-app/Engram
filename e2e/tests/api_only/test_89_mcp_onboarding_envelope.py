@@ -12,8 +12,10 @@ burned five hours and twelve DCR registrations against exactly that wall
 
 Unit tests cover `McpErrorEnvelope` in isolation and through a synthetic
 pipeline. Neither can prove the plug is actually INSTALLED on the MCP scope of
-a booted server, in the right order relative to the seven plugs it wraps. That
-is what this test is for.
+a booted server, in the right order relative to the halting plugs it wraps.
+That is what this test is for. (The plug keys on status rather than on plug
+identity, so do not pin an exact count of those plugs here or anywhere else;
+it rots the next time the pipeline changes.)
 
 Deliberately NOT using `provision_oauth_tokens`: it pre-completes onboarding
 (and could not avoid it anyway — `POST /api/auth/device/authorize` carries
@@ -21,10 +23,13 @@ Deliberately NOT using `provision_oauth_tokens`: it pre-completes onboarding
 onboarding). A raw Clerk session token reaches the same gate by the same path,
 which is what this test needs.
 
-This is also the class of bug the e2e harness structurally cannot catch:
-`frontend/e2e/global-setup.ts`, `helpers/oauth.py` and `helpers/clerk_auth.py`
-all pre-complete onboarding before the first assertion, so no other test in
-either suite has ever been an un-onboarded user.
+This is also the class of bug the e2e harness structurally could not catch.
+Un-onboarded users are not themselves novel: `frontend/e2e/local-auth.spec.ts`
+registers them and walks the whole wizard. What no fixture could produce is a
+user holding a VALID CREDENTIAL and an incomplete account at the same time,
+because every fixture that mints one pre-completes onboarding first
+(`frontend/e2e/global-setup.ts`, `helpers/oauth.py`, `helpers/clerk_auth.py`).
+That combination is the only state this bug exists in.
 """
 
 from __future__ import annotations

@@ -44,14 +44,20 @@ export default function OnboardLayout() {
 	// is what keeps an interrupted authorization legible.
 	const pending = peekPendingAuthorization();
 
+	// Derived from the parked request, so it must be read before anything
+	// clears it. Null means the refusal has nowhere to go.
+	const cancelUrl = pendingCancelUrl();
+
 	const cancelPending = () => {
-		// Read the destination BEFORE clearing: it is derived from the parked
-		// request.
-		const url = pendingCancelUrl();
-		clearPendingAuthorization();
-		if (url) {
-			window.location.assign(url);
+		if (!cancelUrl) {
+			return;
 		}
+		// Clear only once the refusal is actually deliverable. Clearing
+		// unconditionally ALSO dropped the parked request, so a user whose
+		// client had no usable redirect got a button that did nothing and then
+		// finished the wizard onto `/` instead of back to consent.
+		clearPendingAuthorization();
+		window.location.assign(cancelUrl);
 	};
 
 	return (
@@ -82,13 +88,17 @@ export default function OnboardLayout() {
 						</span>
 						.
 					</p>
-					<button
-						type="button"
-						onClick={cancelPending}
-						className="text-muted-foreground underline underline-offset-4 transition hover:text-foreground"
-					>
-						Cancel connection
-					</button>
+					{/* Rendered only when the refusal can actually be delivered.
+					    A button that silently no-ops reads as a broken app. */}
+					{cancelUrl ? (
+						<button
+							type="button"
+							onClick={cancelPending}
+							className="text-muted-foreground underline underline-offset-4 transition hover:text-foreground"
+						>
+							Cancel connection
+						</button>
+					) : null}
 				</aside>
 			) : null}
 			<Outlet />

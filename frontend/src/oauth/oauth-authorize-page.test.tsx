@@ -80,8 +80,12 @@ const vaultsState = vi.hoisted(() => ({
 // Defaults to a fully onboarded user so every pre-existing test keeps
 // exercising the consent card rather than the bounce.
 const onboardingState = vi.hoisted(() => ({
-	current: { next_step: "done", profile: { tools: ["claude"] } } as {
+	current: { next_step: "done", gate_ok: true, profile: { tools: ["claude"] } } as {
 		next_step: string;
+		// The page reads THIS, not `next_step`. They disagree for obsidian-path
+		// users, who the gate admits while the wizard still parks them on
+		// "vault" awaiting the plugin's first sync.
+		gate_ok: boolean;
 		profile?: { tools?: string[] };
 	},
 }));
@@ -203,7 +207,7 @@ describe("OAuthAuthorizePage onboarding bounce", () => {
 	};
 
 	afterEach(() => {
-		onboardingState.current = { next_step: "done", profile: { tools: ["claude"] } };
+		onboardingState.current = { next_step: "done", gate_ok: true, profile: { tools: ["claude"] } };
 		window.sessionStorage.clear();
 	});
 
@@ -212,7 +216,7 @@ describe("OAuthAuthorizePage onboarding bounce", () => {
 	}
 
 	it("sends an unfinished user to the wizard instead of offering Approve", async () => {
-		onboardingState.current = { next_step: "agreement" };
+		onboardingState.current = { next_step: "agreement", gate_ok: false };
 		fetchOAuthClient.mockResolvedValue(ANTIGRAVITY);
 
 		renderWithProbeAt(VALID_QS);
@@ -224,7 +228,7 @@ describe("OAuthAuthorizePage onboarding bounce", () => {
 	// The whole request, query string included, so `state` and the PKCE
 	// challenge survive and the original authorization is still honored.
 	it("parks the request so the wizard can bring them back to it", async () => {
-		onboardingState.current = { next_step: "agreement" };
+		onboardingState.current = { next_step: "agreement", gate_ok: false };
 		fetchOAuthClient.mockResolvedValue(ANTIGRAVITY);
 
 		renderWithProbeAt(VALID_QS);
@@ -236,16 +240,24 @@ describe("OAuthAuthorizePage onboarding bounce", () => {
 	});
 
 	it("pre-answers the tool question from the connecting client", async () => {
-		onboardingState.current = { next_step: "agreement" };
+		onboardingState.current = { next_step: "agreement", gate_ok: false };
 		fetchOAuthClient.mockResolvedValue(ANTIGRAVITY);
 
 		renderWithProbeAt(VALID_QS);
 
-		await waitFor(() => expect(setProfileMock).toHaveBeenCalledWith({ tools: ["antigravity"] }));
+		// `tools_prefilled` is what tells the backend this answer came from the
+		// OAuth client rather than the user, which is what drops the tools step
+		// from the chain. Without it an ordinary signup's counter would freeze.
+		await waitFor(() =>
+			expect(setProfileMock).toHaveBeenCalledWith({
+				tools: ["antigravity"],
+				tools_prefilled: true,
+			}),
+		);
 	});
 
 	it("invents no answer for a client it cannot attribute", async () => {
-		onboardingState.current = { next_step: "agreement" };
+		onboardingState.current = { next_step: "agreement", gate_ok: false };
 		fetchOAuthClient.mockResolvedValue({ ...ANTIGRAVITY, slug: null });
 
 		renderWithProbeAt(VALID_QS);
@@ -255,7 +267,11 @@ describe("OAuthAuthorizePage onboarding bounce", () => {
 	});
 
 	it("does not overwrite tools the user already answered", async () => {
-		onboardingState.current = { next_step: "billing", profile: { tools: ["cursor"] } };
+		onboardingState.current = {
+			next_step: "billing",
+			gate_ok: false,
+			profile: { tools: ["cursor"] },
+		};
 		fetchOAuthClient.mockResolvedValue(ANTIGRAVITY);
 
 		renderWithProbeAt(VALID_QS);

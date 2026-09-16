@@ -38,12 +38,18 @@ export async function clerkSignIn(page: Page, email: string, landOn = "/"): Prom
 	const deadline = Date.now() + 20_000;
 	let backoff = 500;
 	let lastErr: unknown;
+	let signedIn = false;
 
-	while (Date.now() < deadline) {
+	// do/while, not while: a slow `page.goto` above can consume the entire
+	// budget, and a `while (Date.now() < deadline)` would then skip the body
+	// outright. `lastErr` stays undefined, the throw below is skipped, and this
+	// returns having never ATTEMPTED a sign-in. The caller fails 20 seconds
+	// later on an unrelated assertion, which is a thoroughly misleading
+	// diagnosis. At least one attempt must always run.
+	do {
 		try {
 			await clerk.signIn({ page, emailAddress: email });
-			lastErr = undefined;
-			break;
+			signedIn = true;
 		} catch (err) {
 			if (!/No user found/iu.test(String(err))) {
 				throw err;
@@ -52,10 +58,10 @@ export async function clerkSignIn(page: Page, email: string, landOn = "/"): Prom
 			await page.waitForTimeout(Math.min(backoff, Math.max(0, deadline - Date.now())));
 			backoff = Math.min(backoff * 2, 4000);
 		}
-	}
+	} while (!signedIn && Date.now() < deadline);
 
-	if (lastErr) {
-		throw lastErr;
+	if (!signedIn) {
+		throw lastErr ?? new Error(`clerkSignIn: no sign-in attempt succeeded for ${email}`);
 	}
 
 	await page.goto(landOn);

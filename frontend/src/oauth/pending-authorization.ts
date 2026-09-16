@@ -23,6 +23,18 @@ import { ROUTES } from "../routes";
 
 const KEY = "engram:pending-oauth";
 
+// A cancel navigates via `window.location.assign`, so the boundary that matters
+// is not http-vs-custom-scheme. Native OAuth clients legitimately register
+// custom schemes (`cursor://`, `vscode://`, `com.example.app://`) and DCR
+// admits them — `cursor://` is documented as observed in prod. Requiring
+// http(s) left the Cancel button dead for exactly those clients.
+//
+// What must never reach `location.assign` is a script-executing scheme. Host
+// trust is deliberately NOT decided here; that belongs upstream, against the
+// client's registered redirect_uris.
+const ABSOLUTE_URI = /^[a-z][a-z0-9+.-]*:/iu;
+const SCRIPT_SCHEME = /^(?:javascript|data|vbscript|blob|file):/iu;
+
 function isConsentPath(path: string): boolean {
 	return path === ROUTES.OAUTH_CONSENT || path.startsWith(`${ROUTES.OAUTH_CONSENT}?`);
 }
@@ -41,23 +53,33 @@ export interface PendingAuthorization {
 	clientName: string | null;
 }
 
+/** True when the request was actually parked. Callers MUST NOT promise a
+ *  return trip on a false. */
 export function stashPendingAuthorization(
 	search: string,
 	toolSlug: string | null,
 	clientName: string | null,
-): void {
+): boolean {
 	if (typeof window === "undefined") {
-		return;
+		return false;
 	}
 	try {
 		window.sessionStorage.setItem(
 			KEY,
 			JSON.stringify({ returnTo: `${ROUTES.OAUTH_CONSENT}${search}`, toolSlug, clientName }),
 		);
+		return true;
 	} catch {
-		// Storage disabled or full. The user still completes onboarding and
-		// lands home, which is exactly where they landed before any of this
-		// existed — degraded, not broken.
+		// Storage disabled or full (Safari private mode, quota). Landing home
+		// after onboarding is degraded but survivable; it is what happened
+		// before any of this existed.
+		//
+		// What is NOT survivable is claiming otherwise. The consent page
+		// renders "You'll come straight back here to finish connecting X",
+		// and a silently dropped stash turns that sentence into a lie that
+		// ends on the dashboard with the waiting client never mentioned
+		// again. Hence a return value rather than a swallow.
+		return false;
 	}
 }
 
@@ -115,8 +137,11 @@ export function pendingCancelUrl(): string | null {
 	}
 
 	const query = new URLSearchParams(pending.returnTo.split("?").slice(1).join("?"));
-	const redirectUri = query.get("redirect_uri");
-	if (!(redirectUri && /^https?:\/\//iu.test(redirectUri))) {
+	const redirectUri = query.get("redirect_uri")?.trim();
+	if (!redirectUri) {
+		return null;
+	}
+	if (SCRIPT_SCHEME.test(redirectUri) || !ABSOLUTE_URI.test(redirectUri)) {
 		return null;
 	}
 

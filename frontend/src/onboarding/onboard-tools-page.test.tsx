@@ -13,6 +13,7 @@ let onboardingStatus: { data: OnboardingStatus | undefined; isLoading: boolean }
 	data: {
 		enabled: true,
 		next_step: "tools",
+		gate_ok: false,
 		steps: [],
 		actions: [],
 		vault_count: 0,
@@ -66,6 +67,7 @@ beforeEach(() => {
 		data: {
 			enabled: true,
 			next_step: "tools",
+			gate_ok: false,
 			steps: [],
 			actions: [],
 			vault_count: 0,

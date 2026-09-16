@@ -23,6 +23,7 @@ let onboardingStatusValue: { data: OnboardingStatus | undefined; isLoading: bool
 	data: {
 		enabled: true,
 		next_step: "done",
+		gate_ok: true,
 		steps: [],
 		actions: actionsList,
 		vault_count: 1,
@@ -138,6 +139,7 @@ beforeEach(() => {
 		data: {
 			enabled: true,
 			next_step: "done",
+			gate_ok: true,
 			steps: [],
 			actions: actionsList,
 			vault_count: 1,

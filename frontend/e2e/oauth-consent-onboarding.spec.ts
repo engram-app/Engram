@@ -11,11 +11,13 @@ import { clerkSignIn, loadAuthState } from "./clerk-helpers";
  * valid tokens, permanent 403, nothing in the response saying what to do
  * (#1666). One real user burned five hours against that wall.
  *
- * This is the only test in either suite that is an UN-ONBOARDED user. Every
- * other fixture — global-setup.ts, e2e/helpers/oauth.py,
- * e2e/helpers/clerk_auth.py — pre-completes onboarding before the first
- * assertion, which is precisely why the harness could never reach the broken
- * state and the bug shipped.
+ * This is the only test that reaches an un-onboarded user THROUGH THE OAUTH
+ * CONSENT PATH. Un-onboarded users themselves are not new: local-auth.spec.ts
+ * registers them and walks the whole wizard. What no fixture could produce is
+ * one who arrives mid-authorization, because every OAuth fixture
+ * (global-setup.ts, e2e/helpers/oauth.py, e2e/helpers/clerk_auth.py)
+ * pre-completes onboarding before the first assertion. That is the gap the
+ * bug shipped through.
  *
  * The user is provisioned HERE rather than in global-setup, because the test
  * consumes it: finishing the wizard is the thing under test, so a second
@@ -23,15 +25,23 @@ import { clerkSignIn, loadAuthState } from "./clerk-helpers";
  * provisioning is what makes the spec survive Playwright's retry.
  *
  * It is also the only place the SPA talks to the real backend across this
- * path. Every unit test mocks `../api/oauth`, so nothing else verifies that
- * `/api/oauth/clients/:id?redirect_uri=` returns `slug` in the shape the
- * consent page reads, or that the browser's pre-answer POST lands and makes
- * `next_step` skip `tools`.
+ * path. The consent page's unit test mocks `../api/oauth`, so nothing else
+ * verifies that `/api/oauth/clients/:id?redirect_uri=` really returns `slug`
+ * in the shape the page reads, or that the browser's pre-answer POST lands
+ * and drops the `tools` step from the chain.
  *
- * Note: this test creates a vault and a welcome note, so `db-cleanup.ts`'s
- * `DELETE FROM users` warns on the `notes_user_id_fkey` constraint at
- * teardown. The Clerk user is still removed below; only the backend row
- * lingers, which is harmless on an ephemeral CI database.
+ * Note: this test creates a vault and a welcome note, and `notes_user_id_fkey`
+ * has no ON DELETE CASCADE, so `db-cleanup.ts`'s single `DELETE FROM users`
+ * aborts and logs `DB cleanup failed - FK constraints on test users` at
+ * console.error. Because it is ONE statement covering every e2e email
+ * pattern, that abort deletes nobody, not just this spec's row.
+ *
+ * That is survivable only because the e2e-browser Postgres is per-run
+ * ephemeral (PG_CONTAINER is keyed on github.run_id and torn down under
+ * `if: always()`), so nothing accumulates between runs. Do NOT reuse this
+ * reasoning for a suite that runs against a persistent database: there the
+ * same abort would strand every test user until the MAX_ROWS_DELETED cap
+ * tripped and cleanup refused to run at all.
  */
 
 const CLERK_API = "https://api.clerk.com/v1";
@@ -144,10 +154,21 @@ test.describe("MCP-first signup resumes consent after onboarding", () => {
 		if (!pending) {
 			return;
 		}
+		// Teardown must not fail the test, but it must not be mute either. A
+		// Clerk 429 RESOLVES with a non-ok Response rather than throwing, so a
+		// bare `.catch()` sees nothing and the user leaks silently. This suite
+		// has hit Clerk's quota before, and it surfaces as unrelated specs
+		// failing to create users much later.
 		await fetch(`${CLERK_API}/users/${pending.id}`, {
 			method: "DELETE",
 			headers: { Authorization: `Bearer ${SECRET_KEY}` },
-		}).catch(() => undefined);
+		})
+			.then((resp) => {
+				if (!resp.ok) {
+					console.warn(`clerk teardown failed for ${pending?.id}: ${resp.status}`);
+				}
+			})
+			.catch((err) => console.warn(`clerk teardown errored for ${pending?.id}: ${String(err)}`));
 		pending = null;
 	});
 

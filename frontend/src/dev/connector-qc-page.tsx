@@ -175,6 +175,7 @@ function status(over: Partial<OnboardingStatus> = {}): OnboardingStatus {
 	return {
 		enabled: true,
 		next_step: "done",
+		gate_ok: true,
 		steps: [],
 		actions: ["first_vault_created"],
 		vault_count: 1,
@@ -247,7 +248,7 @@ export default function ConnectorQcPage() {
 			<Panel
 				title="FTUX tool picker"
 				note="Gemini is listed, greyed, dashed and unselectable with its reason. Antigravity is selectable under Coding tools. Every option should show a brand mark."
-				onboarding={status({ next_step: "tools" })}
+				onboarding={status({ next_step: "tools", gate_ok: false })}
 			>
 				<OnboardToolsPage />
 			</Panel>
