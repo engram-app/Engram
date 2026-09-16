@@ -509,6 +509,8 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Gating a Phoenix **channel** on onboarding/billing, or a paywalled account is syncing anyway (`RequireOnboarding` is a Plug and never runs on a socket; `user:` must stay UNGATED) → `docs/context/onboarding-gate-is-http-only.md`
 - A test asserting paywall/tier/onboarding behavior passes but shouldn't (`config/runtime.exs` clobbers `billing_enabled` to false for the whole suite) → `docs/context/onboarding-gate-is-http-only.md`
 - OAuth 2.1 + DCR on `/api/mcp` — wire flow, endpoints, token model, scopes → `docs/context/mcp-oauth.md`
+- A user who signed up INSIDE an MCP client's OAuth flow gets valid tokens and then 403 `onboarding_required` on every tool call forever (nothing in the grant path runs or links onboarding; `device_auth_controller.ex:21` is the existing precedent for relaxing it) → `docs/context/mcp-first-signup-onboarding-deadend.md`
+- Auditing prod for users who never onboarded (`engram_audit_ro` is RLS-bound — a correlated subquery over `users` returns 0 for every row, silently; prod Loki ships warn+ only, so successful 2xx traffic is invisible) → `docs/context/mcp-first-signup-onboarding-deadend.md`
 - MCP vault selection design — stateless `set_vault`, fate of the default vault → `docs/context/mcp-vault-selection.md`
 - Refresh-token rotation — leeway/overlap window, token-family reuse detection → `docs/context/refresh-token-reuse-detection.md`
 - How `/settings/connections` + the onboarding checklist identify an OAuth/MCP client (slug attribution, the three hosting classes, HTTPS trust model) → `docs/context/connections-client-identity.md`
