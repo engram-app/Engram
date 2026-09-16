@@ -107,13 +107,62 @@ defmodule EngramWeb.McpVaultRefTest do
       assert tool_text(conn) =~ "list_vaults"
     end
 
-    test "a name that slugifies to nothing does not resolve to some other vault", %{conn: conn} do
-      # slugify/1 reduces scripts with no ASCII fallback to "", which must not
-      # match a vault whose slug happens to be empty-ish or be treated as absent.
-      conn = call_tool(conn, "get_note", %{"source_path" => "a.md", "vault_id" => "日本語"})
-      resp = json_response(conn, 200)
+    # `Vaults.slugify/1` is the MINT-time function: a name with no ASCII
+    # fallback (CJK, Cyrillic, punctuation-only) reduces to "" and it
+    # substitutes the literal default "vault". That default is correct when
+    # creating a vault and catastrophic when resolving one — every junk ref
+    # would collide on whichever vault happens to hold the "vault" slug, which
+    # is exactly the first CJK-named vault a user creates.
+    test "junk refs do not collide on the vault holding the \"vault\" slug", %{
+      conn: conn,
+      user: user
+    } do
+      insert(:vault, user: user, slug: "vault")
 
-      assert resp["result"]["isError"] == true
+      for junk <- ["日本語", "???", "", "🏠", "Русский"] do
+        conn = call_tool(conn, "get_note", %{"source_path" => "a.md", "vault_id" => junk})
+
+        assert json_response(conn, 200)["result"]["isError"] == true,
+               "ref #{inspect(junk)} resolved to a vault instead of failing"
+      end
+    end
+
+    test "set_vault does not confirm the \"vault\"-slugged vault for a junk ref", %{
+      conn: conn,
+      user: user
+    } do
+      decoy = insert(:vault, user: user, slug: "vault")
+      conn = call_tool(conn, "set_vault", %{"vault_id" => "日本語"})
+
+      refute tool_text(conn) =~ to_string(decoy.id)
+      assert json_response(conn, 200)["result"]["isError"] == true
+    end
+  end
+
+  describe "names that look like binary UUIDs" do
+    # `Ecto.UUID.cast/1` has a `cast(<<_::128>>)` clause that accepts any RAW
+    # 16-byte binary, not just the 36-char hex form. A 16-character vault name
+    # therefore takes the UUID branch, casts to garbage, and never reaches the
+    # slug lookup.
+    test "a 16-character vault name still resolves", %{conn: conn, user: user} do
+      insert(:vault, user: user, slug: "engram-workspace")
+
+      assert String.length("Engram Workspace") == 16
+
+      conn =
+        call_tool(conn, "list_folder", %{"folder" => "", "vault_id" => "Engram Workspace"})
+
+      refute json_response(conn, 200)["result"]["isError"] == true,
+             "16-char name hit the UUID branch: #{tool_text(conn)}"
+    end
+
+    test "get_note and set_vault agree on a 16-character name", %{conn: conn, user: user} do
+      # They resolve through different code paths; disagreement is what teaches
+      # a model that names are unreliable.
+      v = insert(:vault, user: user, slug: "engram-workspace")
+
+      assert tool_text(call_tool(conn, "set_vault", %{"vault_id" => "Engram Workspace"})) =~
+               to_string(v.id)
     end
   end
 

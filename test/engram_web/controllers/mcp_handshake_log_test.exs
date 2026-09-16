@@ -56,6 +56,15 @@ defmodule EngramWeb.McpHandshakeLogTest do
       assert meta[:mcp_client_version] == "unknown"
     end
 
+    test "survives array-form params instead of raising on Access" do
+      # JSON-RPC 2.0 allows array params, and an empty list is truthy, so it
+      # reaches here unchanged from `params["params"] || %{}`.
+      meta = McpController.handshake_metadata([])
+
+      assert meta[:mcp_protocol_requested] == "unknown"
+      assert meta[:mcp_client_name] == "unknown"
+    end
+
     test "reports unknown when clientInfo is present but not an object" do
       meta = McpController.handshake_metadata(%{"clientInfo" => "claude"})
 

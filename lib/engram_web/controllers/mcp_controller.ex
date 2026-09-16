@@ -78,7 +78,12 @@ defmodule EngramWeb.McpController do
   legacy path or has to dual-serve it, hence `mcp_protocol_requested` alongside
   `mcp_protocol_served`.
   """
-  @spec handshake_metadata(map()) :: keyword()
+  @spec handshake_metadata(term()) :: keyword()
+  # JSON-RPC 2.0 allows array-form `params`, and an empty list is truthy in
+  # Elixir so `params["params"] || %{}` passes it straight through. `Access` on
+  # a non-keyword list raises, which would turn a legal handshake into a 500.
+  def handshake_metadata(params) when not is_map(params), do: handshake_metadata(%{})
+
   def handshake_metadata(params) do
     client =
       case params["clientInfo"] do
@@ -490,7 +495,11 @@ defmodule EngramWeb.McpController do
           "vault(s) and cannot access vault #{requested}. Call list_vaults to see which " <>
           "ones it can reach, or reconnect with a grant that includes this vault."
 
-      match?({:ok, _}, Engram.Vaults.get_vault(user, requested)) ->
+      # by_ref, matching how the vault was resolved above. With the UUID-only
+      # lookup, a restricted key naming a vault by NAME fell past this branch
+      # into "Vault not found", sending the model to list_vaults instead of
+      # telling it the credential is scoped away from a vault that does exist.
+      match?({:ok, _}, Engram.Vaults.get_vault_by_ref(user, requested)) ->
         "API key does not have access to vault #{requested}"
 
       true ->

@@ -437,20 +437,29 @@ defmodule Engram.Vaults do
   on directly — the slug is the plaintext handle derived from the name.
   """
   def get_vault_by_ref(user, ref) when is_binary(ref) do
-    case Ecto.UUID.cast(ref) do
+    case uuid_ref(ref) do
       {:ok, vault_id} -> get_vault(user, vault_id)
-      :error -> get_vault_by_slug(user, slugify(ref))
+      :error -> get_vault_by_slug(user, ref)
     end
   end
 
   def get_vault_by_ref(_user, _ref), do: {:error, :not_found}
 
-  # slugify/1 maps scripts with no ASCII fallback to "", and `unique_slug/3`
-  # never mints an empty slug, so an empty result cannot match — but reject it
-  # up front rather than relying on that invariant holding forever.
-  defp get_vault_by_slug(_user, ""), do: {:error, :not_found}
+  # Length-gated BEFORE casting. `Ecto.UUID.cast/1` has a `cast(<<_::128>>)`
+  # clause that accepts any RAW 16-byte binary, so a 16-character vault name
+  # ("Engram Workspace") casts to a garbage UUID and never reaches the slug
+  # lookup — the name path silently fails for a whole class of names.
+  defp uuid_ref(ref) when byte_size(ref) == 36, do: Ecto.UUID.cast(ref)
+  defp uuid_ref(_ref), do: :error
 
-  defp get_vault_by_slug(user, slug) do
+  defp get_vault_by_slug(user, ref) do
+    case slugify_ref(ref) do
+      :error -> {:error, :not_found}
+      {:ok, slug} -> fetch_vault_id_by_slug(user, slug)
+    end
+  end
+
+  defp fetch_vault_id_by_slug(user, slug) do
     user = fresh_user(user)
 
     result =
@@ -898,6 +907,31 @@ defmodule Engram.Vaults do
   separately and encrypted.
   """
   def slugify(name) do
+    case slug_base(name) do
+      "" -> "vault"
+      slug -> slug
+    end
+  end
+
+  @doc """
+  The slug a caller-supplied reference reduces to, or `:error` if it reduces to
+  nothing.
+
+  `slugify/1` substitutes the literal `"vault"` for an empty result. That is
+  right at MINT time — every vault needs a slug — and wrong at LOOKUP time: a
+  ref with no ASCII fallback (CJK, Cyrillic, punctuation, emoji, "") would
+  otherwise resolve to whichever vault holds the `"vault"` slug, which by
+  `unique_slug/3` is the user's FIRST such vault. That is a silent
+  wrong-target write, the #1491/#1492 class.
+  """
+  def slugify_ref(name) do
+    case slug_base(name) do
+      "" -> :error
+      slug -> {:ok, slug}
+    end
+  end
+
+  defp slug_base(name) do
     name
     |> to_nfkd()
     |> String.downcase()
@@ -912,10 +946,6 @@ defmodule Engram.Vaults do
     # Truncation can land mid-group and leave a trailing hyphen, which
     # @slug_format rejects.
     |> String.trim("-")
-    |> case do
-      "" -> "vault"
-      slug -> slug
-    end
   end
 
   # `:unicode.characters_to_nfkd_binary/1` returns an {:error, _, _} tuple on

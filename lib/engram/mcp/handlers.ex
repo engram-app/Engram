@@ -842,10 +842,11 @@ defmodule Engram.MCP.Handlers do
   defp vault_ref_matches?(vault, ref) do
     ref = to_string(ref)
 
-    to_string(vault.id) == ref or
-      case Engram.Vaults.slugify(ref) do
-        "" -> false
-        slug -> vault.slug == slug
-      end
+    # `slugify_ref/1`, not `slugify/1`: the latter substitutes the literal
+    # "vault" for a ref that reduces to nothing, which would confirm the
+    # "vault"-slugged vault for any junk input and echo its UUID back to the
+    # model. One shared function so this and `Vaults.get_vault_by_ref/2`
+    # cannot drift apart.
+    to_string(vault.id) == ref or Engram.Vaults.slugify_ref(ref) == {:ok, vault.slug}
   end
 end
