@@ -437,9 +437,21 @@ defmodule Engram.Vaults do
   on directly — the slug is the plaintext handle derived from the name.
   """
   def get_vault_by_ref(user, ref) when is_binary(ref) do
-    case uuid_ref(ref) do
-      {:ok, vault_id} -> get_vault(user, vault_id)
-      :error -> get_vault_by_slug(user, ref)
+    # A UUID string is ITSELF a valid slug (`@slug_format` is alphanumeric
+    # groups joined by hyphens), so a vault may legitimately be named
+    # "550e8400-e29b-41d4-a716-446655440000". The UUID branch must not be
+    # exclusive: on a miss, fall through to the slug lookup. Without this,
+    # `set_vault` (which tries both, ungated) confirmed refs every other tool
+    # rejected — the same self-contradicting-server problem the 36-byte gate
+    # was added to fix, pointing the other way.
+    #
+    # Falling through cannot widen scope: the slug query is user-scoped and
+    # tenant-bound exactly like `get_vault/2`.
+    with {:ok, vault_id} <- uuid_ref(ref),
+         {:ok, vault} <- get_vault(user, vault_id) do
+      {:ok, vault}
+    else
+      _ -> get_vault_by_slug(user, ref)
     end
   end
 

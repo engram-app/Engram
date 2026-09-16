@@ -79,15 +79,22 @@ defmodule EngramWeb.McpController do
   `mcp_protocol_served`.
   """
   @spec handshake_metadata(term()) :: keyword()
-  # JSON-RPC 2.0 allows array-form `params`, and an empty list is truthy in
-  # Elixir so `params["params"] || %{}` passes it straight through. `Access` on
-  # a non-keyword list raises, which would turn a legal handshake into a 500.
-  def handshake_metadata(params) when not is_map(params), do: handshake_metadata(%{})
+  # `is_non_struct_map/1`, not `is_map/1`, in BOTH places. Two reasons a
+  # non-plain-map reaches here:
+  #
+  #   * JSON-RPC 2.0 allows array-form `params`, and an empty list is truthy, so
+  #     `params["params"] || %{}` passes a list straight through.
+  #   * The endpoint parses `:multipart` with `pass: ["*/*"]`, so an
+  #     authenticated multipart POST with a file field named `params[clientInfo]`
+  #     puts a `%Plug.Upload{}` here. A struct matches `%{}` but does not
+  #     implement `Access`, so `info["name"]` raises and the handshake 500s.
+  def handshake_metadata(params) when not is_non_struct_map(params),
+    do: handshake_metadata(%{})
 
   def handshake_metadata(params) do
     client =
       case params["clientInfo"] do
-        %{} = info -> info
+        info when is_non_struct_map(info) -> info
         _ -> %{}
       end
 
@@ -100,6 +107,20 @@ defmodule EngramWeb.McpController do
   end
 
   defp bounded(nil), do: "unknown"
+
+  # Byte guard FIRST. `String.slice/3` counts graphemes, and a grapheme cluster
+  # is unbounded in size — 64 clusters of "a" plus 5,000 combining marks is
+  # ~640 KB that survives "bounded at 64" intact, turning one authenticated
+  # handshake into megabytes of Loki ingest. That is the exact cost this bound
+  # exists to prevent.
+  #
+  # Labelled, not truncated: `binary_slice/3` would cut mid-codepoint and hand
+  # the JSON formatter invalid UTF-8, crashing the log call. An oversize value
+  # has no diagnostic worth anyway — the fact worth keeping is that it was
+  # oversize. 4 bytes per grapheme is the UTF-8 maximum, so anything under the
+  # guard is genuinely bounded by the slice below.
+  defp bounded(value) when is_binary(value) and byte_size(value) > @handshake_field_limit * 4,
+    do: "<oversize>"
 
   defp bounded(value) when is_binary(value),
     do: String.slice(value, 0, @handshake_field_limit)
@@ -495,12 +516,22 @@ defmodule EngramWeb.McpController do
           "vault(s) and cannot access vault #{requested}. Call list_vaults to see which " <>
           "ones it can reach, or reconnect with a grant that includes this vault."
 
-      # by_ref, matching how the vault was resolved above. With the UUID-only
-      # lookup, a restricted key naming a vault by NAME fell past this branch
-      # into "Vault not found", sending the model to list_vaults instead of
-      # telling it the credential is scoped away from a vault that does exist.
-      match?({:ok, _}, Engram.Vaults.get_vault_by_ref(user, requested)) ->
-        "API key does not have access to vault #{requested}"
+      # Keyed on the credential's SCOPE, never on whether `requested` exists.
+      #
+      # This branch used to probe with a lookup, which was tolerable while
+      # vault_id took only a UUID — you had to guess a v4 to learn anything.
+      # Once a NAME resolves, the same probe turns into a dictionary oracle: a
+      # third party holding a vault-restricted API key could walk a wordlist
+      # ("Work", "Journal", "Taxes") and read a clean yes/no per guess off the
+      # differing message. Vault names are encrypted at rest precisely because
+      # they are sensitive, and `set_vault` already refuses to distinguish the
+      # two cases — these two paths must not disagree about that rule.
+      #
+      # A restricted credential therefore gets one answer for every ref, real
+      # or invented. It loses nothing: the guidance is identical either way.
+      Engram.Permissions.vault_scope(conn) != :all ->
+        "This connection is restricted to a subset of your vaults and cannot " <>
+          "access vault #{requested}. Call list_vaults to see the ones it can use."
 
       true ->
         "Vault not found: #{requested}. vault_id takes a vault's name or its UUID; " <>

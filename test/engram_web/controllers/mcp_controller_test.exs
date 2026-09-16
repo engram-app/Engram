@@ -990,8 +990,16 @@ defmodule EngramWeb.McpControllerTest do
         })
 
       text = tool_text(conn)
+
+      # The load-bearing assertion is that the content never comes back. The
+      # refusal deliberately no longer says whether the vault EXISTS: once
+      # vault_id accepts a name, a message that distinguishes "exists but
+      # denied" from "no such vault" is a dictionary oracle over the account's
+      # other vault names.
+      refute text =~ "# Secret"
+      assert json_response(conn, 200)["result"]["isError"] == true
       assert text =~ "Error:"
-      assert text =~ "API key does not have access"
+      assert text =~ "restricted to a subset of your vaults"
     end
 
     test "restricted key can use its authorized vault via tool arguments",

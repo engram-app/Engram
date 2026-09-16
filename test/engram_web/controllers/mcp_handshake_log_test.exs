@@ -72,7 +72,23 @@ defmodule EngramWeb.McpHandshakeLogTest do
       assert meta[:mcp_client_version] == "unknown"
     end
 
-    test "truncates client-supplied strings so one handshake cannot flood the log" do
+    test "truncates a merely-long string to the grapheme bound" do
+      # Between the bound and the byte guard: sliced, not labelled.
+      meta =
+        McpController.handshake_metadata(%{
+          "protocolVersion" => String.duplicate("v", 200),
+          "clientInfo" => %{"name" => String.duplicate("n", 200)}
+        })
+
+      assert String.length(meta[:mcp_protocol_requested]) == 64
+      assert String.length(meta[:mcp_client_name]) == 64
+    end
+
+    test "labels a string past the byte guard instead of slicing it" do
+      # `String.slice/3` counts graphemes, so slicing alone bounds nothing: a
+      # cluster is unbounded in size. Anything past the byte guard is replaced
+      # outright rather than cut, since `binary_slice/3` could split a codepoint
+      # and hand the JSON formatter invalid UTF-8.
       meta =
         McpController.handshake_metadata(%{
           "protocolVersion" => String.duplicate("v", 500),
@@ -82,9 +98,9 @@ defmodule EngramWeb.McpHandshakeLogTest do
           }
         })
 
-      assert String.length(meta[:mcp_protocol_requested]) == 64
-      assert String.length(meta[:mcp_client_name]) == 64
-      assert String.length(meta[:mcp_client_version]) == 64
+      assert meta[:mcp_protocol_requested] == "<oversize>"
+      assert meta[:mcp_client_name] == "<oversize>"
+      assert meta[:mcp_client_version] == "<oversize>"
     end
 
     test "coerces non-string client-supplied values instead of crashing" do
