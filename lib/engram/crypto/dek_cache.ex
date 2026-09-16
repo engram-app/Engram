@@ -32,7 +32,7 @@ defmodule Engram.Crypto.DekCache do
     GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
   end
 
-  @spec get(user_id :: integer()) :: {:ok, <<_::256>>} | :miss
+  @spec get(user_id :: String.t()) :: {:ok, <<_::256>>} | :miss
   def get(user_id) do
     case :ets.lookup(@table, user_id) do
       [{^user_id, dek, expires_at}] ->
@@ -62,7 +62,7 @@ defmodule Engram.Crypto.DekCache do
     :telemetry.execute([:engram, :crypto, :dek_cache], %{count: 1}, %{outcome: outcome})
   end
 
-  @spec put(user_id :: integer(), dek :: <<_::256>>, ttl_ms :: non_neg_integer() | nil) :: :ok
+  @spec put(user_id :: String.t(), dek :: <<_::256>>, ttl_ms :: non_neg_integer() | nil) :: :ok
   def put(user_id, <<_::256>> = dek, ttl_ms \\ nil) do
     ttl = ttl_ms || Application.get_env(:engram, :dek_cache_ttl_ms, 3_600_000)
     expires_at = :erlang.system_time(:millisecond) + ttl
@@ -73,14 +73,14 @@ defmodule Engram.Crypto.DekCache do
     GenServer.call(__MODULE__, {:put, user_id, dek, expires_at})
   end
 
-  @spec invalidate(user_id :: integer()) :: :ok
+  @spec invalidate(user_id :: String.t()) :: :ok
   def invalidate(user_id) do
     :ok = GenServer.call(__MODULE__, {:invalidate, user_id})
     CacheSync.broadcast({:dek_evict, user_id})
   end
 
   @doc "Removes the cached DEK for `user_id`, if any. Alias of `invalidate/1`."
-  @spec delete(user_id :: integer()) :: :ok
+  @spec delete(user_id :: String.t()) :: :ok
   def delete(user_id), do: invalidate(user_id)
 
   @spec invalidate_all() :: :ok
