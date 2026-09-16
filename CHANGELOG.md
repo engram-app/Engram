@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.1](https://github.com/engram-app/Engram/compare/0.27.0...0.27.1) (2026-09-16)
+
+
+### Bug Fixes
+
+* **oauth:** log every client refusal, then consolidate OAuth + MCP ([#1645](https://github.com/engram-app/Engram/issues/1645)) ([38a9654](https://github.com/engram-app/Engram/commit/38a965424b342d6e4b88319dff1fde13186a4514))
+
 ## [0.27.0](https://github.com/engram-app/Engram/compare/0.26.3...0.27.0) (2026-09-15)
 
 
