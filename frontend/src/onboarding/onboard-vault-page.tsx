@@ -2,6 +2,7 @@ import obsidianMark from "@lobehub/icons-static-svg/icons/obsidian-color.svg?raw
 import { FilePlus2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Navigate, useNavigate } from "react-router";
+import { onboardingDoneTarget } from "./onboarding-next";
 import { useAutofocus } from "@/hooks/use-autofocus";
 import AuthPanel from "@/layout/auth-panel";
 import { heading } from "@/lib/ui-classes";
@@ -77,7 +78,7 @@ function VaultStep({
 			await setProfile.mutateAsync({ uses_obsidian: true });
 			setObsidianCommitted(true);
 		}
-		navigate("/", { replace: true });
+		navigate(onboardingDoneTarget(), { replace: true });
 	}
 
 	async function commitFresh(name: string) {
@@ -90,7 +91,7 @@ function VaultStep({
 		setActiveVaultId(vault.id);
 		// The welcome note is seeded server-side by `Engram.Vaults.WelcomeNote`
 		// on every vault creation, so there is nothing to write here.
-		navigate("/", { replace: true });
+		navigate(onboardingDoneTarget(), { replace: true });
 	}
 
 	return (
@@ -385,7 +386,7 @@ export default function OnboardVaultPage() {
 		return <Navigate to={`/onboard/${status.next_step}`} replace />;
 	}
 	if (status.next_step === "done") {
-		return <Navigate to="/" replace />;
+		return <Navigate to={onboardingDoneTarget()} replace />;
 	}
 
 	return (

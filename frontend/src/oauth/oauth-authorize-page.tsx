@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Search } from "lucide-react";
 import type React from "react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,12 +17,20 @@ import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { api } from "../api/client";
 import { fetchOAuthClient, type OAuthConsentParams, postOAuthConsent } from "../api/oauth";
-import { type Connection, useConnections, useMe, useVaults } from "../api/queries";
+import {
+	type Connection,
+	useConnections,
+	useMe,
+	useOnboardingStatus,
+	useSetOnboardingProfile,
+	useVaults,
+} from "../api/queries";
 import { connectionId as oauthConnectionId } from "../billing/existing-connections-panel";
 import { useConnectionCap } from "../billing/use-connection-cap";
 import AuthPanel from "../layout/auth-panel";
 import AuthShell from "../layout/auth-shell";
 import { settingsHash, settingsTo } from "../settings/settings-hash";
+import { clearPendingAuthorization, stashPendingAuthorization } from "./pending-authorization";
 
 const REQUIRED_PARAMS = [
 	"client_id",
@@ -99,8 +107,11 @@ export default function OAuthAuthorizePage() {
 	const { values, resource, missing } = readParams(searchParams);
 
 	const clientQuery = useQuery({
-		queryKey: ["oauth-client", values.client_id],
-		queryFn: () => fetchOAuthClient(values.client_id),
+		// The redirect is part of the key: it is what the backend resolves the
+		// client's catalog slug from, so two requests for the same client with
+		// different redirects are not the same answer.
+		queryKey: ["oauth-client", values.client_id, values.redirect_uri],
+		queryFn: () => fetchOAuthClient(values.client_id, values.redirect_uri),
 		enabled: missing.length === 0 && Boolean(values.client_id),
 		retry: false,
 	});
@@ -110,6 +121,75 @@ export default function OAuthAuthorizePage() {
 	const navigate = useNavigate();
 	const location = useLocation();
 	const qc = useQueryClient();
+
+	const onboardingQuery = useOnboardingStatus();
+	const setProfile = useSetOnboardingProfile();
+	const onboarding = onboardingQuery.data;
+	// Signing up happens INSIDE this flow, so a user can reach this screen with
+	// no terms accepted, no plan and no vault. Approving in that state mints a
+	// grant the vault gate then refuses on every single call — the dead end
+	// #1666 is about. Send them through the wizard first, then resume.
+	//
+	// This page sits OUTSIDE OnboardingGate deliberately (router.tsx) and must
+	// stay there: the gate redirects to `/onboard/<step>` and would drop the
+	// authorization request on the floor. Bouncing here is what lets the
+	// request survive the detour.
+	const needsOnboarding = Boolean(onboarding && onboarding.next_step !== "done");
+	const bounced = useRef(false);
+
+	useEffect(() => {
+		if (!needsOnboarding || bounced.current || missing.length > 0) {
+			return;
+		}
+		// WAIT for the client lookup to settle. The slug rides on that response,
+		// and this effect runs on the first render, when it is still undefined —
+		// bouncing here would park a null slug and the ref guard below would stop
+		// it ever being reconsidered, so the tool question would be asked of
+		// every MCP-first user despite us knowing the answer. An errored lookup
+		// renders "Unknown OAuth client" and must not bounce at all.
+		if (clientQuery.isLoading || clientQuery.isError) {
+			return;
+		}
+		bounced.current = true;
+
+		const slug = clientQuery.data?.slug ?? null;
+		stashPendingAuthorization(location.search, slug);
+
+		const bounce = async () => {
+			// Connecting a tool IS the answer to "which tools do you use", so the
+			// questionnaire is pre-answered instead of asked. An unattributable
+			// client, or a write that fails, just means the user sees the step —
+			// the pre-existing behaviour, not a new failure.
+			if (slug && !onboarding?.profile?.tools?.length) {
+				try {
+					await setProfile.mutateAsync({ tools: [slug] });
+				} catch {
+					// Fall through; the wizard will ask.
+				}
+			}
+			navigate("/onboard", { replace: true });
+		};
+
+		void bounce();
+	}, [
+		needsOnboarding,
+		missing.length,
+		clientQuery.data,
+		clientQuery.isLoading,
+		clientQuery.isError,
+		location.search,
+		navigate,
+		onboarding,
+		setProfile,
+	]);
+
+	// Nothing left to resume once they are through. A stash that outlives its
+	// flow would divert a later, unrelated trip through the wizard.
+	useEffect(() => {
+		if (onboarding && onboarding.next_step === "done") {
+			clearPendingAuthorization();
+		}
+	}, [onboarding]);
 
 	// Proactive cap check — kind comes from the OAuth client metadata so we
 	// pick the right cap key (mcp vs obsidian). Default to "mcp" until the
@@ -211,6 +291,23 @@ export default function OAuthAuthorizePage() {
 		);
 	}
 
+	// Held while the effect above stashes the request and hands off to the
+	// wizard. Rendering the consent card here would offer an Approve button
+	// that mints a grant nothing can use.
+	if (needsOnboarding) {
+		return (
+			<AuthShell>
+				<AuthPanel className="flex flex-col gap-3">
+					<h1 className={heading}>Finish setting up Engram</h1>
+					<p className="text-muted-foreground text-sm">
+						Taking you to setup. You'll come straight back here to finish connecting{" "}
+						<span className="text-primary">{clientQuery.data?.client_name ?? "this app"}</span>.
+					</p>
+				</AuthPanel>
+			</AuthShell>
+		);
+	}
+
 	const handleApprove = async () => {
 		// At cap with a known peer: open the confirm modal first so the user
 		// sees the exact disconnect that's about to happen. Confirm there runs
@@ -296,7 +393,11 @@ export default function OAuthAuthorizePage() {
 	};
 
 	const clientName = clientQuery.data?.client_name ?? "this app";
-	const isLoadingShell = clientQuery.isLoading || vaultsQuery.isLoading || meQuery.isLoading;
+	const isLoadingShell =
+		clientQuery.isLoading ||
+		vaultsQuery.isLoading ||
+		meQuery.isLoading ||
+		onboardingQuery.isLoading;
 
 	return (
 		<AuthShell>

@@ -1,16 +1,13 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { Navigate, useNavigate } from "react-router";
+import { onboardingNext } from "./onboarding-next";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { api } from "../api/client";
 import { type OnboardingStatus, useOnboardingStatus } from "../api/queries";
 import BillingPage from "../billing/billing-page";
 import { FREE_TIER } from "../billing/plan-cards";
-
-function nextPath(status: OnboardingStatus): string {
-	return status.next_step === "done" ? "/" : `/onboard/${status.next_step}`;
-}
 
 export default function OnboardBillingPage() {
 	const navigate = useNavigate();
@@ -28,7 +25,7 @@ export default function OnboardBillingPage() {
 
 	const onActivated = useCallback(
 		(status: OnboardingStatus) => {
-			navigate(nextPath(status), { replace: true });
+			navigate(onboardingNext(status), { replace: true });
 		},
 		[navigate],
 	);
@@ -38,7 +35,7 @@ export default function OnboardBillingPage() {
 		try {
 			const status = await api.post<OnboardingStatus>("/onboarding/accept_free_tier");
 			qc.setQueryData(["onboarding", "status"], status);
-			const next = status.next_step === "done" ? "/" : `/onboard/${status.next_step}`;
+			const next = onboardingNext(status);
 			navigate(next, { replace: true });
 		} catch {
 			toast.error("Could not continue. Please try again.");
@@ -52,7 +49,7 @@ export default function OnboardBillingPage() {
 	// to their actual next step instead of re-showing the plan picker. Keys off
 	// `next_step`, not `steps` (billing stays in `steps` even once satisfied).
 	if (onboarding && onboarding.next_step !== "billing") {
-		return <Navigate to={nextPath(onboarding)} replace />;
+		return <Navigate to={onboardingNext(onboarding)} replace />;
 	}
 
 	return (

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router";
+import { onboardingDoneTarget } from "./onboarding-next";
 import { HelpTip } from "@/components/help-tip";
 import { Checkbox } from "@/components/ui/checkbox";
 import AuthPanel from "@/layout/auth-panel";
@@ -216,7 +217,7 @@ export default function OnboardToolsPage() {
 		return <Navigate to={`/onboard/${status.next_step}`} replace />;
 	}
 	if (status.next_step === "done") {
-		return <Navigate to="/" replace />;
+		return <Navigate to={onboardingDoneTarget()} replace />;
 	}
 
 	return (
