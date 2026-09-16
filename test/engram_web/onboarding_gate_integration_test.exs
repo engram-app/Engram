@@ -105,11 +105,15 @@ defmodule EngramWeb.OnboardingGateIntegrationTest do
     assert json_response(resp, 403)["error"] == "onboarding_required"
   end
 
+  # Same subject as its siblings — the gate halts this route too — but the MCP
+  # scope re-shapes refusal bodies into JSON-RPC errors
+  # (`EngramWeb.Plugs.McpErrorEnvelope`), so the reason moved one level down.
+  # The status is what this test is actually about and it is unchanged.
   test "POST /api/mcp (nested scope) is gated", %{conn: conn} do
     resp =
       post(conn, "/api/mcp", %{jsonrpc: "2.0", id: 1, method: "tools/list", params: %{}})
 
-    assert json_response(resp, 403)["error"] == "onboarding_required"
+    assert json_response(resp, 403)["error"]["data"]["error"] == "onboarding_required"
   end
 
   test "self-host mode lets POST /api/notes through (gate is no-op)", %{conn: conn} do
