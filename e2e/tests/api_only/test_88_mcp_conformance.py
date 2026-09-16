@@ -61,14 +61,19 @@ EXIT_ENVIRONMENT = 2
 #               special-use addresses, and the CLI exposes no opt-in (3.18/3.19):
 #               "Refusing outbound OAuth fetch to loopback host". A CI stack is
 #               loopback by construction, so this stage needs a real deployment.
-#   protocol  — genuinely red against us today: `ping` unimplemented,
+#   protocol  — still red against us, but for FEWER reasons than when this
+#               comment was written. We now negotiate and support 2025-06-18,
+#               so `server-initialize` no longer fails there. What remains:
 #               `localhost-host-rebinding-rejected` (we answer 200 to a
-#               rebinding Host), and we announce protocol 2025-03-26 so
-#               2025-06-18+ fail at `server-initialize`. Real gaps, filed
-#               separately. Turning them on now would block every merge;
-#               excluding the failing checks would be the silent-green this
-#               suite exists to prevent. It graduates to the gate when they are
-#               fixed, not before.
+#               rebinding Host, Engram#1259), and `ping` — which is NOT worth
+#               implementing: 2026-07-28 removes it outright (SEP-2575), along
+#               with logging/setLevel and roots/list_changed, so MCPJam only
+#               asks for it because of the revision we announce. Likewise most
+#               of the capability-dependent skips are resources/prompts/logging,
+#               all deprecated in 2026-07-28 — they resolve to "permanently
+#               N/A", not to work. Turning the stage on now would block every
+#               merge; excluding the failing checks would be the silent-green
+#               this suite exists to prevent. See Engram#1659 for the upgrade.
 #
 # `spec` is not a consolation prize: it is the stage that caught all three
 # discovery bugs on 2026-08-05 while the MCPJam matrix was green.

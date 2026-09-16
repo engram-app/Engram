@@ -10,7 +10,21 @@ defmodule EngramWeb.McpController do
 
   @server_info %{"name" => "engram", "version" => "0.1.0"}
   @capabilities %{"tools" => %{"listChanged" => false}}
-  @protocol_version "2025-03-26"
+  # Newest first. `2025-06-18` is what makes structured tool output reachable:
+  # `outputSchema` / `structuredContent` landed in that revision, so announcing
+  # only `2025-03-26` left the whole feature unreadable by a conformant client.
+  #
+  # We meet it: no JSON-RPC batching (removed there, we never had it), OAuth
+  # resource-server metadata already shipped, and elicitation / resource links
+  # are optional capabilities we simply do not advertise.
+  #
+  # `2025-03-26` stays supported so a client pinned to it keeps working. This
+  # list is the negotiation surface — adding a revision means meeting it.
+  @supported_protocol_versions ["2025-06-18", "2025-03-26"]
+
+  # The floor, answered when a client names no version at all. Conservative on
+  # purpose: with nothing to honour, do not push a legacy client forward.
+  @default_protocol_version List.last(@supported_protocol_versions)
 
   # Handshake fields are free text from the far side of the connection, so they
   # are length-bounded before they reach the log — an unbounded `clientInfo` is
@@ -32,17 +46,43 @@ defmodule EngramWeb.McpController do
   # rather than restated here (see `dispatch_tool/4`).
   @vault_exempt Tools.vault_scoping_exempt()
 
-  def handle(conn, %{"jsonrpc" => "2.0", "id" => id, "method" => method} = params) do
+  @doc """
+  Entry point for every JSON-RPC call.
+
+  `MCP-Protocol-Version` is required on subsequent HTTP requests from
+  `2025-06-18`. An ABSENT header is fine — it means a pre-2025-06-18 client,
+  which the spec says to treat as `2025-03-26` — but a header naming a revision
+  we do not speak must be refused with 400 rather than silently served as
+  though it were supported, which would leave the client believing we agreed.
+  """
+  def handle(conn, params) do
+    case get_req_header(conn, "mcp-protocol-version") do
+      [version | _] when version not in @supported_protocol_versions ->
+        conn
+        |> put_status(400)
+        |> send_jsonrpc_error(
+          params["id"],
+          -32_600,
+          "Unsupported MCP protocol version: #{tool_name_label(version)}. " <>
+            "Supported: #{Enum.join(@supported_protocol_versions, ", ")}."
+        )
+
+      _ ->
+        do_handle(conn, params)
+    end
+  end
+
+  defp do_handle(conn, %{"jsonrpc" => "2.0", "id" => id, "method" => method} = params) do
     result = dispatch(conn, method, params["params"] || %{})
     send_jsonrpc(conn, id, result)
   end
 
   # Notification (no id) — acknowledge
-  def handle(conn, %{"jsonrpc" => "2.0", "method" => _method}) do
+  defp do_handle(conn, %{"jsonrpc" => "2.0", "method" => _method}) do
     send_resp(conn, 202, "")
   end
 
-  def handle(conn, _params) do
+  defp do_handle(conn, _params) do
     send_jsonrpc_error(conn, nil, -32_600, "Invalid Request")
   end
 
@@ -68,15 +108,45 @@ defmodule EngramWeb.McpController do
   end
 
   @doc """
+  Protocol revisions this server can speak, newest first.
+
+  Public so tests and the negotiation logic read one list rather than
+  restating it.
+  """
+  @spec supported_protocol_versions() :: [String.t(), ...]
+  def supported_protocol_versions, do: @supported_protocol_versions
+
+  @doc """
+  The revision to answer a handshake with.
+
+  Per the lifecycle spec: echo the requested version when we support it,
+  otherwise answer with the latest we do support. Neither branch fails the
+  handshake — a version mismatch is for the client to act on, not a reason to
+  refuse the connection.
+  """
+  @spec negotiate_protocol_version(term()) :: String.t()
+  def negotiate_protocol_version(requested) when is_binary(requested) do
+    if requested in @supported_protocol_versions,
+      do: requested,
+      else: List.first(@supported_protocol_versions)
+  end
+
+  def negotiate_protocol_version(nil), do: @default_protocol_version
+
+  # A non-string version is a malformed request, not a legacy client, so it
+  # gets the newest rather than the floor.
+  def negotiate_protocol_version(_other), do: List.first(@supported_protocol_versions)
+
+  @doc """
   Structured metadata for the `mcp_handshake` log line.
 
   Public only so it can be unit-tested without asserting on rendered log text.
 
-  We answer `initialize` with a fixed `@protocol_version` and negotiate nothing,
-  so the version the client ASKED for is not otherwise recorded anywhere. That
-  is the fact needed to decide whether a newer protocol revision can drop the
-  legacy path or has to dual-serve it, hence `mcp_protocol_requested` alongside
-  `mcp_protocol_served`.
+  Carries `mcp_protocol_requested` alongside `mcp_protocol_served` so a
+  DOWNGRADE is visible: the two are equal on a normal handshake and differ when
+  a client asked for something outside `supported_protocol_versions/0`. That
+  difference is the signal for when a revision can be retired, and it is not
+  recoverable from anywhere else.
   """
   @spec handshake_metadata(term()) :: keyword()
   # `is_non_struct_map/1`, not `is_map/1`, in BOTH places. Two reasons a
@@ -102,7 +172,7 @@ defmodule EngramWeb.McpController do
       mcp_protocol_requested: bounded(params["protocolVersion"]),
       mcp_client_name: bounded(client["name"]),
       mcp_client_version: bounded(client["version"]),
-      mcp_protocol_served: @protocol_version
+      mcp_protocol_served: negotiate_protocol_version(params["protocolVersion"])
     )
   end
 
@@ -141,7 +211,7 @@ defmodule EngramWeb.McpController do
 
     {:ok,
      %{
-       "protocolVersion" => @protocol_version,
+       "protocolVersion" => negotiate_protocol_version(params["protocolVersion"]),
        "serverInfo" => @server_info,
        "capabilities" => @capabilities
      }}
