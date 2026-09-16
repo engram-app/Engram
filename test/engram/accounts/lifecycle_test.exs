@@ -1,5 +1,6 @@
 defmodule Engram.Accounts.LifecycleTest do
   use Engram.DataCase, async: false
+  use Oban.Testing, repo: Engram.Repo
 
   import Mox
 
@@ -9,6 +10,7 @@ defmodule Engram.Accounts.LifecycleTest do
   alias Engram.Repo
   alias Engram.Storage.InMemory
   alias Engram.Test.LogCapture
+  alias Engram.Workers.PaddleCancelSubscription
 
   setup :verify_on_exit!
 
@@ -246,7 +248,7 @@ defmodule Engram.Accounts.LifecycleTest do
       assert_receive {[:engram, :account, :deleted], ^ref, _, %{reason: :user, had_sub: true}}
     end
 
-    test "Paddle cancel failure does not abort the cascade" do
+    test "Paddle cancel failure does not abort the cascade, and enqueues a retry" do
       user = insert(:user, external_id: nil)
       insert(:subscription, user: user, paddle_subscription_id: "sub_fail")
 
@@ -257,6 +259,22 @@ defmodule Engram.Accounts.LifecycleTest do
       user_id = user.id
       assert :ok = Lifecycle.hard_delete(user, :user)
       refute Repo.get(User, user_id, skip_tenant_check: true)
+
+      assert_enqueued(
+        worker: PaddleCancelSubscription,
+        args: %{"user_id" => user_id, "paddle_subscription_id" => "sub_fail"}
+      )
+    end
+
+    test "Paddle cancel success does not enqueue a redundant retry job" do
+      user = insert(:user, external_id: nil)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_ok")
+
+      expect(Engram.Paddle.ClientMock, :cancel_subscription, fn _, _, _ -> {:ok, %{}} end)
+
+      assert :ok = Lifecycle.hard_delete(user, :user)
+
+      refute_enqueued(worker: PaddleCancelSubscription)
     end
 
     test "Clerk delete failure does not abort (commit point already passed)" do
