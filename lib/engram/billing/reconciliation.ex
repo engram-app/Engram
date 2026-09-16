@@ -12,7 +12,9 @@ defmodule Engram.Billing.Reconciliation do
 
   Drift kinds:
 
-    * `:missing_local` — Paddle has the subscription, we don't.
+    * `:missing_local` — Paddle has the subscription, we don't. Excludes
+      `canceled` Paddle subs, which a hard-deleted account legitimately
+      leaves behind for the length of the reconciliation window.
     * `:status_mismatch` — `paddle.status != local.status`.
     * `:tier_mismatch` — `tier_from_subscription(paddle) != local.tier`.
     * `:period_mismatch` — `paddle.current_billing_period.ends_at` differs
@@ -183,6 +185,19 @@ defmodule Engram.Billing.Reconciliation do
     local = Map.get(local_by_id, id)
 
     cond do
+      is_nil(local) and paddle_sub["status"] == "canceled" ->
+        # A hard-deleted account cancels its Paddle subscription immediately
+        # (Lifecycle.cancel_paddle_subscription/2), then cascade-deletes the
+        # local row with the user. Paddle keeps the canceled subscription and
+        # ticks its `updated_at` at cancel time, so it re-enters the 7-day
+        # window with nothing local to match — and pages nightly for a week
+        # (prod, 2026-09-15). Nothing is owed and no entitlement is at stake,
+        # so it is not drift. Deliberately narrow: only `canceled`. A
+        # `past_due`/`paused`/`active` sub with no local row still pages,
+        # which is what catches a hard-delete whose best-effort Paddle cancel
+        # failed.
+        []
+
       is_nil(local) ->
         [
           %{

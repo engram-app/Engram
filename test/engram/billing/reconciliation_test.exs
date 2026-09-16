@@ -61,6 +61,49 @@ defmodule Engram.Billing.ReconciliationTest do
                Reconciliation.run(7)
     end
 
+    test "does NOT report :missing_local for a CANCELED Paddle sub with no local row" do
+      # Regression (prod page 2026-09-15): a hard-deleted account cancels its
+      # Paddle subscription immediately, then cascade-deletes the local
+      # `subscriptions` row with the user. Paddle keeps the canceled sub and
+      # ticks its `updated_at` at cancel time, so it re-enters the 7-day
+      # reconciliation window with nothing local to match — every night for a
+      # week. Nothing is owed and no entitlement is at stake, so this is not
+      # drift.
+      Engram.Paddle.ClientMock
+      |> expect(:list_subscriptions, fn _since ->
+        {:ok,
+         [
+           paddle_sub(%{
+             "id" => "sub_deleted_account",
+             "customer_id" => "ctm_deleted_account",
+             "status" => "canceled"
+           })
+         ]}
+      end)
+
+      assert %{drift: [], paddle_total: 1, local_total: 0} = Reconciliation.run(7)
+    end
+
+    test "still reports :missing_local for a non-canceled Paddle sub with no local row" do
+      # The canceled skip above must stay narrow: a `past_due` sub with no
+      # local row means we are failing to bill someone Paddle still considers
+      # ours (or the hard-delete's best-effort Paddle cancel failed). Page.
+      Engram.Paddle.ClientMock
+      |> expect(:list_subscriptions, fn _since ->
+        {:ok,
+         [
+           paddle_sub(%{
+             "id" => "sub_past_due_ghost",
+             "customer_id" => "ctm_past_due_ghost",
+             "status" => "past_due"
+           })
+         ]}
+      end)
+
+      assert %{drift: [%{kind: :missing_local, subscription_id: "sub_past_due_ghost"}]} =
+               Reconciliation.run(7)
+    end
+
     test "detects :status_mismatch" do
       user = insert(:user)
 
