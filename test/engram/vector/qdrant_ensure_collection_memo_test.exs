@@ -89,6 +89,32 @@ defmodule Engram.Vector.QdrantEnsureCollectionMemoTest do
            "expected exactly 2 round trips — one failing, one retry that succeeds."
   end
 
+  # #1609: an unreadable collection_info means the payload indexes could not be
+  # checked. Caching :ok for that would leave a node running without the
+  # indexes strict-mode filtering needs until it restarts, which is the exact
+  # failure #1609 exists to fix.
+  test "an unverified collection is NOT memoised", %{bypass: bypass} do
+    {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+    Bypass.stub(bypass, "PUT", "/collections/unverified_col", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(409, ~s({"status":{"error":"already exists"}}))
+    end)
+
+    Bypass.stub(bypass, "GET", "/collections/unverified_col", fn conn ->
+      Agent.update(counter, &(&1 + 1))
+      Plug.Conn.send_resp(conn, 500, ~s({"status":"error"}))
+    end)
+
+    assert :ok = Qdrant.ensure_collection("unverified_col", 1024)
+    assert :ok = Qdrant.ensure_collection("unverified_col", 1024)
+
+    assert Agent.get(counter, & &1) == 2,
+           "the unverified result was memoised: this node would never create the\n" <>
+             "missing payload indexes, and strict-mode filters would keep 400ing."
+  end
+
   test "a different collection or dims is a separate memo entry", %{bypass: bypass} do
     {:ok, counter} = Agent.start_link(fn -> 0 end)
 

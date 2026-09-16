@@ -53,3 +53,4 @@ mix clean && mix compile
 - Related worktree env-file gap (`.env.local` not carried): `docs/context/local-dev-preview-stack.md`
 - Broader worktree deps staleness note (lockfile drift, not parser beams): `docs/context/read-path-decrypt-perf.md` line 48
 - Worktree usage pattern: `docs/workspace-pattern.md` (workspace root)
+- Same hardlink surface, different root cause (pushing on the system OTP 26 corrupts the `opentelemetry` rebar build): `docs/context/worktree-push-otp-mismatch-rebar-dep.md`

@@ -155,7 +155,9 @@ CREATE UNIQUE INDEX idx_api_keys_hash ON public.api_keys (key_hash);       -- :9
 
 ## RLS Policies
 
-Six tables carry `FORCE ROW LEVEL SECURITY` + a `tenant_isolation_*` policy (structure.sql:1618-1690): **`notes`, `chunks`, `attachments`, `api_keys`, `vaults`, `user_agreements`**.
+Eleven tables carry `FORCE ROW LEVEL SECURITY` + a `tenant_isolation_*` policy: **`notes`, `chunks`, `attachments`, `api_keys`, `vaults`, `user_agreements`, `onboarding_actions`, `crdt_update_log`, `note_links`, `vault_index_states`, `vault_index_update_log`**.
+
+> Only the first six appear in `structure.sql:1618-1690`. That file is the pre-launch baseline dump consumed by `20260602000000_baseline.exs`, so the five added later carry their RLS in their own migrations (`create_onboarding_actions`, `create_crdt_update_log_expand`, `create_note_links_expand`, `create_vault_index_states_expand`, `create_vault_index_update_log_expand`). Auditing against `structure.sql` alone silently exonerates every query on those five. The authoritative list is `Engram.Repo.@tenant_tables`, which `repo_tenant_guard_test.exs` pins against live `pg_class.relrowsecurity`.
 
 ```sql
 ALTER TABLE notes ENABLE ROW LEVEL SECURITY;
@@ -194,7 +196,7 @@ defmodule Engram.Repo do
 
   # Layer 2: Safety net — raises if a tenant-scoped table is queried without context.
   # MUST match the six FORCE-RLS tables above (lib/engram/repo.ex:8).
-  @tenant_tables ~w(notes chunks attachments api_keys vaults user_agreements)a
+  @tenant_tables ~w(notes chunks attachments api_keys vaults user_agreements onboarding_actions crdt_update_log note_links vault_index_states vault_index_update_log)a
 
   @impl true
   def prepare_query(_operation, query, opts) do

@@ -72,13 +72,11 @@ defmodule Engram.OAuth.Cimd do
   import Ecto.Query
 
   alias Engram.Http.SsrfGuard
-  alias Engram.Logger.Metadata
+  alias Engram.OAuth
   alias Engram.OAuth.Cimd.Fetcher
   alias Engram.OAuth.Client
   alias Engram.Repo
   alias EngramWeb.RateLimiter
-
-  require Logger
 
   @ttl_seconds 24 * 3600
 
@@ -98,6 +96,8 @@ defmodule Engram.OAuth.Cimd do
           | :missing_redirect_uris
           | :missing_client_name
           | :confidential_not_supported
+          | :jwks_uri_required
+          | :jwks_uri_unfetchable
           | :no_supported_grant_type
           | :no_supported_response_type
           | :body_too_large
@@ -316,15 +316,50 @@ defmodule Engram.OAuth.Cimd do
     end
   end
 
-  defp host_of(url), do: URI.parse(url).host || "unknown"
+  @doc """
+  The host of a URL, or `"unknown"`.
+
+  Public because it is the one host renderer for the whole OAuth tree: the
+  rate-limit buckets here, `Engram.OAuth.log_refusal/3`, and
+  `Engram.OAuth.Cimd.JwksCache`'s buckets all key on it. It existed five times,
+  and the copy inside this module's own logger had dropped the `|| "unknown"`
+  fallback — so one emitter could write `cimd_host: nil` into the field the
+  `mcp-connector-refused` alert facets on while every sibling wrote `"unknown"`.
+
+  Guard-narrowed rather than `URI.parse(url).host || "unknown"`: dialyzer
+  cannot prove the `||` discharges the `nil` in `%URI{}.host`, and it runs with
+  `:missing_range` here. Widening the spec to `String.t() | nil` would be the
+  wrong repair — a nil in this field is the drift this function exists to end.
+  """
+  @spec host_of(String.t()) :: String.t()
+  def host_of(url) do
+    case URI.parse(url) do
+      %URI{host: host} when is_binary(host) -> host
+      _no_host -> "unknown"
+    end
+  end
 
   # THE binding. Everything else is metadata; this is what ties the document to
   # the URL, and therefore the client's identity to a host only its vendor can
   # serve from.
-  defp validate_document(%{"client_id" => id}, url) when id != url,
+  @doc """
+  Decides whether a fetched document is one we would accept, without storing it.
+
+  Public because vendor acceptance needs a check of its own. The conformance
+  suite only proves that *MCPJam* can register, since `--registration cimd`
+  supplies MCPJam's own published document and no other vendor's is ever
+  fetched — so a vendor changing its auth method turns nothing red. That is how
+  ChatGPT stayed unable to connect for weeks under a green nightly run (#1635).
+
+  Calling this against a real vendor's published document needs no database, no
+  deployed target and no MCPJam, which is what lets the check gate rather than
+  merely report.
+  """
+  @spec validate_document(map(), String.t()) :: :ok | {:error, reason()}
+  def validate_document(%{"client_id" => id}, url) when id != url,
     do: {:error, :client_id_mismatch}
 
-  defp validate_document(document, _url) do
+  def validate_document(document, _url) do
     cond do
       not is_map_key(document, "client_id") ->
         {:error, :client_id_mismatch}
@@ -346,13 +381,74 @@ defmodule Engram.OAuth.Cimd do
       not valid_client_name?(document["client_name"]) ->
         {:error, :missing_client_name}
 
-      # A CIMD client never registered, so no secret was ever minted for it. If we
-      # honoured a confidential method the client could never authenticate (its
-      # stored hash is nil), and if we silently downgraded to `none` the client
-      # would keep sending a secret that `authenticate_client/2` must then reject
-      # for being present at all. Both failures are opaque; refusing the document
-      # is legible.
-      document["token_endpoint_auth_method"] not in [nil, "none"] ->
+      # `private_key_jwt` authenticates with a signature, not a secret, so the
+      # reasoning below does not reach it: there is nothing to mint. The signing
+      # key comes from the document's own `jwks_uri`, which is bound to a host
+      # only the vendor can serve from — the same argument that binds the
+      # document itself. Without that URI there is no way to verify anything, so
+      # the method is unusable and the refusal is about the document, not us.
+      #
+      # Refusing this outright is what made ChatGPT unable to connect at all
+      # until 2026-09-15; it declares `private_key_jwt` and never negotiates down
+      # even though we advertise `none` first (#1633).
+      #
+      # Both `jwks_uri` arms read the PERMITTED set, matching how the token
+      # endpoint routes. Keying on the preferred method let a document
+      # preferring `none` while supporting `private_key_jwt` skip them
+      # entirely, then present assertions against a key location we had never
+      # checked.
+      Client.document_permits_assertion?(document) and
+          not Client.displayable_metadata_uri?(document["jwks_uri"]) ->
+        {:error, :jwks_uri_required}
+
+      # This required the same ORIGIN until 2026-09-15, to stop a document at
+      # `vendor.example` naming keys anywhere and converting a host binding
+      # into an unbounded delegation. Two things were wrong with that.
+      #
+      # It refused a vendor serving keys from a CDN or a dedicated key host,
+      # which is ordinary practice and which the CIMD draft nowhere forbids —
+      # and the refusal read as the vendor's bug, not ours.
+      #
+      # And the delegation it prevented is one the VENDOR chose. Setting
+      # `jwks_uri` at all requires serving the document at the `client_id` URL,
+      # so an attacker who can point it anywhere already controls the vendor's
+      # own host and needs none of this. The residual risk is to the vendor's
+      # keys, and it is theirs to take; it is not a risk to our users, who
+      # still cannot have a token minted without an auth code they consented to.
+      #
+      # What must still hold is that the URI is one we can actually fetch when
+      # a token exchange arrives. `validate_url/1` is the same rule the fetch
+      # applies, minus the DNS lookup, so a scheme, port or shape the guard
+      # would refuse is caught here — legibly, at authorize — instead of as a
+      # mystery 401 on every later exchange. An unfetchable URI that skipped
+      # this check does not fail loudly later: `SsrfGuard` refuses it at the
+      # transport, `jwks.ex` maps that to `:jwks_unavailable`, and that reason
+      # is TRANSIENT, so the connector retries a permanent misconfiguration
+      # forever. DNS stays out on purpose: a resolver blip must not become a
+      # permanent verdict on the document.
+      Client.document_permits_assertion?(document) and
+          SsrfGuard.validate_url(document["jwks_uri"]) != :ok ->
+        {:error, :jwks_uri_unfetchable}
+
+      # A secret-based method still refuses. A CIMD client never registered, so
+      # no secret was ever minted for it. If we honoured the method the client
+      # could never authenticate (its stored hash is nil), and if we silently
+      # downgraded to `none` the client would keep sending a secret that
+      # `authenticate_client/3` must then reject for being present at all. Both
+      # failures are opaque; refusing the document is legible.
+      #
+      # Read off the permitted SET, matching how the token endpoint routes. The
+      # preference alone was read as a requirement until #1634, so a document
+      # naming `client_secret_basic` first was refused terminally even when it
+      # also permitted `private_key_jwt` or `none`, both of which we implement.
+      # Same "preference treated as a requirement" defect as #1633/#1639/#1640,
+      # pointing a third way.
+      #
+      # Empty is the only refusal left, and it is a real one: every method the
+      # document permits would need a secret it never received.
+      # `Client.cimd_changeset/3` stores a member of this same set, so whatever
+      # passes here is what the token endpoint later routes on.
+      Client.document_permitted_auth_methods(document) == [] ->
         {:error, :confidential_not_supported}
 
       true ->
@@ -410,24 +506,5 @@ defmodule Engram.OAuth.Cimd do
   # Loki (`:auth` info does not — see Engram.Logger.Category), and the host is
   # all the classification needs. This is the tripwire for "CIMD was advertised
   # and something on the new path is refusing real clients".
-  defp log(event, url, reason) do
-    Logger.warning(
-      event,
-      Metadata.with_category(:warning, :lifecycle,
-        cimd_host: URI.parse(url).host,
-        reason: format_reason(reason)
-      )
-    )
-  end
-
-  # Field NAMES, never the changeset messages. Several of those interpolate the
-  # offending value (`"missing scheme: #{uri}"`), which is attacker-supplied on
-  # an unauthenticated endpoint — the same reason the host, not the URL, is
-  # logged above. The names are ours, and they are the whole diagnosis: on
-  # 2026-08-04 a bare `:invalid_document` left us unable to say which field of a
-  # vendor's document had killed every Claude connection.
-  defp format_reason({:invalid_document, errors}),
-    do: "invalid_document fields=#{inspect(errors |> Keyword.keys() |> Enum.uniq())}"
-
-  defp format_reason(reason), do: inspect(reason)
+  defp log(event, url, reason), do: OAuth.log_refusal(event, url, reason)
 end

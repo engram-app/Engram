@@ -268,6 +268,27 @@ defmodule Engram.Search do
   def effective_mode(_requested, %SearchProfile{semantic: false}), do: :keyword
   def effective_mode(requested, %SearchProfile{}), do: requested
 
+  @doc """
+  Maps a caller-supplied mode string to a search mode (unknown → `:hybrid`).
+
+  The REST `mode` param and the MCP `mode` tool arg are the same closed enum, so
+  the mapping lives beside `effective_mode/2` rather than once per transport.
+  """
+  @spec parse_mode(term()) :: :keyword | :vector | :hybrid
+  def parse_mode("keyword"), do: :keyword
+  def parse_mode("vector"), do: :vector
+  def parse_mode(_), do: :hybrid
+
+  # The opt key IS the request param name, so one list serves both transports.
+  # Order is the order REST validates them in.
+  @date_params [:created_after, :created_before, :updated_after, :updated_before]
+
+  # No @spec: `[atom()]` is a supertype of the literal list's success typing and
+  # dialyzer runs with `:underspecs`. See `Engram.OAuth.Client`'s note on the
+  # same trade for its constant accessors.
+  @doc "The date-bound opt keys `search/4` accepts (also their param names)."
+  def date_params, do: @date_params
+
   defp do_search(user, vault, query, opts) do
     requested_mode = Keyword.get(opts, :mode, :vector)
     limit = opts |> Keyword.get(:limit, 5) |> clamp_limit()
@@ -340,8 +361,11 @@ defmodule Engram.Search do
 
               {:ok, final}
             else
-              diversified = MMR.rerank(ranked, limit, diversity)
-              {:ok, rehydrate_display_fields(diversified, user)}
+              # Rehydrate BEFORE the MMR pass so a soft-deleted hit is dropped
+              # while the pool can still backfill its slot. Dropping after left
+              # a page short of `limit` (#1608).
+              live = rehydrate_display_fields(ranked, user)
+              {:ok, MMR.rerank(live, limit, diversity)}
             end
           end
         end
@@ -574,7 +598,10 @@ defmodule Engram.Search do
   # #590: Qdrant payloads no longer carry plaintext source_path/tags. Refill
   # them on the final (post-rerank) result set from the encrypted `notes`
   # rows, keyed by qdrant_point_id. Candidates whose note row is missing keep
-  # whatever the payload provided (nil), rather than dropping the hit.
+  # whatever the payload provided (nil), rather than dropping the hit. A hit
+  # whose note is soft-deleted IS dropped: its points outlive the delete until
+  # DeleteNoteIndex succeeds, and they must not answer searches meanwhile
+  # (#1608).
   defp rehydrate_display_fields([], _user), do: []
 
   defp rehydrate_display_fields(results, user) do
@@ -583,13 +610,16 @@ defmodule Engram.Search do
 
     fields_by_qid = Engram.Notes.display_fields_by_qdrant_points(user, qdrant_ids)
 
-    Enum.map(results, fn result ->
+    Enum.flat_map(results, fn result ->
       case Map.get(fields_by_qid, Map.get(result, :qdrant_id)) do
         %{source_path: source_path, tags: tags} ->
-          result |> Map.put(:source_path, source_path) |> Map.put(:tags, tags)
+          [result |> Map.put(:source_path, source_path) |> Map.put(:tags, tags)]
+
+        :deleted ->
+          []
 
         nil ->
-          result
+          [result]
       end
     end)
   end

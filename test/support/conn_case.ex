@@ -74,6 +74,32 @@ defmodule EngramWeb.ConnCase do
     %{conn: authed, user: user, vault: vault, api_key: api_key}
   end
 
+  @doc """
+  POSTs a JSON-RPC `tools/call` for `name` with `args` to the MCP endpoint.
+
+  Dispatched directly against the endpoint (not via `Phoenix.ConnTest.post/3`,
+  which needs a `@endpoint` attribute in the calling module).
+  """
+  def call_tool(conn, name, args \\ %{}) do
+    Phoenix.ConnTest.dispatch(conn, EngramWeb.Endpoint, :post, "/api/mcp", %{
+      "jsonrpc" => "2.0",
+      "id" => 1,
+      "method" => "tools/call",
+      "params" => %{"name" => name, "arguments" => args}
+    })
+  end
+
+  @doc """
+  The text of an MCP tool result: every `content` block joined by a space.
+
+  Tolerates a response with no `result` (a JSON-RPC error) by returning "", so a
+  test asserting over either shape can concatenate this with `error.message`.
+  """
+  def tool_text(conn) do
+    body = Phoenix.ConnTest.json_response(conn, 200)
+    (body["result"]["content"] || []) |> Enum.map_join(" ", & &1["text"])
+  end
+
   @doc "Signs `user` in by minting a local access token and setting the Bearer header."
   def authenticate(conn, user) do
     # `user_factory` defaults `external_id: nil`; the access token's `sub` claim

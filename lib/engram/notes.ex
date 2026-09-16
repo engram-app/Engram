@@ -96,6 +96,18 @@ defmodule Engram.Notes do
   # tombstone older than the window is allowed through as a genuine re-create.
   @delete_tombstone_window_seconds 60
 
+  # Note-size ceiling. Enforced by every transport that accepts a note body —
+  # REST `upsert` answers 413, the MCP `write_note` tool refuses — so it is
+  # declared here once instead of per transport, where the two could drift.
+  @max_note_bytes 10 * 1024 * 1024
+
+  # No @spec, deliberately: dialyzer runs with `:underspecs`, so `pos_integer()`
+  # is a supertype of the literal success typing and a spec tight enough to pass
+  # would only restate the constant. Same call `Engram.OAuth.Client` already
+  # made for `client_name_max_length/0`.
+  @doc "Maximum accepted size of a note body, in bytes."
+  def max_note_bytes, do: @max_note_bytes
+
   @doc """
   Composable query scope that restricts a `Note` query to kind='note' rows.
   Every site that wants real notes (excluding folder markers) should
@@ -143,11 +155,12 @@ defmodule Engram.Notes do
   (Qdrant Cloud is a separate breach surface). The canonical values live
   only in the encrypted `notes` row, so search rehydrates them here keyed by
   the `chunks.qdrant_point_id → note_id` mapping. Tenant-scoped + decrypted
-  as one instrumented batch. Point ids with no live note row are omitted —
-  the caller leaves such candidates' display fields untouched.
+  as one instrumented batch. Point ids with no note row are omitted — the
+  caller leaves such candidates' display fields untouched. A point whose note
+  is soft-deleted maps to `:deleted` so the caller can drop the hit (#1608).
   """
   @spec display_fields_by_qdrant_points(Engram.Accounts.User.t(), [String.t()]) ::
-          %{String.t() => %{source_path: String.t() | nil, tags: [String.t()]}}
+          %{String.t() => %{source_path: String.t() | nil, tags: [String.t()]} | :deleted}
   def display_fields_by_qdrant_points(_user, []), do: %{}
 
   def display_fields_by_qdrant_points(user, qdrant_ids) when is_list(qdrant_ids) do
@@ -172,6 +185,9 @@ defmodule Engram.Notes do
     |> Crypto.decrypt_notes_batch(user)
     |> Enum.zip(qids)
     |> Enum.reduce(%{}, fn
+      {{:ok, %{deleted_at: %DateTime{}}}, qid}, acc ->
+        Map.put(acc, to_string(qid), :deleted)
+
       {{:ok, note}, qid}, acc ->
         Map.put(acc, to_string(qid), %{source_path: note.path, tags: note.tags || []})
 

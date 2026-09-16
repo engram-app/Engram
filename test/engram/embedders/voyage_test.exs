@@ -121,6 +121,50 @@ defmodule Engram.Embedders.VoyageTest do
 
       Voyage.embed_texts(["hello"])
     end
+
+    # #1614: Voyage prepends its retrieval prompts only when told whether an
+    # input is a query or a document, and without output_dimension a
+    # non-default EMBED_DIMS disagrees with the vectors Voyage returns.
+    test "indexing sends input_type document and the configured output_dimension",
+         %{bypass: bypass} do
+      expect_body(bypass)
+      ServiceConfig.put_override(:embed_dims, 512)
+
+      assert {:ok, _} = Voyage.embed_texts(["hello"])
+      assert_receive {:body, %{"input_type" => "document", "output_dimension" => 512}}
+    end
+
+    test "search sends input_type query", %{bypass: bypass} do
+      expect_body(bypass)
+
+      assert {:ok, _} = Voyage.embed_texts(["hello"], purpose: :query)
+      assert_receive {:body, %{"input_type" => "query"}}
+    end
+
+    # Older Voyage models (voyage-2, voyage-law-2, ...) reject output_dimension
+    # outright, and EMBED_DIMS has no default in config, so sending 1024
+    # unasked would 400 every embed for a self-hoster on one of them. Only an
+    # operator who set EMBED_DIMS gets the field.
+    test "omits output_dimension when EMBED_DIMS is not configured", %{bypass: bypass} do
+      expect_body(bypass)
+
+      assert {:ok, _} = Voyage.embed_texts(["hello"])
+      assert_receive {:body, body}
+      refute Map.has_key?(body, "output_dimension")
+    end
+  end
+
+  defp expect_body(bypass) do
+    test_pid = self()
+
+    Bypass.expect_once(bypass, "POST", "/v1/embeddings", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:body, Jason.decode!(body)})
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, ~s({"data":[{"embedding":[0.1]}]}))
+    end)
   end
 
   describe "client-side rate limit (VOYAGE_RPM)" do

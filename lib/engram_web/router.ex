@@ -82,7 +82,12 @@ defmodule EngramWeb.Router do
 
   pipeline :oauth_api do
     plug :accepts, ["json"]
-    plug EngramWeb.Plugs.RateLimit, limit: 10, period: 60_000
+
+    # `purpose: :oauth` is the only telemetry that can report a connector
+    # refused by the limiter rather than by a credential check — that 429 is
+    # deliberately unlogged (see `EngramWeb.Plugs.RateLimit`), so the metric tag
+    # is the whole signal (#1643).
+    plug EngramWeb.Plugs.RateLimit, limit: 10, period: 60_000, purpose: :oauth
 
     # Not all of this pipeline answers JSON. `GET /oauth/authorize` renders
     # HTML on the error paths (OAuthAuthorizeController.render_client_error/2

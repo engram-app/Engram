@@ -22,6 +22,7 @@ defmodule Engram.Accounts.Lifecycle do
   alias Engram.Repo
   alias Engram.Storage
   alias Engram.Vector.Qdrant
+  alias Engram.Workers.PaddleCancelSubscription
 
   require Logger
 
@@ -144,8 +145,12 @@ defmodule Engram.Accounts.Lifecycle do
     # cached in socket assigns keeps streaming until the connection drops.
     _ = SessionInvalidator.disconnect_user(user.id)
 
-    # Step 1: Paddle cancel (best-effort).
-    _ = cancel_paddle_subscription(user, sub)
+    # Step 1: Paddle cancel (best-effort). A failure here does NOT enqueue
+    # the async retry yet — see the `{:ok, _}` transaction branch below.
+    # Enqueueing here would let the retry job outlive a rolled-back Step 4:
+    # `{:error, :pg_failed}` means the user is still live, and a queued
+    # retry would later cancel a paying, non-deleted user's subscription.
+    paddle_retry = cancel_paddle_subscription(user, sub)
 
     # Step 2: Qdrant vectors (best-effort).
     _ = drop_qdrant_for_user(user)
@@ -195,6 +200,10 @@ defmodule Engram.Accounts.Lifecycle do
           Metadata.with_category(:info, :lifecycle, user_id: user.id, reason: reason)
         )
 
+        # The commit landed, so the account really is gone — safe to enqueue
+        # the Paddle retry now (see the Step 1 comment above).
+        _ = maybe_enqueue_paddle_retry(user.id, paddle_retry)
+
         # Step 5: Clerk delete (saas only). Best-effort; Clerk row may
         # outlive ours. Future Clerk webhooks find_by_external_id →
         # :user_not_found → :ok.
@@ -215,15 +224,14 @@ defmodule Engram.Accounts.Lifecycle do
     end
   end
 
+  # Returns `:ok` (nothing to cancel, or Paddle confirmed it) or
+  # `{:retry, sub_id}` — the caller enqueues the async retry only once the
+  # hard-delete transaction actually commits.
   defp cancel_paddle_subscription(_user, nil), do: :ok
   defp cancel_paddle_subscription(_user, %Subscription{paddle_subscription_id: nil}), do: :ok
 
   defp cancel_paddle_subscription(user, %Subscription{paddle_subscription_id: sub_id}) do
-    case Engram.Paddle.Client.impl().cancel_subscription(
-           sub_id,
-           :immediately,
-           idempotency_key: "hard-delete-#{user.id}"
-         ) do
+    case PaddleCancelSubscription.cancel(user.id, sub_id) do
       {:ok, _data} ->
         :ok
 
@@ -237,7 +245,7 @@ defmodule Engram.Accounts.Lifecycle do
           )
         )
 
-        :error
+        {:retry, sub_id}
     end
   rescue
     e ->
@@ -249,8 +257,13 @@ defmodule Engram.Accounts.Lifecycle do
         )
       )
 
-      :error
+      {:retry, sub_id}
   end
+
+  defp maybe_enqueue_paddle_retry(_user_id, :ok), do: :ok
+
+  defp maybe_enqueue_paddle_retry(user_id, {:retry, sub_id}),
+    do: PaddleCancelSubscription.enqueue(user_id, sub_id)
 
   # Single retry on first failure. Second failure: log + continue. S3
   # lifecycle rules sweep stragglers at the per-prefix 30-day mark.

@@ -6,6 +6,11 @@ defmodule Engram.SearchIntegrationTest do
   @moduletag :qdrant_integration
 
   setup do
+    # Per-process override: the Bypass suites delete the global `:qdrant_url`
+    # on exit, so app env alone leaves this pointed at the compiled
+    # localhost:6333 default once any of them has run.
+    Engram.ServiceConfig.put_override(:qdrant_url, qdrant_url())
+
     Engram.Crypto.DekCache.invalidate_all()
     user = insert(:user)
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
@@ -27,6 +32,11 @@ defmodule Engram.SearchIntegrationTest do
     {:ok, user: user, vault: vault, collection: col}
   end
 
+  defp qdrant_url do
+    System.get_env("QDRANT_URL") ||
+      Application.get_env(:engram, :qdrant_url, "http://localhost:6333")
+  end
+
   test "encrypted vault round-trip: upsert → raw payload is ciphertext → search returns plaintext",
        %{user: user, vault: vault, collection: col} do
     note =
@@ -36,13 +46,23 @@ defmodule Engram.SearchIntegrationTest do
         "title" => "Journal"
       })
 
-    {:ok, _n} = Engram.Indexing.index_note(note, vault)
+    # `content`/`title` are VIRTUAL fields: the fixture writes ciphertext only,
+    # so the struct it returns carries content: nil. Indexing that parses zero
+    # chunks and returns {:ok, 0} without ever creating the collection, which
+    # surfaced as a confusing 404 two lines down. EmbedNote decrypts first; so
+    # must this.
+    {:ok, decrypted} = Engram.Crypto.maybe_decrypt_note_fields(note, user)
+
+    assert {:ok, chunk_count} = Engram.Indexing.index_note(decrypted, vault)
+    assert chunk_count > 0, "the note must produce chunks, or nothing below is exercised"
 
     {:ok, info} = Engram.Vector.Qdrant.collection_info(col)
     assert info["points_count"] >= 1
 
+    # Not a hardcoded port: CI runs Qdrant on an ephemeral one (see
+    # test_helper.exs), so read the same URL the client uses.
     {:ok, resp} =
-      Req.post("http://localhost:6333/collections/#{col}/points/scroll",
+      Req.post("#{qdrant_url()}/collections/#{col}/points/scroll",
         json: %{limit: 10, with_payload: true}
       )
 

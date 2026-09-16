@@ -13,6 +13,7 @@ defmodule Engram.Indexing do
   alias Engram.KeywordIndex
   alias Engram.Logger.Metadata
   alias Engram.Notes.Chunk
+  alias Engram.Notes.Note
   alias Engram.Parsers.Markdown
   alias Engram.Repo
   alias Engram.Search.SearchProfile
@@ -21,6 +22,11 @@ defmodule Engram.Indexing do
   require Logger
 
   @default_dims 1024
+
+  # Chunked against Postgres' 65,535 bind-parameter cap — one bind per id in
+  # `in ^batch`. A whole vault, or a sweep's candidate set, can exceed that in a
+  # single statement.
+  @id_query_batch 5_000
 
   defp collection, do: Application.get_env(:engram, :qdrant_collection, "obsidian_notes")
   defp embedder, do: Application.get_env(:engram, :embedder, Engram.Embedders.Voyage)
@@ -40,6 +46,16 @@ defmodule Engram.Indexing do
   commit step inside a per-note `Repo.with_tenant/2`.
   """
   def index_note(note, %Engram.Vaults.Vault{} = vault, user \\ nil) do
+    with {:ok, count, _embedded_bytes} <- index_note_with_usage(note, vault, user),
+         do: {:ok, count}
+  end
+
+  @doc """
+  `index_note/3`, plus the bytes this pass actually sent to the embedder
+  (#1618). Chunk reuse makes that a small part of most edits, and a
+  keyword-only pass sends nothing. Returns `{:ok, chunk_count, embedded_bytes}`.
+  """
+  def index_note_with_usage(note, %Engram.Vaults.Vault{} = vault, user \\ nil) do
     # Resolve identity ONCE for the whole call. This function and
     # prepare_index/3 below both need the same `%User{}`, and both used to
     # fetch it independently — on the embed path that made four `get_user!`
@@ -72,7 +88,7 @@ defmodule Engram.Indexing do
             # Returning the error costs one Oban retry.
             with :ok <- purge_stale_index(note) do
               :ok = Engram.Links.replace_links(user, vault, note.id, link_rows)
-              {:ok, 0}
+              {:ok, 0, 0}
             end
 
           {:error, :no_dek} = err ->
@@ -81,7 +97,8 @@ defmodule Engram.Indexing do
         end
 
       {:ok, prepared} ->
-        commit_index(prepared)
+        with {:ok, count} <- commit_index(prepared),
+             do: {:ok, count, prepared.embedded_bytes}
 
       {:error, _} = err ->
         err
@@ -127,12 +144,19 @@ defmodule Engram.Indexing do
         with :ok <- Qdrant.ensure_collection(collection(), dims),
              {:ok, filter_key} <- Crypto.dek_filter_key(user),
              {:ok, content_key} <- Crypto.dek_content_hash_key(user),
-             plan = plan_chunks(note, chunks, content_key),
+             plan = plan_chunks(note, chunks, content_key, semantic?),
              texts = embed_texts(plan),
              {:ok, vectors} <- maybe_embed(semantic?, texts),
-             :ok <- ensure_one_vector_per_text(vectors, texts, note) do
-          avgdl = Engram.KeywordIndex.Stats.avgdl(note.vault_id)
-          build_prepared(note, user, vault, plan, vectors, filter_key, avgdl, link_rows)
+             :ok <- ensure_one_vector_per_text(vectors, texts, note),
+             avgdl = Engram.KeywordIndex.Stats.avgdl(note.vault_id),
+             {:ok, prepared} <-
+               build_prepared(note, user, vault, plan, vectors, filter_key, avgdl, link_rows) do
+          # What the embedder was actually sent (#1618): reused chunks and
+          # keyword-only passes cost nothing, so the meter must not bill them.
+          embedded_bytes =
+            if semantic?, do: texts |> Enum.map(&byte_size/1) |> Enum.sum(), else: 0
+
+          {:ok, Map.put(prepared, :embedded_bytes, embedded_bytes)}
         else
           {:error, :no_dek} = err ->
             emit_no_dek_telemetry(note)
@@ -183,9 +207,16 @@ defmodule Engram.Indexing do
   being reused, rewrites the chunk rows, and deletes the points nothing names
   any more.
 
-  Caller is responsible for tenant context — non-tenant-scoped callers
-  (e.g. `EmbedNote`) run as the superuser role and bypass RLS; tenant-scoped
-  callers wrap this in a short `Repo.with_tenant/2`.
+  Tenant context is handled internally: the chunk rewrite below and
+  `Links.replace_links/4` each open their own `Repo.with_tenant/2`, so this is
+  safe to call with or without an enclosing tenant (`with_tenant/2` is
+  re-entrant for the same tenant, so a scoped caller pays nothing).
+
+  This used to read "non-tenant-scoped callers run as the superuser role and
+  bypass RLS". That was true of every environment and true of nothing in this
+  code: under any role without SUPERUSER or BYPASSRLS the chunk insert raises
+  42501. Scoping each write removes the dependency on how the app happens to
+  connect.
 
   Returns `{:ok, chunk_count}` or `{:error, reason}`.
   """
@@ -216,15 +247,26 @@ defmodule Engram.Indexing do
          # PATCH refreshes the lot — the values are identical across a note's
          # points, which is why `chunk_index` no longer lives in the payload.
          :ok <- Qdrant.set_payload(collection(), reused_point_ids, note_payload) do
-      # skip_tenant_check: trusted internal pipeline, already scoped by note_id/user_id
-      #
       # Wholesale rewrite rather than a row-level diff: the rows are local and
       # cheap, and replacing them all sidesteps every ordering problem with
       # `chunks_note_id_position_index` when positions shift. One transaction
       # so OrphanSweep can never scroll a live point during the window where
       # its row is momentarily absent.
+      #
+      # `with_tenant` rather than a bare `Repo.transaction`: `chunks` carries
+      # FORCE ROW LEVEL SECURITY with a `WITH CHECK` on
+      # `current_setting('app.current_tenant', true)`, and `skip_tenant_check`
+      # suppresses only Engram's own `prepare_query/3` guard — it sets nothing
+      # in Postgres. Unscoped, the INSERT raises 42501 and the DELETE silently
+      # matches zero rows. It has never bitten because every environment
+      # connects as a superuser, which bypasses RLS even when FORCED; that is
+      # an accident of deployment, not a property of this code.
+      #
+      # `with_tenant/2` opens the transaction itself and is re-entrant for the
+      # same tenant, so a tenant-scoped caller pays nothing and the atomicity
+      # the comment above depends on is unchanged.
       {:ok, _} =
-        Repo.transaction(fn ->
+        Repo.with_tenant(note.user_id, fn ->
           Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id), skip_tenant_check: true)
           Repo.insert_all(Chunk, chunk_rows, skip_tenant_check: true)
         end)
@@ -352,6 +394,60 @@ defmodule Engram.Indexing do
     :ok
   end
 
+  @doc """
+  Flags `note_ids` so their next index rebuilds every chunk from scratch.
+
+  Two clears, in this order, and both are load-bearing:
+
+    * `chunks.context_hmac` — chunk reuse (#1595) matches on it, so a surviving
+      marker makes the "rebuild" reuse the very points it meant to replace. The
+      reuse branch of `build_entry/3` does no embed, no tokenizer pass and no
+      encryption, and discards the `avgdl` it is handed, so a stale BM25 weight
+      and `token_count` would survive verbatim (#1477).
+    * `notes.embed_hash` / `dense_indexed_hash` — `EmbedNote` skips a note whose
+      `embed_hash` still equals its `content_hash`, which is every
+      already-indexed note (#1607).
+
+  Clearing only one of the two is a silent no-op, which is why this is one
+  function rather than a step each caller remembers.
+
+  Markers first: a failure between the two leaves a note that is still skipped
+  but whose points are still named by its rows, so nothing becomes
+  unsearchable. The reverse order strands a note that skips while naming points
+  meant to be rebuilt.
+
+  Callers must scope `note_ids` themselves — this applies to exactly the ids it
+  is given, with RLS bypassed.
+
+  Returns the number of `notes` rows updated.
+  """
+  @spec flag_notes_for_rebuild([Ecto.UUID.t()]) :: non_neg_integer()
+  def flag_notes_for_rebuild([]), do: 0
+
+  def flag_notes_for_rebuild(note_ids) do
+    note_ids
+    |> Enum.uniq()
+    |> Enum.chunk_every(@id_query_batch)
+    |> Enum.reduce(0, fn batch, acc ->
+      # `not is_nil` keeps a re-run from rewriting rows that are already NULL —
+      # dead tuples and WAL for no change.
+      _ =
+        Chunk
+        |> where([c], c.note_id in ^batch and not is_nil(c.context_hmac))
+        |> Repo.update_all([set: [context_hmac: nil]], skip_tenant_check: true)
+
+      {n, _} =
+        Note
+        |> where([n], n.id in ^batch)
+        |> Repo.update_all(
+          [set: [embed_hash: nil, dense_indexed_hash: nil]],
+          skip_tenant_check: true
+        )
+
+      acc + n
+    end)
+  end
+
   # Clears the reuse fingerprints for a note, forcing its next index to rebuild
   # every chunk. `nil` is the same "cannot be matched" state a row written
   # before the column existed is in.
@@ -448,6 +544,13 @@ defmodule Engram.Indexing do
   # ---------------------------------------------------------------------------
 
   defp doc_embed_model, do: Application.get_env(:engram, :doc_embed_model)
+
+  # `do_embed_batch/1` passes `:doc_embed_model` only when it is set, and the
+  # embedder falls back to `:embed_model` otherwise. The reuse fingerprint has
+  # to name the model actually used, or changing EMBED_MODEL with
+  # DOC_EMBED_MODEL unset leaves every hmac identical and the collection
+  # silently mixes two models' embedding spaces (#1606).
+  defp effective_embed_model, do: doc_embed_model() || Application.get_env(:engram, :embed_model)
 
   # Voyage caps a request two ways: 1,000 texts AND 120,000 tokens summed over
   # them. Blowing either is a 400 no retry can fix, so the job churns through
@@ -572,10 +675,10 @@ defmodule Engram.Indexing do
   # Matched by multiplicity, not by set membership: a note with two identical
   # sections has two rows under one hmac and must consume one point each, or
   # the second chunk silently adopts the first one's point.
-  defp plan_chunks(note, chunks, content_key) do
+  defp plan_chunks(note, chunks, content_key, semantic?) do
     chunks =
       Enum.map(chunks, fn chunk ->
-        Map.put(chunk, :context_hmac, Crypto.hmac_content_hash(content_key, chunk.context_text))
+        Map.put(chunk, :context_hmac, fingerprint(content_key, chunk.context_text, semantic?))
       end)
 
     existing =
@@ -614,6 +717,19 @@ defmodule Engram.Indexing do
       reused_point_ids: reused,
       stale_point_ids: Enum.map(existing, fn {_h, id, _t} -> id end) -- reused
     }
+  end
+
+  # What a point HOLDS is part of the fingerprint, not just its text (#1606).
+  # A keyword-only point has no dense vector: matching it after an upgrade
+  # stamped the note densely indexed with nothing behind the stamp, and a
+  # downgrade kept vectors the tier no longer grants. The model is in it for
+  # the same reason, since another model's vector is not reusable either.
+  defp fingerprint(content_key, context_text, true) do
+    Crypto.hmac_content_hash(content_key, "dense:#{effective_embed_model()}\n" <> context_text)
+  end
+
+  defp fingerprint(content_key, context_text, false) do
+    Crypto.hmac_content_hash(content_key, "sparse\n" <> context_text)
   end
 
   defp embed_texts(plan), do: for({:embed, chunk} <- plan.entries, do: chunk.context_text)

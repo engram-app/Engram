@@ -13,21 +13,26 @@ defmodule Engram.OAuth do
   """
   import Ecto.Query
   alias Engram.Accounts
+  alias Engram.Logger.Metadata
   alias Engram.OAuth.{AuthorizationCode, Cimd, Client, RefreshToken}
   alias Engram.Repo
 
-  @code_bytes 32
+  require Logger
+
+  @authorization_code_prefix "engram_ac_"
   @code_ttl_seconds 600
   @max_state_bytes 2048
   @refresh_token_prefix "engram_oauth_rt_"
-  @refresh_token_bytes 32
   @refresh_token_ttl_days 90
+  # One byte count, not three: every prefixed random token this module mints is
+  # 32 bytes of CSPRNG output, and three attributes holding 32 invited them to
+  # drift into three different strengths.
+  @token_bytes 32
   @valid_scopes ~w(mcp)
 
   # ── Clients (Phase 2) ────────────────────────────────────────────
 
   @client_secret_prefix "engram_oauth_cs_"
-  @client_secret_bytes 32
 
   @doc """
   Registers a DCR client.
@@ -52,10 +57,7 @@ defmodule Engram.OAuth do
   end
 
   defp mint_client_secret(method) do
-    if Client.confidential?(method) do
-      @client_secret_prefix <>
-        Base.url_encode64(:crypto.strong_rand_bytes(@client_secret_bytes), padding: false)
-    end
+    if Client.confidential?(method), do: mint_token(@client_secret_prefix)
   end
 
   defp maybe_put_secret_hash(changeset, nil), do: changeset
@@ -127,28 +129,217 @@ defmodule Engram.OAuth do
   `nil`. Comparison is constant-time against the stored hash.
   """
   @spec authenticate_client(String.t() | nil, String.t() | nil) ::
-          :ok | {:error, :invalid_client}
-  def authenticate_client(client_id, secret) do
+          :ok | {:error, :invalid_client | :temporarily_unavailable}
+  def authenticate_client(client_id, secret), do: authenticate_client(client_id, secret, [])
+
+  @doc """
+  As `authenticate_client/2`, plus RFC 7523 `private_key_jwt` support.
+
+  Opts:
+    * `:assertion` — the raw `client_assertion`, when one was presented.
+    * `:audiences` — values acceptable in the assertion's `aud` claim.
+
+  The registered method still binds in both directions. An assertion-based
+  client MUST present an assertion and MUST NOT present a secret; a client
+  registered `none` must present neither. Letting a caller pick its own
+  authentication method at token time would make the registered one decorative.
+  """
+  @spec authenticate_client(String.t() | nil, String.t() | nil, keyword()) ::
+          :ok | {:error, :invalid_client | :temporarily_unavailable}
+  def authenticate_client(client_id, secret, opts) do
     case get_client(client_id) do
-      {:ok, client} -> check_client_secret(client, secret)
-      # Unknown client_id is indistinguishable from a bad secret on purpose.
-      {:error, :not_found} -> {:error, :invalid_client}
+      {:ok, client} ->
+        check_client_credentials(client, secret, opts)
+
+      # Indistinguishable from a bad secret ON THE WIRE, on purpose. Our own
+      # logs are the one place the two must be told apart.
+      {:error, :not_found} ->
+        reject_client(client_id, :client_unknown)
     end
   end
 
+  defp check_client_credentials(client, secret, opts) do
+    cond do
+      # The PERMITTED set, not the preferred method. Reading the preference here
+      # refused a valid assertion from any document that merely prefers `none`
+      # while also supporting `private_key_jwt` — the mirror of the bug #1639
+      # fixed, and the reason both directions now derive from one function.
+      Client.assertion_permitted?(client) ->
+        check_client_assertion(client, secret, opts)
+
+      # An assertion presented to a client that does not authenticate that way.
+      # Accepting it would wave through a caller that believes it proved
+      # something — the same reason an unrecognised `client_assertion_type` is
+      # refused rather than ignored. It also surfaces the deploy window: for up
+      # to the document TTL after release, an existing row may still say `none`.
+      not is_nil(Keyword.get(opts, :assertion)) ->
+        reject_assertion(client, :assertion_not_expected)
+
+      true ->
+        check_client_secret(client, secret)
+    end
+  end
+
+  defp check_client_assertion(client, secret, opts) do
+    assertion = Keyword.get(opts, :assertion)
+
+    cond do
+      not is_nil(secret) ->
+        reject_assertion(client, :secret_presented_with_assertion)
+
+      # A document declares a PREFERRED method and a permitted SET. ChatGPT
+      # publishes `private_key_jwt` as the former and lists `none` in the
+      # latter, then exchanges as a public client over PKCE — which its own
+      # document allows. Treating the preference as a requirement made that a
+      # terminal `invalid_client`, so the connector got one step further than
+      # the original bug and still died (#1633 follow-up).
+      #
+      # This reads the vendor's host-bound document, not the request, so a
+      # caller still cannot pick its own method. PKCE is enforced on the
+      # exchange either way.
+      is_nil(assertion) and Client.public_auth_permitted?(client) ->
+        :ok
+
+      is_nil(assertion) ->
+        reject_assertion(client, :assertion_missing)
+
+      true ->
+        run_assertion_verification(client, assertion, opts)
+    end
+  end
+
+  defp run_assertion_verification(client, assertion, opts) do
+    case Cimd.Jwks.verify_assertion(client, assertion, Keyword.get(opts, :audiences, [])) do
+      :ok -> :ok
+      {:error, reason} -> reject_assertion(client, reason)
+    end
+  end
+
+  # ONE place that turns an assertion refusal into a response, so no branch can
+  # be added silently later. Two things make the line actionable:
+  #
+  #   * the host — "some assertion failed" cannot be triaged; "chatgpt.com's
+  #     assertions fail with :alg_pin_mismatch" can. `Engram.OAuth.Cimd.log/3`
+  #     carries the same label for the same reason.
+  #   * the transient split — a throttle or an unreachable JWKS endpoint is OUR
+  #     side of the wire and clears on its own. RFC 6749 §5.2 makes
+  #     `invalid_client` terminal, so reporting one as the other hands the
+  #     connector a permanent failure for a condition that fixes itself.
+  defp reject_assertion(client, reason) do
+    log_refusal("oauth_client_assertion_rejected", client, reason)
+
+    if Cimd.Jwks.transient?(reason),
+      do: {:error, :temporarily_unavailable},
+      else: {:error, :invalid_client}
+  end
+
+  @doc """
+  Logs a non-assertion client refusal, then returns the terminal error.
+
+  The sibling of `reject_assertion/2`, and for the same reason: every refusal on
+  the connect path needs exactly one line, because `mcp-connector-refused`
+  matches by MESSAGE and a branch that logs nothing is unreachable by any
+  filter. Five branches logged nothing — an unknown `client_id` on the token and
+  authorize paths, all three secret outcomes, and the controller's
+  Basic-vs-body conflict — so a vendor with a typo'd id or a stale secret 401'd
+  forever and produced no attributable signal. That is #1633's failure mode one
+  branch over (#1643).
+
+  Public because `EngramWeb.OAuthTokenController` refuses one credential shape
+  before this module is ever reached, and a second helper there would be a
+  second taxonomy to keep in sync with the alert filter.
+  """
+  @spec reject_client(Client.t() | String.t() | nil, atom()) :: {:error, :invalid_client}
+  def reject_client(subject, reason) do
+    log_client_rejection(subject, reason)
+    {:error, :invalid_client}
+  end
+
+  defp log_client_rejection(subject, reason),
+    do: log_refusal("oauth_client_rejected", subject, reason)
+
+  @doc """
+  THE emitter for every refusal on the connect path. One metadata shape, so the
+  four message names cannot drift apart.
+
+  They already had. Five emitters across four modules each rebuilt this line by
+  hand, and two had diverged: `Cimd.log/3` omitted the `|| "unknown"` host
+  fallback, so it could emit `cimd_host: nil` where its siblings emit
+  `"unknown"` — two shapes for the one field `mcp-connector-refused` facets on —
+  and the token controller's copy carried no `cimd_host` key at all, so a
+  host-faceted alert silently dropped every malformed-assertion refusal. The
+  message name stays the caller's choice (the alert filter enumerates them, and
+  "malformed" and "rejected" are different diagnoses); the SHAPE does not.
+
+  `subject` is whatever identifies the vendor — a `%Client{}`, a wire
+  `client_id`, a document or `jwks_uri` URL, or `nil`. Only its host is logged:
+  a CIMD `client_id` is a URL supplied by an unauthenticated caller, so logging
+  it whole is an unbounded value in a log field, and a DCR id is an opaque UUID
+  with no triage value.
+  """
+  @spec log_refusal(String.t(), Client.t() | String.t() | nil, term()) :: :ok
+  def log_refusal(event, subject, reason) do
+    Logger.warning(
+      event,
+      Metadata.with_category(:warning, :lifecycle,
+        cimd_host: refusal_host(subject),
+        reason: refusal_reason(reason)
+      )
+    )
+  end
+
+  # Field NAMES, never the changeset messages. Several of those interpolate the
+  # offending value (`"missing scheme: #{uri}"`), which is attacker-supplied on
+  # an unauthenticated endpoint — the same reason the host, not the URL, is
+  # logged. The names are ours, and they are the whole diagnosis: on 2026-08-04
+  # a bare `:invalid_document` left us unable to say which field of a vendor's
+  # document had killed every Claude connection. `Metadata.safe_reason/1`
+  # renders this tuple as a bare ":invalid_document", which is why the clause
+  # has to come first.
+  defp refusal_reason({:invalid_document, errors}),
+    do: "invalid_document fields=#{inspect(errors |> Keyword.keys() |> Enum.uniq())}"
+
+  # The STATUS, not just the tag. `Metadata.safe_reason/1`'s generic tuple
+  # clause renders only the tag, which would make a vendor serving 404 (wrong
+  # path), 403 (blocked) and 503 (down) for its document indistinguishable —
+  # in the telemetry that exists to tell them apart. An HTTP status cannot
+  # carry user data, so rendering it is safe.
+  defp refusal_reason({:http_status, status}) when is_integer(status),
+    do: "http_status #{status}"
+
+  defp refusal_reason(reason), do: Metadata.safe_reason(reason)
+
+  defp refusal_host(%Client{cimd_url: url}) when is_binary(url), do: Cimd.host_of(url)
+  defp refusal_host(%Client{}), do: "unknown"
+
+  defp refusal_host(id) when is_binary(id) do
+    if Cimd.url_shaped?(id), do: Cimd.host_of(id), else: "unknown"
+  end
+
+  defp refusal_host(_subject), do: "unknown"
+
+  # The three secret outcomes are reported apart because they are three
+  # different diagnoses: the vendor sent the wrong thing, the vendor sent
+  # nothing, or OUR row has no hash to compare against. Collapsing them is what
+  # made a stale secret and a broken registration look identical in Loki.
   defp check_client_secret(client, secret) do
     cond do
       not Client.confidential?(client.token_endpoint_auth_method) ->
-        if is_nil(secret), do: :ok, else: {:error, :invalid_client}
+        if is_nil(secret),
+          do: :ok,
+          else: reject_client(client, :secret_presented_by_public_client)
 
-      is_nil(secret) or is_nil(client.client_secret_hash) ->
-        {:error, :invalid_client}
+      is_nil(secret) ->
+        reject_client(client, :secret_missing)
+
+      is_nil(client.client_secret_hash) ->
+        reject_client(client, :secret_unset_on_client)
 
       Plug.Crypto.secure_compare(hash_code(secret), client.client_secret_hash) ->
         :ok
 
       true ->
-        {:error, :invalid_client}
+        reject_client(client, :secret_mismatch)
     end
   end
 
@@ -246,14 +437,7 @@ defmodule Engram.OAuth do
   def mint_authorization_code(user, validated, vault_selection, label) do
     with {:ok, vault_ids} <- resolve_vaults(user, vault_selection),
          {:ok, label} <- resolve_label(label) do
-      raw_code =
-        "engram_ac_" <>
-          Base.url_encode64(:crypto.strong_rand_bytes(@code_bytes), padding: false)
-
-      expires_at =
-        DateTime.utc_now()
-        |> DateTime.add(@code_ttl_seconds, :second)
-        |> DateTime.truncate(:second)
+      raw_code = mint_token(@authorization_code_prefix)
 
       attrs = %{
         code_hash: hash_code(raw_code),
@@ -267,7 +451,7 @@ defmodule Engram.OAuth do
         vault_ids: vault_ids,
         label: label,
         state: validated.state,
-        expires_at: expires_at
+        expires_at: expires_in(@code_ttl_seconds)
       }
 
       case %AuthorizationCode{}
@@ -317,22 +501,7 @@ defmodule Engram.OAuth do
          {:ok, user} <- fetch_user(code_row.user_id),
          :ok <- consume_code(code_row),
          {:ok, refresh_raw, refresh_row} <-
-           insert_refresh_token(%{
-             family_id: Ecto.UUID.generate(),
-             client_id: code_row.client_id,
-             user_id: code_row.user_id,
-             vault_id: code_row.vault_id,
-             vault_ids: code_row.vault_ids,
-             label: code_row.label,
-             scope: code_row.scope,
-             # Where the code was actually delivered — already matched against
-             # the client's registered list at /authorize. Carried onto the
-             # grant so the connections list can verify what happened rather
-             # than what the client declared possible. See #1204.
-             redirect_uri: code_row.redirect_uri,
-             last_used_at: DateTime.utc_now(),
-             last_used_ip: ip
-           }) do
+           insert_refresh_token(grant_attrs(code_row, Ecto.UUID.generate(), ip)) do
       {:ok, build_token_response(user, code_row, refresh_raw, refresh_row)}
     end
   end
@@ -345,11 +514,8 @@ defmodule Engram.OAuth do
   """
   def rotate_refresh_token(raw_token, client_id, opts \\ []) do
     ip = Keyword.get(opts, :ip)
-    hash = hash_code(raw_token)
 
-    case Repo.one(from(rt in RefreshToken, where: rt.token_hash == ^hash),
-           skip_tenant_check: true
-         ) do
+    case refresh_token_by_raw(raw_token) do
       nil ->
         {:error, :invalid_grant}
 
@@ -358,18 +524,26 @@ defmodule Engram.OAuth do
     end
   end
 
+  # The sibling of `get_authorization_code_by_raw/1`. The rotate and revoke
+  # paths both resolve a raw refresh token, and had a copy each — so a future
+  # scoping predicate would have landed on one and missed the other.
+  #
+  # Returns the row or nil rather than an {:ok, _} | {:error, _} pair: both
+  # callers branch on absence directly (revocation must stay nil-tolerant per
+  # RFC 7009 §2.2), so a wrapper would only be unwrapped twice.
+  defp refresh_token_by_raw(raw_token) do
+    hash = hash_code(raw_token)
+    Repo.one(from(rt in RefreshToken, where: rt.token_hash == ^hash), skip_tenant_check: true)
+  end
+
   defp rotate_existing(%RefreshToken{client_id: actual}, requested, _ip) when actual != requested,
     do: {:error, :invalid_grant}
 
-  defp rotate_existing(%RefreshToken{revoked_at: %DateTime{}} = rt, _client_id, _ip) do
-    revoke_family(rt.family_id)
-    {:error, :invalid_grant}
-  end
+  defp rotate_existing(%RefreshToken{revoked_at: %DateTime{}} = rt, _client_id, _ip),
+    do: replay(rt)
 
-  defp rotate_existing(%RefreshToken{consumed_at: %DateTime{}} = rt, _client_id, _ip) do
-    revoke_family(rt.family_id)
-    {:error, :invalid_grant}
-  end
+  defp rotate_existing(%RefreshToken{consumed_at: %DateTime{}} = rt, _client_id, _ip),
+    do: replay(rt)
 
   defp rotate_existing(%RefreshToken{expires_at: exp} = rt, _client_id, ip) do
     if DateTime.compare(DateTime.utc_now(), exp) == :gt do
@@ -383,49 +557,24 @@ defmodule Engram.OAuth do
     now = DateTime.utc_now(:second)
 
     # Atomic compare-and-set: only one concurrent rotation may consume this
-    # token. A 0-row result means another request already rotated it — that is
-    # a replay of a now-consumed token, so revoke the whole family
-    # (RFC 6749 §10.4) and reject, mirroring rotate_existing/3's replay branch.
+    # token. This is a DIFFERENT detection from the two clauses in
+    # rotate_existing/3 — those read a value that was already set, which is a
+    # TOCTOU and cannot serialize concurrent rotations; only `WHERE consumed_at
+    # IS NULL` in the UPDATE can. A 0-row result means another request won that
+    # race, so the token we hold is a now-consumed one being replayed.
     case from(r in RefreshToken, where: r.id == ^rt.id and is_nil(r.consumed_at))
          |> Repo.update_all([set: [consumed_at: now]], skip_tenant_check: true) do
-      {0, _} ->
-        revoke_family(rt.family_id)
-        {:error, :invalid_grant}
-
-      {1, _} ->
-        mint_rotation_successor(rt, ip)
+      {0, _} -> replay(rt)
+      {1, _} -> mint_rotation_successor(rt, ip)
     end
   end
 
   defp mint_rotation_successor(rt, ip) do
-    {:ok, refresh_raw, refresh_row} =
-      insert_refresh_token(%{
-        family_id: rt.family_id,
-        client_id: rt.client_id,
-        user_id: rt.user_id,
-        vault_id: rt.vault_id,
-        vault_ids: rt.vault_ids,
-        # Immutable for the life of the family, like redirect_uri below: a
-        # successor is the SAME grant, and the user named it once.
-        label: rt.label,
-        scope: rt.scope,
-        # Immutable for the life of the family, like family_id: rotation mints
-        # a successor to the SAME grant, and the grant was delivered once.
-        redirect_uri: rt.redirect_uri,
-        last_used_at: DateTime.utc_now(),
-        last_used_ip: ip
-      })
+    {:ok, refresh_raw, refresh_row} = insert_refresh_token(grant_attrs(rt, rt.family_id, ip))
 
     case fetch_user(rt.user_id) do
       {:ok, user} ->
-        {:ok,
-         %{
-           access_token: issue_access_token(user, rt.scope, grant_vault_ids(rt)),
-           refresh_token: refresh_raw,
-           token_type: "Bearer",
-           expires_in: Engram.Token.ttl_seconds(),
-           scope: rt.scope
-         }}
+        {:ok, build_token_response(user, rt, refresh_raw, refresh_row)}
 
       err ->
         # Roll back the new refresh row if user lookup failed (shouldn't
@@ -444,6 +593,17 @@ defmodule Engram.OAuth do
     |> Repo.update_all([set: [revoked_at: now]], skip_tenant_check: true)
   end
 
+  # RFC 6749 §10.4: a replayed refresh token means the family may be
+  # compromised, so the whole family dies rather than just the token presented.
+  #
+  # THREE detections reach this — already-revoked, already-consumed, and the
+  # atomic UPDATE losing its race — and that split is deliberate and stays
+  # (see do_rotate/2). The RESPONSE to all three is identical, and is this.
+  defp replay(rt) do
+    revoke_family(rt.family_id)
+    {:error, :invalid_grant}
+  end
+
   defp find_unconsumed_code(nil), do: {:error, :invalid_grant}
 
   defp find_unconsumed_code(raw_code) do
@@ -458,14 +618,15 @@ defmodule Engram.OAuth do
     end
   end
 
-  defp check_code_client(%{client_id: actual}, requested) when actual == requested, do: :ok
-
   # A CIMD client presents its document URL here while the code row stores the
-  # internal UUID, so a literal mismatch is not yet a failure. Only reached when
-  # the fast path above misses, which is either that case or a genuinely wrong
-  # client.
+  # internal UUID, so a literal mismatch is not yet a failure.
+  #
+  # `internal_client_id/2` already carries the equality short-circuit — passing
+  # `actual` as the known value returns it without a query when the two match —
+  # so the separate fast-path clause this used to have was a second copy of that
+  # same check.
   defp check_code_client(%{client_id: actual}, requested) do
-    if actual == internal_client_id(requested), do: :ok, else: {:error, :invalid_grant}
+    if actual == internal_client_id(requested, actual), do: :ok, else: {:error, :invalid_grant}
   end
 
   defp check_code_redirect_uri(%{redirect_uri: actual}, requested) when actual == requested,
@@ -506,21 +667,35 @@ defmodule Engram.OAuth do
     end
   end
 
-  defp insert_refresh_token(attrs) do
-    raw =
-      @refresh_token_prefix <>
-        Base.url_encode64(:crypto.strong_rand_bytes(@refresh_token_bytes), padding: false)
+  # The columns a grant carries from its authorization code into its first
+  # refresh token, and from each refresh token into its successor. Both source
+  # structs expose all seven.
+  #
+  # Every one of them is immutable for the life of the family, because a
+  # successor is the SAME grant: the user named it once (`label`), and it was
+  # delivered to one redirect once (`redirect_uri`) — already matched against
+  # the client's registered list at /authorize, and carried here so the
+  # connections list can report where the code actually went rather than where
+  # the client declared it could go (see #1204).
+  @grant_fields ~w(client_id user_id vault_id vault_ids label scope redirect_uri)a
 
-    expires_at =
-      DateTime.utc_now()
-      |> DateTime.add(@refresh_token_ttl_days * 24 * 3600, :second)
-      |> DateTime.truncate(:second)
+  defp grant_attrs(src, family_id, ip) do
+    src
+    |> Map.take(@grant_fields)
+    |> Map.merge(%{family_id: family_id, last_used_at: DateTime.utc_now(), last_used_ip: ip})
+  end
+
+  defp insert_refresh_token(attrs) do
+    raw = mint_token(@refresh_token_prefix)
+
+    attrs =
+      Map.merge(attrs, %{
+        token_hash: hash_code(raw),
+        expires_at: expires_in(@refresh_token_ttl_days * 24 * 3600)
+      })
 
     case %RefreshToken{}
-         |> RefreshToken.changeset(
-           Map.put(attrs, :token_hash, hash_code(raw))
-           |> Map.put(:expires_at, expires_at)
-         )
+         |> RefreshToken.changeset(attrs)
          |> Repo.insert(skip_tenant_check: true) do
       {:ok, row} -> {:ok, raw, row}
       {:error, _} = err -> err
@@ -577,10 +752,7 @@ defmodule Engram.OAuth do
   def revoke_token(_token, nil, _hint), do: :ok
 
   def revoke_token(raw_token, client_id, _hint) when is_binary(raw_token) do
-    hash = hash_code(raw_token)
-
-    row =
-      Repo.one(from(rt in RefreshToken, where: rt.token_hash == ^hash), skip_tenant_check: true)
+    row = refresh_token_by_raw(raw_token)
 
     # Normalized against the row's own client_id so a CIMD client can revoke with
     # the URL it authenticates with. A nil (unknown wire id) matches nothing,
@@ -634,19 +806,26 @@ defmodule Engram.OAuth do
     {codes + revoked_tokens + expired_tokens, nil}
   end
 
-  defp build_token_response(user, code_row, refresh_raw, _refresh_row) do
+  # `grant` is the authorization code on the code grant and the just-consumed
+  # refresh token on the refresh grant. Both answer `.scope`, `.vault_id` and
+  # `.vault_ids`, which is the whole read — so ONE function serves both, and a
+  # response field added later cannot land on one grant type and miss the other.
+  defp build_token_response(user, grant, refresh_raw, _refresh_row) do
     %{
-      access_token: issue_access_token(user, code_row.scope, grant_vault_ids(code_row)),
+      access_token: issue_access_token(user, grant.scope, grant_vault_ids(grant)),
       refresh_token: refresh_raw,
       token_type: "Bearer",
       expires_in: Engram.Token.ttl_seconds(),
-      scope: code_row.scope
+      scope: grant.scope
     }
   end
 
   # ── Internal ─────────────────────────────────────────────────────
 
-  defp fetch_client(nil), do: {:client_error, "invalid_client"}
+  defp fetch_client(nil) do
+    log_client_rejection(nil, :client_id_missing)
+    {:client_error, "invalid_client"}
+  end
 
   # The ONE place that may fetch a CIMD document. A URL-shaped client_id goes to
   # `Cimd.ensure_client/1`, which handles both first contact and TTL refresh.
@@ -660,8 +839,14 @@ defmodule Engram.OAuth do
       end
     else
       case get_client(client_id) do
-        {:ok, client} -> {:ok, client}
-        {:error, :not_found} -> {:client_error, "invalid_client"}
+        {:ok, client} ->
+          {:ok, client}
+
+        # The URL-shaped case never lands here — `Cimd.ensure_client/1` logs
+        # its own `mcp_cimd_rejected`. This is a DCR id we have never issued.
+        {:error, :not_found} ->
+          log_client_rejection(client_id, :client_unknown)
+          {:client_error, "invalid_client"}
       end
     end
   end
@@ -837,11 +1022,34 @@ defmodule Engram.OAuth do
 
   defp resolve_label(_), do: :error
 
-  defp build_redirect(base, params) do
+  @doc """
+  Appends `params` to a redirect URI: drops nil/blank pairs, then picks `&` or
+  `?` depending on whether the base already carries a query string.
+
+  Public for `EngramWeb.OAuthAuthorizeController`, which had rebuilt the same
+  three steps as its own `build_error_url/3`. The split was by accident of
+  ownership, not design — SUCCESS redirects (`code` + `state`) are minted in
+  this module and ERROR redirects in the controller — so the two copies of the
+  separator rule could only drift apart.
+  """
+  @spec build_redirect(String.t(), map()) :: String.t()
+  def build_redirect(base, params) do
     cleaned = params |> Enum.reject(fn {_, v} -> is_nil(v) or v == "" end) |> Map.new()
     sep = if String.contains?(base, "?"), do: "&", else: "?"
     base <> sep <> URI.encode_query(cleaned)
   end
+
+  # The three prefixed random tokens this module mints — client secret,
+  # authorization code, refresh token — differed only in their prefix.
+  #
+  # Deliberately NOT shared with `Engram.Accounts`, `Engram.Invites` or
+  # `Engram.Auth.DeviceFlow`, which mint their own: a cross-module minter would
+  # be a new abstraction rather than a deletion.
+  defp mint_token(prefix),
+    do: prefix <> Base.url_encode64(:crypto.strong_rand_bytes(@token_bytes), padding: false)
+
+  defp expires_in(seconds),
+    do: DateTime.utc_now() |> DateTime.add(seconds, :second) |> DateTime.truncate(:second)
 
   defp hash_code(raw), do: Engram.Crypto.sha256_hex(raw)
 end

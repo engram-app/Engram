@@ -540,20 +540,27 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Running OAuth/Clerk e2e tests locally (test_47/test_48) → `docs/context/local-oauth-e2e-testing.md`
 - `Vault not registered after 15s` E2E diagnostic ladder — don't just bump the timeout → `docs/context/e2e-vault-registration-diagnostics.md`
 - `Application.put_env` in `async: true` tests is a flake source → `docs/context/exunit-application-env-races.md`
+- Writing a test that proves a query is tenant-scoped, or an RLS test that passes while the code is still unscoped (only INSERT raises; the suite connects as a SUPERUSER; a sandbox `SET LOCAL` tenant leaks FORWARD) → `docs/context/rls-enforcement-testing-traps.md`
 - An e2e assertion counts something vault-wide, or a test's failure count refuses to move across product fixes (the e2e vault is session-scoped and shared by ~110 tests) → `docs/context/e2e-session-vault-scoping-trap.md`
 - Why `prebuild-mix` recompiled everything despite cache hits (absolute-path compile manifest) → `docs/context/ci-mix-compile-cache-runner-path.md`
 - Bun lifecycle-script trust model, `trustedDependencies`, the pngquant CI flake (#975) → `docs/context/bun-postinstall-trust.md`
 
 **Deploy & Infra**
 - AWS ECS deploy, backups, observability, security checklist → `docs/context/deploy-prod.md`
+- `git push` of a `release-v*` tag is rejected as `already exists` (release-please cuts the tag itself on release-PR merge) → `docs/context/prod-release-verification-gotchas.md`
+- `deploy-prod.yml` is green, or `terraform apply` is green, and you are about to call prod deployed (neither means the rollout finished; no `wait_for_steady_state` anywhere in engram-infra `main/`) → `docs/context/prod-release-verification-gotchas.md`
+- Verifying a prod rollout without AWS credentials, or checking that the WORKER tier rolled and not just web → `docs/context/prod-release-verification-gotchas.md`
+- Loki's newest line stopped advancing after a deploy and logging looks dead (prod logs only on activity; confirm against a pre-deploy quiet window first) → `docs/context/prod-release-verification-gotchas.md`
 - Launch-minimum DR runbook — RDS snapshots, S3 versioning, Qdrant reindex fallback → `docs/context/disaster-recovery.md`
 - Why `_build` cache mount across Docker RUN steps ships stale beams → `docs/context/docker-build-cache-pitfalls.md`
 - Local dev loop, hot reload, IEx tricks → `docs/context/dev-iteration-loop.md`
 - Preview frontend changes against a locally-running real backend → `docs/context/local-dev-preview-stack.md`
 - Throwaway local Supabase stack to run Studio Security/Performance Advisors against the schema → `docs/context/local-supabase-audit.md`
+- Local Qdrant dies mid-upsert with `Req.TransportError: socket closed` while `docker inspect` still says healthy (SIGILL, not OOM — this host has no AVX2; read `RestartCount`, not `oom`) → `docs/context/local-qdrant-sigill-no-avx2.md`
 - PG18/UUIDv7 prod crash-loop root cause — in-place engine bump vs specced taint+recreate; `verify_schema_baseline/0` guard → `docs/context/pg18-uuidv7-prod-crashloop-2026-06-11.md`
 - `mjml` vs `lingua` rustler_precompiled version conflict — pin override → `docs/context/rustler-precompiled-nif-conflict.md`
 - Worktree hardlinked `deps/`/`_build/` can omit yecc/leex-generated beams (pre-push failures) → `docs/context/worktree-deps-artifact-staleness.md`
+- `git push` from a worktree hangs or is rejected at the pre-push gates, `mix` reports `erts-14`/OTP 26, or `:opentelemetry` fails with `missing_module,opentelemetry_sup` (bare push runs the gates on the system OTP; always `mise exec -- git push`) → `docs/context/worktree-push-otp-mismatch-rebar-dep.md`
 - Tier-4 / Phase F roadmap for AWS KMS provider routing → `docs/context/aws-kms-provider-integration.md`
 
 **Encryption**
@@ -565,6 +572,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Perf caches + invalidation contracts (2026-06-12 audit wave) → `docs/context/perf-caching-invalidation.md`
 - Phase 1-6 lint ratchet history + threshold rationale → `docs/context/quality-tooling-baseline.md`
 - OpenAPI spec pipeline — schema modules, drift-gate CI, HostRewrite/version-recompile gotchas → `docs/context/openapi-docs-pipeline.md`
+- Replacing hand-rolled code with a shared helper (consolidating a PARSER silently drops accepted input shapes no test names — CRLF frontmatter read as "no frontmatter"), or a log metadata key built inside a helper that Credo cannot see → `docs/context/consolidation-drops-undocumented-tolerances.md`
 
 ## Superpowers spec docs → Engram vault (overrides the skill default)
 

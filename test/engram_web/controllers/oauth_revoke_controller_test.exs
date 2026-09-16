@@ -2,6 +2,7 @@ defmodule EngramWeb.OAuthRevokeControllerTest do
   use EngramWeb.ConnCase, async: false
 
   import Ecto.Query
+  import Engram.OAuthHelpers, only: [code_from_redirect: 1, pkce_pair: 0]
 
   alias Engram.OAuth
   alias Engram.OAuth.RefreshToken
@@ -19,12 +20,6 @@ defmodule EngramWeb.OAuthRevokeControllerTest do
     EngramWeb.RateLimiter.reset_buckets!()
     Application.put_env(:engram, :rate_limit_override, 10_000)
     :ok
-  end
-
-  defp pkce_pair do
-    verifier = Base.url_encode64(:crypto.strong_rand_bytes(48), padding: false)
-    challenge = :crypto.hash(:sha256, verifier) |> Base.url_encode64(padding: false)
-    {verifier, challenge}
   end
 
   defp full_flow_refresh_token(conn) do
@@ -50,7 +45,7 @@ defmodule EngramWeb.OAuthRevokeControllerTest do
       })
 
     {:ok, redirect_url} = OAuth.mint_authorization_code(user, validated, :all, nil)
-    code = URI.parse(redirect_url).query |> URI.decode_query() |> Map.fetch!("code")
+    code = code_from_redirect(redirect_url)
 
     %{"refresh_token" => rt} =
       json_response(
@@ -92,7 +87,7 @@ defmodule EngramWeb.OAuthRevokeControllerTest do
 
     test "force-disconnects live sockets for the token's owner", %{conn: conn} do
       {client, rt} = full_flow_refresh_token(conn)
-      hash = :crypto.hash(:sha256, rt) |> Base.encode16(case: :lower)
+      hash = Engram.Crypto.sha256_hex(rt)
 
       user_id =
         Repo.one!(

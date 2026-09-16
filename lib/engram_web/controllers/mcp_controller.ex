@@ -12,35 +12,25 @@ defmodule EngramWeb.McpController do
   @capabilities %{"tools" => %{"listChanged" => false}}
   @protocol_version "2025-03-26"
 
+  # Handshake fields are free text from the far side of the connection, so they
+  # are length-bounded before they reach the log — an unbounded `clientInfo` is
+  # billed as log volume on every reconnect.
+  @handshake_field_limit 64
+
   # engram-app/engram-infra#340 — closed-set map from tool name strings to
-  # atoms, used as the cardinality-bounded `:tool` tag on MCP PromEx
-  # metrics. Keeps `String.to_atom/1` (atom-table pollution) out of the
-  # hot path while keeping the tag stable. Must stay in sync with every
-  # tool in `Engram.MCP.Tools.list/0` (21 as of #1491/#1492) — a tool
-  # missing here silently degrades to the `:unknown` bucket.
-  @tool_atoms %{
-    "list_vaults" => :list_vaults,
-    "set_vault" => :set_vault,
-    "search_notes" => :search_notes,
-    "list_tags" => :list_tags,
-    "list_folders" => :list_folders,
-    "list_folder" => :list_folder,
-    "create_folder" => :create_folder,
-    "suggest_folder" => :suggest_folder,
-    "get_note" => :get_note,
-    "get_notes" => :get_notes,
-    "create_note" => :create_note,
-    "write_note" => :write_note,
-    "append_to_note" => :append_to_note,
-    "patch_note" => :patch_note,
-    "update_section" => :update_section,
-    "rename_note" => :rename_note,
-    "rename_folder" => :rename_folder,
-    "delete_note" => :delete_note,
-    "delete_folder" => :delete_folder,
-    "move_attachment" => :move_attachment,
-    "get_attachment_upload_target" => :get_attachment_upload_target
-  }
+  # atoms, used as the cardinality-bounded `:tool` tag on MCP PromEx metrics.
+  # Derived from the real roster at COMPILE time, so a new tool can no longer
+  # silently degrade to the `:unknown` bucket by being forgotten here.
+  #
+  # `String.to_atom/1` is safe precisely because this runs at compile time over
+  # a closed list: the atoms intern once while compiling and this module only
+  # reads the finished map afterwards — nothing per-request touches the atom
+  # table, which was the whole objection to `String.to_atom/1` here.
+  @tool_atoms Map.new(Tools.list(), &{&1.name, String.to_atom(&1.name)})
+
+  # The same exempt set the tool definitions use, read once at compile time
+  # rather than restated here (see `dispatch_tool/4`).
+  @vault_exempt Tools.vault_scoping_exempt()
 
   def handle(conn, %{"jsonrpc" => "2.0", "id" => id, "method" => method} = params) do
     result = dispatch(conn, method, params["params"] || %{})
@@ -77,9 +67,78 @@ defmodule EngramWeb.McpController do
     |> send_resp(405, "")
   end
 
+  @doc """
+  Structured metadata for the `mcp_handshake` log line.
+
+  Public only so it can be unit-tested without asserting on rendered log text.
+
+  We answer `initialize` with a fixed `@protocol_version` and negotiate nothing,
+  so the version the client ASKED for is not otherwise recorded anywhere. That
+  is the fact needed to decide whether a newer protocol revision can drop the
+  legacy path or has to dual-serve it, hence `mcp_protocol_requested` alongside
+  `mcp_protocol_served`.
+  """
+  @spec handshake_metadata(term()) :: keyword()
+  # `is_non_struct_map/1`, not `is_map/1`, in BOTH places. Two reasons a
+  # non-plain-map reaches here:
+  #
+  #   * JSON-RPC 2.0 allows array-form `params`, and an empty list is truthy, so
+  #     `params["params"] || %{}` passes a list straight through.
+  #   * The endpoint parses `:multipart` with `pass: ["*/*"]`, so an
+  #     authenticated multipart POST with a file field named `params[clientInfo]`
+  #     puts a `%Plug.Upload{}` here. A struct matches `%{}` but does not
+  #     implement `Access`, so `info["name"]` raises and the handshake 500s.
+  def handshake_metadata(params) when not is_non_struct_map(params),
+    do: handshake_metadata(%{})
+
+  def handshake_metadata(params) do
+    client =
+      case params["clientInfo"] do
+        info when is_non_struct_map(info) -> info
+        _ -> %{}
+      end
+
+    Engram.Logger.Metadata.with_category(:info, :lifecycle,
+      mcp_protocol_requested: bounded(params["protocolVersion"]),
+      mcp_client_name: bounded(client["name"]),
+      mcp_client_version: bounded(client["version"]),
+      mcp_protocol_served: @protocol_version
+    )
+  end
+
+  defp bounded(nil), do: "unknown"
+
+  # Byte guard FIRST. `String.slice/3` counts graphemes, and a grapheme cluster
+  # is unbounded in size — 64 clusters of "a" plus 5,000 combining marks is
+  # ~640 KB that survives "bounded at 64" intact, turning one authenticated
+  # handshake into megabytes of Loki ingest. That is the exact cost this bound
+  # exists to prevent.
+  #
+  # Labelled, not truncated: `binary_slice/3` would cut mid-codepoint and hand
+  # the JSON formatter invalid UTF-8, crashing the log call. An oversize value
+  # has no diagnostic worth anyway — the fact worth keeping is that it was
+  # oversize. 4 bytes per grapheme is the UTF-8 maximum, so anything under the
+  # guard is genuinely bounded by the slice below.
+  defp bounded(value) when is_binary(value) and byte_size(value) > @handshake_field_limit * 4,
+    do: "<oversize>"
+
+  defp bounded(value) when is_binary(value),
+    do: String.slice(value, 0, @handshake_field_limit)
+
+  # A non-string handshake field is labelled by TYPE, never rendered. Rendering
+  # it would put an arbitrary client-supplied term into Loki, and the value
+  # carries no diagnostic worth that: what matters is that the client sent the
+  # wrong shape. Same treatment `tool_name_label/1` gives a bad tool name, and
+  # the JSON types are the same closed set.
+  defp bounded(value), do: tool_name_label(value)
+
   # -- Method dispatch --
 
-  defp dispatch(_conn, "initialize", _params) do
+  defp dispatch(_conn, "initialize", params) do
+    require Logger
+
+    Logger.info("mcp_handshake", handshake_metadata(params))
+
     {:ok,
      %{
        "protocolVersion" => @protocol_version,
@@ -111,7 +170,7 @@ defmodule EngramWeb.McpController do
     with {:ok, tool} <- Tools.get(name),
          user = conn.assigns.current_user,
          # §E — record origin fingerprint for daily-rollup aggregation.
-         _ = OriginStats.record(user.id, get_req_header_first(conn, "user-agent")),
+         _ = OriginStats.record(user.id, List.first(get_req_header(conn, "user-agent"))),
          :ok <- validate_tool_args(tool, args) do
       dispatch_tool(tool, user, normalize_args(tool, args), conn)
     else
@@ -123,7 +182,14 @@ defmodule EngramWeb.McpController do
         # validate_tool_args threads the tool name through its own error
         # value rather than relying on an outer `tool` binding here.
         emit_rejected_call_telemetry(tool_name, start_mono, msg)
-        {:error, -32_602, msg}
+
+        # A Tool Execution Error, not a Protocol Error. The spec reserves
+        # protocol errors for an unknown tool or a malformed request, and
+        # routes anything the model could fix by retrying with different
+        # arguments through `isError: true` so it can self-correct — a
+        # protocol error just aborts the call (SEP-1303). The rejection is
+        # unchanged: the handler still never runs.
+        error_result(msg)
     end
   end
 
@@ -262,11 +328,7 @@ defmodule EngramWeb.McpController do
         {result, :ok, byte_size_safe(text)}
 
       {:error, msg} ->
-        result =
-          {:ok,
-           %{"content" => [%{"type" => "text", "text" => "Error: #{msg}"}], "isError" => true}}
-
-        {result, :error, byte_size_safe(msg)}
+        {error_result(msg), :error, byte_size_safe(msg)}
     end
   catch
     kind, reason ->
@@ -282,20 +344,13 @@ defmodule EngramWeb.McpController do
         Engram.Logger.Metadata.with_category(:error, :http,
           tool: tool.name,
           kind: kind,
-          reason_label: classify_throw_reason(reason)
+          reason_label: Engram.Telemetry.error_kind(reason)
         )
       )
 
       message = safe_trapped_message(kind, reason, __STACKTRACE__)
 
-      result =
-        {:ok,
-         %{
-           "content" => [%{"type" => "text", "text" => "Error: #{message}"}],
-           "isError" => true
-         }}
-
-      {result, :error, byte_size_safe(message)}
+      {error_result(message), :error, byte_size_safe(message)}
   end
 
   # Builds a client-safe message for a trapped tool-handler failure.
@@ -322,11 +377,6 @@ defmodule EngramWeb.McpController do
   defp byte_size_safe(s) when is_binary(s), do: byte_size(s)
   defp byte_size_safe(_), do: 0
 
-  defp classify_throw_reason(reason) when is_atom(reason), do: reason
-  defp classify_throw_reason(%{__exception__: true} = e), do: e.__struct__
-  defp classify_throw_reason({tag, _}) when is_atom(tag), do: {tag, :_}
-  defp classify_throw_reason(_), do: :unknown
-
   # -- Tool dispatch (vault context) --
 
   # `list_vaults` and `set_vault` don't operate on a single vault's contents, so
@@ -337,14 +387,11 @@ defmodule EngramWeb.McpController do
   # VaultPlug pipeline (see router.ex) — no default-vault 404/403 gates it.
   # `list_vaults` is handed the credential-scoped vault set so it can't advertise
   # vaults this token/key cannot use (#729).
-  defp dispatch_tool(%{name: "list_vaults"} = tool, user, args, conn) do
-    call_tool(tool, user, accessible_vaults(user, conn), args)
-  end
-
-  defp dispatch_tool(%{name: "set_vault"} = tool, user, args, conn) do
-    # set_vault only validates + echoes, but it MUST respect the credential's
-    # scope — it sees the same accessible set as list_vaults, so a bound token
-    # can't confirm the name/existence of a vault it was scoped away from (#729).
+  #
+  # set_vault only validates + echoes, but it MUST respect the credential's
+  # scope — it sees the same accessible set as list_vaults, so a bound token
+  # can't confirm the name/existence of a vault it was scoped away from (#729).
+  defp dispatch_tool(%{name: name} = tool, user, args, conn) when name in @vault_exempt do
     call_tool(tool, user, accessible_vaults(user, conn), args)
   end
 
@@ -376,20 +423,26 @@ defmodule EngramWeb.McpController do
   # the result set can never include a vault the credential was scoped away
   # from (#729).
   defp search_across_accessible(tool, user, args, conn) do
-    # Fetch the vault list ONCE; derive both the accessible set and the total
-    # from it (no double query).
+    case resolve_bare_vault(user, conn) do
+      {:ok, only} -> call_tool(tool, user, only, args)
+      {:many, many} -> call_tool(tool, user, {:cross_vault, many}, args)
+      {:error, msg} -> error_result(msg)
+    end
+  end
+
+  # The credential's vault set for a call that named no vault: exactly one
+  # reachable vault, more than one, or none. Fetches the vault list ONCE and
+  # derives both the accessible set and the empty-set message from it (no second
+  # list_vaults query on the error path), and never widens past the scoped list.
+  # Callers differ only in what they do with `{:many, _}`: a bare search spans
+  # them, everything else fails loud (#985).
+  defp resolve_bare_vault(user, conn) do
     all = Engram.Vaults.list_vaults(user)
-    accessible = scope_vaults(all, conn)
 
-    case accessible do
-      [] ->
-        error_result(no_vault_message_for(all))
-
-      [only] ->
-        call_tool(tool, user, only, args)
-
-      many ->
-        call_tool(tool, user, {:cross_vault, many}, args)
+    case scope_vaults(all, conn) do
+      [only] -> {:ok, only}
+      [] -> {:error, no_vault_message_for(all)}
+      many -> {:many, many}
     end
   end
 
@@ -423,53 +476,81 @@ defmodule EngramWeb.McpController do
         resolve_requested_vault(user, requested, conn)
 
       # Bare call → resolve the credential's sole reachable vault, or fail loud.
-      # Fetch the vault list once and reuse it for the empty-set message (no
-      # second list_vaults query on the error path).
       _ ->
-        all = Engram.Vaults.list_vaults(user)
-
-        case scope_vaults(all, conn) do
-          [only] ->
-            {:ok, only}
-
-          [] ->
-            {:error, no_vault_message_for(all)}
-
-          _many ->
+        case resolve_bare_vault(user, conn) do
+          {:many, _vaults} ->
             {:error,
-             "This connection can reach more than one vault — specify which. Call " <>
-               "list_vaults to see the IDs, then pass vault_id on this tool call."}
+             "This connection can reach more than one vault — specify which. Pass " <>
+               "vault_id on this tool call, as either the vault's name or its UUID. " <>
+               "Call list_vaults to see them."}
+
+          ok_or_error ->
+            ok_or_error
         end
     end
   end
 
   # A caller-named vault: enforce the credential's scope with a single get_vault
-  # (not a full list). vault_denied_message re-derives the specific reason on
+  # (not a full list). vault_denied_message/2 re-derives the specific reason on
   # the error path only.
   defp resolve_requested_vault(user, requested, conn) do
-    with {:ok, vault} <- Engram.Vaults.get_vault(user, requested),
+    # by_ref, not get_vault/2: a model naming the vault it wants ("Engram")
+    # should not have to spend a list_vaults call first just to learn the UUID.
+    # The scope check below is unchanged and still runs on the resolved vault,
+    # so a name cannot reach anything a UUID could not.
+    with {:ok, vault} <- Engram.Vaults.get_vault_by_ref(user, requested),
          :ok <- Engram.Permissions.check(Engram.Permissions.vault_scope(conn), vault) do
       {:ok, vault}
     else
-      _ -> {:error, vault_denied_message(user, requested, conn)}
+      # Two vaults share this display name (#1665). Naming the candidates is
+      # what makes the error actionable — but only for a credential that can
+      # already see every vault. For a restricted one it would re-open the
+      # enumeration oracle `vault_denied_message/2` exists to close, so that
+      # path falls through to the same scope-shaped refusal as everything else.
+      {:error, {:ambiguous_ref, ids}} ->
+        if Engram.Permissions.vault_scope(conn) == :all do
+          {:error,
+           "#{length(ids)} vaults are named #{requested}. Pass a UUID or a slug " <>
+             "instead — slugs are unique. Candidates: #{Enum.join(ids, ", ")}."}
+        else
+          {:error, vault_denied_message(requested, conn)}
+        end
+
+      _ ->
+        {:error, vault_denied_message(requested, conn)}
     end
   end
 
   # Explains why a requested vault isn't reachable — an OAuth grant's vault set,
   # an API-key restriction, or a genuinely unknown vault — so the caller gets
   # actionable guidance instead of a flat "not found".
-  defp vault_denied_message(user, requested, conn) do
+  defp vault_denied_message(requested, conn) do
     cond do
       is_list(conn.assigns[:oauth_scope_vault_ids]) ->
         "This connection is authorized for #{length(conn.assigns.oauth_scope_vault_ids)} " <>
           "vault(s) and cannot access vault #{requested}. Call list_vaults to see which " <>
           "ones it can reach, or reconnect with a grant that includes this vault."
 
-      match?({:ok, _}, Engram.Vaults.get_vault(user, requested)) ->
-        "API key does not have access to vault #{requested}"
+      # Keyed on the credential's SCOPE, never on whether `requested` exists.
+      #
+      # This branch used to probe with a lookup, which was tolerable while
+      # vault_id took only a UUID — you had to guess a v4 to learn anything.
+      # Once a NAME resolves, the same probe turns into a dictionary oracle: a
+      # third party holding a vault-restricted API key could walk a wordlist
+      # ("Work", "Journal", "Taxes") and read a clean yes/no per guess off the
+      # differing message. Vault names are encrypted at rest precisely because
+      # they are sensitive, and `set_vault` already refuses to distinguish the
+      # two cases — these two paths must not disagree about that rule.
+      #
+      # A restricted credential therefore gets one answer for every ref, real
+      # or invented. It loses nothing: the guidance is identical either way.
+      Engram.Permissions.vault_scope(conn) != :all ->
+        "This connection is restricted to a subset of your vaults and cannot " <>
+          "access vault #{requested}. Call list_vaults to see the ones it can use."
 
       true ->
-        "Vault not found: #{requested}. Call list_vaults to see the vault IDs you can use."
+        "Vault not found: #{requested}. vault_id takes a vault's name or its UUID; " <>
+          "call list_vaults to see the ones this connection can use."
     end
   end
 
@@ -499,12 +580,5 @@ defmodule EngramWeb.McpController do
       "id" => id,
       "error" => %{"code" => code, "message" => message}
     })
-  end
-
-  defp get_req_header_first(conn, key) do
-    case Plug.Conn.get_req_header(conn, key) do
-      [v | _] -> v
-      [] -> nil
-    end
   end
 end

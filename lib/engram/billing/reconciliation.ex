@@ -12,7 +12,9 @@ defmodule Engram.Billing.Reconciliation do
 
   Drift kinds:
 
-    * `:missing_local` — Paddle has the subscription, we don't.
+    * `:missing_local` — Paddle has the subscription, we don't. Excludes
+      `canceled` Paddle subs, which a hard-deleted account legitimately
+      leaves behind for the length of the reconciliation window.
     * `:status_mismatch` — `paddle.status != local.status`.
     * `:tier_mismatch` — `tier_from_subscription(paddle) != local.tier`.
     * `:period_mismatch` — `paddle.current_billing_period.ends_at` differs
@@ -183,6 +185,37 @@ defmodule Engram.Billing.Reconciliation do
     local = Map.get(local_by_id, id)
 
     cond do
+      is_nil(local) and paddle_sub["status"] == "canceled" ->
+        # A hard-deleted account cancels its Paddle subscription immediately
+        # (Lifecycle.cancel_paddle_subscription/2), then cascade-deletes the
+        # local row with the user. Paddle keeps the canceled subscription and
+        # ticks its `updated_at` at cancel time, so it re-enters the 7-day
+        # window with nothing local to match — and pages nightly for a week
+        # (prod, 2026-09-15). Nothing is owed and no entitlement is at stake,
+        # so it is not drift. Deliberately narrow: only `canceled`. A
+        # `past_due`/`paused`/`active` sub with no local row still pages,
+        # which is what catches a hard-delete whose best-effort Paddle cancel
+        # failed.
+        #
+        # Logged at :info, NOT dropped silently. Two reasons. (1) That
+        # best-effort cancel failure has a terminal state: we bill a deleted
+        # customer while `active` (which pages), then Paddle eventually flips
+        # it to `canceled` on its own — dunning exhaustion, a portal cancel,
+        # a Paddle-side admin — and this clause would swallow the only
+        # remaining trace of a refund we owe. (2) If the skip ever fires at
+        # volume, a regression is cascading `subscriptions` rows for users
+        # who were never deleted, and a counter that only ever moves on
+        # FAILURE would stay flat through it.
+        Logger.info(
+          "paddle_reconcile_canceled_orphan_skipped",
+          Metadata.with_category(:info, :billing,
+            paddle_subscription_id: paddle_sub["id"],
+            paddle_customer_id: paddle_sub["customer_id"]
+          )
+        )
+
+        []
+
       is_nil(local) ->
         [
           %{

@@ -4,6 +4,7 @@ defmodule Engram.SearchTest do
   import Bitwise, only: [bxor: 2]
   import Mox
 
+  alias Engram.Notes.Chunk
   alias Engram.Search
 
   setup :verify_on_exit!
@@ -141,8 +142,8 @@ defmodule Engram.SearchTest do
 
       {:ok, _} =
         Engram.Repo.with_tenant(user.id, fn ->
-          %Engram.Notes.Chunk{}
-          |> Engram.Notes.Chunk.changeset(%{
+          %Chunk{}
+          |> Chunk.changeset(%{
             note_id: note.id,
             user_id: user.id,
             vault_id: vault.id,
@@ -192,6 +193,164 @@ defmodule Engram.SearchTest do
       assert {:ok, [result]} = Search.search(user, vault, "iron")
       assert result.source_path == "Health/iron.md"
       assert result.tags == ["labs"]
+    end
+
+    # #1608: rehydration joined notes with no deleted_at filter, and a hit it
+    # could not fill in was kept anyway, so a deleted note's surviving points
+    # kept answering searches.
+    test "#1608: drops a hit whose note is soft-deleted",
+         %{bypass: bypass, user: user, vault: vault} do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _texts, _opts -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      {:ok, note} =
+        Engram.Notes.upsert_note(user, vault, %{
+          "path" => "Health/gone.md",
+          "content" => "# Gone\n\nFerritin levels.",
+          "mtime" => 1_000.0
+        })
+
+      point_id = Ecto.UUID.generate()
+
+      {:ok, _} =
+        Engram.Repo.with_tenant(user.id, fn ->
+          %Chunk{}
+          |> Chunk.changeset(%{
+            note_id: note.id,
+            user_id: user.id,
+            vault_id: vault.id,
+            position: 0,
+            char_start: 0,
+            char_end: 10,
+            qdrant_point_id: point_id
+          })
+          |> Engram.Repo.insert!()
+        end)
+
+      Engram.Repo.update_all(
+        from(n in Engram.Notes.Note, where: n.id == ^note.id),
+        [set: [deleted_at: DateTime.utc_now()]],
+        skip_tenant_check: true
+      )
+
+      {:ok, enc} =
+        Engram.Crypto.encrypt_qdrant_payload(
+          %{text: "Ferritin levels.", title: "Gone", heading_path: "Gone"},
+          user,
+          "engram_notes",
+          point_id
+        )
+
+      qdrant_result = %{
+        "result" => [
+          %{
+            "id" => point_id,
+            "score" => 0.9,
+            "payload" => %{
+              "text" => enc.text,
+              "title" => enc.title,
+              "heading_path" => enc.heading_path,
+              "text_nonce" => enc.text_nonce,
+              "title_nonce" => enc.title_nonce,
+              "heading_path_nonce" => enc.heading_path_nonce,
+              "aad_version" => enc.aad_version,
+              "user_id" => to_string(user.id),
+              "vault_id" => to_string(vault.id)
+            }
+          }
+        ]
+      }
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(qdrant_result))
+      end)
+
+      assert {:ok, []} = Search.search(user, vault, "ferritin")
+    end
+
+    # Dropping deleted hits AFTER the MMR pass shrinks the page: the deleted
+    # one occupied a slot in the top-K and nothing backfilled it from the pool.
+    test "#1608: a deleted hit does not shrink the page below the limit",
+         %{bypass: bypass, user: user, vault: vault} do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _texts, _opts -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      [live_a, deleted, live_c] =
+        for name <- ~w(alpha beta gamma) do
+          {:ok, note} =
+            Engram.Notes.upsert_note(user, vault, %{
+              "path" => "Health/#{name}.md",
+              "content" => "# #{name}\n\nFerritin levels.",
+              "mtime" => 1_000.0
+            })
+
+          point_id = Ecto.UUID.generate()
+
+          {:ok, _} =
+            Engram.Repo.with_tenant(user.id, fn ->
+              %Chunk{}
+              |> Chunk.changeset(%{
+                note_id: note.id,
+                user_id: user.id,
+                vault_id: vault.id,
+                position: 0,
+                char_start: 0,
+                char_end: 10,
+                qdrant_point_id: point_id
+              })
+              |> Engram.Repo.insert!()
+            end)
+
+          %{note: note, point_id: point_id}
+        end
+
+      Engram.Repo.update_all(
+        from(n in Engram.Notes.Note, where: n.id == ^deleted.note.id),
+        [set: [deleted_at: DateTime.utc_now()]],
+        skip_tenant_check: true
+      )
+
+      results =
+        [live_a, deleted, live_c]
+        |> Enum.zip([0.95, 0.9, 0.85])
+        |> Enum.map(fn {%{point_id: point_id}, score} ->
+          {:ok, enc} =
+            Engram.Crypto.encrypt_qdrant_payload(
+              %{text: "Ferritin levels.", title: "t", heading_path: "t"},
+              user,
+              "engram_notes",
+              point_id
+            )
+
+          %{
+            "id" => point_id,
+            "score" => score,
+            "payload" => %{
+              "text" => enc.text,
+              "title" => enc.title,
+              "heading_path" => enc.heading_path,
+              "text_nonce" => enc.text_nonce,
+              "title_nonce" => enc.title_nonce,
+              "heading_path_nonce" => enc.heading_path_nonce,
+              "aad_version" => enc.aad_version,
+              "user_id" => to_string(user.id),
+              "vault_id" => to_string(vault.id)
+            }
+          }
+        end)
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => results}))
+      end)
+
+      assert {:ok, hits} = Search.search(user, vault, "ferritin", limit: 2)
+
+      assert length(hits) == 2, "the live third candidate must backfill the deleted one's slot"
+      refute Enum.any?(hits, &(&1.source_path == "Health/beta.md"))
     end
 
     test "includes vault_id filter in Qdrant request", %{bypass: bypass, user: user, vault: vault} do

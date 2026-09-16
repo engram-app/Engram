@@ -1,11 +1,28 @@
 defmodule Engram.MCP.ToolsSetVaultSchemaTest do
   use ExUnit.Case, async: true
 
-  test "set_vault advertises vault_id as a UUID string, not an integer (#724)" do
-    tool = Enum.find(Engram.MCP.Tools.list(), &(&1.name == "set_vault"))
-    schema = tool.inputSchema["properties"]["vault_id"]
+  test "set_vault advertises vault_id as a string, not an integer (#724)" do
+    assert vault_id_schema("set_vault")["type"] == "string"
+  end
 
-    assert schema["type"] == "string"
-    assert schema["format"] == "uuid"
+  # #724 pinned `format: "uuid"` alongside the string type. The type is the part
+  # that fixed the bug — clients were sending integers. The format is now wrong:
+  # the field accepts a vault NAME as well as a UUID, and a strict client that
+  # honours `format` would reject a valid name before it ever reached us.
+  test "no vault_id field advertises a uuid format, since names are accepted" do
+    for tool <- Engram.MCP.Tools.list(),
+        schema = tool.inputSchema["properties"]["vault_id"],
+        is_map(schema) do
+      refute schema["format"] == "uuid",
+             "#{tool.name} still advertises vault_id as format: uuid"
+
+      assert schema["type"] == "string", "#{tool.name} must accept vault_id as a string"
+    end
+  end
+
+  defp vault_id_schema(name) do
+    Engram.MCP.Tools.list()
+    |> Enum.find(&(&1.name == name))
+    |> get_in([Access.key!(:inputSchema), "properties", "vault_id"])
   end
 end

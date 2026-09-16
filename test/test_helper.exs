@@ -25,12 +25,48 @@ ExUnit.configure(capture_log: true)
 qdrant_excluded =
   if System.get_env("QDRANT_INTEGRATION") == "1", do: [], else: [:qdrant_integration]
 
+# `config/runtime.exs` reads QDRANT_URL only outside :test, so the integration
+# tests would otherwise be stuck on the client's compiled-in default port. CI
+# runs its Qdrant on an ephemeral port (same pattern as the postgres container),
+# so honour the env var here when those tests are actually enabled.
+if System.get_env("QDRANT_INTEGRATION") == "1" do
+  if url = System.get_env("QDRANT_URL") do
+    Application.put_env(:engram, :qdrant_url, url)
+  end
+
+  # Preflight, so an unreachable Qdrant says WHICH url it tried instead of
+  # surfacing as a bare econnrefused inside every test's setup block.
+  resolved = Application.get_env(:engram, :qdrant_url, "http://localhost:6333")
+
+  case Req.get(resolved <> "/healthz", retry: false, receive_timeout: 5_000) do
+    {:ok, %{status: 200}} ->
+      IO.puts("qdrant_integration: #{resolved} reachable")
+
+    other ->
+      IO.warn("""
+      QDRANT_INTEGRATION=1 but #{resolved} is not answering /healthz: #{inspect(other)}
+      Every :qdrant_integration test will fail in setup. Check QDRANT_URL and that
+      the container is still running.
+      """)
+  end
+end
+
 cluster_excluded = if System.get_env("CLUSTER_TESTS") == "1", do: [], else: [:cluster]
 
 integration_excluded =
   if System.get_env("INTEGRATION_TESTS") == "1", do: [], else: [:integration]
 
-case qdrant_excluded ++ cluster_excluded ++ integration_excluded do
+# - :vendor_conformance makes real outbound HTTPS requests to third-party
+#   vendors (ChatGPT et al) to check their published CIMD documents are still
+#   ones we accept. Excluded by default so a vendor's outage can never block a
+#   merge; it runs on a schedule instead → VENDOR_CONFORMANCE=1.
+vendor_conformance_excluded =
+  if System.get_env("VENDOR_CONFORMANCE") == "1", do: [], else: [:vendor_conformance]
+
+case qdrant_excluded ++
+       cluster_excluded ++
+       integration_excluded ++
+       vendor_conformance_excluded do
   [] -> :ok
   excluded -> ExUnit.configure(exclude: excluded)
 end

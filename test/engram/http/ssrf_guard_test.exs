@@ -14,6 +14,43 @@ defmodule Engram.Http.SsrfGuardTest do
   # hostname: this suite must not depend on the network. `localhost` is
   # hosts-file resolved, so the hostname path is still covered deterministically.
 
+  describe "validate_url/1" do
+    # The reason this is split from `resolve/1` at all. `Cimd` validates a
+    # document's `jwks_uri` at authorize but does not fetch it until a token
+    # exchange, so folding DNS in here would let a resolver blip be recorded as
+    # a permanent verdict on a vendor's document. `.invalid` is guaranteed
+    # NXDOMAIN by RFC 2606, so this pins the split rather than describing it.
+    test "does not resolve DNS, where resolve/1 does" do
+      url = "https://nonexistent.invalid/jwks.json"
+
+      assert :ok = SsrfGuard.validate_url(url)
+      assert {:error, :dns_failure} = SsrfGuard.resolve(url)
+    end
+
+    test "accepts a well-formed https URL" do
+      assert :ok = SsrfGuard.validate_url("https://claude.ai/jwks.json")
+      assert :ok = SsrfGuard.validate_url("https://claude.ai:443/jwks.json")
+    end
+
+    # Same rules as resolve/1, minus the lookup. Shapes that could never be
+    # fetched must be refused at the point the URL is declared.
+    test "rejects the shapes resolve/1 rejects" do
+      assert {:error, :not_https} = SsrfGuard.validate_url("http://claude.ai/jwks.json")
+      assert {:error, :missing_host} = SsrfGuard.validate_url("https:///jwks.json")
+      assert {:error, :userinfo_present} = SsrfGuard.validate_url("https://u@claude.ai/j.json")
+      assert {:error, :fragment_present} = SsrfGuard.validate_url("https://claude.ai/j.json#f")
+      assert {:error, :unsupported_port} = SsrfGuard.validate_url("https://claude.ai:8443/j.json")
+
+      assert {:error, :url_too_long} =
+               SsrfGuard.validate_url("https://claude.ai/" <> String.duplicate("a", 3000))
+    end
+
+    test "rejects a non-binary" do
+      assert {:error, :invalid_url} = SsrfGuard.validate_url(nil)
+      assert {:error, :invalid_url} = SsrfGuard.validate_url(%{})
+    end
+  end
+
   describe "resolve/1 URL shape" do
     test "rejects a non-https scheme" do
       assert {:error, :not_https} = SsrfGuard.resolve("http://93.184.216.34/doc.json")

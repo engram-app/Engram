@@ -26,6 +26,17 @@ defmodule Engram.OAuth.Client do
   # the code to the request that started it. They are not substitutes.
   @valid_auth_methods ~w(none client_secret_post client_secret_basic)
   @confidential_auth_methods ~w(client_secret_post client_secret_basic)
+
+  # CIMD accepts a DIFFERENT set, and the difference is not an oversight.
+  #
+  # `client_secret_*` needs a secret that only registration can mint, so it stays
+  # refused for a client that never registered. `private_key_jwt` needs no minted
+  # secret at all: the client signs an assertion with a key published at its own
+  # `jwks_uri`, bound to the vendor's host by the same argument that binds the
+  # document. DCR keeps refusing it — a stranger POSTing to /oauth/register has
+  # no host-bound document to publish keys in.
+  @cimd_auth_methods ~w(none private_key_jwt)
+  @assertion_auth_methods ~w(private_key_jwt)
   @valid_grant_types ~w(authorization_code refresh_token)
   @valid_response_types ~w(code)
   @loopback_hosts ~w(localhost 127.0.0.1 ::1)
@@ -75,6 +86,21 @@ defmodule Engram.OAuth.Client do
     field :cimd_url, :string
     field :cimd_fetched_at, :utc_datetime_usec
 
+    # Where a `private_key_jwt` client's signing keys live, copied off the
+    # document so the token endpoint can verify an assertion without network I/O
+    # on that path. NULL for every client that authenticates any other way.
+    field :jwks_uri, :string
+    field :token_endpoint_auth_signing_alg, :string
+
+    # The document's full PERMITTED set, where `token_endpoint_auth_method` above
+    # is only its preferred one. A vendor may declare `private_key_jwt` and still
+    # authenticate as a public client when it also lists `none` — ChatGPT does
+    # exactly that. Without this the preference was enforced as a requirement.
+    #
+    # NULL means "never read off a document" (a row predating this column) and is
+    # not the same as `[]`, which means the document named nothing we support.
+    field :token_endpoint_auth_methods_supported, {:array, :string}
+
     # Read-only metadata populated at DCR time.
     # Queries in Connections use :kind to distinguish MCP vs Obsidian clients.
     field :kind, :string, default: "mcp"
@@ -85,6 +111,12 @@ defmodule Engram.OAuth.Client do
     timestamps(type: :utc_datetime_usec)
   end
 
+  # `jwks_uri` and `token_endpoint_auth_signing_alg` are deliberately ABSENT.
+  # DCR is an anonymous public POST, and casting them there would persist two
+  # unbounded attacker-controlled strings that no DCR client can ever use (the
+  # auth-method allowlist refuses `private_key_jwt` on that path). CIMD sets
+  # them explicitly in `cimd_changeset/3`, where they came from a document
+  # served by the vendor's own host.
   @cast_fields ~w(redirect_uris client_name scope grant_types response_types
                   token_endpoint_auth_method software_id software_version
                   logo_uri tos_uri policy_uri
@@ -95,6 +127,148 @@ defmodule Engram.OAuth.Client do
   @doc "True when the registered auth method requires a client secret."
   @spec confidential?(String.t() | nil) :: boolean()
   def confidential?(method), do: method in @confidential_auth_methods
+
+  @doc "The auth methods a CIMD document may declare (see `@cimd_auth_methods`)."
+  def cimd_auth_methods, do: @cimd_auth_methods
+
+  @doc """
+  True when the client's own document permits authenticating with no credential.
+
+  Read off `token_endpoint_auth_methods_supported`, never off the request. The
+  set comes from a document served by the vendor's host, so honouring it is not
+  the same as letting a caller choose its own method at token time — that is
+  still refused, and is what keeps the registered method from being decorative.
+
+  PKCE is mandatory on the exchange regardless (`check_pkce_verifier/2`), so a
+  public-client exchange is still bound to the request that started it.
+
+  NULL is deliberately `false`: a row written before the column existed never
+  had the set read off its document, and widening on that absence would grant
+  public auth to a client that may never have offered it.
+  """
+  def public_auth_permitted?(client), do: "none" in permitted_auth_methods(client)
+
+  @doc """
+  True when the client's own document permits authenticating with an assertion.
+
+  The mirror of `public_auth_permitted?/1`, and it exists because the first fix
+  for #1633 only corrected one direction. `assertion_based?/1` reads the
+  PREFERRED method alone, so a document preferring `none` while also supporting
+  `private_key_jwt` had its assertions refused as `:assertion_not_expected` —
+  the same "preference treated as a requirement" mistake, pointing the other
+  way. No vendor is known to publish that shape, which is precisely why it would
+  have sat undiscovered until one did.
+  """
+  def assertion_permitted?(client) do
+    Enum.any?(permitted_auth_methods(client), &(&1 in @assertion_auth_methods))
+  end
+
+  @doc """
+  Every auth method the client's document allows, preferred one included.
+
+  `token_endpoint_auth_method` is a PREFERENCE, not the only permitted value, so
+  the effective set is the union of it and
+  `token_endpoint_auth_methods_supported`. Deriving both predicates from one
+  place is what stops the two halves drifting apart again.
+
+  A row predating the supported-set column yields just `[preferred]`, so NULL
+  still cannot widen anything — it reproduces the behaviour that row shipped
+  with, and repopulates on the next document refetch.
+  """
+  def permitted_auth_methods(%__MODULE__{} = client) do
+    supported = client.token_endpoint_auth_methods_supported || []
+
+    [client.token_endpoint_auth_method | supported]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  def permitted_auth_methods(_client), do: []
+
+  @doc """
+  `assertion_permitted?/1` for a RAW DOCUMENT, before any row exists.
+
+  `Engram.OAuth.Cimd.validate_document/2` decides at authorize time whether a
+  `jwks_uri` is required and fetchable. Those checks only make sense for a
+  document that can present an assertion, and that question must be answered the
+  SAME way here as it is at token time — otherwise a document passes validation
+  and then cannot authenticate, which is the drift that produced #1640.
+
+  Concretely: gating those checks on the preferred method alone let a document
+  preferring `none` while supporting `private_key_jwt` skip both `jwks_uri`
+  arms, persist an unvalidated URI, and turn every later exchange into a
+  retried-forever 503 instead of a legible refusal at authorize.
+
+  Rather than re-deriving the rule, this and `cimd_changeset/3` both read
+  `document_permitted_auth_methods/1`. Agreement is structural rather than a
+  coincidence of two lists that happen to match today: there is one permitted
+  set, the changeset stores a member of it, and the row path unions that stored
+  member back with the same stored set.
+
+  That filter keeps `@cimd_auth_methods` only, so a method the CIMD path refuses
+  cannot widen the answer, and an absent supported list maps to `[]` rather than
+  `nil`: a document has always been READ, so it must not forge the NULL that
+  means "this row predates the column".
+  """
+  def document_permits_assertion?(document) when is_map(document) do
+    Enum.any?(document_permitted_auth_methods(document), &(&1 in @assertion_auth_methods))
+  end
+
+  def document_permits_assertion?(_document), do: false
+
+  @doc """
+  Every method a raw document permits that this path can actually honour.
+
+  The union of the preferred method and the supported set, filtered to
+  `@cimd_auth_methods`. One list now answers three questions that used to be
+  asked separately and drifted apart: whether the document is connectable at all
+  (`Engram.OAuth.Cimd.validate_document/2`), whether it may present an assertion
+  (`document_permits_assertion?/1`), and which value `cimd_changeset/3` stores.
+
+  EMPTY IS THE REFUSAL. A document whose every permitted method is secret-based
+  has no flow left to run, because no secret was ever minted for a client that
+  did not register. That is the only case `:confidential_not_supported` now
+  covers, and narrowing it to that is the #1634 fix: the preferred method alone
+  was read as a requirement, so a document naming `client_secret_basic` first
+  was refused terminally even when it also permitted `private_key_jwt`.
+
+  An absent preference maps to `none`, not to nothing. Omitting the field has
+  always meant the public flow, and the permitted-set rule must not turn
+  "unstated" into "unusable".
+  """
+  def document_permitted_auth_methods(document) when is_map(document) do
+    preferred = document["token_endpoint_auth_method"] || "none"
+
+    [preferred | supported_auth_methods(document)]
+    |> Enum.filter(&(&1 in @cimd_auth_methods))
+    |> Enum.uniq()
+  end
+
+  def document_permitted_auth_methods(_document), do: []
+
+  # The value `cimd_changeset/3` stores in `token_endpoint_auth_method`.
+  #
+  # The document's own preference wins whenever we can honour it, so a vendor's
+  # stated choice is never silently upgraded. Otherwise the strongest method it
+  # DOES permit is stored, and `none` is never invented: a document permitting
+  # only `private_key_jwt` must not yield a row claiming a public exchange was
+  # allowed.
+  #
+  # With nothing usable the raw preference passes through to fail
+  # `validate_inclusion`, keeping the changeset invalid. `validate_document/2`
+  # refuses those documents earlier on the fetch path, so this is what stops a
+  # direct caller inserting a client that could never authenticate.
+  defp document_auth_method(document) do
+    permitted = document_permitted_auth_methods(document)
+    preferred = document["token_endpoint_auth_method"] || "none"
+
+    cond do
+      preferred in permitted -> preferred
+      "private_key_jwt" in permitted -> "private_key_jwt"
+      "none" in permitted -> "none"
+      true -> document["token_endpoint_auth_method"]
+    end
+  end
 
   @doc """
   The grant and response types this authorization server actually implements.
@@ -159,9 +333,7 @@ defmodule Engram.OAuth.Client do
     |> validate_subset(:response_types, @valid_response_types,
       message: "contains an unsupported response_type"
     )
-    |> validate_inclusion(:token_endpoint_auth_method, @valid_auth_methods,
-      message: "must be one of: #{Enum.join(@valid_auth_methods, ", ")}"
-    )
+    |> validate_auth_method(Keyword.get(opts, :auth_methods, @valid_auth_methods))
     |> validate_length(:client_name, max: @client_name_max_length)
     # Attacker-controlled on a public, unauthenticated endpoint; cap to bound
     # row/metadata size.
@@ -183,10 +355,13 @@ defmodule Engram.OAuth.Client do
 
   Two fields are NOT taken from the document:
 
-    * `token_endpoint_auth_method` is forced to `none`. A CIMD client never
-      registered, so no secret was ever minted for it; PKCE is the binding. The
-      caller rejects a document that asks for a confidential method rather than
-      silently downgrading it (see `Engram.OAuth.Cimd`).
+    * `token_endpoint_auth_method` is a method the document PERMITS, not
+      necessarily the one it prefers. The preference wins when we can honour it;
+      otherwise the strongest method the document also permits is stored (see
+      `document_permitted_auth_methods/1`). A document permitting nothing but
+      secret-based methods is refused by the caller rather than downgraded,
+      because no secret was ever minted for a client that did not register (see
+      `Engram.OAuth.Cimd`). `private_key_jwt` carries `jwks_uri` across with it.
     * `software_id` is dropped. It would be attributable here — the document is
       served by the vendor's own host — but it buys nothing: after #1156 the
       `software_id` map names only our own plugin. Storing it would re-grow the
@@ -205,10 +380,26 @@ defmodule Engram.OAuth.Client do
         "tos_uri" => document["tos_uri"],
         "policy_uri" => document["policy_uri"],
         "kind" => "mcp",
-        "token_endpoint_auth_method" => "none"
+        "token_endpoint_auth_method" => document_auth_method(document)
       },
-      max_redirect_uris: @max_redirect_uris_cimd
+      max_redirect_uris: @max_redirect_uris_cimd,
+      auth_methods: @cimd_auth_methods
     )
+    # Only stored when the document can actually authenticate with one. A
+    # `jwks_uri` on a document that permits no assertion method is unusable
+    # decoration, and the policy for unusable optional metadata is already
+    # settled directly above for `logo_uri`: DROP it, never refuse the client
+    # over it, because losing decoration must not cost a vendor its connector.
+    #
+    # Bounding its length instead was the wrong shape. It refused the whole
+    # client over a field that client could not use, and it capped size rather
+    # than junk — `"not-a-url::%%"` was still accepted and stored verbatim.
+    # Not storing it removes the unbounded-string concern entirely and keeps the
+    # validated-on-use invariant: a persisted `jwks_uri` has always been through
+    # `displayable_metadata_uri?/1` and `SsrfGuard.validate_url/1` at authorize.
+    |> put_change(:jwks_uri, usable_jwks_uri(document))
+    |> put_change(:token_endpoint_auth_signing_alg, document["token_endpoint_auth_signing_alg"])
+    |> put_change(:token_endpoint_auth_methods_supported, supported_auth_methods(document))
     |> put_change(:cimd_url, url)
     |> put_change(:cimd_fetched_at, DateTime.utc_now())
     |> validate_length(:cimd_url, max: 2048)
@@ -216,6 +407,31 @@ defmodule Engram.OAuth.Client do
     # first-contact race resolves by re-reading the winner's row instead of
     # raising. Named explicitly: the index is partial, so Ecto cannot infer it.
     |> unique_constraint(:cimd_url, name: :oauth_clients_cimd_url_index)
+  end
+
+  # Only methods we can actually honour are stored. A document is free to
+  # advertise `client_secret_basic`; persisting it would record a permission the
+  # CIMD path refuses anyway, and a later reader would have to re-derive which
+  # entries were real.
+  #
+  # An absent list becomes `[]`, not NULL: the document WAS read and named
+  # nothing usable, which is a different fact from a row that predates the
+  # column. Only the latter may not be widened. A document declaring
+  # `private_key_jwt` and no supported set therefore keeps requiring an
+  # assertion, which is the strictest reading of what it offered.
+  # NULL unless the document permits an assertion method. Paired with the two
+  # `validate_document/2` arms that run for exactly the same predicate, this
+  # makes a stored `jwks_uri` mean "already validated", and clears a stale one
+  # on refresh if a vendor narrows its permitted set.
+  defp usable_jwks_uri(document) do
+    if document_permits_assertion?(document), do: document["jwks_uri"]
+  end
+
+  defp supported_auth_methods(document) do
+    case document["token_endpoint_auth_methods_supported"] do
+      methods when is_list(methods) -> Enum.filter(methods, &(&1 in @cimd_auth_methods))
+      _absent -> []
+    end
   end
 
   # DCR is a public endpoint:
@@ -226,6 +442,16 @@ defmodule Engram.OAuth.Client do
   #     break the revoke button.
   #   - Anything else: log + default to "mcp" so legitimate typos aren't
   #     hostile UX, but we can grep the logs for "kind drift" later.
+  # The allowlist is a parameter rather than a constant because DCR and CIMD ask
+  # different questions of the same field. Passing it in keeps ONE changeset
+  # rather than growing a second, drift-prone CIMD validation path — the mistake
+  # that caused the 2026-08-04 outage, in the opposite direction.
+  defp validate_auth_method(changeset, allowed) do
+    validate_inclusion(changeset, :token_endpoint_auth_method, allowed,
+      message: "must be one of: #{Enum.join(allowed, ", ")}"
+    )
+  end
+
   defp coerce_kind(changeset) do
     case get_field(changeset, :kind) do
       "mcp" ->

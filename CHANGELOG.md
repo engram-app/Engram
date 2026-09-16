@@ -1,5 +1,72 @@
 # Changelog
 
+## [0.28.0](https://github.com/engram-app/Engram/compare/0.27.2...0.28.0) (2026-09-16)
+
+
+### Features
+
+* **oauth:** daily CIMD document refresh sweep ([#1658](https://github.com/engram-app/Engram/issues/1658)) ([d220055](https://github.com/engram-app/Engram/commit/d220055b5409a966ce9ae137d1734336ba8c55b2)), closes [#1642](https://github.com/engram-app/Engram/issues/1642)
+
+
+### Bug Fixes
+
+* **oauth:** accept CIMD docs by permitted methods ([#1653](https://github.com/engram-app/Engram/issues/1653)) ([0601b2a](https://github.com/engram-app/Engram/commit/0601b2ad8e9f5f58edbea1a160be639a6c8b5e0e)), closes [#1634](https://github.com/engram-app/Engram/issues/1634)
+
+## [0.27.2](https://github.com/engram-app/Engram/compare/0.27.1...0.27.2) (2026-09-16)
+
+
+### Bug Fixes
+
+* **billing:** stop paging on canceled subs from deleted accounts ([#1651](https://github.com/engram-app/Engram/issues/1651)) ([6febb1e](https://github.com/engram-app/Engram/commit/6febb1eb99fce0813b2daba443d0cded249d553a))
+
+## [0.27.1](https://github.com/engram-app/Engram/compare/0.27.0...0.27.1) (2026-09-16)
+
+
+### Bug Fixes
+
+* **oauth:** log every client refusal, then consolidate OAuth + MCP ([#1645](https://github.com/engram-app/Engram/issues/1645)) ([38a9654](https://github.com/engram-app/Engram/commit/38a965424b342d6e4b88319dff1fde13186a4514))
+
+## [0.27.0](https://github.com/engram-app/Engram/compare/0.26.3...0.27.0) (2026-09-15)
+
+
+### Features
+
+* **oauth:** accept private_key_jwt on CIMD ([#1637](https://github.com/engram-app/Engram/issues/1637)) ([58b157d](https://github.com/engram-app/Engram/commit/58b157d5ba340847fd9eac8162b4778c3947975b)), closes [#1633](https://github.com/engram-app/Engram/issues/1633)
+
+
+### Bug Fixes
+
+* **oauth:** derive both auth directions from the document's permitted set ([#1640](https://github.com/engram-app/Engram/issues/1640)) ([59dcf51](https://github.com/engram-app/Engram/commit/59dcf511dfa1ca6a0d3375a4d30c025fc3553c44)), closes [#1633](https://github.com/engram-app/Engram/issues/1633)
+* **oauth:** honour a CIMD document's permitted auth methods, not just its preferred one ([#1639](https://github.com/engram-app/Engram/issues/1639)) ([20d0f31](https://github.com/engram-app/Engram/commit/20d0f31d9decaae9601a9b628eda683514d92ba7)), closes [#1633](https://github.com/engram-app/Engram/issues/1633)
+* **oauth:** stop persisting a jwks_uri the document cannot use ([#1644](https://github.com/engram-app/Engram/issues/1644)) ([98f6cb6](https://github.com/engram-app/Engram/commit/98f6cb661c13665b8609aa6e040b6ff10eac4609)), closes [#1633](https://github.com/engram-app/Engram/issues/1633)
+
+## [0.26.3](https://github.com/engram-app/Engram/compare/0.26.2...0.26.3) (2026-09-15)
+
+
+### Bug Fixes
+
+* **indexing:** scope note-count reads to a tenant, not skip the guard ([#1632](https://github.com/engram-app/Engram/issues/1632)) ([1f336bf](https://github.com/engram-app/Engram/commit/1f336bfab1bb11417c2ad3cb82ad587c02d17355))
+* **search:** make ReindexKeyword actually re-normalize a vault ([#1477](https://github.com/engram-app/Engram/issues/1477)) ([#1631](https://github.com/engram-app/Engram/issues/1631)) ([4601be9](https://github.com/engram-app/Engram/commit/4601be94c66ffcfeb4a0d06d0a033c87c9bc62e3))
+* **search:** rebuild notes whose chunks came from an older chunker ([#1620](https://github.com/engram-app/Engram/issues/1620)) ([#1628](https://github.com/engram-app/Engram/issues/1628)) ([d8e0d2c](https://github.com/engram-app/Engram/commit/d8e0d2cf85206202fb1f03c89bfcf50328ba1f7d))
+
+## [0.26.2](https://github.com/engram-app/Engram/compare/0.26.1...0.26.2) (2026-09-13)
+
+
+### Bug Fixes
+
+* **billing:** meter only the bytes a pass actually embeds ([#1618](https://github.com/engram-app/Engram/issues/1618)) ([0f9d965](https://github.com/engram-app/Engram/commit/0f9d9650dd3672712ee90ed27a5bb90113f05280))
+* **search:** clear chunk hmacs when OrphanSweep flags a note for re-index ([#1607](https://github.com/engram-app/Engram/issues/1607)) ([0f9d965](https://github.com/engram-app/Engram/commit/0f9d9650dd3672712ee90ed27a5bb90113f05280))
+* **search:** create missing Qdrant payload indexes so folder, tag, type and date filters work ([#1609](https://github.com/engram-app/Engram/issues/1609)) ([0f9d965](https://github.com/engram-app/Engram/commit/0f9d9650dd3672712ee90ed27a5bb90113f05280))
+* **search:** keep the whole note body when frontmatter has multibyte characters or CRLF ([#1605](https://github.com/engram-app/Engram/issues/1605)) ([0f9d965](https://github.com/engram-app/Engram/commit/0f9d9650dd3672712ee90ed27a5bb90113f05280))
+* **search:** make chunk reuse tier- and model-aware so upgraded users get semantic search ([#1606](https://github.com/engram-app/Engram/issues/1606)) ([0f9d965](https://github.com/engram-app/Engram/commit/0f9d9650dd3672712ee90ed27a5bb90113f05280))
+* **search:** send input_type and output_dimension to Voyage ([#1614](https://github.com/engram-app/Engram/issues/1614)) ([0f9d965](https://github.com/engram-app/Engram/commit/0f9d9650dd3672712ee90ed27a5bb90113f05280))
+* **search:** stop deleted notes answering searches ([#1608](https://github.com/engram-app/Engram/issues/1608)) ([0f9d965](https://github.com/engram-app/Engram/commit/0f9d9650dd3672712ee90ed27a5bb90113f05280))
+
+
+### Performance Improvements
+
+* **search:** make MMR re-ranking linear in the result limit ([#1617](https://github.com/engram-app/Engram/issues/1617)) ([0f9d965](https://github.com/engram-app/Engram/commit/0f9d9650dd3672712ee90ed27a5bb90113f05280))
+
 ## [0.26.1](https://github.com/engram-app/Engram/compare/0.26.0...0.26.1) (2026-09-11)
 
 

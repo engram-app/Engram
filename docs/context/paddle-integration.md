@@ -138,12 +138,24 @@ Four observability layers on the webhook + a daily reconciliation. Each is indep
 
    | Kind | Meaning |
    |------|---------|
-   | `:missing_local` | Paddle has the subscription, we don't (most likely silent-200 swallowed-error or a missed webhook). |
+   | `:missing_local` | Paddle has the subscription, we don't (most likely silent-200 swallowed-error or a missed webhook). **Excludes `canceled` Paddle subs** — see below. |
    | `:status_mismatch` | `paddle.status != local.status`. |
    | `:tier_mismatch` | Price ID maps to a different tier than `local.tier`. |
    | `:period_mismatch` | `current_billing_period.ends_at` disagrees by more than 120 seconds. |
 
    Each entry logs at `:error` (Sentry-captured). Worker always returns `:ok` — drift is *signal*, not job failure, so Oban shouldn't retry it.
+
+   **`:missing_local` skips `canceled` Paddle subs, by design.** A hard-deleted
+   account cancels its Paddle subscription `:immediately` and then cascade-deletes
+   the local `subscriptions` row with the user, so Paddle legitimately holds a
+   canceled sub we have no row for — and re-ticks its `updated_at` at cancel time,
+   which drags it back into the 7-day window every night for a week. That paged
+   prod on 2026-09-15. Nothing is owed and no entitlement is at stake, so it is not
+   drift. The skip is logged at `:info` as `paddle_reconcile_canceled_orphan_skipped`
+   with the subscription id — **grep that before concluding reconciliation is
+   broken.** `active`/`past_due`/`paused` with no local row still pages; that is
+   the case that catches a hard-delete whose best-effort Paddle cancel failed and
+   left us billing a deleted customer.
 
    Manual one-off:
 
@@ -155,6 +167,10 @@ Four observability layers on the webhook + a daily reconciliation. Each is indep
 
 When you see `paddle_reconciliation_drift` in Sentry or the logs:
 
+0. If you expected a page and got silence, check for
+   `paddle_reconcile_canceled_orphan_skipped` — the sub is canceled and the local
+   row went with a deleted account. Only worth chasing if Paddle billed it after
+   the account was deleted.
 1. Note `paddle_subscription_id` and `drift_kind`.
 2. `paddle get /subscriptions/<id>` (or the Paddle dashboard) to confirm Paddle's current state.
 3. Replay the missed webhook event:

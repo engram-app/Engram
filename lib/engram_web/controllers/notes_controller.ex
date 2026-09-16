@@ -11,8 +11,6 @@ defmodule EngramWeb.NotesController do
 
   require Logger
 
-  @max_note_bytes 10 * 1024 * 1024
-
   operation(:upsert,
     operation_id: "notes-upsert",
     summary: "Create or update a note",
@@ -37,7 +35,7 @@ defmodule EngramWeb.NotesController do
   def upsert(conn, params) do
     content = params["content"] || params[:content] || ""
 
-    if byte_size(content) > @max_note_bytes do
+    if byte_size(content) > Notes.max_note_bytes() do
       conn |> put_status(413) |> json(%{error: "note exceeds maximum size of 10MB"})
     else
       user = conn.assigns.current_user
