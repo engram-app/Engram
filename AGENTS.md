@@ -546,6 +546,10 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 
 **Deploy & Infra**
 - AWS ECS deploy, backups, observability, security checklist → `docs/context/deploy-prod.md`
+- `git push` of a `release-v*` tag is rejected as `already exists` (release-please cuts the tag itself on release-PR merge) → `docs/context/prod-release-verification-gotchas.md`
+- `deploy-prod.yml` is green, or `terraform apply` is green, and you are about to call prod deployed (neither means the rollout finished; no `wait_for_steady_state` anywhere in engram-infra `main/`) → `docs/context/prod-release-verification-gotchas.md`
+- Verifying a prod rollout without AWS credentials, or checking that the WORKER tier rolled and not just web → `docs/context/prod-release-verification-gotchas.md`
+- Loki's newest line stopped advancing after a deploy and logging looks dead (prod logs only on activity; confirm against a pre-deploy quiet window first) → `docs/context/prod-release-verification-gotchas.md`
 - Launch-minimum DR runbook — RDS snapshots, S3 versioning, Qdrant reindex fallback → `docs/context/disaster-recovery.md`
 - Why `_build` cache mount across Docker RUN steps ships stale beams → `docs/context/docker-build-cache-pitfalls.md`
 - Local dev loop, hot reload, IEx tricks → `docs/context/dev-iteration-loop.md`
