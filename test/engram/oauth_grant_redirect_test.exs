@@ -11,17 +11,13 @@ defmodule Engram.OAuthGrantRedirectTest do
   """
   use Engram.DataCase, async: true
 
+  import Engram.OAuthHelpers, only: [code_from_redirect: 1, pkce_pair: 0]
+
   alias Engram.OAuth
   alias Engram.OAuth.RefreshToken
 
   @vendor "https://claude.ai/api/mcp/auth_callback"
   @loopback "http://localhost:9999/steal"
-
-  defp pkce_pair do
-    verifier = 48 |> :crypto.strong_rand_bytes() |> Base.url_encode64(padding: false)
-    challenge = :sha256 |> :crypto.hash(verifier) |> Base.url_encode64(padding: false)
-    {verifier, challenge}
-  end
 
   # Registers a client with `registered` redirects, authorizes against `used`,
   # and exchanges. Returns the token pair.
@@ -43,8 +39,7 @@ defmodule Engram.OAuthGrantRedirectTest do
 
     {:ok, redirect_url} = OAuth.mint_authorization_code(user, validated, :all, nil)
 
-    code =
-      redirect_url |> URI.parse() |> Map.fetch!(:query) |> URI.decode_query() |> Map.get("code")
+    code = code_from_redirect(redirect_url)
 
     {:ok, tokens} =
       OAuth.exchange_authorization_code(%{

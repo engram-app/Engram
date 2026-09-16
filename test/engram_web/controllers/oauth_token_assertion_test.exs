@@ -12,6 +12,7 @@ defmodule EngramWeb.OAuthTokenAssertionTest do
   # async: false — Mox expectations plus the node-global JWKS cache and limiter.
   use EngramWeb.ConnCase, async: false
 
+  import Engram.OAuthHelpers, only: [code_from_redirect: 1, pkce_pair: 0]
   import Mox
 
   alias Engram.OAuth
@@ -65,12 +66,6 @@ defmodule EngramWeb.OAuthTokenAssertionTest do
     )
   end
 
-  defp pkce_pair do
-    verifier = :crypto.strong_rand_bytes(48) |> Base.url_encode64(padding: false)
-    challenge = :crypto.hash(:sha256, verifier) |> Base.url_encode64(padding: false)
-    {verifier, challenge}
-  end
-
   defp mint_code(user, challenge) do
     {:ok, validated} =
       OAuth.validate_authorization_request(%{
@@ -83,8 +78,7 @@ defmodule EngramWeb.OAuthTokenAssertionTest do
       })
 
     {:ok, redirect_url} = OAuth.mint_authorization_code(user, validated, :all, nil)
-    %{query: query} = URI.parse(redirect_url)
-    URI.decode_query(query)["code"]
+    code_from_redirect(redirect_url)
   end
 
   defp assertion(private, overrides \\ %{}) do

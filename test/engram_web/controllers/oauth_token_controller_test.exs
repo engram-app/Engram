@@ -2,25 +2,12 @@ defmodule EngramWeb.OAuthTokenControllerTest do
   use EngramWeb.ConnCase, async: true
 
   import Ecto.Query
+  import Engram.OAuthHelpers, only: [code_from_redirect: 1, pkce_pair: 0]
 
   alias Engram.OAuth
   alias Engram.OAuth.RefreshToken
   alias Engram.Permissions
   alias Engram.Repo
-
-  defp hash_token(raw), do: :crypto.hash(:sha256, raw) |> Base.encode16(case: :lower)
-
-  defp pkce_pair do
-    verifier =
-      :crypto.strong_rand_bytes(48)
-      |> Base.url_encode64(padding: false)
-
-    challenge =
-      :crypto.hash(:sha256, verifier)
-      |> Base.url_encode64(padding: false)
-
-    {verifier, challenge}
-  end
 
   defp register_client(redirect_uri \\ "https://claude.ai/api/mcp/auth_callback") do
     {:ok, client} =
@@ -55,8 +42,7 @@ defmodule EngramWeb.OAuthTokenControllerTest do
     {:ok, redirect_url} =
       OAuth.mint_authorization_code(user, validated, vault_choice, Keyword.get(opts, :label))
 
-    %{query: query} = URI.parse(redirect_url)
-    URI.decode_query(query)["code"]
+    code_from_redirect(redirect_url)
   end
 
   # The live grant row — unconsumed + unrevoked is exactly the pair
@@ -216,7 +202,7 @@ defmodule EngramWeb.OAuthTokenControllerTest do
         })
 
       body = json_response(conn, 200)
-      token_hash = hash_token(body["refresh_token"])
+      token_hash = Engram.Crypto.sha256_hex(body["refresh_token"])
 
       row =
         Repo.one!(
@@ -325,6 +311,61 @@ defmodule EngramWeb.OAuthTokenControllerTest do
       assert Enum.sort(Permissions.scope_ids_from_claims(claims2)) == Enum.sort([a.id, b.id])
       # The ROTATION hop. This is a different row than the one asserted above.
       assert %{label: "Work laptop"} = current_refresh_row(user)
+    end
+
+    # `grant_attrs/3` copies the grant's fields with `Map.take(@grant_fields)`.
+    # Add a column to `RefreshToken`, forget that list, and rotation silently
+    # drops it — a grant losing its label, scope or vault scoping on the first
+    # refresh, with nothing failing. Asserted field-by-field against the
+    # pre-rotation row rather than against literals, so it keeps holding when
+    # this fixture changes.
+    test "rotation preserves every field the grant carries", %{conn: conn} do
+      user = insert(:user)
+      a = insert(:vault, user: user, slug: "tok-grant-attrs-a")
+      b = insert(:vault, user: user, slug: "tok-grant-attrs-b")
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+      {verifier, challenge} = pkce_pair()
+
+      code =
+        mint_code(user, client, redirect_uri, challenge,
+          vault_ids: [a.id, b.id],
+          label: "Work laptop"
+        )
+
+      body =
+        conn
+        |> post("/oauth/token", %{
+          "grant_type" => "authorization_code",
+          "code" => code,
+          "redirect_uri" => redirect_uri,
+          "client_id" => client.client_id,
+          "code_verifier" => verifier
+        })
+        |> json_response(200)
+
+      granted = current_refresh_row(user)
+
+      build_conn()
+      |> post("/oauth/token", %{
+        "grant_type" => "refresh_token",
+        "refresh_token" => body["refresh_token"],
+        "client_id" => client.client_id
+      })
+      |> json_response(200)
+
+      rotated = current_refresh_row(user)
+
+      refute rotated.id == granted.id, "expected rotation to mint a new row, not update one"
+
+      for field <- [:client_id, :user_id, :vault_id, :vault_ids, :label, :scope, :redirect_uri] do
+        assert Map.fetch!(rotated, field) == Map.fetch!(granted, field),
+               "rotation dropped #{field}"
+      end
+
+      # Immutable across rotation by design: the family is what replay detection
+      # revokes (RFC 6749 §10.4).
+      assert rotated.family_id == granted.family_id
     end
 
     test "a legacy refresh token with only vault_id still mints a scoped access token",
@@ -525,7 +566,7 @@ defmodule EngramWeb.OAuthTokenControllerTest do
         })
 
       body = json_response(conn2, 200)
-      new_token_hash = hash_token(body["refresh_token"])
+      new_token_hash = Engram.Crypto.sha256_hex(body["refresh_token"])
 
       new_row =
         Repo.one!(

@@ -199,27 +199,36 @@ defmodule Engram.OAuth.Client do
   arms, persist an unvalidated URI, and turn every later exchange into a
   retried-forever 503 instead of a legible refusal at authorize.
 
-  Filtered through `@cimd_auth_methods` FIRST, exactly as `supported_auth_methods/1`
-  filters what gets stored. Without that the agreement is a coincidence of the
-  two lists rather than a property: add a method to `@assertion_auth_methods`
-  and not to `@cimd_auth_methods`, and this would answer `true` for a document
-  whose stored row drops the method, so every assertion it then sent would be
-  refused `:assertion_not_expected`. Filtering makes the claim above true
-  instead of merely currently-accurate.
+  Rather than re-deriving the rule, this BUILDS the row `cimd_changeset/3` would
+  persist for the document — the preferred method with the same `|| "none"`
+  default and the same `@cimd_auth_methods` restriction its `validate_inclusion`
+  applies, the supported set through the same `supported_auth_methods/1` filter —
+  and asks `assertion_permitted?/1`. Agreement is then structural rather than a
+  coincidence of two lists that happen to match today: there is one rule, and the
+  only way the two answers can diverge is if the values built here stop matching
+  the values the changeset writes, which is a single edit in a single function.
+
+  `supported_auth_methods/1` keeps the `@cimd_auth_methods` filter, so a method
+  the CIMD path refuses cannot widen the answer. It also maps both an absent key
+  and `[]` to `[]`, never `nil`: a document has always been READ, so it must not
+  forge the NULL that means "this row predates the column".
   """
   def document_permits_assertion?(document) when is_map(document) do
-    supported =
-      case document["token_endpoint_auth_methods_supported"] do
-        methods when is_list(methods) -> methods
-        _absent -> []
-      end
-
-    [document["token_endpoint_auth_method"] | supported]
-    |> Enum.filter(&(&1 in @cimd_auth_methods))
-    |> Enum.any?(&(&1 in @assertion_auth_methods))
+    assertion_permitted?(%__MODULE__{
+      token_endpoint_auth_method: cimd_auth_method(document["token_endpoint_auth_method"]),
+      token_endpoint_auth_methods_supported: supported_auth_methods(document)
+    })
   end
 
   def document_permits_assertion?(_document), do: false
+
+  # `cimd_changeset/3` runs `validate_inclusion` against `@cimd_auth_methods` on
+  # this field, so a document naming a method the CIMD path does not implement is
+  # refused outright. Passing the raw value through would let it answer for a row
+  # that can never exist — harmless while every assertion method is also a CIMD
+  # method, and a silent divergence the day one is not.
+  defp cimd_auth_method(method) when method in @cimd_auth_methods, do: method
+  defp cimd_auth_method(_method), do: "none"
 
   @doc """
   The grant and response types this authorization server actually implements.

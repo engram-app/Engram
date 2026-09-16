@@ -37,7 +37,8 @@ defmodule Engram.OAuth.Cimd.JwksCache do
     table: :engram_cimd_jwks_cache,
     ttl: :timer.hours(1)
 
-  alias Engram.Logger.Metadata
+  alias Engram.OAuth
+  alias Engram.OAuth.Cimd
   alias Engram.OAuth.Cimd.Fetcher
   alias EngramWeb.RateLimiter
 
@@ -95,13 +96,7 @@ defmodule Engram.OAuth.Cimd.JwksCache do
         # The vendor's endpoint answered with something unusable, or not at
         # all. Logged with the host because the whole point of this series is
         # that a vendor failing must be attributable to THAT vendor.
-        Logger.warning(
-          "mcp_jwks_unusable",
-          Metadata.with_category(:warning, :lifecycle,
-            cimd_host: host_of(jwks_uri),
-            reason: Metadata.safe_reason(unusable_reason(other))
-          )
-        )
+        OAuth.log_refusal("mcp_jwks_unusable", jwks_uri, unusable_reason(other))
 
         {:error, :jwks_unavailable}
     end
@@ -117,11 +112,9 @@ defmodule Engram.OAuth.Cimd.JwksCache do
   # the client a terminal 401 for a condition that would have succeeded a second
   # later. Same split `Engram.OAuth.cimd_error/1` already makes.
   defp rate_limit(jwks_uri, bucket_prefix, limit) do
-    case RateLimiter.hit(bucket_prefix <> host_of(jwks_uri), @window_ms, limit, :cimd_fetch) do
+    case RateLimiter.hit(bucket_prefix <> Cimd.host_of(jwks_uri), @window_ms, limit, :cimd_fetch) do
       {:allow, _} -> :ok
       {:deny, _} -> {:error, :jwks_rate_limited}
     end
   end
-
-  defp host_of(jwks_uri), do: URI.parse(jwks_uri).host || "unknown"
 end

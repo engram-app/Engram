@@ -72,13 +72,11 @@ defmodule Engram.OAuth.Cimd do
   import Ecto.Query
 
   alias Engram.Http.SsrfGuard
-  alias Engram.Logger.Metadata
+  alias Engram.OAuth
   alias Engram.OAuth.Cimd.Fetcher
   alias Engram.OAuth.Client
   alias Engram.Repo
   alias EngramWeb.RateLimiter
-
-  require Logger
 
   @ttl_seconds 24 * 3600
 
@@ -318,7 +316,28 @@ defmodule Engram.OAuth.Cimd do
     end
   end
 
-  defp host_of(url), do: URI.parse(url).host || "unknown"
+  @doc """
+  The host of a URL, or `"unknown"`.
+
+  Public because it is the one host renderer for the whole OAuth tree: the
+  rate-limit buckets here, `Engram.OAuth.log_refusal/3`, and
+  `Engram.OAuth.Cimd.JwksCache`'s buckets all key on it. It existed five times,
+  and the copy inside this module's own logger had dropped the `|| "unknown"`
+  fallback — so one emitter could write `cimd_host: nil` into the field the
+  `mcp-connector-refused` alert facets on while every sibling wrote `"unknown"`.
+
+  Guard-narrowed rather than `URI.parse(url).host || "unknown"`: dialyzer
+  cannot prove the `||` discharges the `nil` in `%URI{}.host`, and it runs with
+  `:missing_range` here. Widening the spec to `String.t() | nil` would be the
+  wrong repair — a nil in this field is the drift this function exists to end.
+  """
+  @spec host_of(String.t()) :: String.t()
+  def host_of(url) do
+    case URI.parse(url) do
+      %URI{host: host} when is_binary(host) -> host
+      _no_host -> "unknown"
+    end
+  end
 
   # THE binding. Everything else is metadata; this is what ties the document to
   # the URL, and therefore the client's identity to a host only its vendor can
@@ -490,24 +509,5 @@ defmodule Engram.OAuth.Cimd do
   # Loki (`:auth` info does not — see Engram.Logger.Category), and the host is
   # all the classification needs. This is the tripwire for "CIMD was advertised
   # and something on the new path is refusing real clients".
-  defp log(event, url, reason) do
-    Logger.warning(
-      event,
-      Metadata.with_category(:warning, :lifecycle,
-        cimd_host: URI.parse(url).host,
-        reason: format_reason(reason)
-      )
-    )
-  end
-
-  # Field NAMES, never the changeset messages. Several of those interpolate the
-  # offending value (`"missing scheme: #{uri}"`), which is attacker-supplied on
-  # an unauthenticated endpoint — the same reason the host, not the URL, is
-  # logged above. The names are ours, and they are the whole diagnosis: on
-  # 2026-08-04 a bare `:invalid_document` left us unable to say which field of a
-  # vendor's document had killed every Claude connection.
-  defp format_reason({:invalid_document, errors}),
-    do: "invalid_document fields=#{inspect(errors |> Keyword.keys() |> Enum.uniq())}"
-
-  defp format_reason(reason), do: inspect(reason)
+  defp log(event, url, reason), do: OAuth.log_refusal(event, url, reason)
 end
