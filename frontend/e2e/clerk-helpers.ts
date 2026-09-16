@@ -14,11 +14,6 @@ export interface AuthState {
 	email: string;
 	password: string;
 	clerk_user_id: string;
-	/** A second user global-setup deliberately leaves un-onboarded. Absent on
-	 *  older state files, so treat it as optional and skip when missing. */
-	pending_email?: string;
-	pending_password?: string;
-	pending_clerk_user_id?: string;
 	skipped: boolean;
 }
 

@@ -12,25 +12,38 @@ import { clerkSignIn, loadAuthState } from "./clerk-helpers";
  * (#1666). One real user burned five hours against that wall.
  *
  * This is the only test in either suite that is an UN-ONBOARDED user. Every
- * other fixture — this file's global-setup, e2e/helpers/oauth.py,
+ * other fixture — global-setup.ts, e2e/helpers/oauth.py,
  * e2e/helpers/clerk_auth.py — pre-completes onboarding before the first
  * assertion, which is precisely why the harness could never reach the broken
  * state and the bug shipped.
  *
+ * The user is provisioned HERE rather than in global-setup, because the test
+ * consumes it: finishing the wizard is the thing under test, so a second
+ * attempt against the same user would find nothing to bounce. Per-attempt
+ * provisioning is what makes the spec survive Playwright's retry.
+ *
  * It is also the only place the SPA talks to the real backend across this
  * path. Every unit test mocks `../api/oauth`, so nothing else verifies that
- * `/api/oauth/clients/:id?redirect_uri=` actually returns `slug` in the shape
- * the consent page reads, or that the browser's pre-answer POST lands and
- * makes `next_step` skip `tools`.
+ * `/api/oauth/clients/:id?redirect_uri=` returns `slug` in the shape the
+ * consent page reads, or that the browser's pre-answer POST lands and makes
+ * `next_step` skip `tools`.
+ *
+ * Note: this test creates a vault and a welcome note, so `db-cleanup.ts`'s
+ * `DELETE FROM users` warns on the `notes_user_id_fkey` constraint at
+ * teardown. The Clerk user is still removed below; only the backend row
+ * lingers, which is harmless on an ephemeral CI database.
  */
 
+const CLERK_API = "https://api.clerk.com/v1";
 const CLERK_BACKEND_PORT = process.env.PW_CLERK_BACKEND_PORT ?? "4001";
 const CLERK_VITE_PORT = process.env.PW_CLERK_VITE_PORT ?? "5174";
+const SECRET_KEY = process.env.E2E_CLERK_SECRET_KEY ?? "";
 
 // Loopback on the SPA's own origin, so approving cannot navigate the browser
 // off-box. The page 404s; the assertion is on the URL, which is where the
 // authorization code is delivered.
-const REDIRECT_URI = `http://localhost:${CLERK_VITE_PORT}/oauth-callback-test`;
+const CALLBACK_PATH = "/oauth-callback-test";
+const REDIRECT_URI = `http://localhost:${CLERK_VITE_PORT}${CALLBACK_PATH}`;
 
 // "Claude Code" normalizes to the `claude_code` catalog slug via
 // LogoAllowlist's client_name fallback — the path loopback clients take, since
@@ -63,6 +76,40 @@ async function registerClient(): Promise<string> {
 	return body.client_id as string;
 }
 
+/** A fresh Clerk user with NO onboarding performed. The omission is the point. */
+async function createUnonboardedUser(): Promise<{ email: string; id: string }> {
+	const ts = Date.now();
+	const email = `e2e-browser-pending-${ts}@test.com`;
+
+	const resp = await fetch(`${CLERK_API}/users`, {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${SECRET_KEY}`,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify({
+			email_address: [email],
+			username: `e2e-pending-${ts}`,
+			password: `pw-${ts}-${Math.random().toString(36).slice(2)}`,
+			skip_password_checks: true,
+		}),
+	});
+
+	if (!resp.ok) {
+		throw new Error(`Clerk pending-user creation failed: ${resp.status} ${await resp.text()}`);
+	}
+
+	const user = await resp.json();
+
+	// No readiness probe here. Clerk's user-list and sign-in-token endpoints can
+	// sit on different read replicas (#455), but `clerkSignIn` already rides
+	// that out: it retries specifically on "No user found" for ~20s with
+	// backoff, which is that lookup lagging. Exporting global-setup's probes to
+	// duplicate the wait would also put mid-file exports in a module the linter
+	// requires to keep its exports last.
+	return { email, id: user.id as string };
+}
+
 function consentUrl(clientId: string): string {
 	const params = new URLSearchParams({
 		client_id: clientId,
@@ -78,21 +125,36 @@ function consentUrl(clientId: string): string {
 
 test.describe("MCP-first signup resumes consent after onboarding", () => {
 	const state = loadAuthState();
+	const skip = state.skipped || !SECRET_KEY;
 
-	test.skip(
-		() => state.skipped || !state.pending_email,
-		"No un-onboarded Clerk user provisioned — needs E2E_CLERK_SECRET_KEY",
-	);
+	let pending: { email: string; id: string } | null = null;
+
+	test.skip(() => skip, "E2E_CLERK_SECRET_KEY not set — Clerk browser tests skipped");
 
 	test.beforeEach(async ({ page }) => {
+		if (skip) {
+			return;
+		}
+		// Per-attempt, not beforeAll: a retry needs its own un-onboarded user.
+		pending = await createUnonboardedUser();
 		await setupClerkTestingToken({ page });
+	});
+
+	test.afterEach(async () => {
+		if (!pending) {
+			return;
+		}
+		await fetch(`${CLERK_API}/users/${pending.id}`, {
+			method: "DELETE",
+			headers: { Authorization: `Bearer ${SECRET_KEY}` },
+		}).catch(() => undefined);
+		pending = null;
 	});
 
 	test("consent → wizard → back to consent → approve", async ({ page }) => {
 		const clientId = await registerClient();
 
-		// The un-onboarded user, NOT the shared pre-onboarded one.
-		await clerkSignIn(page, state.pending_email as string, consentUrl(clientId));
+		await clerkSignIn(page, (pending as { email: string }).email, consentUrl(clientId));
 
 		// 1. Bounced into the wizard rather than shown an Approve button that
 		//    would mint an unusable grant.
@@ -111,8 +173,7 @@ test.describe("MCP-first signup resumes consent after onboarding", () => {
 		//    and `subscription_ok` auto-pass and `build_steps/2` yields only
 		//    tools → vault. Handle whichever this environment serves instead of
 		//    assuming, so the spec does not encode one deployment's config.
-		await page.waitForURL(/\/onboard\//u, { timeout: 20_000 });
-
+		//
 		// The tool question must never render: the connecting client already
 		// answered it. Asserted before walking the wizard so a failed
 		// pre-answer reports as itself rather than as a later timeout.
@@ -130,26 +191,33 @@ test.describe("MCP-first signup resumes consent after onboarding", () => {
 
 		// 4. The vault step, reached without ever showing tools.
 		await page.waitForURL(/\/onboard\/vault/u, { timeout: 20_000 });
-
-		// 6. First vault.
 		await page.getByRole("button", { name: /starting fresh/iu }).click();
 		await page.getByLabel(/vault name/iu).fill("E2E Consent Vault");
 		await page.getByRole("button", { name: /create vault & continue/iu }).click();
 
-		// 7. Returned to the authorization, with the request intact. `state` is
+		// 5. Returned to the authorization, with the request intact. `state` is
 		//    the whole point: an OAuth client rejects a callback whose state
 		//    does not match what it sent.
 		await page.waitForURL(/\/oauth\/consent/u, { timeout: 25_000 });
 		expect(new URL(page.url()).searchParams.get("state")).toBe(STATE);
 		expect(new URL(page.url()).searchParams.get("client_id")).toBe(clientId);
 
-		// 8. Approving now yields a code, which is what was impossible before.
+		// 6. Approving now yields a code, which is what was impossible before.
+		//
+		// Matched on PATHNAME, not a substring. The consent page's own URL
+		// carries `redirect_uri=...%2Foauth-callback-test`, so a loose regex
+		// matches before any navigation happens and the assertions below then
+		// read the consent URL's params instead of the callback's.
 		await page.getByRole("button", { name: /approve/iu }).click();
-		await page.waitForURL(/oauth-callback-test/u, { timeout: 25_000 });
+		await page.waitForURL((url) => new URL(url).pathname === CALLBACK_PATH, {
+			timeout: 25_000,
+		});
 
 		const callback = new URL(page.url());
+		// `error` first: when the grant is refused the callback carries a
+		// reason, and reporting that beats "expected truthy, got null".
+		expect(callback.searchParams.get("error")).toBeNull();
 		expect(callback.searchParams.get("code")).toBeTruthy();
 		expect(callback.searchParams.get("state")).toBe(STATE);
-		expect(callback.searchParams.get("error")).toBeNull();
 	});
 });
