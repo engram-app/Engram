@@ -76,13 +76,16 @@ EXIT_ENVIRONMENT = 2
 #               block.
 #
 #               Also still red: `localhost-host-rebinding-rejected` (we answer
-#               200 to a rebinding Host, Engram#1259). NOT worth fixing:
-#               `ping`, which 2026-07-28 removes outright (SEP-2575) along with
-#               logging/setLevel and roots/list_changed — MCPJam only asks for
-#               it because of the revision we announce. Most capability skips
-#               are resources/prompts/logging, all deprecated in 2026-07-28, so
-#               they resolve to "permanently N/A" rather than to work.
-#               See Engram#1659 for the upgrade.
+#               200 to a rebinding Host, Engram#1259).
+#
+#               `ping` WAS on this list as "not worth fixing, 2026-07-28 removes
+#               it (SEP-2575)". That was wrong, and a staging run caught it:
+#               2026-07-28 is exactly the revision we refuse, and `ping` is a
+#               base-protocol MUST in all three we do announce. Now answered.
+#
+#               Most remaining capability skips are resources/prompts/logging,
+#               all deprecated in 2026-07-28, so they resolve to "permanently
+#               N/A" rather than to work. See Engram#1659 for the upgrade.
 #
 # `spec` is not a consolation prize: it is the stage that caught all three
 # discovery bugs on 2026-08-05 while the MCPJam matrix was green.
