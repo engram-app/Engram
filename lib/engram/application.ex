@@ -33,7 +33,9 @@ defmodule Engram.Application do
         EngramWeb.Telemetry,
         Engram.PromEx,
         Engram.Repo,
+        maintenance_repo_child(),
         boot_canary_guard(),
+        tenancy_guard(),
         {DNSCluster, query: Application.get_env(:engram, :dns_cluster_query) || :ignore},
         {Phoenix.PubSub, name: Engram.PubSub},
         # Subscribes to CacheSync in init, so it must start after PubSub. (Local
@@ -157,6 +159,34 @@ defmodule Engram.Application do
       %{
         id: :engram_boot_canary_guard,
         start: {Engram.Crypto.BootCanaryGuard, :start_link, []},
+        restart: :temporary
+      }
+    end
+  end
+
+  # The cross-tenant pool, started only where a second credential is
+  # configured. `nil` is the common and correct case: self-host runs one pool
+  # (see Engram.Repo.Maintenance), and nothing in :test sets the variable, so
+  # the SQL sandbox only ever owns `Engram.Repo`.
+  defp maintenance_repo_child do
+    if Application.get_env(:engram, :maintenance_repo_enabled, false) do
+      Engram.Repo.Maintenance
+    end
+  end
+
+  # Asks Postgres whether this connection's role is actually subject to RLS,
+  # and whether a maintenance pool exists to do the cross-tenant work if it is.
+  # Must start after Engram.Repo — it runs a query.
+  #
+  # Disabled in :test, where a boot-time query would check out a connection
+  # with no sandbox owner. `Engram.Repo.TenancyGuardTest` drives `enforced?/0`
+  # directly instead, including under a dropped role, which is the part worth
+  # covering.
+  defp tenancy_guard do
+    if Application.get_env(:engram, :tenancy_guard_enabled, true) do
+      %{
+        id: :engram_tenancy_guard,
+        start: {Engram.Repo.TenancyGuard, :start_link, []},
         restart: :temporary
       }
     end

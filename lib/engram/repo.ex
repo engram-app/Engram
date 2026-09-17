@@ -25,6 +25,30 @@ defmodule Engram.Repo do
   def tenant_tables, do: @tenant_tables
 
   @doc """
+  The repo to use for work that legitimately spans tenants.
+
+  Returns `Engram.Repo.Maintenance` where a second credential is configured,
+  and `__MODULE__` otherwise — so a caller reads the same either way and
+  self-host needs no second connection. See `Engram.Repo.Maintenance` for which
+  deployment wants which, and `Engram.Repo.TenancyGuard` for what notices when
+  the answer is wrong.
+
+  Resolved per call rather than at compile time: `MAINTENANCE_DATABASE_URL` is
+  read in `config/runtime.exs`, which runs after this module is built.
+
+  No `@spec`, for the same reason `tenant_tables/0` above carries none: the
+  body returns one of two literal module atoms, so `module()` is a dialyzer
+  `contract_supertype` of the inferred `Engram.Repo | Engram.Repo.Maintenance`.
+  """
+  def maintenance do
+    if Application.get_env(:engram, :maintenance_repo_enabled, false) do
+      Engram.Repo.Maintenance
+    else
+      __MODULE__
+    end
+  end
+
+  @doc """
   Take a transaction-scoped Postgres advisory lock keyed on a string id (a
   note/attachment/source-note UUID, etc). Released automatically at
   commit/rollback — the caller must already be inside a transaction (e.g.
