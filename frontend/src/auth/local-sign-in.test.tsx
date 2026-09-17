@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import LocalSignIn from "./local-sign-in";
 
@@ -7,8 +7,11 @@ const { login } = vi.hoisted(() => ({ login: vi.fn().mockResolvedValue(undefined
 vi.mock("./use-auth-adapter", () => ({
 	useAuthAdapter: () => ({ login, isSignedIn: false }),
 }));
+const { boot } = vi.hoisted(() => ({
+	boot: { state: { registration_mode: "open", bootstrap_pending: false } },
+}));
 vi.mock("./use-bootstrap", () => ({
-	useBootstrap: () => ({ registration_mode: "open", bootstrap_pending: false }),
+	useBootstrap: () => boot.state,
 }));
 
 function renderPage() {
@@ -19,7 +22,10 @@ function renderPage() {
 	);
 }
 
-afterEach(() => vi.clearAllMocks());
+afterEach(() => {
+	vi.clearAllMocks();
+	boot.state = { registration_mode: "open", bootstrap_pending: false };
+});
 
 describe("LocalSignIn", () => {
 	it("renders the sign-in form", () => {
@@ -61,5 +67,39 @@ describe("LocalSignIn sign-up cross-link", () => {
 			</MemoryRouter>,
 		);
 		expect(screen.getByRole("link", { name: /sign up/iu })).toHaveAttribute("href", "/sign-up");
+	});
+});
+
+// The first-run bounce is a SECOND, programmatic /sign-in -> /sign-up hop,
+// nine lines above the visible link. Leaving it bare strands the operator:
+// AuthGuard stashes a device code under `return_to=/link`, this bounce drops
+// it, and the finished signup lands on "/" with the code never redeemed.
+function SignUpProbe() {
+	const { search } = useLocation();
+	return <p data-testid="signup">signup{search}</p>;
+}
+
+describe("LocalSignIn first-run bounce", () => {
+	function renderAt(search: string) {
+		return render(
+			<MemoryRouter initialEntries={[`/sign-in${search}`]}>
+				<Routes>
+					<Route path="/sign-in" element={<LocalSignIn />} />
+					<Route path="/sign-up" element={<SignUpProbe />} />
+				</Routes>
+			</MemoryRouter>,
+		);
+	}
+
+	it("carries the destination into the bootstrap signup", () => {
+		boot.state = { registration_mode: "open", bootstrap_pending: true };
+		renderAt("?return_to=%2Flink");
+		expect(screen.getByTestId("signup")).toHaveTextContent("?return_to=%2Flink");
+	});
+
+	it("bounces bare when nothing sent them here", () => {
+		boot.state = { registration_mode: "open", bootstrap_pending: true };
+		renderAt("");
+		expect(screen.getByTestId("signup")).toHaveTextContent("signup");
 	});
 });

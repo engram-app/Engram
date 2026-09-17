@@ -81,11 +81,16 @@ export default function LocalSignIn() {
 
 	// Self-host first-run: bounce to /sign-up so the operator creates the
 	// admin account instead of staring at an unusable sign-in form.
+	//
+	// Carries `return_to` for the same reason the visible link below does —
+	// this is the SECOND /sign-in -> /sign-up hop, and a bare one strands a
+	// first-run operator who arrived holding a destination (e.g. the plugin's
+	// /link?code=, stashed by AuthGuard and never redeemed if we drop it).
 	useEffect(() => {
 		if (bootstrap?.bootstrap_pending) {
-			navigate(ROUTES.SIGN_UP, { replace: true });
+			navigate(authUrlWithReturnTo(ROUTES.SIGN_UP, returnTo), { replace: true });
 		}
-	}, [bootstrap, navigate]);
+	}, [bootstrap, navigate, returnTo]);
 
 	async function handleSubmit(e: FormEvent) {
 		e.preventDefault();
