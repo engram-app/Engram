@@ -77,6 +77,21 @@ const vaultsState = vi.hoisted(() => ({
 	}>,
 }));
 
+// Defaults to a fully onboarded user so every pre-existing test keeps
+// exercising the consent card rather than the bounce.
+const onboardingState = vi.hoisted(() => ({
+	current: { next_step: "done", gate_ok: true, profile: { tools: ["claude"] } } as {
+		next_step: string;
+		// The page reads THIS, not `next_step`. They disagree for obsidian-path
+		// users, who the gate admits while the wizard still parks them on
+		// "vault" awaiting the plugin's first sync.
+		gate_ok: boolean;
+		profile?: { tools?: string[] };
+	},
+}));
+
+const { setProfileMock } = vi.hoisted(() => ({ setProfileMock: vi.fn() }));
+
 const billingState = vi.hoisted(() => ({
 	current: {
 		caps: {
@@ -94,6 +109,8 @@ vi.mock("../api/queries", () => ({
 	useMe: () => ({ data: { email: "todd@example.com" }, isLoading: false }),
 	useVaults: () => ({ data: vaultsState.current, isLoading: false }),
 	useBillingStatus: () => ({ data: billingState.current }),
+	useOnboardingStatus: () => ({ data: onboardingState.current, isLoading: false }),
+	useSetOnboardingProfile: () => ({ mutateAsync: setProfileMock }),
 	useConnections: () => ({
 		data: [
 			{
@@ -175,6 +192,106 @@ afterEach(() => {
 		current_connections: { obsidian: 0, mcp: 0 },
 		device_swap_cooldown_remaining_hours: null,
 	};
+});
+
+// Signing up happens inside the OAuth flow, so this page can be reached by an
+// account with nothing set up. Approving there mints a grant the vault gate
+// refuses on every call (#1666), so the request is parked and the user is sent
+// through the wizard first.
+describe("OAuthAuthorizePage onboarding bounce", () => {
+	const ANTIGRAVITY = {
+		client_id: "cli",
+		client_name: "Google Antigravity",
+		kind: "mcp" as const,
+		slug: "antigravity",
+	};
+
+	afterEach(() => {
+		onboardingState.current = { next_step: "done", gate_ok: true, profile: { tools: ["claude"] } };
+		window.sessionStorage.clear();
+	});
+
+	function probeText(): string {
+		return screen.getByTestId("location-probe").textContent ?? "";
+	}
+
+	it("sends an unfinished user to the wizard instead of offering Approve", async () => {
+		onboardingState.current = { next_step: "agreement", gate_ok: false };
+		fetchOAuthClient.mockResolvedValue(ANTIGRAVITY);
+
+		renderWithProbeAt(VALID_QS);
+
+		await waitFor(() => expect(probeText()).toContain("/onboard"));
+		expect(screen.queryByRole("button", { name: /approve/iu })).toBeNull();
+	});
+
+	// The whole request, query string included, so `state` and the PKCE
+	// challenge survive and the original authorization is still honored.
+	it("parks the request so the wizard can bring them back to it", async () => {
+		onboardingState.current = { next_step: "agreement", gate_ok: false };
+		fetchOAuthClient.mockResolvedValue(ANTIGRAVITY);
+
+		renderWithProbeAt(VALID_QS);
+
+		await waitFor(() =>
+			expect(window.sessionStorage.getItem("engram:pending-oauth")).toContain("/oauth/consent"),
+		);
+		expect(window.sessionStorage.getItem("engram:pending-oauth")).toContain("state=xyz");
+	});
+
+	it("pre-answers the tool question from the connecting client", async () => {
+		onboardingState.current = { next_step: "agreement", gate_ok: false };
+		fetchOAuthClient.mockResolvedValue(ANTIGRAVITY);
+
+		renderWithProbeAt(VALID_QS);
+
+		// `tools_prefilled` is what tells the backend this answer came from the
+		// OAuth client rather than the user, which is what drops the tools step
+		// from the chain. Without it an ordinary signup's counter would freeze.
+		await waitFor(() =>
+			expect(setProfileMock).toHaveBeenCalledWith({
+				tools: ["antigravity"],
+				tools_prefilled: true,
+			}),
+		);
+	});
+
+	it("invents no answer for a client it cannot attribute", async () => {
+		onboardingState.current = { next_step: "agreement", gate_ok: false };
+		fetchOAuthClient.mockResolvedValue({ ...ANTIGRAVITY, slug: null });
+
+		renderWithProbeAt(VALID_QS);
+
+		await waitFor(() => expect(probeText()).toContain("/onboard"));
+		expect(setProfileMock).not.toHaveBeenCalled();
+	});
+
+	it("does not overwrite tools the user already answered", async () => {
+		onboardingState.current = {
+			next_step: "billing",
+			gate_ok: false,
+			profile: { tools: ["cursor"] },
+		};
+		fetchOAuthClient.mockResolvedValue(ANTIGRAVITY);
+
+		renderWithProbeAt(VALID_QS);
+
+		await waitFor(() => expect(probeText()).toContain("/onboard"));
+		expect(setProfileMock).not.toHaveBeenCalled();
+	});
+
+	it("leaves a finished user on consent and drops a stale park", async () => {
+		window.sessionStorage.setItem(
+			"engram:pending-oauth",
+			JSON.stringify({ returnTo: "/oauth/consent?old=1", toolSlug: null }),
+		);
+		fetchOAuthClient.mockResolvedValue(ANTIGRAVITY);
+
+		renderAt(VALID_QS);
+
+		expect(await screen.findByRole("button", { name: /approve/iu })).toBeTruthy();
+		expect(window.sessionStorage.getItem("engram:pending-oauth")).toBeNull();
+	});
 });
 
 describe("OAuthAuthorizePage", () => {

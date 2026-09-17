@@ -8,6 +8,12 @@ export interface OAuthClientMetadata {
 	// DCR rejects "obsidian"; device-flow clients carry that kind. The
 	// backend `oauth_clients_controller.show/2` echoes it from the DB row.
 	kind: "mcp" | "obsidian";
+	// Catalog slug for the connecting client ("antigravity", "claude_code", …),
+	// or null when it cannot be attributed. Resolved server-side from the
+	// redirect the grant is using; the consent page passes it to the wizard so
+	// the FTUX tool question isn't asked of someone who just answered it by
+	// connecting a tool.
+	slug: string | null;
 }
 
 export interface OAuthConsentParams {
@@ -34,8 +40,18 @@ export interface OAuthConsentResponse {
 	redirect_uri: string;
 }
 
-export function fetchOAuthClient(clientId: string): Promise<OAuthClientMetadata> {
-	const url = joinApiUrl(getApiBase(), `/api/oauth/clients/${encodeURIComponent(clientId)}`);
+// `redirectUri` is the one THIS request is using, not the registered list.
+// The backend resolves the client's catalog slug from it and ignores any value
+// the client never registered, so passing it widens nothing.
+export function fetchOAuthClient(
+	clientId: string,
+	redirectUri?: string,
+): Promise<OAuthClientMetadata> {
+	const query = redirectUri ? `?redirect_uri=${encodeURIComponent(redirectUri)}` : "";
+	const url = joinApiUrl(
+		getApiBase(),
+		`/api/oauth/clients/${encodeURIComponent(clientId)}${query}`,
+	);
 	return fetch(url).then((res) => {
 		if (!res.ok) {
 			throw new Error(`oauth client lookup failed: ${res.status}`);

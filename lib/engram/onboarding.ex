@@ -13,12 +13,15 @@ defmodule Engram.Onboarding do
   alias Engram.Accounts
   alias Engram.Legal
   alias Engram.Legal.VersionCache
+  alias Engram.Logger.Metadata
   alias Engram.Onboarding.Action
   alias Engram.Onboarding.Agreement
   alias Engram.Onboarding.GateCache
   alias Engram.Onboarding.TermsCache
   alias Engram.Repo
   alias Engram.Vaults
+
+  require Logger
 
   @terms_document "terms_of_service"
   @privacy_document "privacy_policy"
@@ -186,7 +189,7 @@ defmodule Engram.Onboarding do
     next = next_step(terms_ok, subscription_ok, profile_complete, profile, has_vault)
     steps = build_steps(billing_active, profile)
 
-    %{
+    base = %{
       enabled: true,
       terms_ok: terms_ok,
       subscription_ok: subscription_ok,
@@ -199,6 +202,18 @@ defmodule Engram.Onboarding do
       next_step: next,
       steps: steps
     }
+
+    # The authoritative runtime verdict, derived by the SAME function `gate/2`
+    # enforces with, so a caller can ask "may this user proceed" without
+    # reimplementing the rules.
+    #
+    # It is NOT `next_step == :done`. Wizard navigation and runtime permission
+    # are deliberately decoupled (see `next_step/5`): an obsidian-path user
+    # sits at `:vault` until the plugin first-syncs, while the gate already
+    # admits them. Anything that re-derives the verdict from `next_step` gets
+    # that case backwards — the consent page did, and bounced those users
+    # between consent and the wizard forever.
+    Map.put(base, :gate_ok, gate_missing(base) == [])
   end
 
   @doc """
@@ -254,31 +269,8 @@ defmodule Engram.Onboarding do
   end
 
   defp derive_gate(user, status, opts) do
-    # Every key is destructured, none defaulted. `has_vault` and `profile` used
-    # to come from `Map.get/3` with fail-OPEN defaults three lines under four
-    # strictly-matched siblings: dropping `:next_step` from `status/1` would
-    # raise, while dropping `:has_vault` would silently pass the vault rule for
-    # every user on both transports, with no compile error and no test failure.
-    %{
-      terms_ok: terms_ok,
-      subscription_ok: sub_ok,
-      profile_complete: profile_ok,
-      has_vault: has_vault,
-      profile: profile,
-      next_step: next_step
-    } = status
-
-    profile = profile || %{}
-    # uses_obsidian users bypass the vault gate (the plugin creates the vault).
-    vault_required = profile_ok and Map.get(profile, "uses_obsidian") != true
-
-    missing =
-      []
-      |> then(&if terms_ok, do: &1, else: ["terms" | &1])
-      |> then(&if sub_ok, do: &1, else: ["subscription" | &1])
-      |> then(&if profile_ok, do: &1, else: ["profile" | &1])
-      |> then(&if not vault_required or has_vault, do: &1, else: ["vault" | &1])
-      |> Enum.sort()
+    %{next_step: next_step} = status
+    missing = gate_missing(status)
 
     cond do
       missing == [] ->
@@ -296,17 +288,94 @@ defmodule Engram.Onboarding do
         :ok
 
       true ->
+        # Emitted HERE rather than in `RequireOnboarding`, because both
+        # transports funnel through this function — HTTP via the plug,
+        # sockets via `ChannelGate` — so one line covers both.
+        #
+        # Category `:lifecycle`, NOT `:auth`. The `auth-failure-burst` alert
+        # counts `metadata_category="auth"` at warning-or-above to catch
+        # credential stuffing. An onboarding refusal presents no credentials,
+        # so filing it there would pad a security signal with traffic that is
+        # not a security event — a retry loop like #1666 (twelve attempts over
+        # five hours) is well inside that rule's threshold, so it would not
+        # fire it, just quietly make its baseline dishonest.
+        # `:warning` also guarantees the line reaches Loki
+        # (`Category.loki_ship?/2` is true for warning and above) without
+        # tripping `error-rate`, which matches error severity and up.
+        #
+        # One line per refused request: failing verdicts are never cached
+        # (`GateCache` holds passes only), which is what makes a burst
+        # countable. A user stuck in a retry loop is exactly the shape this
+        # exists to surface — #1666 ran for five hours with no signal at all.
+        Logger.warning(
+          "onboarding refused",
+          Metadata.with_category(:warning, :lifecycle,
+            reason: "onboarding_required",
+            missing: Enum.join(missing, ","),
+            next_step: to_string(next_step),
+            user_id: user.id
+          )
+        )
+
         {:error, missing, next_step}
     end
+  end
+
+  # The sorted list of unmet runtime requirements, or `[]` when the user may
+  # proceed. Single source of truth: `gate/2` enforces with it and `status/1`
+  # publishes its emptiness as `:gate_ok`, so the wire answer and the enforced
+  # answer cannot drift.
+  #
+  # Every key is destructured, none defaulted. `has_vault` and `profile` used
+  # to come from `Map.get/3` with fail-OPEN defaults three lines under four
+  # strictly-matched siblings: dropping `:next_step` from `status/1` would
+  # raise, while dropping `:has_vault` would silently pass the vault rule for
+  # every user on both transports, with no compile error and no test failure.
+  defp gate_missing(%{
+         terms_ok: terms_ok,
+         subscription_ok: sub_ok,
+         profile_complete: profile_ok,
+         has_vault: has_vault,
+         profile: profile
+       }) do
+    profile = profile || %{}
+    # uses_obsidian users bypass the vault gate (the plugin creates the vault).
+    vault_required = profile_ok and Map.get(profile, "uses_obsidian") != true
+
+    []
+    |> then(&if terms_ok, do: &1, else: ["terms" | &1])
+    |> then(&if sub_ok, do: &1, else: ["subscription" | &1])
+    |> then(&if profile_ok, do: &1, else: ["profile" | &1])
+    |> then(&if not vault_required or has_vault, do: &1, else: ["vault" | &1])
+    |> Enum.sort()
   end
 
   # Enumerates the full step chain so the frontend can render "Step X of N"
   # without re-deriving the gate rules. `:tools` collects the questionnaire's
   # tool picks; `:vault` collects the obsidian/fresh source pick and creates
   # (or waits on) the first vault.
-  defp build_steps(billing_active, _profile) do
-    if billing_active, do: [:agreement, :billing, :tools, :vault], else: [:tools, :vault]
+  # `:tools` drops out ONLY when the OAuth client pre-answered it before the
+  # wizard started (the connecting client IS the answer), which is what keeps
+  # the MCP-first header from counting 2-of-4 and then jumping to 4-of-4.
+  #
+  # Keyed on `tools_prefilled`, NOT on "the profile has tools". Keying on the
+  # answer itself regressed every ordinary signup: the moment they submitted
+  # /onboard/tools, `:tools` vanished from their own chain, so self-host went
+  # "Step 1 of 2" then "Step 1 of 1" and the counter never advanced. The chain
+  # must describe the account's intended journey, not its live progress
+  # through it.
+  #
+  # `:vault` never drops: `OnboardVaultPage` is also where `uses_obsidian` is
+  # collected, so it renders even for a user who already has a vault row.
+  defp build_steps(billing_active, profile) do
+    hosted = if billing_active, do: [:agreement, :billing], else: []
+    tools = if tools_prefilled?(profile), do: [], else: [:tools]
+
+    hosted ++ tools ++ [:vault]
   end
+
+  defp tools_prefilled?(%{"tools_prefilled" => true}), do: true
+  defp tools_prefilled?(_), do: false
 
   # Self-host (billing_enabled=false) doesn't run a ToS gate — operators own
   # their legal posture. Hosted mode performs the real cache-backed check.
@@ -340,10 +409,21 @@ defmodule Engram.Onboarding do
   def set_profile(user, attrs) when is_map(attrs) do
     has_tools = Map.has_key?(attrs, :tools)
     has_source = Map.has_key?(attrs, :uses_obsidian)
+    has_prefilled = Map.has_key?(attrs, :tools_prefilled)
 
     cond do
-      not has_tools and not has_source ->
+      not has_tools and not has_source and not has_prefilled ->
         {:error, :nothing_to_set}
+
+      # A qualifier on `tools`, never a standalone fact. Accepting it alone
+      # would let a stray POST mark an ordinary signup's own answer as
+      # pre-filled, silently dropping their tools step out of the chain and
+      # freezing the "Step X of N" counter.
+      has_prefilled and not has_tools ->
+        {:error, :nothing_to_set}
+
+      has_prefilled and not is_boolean(Map.get(attrs, :tools_prefilled)) ->
+        {:error, :invalid_tools_prefilled}
 
       has_tools and not is_list(Map.get(attrs, :tools)) ->
         {:error, :empty_tools}
@@ -363,6 +443,7 @@ defmodule Engram.Onboarding do
         merged =
           existing
           |> maybe_put_field(attrs, :tools, "tools")
+          |> maybe_put_field(attrs, :tools_prefilled, "tools_prefilled")
           |> maybe_put_field(attrs, :uses_obsidian, "uses_obsidian")
           |> maybe_stamp_completed_at()
 

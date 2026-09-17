@@ -57,7 +57,6 @@ export default function MobileLayout() {
 		// biome-ignore lint/nursery/useReactCompiler: closing the drawers is a reaction to navigation, which has no render-phase form -- programmatic navigations (FolderActions' "New note") never pass through the click handler, and keying the Sheets on pathname would remount FolderTree on every route change.
 		setLeftOpen(false);
 		setRightOpen(false);
-		// biome-ignore lint/nursery/useReactCompiler: pathname is a change trigger, not a captured value -- the effect only calls setters. Same reasoning as the useExhaustiveDependencies suppression above.
 	}, [pathname]);
 
 	return (

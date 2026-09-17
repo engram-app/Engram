@@ -7,6 +7,7 @@ import { heading, selectableRow } from "@/lib/ui-classes";
 import { useOnboardingStatus, useSetOnboardingProfile } from "../api/queries";
 import { useIsFreeTier } from "../billing/use-is-free-tier";
 import LoadingScreen from "../layout/loading-screen";
+import { onboardingDoneTarget } from "./onboarding-next";
 import { NO_AI_TOOL, TOOL_ASSISTANTS, TOOL_CODING, type ToolOption } from "./onboarding-tools";
 import { ToolBadge } from "./tool-icon";
 
@@ -216,7 +217,7 @@ export default function OnboardToolsPage() {
 		return <Navigate to={`/onboard/${status.next_step}`} replace />;
 	}
 	if (status.next_step === "done") {
-		return <Navigate to="/" replace />;
+		return <Navigate to={onboardingDoneTarget()} replace />;
 	}
 
 	return (

@@ -14,6 +14,7 @@ import {
 } from "../api/queries";
 import { useConfig } from "../config-context";
 import LoadingScreen from "../layout/loading-screen";
+import { onboardingDoneTarget } from "./onboarding-next";
 import { SyncStatusPill } from "./sync-status-pill";
 import { useVaultReadyEvents } from "./use-vault-ready-events";
 
@@ -77,7 +78,7 @@ function VaultStep({
 			await setProfile.mutateAsync({ uses_obsidian: true });
 			setObsidianCommitted(true);
 		}
-		navigate("/", { replace: true });
+		navigate(onboardingDoneTarget(), { replace: true });
 	}
 
 	async function commitFresh(name: string) {
@@ -90,7 +91,7 @@ function VaultStep({
 		setActiveVaultId(vault.id);
 		// The welcome note is seeded server-side by `Engram.Vaults.WelcomeNote`
 		// on every vault creation, so there is nothing to write here.
-		navigate("/", { replace: true });
+		navigate(onboardingDoneTarget(), { replace: true });
 	}
 
 	return (
@@ -385,7 +386,7 @@ export default function OnboardVaultPage() {
 		return <Navigate to={`/onboard/${status.next_step}`} replace />;
 	}
 	if (status.next_step === "done") {
-		return <Navigate to="/" replace />;
+		return <Navigate to={onboardingDoneTarget()} replace />;
 	}
 
 	return (

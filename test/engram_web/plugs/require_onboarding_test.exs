@@ -170,6 +170,105 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
     assert body["next_step"] == "billing"
   end
 
+  describe "resume_url" do
+    setup do
+      prev = Application.get_env(:engram, :frontend_base_url)
+      on_exit(fn -> Application.put_env(:engram, :frontend_base_url, prev) end)
+      :ok
+    end
+
+    test "403 body carries an absolute resume_url on the frontend host", %{conn: conn} do
+      Application.put_env(:engram, :frontend_base_url, "https://app.engram.page")
+      user = insert(:user, onboarding_profile: %{})
+
+      conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
+
+      body = Phoenix.ConnTest.json_response(conn, 403)
+      assert body["resume_url"] == "https://app.engram.page/onboard"
+    end
+
+    test "a trailing slash on the configured base does not double up", %{conn: conn} do
+      Application.put_env(:engram, :frontend_base_url, "https://app.engram.page/")
+      user = insert(:user, onboarding_profile: %{})
+
+      conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
+
+      body = Phoenix.ConnTest.json_response(conn, 403)
+      assert body["resume_url"] == "https://app.engram.page/onboard"
+    end
+
+    test "falls back to the endpoint host when no frontend base is configured (self-host)",
+         %{conn: conn} do
+      Application.put_env(:engram, :frontend_base_url, nil)
+      user = insert(:user, onboarding_profile: %{})
+
+      conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
+
+      body = Phoenix.ConnTest.json_response(conn, 403)
+      assert body["resume_url"] == EngramWeb.Endpoint.url() <> "/onboard"
+    end
+
+    test "an empty frontend base is treated as unset, not as a bare /onboard", %{conn: conn} do
+      Application.put_env(:engram, :frontend_base_url, "")
+      user = insert(:user, onboarding_profile: %{})
+
+      conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
+
+      body = Phoenix.ConnTest.json_response(conn, 403)
+      assert body["resume_url"] == EngramWeb.Endpoint.url() <> "/onboard"
+    end
+
+    test "403 carries a human-readable message naming the resume URL", %{conn: conn} do
+      Application.put_env(:engram, :frontend_base_url, "https://app.engram.page")
+      user = insert(:user, onboarding_profile: %{})
+
+      conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
+
+      body = Phoenix.ConnTest.json_response(conn, 403)
+      assert body["message"] =~ "https://app.engram.page/onboard"
+      # Prose, not a field dump. A client that shows the message verbatim must
+      # not be showing the user `missing: ["terms"]`.
+      refute body["message"] =~ "missing"
+    end
+
+    test "the 401 path carries no resume_url (nothing to resume)", %{conn: conn} do
+      conn = RequireOnboarding.call(conn, [])
+
+      body = Phoenix.ConnTest.json_response(conn, 401)
+      refute Map.has_key?(body, "resume_url")
+    end
+  end
+
+  # The refusal was invisible to alerting: the only trace in Loki was a
+  # generic `POST 403` whose route is null and whose path is redacted,
+  # indistinguishable from any other 403. #1666 ran for five hours and
+  # nothing fired.
+  test "a refusal emits a warning that alerting can key on", %{conn: conn} do
+    user = insert(:user, onboarding_profile: %{})
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        conn |> assign(:current_user, user) |> RequireOnboarding.call([])
+      end)
+
+    assert log =~ "onboarding refused"
+    assert log =~ "[warning]"
+  end
+
+  test "a passing request logs no refusal", %{conn: conn} do
+    user = insert(:user, onboarding_profile: %{})
+    {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+    insert(:subscription, user: user, status: "active")
+    {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        conn |> assign(:current_user, user) |> RequireOnboarding.call([])
+      end)
+
+    refute log =~ "onboarding refused"
+  end
+
   test "403 includes Content-Type application/json", %{conn: conn} do
     user = insert(:user, onboarding_profile: %{})
     conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])

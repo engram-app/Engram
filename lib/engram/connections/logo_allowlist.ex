@@ -123,12 +123,15 @@ defmodule Engram.Connections.LogoAllowlist do
     # all, unlike every other `logo: nil` entry above, which all pair with a slug
     # that exists in the frontend BRANDS map.
     #
-    # `devin` is deliberately NOT in `Engram.Onboarding.valid_tools/0`: a slug
-    # only *creates* a checklist row when the user picked that tool in the FTUX
-    # questionnaire, and connection slugs merely mark existing rows complete. So
-    # this buys the icon without inventing a row that would need a
-    # `/docs/integrations/devin/` page (that page 404s, and `checklist-widget`'s
-    # #1157 parity test requires one for every SELECTABLE slug).
+    # `devin` IS in `Engram.Onboarding.valid_tools/0` (onboarding.ex:41), so it
+    # is a selectable FTUX answer as well as a connection slug. This comment
+    # previously asserted the opposite; acting on that and removing the slug
+    # would 422 every Devin pre-answer at `set_profile/2`, and the consent
+    # page's pre-answer swallows its own errors, so the only symptom would be
+    # one vendor's users seeing a tools step they should not.
+    #
+    # A slug only *creates* a checklist row when the user picked that tool in
+    # the questionnaire; connection slugs merely mark existing rows complete.
     #
     # Vendor note: Cognition, which makes Devin, acquired Windsurf in 2025 and
     # renamed that IDE "Devin Desktop" on 2026-06-02. Same vendor as the

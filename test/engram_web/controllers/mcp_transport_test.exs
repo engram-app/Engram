@@ -108,4 +108,88 @@ defmodule EngramWeb.McpTransportTest do
       assert get_resp_header(conn, "www-authenticate") == []
     end
   end
+
+  # A gate plug halts in the pipeline, long before McpController runs — so its
+  # refusal went out as the REST body every other API route gets. An MCP client
+  # has no idea what to do with that: it is not a JSON-RPC response, so most
+  # surface "HTTP 403" and drop the body, which is how a user can hit a wall
+  # for hours with the remedy sitting in a field they never see.
+  describe "gate refusals on /api/mcp are JSON-RPC shaped" do
+    defp mcp_authed(conn, user) do
+      user = ensure_external_id(user)
+      token = Engram.Accounts.generate_jwt(user, %{"scope" => "mcp"})
+      put_req_header(conn, "authorization", "Bearer #{token}")
+    end
+
+    test "an onboarding refusal answers a JSON-RPC error with a readable message",
+         %{conn: conn} do
+      user = insert(:user, onboarding_profile: %{})
+
+      conn = conn |> mcp_authed(user) |> call_tool("list_folders", %{})
+
+      # Status is unchanged: every existing assertion and every client that
+      # keys off it still sees a refusal.
+      assert conn.status == 403
+
+      body = Jason.decode!(conn.resp_body)
+      assert body["jsonrpc"] == "2.0"
+      assert is_binary(body["error"]["message"])
+      assert body["error"]["message"] =~ "/onboard"
+      refute Map.has_key?(body, "missing")
+    end
+
+    test "the original REST fields survive under error.data for machine clients",
+         %{conn: conn} do
+      user = insert(:user, onboarding_profile: %{})
+
+      conn = conn |> mcp_authed(user) |> call_tool("list_folders", %{})
+
+      data = Jason.decode!(conn.resp_body)["error"]["data"]
+      assert data["error"] == "onboarding_required"
+      assert data["missing"] == ["profile"]
+      assert is_binary(data["resume_url"])
+    end
+
+    test "the JSON-RPC id from the request is echoed back", %{conn: conn} do
+      user = insert(:user, onboarding_profile: %{})
+
+      conn =
+        conn
+        |> mcp_authed(user)
+        |> post("/api/mcp", %{
+          "jsonrpc" => "2.0",
+          "id" => 4242,
+          "method" => "tools/call",
+          "params" => %{"name" => "list_folders", "arguments" => %{}}
+        })
+
+      assert Jason.decode!(conn.resp_body)["id"] == 4242
+    end
+
+    # 401 is the one refusal that must NOT be reshaped. It is the entry point
+    # to OAuth discovery (RFC 9728 §5.1) and its bare body plus challenge
+    # header is what a spec-following client acts on.
+    test "an unauthenticated 401 is left alone", %{conn: conn} do
+      conn = post(conn, "/api/mcp", %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"})
+
+      assert conn.status == 401
+      body = Jason.decode!(conn.resp_body)
+      refute Map.has_key?(body, "jsonrpc")
+      assert [_challenge] = get_resp_header(conn, "www-authenticate")
+    end
+
+    # Scoping guard, mirroring the challenge one above. The envelope is a
+    # property of the MCP resource; wrapping REST refusals would break every
+    # SPA and plugin caller that reads `error` off the top level.
+    test "the same refusal on a REST route keeps its REST shape", %{conn: conn} do
+      user = insert(:user, onboarding_profile: %{})
+
+      conn = conn |> mcp_authed(user) |> get("/api/notes")
+
+      assert conn.status == 403
+      body = Jason.decode!(conn.resp_body)
+      assert body["error"] == "onboarding_required"
+      refute Map.has_key?(body, "jsonrpc")
+    end
+  end
 end

@@ -124,6 +124,7 @@ defmodule EngramWeb.OnboardingController do
     attrs =
       %{}
       |> maybe_put_attr(params, "tools", :tools)
+      |> maybe_put_attr(params, "tools_prefilled", :tools_prefilled)
       |> maybe_put_attr(params, "uses_obsidian", :uses_obsidian)
 
     if attrs == %{} do
@@ -134,7 +135,13 @@ defmodule EngramWeb.OnboardingController do
           conn |> put_status(:created) |> json(user.onboarding_profile)
 
         {:error, reason}
-        when reason in [:invalid_uses_obsidian, :empty_tools, :invalid_tool] ->
+        when reason in [
+               :invalid_uses_obsidian,
+               :empty_tools,
+               :invalid_tool,
+               :invalid_tools_prefilled,
+               :nothing_to_set
+             ] ->
           conn |> put_status(422) |> json(%{error: Atom.to_string(reason)})
       end
     end

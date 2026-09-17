@@ -153,13 +153,32 @@ defmodule Engram.OnboardingTest do
     end
 
     test "steps stays [:tools, :vault] regardless of profile.uses_obsidian" do
+      # Only `uses_obsidian` is set here, deliberately. This pins that the
+      # SOURCE pick does not reshape the chain; answering `tools` does, and
+      # has its own test below.
       user = insert(:user, onboarding_profile: %{})
-      {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
+      {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true})
       assert %{steps: [:tools, :vault]} = Onboarding.status(user)
 
       user2 = insert(:user, onboarding_profile: %{})
-      {:ok, _} = Onboarding.set_profile(user2, %{uses_obsidian: false, tools: ["claude"]})
+      {:ok, _} = Onboarding.set_profile(user2, %{uses_obsidian: false})
       assert %{steps: [:tools, :vault]} = Onboarding.status(user2)
+    end
+
+    # Answering the question INSIDE the wizard must not remove it from the
+    # chain. Keying the drop on "the profile has tools" did exactly that, so an
+    # ordinary signup read "Step 1 of 2" and then "Step 1 of 1", never
+    # advancing. The chain describes the intended journey, not live progress.
+    test "steps keeps :tools when the user answers it themselves" do
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.set_profile(user, %{tools: ["claude"]})
+      assert %{steps: [:tools, :vault]} = Onboarding.status(user)
+    end
+
+    test "steps drops :tools when an OAuth client pre-answered it" do
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.set_profile(user, %{tools: ["claude"], tools_prefilled: true})
+      assert %{steps: [:vault]} = Onboarding.status(user)
     end
   end
 
@@ -217,7 +236,32 @@ defmodule Engram.OnboardingTest do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
       insert(:subscription, user: user, status: "active")
-      {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
+      {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true})
+      assert %{steps: [:agreement, :billing, :tools, :vault]} = Onboarding.status(user)
+    end
+
+    # The MCP-first path answers `tools` from the OAuth client before the
+    # wizard starts, so the step never renders. Leaving it in the chain made
+    # the header count 2-of-4 and then jump straight to 4-of-4.
+    test "steps drops :tools when an OAuth client pre-answered it" do
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+      insert(:subscription, user: user, status: "active")
+
+      {:ok, _} =
+        Onboarding.set_profile(user, %{tools: ["antigravity"], tools_prefilled: true})
+
+      assert %{steps: [:agreement, :billing, :vault]} = Onboarding.status(user)
+    end
+
+    # The SaaS counterpart of the self-host case above: a user who answers the
+    # questionnaire in the wizard keeps their 4-step chain.
+    test "steps keeps :tools when the user answers it themselves" do
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+      insert(:subscription, user: user, status: "active")
+      {:ok, _} = Onboarding.set_profile(user, %{tools: ["antigravity"]})
+
       assert %{steps: [:agreement, :billing, :tools, :vault]} = Onboarding.status(user)
     end
 
@@ -519,6 +563,38 @@ defmodule Engram.OnboardingTest do
       :ok
     end
 
+    test "tools_prefilled records that an OAuth client answered, not the user" do
+      user = insert(:user, onboarding_profile: %{})
+
+      assert {:ok, updated} =
+               Onboarding.set_profile(user, %{tools: ["claude"], tools_prefilled: true})
+
+      assert updated.onboarding_profile["tools_prefilled"] == true
+    end
+
+    # A qualifier on `tools`, never a standalone fact. Accepted alone, a stray
+    # POST could mark an ordinary signup's own answer as pre-filled, dropping
+    # their tools step out of the chain and freezing "Step X of N".
+    test "tools_prefilled on its own is refused" do
+      user = insert(:user, onboarding_profile: %{})
+
+      assert {:error, :nothing_to_set} = Onboarding.set_profile(user, %{tools_prefilled: true})
+    end
+
+    test "tools_prefilled must be a boolean" do
+      user = insert(:user, onboarding_profile: %{})
+
+      assert {:error, :invalid_tools_prefilled} =
+               Onboarding.set_profile(user, %{tools: ["claude"], tools_prefilled: "yes"})
+    end
+
+    test "an ordinary tools answer leaves tools_prefilled unset" do
+      user = insert(:user, onboarding_profile: %{})
+
+      assert {:ok, updated} = Onboarding.set_profile(user, %{tools: ["claude"]})
+      refute Map.has_key?(updated.onboarding_profile, "tools_prefilled")
+    end
+
     test "stores uses_obsidian + tools + completed_at on the user" do
       user = insert(:user, onboarding_profile: %{})
 
@@ -654,6 +730,40 @@ defmodule Engram.OnboardingTest do
       {:ok, _, _} = Engram.Vaults.register_vault(user, "My Vault", Ecto.UUID.generate())
 
       assert %{has_vault: true, next_step: :done} = Onboarding.status(user)
+    end
+
+    # `gate_ok` and `next_step` disagree here ON PURPOSE: the plugin cannot
+    # create the first vault until the gate already admits it. Anything that
+    # re-derives "may this user proceed" from `next_step` inverts this case.
+    # The consent page did exactly that, and bounced obsidian users between
+    # /oauth/consent and the wizard forever — the wizard had nothing left to
+    # collect, and the gate had nothing left to refuse.
+    test "gate_ok true for an obsidian user with no vault, while next_step stays :vault" do
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+      insert(:subscription, user: user, status: "active")
+      {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
+
+      assert %{gate_ok: true, next_step: :vault, has_vault: false} = Onboarding.status(user)
+      assert :ok = Onboarding.gate(user)
+    end
+
+    test "gate_ok false for a fresh-start user with no vault" do
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+      insert(:subscription, user: user, status: "active")
+      {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: false, tools: ["claude"]})
+
+      assert %{gate_ok: false, next_step: :vault} = Onboarding.status(user)
+      assert {:error, ["vault"], :vault} = Onboarding.gate(user)
+    end
+
+    test "gate_ok agrees with gate/2 for a user who has accepted nothing" do
+      user = insert(:user, onboarding_profile: %{})
+
+      assert %{gate_ok: false} = Onboarding.status(user)
+      assert {:error, missing, _} = Onboarding.gate(user)
+      assert "terms" in missing
     end
   end
 

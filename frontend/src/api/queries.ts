@@ -1190,6 +1190,11 @@ export interface OnboardingStatus {
 	current_tos_version?: string;
 	current_privacy_version?: string;
 	next_step: OnboardingStep | "done";
+	// The authoritative runtime verdict: may this user reach vault data? Ask
+	// this, never `next_step === "done"`. The two deliberately disagree for
+	// obsidian-path users, who are admitted by the gate while the wizard still
+	// parks them on `"vault"` awaiting the plugin's first sync.
+	gate_ok: boolean;
 	// Full intended step chain for THIS account at this moment. Self-host
 	// returns ["tools","vault"]; hosted returns ["agreement","billing",
 	// "tools","vault"]. `:tools` collects the FTUX tool checkboxes; `:vault`
@@ -1212,6 +1217,11 @@ export type OnboardingStep = "agreement" | "billing" | "tools" | "vault";
 export interface OnboardingProfile {
 	uses_obsidian?: boolean;
 	tools?: string[];
+	// Set only when an OAuth client answered the tool question before the
+	// wizard began. Drops `tools` from the step chain for that account; an
+	// ordinary signup answering the question themselves must NOT set it, or
+	// their own step counter stops advancing.
+	tools_prefilled?: boolean;
 	completed_at?: string;
 }
 
@@ -1372,7 +1382,7 @@ export function useAcceptTerms() {
 export function useSetOnboardingProfile() {
 	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: (body: { uses_obsidian?: boolean; tools?: string[] }) =>
+		mutationFn: (body: { uses_obsidian?: boolean; tools?: string[]; tools_prefilled?: boolean }) =>
 			api.patch<OnboardingProfile>("/onboarding/profile", body),
 		// AWAIT the invalidation so mutateAsync resolves only after
 		// ['onboarding','status'] has refetched. Without the await,

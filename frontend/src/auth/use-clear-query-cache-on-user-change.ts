@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
+import { clearPendingAuthorization } from "../oauth/pending-authorization";
 
 // Wipe the React Query cache whenever the signed-in user changes. The cache is
 // a module singleton (api/query-client.ts) and survives Clerk sign-out, so
@@ -19,6 +20,13 @@ export function useClearQueryCacheOnUserChange(
 		}
 		if (prevRef.current !== undefined) {
 			queryClient.clear();
+			// Same threat, different store. A parked OAuth authorization is
+			// sessionStorage, so it outlives sign-out too: A parks a consent
+			// request, signs out from the wizard header, B signs up in that tab
+			// and finishes the wizard, and B is handed A's consent screen with
+			// A's `state` and `redirect_uri`. Approving would mint a grant on
+			// B's account and ship the code to A's redirect.
+			clearPendingAuthorization();
 		}
 		prevRef.current = userId;
 	}, [queryClient, userId]);

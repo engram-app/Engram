@@ -626,6 +626,11 @@ defmodule EngramWeb.Router do
       # callback runs on halted conns and keys off the status actually sent, so
       # it covers OAuthScopeEnforce's 401s too, not just Auth's.
       EngramWeb.Plugs.McpAuthChallenge,
+      # BEFORE :authed_api, for the same reason as the challenge above: the
+      # seven halting plugs inside it never reach McpController, so their REST
+      # bodies would go out as-is. Registers a before_send that rewrites a
+      # refusal body into a JSON-RPC error while leaving the status alone.
+      EngramWeb.Plugs.McpErrorEnvelope,
       :authed_api,
       # No VaultPlug: McpController self-resolves the vault. TraceUserAttrs still
       # stamps app.user_id (app.vault_id stays nil — MCP is multi-vault per

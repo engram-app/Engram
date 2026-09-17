@@ -4,6 +4,11 @@ import { useAuthAdapter } from "../auth/use-auth-adapter";
 import AuthShell from "../layout/auth-shell";
 import LoadingScreen from "../layout/loading-screen";
 import { isMember } from "../lib/is-member";
+import {
+	clearPendingAuthorization,
+	peekPendingAuthorization,
+	pendingCancelUrl,
+} from "../oauth/pending-authorization";
 
 const STEP_PATHS: OnboardingStep[] = ["agreement", "billing", "tools", "vault"];
 
@@ -33,6 +38,28 @@ export default function OnboardLayout() {
 	const total = data.steps.length;
 	const counter = index >= 0 ? `Step ${index + 1} of ${total}` : null;
 
+	// Someone pulled in here mid-OAuth is not doing a normal signup, and a
+	// wizard that says nothing about it reads like the connection silently
+	// failed. Naming the app, and offering a refusal the app actually hears,
+	// is what keeps an interrupted authorization legible.
+	const pending = peekPendingAuthorization();
+
+	// Derived from the parked request, so it must be read before anything
+	// clears it. Null means the refusal has nowhere to go.
+	const cancelUrl = pendingCancelUrl();
+
+	const cancelPending = () => {
+		if (!cancelUrl) {
+			return;
+		}
+		// Clear only once the refusal is actually deliverable. Clearing
+		// unconditionally ALSO dropped the parked request, so a user whose
+		// client had no usable redirect got a button that did nothing and then
+		// finished the wizard onto `/` instead of back to consent.
+		clearPendingAuthorization();
+		window.location.assign(cancelUrl);
+	};
+
 	return (
 		<AuthShell
 			navLabel="Onboarding"
@@ -49,6 +76,31 @@ export default function OnboardLayout() {
 				</>
 			}
 		>
+			{pending ? (
+				<aside
+					role="status"
+					className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-muted/40 p-3 text-sm"
+				>
+					<p className="text-muted-foreground">
+						Finish setting up to connect{" "}
+						<span className="font-medium text-foreground">
+							{pending.clientName ?? "the app that sent you here"}
+						</span>
+						.
+					</p>
+					{/* Rendered only when the refusal can actually be delivered.
+					    A button that silently no-ops reads as a broken app. */}
+					{cancelUrl ? (
+						<button
+							type="button"
+							onClick={cancelPending}
+							className="text-muted-foreground underline underline-offset-4 transition hover:text-foreground"
+						>
+							Cancel connection
+						</button>
+					) : null}
+				</aside>
+			) : null}
 			<Outlet />
 		</AuthShell>
 	);
