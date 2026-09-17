@@ -6,11 +6,19 @@ defmodule Engram.MCP.Tools do
 
   alias Engram.MCP.Handlers
 
+  # `outputSchema` is OPTIONAL and added per-tool (#1660). Declaring it is a
+  # promise: a tool that advertises one MUST return `structuredContent` on
+  # success, so the two are added together or not at all. Handlers signal it by
+  # returning the 3-tuple; `run_tool_handler/4` is the only place that cares.
   @type tool_def :: %{
-          name: String.t(),
-          description: String.t(),
-          inputSchema: map(),
-          handler: (map(), map(), map() -> {:ok, String.t()} | {:error, String.t()})
+          required(:name) => String.t(),
+          required(:description) => String.t(),
+          required(:inputSchema) => map(),
+          optional(:outputSchema) => map(),
+          required(:handler) => (map(), map(), map() ->
+                                   {:ok, String.t()}
+                                   | {:ok, String.t(), map()}
+                                   | {:error, String.t()})
         }
 
   # Tools that do NOT operate on a single vault's contents, so they take no
@@ -105,6 +113,39 @@ defmodule Engram.MCP.Tools do
       name: "list_vaults",
       description: "List all vaults owned by the current user with IDs, names, and descriptions.",
       inputSchema: %{"type" => "object", "properties" => %{}},
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "vaults" => %{
+            "type" => "array",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                "id" => %{"type" => "string", "description" => "Vault UUID"},
+                # Nullable on purpose: `name` is a VIRTUAL field and
+                # `decrypt_vault_if_needed/2` returns the row undecrypted on a
+                # crypto failure, leaving it nil. A client validating against
+                # this schema would turn a degraded-but-readable listing into a
+                # hard failure — on list_vaults, which is the recovery path.
+                "name" => %{"type" => ["string", "null"], "description" => "Display name"},
+                # Display only — deliberately NOT advertised as a vault_id ref.
+                # Resolution puts exact display name before slug (#1665), so a
+                # vault whose slug is ALSO another vault's literal name loses:
+                # emit `test-vault` for vault A, pass it back, and it resolves
+                # to the vault literally NAMED "test-vault". `id` is in this
+                # same payload and always round-trips; pointing a code-mode
+                # client at the one handle that does not would be a
+                # wrong-target write.
+                "slug" => %{"type" => "string", "description" => "URL-safe handle"},
+                "is_default" => %{"type" => "boolean"},
+                "description" => %{"type" => ["string", "null"]}
+              },
+              "required" => ["id", "name", "slug", "is_default"]
+            }
+          }
+        },
+        "required" => ["vaults"]
+      },
       handler: &Handlers.handle("list_vaults", &1, &2, &3)
     }
   end
@@ -113,9 +154,10 @@ defmodule Engram.MCP.Tools do
     %{
       name: "set_vault",
       description:
-        "Validate and echo a vault by ID. NOTE: this does NOT persist an active " <>
-          "vault — MCP keeps no state between calls. To read or write a specific " <>
-          "vault, pass its vault_id on each tool call. Use list_vaults to discover IDs.",
+        "Validate and echo a vault by name or ID. NOTE: this does NOT persist an " <>
+          "active vault — MCP keeps no state between calls. To read or write a " <>
+          "specific vault, pass its vault_id on each tool call; a vault's name works " <>
+          "there too, so this need not be called first. Use list_vaults to see them.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{

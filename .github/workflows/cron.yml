@@ -593,10 +593,14 @@ jobs:
   # matrix needs a publicly-addressed deployment. See
   # docs/context/mcp-conformance-suite-limits.md.
   #
-  # `protocol` is deliberately absent: it is genuinely red (#1259 — ping
-  # unimplemented, no Host-rebinding rejection, we announce protocol
-  # 2025-03-26). Including it would page nightly for a known, filed issue.
-  # Add it to CONFORMANCE_STAGES when #1259 closes.
+  # `protocol` is deliberately absent: it is genuinely red. No Host-rebinding
+  # rejection (#1259), and the 2025-11-25 / 2026-07-28 matrix cells now 400 on
+  # every POST, because we enforce the 2025-06-18 MUST on an unsupported
+  # MCP-Protocol-Version header while MCPJam pins that header from its
+  # --protocol-version flag rather than from the negotiated answer. Those
+  # revisions are #1659's job. `ping` is NOT on the fix list — 2026-07-28
+  # removes it. Including this stage would page nightly for known, filed
+  # issues. Add it to CONFORMANCE_STAGES when #1259 and #1659 close.
   #
   # Non-gating on purpose: it grades a deployment rather than a commit, so a red
   # run means "staging is wrong" — a page, not a merge block. The page is the

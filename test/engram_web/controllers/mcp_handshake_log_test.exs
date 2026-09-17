@@ -38,7 +38,10 @@ defmodule EngramWeb.McpHandshakeLogTest do
       assert meta[:mcp_protocol_requested] == "2025-06-18"
       assert meta[:mcp_client_name] == "claude-code"
       assert meta[:mcp_client_version] == "2.1.0"
-      assert meta[:mcp_protocol_served] == "2025-03-26"
+      # Served now reflects negotiation, so it equals requested whenever we
+      # speak that revision. A downgrade is what makes the two differ — see
+      # mcp_version_negotiation_test.
+      assert meta[:mcp_protocol_served] == "2025-06-18"
     end
 
     test "ships to Loki as a lifecycle event" do
@@ -138,7 +141,7 @@ defmodule EngramWeb.McpHandshakeLogTest do
               }
             })
 
-          assert json_response(conn, 200)["result"]["protocolVersion"] == "2025-03-26"
+          assert json_response(conn, 200)["result"]["protocolVersion"] == "2025-06-18"
         end)
 
       assert log =~ "mcp_handshake"
