@@ -8,7 +8,7 @@ defmodule Engram.Observability.PostHog do
   are logged at `:warning` but don't propagate. Missing analytics
   events must never break the request that emitted them.
 
-  The frontend's `posthog.identify(clerk_user_id, ...)` (see
+  The frontend's `posthog.identify(...)` (see
   `auth/clerk-auth-provider.tsx`) binds anonymous device events to
   the user's distinct_id. Server-side events use the same
   distinct_id so funnels join across the timeline. PR8 wires the
@@ -23,8 +23,8 @@ defmodule Engram.Observability.PostHog do
 
   @doc """
   Send an event to PostHog. `distinct_id` should match the
-  frontend's `posthog.identify(...)` value — for SaaS users that's
-  the Clerk user id; for anonymous flows pass `:anon` and PostHog
+  frontend's `posthog.identify(...)` value — the keyed analytics id
+  (see `analytics_id/1`); for anonymous flows pass `:anon` and PostHog
   buckets the event under a fallback id.
   """
   @spec capture(String.t() | :anon, String.t(), map()) :: :ok
@@ -86,19 +86,6 @@ defmodule Engram.Observability.PostHog do
 
   defp to_distinct_id(:anon), do: "anonymous"
   defp to_distinct_id(id) when is_binary(id), do: id
-
-  @doc """
-  Resolve the PostHog distinct_id for a user. Must equal the frontend's
-  `posthog.identify(clerk.user.id)` value (see
-  frontend/src/auth/clerk-auth-provider.tsx) or funnels won't join across
-  the client/server timeline.
-
-  Users without a Clerk external_id (self-host, internal flows) fall back
-  to `:anon` — bucketed under a stable "anonymous" id on PostHog's side.
-  """
-  @spec distinct_id_for(map() | struct() | nil) :: String.t() | :anon
-  def distinct_id_for(%{external_id: ext}) when is_binary(ext) and byte_size(ext) > 0, do: ext
-  def distinct_id_for(_), do: :anon
 
   @doc """
   Pseudonymous analytics identifier for an email address.

@@ -227,7 +227,7 @@ defmodule Engram.Search do
     latency_ms = System.monotonic_time(:millisecond) - started_at
 
     Engram.Observability.PostHog.capture(
-      Engram.Observability.PostHog.distinct_id_for(user),
+      Engram.Observability.PostHog.analytics_id(user.email),
       "search_performed",
       %{
         result_count: length(results),
