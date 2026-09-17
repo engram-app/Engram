@@ -98,7 +98,7 @@ defmodule Engram.SkipTenantCheckInventoryTest do
     "engram/vaults.ex" => 4,
     "engram/workers/account_export.ex" => 6,
     "engram/workers/cimd_refresh.ex" => 1,
-    "engram/workers/cleanup_vault.ex" => 7,
+    "engram/workers/cleanup_vault.ex" => 1,
     "engram/workers/export_expiry_sweep.ex" => 3,
     "engram/workers/inactivity_cleanup.ex" => 4,
     "engram/workers/reindex_keyword.ex" => 1,

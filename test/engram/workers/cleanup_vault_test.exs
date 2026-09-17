@@ -253,7 +253,15 @@ defmodule Engram.Workers.CleanupVaultTest do
 
   describe "perform_cleanup/2 — skip" do
     test "skips when vault doesn't exist" do
-      assert :ok = CleanupVault.perform_cleanup("00000000-0000-0000-0000-000000999999", 1)
+      # A real UUID rather than `1`: this test's subject is the missing vault,
+      # and job args always carry a uuid user_id. The tenant-scoped load now
+      # rejects a non-uuid outright, so the literal `1` was testing the
+      # argument type by accident.
+      assert :ok =
+               CleanupVault.perform_cleanup(
+                 "00000000-0000-0000-0000-000000999999",
+                 Ecto.UUID.generate()
+               )
     end
 
     test "skips when vault is not soft-deleted (was restored)" do
