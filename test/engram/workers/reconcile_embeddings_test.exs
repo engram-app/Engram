@@ -312,7 +312,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
   # tests red and every `refute_enqueued` test in this file VACUOUS.
   #
   # So always give the note a vault owned by the same user.
-  defp note_for(user, attrs \\ []) do
+  defp note_for(user, attrs) do
     insert(:note, Keyword.merge([user: user, vault: insert(:vault, user: user)], attrs))
   end
 
