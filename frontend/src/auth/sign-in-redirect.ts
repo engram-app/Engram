@@ -32,7 +32,26 @@ export function signInRedirectTarget(location: {
 	}
 	const search = params.toString();
 	const returnTo = location.pathname + (search ? `?${search}` : "") + location.hash;
+	return authUrlWithReturnTo(ROUTES.SIGN_IN, returnTo);
+}
+
+/** Attach `return_to` to an auth route, or leave it bare when the destination
+ *  is home (already the default landing, so the round-trip buys nothing).
+ *
+ *  Also used for the cross-links BETWEEN the two auth pages. Clerk renders
+ *  those as plain hrefs from `signUpUrl`/`signInUrl`, and a bare one silently
+ *  drops the destination: a user who arrived at `/sign-in` mid-OAuth and then
+ *  clicked "Sign up" lost the whole authorization request before the consent
+ *  page ever rendered, so there was nothing parked for the wizard to resume.
+ *
+ *  `returnTo` MUST already be stripped and sanitized — pass the output of
+ *  `safeReturnTo`, or a value this module built. Unlike `signInRedirectTarget`
+ *  this does NOT stash-and-strip `CREDENTIAL_PARAMS`, so handing it a raw
+ *  `location.search` would put a device code or reset token into an href and
+ *  then into Clerk's hands. Every current caller reads through `safeReturnTo`
+ *  first; a new one that skips it is the way that guarantee gets lost. */
+export function authUrlWithReturnTo(route: string, returnTo: string): string {
 	return returnTo && returnTo !== ROUTES.HOME
-		? `${ROUTES.SIGN_IN}?return_to=${encodeURIComponent(returnTo)}`
-		: ROUTES.SIGN_IN;
+		? `${route}?return_to=${encodeURIComponent(returnTo)}`
+		: route;
 }
