@@ -31,7 +31,7 @@ The frontend and backend ship on **different triggers**:
 
 | Surface | Host | Deploy trigger | Gating |
 |---|---|---|---|
-| Frontend | `app.engram.page` (Cloudflare Worker `engram-frontend`) | **Any merge to main touching `frontend/`** — `deploy-frontend` job in `verify.yml` + wrangler | merge-gated, instant |
+| Frontend | `app.engram.page` (Cloudflare Worker `engram-frontend`) | **`frontend-promote.yml`** (`wrangler versions deploy <id>@100%`), dispatched by engram-infra's prod tf-apply or run manually. Every main push only *uploads* a zero-traffic version (`deploy-frontend` in `verify.yml`) | promote-gated |
 | Backend | `api.engram.page` (AWS ECS) | **`release-v*` tag only** → `deploy-prod.yml` → engram-infra image-bump PR → tf-apply daemon → ECS | release-gated |
 
 **The hazard:** a frontend deploy ships *all* accumulated frontend changes that merged

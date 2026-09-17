@@ -553,6 +553,8 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - `deploy-prod.yml` is green, or `terraform apply` is green, and you are about to call prod deployed (neither means the rollout finished; no `wait_for_steady_state` anywhere in engram-infra `main/`) → `docs/context/prod-release-verification-gotchas.md`
 - Verifying a prod rollout without AWS credentials, or checking that the WORKER tier rolled and not just web → `docs/context/prod-release-verification-gotchas.md`
 - Loki's newest line stopped advancing after a deploy and logging looks dead (prod logs only on activity; confirm against a pre-deploy quiet window first) → `docs/context/prod-release-verification-gotchas.md`
+- Checking whether a frontend change shipped by grepping the deployed SPA, or a `version` field that won't move after a deploy (the entry bundle proves nothing — routes are lazy chunks; trust `build_sha`) → `docs/context/frontend-ship-verification-bundle-grep.md`
+- Expecting a main merge to move prod frontend traffic (`deploy-frontend` only uploads a zero-traffic version; only `frontend-promote.yml` shifts traffic) → `docs/context/frontend-ship-verification-bundle-grep.md`
 - Launch-minimum DR runbook — RDS snapshots, S3 versioning, Qdrant reindex fallback → `docs/context/disaster-recovery.md`
 - Why `_build` cache mount across Docker RUN steps ships stale beams → `docs/context/docker-build-cache-pitfalls.md`
 - Local dev loop, hot reload, IEx tricks → `docs/context/dev-iteration-loop.md`
