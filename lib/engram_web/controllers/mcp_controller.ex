@@ -266,6 +266,13 @@ defmodule EngramWeb.McpController do
   #
   # SEP-2575 removes `ping` from the stateless 2026 revision, but the header
   # gate already refuses that revision outright, so no clause is needed for it.
+  #
+  # No `OriginStats.record/2` here, unlike `tools/call` below. That call exists
+  # so a client sending nothing but malformed arguments stays visible to abuse
+  # fingerprinting; a liveness check carries no such signal. Clients ping on a
+  # timer, so recording it would bury the fingerprint data in keepalive noise
+  # for an endpoint that reads nothing and writes nothing. The bucket in
+  # `PreAuthRateLimit` (600/60s) is what bounds ping volume.
   defp dispatch(_conn, "ping", _params) do
     {:ok, %{}}
   end
