@@ -43,7 +43,11 @@ jobs:
       # Kept in lockstep with deploy-frontend in verify.yml — this workflow's
       # self-heal fallback rebuilds the same artifact, and the two builds are
       # meant to be byte-identical. Bump both together or they are not.
+      # Private HOME: never rewrite the shared ~/.bun (see the first setup-bun
+      # step in verify.yml for the Text-file-busy race this prevents).
       - uses: oven-sh/setup-bun@v2
+        env:
+          HOME: ${{ runner.temp }}
         with: { bun-version: 1.4.0 }
 
       - name: Resolve uploaded version for this commit (fast path)
