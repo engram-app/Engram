@@ -68,21 +68,30 @@ defmodule Engram.Workers.CleanupVault do
   @doc false
   def perform_cleanup(vault_id, user_id, opts \\ []) do
     force = Keyword.get(opts, :force, false)
-    vault = Repo.get(Vault, vault_id, skip_tenant_check: true)
+
+    # Tenant-scoped, and this load is the linchpin. Unscoped it was FILTERED to
+    # nil rather than rejected, and the `is_nil(vault)` clause below reads nil
+    # as "already cleaned up" — so the job logged at :debug, returned `:ok`,
+    # and deleted nothing. Every observable said the cleanup ran while the
+    # user's data survived.
+    vault = Repo.with_tenant!(user_id, fn -> Repo.get(Vault, vault_id) end)
+
+    # A scoped load cannot return another tenant's vault, so `nil` is now
+    # ambiguous: the vault may be genuinely gone, or it may exist and belong to
+    # someone else (forged args, or crossed wires). Those deserve very
+    # different reactions — one is routine, the other is a security event — so
+    # the ambiguity is resolved rather than collapsed into "skipping".
+    foreign_owner_id = if is_nil(vault), do: foreign_owner(vault_id, user_id)
 
     cond do
-      is_nil(vault) ->
-        Logger.debug(
-          "CleanupVault: vault not found — skipping",
-          Metadata.with_category(:debug, :oban, vault_id: vault_id)
-        )
-
-        :ok
-
-      # Defense in depth: the load bypasses RLS (skip_tenant_check), so the
-      # job's user_id is the only owner check. A mismatch means the args were
-      # forged or wires got crossed — never hard-delete another tenant's vault.
-      to_string(vault.user_id) != to_string(user_id) ->
+      # Defense in depth, and the reason the scoped load did not simply delete
+      # this branch. Never hard-delete another tenant's vault.
+      #
+      # Honest limitation: the probe below is itself subject to the policy, so
+      # where RLS IS enforced and no maintenance pool exists, a forged job is
+      # indistinguishable from a deleted vault and falls through to the `:ok`
+      # branch. It refuses to delete either way — it just cannot say why.
+      not is_nil(foreign_owner_id) ->
         Logger.error(
           "CleanupVault: owner mismatch — discarding",
           Metadata.with_category(:error, :oban,
@@ -93,6 +102,14 @@ defmodule Engram.Workers.CleanupVault do
         )
 
         {:discard, :owner_mismatch}
+
+      is_nil(vault) ->
+        Logger.debug(
+          "CleanupVault: vault not found — skipping",
+          Metadata.with_category(:debug, :oban, vault_id: vault_id)
+        )
+
+        :ok
 
       is_nil(vault.deleted_at) ->
         Logger.debug(
@@ -126,6 +143,24 @@ defmodule Engram.Workers.CleanupVault do
     DateTime.diff(DateTime.utc_now(), vault.deleted_at, :second)
   end
 
+  # Returns the real owner's id when `vault_id` exists but belongs to someone
+  # other than `user_id`, else nil. Only called when the tenant-scoped load
+  # came back nil, to tell "already gone" from "not yours".
+  #
+  # `cross_tenant/1` and not `with_tenant/2`: the whole question is about a row
+  # outside the caller's tenant, so there is no tenant that could scope it.
+  # It suppresses only the application guard, so this answers correctly where
+  # the connecting role is exempt from the policy and returns nil where it is
+  # not — see the caller's note on that limitation.
+  defp foreign_owner(vault_id, user_id) do
+    Repo.cross_tenant(fn ->
+      case Repo.get(Vault, vault_id) do
+        nil -> nil
+        %Vault{user_id: owner} -> if to_string(owner) == to_string(user_id), do: nil, else: owner
+      end
+    end)
+  end
+
   # ---------------------------------------------------------------------------
   # Private
   # ---------------------------------------------------------------------------
@@ -138,8 +173,14 @@ defmodule Engram.Workers.CleanupVault do
     # Qdrant points are derived data that can be re-indexed
     delete_qdrant_points(vault)
 
-    # DB transaction: delete all rows, making DB authoritative
-    Repo.transaction(fn ->
+    # DB transaction: delete all rows, making DB authoritative.
+    #
+    # `with_tenant/2` IS the transaction — it opens one — so this replaces the
+    # bare `Repo.transaction/1` rather than nesting inside it. Every write
+    # below needs the tenant: a filtered `delete_all` reports `{0, nil}` with
+    # no error, and `Repo.delete!(vault)` carries no bypass at all, so a
+    # filtered delete would raise `Ecto.StaleEntryError` instead.
+    Repo.with_tenant(vault.user_id, fn ->
       vault_id = vault.id
 
       # Drop the owner's live-note counter by the notes this vault still holds
@@ -152,24 +193,26 @@ defmodule Engram.Workers.CleanupVault do
               n.vault_id == ^vault_id and is_nil(n.deleted_at) and
                 n.kind == "note",
             select: count(n.id)
-          ),
-          skip_tenant_check: true
+          )
         ) || 0
 
       Chunk
       |> where(vault_id: ^vault_id)
-      |> Repo.delete_all(skip_tenant_check: true)
+      |> Repo.delete_all()
 
       Note
       |> where(vault_id: ^vault_id)
-      |> Repo.delete_all(skip_tenant_check: true)
+      |> Repo.delete_all()
 
       :ok = UsageMeters.dec_notes_count(vault.user_id, live_notes)
 
       Attachment
       |> where(vault_id: ^vault_id)
-      |> Repo.delete_all(skip_tenant_check: true)
+      |> Repo.delete_all()
 
+      # `api_key_vaults` carries no RLS policy, so the guard never fires for it
+      # and the option here is inert either way. Left as-is to keep this diff
+      # to the queries that were actually broken.
       from(akv in "api_key_vaults", where: akv.vault_id == type(^vault_id, Ecto.UUID))
       |> Repo.delete_all(skip_tenant_check: true)
 
@@ -189,12 +232,18 @@ defmodule Engram.Workers.CleanupVault do
     :ok
   end
 
+  # Runs BEFORE the delete transaction, so it needs its own scope. Unscoped it
+  # returned `[]`, and the blobs for every attachment in the vault were left
+  # in S3 with no row pointing at them — unreachable by any other cleanup path
+  # except the weekly orphan sweep.
   defp collect_storage_keys(vault) do
-    Attachment
-    |> where(vault_id: ^vault.id)
-    |> where([a], not is_nil(a.storage_key))
-    |> select([a], a.storage_key)
-    |> Repo.all(skip_tenant_check: true)
+    Repo.with_tenant!(vault.user_id, fn ->
+      Attachment
+      |> where(vault_id: ^vault.id)
+      |> where([a], not is_nil(a.storage_key))
+      |> select([a], a.storage_key)
+      |> Repo.all()
+    end)
   end
 
   defp delete_qdrant_points(vault) do
