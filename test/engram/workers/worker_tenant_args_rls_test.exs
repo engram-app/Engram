@@ -39,6 +39,7 @@ defmodule Engram.Workers.WorkerTenantArgsRlsTest do
   use Engram.DataCase, async: false
 
   import Ecto.Query
+  import Engram.RlsCase
 
   alias Engram.Links
   alias Engram.Notes
@@ -66,31 +67,6 @@ defmodule Engram.Workers.WorkerTenantArgsRlsTest do
     basename_hmac = Links.basename_hmac(user, "target")
 
     {:ok, user: user, vault: vault, note: note, target: target, basename_hmac: basename_hmac}
-  end
-
-  # Runs `fun` as the non-BYPASSRLS role with NO tenant set — the shape these
-  # workers run in once the app stops connecting as a migrator-grade role.
-  #
-  # Rolls back unconditionally so the SET LOCAL role and tenant are discarded
-  # without a trailing RESET ROLE, which would itself fail with 25P02 if the
-  # transaction had been aborted by a raise.
-  defp as_prod_role(fun) do
-    {:error, outcome} =
-      Repo.transaction(fn ->
-        Repo.query!("SELECT set_config('app.current_tenant', '', true)")
-        Repo.query!("SET LOCAL ROLE engram_app")
-
-        outcome =
-          try do
-            {:returned, fun.()}
-          rescue
-            e -> {:raised, e}
-          end
-
-        Repo.rollback(outcome)
-      end)
-
-    outcome
   end
 
   describe "Notes.fetch_note_for_worker under enforced RLS" do

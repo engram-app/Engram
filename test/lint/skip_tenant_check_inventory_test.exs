@@ -61,7 +61,7 @@ defmodule Engram.SkipTenantCheckInventoryTest do
   # the one use that defeats the point.
   @inventory %{
     "engram/abuse/origin_stats.ex" => 4,
-    "engram/accounts.ex" => 37,
+    "engram/accounts.ex" => 36,
     "engram/accounts/export.ex" => 5,
     "engram/accounts/export/streamer.ex" => 2,
     "engram/accounts/lifecycle.ex" => 6,
@@ -81,7 +81,7 @@ defmodule Engram.SkipTenantCheckInventoryTest do
     "engram/crypto/rotation_lock.ex" => 5,
     "engram/crypto/user_dek_rotation.ex" => 23,
     "engram/idempotency.ex" => 1,
-    "engram/indexing.ex" => 4,
+    "engram/indexing.ex" => 2,
     "engram/indexing/index_cap.ex" => 2,
     "engram/instance.ex" => 4,
     "engram/keyword_index/stats.ex" => 1,
@@ -90,7 +90,7 @@ defmodule Engram.SkipTenantCheckInventoryTest do
     "engram/links.ex" => 15,
     "engram/links/rewriter.ex" => 3,
     "engram/logs.ex" => 2,
-    "engram/notes.ex" => 2,
+    "engram/notes.ex" => 1,
     "engram/oauth.ex" => 15,
     "engram/oauth/cimd.ex" => 3,
     "engram/onboarding.ex" => 2,
@@ -101,7 +101,6 @@ defmodule Engram.SkipTenantCheckInventoryTest do
     "engram/workers/cleanup_vault.ex" => 7,
     "engram/workers/export_expiry_sweep.ex" => 3,
     "engram/workers/inactivity_cleanup.ex" => 4,
-    "engram/workers/orphan_sweep.ex" => 2,
     "engram/workers/reindex_keyword.ex" => 1,
     "engram/workers/vault_deleted_email.ex" => 2,
     "engram_web/controllers/admin/user_controller.ex" => 3

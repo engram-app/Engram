@@ -444,22 +444,24 @@ defmodule Engram.Indexing do
     |> Enum.uniq()
     |> Enum.chunk_every(@id_query_batch)
     |> Enum.reduce(0, fn batch, acc ->
-      # `not is_nil` keeps a re-run from rewriting rows that are already NULL —
-      # dead tuples and WAL for no change.
-      _ =
-        Chunk
-        |> where([c], c.note_id in ^batch and not is_nil(c.context_hmac))
-        |> Repo.update_all([set: [context_hmac: nil]], skip_tenant_check: true)
+      # One block over both writes, rather than the option on each: they are a
+      # single ordered unit (markers before hashes, per the moduledoc above),
+      # and the ordering only means anything if both run under the same intent.
+      Repo.cross_tenant(fn ->
+        # `not is_nil` keeps a re-run from rewriting rows that are already NULL
+        # — dead tuples and WAL for no change.
+        _ =
+          Chunk
+          |> where([c], c.note_id in ^batch and not is_nil(c.context_hmac))
+          |> Repo.update_all(set: [context_hmac: nil])
 
-      {n, _} =
-        Note
-        |> where([n], n.id in ^batch)
-        |> Repo.update_all(
-          [set: [embed_hash: nil, dense_indexed_hash: nil]],
-          skip_tenant_check: true
-        )
+        {n, _} =
+          Note
+          |> where([n], n.id in ^batch)
+          |> Repo.update_all(set: [embed_hash: nil, dense_indexed_hash: nil])
 
-      acc + n
+        acc + n
+      end)
     end)
   end
 

@@ -31,6 +31,8 @@ Live. This is regenerated from `config/runtime.exs` (the ~90 vars it reads), wit
 | `PHX_PORT` | `443` prod / `80` dev | URL port for generated links (:515). |
 | `DATABASE_URL` | — (required in prod, :558) | `ecto://USER:PASS@HOST/DATABASE`. |
 | `POOL_SIZE` | `10` | Ecto pool size (:582). |
+| `MAINTENANCE_DATABASE_URL` | unset | Credential for `Engram.Repo.Maintenance`, the pool for work that legitimately spans tenants (orphan reaping, expiry sweeps, credential lookups that *discover* a user_id). **Unset is correct for self-host** — one box, one tenant, connecting as its own database owner; `Engram.Repo.maintenance/0` then resolves to `Engram.Repo` and callers read identically. Unset on a deploy where RLS *is* enforced means those sweeps are filtered to zero rows and report success, which `Engram.Repo.TenancyGuard` logs at boot. |
+| `MAINTENANCE_POOL_SIZE` | `2` | Pool size for the above, per node. Ignored unless `MAINTENANCE_DATABASE_URL` is set. Deliberately tiny: it serves a few cron jobs and never a request, and connections are the scarce resource on RDS (see `prod-db-connection-budget.md`). |
 | `ECTO_IPV6` | unset | `true`/`1` → connect to Postgres over IPv6 (:564). |
 | `DATABASE_SSL` | off | `true` enables TLS to Postgres (required by AWS RDS) (:575, via `RuntimeConfig.database_ssl/2`). |
 | `DATABASE_SSL_MODE` | `verify_none` | `verify-full` → `verify_peer` w/ OS trust store + SNI + hostname check (:570). |

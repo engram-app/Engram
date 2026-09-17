@@ -52,6 +52,13 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/attachments.ex",
     "lib/engram/crypto/",
     "lib/engram/logs.ex",
+    # In scope rather than out, on this file's own stated rule: its three
+    # Logger calls are static strings today and cannot reach content, but
+    # `@out_of_scope` is never re-scanned, so filing it there would mean a
+    # `Logger.error(..., reason: inspect(reason))` added in a year is checked
+    # by nothing. It reports boot-time role and pool configuration, so a raw
+    # term is a plausible future addition.
+    "lib/engram/repo/tenancy_guard.ex",
     "lib/engram/links/",
     "lib/engram/rerankers/",
     "lib/engram_web/channels/",
@@ -153,6 +160,12 @@ defmodule Engram.Logger.LogCallComplianceTest do
     # the specific file, not `lib/engram/indexing/`, so a future sibling module
     # that CAN reach content still trips this test.
     "lib/engram/indexing/index_cap.ex",
+    # A bare `use Ecto.Repo` — the second connection pool for cross-tenant
+    # work. No function bodies, no Logger call, nothing to render. Listed as
+    # the specific file rather than `lib/engram/repo/`, so its sibling
+    # `tenancy_guard.ex` (which DOES log, and is in scope below) cannot be
+    # swept out of scope by a prefix.
+    "lib/engram/repo/maintenance.ex",
     # Auth, identity and OAuth — tokens and emails, never note data.
     "lib/engram/abuse/",
     "lib/engram/auth.ex",

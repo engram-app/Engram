@@ -127,6 +127,58 @@ defmodule Engram.Repo do
           "tenant_id must be a canonical UUID string, got: #{inspect(tenant_id)}"
   end
 
+  @doc """
+  `with_tenant/2` returning the bare result instead of `{:ok, result}`.
+
+  The transactional path returns `{:ok, result}` and the re-entrant path is
+  shaped to match it, so `{:ok, _} = Repo.with_tenant(...)` appears at 11 call
+  sites purely to unwrap something that cannot legitimately be anything else:
+  the transaction only fails via `rollback/1`, which nothing inside a
+  `with_tenant` block calls.
+
+  Use this where the tuple carries no information. Keep `with_tenant/2` where
+  a caller genuinely branches on the result.
+  """
+  def with_tenant!(tenant_id, fun) do
+    {:ok, result} = with_tenant(tenant_id, fun)
+    result
+  end
+
+  @doc """
+  Runs `fun` with the tenant tripwire suspended, for queries that legitimately
+  span tenants.
+
+  This is the replacement for `skip_tenant_check: true`, and the difference is
+  entirely one of legibility: the option sits at the end of a single query,
+  often many lines from the `from(...)` it belongs to, and reads as a local
+  detail. A block names the intent, covers every query inside it, and is
+  visible in a diff.
+
+  Neither one is a scope. Both suppress only `prepare_query/3`, an
+  application-level guard; neither sets any Postgres session state. Where RLS
+  is enforced, the queries inside this block are still filtered by the tenant
+  policy unless the connecting role is exempt from it. That is what
+  `Engram.Repo.Maintenance` is for, and when a call site needs the real thing
+  it should run through `maintenance()`.
+
+  Emits the same `:tenant_check_skipped` telemetry the keyword does, so the
+  existing metric keeps counting the same population across the migration.
+
+  Not re-entrant-safe by design — it restores the PREVIOUS flag value rather
+  than clearing it, so a nested call cannot silently re-arm the tripwire for
+  the remainder of an enclosing block.
+  """
+  def cross_tenant(fun) when is_function(fun, 0) do
+    previous = Process.get(:engram_cross_tenant, false)
+    Process.put(:engram_cross_tenant, true)
+
+    try do
+      fun.()
+    after
+      Process.put(:engram_cross_tenant, previous)
+    end
+  end
+
   defp run_with_tenant(uuid, fun) do
     Process.put(:engram_tenant, uuid)
 
@@ -179,7 +231,8 @@ defmodule Engram.Repo do
 
   @doc """
   Safety net — raises if a tenant-scoped table is queried without
-  `with_tenant/2`. Uses process dict (zero-cost) rather than a DB query.
+  `with_tenant/2`, `cross_tenant/1`, or an explicit `skip_tenant_check: true`.
+  Uses process dict (zero-cost) rather than a DB query.
   """
   @impl true
   def prepare_query(_operation, query, opts) do
@@ -192,7 +245,14 @@ defmodule Engram.Repo do
         # Deliberate bypass (admin/cron/auth). Count it: a regression that adds
         # skip_tenant_check to a user-facing read shows up as a rate change on a
         # tenant table that should never be skipped on the request path.
-        Keyword.get(opts, :skip_tenant_check, false) ->
+        #
+        # Two spellings, one meaning. The keyword is per-query; `cross_tenant/1`
+        # is a block covering everything inside it. They emit the SAME event on
+        # purpose — the metric measures how much of the system runs outside a
+        # tenant scope, and splitting it per spelling would reset that baseline
+        # to zero mid-migration and hide the answer.
+        Keyword.get(opts, :skip_tenant_check, false) or
+            Process.get(:engram_cross_tenant, false) ->
           emit_tenant_event(:tenant_check_skipped, query)
 
         # A tenant table queried with no scope and no bypass — the highest

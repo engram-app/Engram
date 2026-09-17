@@ -161,7 +161,7 @@ defmodule Engram.Workers.ProjectVaultIndex do
   end
 
   defp load_entries(user, vault_id) do
-    {:ok, row} = Repo.with_tenant(user.id, fn -> Repo.get(VaultIndexState, vault_id) end)
+    row = Repo.with_tenant!(user.id, fn -> Repo.get(VaultIndexState, vault_id) end)
 
     case row do
       nil -> :none

@@ -41,44 +41,17 @@ defmodule Engram.Indexing.IndexCapRlsTest do
 
   import Ecto.Query
 
+  # This file's harness COMMITS, so its calls use `as_prod_role_committing/1`.
+  # They were spelled `as_prod_role/1` while the function was local — the same
+  # name four other RLS test files used for the rolling-back variant, with a
+  # different return type. That collision is the main thing extracting
+  # `Engram.RlsCase` fixes.
+  import Engram.RlsCase
+
   alias Engram.Indexing.IndexCap
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.UsageMeters
-
-  # Runs `fun` as the non-BYPASSRLS role with NO tenant configured — the exact
-  # shape of a prod request reaching these code paths.
-  #
-  # The tenant clear is load-bearing, not hygiene. Several tests below make a
-  # superuser "sanity" call first, and those go through `Repo.with_tenant/2`,
-  # whose `set_config(..., true)` is a SET LOCAL that PERSISTS into the
-  # enclosing sandbox transaction once its savepoint commits — `with_tenant`'s
-  # exit resets only the ROLE, never the tenant. Without this line the role
-  # drop below re-engages RLS while the policy compares against a MATCHING
-  # tenant, so three of the tests in this file passed no matter what the code
-  # did. See the leak-forward trap in
-  # `docs/context/rls-enforcement-testing-traps.md`.
-  defp as_prod_role(fun) do
-    {:ok, result} =
-      Repo.transaction(fn ->
-        Repo.query!("SELECT set_config('app.current_tenant', '', true)")
-        Repo.query!("SET LOCAL ROLE engram_app")
-
-        result = fun.()
-
-        # Reset on the SUCCESS path only, deliberately not in an `after`. If
-        # `fun` raises, the transaction is already aborted and `RESET ROLE`
-        # fails with 25P02, masking the real error — and the read paths in this
-        # file CAN raise now that they run against a genuinely filtered result
-        # set: `backfill_freed_slots/1` calls `Accounts.get_user!/1`, and a
-        # missing `engram_app` grant surfaces as 42501. Letting the raise
-        # propagate rolls the transaction back, discarding the SET LOCAL state.
-        Repo.query!("RESET ROLE")
-        result
-      end)
-
-    result
-  end
 
   defp capped_user_with_notes(cap) do
     user = insert(:user)
@@ -112,7 +85,7 @@ defmodule Engram.Indexing.IndexCapRlsTest do
       assert %{total: 2} = IndexCap.counts(user)
 
       seen =
-        as_prod_role(fn ->
+        as_prod_role_committing(fn ->
           Repo.one(
             from(n in Note, where: n.user_id == ^user.id, select: count(n.id)),
             skip_tenant_check: true
@@ -140,7 +113,7 @@ defmodule Engram.Indexing.IndexCapRlsTest do
       # is RLS filtering rather than a broken fixture.
       assert %{total: 2} = IndexCap.counts(user)
 
-      assert %{indexed: 2, total: 2} = as_prod_role(fn -> IndexCap.counts(user) end)
+      assert %{indexed: 2, total: 2} = as_prod_role_committing(fn -> IndexCap.counts(user) end)
     end
   end
 
@@ -154,7 +127,7 @@ defmodule Engram.Indexing.IndexCapRlsTest do
       # silently over-indexes on the hot path.
       refute IndexCap.within_cap?(newer, user)
 
-      refute as_prod_role(fn -> IndexCap.within_cap?(newer, user) end)
+      refute as_prod_role_committing(fn -> IndexCap.within_cap?(newer, user) end)
     end
   end
 
@@ -190,7 +163,7 @@ defmodule Engram.Indexing.IndexCapRlsTest do
       assert note.embed_hash == "stale-embed"
       assert note.dense_indexed_hash == "stale-dense"
 
-      assert :ok = as_prod_role(fn -> IndexCap.revoke_dense_index(user.id) end)
+      assert :ok = as_prod_role_committing(fn -> IndexCap.revoke_dense_index(user.id) end)
 
       reloaded = Repo.get!(Note, note.id, skip_tenant_check: true)
 
@@ -214,7 +187,7 @@ defmodule Engram.Indexing.IndexCapRlsTest do
 
       assert note.embed_hash == "stale-embed"
 
-      assert :ok = as_prod_role(fn -> IndexCap.backfill_freed_slots(user.id) end)
+      assert :ok = as_prod_role_committing(fn -> IndexCap.backfill_freed_slots(user.id) end)
 
       reloaded = Repo.get!(Note, note.id, skip_tenant_check: true)
 
@@ -233,7 +206,7 @@ defmodule Engram.Indexing.IndexCapRlsTest do
 
       # This one WRITES what it reads, so a filtered read does not merely
       # report wrong — it persists a 0 over a correct counter.
-      assert as_prod_role(fn -> UsageMeters.recount_notes!(user.id) end) == 2
+      assert as_prod_role_committing(fn -> UsageMeters.recount_notes!(user.id) end) == 2
       assert UsageMeters.notes_count(user.id) == 2
     end
   end

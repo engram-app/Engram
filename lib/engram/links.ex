@@ -790,7 +790,7 @@ defmodule Engram.Links do
     user = reload_for_dek(user)
     {:ok, dek} = Crypto.get_dek(user)
 
-    {:ok, result} = Repo.with_tenant(user.id, fn -> do_links_for_note(user, note_id, dek) end)
+    result = Repo.with_tenant!(user.id, fn -> do_links_for_note(user, note_id, dek) end)
     result
   end
 
@@ -876,7 +876,7 @@ defmodule Engram.Links do
     user = reload_for_dek(user)
     {:ok, dek} = Crypto.get_dek(user)
 
-    {:ok, result} = Repo.with_tenant(user.id, fn -> do_backlinks_for_note(user, note_id, dek) end)
+    result = Repo.with_tenant!(user.id, fn -> do_backlinks_for_note(user, note_id, dek) end)
     result
   end
 

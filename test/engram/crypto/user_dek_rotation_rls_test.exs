@@ -63,6 +63,20 @@ defmodule Engram.Crypto.UserDekRotationRlsTest do
 
   import Ecto.Query, only: [from: 2]
 
+  # A real rotation runs with no tenant set: neither the Oban worker
+  # (`workers/rotate_user_dek.ex:61`) nor the mix task wraps the call in
+  # `Repo.with_tenant/2`, and the rotation module contains no `with_tenant` at
+  # all. Hence the dropped-role harness, and hence the COMMITTING variant —
+  # every assertion here reads back persisted state via `reload_note/1` and
+  # `reload_user/1` below.
+  #
+  # The local copy this replaced put `RESET ROLE` in an `after`, which is the
+  # one spelling the other files' comments warn against: on the raise path the
+  # transaction is already aborted, so the reset fails with 25P02 and buries
+  # the real error. Nothing in this file raises today, so it was latent rather
+  # than live.
+  import Engram.RlsCase
+
   alias Engram.Accounts.User
   alias Engram.Crypto
   alias Engram.Crypto.UserDekRotation
@@ -95,40 +109,6 @@ defmodule Engram.Crypto.UserDekRotationRlsTest do
     {:ok, user: user, vault: vault, note: note}
   end
 
-  # Runs `fun` as the non-BYPASSRLS role with NO tenant configured, which is
-  # the shape a real rotation runs in: neither the Oban worker
-  # (`workers/rotate_user_dek.ex:61`) nor the mix task wraps the call in
-  # `Repo.with_tenant/2`, and the rotation module contains no `with_tenant` at
-  # all.
-  defp as_prod_role(fun) do
-    {:ok, result} =
-      Repo.transaction(fn ->
-        # Clearing the tenant is NOT redundant, and omitting it silently voids
-        # every assertion in this file.
-        #
-        # `Repo.with_tenant/2` sets the tenant with `set_config(..., true)` —
-        # SET LOCAL, scoped to the enclosing transaction — and its exit path
-        # resets only the ROLE, never `app.current_tenant`. Under the Ecto
-        # sandbox the entire test runs inside ONE outer transaction, so any
-        # fixture that writes through a tenant-scoped path (here
-        # `Fixtures.insert_vault!` / `insert_note!`) leaves the tenant set for
-        # everything that follows.
-        #
-        # Without this line the control test below sees the note and the whole
-        # file passes vacuously while never exercising RLS at all.
-        Repo.query!("SELECT set_config('app.current_tenant', '', true)")
-        Repo.query!("SET LOCAL ROLE engram_app")
-
-        try do
-          fun.()
-        after
-          Repo.query!("RESET ROLE")
-        end
-      end)
-
-    result
-  end
-
   # Reads run OUTSIDE the dropped-role block, as the superuser. Reading them
   # inside would filter them too, and the test would pass while seeing nothing
   # — the same silent-empty failure it is meant to detect.
@@ -145,7 +125,7 @@ defmodule Engram.Crypto.UserDekRotationRlsTest do
     # bites before anything is concluded from it.
     test "control: the dropped role cannot see the user's rows", %{user: user, note: note} do
       visible =
-        as_prod_role(fn ->
+        as_prod_role_committing(fn ->
           Repo.one(
             from(n in Note, where: n.user_id == ^user.id, select: count(n.id)),
             skip_tenant_check: true
@@ -166,7 +146,7 @@ defmodule Engram.Crypto.UserDekRotationRlsTest do
 
     test "does not flip the user while leaving rows wrapped under the old DEK",
          %{user: user, note: note} do
-      result = as_prod_role(fn -> UserDekRotation.rotate_user(user.id) end)
+      result = as_prod_role_committing(fn -> UserDekRotation.rotate_user(user.id) end)
 
       reloaded_note = reload_note(note.id)
       reloaded_user = reload_user(user.id)
@@ -201,7 +181,7 @@ defmodule Engram.Crypto.UserDekRotationRlsTest do
 
     test "the note still decrypts after a rotation that reported success",
          %{user: user, note: note} do
-      _ = as_prod_role(fn -> UserDekRotation.rotate_user(user.id) end)
+      _ = as_prod_role_committing(fn -> UserDekRotation.rotate_user(user.id) end)
 
       reloaded_user = reload_user(user.id)
       reloaded_note = reload_note(note.id)

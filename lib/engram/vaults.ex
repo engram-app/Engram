@@ -96,7 +96,7 @@ defmodule Engram.Vaults do
   raw-SQL + `Ecto.UUID.dump!/1` access idiom otherwise.
   """
   def current_seq(user_id, vault_id) do
-    {:ok, seq} = Repo.with_tenant(user_id, fn -> raw_current_seq(vault_id) end)
+    seq = Repo.with_tenant!(user_id, fn -> raw_current_seq(vault_id) end)
 
     seq
   end
