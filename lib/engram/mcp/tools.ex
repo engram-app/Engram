@@ -357,9 +357,13 @@ defmodule Engram.MCP.Tools do
             "items" => %{
               "type" => "object",
               "properties" => %{
-                # Nullable: `title` is a virtual decrypted field, nil when the
-                # row comes back undecrypted. Same reasoning as list_vaults'
-                # `name` — do not turn a degraded listing into a hard failure.
+                # Nullable as deliberate slack, NOT for list_vaults' reason:
+                # `list_notes_in_folder` decrypts with `decrypt_or_raise!`, so
+                # a row never arrives undecrypted the way a vault can. `title`
+                # falls back to the filename stem and is in practice always
+                # present. Declared nullable anyway because a required field
+                # that turns up absent is a hard client failure, while an
+                # unexpected null is not.
                 "title" => %{"type" => ["string", "null"]},
                 "path" => %{"type" => "string", "description" => "Vault-relative path"},
                 "tags" => %{"type" => "array", "items" => %{"type" => "string"}}
