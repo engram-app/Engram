@@ -28,6 +28,20 @@ defmodule EngramWeb.UsersControllerTest do
       assert body["user"]["role"] == "member"
       assert Map.has_key?(body["user"], "display_name")
     end
+
+    test "returns the analytics id even when onboarding is incomplete" do
+      # Load-bearing: /api/me is on the user-scoped pipeline, which runs Auth but
+      # NOT RequireOnboarding. The entire funnel we are trying to measure happens
+      # BEFORE onboarding completes, so if this ever moves behind the gate the
+      # instrumentation goes dark for exactly the users it exists to observe.
+      user =
+        insert_user(email: "sabio@web.de", external_id: "user_sabio", onboarding_profile: %{})
+
+      conn = auth_conn(user) |> get("/api/me")
+      body = json_response(conn, 200)
+
+      assert body["user"]["analytics_id"] == Engram.Observability.PostHog.analytics_id(user.email)
+    end
   end
 
   describe "PATCH /api/me" do
