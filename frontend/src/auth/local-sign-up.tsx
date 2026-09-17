@@ -6,6 +6,8 @@ import { cn } from "@/lib/utils";
 import { getApiBase, joinApiUrl } from "../api/base";
 import { ROUTES } from "../routes";
 import AuthLayout from "./auth-layout";
+import { safeReturnTo } from "./safe-return-to";
+import { authUrlWithReturnTo } from "./sign-in-redirect";
 import { useAuthAdapter } from "./use-auth-adapter";
 import { useBootstrap } from "./use-bootstrap";
 
@@ -19,6 +21,9 @@ export default function LocalSignUp() {
 	const navigate = useNavigate();
 	const [searchParams] = useSearchParams();
 	const invite = searchParams.get("invite") ?? "";
+	// Mirrors local-sign-in.tsx. Landing unconditionally on HOME dropped an
+	// in-flight OAuth authorization for anyone who signed up mid-flow.
+	const returnTo = safeReturnTo(searchParams.get("return_to"));
 	const bootstrap = useBootstrap();
 	// Keyed by the invite it was fetched for, so switching to a different (or
 	// absent) invite yields null during render instead of leaving the previous
@@ -37,9 +42,9 @@ export default function LocalSignUp() {
 	// Navigate after auth state propagates (React 18 batching)
 	useEffect(() => {
 		if (isSignedIn) {
-			navigate(ROUTES.HOME, { replace: true });
+			navigate(returnTo, { replace: true });
 		}
-	}, [isSignedIn, navigate]);
+	}, [isSignedIn, navigate, returnTo]);
 
 	// Preview the invite (non-enumerating: bad/expired/revoked → {valid:false}).
 	useEffect(() => {
@@ -122,7 +127,10 @@ export default function LocalSignUp() {
 							: "Sign-ups on this instance require an invite link. Contact your admin to request one — they can generate one from Settings → Administration."}
 					</p>
 					<p className="text-center text-muted-foreground text-sm">
-						<Link to={ROUTES.SIGN_IN} className="font-medium text-primary hover:underline">
+						<Link
+							to={authUrlWithReturnTo(ROUTES.SIGN_IN, returnTo)}
+							className="font-medium text-primary hover:underline"
+						>
 							Back to sign in
 						</Link>
 					</p>
@@ -246,7 +254,10 @@ export default function LocalSignUp() {
 
 				<p className="text-center text-muted-foreground text-sm">
 					Already have an account?{" "}
-					<Link to={ROUTES.SIGN_IN} className="font-medium text-primary hover:underline">
+					<Link
+						to={authUrlWithReturnTo(ROUTES.SIGN_IN, returnTo)}
+						className="font-medium text-primary hover:underline"
+					>
 						Sign in
 					</Link>
 				</p>

@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { ROUTES } from "../routes";
 import AuthLayout from "./auth-layout";
 import { safeReturnTo } from "./safe-return-to";
+import { authUrlWithReturnTo } from "./sign-in-redirect";
 import { useAuthAdapter } from "./use-auth-adapter";
 import { type BootstrapState, useBootstrap } from "./use-bootstrap";
 
@@ -24,7 +25,7 @@ function loginErrorMessage(code: string): string {
 // invisible placeholder line of the same height — preserves layout and
 // avoids the default→correct copy flash on first paint. `null` means
 // Clerk / 404 / network error: fall back to the open-mode link.
-function SignUpFooter({ bootstrap }: { bootstrap: BootstrapState }) {
+function SignUpFooter({ bootstrap, returnTo }: { bootstrap: BootstrapState; returnTo: string }) {
 	if (bootstrap === undefined) {
 		return (
 			<p aria-hidden className="invisible text-center text-sm">
@@ -50,7 +51,10 @@ function SignUpFooter({ bootstrap }: { bootstrap: BootstrapState }) {
 	return (
 		<p className="text-center text-muted-foreground text-sm">
 			Don't have an account?{" "}
-			<Link to={ROUTES.SIGN_UP} className="font-medium text-primary hover:underline">
+			<Link
+				to={authUrlWithReturnTo(ROUTES.SIGN_UP, returnTo)}
+				className="font-medium text-primary hover:underline"
+			>
 				Sign up
 			</Link>
 		</p>
@@ -144,7 +148,7 @@ export default function LocalSignIn() {
 					{loading ? "Signing in…" : "Sign in"}
 				</Button>
 
-				<SignUpFooter bootstrap={bootstrap} />
+				<SignUpFooter bootstrap={bootstrap} returnTo={returnTo} />
 			</form>
 		</AuthLayout>
 	);

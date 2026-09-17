@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { signInRedirectTarget } from "./sign-in-redirect";
+import { authUrlWithReturnTo, signInRedirectTarget } from "./sign-in-redirect";
 
 describe("signInRedirectTarget", () => {
 	it("redirects to bare sign-in from the home path (no return_to round-trip)", () => {
@@ -64,5 +64,24 @@ describe("credentials never ride the return_to", () => {
 		expect(decoded).toContain("ref=newsletter");
 		expect(decoded).toContain("#top");
 		expect(decoded).not.toContain("SECRET");
+	});
+});
+
+describe("authUrlWithReturnTo", () => {
+	// The Clerk widget's "Sign up" / "Sign in" cross-links are plain hrefs. A
+	// bare one drops the destination, which is how an MCP-first signup lost its
+	// whole authorization request (#1666 shape, for a user with no account).
+	it("attaches an encoded return_to to an auth route", () => {
+		expect(authUrlWithReturnTo("/sign-up", "/oauth/consent?client_id=abc&state=xyz")).toBe(
+			"/sign-up?return_to=%2Foauth%2Fconsent%3Fclient_id%3Dabc%26state%3Dxyz",
+		);
+	});
+
+	it("leaves the route bare when the destination is home", () => {
+		expect(authUrlWithReturnTo("/sign-up", "/")).toBe("/sign-up");
+	});
+
+	it("leaves the route bare when there is no destination", () => {
+		expect(authUrlWithReturnTo("/sign-up", "")).toBe("/sign-up");
 	});
 });
