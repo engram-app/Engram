@@ -70,11 +70,10 @@ defmodule Engram.Workers.EmbedNote do
   @impl Oban.Worker
   def perform(%Oban.Job{args: args} = job) do
     :ok = BackgroundPriority.demote()
-    note_id = args["note_id"]
     # T3.2 — `old_path_hmac` is a base64-encoded HMAC, never plaintext path.
     old_path_hmac_b64 = args["old_path_hmac"]
 
-    case Engram.Notes.fetch_note_for_worker(note_id) do
+    case Engram.Notes.fetch_note_for_worker_job(args) do
       {:discard, _reason} = discard ->
         discard
 
@@ -337,26 +336,15 @@ defmodule Engram.Workers.EmbedNote do
         from(n in Note, where: n.id == ^note.id and n.content_hash == ^note.content_hash)
       end
 
-    {count, _} =
-      Repo.update_all(park_query, [set: [embed_retry_after: retry_after]],
-        skip_tenant_check: true
-      )
-
     error_kind = Engram.Telemetry.error_kind(reason)
     status = embed_error_status(reason)
 
-    :telemetry.execute(
-      [:engram, :embed, :poison],
-      %{count: 1, cooldown_seconds: cooldown},
-      %{
-        error_kind: error_kind,
-        status: status,
-        note_id: note.id,
-        user_id: note.user_id,
-        parked: count > 0
-      }
-    )
-
+    # Logged BEFORE the park is attempted, deliberately. This whole function
+    # runs only on the terminal attempt — i.e. during an outage — and the park
+    # below now opens a transaction (BEGIN / SET LOCAL / COMMIT). If that
+    # raises on an exhausted pool, the ORIGINAL upstream error still has to
+    # reach the logs; otherwise on-call gets a DBConnection crash instead of
+    # the Voyage status that caused it.
     Logger.error(
       "embed_poisoned",
       Metadata.with_category(:error, :search,
@@ -370,6 +358,29 @@ defmodule Engram.Workers.EmbedNote do
       )
     )
 
+    # Tenant-scoped: `notes` carries FORCE ROW LEVEL SECURITY, and an UPDATE is
+    # FILTERED by the policy's USING clause rather than rejected — it reports 0
+    # rows with no error. Unscoped, the note is never parked, so
+    # ReconcileEmbeddings re-enqueues this exact failing note every 15 minutes
+    # and re-pays Voyage each time. `note.user_id` is in scope.
+    {:ok, {count, _}} =
+      Repo.with_tenant(note.user_id, fn ->
+        Repo.update_all(park_query, set: [embed_retry_after: retry_after])
+      end)
+
+    # Emitted after the write so `parked:` reports what actually happened.
+    :telemetry.execute(
+      [:engram, :embed, :poison],
+      %{count: 1, cooldown_seconds: cooldown},
+      %{
+        error_kind: error_kind,
+        status: status,
+        note_id: note.id,
+        user_id: note.user_id,
+        parked: count > 0
+      }
+    )
+
     :ok
   end
 
@@ -377,13 +388,19 @@ defmodule Engram.Workers.EmbedNote do
 
   defp run_embed(note, user, old_path_hmac_b64) do
     # Load vault up front so we can drive both the decrypt path (future) and
-    # the index call. skip_tenant_check: trusted internal worker.
+    # the index call.
     # Missing vault means the note is orphaned — nothing to index, discard.
-    case Repo.get(Vault, note.vault_id, skip_tenant_check: true) do
-      nil ->
+    #
+    # Tenant-scoped: `vaults` carries FORCE ROW LEVEL SECURITY, so unscoped
+    # this returns nil for a vault that plainly exists and EVERY embed
+    # discards as "orphaned". `RebindNoteLinks` and `ExtractNoteLinks` carried
+    # the identical read; all three are fixed in this change-set, none of them
+    # earlier. `note.user_id` is in scope.
+    case Repo.with_tenant(note.user_id, fn -> Repo.get(Vault, note.vault_id) end) do
+      {:ok, nil} ->
         {:discard, "vault #{note.vault_id} not found for note #{note.id}"}
 
-      %Vault{} = vault ->
+      {:ok, %Vault{} = vault} ->
         case Crypto.maybe_decrypt_note_fields(note, user) do
           {:ok, decrypted_note} ->
             # If renamed, clean up old path's Qdrant points before re-indexing
@@ -500,11 +517,17 @@ defmodule Engram.Workers.EmbedNote do
         ]
       end
 
-    {count, _} =
-      from(n in Note,
-        where: n.id == ^note.id and n.content_hash == ^note.content_hash
-      )
-      |> Repo.update_all([set: set], skip_tenant_check: true)
+    # Tenant-scoped: same filtered-UPDATE class as `maybe_mark_poison/3`.
+    # Unscoped this stamps NOTHING, so the note re-embeds on every sweep and
+    # pays Voyage each time, while `count == 0` below is logged as a benign
+    # "concurrent edit" — a silent, recurring bill.
+    {:ok, {count, _}} =
+      Repo.with_tenant(note.user_id, fn ->
+        from(n in Note,
+          where: n.id == ^note.id and n.content_hash == ^note.content_hash
+        )
+        |> Repo.update_all(set: set)
+      end)
 
     if count == 0 do
       Logger.debug(
@@ -540,7 +563,14 @@ defmodule Engram.Workers.EmbedNote do
   `existing_burst_start` SELECT that would otherwise run once per note for
   nothing (a 500-note reconcile tick = 500 wasted queries).
   """
-  def new_debounced(note_id, opts \\ []) do
+  # `user_id` REQUIRED and positional — see the note on
+  # `Engram.Workers.ExtractNoteLinks.new_debounced/2`.
+  # The `is_binary(user_id)` guard is load-bearing, not decoration. `opts` keeps
+  # a default, so `/2` still exists — without the guard
+  # `new_debounced(note_id, priority: 0)` compiles cleanly and writes a KEYWORD
+  # LIST into `args.user_id`, which then fails the `is_binary` check in
+  # `fetch_note_for_worker_job/1` and silently takes the unscoped legacy path.
+  def new_debounced(note_id, user_id, opts \\ []) when is_binary(user_id) do
     quiet_at = DateTime.add(DateTime.utc_now(), settle_seconds(), :second)
 
     scheduled_at =
@@ -548,7 +578,7 @@ defmodule Engram.Workers.EmbedNote do
         do: clamp_to_ceiling(note_id, quiet_at),
         else: quiet_at
 
-    args = %{note_id: note_id}
+    args = %{note_id: note_id, user_id: user_id}
 
     args =
       if opts[:old_path_hmac],

@@ -8,7 +8,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
   describe "perform/1" do
     test "queues jobs for notes with nil embed_hash" do
       user = insert(:user)
-      note = insert(:note, user: user, embed_hash: nil)
+      note = note_for(user, embed_hash: nil)
 
       assert :ok = perform_job(ReconcileEmbeddings, %{})
       assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
@@ -18,8 +18,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       user = insert(:user)
 
       note =
-        insert(:note,
-          user: user,
+        note_for(user,
           content_hash: "new_hash",
           embed_hash: "old_hash"
         )
@@ -42,8 +41,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       insert(:subscription, user: user, tier: "pro", status: "active")
 
       note =
-        insert(:note,
-          user: user,
+        note_for(user,
           content_hash: "abc123",
           embed_hash: "abc123",
           dense_indexed_hash: "abc123",
@@ -71,8 +69,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
         insert(:subscription, user: user, tier: "pro", status: status)
 
         note =
-          insert(:note,
-            user: user,
+          note_for(user,
             content_hash: "abc123",
             embed_hash: "abc123",
             dense_indexed_hash: nil
@@ -96,8 +93,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       insert(:subscription, user: user, tier: "free", status: "trialing")
 
       _note =
-        insert(:note,
-          user: user,
+        note_for(user,
           content_hash: "abc123",
           embed_hash: "abc123",
           dense_indexed_hash: nil
@@ -112,8 +108,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       insert(:subscription, user: user, tier: "pro", status: "canceled")
 
       _note =
-        insert(:note,
-          user: user,
+        note_for(user,
           content_hash: "abc123",
           embed_hash: "abc123",
           dense_indexed_hash: nil
@@ -125,7 +120,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
 
     test "skips notes where embed_hash matches content_hash" do
       user = insert(:user)
-      _note = insert(:note, user: user, content_hash: "abc123", embed_hash: "abc123")
+      _note = note_for(user, content_hash: "abc123", embed_hash: "abc123")
 
       assert :ok = perform_job(ReconcileEmbeddings, %{})
       refute_enqueued(worker: EmbedNote)
@@ -135,8 +130,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       user = insert(:user)
 
       _note =
-        insert(:note,
-          user: user,
+        note_for(user,
           embed_hash: nil,
           deleted_at: DateTime.utc_now()
         )
@@ -232,8 +226,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       user = insert(:user)
 
       note =
-        insert(:note,
-          user: user,
+        note_for(user,
           embed_hash: nil,
           embed_retry_after: DateTime.add(DateTime.utc_now(), 3600, :second)
         )
@@ -246,8 +239,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       user = insert(:user)
 
       note =
-        insert(:note,
-          user: user,
+        note_for(user,
           embed_hash: nil,
           embed_retry_after: DateTime.add(DateTime.utc_now(), -3600, :second)
         )
@@ -265,7 +257,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
     # successful EmbedNote clears the stamp back to NULL.
     test "stamps a future embed_retry_after on every note it enqueues" do
       user = insert(:user)
-      note = insert(:note, user: user, embed_hash: nil, embed_retry_after: nil)
+      note = note_for(user, embed_hash: nil, embed_retry_after: nil)
 
       assert :ok = perform_job(ReconcileEmbeddings, %{})
       assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
@@ -282,7 +274,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
     test "does not stamp notes it did not enqueue" do
       user = insert(:user)
       # up-to-date note — not enqueued, so it must not be collaterally cooled.
-      fresh = insert(:note, user: user, content_hash: "abc123", embed_hash: "abc123")
+      fresh = note_for(user, content_hash: "abc123", embed_hash: "abc123")
 
       assert :ok = perform_job(ReconcileEmbeddings, %{})
       refute_enqueued(worker: EmbedNote, args: %{"note_id" => fresh.id})
@@ -295,7 +287,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       # OOM kill — no success clear, no graceful poison stamp), then tick again.
       # The preemptive stamp alone must keep it out of the second batch.
       user = insert(:user)
-      note = insert(:note, user: user, embed_hash: nil, embed_retry_after: nil)
+      note = note_for(user, embed_hash: nil, embed_retry_after: nil)
 
       assert :ok = perform_job(ReconcileEmbeddings, %{})
       stamped = Repo.get!(Note, note.id, skip_tenant_check: true).embed_retry_after
@@ -306,6 +298,22 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       assert :ok = perform_job(ReconcileEmbeddings, %{})
       assert Repo.get!(Note, note.id, skip_tenant_check: true).embed_retry_after == stamped
     end
+  end
+
+  # `insert(:note, user: user)` on its own is NOT enough here.
+  #
+  # `note_factory` builds `vault: build(:vault, user: user)` against its OWN
+  # `build(:user)`, so overriding only `user:` leaves the note pointing at a
+  # vault owned by somebody else. That state cannot occur in production — a
+  # note always references its owner's vault — but this cron's eligibility
+  # query INNER JOINs `vaults` and now runs inside each tenant's RLS context,
+  # where another user's vault is invisible. Such a note is therefore skipped
+  # by its own owner's sweep, which silently turned the `assert_enqueued`
+  # tests red and every `refute_enqueued` test in this file VACUOUS.
+  #
+  # So always give the note a vault owned by the same user.
+  defp note_for(user, attrs) do
+    insert(:note, Keyword.merge([user: user, vault: insert(:vault, user: user)], attrs))
   end
 
   defp collect_queries(acc \\ []) do

@@ -464,13 +464,18 @@ defmodule Engram.Notes do
             if prev_hash != note.content_hash do
               _ =
                 Enqueue.enqueue(
-                  EmbedNote.new_debounced(note.id, priority: EmbedNote.priority_for(note)),
+                  EmbedNote.new_debounced(note.id, user.id,
+                    priority: EmbedNote.priority_for(note)
+                  ),
                   "embed_note"
                 )
 
               # #648 lever 1 — cheap edge extraction must not ride the embed
               # debounce (30s) or the embed budget gate; ~2s leading edge.
-              Enqueue.enqueue(ExtractNoteLinks.new_debounced(note.id), "extract_note_links")
+              Enqueue.enqueue(
+                ExtractNoteLinks.new_debounced(note.id, user.id),
+                "extract_note_links"
+              )
             end
 
           note = decrypt_or_raise!(note, user)
@@ -539,13 +544,18 @@ defmodule Engram.Notes do
             if prev_hash != note.content_hash do
               _ =
                 Enqueue.enqueue(
-                  EmbedNote.new_debounced(note.id, priority: EmbedNote.priority_for(note)),
+                  EmbedNote.new_debounced(note.id, user.id,
+                    priority: EmbedNote.priority_for(note)
+                  ),
                   "embed_note"
                 )
 
               # #648 lever 1 — cheap edge extraction must not ride the embed
               # debounce (30s) or the embed budget gate; ~2s leading edge.
-              Enqueue.enqueue(ExtractNoteLinks.new_debounced(note.id), "extract_note_links")
+              Enqueue.enqueue(
+                ExtractNoteLinks.new_debounced(note.id, user.id),
+                "extract_note_links"
+              )
             end
 
           note = decrypt_or_raise!(note, user)
@@ -2278,25 +2288,100 @@ defmodule Engram.Notes do
   end
 
   @doc """
-  Worker-side note fetch: loads by id with `skip_tenant_check` (trusted
-  internal workers scope by note_id, not tenant) and maps the two dead-end
-  states to an Oban `{:discard, reason}` — a vanished note or a soft-deleted
-  one is permanently un-processable, so retrying would only burn attempts.
-  Used by `Engram.Workers.EmbedNote` and `Engram.Workers.RepathNoteIndex`.
+  Worker-side note fetch from a job's args map. Picks the tenant-scoped path
+  when the job carries a `user_id`, and the legacy unscoped one when it does
+  not.
+
+  Use this from `perform/1` rather than calling either arity directly — it is
+  the single place that knows how to bridge jobs enqueued before `user_id`
+  was added to the args.
+  """
+  @spec fetch_note_for_worker_job(map()) :: {:ok, Note.t()} | {:discard, String.t()}
+  def fetch_note_for_worker_job(%{"note_id" => note_id} = args) do
+    case Map.get(args, "user_id") do
+      user_id when is_binary(user_id) ->
+        fetch_note_for_worker(note_id, user_id)
+
+      nil ->
+        # Job predates the args change. The read this falls back to is filtered
+        # under an RLS-enforcing role, so the note WILL discard — see the
+        # legacy bridge's own docs. Counted and logged because that discard is
+        # otherwise indistinguishable from a deleted note, which would make a
+        # one-deploy mass drop invisible.
+        :telemetry.execute(
+          [:engram, :notes, :worker_fetch_legacy_args],
+          %{count: 1},
+          %{note_id: note_id}
+        )
+
+        Logger.warning(
+          "worker note fetch has no tenant in job args; note #{note_id} will " <>
+            "discard while RLS is enforced",
+          Metadata.with_category(:warning, :search, note_id: note_id)
+        )
+
+        fetch_note_for_worker(note_id)
+
+      other ->
+        # Present but unusable. Deliberately NOT folded into the nil branch: a
+        # malformed tenant is a bug at the enqueue site, not an old job, and
+        # routing it to the legacy path would silently discard the note while
+        # looking identical to a pre-change enqueue.
+        raise ArgumentError,
+              "job args carry a non-binary user_id (#{inspect(other)}) for note #{note_id}"
+    end
+  end
+
+  @doc """
+  Worker-side note fetch, tenant-scoped. Maps the two dead-end states to an
+  Oban `{:discard, reason}` — a vanished or soft-deleted note is permanently
+  un-processable, so retrying would only burn attempts.
+
+  `notes` carries FORCE ROW LEVEL SECURITY, so this read needs a tenant. The
+  worker cannot discover one from the note itself (that is the row it cannot
+  read), which is why `user_id` travels in the job args instead: the enqueuer
+  always knows it, because it just wrote the note.
+
+  Observed on staging the moment the app pool dropped to `engram_app`: the
+  unscoped read below returned nil for notes that plainly exist, and
+  `EmbedNote`, `ExtractNoteLinks` and `RepathNoteIndex` all discarded with
+  "note not found" before reaching any of their own logic.
+  """
+  @spec fetch_note_for_worker(String.t(), String.t()) :: {:ok, Note.t()} | {:discard, String.t()}
+  def fetch_note_for_worker(note_id, user_id) when is_binary(user_id) do
+    {:ok, result} = Repo.with_tenant(user_id, fn -> Repo.get(Note, note_id) end)
+    classify_worker_note(note_id, result)
+  end
+
+  @doc """
+  LEGACY BRIDGE — unscoped worker fetch, for jobs enqueued before `user_id`
+  was part of the args.
+
+  Returns nil (hence `{:discard, ...}`) under any role without BYPASSRLS, so
+  under the `engram_app` pool it DISCARDS every job enqueued before the args
+  change. That is deliberate and unavoidable — there is no tenant to recover,
+  and a snooze would never heal — but it is real, bounded loss: those notes
+  end with 0 chunks, 0 links and a NULL `embed_hash`, and the discard reason
+  is byte-identical to that of a genuinely deleted note.
+
+  So the branch that reaches this is logged and counted in
+  `fetch_note_for_worker_job/1`, making the affected population observable for
+  the one deploy cycle it spans (the `unique` windows here are minutes) rather
+  than an invisible mass drop.
+
+  Remove once no in-flight job predates the args change.
   """
   @spec fetch_note_for_worker(String.t()) :: {:ok, Note.t()} | {:discard, String.t()}
   def fetch_note_for_worker(note_id) do
-    case Repo.get(Note, note_id, skip_tenant_check: true) do
-      nil ->
-        {:discard, "note #{note_id} not found"}
-
-      %Note{deleted_at: deleted_at} when deleted_at != nil ->
-        {:discard, "note #{note_id} is soft-deleted"}
-
-      note ->
-        {:ok, note}
-    end
+    classify_worker_note(note_id, Repo.get(Note, note_id, skip_tenant_check: true))
   end
+
+  defp classify_worker_note(note_id, nil), do: {:discard, "note #{note_id} not found"}
+
+  defp classify_worker_note(note_id, %Note{deleted_at: deleted_at}) when deleted_at != nil,
+    do: {:discard, "note #{note_id} is soft-deleted"}
+
+  defp classify_worker_note(_note_id, %Note{} = note), do: {:ok, note}
 
   @doc """
   True when a live note with `note_id` exists in `vault_id` for `user`.
@@ -2652,7 +2737,7 @@ defmodule Engram.Notes do
         # points instead of re-embedding through Voyage. T3.2: base64 hmac, never plaintext.
         _ =
           Enqueue.enqueue(
-            Engram.Workers.RepathNoteIndex.new_debounced(note.id,
+            Engram.Workers.RepathNoteIndex.new_debounced(note.id, user.id,
               old_path_hmac: old_path_hmac_b64!(user, old_path)
             ),
             "repath_note_index"
@@ -4021,7 +4106,7 @@ defmodule Engram.Notes do
 
     embed_jobs =
       for {id, priority} <- embed_candidates, MapSet.member?(enqueueable, id) do
-        EmbedNote.new_debounced(id, clamp: false, priority: priority)
+        EmbedNote.new_debounced(id, user.id, clamp: false, priority: priority)
       end
 
     _ = if embed_jobs != [], do: Oban.insert_all(embed_jobs)
@@ -4032,7 +4117,9 @@ defmodule Engram.Notes do
     extract_jobs =
       ok_entries
       |> Enum.filter(fn %{result: {:ok, info}} -> info.prev_hash != info.content_hash end)
-      |> Enum.map(fn %{result: {:ok, info}} -> ExtractNoteLinks.new_debounced(info.id) end)
+      |> Enum.map(fn %{result: {:ok, info}} ->
+        ExtractNoteLinks.new_debounced(info.id, user.id)
+      end)
 
     _ = if extract_jobs != [], do: Oban.insert_all(extract_jobs)
 
@@ -5628,7 +5715,7 @@ defmodule Engram.Notes do
 
               _ =
                 Enqueue.enqueue(
-                  Engram.Workers.RepathNoteIndex.new_debounced(note.id,
+                  Engram.Workers.RepathNoteIndex.new_debounced(note.id, user.id,
                     old_path_hmac: old_path_hmac
                   ),
                   "repath_note_index"

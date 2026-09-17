@@ -544,7 +544,7 @@ defmodule Engram.Workers.EmbedNoteTest do
     end
 
     test "schedules ~settle seconds out by default", %{note: note} do
-      {:ok, _} = Oban.insert(EmbedNote.new_debounced(note.id))
+      {:ok, _} = Oban.insert(EmbedNote.new_debounced(note.id, note.user_id))
 
       job = embed_job(note.id)
       diff = DateTime.diff(job.scheduled_at, DateTime.utc_now(), :second)
@@ -552,8 +552,8 @@ defmodule Engram.Workers.EmbedNoteTest do
     end
 
     test "a rapid re-insert keeps a single job and pushes the timer out", %{note: note} do
-      {:ok, _} = Oban.insert(EmbedNote.new_debounced(note.id))
-      {:ok, _} = Oban.insert(EmbedNote.new_debounced(note.id))
+      {:ok, _} = Oban.insert(EmbedNote.new_debounced(note.id, note.user_id))
+      {:ok, _} = Oban.insert(EmbedNote.new_debounced(note.id, note.user_id))
 
       jobs =
         from(j in Oban.Job, where: fragment("? ->> 'note_id' = ?", j.args, ^to_string(note.id)))
@@ -566,7 +566,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
     test "clamps scheduled_at to the max-wait ceiling for a continuously-edited note",
          %{note: note} do
-      {:ok, _} = Oban.insert(EmbedNote.new_debounced(note.id))
+      {:ok, _} = Oban.insert(EmbedNote.new_debounced(note.id, note.user_id))
 
       # Backdate the burst start to 290s ago — 10s short of the 300s ceiling.
       # The next edit must clamp to the ceiling (~now+10s), NOT the full 30s settle.
@@ -575,7 +575,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       from(j in Oban.Job, where: fragment("? ->> 'note_id' = ?", j.args, ^to_string(note.id)))
       |> Repo.update_all(set: [inserted_at: burst_start])
 
-      {:ok, _} = Oban.insert(EmbedNote.new_debounced(note.id))
+      {:ok, _} = Oban.insert(EmbedNote.new_debounced(note.id, note.user_id))
 
       job = embed_job(note.id)
       diff = DateTime.diff(job.scheduled_at, DateTime.utc_now(), :second)
