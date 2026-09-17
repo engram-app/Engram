@@ -74,6 +74,41 @@ defmodule Engram.Workers.OrphanSweep do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
+    if tenancy_unsafe?() do
+      # REFUSE rather than sweep blind. This worker diffs Qdrant against
+      # `chunks`, and `chunks` carries FORCE ROW LEVEL SECURITY — so where RLS
+      # is enforced and no maintenance pool is configured, `chunk_point_ids/1`
+      # returns an EMPTY set and every scanned point looks orphaned.
+      #
+      # `runaway?/2` is not sufficient protection: it requires
+      # `n >= @runaway_floor` (100), so a collection under 100 points falls
+      # through the ratio guard entirely and is deleted in full. The grace
+      # re-check in `confirm_and_delete/2` calls the same blinded function and
+      # concurs. That is irreversible without a paid re-embed.
+      #
+      # `max_attempts: 1`, so this discards and is visible in the Oban
+      # dashboard and the discard telemetry rather than retrying forever.
+      Logger.error(
+        "orphan_sweep refusing to run: RLS is enforced and no maintenance pool is " <>
+          "configured, so the chunk reads this diffs against would return zero rows and " <>
+          "every Qdrant point would look orphaned",
+        Metadata.with_category(:error, :oban, [])
+      )
+
+      {:error, :tenancy_unsafe}
+    else
+      do_perform(args)
+    end
+  end
+
+  # One query per weekly run. Deliberately not cached: the answer depends on
+  # the credential this node connected with, and a node that gets a new pool
+  # gets a new boot.
+  defp tenancy_unsafe? do
+    Repo.maintenance() == Repo and Engram.Repo.TenancyGuard.enforced?()
+  end
+
+  defp do_perform(args) do
     live_ids = live_user_ids()
 
     qdrant_deleted = sweep_qdrant(live_ids)
@@ -276,10 +311,10 @@ defmodule Engram.Workers.OrphanSweep do
     end)
   end
 
-  # skip_tenant_check: cross-tenant by design — this is a whole-collection
-  # reconciliation, and RLS would hide exactly the rows that prove a point is
-  # still live. Indexed lookup on `chunks.qdrant_point_id`, bounded by the
-  # caller's page/candidate list — never a whole-table read.
+  # cross_tenant: by design — this is a whole-collection reconciliation, and
+  # RLS would hide exactly the rows that prove a point is still live. Indexed
+  # lookup on `chunks.qdrant_point_id`, bounded by the caller's page/candidate
+  # list — never a whole-table read.
   #
   # Chunked: one bind parameter per id against Postgres' 65,535 statement cap.
   # A page is 4,096 and the candidate list can reach the cap plus a page, so
@@ -290,12 +325,14 @@ defmodule Engram.Workers.OrphanSweep do
     |> cast_uuids()
     |> Enum.chunk_every(@id_query_batch)
     |> Enum.reduce(MapSet.new(), fn batch, acc ->
-      Chunk
-      |> where([c], c.qdrant_point_id in ^batch)
-      |> select([c], c.qdrant_point_id)
-      |> Repo.all(skip_tenant_check: true)
-      |> Enum.reject(&is_nil/1)
-      |> Enum.into(acc)
+      Repo.cross_tenant(fn ->
+        Chunk
+        |> where([c], c.qdrant_point_id in ^batch)
+        |> select([c], c.qdrant_point_id)
+        |> Repo.all()
+        |> Enum.reject(&is_nil/1)
+        |> Enum.into(acc)
+      end)
     end)
   end
 
@@ -504,19 +541,21 @@ defmodule Engram.Workers.OrphanSweep do
   # Qdrant points BEFORE its DB transaction, so a restore leaves exactly this
   # shape: live rows in a soft-deleted vault whose points are already gone.
   #
-  # skip_tenant_check: cross-tenant by design, same as `chunk_point_ids/1` —
-  # RLS would hide exactly the rows this reconciliation exists to check.
+  # cross_tenant: by design, same as `chunk_point_ids/1` — RLS would hide
+  # exactly the rows this reconciliation exists to check.
   defp chunk_page(after_id) do
-    Chunk
-    |> join(:inner, [c], n in Note, on: n.id == c.note_id)
-    |> join(:inner, [c, n], v in Vault, on: v.id == n.vault_id)
-    |> where([c, n, v], is_nil(n.deleted_at) and is_nil(v.deleted_at))
-    |> where([c], not is_nil(c.qdrant_point_id))
-    |> then(fn q -> if after_id, do: where(q, [c], c.id > ^after_id), else: q end)
-    |> order_by([c], asc: c.id)
-    |> limit(^chunk_probe_batch())
-    |> select([c], {c.id, c.note_id, c.qdrant_point_id})
-    |> Repo.all(skip_tenant_check: true)
+    Repo.cross_tenant(fn ->
+      Chunk
+      |> join(:inner, [c], n in Note, on: n.id == c.note_id)
+      |> join(:inner, [c, n], v in Vault, on: v.id == n.vault_id)
+      |> where([c, n, v], is_nil(n.deleted_at) and is_nil(v.deleted_at))
+      |> where([c], not is_nil(c.qdrant_point_id))
+      |> then(fn q -> if after_id, do: where(q, [c], c.id > ^after_id), else: q end)
+      |> order_by([c], asc: c.id)
+      |> limit(^chunk_probe_batch())
+      |> select([c], {c.id, c.note_id, c.qdrant_point_id})
+      |> Repo.all()
+    end)
   end
 
   # Which of these ids does Qdrant actually hold? `has_id` against the existing

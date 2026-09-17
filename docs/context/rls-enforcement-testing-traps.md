@@ -210,28 +210,38 @@ under it. Committing is safe **only on the filtered-write path specifically**,
 because filtered `update_all`/`delete_all` never raise:
 
 ```elixir
-  # Commit-based variant, for assertions about PERSISTED effect.
-  #
-  # [...] But a rollback also discards the write under test, so an assertion that a
-  # row is GONE can never pass. Committing is safe on this path specifically
-  # because `delete_all`/`update_all` are FILTERED by the policy rather than
-  # rejected, so nothing here raises.
-  defp as_prod_role_committing(fun) do
+  def as_prod_role_committing(fun) do
     {:ok, result} =
       Repo.transaction(fn ->
         Repo.query!("SELECT set_config('app.current_tenant', '', true)")
         Repo.query!("SET LOCAL ROLE engram_app")
 
-        try do
-          fun.()
-        after
-          Repo.query!("RESET ROLE")
-        end
+        result = fun.()
+
+        # SUCCESS PATH ONLY. Deliberately not an `after`.
+        Repo.query!("RESET ROLE")
+        result
       end)
 
     result
   end
 ```
+
+**`RESET ROLE` goes on the success path, never in an `after`.** This doc showed
+the `after` form for months and one test file copied it. On the raise path the
+transaction is already aborted, so the reset fails with 25P02 and replaces the
+real error with "current transaction is aborted" — the exact masking the
+rolling-back variant above exists to avoid. Letting the raise propagate rolls
+the transaction back, which discards the `SET LOCAL` state anyway, so nothing
+leaks and the original error survives.
+
+**Do not copy either of these.** Both now live in `Engram.RlsCase`
+(`test/support/rls_case.ex`) as `as_prod_role/1` and
+`as_prod_role_committing/1`; `import Engram.RlsCase` and use them. Six
+hand-rolled copies across five files drifted into three spellings, and one of
+them reused the name `as_prod_role` for the *committing* variant — same name,
+different return type, in a file sitting next to four that meant the other
+thing.
 
 On the committing path `RESET ROLE` **is** mandatory rather than tidiness: these
 transactions are savepoints under the sandbox, and `RELEASE SAVEPOINT` would

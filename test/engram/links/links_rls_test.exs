@@ -48,6 +48,7 @@ defmodule Engram.Links.LinksRlsTest do
   use Engram.DataCase, async: false
 
   import Ecto.Query
+  import Engram.RlsCase
 
   alias Engram.Crypto.DekCache
   alias Engram.Links
@@ -79,63 +80,6 @@ defmodule Engram.Links.LinksRlsTest do
       |> Repo.update_all([set: [target_note_id: target.id]], skip_tenant_check: true)
 
     {:ok, user: user, vault: vault, source: source, target: target}
-  end
-
-  # Runs `fun` as the non-BYPASSRLS role with NO tenant set — the shape these
-  # functions would run in if the app connected as anything but a superuser.
-  #
-  # Rolls back unconditionally so the SET LOCAL role and tenant are discarded
-  # without a trailing RESET ROLE, which would itself fail with 25P02 if the
-  # transaction had been aborted by a raise.
-  defp as_prod_role(fun) do
-    {:error, outcome} =
-      Repo.transaction(fn ->
-        Repo.query!("SELECT set_config('app.current_tenant', '', true)")
-        Repo.query!("SET LOCAL ROLE engram_app")
-
-        outcome =
-          try do
-            {:returned, fun.()}
-          rescue
-            e -> {:raised, e}
-          end
-
-        Repo.rollback(outcome)
-      end)
-
-    outcome
-  end
-
-  # Commit-based variant, for assertions about PERSISTED effect.
-  #
-  # `as_prod_role/1` rolls back unconditionally, which is right for the read
-  # tests — they assert on return values — and mandatory for anything that can
-  # raise: an RLS-rejected INSERT aborts the transaction, and a trailing
-  # `RESET ROLE` would then fail with 25P02 and mask the original error.
-  #
-  # But a rollback also discards the write under test, so an assertion that a
-  # row is GONE can never pass. Committing is safe on this path specifically
-  # because `delete_all`/`update_all` are FILTERED by the policy rather than
-  # rejected, so nothing here raises.
-  defp as_prod_role_committing(fun) do
-    {:ok, result} =
-      Repo.transaction(fn ->
-        Repo.query!("SELECT set_config('app.current_tenant', '', true)")
-        Repo.query!("SET LOCAL ROLE engram_app")
-
-        result = fun.()
-
-        # Reset on the SUCCESS path only, deliberately not in an `after`. If
-        # `fun` raises, the transaction is already aborted and `RESET ROLE`
-        # would fail with 25P02, replacing the real error with "current
-        # transaction is aborted". Letting the raise propagate instead rolls
-        # the transaction back, which discards the SET LOCAL role and tenant
-        # anyway — so nothing leaks and the original error survives.
-        Repo.query!("RESET ROLE")
-        result
-      end)
-
-    result
   end
 
   describe "Engram.Links under enforced RLS" do

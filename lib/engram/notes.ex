@@ -2349,7 +2349,7 @@ defmodule Engram.Notes do
   """
   @spec fetch_note_for_worker(String.t(), String.t()) :: {:ok, Note.t()} | {:discard, String.t()}
   def fetch_note_for_worker(note_id, user_id) when is_binary(user_id) do
-    {:ok, result} = Repo.with_tenant(user_id, fn -> Repo.get(Note, note_id) end)
+    result = Repo.with_tenant!(user_id, fn -> Repo.get(Note, note_id) end)
     classify_worker_note(note_id, result)
   end
 
@@ -2373,7 +2373,8 @@ defmodule Engram.Notes do
   """
   @spec fetch_note_for_worker(String.t()) :: {:ok, Note.t()} | {:discard, String.t()}
   def fetch_note_for_worker(note_id) do
-    classify_worker_note(note_id, Repo.get(Note, note_id, skip_tenant_check: true))
+    note = Repo.cross_tenant(fn -> Repo.get(Note, note_id) end)
+    classify_worker_note(note_id, note)
   end
 
   defp classify_worker_note(note_id, nil), do: {:discard, "note #{note_id} not found"}
@@ -2477,7 +2478,7 @@ defmodule Engram.Notes do
             select: {n.path_hmac, n.id}
           )
 
-        {:ok, rows} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
+        rows = Repo.with_tenant!(user.id, fn -> Repo.all(query) end)
 
         Map.new(rows, fn {hmac, id} -> {Map.fetch!(by_hmac, hmac), id} end)
 
@@ -4954,7 +4955,7 @@ defmodule Engram.Notes do
   def list_folder_markers(user, vault) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, dek} <- Crypto.get_dek(user) do
-      {:ok, markers} = Repo.with_tenant(user.id, fn -> raw_folder_marker_rows(user, vault) end)
+      markers = Repo.with_tenant!(user.id, fn -> raw_folder_marker_rows(user, vault) end)
       decrypt_folder_marker_rows(markers, dek)
     else
       {:error, :no_dek} -> []
@@ -5050,7 +5051,7 @@ defmodule Engram.Notes do
   """
   @spec list_tree_notes(map(), map()) :: {:ok, [map()]}
   def list_tree_notes(user, vault) do
-    {:ok, rows} = Repo.with_tenant(user.id, fn -> raw_tree_note_rows(user, vault) end)
+    rows = Repo.with_tenant!(user.id, fn -> raw_tree_note_rows(user, vault) end)
     {:ok, dek} = Crypto.get_dek(user)
     {:ok, decrypt_tree_note_rows(rows, dek)}
   end
@@ -5195,7 +5196,7 @@ defmodule Engram.Notes do
     case Crypto.dek_filter_key(user) do
       {:ok, _filter_key} ->
         {:ok, dek} = Crypto.get_dek(user)
-        {:ok, rows} = Repo.with_tenant(user.id, fn -> raw_folder_count_rows(user, vault) end)
+        rows = Repo.with_tenant!(user.id, fn -> raw_folder_count_rows(user, vault) end)
         {:ok, decrypt_folder_count_rows(rows, dek)}
 
       {:error, :no_dek} ->
@@ -5429,7 +5430,7 @@ defmodule Engram.Notes do
   defp fetch_decrypted_live_rows(user, vault) do
     query = from(n in scoped_live(user, vault), select: struct(n, @note_meta_fields))
 
-    {:ok, rows} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
+    rows = Repo.with_tenant!(user.id, fn -> Repo.all(query) end)
     {:ok, dek} = Crypto.get_dek(user)
 
     # Marker rows have nil path_ciphertext, so the standard decrypt path

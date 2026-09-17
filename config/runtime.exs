@@ -646,6 +646,59 @@ if config_env() == :prod do
            log: false
          ] ++ database_ssl_opts
 
+  # Second pool, for work that legitimately spans tenants (orphan reaping,
+  # expiry sweeps, credential lookups that DISCOVER a user_id). See
+  # `Engram.Repo.Maintenance`.
+  #
+  # Unset is supported and correct for self-host: one box, one tenant,
+  # connecting as its own database owner, nothing for RLS to separate. The
+  # resolver `Engram.Repo.maintenance/0` then hands back `Engram.Repo` and
+  # callers read identically, so a self-hoster never configures a second
+  # credential and never learns this exists.
+  #
+  # Unset on SaaS, where the app connects as a role RLS applies to, means every
+  # such sweep is filtered to zero rows and reports success.
+  # `Engram.Repo.TenancyGuard` is what says so at boot.
+  # `""` is matched alongside `nil` deliberately. An empty-valued env var is a
+  # routine state in an ECS task definition or a SOPS-rendered env file, and it
+  # is the state immediately adjacent to the supported one. Without this,
+  # `Ecto.Repo.Supervisor.parse_url("")` returns `[]`, so no host and no
+  # database are merged, the pool starts and cannot serve a query — and
+  # `maintenance_repo_enabled` is set true, so `TenancyGuard` logs the
+  # REASSURING branch ("maintenance pool configured") over an unusable pool.
+  # That is exactly the false-green class this change exists to remove. The
+  # same `""` filter is already the convention elsewhere in this file.
+  case System.get_env("MAINTENANCE_DATABASE_URL") do
+    url when url in [nil, ""] ->
+      :ok
+
+    maintenance_url ->
+      config :engram,
+             Engram.Repo.Maintenance,
+             [
+               url: maintenance_url,
+               # Deliberately tiny: this pool serves a few cron jobs and never a
+               # request, and connections are the scarce resource on RDS (see
+               # docs/context/prod-db-connection-budget.md). It is sized per
+               # NODE, like POOL_SIZE, so the fleet total is this times the task
+               # count.
+               pool_size: String.to_integer(System.get_env("MAINTENANCE_POOL_SIZE") || "2"),
+               socket_options: maybe_ipv6,
+               # Same reasoning as Engram.Repo above (T3.0.2): keep Ecto params
+               # out of :debug logs if anyone raises the log level.
+               log: false
+             ] ++
+               Engram.RuntimeConfig.database_ssl(
+                 &System.get_env/1,
+                 URI.parse(maintenance_url).host
+               )
+
+      # Read by `Engram.Repo.maintenance/0`. A separate key rather than probing
+      # for the repo's config, so the resolver stays a cheap app-env lookup on
+      # a path that runs per sweep query.
+      config :engram, :maintenance_repo_enabled, true
+  end
+
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you
   # want to use a different value for prod and you most likely don't want

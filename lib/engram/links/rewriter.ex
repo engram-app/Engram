@@ -446,7 +446,7 @@ defmodule Engram.Links.Rewriter do
   end
 
   defp persist_roomless(user, vault, note, doc, delta, head_at_load, rt) do
-    {:ok, head_now} = Repo.with_tenant(user.id, fn -> tail_head(note.id, note.vault_id) end)
+    head_now = Repo.with_tenant!(user.id, fn -> tail_head(note.id, note.vault_id) end)
 
     cond do
       head_now == head_at_load ->

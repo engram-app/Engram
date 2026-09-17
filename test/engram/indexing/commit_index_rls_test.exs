@@ -66,6 +66,12 @@ defmodule Engram.Indexing.CommitIndexRlsTest do
   import Ecto.Query
   import Mox
 
+  # The rolling-back variant: `commit_index/1` INSERTs, and INSERT is the one
+  # statement the policy rejects rather than filters. Two tests below match on
+  # `{:raised, error}` to turn that 42501 into a legible `flunk`, which is what
+  # the tagged return is for.
+  import Engram.RlsCase
+
   alias Engram.Indexing
   alias Engram.Notes
   alias Engram.Notes.Note
@@ -113,33 +119,6 @@ defmodule Engram.Indexing.CommitIndexRlsTest do
       |> Plug.Conn.put_resp_content_type("application/json")
       |> Plug.Conn.send_resp(200, ~s({"result": true, "status": "ok"}))
     end)
-  end
-
-  # Runs `fun` as the non-BYPASSRLS role with NO tenant set — the shape a real
-  # `EmbedNote` job would have if the app connected as anything but a superuser.
-  #
-  # Always rolls back. That is deliberate and load-bearing: an RLS violation
-  # aborts the transaction, so a trailing `RESET ROLE` would itself fail with
-  # 25P02 and mask the original error. Rolling back discards the SET LOCAL role
-  # and tenant anyway, so there is nothing to reset. The outcome is carried out
-  # through the rollback value.
-  defp as_prod_role(fun) do
-    {:error, outcome} =
-      Repo.transaction(fn ->
-        Repo.query!("SELECT set_config('app.current_tenant', '', true)")
-        Repo.query!("SET LOCAL ROLE engram_app")
-
-        outcome =
-          try do
-            {:returned, fun.()}
-          rescue
-            e -> {:raised, e}
-          end
-
-        Repo.rollback(outcome)
-      end)
-
-    outcome
   end
 
   defp prepare!(note, vault, user) do

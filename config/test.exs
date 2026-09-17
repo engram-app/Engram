@@ -45,6 +45,12 @@ config :engram, :fanout_pacing_enabled, false
 # across isolated sandbox transactions. Prod keeps it (defaults true).
 config :engram, :admin_bootstrap_lock_enabled, false
 
+# The guard queries pg_roles at boot. Under the SQL sandbox that checkout has
+# no owner, so it would fail the whole application start. `enforced?/0` is
+# covered directly by Engram.Repo.TenancyGuardTest, which can also drop the
+# role — the interesting case a boot-time call could never reach.
+config :engram, :tenancy_guard_enabled, false
+
 # Configure your database
 #
 # The MIX_TEST_PARTITION environment variable can be used

@@ -41,6 +41,10 @@ defmodule Engram.OnboardingRlsTest do
 
   use Engram.DataCase, async: false
 
+  # The rolling-back variant, because the INSERT under test RAISES when
+  # unscoped — that 42501 is the staging 500 this file fences.
+  import Engram.RlsCase
+
   alias Engram.LegalFixtures
   alias Engram.Onboarding
   alias Engram.Onboarding.Agreement
@@ -80,31 +84,6 @@ defmodule Engram.OnboardingRlsTest do
     end)
 
     :ok
-  end
-
-  # Runs `fun` as the non-BYPASSRLS role with NO tenant set — the shape
-  # onboarding ran in on staging once the app pool dropped to `engram_app`.
-  #
-  # Rolls back unconditionally: the INSERT under test RAISES when unscoped, and
-  # a trailing RESET ROLE on an aborted transaction would fail with 25P02 and
-  # mask the original error.
-  defp as_prod_role(fun) do
-    {:error, outcome} =
-      Repo.transaction(fn ->
-        Repo.query!("SELECT set_config('app.current_tenant', '', true)")
-        Repo.query!("SET LOCAL ROLE engram_app")
-
-        outcome =
-          try do
-            {:returned, fun.()}
-          rescue
-            e -> {:raised, e}
-          end
-
-        Repo.rollback(outcome)
-      end)
-
-    outcome
   end
 
   # Seeds an acceptance WITHOUT going through `accept_terms/3`.

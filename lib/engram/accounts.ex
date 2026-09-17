@@ -608,9 +608,14 @@ defmodule Engram.Accounts do
   def validate_api_key(raw_key) do
     key_hash = hash_api_key(raw_key)
 
-    case Repo.one(from(k in ApiKey, where: k.key_hash == ^key_hash, preload: :user),
-           skip_tenant_check: true
-         ) do
+    # Tenant DISCOVERY, not a tenant bypass: the user_id is what this lookup
+    # returns, so there is nothing to scope by until it has already succeeded.
+    lookup =
+      Repo.cross_tenant(fn ->
+        Repo.one(from(k in ApiKey, where: k.key_hash == ^key_hash, preload: :user))
+      end)
+
+    case lookup do
       nil -> {:error, :invalid_key}
       api_key -> {:ok, api_key.user, api_key}
     end

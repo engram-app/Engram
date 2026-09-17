@@ -81,6 +81,26 @@ defmodule Engram.PromEx.Reliability do
           description: "Honored skip_tenant_check bypasses on a tenant table.",
           tags: [:table]
         ),
+        # Both of these fire once per boot, from Engram.Repo.TenancyGuard.
+        # Prometheus, not Loki: the ONLY environment where they can fire is one
+        # whose connecting role is subject to RLS, and Loki alert rules live
+        # exclusively under main/envs/prod — whose role bypasses RLS, so the
+        # log line there is unreachable. A Logger.error with no alert behind it
+        # is not an observable.
+        counter(
+          metric_prefix ++ [:tenancy_misconfigured, :total],
+          event_name: [:engram, :repo, :tenancy_misconfigured],
+          description:
+            "Boot found RLS enforced with no maintenance pool: cross-tenant sweeps are " <>
+              "filtered to zero rows and report success.",
+          tags: []
+        ),
+        counter(
+          metric_prefix ++ [:tenancy_unknown, :total],
+          event_name: [:engram, :repo, :tenancy_unknown],
+          description: "Boot could not determine whether RLS is enforced for this connection.",
+          tags: []
+        ),
         counter(
           metric_prefix ++ [:embed, :failed, :total],
           event_name: [:engram, :embed, :failed],
