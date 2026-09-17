@@ -217,6 +217,7 @@ Each block is opt-in: unset → no-op (dev/test/self-host emit nothing).
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | **Master switch for tracing** — unset → OTel is a no-op. Prod points it at the Alloy sidecar on loopback; Alloy forwards to Tempo. |
 | `ENGRAM_OTEL_SAMPLE_RATIO` | `1.0` | Head-sampling ratio, tunable without a code deploy. Applies *after* `Engram.Observability.TraceSampler` drops health-check/scrape traffic (~96% of span volume) at the root — under `:parent_based` a root `:drop` cascades, so probe traces never build children. |
 | `TELEMETRY_HMAC_KEY_USER_ID` | unset (per-boot random + warning) | HMAC key for hashing user ids in metric labels/logs — **distinct from any encryption key**. SaaS prod + staging set it via SOPS so `user_id_hmac` correlates across restarts; unset still never leaks plaintext ids, it just breaks correlation across reboots. |
+| `HMAC_KEY_ANALYTICS_ID` | unset (per-boot random) | Keys `Engram.Observability.PostHog.analytics_id/1` — a pseudonymous id derived from a user's email for PostHog. Separate secret from `TELEMETRY_HMAC_KEY_USER_ID` on purpose (domain separation). SaaS prod sets it via SOPS so the id is stable across restarts; self-host/dev leave it unset since analytics is off anyway (no `POSTHOG_API_KEY`). Non-rotating by design — rotating it re-identifies every person in PostHog. |
 
 ## Notes on removed / migrated vars
 
