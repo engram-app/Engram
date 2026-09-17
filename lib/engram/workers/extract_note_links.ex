@@ -68,7 +68,7 @@ defmodule Engram.Workers.ExtractNoteLinks do
   def perform(%Oban.Job{args: args}) do
     :ok = BackgroundPriority.demote()
 
-    case Engram.Notes.fetch_note_for_worker(args["note_id"]) do
+    case Engram.Notes.fetch_note_for_worker_job(args) do
       {:discard, _reason} = discard ->
         discard
 
@@ -85,11 +85,17 @@ defmodule Engram.Workers.ExtractNoteLinks do
     user = Accounts.get_user!(note.user_id)
 
     # Missing vault = orphaned note (same rule as EmbedNote): nothing to do.
-    case Repo.get(Vault, note.vault_id, skip_tenant_check: true) do
-      nil ->
+    #
+    # Tenant-scoped: `vaults` carries FORCE ROW LEVEL SECURITY, so unscoped
+    # this returns nil for a vault that exists and the job discards as
+    # "orphaned". `note.user_id` is in hand from the fetch above, so there is
+    # no tenant to discover. `RebindNoteLinks` and `EmbedNote` carried the
+    # identical unscoped vault read; all three are fixed in this change-set.
+    case Repo.with_tenant(note.user_id, fn -> Repo.get(Vault, note.vault_id) end) do
+      {:ok, nil} ->
         {:discard, "vault #{note.vault_id} not found for note #{note.id}"}
 
-      %Vault{} = vault ->
+      {:ok, %Vault{} = vault} ->
         # notes.content is the REST/search FACADE — since #1141 it's only
         # materialized from the CRDT doc at checkpoint, so it lags a live doc
         # write (same staleness class as #1159, see
@@ -121,9 +127,22 @@ defmodule Engram.Workers.ExtractNoteLinks do
   @doc """
   Leading-edge debounced job (~2s, `:link_extract_delay_seconds` app env key).
   """
-  @spec new_debounced(binary()) :: Ecto.Changeset.t()
-  def new_debounced(note_id) do
-    new(%{note_id: note_id},
+  # `user_id` is REQUIRED and positional, not an option: `notes` is
+  # RLS-scoped, the worker cannot discover the tenant from the note it is
+  # trying to read, and making this optional would let a call site silently
+  # keep enqueueing jobs that discard.
+  #
+  # Here the arity change alone is enough — there is no `/1` left, so a stale
+  # caller fails to COMPILE. `EmbedNote` and `RepathNoteIndex` keep an `opts`
+  # default, so their `/2` still exists and they need an `is_binary(user_id)`
+  # guard to get an equivalent (runtime) failure instead of a keyword list
+  # landing in `args.user_id`.
+  #
+  # `unique: keys: [:note_id]` is unchanged on purpose — dedup must stay keyed
+  # on the note alone, or the same note could collect one job per key shape.
+  @spec new_debounced(binary(), binary()) :: Ecto.Changeset.t()
+  def new_debounced(note_id, user_id) do
+    new(%{note_id: note_id, user_id: user_id},
       schedule_in: extract_delay_seconds(),
       unique: [period: 60, keys: [:note_id], states: [:available, :scheduled]]
     )
@@ -155,18 +174,22 @@ defmodule Engram.Workers.ExtractNoteLinks do
   # Plugin/Obsidian-origin renames never enqueued a rewrite (one-rewriter
   # invariant) → no evidence row → correctly never repaired here.
   defp repair_rename_danglers(user, vault, source_note_id) do
-    dangling_hmacs =
-      Repo.all(
-        from(l in NoteLink,
-          where:
-            l.source_note_id == ^source_note_id and l.user_id == ^user.id and
-              l.vault_id == ^vault.id and is_nil(l.target_note_id) and
-              is_nil(l.target_attachment_id),
-          distinct: true,
-          select: l.target_basename_hmac
-        ),
-        skip_tenant_check: true
-      )
+    # Tenant-scoped: `note_links` carries FORCE ROW LEVEL SECURITY, so
+    # unscoped this returns [] and bind-time rename repair silently stops
+    # working — no error, no dangler ever repaired. `user.id` is in scope.
+    {:ok, dangling_hmacs} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.all(
+          from(l in NoteLink,
+            where:
+              l.source_note_id == ^source_note_id and l.user_id == ^user.id and
+                l.vault_id == ^vault.id and is_nil(l.target_note_id) and
+                is_nil(l.target_attachment_id),
+            distinct: true,
+            select: l.target_basename_hmac
+          )
+        )
+      end)
 
     Enum.each(dangling_hmacs, fn hmac ->
       case recent_rename_job_args(user.id, vault.id, Base.encode64(hmac)) do

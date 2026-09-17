@@ -81,9 +81,28 @@ defmodule Engram.Workers.RebindNoteLinks do
           :ok ->
             user = Accounts.get_user!(user_id)
 
-            case Repo.get(Vault, vault_id, skip_tenant_check: true) do
-              nil -> {:discard, "vault #{vault_id} not found"}
-              %Vault{} = vault -> Links.bind_danglers_for_hmac(user, vault, basename_hmac)
+            # `vaults` carries FORCE ROW LEVEL SECURITY. Unscoped, this read
+            # returns nil under any role without BYPASSRLS and the job
+            # discards with "vault not found" — observed on staging the moment
+            # the app pool dropped to `engram_app`, for a vault that plainly
+            # exists. `user_id` is already in the job args (used just above),
+            # so there is no tenant to discover here.
+            #
+            # `skip_tenant_check` deliberately dropped rather than kept
+            # alongside the scope: inside `with_tenant/2` the guard passes on
+            # the process-dict tenant anyway, and leaving the option would
+            # silence `Engram.TenantError` if this read were ever hoisted back
+            # out of the closure.
+            #
+            # `bind_danglers_for_hmac/3` opens its own scope and is called
+            # OUTSIDE this block. That costs a second `set_config` round trip
+            # (re-entrancy is free only INSIDE an active `with_tenant`, and
+            # this block has already exited), which is the right trade: the
+            # vault load does not hold a transaction across the per-edge
+            # rebind loop.
+            case Repo.with_tenant(user_id, fn -> Repo.get(Vault, vault_id) end) do
+              {:ok, nil} -> {:discard, "vault #{vault_id} not found"}
+              {:ok, %Vault{} = vault} -> Links.bind_danglers_for_hmac(user, vault, basename_hmac)
             end
 
           {:error, :rotation_in_progress} ->

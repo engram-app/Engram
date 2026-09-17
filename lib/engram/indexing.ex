@@ -178,7 +178,18 @@ defmodule Engram.Indexing do
   # that never had chunks) does not pay a Qdrant round trip on every index.
   # The cheap Postgres existence check gates the expensive remote delete.
   defp purge_stale_index(note) do
-    if Repo.exists?(from(c in Chunk, where: c.note_id == ^note.id), skip_tenant_check: true) do
+    # Tenant-scoped: `chunks` carries FORCE ROW LEVEL SECURITY, so unscoped this
+    # gate reads false for a note that HAS chunks, `delete_note_index/1` is
+    # skipped, and the previous pass's points survive the re-index as stale
+    # duplicates. Scoping only the gate, deliberately: `delete_note_index/1`
+    # opens its own scope and makes a Qdrant call, which must not run inside a
+    # transaction.
+    {:ok, has_chunks?} =
+      Repo.with_tenant(note.user_id, fn ->
+        Repo.exists?(from(c in Chunk, where: c.note_id == ^note.id))
+      end)
+
+    if has_chunks? do
       delete_note_index(note)
     else
       :ok
@@ -363,7 +374,7 @@ defmodule Engram.Indexing do
              to_string(note.vault_id),
              path_hmac
            ) do
-      forget_chunk_reuse(note.id)
+      forget_chunk_reuse(note)
       :ok
     end
   end
@@ -385,11 +396,15 @@ defmodule Engram.Indexing do
   invisible.
   """
   def forget_chunk_reuse_for_user(user_id) do
-    Repo.update_all(
-      from(c in Chunk, where: c.user_id == ^user_id and not is_nil(c.context_hmac)),
-      [set: [context_hmac: nil]],
-      skip_tenant_check: true
-    )
+    # Tenant-scoped: same filtered-UPDATE class as `forget_chunk_reuse/1`. The
+    # tenant is the argument, so there is nothing to discover.
+    {:ok, _} =
+      Repo.with_tenant(user_id, fn ->
+        Repo.update_all(
+          from(c in Chunk, where: c.user_id == ^user_id and not is_nil(c.context_hmac)),
+          set: [context_hmac: nil]
+        )
+      end)
 
     :ok
   end
@@ -451,12 +466,20 @@ defmodule Engram.Indexing do
   # Clears the reuse fingerprints for a note, forcing its next index to rebuild
   # every chunk. `nil` is the same "cannot be matched" state a row written
   # before the column existed is in.
-  defp forget_chunk_reuse(note_id) do
-    Repo.update_all(
-      from(c in Chunk, where: c.note_id == ^note_id and not is_nil(c.context_hmac)),
-      [set: [context_hmac: nil]],
-      skip_tenant_check: true
-    )
+  # Takes the note rather than an id because it needs the tenant. `chunks`
+  # carries FORCE ROW LEVEL SECURITY and an UPDATE is FILTERED by the policy
+  # rather than rejected, so unscoped this clears NOTHING and still returns
+  # `:ok` — which breaks the invariant in the moduledoc above in the silent
+  # direction: the Qdrant points are already gone, the markers survive, and the
+  # next index reuses point ids that no longer exist.
+  defp forget_chunk_reuse(note) do
+    {:ok, _} =
+      Repo.with_tenant(note.user_id, fn ->
+        Repo.update_all(
+          from(c in Chunk, where: c.note_id == ^note.id and not is_nil(c.context_hmac)),
+          set: [context_hmac: nil]
+        )
+      end)
 
     :ok
   end
@@ -501,7 +524,18 @@ defmodule Engram.Indexing do
   """
   def delete_note_index(note) do
     with :ok <- delete_note_points(note) do
-      Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id), skip_tenant_check: true)
+      # Tenant-scoped: a DELETE is FILTERED by the policy rather than rejected,
+      # so unscoped this removes nothing and reports success, leaving orphan
+      # chunk rows naming points that are already gone from Qdrant.
+      #
+      # `note` may be a synthetic map here, not a Note struct (see
+      # `Engram.Workers.DeleteNoteIndex.perform/1`) — it carries `:user_id`,
+      # which is all this needs.
+      {:ok, _} =
+        Repo.with_tenant(note.user_id, fn ->
+          Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id))
+        end)
+
       :ok
     end
   end
@@ -513,7 +547,7 @@ defmodule Engram.Indexing do
   # the old points stranded. See `delete_points_for_note/1`. The filter then
   # catches the reverse case: points whose rows are already gone.
   defp delete_note_points(note) do
-    with :ok <- delete_points_for_note(note.id) do
+    with :ok <- delete_points_for_note(note) do
       Qdrant.delete_by_note(
         collection(),
         to_string(note.user_id),
@@ -530,11 +564,24 @@ defmodule Engram.Indexing do
   # has drifted (rename → debounced repath → delete inside the window). This is
   # the delete that closes that hole; `delete_by_note/4` stays as the belt for
   # points whose rows were already lost.
-  defp delete_points_for_note(note_id) do
-    Chunk
-    |> where([c], c.note_id == ^note_id)
-    |> select([c], c.qdrant_point_id)
-    |> Repo.all(skip_tenant_check: true)
+  # Takes the note rather than an id because it needs the tenant. Unscoped this
+  # read is filtered to [], so the by-id delete silently removes nothing and
+  # the whole point of running it before the rows are dropped is lost — the
+  # hmac filter below is only the belt, and it misses points whose note has
+  # since been re-pathed.
+  #
+  # Only the READ is scoped; the Qdrant call stays outside, so no transaction
+  # is held across a network round trip.
+  defp delete_points_for_note(note) do
+    {:ok, point_ids} =
+      Repo.with_tenant(note.user_id, fn ->
+        Chunk
+        |> where([c], c.note_id == ^note.id)
+        |> select([c], c.qdrant_point_id)
+        |> Repo.all()
+      end)
+
+    point_ids
     |> Enum.reject(&is_nil/1)
     |> then(&Qdrant.delete_points(collection(), &1))
   end
@@ -681,12 +728,19 @@ defmodule Engram.Indexing do
         Map.put(chunk, :context_hmac, fingerprint(content_key, chunk.context_text, semantic?))
       end)
 
-    existing =
-      Chunk
-      |> where([c], c.note_id == ^note.id)
-      |> select([c], {c.context_hmac, c.qdrant_point_id, c.token_count})
-      |> Repo.all(skip_tenant_check: true)
-      |> Enum.reject(fn {_hmac, point_id, _tokens} -> is_nil(point_id) end)
+    # Tenant-scoped: unscoped this read is filtered to [], so reuse never
+    # matches. That is not a correctness break but a cost one — every index
+    # pays a full re-embed, and the prior pass's points are left orphaned in
+    # Qdrant rather than being reused or replaced.
+    {:ok, rows} =
+      Repo.with_tenant(note.user_id, fn ->
+        Chunk
+        |> where([c], c.note_id == ^note.id)
+        |> select([c], {c.context_hmac, c.qdrant_point_id, c.token_count})
+        |> Repo.all()
+      end)
+
+    existing = Enum.reject(rows, fn {_hmac, point_id, _tokens} -> is_nil(point_id) end)
 
     # A nil hmac is a row written before the column existed, or one whose key
     # a DEK rotation invalidated. It names a real point that still has to be

@@ -26,15 +26,15 @@ defmodule Engram.Workers.EmbedPriorityTest do
     end
   end
 
-  describe "new_debounced/2 priority" do
+  describe "new_debounced/3 priority" do
     test "defaults to interactive priority" do
-      changeset = EmbedNote.new_debounced(Ecto.UUID.generate())
+      changeset = EmbedNote.new_debounced(Ecto.UUID.generate(), Ecto.UUID.generate())
       assert Ecto.Changeset.get_field(changeset, :priority) == 0
     end
 
     test "carries an explicit priority through to the job" do
       changeset =
-        EmbedNote.new_debounced(Ecto.UUID.generate(),
+        EmbedNote.new_debounced(Ecto.UUID.generate(), Ecto.UUID.generate(),
           clamp: false,
           priority: EmbedNote.backfill_priority()
         )
@@ -44,7 +44,7 @@ defmodule Engram.Workers.EmbedPriorityTest do
 
     test "a backfill-priority job is still a valid Oban changeset" do
       changeset =
-        EmbedNote.new_debounced(Ecto.UUID.generate(),
+        EmbedNote.new_debounced(Ecto.UUID.generate(), Ecto.UUID.generate(),
           clamp: false,
           priority: EmbedNote.backfill_priority()
         )
@@ -63,14 +63,18 @@ defmodule Engram.Workers.EmbedPriorityTest do
         note = insert(:note, user: user, vault: vault, embed_hash: nil, path: "import#{i}.md")
 
         {:ok, _} =
-          Oban.insert(EmbedNote.new_debounced(note.id, priority: EmbedNote.priority_for(note)))
+          Oban.insert(
+            EmbedNote.new_debounced(note.id, user.id, priority: EmbedNote.priority_for(note))
+          )
       end
 
       # ...then one live edit of an already-embedded note, enqueued LAST.
       edited = insert(:note, user: user, vault: vault, embed_hash: "old", path: "live.md")
 
       {:ok, _} =
-        Oban.insert(EmbedNote.new_debounced(edited.id, priority: EmbedNote.priority_for(edited)))
+        Oban.insert(
+          EmbedNote.new_debounced(edited.id, user.id, priority: EmbedNote.priority_for(edited))
+        )
 
       # Oban fetches priority ASC, then scheduled_at/id. Despite being inserted
       # last, the live edit must sort first.

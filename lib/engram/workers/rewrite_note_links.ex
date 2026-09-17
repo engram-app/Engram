@@ -249,31 +249,48 @@ defmodule Engram.Workers.RewriteNoteLinks do
   # put in args: decrypt it. Newest tombstone wins (repeated renames
   # through the same path).
   defp tombstone_old_path(user, vault, :note, old_path_hmac) do
-    Repo.one(
-      from(n in Note,
-        where:
-          n.user_id == ^user.id and n.vault_id == ^vault.id and n.kind == "note" and
-            n.path_hmac == ^old_path_hmac and not is_nil(n.deleted_at),
-        order_by: [desc: n.seq],
-        limit: 1
-      ),
-      skip_tenant_check: true
-    )
-    |> decrypt_tombstone_path(user, &Crypto.maybe_decrypt_note_fields/2)
+    # Tenant-scoped: `notes` carries FORCE ROW LEVEL SECURITY, so unscoped this
+    # returns nil and old-path recovery silently fails — the rename's link
+    # rewrite then has nothing to rewrite toward, with no error. `user.id` is
+    # in scope; it is already in the WHERE clause below.
+    #
+    # Only the READ is scoped. The decrypt below derives the user's DEK and
+    # stays OUTSIDE the scope for the reason given on `Links.resolve_target/4`:
+    # a KMS provider round trip inside the scope would hold row locks for the
+    # provider's latency.
+    {:ok, tombstone} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.one(
+          from(n in Note,
+            where:
+              n.user_id == ^user.id and n.vault_id == ^vault.id and n.kind == "note" and
+                n.path_hmac == ^old_path_hmac and not is_nil(n.deleted_at),
+            order_by: [desc: n.seq],
+            limit: 1
+          )
+        )
+      end)
+
+    decrypt_tombstone_path(tombstone, user, &Crypto.maybe_decrypt_note_fields/2)
   end
 
   defp tombstone_old_path(user, vault, :attachment, old_path_hmac) do
-    Repo.one(
-      from(a in Attachment,
-        where:
-          a.user_id == ^user.id and a.vault_id == ^vault.id and
-            a.path_hmac == ^old_path_hmac and not is_nil(a.deleted_at),
-        order_by: [desc: a.seq],
-        limit: 1
-      ),
-      skip_tenant_check: true
-    )
-    |> decrypt_tombstone_path(user, &Crypto.maybe_decrypt_attachment_fields/2)
+    # Tenant-scoped for the same reason as the `:note` clause above;
+    # `attachments` is also FORCE ROW LEVEL SECURITY.
+    {:ok, tombstone} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.one(
+          from(a in Attachment,
+            where:
+              a.user_id == ^user.id and a.vault_id == ^vault.id and
+                a.path_hmac == ^old_path_hmac and not is_nil(a.deleted_at),
+            order_by: [desc: a.seq],
+            limit: 1
+          )
+        )
+      end)
+
+    decrypt_tombstone_path(tombstone, user, &Crypto.maybe_decrypt_attachment_fields/2)
   end
 
   # Old-path recovery, two sources in order:

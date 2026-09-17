@@ -126,14 +126,34 @@ defmodule Engram.Onboarding do
   # refresh the audit fields instead of inserting duplicate rows. Unique
   # index `user_agreements_user_document_version_unique` enforces this at DB.
   defp insert_agreement(attrs) do
-    %Agreement{}
-    |> Agreement.changeset(attrs)
-    |> Repo.insert(
-      on_conflict: {:replace, [:accepted_at, :ip_address, :user_agent, :content_hash]},
-      conflict_target: [:user_id, :document, :version],
-      returning: true,
-      skip_tenant_check: true
-    )
+    # Inside with_tenant, not `skip_tenant_check: true` alone (#1354, same as
+    # `record_action/2`). `user_agreements` carries FORCE ROW LEVEL SECURITY,
+    # so with no `app.current_tenant` the policy's WITH CHECK fails and this
+    # INSERT RAISES 42501 — `skip_tenant_check` only silences Engram's own
+    # guard, it does not set the tenant.
+    #
+    # Observed on staging the moment the app pool dropped to `engram_app`:
+    # POST /api/onboarding/accept-terms 500'd for EVERY user, blocking new
+    # signups and re-acceptance alike.
+    #
+    # `accept_terms/6` calls this twice inside one `Repo.transaction`, and each
+    # call is independently scoped: `run_with_tenant/2` deletes the process-dict
+    # tenant in its `after` block, so the second call re-enters and issues its
+    # own `set_config` round trip. The re-entrant fast path needs an enclosing
+    # `with_tenant`, which a plain transaction is not. The transaction still
+    # does its job — the two rows are atomic.
+    {:ok, result} =
+      Repo.with_tenant(attrs.user_id, fn ->
+        %Agreement{}
+        |> Agreement.changeset(attrs)
+        |> Repo.insert(
+          on_conflict: {:replace, [:accepted_at, :ip_address, :user_agent, :content_hash]},
+          conflict_target: [:user_id, :document, :version],
+          returning: true
+        )
+      end)
+
+    result
   end
 
   @doc """
@@ -540,13 +560,26 @@ defmodule Engram.Onboarding do
   defp query_accepted_version(user, document) do
     import Ecto.Query
 
-    from(a in Agreement,
-      where: a.user_id == ^user.id and a.document == ^document,
-      order_by: [desc: a.accepted_at],
-      limit: 1,
-      select: a.version
-    )
-    |> Repo.one(skip_tenant_check: true)
+    # Inside with_tenant (#1354, same as `list_actions/1`). `user_agreements`
+    # carries FORCE ROW LEVEL SECURITY, so the unscoped form returns nil for a
+    # user who HAS accepted — a filtered read, not an error. `terms_ok` then
+    # reads false and the wizard sends an already-onboarded user back to
+    # /onboard/agreement, where the accept POST also fails. Dead end both ways.
+    #
+    # Verified on staging: a user with terms_of_service + privacy_policy rows
+    # dated 2026-06-15 still got terms_ok=false.
+    {:ok, version} =
+      Repo.with_tenant(user.id, fn ->
+        from(a in Agreement,
+          where: a.user_id == ^user.id and a.document == ^document,
+          order_by: [desc: a.accepted_at],
+          limit: 1,
+          select: a.version
+        )
+        |> Repo.one()
+      end)
+
+    version
   end
 
   defp next_step(false, _, _, _, _), do: :agreement

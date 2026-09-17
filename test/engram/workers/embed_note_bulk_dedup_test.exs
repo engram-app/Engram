@@ -231,13 +231,14 @@ defmodule Engram.Workers.EmbedNoteBulkDedupTest do
   describe "the ratchet it prevents" do
     test "repeated bulk enqueues of the same note never stack up" do
       note_id = Ecto.UUID.generate()
+      user_id = Ecto.UUID.generate()
 
       # Simulate ReconcileEmbeddings ticking 10 times while the job never drains.
       for _tick <- 1..10 do
         note_id
         |> List.wrap()
         |> EmbedNote.reject_already_queued()
-        |> Enum.map(&EmbedNote.new_debounced(&1, clamp: false))
+        |> Enum.map(&EmbedNote.new_debounced(&1, user_id, clamp: false))
         |> case do
           [] -> :ok
           changesets -> Oban.insert_all(changesets)

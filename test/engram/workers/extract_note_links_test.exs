@@ -52,8 +52,8 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
   test "new_debounced dedups per note over available/scheduled", %{user: user, vault: vault} do
     {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "S.md", "content" => "a"})
 
-    {:ok, _} = Oban.insert(ExtractNoteLinks.new_debounced(note.id))
-    {:ok, _} = Oban.insert(ExtractNoteLinks.new_debounced(note.id))
+    {:ok, _} = Oban.insert(ExtractNoteLinks.new_debounced(note.id, user.id))
+    {:ok, _} = Oban.insert(ExtractNoteLinks.new_debounced(note.id, user.id))
 
     assert [job] = all_enqueued(worker: ExtractNoteLinks)
     assert job.args["note_id"] == note.id

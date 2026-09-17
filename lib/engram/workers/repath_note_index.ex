@@ -46,17 +46,26 @@ defmodule Engram.Workers.RepathNoteIndex do
   path (T3.2 — never plaintext). Scheduled a few seconds out so the rename
   txn's broadcasts settle first; replaced on re-insert within the window.
   """
-  def new_debounced(note_id, opts \\ []) do
-    args = %{note_id: note_id, old_path_hmac: Keyword.fetch!(opts, :old_path_hmac)}
+  # `user_id` REQUIRED and positional — see the note on
+  # `Engram.Workers.ExtractNoteLinks.new_debounced/2`.
+  # `is_binary(user_id)` guard: see `Engram.Workers.EmbedNote.new_debounced/3`.
+  # `opts` keeps a default, so `/2` exists and would otherwise accept the old
+  # `new_debounced(note_id, old_path_hmac: x)` shape.
+  def new_debounced(note_id, user_id, opts \\ []) when is_binary(user_id) do
+    args = %{
+      note_id: note_id,
+      user_id: user_id,
+      old_path_hmac: Keyword.fetch!(opts, :old_path_hmac)
+    }
+
     new(args, schedule_in: 3, replace: [:scheduled_at])
   end
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: args} = job) do
-    note_id = args["note_id"]
     old_path_hmac = args["old_path_hmac"]
 
-    case Engram.Notes.fetch_note_for_worker(note_id) do
+    case Engram.Notes.fetch_note_for_worker_job(args) do
       {:discard, _reason} = discard ->
         discard
 
@@ -87,7 +96,7 @@ defmodule Engram.Workers.RepathNoteIndex do
   # (embed it fresh under the new path), or it claims to be embedded but its
   # points vanished (a real inconsistency we surface, not silently swallow).
   defp handle_no_points(%Note{content_hash: ch, embed_hash: eh} = note) when ch != eh do
-    _ = Enqueue.enqueue(EmbedNote.new_debounced(note.id), "embed_note")
+    _ = Enqueue.enqueue(EmbedNote.new_debounced(note.id, note.user_id), "embed_note")
     :ok
   end
 
@@ -108,7 +117,7 @@ defmodule Engram.Workers.RepathNoteIndex do
        when a >= m do
     _ =
       Enqueue.enqueue(
-        EmbedNote.new_debounced(note.id, old_path_hmac: old_path_hmac),
+        EmbedNote.new_debounced(note.id, note.user_id, old_path_hmac: old_path_hmac),
         "embed_note"
       )
 
