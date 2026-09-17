@@ -280,7 +280,8 @@ defmodule Engram.MCP.HandlersTest do
           "content_base64" => Base.encode64("x")
         })
 
-      assert {:ok, body} = Handlers.handle("list_folder", user, vault, %{"folder" => "Docs"})
+      assert {:ok, body, _structured} =
+               Handlers.handle("list_folder", user, vault, %{"folder" => "Docs"})
 
       assert body =~ "Docs/a.md"
       assert body =~ "Docs/p.png"
@@ -294,7 +295,9 @@ defmodule Engram.MCP.HandlersTest do
           "content_base64" => Base.encode64("x")
         })
 
-      assert {:ok, body} = Handlers.handle("list_folder", user, vault, %{"folder" => "Docs"})
+      assert {:ok, body, _structured} =
+               Handlers.handle("list_folder", user, vault, %{"folder" => "Docs"})
+
       refute body =~ "deep.png"
     end
 
@@ -305,7 +308,8 @@ defmodule Engram.MCP.HandlersTest do
           "content_base64" => Base.encode64("x")
         })
 
-      assert {:ok, body} = Handlers.handle("list_folder", user, vault, %{"folder" => "Docs"})
+      assert {:ok, body, _structured} =
+               Handlers.handle("list_folder", user, vault, %{"folder" => "Docs"})
 
       assert body =~ "Docs/p.png"
       assert body =~ "(attachment)"

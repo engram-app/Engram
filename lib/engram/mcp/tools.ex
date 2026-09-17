@@ -239,6 +239,34 @@ defmodule Engram.MCP.Tools do
         },
         "required" => ["query"]
       },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "results" => %{
+            "type" => "array",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                "score" => %{"type" => "number"},
+                # Every field below comes off a search hit whose shape varies by
+                # backend and index age, so each is nullable rather than
+                # required. `format_search_result/3` already omits the missing
+                # ones from the markdown; the schema says the same thing.
+                "title" => %{"type" => ["string", "null"]},
+                "heading_path" => %{"type" => ["string", "null"]},
+                "source_path" => %{"type" => ["string", "null"]},
+                "tags" => %{"type" => "array", "items" => %{"type" => "string"}},
+                "text" => %{"type" => "string", "description" => "Matched chunk"},
+                # Present only in cross-vault mode, matching the rendered label.
+                "vault_id" => %{"type" => ["string", "null"]},
+                "vault" => %{"type" => ["string", "null"]}
+              },
+              "required" => ["score", "text"]
+            }
+          }
+        },
+        "required" => ["results"]
+      },
       handler: &Handlers.handle("search_notes", &1, &2, &3)
     }
   end
@@ -250,6 +278,23 @@ defmodule Engram.MCP.Tools do
         "List all tags in the personal knowledge base with document counts. " <>
           "Use to explore what topics exist in the vault.",
       inputSchema: %{"type" => "object", "properties" => %{}},
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "tags" => %{
+            "type" => "array",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                "name" => %{"type" => "string"},
+                "count" => %{"type" => "integer", "description" => "Notes carrying this tag"}
+              },
+              "required" => ["name", "count"]
+            }
+          }
+        },
+        "required" => ["tags"]
+      },
       handler: &Handlers.handle("list_tags", &1, &2, &3)
     }
   end
@@ -261,6 +306,29 @@ defmodule Engram.MCP.Tools do
         "List all folders in the personal knowledge base with note counts. " <>
           "Use to understand the vault's organization.",
       inputSchema: %{"type" => "object", "properties" => %{}},
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "folders" => %{
+            "type" => "array",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                # The RAW folder path, which is what list_folder takes back.
+                # The markdown table shows "(root)" for the empty one; that is
+                # a label, not a value, and is deliberately not emitted here.
+                "folder" => %{
+                  "type" => "string",
+                  "description" => ~s(Folder path; "" is the vault root)
+                },
+                "count" => %{"type" => "integer", "description" => "Notes directly inside"}
+              },
+              "required" => ["folder", "count"]
+            }
+          }
+        },
+        "required" => ["folders"]
+      },
       handler: &Handlers.handle("list_folders", &1, &2, &3)
     }
   end
@@ -279,6 +347,39 @@ defmodule Engram.MCP.Tools do
           }
         },
         "required" => ["folder"]
+      },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "folder" => %{"type" => "string", "description" => ~s(Folder listed; "" is the root)},
+          "notes" => %{
+            "type" => "array",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                # Nullable: `title` is a virtual decrypted field, nil when the
+                # row comes back undecrypted. Same reasoning as list_vaults'
+                # `name` — do not turn a degraded listing into a hard failure.
+                "title" => %{"type" => ["string", "null"]},
+                "path" => %{"type" => "string", "description" => "Vault-relative path"},
+                "tags" => %{"type" => "array", "items" => %{"type" => "string"}}
+              },
+              "required" => ["title", "path", "tags"]
+            }
+          },
+          "attachments" => %{
+            "type" => "array",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                "name" => %{"type" => "string"},
+                "path" => %{"type" => "string"}
+              },
+              "required" => ["name", "path"]
+            }
+          }
+        },
+        "required" => ["folder", "notes", "attachments"]
       },
       handler: &Handlers.handle("list_folder", &1, &2, &3)
     }

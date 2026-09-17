@@ -101,32 +101,44 @@ defmodule Engram.MCP.Handlers do
   def handle("list_tags", user, vault, _args) do
     {:ok, tags} = Notes.list_tags_with_counts(user, vault)
 
-    if tags == [] do
-      {:ok, "No tags found."}
-    else
-      lines = ["| Tag | Count |", "|-----|-------|"]
-      lines = lines ++ Enum.map(tags, fn t -> "| #{t.name} | #{t.count} |" end)
-      {:ok, Enum.join(lines, "\n")}
-    end
+    text =
+      if tags == [] do
+        "No tags found."
+      else
+        ["| Tag | Count |", "|-----|-------|"]
+        |> Kernel.++(Enum.map(tags, fn t -> "| #{t.name} | #{t.count} |" end))
+        |> Enum.join("\n")
+      end
+
+    # The empty case keeps the key rather than dropping it — see the same note
+    # on list_vaults. A client generating types from the schema breaks on a
+    # missing `tags`, and empty is the common first-run state.
+    {:ok, text, %{"tags" => Enum.map(tags, &%{"name" => &1.name, "count" => &1.count})}}
   end
 
   def handle("list_folders", user, vault, _args) do
     {:ok, folders} = Notes.list_folders_with_counts(user, vault)
 
-    if folders == [] do
-      {:ok, "No folders found."}
-    else
-      lines = ["| Folder | Notes |", "|--------|-------|"]
-
-      lines =
-        lines ++
+    text =
+      if folders == [] do
+        "No folders found."
+      else
+        ["| Folder | Notes |", "|--------|-------|"]
+        |> Kernel.++(
           Enum.map(folders, fn f ->
-            folder_name = if f.folder == "" or is_nil(f.folder), do: "(root)", else: f.folder
-            "| #{folder_name} | #{f.count} |"
+            "| #{folder_label(f.folder)} | #{f.count} |"
           end)
+        )
+        |> Enum.join("\n")
+      end
 
-      {:ok, Enum.join(lines, "\n")}
-    end
+    # `folder` carries the RAW path, not the "(root)" label the table shows:
+    # it is the value a client passes back to list_folder, and "(root)" is not
+    # a folder. The label stays in the text rendering only.
+    structured =
+      Enum.map(folders, &%{"folder" => &1.folder || "", "count" => &1.count})
+
+    {:ok, text, %{"folders" => structured}}
   end
 
   def handle("list_folder", user, vault, args) do
@@ -134,33 +146,9 @@ defmodule Engram.MCP.Handlers do
 
     with {:ok, notes} <- Notes.list_notes_in_folder(user, vault, folder),
          {:ok, atts} <- Engram.Attachments.list_in_folder(user, vault, folder) do
-      folder_label = if folder == "", do: "(root)", else: folder
-
-      if notes == [] and atts == [] do
-        {:ok, "No notes found in folder: #{folder_label}"}
-      else
-        header = [
-          "**Folder:** #{folder_label}",
-          "",
-          "| Title | Path | Tags |",
-          "|-------|------|------|"
-        ]
-
-        note_rows =
-          Enum.map(notes, fn n ->
-            tags = if n.tags && n.tags != [], do: Enum.join(n.tags, ", "), else: ""
-            "| #{n.title} | #{n.path} | #{tags} |"
-          end)
-
-        att_rows =
-          Enum.map(atts, fn a ->
-            "| #{Path.basename(a.path)} | #{a.path} | (attachment) |"
-          end)
-
-        {:ok, Enum.join(header ++ note_rows ++ att_rows, "\n")}
-      end
+      render_folder({:ok, notes, atts}, folder)
     else
-      {:error, reason} -> {:ok, "Could not list folder #{folder}: #{inspect(reason)}"}
+      error -> render_folder(error, folder)
     end
   end
 
@@ -656,16 +644,18 @@ defmodule Engram.MCP.Handlers do
   # vault_id → vault name; when non-empty (cross-vault mode) each hit is labelled
   # with its vault so the caller knows which vault to act against. Public (doc:
   # false) so the vault-labelling can be unit-tested without standing up Qdrant.
-  def render_search({:ok, results}, names) when results != [] do
+  def render_search({:ok, results}, names) do
     text =
-      results
-      |> Enum.with_index(1)
-      |> Enum.map_join("\n", fn {r, i} -> format_search_result(r, i, names) end)
+      if results == [] do
+        "No results found."
+      else
+        results
+        |> Enum.with_index(1)
+        |> Enum.map_join("\n", fn {r, i} -> format_search_result(r, i, names) end)
+      end
 
-    {:ok, text}
+    {:ok, text, %{"results" => Enum.map(results, &search_payload(&1, names))}}
   end
-
-  def render_search({:ok, _empty}, _names), do: {:ok, "No results found."}
 
   # A spent budget is a PLAN limit, not an outage. Naming the key lets a client
   # tell "upgrade" from "try again later", and matches the `limit_key` the REST
@@ -673,7 +663,98 @@ defmodule Engram.MCP.Handlers do
   def render_search({:error, :search_cap_exceeded, limit}, _names),
     do: {:error, "ai_searches_per_day: daily limit of #{limit} reached"}
 
-  def render_search({:error, _reason}, _names), do: {:ok, "Search unavailable."}
+  # Was `{:ok, "Search unavailable."}` — an outage reported as success, which
+  # no client could distinguish from a genuine zero-hit search, and which a
+  # retry loop would never retry.
+  def render_search({:error, _reason}, _names), do: {:error, "Search unavailable."}
+
+  # Mirrors `format_search_result/3` field for field, so a client reading
+  # structuredContent sees exactly what the markdown shows. `vault_id`/`vault`
+  # are present only in cross-vault mode, matching the rendered label.
+  defp search_payload(r, names) do
+    %{
+      "score" => r.score,
+      "title" => r[:title],
+      "heading_path" => r[:heading_path],
+      "source_path" => r[:source_path],
+      "tags" => r[:tags] || [],
+      "text" => r.text
+    }
+    |> maybe_vault(r, names)
+  end
+
+  defp maybe_vault(payload, _r, names) when names == %{}, do: payload
+
+  defp maybe_vault(payload, r, names) do
+    id = r[:vault_id] && to_string(r.vault_id)
+
+    Map.merge(payload, %{"vault_id" => id, "vault" => id && names[id]})
+  end
+
+  @doc false
+  # Render list_folder output. Public (doc: false) so both branches — including
+  # the failure one, which no fixture can force through Notes — are directly
+  # testable, the same reason `render_search/2` is public.
+  def render_folder({:ok, notes, atts}, folder) do
+    label = folder_label(folder)
+
+    text =
+      if notes == [] and atts == [] do
+        "No notes found in folder: #{label}"
+      else
+        header = [
+          "**Folder:** #{label}",
+          "",
+          "| Title | Path | Tags |",
+          "|-------|------|------|"
+        ]
+
+        note_rows =
+          Enum.map(notes, fn n ->
+            tags = if n.tags && n.tags != [], do: Enum.join(n.tags, ", "), else: ""
+            "| #{n.title} | #{n.path} | #{tags} |"
+          end)
+
+        att_rows =
+          Enum.map(atts, fn a -> "| #{Path.basename(a.path)} | #{a.path} | (attachment) |" end)
+
+        Enum.join(header ++ note_rows ++ att_rows, "\n")
+      end
+
+    structured = %{
+      # Raw path, not the "(root)" label — this is what a client echoes back.
+      "folder" => folder,
+      "notes" =>
+        Enum.map(notes, fn n ->
+          %{"title" => n.title, "path" => n.path, "tags" => n.tags || []}
+        end),
+      "attachments" =>
+        Enum.map(atts, fn a -> %{"name" => Path.basename(a.path), "path" => a.path} end)
+    }
+
+    {:ok, text, structured}
+  end
+
+  # Was `{:ok, "Could not list folder ...#{inspect(reason)}"}` — a storage
+  # failure reported as success, so no client could tell it from an empty
+  # folder, and the reason was `inspect/1`ed into the response body. The
+  # reason is logged, not returned: it originates deep in Notes/Attachments
+  # and can carry decrypted struct fields.
+  def render_folder({:error, reason}, folder) do
+    require Logger
+
+    Logger.error(
+      "mcp list_folder failed",
+      Engram.Logger.Metadata.with_category(:error, :http,
+        reason_label: Engram.Telemetry.error_kind(reason)
+      )
+    )
+
+    {:error, "Could not list folder: #{folder_label(folder)}"}
+  end
+
+  defp folder_label(folder) when folder in ["", nil], do: "(root)"
+  defp folder_label(folder), do: folder
 
   defp format_search_result(r, i, names) do
     ["## Result #{i} (score: #{Float.round(r.score, 3)})"]

@@ -85,7 +85,14 @@ defmodule EngramWeb.McpStructuredOutputTest do
     test "a tool with no outputSchema omits structuredContent entirely", %{conn: conn} do
       # An unconverted tool must not grow an empty/nil key: a client checking
       # `"structuredContent" in result` would read that as structured output.
-      refute Map.has_key?(result(conn, "list_tags"), "structuredContent")
+      #
+      # Picked from the list rather than named, so converting whichever tool
+      # this lands on does not silently delete the assertion (it named
+      # list_tags until #1660 slice 2 converted it).
+      unconverted = Enum.find(Tools.list(), &is_nil(&1[:outputSchema]))
+      assert unconverted, "every tool is converted — retire this test"
+
+      refute Map.has_key?(result(conn, unconverted.name), "structuredContent")
     end
   end
 
@@ -158,19 +165,40 @@ defmodule EngramWeb.McpStructuredOutputTest do
 
       assert declared != [], "no tool has been converted yet"
 
-      for name <- declared do
-        result = result(conn, name)
+      # `structuredContent` is required on SUCCESS only, so an errored call is
+      # exempt — but exempting it silently would let the whole sweep pass
+      # vacuously the day every tool starts erroring. Count them and assert at
+      # least one real success below.
+      #
+      # search_notes errors here on purpose: this env has no Qdrant, and an
+      # outage is now an error rather than an `{:ok, "Search unavailable."}`.
+      succeeded =
+        for name <- declared, reduce: 0 do
+          acc ->
+            result = result(conn, name)
 
-        assert is_map(result["structuredContent"]),
-               "#{name} advertises an outputSchema but returned no structuredContent"
-
-        {:ok, tool} = Tools.get(name)
-
-        for key <- Map.keys(result["structuredContent"]) do
-          assert Map.has_key?(tool.outputSchema["properties"], key),
-                 "#{name} returned undeclared structuredContent key #{key}"
+            if result["isError"] do
+              acc
+            else
+              assert_structured(result, name)
+              acc + 1
+            end
         end
-      end
+
+      assert succeeded > 0,
+             "every converted tool errored — the sweep proved nothing"
+    end
+  end
+
+  defp assert_structured(result, name) do
+    assert is_map(result["structuredContent"]),
+           "#{name} advertises an outputSchema but returned no structuredContent"
+
+    {:ok, tool} = Tools.get(name)
+
+    for key <- Map.keys(result["structuredContent"]) do
+      assert Map.has_key?(tool.outputSchema["properties"], key),
+             "#{name} returned undeclared structuredContent key #{key}"
     end
   end
 end
