@@ -23,8 +23,9 @@ defmodule Engram.Repo.Maintenance do
 
     * **Separate credential, never the request path.** The URL comes from
       `MAINTENANCE_DATABASE_URL` alone. Nothing in a web request may use this
-      module; `test/lint/maintenance_repo_lint_test.exs` is what holds that
-      line.
+      module — a rule currently held by review alone. There is no lint
+      enforcing it yet, and this docstring previously claimed one existed,
+      which is worse than claiming nothing.
 
   ## Unconfigured is a supported state
 

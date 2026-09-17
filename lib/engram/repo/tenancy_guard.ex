@@ -44,26 +44,46 @@ defmodule Engram.Repo.TenancyGuard do
   require Logger
 
   @doc """
-  `true` when the connecting role is subject to RLS.
+  Whether the connecting role is subject to RLS: `:enforced`, `:bypassed`, or
+  `:unknown`.
 
   Inverted from what the query asks: a role that is `rolsuper` or
   `rolbypassrls` reads every row regardless of policy, so enforcement is OFF
-  for it. Anything else is enforced.
+  for it.
+
+  Uses the non-bang `query/3` deliberately. This runs in `init/1`, and an
+  `init/1` raise makes `start_link` return `{:error, _}`, which fails
+  `Supervisor.start_link` and therefore `Application.start/2` — the exact
+  fail-loud mechanism `Engram.Crypto.BootCanaryGuard` is built on, and
+  `restart: :temporary` does not save it. A statement timeout or a connection
+  blip during boot would then hard-crash the one component whose whole design
+  statement is "log, never refuse to boot". `:unknown` is as alarming as
+  `:misconfigured` and now produces a sentence rather than a crash.
   """
-  @spec enforced?() :: boolean()
-  def enforced? do
-    case Engram.Repo.query!(
+  @spec enforcement() :: :enforced | :bypassed | :unknown
+  def enforcement do
+    case Engram.Repo.query(
            "SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user",
            [],
            source: "tenancy_guard"
          ) do
-      %{rows: [[bypasses?]]} -> not bypasses?
-      # No row for current_user should be impossible. Treat the unknown as
-      # "enforced" so the noisy branch is the one that fires: a false alarm
-      # costs a log line, the other direction hides the bug.
-      _ -> true
+      {:ok, %{rows: [[true]]}} -> :bypassed
+      {:ok, %{rows: [[false]]}} -> :enforced
+      # No row for current_user should be impossible, and a failed query is the
+      # realistic unknown. Both land here rather than being guessed at.
+      {:ok, _} -> :unknown
+      {:error, _} -> :unknown
     end
   end
+
+  @doc """
+  `true` when the connecting role is subject to RLS.
+
+  `:unknown` reports `true` so the noisy branch is the one that fires: a false
+  alarm costs a log line, the other direction hides the bug.
+  """
+  @spec enforced?() :: boolean()
+  def enforced?, do: enforcement() != :bypassed
 
   def start_link(_opts \\ []) do
     GenServer.start_link(__MODULE__, [])
@@ -71,11 +91,20 @@ defmodule Engram.Repo.TenancyGuard do
 
   @impl true
   def init(_) do
-    report(enforced?(), Engram.Repo.maintenance() != Engram.Repo)
+    report(enforcement(), Engram.Repo.maintenance() != Engram.Repo)
     :ignore
   end
 
-  defp report(true = _enforced?, false = _maintenance_pool?) do
+  defp report(:unknown, _maintenance_pool?) do
+    :telemetry.execute([:engram, :repo, :tenancy_unknown], %{count: 1}, %{})
+
+    Logger.error(
+      "could not determine whether RLS is enforced for this connection",
+      Metadata.with_category(:error, :boot, [])
+    )
+  end
+
+  defp report(:enforced, false = _maintenance_pool?) do
     :telemetry.execute([:engram, :repo, :tenancy_misconfigured], %{count: 1}, %{})
 
     Logger.error(
@@ -95,14 +124,14 @@ defmodule Engram.Repo.TenancyGuard do
     )
   end
 
-  defp report(true = _enforced?, true = _maintenance_pool?) do
+  defp report(:enforced, true = _maintenance_pool?) do
     Logger.info(
       "RLS enforced; maintenance pool configured",
       Metadata.with_category(:info, :boot, [])
     )
   end
 
-  defp report(false = _enforced?, _maintenance_pool?) do
+  defp report(:bypassed, _maintenance_pool?) do
     # Not a warning even on SaaS. It is the documented state of prod today
     # (connecting as the migrator role), and the remedy is an infra change, not
     # an app one. Logged at info so a deploy can be checked against it.

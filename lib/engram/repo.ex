@@ -164,9 +164,18 @@ defmodule Engram.Repo do
   Emits the same `:tenant_check_skipped` telemetry the keyword does, so the
   existing metric keeps counting the same population across the migration.
 
-  Not re-entrant-safe by design — it restores the PREVIOUS flag value rather
-  than clearing it, so a nested call cannot silently re-arm the tripwire for
-  the remainder of an enclosing block.
+  Re-entrant: it restores the PREVIOUS flag value rather than clearing it, so
+  a nested call cannot re-arm the tripwire for the remainder of an enclosing
+  block. (An earlier version of this docstring called that "not re-entrant-safe
+  by design", which inverts the conclusion — restoring the previous value is
+  precisely what makes nesting safe.)
+
+  The flag is process-local, so it does NOT propagate to a process spawned
+  inside the block: a `Task.async_stream` or an `Engram.TaskSupervisor` fan-out
+  started in here fails CLOSED with `Engram.TenantError` from the child, far
+  from this call. That polarity is correct — a child that silently inherited a
+  bypass is the worse failure — but it is surprising, so wrap the work inside
+  the child rather than around the spawn.
   """
   def cross_tenant(fun) when is_function(fun, 0) do
     previous = Process.get(:engram_cross_tenant, false)

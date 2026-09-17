@@ -143,28 +143,48 @@ defmodule Engram.SkipTenantCheckInventoryTest do
   # pool that exists to replace it. Counting those would make the ratchet fire
   # on documentation edits, which is the fastest way to get it deleted.
   defp count_sites(path) do
-    path
-    |> File.read!()
-    |> String.split("\n")
-    |> strip_heredocs()
+    {kept, inside_heredoc?} =
+      path |> File.read!() |> String.split("\n") |> strip_heredocs()
+
+    # Fail LOUD on a desync rather than reporting a plausible smaller number.
+    # The stripper toggles on any line containing `\"\"\"`, so a line that both
+    # opens and closes one, or a `\"\"\"` inside a regular string or sigil,
+    # leaves it inverted — and everything past that point counts as prose and
+    # contributes 0. That shows up as a lower count, which the failure message
+    # below then invites someone to "fix" by regenerating the map, silently
+    # un-guarding the tail of the file. An unbalanced toggle means the number
+    # is untrustworthy, not that sites were removed.
+    if inside_heredoc? do
+      raise """
+      unbalanced heredoc in #{path}: the `\"\"\"` toggle ended INSIDE a
+      docstring, so every line past the desync was treated as prose and counted
+      as zero. Fix the stripper — do NOT regenerate @inventory from this run.
+      """
+    end
+
+    kept
     |> Enum.reject(&Regex.match?(~r/^\s*#/, &1))
-    |> Enum.count(&Regex.match?(@option, &1))
+    # Occurrences, not lines: two sites on one line must count as two. None
+    # exist today, which is exactly why this is cheap to get right now.
+    |> Enum.map(&length(Regex.scan(@option, &1)))
+    |> Enum.sum()
   end
 
   # Line-level toggle on `"""`. Crude, and sufficient: it only has to be right
   # about whether a line carrying the option is inside a docstring, and no line
   # in `lib/` both opens a heredoc and calls a Repo function.
+  #
+  # Returns the trailing toggle state so `count_sites/1` can refuse to report a
+  # number it does not trust. The kept lines come back reversed, which is
+  # harmless for counting — do not use this to report line numbers.
   defp strip_heredocs(lines) do
-    {kept, _inside?} =
-      Enum.reduce(lines, {[], false}, fn line, {acc, inside?} ->
-        cond do
-          String.contains?(line, ~s(""")) -> {acc, not inside?}
-          inside? -> {acc, true}
-          true -> {[line | acc], false}
-        end
-      end)
-
-    kept
+    Enum.reduce(lines, {[], false}, fn line, {acc, inside?} ->
+      cond do
+        String.contains?(line, ~s(""")) -> {acc, not inside?}
+        inside? -> {acc, true}
+        true -> {[line | acc], false}
+      end
+    end)
   end
 
   defp diff(a, b) do

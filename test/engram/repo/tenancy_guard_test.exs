@@ -7,7 +7,12 @@ defmodule Engram.Repo.TenancyGuardTest do
 
   Asserting only the first would pass against `def enforced?, do: false`.
   """
-  use Engram.DataCase, async: true
+  # NOT async: one test flips the global `:maintenance_repo_enabled` app env to
+  # exercise the resolver. That is only harmless today because
+  # `Repo.maintenance/0`'s single caller is the boot guard, which is disabled in
+  # test — the moment a `lib/` caller exists, a concurrent test could resolve to
+  # a repo that was never started.
+  use Engram.DataCase, async: false
 
   alias Engram.Repo.TenancyGuard
 

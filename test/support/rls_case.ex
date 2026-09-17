@@ -29,10 +29,18 @@ defmodule Engram.RlsCase do
   transaction that can be neither reset nor committed. That is a constraint of
   Postgres, not a gap here.
 
-  ## Forces `async: false`
+  ## Every adopter must declare `async: false` itself
 
   `SET LOCAL ROLE` applies to the connection, so two of these running
   concurrently on a shared sandbox connection would each see the other's role.
+
+  This module does NOT enforce that. All six adopters `import Engram.RlsCase`
+  and write `use Engram.DataCase, async: false` by hand, so the
+  `ExUnit.CaseTemplate` `using` block below is currently used by zero files —
+  it is kept only so `use Engram.RlsCase` works for a new file that wants it.
+  An earlier version of this doc claimed the template "forces `async: false`",
+  which was false in the direction that matters: a file importing the helpers
+  without declaring it would get no protection while the doc said otherwise.
 
   ## Every file using this still needs its own CONTROL test
 
@@ -84,6 +92,18 @@ defmodule Engram.RlsCase do
 
   Only `rescue`, not `catch`: an `exit` or `throw` escapes untagged. No current
   test does either.
+
+  **Never use this to assert a write did NOT persist.** The rollback discards
+  the write regardless, so "the row is unchanged afterwards" holds whether or
+  not the policy filtered anything — such a test passes against a completely
+  unscoped implementation. That direction is silent, unlike its opposite
+  (asserting a write DID persist under a rollback fails loudly on the reload).
+  Use `as_prod_role_committing/1` for any assertion about persisted effect.
+
+  The `rescue` is also broad: a fixture bug, a `MatchError` from a changed
+  return shape, and a missing `engram_app` GRANT all arrive as `{:raised, e}`,
+  and a 42501 from a permission denial is indistinguishable there from a 42501
+  policy violation. Match on the specific error, not on `{:raised, _}`.
   """
   def as_prod_role(fun) when is_function(fun, 0) do
     {:error, outcome} =

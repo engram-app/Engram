@@ -65,10 +65,21 @@ defmodule Engram.Crypto.UserDekRotationRlsTest do
 
   # A real rotation runs with no tenant set: neither the Oban worker
   # (`workers/rotate_user_dek.ex:61`) nor the mix task wraps the call in
-  # `Repo.with_tenant/2`, and the rotation module contains no `with_tenant` at
-  # all. Hence the dropped-role harness, and hence the COMMITTING variant —
+  # `Repo.with_tenant/2`. Hence the dropped-role harness, and the COMMITTING
+  # variant —
   # every assertion here reads back persisted state via `reload_note/1` and
   # `reload_user/1` below.
+  #
+  # KNOWN COVERAGE LIMIT, and the comment here previously asserted the
+  # opposite. `user_dek_rotation.ex` contains EIGHT `with_tenant` calls, and
+  # the first one `rotate_user/1` reaches is `sweep_table_loop/4`. Its exit runs
+  # `set_config('role', 'none', true)`, which under the sandbox leaks forward
+  # into the enclosing transaction and reverts the role to the superuser. So
+  # only the FIRST sweep runs enforced; `sweep_vaults`, the vault-index sweeps,
+  # `sweep_attachments`, `sweep_note_links`, `clear_chunk_context_hmacs` and
+  # `final_flip` all run unenforced here. Deleting the `with_tenant` from any
+  # of those leaves these tests green. Driving the sweeps individually under
+  # the harness is what would close it.
   #
   # The local copy this replaced put `RESET ROLE` in an `after`, which is the
   # one spelling the other files' comments warn against: on the raise path the
