@@ -78,7 +78,7 @@ defmodule Engram.SkipTenantCheckInventoryTest do
     "engram/crypto/master_rotation.ex" => 2,
     "engram/crypto/provider_migration.ex" => 4,
     "engram/crypto/rotation_gate.ex" => 1,
-    "engram/crypto/rotation_lock.ex" => 5,
+    "engram/crypto/rotation_lock.ex" => 4,
     "engram/crypto/user_dek_rotation.ex" => 23,
     "engram/idempotency.ex" => 1,
     "engram/indexing.ex" => 2,
