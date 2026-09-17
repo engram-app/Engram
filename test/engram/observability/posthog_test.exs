@@ -124,5 +124,16 @@ defmodule Engram.Observability.PostHogTest do
 
       refute PostHog.analytics_id(@email) == first
     end
+
+    # Oracle computed independently (Python `hmac.new(key, email, sha256)`).
+    # The tests above prove the output is not a bare digest; only this one
+    # proves the construction is genuinely HMAC and not sha256(key <> email),
+    # which would produce 9149107753017daac3b7cb57b12fab6319e4ad415dae5bd5e8dbd66b3b4dc969.
+    # There is no second implementation to cross-check against — engram-marketing's
+    # was deleted in #189 — so this literal IS the contract.
+    test "matches an independently computed HMAC vector" do
+      assert PostHog.analytics_id(@email) ==
+               "6f2afb8435bef1b20c37300002a4827c68eca6aa666c401626d5d227624e2bb6"
+    end
   end
 end
