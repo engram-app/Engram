@@ -611,6 +611,20 @@ if config_env() == :prod do
       config :engram, :hmac_key_user_id, key
   end
 
+  # Analytics-id HMAC key (Engram.Observability.PostHog.analytics_id/1).
+  # Separate secret from TELEMETRY_HMAC_KEY_USER_ID above — domain separation
+  # is the entire point of a keyed hash.
+  case System.get_env("HMAC_KEY_ANALYTICS_ID") do
+    nil ->
+      # Self-host and dev: analytics is off anyway (no posthog_key), so a
+      # random per-boot key is correct — it can never collide with the SaaS
+      # namespace even if a key is later set.
+      config :engram, :hmac_key_analytics_id, Base.encode64(:crypto.strong_rand_bytes(32))
+
+    key ->
+      config :engram, :hmac_key_analytics_id, key
+  end
+
   database_url =
     System.get_env("DATABASE_URL") ||
       raise """

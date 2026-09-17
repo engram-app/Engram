@@ -99,4 +99,27 @@ defmodule Engram.Observability.PostHog do
   @spec distinct_id_for(map() | struct() | nil) :: String.t() | :anon
   def distinct_id_for(%{external_id: ext}) when is_binary(ext) and byte_size(ext) > 0, do: ext
   def distinct_id_for(_), do: :anon
+
+  @doc """
+  Pseudonymous analytics identifier for an email address.
+
+  Keyed, not a bare digest: an email is a low-entropy enumerable input, so an
+  unsalted SHA-256 of one is reversible with a wordlist and would not be
+  pseudonymisation in any meaningful sense.
+
+  Normalisation and output format are pinned by a test vector. They were once a
+  cross-repo contract with `engram-marketing`; that repo's waitlist and its
+  email hashing were deleted in #189, so nothing external depends on this
+  format today. If a second producer ever appears, it must match this exactly.
+
+  The key is deliberately NON-ROTATING: rotating it re-identifies every person
+  in PostHog and orphans all history.
+  """
+  @spec analytics_id(String.t()) :: String.t()
+  def analytics_id(email) when is_binary(email) do
+    key = Application.fetch_env!(:engram, :hmac_key_analytics_id)
+
+    :crypto.mac(:hmac, :sha256, key, email |> String.trim() |> String.downcase())
+    |> Base.encode16(case: :lower)
+  end
 end

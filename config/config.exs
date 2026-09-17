@@ -306,6 +306,12 @@ config :engram, EngramWeb.RateLimiter, backend: :ets
 # identifiers in metric labels and log lines.
 config :engram, :hmac_key_user_id, "dev-hmac-key-do-not-use-in-prod"
 
+# Analytics-id HMAC key (Engram.Observability.PostHog.analytics_id/1).
+# Separate from :hmac_key_user_id on purpose — domain separation is the whole
+# point of a keyed hash, and sharing one key across two purposes throws it
+# away. Throwaway default for dev/test; prod overrides via runtime.exs.
+config :engram, :hmac_key_analytics_id, "dev-analytics-key-do-not-use-in-prod"
+
 # Sentry PII scrubber. Compile-time so it applies wherever Sentry captures,
 # including the no-DSN dev/test case if a future test exercises a Sentry stub.
 # DSN, release tag, environment_name, and source-context flags live in
