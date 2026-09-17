@@ -2436,6 +2436,19 @@ defmodule Engram.Notes do
   # Opens its own tenant context — use note_by_path_query/3 directly when
   # already inside Repo.with_tenant (Repo.with_tenant does not nest safely:
   # the inner `after` Process.delete clobbers the parent's tenant key).
+  @doc """
+  Whether a live note exists at `path`, WITHOUT decrypting it.
+
+  `get_note/3` decrypts via `decrypt_or_raise!`, so probing existence with it
+  raises on a note whose content is corrupt. Callers that only need the yes/no
+  — and especially `delete_note/4`, which itself never decrypts — use this so a
+  damaged note stays cleanable (#1660 follow-up).
+  """
+  @spec note_exists?(Engram.Accounts.User.t(), map(), String.t()) :: boolean()
+  def note_exists?(user, vault, path) do
+    match?({:ok, %Note{}}, find_note_by_path(user, vault, path))
+  end
+
   defp find_note_by_path(user, vault, path) do
     case note_by_path_query(user, vault, path) do
       {:ok, query} ->
