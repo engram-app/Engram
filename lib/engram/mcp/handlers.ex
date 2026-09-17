@@ -533,7 +533,12 @@ defmodule Engram.MCP.Handlers do
     # announce "Note deleted" either way. Probe first so the payload can say
     # which it was — the call still succeeds on a no-op, since an idempotent
     # delete of an absent note is not a failure.
-    existed? = match?({:ok, _}, Notes.get_note(user, vault, path))
+    #
+    # `note_exists?/3`, NOT `get_note/3`: the latter decrypts and raises on a
+    # corrupt note, which would make a damaged note undeletable — the one case
+    # where you most want the delete to work. `delete_note/4` itself never
+    # decrypts, so the probe must not either.
+    existed? = Notes.note_exists?(user, vault, path)
     :ok = Notes.delete_note(user, vault, path)
 
     text = if existed?, do: "Note deleted: #{path}", else: "No note at: #{path}"
