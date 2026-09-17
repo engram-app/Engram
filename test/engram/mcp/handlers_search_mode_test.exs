@@ -29,24 +29,39 @@ defmodule Engram.MCP.HandlersSearchModeTest do
            %{score: 0.82, vault_id: "v2", source_path: "Work/B.md", text: "bbb"}
          ]}
 
-      {:ok, text} = Handlers.render_search(results, %{"v1" => "Health", "v2" => "Work"})
+      {:ok, text, structured} =
+        Handlers.render_search(results, %{"v1" => "Health", "v2" => "Work"})
 
       assert text =~ "**Vault:** Health (v1)"
       assert text =~ "**Vault:** Work (v2)"
+
+      # structuredContent carries the same attribution the markdown labels.
+      assert [%{"vault" => "Health", "vault_id" => "v1"}, %{"vault" => "Work"}] =
+               structured["results"]
     end
 
     test "single-vault mode (empty names) emits no vault label" do
       results = {:ok, [%{score: 0.9, vault_id: "v1", source_path: "A.md", text: "x", title: "A"}]}
 
-      {:ok, text} = Handlers.render_search(results, %{})
+      {:ok, text, structured} = Handlers.render_search(results, %{})
 
       refute text =~ "**Vault:**"
       assert text =~ "**Title:** A"
+
+      # No names map means single-vault mode: the payload omits the keys too,
+      # rather than emitting a null vault a client would have to special-case.
+      refute Map.has_key?(hd(structured["results"]), "vault")
     end
 
-    test "empty and error results render human messages" do
-      assert Handlers.render_search({:ok, []}, %{"v1" => "Health"}) == {:ok, "No results found."}
-      assert Handlers.render_search({:error, :boom}, %{}) == {:ok, "Search unavailable."}
+    test "an empty result still carries the results key" do
+      assert {:ok, "No results found.", %{"results" => []}} =
+               Handlers.render_search({:ok, []}, %{"v1" => "Health"})
+    end
+
+    test "an outage is an error, not a success carrying an excuse" do
+      # Was `{:ok, "Search unavailable."}`, which no client could tell apart
+      # from a genuine zero-hit search, and which no retry loop would retry.
+      assert {:error, "Search unavailable."} = Handlers.render_search({:error, :boom}, %{})
     end
   end
 

@@ -554,9 +554,12 @@ defmodule EngramWeb.McpControllerTest do
 
     test "returns not found for missing note", %{conn: conn} do
       conn = call_tool(conn, "get_note", %{"source_path" => "Missing/Note.md"})
-      text = tool_text(conn)
 
-      assert text == "Note not found: Missing/Note.md"
+      # isError, not a success blob saying "not found" (#1660). The caller
+      # named one specific note; not having it is a failed call. get_notes is
+      # the batch case and keeps per-path `found` flags instead.
+      assert_tool_error(json_response(conn, 200))
+      assert tool_text(conn) =~ "Note not found: Missing/Note.md"
     end
 
     test "does not re-inject title/tags already in the decrypted body (#731)", %{conn: conn} do
@@ -738,7 +741,7 @@ defmodule EngramWeb.McpControllerTest do
         })
 
       text = tool_text(conn)
-      assert text == "Note not found: Missing/Note.md"
+      assert text =~ "Note not found: Missing/Note.md"
     end
   end
 
@@ -832,7 +835,7 @@ defmodule EngramWeb.McpControllerTest do
         })
 
       text = tool_text(conn)
-      assert text == "Note not found: Missing/Note.md"
+      assert text =~ "Note not found: Missing/Note.md"
     end
   end
 
@@ -912,7 +915,7 @@ defmodule EngramWeb.McpControllerTest do
           "new_path" => "Missing/New.md"
         })
 
-      assert tool_text(conn) == "Note not found: Missing/Note.md"
+      assert tool_text(conn) =~ "Note not found: Missing/Note.md"
     end
   end
 

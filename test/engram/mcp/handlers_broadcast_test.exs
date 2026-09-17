@@ -23,7 +23,7 @@ defmodule Engram.MCP.HandlersBroadcastTest do
     # create_note derives its own path from title + suggested_folder (no "path"
     # arg exists on this tool) — pass suggested_folder to skip the
     # auto_place_folder Search call and keep the path deterministic.
-    assert {:ok, _} =
+    assert {:ok, _, _} =
              Handlers.handle("create_note", user, vault, %{
                "title" => "A via MCP",
                "content" => "body text",
@@ -37,7 +37,7 @@ defmodule Engram.MCP.HandlersBroadcastTest do
   end
 
   test "write_note broadcasts note_changed", %{user: user, vault: vault} do
-    assert {:ok, _} =
+    assert {:ok, _, _} =
              Handlers.handle("write_note", user, vault, %{
                "path" => "mcp/b.md",
                "content" => "# B"
@@ -50,7 +50,7 @@ defmodule Engram.MCP.HandlersBroadcastTest do
   end
 
   test "append_to_note broadcasts the appended content", %{user: user, vault: vault} do
-    {:ok, _} =
+    {:ok, _, _} =
       Handlers.handle("create_note", user, vault, %{
         "title" => "C",
         "content" => "body",
@@ -59,7 +59,7 @@ defmodule Engram.MCP.HandlersBroadcastTest do
 
     assert_receive %Phoenix.Socket.Broadcast{event: "note_changed"}
 
-    assert {:ok, _} =
+    assert {:ok, _, _} =
              Handlers.handle("append_to_note", user, vault, %{
                "path" => "mcp/C.md",
                "text" => "tail"
@@ -70,7 +70,7 @@ defmodule Engram.MCP.HandlersBroadcastTest do
   end
 
   test "patch_note broadcasts the replaced content", %{user: user, vault: vault} do
-    {:ok, _} =
+    {:ok, _, _} =
       Handlers.handle("write_note", user, vault, %{
         "path" => "mcp/patch.md",
         "content" => "# Patch\n\nfind me here"
@@ -78,7 +78,7 @@ defmodule Engram.MCP.HandlersBroadcastTest do
 
     assert_receive %Phoenix.Socket.Broadcast{event: "note_changed"}
 
-    assert {:ok, _} =
+    assert {:ok, _, _} =
              Handlers.handle("patch_note", user, vault, %{
                "path" => "mcp/patch.md",
                "find" => "find me",
@@ -90,7 +90,7 @@ defmodule Engram.MCP.HandlersBroadcastTest do
   end
 
   test "update_section broadcasts the new section content", %{user: user, vault: vault} do
-    {:ok, _} =
+    {:ok, _, _} =
       Handlers.handle("write_note", user, vault, %{
         "path" => "mcp/section.md",
         "content" => "# Doc\n\n## Notes\n\nold body\n"
@@ -98,7 +98,7 @@ defmodule Engram.MCP.HandlersBroadcastTest do
 
     assert_receive %Phoenix.Socket.Broadcast{event: "note_changed"}
 
-    assert {:ok, _} =
+    assert {:ok, _, _} =
              Handlers.handle("update_section", user, vault, %{
                "path" => "mcp/section.md",
                "heading" => "Notes",
@@ -114,7 +114,7 @@ defmodule Engram.MCP.HandlersBroadcastTest do
     user: user,
     vault: vault
   } do
-    {:ok, _} =
+    {:ok, _, _} =
       Handlers.handle("create_note", user, vault, %{
         "title" => "Old",
         "content" => "body",
@@ -123,7 +123,7 @@ defmodule Engram.MCP.HandlersBroadcastTest do
 
     assert_receive %Phoenix.Socket.Broadcast{event: "note_changed"}
 
-    assert {:ok, _} =
+    assert {:ok, _, _} =
              Handlers.handle("rename_note", user, vault, %{
                "old_path" => "mcp/Old.md",
                "new_path" => "mcp/New.md"
@@ -144,7 +144,7 @@ defmodule Engram.MCP.HandlersBroadcastTest do
   end
 
   test "delete_note broadcasts the delete event with the note id", %{user: user, vault: vault} do
-    {:ok, _} =
+    {:ok, _, _} =
       Handlers.handle("create_note", user, vault, %{
         "title" => "Gone",
         "content" => "body",
@@ -154,7 +154,7 @@ defmodule Engram.MCP.HandlersBroadcastTest do
     assert_receive %Phoenix.Socket.Broadcast{event: "note_changed"}
     {:ok, note} = Notes.get_note(user, vault, "mcp/Gone.md")
 
-    assert {:ok, _} = Handlers.handle("delete_note", user, vault, %{"path" => "mcp/Gone.md"})
+    assert {:ok, _, _} = Handlers.handle("delete_note", user, vault, %{"path" => "mcp/Gone.md"})
 
     assert_receive %Phoenix.Socket.Broadcast{
       event: "note_changed",
@@ -168,7 +168,7 @@ defmodule Engram.MCP.HandlersBroadcastTest do
     {:ok, %{changes: before_changes}} = Notes.list_changes_by_seq(user, vault, 0)
     refute Enum.any?(before_changes, &(&1.path == "mcp/feed.md"))
 
-    assert {:ok, _} =
+    assert {:ok, _, _} =
              Handlers.handle("write_note", user, vault, %{
                "path" => "mcp/feed.md",
                "content" => "# Feed"

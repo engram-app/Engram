@@ -167,6 +167,25 @@ defmodule Engram.MCP.Tools do
           }
         }
       },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          # Null when called with no vault_id: the tool then only explains that
+          # MCP holds no active-vault state, so there is no vault to report.
+          "vault" => %{
+            "type" => ["object", "null"],
+            "properties" => %{
+              "id" => %{"type" => "string"},
+              "name" => %{"type" => ["string", "null"]},
+              "slug" => %{"type" => "string"},
+              "is_default" => %{"type" => "boolean"},
+              "description" => %{"type" => ["string", "null"]}
+            },
+            "required" => ["id", "name", "slug", "is_default"]
+          }
+        },
+        "required" => ["vault"]
+      },
       handler: &Handlers.handle("set_vault", &1, &2, &3)
     }
   end
@@ -239,6 +258,34 @@ defmodule Engram.MCP.Tools do
         },
         "required" => ["query"]
       },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "results" => %{
+            "type" => "array",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                "score" => %{"type" => "number"},
+                # Every field below comes off a search hit whose shape varies by
+                # backend and index age, so each is nullable rather than
+                # required. `format_search_result/3` already omits the missing
+                # ones from the markdown; the schema says the same thing.
+                "title" => %{"type" => ["string", "null"]},
+                "heading_path" => %{"type" => ["string", "null"]},
+                "source_path" => %{"type" => ["string", "null"]},
+                "tags" => %{"type" => "array", "items" => %{"type" => "string"}},
+                "text" => %{"type" => "string", "description" => "Matched chunk"},
+                # Present only in cross-vault mode, matching the rendered label.
+                "vault_id" => %{"type" => ["string", "null"]},
+                "vault" => %{"type" => ["string", "null"]}
+              },
+              "required" => ["score", "text"]
+            }
+          }
+        },
+        "required" => ["results"]
+      },
       handler: &Handlers.handle("search_notes", &1, &2, &3)
     }
   end
@@ -250,6 +297,23 @@ defmodule Engram.MCP.Tools do
         "List all tags in the personal knowledge base with document counts. " <>
           "Use to explore what topics exist in the vault.",
       inputSchema: %{"type" => "object", "properties" => %{}},
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "tags" => %{
+            "type" => "array",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                "name" => %{"type" => "string"},
+                "count" => %{"type" => "integer", "description" => "Notes carrying this tag"}
+              },
+              "required" => ["name", "count"]
+            }
+          }
+        },
+        "required" => ["tags"]
+      },
       handler: &Handlers.handle("list_tags", &1, &2, &3)
     }
   end
@@ -261,6 +325,29 @@ defmodule Engram.MCP.Tools do
         "List all folders in the personal knowledge base with note counts. " <>
           "Use to understand the vault's organization.",
       inputSchema: %{"type" => "object", "properties" => %{}},
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "folders" => %{
+            "type" => "array",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                # The RAW folder path, which is what list_folder takes back.
+                # The markdown table shows "(root)" for the empty one; that is
+                # a label, not a value, and is deliberately not emitted here.
+                "folder" => %{
+                  "type" => "string",
+                  "description" => ~s(Folder path; "" is the vault root)
+                },
+                "count" => %{"type" => "integer", "description" => "Notes directly inside"}
+              },
+              "required" => ["folder", "count"]
+            }
+          }
+        },
+        "required" => ["folders"]
+      },
       handler: &Handlers.handle("list_folders", &1, &2, &3)
     }
   end
@@ -279,6 +366,43 @@ defmodule Engram.MCP.Tools do
           }
         },
         "required" => ["folder"]
+      },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "folder" => %{"type" => "string", "description" => ~s(Folder listed; "" is the root)},
+          "notes" => %{
+            "type" => "array",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                # Nullable as deliberate slack, NOT for list_vaults' reason:
+                # `list_notes_in_folder` decrypts with `decrypt_or_raise!`, so
+                # a row never arrives undecrypted the way a vault can. `title`
+                # falls back to the filename stem and is in practice always
+                # present. Declared nullable anyway because a required field
+                # that turns up absent is a hard client failure, while an
+                # unexpected null is not.
+                "title" => %{"type" => ["string", "null"]},
+                "path" => %{"type" => "string", "description" => "Vault-relative path"},
+                "tags" => %{"type" => "array", "items" => %{"type" => "string"}}
+              },
+              "required" => ["title", "path", "tags"]
+            }
+          },
+          "attachments" => %{
+            "type" => "array",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                "name" => %{"type" => "string"},
+                "path" => %{"type" => "string"}
+              },
+              "required" => ["name", "path"]
+            }
+          }
+        },
+        "required" => ["folder", "notes", "attachments"]
       },
       handler: &Handlers.handle("list_folder", &1, &2, &3)
     }
@@ -299,6 +423,11 @@ defmodule Engram.MCP.Tools do
             "description" => "Folder path, e.g. \"Projects/Active\""
           }
         },
+        "required" => ["folder"]
+      },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{"folder" => %{"type" => "string"}},
         "required" => ["folder"]
       },
       handler: &Handlers.handle("create_folder", &1, &2, &3)
@@ -326,6 +455,26 @@ defmodule Engram.MCP.Tools do
         },
         "required" => ["description"]
       },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "suggestions" => %{
+            "type" => "array",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                "rank" => %{"type" => "integer"},
+                # Raw path; "" is the root. The table renders "(root)", which
+                # is a label and not a value a client can pass back.
+                "folder" => %{"type" => "string"},
+                "count" => %{"type" => "integer"}
+              },
+              "required" => ["rank", "folder", "count"]
+            }
+          }
+        },
+        "required" => ["suggestions"]
+      },
       handler: &Handlers.handle("suggest_folder", &1, &2, &3)
     }
   end
@@ -345,6 +494,17 @@ defmodule Engram.MCP.Tools do
           }
         },
         "required" => ["source_path"]
+      },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "path" => %{"type" => "string", "description" => "Vault-relative path"},
+          "title" => %{"type" => ["string", "null"]},
+          "folder" => %{"type" => "string"},
+          "tags" => %{"type" => "array", "items" => %{"type" => "string"}},
+          "content" => %{"type" => "string"}
+        },
+        "required" => ["path", "title", "folder", "tags", "content"]
       },
       handler: &Handlers.handle("get_note", &1, &2, &3)
     }
@@ -369,6 +529,30 @@ defmodule Engram.MCP.Tools do
         },
         "required" => ["paths"]
       },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "notes" => %{
+            "type" => "array",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                # A batch that resolves SOME of its paths succeeded, so a miss
+                # is data here rather than an error the way it is in get_note.
+                # Only `path` and `found` are guaranteed on a miss.
+                "found" => %{"type" => "boolean"},
+                "path" => %{"type" => "string", "description" => "Vault-relative path"},
+                "title" => %{"type" => ["string", "null"]},
+                "folder" => %{"type" => "string"},
+                "tags" => %{"type" => "array", "items" => %{"type" => "string"}},
+                "content" => %{"type" => "string"}
+              },
+              "required" => ["path", "found"]
+            }
+          }
+        },
+        "required" => ["notes"]
+      },
       handler: &Handlers.handle("get_notes", &1, &2, &3)
     }
   end
@@ -391,6 +575,16 @@ defmodule Engram.MCP.Tools do
         },
         "required" => ["title", "content"]
       },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "path" => %{
+            "type" => "string",
+            "description" => "Where the note landed — the server picks the folder"
+          }
+        },
+        "required" => ["path"]
+      },
       handler: &Handlers.handle("create_note", &1, &2, &3)
     }
   end
@@ -411,6 +605,11 @@ defmodule Engram.MCP.Tools do
         },
         "required" => ["path", "content"]
       },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{"path" => %{"type" => "string"}},
+        "required" => ["path"]
+      },
       handler: &Handlers.handle("write_note", &1, &2, &3)
     }
   end
@@ -426,6 +625,17 @@ defmodule Engram.MCP.Tools do
           "text" => %{"type" => "string", "description" => "Text to append"}
         },
         "required" => ["path", "text"]
+      },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "path" => %{"type" => "string"},
+          "created" => %{
+            "type" => "boolean",
+            "description" => "true when the note did not exist and was created"
+          }
+        },
+        "required" => ["path", "created"]
       },
       handler: &Handlers.handle("append_to_note", &1, &2, &3)
     }
@@ -450,6 +660,14 @@ defmodule Engram.MCP.Tools do
           }
         },
         "required" => ["path", "find", "replace"]
+      },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "path" => %{"type" => "string"},
+          "replacements" => %{"type" => "integer", "description" => "Occurrences replaced"}
+        },
+        "required" => ["path", "replacements"]
       },
       handler: &Handlers.handle("patch_note", &1, &2, &3)
     }
@@ -481,6 +699,14 @@ defmodule Engram.MCP.Tools do
         },
         "required" => ["path", "heading", "content"]
       },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "path" => %{"type" => "string"},
+          "heading" => %{"type" => "string"}
+        },
+        "required" => ["path", "heading"]
+      },
       handler: &Handlers.handle("update_section", &1, &2, &3)
     }
   end
@@ -495,6 +721,14 @@ defmodule Engram.MCP.Tools do
         "properties" => %{
           "old_path" => %{"type" => "string", "description" => "Current path of the note"},
           "new_path" => %{"type" => "string", "description" => "New path for the note"}
+        },
+        "required" => ["old_path", "new_path"]
+      },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "old_path" => %{"type" => "string"},
+          "new_path" => %{"type" => "string"}
         },
         "required" => ["old_path", "new_path"]
       },
@@ -516,6 +750,16 @@ defmodule Engram.MCP.Tools do
         },
         "required" => ["old_folder", "new_folder"]
       },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "old_folder" => %{"type" => "string"},
+          "new_folder" => %{"type" => "string"},
+          "notes" => %{"type" => "integer", "description" => "Notes repathed"},
+          "attachments" => %{"type" => "integer"}
+        },
+        "required" => ["old_folder", "new_folder", "notes", "attachments"]
+      },
       handler: &Handlers.handle("rename_folder", &1, &2, &3)
     }
   end
@@ -534,6 +778,19 @@ defmodule Engram.MCP.Tools do
           }
         },
         "required" => ["path"]
+      },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "path" => %{"type" => "string"},
+          # The delete is idempotent, so deleting an absent note still
+          # succeeds. This says which of the two actually happened.
+          "deleted" => %{
+            "type" => "boolean",
+            "description" => "false when no note existed at that path"
+          }
+        },
+        "required" => ["path", "deleted"]
       },
       handler: &Handlers.handle("delete_note", &1, &2, &3)
     }
@@ -561,6 +818,15 @@ defmodule Engram.MCP.Tools do
         },
         "required" => ["folder"]
       },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "folder" => %{"type" => "string"},
+          "notes" => %{"type" => "integer", "description" => "Notes removed"},
+          "attachments" => %{"type" => "integer"}
+        },
+        "required" => ["folder", "notes", "attachments"]
+      },
       handler: &Handlers.handle("delete_folder", &1, &2, &3)
     }
   end
@@ -579,6 +845,22 @@ defmodule Engram.MCP.Tools do
         "properties" => %{},
         "required" => []
       },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "url" => %{"type" => "string"},
+          "method" => %{"type" => "string"},
+          "vault_id" => %{"type" => "string", "description" => "Send as the x-vault-id header"},
+          # Null means uncapped. The prose renders that as "unlimited"; a
+          # client comparing sizes should not have to parse an English word.
+          "max_bytes" => %{"type" => ["integer", "null"]},
+          "all_types" => %{
+            "type" => "boolean",
+            "description" => "false means text/* only on this plan"
+          }
+        },
+        "required" => ["url", "method", "vault_id", "all_types"]
+      },
       handler: &Handlers.handle("get_attachment_upload_target", &1, &2, &3)
     }
   end
@@ -595,6 +877,14 @@ defmodule Engram.MCP.Tools do
         "properties" => %{
           "old_path" => %{"type" => "string", "description" => "Current path of the attachment"},
           "new_path" => %{"type" => "string", "description" => "New path for the attachment"}
+        },
+        "required" => ["old_path", "new_path"]
+      },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "old_path" => %{"type" => "string"},
+          "new_path" => %{"type" => "string"}
         },
         "required" => ["old_path", "new_path"]
       },
