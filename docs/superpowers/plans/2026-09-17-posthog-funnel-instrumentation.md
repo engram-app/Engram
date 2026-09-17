@@ -45,9 +45,10 @@ defmodule Engram.Observability.PostHogTest do
 
   alias Engram.Observability.PostHog
 
-  # Cross-repo contract. engram-marketing's src/lib/hash-email.test.ts asserts
-  # the SAME key and email. If you change either, change both, or the
-  # marketing -> app funnel silently splits one person into two.
+  # Pins the algorithm. NOTE: this was originally a cross-repo contract with
+  # engram-marketing, but that repo's waitlist and src/lib/hash-email.ts were
+  # deleted in #189 — there is no marketing counterpart to match any more.
+  # Keep the vector anyway: it is what catches a normalisation change.
   @key "dGVzdC1rZXktZG8tbm90LXVzZS1pbi1wcm9kdWN0aW9uLg=="
   @email "sabio@web.de"
 
@@ -96,10 +97,10 @@ Add to `lib/engram/observability/posthog.ex`:
   unsalted SHA-256 of one is reversible with a wordlist and would not be
   pseudonymisation in any meaningful sense.
 
-  Normalisation and output format are a CROSS-REPO CONTRACT — `engram-marketing`
-  (`src/lib/hash-email.ts`) must produce byte-identical output for the same
-  email, or the marketing funnel and the app funnel describe two different
-  people. A parity vector is asserted in both test suites.
+  Normalisation and output format are pinned by a test vector. They were once a
+  cross-repo contract with `engram-marketing`; that repo's waitlist and its
+  email hashing were deleted in #189, so nothing external depends on this
+  format today. If a second producer ever appears, it must match this exactly.
 
   The key is deliberately NON-ROTATING: rotating it re-identifies every person
   in PostHog and orphans all history.
@@ -253,16 +254,18 @@ In `users_controller.ex`, add one key to the `json/2` map in `me/2`:
 `Schemas.UserResponse` gains an `analytics_id` string property. Then regenerate:
 
 ```bash
-mise exec -- mix openapi.spec.json --spec EngramWeb.ApiSpec
+mise exec -- env MIX_ENV=test mix openapi.spec.json --spec EngramWeb.ApiSpec --pretty=true openapi.json
 ```
 
-A stale `openapi.json` fails CI — see `engram-workspace/docs/context/self-host-capability-polarity.md`.
+The generated file is `openapi.json` at the REPO ROOT — not `priv/static/`.
+A stale one fails CI at `verify.yml:2503-2515`; see
+`engram-workspace/docs/context/self-host-capability-polarity.md`.
 
 - [ ] **Step 5: Run it and watch it pass, then commit**
 
 ```bash
 mise exec -- mix test test/engram_web/controllers/users_controller_test.exs
-git add lib/engram_web/ test/engram_web/ priv/static/openapi.json
+git add lib/engram_web/ test/engram_web/ openapi.json
 git commit -m "feat(api): return analytics_id on GET /me"
 ```
 
@@ -848,14 +851,23 @@ Add the identical line to `frontend-promote.yml`'s rebuild step. That step claim
 
 - [ ] **Step 6: Prove self-host emits nothing**
 
-```ts
-it("build:selfhost produces a bundle with no posthog host", async () => {
-	// Guards the Dockerfile:42-46 intent with a test instead of a comment.
-	const bundle = await readBuiltSelfhostBundle();
-	expect(bundle).not.toMatch(/us\.i\.posthog\.com/);
-	expect(bundle).not.toMatch(/phc_[a-zA-Z0-9]/);
-});
+This is a build-output assertion, not a unit test, so it runs as a shell check
+rather than through vitest. `build:selfhost` (`frontend/package.json:17`) runs
+`vite build --mode selfhost` and never loads `.env.production`, so no
+`VITE_POSTHOG_*` value can reach it.
+
+```bash
+cd frontend
+VITE_POSTHOG_KEY=phc_thisMustNotAppear bun run build:selfhost
+# Both greps must find nothing. `grep -r` exits 1 on no-match, which is success
+# here, so invert it explicitly rather than relying on the exit code.
+if grep -rq "phc_thisMustNotAppear" dist/; then echo "FAIL: key leaked into self-host bundle"; exit 1; fi
+if grep -rq "us\.i\.posthog\.com" dist/; then echo "FAIL: posthog host in self-host bundle"; exit 1; fi
+echo "OK: self-host bundle is clean"
 ```
+
+Add that block as a step in whichever CI job already builds self-host, so the
+`Dockerfile:42-46` intent is guarded by a check rather than a comment.
 
 - [ ] **Step 7: Set the repo secret**
 
