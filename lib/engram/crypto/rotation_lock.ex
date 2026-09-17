@@ -24,6 +24,12 @@ defmodule Engram.Crypto.RotationLock do
   restore from S3 versioning + clear `dek_version_pending` + clear
   `dek_rotation_locked_at` manually before retry. See runbook
   § T3.7.4 "Half-state recovery".
+
+  That refusal depends on `half_state_pending?/1` being TENANT-SCOPED. It
+  counts `attachments`, which carries FORCE ROW LEVEL SECURITY, and an
+  unscoped count is filtered to 0 rather than rejected — which inverts the
+  guard into a permit. Do not remove the `with_tenant` there; see the comment
+  on that function.
   """
 
   import Ecto.Query, only: [from: 2]
@@ -119,15 +125,31 @@ defmodule Engram.Crypto.RotationLock do
     DateTime.diff(DateTime.utc_now(), at, :second) > @stale_after_seconds
   end
 
+  # MUST be tenant-scoped, and this is the one query in this module where that
+  # is true — the other four read and write `users`, which carries no policy.
+  #
+  # `attachments` carries FORCE ROW LEVEL SECURITY, and an unscoped count is
+  # FILTERED to 0 rather than rejected. No error, no warning. So this returned
+  # `false`, takeover proceeded, and the blobs whose DEK died with the crashed
+  # BEAM were re-encrypted under a fresh one: the safety check became the thing
+  # that permitted the corruption it exists to prevent.
+  #
+  # `skip_tenant_check: true` was on this query and did not help. It suppresses
+  # only Engram's application-level tripwire and sets no Postgres state.
+  #
+  # `rotation_lock_rls_test.exs` pins this under a dropped role. The superuser
+  # suite cannot see it — `rotation_lock_test.exs` already asserts the correct
+  # refusal and passes either way.
   defp half_state_pending?(user_id) do
     count =
-      Repo.one(
-        from(a in Attachment,
-          where: a.user_id == ^user_id and not is_nil(a.dek_version_pending),
-          select: count(a.id)
-        ),
-        skip_tenant_check: true
-      )
+      Repo.with_tenant!(user_id, fn ->
+        Repo.one(
+          from(a in Attachment,
+            where: a.user_id == ^user_id and not is_nil(a.dek_version_pending),
+            select: count(a.id)
+          )
+        )
+      end)
 
     count > 0
   end
