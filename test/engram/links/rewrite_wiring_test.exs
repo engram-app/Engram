@@ -63,7 +63,7 @@ defmodule Engram.Links.RewriteWiringTest do
   } do
     {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "McpOld.md", "content" => "x"})
 
-    {:ok, _msg} =
+    {:ok, _msg, _} =
       Handlers.handle("rename_note", user, vault, %{
         "old_path" => "McpOld.md",
         "new_path" => "McpNew.md"
@@ -78,7 +78,7 @@ defmodule Engram.Links.RewriteWiringTest do
   } do
     _att = Engram.Fixtures.insert_attachment!(user, vault, %{path: "m/old.png"})
 
-    {:ok, _msg} =
+    {:ok, _msg, _} =
       Handlers.handle("move_attachment", user, vault, %{
         "old_path" => "m/old.png",
         "new_path" => "m/new.png"
@@ -254,7 +254,7 @@ defmodule Engram.Links.RewriteWiringTest do
     } do
       {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "m/N.md", "content" => "n"})
 
-      {:ok, _msg} =
+      {:ok, _msg, _} =
         Handlers.handle("rename_folder", user, vault, %{
           "old_folder" => "m",
           "new_folder" => "m2"

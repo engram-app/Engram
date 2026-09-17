@@ -82,17 +82,17 @@ defmodule EngramWeb.McpStructuredOutputTest do
       assert result["isError"] == false
     end
 
-    test "a tool with no outputSchema omits structuredContent entirely", %{conn: conn} do
-      # An unconverted tool must not grow an empty/nil key: a client checking
-      # `"structuredContent" in result` would read that as structured output.
-      #
-      # Picked from the list rather than named, so converting whichever tool
-      # this lands on does not silently delete the assertion (it named
-      # list_tags until #1660 slice 2 converted it).
-      unconverted = Enum.find(Tools.list(), &is_nil(&1[:outputSchema]))
-      assert unconverted, "every tool is converted — retire this test"
+    test "every tool is converted", %{conn: _conn} do
+      # This started life as "a tool with no outputSchema omits
+      # structuredContent entirely", picking an unconverted tool from the list.
+      # #1660 converted the last one, so that assertion has no subject left.
+      # Inverted into the guard that still has teeth: a NEW tool added without
+      # an outputSchema fails here rather than shipping unreadable to a
+      # code-mode client.
+      unconverted = for t <- Tools.list(), is_nil(t[:outputSchema]), do: t.name
 
-      refute Map.has_key?(result(conn, unconverted.name), "structuredContent")
+      assert unconverted == [],
+             "these tools declare no outputSchema: #{Enum.join(unconverted, ", ")}"
     end
   end
 

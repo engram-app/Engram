@@ -167,6 +167,25 @@ defmodule Engram.MCP.Tools do
           }
         }
       },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          # Null when called with no vault_id: the tool then only explains that
+          # MCP holds no active-vault state, so there is no vault to report.
+          "vault" => %{
+            "type" => ["object", "null"],
+            "properties" => %{
+              "id" => %{"type" => "string"},
+              "name" => %{"type" => ["string", "null"]},
+              "slug" => %{"type" => "string"},
+              "is_default" => %{"type" => "boolean"},
+              "description" => %{"type" => ["string", "null"]}
+            },
+            "required" => ["id", "name", "slug", "is_default"]
+          }
+        },
+        "required" => ["vault"]
+      },
       handler: &Handlers.handle("set_vault", &1, &2, &3)
     }
   end
@@ -406,6 +425,11 @@ defmodule Engram.MCP.Tools do
         },
         "required" => ["folder"]
       },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{"folder" => %{"type" => "string"}},
+        "required" => ["folder"]
+      },
       handler: &Handlers.handle("create_folder", &1, &2, &3)
     }
   end
@@ -431,6 +455,26 @@ defmodule Engram.MCP.Tools do
         },
         "required" => ["description"]
       },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "suggestions" => %{
+            "type" => "array",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                "rank" => %{"type" => "integer"},
+                # Raw path; "" is the root. The table renders "(root)", which
+                # is a label and not a value a client can pass back.
+                "folder" => %{"type" => "string"},
+                "count" => %{"type" => "integer"}
+              },
+              "required" => ["rank", "folder", "count"]
+            }
+          }
+        },
+        "required" => ["suggestions"]
+      },
       handler: &Handlers.handle("suggest_folder", &1, &2, &3)
     }
   end
@@ -450,6 +494,17 @@ defmodule Engram.MCP.Tools do
           }
         },
         "required" => ["source_path"]
+      },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "path" => %{"type" => "string", "description" => "Vault-relative path"},
+          "title" => %{"type" => ["string", "null"]},
+          "folder" => %{"type" => "string"},
+          "tags" => %{"type" => "array", "items" => %{"type" => "string"}},
+          "content" => %{"type" => "string"}
+        },
+        "required" => ["path", "title", "folder", "tags", "content"]
       },
       handler: &Handlers.handle("get_note", &1, &2, &3)
     }
@@ -474,6 +529,30 @@ defmodule Engram.MCP.Tools do
         },
         "required" => ["paths"]
       },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "notes" => %{
+            "type" => "array",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                # A batch that resolves SOME of its paths succeeded, so a miss
+                # is data here rather than an error the way it is in get_note.
+                # Only `path` and `found` are guaranteed on a miss.
+                "found" => %{"type" => "boolean"},
+                "path" => %{"type" => "string", "description" => "Vault-relative path"},
+                "title" => %{"type" => ["string", "null"]},
+                "folder" => %{"type" => "string"},
+                "tags" => %{"type" => "array", "items" => %{"type" => "string"}},
+                "content" => %{"type" => "string"}
+              },
+              "required" => ["path", "found"]
+            }
+          }
+        },
+        "required" => ["notes"]
+      },
       handler: &Handlers.handle("get_notes", &1, &2, &3)
     }
   end
@@ -496,6 +575,16 @@ defmodule Engram.MCP.Tools do
         },
         "required" => ["title", "content"]
       },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "path" => %{
+            "type" => "string",
+            "description" => "Where the note landed — the server picks the folder"
+          }
+        },
+        "required" => ["path"]
+      },
       handler: &Handlers.handle("create_note", &1, &2, &3)
     }
   end
@@ -516,6 +605,11 @@ defmodule Engram.MCP.Tools do
         },
         "required" => ["path", "content"]
       },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{"path" => %{"type" => "string"}},
+        "required" => ["path"]
+      },
       handler: &Handlers.handle("write_note", &1, &2, &3)
     }
   end
@@ -531,6 +625,17 @@ defmodule Engram.MCP.Tools do
           "text" => %{"type" => "string", "description" => "Text to append"}
         },
         "required" => ["path", "text"]
+      },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "path" => %{"type" => "string"},
+          "created" => %{
+            "type" => "boolean",
+            "description" => "true when the note did not exist and was created"
+          }
+        },
+        "required" => ["path", "created"]
       },
       handler: &Handlers.handle("append_to_note", &1, &2, &3)
     }
@@ -555,6 +660,14 @@ defmodule Engram.MCP.Tools do
           }
         },
         "required" => ["path", "find", "replace"]
+      },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "path" => %{"type" => "string"},
+          "replacements" => %{"type" => "integer", "description" => "Occurrences replaced"}
+        },
+        "required" => ["path", "replacements"]
       },
       handler: &Handlers.handle("patch_note", &1, &2, &3)
     }
@@ -586,6 +699,14 @@ defmodule Engram.MCP.Tools do
         },
         "required" => ["path", "heading", "content"]
       },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "path" => %{"type" => "string"},
+          "heading" => %{"type" => "string"}
+        },
+        "required" => ["path", "heading"]
+      },
       handler: &Handlers.handle("update_section", &1, &2, &3)
     }
   end
@@ -600,6 +721,14 @@ defmodule Engram.MCP.Tools do
         "properties" => %{
           "old_path" => %{"type" => "string", "description" => "Current path of the note"},
           "new_path" => %{"type" => "string", "description" => "New path for the note"}
+        },
+        "required" => ["old_path", "new_path"]
+      },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "old_path" => %{"type" => "string"},
+          "new_path" => %{"type" => "string"}
         },
         "required" => ["old_path", "new_path"]
       },
@@ -621,6 +750,16 @@ defmodule Engram.MCP.Tools do
         },
         "required" => ["old_folder", "new_folder"]
       },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "old_folder" => %{"type" => "string"},
+          "new_folder" => %{"type" => "string"},
+          "notes" => %{"type" => "integer", "description" => "Notes repathed"},
+          "attachments" => %{"type" => "integer"}
+        },
+        "required" => ["old_folder", "new_folder", "notes", "attachments"]
+      },
       handler: &Handlers.handle("rename_folder", &1, &2, &3)
     }
   end
@@ -639,6 +778,19 @@ defmodule Engram.MCP.Tools do
           }
         },
         "required" => ["path"]
+      },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "path" => %{"type" => "string"},
+          # The delete is idempotent, so deleting an absent note still
+          # succeeds. This says which of the two actually happened.
+          "deleted" => %{
+            "type" => "boolean",
+            "description" => "false when no note existed at that path"
+          }
+        },
+        "required" => ["path", "deleted"]
       },
       handler: &Handlers.handle("delete_note", &1, &2, &3)
     }
@@ -666,6 +818,15 @@ defmodule Engram.MCP.Tools do
         },
         "required" => ["folder"]
       },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "folder" => %{"type" => "string"},
+          "notes" => %{"type" => "integer", "description" => "Notes removed"},
+          "attachments" => %{"type" => "integer"}
+        },
+        "required" => ["folder", "notes", "attachments"]
+      },
       handler: &Handlers.handle("delete_folder", &1, &2, &3)
     }
   end
@@ -684,6 +845,22 @@ defmodule Engram.MCP.Tools do
         "properties" => %{},
         "required" => []
       },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "url" => %{"type" => "string"},
+          "method" => %{"type" => "string"},
+          "vault_id" => %{"type" => "string", "description" => "Send as the x-vault-id header"},
+          # Null means uncapped. The prose renders that as "unlimited"; a
+          # client comparing sizes should not have to parse an English word.
+          "max_bytes" => %{"type" => ["integer", "null"]},
+          "all_types" => %{
+            "type" => "boolean",
+            "description" => "false means text/* only on this plan"
+          }
+        },
+        "required" => ["url", "method", "vault_id", "all_types"]
+      },
       handler: &Handlers.handle("get_attachment_upload_target", &1, &2, &3)
     }
   end
@@ -700,6 +877,14 @@ defmodule Engram.MCP.Tools do
         "properties" => %{
           "old_path" => %{"type" => "string", "description" => "Current path of the attachment"},
           "new_path" => %{"type" => "string", "description" => "New path for the attachment"}
+        },
+        "required" => ["old_path", "new_path"]
+      },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "old_path" => %{"type" => "string"},
+          "new_path" => %{"type" => "string"}
         },
         "required" => ["old_path", "new_path"]
       },

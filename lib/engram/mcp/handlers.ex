@@ -39,7 +39,8 @@ defmodule Engram.MCP.Handlers do
       nil ->
         {:ok,
          "MCP keeps no active-vault state between calls. Pass `vault_id` on each " <>
-           "vault-scoped tool call to target a vault. Call list_vaults to see the IDs."}
+           "vault-scoped tool call to target a vault. Call list_vaults to see the IDs.",
+         %{"vault" => nil}}
 
       vault_id ->
         # `filter`, not `find`: two accessible vaults can share a display name
@@ -61,7 +62,8 @@ defmodule Engram.MCP.Handlers do
           [v] ->
             {:ok,
              "Vault **#{v.name}** (ID: #{v.id}) is valid. Pass vault_id=\"#{v.id}\" on each " <>
-               "tool call to target it — MCP stores no active vault between calls."}
+               "tool call to target it — MCP stores no active vault between calls.",
+             %{"vault" => vault_payload(v)}}
         end
     end
   end
@@ -155,7 +157,7 @@ defmodule Engram.MCP.Handlers do
   def handle("create_folder", user, vault, %{"folder" => folder}) when is_binary(folder) do
     case Notes.create_folder_marker(user, vault, folder) do
       {:ok, marker} ->
-        {:ok, "Created folder: #{marker.folder}"}
+        {:ok, "Created folder: #{marker.folder}", %{"folder" => marker.folder}}
 
       {:error, :root_folder_not_marker} ->
         {:error, "folder must be a non-empty path"}
@@ -179,27 +181,36 @@ defmodule Engram.MCP.Handlers do
       {:error, :search_cap_exceeded, cap} ->
         {:error, "ai_searches_per_day: daily limit of #{cap} reached"}
 
-      {:ok, results} when results != [] ->
-        folder_counts = results |> folder_counts() |> Enum.take(limit)
+      {:ok, results} ->
+        suggestions =
+          results
+          |> folder_counts()
+          |> Enum.take(limit)
+          |> Enum.with_index(1)
+          |> Enum.map(fn {{folder, count}, rank} ->
+            %{"rank" => rank, "folder" => folder, "count" => count}
+          end)
 
-        if folder_counts == [] do
-          {:ok, "No folders found. The vault may be empty."}
-        else
-          lines = ["| Rank | Folder | Notes |", "|------|--------|-------|"]
+        text =
+          if suggestions == [] do
+            "No folders found. The vault may be empty."
+          else
+            ["| Rank | Folder | Notes |", "|------|--------|-------|"]
+            |> Kernel.++(
+              Enum.map(suggestions, fn s ->
+                "| #{s["rank"]} | #{folder_label(s["folder"])} | #{s["count"]} |"
+              end)
+            )
+            |> Enum.join("\n")
+          end
 
-          lines =
-            (lines ++
-               Enum.with_index(folder_counts, 1))
-            |> Enum.map(fn {{folder, count}, rank} ->
-              folder_name = if folder == "", do: "(root)", else: folder
-              "| #{rank} | #{folder_name} | #{count} |"
-            end)
+        {:ok, text, %{"suggestions" => suggestions}}
 
-          {:ok, Enum.join(lines, "\n")}
-        end
-
-      _ ->
-        {:ok, "No folders found. The vault may be empty."}
+      # Was a catch-all that swallowed every search ERROR into "No folders
+      # found. The vault may be empty." — an outage rendered as a fact about
+      # the vault, which tells the caller to give up rather than retry.
+      {:error, reason} ->
+        log_and_error("suggest_folder", reason, "Folder suggestion unavailable.")
     end
   end
 
@@ -208,10 +219,14 @@ defmodule Engram.MCP.Handlers do
 
     case Notes.get_note(user, vault, source_path) do
       {:ok, note} ->
-        {:ok, format_get_note(note)}
+        {:ok, format_get_note(note), note_payload(note)}
 
+      # Was `{:ok, "Note not found: ..."}`. The caller named one specific note;
+      # not having it is a failed call, not a result. `get_notes` below is the
+      # batch case and keeps per-path `found` flags instead, because a batch
+      # that resolves some of its paths did succeed.
       {:error, :not_found} ->
-        {:ok, "Note not found: #{source_path}"}
+        {:error, "Note not found: #{source_path}"}
     end
   end
 
@@ -229,15 +244,27 @@ defmodule Engram.MCP.Handlers do
         {:error, "Too many paths (max 20). Split into multiple calls."}
 
       true ->
-        body =
-          Enum.map_join(paths, "\n\n---\n\n", fn path ->
+        fetched =
+          Enum.map(paths, fn path ->
             case Notes.get_note(user, vault, path) do
-              {:ok, note} -> format_get_note(note)
-              {:error, :not_found} -> "Note not found: #{path}"
+              {:ok, note} -> {path, note}
+              {:error, :not_found} -> {path, nil}
             end
           end)
 
-        {:ok, body}
+        body =
+          Enum.map_join(fetched, "\n\n---\n\n", fn
+            {_path, %{} = note} -> format_get_note(note)
+            {path, nil} -> "Note not found: #{path}"
+          end)
+
+        notes =
+          Enum.map(fetched, fn
+            {_path, %{} = note} -> Map.put(note_payload(note), "found", true)
+            {path, nil} -> %{"path" => path, "found" => false}
+          end)
+
+        {:ok, body, %{"notes" => notes}}
     end
   end
 
@@ -267,10 +294,13 @@ defmodule Engram.MCP.Handlers do
 
     Notes.upsert_note(user, vault, %{"path" => path, "content" => content, "mtime" => now()})
     |> upsert_reply(
-      ok: "Note created: #{path}",
-      conflict: "Note changed on the server, retry: #{path}",
-      deleted: "Note was deleted: #{path}",
-      error: "Failed to create note: #{path}"
+      [
+        ok: "Note created: #{path}",
+        conflict: "Note changed on the server, retry: #{path}",
+        deleted: "Note was deleted: #{path}",
+        error: "Failed to create note: #{path}"
+      ],
+      %{"path" => path}
     )
   end
 
@@ -281,15 +311,20 @@ defmodule Engram.MCP.Handlers do
     # Same ceiling the REST upsert enforces with a 413, declared once in
     # `Notes` so the two transports cannot drift. Checked in the body, not a
     # guard: a guard cannot call a remote function.
+    # Was `{:ok, "Error: note exceeds maximum size of 10MB"}` — a refusal whose
+    # own text said "Error:" while the envelope said success.
     if byte_size(content) > Notes.max_note_bytes() do
-      {:ok, "Error: note exceeds maximum size of 10MB"}
+      {:error, "note exceeds maximum size of 10MB"}
     else
       Notes.upsert_note(user, vault, %{"path" => path, "content" => content, "mtime" => now()})
       |> upsert_reply(
-        ok: "Note saved: #{path}",
-        conflict: "Note changed on the server, retry: #{path}",
-        deleted: "Note was deleted: #{path}",
-        error: "Failed to save note: #{path}"
+        [
+          ok: "Note saved: #{path}",
+          conflict: "Note changed on the server, retry: #{path}",
+          deleted: "Note was deleted: #{path}",
+          error: "Failed to save note: #{path}"
+        ],
+        %{"path" => path}
       )
     end
   end
@@ -307,9 +342,12 @@ defmodule Engram.MCP.Handlers do
           String.trim_trailing(content, "\n") <> "\n" <> text
         end)
         |> upsert_reply(
-          ok: "Note appended to: #{path}",
-          conflict: "Note changed concurrently; retry: #{path}",
-          error: "Failed to append to note: #{path}"
+          [
+            ok: "Note appended to: #{path}",
+            conflict: "Note changed concurrently; retry: #{path}",
+            error: "Failed to append to note: #{path}"
+          ],
+          %{"path" => path, "created" => false}
         )
 
       {:error, :not_found} ->
@@ -317,10 +355,13 @@ defmodule Engram.MCP.Handlers do
 
         Notes.upsert_note(user, vault, %{"path" => path, "content" => content, "mtime" => now()})
         |> upsert_reply(
-          ok: "Note created: #{path}",
-          conflict: "Note changed on the server, retry: #{path}",
-          deleted: "Note was deleted: #{path}",
-          error: "Failed to create note: #{path}"
+          [
+            ok: "Note created: #{path}",
+            conflict: "Note changed on the server, retry: #{path}",
+            deleted: "Note was deleted: #{path}",
+            error: "Failed to create note: #{path}"
+          ],
+          %{"path" => path, "created" => true}
         )
     end
   end
@@ -339,23 +380,22 @@ defmodule Engram.MCP.Handlers do
       if String.contains?(current, find) do
         {new_content, count} = do_replace(current, find, replace, occurrence)
 
-        Notes.upsert_note(user, vault, %{
-          "path" => path,
-          "content" => new_content,
-          "mtime" => now(),
-          "base_hash" => note.content_hash
-        })
-        |> upsert_reply(
-          ok: "Replaced #{count} occurrence(s) in #{path}",
-          conflict: "Note changed concurrently; retry: #{path}",
-          error: "Failed to patch note: #{path}"
-        )
+        # `find` is present but the requested occurrence is past the last one,
+        # so do_replace/4 returns the content untouched. Rewriting the note
+        # with its own bytes and calling that success told the caller the patch
+        # landed. Same rule as the "Text not found" branch below.
+        if count == 0 do
+          {:error, "Occurrence #{occurrence} not found in #{path}"}
+        else
+          patch_upsert(user, vault, path, note, new_content, count)
+        end
       else
-        {:ok, "Text not found in #{path}"}
+        # Nothing was replaced, so the patch did not happen. Was `:ok`.
+        {:error, "Text not found in #{path}"}
       end
     else
-      {:error, :not_found} -> {:ok, "Note not found: #{path}"}
-      {:error, _} -> {:ok, "Could not read current content for #{path}; retry"}
+      {:error, :not_found} -> {:error, "Note not found: #{path}"}
+      {:error, reason} -> log_and_error("patch_note", reason, "Could not read #{path}; retry")
     end
   end
 
@@ -379,7 +419,8 @@ defmodule Engram.MCP.Handlers do
         end)
 
       if start_idx == nil do
-        {:ok, "Heading not found: #{target}"}
+        # The section was not updated, so this is not a success. Was `:ok`.
+        {:error, "Heading not found: #{target}"}
       else
         end_idx =
           Enum.find_index(Enum.drop(lines, start_idx + 1), fn line ->
@@ -418,14 +459,17 @@ defmodule Engram.MCP.Handlers do
           "base_hash" => note.content_hash
         })
         |> upsert_reply(
-          ok: "Section '#{heading}' updated in #{path}",
-          conflict: "Note changed concurrently; retry: #{path}",
-          error: "Failed to update section in #{path}"
+          [
+            ok: "Section '#{heading}' updated in #{path}",
+            conflict: "Note changed concurrently; retry: #{path}",
+            error: "Failed to update section in #{path}"
+          ],
+          %{"path" => path, "heading" => heading}
         )
       end
     else
-      {:error, :not_found} -> {:ok, "Note not found: #{path}"}
-      {:error, _} -> {:ok, "Could not read current content for #{path}; retry"}
+      {:error, :not_found} -> {:error, "Note not found: #{path}"}
+      {:error, reason} -> log_and_error("update_section", reason, "Could not read #{path}; retry")
     end
   end
 
@@ -435,13 +479,14 @@ defmodule Engram.MCP.Handlers do
 
     case Notes.rename_note(user, vault, old_path, new_path) do
       {:ok, _note} ->
-        {:ok, "Note renamed: #{old_path} -> #{new_path}"}
+        {:ok, "Note renamed: #{old_path} -> #{new_path}",
+         %{"old_path" => old_path, "new_path" => new_path}}
 
       {:error, :not_found} ->
-        {:ok, "Note not found: #{old_path}"}
+        {:error, "Note not found: #{old_path}"}
 
       {:error, :conflict} ->
-        {:ok, "Note rename conflict: #{new_path} is already taken"}
+        {:error, "Note rename conflict: #{new_path} is already taken"}
 
       # Same catch-all as rename_folder below, and now load-bearing for a second
       # reason: rename_note/5 claims the path in the CRDT authority before
@@ -449,7 +494,7 @@ defmodule Engram.MCP.Handlers do
       # snapshot read/write failures. Without this clause every one of them is a
       # CaseClauseError → 500.
       {:error, reason} ->
-        {:ok, "Could not rename note #{old_path} -> #{new_path}: #{inspect(reason)}"}
+        log_and_error("rename_note", reason, "Could not rename note: #{old_path}")
     end
   end
 
@@ -461,23 +506,38 @@ defmodule Engram.MCP.Handlers do
       {:ok, %{notes: n, attachments: a}} ->
         {:ok,
          "Folder renamed: #{old_folder} -> #{new_folder} " <>
-           "(#{n} notes, #{a} attachments updated)"}
+           "(#{n} notes, #{a} attachments updated)",
+         %{
+           "old_folder" => old_folder,
+           "new_folder" => new_folder,
+           "notes" => n,
+           "attachments" => a
+         }}
 
       {:error, :conflict} ->
-        {:ok, "Folder rename conflict: #{new_folder} already exists"}
+        {:error, "Folder rename conflict: #{new_folder} already exists"}
 
       # Catch-all (Bug 2): Folders.rename can surface a non-:conflict
       # {:error, reason} (e.g. a crypto failure in the attachment leg). Without
       # this clause it CaseClauseError'd → 500.
       {:error, reason} ->
-        {:ok, "Could not rename folder #{old_folder} -> #{new_folder}: #{inspect(reason)}"}
+        log_and_error("rename_folder", reason, "Could not rename folder: #{old_folder}")
     end
   end
 
   def handle("delete_note", user, vault, args) do
     path = args["path"] || ""
-    Notes.delete_note(user, vault, path)
-    {:ok, "Note deleted: #{path}"}
+
+    # `delete_note/4` is idempotent and always returns :ok, so it cannot tell
+    # us whether anything was there. The handler used to discard its result and
+    # announce "Note deleted" either way. Probe first so the payload can say
+    # which it was — the call still succeeds on a no-op, since an idempotent
+    # delete of an absent note is not a failure.
+    existed? = match?({:ok, _}, Notes.get_note(user, vault, path))
+    :ok = Notes.delete_note(user, vault, path)
+
+    text = if existed?, do: "Note deleted: #{path}", else: "No note at: #{path}"
+    {:ok, text, %{"path" => path, "deleted" => existed?}}
   end
 
   def handle("delete_folder", user, vault, args) do
@@ -485,22 +545,25 @@ defmodule Engram.MCP.Handlers do
     recursive = args["recursive"] == true
 
     if folder == "" do
-      {:ok, "Refusing to delete the vault root."}
+      {:error, "Refusing to delete the vault root."}
     else
       case Engram.Folders.delete(user, vault, folder, recursive: recursive) do
-        {:ok, %{notes: 0, attachments: 0}} ->
-          {:ok, "Folder deleted: #{folder}"}
-
         {:ok, %{notes: n, attachments: a}} ->
-          {:ok, "Folder deleted: #{folder} (#{n} notes, #{a} attachments removed)"}
+          counts =
+            if n == 0 and a == 0, do: "", else: " (#{n} notes, #{a} attachments removed)"
 
+          {:ok, "Folder deleted: #{folder}#{counts}",
+           %{"folder" => folder, "notes" => n, "attachments" => a}}
+
+        # A refusal to act, not a completed delete. The caller must re-issue
+        # with recursive: true, which it will not do if we report success.
         {:error, {:not_empty, %{notes: n, attachments: a}}} ->
-          {:ok,
+          {:error,
            "Folder #{folder} contains #{n} notes and #{a} attachments. " <>
              "Pass recursive: true to delete them."}
 
         {:error, reason} ->
-          {:ok, "Could not delete folder #{folder}: #{inspect(reason)}"}
+          log_and_error("delete_folder", reason, "Could not delete folder: #{folder}")
       end
     end
   end
@@ -510,15 +573,25 @@ defmodule Engram.MCP.Handlers do
     new_path = args["new_path"] || ""
 
     case Engram.Attachments.move_attachment(user, vault, old_path, new_path) do
-      {:ok, _att} -> {:ok, "Attachment moved: #{old_path} -> #{new_path}"}
-      {:error, :not_found} -> {:ok, "Attachment not found: #{old_path}"}
-      {:error, :conflict} -> {:ok, "Attachment already exists at: #{new_path}"}
+      {:ok, _att} ->
+        {:ok, "Attachment moved: #{old_path} -> #{new_path}",
+         %{"old_path" => old_path, "new_path" => new_path}}
+
+      {:error, :not_found} ->
+        {:error, "Attachment not found: #{old_path}"}
+
+      {:error, :conflict} ->
+        {:error, "Attachment already exists at: #{new_path}"}
+
       # Plan gate, not a domain outcome: surface it as an MCP error so a client
       # can tell "your plan does not include this" from "that path is free".
-      {:error, :feature_not_available} -> {:error, "attachments_enabled: not on your plan"}
+      {:error, :feature_not_available} ->
+        {:error, "attachments_enabled: not on your plan"}
+
       # Catch-all (Bug 2): move_attachment's crypto `with` head can return an
       # arbitrary {:error, reason}; without this clause it CaseClauseError'd → 500.
-      {:error, reason} -> {:ok, "Could not move attachment: #{inspect(reason)}"}
+      {:error, reason} ->
+        log_and_error("move_attachment", reason, "Could not move attachment: #{old_path}")
     end
   end
 
@@ -556,7 +629,17 @@ defmodule Engram.MCP.Handlers do
        allowed:   #{types}
 
      A 402 response means a plan limit was hit; the body names which one.
-     """}
+     """,
+     %{
+       "url" => "#{base}/api/attachments",
+       "method" => "POST",
+       "vault_id" => to_string(vault.id),
+       # `max_bytes` renders as "unlimited" in the prose when the cap is
+       # absent; the payload uses null rather than that string, so a client
+       # comparing sizes never has to parse an English word.
+       "max_bytes" => Engram.Billing.cap(user, :max_file_bytes),
+       "all_types" => Engram.Billing.attachments_all_types?(user)
+     }}
   end
 
   # No "unknown tool" clause: `Tools.get/1` gates dispatch in mcp_controller.ex,
@@ -807,13 +890,52 @@ defmodule Engram.MCP.Handlers do
   #   * `:note_deleted` is a distinct outcome, not a generic failure. Callers
   #     that name a `:deleted` message report it as one; the rest fold it into
   #     `:error`, exactly as their own ladders did.
-  defp upsert_reply(result, msgs) do
+  # Every failure here used to come back as `{:ok, apologetic_sentence}` — a
+  # write that did not happen, reported as one that did. A model reading only
+  # `isError` had no way to tell a landed write from a version conflict, so it
+  # moved on instead of retrying. #1660 flips them; `structured` rides along on
+  # the success branch to satisfy the outputSchema promise.
+  defp upsert_reply(result, msgs, structured) do
     case result do
-      {:ok, _note} -> {:ok, msgs[:ok]}
-      {:error, :version_conflict, _note} -> {:ok, msgs[:conflict]}
-      {:error, :note_deleted} -> {:ok, msgs[:deleted] || msgs[:error]}
-      {:error, _reason} -> {:ok, msgs[:error]}
+      {:ok, _note} -> {:ok, msgs[:ok], structured}
+      {:error, :version_conflict, _note} -> {:error, msgs[:conflict]}
+      {:error, :note_deleted} -> {:error, msgs[:deleted] || msgs[:error]}
+      {:error, _reason} -> {:error, msgs[:error]}
     end
+  end
+
+  defp patch_upsert(user, vault, path, note, new_content, count) do
+    Notes.upsert_note(user, vault, %{
+      "path" => path,
+      "content" => new_content,
+      "mtime" => now(),
+      "base_hash" => note.content_hash
+    })
+    |> upsert_reply(
+      [
+        ok: "Replaced #{count} occurrence(s) in #{path}",
+        conflict: "Note changed concurrently; retry: #{path}",
+        error: "Failed to patch note: #{path}"
+      ],
+      %{"path" => path, "replacements" => count}
+    )
+  end
+
+  # A reason from deep in Notes/Folders/Attachments can carry decrypted struct
+  # fields, so it is logged with a low-cardinality label and never rendered
+  # into the response. Replaces four `inspect(reason)`-into-the-body sites.
+  defp log_and_error(op, reason, message) do
+    require Logger
+
+    Logger.error(
+      "mcp #{op} failed",
+      Engram.Logger.Metadata.with_category(:error, :http,
+        tool: op,
+        reason_label: Engram.Telemetry.error_kind(reason)
+      )
+    )
+
+    {:error, message}
   end
 
   # Search hits → `{folder, count}` sorted by descending count. Shared by
@@ -964,6 +1086,20 @@ defmodule Engram.MCP.Handlers do
       (named = Enum.filter(accessible, &(&1.name == ref))) != [] -> named
       true -> by_slug
     end
+  end
+
+  # Mirrors the header `format_get_note/1` injects, minus the rendering: the
+  # markdown suppresses an injected title/tags when the body already carries
+  # them, but the payload always states them — a client reading structured
+  # output should not have to parse frontmatter to learn a note's title.
+  defp note_payload(note) do
+    %{
+      "path" => note.path,
+      "title" => note.title,
+      "folder" => note.folder || "",
+      "tags" => note.tags || [],
+      "content" => note.content || ""
+    }
   end
 
   defp vault_payload(v) do

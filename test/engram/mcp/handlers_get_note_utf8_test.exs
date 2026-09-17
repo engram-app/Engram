@@ -57,7 +57,7 @@ defmodule Engram.MCP.HandlersGetNoteUtf8Test do
     # continuation bytes missing. Invalid UTF-8, sitting between head and tail.
     corrupt_note!(user, vault, "Test/Corrupt.md", head <> <<0xE2>> <> tail)
 
-    assert {:ok, out} =
+    assert {:ok, out, _} =
              Handlers.handle("get_note", user, vault, %{"source_path" => "Test/Corrupt.md"})
 
     # The output is clean UTF-8 — no raw bad byte leaks to the JSON boundary.

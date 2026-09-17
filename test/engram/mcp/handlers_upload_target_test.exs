@@ -35,7 +35,7 @@ defmodule Engram.MCP.HandlersUploadTargetTest do
         mcp_host: "mcp.engram.page"
       )
 
-      {:ok, text} = Handlers.handle("get_attachment_upload_target", ctx.user, ctx.vault, %{})
+      {:ok, text, _} = Handlers.handle("get_attachment_upload_target", ctx.user, ctx.vault, %{})
 
       scheme = URI.parse(EngramWeb.Endpoint.url()).scheme
       assert text =~ "#{scheme}://api.engram.page/api/attachments"
@@ -49,7 +49,7 @@ defmodule Engram.MCP.HandlersUploadTargetTest do
       # Unset means ABSENT, which is what a self-host release actually has.
       Application.delete_env(:engram, :host_rewrite)
 
-      {:ok, text} = Handlers.handle("get_attachment_upload_target", ctx.user, ctx.vault, %{})
+      {:ok, text, _} = Handlers.handle("get_attachment_upload_target", ctx.user, ctx.vault, %{})
 
       assert text =~ EngramWeb.Endpoint.url() <> "/api/attachments"
     end
@@ -57,7 +57,7 @@ defmodule Engram.MCP.HandlersUploadTargetTest do
     # The model needs the caller's real limits to decide whether a file can go
     # up at all, and those are per-plan. Free is text-only with a 10MB cap.
     test "reports the caller's resolved plan limits", ctx do
-      {:ok, text} = Handlers.handle("get_attachment_upload_target", ctx.user, ctx.vault, %{})
+      {:ok, text, _} = Handlers.handle("get_attachment_upload_target", ctx.user, ctx.vault, %{})
 
       # Asserting the literal free-tier cap rather than `to_string(effective_limit(...))`:
       # that comparison is vacuous when the limit is nil (`text =~ ""` is always
@@ -70,7 +70,7 @@ defmodule Engram.MCP.HandlersUploadTargetTest do
     # user's default vault silently, which is the wrong vault whenever the
     # account has more than one.
     test "names the vault as a header, not a body field", ctx do
-      {:ok, text} = Handlers.handle("get_attachment_upload_target", ctx.user, ctx.vault, %{})
+      {:ok, text, _} = Handlers.handle("get_attachment_upload_target", ctx.user, ctx.vault, %{})
 
       assert text =~ "x-vault-id: #{ctx.vault.id}"
       # Whitespace-insensitive: a heredoc reformat must not silently disarm this.
@@ -90,7 +90,7 @@ defmodule Engram.MCP.HandlersUploadTargetTest do
 
       Engram.Billing.OverrideCache.evict(ctx.user.id)
 
-      {:ok, text} = Handlers.handle("get_attachment_upload_target", ctx.user, ctx.vault, %{})
+      {:ok, text, _} = Handlers.handle("get_attachment_upload_target", ctx.user, ctx.vault, %{})
 
       assert text =~ "max_bytes: unlimited"
 

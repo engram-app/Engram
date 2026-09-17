@@ -94,7 +94,7 @@ defmodule Engram.MCP.HandlersTest do
           "content_base64" => Base.encode64("x")
         })
 
-      assert {:ok, msg} =
+      assert {:ok, msg, _} =
                Handlers.handle("rename_folder", user, vault, %{
                  "old_folder" => "Docs",
                  "new_folder" => "Archive"
@@ -115,7 +115,7 @@ defmodule Engram.MCP.HandlersTest do
           "content_base64" => Base.encode64("x")
         })
 
-      assert {:ok, msg} =
+      assert {:ok, msg, _} =
                Handlers.handle("move_attachment", user, vault, %{
                  "old_path" => "a.png",
                  "new_path" => "img/a.png"
@@ -142,13 +142,18 @@ defmodule Engram.MCP.HandlersTest do
       corrupt = user |> Ecto.Changeset.change(encrypted_dek: :crypto.strong_rand_bytes(32))
       {:ok, corrupt_user} = Engram.Repo.update(corrupt, skip_tenant_check: true)
 
-      assert {:ok, msg} =
+      assert {:error, msg} =
                Handlers.handle("move_attachment", corrupt_user, vault, %{
                  "old_path" => "a.png",
                  "new_path" => "img/a.png"
                })
 
       assert msg =~ "Could not move attachment"
+
+      # Still the point of this test: a reason from the crypto path can carry
+      # decrypted struct fields, so it is logged, never rendered. It used to be
+      # inspect/1'd straight into the body.
+      refute msg =~ "unrecognised_blob"
     end
   end
 
@@ -183,7 +188,7 @@ defmodule Engram.MCP.HandlersTest do
       {:ok, _} =
         Notes.upsert_note(user, vault, %{"path" => "B.md", "content" => "beta", "mtime" => 1.0})
 
-      assert {:ok, body} =
+      assert {:ok, body, _} =
                Handlers.handle("get_notes", user, vault, %{"paths" => ["A.md", "B.md"]})
 
       assert body =~ "alpha"
@@ -196,7 +201,7 @@ defmodule Engram.MCP.HandlersTest do
       {:ok, _} =
         Notes.upsert_note(user, vault, %{"path" => "A.md", "content" => "alpha", "mtime" => 1.0})
 
-      assert {:ok, body} =
+      assert {:ok, body, _} =
                Handlers.handle("get_notes", user, vault, %{"paths" => ["A.md", "gone.md"]})
 
       assert body =~ "alpha"
@@ -227,7 +232,7 @@ defmodule Engram.MCP.HandlersTest do
     test "deletes an empty folder", %{user: user, vault: vault} do
       {:ok, _} = Notes.create_folder_marker(user, vault, "Empty")
 
-      assert {:ok, msg} = Handlers.handle("delete_folder", user, vault, %{"folder" => "Empty"})
+      assert {:ok, msg, _} = Handlers.handle("delete_folder", user, vault, %{"folder" => "Empty"})
       assert msg =~ "Folder deleted: Empty"
     end
 
@@ -237,7 +242,10 @@ defmodule Engram.MCP.HandlersTest do
       {:ok, _} =
         Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
 
-      assert {:ok, msg} = Handlers.handle("delete_folder", user, vault, %{"folder" => "Docs"})
+      # A refusal to act, not a completed delete (#1660). Reporting it as
+      # success told the caller the folder was gone, so it never re-issued
+      # with recursive: true.
+      assert {:error, msg} = Handlers.handle("delete_folder", user, vault, %{"folder" => "Docs"})
       assert msg =~ "recursive: true"
       assert msg =~ "1 notes"
     end
@@ -248,7 +256,7 @@ defmodule Engram.MCP.HandlersTest do
       {:ok, _} =
         Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
 
-      assert {:ok, msg} =
+      assert {:ok, msg, _} =
                Handlers.handle("delete_folder", user, vault, %{
                  "folder" => "Docs",
                  "recursive" => true
@@ -259,7 +267,7 @@ defmodule Engram.MCP.HandlersTest do
     end
 
     test "refuses to delete the vault root", %{user: user, vault: vault} do
-      assert {:ok, msg} = Handlers.handle("delete_folder", user, vault, %{"folder" => ""})
+      assert {:error, msg} = Handlers.handle("delete_folder", user, vault, %{"folder" => ""})
       assert msg =~ "root"
     end
 
