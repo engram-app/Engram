@@ -260,6 +260,16 @@ defmodule EngramWeb.McpController do
      }}
   end
 
+  # Base protocol in every revision we serve: the receiver MUST respond
+  # promptly with an empty result. Params (a `_meta.progressToken`) are
+  # ignored by design — there is no progress to report on a liveness check.
+  #
+  # SEP-2575 removes `ping` from the stateless 2026 revision, but the header
+  # gate already refuses that revision outright, so no clause is needed for it.
+  defp dispatch(_conn, "ping", _params) do
+    {:ok, %{}}
+  end
+
   defp dispatch(_conn, "tools/list", _params) do
     tools =
       Enum.map(Tools.list(), fn t ->
