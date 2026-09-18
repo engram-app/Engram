@@ -11,6 +11,12 @@ defmodule Engram.Repo.Migrations.UserLimitOverridesBackfillTest do
   alias Engram.Billing.UserLimitOverride
   alias Engram.Repo
 
+  # Opted out of the enforced-RLS diagnostic. This file recreates the dropped
+  # legacy table inside the test, and `engram_app` has USAGE but not CREATE on
+  # schema public — so it fails with `permission denied for schema public`,
+  # which is a DDL privilege, not an RLS finding.
+  @moduletag :rls_unsafe
+
   @backfill_sql """
   INSERT INTO user_limit_overrides (user_id, key, value, reason, set_by, set_at)
   SELECT o.user_id,

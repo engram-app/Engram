@@ -17,6 +17,11 @@ defmodule Engram.Repo.CrossTenantTest do
 
   alias Engram.Notes.Note
 
+  # Opted out of the enforced-RLS diagnostic: this file drops the role itself
+  # and reads back as the superuser to prove the contrast, so a suite-wide drop
+  # makes its control assertions meaningless.
+  @moduletag :rls_unsafe
+
   describe "cross_tenant/1" do
     test "a tenant-table query raises outside the block" do
       # The control. Without it, every assertion below is ambiguous between

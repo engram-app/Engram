@@ -11,6 +11,12 @@ defmodule Engram.Repo.Migrations.UsageMetersNotesCountBackfillTest do
   alias Engram.UsageMeters
   alias Engram.UsageMeters.Meter
 
+  # Opted out of the enforced-RLS diagnostic, same reason as
+  # `user_limit_overrides_backfill_test.exs`: it exercises migration SQL that
+  # needs DDL on schema public, which `engram_app` lacks. The failure is
+  # `permission denied for schema public`, not a tenant-scoping problem.
+  @moduletag :rls_unsafe
+
   @update_sql """
   UPDATE usage_meters m
   SET notes_count = COALESCE(c.cnt, 0)

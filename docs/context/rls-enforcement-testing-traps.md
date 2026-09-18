@@ -414,6 +414,40 @@ whole thing.
   makes the later writes inherit the earlier tenant. Every write on the path
   needs its own direct test.
 - **`@moduletag :integration`.** Never runs in CI; guards nothing.
+- **Flipping the WHOLE suite to `engram_app` as a CI gate.** Tried 2026-09-17
+  and abandoned the same day. The mechanism works — `SET LOCAL SESSION
+  AUTHORIZATION engram_app` in `DataCase.setup_sandbox`, gated on
+  `ENGRAM_ENFORCE_RLS=1`, with `@moduletag :rls_unsafe` opt-outs. The
+  measurement is the problem.
+
+  Measured across the suite: **541 failures in 59 files, 441 of them (82%)
+  originating in `setup`**. By reason: 588 × `new row violates row-level
+  security policy`, 5 × `permission denied for schema public` (migration tests
+  doing DDL), and **6** behavioural assertion failures in total.
+
+  Cause: ExMachina's `insert/1` sets no tenant, so every tenant-owned fixture
+  is rejected before the code under test runs. The job therefore measures
+  "fixtures do not scope their inserts", not "production code does not scope
+  its queries" — a ~2% signal-to-noise ratio, and a `:rls_unsafe` list of 59
+  files would leave a gate asserting almost nothing.
+
+  Two exits are closed, so do not go looking for them. ExMachina generates
+  `insert/N` through its Strategy system (`strategy.ex`: `def
+  unquote(function_name)` dispatching via `apply/3` to
+  `ExMachina.EctoStrategy.handle_insert/2`) — a module we do not own, and there
+  is no `defoverridable` for it, only for the deprecated `create/1,2`. And
+  ExUnit has no hook between a module's `setup` blocks and the test body, so
+  you cannot let fixtures run as superuser and enforce only for the body.
+
+  What survives, and is worth keeping: the flag as an **opt-in diagnostic**
+  (`ENGRAM_ENFORCE_RLS=1 mix test <slice>`, then triage by whether the trace
+  contains `__ex_unit_setup_`), and `Engram.Repo.SessionRoleTest`, which pins
+  the role primitives — notably that `SET ROLE` is NOT usable here, because
+  `with_tenant/2`'s exit runs `set_config('role','none',true)` and reverts to
+  `session_user`, handing the connection back to the superuser mid-test.
+
+  The per-file harness (`Engram.RlsCase`) remains the real mechanism. One bug,
+  one targeted test.
 
 ## References
 

@@ -40,6 +40,8 @@ defmodule Engram.DataCase do
     pid = Ecto.Adapters.SQL.Sandbox.start_owner!(Engram.Repo, shared: not tags[:async])
     on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
 
+    maybe_enforce_rls(tags)
+
     # A test may spin up `:global` CrdtDoc rooms (any test exercising the CRDT
     # sync path). A room is a sandbox-using process that is NOT linked to the
     # test, so it outlives the test and its `terminate` -> `CrdtPersistence.unbind/3`
@@ -58,6 +60,44 @@ defmodule Engram.DataCase do
     unless tags[:async] do
       on_exit(&stop_crdt_rooms/0)
     end
+  end
+
+  # Runs the suite as `engram_app` rather than the cluster superuser, so the RLS
+  # policies are genuinely in force. Opt-in via `ENGRAM_ENFORCE_RLS=1`; without
+  # it the suite keeps its superuser connection and behaves exactly as before.
+  #
+  # Why this exists: the whole suite connects as a SUPERUSER, and a superuser
+  # bypasses RLS even under `FORCE ROW LEVEL SECURITY`. So ~235
+  # `skip_tenant_check` call sites were never once exercised against a role the
+  # policy applies to, and 32 of them turned out to be broken. Writing one RLS
+  # test per bug does not scale to that; flipping the whole suite does.
+  #
+  # `SET LOCAL SESSION AUTHORIZATION` is the specific primitive, and both
+  # obvious alternatives are wrong:
+  #
+  #   * `SET ROLE` — `Repo.with_tenant/2` ends every block with
+  #     `set_config('role', 'none', true)`, which reverts to `session_user`.
+  #     Under `SET ROLE` that is the superuser, so every statement after the
+  #     first scoped call runs UNENFORCED and the suite proves nothing.
+  #   * session-level `SET SESSION AUTHORIZATION` — the sandbox returns
+  #     connections to a pool, so it would leak into whichever test checks out
+  #     next, and resetting it in `on_exit` is unreliable because that callback
+  #     runs outside the connection's owner.
+  #
+  # `SET LOCAL` is scoped to the sandbox's per-test transaction and reverted by
+  # its rollback, so there is no cleanup step to forget. All of that is pinned
+  # by `Engram.Repo.SessionRoleTest` rather than asserted here.
+  #
+  # `@moduletag :rls_unsafe` opts a file out, for tests whose expectations are
+  # legitimately role-dependent (a foreign row is invisible under the policy, so
+  # some assertions genuinely differ). That tag is the debt counter:
+  # `grep -rl rls_unsafe test/ | wc -l` only goes down.
+  defp maybe_enforce_rls(tags) do
+    if System.get_env("ENGRAM_ENFORCE_RLS") == "1" and tags[:rls_unsafe] != true do
+      Engram.Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_app")
+    end
+
+    :ok
   end
 
   # Stop every live CrdtDoc room synchronously so its terminate/unbind runs
