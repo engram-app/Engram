@@ -4,8 +4,9 @@ _Last verified: 2026-09-18 (measured on staging)_
 
 ## Status
 
-Live bug on staging. Prod is unaffected TODAY only because prod still connects
-as its migrator role (BYPASSRLS). Fix proposed, not approved at time of writing.
+Live bug on staging, FIXED by adding a permissive `FOR SELECT` discovery policy
+(see "The fix"). Prod was never affected, because prod still connects as its
+migrator role (BYPASSRLS), and would have hit this at cutover.
 
 ## What This Is
 
@@ -79,28 +80,69 @@ as superuser.
   `MAINTENANCE_DATABASE_URL` is unset on staging. Moving the call site alone
   changes nothing.
 
-## Recommended fix
+## The fix
 
-Treat `api_keys` as an identity/credential table and drop it from the tenant
-policy set. That is already the established treatment for `users`,
-`refresh_tokens`, `oauth_clients` and `device_authorizations`, none of which
-carry a policy.
+One permissive policy, in
+`priv/repo/migrations/20260918120000_add_api_keys_discovery_policy.exs`:
 
-Security cost is low. The row holds only a SHA256 `key_hash`, `name`, `user_id`
-and timestamps, so reading another user's row does not let you authenticate:
-you would need the hash preimage. Per-user scoping of `list_api_keys/1` and
-`revoke_api_key/2` is already enforced by explicit `user_id` predicates.
+```sql
+CREATE POLICY api_keys_discovery ON api_keys FOR SELECT
+  USING (coalesce((SELECT current_setting('app.current_tenant', true)), '') = '');
+```
 
-### Changing the policy set is a 4-place edit
+Permissive policies OR within a command and AND across commands, so a
+`FOR SELECT` policy widens reads ONLY. INSERT still goes through
+`tenant_isolation_api_keys`'s WITH CHECK; UPDATE and DELETE still go through
+its USING. Nothing else changes: `@tenant_tables` keeps `api_keys` so the
+`prepare_query/3` tripwire and four derived lints survive, `structure.sql`
+needs no edit, and `validate_api_key/1` keeps its existing
+`Repo.cross_tenant/1` wrapper.
 
-All four move together or tests fail:
+The predicate is "no tenant is set" rather than `true`. Both fix auth, but
+`true` surrenders read isolation entirely. Measured as `engram_app`:
+
+| policy | no tenant (auth path) | inside `with_tenant` |
+|---|---|---|
+| no RLS at all | all rows | all rows |
+| `USING (true)` | all rows | all rows |
+| `USING (tenant unset)` | all rows | own rows only |
+
+With a tenant set, a foreign INSERT still raises 42501 and cross-tenant
+UPDATE/DELETE still report 0 rows. All four verbs were verified on a scratch
+database before shipping.
+
+## Rejected: dropping `api_keys` from the policy set
+
+This was attempted first and abandoned after review. Treating `api_keys` as an
+identity table (the established treatment for `users`, `refresh_tokens`,
+`oauth_clients` and `device_authorizations`, none of which carry a policy) is
+defensible in the abstract and is what most multi-tenant Postgres guidance
+recommends. It is the wrong trade HERE because the outage was one filtered
+SELECT, and dropping the policy also discards:
+
+- the WITH CHECK guard on INSERT, which is the only verb RLS makes LOUD
+  (42501); the others fail silently,
+- the USING guard on UPDATE and DELETE,
+- the `prepare_query/3` tripwire, since the drift test
+  (`repo_tenant_guard_test.exs`) forces `@tenant_tables` to equal the live RLS
+  set,
+- four lints deriving from `Repo.tenant_tables/0`.
+
+The compensating control offered for that version was `REVOKE UPDATE ON
+api_keys FROM engram_app` — which protects a verb with zero callers, while the
+verb that actually writes (INSERT) lost its only database-level guard. A CHECK
+constraint cannot substitute: `current_setting()` is STABLE and CHECK requires
+IMMUTABLE.
+
+### If you ever DO change the policy set
+
+Four places move together or tests fail:
 
 1. A migration dropping the policy and FORCE RLS on `api_keys`.
 2. `@tenant_tables` in lib/engram/repo.ex:16.
-3. `priv/repo/structure.sql` (lines ~64 and ~1639 reference `api_keys` FORCE
-   RLS and the policy).
-4. docs/context/database-schema-rls.md, which says "Eleven tables carry FORCE
-   ROW LEVEL SECURITY" and lists `api_keys` in several places.
+3. `priv/repo/structure.sql` (the `api_keys` FORCE RLS line and the policy).
+4. docs/context/database-schema-rls.md, which counts the FORCE-RLS tables and
+   lists `api_keys` in several places.
 
 `test/engram/repo_tenant_guard_test.exs` is a drift guard asserting
 `Repo.tenant_tables()` equals the live set of RLS-enabled tables read from the
