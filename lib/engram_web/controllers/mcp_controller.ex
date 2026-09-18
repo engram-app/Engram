@@ -187,9 +187,11 @@ defmodule EngramWeb.McpController do
     version = meta[@meta_protocol_version]
 
     cond do
-      # The header and the envelope must agree. Two sources naming different
-      # revisions is the client contradicting itself, and guessing which it
-      # meant is how a request gets served under rules neither side chose.
+      # A contradiction is refused before either value is interpreted: the
+      # header and the envelope naming different revisions means the client
+      # disagrees with itself, and picking one is how a request gets served
+      # under rules neither side chose. This precedes even the era decision,
+      # because there is no trustworthy era to decide from.
       is_binary(header) and is_binary(version) and header != version ->
         modern_error(conn, id, -32_020, "Header mismatch", %{
           "header" => "MCP-Protocol-Version",
@@ -197,7 +199,35 @@ defmodule EngramWeb.McpController do
           "bodyValue" => safe_header_label(version)
         })
 
-      # Same rule for `Mcp-Method`, which restates the body's method so an
+      # Then era, and version-support before that. Both precede every
+      # modern-only requirement below, because those requirements do not apply
+      # to a request that asked for an older revision.
+      #
+      # A version we do not implement is -32022 whichever era it names: the
+      # client needs the supported list to retry with, and has no other way to
+      # get it.
+      is_binary(version) and version not in @supported_protocol_versions ->
+        modern_error(conn, id, -32_022, "Unsupported protocol version", %{
+          "supported" => @supported_protocol_versions,
+          "requested" => safe_header_label(version)
+        })
+
+      # The ERA is whatever the client DECLARED, not whatever shape its
+      # metadata took. A client can carry modern per-request `_meta` while
+      # asking for a revision that has no `resultType` and no caching model;
+      # answering that with a modern envelope replies in a dialect it did not
+      # ask for. The `_meta` shape only tells us where to READ the declared
+      # version — it does not promote the request to a newer revision.
+      #
+      # This MUST come before the `_meta` requirements below.
+      # `clientCapabilities` is required only in the modern era, so validating
+      # it first rejected a well-formed legacy request with -32602 for omitting
+      # a field its revision never defined.
+      is_binary(version) and version < @modern_era_floor ->
+        legacy_gate(conn, header, params)
+
+      # From here down the request is modern, so the era's own rules apply.
+      # `Mcp-Method` restates the body's method so an
       # intermediary can route without parsing the body. A mismatch means the
       # two disagree about what is being called.
       method_header_mismatch?(conn, params) ->
@@ -218,12 +248,6 @@ defmodule EngramWeb.McpController do
           "Invalid params: #{@meta_client_capabilities} is required"
         )
 
-      version not in @supported_protocol_versions ->
-        modern_error(conn, id, -32_022, "Unsupported protocol version", %{
-          "supported" => @supported_protocol_versions,
-          "requested" => safe_header_label(version)
-        })
-
       true ->
         modern_dispatch(conn, params, id)
     end
@@ -239,7 +263,16 @@ defmodule EngramWeb.McpController do
     end
   end
 
-  defp modern_dispatch(conn, %{"jsonrpc" => "2.0", "method" => method} = params, id)
+  # A removed method sent as a REQUEST gets 404 + -32601. Sent as a
+  # NOTIFICATION it gets an acknowledgement and nothing else: JSON-RPC says the
+  # receiver MUST NOT respond to a notification, and MCP adds that an id MUST
+  # NOT be null — this clause used to match on the method alone, so it answered
+  # notifications with a 404 body carrying `"id": null`, breaking both, and
+  # telling a sender that was not listening.
+  #
+  # `notifications/roots/list_changed` is on the removed list and is only ever
+  # sent as a notification, so it hit this every time.
+  defp modern_dispatch(conn, %{"jsonrpc" => "2.0", "id" => _, "method" => method} = params, id)
        when method in @modern_removed_methods do
     _ = params
 
@@ -250,6 +283,11 @@ defmodule EngramWeb.McpController do
       -32_601,
       "Method not found: #{tool_name_label(method)} was removed in #{@modern_era_floor}"
     )
+  end
+
+  defp modern_dispatch(conn, %{"jsonrpc" => "2.0", "method" => method}, _id)
+       when method in @modern_removed_methods do
+    send_resp(conn, 202, "")
   end
 
   defp modern_dispatch(conn, %{"jsonrpc" => "2.0", "id" => _id, "method" => method} = params, id) do
