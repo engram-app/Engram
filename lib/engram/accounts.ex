@@ -780,14 +780,29 @@ defmodule Engram.Accounts do
 
   @doc """
   Spec §7 — enqueues a forced `CleanupVault` for every vault a user owns
-  (active + soft-deleted). Bypasses RLS + the `Vaults.list_vaults/1`
-  DEK-decrypt chain, since the purge only needs vault ids.
+  (active + soft-deleted). Skips the `Vaults.list_vaults/1` DEK-decrypt chain,
+  since the purge only needs vault ids.
+
+  Scoped with `Repo.with_tenant!/2` because `vaults` carries FORCE ROW LEVEL
+  SECURITY. Unscoped, the enumeration is filtered to `[]` under any role the
+  policy applies to, `Enum.each/2` iterates nothing, and the admin DELETE
+  endpoint answers `{"ok": true}` while the user's vaults, attachments and
+  storage blobs are never reaped. Nothing raises and nothing logs.
+
+  This previously read with `skip_tenant_check: true`, and the docstring
+  claimed that "bypasses RLS". It does not: that option only silences the
+  application-level `prepare_query/3` tripwire and sets no Postgres session
+  state. See docs/context/skip-tenant-check-audit.md.
+
+  The enqueue stays OUTSIDE the transaction. Oban inserts tied to it would be
+  discarded on a rollback, and holding a tenant transaction open across N
+  inserts buys nothing here.
   """
   def purge_user_vaults(%User{id: user_id}) do
-    Repo.all(
-      from(v in Engram.Vaults.Vault, where: v.user_id == ^user_id),
-      skip_tenant_check: true
-    )
+    user_id
+    |> Repo.with_tenant!(fn ->
+      Repo.all(from(v in Engram.Vaults.Vault, where: v.user_id == ^user_id))
+    end)
     |> Enum.each(fn v -> Engram.Workers.CleanupVault.enqueue_now(v.id, user_id) end)
   end
 end
