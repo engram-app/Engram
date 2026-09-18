@@ -36,6 +36,17 @@ defmodule Engram.AccountsPurgeVaultsRlsTest do
   assertion counts. Counting inside the closure keeps the harness rolling back
   (right, because nothing here needs to persist) while still observing the
   effect.
+
+  ## Do not append a tenant-table assertion after the purge call
+
+  `Repo.with_tenant/2` resets the ROLE on exit but not `app.current_tenant`,
+  so once `purge_user_vaults/1` returns, the tenant is still set for the rest
+  of this closure. The `oban_jobs` counts below are unaffected because that
+  table carries no policy. A `vaults` or `notes` assertion placed after the
+  call would run WITH a tenant in force and pass regardless of the code under
+  test — trap 2 in `docs/context/rls-enforcement-testing-traps.md`. Put any
+  such assertion in its own `as_prod_role/1` block, which clears the tenant on
+  entry.
   """
   use Engram.DataCase, async: false
 
@@ -49,8 +60,18 @@ defmodule Engram.AccountsPurgeVaultsRlsTest do
   setup do
     user = insert(:user, role: "member")
     vault = insert(:vault, user: user)
+    _second_vault = insert(:vault, user: user)
 
-    %{user: user, vault: vault}
+    # A bystander, whose VAULT id is what the assertion keys on. Keying it on
+    # the bystander's user_id would pin nothing: the enqueue passes the outer
+    # `user_id`, not `v.user_id`, so every job carries the purged user's id by
+    # construction and that count is structurally unable to be non-zero. The
+    # vault id does move — an over-broad read that loses its `user_id`
+    # predicate enqueues a job carrying THIS vault's id.
+    other = insert(:user, role: "member")
+    other_vault = insert(:vault, user: other)
+
+    %{user: user, vault: vault, other_vault: other_vault}
   end
 
   describe "purge_user_vaults/1 under enforced RLS" do
@@ -66,25 +87,40 @@ defmodule Engram.AccountsPurgeVaultsRlsTest do
                end)
     end
 
-    test "every owned vault still gets a forced CleanupVault", %{user: user, vault: vault} do
+    test "every owned vault gets a forced CleanupVault, and only theirs",
+         %{user: user, other_vault: other_vault} do
+      # Worker-scoped: a bare `user_id` match would also count any other job
+      # this path later enqueues keyed on the same user.
+      count = fn field, value ->
+        Repo.one(
+          from(j in "oban_jobs",
+            where:
+              j.worker == "Engram.Workers.CleanupVault" and
+                fragment("? ->> ? = ?", j.args, ^field, ^value),
+            select: count(j.id)
+          )
+        )
+      end
+
       outcome =
         as_prod_role(fn ->
           Accounts.purge_user_vaults(user)
-
-          Repo.one(
-            from(j in "oban_jobs",
-              where: fragment("? ->> 'vault_id' = ?", j.args, ^vault.id),
-              select: count(j.id)
-            ),
-            skip_tenant_check: true
-          )
+          {count.("user_id", user.id), count.("vault_id", other_vault.id)}
         end)
 
-      assert {:returned, 1} = outcome,
+      # The two elements pin opposite failures. `{0, _}` is the filtered-read
+      # bug this file exists for. `{_, 1}` is an over-broad enumeration that
+      # lost its `user_id` predicate — caught via the bystander's VAULT id,
+      # because every job carries the purged user's id regardless.
+      assert {:returned, {2, 0}} = outcome,
              """
-             purge_user_vaults/1 enqueued nothing: the `vaults` enumeration was
-             filtered by the tenant policy, so an admin DELETE returns ok while
-             the user's vault data is never reaped.
+             expected 2 CleanupVault jobs for the purged user and 0 for the
+             bystander.
+
+             `{0, 0}` means the `vaults` enumeration was filtered by the tenant
+             policy, so an admin DELETE returns ok while nothing is reaped.
+             A non-zero second element means the purge reached another user's
+             vaults.
 
                got: #{inspect(outcome)}
              """
