@@ -15,6 +15,17 @@ afterEach(() => {
 	vi.mocked(posthog.capture).mockClear();
 });
 
+/** A rejected event must (1) never reach PostHog and (2) be reported — and it
+ *  must NOT throw into the caller. `track()` used to throw synchronously in
+ *  DEV; the e2e suite runs `bun run dev`, so one rejected property was caught
+ *  by React's error boundary and replaced the whole page with "Something went
+ *  wrong". Asserting "it threw" would enshrine that. Assert the drop, which is
+ *  the property that actually matters. */
+function expectRejected(): void {
+	expect(posthog.capture).not.toHaveBeenCalled();
+	expect(mockCapture).toHaveBeenCalledOnce();
+}
+
 describe("track property validation", () => {
 	it("allows uuids, enum members and numbers", () => {
 		track("plugin_connect_succeeded", {
@@ -38,13 +49,15 @@ describe("track property validation", () => {
 			{ step: "vault", user_uuid: "12dc6735-52f2-4ce4-9117-91f0ce2389a7" },
 		],
 	])("rejects %s", (_label, props) => {
-		expect(() => track("onboarding_step_viewed", props)).toThrow(/not an allowed/i);
+		track("onboarding_step_viewed", props);
+		expectRejected();
 	});
 
 	it("rejects a declared key whose value is the wrong kind", () => {
 		// `step` is declared as kind "step" for this event; a checkout method
 		// string is the wrong kind for that key, not merely an unknown key.
-		expect(() => track("onboarding_step_viewed", { step: "card" })).toThrow(/not an allowed/i);
+		track("onboarding_step_viewed", { step: "card" });
+		expectRejected();
 	});
 
 	it("accepts a gate_reasons array of GATE_REASONS members", () => {
@@ -59,7 +72,8 @@ describe("track property validation", () => {
 			{ missing: ["terms", "not_a_reason"], next_step: "billing" },
 		],
 	])("rejects onboarding_blocked with %s for missing", (_label, props) => {
-		expect(() => track("onboarding_blocked", props)).toThrow(/not an allowed/i);
+		track("onboarding_blocked", props);
+		expectRejected();
 	});
 
 	it("accepts a checkout tier under checkout_opened", () => {
@@ -68,9 +82,8 @@ describe("track property validation", () => {
 	});
 
 	it("rejects a tier value outside CHECKOUT_TIERS", () => {
-		expect(() => track("checkout_opened", { method: "unknown", tier: "enterprise" })).toThrow(
-			/not an allowed/i,
-		);
+		track("checkout_opened", { method: "unknown", tier: "enterprise" });
+		expectRejected();
 	});
 
 	describe("in production (no dev-throw)", () => {

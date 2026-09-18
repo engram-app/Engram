@@ -54,6 +54,19 @@ function isKind(kind: PropKind, value: unknown): boolean {
 function reportViolation(message: string): void {
 	console.warn(message);
 	captureError(new Error(message));
+
+	// Deliberately NEVER thrown — not synchronously, and not deferred either.
+	//
+	// It used to throw when `import.meta.env.DEV`. The e2e suite runs
+	// `bun run dev`, so DEV was true in CI, and a single rejected property was
+	// caught by React's error boundary and replaced the entire page with
+	// "Something went wrong" — the analytics guard taking down the product it
+	// exists to measure. Deferring the throw via queueMicrotask dodges the
+	// boundary but still registers as an unhandled error, which vitest fails
+	// the run on and Playwright's pageerror handler would catch.
+	//
+	// console.warn + Sentry is the whole reporting path. A dropped event is a
+	// data gap; a thrown one is an outage.
 }
 
 export function track(event: EngramEvent, props: Record<string, unknown> = {}): void {
@@ -61,11 +74,7 @@ export function track(event: EngramEvent, props: Record<string, unknown> = {}): 
 	if (!schema) {
 		// Unreachable under the exhaustive EVENT_SCHEMAS type, but an event
 		// smuggled in via `as EngramEvent` gets no free pass at runtime either.
-		const message = `analytics: no schema declared for event "${event}"`;
-		if (import.meta.env.DEV) {
-			throw new Error(message);
-		}
-		reportViolation(message);
+		reportViolation(`analytics: no schema declared for event "${event}"`);
 		return;
 	}
 
@@ -75,12 +84,8 @@ export function track(event: EngramEvent, props: Record<string, unknown> = {}): 
 			continue;
 		}
 
-		const message = `analytics: property "${key}" on "${event}" is not an allowed value`;
-		if (import.meta.env.DEV) {
-			throw new Error(message);
-		}
-		reportViolation(message);
-		return; // Drop the whole event in prod. A partial event is a silent lie.
+		reportViolation(`analytics: property "${key}" on "${event}" is not an allowed value`);
+		return; // Drop the whole event. A partial event is a silent lie.
 	}
 
 	posthog.capture(event, props);
