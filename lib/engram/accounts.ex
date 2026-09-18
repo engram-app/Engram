@@ -792,17 +792,48 @@ defmodule Engram.Accounts do
   This previously read with `skip_tenant_check: true`, and the docstring
   claimed that "bypasses RLS". It does not: that option only silences the
   application-level `prepare_query/3` tripwire and sets no Postgres session
-  state. See docs/context/skip-tenant-check-audit.md.
+  state. See docs/context/skip-tenant-check-audit.md. That was only ever live
+  where the app connects as a role the policy applies to (staging, self-host);
+  prod connects as its BYPASSRLS migrator and was never affected.
 
-  The enqueue stays OUTSIDE the transaction. Oban inserts tied to it would be
-  discarded on a rollback, and holding a tenant transaction open across N
-  inserts buys nothing here.
+  The enqueue runs INSIDE the tenant transaction, and a failed insert raises.
+  Both matter, because `Oban.insert/1` returns `{:error, changeset}` rather
+  than raising: an `Enum.each/2` that discards it reproduces the exact silent
+  failure this function was fixed for, one line lower. Rolling the whole purge
+  back on a bad insert is the correct atomic outcome — the alternative leaves
+  vault 1 reaped, vault 3 not, and nothing retrying.
+
+  PRECONDITION: raises if called from inside a `Repo.with_tenant/2` block for
+  a DIFFERENT tenant. The only caller is the admin DELETE path, which holds no
+  tenant when it gets here.
+
+  Returns the number of vaults enqueued.
   """
   def purge_user_vaults(%User{id: user_id}) do
-    user_id
-    |> Repo.with_tenant!(fn ->
-      Repo.all(from(v in Engram.Vaults.Vault, where: v.user_id == ^user_id))
+    require Logger
+
+    Repo.with_tenant!(user_id, fn ->
+      vaults = Repo.all(from(v in Engram.Vaults.Vault, where: v.user_id == ^user_id))
+
+      Enum.each(vaults, fn v ->
+        case Engram.Workers.CleanupVault.enqueue_now(v.id, user_id) do
+          {:ok, _job} ->
+            :ok
+
+          {:error, reason} ->
+            raise "purge_user_vaults: CleanupVault enqueue failed for vault " <>
+                    "#{v.id} (user #{user_id}): #{inspect(reason)}"
+        end
+      end)
+
+      # An irreversible admin action that previously did nothing at all, so it
+      # says how much it did.
+      Logger.info(
+        "purge_user_vaults enqueued #{length(vaults)} CleanupVault job(s)",
+        Engram.Logger.Metadata.with_category(:info, :lifecycle, user_id: user_id)
+      )
+
+      length(vaults)
     end)
-    |> Enum.each(fn v -> Engram.Workers.CleanupVault.enqueue_now(v.id, user_id) end)
   end
 end

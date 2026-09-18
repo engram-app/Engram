@@ -36,6 +36,17 @@ defmodule Engram.AccountsPurgeVaultsRlsTest do
   assertion counts. Counting inside the closure keeps the harness rolling back
   (right, because nothing here needs to persist) while still observing the
   effect.
+
+  ## Do not append a tenant-table assertion after the purge call
+
+  `Repo.with_tenant/2` resets the ROLE on exit but not `app.current_tenant`,
+  so once `purge_user_vaults/1` returns, the tenant is still set for the rest
+  of this closure. The `oban_jobs` counts below are unaffected because that
+  table carries no policy. A `vaults` or `notes` assertion placed after the
+  call would run WITH a tenant in force and pass regardless of the code under
+  test — trap 2 in `docs/context/rls-enforcement-testing-traps.md`. Put any
+  such assertion in its own `as_prod_role/1` block, which clears the tenant on
+  entry.
   """
   use Engram.DataCase, async: false
 
@@ -49,8 +60,15 @@ defmodule Engram.AccountsPurgeVaultsRlsTest do
   setup do
     user = insert(:user, role: "member")
     vault = insert(:vault, user: user)
+    _second_vault = insert(:vault, user: user)
 
-    %{user: user, vault: vault}
+    # A bystander. The assertion below counts jobs per user_id, so enqueueing
+    # for EVERY user's vaults (an over-broad regression, e.g. dropping the
+    # `user_id` predicate) fails here rather than passing green.
+    other = insert(:user, role: "member")
+    _other_vault = insert(:vault, user: other)
+
+    %{user: user, vault: vault, other: other}
   end
 
   describe "purge_user_vaults/1 under enforced RLS" do
@@ -66,25 +84,36 @@ defmodule Engram.AccountsPurgeVaultsRlsTest do
                end)
     end
 
-    test "every owned vault still gets a forced CleanupVault", %{user: user, vault: vault} do
+    test "every owned vault gets a forced CleanupVault, and only theirs",
+         %{user: user, other: other} do
+      count_for = fn id ->
+        Repo.one(
+          from(j in "oban_jobs",
+            where: fragment("? ->> 'user_id' = ?", j.args, ^id),
+            select: count(j.id)
+          ),
+          skip_tenant_check: true
+        )
+      end
+
       outcome =
         as_prod_role(fn ->
           Accounts.purge_user_vaults(user)
-
-          Repo.one(
-            from(j in "oban_jobs",
-              where: fragment("? ->> 'vault_id' = ?", j.args, ^vault.id),
-              select: count(j.id)
-            ),
-            skip_tenant_check: true
-          )
+          {count_for.(user.id), count_for.(other.id)}
         end)
 
-      assert {:returned, 1} = outcome,
+      # Counting BOTH users pins the two failure directions at once: `{0, _}`
+      # is the filtered-read bug this file exists for, and `{_, 1}` is an
+      # over-broad enumeration that lost its `user_id` predicate.
+      assert {:returned, {2, 0}} = outcome,
              """
-             purge_user_vaults/1 enqueued nothing: the `vaults` enumeration was
-             filtered by the tenant policy, so an admin DELETE returns ok while
-             the user's vault data is never reaped.
+             expected 2 CleanupVault jobs for the purged user and 0 for the
+             bystander.
+
+             `{0, 0}` means the `vaults` enumeration was filtered by the tenant
+             policy, so an admin DELETE returns ok while nothing is reaped.
+             A non-zero second element means the purge reached another user's
+             vaults.
 
                got: #{inspect(outcome)}
              """
