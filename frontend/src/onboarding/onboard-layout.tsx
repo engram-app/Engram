@@ -28,17 +28,30 @@ export default function OnboardLayout() {
 	// below), so the effect beneath it can be called unconditionally too.
 	const current = stepFromPath(pathname);
 
-	// Fires once per distinct step, not once per onboarding/status refetch —
-	// this is the signal that would have shown someone stuck on one step
-	// across two visits, so it must key on the step alone, not on query churn.
+	// `/onboard` sits outside OnboardingGate's bootstrap seed, so this query is
+	// genuinely uncached on a real first visit — the effect below WILL run
+	// once while still loading, before it has anything to report. `ready`
+	// flips false -> true exactly once (react-query's `isLoading` only covers
+	// "no data yet"; a background refetch, e.g. refetchOnWindowFocus, leaves
+	// it false since data already exists), which is what gives the effect its
+	// second chance to fire once the query actually resolves. A boolean, not
+	// `data` itself, is in the deps — `data` gets a new reference on every
+	// refetch even when `steps` is unchanged, which would refire this on every
+	// background revalidation.
+	const ready = !isLoading && data !== undefined;
+
+	// Fires once per distinct step actually shown, not once per
+	// onboarding/status refetch — this is the signal that would have shown
+	// someone stuck on one step across two visits, so it must key on the step
+	// (once known) alone, not on query churn.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: deliberately
-	// keyed on `current` only — see comment above.
+	// keyed on `current` + `ready` only — see comments above.
 	useEffect(() => {
-		if (!current || isLoading || !data || !data.steps.includes(current)) {
+		if (!current || !ready || !data || !data.steps.includes(current)) {
 			return;
 		}
 		track("onboarding_step_viewed", { step: current });
-	}, [current]);
+	}, [current, ready]);
 
 	if (isLoading || !data) {
 		return <LoadingScreen />;
