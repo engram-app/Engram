@@ -1,0 +1,201 @@
+defmodule Engram.Workers.CrdtBloatSweep do
+  @moduledoc """
+  Daily whole-population measurement of CRDT doc bloat (#1706).
+
+  `Engram.Notes.CrdtCheckpoint` emits a per-checkpoint bloat sample, but that
+  stream is biased in two ways that make it the wrong thing to size the database
+  against. It only sees notes that were OPENED, and it re-samples a frequently
+  synced note on every open — so the distribution it describes is "notes people
+  touch", weighted by how often they touch them. In prod 99% of rooms are
+  handshake-minted rather than edit-minted, and at ~390 rooms/day a p99 over the
+  live histogram needs weeks to mean anything.
+
+  This sweep answers the question the checkpoint stream cannot: across EVERY
+  stored note, how far does `crdt_state` run ahead of the content it encodes.
+
+  ## It never decrypts anything
+
+  AES-GCM ciphertext is the same length as its plaintext plus a fixed 16-byte
+  tag (`Engram.Crypto.Envelope.tag_bytes/0`); the nonce lives in its own column.
+  So `octet_length(col) - tag_bytes()` is the exact plaintext size, and the
+  whole measurement is column lengths — no DEK lookup, no key material, no
+  plaintext in memory, and one aggregate query rather than a walk. The fixed
+  overhead cancels in the ratio anyway; it is subtracted so the reported BYTE
+  totals are true sizes rather than sizes plus a per-row constant.
+
+  ## Scope
+
+  The population is every live `kind='note'` row, not only those carrying CRDT
+  state — `state_bytes_total / content_bytes_total` is sold as the
+  reclaimable-storage estimate #609 sizes against, and scoping it to rows WITH
+  state would drop the cohort migration 20260706210000 left with a NULL
+  `crdt_state` that nothing re-seeds (see `CrdtCheckpoint`), reporting a ratio
+  higher than the database's. `notes_with_state` reports that split.
+
+  `kind='note'` is explicit rather than implied. Folder rows live in the same
+  table and are allowed a NULL `content_ciphertext`; nothing stops one acquiring
+  CRDT state, and it would enter the population as `content_bytes = 0`.
+
+  ## Percentiles exclude trivially small notes
+
+  Ratio percentiles are computed only over notes above
+  `Engram.Notes.CrdtBloat.min_content_bytes/0`; `notes_measured` reports that
+  denominator alongside `notes`. Byte totals stay over the full population —
+  those are real storage no matter how small the note. The staging measurement
+  that forced this split is recorded in `CrdtBloat`.
+
+  ## Why it refuses rather than reporting zero
+
+  `notes` carries RLS. Where enforcement is on and no maintenance pool is
+  configured, this query returns zero rows — and a sweep that reports "0 notes,
+  ratio 0" is indistinguishable from a healthy empty database. That is a lying
+  oracle, and the gauges it writes would be believed. Same guard, and same
+  reasoning, as `Engram.Workers.OrphanSweep`.
+  """
+  use Oban.Worker, queue: :maintenance, max_attempts: 1
+
+  alias Engram.Crypto.Envelope
+  alias Engram.Logger.Metadata
+  alias Engram.Notes.CrdtBloat
+  alias Engram.Repo
+
+  require Logger
+
+  @typedoc """
+  One sweep reading.
+
+  Spelled out rather than `map()` because dialyzer then catches a key renamed
+  here and not at the call site. It does NOT catch a measurement added without a
+  matching PromEx gauge — nothing does; `Engram.PromEx.CrdtTest` asserts a
+  hardcoded key list, so both have to be edited by hand.
+  """
+  @type measurements :: %{
+          notes: non_neg_integer(),
+          notes_with_state: non_neg_integer(),
+          notes_measured: non_neg_integer(),
+          bloat_ratio_p50: float(),
+          bloat_ratio_p90: float(),
+          bloat_ratio_p99: float(),
+          bloat_ratio_max: float(),
+          state_bytes_total: non_neg_integer(),
+          content_bytes_total: non_neg_integer(),
+          notes_over_threshold: non_neg_integer()
+        }
+
+  @event [:engram, :crdt, :state_sweep]
+
+  # Matches the `>5x` panel on the engram-crdt dashboard. Changing it here
+  # without changing the `le` bucket there makes the two disagree silently.
+  @bloat_threshold 5
+
+  # Both halves are needed. `timeout/1` bounds the JOB; Ecto bounds the QUERY
+  # separately and defaults to 15s, so a job budget alone would still have this
+  # die mid-scan on a large table with nothing but a DBConnection error and a
+  # discard to show for it.
+  @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(10)
+
+  @impl Oban.Worker
+  def perform(%Oban.Job{}) do
+    if tenancy_unsafe?() do
+      Logger.error(
+        "crdt_bloat_sweep refusing to run: RLS is enforced and no maintenance pool is " <>
+          "configured, so the notes read would return zero rows and the sweep would " <>
+          "report an empty database as a healthy one",
+        Metadata.with_category(:error, :oban, [])
+      )
+
+      {:error, :tenancy_unsafe}
+    else
+      _ = measure_and_emit()
+      :ok
+    end
+  end
+
+  @doc """
+  Run the aggregate and emit `[:engram, :crdt, :state_sweep]`.
+
+  Public so the sweep can be triggered by hand against a real database
+  (`Engram.Workers.CrdtBloatSweep.measure_and_emit/0`) without waiting for the
+  cron slot. Returns the measurements map.
+  """
+  @spec measure_and_emit() :: measurements()
+  def measure_and_emit do
+    measurements = measure()
+
+    :telemetry.execute(@event, measurements, %{})
+
+    Logger.info(
+      "crdt_bloat_sweep notes=#{measurements.notes} with_state=#{measurements.notes_with_state} measured=#{measurements.notes_measured} p50=#{fmt(measurements.bloat_ratio_p50)} " <>
+        "p90=#{fmt(measurements.bloat_ratio_p90)} p99=#{fmt(measurements.bloat_ratio_p99)} " <>
+        "max=#{fmt(measurements.bloat_ratio_max)} over_threshold=#{measurements.notes_over_threshold} " <>
+        "state_bytes=#{measurements.state_bytes_total}",
+      Metadata.with_category(:info, :oban, [])
+    )
+
+    measurements
+  end
+
+  @spec measure() :: measurements()
+  defp measure do
+    tag = Envelope.tag_bytes()
+
+    %Postgrex.Result{rows: [row]} =
+      Repo.maintenance().query!(
+        """
+        SELECT
+          count(*)::bigint,
+          count(*) FILTER (WHERE has_state)::bigint,
+          count(*) FILTER (WHERE has_state AND big)::bigint,
+          coalesce(
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY ratio) FILTER (WHERE has_state AND big), 0
+          )::float8,
+          coalesce(
+            percentile_cont(0.9) WITHIN GROUP (ORDER BY ratio) FILTER (WHERE has_state AND big), 0
+          )::float8,
+          coalesce(
+            percentile_cont(0.99) WITHIN GROUP (ORDER BY ratio) FILTER (WHERE has_state AND big), 0
+          )::float8,
+          coalesce(max(ratio) FILTER (WHERE has_state AND big), 0)::float8,
+          coalesce(sum(state_bytes), 0)::bigint,
+          coalesce(sum(content_bytes), 0)::bigint,
+          count(*) FILTER (WHERE has_state AND big AND ratio > $2::float8)::bigint
+        FROM (
+          SELECT
+            n.crdt_state_ciphertext IS NOT NULL AS has_state,
+            greatest(octet_length(n.crdt_state_ciphertext) - $1::int, 0) AS state_bytes,
+            greatest(octet_length(n.content_ciphertext) - $1::int, 0) AS content_bytes,
+            greatest(octet_length(n.content_ciphertext) - $1::int, 0) >= $3::int AS big,
+            greatest(octet_length(n.crdt_state_ciphertext) - $1::int, 0)::float8
+              / greatest(octet_length(n.content_ciphertext) - $1::int, 1)::float8 AS ratio
+          FROM notes n
+          WHERE n.deleted_at IS NULL
+            AND n.kind = 'note'
+        ) sized
+        """,
+        [tag, @bloat_threshold * 1.0, CrdtBloat.min_content_bytes()],
+        timeout: :timer.minutes(5)
+      )
+
+    [notes, with_state, measured, p50, p90, p99, max, state_bytes, content_bytes, over] = row
+
+    %{
+      notes: notes,
+      notes_with_state: with_state,
+      notes_measured: measured,
+      bloat_ratio_p50: p50,
+      bloat_ratio_p90: p90,
+      bloat_ratio_p99: p99,
+      bloat_ratio_max: max,
+      state_bytes_total: state_bytes,
+      content_bytes_total: content_bytes,
+      notes_over_threshold: over
+    }
+  end
+
+  defp tenancy_unsafe? do
+    Repo.maintenance() == Repo and Engram.Repo.TenancyGuard.enforced?()
+  end
+
+  defp fmt(f) when is_float(f), do: Float.round(f, 2)
+end
