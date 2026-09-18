@@ -34,7 +34,9 @@ export function useVaultReadyEvents({ userId, enabled }: Options): State {
 	// Start of the wait, for vault_first_sync_completed's duration_ms — this is
 	// the one milestone that proves a signup actually produced content, so how
 	// long it took to land is worth carrying along with it.
-	const waitStartedAtRef = useRef(Date.now());
+	// Real value assigned synchronously below before the effect registers any
+	// listener that reads it — this initializer just needs to be pure.
+	const waitStartedAtRef = useRef(0);
 
 	useEffect(() => {
 		if (!enabled || userId === null || userId === undefined) {

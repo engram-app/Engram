@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -31,7 +31,7 @@ export default function AgreementPage() {
 	const navigate = useNavigate();
 	const { data } = useOnboardingStatus();
 	const { mutateAsync, isPending } = useAcceptTerms();
-	const mountedAtRef = useRef(Date.now());
+	const [mountedAt] = useState(() => Date.now());
 
 	const tosV = data?.current_tos_version;
 	const privV = data?.current_privacy_version;
@@ -57,7 +57,7 @@ export default function AgreementPage() {
 		});
 		track("onboarding_step_completed", {
 			step: "agreement",
-			duration_ms: Date.now() - mountedAtRef.current,
+			duration_ms: Date.now() - mountedAt,
 		});
 		navigate("/onboard", { replace: true });
 	}

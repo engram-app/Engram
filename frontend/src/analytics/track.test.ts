@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
 import posthog from "posthog-js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { captureError } from "../sentry";
 import { track } from "./track";
 
@@ -33,7 +33,10 @@ describe("track property validation", () => {
 		// onboarding step) must still be rejected under a key its event's
 		// schema never declared. Checking the value's shape is not enough.
 		["a valid enum value under an undeclared key", { step: "vault", title: "done" }],
-		["a uuid-shaped string under an undeclared key", { step: "vault", user_uuid: "12dc6735-52f2-4ce4-9117-91f0ce2389a7" }],
+		[
+			"a uuid-shaped string under an undeclared key",
+			{ step: "vault", user_uuid: "12dc6735-52f2-4ce4-9117-91f0ce2389a7" },
+		],
 	])("rejects %s", (_label, props) => {
 		expect(() => track("onboarding_step_viewed", props)).toThrow(/not an allowed/i);
 	});
@@ -51,7 +54,10 @@ describe("track property validation", () => {
 
 	it.each([
 		["a non-array value", { missing: "terms", next_step: "billing" }],
-		["an array with an unrecognised member", { missing: ["terms", "not_a_reason"], next_step: "billing" }],
+		[
+			"an array with an unrecognised member",
+			{ missing: ["terms", "not_a_reason"], next_step: "billing" },
+		],
 	])("rejects onboarding_blocked with %s for missing", (_label, props) => {
 		expect(() => track("onboarding_blocked", props)).toThrow(/not an allowed/i);
 	});

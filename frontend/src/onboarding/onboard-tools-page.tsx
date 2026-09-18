@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router";
 import { HelpTip } from "@/components/help-tip";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -205,7 +205,7 @@ export default function OnboardToolsPage() {
 	const { data: status, isLoading } = useOnboardingStatus();
 	const setProfile = useSetOnboardingProfile();
 	const isFree = useIsFreeTier();
-	const mountedAtRef = useRef(Date.now());
+	const [mountedAt] = useState(() => Date.now());
 
 	if (isLoading || !status) {
 		return <LoadingScreen />;
@@ -232,7 +232,7 @@ export default function OnboardToolsPage() {
 				await setProfile.mutateAsync({ tools });
 				track("onboarding_step_completed", {
 					step: "tools",
-					duration_ms: Date.now() - mountedAtRef.current,
+					duration_ms: Date.now() - mountedAt,
 				});
 				navigate("/onboard/vault", { replace: true });
 			}}

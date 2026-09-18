@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { Navigate, Outlet, useLocation } from "react-router";
-import { type OnboardingStep, useOnboardingStatus } from "../api/queries";
 import { track } from "../analytics/track";
+import { type OnboardingStep, useOnboardingStatus } from "../api/queries";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
 import AuthShell from "../layout/auth-shell";
 import LoadingScreen from "../layout/loading-screen";
@@ -44,10 +44,9 @@ export default function OnboardLayout() {
 	// onboarding/status refetch — this is the signal that would have shown
 	// someone stuck on one step across two visits, so it must key on the step
 	// (once known) alone, not on query churn.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: deliberately
-	// keyed on `current` + `ready` only — see comments above.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: deliberately keyed on `current` + `ready` only — see comments above.
 	useEffect(() => {
-		if (!current || !ready || !data || !data.steps.includes(current)) {
+		if (!(current && ready && data?.steps.includes(current))) {
 			return;
 		}
 		track("onboarding_step_viewed", { step: current });

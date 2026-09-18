@@ -18,16 +18,30 @@
 // can add a differently-named URL property in a future version and a
 // fixed-name denylist would silently stop covering it.
 function isUrlLike(key: string, value: unknown): boolean {
-	if (/url|referr|pathname|host/i.test(key)) return true;
+	if (/url|referr|pathname|host/i.test(key)) {
+		return true;
+	}
 	return typeof value === "string" && /^https?:\/\//i.test(value);
 }
 
+interface NavigatorWithGpc extends Navigator {
+	globalPrivacyControl?: boolean;
+}
+
+function hasGlobalPrivacyControl(nav: Navigator): nav is NavigatorWithGpc {
+	return "globalPrivacyControl" in nav;
+}
+
 export async function initAnalytics(key: string): Promise<void> {
-	if (!key) return;
+	if (!key) {
+		return;
+	}
 
 	// GPC has legal force under CCPA/CPRA and is what our privacy policy
 	// promises. posthog's respect_dnt covers the deprecated DNT header only.
-	if ((navigator as { globalPrivacyControl?: boolean }).globalPrivacyControl === true) return;
+	if (hasGlobalPrivacyControl(navigator) && navigator.globalPrivacyControl === true) {
+		return;
+	}
 
 	const { default: posthog } = await import("posthog-js");
 	posthog.init(key, {
@@ -46,7 +60,9 @@ export async function initAnalytics(key: string): Promise<void> {
 		sanitize_properties: (properties, _event) => {
 			const clean: Record<string, unknown> = {};
 			for (const [propKey, propValue] of Object.entries(properties)) {
-				if (isUrlLike(propKey, propValue)) continue;
+				if (isUrlLike(propKey, propValue)) {
+					continue;
+				}
 				clean[propKey] = propValue;
 			}
 			return clean;

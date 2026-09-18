@@ -73,11 +73,26 @@ function toCheckoutMethod(type: string | undefined): CheckoutMethod {
 
 // Every Paddle.js checkout event's `data` carries this shape once a payment
 // method has been chosen, but the SDK's own per-event union types don't
-// narrow it for us here — same defensive unknown-cast the eventCallback's
-// transaction_id extraction below uses.
+// narrow it for us here — walked defensively, same as the eventCallback's
+// transaction_id extraction below.
 function paymentMethodFrom(data: unknown): string | undefined {
-	const d = data as { payment?: { method_details?: { type?: string } } } | undefined;
-	return d?.payment?.method_details?.type;
+	if (typeof data !== "object" || data === null || !("payment" in data)) {
+		return undefined;
+	}
+	const { payment } = data;
+	if (typeof payment !== "object" || payment === null || !("method_details" in payment)) {
+		return undefined;
+	}
+	const { method_details } = payment;
+	if (
+		typeof method_details !== "object" ||
+		method_details === null ||
+		!("type" in method_details)
+	) {
+		return undefined;
+	}
+	const { type } = method_details;
+	return typeof type === "string" ? type : undefined;
 }
 
 async function downloadInvoice(transactionId: string) {

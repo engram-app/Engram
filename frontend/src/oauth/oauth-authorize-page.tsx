@@ -31,6 +31,7 @@ import { connectionId as oauthConnectionId } from "../billing/existing-connectio
 import { useConnectionCap } from "../billing/use-connection-cap";
 import AuthPanel from "../layout/auth-panel";
 import AuthShell from "../layout/auth-shell";
+import { isMember } from "../lib/is-member";
 import { settingsHash, settingsTo } from "../settings/settings-hash";
 import { clearPendingAuthorization, stashPendingAuthorization } from "./pending-authorization";
 
@@ -92,9 +93,7 @@ function readParams(search: URLSearchParams): {
 // "cline" — real catalog slugs, just not one of the three this event
 // distinguishes) becomes "other", same as no slug at all.
 function toMcpClient(slug: string | null | undefined): (typeof MCP_CLIENTS)[number] {
-	return slug && (MCP_CLIENTS as readonly string[]).includes(slug)
-		? (slug as (typeof MCP_CLIENTS)[number])
-		: "other";
+	return isMember(MCP_CLIENTS, slug) ? slug : "other";
 }
 
 function buildCancelUrl(redirectUri: string, state: string): string {

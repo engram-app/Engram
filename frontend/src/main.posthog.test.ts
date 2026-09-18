@@ -67,7 +67,10 @@ describe("initAnalytics", () => {
 		const { initAnalytics } = await import("./analytics/init");
 		await initAnalytics("phc_test");
 		const config = posthogInit.mock.calls[0]![1] as {
-			sanitize_properties: (props: Record<string, unknown>, event: string) => Record<string, unknown>;
+			sanitize_properties: (
+				props: Record<string, unknown>,
+				event: string,
+			) => Record<string, unknown>;
 		};
 		const dirtyProperties = {
 			$current_url: "https://app.engram.page/v/my-private-journal",

@@ -1,4 +1,5 @@
 import posthog from "posthog-js";
+import { isMember } from "../lib/is-member";
 import { captureError } from "../sentry";
 import {
 	CHECKOUT_METHODS,
@@ -23,24 +24,25 @@ function isKind(kind: PropKind, value: unknown): boolean {
 		case "uuid":
 			return typeof value === "string" && UUID.test(value);
 		case "step":
-			return typeof value === "string" && (ONBOARDING_STEPS as readonly string[]).includes(value);
+			return isMember(ONBOARDING_STEPS, value);
 		case "checkout_method":
-			return typeof value === "string" && (CHECKOUT_METHODS as readonly string[]).includes(value);
+			return isMember(CHECKOUT_METHODS, value);
 		case "tier":
-			return typeof value === "string" && (CHECKOUT_TIERS as readonly string[]).includes(value);
+			return isMember(CHECKOUT_TIERS, value);
 		case "mcp_client":
-			return typeof value === "string" && (MCP_CLIENTS as readonly string[]).includes(value);
+			return isMember(MCP_CLIENTS, value);
 		case "error_code":
-			return typeof value === "string" && (ERROR_CODES as readonly string[]).includes(value);
+			return isMember(ERROR_CODES, value);
 		case "gate_reasons":
-			return (
-				Array.isArray(value) &&
-				value.every((v) => typeof v === "string" && (GATE_REASONS as readonly string[]).includes(v))
-			);
+			return Array.isArray(value) && value.every((v) => isMember(GATE_REASONS, v));
 		case "boolean":
 			return typeof value === "boolean";
 		case "number":
 			return typeof value === "number" && Number.isFinite(value);
+		default:
+			// Unreachable under the exhaustive PropKind type, but a kind smuggled
+			// in via `as PropKind` gets no free pass at runtime either.
+			return false;
 	}
 }
 
@@ -51,7 +53,7 @@ function isKind(kind: PropKind, value: unknown): boolean {
  *  failures and must never block or throw into the calling analytics path. */
 function reportViolation(message: string): void {
 	console.warn(message);
-	void captureError(new Error(message));
+	captureError(new Error(message));
 }
 
 export function track(event: EngramEvent, props: Record<string, unknown> = {}): void {
@@ -60,17 +62,23 @@ export function track(event: EngramEvent, props: Record<string, unknown> = {}): 
 		// Unreachable under the exhaustive EVENT_SCHEMAS type, but an event
 		// smuggled in via `as EngramEvent` gets no free pass at runtime either.
 		const message = `analytics: no schema declared for event "${event}"`;
-		if (import.meta.env.DEV) throw new Error(message);
+		if (import.meta.env.DEV) {
+			throw new Error(message);
+		}
 		reportViolation(message);
 		return;
 	}
 
 	for (const [key, value] of Object.entries(props)) {
 		const kind = schema[key];
-		if (kind !== undefined && isKind(kind, value)) continue;
+		if (kind !== undefined && isKind(kind, value)) {
+			continue;
+		}
 
 		const message = `analytics: property "${key}" on "${event}" is not an allowed value`;
-		if (import.meta.env.DEV) throw new Error(message);
+		if (import.meta.env.DEV) {
+			throw new Error(message);
+		}
 		reportViolation(message);
 		return; // Drop the whole event in prod. A partial event is a silent lie.
 	}

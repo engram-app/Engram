@@ -1,6 +1,6 @@
 import obsidianMark from "@lobehub/icons-static-svg/icons/obsidian-color.svg?raw";
 import { FilePlus2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Navigate, useNavigate } from "react-router";
 import { useAutofocus } from "@/hooks/use-autofocus";
 import AuthPanel from "@/layout/auth-panel";
@@ -55,7 +55,7 @@ function VaultStep({
 	const [obsidianCommitted, setObsidianCommitted] = useState<boolean>(
 		profileSaved && savedUsesObsidian,
 	);
-	const mountedAtRef = useRef(Date.now());
+	const [mountedAt] = useState(() => Date.now());
 
 	async function pickSource(s: Source) {
 		setSource(s);
@@ -100,7 +100,7 @@ function VaultStep({
 		track("onboarding_step_completed", {
 			step: "vault",
 			vault_id: vault.id,
-			duration_ms: Date.now() - mountedAtRef.current,
+			duration_ms: Date.now() - mountedAt,
 		});
 		navigate(onboardingDoneTarget(), { replace: true });
 	}
