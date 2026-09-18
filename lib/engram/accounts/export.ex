@@ -191,8 +191,16 @@ defmodule Engram.Accounts.Export do
     end
   end
 
+  # Both reads sit inside ONE `with_tenant/2` block. `attachments` and `notes`
+  # both carry FORCE ROW LEVEL SECURITY, and unscoped they returned 0 and 0 —
+  # which is under every cap, so the gate FAILED OPEN and admitted an export
+  # far past `account_export_max_bytes`. A cap must never fail in that
+  # direction. `skip_tenant_check: true` could not help: it suppresses
+  # Engram's application-level tripwire and sets no Postgres session state.
   defp estimate_bytes(user) do
-    attachment_bytes(user) + note_overhead(user)
+    Repo.with_tenant!(user.id, fn ->
+      attachment_bytes(user) + note_overhead(user)
+    end)
   end
 
   defp attachment_bytes(user) do
@@ -200,8 +208,7 @@ defmodule Engram.Accounts.Export do
       from(a in "attachments",
         where: a.user_id == type(^user.id, Ecto.UUID),
         select: coalesce(sum(a.size_bytes), 0)
-      ),
-      skip_tenant_check: true
+      )
     )
     |> to_integer()
   end
@@ -216,8 +223,7 @@ defmodule Engram.Accounts.Export do
         from(n in "notes",
           where: n.user_id == type(^user.id, Ecto.UUID),
           select: count(n.id)
-        ),
-        skip_tenant_check: true
+        )
       ) || 0
 
     count * @note_overhead_bytes

@@ -55,14 +55,24 @@ defmodule Engram.Accounts.Export.Streamer do
   """
   @spec run(Schema.t(), keyword()) :: {:ok, [part_map()], non_neg_integer()}
   def run(%Schema{user_id: user_id} = export, _opts) do
+    # Scoped per query, NOT by wrapping `run/2`: everything below opens a
+    # multipart upload and streams zip bytes to S3, and `with_tenant/2` runs a
+    # transaction — wrapping the whole function would pin a DB connection for
+    # the entire upload.
+    #
+    # Unscoped this came back `[]` under an enforced policy, so `run/2`
+    # returned `{:ok, [], 0}` and the worker marked the export `:ready` with
+    # `s3_keys: []`: a successful, EMPTY export of the user's own data, with
+    # nothing logged.
     vaults =
-      Repo.all(
-        from(v in Vault,
-          where: v.user_id == ^user_id and is_nil(v.deleted_at),
-          order_by: [asc: v.id]
-        ),
-        skip_tenant_check: true
-      )
+      Repo.with_tenant!(user_id, fn ->
+        Repo.all(
+          from(v in Vault,
+            where: v.user_id == ^user_id and is_nil(v.deleted_at),
+            order_by: [asc: v.id]
+          )
+        )
+      end)
 
     {acc_parts, total} =
       Enum.reduce(vaults, {[], 0}, fn vault, {acc_parts, acc_bytes} ->
@@ -130,20 +140,23 @@ defmodule Engram.Accounts.Export.Streamer do
   # paths to match against once we decrypt.
   defp zip_entries(%Schema{user_id: user_id}, %Vault{id: vault_id}) do
     notes =
-      Repo.all(
-        from(n in Note,
-          # RLS is bypassed (skip_tenant_check), so the explicit user_id clause
-          # is the sole guarantee that one tenant's export never includes
-          # another tenant's rows — it MUST NOT be removed.
-          where:
-            n.user_id == ^user_id and
-              n.vault_id == ^vault_id and
-              n.kind == "note" and
-              is_nil(n.deleted_at),
-          order_by: [asc: n.id]
-        ),
-        skip_tenant_check: true
-      )
+      Repo.with_tenant!(user_id, fn ->
+        Repo.all(
+          from(n in Note,
+            # The policy now scopes this by `user_id` too, so that clause is no
+            # longer the SOLE cross-tenant guarantee it was documented as. Keep
+            # it anyway: it is what narrows the read to THIS vault, and it
+            # stays correct for `Engram.Repo.maintenance()`, which is exempt
+            # from the policy by design.
+            where:
+              n.user_id == ^user_id and
+                n.vault_id == ^vault_id and
+                n.kind == "note" and
+                is_nil(n.deleted_at),
+            order_by: [asc: n.id]
+          )
+        )
+      end)
 
     Enum.map(notes, fn note ->
       Zstream.entry("notes/note-#{note.id}.md", [note_payload(note)])
