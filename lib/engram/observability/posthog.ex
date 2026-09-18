@@ -9,12 +9,11 @@ defmodule Engram.Observability.PostHog do
   events must never break the request that emitted them.
 
   The frontend's `posthog.identify(...)` (see
-  `auth/clerk-auth-provider.tsx`) binds anonymous device events to
-  the user's distinct_id. Server-side events use the same
-  distinct_id so funnels join across the timeline. PR8 wires the
-  call sites (`note_created`, `search_performed`,
-  `vault_opened`, `subscription_started`) and the Clerk/Paddle
-  webhook forwarders that depend on this module.
+  `frontend/src/auth/use-identify-user-on-auth-change.ts`) binds anonymous
+  device events to the user's distinct_id. Server-side events use the same
+  distinct_id so funnels join across the timeline. Live call sites: notes.ex
+  (note create/search), search.ex, vaults_controller.ex, and
+  `EngramWeb.Webhooks.PostHogForwarder` for the Clerk/Paddle webhook events.
   """
 
   alias Engram.Logger.Metadata

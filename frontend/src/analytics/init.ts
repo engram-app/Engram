@@ -31,7 +31,7 @@ export async function initAnalytics(key: string): Promise<void> {
 
 	const { default: posthog } = await import("posthog-js");
 	posthog.init(key, {
-		api_host: import.meta.env.VITE_POSTHOG_HOST ?? "/ph",
+		api_host: import.meta.env.VITE_POSTHOG_HOST || "/ph",
 		persistence: "memory",
 		person_profiles: "identified_only",
 		autocapture: false,

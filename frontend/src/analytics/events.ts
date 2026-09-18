@@ -85,7 +85,7 @@ export type PropKind =
  *  `Record<EngramEvent, ...>` is exhaustive on purpose: adding an event to the
  *  union without a schema entry here is a type error, not a silent bypass. */
 export const EVENT_SCHEMAS: Record<EngramEvent, Record<string, PropKind>> = {
-	onboarding_step_viewed: { step: "step", vault_id: "uuid", is_retry: "boolean", duration_ms: "number" },
+	onboarding_step_viewed: { step: "step" },
 	onboarding_step_completed: { step: "step", vault_id: "uuid", duration_ms: "number" },
 	// Corrected from the first-cut `{ step, reason: error_code }` — the actual
 	// 403 body (RequireOnboarding) carries `missing` (a list of GATE_REASONS)

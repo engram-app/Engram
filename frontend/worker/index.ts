@@ -16,10 +16,10 @@ const NEW_MCP_ENDPOINT = "https://mcp.engram.page/api/mcp";
 
 const POSTHOG_HOST = "https://us.i.posthog.com";
 
-// Ported from engram-marketing/src/lib/posthog-proxy.ts verbatim — keep the
-// two in sync. Strips IP-bearing and high-resolution geo headers before
-// forwarding; `cf-ipcountry` intentionally passes through, since
-// country-level is the granularity our privacy policy promises.
+// This header set is ported from engram-marketing/src/lib/posthog-proxy.ts
+// verbatim — keep the two in sync. Strips IP-bearing and high-resolution geo
+// headers before forwarding; `cf-ipcountry` intentionally passes through,
+// since country-level is the granularity our privacy policy promises.
 const STRIPPED_REQUEST_HEADERS = new Set([
 	"host",
 	"cookie",
@@ -44,7 +44,9 @@ interface Env {
 
 async function proxyToPostHog(request: Request): Promise<Response> {
 	// Global Privacy Control has legal force under CCPA/CPRA and is what our
-	// privacy policy promises to honor — matches engram-marketing's proxy.
+	// privacy policy promises to honor. This check does NOT exist in
+	// engram-marketing's proxy (posthog-proxy.ts has no sec-gpc handling) —
+	// this app's proxy is strictly stricter on this point, not a mirror of it.
 	if (request.headers.get("sec-gpc") === "1") {
 		return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
 	}

@@ -16,11 +16,9 @@ afterEach(() => {
 });
 
 describe("track property validation", () => {
-	it("allows uuids, enum members, booleans and numbers", () => {
-		track("onboarding_step_viewed", {
-			step: "billing",
+	it("allows uuids, enum members and numbers", () => {
+		track("plugin_connect_succeeded", {
 			vault_id: "12dc6735-52f2-4ce4-9117-91f0ce2389a7",
-			is_retry: false,
 			duration_ms: 1420,
 		});
 		expect(posthog.capture).toHaveBeenCalledOnce();

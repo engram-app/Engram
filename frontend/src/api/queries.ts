@@ -402,8 +402,10 @@ export interface User {
 	display_name: string | null;
 	// Keyed HMAC of the email, 64-char lowercase hex. Analytics identifies with
 	// this, never with `email` above — see src/auth/use-identify-user-on-auth-change.ts.
-	// Optional so mocks/older responses that predate it don't need updating.
-	analytics_id?: string;
+	// Required: GET /me always populates it (schemas/account.ex:21 agrees) —
+	// an optional type here would silently degrade a missing field to "no
+	// identify call" with no type error and no runtime signal.
+	analytics_id: string;
 }
 
 // Query hooks
