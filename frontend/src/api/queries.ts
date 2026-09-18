@@ -1030,14 +1030,23 @@ export function useTypes() {
 /** `enabled` defaults true so existing callers are unchanged. The Clerk
  *  adapter passes false while signed out: it renders for anonymous visitors
  *  too, and an unconditional /me there 401s on every page load and stalls the
- *  redirect to sign-in. */
-export function useMe(options?: { enabled?: boolean }) {
-	return useQuery({
-		queryKey: ["me"],
-		queryFn: () => api.get<{ user: User }>("/me"),
-		select: (data) => data.user,
-		enabled: options?.enabled ?? true,
-	});
+ *  redirect to sign-in.
+ *
+ *  `client` exists because ClerkAuthProvider sits ABOVE QueryClientProvider in
+ *  main.tsx, so `useQueryClient()` has no context there and throws "No
+ *  QueryClient set" — synchronously, before `enabled` is ever consulted, so
+ *  gating does NOT avoid it. That adapter passes the singleton explicitly.
+ *  Everyone else omits it and resolves through context as usual. */
+export function useMe(options?: { enabled?: boolean; client?: QueryClient }) {
+	return useQuery(
+		{
+			queryKey: ["me"],
+			queryFn: () => api.get<{ user: User }>("/me"),
+			select: (data) => data.user,
+			enabled: options?.enabled ?? true,
+		},
+		options?.client,
+	);
 }
 
 export function useUpdateProfile() {

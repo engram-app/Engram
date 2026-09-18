@@ -61,9 +61,13 @@ function ClerkAdapterInner({ children }: { children: React.ReactNode }) {
 	const email = clerk.user?.primaryEmailAddress?.emailAddress;
 	const imageUrl = clerk.user?.imageUrl;
 
-	// Gated: this component renders for signed-OUT visitors too, and an
+	// `client` is mandatory here: this provider sits ABOVE QueryClientProvider in
+	// main.tsx, so the context lookup inside useQuery throws "No QueryClient set"
+	// and the whole app renders the error boundary. `enabled` does not save it —
+	// useQuery resolves the client before it reads `enabled`.
+	// Gated anyway: this renders for signed-OUT visitors too, and an
 	// unauthenticated /me call 401s and stalls the sign-in redirect.
-	const { data: me } = useMe({ enabled: isLoaded && isSignedIn === true });
+	const { data: me } = useMe({ enabled: isLoaded && isSignedIn === true, client: queryClient });
 
 	useIdentifyUserOnAuthChange({
 		isLoaded,
