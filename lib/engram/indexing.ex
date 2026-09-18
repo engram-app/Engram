@@ -148,7 +148,7 @@ defmodule Engram.Indexing do
              texts = embed_texts(plan),
              {:ok, vectors} <- maybe_embed(semantic?, texts),
              :ok <- ensure_one_vector_per_text(vectors, texts, note),
-             avgdl = Engram.KeywordIndex.Stats.avgdl(note.vault_id),
+             avgdl = Engram.KeywordIndex.Stats.avgdl(note.user_id, note.vault_id),
              {:ok, prepared} <-
                build_prepared(note, user, vault, plan, vectors, filter_key, avgdl, link_rows) do
           # What the embedder was actually sent (#1618): reused chunks and

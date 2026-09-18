@@ -44,11 +44,11 @@ defmodule Engram.KeywordIndex.StatsCacheTest do
     insert_chunk!(user, vault, note, 0, 100)
     insert_chunk!(user, vault, note, 1, 200)
 
-    assert Stats.avgdl(vault.id) == 150.0
+    assert Stats.avgdl(user.id, vault.id) == 150.0
 
     # Change the underlying data; a cached read must NOT see it yet.
     insert_chunk!(user, vault, note, 2, 700)
-    assert Stats.avgdl(vault.id) == 150.0
+    assert Stats.avgdl(user.id, vault.id) == 150.0
   end
 
   test "evict/1 forces a recompute", %{user: user, vault: vault} do
@@ -56,14 +56,14 @@ defmodule Engram.KeywordIndex.StatsCacheTest do
       Engram.Notes.upsert_note(user, vault, %{"path" => "b.md", "content" => "# B"})
 
     insert_chunk!(user, vault, note, 0, 100)
-    assert Stats.avgdl(vault.id) == 100.0
+    assert Stats.avgdl(user.id, vault.id) == 100.0
 
     insert_chunk!(user, vault, note, 1, 300)
     :ok = Stats.evict(vault.id)
-    assert Stats.avgdl(vault.id) == 200.0
+    assert Stats.avgdl(user.id, vault.id) == 200.0
   end
 
-  test "empty vault default is returned and cached", %{vault: vault} do
-    assert Stats.avgdl(vault.id) == 100.0
+  test "empty vault default is returned and cached", %{user: user, vault: vault} do
+    assert Stats.avgdl(user.id, vault.id) == 100.0
   end
 end

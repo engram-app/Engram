@@ -29,8 +29,13 @@ defmodule Engram.Workers.VaultDeletedEmail do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"user_id" => user_id, "vault_id" => vault_id}}) do
+    # `users` carries no policy, so that read needs no scope. `vaults` does:
+    # unscoped this came back nil, the `cond` below fell into its
+    # `is_nil(vault)` arm, and the worker returned `:ok` having sent NOTHING.
+    # The user is never told their vault is scheduled for purge, and Oban
+    # records a clean success.
     user = Repo.get(User, user_id, skip_tenant_check: true)
-    vault = Repo.get(Vault, vault_id, skip_tenant_check: true)
+    vault = Repo.with_tenant!(user_id, fn -> Repo.get(Vault, vault_id) end)
 
     cond do
       is_nil(user) or is_nil(vault) ->
