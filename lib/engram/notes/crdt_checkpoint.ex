@@ -45,6 +45,12 @@ defmodule Engram.Notes.CrdtCheckpoint do
   @abort_event [:engram, :crdt, :checkpoint_abort]
   @quarantine_tail_depth 500
 
+  # #1706. The shape of `crdt_state` against the text it encodes was entirely
+  # unobserved, so every storage estimate in the history workstream — and the
+  # flatten gate in #1707 — was a guess. Checkpoint already holds all three
+  # values, so this is a read of locals, not new computation.
+  @doc_event [:engram, :crdt, :checkpoint_doc]
+
   @doc """
   Checkpoint the live doc into the `notes` row. Encrypts the full Yjs v1
   state, prunes the tail-log, and — when the projected text actually changed —
@@ -338,6 +344,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
          text = CrdtBridge.text_of(union_doc),
          :ok <- ensure_projection_safe(note, text),
          {:ok, raw_state} <- encode(union_doc),
+         :ok <- emit_doc_stats(union_doc, raw_state, text),
          {_flat_doc, state} <- maybe_flatten(union_doc, raw_state, note_id),
          {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(state, user, note_id),
          {:ok, key} <- Crypto.dek_content_hash_key(user) do
@@ -573,6 +580,32 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # When BOTH the byte-size AND the client-ID thresholds are crossed, replace
   # the live doc with a fresh single-client reset (text preserved). Returns a
   # {doc, state} tuple in both branches so the caller's `with` chain is uniform.
+  # Measured on the PRE-flatten state deliberately: post-flatten bytes are what
+  # the gate already reclaimed, and #1707 has to tune that gate against the
+  # bloat it is meant to catch. Today the gate never fires, so the two are
+  # equal; once it does, only this reading still answers "how bloated do docs
+  # get before we act".
+  #
+  # NO metadata. note_id / vault_id / user_id are unbounded labels (2026-07-02
+  # cardinality audit) — the distribution is the whole answer here.
+  defp emit_doc_stats(%Yex.Doc{} = doc, state, text) do
+    state_bytes = byte_size(state)
+    content_bytes = byte_size(text)
+
+    :telemetry.execute(
+      @doc_event,
+      %{
+        state_bytes: state_bytes,
+        content_bytes: content_bytes,
+        client_count: CrdtBridge.client_count(doc),
+        bloat_ratio: state_bytes / max(content_bytes, 1)
+      },
+      %{}
+    )
+
+    :ok
+  end
+
   defp maybe_flatten(%Yex.Doc{} = doc, state, note_id) do
     if CrdtBridge.should_flatten?(state, doc) do
       Logger.info(

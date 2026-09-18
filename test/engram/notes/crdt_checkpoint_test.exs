@@ -106,6 +106,51 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     assert tail_count_after == 0
   end
 
+  # ── #1706: CRDT doc bloat telemetry ───────────────────────────────────────
+  # Everything in the history/DB-growth workstream is guessed until the shape of
+  # `crdt_state` vs the text it encodes is visible. The measurement is taken on
+  # the PRE-flatten state on purpose: post-flatten bytes are what the gate
+  # already reclaimed, and #1707 has to tune that gate against the bloat it is
+  # supposed to catch.
+  test "checkpoint emits doc bloat telemetry", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "before AFTER")
+
+    test_pid = self()
+    handler_id = "bloat-telemetry-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      handler_id,
+      [:engram, :crdt, :checkpoint_doc],
+      fn _event, measurements, meta, _config ->
+        send(test_pid, {:checkpoint_doc, measurements, meta})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    assert_receive {:checkpoint_doc, measurements, meta}
+
+    assert measurements.content_bytes == byte_size("before AFTER")
+    assert measurements.state_bytes > 0
+    assert measurements.client_count >= 1
+
+    assert_in_delta measurements.bloat_ratio,
+                    measurements.state_bytes / measurements.content_bytes,
+                    0.0001
+
+    # Cardinality contract (project_grafana_cardinality_audit_2026_07_02): no
+    # note_id / vault_id / user_id may ride along as a label.
+    assert meta == %{}
+  end
+
   # ── #983 task 2: user-resolve raise must NOT escape terminate/2 ────────────
   # `checkpoint/5` runs on the room's `terminate/2` (unbind path). Its ONE DB
   # call outside `do_checkpoint`'s rescue is `Accounts.get_user/1`. Under pool

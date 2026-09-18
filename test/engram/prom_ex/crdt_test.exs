@@ -63,4 +63,26 @@ defmodule Engram.PromEx.CrdtTest do
     assert is_integer(resident) and resident >= 0
     assert cap == CrdtRoomLru.max_resident()
   end
+
+  # #1706. The emit is useless if the plugin never exports it: nothing in the
+  # checkpoint path would fail, and the Grafana panel would just be empty.
+  test "checkpoint_doc bloat distributions are exported, untagged" do
+    metrics =
+      [otp_app: :engram]
+      |> Plugin.event_metrics()
+      |> List.wrap()
+      |> Enum.flat_map(& &1.metrics)
+      |> Enum.filter(&(&1.event_name == [:engram, :crdt, :checkpoint_doc]))
+
+    assert Enum.all?(metrics, &match?(%Telemetry.Metrics.Distribution{}, &1))
+
+    measurements = Enum.map(metrics, & &1.measurement)
+    assert :bloat_ratio in measurements
+    assert :state_bytes in measurements
+    assert :content_bytes in measurements
+    assert :client_count in measurements
+
+    # Untagged by contract — one series per bucket, never one per note.
+    assert Enum.all?(metrics, &(&1.tags == []))
+  end
 end

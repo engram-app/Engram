@@ -138,6 +138,7 @@ defmodule Engram.PromEx.Crdt do
   @checkpoint_event [:engram, :crdt, :index_checkpoint]
   @abort_event [:engram, :crdt, :checkpoint_abort]
   @projection_event [:engram, :crdt, :index_projection]
+  @doc_event [:engram, :crdt, :checkpoint_doc]
 
   @impl true
   def event_metrics(opts) do
@@ -216,6 +217,52 @@ defmodule Engram.PromEx.Crdt do
         # Tagged by all three keys on purpose. `phase` alone would merge a room
         # `:conflict` with a snapshot `:conflict`, losing the only dimension
         # that tells them apart. 2 ops x 5 routes x 8 phases bounds the series.
+        # #1706. `crdt_state_ciphertext` is the largest column in the database
+        # and it grows monotonically with edit count, but nothing ever measured
+        # how far it runs ahead of the text it encodes. Untagged and
+        # distribution-only: the whole question is the SHAPE across notes, and
+        # note_id / vault_id are unbounded labels (2026-07-02 audit).
+        #
+        # Emitted pre-flatten, so the gate rework in #1707 reads the bloat it is
+        # supposed to catch rather than what a previous flatten already took.
+        distribution(
+          metric_prefix ++ [:checkpoint_doc, :bloat_ratio],
+          event_name: @doc_event,
+          measurement: :bloat_ratio,
+          description:
+            "CRDT doc state bytes divided by projected content bytes, per markdown checkpoint. " <>
+              "1.0 means the encoded doc costs what its text costs; high values are accumulated " <>
+              "tombstones and stale client IDs.",
+          reporter_options: [buckets: [1, 2, 3, 5, 10, 25, 50, 100, 500]]
+        ),
+        distribution(
+          metric_prefix ++ [:checkpoint_doc, :state_bytes],
+          event_name: @doc_event,
+          measurement: :state_bytes,
+          description: "Encoded Yjs v1 state size per markdown checkpoint, before flatten.",
+          reporter_options: [
+            buckets: [1_000, 5_000, 10_000, 50_000, 100_000, 500_000, 1_000_000, 5_000_000]
+          ]
+        ),
+        distribution(
+          metric_prefix ++ [:checkpoint_doc, :content_bytes],
+          event_name: @doc_event,
+          measurement: :content_bytes,
+          description: "Projected markdown size per checkpoint — the bloat_ratio denominator.",
+          reporter_options: [
+            buckets: [500, 1_000, 5_000, 10_000, 50_000, 100_000, 500_000]
+          ]
+        ),
+        # The other half of the flatten gate. `should_flatten?/2` requires 1,000
+        # distinct client IDs AND 500 KB; this says whether any real doc ever
+        # approaches either.
+        distribution(
+          metric_prefix ++ [:checkpoint_doc, :client_count],
+          event_name: @doc_event,
+          measurement: :client_count,
+          description: "Distinct client IDs in the doc state vector per markdown checkpoint.",
+          reporter_options: [buckets: [1, 2, 5, 10, 25, 50, 100, 500, 1_000]]
+        ),
         counter(
           metric_prefix ++ [:index_claim, :total],
           event_name: @claim_event,
