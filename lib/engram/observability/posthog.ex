@@ -17,6 +17,8 @@ defmodule Engram.Observability.PostHog do
   webhook forwarders that depend on this module.
   """
 
+  alias Engram.Logger.Metadata
+
   require Logger
 
   @capture_path "/capture/"
@@ -73,13 +75,13 @@ defmodule Engram.Observability.PostHog do
       {:ok, %{status: status, body: body}} ->
         Logger.warning(
           "posthog capture rejected: status=#{status} body=#{inspect(body)}",
-          Engram.Logger.Metadata.with_category(:warning, :boot, [])
+          Metadata.with_category(:warning, :boot, [])
         )
 
       {:error, reason} ->
         Logger.warning(
           "posthog capture failed: #{inspect(reason)}",
-          Engram.Logger.Metadata.with_category(:warning, :boot, [])
+          Metadata.with_category(:warning, :boot, [])
         )
     end
   end
@@ -94,25 +96,67 @@ defmodule Engram.Observability.PostHog do
   error — same tolerance as the Clerk delete, which already treats 404 as done.
   Requires a personal API key with person:write scope; the capture key cannot
   delete.
+
+  Always returns `:ok` — erasure must not block on a PostHog outage — but a
+  failed lookup or delete (as opposed to a lookup that legitimately finds no
+  person) logs at `:warning`, same as `capture/3`. Silence here means an
+  operator believes a person was erased when they were not.
   """
   @spec delete_person(String.t()) :: :ok
   def delete_person(distinct_id) when is_binary(distinct_id) do
-    with {key, host, project} <- admin_config(),
-         {:ok, %{status: 200, body: %{"results" => [%{"id" => id} | _]}}} <-
-           Req.get("#{host}/api/projects/#{project}/persons/",
-             params: [distinct_id: distinct_id],
-             auth: {:bearer, key}
-           ) do
-      _ =
-        Req.delete("#{host}/api/projects/#{project}/persons/#{id}/",
-          params: [delete_events: true],
-          auth: {:bearer, key}
-        )
-
-      :ok
-    else
-      _ -> :ok
+    case admin_config() do
+      :disabled -> :ok
+      {key, host, project} -> lookup_and_delete(host, project, key, distinct_id)
     end
+  end
+
+  defp lookup_and_delete(host, project, key, distinct_id) do
+    case Req.get("#{host}/api/projects/#{project}/persons/",
+           params: [distinct_id: distinct_id],
+           auth: {:bearer, key},
+           receive_timeout: 5_000
+         ) do
+      {:ok, %{status: 200, body: %{"results" => [%{"id" => id} | _]}}} ->
+        delete_by_id(host, project, key, id, distinct_id)
+
+      {:ok, %{status: 200, body: %{"results" => []}}} ->
+        # Not found — SUCCESS, not a failure. Same tolerance as the Clerk
+        # delete, which treats 404 as done.
+        :ok
+
+      {:ok, %{status: status, body: body}} ->
+        warn_erasure_failed("lookup", distinct_id, status: status, body: body)
+
+      {:error, reason} ->
+        warn_erasure_failed("lookup", distinct_id, reason: reason)
+    end
+  end
+
+  defp delete_by_id(host, project, key, id, distinct_id) do
+    case Req.delete("#{host}/api/projects/#{project}/persons/#{id}/",
+           params: [delete_events: true],
+           auth: {:bearer, key},
+           receive_timeout: 5_000
+         ) do
+      {:ok, %{status: status}} when status in 200..299 ->
+        :ok
+
+      {:ok, %{status: status, body: body}} ->
+        warn_erasure_failed("delete", distinct_id, id: id, status: status, body: body)
+
+      {:error, reason} ->
+        warn_erasure_failed("delete", distinct_id, id: id, reason: reason)
+    end
+  end
+
+  defp warn_erasure_failed(step, distinct_id, details) do
+    Logger.warning(
+      "posthog person #{step} failed during erasure: distinct_id=#{distinct_id} " <>
+        Enum.map_join(details, " ", fn {k, v} -> "#{k}=#{inspect(v)}" end),
+      Metadata.with_category(:warning, :boot, [])
+    )
+
+    :ok
   end
 
   defp admin_config do

@@ -469,19 +469,31 @@ defmodule Engram.Accounts.LifecycleTest do
 
     test "hard_delete also erases the legacy Clerk-id-keyed person", %{bypass: bypass} do
       user = insert(:user, external_id: "user_clerk_legacy", email: "legacy@example.com")
+      analytics_id = Engram.Observability.PostHog.analytics_id(user.email)
 
       expect(Engram.Auth.Clerk.ApiMock, :delete_user, fn _ -> :ok end)
 
-      # Both the analytics-id lookup and the legacy Clerk-id lookup hit
-      # persons/ — Bypass.expect (not expect_once) tolerates either order
-      # and both calls.
+      # `Bypass.expect` alone ("at least once") would pass even if the
+      # legacy-id lookup were deleted from lifecycle.ex, since the
+      # unconditional analytics-id lookup satisfies it on its own. Collect
+      # the distinct_id query param off every request and assert BOTH ids
+      # were looked up, so removing either call fails this test.
+      {:ok, collector} = Agent.start_link(fn -> [] end)
+
       Bypass.expect(bypass, "GET", "/api/projects/1/persons/", fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+        Agent.update(collector, &[conn.query_params["distinct_id"] | &1])
+
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.resp(200, ~s({"results":[]}))
       end)
 
       assert :ok = Lifecycle.hard_delete(user, :user)
+
+      seen_distinct_ids = Agent.get(collector, & &1)
+      assert analytics_id in seen_distinct_ids
+      assert "user_clerk_legacy" in seen_distinct_ids
     end
   end
 end
