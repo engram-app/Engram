@@ -3900,9 +3900,9 @@ jobs:
       # ambient/poisoned env var (this step's whole point — CI env is not
       # guaranteed clean) cannot survive into the bundle. `grep -rq` exits 1
       # on no-match, which is success here, so the check inverts that
-      # explicitly rather than relying on the exit code. Output lands in
-      # ../priv/static/app (vite.config.ts's default outDir for any build
-      # that doesn't pass --outDir dist, as build:saas does).
+      # explicitly rather than relying on the exit code. Builds to a mktemp
+      # outDir: the default is ../priv/static/app, which holds the SaaS bundle
+      # the e2e suites serve.
       #
       # Deliberately NOT grepping for "us.i.posthog.com": posthog-js ships
       # that hostname as its own internal default constant, so the literal
@@ -3919,8 +3919,15 @@ jobs:
         working-directory: frontend
         run: |
           set -euo pipefail
-          VITE_POSTHOG_KEY=phc_thisMustNotAppear bun run build:selfhost
-          if grep -rq "phc_thisMustNotAppear" ../priv/static/app/; then
+          # MUST build to a throwaway outDir. build:selfhost's default outDir is
+          # ../priv/static/app, which is where the already-built SaaS bundle
+          # lives and what the e2e suites serve — clobbering it with a SELFHOST
+          # bundle removes the Clerk provider entirely and turns every [clerk]
+          # project test red while [local] stays green.
+          OUT=$(mktemp -d)
+          trap 'rm -rf "$OUT"' EXIT
+          VITE_POSTHOG_KEY=phc_thisMustNotAppear bun run build:selfhost -- --outDir "$OUT"
+          if grep -rq "phc_thisMustNotAppear" "$OUT"; then
             echo "::error::PostHog key leaked into self-host bundle"; exit 1
           fi
           echo "OK: self-host bundle carries no PostHog key"
