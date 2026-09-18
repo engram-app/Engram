@@ -3893,6 +3893,38 @@ jobs:
         working-directory: frontend
         run: bun run test
 
+      # Dockerfile:42-46 exists so self-host images never carry the SaaS
+      # PostHog token. That's a comment, not an enforcement — this proves it
+      # structurally: build:selfhost (package.json) now hard-clears
+      # VITE_POSTHOG_KEY/VITE_POSTHOG_HOST ahead of `vite build`, so even an
+      # ambient/poisoned env var (this step's whole point — CI env is not
+      # guaranteed clean) cannot survive into the bundle. `grep -rq` exits 1
+      # on no-match, which is success here, so the check inverts that
+      # explicitly rather than relying on the exit code. Output lands in
+      # ../priv/static/app (vite.config.ts's default outDir for any build
+      # that doesn't pass --outDir dist, as build:saas does).
+      #
+      # Deliberately NOT grepping for "us.i.posthog.com": posthog-js ships
+      # that hostname as its own internal default constant, so the literal
+      # string is present in ANY bundle that imports the library at all
+      # (verified — it's already there on main via src/analytics/track.ts and
+      # src/auth/use-identify-user-on-auth-change.ts, both used regardless of
+      # whether a key is configured). It's inert dead-code text, not a
+      # network destination our config points at; asserting on it would be a
+      # permanently-red check against a third-party SDK's own source, not a
+      # real leak. The key is the actual secret and the only thing that turns
+      # that inert code live.
+      - name: Self-host bundle carries no PostHog key leakage
+        if: steps.guard.outputs.skip != 'true'
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          VITE_POSTHOG_KEY=phc_thisMustNotAppear bun run build:selfhost
+          if grep -rq "phc_thisMustNotAppear" ../priv/static/app/; then
+            echo "::error::PostHog key leaked into self-host bundle"; exit 1
+          fi
+          echo "OK: self-host bundle carries no PostHog key"
+
   e2e-browser:
     # Runs in parallel with the Obsidian suites on a `heavy` runner (max 2
     # heavy suites per VM — see the e2e-clerk runs-on comment). The old
@@ -5516,6 +5548,12 @@ jobs:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: ${{ vars.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT_FRONTEND }}
+          # Product analytics. Publishable (ships in the browser) but stored as
+          # a secret to match engram-marketing's PUBLIC_POSTHOG_KEY precedent.
+          # Deliberately NOT passed to the Docker build: that image runs
+          # build:selfhost, and Dockerfile:42-46 exists so self-host bundles
+          # never carry the SaaS token.
+          VITE_POSTHOG_KEY: ${{ secrets.VITE_POSTHOG_KEY }}
 
       - name: Upload frontend version (nightly, zero-traffic)
         working-directory: frontend

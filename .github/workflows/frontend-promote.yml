@@ -89,6 +89,9 @@ jobs:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: ${{ vars.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT_FRONTEND }}
+          # Must match deploy-frontend exactly — see the Sentry DSN comment
+          # above this block; the same "byte-identical" trap applies here.
+          VITE_POSTHOG_KEY: ${{ secrets.VITE_POSTHOG_KEY }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
