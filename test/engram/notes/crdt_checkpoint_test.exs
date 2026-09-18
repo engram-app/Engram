@@ -5,6 +5,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
   import Ecto.Query
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
+  alias Engram.Notes.CrdtBloat
   alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtCheckpointTimer, CrdtUpdateLog, Note}
   alias Engram.Workers.EmbedNote
 
@@ -118,7 +119,10 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
-    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "before AFTER")
+    # Must clear CrdtBloat.min_content_bytes/0 or no ratio sample is taken.
+    body = String.duplicate("measurable body text ", 10)
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), body)
+    assert byte_size(body) >= CrdtBloat.min_content_bytes()
 
     attach_doc_telemetry()
 
@@ -126,7 +130,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
 
     assert_receive {:checkpoint_doc, measurements, meta}
 
-    assert measurements.content_bytes == byte_size("before AFTER")
+    assert measurements.content_bytes == byte_size(body)
     assert measurements.state_bytes > 0
     assert measurements.client_count >= 1
 
@@ -163,9 +167,12 @@ defmodule Engram.Notes.CrdtCheckpointTest do
 
     assert measurements.content_bytes == 0
     assert measurements.state_bytes > 0
-    # Guarded by `max(content_bytes, 1)`: the ratio degrades to the raw state
-    # size rather than raising ArithmeticError and killing the checkpoint.
-    assert measurements.bloat_ratio == measurements.state_bytes / 1
+    # No ratio sample, and no zero either. An empty doc still carries Yjs
+    # framing; dividing it by nothing reports framing overhead as tombstone
+    # bloat, which is exactly the artifact that pinned staging's p90 to 2.0.
+    # Telemetry.Metrics skips a metric whose key is absent, so the byte
+    # histograms still take their sample and the ratio histogram does not.
+    refute Map.has_key?(measurements, :bloat_ratio)
   end
 
   # The hash-unchanged path degrades to a snapshot-compaction write with no
@@ -179,7 +186,8 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
-    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "settled")
+    settled = String.duplicate("settled body ", 12)
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), settled)
 
     # First checkpoint materializes the change and bumps seq.
     :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
@@ -195,8 +203,9 @@ defmodule Engram.Notes.CrdtCheckpointTest do
            "expected the compaction path (no seq churn), got a real materialization"
 
     assert_receive {:checkpoint_doc, measurements, _meta}
-    assert measurements.content_bytes == byte_size("settled")
+    assert measurements.content_bytes == byte_size(settled)
     assert measurements.state_bytes > 0
+    assert measurements.bloat_ratio > 0
   end
 
   defp attach_doc_telemetry do

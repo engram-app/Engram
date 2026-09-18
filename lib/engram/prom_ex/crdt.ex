@@ -233,7 +233,10 @@ defmodule Engram.PromEx.Crdt do
           description:
             "CRDT doc state bytes divided by projected content bytes, per markdown checkpoint. " <>
               "1.0 means the encoded doc costs what its text costs; high values are accumulated " <>
-              "tombstones and stale client IDs.",
+              "tombstones and stale client IDs. Notes under " <>
+              "Engram.Notes.CrdtBloat.min_content_bytes/0 take NO sample — their Yjs framing " <>
+              "divides to a large ratio that is not bloat. Its `_count` is therefore lower " <>
+              "than the state_bytes/content_bytes counts, by design.",
           reporter_options: [buckets: [1, 2, 3, 5, 10, 25, 50, 100, 500]]
         ),
         distribution(
@@ -280,6 +283,15 @@ defmodule Engram.PromEx.Crdt do
           event_name: @sweep_event,
           measurement: :notes,
           description: "Notes carrying a CRDT state snapshot, at the last daily sweep."
+        ),
+        last_value(
+          metric_prefix ++ [:state_sweep, :notes_measured],
+          event_name: @sweep_event,
+          measurement: :notes_measured,
+          description:
+            "Notes large enough for the ratio to mean anything — the denominator of every " <>
+              "percentile below. Far under `notes` means the population is mostly empties, " <>
+              "and the gap is the artifact this split exists to keep out of the percentiles."
         ),
         last_value(
           metric_prefix ++ [:state_sweep, :bloat_ratio_p50],

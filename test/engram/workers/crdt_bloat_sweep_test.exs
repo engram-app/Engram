@@ -13,7 +13,7 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
   import Ecto.Query
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, Note}
+  alias Engram.Notes.{CrdtBloat, CrdtBridge, CrdtCheckpoint, Note}
   alias Engram.Workers.CrdtBloatSweep
 
   setup do
@@ -55,8 +55,10 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
   test "sizes every stored note from column lengths alone", ctx do
     %{user: user, vault: vault} = ctx
 
-    a = "alpha content here"
+    a = String.duplicate("alpha content here ", 8)
     b = String.duplicate("beta ", 40)
+    assert byte_size(a) >= CrdtBloat.min_content_bytes()
+    assert byte_size(b) >= CrdtBloat.min_content_bytes()
 
     seeded_note(user, vault, "a.md", a)
     seeded_note(user, vault, "b.md", b)
@@ -69,6 +71,7 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
     assert meta == %{}
 
     assert m.notes == 2
+    assert m.notes_measured == 2
 
     # The load-bearing assertion. Off-by-the-tag would still look reasonable.
     assert m.content_bytes_total == byte_size(a) + byte_size(b)
@@ -89,6 +92,7 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
 
     assert_receive {:sweep, m, _meta}
     assert m.notes == 0
+    assert m.notes_measured == 0
     assert m.bloat_ratio_p50 == 0.0
     assert m.bloat_ratio_max == 0.0
     assert m.state_bytes_total == 0
@@ -98,7 +102,7 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
   test "soft-deleted notes are excluded", ctx do
     %{user: user, vault: vault} = ctx
 
-    kept = "kept content"
+    kept = String.duplicate("kept content ", 10)
     seeded_note(user, vault, "kept.md", kept)
     gone = seeded_note(user, vault, "gone.md", "tombstoned content")
 
@@ -117,5 +121,37 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
     assert_receive {:sweep, m, _meta}
     assert m.notes == 1
     assert m.content_bytes_total == byte_size(kept)
+  end
+
+  # The defect staging caught (2026-09-18): 1,932 of 5,277 notes held under 100
+  # bytes, most of them a 2-byte Yjs doc, and they pinned p90 and p99 to exactly
+  # 2.0 — which reads as "10% of notes carry 2x bloat" and is really "37% of
+  # notes are empty". Percentiles must ignore them; byte totals must not,
+  # because those bytes are really on disk.
+  test "tiny notes are excluded from percentiles but counted in byte totals", ctx do
+    %{user: user, vault: vault} = ctx
+
+    real = String.duplicate("a real note body ", 12)
+    assert byte_size(real) >= CrdtBloat.min_content_bytes()
+    seeded_note(user, vault, "real.md", real)
+
+    tiny = "x"
+    for i <- 1..5, do: seeded_note(user, vault, "tiny#{i}.md", tiny)
+
+    attach()
+
+    assert :ok = perform_job(CrdtBloatSweep, %{})
+    assert_receive {:sweep, m, _meta}
+
+    assert m.notes == 6, "every note is counted in the population"
+    assert m.notes_measured == 1, "only the real note is eligible for a ratio"
+
+    # Every note's bytes still count toward storage.
+    assert m.content_bytes_total == byte_size(real) + 5 * byte_size(tiny)
+
+    # With the tiny docs excluded the percentiles collapse onto the one real
+    # note — if they leaked in, p90/p99 would be pulled far above p50.
+    assert_in_delta m.bloat_ratio_p50, m.bloat_ratio_p99, 0.0001
+    assert m.bloat_ratio_max == m.bloat_ratio_p50
   end
 end

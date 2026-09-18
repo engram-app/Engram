@@ -21,7 +21,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
   alias Engram.{Accounts, Crypto, Notes, Repo, Vaults}
   alias Engram.Crypto.RotationGate
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtBridge, CrdtDeliver, CrdtUpdateLog, Enqueue, Helpers, Note}
+  alias Engram.Notes.{CrdtBloat, CrdtBridge, CrdtDeliver, CrdtUpdateLog, Enqueue, Helpers, Note}
   alias Engram.Workers.{EmbedNote, ExtractNoteLinks}
 
   require Logger
@@ -592,16 +592,24 @@ defmodule Engram.Notes.CrdtCheckpoint do
     state_bytes = byte_size(state)
     content_bytes = byte_size(text)
 
-    :telemetry.execute(
-      @doc_event,
-      %{
-        state_bytes: state_bytes,
-        content_bytes: content_bytes,
-        client_count: CrdtBridge.client_count(doc),
-        bloat_ratio: state_bytes / max(content_bytes, 1)
-      },
-      %{}
-    )
+    measurements = %{
+      state_bytes: state_bytes,
+      content_bytes: content_bytes,
+      client_count: CrdtBridge.client_count(doc)
+    }
+
+    # `:bloat_ratio` is OMITTED, not zeroed, for a doc too small to divide by —
+    # Telemetry.Metrics skips a metric whose measurement key is absent, so the
+    # ratio histogram takes no sample while the byte histograms still take one.
+    # An empty note emits a couple of bytes of Yjs framing over zero content;
+    # recorded, that framing reads as tombstone bloat. See `CrdtBloat`.
+    measurements =
+      case CrdtBloat.ratio(state_bytes, content_bytes) do
+        nil -> measurements
+        ratio -> Map.put(measurements, :bloat_ratio, ratio)
+      end
+
+    :telemetry.execute(@doc_event, measurements, %{})
 
     :ok
   end

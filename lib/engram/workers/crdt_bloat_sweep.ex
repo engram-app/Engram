@@ -23,6 +23,14 @@ defmodule Engram.Workers.CrdtBloatSweep do
   overhead cancels in the ratio anyway; it is subtracted so the reported BYTE
   totals are true sizes rather than sizes plus a per-row constant.
 
+  ## Percentiles exclude trivially small notes
+
+  Ratio percentiles are computed only over notes above
+  `Engram.Notes.CrdtBloat.min_content_bytes/0`; `notes_measured` reports that
+  denominator alongside `notes`. Byte totals stay over the full population —
+  those are real storage no matter how small the note. The staging measurement
+  that forced this split is recorded in `CrdtBloat`.
+
   ## Why it refuses rather than reporting zero
 
   `notes` carries RLS. Where enforcement is on and no maintenance pool is
@@ -35,6 +43,7 @@ defmodule Engram.Workers.CrdtBloatSweep do
 
   alias Engram.Crypto.Envelope
   alias Engram.Logger.Metadata
+  alias Engram.Notes.CrdtBloat
   alias Engram.Repo
 
   require Logger
@@ -45,6 +54,7 @@ defmodule Engram.Workers.CrdtBloatSweep do
   """
   @type measurements :: %{
           notes: non_neg_integer(),
+          notes_measured: non_neg_integer(),
           bloat_ratio_p50: float(),
           bloat_ratio_p90: float(),
           bloat_ratio_p99: float(),
@@ -94,7 +104,7 @@ defmodule Engram.Workers.CrdtBloatSweep do
     :telemetry.execute(@event, measurements, %{})
 
     Logger.info(
-      "crdt_bloat_sweep notes=#{measurements.notes} p50=#{fmt(measurements.bloat_ratio_p50)} " <>
+      "crdt_bloat_sweep notes=#{measurements.notes} measured=#{measurements.notes_measured} p50=#{fmt(measurements.bloat_ratio_p50)} " <>
         "p90=#{fmt(measurements.bloat_ratio_p90)} p99=#{fmt(measurements.bloat_ratio_p99)} " <>
         "max=#{fmt(measurements.bloat_ratio_max)} over_threshold=#{measurements.notes_over_threshold} " <>
         "state_bytes=#{measurements.state_bytes_total}",
@@ -113,17 +123,19 @@ defmodule Engram.Workers.CrdtBloatSweep do
         """
         SELECT
           count(*)::bigint,
-          coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER BY ratio), 0)::float8,
-          coalesce(percentile_cont(0.9) WITHIN GROUP (ORDER BY ratio), 0)::float8,
-          coalesce(percentile_cont(0.99) WITHIN GROUP (ORDER BY ratio), 0)::float8,
-          coalesce(max(ratio), 0)::float8,
+          count(*) FILTER (WHERE big)::bigint,
+          coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER BY ratio) FILTER (WHERE big), 0)::float8,
+          coalesce(percentile_cont(0.9) WITHIN GROUP (ORDER BY ratio) FILTER (WHERE big), 0)::float8,
+          coalesce(percentile_cont(0.99) WITHIN GROUP (ORDER BY ratio) FILTER (WHERE big), 0)::float8,
+          coalesce(max(ratio) FILTER (WHERE big), 0)::float8,
           coalesce(sum(state_bytes), 0)::bigint,
           coalesce(sum(content_bytes), 0)::bigint,
-          count(*) FILTER (WHERE ratio > $2::float8)::bigint
+          count(*) FILTER (WHERE big AND ratio > $2::float8)::bigint
         FROM (
           SELECT
             greatest(octet_length(n.crdt_state_ciphertext) - $1::int, 0) AS state_bytes,
             greatest(octet_length(n.content_ciphertext) - $1::int, 0) AS content_bytes,
+            greatest(octet_length(n.content_ciphertext) - $1::int, 0) >= $3::int AS big,
             greatest(octet_length(n.crdt_state_ciphertext) - $1::int, 0)::float8
               / greatest(octet_length(n.content_ciphertext) - $1::int, 1)::float8 AS ratio
           FROM notes n
@@ -131,13 +143,14 @@ defmodule Engram.Workers.CrdtBloatSweep do
             AND n.deleted_at IS NULL
         ) sized
         """,
-        [tag, @bloat_threshold * 1.0]
+        [tag, @bloat_threshold * 1.0, CrdtBloat.min_content_bytes()]
       )
 
-    [notes, p50, p90, p99, max, state_bytes, content_bytes, over] = row
+    [notes, measured, p50, p90, p99, max, state_bytes, content_bytes, over] = row
 
     %{
       notes: notes,
+      notes_measured: measured,
       bloat_ratio_p50: p50,
       bloat_ratio_p90: p90,
       bloat_ratio_p99: p99,

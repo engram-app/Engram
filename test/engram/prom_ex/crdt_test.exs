@@ -103,6 +103,7 @@ defmodule Engram.PromEx.CrdtTest do
 
     for key <- [
           :notes,
+          :notes_measured,
           :bloat_ratio_p50,
           :bloat_ratio_p90,
           :bloat_ratio_p99,
