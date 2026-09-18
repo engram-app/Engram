@@ -155,12 +155,18 @@ defmodule Engram.Auth.DeviceFlow do
         {:error, :not_found_or_expired}
 
       auth ->
-        case Repo.one(
-               from(v in Vaults.Vault,
-                 where: v.id == ^vault_id and v.user_id == ^user.id and is_nil(v.deleted_at)
-               ),
-               skip_tenant_check: true
-             ) do
+        # `vaults` carries FORCE ROW LEVEL SECURITY. Unscoped this returned nil
+        # and the caller got `{:error, :vault_not_found}` — device linking
+        # refused a vault the user owns, and blamed the vault rather than the
+        # missing tenant. The `device_authorizations` reads above need no scope:
+        # that table carries no policy.
+        case Repo.with_tenant!(user.id, fn ->
+               Repo.one(
+                 from(v in Vaults.Vault,
+                   where: v.id == ^vault_id and v.user_id == ^user.id and is_nil(v.deleted_at)
+                 )
+               )
+             end) do
           nil ->
             {:error, :vault_not_found}
 

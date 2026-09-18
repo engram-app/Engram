@@ -25,15 +25,19 @@ defmodule Engram.KeywordIndex.Stats do
   and the uncached AVG over the vault's whole chunk set made initial
   indexing O(N^2) in DB row visits. Staleness inside the cache TTL is
   harmless — see `Engram.KeywordIndex.Stats.Cache`.
+
+  Takes `user_id` as well as `vault_id` because the underlying `chunks` read
+  has to run inside `Repo.with_tenant/2`, and nothing in this module can derive
+  the owner: the `vaults` lookup that would supply it is under the same policy.
   """
-  @spec avgdl(Ecto.UUID.t()) :: float()
-  def avgdl(vault_id) do
+  @spec avgdl(Ecto.UUID.t(), Ecto.UUID.t()) :: float()
+  def avgdl(user_id, vault_id) do
     case Cache.get(vault_id) do
       {:ok, value} ->
         value
 
       :miss ->
-        value = compute_avgdl(vault_id)
+        value = compute_avgdl(user_id, vault_id)
         :ok = Cache.put(vault_id, value)
         value
     end
@@ -43,11 +47,22 @@ defmodule Engram.KeywordIndex.Stats do
   @spec evict(Ecto.UUID.t()) :: :ok
   defdelegate evict(vault_id), to: Cache
 
-  defp compute_avgdl(vault_id) do
-    Chunk
-    |> where([c], c.vault_id == ^vault_id and not is_nil(c.token_count))
-    |> select([c], avg(c.token_count))
-    |> Repo.one(skip_tenant_check: true)
+  # Scoped HERE rather than around `avgdl/2` so a cache hit still costs no
+  # transaction — this runs only on a miss. `chunks` carries FORCE ROW LEVEL
+  # SECURITY, and unscoped the aggregate came back nil, so every vault fell
+  # through to `@default_avgdl` and every BM25 weight in it was
+  # length-normalized against a bootstrap constant instead of the vault's real
+  # average. Nothing raised and nothing logged; the ranking just got quietly
+  # worse. `Indexing.prepare_index/3`, the only caller, is documented as
+  # running OUTSIDE the per-note `with_tenant/2` ("HTTP/CPU only, no DB
+  # writes"), which is what left this read unscoped.
+  defp compute_avgdl(user_id, vault_id) do
+    Repo.with_tenant!(user_id, fn ->
+      Chunk
+      |> where([c], c.vault_id == ^vault_id and not is_nil(c.token_count))
+      |> select([c], avg(c.token_count))
+      |> Repo.one()
+    end)
     |> case do
       nil -> @default_avgdl
       %Decimal{} = d -> Decimal.to_float(d)

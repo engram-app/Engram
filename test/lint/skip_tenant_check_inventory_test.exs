@@ -66,7 +66,7 @@ defmodule Engram.SkipTenantCheckInventoryTest do
     "engram/accounts/lifecycle.ex" => 4,
     "engram/accounts/password_reset.ex" => 5,
     "engram/auth/clerk/webhook.ex" => 2,
-    "engram/auth/device_flow.ex" => 15,
+    "engram/auth/device_flow.ex" => 14,
     "engram/billing.ex" => 7,
     "engram/billing/plan_cache.ex" => 1,
     "engram/billing/reconciliation.ex" => 1,
@@ -83,7 +83,6 @@ defmodule Engram.SkipTenantCheckInventoryTest do
     "engram/indexing.ex" => 2,
     "engram/indexing/index_cap.ex" => 2,
     "engram/instance.ex" => 4,
-    "engram/keyword_index/stats.ex" => 1,
     "engram/legal.ex" => 4,
     "engram/legal/seeder.ex" => 2,
     "engram/links.ex" => 15,
@@ -98,7 +97,7 @@ defmodule Engram.SkipTenantCheckInventoryTest do
     "engram/workers/cleanup_vault.ex" => 1,
     "engram/workers/export_expiry_sweep.ex" => 3,
     "engram/workers/inactivity_cleanup.ex" => 4,
-    "engram/workers/vault_deleted_email.ex" => 2,
+    "engram/workers/vault_deleted_email.ex" => 1,
     "engram_web/controllers/admin/user_controller.ex" => 3
   }
 

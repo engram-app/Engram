@@ -12,8 +12,9 @@ defmodule Engram.KeywordIndex.StatsTest do
     %{user: user, vault: vault, note: note}
   end
 
-  test "returns the default when the vault has no indexed chunks", %{vault: vault} do
-    assert Stats.avgdl(vault.id) == 100.0
+  test "returns the default when the vault has no indexed chunks",
+       %{user: user, vault: vault} do
+    assert Stats.avgdl(user.id, vault.id) == 100.0
   end
 
   test "averages token_count across the vault's chunks", %{user: u, vault: v, note: n} do
@@ -30,6 +31,6 @@ defmodule Engram.KeywordIndex.StatsTest do
       })
     end
 
-    assert Stats.avgdl(v.id) == 20.0
+    assert Stats.avgdl(u.id, v.id) == 20.0
   end
 end
