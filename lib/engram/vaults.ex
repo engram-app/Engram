@@ -300,10 +300,13 @@ defmodule Engram.Vaults do
   Non-integer entries are silently filtered (they cannot match an integer PK).
   Returns a map keyed by stringified vault id: `%{"5" => %Vault{}}`.
 
-  Tenant scoping is enforced via an explicit `user_id == ^user_id` clause.
-  RLS is bypassed (`skip_tenant_check: true`) for performance — the explicit
-  clause is the sole guarantee, so it MUST NOT be removed. Excludes
-  soft-deleted vaults, matching `list_vaults/1` and `get_vault/2` conventions.
+  Runs inside `Repo.with_tenant/2`. The explicit `user_id == ^user_id` clause
+  stays, but it is NOT the guarantee this docstring used to claim: `vaults`
+  carries FORCE ROW LEVEL SECURITY and the policy filters FIRST, so unscoped
+  this returned `%{}` no matter how correct the app-level predicate looked.
+  See `count_for/1` below, which already documents the same lesson.
+
+  Excludes soft-deleted vaults, matching `list_vaults/1` and `get_vault/2`.
   """
   @spec list_for_ids(Engram.Accounts.User.t(), [String.t()]) :: %{String.t() => Vault.t()}
   def list_for_ids(%Engram.Accounts.User{id: user_id}, vault_ids) when is_list(vault_ids) do
@@ -320,10 +323,12 @@ defmodule Engram.Vaults do
     if ids == [] do
       %{}
     else
-      scoped(user_id)
-      |> active()
-      |> where([v], v.id in ^ids)
-      |> Repo.all(skip_tenant_check: true)
+      Repo.with_tenant!(user_id, fn ->
+        scoped(user_id)
+        |> active()
+        |> where([v], v.id in ^ids)
+        |> Repo.all()
+      end)
       |> Map.new(fn v -> {to_string(v.id), v} end)
     end
   end
@@ -355,9 +360,11 @@ defmodule Engram.Vaults do
   Returns a map of `%{vault_id => %{notes: n, attachments: m}}` for the given
   vaults, counting only non-deleted notes/attachments owned by `user`.
 
-  Two batched GROUP BY queries (one per table) — no N+1. Tenant scoping is the
-  explicit `user_id == ^user_id` clause; RLS is bypassed (`skip_tenant_check:
-  true`) for performance, matching `list_for_ids/2`. The clause MUST stay.
+  Two batched GROUP BY queries (one per table) — no N+1, both inside a single
+  `Repo.with_tenant/2`. The explicit `user_id == ^user_id` clause stays, but
+  the policy filters first: unscoped, both reads returned `[]` and the
+  zero-fallback below then reported `%{notes: 0, attachments: 0}` for every
+  vault — an answer a caller cannot tell apart from a genuine zero.
   """
   @spec content_counts_for(Engram.Accounts.User.t(), [Vault.t()]) ::
           %{integer() => %{notes: integer(), attachments: integer()}}
@@ -380,25 +387,34 @@ defmodule Engram.Vaults do
   defp do_content_counts(_user_id, []), do: %{}
 
   defp do_content_counts(user_id, ids) do
-    note_counts =
-      from(n in Engram.Notes.Note,
-        where:
-          n.user_id == ^user_id and n.vault_id in ^ids and is_nil(n.deleted_at) and
-            n.kind == "note",
-        group_by: n.vault_id,
-        select: {n.vault_id, count(n.id)}
-      )
-      |> Repo.all(skip_tenant_check: true)
-      |> Map.new()
+    # Both reads in ONE `with_tenant/2` rather than two: they are a single
+    # logical answer, and `notes` + `attachments` are both FORCE-RLS, so
+    # unscoped each returned `[]` and the `Map.new/2` fallback below turned
+    # that into a confident `%{notes: 0, attachments: 0}` per vault.
+    {note_counts, attachment_counts} =
+      Repo.with_tenant!(user_id, fn ->
+        notes =
+          from(n in Engram.Notes.Note,
+            where:
+              n.user_id == ^user_id and n.vault_id in ^ids and is_nil(n.deleted_at) and
+                n.kind == "note",
+            group_by: n.vault_id,
+            select: {n.vault_id, count(n.id)}
+          )
+          |> Repo.all()
+          |> Map.new()
 
-    attachment_counts =
-      from(a in Engram.Attachments.Attachment,
-        where: a.user_id == ^user_id and a.vault_id in ^ids and is_nil(a.deleted_at),
-        group_by: a.vault_id,
-        select: {a.vault_id, count(a.id)}
-      )
-      |> Repo.all(skip_tenant_check: true)
-      |> Map.new()
+        attachments =
+          from(a in Engram.Attachments.Attachment,
+            where: a.user_id == ^user_id and a.vault_id in ^ids and is_nil(a.deleted_at),
+            group_by: a.vault_id,
+            select: {a.vault_id, count(a.id)}
+          )
+          |> Repo.all()
+          |> Map.new()
+
+        {notes, attachments}
+      end)
 
     Map.new(ids, fn id ->
       {id, %{notes: Map.get(note_counts, id, 0), attachments: Map.get(attachment_counts, id, 0)}}
