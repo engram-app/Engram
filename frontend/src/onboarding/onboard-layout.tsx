@@ -1,4 +1,6 @@
+import { useEffect } from "react";
 import { Navigate, Outlet, useLocation } from "react-router";
+import { track } from "../analytics/track";
 import { type OnboardingStep, useOnboardingStatus } from "../api/queries";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
 import AuthShell from "../layout/auth-shell";
@@ -22,11 +24,38 @@ export default function OnboardLayout() {
 	const { pathname } = useLocation();
 	const { data, isLoading } = useOnboardingStatus();
 
+	// Computed unconditionally (Hooks can't follow the loading early-return
+	// below), so the effect beneath it can be called unconditionally too.
+	const current = stepFromPath(pathname);
+
+	// `/onboard` sits outside OnboardingGate's bootstrap seed, so this query is
+	// genuinely uncached on a real first visit — the effect below WILL run
+	// once while still loading, before it has anything to report. `ready`
+	// flips false -> true exactly once (react-query's `isLoading` only covers
+	// "no data yet"; a background refetch, e.g. refetchOnWindowFocus, leaves
+	// it false since data already exists), which is what gives the effect its
+	// second chance to fire once the query actually resolves. A boolean, not
+	// `data` itself, is in the deps — `data` gets a new reference on every
+	// refetch even when `steps` is unchanged, which would refire this on every
+	// background revalidation.
+	const ready = !isLoading && data !== undefined;
+
+	// Fires once per distinct step actually shown, not once per
+	// onboarding/status refetch — this is the signal that would have shown
+	// someone stuck on one step across two visits, so it must key on the step
+	// (once known) alone, not on query churn.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: deliberately keyed on `current` + `ready` only — see comments above.
+	useEffect(() => {
+		if (!(current && ready && data?.steps.includes(current))) {
+			return;
+		}
+		track("onboarding_step_viewed", { step: current });
+	}, [current, ready]);
+
 	if (isLoading || !data) {
 		return <LoadingScreen />;
 	}
 
-	const current = stepFromPath(pathname);
 	// Step not in the active chain for this account (e.g. /onboard/agreement on
 	// self-host, or /onboard/billing after billing is satisfied) — punt to the
 	// resolver, which sends them to next_step.

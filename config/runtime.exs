@@ -611,6 +611,32 @@ if config_env() == :prod do
       config :engram, :hmac_key_user_id, key
   end
 
+  # Analytics-id HMAC key (Engram.Observability.PostHog.analytics_id/1).
+  # Separate secret from TELEMETRY_HMAC_KEY_USER_ID above — domain separation
+  # is the entire point of a keyed hash.
+  case System.get_env("HMAC_KEY_ANALYTICS_ID") do
+    nil ->
+      # Self-host and dev: analytics is off anyway (no posthog_key), so a
+      # random per-boot key is correct — it can never collide with the SaaS
+      # namespace even if a key is later set. But that safety rests on an
+      # unenforced coupling between two independently-read env vars, so warn
+      # if POSTHOG_API_KEY IS set — this key is about to silently re-identify
+      # every person in PostHog on every deploy.
+      if System.get_env("POSTHOG_API_KEY") do
+        require Logger
+
+        Logger.warning(
+          "HMAC_KEY_ANALYTICS_ID not set but POSTHOG_API_KEY is; using a " <>
+            "per-boot random analytics-id key (every person will be re-identified on every deploy)"
+        )
+      end
+
+      config :engram, :hmac_key_analytics_id, Base.encode64(:crypto.strong_rand_bytes(32))
+
+    key ->
+      config :engram, :hmac_key_analytics_id, key
+  end
+
   database_url =
     System.get_env("DATABASE_URL") ||
       raise """
@@ -961,6 +987,15 @@ if key = System.get_env("POSTHOG_API_KEY") do
     posthog_key: key,
     posthog_host: System.get_env("POSTHOG_HOST", "https://us.i.posthog.com")
 end
+
+# PostHog erasure (Engram.Observability.PostHog.delete_person/1), called from
+# account hard-delete (GDPR Art. 17). Deliberately a SEPARATE key from
+# POSTHOG_API_KEY above: that one is capture-only and must stay read-only;
+# person-delete needs person:write scope. admin_config/0 no-ops when either
+# var is unset (self-host, dev).
+config :engram,
+  posthog_erasure_api_key: System.get_env("POSTHOG_ERASURE_API_KEY"),
+  posthog_project_id: System.get_env("POSTHOG_PROJECT_ID")
 
 # Pyroscope continuous CPU profiling. Same opt-in shape as Sentry/PostHog:
 # the worker's child_spec/1 returns :ignore when any of the three required

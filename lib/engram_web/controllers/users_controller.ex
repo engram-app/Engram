@@ -23,7 +23,8 @@ defmodule EngramWeb.UsersController do
         id: user.id,
         email: user.email,
         role: user.role,
-        display_name: user.display_name
+        display_name: user.display_name,
+        analytics_id: Engram.Observability.PostHog.analytics_id(user.email)
       }
     })
   end
@@ -54,7 +55,8 @@ defmodule EngramWeb.UsersController do
             id: updated.id,
             email: updated.email,
             role: updated.role,
-            display_name: updated.display_name
+            display_name: updated.display_name,
+            analytics_id: Engram.Observability.PostHog.analytics_id(updated.email)
           }
         })
 

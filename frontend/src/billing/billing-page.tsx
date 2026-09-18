@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ctaFilled, ctaOutline } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
+import type { CheckoutMethod } from "../analytics/events";
+import { track } from "../analytics/track";
 import { api } from "../api/client";
 import {
 	type BillingCadence,
@@ -49,6 +51,49 @@ const INLINE_FRAME_TARGET = "paddle-checkout";
 // path is compiled out and never ships. Excluded under `TEST` so unit tests
 // exercise the real inline-frame path (vitest sets DEV=true too).
 const DEV_FAKE_CHECKOUT = import.meta.env.DEV && !import.meta.env.TEST;
+
+// Paddle's own CheckoutEventsPaymentMethodTypes ("apple-pay", "google-pay", …)
+// use hyphens; CHECKOUT_METHODS uses underscores to match every other enum
+// member in this app. Anything Paddle adds later (Alipay, WeChat Pay, …)
+// collapses to "unknown" rather than growing this analytics enum silently.
+function toCheckoutMethod(type: string | undefined): CheckoutMethod {
+	switch (type) {
+		case "card":
+			return "card";
+		case "apple-pay":
+			return "apple_pay";
+		case "google-pay":
+			return "google_pay";
+		case "paypal":
+			return "paypal";
+		default:
+			return "unknown";
+	}
+}
+
+// Every Paddle.js checkout event's `data` carries this shape once a payment
+// method has been chosen, but the SDK's own per-event union types don't
+// narrow it for us here — walked defensively, same as the eventCallback's
+// transaction_id extraction below.
+function paymentMethodFrom(data: unknown): string | undefined {
+	if (typeof data !== "object" || data === null || !("payment" in data)) {
+		return undefined;
+	}
+	const { payment } = data;
+	if (typeof payment !== "object" || payment === null || !("method_details" in payment)) {
+		return undefined;
+	}
+	const { method_details } = payment;
+	if (
+		typeof method_details !== "object" ||
+		method_details === null ||
+		!("type" in method_details)
+	) {
+		return undefined;
+	}
+	const { type } = method_details;
+	return typeof type === "string" ? type : undefined;
+}
 
 async function downloadInvoice(transactionId: string) {
 	try {
@@ -180,6 +225,20 @@ export default function BillingPage({
 	// Ref mirror of `paddle` so the eventCallback (captured pre-instance) can
 	// call Checkout.close() on push activation or cooldown without re-init.
 	const paddleRef = useRef<Paddle | undefined>(undefined);
+	// Which tier the currently-open checkout is for — set when the user starts
+	// one, read by the CHECKOUT_LOADED handler (captured pre-render, so it
+	// can't come from a render-time variable).
+	const checkoutTierRef = useRef<"starter" | "pro" | null>(null);
+	// The payment method selected mid-checkout, tracked so checkout_completed/
+	// checkout_stalled can report it — Paddle's own COMPLETED/FAILED payloads
+	// don't reliably carry method_details, but PAYMENT_SELECTED always does.
+	const checkoutMethodRef = useRef<CheckoutMethod>("unknown");
+	// True once CHECKOUT_COMPLETED has fired for the open checkout — the only
+	// thing that tells CHECKOUT_CLOSED apart from an abandon: our OWN code
+	// calls Checkout.close() after a successful activation too (see
+	// handleSubscriptionActivated below), and that close event mustn't read as
+	// an abandonment just because it lands after this flag was reset.
+	const checkoutCompletedRef = useRef(false);
 	// Annual by default: it buys RETENTION, not payment-fee savings. The 17%
 	// discount costs more than the flat $0.50/transaction fee saves ($66.00 vs
 	// $73.80 net per year at list). It wins on churn — a monthly cohort at 5%/mo
@@ -313,6 +372,21 @@ export default function BillingPage({
 					return;
 				}
 				switch (event.name) {
+					case CheckoutEventNames.CHECKOUT_LOADED: {
+						// Only for a tier checkout (handleStartCheckout set the ref) — the
+						// payment-method-update flow (handleUpdatePayment) also opens a
+						// Paddle frame via a bare transactionId, and that isn't the
+						// signup/upgrade funnel this event exists to measure.
+						const tier = checkoutTierRef.current;
+						if (tier) {
+							track("checkout_opened", { method: "unknown", tier });
+						}
+						break;
+					}
+					case CheckoutEventNames.CHECKOUT_PAYMENT_SELECTED: {
+						checkoutMethodRef.current = toCheckoutMethod(paymentMethodFrom(event.data));
+						break;
+					}
 					case CheckoutEventNames.CHECKOUT_PAYMENT_INITIATED: {
 						// Belt-and-suspenders: either PAYMENT_INITIATED or COMPLETED may
 						// drop on trial-signup redirects. Arm the cooldown timer on
@@ -340,6 +414,13 @@ export default function BillingPage({
 						// armed here in case PAYMENT_INITIATED dropped).
 						setCompletedAt((prev) => prev ?? Date.now());
 						invalidateBillingState(qc);
+						checkoutCompletedRef.current = true;
+						// COMPLETED's own payload carries method_details too — prefer it,
+						// fall back to whatever PAYMENT_SELECTED last recorded.
+						const method = paymentMethodFrom(event.data);
+						track("checkout_completed", {
+							method: method ? toCheckoutMethod(method) : checkoutMethodRef.current,
+						});
 						break;
 					}
 					case CheckoutEventNames.CHECKOUT_PAYMENT_FAILED: {
@@ -352,6 +433,21 @@ export default function BillingPage({
 						// state so a stale COMPLETED/INITIATED timer can't fire.
 						setCompletedAt(null);
 						setSlow(false);
+						// This is the real "payment failed" signal Paddle.js exposes —
+						// there is no separate "action_required" event to distinguish an
+						// outright decline from a payment left awaiting the user (e.g. a
+						// dismissed native Apple Pay sheet). That case has no event here
+						// at all; see the task report.
+						track("checkout_stalled", {
+							method: checkoutMethodRef.current,
+							reason: "payment_declined",
+						});
+						break;
+					}
+					case CheckoutEventNames.CHECKOUT_CLOSED: {
+						if (!checkoutCompletedRef.current) {
+							track("checkout_abandoned", { method: checkoutMethodRef.current });
+						}
 						break;
 					}
 					case CheckoutEventNames.CHECKOUT_PAYMENT_ERROR:
@@ -426,6 +522,12 @@ export default function BillingPage({
 			if (!(paddle && config)) {
 				return;
 			}
+			// Reset per-attempt tracking state — each Sync click is a fresh attempt
+			// (see the four dead Apple Pay attempts in two minutes this exists to
+			// distinguish from one another).
+			checkoutTierRef.current = tier;
+			checkoutMethodRef.current = "unknown";
+			checkoutCompletedRef.current = false;
 			if (isInline) {
 				setCheckingOut(true);
 			}

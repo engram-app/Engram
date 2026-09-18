@@ -11,17 +11,20 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
   fire-and-forget (Task.start) — these helpers never block on network I/O
   and always return `:ok`.
 
-  distinct_id MUST equal the frontend's `posthog.identify(clerk.user.id)`
-  value (see frontend/src/auth/clerk-auth-provider.tsx) or the funnel
-  silently fails to join across the client/server boundary:
+  distinct_id MUST be the keyed analytics id (`PostHog.analytics_id/1`,
+  hashed from the user's email) — not the raw Clerk id — or the funnel
+  silently fails to join once the frontend identifies by the same id:
 
-  - Clerk events carry the Clerk user id in the payload (`data.id` for
-    user.created, `data.user_id` for session.created — they're not the
-    same key, Clerk's session row references the user it belongs to).
+  - Clerk events carry only the Clerk user id in the payload (`data.id`
+    for user.created, `data.user_id` for session.created — they're not
+    the same key, Clerk's session row references the user it belongs
+    to), so each handler loads the local user by external_id and hashes
+    its email.
   - Paddle events carry an *internal* `custom_data.user_id`; we resolve
-    through the Subscription row to the user's `external_id`.
+    through the Subscription row to the user, then hash its email.
   """
 
+  alias Engram.Accounts
   alias Engram.Observability.PostHog
 
   @doc """
@@ -32,17 +35,32 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
   @spec forward_clerk_event(map()) :: :ok
   def forward_clerk_event(%{"type" => "user.created", "data" => %{"id" => clerk_id}})
       when is_binary(clerk_id) do
-    _ = PostHog.capture(clerk_id, "user_signed_up", %{})
+    capture_by_clerk_id(clerk_id, "user_signed_up")
     :ok
   end
 
   def forward_clerk_event(%{"type" => "session.created", "data" => %{"user_id" => clerk_id}})
       when is_binary(clerk_id) do
-    _ = PostHog.capture(clerk_id, "user_signed_in", %{})
+    capture_by_clerk_id(clerk_id, "user_signed_in")
     :ok
   end
 
   def forward_clerk_event(_event), do: :ok
+
+  # Clerk webhooks carry only the Clerk id. Resolve it to the local user's
+  # email so the event is keyed by the analytics id instead. If the local
+  # row doesn't exist yet (e.g. a duplicate-signup revoked before this
+  # handler runs), drop silently — there's no analytics identity to join on.
+  defp capture_by_clerk_id(clerk_id, event) do
+    case Accounts.find_by_external_id(clerk_id) do
+      {:ok, %{email: email}} when is_binary(email) and byte_size(email) > 0 ->
+        _ = PostHog.capture(PostHog.analytics_id(email), event, %{})
+        :ok
+
+      _ ->
+        :ok
+    end
+  end
 
   @doc """
   Forward a verified Paddle webhook event paired with the result of
@@ -56,12 +74,12 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
         %{"event_type" => "subscription.activated", "data" => data},
         %Engram.Billing.Subscription{} = sub
       ) do
-    case Engram.Accounts.get_user(sub.user_id) do
-      %{external_id: ext_id} when is_binary(ext_id) and byte_size(ext_id) > 0 ->
+    case Accounts.get_user(sub.user_id) do
+      %{email: email} when is_binary(email) and byte_size(email) > 0 ->
         price_id = data |> Map.get("items", []) |> List.first(%{}) |> get_in(["price", "id"])
 
         _ =
-          PostHog.capture(ext_id, "subscription_started", %{
+          PostHog.capture(PostHog.analytics_id(email), "subscription_started", %{
             tier: sub.tier,
             price_id: price_id,
             paddle_subscription_id: sub.paddle_subscription_id
@@ -70,10 +88,9 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
         :ok
 
       _ ->
-        # Self-host installs and pre-Clerk legacy rows have no external_id.
-        # Without a Clerk identify call on the frontend there's nothing to
-        # join against — drop silently rather than emit an :anon event that
-        # would land in PostHog as un-funnelable noise.
+        # No email on the local row — there's no analytics identity to hash
+        # and join against. Drop silently rather than emit an :anon event
+        # that would land in PostHog as un-funnelable noise.
         :ok
     end
   end

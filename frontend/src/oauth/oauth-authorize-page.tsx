@@ -15,6 +15,8 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
+import { MCP_CLIENTS } from "../analytics/events";
+import { track } from "../analytics/track";
 import { api } from "../api/client";
 import { fetchOAuthClient, type OAuthConsentParams, postOAuthConsent } from "../api/oauth";
 import {
@@ -29,6 +31,7 @@ import { connectionId as oauthConnectionId } from "../billing/existing-connectio
 import { useConnectionCap } from "../billing/use-connection-cap";
 import AuthPanel from "../layout/auth-panel";
 import AuthShell from "../layout/auth-shell";
+import { isMember } from "../lib/is-member";
 import { settingsHash, settingsTo } from "../settings/settings-hash";
 import { clearPendingAuthorization, stashPendingAuthorization } from "./pending-authorization";
 
@@ -81,6 +84,16 @@ function readParams(search: URLSearchParams): {
 	values.scope = search.get("scope") || DEFAULT_SCOPE;
 
 	return { values, resource: search.get("resource"), missing };
+}
+
+// The client's catalog slug is already resolved server-side from the redirect
+// it's using (see OAuthClientMetadata.slug) — never the raw client_name or
+// host, both of which are attacker/client-supplied free text. Any slug this
+// analytics enum doesn't enumerate (e.g. "claude_code", "antigravity",
+// "cline" — real catalog slugs, just not one of the three this event
+// distinguishes) becomes "other", same as no slug at all.
+function toMcpClient(slug: string | null | undefined): (typeof MCP_CLIENTS)[number] {
+	return isMember(MCP_CLIENTS, slug) ? slug : "other";
 }
 
 function buildCancelUrl(redirectUri: string, state: string): string {
@@ -357,6 +370,14 @@ export default function OAuthAuthorizePage() {
 		setSubmitting(true);
 		setSubmitError(null);
 
+		// Obsidian's device-code flow is a different surface (device-link-page.tsx,
+		// plugin_connect_*) — this event name says "mcp" and must mean it.
+		const isMcp = clientKind === "mcp";
+		const mcpClient = toMcpClient(clientQuery.data?.slug);
+		if (isMcp) {
+			track("mcp_connect_attempted", { client: mcpClient });
+		}
+
 		const body: OAuthConsentParams = {
 			client_id: values.client_id,
 			redirect_uri: values.redirect_uri,
@@ -397,6 +418,9 @@ export default function OAuthAuthorizePage() {
 			}
 
 			const { redirect_uri } = await postOAuthConsent(body);
+			if (isMcp) {
+				track("mcp_connect_succeeded", { client: mcpClient });
+			}
 			window.location.assign(redirect_uri);
 		} catch (e: unknown) {
 			if (swappedFromName) {
@@ -406,6 +430,9 @@ export default function OAuthAuthorizePage() {
 					`Disconnected '${swappedFromName}' but authorizing the new connection failed. ` +
 						`Re-run the request from ${clientName} — no connections of this kind are currently active.`,
 				);
+				if (isMcp) {
+					track("mcp_connect_failed", { client: mcpClient, reason: "unknown" });
+				}
 				setSubmitting(false);
 				return;
 			}
@@ -413,11 +440,17 @@ export default function OAuthAuthorizePage() {
 			// (we pre-disconnected). Keep the guard for the rare race where the
 			// cap re-trips between disconnect + consent.
 			if (e instanceof Error && e.name === "LimitExceededError") {
+				if (isMcp) {
+					track("mcp_connect_failed", { client: mcpClient, reason: "limit_exceeded" });
+				}
 				setSubmitting(false);
 				return;
 			}
 			const message = e instanceof Error ? e.message : "Authorization failed";
 			setSubmitError(message);
+			if (isMcp) {
+				track("mcp_connect_failed", { client: mcpClient, reason: "unknown" });
+			}
 			setSubmitting(false);
 		}
 	};

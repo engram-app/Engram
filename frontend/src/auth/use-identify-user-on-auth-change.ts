@@ -21,12 +21,12 @@ export function useIdentifyUserOnAuthChange({
 	isLoaded,
 	isSignedIn,
 	id,
-	email,
+	analyticsId,
 }: {
 	isLoaded: boolean;
 	isSignedIn: boolean;
 	id?: string;
-	email?: string;
+	analyticsId?: string;
 }): void {
 	useEffect(() => {
 		// Clerk reports isSignedIn:false while still resolving; acting on that
@@ -34,13 +34,14 @@ export function useIdentifyUserOnAuthChange({
 		if (!isLoaded) {
 			return;
 		}
-		if (isSignedIn && id) {
-			posthog.identify(id, email ? { email } : undefined);
-			// Id only — never email. See setSentryUser, which never rejects.
-			setSentryUser(id);
+		if (isSignedIn && analyticsId) {
+			posthog.identify(analyticsId);
+			// Id only — never email, and never the Clerk id. See the privacy
+			// policy's sub-processor table.
+			setSentryUser(id ?? null);
 		} else if (!isSignedIn) {
 			posthog.reset();
 			setSentryUser(null);
 		}
-	}, [isLoaded, isSignedIn, id, email]);
+	}, [isLoaded, isSignedIn, id, analyticsId]);
 }

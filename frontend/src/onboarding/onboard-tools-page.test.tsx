@@ -1,11 +1,15 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type React from "react";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { track } from "../analytics/track";
 import type { BillingStatus, OnboardingStatus } from "../api/queries";
 // Import after mocks
 import OnboardToolsPage from "./onboard-tools-page";
+
+vi.mock("../analytics/track", () => ({ track: vi.fn() }));
+const mockTrack = vi.mocked(track);
 
 const mutateAsync = vi.fn().mockResolvedValue({});
 
@@ -63,6 +67,7 @@ function wrap(ui: React.ReactNode) {
 
 beforeEach(() => {
 	mutateAsync.mockClear();
+	mockTrack.mockClear();
 	onboardingStatus = {
 		data: {
 			enabled: true,
@@ -223,5 +228,21 @@ describe("OnboardToolsPage: Paid tier", () => {
 
 		expect(claude).toHaveAttribute("data-state", "checked");
 		expect(cursor).toHaveAttribute("data-state", "checked");
+	});
+});
+
+describe("OnboardToolsPage: step-completion tracking", () => {
+	it("emits onboarding_step_completed for the tools step on submit", async () => {
+		render(wrap(<OnboardToolsPage />));
+
+		fireEvent.click(screen.getByLabelText(/^Cursor$/iu));
+		fireEvent.click(screen.getByRole("button", { name: /continue/iu }));
+
+		await waitFor(() =>
+			expect(mockTrack).toHaveBeenCalledWith(
+				"onboarding_step_completed",
+				expect.objectContaining({ step: "tools" }),
+			),
+		);
 	});
 });

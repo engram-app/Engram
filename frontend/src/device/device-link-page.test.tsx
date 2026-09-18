@@ -2,8 +2,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { track } from "../analytics/track";
 import { signInRedirectTarget } from "../auth/sign-in-redirect";
 import DeviceLinkPage from "./device-link-page";
+
+vi.mock("../analytics/track", () => ({ track: vi.fn() }));
+const mockTrack = vi.mocked(track);
 
 const { get, post } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
 vi.mock("../api/client", () => ({ api: { get, post } }));
@@ -377,6 +381,47 @@ describe("DeviceLinkPage", () => {
 			),
 		);
 		expect(await screen.findByText(/your vault is linked/iu)).toBeInTheDocument();
+	});
+
+	// This is the actual device-link (plugin-connect) flow — the brief's
+	// "onboarding-shell.tsx" file name for this event doesn't match a real
+	// step-prop'd component in this codebase; this page's Sync click is the
+	// real attempt/success/failure boundary.
+	it("emits plugin_connect_started and plugin_connect_succeeded around a successful link", async () => {
+		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
+		post.mockResolvedValue({ ok: true, vault_id: 7 });
+		renderPage();
+
+		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ENGR7X4K" } });
+		fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+		fireEvent.click(await screen.findByRole("radio", { name: /personal/iu }));
+		fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
+
+		expect(mockTrack).toHaveBeenCalledWith("plugin_connect_started", expect.anything());
+		await waitFor(() =>
+			expect(mockTrack).toHaveBeenCalledWith(
+				"plugin_connect_succeeded",
+				expect.objectContaining({ vault_id: 7 }),
+			),
+		);
+	});
+
+	it("emits plugin_connect_failed when authorize rejects", async () => {
+		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
+		post.mockRejectedValue(new Error("404 not found"));
+		renderPage();
+
+		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ENGR7X4K" } });
+		fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+		fireEvent.click(await screen.findByRole("radio", { name: /personal/iu }));
+		fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
+
+		await waitFor(() =>
+			expect(mockTrack).toHaveBeenCalledWith(
+				"plugin_connect_failed",
+				expect.objectContaining({ reason: "not_found" }),
+			),
+		);
 	});
 
 	// The heading used to stay "Link Obsidian Vault" on the success step — a

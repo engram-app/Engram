@@ -7,8 +7,9 @@ defmodule Engram.Observability.EmittersTest do
 
   These tests are NOT a contract on the wire format (PostHog accepts a
   range of shapes — see Engram.Observability.PostHogTest); they pin the
-  funnel-join invariant: `distinct_id` MUST be the Clerk user id, so the
-  server-emitted events join with the frontend's `posthog.identify` call.
+  funnel-join invariant: `distinct_id` MUST be the keyed analytics id
+  (`PostHog.analytics_id/1`), not a raw Clerk id, so the server-emitted
+  events join with the frontend's `posthog.identify` call.
 
   `async: false` because every test mutates the global Application env
   (:posthog_key, :posthog_host) — Bypass setup is per-test but the env
@@ -20,6 +21,7 @@ defmodule Engram.Observability.EmittersTest do
   import Mox
 
   alias Engram.Notes
+  alias Engram.Observability.PostHog
   alias Engram.Search
   alias EngramWeb.Webhooks.PostHogForwarder
 
@@ -81,7 +83,7 @@ defmodule Engram.Observability.EmittersTest do
 
       assert_receive {:posthog_body, body}, 1_500
       assert body["event"] == "note_created"
-      assert body["distinct_id"] == user.external_id
+      assert body["distinct_id"] == PostHog.analytics_id(user.email)
       assert body["properties"]["vault_id"] == vault.id
     end
 
@@ -153,7 +155,7 @@ defmodule Engram.Observability.EmittersTest do
 
       assert_receive {:posthog_body, body}, 1_500
       assert body["event"] == "search_performed"
-      assert body["distinct_id"] == user.external_id
+      assert body["distinct_id"] == PostHog.analytics_id(user.email)
       assert body["properties"]["result_count"] == 0
       assert is_integer(body["properties"]["latency_ms"])
       assert body["properties"]["cross_vault"] == false
@@ -172,24 +174,42 @@ defmodule Engram.Observability.EmittersTest do
 
       assert_receive {:posthog_body, body}, 1_500
       assert body["event"] == "vault_opened"
-      assert body["distinct_id"] == user.external_id
+      assert body["distinct_id"] == PostHog.analytics_id(user.email)
       assert body["properties"]["vault_id"] == vault.id
     end
   end
 
   describe "PostHogForwarder.forward_clerk_event/1" do
-    test "user.created → user_signed_up keyed by data.id", %{bypass: bypass} do
+    # PostHog.capture spawns Task.start — assert_receive needs the bypass to
+    # send to this process. Wraps a single forward_clerk_event/1 call for
+    # "user.created" keyed by `user.external_id` and returns the distinct_id
+    # PostHog actually received.
+    defp captured_distinct_id_for(user, bypass) do
       expect_capture(bypass)
 
       :ok =
         PostHogForwarder.forward_clerk_event(%{
           "type" => "user.created",
-          "data" => %{"id" => "user_2nXyZclerk"}
+          "data" => %{"id" => user.external_id}
+        })
+
+      assert_receive {:posthog_body, body}, 1_500
+      body["distinct_id"]
+    end
+
+    test "user.created → user_signed_up keyed by data.id", %{bypass: bypass} do
+      user = insert_user(email: "clerk-created@example.com", external_id: "user_2nXyZclerk")
+      expect_capture(bypass)
+
+      :ok =
+        PostHogForwarder.forward_clerk_event(%{
+          "type" => "user.created",
+          "data" => %{"id" => user.external_id}
         })
 
       assert_receive {:posthog_body, body}, 1_500
       assert body["event"] == "user_signed_up"
-      assert body["distinct_id"] == "user_2nXyZclerk"
+      assert body["distinct_id"] == PostHog.analytics_id(user.email)
     end
 
     # The session.created key is `data.user_id`, NOT `data.id` — they're
@@ -197,17 +217,27 @@ defmodule Engram.Observability.EmittersTest do
     # mismatched key here would silently break the funnel.
     test "session.created → user_signed_in keyed by data.user_id",
          %{bypass: bypass} do
+      user = insert_user(email: "clerk-session@example.com", external_id: "user_2nXyZclerk")
       expect_capture(bypass)
 
       :ok =
         PostHogForwarder.forward_clerk_event(%{
           "type" => "session.created",
-          "data" => %{"id" => "sess_xyz", "user_id" => "user_2nXyZclerk"}
+          "data" => %{"id" => "sess_xyz", "user_id" => user.external_id}
         })
 
       assert_receive {:posthog_body, body}, 1_500
       assert body["event"] == "user_signed_in"
-      assert body["distinct_id"] == "user_2nXyZclerk"
+      assert body["distinct_id"] == PostHog.analytics_id(user.email)
+    end
+
+    test "user_signed_up is keyed by the analytics id, not the clerk id", %{bypass: bypass} do
+      user = insert_user(email: "sabio@web.de", external_id: "user_3J50JyLu")
+
+      distinct_id = captured_distinct_id_for(user, bypass)
+
+      assert distinct_id == PostHog.analytics_id(user.email)
+      refute distinct_id == user.external_id
     end
 
     test "unhandled event type is a no-op" do
@@ -216,6 +246,18 @@ defmodule Engram.Observability.EmittersTest do
         PostHogForwarder.forward_clerk_event(%{
           "type" => "user.deleted",
           "data" => %{"id" => "user_x"}
+        })
+
+      refute_receive {:posthog_body, _}, 100
+    end
+
+    test "user.created with no matching local user is dropped silently", %{bypass: _bypass} do
+      # No Bypass.expect — any POST would fail the test on exit. Simulates a
+      # webhook arriving before (or without) a corresponding local user row.
+      :ok =
+        PostHogForwarder.forward_clerk_event(%{
+          "type" => "user.created",
+          "data" => %{"id" => "user_never_provisioned"}
         })
 
       refute_receive {:posthog_body, _}, 100
@@ -243,14 +285,17 @@ defmodule Engram.Observability.EmittersTest do
 
       assert_receive {:posthog_body, body}, 1_500
       assert body["event"] == "subscription_started"
-      assert body["distinct_id"] == "user_paddle_resolve"
+      assert body["distinct_id"] == PostHog.analytics_id(user.email)
+      refute body["distinct_id"] == user.external_id
       assert body["properties"]["tier"] == "starter"
       assert body["properties"]["price_id"] == "pri_starter_monthly"
       assert body["properties"]["paddle_subscription_id"] == "sub_ABC"
     end
 
-    test "user without external_id is dropped silently (self-host path)" do
-      user = insert(:user, external_id: nil)
+    test "user with no email is dropped silently (nothing to hash into an analytics id)" do
+      # `email` is NOT NULL at the DB level (structure.sql), so an empty
+      # string — not nil — is the reachable "no email" shape for a real row.
+      user = insert(:user, email: "")
       sub = insert(:subscription, user: user, tier: "starter")
 
       :ok =
@@ -263,6 +308,38 @@ defmodule Engram.Observability.EmittersTest do
         )
 
       refute_receive {:posthog_body, _}, 100
+    end
+
+    # The distinct_id used to BE the Clerk external_id, so a user without one
+    # (self-host, pre-Clerk legacy rows) had nothing to key the event on and
+    # the guard dropped it. After the rekey to analytics_id(email), the
+    # external_id is never read — a missing external_id is no longer a
+    # reason to drop the event, only a missing email is (see the test
+    # above). This pins that behavior change on purpose: it is not
+    # self-host-safe by itself, only :posthog_key being unset makes
+    # self-host a no-op (Engram.Observability.PostHog.capture/3 short-
+    # circuits before any network call when :posthog_key is unset — see
+    # config().
+    test "user with an email but no external_id now emits subscription_started", %{bypass: bypass} do
+      user = insert(:user, external_id: nil)
+
+      sub =
+        insert(:subscription, user: user, tier: "starter", paddle_subscription_id: "sub_no_ext")
+
+      expect_capture(bypass)
+
+      :ok =
+        PostHogForwarder.forward_paddle_event(
+          %{
+            "event_type" => "subscription.activated",
+            "data" => %{"items" => [%{"price" => %{"id" => "pri_x"}}]}
+          },
+          sub
+        )
+
+      assert_receive {:posthog_body, body}, 1_500
+      assert body["event"] == "subscription_started"
+      assert body["distinct_id"] == PostHog.analytics_id(user.email)
     end
 
     test "non-activated event types no-op (subscription.updated, subscription.canceled, ignored)" do

@@ -2,7 +2,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { track } from "../analytics/track";
 import OAuthAuthorizePage from "./oauth-authorize-page";
+
+vi.mock("../analytics/track", () => ({ track: vi.fn() }));
+const mockTrack = vi.mocked(track);
 
 const { fetchOAuthClient, postOAuthConsent } = vi.hoisted(() => ({
 	fetchOAuthClient: vi.fn(),
@@ -363,6 +367,61 @@ describe("OAuthAuthorizePage", () => {
 			),
 		);
 		await waitFor(() => expect(assign).toHaveBeenCalledWith("https://app/cb?code=ok"));
+	});
+
+	it("emits mcp_connect_attempted and mcp_connect_succeeded, mapping a recognised slug", async () => {
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "cli",
+			client_name: "Cursor",
+			kind: "mcp",
+			slug: "cursor",
+		});
+		postOAuthConsent.mockResolvedValue({ redirect_uri: "https://app/cb?code=ok" });
+		vi.spyOn(window.location, "assign").mockImplementation(() => {});
+
+		renderAt(VALID_QS);
+		fireEvent.click(await screen.findByRole("button", { name: /approve/iu }));
+
+		expect(mockTrack).toHaveBeenCalledWith("mcp_connect_attempted", { client: "cursor" });
+		await waitFor(() =>
+			expect(mockTrack).toHaveBeenCalledWith("mcp_connect_succeeded", { client: "cursor" }),
+		);
+	});
+
+	it("maps an unrecognised or absent slug to 'other', never the raw value", async () => {
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "cli",
+			client_name: "Some New Client",
+			kind: "mcp",
+			slug: "some_new_client",
+		});
+		postOAuthConsent.mockResolvedValue({ redirect_uri: "https://app/cb?code=ok" });
+		vi.spyOn(window.location, "assign").mockImplementation(() => {});
+
+		renderAt(VALID_QS);
+		fireEvent.click(await screen.findByRole("button", { name: /approve/iu }));
+
+		expect(mockTrack).toHaveBeenCalledWith("mcp_connect_attempted", { client: "other" });
+	});
+
+	it("emits mcp_connect_failed when consent rejects", async () => {
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "cli",
+			client_name: "Claude Desktop",
+			kind: "mcp",
+			slug: "claude",
+		});
+		postOAuthConsent.mockRejectedValue(new Error("boom"));
+
+		renderAt(VALID_QS);
+		fireEvent.click(await screen.findByRole("button", { name: /approve/iu }));
+
+		await waitFor(() =>
+			expect(mockTrack).toHaveBeenCalledWith(
+				"mcp_connect_failed",
+				expect.objectContaining({ client: "claude" }),
+			),
+		);
 	});
 
 	it("shows a heads-up banner at the MCP cap and swaps on Approve", async () => {
