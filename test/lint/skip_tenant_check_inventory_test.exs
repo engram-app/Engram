@@ -93,7 +93,7 @@ defmodule Engram.SkipTenantCheckInventoryTest do
     "engram/oauth/cimd.ex" => 3,
     "engram/onboarding.ex" => 2,
     "engram/usage_meters.ex" => 9,
-    "engram/vaults.ex" => 4,
+    "engram/vaults.ex" => 1,
     "engram/workers/account_export.ex" => 6,
     "engram/workers/cimd_refresh.ex" => 1,
     "engram/workers/cleanup_vault.ex" => 1,
