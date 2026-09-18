@@ -61,7 +61,9 @@ function ClerkAdapterInner({ children }: { children: React.ReactNode }) {
 	const email = clerk.user?.primaryEmailAddress?.emailAddress;
 	const imageUrl = clerk.user?.imageUrl;
 
-	const { data: me } = useMe();
+	// Gated: this component renders for signed-OUT visitors too, and an
+	// unauthenticated /me call 401s and stalls the sign-in redirect.
+	const { data: me } = useMe({ enabled: isLoaded && isSignedIn === true });
 
 	useIdentifyUserOnAuthChange({
 		isLoaded,

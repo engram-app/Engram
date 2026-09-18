@@ -1027,11 +1027,16 @@ export function useTypes() {
 	});
 }
 
-export function useMe() {
+/** `enabled` defaults true so existing callers are unchanged. The Clerk
+ *  adapter passes false while signed out: it renders for anonymous visitors
+ *  too, and an unconditional /me there 401s on every page load and stalls the
+ *  redirect to sign-in. */
+export function useMe(options?: { enabled?: boolean }) {
 	return useQuery({
 		queryKey: ["me"],
 		queryFn: () => api.get<{ user: User }>("/me"),
 		select: (data) => data.user,
+		enabled: options?.enabled ?? true,
 	});
 }
 
