@@ -20,7 +20,39 @@ defmodule EngramWeb.McpController do
   #
   # `2025-03-26` stays supported so a client pinned to it keeps working. This
   # list is the negotiation surface — adding a revision means meeting it.
-  @supported_protocol_versions ["2025-06-18", "2025-03-26", "2024-11-05"]
+  @supported_protocol_versions ["2026-07-28", "2025-06-18", "2025-03-26", "2024-11-05"]
+
+  # `2026-07-28` is a different ERA, not just a newer revision: it deletes the
+  # `initialize` handshake entirely and moves protocol version, client info and
+  # client capabilities into a per-request `_meta`. The spec's own terms are
+  # "modern" (per-request metadata) vs "legacy" (handshake), and it permits a
+  # "dual-era" server to serve both concurrently on one endpoint. That is what
+  # we are — `do_handle/2` below is the legacy path, untouched.
+  #
+  # Revisions are ISO dates, so lexical >= is the era test.
+  @modern_era_floor "2026-07-28"
+
+  # What a LEGACY `initialize` may be answered with. Deliberately excludes the
+  # modern revisions: the lifecycle rule is "answer with the latest you
+  # support", but answering a handshake with a revision that HAS no handshake
+  # hands the client a version it cannot speak. A legacy client asking for
+  # something unknown must land on the newest legacy revision, not the newest
+  # revision overall.
+  @legacy_protocol_versions Enum.reject(
+                              @supported_protocol_versions,
+                              &(&1 >= @modern_era_floor)
+                            )
+
+  # Per-request `_meta` keys the modern era defines. `protocolVersion` and
+  # `clientCapabilities` are REQUIRED on every request; a request missing
+  # either is malformed and MUST be refused with -32602 on HTTP 400.
+  @meta_protocol_version "io.modelcontextprotocol/protocolVersion"
+  @meta_client_capabilities "io.modelcontextprotocol/clientCapabilities"
+  @meta_server_info "io.modelcontextprotocol/serverInfo"
+
+  # Removed by `2026-07-28`. They still work in the legacy era — `ping` is a
+  # base-protocol MUST there (#1680) — so this is era-scoped, not a deletion.
+  @modern_removed_methods ~w(initialize ping logging/setLevel notifications/roots/list_changed)
 
   # `2024-11-05` is on the list for CONTINUITY, not ambition. SDKs released
   # before ~June 2025 ship `SUPPORTED_PROTOCOL_VERSIONS = ["2025-03-26",
@@ -67,20 +99,162 @@ defmodule EngramWeb.McpController do
   though it were supported, which would leave the client believing we agreed.
   """
   def handle(conn, params) do
-    case get_req_header(conn, "mcp-protocol-version") do
-      [version | _] when version not in @supported_protocol_versions ->
-        conn
-        |> put_status(400)
-        |> send_jsonrpc_error(
-          jsonrpc_id(params["id"]),
-          -32_600,
-          "Unsupported MCP protocol version: #{safe_header_label(version)}. " <>
-            "Supported: #{Enum.join(@supported_protocol_versions, ", ")}."
+    header = List.first(get_req_header(conn, "mcp-protocol-version"))
+
+    if modern_request?(header, params) do
+      modern_handle(conn, header, params)
+    else
+      legacy_gate(conn, header, params)
+    end
+  end
+
+  # A request is modern when it carries the era's own `_meta` keys, or when the
+  # header names a modern revision. Checking `_meta` first matters for the
+  # unsupported-version case: a client asking for a revision we have never
+  # heard of is still recognisably modern by the shape of its metadata, and the
+  # spec requires it get -32022 (which it can act on) rather than a generic
+  # refusal (which it cannot).
+  defp modern_request?(header, params) do
+    meta = request_meta(params)
+
+    Map.has_key?(meta, @meta_protocol_version) or
+      Map.has_key?(meta, @meta_client_capabilities) or
+      modern_header?(header)
+  end
+
+  # `String.valid?` before the comparison, not after: header bytes are
+  # attacker-controlled, and an invalid-UTF-8 blob can compare >= the era floor
+  # by raw byte order. Treating that as "modern" routed a malformed header into
+  # the modern validator, which then complained about a missing `_meta` key
+  # instead of about the header that was actually wrong.
+  defp modern_header?(header) when is_binary(header),
+    do: String.valid?(header) and header >= @modern_era_floor
+
+  defp modern_header?(_header), do: false
+
+  defp request_meta(params) when is_non_struct_map(params) do
+    case params["params"] do
+      %{"_meta" => meta} when is_non_struct_map(meta) -> meta
+      _ -> %{}
+    end
+  end
+
+  defp request_meta(_params), do: %{}
+
+  # -- Legacy era (`initialize` handshake) --
+
+  defp legacy_gate(conn, header, params) do
+    if is_binary(header) and header not in @supported_protocol_versions do
+      conn
+      |> put_status(400)
+      |> send_jsonrpc_error(
+        jsonrpc_id(params["id"]),
+        -32_600,
+        "Unsupported MCP protocol version: #{safe_header_label(header)}. " <>
+          "Supported: #{Enum.join(@supported_protocol_versions, ", ")}."
+      )
+    else
+      do_handle(conn, params)
+    end
+  end
+
+  # -- Modern era (`2026-07-28`, per-request metadata) --
+
+  defp modern_handle(conn, header, params) do
+    meta = request_meta(params)
+    id = jsonrpc_id(params["id"])
+    version = meta[@meta_protocol_version]
+
+    cond do
+      # The header and the envelope must agree. Two sources naming different
+      # revisions is the client contradicting itself, and guessing which it
+      # meant is how a request gets served under rules neither side chose.
+      is_binary(header) and is_binary(version) and header != version ->
+        modern_error(conn, id, -32_020, "Header mismatch", %{
+          "header" => "MCP-Protocol-Version",
+          "headerValue" => safe_header_label(header),
+          "bodyValue" => safe_header_label(version)
+        })
+
+      not is_binary(version) ->
+        modern_error(conn, id, -32_602, "Invalid params: #{@meta_protocol_version} is required")
+
+      not is_non_struct_map(meta[@meta_client_capabilities]) ->
+        modern_error(
+          conn,
+          id,
+          -32_602,
+          "Invalid params: #{@meta_client_capabilities} is required"
         )
 
-      _ ->
-        do_handle(conn, params)
+      version not in @supported_protocol_versions ->
+        modern_error(conn, id, -32_022, "Unsupported protocol version", %{
+          "supported" => @supported_protocol_versions,
+          "requested" => safe_header_label(version)
+        })
+
+      true ->
+        modern_dispatch(conn, params, id)
     end
+  end
+
+  defp modern_dispatch(conn, %{"jsonrpc" => "2.0", "method" => method} = params, id)
+       when method in @modern_removed_methods do
+    _ = params
+
+    conn
+    |> put_status(404)
+    |> send_jsonrpc_error(
+      id,
+      -32_601,
+      "Method not found: #{tool_name_label(method)} was removed in #{@modern_era_floor}"
+    )
+  end
+
+  defp modern_dispatch(conn, %{"jsonrpc" => "2.0", "id" => _id, "method" => method} = params, id) do
+    case dispatch(conn, method, params["params"] || %{}) do
+      {:ok, result} ->
+        json(conn, %{"jsonrpc" => "2.0", "id" => id, "result" => modern_result(result)})
+
+      # An unrecognised method is 404 on HTTP in this era, not a 200 carrying
+      # an error — the status is how a dual-era client tells a modern server
+      # from a legacy one without parsing the body.
+      {:error, -32_601, message} ->
+        conn |> put_status(404) |> send_jsonrpc_error(id, -32_601, message)
+
+      {:error, code, message} ->
+        send_jsonrpc_error(conn, id, code, message)
+    end
+  end
+
+  # Notification: no id, so no response. `_meta` still had to validate above.
+  defp modern_dispatch(conn, %{"jsonrpc" => "2.0", "method" => _method}, _id) do
+    send_resp(conn, 202, "")
+  end
+
+  defp modern_dispatch(conn, _params, id) do
+    send_jsonrpc_error(conn, id, -32_600, "Invalid Request")
+  end
+
+  # Every modern result MUST carry `resultType`, and SHOULD identify the server
+  # in `_meta` — both exist so a stateless request is self-describing, with no
+  # handshake to have established either.
+  defp modern_result(result) when is_non_struct_map(result) do
+    result
+    |> Map.put_new("resultType", "complete")
+    |> Map.update("_meta", %{@meta_server_info => @server_info}, fn meta ->
+      Map.put_new(meta, @meta_server_info, @server_info)
+    end)
+  end
+
+  defp modern_error(conn, id, code, message, data \\ nil) do
+    error =
+      %{"code" => code, "message" => message}
+      |> then(&if data, do: Map.put(&1, "data", data), else: &1)
+
+    conn
+    |> put_status(400)
+    |> json(%{"jsonrpc" => "2.0", "id" => id, "error" => error})
   end
 
   defp do_handle(conn, %{"jsonrpc" => "2.0", "id" => id, "method" => method} = params) do
@@ -128,6 +302,15 @@ defmodule EngramWeb.McpController do
   def supported_protocol_versions, do: @supported_protocol_versions
 
   @doc """
+  Revisions a LEGACY `initialize` handshake may be answered with.
+
+  Excludes the modern era: `2026-07-28` has no handshake, so answering one
+  with it hands the client a revision it cannot speak.
+  """
+  @spec legacy_protocol_versions() :: [String.t(), ...]
+  def legacy_protocol_versions, do: @legacy_protocol_versions
+
+  @doc """
   The revision to answer a handshake with.
 
   Per the lifecycle spec: echo the requested version when we support it,
@@ -137,16 +320,16 @@ defmodule EngramWeb.McpController do
   """
   @spec negotiate_protocol_version(term()) :: String.t()
   def negotiate_protocol_version(requested) when is_binary(requested) do
-    if requested in @supported_protocol_versions,
+    if requested in @legacy_protocol_versions,
       do: requested,
-      else: List.first(@supported_protocol_versions)
+      else: List.first(@legacy_protocol_versions)
   end
 
   def negotiate_protocol_version(nil), do: @default_protocol_version
 
   # A non-string version is a malformed request, not a legacy client, so it
   # gets the newest rather than the floor.
-  def negotiate_protocol_version(_other), do: List.first(@supported_protocol_versions)
+  def negotiate_protocol_version(_other), do: List.first(@legacy_protocol_versions)
 
   @doc """
   Structured metadata for the `mcp_handshake` log line.
@@ -275,6 +458,20 @@ defmodule EngramWeb.McpController do
   # `PreAuthRateLimit` (600/60s) is what bounds ping volume.
   defp dispatch(_conn, "ping", _params) do
     {:ok, %{}}
+  end
+
+  # MUST be implemented in `2026-07-28`. It is the modern replacement for the
+  # information `initialize` used to return, and the probe a dual-era client
+  # uses on stdio to decide which era a server speaks.
+  defp dispatch(_conn, "server/discover", _params) do
+    {:ok,
+     %{
+       "supportedVersions" => @supported_protocol_versions,
+       "capabilities" => @capabilities,
+       "instructions" =>
+         "Engram is a personal knowledge base. Tools read and write notes in " <>
+           "a vault; pass vault_id (a name or UUID) on every vault-scoped call."
+     }}
   end
 
   defp dispatch(_conn, "tools/list", _params) do

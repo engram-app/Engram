@@ -38,7 +38,7 @@ defmodule EngramWeb.McpVersionNegotiationTest do
 
   describe "negotiation" do
     test "echoes a supported version the client asked for", %{conn: conn} do
-      for version <- McpController.supported_protocol_versions() do
+      for version <- McpController.legacy_protocol_versions() do
         assert initialize(conn, %{"protocolVersion" => version}) == version
       end
     end
@@ -46,13 +46,13 @@ defmodule EngramWeb.McpVersionNegotiationTest do
     test "structured output is reachable: 2025-06-18 is supported" do
       # outputSchema / structuredContent landed in this revision. Announcing an
       # older one makes the whole feature dead weight for a conformant client.
-      assert "2025-06-18" in McpController.supported_protocol_versions()
+      assert "2025-06-18" in McpController.legacy_protocol_versions()
     end
 
     test "answers the newest supported version when the client asks for one we lack", %{
       conn: conn
     } do
-      newest = List.first(McpController.supported_protocol_versions())
+      newest = List.first(McpController.legacy_protocol_versions())
 
       assert initialize(conn, %{"protocolVersion" => "2099-01-01"}) == newest
       assert initialize(conn, %{"protocolVersion" => "gibberish"}) == newest
@@ -69,7 +69,7 @@ defmodule EngramWeb.McpVersionNegotiationTest do
       # "2024-11-05"] and ABORT on anything else. Dropping it from the surface
       # meant they asked for 2024-11-05, were answered 2025-06-18, and stopped
       # connecting — broken by an upgrade they never requested.
-      assert "2024-11-05" in McpController.supported_protocol_versions()
+      assert "2024-11-05" in McpController.legacy_protocol_versions()
     end
 
     test "a legacy client is echoed its own version, not upgraded", %{conn: conn} do
@@ -102,14 +102,14 @@ defmodule EngramWeb.McpVersionNegotiationTest do
     end
 
     test "a non-string version does not crash the handshake", %{conn: conn} do
-      newest = List.first(McpController.supported_protocol_versions())
+      newest = List.first(McpController.legacy_protocol_versions())
 
       assert initialize(conn, %{"protocolVersion" => 20_250_618}) == newest
       assert initialize(conn, %{"protocolVersion" => %{"a" => 1}}) == newest
     end
 
     test "the version list is newest-first and has no duplicates" do
-      versions = McpController.supported_protocol_versions()
+      versions = McpController.legacy_protocol_versions()
 
       assert versions == versions |> Enum.uniq() |> Enum.sort(:desc)
     end
@@ -127,7 +127,7 @@ defmodule EngramWeb.McpVersionNegotiationTest do
       meta = McpController.handshake_metadata(%{"protocolVersion" => "2099-01-01"})
 
       assert meta[:mcp_protocol_requested] == "2099-01-01"
-      assert meta[:mcp_protocol_served] == List.first(McpController.supported_protocol_versions())
+      assert meta[:mcp_protocol_served] == List.first(McpController.legacy_protocol_versions())
     end
   end
 
