@@ -9,6 +9,19 @@
 // Own module (mirrors sentry.ts) so main.tsx's inline call site stays a
 // one-liner and this is importable/testable without pulling in main.tsx's
 // module-scope createRoot(...).render(...) side effect.
+// posthog-js merges its own page-info properties ($current_url, $pathname,
+// $host, $referrer, $referring_domain, $initial_current_url,
+// $session_entry_url, ...) into EVERY capture(), regardless of
+// autocapture/capture_pageview settings — vault routes are /v/:slug where
+// slug embeds the vault name in plaintext, so this would leak it. Match on
+// shape (key name or URL-looking value), not an exact-name list: posthog-js
+// can add a differently-named URL property in a future version and a
+// fixed-name denylist would silently stop covering it.
+function isUrlLike(key: string, value: unknown): boolean {
+	if (/url|referr|pathname|host/i.test(key)) return true;
+	return typeof value === "string" && /^https?:\/\//i.test(value);
+}
+
 export async function initAnalytics(key: string): Promise<void> {
 	if (!key) return;
 
@@ -27,5 +40,16 @@ export async function initAnalytics(key: string): Promise<void> {
 		disable_session_recording: true,
 		// Honor the browser's DNT signal as belt-and-suspenders.
 		respect_dnt: true,
+		// Fail-closed strip of any URL-bearing property the SDK attaches on
+		// its own — see isUrlLike above. Every funnel event already carries
+		// step/vault_id/client explicitly, so nothing of value is lost.
+		sanitize_properties: (properties, _event) => {
+			const clean: Record<string, unknown> = {};
+			for (const [propKey, propValue] of Object.entries(properties)) {
+				if (isUrlLike(propKey, propValue)) continue;
+				clean[propKey] = propValue;
+			}
+			return clean;
+		},
 	});
 }
