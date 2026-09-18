@@ -976,6 +976,15 @@ if key = System.get_env("POSTHOG_API_KEY") do
     posthog_host: System.get_env("POSTHOG_HOST", "https://us.i.posthog.com")
 end
 
+# PostHog erasure (Engram.Observability.PostHog.delete_person/1), called from
+# account hard-delete (GDPR Art. 17). Deliberately a SEPARATE key from
+# POSTHOG_API_KEY above: that one is capture-only and must stay read-only;
+# person-delete needs person:write scope. admin_config/0 no-ops when either
+# var is unset (self-host, dev).
+config :engram,
+  posthog_erasure_api_key: System.get_env("POSTHOG_ERASURE_API_KEY"),
+  posthog_project_id: System.get_env("POSTHOG_PROJECT_ID")
+
 # Pyroscope continuous CPU profiling. Same opt-in shape as Sentry/PostHog:
 # the worker's child_spec/1 returns :ignore when any of the three required
 # env vars is missing, so dev/test/self-host emit no profiling traffic and

@@ -401,4 +401,87 @@ defmodule Engram.Accounts.LifecycleTest do
       assert milestone.meta[:loki_ship] == true
     end
   end
+
+  describe "hard_delete/2 PostHog erasure" do
+    setup do
+      prev_key = Application.get_env(:engram, :posthog_erasure_api_key)
+      prev_project = Application.get_env(:engram, :posthog_project_id)
+      prev_host = Application.get_env(:engram, :posthog_host)
+
+      bypass = Bypass.open()
+      Application.put_env(:engram, :posthog_erasure_api_key, "phx_test_key")
+      Application.put_env(:engram, :posthog_project_id, "1")
+      Application.put_env(:engram, :posthog_host, "http://localhost:#{bypass.port}")
+
+      on_exit(fn ->
+        if is_nil(prev_key),
+          do: Application.delete_env(:engram, :posthog_erasure_api_key),
+          else: Application.put_env(:engram, :posthog_erasure_api_key, prev_key)
+
+        if is_nil(prev_project),
+          do: Application.delete_env(:engram, :posthog_project_id),
+          else: Application.put_env(:engram, :posthog_project_id, prev_project)
+
+        if is_nil(prev_host),
+          do: Application.delete_env(:engram, :posthog_host),
+          else: Application.put_env(:engram, :posthog_host, prev_host)
+      end)
+
+      {:ok, bypass: bypass}
+    end
+
+    test "hard_delete removes the PostHog person", %{bypass: bypass} do
+      user = insert(:user, external_id: nil, email: "sabio@web.de")
+
+      # PostHog deletes by person UUID, so the flow is: look up by
+      # distinct_id, then DELETE that uuid with delete_events=true. No
+      # external_id here, so only the analytics-id lookup fires.
+      Bypass.expect_once(bypass, "GET", "/api/projects/1/persons/", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"results":[{"id":"00000000-0000-0000-0000-0000000000ab"}]}))
+      end)
+
+      Bypass.expect_once(
+        bypass,
+        "DELETE",
+        "/api/projects/1/persons/00000000-0000-0000-0000-0000000000ab/",
+        fn conn ->
+          Plug.Conn.resp(conn, 204, "")
+        end
+      )
+
+      assert :ok = Lifecycle.hard_delete(user, :user)
+    end
+
+    test "hard_delete tolerates a person that does not exist", %{bypass: bypass} do
+      user = insert(:user, external_id: nil, email: "gone@example.com")
+
+      Bypass.expect_once(bypass, "GET", "/api/projects/1/persons/", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"results":[]}))
+      end)
+
+      # A missing person is success, exactly like the Clerk 404 case.
+      assert :ok = Lifecycle.hard_delete(user, :user)
+    end
+
+    test "hard_delete also erases the legacy Clerk-id-keyed person", %{bypass: bypass} do
+      user = insert(:user, external_id: "user_clerk_legacy", email: "legacy@example.com")
+
+      expect(Engram.Auth.Clerk.ApiMock, :delete_user, fn _ -> :ok end)
+
+      # Both the analytics-id lookup and the legacy Clerk-id lookup hit
+      # persons/ — Bypass.expect (not expect_once) tolerates either order
+      # and both calls.
+      Bypass.expect(bypass, "GET", "/api/projects/1/persons/", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"results":[]}))
+      end)
+
+      assert :ok = Lifecycle.hard_delete(user, :user)
+    end
+  end
 end

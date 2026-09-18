@@ -207,6 +207,8 @@ Each block is opt-in: unset → no-op (dev/test/self-host emit nothing).
 | `RELEASE_SHA` | unset | Sentry release tag — must match `getsentry/action-release` (:770). |
 | `POSTHOG_API_KEY` | unset | Server-side PostHog capture (:794). |
 | `POSTHOG_HOST` | `https://us.i.posthog.com` | PostHog ingest host (:797). |
+| `POSTHOG_ERASURE_API_KEY` | unset | Separate, write-scoped PostHog key for `Engram.Observability.PostHog.delete_person/1`, called from account hard-delete (GDPR Art. 17). Deliberately not `POSTHOG_API_KEY` — that one stays capture-only/read-only (:985). |
+| `POSTHOG_PROJECT_ID` | unset | PostHog project id for the erasure API (`/api/projects/:id/persons/`). Erasure no-ops when either this or `POSTHOG_ERASURE_API_KEY` is unset — self-host/dev (:986). |
 | `GRAFANA_PYROSCOPE_URL` | unset | Enables continuous CPU profiling (:812). |
 | `GRAFANA_PYROSCOPE_USERNAME` | — (required if Pyroscope URL set, :817) | Pyroscope username. |
 | `GRAFANA_AGENT_TOKEN` | — (required if Pyroscope URL set, :819) | Shared Grafana Cloud token (metrics/logs/traces/profiles write). |

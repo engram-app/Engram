@@ -88,6 +88,46 @@ defmodule Engram.Observability.PostHog do
   defp to_distinct_id(id) when is_binary(id), do: id
 
   @doc """
+  Delete a PostHog person and their events by distinct_id.
+
+  Called from account erasure. A person that does not exist is SUCCESS, not an
+  error — same tolerance as the Clerk delete, which already treats 404 as done.
+  Requires a personal API key with person:write scope; the capture key cannot
+  delete.
+  """
+  @spec delete_person(String.t()) :: :ok
+  def delete_person(distinct_id) when is_binary(distinct_id) do
+    with {key, host, project} <- admin_config(),
+         {:ok, %{status: 200, body: %{"results" => [%{"id" => id} | _]}}} <-
+           Req.get("#{host}/api/projects/#{project}/persons/",
+             params: [distinct_id: distinct_id],
+             auth: {:bearer, key}
+           ) do
+      _ =
+        Req.delete("#{host}/api/projects/#{project}/persons/#{id}/",
+          params: [delete_events: true],
+          auth: {:bearer, key}
+        )
+
+      :ok
+    else
+      _ -> :ok
+    end
+  end
+
+  defp admin_config do
+    key = Application.get_env(:engram, :posthog_erasure_api_key)
+    project = Application.get_env(:engram, :posthog_project_id)
+
+    if is_binary(key) and byte_size(key) > 0 and is_binary(project) and byte_size(project) > 0 do
+      host = Application.get_env(:engram, :posthog_host, "https://us.i.posthog.com")
+      {key, host, project}
+    else
+      :disabled
+    end
+  end
+
+  @doc """
   Pseudonymous analytics identifier for an email address.
 
   Keyed, not a bare digest: an email is a low-entropy enumerable input, so an
