@@ -269,6 +269,113 @@ defmodule EngramWeb.McpModernEraTest do
     end
   end
 
+  describe "notifications never get a response" do
+    test "a removed method sent as a NOTIFICATION is acknowledged, not answered", %{conn: conn} do
+      # JSON-RPC: "The receiver MUST NOT send a response" to a notification,
+      # and MCP adds "the ID MUST NOT be null". The removed-methods clause
+      # matched on method alone, so it answered a notification with a 404 whose
+      # body carried `"id": null` — two MUSTs broken, and nothing the sender
+      # could act on since it was not waiting for a reply.
+      resp =
+        conn
+        |> put_req_header("mcp-protocol-version", @modern)
+        |> post("/api/mcp", %{
+          "jsonrpc" => "2.0",
+          "method" => "notifications/roots/list_changed",
+          "params" => %{"_meta" => modern_meta()}
+        })
+
+      assert resp.status == 202
+      assert resp.resp_body == ""
+    end
+
+    test "a removed method sent as a REQUEST still 404s", %{conn: conn} do
+      resp = post_modern(conn, "ping")
+
+      assert resp.status == 404
+      assert json_response(resp, 404)["error"]["code"] == -32_601
+    end
+
+    test "an ordinary notification is still acknowledged", %{conn: conn} do
+      resp =
+        conn
+        |> put_req_header("mcp-protocol-version", @modern)
+        |> post("/api/mcp", %{
+          "jsonrpc" => "2.0",
+          "method" => "notifications/initialized",
+          "params" => %{"_meta" => modern_meta()}
+        })
+
+      assert resp.status == 202
+    end
+  end
+
+  describe "the declared version picks the era, not the shape of _meta" do
+    test "modern _meta declaring a legacy revision gets a legacy-shaped result", %{conn: conn} do
+      # A client can carry modern per-request metadata while asking for a
+      # revision that has no resultType and no caching model. Serving it a
+      # modern shape answers in a dialect it did not ask for; the extra keys
+      # are ignorable, but the era is the client's to declare.
+      result =
+        conn
+        |> put_req_header("mcp-protocol-version", "2025-06-18")
+        |> post("/api/mcp", %{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "tools/list",
+          "params" => %{
+            "_meta" => %{
+              @meta_version => "2025-06-18",
+              @meta_caps => %{}
+            }
+          }
+        })
+        |> json_response(200)
+        |> Map.fetch!("result")
+
+      refute Map.has_key?(result, "resultType")
+      refute Map.has_key?(result, "ttlMs")
+      assert length(result["tools"]) == 21
+    end
+
+    test "a legacy-declared request is not held to modern _meta requirements", %{conn: conn} do
+      # `clientCapabilities` is REQUIRED only in the modern era. A client that
+      # names 2025-06-18 and omits it is well-formed for the revision it asked
+      # for, so deciding the era AFTER validating modern `_meta` rejected a
+      # valid legacy request with -32602.
+      result =
+        conn
+        |> post("/api/mcp", %{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "tools/list",
+          "params" => %{"_meta" => %{@meta_version => "2025-06-18"}}
+        })
+        |> json_response(200)
+        |> Map.fetch!("result")
+
+      assert length(result["tools"]) == 21
+      refute Map.has_key?(result, "resultType")
+    end
+
+    test "an unsupported version is still -32022 even though it is not modern", %{conn: conn} do
+      # The era check must not swallow this: a client declaring a version we
+      # do not implement needs the list of what we do, whichever era it is.
+      resp =
+        conn
+        |> post("/api/mcp", %{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "tools/list",
+          "params" => %{"_meta" => %{@meta_version => "1900-01-01", @meta_caps => %{}}}
+        })
+        |> json_response(400)
+
+      assert resp["error"]["code"] == -32_022
+      assert resp["error"]["data"]["supported"] != []
+    end
+  end
+
   describe "unknown methods" do
     test "are -32601, not -32600", %{conn: conn} do
       assert json_response(post_modern(conn, "nope/nope"), 404)["error"]["code"] == -32_601
