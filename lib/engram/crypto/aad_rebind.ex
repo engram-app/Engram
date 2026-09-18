@@ -81,8 +81,22 @@ defmodule Engram.Crypto.AadRebind do
 
   # ── internals ───────────────────────────────────────────────────────────────
 
+  # `with_tenant/2`, NOT a bare `Repo.transaction`: every tenant-owned read
+  # below runs inside this block, and unscoped under an enforced policy all
+  # three were filtered to nothing — the user's legacy `notes` and `vaults`
+  # came back `[]` and the legacy `attachments` count came back 0.
+  #
+  # With all three empty and the DEK wrap already v2, `rebind_locked_user/1`
+  # concluded nothing had changed and reported `:skipped` for a user who still
+  # held legacy rows. The operator drain log then declared the fleet rebound
+  # while legacy envelopes remained, and the next drain skipped them again for
+  # the same reason — the failure is stable, not transient.
+  #
+  # The `users` reads below keep `skip_tenant_check: true`: that table carries
+  # no policy, and the option only suppresses Engram's application-level
+  # tripwire (it sets no Postgres state and is not a scope).
   defp do_rebind(user_id) do
-    Repo.transaction(fn ->
+    Repo.with_tenant(user_id, fn ->
       locked =
         from(u in User, where: u.id == ^user_id, lock: "FOR UPDATE")
         |> Repo.one(skip_tenant_check: true)
@@ -177,7 +191,7 @@ defmodule Engram.Crypto.AadRebind do
         where: n.user_id == ^user_id and n.dek_version == ^legacy_version,
         select: n
       )
-      |> Repo.all(skip_tenant_check: true)
+      |> Repo.all()
 
     Enum.reduce_while(rows, {:ok, 0}, fn note, {:ok, n} ->
       case rebind_note(note, dek) do
@@ -206,10 +220,18 @@ defmodule Engram.Crypto.AadRebind do
   `Engram.Workers.BackfillCrdtState`, which cannot seed a snapshot onto one --
   can migrate it in place instead of skipping it (#1341).
 
-  Caller must already be inside a transaction scoped to the note's owner; the
-  UPDATE is fenced on the row still being legacy, so a concurrent migration
-  makes this a no-op rather than a double-rebind. Returns `:ok`, `:stale` when
-  the fence missed, or `{:error, reason}` when a column will not decrypt.
+  Caller must already be inside `Repo.with_tenant/2` for the note's owner — a
+  bare transaction is NOT enough. The UPDATE below carries no
+  `skip_tenant_check` and `notes` enforces a tenant policy, so with no tenant
+  in force it is filtered to zero rows and returns `:stale`, which reads as a
+  lost race rather than the scoping mistake it actually is. Both callers
+  comply: `rebind_user_notes/1` through `do_rebind/1`, and
+  `Workers.BackfillCrdtState` through its own `with_tenant/2` block.
+
+  The UPDATE is fenced on the row still being legacy, so a concurrent
+  migration makes this a no-op rather than a double-rebind. Returns `:ok`,
+  `:stale` when the fence missed, or `{:error, reason}` when a column will not
+  decrypt.
   """
   @spec rebind_note(Note.t(), binary()) :: :ok | :stale | {:error, term()}
   def rebind_note(%Note{id: id} = note, dek) do
@@ -238,22 +260,19 @@ defmodule Engram.Crypto.AadRebind do
       {count, _} =
         from(n in Note, where: n.id == ^id and n.dek_version == ^legacy_version)
         |> Repo.update_all(
-          [
-            set: [
-              content_ciphertext: content_ct,
-              content_nonce: content_n,
-              title_ciphertext: title_ct,
-              title_nonce: title_n,
-              path_ciphertext: path_ct,
-              path_nonce: path_n,
-              folder_ciphertext: folder_ct,
-              folder_nonce: folder_n,
-              tags_ciphertext: tags_ct,
-              tags_nonce: tags_n,
-              dek_version: @target_version
-            ]
-          ],
-          skip_tenant_check: true
+          set: [
+            content_ciphertext: content_ct,
+            content_nonce: content_n,
+            title_ciphertext: title_ct,
+            title_nonce: title_n,
+            path_ciphertext: path_ct,
+            path_nonce: path_n,
+            folder_ciphertext: folder_ct,
+            folder_nonce: folder_n,
+            tags_ciphertext: tags_ct,
+            tags_nonce: tags_n,
+            dek_version: @target_version
+          ]
         )
 
       if count == 1, do: :ok, else: :stale
@@ -272,7 +291,7 @@ defmodule Engram.Crypto.AadRebind do
         where: a.user_id == ^user_id and a.dek_version == ^legacy_version,
         select: count(a.id)
       )
-      |> Repo.one(skip_tenant_check: true)
+      |> Repo.one()
       |> case do
         nil -> 0
         n when is_integer(n) -> n
@@ -324,7 +343,7 @@ defmodule Engram.Crypto.AadRebind do
         where: v.user_id == ^user_id and v.dek_version == ^legacy_version,
         select: v
       )
-      |> Repo.all(skip_tenant_check: true)
+      |> Repo.all()
 
     Enum.reduce_while(rows, {:ok, 0}, fn vault, {:ok, n} ->
       case rebind_vault(vault, dek) do
@@ -341,14 +360,11 @@ defmodule Engram.Crypto.AadRebind do
       {1, _} =
         from(v in Vault, where: v.id == ^id)
         |> Repo.update_all(
-          [
-            set: [
-              name_ciphertext: ct,
-              name_nonce: n,
-              dek_version: @target_version
-            ]
-          ],
-          skip_tenant_check: true
+          set: [
+            name_ciphertext: ct,
+            name_nonce: n,
+            dek_version: @target_version
+          ]
         )
 
       :ok
