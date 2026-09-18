@@ -292,8 +292,10 @@ defmodule Engram.Observability.EmittersTest do
       assert body["properties"]["paddle_subscription_id"] == "sub_ABC"
     end
 
-    test "user without external_id is dropped silently (self-host path)" do
-      user = insert(:user, external_id: nil)
+    test "user with no email is dropped silently (nothing to hash into an analytics id)" do
+      # `email` is NOT NULL at the DB level (structure.sql), so an empty
+      # string — not nil — is the reachable "no email" shape for a real row.
+      user = insert(:user, email: "")
       sub = insert(:subscription, user: user, tier: "starter")
 
       :ok =
@@ -306,6 +308,38 @@ defmodule Engram.Observability.EmittersTest do
         )
 
       refute_receive {:posthog_body, _}, 100
+    end
+
+    # The distinct_id used to BE the Clerk external_id, so a user without one
+    # (self-host, pre-Clerk legacy rows) had nothing to key the event on and
+    # the guard dropped it. After the rekey to analytics_id(email), the
+    # external_id is never read — a missing external_id is no longer a
+    # reason to drop the event, only a missing email is (see the test
+    # above). This pins that behavior change on purpose: it is not
+    # self-host-safe by itself, only :posthog_key being unset makes
+    # self-host a no-op (Engram.Observability.PostHog.capture/3 short-
+    # circuits before any network call when :posthog_key is unset — see
+    # config().
+    test "user with an email but no external_id now emits subscription_started", %{bypass: bypass} do
+      user = insert(:user, external_id: nil)
+
+      sub =
+        insert(:subscription, user: user, tier: "starter", paddle_subscription_id: "sub_no_ext")
+
+      expect_capture(bypass)
+
+      :ok =
+        PostHogForwarder.forward_paddle_event(
+          %{
+            "event_type" => "subscription.activated",
+            "data" => %{"items" => [%{"price" => %{"id" => "pri_x"}}]}
+          },
+          sub
+        )
+
+      assert_receive {:posthog_body, body}, 1_500
+      assert body["event"] == "subscription_started"
+      assert body["distinct_id"] == PostHog.analytics_id(user.email)
     end
 
     test "non-activated event types no-op (subscription.updated, subscription.canceled, ignored)" do
