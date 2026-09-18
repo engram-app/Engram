@@ -62,13 +62,16 @@ defmodule Engram.AccountsPurgeVaultsRlsTest do
     vault = insert(:vault, user: user)
     _second_vault = insert(:vault, user: user)
 
-    # A bystander. The assertion below counts jobs per user_id, so enqueueing
-    # for EVERY user's vaults (an over-broad regression, e.g. dropping the
-    # `user_id` predicate) fails here rather than passing green.
+    # A bystander, whose VAULT id is what the assertion keys on. Keying it on
+    # the bystander's user_id would pin nothing: the enqueue passes the outer
+    # `user_id`, not `v.user_id`, so every job carries the purged user's id by
+    # construction and that count is structurally unable to be non-zero. The
+    # vault id does move — an over-broad read that loses its `user_id`
+    # predicate enqueues a job carrying THIS vault's id.
     other = insert(:user, role: "member")
-    _other_vault = insert(:vault, user: other)
+    other_vault = insert(:vault, user: other)
 
-    %{user: user, vault: vault, other: other}
+    %{user: user, vault: vault, other_vault: other_vault}
   end
 
   describe "purge_user_vaults/1 under enforced RLS" do
@@ -85,26 +88,30 @@ defmodule Engram.AccountsPurgeVaultsRlsTest do
     end
 
     test "every owned vault gets a forced CleanupVault, and only theirs",
-         %{user: user, other: other} do
-      count_for = fn id ->
+         %{user: user, other_vault: other_vault} do
+      # Worker-scoped: a bare `user_id` match would also count any other job
+      # this path later enqueues keyed on the same user.
+      count = fn field, value ->
         Repo.one(
           from(j in "oban_jobs",
-            where: fragment("? ->> 'user_id' = ?", j.args, ^id),
+            where:
+              j.worker == "Engram.Workers.CleanupVault" and
+                fragment("? ->> ? = ?", j.args, ^field, ^value),
             select: count(j.id)
-          ),
-          skip_tenant_check: true
+          )
         )
       end
 
       outcome =
         as_prod_role(fn ->
           Accounts.purge_user_vaults(user)
-          {count_for.(user.id), count_for.(other.id)}
+          {count.("user_id", user.id), count.("vault_id", other_vault.id)}
         end)
 
-      # Counting BOTH users pins the two failure directions at once: `{0, _}`
-      # is the filtered-read bug this file exists for, and `{_, 1}` is an
-      # over-broad enumeration that lost its `user_id` predicate.
+      # The two elements pin opposite failures. `{0, _}` is the filtered-read
+      # bug this file exists for. `{_, 1}` is an over-broad enumeration that
+      # lost its `user_id` predicate — caught via the bystander's VAULT id,
+      # because every job carries the purged user's id regardless.
       assert {:returned, {2, 0}} = outcome,
              """
              expected 2 CleanupVault jobs for the purged user and 0 for the

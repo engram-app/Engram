@@ -792,9 +792,17 @@ defmodule Engram.Accounts do
   This previously read with `skip_tenant_check: true`, and the docstring
   claimed that "bypasses RLS". It does not: that option only silences the
   application-level `prepare_query/3` tripwire and sets no Postgres session
-  state. See docs/context/skip-tenant-check-audit.md. That was only ever live
-  where the app connects as a role the policy applies to (staging, self-host);
-  prod connects as its BYPASSRLS migrator and was never affected.
+  state. See docs/context/skip-tenant-check-audit.md.
+
+  WHETHER THIS WAS LIVE IN PROD IS UNVERIFIED, and the repo contradicts itself.
+  `docs/context/rls-cutover-breaks-api-key-auth.md` says prod connects as a
+  BYPASSRLS migrator and was therefore unaffected, but `Engram.Onboarding`
+  records `engram_admin` as `rolbypassrls=false`, and
+  `docs/context/migrations-force-rls-data-dml.md` says the prod migrator has
+  neither SUPERUSER nor BYPASSRLS. If those two are right, admin-deleted users'
+  vaults were never reaped in prod either, which is a data-retention question
+  rather than a footnote. `Engram.Repo.TenancyGuard` logs which branch fired at
+  boot; settle it from that before anyone repeats the reassuring version.
 
   The enqueue runs INSIDE the tenant transaction, and a failed insert raises.
   Both matter, because `Oban.insert/1` returns `{:error, changeset}` rather
@@ -826,14 +834,21 @@ defmodule Engram.Accounts do
         end
       end)
 
+      length(vaults)
+    end)
+    |> tap(fn count ->
+      # Logged AFTER the transaction returns, not inside it. Inside, the line
+      # asserts "enqueued N" while those rows are still uncommitted, so a
+      # connection drop or statement timeout before COMMIT leaves a log claiming
+      # jobs that do not exist — the same report-success-while-doing-nothing
+      # shape this function exists to remove, one layer up.
+      #
       # An irreversible admin action that previously did nothing at all, so it
       # says how much it did.
       Logger.info(
-        "purge_user_vaults enqueued #{length(vaults)} CleanupVault job(s)",
+        "purge_user_vaults enqueued #{count} CleanupVault job(s)",
         Engram.Logger.Metadata.with_category(:info, :lifecycle, user_id: user_id)
       )
-
-      length(vaults)
     end)
   end
 end
