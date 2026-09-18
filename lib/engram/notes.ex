@@ -6521,15 +6521,28 @@ defmodule Engram.Notes do
     # `note_count` of 0 forever. Two "count the notes" predicates that
     # disagree is the bug; keep them identical.
     #
-    # `skip_tenant_check:` rather than `Repo.with_tenant/2`: outside a
-    # transaction that helper opens BEGIN + set_config + COMMIT, and this
-    # runs on every genesis insert of a bulk first sync. The query already
-    # filters user_id AND vault_id, so the tenant round-trip buys nothing.
+    # `with_tenant/2`, NOT `skip_tenant_check:`. An earlier version of this
+    # comment argued the opposite — "the query already filters user_id AND
+    # vault_id, so the tenant round-trip buys nothing" — which inverts the
+    # order of operations: the policy filters FIRST, so the app-level
+    # predicate never gets a chance to be correct. Unscoped, this probe
+    # returned `[]`, `length(ids) == 1` was never true, and the broadcast
+    # never fired — stranding the `/link` success page and onboarding's
+    # install-the-plugin step forever, which is the exact bug this event was
+    # ADDED to fix.
+    #
+    # The cost that comment was guarding against is real but small, and
+    # `with_tenant/2` is RE-ENTRANT for the same tenant: the REST upsert
+    # caller is already inside the block opened in `upsert_note/4`, so it pays
+    # nothing. Only the CRDT genesis caller opens a transaction here, and that
+    # one is deliberately post-commit with no tenant in force — which is
+    # precisely why it was the broken caller.
     ids =
-      Repo.all(
-        from(n in scoped_live(user, vault), where: n.kind == "note", select: n.id, limit: 2),
-        skip_tenant_check: true
-      )
+      Repo.with_tenant!(user.id, fn ->
+        Repo.all(
+          from(n in scoped_live(user, vault), where: n.kind == "note", select: n.id, limit: 2)
+        )
+      end)
 
     _ =
       if length(ids) == 1 do

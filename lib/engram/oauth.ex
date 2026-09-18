@@ -978,7 +978,18 @@ defmodule Engram.OAuth do
           select: v.id
         )
 
-      case Repo.all(query, skip_tenant_check: true) do
+      # `vaults` carries FORCE ROW LEVEL SECURITY, so unscoped this returned
+      # `[]`, the length comparison failed, and EVERY selection was rejected as
+      # `:error` — which `mint_authorization_code/4` turns into an
+      # `access_denied` redirect. A user granting a client access to a vault
+      # they own was refused, and the refusal named the wrong cause.
+      #
+      # The ownership predicate above is still the right check and stays; it
+      # simply never got the chance to be correct, because the policy filters
+      # first. Only this multi-vault branch was affected — `:all`
+      # short-circuits above without a query, which is why the existing OAuth
+      # tests (almost all `:all`) never caught it.
+      case Repo.with_tenant!(user.id, fn -> Repo.all(query) end) do
         found when length(found) == length(wanted) -> {:ok, Enum.sort(found)}
         _ -> :error
       end
