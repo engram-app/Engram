@@ -4,10 +4,10 @@ defmodule Engram.Notes.CrdtIndexDoc do
   a CRDT instead of a REST projection (engram-app/engram-workspace#167).
 
   Identity today lives in three places that must agree: `NoteIdMap` in the
-  client, the REST manifest, and the seq cursor. `relay-pattern-audit.md` (engram-workspace repo)
-  traces every drift incident to that split. Relay has no such class because
-  identity converges through the SAME channel as content — a `Y.Map` inside a
-  synced doc. This room is that map.
+  client, the REST manifest, and the seq cursor. `sync-pattern-audit.md` (engram-workspace repo)
+  traces every drift incident to that split. The class disappears when identity
+  converges through the SAME channel as content — a `Y.Map` inside a synced doc.
+  This room is that map.
 
   Doc shape: one `Y.Map` named `filemeta_v0`, `path -> %{note_id, type, hash}`.
   One room per vault rather than per note, so this *improves* the `:global`
@@ -85,9 +85,9 @@ defmodule Engram.Notes.CrdtIndexDoc do
   @doc """
   The `Y.Map` name holding `path -> %{note_id, type, hash}`.
 
-  Matches Relay's `filemeta_v0` (`SyncStore.ts:20`) on purpose: the shape is
-  the part of Relay's design that removes the drift class, and keeping the name
-  makes the correspondence checkable rather than folkloric.
+  `filemeta_v0` is the wire contract shared with the client: a single flat map
+  keyed by path is the shape that removes the drift class, and pinning the name
+  here makes the correspondence checkable rather than folkloric.
   """
   @spec map_name() :: String.t()
   def map_name, do: @map_name
