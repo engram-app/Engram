@@ -15,16 +15,14 @@ afterEach(() => {
 	vi.mocked(posthog.capture).mockClear();
 });
 
-/** A rejected event must (1) never reach PostHog and (2) be reported — and it
- *  must NOT throw into the caller. `track()` used to throw synchronously in
- *  DEV; the e2e suite runs `bun run dev`, so one rejected property was caught
- *  by React's error boundary and replaced the whole page with "Something went
- *  wrong". Asserting "it threw" would enshrine that. Assert the drop, which is
- *  the property that actually matters. */
-function expectRejected(): void {
-	expect(posthog.capture).not.toHaveBeenCalled();
-	expect(mockCapture).toHaveBeenCalledOnce();
-}
+/* A rejected event must (1) never reach PostHog and (2) be reported — and it
+ * must NOT throw into the caller. `track()` used to throw synchronously in
+ * DEV; the e2e suite runs `bun run dev`, so one rejected property was caught
+ * by React's error boundary and replaced the whole page with "Something went
+ * wrong". Asserting "it threw" would enshrine that. Assert the drop, which is
+ * the property that actually matters. The two assertions are repeated per test
+ * rather than shared in a helper: biome's noMisplacedAssertion rejects any
+ * expect() outside an it()/test() body, with no escape for named helpers. */
 
 describe("track property validation", () => {
 	it("allows uuids, enum members and numbers", () => {
@@ -50,14 +48,16 @@ describe("track property validation", () => {
 		],
 	])("rejects %s", (_label, props) => {
 		track("onboarding_step_viewed", props);
-		expectRejected();
+		expect(posthog.capture).not.toHaveBeenCalled();
+		expect(mockCapture).toHaveBeenCalledOnce();
 	});
 
 	it("rejects a declared key whose value is the wrong kind", () => {
 		// `step` is declared as kind "step" for this event; a checkout method
 		// string is the wrong kind for that key, not merely an unknown key.
 		track("onboarding_step_viewed", { step: "card" });
-		expectRejected();
+		expect(posthog.capture).not.toHaveBeenCalled();
+		expect(mockCapture).toHaveBeenCalledOnce();
 	});
 
 	it("accepts a gate_reasons array of GATE_REASONS members", () => {
@@ -73,7 +73,8 @@ describe("track property validation", () => {
 		],
 	])("rejects onboarding_blocked with %s for missing", (_label, props) => {
 		track("onboarding_blocked", props);
-		expectRejected();
+		expect(posthog.capture).not.toHaveBeenCalled();
+		expect(mockCapture).toHaveBeenCalledOnce();
 	});
 
 	it("accepts a checkout tier under checkout_opened", () => {
@@ -83,7 +84,8 @@ describe("track property validation", () => {
 
 	it("rejects a tier value outside CHECKOUT_TIERS", () => {
 		track("checkout_opened", { method: "unknown", tier: "enterprise" });
-		expectRejected();
+		expect(posthog.capture).not.toHaveBeenCalled();
+		expect(mockCapture).toHaveBeenCalledOnce();
 	});
 
 	describe("in production (no dev-throw)", () => {
