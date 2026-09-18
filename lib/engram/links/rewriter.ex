@@ -204,16 +204,27 @@ defmodule Engram.Links.Rewriter do
     end
   end
 
+  # Only the READ is scoped; the decrypt below stays OUTSIDE the scope, the
+  # same split `RewriteNoteLinks.tombstone_old_path/4` documents — a KMS
+  # provider round trip inside the scope would hold the transaction open for
+  # the provider's latency.
+  #
+  # Unscoped this returned nil, so `build_target/5` answered
+  # `{:error, :target_gone}`, which `Workers.RewriteNoteLinks` maps to
+  # `{:discard, :target_gone}`. Oban then threw the rewrite away as a
+  # legitimate terminal state, so every inbound `[[wikilink]]` kept pointing at
+  # the old path permanently, with no error logged and no retry to heal it.
   defp current_path(user, vault, :note, id) do
     row =
-      Repo.one(
-        from(n in Note,
-          where:
-            n.id == ^id and n.user_id == ^user.id and n.vault_id == ^vault.id and
-              n.kind == "note" and is_nil(n.deleted_at)
-        ),
-        skip_tenant_check: true
-      )
+      Repo.with_tenant!(user.id, fn ->
+        Repo.one(
+          from(n in Note,
+            where:
+              n.id == ^id and n.user_id == ^user.id and n.vault_id == ^vault.id and
+                n.kind == "note" and is_nil(n.deleted_at)
+          )
+        )
+      end)
 
     with %Note{} = note <- row,
          {:ok, %{path: path}} when is_binary(path) <- Crypto.maybe_decrypt_note_fields(note, user) do
@@ -223,16 +234,20 @@ defmodule Engram.Links.Rewriter do
     end
   end
 
+  # Scoped for the same reason as the `:note` clause above, and with the same
+  # read-inside / decrypt-outside split; `attachments` is also FORCE ROW LEVEL
+  # SECURITY.
   defp current_path(user, vault, :attachment, id) do
     row =
-      Repo.one(
-        from(a in Attachment,
-          where:
-            a.id == ^id and a.user_id == ^user.id and a.vault_id == ^vault.id and
-              is_nil(a.deleted_at)
-        ),
-        skip_tenant_check: true
-      )
+      Repo.with_tenant!(user.id, fn ->
+        Repo.one(
+          from(a in Attachment,
+            where:
+              a.id == ^id and a.user_id == ^user.id and a.vault_id == ^vault.id and
+                is_nil(a.deleted_at)
+          )
+        )
+      end)
 
     with %Attachment{} = att <- row,
          {:ok, %{path: path}} when is_binary(path) <-
@@ -252,19 +267,25 @@ defmodule Engram.Links.Rewriter do
   """
   @spec source_note_ids(map(), map(), binary(), binary(), pos_integer()) :: [binary()]
   def source_note_ids(user, vault, old_basename_hmac, cursor, limit) do
-    Repo.all(
-      from(l in Engram.Links.NoteLink,
-        where:
-          l.user_id == ^user.id and l.vault_id == ^vault.id and
-            l.target_basename_hmac == ^old_basename_hmac and
-            l.source_note_id > ^cursor,
-        distinct: true,
-        select: l.source_note_id,
-        order_by: [asc: l.source_note_id],
-        limit: ^limit
-      ),
-      skip_tenant_check: true
-    )
+    # Scoped here rather than at the two call sites (`walk/4` and
+    # `Workers.RewriteNoteLinks.run/1`) so both are covered by one guard.
+    # `note_links` carries FORCE ROW LEVEL SECURITY; unscoped this returned
+    # `[]` for a basename that genuinely had referring edges, so the walk
+    # rewrote nothing and terminated as though the work were complete.
+    Repo.with_tenant!(user.id, fn ->
+      Repo.all(
+        from(l in Engram.Links.NoteLink,
+          where:
+            l.user_id == ^user.id and l.vault_id == ^vault.id and
+              l.target_basename_hmac == ^old_basename_hmac and
+              l.source_note_id > ^cursor,
+          distinct: true,
+          select: l.source_note_id,
+          order_by: [asc: l.source_note_id],
+          limit: ^limit
+        )
+      )
+    end)
   end
 
   @doc "Synchronous full walk for a renamed note (spec entry point; the Oban worker chunks the same primitives)."
