@@ -53,7 +53,15 @@ defmodule Engram.Accounts.Export.Streamer do
   per vault. Returns the s3_keys list (one map per part) and the total
   byte size across all parts.
   """
-  @spec run(Schema.t(), keyword()) :: {:ok, [part_map()], non_neg_integer()}
+  # No `@spec`, and it is the tenant scoping below that costs it.
+  # `Repo.with_tenant!/2` unwraps `{:ok, term()}`, so it returns `any()` by
+  # construction — the vault list flows out of it untyped, through the reduce,
+  # into both the parts list and the byte total. Dialyzer's success typing is
+  # therefore `{:ok, [any()], _}`, and with the `:underspecs` flag any spec
+  # narrower than that is reported as `invalid_contract` (it was, on CI, as
+  # `streamer.ex:56:invalid_contract`). The only spec that would match is
+  # `{:ok, [any()], any()}`, which documents nothing the `@doc` above does not
+  # already say. Same reasoning as `Engram.Repo.tenant_tables/0`.
   def run(%Schema{user_id: user_id} = export, _opts) do
     # Scoped per query, NOT by wrapping `run/2`: everything below opens a
     # multipart upload and streams zip bytes to S3, and `with_tenant/2` runs a
