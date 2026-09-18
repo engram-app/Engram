@@ -607,8 +607,11 @@ defmodule Engram.Notes.CrdtCheckpoint do
     :ok
   rescue
     e ->
+      # safe_reason/1, not Exception.message/1: note content is in scope on this
+      # module, and an exception message can carry a row value. Enforced by
+      # Engram.Logger.LogCallComplianceTest.
       Logger.warning(
-        "crdt checkpoint_doc telemetry failed err=#{Exception.message(e)}",
+        "crdt checkpoint_doc telemetry failed err=#{Metadata.safe_reason(e)}",
         Metadata.with_category(:warning, :sync, [])
       )
 
