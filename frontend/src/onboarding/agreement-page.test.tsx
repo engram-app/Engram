@@ -2,7 +2,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { track } from "../analytics/track";
 import AgreementPage from "./agreement-page";
+
+vi.mock("../analytics/track", () => ({ track: vi.fn() }));
+const mockTrack = vi.mocked(track);
 
 const { mutate, statusRef } = vi.hoisted(() => ({
 	mutate: vi.fn().mockResolvedValue({ version: "2026-05-19", accepted_at: "now" }),
@@ -78,6 +82,20 @@ describe("AgreementPage", () => {
 					tos_hash: expect.stringMatching(/^[0-9a-f]{64}$/u),
 					privacy_hash: expect.stringMatching(/^[0-9a-f]{64}$/u),
 				}),
+			),
+		);
+	});
+
+	it("emits onboarding_step_completed for the agreement step on submit", async () => {
+		mockTrack.mockClear();
+		renderPage();
+		fireEvent.click(screen.getByRole("checkbox", { name: /agree/iu }));
+		fireEvent.click(screen.getByRole("button", { name: /continue/iu }));
+
+		await waitFor(() =>
+			expect(mockTrack).toHaveBeenCalledWith(
+				"onboarding_step_completed",
+				expect.objectContaining({ step: "agreement" }),
 			),
 		);
 	});

@@ -46,6 +46,29 @@ describe("track property validation", () => {
 		expect(() => track("onboarding_step_viewed", { step: "card" })).toThrow(/not an allowed/i);
 	});
 
+	it("accepts a gate_reasons array of GATE_REASONS members", () => {
+		track("onboarding_blocked", { missing: ["terms", "subscription"], next_step: "billing" });
+		expect(posthog.capture).toHaveBeenCalledOnce();
+	});
+
+	it.each([
+		["a non-array value", { missing: "terms", next_step: "billing" }],
+		["an array with an unrecognised member", { missing: ["terms", "not_a_reason"], next_step: "billing" }],
+	])("rejects onboarding_blocked with %s for missing", (_label, props) => {
+		expect(() => track("onboarding_blocked", props)).toThrow(/not an allowed/i);
+	});
+
+	it("accepts a checkout tier under checkout_opened", () => {
+		track("checkout_opened", { method: "unknown", tier: "pro" });
+		expect(posthog.capture).toHaveBeenCalledOnce();
+	});
+
+	it("rejects a tier value outside CHECKOUT_TIERS", () => {
+		expect(() => track("checkout_opened", { method: "unknown", tier: "enterprise" })).toThrow(
+			/not an allowed/i,
+		);
+	});
+
 	describe("in production (no dev-throw)", () => {
 		it("drops the event, warns, and reports the violation to Sentry with no value", () => {
 			vi.stubEnv("DEV", false);

@@ -1,10 +1,11 @@
 import obsidianMark from "@lobehub/icons-static-svg/icons/obsidian-color.svg?raw";
 import { FilePlus2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Navigate, useNavigate } from "react-router";
 import { useAutofocus } from "@/hooks/use-autofocus";
 import AuthPanel from "@/layout/auth-panel";
 import { heading } from "@/lib/ui-classes";
+import { track } from "../analytics/track";
 import { setActiveVaultId } from "../api/active-vault";
 import {
 	useCreateVault,
@@ -54,6 +55,7 @@ function VaultStep({
 	const [obsidianCommitted, setObsidianCommitted] = useState<boolean>(
 		profileSaved && savedUsesObsidian,
 	);
+	const mountedAtRef = useRef(Date.now());
 
 	async function pickSource(s: Source) {
 		setSource(s);
@@ -78,6 +80,10 @@ function VaultStep({
 			await setProfile.mutateAsync({ uses_obsidian: true });
 			setObsidianCommitted(true);
 		}
+		// No onboarding_step_completed here: this branch's real milestone is the
+		// plugin's first sync landing, which use-vault-ready-events.ts already
+		// reports as vault_first_sync_completed (with the vault_id this function
+		// doesn't have — that only lives in ObsidianInlinePanel's own hook call).
 		navigate(onboardingDoneTarget(), { replace: true });
 	}
 
@@ -91,6 +97,11 @@ function VaultStep({
 		setActiveVaultId(vault.id);
 		// The welcome note is seeded server-side by `Engram.Vaults.WelcomeNote`
 		// on every vault creation, so there is nothing to write here.
+		track("onboarding_step_completed", {
+			step: "vault",
+			vault_id: vault.id,
+			duration_ms: Date.now() - mountedAtRef.current,
+		});
 		navigate(onboardingDoneTarget(), { replace: true });
 	}
 

@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import AuthPanel from "@/layout/auth-panel";
 import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
+import { track } from "../analytics/track";
 import { useAcceptTerms, useOnboardingStatus } from "../api/queries";
 import { LegalDoc } from "../legal/legal-doc";
 import { loadVersion, sha256Hex } from "../legal/load";
@@ -30,6 +31,7 @@ export default function AgreementPage() {
 	const navigate = useNavigate();
 	const { data } = useOnboardingStatus();
 	const { mutateAsync, isPending } = useAcceptTerms();
+	const mountedAtRef = useRef(Date.now());
 
 	const tosV = data?.current_tos_version;
 	const privV = data?.current_privacy_version;
@@ -52,6 +54,10 @@ export default function AgreementPage() {
 			tos_hash,
 			privacy_version: privV,
 			privacy_hash,
+		});
+		track("onboarding_step_completed", {
+			step: "agreement",
+			duration_ms: Date.now() - mountedAtRef.current,
 		});
 		navigate("/onboard", { replace: true });
 	}

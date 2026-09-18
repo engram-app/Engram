@@ -1,5 +1,6 @@
 import { Socket } from "phoenix";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { track } from "../analytics/track";
 import { getWsBase, joinWsUrl } from "../api/base";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
 
@@ -30,11 +31,16 @@ interface Options {
 export function useVaultReadyEvents({ userId, enabled }: Options): State {
 	const { getToken } = useAuthAdapter();
 	const [state, setState] = useState<State>(INITIAL);
+	// Start of the wait, for vault_first_sync_completed's duration_ms — this is
+	// the one milestone that proves a signup actually produced content, so how
+	// long it took to land is worth carrying along with it.
+	const waitStartedAtRef = useRef(Date.now());
 
 	useEffect(() => {
 		if (!enabled || userId === null || userId === undefined) {
 			return;
 		}
+		waitStartedAtRef.current = Date.now();
 
 		let socket: Socket | null = null;
 		let cancelled = false;
@@ -65,6 +71,13 @@ export function useVaultReadyEvents({ userId, enabled }: Options): State {
 					vaultPopulated: true,
 					vaultId: prev.vaultId ?? payload.vault_id,
 				}));
+				// ponytail: no de-dupe guard against a redelivered broadcast (e.g. a
+				// reconnect replay) double-counting this event — add one if that
+				// shows up in the funnel data as an inflated completion count.
+				track("vault_first_sync_completed", {
+					vault_id: payload.vault_id,
+					duration_ms: Date.now() - waitStartedAtRef.current,
+				});
 			});
 
 			channel.join().receive("error", (resp) => {

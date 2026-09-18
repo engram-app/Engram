@@ -1,5 +1,7 @@
+import { useEffect } from "react";
 import { Navigate, Outlet, useLocation } from "react-router";
 import { type OnboardingStep, useOnboardingStatus } from "../api/queries";
+import { track } from "../analytics/track";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
 import AuthShell from "../layout/auth-shell";
 import LoadingScreen from "../layout/loading-screen";
@@ -22,11 +24,26 @@ export default function OnboardLayout() {
 	const { pathname } = useLocation();
 	const { data, isLoading } = useOnboardingStatus();
 
+	// Computed unconditionally (Hooks can't follow the loading early-return
+	// below), so the effect beneath it can be called unconditionally too.
+	const current = stepFromPath(pathname);
+
+	// Fires once per distinct step, not once per onboarding/status refetch —
+	// this is the signal that would have shown someone stuck on one step
+	// across two visits, so it must key on the step alone, not on query churn.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: deliberately
+	// keyed on `current` only — see comment above.
+	useEffect(() => {
+		if (!current || isLoading || !data || !data.steps.includes(current)) {
+			return;
+		}
+		track("onboarding_step_viewed", { step: current });
+	}, [current]);
+
 	if (isLoading || !data) {
 		return <LoadingScreen />;
 	}
 
-	const current = stepFromPath(pathname);
 	// Step not in the active chain for this account (e.g. /onboard/agreement on
 	// self-host, or /onboard/billing after billing is satisfied) — punt to the
 	// resolver, which sends them to next_step.

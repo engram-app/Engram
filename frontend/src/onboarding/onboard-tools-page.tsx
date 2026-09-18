@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router";
 import { HelpTip } from "@/components/help-tip";
 import { Checkbox } from "@/components/ui/checkbox";
 import AuthPanel from "@/layout/auth-panel";
 import { heading, selectableRow } from "@/lib/ui-classes";
+import { track } from "../analytics/track";
 import { useOnboardingStatus, useSetOnboardingProfile } from "../api/queries";
 import { useIsFreeTier } from "../billing/use-is-free-tier";
 import LoadingScreen from "../layout/loading-screen";
@@ -204,6 +205,7 @@ export default function OnboardToolsPage() {
 	const { data: status, isLoading } = useOnboardingStatus();
 	const setProfile = useSetOnboardingProfile();
 	const isFree = useIsFreeTier();
+	const mountedAtRef = useRef(Date.now());
 
 	if (isLoading || !status) {
 		return <LoadingScreen />;
@@ -228,6 +230,10 @@ export default function OnboardToolsPage() {
 			isFree={isFree}
 			onSubmit={async (tools) => {
 				await setProfile.mutateAsync({ tools });
+				track("onboarding_step_completed", {
+					step: "tools",
+					duration_ms: Date.now() - mountedAtRef.current,
+				});
 				navigate("/onboard/vault", { replace: true });
 			}}
 		/>

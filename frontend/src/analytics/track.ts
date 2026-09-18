@@ -2,9 +2,11 @@ import posthog from "posthog-js";
 import { captureError } from "../sentry";
 import {
 	CHECKOUT_METHODS,
-	ERROR_CODES,
+	CHECKOUT_TIERS,
 	type EngramEvent,
+	ERROR_CODES,
 	EVENT_SCHEMAS,
+	GATE_REASONS,
 	MCP_CLIENTS,
 	ONBOARDING_STEPS,
 	type PropKind,
@@ -24,10 +26,17 @@ function isKind(kind: PropKind, value: unknown): boolean {
 			return typeof value === "string" && (ONBOARDING_STEPS as readonly string[]).includes(value);
 		case "checkout_method":
 			return typeof value === "string" && (CHECKOUT_METHODS as readonly string[]).includes(value);
+		case "tier":
+			return typeof value === "string" && (CHECKOUT_TIERS as readonly string[]).includes(value);
 		case "mcp_client":
 			return typeof value === "string" && (MCP_CLIENTS as readonly string[]).includes(value);
 		case "error_code":
 			return typeof value === "string" && (ERROR_CODES as readonly string[]).includes(value);
+		case "gate_reasons":
+			return (
+				Array.isArray(value) &&
+				value.every((v) => typeof v === "string" && (GATE_REASONS as readonly string[]).includes(v))
+			);
 		case "boolean":
 			return typeof value === "boolean";
 		case "number":

@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useOnboardingStatus } from "../api/queries";
+import { track } from "../analytics/track";
 import { stashPendingAuthorization } from "../oauth/pending-authorization";
 import OnboardLayout from "./onboard-layout";
 
@@ -18,6 +19,9 @@ vi.mock("../theme/theme-toggle", () => ({
 vi.mock("../api/queries", () => ({
 	useOnboardingStatus: vi.fn(),
 }));
+
+vi.mock("../analytics/track", () => ({ track: vi.fn() }));
+const mockTrack = vi.mocked(track);
 
 type Steps = ("agreement" | "billing" | "tools" | "vault")[];
 
@@ -164,5 +168,40 @@ describe("OnboardLayout", () => {
 		renderAt("/onboard/tools", SAAS);
 		fireEvent.click(screen.getByRole("button", { name: /sign out/iu }));
 		expect(logout).toHaveBeenCalled();
+	});
+});
+
+// The blind spot this closes: dgonzalez hit the onboarding wall, came back
+// two days later, hit it again, and left with zero notes — and nothing
+// recorded any of it. `onboarding_step_viewed` is the minimum signal that
+// would have shown someone stuck on one step across two visits.
+describe("OnboardLayout step tracking", () => {
+	afterEach(() => {
+		mockTrack.mockClear();
+	});
+
+	it("emits onboarding_step_viewed for the step named by the URL", () => {
+		renderAt("/onboard/agreement", SAAS);
+		expect(mockTrack).toHaveBeenCalledWith("onboarding_step_viewed", { step: "agreement" });
+	});
+
+	it("does not re-fire on a re-render of the same step", () => {
+		const { rerender } = renderAt("/onboard/tools", SAAS);
+		expect(mockTrack).toHaveBeenCalledTimes(1);
+		rerender(
+			<MemoryRouter initialEntries={["/onboard/tools"]}>
+				<Routes>
+					<Route element={<OnboardLayout />}>
+						<Route path="/onboard/tools" element={<p>tools step</p>} />
+					</Route>
+				</Routes>
+			</MemoryRouter>,
+		);
+		expect(mockTrack).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not emit for a step outside the account's chain (redirected before rendering)", () => {
+		renderAt("/onboard/agreement", SELF);
+		expect(mockTrack).not.toHaveBeenCalled();
 	});
 });
