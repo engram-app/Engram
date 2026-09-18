@@ -4,8 +4,8 @@ defmodule Engram.Notes.CrdtIndexRoomTest do
 
   Today identity lives in three places that have to agree — `NoteIdMap` in the
   client, the REST manifest, and the seq cursor — and every drift incident in
-  `docs/context/relay-pattern-audit.md` traces to that split. Relay has no such
-  class because identity converges through the SAME channel as content, as a
+  `docs/context/sync-pattern-audit.md` traces to that split. The class
+  disappears when identity converges through the SAME channel as content, as a
   `Y.Map` inside a synced doc. This room is the substrate for doing the same.
 
   Scope here is deliberately INERT: the room exists, syncs, and can be observed.
