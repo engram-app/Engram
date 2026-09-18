@@ -175,7 +175,17 @@ config :engram, Oban,
        # ago. Since that row carries the permitted auth-method set, a vendor
        # TIGHTENING its document could not land the change until someone
        # re-authorized. 05:40 keeps it clear of OrphanSweep at 05:00.
-       {"40 5 * * *", Engram.Workers.CimdRefresh}
+       {"40 5 * * *", Engram.Workers.CimdRefresh},
+       # Whole-population CRDT doc bloat measurement (#1706). One aggregate
+       # query over `notes` column lengths — no decrypt, no row walk — so it is
+       # cheap enough to run daily and is the only unbiased view of the
+       # distribution the checkpoint histogram samples.
+       #
+       # 06:10 UTC: clear of every slot above, and deliberately NOT on the hour
+       # or a quarter-hour, which are taken by CleanupDeviceAuthWorker
+       # (`0 * * * *`) and ReconcileEmbeddings (`*/15`). Last in the nightly
+       # chain on purpose — it reads sizes the earlier sweeps may have changed.
+       {"10 6 * * *", Engram.Workers.CrdtBloatSweep}
      ]}
   ]
 

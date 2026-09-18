@@ -139,6 +139,7 @@ defmodule Engram.PromEx.Crdt do
   @abort_event [:engram, :crdt, :checkpoint_abort]
   @projection_event [:engram, :crdt, :index_projection]
   @doc_event [:engram, :crdt, :checkpoint_doc]
+  @sweep_event [:engram, :crdt, :state_sweep]
 
   @impl true
   def event_metrics(opts) do
@@ -262,6 +263,70 @@ defmodule Engram.PromEx.Crdt do
           measurement: :client_count,
           description: "Distinct client IDs in the doc state vector per markdown checkpoint.",
           reporter_options: [buckets: [1, 2, 5, 10, 25, 50, 100, 500, 1_000]]
+        ),
+        # #1706, the sweep half. The distributions above sample notes that were
+        # OPENED, re-counting a frequently synced note on every open; these
+        # gauges are one daily pass over every stored note
+        # (`Engram.Workers.CrdtBloatSweep`), so they answer "how big is the
+        # database and how much of it is bloat" rather than "what did traffic
+        # look like".
+        #
+        # last_value, not distribution: the sweep already computed the
+        # percentiles server-side over the true population. Re-bucketing them
+        # would only lose precision, and a histogram of one sample per day is
+        # not a distribution.
+        last_value(
+          metric_prefix ++ [:state_sweep, :notes],
+          event_name: @sweep_event,
+          measurement: :notes,
+          description: "Notes carrying a CRDT state snapshot, at the last daily sweep."
+        ),
+        last_value(
+          metric_prefix ++ [:state_sweep, :bloat_ratio_p50],
+          event_name: @sweep_event,
+          measurement: :bloat_ratio_p50,
+          description: "Median state/content ratio across every stored note."
+        ),
+        last_value(
+          metric_prefix ++ [:state_sweep, :bloat_ratio_p90],
+          event_name: @sweep_event,
+          measurement: :bloat_ratio_p90,
+          description: "p90 state/content ratio across every stored note."
+        ),
+        last_value(
+          metric_prefix ++ [:state_sweep, :bloat_ratio_p99],
+          event_name: @sweep_event,
+          measurement: :bloat_ratio_p99,
+          description: "p99 state/content ratio across every stored note."
+        ),
+        last_value(
+          metric_prefix ++ [:state_sweep, :bloat_ratio_max],
+          event_name: @sweep_event,
+          measurement: :bloat_ratio_max,
+          description:
+            "Worst state/content ratio in the database. The single note the flatten gate " <>
+              "in #1707 most needs to catch."
+        ),
+        last_value(
+          metric_prefix ++ [:state_sweep, :notes_over_threshold],
+          event_name: @sweep_event,
+          measurement: :notes_over_threshold,
+          description: "Notes whose state exceeds 5x their content — the #1707 tuning target."
+        ),
+        last_value(
+          metric_prefix ++ [:state_sweep, :state_bytes_total],
+          event_name: @sweep_event,
+          measurement: :state_bytes_total,
+          description:
+            "Total decrypted-equivalent bytes of crdt_state across the database. Paired with " <>
+              "content_bytes_total this is the reclaimable-storage estimate the history epic " <>
+              "(#609) needs before sizing anything."
+        ),
+        last_value(
+          metric_prefix ++ [:state_sweep, :content_bytes_total],
+          event_name: @sweep_event,
+          measurement: :content_bytes_total,
+          description: "Total decrypted-equivalent bytes of note content across the database."
         ),
         counter(
           metric_prefix ++ [:index_claim, :total],

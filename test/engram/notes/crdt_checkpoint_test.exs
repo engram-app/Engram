@@ -120,19 +120,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
     :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "before AFTER")
 
-    test_pid = self()
-    handler_id = "bloat-telemetry-#{System.unique_integer([:positive])}"
-
-    :telemetry.attach(
-      handler_id,
-      [:engram, :crdt, :checkpoint_doc],
-      fn _event, measurements, meta, _config ->
-        send(test_pid, {:checkpoint_doc, measurements, meta})
-      end,
-      nil
-    )
-
-    on_exit(fn -> :telemetry.detach(handler_id) end)
+    attach_doc_telemetry()
 
     :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
 
@@ -149,6 +137,82 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     # Cardinality contract (project_grafana_cardinality_audit_2026_07_02): no
     # note_id / vault_id / user_id may ride along as a label.
     assert meta == %{}
+  end
+
+  # A note whose doc projects "" but which HAS stored state is not the
+  # `ensure_projection_safe/2` skip case — that clause only fires on a nil
+  # `crdt_state_ciphertext`. So a real emptying reaches the emit with
+  # content_bytes = 0, and the ratio divides by it.
+  test "checkpoint emits bloat telemetry with an empty projection (divide guard)", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+
+    # Empty the text the way a user would — a delete op, which is itself state,
+    # so the row keeps a non-nil crdt_state_ciphertext.
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "")
+    assert CrdtBridge.text_of(doc) == ""
+
+    attach_doc_telemetry()
+
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    assert_receive {:checkpoint_doc, measurements, _meta}
+
+    assert measurements.content_bytes == 0
+    assert measurements.state_bytes > 0
+    # Guarded by `max(content_bytes, 1)`: the ratio degrades to the raw state
+    # size rather than raising ArithmeticError and killing the checkpoint.
+    assert measurements.bloat_ratio == measurements.state_bytes / 1
+  end
+
+  # The hash-unchanged path degrades to a snapshot-compaction write with no
+  # version/seq churn — and in prod it is the MAJORITY of checkpoints, because
+  # 99% of rooms are handshake-minted rather than edit-minted. A bloat metric
+  # that only fired on real edits would miss the population it exists to
+  # describe.
+  test "checkpoint emits bloat telemetry on the unchanged-text compaction path", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "settled")
+
+    # First checkpoint materializes the change and bumps seq.
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+    seq_after_first = Vaults.current_seq(user.id, vault.id)
+
+    attach_doc_telemetry()
+
+    # Second checkpoint over the SAME text: content_hash matches, so this is the
+    # degraded compaction write.
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    assert Vaults.current_seq(user.id, vault.id) == seq_after_first,
+           "expected the compaction path (no seq churn), got a real materialization"
+
+    assert_receive {:checkpoint_doc, measurements, _meta}
+    assert measurements.content_bytes == byte_size("settled")
+    assert measurements.state_bytes > 0
+  end
+
+  defp attach_doc_telemetry do
+    test_pid = self()
+    handler_id = "bloat-telemetry-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      handler_id,
+      [:engram, :crdt, :checkpoint_doc],
+      fn _event, measurements, meta, _config ->
+        send(test_pid, {:checkpoint_doc, measurements, meta})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
   end
 
   # ── #983 task 2: user-resolve raise must NOT escape terminate/2 ────────────

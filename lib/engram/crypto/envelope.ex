@@ -37,6 +37,21 @@ defmodule Engram.Crypto.Envelope do
   @typedoc "AES-GCM Additional Authenticated Data — bound to ciphertext but not encrypted."
   @type aad :: binary()
 
+  @doc """
+  Bytes of AEAD tag suffixed to every ciphertext by `encrypt/3`.
+
+  AES-GCM ciphertext is the same length as its plaintext, so
+  `octet_length(col) - tag_bytes()` recovers the plaintext size of any encrypted
+  column WITHOUT a DEK. That is what lets `Engram.Workers.CrdtBloatSweep` size
+  every note in the database in one query while touching no key material.
+  Exposed rather than hardcoded at the call site so a cipher change has one
+  place to fail, not two.
+  """
+  # No @spec: the body returns a literal, so any integer type is a dialyzer
+  # `contract_supertype` of the success typing. Same reason `Engram.Repo.maintenance/0`
+  # carries none.
+  def tag_bytes, do: @tag_bytes
+
   @spec encrypt(binary(), <<_::256>>) :: {binary(), binary()}
   def encrypt(plaintext, dek), do: encrypt(plaintext, dek, <<>>)
 
