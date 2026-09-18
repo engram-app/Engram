@@ -23,6 +23,19 @@ defmodule Engram.Workers.CrdtBloatSweep do
   overhead cancels in the ratio anyway; it is subtracted so the reported BYTE
   totals are true sizes rather than sizes plus a per-row constant.
 
+  ## Scope
+
+  The population is every live `kind='note'` row, not only those carrying CRDT
+  state — `state_bytes_total / content_bytes_total` is sold as the
+  reclaimable-storage estimate #609 sizes against, and scoping it to rows WITH
+  state would drop the cohort migration 20260706210000 left with a NULL
+  `crdt_state` that nothing re-seeds (see `CrdtCheckpoint`), reporting a ratio
+  higher than the database's. `notes_with_state` reports that split.
+
+  `kind='note'` is explicit rather than implied. Folder rows live in the same
+  table and are allowed a NULL `content_ciphertext`; nothing stops one acquiring
+  CRDT state, and it would enter the population as `content_bytes = 0`.
+
   ## Percentiles exclude trivially small notes
 
   Ratio percentiles are computed only over notes above
@@ -49,11 +62,16 @@ defmodule Engram.Workers.CrdtBloatSweep do
   require Logger
 
   @typedoc """
-  One sweep reading. Spelled out rather than `map()` so a measurement added to
-  the telemetry event without a matching PromEx gauge fails here.
+  One sweep reading.
+
+  Spelled out rather than `map()` because dialyzer then catches a key renamed
+  here and not at the call site. It does NOT catch a measurement added without a
+  matching PromEx gauge — nothing does; `Engram.PromEx.CrdtTest` asserts a
+  hardcoded key list, so both have to be edited by hand.
   """
   @type measurements :: %{
           notes: non_neg_integer(),
+          notes_with_state: non_neg_integer(),
           notes_measured: non_neg_integer(),
           bloat_ratio_p50: float(),
           bloat_ratio_p90: float(),
@@ -70,6 +88,10 @@ defmodule Engram.Workers.CrdtBloatSweep do
   # without changing the `le` bucket there makes the two disagree silently.
   @bloat_threshold 5
 
+  # Both halves are needed. `timeout/1` bounds the JOB; Ecto bounds the QUERY
+  # separately and defaults to 15s, so a job budget alone would still have this
+  # die mid-scan on a large table with nothing but a DBConnection error and a
+  # discard to show for it.
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(10)
 
@@ -104,7 +126,7 @@ defmodule Engram.Workers.CrdtBloatSweep do
     :telemetry.execute(@event, measurements, %{})
 
     Logger.info(
-      "crdt_bloat_sweep notes=#{measurements.notes} measured=#{measurements.notes_measured} p50=#{fmt(measurements.bloat_ratio_p50)} " <>
+      "crdt_bloat_sweep notes=#{measurements.notes} with_state=#{measurements.notes_with_state} measured=#{measurements.notes_measured} p50=#{fmt(measurements.bloat_ratio_p50)} " <>
         "p90=#{fmt(measurements.bloat_ratio_p90)} p99=#{fmt(measurements.bloat_ratio_p99)} " <>
         "max=#{fmt(measurements.bloat_ratio_max)} over_threshold=#{measurements.notes_over_threshold} " <>
         "state_bytes=#{measurements.state_bytes_total}",
@@ -123,33 +145,43 @@ defmodule Engram.Workers.CrdtBloatSweep do
         """
         SELECT
           count(*)::bigint,
-          count(*) FILTER (WHERE big)::bigint,
-          coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER BY ratio) FILTER (WHERE big), 0)::float8,
-          coalesce(percentile_cont(0.9) WITHIN GROUP (ORDER BY ratio) FILTER (WHERE big), 0)::float8,
-          coalesce(percentile_cont(0.99) WITHIN GROUP (ORDER BY ratio) FILTER (WHERE big), 0)::float8,
-          coalesce(max(ratio) FILTER (WHERE big), 0)::float8,
+          count(*) FILTER (WHERE has_state)::bigint,
+          count(*) FILTER (WHERE has_state AND big)::bigint,
+          coalesce(
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY ratio) FILTER (WHERE has_state AND big), 0
+          )::float8,
+          coalesce(
+            percentile_cont(0.9) WITHIN GROUP (ORDER BY ratio) FILTER (WHERE has_state AND big), 0
+          )::float8,
+          coalesce(
+            percentile_cont(0.99) WITHIN GROUP (ORDER BY ratio) FILTER (WHERE has_state AND big), 0
+          )::float8,
+          coalesce(max(ratio) FILTER (WHERE has_state AND big), 0)::float8,
           coalesce(sum(state_bytes), 0)::bigint,
           coalesce(sum(content_bytes), 0)::bigint,
-          count(*) FILTER (WHERE big AND ratio > $2::float8)::bigint
+          count(*) FILTER (WHERE has_state AND big AND ratio > $2::float8)::bigint
         FROM (
           SELECT
+            n.crdt_state_ciphertext IS NOT NULL AS has_state,
             greatest(octet_length(n.crdt_state_ciphertext) - $1::int, 0) AS state_bytes,
             greatest(octet_length(n.content_ciphertext) - $1::int, 0) AS content_bytes,
             greatest(octet_length(n.content_ciphertext) - $1::int, 0) >= $3::int AS big,
             greatest(octet_length(n.crdt_state_ciphertext) - $1::int, 0)::float8
               / greatest(octet_length(n.content_ciphertext) - $1::int, 1)::float8 AS ratio
           FROM notes n
-          WHERE n.crdt_state_ciphertext IS NOT NULL
-            AND n.deleted_at IS NULL
+          WHERE n.deleted_at IS NULL
+            AND n.kind = 'note'
         ) sized
         """,
-        [tag, @bloat_threshold * 1.0, CrdtBloat.min_content_bytes()]
+        [tag, @bloat_threshold * 1.0, CrdtBloat.min_content_bytes()],
+        timeout: :timer.minutes(5)
       )
 
-    [notes, measured, p50, p90, p99, max, state_bytes, content_bytes, over] = row
+    [notes, with_state, measured, p50, p90, p99, max, state_bytes, content_bytes, over] = row
 
     %{
       notes: notes,
+      notes_with_state: with_state,
       notes_measured: measured,
       bloat_ratio_p50: p50,
       bloat_ratio_p90: p90,

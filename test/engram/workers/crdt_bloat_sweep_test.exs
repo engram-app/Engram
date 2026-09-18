@@ -71,6 +71,7 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
     assert meta == %{}
 
     assert m.notes == 2
+    assert m.notes_with_state == 2
     assert m.notes_measured == 2
 
     # The load-bearing assertion. Off-by-the-tag would still look reasonable.
@@ -92,6 +93,7 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
 
     assert_receive {:sweep, m, _meta}
     assert m.notes == 0
+    assert m.notes_with_state == 0
     assert m.notes_measured == 0
     assert m.bloat_ratio_p50 == 0.0
     assert m.bloat_ratio_max == 0.0
@@ -144,6 +146,7 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
     assert_receive {:sweep, m, _meta}
 
     assert m.notes == 6, "every note is counted in the population"
+    assert m.notes_with_state == 6
     assert m.notes_measured == 1, "only the real note is eligible for a ratio"
 
     # Every note's bytes still count toward storage.
@@ -153,5 +156,40 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
     # note — if they leaked in, p90/p99 would be pulled far above p50.
     assert_in_delta m.bloat_ratio_p50, m.bloat_ratio_p99, 0.0001
     assert m.bloat_ratio_max == m.bloat_ratio_p50
+  end
+
+  # Migration 20260706210000 NULLed crdt_state for every note and nothing
+  # re-seeds it (see CrdtCheckpoint). Those notes cost content bytes and no
+  # state bytes. Scoping the sums to rows WITH state would drop them and report
+  # a state/content ratio higher than the database's actual one — which is the
+  # number #609 sizes storage against.
+  test "notes with no CRDT state still count toward content bytes", ctx do
+    %{user: user, vault: vault} = ctx
+
+    with_state = String.duplicate("has a crdt snapshot ", 8)
+    seeded_note(user, vault, "stateful.md", with_state)
+
+    # upsert_note without a checkpoint leaves crdt_state unset on this row.
+    stateless = String.duplicate("never checkpointed ", 8)
+    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "bare.md", "content" => stateless})
+
+    {:ok, {1, _}} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(
+          from(n in Note, where: n.id == ^note.id),
+          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        )
+      end)
+
+    attach()
+
+    assert :ok = perform_job(CrdtBloatSweep, %{})
+    assert_receive {:sweep, m, _meta}
+
+    assert m.notes == 2
+    assert m.notes_with_state == 1, "only one row carries a snapshot"
+
+    # The load-bearing part: the stateless note's bytes are still on disk.
+    assert m.content_bytes_total == byte_size(with_state) + byte_size(stateless)
   end
 end

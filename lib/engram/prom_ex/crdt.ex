@@ -269,29 +269,72 @@ defmodule Engram.PromEx.Crdt do
         ),
         # #1706, the sweep half. The distributions above sample notes that were
         # OPENED, re-counting a frequently synced note on every open; these
-        # gauges are one daily pass over every stored note
+        # gauges are one pass over every stored note
         # (`Engram.Workers.CrdtBloatSweep`), so they answer "how big is the
         # database and how much of it is bloat" rather than "what did traffic
         # look like".
         #
         # last_value, not distribution: the sweep already computed the
         # percentiles server-side over the true population. Re-bucketing them
-        # would only lose precision, and a histogram of one sample per day is
-        # not a distribution.
+        # would only lose precision, and a histogram of a handful of samples per
+        # day is not a distribution.
+        #
+        # STALENESS CONTRACT — read before writing a query against these.
+        #
+        # A `last_value` gauge never expires: the reporter re-serves its last
+        # sample on every scrape until something overwrites it. That is the
+        # #1497 failure class (`config/runtime.exs`, the web-node Oban poll
+        # gauges that froze a 494-job backlog for 40 minutes). Two consequences
+        # specific to an event-driven gauge written by a cron job:
+        #
+        #   * Only the node that RAN the sweep holds a series. `Oban.Cron` is
+        #     leader-gated, and `maintenance` does not run on `web`, so most
+        #     nodes never export these at all — absent, not stale. Good.
+        #   * Across a multi-task worker tier, consecutive runs can land on
+        #     DIFFERENT tasks, leaving the previous one serving its last reading
+        #     forever. Aggregate with `max by (instance)` or pick one instance —
+        #     NEVER `sum`, which double-counts the byte totals.
+        #
+        # The sweep runs every 6 hours rather than daily mostly for this: an
+        # ECS task replacement clears the table, and on a daily cadence that is
+        # up to 24h of "No data" on every panel after each deploy.
+        #
+        # Assumes the default `PromEx.Storage.Core` reporter. Under
+        # `PromEx.Storage.Peep` a MISSING measurement key records 1.0 rather
+        # than being skipped, which would silently turn every sub-floor note
+        # into a perfect 1.0 bloat ratio — the exact artifact
+        # `Engram.Notes.CrdtBloat` exists to keep out. Do not set
+        # `:storage_adapter` without revisiting the omit-vs-zero decision in
+        # `CrdtCheckpoint.emit_doc_stats/3`.
         last_value(
           metric_prefix ++ [:state_sweep, :notes],
           event_name: @sweep_event,
           measurement: :notes,
-          description: "Notes carrying a CRDT state snapshot, at the last daily sweep."
+          description:
+            "Live notes (kind='note') in the database at the last sweep. The denominator for " <>
+              "storage questions; `notes_with_state` is the subset that actually carries a " <>
+              "CRDT snapshot."
+        ),
+        last_value(
+          metric_prefix ++ [:state_sweep, :notes_with_state],
+          event_name: @sweep_event,
+          measurement: :notes_with_state,
+          description:
+            "Notes carrying a CRDT state snapshot. Below `notes` by the cohort migration " <>
+              "20260706210000 NULLed and nothing re-seeds — those notes cost content bytes " <>
+              "and no state bytes, so excluding them would overstate the bloat ratio."
         ),
         last_value(
           metric_prefix ++ [:state_sweep, :notes_measured],
           event_name: @sweep_event,
           measurement: :notes_measured,
           description:
-            "Notes large enough for the ratio to mean anything — the denominator of every " <>
-              "percentile below. Far under `notes` means the population is mostly empties, " <>
-              "and the gap is the artifact this split exists to keep out of the percentiles."
+            "Notes with state AND enough content to divide by — the denominator of every " <>
+              "percentile below. The gap against `notes_with_state` is what the size floor " <>
+              "keeps out of the percentiles. It is NOT purely empty notes: structural " <>
+              "(.canvas) rows keep their data in Y.Maps and leave `content` untouched, so a " <>
+              "fully populated board also lands in that gap. The sweep reads column lengths " <>
+              "and cannot tell the two apart."
         ),
         last_value(
           metric_prefix ++ [:state_sweep, :bloat_ratio_p50],
@@ -330,15 +373,17 @@ defmodule Engram.PromEx.Crdt do
           event_name: @sweep_event,
           measurement: :state_bytes_total,
           description:
-            "Total decrypted-equivalent bytes of crdt_state across the database. Paired with " <>
-              "content_bytes_total this is the reclaimable-storage estimate the history epic " <>
-              "(#609) needs before sizing anything."
+            "Total decrypted-equivalent bytes of crdt_state across every live note. Paired " <>
+              "with content_bytes_total this is the reclaimable-storage estimate the history " <>
+              "epic (#609) needs before sizing anything. Aggregate with max, never sum."
         ),
         last_value(
           metric_prefix ++ [:state_sweep, :content_bytes_total],
           event_name: @sweep_event,
           measurement: :content_bytes_total,
-          description: "Total decrypted-equivalent bytes of note content across the database."
+          description:
+            "Total decrypted-equivalent bytes of note content across every live note, " <>
+              "including those carrying no CRDT state. Aggregate with max, never sum."
         ),
         counter(
           metric_prefix ++ [:index_claim, :total],

@@ -177,15 +177,21 @@ config :engram, Oban,
        # re-authorized. 05:40 keeps it clear of OrphanSweep at 05:00.
        {"40 5 * * *", Engram.Workers.CimdRefresh},
        # Whole-population CRDT doc bloat measurement (#1706). One aggregate
-       # query over `notes` column lengths — no decrypt, no row walk — so it is
-       # cheap enough to run daily and is the only unbiased view of the
-       # distribution the checkpoint histogram samples.
+       # query over `notes` column lengths — no decrypt, no row walk — and the
+       # only unbiased view of the distribution the checkpoint histogram
+       # samples.
        #
-       # 06:10 UTC: clear of every slot above, and deliberately NOT on the hour
-       # or a quarter-hour, which are taken by CleanupDeviceAuthWorker
-       # (`0 * * * *`) and ReconcileEmbeddings (`*/15`). Last in the nightly
-       # chain on purpose — it reads sizes the earlier sweeps may have changed.
-       {"10 6 * * *", Engram.Workers.CrdtBloatSweep}
+       # :10 past the hour: deliberately NOT on the hour or a quarter-hour,
+       # which CleanupDeviceAuthWorker (`0 * * * *`) and ReconcileEmbeddings
+       # (`*/15`) own. 00:10 is clear of the nightly chain above, and 06:10 puts
+       # the first post-chain reading after it rather than during it.
+       #
+       # Every 6h rather than daily because it writes `last_value` gauges, which
+       # only exist on the node that ran the job: an ECS task replacement clears
+       # them, and on a daily cadence that is up to 24h of "No data" on every
+       # panel after each deploy. Four cheap aggregates a day buys a 6h worst
+       # case. See the staleness contract in `Engram.PromEx.Crdt`.
+       {"10 */6 * * *", Engram.Workers.CrdtBloatSweep}
      ]}
   ]
 

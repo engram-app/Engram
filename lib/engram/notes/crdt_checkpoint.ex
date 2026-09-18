@@ -47,8 +47,13 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
   # #1706. The shape of `crdt_state` against the text it encodes was entirely
   # unobserved, so every storage estimate in the history workstream — and the
-  # flatten gate in #1707 — was a guess. Checkpoint already holds all three
-  # values, so this is a read of locals, not new computation.
+  # flatten gate in #1707 — was a guess.
+  #
+  # Two of the three values are locals the checkpoint already holds. The third,
+  # `client_count/1`, is a real call into a bang NIF, and it is NEW work on this
+  # path: it used to be reachable only past `should_flatten?/2`'s 500 KB arm,
+  # which staging says is never true. Cheap (it decodes one leading varint), but
+  # cheap is not the same as infallible — see `emit_doc_stats/3`.
   @doc_event [:engram, :crdt, :checkpoint_doc]
 
   @doc """
@@ -588,7 +593,29 @@ defmodule Engram.Notes.CrdtCheckpoint do
   #
   # NO metadata. note_id / vault_id / user_id are unbounded labels (2026-07-02
   # cardinality audit) — the distribution is the whole answer here.
+  # Never lets a measurement fail the write it is measuring. This sits INSIDE the
+  # `with` that persists the checkpoint, and `client_count/1` calls a bang NIF —
+  # a raise there would unwind to the function-level rescue, which logs and
+  # returns `:ok`, so the caller would see success while `crdt_state` went
+  # unpersisted and the tail unpruned. Losing a telemetry sample is the correct
+  # trade against losing a checkpoint.
+  #
+  # Not a silent swallow: the rescue logs on its own greppable key, so a
+  # systematic failure here is findable rather than merely survivable.
   defp emit_doc_stats(%Yex.Doc{} = doc, state, text) do
+    do_emit_doc_stats(doc, state, text)
+    :ok
+  rescue
+    e ->
+      Logger.warning(
+        "crdt checkpoint_doc telemetry failed err=#{Exception.message(e)}",
+        Metadata.with_category(:warning, :sync, [])
+      )
+
+      :ok
+  end
+
+  defp do_emit_doc_stats(%Yex.Doc{} = doc, state, text) do
     state_bytes = byte_size(state)
     content_bytes = byte_size(text)
 
@@ -610,8 +637,6 @@ defmodule Engram.Notes.CrdtCheckpoint do
       end
 
     :telemetry.execute(@doc_event, measurements, %{})
-
-    :ok
   end
 
   defp maybe_flatten(%Yex.Doc{} = doc, state, note_id) do
