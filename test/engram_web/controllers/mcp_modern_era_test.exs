@@ -178,6 +178,97 @@ defmodule EngramWeb.McpModernEraTest do
     end
   end
 
+  describe "cache hints on cacheable results" do
+    # Servers MUST include them on `resultType: "complete"` results from
+    # server/discover, tools/list, prompts/list, resources/list,
+    # resources/templates/list and resources/read. We expose the first two.
+    for method <- ["server/discover", "tools/list"] do
+      test "#{method} carries ttlMs and cacheScope", %{conn: conn} do
+        result = json_response(post_modern(conn, unquote(method)), 200)["result"]
+
+        assert is_integer(result["ttlMs"])
+        assert result["ttlMs"] >= 0, "servers MUST provide ttlMs >= 0"
+        assert result["cacheScope"] in ["public", "private"]
+      end
+    end
+
+    test "tools/list is public because the list is identical for every caller", %{conn: conn} do
+      result = json_response(post_modern(conn, "tools/list"), 200)["result"]
+
+      assert result["cacheScope"] == "public"
+    end
+
+    test "a tools/call result carries no cache hints", %{conn: conn} do
+      # Not on the cacheable list, and its result depends on the caller's data.
+      result =
+        post_modern(conn, "tools/call", %{"name" => "list_vaults", "arguments" => %{}})
+        |> json_response(200)
+        |> Map.fetch!("result")
+
+      refute Map.has_key?(result, "ttlMs")
+      refute Map.has_key?(result, "cacheScope")
+    end
+
+    test "the legacy era gets no cache hints", %{conn: conn} do
+      result =
+        conn
+        |> post("/api/mcp", %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"})
+        |> json_response(200)
+        |> Map.fetch!("result")
+
+      refute Map.has_key?(result, "ttlMs")
+    end
+  end
+
+  describe "Mcp-Method header" do
+    test "agreeing with the body is fine", %{conn: conn} do
+      resp =
+        conn
+        |> put_req_header("mcp-protocol-version", @modern)
+        |> put_req_header("mcp-method", "tools/list")
+        |> post("/api/mcp", %{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "tools/list",
+          "params" => %{"_meta" => modern_meta()}
+        })
+
+      assert json_response(resp, 200)["result"]["resultType"] == "complete"
+    end
+
+    test "disagreeing with the body is -32020 on HTTP 400", %{conn: conn} do
+      resp =
+        conn
+        |> put_req_header("mcp-protocol-version", @modern)
+        |> put_req_header("mcp-method", "tools/call")
+        |> post("/api/mcp", %{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "tools/list",
+          "params" => %{"_meta" => modern_meta()}
+        })
+        |> json_response(400)
+
+      assert resp["error"]["code"] == -32_020
+    end
+
+    test "an invalid-UTF-8 Mcp-Method header does not crash", %{conn: conn} do
+      resp =
+        conn
+        |> put_req_header("mcp-protocol-version", @modern)
+        |> put_req_header("mcp-method", <<0xFF, 0xFE>>)
+        |> post("/api/mcp", %{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "tools/list",
+          "params" => %{"_meta" => modern_meta()}
+        })
+
+      assert resp.status == 400
+      assert json_response(resp, 400)["error"]["code"] == -32_020
+    end
+  end
+
   describe "unknown methods" do
     test "are -32601, not -32600", %{conn: conn} do
       assert json_response(post_modern(conn, "nope/nope"), 404)["error"]["code"] == -32_601

@@ -54,6 +54,27 @@ defmodule EngramWeb.McpController do
   # base-protocol MUST there (#1680) — so this is era-scoped, not a deletion.
   @modern_removed_methods ~w(initialize ping logging/setLevel notifications/roots/list_changed)
 
+  # Cache hints the modern era REQUIRES on `resultType: "complete"` results
+  # from a fixed set of operations. We expose two of them; the rest
+  # (prompts/list, resources/*) we do not serve.
+  #
+  # An hour: both results change only on deploy. We advertise
+  # `listChanged: false`, so there is no invalidation signal and the TTL is the
+  # client's only freshness mechanism — a client can therefore run an hour
+  # behind a deploy that changed the tool list. That is acceptable because a
+  # call against a stale list fails with a tool error, which the spec names as
+  # a reason a client MAY re-fetch early.
+  #
+  # `tools/list` is `public` on one invariant: `Tools.list/0` takes no user and
+  # no conn, so every credential gets a byte-identical list. `public` lets a
+  # cache serve one caller's response to another ACROSS access tokens, so the
+  # day a tool becomes plan- or scope-gated this MUST become `private`.
+  # Per-call authorization lives in `tools/call` and does not depend on this.
+  @cacheable_results %{
+    "server/discover" => %{"ttlMs" => 3_600_000, "cacheScope" => "public"},
+    "tools/list" => %{"ttlMs" => 3_600_000, "cacheScope" => "public"}
+  }
+
   # `2024-11-05` is on the list for CONTINUITY, not ambition. SDKs released
   # before ~June 2025 ship `SUPPORTED_PROTOCOL_VERSIONS = ["2025-03-26",
   # "2024-11-05"]` and ABORT with "Server's protocol version is not supported"
@@ -176,6 +197,16 @@ defmodule EngramWeb.McpController do
           "bodyValue" => safe_header_label(version)
         })
 
+      # Same rule for `Mcp-Method`, which restates the body's method so an
+      # intermediary can route without parsing the body. A mismatch means the
+      # two disagree about what is being called.
+      method_header_mismatch?(conn, params) ->
+        modern_error(conn, id, -32_020, "Header mismatch", %{
+          "header" => "Mcp-Method",
+          "headerValue" => safe_header_label(List.first(get_req_header(conn, "mcp-method"))),
+          "bodyValue" => tool_name_label(params["method"])
+        })
+
       not is_binary(version) ->
         modern_error(conn, id, -32_602, "Invalid params: #{@meta_protocol_version} is required")
 
@@ -198,6 +229,16 @@ defmodule EngramWeb.McpController do
     end
   end
 
+  # Compared as raw binaries: an invalid-UTF-8 header cannot equal a valid
+  # method name, so it mismatches and is refused rather than crashing a
+  # String function or being silently ignored.
+  defp method_header_mismatch?(conn, params) do
+    case get_req_header(conn, "mcp-method") do
+      [declared | _] -> declared != params["method"]
+      [] -> false
+    end
+  end
+
   defp modern_dispatch(conn, %{"jsonrpc" => "2.0", "method" => method} = params, id)
        when method in @modern_removed_methods do
     _ = params
@@ -214,7 +255,7 @@ defmodule EngramWeb.McpController do
   defp modern_dispatch(conn, %{"jsonrpc" => "2.0", "id" => _id, "method" => method} = params, id) do
     case dispatch(conn, method, params["params"] || %{}) do
       {:ok, result} ->
-        json(conn, %{"jsonrpc" => "2.0", "id" => id, "result" => modern_result(result)})
+        json(conn, %{"jsonrpc" => "2.0", "id" => id, "result" => modern_result(result, method)})
 
       # An unrecognised method is 404 on HTTP in this era, not a 200 carrying
       # an error — the status is how a dual-era client tells a modern server
@@ -239,12 +280,13 @@ defmodule EngramWeb.McpController do
   # Every modern result MUST carry `resultType`, and SHOULD identify the server
   # in `_meta` — both exist so a stateless request is self-describing, with no
   # handshake to have established either.
-  defp modern_result(result) when is_non_struct_map(result) do
+  defp modern_result(result, method) when is_non_struct_map(result) do
     result
     |> Map.put_new("resultType", "complete")
     |> Map.update("_meta", %{@meta_server_info => @server_info}, fn meta ->
       Map.put_new(meta, @meta_server_info, @server_info)
     end)
+    |> Map.merge(Map.get(@cacheable_results, method, %{}))
   end
 
   defp modern_error(conn, id, code, message, data \\ nil) do
