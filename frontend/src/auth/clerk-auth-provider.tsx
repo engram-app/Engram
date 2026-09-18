@@ -2,6 +2,7 @@ import { ClerkProvider, useAuth, useClerk } from "@clerk/react";
 import { dark } from "@clerk/themes";
 import { useCallback, useEffect, useMemo } from "react";
 import { setTokenGetter } from "../api/client";
+import { useMe } from "../api/queries";
 import { queryClient } from "../api/query-client";
 import { useConfig } from "../config-context";
 import { getAppRouter } from "../router";
@@ -60,11 +61,13 @@ function ClerkAdapterInner({ children }: { children: React.ReactNode }) {
 	const email = clerk.user?.primaryEmailAddress?.emailAddress;
 	const imageUrl = clerk.user?.imageUrl;
 
+	const { data: me } = useMe();
+
 	useIdentifyUserOnAuthChange({
 		isLoaded,
 		isSignedIn: isSignedIn ?? false,
 		id: clerkUserId,
-		email,
+		analyticsId: me?.analytics_id,
 	});
 	const adapter: AuthAdapter = useMemo(
 		() => ({

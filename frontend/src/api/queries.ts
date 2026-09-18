@@ -400,6 +400,10 @@ export interface User {
 	email: string;
 	role: "admin" | "member";
 	display_name: string | null;
+	// Keyed HMAC of the email, 64-char lowercase hex. Analytics identifies with
+	// this, never with `email` above — see src/auth/use-identify-user-on-auth-change.ts.
+	// Optional so mocks/older responses that predate it don't need updating.
+	analytics_id?: string;
 }
 
 // Query hooks

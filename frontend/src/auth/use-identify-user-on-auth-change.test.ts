@@ -14,8 +14,12 @@ vi.mock("posthog-js", () => ({
 }));
 vi.mock("../sentry", () => ({ setSentryUser: (id: string | null) => setSentryUser(id) }));
 
-const render = (props: { isLoaded: boolean; isSignedIn: boolean; id?: string; email?: string }) =>
-	renderHook((p: typeof props) => useIdentifyUserOnAuthChange(p), { initialProps: props });
+const render = (props: {
+	isLoaded: boolean;
+	isSignedIn: boolean;
+	id?: string;
+	analyticsId?: string;
+}) => renderHook((p: typeof props) => useIdentifyUserOnAuthChange(p), { initialProps: props });
 
 describe("useIdentifyUserOnAuthChange", () => {
 	afterEach(() => {
@@ -33,29 +37,41 @@ describe("useIdentifyUserOnAuthChange", () => {
 		expect(setSentryUser).not.toHaveBeenCalled();
 	});
 
-	it("identifies BOTH PostHog and Sentry when signed in", () => {
-		render({ isLoaded: true, isSignedIn: true, id: "user_1", email: "a@b.c" });
-		expect(identify).toHaveBeenCalledWith("user_1", { email: "a@b.c" });
-		expect(setSentryUser).toHaveBeenCalledWith("user_1");
+	it("identifies with the analytics id and never with an email", () => {
+		renderHook(() =>
+			useIdentifyUserOnAuthChange({
+				isLoaded: true,
+				isSignedIn: true,
+				analyticsId: "a".repeat(64),
+				id: "user_3J50JyLu",
+			}),
+		);
+
+		expect(identify).toHaveBeenCalledWith("a".repeat(64));
+		// One argument only. A second argument is how a raw email reaches PostHog,
+		// and our privacy policy says it does not.
+		expect(identify.mock.calls[0]).toHaveLength(1);
 	});
 
-	// Sentry gets the id and nothing else, regardless of what PostHog is handed.
-	// sendDefaultPii is false and the module scrubs every URL and header; email
-	// would be a new PII surface. See setSentryUser in ../sentry.
-	it("never hands Sentry the email", () => {
-		render({ isLoaded: true, isSignedIn: true, id: "user_1", email: "a@b.c" });
-		expect(setSentryUser).toHaveBeenCalledTimes(1);
-		expect(setSentryUser).toHaveBeenCalledWith("user_1");
+	it("does not identify before the analytics id has loaded", () => {
+		renderHook(() =>
+			useIdentifyUserOnAuthChange({ isLoaded: true, isSignedIn: true, id: "user_3J50JyLu" }),
+		);
+		expect(identify).not.toHaveBeenCalled();
 	});
 
-	it("identifies without email when Clerk has none", () => {
-		render({ isLoaded: true, isSignedIn: true, id: "user_1" });
-		expect(identify).toHaveBeenCalledWith("user_1", undefined);
+	it("identifies Sentry with the Clerk id when signed in", () => {
+		render({ isLoaded: true, isSignedIn: true, id: "user_1", analyticsId: "a".repeat(64) });
 		expect(setSentryUser).toHaveBeenCalledWith("user_1");
 	});
 
 	it("clears BOTH on sign-out", () => {
-		const { rerender } = render({ isLoaded: true, isSignedIn: true, id: "user_1" });
+		const { rerender } = render({
+			isLoaded: true,
+			isSignedIn: true,
+			id: "user_1",
+			analyticsId: "a".repeat(64),
+		});
 		identify.mockClear();
 		setSentryUser.mockClear();
 
