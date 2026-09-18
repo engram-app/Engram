@@ -29,6 +29,25 @@ defmodule Engram.RlsCase do
   transaction that can be neither reset nor committed. That is a constraint of
   Postgres, not a gap here.
 
+  ## Why `SESSION AUTHORIZATION` and not `SET ROLE`
+
+  Both helpers used `SET LOCAL ROLE engram_app` and were **structurally unable
+  to enforce anything** against code that calls `Engram.Repo.with_tenant/2`.
+  That function exits with `set_config('role', 'none', true)`, which reverts to
+  `session_user` — under `SET ROLE` that is the suite's superuser. So the first
+  `with_tenant` anywhere beneath the code under test handed the connection back
+  to a role that bypasses RLS, and every statement after it ran unenforced.
+
+  This was not theoretical. `Engram.Accounts.LifecycleRlsTest` passed green
+  against a genuinely broken `do_hard_delete/2`: a probe showed
+  `current_user` flipping from `engram_app` to `engram` mid-call, after which
+  the vault delete succeeded and the cascade completed. The same bug reproduces
+  immediately when the role is dropped with `SESSION AUTHORIZATION` instead.
+
+  `SET LOCAL SESSION AUTHORIZATION` changes `session_user` itself, so
+  `ROLE NONE` lands back on `engram_app`. `Engram.Repo.SessionRoleTest` pins
+  exactly this difference.
+
   ## Every adopter must declare `async: false` itself
 
   `SET LOCAL ROLE` applies to the connection, so two of these running
@@ -109,7 +128,7 @@ defmodule Engram.RlsCase do
     {:error, outcome} =
       Repo.transaction(fn ->
         Repo.query!("SELECT set_config('app.current_tenant', '', true)")
-        Repo.query!("SET LOCAL ROLE engram_app")
+        Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_app")
 
         outcome =
           try do
@@ -141,11 +160,11 @@ defmodule Engram.RlsCase do
     {:ok, result} =
       Repo.transaction(fn ->
         Repo.query!("SELECT set_config('app.current_tenant', '', true)")
-        Repo.query!("SET LOCAL ROLE engram_app")
+        Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_app")
 
         result = fun.()
 
-        Repo.query!("RESET ROLE")
+        Repo.query!("RESET SESSION AUTHORIZATION")
         result
       end)
 

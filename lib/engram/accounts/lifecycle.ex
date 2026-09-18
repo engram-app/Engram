@@ -167,17 +167,25 @@ defmodule Engram.Accounts.Lifecycle do
     #
     # Vaults must be deleted before the user row because `notes.user_id`,
     # `attachments.user_id`, and `chunks.user_id` reference users WITHOUT
-    # ON DELETE CASCADE. Deleting the user's vaults transitively cascades
-    # notes/attachments/chunks (their `vault_id` FKs do cascade), clearing
-    # the path for the final `Repo.delete!(user)`. Everything else hanging
-    # off `users` (api_keys, subscriptions, refresh_tokens, usage_meters,
-    # …) does cascade directly.
-    case Repo.transaction(
+    # ON DELETE CASCADE (verified: `confdeltype = 'a'`). Deleting the user's
+    # vaults transitively cascades notes/attachments/chunks (their `vault_id`
+    # FKs are `'c'`), clearing the path for the final `Repo.delete!(user)`.
+    # Everything else hanging off `users` (api_keys, subscriptions,
+    # refresh_tokens, usage_meters, …) does cascade directly.
+    #
+    # `with_tenant/2`, NOT a bare `Repo.transaction`: `vaults` carries FORCE
+    # ROW LEVEL SECURITY, so under a role the policy applies to, an unscoped
+    # `delete_all` is FILTERED to zero rows and reports `{0, nil}` WITHOUT
+    # raising. Nothing then cascades, and the `Repo.delete!(user)` below dies
+    # on `notes_user_id_fkey` — account deletion could not complete at all,
+    # and the operator saw a Postgres FK error about `notes` rather than
+    # anything naming tenant scoping. `skip_tenant_check: true` did not and
+    # could not help: it suppresses Engram's application-level tripwire and
+    # sets no Postgres state whatsoever.
+    case Repo.with_tenant(
+           user.id,
            fn ->
-             Repo.delete_all(
-               from(v in Engram.Vaults.Vault, where: v.user_id == ^user.id),
-               skip_tenant_check: true
-             )
+             Repo.delete_all(from(v in Engram.Vaults.Vault, where: v.user_id == ^user.id))
 
              # No `usage_buckets` purge any more: the AI search budget moved out
              # of Postgres into the cluster-synced ETS counter
@@ -185,8 +193,7 @@ defmodule Engram.Accounts.Lifecycle do
              # bucket keyed on a deleted user id ages out with its window and
              # orphans nothing.
              Repo.delete!(user, skip_tenant_check: true)
-           end,
-           skip_tenant_check: true
+           end
          ) do
       {:ok, _} ->
         :telemetry.execute(

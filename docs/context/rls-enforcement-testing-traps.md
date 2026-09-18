@@ -1,6 +1,6 @@
-# Context Doc: Testing RLS enforcement (five traps)
+# Context Doc: Testing RLS enforcement (seven traps)
 
-_Last verified: 2026-09-16_
+_Last verified: 2026-09-17_
 
 ## Status
 
@@ -15,7 +15,7 @@ Every trap below produced a false green for real while these files were written.
 ## What This Is
 
 How to write a test that actually proves Postgres Row Level Security is
-enforced on a query — and the five ways such a test passes while proving
+enforced on a query — and the seven ways such a test passes while proving
 nothing. `docs/context/database-schema-rls.md` covers the policies and the
 `Repo.with_tenant/2` model; this doc is only about testing them.
 
@@ -29,7 +29,9 @@ nothing. `docs/context/database-schema-rls.md` covers the policies and the
 A correct RLS test file has all five. Miss one and green is meaningless.
 
 1. `use Engram.DataCase, async: false` — the role change is connection-global.
-2. A harness that clears the tenant **and** drops the role, in that order.
+2. A harness that clears the tenant **and** drops the role, in that order —
+   and the drop must be `SET LOCAL SESSION AUTHORIZATION`, not `SET ROLE`
+   (trap 6).
 3. A **control test** asserting the dropped role sees zero rows.
 4. Assertions on **persisted effect** for `update_all`/`delete_all` — "it
    didn't raise" is vacuous there.
@@ -314,6 +316,126 @@ excluded unless `INTEGRATION_TESTS=1`, which CI never sets — a tagged file wou
 guard nothing. It exists for tests needing a local docker container to drive
 `pg_dump`; these need only the `engram_app` role.
 
+## Trap 6 — `SET LOCAL ROLE` is un-enforced by the first `with_tenant` beneath the code under test
+
+`SET ROLE` and `SET SESSION AUTHORIZATION` are not interchangeable here, and
+picking the first one makes the harness **structurally unable to enforce
+anything** against code that calls `Repo.with_tenant/2`.
+
+`test/support/rls_case.ex` dropped the connection with `SET LOCAL ROLE
+engram_app` in both helpers. `Repo.with_tenant/2` exits by running
+`set_config('role', 'none', true)`, which reverts to `session_user`. Under
+`SET ROLE` that is the suite's superuser `engram`, which bypasses RLS even under
+`FORCE ROW LEVEL SECURITY` (trap 4). So the **first** `with_tenant` call
+anywhere beneath the code under test silently handed the connection back to the
+superuser, and every statement after it, including the code under test, ran
+unenforced.
+
+Measured, not theorised: a probe printing `current_user` before and after a real
+`Engram.Accounts.Lifecycle.hard_delete/2` call inside the harness showed
+`current_user="engram_app"` before and `current_user="engram"` after.
+`Engram.Accounts.LifecycleRlsTest`
+(`test/engram/accounts/lifecycle_rls_test.exs`) was passing green against
+genuinely broken code because of this.
+
+The fix is the other primitive. `SET LOCAL SESSION AUTHORIZATION` changes
+`session_user` itself, so `ROLE NONE` lands back on `engram_app`:
+
+```elixir
+        Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_app")
+```
+
+and on the committing variant's success path the reset changes to match:
+
+```elixir
+        # SUCCESS PATH ONLY. Deliberately not an `after` (trap 3).
+        Repo.query!("RESET SESSION AUTHORIZATION")
+```
+
+**The code blocks in traps 2, 3 and 4 above still show the superseded
+`SET LOCAL ROLE` spelling.** Do not copy them; `import Engram.RlsCase` and use
+`as_prod_role/1` or `as_prod_role_committing/1`, which now carry the correct
+form.
+
+What makes this the most embarrassing entry in the file: `Engram.Repo.SessionRoleTest`
+already pinned this exact Postgres difference against a live server. The harness
+simply was not using the primitive that test proved. (That test currently lives
+only on branch `feat/rls-enforced-ci`, at `test/engram/repo/session_role_test.exs`;
+it is not on `main`, so grepping this worktree for it finds only the reference in
+`rls_case.ex`.)
+
+## Trap 7 — a leaked tenant can make the bug UNREPRODUCIBLE through its real entry point
+
+This is a distinct and worse shape of trap 2. There, a leaked tenant makes a
+later **unscoped** statement look scoped. Here it goes further: the leak makes
+the bug impossible to trigger through the function's real entry point at all.
+
+After fixing trap 6 so the role genuinely survived, `hard_delete/2` **still**
+returned `:ok` and still deleted every row. The probe showed why:
+`app.current_tenant` was the user's own id at the commit point (Step 4), leaked
+forward from a `Repo.with_tenant/2` call in an **earlier step of the same
+function** — Step 2, `drop_qdrant_for_user/1`. That leaked tenant *satisfies*
+the `vaults` policy, so the vault delete legitimately succeeded. Nothing was
+broken about the test's role handling; the code under test was simply handed a
+valid tenant by its own earlier step.
+
+> The leaking call verified in this worktree is
+> `Engram.Indexing.forget_chunk_reuse_for_user/1`
+> (`lib/engram/indexing.ex:402`), which `drop_qdrant_for_user/1` calls
+> unconditionally before touching Qdrant. `Vector.Qdrant.delete_by_user/2`
+> itself is pure HTTP and opens no transaction.
+
+In production there is no enclosing transaction, so that `SET LOCAL` dies with
+its own transaction and the commit point runs with an **empty** tenant. Probing
+that production condition directly (`current_user=engram_app`, tenant `''`):
+
+| Probe | Result |
+|---|---|
+| `row_security_active('vaults')` | `true` |
+| `delete_all` on `vaults` | **0 rows** (filtered, per trap 1) |
+| subsequent `users` delete | raises **23503** `foreign_key_violation` on `notes_user_id_fkey` |
+
+**Consequence: when an earlier step in the same call chain leaks a tenant, you
+cannot reproduce the bug by calling the real entry point at all.** Clearing the
+tenant in the harness does not help either, because the leaking step runs after
+the harness and re-sets it.
+
+The workaround was to clear the tenant through an **existing seam that runs
+between the leaking step and the commit point**. Step 3's `wipe_storage_prefix/2`
+goes through `Storage.adapter()`, which this test already swaps, so a test-only
+adapter clears the tenant and delegates:
+
+```elixir
+defmodule Engram.Accounts.LifecycleRlsTest.TenantClearingStorage do
+  def delete_prefix(prefix) do
+    Repo.query!("SELECT set_config('app.current_tenant', '', true)")
+    InMemory.delete_prefix(prefix)
+  end
+end
+```
+
+That places the tenant exactly where production has it at the commit point:
+empty. **Requiring no change to `lib/` code is what makes this acceptable.** The
+alternative, testing a hand-copied replica of the commit point, would not have
+been testing the real code.
+
+The FK topology is what makes the vault-delete ordering load-bearing, and it is
+confirmed against the test database (`pg_constraint.confdeltype`):
+
+| FK | Target | `confdeltype` | Meaning |
+|---|---|---|---|
+| `notes.user_id` | `users` | `a` | NO ACTION |
+| `attachments.user_id` | `users` | `a` | NO ACTION |
+| `chunks.user_id` | `users` | `a` | NO ACTION |
+| `notes.vault_id` | `vaults` | `c` | CASCADE |
+| `attachments.vault_id` | `vaults` | `c` | CASCADE |
+| `chunks.vault_id` | `vaults` | `c` | CASCADE |
+
+So the child rows are cleared only as a side effect of the **vault** delete. If
+RLS filters that delete to zero rows, the `users` delete that follows has no
+route to succeed: it hits `notes_user_id_fkey` and raises. That raise is the
+production symptom the green test was hiding.
+
 ---
 
 ## The scoping pattern for fixing call sites
@@ -399,6 +521,11 @@ whole thing.
 - **Read-back assertions need `skip_tenant_check: true`** — they run outside any
   tenant scope, so `prepare_query/3`'s guard would otherwise raise before the
   query ran.
+- **`psql` is NOT on PATH on this machine.** To introspect the test database
+  (FK topology, `row_security_active`, role attributes), go through the
+  container: `docker exec backend-postgres-1 psql -U engram -d engram_test6 ...`.
+  The other container, `engram-dev-postgres`, does not have the partitioned test
+  databases.
 
 ## Failed Approaches / Dead Ends
 
@@ -414,6 +541,13 @@ whole thing.
   makes the later writes inherit the earlier tenant. Every write on the path
   needs its own direct test.
 - **`@moduletag :integration`.** Never runs in CI; guards nothing.
+- **`SET LOCAL ROLE` in the harness.** Reverted to the superuser by the first
+  `with_tenant` exit beneath the code under test, so the file enforces nothing
+  (trap 6). Use `SET LOCAL SESSION AUTHORIZATION`.
+- **Testing a hand-copied replica of the commit point.** Considered for trap 7
+  and rejected: it would not have been testing the real code. Clearing the
+  leaked tenant through a seam the test already controls (the swapped storage
+  adapter) keeps the real entry point under test and needs no change to `lib/`.
 - **Flipping the WHOLE suite to `engram_app` as a CI gate.** Tried 2026-09-17
   and abandoned the same day. The mechanism works — `SET LOCAL SESSION
   AUTHORIZATION engram_app` in `DataCase.setup_sandbox`, gated on
@@ -458,5 +592,15 @@ whole thing.
 - `lib/engram/repo.ex` — `with_tenant/2`, `prepare_query/3`, `@tenant_tables`
 - `lib/engram/release.ex` — `engram_app` role creation
 - `lib/engram/crypto/user_dek_rotation.ex` — external I/O outside the tenant scope
+- `test/support/rls_case.ex` — both harnesses; moduledoc explains the
+  `SESSION AUTHORIZATION` choice
+- `test/engram/accounts/lifecycle_rls_test.exs` — traps 6 and 7; the
+  tenant-clearing storage adapter
+- `test/engram/repo/session_role_test.exs` — pins `SET ROLE` vs
+  `SESSION AUTHORIZATION` (branch `feat/rls-enforced-ci` only, not on `main`)
+- `lib/engram/accounts/lifecycle.ex` — `hard_delete/2` steps 0-5; the commit
+  point is Step 4
+- `lib/engram/indexing.ex` — `forget_chunk_reuse_for_user/1`, the Step 2 tenant
+  leak source
 - `docs/context/database-schema-rls.md` — policies, roles, enforcement layers
 - `docs/context/with-tenant-return-wrapping.md` — funs must return bare values
