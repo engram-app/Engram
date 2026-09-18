@@ -27,7 +27,7 @@ defmodule Engram.Workers.ReindexKeywordTest do
     {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
     vault = insert(:vault, user: user)
 
-    assert :ok = ReindexKeyword.enqueue(vault.id)
+    assert :ok = ReindexKeyword.enqueue(user.id, vault.id)
     assert_enqueued(worker: ReindexKeyword, args: %{"vault_id" => vault.id})
   end
 
@@ -37,7 +37,11 @@ defmodule Engram.Workers.ReindexKeywordTest do
     note_a = insert(:note, user: user, vault: vault)
     note_b = insert(:note, user: user, vault: vault)
 
-    assert :ok = perform_job(ReindexKeyword, %{"vault_id" => to_string(vault.id)})
+    assert :ok =
+             perform_job(ReindexKeyword, %{
+               "user_id" => user.id,
+               "vault_id" => to_string(vault.id)
+             })
 
     assert_enqueued(worker: EmbedNote, args: %{"note_id" => note_a.id})
     assert_enqueued(worker: EmbedNote, args: %{"note_id" => note_b.id})
@@ -64,7 +68,11 @@ defmodule Engram.Workers.ReindexKeywordTest do
 
     chunk = insert_chunk!(note, "reuse-me")
 
-    assert :ok = perform_job(ReindexKeyword, %{"vault_id" => to_string(vault.id)})
+    assert :ok =
+             perform_job(ReindexKeyword, %{
+               "user_id" => user.id,
+               "vault_id" => to_string(vault.id)
+             })
 
     assert is_nil(Repo.get!(Chunk, chunk.id, skip_tenant_check: true).context_hmac)
 
@@ -102,7 +110,11 @@ defmodule Engram.Workers.ReindexKeywordTest do
 
     bystander_chunk = insert_chunk!(bystander, "keep-me")
 
-    assert :ok = perform_job(ReindexKeyword, %{"vault_id" => to_string(target.id)})
+    assert :ok =
+             perform_job(ReindexKeyword, %{
+               "user_id" => user.id,
+               "vault_id" => to_string(target.id)
+             })
 
     # Both halves, or this passes on a build that writes nothing at all: the
     # target MUST be flagged...
@@ -136,7 +148,11 @@ defmodule Engram.Workers.ReindexKeywordTest do
 
     deleted_chunk = insert_chunk!(deleted, "gone")
 
-    assert :ok = perform_job(ReindexKeyword, %{"vault_id" => to_string(vault.id)})
+    assert :ok =
+             perform_job(ReindexKeyword, %{
+               "user_id" => user.id,
+               "vault_id" => to_string(vault.id)
+             })
 
     # The select excludes them, so the UPDATEs must too — a soft-deleted note's
     # points are already removed, so flagging it buys a rebuild with nothing to
@@ -154,7 +170,12 @@ defmodule Engram.Workers.ReindexKeywordTest do
     {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
     vault = insert(:vault, user: user)
 
-    assert :ok = perform_job(ReindexKeyword, %{"vault_id" => to_string(vault.id)})
+    assert :ok =
+             perform_job(ReindexKeyword, %{
+               "user_id" => user.id,
+               "vault_id" => to_string(vault.id)
+             })
+
     refute_enqueued(worker: EmbedNote)
   end
 
@@ -169,7 +190,11 @@ defmodule Engram.Workers.ReindexKeywordTest do
 
     assert marker.kind == "folder"
 
-    assert :ok = perform_job(ReindexKeyword, %{"vault_id" => to_string(vault.id)})
+    assert :ok =
+             perform_job(ReindexKeyword, %{
+               "user_id" => user.id,
+               "vault_id" => to_string(vault.id)
+             })
 
     assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
     refute_enqueued(worker: EmbedNote, args: %{"note_id" => marker.id})

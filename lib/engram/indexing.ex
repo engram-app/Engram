@@ -432,7 +432,15 @@ defmodule Engram.Indexing do
   meant to be rebuilt.
 
   Callers must scope `note_ids` themselves — this applies to exactly the ids it
-  is given, with RLS bypassed.
+  is given.
+
+  Callers must ALSO already be inside `Repo.with_tenant/2`. The two writes run
+  under `Repo.cross_tenant/1`, which suppresses only Engram's application-level
+  tripwire and sets no Postgres session state, so where RLS is enforced both
+  `update_all`s are FILTERED by the policy — they report rows affected of zero
+  and no error, and this function returns 0 having cleared nothing. An earlier
+  version of this docstring said "with RLS bypassed", which is exactly
+  backwards: `cross_tenant/1` bypasses the guard, not the policy.
 
   Returns the number of `notes` rows updated.
   """
