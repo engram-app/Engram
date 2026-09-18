@@ -1,6 +1,6 @@
 # Context Doc: What the MCP conformance suite does and does not prove
 
-_Last verified: 2026-09-15_
+_Last verified: 2026-09-17 (protocol stage re-measured against staging `e8aadd6e`)_
 
 ## Status
 `scripts/mcp-conformance.sh` works and **is wired into CI**: `cron.yml` runs the `mcp-conformance` job daily at 05:40 UTC over a two-cell matrix — staging (`stages: spec,oauth`) and prod (`stages: spec`). It passes.
@@ -71,7 +71,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://staging.engram.page/.well-know
 ## Gotcha: prod and staging legitimately differ
 `mcp.engram.page` advertises the **bare host** as the resource (HostRewrite serves MCP at `/`, see #634), so the *root* well-known is its spec-correct metadata location and the §3.1 path form does not apply. Every other host (staging, selfhost `engram.ax`, `app`/`api`) advertises the `/api/mcp` path and needs the §3.1 form. `EngramWeb.OAuthMetadata` derives both from one place so the document and the `WWW-Authenticate` pointer cannot drift — a mismatch there fails the client *after* it successfully fetches both, which is the least debuggable shape of this bug.
 
-## Which stages can gate a PR (measured 2026-08-05)
+## Which stages can gate a PR (measured 2026-08-05; protocol re-measured 2026-09-17)
 
 Established by running the suite against a CI stack built from the branch, not by reasoning about it. Two of three stages cannot gate, for different reasons, and neither is a preference.
 
@@ -79,7 +79,7 @@ Established by running the suite against a CI stack built from the branch, not b
 |---|---|---|
 | `spec` (our RFC 9728 assertions) | passes in ~4.5s | **yes** |
 | `oauth` (MCPJam matrix) | refused — loopback | no, structurally |
-| `protocol` (32 checks) | genuinely red | not yet — #1259 |
+| `protocol` (32 checks) | 0 failed, always some skipped | **no, structurally** |
 
 **`oauth` cannot target a CI stack, ever.** MCPJam's SDK ships an SSRF guard, `assertOutboundOAuthUrlAllowed`, refusing outbound OAuth metadata fetches to RFC 6890 special-use addresses unless the caller opts in — and the CLI exposes no such flag in 3.18.0 or 3.19.0:
 
@@ -89,11 +89,40 @@ Refusing outbound OAuth fetch to loopback host "localhost" (no loopback opt-in)
 
 It defends against a hostile MCP server steering a fetch at `169.254.169.254` or a LAN service, which is worth having. There is no workaround from our side: a private LAN address is equally refused, and a hostname resolving to loopback is caught by their DNS revalidation. This stage needs a publicly-addressed deployment.
 
-**`protocol` is red for real reasons** — no Host-rebinding rejection (#1259), and two matrix cells now 400 outright. It is excluded from the gate rather than having its failing checks excluded, because the latter is the exact silent-green this document is about.
+**`protocol` cannot gate, and the reason is now structural rather than "we have bugs to fix".** Measured 2026-09-17 against staging at `e8aadd6e`, all four cells are **0 failed**:
 
-We no longer announce `2025-03-26` unconditionally: `initialize` negotiates across `2025-06-18`, `2025-03-26` and `2024-11-05`, so `server-initialize` passes on the first two. In exchange we enforce the 2025-06-18 MUST that an unsupported `MCP-Protocol-Version` header gets a 400 — and MCPJam pins that header from its `--protocol-version` flag rather than from the negotiated answer, so the `2025-11-25` and `2026-07-28` cells of `scripts/mcp-conformance.sh` now fail every POST rather than just `server-initialize`. Expected, not a regression to chase: those revisions are #1659's job.
+```
+PROTOCOL — 2025-03-26: 32 checks, 0 failed, 22 skipped
+PROTOCOL — 2025-06-18: 32 checks, 0 failed, 22 skipped
+PROTOCOL — 2025-11-25: 32 checks, 0 failed, 22 skipped
+PROTOCOL — 2026-07-28: 32 checks, 0 failed, 15 skipped
+```
 
-`ping` is deliberately NOT on the fix list. `2026-07-28` removes it (SEP-2575), so MCPJam only asks because of the revision we announce.
+and the script still exits **1**, on every single one.
+
+That is `grade_protocol_conformance.py` doing its job: *"A skipped check is a failure here… Exit 0 = every check ran and passed."* The rule is correct and must stay — it is what stopped the 2026-08-05 silent-green.
+
+But it means **the stage can never exit 0 for us**, because some skips are permanent by construction and no amount of work removes them:
+
+| Skip | Why it can never run |
+|---|---|
+| `server-initialize`, `ping` at `2026-07-28` | the revision *removes* them — "not applicable to the modern era" |
+| the 11 `modern-*` checks on any legacy revision | same in reverse |
+| `localhost-host-rebinding-rejected` / `-valid-accepted` | only apply to a localhost server; we test a remote host |
+| `logging-set-level`, `completion-complete`, `modern-resource-not-found` | optional capabilities we deliberately do not advertise |
+| the 3 `subscriptions/*` checks | need `listChanged: true`, which we do not claim |
+
+So do **not** flip `GATED_STAGES` to `"spec,protocol"`. It would be red forever, on a green server. This was proposed twice on 2026-09-17 before the exit code was actually traced — the summary line says "0 failed" and it is easy to assume `rc=1` means a cell is broken. Trace the grader, not the summary.
+
+**What protects this work instead:** ExUnit. `mcp_modern_era_test.exs` (29 tests) and the `outputSchema`/`structuredContent` sweep in `mcp_structured_output_test.exs` both gate every push, and the sweep fails if a tool advertises a schema it does not honour. Regression protection lives there; the conformance suite's job is the third-party-client signal.
+
+### Retracted: "`ping` is deliberately NOT on the fix list"
+
+This document used to say `ping` was not worth implementing because `2026-07-28` removes it (SEP-2575), so MCPJam "only asks because of the revision we announce."
+
+**That was backwards and it is retracted.** `2026-07-28` was the revision our header gate *refused*, so its removal could never apply to a request we served — while `ping` is a base-protocol MUST in all three revisions we did serve. A third-party client failed us on it at both `2025-03-26` and `2025-06-18`. Shipped in #1680.
+
+The general lesson is worth more than the specific call: **do not excuse a gap using a spec revision you do not serve.**
 
 **Gotcha: the CLI writes advisories to STDOUT, ahead of the JSON.** `json.load` on the raw capture therefore fails and the run reports NO SIGNAL — a harness fault wearing a server verdict's clothes. `scripts/lib/report_io.py` locates the document and keeps the preamble (it often explains the failures beneath it). Redirecting stderr does not help; these are stdout.
 
