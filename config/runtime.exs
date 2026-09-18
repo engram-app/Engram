@@ -618,7 +618,19 @@ if config_env() == :prod do
     nil ->
       # Self-host and dev: analytics is off anyway (no posthog_key), so a
       # random per-boot key is correct — it can never collide with the SaaS
-      # namespace even if a key is later set.
+      # namespace even if a key is later set. But that safety rests on an
+      # unenforced coupling between two independently-read env vars, so warn
+      # if POSTHOG_API_KEY IS set — this key is about to silently re-identify
+      # every person in PostHog on every deploy.
+      if System.get_env("POSTHOG_API_KEY") do
+        require Logger
+
+        Logger.warning(
+          "HMAC_KEY_ANALYTICS_ID not set but POSTHOG_API_KEY is; using a " <>
+            "per-boot random analytics-id key (every person will be re-identified on every deploy)"
+        )
+      end
+
       config :engram, :hmac_key_analytics_id, Base.encode64(:crypto.strong_rand_bytes(32))
 
     key ->

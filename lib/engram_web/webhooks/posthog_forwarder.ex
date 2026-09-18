@@ -75,9 +75,7 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
         %Engram.Billing.Subscription{} = sub
       ) do
     case Accounts.get_user(sub.user_id) do
-      %{external_id: ext_id, email: email}
-      when is_binary(ext_id) and byte_size(ext_id) > 0 and is_binary(email) and
-             byte_size(email) > 0 ->
+      %{email: email} when is_binary(email) and byte_size(email) > 0 ->
         price_id = data |> Map.get("items", []) |> List.first(%{}) |> get_in(["price", "id"])
 
         _ =
@@ -90,10 +88,9 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
         :ok
 
       _ ->
-        # Self-host installs and pre-Clerk legacy rows have no external_id.
-        # Without a Clerk identify call on the frontend there's nothing to
-        # join against — drop silently rather than emit an :anon event that
-        # would land in PostHog as un-funnelable noise.
+        # No email on the local row — there's no analytics identity to hash
+        # and join against. Drop silently rather than emit an :anon event
+        # that would land in PostHog as un-funnelable noise.
         :ok
     end
   end
