@@ -1,6 +1,6 @@
 # Context Doc: Worktree Deps Artifact Staleness (pre-push hook failures)
 
-_Last verified: 2026-06-25_
+_Last verified: 2026-09-18_
 
 ## Status
 Working (documented gotcha — not a bug, requires manual fix per worktree)
@@ -40,6 +40,38 @@ This rebuilds the two generated parser files (`.erl` + `.beam`) inside the workt
 
 ```bash
 mix clean && mix compile
+```
+
+## Second instance: `hammer` (2026-09-18)
+
+Same class, but the error names **your** file, not the dep:
+
+```
+error: module Hammer is not loaded and could not be found.
+ 7 │   use Hammer, backend: :ets
+    └─ lib/engram_web/rate_limiter/ets.ex:7
+== Compilation error in file lib/engram_web/rate_limiter/ets.ex ==
+```
+
+Nothing points at `deps/hammer`, so this reads like a code defect in the rate
+limiter. It is not — `_build/dev/lib/hammer/ebin/` held only the three
+`Mix.Tasks.Hammer.Install` artifacts; `Elixir.Hammer.beam` was absent.
+
+Two traps on the way to the fix:
+
+- **`mix deps.compile hammer` (no `--force`) silently no-ops.** It prints
+  `==> hammer` / `Generated hammer app` and exits 0 while the ebin stays
+  incomplete. Only `rm -rf _build/dev/lib/hammer` first (or `--force`) makes it
+  compile the 14 files.
+- **The parent checkout compiling clean proves nothing**, and neither does
+  checking out an unmodified tree in the *same* worktree — the bad `_build` is
+  the worktree's, so `git stash` + recompile still fails and invites the wrong
+  conclusion that the breakage is on `main`.
+
+Check the ebin directly before theorising:
+
+```bash
+ls _build/dev/lib/<dep>/ebin/ | head
 ```
 
 ## Gotchas
