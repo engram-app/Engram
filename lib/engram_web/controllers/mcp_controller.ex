@@ -20,7 +20,33 @@ defmodule EngramWeb.McpController do
   #
   # `2025-03-26` stays supported so a client pinned to it keeps working. This
   # list is the negotiation surface — adding a revision means meeting it.
-  @supported_protocol_versions ["2026-07-28", "2025-06-18", "2025-03-26", "2024-11-05"]
+  @supported_protocol_versions [
+    "2026-07-28",
+    "2025-11-25",
+    "2025-06-18",
+    "2025-03-26",
+    "2024-11-05"
+  ]
+
+  # `2025-11-25` is claimed because we meet it, audited against its changelog
+  # rather than assumed from the version number. Almost everything it adds is
+  # someone else's job or optional:
+  #
+  #   * elicitation (ElicitResult/EnumSchema, URL mode) and tool-calling in
+  #     sampling are CLIENT capabilities — we advertise neither
+  #   * icons, `Implementation.description` and experimental tasks are optional
+  #     server metadata
+  #   * CIMD as the recommended client registration already shipped (#1148)
+  #   * SEP-1303 (input validation as a Tool Execution Error) already shipped
+  #     (#1657)
+  #   * RFC 9728 protected-resource metadata and the `WWW-Authenticate`
+  #     fallback both already exist
+  #   * JSON Schema 2020-12 is the default dialect, which our schemas are
+  #
+  # The one obligation we did NOT already meet was the clarification that a
+  # server MUST answer HTTP 403 to an invalid `Origin`. That is what
+  # `Plugs.McpOriginGuard` does, and it is also #1259 finding 2 — the same gap
+  # from both directions.
 
   # `2026-07-28` is a different ERA, not just a newer revision: it deletes the
   # `initialize` handshake entirely and moves protocol version, client info and

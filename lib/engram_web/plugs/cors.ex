@@ -82,6 +82,15 @@ defmodule EngramWeb.Plugs.CORS do
       "*" ->
         "*"
 
+      # An explicit nil means the key is PRESENT and unconfigured, which
+      # `get_env/3`'s default does not cover — and this plug runs on the
+      # ENDPOINT, so an unmatched clause here 500s every request on every
+      # pipeline, not just one route. Reached for real by any code that
+      # "restores" the setting with `put_env(.., nil)` instead of
+      # `delete_env/2`. Same meaning as unset.
+      nil ->
+        "*"
+
       origin when is_binary(origin) ->
         origin
 

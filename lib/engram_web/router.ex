@@ -631,6 +631,12 @@ defmodule EngramWeb.Router do
       # bodies would go out as-is. Registers a before_send that rewrites a
       # refusal body into a JSON-RPC error while leaving the status alone.
       EngramWeb.Plugs.McpErrorEnvelope,
+      # AFTER McpErrorEnvelope so its before_send callback is already
+      # registered and rewrites this 403 into JSON-RPC, and BEFORE :authed_api
+      # so a DNS-rebinding probe is refused on its own terms instead of
+      # reaching auth (#1259). 403 is the status `2025-11-25` names for an
+      # invalid Origin.
+      EngramWeb.Plugs.McpOriginGuard,
       :authed_api,
       # No VaultPlug: McpController self-resolves the vault. TraceUserAttrs still
       # stamps app.user_id (app.vault_id stays nil — MCP is multi-vault per
