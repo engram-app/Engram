@@ -16,6 +16,11 @@ defmodule Engram.Repo.TenancyGuardTest do
 
   alias Engram.Repo.TenancyGuard
 
+  # Opted out of the enforced-RLS diagnostic: `enforced?/0` is asserted as a
+  # PAIR (false for the suite's superuser connection, true under a dropped
+  # role), and a suite-wide drop would make the first half false.
+  @moduletag :rls_unsafe
+
   describe "enforced?/0" do
     test "false for the suite's connection, which bypasses RLS" do
       # Not an accident of the test harness — it is the reason the RLS bug was
