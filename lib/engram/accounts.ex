@@ -9,6 +9,7 @@ defmodule Engram.Accounts do
   alias Engram.Auth.EmailNormalizer
   alias Engram.Auth.RefreshToken
   alias Engram.Auth.SessionInvalidator
+  alias Engram.Logger.Metadata
   alias Engram.Repo
 
   @api_key_prefix "engram_"
@@ -502,7 +503,7 @@ defmodule Engram.Accounts do
 
     Logger.warning(
       "refresh-token reuse detected; revoking family family_id=#{family_id}",
-      Engram.Logger.Metadata.with_category(:warning, :auth, [])
+      Metadata.with_category(:warning, :auth, [])
     )
 
     # Mark every still-live member of the family as revoked using the
@@ -794,22 +795,52 @@ defmodule Engram.Accounts do
   application-level `prepare_query/3` tripwire and sets no Postgres session
   state. See docs/context/skip-tenant-check-audit.md.
 
-  WHETHER THIS WAS LIVE IN PROD IS UNVERIFIED, and the repo contradicts itself.
-  `docs/context/rls-cutover-breaks-api-key-auth.md` says prod connects as a
-  BYPASSRLS migrator and was therefore unaffected, but `Engram.Onboarding`
-  records `engram_admin` as `rolbypassrls=false`, and
-  `docs/context/migrations-force-rls-data-dml.md` says the prod migrator has
-  neither SUPERUSER nor BYPASSRLS. If those two are right, admin-deleted users'
-  vaults were never reaped in prod either, which is a data-retention question
-  rather than a footnote. `Engram.Repo.TenancyGuard` logs which branch fired at
-  boot; settle it from that before anyone repeats the reassuring version.
+  Whether this was live in PROD is unresolved, and the evidence conflicts. Do
+  not repeat either answer as settled.
+
+  Prod connects as `engram_admin`, the RDS master (`engram-infra` assembles
+  `DATABASE_URL` from `aws_db_instance.main.username`).
+
+  Points at NOT enforced, today: `Engram.Workers.OrphanSweep` refuses with
+  `{:error, :tenancy_unsafe}` when `Repo.maintenance() == Repo` and
+  `TenancyGuard.enforced?()` — a direct read of `rolsuper OR rolbypassrls`.
+  Prod sets no `MAINTENANCE_DATABASE_URL`, so the first half holds, and prod
+  logs `orphan_sweep complete` rather than refusing.
+
+  Points at ENFORCED, earlier: `Engram.Onboarding.record_action/2` records
+  `engram_admin` as "verified rolbypassrls=false" against a real incident
+  (#1354) where the INSERT raised on prod, and
+  `docs/context/migrations-force-rls-data-dml.md` records a migration caught
+  no-opping for the same reason in a dated audit. Those are incident records,
+  not guesses, so they are not simply wrong.
+
+  The reconciliation that fits both is that BYPASSRLS was granted to
+  `engram_admin` out of band after those were written; nothing in this repo
+  grants it. Unconfirmed — it needs `SELECT rolsuper OR rolbypassrls` against
+  the live prod role. Staging and self-host connect as `engram_app` and were
+  definitely affected.
 
   The enqueue runs INSIDE the tenant transaction, and a failed insert raises.
   Both matter, because `Oban.insert/1` returns `{:error, changeset}` rather
   than raising: an `Enum.each/2` that discards it reproduces the exact silent
-  failure this function was fixed for, one line lower. Rolling the whole purge
-  back on a bad insert is the correct atomic outcome — the alternative leaves
-  vault 1 reaped, vault 3 not, and nothing retrying.
+  failure this function was fixed for, one line lower. Raising is what rolls
+  the batch back; returning an error tuple instead would commit the partial
+  batch and leave vault 1 reaped, vault 3 not, and nothing retrying.
+
+  Two consequences of raising, neither obvious:
+
+    * The caller gets a generic 500, NOT a rendered error.
+      `EngramWeb.FallbackController` only runs on an `{:error, _}` return
+      value, so a raise bypasses it and surfaces via `Sentry.PlugCapture`.
+    * "Rolls the batch back" is true only of THIS transaction.
+      `soft_delete_user/1` has already committed in its own transaction by the
+      time this runs, so on a raise the user stays soft-deleted with zero
+      cleanup jobs. The admin operation as a whole is not atomic.
+
+  That second one is survivable because the purge is re-drivable:
+  `soft_delete_user/1` re-stamps `deleted_at` with no already-deleted guard and
+  `Repo.get!` still finds a soft-deleted row, so re-issuing the admin DELETE
+  runs the purge again.
 
   PRECONDITION: raises if called from inside a `Repo.with_tenant/2` block for
   a DIFFERENT tenant. The only caller is the admin DELETE path, which holds no
@@ -828,9 +859,23 @@ defmodule Engram.Accounts do
           {:ok, _job} ->
             :ok
 
-          {:error, reason} ->
+          # Only the changeset's ERRORS, never the changeset itself.
+          # `inspect/1` on a struct in a message body is the shape this repo
+          # bans: `Engram.Logger.RedactFilter` deliberately does not touch
+          # message bodies, and this string reaches both the crash log and
+          # Sentry. `errors` is bounded and is the part that says why.
+          #
+          # `Metadata.safe_reason/1` is not used for the changeset branch on
+          # purpose: its `%mod{}` clause renders just "Ecto.Changeset" and
+          # throws the constraint name away.
+          {:error, %Ecto.Changeset{errors: errors}} ->
             raise "purge_user_vaults: CleanupVault enqueue failed for vault " <>
-                    "#{v.id} (user #{user_id}): #{inspect(reason)}"
+                    "#{v.id} (user #{user_id}): #{inspect(errors)}"
+
+          {:error, other} ->
+            raise "purge_user_vaults: CleanupVault enqueue failed for vault " <>
+                    "#{v.id} (user #{user_id}): " <>
+                    Metadata.safe_reason(other)
         end
       end)
 
@@ -847,7 +892,7 @@ defmodule Engram.Accounts do
       # says how much it did.
       Logger.info(
         "purge_user_vaults enqueued #{count} CleanupVault job(s)",
-        Engram.Logger.Metadata.with_category(:info, :lifecycle, user_id: user_id)
+        Metadata.with_category(:info, :lifecycle, user_id: user_id)
       )
     end)
   end
