@@ -233,5 +233,59 @@ defmodule Engram.Indexing.CommitIndexRlsTest do
           """)
       end
     end
+
+    # The test above STOPPED DISCRIMINATING at 63e74adb, and this one exists
+    # because of it.
+    #
+    # That commit scoped `prefetch_candidates/4`, which is the FIRST statement
+    # in `replace_links/4`. Under the sandbox its `with_tenant` is a savepoint
+    # whose `SET LOCAL` persists to the enclosing transaction, so every later
+    # statement — including the `insert_all` — inherits a tenant even when the
+    # write block sets none of its own. Measured, not assumed: replacing the
+    # `with_tenant` at `links.ex:141` with a bare `Repo.transaction` leaves the
+    # test above GREEN at 63e74adb and RED at 0a4161fe.
+    #
+    # An empty parsed list cannot be masked that way. It short-circuits on
+    # `prefetch_candidates(_user, _vault, [], _dek)` before anything is opened,
+    # so no tenant leaks in and the DELETE must do its own scoping. DELETE is
+    # FILTERED rather than rejected, so unscoped it reports `{0, nil}`, returns
+    # `:ok`, and the old edges survive — which is exactly what this asserts.
+    test "replace_links/4 scopes its DELETE without help from the prefetch",
+         %{bypass: bypass, note: note, vault: vault, user: user} do
+      stub_qdrant(bypass)
+      prepared = prepare!(note, vault, user)
+
+      edge_count = fn ->
+        Repo.aggregate(
+          from(l in "note_links", where: l.source_note_id == type(^note.id, Ecto.UUID)),
+          :count,
+          :id,
+          skip_tenant_check: true
+        )
+      end
+
+      # Seed as the superuser, so the delete below has something to remove.
+      :ok = Engram.Links.replace_links(user, vault, note.id, prepared.links)
+
+      assert edge_count.() > 0,
+             "fixture seeded no edges, so the delete below would be a no-op and prove nothing"
+
+      # Committing harness, deliberately: the assertion is about the rows being
+      # GONE afterwards, and the rolling-back helper would discard the delete.
+      :ok =
+        as_prod_role_committing(fn ->
+          Engram.Links.replace_links(user, vault, note.id, [])
+        end)
+
+      assert edge_count.() == 0,
+             """
+             replace_links/4 left the previous edges in place.
+
+             The DELETE was FILTERED by row-level security rather than rejected,
+             so it reported 0 rows affected and the call still returned :ok. That
+             means the write block is relying on a tenant it did not set itself —
+             which works under the sandbox and fails in prod.
+             """
+    end
   end
 end
