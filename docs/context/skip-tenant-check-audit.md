@@ -7,6 +7,9 @@ reports success while the data says otherwise.
 Audited 2026-09-17 against `5dcdcdc3`. 271 textual occurrences in `lib/`; 235
 real call sites; 36 are prose.
 
+Re-audited 2026-09-18 against `0a4161fe`: **bucket D is empty.** All 32 sites
+are scoped. Buckets A through C are unchanged — they were never debt.
+
 ## What the option does, and does not do
 
 `skip_tenant_check: true` suppresses `Engram.Repo.prepare_query/3` — an
@@ -60,12 +63,20 @@ These cannot use `with_tenant`, because there is no single tenant to set:
 - `orphan_sweep.ex` ×2 — whole-collection Qdrant↔`chunks` reconciliation. RLS
   would hide exactly the rows that prove a point is still live.
 
-## Bucket D — the debt list
+## Bucket D — the debt list (all discharged)
 
-Not yet fixed. Ordered by consequence, worst first. Every one of these is live
-only where RLS is enforced (staging today, not prod).
+All 32 sites are scoped as of 2026-09-18. Kept as a record of the class,
+because the next batch will look the same: every entry below was live only
+where RLS is enforced (staging today, not prod), and all but one of them
+failed SILENTLY.
 
-| site | consequence under RLS |
+The last to land was `links.ex` ×2, and it outlived the rest for the reason
+worth remembering — it was reached correctly from one caller and unscoped from
+four, so it read as fine in isolation.
+
+Ordered by consequence, worst first. Counts are as-of-audit, not current.
+
+| site | consequence under RLS, before the fix |
 |---|---|
 | `crypto/rotation_lock.ex` | count reads 0 → `half_state_pending?` false → **stale-lock takeover proceeds when it must be refused**. The moduledoc calls the result irreversible S3 blob corruption. |
 | `workers/cleanup_vault.ex` ×6 | vault never found, or notes/chunks/attachments never deleted and storage keys never collected → hard delete silently does nothing, blobs orphaned. |
@@ -84,13 +95,23 @@ only where RLS is enforced (staging today, not prod).
 | `workers/reindex_keyword.ex` | flags nothing → an operator-triggered re-index is a silent no-op. |
 | `workers/vault_deleted_email.ex` | nil vault → returns `:ok`, deletion notice never sent. |
 
-Two of these have **no tenant in scope at all** and cannot be fixed by
-wrapping: `keyword_index/stats.ex` and `workers/reindex_keyword.ex` need a
-`user_id` threaded in from their caller, the way `EmbedNote` now gets one.
+Two of these had **no tenant in scope at all** and could not be fixed by
+wrapping alone: `keyword_index/stats.ex` and `workers/reindex_keyword.ex`.
+Both now thread a `user_id` in from their caller, the way `EmbedNote` does,
+and then wrap — so the fix this audit said was owed is the fix that shipped.
 
-Two are **mixed-path** — scoped on one caller, not another — so they read as
-correct in isolation: `links.ex` (unscoped via `replace_links/4`) and
-`crypto/aad_rebind.ex` (scoped only when called from `BackfillCrdtState`).
+Two were **mixed-path** — scoped on one caller, not another — which is why
+they read as correct in isolation and were the hardest to see:
+
+- `links.ex`: the candidate prefetch in `replace_links/4` ran *before* that
+  function opened its own `with_tenant`. Filtered, it returned no candidates
+  and every wikilink edge was written DANGLING — silently, because the
+  `insert_all` downstream *was* scoped and succeeded. `BackfillNoteLinks`
+  reached it scoped; `commit_index/1`, `index_note_with_usage/3`'s
+  `:no_chunks` branch, `ExtractNoteLinks` and `Rewriter.finish/4` did not.
+  Now scoped inside `prefetch_candidates/4` itself.
+- `crypto/aad_rebind.ex`: scoped only when called from `BackfillCrdtState`.
+  Now scoped at `rebind_note/2`'s own entry.
 
 ## Why there is no "is it scoped?" lint
 
