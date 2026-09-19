@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.29.0](https://github.com/engram-app/Engram/compare/0.28.0...0.29.0) (2026-09-19)
+
+
+### Features
+
+* **analytics:** PostHog funnel instrumentation, GDPR erasure, and a keyed pseudonymous identity ([#1704](https://github.com/engram-app/Engram/issues/1704)) ([fef5dc2](https://github.com/engram-app/Engram/commit/fef5dc2b7ff883aff9d1cae8f5ea9671dfc2af1a))
+* **deploy:** separate migrator credentials from the app pool ([#1674](https://github.com/engram-app/Engram/issues/1674)) ([e318244](https://github.com/engram-app/Engram/commit/e3182443038a2f6cf5ed27b1cb133788f667a016))
+* **mcp:** add server.json for the official MCP registry ([#1695](https://github.com/engram-app/Engram/issues/1695)) ([451a5f7](https://github.com/engram-app/Engram/commit/451a5f71b6e36179a90e08d33fe7d0c14b04c199))
+* **mcp:** cache hints and the Mcp-Method header check ([#1692](https://github.com/engram-app/Engram/issues/1692)) ([cbfa468](https://github.com/engram-app/Engram/commit/cbfa46834a571a3d26f603dcc5605811f6ffb6d5))
+* **mcp:** claim 2025-11-25, reject invalid Origin with 403 ([#1701](https://github.com/engram-app/Engram/issues/1701)) ([e8aadd6](https://github.com/engram-app/Engram/commit/e8aadd6e59c171b307fd17c1671c3221b1b1b283))
+* **mcp:** negotiate protocol version, structured tool output ([#1672](https://github.com/engram-app/Engram/issues/1672)) ([98e55fa](https://github.com/engram-app/Engram/commit/98e55fabd2b165b42f5e1f633733ff9fbb0cb7b9))
+* **mcp:** serve the 2026-07-28 modern era alongside the legacy one ([#1689](https://github.com/engram-app/Engram/issues/1689)) ([5283fa6](https://github.com/engram-app/Engram/commit/5283fa6654bcc8f0d172f7528ce36a31095cb474))
+* **mcp:** structured output for all 21 tools ([#1684](https://github.com/engram-app/Engram/issues/1684)) ([517b32c](https://github.com/engram-app/Engram/commit/517b32c89c368a9dda47f9ce5f0b2aa68e6f46b7))
+* **mcp:** vault names as refs, spec-correct error class, handshake logging ([#1657](https://github.com/engram-app/Engram/issues/1657)) ([f9cfa1f](https://github.com/engram-app/Engram/commit/f9cfa1f7c19a6c469b1ee8f8c66341aff323fa12))
+
+
+### Bug Fixes
+
+* **auth:** carry return_to through sign-up, and resolve it safely ([#1682](https://github.com/engram-app/Engram/issues/1682)) ([76a8564](https://github.com/engram-app/Engram/commit/76a8564c7f970147054b868f72ccc4322cfda704))
+* **billing:** retry Paddle cancel on hard-delete failure ([#1673](https://github.com/engram-app/Engram/issues/1673)) ([1cc2aa4](https://github.com/engram-app/Engram/commit/1cc2aa4ed578c5414b9807578235563f7def325d))
+* **ci:** give setup-bun a private HOME, stop bun ETXTBSY ([#1604](https://github.com/engram-app/Engram/issues/1604)) ([854ab33](https://github.com/engram-app/Engram/commit/854ab3303e2756e57ba098abe3ebaa0cb0eef700))
+* **crypto:** scope the AAD rebind to its tenant ([#1694](https://github.com/engram-app/Engram/issues/1694)) ([5784785](https://github.com/engram-app/Engram/commit/57847858831f673f5d5c4f0a68b9e9b0d9c88f34))
+* **crypto:** scope the stale-takeover guard ([#1686](https://github.com/engram-app/Engram/issues/1686)) ([2e45c7a](https://github.com/engram-app/Engram/commit/2e45c7af4365a07f1f16910801903af26ba5e874))
+* **export:** scope the size estimate and the streamer reads ([#1693](https://github.com/engram-app/Engram/issues/1693)) ([a350b37](https://github.com/engram-app/Engram/commit/a350b372c0a0cced7b4dca759408f0ad9c42ed09))
+* **lifecycle:** scope the hard-delete cascade, fix the RLS harness ([#1691](https://github.com/engram-app/Engram/issues/1691)) ([b64f2bb](https://github.com/engram-app/Engram/commit/b64f2bbbef8ea98a4c1181d66817c5fdbc9dd65c))
+* **links:** scope the candidate prefetch to its tenant ([#1724](https://github.com/engram-app/Engram/issues/1724)) ([63e74ad](https://github.com/engram-app/Engram/commit/63e74adbaf1ad86fb0de5062f0bc14431c48c625))
+* **links:** scope the rename rewriter's two reads ([#1697](https://github.com/engram-app/Engram/issues/1697)) ([c9da583](https://github.com/engram-app/Engram/commit/c9da583ad440b4161393f7315b714410698360de))
+* **mcp:** answer ping instead of Method not found ([#1680](https://github.com/engram-app/Engram/issues/1680)) ([0a62085](https://github.com/engram-app/Engram/commit/0a620855dee84953798b8c5e67c943e962c1f4f8))
+* **mcp:** keep a corrupt note deletable ([#1687](https://github.com/engram-app/Engram/issues/1687)) ([948b5f2](https://github.com/engram-app/Engram/commit/948b5f2f989b1946e355b90fa69557a68cd9a72e))
+* **mcp:** two modern-era protocol violations ([#1696](https://github.com/engram-app/Engram/issues/1696)) ([d4e86a3](https://github.com/engram-app/Engram/commit/d4e86a3e2f9847d05168b5a667e4d39005efdfbc))
+* rescue MCP-first signups from a permanent onboarding 403 ([#1670](https://github.com/engram-app/Engram/issues/1670)) ([80ec292](https://github.com/engram-app/Engram/commit/80ec292d4b76b8019487ee9044f0bf4b3d9ce7f4)), closes [#1666](https://github.com/engram-app/Engram/issues/1666)
+* **rls:** let API-key auth read its own credential row ([#1719](https://github.com/engram-app/Engram/issues/1719)) ([98a03b6](https://github.com/engram-app/Engram/commit/98a03b61e5c44b11dcc81f2a6b6598cf546e4326))
+* **rls:** make the vault purge fail loudly ([#1723](https://github.com/engram-app/Engram/issues/1723)) ([0a4161f](https://github.com/engram-app/Engram/commit/0a4161fe290bb406f105aa207f7e0053568e7ecf))
+* **rls:** scope OAuth vault selection and the vault_populated probe ([#1702](https://github.com/engram-app/Engram/issues/1702)) ([b353fe8](https://github.com/engram-app/Engram/commit/b353fe8b38ab8dfd770bf361503d027a570e5f34))
+* **rls:** scope the admin vault purge ([#1722](https://github.com/engram-app/Engram/issues/1722)) ([2fd96fc](https://github.com/engram-app/Engram/commit/2fd96fce411c1d44adf3dc07d68091362e334807))
+* **rls:** scope the indexing and links write paths to a tenant ([#1667](https://github.com/engram-app/Engram/issues/1667)) ([b854aa7](https://github.com/engram-app/Engram/commit/b854aa789421c134fc5de928ee19a50b8a74b06c))
+* **rls:** scope the keyword re-normalizer, carry user_id in its args ([#1700](https://github.com/engram-app/Engram/issues/1700)) ([8e54298](https://github.com/engram-app/Engram/commit/8e54298d22e8bd7da0cbc4d30a639007791c9cb3))
+* **rls:** scope three single-site tenant reads ([#1699](https://github.com/engram-app/Engram/issues/1699)) ([4a9af7f](https://github.com/engram-app/Engram/commit/4a9af7fc4049144a0dc482cc481bfcfbd1f859aa))
+* scope per-user DEK rotation sweeps to the tenant ([#1654](https://github.com/engram-app/Engram/issues/1654)) ([6dfdbe2](https://github.com/engram-app/Engram/commit/6dfdbe2084b24bd1df84293b76ec6b6510bb7714))
+* tenant-scope RLS call sites (onboarding P0) ([#1679](https://github.com/engram-app/Engram/issues/1679)) ([5dcdcdc](https://github.com/engram-app/Engram/commit/5dcdcdc319f9c8faefb60e20b3610421f351b769))
+* **vaults:** scope list_for_ids and the content counts ([#1698](https://github.com/engram-app/Engram/issues/1698)) ([76c58df](https://github.com/engram-app/Engram/commit/76c58df3b1300aa5ee1eb5cf3852567523f0f9da))
+* **vaults:** scope vault hard-delete to its tenant ([#1688](https://github.com/engram-app/Engram/issues/1688)) ([0da1cdc](https://github.com/engram-app/Engram/commit/0da1cdce29d81ec84d153b4d597d143ffa8f022f))
+
 ## [0.28.0](https://github.com/engram-app/Engram/compare/0.27.2...0.28.0) (2026-09-16)
 
 
