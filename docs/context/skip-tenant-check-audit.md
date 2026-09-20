@@ -41,12 +41,34 @@ but a superuser bypasses RLS even under FORCE — and dev and CI both connect as
 one. Staging-fastraid **and self-host** connect as `engram_app`, which is why
 staging broke and dev/CI did not.
 
-**Whether SaaS prod enforces is UNRESOLVED, and the evidence conflicts.** Prod
-connects as `engram_admin`; `OrphanSweep` running rather than refusing points
-at not-enforced, while incident #1354 and the FORCE-RLS migration audit point
-at enforced. See the note at `lib/engram/accounts.ex:798-822` and do not repeat
-either answer as settled. `Engram.Repo.TenancyGuard` reports which side a given
-deployment is on, at boot.
+**Whether SaaS prod enforces is UNRESOLVED, and the evidence conflicts.** Do
+not repeat either answer as settled. `Engram.Repo.TenancyGuard` reports which
+side a given deployment is on, at boot.
+
+Prod connects as `engram_admin` — `rolsuper = false`, `rolbypassrls = false`.
+What is on record, and why it does not add up:
+
+- **#1649 read prod directly.** Tenant verifiably set, `notes` carrying
+  `relrowsecurity` AND `relforcerowsecurity`, and `select count(*) from notes`
+  returned **all 3,602 rows**. That says NOT enforced.
+- **#1354 / #1357 record the opposite**, also against prod: a tenant-table
+  query outside `with_tenant` returning zero rows. If the role simply ignored
+  RLS, that read would have returned everything.
+- `OrphanSweep` running rather than refusing also points at not-enforced.
+
+Both prod observations cannot hold unless something not yet identified
+conditions them. Nobody has isolated what.
+
+**One hypothesis is already dead, so do not re-derive it.** #1649 proposed
+`pg_read_all_data` / `pg_write_all_data` membership as the mechanism. Tested on
+staging 2026-09-19 against `notes` (FORCE RLS, 5,411 rows, no tenant set): a
+role holding `pg_read_all_data` and one without it BOTH saw **0 rows**. It does
+not defeat FORCE RLS, exactly as the PostgreSQL docs say. The remaining
+candidate from `engram_admin`'s membership list is `rds_superuser`, which
+cannot be reproduced on FastRaid because FastRaid is not RDS.
+
+Settling this needs one read against prod. See also
+`lib/engram/accounts.ex:798-822`.
 
 ## The four buckets
 
