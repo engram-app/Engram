@@ -101,6 +101,19 @@ defmodule Engram.PromEx.Reliability do
           description: "Boot could not determine whether RLS is enforced for this connection.",
           tags: []
         ),
+        # Unlike its two neighbours, this one CAN fire on prod — it is the
+        # condition where the role's pg_roles attributes and its actual row
+        # visibility disagree, which is engram-app/Engram#1726 and which has
+        # only ever been observed on prod. A Loki rule would work here; the
+        # counter is the durable half either way.
+        counter(
+          metric_prefix ++ [:tenancy_divergence, :total],
+          event_name: [:engram, :repo, :tenancy_divergence],
+          description:
+            "Boot found the role's RLS attributes and its observed row visibility in " <>
+              "disagreement — the deployment is in the state #1726 describes.",
+          tags: []
+        ),
         counter(
           metric_prefix ++ [:embed, :failed, :total],
           event_name: [:engram, :embed, :failed],
