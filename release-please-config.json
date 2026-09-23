@@ -5,7 +5,8 @@
       "release-type": "simple",
       "include-component-in-tag": false,
       "extra-files": [
-        { "type": "generic", "path": "mix.exs" }
+        { "type": "generic", "path": "mix.exs" },
+        { "type": "json", "path": "server.json", "jsonpath": "$.version" }
       ]
     }
   },
