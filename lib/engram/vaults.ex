@@ -334,9 +334,10 @@ defmodule Engram.Vaults do
   end
 
   @doc """
-  Count of non-deleted vaults owned by `user`. Tenant scoping is the explicit
-  `user_id == ^user_id` clause; RLS is bypassed (`skip_tenant_check: true`)
-  for parity with `list_for_ids/2`. The clause MUST stay.
+  Count of non-deleted vaults owned by `user`. Runs INSIDE `Repo.with_tenant/2`
+  (#1354): `vaults` is FORCE-RLS, so the unscoped form counted 0 for every user
+  on prod. The explicit `user_id == ^user_id` clause is a second belt and MUST
+  stay, but it is not what does the scoping.
   """
   @spec count_for(Engram.Accounts.User.t()) :: non_neg_integer()
   def count_for(%Engram.Accounts.User{id: user_id}) do

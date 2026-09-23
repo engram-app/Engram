@@ -250,12 +250,14 @@ defmodule EngramWeb.CSP do
 
   # PostHog product analytics (browser SDK).
   #
-  # SDK is bundled (no script-src host). Events POST to the project's
-  # regional host — `us.i.posthog.com` for US-hosted projects,
-  # `eu.i.posthog.com` for EU. The `.i.` subdomain is PostHog's
-  # documented ingest path; wildcard covers both regions without
-  # hard-coding which one this account uses (configured at build via
-  # VITE_POSTHOG_HOST).
+  # SDK is bundled (no script-src host). As of the first-party proxy
+  # (VITE_POSTHOG_HOST=/ph in .env.production, forwarded to PostHog by
+  # `frontend/worker/index.ts`'s proxyToPostHog), the browser POSTs
+  # same-origin and is already covered by `connect-src 'self'` — these
+  # wildcard regional hosts are not needed for that path today. Kept as a
+  # fallback `connect-src` entry (harmless: an unused allowance, not a
+  # missing one) for any deploy where VITE_POSTHOG_HOST reverts to a direct
+  # PostHog host.
   #
   # Same silent-failure trap as Sentry: without this `connect-src`
   # entry, `posthog.capture(...)` looks like it succeeded — the SDK

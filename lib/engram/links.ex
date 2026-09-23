@@ -179,13 +179,37 @@ defmodule Engram.Links do
   # forfeits `route_resolution/3`'s lazy short-circuit (it no longer skips the
   # second table's *query*, only its filter), which trades at worst one extra
   # query per note against one saved per link.
+  #
+  # Scoped HERE and not at the callers, for the same reason `replace_links/4`
+  # is: this prefetch runs BEFORE that function opens its own `with_tenant`
+  # (it feeds the rows that block inserts), and FIVE caller paths reach it with
+  # no tenant in force — `commit_index/1` after its tenant block has already
+  # committed, `index_note_with_usage/3`'s `:no_chunks` branch,
+  # `ExtractNoteLinks` (whose block covers only the vault fetch),
+  # `Rewriter.finish/4`, and `Rewriter.rewrite_legacy/5` (reached from
+  # `attempt/6`'s `{:legacy, _}` branch, after `load_doc/2`'s block has
+  # closed). Filtered, both reads return no candidates and every edge is
+  # written DANGLING — silently, because the `insert_all` downstream IS scoped
+  # and succeeds. Re-entrant for the same tenant, so `BackfillNoteLinks`
+  # (already inside `with_tenant`) pays nothing.
+  #
+  # The `[]` clause is load-bearing, not a micro-optimisation.
+  # `replace_links/4` runs on EVERY note write and a note with no wikilinks is
+  # the common case; `fetch_candidates_by_hmac/5` already short-circuits `[]`
+  # with zero queries. Wrapping unconditionally therefore opened a whole
+  # transaction to run nothing — about four extra round trips on the hot path,
+  # which is the exact cost this prefetch exists to avoid.
+  defp prefetch_candidates(_user, _vault, [], _dek), do: %{notes: %{}, attachments: %{}}
+
   defp prefetch_candidates(user, vault, hmacs, dek) do
     uniq = Enum.uniq(hmacs)
 
-    %{
-      notes: fetch_candidates_by_hmac(user, vault, uniq, :notes, dek),
-      attachments: fetch_candidates_by_hmac(user, vault, uniq, :attachments, dek)
-    }
+    Repo.with_tenant!(user.id, fn ->
+      %{
+        notes: fetch_candidates_by_hmac(user, vault, uniq, :notes, dek),
+        attachments: fetch_candidates_by_hmac(user, vault, uniq, :attachments, dek)
+      }
+    end)
   end
 
   # Same extension-preference + cross-table-fallback rule as `resolve_target/4`,

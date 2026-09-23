@@ -9,6 +9,7 @@ defmodule Engram.Accounts do
   alias Engram.Auth.EmailNormalizer
   alias Engram.Auth.RefreshToken
   alias Engram.Auth.SessionInvalidator
+  alias Engram.Logger.Metadata
   alias Engram.Repo
 
   @api_key_prefix "engram_"
@@ -502,7 +503,7 @@ defmodule Engram.Accounts do
 
     Logger.warning(
       "refresh-token reuse detected; revoking family family_id=#{family_id}",
-      Engram.Logger.Metadata.with_category(:warning, :auth, [])
+      Metadata.with_category(:warning, :auth, [])
     )
 
     # Mark every still-live member of the family as revoked using the
@@ -780,14 +781,119 @@ defmodule Engram.Accounts do
 
   @doc """
   Spec §7 — enqueues a forced `CleanupVault` for every vault a user owns
-  (active + soft-deleted). Bypasses RLS + the `Vaults.list_vaults/1`
-  DEK-decrypt chain, since the purge only needs vault ids.
+  (active + soft-deleted). Skips the `Vaults.list_vaults/1` DEK-decrypt chain,
+  since the purge only needs vault ids.
+
+  Scoped with `Repo.with_tenant!/2` because `vaults` carries FORCE ROW LEVEL
+  SECURITY. Unscoped, the enumeration is filtered to `[]` under any role the
+  policy applies to, `Enum.each/2` iterates nothing, and the admin DELETE
+  endpoint answers `{"ok": true}` while the user's vaults, attachments and
+  storage blobs are never reaped. Nothing raises and nothing logs.
+
+  This previously read with `skip_tenant_check: true`, and the docstring
+  claimed that "bypasses RLS". It does not: that option only silences the
+  application-level `prepare_query/3` tripwire and sets no Postgres session
+  state. See docs/context/skip-tenant-check-audit.md.
+
+  Whether this was live in PROD is unresolved, and the evidence conflicts. Do
+  not repeat either answer as settled.
+
+  Prod connects as `engram_admin`, the RDS master (`engram-infra` assembles
+  `DATABASE_URL` from `aws_db_instance.main.username`).
+
+  Points at NOT enforced, today: `Engram.Workers.OrphanSweep` refuses with
+  `{:error, :tenancy_unsafe}` when `Repo.maintenance() == Repo` and
+  `TenancyGuard.enforced?()` — a direct read of `rolsuper OR rolbypassrls`.
+  Prod sets no `MAINTENANCE_DATABASE_URL`, so the first half holds, and prod
+  logs `orphan_sweep complete` rather than refusing.
+
+  Points at ENFORCED, earlier: `Engram.Onboarding.record_action/2` records
+  `engram_admin` as "verified rolbypassrls=false" against a real incident
+  (#1354) where the INSERT raised on prod, and
+  `docs/context/migrations-force-rls-data-dml.md` records a migration caught
+  no-opping for the same reason in a dated audit. Those are incident records,
+  not guesses, so they are not simply wrong.
+
+  The reconciliation that fits both is that BYPASSRLS was granted to
+  `engram_admin` out of band after those were written; nothing in this repo
+  grants it. Unconfirmed — it needs `SELECT rolsuper OR rolbypassrls` against
+  the live prod role. Staging and self-host connect as `engram_app` and were
+  definitely affected.
+
+  The enqueue runs INSIDE the tenant transaction, and a failed insert raises.
+  Both matter, because `Oban.insert/1` returns `{:error, changeset}` rather
+  than raising: an `Enum.each/2` that discards it reproduces the exact silent
+  failure this function was fixed for, one line lower. Raising is what rolls
+  the batch back; returning an error tuple instead would commit the partial
+  batch and leave vault 1 reaped, vault 3 not, and nothing retrying.
+
+  Two consequences of raising, neither obvious:
+
+    * The caller gets a generic 500, NOT a rendered error.
+      `EngramWeb.FallbackController` only runs on an `{:error, _}` return
+      value, so a raise bypasses it and surfaces via `Sentry.PlugCapture`.
+    * "Rolls the batch back" is true only of THIS transaction.
+      `soft_delete_user/1` has already committed in its own transaction by the
+      time this runs, so on a raise the user stays soft-deleted with zero
+      cleanup jobs. The admin operation as a whole is not atomic.
+
+  That second one is survivable because the purge is re-drivable:
+  `soft_delete_user/1` re-stamps `deleted_at` with no already-deleted guard and
+  `Repo.get!` still finds a soft-deleted row, so re-issuing the admin DELETE
+  runs the purge again.
+
+  PRECONDITION: raises if called from inside a `Repo.with_tenant/2` block for
+  a DIFFERENT tenant. The only caller is the admin DELETE path, which holds no
+  tenant when it gets here.
+
+  Returns the number of vaults enqueued.
   """
   def purge_user_vaults(%User{id: user_id}) do
-    Repo.all(
-      from(v in Engram.Vaults.Vault, where: v.user_id == ^user_id),
-      skip_tenant_check: true
-    )
-    |> Enum.each(fn v -> Engram.Workers.CleanupVault.enqueue_now(v.id, user_id) end)
+    require Logger
+
+    Repo.with_tenant!(user_id, fn ->
+      vaults = Repo.all(from(v in Engram.Vaults.Vault, where: v.user_id == ^user_id))
+
+      Enum.each(vaults, fn v ->
+        case Engram.Workers.CleanupVault.enqueue_now(v.id, user_id) do
+          {:ok, _job} ->
+            :ok
+
+          # Only the changeset's ERRORS, never the changeset itself.
+          # `inspect/1` on a struct in a message body is the shape this repo
+          # bans: `Engram.Logger.RedactFilter` deliberately does not touch
+          # message bodies, and this string reaches both the crash log and
+          # Sentry. `errors` is bounded and is the part that says why.
+          #
+          # `Metadata.safe_reason/1` is not used for the changeset branch on
+          # purpose: its `%mod{}` clause renders just "Ecto.Changeset" and
+          # throws the constraint name away.
+          {:error, %Ecto.Changeset{errors: errors}} ->
+            raise "purge_user_vaults: CleanupVault enqueue failed for vault " <>
+                    "#{v.id} (user #{user_id}): #{inspect(errors)}"
+
+          {:error, other} ->
+            raise "purge_user_vaults: CleanupVault enqueue failed for vault " <>
+                    "#{v.id} (user #{user_id}): " <>
+                    Metadata.safe_reason(other)
+        end
+      end)
+
+      length(vaults)
+    end)
+    |> tap(fn count ->
+      # Logged AFTER the transaction returns, not inside it. Inside, the line
+      # asserts "enqueued N" while those rows are still uncommitted, so a
+      # connection drop or statement timeout before COMMIT leaves a log claiming
+      # jobs that do not exist — the same report-success-while-doing-nothing
+      # shape this function exists to remove, one layer up.
+      #
+      # An irreversible admin action that previously did nothing at all, so it
+      # says how much it did.
+      Logger.info(
+        "purge_user_vaults enqueued #{count} CleanupVault job(s)",
+        Metadata.with_category(:info, :lifecycle, user_id: user_id)
+      )
+    end)
   end
 end

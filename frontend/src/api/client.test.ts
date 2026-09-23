@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { track } from "../analytics/track";
 import { ApiError, api, isNotFound, LimitExceededError, setUpgradeHandler } from "./client";
+
+vi.mock("../analytics/track", () => ({ track: vi.fn() }));
+const mockTrack = vi.mocked(track);
 
 describe("isNotFound", () => {
 	it("is true only for a 404 ApiError", () => {
@@ -100,6 +104,40 @@ describe("api client 402 handling", () => {
 			);
 
 		await expect(api.get("/x")).rejects.toThrow("display_name: should be at most 80 character(s)");
+	});
+
+	it("emits onboarding_blocked on a 403 onboarding_required response", async () => {
+		mockTrack.mockClear();
+		globalThis.fetch = vi.fn().mockResolvedValue(
+			new Response(
+				JSON.stringify({
+					error: "onboarding_required",
+					missing: ["terms", "vault"],
+					next_step: "agreement",
+					resume_url: "https://app.engram.page/onboard",
+					message: "Your Engram account setup is not finished.",
+				}),
+				{ status: 403, headers: { "Content-Type": "application/json" } },
+			),
+		);
+
+		await expect(api.get("/notes")).rejects.toBeInstanceOf(ApiError);
+
+		expect(mockTrack).toHaveBeenCalledWith("onboarding_blocked", {
+			missing: ["terms", "vault"],
+			next_step: "agreement",
+		});
+	});
+
+	it("does not emit onboarding_blocked for an unrelated 403", async () => {
+		mockTrack.mockClear();
+		globalThis.fetch = vi
+			.fn()
+			.mockResolvedValue(new Response(JSON.stringify({ error: "forbidden" }), { status: 403 }));
+
+		await expect(api.post("/folders", {})).rejects.toBeInstanceOf(ApiError);
+
+		expect(mockTrack).not.toHaveBeenCalled();
 	});
 
 	it("sends an X-Device-Id header on every request", async () => {

@@ -8,7 +8,7 @@ dual-write.
 
 Identity has lived in three places that must agree — the plugin's `NoteIdMap`,
 the REST manifest, and the seq cursor. Every drift incident in this repo traces
-to that split (`relay-pattern-audit.md`). #167 exists to collapse it to one.
+to that split (`sync-pattern-audit.md`). #167 exists to collapse it to one.
 
 Collapsing it raises a question the epic did not answer: the server ALSO changes
 paths (web rename, MCP, folder rename, batch move). Two writers of identity, so

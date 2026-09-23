@@ -157,7 +157,11 @@
 			"linter": { "rules": { "nursery": { "useLayeredStyles": "off" } } }
 		},
 		{
-			"includes": ["src/billing/billing-page.tsx", "src/settings/connections-page.tsx"],
+			"includes": [
+				"src/billing/billing-page.tsx",
+				"src/settings/connections-page.tsx",
+				"src/device/device-link-page.tsx"
+			],
 			"linter": { "rules": { "nursery": { "useReactCompiler": "off" } } }
 		},
 		{

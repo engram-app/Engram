@@ -131,7 +131,7 @@ defmodule EngramWeb.VaultsController do
           # conflate browsing with opening, so the event stays on show/2.
           _ =
             Engram.Observability.PostHog.capture(
-              Engram.Observability.PostHog.distinct_id_for(user),
+              Engram.Observability.PostHog.analytics_id(user.email),
               "vault_opened",
               %{vault_id: vault.id}
             )

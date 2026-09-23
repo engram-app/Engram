@@ -1,4 +1,5 @@
 import { type ReactNode, useState } from "react";
+import { track } from "../analytics/track";
 import { ChecklistWidget } from "./checklist-widget";
 import { CreateFirstVaultModal } from "./create-first-vault-modal";
 import { useOnboardingActions } from "./use-onboarding-actions";
@@ -17,7 +18,15 @@ export function OnboardingShell({ children }: { children: ReactNode }) {
 		<>
 			{children}
 			{Boolean(showVaultModal) && (
-				<CreateFirstVaultModal onCreated={() => setVaultModalHandled(true)} />
+				<CreateFirstVaultModal
+					onCreated={(vault) => {
+						// Same milestone the wizard's own vault step reports (see
+						// onboard-vault-page.tsx), reached here via the recovery path:
+						// a "done" account with 0 vaults (e.g. after a deletion).
+						track("onboarding_step_completed", { step: "vault", vault_id: vault.id });
+						setVaultModalHandled(true);
+					}}
+				/>
 			)}
 			<ChecklistWidget />
 		</>
