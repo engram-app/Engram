@@ -545,6 +545,9 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - `Application.put_env` in `async: true` tests is a flake source → `docs/context/exunit-application-env-races.md`
 - Writing a test that proves a query is tenant-scoped, or an RLS test that passes while the code is still unscoped (only INSERT raises; the suite connects as a SUPERUSER; a sandbox `SET LOCAL` tenant leaks FORWARD) → `docs/context/rls-enforcement-testing-traps.md`
 - An e2e assertion counts something vault-wide, or a test's failure count refuses to move across product fixes (the e2e vault is session-scoped and shared by ~110 tests) → `docs/context/e2e-session-vault-scoping-trap.md`
+- Several unrelated `e2e-crdt` tests fail in one run (live-binding + seq-gap-heal + orphaned-claim + web-to-obsidian): check whether both Obsidian instances died mid-run before counting N bugs → `docs/context/e2e-simultaneous-failures-obsidian-death.md`
+- A CDP call starts returning `[Errno 111] Connection refused`, or a "content never propagated" 120s timeout while the backend log stays healthy (all 7 runners share one 16 GB VM; Obsidian stderr is `DEVNULL`, so an OOM kill leaves no record) → `docs/context/e2e-simultaneous-failures-obsidian-death.md`
+- Deciding whether a red e2e run is a real regression (same test passing on the SAME sha in a sibling run; check the pinned PLUGIN sha too) → `docs/context/e2e-simultaneous-failures-obsidian-death.md`
 - Why `prebuild-mix` recompiled everything despite cache hits (absolute-path compile manifest) → `docs/context/ci-mix-compile-cache-runner-path.md`
 - Bun lifecycle-script trust model, `trustedDependencies`, the pngquant CI flake (#975) → `docs/context/bun-postinstall-trust.md`
 
