@@ -22,9 +22,10 @@
 		// Serve index.html (200) for any path that isn't a built asset, so
 		// React Router client-side routes (deep links, /settings, etc.) work.
 		"not_found_handling": "single-page-application",
-		// Invoke the Worker FIRST only for the dead MCP path (returns 410);
-		// all other paths serve static assets directly. House pattern mirrors
-		// engram-marketing's wrangler `run_worker_first` scoping.
-		"run_worker_first": ["/api/mcp", "/api/mcp/*"]
+		// Invoke the Worker FIRST only for the dead MCP path (returns 410) and
+		// the first-party PostHog proxy (/ph); all other paths serve static
+		// assets directly. House pattern mirrors engram-marketing's wrangler
+		// `run_worker_first` scoping.
+		"run_worker_first": ["/api/mcp", "/api/mcp/*", "/ph", "/ph/*"]
 	}
 }

@@ -23,15 +23,15 @@ engram-app/engram-workspace#167.
 ## Why the room exists
 
 Identity today lives in three places that have to agree — `NoteIdMap` in the client, the REST
-manifest, and the seq cursor. `relay-pattern-audit.md` — in the **engram-workspace** repo, not this one
-(`../engram-workspace/docs/context/relay-pattern-audit.md`) — traces every drift incident to
+manifest, and the seq cursor. `sync-pattern-audit.md` — in the **engram-workspace** repo, not this one
+(`../engram-workspace/docs/context/sync-pattern-audit.md`) — traces every drift incident to
 that split, and lists the ~18 functions in `plugin/src/sync.ts` that exist only to keep them
-agreeing. Relay has no such class because identity converges through the **same channel as
+agreeing. The class disappears when identity converges through the **same channel as
 content**, as a `Y.Map` inside a synced doc. This room is that map.
 
-The name `filemeta_v0` matches Relay's (`SyncStore.ts:20`) on purpose: the shape is the part of
-their design that removes the drift class, and keeping the name makes the correspondence checkable
-rather than folkloric.
+The name `filemeta_v0` is the wire contract shared with the client: a single flat map keyed by
+path is the shape that removes the drift class, and pinning the name makes the correspondence
+checkable rather than folkloric.
 
 ## The trap: #1150 and #1152 combined badly (now half-resolved)
 
@@ -75,7 +75,7 @@ see "Testing notes" below.
   known — moving ALL index traffic onto the handshake lane only relocates the starvation risk onto
   handshakes, which is the 2026-07-07 cross-file-overwrite shape. Both lanes are now pinned by
   tests so the decision is made against measured behaviour rather than a comment.
-- **Relay ordering.** `handle_info({:yjs, frame, room})` checks `index_room` FIRST, so an index
+- **Frame-relay ordering.** `handle_info({:yjs, frame, room})` checks `index_room` FIRST, so an index
   room can never be mistaken for a note room whose pid was reused.
 - **Monitor + cache eviction.** Same rationale as note rooms: a dead room left in the cache means
   every later frame casts into a corpse and returns `:ok` (a `sync_update` is a `GenServer.cast`).

@@ -525,7 +525,7 @@ defmodule Engram.Notes do
             # doesn't double-count idempotent re-pushes of unchanged notes.
             :ok =
               PostHog.capture(
-                PostHog.distinct_id_for(user),
+                PostHog.analytics_id(user.email),
                 "note_created",
                 %{vault_id: vault.id}
               )
@@ -4195,7 +4195,7 @@ defmodule Engram.Notes do
         })
       end
 
-    distinct_id = PostHog.distinct_id_for(user)
+    distinct_id = PostHog.analytics_id(user.email)
 
     Enum.each(created, fn _ ->
       :ok =

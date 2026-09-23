@@ -4,7 +4,8 @@ defmodule Engram.Accounts.Lifecycle do
   Clerk `user.deleted` webhook, and the inactivity sweep.
 
   Soft = reversible (sets `deleted_at`, drops Qdrant, revokes tokens, emails).
-  Hard = cascade purge of every store (sessions, Paddle, Qdrant, S3, PG, Clerk).
+  Hard = cascade purge of every store (sessions, Paddle, Qdrant, S3, PG, Clerk,
+  PostHog).
 
   Both are idempotent.
   """
@@ -19,6 +20,7 @@ defmodule Engram.Accounts.Lifecycle do
   alias Engram.Indexing
   alias Engram.Logger.Metadata
   alias Engram.Mailer
+  alias Engram.Observability.PostHog
   alias Engram.Repo
   alias Engram.Storage
   alias Engram.Vector.Qdrant
@@ -158,6 +160,15 @@ defmodule Engram.Accounts.Lifecycle do
     # Step 3: S3 prefixes — user blobs + exports. Retry once on failure.
     _ = wipe_storage_prefix(user, "#{user.id}/")
     _ = wipe_storage_prefix(user, "exports/#{user.id}/")
+
+    # Step 3b: analytics. Right to erasure covers PostHog too — this was
+    # missing until 2026-09-17, so accounts erased before then still have live
+    # person records. Best-effort and non-blocking, same as Qdrant and S3.
+    # Also deletes the legacy Clerk-id-keyed person: every person created
+    # before this work is keyed on the raw Clerk id, not the analytics id, so
+    # erasing only the new key would leave the old record behind.
+    _ = PostHog.delete_person(PostHog.analytics_id(user.email))
+    _ = if user.external_id, do: PostHog.delete_person(user.external_id), else: :ok
 
     # Step 4: COMMIT POINT — Postgres cascade, wrapped in a transaction so
     # the two writes (vault delete + user delete) either both land or both

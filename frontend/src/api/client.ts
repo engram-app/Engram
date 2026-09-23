@@ -1,3 +1,4 @@
+import { track } from "../analytics/track";
 import { newTraceContext, tracingEnabled } from "../observability/trace";
 import { getActiveVaultId } from "./active-vault";
 import { getApiBase, joinApiUrl } from "./base";
@@ -55,6 +56,14 @@ async function authFetch(path: string, options: RequestInit = {}): Promise<Respo
 
 	if (!response.ok) {
 		const body = await response.json().catch(() => ({}));
+		// EngramWeb.Plugs.RequireOnboarding's 403 shape. Every caller routes
+		// through this one function, so this is the single place that can see
+		// it — nothing upstream ever specialised on `error: "onboarding_required"`
+		// before, which is why a user stuck behind this gate left no trace at
+		// all (see dgonzalez, two visits, zero notes).
+		if (response.status === 403 && body.error === "onboarding_required") {
+			track("onboarding_blocked", { missing: body.missing, next_step: body.next_step });
+		}
 		if (response.status === 402) {
 			const reason = body.reason ?? "unknown";
 			if (upgradeHandler) {

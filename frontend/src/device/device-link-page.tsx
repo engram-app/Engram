@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useAutofocus } from "@/hooks/use-autofocus";
 import { destructiveAlert, fieldInput, heading, selectableRow } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
+import { track } from "../analytics/track";
 import { setActiveVaultId } from "../api/active-vault";
 import { api } from "../api/client";
 import { type Connection, useBillingStatus, useConnections, useMe } from "../api/queries";
@@ -252,6 +253,11 @@ function DeviceLinkPage() {
 	async function handleAuthorize() {
 		setLoading(true);
 		setError("");
+		const startedAt = Date.now();
+		// vault_id only when linking into a known existing vault — a "new" or
+		// "custom" selection has no id to report yet, and passing one of those
+		// strings under a "uuid" key would just get silently dropped anyway.
+		track("plugin_connect_started", createNew ? {} : { vault_id: selection });
 		try {
 			// If user is at cap, swap: disconnect the existing device first so the
 			// authorize call doesn't 402. If the disconnect succeeds but authorize
@@ -296,6 +302,7 @@ function DeviceLinkPage() {
 
 				setLinkedVaultId(vault_id);
 				setStep("success");
+				track("plugin_connect_succeeded", { vault_id, duration_ms: Date.now() - startedAt });
 			} catch (authErr) {
 				if (swappedFromName) {
 					// Disconnect succeeded but authorize did not — user is now at 0
@@ -304,6 +311,7 @@ function DeviceLinkPage() {
 						`Disconnected '${swappedFromName}' but linking the new device failed. ` +
 							"Re-link from Obsidian — no devices are currently synced.",
 					);
+					track("plugin_connect_failed", { reason: "unknown" });
 					return;
 				}
 				throw authErr;
@@ -313,14 +321,17 @@ function DeviceLinkPage() {
 			// dialog opens with Disconnect + Upgrade). Don't double-render its
 			// raw message as an inline error.
 			if (e instanceof Error && e.name === "LimitExceededError") {
+				track("plugin_connect_failed", { reason: "limit_exceeded" });
 				return;
 			}
 			const message = e instanceof Error ? e.message : "Authorization failed";
-			if (message.includes("404") || message.includes("not found")) {
+			const notFound = message.includes("404") || message.includes("not found");
+			if (notFound) {
 				setError("This code is invalid or has expired. Please try again from Obsidian.");
 			} else {
 				setError(message);
 			}
+			track("plugin_connect_failed", { reason: notFound ? "not_found" : "unknown" });
 		} finally {
 			setLoading(false);
 		}

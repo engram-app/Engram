@@ -370,7 +370,7 @@ class Replica {
 			if (connected) engine.clearConfirmedNoteIds(); // main.ts:1734
 			else if (!crdtEverJoined) engine.setCrdtManager(null); // main.ts:1757-1758
 			if (!connected) manager.clearSynced(); // main.ts:1776
-			// Relay model (main.ts:1859): providers go offline so local edits buffer
+			// Provider model (main.ts:1859): providers go offline so local edits buffer
 			// rather than being written to a dead socket. goOffline() only drops the
 			// channel, so without this the registry still believes it can send.
 			if (!connected) manager.setConnected(false);
@@ -414,7 +414,7 @@ class Replica {
 		channel.onCrdtJoined = () => {
 			crdtEverJoined = true;
 			engine.setCrdtManager(manager);
-			// Relay model: the crdt: topic is joined, so frames can go out. Without
+			// Provider model: the crdt: topic is joined, so frames can go out. Without
 			// this the registry stays `connected: false`, and since broadcast() is
 			// `sent = this.connected && send(frame)`, EVERY local frame buffers
 			// forever while the receive path keeps working — handshake/catch-up go

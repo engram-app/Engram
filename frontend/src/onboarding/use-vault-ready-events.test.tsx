@@ -1,8 +1,12 @@
 import { act, renderHook } from "@testing-library/react";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { track } from "../analytics/track";
 import { type AuthAdapter, AuthContext } from "../auth/auth-context";
 import { useVaultReadyEvents } from "./use-vault-ready-events";
+
+vi.mock("../analytics/track", () => ({ track: vi.fn() }));
+const mockTrack = vi.mocked(track);
 
 const {
 	channelHandlers,
@@ -72,6 +76,7 @@ describe("useVaultReadyEvents", () => {
 		socketConnectMock.mockClear();
 		socketDisconnectMock.mockClear();
 		channelOn.mockClear();
+		mockTrack.mockClear();
 		for (const k of Object.keys(channelHandlers)) {
 			delete channelHandlers[k];
 		}
@@ -123,6 +128,40 @@ describe("useVaultReadyEvents", () => {
 		expect(result.current.vaultCreated).toBe(true);
 		expect(result.current.vaultPopulated).toBe(true);
 		expect(result.current.vaultId).toBe("v_2");
+	});
+
+	// This is the signal the "zero notes ever" cases had no substitute for: the
+	// plugin's first sync landing is the one milestone that proves a signup
+	// actually produced content, and nothing tracked it before now.
+	it("emits vault_first_sync_completed when vault_populated fires", async () => {
+		renderHook(() => useVaultReadyEvents({ userId: "42", enabled: true }), { wrapper: wrap });
+		await act(async () => {
+			await Promise.resolve();
+			await Promise.resolve();
+		});
+
+		act(() => {
+			channelHandlers.vault_populated!({ vault_id: "v_2" });
+		});
+
+		expect(mockTrack).toHaveBeenCalledWith(
+			"vault_first_sync_completed",
+			expect.objectContaining({ vault_id: "v_2" }),
+		);
+	});
+
+	it("does not emit vault_first_sync_completed on vault_created alone", async () => {
+		renderHook(() => useVaultReadyEvents({ userId: "42", enabled: true }), { wrapper: wrap });
+		await act(async () => {
+			await Promise.resolve();
+			await Promise.resolve();
+		});
+
+		act(() => {
+			channelHandlers.vault_created!({ vault_id: "v_1" });
+		});
+
+		expect(mockTrack).not.toHaveBeenCalled();
 	});
 
 	it("does not connect when enabled is false", async () => {

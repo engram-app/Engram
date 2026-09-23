@@ -26,6 +26,7 @@ import {
 	useDeleteNote,
 	useDeleteVault,
 	useDuplicateNote,
+	useMe,
 	useNote,
 	usePlanChangePreview,
 	useRenameAttachment,
@@ -2332,5 +2333,21 @@ describe("useAppBootstrap seeding useVaults", () => {
 		await waitFor(() => expect(vaults.result.current.isSuccess).toBe(true));
 
 		expect(getActiveVaultId()).toBe("42");
+	});
+});
+
+describe("useMe outside a QueryClientProvider", () => {
+	// ClerkAuthProvider renders ABOVE QueryClientProvider in main.tsx, so the
+	// context lookup inside useQuery finds nothing and throws "No QueryClient
+	// set" — synchronously, before `enabled` is read, which is why gating the
+	// query does not avoid it. Passing the client explicitly is the only fix.
+	// Regression: this took down every signed-in page behind the error boundary.
+	it("throws without an explicit client", () => {
+		expect(() => renderHook(() => useMe({ enabled: false }))).toThrow(/No QueryClient set/);
+	});
+
+	it("does not throw when the client is passed explicitly", () => {
+		const client = new QueryClient();
+		expect(() => renderHook(() => useMe({ enabled: false, client }))).not.toThrow();
 	});
 });

@@ -84,4 +84,56 @@ defmodule Engram.Observability.PostHogTest do
       assert body["distinct_id"] == "anonymous"
     end
   end
+
+  describe "analytics_id/1" do
+    # Pins the algorithm. NOTE: this was originally a cross-repo contract with
+    # engram-marketing, but that repo's waitlist and src/lib/hash-email.ts were
+    # deleted in #189 — there is no marketing counterpart to match any more.
+    # Keep the vector anyway: it is what catches a normalisation change.
+    @key "dGVzdC1rZXktZG8tbm90LXVzZS1pbi1wcm9kdWN0aW9uLg=="
+    @email "sabio@web.de"
+
+    setup do
+      prev = Application.get_env(:engram, :hmac_key_analytics_id)
+      Application.put_env(:engram, :hmac_key_analytics_id, @key)
+      on_exit(fn -> Application.put_env(:engram, :hmac_key_analytics_id, prev) end)
+      :ok
+    end
+
+    test "normalises by trimming and downcasing" do
+      assert PostHog.analytics_id("  Sabio@Web.DE  ") == PostHog.analytics_id(@email)
+    end
+
+    test "returns 64 lowercase hex characters" do
+      assert PostHog.analytics_id(@email) =~ ~r/^[0-9a-f]{64}$/
+    end
+
+    test "is keyed, not a bare digest" do
+      plain = :crypto.hash(:sha256, @email) |> Base.encode16(case: :lower)
+      refute PostHog.analytics_id(@email) == plain
+    end
+
+    test "a different key yields a different id" do
+      first = PostHog.analytics_id(@email)
+
+      Application.put_env(
+        :engram,
+        :hmac_key_analytics_id,
+        "b3RoZXIta2V5LW90aGVyLWtleS0xMjM0NTY3OA=="
+      )
+
+      refute PostHog.analytics_id(@email) == first
+    end
+
+    # Oracle computed independently (Python `hmac.new(key, email, sha256)`).
+    # The tests above prove the output is not a bare digest; only this one
+    # proves the construction is genuinely HMAC and not sha256(key <> email),
+    # which would produce 9149107753017daac3b7cb57b12fab6319e4ad415dae5bd5e8dbd66b3b4dc969.
+    # There is no second implementation to cross-check against — engram-marketing's
+    # was deleted in #189 — so this literal IS the contract.
+    test "matches an independently computed HMAC vector" do
+      assert PostHog.analytics_id(@email) ==
+               "6f2afb8435bef1b20c37300002a4827c68eca6aa666c401626d5d227624e2bb6"
+    end
+  end
 end

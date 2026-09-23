@@ -2,6 +2,7 @@ import { ClerkProvider, useAuth, useClerk } from "@clerk/react";
 import { dark } from "@clerk/themes";
 import { useCallback, useEffect, useMemo } from "react";
 import { setTokenGetter } from "../api/client";
+import { useMe } from "../api/queries";
 import { queryClient } from "../api/query-client";
 import { useConfig } from "../config-context";
 import { getAppRouter } from "../router";
@@ -60,11 +61,19 @@ function ClerkAdapterInner({ children }: { children: React.ReactNode }) {
 	const email = clerk.user?.primaryEmailAddress?.emailAddress;
 	const imageUrl = clerk.user?.imageUrl;
 
+	// `client` is mandatory here: this provider sits ABOVE QueryClientProvider in
+	// main.tsx, so the context lookup inside useQuery throws "No QueryClient set"
+	// and the whole app renders the error boundary. `enabled` does not save it —
+	// useQuery resolves the client before it reads `enabled`.
+	// Gated anyway: this renders for signed-OUT visitors too, and an
+	// unauthenticated /me call 401s and stalls the sign-in redirect.
+	const { data: me } = useMe({ enabled: isLoaded && isSignedIn === true, client: queryClient });
+
 	useIdentifyUserOnAuthChange({
 		isLoaded,
 		isSignedIn: isSignedIn ?? false,
 		id: clerkUserId,
-		email,
+		analyticsId: me?.analytics_id,
 	});
 	const adapter: AuthAdapter = useMemo(
 		() => ({

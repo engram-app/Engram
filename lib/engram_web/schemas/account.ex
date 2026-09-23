@@ -10,9 +10,15 @@ defmodule EngramWeb.Schemas.User do
       id: %Schema{type: :string, format: :uuid},
       email: %Schema{type: :string, format: :email},
       role: %Schema{type: :string, example: "user"},
-      display_name: %Schema{type: :string, nullable: true}
+      display_name: %Schema{type: :string, nullable: true},
+      analytics_id: %Schema{
+        type: :string,
+        description:
+          "Keyed pseudonymous identifier (HMAC of the user's email) for client-side " <>
+            "analytics identify calls. See Engram.Observability.PostHog.analytics_id/1."
+      }
     },
-    required: [:id, :email]
+    required: [:id, :email, :analytics_id]
   })
 end
 

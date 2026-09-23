@@ -2,9 +2,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { track } from "../analytics/track";
 import { type AuthAdapter, AuthContext } from "../auth/auth-context";
 import { ThemeProvider, useTheme } from "../theme/theme-provider";
 import BillingPage from "./billing-page";
+
+vi.mock("../analytics/track", () => ({ track: vi.fn() }));
+const mockTrack = vi.mocked(track);
 
 const initializePaddleMock = vi.fn();
 vi.mock("@paddle/paddle-js", () => ({
@@ -14,6 +18,7 @@ vi.mock("@paddle/paddle-js", () => ({
 		CHECKOUT_CLOSED: "checkout.closed",
 		CHECKOUT_COMPLETED: "checkout.completed",
 		CHECKOUT_PAYMENT_INITIATED: "checkout.payment.initiated",
+		CHECKOUT_PAYMENT_SELECTED: "checkout.payment.selected",
 		CHECKOUT_PAYMENT_FAILED: "checkout.payment.failed",
 		CHECKOUT_PAYMENT_ERROR: "checkout.payment.error",
 		CHECKOUT_ERROR: "checkout.error",
@@ -69,6 +74,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		get.mockReset();
 		initializePaddleMock.mockReset();
 		socketCtor.mockClear();
+		mockTrack.mockClear();
 		for (const k of Object.keys(channelHandlers)) {
 			delete channelHandlers[k];
 		}
@@ -269,6 +275,147 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		expect(container.querySelector(".paddle-checkout")).not.toBeNull();
 		expect(queryAllByText("Starter")).toHaveLength(0);
 		expect(openMock).toHaveBeenCalledTimes(1);
+	});
+
+	describe("checkout funnel tracking", () => {
+		function startCheckout(container: HTMLElement) {
+			const startBtn = Array.from(container.querySelectorAll("button")).find(
+				(b) => b.textContent === "Start free trial",
+			)!;
+			return act(async () => {
+				startBtn.click();
+				await Promise.resolve();
+			});
+		}
+
+		it("emits checkout_opened with method unknown and the tier being checked out, on CHECKOUT_LOADED", async () => {
+			mockBillingApi();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: vi.fn() } };
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			await startCheckout(container);
+
+			await act(async () => {
+				captured!({ name: "checkout.loaded", data: {} });
+				await Promise.resolve();
+			});
+
+			expect(mockTrack).toHaveBeenCalledWith("checkout_opened", {
+				method: "unknown",
+				tier: "starter",
+			});
+		});
+
+		it("emits checkout_completed with the method selected mid-checkout", async () => {
+			mockBillingApi();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: vi.fn() } };
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			await startCheckout(container);
+
+			await act(async () => {
+				captured!({
+					name: "checkout.payment.selected",
+					data: { payment: { method_details: { type: "apple-pay" } } },
+				});
+				await Promise.resolve();
+			});
+			await act(async () => {
+				captured!({ name: "checkout.completed", data: {} });
+				await Promise.resolve();
+			});
+
+			expect(mockTrack).toHaveBeenCalledWith("checkout_completed", { method: "apple_pay" });
+		});
+
+		// This is the signal the four dead Apple Pay attempts on 2026-09-06
+		// needed — a declined/failed payment, not the dismissed-native-sheet
+		// case this Paddle.js integration has no event for at all (see the
+		// task report).
+		it("emits checkout_stalled on CHECKOUT_PAYMENT_FAILED", async () => {
+			mockBillingApi();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: vi.fn() } };
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			await startCheckout(container);
+
+			await act(async () => {
+				captured!({
+					name: "checkout.payment.selected",
+					data: { payment: { method_details: { type: "apple-pay" } } },
+				});
+				await Promise.resolve();
+			});
+			await act(async () => {
+				captured!({ name: "checkout.payment.failed", data: {} });
+				await Promise.resolve();
+			});
+
+			expect(mockTrack).toHaveBeenCalledWith("checkout_stalled", {
+				method: "apple_pay",
+				reason: "payment_declined",
+			});
+		});
+
+		it("emits checkout_abandoned on CHECKOUT_CLOSED without a prior completion", async () => {
+			mockBillingApi();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: vi.fn() } };
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			await startCheckout(container);
+
+			await act(async () => {
+				captured!({ name: "checkout.closed", data: {} });
+				await Promise.resolve();
+			});
+
+			expect(mockTrack).toHaveBeenCalledWith("checkout_abandoned", { method: "unknown" });
+		});
+
+		it("does not emit checkout_abandoned on CHECKOUT_CLOSED after a completion", async () => {
+			mockBillingApi();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: vi.fn() } };
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			await startCheckout(container);
+
+			await act(async () => {
+				captured!({ name: "checkout.completed", data: {} });
+				await Promise.resolve();
+			});
+			mockTrack.mockClear();
+			await act(async () => {
+				captured!({ name: "checkout.closed", data: {} });
+				await Promise.resolve();
+			});
+
+			expect(mockTrack).not.toHaveBeenCalledWith("checkout_abandoned", expect.anything());
+		});
 	});
 
 	it("onboarding (inline): CHECKOUT_PAYMENT_FAILED keeps Paddle's frame open so the decline reason + retry stay visible", async () => {

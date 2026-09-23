@@ -2,6 +2,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Component, lazy, type ReactNode, StrictMode, Suspense, use, useMemo } from "react";
 import { createRoot } from "react-dom/client";
 import { RouterProvider } from "react-router";
+import { initAnalytics } from "./analytics/init";
 import { setApiBase, setTracingEnabled, setWsBase } from "./api/base";
 import { queryClient } from "./api/query-client";
 import { configPromise, type EngramConfig } from "./config";
@@ -53,34 +54,14 @@ if (cfBeaconToken) {
 	document.head.appendChild(s);
 }
 
-// PostHog — product analytics. Cookieless by `persistence: 'memory'`
-// per [[reference_cookie_audit_2026_05_24]] so the no-banner launch
-// posture holds. Autocapture is OFF — explicit events only (see PR8)
-// is the single biggest cost lever on the free tier, per
-// [[project_observability_stack_plan]]. The identify call happens in
-// the Clerk auth provider as soon as the user resolves, NOT here —
-// firing it pre-auth would burn a permanent anonymous distinct_id.
-// posthog-js (~80 KB) is dynamically imported so it stays OUT of the eager
-// main bundle that gates first paint / the login modal. init is fire-and-
-// forget and identify happens later in the Clerk auth provider, so nothing on
-// the critical path needs posthog synchronously. The clerk-auth-provider
-// imports it too, so both resolve to one shared async chunk.
-const posthogKey = import.meta.env.VITE_POSTHOG_KEY;
-const posthogHost = import.meta.env.VITE_POSTHOG_HOST ?? "https://us.i.posthog.com";
-if (posthogKey) {
-	import("posthog-js").then(({ default: posthog }) => {
-		posthog.init(posthogKey, {
-			api_host: posthogHost,
-			persistence: "memory",
-			autocapture: false,
-			capture_pageview: false,
-			capture_pageleave: false,
-			disable_session_recording: true,
-			// Honor the browser's DNT signal as belt-and-suspenders.
-			respect_dnt: true,
-		});
-	});
-}
+// PostHog — product analytics. See ./analytics/init for the init options and
+// their rationale (cookieless posture, no-autocapture, GPC guard). Fire-and-
+// forget: init is async (posthog-js is dynamically imported so it stays OUT
+// of the eager main bundle) and identify happens later in the Clerk auth
+// provider, so nothing on the critical path needs it synchronously. The
+// clerk-auth-provider imports posthog-js too, so both resolve to one shared
+// async chunk.
+initAnalytics(import.meta.env.VITE_POSTHOG_KEY ?? "");
 
 // Both auth providers are declared lazy at module scope; only one is
 // instantiated per page load based on resolved config (BootstrapGate).

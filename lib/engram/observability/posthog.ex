@@ -8,14 +8,15 @@ defmodule Engram.Observability.PostHog do
   are logged at `:warning` but don't propagate. Missing analytics
   events must never break the request that emitted them.
 
-  The frontend's `posthog.identify(clerk_user_id, ...)` (see
-  `auth/clerk-auth-provider.tsx`) binds anonymous device events to
-  the user's distinct_id. Server-side events use the same
-  distinct_id so funnels join across the timeline. PR8 wires the
-  call sites (`note_created`, `search_performed`,
-  `vault_opened`, `subscription_started`) and the Clerk/Paddle
-  webhook forwarders that depend on this module.
+  The frontend's `posthog.identify(...)` (see
+  `frontend/src/auth/use-identify-user-on-auth-change.ts`) binds anonymous
+  device events to the user's distinct_id. Server-side events use the same
+  distinct_id so funnels join across the timeline. Live call sites: notes.ex
+  (note create/search), search.ex, vaults_controller.ex, and
+  `EngramWeb.Webhooks.PostHogForwarder` for the Clerk/Paddle webhook events.
   """
+
+  alias Engram.Logger.Metadata
 
   require Logger
 
@@ -23,8 +24,8 @@ defmodule Engram.Observability.PostHog do
 
   @doc """
   Send an event to PostHog. `distinct_id` should match the
-  frontend's `posthog.identify(...)` value — for SaaS users that's
-  the Clerk user id; for anonymous flows pass `:anon` and PostHog
+  frontend's `posthog.identify(...)` value — the keyed analytics id
+  (see `analytics_id/1`); for anonymous flows pass `:anon` and PostHog
   buckets the event under a fallback id.
   """
   @spec capture(String.t() | :anon, String.t(), map()) :: :ok
@@ -73,13 +74,13 @@ defmodule Engram.Observability.PostHog do
       {:ok, %{status: status, body: body}} ->
         Logger.warning(
           "posthog capture rejected: status=#{status} body=#{inspect(body)}",
-          Engram.Logger.Metadata.with_category(:warning, :boot, [])
+          Metadata.with_category(:warning, :boot, [])
         )
 
       {:error, reason} ->
         Logger.warning(
           "posthog capture failed: #{inspect(reason)}",
-          Engram.Logger.Metadata.with_category(:warning, :boot, [])
+          Metadata.with_category(:warning, :boot, [])
         )
     end
   end
@@ -88,15 +89,107 @@ defmodule Engram.Observability.PostHog do
   defp to_distinct_id(id) when is_binary(id), do: id
 
   @doc """
-  Resolve the PostHog distinct_id for a user. Must equal the frontend's
-  `posthog.identify(clerk.user.id)` value (see
-  frontend/src/auth/clerk-auth-provider.tsx) or funnels won't join across
-  the client/server timeline.
+  Delete a PostHog person and their events by distinct_id.
 
-  Users without a Clerk external_id (self-host, internal flows) fall back
-  to `:anon` — bucketed under a stable "anonymous" id on PostHog's side.
+  Called from account erasure. A person that does not exist is SUCCESS, not an
+  error — same tolerance as the Clerk delete, which already treats 404 as done.
+  Requires a personal API key with person:write scope; the capture key cannot
+  delete.
+
+  Always returns `:ok` — erasure must not block on a PostHog outage — but a
+  failed lookup or delete (as opposed to a lookup that legitimately finds no
+  person) logs at `:warning`, same as `capture/3`. Silence here means an
+  operator believes a person was erased when they were not.
   """
-  @spec distinct_id_for(map() | struct() | nil) :: String.t() | :anon
-  def distinct_id_for(%{external_id: ext}) when is_binary(ext) and byte_size(ext) > 0, do: ext
-  def distinct_id_for(_), do: :anon
+  @spec delete_person(String.t()) :: :ok
+  def delete_person(distinct_id) when is_binary(distinct_id) do
+    case admin_config() do
+      :disabled -> :ok
+      {key, host, project} -> lookup_and_delete(host, project, key, distinct_id)
+    end
+  end
+
+  defp lookup_and_delete(host, project, key, distinct_id) do
+    case Req.get("#{host}/api/projects/#{project}/persons/",
+           params: [distinct_id: distinct_id],
+           auth: {:bearer, key},
+           receive_timeout: 5_000
+         ) do
+      {:ok, %{status: 200, body: %{"results" => [%{"id" => id} | _]}}} ->
+        delete_by_id(host, project, key, id, distinct_id)
+
+      {:ok, %{status: 200, body: %{"results" => []}}} ->
+        # Not found — SUCCESS, not a failure. Same tolerance as the Clerk
+        # delete, which treats 404 as done.
+        :ok
+
+      {:ok, %{status: status, body: body}} ->
+        warn_erasure_failed("lookup", distinct_id, status: status, body: body)
+
+      {:error, reason} ->
+        warn_erasure_failed("lookup", distinct_id, reason: reason)
+    end
+  end
+
+  defp delete_by_id(host, project, key, id, distinct_id) do
+    case Req.delete("#{host}/api/projects/#{project}/persons/#{id}/",
+           params: [delete_events: true],
+           auth: {:bearer, key},
+           receive_timeout: 5_000
+         ) do
+      {:ok, %{status: status}} when status in 200..299 ->
+        :ok
+
+      {:ok, %{status: status, body: body}} ->
+        warn_erasure_failed("delete", distinct_id, id: id, status: status, body: body)
+
+      {:error, reason} ->
+        warn_erasure_failed("delete", distinct_id, id: id, reason: reason)
+    end
+  end
+
+  defp warn_erasure_failed(step, distinct_id, details) do
+    Logger.warning(
+      "posthog person #{step} failed during erasure: distinct_id=#{distinct_id} " <>
+        Enum.map_join(details, " ", fn {k, v} -> "#{k}=#{inspect(v)}" end),
+      Metadata.with_category(:warning, :boot, [])
+    )
+
+    :ok
+  end
+
+  defp admin_config do
+    key = Application.get_env(:engram, :posthog_erasure_api_key)
+    project = Application.get_env(:engram, :posthog_project_id)
+
+    if is_binary(key) and byte_size(key) > 0 and is_binary(project) and byte_size(project) > 0 do
+      host = Application.get_env(:engram, :posthog_host, "https://us.i.posthog.com")
+      {key, host, project}
+    else
+      :disabled
+    end
+  end
+
+  @doc """
+  Pseudonymous analytics identifier for an email address.
+
+  Keyed, not a bare digest: an email is a low-entropy enumerable input, so an
+  unsalted SHA-256 of one is reversible with a wordlist and would not be
+  pseudonymisation in any meaningful sense.
+
+  Normalisation and output format are pinned by a test vector. They were once a
+  cross-repo contract with `engram-marketing`; that repo's waitlist and its
+  email hashing were deleted in #189, so nothing external depends on this
+  format today. If a second producer ever appears, it must match this exactly.
+
+  The key is deliberately NON-ROTATING: rotating it re-identifies every person
+  in PostHog and orphans all history.
+  """
+  @spec analytics_id(String.t()) :: String.t()
+  def analytics_id(email) when is_binary(email) do
+    key = Application.fetch_env!(:engram, :hmac_key_analytics_id)
+
+    :crypto.mac(:hmac, :sha256, key, email |> String.trim() |> String.downcase())
+    |> Base.encode16(case: :lower)
+  end
 end

@@ -130,6 +130,35 @@ defmodule Engram.Links.LinksRlsTest do
                "a filtered read here feeds rename-collision decisions"
     end
 
+    # The candidate prefetch in `replace_links/4` runs BEFORE that function's
+    # own `with_tenant` block opens, so its two reads were unscoped. Filtered,
+    # they return no candidates and every edge is written DANGLING — the
+    # `insert_all` still succeeds inside the tenant block, so nothing raises
+    # and nothing logs. A "returns :ok" assertion passes vacuously here; only
+    # the persisted `target_note_id` discriminates.
+    test "replace_links/4 binds the edge to its target",
+         %{user: user, vault: vault, target: target} do
+      source2 = Engram.Fixtures.insert_note!(user, vault, %{path: "Source2.md"})
+
+      # Committing harness, deliberately: the assertion is about the row that
+      # survives, and the rolling-back helper would discard the insert.
+      assert :ok =
+               as_prod_role_committing(fn ->
+                 Links.replace_links(user, vault, source2.id, Parser.extract("See [[Target]]."))
+               end)
+
+      bound =
+        Repo.one(
+          from(l in NoteLink, where: l.source_note_id == ^source2.id, select: l.target_note_id),
+          skip_tenant_check: true
+        )
+
+      assert bound == target.id,
+             "edge was written dangling (target_note_id=#{inspect(bound)}) — the candidate " <>
+               "prefetch was filtered by RLS, so a wikilink to an existing note silently " <>
+               "never binds and the backlinks panel stays empty"
+    end
+
     test "on_note_soft_deleted/2 actually drops the outgoing edge",
          %{user: user, source: source} do
       # Committing harness, deliberately: this assertion is about the row being
