@@ -1,5 +1,5 @@
 {
-	"$schema": "https://biomejs.dev/schemas/2.5.13/schema.json",
+	"$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
 	"vcs": {
 		"enabled": true,
 		"clientKind": "git",
@@ -96,13 +96,15 @@
 						"noInlineStyles": "off",
 						"noTailwindArbitraryValue": "off",
 						"useBaseline": "off",
+						"useConsistentFunctionStyle": "off",
 						"useDomQuerySelector": "off",
 						"useExpect": "off",
 						"useReactFunctionComponentDefinition": "off",
 						"useRegexpTest": "off",
 						"useTestHooksOnTop": "off",
 						"useThisInClassMethods": "off",
-						"useUnicodeRegex": "off"
+						"useUnicodeRegex": "off",
+						"useValidTestTitle": "off"
 					},
 					"performance": {
 						"useTopLevelRegex": "off",
