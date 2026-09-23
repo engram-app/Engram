@@ -212,7 +212,7 @@ defmodule Engram.Notes.CrdtPersistence do
           end)
 
         # Fan out the update to every device on this vault over the single
-        # per-vault sync channel (Relay's `document.updated` model). This is
+        # per-vault sync channel (the `document.updated` model). This is
         # what lets an IDLE note (one the client never STEP1-enrolled) converge
         # without opening its own CRDT room: the client applies these pushed
         # bytes straight to the note's Y.Doc. Fires on EVERY update source
