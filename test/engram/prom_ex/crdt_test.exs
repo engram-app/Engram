@@ -102,6 +102,7 @@ defmodule Engram.PromEx.CrdtTest do
     measurements = Enum.map(metrics, & &1.measurement)
 
     for key <- [
+          :measured_at_unix,
           :notes,
           :notes_with_state,
           :notes_measured,

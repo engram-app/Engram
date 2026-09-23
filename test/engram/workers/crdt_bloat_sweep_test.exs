@@ -73,6 +73,7 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
     assert m.notes == 2
     assert m.notes_with_state == 2
     assert m.notes_measured == 2
+    assert_in_delta m.measured_at_unix, System.system_time(:second), 60
 
     # The load-bearing assertion. Off-by-the-tag would still look reasonable.
     assert m.content_bytes_total == byte_size(a) + byte_size(b)
@@ -191,5 +192,26 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
 
     # The load-bearing part: the stateless note's bytes are still on disk.
     assert m.content_bytes_total == byte_size(with_state) + byte_size(stateless)
+  end
+
+  # The guard used to live in `perform/1`, which left the hand-invocation route
+  # the @doc advertises bypassing it entirely. On a SaaS node with RLS enforced
+  # and no maintenance pool that writes notes=0/ratio=0 into gauges that never
+  # expire — the lying oracle the guard exists to prevent, reached through the
+  # documented entry point. Both routes must refuse identically.
+  test "measure_and_emit/0 carries the same refusal as perform/1" do
+    assert function_exported?(CrdtBloatSweep, :measure_and_emit, 0)
+
+    # Both call sites must read the guard, not just the Oban one. Asserting on
+    # the source is crude, but the alternative is a stubbing layer for a
+    # two-line predicate, and this is the property that actually regressed.
+    source = File.read!("lib/engram/workers/crdt_bloat_sweep.ex")
+
+    [_, after_def] = String.split(source, "def measure_and_emit do", parts: 2)
+    guarded = after_def |> String.split("end", parts: 2) |> hd()
+
+    assert guarded =~ "tenancy_unsafe?",
+           "measure_and_emit/0 must check the tenancy guard itself — perform/1 is not the " <>
+             "only caller, and the @doc invites the other one"
   end
 end

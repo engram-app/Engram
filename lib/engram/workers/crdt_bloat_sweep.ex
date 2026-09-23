@@ -1,6 +1,6 @@
 defmodule Engram.Workers.CrdtBloatSweep do
   @moduledoc """
-  Daily whole-population measurement of CRDT doc bloat (#1706).
+  Whole-population measurement of CRDT doc bloat (#1706), every 6 hours.
 
   `Engram.Notes.CrdtCheckpoint` emits a per-checkpoint bloat sample, but that
   stream is biased in two ways that make it the wrong thing to size the database
@@ -12,6 +12,11 @@ defmodule Engram.Workers.CrdtBloatSweep do
 
   This sweep answers the question the checkpoint stream cannot: across EVERY
   stored note, how far does `crdt_state` run ahead of the content it encodes.
+
+  Every 6 hours rather than daily because it publishes `last_value` gauges,
+  which live only on the node that ran the job: a task replacement clears them,
+  and on a daily cadence that is up to 24h of "No data". See the staleness
+  contract in `Engram.PromEx.Crdt`.
 
   ## It never decrypts anything
 
@@ -43,6 +48,12 @@ defmodule Engram.Workers.CrdtBloatSweep do
   denominator alongside `notes`. Byte totals stay over the full population —
   those are real storage no matter how small the note. The staging measurement
   that forced this split is recorded in `CrdtBloat`.
+
+  ## Freshness
+
+  `measured_at_unix` rides along with every reading so a consumer can tell a
+  frozen gauge from a current one. Without it a sweep that has been failing for
+  a week is indistinguishable, on every panel, from one that ran a minute ago.
 
   ## Why it refuses rather than reporting zero
 
@@ -79,7 +90,8 @@ defmodule Engram.Workers.CrdtBloatSweep do
           bloat_ratio_max: float(),
           state_bytes_total: non_neg_integer(),
           content_bytes_total: non_neg_integer(),
-          notes_over_threshold: non_neg_integer()
+          notes_over_threshold: non_neg_integer(),
+          measured_at_unix: integer()
         }
 
   @event [:engram, :crdt, :state_sweep]
@@ -97,30 +109,47 @@ defmodule Engram.Workers.CrdtBloatSweep do
 
   @impl Oban.Worker
   def perform(%Oban.Job{}) do
-    if tenancy_unsafe?() do
-      Logger.error(
-        "crdt_bloat_sweep refusing to run: RLS is enforced and no maintenance pool is " <>
-          "configured, so the notes read would return zero rows and the sweep would " <>
-          "report an empty database as a healthy one",
-        Metadata.with_category(:error, :oban, [])
-      )
-
-      {:error, :tenancy_unsafe}
-    else
-      _ = measure_and_emit()
-      :ok
+    case measure_and_emit() do
+      {:error, :tenancy_unsafe} = err -> err
+      _measurements -> :ok
     end
   end
 
   @doc """
   Run the aggregate and emit `[:engram, :crdt, :state_sweep]`.
 
-  Public so the sweep can be triggered by hand against a real database
-  (`Engram.Workers.CrdtBloatSweep.measure_and_emit/0`) without waiting for the
-  cron slot. Returns the measurements map.
+  Public so the sweep can be triggered by hand against a real database without
+  waiting for a cron slot. Returns the measurements map, or
+  `{:error, :tenancy_unsafe}`.
+
+  The refuse-guard lives HERE rather than in `perform/1` on purpose. It was in
+  the caller, which left the advertised hand-invocation route bypassing it: one
+  `iex` call on a SaaS node with RLS enforced and no maintenance pool would
+  write `notes=0, ratio=0` into gauges that never expire, and they would be
+  re-served on every scrape until the next sweep — the exact lying oracle the
+  guard exists to prevent, reachable through the documented entry point.
   """
-  @spec measure_and_emit() :: measurements()
+  @spec measure_and_emit() :: measurements() | {:error, :tenancy_unsafe}
   def measure_and_emit do
+    if tenancy_unsafe?() do
+      refuse()
+    else
+      do_measure_and_emit()
+    end
+  end
+
+  defp refuse do
+    Logger.error(
+      "crdt_bloat_sweep refusing to run: RLS enforcement could not be ruled out and no " <>
+        "maintenance pool is configured, so the notes read would return zero rows and the " <>
+        "sweep would report an empty database as a healthy one",
+      Metadata.with_category(:error, :oban, [])
+    )
+
+    {:error, :tenancy_unsafe}
+  end
+
+  defp do_measure_and_emit do
     measurements = measure()
 
     :telemetry.execute(@event, measurements, %{})
@@ -189,10 +218,19 @@ defmodule Engram.Workers.CrdtBloatSweep do
       bloat_ratio_max: max,
       state_bytes_total: state_bytes,
       content_bytes_total: content_bytes,
-      notes_over_threshold: over
+      notes_over_threshold: over,
+      # A `last_value` gauge never expires, so a sweep that stops running keeps
+      # serving its final reading and looks exactly like a healthy one. The
+      # panels could say "absent means it has not run"; nothing could say
+      # "frozen". `time() - this` is that missing signal, and it costs a field.
+      measured_at_unix: System.system_time(:second)
     }
   end
 
+  # `enforced?/0` answers a live query and reports `true` when it cannot tell, so
+  # a transient DB blip refuses this slot rather than sweeping blind. That is the
+  # safe direction — a lost reading self-heals in 6h, a fabricated zero does not
+  # — but it means the refusal message must not assert RLS *is* enforced.
   defp tenancy_unsafe? do
     Repo.maintenance() == Repo and Engram.Repo.TenancyGuard.enforced?()
   end

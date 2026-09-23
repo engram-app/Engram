@@ -582,17 +582,6 @@ defmodule Engram.Notes.CrdtCheckpoint do
     end
   end
 
-  # When BOTH the byte-size AND the client-ID thresholds are crossed, replace
-  # the live doc with a fresh single-client reset (text preserved). Returns a
-  # {doc, state} tuple in both branches so the caller's `with` chain is uniform.
-  # Measured on the PRE-flatten state deliberately: post-flatten bytes are what
-  # the gate already reclaimed, and #1707 has to tune that gate against the
-  # bloat it is meant to catch. Today the gate never fires, so the two are
-  # equal; once it does, only this reading still answers "how bloated do docs
-  # get before we act".
-  #
-  # NO metadata. note_id / vault_id / user_id are unbounded labels (2026-07-02
-  # cardinality audit) — the distribution is the whole answer here.
   # Never lets a measurement fail the write it is measuring. This sits INSIDE the
   # `with` that persists the checkpoint, and `client_count/1` calls a bang NIF —
   # a raise there would unwind to the function-level rescue, which logs and
@@ -600,8 +589,19 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # unpersisted and the tail unpruned. Losing a telemetry sample is the correct
   # trade against losing a checkpoint.
   #
-  # Not a silent swallow: the rescue logs on its own greppable key, so a
-  # systematic failure here is findable rather than merely survivable.
+  # `catch :exit` as well as `rescue`: `Yex.encode_state_vector!/1` runs through
+  # `Yex.Doc.run_in_worker_process/2`, which GenServer.calls the owner when the
+  # doc belongs to ANOTHER process — and a call exits rather than raising, which
+  # `rescue` does not catch. Every doc on this path is built by
+  # `CrdtBridge.doc_from_state/1` in this process, so the block runs inline and
+  # the exit arm is unreachable today. It is here so that stops being an
+  # invariant nobody wrote down.
+  #
+  # Not a silent swallow: both arms log on their own greppable key, WITH the
+  # stacktrace location — `safe_reason/1` alone renders most exceptions as bare
+  # module names (RuntimeError, which is what the NIF raises, is not in its
+  # safe-message list), so without `at=` the line says a failure happened and
+  # nothing about where.
   defp emit_doc_stats(%Yex.Doc{} = doc, state, text) do
     do_emit_doc_stats(doc, state, text)
     :ok
@@ -610,14 +610,30 @@ defmodule Engram.Notes.CrdtCheckpoint do
       # safe_reason/1, not Exception.message/1: note content is in scope on this
       # module, and an exception message can carry a row value. Enforced by
       # Engram.Logger.LogCallComplianceTest.
-      Logger.warning(
-        "crdt checkpoint_doc telemetry failed err=#{Metadata.safe_reason(e)}",
-        Metadata.with_category(:warning, :sync, [])
-      )
-
-      :ok
+      log_doc_stats_failure(Metadata.safe_reason(e), __STACKTRACE__)
+  catch
+    :exit, reason ->
+      log_doc_stats_failure(Metadata.safe_exit_reason(reason), __STACKTRACE__)
   end
 
+  defp log_doc_stats_failure(reason, stacktrace) do
+    Logger.warning(
+      "crdt checkpoint_doc telemetry failed err=#{reason} " <>
+        "at=#{Metadata.format_location(stacktrace)}",
+      Metadata.with_category(:warning, :sync, [])
+    )
+
+    :ok
+  end
+
+  # Measured on the PRE-flatten state deliberately: post-flatten bytes are what
+  # the gate already reclaimed, and #1707 has to tune that gate against the
+  # bloat it is meant to catch. Today the gate never fires, so the two are
+  # equal; once it does, only this reading still answers "how bloated do docs
+  # get before we act".
+  #
+  # NO metadata. note_id / vault_id / user_id are unbounded labels (2026-07-02
+  # cardinality audit) — the distribution is the whole answer here.
   defp do_emit_doc_stats(%Yex.Doc{} = doc, state, text) do
     state_bytes = byte_size(state)
     content_bytes = byte_size(text)
@@ -642,6 +658,9 @@ defmodule Engram.Notes.CrdtCheckpoint do
     :telemetry.execute(@doc_event, measurements, %{})
   end
 
+  # When BOTH the byte-size AND the client-ID thresholds are crossed, replace
+  # the live doc with a fresh single-client reset (text preserved). Returns a
+  # {doc, state} tuple in both branches so the caller's `with` chain is uniform.
   defp maybe_flatten(%Yex.Doc{} = doc, state, note_id) do
     if CrdtBridge.should_flatten?(state, doc) do
       Logger.info(

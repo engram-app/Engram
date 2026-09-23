@@ -41,7 +41,8 @@ defmodule Engram.ObanCronTest do
     parsed = Expression.parse!(expr)
 
     MapSet.size(parsed.hours) == 1 and MapSet.size(parsed.minutes) == 1 and
-      MapSet.size(parsed.days) == 31 and MapSet.size(parsed.weekdays) == 7
+      MapSet.size(parsed.days) == 31 and MapSet.size(parsed.weekdays) == 7 and
+      MapSet.size(parsed.months) == 12
   end
 
   test "every cron entry parses" do
@@ -65,8 +66,13 @@ defmodule Engram.ObanCronTest do
   end
 
   test "the CRDT bloat sweep does not collide with any other entry" do
-    {sweep_expr, _} =
-      Enum.find(crontab(), fn {_, worker} -> worker == Engram.Workers.CrdtBloatSweep end)
+    entry = Enum.find(crontab(), fn {_, worker} -> worker == Engram.Workers.CrdtBloatSweep end)
+
+    assert entry,
+           "CrdtBloatSweep is not scheduled — this test guards its slot, so removing " <>
+             "the entry should be a deliberate edit here too"
+
+    {sweep_expr, _} = entry
 
     sweep = slots(sweep_expr)
 

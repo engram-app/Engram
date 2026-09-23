@@ -306,6 +306,19 @@ defmodule Engram.PromEx.Crdt do
         # `Engram.Notes.CrdtBloat` exists to keep out. Do not set
         # `:storage_adapter` without revisiting the omit-vs-zero decision in
         # `CrdtCheckpoint.emit_doc_stats/3`.
+        # The freshness signal. `last_value` never expires, so a sweep that stops
+        # running keeps serving its last reading and reads as healthy on every
+        # panel below — `absent()` cannot catch it because the series is still
+        # there. Alert and panel on `time() - this`, not on the values.
+        last_value(
+          metric_prefix ++ [:state_sweep, :measured_at_unix],
+          event_name: @sweep_event,
+          measurement: :measured_at_unix,
+          description:
+            "Unix seconds at which the last sweep on this instance completed. " <>
+              "`time() - this` is the only way to tell a frozen gauge from a current one; " <>
+              "expect it under ~6h (the cron period) plus a scrape interval."
+        ),
         last_value(
           metric_prefix ++ [:state_sweep, :notes],
           event_name: @sweep_event,
@@ -359,14 +372,20 @@ defmodule Engram.PromEx.Crdt do
           event_name: @sweep_event,
           measurement: :bloat_ratio_max,
           description:
-            "Worst state/content ratio in the database. The single note the flatten gate " <>
-              "in #1707 most needs to catch."
+            "Worst state/content ratio among notes above the 100-byte content floor. NOT " <>
+              "the worst ratio in the database — a fully emptied note scores higher and is " <>
+              "excluded by that floor, deliberately, because its ratio is Yjs framing over " <>
+              "nothing rather than tombstone accumulation."
         ),
         last_value(
           metric_prefix ++ [:state_sweep, :notes_over_threshold],
           event_name: @sweep_event,
           measurement: :notes_over_threshold,
-          description: "Notes whose state exceeds 5x their content — the #1707 tuning target."
+          description:
+            "Notes whose state exceeds 5x their content — the #1707 tuning target. Counted " <>
+              "over `notes_measured`, so notes under the 100-byte content floor are NOT " <>
+              "included: a note written then fully emptied has tiny content and large " <>
+              "tombstone state, and lands in the excluded cohort rather than here."
         ),
         last_value(
           metric_prefix ++ [:state_sweep, :state_bytes_total],

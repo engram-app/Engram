@@ -21,7 +21,7 @@ Code:
 
 - `lib/engram/notes/crdt_bloat.ex` — the eligibility floor
 - `lib/engram/notes/crdt_checkpoint.ex` — per-checkpoint (biased) sample
-- `lib/engram/workers/crdt_bloat_sweep.ex` — daily whole-population sweep
+- `lib/engram/workers/crdt_bloat_sweep.ex` — whole-population sweep, every 6h
 - `lib/engram/prom_ex/crdt.ex` — both sets of metrics
 - `test/engram/oban_cron_test.exs`, `test/engram/workers/crdt_bloat_sweep_test.exs`
 
@@ -98,7 +98,7 @@ sum(increase(engram_prom_ex_crdt_room_start_total{job="prometheus.scrape.engram_
 At that rate a p99 over the live histogram needs weeks before it means anything.
 
 That bias is the entire reason `CrdtBloatSweep` exists as the unbiased
-counterpart: one daily pass over every stored note, `last_value` gauges (the
+counterpart: one pass over every stored note, `last_value` gauges (the
 percentiles are already computed server-side over the true population;
 re-bucketing them would only lose precision).
 
@@ -110,7 +110,18 @@ it by uid.
 
 ## Cron placement
 
-The sweep runs at **06:10 UTC** (`config/config.exs`).
+`10 */6 * * *` — 00:10, 06:10, 12:10, 18:10 UTC (`config/config.exs`).
+
+**Not daily, and the cadence is not about freshness of the data.** These are
+`last_value` gauges, which live only on the node that ran the job. An ECS task
+replacement clears them, and on a daily cadence that is up to 24h of "No data"
+on every panel after each deploy. Four cheap aggregates a day buys a 6h worst
+case. The query is ~23ms on staging and extrapolates to ~4-5s at 1M notes — a
+seq scan of the heap only, never the TOAST side table, because `octet_length`
+reads the raw datum size off the pointer without detoasting.
+
+:10 past the hour is deliberate: `0 * * * *` (`CleanupDeviceAuthWorker`) owns
+the hour and `*/15` (`ReconcileEmbeddings`) owns the quarter-hours.
 
 `Engram.ObanCronTest` pins two things:
 
@@ -119,9 +130,11 @@ The sweep runs at **06:10 UTC** (`config/config.exs`).
    timeout in whichever worker lost, pointing at the worker instead of at the
    schedule.
 2. `CrdtBloatSweep` collides with **nothing at all**, including sub-hourly
-   entries. `*/15` `ReconcileEmbeddings` and `0 * * * *` `CleanupDeviceAuthWorker`
-   fire in *every* hour, so that check compares them on minute-of-hour and the
-   rest on minute-of-day.
+   entries. `slots/1` expands every expression to its full set of
+   minutes-of-day — a sub-hourly entry expands across all 24 hours — so one set
+   intersection covers both cases. (An earlier version claimed to compare
+   sub-hourly entries on minute-of-hour; it never did, and the branch that
+   supposedly did it was a verified no-op.)
 
 Global non-overlap is deliberately **not** asserted — those two already share
 the top of every hour by design, and have since long before this test.
@@ -141,11 +154,29 @@ the top of every hour by design, and have since long before this test.
   disagree silently.
 - No `note_id` / `vault_id` / `user_id` metadata anywhere here — unbounded
   labels, per the 2026-07-02 cardinality audit. The distribution *is* the answer.
-- `measurements` is a spelled-out `@type` rather than `map()` so a measurement
-  added to the telemetry event without a matching PromEx gauge fails at compile
-  time instead of vanishing.
+- `measurements` is a spelled-out `@type` rather than `map()` so **dialyzer**
+  catches a key renamed in one place and not the other. It does **not** catch a
+  measurement added with no matching PromEx gauge — nothing does. Four lists
+  must be edited together by hand: the map in `measure/0`, the `@type`, the
+  `last_value` list in `Engram.PromEx.Crdt`, and the hardcoded key list in
+  `Engram.PromEx.CrdtTest`.
 - `CrdtBloatSweep.measure_and_emit/0` is public so the sweep can be run by hand
-  against a real database without waiting for the cron slot.
+  without waiting for a cron slot — and it carries the tenancy guard **itself**
+  for that reason. The guard used to live in `perform/1`, which left the
+  advertised hand-invocation route bypassing it: one `iex` call on a misconfigured
+  SaaS node writes `notes=0, ratio=0` into gauges that never expire.
+- A **frozen** sweep is invisible on the value panels: `last_value` never
+  expires, so a job that has been failing for a week serves its last reading and
+  `absent()` cannot see it, because the series is still there.
+  `measured_at_unix` exists only so `time() - it` can. Alert on the age, never
+  on the values.
+- `bloat_ratio_max` and `notes_over_threshold` are computed over
+  `notes_measured`, so they exclude sub-floor notes. A note written then fully
+  emptied scores the highest ratio in the database and is deliberately not in
+  either — its ratio is Yjs framing over nothing, not tombstone accumulation.
+- The dashboard's checkpoint-rate panel must read `…_state_bytes_count`, not
+  `…_bloat_ratio_count`. The ratio is omitted below the floor, so its count runs
+  ~37% low (staging) and is not the checkpoint count.
 
 ## References
 
