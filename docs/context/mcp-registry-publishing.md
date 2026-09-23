@@ -54,9 +54,12 @@ curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=engram"   # v
   private key kept somewhere. GitHub org auth needs neither.
 
 ## Gotchas
-- **`version` is hand-synced to `mix.exs`** (currently 0.28.0). The registry rejects
-  re-publishing an existing version, so bump it before every re-publish. No CI automation
-  is wired for this.
+- **`version` is bumped by release-please**, via the `json` extra-file entry in
+  `release-please-config.json` (`$.version`). It was hand-synced until 0.28.0 and drifted
+  immediately — the 0.29.0 release PR did not touch it, so the manifest would have
+  advertised a version two releases stale. The registry rejects re-publishing an existing
+  version, so this only matters at publish time, but the drift is silent until then.
+  Publishing itself is still manual.
 - The only `_meta` key the registry preserves is
   `io.modelcontextprotocol.registry/publisher-provided` (4KB limit). Every other `_meta` key
   is silently dropped.
