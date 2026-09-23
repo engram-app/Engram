@@ -113,7 +113,7 @@ defmodule Engram.MixProject do
       # Yjs CRDT engine (Rust `yrs` via Rustler NIF). Stock Hex release with
       # precompiled binaries — NO fork, NO DirtyCpu (Gate 0 spike proved
       # bounded docs stay under the 1ms NIF budget). v1 wire format only.
-      {:y_ex, "~> 0.10.5"},
+      {:y_ex, "~> 0.11.0"},
 
       # Email template rendering (MJML → responsive HTML, via mrml Rust NIF)
       {:mjml, "~> 6.0"},

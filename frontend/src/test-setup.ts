@@ -1,5 +1,5 @@
 import "fake-indexeddb/auto";
-import "@testing-library/jest-dom";
+import "@testing-library/jest-dom/vitest";
 
 // happy-dom returns 0 for clientHeight / scrollHeight by default, which
 // breaks @tanstack/react-virtual (it computes 0 visible rows). Force
