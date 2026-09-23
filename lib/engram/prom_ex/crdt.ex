@@ -138,6 +138,8 @@ defmodule Engram.PromEx.Crdt do
   @checkpoint_event [:engram, :crdt, :index_checkpoint]
   @abort_event [:engram, :crdt, :checkpoint_abort]
   @projection_event [:engram, :crdt, :index_projection]
+  @doc_event [:engram, :crdt, :checkpoint_doc]
+  @sweep_event [:engram, :crdt, :state_sweep]
 
   @impl true
   def event_metrics(opts) do
@@ -216,6 +218,192 @@ defmodule Engram.PromEx.Crdt do
         # Tagged by all three keys on purpose. `phase` alone would merge a room
         # `:conflict` with a snapshot `:conflict`, losing the only dimension
         # that tells them apart. 2 ops x 5 routes x 8 phases bounds the series.
+        # #1706. `crdt_state_ciphertext` is the largest column in the database
+        # and it grows monotonically with edit count, but nothing ever measured
+        # how far it runs ahead of the text it encodes. Untagged and
+        # distribution-only: the whole question is the SHAPE across notes, and
+        # note_id / vault_id are unbounded labels (2026-07-02 audit).
+        #
+        # Emitted pre-flatten, so the gate rework in #1707 reads the bloat it is
+        # supposed to catch rather than what a previous flatten already took.
+        distribution(
+          metric_prefix ++ [:checkpoint_doc, :bloat_ratio],
+          event_name: @doc_event,
+          measurement: :bloat_ratio,
+          description:
+            "CRDT doc state bytes divided by projected content bytes, per markdown checkpoint. " <>
+              "1.0 means the encoded doc costs what its text costs; high values are accumulated " <>
+              "tombstones and stale client IDs. Notes under " <>
+              "Engram.Notes.CrdtBloat.min_content_bytes/0 take NO sample — their Yjs framing " <>
+              "divides to a large ratio that is not bloat. Its `_count` is therefore lower " <>
+              "than the state_bytes/content_bytes counts, by design.",
+          reporter_options: [buckets: [1, 2, 3, 5, 10, 25, 50, 100, 500]]
+        ),
+        distribution(
+          metric_prefix ++ [:checkpoint_doc, :state_bytes],
+          event_name: @doc_event,
+          measurement: :state_bytes,
+          description: "Encoded Yjs v1 state size per markdown checkpoint, before flatten.",
+          reporter_options: [
+            buckets: [1_000, 5_000, 10_000, 50_000, 100_000, 500_000, 1_000_000, 5_000_000]
+          ]
+        ),
+        distribution(
+          metric_prefix ++ [:checkpoint_doc, :content_bytes],
+          event_name: @doc_event,
+          measurement: :content_bytes,
+          description: "Projected markdown size per checkpoint — the bloat_ratio denominator.",
+          reporter_options: [
+            buckets: [500, 1_000, 5_000, 10_000, 50_000, 100_000, 500_000]
+          ]
+        ),
+        # The other half of the flatten gate. `should_flatten?/2` requires 1,000
+        # distinct client IDs AND 500 KB; this says whether any real doc ever
+        # approaches either.
+        distribution(
+          metric_prefix ++ [:checkpoint_doc, :client_count],
+          event_name: @doc_event,
+          measurement: :client_count,
+          description: "Distinct client IDs in the doc state vector per markdown checkpoint.",
+          reporter_options: [buckets: [1, 2, 5, 10, 25, 50, 100, 500, 1_000]]
+        ),
+        # #1706, the sweep half. The distributions above sample notes that were
+        # OPENED, re-counting a frequently synced note on every open; these
+        # gauges are one pass over every stored note
+        # (`Engram.Workers.CrdtBloatSweep`), so they answer "how big is the
+        # database and how much of it is bloat" rather than "what did traffic
+        # look like".
+        #
+        # last_value, not distribution: the sweep already computed the
+        # percentiles server-side over the true population. Re-bucketing them
+        # would only lose precision, and a histogram of a handful of samples per
+        # day is not a distribution.
+        #
+        # STALENESS CONTRACT — read before writing a query against these.
+        #
+        # A `last_value` gauge never expires: the reporter re-serves its last
+        # sample on every scrape until something overwrites it. That is the
+        # #1497 failure class (`config/runtime.exs`, the web-node Oban poll
+        # gauges that froze a 494-job backlog for 40 minutes). Two consequences
+        # specific to an event-driven gauge written by a cron job:
+        #
+        #   * Only the node that RAN the sweep holds a series. `Oban.Cron` is
+        #     leader-gated, and `maintenance` does not run on `web`, so most
+        #     nodes never export these at all — absent, not stale. Good.
+        #   * Across a multi-task worker tier, consecutive runs can land on
+        #     DIFFERENT tasks, leaving the previous one serving its last reading
+        #     forever. Aggregate with `max by (instance)` or pick one instance —
+        #     NEVER `sum`, which double-counts the byte totals.
+        #
+        # The sweep runs every 6 hours rather than daily mostly for this: an
+        # ECS task replacement clears the table, and on a daily cadence that is
+        # up to 24h of "No data" on every panel after each deploy.
+        #
+        # Assumes the default `PromEx.Storage.Core` reporter. Under
+        # `PromEx.Storage.Peep` a MISSING measurement key records 1.0 rather
+        # than being skipped, which would silently turn every sub-floor note
+        # into a perfect 1.0 bloat ratio — the exact artifact
+        # `Engram.Notes.CrdtBloat` exists to keep out. Do not set
+        # `:storage_adapter` without revisiting the omit-vs-zero decision in
+        # `CrdtCheckpoint.emit_doc_stats/3`.
+        # The freshness signal. `last_value` never expires, so a sweep that stops
+        # running keeps serving its last reading and reads as healthy on every
+        # panel below — `absent()` cannot catch it because the series is still
+        # there. Alert and panel on `time() - this`, not on the values.
+        last_value(
+          metric_prefix ++ [:state_sweep, :measured_at_unix],
+          event_name: @sweep_event,
+          measurement: :measured_at_unix,
+          description:
+            "Unix seconds at which the last sweep on this instance completed. " <>
+              "`time() - this` is the only way to tell a frozen gauge from a current one; " <>
+              "expect it under ~6h (the cron period) plus a scrape interval."
+        ),
+        last_value(
+          metric_prefix ++ [:state_sweep, :notes],
+          event_name: @sweep_event,
+          measurement: :notes,
+          description:
+            "Live notes (kind='note') in the database at the last sweep. The denominator for " <>
+              "storage questions; `notes_with_state` is the subset that actually carries a " <>
+              "CRDT snapshot."
+        ),
+        last_value(
+          metric_prefix ++ [:state_sweep, :notes_with_state],
+          event_name: @sweep_event,
+          measurement: :notes_with_state,
+          description:
+            "Notes carrying a CRDT state snapshot. Below `notes` by the cohort migration " <>
+              "20260706210000 NULLed and nothing re-seeds — those notes cost content bytes " <>
+              "and no state bytes, so excluding them would overstate the bloat ratio."
+        ),
+        last_value(
+          metric_prefix ++ [:state_sweep, :notes_measured],
+          event_name: @sweep_event,
+          measurement: :notes_measured,
+          description:
+            "Notes with state AND enough content to divide by — the denominator of every " <>
+              "percentile below. The gap against `notes_with_state` is what the size floor " <>
+              "keeps out of the percentiles. It is NOT purely empty notes: structural " <>
+              "(.canvas) rows keep their data in Y.Maps and leave `content` untouched, so a " <>
+              "fully populated board also lands in that gap. The sweep reads column lengths " <>
+              "and cannot tell the two apart."
+        ),
+        last_value(
+          metric_prefix ++ [:state_sweep, :bloat_ratio_p50],
+          event_name: @sweep_event,
+          measurement: :bloat_ratio_p50,
+          description: "Median state/content ratio across every stored note."
+        ),
+        last_value(
+          metric_prefix ++ [:state_sweep, :bloat_ratio_p90],
+          event_name: @sweep_event,
+          measurement: :bloat_ratio_p90,
+          description: "p90 state/content ratio across every stored note."
+        ),
+        last_value(
+          metric_prefix ++ [:state_sweep, :bloat_ratio_p99],
+          event_name: @sweep_event,
+          measurement: :bloat_ratio_p99,
+          description: "p99 state/content ratio across every stored note."
+        ),
+        last_value(
+          metric_prefix ++ [:state_sweep, :bloat_ratio_max],
+          event_name: @sweep_event,
+          measurement: :bloat_ratio_max,
+          description:
+            "Worst state/content ratio among notes above the 100-byte content floor. NOT " <>
+              "the worst ratio in the database — a fully emptied note scores higher and is " <>
+              "excluded by that floor, deliberately, because its ratio is Yjs framing over " <>
+              "nothing rather than tombstone accumulation."
+        ),
+        last_value(
+          metric_prefix ++ [:state_sweep, :notes_over_threshold],
+          event_name: @sweep_event,
+          measurement: :notes_over_threshold,
+          description:
+            "Notes whose state exceeds 5x their content — the #1707 tuning target. Counted " <>
+              "over `notes_measured`, so notes under the 100-byte content floor are NOT " <>
+              "included: a note written then fully emptied has tiny content and large " <>
+              "tombstone state, and lands in the excluded cohort rather than here."
+        ),
+        last_value(
+          metric_prefix ++ [:state_sweep, :state_bytes_total],
+          event_name: @sweep_event,
+          measurement: :state_bytes_total,
+          description:
+            "Total decrypted-equivalent bytes of crdt_state across every live note. Paired " <>
+              "with content_bytes_total this is the reclaimable-storage estimate the history " <>
+              "epic (#609) needs before sizing anything. Aggregate with max, never sum."
+        ),
+        last_value(
+          metric_prefix ++ [:state_sweep, :content_bytes_total],
+          event_name: @sweep_event,
+          measurement: :content_bytes_total,
+          description:
+            "Total decrypted-equivalent bytes of note content across every live note, " <>
+              "including those carrying no CRDT state. Aggregate with max, never sum."
+        ),
         counter(
           metric_prefix ++ [:index_claim, :total],
           event_name: @claim_event,

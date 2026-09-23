@@ -5,6 +5,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
   import Ecto.Query
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
+  alias Engram.Notes.CrdtBloat
   alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtCheckpointTimer, CrdtUpdateLog, Note}
   alias Engram.Workers.EmbedNote
 
@@ -104,6 +105,123 @@ defmodule Engram.Notes.CrdtCheckpointTest do
       end)
 
     assert tail_count_after == 0
+  end
+
+  # ── #1706: CRDT doc bloat telemetry ───────────────────────────────────────
+  # Everything in the history/DB-growth workstream is guessed until the shape of
+  # `crdt_state` vs the text it encodes is visible. The measurement is taken on
+  # the PRE-flatten state on purpose: post-flatten bytes are what the gate
+  # already reclaimed, and #1707 has to tune that gate against the bloat it is
+  # supposed to catch.
+  test "checkpoint emits doc bloat telemetry", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+    # Must clear CrdtBloat.min_content_bytes/0 or no ratio sample is taken.
+    body = String.duplicate("measurable body text ", 10)
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), body)
+    assert byte_size(body) >= CrdtBloat.min_content_bytes()
+
+    attach_doc_telemetry()
+
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    assert_receive {:checkpoint_doc, measurements, meta}
+
+    assert measurements.content_bytes == byte_size(body)
+    assert measurements.state_bytes > 0
+    assert measurements.client_count >= 1
+
+    assert_in_delta measurements.bloat_ratio,
+                    measurements.state_bytes / measurements.content_bytes,
+                    0.0001
+
+    # Cardinality contract (project_grafana_cardinality_audit_2026_07_02): no
+    # note_id / vault_id / user_id may ride along as a label.
+    assert meta == %{}
+  end
+
+  # A note whose doc projects "" but which HAS stored state is not the
+  # `ensure_projection_safe/2` skip case — that clause only fires on a nil
+  # `crdt_state_ciphertext`. So a real emptying reaches the emit with
+  # content_bytes = 0, and the ratio divides by it.
+  test "checkpoint emits bloat telemetry with an empty projection (divide guard)", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+
+    # Empty the text the way a user would — a delete op, which is itself state,
+    # so the row keeps a non-nil crdt_state_ciphertext.
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "")
+    assert CrdtBridge.text_of(doc) == ""
+
+    attach_doc_telemetry()
+
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    assert_receive {:checkpoint_doc, measurements, _meta}
+
+    assert measurements.content_bytes == 0
+    assert measurements.state_bytes > 0
+    # No ratio sample, and no zero either. An empty doc still carries Yjs
+    # framing; dividing it by nothing reports framing overhead as tombstone
+    # bloat, which is exactly the artifact that pinned staging's p90 to 2.0.
+    # Telemetry.Metrics skips a metric whose key is absent, so the byte
+    # histograms still take their sample and the ratio histogram does not.
+    refute Map.has_key?(measurements, :bloat_ratio)
+  end
+
+  # The hash-unchanged path degrades to a snapshot-compaction write with no
+  # version/seq churn — and in prod it is the MAJORITY of checkpoints, because
+  # 99% of rooms are handshake-minted rather than edit-minted. A bloat metric
+  # that only fired on real edits would miss the population it exists to
+  # describe.
+  test "checkpoint emits bloat telemetry on the unchanged-text compaction path", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+    settled = String.duplicate("settled body ", 12)
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), settled)
+
+    # First checkpoint materializes the change and bumps seq.
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+    seq_after_first = Vaults.current_seq(user.id, vault.id)
+
+    attach_doc_telemetry()
+
+    # Second checkpoint over the SAME text: content_hash matches, so this is the
+    # degraded compaction write.
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    assert Vaults.current_seq(user.id, vault.id) == seq_after_first,
+           "expected the compaction path (no seq churn), got a real materialization"
+
+    assert_receive {:checkpoint_doc, measurements, _meta}
+    assert measurements.content_bytes == byte_size(settled)
+    assert measurements.state_bytes > 0
+    assert measurements.bloat_ratio > 0
+  end
+
+  defp attach_doc_telemetry do
+    test_pid = self()
+    handler_id = "bloat-telemetry-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      handler_id,
+      [:engram, :crdt, :checkpoint_doc],
+      fn _event, measurements, meta, _config ->
+        send(test_pid, {:checkpoint_doc, measurements, meta})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
   end
 
   # ── #983 task 2: user-resolve raise must NOT escape terminate/2 ────────────

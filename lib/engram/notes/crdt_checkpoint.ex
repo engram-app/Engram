@@ -21,7 +21,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
   alias Engram.{Accounts, Crypto, Notes, Repo, Vaults}
   alias Engram.Crypto.RotationGate
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtBridge, CrdtDeliver, CrdtUpdateLog, Enqueue, Helpers, Note}
+  alias Engram.Notes.{CrdtBloat, CrdtBridge, CrdtDeliver, CrdtUpdateLog, Enqueue, Helpers, Note}
   alias Engram.Workers.{EmbedNote, ExtractNoteLinks}
 
   require Logger
@@ -44,6 +44,17 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # just admitted we cannot read.
   @abort_event [:engram, :crdt, :checkpoint_abort]
   @quarantine_tail_depth 500
+
+  # #1706. The shape of `crdt_state` against the text it encodes was entirely
+  # unobserved, so every storage estimate in the history workstream — and the
+  # flatten gate in #1707 — was a guess.
+  #
+  # Two of the three values are locals the checkpoint already holds. The third,
+  # `client_count/1`, is a real call into a bang NIF, and it is NEW work on this
+  # path: it used to be reachable only past `should_flatten?/2`'s 500 KB arm,
+  # which staging says is never true. Cheap (it decodes one leading varint), but
+  # cheap is not the same as infallible — see `emit_doc_stats/3`.
+  @doc_event [:engram, :crdt, :checkpoint_doc]
 
   @doc """
   Checkpoint the live doc into the `notes` row. Encrypts the full Yjs v1
@@ -338,6 +349,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
          text = CrdtBridge.text_of(union_doc),
          :ok <- ensure_projection_safe(note, text),
          {:ok, raw_state} <- encode(union_doc),
+         :ok <- emit_doc_stats(union_doc, raw_state, text),
          {_flat_doc, state} <- maybe_flatten(union_doc, raw_state, note_id),
          {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(state, user, note_id),
          {:ok, key} <- Crypto.dek_content_hash_key(user) do
@@ -568,6 +580,82 @@ defmodule Engram.Notes.CrdtCheckpoint do
       {:ok, s} -> {:ok, s}
       {:error, reason} -> {:error, {:encode_failed, reason}}
     end
+  end
+
+  # Never lets a measurement fail the write it is measuring. This sits INSIDE the
+  # `with` that persists the checkpoint, and `client_count/1` calls a bang NIF —
+  # a raise there would unwind to the function-level rescue, which logs and
+  # returns `:ok`, so the caller would see success while `crdt_state` went
+  # unpersisted and the tail unpruned. Losing a telemetry sample is the correct
+  # trade against losing a checkpoint.
+  #
+  # `catch :exit` as well as `rescue`: `Yex.encode_state_vector!/1` runs through
+  # `Yex.Doc.run_in_worker_process/2`, which GenServer.calls the owner when the
+  # doc belongs to ANOTHER process — and a call exits rather than raising, which
+  # `rescue` does not catch. Every doc on this path is built by
+  # `CrdtBridge.doc_from_state/1` in this process, so the block runs inline and
+  # the exit arm is unreachable today. It is here so that stops being an
+  # invariant nobody wrote down.
+  #
+  # Not a silent swallow: both arms log on their own greppable key, WITH the
+  # stacktrace location — `safe_reason/1` alone renders most exceptions as bare
+  # module names (RuntimeError, which is what the NIF raises, is not in its
+  # safe-message list), so without `at=` the line says a failure happened and
+  # nothing about where.
+  defp emit_doc_stats(%Yex.Doc{} = doc, state, text) do
+    do_emit_doc_stats(doc, state, text)
+    :ok
+  rescue
+    e ->
+      # safe_reason/1, not Exception.message/1: note content is in scope on this
+      # module, and an exception message can carry a row value. Enforced by
+      # Engram.Logger.LogCallComplianceTest.
+      log_doc_stats_failure(Metadata.safe_reason(e), __STACKTRACE__)
+  catch
+    :exit, reason ->
+      log_doc_stats_failure(Metadata.safe_exit_reason(reason), __STACKTRACE__)
+  end
+
+  defp log_doc_stats_failure(reason, stacktrace) do
+    Logger.warning(
+      "crdt checkpoint_doc telemetry failed err=#{reason} " <>
+        "at=#{Metadata.format_location(stacktrace)}",
+      Metadata.with_category(:warning, :sync, [])
+    )
+
+    :ok
+  end
+
+  # Measured on the PRE-flatten state deliberately: post-flatten bytes are what
+  # the gate already reclaimed, and #1707 has to tune that gate against the
+  # bloat it is meant to catch. Today the gate never fires, so the two are
+  # equal; once it does, only this reading still answers "how bloated do docs
+  # get before we act".
+  #
+  # NO metadata. note_id / vault_id / user_id are unbounded labels (2026-07-02
+  # cardinality audit) — the distribution is the whole answer here.
+  defp do_emit_doc_stats(%Yex.Doc{} = doc, state, text) do
+    state_bytes = byte_size(state)
+    content_bytes = byte_size(text)
+
+    measurements = %{
+      state_bytes: state_bytes,
+      content_bytes: content_bytes,
+      client_count: CrdtBridge.client_count(doc)
+    }
+
+    # `:bloat_ratio` is OMITTED, not zeroed, for a doc too small to divide by —
+    # Telemetry.Metrics skips a metric whose measurement key is absent, so the
+    # ratio histogram takes no sample while the byte histograms still take one.
+    # An empty note emits a couple of bytes of Yjs framing over zero content;
+    # recorded, that framing reads as tombstone bloat. See `CrdtBloat`.
+    measurements =
+      case CrdtBloat.ratio(state_bytes, content_bytes) do
+        nil -> measurements
+        ratio -> Map.put(measurements, :bloat_ratio, ratio)
+      end
+
+    :telemetry.execute(@doc_event, measurements, %{})
   end
 
   # When BOTH the byte-size AND the client-ID thresholds are crossed, replace
