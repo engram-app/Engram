@@ -90,6 +90,16 @@ defmodule Engram.SkipTenantCheckInventoryTest do
     "engram/oauth.ex" => 14,
     "engram/oauth/cimd.ex" => 3,
     "engram/onboarding.ex" => 2,
+    # TenancyGuard's behavioural probe. The one site in this inventory where
+    # the keyword is an accurate DECLARATION rather than a concession: the
+    # probe deliberately sets a tenant that owns nothing and asks the SERVER
+    # whether the policy filters. The `prepare_query/3` tripwire would refuse
+    # the query before Postgres saw it, which would make the guard measure the
+    # tripwire instead of the database it is there to interrogate.
+    #
+    # Generated: one clause per entry in `Repo.tenant_tables/0`, but the
+    # keyword appears once in source, which is what this lint counts.
+    "engram/repo/tenancy_guard.ex" => 1,
     "engram/usage_meters.ex" => 9,
     "engram/vaults.ex" => 1,
     "engram/workers/account_export.ex" => 6,

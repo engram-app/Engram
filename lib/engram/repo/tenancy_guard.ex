@@ -46,13 +46,19 @@ defmodule Engram.Repo.TenancyGuard do
   issue `NO FORCE ROW LEVEL SECURITY` and re-`FORCE` at the end. An
   interrupted one leaves a single table exposed while the rest are fine.
 
-  A negative result is ambiguous on its own: an enforced connection and an
-  empty table look identical. `pg_class.reltuples` disambiguates, because the
-  catalog is not RLS-filtered — no visible rows against a table the planner
-  believes is populated is enforcement; no visible rows against an apparently
-  empty table is `:unknown`, not a clean bill of health. Note the estimate is
-  stale between `ANALYZE` runs, so a table emptied since the last one reads as
-  populated and yields `:enforced`. That error is in the cautious direction.
+  The probe answers `:bypassed` or nothing. It cannot assert `:enforced`, and
+  that asymmetry is deliberate: seeing no rows has three causes and the probe
+  can distinguish only one of them — the policy filtered us, the table is
+  empty, or the rows exist but are invisible to this transaction. Seeing a row
+  that should be hidden has exactly one cause, which is why the positive
+  direction is the only one worth claiming.
+
+  An earlier version tried to rule out "empty" with `pg_class.reltuples`. That
+  was wrong in a way worth recording: reltuples is a table-wide,
+  NON-transactional statistic, so under the Ecto sandbox it reports the whole
+  table while the connection sees only its own uncommitted rows — which reads
+  as `:enforced` on a database enforcing nothing. It turned CI red while the
+  same test passed alone locally.
 
   ## What the answer is allowed to change
 
@@ -84,6 +90,8 @@ defmodule Engram.Repo.TenancyGuard do
   """
 
   use GenServer
+
+  import Ecto.Query, only: [from: 1]
 
   alias Engram.Logger.Metadata
 
@@ -254,27 +262,27 @@ defmodule Engram.Repo.TenancyGuard do
     verdict
   end
 
-  # Any one table leaking is decisive and short-circuits. Otherwise the answer
-  # is the WEAKEST claim across the tables we could read: `:enforced` only if
-  # at least one table was populated enough to prove it, `:unknown` if none
-  # were. That ordering matters — an empty database must not read as enforced.
+  # Any one table leaking is decisive and short-circuits. Otherwise the probe
+  # has NO OPINION — `:unknown` — and `combine/2` defers to the attribute
+  # answer.
+  #
+  # It deliberately cannot return `:enforced`. Seeing no rows has three causes
+  # and the probe can only distinguish one of them: the policy filtered us, the
+  # table is empty, or the rows exist but are invisible to this transaction.
+  # An earlier version used `pg_class.reltuples` to rule out "empty" — but
+  # reltuples is a table-wide, non-transactional statistic, so under the Ecto
+  # sandbox it reports the whole table while the connection sees only its own
+  # uncommitted rows. That combination reads as `:enforced` on a database that
+  # is not enforcing anything, and it is what turned CI red while the same test
+  # passed alone locally.
+  #
+  # Detecting a BYPASS is the probe's whole job and the only thing it can
+  # honestly assert. #1726 is a question about rows being visible that should
+  # not be, and a positive answer to that needs no disambiguation.
   defp probe_all_tenant_tables do
-    Enum.reduce_while(Engram.Repo.tenant_tables(), :unknown, fn table, acc ->
-      case probe_table(table) do
-        :bypassed -> {:halt, :bypassed}
-        :enforced -> {:cont, :enforced}
-        :unknown -> {:cont, acc}
-      end
+    Enum.reduce_while(Engram.Repo.tenant_tables(), :unknown, fn table, _acc ->
+      if probe_visibility(table), do: {:halt, :bypassed}, else: {:cont, :unknown}
     end)
-  end
-
-  defp probe_table(table) do
-    with {:ok, %{rows: [[visible?]]}} <- probe_visibility(table),
-         {:ok, %{rows: [[estimated_rows]]}} <- estimate_rows(table) do
-      verdict(visible?, estimated_rows)
-    else
-      _ -> :unknown
-    end
   end
 
   defp current_tenant do
@@ -294,55 +302,34 @@ defmodule Engram.Repo.TenancyGuard do
     )
   end
 
-  @doc """
-  The decision the probe's two readings imply. Public only so it can be tested
-  without a database — the interesting cases are the ones a sandbox cannot
-  easily produce.
-  """
-  @spec verdict(boolean(), number()) :: :enforced | :bypassed | :unknown
-
-  # `true` is decisive on its own: a row belonging to another tenant was
-  # readable, so nothing is being enforced.
-  def verdict(true, _estimated_rows), do: :bypassed
-
-  # `false` is only meaningful against a table the planner believes has rows.
-  # On an empty table an enforced connection and a bypassed one look identical,
-  # and calling that `:enforced` would be a clean bill of health we did not
-  # earn. `reltuples` is -1 on a never-analyzed table and 0 on a genuinely
-  # empty one; neither can support the claim.
-  def verdict(false, estimated_rows) when estimated_rows > 0, do: :enforced
-  def verdict(false, _estimated_rows), do: :unknown
-
-  # Interpolated, not a bind parameter: a table name cannot be one. Safe
-  # because the only source is `Engram.Repo.tenant_tables/0`, a compile-time
-  # literal list of atoms, and `to_string/1` on an atom cannot introduce
-  # anything else. Asserted rather than assumed — see the guard clause.
-  defp probe_visibility(table) when is_atom(table) do
-    Engram.Repo.query("SELECT EXISTS (SELECT 1 FROM #{table} LIMIT 1)", [],
-      source: "tenancy_guard"
-    )
-  end
-
-  # pg_class is a catalog, so it is NOT RLS-filtered — which is the only reason
-  # this can disambiguate "saw nothing because filtered" from "saw nothing
-  # because empty". An estimate is sufficient: the question is whether the
-  # table is populated at all, not how many rows it holds.
+  # One clause per tenant table, generated at COMPILE time.
   #
-  # `::regclass` rather than `WHERE relname = $1`: relname is not unique across
-  # schemas or relkinds, so a same-named table in another schema (or an index)
-  # returns a second row, the single-row match fails, and the probe silently
-  # degrades to :unknown. regclass resolves through search_path to exactly one
-  # relation.
-  # `$1::text::regclass`, not `$1::regclass`. Postgrex reads the latter as an
-  # `oid` parameter and RAISES ArgumentError ("you tried to use a binary for an
-  # oid type") instead of returning `{:error, _}` — which the probe's error
-  # handling would never have caught, because it only handles error tuples.
-  # The explicit ::text pins the parameter as text and lets Postgres do the
-  # lookup.
-  defp estimate_rows(table) when is_atom(table) do
-    Engram.Repo.query("SELECT reltuples FROM pg_class WHERE oid = $1::text::regclass", [
-      to_string(table)
-    ])
+  # A structured Ecto query rather than raw SQL, because a table name cannot be
+  # a bind parameter and every raw-SQL shape that accepts one trips a lint that
+  # is right to trip: runtime interpolation is a sobelow SQL-injection finding,
+  # and `unquote`-generated SQL is too — sobelow reads the AST, where the
+  # string is not yet a literal. Both would have needed a suppression. This
+  # needs none, and reads better.
+  #
+  # `skip_tenant_check: true` is the accurate declaration here, unlike
+  # everywhere else it appears. The probe is not skipping a tenant check by
+  # oversight; it has deliberately set a tenant that owns nothing and is
+  # asking the SERVER whether the policy filters. The ORM tripwire would refuse
+  # the query before Postgres ever saw it, which would make this measure the
+  # tripwire instead of the database.
+  #
+  # Generated from `Engram.Repo.tenant_tables/0` rather than a second hardcoded
+  # list: that one is pinned to the live RLS set by `tenant_table_guard_test`,
+  # and a copy here could drift out of it silently. An unknown table raises
+  # FunctionClauseError instead of building a query, which is the behaviour
+  # worth having.
+  for table <- Engram.Repo.tenant_tables() do
+    defp probe_visibility(unquote(table)) do
+      Engram.Repo.exists?(from(t in unquote(Atom.to_string(table))),
+        skip_tenant_check: true,
+        source: "tenancy_guard"
+      )
+    end
   end
 
   @doc """

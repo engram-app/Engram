@@ -36,38 +36,6 @@ defmodule Engram.Repo.TenancyGuardTest do
   # dropped role), and a suite-wide drop would make the first half false.
   @moduletag :rls_unsafe
 
-  describe "verdict/2" do
-    # Pure, so the interesting cases can be stated directly. Two of them — an
-    # empty table and a never-analyzed one — are awkward to manufacture inside
-    # a sandbox that has just seeded fixtures, and they are precisely the cases
-    # where a naive implementation reports a clean bill of health it did not
-    # earn.
-
-    test "a visible row is decisive, whatever the table size estimate" do
-      assert TenancyGuard.verdict(true, 5000.0) == :bypassed
-      assert TenancyGuard.verdict(true, 0.0) == :bypassed
-      assert TenancyGuard.verdict(true, -1.0) == :bypassed
-    end
-
-    test "no visible row against a populated table means enforced" do
-      assert TenancyGuard.verdict(false, 3602.0) == :enforced
-    end
-
-    test "no visible row against an EMPTY table proves nothing" do
-      # The trap this guard exists to avoid. An enforced connection and a
-      # bypassed one are indistinguishable on an empty table, so the only
-      # honest answer is :unknown.
-      assert TenancyGuard.verdict(false, 0.0) == :unknown
-    end
-
-    test "no visible row against a NEVER-ANALYZED table proves nothing" do
-      # Postgres reports reltuples = -1, not 0, for a table that has never been
-      # analyzed. Treating that as "0 rows, therefore enforced" would be a
-      # false green on every freshly-restored database.
-      assert TenancyGuard.verdict(false, -1.0) == :unknown
-    end
-  end
-
   describe "observed_enforcement/0" do
     setup do
       {:ok, user} = user_with_dek_fixture()
