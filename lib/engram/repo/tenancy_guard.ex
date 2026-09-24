@@ -7,11 +7,16 @@ defmodule Engram.Repo.TenancyGuard do
 
   Every local signal for "is RLS on?" lies. The tables have had `ENABLE` +
   `FORCE ROW LEVEL SECURITY` and a correct policy for months, and the policy
-  was never the problem: dev, CI, and (at the time of writing) SaaS prod all
-  *connect as a superuser*, and a superuser bypasses RLS even under FORCE. So
-  the schema says enforced, the config says nothing, and the truth is a
-  property of the credential in `DATABASE_URL` — which only the server can
-  answer.
+  was never the problem: dev and CI *connect as a superuser*, and a superuser
+  bypasses RLS even under FORCE. So the schema says enforced, the config says
+  nothing, and the truth is a property of the credential in `DATABASE_URL` —
+  which only the server can answer.
+
+  This used to say SaaS prod connected as a superuser too. It does not.
+  `0.29.0` measured `engram_admin` from inside the app's own pool: neither
+  `rolsuper` nor `rolbypassrls`. `0.30.0`'s probe then saw zero rows across all
+  eleven tenant tables there. See
+  `docs/context/rls-tenancy-probe-boot-log.md`.
 
   ## Why it asks Postgres to DEMONSTRATE it, not to describe itself
 
@@ -438,9 +443,15 @@ defmodule Engram.Repo.TenancyGuard do
   end
 
   defp report(:bypassed, _maintenance_pool?) do
-    # Not a warning even on SaaS. It is the documented state of prod today
-    # (connecting as the migrator role), and the remedy is an infra change, not
-    # an app one. Logged at info so a deploy can be checked against it.
+    # Info rather than warning because this is the CORRECT state for self-host
+    # and for dev/CI, where a single-tenant box connects as its own database
+    # owner and RLS has nothing to separate.
+    #
+    # It is no longer the state of SaaS prod, whatever this comment used to
+    # say: prod has measured as not-bypassed since 2026-09-23 (role attributes)
+    # and 2026-09-24 (row visibility). If this branch ever fires on prod it is
+    # a finding, not a status line — see
+    # `docs/context/rls-tenancy-probe-boot-log.md`.
     Logger.info(
       "RLS NOT enforced: the connecting role bypasses row security",
       Metadata.with_category(:info, :boot, [])
