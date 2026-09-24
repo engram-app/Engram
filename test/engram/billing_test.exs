@@ -926,11 +926,13 @@ defmodule Engram.BillingTest do
             %{
               "status" => "captured",
               "error_code" => nil,
+              "created_at" => "2026-09-06T03:22:00Z",
               "method_details" => %{"type" => "card"}
             },
             %{
               "status" => "error",
               "error_code" => "declined",
+              "created_at" => "2026-09-06T03:21:00Z",
               "method_details" => %{"type" => "card"}
             }
           ]
@@ -944,6 +946,120 @@ defmodule Engram.BillingTest do
 
       refute log =~ "checkout_payment_stalled"
       refute_received {[:engram, :paddle, :checkout, :stalled], _, _, _}
+    end
+
+    # The array is cumulative, so reporting every stalled entry made the count
+    # scale with retries rather than with stalled checkouts: the real 4-attempt
+    # incident would have emitted 1+2+3+4 across its payment_failed events
+    # alone. One event reports at most one attempt, the newest.
+    test "reports only the newest attempt when several have failed" do
+      event = %{
+        "event_type" => "transaction.payment_failed",
+        "data" => %{
+          "id" => "txn_retries",
+          "customer_id" => "ctm_retries",
+          "payments" => [
+            %{
+              "status" => "error",
+              "error_code" => "expired_card",
+              "created_at" => "2026-09-06T03:21:54Z",
+              "method_details" => %{"type" => "apple_pay"}
+            },
+            %{
+              "status" => "error",
+              "error_code" => "declined",
+              "created_at" => "2026-09-06T03:20:31Z",
+              "method_details" => %{"type" => "card"}
+            }
+          ]
+        }
+      }
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, :checkout_stalled} = Billing.upsert_from_paddle_event(event)
+        end)
+
+      assert log =~ "expired_card"
+      refute log =~ "declined"
+
+      assert_received {[:engram, :paddle, :checkout, :stalled], _ref, _m, %{method: "apple_pay"}}
+      refute_received {[:engram, :paddle, :checkout, :stalled], _, _, _}
+    end
+
+    # A renewal decline is dunning, not checkout. subscription.past_due already
+    # handles it, and telemetry.ex says :payment_failed may page on its own —
+    # so letting renewals through would page at 3am for an expired card on an
+    # existing subscriber, under a log name naming the wrong flow.
+    test "a subscription renewal decline is not a stalled checkout" do
+      event = %{
+        "event_type" => "transaction.payment_failed",
+        "data" => %{
+          "id" => "txn_renewal",
+          "customer_id" => "ctm_renewal",
+          "origin" => "subscription_recurring",
+          "subscription_id" => "sub_existing",
+          "payments" => [
+            %{
+              "status" => "error",
+              "error_code" => "expired_card",
+              "method_details" => %{"type" => "card"}
+            }
+          ]
+        }
+      }
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, :ignored} = Billing.upsert_from_paddle_event(event)
+        end)
+
+      refute log =~ "checkout_payment_stalled"
+      refute_received {[:engram, :paddle, :checkout, :stalled], _, _, _}
+    end
+
+    # 3DS runs action_required → authorized → captured. Reporting a stall while
+    # the money is already reserved would alert on a checkout about to succeed.
+    test "an authorized attempt counts as healthy, not stalled" do
+      event = %{
+        "event_type" => "transaction.updated",
+        "data" => %{
+          "id" => "txn_authorized",
+          "customer_id" => "ctm_authorized",
+          "payments" => [
+            %{
+              "status" => "authorized",
+              "error_code" => nil,
+              "created_at" => "2026-09-06T03:22:00Z",
+              "method_details" => %{"type" => "card"}
+            },
+            %{
+              "status" => "action_required",
+              "error_code" => nil,
+              "created_at" => "2026-09-06T03:21:00Z",
+              "method_details" => %{"type" => "card"}
+            }
+          ]
+        }
+      }
+
+      assert {:ok, :ignored} = Billing.upsert_from_paddle_event(event)
+      refute_received {[:engram, :paddle, :checkout, :stalled], _, _, _}
+    end
+
+    # A status we do not classify must not raise: the controller would rescue
+    # it, skip mark_processed, and Paddle would retry the same payload forever.
+    test "an unclassified payment status never raises" do
+      event = %{
+        "event_type" => "transaction.updated",
+        "data" => %{
+          "id" => "txn_odd",
+          "customer_id" => "ctm_odd",
+          "payments" => [%{"status" => "dropped", "method_details" => %{"type" => "card"}}]
+        }
+      }
+
+      assert {:ok, :ignored} = Billing.upsert_from_paddle_event(event)
     end
 
     test "a transaction event carrying no payments stays silent" do
@@ -966,7 +1082,9 @@ defmodule Engram.BillingTest do
       assert_received {[:engram, :paddle, :checkout, :stalled], _ref, _measure,
                        %{method: "unknown"}}
     end
+  end
 
+  describe "upsert_from_paddle_event/1 — subscription broadcasts" do
     test "subscription.created broadcasts subscription_activated on user:{id} topic" do
       user = insert(:user)
       EngramWeb.Endpoint.subscribe("user:#{user.id}")

@@ -828,24 +828,14 @@ defmodule Engram.Billing do
   # rather than firing on a single event.
   def upsert_from_paddle_event(%{"event_type" => type, "data" => data})
       when type in ~w(transaction.payment_failed transaction.updated) do
-    payments = List.wrap(data["payments"])
-
-    # `payments` is CUMULATIVE — Paddle's own transaction.completed example
-    # carries [captured, error] after a buyer retries a declined card. So a
-    # stalled attempt only means the checkout stalled if nothing later
-    # captured; otherwise we would alert on a checkout that got paid.
-    stalled =
-      if Enum.any?(payments, &captured_payment?/1),
-        do: [],
-        else: Enum.filter(payments, &stalled_payment?/1)
-
-    case stalled do
-      [] ->
-        {:ok, :ignored}
-
-      stalled ->
-        Enum.each(stalled, &report_stalled_checkout(type, data, &1))
-        {:ok, :checkout_stalled}
+    # A renewal decline is dunning, not a stalled checkout: it already arrives
+    # as subscription.past_due, which this module handles. Reporting it here
+    # would page for an expired card on an existing subscriber, under a log
+    # name that says "checkout".
+    if renewal?(data) do
+      {:ok, :ignored}
+    else
+      report_checkout_payment(type, data)
     end
   end
 
@@ -863,19 +853,51 @@ defmodule Engram.Billing do
 
   @stalled_payment_statuses ~w(error action_required)
 
+  defp report_checkout_payment(type, data) do
+    # `payments` is CUMULATIVE — Paddle's own transaction.completed example
+    # carries [captured, error] after a buyer retries a declined card, newest
+    # first. So we judge the transaction by its NEWEST attempt only. Reporting
+    # every stalled entry made the counter scale with retry count instead of
+    # with stalled checkouts, and re-emitted the whole history on each later
+    # transaction.updated.
+    case newest_payment(List.wrap(data["payments"])) do
+      nil ->
+        {:ok, :ignored}
+
+      payment ->
+        if stalled_payment?(payment) do
+          report_stalled_checkout(type, data, payment)
+          {:ok, :checkout_stalled}
+        else
+          {:ok, :ignored}
+        end
+    end
+  end
+
   defp stalled_payment?(%{"status" => status}) when status in @stalled_payment_statuses, do: true
   defp stalled_payment?(_), do: false
 
-  defp captured_payment?(%{"status" => "captured"}), do: true
-  defp captured_payment?(_), do: false
+  defp renewal?(data), do: not is_nil(data["subscription_id"])
+
+  # Paddle orders payments newest-first, but that is not documented, so sort by
+  # `created_at` and fall back to the head when the field is absent.
+  defp newest_payment([]), do: nil
+  defp newest_payment([payment]), do: payment
+
+  defp newest_payment(payments), do: Enum.max_by(payments, &(&1["created_at"] || ""))
 
   defp report_stalled_checkout(event_type, data, payment) do
     method = get_in(payment, ["method_details", "type"]) || "unknown"
 
+    # The fallback arm is not dead code: without it, adding a status to
+    # @stalled_payment_statuses raises CaseClauseError inside the webhook, the
+    # controller rescues it, mark_processed is skipped, and Paddle retries the
+    # same payload forever.
     reason =
       case payment["status"] do
         "error" -> :payment_failed
         "action_required" -> :action_required
+        _ -> :unknown
       end
 
     Logger.warning(
