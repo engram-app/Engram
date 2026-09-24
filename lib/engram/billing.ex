@@ -828,12 +828,23 @@ defmodule Engram.Billing do
   # rather than firing on a single event.
   def upsert_from_paddle_event(%{"event_type" => type, "data" => data})
       when type in ~w(transaction.payment_failed transaction.updated) do
-    case Enum.filter(List.wrap(data["payments"]), &stalled_payment?/1) do
+    payments = List.wrap(data["payments"])
+
+    # `payments` is CUMULATIVE — Paddle's own transaction.completed example
+    # carries [captured, error] after a buyer retries a declined card. So a
+    # stalled attempt only means the checkout stalled if nothing later
+    # captured; otherwise we would alert on a checkout that got paid.
+    stalled =
+      if Enum.any?(payments, &captured_payment?/1),
+        do: [],
+        else: Enum.filter(payments, &stalled_payment?/1)
+
+    case stalled do
       [] ->
         {:ok, :ignored}
 
-      payments ->
-        Enum.each(payments, &report_stalled_checkout(type, data, &1))
+      stalled ->
+        Enum.each(stalled, &report_stalled_checkout(type, data, &1))
         {:ok, :checkout_stalled}
     end
   end
@@ -854,6 +865,9 @@ defmodule Engram.Billing do
 
   defp stalled_payment?(%{"status" => status}) when status in @stalled_payment_statuses, do: true
   defp stalled_payment?(_), do: false
+
+  defp captured_payment?(%{"status" => "captured"}), do: true
+  defp captured_payment?(_), do: false
 
   defp report_stalled_checkout(event_type, data, payment) do
     method = get_in(payment, ["method_details", "type"]) || "unknown"

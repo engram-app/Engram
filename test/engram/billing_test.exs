@@ -913,6 +913,39 @@ defmodule Engram.BillingTest do
       refute_received {[:engram, :paddle, :checkout, :stalled], _, _, _}
     end
 
+    # The payments array is cumulative: Paddle's own transaction.completed
+    # example carries [captured, error] after a successful retry. Reporting the
+    # historical error would fire a stall alert on a checkout that got paid.
+    test "an earlier failed attempt is not reported once a later one captured" do
+      event = %{
+        "event_type" => "transaction.updated",
+        "data" => %{
+          "id" => "txn_retried",
+          "customer_id" => "ctm_retried",
+          "payments" => [
+            %{
+              "status" => "captured",
+              "error_code" => nil,
+              "method_details" => %{"type" => "card"}
+            },
+            %{
+              "status" => "error",
+              "error_code" => "declined",
+              "method_details" => %{"type" => "card"}
+            }
+          ]
+        }
+      }
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, :ignored} = Billing.upsert_from_paddle_event(event)
+        end)
+
+      refute log =~ "checkout_payment_stalled"
+      refute_received {[:engram, :paddle, :checkout, :stalled], _, _, _}
+    end
+
     test "a transaction event carrying no payments stays silent" do
       event = %{
         "event_type" => "transaction.updated",
