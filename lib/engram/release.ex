@@ -64,10 +64,11 @@ defmodule Engram.Release do
 
   # NOINHERIT + LOGIN matches the historical baseline shape (preserved
   # for envs that rely on `engram_app` connecting directly).
-  # PASSWORD intentionally absent — privilege separation (app
-  # DATABASE_URL using engram_app creds) is a separate concern wired
-  # via DATABASE_URL itself; this task only guarantees the role
-  # exists.
+  #
+  # No PASSWORD here: creation is idempotent behind IF NOT EXISTS, so a
+  # password set at creation time could never be rotated. It is applied
+  # separately by `set_engram_app_password/1`, which runs on every boot from
+  # ENGRAM_APP_DB_PASSWORD and no-ops when that is unset.
   @create_engram_app_role_sql """
   DO $$
   BEGIN
@@ -273,10 +274,114 @@ defmodule Engram.Release do
 
   defp do_prepare_database(repo) do
     repo.query!(@create_engram_app_role_sql, [])
+    set_engram_app_password(repo)
     repo.query!(@grant_schema_usage_sql, [])
     repo.query!(@default_priv_tables_sql, [])
     repo.query!(@default_priv_sequences_sql, [])
     :ok
+  end
+
+  # `ALTER ROLE engram_app PASSWORD`, from ENGRAM_APP_DB_PASSWORD.
+  # Public only so it can be tested against a real connection; not an API.
+  #
+  # Unset is the normal case and a no-op: self-host, dev and CI all connect as
+  # the owner and never need `engram_app` to log in. Only a deployment doing
+  # privilege separation sets it.
+  #
+  # ## Why this lives in the boot path
+  #
+  # It has to run somewhere with CREATEROLE against the database, and on AWS
+  # that is a shorter list than it looks. RDS is `publicly_accessible = false`
+  # in private subnets, the VPC has no NAT, and the CI runners are self-hosted
+  # in a homelab — so no Terraform provider has a TCP path to port 5432, and
+  # every DB role here has historically been created by hand through the SSM
+  # bastion (`engram_metrics_ro`, `engram_audit_ro`). The app container is
+  # already inside the VPC, already holds a CREATEROLE credential, and already
+  # runs `CREATE ROLE engram_app` three lines up. Putting the password beside
+  # the role creation deletes a manual step rather than adding a mechanism.
+  #
+  # The old comment on @create_engram_app_role_sql said "PASSWORD intentionally
+  # absent — privilege separation is a separate concern wired via DATABASE_URL
+  # itself". True while nothing set a password; it left the password as the one
+  # piece of the cutover with no owner, and it stalled #1649.
+  #
+  # ## Why it sends a SCRAM VERIFIER rather than the password
+  #
+  # `ALTER ROLE ... PASSWORD` is utility DDL and accepts no bind parameter, so
+  # whatever it is given becomes part of the statement TEXT. That matters here
+  # because `pg_stat_statements` does not normalise utility statements — it
+  # stores them verbatim — and `engram_metrics_ro` holds `pg_monitor`, which
+  # can read it. Sending the plaintext would hand the app's database password
+  # to the metrics exporter role.
+  #
+  # Postgres accepts a pre-computed RFC 5802 verifier and stores it unchanged,
+  # which is precisely what that format is for. So the plaintext never leaves
+  # this process; what lands in the statement log is the same hash already
+  # sitting in `pg_authid`.
+  #
+  # (A `DO $$ ... EXECUTE format(..., $1) $$` block does NOT solve this: `$1`
+  # inside a dollar-quoted body is literal text, not a placeholder, and
+  # Postgrex rejects the call with "parameters must be of length 0".)
+  #
+  # ## Why ALTER every boot rather than only on create
+  #
+  # Rotation. Setting it only inside the `IF NOT EXISTS` branch would mean a
+  # rotated secret never reaches Postgres and the app locks itself out at the
+  # next task replacement, with the symptom arriving hours later. A fresh salt
+  # each boot makes the verifier differ every time, which is harmless — the
+  # password it encodes is what has to stay stable.
+  @doc false
+  def set_engram_app_password(repo) do
+    case System.get_env("ENGRAM_APP_DB_PASSWORD") do
+      nil ->
+        :ok
+
+      "" ->
+        # Same meaning as unset. An empty ECS/SOPS value must never become
+        # `PASSWORD ''`, which is a role anyone can authenticate as while
+        # looking like a successful rotation.
+        :ok
+
+      password ->
+        repo.query!("ALTER ROLE engram_app PASSWORD '#{scram_verifier(password)}'", [])
+
+        Logger.info(
+          "engram_app password applied from ENGRAM_APP_DB_PASSWORD",
+          Metadata.with_category(:info, :boot, [])
+        )
+
+        :ok
+    end
+  end
+
+  # RFC 5802 / RFC 7677 SCRAM-SHA-256 verifier, in the on-disk shape Postgres
+  # writes to `pg_authid.rolpassword`:
+  #
+  #     SCRAM-SHA-256$<iterations>:<b64 salt>$<b64 StoredKey>:<b64 ServerKey>
+  #
+  # 4096 iterations and a 16-byte salt match Postgres' own defaults
+  # (`scram_sha_256_build_secret`), so a role configured here is
+  # indistinguishable from one configured with a plain `PASSWORD 'x'`.
+  #
+  # The verifier is interpolated rather than bound, which is safe here and
+  # nowhere else: every byte of it is base64 or punctuation from THIS function,
+  # never from the password, so there is no input that can close the quote.
+  @scram_iterations 4096
+  @scram_salt_bytes 16
+
+  # Public only so a test can prove a real login succeeds against it; the
+  # `ALTER ROLE` wrapper above is trivially correct, this is the part that can
+  # be subtly and silently wrong.
+  @doc false
+  def scram_verifier(password, salt \\ :crypto.strong_rand_bytes(@scram_salt_bytes)) do
+    salted =
+      :crypto.pbkdf2_hmac(:sha256, password, salt, @scram_iterations, 32)
+
+    stored_key = :crypto.hash(:sha256, :crypto.mac(:hmac, :sha256, salted, "Client Key"))
+    server_key = :crypto.mac(:hmac, :sha256, salted, "Server Key")
+
+    "SCRAM-SHA-256$#{@scram_iterations}:#{Base.encode64(salt)}$" <>
+      "#{Base.encode64(stored_key)}:#{Base.encode64(server_key)}"
   end
 
   defp repos do
