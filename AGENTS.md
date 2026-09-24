@@ -470,6 +470,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 **Architecture & Decisions**
 - Elixir decision audit, library deps, infra checklist (partially superseded — read inline corrections) → `docs/context/elixir-architecture-decisions.md`
 - Full SQL schema, RLS policies, Ecto enforcement → `docs/context/database-schema-rls.md`
+- Reading `TenancyGuard`'s boot line (it reports `:enforced` without saying what the PROBE saw), what the probe measured on prod 2026-09-24, or touching the probe itself (`reltuples` and `$1::regclass` traps) → `docs/context/rls-tenancy-probe-boot-log.md`
 - Widening a column type without rewriting the table (`varchar[]` → `text[]` DOES rewrite; how to measure with relfilenode; when `# squawk-ignore-file` is justified) → `docs/context/migration-column-type-rewrites.md`
 - All env vars by category → `docs/context/environment-variables.md`
 - Rate limiter & cap architecture — Postgres + BEAM only, zero Redis → `docs/context/rate-limiter-architecture.md`
