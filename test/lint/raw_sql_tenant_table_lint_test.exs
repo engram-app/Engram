@@ -50,13 +50,41 @@ defmodule Engram.RawSqlTenantTableLintTest do
     # `UPDATE notes ... FROM (VALUES ...)`: each row carries distinct
     # re-encrypted ciphertexts (per-row values, one statement). Runs inside
     # do_rename_folder's `Repo.with_tenant/2` transaction — RLS context active.
-    "engram/notes.ex"
+    "engram/notes.ex",
+    # CrdtBloatSweep.measure/0 — one whole-table aggregate over `notes`
+    # computing size percentiles for the history/trash epic (#1706). Genuinely
+    # cross-tenant by design: the question is "how much is CRDT state costing
+    # us in total", which has no tenant.
+    #
+    # Reaches Postgres through `Repo.maintenance()`, so it takes the exempt
+    # pool wherever one is configured. On prod today none is, which is exactly
+    # the situation `TenancyGuard` warns about at boot — under enforcement
+    # these reads are filtered to zero rows and the sweep reports success while
+    # measuring nothing. Tracked on #1649; the sweep is not the fix for it.
+    "engram/workers/crdt_bloat_sweep.ex"
   ]
 
   # Matches a raw-SQL call and the text immediately following it (covers
   # multi-line heredoc SQL where the table name sits a few lines below the
   # `Repo.query!(` call).
-  @raw_sql_call ~r/(?:Repo\.query!?|Ecto\.Adapters\.SQL\.query!?)\(.{0,600}/s
+  # Two independent misses let a `FROM notes` query land in
+  # `crdt_bloat_sweep.ex` neither flagged nor allowlisted, and BOTH had to be
+  # fixed — widening only one leaves the hole open.
+  #
+  # 1. The call shape. `Repo(\.\w+\(\))?\.query` rather than a bare
+  #    `Repo.query`, because `Repo.maintenance().query!(` did not match at all.
+  #    On prod `Repo.maintenance()` resolves to `Repo` itself (no
+  #    MAINTENANCE_DATABASE_URL), so that call IS `Repo.query!` — the exact
+  #    shape this lint exists to catch, wearing a different hat.
+  #
+  # 2. The scan window. 600 characters does not reach the table name of a long
+  #    aggregate: in that file the gap between the call and `FROM notes n` is
+  #    1418 characters, so even once the call matched, the table was invisible.
+  #    2000 clears it with room, and the window only has to span one statement.
+  #
+  # Measured rather than guessed — the first attempt at this fixed the syntax
+  # alone, and the lint still passed against the very file that prompted it.
+  @raw_sql_call ~r/(?:Repo(?:\.\w+\(\))?\.query!?|Ecto\.Adapters\.SQL\.query!?)\(.{0,2000}/s
 
   test "no raw SQL references a tenant table outside the allowlist" do
     offenders =

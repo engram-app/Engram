@@ -208,16 +208,6 @@ defmodule Engram.PromEx.Crdt do
               "quarantined=true means it has crossed the depth threshold.",
           tags: [:phase, :quarantined]
         ),
-        # The WRITE side of the authority the projection metrics below read from.
-        # Emitted by `Engram.Notes.Identity` (and by `Engram.Notes` for the
-        # `:orphan` route). Without this the module's own argument — that an
-        # unobserved subsystem is indistinguishable from an idle one — was
-        # unfulfilled: a vault where every rename is refused mid-rotation looked
-        # exactly like a vault nobody renamed.
-        #
-        # Tagged by all three keys on purpose. `phase` alone would merge a room
-        # `:conflict` with a snapshot `:conflict`, losing the only dimension
-        # that tells them apart. 2 ops x 5 routes x 8 phases bounds the series.
         # #1706. `crdt_state_ciphertext` is the largest column in the database
         # and it grows monotonically with edit count, but nothing ever measured
         # how far it runs ahead of the text it encodes. Untagged and
@@ -404,6 +394,16 @@ defmodule Engram.PromEx.Crdt do
             "Total decrypted-equivalent bytes of note content across every live note, " <>
               "including those carrying no CRDT state. Aggregate with max, never sum."
         ),
+        # The WRITE side of the authority the projection metrics below read from.
+        # Emitted by `Engram.Notes.Identity` (and by `Engram.Notes` for the
+        # `:orphan` route). Without this the module's own argument — that an
+        # unobserved subsystem is indistinguishable from an idle one — was
+        # unfulfilled: a vault where every rename is refused mid-rotation looked
+        # exactly like a vault nobody renamed.
+        #
+        # Tagged by all three keys on purpose. `phase` alone would merge a room
+        # `:conflict` with a snapshot `:conflict`, losing the only dimension
+        # that tells them apart. 2 ops x 5 routes x 8 phases bounds the series.
         counter(
           metric_prefix ++ [:index_claim, :total],
           event_name: @claim_event,

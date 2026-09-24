@@ -28,6 +28,25 @@ defmodule Engram.Workers.CrdtBloatSweep do
   overhead cancels in the ratio anyway; it is subtracted so the reported BYTE
   totals are true sizes rather than sizes plus a per-row constant.
 
+  ### "Just column lengths" is not free, and the cost scales with the problem
+
+  `octet_length` on a `bytea` returns the UNCOMPRESSED length, so Postgres must
+  materialize and de-TOAST every value to answer it. `crdt_state_ciphertext` is
+  the largest column in the database, which means this reads and decompresses
+  the entire CRDT corpus on the primary on every run, inside a 5-minute
+  statement timeout.
+
+  That is affordable at current scale and deliberately accepted — but note the
+  shape: the cost grows with exactly the quantity being measured, so it
+  degrades fastest in the scenario #609 exists to address. If this starts
+  timing out, the fix is not a longer timeout.
+
+  `pg_column_size/1` answers a storage question from the on-disk size without
+  de-TOASTing, and would be the cheap swap — but it measures COMPRESSED bytes,
+  which is a different metric than the plaintext ratio this worker reports.
+  Changing it changes what the numbers mean, so it is not a drop-in. Tracked
+  separately rather than done quietly here.
+
   ## Scope
 
   The population is every live `kind='note'` row, not only those carrying CRDT
