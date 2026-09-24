@@ -809,7 +809,80 @@ defmodule Engram.Billing do
     end
   end
 
+  # #1737 — a checkout that stalls mid-payment is the only way we lose a signup
+  # silently. Paddle sends us all nine `transaction.*` events and we subscribe
+  # to every one, but nothing here matched them, so they fell to the catch-all
+  # below and returned `{:ok, :ignored}` under a `paddle_webhook_ok` line. The
+  # first time it cost us a customer (apple_pay, `action_required`, never
+  # captured, 2026-09-06) we found out eleven days later by reading the Paddle
+  # API by hand.
+  #
+  # This clause does not recover the payment — recovery is #422. It makes the
+  # event greppable in Loki and countable in Prometheus, which is what we did
+  # not have.
+  #
+  # `action_required` is NOT a failure on its own: a 3DS challenge sits there
+  # for the seconds a buyer takes to approve it. So it is reported as its own
+  # `reason`, and an alert must compare it against
+  # `engram.paddle.webhook.start.count{event_type="transaction.completed"}`
+  # rather than firing on a single event.
+  def upsert_from_paddle_event(%{"event_type" => type, "data" => data})
+      when type in ~w(transaction.payment_failed transaction.updated) do
+    case Enum.filter(List.wrap(data["payments"]), &stalled_payment?/1) do
+      [] ->
+        {:ok, :ignored}
+
+      payments ->
+        Enum.each(payments, &report_stalled_checkout(type, data, &1))
+        {:ok, :checkout_stalled}
+    end
+  end
+
+  def upsert_from_paddle_event(%{"event_type" => type}) do
+    # Debug, not warn: this is the gap-finding line, and Loki ships warn+ only.
+    Logger.debug(
+      "paddle_webhook_unhandled_event",
+      Metadata.with_category(:debug, :billing, event_type: type)
+    )
+
+    {:ok, :ignored}
+  end
+
   def upsert_from_paddle_event(_event), do: {:ok, :ignored}
+
+  @stalled_payment_statuses ~w(error action_required)
+
+  defp stalled_payment?(%{"status" => status}) when status in @stalled_payment_statuses, do: true
+  defp stalled_payment?(_), do: false
+
+  defp report_stalled_checkout(event_type, data, payment) do
+    method = get_in(payment, ["method_details", "type"]) || "unknown"
+
+    reason =
+      case payment["status"] do
+        "error" -> :payment_failed
+        "action_required" -> :action_required
+      end
+
+    Logger.warning(
+      "checkout_payment_stalled",
+      Metadata.with_category(:warn, :billing,
+        event_type: event_type,
+        transaction_id: data["id"],
+        customer_id: data["customer_id"],
+        payment_status: payment["status"],
+        payment_method: method,
+        error_code: payment["error_code"],
+        reason: reason
+      )
+    )
+
+    :telemetry.execute(
+      [:engram, :paddle, :checkout, :stalled],
+      %{count: 1},
+      %{reason: reason, method: method}
+    )
+  end
 
   # Resolve the tier from the event's price_id and merge it into `base_attrs`.
   # An unknown price_id leaves the tier UNCHANGED (attrs without :tier) rather

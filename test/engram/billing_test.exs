@@ -830,6 +830,109 @@ defmodule Engram.BillingTest do
       event = %{"event_type" => "transaction.completed", "data" => %{}}
       assert {:ok, :ignored} = Billing.upsert_from_paddle_event(event)
     end
+  end
+
+  # #1737 — every transaction.* event used to fall to the catch-all and return
+  # {:ok, :ignored} with no warn line and no metric, so a checkout could stall
+  # on the only revenue path we have and leave no trace. Reproduces the real
+  # payload from obyor@yahoo.com, 2026-09-06 (txn_01m1tbrkx80gx2p3eq024jhd4x):
+  # apple_pay, action_required, never captured, four attempts, found by hand
+  # eleven days later.
+  describe "upsert_from_paddle_event/1 — stalled checkouts (#1737)" do
+    setup do
+      :telemetry_test.attach_event_handlers(self(), [[:engram, :paddle, :checkout, :stalled]])
+      :ok
+    end
+
+    defp txn_event(type, payment) do
+      %{
+        "event_type" => type,
+        "data" => %{
+          "id" => "txn_01m1tbrkx80gx2p3eq024jhd4x",
+          "status" => "ready",
+          "customer_id" => "ctm_01m1tbn199h8ke380rjbtagvd2",
+          "payments" => [payment]
+        }
+      }
+    end
+
+    defp apple_pay(status, error_code \\ nil) do
+      %{
+        "status" => status,
+        "error_code" => error_code,
+        "method_details" => %{"type" => "apple_pay"}
+      }
+    end
+
+    test "transaction.payment_failed logs a warn naming method and error code" do
+      event = txn_event("transaction.payment_failed", apple_pay("error", "declined"))
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, :checkout_stalled} = Billing.upsert_from_paddle_event(event)
+        end)
+
+      assert log =~ "checkout_payment_stalled"
+      assert log =~ "apple_pay"
+      assert log =~ "declined"
+      assert log =~ "txn_01m1tbrkx80gx2p3eq024jhd4x"
+    end
+
+    test "transaction.updated with a payment stuck at action_required is reported" do
+      event = txn_event("transaction.updated", apple_pay("action_required"))
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, :checkout_stalled} = Billing.upsert_from_paddle_event(event)
+        end)
+
+      assert log =~ "checkout_payment_stalled"
+      assert log =~ "action_required"
+    end
+
+    test "emits a counter tagged by reason and payment method" do
+      event = txn_event("transaction.payment_failed", apple_pay("error", "declined"))
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        Billing.upsert_from_paddle_event(event)
+      end)
+
+      assert_received {[:engram, :paddle, :checkout, :stalled], _ref, %{count: 1},
+                       %{reason: :payment_failed, method: "apple_pay"}}
+    end
+
+    test "a healthy payment stays silent" do
+      event = txn_event("transaction.updated", apple_pay("captured"))
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, :ignored} = Billing.upsert_from_paddle_event(event)
+        end)
+
+      refute log =~ "checkout_payment_stalled"
+      refute_received {[:engram, :paddle, :checkout, :stalled], _, _, _}
+    end
+
+    test "a transaction event carrying no payments stays silent" do
+      event = %{
+        "event_type" => "transaction.updated",
+        "data" => %{"id" => "txn_draft", "status" => "draft"}
+      }
+
+      assert {:ok, :ignored} = Billing.upsert_from_paddle_event(event)
+    end
+
+    test "an unknown method still reports, tagged unknown" do
+      payment = %{"status" => "error", "error_code" => "declined", "method_details" => nil}
+      event = txn_event("transaction.payment_failed", payment)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, :checkout_stalled} = Billing.upsert_from_paddle_event(event)
+      end)
+
+      assert_received {[:engram, :paddle, :checkout, :stalled], _ref, _measure,
+                       %{method: "unknown"}}
+    end
 
     test "subscription.created broadcasts subscription_activated on user:{id} topic" do
       user = insert(:user)
