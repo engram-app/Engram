@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.30.0](https://github.com/engram-app/Engram/compare/0.29.0...0.30.0) (2026-09-24)
+
+
+### Features
+
+* **crdt:** measure CRDT doc bloat (checkpoint span + periodic sweep) ([#1720](https://github.com/engram-app/Engram/issues/1720)) ([d68a950](https://github.com/engram-app/Engram/commit/d68a9505681db2b38ebf905703104843fe5f73bc))
+
+
+### Bug Fixes
+
+* **billing:** report a checkout that stalls mid-payment ([#1738](https://github.com/engram-app/Engram/issues/1738)) ([a0de78e](https://github.com/engram-app/Engram/commit/a0de78e3454373fdd920b13acbb78c16d4c674f9))
+* **e2e:** name why Obsidian died instead of leaving Errno 111 ([#1734](https://github.com/engram-app/Engram/issues/1734)) ([3fc3ed5](https://github.com/engram-app/Engram/commit/3fc3ed52e41923419e03f65b2ec564c1b15f2e4c)), closes [#1522](https://github.com/engram-app/Engram/issues/1522) [#1503](https://github.com/engram-app/Engram/issues/1503)
+* **rls:** do not let the probe unlock OrphanSweep, and probe every table ([#1739](https://github.com/engram-app/Engram/issues/1739)) ([5baa41a](https://github.com/engram-app/Engram/commit/5baa41a3fe3cc5fae06a22e624ee017dfe450799))
+* **rls:** make TenancyGuard ask what the connection can SEE ([#1736](https://github.com/engram-app/Engram/issues/1736)) ([489fa77](https://github.com/engram-app/Engram/commit/489fa774235d3f296530b94b100c30df7a3b1f5c)), closes [#1726](https://github.com/engram-app/Engram/issues/1726) [#1649](https://github.com/engram-app/Engram/issues/1649)
+
 ## [0.29.0](https://github.com/engram-app/Engram/compare/0.28.0...0.29.0) (2026-09-23)
 
 
