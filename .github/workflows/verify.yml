@@ -1554,7 +1554,15 @@ jobs:
           cp /tmp/obsidian-stderr-*.log ci-artifacts/ 2>/dev/null || true
           {
             echo "=== dmesg (tail) ==="
-            sudo dmesg -T 2>/dev/null | tail -100 || dmesg -T 2>/dev/null | tail -100 || echo "dmesg unavailable (kernel.dmesg_restrict?)"
+            # NOT `sudo dmesg | tail || dmesg | tail`: a pipeline's exit
+            # status is the LAST command's, so `tail` returning 0 makes the
+            # fallbacks unreachable and a restricted dmesg yields a silently
+            # empty section. Capture first, then decide.
+            if out=$(sudo dmesg -T 2>/dev/null) || out=$(dmesg -T 2>/dev/null); then
+              printf '%s\n' "$out" | tail -100
+            else
+              echo "dmesg unavailable (kernel.dmesg_restrict?)"
+            fi
             echo "=== free -m ==="
             free -m
             echo "=== top by RSS ==="
@@ -2093,7 +2101,15 @@ jobs:
           # bare, then give up. Never fail the step over diagnostics.
           {
             echo "=== dmesg (tail) ==="
-            sudo dmesg -T 2>/dev/null | tail -100 || dmesg -T 2>/dev/null | tail -100 || echo "dmesg unavailable (kernel.dmesg_restrict?)"
+            # NOT `sudo dmesg | tail || dmesg | tail`: a pipeline's exit
+            # status is the LAST command's, so `tail` returning 0 makes the
+            # fallbacks unreachable and a restricted dmesg yields a silently
+            # empty section. Capture first, then decide.
+            if out=$(sudo dmesg -T 2>/dev/null) || out=$(dmesg -T 2>/dev/null); then
+              printf '%s\n' "$out" | tail -100
+            else
+              echo "dmesg unavailable (kernel.dmesg_restrict?)"
+            fi
             echo "=== free -m ==="
             free -m
             echo "=== top by RSS ==="
