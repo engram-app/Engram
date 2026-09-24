@@ -801,11 +801,12 @@ defmodule Engram.Accounts do
   Prod connects as `engram_admin`, the RDS master (`engram-infra` assembles
   `DATABASE_URL` from `aws_db_instance.main.username`).
 
-  Points at NOT enforced, today: `Engram.Workers.OrphanSweep` refuses with
-  `{:error, :tenancy_unsafe}` when `Repo.maintenance() == Repo` and
-  `TenancyGuard.enforced?()` — a direct read of `rolsuper OR rolbypassrls`.
-  Prod sets no `MAINTENANCE_DATABASE_URL`, so the first half holds, and prod
-  logs `orphan_sweep complete` rather than refusing.
+  Points at NOT enforced, historically: `Engram.Workers.OrphanSweep` refuses
+  with `{:error, :tenancy_unsafe}` when `Repo.maintenance() == Repo` and
+  `TenancyGuard.enforced?()`. Prod sets no `MAINTENANCE_DATABASE_URL`, so the
+  first half holds, and prod logged `orphan_sweep complete` rather than
+  refusing — but that was on images predating the guard, so it is evidence
+  about the old code path, not about the role.
 
   Points at ENFORCED, earlier: `Engram.Onboarding.record_action/2` records
   `engram_admin` as "verified rolbypassrls=false" against a real incident
@@ -814,11 +815,20 @@ defmodule Engram.Accounts do
   no-opping for the same reason in a dated audit. Those are incident records,
   not guesses, so they are not simply wrong.
 
-  The reconciliation that fits both is that BYPASSRLS was granted to
-  `engram_admin` out of band after those were written; nothing in this repo
-  grants it. Unconfirmed — it needs `SELECT rolsuper OR rolbypassrls` against
-  the live prod role. Staging and self-host connect as `engram_app` and were
-  definitely affected.
+  The reconciliation that fitted both was that BYPASSRLS had been granted to
+  `engram_admin` out of band. **That is now disproved.** `0.29.0` shipped
+  `Engram.Repo.TenancyGuard`, which asks that exact question from inside the
+  app's own pool at boot, and prod answered `:enforced` on every task on
+  2026-09-23 — so `engram_admin` is neither `rolsuper` nor `rolbypassrls`, and
+  nothing was granted out of band.
+
+  What that leaves is stranger, not simpler: a role with no bypass attributes
+  that #1649 nonetheless watched return all 3,602 `notes` rows with a tenant
+  set. The attribute answer and the observed answer disagree, and the mechanism
+  is still unidentified. `TenancyGuard.observed_enforcement/0` now probes
+  visibility directly and reports that divergence when it sees it.
+
+  Staging and self-host connect as `engram_app` and were definitely affected.
 
   The enqueue runs INSIDE the tenant transaction, and a failed insert raises.
   Both matter, because `Oban.insert/1` returns `{:error, changeset}` rather
