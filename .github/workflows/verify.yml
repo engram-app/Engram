@@ -1546,6 +1546,20 @@ jobs:
           cp ${MARKER_PREFIX}-*.log ci-artifacts/ 2>/dev/null || true
           # Pytest detailed log (captures DEBUG+ from all helpers)
           cp e2e/pytest-e2e.log ci-artifacts/ 2>/dev/null || true
+          # Obsidian stderr + host forensics. Same rationale as the e2e-crdt
+          # job — see docs/context/e2e-simultaneous-failures-obsidian-death.md.
+          # All 7 runners share one 8 vCPU / 16 GB VM, so a co-tenant job's
+          # memory pressure can kill this suite's Electron processes and the
+          # only symptom is `Errno 111` from CDP.
+          cp /tmp/obsidian-stderr-*.log ci-artifacts/ 2>/dev/null || true
+          {
+            echo "=== dmesg (tail) ==="
+            sudo dmesg -T 2>/dev/null | tail -100 || dmesg -T 2>/dev/null | tail -100 || echo "dmesg unavailable (kernel.dmesg_restrict?)"
+            echo "=== free -m ==="
+            free -m
+            echo "=== top by RSS ==="
+            ps -eo pid,rss,etime,comm --sort=-rss | head -20
+          } > ci-artifacts/host-forensics.log 2>&1 || true
           for v in ${E2E_VAULT_PREFIX}-*; do
             [ -d "$v" ] && tar czf "ci-artifacts/$(basename $v).tar.gz" -C /tmp "$(basename $v)" 2>/dev/null || true
           done
@@ -2065,6 +2079,26 @@ jobs:
           cp ${MARKER_PREFIX}-*.log ci-artifacts/ 2>/dev/null || true
           # Pytest detailed log (captures DEBUG+ from all helpers)
           cp e2e/pytest-e2e.log ci-artifacts/ 2>/dev/null || true
+          # Obsidian stderr, one file per instance. Was DEVNULL until
+          # docs/context/e2e-simultaneous-failures-obsidian-death.md — a crash
+          # left no record and every death looked like `Errno 111` from CDP.
+          cp /tmp/obsidian-stderr-*.log ci-artifacts/ 2>/dev/null || true
+          # Host forensics. All 7 runners share ONE 8 vCPU / 16 GB VM, so a
+          # heavy e2e stack can be killed by a co-tenant job's memory pressure
+          # rather than by anything in this suite. dmesg names it verbatim:
+          # "Out of memory: Killed process ... (obsidian)". Without this the
+          # OOM-vs-bug call is inference; with it, it is a grep.
+          #
+          # dmesg may be restricted (kernel.dmesg_restrict) — try sudo, then
+          # bare, then give up. Never fail the step over diagnostics.
+          {
+            echo "=== dmesg (tail) ==="
+            sudo dmesg -T 2>/dev/null | tail -100 || dmesg -T 2>/dev/null | tail -100 || echo "dmesg unavailable (kernel.dmesg_restrict?)"
+            echo "=== free -m ==="
+            free -m
+            echo "=== top by RSS ==="
+            ps -eo pid,rss,etime,comm --sort=-rss | head -20
+          } > ci-artifacts/host-forensics.log 2>&1 || true
           for v in ${E2E_VAULT_PREFIX}-*; do
             [ -d "$v" ] && tar czf "ci-artifacts/$(basename $v).tar.gz" -C /tmp "$(basename $v)" 2>/dev/null || true
           done

@@ -59,6 +59,10 @@ class ObsidianInstance:
         self.vault_id = hashlib.md5(str(vault_path).encode()).hexdigest()[:16]
         self._xvfb_proc: subprocess.Popen | None = None
         self._obsidian_proc: subprocess.Popen | None = None
+        # Declared here, not just where they're opened: stop() reads them, and
+        # stop() runs even when start() raised partway through.
+        self._xvfb_stderr = None
+        self._obsidian_stderr = None
 
     def start(self) -> None:
         """Start Xvfb, configure vault, launch Obsidian, enable plugin via CDP."""
@@ -79,6 +83,17 @@ class ObsidianInstance:
     def stop(self) -> None:
         """Kill Obsidian (including extracted child processes) and Xvfb."""
         logger.info("[%s] Stopping", self.name)
+
+        # Sample liveness BEFORE the pkill below, or every teardown looks like
+        # a death. A non-None code here means the process was ALREADY gone when
+        # teardown ran — nobody asked it to exit, it just went.
+        #
+        # This is the signal the "six unrelated CRDT tests failed at once"
+        # investigations kept lacking: the tests only ever saw `Errno 111
+        # Connection refused` from CDP, which cannot distinguish a crash from
+        # an OOM kill from a stray pkill. See
+        # docs/context/e2e-simultaneous-failures-obsidian-death.md.
+        self._report_premature_death()
 
         # Kill all processes using our user-data-dir (catches extracted binary children)
         # Must use SIGKILL — Obsidian ignores SIGTERM
@@ -104,6 +119,56 @@ class ObsidianInstance:
         # Clean up config dir
         if self.config_dir.exists():
             shutil.rmtree(self.config_dir, ignore_errors=True)
+
+    # Signals worth naming rather than leaving as a bare negative number.
+    # -9 is the one that matters: the OOM killer and a stray `pkill -9` both
+    # land here, and those are the two known ways an e2e Obsidian dies on the
+    # shared runner VM.
+    _SIGNAL_NAMES = {
+        -9: "SIGKILL — OOM killer, or another job's `pkill -9`",
+        -11: "SIGSEGV — crash",
+        -6: "SIGABRT — crash",
+        -15: "SIGTERM — something asked it to exit",
+    }
+
+    def _report_premature_death(self) -> None:
+        """Log loudly if a process exited on its own before teardown."""
+        for proc, label in [
+            (self._obsidian_proc, "Obsidian"),
+            (self._xvfb_proc, "Xvfb"),
+        ]:
+            if proc is None:
+                continue
+            rc = proc.poll()
+            if rc is None:
+                continue
+
+            reason = self._SIGNAL_NAMES.get(rc, f"exit code {rc}")
+            logger.error(
+                "[%s] %s DIED BEFORE TEARDOWN (pid %d, rc=%d: %s)%s",
+                self.name, label, proc.pid, rc, reason,
+                self._stderr_tail(label),
+            )
+
+    def _stderr_tail(self, label: str) -> str:
+        """Last few stderr lines for a dead process, or '' if we have none.
+
+        A SIGKILL leaves nothing behind — the process never gets to write — so
+        an empty tail next to rc=-9 is itself informative rather than a gap.
+        """
+        f = self._obsidian_stderr if label == "Obsidian" else self._xvfb_stderr
+        if f is None:
+            return ""
+        try:
+            f.flush()
+            f.seek(0)
+            text = f.read().decode("utf-8", errors="replace").strip()
+        except Exception as e:  # noqa: BLE001 - diagnostics must never mask the death
+            return f"\n  <could not read stderr: {e}>"
+        if not text:
+            return "\n  (stderr empty — consistent with SIGKILL)"
+        tail = "\n  ".join(text.splitlines()[-10:])
+        return f"\n  stderr tail:\n  {tail}"
 
     def read_data_json(self) -> dict:
         """Read the plugin's persisted data.json without mutating it.
@@ -285,13 +350,22 @@ class ObsidianInstance:
             ]
             logger.info("[%s] Using AppImage (no pre-extracted binary found)", self.name)
 
+        # stderr to a file, not DEVNULL — same treatment Xvfb already gets
+        # above. Discarding it meant a crash left no record anywhere and every
+        # death looked identical from the test side: `Errno 111`.
+        stderr_path = f"/tmp/obsidian-stderr-{self.name.lower()}-{os.getpid()}.log"
+        self._obsidian_stderr = open(stderr_path, "w+b")
+
         self._obsidian_proc = subprocess.Popen(
             cmd,
             env=env,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=self._obsidian_stderr,
         )
-        logger.info("[%s] Obsidian launched (PID %d)", self.name, self._obsidian_proc.pid)
+        logger.info(
+            "[%s] Obsidian launched (PID %d, stderr=%s)",
+            self.name, self._obsidian_proc.pid, stderr_path,
+        )
 
     def _wait_for_cdp(self, timeout: float = 60) -> None:
         """Poll until CDP endpoint responds."""
