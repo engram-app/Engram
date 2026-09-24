@@ -74,9 +74,21 @@ class ObsidianInstance:
         self._prepare_vault()
         self._prepare_config()
         self._start_xvfb()
-        self._start_obsidian()
-        self._wait_for_cdp()
-        self._enable_plugin_via_cdp()
+
+        # The death report has to run on the FAILURE path here, not only in
+        # stop(). Pytest fixtures call start() before their yield, and a
+        # fixture that raises during setup never runs its teardown — so an
+        # Obsidian OOM-killed during boot would raise out of _wait_for_cdp with
+        # stop() never called, and produce exactly the bare `Errno 111` this
+        # reporting exists to replace. That is also the likeliest moment to be
+        # killed: boot is when the process is hungriest.
+        try:
+            self._start_obsidian()
+            self._wait_for_cdp()
+            self._enable_plugin_via_cdp()
+        except Exception:
+            self._report_premature_death()
+            raise
 
         logger.info("[%s] Fully ready", self.name)
 
@@ -141,6 +153,19 @@ class ObsidianInstance:
                 continue
             rc = proc.poll()
             if rc is None:
+                continue
+
+            # rc == 0 is a CLEAN exit, not a death. It is also expected on the
+            # AppImage path: the launcher can exit 0 after handing off to the
+            # extracted binary, which is why stop() kills by user-data-dir
+            # rather than by this pid. Treating 0 as a death would put an ERROR
+            # in every healthy teardown and make the signal worthless from the
+            # first run.
+            if rc == 0:
+                logger.debug(
+                    "[%s] %s had already exited cleanly (pid %d, rc=0)",
+                    self.name, label, proc.pid,
+                )
                 continue
 
             reason = self._SIGNAL_NAMES.get(rc, f"exit code {rc}")

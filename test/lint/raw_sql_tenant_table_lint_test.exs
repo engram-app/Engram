@@ -50,25 +50,7 @@ defmodule Engram.RawSqlTenantTableLintTest do
     # `UPDATE notes ... FROM (VALUES ...)`: each row carries distinct
     # re-encrypted ciphertexts (per-row values, one statement). Runs inside
     # do_rename_folder's `Repo.with_tenant/2` transaction — RLS context active.
-    "engram/notes.ex",
-    # TenancyGuard.observed_enforcement/0 — `SELECT EXISTS (SELECT 1 FROM notes
-    # LIMIT 1)` under a tenant that owns nothing.
-    #
-    # This is the one entry NOT justified by "runs inside with_tenant", and it
-    # is deliberately not the anti-pattern the comment at the top of this list
-    # warns about. That warning is about code which reads cross-tenant, gets
-    # zero rows on prod, and believes it worked. Here zero rows is the EXPECTED
-    # result and the assertion: the guard is measuring whether the policy
-    # filters, so routing it through the ORM safety net would make it measure
-    # the safety net instead of the database.
-    #
-    # `skip_tenant_check: true` on a structured query would be the wrong shape
-    # for the same reason — the probe is not skipping a tenant check, it is
-    # setting a tenant and observing what the server does about it.
-    #
-    # Bounded by LIMIT 1, inside a savepoint, and it restores the caller's
-    # tenant before returning.
-    "engram/repo/tenancy_guard.ex"
+    "engram/notes.ex"
   ]
 
   # Matches a raw-SQL call and the text immediately following it (covers

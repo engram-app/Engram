@@ -36,38 +36,6 @@ defmodule Engram.Repo.TenancyGuardTest do
   # dropped role), and a suite-wide drop would make the first half false.
   @moduletag :rls_unsafe
 
-  describe "verdict/2" do
-    # Pure, so the interesting cases can be stated directly. Two of them — an
-    # empty table and a never-analyzed one — are awkward to manufacture inside
-    # a sandbox that has just seeded fixtures, and they are precisely the cases
-    # where a naive implementation reports a clean bill of health it did not
-    # earn.
-
-    test "a visible row is decisive, whatever the table size estimate" do
-      assert TenancyGuard.verdict(true, 5000.0) == :bypassed
-      assert TenancyGuard.verdict(true, 0.0) == :bypassed
-      assert TenancyGuard.verdict(true, -1.0) == :bypassed
-    end
-
-    test "no visible row against a populated table means enforced" do
-      assert TenancyGuard.verdict(false, 3602.0) == :enforced
-    end
-
-    test "no visible row against an EMPTY table proves nothing" do
-      # The trap this guard exists to avoid. An enforced connection and a
-      # bypassed one are indistinguishable on an empty table, so the only
-      # honest answer is :unknown.
-      assert TenancyGuard.verdict(false, 0.0) == :unknown
-    end
-
-    test "no visible row against a NEVER-ANALYZED table proves nothing" do
-      # Postgres reports reltuples = -1, not 0, for a table that has never been
-      # analyzed. Treating that as "0 rows, therefore enforced" would be a
-      # false green on every freshly-restored database.
-      assert TenancyGuard.verdict(false, -1.0) == :unknown
-    end
-  end
-
   describe "observed_enforcement/0" do
     setup do
       {:ok, user} = user_with_dek_fixture()
@@ -104,6 +72,25 @@ defmodule Engram.Repo.TenancyGuardTest do
       end)
     end
 
+    test "probes every tenant table, so one exposed table is enough" do
+      # RLS state is per-table and this repo toggles it per-table: ten
+      # migrations issue NO FORCE ROW LEVEL SECURITY and re-FORCE at the end.
+      # An interrupted one leaves a single table exposed. A probe that only
+      # read `notes` would miss it — and OrphanSweep's data-loss guard reads
+      # `chunks`, not `notes`, so the blind spot sat directly over the
+      # destructive path.
+      #
+      # Asserted by source rather than by mutating RLS state mid-test: the
+      # sandbox cannot ALTER TABLE without leaking out of the transaction.
+      source = File.read!("lib/engram/repo/tenancy_guard.ex")
+
+      assert source =~ "Engram.Repo.tenant_tables()",
+             "the probe must enumerate tenant_tables/0, not a hardcoded table"
+
+      refute source =~ ~r/FROM notes LIMIT 1/,
+             "a hardcoded `FROM notes` means the per-table blind spot is back"
+    end
+
     test "leaves the caller's tenant untouched" do
       # The guard borrows a pooled connection that goes straight back into
       # service, and it sets `app.current_tenant` to do its work. If that leaked
@@ -125,21 +112,44 @@ defmodule Engram.Repo.TenancyGuardTest do
     end
   end
 
-  describe "enforcement/0 falls back when the probe cannot speak" do
-    # No fixtures in this describe block on purpose: with no notes row the
-    # probe returns :unknown, which is exactly the condition under test.
+  describe "enforcement/0 combines both signals, asymmetrically" do
+    # No fixtures in this describe block on purpose: with every tenant table
+    # empty the probe returns :unknown, which is one of the conditions here.
 
-    test "uses the attribute answer rather than reporting :unknown" do
-      # A fresh self-host install has no notes yet. Reporting :unknown there
+    test "uses the attribute answer when the probe cannot speak" do
+      # A fresh self-host install has no rows yet. Reporting :unknown there
       # would make `enforced?/0` true, which makes OrphanSweep refuse its
       # weekly run forever and log an error about it each time — on a database
       # with nothing to sweep.
-      #
-      # This also pins that the probe's strictness did not silently become the
-      # global default: four orphan_sweep tests caught exactly this regression
-      # before the fallback existed.
       assert TenancyGuard.observed_enforcement() == :unknown
       assert TenancyGuard.enforcement() == :bypassed
+    end
+
+    test "prod's shape — probe says bypassed, attributes say enforced — resolves CAUTIOUS" do
+      # The safety property, and the reason this is not `observed || claimed`.
+      # `enforced?/0` gates irreversible Qdrant point and S3 prefix deletion in
+      # OrphanSweep. Prod refuses every run today because the attribute answer
+      # is :enforced; letting the probe alone flip that to :bypassed would
+      # start those deletions as a side effect of improving a diagnostic, on a
+      # signal whose mechanism #1726 says nobody has identified.
+      assert TenancyGuard.combine(:bypassed, :enforced) == :enforced
+      assert TenancyGuard.combine(:enforced, :bypassed) == :enforced
+    end
+
+    test ":unknown abstains rather than vetoing" do
+      # The bug caught while writing this: treating :unknown as a veto made
+      # OrphanSweep refuse on every empty database — every fresh self-host
+      # install, and four of its own tests.
+      assert TenancyGuard.combine(:unknown, :bypassed) == :bypassed
+      assert TenancyGuard.combine(:bypassed, :unknown) == :bypassed
+      assert TenancyGuard.combine(:unknown, :enforced) == :enforced
+      assert TenancyGuard.combine(:enforced, :unknown) == :enforced
+    end
+
+    test "agreement passes straight through, and total silence is :unknown" do
+      assert TenancyGuard.combine(:bypassed, :bypassed) == :bypassed
+      assert TenancyGuard.combine(:enforced, :enforced) == :enforced
+      assert TenancyGuard.combine(:unknown, :unknown) == :unknown
     end
   end
 

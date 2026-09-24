@@ -99,6 +99,22 @@ def test_both_processes_are_reported(caplog) -> None:
     assert any("Xvfb" in m and "SIGSEGV" in m for m in messages)
 
 
+def test_a_clean_exit_is_not_a_death(caplog) -> None:
+    """rc=0 must stay quiet.
+
+    The AppImage launcher can exit 0 after handing off to the extracted
+    binary — which is why stop() kills by user-data-dir rather than by this
+    pid. Reporting that as a death would put an ERROR in every healthy
+    teardown and make the signal worthless from the first run.
+    """
+    inst = _prepare(obsidian_rc=0)
+
+    with caplog.at_level(logging.ERROR):
+        inst._report_premature_death()
+
+    assert caplog.records == []
+
+
 def test_unknown_code_falls_back_to_the_number(caplog) -> None:
     """An unmapped code must still surface, not vanish into a KeyError."""
     inst = _prepare(obsidian_rc=137)
