@@ -283,6 +283,22 @@ defmodule EngramWeb.Telemetry do
         description:
           "Webhook handler raised. Non-zero = Paddle will retry; investigate via Sentry trace + reconciliation drift."
       ),
+      # #1737 — a checkout that stalls mid-payment, emitted by
+      # Engram.Billing.upsert_from_paddle_event/1.
+      #
+      # `:action_required` is not a failure by itself (a 3DS challenge sits
+      # there while the buyer approves it), so do NOT alert on this counter
+      # alone. Alert on it relative to
+      # `engram.paddle.webhook.start.count{event_type="transaction.completed"}`
+      # over the same window: stalls that never become completions are the
+      # signal. `:payment_failed` is definitive and can page on its own.
+      counter("engram.paddle.checkout.stalled.count",
+        event_name: [:engram, :paddle, :checkout, :stalled],
+        measurement: :count,
+        tags: [:reason, :method],
+        description:
+          "Stall REPORTS, not distinct stalled checkouts: one per qualifying webhook, and Paddle re-emits transaction.updated as a transaction moves on (billed → past_due → canceled), so a single dead checkout contributes several. `reason` is :payment_failed | :action_required | :unknown; `method` is the Paddle payment method type (apple_pay, card, paypal, unknown)."
+      ),
       counter("engram.paddle.reconcile.run.count",
         event_name: [:engram, :paddle, :reconcile, :run],
         measurement: :paddle_total,

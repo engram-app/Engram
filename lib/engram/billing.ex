@@ -809,7 +809,132 @@ defmodule Engram.Billing do
     end
   end
 
+  # #1737 — a checkout that stalls mid-payment is the only way we lose a signup
+  # silently. Paddle sends us all nine `transaction.*` events and we subscribe
+  # to every one, but nothing here matched them, so they fell to the catch-all
+  # below and returned `{:ok, :ignored}` under a `paddle_webhook_ok` line. The
+  # first time it cost us a customer (apple_pay, `action_required`, never
+  # captured, 2026-09-06) we found out eleven days later by reading the Paddle
+  # API by hand.
+  #
+  # This clause does not recover the payment — recovery is #422. It makes the
+  # event greppable in Loki and countable in Prometheus, which is what we did
+  # not have.
+  #
+  # `action_required` is NOT a failure on its own: a 3DS challenge sits there
+  # for the seconds a buyer takes to approve it. So it is reported as its own
+  # `reason`, and an alert must compare it against
+  # `engram.paddle.webhook.start.count{event_type="transaction.completed"}`
+  # rather than firing on a single event.
+  def upsert_from_paddle_event(%{"event_type" => type, "data" => data})
+      when type in ~w(transaction.payment_failed transaction.updated) do
+    # A renewal decline is dunning, not a stalled checkout: it already arrives
+    # as subscription.past_due, which this module handles. Reporting it here
+    # would page for an expired card on an existing subscriber, under a log
+    # name that says "checkout".
+    if dunning?(data) do
+      {:ok, :ignored}
+    else
+      report_checkout_payment(type, data)
+    end
+  end
+
+  def upsert_from_paddle_event(%{"event_type" => type}) do
+    # Debug, not warn: this is the gap-finding line, and Loki ships warn+ only.
+    Logger.debug(
+      "paddle_webhook_unhandled_event",
+      Metadata.with_category(:debug, :billing, event_type: type)
+    )
+
+    {:ok, :ignored}
+  end
+
   def upsert_from_paddle_event(_event), do: {:ok, :ignored}
+
+  @stalled_payment_statuses ~w(error action_required)
+
+  defp report_checkout_payment(type, data) do
+    # `payments` is CUMULATIVE — Paddle's own transaction.completed example
+    # carries [captured, error] after a buyer retries a declined card, newest
+    # first. So we judge the transaction by its NEWEST attempt only. Reporting
+    # every stalled entry made the counter scale with retry count instead of
+    # with stalled checkouts, and re-emitted the whole history on each later
+    # transaction.updated.
+    case newest_payment(List.wrap(data["payments"])) do
+      nil ->
+        {:ok, :ignored}
+
+      payment ->
+        if stalled_payment?(payment) do
+          report_stalled_checkout(type, data, payment)
+          {:ok, :checkout_stalled}
+        else
+          {:ok, :ignored}
+        end
+    end
+  end
+
+  defp stalled_payment?(%{"status" => status}) when status in @stalled_payment_statuses, do: true
+  defp stalled_payment?(_), do: false
+
+  # `origin`, not `subscription_id`. Both `subscription_payment_method_change`
+  # and `subscription_charge` carry a subscription id while a buyer is sitting
+  # in a live checkout, and neither arrives as subscription.past_due — keying
+  # on the id would silently drop exactly the failures we are here to see.
+  defp dunning?(data), do: data["origin"] == "subscription_recurring"
+
+  # Paddle orders payments newest-first, but that is not documented, so sort by
+  # `created_at` and fall back to the head when the field is absent.
+  defp newest_payment([]), do: nil
+  defp newest_payment([payment]), do: payment
+
+  defp newest_payment(payments), do: Enum.max_by(payments, &(&1["created_at"] || ""))
+
+  defp report_stalled_checkout(event_type, data, payment) do
+    method = get_in(payment, ["method_details", "type"]) || "unknown"
+
+    # The fallback arm is not dead code: without it, adding a status to
+    # @stalled_payment_statuses raises CaseClauseError inside the webhook. The
+    # controller rescues that and still answers 200 (webhook_controller.ex:135),
+    # so Paddle does NOT retry — the event is dropped silently, which is the
+    # exact blindness this clause exists to end.
+    reason =
+      case payment["status"] do
+        "error" -> :payment_failed
+        "action_required" -> :action_required
+        _ -> :unknown
+      end
+
+    # `action_required` is a 3DS challenge in flight, so it gets its own message
+    # rather than claiming a stall: every healthy EU card payment produces one,
+    # and it is only evidence of a problem when no completion follows.
+    message =
+      if reason == :action_required,
+        do: "checkout_payment_action_required",
+        else: "checkout_payment_stalled"
+
+    # `:warning`, not `:warn` — Category.loki_ship?/2 matches on :warning, so
+    # :warn silently stamps loki_ship=false on the one line this exists to make
+    # greppable.
+    Logger.warning(
+      message,
+      Metadata.with_category(:warning, :billing,
+        event_type: event_type,
+        transaction_id: data["id"],
+        customer_id: data["customer_id"],
+        payment_status: payment["status"],
+        payment_method: method,
+        error_code: payment["error_code"],
+        reason: reason
+      )
+    )
+
+    :telemetry.execute(
+      [:engram, :paddle, :checkout, :stalled],
+      %{count: 1},
+      %{reason: reason, method: method}
+    )
+  end
 
   # Resolve the tier from the event's price_id and merge it into `base_attrs`.
   # An unknown price_id leaves the tier UNCHANGED (attrs without :tier) rather

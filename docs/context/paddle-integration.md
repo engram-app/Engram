@@ -28,7 +28,9 @@ Paddle webhooks → POST /webhooks/paddle
        └─ subscription.activated/updated → update row (status, tier, current_period_end)
        └─ subscription.past_due          → set status "past_due"
        └─ subscription.canceled          → set status "canceled"
-       └─ anything else                  → {:ok, :ignored}
+       └─ transaction.payment_failed     → report a stalled checkout (#1737)
+       └─ transaction.updated            → report a stalled checkout (#1737)
+       └─ anything else                  → {:ok, :ignored} + a debug line
 ```
 
 ## Module map
@@ -82,7 +84,8 @@ Whatever the overlay sends becomes `data.custom_data` on every subscription webh
 | `subscription.updated` | Same as activated. | Plan change, billing cycle roll, dunning recovery. |
 | `subscription.past_due` | Same as activated; status becomes `"past_due"`. | Card declined, retry in progress. `past_due` is in `@entitled_statuses`, so `tier/1` still reports the paid tier during the grace window. |
 | `subscription.canceled` | Status becomes `"canceled"`. | End of life. `canceled` is NOT entitled, so `tier/1` drops back to `:free`. (`active?/1` is suspension-only — `is_nil(suspended_at)` — and is unaffected by subscription status.) |
-| anything else | `{:ok, :ignored}` | Transactions, invoices, payment methods, etc. — out of scope for the subscription row. |
+| `transaction.payment_failed` / `transaction.updated` | `{:ok, :checkout_stalled}` when the transaction's NEWEST payment attempt is `error` or `action_required`, else `{:ok, :ignored}`. Writes no row. | #1737. Logs `checkout_payment_stalled` (or `checkout_payment_action_required`) with transaction id, customer id, method and error code, and increments `engram.paddle.checkout.stalled` tagged `reason` + `method`. **Four traps:** `payments` is cumulative, so judge the newest attempt only or the count scales with retries; the counter measures stall REPORTS, not distinct checkouts, because Paddle re-emits `transaction.updated` as a dead transaction moves on; `action_required` is a 3DS challenge in progress and every healthy EU card payment produces one, so alert on it relative to `transaction.completed` rather than per event; dunning is skipped on `origin == "subscription_recurring"` because it already arrives as `subscription.past_due` — do NOT key that on `subscription_id`, which would also drop `subscription_payment_method_change` and `subscription_charge`, both of which are live checkouts. |
+| anything else | `{:ok, :ignored}` + a `paddle_webhook_unhandled_event` debug line | Invoices, payment methods, adjustments, etc. — out of scope for the subscription row. The debug line exists so the next gap is greppable; #1737 was invisible for four months because this branch was silent. |
 
 `tier` is derived from `data.items[0].price.id` matched against the four price-ID config keys (`:paddle_starter_monthly_price_id`, `:paddle_starter_annual_price_id`, `:paddle_pro_monthly_price_id`, `:paddle_pro_annual_price_id`) via `Engram.Billing.tier_from_subscription/1`. Anything unrecognized returns `{:error, :unknown_price_id}` — the upserter then leaves the existing tier UNCHANGED and captures a Sentry message (`billing.ex:446/512/589`). It does NOT fall back to `"starter"`.
 
