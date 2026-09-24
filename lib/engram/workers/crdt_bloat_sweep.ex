@@ -28,6 +28,27 @@ defmodule Engram.Workers.CrdtBloatSweep do
   overhead cancels in the ratio anyway; it is subtracted so the reported BYTE
   totals are true sizes rather than sizes plus a per-row constant.
 
+  ### `octet_length` does NOT de-TOAST, despite looking like it must
+
+  Worth stating because the opposite is the intuitive reading, and it was
+  asserted confidently in review of this worker before anyone measured it.
+
+  `byteaoctetlen` calls `toast_raw_datum_size()`, which reads `va_rawsize`
+  straight out of the TOAST pointer — no chunk fetch. So this aggregate touches
+  the heap only, and its cost scales with ROW COUNT, not with the size of the
+  state being measured. Measured on PG 18, 300 rows x 32 KB bytea, all
+  out-of-line:
+
+      sum(octet_length(b))    shared hit=2
+      sum(pg_column_size(b))  shared hit=2
+      sum(get_byte(b, 0))     shared hit=1502   <- an actual de-TOAST
+
+  `pg_column_size/1` is therefore NOT a cheaper alternative; it reads the same
+  varlena header and measured identically. The only reason to prefer one is
+  which number you want — raw plaintext bytes versus on-disk compressed bytes
+  — and for AES-GCM ciphertext (incompressible, stored EXTERNAL) those differ
+  by about four bytes anyway.
+
   ## Scope
 
   The population is every live `kind='note'` row, not only those carrying CRDT
