@@ -878,7 +878,9 @@ defmodule Engram.BillingTest do
       assert log =~ "txn_01m1tbrkx80gx2p3eq024jhd4x"
     end
 
-    test "transaction.updated with a payment stuck at action_required is reported" do
+    # Reported, but NOT as a stall: a 3DS challenge in flight produces one of
+    # these on every healthy EU card payment.
+    test "transaction.updated with a payment at action_required is reported as its own event" do
       event = txn_event("transaction.updated", apple_pay("action_required"))
 
       log =
@@ -886,8 +888,42 @@ defmodule Engram.BillingTest do
           assert {:ok, :checkout_stalled} = Billing.upsert_from_paddle_event(event)
         end)
 
-      assert log =~ "checkout_payment_stalled"
-      assert log =~ "action_required"
+      assert log =~ "checkout_payment_action_required"
+      refute log =~ "checkout_payment_stalled"
+    end
+
+    # loki_ship?/2 matches :warning; :warn falls through to false and would
+    # stamp the wrong value on the line this whole clause exists to produce.
+    test "the warn line is marked for Loki" do
+      event = txn_event("transaction.payment_failed", apple_pay("error", "declined"))
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          Billing.upsert_from_paddle_event(event)
+        end)
+
+      assert log =~ "loki_ship=true"
+    end
+
+    # subscription_payment_method_change carries a subscription_id while a
+    # buyer is live in checkout, and never arrives as subscription.past_due.
+    test "an interactive checkout on an existing subscription is still reported" do
+      event = %{
+        "event_type" => "transaction.payment_failed",
+        "data" => %{
+          "id" => "txn_pm_change",
+          "customer_id" => "ctm_pm_change",
+          "origin" => "subscription_payment_method_change",
+          "subscription_id" => "sub_existing",
+          "payments" => [apple_pay("error", "declined")]
+        }
+      }
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, :checkout_stalled} = Billing.upsert_from_paddle_event(event)
+      end)
+
+      assert_received {[:engram, :paddle, :checkout, :stalled], _, _, %{reason: :payment_failed}}
     end
 
     test "emits a counter tagged by reason and payment method" do

@@ -832,7 +832,7 @@ defmodule Engram.Billing do
     # as subscription.past_due, which this module handles. Reporting it here
     # would page for an expired card on an existing subscriber, under a log
     # name that says "checkout".
-    if renewal?(data) do
+    if dunning?(data) do
       {:ok, :ignored}
     else
       report_checkout_payment(type, data)
@@ -877,7 +877,11 @@ defmodule Engram.Billing do
   defp stalled_payment?(%{"status" => status}) when status in @stalled_payment_statuses, do: true
   defp stalled_payment?(_), do: false
 
-  defp renewal?(data), do: not is_nil(data["subscription_id"])
+  # `origin`, not `subscription_id`. Both `subscription_payment_method_change`
+  # and `subscription_charge` carry a subscription id while a buyer is sitting
+  # in a live checkout, and neither arrives as subscription.past_due — keying
+  # on the id would silently drop exactly the failures we are here to see.
+  defp dunning?(data), do: data["origin"] == "subscription_recurring"
 
   # Paddle orders payments newest-first, but that is not documented, so sort by
   # `created_at` and fall back to the head when the field is absent.
@@ -890,9 +894,10 @@ defmodule Engram.Billing do
     method = get_in(payment, ["method_details", "type"]) || "unknown"
 
     # The fallback arm is not dead code: without it, adding a status to
-    # @stalled_payment_statuses raises CaseClauseError inside the webhook, the
-    # controller rescues it, mark_processed is skipped, and Paddle retries the
-    # same payload forever.
+    # @stalled_payment_statuses raises CaseClauseError inside the webhook. The
+    # controller rescues that and still answers 200 (webhook_controller.ex:135),
+    # so Paddle does NOT retry — the event is dropped silently, which is the
+    # exact blindness this clause exists to end.
     reason =
       case payment["status"] do
         "error" -> :payment_failed
@@ -900,9 +905,20 @@ defmodule Engram.Billing do
         _ -> :unknown
       end
 
+    # `action_required` is a 3DS challenge in flight, so it gets its own message
+    # rather than claiming a stall: every healthy EU card payment produces one,
+    # and it is only evidence of a problem when no completion follows.
+    message =
+      if reason == :action_required,
+        do: "checkout_payment_action_required",
+        else: "checkout_payment_stalled"
+
+    # `:warning`, not `:warn` — Category.loki_ship?/2 matches on :warning, so
+    # :warn silently stamps loki_ship=false on the one line this exists to make
+    # greppable.
     Logger.warning(
-      "checkout_payment_stalled",
-      Metadata.with_category(:warn, :billing,
+      message,
+      Metadata.with_category(:warning, :billing,
         event_type: event_type,
         transaction_id: data["id"],
         customer_id: data["customer_id"],
