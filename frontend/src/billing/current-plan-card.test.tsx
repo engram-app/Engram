@@ -31,7 +31,7 @@ describe("CurrentPlanCard", () => {
 		);
 		expect(
 			screen.getByText(
-				"1,312 of your notes aren't searchable on Free. Only your oldest 2,000 are indexed, so your newest notes won't show up in search.",
+				"1,312 of your notes aren't searchable. Only your oldest 2,000 are indexed, so your newest notes won't show up in search.",
 			),
 		).toBeInTheDocument();
 	});

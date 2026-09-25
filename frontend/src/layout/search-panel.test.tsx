@@ -641,7 +641,7 @@ describe("SearchPanel", () => {
 			// keeps the OLDEST notes, so the copy must name the newest as missing.
 			expect(
 				await screen.findByText(
-					/2,312 of your notes aren't searchable on Free\. Only your oldest 2,000 are indexed, so your newest notes won't show up in search\./u,
+					/2,312 of your notes aren't searchable\. Only your oldest 2,000 are indexed, so your newest notes won't show up in search\./u,
 				),
 			).toBeInTheDocument();
 			expect(
@@ -659,7 +659,7 @@ describe("SearchPanel", () => {
 			});
 
 			expect(await screen.findByText(/No results for/u)).toBeInTheDocument();
-			expect(screen.queryByText(/searchable on Free/u)).not.toBeInTheDocument();
+			expect(screen.queryByText(/aren't searchable/u)).not.toBeInTheDocument();
 		});
 	});
 });

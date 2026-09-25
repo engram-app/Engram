@@ -79,13 +79,14 @@ export const FREE_TIER = {
 // the copy cannot drift. `IndexCap` ranks by `created_at` ASC, so the indexed
 // set is the OLDEST notes and it is the user's NEWEST work that is missing —
 // say so, never "your most recent notes are searchable". Uncapped tiers report
-// 0/0, so `hidden <= 0` covers them too.
+// 0/0, so `hidden <= 0` covers them too. No tier name in the copy: a paid user
+// with a lowered `indexed_notes_cap` override is capped too.
 export function unsearchableNotesNotice({ indexed, total }: IndexStatus): string | null {
 	const hidden = total - indexed;
 	if (hidden <= 0) {
 		return null;
 	}
-	return `${hidden.toLocaleString()} of your notes ${hidden === 1 ? "isn't" : "aren't"} searchable on Free. Only your oldest ${indexed.toLocaleString()} are indexed, so your newest notes won't show up in search.`;
+	return `${hidden.toLocaleString()} of your notes ${hidden === 1 ? "isn't" : "aren't"} searchable. Only your oldest ${indexed.toLocaleString()} are indexed, so your newest notes won't show up in search.`;
 }
 
 // Single catalog source-of-truth: both onboarding (trial signup) and the
