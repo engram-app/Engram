@@ -90,11 +90,36 @@ defmodule Engram.Workers.IndexCapMaintenanceTest do
                Repo.get!(Note, note.id, skip_tenant_check: true)
     end
 
-    test "a legacy revoke_dense job still runs, as the over-cap sweep" do
-      # Jobs enqueued by the previous release under the old kind must not crash
-      # after deploy.
+    test "a legacy revoke_dense job evicts the notes past the cap" do
+      # Jobs enqueued under the old kind (and still enqueued that way for one
+      # release, see Billing) must run the over-cap sweep on new nodes.
       user = insert(:user)
+      vault = insert(:vault, user: user)
+      :ok = cap!(user, 1)
+
+      [kept, evicted] =
+        for {hash, seconds} <- [{"old", 0}, {"new", 10}] do
+          note =
+            insert(:note,
+              user: user,
+              vault: vault,
+              content_hash: hash,
+              embed_hash: hash,
+              dense_indexed_hash: hash,
+              created_at: DateTime.add(~U[2026-01-01 00:00:00Z], seconds, :second)
+            )
+
+          :ok = insert_chunk!(note)
+          note
+        end
+
       assert :ok = perform_job(IndexCapMaintenance, %{user_id: user.id, kind: "revoke_dense"})
+
+      assert %Note{embed_hash: "old", dense_indexed_hash: "old"} =
+               Repo.get!(Note, kept.id, skip_tenant_check: true)
+
+      assert %Note{embed_hash: nil, dense_indexed_hash: nil} =
+               Repo.get!(Note, evicted.id, skip_tenant_check: true)
     end
 
     test "evict_over_cap does not touch another user's notes" do

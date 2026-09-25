@@ -36,9 +36,9 @@ defmodule Engram.Workers.IndexCapMaintenance do
   delete worker, and neither should fail because a follow-up sweep could not
   be queued.
   """
-  @spec enqueue(Ecto.UUID.t(), :evict_over_cap | :backfill_slots) :: :ok
+  @spec enqueue(Ecto.UUID.t(), :evict_over_cap | :revoke_dense | :backfill_slots) :: :ok
   def enqueue(user_id, kind)
-      when is_binary(user_id) and kind in [:evict_over_cap, :backfill_slots] do
+      when is_binary(user_id) and kind in [:evict_over_cap, :revoke_dense, :backfill_slots] do
     %{user_id: user_id, kind: Atom.to_string(kind)}
     |> new()
     |> Oban.insert()

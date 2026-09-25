@@ -745,7 +745,12 @@ defmodule Engram.Billing do
               # so a cancellation that COMMITTED was recorded as a failed
               # delivery and retried. Only fires on a real downgrade — `user`
               # is nil unless prev_tier was paid.
-              _ = IndexCapMaintenance.enqueue(user.id, :evict_over_cap)
+              #
+              # LEGACY kind, deliberately, for one release: during a rolling
+              # deploy an old node can pick this job up, and it only matches
+              # "revoke_dense" (a new node maps that to the over-cap sweep).
+              # TODO(next release): enqueue :evict_over_cap.
+              _ = IndexCapMaintenance.enqueue(user.id, :revoke_dense)
             end
 
             {:ok, updated}
