@@ -22,6 +22,25 @@ function status(overrides: Partial<BillingStatus> = {}): BillingStatus {
 }
 
 describe("CurrentPlanCard", () => {
+	it("tells a capped user how many of their newest notes are not searchable", () => {
+		render(
+			<CurrentPlanCard
+				billing={status({ tier: "free", subscription: null })}
+				indexStatus={{ indexed: 2000, total: 3312 }}
+			/>,
+		);
+		expect(
+			screen.getByText(
+				"1,312 of your notes aren't searchable. Only your oldest 2,000 are indexed, so your newest notes won't show up in search.",
+			),
+		).toBeInTheDocument();
+	});
+
+	it("says nothing about search coverage when every note is indexed", () => {
+		render(<CurrentPlanCard billing={status()} indexStatus={{ indexed: 0, total: 0 }} />);
+		expect(screen.queryByText(/searchable/iu)).not.toBeInTheDocument();
+	});
+
 	it("shows the tier label and active status", () => {
 		render(<CurrentPlanCard billing={status()} />);
 		expect(screen.getByText("Starter")).toBeInTheDocument();

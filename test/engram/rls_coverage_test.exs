@@ -16,7 +16,6 @@ defmodule Engram.RlsCoverageTest do
   # isolation even on a scoping bug — and the daily prune worker needs cheap
   # cross-tenant deletes (FORCE RLS would block the app-role sweep).
   @no_rls_allowlist ~w(
-    account_exports
     client_logs
     idempotency_keys
     client_origin_stats

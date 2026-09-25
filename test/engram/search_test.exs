@@ -15,7 +15,6 @@ defmodule Engram.SearchTest do
     on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
 
     {:ok, user} = insert(:user) |> Engram.Crypto.ensure_user_dek()
-    :ok = Engram.Fixtures.grant_semantic!(user)
     vault = insert(:vault, user: user)
     %{bypass: bypass, user: user, vault: vault}
   end
@@ -369,7 +368,7 @@ defmodule Engram.SearchTest do
         |> Plug.Conn.send_resp(200, ~s({"result": []}))
       end)
 
-      assert {:ok, []} = Search.search(user, vault, "query")
+      assert {:ok, []} = Search.search(user, vault, "query", mode: :vector)
     end
 
     test "translates :folder opt into folder_hmac filter (Phase B.2.3)",
@@ -398,7 +397,7 @@ defmodule Engram.SearchTest do
         |> Plug.Conn.send_resp(200, ~s({"result": []}))
       end)
 
-      assert {:ok, []} = Search.search(user, vault, "query", folder: "Health")
+      assert {:ok, []} = Search.search(user, vault, "query", folder: "Health", mode: :vector)
     end
 
     test "translates :tags opt into tags_hmac filter (Phase B.2.3)",
@@ -429,7 +428,8 @@ defmodule Engram.SearchTest do
         |> Plug.Conn.send_resp(200, ~s({"result": []}))
       end)
 
-      assert {:ok, []} = Search.search(user, vault, "query", tags: ["health", "labs"])
+      assert {:ok, []} =
+               Search.search(user, vault, "query", tags: ["health", "labs"], mode: :vector)
     end
 
     test "type filter is HMAC-translated and dates become unix bounds (OKF)",
@@ -468,7 +468,8 @@ defmodule Engram.SearchTest do
                Search.search(user, vault, "query",
                  type: "Playbook",
                  updated_after: updated_after,
-                 created_before: created_before
+                 created_before: created_before,
+                 mode: :vector
                )
     end
 
@@ -477,7 +478,6 @@ defmodule Engram.SearchTest do
       # search proceeds (unlike folder/tags/type, which require the DEK to
       # derive an HMAC).
       user_no_dek = insert(:user)
-      :ok = Engram.Fixtures.grant_semantic!(user_no_dek)
       vault = insert(:vault, user: user_no_dek)
 
       Engram.MockEmbedder
@@ -503,7 +503,6 @@ defmodule Engram.SearchTest do
       # Brand-new user — no notes upserted, no DEK provisioned. Mirrors the
       # multi-tenant edge case fixed for list_folders in B.2.2.
       user_no_dek = insert(:user)
-      :ok = Engram.Fixtures.grant_semantic!(user_no_dek)
       vault = insert(:vault, user: user_no_dek)
 
       Bypass.stub(bypass, "POST", "/collections/engram_notes/points/query", fn _ ->
@@ -519,7 +518,8 @@ defmodule Engram.SearchTest do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _, _ -> {:error, :unavailable} end)
 
-      assert {:error, _} = Search.search(user, vault, "iron panel")
+      # Dense-only: the hybrid default degrades to keyword instead (below).
+      assert {:error, _} = Search.search(user, vault, "iron panel", mode: :vector)
     end
 
     test "hybrid degrades (does not raise) when the transport reason is a TUPLE",
@@ -811,13 +811,7 @@ defmodule Engram.SearchTest do
       bypass: bypass,
       vault: vault
     } do
-      # A "pro plan" that does not grant semantic search is not a pro plan: the
-      # dense leg never runs, so no Qdrant query is issued and Bypass sees
-      # nothing.
-      plan =
-        insert(:plan,
-          limits: %{"cross_vault_search" => true, "search_semantic_enabled" => true}
-        )
+      plan = insert(:plan, limits: %{"cross_vault_search" => true})
 
       pro_user = insert(:user, plan_id: plan.id)
 
@@ -1207,7 +1201,6 @@ defmodule Engram.SearchTest do
       Engram.Crypto.DekCache.invalidate_all()
       user = insert(:user)
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-      :ok = Engram.Fixtures.grant_semantic!(user)
       enc_vault = insert(:vault, user: user)
 
       {:ok, user: user, enc_vault: enc_vault}

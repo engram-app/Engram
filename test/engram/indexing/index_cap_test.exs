@@ -252,37 +252,75 @@ defmodule Engram.Indexing.IndexCapTest do
     end
   end
 
-  describe "revoke_dense_index/1" do
-    test "nulls both hashes so the rebuild drops the dense vectors", %{user: u, vault: v} do
-      note = note_at(u, v, 0)
+  describe "evict_over_cap/1" do
+    # After a downgrade, Free keeps dense vectors (semantic is every tier's),
+    # but the notes past the new cap must stop being searchable.
+    defp indexed!(user, vault, seconds) do
+      note = note_at(user, vault, seconds)
+
+      note =
+        note
+        |> Ecto.Changeset.change(
+          embed_hash: note.content_hash,
+          dense_indexed_hash: note.content_hash
+        )
+        |> Repo.update!()
+
+      Repo.insert!(%Chunk{
+        note_id: note.id,
+        user_id: user.id,
+        vault_id: vault.id,
+        position: 0,
+        char_start: 0,
+        char_end: 10,
+        token_count: 2,
+        qdrant_point_id: Ecto.UUID.generate()
+      })
 
       note
-      |> Ecto.Changeset.change(
-        embed_hash: note.content_hash,
-        dense_indexed_hash: note.content_hash
-      )
-      |> Repo.update!()
-
-      :ok = IndexCap.revoke_dense_index(u.id)
-
-      reloaded = Repo.get!(Note, note.id, skip_tenant_check: true)
-      # BOTH must be nil. Clearing only dense_indexed_hash would leave
-      # EmbedNote's skip clause matching for a now-unentitled user, so nothing
-      # would ever rebuild and the dense vectors would stay in Qdrant.
-      assert reloaded.embed_hash == nil
-      assert reloaded.dense_indexed_hash == nil
     end
 
-    test "leaves a note that never had dense vectors untouched", %{user: u, vault: v} do
-      note = note_at(u, v, 0)
+    test "re-opens the NEWEST notes past the cap and keeps the oldest", %{user: u, vault: v} do
+      :ok = cap!(u, 1)
+      oldest = indexed!(u, v, 0)
+      newest = indexed!(u, v, 10)
 
-      note
-      |> Ecto.Changeset.change(embed_hash: note.content_hash, dense_indexed_hash: nil)
+      :ok = IndexCap.evict_over_cap(u.id)
+
+      # In cap: untouched, dense vectors and all. No rebuild, no Voyage spend.
+      kept = Repo.get!(Note, oldest.id, skip_tenant_check: true)
+      assert kept.embed_hash == oldest.content_hash
+      assert kept.dense_indexed_hash == oldest.content_hash
+
+      # Past the cap: both hashes nulled, so ReconcileEmbeddings re-runs it and
+      # the pass purges its points (it is outside the cap now).
+      evicted = Repo.get!(Note, newest.id, skip_tenant_check: true)
+      assert evicted.embed_hash == nil
+      assert evicted.dense_indexed_hash == nil
+    end
+
+    test "leaves an over-cap note with no chunks alone", %{user: u, vault: v} do
+      :ok = cap!(u, 1)
+      _oldest = indexed!(u, v, 0)
+      skipped = note_at(u, v, 10)
+
+      skipped
+      |> Ecto.Changeset.change(embed_hash: skipped.content_hash)
       |> Repo.update!()
 
-      :ok = IndexCap.revoke_dense_index(u.id)
+      :ok = IndexCap.evict_over_cap(u.id)
 
-      # Not re-queued: it is already sparse-only, so a rebuild would be pure waste.
+      # Already has no index artifacts; re-running it would be pure waste.
+      assert Repo.get!(Note, skipped.id, skip_tenant_check: true).embed_hash ==
+               skipped.content_hash
+    end
+
+    test "is a no-op on an uncapped tier", %{user: u, vault: v} do
+      :ok = cap!(u, -1)
+      note = indexed!(u, v, 0)
+
+      :ok = IndexCap.evict_over_cap(u.id)
+
       assert Repo.get!(Note, note.id, skip_tenant_check: true).embed_hash == note.content_hash
     end
   end

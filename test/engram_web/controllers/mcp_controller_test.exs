@@ -1069,9 +1069,6 @@ defmodule EngramWeb.McpControllerTest do
       user = insert(:user)
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
-      # Without this the profile downgrades to keyword-only and never issues the
-      # dense query whose filter is under test.
-      :ok = Engram.Fixtures.grant_semantic!(user)
 
       {:ok, va, _} = Engram.Vaults.register_vault(user, "A", Ecto.UUID.generate())
       {:ok, vb, _} = Engram.Vaults.register_vault(user, "B", Ecto.UUID.generate())

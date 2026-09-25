@@ -16,7 +16,6 @@ defmodule Engram.IndexingLinksTest do
     on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
 
     user = insert(:user)
-    :ok = Engram.Fixtures.grant_semantic!(user)
     vault = insert(:vault, user: user)
 
     %{bypass: bypass, user: user, vault: vault}
@@ -108,7 +107,6 @@ defmodule Engram.IndexingLinksTest do
     # directly (mirrors the old pre-Task-5 "skips embedding" test) to keep
     # the user genuinely DEK-less.
     user = insert(:user)
-    :ok = Engram.Fixtures.grant_semantic!(user)
     vault = insert(:vault, user: user)
 
     note = %Engram.Notes.Note{

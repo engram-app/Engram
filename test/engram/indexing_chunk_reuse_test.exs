@@ -44,7 +44,6 @@ defmodule Engram.IndexingChunkReuseTest do
     on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
 
     user = insert(:user)
-    :ok = Engram.Fixtures.grant_semantic!(user)
     vault = insert(:vault, user: user)
 
     {:ok, recorder} = Agent.start_link(fn -> [] end)
@@ -368,20 +367,21 @@ defmodule Engram.IndexingChunkReuseTest do
   end
 
   # #1606: reuse matched on the text alone and ignored what the point holds. A
-  # keyword-only point has no dense vector, so reusing it after an upgrade
+  # sparse-only point has no dense vector, so reusing it on a dense pass
   # stamped the note densely indexed with nothing behind the stamp.
-  describe "a tier change" do
-    test "an upgrade embeds every chunk of a keyword-only index", ctx do
+  describe "a dense/sparse switch" do
+    test "a dense pass embeds every chunk of a sparse-only index", ctx do
       user = insert(:user)
       vault = insert(:vault, user: user)
       note = put_raw(user, vault, @path, content("Ferritin levels are low.", "[health]"))
       stub_embedder(self())
 
-      assert {:ok, count} = Indexing.index_note(note, vault)
-      assert embedded_texts() == [], "a keyword-only user must not reach the embedder"
+      assert {:ok, count, 0, false} =
+               Indexing.index_note_with_usage(note, vault, nil, dense: false)
+
+      assert embedded_texts() == [], "a sparse-only pass must not reach the embedder"
       reset(ctx.recorder)
 
-      :ok = Engram.Fixtures.grant_semantic!(user)
       assert {:ok, ^count} = Indexing.index_note(note, vault)
 
       assert length(embedded_texts()) == count
@@ -411,7 +411,7 @@ defmodule Engram.IndexingChunkReuseTest do
              "a model change must re-embed every chunk, not reuse the old model's vectors"
     end
 
-    test "a downgrade rebuilds every point without a dense vector", ctx do
+    test "a sparse-only pass rebuilds every point without a dense vector", ctx do
       note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
       stub_embedder(self())
 
@@ -419,13 +419,8 @@ defmodule Engram.IndexingChunkReuseTest do
       _ = embedded_texts()
       reset(ctx.recorder)
 
-      Repo.delete_all(
-        from(o in Engram.Billing.UserLimitOverride, where: o.user_id == ^ctx.user.id)
-      )
-
-      Engram.Billing.OverrideCache.evict(ctx.user.id)
-
-      assert {:ok, ^count} = Indexing.index_note(note, ctx.vault)
+      assert {:ok, ^count, 0, false} =
+               Indexing.index_note_with_usage(note, ctx.vault, nil, dense: false)
 
       points = upserts(ctx.recorder)
       assert length(points) == count

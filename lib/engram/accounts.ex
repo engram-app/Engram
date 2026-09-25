@@ -803,10 +803,11 @@ defmodule Engram.Accounts do
 
   Points at NOT enforced, historically: `Engram.Workers.OrphanSweep` refuses
   with `{:error, :tenancy_unsafe}` when `Repo.maintenance() == Repo` and
-  `TenancyGuard.enforced?()`. Prod sets no `MAINTENANCE_DATABASE_URL`, so the
-  first half holds, and prod logged `orphan_sweep complete` rather than
+  `TenancyGuard.enforced?()`. Prod set no `MAINTENANCE_DATABASE_URL` then, so
+  the first half held, and prod logged `orphan_sweep complete` rather than
   refusing — but that was on images predating the guard, so it is evidence
-  about the old code path, not about the role.
+  about the old code path, not about the role. Prod has since set it, to the
+  same RDS master (engram-infra#1243), so the premise no longer holds.
 
   Points at ENFORCED, earlier: `Engram.Onboarding.record_action/2` records
   `engram_admin` as "verified rolbypassrls=false" against a real incident

@@ -1,7 +1,8 @@
 import { Sparkles } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
-import type { BillingStatus } from "../api/queries";
+import type { BillingStatus, IndexStatus } from "../api/queries";
+import { unsearchableNotesNotice } from "./plan-cards";
 
 const TIER_LABELS: Record<BillingStatus["tier"], string> = {
 	free: "Free",
@@ -17,11 +18,14 @@ const FLASHY_TIERS: BillingStatus["tier"][] = ["starter", "pro", "trial"];
 
 export default function CurrentPlanCard({
 	billing,
+	indexStatus,
 	children,
 }: {
 	billing: BillingStatus;
+	indexStatus?: IndexStatus;
 	children?: ReactNode;
 }) {
+	const unsearchable = indexStatus ? unsearchableNotesNotice(indexStatus) : null;
 	const sub = billing.subscription;
 	const canceled = sub?.status === "canceled";
 	const trialing = sub?.status === "trialing";
@@ -54,6 +58,8 @@ export default function CurrentPlanCard({
 					{billing.trial_days_remaining} days remaining in your free trial.
 				</p>
 			)}
+
+			{unsearchable ? <p className="text-muted-foreground text-sm">{unsearchable}</p> : null}
 
 			{sub ? (
 				<dl className="grid grid-cols-2 gap-4 text-sm">

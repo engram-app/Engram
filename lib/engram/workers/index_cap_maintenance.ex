@@ -4,10 +4,11 @@ defmodule Engram.Workers.IndexCapMaintenance do
 
   Both were previously inline, and both are O(the user's whole vault):
 
-    * `:revoke_dense` — after a downgrade, drop every dense vector the user is
-      no longer entitled to. Ran synchronously inside the Paddle webhook, where
-      a 60k-note UPDATE can outlive the webhook timeout and get the delivery
-      recorded as failed even though the cancellation committed.
+    * `:evict_over_cap` — after a downgrade, re-open the notes past the new
+      cap so their points are purged. Its predecessor (`revoke_dense`) ran
+      synchronously inside the Paddle webhook, where a 60k-note UPDATE can
+      outlive the webhook timeout and get the delivery recorded as failed even
+      though the cancellation committed.
 
     * `:backfill_slots` — after a delete frees a capped slot, re-open the note
       that inherits it. Ran once per DELETED note, so a 5,000-note folder
@@ -35,9 +36,9 @@ defmodule Engram.Workers.IndexCapMaintenance do
   delete worker, and neither should fail because a follow-up sweep could not
   be queued.
   """
-  @spec enqueue(Ecto.UUID.t(), :revoke_dense | :backfill_slots) :: :ok
+  @spec enqueue(Ecto.UUID.t(), :evict_over_cap | :revoke_dense | :backfill_slots) :: :ok
   def enqueue(user_id, kind)
-      when is_binary(user_id) and kind in [:revoke_dense, :backfill_slots] do
+      when is_binary(user_id) and kind in [:evict_over_cap, :revoke_dense, :backfill_slots] do
     %{user_id: user_id, kind: Atom.to_string(kind)}
     |> new()
     |> Oban.insert()
@@ -48,8 +49,11 @@ defmodule Engram.Workers.IndexCapMaintenance do
   end
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"user_id" => user_id, "kind" => "revoke_dense"}}) do
-    IndexCap.revoke_dense_index(user_id)
+  # "revoke_dense" is the previous release's kind for the same downgrade
+  # trigger; a job enqueued before deploy runs as the over-cap sweep.
+  def perform(%Oban.Job{args: %{"user_id" => user_id, "kind" => kind}})
+      when kind in ["evict_over_cap", "revoke_dense"] do
+    IndexCap.evict_over_cap(user_id)
   end
 
   def perform(%Oban.Job{args: %{"user_id" => user_id, "kind" => "backfill_slots"}}) do

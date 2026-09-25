@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.34.0](https://github.com/engram-app/Engram/compare/0.33.0...0.34.0) (2026-09-25)
+
+
+### Features
+
+* **mcp:** describe Engram as AI memory in the registry listing ([#1757](https://github.com/engram-app/Engram/issues/1757)) ([699ce4c](https://github.com/engram-app/Engram/commit/699ce4c4bb25103edf2498d96a359909135e37f8))
+
+## [0.33.0](https://github.com/engram-app/Engram/compare/0.32.0...0.33.0) (2026-09-25)
+
+
+### Features
+
+* **search:** semantic search for every tier, Free included ([#1760](https://github.com/engram-app/Engram/issues/1760)) ([aeace3b](https://github.com/engram-app/Engram/commit/aeace3b701450f473d635c0807bf3f3b26b456a6))
+
+
+### Bug Fixes
+
+* **crdt:** evict rooms to the cap, largest vault first ([#1752](https://github.com/engram-app/Engram/issues/1752)) ([8850321](https://github.com/engram-app/Engram/commit/8850321907ea750f70a07d491efc2b489025c242))
+
 ## [0.32.0](https://github.com/engram-app/Engram/compare/0.31.1...0.32.0) (2026-09-25)
 
 

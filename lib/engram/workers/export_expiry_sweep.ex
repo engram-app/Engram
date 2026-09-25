@@ -33,22 +33,50 @@ defmodule Engram.Workers.ExportExpirySweep do
 
   @impl Oban.Worker
   def perform(_job) do
+    if tenancy_unsafe?() do
+      # Filtered by the tenant policy, the read below returns [] and the sweep
+      # reports success while archives of personal data stay in S3 forever.
+      Logger.error(
+        "export_expiry_sweep refusing to run: RLS is enforced and no maintenance pool is " <>
+          "configured, so the expired-export read would return zero rows",
+        Metadata.with_category(:error, :oban, [])
+      )
+
+      {:error, :tenancy_unsafe}
+    else
+      sweep()
+    end
+  end
+
+  # Same gate as `OrphanSweep`: the fallback `Repo` is only correct where RLS
+  # is not enforced.
+  defp tenancy_unsafe? do
+    Repo.maintenance() == Repo and Engram.Repo.TenancyGuard.enforced?()
+  end
+
+  # Every query runs on `Repo.maintenance()`: this sweep spans tenants by
+  # definition. `cross_tenant/1` is a no-op on the maintenance pool and silences
+  # the app tripwire on the `Repo` fallback, which the gate above allows only
+  # where RLS is not enforced.
+  defp sweep do
     adapter = Engram.Storage.adapter()
+    repo = Repo.maintenance()
     now = DateTime.utc_now()
 
     expired =
-      Repo.all(
-        from(e in Schema,
-          where:
-            (e.status == :ready and e.expires_at <= ^now) or
-              (e.status == :expired and fragment("array_length(?, 1) > 0", e.s3_keys))
-        ),
-        skip_tenant_check: true
-      )
+      Repo.cross_tenant(fn ->
+        repo.all(
+          from(e in Schema,
+            where:
+              (e.status == :ready and e.expires_at <= ^now) or
+                (e.status == :expired and fragment("array_length(?, 1) > 0", e.s3_keys))
+          )
+        )
+      end)
 
     Enum.each(expired, fn export ->
       try do
-        sweep_export(adapter, export)
+        sweep_export(adapter, repo, export)
       rescue
         error ->
           Logger.error(
@@ -64,14 +92,14 @@ defmodule Engram.Workers.ExportExpirySweep do
     :ok
   end
 
-  defp sweep_export(adapter, %Schema{} = export) do
+  defp sweep_export(adapter, repo, %Schema{} = export) do
     # Expire BEFORE deleting: from this point the archive is not
     # downloadable regardless of how far the blob deletes get.
     {:ok, export} =
       if export.status == :ready do
         export
         |> Schema.changeset(%{status: :expired})
-        |> Repo.update(skip_tenant_check: true)
+        |> save(repo)
       else
         {:ok, export}
       end
@@ -93,10 +121,12 @@ defmodule Engram.Workers.ExportExpirySweep do
     {:ok, _} =
       export
       |> Schema.changeset(%{s3_keys: remaining})
-      |> Repo.update(skip_tenant_check: true)
+      |> save(repo)
 
     :ok
   end
+
+  defp save(changeset, repo), do: Repo.cross_tenant(fn -> repo.update(changeset) end)
 
   defp delete_blob(adapter, %{"key" => key} = entry) when is_binary(key) do
     case adapter.delete(key) do

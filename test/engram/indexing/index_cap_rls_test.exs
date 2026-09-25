@@ -145,9 +145,10 @@ defmodule Engram.Indexing.IndexCapRlsTest do
   #
   # This is also why both sites outlived 1f336bfa, which scoped the count reads
   # in this module and left these two writes behind: nothing failed loudly.
-  describe "revoke_dense_index/1 under FORCE RLS" do
+  describe "evict_over_cap/1 under FORCE RLS" do
     test "clears both hashes instead of silently matching zero rows" do
       user = insert(:user)
+      insert(:user_limit_override, user: user, key: "indexed_notes_cap", value: %{"v" => 0})
       vault = insert(:vault, user: user)
 
       note =
@@ -158,22 +159,35 @@ defmodule Engram.Indexing.IndexCapRlsTest do
           dense_indexed_hash: "stale-dense"
         )
 
+      {:ok, _} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.insert!(%Engram.Notes.Chunk{
+            note_id: note.id,
+            user_id: user.id,
+            vault_id: vault.id,
+            position: 0,
+            char_start: 0,
+            char_end: 10,
+            qdrant_point_id: Ecto.UUID.generate()
+          })
+        end)
+
       # Precondition, not decoration: if these were already nil the assertions
       # below would hold no matter what the function did.
       assert note.embed_hash == "stale-embed"
       assert note.dense_indexed_hash == "stale-dense"
 
-      assert :ok = as_prod_role_committing(fn -> IndexCap.revoke_dense_index(user.id) end)
+      assert :ok = as_prod_role_committing(fn -> IndexCap.evict_over_cap(user.id) end)
 
       reloaded = Repo.get!(Note, note.id, skip_tenant_check: true)
 
       assert is_nil(reloaded.dense_indexed_hash),
-             "dense_indexed_hash survived revoke_dense_index/1 — the UPDATE was filtered by " <>
-               "RLS and reported zero rows, so the user keeps paying for dense vectors"
+             "dense_indexed_hash survived evict_over_cap/1 — the UPDATE was filtered by " <>
+               "RLS and reported zero rows"
 
       assert is_nil(reloaded.embed_hash),
-             "embed_hash survived, so the note never re-enters the reconcile query and the " <>
-               "dense points are never replaced"
+             "embed_hash survived, so the over-cap note never re-enters the reconcile query " <>
+               "and stays searchable past the cap"
     end
   end
 

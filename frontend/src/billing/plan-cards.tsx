@@ -1,7 +1,7 @@
 import { ChevronDown } from "lucide-react";
 import { ctaFilled, ctaOutline } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
-import type { BillingCadence } from "../api/queries";
+import type { BillingCadence, IndexStatus } from "../api/queries";
 
 // Feature checklist shared by the full card and the accordion row. `className`
 // merges extra layout (e.g. `flex-1` on the full card).
@@ -74,6 +74,20 @@ export const FREE_TIER = {
 	summary: "2,000 notes searchable · 1 vault · 1 GB attachments",
 	features: ["2,000 notes searchable", "1 vault", "1 GB attachments", "2 devices"],
 } as const;
+
+// The one "N notes are not searchable" line, shared by search and billing so
+// the copy cannot drift. `IndexCap` ranks by `created_at` ASC, so the indexed
+// set is the OLDEST notes and it is the user's NEWEST work that is missing —
+// say so, never "your most recent notes are searchable". Uncapped tiers report
+// 0/0, so `hidden <= 0` covers them too. No tier name in the copy: a paid user
+// with a lowered `indexed_notes_cap` override is capped too.
+export function unsearchableNotesNotice({ indexed, total }: IndexStatus): string | null {
+	const hidden = total - indexed;
+	if (hidden <= 0) {
+		return null;
+	}
+	return `${hidden.toLocaleString()} of your notes ${hidden === 1 ? "isn't" : "aren't"} searchable. Only your oldest ${indexed.toLocaleString()} are indexed, so your newest notes won't show up in search.`;
+}
 
 // Single catalog source-of-truth: both onboarding (trial signup) and the
 // change-plan panel read display prices from here. Keep in sync with the
