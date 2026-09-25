@@ -1,0 +1,1261 @@
+{
+  "tools": [
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "List Vaults"
+      },
+      "description": "List all vaults owned by the current user with IDs, names, and descriptions.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "list_vaults",
+      "outputSchema": {
+        "properties": {
+          "vaults": {
+            "items": {
+              "properties": {
+                "description": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "description": "Vault UUID",
+                  "type": "string"
+                },
+                "is_default": {
+                  "type": "boolean"
+                },
+                "name": {
+                  "description": "Display name",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "slug": {
+                  "description": "URL-safe handle",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "slug",
+                "is_default"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "vaults"
+        ],
+        "type": "object"
+      },
+      "title": "List Vaults"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Check Vault"
+      },
+      "description": "Validate and echo a vault by name or ID. NOTE: this does NOT persist an active vault — MCP keeps no state between calls. To read or write a specific vault, pass its vault_id on each tool call; a vault's name works there too, so this need not be called first. Use list_vaults to see them.",
+      "inputSchema": {
+        "properties": {
+          "vault_id": {
+            "description": "Vault to validate — its name (e.g. \"Engram\") or its UUID",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "set_vault",
+      "outputSchema": {
+        "properties": {
+          "vault": {
+            "properties": {
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "is_default": {
+                "type": "boolean"
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "slug": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "slug",
+              "is_default"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "vault"
+        ],
+        "type": "object"
+      },
+      "title": "Check Vault"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Search Notes"
+      },
+      "description": "Search your personal knowledge base. Finds relevant notes using semantic search. Searches across ALL your vaults by default; pass vault_id to limit to one. Use when the user asks about their notes, vault, knowledge, or memory.",
+      "inputSchema": {
+        "properties": {
+          "created_after": {
+            "description": "Only notes created at/after this ISO 8601 datetime (frontmatter created/date)",
+            "type": "string"
+          },
+          "created_before": {
+            "description": "Only notes created at/before this ISO 8601 datetime",
+            "type": "string"
+          },
+          "diversity": {
+            "description": "Result diversity (0 = most relevant, default tuned per plan; 1 = most varied). Uses Maximal Marginal Relevance to reduce redundancy among results.",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "folder": {
+            "description": "Optional folder path to scope the search to (exact match)",
+            "type": "string"
+          },
+          "limit": {
+            "default": 5,
+            "description": "Maximum number of results (1-20, default 5)",
+            "type": "integer"
+          },
+          "mode": {
+            "default": "hybrid",
+            "description": "Retrieval mode (default hybrid). Use 'keyword' for exact terms, identifiers, code, or error strings; 'vector' for purely conceptual/semantic queries; 'hybrid' (default) blends both.",
+            "enum": [
+              "hybrid",
+              "keyword",
+              "vector"
+            ],
+            "type": "string"
+          },
+          "query": {
+            "description": "Natural language search query",
+            "type": "string"
+          },
+          "tags": {
+            "description": "Optional list of tags to filter by",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": {
+            "description": "Optional frontmatter type to filter by (e.g. 'Playbook', 'Reference'); case-insensitive",
+            "type": "string"
+          },
+          "updated_after": {
+            "description": "Only notes updated at/after this ISO 8601 datetime (frontmatter timestamp/modified)",
+            "type": "string"
+          },
+          "updated_before": {
+            "description": "Only notes updated at/before this ISO 8601 datetime",
+            "type": "string"
+          },
+          "vault_id": {
+            "description": "Optional: limit the search to a single vault, by name (e.g. \"Engram\") or UUID. Omit to search across ALL your vaults. Call list_vaults to see them.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "name": "search_notes",
+      "outputSchema": {
+        "properties": {
+          "results": {
+            "items": {
+              "properties": {
+                "heading_path": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "score": {
+                  "type": "number"
+                },
+                "source_path": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "tags": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "text": {
+                  "description": "Matched chunk",
+                  "type": "string"
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "vault": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "vault_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "score",
+                "text"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "type": "object"
+      },
+      "title": "Search Notes"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "List Tags"
+      },
+      "description": "List all tags in the personal knowledge base with document counts. Use to explore what topics exist in the vault.",
+      "inputSchema": {
+        "properties": {
+          "vault_id": {
+            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_tags",
+      "outputSchema": {
+        "properties": {
+          "tags": {
+            "items": {
+              "properties": {
+                "count": {
+                  "description": "Notes carrying this tag",
+                  "type": "integer"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "count"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "tags"
+        ],
+        "type": "object"
+      },
+      "title": "List Tags"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "List Folders"
+      },
+      "description": "List all folders in the personal knowledge base with note counts. Use to understand the vault's organization.",
+      "inputSchema": {
+        "properties": {
+          "vault_id": {
+            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_folders",
+      "outputSchema": {
+        "properties": {
+          "folders": {
+            "items": {
+              "properties": {
+                "count": {
+                  "description": "Notes directly inside",
+                  "type": "integer"
+                },
+                "folder": {
+                  "description": "Folder path; \"\" is the vault root",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "folder",
+                "count"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "folders"
+        ],
+        "type": "object"
+      },
+      "title": "List Folders"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "List Folder Contents"
+      },
+      "description": "List all notes in a specific folder. Pass an empty string to list notes in the vault root.",
+      "inputSchema": {
+        "properties": {
+          "folder": {
+            "description": "Folder path (e.g. \"Health\") or \"\" for root",
+            "type": "string"
+          },
+          "vault_id": {
+            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "folder"
+        ],
+        "type": "object"
+      },
+      "name": "list_folder",
+      "outputSchema": {
+        "properties": {
+          "attachments": {
+            "items": {
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "path"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "folder": {
+            "description": "Folder listed; \"\" is the root",
+            "type": "string"
+          },
+          "notes": {
+            "items": {
+              "properties": {
+                "path": {
+                  "description": "Vault-relative path",
+                  "type": "string"
+                },
+                "tags": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "title",
+                "path",
+                "tags"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "folder",
+          "notes",
+          "attachments"
+        ],
+        "type": "object"
+      },
+      "title": "List Folder Contents"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Create Folder"
+      },
+      "description": "Create an explicit empty folder in the personal knowledge base. Use to scaffold folder structure before placing notes. Idempotent — calling with an existing folder name succeeds without creating duplicates.",
+      "inputSchema": {
+        "properties": {
+          "folder": {
+            "description": "Folder path, e.g. \"Projects/Active\"",
+            "type": "string"
+          },
+          "vault_id": {
+            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "folder"
+        ],
+        "type": "object"
+      },
+      "name": "create_folder",
+      "outputSchema": {
+        "properties": {
+          "folder": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "folder"
+        ],
+        "type": "object"
+      },
+      "title": "Create Folder"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Suggest Folder"
+      },
+      "description": "Find the best existing folder for a new note based on a description of its content. Call before create_note when the right folder is unclear.",
+      "inputSchema": {
+        "properties": {
+          "description": {
+            "description": "What the note is about",
+            "type": "string"
+          },
+          "limit": {
+            "default": 5,
+            "description": "Number of suggestions (1-10, default 5)",
+            "type": "integer"
+          },
+          "vault_id": {
+            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "description"
+        ],
+        "type": "object"
+      },
+      "name": "suggest_folder",
+      "outputSchema": {
+        "properties": {
+          "suggestions": {
+            "items": {
+              "properties": {
+                "count": {
+                  "type": "integer"
+                },
+                "folder": {
+                  "type": "string"
+                },
+                "rank": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "rank",
+                "folder",
+                "count"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "suggestions"
+        ],
+        "type": "object"
+      },
+      "title": "Suggest Folder"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Read Note"
+      },
+      "description": "Retrieve the full content of a specific note. Use after searching to read a complete note.",
+      "inputSchema": {
+        "properties": {
+          "source_path": {
+            "description": "The path of the note (e.g. \"Health/Omega Oils.md\")",
+            "type": "string"
+          },
+          "vault_id": {
+            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_path"
+        ],
+        "type": "object"
+      },
+      "name": "get_note",
+      "outputSchema": {
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "folder": {
+            "type": "string"
+          },
+          "path": {
+            "description": "Vault-relative path",
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "title",
+          "folder",
+          "tags",
+          "content"
+        ],
+        "type": "object"
+      },
+      "title": "Read Note"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Read Notes"
+      },
+      "description": "Retrieve the full content of multiple notes in one call (1-20 paths). Use to inventory a folder (list_folder then get_notes) or to read a batch of search results without N round-trips. Missing paths are reported inline.",
+      "inputSchema": {
+        "properties": {
+          "paths": {
+            "description": "Note paths to read (max 20), e.g. [\"Health/A.md\", \"Health/B.md\"]",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "vault_id": {
+            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "paths"
+        ],
+        "type": "object"
+      },
+      "name": "get_notes",
+      "outputSchema": {
+        "properties": {
+          "notes": {
+            "items": {
+              "properties": {
+                "content": {
+                  "type": "string"
+                },
+                "folder": {
+                  "type": "string"
+                },
+                "found": {
+                  "type": "boolean"
+                },
+                "path": {
+                  "description": "Vault-relative path",
+                  "type": "string"
+                },
+                "tags": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "path",
+                "found"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "notes"
+        ],
+        "type": "object"
+      },
+      "title": "Read Notes"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Create Note"
+      },
+      "description": "Create a new note with automatic folder placement. If suggested_folder is omitted, the note is placed automatically. Never overwrites: fails if a note already exists at the resulting path.",
+      "inputSchema": {
+        "properties": {
+          "content": {
+            "description": "Markdown content",
+            "type": "string"
+          },
+          "suggested_folder": {
+            "description": "Only set when user explicitly named a folder",
+            "type": "string"
+          },
+          "title": {
+            "description": "Title for the new note",
+            "type": "string"
+          },
+          "vault_id": {
+            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "content"
+        ],
+        "type": "object"
+      },
+      "name": "create_note",
+      "outputSchema": {
+        "properties": {
+          "path": {
+            "description": "Where the note landed — the server picks the folder",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "title": "Create Note"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Write Note"
+      },
+      "description": "Write or update a note. Saves to storage, indexes for search, and syncs to Obsidian.",
+      "inputSchema": {
+        "properties": {
+          "content": {
+            "description": "Full markdown content",
+            "type": "string"
+          },
+          "path": {
+            "description": "Full path for the note (e.g. \"Health/New Note.md\")",
+            "type": "string"
+          },
+          "vault_id": {
+            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "type": "object"
+      },
+      "name": "write_note",
+      "outputSchema": {
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "title": "Write Note"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Append to Note"
+      },
+      "description": "Append text to an existing note, or create it if it doesn't exist.",
+      "inputSchema": {
+        "properties": {
+          "path": {
+            "description": "Full path for the note",
+            "type": "string"
+          },
+          "text": {
+            "description": "Text to append",
+            "type": "string"
+          },
+          "vault_id": {
+            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "text"
+        ],
+        "type": "object"
+      },
+      "name": "append_to_note",
+      "outputSchema": {
+        "properties": {
+          "created": {
+            "description": "true when the note did not exist and was created",
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "created"
+        ],
+        "type": "object"
+      },
+      "title": "Append to Note"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Find and Replace in Note"
+      },
+      "description": "Find and replace text in an existing note. By default replaces the first occurrence. Set occurrence to -1 to replace all.",
+      "inputSchema": {
+        "properties": {
+          "find": {
+            "description": "Exact text to find",
+            "type": "string"
+          },
+          "occurrence": {
+            "default": 0,
+            "description": "Which occurrence (0=first, 1=second, -1=all)",
+            "type": "integer"
+          },
+          "path": {
+            "description": "Full path of the note",
+            "type": "string"
+          },
+          "replace": {
+            "description": "Text to replace it with",
+            "type": "string"
+          },
+          "vault_id": {
+            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "find",
+          "replace"
+        ],
+        "type": "object"
+      },
+      "name": "patch_note",
+      "outputSchema": {
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "replacements": {
+            "description": "Occurrences replaced",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "replacements"
+        ],
+        "type": "object"
+      },
+      "title": "Find and Replace in Note"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Replace Note Section"
+      },
+      "description": "Replace content under a specific heading in an existing note. Everything from the matched heading to the next heading of same/higher level is replaced.",
+      "inputSchema": {
+        "properties": {
+          "content": {
+            "description": "New content to place under the heading",
+            "type": "string"
+          },
+          "heading": {
+            "description": "Heading text without # prefix (e.g. \"Shopping List\")",
+            "type": "string"
+          },
+          "level": {
+            "default": 2,
+            "description": "Heading level 1-6 (default 2 for ##)",
+            "type": "integer"
+          },
+          "path": {
+            "description": "Full path of the note",
+            "type": "string"
+          },
+          "vault_id": {
+            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "heading",
+          "content"
+        ],
+        "type": "object"
+      },
+      "name": "update_section",
+      "outputSchema": {
+        "properties": {
+          "heading": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "heading"
+        ],
+        "type": "object"
+      },
+      "title": "Replace Note Section"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Rename Note"
+      },
+      "description": "Rename or move a note to a new path. Syncs to all connected Obsidian devices.",
+      "inputSchema": {
+        "properties": {
+          "new_path": {
+            "description": "New path for the note",
+            "type": "string"
+          },
+          "old_path": {
+            "description": "Current path of the note",
+            "type": "string"
+          },
+          "vault_id": {
+            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "old_path",
+          "new_path"
+        ],
+        "type": "object"
+      },
+      "name": "rename_note",
+      "outputSchema": {
+        "properties": {
+          "new_path": {
+            "type": "string"
+          },
+          "old_path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "old_path",
+          "new_path"
+        ],
+        "type": "object"
+      },
+      "title": "Rename Note"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Rename Folder"
+      },
+      "description": "Rename a folder and all notes within it (including subfolders). All affected notes will be reindexed and synced.",
+      "inputSchema": {
+        "properties": {
+          "new_folder": {
+            "description": "New folder path",
+            "type": "string"
+          },
+          "old_folder": {
+            "description": "Current folder path",
+            "type": "string"
+          },
+          "vault_id": {
+            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "old_folder",
+          "new_folder"
+        ],
+        "type": "object"
+      },
+      "name": "rename_folder",
+      "outputSchema": {
+        "properties": {
+          "attachments": {
+            "type": "integer"
+          },
+          "new_folder": {
+            "type": "string"
+          },
+          "notes": {
+            "description": "Notes repathed",
+            "type": "integer"
+          },
+          "old_folder": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "old_folder",
+          "new_folder",
+          "notes",
+          "attachments"
+        ],
+        "type": "object"
+      },
+      "title": "Rename Folder"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Delete Note"
+      },
+      "description": "Delete a note from the knowledge base. The deletion will sync to all connected Obsidian devices.",
+      "inputSchema": {
+        "properties": {
+          "path": {
+            "description": "Path of the note to delete",
+            "type": "string"
+          },
+          "vault_id": {
+            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "name": "delete_note",
+      "outputSchema": {
+        "properties": {
+          "deleted": {
+            "description": "false when no note existed at that path",
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "deleted"
+        ],
+        "type": "object"
+      },
+      "title": "Delete Note"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Delete Folder"
+      },
+      "description": "Delete a folder. Empty-only by default: if the folder contains notes or attachments, the call is refused and reports the counts. Pass recursive: true to delete the folder and everything under it. Syncs to all connected devices.",
+      "inputSchema": {
+        "properties": {
+          "folder": {
+            "description": "Folder path to delete, e.g. \"Projects/Old\"",
+            "type": "string"
+          },
+          "recursive": {
+            "default": false,
+            "description": "Delete all notes and attachments under the folder (default false)",
+            "type": "boolean"
+          },
+          "vault_id": {
+            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "folder"
+        ],
+        "type": "object"
+      },
+      "name": "delete_folder",
+      "outputSchema": {
+        "properties": {
+          "attachments": {
+            "type": "integer"
+          },
+          "folder": {
+            "type": "string"
+          },
+          "notes": {
+            "description": "Notes removed",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "folder",
+          "notes",
+          "attachments"
+        ],
+        "type": "object"
+      },
+      "title": "Delete Folder"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Move Attachment"
+      },
+      "description": "Move or rename a single attachment (image, PDF, or other binary file) to a new path. Syncs to all connected Obsidian devices. The file's content is unchanged; only its path moves.",
+      "inputSchema": {
+        "properties": {
+          "new_path": {
+            "description": "New path for the attachment",
+            "type": "string"
+          },
+          "old_path": {
+            "description": "Current path of the attachment",
+            "type": "string"
+          },
+          "vault_id": {
+            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "old_path",
+          "new_path"
+        ],
+        "type": "object"
+      },
+      "name": "move_attachment",
+      "outputSchema": {
+        "properties": {
+          "new_path": {
+            "type": "string"
+          },
+          "old_path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "old_path",
+          "new_path"
+        ],
+        "type": "object"
+      },
+      "title": "Move Attachment"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Get Attachment Upload Target"
+      },
+      "description": "Get the endpoint and this account's limits for uploading an attachment (image, PDF, audio, video). Returns a URL to POST the file to yourself using the credential already authorizing this connection; the bytes do not pass through this tool. Call before uploading to learn the size cap and which file types the plan allows.",
+      "inputSchema": {
+        "properties": {
+          "vault_id": {
+            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "get_attachment_upload_target",
+      "outputSchema": {
+        "properties": {
+          "all_types": {
+            "description": "false means text/* only on this plan",
+            "type": "boolean"
+          },
+          "max_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "method": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "vault_id": {
+            "description": "Send as the x-vault-id header",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "method",
+          "vault_id",
+          "all_types"
+        ],
+        "type": "object"
+      },
+      "title": "Get Attachment Upload Target"
+    }
+  ]
+}
