@@ -64,7 +64,6 @@ defmodule Engram.Observability.EmittersTest do
       end)
 
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-    :ok = Engram.Fixtures.grant_semantic!(user)
     user
   end
 

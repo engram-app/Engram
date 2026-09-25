@@ -17,9 +17,8 @@ defmodule EngramWeb.NotesControllerLinksTest do
   describe "GET /api/notes/by-id/:id — links" do
     setup :verify_on_exit!
 
-    setup %{user: user} do
+    setup do
       bypass = Bypass.open()
-      :ok = Engram.Fixtures.grant_semantic!(user)
       Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
       on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
       %{bypass: bypass}
@@ -57,9 +56,8 @@ defmodule EngramWeb.NotesControllerLinksTest do
   describe "GET /api/notes/by-id/:id/backlinks" do
     setup :verify_on_exit!
 
-    setup %{user: user} do
+    setup do
       bypass = Bypass.open()
-      :ok = Engram.Fixtures.grant_semantic!(user)
       Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
       on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
       %{bypass: bypass}
@@ -95,7 +93,6 @@ defmodule EngramWeb.NotesControllerLinksTest do
 
     test "returns 404 for another user's note (isolation)", %{conn: conn} do
       other_user = insert(:user)
-      :ok = Engram.Fixtures.grant_semantic!(other_user)
       other_vault = insert(:vault, user: other_user, is_default: true)
 
       {:ok, other_note} =

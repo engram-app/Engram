@@ -56,6 +56,17 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
     # Eligible stale notes, oldest-first, capped — kept as a subquery so the
     # whole select-and-stamp is ONE statement (see the UPDATE below).
+    # The SQL proxy for "uncapped and unmetered": a paid, entitled
+    # subscription. See the comments on its two uses below.
+    paid =
+      from(s in Engram.Billing.Subscription,
+        where:
+          s.user_id == parent_as(:note).user_id and
+            s.status in ^Engram.Billing.entitled_statuses() and
+            s.tier in ["starter", "pro"],
+        select: 1
+      )
+
     sweep_tenant = fn remaining ->
       eligible =
         from(n in Note, as: :note)
@@ -64,43 +75,43 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         |> where([n], is_nil(n.deleted_at))
         # Two ways a note is stale:
         #   1. content changed since it was indexed (or was never indexed)
-        #   2. it is indexed but has NO dense vectors, and the user is on a paid
-        #      plan — i.e. they upgraded from a keyword-only tier and their
-        #      backlog needs the dense leg added
+        #   2. it is indexed but has NO dense vectors, and a dense pass could
+        #      add them. That is the backfill for notes indexed sparse-only:
+        #      every Free note from before semantic search was every tier's,
+        #      and any note a spent embed budget left sparse.
         #
-        # (2) is what makes an upgrade self-healing: no hook on the billing path
-        # to forget or silently fail, just this cron noticing on its next tick.
+        # (2) is narrowed to notes where the dense pass can actually write
+        # something, or it is the forever-loop this column split exists to
+        # prevent — EmbedNote clears the backoff stamp below on every pass that
+        # ends with no dense hash, so an unwinnable note comes back every tick:
         #
-        # The subscription join is a SQL-expressible PROXY for
-        # `SearchProfile.resolve(user).semantic`, which is a 4-layer resolver and
-        # cannot be expressed here. Over-selecting is harmless — `EmbedNote`
-        # re-checks the real entitlement and no-ops for a user who is not actually
-        # semantic. Under-selecting strands a backlog silently, hence
-        # `entitled_statuses/0` rather than a hand-rolled subset — dropping
-        # `past_due` stalled the backfill for users who were still paying.
+        #   * `exists(chunk)` — the note is INSIDE the indexed-notes cap. An
+        #     over-cap note is stamped with no chunk rows and no dense hash, and
+        #     can never get one while the cap holds. On Free, with its 2,000
+        #     cap, that is most of any large vault. `IndexCap` re-opens those
+        #     notes itself when a slot frees (`backfill_freed_slots/1`).
+        #   * OR a paid, entitled subscription — the SQL proxy for "uncapped",
+        #     so an upgrade backfills the notes that were over the Free cap
+        #     (no chunks yet). Self-healing with no hook on the billing path.
+        #     `entitled_statuses/0` rather than a hand-rolled subset: dropping
+        #     `past_due` stalled the backfill for users who were still paying.
+        #     The `tier` filter is load-bearing: `subscriptions.tier` accepts
+        #     "free" while `status` DEFAULTS to "trialing", and matching on
+        #     status alone would select a capped user's over-cap notes.
         #
-        # The `tier` filter is equally load-bearing: `tier/1` requires BOTH an
-        # entitled status AND a paid tier, and `subscriptions.tier` legitimately
-        # accepts "free" while `status` DEFAULTS to "trialing". Matching on
-        # status alone selects a keyword-only user's notes; EmbedNote's skip
-        # clause then returns `:ok` WITHOUT clearing the `embed_retry_after` this
-        # worker just stamped, so the note comes back every 30 minutes forever.
-        # Over-selecting is not harmless here. What we must NOT
-        # do is select every keyword-only note every tick: that is the 15-minute
-        # forever-loop this whole column split exists to prevent.
+        # A note whose embed budget is spent is kept out by the cooldown filter
+        # below: EmbedNote parks it with a future `embed_retry_after`.
         |> where(
           [n],
           is_nil(n.embed_hash) or n.embed_hash != n.content_hash or
             (is_nil(n.dense_indexed_hash) and
-               exists(
-                 from(s in Engram.Billing.Subscription,
-                   where:
-                     s.user_id == parent_as(:note).user_id and
-                       s.status in ^Engram.Billing.entitled_statuses() and
-                       s.tier in ["starter", "pro"],
-                   select: 1
-                 )
-               ))
+               (exists(
+                  from(c in Engram.Notes.Chunk,
+                    where: c.note_id == parent_as(:note).id,
+                    select: 1
+                  )
+                ) or
+                  exists(paid)))
         )
         # Poison-loop guard: a note that exhausts its EmbedNote attempts gets an
         # embed_retry_after cooldown stamp. Skip it until the cooldown elapses so a
@@ -108,7 +119,16 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         # every tick. NULL = no cooldown = eligible now. This same filter is what
         # preserves a longer (poison) cooldown from the UPDATE below — a note
         # inside any cooldown isn't selected, so it isn't re-stamped.
-        |> where([n], is_nil(n.embed_retry_after) or n.embed_retry_after <= ^now)
+        #
+        # Except a BUDGET park for a user who has since upgraded: the budget
+        # that parked it no longer applies, and waiting out the 24h would make
+        # a paying user's search worse than it needs to be. A poison cooldown
+        # (`embed_budget_parked` not true) still holds for everyone.
+        |> where(
+          [n],
+          is_nil(n.embed_retry_after) or n.embed_retry_after <= ^now or
+            (n.embed_budget_parked == true and exists(paid))
+        )
         |> order_by([n], asc: n.updated_at)
         |> limit(^remaining)
         |> select([n], n.id)
@@ -131,7 +151,10 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       {_count, rows} =
         from(n in Note, where: n.kind == "note" and n.id in subquery(eligible))
         |> select([n], {n.id, n.user_id})
-        |> Repo.update_all(set: [embed_retry_after: backoff_until])
+        # Clears the budget-park flag with it: the #897 backoff must hold for
+        # this note even for a paying user, or a crash mid-embed re-selects it
+        # every tick.
+        |> Repo.update_all(set: [embed_retry_after: backoff_until, embed_budget_parked: nil])
 
       rows
     end

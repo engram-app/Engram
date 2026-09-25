@@ -119,7 +119,7 @@ defmodule Engram.Indexing.IndexCap do
             select: n.id
           )
 
-        # `with_tenant` for the same reason as `revoke_dense_index/1`: `notes`
+        # `with_tenant` for the same reason as `evict_over_cap/1`: `notes`
         # carries FORCE ROW LEVEL SECURITY, and an UPDATE is FILTERED by the
         # policy's USING clause rather than rejected. Unscoped this reports
         # `{0, nil}`, skips the telemetry below on its `count > 0` guard, and
@@ -154,52 +154,66 @@ defmodule Engram.Indexing.IndexCap do
   end
 
   @doc """
-  Drops a user's dense vectors after they lose semantic entitlement.
+  Re-opens the notes a downgrade just pushed outside the cap.
 
-  Without this a downgraded user keeps every dense vector in Qdrant forever —
-  ~$0.53/mo of RAM on a tier priced at $0.11 — which is exactly the
-  accumulation problem the keyword-only tier exists to fix.
+  The mirror of `backfill_freed_slots/1`. A Pro->Free downgrade leaves every
+  note indexed, and nothing re-checks the cap until a note is re-indexed, so
+  the notes past the new cap (the NEWEST ones, by `created_at`) would stay
+  searchable forever. Nulling both hashes puts them back in the reconcile
+  cron's stale-note query; the re-index finds them outside the cap and purges
+  their points.
 
-  Nulls BOTH hashes rather than just `dense_indexed_hash`: with only the dense
-  one cleared, `EmbedNote`'s skip clause sees `embed_hash == content_hash` and a
-  now-unentitled user, and correctly does nothing. Clearing `embed_hash` too
-  puts the notes back in the reconcile cron's stale query, and because
-  `commit_index/1` deletes a note's points before inserting the new ones, the
-  rebuild replaces dense+sparse points with sparse-only ones. The vectors go
-  away as a side effect of normal re-indexing.
+  Only notes past the cap that still have chunk rows are touched. Notes inside
+  the cap keep their dense vectors — semantic search is every tier's, so a
+  rebuild there would buy nothing.
   """
-  @spec revoke_dense_index(Ecto.UUID.t()) :: :ok
-  def revoke_dense_index(user_id) when is_binary(user_id) do
-    # `with_tenant` for the same reason as the count reads below, but the
-    # failure mode here is quieter and worse. `notes` carries FORCE ROW LEVEL
-    # SECURITY, and an UPDATE gets its rows filtered by the policy's USING
-    # clause rather than rejected — so unscoped this reports `{0, nil}` and
-    # returns `:ok` having cleared nothing. No error, no telemetry (the
-    # `count > 0` guard below sees 0), and every downgraded user keeps their
-    # dense vectors forever: exactly the cost this function exists to reclaim.
-    #
-    # Only INSERTs raise 42501. That is why this site survived the read-side
-    # fix in 1f336bfa — nothing failed loudly enough to notice.
-    {:ok, {count, _}} =
-      Repo.with_tenant(user_id, fn ->
-        from(n in Note,
-          where: n.user_id == ^user_id and n.kind == "note" and is_nil(n.deleted_at),
-          where: not is_nil(n.dense_indexed_hash)
-        )
-        |> Repo.update_all([set: [embed_hash: nil, dense_indexed_hash: nil]],
-          skip_tenant_check: true
-        )
-      end)
+  @spec evict_over_cap(Ecto.UUID.t()) :: :ok
+  def evict_over_cap(user_id) when is_binary(user_id) do
+    user = Engram.Accounts.get_user!(user_id)
 
-    if count > 0 do
-      :telemetry.execute(
-        [:engram, :indexing, :dense_revoked],
-        %{count: count},
-        %{user_id: user_id}
-      )
+    case resolve_cap(user) do
+      {:cap, cap} ->
+        over_cap =
+          from(n in Note,
+            where: n.user_id == ^user_id and n.kind == "note" and is_nil(n.deleted_at),
+            order_by: [asc: n.created_at, asc: n.id],
+            offset: ^cap,
+            select: n.id
+          )
+
+        indexed =
+          from(n in Note,
+            as: :n,
+            where: n.id in subquery(over_cap),
+            where: exists(from(c in Chunk, where: c.note_id == parent_as(:n).id, select: 1)),
+            select: n.id
+          )
+
+        # `with_tenant`: `notes` carries FORCE ROW LEVEL SECURITY, and an UPDATE
+        # is FILTERED by the policy rather than rejected — unscoped this reports
+        # `{0, nil}` and returns `:ok` having evicted nothing, so a downgraded
+        # user keeps searching past the cap with no error anywhere.
+        {:ok, {count, _}} =
+          Repo.with_tenant(user_id, fn ->
+            from(n in Note, where: n.kind == "note" and n.id in subquery(indexed))
+            |> Repo.update_all([set: [embed_hash: nil, dense_indexed_hash: nil]],
+              skip_tenant_check: true
+            )
+          end)
+
+        if count > 0 do
+          :telemetry.execute(
+            [:engram, :indexing, :over_cap_evicted],
+            %{count: count},
+            %{user_id: user_id}
+          )
+        end
+
+        :ok
+
+      :unlimited ->
+        :ok
     end
-
-    :ok
   end
 
   @doc """

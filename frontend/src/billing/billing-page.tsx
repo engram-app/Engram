@@ -18,6 +18,7 @@ import {
 	useBillingHistory,
 	useBillingStatus,
 	useBillingSubscriptionDetail,
+	useIndexStatus,
 	useMe,
 } from "../api/queries";
 import BillingHistoryTable from "./billing-history-table";
@@ -221,6 +222,7 @@ export default function BillingPage({
 	const { data: detail } = useBillingSubscriptionDetail(hasSubscription);
 	const { data: history } = useBillingHistory(hasSubscription);
 	const qc = useQueryClient();
+	const { data: indexStatus } = useIndexStatus();
 	const [paddle, setPaddle] = useState<Paddle>();
 	// Ref mirror of `paddle` so the eventCallback (captured pre-instance) can
 	// call Checkout.close() on push activation or cooldown without re-init.
@@ -650,7 +652,7 @@ export default function BillingPage({
 			)}
 
 			{!hideHeading && (
-				<CurrentPlanCard billing={billing}>
+				<CurrentPlanCard billing={billing} indexStatus={indexStatus}>
 					{billing.subscription && panel === null && (
 						<div className="flex flex-wrap justify-end gap-3">
 							<Button onClick={() => setPanel("change")}>Change plan</Button>

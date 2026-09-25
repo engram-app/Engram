@@ -8,7 +8,7 @@ defmodule Engram.Billing.LimitKeys do
     LimitKeys.defined?(:notes_cap)            #=> true
     LimitKeys.type(:notes_cap)                #=> :integer
     LimitKeys.default_for(:notes_cap, :free)  #=> 10_000
-    LimitKeys.env_var_names()                 #=> 96 tuples (32 keys × 3 tiers)
+    LimitKeys.env_var_names()                 #=> one tuple per key per tier
   """
 
   @catalog %{
@@ -85,16 +85,9 @@ defmodule Engram.Billing.LimitKeys do
     # rotation hole that would otherwise make the device cap advisory.
     device_swap_cooldown_hours: %{type: :integer, defaults: %{free: 24, starter: 0, pro: 0}},
     reranker_enabled: %{type: :boolean, defaults: %{free: false, starter: false, pro: true}},
-    # Grant-shaped, like every boolean here: `true` == this user gets semantic
-    # (dense-vector) retrieval. Free is keyword-only (BM25 over Qdrant sparse
-    # vectors). Enforced in `Engram.Search.do_search/4` via `SearchProfile`, NOT
-    # in the controller — `Engram.MCP.Handlers` calls `Search.search/4` directly
-    # at four sites, two of which pass no mode at all, so a controller-level gate
-    # would leave MCP (the Free tier's whole demo path) on dense retrieval.
-    search_semantic_enabled: %{
-      type: :boolean,
-      defaults: %{free: false, starter: true, pro: true}
-    },
+    # No `search_semantic_enabled` key: semantic search is every tier's. Free is
+    # bounded by `indexed_notes_cap`, `lifetime_embed_token_cap` and
+    # `ai_searches_per_day`, not by a feature flag.
     # How many of a user's notes get indexed at all. NOT a cap on how many sync —
     # capping sync leaves a half-synced vault on first sync and the user bounces.
     # Ranked by server-side creation time among LIVE notes, so deleting frees a

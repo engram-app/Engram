@@ -1,5 +1,6 @@
 defmodule EngramWeb.WebhookControllerTest do
   use EngramWeb.ConnCase, async: true
+  use Oban.Testing, repo: Engram.Repo
 
   import Ecto.Query
 
@@ -400,6 +401,14 @@ defmodule EngramWeb.WebhookControllerTest do
 
       assert_received {[:engram, :tier_downgraded], ^ref, _meas,
                        %{from: :pro, to: :free, user_id: _}}
+
+      # The over-cap sweep is enqueued under the LEGACY kind for one release:
+      # during a rolling deploy an old node may pick the job up, and it only
+      # knows "revoke_dense" (new nodes map that to the over-cap eviction).
+      assert_enqueued(
+        worker: Engram.Workers.IndexCapMaintenance,
+        args: %{"user_id" => user.id, "kind" => "revoke_dense"}
+      )
     end
 
     test "subscription.canceled preserves free_tier_accepted_at when already set",

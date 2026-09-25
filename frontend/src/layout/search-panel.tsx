@@ -25,6 +25,7 @@ import {
 	useTypes,
 } from "../api/queries";
 import { useActiveVaultSlug } from "../api/vault-slug";
+import { unsearchableNotesNotice } from "../billing/plan-cards";
 import { noteHref } from "../routes";
 import { settingsTo } from "../settings/settings-hash";
 import { useRailView } from "./rail-view-context";
@@ -229,7 +230,7 @@ function SearchPanel({
 	// A capped user's un-indexed notes are simply absent from results. Without
 	// this the only signal is an empty result list, which reads as "search is
 	// broken" rather than "this note is not indexed yet".
-	const capped = Boolean(indexStatus && indexStatus.indexed < indexStatus.total);
+	const unsearchable = indexStatus ? unsearchableNotesNotice(indexStatus) : null;
 	const [recent, setRecent] = useState<string[]>(() => readRecent());
 
 	const inputRef = useRef<HTMLInputElement>(null);
@@ -595,9 +596,9 @@ function SearchPanel({
 				{deferred && results && results.length === 0 && !isLoading && (
 					<p className="px-3 py-2 text-muted-foreground text-xs">No results for "{deferred}"</p>
 				)}
-				{capped && deferred && !isLoading && indexStatus ? (
+				{unsearchable && deferred && !isLoading ? (
 					<p className="px-3 pb-2 text-muted-foreground text-xs">
-						{`Searching ${indexStatus.indexed.toLocaleString()} of ${indexStatus.total.toLocaleString()} notes. `}
+						{`${unsearchable} `}
 						<Link
 							className="underline underline-offset-2"
 							to={settingsTo("billing", location.search)}

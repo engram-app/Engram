@@ -23,6 +23,16 @@ defmodule Engram.Search.CrossVaultGateTest do
 
   alias Engram.Search
 
+  setup do
+    # Every tier's search embeds the query now. Only the gate is under test, so
+    # any vector will do.
+    Mox.stub(Engram.MockEmbedder, :embed_texts, fn texts, _opts ->
+      {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+    end)
+
+    :ok
+  end
+
   describe "cross_vault_search gate" do
     test "a Free user is refused cross-vault search on the REST path" do
       user = insert(:user)

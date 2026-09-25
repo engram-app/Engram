@@ -13,7 +13,6 @@ defmodule Engram.Search.SearchProfile do
   @default_pool 20
 
   defstruct query_model: nil,
-            semantic: true,
             full_precision: false,
             reranker: false,
             diversity: 0.0,
@@ -21,7 +20,6 @@ defmodule Engram.Search.SearchProfile do
 
   @type t :: %__MODULE__{
           query_model: String.t() | nil,
-          semantic: boolean(),
           full_precision: boolean(),
           reranker: boolean(),
           diversity: float(),
@@ -32,7 +30,6 @@ defmodule Engram.Search.SearchProfile do
   def resolve(user) do
     %__MODULE__{
       query_model: as_model(Billing.effective_limit(user, :search_query_model)),
-      semantic: Billing.granted?(user, :search_semantic_enabled),
       full_precision: Billing.granted?(user, :search_full_precision),
       reranker: Billing.granted?(user, :reranker_enabled),
       # fallback 30 = 0.3 default; self-host (no cap) gets MMR like every tier

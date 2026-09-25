@@ -15,7 +15,7 @@ defmodule Engram.Workers.ReindexKeyword do
   re-normalized nothing (#1477).
 
   Cost: a full re-embed of the vault — one embed request per note, every chunk
-  billed, for a semantic user; zero Voyage spend for a keyword-only one. That is
+  billed (sparse-only, with zero Voyage spend, once the embed budget is spent). That is
   the point of a re-normalize, but it is why this is operator-triggered, unique
   per vault, and enqueued at backfill priority.
   """

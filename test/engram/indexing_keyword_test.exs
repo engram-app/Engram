@@ -16,7 +16,6 @@ defmodule Engram.IndexingKeywordTest do
     ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
 
     {:ok, user} = Crypto.ensure_user_dek(insert(:user))
-    :ok = Engram.Fixtures.grant_semantic!(user)
     vault = insert(:vault, user: user)
 
     {:ok, note} =
