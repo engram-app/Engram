@@ -523,7 +523,11 @@ defmodule Engram.Workers.OrphanSweep do
     # or a re-index "reuses" the very points Qdrant lost and stamps the note
     # indexed again (#1607); that rule is now stated once, next to the reuse
     # logic it protects.
-    count = Indexing.flag_notes_for_rebuild(note_ids)
+    # Maintenance pool: `note_ids` span every tenant by construction, so no
+    # `with_tenant` is possible and both of that function's `update_all`s would
+    # be FILTERED to zero rows on the app pool — clearing nothing while this
+    # logs a count of 0 and reads as a successful repair. #1746.
+    count = Indexing.flag_notes_for_rebuild(note_ids, maintenance_repo())
 
     Logger.warning(
       "orphan_sweep flagged notes for re-index: Qdrant is missing their points",
@@ -571,9 +575,17 @@ defmodule Engram.Workers.OrphanSweep do
   # `chunk_page/1` ran on `Repo` under `cross_tenant/1`, which sets only a
   # process flag suppressing the app-level tripwire and NO Postgres session
   # state. Setting `MAINTENANCE_DATABASE_URL` therefore opened the gate while
-  # leaving these reads filtered by RLS: every scanned Qdrant point looks
-  # orphaned, and `runaway?/2`'s floor does not catch a collection holding
-  # fewer points than it. See engram-app/Engram#1746.
+  # leaving these reads filtered by RLS. See engram-app/Engram#1746.
+  #
+  # Be precise about what that would have cost, because someone will later use
+  # this comment to reason about whether prod lost data. With the reads blinded,
+  # `candidates == scanned`, so the ratio is 1.0 and `runaway?/2` ABORTS any
+  # collection at or above `@runaway_floor`. Prod's collection is well past it,
+  # so prod would have logged a loud weekly abort and deleted nothing. Mass
+  # deletion needs a collection UNDER the floor — a fresh self-host, a small
+  # staging, a repointed collection. The quieter half is the one that would have
+  # gone unnoticed: `chunk_page/1` returns `[]`, so `sweep_missing_points/1`
+  # reports `missing: 0` forever and the #1576 repair silently never runs.
   #
   # The `Repo.cross_tenant/1` wrapper stays on `Engram.Repo` rather than moving
   # to this pool, and that is deliberate. The flag it sets is process-local and
@@ -657,7 +669,17 @@ defmodule Engram.Workers.OrphanSweep do
   defp live_user_ids do
     # Includes soft-deleted users (deleted_at IS NOT NULL but row exists) —
     # they are the InactivityCleanup ladder's responsibility, not ours.
-    Repo.all(from(u in User, select: u.id)) |> MapSet.new()
+    #
+    # On the maintenance pool even though `users` carries no RLS today, because
+    # this is the most destructive authority read in the file and the safety of
+    # reading it on the app pool is a fact stored in another module. Its two
+    # consumers diff against it and then delete with NO runaway guard at all:
+    # `sweep_qdrant/1` drops a whole user's vectors, `sweep_s3/1` drops a whole
+    # user's attachment prefix. An empty result deletes every user's data in one
+    # tick. Adding `users` to `@tenant_tables` would make that real and no test
+    # here would catch it, so the pool choice does not depend on that staying
+    # true.
+    maintenance_repo().all(from(u in User, select: u.id)) |> MapSet.new()
   end
 
   # -- Qdrant --------------------------------------------------------------

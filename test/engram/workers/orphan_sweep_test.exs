@@ -153,28 +153,52 @@ defmodule Engram.Workers.OrphanSweepTest do
   end
 
   # engram-app/Engram#1746. `tenancy_unsafe?/0` clears the moment a maintenance
-  # repo is configured, so the authority reads must be on that same pool. They
-  # were not: both ran on `Repo` under `cross_tenant/1`, which sets a
-  # process-local flag and NO Postgres session state. Setting
-  # `MAINTENANCE_DATABASE_URL` opened the gate while leaving these reads
-  # filtered by RLS, so every scanned Qdrant point looks orphaned and gets
-  # deleted irreversibly.
+  # repo is configured, so every read that feeds a delete or a flag must be on
+  # that same pool. They were not: they ran on `Repo` under `cross_tenant/1`,
+  # which sets a process-local flag and NO Postgres session state. Setting
+  # `MAINTENANCE_DATABASE_URL` opened the gate while leaving those reads
+  # filtered by RLS.
   #
-  # Asserted on source for the same reason `CrdtBloatSweep` does it: the
-  # alternative is a second pool wired through the sandbox, and the property
-  # that regressed is literally which module name these two calls reach.
-  test "the authority reads run on the maintenance pool, not on Repo" do
+  # Parsed rather than string-sliced. An earlier version split the source on
+  # ~r/\n  end\n/ and grepped for one spelling of `|> Repo.all()`, which a
+  # second unpiped `Repo.one(...)` in the same function would have walked
+  # straight past while both assertions stayed green.
+  test "every authority read runs on the maintenance pool, not on Repo" do
+    {:ok, ast} = Code.string_to_quoted(File.read!("lib/engram/workers/orphan_sweep.ex"))
+
+    bodies =
+      ast
+      |> Macro.prewalk(%{}, fn
+        {:defp, _, [{name, _, _}, [do: body]]} = node, acc
+        when name in [:chunk_page, :chunk_point_ids, :live_user_ids] ->
+          {node, Map.put(acc, name, Macro.to_string(body))}
+
+        node, acc ->
+          {node, acc}
+      end)
+      |> elem(1)
+
+    assert bodies |> Map.keys() |> Enum.sort() ==
+             [:chunk_page, :chunk_point_ids, :live_user_ids],
+           "all three authority reads must still exist under these names"
+
+    for {name, body} <- bodies do
+      assert body =~ "maintenance_repo()",
+             "#{name} must resolve its pool via maintenance_repo/0"
+
+      refute body =~ ~r/\bRepo\.(all|one|stream|exists\?|aggregate|update_all)\b/,
+             "#{name} must not read on Repo. That is the #1746 deletion path"
+    end
+  end
+
+  # The write half of the same bug. `flag_notes_for_rebuild/2`'s two `update_all`s
+  # hit FORCE-RLS tables; filtered, they report {0, nil} and this worker logs a
+  # successful repair having changed nothing — silently disabling #1576.
+  test "the re-index flag write is handed the maintenance pool" do
     source = File.read!("lib/engram/workers/orphan_sweep.ex")
 
-    for fun <- ["defp chunk_point_ids(ids) do", "defp chunk_page(after_id) do"] do
-      [_, after_def] = String.split(source, fun, parts: 2)
-      body = after_def |> String.split(~r/\n  end\n/, parts: 2) |> hd()
-
-      assert body =~ "maintenance_repo()",
-             "#{fun} must resolve its pool via maintenance_repo/0"
-
-      refute body =~ ~r/\|>\s*Repo\.all\(\)/,
-             "#{fun} must not read on Repo — that is the #1746 deletion path"
-    end
+    assert source =~ "Indexing.flag_notes_for_rebuild(note_ids, maintenance_repo())",
+           "the flag write must be routed to the maintenance pool explicitly — " <>
+             "its default is Repo, which is correct only for ReindexKeyword"
   end
 end
