@@ -5,6 +5,8 @@ _Last verified: 2026-09-25_
 ## Status
 Live. `io.github.engram-app/engram` 0.32.0 published 2026-09-25 and active. Every
 `release-v*` tag re-publishes automatically via `.github/workflows/publish-mcp-registry.yml`.
+A version is immutable once published: a `title`/`description` change in `server.json` only
+reaches the registry with the NEXT release tag (0.32.0 carries the pre-#1757 copy).
 
 ## What This Is
 How Engram gets listed in the official MCP registry at `registry.modelcontextprotocol.io`,
