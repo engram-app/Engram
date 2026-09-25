@@ -14,9 +14,16 @@ defmodule Engram.Repo.TenancyGuard do
 
   This used to say SaaS prod connected as a superuser too. It does not.
   `0.29.0` measured `engram_admin` from inside the app's own pool: neither
-  `rolsuper` nor `rolbypassrls`. `0.30.0`'s probe then saw zero rows across all
-  eleven tenant tables there. See
-  `docs/context/rls-tenancy-probe-boot-log.md`.
+  `rolsuper` nor `rolbypassrls`.
+
+  This paragraph also used to claim `0.30.0`'s probe saw zero rows across all
+  eleven tenant tables on prod. **That was never measured.** `probe_opts/0`
+  documents why: the probe's transaction failed on every outermost caller, so
+  `observed_enforcement/0` returned `:unknown` on prod every time and the reads
+  never ran. The claim was an inference from a boot log that only ever showed
+  the attribute answer. What prod's behaviour is remains OPEN — see
+  `docs/context/rls-tenancy-probe-boot-log.md`, and re-measure once a release
+  carrying the `probe_opts/0` fix has rolled.
 
   ## Why it asks Postgres to DEMONSTRATE it, not to describe itself
 
@@ -213,12 +220,7 @@ defmodule Engram.Repo.TenancyGuard do
   """
   @spec observed_enforcement() :: :enforced | :bypassed | :unknown
   def observed_enforcement do
-    # `mode: :savepoint` so a nested call opens a subtransaction instead of
-    # joining the caller's. No current caller invokes this from inside a
-    # transaction — `OrphanSweep` and `CrdtBloatSweep` both ask at the top of
-    # their Oban job — so this is defensive rather than load-bearing today.
-    # Said plainly because an earlier version of this comment claimed otherwise
-    # and would have justified removing it.
+    # See `probe_opts/0` for why the transaction mode is decided at call time.
     #
     # try/rescue because `Repo.transaction/2` does NOT convert a pool checkout
     # failure into `{:error, _}` the way `query/3` does; it raises
@@ -237,12 +239,45 @@ defmodule Engram.Repo.TenancyGuard do
   # tuple escaped as this function's result. The tests caught it, which is the
   # only reason it is not still in here.
   defp run_probe do
-    case Engram.Repo.transaction(&probe/0, mode: :savepoint) do
+    case Engram.Repo.transaction(&probe/0, probe_opts()) do
       {:ok, verdict} -> verdict
       _ -> :unknown
     end
   rescue
     _ -> :unknown
+  end
+
+  @doc """
+  Transaction options for the probe, decided at call time.
+
+  `mode: :savepoint` is only valid INSIDE an existing transaction — it issues
+  `SAVEPOINT`, which Postgres rejects with no enclosing `BEGIN`. Passing it
+  unconditionally failed the transaction on every real caller (`init/1` at
+  boot, and the top of the `OrphanSweep` and `CrdtBloatSweep` Oban jobs are
+  all outermost), tore down the pooled connection with
+  `DBConnection.TransactionError: transaction is not started`, and left
+  `run_probe/0` reporting `:unknown`.
+
+  That failed silently for two reasons worth stating, because both are traps
+  this module has now hit twice:
+
+    * `:unknown` is a legitimate verdict — a fresh install with no rows
+      returns it — so `combine/2` fell back to the attribute answer and
+      nothing logged a defect.
+    * Every test of the probe runs under `Engram.DataCase`, whose sandbox
+      already holds a transaction open, so the savepoint was always valid in
+      the suite. The shape that ships was the one shape never exercised.
+      `tenancy_guard_outermost_test.exs` exists to close that gap and checks
+      out with `sandbox: false` deliberately.
+
+  Public only so that test can assert both shapes without reading source.
+  """
+  @spec probe_opts() :: keyword()
+  def probe_opts do
+    # Still `:savepoint` when nested, so aborting the probe cannot roll back a
+    # caller's own work. No caller does this today; it is cheap insurance
+    # against one appearing.
+    if Engram.Repo.in_transaction?(), do: [mode: :savepoint], else: []
   end
 
   defp probe do
