@@ -311,16 +311,19 @@ defmodule Engram.Workers.OrphanSweep do
     end)
   end
 
-  # cross_tenant: by design — this is a whole-collection reconciliation, and
-  # RLS would hide exactly the rows that prove a point is still live. Indexed
-  # lookup on `chunks.qdrant_point_id`, bounded by the caller's page/candidate
-  # list — never a whole-table read.
+  # Runs on `Repo.maintenance()`, NOT on `Repo` — see `maintenance_repo/0`.
+  # This is a whole-collection reconciliation and RLS would hide exactly the
+  # rows that prove a point is still live. Indexed lookup on
+  # `chunks.qdrant_point_id`, bounded by the caller's page/candidate list —
+  # never a whole-table read.
   #
   # Chunked: one bind parameter per id against Postgres' 65,535 statement cap.
   # A page is 4,096 and the candidate list can reach the cap plus a page, so
   # neither caller is close today — but both are constants someone will raise,
   # and the failure mode is the confirm query raising mid-sweep.
   defp chunk_point_ids(ids) do
+    repo = maintenance_repo()
+
     ids
     |> cast_uuids()
     |> Enum.chunk_every(@id_query_batch)
@@ -329,7 +332,7 @@ defmodule Engram.Workers.OrphanSweep do
         Chunk
         |> where([c], c.qdrant_point_id in ^batch)
         |> select([c], c.qdrant_point_id)
-        |> Repo.all()
+        |> repo.all()
         |> Enum.reject(&is_nil/1)
         |> Enum.into(acc)
       end)
@@ -541,9 +544,11 @@ defmodule Engram.Workers.OrphanSweep do
   # Qdrant points BEFORE its DB transaction, so a restore leaves exactly this
   # shape: live rows in a soft-deleted vault whose points are already gone.
   #
-  # cross_tenant: by design, same as `chunk_point_ids/1` — RLS would hide
+  # Runs on `Repo.maintenance()`, same as `chunk_point_ids/1` — RLS would hide
   # exactly the rows this reconciliation exists to check.
   defp chunk_page(after_id) do
+    repo = maintenance_repo()
+
     Repo.cross_tenant(fn ->
       Chunk
       |> join(:inner, [c], n in Note, on: n.id == c.note_id)
@@ -554,9 +559,32 @@ defmodule Engram.Workers.OrphanSweep do
       |> order_by([c], asc: c.id)
       |> limit(^chunk_probe_batch())
       |> select([c], {c.id, c.note_id, c.qdrant_point_id})
-      |> Repo.all()
+      |> repo.all()
     end)
   end
+
+  # The pool the sweep's AUTHORITY reads must use.
+  #
+  # `tenancy_unsafe?/0` clears the moment a maintenance repo is configured, so
+  # the gate and these reads have to agree about which pool they mean. They did
+  # not: the gate looked at `Repo.maintenance()` while `chunk_point_ids/1` and
+  # `chunk_page/1` ran on `Repo` under `cross_tenant/1`, which sets only a
+  # process flag suppressing the app-level tripwire and NO Postgres session
+  # state. Setting `MAINTENANCE_DATABASE_URL` therefore opened the gate while
+  # leaving these reads filtered by RLS: every scanned Qdrant point looks
+  # orphaned, and `runaway?/2`'s floor does not catch a collection holding
+  # fewer points than it. See engram-app/Engram#1746.
+  #
+  # The `Repo.cross_tenant/1` wrapper stays on `Engram.Repo` rather than moving
+  # to this pool, and that is deliberate. The flag it sets is process-local and
+  # `Engram.Repo.Maintenance` carries no `prepare_query/3` override at all, so
+  # the wrapper is a no-op for the maintenance pool and load-bearing for the
+  # fallback below.
+  #
+  # Falls back to `Repo` when no maintenance pool is configured. That is only
+  # reachable when the gate let the job run because RLS is NOT enforced, which
+  # is the one case where reading on `Repo` is correct.
+  defp maintenance_repo, do: Repo.maintenance()
 
   # Which of these ids does Qdrant actually hold? `has_id` against the existing
   # scroll endpoint — no new client call.

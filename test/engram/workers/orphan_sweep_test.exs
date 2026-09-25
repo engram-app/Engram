@@ -151,4 +151,30 @@ defmodule Engram.Workers.OrphanSweepTest do
     assert summary.meta[:loki_ship] == true
     assert summary.meta[:total_count] == 0
   end
+
+  # engram-app/Engram#1746. `tenancy_unsafe?/0` clears the moment a maintenance
+  # repo is configured, so the authority reads must be on that same pool. They
+  # were not: both ran on `Repo` under `cross_tenant/1`, which sets a
+  # process-local flag and NO Postgres session state. Setting
+  # `MAINTENANCE_DATABASE_URL` opened the gate while leaving these reads
+  # filtered by RLS, so every scanned Qdrant point looks orphaned and gets
+  # deleted irreversibly.
+  #
+  # Asserted on source for the same reason `CrdtBloatSweep` does it: the
+  # alternative is a second pool wired through the sandbox, and the property
+  # that regressed is literally which module name these two calls reach.
+  test "the authority reads run on the maintenance pool, not on Repo" do
+    source = File.read!("lib/engram/workers/orphan_sweep.ex")
+
+    for fun <- ["defp chunk_point_ids(ids) do", "defp chunk_page(after_id) do"] do
+      [_, after_def] = String.split(source, fun, parts: 2)
+      body = after_def |> String.split(~r/\n  end\n/, parts: 2) |> hd()
+
+      assert body =~ "maintenance_repo()",
+             "#{fun} must resolve its pool via maintenance_repo/0"
+
+      refute body =~ ~r/\|>\s*Repo\.all\(\)/,
+             "#{fun} must not read on Repo — that is the #1746 deletion path"
+    end
+  end
 end
