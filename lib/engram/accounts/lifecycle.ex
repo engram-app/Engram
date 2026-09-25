@@ -140,7 +140,14 @@ defmodule Engram.Accounts.Lifecycle do
   defp guard_last_admin(_user), do: :ok
 
   defp do_hard_delete(%User{} = user, reason) do
-    sub = Repo.one(from(s in Subscription, where: s.user_id == ^user.id), skip_tenant_check: true)
+    # Scoped (#1758): an unscoped read under an enforced `subscriptions` policy
+    # finds nothing, skips the Paddle cancel, and the deleted user keeps being
+    # billed.
+    sub =
+      Repo.with_tenant!(user.id, fn ->
+        Repo.one(from(s in Subscription, where: s.user_id == ^user.id))
+      end)
+
     had_sub = not is_nil(sub && sub.paddle_subscription_id)
 
     # Step 0: Kick live sockets before any data wipe. Otherwise the JWT

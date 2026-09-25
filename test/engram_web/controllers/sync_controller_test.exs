@@ -33,7 +33,7 @@ defmodule EngramWeb.SyncControllerTest do
     # section warns against for decrypt. Out of scope here; only the two
     # *adjacent* blocks inside render_manifest/5 (notes fetch + attachments
     # fetch) are being collapsed.
-    test "a changed manifest opens at most 3 with_tenant blocks", %{conn: conn} do
+    test "a changed manifest opens at most 4 with_tenant blocks", %{conn: conn} do
       post(conn, "/api/notes", %{path: "A.md", content: "# A", mtime: 1_000.0})
 
       post(conn, "/api/attachments", %{
@@ -50,12 +50,17 @@ defmodule EngramWeb.SyncControllerTest do
       # VaultPlug's vault resolve + Vaults.current_seq/2 + one combined block
       # for the notes/attachments fetch. Was 4 (VaultPlug + current_seq +
       # separate notes block + separate attachments block).
-      assert length(enters) <= 3,
-             "expected at most 3 with_tenant blocks (VaultPlug + current_seq + one " <>
+      # +1 since #1758: EngramWeb.Plugs.Auth preloads the subscription in its
+      # own with_tenant block, required once `subscriptions` carries RLS
+      # (unscoped, a paying user resolves :free). ~0.6ms per block (repo.ex:
+      # 13 blocks = 7.9ms). AuthTest pins that plug at exactly ONE block.
+      assert length(enters) <= 4,
+             "expected at most 4 with_tenant blocks (Auth subscription preload + " <>
+               "VaultPlug + current_seq + one " <>
                "combined notes/attachments fetch), got #{length(enters)}: #{inspect(enters)}"
     end
 
-    test "an unchanged manifest still opens exactly 2 with_tenant blocks", %{conn: conn} do
+    test "an unchanged manifest still opens exactly 3 with_tenant blocks", %{conn: conn} do
       post(conn, "/api/notes", %{path: "A.md", content: "# A", mtime: 1_000.0})
 
       current =
@@ -71,8 +76,12 @@ defmodule EngramWeb.SyncControllerTest do
       # VaultPlug's vault resolve + Vaults.current_seq/2. The short-circuit
       # path was already minimal (skips notes/attachments entirely) — this
       # just guards it from regressing.
-      assert length(enters) == 2,
-             "short-circuit path must not regress past 2 with_tenant blocks, " <>
+      # +1 since #1758: EngramWeb.Plugs.Auth preloads the subscription in its
+      # own with_tenant block, required once `subscriptions` carries RLS
+      # (unscoped, a paying user resolves :free). ~0.6ms per block (repo.ex:
+      # 13 blocks = 7.9ms). AuthTest pins that plug at exactly ONE block.
+      assert length(enters) == 3,
+             "short-circuit path must not regress past 3 with_tenant blocks, " <>
                "got #{length(enters)}: #{inspect(enters)}"
     end
   end

@@ -182,4 +182,50 @@ defmodule Engram.ReleaseTest do
       assert verifier() != first, "expected a fresh salt on each application"
     end
   end
+
+  describe "set_engram_maintenance_password/1" do
+    # Same mechanism as set_engram_app_password/1 (one shared implementation),
+    # so this pins only what differs: the env var and the role it lands on, and
+    # that it never touches engram_app's credential.
+
+    setup do
+      Repo.query!(
+        "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'engram_maintenance') " <>
+          "THEN CREATE ROLE engram_maintenance NOINHERIT LOGIN; END IF; END $$;"
+      )
+
+      on_exit(fn -> System.delete_env("ENGRAM_MAINTENANCE_DB_PASSWORD") end)
+      :ok
+    end
+
+    defp verifier_for(role) do
+      %{rows: [[v]]} = Repo.query!("SELECT rolpassword FROM pg_authid WHERE rolname = $1", [role])
+      v
+    end
+
+    test "unset and EMPTY are no-ops" do
+      before = verifier_for("engram_maintenance")
+
+      System.delete_env("ENGRAM_MAINTENANCE_DB_PASSWORD")
+      assert :ok = Release.set_engram_maintenance_password(Repo)
+
+      System.put_env("ENGRAM_MAINTENANCE_DB_PASSWORD", "")
+      assert :ok = Release.set_engram_maintenance_password(Repo)
+
+      assert verifier_for("engram_maintenance") == before
+    end
+
+    test "applies a SCRAM verifier to engram_maintenance, never the plaintext, and leaves engram_app alone" do
+      app_before = verifier_for("engram_app")
+      password = "maintenance-plaintext-marker"
+      System.put_env("ENGRAM_MAINTENANCE_DB_PASSWORD", password)
+
+      assert :ok = Release.set_engram_maintenance_password(Repo)
+
+      stored = verifier_for("engram_maintenance")
+      assert stored =~ "SCRAM-SHA-256$4096:"
+      refute stored =~ password
+      assert verifier_for("engram_app") == app_before
+    end
+  end
 end

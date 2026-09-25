@@ -50,6 +50,6 @@ defmodule Engram.Accounts.Export.SchemaTest do
       |> Repo.insert(skip_tenant_check: true)
 
     Repo.delete!(user, skip_tenant_check: true)
-    assert Repo.aggregate(Schema, :count) == 0
+    assert Repo.aggregate(Schema, :count, skip_tenant_check: true) == 0
   end
 end

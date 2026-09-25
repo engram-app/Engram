@@ -54,7 +54,7 @@ defmodule Engram.Workers.AccountExportTest do
 
       assert :ok = perform_job(AccountExport, %{"export_id" => export.id})
 
-      reloaded = Repo.reload!(export)
+      reloaded = Repo.reload!(export, skip_tenant_check: true)
       assert reloaded.status == :ready
       assert is_integer(reloaded.size_bytes)
       assert reloaded.size_bytes > 0
@@ -92,7 +92,7 @@ defmodule Engram.Workers.AccountExportTest do
       {:ok, export} = Export.request(user)
       assert :ok = perform_job(AccountExport, %{"export_id" => export.id})
 
-      reloaded = Repo.reload!(export)
+      reloaded = Repo.reload!(export, skip_tenant_check: true)
 
       Enum.each(reloaded.s3_keys, fn %{"key" => key, "vault_name" => name} ->
         assert String.contains?(key, "exports/#{user.id}/")
@@ -113,7 +113,7 @@ defmodule Engram.Workers.AccountExportTest do
       {:ok, export} = Export.request(user)
       assert :ok = perform_job(AccountExport, %{"export_id" => export.id})
 
-      reloaded = Repo.reload!(export)
+      reloaded = Repo.reload!(export, skip_tenant_check: true)
       vault_ids = reloaded.s3_keys |> Enum.map(& &1["vault_id"]) |> Enum.sort()
       assert vault_ids == Enum.sort([v1.id, v2.id])
     end
@@ -124,7 +124,7 @@ defmodule Engram.Workers.AccountExportTest do
 
       assert :ok = perform_job(AccountExport, %{"export_id" => export.id})
 
-      reloaded = Repo.reload!(export)
+      reloaded = Repo.reload!(export, skip_tenant_check: true)
       assert reloaded.status == :ready
       assert reloaded.s3_keys == []
       assert reloaded.size_bytes == 0
@@ -146,7 +146,7 @@ defmodule Engram.Workers.AccountExportTest do
 
       assert :ok = perform_job(AccountExport, %{"export_id" => export.id})
 
-      assert %Schema{status: :ready} = Repo.reload!(export)
+      assert %Schema{status: :ready} = Repo.reload!(export, skip_tenant_check: true)
     end
   end
 end

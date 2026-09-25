@@ -66,9 +66,13 @@ defmodule EngramWeb.Plugs.Auth do
   # (RequireOnboarding, RequireApiRpsBudget, RequireApiWriteEnabled) reuse the
   # preloaded assoc instead of each re-querying. Skipped in self-host mode,
   # where no billing gate runs and the extra read would be pure waste.
+  #
+  # Under the user's own tenant (#1758): unscoped, an enforced `subscriptions`
+  # policy returns no row, every paying user resolves `:free`, and
+  # RequireOnboarding locks them out.
   defp with_billing_assoc(user) do
     if Application.get_env(:engram, :billing_enabled, false) do
-      Engram.Repo.preload(user, :subscription)
+      Engram.Repo.with_tenant!(user.id, fn -> Engram.Repo.preload(user, :subscription) end)
     else
       user
     end

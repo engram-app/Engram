@@ -13,7 +13,7 @@ defmodule Engram.Repo do
   # (Engram#788). Their access is already correct — onboarding_actions via
   # `skip_tenant_check`, crdt_update_log via `with_tenant` — so listing them
   # only tightens the guard, it doesn't change behavior.
-  @tenant_tables ~w(notes chunks attachments api_keys vaults user_agreements onboarding_actions crdt_update_log note_links vault_index_states vault_index_update_log)a
+  @tenant_tables ~w(notes chunks attachments api_keys vaults user_agreements onboarding_actions crdt_update_log note_links vault_index_states vault_index_update_log account_exports)a
 
   @doc """
   The tables guarded by `prepare_query/3`, which must equal the set of tables
@@ -226,9 +226,23 @@ defmodule Engram.Repo do
           # the sandbox transaction. Resetting the role INSIDE the
           # transaction (`set_config('role', 'none', true)` == SET LOCAL
           # ROLE NONE) ensures the last local setting that persists is the
-          # default. In production this runs inside a real transaction and
-          # is harmless.
-          _ = query!("SELECT set_config('role', 'none', true)", [], source: "tenant_exit")
+          # default. The same holds in production whenever this block is
+          # nested inside a plain `Repo.transaction`.
+          #
+          # The tenant is cleared in the same round trip (#1761). Nested in a
+          # plain transaction this block is a savepoint too, and a SET LOCAL
+          # tenant would otherwise stay in force for the rest of the OUTER
+          # transaction while the app believes it is unscoped. '' and not NULL:
+          # the tenant policies never match '', and `api_keys_discovery` reads
+          # coalesce(..., '') = '' as "no tenant".
+          _ =
+            query!(
+              "SELECT set_config('role', 'none', true), " <>
+                "set_config('app.current_tenant', '', true)",
+              [],
+              source: "tenant_exit"
+            )
+
           result
         end,
         source: "tenant_txn"
