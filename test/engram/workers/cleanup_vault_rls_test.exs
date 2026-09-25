@@ -37,6 +37,8 @@ defmodule Engram.Workers.CleanupVaultRlsTest do
   import Engram.RlsCase
   import Mox
 
+  alias Engram.Accounts
+  alias Engram.Accounts.ApiKey
   alias Engram.Attachments.Attachment
   alias Engram.Notes.Chunk
   alias Engram.Notes.Note
@@ -120,6 +122,60 @@ defmodule Engram.Workers.CleanupVaultRlsTest do
 
       assert [] ==
                Repo.all(from(c in Chunk, where: c.vault_id == ^vault.id), skip_tenant_check: true)
+    end
+  end
+
+  # An API key with no `api_key_vaults` rows is UNRESTRICTED
+  # (`Vaults.accessible_vault_ids/1` returns `:all`). Hard-deleting a vault
+  # deleted its mapping rows, so a key restricted to that vault alone silently
+  # became a key to every vault the user owns. The key can trigger this itself:
+  # `DELETE /api/vaults/:id` accepts API-key auth.
+  describe "API keys restricted to the deleted vault" do
+    defp restrict!(key, vault) do
+      Repo.insert_all("api_key_vaults", [
+        %{api_key_id: Ecto.UUID.dump!(key.id), vault_id: Ecto.UUID.dump!(vault.id)}
+      ])
+    end
+
+    defp key_exists?(key), do: Repo.get(ApiKey, key.id, skip_tenant_check: true) != nil
+
+    test "a key restricted to only that vault is revoked, not widened", %{
+      user: user,
+      vault: vault
+    } do
+      stub_qdrant!()
+      {:ok, raw, key} = Accounts.create_api_key(user, "sole-vault")
+      restrict!(key, vault)
+
+      as_prod_role_committing(fn -> CleanupVault.perform_cleanup(vault.id, user.id) end)
+
+      refute key_exists?(key)
+      assert {:error, :invalid_key} = Accounts.validate_api_key(raw)
+    end
+
+    test "a key also restricted to another vault keeps only that vault", %{
+      user: user,
+      vault: vault
+    } do
+      stub_qdrant!()
+      other = insert(:vault, user: user)
+      {:ok, _raw, key} = Accounts.create_api_key(user, "two-vaults")
+      restrict!(key, vault)
+      restrict!(key, other)
+
+      as_prod_role_committing(fn -> CleanupVault.perform_cleanup(vault.id, user.id) end)
+
+      assert key_exists?(key)
+      assert Engram.Vaults.accessible_vault_ids(key) == [other.id]
+    end
+
+    test "an unrestricted key is untouched", %{user: user, vault: vault} do
+      stub_qdrant!()
+      {:ok, _raw, key} = Accounts.create_api_key(user, "unrestricted")
+
+      as_prod_role_committing(fn -> CleanupVault.perform_cleanup(vault.id, user.id) end)
+
+      assert key_exists?(key)
     end
   end
 end
