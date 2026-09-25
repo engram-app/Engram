@@ -100,8 +100,15 @@ defmodule Engram.Workers.AccountExport do
     end
   end
 
-  defp save(changeset),
-    do: Repo.with_tenant!(changeset.data.user_id, fn -> Repo.update(changeset) end)
+  # `mode: :savepoint`: an Oban retry of a :failed export, after the user has
+  # requested a new one, trips `account_exports_one_active_per_user` on the
+  # flip to :running. Without a savepoint `with_tenant/2`'s role reset dies
+  # with 25P02 and the job crashes instead of reaching `handle_failure/3`.
+  defp save(changeset) do
+    Repo.with_tenant!(changeset.data.user_id, fn ->
+      Repo.update(changeset, mode: :savepoint)
+    end)
+  end
 
   defp mark_running(%Schema{} = export) do
     export

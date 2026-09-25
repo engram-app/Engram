@@ -216,6 +216,25 @@ defmodule Engram.Accounts.ExportRlsTest do
       assert Repo.reload!(export, skip_tenant_check: true).status == :pending
     end
 
+    # The one live path into the worker's failure branch: an Oban retry of a
+    # :failed export after the user already requested a new one. Flipping the
+    # old row to :running trips `account_exports_one_active_per_user` inside
+    # `with_tenant/2`, whose role reset then 25P02s unless the update has a
+    # savepoint to roll back to.
+    test "a retried export that collides with a newer one is marked :failed", %{user: user} do
+      old = insert_export!(user, :failed)
+      _new = insert_export!(user, :pending)
+
+      assert {:error, %Ecto.Changeset{}} =
+               as_prod_role_committing(fn ->
+                 perform_job(AccountExport, %{"export_id" => old.id, "user_id" => user.id})
+               end)
+
+      reloaded = Repo.reload!(old, skip_tenant_check: true)
+      assert reloaded.status == :failed
+      assert reloaded.error_reason =~ "one_active_per_user"
+    end
+
     # A pre-#1758 job has no `user_id`. Its owner lookup hidden by RLS returns
     # nil, which reads exactly like "row gone": the job succeeds, the row stays
     # :pending, and the unique index then answers :already_running forever.
