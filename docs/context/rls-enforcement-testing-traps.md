@@ -94,6 +94,16 @@ basename that is in use. Nothing logs, nothing retries.
 
 ## Trap 2 — the sandbox leak-forward (the one that faked coverage)
 
+> **Fixed at the source by #1761.** `with_tenant/2` now clears
+> `app.current_tenant` on exit in the same round trip as the role reset, so a
+> COMPLETED tenant block no longer leaks forward, in the sandbox or in
+> production. Two corrections to the text below: the leak was never
+> sandbox-only (production nests `with_tenant` inside plain transactions too,
+> e.g. `Onboarding.accept_terms/6`), and "production has no enclosing
+> transaction" was wrong for exactly that shape. The lesson still holds: give
+> every write on a path its own direct test. `test/engram/repo/tenant_exit_reset_test.exs`
+> pins the fix.
+
 **This is the important one.** It produced a real false green.
 
 A subtransaction's `SET LOCAL` **persists into the enclosing transaction** once
@@ -365,6 +375,10 @@ it is not on `main`, so grepping this worktree for it finds only the reference i
 `rls_case.ex`.)
 
 ## Trap 7 — a leaked tenant can make the bug UNREPRODUCIBLE through its real entry point
+
+> Same mechanism as trap 2, fixed at the source by #1761: an earlier step's
+> completed `with_tenant` block no longer hands later steps its tenant. Kept as
+> the record of why `LifecycleRlsTest` needed a seam.
 
 This is a distinct and worse shape of trap 2. There, a leaked tenant makes a
 later **unscoped** statement look scoped. Here it goes further: the leak makes

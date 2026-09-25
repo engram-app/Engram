@@ -29,7 +29,7 @@ red e2e-clerk on your PR is ambient noise.
 | Test | Nights | Class |
 |---|---|---|
 | `test_34_folder_rename_propagation::test_folder_rename_new_paths` | **5/7** | **Real bug — FIXED**, Engram-obsidian#394 |
-| `test_77_bulk_first_sync::test_bulk_first_sync_timing` | **5/7** | Load-sensitive throughput assert |
+| `test_77_bulk_first_sync::test_bulk_first_sync_timing` | **5/7** | Load-sensitive throughput assert — **FIXED** (route count replaces wall clock), see below |
 | `test_30_sse_catch_up_multi::test_channel_catch_up_multi` | 3/7 | Uninvestigated |
 | `test_49`, `test_37`, `api_only/test_77_rename_repath_search` | 1/7 each | Uninvestigated |
 | `api_only/test_32_vault_api_key_isolation::test_mcp_search_spans_all_vaults_by_default` | (post-window) | **Load-sensitive client timeout — FIXED**, see below |
@@ -491,9 +491,31 @@ test_66's neighbours and timing without being at fault for its content.
   empty check).
 - **CI storage (MinIO) failing on main** — the attachment-502 cluster above.
   Live and unowned as of 2026-08-05.
-- `test_77` — the assert is `1000 notes in 120s`; observed 826 in 122.4s on a
-  saturated runner pool. The documented pattern for this class is *move
-  load-variable cost OUT of the timed window, never loosen the assert*.
+- `test_77` — **FIXED** (2026-09-25, branch `fix/e2e-test77-bulk-sync-flake`).
+  The assert was `1000 notes in 120s`; observed 826 in 122.4s, and on PR #1759
+  (run 36110947523) a single `fullSync()` outlived the 120s CDP evaluate
+  ceiling and died as an unnamed `CdpError`. The Obsidian-indexing wait was
+  ALREADY outside the timed window, so "move load-variable cost out" had
+  nothing left to move: the sync itself was the load-variable part. Measured
+  across 36 CI runs of identical code, the whole test took 31s–153s; the slow
+  runs pushed ~5 notes/s while the backend answered in 8–15ms, so the cost was
+  runner contention (two `heavy` e2e suites per VM), not the server. At that
+  rate the socket path is as slow as the per-note REST fallback the 120s bound
+  existed to catch, so the bound could not separate the two.
+  The fix replaces the proxy with the claim itself, load-invariant:
+  `helpers/route_probe.py` counts `Bulk/` writes per route off telemetry
+  Phoenix already emits (`channel_handled_in` for `crdt_create`,
+  `router_dispatch.stop` for `NotesController :upsert`) and the test asserts
+  `crdt_create >= 1000` and `rest_upsert == 0`. `fullSync()` is kicked
+  WITHOUT awaiting over CDP and the server manifest is polled; the remaining
+  200s deadline is a hang detector only (per-test `@pytest.mark.timeout(300)`).
+  Two latent bugs fixed with it: the "running peak" residency was only
+  sampled between fullSync passes (one pass usually carries the whole import,
+  so it was a before/after pair); it is now sampled by a background thread
+  across the sync. And the per-pass `backend_rpc` probes (docker exec + BEAM
+  boot each) no longer sit in the test's control loop. The probe parser
+  refuses a detached handler's vacuous 0 (`e2e/unit/test_route_probe.py`),
+  because 0 is exactly the passing value for `rest_upsert`.
 - `test_30`, `test_49`, `test_37`, `api_only/test_77` — uninvestigated.
 
 ## Gotcha: the org runner list undercounts
