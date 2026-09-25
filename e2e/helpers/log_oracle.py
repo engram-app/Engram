@@ -203,6 +203,35 @@ def _timeout_error(
     )
 
 
+def _read_if_settled(full: Path, encoding: str | None):
+    """Return the file's contents once it exists and is non-empty, else None.
+
+    One function for both delivery waiters because the race is the same, and
+    it is not the 0-byte window their callers already document. `exists()`,
+    `stat()` and the read are three separate syscalls, and the thing being
+    polled is a file Obsidian may be concurrently creating, writing, renaming
+    or deleting. A folder rename lands on disk as a delete plus a create, so
+    `exists()` can answer True and `stat()` raise FileNotFoundError a
+    microsecond later.
+
+    When that happened the poll loop died with a bare FileNotFoundError from
+    pathlib, so the caller never reached this oracle's causal-chain
+    TimeoutError — the one diagnostic that says WHY a note failed to arrive.
+    A real delivery failure got reported as a stack trace inside stdlib.
+    Observed on test_34_folder_rename_propagation.
+
+    Catching FileNotFoundError here is not swallowing a failure: "not on disk
+    yet" is precisely the condition being polled for, and the loop still fails
+    loudly via `_timeout_error` if it never settles.
+    """
+    try:
+        if full.stat().st_size == 0:
+            return None
+        return full.read_bytes() if encoding is None else full.read_text(encoding=encoding)
+    except FileNotFoundError:
+        return None
+
+
 def wait_for_delivery(
     vault_path,
     rel_path: str,
@@ -224,8 +253,9 @@ def wait_for_delivery(
         # caller's substring assert fail WITHOUT this oracle's causal-chain
         # diagnostic ever firing — so wait past the empty window like the
         # binary variant does.
-        if full.exists() and full.stat().st_size > 0:
-            return full.read_text(encoding="utf-8")
+        settled = _read_if_settled(full, "utf-8")
+        if settled is not None:
+            return settled
         time.sleep(poll)
     raise _timeout_error(rel_path, api_sync, timeout, vault_path=vault_path)
 
@@ -246,8 +276,9 @@ def wait_for_binary_delivery(
     full = Path(vault_path) / rel_path
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if full.exists() and full.stat().st_size > 0:
-            return full.read_bytes()
+        settled = _read_if_settled(full, None)
+        if settled is not None:
+            return settled
         time.sleep(poll)
     raise _timeout_error(
         rel_path, api_sync, timeout, vault_path=vault_path, attachment=True
