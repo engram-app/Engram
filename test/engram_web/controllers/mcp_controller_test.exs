@@ -103,6 +103,9 @@ defmodule EngramWeb.McpControllerTest do
         assert is_binary(t["name"])
         assert is_binary(t["description"])
         assert is_map(t["inputSchema"])
+        assert is_binary(t["title"])
+        assert is_boolean(t["annotations"]["readOnlyHint"])
+        assert t["annotations"]["title"] == t["title"]
       end)
     end
 
