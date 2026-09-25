@@ -749,7 +749,7 @@ defmodule Engram.Billing do
               # LEGACY kind, deliberately, for one release: during a rolling
               # deploy an old node can pick this job up, and it only matches
               # "revoke_dense" (a new node maps that to the over-cap sweep).
-              # TODO(next release): enqueue :evict_over_cap.
+              # Switch this to :evict_over_cap in the release after this one.
               _ = IndexCapMaintenance.enqueue(user.id, :revoke_dense)
             end
 
