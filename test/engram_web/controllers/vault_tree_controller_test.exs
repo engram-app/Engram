@@ -29,7 +29,7 @@ defmodule EngramWeb.VaultTreeControllerTest do
     # as SyncControllerTest's equivalent guard for #1211. Only the
     # controller-owned blocks (current_seq + notes + folder counts + folder
     # markers + attachments — 5 of them) are being collapsed, into 1.
-    test "a populated tree opens at most 2 with_tenant blocks", %{conn: conn} do
+    test "a populated tree opens at most 3 with_tenant blocks", %{conn: conn} do
       post(conn, "/api/notes", %{path: "Test/A.md", content: "# A", mtime: 1_000.0})
 
       post(conn, "/api/attachments", %{
@@ -43,8 +43,13 @@ defmodule EngramWeb.VaultTreeControllerTest do
           conn |> get("/api/vault/tree") |> json_response(200)
         end)
 
-      assert length(enters) <= 2,
-             "expected at most 2 with_tenant blocks (VaultPlug + one combined " <>
+      # +1 since #1758: EngramWeb.Plugs.Auth preloads the subscription in its
+      # own with_tenant block, required once `subscriptions` carries RLS
+      # (unscoped, a paying user resolves :free). ~0.6ms per block (repo.ex:
+      # 13 blocks = 7.9ms). AuthTest pins that plug at exactly ONE block.
+      assert length(enters) <= 3,
+             "expected at most 3 with_tenant blocks (Auth subscription preload + " <>
+               "VaultPlug + one combined " <>
                "seq/notes/folders/attachments fetch), got #{length(enters)}: #{inspect(enters)}"
     end
   end
