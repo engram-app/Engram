@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.31.1](https://github.com/engram-app/Engram/compare/0.31.0...0.31.1) (2026-09-25)
+
+
+### Bug Fixes
+
+* **rls:** run OrphanSweep's authority reads on the maintenance pool ([#1747](https://github.com/engram-app/Engram/issues/1747)) ([c60bc8e](https://github.com/engram-app/Engram/commit/c60bc8e5b3c542e0ae09a155511e10253f244fa6))
+
 ## [0.31.0](https://github.com/engram-app/Engram/compare/0.30.0...0.31.0) (2026-09-25)
 
 
