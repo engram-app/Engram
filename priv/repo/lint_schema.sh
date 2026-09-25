@@ -36,7 +36,17 @@ IGNORE='^(unused_index)$'
 # advisory is about per-query policy evaluation cost; this table is read once
 # per request by unique index, so the cost is noise.
 # See docs/context/rls-cutover-breaks-api-key-auth.md.
-WAIVERS='multiple_permissive_policies.*public\.api_keys'
+#
+# multiple_permissive_policies for role engram_maintenance, pairing
+# `maintenance_all` with a table's `tenant_isolation_*`: deliberate. RDS cannot
+# grant BYPASSRLS to a custom role, so the maintenance pool's cross-tenant
+# reach IS a second permissive policy scoped `TO engram_maintenance`. The
+# tenant policies apply to PUBLIC, so that role always sees two. Only the
+# maintenance pool (a few cron jobs, never a request) pays the extra
+# evaluation, and its `true` predicate short-circuits the OR. Matched on the
+# role AND the exact two-policy set, so a third permissive policy on any
+# table still fires. See docs/context/maintenance-db-role.md.
+WAIVERS='multiple_permissive_policies.*public\.api_keys|multiple_permissive_policies.*role [^ ]*engram_maintenance[^ ]* .*\{maintenance_all,tenant_isolation_[a-z_]+\}'
 
 # `|| true`: grep exits 1 when it filters every line, which is a pass, not an
 # error. Without it `set -e` would abort here on a clean schema.
