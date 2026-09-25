@@ -8,7 +8,7 @@
         "readOnlyHint": true,
         "title": "List Vaults"
       },
-      "description": "List all vaults owned by the current user with IDs, names, and descriptions.",
+      "description": "List your vaults with their IDs, names and slugs. Call this first when you own more than one vault: every other tool needs a vault_id (a name or ID from this list) to know which vault to act on.",
       "inputSchema": {
         "properties": {},
         "type": "object"
@@ -70,7 +70,7 @@
         "readOnlyHint": true,
         "title": "Check Vault"
       },
-      "description": "Validate and echo a vault by name or ID. NOTE: this does NOT persist an active vault — MCP keeps no state between calls. To read or write a specific vault, pass its vault_id on each tool call; a vault's name works there too, so this need not be called first. Use list_vaults to see them.",
+      "description": "Validate and echo a vault by name or ID. NOTE: this does NOT persist an active vault; MCP keeps no state between calls. To read or write a specific vault, pass its vault_id on each tool call; a vault's name works there too, so this need not be called first. Use list_vaults to see them.",
       "inputSchema": {
         "properties": {
           "vault_id": {
@@ -374,7 +374,7 @@
         "readOnlyHint": true,
         "title": "List Folder Contents"
       },
-      "description": "List all notes in a specific folder. Pass an empty string to list notes in the vault root.",
+      "description": "List the notes and attachments directly inside one folder (not subfolders). Pass an empty string for the vault root. To see every folder in the vault with note counts use list_folders. To find notes by content use search_notes.",
       "inputSchema": {
         "properties": {
           "folder": {
@@ -463,7 +463,7 @@
         "readOnlyHint": false,
         "title": "Create Folder"
       },
-      "description": "Create an explicit empty folder in the personal knowledge base. Use to scaffold folder structure before placing notes. Idempotent — calling with an existing folder name succeeds without creating duplicates.",
+      "description": "Create an explicit empty folder in the personal knowledge base. Use to scaffold folder structure before placing notes. Idempotent: calling with an existing folder name succeeds without creating duplicates.",
       "inputSchema": {
         "properties": {
           "folder": {
@@ -752,7 +752,7 @@
         "readOnlyHint": false,
         "title": "Write Note"
       },
-      "description": "Write or update a note. Saves to storage, indexes for search, and syncs to Obsidian.",
+      "description": "Replace a note's entire content, or create the note if it does not exist. Saves, indexes for search, and syncs to Obsidian. Overwrites whatever the note held. To add text without touching existing content use append_to_note. To change one passage use patch_note, or one heading's section use update_section. To create a note with no risk of overwriting an existing one use create_note.",
       "inputSchema": {
         "properties": {
           "content": {
@@ -796,7 +796,7 @@
         "readOnlyHint": false,
         "title": "Append to Note"
       },
-      "description": "Append text to an existing note, or create it if it doesn't exist.",
+      "description": "Add text to the end of a note, creating the note if it does not exist. Never removes or changes existing content. Use for logs, journals and running lists. To change existing text use patch_note. To replace the whole note use write_note.",
       "inputSchema": {
         "properties": {
           "path": {
@@ -845,7 +845,7 @@
         "readOnlyHint": false,
         "title": "Find and Replace in Note"
       },
-      "description": "Find and replace text in an existing note. By default replaces the first occurrence. Set occurrence to -1 to replace all.",
+      "description": "Find exact text in an existing note and replace it. Replaces the first occurrence by default; set occurrence to -1 for all, or 1 for the second. Fails if the text is not found. To replace everything under a heading use update_section. To add text use append_to_note. To rewrite the whole note use write_note.",
       "inputSchema": {
         "properties": {
           "find": {
@@ -904,7 +904,7 @@
         "readOnlyHint": false,
         "title": "Replace Note Section"
       },
-      "description": "Replace content under a specific heading in an existing note. Everything from the matched heading to the next heading of same/higher level is replaced.",
+      "description": "Replace everything under one heading in an existing note, up to the next heading of the same or higher level. The heading line itself is kept. Fails if the heading is not found. To change a specific passage use patch_note. To add text at the end use append_to_note.",
       "inputSchema": {
         "properties": {
           "content": {
@@ -962,7 +962,7 @@
         "readOnlyHint": false,
         "title": "Rename Note"
       },
-      "description": "Rename or move a note to a new path. Syncs to all connected Obsidian devices.",
+      "description": "Rename or move one note to a new path; links pointing at it are rewritten and the change syncs to all Obsidian devices. Fails if a note already exists at the new path. To move a whole folder use rename_folder. To move an image or PDF use move_attachment.",
       "inputSchema": {
         "properties": {
           "new_path": {
@@ -1010,7 +1010,7 @@
         "readOnlyHint": false,
         "title": "Rename Folder"
       },
-      "description": "Rename a folder and all notes within it (including subfolders). All affected notes will be reindexed and synced.",
+      "description": "Rename or move a folder, including every note, attachment and subfolder inside it. All affected notes are reindexed and synced. To move a single note use rename_note.",
       "inputSchema": {
         "properties": {
           "new_folder": {
@@ -1067,7 +1067,7 @@
         "readOnlyHint": false,
         "title": "Delete Note"
       },
-      "description": "Delete a note from the knowledge base. The deletion will sync to all connected Obsidian devices.",
+      "description": "Permanently delete one note by path; the deletion syncs to all connected Obsidian devices. Deleting a path that holds no note succeeds and reports deleted: false. To remove a whole folder use delete_folder. To move a note instead use rename_note.",
       "inputSchema": {
         "properties": {
           "path": {
