@@ -2867,6 +2867,34 @@ jobs:
       - name: Limit-keys lint
         run: mix engram.lint.limit_keys
 
+      - name: MCP tools snapshot is fresh
+        # mcp-tools.json is the committed tools/list payload TDQS scores
+        # (same drift-gate pattern as openapi.json). Regenerate with
+        # `mix engram.mcp.tools_json` whenever a tool definition changes.
+        run: |
+          mix engram.mcp.tools_json /tmp/mcp-tools.generated.json
+          python3 - <<'PY'
+          import json, sys
+          committed = json.load(open("mcp-tools.json"))
+          generated = json.load(open("/tmp/mcp-tools.generated.json"))
+          if committed != generated:
+              print("::error::mcp-tools.json is stale. Run: mix engram.mcp.tools_json")
+              sys.exit(1)
+          PY
+
+      - uses: actions/setup-node@v7
+        # mcp-tdqs needs Node 22+. The e2e-clerk job pins 20 for its own
+        # reasons; this job gets its own setup.
+        with:
+          node-version: '22'
+
+      - name: TDQS lint (MCP tool definitions)
+        # Deterministic, no model, no key (TDQS stages 1, 2 and 4). Fails on
+        # a missing description, missing annotations, uncovered parameters,
+        # or a shadowing name. Scoring with a model is the separate
+        # mcp-tdqs-score workflow (report-only).
+        run: npx -y mcp-tdqs@0.2.0 lint --file mcp-tools.json --server-name engram --fail-on warning
+
       - name: Sobelow
         # `--skip` honours `.sobelow-skips`, which pins accepted findings by
         # fingerprint rather than by check name, so an already-accepted check
