@@ -90,6 +90,15 @@ task runs every queue. Worker-only needs a backend change first (a
 role-aware TenancyGuard). The cost of keeping it is one idle connection per
 web task (`MAINTENANCE_POOL_SIZE=1`).
 
+## Schema lint waiver
+
+splinter's `multiple_permissive_policies` fires for `engram_maintenance` on
+every tenant table, because it sees both `maintenance_all` and the table's
+`tenant_isolation_*` (which applies to PUBLIC). That is the design, so
+`priv/repo/lint_schema.sh` waives exactly that pairing for that role. A third
+permissive policy on any table, or the lint for any other role, still fails
+the `unit-tests` job.
+
 ## Test trap: `has_table_privilege` with a privilege list
 
 ```sql
