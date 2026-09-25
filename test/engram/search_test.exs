@@ -368,7 +368,7 @@ defmodule Engram.SearchTest do
         |> Plug.Conn.send_resp(200, ~s({"result": []}))
       end)
 
-      assert {:ok, []} = Search.search(user, vault, "query")
+      assert {:ok, []} = Search.search(user, vault, "query", mode: :vector)
     end
 
     test "translates :folder opt into folder_hmac filter (Phase B.2.3)",
@@ -397,7 +397,7 @@ defmodule Engram.SearchTest do
         |> Plug.Conn.send_resp(200, ~s({"result": []}))
       end)
 
-      assert {:ok, []} = Search.search(user, vault, "query", folder: "Health")
+      assert {:ok, []} = Search.search(user, vault, "query", folder: "Health", mode: :vector)
     end
 
     test "translates :tags opt into tags_hmac filter (Phase B.2.3)",
@@ -428,7 +428,8 @@ defmodule Engram.SearchTest do
         |> Plug.Conn.send_resp(200, ~s({"result": []}))
       end)
 
-      assert {:ok, []} = Search.search(user, vault, "query", tags: ["health", "labs"])
+      assert {:ok, []} =
+               Search.search(user, vault, "query", tags: ["health", "labs"], mode: :vector)
     end
 
     test "type filter is HMAC-translated and dates become unix bounds (OKF)",
@@ -467,7 +468,8 @@ defmodule Engram.SearchTest do
                Search.search(user, vault, "query",
                  type: "Playbook",
                  updated_after: updated_after,
-                 created_before: created_before
+                 created_before: created_before,
+                 mode: :vector
                )
     end
 
@@ -516,7 +518,8 @@ defmodule Engram.SearchTest do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _, _ -> {:error, :unavailable} end)
 
-      assert {:error, _} = Search.search(user, vault, "iron panel")
+      # Dense-only: the hybrid default degrades to keyword instead (below).
+      assert {:error, _} = Search.search(user, vault, "iron panel", mode: :vector)
     end
 
     test "hybrid degrades (does not raise) when the transport reason is a TUPLE",

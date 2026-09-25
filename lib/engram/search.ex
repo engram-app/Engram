@@ -272,7 +272,12 @@ defmodule Engram.Search do
   def date_params, do: @date_params
 
   defp do_search(user, vault, query, opts) do
-    mode = Keyword.get(opts, :mode, :vector)
+    # Hybrid, not dense-only, when the caller names no mode (MCP's
+    # `suggest_folder` and note auto-placement). A note indexed while its
+    # owner's embed budget was spent has only the sparse leg, so a dense-only
+    # default cannot find it. Hybrid reaches both, and already degrades to
+    # keyword when the query embed fails.
+    mode = Keyword.get(opts, :mode, :hybrid)
     limit = opts |> Keyword.get(:limit, 5) |> clamp_limit()
     tags = Keyword.get(opts, :tags)
     folder = Keyword.get(opts, :folder)

@@ -80,4 +80,61 @@ defmodule Engram.Search.FreeSemanticTest do
     expect_dense_search(bypass)
     assert {:ok, []} = Search.search(user, vault, "iron panel", mode: :hybrid, diversity: 0.0)
   end
+
+  # MCP's `suggest_folder` and auto-placement call `Search.search/4` with no
+  # `:mode`. An over-budget Free user's notes are sparse-only (no dense vector),
+  # so a dense-only default finds nothing and reports "No folders found". The
+  # default must be hybrid, whose keyword leg still reaches those notes.
+  test "an over-budget Free user's suggest_folder still gets folders from BM25",
+       %{bypass: bypass, user: user, vault: vault} do
+    Engram.UsageMeters.add_embed_tokens(user.id, 20_000_000)
+
+    Engram.MockEmbedder
+    |> expect(:embed_texts, fn _texts, _opts -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+    {:ok, enc} =
+      Engram.Crypto.encrypt_qdrant_payload(
+        %{text: "Ferritin levels.", title: "Iron Panel", heading_path: "Iron Panel"},
+        user,
+        "engram_notes",
+        "uuid-1"
+      )
+
+    point = %{
+      "id" => "uuid-1",
+      "score" => 0.9,
+      "payload" => %{
+        "text" => enc.text,
+        "title" => enc.title,
+        "heading_path" => enc.heading_path,
+        "text_nonce" => enc.text_nonce,
+        "title_nonce" => enc.title_nonce,
+        "heading_path_nonce" => enc.heading_path_nonce,
+        "aad_version" => enc.aad_version,
+        "source_path" => "Health/Iron Panel.md",
+        "user_id" => to_string(user.id),
+        "vault_id" => to_string(vault.id)
+      }
+    }
+
+    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      prefetch = Jason.decode!(body)["prefetch"] || []
+
+      # The sparse note only matches through the keyword leg: a dense-only
+      # query reaches nothing, exactly as in production.
+      points = if Enum.any?(prefetch, &(&1["using"] == "keyword")), do: [point], else: []
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => %{"points" => points}}))
+    end)
+
+    assert {:ok, text, %{"suggestions" => [%{"folder" => "Health"}]}} =
+             Engram.MCP.Handlers.handle("suggest_folder", user, vault, %{
+               "description" => "iron panel"
+             })
+
+    assert text =~ "Health"
+  end
 end

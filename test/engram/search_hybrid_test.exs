@@ -78,7 +78,28 @@ defmodule Engram.SearchHybridTest do
     assert_in_delta hit.score, 0.0163, 1.0e-6
   end
 
-  test "internal default mode stays :vector (single-leg query)",
+  # The default is what MCP's `suggest_folder` and note auto-placement get,
+  # since they pass no mode. Dense-only there missed every note indexed
+  # sparse-only (an owner whose embed budget ran out), so it is hybrid.
+  test "internal default mode is :hybrid (dense + keyword legs)",
+       %{bypass: bypass, user: user, vault: vault} do
+    Engram.MockEmbedder
+    |> expect(:embed_texts, fn ["x"], _opts -> {:ok, [[0.1, 0.2, 0.3]]} end)
+
+    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      json = Jason.decode!(body)
+      assert Enum.map(json["prefetch"], & &1["using"]) |> Enum.sort() == ["dense", "keyword"]
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, ~s({"result":[]}))
+    end)
+
+    assert {:ok, []} = Search.search(user, vault, "x")
+  end
+
+  test "mode: :vector is a single-leg dense query",
        %{bypass: bypass, user: user, vault: vault} do
     Engram.MockEmbedder
     |> expect(:embed_texts, fn ["x"], _opts -> {:ok, [[0.1, 0.2, 0.3]]} end)
@@ -94,7 +115,7 @@ defmodule Engram.SearchHybridTest do
       |> Plug.Conn.send_resp(200, ~s({"result":[]}))
     end)
 
-    assert {:ok, []} = Search.search(user, vault, "x")
+    assert {:ok, []} = Search.search(user, vault, "x", mode: :vector)
   end
 
   test "mode: :keyword routes to a sparse-only query and returns results",
