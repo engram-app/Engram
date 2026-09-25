@@ -1,12 +1,18 @@
-"""Test 77: a 1k-note bulk first sync lands in bounded time, and does not
-allocate a CRDT room per note.
+"""Test 77: a 1k-note bulk first sync lands over socket-native `crdt_create`
+(never per-note REST), and does not allocate a CRDT room per note.
 
 Push path: `pushPartitioned` -> `pushFile` -> socket-native `crdt_create`,
 one bounded per-file work unit each (the `crdt_create_batch` RPC this test
 was originally written against was retired in the Relay-pattern rewrite, in
-favour of per-file failure isolation). The duration bound is deliberately
-generous for CI noise but far below what a REST per-note fallback costs
-(1,000 paced requests), so a silent regression to that path fails here.
+favour of per-file failure isolation).
+
+The transport claim is asserted by COUNT, not wall clock (route_probe): every
+`Bulk/` note must reach the server via `crdt_create`, and zero via per-note
+`POST /notes`. This used to be a proxy — "1,000 notes within 120s" — which
+flaked ~5/7 nights: on the shared runner pool (two heavy e2e suites per VM) the
+whole test took 31s to 153s for identical code, and at the slow end it is as
+slow as the REST fallback it was meant to catch. The count separates the two
+regardless of load. The remaining deadline is a HANG detector only.
 
 The room-allocation bound is the #1409 acceptance criterion. A room is a
 live-collaboration actor; an import has no collaborators, so genesis content
@@ -15,22 +21,33 @@ actually open in an editor. Importing a 1,700-file vault once allocated
 ~1,700 rooms and took prod's BEAM from 757 to 2,744 processes (2026-08-18).
 """
 
+import asyncio
+import json
 import os
 import shutil
+import threading
 import time
 
 import pytest
 
 from helpers.residency_probe import read_resident_rooms
 from helpers.room_probe import arm_room_starts, read_room_starts
+from helpers.route_probe import arm_routes, read_routes
 from helpers.vault import write_note
 
 # CI always runs the full 1,000 — the bounds below are calibrated against that
 # size and the default must never be lowered. The override exists so the LOCAL
 # repro loop (docs/context/local-crdt-e2e-repro.md) can run a smaller import on
-# a box where a 1,000-note `fullSync()` exceeds the 120s CDP evaluate timeout.
+# a slow box.
 NOTE_COUNT = int(os.environ.get("E2E_BULK_NOTE_COUNT", "1000"))
-PUSH_TIME_BOUND_S = 120
+
+# HANG detector, not a performance bound — the transport claim is the route
+# count. Across 36 CI runs of the same code (2026-09-25) this whole test took 31s
+# to 153s, driven by runner contention, and the slowest sync ran ~5 notes/s
+# (~200s for 1,000); 200s is sized to that tail while still failing a sync that
+# stopped making progress. Do not tighten this into a
+# throughput assert again: on a shared pool it measures the neighbours.
+CONVERGE_DEADLINE_S = 200
 
 # Rooms this sync may allocate. The criterion is O(open editors), not O(N) —
 # the bound is a small constant on purpose, so a per-note regression fails by
@@ -97,7 +114,62 @@ HANDSHAKE_ROOM_RATCHET = 700
 # again — that is exactly the 2026-08-18 shape.
 PEAK_RESIDENT_ROOM_BOUND = 32
 
-SET_BLOCKED = "app.plugins.plugins['engram-vault-sync'].syncEngine.setSyncBlocked({})"
+ENGINE = "app.plugins.plugins['engram-vault-sync'].syncEngine"
+SET_BLOCKED = ENGINE + ".setSyncBlocked({})"
+
+# Fire-and-forget fullSync: the promise settles into window.__e2e77 instead of
+# being awaited over CDP. Awaiting it made the CDP evaluate ceiling (120s) the
+# real deadline, and a slow-but-progressing sync died as an unnamed CdpError.
+KICK_SYNC = (
+    "window.__e2e77 = {done: false}; " + ENGINE + ".fullSync().then("
+    "r => { window.__e2e77 = {done: true, result: r}; }, "
+    "e => { window.__e2e77 = {done: true, error: String(e)}; }); true"
+)
+SYNC_STATE = "JSON.stringify(window.__e2e77 || null)"
+
+
+class _PeakResidencySampler:
+    """Poll room residency on a background thread for the whole sync.
+
+    Residency is a burst quantity (see residency_probe): the peak is only
+    trustworthy if sampled continuously ACROSS the import. Sampling between
+    fullSync passes did not do that — one pass usually carries the whole import,
+    so the "running peak" was just a before/after pair. A thread also keeps the
+    probe's docker-exec + rpc cost off the test's own control flow.
+    """
+
+    def __init__(self, interval_s: float = 1.0) -> None:
+        self.peak = 0
+        self._error: BaseException | None = None
+        self._stop = threading.Event()
+        self._interval = interval_s
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self) -> None:
+        while True:
+            try:
+                self.peak = max(self.peak, read_resident_rooms())
+            except BaseException as e:  # re-raised on the test thread by stop()
+                self._error = e
+                return
+            if self._stop.wait(self._interval):
+                return
+
+    def start(self) -> "_PeakResidencySampler":
+        self._thread.start()
+        return self
+
+    def abort(self) -> None:
+        self._stop.set()
+
+    def stop(self) -> int:
+        """Take one final sample, stop, and return the peak (raises probe errors)."""
+        self._stop.set()
+        self._thread.join(timeout=30)
+        if self._error is not None:
+            raise AssertionError(f"residency probe failed mid-sync: {self._error!r}")
+        self.peak = max(self.peak, read_resident_rooms())
+        return self.peak
 
 
 async def _cleanup_bulk_residue(vault_a, cdp_a, api_sync) -> None:
@@ -139,14 +211,18 @@ async def _cleanup_bulk_residue(vault_a, cdp_a, api_sync) -> None:
         pass
 
 
+@pytest.mark.timeout(300)  # index wait (60s) + CONVERGE_DEADLINE_S + probes/cleanup
 @pytest.mark.asyncio
 async def test_bulk_first_sync_timing(vault_a, cdp_a, api_sync):
+    sampler: _PeakResidencySampler | None = None
     try:
-        # Arm BEFORE the gate work: the counter is cumulative per node and the
+        # Arm BEFORE the gate work: the counters are cumulative per node and the
         # measured window is a delta, so arming early only widens what is
-        # attributed to this test — it can never under-count the sync.
+        # attributed to this test — it can never under-count the sync. Route
+        # counts are Bulk/-scoped and re-armed (reset) here.
         arm_room_starts()
         rooms_before = read_room_starts()
+        arm_routes("Bulk/")
 
         # Close the sync gate FIRST: every raw write below fires the vault
         # watcher, and an open gate turns that into 1,000 debounced single-note
@@ -157,7 +233,7 @@ async def test_bulk_first_sync_timing(vault_a, cdp_a, api_sync):
 
         # Seed 1,000 files on disk, then wait for Obsidian's indexer to see them
         # (raw filesystem writes only reach app.vault.getFiles() once the
-        # watcher fires).
+        # watcher fires). A readiness gate, not part of any assertion.
         for i in range(NOTE_COUNT):
             write_note(
                 vault_a,
@@ -172,7 +248,7 @@ async def test_bulk_first_sync_timing(vault_a, cdp_a, api_sync):
             )
             if isinstance(count, int) and count >= NOTE_COUNT:
                 break
-            time.sleep(1)
+            await asyncio.sleep(1)
         else:
             raise TimeoutError(f"Obsidian indexed only {count}/{NOTE_COUNT} bulk files")
 
@@ -180,46 +256,61 @@ async def test_bulk_first_sync_timing(vault_a, cdp_a, api_sync):
         # (persists the fingerprint + flips syncBlocked false).
         await cdp_a.accept_sync_gate()
 
-        # Drive the bulk first sync to server-side convergence within the time
-        # bound. A single fullSync()'s `pushed` count is an unreliable proxy under
-        # CI load, in two ways (both observed as issue #627):
-        #   1. fullSync() returns {pulled:0, pushed:0} when syncBlocked is still
-        #      true — the plugin's async startup can re-assert it AFTER our unblock.
-        #   2. A batch chunk that errors against a loaded backend goes offline with
-        #      the remainder queued (sync.ts pushNotesViaBatch), so one call can
-        #      report a partial count (e.g. pushed=2) even though the rest land
-        #      moments later.
-        # So we re-assert unblocked and re-trigger fullSync until the SERVER
-        # manifest holds all 1,000 notes, bounded by PUSH_TIME_BOUND_S. The bound
-        # is the batch-vs-per-note guarantee: 1,000 paced per-note pushes cannot
-        # converge within it, so a silent fallback still fails this test — the
-        # success criterion is "bulk lands in bounded time", not a single call's
-        # push tally.
+        # Drive the bulk first sync to server-side convergence. A single
+        # fullSync()'s `pushed` count is an unreliable proxy under CI load
+        # (issue #627): it returns {pulled:0, pushed:0} when the plugin's async
+        # startup re-asserts syncBlocked after our unblock, and one call can
+        # report a partial count while the remainder lands moments later. So the
+        # SERVER manifest is the oracle, and a sync that settled short of it is
+        # re-kicked (never stacked on an in-flight one).
+        sampler = _PeakResidencySampler().start()
         started = time.monotonic()
-        deadline = started + PUSH_TIME_BOUND_S
+        deadline = started + CONVERGE_DEADLINE_S
         bulk_count = 0
-        # Sampled on EVERY pass, not once at the end: room_probe's docstring is
-        # right that a single trailing sample cannot see a burst come and go.
-        # A running peak across the whole import cannot be dodged that way.
-        peak_resident = read_resident_rooms()
+        kicks = 0
+        last_state = None
         while time.monotonic() < deadline:
-            await cdp_a.evaluate(SET_BLOCKED.format("false"))
-            await cdp_a.trigger_full_sync()
-            peak_resident = max(peak_resident, read_resident_rooms())
+            raw = await cdp_a.evaluate(SYNC_STATE)
+            last_state = json.loads(raw) if isinstance(raw, str) else None
+            if last_state is None or last_state.get("done"):
+                await cdp_a.evaluate(SET_BLOCKED.format("false"))
+                await cdp_a.evaluate(KICK_SYNC)
+                kicks += 1
             manifest = api_sync.get_manifest()
             bulk_count = sum(
                 1 for n in manifest["notes"] if n["path"].startswith("Bulk/")
             )
             if bulk_count >= NOTE_COUNT:
                 break
-            time.sleep(2)
-            peak_resident = max(peak_resident, read_resident_rooms())
+            await asyncio.sleep(2)
         elapsed = time.monotonic() - started
+        peak_resident = sampler.stop()
+        sampler = None
 
+        # Informational only — a trend line, deliberately not asserted.
+        print(
+            f"\ntest_77 converged {bulk_count}/{NOTE_COUNT} in {elapsed:.1f}s "
+            f"({kicks} fullSync kick(s), last={last_state})"
+        )
         assert bulk_count >= NOTE_COUNT, (
-            f"bulk first sync converged only {bulk_count}/{NOTE_COUNT} notes in "
-            f"{elapsed:.1f}s (bound {PUSH_TIME_BOUND_S}s) — did the plugin fall "
-            "back to per-note pushes or stall?"
+            f"bulk first sync converged only {bulk_count}/{NOTE_COUNT} notes "
+            f"within the {CONVERGE_DEADLINE_S}s hang deadline — the sync stalled "
+            f"({kicks} fullSync kick(s), last={last_state})"
+        )
+
+        # The transport claim, load-invariant: every note came over crdt_create
+        # and none as a per-note REST upsert. crdt_create >= N (not ==) because a
+        # timed-out create is legitimately retried.
+        routes = read_routes()
+        print(f"\ntest_77 write routes for Bulk/: {routes}")
+        assert routes.rest_upsert == 0, (
+            f"{routes.rest_upsert} Bulk/ notes were written via per-note "
+            f"POST /notes ({routes}) — the bulk first sync fell back to REST "
+            "instead of socket-native crdt_create."
+        )
+        assert routes.crdt_create >= NOTE_COUNT, (
+            f"only {routes.crdt_create} crdt_create frames for {NOTE_COUNT} Bulk/ "
+            f"notes ({routes}) — the rest reached the server by some other path."
         )
 
         # Read AFTER convergence: a room allocated by the tail of the sync must
@@ -248,4 +339,6 @@ async def test_bulk_first_sync_timing(vault_a, cdp_a, api_sync):
             "is #1409's open half — the ratchet only fails when it gets WORSE."
         )
     finally:
+        if sampler is not None:  # failed mid-sync: stop the thread, keep the real error
+            sampler.abort()
         await _cleanup_bulk_residue(vault_a, cdp_a, api_sync)

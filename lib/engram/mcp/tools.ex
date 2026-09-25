@@ -100,6 +100,31 @@ defmodule Engram.MCP.Tools do
     |> Enum.map(&(&1 |> with_vault_id() |> with_annotations()))
   end
 
+  @doc """
+  The exact `tools/list` payload: what `McpController` serves and what
+  `mix engram.mcp.tools_json` snapshots for TDQS. One function so the two
+  cannot drift.
+  """
+  @spec wire_list() :: [map()]
+  def wire_list do
+    Enum.map(list(), fn t ->
+      base = %{
+        "name" => t.name,
+        "title" => t.title,
+        "description" => t.description,
+        "inputSchema" => t.inputSchema,
+        "annotations" => t.annotations
+      }
+
+      # Only for converted tools (#1660). An `outputSchema` a tool cannot
+      # honour is worse than none: a client generates types from it.
+      case t[:outputSchema] do
+        nil -> base
+        schema -> Map.put(base, "outputSchema", schema)
+      end
+    end)
+  end
+
   defp with_annotations(%{name: name} = tool) do
     {title, read_only, destructive, idempotent} = Map.fetch!(@annotations, name)
 

@@ -20,6 +20,8 @@ defmodule Engram.Workers.AccountExport do
     max_attempts: 3,
     unique: [fields: [:args], period: :infinity]
 
+  import Ecto.Query
+
   alias Engram.Accounts.Export.Schema
   alias Engram.Accounts.Export.Streamer
   alias Engram.Repo
@@ -42,8 +44,17 @@ defmodule Engram.Workers.AccountExport do
   def timeout(_job), do: :timer.minutes(60)
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"export_id" => id}}) do
-    with {:ok, export} <- fetch_for_worker(id),
+  def perform(%Oban.Job{args: %{"export_id" => id} = args}) do
+    case owner(args) do
+      # Row gone (user hard-deleted mid-export). Nothing to do.
+      nil -> :ok
+      {:error, _} = error -> error
+      user_id -> run(id, user_id)
+    end
+  end
+
+  defp run(id, user_id) do
+    with {:ok, export} <- fetch_for_worker(id, user_id),
          :ok <- abort_stale_multiparts(export),
          {:ok, running} <- mark_running(export),
          {:ok, parts, total_bytes} <- Streamer.run(running, part_max_bytes: @part_max_bytes),
@@ -56,24 +67,53 @@ defmodule Engram.Workers.AccountExport do
         :ok
 
       {:error, reason} ->
-        handle_failure(id, reason)
+        handle_failure(id, user_id, reason)
     end
   end
 
-  defp fetch_for_worker(id) do
-    case Repo.get(Schema, id, skip_tenant_check: true) do
+  defp owner(%{"user_id" => user_id}), do: user_id
+
+  # Jobs enqueued before `user_id` joined the args (#1758). The owner is what
+  # this read discovers, so no tenant can scope it; hence the maintenance pool.
+  # ponytail: legacy bridge, delete once no pre-#1758 export job can be in flight.
+  #
+  # Refuses where RLS is enforced and no maintenance pool exists: there the read
+  # returns nil, which is indistinguishable from "row gone", and the export
+  # would sit :pending forever behind `account_exports_one_active_per_user`.
+  defp owner(%{"export_id" => id}) do
+    if Repo.maintenance() == Repo and Engram.Repo.TenancyGuard.enforced?() do
+      {:error, :tenancy_unsafe}
+    else
+      Repo.cross_tenant(fn ->
+        Repo.maintenance().one(from(e in Schema, where: e.id == ^id, select: e.user_id))
+      end)
+    end
+  end
+
+  defp fetch_for_worker(id, user_id) do
+    case Repo.with_tenant!(user_id, fn -> Repo.get(Schema, id) end) do
       nil ->
         {:error, :not_found}
 
       %Schema{} = schema ->
-        {:ok, Repo.preload(schema, :user, skip_tenant_check: true)}
+        {:ok, Repo.preload(schema, :user)}
     end
+  end
+
+  # `mode: :savepoint`: an Oban retry of a :failed export, after the user has
+  # requested a new one, trips `account_exports_one_active_per_user` on the
+  # flip to :running. Without a savepoint `with_tenant/2`'s role reset dies
+  # with 25P02 and the job crashes instead of reaching `handle_failure/3`.
+  defp save(changeset) do
+    Repo.with_tenant!(changeset.data.user_id, fn ->
+      Repo.update(changeset, mode: :savepoint)
+    end)
   end
 
   defp mark_running(%Schema{} = export) do
     export
     |> Schema.changeset(%{status: :running})
-    |> Repo.update(skip_tenant_check: true)
+    |> save()
   end
 
   defp mark_ready(%Schema{} = export, parts, total_bytes) do
@@ -88,7 +128,7 @@ defmodule Engram.Workers.AccountExport do
       ready_at: now,
       expires_at: DateTime.add(now, @ready_ttl_seconds, :second)
     })
-    |> Repo.update(skip_tenant_check: true)
+    |> save()
   end
 
   # Task 14 fills this in (looks at `s3_upload_ids` and calls
@@ -106,8 +146,8 @@ defmodule Engram.Workers.AccountExport do
   # row so the user sees `:failed` instead of a stuck `:running`, and
   # bubble the original error up to Oban so retry/backoff still kicks
   # in.
-  defp handle_failure(id, reason) do
-    case Repo.get(Schema, id, skip_tenant_check: true) do
+  defp handle_failure(id, user_id, reason) do
+    case Repo.with_tenant!(user_id, fn -> Repo.get(Schema, id) end) do
       nil ->
         :ok
 
@@ -117,7 +157,7 @@ defmodule Engram.Workers.AccountExport do
           status: :failed,
           error_reason: inspect(reason)
         })
-        |> Repo.update(skip_tenant_check: true)
+        |> save()
     end
 
     {:error, reason}

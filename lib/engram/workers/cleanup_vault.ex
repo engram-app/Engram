@@ -22,7 +22,9 @@ defmodule Engram.Workers.CleanupVault do
 
   import Ecto.Query
 
+  alias Engram.Accounts.ApiKey
   alias Engram.Attachments.Attachment
+  alias Engram.Auth.SessionInvalidator
   alias Engram.Logger.Metadata
   alias Engram.Notes.{Chunk, Note}
   alias Engram.Repo
@@ -192,44 +194,67 @@ defmodule Engram.Workers.CleanupVault do
     # below needs the tenant: a filtered `delete_all` reports `{0, nil}` with
     # no error, and `Repo.delete!(vault)` carries no bypass at all, so a
     # filtered delete would raise `Ecto.StaleEntryError` instead.
-    Repo.with_tenant(vault.user_id, fn ->
-      vault_id = vault.id
+    {:ok, revoked_keys} =
+      Repo.with_tenant(vault.user_id, fn ->
+        vault_id = vault.id
 
-      # Drop the owner's live-note counter by the notes this vault still holds
-      # as live (deleted_at IS NULL). Soft-deleted notes were already
-      # decremented at soft-delete time, so only the live set counts here.
-      live_notes =
-        Repo.one(
-          from(n in Note,
-            where:
-              n.vault_id == ^vault_id and is_nil(n.deleted_at) and
-                n.kind == "note",
-            select: count(n.id)
+        # Drop the owner's live-note counter by the notes this vault still holds
+        # as live (deleted_at IS NULL). Soft-deleted notes were already
+        # decremented at soft-delete time, so only the live set counts here.
+        live_notes =
+          Repo.one(
+            from(n in Note,
+              where:
+                n.vault_id == ^vault_id and is_nil(n.deleted_at) and
+                  n.kind == "note",
+              select: count(n.id)
+            )
+          ) || 0
+
+        Chunk
+        |> where(vault_id: ^vault_id)
+        |> Repo.delete_all()
+
+        Note
+        |> where(vault_id: ^vault_id)
+        |> Repo.delete_all()
+
+        :ok = UsageMeters.dec_notes_count(vault.user_id, live_notes)
+
+        Attachment
+        |> where(vault_id: ^vault_id)
+        |> Repo.delete_all()
+
+        # Revoke every key restricted to THIS vault alone, before its mapping
+        # rows go. A key with no `api_key_vaults` rows is unrestricted
+        # (`Vaults.accessible_vault_ids/1`), so deleting the mapping would widen a
+        # one-vault key to every vault the user owns, and the key can start that
+        # itself through `DELETE /api/vaults/:id`. Deleting the key cascades its
+        # mapping rows. `bool_and` holds only when all of a key's rows are this
+        # vault. Scoped by `with_tenant` via `api_keys`' own policy.
+        sole_vault_keys =
+          from(akv in "api_key_vaults",
+            group_by: akv.api_key_id,
+            having: fragment("bool_and(? = ?)", akv.vault_id, type(^vault_id, Ecto.UUID)),
+            select: akv.api_key_id
           )
-        ) || 0
 
-      Chunk
-      |> where(vault_id: ^vault_id)
-      |> Repo.delete_all()
+        {revoked, _} =
+          from(k in ApiKey, where: k.id in subquery(sole_vault_keys)) |> Repo.delete_all()
 
-      Note
-      |> where(vault_id: ^vault_id)
-      |> Repo.delete_all()
+        # `api_key_vaults` carries no RLS policy, so the guard never fires for it
+        # and the option here is inert either way. Left as-is to keep this diff
+        # to the queries that were actually broken.
+        from(akv in "api_key_vaults", where: akv.vault_id == type(^vault_id, Ecto.UUID))
+        |> Repo.delete_all(skip_tenant_check: true)
 
-      :ok = UsageMeters.dec_notes_count(vault.user_id, live_notes)
+        Repo.delete!(vault)
+        revoked
+      end)
 
-      Attachment
-      |> where(vault_id: ^vault_id)
-      |> Repo.delete_all()
-
-      # `api_key_vaults` carries no RLS policy, so the guard never fires for it
-      # and the option here is inert either way. Left as-is to keep this diff
-      # to the queries that were actually broken.
-      from(akv in "api_key_vaults", where: akv.vault_id == type(^vault_id, Ecto.UUID))
-      |> Repo.delete_all(skip_tenant_check: true)
-
-      Repo.delete!(vault)
-    end)
+    # Same as `Accounts.revoke_api_key/2`: an open socket authenticated with a
+    # revoked key must not outlive it.
+    if revoked_keys > 0, do: SessionInvalidator.disconnect_user(vault.user_id)
 
     # Post-commit: delete storage blobs (best-effort)
     # If this fails, we have orphan blobs but no ghost rows — safe to retry
@@ -238,7 +263,11 @@ defmodule Engram.Workers.CleanupVault do
     # Actual user-facing lifecycle event: the vault and all its data are gone.
     Logger.info(
       "CleanupVault: vault permanently deleted",
-      Metadata.with_category(:info, :lifecycle, vault_id: vault.id, user_id: vault.user_id)
+      Metadata.with_category(:info, :lifecycle,
+        vault_id: vault.id,
+        user_id: vault.user_id,
+        revoked_api_keys: revoked_keys
+      )
     )
 
     :ok
