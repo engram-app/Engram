@@ -35,8 +35,33 @@ const KEY = "engram:pending-oauth";
 const ABSOLUTE_URI = /^[a-z][a-z0-9+.-]*:/iu;
 const SCRIPT_SCHEME = /^(?:javascript|data|vbscript|blob|file):/iu;
 
-function isConsentPath(path: string): boolean {
-	return path === ROUTES.OAUTH_CONSENT || path.startsWith(`${ROUTES.OAUTH_CONSENT}?`);
+// The two screens that can be interrupted by the wizard: OAuth consent, and
+// /link for a plugin-first signup. Both sit outside OnboardingGate.
+function isResumablePath(path: string): boolean {
+	return [ROUTES.OAUTH_CONSENT, ROUTES.DEVICE_LINK].some(
+		(route) => path === route || path.startsWith(`${route}?`),
+	);
+}
+
+function stash(pending: PendingAuthorization): boolean {
+	if (typeof window === "undefined") {
+		return false;
+	}
+	try {
+		window.sessionStorage.setItem(KEY, JSON.stringify(pending));
+		return true;
+	} catch {
+		// Storage disabled or full (Safari private mode, quota). Landing home
+		// after onboarding is degraded but survivable; it is what happened
+		// before any of this existed.
+		//
+		// What is NOT survivable is claiming otherwise. The consent page
+		// renders "You'll come straight back here to finish connecting X",
+		// and a silently dropped stash turns that sentence into a lie that
+		// ends on the dashboard with the waiting client never mentioned
+		// again. Hence a return value rather than a swallow.
+		return false;
+	}
 }
 
 export interface PendingAuthorization {
@@ -60,27 +85,16 @@ export function stashPendingAuthorization(
 	toolSlug: string | null,
 	clientName: string | null,
 ): boolean {
-	if (typeof window === "undefined") {
-		return false;
-	}
-	try {
-		window.sessionStorage.setItem(
-			KEY,
-			JSON.stringify({ returnTo: `${ROUTES.OAUTH_CONSENT}${search}`, toolSlug, clientName }),
-		);
-		return true;
-	} catch {
-		// Storage disabled or full (Safari private mode, quota). Landing home
-		// after onboarding is degraded but survivable; it is what happened
-		// before any of this existed.
-		//
-		// What is NOT survivable is claiming otherwise. The consent page
-		// renders "You'll come straight back here to finish connecting X",
-		// and a silently dropped stash turns that sentence into a lie that
-		// ends on the dashboard with the waiting client never mentioned
-		// again. Hence a return value rather than a swallow.
-		return false;
-	}
+	return stash({ returnTo: `${ROUTES.OAUTH_CONSENT}${search}`, toolSlug, clientName });
+}
+
+/** Parks a device-link code (possibly empty) so the wizard returns to /link
+ *  with it. There is no OAuth client behind it, so no cancel URL either. */
+export function stashPendingDeviceLink(code: string): boolean {
+	const returnTo = code
+		? `${ROUTES.DEVICE_LINK}?${new URLSearchParams({ code }).toString()}`
+		: ROUTES.DEVICE_LINK;
+	return stash({ returnTo, toolSlug: null, clientName: "Obsidian" });
 }
 
 export function peekPendingAuthorization(): PendingAuthorization | null {
@@ -105,7 +119,7 @@ export function peekPendingAuthorization(): PendingAuthorization | null {
 		// consent path also rejects `//evil.com/...` and absolute URLs, which is
 		// the open-redirect `safe-return-to.ts` exists to prevent — here the
 		// allowed target is a single known route, so the check is stricter.
-		if (!isConsentPath(parsed.returnTo)) {
+		if (!isResumablePath(parsed.returnTo)) {
 			return null;
 		}
 

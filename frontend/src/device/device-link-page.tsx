@@ -8,13 +8,20 @@ import { cn } from "@/lib/utils";
 import { track } from "../analytics/track";
 import { setActiveVaultId } from "../api/active-vault";
 import { api } from "../api/client";
-import { type Connection, useBillingStatus, useConnections, useMe } from "../api/queries";
+import {
+	type Connection,
+	useBillingStatus,
+	useConnections,
+	useMe,
+	useOnboardingStatus,
+} from "../api/queries";
 import { takeCredential } from "../auth/credential-handoff";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
 import { connectionId as obsidianConnectionId } from "../billing/existing-connections-panel";
 import { useConnectionCap } from "../billing/use-connection-cap";
 import AuthPanel from "../layout/auth-panel";
 import AuthShell from "../layout/auth-shell";
+import { clearPendingAuthorization, stashPendingDeviceLink } from "../oauth/pending-authorization";
 import { SyncStatusPill } from "../onboarding/sync-status-pill";
 import { useVaultReadyEvents } from "../onboarding/use-vault-ready-events";
 import { ROUTES } from "../routes";
@@ -203,6 +210,30 @@ function DeviceLinkPage() {
 	//
 	// Scrubs the code out of the address bar too: it's a single-use credential
 	// and shouldn't sit in history or survive a copy-pasted URL.
+	// A plugin-first signup lands here straight out of Clerk, with no terms, plan
+	// or profile. This page sits outside OnboardingGate (router.tsx), so without
+	// this the vault picker renders and every Sync 403s `onboarding_required`.
+	// Same detour as /oauth/consent: park the code, run the wizard, come back.
+	// `gate_ok`, not `next_step`, for the reason given in oauth-authorize-page.
+	const onboardingQuery = useOnboardingStatus({ enabled: isSignedIn });
+	const gateOk = onboardingQuery.data?.gate_ok;
+	const bounced = useRef(false);
+	useEffect(() => {
+		if (gateOk !== false || bounced.current) {
+			return;
+		}
+		bounced.current = true;
+		stashPendingDeviceLink(urlCode);
+		navigate("/onboard", { replace: true });
+	}, [gateOk, urlCode, navigate]);
+
+	// Back from the wizard: the parked trip is spent.
+	useEffect(() => {
+		if (gateOk) {
+			clearPendingAuthorization();
+		}
+	}, [gateOk]);
+
 	const autoVerified = useRef(false);
 	useEffect(() => {
 		// Wait for billing: `handleVerifyCode` picks the default selection using
@@ -212,7 +243,14 @@ function DeviceLinkPage() {
 		// create-new row that is then rendered disabled, leaving Sync armed for
 		// a guaranteed 402. `isPending` and not `data === undefined` so a FAILED
 		// billing fetch still lets the link through.
-		if (autoVerified.current || !isSignedIn || urlCode.length !== 9 || billingPending) {
+		if (
+			autoVerified.current ||
+			!isSignedIn ||
+			urlCode.length !== 9 ||
+			billingPending ||
+			onboardingQuery.isPending ||
+			gateOk === false
+		) {
 			return;
 		}
 		autoVerified.current = true;
@@ -230,7 +268,16 @@ function DeviceLinkPage() {
 			{ replace: true },
 		);
 		handleVerifyCode();
-	}, [isSignedIn, urlCode, handleVerifyCode, billingPending, location, navigate]);
+	}, [
+		isSignedIn,
+		urlCode,
+		handleVerifyCode,
+		billingPending,
+		onboardingQuery.isPending,
+		gateOk,
+		location,
+		navigate,
+	]);
 
 	if (!isSignedIn) {
 		return (
