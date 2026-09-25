@@ -227,7 +227,9 @@ def _read_if_settled(full: Path, encoding: str | None):
     try:
         if full.stat().st_size == 0:
             return None
-        return full.read_bytes() if encoding is None else full.read_text(encoding=encoding)
+        return (
+            full.read_bytes() if encoding is None else full.read_text(encoding=encoding)
+        )
     except FileNotFoundError:
         return None
 
