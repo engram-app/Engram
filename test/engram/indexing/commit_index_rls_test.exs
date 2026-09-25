@@ -85,7 +85,6 @@ defmodule Engram.Indexing.CommitIndexRlsTest do
     on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
 
     user = insert(:user)
-    :ok = Engram.Fixtures.grant_semantic!(user)
     vault = insert(:vault, user: user)
 
     {:ok, note} =

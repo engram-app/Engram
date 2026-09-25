@@ -83,6 +83,56 @@ defmodule Engram.UsageMeters do
   def add_embed_tokens(user_id, 0) when is_binary(user_id), do: lifetime_embed_tokens(user_id)
 
   @doc """
+  Atomically charges `count` tokens only if the total stays within `cap`.
+  Returns `true` when charged, `false` when it would overshoot.
+
+  One statement, so concurrent embeds cannot all pass on the same reading of
+  the meter: whichever commits first takes the headroom, the rest see it
+  spent. Callers reserve BEFORE calling the embedder and
+  `release_embed_tokens/2` on failure.
+  """
+  @spec reserve_embed_tokens(Ecto.UUID.t(), pos_integer(), non_neg_integer()) :: boolean()
+  def reserve_embed_tokens(user_id, count, cap)
+      when is_binary(user_id) and is_integer(count) and count > 0 and is_integer(cap) do
+    if count > cap do
+      false
+    else
+      now = DateTime.utc_now()
+
+      {n, _} =
+        Repo.insert_all(
+          Meter,
+          [%{user_id: user_id, lifetime_embed_tokens: count, updated_at: now}],
+          on_conflict:
+            from(m in Meter,
+              where: m.lifetime_embed_tokens + ^count <= ^cap,
+              update: [inc: [lifetime_embed_tokens: ^count], set: [updated_at: ^now]]
+            ),
+          conflict_target: :user_id,
+          skip_tenant_check: true
+        )
+
+      n == 1
+    end
+  end
+
+  @doc "Gives back a reservation whose embed call failed."
+  @spec release_embed_tokens(Ecto.UUID.t(), non_neg_integer()) :: :ok
+  def release_embed_tokens(_user_id, 0), do: :ok
+
+  def release_embed_tokens(user_id, count)
+      when is_binary(user_id) and is_integer(count) and count > 0 do
+    {_, _} =
+      Repo.update_all(
+        from(m in Meter, where: m.user_id == ^user_id),
+        [inc: [lifetime_embed_tokens: -count]],
+        skip_tenant_check: true
+      )
+
+    :ok
+  end
+
+  @doc """
   Estimates Voyage token count from raw byte size. English averages ~4 bytes
   per token; we round up so the cap is conservative (we never undercount
   against the user). Real `usage.total_tokens` from the Voyage response is a

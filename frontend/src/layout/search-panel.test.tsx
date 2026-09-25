@@ -627,7 +627,7 @@ describe("SearchPanel", () => {
 	describe("indexed-note cap hint", () => {
 		afterEach(() => indexStatusMock.mockReturnValue(undefined));
 
-		it("tells the user how many notes are searchable when they are capped", async () => {
+		it("tells the user how many of their newest notes are not searchable", async () => {
 			indexStatusMock.mockReturnValue({ indexed: 2000, total: 4312 });
 			useSearchSpy.mockReturnValue({ data: [], isLoading: false, error: null });
 			renderPanel();
@@ -637,8 +637,13 @@ describe("SearchPanel", () => {
 			});
 
 			// Without this the only signal is an empty result list, which reads as
-			// "search is broken" rather than "this note is not indexed".
-			expect(await screen.findByText(/Searching 2,000 of 4,312 notes/u)).toBeInTheDocument();
+			// "search is broken" rather than "this note is not indexed". IndexCap
+			// keeps the OLDEST notes, so the copy must name the newest as missing.
+			expect(
+				await screen.findByText(
+					/2,312 of your notes aren't searchable\. Only your oldest 2,000 are indexed, so your newest notes won't show up in search\./u,
+				),
+			).toBeInTheDocument();
 			expect(
 				screen.getByRole("link", { name: /upgrade to search everything/iu }),
 			).toBeInTheDocument();
@@ -654,7 +659,7 @@ describe("SearchPanel", () => {
 			});
 
 			expect(await screen.findByText(/No results for/u)).toBeInTheDocument();
-			expect(screen.queryByText(/of 812 notes/u)).not.toBeInTheDocument();
+			expect(screen.queryByText(/aren't searchable/u)).not.toBeInTheDocument();
 		});
 	});
 });

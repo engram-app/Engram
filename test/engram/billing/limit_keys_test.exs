@@ -4,9 +4,9 @@ defmodule Engram.Billing.LimitKeysTest do
   alias Engram.Billing.LimitKeys
 
   describe "all/0" do
-    test "returns the 27 catalog keys" do
+    test "returns the 26 catalog keys" do
       keys = LimitKeys.all()
-      assert length(keys) == 27
+      assert length(keys) == 26
       assert :notes_cap in keys
       assert :vaults_cap in keys
       assert :reranker_enabled in keys
@@ -61,7 +61,8 @@ defmodule Engram.Billing.LimitKeysTest do
       assert LimitKeys.default_for(:ai_searches_per_day, :starter) == nil
       assert LimitKeys.default_for(:ai_searches_per_day, :pro) == nil
       assert LimitKeys.default_for(:reranker_enabled, :free) == false
-      assert LimitKeys.default_for(:search_semantic_enabled, :free) == false
+      # Semantic search is every tier's; the key was removed, not flipped.
+      refute :search_semantic_enabled in LimitKeys.all()
       assert LimitKeys.default_for(:indexed_notes_cap, :free) == 2_000
       assert LimitKeys.default_for(:api_write_enabled, :free) == false
       assert LimitKeys.default_for(:api_rps_cap, :free) == 0
@@ -76,7 +77,6 @@ defmodule Engram.Billing.LimitKeysTest do
       assert LimitKeys.default_for(:attachment_bytes_cap, :starter) == 10_737_418_240
       assert LimitKeys.default_for(:max_file_bytes, :starter) == 209_715_200
       assert LimitKeys.default_for(:lifetime_embed_token_cap, :starter) == nil
-      assert LimitKeys.default_for(:search_semantic_enabled, :starter) == true
       assert LimitKeys.default_for(:indexed_notes_cap, :starter) == nil
       # API keys are Pro-only. Starter keeps MCP + vault sync + web app,
       # which authenticate without an API key and so bypass both gates.
@@ -94,7 +94,6 @@ defmodule Engram.Billing.LimitKeysTest do
       assert LimitKeys.default_for(:attachment_bytes_cap, :pro) == 53_687_091_200
       assert LimitKeys.default_for(:max_file_bytes, :pro) == 524_288_000
       assert LimitKeys.default_for(:reranker_enabled, :pro) == true
-      assert LimitKeys.default_for(:search_semantic_enabled, :pro) == true
       assert LimitKeys.default_for(:indexed_notes_cap, :pro) == nil
       assert LimitKeys.default_for(:api_write_enabled, :pro) == true
       assert LimitKeys.default_for(:api_rps_cap, :pro) == 30

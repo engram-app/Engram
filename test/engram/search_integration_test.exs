@@ -11,6 +11,20 @@ defmodule Engram.SearchIntegrationTest do
     # localhost:6333 default once any of them has run.
     Engram.ServiceConfig.put_override(:qdrant_url, qdrant_url())
 
+    # Every tier embeds now, so indexing and the query both reach the
+    # embedder. One fixed vector for both: this test is about the encryption
+    # round-trip, not ranking, and identical vectors guarantee a match.
+    dims = Application.get_env(:engram, :embed_dims, 1024)
+    vector = List.duplicate(0.1, dims)
+
+    Mox.stub(Engram.MockEmbedder, :embed_texts, fn texts ->
+      {:ok, Enum.map(texts, fn _ -> vector end)}
+    end)
+
+    Mox.stub(Engram.MockEmbedder, :embed_texts, fn texts, _opts ->
+      {:ok, Enum.map(texts, fn _ -> vector end)}
+    end)
+
     Engram.Crypto.DekCache.invalidate_all()
     user = insert(:user)
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)

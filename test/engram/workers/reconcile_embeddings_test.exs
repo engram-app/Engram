@@ -83,12 +83,86 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       end
     end
 
+    test "backfills dense vectors for a Free user's sparse-only note inside the cap" do
+      # Free was keyword-only until semantic search shipped for every tier, so
+      # existing Free notes are indexed (chunks + embed_hash) with no dense leg.
+      # Having chunk rows is what marks a note as inside the indexed-notes cap.
+      user = insert(:user)
+      note = note_for(user, content_hash: "abc123", embed_hash: "abc123", dense_indexed_hash: nil)
+      insert_chunk!(note)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+    end
+
+    test "does not select a Free user's note outside the cap (no chunk rows)" do
+      # An over-cap note is stamped with embed_hash and no chunks. Selecting it
+      # would re-run EmbedNote on it every tick forever, since the cap makes
+      # every pass end with no dense vectors.
+      user = insert(:user)
+
+      _note =
+        note_for(user, content_hash: "abc123", embed_hash: "abc123", dense_indexed_hash: nil)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      refute_enqueued(worker: EmbedNote)
+    end
+
+    test "does not select a Free note parked for an exhausted embed budget" do
+      # EmbedNote parks an over-budget note with a future embed_retry_after.
+      user = insert(:user)
+
+      note =
+        note_for(user,
+          content_hash: "abc123",
+          embed_hash: "abc123",
+          dense_indexed_hash: nil,
+          embed_retry_after: DateTime.add(DateTime.utc_now(), 3600, :second)
+        )
+
+      insert_chunk!(note)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      refute_enqueued(worker: EmbedNote)
+    end
+
+    test "a paying user's POISON cooldown still holds (only a budget park is skipped)" do
+      user = insert(:user)
+      insert(:subscription, user: user, tier: "pro", status: "active")
+      later = DateTime.add(DateTime.utc_now(), 3600, :second)
+
+      poisoned =
+        note_for(user,
+          content_hash: "abc123",
+          embed_hash: "abc123",
+          dense_indexed_hash: nil,
+          embed_retry_after: later
+        )
+
+      parked =
+        note_for(user,
+          content_hash: "def456",
+          embed_hash: "def456",
+          dense_indexed_hash: nil,
+          embed_retry_after: later,
+          embed_budget_parked: true
+        )
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      refute_enqueued(worker: EmbedNote, args: %{"note_id" => poisoned.id})
+      assert_enqueued(worker: EmbedNote, args: %{"note_id" => parked.id})
+
+      # The reconcile backoff replaces the park, so a crash mid-embed cannot
+      # re-select it every tick.
+      assert %Note{embed_budget_parked: nil} =
+               Engram.Repo.get!(Note, parked.id, skip_tenant_check: true)
+    end
+
     test "does not backfill for a tier:free row, whose status defaults to entitled" do
       # `subscriptions.tier` accepts "free" and `status` DEFAULTS to
       # "trialing", so a status-only join selects a user that `tier/1` resolves
-      # to :free. EmbedNote's keyword-only skip then returns :ok without
-      # clearing the embed_retry_after this worker stamps, and the note comes
-      # back every 30 minutes forever.
+      # to :free. This note has no chunk rows (outside the cap), so selecting
+      # it would re-run EmbedNote on it every tick forever.
       user = insert(:user)
       insert(:subscription, user: user, tier: "free", status: "trialing")
 
@@ -314,6 +388,25 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
   # So always give the note a vault owned by the same user.
   defp note_for(user, attrs) do
     insert(:note, Keyword.merge([user: user, vault: insert(:vault, user: user)], attrs))
+  end
+
+  defp insert_chunk!(note) do
+    {:ok, _} =
+      Engram.Repo.with_tenant(note.user_id, fn ->
+        %Engram.Notes.Chunk{}
+        |> Engram.Notes.Chunk.changeset(%{
+          note_id: note.id,
+          user_id: note.user_id,
+          vault_id: note.vault_id,
+          position: 0,
+          char_start: 0,
+          char_end: 10,
+          qdrant_point_id: Ecto.UUID.generate()
+        })
+        |> Engram.Repo.insert!()
+      end)
+
+    :ok
   end
 
   defp collect_queries(acc \\ []) do

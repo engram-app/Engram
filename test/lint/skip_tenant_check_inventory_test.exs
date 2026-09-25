@@ -99,7 +99,7 @@ defmodule Engram.SkipTenantCheckInventoryTest do
     # Generated: one clause per entry in `Repo.tenant_tables/0`, but the
     # keyword appears once in source, which is what this lint counts.
     "engram/repo/tenancy_guard.ex" => 1,
-    "engram/usage_meters.ex" => 9,
+    "engram/usage_meters.ex" => 11,
     "engram/vaults.ex" => 1,
     "engram/workers/cimd_refresh.ex" => 1,
     "engram/workers/cleanup_vault.ex" => 1,

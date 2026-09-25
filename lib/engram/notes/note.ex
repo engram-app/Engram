@@ -51,6 +51,7 @@ defmodule Engram.Notes.Note do
     # on the next successful embed. Only gates the cron — direct user-action
     # enqueues (upsert/rename) always run.
     field :embed_retry_after, :utc_datetime_usec
+    field :embed_budget_parked, :boolean
     field :mtime, :float
     field :deleted_at, :utc_datetime_usec
     field :content_ciphertext, :binary
