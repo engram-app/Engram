@@ -420,11 +420,13 @@ defmodule Engram.Billing do
   # a DB round-trip.
   def get_subscription(%{id: nil}), do: nil
 
+  # Scoped to the user's own tenant (#1758): under an enforced `subscriptions`
+  # policy an unscoped read returns nil, and `tier/1` would quietly answer
+  # `:free` for a paying user.
   def get_subscription(user) do
-    Repo.one(
-      from(s in Subscription, where: s.user_id == ^user.id),
-      skip_tenant_check: true
-    )
+    Repo.with_tenant!(user.id, fn ->
+      Repo.one(from(s in Subscription, where: s.user_id == ^user.id))
+    end)
   end
 
   @doc "Returns remaining trial days from the Paddle subscription, or 0."
@@ -649,23 +651,31 @@ defmodule Engram.Billing do
         # Omit :custom_data from the replace list. Paddle delivers at-least-once,
         # so a retried subscription.created must NOT clobber the affiliate /
         # utm attribution captured on first delivery.
+        #
+        # Scoped to the user the checkout named, so the insert passes the
+        # tenant policy's WITH CHECK (#1758). `mode: :savepoint` because a
+        # paddle_subscription_id already held by another row trips a unique
+        # index: without it that error aborts the tenant transaction and the
+        # role reset dies with 25P02 instead of returning the changeset error.
         result =
-          %Subscription{}
-          |> Subscription.changeset(attrs)
-          |> Repo.insert(
-            on_conflict:
-              {:replace,
-               [
-                 :paddle_customer_id,
-                 :paddle_subscription_id,
-                 :tier,
-                 :status,
-                 :current_period_end,
-                 :updated_at
-               ]},
-            conflict_target: :user_id,
-            skip_tenant_check: true
-          )
+          Repo.with_tenant!(user_id, fn ->
+            %Subscription{}
+            |> Subscription.changeset(attrs)
+            |> Repo.insert(
+              on_conflict:
+                {:replace,
+                 [
+                   :paddle_customer_id,
+                   :paddle_subscription_id,
+                   :tier,
+                   :status,
+                   :current_period_end,
+                   :updated_at
+                 ]},
+              conflict_target: :user_id,
+              mode: :savepoint
+            )
+          end)
 
         case result do
           {:ok, sub} ->
@@ -686,7 +696,9 @@ defmodule Engram.Billing do
       %Subscription{} = sub ->
         sub_with_user = Repo.preload(sub, :user, skip_tenant_check: true)
         user = sub_with_user.user
-        prev_tier = if user, do: tier(user), else: :free
+        # `sub` IS the user's subscription row (user_id is unique), so resolve
+        # the tier from it rather than re-reading it through `get_subscription/1`.
+        prev_tier = if user, do: tier(%{user | subscription: sub}), else: :free
 
         base_attrs = %{
           status: data["status"],
@@ -699,13 +711,14 @@ defmodule Engram.Billing do
         # `free_tier_accepted_at` is stamped only when nil so a user who had
         # originally accepted Free, upgraded, then canceled keeps the original
         # acceptance timestamp. Wrap both writes in a transaction so a partial
-        # failure rolls back together.
+        # failure rolls back together; it is the owner's tenant transaction,
+        # so the subscription write passes the tenant policy (#1758).
         result =
-          Repo.transaction(fn ->
+          Repo.with_tenant(sub.user_id, fn ->
             updated_sub =
               sub
               |> Subscription.changeset(update_attrs)
-              |> Repo.update!(skip_tenant_check: true)
+              |> Repo.update!()
 
             if user && is_nil(user.free_tier_accepted_at) do
               user
@@ -775,10 +788,13 @@ defmodule Engram.Billing do
 
         update_attrs = attrs_with_tier(base_attrs, data, sub.user_id)
 
+        # Written under the owner's tenant, discovered from the row (#1758).
         result =
-          sub
-          |> Subscription.changeset(update_attrs)
-          |> Repo.update(skip_tenant_check: true)
+          Repo.with_tenant!(sub.user_id, fn ->
+            sub
+            |> Subscription.changeset(update_attrs)
+            |> Repo.update()
+          end)
 
         case result do
           {:ok, updated} ->
@@ -975,13 +991,23 @@ defmodule Engram.Billing do
     end
   end
 
-  # Webhook-side lookup: Paddle's subscription id is the only key we have at
-  # this point (no user in scope yet), hence skip_tenant_check.
+  # Webhook-side DISCOVERY: Paddle's subscription id is the only key we have
+  # here, and the owner is what the read finds, so there is no tenant to scope
+  # by. It therefore runs on the maintenance pool, which RLS does not filter;
+  # the caller then writes under `with_tenant(sub.user_id)` (#1758).
+  #
+  # `cross_tenant/1` only silences the app-level tripwire for the fallback
+  # case where `maintenance()` is `Repo` (self-host, and prod until its
+  # maintenance pool is provisioned). It is NOT a scope: with the
+  # `subscriptions` policy enforced and no maintenance pool, this read returns
+  # nil and every renewal/cancellation reports `:subscription_not_found`. So
+  # the policy migration must not ship before prod has `MAINTENANCE_DATABASE_URL`.
   defp get_subscription_by_paddle_id(subscription_id) do
-    Repo.one(
-      from(s in Subscription, where: s.paddle_subscription_id == ^subscription_id),
-      skip_tenant_check: true
-    )
+    Repo.cross_tenant(fn ->
+      Repo.maintenance().one(
+        from(s in Subscription, where: s.paddle_subscription_id == ^subscription_id)
+      )
+    end)
   end
 
   # Notify the user's open browser tabs that their subscription state

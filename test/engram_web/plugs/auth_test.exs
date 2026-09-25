@@ -39,6 +39,32 @@ defmodule EngramWeb.Plugs.AuthTest do
     assert sub.tier == "pro"
   end
 
+  # #1758 raised the #1211 round-trip budgets in SyncControllerTest and
+  # VaultTreeControllerTest by exactly one, for this plug's scoped subscription
+  # preload. Pinning it at ONE block keeps a second block from quietly eating
+  # that headroom.
+  test "the subscription preload opens exactly one with_tenant block", %{
+    user: user,
+    raw_key: raw_key
+  } do
+    prev_enabled = Application.get_env(:engram, :billing_enabled)
+    Application.put_env(:engram, :billing_enabled, true)
+    on_exit(fn -> Application.put_env(:engram, :billing_enabled, prev_enabled) end)
+
+    insert(:subscription, user: user, tier: "pro", status: "active")
+
+    enters =
+      Engram.TenantQueryCounter.count_tenant_enters(fn ->
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{raw_key}")
+        |> Auth.call([])
+      end)
+
+    assert length(enters) == 1,
+           "expected the auth plug to open exactly 1 with_tenant block, got " <>
+             "#{length(enters)}: #{inspect(enters)}"
+  end
+
   test "does not preload the subscription in self-host mode (billing disabled)", %{
     user: user,
     raw_key: raw_key

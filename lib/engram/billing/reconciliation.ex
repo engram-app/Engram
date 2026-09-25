@@ -175,9 +175,17 @@ defmodule Engram.Billing.Reconciliation do
   # per_page`) and safe to send IN-list.
   defp local_subscriptions_for([]), do: []
 
+  # Spans every tenant, so it reads through the maintenance pool: on the app
+  # pool an enforced `subscriptions` policy would hide every row and each
+  # paying user would page as `:missing_local` (#1758). `cross_tenant/1` only
+  # silences the app tripwire when `maintenance()` falls back to `Repo`; it
+  # scopes nothing, which is why that policy waits on prod's maintenance pool.
   defp local_subscriptions_for(paddle_ids) do
-    from(s in Subscription, where: s.paddle_subscription_id in ^paddle_ids)
-    |> Repo.all(skip_tenant_check: true)
+    Repo.cross_tenant(fn ->
+      Repo.maintenance().all(
+        from(s in Subscription, where: s.paddle_subscription_id in ^paddle_ids)
+      )
+    end)
   end
 
   defp classify(paddle_sub, local_by_id) do

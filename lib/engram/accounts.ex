@@ -36,7 +36,7 @@ defmodule Engram.Accounts do
   """
   @spec get_user_with_subscription(Ecto.UUID.t()) :: User.t() | nil
   def get_user_with_subscription(id) do
-    Repo.one(with_subscription_query(id), skip_tenant_check: true)
+    Repo.with_tenant!(id, fn -> Repo.one(with_subscription_query(id)) end)
   end
 
   @doc """
@@ -46,9 +46,13 @@ defmodule Engram.Accounts do
   """
   @spec get_user_with_subscription!(Ecto.UUID.t()) :: User.t()
   def get_user_with_subscription!(id) do
-    Repo.one!(with_subscription_query(id), skip_tenant_check: true)
+    Repo.with_tenant!(id, fn -> Repo.one!(with_subscription_query(id)) end)
   end
 
+  # `users` has no RLS, but the joined `subscriptions` row is the user's own
+  # tenant data (#1758): unscoped, the join comes back nil under an enforced
+  # policy and a paying user silently resolves to `:free`. Callers therefore
+  # run it inside `with_tenant/2` for the user being loaded.
   defp with_subscription_query(id) do
     from(u in User,
       where: u.id == ^id,

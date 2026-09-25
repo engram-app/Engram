@@ -61,14 +61,13 @@ defmodule Engram.SkipTenantCheckInventoryTest do
   # the one use that defeats the point.
   @inventory %{
     "engram/abuse/origin_stats.ex" => 4,
-    "engram/accounts.ex" => 35,
-    "engram/accounts/lifecycle.ex" => 4,
+    "engram/accounts.ex" => 33,
+    "engram/accounts/lifecycle.ex" => 3,
     "engram/accounts/password_reset.ex" => 5,
     "engram/auth/clerk/webhook.ex" => 2,
     "engram/auth/device_flow.ex" => 14,
-    "engram/billing.ex" => 7,
+    "engram/billing.ex" => 2,
     "engram/billing/plan_cache.ex" => 1,
-    "engram/billing/reconciliation.ex" => 1,
     "engram/billing/workers/override_expiry_sweep.ex" => 1,
     "engram/connections.ex" => 3,
     "engram/crypto.ex" => 1,
