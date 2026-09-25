@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.34.0](https://github.com/engram-app/Engram/compare/0.33.0...0.34.0) (2026-09-25)
+
+
+### Features
+
+* **mcp:** describe Engram as AI memory in the registry listing ([#1757](https://github.com/engram-app/Engram/issues/1757)) ([699ce4c](https://github.com/engram-app/Engram/commit/699ce4c4bb25103edf2498d96a359909135e37f8))
+
 ## [0.33.0](https://github.com/engram-app/Engram/compare/0.32.0...0.33.0) (2026-09-25)
 
 
