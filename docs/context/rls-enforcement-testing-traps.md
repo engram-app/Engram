@@ -1,6 +1,6 @@
-# Context Doc: Testing RLS enforcement (seven traps)
+# Context Doc: Testing RLS enforcement (nine traps)
 
-_Last verified: 2026-09-17_
+_Last verified: 2026-09-25_
 
 ## Status
 
@@ -15,7 +15,7 @@ Every trap below produced a false green for real while these files were written.
 ## What This Is
 
 How to write a test that actually proves Postgres Row Level Security is
-enforced on a query — and the seven ways such a test passes while proving
+enforced on a query — and the nine ways such a test passes while proving
 nothing. `docs/context/database-schema-rls.md` covers the policies and the
 `Repo.with_tenant/2` model; this doc is only about testing them.
 
@@ -436,6 +436,52 @@ RLS filters that delete to zero rows, the `users` delete that follows has no
 route to succeed: it hits `notes_user_id_fkey` and raises. That raise is the
 production symptom the green test was hiding.
 
+## Trap 8: a unique-constraint write inside `with_tenant/2` needs `mode: :savepoint`
+
+Not a test trap strictly, but it surfaces while writing these tests. Any
+`Repo.insert`/`Repo.update` that can hit a unique constraint **inside**
+`Repo.with_tenant/2` must pass `mode: :savepoint`. Without it the constraint
+error aborts the transaction, and `with_tenant/2`'s trailing role-reset query
+then dies with SQLSTATE **25P02** `in_failed_sql_transaction`. The caller gets
+a crash instead of `{:error, changeset}`, so `unique_constraint/3` on the
+changeset never gets a chance to turn it into a validation error.
+
+```elixir
+    Repo.with_tenant!(user.id, fn -> Repo.insert(changeset, mode: :savepoint) end)
+```
+
+Sites: `lib/engram/accounts/export.ex` `insert_pending/1` (a concurrent request
+trips the partial unique index), and `lib/engram/workers/account_export.ex`
+`save/1` (an Oban retry of a `:failed` export, after the user has requested a
+new one, trips `account_exports_one_active_per_user` on the flip to
+`:running`). Precedent: `Vaults.create_vault` (`lib/engram/vaults.ex`).
+
+## Trap 9: proving a cross-tenant sweep runs on `Engram.Repo.Maintenance`
+
+A sweep that must see every tenant's rows only works on the maintenance pool.
+Run on `Repo` it is filtered to zero rows (trap 1) and reports success. The
+test has to make those two outcomes distinguishable.
+`test/engram/workers/export_expiry_sweep_maintenance_test.exs` is the worked
+example:
+
+1. Start a real maintenance pool:
+   `start_supervised!({Engram.Repo.Maintenance, Keyword.merge(Repo.config(), pool: DBConnection.ConnectionPool, pool_size: 1)})`.
+2. Set `:maintenance_repo_enabled` (and `on_exit` delete it).
+3. Insert fixtures **committed**, via `Ecto.Adapters.SQL.Sandbox.unboxed_run/2`.
+   The maintenance pool is a second connection and cannot see sandbox rows.
+   Delete them in `on_exit`, since no rollback will.
+4. Run the job under `as_prod_role_committing/1`, so the app pool is filtered
+   to zero. Only a sweep on the maintenance pool can then change the row.
+
+Mutation-checked: moving the sweep back onto `Repo` fails the test.
+
+**Related: a "must not touch another tenant's row" worker test is vacuous under
+`as_prod_role`.** The dropped role filters an unscoped read too, so the test
+passes whether or not the worker scopes by owner. Run it as the superuser
+instead; `with_tenant/2` drops to `engram_app` by itself, so the scoping under
+test is still exercised. See "a job naming the wrong owner touches nothing" in
+`test/engram/accounts/export_rls_test.exs`.
+
 ---
 
 ## The scoping pattern for fixing call sites
@@ -602,5 +648,10 @@ whole thing.
   point is Step 4
 - `lib/engram/indexing.ex` — `forget_chunk_reuse_for_user/1`, the Step 2 tenant
   leak source
+- `test/engram/workers/export_expiry_sweep_maintenance_test.exs`: trap 9, the
+  maintenance-pool sweep test
+- `test/engram/accounts/export_rls_test.exs`: the superuser-run wrong-owner test
+- `lib/engram/accounts/export.ex`, `lib/engram/workers/account_export.ex`,
+  `lib/engram/vaults.ex`: trap 8 `mode: :savepoint` sites
 - `docs/context/database-schema-rls.md` — policies, roles, enforcement layers
 - `docs/context/with-tenant-return-wrapping.md` — funs must return bare values
