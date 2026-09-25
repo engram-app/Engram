@@ -33,12 +33,25 @@ defmodule Engram.Search.FreeSemanticTest do
     end)
   end
 
-  test "a Free user's search embeds the query and runs the dense leg",
+  test "a Free user's default search embeds the query and runs dense AND keyword legs",
        %{bypass: bypass, user: user, vault: vault} do
     assert Billing.tier(user) == :free
-    expect_dense_search(bypass)
 
-    # No `:mode` — the default, and what two MCP call sites send.
+    Engram.MockEmbedder
+    |> expect(:embed_texts, fn ["iron panel"], _opts -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      legs = Enum.map(Jason.decode!(body)["prefetch"], & &1["using"])
+      assert Enum.sort(legs) == ["dense", "keyword"]
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, ~s({"result": []}))
+    end)
+
+    # No `:mode` — the default, and what two MCP call sites send. Hybrid, so
+    # a note indexed sparse-only is still reachable.
     assert {:ok, []} = Search.search(user, vault, "iron panel", diversity: 0.0)
   end
 
