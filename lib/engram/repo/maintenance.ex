@@ -27,6 +27,21 @@ defmodule Engram.Repo.Maintenance do
       enforcing it yet, and this docstring previously claimed one existed,
       which is worse than claiming nothing.
 
+  ## Which credential
+
+  `engram_maintenance`, created by `Engram.Release.prepare_database/0`. It has
+  no bypass attributes at all (no SUPERUSER, BYPASSRLS, CREATEROLE or
+  CREATEDB, no role memberships) and DML-only grants. Its cross-tenant reach
+  is one permissive `maintenance_all` policy per tenant table, scoped
+  `TO engram_maintenance` — not BYPASSRLS, because RDS cannot grant that to a
+  custom role (the master is CREATEROLE, not superuser). A new tenant table
+  must add its own `maintenance_all`; `Engram.Repo.MaintenanceRoleTest` fails
+  until it does, and until then this pool reads zero rows from that table.
+
+  SaaS prod pointed this pool at the RDS master (`engram_admin`) from
+  engram-infra#1243 until the dedicated role shipped. That worked, but it also
+  handed every sweep CREATEROLE and DDL on the schema.
+
   ## Unconfigured is a supported state
 
   When `MAINTENANCE_DATABASE_URL` is unset this repo is never started and

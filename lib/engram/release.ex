@@ -96,6 +96,52 @@ defmodule Engram.Release do
     GRANT SELECT, USAGE ON SEQUENCES TO engram_app;
   """
 
+  # The credential behind MAINTENANCE_DATABASE_URL on SaaS: the pool for work
+  # that legitimately spans tenants (see `Engram.Repo.Maintenance`).
+  #
+  # Deliberately NO BYPASSRLS. RDS cannot grant it: the master is CREATEROLE,
+  # not superuser, and PG16+ only lets a CREATEROLE role hand out an attribute
+  # it holds itself. Cross-tenant reach comes instead from one permissive
+  # `maintenance_all` policy per tenant table, scoped `TO engram_maintenance`
+  # (migration 20260925140000). That also keeps the reach visible in the schema
+  # and limited to the tables that carry the policy.
+  #
+  # Same shape as engram_app otherwise: NOINHERIT LOGIN, no memberships, no
+  # CREATEROLE/CREATEDB, DML only. No PASSWORD at creation for the same
+  # rotation reason; `set_engram_maintenance_password/1` applies it per boot.
+  #
+  # It must exist BEFORE `migrate/0`: `CREATE POLICY ... TO engram_maintenance`
+  # fails on an unknown role. Every path that migrates (entrypoint.sh, the
+  # `ecto.setup` and `test` aliases, CI) runs this first, as for engram_app.
+  @create_engram_maintenance_role_sql """
+  DO $$
+  BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'engram_maintenance') THEN
+      CREATE ROLE engram_maintenance NOINHERIT LOGIN;
+    END IF;
+  END
+  $$;
+  """
+
+  # Unlike engram_app, existing tables are granted HERE rather than by the
+  # baseline dump: this role postdates the baseline, and on an established
+  # database (prod, staging) no migration will recreate those tables. On a
+  # fresh database this matches nothing and the DEFAULT PRIVILEGES below cover
+  # every table the migrator then creates. Both are idempotent.
+  @engram_maintenance_grants_sql [
+    "GRANT USAGE ON SCHEMA public TO engram_maintenance;",
+    "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO engram_maintenance;",
+    "GRANT SELECT, USAGE ON ALL SEQUENCES IN SCHEMA public TO engram_maintenance;",
+    """
+    ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER IN SCHEMA public
+      GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO engram_maintenance;
+    """,
+    """
+    ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER IN SCHEMA public
+      GRANT SELECT, USAGE ON SEQUENCES TO engram_maintenance;
+    """
+  ]
+
   @doc """
   Idempotent cluster bootstrap. Run BEFORE `migrate/0`.
 
@@ -103,6 +149,10 @@ defmodule Engram.Release do
   the connecting role's future objects auto-grant CRUD on tables +
   SELECT/USAGE on sequences to `engram_app`. Existing objects are
   granted explicitly by the baseline migration's structure.sql dump.
+
+  Does the same for `engram_maintenance`, the cross-tenant maintenance
+  credential, and additionally grants it on existing objects (it
+  postdates the baseline).
 
   Requires the connecting role to have CREATEROLE + GRANT privileges.
   On AWS RDS this means the master user (`engram_admin`); locally /
@@ -278,6 +328,10 @@ defmodule Engram.Release do
     repo.query!(@grant_schema_usage_sql, [])
     repo.query!(@default_priv_tables_sql, [])
     repo.query!(@default_priv_sequences_sql, [])
+
+    repo.query!(@create_engram_maintenance_role_sql, [])
+    set_engram_maintenance_password(repo)
+    Enum.each(@engram_maintenance_grants_sql, &repo.query!(&1, []))
     :ok
   end
 
@@ -331,8 +385,20 @@ defmodule Engram.Release do
   # each boot makes the verifier differ every time, which is harmless — the
   # password it encodes is what has to stay stable.
   @doc false
-  def set_engram_app_password(repo) do
-    case System.get_env("ENGRAM_APP_DB_PASSWORD") do
+  def set_engram_app_password(repo),
+    do: set_role_password(repo, "engram_app", "ENGRAM_APP_DB_PASSWORD")
+
+  # `ALTER ROLE engram_maintenance PASSWORD`, from ENGRAM_MAINTENANCE_DB_PASSWORD.
+  # Everything above applies unchanged; only the role and the variable differ.
+  # Unset everywhere except a SaaS deployment that sets MAINTENANCE_DATABASE_URL.
+  @doc false
+  def set_engram_maintenance_password(repo),
+    do: set_role_password(repo, "engram_maintenance", "ENGRAM_MAINTENANCE_DB_PASSWORD")
+
+  # `role` and `env_var` are compile-time literals from the two wrappers above,
+  # never input; the password itself only ever reaches Postgres as a verifier.
+  defp set_role_password(repo, role, env_var) do
+    case System.get_env(env_var) do
       nil ->
         :ok
 
@@ -343,10 +409,10 @@ defmodule Engram.Release do
         :ok
 
       password ->
-        repo.query!("ALTER ROLE engram_app PASSWORD '#{scram_verifier(password)}'", [])
+        repo.query!("ALTER ROLE #{role} PASSWORD '#{scram_verifier(password)}'", [])
 
         Logger.info(
-          "engram_app password applied from ENGRAM_APP_DB_PASSWORD",
+          "#{role} password applied from #{env_var}",
           Metadata.with_category(:info, :boot, [])
         )
 
