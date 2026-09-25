@@ -712,18 +712,38 @@ defmodule Engram.Indexing do
     end
   end
 
-  # A failed embed gives its reservation back. A failure AFTER the embed (the
-  # Qdrant commit) keeps the charge: Voyage billed those tokens either way.
-  defp embed_or_release(dense?, texts, opts) do
-    case maybe_embed(dense?, texts) do
-      {:error, _} = err when dense? ->
-        release = Keyword.get(opts, :release_tokens, fn _tokens -> :ok end)
-        _ = release.(texts |> text_bytes() |> UsageMeters.estimate_tokens())
-        err
+  # Anything but a successful embed gives its reservation back, exactly once:
+  # an `{:error, _}`, a raise, a throw or an exit. The `catch` re-raises with
+  # the original stacktrace, so callers see the same failure. A failure AFTER
+  # the embed (the Qdrant commit) keeps the charge: Voyage billed those tokens.
+  #
+  # Not covered: a hard node kill (or a brutal kill of the job process, e.g. an
+  # Oban timeout) between the reservation and the embed returning — no code
+  # runs, so that pass's tokens stay charged. Accepted: rare, and bounded to one
+  # note's worth of tokens per kill.
+  defp embed_or_release(false, texts, _opts), do: maybe_embed(false, texts)
 
-      other ->
-        other
+  defp embed_or_release(true, texts, opts) do
+    release = fn ->
+      _ =
+        Keyword.get(opts, :release_tokens, fn _tokens -> :ok end).(
+          texts
+          |> text_bytes()
+          |> UsageMeters.estimate_tokens()
+        )
     end
+
+    result =
+      try do
+        maybe_embed(true, texts)
+      catch
+        kind, reason ->
+          release.()
+          :erlang.raise(kind, reason, __STACKTRACE__)
+      end
+
+    with {:error, _} <- result, do: release.()
+    result
   end
 
   defp text_bytes(texts), do: texts |> Enum.map(&byte_size/1) |> Enum.sum()

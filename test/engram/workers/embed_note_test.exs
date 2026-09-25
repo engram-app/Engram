@@ -985,6 +985,28 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert Engram.UsageMeters.lifetime_embed_tokens(user.id) == 0
     end
 
+    # A crash between reserving and the embed returning must give the
+    # reservation back too, or every retry of a crashing job eats more of a
+    # Free user's lifetime budget.
+    test "an embedder that raises gives its reservation back",
+         %{bypass: bypass, user: user, note: note} do
+      stub_qdrant_optional(bypass)
+      Engram.MockEmbedder |> expect(:embed_texts, fn _texts -> raise "boom" end)
+
+      assert_raise RuntimeError, fn -> perform_job(EmbedNote, %{note_id: note.id}) end
+      assert Engram.UsageMeters.lifetime_embed_tokens(user.id) == 0
+    end
+
+    test "an embedder that exits gives its reservation back",
+         %{bypass: bypass, user: user, note: note} do
+      stub_qdrant_optional(bypass)
+      Engram.MockEmbedder |> expect(:embed_texts, fn _texts -> exit(:timeout) end)
+
+      # Oban.Testing surfaces an exit from the job as Oban.CrashError.
+      assert_raise Oban.CrashError, fn -> perform_job(EmbedNote, %{note_id: note.id}) end
+      assert Engram.UsageMeters.lifetime_embed_tokens(user.id) == 0
+    end
+
     test "user override raises the cap above the default",
          %{bypass: bypass, user: user, note: note} do
       Engram.UsageMeters.add_embed_tokens(user.id, 20_000_000)
