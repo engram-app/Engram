@@ -9,10 +9,13 @@ defmodule Engram.Repo.Migrations.EnableAccountExportsRlsExpand do
   # an app-side `user_id` filter alone.
   #
   # The code that ships with this migration names the tenant on every access
-  # (`with_tenant/2`, or `Repo.maintenance()` for the expiry sweep), so it is
-  # correct with or without the policy. Prod held 0 rows when this landed, so
-  # the rolling-deploy window, where old nodes still run unscoped queries, has
-  # nothing to filter.
+  # (`with_tenant/2`, or `Repo.maintenance()` for the expiry sweep). One
+  # consequence is deliberate: where RLS is enforced and no maintenance pool is
+  # configured (SaaS prod at the time of writing), `ExportExpirySweep` refuses
+  # with `:tenancy_unsafe` rather than expire nothing, and `mint_download_url/2`
+  # enforces `expires_at` itself so the download window holds meanwhile. Prod
+  # held 0 rows when this landed, so the rolling-deploy window, where old nodes
+  # still run unscoped queries, has nothing to filter.
   #
   # Policy form matches every other tenant table; `Engram.RlsPolicyFormTest`
   # pins the `(SELECT current_setting(...))` wrapper.

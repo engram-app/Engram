@@ -262,6 +262,18 @@ defmodule Engram.Accounts.ExportTest do
       end
     end
 
+    # The expiry sweep flips :ready → :expired, but it can be down (it refuses
+    # when RLS is enforced with no maintenance pool). The window has to hold
+    # without it.
+    test ":ready past expires_at → {:error, :not_ready}" do
+      user = insert(:user)
+      export = insert_export!(user, :ready, s3_keys: [s3_key_entry(1, 1)])
+      export = %{export | expires_at: DateTime.add(DateTime.utc_now(), -1, :second)}
+
+      # No Storage expectations — the expiry guard fires before any adapter call.
+      assert {:error, :not_ready} = Export.mint_download_url(export, 1)
+    end
+
     test "multi-part export: returns URL only for requested part" do
       user = insert(:user) |> as_pro()
 

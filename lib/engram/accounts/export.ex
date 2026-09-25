@@ -67,7 +67,17 @@ defmodule Engram.Accounts.Export do
   def mint_download_url(%Schema{status: status}, _part) when status != :ready,
     do: {:error, :not_ready}
 
-  def mint_download_url(%Schema{s3_keys: keys}, part) when is_integer(part) and part > 0 do
+  # The download window must not depend on `ExportExpirySweep` having run: it
+  # refuses to where RLS is enforced and no maintenance pool is configured.
+  def mint_download_url(%Schema{expires_at: %DateTime{} = expires_at} = export, part) do
+    if DateTime.before?(expires_at, DateTime.utc_now()),
+      do: {:error, :not_ready},
+      else: mint_ready_url(export, part)
+  end
+
+  def mint_download_url(%Schema{} = export, part), do: mint_ready_url(export, part)
+
+  defp mint_ready_url(%Schema{s3_keys: keys}, part) when is_integer(part) and part > 0 do
     adapter = Storage.adapter()
 
     cond do

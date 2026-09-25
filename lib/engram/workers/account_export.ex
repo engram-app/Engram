@@ -48,6 +48,7 @@ defmodule Engram.Workers.AccountExport do
     case owner(args) do
       # Row gone (user hard-deleted mid-export). Nothing to do.
       nil -> :ok
+      {:error, _} = error -> error
       user_id -> run(id, user_id)
     end
   end
@@ -75,10 +76,18 @@ defmodule Engram.Workers.AccountExport do
   # Jobs enqueued before `user_id` joined the args (#1758). The owner is what
   # this read discovers, so no tenant can scope it; hence the maintenance pool.
   # ponytail: legacy bridge, delete once no pre-#1758 export job can be in flight.
+  #
+  # Refuses where RLS is enforced and no maintenance pool exists: there the read
+  # returns nil, which is indistinguishable from "row gone", and the export
+  # would sit :pending forever behind `account_exports_one_active_per_user`.
   defp owner(%{"export_id" => id}) do
-    Repo.cross_tenant(fn ->
-      Repo.maintenance().one(from(e in Schema, where: e.id == ^id, select: e.user_id))
-    end)
+    if Repo.maintenance() == Repo and Engram.Repo.TenancyGuard.enforced?() do
+      {:error, :tenancy_unsafe}
+    else
+      Repo.cross_tenant(fn ->
+        Repo.maintenance().one(from(e in Schema, where: e.id == ^id, select: e.user_id))
+      end)
+    end
   end
 
   defp fetch_for_worker(id, user_id) do

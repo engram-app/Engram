@@ -183,6 +183,16 @@ defmodule Engram.Accounts.ExportRlsTest do
       assert is_binary(id)
     end
 
+    # A pre-#1758 job has no `user_id`. Its owner lookup hidden by RLS returns
+    # nil, which reads exactly like "row gone": the job succeeds, the row stays
+    # :pending, and the unique index then answers :already_running forever.
+    test "a legacy job refuses loudly instead of stranding the export", %{user: user} do
+      export = insert_export!(user, :pending)
+
+      assert {:returned, {:error, :tenancy_unsafe}} =
+               as_prod_role(fn -> perform_job(AccountExport, %{"export_id" => export.id}) end)
+    end
+
     test "the expiry sweep refuses loudly instead of expiring nothing", %{user: user} do
       insert_export!(user, :ready, %{expires_at: DateTime.add(DateTime.utc_now(), -1, :hour)})
 
