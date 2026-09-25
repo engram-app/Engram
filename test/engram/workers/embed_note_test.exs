@@ -6,6 +6,7 @@ defmodule Engram.Workers.EmbedNoteTest do
   import Mox
 
   alias Engram.Accounts.User
+  alias Engram.Billing.OverrideCache
   alias Engram.Crypto
   alias Engram.Crypto.DekCache
   alias Engram.Notes
@@ -794,6 +795,67 @@ defmodule Engram.Workers.EmbedNoteTest do
       stub_qdrant(bypass)
 
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+    end
+  end
+
+  describe "perform/1 — embed budget runs out after a dense index" do
+    test "a sparse-only re-index clears dense_indexed_hash, so a raised budget can backfill it",
+         %{bypass: bypass, user: user, note: note} do
+      # Index once WITH dense vectors.
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts -> {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)} end)
+
+      stub_qdrant(bypass)
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+      assert %Note{dense_indexed_hash: dense} = Repo.get!(Note, note.id, skip_tenant_check: true)
+      refute is_nil(dense)
+
+      # Exhaust the budget, then edit. The re-index rebuilds the note's points
+      # sparse-only, so the dense vectors this column names no longer exist.
+      Engram.UsageMeters.add_embed_tokens(user.id, 20_000_000)
+
+      {:ok, note} =
+        Notes.upsert_note(
+          user,
+          Repo.get!(Engram.Vaults.Vault, note.vault_id, skip_tenant_check: true),
+          %{
+            "path" => note.path,
+            "content" => "# Hello\n\nDifferent words entirely.",
+            "mtime" => 2_000.0
+          }
+        )
+
+      # No second MockEmbedder expectation: the edit must not reach Voyage.
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      # Leaving the old hash would make ReconcileEmbeddings' dense backfill
+      # (which selects on `is_nil(dense_indexed_hash)`) skip this note forever.
+      assert %Note{dense_indexed_hash: nil} = Repo.get!(Note, note.id, skip_tenant_check: true)
+    end
+  end
+
+  describe "perform/1 — entitled but over the index cap" do
+    test "an over-cap note is not stamped as dense-indexed, so raising the cap re-opens it",
+         %{user: user, note: note} do
+      # Any user can be over an indexed_notes_cap — Free by default, anyone
+      # else via a per-user override. A dense pass alone must not stamp the
+      # dense hash: nothing was written, and ReconcileEmbeddings' backfill selects on
+      # `is_nil(dense_indexed_hash)`, so a stamp locks the note out forever.
+      Repo.insert!(%Engram.Billing.UserLimitOverride{
+        user_id: user.id,
+        key: "indexed_notes_cap",
+        value: %{"v" => 0},
+        reason: "test",
+        set_by: "test"
+      })
+
+      OverrideCache.evict(user.id)
+
+      # No MockEmbedder expectation and no Qdrant stub: an over-cap note must
+      # reach neither.
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      assert %Note{dense_indexed_hash: nil} = Repo.get!(Note, note.id, skip_tenant_check: true)
     end
   end
 
