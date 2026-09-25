@@ -1,8 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.engram-app/engram",
-  "title": "Engram",
-  "description": "Search and edit your own Obsidian notes vault. No extraction step: the memory is the note you wrote.",
+  "title": "Engram: AI memory you can edit in Obsidian",
+  "description": "Shared memory for Claude, ChatGPT and any MCP client. Read and edit it in Obsidian or the web app.",
   "websiteUrl": "https://engram.page",
   "repository": {
     "url": "https://github.com/engram-app/engram",
