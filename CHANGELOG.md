@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.31.0](https://github.com/engram-app/Engram/compare/0.30.0...0.31.0) (2026-09-25)
+
+
+### Features
+
+* **deploy:** set the engram_app password from the boot DDL path ([#1744](https://github.com/engram-app/Engram/issues/1744)) ([67e688e](https://github.com/engram-app/Engram/commit/67e688e966bd35f4ff5d3b8a6578e9b8f20497bf)), closes [#1649](https://github.com/engram-app/Engram/issues/1649) [#1726](https://github.com/engram-app/Engram/issues/1726)
+
+
+### Bug Fixes
+
+* **lint:** close two holes that let a tenant-table query through ([#1741](https://github.com/engram-app/Engram/issues/1741)) ([d9308f3](https://github.com/engram-app/Engram/commit/d9308f303beba0f069e24b48e6def9638eafc13f))
+* **rls:** the tenancy probe never ran in production ([#1745](https://github.com/engram-app/Engram/issues/1745)) ([2b37223](https://github.com/engram-app/Engram/commit/2b372233fa0c51ccb183bd7d78106525a8677596)), closes [#1726](https://github.com/engram-app/Engram/issues/1726)
+
 ## [0.30.0](https://github.com/engram-app/Engram/compare/0.29.0...0.30.0) (2026-09-24)
 
 
