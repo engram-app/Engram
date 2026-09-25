@@ -443,11 +443,28 @@ defmodule Engram.Indexing do
   backwards: `cross_tenant/1` bypasses the guard, not the policy.
 
   Returns the number of `notes` rows updated.
-  """
-  @spec flag_notes_for_rebuild([Ecto.UUID.t()]) :: non_neg_integer()
-  def flag_notes_for_rebuild([]), do: 0
 
-  def flag_notes_for_rebuild(note_ids) do
+  The `repo` argument exists because the two callers need opposite pools, and
+  getting it wrong is silent in the dangerous direction.
+
+    * `ReindexKeyword` calls this INSIDE `Repo.with_tenant!/2`, so it must stay
+      on `Engram.Repo` — the tenant scope is the point there.
+    * `OrphanSweep` calls it with note_ids spanning every tenant by
+      construction, so no `with_tenant` is possible. It must pass
+      `Repo.maintenance()`.
+
+  Both writes below are `update_all` against tables carrying FORCE ROW LEVEL
+  SECURITY. An `update_all` the policy filters does not raise: it reports
+  `{0, nil}` and the caller logs success having changed nothing. `cross_tenant/1`
+  does NOT prevent that — it only suppresses the app-level `prepare_query/3`
+  tripwire and sets no Postgres session state. See engram-app/Engram#1746.
+  """
+  @spec flag_notes_for_rebuild([Ecto.UUID.t()], module()) :: non_neg_integer()
+  def flag_notes_for_rebuild(note_ids, repo \\ Repo)
+
+  def flag_notes_for_rebuild([], _repo), do: 0
+
+  def flag_notes_for_rebuild(note_ids, repo) do
     note_ids
     |> Enum.uniq()
     |> Enum.chunk_every(@id_query_batch)
@@ -455,18 +472,22 @@ defmodule Engram.Indexing do
       # One block over both writes, rather than the option on each: they are a
       # single ordered unit (markers before hashes, per the moduledoc above),
       # and the ordering only means anything if both run under the same intent.
+      #
+      # The wrapper stays on `Engram.Repo` whichever pool `repo` is: the flag is
+      # process-local and `Engram.Repo.Maintenance` has no `prepare_query/3` to
+      # suppress, so it is a no-op there and load-bearing here.
       Repo.cross_tenant(fn ->
         # `not is_nil` keeps a re-run from rewriting rows that are already NULL
         # — dead tuples and WAL for no change.
         _ =
           Chunk
           |> where([c], c.note_id in ^batch and not is_nil(c.context_hmac))
-          |> Repo.update_all(set: [context_hmac: nil])
+          |> repo.update_all(set: [context_hmac: nil])
 
         {n, _} =
           Note
           |> where([n], n.id in ^batch)
-          |> Repo.update_all(set: [embed_hash: nil, dense_indexed_hash: nil])
+          |> repo.update_all(set: [embed_hash: nil, dense_indexed_hash: nil])
 
         acc + n
       end)

@@ -87,9 +87,10 @@ defmodule Engram.Workers.CleanupVault do
       # Defense in depth, and the reason the scoped load did not simply delete
       # this branch. Never hard-delete another tenant's vault.
       #
-      # Honest limitation: the probe below is itself subject to the policy, so
-      # where RLS IS enforced and no maintenance pool exists, a forged job is
-      # indistinguishable from a deleted vault and falls through to the `:ok`
+      # Honest limitation, now narrowed: the probe runs on `Repo.maintenance()`,
+      # so it answers correctly wherever a maintenance pool is configured. Only
+      # with RLS enforced AND no maintenance pool is a forged job
+      # indistinguishable from a deleted vault, falling through to the `:ok`
       # branch. It refuses to delete either way — it just cannot say why.
       not is_nil(foreign_owner_id) ->
         Logger.error(
@@ -149,12 +150,23 @@ defmodule Engram.Workers.CleanupVault do
   #
   # `cross_tenant/1` and not `with_tenant/2`: the whole question is about a row
   # outside the caller's tenant, so there is no tenant that could scope it.
-  # It suppresses only the application guard, so this answers correctly where
-  # the connecting role is exempt from the policy and returns nil where it is
-  # not — see the caller's note on that limitation.
+  #
+  # On `Repo.maintenance()` because `cross_tenant/1` suppresses only the
+  # application guard and sets no Postgres session state. On the app pool once
+  # RLS actually applies, this returns nil unconditionally and the caller's
+  # `owner_mismatch` branch becomes UNREACHABLE — a forged job targeting another
+  # tenant's vault would be indistinguishable from a routine already-deleted
+  # one and log at :debug. No data-loss risk either way (the delete at the
+  # bottom of this module is properly tenant-scoped), but losing the security
+  # signal silently is the whole failure mode of engram-app/Engram#1746.
+  #
+  # Falls back to `Repo` when no maintenance pool is configured, which is the
+  # pre-cutover state the caller's limitation note describes.
   defp foreign_owner(vault_id, user_id) do
+    repo = Repo.maintenance()
+
     Repo.cross_tenant(fn ->
-      case Repo.get(Vault, vault_id) do
+      case repo.get(Vault, vault_id) do
         nil -> nil
         %Vault{user_id: owner} -> if to_string(owner) == to_string(user_id), do: nil, else: owner
       end

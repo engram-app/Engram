@@ -200,6 +200,11 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
   # expire — the lying oracle the guard exists to prevent, reached through the
   # documented entry point. Both routes must refuse identically.
   test "measure_and_emit/0 carries the same refusal as perform/1" do
+    # `ensure_loaded?` first: `function_exported?/3` answers false for a module
+    # that simply has not been loaded yet, so without this the assertion passes
+    # or fails on test ORDER rather than on the property. It went red only when
+    # this file ran alongside test/engram/repo/, which is how it surfaced.
+    assert Code.ensure_loaded?(CrdtBloatSweep)
     assert function_exported?(CrdtBloatSweep, :measure_and_emit, 0)
 
     # Both call sites must read the guard, not just the Oban one. Asserting on
