@@ -213,8 +213,8 @@ defmodule Engram.Notes.CrdtRoomIdleExitTest do
   # feature's inertness on exactly that, and nothing asserted it: a mutation
   # enrolling every note room passed the whole suite. The consequence is not
   # subtle — the LRU bypasses `idle?/2` on purpose, so once a node holds more
-  # rooms than the cap its sweep starts drain-broadcasting at rooms users are
-  # actively typing in.
+  # rooms than the cap its sweep drain-broadcasts at rooms users are actively
+  # typing in (the vault holding the most rooms first, since #1412).
   describe "LRU enrolment" do
     setup do
       CrdtRoomLru.reset()

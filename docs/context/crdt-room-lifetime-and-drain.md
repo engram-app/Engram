@@ -220,12 +220,16 @@ carries no `b64` at all and hardcodes `check_rate(socket, :handshake)`, while `c
 which does carry state — goes through `state_frame_class/1`, the size gate `crdt_create`'s genesis
 seed introduced (small rides `:handshake`, oversized pays `:edit`). Only the latter two share it.
 
-**What this does NOT do:** it does not make `@max_evictions_per_sweep` right. That cap is still a
-fixed batch with no feedback term, deliberately, because each eviction costs the owning channel a
-serial ~1s probe. Its comment scopes the trade to "stops mattering once a bulk upload no longer
-creates a room per note (#1409)" — a precondition that was assumed met from 2026-08-26 and was
-still false in the field on 2026-08-28. Re-read it only once #1493's two PRs are **in a release**,
-not when they merge.
+**LRU pacing is conditional since #1412.** The old flat `@max_evictions_per_sweep 16` was a fixed
+batch with no feedback, justified by "stops mattering once a bulk upload no longer creates a room
+per note (#1409)". That precondition was still false on 2026-09-14, when one import held 1,175 rooms
+against a cap of 64 for ten minutes. A sweep now evicts the WHOLE excess, and falls back to 16 only
+when a room it asked earlier is still resident `drain_grace_ms` (5s) later — the one signal that
+drains are not landing and each one is costing its channel a ~1s probe. A new room past the cap
+also schedules a sweep within `over_cap_sweep_ms` (1s) instead of waiting out the 30s interval.
+
+Eviction order is per-vault fair: the deepest rooms of the vault holding the most rooms go first
+(`select_evictions/3`), so one user's bulk sync sheds its own rooms before anyone else's.
 
 ## Observability
 
