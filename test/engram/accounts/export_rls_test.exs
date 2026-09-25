@@ -183,6 +183,39 @@ defmodule Engram.Accounts.ExportRlsTest do
       assert is_binary(id)
     end
 
+    test "the paid 24h quota still trips instead of failing open", %{user: user} do
+      insert(:subscription, user: user, tier: "pro", status: "active")
+      insert_export!(user, :ready)
+
+      assert {:returned, {:error, :rate_exceeded}} = as_prod_role(fn -> Export.request(user) end)
+    end
+
+    # WITH CHECK, not just USING: a write naming another tenant is rejected
+    # outright rather than landing a row its own tenant cannot see.
+    test "the policy rejects an export written for another tenant", %{user: user} do
+      other = insert(:user)
+
+      cs =
+        Schema.changeset(%Schema{}, %{user_id: other.id, status: :pending, reason: :user_request})
+
+      assert {:raised, %Postgrex.Error{postgres: %{code: :insufficient_privilege}}} =
+               as_prod_role(fn -> Repo.with_tenant!(user.id, fn -> Repo.insert!(cs) end) end)
+    end
+
+    # Run as the SUPERUSER on purpose: `with_tenant/2` drops to `engram_app`
+    # itself, so only a worker that ignores its `user_id` and reads unscoped
+    # finds the row. Under `as_prod_role` that bug would be filtered too, and
+    # this test would pass against it.
+    test "a job naming the wrong owner touches nothing", %{user: user} do
+      export = insert_export!(user, :pending)
+      other = insert(:user)
+
+      assert :ok =
+               perform_job(AccountExport, %{"export_id" => export.id, "user_id" => other.id})
+
+      assert Repo.reload!(export, skip_tenant_check: true).status == :pending
+    end
+
     # A pre-#1758 job has no `user_id`. Its owner lookup hidden by RLS returns
     # nil, which reads exactly like "row gone": the job succeeds, the row stays
     # :pending, and the unique index then answers :already_running forever.

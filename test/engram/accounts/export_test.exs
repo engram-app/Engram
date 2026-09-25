@@ -274,6 +274,17 @@ defmodule Engram.Accounts.ExportTest do
       assert {:error, :not_ready} = Export.mint_download_url(export, 1)
     end
 
+    test ":ready inside expires_at still mints" do
+      user = insert(:user)
+      export = insert_export!(user, :ready, s3_keys: [s3_key_entry(1, 1)])
+      export = %{export | expires_at: DateTime.add(DateTime.utc_now(), 1, :hour)}
+
+      expect(Engram.MockStorage, :selfhost?, fn -> false end)
+      expect(Engram.MockStorage, :sign_url, fn _key, _opts -> "https://signed.example/x" end)
+
+      assert {:ok, %{1 => "https://signed.example/x"}} = Export.mint_download_url(export, 1)
+    end
+
     test "multi-part export: returns URL only for requested part" do
       user = insert(:user) |> as_pro()
 
