@@ -114,8 +114,9 @@ it. Check one privilege per call.
 Tables that join the tenant set in parallel PRs must also get
 `maintenance_all`. Whichever PR merges second adds it:
 
-- `account_exports`: Engram#1759
-- `subscriptions`: Engram#1771 / #1758
+- `account_exports`: Engram#1759 merged first, so #1774 includes it in its
+  migration (12 tables).
+- `subscriptions`: Engram#1771 / #1758, still open.
 
 The coverage test above fails on that second branch until it does.
 

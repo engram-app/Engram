@@ -46,7 +46,7 @@ IGNORE='^(unused_index)$'
 # evaluation, and its `true` predicate short-circuits the OR. Matched on the
 # role AND the exact two-policy set, so a third permissive policy on any
 # table still fires. See docs/context/maintenance-db-role.md.
-WAIVERS='multiple_permissive_policies.*public\.api_keys|multiple_permissive_policies.*role .?engram_maintenance.? .*\{maintenance_all,tenant_isolation_[a-z_]+\}'
+WAIVERS='multiple_permissive_policies.*public\.api_keys|multiple_permissive_policies.*role [^ ]*engram_maintenance[^ ]* .*\{maintenance_all,tenant_isolation_[a-z_]+\}'
 
 # `|| true`: grep exits 1 when it filters every line, which is a pass, not an
 # error. Without it `set -e` would abort here on a clean schema.

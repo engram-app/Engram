@@ -29,7 +29,7 @@ defmodule Engram.Repo.MaintenanceRoleTest do
 
   @tenant_tables Enum.map(Engram.Repo.tenant_tables(), &Atom.to_string/1)
 
-  # Rows owned by a user who is never set as the tenant. Five of the eleven
+  # Rows owned by a user who is never set as the tenant. Five of the twelve
   # tables have cheap factories; the rest are covered by the count-parity and
   # policy-shape tests below, which do not need rows of their own.
   defp seed_foreign_tenant do

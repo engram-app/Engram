@@ -45,7 +45,8 @@ defmodule Engram.Repo.Migrations.AddMaintenanceAllPoliciesExpand do
   # Per-table this is `CREATE POLICY`, which takes a brief ACCESS EXCLUSIVE
   # lock. Metadata-only, no scan or rewrite.
   @tables ~w(notes chunks attachments api_keys vaults user_agreements onboarding_actions
-             crdt_update_log note_links vault_index_states vault_index_update_log)
+             crdt_update_log note_links vault_index_states vault_index_update_log
+             account_exports)
 
   def up do
     execute """
