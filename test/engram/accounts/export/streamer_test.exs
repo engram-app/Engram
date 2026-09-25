@@ -57,7 +57,7 @@ defmodule Engram.Accounts.Export.StreamerTest do
       {:ok, export} = Export.request(user)
       assert :ok = perform_job(AccountExport, %{"export_id" => export.id})
 
-      reloaded = Repo.reload!(export)
+      reloaded = Repo.reload!(export, skip_tenant_check: true)
       [%{"key" => key}] = reloaded.s3_keys
       {:ok, zip_bytes} = InMemory.get(key)
 
@@ -85,7 +85,7 @@ defmodule Engram.Accounts.Export.StreamerTest do
       {:ok, export} = Export.request(user)
       assert :ok = perform_job(AccountExport, %{"export_id" => export.id})
 
-      reloaded = Repo.reload!(export)
+      reloaded = Repo.reload!(export, skip_tenant_check: true)
       assert reloaded.status == :ready
       assert reloaded.s3_keys == []
       assert reloaded.size_bytes == 0
@@ -98,7 +98,7 @@ defmodule Engram.Accounts.Export.StreamerTest do
       {:ok, export} = Export.request(user)
       assert :ok = perform_job(AccountExport, %{"export_id" => export.id})
 
-      reloaded = Repo.reload!(export)
+      reloaded = Repo.reload!(export, skip_tenant_check: true)
       # selfhost InMemory adapter short-circuits before :no_such_part, so
       # we assert the s3_keys-empty invariant directly here (the actual
       # :no_such_part wiring is covered in export_test.exs against a
@@ -127,7 +127,7 @@ defmodule Engram.Accounts.Export.StreamerTest do
 
       assert :ok = perform_job(AccountExport, %{"export_id" => export.id})
 
-      reloaded = Repo.reload!(export)
+      reloaded = Repo.reload!(export, skip_tenant_check: true)
       assert reloaded.status == :ready
       assert reloaded.s3_keys == []
     end
@@ -155,7 +155,7 @@ defmodule Engram.Accounts.Export.StreamerTest do
       {:ok, export} = Export.request(user)
       assert :ok = perform_job(AccountExport, %{"export_id" => export.id})
 
-      reloaded = Repo.reload!(export)
+      reloaded = Repo.reload!(export, skip_tenant_check: true)
 
       part_numbers = Enum.map(reloaded.s3_keys, & &1["part"])
 
@@ -171,7 +171,7 @@ defmodule Engram.Accounts.Export.StreamerTest do
       _note = insert(:note, user: user, vault: vault)
 
       {:ok, export} = Export.request(user)
-      assert {:ok, parts, total} = Streamer.run(Repo.reload!(export), [])
+      assert {:ok, parts, total} = Streamer.run(Repo.reload!(export, skip_tenant_check: true), [])
 
       assert is_list(parts)
       assert total > 0
@@ -191,7 +191,9 @@ defmodule Engram.Accounts.Export.StreamerTest do
       foreign = insert(:note, user: other, vault: vault)
 
       {:ok, export} = Export.request(user)
-      assert {:ok, [%{"key" => key} | _], _total} = Streamer.run(Repo.reload!(export), [])
+
+      assert {:ok, [%{"key" => key} | _], _total} =
+               Streamer.run(Repo.reload!(export, skip_tenant_check: true), [])
 
       {:ok, zip_bytes} = InMemory.get(key)
       {:ok, entries} = :zip.table(zip_bytes)
