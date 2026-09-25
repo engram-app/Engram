@@ -1,0 +1,103 @@
+name: MCP TDQS score
+
+# Model-graded TDQS score of the committed MCP tool definitions. REPORT-ONLY
+# for the first 5 runs (continue-on-error) while run-to-run variance is
+# measured; then flip to gating per docs/context/mcp-tdqs-baseline.md.
+# ~22 model calls / ~52K tokens per run on Haiku 4.5 (about $0.12) -- one
+# `score` invocation only. `tdqs score` renders exactly one of
+# json/markdown/text per run (it does not score twice for two formats), so
+# this asks for --format json once and renders the step summary from that
+# JSON itself rather than paying for a second model pass.
+on:
+  push:
+    branches: [main, "feat/**", "fix/**", "refactor/**", "docs/**"]
+    paths: ["mcp-tools.json"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mcp-tdqs-score-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  score:
+    runs-on: [self-hosted, linux, x64, isolated]
+    timeout-minutes: 15
+    continue-on-error: true
+    env:
+      # Job-level so step `if:` conditions can see it (a step's own `env:`
+      # isn't visible to its own `if:`). Doubles as the skip switch: the
+      # secret doesn't exist yet, and a human adds it once with
+      # `gh secret set ANTHROPIC_API_KEY -R engram-app/Engram`.
+      TDQS_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - name: Check for ANTHROPIC_API_KEY
+        if: env.TDQS_API_KEY == ''
+        run: echo "::notice::ANTHROPIC_API_KEY not set, skipping score"
+
+      - uses: actions/checkout@v7
+        if: env.TDQS_API_KEY != ''
+
+      - uses: actions/setup-node@v7
+        if: env.TDQS_API_KEY != ''
+        with:
+          node-version: '22'
+
+      - name: Score with TDQS
+        if: env.TDQS_API_KEY != ''
+        env:
+          TDQS_BASE_URL: https://api.anthropic.com/v1/
+          TDQS_MODEL: claude-haiku-4-5-20251001
+          # Anthropic's OpenAI-compatible endpoint requires max_tokens; TDQS
+          # sends none. Merged into every request.
+          TDQS_REQUEST_OVERRIDES: '{"max_tokens":4096}'
+        run: npx -y mcp-tdqs@0.2.0 score --file mcp-tools.json --format json --output tdqs-report.json
+
+      - name: Job summary
+        # always(): still render/upload whatever exists if the score step
+        # above failed partway through. Guarded on the secret too, so a
+        # skipped run doesn't emit a summary or an empty artifact.
+        if: env.TDQS_API_KEY != '' && always()
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+
+          summary_path = os.environ["GITHUB_STEP_SUMMARY"]
+
+          try:
+              with open("tdqs-report.json") as f:
+                  report = json.load(f)
+          except FileNotFoundError:
+              with open(summary_path, "a") as out:
+                  out.write("## MCP TDQS score\n\nScoring failed before a report was written.\n")
+              raise SystemExit(0)
+
+          server = report["server"]
+          s = report["serverScore"]
+          lines = [
+              "## MCP TDQS score",
+              "",
+              f"Model: `{report.get('model')}`  ",
+              f"Server: `{server['name']}` ({server['toolCount']} tools)  ",
+              f"Overall: **{s['overallTier']}** (score {s['overallScore']}, "
+              f"mean {s['meanTdqs']}, min {s['minTdqs']}, "
+              f"{s['scoredToolCount']}/{server['toolCount']} scored)",
+              "",
+              "| Tool | TDQS | Tier |",
+              "|---|---|---|",
+          ]
+          for tool in report["tools"]:
+              lines.append(f"| `{tool['name']}` | {tool['tdqs']} | {tool['tier']} |")
+
+          with open(summary_path, "a") as out:
+              out.write("\n".join(lines) + "\n")
+          PY
+
+      - uses: actions/upload-artifact@v7
+        if: env.TDQS_API_KEY != '' && always()
+        with:
+          name: tdqs-report
+          path: tdqs-report.json
