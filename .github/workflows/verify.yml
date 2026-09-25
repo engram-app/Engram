@@ -2871,13 +2871,22 @@ jobs:
         # mcp-tools.json is the committed tools/list payload TDQS scores
         # (same drift-gate pattern as openapi.json). Regenerate with
         # `mix engram.mcp.tools_json` whenever a tool definition changes.
+        #
+        # Uses RUNNER_TEMP, not /tmp: /tmp is shared by every runner on the
+        # VM, so a parallel lint job on another PR can clobber this file
+        # mid-comparison. (Leave the pre-existing openapi gate's /tmp path
+        # alone — out of scope here.)
         run: |
-          mix engram.mcp.tools_json /tmp/mcp-tools.generated.json
-          python3 - <<'PY'
-          import json, sys
+          mix engram.mcp.tools_json "$RUNNER_TEMP/mcp-tools.generated.json"
+          python3 - <<PY
+          import difflib, json, sys
           committed = json.load(open("mcp-tools.json"))
-          generated = json.load(open("/tmp/mcp-tools.generated.json"))
+          generated = json.load(open("$RUNNER_TEMP/mcp-tools.generated.json"))
           if committed != generated:
+              committed_norm = json.dumps(committed, indent=2, sort_keys=True).splitlines(keepends=True)
+              generated_norm = json.dumps(generated, indent=2, sort_keys=True).splitlines(keepends=True)
+              diff = difflib.unified_diff(committed_norm, generated_norm, "mcp-tools.json", "generated")
+              print("".join(diff))
               print("::error::mcp-tools.json is stale. Run: mix engram.mcp.tools_json")
               sys.exit(1)
           PY
@@ -2893,6 +2902,12 @@ jobs:
         # a missing description, missing annotations, uncovered parameters,
         # or a shadowing name. Scoring with a model is the separate
         # mcp-tdqs-score workflow (report-only).
+        #
+        # npm_config_cache: isolate npx's package cache per runner. The
+        # shared ~/.npm cache on a common HOME risks an ENOTEMPTY race when
+        # two lint jobs extract into it concurrently.
+        env:
+          npm_config_cache: ${{ runner.temp }}/.npm
         run: npx -y mcp-tdqs@0.2.0 lint --file mcp-tools.json --server-name engram --fail-on warning
 
       - name: Sobelow
