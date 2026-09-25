@@ -394,4 +394,59 @@ defmodule EngramWeb.OnboardingControllerTest do
              |> response(401)
     end
   end
+
+  # The wizard's progress is otherwise invisible in prod: success responses are
+  # not request-logged, so a signup refused on /link and then silent could have
+  # finished the wizard or left, and nothing tells the two apart.
+  describe "wizard step logging" do
+    import ExUnit.CaptureLog
+
+    setup do
+      # config/test.exs sets the logger to :warning; these lines are :info.
+      # Safe globally: this module is async: false.
+      previous_level = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: previous_level) end)
+    end
+
+    test "logs terms acceptance", %{conn: conn} do
+      log =
+        capture_log([level: :info], fn ->
+          post(conn, "/api/onboarding/accept-terms", %{
+            "tos_version" => "2026-05-15",
+            "tos_hash" => "canonical",
+            "privacy_version" => "2026-05-15",
+            "privacy_hash" => "p"
+          })
+        end)
+
+      assert log =~ "onboarding step completed: terms"
+    end
+
+    test "logs free-tier acceptance", %{conn: conn} do
+      log =
+        capture_log([level: :info], fn -> post(conn, ~p"/api/onboarding/accept_free_tier") end)
+
+      assert log =~ "onboarding step completed: free_tier"
+    end
+
+    test "logs a profile save with the fields it set", %{conn: conn} do
+      log =
+        capture_log([level: :info], fn ->
+          patch(conn, "/api/onboarding/profile", %{"uses_obsidian" => true})
+        end)
+
+      assert log =~ "onboarding step completed: profile"
+      assert log =~ "uses_obsidian"
+    end
+
+    test "does not log a rejected profile save", %{conn: conn} do
+      log =
+        capture_log([level: :info], fn ->
+          patch(conn, "/api/onboarding/profile", %{"tools" => []})
+        end)
+
+      refute log =~ "onboarding step completed"
+    end
+  end
 end

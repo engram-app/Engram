@@ -2,8 +2,11 @@ defmodule EngramWeb.OnboardingController do
   use EngramWeb, :controller
 
   alias Engram.Legal.VersionCache
+  alias Engram.Logger.Metadata
   alias Engram.Onboarding
   alias EngramWeb.RequestMeta
+
+  require Logger
 
   def status(conn, _params) do
     json(conn, status_payload(conn.assigns.current_user))
@@ -77,6 +80,8 @@ defmodule EngramWeb.OnboardingController do
 
       case Onboarding.accept_terms(conn.assigns.current_user, tv, th, pv, ph, meta) do
         {:ok, agreement} ->
+          log_step(conn.assigns.current_user, "terms")
+
           conn
           |> put_status(:created)
           |> json(%{version: agreement.version, accepted_at: agreement.accepted_at})
@@ -102,6 +107,8 @@ defmodule EngramWeb.OnboardingController do
     user = conn.assigns.current_user
 
     with {:ok, updated} <- Onboarding.accept_free_tier(user) do
+      log_step(user, "free_tier")
+
       payload =
         Onboarding.status(updated)
         |> Map.update!(:next_step, &Atom.to_string/1)
@@ -132,6 +139,7 @@ defmodule EngramWeb.OnboardingController do
     else
       case Onboarding.set_profile(conn.assigns.current_user, attrs) do
         {:ok, user} ->
+          log_step(user, "profile", fields: attrs |> Map.keys() |> Enum.sort() |> Enum.join(","))
           conn |> put_status(:created) |> json(user.onboarding_profile)
 
         {:error, reason}
@@ -145,6 +153,17 @@ defmodule EngramWeb.OnboardingController do
           conn |> put_status(422) |> json(%{error: Atom.to_string(reason)})
       end
     end
+  end
+
+  # Success responses are not request-logged, so without this the wizard is
+  # invisible in prod: a signup refused on /link (`onboarding refused`) that
+  # goes quiet could have finished setup or left. `:lifecycle` info ships to
+  # Loki (`Category.loki_ship?/2`); a paid plan is logged by the Paddle webhook.
+  defp log_step(user, step, extra \\ []) do
+    Logger.info(
+      "onboarding step completed: #{step}",
+      Metadata.with_category(:info, :lifecycle, [step: step, user_id: user.id] ++ extra)
+    )
   end
 
   defp maybe_put_attr(attrs, params, json_key, atom_key) do
