@@ -1118,6 +1118,35 @@ defmodule Engram.BillingTest do
       assert_received {[:engram, :paddle, :checkout, :stalled], _ref, _measure,
                        %{method: "unknown"}}
     end
+
+    # The stalled-3DS alert (engram-infra #1157) fires on an action_required
+    # transaction id that never shows up on a completed line. Without this line
+    # every approved 3DS challenge would look abandoned.
+    test "transaction.completed logs the transaction id for Loki" do
+      event = txn_event("transaction.completed", apple_pay("captured"))
+      # config/test.exs sets the logger to :warning. Safe globally: this module is async: false.
+      previous_level = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: previous_level) end)
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :info], fn ->
+          assert {:ok, :ignored} = Billing.upsert_from_paddle_event(event)
+        end)
+
+      assert log =~ "paddle_transaction_completed"
+      assert log =~ "txn_01m1tbrkx80gx2p3eq024jhd4x"
+      assert log =~ "loki_ship=true"
+      refute_received {[:engram, :paddle, :checkout, :stalled], _, _, _}
+    end
+
+    test "transaction.completed with no data id does not raise" do
+      event = %{"event_type" => "transaction.completed", "data" => %{}}
+
+      ExUnit.CaptureLog.capture_log([level: :info], fn ->
+        assert {:ok, :ignored} = Billing.upsert_from_paddle_event(event)
+      end)
+    end
   end
 
   describe "upsert_from_paddle_event/1 — subscription broadcasts" do
