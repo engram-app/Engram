@@ -997,11 +997,12 @@ defmodule Engram.Billing do
   # the caller then writes under `with_tenant(sub.user_id)` (#1758).
   #
   # `cross_tenant/1` only silences the app-level tripwire for the fallback
-  # case where `maintenance()` is `Repo` (self-host, and prod until its
-  # maintenance pool is provisioned). It is NOT a scope: with the
-  # `subscriptions` policy enforced and no maintenance pool, this read returns
-  # nil and every renewal/cancellation reports `:subscription_not_found`. So
-  # the policy migration must not ship before prod has `MAINTENANCE_DATABASE_URL`.
+  # case where `maintenance()` is `Repo` (self-host). It is NOT a scope: with
+  # the `subscriptions` policy enforced and a maintenance pool that cannot read
+  # across tenants, this read returns nil and every renewal/cancellation
+  # reports `:subscription_not_found`. Prod and staging do configure the pool
+  # (engram-infra#1243, #1248), so the policy migration waits only on
+  # verifying that pool reads `subscriptions` under the policy.
   defp get_subscription_by_paddle_id(subscription_id) do
     Repo.cross_tenant(fn ->
       Repo.maintenance().one(

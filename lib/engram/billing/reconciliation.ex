@@ -179,7 +179,7 @@ defmodule Engram.Billing.Reconciliation do
   # pool an enforced `subscriptions` policy would hide every row and each
   # paying user would page as `:missing_local` (#1758). `cross_tenant/1` only
   # silences the app tripwire when `maintenance()` falls back to `Repo`; it
-  # scopes nothing, which is why that policy waits on prod's maintenance pool.
+  # scopes nothing, which is why the policy waits on verifying that pool.
   defp local_subscriptions_for(paddle_ids) do
     Repo.cross_tenant(fn ->
       Repo.maintenance().all(
