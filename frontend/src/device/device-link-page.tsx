@@ -14,6 +14,7 @@ import {
 	useConnections,
 	useMe,
 	useOnboardingStatus,
+	useSetOnboardingProfile,
 } from "../api/queries";
 import { takeCredential } from "../auth/credential-handoff";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
@@ -217,6 +218,7 @@ function DeviceLinkPage() {
 	// `gate_ok`, not `next_step`, for the reason given in oauth-authorize-page.
 	const onboardingQuery = useOnboardingStatus({ enabled: isSignedIn });
 	const gateOk = onboardingQuery.data?.gate_ok;
+	const setProfile = useSetOnboardingProfile();
 	const bounced = useRef(false);
 	useEffect(() => {
 		if (gateOk !== false || bounced.current) {
@@ -224,8 +226,15 @@ function DeviceLinkPage() {
 		}
 		bounced.current = true;
 		stashPendingDeviceLink(urlCode);
-		navigate("/onboard", { replace: true });
-	}, [gateOk, urlCode, navigate]);
+		// Arriving from the plugin answers the vault step's "do you already use
+		// Obsidian?", so answer it here. Once saved, the vault step sends them
+		// straight back to /link instead of asking. A failed write only means
+		// the question gets asked, so it must never block the handoff.
+		setProfile
+			.mutateAsync({ uses_obsidian: true })
+			.catch((err: unknown) => console.warn("onboarding uses_obsidian pre-answer failed", err))
+			.finally(() => navigate("/onboard", { replace: true }));
+	}, [gateOk, urlCode, navigate, setProfile]);
 
 	// Back from the wizard: the parked trip is spent.
 	useEffect(() => {

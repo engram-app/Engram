@@ -55,6 +55,7 @@ interface FakeBilling {
 }
 const billingPending = vi.hoisted(() => ({ current: false }));
 // Default: onboarded. A plugin-first signup arrives with gate_ok false.
+const setProfile = vi.hoisted(() => vi.fn().mockResolvedValue({}));
 const onboardingState = vi.hoisted(() => ({
 	current: { gate_ok: true } as { gate_ok: boolean } | undefined,
 }));
@@ -75,6 +76,7 @@ vi.mock("../api/queries", async (importOriginal) => {
 		}),
 		useMe: () => ({ data: { id: 1, email: "me@example.com" } }),
 		useOnboardingStatus: () => ({ data: onboardingState.current }),
+		useSetOnboardingProfile: () => ({ mutateAsync: setProfile }),
 		// The cap panel reads this — keep it deterministic across tests so we
 		// don't trigger real network fetches via the partial-mock pass-through.
 		useConnections: () => ({
@@ -139,6 +141,8 @@ afterEach(() => {
 	window.sessionStorage.clear();
 	billingPending.current = false;
 	onboardingState.current = { gate_ok: true };
+	// mutateAsync always returns a promise; a bare reset would return undefined.
+	setProfile.mockReset().mockResolvedValue({});
 	vaultReadyArgs.last = null;
 	window.history.replaceState({}, "", "/link");
 	authState.current = { isSignedIn: true };
@@ -163,6 +167,28 @@ describe("DeviceLinkPage", () => {
 			await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/onboard"));
 			expect(peekPendingAuthorization()?.returnTo).toBe("/link?code=ENGR-7X4K");
 			expect(post).not.toHaveBeenCalled();
+		});
+
+		// Arriving from the plugin IS the answer to "do you already use
+		// Obsidian?" — the wizard must not ask it.
+		it("pre-answers uses_obsidian before handing over to the wizard", async () => {
+			onboardingState.current = { gate_ok: false };
+			setProfile.mockResolvedValue({});
+			renderPage("/link?code=ENGR-7X4K");
+
+			await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/onboard"));
+			expect(setProfile).toHaveBeenCalledWith({ uses_obsidian: true });
+		});
+
+		// The pre-answer is a convenience. Failing it must not strand the user.
+		it("still hands over to the wizard when the pre-answer fails", async () => {
+			onboardingState.current = { gate_ok: false };
+			setProfile.mockRejectedValue(new Error("boom"));
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+			renderPage("/link?code=ENGR-7X4K");
+
+			await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/onboard"));
+			warn.mockRestore();
 		});
 
 		it("parks the code handed over from a sign-in redirect", async () => {

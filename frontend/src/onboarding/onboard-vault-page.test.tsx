@@ -11,11 +11,12 @@ const mockTrack = vi.mocked(track);
 const createVaultMutateAsync = vi.fn().mockResolvedValue({ id: "vault-uuid-1", name: "My Vault" });
 const setProfileMutateAsync = vi.fn().mockResolvedValue({});
 
+const status = vi.hoisted(() => ({
+	current: { next_step: "vault", profile_complete: false, profile: {} } as Record<string, unknown>,
+}));
+
 vi.mock("../api/queries", () => ({
-	useOnboardingStatus: () => ({
-		data: { next_step: "vault", profile_complete: false, profile: {} },
-		isLoading: false,
-	}),
+	useOnboardingStatus: () => ({ data: status.current, isLoading: false }),
 	useMe: () => ({ data: { id: "user-1" } }),
 	useSetOnboardingProfile: () => ({
 		mutateAsync: setProfileMutateAsync,
@@ -79,6 +80,21 @@ describe("OnboardVaultPage: with a device link parked", () => {
 	beforeEach(() => {
 		window.sessionStorage.clear();
 		setProfileMutateAsync.mockClear();
+		status.current = { next_step: "vault", profile_complete: false, profile: {} };
+	});
+
+	// /link pre-answered uses_obsidian, so there is no question left to ask.
+	it("skips the step and returns to /link when Obsidian was pre-answered", () => {
+		stashPendingDeviceLink("ENGR-7X4K");
+		status.current = {
+			next_step: "vault",
+			profile_complete: true,
+			profile: { uses_obsidian: true, tools: ["claude"] },
+		};
+		renderPage();
+
+		expect(screen.getByTestId("location")).toHaveTextContent("/link?code=ENGR-7X4K");
+		expect(screen.queryByText(/i already use obsidian/iu)).not.toBeInTheDocument();
 	});
 
 	it("returns to /link with the code once Obsidian is picked", async () => {
