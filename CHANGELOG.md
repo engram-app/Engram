@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.32.0](https://github.com/engram-app/Engram/compare/0.31.1...0.32.0) (2026-09-25)
+
+
+### Features
+
+* **billing:** log completed Paddle transactions ([#1750](https://github.com/engram-app/Engram/issues/1750)) ([67d1660](https://github.com/engram-app/Engram/commit/67d16600e5202a401b49c5d5797c1d4cf290dacc)), closes [#1737](https://github.com/engram-app/Engram/issues/1737)
+* **mcp:** add tool annotations; create_note no longer overwrites ([#1749](https://github.com/engram-app/Engram/issues/1749)) ([a7f3304](https://github.com/engram-app/Engram/commit/a7f3304f298722ce3f781b15faab38a9b3159cf7))
+
 ## [0.31.1](https://github.com/engram-app/Engram/compare/0.31.0...0.31.1) (2026-09-25)
 
 
