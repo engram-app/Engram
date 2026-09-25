@@ -6,7 +6,6 @@ defmodule Engram.Workers.EmbedNoteTest do
   import Mox
 
   alias Engram.Accounts.User
-  alias Engram.Billing.OverrideCache
   alias Engram.Crypto
   alias Engram.Crypto.DekCache
   alias Engram.Notes
@@ -24,10 +23,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
     user = insert(:user)
     {:ok, user} = Crypto.ensure_user_dek(user)
-    # Factory users resolve to the Free tier, which is keyword-only and never
-    # calls the embedder. Every test in this file exercises the DENSE path, so
-    # the fixture user has to be one that is actually entitled to it.
-    :ok = Engram.Fixtures.grant_semantic!(user)
+    # Factory users resolve to the Free tier, which embeds like every tier.
     vault = insert(:vault, user: user)
 
     # Phase B.3 requires Phase B ciphertext on every note row, so go through
@@ -167,16 +163,17 @@ defmodule Engram.Workers.EmbedNoteTest do
                Markdown.chunker_version()
     end
 
-    test "re-embeds an entitled user's note that has no dense vectors (upgrade backfill)", %{
+    test "backfills dense vectors for a Free note inside the cap", %{
       bypass: bypass,
       note: note
     } do
       import Ecto.Query
 
-      # The shape a note is left in by a keyword-only tier: content IS indexed
-      # (embed_hash stamped, so ReconcileEmbeddings leaves it alone) but it has
-      # no dense vectors. Once the user is entitled, this must re-embed —
-      # otherwise someone pays for semantic search and gets zero vectors.
+      # The shape every Free note was left in while Free was keyword-only:
+      # content IS indexed (embed_hash stamped) but it has no dense vectors.
+      # Semantic search is now every tier's, so this must embed.
+      assert Engram.Billing.tier(Repo.get!(User, note.user_id)) == :free
+
       from(n in Note, where: n.id == ^note.id)
       |> Repo.update_all(
         [set: [embed_hash: note.content_hash, dense_indexed_hash: nil]],
@@ -194,23 +191,20 @@ defmodule Engram.Workers.EmbedNoteTest do
                note.content_hash
     end
 
-    test "does NOT re-embed a keyword-only user's note with no dense vectors", %{note: note} do
+    test "parks an over-budget note with no dense vectors instead of re-indexing it", %{
+      note: note
+    } do
       import Ecto.Query
 
-      # Same row shape as above, but the user is not entitled. This MUST be a
-      # no-op: ReconcileEmbeddings re-enqueues on a 15-minute cron, so embedding
-      # here would bill Voyage for a free user every 15 minutes, forever.
-      Engram.Repo.delete_all(
-        from(o in Engram.Billing.UserLimitOverride,
-          where: o.user_id == ^note.user_id and o.key == "search_semantic_enabled"
-        )
-      )
-
-      OverrideCache.evict(note.user_id)
+      # Same row shape as above, but the lifetime embed budget is spent. The
+      # sparse index is already there, so this must neither call Voyage nor
+      # rebuild: it parks the note so ReconcileEmbeddings stops re-selecting it
+      # every tick.
+      Engram.UsageMeters.add_embed_tokens(note.user_id, 20_000_000)
 
       # Pinned to the current chunker version on purpose: this test is about
-      # TIER gating, not #1620. Left NULL it would match the stale-chunker
-      # clause and rebuild, which would prove nothing about entitlement.
+      # the BUDGET, not #1620. Left NULL it would match the stale-chunker
+      # clause and rebuild.
       from(n in Note, where: n.id == ^note.id)
       |> Repo.update_all(
         [
@@ -223,8 +217,12 @@ defmodule Engram.Workers.EmbedNoteTest do
         skip_tenant_check: true
       )
 
-      # No mock expectations — any embed call fails the test.
+      # No mock expectations and no Qdrant stub: any embed or index fails the test.
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      parked = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert DateTime.compare(parked.embed_retry_after, DateTime.utc_now()) == :gt
+      assert is_nil(parked.dense_indexed_hash)
     end
 
     test "does not stamp chunker_version when content changed mid-embed", %{
@@ -267,23 +265,16 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert is_nil(updated.chunker_version)
     end
 
-    test "rebuilds a keyword-only user's note when the chunker version is stale", %{
+    test "rebuilds an over-budget note's keyword index when the chunker version is stale", %{
       bypass: bypass,
       note: note
     } do
       import Ecto.Query
 
-      # A Free user's notes carry the same bad chunks as everyone else's, and
-      # re-chunking them calls no embedder, so #1620 rebuilds them too. The
-      # absence of a Mox expectation is the assertion that Voyage is NOT hit:
-      # the tier gate still holds, only the skip does not.
-      Engram.Repo.delete_all(
-        from(o in Engram.Billing.UserLimitOverride,
-          where: o.user_id == ^note.user_id and o.key == "search_semantic_enabled"
-        )
-      )
-
-      OverrideCache.evict(note.user_id)
+      # An over-budget note carries the same bad chunks as everyone else's, and
+      # re-chunking it sparse-only calls no embedder, so #1620 rebuilds it too.
+      # The absence of a Mox expectation is the assertion that Voyage is NOT hit.
+      Engram.UsageMeters.add_embed_tokens(note.user_id, 20_000_000)
 
       from(n in Note, where: n.id == ^note.id)
       |> Repo.update_all(
@@ -297,7 +288,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       updated = Repo.get!(Note, note.id, skip_tenant_check: true)
       assert updated.chunker_version == Markdown.chunker_version()
-      # Still keyword-only: the rebuild must not invent dense vectors.
+      # Still sparse-only: the rebuild must not invent dense vectors.
       assert is_nil(updated.dense_indexed_hash)
     end
 
@@ -464,7 +455,6 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       user = insert(:user)
       {:ok, user} = Crypto.ensure_user_dek(user)
-      :ok = Engram.Fixtures.grant_semantic!(user)
       vault = insert(:vault, user: user)
 
       # upsert_note encrypts content on the way in
@@ -807,91 +797,6 @@ defmodule Engram.Workers.EmbedNoteTest do
     end
   end
 
-  # A user with no semantic override — the real Free tier. Cannot reuse the
-  # setup fixture, which grants semantic to exercise the dense path.
-  defp keyword_only_user! do
-    user = insert(:user)
-    {:ok, user} = Crypto.ensure_user_dek(user)
-    vault = insert(:vault, user: user)
-
-    note =
-      Engram.Fixtures.insert_note!(user, vault, %{
-        path: "Test/Keyword.md",
-        content: "# Keyword\n\nOnly."
-      })
-
-    {user, note}
-  end
-
-  describe "perform/1 — losing semantic entitlement" do
-    test "a keyword-only re-index clears dense_indexed_hash, so an upgrade can backfill it",
-         %{bypass: bypass, user: user, note: note} do
-      # Index once WITH dense vectors (setup user is entitled).
-      Engram.MockEmbedder
-      |> expect(:embed_texts, fn texts -> {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)} end)
-
-      stub_qdrant(bypass)
-      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
-      assert %Note{dense_indexed_hash: dense} = Repo.get!(Note, note.id, skip_tenant_check: true)
-      refute is_nil(dense)
-
-      # Lose entitlement, then edit. The re-index rebuilds the note's points
-      # sparse-only, so the dense vectors this column names no longer exist.
-      Repo.delete_all(
-        from(o in Engram.Billing.UserLimitOverride,
-          where: o.user_id == ^user.id and o.key == "search_semantic_enabled"
-        ),
-        skip_tenant_check: true
-      )
-
-      OverrideCache.evict(user.id)
-
-      {:ok, note} =
-        Notes.upsert_note(
-          user,
-          Repo.get!(Engram.Vaults.Vault, note.vault_id, skip_tenant_check: true),
-          %{
-            "path" => note.path,
-            "content" => "# Hello\n\nDifferent words entirely.",
-            "mtime" => 2_000.0
-          }
-        )
-
-      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
-
-      # Leaving the old hash would make ReconcileEmbeddings' upgrade backfill
-      # (which selects on `is_nil(dense_indexed_hash)`) skip this note forever:
-      # the user would pay for semantic search over a silent hole.
-      assert %Note{dense_indexed_hash: nil} = Repo.get!(Note, note.id, skip_tenant_check: true)
-    end
-  end
-
-  describe "perform/1 — entitled but over the index cap" do
-    test "an over-cap note is not stamped as dense-indexed, so raising the cap re-opens it",
-         %{user: user, note: note} do
-      # A SEMANTIC user can still be over an indexed_notes_cap — a per-user
-      # override is exactly how a promo grant or a throttled abuser is
-      # expressed. Entitlement alone must not stamp the dense hash: nothing
-      # was written, and ReconcileEmbeddings' backfill selects on
-      # `is_nil(dense_indexed_hash)`, so a stamp locks the note out forever.
-      Repo.insert!(%Engram.Billing.UserLimitOverride{
-        user_id: user.id,
-        key: "indexed_notes_cap",
-        value: %{"v" => 0},
-        reason: "test",
-        set_by: "test"
-      })
-
-      OverrideCache.evict(user.id)
-
-      # No MockEmbedder expectation and no Qdrant stub: an over-cap note must
-      # reach neither.
-      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
-
-      assert %Note{dense_indexed_hash: nil} = Repo.get!(Note, note.id, skip_tenant_check: true)
-    end
-  end
-
   describe "perform/1 — lifetime embed-token budget (pricing v2 §B)" do
     setup do
       # Users without a Subscription default to :free tier (Billing.tier/1).
@@ -908,13 +813,27 @@ defmodule Engram.Workers.EmbedNoteTest do
       :ok
     end
 
-    test "discards job when lifetime_embed_token_cap is exhausted", %{user: user, note: note} do
+    test "an exhausted budget still builds the keyword index, without calling Voyage",
+         %{bypass: bypass, user: user, note: note} do
+      # Cancelling here (the old behaviour) cost an over-budget user their
+      # BM25 index too, so the note stopped being searchable at all.
       Engram.UsageMeters.add_embed_tokens(user.id, 20_000_000)
+      stub_qdrant(bypass)
 
-      assert {:cancel, _reason} = perform_job(EmbedNote, %{note_id: note.id})
+      # No Mock expect declared: a Voyage call fails the test.
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 
-      # No Voyage call should have happened (no Mock expect declared).
       assert Engram.UsageMeters.lifetime_embed_tokens(user.id) == 20_000_000
+
+      assert Repo.exists?(from(c in Engram.Notes.Chunk, where: c.note_id == ^note.id),
+               skip_tenant_check: true
+             )
+
+      indexed = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert indexed.embed_hash == indexed.content_hash
+      assert is_nil(indexed.dense_indexed_hash)
+      # Parked, so ReconcileEmbeddings' dense backfill does not re-run it every tick.
+      assert DateTime.compare(indexed.embed_retry_after, DateTime.utc_now()) == :gt
     end
 
     test "proceeds and increments the counter on success",
@@ -1012,33 +931,6 @@ defmodule Engram.Workers.EmbedNoteTest do
       stub_qdrant(bypass)
 
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
-    end
-
-    test "keyword-only users accrue no embed tokens — they never call Voyage",
-         %{bypass: bypass} do
-      {user, note} = keyword_only_user!()
-      stub_qdrant(bypass)
-
-      # No MockEmbedder expectation: a Voyage call here would fail the test.
-      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
-
-      # Charging anyway is not cosmetic — phantom tokens reach the 20M cap and
-      # embed_budget_gate/1 then cancels the job, costing the user their BM25
-      # index for spend that never happened.
-      assert Engram.UsageMeters.lifetime_embed_tokens(user.id) == 0
-    end
-
-    test "an exhausted token budget does not block a keyword-only user's indexing",
-         %{bypass: bypass} do
-      {user, note} = keyword_only_user!()
-      Engram.UsageMeters.add_embed_tokens(user.id, 20_000_000)
-      stub_qdrant(bypass)
-
-      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
-
-      assert Repo.exists?(from(c in Engram.Notes.Chunk, where: c.note_id == ^note.id),
-               skip_tenant_check: true
-             )
     end
   end
 end

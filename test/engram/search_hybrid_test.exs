@@ -21,7 +21,6 @@ defmodule Engram.SearchHybridTest do
     # a query-construction bug.
     ServiceConfig.put_override(:qdrant_search_timeout, 30_000)
     {:ok, user} = insert(:user) |> Engram.Crypto.ensure_user_dek()
-    :ok = Engram.Fixtures.grant_semantic!(user)
     vault = insert(:vault, user: user)
     %{bypass: bypass, user: user, vault: vault}
   end

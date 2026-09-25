@@ -16,7 +16,6 @@ defmodule Engram.Indexing do
   alias Engram.Notes.Note
   alias Engram.Parsers.Markdown
   alias Engram.Repo
-  alias Engram.Search.SearchProfile
   alias Engram.Vector.Qdrant
 
   require Logger
@@ -46,16 +45,21 @@ defmodule Engram.Indexing do
   commit step inside a per-note `Repo.with_tenant/2`.
   """
   def index_note(note, %Engram.Vaults.Vault{} = vault, user \\ nil) do
-    with {:ok, count, _embedded_bytes} <- index_note_with_usage(note, vault, user),
+    with {:ok, count, _embedded_bytes} <- index_note_with_usage(note, vault, user, []),
          do: {:ok, count}
   end
 
   @doc """
   `index_note/3`, plus the bytes this pass actually sent to the embedder
   (#1618). Chunk reuse makes that a small part of most edits, and a
-  keyword-only pass sends nothing. Returns `{:ok, chunk_count, embedded_bytes}`.
+  sparse-only pass sends nothing. Returns `{:ok, chunk_count, embedded_bytes}`.
+
+  Options:
+    * `:dense` (default `true`) — `false` builds the sparse (BM25) leg only and
+      never calls the embedder. `EmbedNote` passes it when the user's lifetime
+      embed budget is spent, so the note stays keyword-searchable.
   """
-  def index_note_with_usage(note, %Engram.Vaults.Vault{} = vault, user \\ nil) do
+  def index_note_with_usage(note, %Engram.Vaults.Vault{} = vault, user \\ nil, opts \\ []) do
     # Resolve identity ONCE for the whole call. This function and
     # prepare_index/3 below both need the same `%User{}`, and both used to
     # fetch it independently — on the embed path that made four `get_user!`
@@ -65,12 +69,11 @@ defmodule Engram.Indexing do
     # two args; the hot path passes the user it already has.
     #
     # `_with_subscription`: everything downstream asks about a limit —
-    # `IndexCap.within_cap?/2` and `SearchProfile.resolve/1` each resolve the
-    # tier — and on a bare `get_user!/1` struct that is one `subscriptions`
-    # query apiece. The join folds both into this fetch. See #1502.
+    # `IndexCap.within_cap?/2` resolves the tier — and on a bare `get_user!/1` struct that is one `subscriptions`
+    # query. The join folds it into this fetch. See #1502.
     user = user || Engram.Accounts.get_user_with_subscription!(note.user_id)
 
-    case prepare_index(note, vault, user) do
+    case prepare_index(note, vault, user, opts) do
       {:ok, {:no_chunks, link_rows}} ->
         case Crypto.get_dek(user) do
           {:ok, _dek} ->
@@ -119,7 +122,7 @@ defmodule Engram.Indexing do
     * `{:ok, prepared}` — ready to hand to `commit_index/1`
     * `{:error, reason}` — embed failed, encryption failed, etc.
   """
-  def prepare_index(note, %Engram.Vaults.Vault{} = vault, user \\ nil) do
+  def prepare_index(note, %Engram.Vaults.Vault{} = vault, user \\ nil, opts \\ []) do
     link_rows = Engram.Links.Parser.extract(note.content || "")
     chunks = Markdown.parse(note.content || "", note.path)
 
@@ -135,26 +138,26 @@ defmodule Engram.Indexing do
       if IndexCap.within_cap?(note, user) do
         dims = Application.get_env(:engram, :embed_dims, @default_dims)
 
-        # Keyword-only tiers never call Voyage. `nil` vectors flow through
-        # build_prepared/8, which emits a sparse-only named vector — the BM25
-        # leg is computed locally from the chunk text, so keyword search is
-        # fully functional with zero embedding spend.
-        semantic? = SearchProfile.resolve(user).semantic
+        # A sparse-only pass (`dense: false`, the embed budget is spent) never
+        # calls Voyage. `nil` vectors flow through build_prepared/8, which emits
+        # a sparse-only named vector — the BM25 leg is computed locally from the
+        # chunk text, so keyword search works with zero embedding spend.
+        dense? = Keyword.get(opts, :dense, true)
 
         with :ok <- Qdrant.ensure_collection(collection(), dims),
              {:ok, filter_key} <- Crypto.dek_filter_key(user),
              {:ok, content_key} <- Crypto.dek_content_hash_key(user),
-             plan = plan_chunks(note, chunks, content_key, semantic?),
+             plan = plan_chunks(note, chunks, content_key, dense?),
              texts = embed_texts(plan),
-             {:ok, vectors} <- maybe_embed(semantic?, texts),
+             {:ok, vectors} <- maybe_embed(dense?, texts),
              :ok <- ensure_one_vector_per_text(vectors, texts, note),
              avgdl = Engram.KeywordIndex.Stats.avgdl(note.user_id, note.vault_id),
              {:ok, prepared} <-
                build_prepared(note, user, vault, plan, vectors, filter_key, avgdl, link_rows) do
           # What the embedder was actually sent (#1618): reused chunks and
-          # keyword-only passes cost nothing, so the meter must not bill them.
+          # sparse-only passes cost nothing, so the meter must not bill them.
           embedded_bytes =
-            if semantic?, do: texts |> Enum.map(&byte_size/1) |> Enum.sum(), else: 0
+            if dense?, do: texts |> Enum.map(&byte_size/1) |> Enum.sum(), else: 0
 
           {:ok, Map.put(prepared, :embedded_bytes, embedded_bytes)}
         else
@@ -753,10 +756,10 @@ defmodule Engram.Indexing do
   # Matched by multiplicity, not by set membership: a note with two identical
   # sections has two rows under one hmac and must consume one point each, or
   # the second chunk silently adopts the first one's point.
-  defp plan_chunks(note, chunks, content_key, semantic?) do
+  defp plan_chunks(note, chunks, content_key, dense?) do
     chunks =
       Enum.map(chunks, fn chunk ->
-        Map.put(chunk, :context_hmac, fingerprint(content_key, chunk.context_text, semantic?))
+        Map.put(chunk, :context_hmac, fingerprint(content_key, chunk.context_text, dense?))
       end)
 
     # Tenant-scoped: unscoped this read is filtered to [], so reuse never
@@ -805,9 +808,9 @@ defmodule Engram.Indexing do
   end
 
   # What a point HOLDS is part of the fingerprint, not just its text (#1606).
-  # A keyword-only point has no dense vector: matching it after an upgrade
+  # A sparse-only point has no dense vector: matching it on a dense pass
   # stamped the note densely indexed with nothing behind the stamp, and a
-  # downgrade kept vectors the tier no longer grants. The model is in it for
+  # sparse-only pass kept vectors it had decided not to pay for. The model is in it for
   # the same reason, since another model's vector is not reusable either.
   defp fingerprint(content_key, context_text, true) do
     Crypto.hmac_content_hash(content_key, "dense:#{effective_embed_model()}\n" <> context_text)
