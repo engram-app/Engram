@@ -80,20 +80,20 @@ proves incompatible once a key is added.
 
 ## The gating rule (not yet adopted)
 
-Once `ANTHROPIC_API_KEY` exists, run the score workflow three times against `main` and record
+Once `ANTHROPIC_API_KEY` exists, run the score workflow 5 times against `main` and record
 each run's overall score, tier, and per-tool spread (max minus min per tool, per dimension) in
-a new section below. Only after those 3 runs are recorded here does the following rule take
+a new section below. Only after those 5 runs are recorded here does the following rule take
 effect:
 
 - Gate on the server score: `mcp-tdqs@0.2.0 score --file mcp-tools.json --fail-under B` (or
-  whichever tier the 3 baseline runs land on).
+  whichever tier the 5 baseline runs land on).
 - Additionally fail if the overall score drops more than 0.3 below the recorded baseline
   average.
-- If the measured spread across the 3 runs exceeds 0.3, widen the drop margin to match the
+- If the measured spread across the 5 runs exceeds 0.3, widen the drop margin to match the
   measured spread instead of tightening it artificially: the gate must not flap on model
   variance alone.
 
-This rule is adopted only once 3 runs are recorded here. Until then, `mcp-tdqs-score.yml`
+This rule is adopted only once 5 runs are recorded here. Until then, `mcp-tdqs-score.yml`
 stays report-only and this section is the entire gating policy: none.
 
 ## External reference (not comparable)
