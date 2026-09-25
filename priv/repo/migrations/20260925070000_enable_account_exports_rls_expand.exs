@@ -11,9 +11,10 @@ defmodule Engram.Repo.Migrations.EnableAccountExportsRlsExpand do
   # The code that ships with this migration names the tenant on every access
   # (`with_tenant/2`, or `Repo.maintenance()` for the expiry sweep). One
   # consequence is deliberate: where RLS is enforced and no maintenance pool is
-  # configured (SaaS prod at the time of writing), `ExportExpirySweep` refuses
-  # with `:tenancy_unsafe` rather than expire nothing, and `mint_download_url/2`
-  # enforces `expires_at` itself so the download window holds meanwhile. Prod
+  # configured, `ExportExpirySweep` refuses with `:tenancy_unsafe` rather than
+  # expire nothing, and `mint_download_url/2` enforces `expires_at` itself so
+  # the download window holds meanwhile. SaaS prod and staging both configure
+  # the pool (engram-infra#1243, #1248), so the sweep runs there. Prod
   # held 0 rows when this landed, so the rolling-deploy window, where old nodes
   # still run unscoped queries, has nothing to filter.
   #
