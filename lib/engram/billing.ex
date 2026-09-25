@@ -823,9 +823,8 @@ defmodule Engram.Billing do
   #
   # `action_required` is NOT a failure on its own: a 3DS challenge sits there
   # for the seconds a buyer takes to approve it. So it is reported as its own
-  # `reason`, and an alert must compare it against
-  # `engram.paddle.webhook.start.count{event_type="transaction.completed"}`
-  # rather than firing on a single event.
+  # `reason`, and the alert (engram-infra #1157) fires only on a transaction id
+  # that never reaches a `paddle_transaction_completed` line.
   def upsert_from_paddle_event(%{"event_type" => type, "data" => data})
       when type in ~w(transaction.payment_failed transaction.updated) do
     # A renewal decline is dunning, not a stalled checkout: it already arrives
@@ -837,6 +836,21 @@ defmodule Engram.Billing do
     else
       report_checkout_payment(type, data)
     end
+  end
+
+  # The other half of the stalled-3DS alert (engram-infra #1157): it fires on a
+  # `checkout_payment_action_required` transaction id that never appears on this
+  # line. Info ships to Loki for :billing (Category.loki_ship?/2).
+  def upsert_from_paddle_event(%{"event_type" => "transaction.completed", "data" => data}) do
+    Logger.info(
+      "paddle_transaction_completed",
+      Metadata.with_category(:info, :billing,
+        transaction_id: data["id"],
+        customer_id: data["customer_id"]
+      )
+    )
+
+    {:ok, :ignored}
   end
 
   def upsert_from_paddle_event(%{"event_type" => type}) do

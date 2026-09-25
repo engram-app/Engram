@@ -288,10 +288,10 @@ defmodule EngramWeb.Telemetry do
       #
       # `:action_required` is not a failure by itself (a 3DS challenge sits
       # there while the buyer approves it), so do NOT alert on this counter
-      # alone. Alert on it relative to
-      # `engram.paddle.webhook.start.count{event_type="transaction.completed"}`
-      # over the same window: stalls that never become completions are the
-      # signal. `:payment_failed` is definitive and can page on its own.
+      # alone. The prod alert lives in Loki instead (engram-infra #1157): an
+      # action_required transaction id with no `paddle_transaction_completed`
+      # line. A sparse counter also loses its first increment to `increase()`.
+      # `:payment_failed` is definitive and can page on its own.
       counter("engram.paddle.checkout.stalled.count",
         event_name: [:engram, :paddle, :checkout, :stalled],
         measurement: :count,
