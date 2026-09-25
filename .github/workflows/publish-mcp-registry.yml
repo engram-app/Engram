@@ -1,0 +1,63 @@
+name: Publish MCP Registry
+
+# Publishes server.json to the official MCP Registry
+# (registry.modelcontextprotocol.io) as `io.github.engram-app/engram` on every
+# `release-v*` tag, so the listing's version tracks the release. Glama,
+# PulseMCP, VS Code and GitHub's MCP list all read from that registry.
+#
+# Auth is GitHub OIDC, not a personal login: a workflow in an engram-app repo
+# is allowed to publish `io.github.engram-app/*`. A personal `mcp-publisher
+# login github` only grants `io.github.<user>/*` when the org restricts
+# third-party OAuth apps.
+#
+# release-please bumps server.json's `version` in the release PR, so the tagged
+# commit always carries the version being released. A version already in the
+# registry is rejected, so re-running this on the same tag fails loudly rather
+# than overwriting anything.
+#
+# workflow_dispatch exists for the first publish and for re-publishing after a
+# registry-side problem; it publishes server.json from the ref it runs on.
+on:
+  push:
+    tags: ['release-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-mcp-registry
+  cancel-in-progress: false
+
+env:
+  # Pinned, and checked against the release's checksums file, so a new or
+  # tampered release asset can't run with an OIDC token that publishes as us.
+  MCP_PUBLISHER_VERSION: '1.8.1'
+  MCP_PUBLISHER_SHA256: 'a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc'
+
+jobs:
+  publish:
+    runs-on: [self-hosted, linux, x64, isolated]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install mcp-publisher
+        run: |
+          set -euo pipefail
+          tarball="mcp-publisher_linux_amd64.tar.gz"
+          curl -fsSL --retry 3 -o "$tarball" \
+            "https://github.com/modelcontextprotocol/registry/releases/download/v${MCP_PUBLISHER_VERSION}/${tarball}"
+          echo "${MCP_PUBLISHER_SHA256}  ${tarball}" | sha256sum -c -
+          tar xzf "$tarball" mcp-publisher
+          ./mcp-publisher --version
+
+      - name: Validate server.json
+        run: ./mcp-publisher validate server.json
+
+      - name: Log in with GitHub OIDC
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish
+        run: ./mcp-publisher publish server.json
