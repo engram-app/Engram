@@ -585,8 +585,10 @@ defmodule EngramWeb.McpController do
       Enum.map(Tools.list(), fn t ->
         base = %{
           "name" => t.name,
+          "title" => t.title,
           "description" => t.description,
-          "inputSchema" => t.inputSchema
+          "inputSchema" => t.inputSchema,
+          "annotations" => t.annotations
         }
 
         # Only for converted tools (#1660). An `outputSchema` a tool cannot

@@ -14,6 +14,8 @@ defmodule Engram.MCP.Tools do
           required(:name) => String.t(),
           required(:description) => String.t(),
           required(:inputSchema) => map(),
+          optional(:title) => String.t(),
+          optional(:annotations) => map(),
           optional(:outputSchema) => map(),
           required(:handler) => (map(), map(), map() ->
                                    {:ok, String.t()}
@@ -38,6 +40,36 @@ defmodule Engram.MCP.Tools do
         "more than one vault — the server keeps no active-vault state between calls, so " <>
         "it must be passed on every vault-scoped call. Omit only if you have a single " <>
         "vault. Call list_vaults if a name does not resolve."
+  }
+
+  # MCP tool annotations, keyed by tool name. The Claude and ChatGPT app
+  # directories reject a server without them, and clients use `readOnlyHint` to
+  # skip the confirmation prompt. `destructive` = overwrites or removes content
+  # the user wrote. No tool is `openWorldHint`: every one stays inside the
+  # caller's own vaults. A tool missing here crashes `list/0`, which is the point.
+  # Each value: {title, readOnlyHint, destructiveHint, idempotentHint}.
+  @annotations %{
+    "list_vaults" => {"List Vaults", true, false, true},
+    "set_vault" => {"Check Vault", true, false, true},
+    "search_notes" => {"Search Notes", true, false, true},
+    "list_tags" => {"List Tags", true, false, true},
+    "list_folders" => {"List Folders", true, false, true},
+    "list_folder" => {"List Folder Contents", true, false, true},
+    "create_folder" => {"Create Folder", false, false, true},
+    "suggest_folder" => {"Suggest Folder", true, false, true},
+    "get_note" => {"Read Note", true, false, true},
+    "get_notes" => {"Read Notes", true, false, true},
+    "create_note" => {"Create Note", false, false, false},
+    "write_note" => {"Write Note", false, true, true},
+    "append_to_note" => {"Append to Note", false, false, false},
+    "patch_note" => {"Find and Replace in Note", false, true, false},
+    "update_section" => {"Replace Note Section", false, true, true},
+    "rename_note" => {"Rename Note", false, false, false},
+    "rename_folder" => {"Rename Folder", false, false, false},
+    "delete_note" => {"Delete Note", false, true, true},
+    "delete_folder" => {"Delete Folder", false, true, true},
+    "move_attachment" => {"Move Attachment", false, false, false},
+    "get_attachment_upload_target" => {"Get Attachment Upload Target", true, false, true}
   }
 
   @spec list() :: [tool_def()]
@@ -65,7 +97,22 @@ defmodule Engram.MCP.Tools do
       move_attachment_def(),
       get_attachment_upload_target_def()
     ]
-    |> Enum.map(&with_vault_id/1)
+    |> Enum.map(&(&1 |> with_vault_id() |> with_annotations()))
+  end
+
+  defp with_annotations(%{name: name} = tool) do
+    {title, read_only, destructive, idempotent} = Map.fetch!(@annotations, name)
+
+    Map.merge(tool, %{
+      title: title,
+      annotations: %{
+        "title" => title,
+        "readOnlyHint" => read_only,
+        "destructiveHint" => destructive,
+        "idempotentHint" => idempotent,
+        "openWorldHint" => false
+      }
+    })
   end
 
   defp with_vault_id(%{name: name} = tool) when name in @vault_scoping_exempt, do: tool
@@ -562,7 +609,8 @@ defmodule Engram.MCP.Tools do
       name: "create_note",
       description:
         "Create a new note with automatic folder placement. " <>
-          "If suggested_folder is omitted, the note is placed automatically.",
+          "If suggested_folder is omitted, the note is placed automatically. " <>
+          "Never overwrites: fails if a note already exists at the resulting path.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
