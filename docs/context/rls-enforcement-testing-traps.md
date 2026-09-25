@@ -78,12 +78,12 @@ assertion would hold no matter what the function did.
       assert note.embed_hash == "stale-embed"
       assert note.dense_indexed_hash == "stale-dense"
 
-      assert :ok = as_prod_role(fn -> IndexCap.revoke_dense_index(user.id) end)
+      assert :ok = as_prod_role(fn -> IndexCap.evict_over_cap(user.id) end)
 
       reloaded = Repo.get!(Note, note.id, skip_tenant_check: true)
 
       assert is_nil(reloaded.dense_indexed_hash),
-             "dense_indexed_hash survived revoke_dense_index/1 — the UPDATE was filtered by " <>
+             "dense_indexed_hash survived evict_over_cap/1 — the UPDATE was filtered by " <>
                "RLS and reported zero rows, so the user keeps paying for dense vectors"
 ```
 

@@ -78,7 +78,7 @@ This is acceptable **only because vectors are derived data** — Postgres is gro
     WHERE kind = 'note' AND deleted_at IS NULL;
    ```
 
-   Same shape the billing downgrade path already uses (`Engram.Billing` → `IndexCap.revoke_dense_index/1`), so this is a proven mechanism, not a new one.
+   Same shape the billing downgrade path uses (`Engram.Billing` → `IndexCap.evict_over_cap/1`, which nulls both hashes for the notes past the Free cap), so this is a proven mechanism, not a new one.
 3. **Wait.** `Engram.Workers.ReconcileEmbeddings` runs on the `*/15 * * * *` Oban cron and enqueues at most `@batch_size = 500` `EmbedNote` jobs per tick.
 
 **RTO for a full rebuild ≈ 1 hour** at current volume: ~1,574 live notes ÷ 500 per tick × 15 min ≈ 4 ticks. Search is degraded (keyword-only) for that window; note reads and writes are unaffected throughout. To go faster, invoke `ReconcileEmbeddings.perform/1` in a loop from a remote console — the per-tick cap is the binding constraint, not embed throughput. A full rebuild re-bills Voyage for the whole corpus; budget for it before starting.

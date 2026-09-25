@@ -732,11 +732,12 @@ defmodule Engram.Billing do
                 %{user_id: user.id, from: prev_tier, to: :free}
               )
 
-              # Free is keyword-only, so this user's dense vectors are now dead
-              # weight in Qdrant — ~$0.53/mo of RAM on a tier priced at $0.11.
-              # Nulls both index hashes; ReconcileEmbeddings rebuilds the notes
-              # sparse-only on its next tick and the dense points go with the
-              # replace. See IndexCap.revoke_dense_index/1.
+              # Free is capped at `indexed_notes_cap`, and nothing re-checks
+              # the cap until a note is re-indexed, so the notes past it would
+              # stay searchable forever. Re-opens those notes so
+              # ReconcileEmbeddings purges their points. Notes inside the cap
+              # keep their dense vectors (semantic is every tier's). See
+              # IndexCap.evict_over_cap/1.
               #
               # ENQUEUED, not inline. This is an unbounded UPDATE over the
               # user's whole vault, and we are inside a Paddle webhook request:
@@ -744,7 +745,7 @@ defmodule Engram.Billing do
               # so a cancellation that COMMITTED was recorded as a failed
               # delivery and retried. Only fires on a real downgrade — `user`
               # is nil unless prev_tier was paid.
-              _ = IndexCapMaintenance.enqueue(user.id, :revoke_dense)
+              _ = IndexCapMaintenance.enqueue(user.id, :evict_over_cap)
             end
 
             {:ok, updated}
@@ -789,14 +790,14 @@ defmodule Engram.Billing do
               Engram.Auth.SessionInvalidator.disconnect_user(updated.user_id)
             end
 
-            # NOTE: no IndexCap.revoke_dense_index/1 here, unlike the
+            # NOTE: no IndexCap.evict_over_cap/1 here, unlike the
             # subscription.canceled clause. `past_due` is in
             # @entitled_statuses, so tier/1 still resolves to starter/pro and
-            # the user remains semantically entitled through Paddle's dunning
-            # window — revoking would be wrong, not merely expensive. It would
-            # also re-embed the whole vault on a transient failed charge and
-            # again when payment recovers. The window is bounded and ends in
-            # subscription.canceled, which does revoke.
+            # the user stays uncapped through Paddle's dunning window —
+            # evicting would be wrong, not merely expensive. It would also
+            # purge and re-index the notes past the Free cap on a transient
+            # failed charge and again when payment recovers. The window is
+            # bounded and ends in subscription.canceled, which does evict.
 
             {:ok, updated}
 
