@@ -38,9 +38,11 @@ defmodule Engram.Accounts.ExportRlsTest do
   import Engram.RlsCase
 
   alias Engram.Accounts.Export
+  alias Engram.Accounts.Export.Schema
   alias Engram.Repo
   alias Engram.Storage.InMemory
   alias Engram.Workers.AccountExport
+  alias Engram.Workers.ExportExpirySweep
 
   setup do
     InMemory.ensure_table()
@@ -95,16 +97,15 @@ defmodule Engram.Accounts.ExportRlsTest do
       # Requested as the superuser: this test is about what the STREAMER reads,
       # not about admission, and `request/1` is covered above.
       {:ok, export} = Export.request(user)
+      [job] = all_enqueued(worker: AccountExport)
 
       # The committing harness is required — the claim is about what the worker
       # persisted onto the export row, and a rollback would discard it and pass
       # against a completely unscoped implementation.
       assert :ok =
-               as_prod_role_committing(fn ->
-                 perform_job(AccountExport, %{"export_id" => export.id})
-               end)
+               as_prod_role_committing(fn -> perform_job(AccountExport, job.args) end)
 
-      reloaded = Repo.reload!(export)
+      reloaded = Repo.reload!(export, skip_tenant_check: true)
 
       # Unscoped, the vault list is `[]`, so the export completes with no parts
       # at all and still reports success.
@@ -114,6 +115,79 @@ defmodule Engram.Accounts.ExportRlsTest do
              "export was marked :ready with NO parts — the vault query was filtered"
 
       assert reloaded.size_bytes > 0
+    end
+  end
+
+  # engram-app/Engram#1758. `account_exports` carries its own tenant policy, so
+  # every read and write of it has to name the tenant. `skip_tenant_check: true`
+  # names nothing: under the policy a read returns zero rows and an UPDATE
+  # reports zero affected, and neither raises.
+  describe "account_exports under its own RLS policy" do
+    defp insert_export!(user, status, attrs \\ %{}) do
+      %Schema{}
+      |> Schema.changeset(
+        Map.merge(%{user_id: user.id, status: status, reason: :user_request}, attrs)
+      )
+      |> Repo.insert!(skip_tenant_check: true)
+    end
+
+    # CONTROL. Proves the policy exists and the role drop engaged: with no
+    # tenant set, the user's own export row is invisible.
+    test "control: the dropped role sees none of the user's exports", %{user: user} do
+      insert_export!(user, :ready)
+
+      assert {:returned, 0} = as_prod_role(fn -> count_for("account_exports", user.id) end)
+    end
+
+    test "list and get return the user's own export", %{user: user} do
+      export = insert_export!(user, :ready)
+      id = export.id
+
+      assert {:returned, {[%Schema{id: ^id}], {:ok, %Schema{id: ^id}}}} =
+               as_prod_role(fn -> {Export.list(user), Export.get(user, id)} end)
+    end
+
+    test "get does not return another user's export", %{user: user} do
+      other = insert(:user)
+      theirs = insert_export!(other, :ready)
+
+      assert {:returned, {:error, :not_found}} =
+               as_prod_role(fn -> Export.get(user, theirs.id) end)
+    end
+
+    # Filtered to zero, the quota count grants unlimited exports and nothing errors.
+    test "the lifetime quota still trips instead of failing open", %{user: user} do
+      insert_export!(user, :ready)
+
+      assert {:returned, {:error, :lifetime_exceeded}} =
+               as_prod_role(fn -> Export.request(user) end)
+    end
+
+    # The unique violation happens inside `with_tenant`'s transaction. Without a
+    # savepoint its trailing role reset dies with 25P02 and the caller gets a 500.
+    test "a second concurrent request is :already_running, not a crash", %{user: user} do
+      insert_export!(user, :pending)
+
+      assert {:returned, {:error, :already_running}} =
+               as_prod_role(fn -> Export.request(user) end)
+    end
+
+    test "request inserts the row and enqueues a job that names its tenant", %{user: user} do
+      assert {:returned, {:ok, %Schema{id: id}}} = as_prod_role(fn -> Export.request(user) end)
+
+      # Rolled back with the rest of `as_prod_role`, so assert on the job the
+      # superuser path enqueues — same function, same args shape.
+      {:ok, _} = Export.request(user)
+      assert [%Oban.Job{args: %{"user_id" => uid}}] = all_enqueued(worker: AccountExport)
+      assert uid == user.id
+      assert is_binary(id)
+    end
+
+    test "the expiry sweep refuses loudly instead of expiring nothing", %{user: user} do
+      insert_export!(user, :ready, %{expires_at: DateTime.add(DateTime.utc_now(), -1, :hour)})
+
+      assert {:returned, {:error, :tenancy_unsafe}} =
+               as_prod_role(fn -> perform_job(ExportExpirySweep, %{}) end)
     end
   end
 end

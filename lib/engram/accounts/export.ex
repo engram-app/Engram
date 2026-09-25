@@ -30,19 +30,20 @@ defmodule Engram.Accounts.Export do
 
   @spec list(User.t(), pos_integer()) :: [Schema.t()]
   def list(%User{} = user, limit \\ 10) do
-    Repo.all(
-      from(e in Schema,
-        where: e.user_id == ^user.id,
-        order_by: [desc: e.inserted_at],
-        limit: ^limit
-      ),
-      skip_tenant_check: true
-    )
+    Repo.with_tenant!(user.id, fn ->
+      Repo.all(
+        from(e in Schema,
+          where: e.user_id == ^user.id,
+          order_by: [desc: e.inserted_at],
+          limit: ^limit
+        )
+      )
+    end)
   end
 
   @spec get(User.t(), integer()) :: {:ok, Schema.t()} | {:error, :not_found}
   def get(%User{} = user, export_id) do
-    case Repo.get_by(Schema, [id: export_id, user_id: user.id], skip_tenant_check: true) do
+    case Repo.with_tenant!(user.id, fn -> Repo.get_by(Schema, id: export_id, user_id: user.id) end) do
       nil -> {:error, :not_found}
       %Schema{} = export -> {:ok, export}
     end
@@ -95,10 +96,15 @@ defmodule Engram.Accounts.Export do
     end
   end
 
+  # `mode: :savepoint` is load-bearing. A concurrent request trips the partial
+  # unique index inside `with_tenant/2`'s transaction; without a savepoint to
+  # roll back to, its trailing role reset dies with 25P02 and the caller gets a
+  # 500 instead of `:already_running`. Same trap as `Vaults.create_vault/2`.
   defp insert_pending(user) do
-    %Schema{}
-    |> Schema.changeset(%{user_id: user.id, status: :pending, reason: :user_request})
-    |> Repo.insert(skip_tenant_check: true)
+    changeset =
+      Schema.changeset(%Schema{}, %{user_id: user.id, status: :pending, reason: :user_request})
+
+    Repo.with_tenant!(user.id, fn -> Repo.insert(changeset, mode: :savepoint) end)
     |> case do
       {:ok, export} ->
         {:ok, export}
@@ -116,8 +122,10 @@ defmodule Engram.Accounts.Export do
     end)
   end
 
+  # `user_id` lets the worker scope every query with `with_tenant/2` instead of
+  # discovering the owner from a row the tenant policy hides from it.
   defp enqueue_worker(export) do
-    %{"export_id" => export.id}
+    %{"export_id" => export.id, "user_id" => export.user_id}
     |> AccountExport.new()
     |> Oban.insert()
   end
@@ -142,12 +150,12 @@ defmodule Engram.Accounts.Export do
   defp rate_limit_check(%User{} = user) do
     cond do
       is_integer(lifetime_cap = Billing.cap(user, :account_exports_lifetime)) ->
-        if Repo.aggregate(used_lifetime_q(user), :count) >= lifetime_cap,
+        if count_exports(user, used_lifetime_q(user)) >= lifetime_cap,
           do: {:error, :lifetime_exceeded},
           else: :ok
 
       is_integer(per_24h_cap = Billing.cap(user, :account_export_rate_per_24h)) ->
-        if Repo.aggregate(recent_24h_q(user), :count) >= per_24h_cap,
+        if count_exports(user, recent_24h_q(user)) >= per_24h_cap,
           do: {:error, :rate_exceeded},
           else: :ok
 
@@ -155,6 +163,10 @@ defmodule Engram.Accounts.Export do
         :ok
     end
   end
+
+  # Filtered to zero these counts would grant unlimited exports, silently.
+  defp count_exports(user, query),
+    do: Repo.with_tenant!(user.id, fn -> Repo.aggregate(query, :count) end)
 
   defp used_lifetime_q(user) do
     from(e in Schema,
