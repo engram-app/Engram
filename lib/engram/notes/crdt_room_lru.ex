@@ -303,7 +303,11 @@ defmodule Engram.Notes.CrdtRoomLru do
     outstanding = Map.filter(state.asked, fn {id, {pid, _at}} -> {id, pid} in live_keys end)
     grace = drain_grace_ms()
     {stuck, exiting} = Map.split_with(outstanding, fn {_id, {_pid, at}} -> now - at >= grace end)
-    stuck? = map_size(stuck) > 0
+    # Also stay paced while the last paced sweep's OWN asks are unresolved.
+    # Those sit in `exiting` for the grace window, so a sweep landing inside
+    # it (a periodic sweep right after a paced prompt sweep) would otherwise
+    # see nothing stuck and re-ask the whole backlog unpaced, mid-wedge.
+    stuck? = map_size(stuck) > 0 or (state.paced and map_size(exiting) > 0)
     limit = if stuck?, do: @paced_evictions_per_sweep, else: :infinity
 
     # A room asked inside the grace window is on its way out (its checkpoint
@@ -327,7 +331,14 @@ defmodule Engram.Notes.CrdtRoomLru do
     # next frame re-observes the same pid), and keeping it here would pin the
     # whole node in paced mode for as long as the note is edited. In a real
     # wedge the rooms asked by this paced sweep go stuck in turn, so pacing
-    # continues for exactly as long as drains keep failing.
+    # continues for exactly as long as drains keep failing. If the paced asks
+    # DO land while older stuck rooms are still alive, the pool has recovered
+    # and re-asking them unpaced is the right call.
+    #
+    # Known cost: a room kept alive by a second observer that keeps getting
+    # re-selected paces every other sweep instead of pinning. Rare, since a
+    # room is re-touched on every write and depth ranking protects a vault's
+    # newest rooms.
     #
     # Exiting asks keep their FIRST ask time, so a quick later sweep cannot
     # restart their grace clock.

@@ -344,9 +344,10 @@ defmodule Engram.Notes.CrdtRoomLruTest do
       with_lru_config(drain_grace_ms: 100)
 
       a = live_room()
+      b = live_room()
       CrdtRoomLru.touch("a-note", a, @vault)
       Process.sleep(5)
-      CrdtRoomLru.touch("b-note", live_room(), @vault)
+      CrdtRoomLru.touch("b-note", b, @vault)
 
       CrdtRoomLru.sweep(1)
       Process.sleep(150)
@@ -356,8 +357,39 @@ defmodule Engram.Notes.CrdtRoomLruTest do
       CrdtRoomLru.sweep(1)
       assert paced?(), "a stuck ask past its grace window paces this sweep"
 
+      # The paced sweep asked `b`, whose drain lands (it exits). `a` is still
+      # held by its second observer; it must not keep the node paced.
+      Process.exit(b, :kill)
+      Process.sleep(150)
       CrdtRoomLru.sweep(1)
       refute paced?(), "the same healthy room must not keep the node paced"
+    end
+
+    # A real wedge: no drain ever lands, so no room ever exits. Forgetting a
+    # stuck ask after one paced sweep must not end pacing: the rooms the paced
+    # sweep asks go stuck in turn. That includes a sweep landing INSIDE their
+    # grace window (a periodic sweep right after a paced prompt sweep), which
+    # would otherwise see nothing stuck and re-ask the whole backlog.
+    # Grace sits well above drains_received/0's 200ms quiet wait.
+    test "a continuous wedge stays paced, including a sweep inside the grace window" do
+      with_lru_config(drain_grace_ms: 1_000)
+      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(@vault))
+
+      for n <- 1..60, do: CrdtRoomLru.touch("w-#{n}", live_room(), @vault)
+
+      CrdtRoomLru.sweep(0)
+      assert drains_received() == 60, "nothing is stuck yet: the first sweep is unpaced"
+
+      for _ <- 1..3 do
+        Process.sleep(1_100)
+        CrdtRoomLru.sweep(0)
+        assert drains_received() == 16
+        assert paced?()
+      end
+
+      CrdtRoomLru.sweep(0)
+      assert drains_received() <= 16, "stuck rooms must not be re-asked unpaced"
+      assert paced?()
     end
 
     test "pacing ends once the stuck room exits" do
