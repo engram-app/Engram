@@ -44,7 +44,9 @@ defmodule Engram.TenantQueryCounter do
   (see `count_wire_statements/1` for enter+exit together).
   """
   def count_tenant_enters(fun) do
-    count_matching_queries(fun, &(&1 =~ "app.current_tenant"))
+    # The bind parameter is what marks the ENTER: the exit statement also names
+    # `app.current_tenant` since #1761 (it clears it to ''), with no bind.
+    count_matching_queries(fun, &(&1 =~ "set_config('app.current_tenant', $1"))
   end
 
   @doc """
