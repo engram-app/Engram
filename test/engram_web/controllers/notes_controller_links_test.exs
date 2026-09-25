@@ -17,7 +17,7 @@ defmodule EngramWeb.NotesControllerLinksTest do
   describe "GET /api/notes/by-id/:id — links" do
     setup :verify_on_exit!
 
-    setup %{user: user} do
+    setup do
       bypass = Bypass.open()
       Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
       on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
@@ -56,7 +56,7 @@ defmodule EngramWeb.NotesControllerLinksTest do
   describe "GET /api/notes/by-id/:id/backlinks" do
     setup :verify_on_exit!
 
-    setup %{user: user} do
+    setup do
       bypass = Bypass.open()
       Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
       on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
