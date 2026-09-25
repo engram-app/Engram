@@ -975,6 +975,16 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert Engram.UsageMeters.lifetime_embed_tokens(user.id) == first
     end
 
+    test "a failed embed gives its reservation back", %{bypass: bypass, user: user, note: note} do
+      stub_qdrant_optional(bypass)
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _texts -> {:error, :unavailable} end)
+
+      assert {:error, _} = perform_job(EmbedNote, %{note_id: note.id})
+      assert Engram.UsageMeters.lifetime_embed_tokens(user.id) == 0
+    end
+
     test "user override raises the cap above the default",
          %{bypass: bypass, user: user, note: note} do
       Engram.UsageMeters.add_embed_tokens(user.id, 20_000_000)

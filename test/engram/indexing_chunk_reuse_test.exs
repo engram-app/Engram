@@ -376,7 +376,9 @@ defmodule Engram.IndexingChunkReuseTest do
       note = put_raw(user, vault, @path, content("Ferritin levels are low.", "[health]"))
       stub_embedder(self())
 
-      assert {:ok, count, 0} = Indexing.index_note_with_usage(note, vault, nil, dense: false)
+      assert {:ok, count, 0, false} =
+               Indexing.index_note_with_usage(note, vault, nil, dense: false)
+
       assert embedded_texts() == [], "a sparse-only pass must not reach the embedder"
       reset(ctx.recorder)
 
@@ -417,7 +419,8 @@ defmodule Engram.IndexingChunkReuseTest do
       _ = embedded_texts()
       reset(ctx.recorder)
 
-      assert {:ok, ^count, 0} = Indexing.index_note_with_usage(note, ctx.vault, nil, dense: false)
+      assert {:ok, ^count, 0, false} =
+               Indexing.index_note_with_usage(note, ctx.vault, nil, dense: false)
 
       points = upserts(ctx.recorder)
       assert length(points) == count

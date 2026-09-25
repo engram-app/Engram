@@ -56,6 +56,17 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
     # Eligible stale notes, oldest-first, capped — kept as a subquery so the
     # whole select-and-stamp is ONE statement (see the UPDATE below).
+    # The SQL proxy for "uncapped and unmetered": a paid, entitled
+    # subscription. See the comments on its two uses below.
+    paid =
+      from(s in Engram.Billing.Subscription,
+        where:
+          s.user_id == parent_as(:note).user_id and
+            s.status in ^Engram.Billing.entitled_statuses() and
+            s.tier in ["starter", "pro"],
+        select: 1
+      )
+
     sweep_tenant = fn remaining ->
       eligible =
         from(n in Note, as: :note)
@@ -100,15 +111,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
                     select: 1
                   )
                 ) or
-                  exists(
-                    from(s in Engram.Billing.Subscription,
-                      where:
-                        s.user_id == parent_as(:note).user_id and
-                          s.status in ^Engram.Billing.entitled_statuses() and
-                          s.tier in ["starter", "pro"],
-                      select: 1
-                    )
-                  )))
+                  exists(paid)))
         )
         # Poison-loop guard: a note that exhausts its EmbedNote attempts gets an
         # embed_retry_after cooldown stamp. Skip it until the cooldown elapses so a
@@ -116,7 +119,16 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         # every tick. NULL = no cooldown = eligible now. This same filter is what
         # preserves a longer (poison) cooldown from the UPDATE below — a note
         # inside any cooldown isn't selected, so it isn't re-stamped.
-        |> where([n], is_nil(n.embed_retry_after) or n.embed_retry_after <= ^now)
+        #
+        # Except a BUDGET park for a user who has since upgraded: the budget
+        # that parked it no longer applies, and waiting out the 24h would make
+        # a paying user's search worse than it needs to be. A poison cooldown
+        # (`embed_budget_parked` not true) still holds for everyone.
+        |> where(
+          [n],
+          is_nil(n.embed_retry_after) or n.embed_retry_after <= ^now or
+            (n.embed_budget_parked == true and exists(paid))
+        )
         |> order_by([n], asc: n.updated_at)
         |> limit(^remaining)
         |> select([n], n.id)
@@ -139,7 +151,10 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       {_count, rows} =
         from(n in Note, where: n.kind == "note" and n.id in subquery(eligible))
         |> select([n], {n.id, n.user_id})
-        |> Repo.update_all(set: [embed_retry_after: backoff_until])
+        # Clears the budget-park flag with it: the #897 backoff must hold for
+        # this note even for a paying user, or a crash mid-embed re-selects it
+        # every tick.
+        |> Repo.update_all(set: [embed_retry_after: backoff_until, embed_budget_parked: nil])
 
       rows
     end

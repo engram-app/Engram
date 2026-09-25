@@ -126,6 +126,38 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       refute_enqueued(worker: EmbedNote)
     end
 
+    test "a paying user's POISON cooldown still holds (only a budget park is skipped)" do
+      user = insert(:user)
+      insert(:subscription, user: user, tier: "pro", status: "active")
+      later = DateTime.add(DateTime.utc_now(), 3600, :second)
+
+      poisoned =
+        note_for(user,
+          content_hash: "abc123",
+          embed_hash: "abc123",
+          dense_indexed_hash: nil,
+          embed_retry_after: later
+        )
+
+      parked =
+        note_for(user,
+          content_hash: "def456",
+          embed_hash: "def456",
+          dense_indexed_hash: nil,
+          embed_retry_after: later,
+          embed_budget_parked: true
+        )
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      refute_enqueued(worker: EmbedNote, args: %{"note_id" => poisoned.id})
+      assert_enqueued(worker: EmbedNote, args: %{"note_id" => parked.id})
+
+      # The reconcile backoff replaces the park, so a crash mid-embed cannot
+      # re-select it every tick.
+      assert %Note{embed_budget_parked: nil} =
+               Engram.Repo.get!(Note, parked.id, skip_tenant_check: true)
+    end
+
     test "does not backfill for a tier:free row, whose status defaults to entitled" do
       # `subscriptions.tier` accepts "free" and `status` DEFAULTS to
       # "trialing", so a status-only join selects a user that `tier/1` resolves

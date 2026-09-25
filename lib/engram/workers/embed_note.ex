@@ -104,10 +104,11 @@ defmodule Engram.Workers.EmbedNote do
       when hash != nil and is_nil(old_path_hmac_b64) ->
         # Content is indexed but has no dense vectors: the dense backfill for
         # a note indexed sparse-only (Free before semantic search was every
-        # tier's, or a pass that ran with the embed budget spent). Add the
-        # dense leg if the budget allows. If it does not, the sparse index is
-        # already in place, so park the note instead of rebuilding it —
-        # otherwise ReconcileEmbeddings re-selects it every tick forever.
+        # tier's, or a pass that ran with the embed budget spent). If the
+        # budget is already spent, the sparse index is in place, so park the
+        # note instead of rebuilding it — otherwise ReconcileEmbeddings
+        # re-selects it every tick forever. Otherwise the pass itself reserves
+        # exactly what it needs (see `reserve_embed_tokens/2`).
         # Loaded once here and handed to run_and_stamp — it needs the same row
         # for the rotation gate, so re-resolving would cost a second read on
         # exactly the path that already paid for one. See #1502.
@@ -116,8 +117,8 @@ defmodule Engram.Workers.EmbedNote do
             {:discard, :user_deleted}
 
           user ->
-            if dense_budget?(note, user) do
-              run_and_stamp(note, old_path_hmac_b64, job, user, true)
+            if embed_budget_left?(user) do
+              run_and_stamp(note, old_path_hmac_b64, job, user)
             else
               park_over_budget(note)
             end
@@ -151,7 +152,7 @@ defmodule Engram.Workers.EmbedNote do
   # and passed down from here — the budget gate, the decrypt in run_embed and
   # both halves of Indexing all take it. Nothing below may re-resolve it.
   # See #1502.
-  defp run_and_stamp(note, old_path_hmac_b64, job, user \\ nil, dense? \\ nil) do
+  defp run_and_stamp(note, old_path_hmac_b64, job, user \\ nil) do
     # `_with_subscription`: the budget gate calls `Billing.limit_enforced?/2`
     # and then `check_limit/3`, and each resolves the tier via
     # `get_subscription/1` — which queries unless the association is already
@@ -176,21 +177,10 @@ defmodule Engram.Workers.EmbedNote do
           :ok ->
             # An over-budget pass still runs, sparse-only: cancelling it (the
             # old behaviour) left the note with no BM25 index either, so it
-            # vanished from keyword search too.
-            dense? = if is_nil(dense?), do: dense_budget?(note, user), else: dense?
-
-            case run_embed(note, user, old_path_hmac_b64, dense?) do
-              {:ok, embedded_bytes} ->
-                # Charge the embed meter for what Voyage was actually sent
-                # this pass, not the whole note (#1618). Chunk reuse sends
-                # only the changed chunks; an empty, over-cap or sparse-only
-                # pass sends nothing at all.
-                #
-                # Charging more was not merely cosmetic: phantom tokens
-                # accumulate to the 20M lifetime cap and switch the user's
-                # dense leg off for spend that never happened.
-                _ = record_embed_tokens(note.user_id, embedded_bytes)
-
+            # vanished from keyword search too. The meter is charged inside
+            # the pass, by the reservation (see `reserve_embed_tokens/2`).
+            case run_embed(note, user, old_path_hmac_b64) do
+              :ok ->
                 :ok
 
               other ->
@@ -207,60 +197,74 @@ defmodule Engram.Workers.EmbedNote do
   defp embed_error_status({status, _body}) when is_integer(status), do: status
   defp embed_error_status(_), do: nil
 
-  # Pricing v2 §B — whether this pass may spend Voyage tokens on dense vectors,
-  # against the user's lifetime token budget. Resolver returns nil for
-  # Starter/Pro (unmetered), so this is effectively Free-only. Per-user
-  # overrides via Billing.UserLimitOverride.
+  # Pricing v2 §B — the lifetime embed-token budget. Resolver returns nil for
+  # Starter/Pro (unmetered), so this binds on Free. Per-user overrides via
+  # Billing.UserLimitOverride.
   #
-  # `false` never blocks INDEXING: the pass runs sparse-only, so the note stays
-  # keyword-searchable. The budget bounds Voyage SPEND, nothing else.
-  defp dense_budget?(%Note{user_id: user_id} = note, %{} = user) do
-    # Resolve the cap BEFORE measuring usage. `check_limit/3` answers `:ok` for
-    # `:unlimited`/`nil`/`-1` without ever reading `current_count`, and the
-    # resolver returns `nil` for Starter/Pro — so for every paying user the
-    # `lifetime_embed_tokens/1` aggregate below was computed and thrown away,
-    # once per job. On a 1.4k-note import that is 1.4k wasted aggregates.
-    # See #1502.
-    if Billing.limit_enforced?(user, :lifetime_embed_token_cap) do
-      within_embed_budget?(note, user, user_id)
-    else
-      true
+  # Reserved per pass, for exactly the tokens the pass would send AFTER chunk
+  # reuse — a one-section edit asks for one section, not the whole note — and
+  # atomically, so concurrent jobs cannot all pass on one reading of the meter.
+  # A refusal never blocks INDEXING: the pass runs sparse-only, so the note
+  # stays keyword-searchable. The reservation IS the charge (#1618: what Voyage
+  # is sent, nothing more); a failed embed gives it back.
+  defp budget_opts(user) do
+    [
+      reserve_tokens: &reserve_embed_tokens(user, &1),
+      release_tokens: &UsageMeters.release_embed_tokens(user.id, &1)
+    ]
+  end
+
+  defp reserve_embed_tokens(user, tokens) do
+    case Billing.effective_limit(user, :lifetime_embed_token_cap) do
+      cap when is_integer(cap) and cap >= 0 ->
+        UsageMeters.reserve_embed_tokens(user.id, tokens, cap) or budget_exhausted(user.id)
+
+      # nil / :unlimited / a negative sentinel: unmetered, still recorded.
+      cap when is_nil(cap) or cap == :unlimited or is_integer(cap) ->
+        _ = UsageMeters.add_embed_tokens(user.id, tokens)
+        true
+
+      # A malformed override fails CLOSED, as `check_limit/3` always did.
+      _malformed ->
+        budget_exhausted(user.id)
     end
   end
 
-  defp within_embed_budget?(note, user, user_id) do
-    current = UsageMeters.lifetime_embed_tokens(user_id)
-    estimated = estimate_note_tokens(note)
-
-    case Billing.check_limit(user, :lifetime_embed_token_cap, current + estimated - 1) do
-      :ok ->
-        true
-
-      {:error, :limit_reached} ->
-        :telemetry.execute(
-          [:engram, :abuse, :embed_budget_exhausted],
-          %{count: 1, lifetime_tokens: current},
-          %{user_id: user_id}
-        )
-
-        Logger.warning(
-          "EmbedNote indexing sparse-only — lifetime embed-token cap reached",
-          Metadata.with_category(:warning, :search,
-            user_id: user_id,
-            reason_label: :embed_budget_exhausted
-          )
-        )
-
-        false
+  # Cheap pre-check for the dense backfill of an already-indexed note: with
+  # nothing left there is no point rebuilding it just to be refused.
+  defp embed_budget_left?(user) do
+    case Billing.effective_limit(user, :lifetime_embed_token_cap) do
+      cap when is_integer(cap) and cap >= 0 -> UsageMeters.lifetime_embed_tokens(user.id) < cap
+      cap when is_nil(cap) or cap == :unlimited or is_integer(cap) -> true
+      _malformed -> false
     end
+  end
+
+  defp budget_exhausted(user_id) do
+    :telemetry.execute(
+      [:engram, :abuse, :embed_budget_exhausted],
+      %{count: 1, lifetime_tokens: UsageMeters.lifetime_embed_tokens(user_id)},
+      %{user_id: user_id}
+    )
+
+    Logger.warning(
+      "EmbedNote indexing sparse-only — lifetime embed-token cap reached",
+      Metadata.with_category(:warning, :search,
+        user_id: user_id,
+        reason_label: :embed_budget_exhausted
+      )
+    )
+
+    false
   end
 
   # How long an over-budget note sits out of ReconcileEmbeddings' dense
   # backfill before it is re-checked. The budget is LIFETIME, so it only frees
   # up on an upgrade or an override; until then every re-check is a no-op.
-  # ponytail: fixed 24h, so an over-budget user who upgrades waits up to a day
-  # for the dense leg on parked notes. Clear `embed_retry_after` on upgrade if
-  # that ever matters.
+  # `embed_budget_parked` marks the park so ReconcileEmbeddings can skip it for
+  # a user who upgraded, without also skipping a poison cooldown.
+  # ponytail: a raised per-user override (not an upgrade) still waits out the
+  # 24h.
   @budget_park_seconds 86_400
 
   defp budget_park_until,
@@ -271,29 +275,12 @@ defmodule Engram.Workers.EmbedNote do
     {:ok, _} =
       Repo.with_tenant(note.user_id, fn ->
         Repo.update_all(from(n in Note, where: n.id == ^note.id),
-          set: [embed_retry_after: budget_park_until()]
+          set: [embed_retry_after: budget_park_until(), embed_budget_parked: true]
         )
       end)
 
     :ok
   end
-
-  defp record_embed_tokens(user_id, embedded_bytes) do
-    case UsageMeters.estimate_tokens(embedded_bytes) do
-      0 -> :ok
-      tokens -> UsageMeters.add_embed_tokens(user_id, tokens)
-    end
-  end
-
-  # The budget GATE still estimates the whole note: it runs before the pass,
-  # when which chunks will re-embed is not yet known, so it errs towards
-  # blocking. Uses the ciphertext byte size; AES-GCM adds a 16-byte auth tag,
-  # so it over-counts by ~4 tokens per note.
-  defp estimate_note_tokens(%Note{content_ciphertext: ct}) when is_binary(ct) do
-    UsageMeters.estimate_tokens(ct)
-  end
-
-  defp estimate_note_tokens(_), do: 0
 
   # Snooze duration after Voyage 429. Env-driven via `EMBED_429_SNOOZE_SECONDS`
   # (wired in runtime.exs) so we can tune as Voyage RPM allotment grows. 60s is
@@ -384,7 +371,9 @@ defmodule Engram.Workers.EmbedNote do
     # and re-pays Voyage each time. `note.user_id` is in scope.
     {:ok, {count, _}} =
       Repo.with_tenant(note.user_id, fn ->
-        Repo.update_all(park_query, set: [embed_retry_after: retry_after])
+        Repo.update_all(park_query,
+          set: [embed_retry_after: retry_after, embed_budget_parked: nil]
+        )
       end)
 
     # Emitted after the write so `parked:` reports what actually happened.
@@ -405,7 +394,7 @@ defmodule Engram.Workers.EmbedNote do
 
   defp maybe_mark_poison(_note, _result, _job), do: :ok
 
-  defp run_embed(note, user, old_path_hmac_b64, dense?) do
+  defp run_embed(note, user, old_path_hmac_b64) do
     # Load vault up front so we can drive both the decrypt path (future) and
     # the index call.
     # Missing vault means the note is orphaned — nothing to index, discard.
@@ -428,14 +417,13 @@ defmodule Engram.Workers.EmbedNote do
                 Indexing.delete_points_by_path_hmac(decrypted_note, old_path_hmac_b64)
               end
 
-            case Indexing.index_note_with_usage(decrypted_note, vault, user, dense: dense?) do
-              {:ok, count, embedded_bytes} ->
-                # `dense?` is the one decision this pass made, threaded down
-                # from run_and_stamp. Do NOT re-check the budget here: a second
-                # read can land a DIFFERENT answer mid-job, and the stamp would
-                # then disagree with what Indexing actually wrote.
+            case Indexing.index_note_with_usage(decrypted_note, vault, user, budget_opts(user)) do
+              {:ok, count, _embedded_bytes, dense?} ->
+                # `dense?` is what Indexing actually wrote. Do NOT re-check the
+                # budget here: a second read can land a DIFFERENT answer, and
+                # the stamp would then disagree with the index.
                 stamp_embed_hash(note, dense?, count)
-                {:ok, embedded_bytes}
+                :ok
 
               # Voyage 429 — back off without burning an Oban attempt. Voyage's
               # paid-tier RPM is finite; without this guard five consecutive
@@ -521,13 +509,21 @@ defmodule Engram.Workers.EmbedNote do
     set =
       cond do
         chunk_count == 0 ->
-          [dense_indexed_hash: nil, embed_retry_after: nil]
+          [dense_indexed_hash: nil, embed_retry_after: nil, embed_budget_parked: nil]
 
         dense? ->
-          [dense_indexed_hash: note.content_hash, embed_retry_after: nil]
+          [
+            dense_indexed_hash: note.content_hash,
+            embed_retry_after: nil,
+            embed_budget_parked: nil
+          ]
 
         true ->
-          [dense_indexed_hash: nil, embed_retry_after: budget_park_until()]
+          [
+            dense_indexed_hash: nil,
+            embed_retry_after: budget_park_until(),
+            embed_budget_parked: true
+          ]
       end
 
     set = [embed_hash: note.content_hash, chunker_version: @chunker_version] ++ set

@@ -16,6 +16,7 @@ defmodule Engram.Indexing do
   alias Engram.Notes.Note
   alias Engram.Parsers.Markdown
   alias Engram.Repo
+  alias Engram.UsageMeters
   alias Engram.Vector.Qdrant
 
   require Logger
@@ -45,19 +46,27 @@ defmodule Engram.Indexing do
   commit step inside a per-note `Repo.with_tenant/2`.
   """
   def index_note(note, %Engram.Vaults.Vault{} = vault, user \\ nil) do
-    with {:ok, count, _embedded_bytes} <- index_note_with_usage(note, vault, user, []),
+    with {:ok, count, _embedded_bytes, _dense?} <- index_note_with_usage(note, vault, user, []),
          do: {:ok, count}
   end
 
   @doc """
   `index_note/3`, plus the bytes this pass actually sent to the embedder
   (#1618). Chunk reuse makes that a small part of most edits, and a
-  sparse-only pass sends nothing. Returns `{:ok, chunk_count, embedded_bytes}`.
+  sparse-only pass sends nothing. Returns
+  `{:ok, chunk_count, embedded_bytes, dense?}`, where `dense?` says whether
+  the pass wrote dense vectors.
 
   Options:
     * `:dense` (default `true`) — `false` builds the sparse (BM25) leg only and
-      never calls the embedder. `EmbedNote` passes it when the user's lifetime
-      embed budget is spent, so the note stays keyword-searchable.
+      never calls the embedder.
+    * `:reserve_tokens` — `fn tokens -> boolean end`, called with the tokens
+      this pass would actually send to the embedder, AFTER chunk reuse is
+      planned (so a one-section edit asks for one section, not the note).
+      `false` downgrades the pass to sparse-only, so the note stays
+      keyword-searchable. `EmbedNote` passes the lifetime embed budget here.
+    * `:release_tokens` — `fn tokens -> any end`, called when the embed call
+      fails after a reservation, so a failed attempt is not charged.
   """
   def index_note_with_usage(note, %Engram.Vaults.Vault{} = vault, user \\ nil, opts \\ []) do
     # Resolve identity ONCE for the whole call. This function and
@@ -91,7 +100,7 @@ defmodule Engram.Indexing do
             # Returning the error costs one Oban retry.
             with :ok <- purge_stale_index(note) do
               :ok = Engram.Links.replace_links(user, vault, note.id, link_rows)
-              {:ok, 0, 0}
+              {:ok, 0, 0, false}
             end
 
           {:error, :no_dek} = err ->
@@ -101,7 +110,7 @@ defmodule Engram.Indexing do
 
       {:ok, prepared} ->
         with {:ok, count} <- commit_index(prepared),
-             do: {:ok, count, prepared.embedded_bytes}
+             do: {:ok, count, prepared.embedded_bytes, prepared.dense?}
 
       {:error, _} = err ->
         err
@@ -138,28 +147,33 @@ defmodule Engram.Indexing do
       if IndexCap.within_cap?(note, user) do
         dims = Application.get_env(:engram, :embed_dims, @default_dims)
 
-        # A sparse-only pass (`dense: false`, the embed budget is spent) never
-        # calls Voyage. `nil` vectors flow through build_prepared/8, which emits
-        # a sparse-only named vector — the BM25 leg is computed locally from the
-        # chunk text, so keyword search works with zero embedding spend.
-        dense? = Keyword.get(opts, :dense, true)
-
+        # A sparse-only pass (`dense: false`, or the embed budget refused the
+        # reservation) never calls Voyage. `nil` vectors flow through
+        # build_prepared/8, which emits a sparse-only named vector — the BM25
+        # leg is computed locally from the chunk text, so keyword search works
+        # with zero embedding spend.
         with :ok <- Qdrant.ensure_collection(collection(), dims),
              {:ok, filter_key} <- Crypto.dek_filter_key(user),
              {:ok, content_key} <- Crypto.dek_content_hash_key(user),
-             plan = plan_chunks(note, chunks, content_key, dense?),
+             {dense?, plan} =
+               plan_within_budget(
+                 note,
+                 chunks,
+                 content_key,
+                 Keyword.get(opts, :dense, true),
+                 opts
+               ),
              texts = embed_texts(plan),
-             {:ok, vectors} <- maybe_embed(dense?, texts),
+             {:ok, vectors} <- embed_or_release(dense?, texts, opts),
              :ok <- ensure_one_vector_per_text(vectors, texts, note),
              avgdl = Engram.KeywordIndex.Stats.avgdl(note.user_id, note.vault_id),
              {:ok, prepared} <-
                build_prepared(note, user, vault, plan, vectors, filter_key, avgdl, link_rows) do
           # What the embedder was actually sent (#1618): reused chunks and
           # sparse-only passes cost nothing, so the meter must not bill them.
-          embedded_bytes =
-            if dense?, do: texts |> Enum.map(&byte_size/1) |> Enum.sum(), else: 0
+          embedded_bytes = if dense?, do: text_bytes(texts), else: 0
 
-          {:ok, Map.put(prepared, :embedded_bytes, embedded_bytes)}
+          {:ok, prepared |> Map.put(:embedded_bytes, embedded_bytes) |> Map.put(:dense?, dense?)}
         else
           {:error, :no_dek} = err ->
             emit_no_dek_telemetry(note)
@@ -676,6 +690,43 @@ defmodule Engram.Indexing do
   # and the RPM is the knob if it ever bites.
   @embed_batch_size 128
   @embed_batch_bytes 118_000
+
+  # Plans a dense pass, then asks the caller's budget for exactly what that
+  # pass would send (reused chunks cost nothing). Refused → re-plan sparse:
+  # the fingerprints differ, so a dense plan cannot be reused for a sparse pass.
+  defp plan_within_budget(note, chunks, content_key, false, _opts),
+    do: {false, plan_chunks(note, chunks, content_key, false)}
+
+  defp plan_within_budget(note, chunks, content_key, true, opts) do
+    plan = plan_chunks(note, chunks, content_key, true)
+    reserve = Keyword.get(opts, :reserve_tokens, fn _tokens -> true end)
+
+    case plan |> embed_texts() |> text_bytes() |> UsageMeters.estimate_tokens() do
+      0 ->
+        {true, plan}
+
+      tokens ->
+        if reserve.(tokens),
+          do: {true, plan},
+          else: {false, plan_chunks(note, chunks, content_key, false)}
+    end
+  end
+
+  # A failed embed gives its reservation back. A failure AFTER the embed (the
+  # Qdrant commit) keeps the charge: Voyage billed those tokens either way.
+  defp embed_or_release(dense?, texts, opts) do
+    case maybe_embed(dense?, texts) do
+      {:error, _} = err when dense? ->
+        release = Keyword.get(opts, :release_tokens, fn _tokens -> :ok end)
+        _ = release.(texts |> text_bytes() |> UsageMeters.estimate_tokens())
+        err
+
+      other ->
+        other
+    end
+  end
+
+  defp text_bytes(texts), do: texts |> Enum.map(&byte_size/1) |> Enum.sum()
 
   # `false` yields a nil vector per chunk. Kept as an explicit list (not a bare
   # nil) so build_prepared/8 can zip chunks with vectors either way.
