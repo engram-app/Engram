@@ -230,6 +230,9 @@ defmodule Engram.Notes.CrdtRoomLruTest do
     # comes down, and the counter inflates with repeat asks for the same room.
     # Re-stamping on the ask moves it to the back of the queue.
     test "a room that ignores the drain does not monopolise the eviction slate" do
+      # Grace 0: `a` counts as stuck by the second sweep, so it is a candidate
+      # again. Inside the grace window it would not be re-asked at all.
+      with_lru_config(drain_grace_ms: 0)
       a = live_room()
       b = live_room()
       c = live_room()
@@ -279,8 +282,58 @@ defmodule Engram.Notes.CrdtRoomLruTest do
       CrdtRoomLru.sweep(0)
       assert drains_received() == 20
 
+      # The first 20 are still inside their grace window: not stuck, so 20 NEW
+      # rooms are evicted in one unpaced pass (more than the paced 16).
+      for n <- 1..20, do: CrdtRoomLru.touch("s-#{n}", live_room(), @vault)
       CrdtRoomLru.sweep(0)
       assert drains_received() == 20
+    end
+
+    # A drained room takes a checkpoint to exit. A sweep that lands before it
+    # does must neither re-ask it nor count it toward the excess — or, with the
+    # asked rooms restamped to "now", it turns on the rooms it meant to KEEP.
+    test "a room asked moments ago is not asked again and does not count toward the excess" do
+      with_lru_config(drain_grace_ms: 60_000)
+      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(@vault))
+
+      rooms = for n <- 1..5, do: {"r-#{n}", live_room()}
+
+      for {id, pid} <- rooms do
+        CrdtRoomLru.touch(id, pid, @vault)
+        Process.sleep(2)
+      end
+
+      CrdtRoomLru.sweep(2)
+      assert drains_received() == 3
+
+      CrdtRoomLru.sweep(2)
+      assert drains_received() == 0, "the 3 asked rooms are exiting; the 2 kept are the cap"
+
+      # One NEW room: exactly one more over the cap, and the victim is the oldest
+      # room that was never asked.
+      [{_, kept_oldest} | _] = Enum.drop(rooms, 3)
+      CrdtRoomLru.touch("r-new", live_room(), @vault)
+      CrdtRoomLru.sweep(2)
+
+      assert_receive {:crdt_room_drain, ^kept_oldest}, 1_000
+      assert drains_received() == 0
+    end
+
+    # The paced limit bounds how much probe work a wedge can queue on a channel
+    # per sweep INTERVAL. Prompt over-cap sweeps would re-run it every second.
+    # Asserted on the scheduled timer, not on silence: the periodic sweep can
+    # land inside any quiet window and drain a stuck room legitimately.
+    test "no prompt sweep while drains are stuck; pacing waits for the interval" do
+      with_lru_config(drain_grace_ms: 0, max_resident: 1, over_cap_sweep_ms: 60_000)
+
+      for n <- 1..3, do: CrdtRoomLru.touch("w-#{n}", live_room(), @vault)
+      CrdtRoomLru.sweep(1)
+      # Nobody drained anything: the next sweep sees stuck rooms and paces.
+      CrdtRoomLru.sweep(1)
+
+      CrdtRoomLru.touch("w-new", live_room(), @vault)
+
+      assert over_cap_timer() == nil
     end
 
     # A 30s sweep interval alone let 9 new rooms/s pile ~270 over the cap
@@ -297,21 +350,25 @@ defmodule Engram.Notes.CrdtRoomLruTest do
       assert_receive {:crdt_room_drain, ^old}, 1_000
     end
 
-    test "re-touching a resident room does not trigger a sweep" do
-      with_lru_config(max_resident: 1, over_cap_sweep_ms: 10)
-      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(@vault))
+    test "re-touching a resident room does not schedule a sweep; a new room does" do
+      with_lru_config(max_resident: 1, over_cap_sweep_ms: 60_000)
 
       # Two rooms are already over the cap of 1, but only a NEW room grows
       # residency; ordinary writes to existing rooms must stay a bare insert.
       a = live_room()
-      b = live_room()
       :ets.insert(:crdt_room_lru, {"a-note", a, @vault, 1})
-      :ets.insert(:crdt_room_lru, {"b-note", b, @vault, 2})
+      :ets.insert(:crdt_room_lru, {"b-note", live_room(), @vault, 2})
 
       CrdtRoomLru.touch("a-note", a, @vault)
+      assert over_cap_timer() == nil
 
-      refute_receive {:crdt_room_drain, _}, 200
+      CrdtRoomLru.touch("c-note", live_room(), @vault)
+      assert over_cap_timer() != nil
     end
+
+    # `:sys.get_state/1` is a call, so it is served after any cast `touch/3`
+    # already sent from this process.
+    defp over_cap_timer, do: :sys.get_state(CrdtRoomLru).over_cap_timer
 
     defp with_lru_config(overrides) do
       prev = Application.get_env(:engram, CrdtRoomLru, [])

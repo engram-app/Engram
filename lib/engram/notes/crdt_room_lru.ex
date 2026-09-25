@@ -245,9 +245,11 @@ defmodule Engram.Notes.CrdtRoomLru do
   end
 
   # `asked`: note_id => {pid, first_asked_at} for drains not yet seen to land.
-  # `over_cap_armed`: a prompt sweep is already scheduled, so a burst of new
+  # `over_cap_timer`: a prompt sweep is already scheduled, so a burst of new
   # rooms coalesces into one sweep instead of one per room.
-  defp initial_state, do: %{asked: %{}, over_cap_armed: false}
+  # `paced`: the last sweep found stuck drains. Prompt sweeps stand down until a
+  # sweep finds none, so a wedge gets at most one paced batch per interval.
+  defp initial_state, do: %{asked: %{}, over_cap_timer: nil, paced: false}
 
   @impl true
   def handle_call({:sweep, cap}, _from, state) do
@@ -255,17 +257,23 @@ defmodule Engram.Notes.CrdtRoomLru do
   end
 
   @impl true
-  def handle_call(:reset, _from, _state) do
+  def handle_call(:reset, _from, state) do
     :ets.delete_all_objects(@table)
+    _ = cancel_over_cap_timer(state)
     {:reply, :ok, initial_state()}
   end
 
   @impl true
-  def handle_cast(:over_cap, %{over_cap_armed: true} = state), do: {:noreply, state}
+  def handle_cast(:over_cap, %{over_cap_timer: ref} = state) when ref != nil,
+    do: {:noreply, state}
+
+  # While drains are stuck every drain can cost its channel a 1s probe, and
+  # prompt sweeps would queue a paced batch per second instead of per interval.
+  def handle_cast(:over_cap, %{paced: true} = state), do: {:noreply, state}
 
   def handle_cast(:over_cap, state) do
-    Process.send_after(self(), :over_cap_sweep, over_cap_sweep_ms())
-    {:noreply, %{state | over_cap_armed: true}}
+    ref = Process.send_after(self(), :over_cap_sweep, over_cap_sweep_ms())
+    {:noreply, %{state | over_cap_timer: ref}}
   end
 
   @impl true
@@ -276,7 +284,7 @@ defmodule Engram.Notes.CrdtRoomLru do
   end
 
   def handle_info(:over_cap_sweep, state) do
-    {:noreply, do_sweep(max_resident(), %{state | over_cap_armed: false})}
+    {:noreply, do_sweep(max_resident(), %{state | over_cap_timer: nil})}
   end
 
   # Private ------------------------------------------------------------------
@@ -290,14 +298,40 @@ defmodule Engram.Notes.CrdtRoomLru do
     # replacement room for the note (new pid) means the old drain landed.
     outstanding = Map.filter(state.asked, fn {id, {pid, _at}} -> {id, pid} in live_keys end)
     grace = drain_grace_ms()
-    stuck? = Enum.any?(outstanding, fn {_id, {_pid, at}} -> now - at >= grace end)
+    {stuck, exiting} = Map.split_with(outstanding, fn {_id, {_pid, at}} -> now - at >= grace end)
+    stuck? = map_size(stuck) > 0
     limit = if stuck?, do: @paced_evictions_per_sweep, else: :infinity
 
-    asked = evict(select_evictions(live, cap, limit), cap, length(live), stuck?)
+    # A room asked inside the grace window is on its way out (its checkpoint
+    # takes a moment). It is neither a candidate nor part of the excess: counting
+    # it would re-ask it, and since an ask restamps a room as newest, a quick
+    # second sweep would then drain the very rooms the first one kept.
+    candidates =
+      Enum.reject(live, fn {id, pid, _vault, _last} ->
+        match?({^pid, _}, Map.get(exiting, id))
+      end)
+
+    evictions = select_evictions(candidates, cap, limit)
+    backlog = max(length(candidates) - cap - length(evictions), 0)
+    asked = evict(evictions, cap, length(live), backlog, stuck?)
+
+    # Pacing also stands down any prompt sweep armed before the wedge showed.
+    state = if stuck?, do: cancel_over_cap_timer(state), else: state
 
     # The FIRST ask time wins: re-asking a stuck room every sweep must not keep
     # restarting its grace clock.
-    %{state | asked: Map.merge(Map.new(asked, &{elem(&1, 0), {elem(&1, 1), now}}), outstanding)}
+    %{
+      state
+      | asked: Map.merge(Map.new(asked, &{elem(&1, 0), {elem(&1, 1), now}}), outstanding),
+        paced: stuck?
+    }
+  end
+
+  defp cancel_over_cap_timer(%{over_cap_timer: nil} = state), do: state
+
+  defp cancel_over_cap_timer(state) do
+    _ = Process.cancel_timer(state.over_cap_timer)
+    %{state | over_cap_timer: nil}
   end
 
   # A room that exited between sweeps still holds an entry. Prune BEFORE
@@ -316,17 +350,16 @@ defmodule Engram.Notes.CrdtRoomLru do
     end)
   end
 
-  defp evict([], _cap, _resident, _paced?), do: []
+  defp evict([], _cap, _resident, _backlog, _paced?), do: []
 
   # Returns `[{note_id, pid}]` for every room actually asked to drain.
-  defp evict(note_ids, cap, resident, paced?) do
-    # Never silent: an LRU eviction means the idle drain alone was not keeping
-    # up, which is a capacity signal and not routine.
-    # `backlog` is what this sweep is deliberately NOT evicting because earlier
-    # drains have not landed (`paced=true`). Logged explicitly so a paced sweep
-    # can never read as "residency is under control" when it is only catching up.
-    backlog = max(resident - cap - length(note_ids), 0)
-
+  #
+  # Never silent: an LRU eviction means the idle drain alone was not keeping up,
+  # which is a capacity signal and not routine. `backlog` is what this sweep is
+  # deliberately NOT evicting because earlier drains have not landed
+  # (`paced=true`). Logged explicitly so a paced sweep can never read as
+  # "residency is under control" when it is only catching up.
+  defp evict(note_ids, cap, resident, backlog, paced?) do
     Logger.warning(
       "crdt room LRU evicting #{length(note_ids)} room(s) — resident=#{resident} cap=#{cap} backlog=#{backlog} paced=#{paced?}",
       Engram.Logger.Metadata.with_category(:warning, :sync)
