@@ -609,7 +609,8 @@ defmodule Engram.MCP.Tools do
       name: "create_note",
       description:
         "Create a new note with automatic folder placement. " <>
-          "If suggested_folder is omitted, the note is placed automatically.",
+          "If suggested_folder is omitted, the note is placed automatically. " <>
+          "Never overwrites: fails if a note already exists at the resulting path.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
