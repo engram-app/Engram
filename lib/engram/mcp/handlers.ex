@@ -292,16 +292,26 @@ defmodule Engram.MCP.Handlers do
         "# #{title}\n\n#{content}"
       end
 
-    Notes.upsert_note(user, vault, %{"path" => path, "content" => content, "mtime" => now()})
-    |> upsert_reply(
-      [
-        ok: "Note created: #{path}",
-        conflict: "Note changed on the server, retry: #{path}",
-        deleted: "Note was deleted: #{path}",
-        error: "Failed to create note: #{path}"
-      ],
-      %{"path" => path}
-    )
+    # create_note is advertised non-destructive, so it must never replace a note
+    # at its derived path. Upsert sanitizes the path, so check the same form.
+    # ponytail: check-then-write, two concurrent creates of one title can still
+    # race; a create-only mode on upsert_note closes it if that ever matters.
+    if Notes.note_exists?(user, vault, Notes.PathSanitizer.sanitize(path)) do
+      {:error,
+       "A note already exists at #{path}. Use get_note to read it, or write_note " <>
+         "to replace it, or pick a different title."}
+    else
+      Notes.upsert_note(user, vault, %{"path" => path, "content" => content, "mtime" => now()})
+      |> upsert_reply(
+        [
+          ok: "Note created: #{path}",
+          conflict: "Note changed on the server, retry: #{path}",
+          deleted: "Note was deleted: #{path}",
+          error: "Failed to create note: #{path}"
+        ],
+        %{"path" => path}
+      )
+    end
   end
 
   def handle("write_note", user, vault, args) do

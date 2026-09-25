@@ -3,6 +3,7 @@
 import logging
 import re
 import time
+import uuid
 
 import pytest
 
@@ -59,7 +60,9 @@ async def test_mcp_create_note_broadcasts_to_vault(vault_b, cdp_b, api_sync):
     resp, status = api_sync.mcp_call(
         "create_note",
         {
-            "title": "MCP Create RT",
+            # Unique: create_note refuses an occupied path, and the e2e vault
+            # outlives a single test run (reruns, shared session vault).
+            "title": f"MCP Create RT {uuid.uuid4().hex[:8]}",
             "content": "Created via MCP create_note tool",
             "suggested_folder": "E2E",
         },
