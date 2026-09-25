@@ -581,25 +581,7 @@ defmodule EngramWeb.McpController do
   end
 
   defp dispatch(_conn, "tools/list", _params) do
-    tools =
-      Enum.map(Tools.list(), fn t ->
-        base = %{
-          "name" => t.name,
-          "title" => t.title,
-          "description" => t.description,
-          "inputSchema" => t.inputSchema,
-          "annotations" => t.annotations
-        }
-
-        # Only for converted tools (#1660). An `outputSchema` a tool cannot
-        # honour is worse than none: a client generates types from it.
-        case t[:outputSchema] do
-          nil -> base
-          schema -> Map.put(base, "outputSchema", schema)
-        end
-      end)
-
-    {:ok, %{"tools" => tools}}
+    {:ok, %{"tools" => Tools.wire_list()}}
   end
 
   defp dispatch(conn, "tools/call", %{"name" => name, "arguments" => args}) do
