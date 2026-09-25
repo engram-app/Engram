@@ -257,9 +257,8 @@ defmodule Engram.Notes.CrdtRoomLru do
   end
 
   @impl true
-  def handle_call(:reset, _from, state) do
+  def handle_call(:reset, _from, _state) do
     :ets.delete_all_objects(@table)
-    _ = cancel_over_cap_timer(state)
     {:reply, :ok, initial_state()}
   end
 
@@ -272,7 +271,8 @@ defmodule Engram.Notes.CrdtRoomLru do
   def handle_cast(:over_cap, %{paced: true} = state), do: {:noreply, state}
 
   def handle_cast(:over_cap, state) do
-    ref = Process.send_after(self(), :over_cap_sweep, over_cap_sweep_ms())
+    ref = make_ref()
+    _ = Process.send_after(self(), {:over_cap_sweep, ref}, over_cap_sweep_ms())
     {:noreply, %{state | over_cap_timer: ref}}
   end
 
@@ -283,9 +283,13 @@ defmodule Engram.Notes.CrdtRoomLru do
     {:noreply, state}
   end
 
-  def handle_info(:over_cap_sweep, state) do
+  # Only the sweep for the CURRENT timer runs. `Process.cancel_timer/1` cannot
+  # recall a message already delivered, so a cancelled one may still arrive.
+  def handle_info({:over_cap_sweep, ref}, %{over_cap_timer: ref} = state) do
     {:noreply, do_sweep(max_resident(), %{state | over_cap_timer: nil})}
   end
+
+  def handle_info({:over_cap_sweep, _stale}, state), do: {:noreply, state}
 
   # Private ------------------------------------------------------------------
 
@@ -318,21 +322,25 @@ defmodule Engram.Notes.CrdtRoomLru do
     # Pacing also stands down any prompt sweep armed before the wedge showed.
     state = if stuck?, do: cancel_over_cap_timer(state), else: state
 
-    # The FIRST ask time wins: re-asking a stuck room every sweep must not keep
-    # restarting its grace clock.
+    # A stuck ask paces ONE sweep, then is forgotten. A room can outlive its
+    # drain without any wedge (a second observer still holds it and the user's
+    # next frame re-observes the same pid), and keeping it here would pin the
+    # whole node in paced mode for as long as the note is edited. In a real
+    # wedge the rooms asked by this paced sweep go stuck in turn, so pacing
+    # continues for exactly as long as drains keep failing.
+    #
+    # Exiting asks keep their FIRST ask time, so a quick later sweep cannot
+    # restart their grace clock.
     %{
       state
-      | asked: Map.merge(Map.new(asked, &{elem(&1, 0), {elem(&1, 1), now}}), outstanding),
+      | asked: Map.merge(Map.new(asked, &{elem(&1, 0), {elem(&1, 1), now}}), exiting),
         paced: stuck?
     }
   end
 
-  defp cancel_over_cap_timer(%{over_cap_timer: nil} = state), do: state
-
-  defp cancel_over_cap_timer(state) do
-    _ = Process.cancel_timer(state.over_cap_timer)
-    %{state | over_cap_timer: nil}
-  end
+  # Forgetting the ref is the cancellation: the pending message then arrives
+  # stale and is ignored by `handle_info/2`.
+  defp cancel_over_cap_timer(state), do: %{state | over_cap_timer: nil}
 
   # A room that exited between sweeps still holds an entry. Prune BEFORE
   # selecting, or corpses count toward residency and healthy rooms get evicted
