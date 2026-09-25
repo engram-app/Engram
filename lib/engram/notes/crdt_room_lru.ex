@@ -335,10 +335,18 @@ defmodule Engram.Notes.CrdtRoomLru do
     # DO land while older stuck rooms are still alive, the pool has recovered
     # and re-asking them unpaced is the right call.
     #
-    # Known cost: a room kept alive by a second observer that keeps getting
-    # re-selected paces every other sweep instead of pinning. Rare, since a
-    # room is re-touched on every write and depth ranking protects a vault's
-    # newest rooms.
+    # Known costs, both accepted:
+    # - A room kept alive by a second observer keeps the node paced for as long
+    #   as each paced sweep re-selects it (an excess of 16 or fewer that it
+    #   stays inside). Pacing evicts all of so small an excess anyway, so the
+    #   only loss is prompt sweeps; an import breaks it within one interval
+    #   because its deeper rooms outrank the held one.
+    # - A paced sweep that asks NOTHING (residency fell back under the cap
+    #   mid-wedge) drops the stuck verdict, so the next excess goes out as one
+    #   unpaced batch before the following sweep re-detects the wedge. Keeping
+    #   the stuck asks instead would let one healthy held room keep the node
+    #   paced whenever there is no excess, slowing the first minute of every
+    #   later import. The common healthy case wins.
     #
     # Exiting asks keep their FIRST ask time, so a quick later sweep cannot
     # restart their grace clock.
