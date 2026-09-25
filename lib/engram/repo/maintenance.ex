@@ -33,7 +33,7 @@ defmodule Engram.Repo.Maintenance do
   no bypass attributes at all (no SUPERUSER, BYPASSRLS, CREATEROLE or
   CREATEDB, no role memberships) and DML-only grants. Its cross-tenant reach
   is one permissive `maintenance_all` policy per tenant table, scoped
-  `TO engram_maintenance` — not BYPASSRLS, because RDS cannot grant that to a
+  `TO engram_maintenance`, not BYPASSRLS, because RDS cannot grant that to a
   custom role (the master is CREATEROLE, not superuser). A new tenant table
   must add its own `maintenance_all`; `Engram.Repo.MaintenanceRoleTest` fails
   until it does, and until then this pool reads zero rows from that table.

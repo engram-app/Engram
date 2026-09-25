@@ -40,13 +40,20 @@ Where each piece lives:
 
 - Role, grants, default privileges, password: `Engram.Release.prepare_database/0`,
   which runs before every migrate (entrypoint, `ecto.setup`, `test` alias, CI).
-  The role must exist before `CREATE POLICY ... TO engram_maintenance`.
 - Existing tables are granted by `GRANT ... ON ALL TABLES` in
   `prepare_database`, because the role postdates the baseline dump. Future
   tables are covered by `ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER`.
 - Password: `ENGRAM_MAINTENANCE_DB_PASSWORD`, applied as a SCRAM verifier on
   every boot, same code as `ENGRAM_APP_DB_PASSWORD`.
-- Policies: migration `20260925140000_add_maintenance_all_policies_expand.exs`.
+- Policies: migration `20260925150000_add_maintenance_all_policies_expand.exs`.
+  It ALSO creates the role if missing, with the same guarded statement and
+  attributes. A migration must apply on top of the previous release's
+  bootstrap: the n1-compat gate runs the previous tag's `prepare_database`
+  (which predates this role) and then this migration, and
+  `CREATE POLICY ... TO` an unknown role fails with 42704. Both creators are
+  idempotent in either order. A role the migration creates has no grants and
+  no password until `prepare_database` runs. `down/0` drops only the
+  policies; `prepare_database` owns the role.
 
 **Every new tenant table needs its own `maintenance_all`,** added in the same
 migration that enables RLS on it. Without it the maintenance pool reads zero

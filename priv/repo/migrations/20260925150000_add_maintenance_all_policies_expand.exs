@@ -3,7 +3,7 @@ defmodule Engram.Repo.Migrations.AddMaintenanceAllPoliciesExpand do
 
   # squawk-ignore-file
   #
-  # phase/expand — adds one permissive policy per tenant table. Additive: no
+  # phase/expand: adds one permissive policy per tenant table. Additive: no
   # existing role gains or loses anything, because each policy applies only
   # `TO engram_maintenance`, a role nothing connects as until infra sets
   # MAINTENANCE_DATABASE_URL to it.
@@ -12,7 +12,7 @@ defmodule Engram.Repo.Migrations.AddMaintenanceAllPoliciesExpand do
   # tenants (OrphanSweep, CrdtBloatSweep, ExportExpirySweep, CleanupVault). Under
   # FORCE RLS it needs a credential the tenant policy does not filter. Prod has
   # been using the RDS master (`engram_admin`) for that, which also carries
-  # CREATEROLE, DDL and schema ownership — far more than a sweep needs.
+  # CREATEROLE, DDL and schema ownership, far more than a sweep needs.
   #
   # The obvious least-privilege answer, a dedicated BYPASSRLS role, is not
   # available on RDS: the master is CREATEROLE but not superuser, and PG16+
@@ -21,10 +21,20 @@ defmodule Engram.Repo.Migrations.AddMaintenanceAllPoliciesExpand do
   # for `engram_maintenance` these make every row visible and writable; for
   # every other role the `TO` clause means they do not exist.
   #
-  # The role itself is created by `Engram.Release.prepare_database/0`, which
-  # every migrate path runs first. On a database where it was skipped, this
-  # fails with `role "engram_maintenance" does not exist`, which is the right
-  # outcome — the same contract the baseline already has with engram_app.
+  # The role is OWNED by `Engram.Release.prepare_database/0` (attributes,
+  # grants, password). This migration still creates it if missing, because a
+  # migration must apply on top of the PREVIOUS release's bootstrap: the
+  # n1-compat gate (and any env migrated before its image's prepare_database
+  # ran) has no `engram_maintenance`, and `CREATE POLICY ... TO` an unknown
+  # role fails with 42704. Same guarded statement, same attributes
+  # (NOINHERIT LOGIN, nothing else), so the two are idempotent in either
+  # order. The migrator can do it: `engram_admin` has CREATEROLE on RDS, and
+  # dev/CI/FastRaid migrate as a superuser.
+  #
+  # A role created here has no grants and no password, so it can neither log
+  # in nor read anything until prepare_database runs. `down/0` leaves the
+  # role: prepare_database owns it, and dropping it would break a
+  # rollback-then-reapply (and fail outright once its grants exist).
   #
   # Kept as a literal list rather than `Engram.Repo.tenant_tables/0`: a
   # migration must describe the schema at ITS point in history, not whatever
@@ -38,6 +48,16 @@ defmodule Engram.Repo.Migrations.AddMaintenanceAllPoliciesExpand do
              crdt_update_log note_links vault_index_states vault_index_update_log)
 
   def up do
+    execute """
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'engram_maintenance') THEN
+        CREATE ROLE engram_maintenance NOINHERIT LOGIN;
+      END IF;
+    END
+    $$;
+    """
+
     for t <- @tables do
       execute "CREATE POLICY maintenance_all ON #{t} TO engram_maintenance USING (true) WITH CHECK (true)"
     end

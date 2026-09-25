@@ -103,7 +103,7 @@ defmodule Engram.Release do
   # not superuser, and PG16+ only lets a CREATEROLE role hand out an attribute
   # it holds itself. Cross-tenant reach comes instead from one permissive
   # `maintenance_all` policy per tenant table, scoped `TO engram_maintenance`
-  # (migration 20260925140000). That also keeps the reach visible in the schema
+  # (migration 20260925150000). That also keeps the reach visible in the schema
   # and limited to the tables that carry the policy.
   #
   # Same shape as engram_app otherwise: NOINHERIT LOGIN, no memberships, no
