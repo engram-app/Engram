@@ -1,4 +1,4 @@
-# Context Doc: MCP TDQS baseline and gating rule
+# MCP TDQS lint gate and hosted score
 
 _Last verified: 2026-09-26 (mcp-tdqs@0.2.0, `mcp-tools.json` 17 tools, spec 1.3; issue #1767)_
 
