@@ -228,9 +228,16 @@ config :engram, :warm_lang_models, false
 # ClientSpanTest swap in an in-memory `:otel_exporter_pid` exporter via
 # `:otel_simple_processor.set_exporter/2` and synchronously observe the
 # exported span in the same test process (no batch flush delay/race).
+#
+# Same processor chain as prod (runtime.exs) so the scrubber is exercised.
+# With more than one processor the SDK no longer auto-names the simple one
+# `global`, so name it explicitly or set_exporter/2 finds nothing.
 config :opentelemetry,
   traces_exporter: :none,
-  span_processor: :simple,
+  processors: [
+    {Engram.Observability.SpanScrubber, %{}},
+    {:otel_simple_processor, %{name: :global}}
+  ],
   sampler: :always_on
 
 # OrphanSweep re-checks its point-orphan candidates after a grace window before
