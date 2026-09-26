@@ -84,6 +84,80 @@ defmodule Engram.MCP.HandlersTest do
                  content <> "\nappended"
                end)
     end
+
+    # append_to_note's position: start guard runs INSIDE the rebuild function
+    # so it re-checks the content rmw_upsert actually rebuilds from on every
+    # attempt, not a content snapshot read before rmw_upsert's own read/retry
+    # loop (a pre-read-then-check-then-call-rmw_upsert shape would let a
+    # concurrent write land between the check and the real read/write and
+    # slip an unsafe shape through).
+    test "rebuild may refuse with {:error, msg} and nothing is written", ctx do
+      %{user: user, vault: vault} = ctx
+      alias Engram.Notes
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "refuse.md",
+          "content" => "base",
+          "mtime" => 1.0
+        })
+
+      assert {:error, "nope"} =
+               Handlers.rmw_upsert(user, vault, "refuse.md", fn _content -> {:error, "nope"} end)
+
+      {:ok, note} = Notes.get_note(user, vault, "refuse.md")
+      assert {:ok, "base"} = Notes.authoritative_content(user, note)
+    end
+
+    test "a rebuild error check runs against the FRESH re-read on retry, not the stale content",
+         ctx do
+      %{user: user, vault: vault} = ctx
+      alias Engram.Notes
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "toctou.md",
+          "content" => "safe",
+          "mtime" => 1.0
+        })
+
+      raced = :counters.new(1, [])
+
+      result =
+        Handlers.rmw_upsert(user, vault, "toctou.md", fn content ->
+          if :counters.get(raced, 1) == 0 do
+            :counters.add(raced, 1, 1)
+
+            # A concurrent write lands between rmw_upsert's read (which handed
+            # us the safe "safe" content) and its write, moving the row to
+            # "unsafe". This forces a version_conflict retry.
+            {:ok, _} =
+              Notes.upsert_note(user, vault, %{
+                "path" => "toctou.md",
+                "content" => "unsafe",
+                "mtime" => 2.0
+              })
+
+            content <> "\nappended"
+          else
+            # Retry: rmw_upsert re-read the row, so `content` here MUST be the
+            # fresh "unsafe" value, never the stale "safe" one from the first
+            # call. A check based on a pre-read snapshot would never see this.
+            if content == "unsafe" do
+              {:error, "refused: unsafe content"}
+            else
+              content <> "\nappended"
+            end
+          end
+        end)
+
+      assert {:error, "refused: unsafe content"} = result
+
+      {:ok, note} = Notes.get_note(user, vault, "toctou.md")
+      assert {:ok, "unsafe"} = Notes.authoritative_content(user, note)
+    end
   end
 
   describe "rename_folder handler" do

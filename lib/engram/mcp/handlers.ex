@@ -346,8 +346,27 @@ defmodule Engram.MCP.Handlers do
 
     with {:ok, position} <- resolve_append_position(args["position"]) do
       case Notes.get_note(user, vault, path) do
-        {:ok, note} ->
-          append_to_existing(user, vault, path, note, text, position)
+        {:ok, _note} ->
+          # Read-modify-write via the CAS helper: a write landing between the
+          # read and the upsert must trigger a re-read + rebuild, not be
+          # deleted by the full-content merge (2026-07-07: MCP appends
+          # erased). The frontmatter-misparse guard runs INSIDE rebuild (not
+          # here) so it checks the content rmw_upsert actually rebuilds from
+          # on every attempt, including the post-conflict retry.
+          rmw_upsert(user, vault, path, fn content ->
+            case guard_start_frontmatter_safety(position, content, text) do
+              :ok -> place_text(content, text, position)
+              {:error, _msg} = error -> error
+            end
+          end)
+          |> upsert_reply(
+            [
+              ok: "Note appended to: #{path}",
+              conflict: "Note changed concurrently; retry: #{path}",
+              error: "Failed to append to note: #{path}"
+            ],
+            %{"path" => path, "created" => false}
+          )
 
         {:error, :not_found} ->
           content = "# #{Path.basename(path, ".md")}\n\n#{text}"
@@ -830,8 +849,15 @@ defmodule Engram.MCP.Handlers do
   # Declares the read row's content_hash as `base_hash` so a write landing
   # between the read and the upsert 409s instead of being deleted by the
   # full-content merge, then retries ONCE on a fresh read. `rebuild` receives
-  # the current content and returns the new content. Public (doc: false) so
-  # the CAS interleaving is unit-testable with a racing rebuild fun.
+  # the current content and returns the new content (a binary), OR
+  # `{:error, reason}` to refuse the write entirely: rmw_upsert returns that
+  # error as-is and writes nothing. Because `rebuild` is invoked fresh on
+  # every attempt (including the retry, against the RE-READ content), any
+  # check a caller puts inside `rebuild` runs against the content actually
+  # being rebuilt from every time, not a snapshot read before rmw_upsert was
+  # called, which a concurrent write could have moved past. A guard failure
+  # is not a version conflict, so it never triggers the retry. Public (doc:
+  # false) so the CAS interleaving is unit-testable with a racing rebuild fun.
   def rmw_upsert(user, vault, path, rebuild, attempt \\ 0) do
     with {:ok, note} <- Notes.get_note(user, vault, path),
          # Rebuild from the AUTHORITY, not the `notes.content` façade. The façade
@@ -839,10 +865,11 @@ defmodule Engram.MCP.Handlers do
          # it can commit a shorter or older body (#1159). base_hash still guards
          # the concurrent-REST-write race, but it cannot detect façade lag:
          # content and content_hash go stale together.
-         {:ok, current} <- Notes.authoritative_content(user, note) do
+         {:ok, current} <- Notes.authoritative_content(user, note),
+         {:ok, new_content} <- rebuild_or_refuse(rebuild.(current)) do
       case Notes.upsert_note(user, vault, %{
              "path" => path,
-             "content" => rebuild.(current),
+             "content" => new_content,
              "mtime" => now(),
              "base_hash" => note.content_hash
            }) do
@@ -854,6 +881,9 @@ defmodule Engram.MCP.Handlers do
       end
     end
   end
+
+  defp rebuild_or_refuse(content) when is_binary(content), do: {:ok, content}
+  defp rebuild_or_refuse({:error, _reason} = error), do: error
 
   @doc false
   # Render Search.search/4 output for the search_notes tool. `names` maps
@@ -1023,6 +1053,12 @@ defmodule Engram.MCP.Handlers do
   #   * `:note_deleted` is a distinct outcome, not a generic failure. Callers
   #     that name a `:deleted` message report it as one; the rest fold it into
   #     `:error`, exactly as their own ladders did.
+  #   * a binary reason is a message a `rmw_upsert` rebuild function already
+  #     built for the caller (e.g. a content-shape guard), so it is passed
+  #     through verbatim rather than replaced with the generic `msgs[:error]`.
+  #     `Notes.upsert_note/4`'s own error reasons are never binaries (its spec
+  #     is Ecto.Changeset.t() | atom() | {atom(), ...}), so this can't shadow
+  #     an internal failure detail leaking to the caller.
   # Every failure here used to come back as `{:ok, apologetic_sentence}` — a
   # write that did not happen, reported as one that did. A model reading only
   # `isError` had no way to tell a landed write from a version conflict, so it
@@ -1033,6 +1069,7 @@ defmodule Engram.MCP.Handlers do
       {:ok, _note} -> {:ok, msgs[:ok], structured}
       {:error, :version_conflict, _note} -> {:error, msgs[:conflict]}
       {:error, :note_deleted} -> {:error, msgs[:deleted] || msgs[:error]}
+      {:error, reason} when is_binary(reason) -> {:error, reason}
       {:error, _reason} -> {:error, msgs[:error]}
     end
   end
@@ -1057,33 +1094,6 @@ defmodule Engram.MCP.Handlers do
   defp resolve_append_position(nil), do: {:ok, "end"}
   defp resolve_append_position(position) when position in ["end", "start"], do: {:ok, position}
   defp resolve_append_position(_), do: {:error, "position must be end or start"}
-
-  defp append_to_existing(user, vault, path, note, text, position) do
-    case Notes.authoritative_content(user, note) do
-      {:ok, current} ->
-        case guard_start_frontmatter_safety(position, current, text) do
-          :ok ->
-            # Read-modify-write via the CAS helper: a write landing between the
-            # read and the upsert must trigger a re-read + rebuild, not be
-            # deleted by the full-content merge (2026-07-07: MCP appends erased).
-            rmw_upsert(user, vault, path, fn content -> place_text(content, text, position) end)
-            |> upsert_reply(
-              [
-                ok: "Note appended to: #{path}",
-                conflict: "Note changed concurrently; retry: #{path}",
-                error: "Failed to append to note: #{path}"
-              ],
-              %{"path" => path, "created" => false}
-            )
-
-          {:error, _msg} = error ->
-            error
-        end
-
-      {:error, _reason} ->
-        {:error, "Failed to append to note: #{path}"}
-    end
-  end
 
   # position "end" never changes the note's shape, so it needs no guard.
   #
