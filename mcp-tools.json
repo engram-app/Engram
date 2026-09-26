@@ -68,70 +68,6 @@
         "idempotentHint": true,
         "openWorldHint": false,
         "readOnlyHint": true,
-        "title": "Check Vault"
-      },
-      "description": "Validate and echo a vault by name or ID. NOTE: this does NOT persist an active vault; MCP keeps no state between calls. To read or write a specific vault, pass its vault_id on each tool call; a vault's name works there too, so this need not be called first. Use list_vaults to see them.",
-      "inputSchema": {
-        "properties": {
-          "vault_id": {
-            "description": "Vault to validate: its name (e.g. \"Engram\") or its UUID",
-            "type": "string"
-          }
-        },
-        "type": "object"
-      },
-      "name": "set_vault",
-      "outputSchema": {
-        "properties": {
-          "vault": {
-            "properties": {
-              "description": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "id": {
-                "type": "string"
-              },
-              "is_default": {
-                "type": "boolean"
-              },
-              "name": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "slug": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "id",
-              "name",
-              "slug",
-              "is_default"
-            ],
-            "type": [
-              "object",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "vault"
-        ],
-        "type": "object"
-      },
-      "title": "Check Vault"
-    },
-    {
-      "annotations": {
-        "destructiveHint": false,
-        "idempotentHint": true,
-        "openWorldHint": false,
-        "readOnlyHint": true,
         "title": "Search Notes"
       },
       "description": "Search your personal knowledge base. Finds relevant notes using semantic search. Searches across ALL your vaults by default; pass vault_id to limit to one. Use when the user asks about their notes, vault, knowledge, or memory.",
@@ -323,72 +259,24 @@
         "idempotentHint": true,
         "openWorldHint": false,
         "readOnlyHint": true,
-        "title": "List Folders"
-      },
-      "description": "List all folders in the personal knowledge base with note counts. Use to understand the vault's organization.",
-      "inputSchema": {
-        "properties": {
-          "vault_id": {
-            "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
-            "type": "string"
-          }
-        },
-        "type": "object"
-      },
-      "name": "list_folders",
-      "outputSchema": {
-        "properties": {
-          "folders": {
-            "items": {
-              "properties": {
-                "count": {
-                  "description": "Notes directly inside",
-                  "type": "integer"
-                },
-                "folder": {
-                  "description": "Folder path; \"\" is the vault root",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "folder",
-                "count"
-              ],
-              "type": "object"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "folders"
-        ],
-        "type": "object"
-      },
-      "title": "List Folders"
-    },
-    {
-      "annotations": {
-        "destructiveHint": false,
-        "idempotentHint": true,
-        "openWorldHint": false,
-        "readOnlyHint": true,
         "title": "List Folder Contents"
       },
-      "description": "List the notes and attachments directly inside one folder (not subfolders). Pass an empty string for the vault root. To see every folder in the vault with note counts use list_folders. To find notes by content use search_notes.",
+      "description": "List the notes, attachments, and subfolders directly inside one folder. Pass an empty string for the vault root. Set recursive: true to list every descendant folder (with note counts) instead of just the direct ones. To see every folder in the vault with counts call list_folder with recursive: true on the root. To find notes by content use search_notes.",
       "inputSchema": {
         "properties": {
           "folder": {
-            "description": "Folder path (e.g. \"Health\") or \"\" for root",
+            "description": "Folder path (e.g. \"Health\") or \"\" for root. Defaults to root.",
             "type": "string"
+          },
+          "recursive": {
+            "description": "List every descendant folder, not just direct subfolders. Defaults to false.",
+            "type": "boolean"
           },
           "vault_id": {
             "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
             "type": "string"
           }
         },
-        "required": [
-          "folder"
-        ],
         "type": "object"
       },
       "name": "list_folder",
@@ -415,6 +303,26 @@
           "folder": {
             "description": "Folder listed; \"\" is the root",
             "type": "string"
+          },
+          "folders": {
+            "description": "Direct subfolders, or every descendant when recursive was true.",
+            "items": {
+              "properties": {
+                "count": {
+                  "description": "Notes directly inside",
+                  "type": "integer"
+                },
+                "folder": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "folder",
+                "count"
+              ],
+              "type": "object"
+            },
+            "type": "array"
           },
           "notes": {
             "items": {
@@ -449,7 +357,8 @@
         "required": [
           "folder",
           "notes",
-          "attachments"
+          "attachments",
+          "folders"
         ],
         "type": "object"
       },
@@ -563,71 +472,9 @@
         "idempotentHint": true,
         "openWorldHint": false,
         "readOnlyHint": true,
-        "title": "Read Note"
-      },
-      "description": "Retrieve the full content of a specific note. Use after searching to read a complete note.",
-      "inputSchema": {
-        "properties": {
-          "source_path": {
-            "description": "The path of the note (e.g. \"Health/Omega Oils.md\")",
-            "type": "string"
-          },
-          "vault_id": {
-            "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "source_path"
-        ],
-        "type": "object"
-      },
-      "name": "get_note",
-      "outputSchema": {
-        "properties": {
-          "content": {
-            "type": "string"
-          },
-          "folder": {
-            "type": "string"
-          },
-          "path": {
-            "description": "Vault-relative path",
-            "type": "string"
-          },
-          "tags": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "title": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "path",
-          "title",
-          "folder",
-          "tags",
-          "content"
-        ],
-        "type": "object"
-      },
-      "title": "Read Note"
-    },
-    {
-      "annotations": {
-        "destructiveHint": false,
-        "idempotentHint": true,
-        "openWorldHint": false,
-        "readOnlyHint": true,
         "title": "Read Notes"
       },
-      "description": "Retrieve the full content of multiple notes in one call (1-20 paths). Use to inventory a folder (list_folder then get_notes) or to read a batch of search results without N round-trips. Missing paths are reported inline.",
+      "description": "Retrieve the full content of multiple notes in one call (1-20 paths). Also reads a single note: pass one path. Use to inventory a folder (list_folder then get_notes) or to read a batch of search results without N round-trips. Missing paths are reported inline.",
       "inputSchema": {
         "properties": {
           "paths": {
@@ -752,7 +599,7 @@
         "readOnlyHint": false,
         "title": "Write Note"
       },
-      "description": "Replace a note's entire content, or create the note if it does not exist. Saves, indexes for search, and syncs to Obsidian. Overwrites whatever the note held. To add text without touching existing content use append_to_note. To change one passage use patch_note, or one heading's section use update_section. To create a note with no risk of overwriting an existing one use create_note; create_note takes a title and picks the folder, not a path.",
+      "description": "Replace a note's entire content, or create the note if it does not exist. Saves, indexes for search, and syncs to Obsidian. Overwrites whatever the note held. To add text without touching existing content use append_to_note. To change one passage, or one heading's section, use edit_note. To create a note with no risk of overwriting an existing one use create_note; create_note takes a title and picks the folder, not a path.",
       "inputSchema": {
         "properties": {
           "content": {
@@ -796,11 +643,20 @@
         "readOnlyHint": false,
         "title": "Append to Note"
       },
-      "description": "Add text to the end of a note. Existing text is kept. If the note does not exist it is created with a `# <name>` title line first. Use for logs, journals and running lists. To change existing text use patch_note. To replace the whole note use write_note.",
+      "description": "Add text to the end of a note. Existing text is kept. If the note does not exist it is created with a `# <name>` title line first. Use for logs, journals and running lists. Set position to start to insert at the top (after any frontmatter) instead. To change existing text use edit_note. To replace the whole note use write_note.",
       "inputSchema": {
         "properties": {
           "path": {
             "description": "Full path for the note",
+            "type": "string"
+          },
+          "position": {
+            "default": "end",
+            "description": "end (default) appends; start inserts at the top, after any frontmatter",
+            "enum": [
+              "end",
+              "start"
+            ],
             "type": "string"
           },
           "text": {
@@ -843,85 +699,51 @@
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false,
-        "title": "Find and Replace in Note"
+        "title": "Edit Note"
       },
-      "description": "Find exact text in an existing note and replace it. Replaces the first occurrence by default; set occurrence to -1 for all, or 1 for the second. Fails if the text is not found. To replace everything under a heading use update_section. To add text use append_to_note. To rewrite the whole note use write_note.",
-      "inputSchema": {
-        "properties": {
-          "find": {
-            "description": "Exact text to find",
-            "type": "string"
-          },
-          "occurrence": {
-            "default": 0,
-            "description": "Which occurrence (0=first, 1=second, -1=all)",
-            "type": "integer"
-          },
-          "path": {
-            "description": "Full path of the note",
-            "type": "string"
-          },
-          "replace": {
-            "description": "Text to replace it with",
-            "type": "string"
-          },
-          "vault_id": {
-            "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "path",
-          "find",
-          "replace"
-        ],
-        "type": "object"
-      },
-      "name": "patch_note",
-      "outputSchema": {
-        "properties": {
-          "path": {
-            "type": "string"
-          },
-          "replacements": {
-            "description": "Occurrences replaced",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "path",
-          "replacements"
-        ],
-        "type": "object"
-      },
-      "title": "Find and Replace in Note"
-    },
-    {
-      "annotations": {
-        "destructiveHint": true,
-        "idempotentHint": true,
-        "openWorldHint": false,
-        "readOnlyHint": false,
-        "title": "Replace Note Section"
-      },
-      "description": "Replace everything under one heading in an existing note, up to the next heading of the same or higher level. The heading line itself is kept. Fails if the heading is not found. To change a specific passage use patch_note. To add text at the end use append_to_note.",
+      "description": "Change part of an existing note. mode replace_text finds exact text and replaces it (first occurrence by default); mode replace_section replaces everything under one heading. Fails without writing if the text or heading is not found, or if expected_replacements does not match. To add text use append_to_note. To rewrite the whole note use write_note.",
       "inputSchema": {
         "properties": {
           "content": {
-            "description": "New content to place under the heading",
+            "description": "replace_section only: new content for under the heading",
+            "type": "string"
+          },
+          "expected_replacements": {
+            "description": "replace_text only: fail without writing unless exactly this many are replaced",
+            "type": "integer"
+          },
+          "find": {
+            "description": "replace_text only: exact text to find",
             "type": "string"
           },
           "heading": {
-            "description": "Heading text without # prefix (e.g. \"Shopping List\")",
+            "description": "replace_section only: heading text without the # prefix",
             "type": "string"
           },
           "level": {
             "default": 2,
-            "description": "Heading level 1-6 (default 2 for ##)",
+            "description": "replace_section only: heading level 1-6 (default 2)",
+            "type": "integer"
+          },
+          "mode": {
+            "description": "replace_text or replace_section",
+            "enum": [
+              "replace_text",
+              "replace_section"
+            ],
+            "type": "string"
+          },
+          "occurrence": {
+            "default": 0,
+            "description": "replace_text only: 0 = first (default), 1 = second, -1 = all",
             "type": "integer"
           },
           "path": {
-            "description": "Full path of the note",
+            "description": "Path of the note, e.g. \"Projects/Alpha.md\"",
+            "type": "string"
+          },
+          "replace": {
+            "description": "replace_text only: text to put in its place",
             "type": "string"
           },
           "vault_id": {
@@ -931,28 +753,41 @@
         },
         "required": [
           "path",
-          "heading",
-          "content"
+          "mode"
         ],
         "type": "object"
       },
-      "name": "update_section",
+      "name": "edit_note",
       "outputSchema": {
         "properties": {
           "heading": {
+            "description": "replace_section: heading updated",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
             "type": "string"
           },
           "path": {
             "type": "string"
+          },
+          "replacements": {
+            "description": "replace_text: occurrences replaced",
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
           "path",
-          "heading"
+          "mode"
         ],
         "type": "object"
       },
-      "title": "Replace Note Section"
+      "title": "Edit Note"
     },
     {
       "annotations": {

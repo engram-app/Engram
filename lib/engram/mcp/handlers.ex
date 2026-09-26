@@ -301,7 +301,7 @@ defmodule Engram.MCP.Handlers do
     # race; a create-only mode on upsert_note closes it if that ever matters.
     if Notes.note_exists?(user, vault, Notes.PathSanitizer.sanitize(path)) do
       {:error,
-       "A note already exists at #{path}. Use get_note to read it, or write_note " <>
+       "A note already exists at #{path}. Use get_notes to read it, or write_note " <>
          "to replace it, or pick a different title."}
     else
       Notes.upsert_note(user, vault, %{"path" => path, "content" => content, "mtime" => now()})

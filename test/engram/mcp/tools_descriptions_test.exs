@@ -6,12 +6,11 @@ defmodule Engram.MCP.ToolsDescriptionsTest do
   alias Engram.MCP.Tools
 
   @siblings %{
-    "write_note" => ~w(append_to_note patch_note create_note),
-    "patch_note" => ~w(update_section append_to_note write_note),
-    "update_section" => ~w(patch_note append_to_note),
-    "append_to_note" => ~w(patch_note write_note),
+    "write_note" => ~w(append_to_note edit_note create_note),
+    "edit_note" => ~w(append_to_note write_note),
+    "append_to_note" => ~w(edit_note write_note),
     "delete_note" => ~w(delete_folder rename_note),
-    "list_folder" => ~w(list_folders search_notes),
+    "list_folder" => ~w(search_notes),
     "list_vaults" => ~w(vault_id),
     "rename_note" => ~w(rename_folder move_attachment),
     "rename_folder" => ~w(rename_note)
@@ -43,6 +42,22 @@ defmodule Engram.MCP.ToolsDescriptionsTest do
   test "no client-visible tool text uses an em dash" do
     for t <- Tools.wire_list(), s <- strings(t) do
       refute s =~ "—", "#{t["name"]} has an em dash: #{s}"
+    end
+  end
+
+  # Task 3.6: a listed tool must never point a client at a retired name.
+  # Word-boundary matched: "get_note" must not false-positive on "get_notes".
+  @retired_name_patterns [
+    ~r/\bget_note\b/,
+    ~r/\blist_folders\b/,
+    ~r/\bpatch_note\b/,
+    ~r/\bupdate_section\b/,
+    ~r/\bset_vault\b/
+  ]
+
+  test "no listed tool description or schema text mentions a retired name" do
+    for t <- Tools.wire_list(), s <- strings(t), pattern <- @retired_name_patterns do
+      refute s =~ pattern, "#{t["name"]} mentions a retired tool: #{s}"
     end
   end
 

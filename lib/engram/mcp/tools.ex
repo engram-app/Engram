@@ -463,8 +463,8 @@ defmodule Engram.MCP.Tools do
         "List the notes, attachments, and subfolders directly inside one folder. Pass " <>
           "an empty string for the vault root. Set recursive: true to list every " <>
           "descendant folder (with note counts) instead of just the direct ones. To see " <>
-          "every folder in the vault with note counts use list_folders. To find notes by " <>
-          "content use search_notes.",
+          "every folder in the vault with counts call list_folder with recursive: true " <>
+          "on the root. To find notes by content use search_notes.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
@@ -639,6 +639,7 @@ defmodule Engram.MCP.Tools do
       name: "get_notes",
       description:
         "Retrieve the full content of multiple notes in one call (1-20 paths). " <>
+          "Also reads a single note: pass one path. " <>
           "Use to inventory a folder (list_folder then get_notes) or to read a batch " <>
           "of search results without N round-trips. Missing paths are reported inline.",
       inputSchema: %{
@@ -721,7 +722,7 @@ defmodule Engram.MCP.Tools do
         "Replace a note's entire content, or create the note if it does not exist. " <>
           "Saves, indexes for search, and syncs to Obsidian. Overwrites whatever the note held. " <>
           "To add text without touching existing content use append_to_note. To change one " <>
-          "passage use patch_note, or one heading's section use update_section. To create a " <>
+          "passage, or one heading's section, use edit_note. To create a " <>
           "note with no risk of overwriting an existing one use create_note; create_note " <>
           "takes a title and picks the folder, not a path.",
       inputSchema: %{
@@ -752,7 +753,7 @@ defmodule Engram.MCP.Tools do
           "it is created with a `# <name>` title line first. Use for logs, journals and " <>
           "running lists. Set position to start to insert at the top (after any " <>
           "frontmatter) instead. " <>
-          "To change existing text use patch_note. To replace the whole note use write_note.",
+          "To change existing text use edit_note. To replace the whole note use write_note.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
