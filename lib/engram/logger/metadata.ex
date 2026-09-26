@@ -52,6 +52,8 @@ defmodule Engram.Logger.Metadata do
   # Only types whose message/1 was read in deps/ and confirmed to contain no
   # value from the row, the query, or the changeset.
   @safe_message_exceptions [
+    # Built from safe_reason itself (Engram.Logger.SafeException).
+    Engram.Logger.RedactedError,
     # Constraint NAMES only.
     Ecto.ConstraintError,
     # Operator text ("tcp recv: closed"). One latent path renders
@@ -132,6 +134,11 @@ defmodule Engram.Logger.Metadata do
   # carried one function over. A FunctionClauseError raised from inside an
   # isolation rescue defeats the isolation.
   def safe_reason(_other), do: "unknown"
+
+  @doc "True for exception types whose `message/1` is known to hold no user data."
+  @spec safe_message?(term()) :: boolean()
+  def safe_message?(%mod{}) when mod in @safe_message_exceptions, do: true
+  def safe_message?(_), do: false
 
   @doc """
   Where a raise happened, with no argument values.
