@@ -126,5 +126,22 @@ defmodule Engram.Logs.TextScrubberTest do
         assert large <= 10 * small + 20_000, "#{name}: #{small}us -> #{large}us"
       end
     end
+
+    # Counted in characters like the plugin/SPA (UTF-16 units there), not
+    # bytes: a 400-char Cyrillic path is ~800 bytes per side of its slash.
+    test "a long non-Latin quoted path is redacted, as in the plugin" do
+      left = String.duplicate("д", 400)
+      right = String.duplicate("ж", 400)
+      out = TextScrubber.scrub("open '#{left}/#{right}' failed")
+      refute out =~ "д"
+      refute out =~ "ж"
+      assert out =~ "open '<path>' failed"
+    end
+
+    test "invalid UTF-8 is scrubbed, not raised on" do
+      out = TextScrubber.scrub(<<"open '", 0xFF, "Medical/x.md' failed">>)
+      refute out =~ "Medical"
+      assert out =~ "failed"
+    end
   end
 end

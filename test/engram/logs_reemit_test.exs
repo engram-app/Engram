@@ -216,4 +216,29 @@ defmodule Engram.LogsReemitTest do
     refute row.stack =~ "alice"
     assert row.stack =~ "at push (app.js:1:2)"
   end
+
+  # Scrub BEFORE truncating: a quoted path that straddles the length cap would
+  # otherwise lose its closing quote and pass every rule half-intact.
+  test "a path straddling the message cap is not stored half-scrubbed" do
+    user = insert(:user)
+    pad = String.duplicate("x", 7_980)
+
+    {:ok, 1} =
+      Logs.insert_logs(user, [
+        %{
+          "level" => "error",
+          "category" => "push",
+          "message" => pad <> " open 'Medical/Divorce settlement draft.md'"
+        }
+      ])
+
+    row =
+      Engram.Repo.one!(from(l in Engram.Logs.ClientLog, where: l.user_id == ^user.id),
+        skip_tenant_check: true
+      )
+
+    refute row.message =~ "Medical"
+    refute row.message =~ "Divorce"
+    assert String.length(row.message) <= 8_000
+  end
 end

@@ -29,10 +29,10 @@ defmodule Engram.Logs.TextScrubber do
   `errMsg(e, knownPath)` at the call site is the fix.
   """
 
-  @egress_quoted ~r/(^|[\s(\[{=:,])(?:'([^'\n]{1,1025})'|"([^"\n]{1,1025})"|`([^`\n]{1,1025})`)(?=$|[\s)\]},.;:|])/
-  @api_route ~r/^\/api(\/[a-z0-9_:.-]*)*$/
-  @home_or_drive ~r/(?:~|\/Users|\/home|\b[A-Za-z]:(?=[\\\/]))[\\\/][^\n|]*/i
-  @vault_ext ~r/\.(?:md|markdown|canvas|base|excalidraw|txt|rtf|csv|tsv|json|html?|xml|pdf|epub|docx?|xlsx?|pptx?|odt|ods|odp|key|pages|numbers|png|jpe?g|gif|bmp|svg|webp|avif|heic|heif|tiff?|mp3|wav|ogg|m4a|flac|aac|mp4|mov|webm|mkv|avi|zip)$/i
+  @egress_quoted ~r/(^|[\s(\[{=:,])(?:'([^'\n]{1,1025})'|"([^"\n]{1,1025})"|`([^`\n]{1,1025})`)(?=$|[\s)\]},.;:|])/u
+  @api_route ~r/^\/api(\/[a-z0-9_:.-]*)*$/u
+  @home_or_drive ~r/(?:~|\/Users|\/home|\b[A-Za-z]:(?=[\\\/]))[\\\/][^\n|]*/iu
+  @vault_ext ~r/\.(?:md|markdown|canvas|base|excalidraw|txt|rtf|csv|tsv|json|html?|xml|pdf|epub|docx?|xlsx?|pptx?|odt|ods|odp|key|pages|numbers|png|jpe?g|gif|bmp|svg|webp|avif|heic|heif|tiff?|mp3|wav|ogg|m4a|flac|aac|mp4|mov|webm|mkv|avi|zip)$/iu
   @trailing_punct [?,, ?., ?;, ?:, ?), ?], ?}, ?", ?']
   @max_backwalk 8
   @max_side 512
@@ -40,6 +40,9 @@ defmodule Engram.Logs.TextScrubber do
   @spec scrub(String.t() | nil) :: String.t() | nil
   def scrub(text) when is_binary(text) do
     text
+    # The regexes are Unicode (`u`) and raise on invalid UTF-8; a scrubber on
+    # an ingest boundary must be total.
+    |> String.replace_invalid()
     |> then(
       &Regex.replace(@egress_quoted, &1, fn match, pre, s, d, t ->
         redact_quoted(match, pre, s, d, t)
@@ -94,12 +97,17 @@ defmodule Engram.Logs.TextScrubber do
       else: match
   end
 
+  # Positions in characters (codepoints), like the plugin's UTF-16 index: a
+  # byte count would let a long non-Latin path escape the 512-per-side bound.
   defp separator_within_bounds?(content) do
-    size = byte_size(content)
+    chars = String.to_charlist(content)
+    size = length(chars)
 
-    content
-    |> :binary.matches(["/", "\\"])
-    |> Enum.any?(fn {pos, _} -> pos <= @max_side and size - pos - 1 <= @max_side end)
+    chars
+    |> Enum.with_index()
+    |> Enum.any?(fn {c, pos} ->
+      c in [?/, ?\\] and pos <= @max_side and size - pos - 1 <= @max_side
+    end)
   end
 
   defp redact_spaced_paths(line) do
