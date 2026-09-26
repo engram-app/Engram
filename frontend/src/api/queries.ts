@@ -1549,6 +1549,8 @@ export interface Vault {
 	purge_at?: string | null;
 	note_count?: number;
 	attachment_count?: number;
+	/** A note other than the seeded welcome note exists. */
+	populated?: boolean;
 }
 
 // Vault hooks

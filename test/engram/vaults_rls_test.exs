@@ -103,7 +103,7 @@ defmodule Engram.VaultsRlsTest do
       assert {:returned, counts} = outcome
       got = Map.get(counts, vault.id)
 
-      assert got == %{notes: 1, attachments: 1},
+      assert got == %{notes: 1, attachments: 1, populated: true},
              """
              content_counts_for/2 reported #{inspect(got)} for a vault holding one
              note and one attachment — both reads were filtered, and the

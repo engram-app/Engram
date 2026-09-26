@@ -355,11 +355,13 @@ defmodule Engram.Vaults do
 
   # ── Content counts ───────────────────────────────────────────────────────
 
-  @zero_counts %{notes: 0, attachments: 0}
+  @zero_counts %{notes: 0, attachments: 0, populated: false}
 
   @doc """
-  Returns a map of `%{vault_id => %{notes: n, attachments: m}}` for the given
-  vaults, counting only non-deleted notes/attachments owned by `user`.
+  Returns a map of `%{vault_id => %{notes: n, attachments: m, populated: bool}}`
+  for the given vaults, counting only non-deleted notes/attachments owned by
+  `user`. `populated` is true once a note other than the seeded welcome note
+  exists.
 
   Two batched GROUP BY queries (one per table) — no N+1, both inside a single
   `Repo.with_tenant/2`. The explicit `user_id == ^user_id` clause stays, but
@@ -368,26 +370,33 @@ defmodule Engram.Vaults do
   vault — an answer a caller cannot tell apart from a genuine zero.
   """
   @spec content_counts_for(Engram.Accounts.User.t(), [Vault.t()]) ::
-          %{integer() => %{notes: integer(), attachments: integer()}}
-  def content_counts_for(%Engram.Accounts.User{id: user_id}, vaults) when is_list(vaults) do
+          %{integer() => %{notes: integer(), attachments: integer(), populated: boolean()}}
+  def content_counts_for(%Engram.Accounts.User{} = user, vaults) when is_list(vaults) do
     ids = Enum.map(vaults, & &1.id)
-    do_content_counts(user_id, ids)
+    do_content_counts(user, ids)
   end
 
   @doc """
-  Returns `%{notes: n, attachments: m}` for a single vault id owned by `user`.
+  Returns `%{notes: n, attachments: m, populated: bool}` for a single vault id
+  owned by `user`.
   """
   @spec content_counts(Engram.Accounts.User.t(), integer()) :: %{
           notes: integer(),
-          attachments: integer()
+          attachments: integer(),
+          populated: boolean()
         }
-  def content_counts(%Engram.Accounts.User{id: user_id}, vault_id) do
-    Map.get(do_content_counts(user_id, [vault_id]), vault_id, @zero_counts)
+  def content_counts(%Engram.Accounts.User{} = user, vault_id) do
+    Map.get(do_content_counts(user, [vault_id]), vault_id, @zero_counts)
   end
 
-  defp do_content_counts(_user_id, []), do: %{}
+  defp do_content_counts(_user, []), do: %{}
 
-  defp do_content_counts(user_id, ids) do
+  defp do_content_counts(%Engram.Accounts.User{id: user_id} = user, ids) do
+    # `populated`: a live note other than the seeded welcome note. The same
+    # predicate as `Notes`' vault_populated probe, so a client can tell whether
+    # that event is still to come. `note_count` keeps counting the welcome note.
+    welcome = Engram.Vaults.WelcomeNote.path_hmac(user)
+
     # Both reads in ONE `with_tenant/2` rather than two: they are a single
     # logical answer, and `notes` + `attachments` are both FORCE-RLS, so
     # unscoped each returned `[]` and the `Map.new/2` fallback below turned
@@ -399,9 +408,9 @@ defmodule Engram.Vaults do
             where:
               n.user_id == ^user_id and n.vault_id in ^ids and is_nil(n.deleted_at) and
                 n.kind == "note",
-            group_by: n.vault_id,
-            select: {n.vault_id, count(n.id)}
+            group_by: n.vault_id
           )
+          |> select_note_counts(welcome)
           |> Repo.all()
           |> Map.new()
 
@@ -418,8 +427,21 @@ defmodule Engram.Vaults do
       end)
 
     Map.new(ids, fn id ->
-      {id, %{notes: Map.get(note_counts, id, 0), attachments: Map.get(attachment_counts, id, 0)}}
+      {notes, real} = Map.get(note_counts, id, {0, 0})
+      {id, %{notes: notes, attachments: Map.get(attachment_counts, id, 0), populated: real > 0}}
     end)
+  end
+
+  # `{vault_id, {all notes, notes other than the welcome seed}}`. With no filter
+  # key the seed cannot be recognised, so every note counts as real.
+  defp select_note_counts(query, nil),
+    do: select(query, [n], {n.vault_id, {count(n.id), count(n.id)}})
+
+  defp select_note_counts(query, welcome) do
+    select(query, [n], {
+      n.vault_id,
+      {count(n.id), filter(count(n.id), is_nil(n.path_hmac) or n.path_hmac != ^welcome)}
+    })
   end
 
   # ── Get ─────────────────────────────────────────────────────────────────────

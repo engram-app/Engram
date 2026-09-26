@@ -609,6 +609,26 @@ describe("DeviceLinkPage", () => {
 	});
 
 	// An empty vault genuinely can produce the event, so the wait is real there.
+	// A vault made in the web app holds only the seeded welcome note:
+	// note_count 1, but the backend's vault_populated still has its 0->1 to
+	// fire on the first real note. Waiting must follow `populated`, not
+	// `note_count`, or the page never forwards.
+	it("waits for the first sync when the vault holds only the welcome note", async () => {
+		get.mockResolvedValue({
+			vaults: [{ id: 7, name: "Personal", note_count: 1, populated: false }],
+			user_code_valid: true,
+		});
+		post.mockResolvedValue({ ok: true, vault_id: 7 });
+		renderPage();
+
+		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ENGR7X4K" } });
+		fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+		fireEvent.click(await screen.findByRole("radio", { name: /personal/iu }));
+		fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
+
+		expect(await screen.findByText(/waiting for your first sync/iu)).toBeInTheDocument();
+	});
+
 	it("waits for the first sync when the linked vault is empty", async () => {
 		get.mockResolvedValue({
 			vaults: [{ id: 7, name: "Personal", note_count: 0 }],

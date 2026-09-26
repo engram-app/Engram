@@ -3716,7 +3716,7 @@ defmodule Engram.Notes do
 
     # vault_populated probe — must read BEFORE the insert_all below.
     was_empty =
-      not Repo.exists?(scoped(user, vault))
+      not Repo.exists?(populating_notes(user, vault))
 
     to_insert =
       Enum.count(
@@ -4188,8 +4188,13 @@ defmodule Engram.Notes do
 
     created = Enum.filter(ok_entries, fn %{result: {:ok, info}} -> is_nil(info.prev_hash) end)
 
+    # Same predicate as `populating_notes/2`: a (re-)pushed welcome-path note is
+    # not the vault's first real note, so it must not spend the one-shot event.
+    welcome = Engram.Vaults.WelcomeNote.path_hmac(user)
+    created_real = Enum.reject(created, &(welcome != nil and &1.path_hmac == welcome))
+
     _ =
-      if state.was_empty and created != [] do
+      if state.was_empty and created_real != [] do
         EngramWeb.Endpoint.broadcast("user:#{user.id}", "vault_populated", %{
           vault_id: vault.id
         })
@@ -6500,8 +6505,31 @@ defmodule Engram.Notes do
           keyword()
         ) ::
           :ok
+  # The notes both `vault_populated` probes count: live notes (no folder
+  # markers, no tombstones) other than the seeded welcome note.
+  #
+  # The welcome note is excluded because every vault created through /link or
+  # the web app gets it FIRST (`Engram.Vaults.WelcomeNote`). Its own write
+  # suppresses the event, but counting it afterwards made the user's first real
+  # note #2, so the 0->1 probe never fired and the /link success page and the
+  # wizard's Obsidian step waited forever. `note_count` still counts the
+  # welcome note; the vault JSON's `populated` flag is the client-facing twin
+  # of THIS predicate (`Vaults.do_content_counts/2`), so a page deciding
+  # whether to wait for the event must read `populated`, not `note_count`.
+  #
+  # Matched by `path_hmac`, so a user's own `Welcome to Engram.md` overwrites
+  # the seed and does not count either; the event then fires on their next note.
+  defp populating_notes(user, vault) do
+    notes = from(n in scoped_live(user, vault), where: n.kind == "note")
+
+    case Engram.Vaults.WelcomeNote.path_hmac(user) do
+      nil -> notes
+      welcome -> from(n in notes, where: is_nil(n.path_hmac) or n.path_hmac != ^welcome)
+    end
+  end
+
   # Emits `vault_populated` only when this insert took the vault from 0
-  # to 1 notes. Subsequent inserts skip the broadcast; the FTUX listener
+  # to 1 notes (see `populating_notes/2` for what counts). Subsequent inserts skip the broadcast; the FTUX listener
   # is one-shot anyway, but avoiding extra channel traffic keeps the
   # invariant readable from the server side too.
   defp maybe_broadcast_vault_populated(user, vault) do
@@ -6512,10 +6540,10 @@ defmodule Engram.Notes do
     # usage_meters counter — multi-vault users must still get the event
     # for a new vault's first note).
     #
-    # Predicates must MATCH `Vaults.do_content_counts/2` (`is_nil(deleted_at)`
-    # and `kind == "note"`), because the page this event unblocks gates on
-    # THAT counter. `scoped/2` alone counts folder markers and tombstones,
-    # which live in this same table — and the plugin's catch-up seeds folder
+    # Predicates must MATCH the `populated` flag from `Vaults.do_content_counts/2`,
+    # because the page this event unblocks decides whether to wait on THAT.
+    # `scoped/2` alone counts folder markers and tombstones, which live in
+    # this same table — and the plugin's catch-up seeds folder
     # rows BEFORE the first note, so any vault with one empty folder saw 2
     # rows here, skipped the broadcast, and left the web page spinning on a
     # `note_count` of 0 forever. Two "count the notes" predicates that
@@ -6539,9 +6567,7 @@ defmodule Engram.Notes do
     # precisely why it was the broken caller.
     ids =
       Repo.with_tenant!(user.id, fn ->
-        Repo.all(
-          from(n in scoped_live(user, vault), where: n.kind == "note", select: n.id, limit: 2)
-        )
+        Repo.all(from(n in populating_notes(user, vault), select: n.id, limit: 2))
       end)
 
     _ =

@@ -102,6 +102,18 @@ defmodule Engram.Vaults.WelcomeNote do
   def path, do: @path
 
   @doc """
+  The welcome note's `path_hmac` for `user`, or nil when the user's filter key
+  is unavailable. Lets queries recognise the seed without decrypting paths.
+  """
+  @spec path_hmac(Engram.Accounts.User.t()) :: binary() | nil
+  def path_hmac(user) do
+    case Engram.Crypto.dek_filter_key(user) do
+      {:ok, filter_key} -> Engram.Crypto.hmac_field(filter_key, @path)
+      _no_key -> nil
+    end
+  end
+
+  @doc """
   The note body, with `date` stamped into the `created` property so a brand-new
   vault's first note doesn't open showing a hardcoded date from whenever this
   file was last edited.

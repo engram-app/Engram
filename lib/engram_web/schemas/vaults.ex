@@ -19,6 +19,12 @@ defmodule EngramWeb.Schemas.Vault do
       },
       note_count: %Schema{type: :integer},
       attachment_count: %Schema{type: :integer},
+      populated: %Schema{
+        type: :boolean,
+        description:
+          "True once the vault holds a note other than the seeded welcome note " <>
+            "(the moment the `vault_populated` event fires)."
+      },
       deleted_at: %Schema{type: :string, format: :"date-time", nullable: true},
       purge_at: %Schema{
         type: :string,

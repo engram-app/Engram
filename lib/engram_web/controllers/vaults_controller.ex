@@ -311,6 +311,15 @@ defmodule EngramWeb.VaultsController do
     else
       case Vaults.register_vault(user, name, client_id) do
         {:ok, vault, :created} ->
+          # A brand-new user gets their DEK inside the seed below, but `user`
+          # predates it. Without the DEK the counts cannot recognise the welcome
+          # note, and a welcome-only vault would come back `populated: true`.
+          user =
+            case Engram.Crypto.ensure_user_dek(user) do
+              {:ok, user} -> user
+              _ -> user
+            end
+
           WelcomeNote.seed(user, vault)
 
           conn
@@ -372,7 +381,10 @@ defmodule EngramWeb.VaultsController do
       # is gone.
       encrypted: true,
       note_count: counts.notes,
-      attachment_count: counts.attachments
+      attachment_count: counts.attachments,
+      # Has a note other than the seeded welcome note: whether the one-shot
+      # `vault_populated` event is still to come. See `Vaults.content_counts_for/2`.
+      populated: counts.populated
     }
   end
 
