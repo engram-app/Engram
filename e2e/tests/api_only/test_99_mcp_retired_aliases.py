@@ -42,7 +42,7 @@ def _text(result: dict) -> str:
     return result["content"][0]["text"]
 
 
-def test_get_note_alias_matches_get_notes(scoped):
+def test_get_note_alias_still_works(scoped):
     api, vault_id = scoped
     path = f"E2E/McpAlias99Get-{uuid.uuid4().hex[:8]}.md"
     content = "# Alias Get\nOriginal content for the get_note alias."
@@ -60,7 +60,7 @@ def test_get_note_alias_matches_get_notes(scoped):
     assert "Original content for the get_note alias." in structured["content"]
 
 
-def test_list_folders_alias_matches_list_folder(scoped):
+def test_list_folders_alias_still_works(scoped):
     api, vault_id = scoped
     folder = f"E2E/McpAlias99Folder-{uuid.uuid4().hex[:8]}"
     path = f"{folder}/Note.md"
@@ -79,7 +79,7 @@ def test_list_folders_alias_matches_list_folder(scoped):
     assert match["count"] == 1
 
 
-def test_patch_note_alias_matches_edit_note(scoped):
+def test_patch_note_alias_still_works(scoped):
     api, vault_id = scoped
     path = f"E2E/McpAlias99Patch-{uuid.uuid4().hex[:8]}.md"
     api.create_note(path, "# Patch Alias\nOriginal sentence here.")
@@ -99,7 +99,7 @@ def test_patch_note_alias_matches_edit_note(scoped):
     assert "Patched sentence here." in updated["content"]
 
 
-def test_update_section_alias_matches_edit_note(scoped):
+def test_update_section_alias_still_works(scoped):
     api, vault_id = scoped
     path = f"E2E/McpAlias99Section-{uuid.uuid4().hex[:8]}.md"
     api.create_note(path, "# Section Alias\n\n## Notes\nOld body.\n")
@@ -119,7 +119,7 @@ def test_update_section_alias_matches_edit_note(scoped):
     assert "New body." in updated["content"]
 
 
-def test_set_vault_alias_matches_list_vaults(scoped):
+def test_set_vault_alias_still_works(scoped):
     api, vault_id = scoped
 
     resp, status = api.mcp_call("set_vault", {"vault_id": vault_id})
