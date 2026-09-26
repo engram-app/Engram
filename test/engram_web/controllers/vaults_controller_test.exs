@@ -467,6 +467,18 @@ defmodule EngramWeb.VaultsControllerTest do
       assert note.content =~ "## Try these"
     end
 
+    # A brand-new user's DEK is created by the welcome seed inside this request,
+    # after the controller already holds the user. The response must still
+    # recognise the seed, or `populated` reads true for a welcome-only vault.
+    test "reports a freshly seeded vault as not yet populated", %{conn: conn} do
+      body =
+        conn
+        |> post("/api/vaults/register", %{name: "Fresh", client_id: "mac-fresh"})
+        |> json_response(201)
+
+      assert %{"note_count" => 1, "populated" => false} = body
+    end
+
     test "does not re-seed the welcome note on an existing vault", %{conn: conn, user: user} do
       body =
         conn

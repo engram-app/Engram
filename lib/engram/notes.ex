@@ -4188,8 +4188,13 @@ defmodule Engram.Notes do
 
     created = Enum.filter(ok_entries, fn %{result: {:ok, info}} -> is_nil(info.prev_hash) end)
 
+    # Same predicate as `populating_notes/2`: a (re-)pushed welcome-path note is
+    # not the vault's first real note, so it must not spend the one-shot event.
+    welcome = Engram.Vaults.WelcomeNote.path_hmac(user)
+    created_real = Enum.reject(created, &(welcome != nil and &1.path_hmac == welcome))
+
     _ =
-      if state.was_empty and created != [] do
+      if state.was_empty and created_real != [] do
         EngramWeb.Endpoint.broadcast("user:#{user.id}", "vault_populated", %{
           vault_id: vault.id
         })
