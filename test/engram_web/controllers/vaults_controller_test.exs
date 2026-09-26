@@ -144,6 +144,34 @@ defmodule EngramWeb.VaultsControllerTest do
       assert json_response(conn2, 200)["suggested_vault_name"] == nil
     end
 
+    # `populated` answers "has this vault got a real note yet?", the same
+    # question the vault_populated event answers. The seeded welcome note
+    # counts in note_count but not here.
+    test "index reports populated, ignoring the seeded welcome note", %{conn: conn, user: user} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      vault = insert(:vault, user: user)
+      :ok = Engram.Vaults.WelcomeNote.seed(user, vault)
+
+      row = fn ->
+        conn
+        |> get(~p"/api/vaults")
+        |> json_response(200)
+        |> Map.fetch!("vaults")
+        |> Enum.find(&(&1["id"] == vault.id))
+      end
+
+      assert %{"note_count" => 1, "populated" => false} = row.()
+
+      {:ok, _} =
+        Engram.Notes.upsert_note(user, vault, %{
+          "path" => "real.md",
+          "content" => "x",
+          "mtime" => 1.0
+        })
+
+      assert %{"note_count" => 2, "populated" => true} = row.()
+    end
+
     test "index includes note_count and attachment_count", %{conn: conn, user: user} do
       vault = insert(:vault, user: user)
       insert(:note, user: user, vault: vault)

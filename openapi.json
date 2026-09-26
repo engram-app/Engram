@@ -2093,6 +2093,12 @@
             "x-struct": null,
             "x-validate": null
           },
+          "populated": {
+            "description": "True once the vault holds a note other than the seeded welcome note (the moment the `vault_populated` event fires).",
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          },
           "purge_at": {
             "description": "When a soft-deleted vault is hard-purged (deleted_at + 30d).",
             "format": "date-time",

@@ -245,8 +245,8 @@ defmodule Engram.VaultsTest do
 
       counts = Vaults.content_counts_for(user, [a, b])
 
-      assert counts[a.id] == %{notes: 2, attachments: 1}
-      assert counts[b.id] == %{notes: 1, attachments: 0}
+      assert counts[a.id] == %{notes: 2, attachments: 1, populated: true}
+      assert counts[b.id] == %{notes: 1, attachments: 0, populated: true}
     end
 
     test "excludes soft-deleted notes and attachments", %{user: user, a: a} do
@@ -254,14 +254,22 @@ defmodule Engram.VaultsTest do
       insert(:note, user: user, vault: a, deleted_at: DateTime.utc_now(:second))
       insert(:attachment, user: user, vault: a, deleted_at: DateTime.utc_now(:second))
 
-      assert Vaults.content_counts_for(user, [a])[a.id] == %{notes: 1, attachments: 0}
+      assert Vaults.content_counts_for(user, [a])[a.id] == %{
+               notes: 1,
+               attachments: 0,
+               populated: true
+             }
     end
 
     test "does not bleed across users", %{user: user, other_user: other, a: a} do
       insert(:note, user: other, vault: build(:vault, user: other))
       insert(:note, user: user, vault: a)
 
-      assert Vaults.content_counts_for(user, [a])[a.id] == %{notes: 1, attachments: 0}
+      assert Vaults.content_counts_for(user, [a])[a.id] == %{
+               notes: 1,
+               attachments: 0,
+               populated: true
+             }
     end
 
     # Structurally proves the user_id guard fires: this note shares vault a's id
@@ -275,7 +283,11 @@ defmodule Engram.VaultsTest do
       insert(:note, user: other, vault: a)
       insert(:note, user: user, vault: a)
 
-      assert Vaults.content_counts_for(user, [a])[a.id] == %{notes: 1, attachments: 0}
+      assert Vaults.content_counts_for(user, [a])[a.id] == %{
+               notes: 1,
+               attachments: 0,
+               populated: true
+             }
     end
 
     test "empty vault list returns empty map", %{user: user} do
@@ -284,11 +296,11 @@ defmodule Engram.VaultsTest do
 
     test "content_counts/2 returns a single vault's counts", %{user: user, a: a} do
       insert(:note, user: user, vault: a)
-      assert Vaults.content_counts(user, a.id) == %{notes: 1, attachments: 0}
+      assert Vaults.content_counts(user, a.id) == %{notes: 1, attachments: 0, populated: true}
     end
 
     test "content_counts/2 returns zeros for an empty vault", %{user: user, b: b} do
-      assert Vaults.content_counts(user, b.id) == %{notes: 0, attachments: 0}
+      assert Vaults.content_counts(user, b.id) == %{notes: 0, attachments: 0, populated: false}
     end
   end
 

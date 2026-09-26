@@ -32,6 +32,9 @@ interface Vault {
 	id: string;
 	name: string;
 	note_count: number;
+	/** Has a note other than the seeded welcome note, i.e. `vault_populated`
+	 *  has already fired. Absent from backends that predate it. */
+	populated?: boolean;
 }
 
 type Step = "enter-code" | "verifying" | "pick-vault" | "success";
@@ -375,15 +378,18 @@ function DeviceLinkPage() {
 				setActiveVaultId(vault_id);
 				qc.invalidateQueries({ queryKey: ["vaults"] });
 
-				// `vault_populated` fires on a vault's 0 -> 1 note transition, so a
-				// vault that ALREADY has notes can never emit it.
+				// `vault_populated` fires on a vault's first REAL note, so a vault
+				// that already has one can never emit it. Read `populated`, not
+				// `note_count`: a vault made in the web app holds only the seeded
+				// welcome note (note_count 1) and still has its event to come.
+				// `note_count === 0` is the fallback for a backend without the field.
 				//
 				// That kills the WAITING, not the step. The user still has to go back
 				// to Obsidian and finish the sync, so the instructions and the Open
 				// Obsidian button must render either way — skipping straight to the
 				// vault drops the one thing this screen exists to tell them.
 				const target = createNew ? null : vaults.find((v) => String(v.id) === String(selection));
-				setAwaitFirstSync(!target || target.note_count === 0);
+				setAwaitFirstSync(!(target && (target.populated ?? target.note_count > 0)));
 
 				setLinkedVaultId(vault_id);
 				setStep("success");

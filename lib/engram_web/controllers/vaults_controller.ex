@@ -372,7 +372,10 @@ defmodule EngramWeb.VaultsController do
       # is gone.
       encrypted: true,
       note_count: counts.notes,
-      attachment_count: counts.attachments
+      attachment_count: counts.attachments,
+      # Has a note other than the seeded welcome note: whether the one-shot
+      # `vault_populated` event is still to come. See `Vaults.content_counts_for/2`.
+      populated: counts.populated
     }
   end
 

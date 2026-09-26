@@ -6500,10 +6500,6 @@ defmodule Engram.Notes do
           keyword()
         ) ::
           :ok
-  # Emits `vault_populated` only when this insert took the vault from 0
-  # to 1 notes. Subsequent inserts skip the broadcast; the FTUX listener
-  # is one-shot anyway, but avoiding extra channel traffic keeps the
-  # invariant readable from the server side too.
   # The notes both `vault_populated` probes count: live notes (no folder
   # markers, no tombstones) other than the seeded welcome note.
   #
@@ -6511,25 +6507,26 @@ defmodule Engram.Notes do
   # the web app gets it FIRST (`Engram.Vaults.WelcomeNote`). Its own write
   # suppresses the event, but counting it afterwards made the user's first real
   # note #2, so the 0->1 probe never fired and the /link success page and the
-  # wizard's Obsidian step waited forever. It deliberately differs from
-  # `Vaults.do_content_counts/2`, which counts the welcome note: that only
-  # makes `note_count` >= 1 whenever the event fires, never 0.
+  # wizard's Obsidian step waited forever. `note_count` still counts the
+  # welcome note; the vault JSON's `populated` flag is the client-facing twin
+  # of THIS predicate (`Vaults.do_content_counts/2`), so a page deciding
+  # whether to wait for the event must read `populated`, not `note_count`.
   #
   # Matched by `path_hmac`, so a user's own `Welcome to Engram.md` overwrites
   # the seed and does not count either; the event then fires on their next note.
   defp populating_notes(user, vault) do
     notes = from(n in scoped_live(user, vault), where: n.kind == "note")
 
-    case Crypto.dek_filter_key(user) do
-      {:ok, filter_key} ->
-        welcome = Crypto.hmac_field(filter_key, Engram.Vaults.WelcomeNote.path())
-        from(n in notes, where: is_nil(n.path_hmac) or n.path_hmac != ^welcome)
-
-      _no_key ->
-        notes
+    case Engram.Vaults.WelcomeNote.path_hmac(user) do
+      nil -> notes
+      welcome -> from(n in notes, where: is_nil(n.path_hmac) or n.path_hmac != ^welcome)
     end
   end
 
+  # Emits `vault_populated` only when this insert took the vault from 0
+  # to 1 notes (see `populating_notes/2` for what counts). Subsequent inserts skip the broadcast; the FTUX listener
+  # is one-shot anyway, but avoiding extra channel traffic keeps the
+  # invariant readable from the server side too.
   defp maybe_broadcast_vault_populated(user, vault) do
     # "Exactly one row?" via LIMIT 2 instead of COUNT(*): the aggregate
     # visits every matching row, so a bulk first-sync paid an O(vault)
@@ -6538,10 +6535,10 @@ defmodule Engram.Notes do
     # usage_meters counter — multi-vault users must still get the event
     # for a new vault's first note).
     #
-    # Predicates must MATCH `Vaults.do_content_counts/2` (`is_nil(deleted_at)`
-    # and `kind == "note"`), because the page this event unblocks gates on
-    # THAT counter. `scoped/2` alone counts folder markers and tombstones,
-    # which live in this same table — and the plugin's catch-up seeds folder
+    # Predicates must MATCH the `populated` flag from `Vaults.do_content_counts/2`,
+    # because the page this event unblocks decides whether to wait on THAT.
+    # `scoped/2` alone counts folder markers and tombstones, which live in
+    # this same table — and the plugin's catch-up seeds folder
     # rows BEFORE the first note, so any vault with one empty folder saw 2
     # rows here, skipped the broadcast, and left the web page spinning on a
     # `note_count` of 0 forever. Two "count the notes" predicates that

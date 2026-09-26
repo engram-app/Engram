@@ -82,8 +82,13 @@ defmodule Engram.NotesCrdtVaultPopulatedTest do
   # sees it, and the /link success page waits forever (staging, 2026-09-25).
   describe "with the welcome note seeded" do
     setup %{user: user, vault: vault} do
+      # The controllers that seed always hold a user with a DEK; so must this.
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
       :ok = Engram.Vaults.WelcomeNote.seed(user, vault)
-      :ok
+      # `seed/2` swallows every failure and returns :ok. Without this, a seed
+      # that silently wrote nothing would let every test below pass vacuously.
+      assert {:ok, _} = Notes.get_note(user, vault, Engram.Vaults.WelcomeNote.path())
+      {:ok, user: user}
     end
 
     test "seeding it does not announce", _ctx do
