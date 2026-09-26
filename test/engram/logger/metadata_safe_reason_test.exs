@@ -11,14 +11,14 @@ defmodule Engram.Logger.MetadataSafeReasonTest do
   """
   use ExUnit.Case, async: true
 
+  import Ecto.Query, only: [from: 2]
+
+  alias Engram.Logger.Metadata
+
   # Stands in for any row struct WITHOUT `redact: true` on its fields.
   defmodule LeakyRow do
     defstruct [:content, :title, :path]
   end
-
-  import Ecto.Query, only: [from: 2]
-
-  alias Engram.Logger.Metadata
 
   @secret "Dear diary, the biopsy came back positive."
 
