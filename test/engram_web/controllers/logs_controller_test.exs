@@ -174,7 +174,9 @@ defmodule EngramWeb.LogsControllerTest do
             ts: "2026-04-03T01:03:00Z",
             level: "info",
             category: "channel",
-            message: "Event: note_changed path=A.md",
+            # noteRef labels, as shipped since the plugin stopped sending raw
+            # paths; a raw `A.md` is now redacted on ingest (TextScrubber).
+            message: "Event: note_changed path=n1",
             platform: "desktop",
             device_id: "instance-a",
             conn_id: "conn-a-1"
@@ -183,7 +185,7 @@ defmodule EngramWeb.LogsControllerTest do
             ts: "2026-04-03T01:03:01Z",
             level: "info",
             category: "pull",
-            message: "Applied: A.md | localLen=10 | remoteLen=10",
+            message: "Applied: n1 | localLen=10 | remoteLen=10",
             platform: "desktop",
             device_id: "instance-b",
             conn_id: "conn-b-1"
@@ -196,12 +198,12 @@ defmodule EngramWeb.LogsControllerTest do
 
       instance_b_rows = Enum.filter(body["logs"], &(&1["device_id"] == "instance-b"))
       assert length(instance_b_rows) == 1
-      assert hd(instance_b_rows)["message"] == "Applied: A.md | localLen=10 | remoteLen=10"
+      assert hd(instance_b_rows)["message"] == "Applied: n1 | localLen=10 | remoteLen=10"
       assert hd(instance_b_rows)["conn_id"] == "conn-b-1"
 
       instance_a_rows = Enum.filter(body["logs"], &(&1["device_id"] == "instance-a"))
       assert length(instance_a_rows) == 1
-      assert hd(instance_a_rows)["message"] == "Event: note_changed path=A.md"
+      assert hd(instance_a_rows)["message"] == "Event: note_changed path=n1"
     end
 
     test "multi-tenant isolation — user B cannot see user A's logs", %{conn: _conn} do

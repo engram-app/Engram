@@ -227,3 +227,28 @@ describe("the scrubbers are actually wired into Sentry.init", () => {
 		expect(opts.sendDefaultPii).toBe(false);
 	});
 });
+
+describe("scrubEvent exception values", () => {
+	it("keeps an ApiError's slug reason and drops free text", () => {
+		const slug = scrubEvent({ exception: { values: [{ type: "ApiError", value: "not_found" }] } });
+		expect(slug.exception?.values?.[0]?.value).toBe("not_found");
+
+		const text = scrubEvent({
+			exception: { values: [{ type: "ApiError", value: "note Medical/biopsy.md is locked" }] },
+		});
+		expect(text.exception?.values?.[0]?.value).not.toMatch(/biopsy|Medical/u);
+		expect(text.exception?.values?.[0]?.type).toBe("ApiError");
+	});
+
+	it("scrubs quoted paths from any exception value, keeping the rest", () => {
+		const e = scrubEvent({
+			exception: {
+				values: [{ type: "Error", value: `failed to open "Medical/Tom's notes.md" (code 3)` }],
+			},
+		});
+		const value = e.exception?.values?.[0]?.value ?? "";
+		expect(value).not.toMatch(/Medical|Tom/u);
+		expect(value).toMatch(/failed to open/u);
+		expect(value).toMatch(/code 3/u);
+	});
+});

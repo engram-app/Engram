@@ -1,3 +1,5 @@
+import type { PostHogConfig } from "posthog-js";
+
 // PostHog — product analytics. Cookieless by `persistence: 'memory'` per
 // [[reference_cookie_audit_2026_05_24]] so the no-banner launch posture
 // holds. Autocapture is OFF — explicit events only is the single biggest
@@ -44,7 +46,16 @@ export async function initAnalytics(key: string): Promise<void> {
 	}
 
 	const { default: posthog } = await import("posthog-js");
-	posthog.init(key, {
+	posthog.init(key, posthogInitOptions());
+}
+
+/** The exact options passed to `posthog.init`. Exported so a test can pin every
+ *  capture surface OFF: heatmaps, dead clicks, rageclicks, exception autocapture
+ *  and web-vitals are switchable from the PostHog PROJECT dashboard unless the
+ *  code sets them, and none of their payloads pass sanitize_properties' URL-key
+ *  check (heatmaps key by full location.href, which holds the vault slug). */
+export function posthogInitOptions(): Partial<PostHogConfig> {
+	return {
 		api_host: import.meta.env.VITE_POSTHOG_HOST || "/ph",
 		persistence: "memory",
 		person_profiles: "identified_only",
@@ -67,5 +78,11 @@ export async function initAnalytics(key: string): Promise<void> {
 			}
 			return clean;
 		},
-	});
+		capture_heatmaps: false,
+		capture_dead_clicks: false,
+		capture_exceptions: false,
+		capture_performance: false,
+		rageclick: false,
+		disable_surveys: true,
+	};
 }

@@ -29,5 +29,6 @@ export function collideBump(
 			return candidate;
 		}
 	}
-	throw new Error(`collideBump: too many collisions for "${base}" (cap ${cap})`);
+	// No filename: this message reaches Sentry, and `base` is a user-typed title.
+	throw new Error(`collideBump: too many collisions (cap ${cap})`);
 }

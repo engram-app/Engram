@@ -39,21 +39,6 @@ window.addEventListener("vite:preloadError", (event) => {
 // a cycle back into this entry module. Opt-in via VITE_SENTRY_DSN; no-op when
 // unset. See sentry.ts for the lazy-load + early-error-queue rationale.
 
-// Cloudflare Web Analytics — cookieless RUM beacon. Opt-in via
-// VITE_CF_BEACON_TOKEN at build time; no-op when unset so dev /
-// self-host builds don't ping the SaaS-side CF analytics account.
-// Injected dynamically rather than as a static <script> in
-// index.html because the token only exists on the SaaS build path
-// (self-host's same bundle would otherwise embed it as a literal).
-const cfBeaconToken = import.meta.env.VITE_CF_BEACON_TOKEN;
-if (cfBeaconToken) {
-	const s = document.createElement("script");
-	s.defer = true;
-	s.src = "https://static.cloudflareinsights.com/beacon.min.js";
-	s.setAttribute("data-cf-beacon", JSON.stringify({ token: cfBeaconToken }));
-	document.head.appendChild(s);
-}
-
 // PostHog — product analytics. See ./analytics/init for the init options and
 // their rationale (cookieless posture, no-autocapture, GPC guard). Fire-and-
 // forget: init is async (posthog-js is dynamically imported so it stays OUT

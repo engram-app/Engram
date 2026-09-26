@@ -26,6 +26,15 @@ defmodule Engram.Observability.BeaconSanitizer do
     "web.crdt.handshake"
   ]
   @uuid_re ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/
+  @uuid_segment ~r/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
+
+  # Route segments that are OURS; mirrors the plugin's STATIC_ROUTE_SEGMENTS
+  # (src/api.ts). Everything else in a path is the user's vault structure.
+  # Plugins before `beaconRoute` sent the raw path, and they are still in the
+  # field, so the server normalizes rather than trusting the shape.
+  @static_route_segments ~w(api attachments changes explicit folders health heads logs
+                            manifest me notes register search sync updates vault vaults)
+  @reason_re ~r/\A[a-z0-9_.:-]{1,64}\z/
   @max_duration_us 30_000_000
   @max_skew_us 300_000_000
 
@@ -82,12 +91,33 @@ defmodule Engram.Observability.BeaconSanitizer do
       # note_id must LOOK like a note id: anything else (a title, a path) is
       # both a PII leak and an unbounded-cardinality label. Drop, don't reject.
       {"engram.note_id", v} -> is_binary(v) and Regex.match?(@uuid_re, v)
+      {"engram.reason", v} -> is_binary(v) and Regex.match?(@reason_re, v)
       {_k, v} -> safe_attr_value?(v)
     end)
     |> Map.new()
+    |> normalize_route()
   end
 
   defp attributes(_), do: %{}
+
+  defp normalize_route(%{"engram.route" => route} = attrs) when is_binary(route) do
+    shaped =
+      route
+      |> String.split("?", parts: 2)
+      |> hd()
+      |> then(&Regex.replace(@uuid_segment, &1, ":id"))
+      |> String.split("/")
+      |> Enum.map_join("/", fn
+        seg when seg in ["", ":id", ":seg"] -> seg
+        seg when seg in @static_route_segments -> seg
+        _ -> ":seg"
+      end)
+      |> String.slice(0, 64)
+
+    Map.put(attrs, "engram.route", shaped)
+  end
+
+  defp normalize_route(attrs), do: attrs
 
   defp safe_attr_value?(v) when is_number(v), do: true
   defp safe_attr_value?(v) when is_binary(v), do: byte_size(v) <= 64

@@ -8,6 +8,7 @@ defmodule Engram.Logs do
   alias Engram.Crypto.HMAC
   alias Engram.Logger.Metadata
   alias Engram.Logs.ClientLog
+  alias Engram.Logs.TextScrubber
   alias Engram.Repo
 
   require Logger
@@ -46,6 +47,8 @@ defmodule Engram.Logs do
   # and a stack is the one field with a legitimate reason to be long.
   @max_message_chars 8_000
   @max_stack_chars 16_000
+  # Raw input kept for scrubbing is this multiple of the stored cap.
+  @scrub_headroom 4
 
   # Identifier-ish fields. `device_id`/`conn_id` are UUID-shaped, so 128 is
   # already far past anything legitimate; the rest are short enums/versions.
@@ -113,8 +116,21 @@ defmodule Engram.Logs do
       ts: parse_ts(get(entry, "ts", :ts)) || now,
       level: get(entry, "level", :level) |> default("info") |> clamp(@max_short_chars),
       category: get(entry, "category", :category) |> default("") |> clamp(@max_short_chars),
-      message: get(entry, "message", :message) |> default("") |> clamp(@max_message_chars),
-      stack: get(entry, "stack", :stack) |> clamp(@max_stack_chars),
+      # Scrub BEFORE the final clamp: truncating first can cut a quoted path
+      # off its closing quote, and a half path then passes every rule. The
+      # raw pre-cap only bounds the scrub's work; anything past it is beyond
+      # the final clamp anyway.
+      message:
+        get(entry, "message", :message)
+        |> default("")
+        |> clamp(@max_message_chars * @scrub_headroom)
+        |> TextScrubber.scrub()
+        |> clamp(@max_message_chars),
+      stack:
+        get(entry, "stack", :stack)
+        |> clamp(@max_stack_chars * @scrub_headroom)
+        |> TextScrubber.scrub_stack()
+        |> clamp(@max_stack_chars),
       plugin_version:
         get(entry, "plugin_version", :plugin_version) |> default("") |> clamp(@max_short_chars),
       platform: get(entry, "platform", :platform) |> default("") |> clamp(@max_short_chars),
