@@ -398,4 +398,49 @@ defmodule Engram.MCP.HandlersTest do
       refute body =~ "No notes found"
     end
   end
+
+  describe "list_folder subfolders (absorbs list_folders, #1660 3.5)" do
+    test "reports direct subfolders; recursive reports every descendant with counts", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      for p <- ["A/a.md", "A/B/b.md", "A/B/C/c.md", "Z/z.md"],
+          do:
+            {:ok, _} =
+              Notes.upsert_note(user, vault, %{"path" => p, "content" => "x", "mtime" => 1.0})
+
+      {:ok, _, direct} = Handlers.handle("list_folder", user, vault, %{"folder" => "A"})
+      assert Enum.map(direct["folders"], & &1["folder"]) == ["A/B"]
+
+      {:ok, _, all} =
+        Handlers.handle("list_folder", user, vault, %{"folder" => "", "recursive" => true})
+
+      assert Enum.map(all["folders"], & &1["folder"]) |> Enum.sort() == ["A", "A/B", "A/B/C", "Z"]
+      assert Enum.find(all["folders"], &(&1["folder"] == "A/B"))["count"] == 1
+    end
+
+    test "non-recursive root lists only top-level folders", %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      for p <- ["A/a.md", "A/B/b.md", "Z/z.md"],
+          do:
+            {:ok, _} =
+              Notes.upsert_note(user, vault, %{"path" => p, "content" => "x", "mtime" => 1.0})
+
+      {:ok, _, root} = Handlers.handle("list_folder", user, vault, %{"folder" => ""})
+      assert Enum.map(root["folders"], & &1["folder"]) |> Enum.sort() == ["A", "Z"]
+    end
+
+    test "a folder with no subfolders returns an empty folders list", %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Leaf/a.md", "content" => "x", "mtime" => 1.0})
+
+      {:ok, _, structured} = Handlers.handle("list_folder", user, vault, %{"folder" => "Leaf"})
+      assert structured["folders"] == []
+    end
+  end
 end

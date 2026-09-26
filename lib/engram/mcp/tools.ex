@@ -455,18 +455,24 @@ defmodule Engram.MCP.Tools do
     %{
       name: "list_folder",
       description:
-        "List the notes and attachments directly inside one folder (not subfolders). Pass " <>
-          "an empty string for the vault root. To see every folder in the vault with note " <>
-          "counts use list_folders. To find notes by content use search_notes.",
+        "List the notes, attachments, and subfolders directly inside one folder. Pass " <>
+          "an empty string for the vault root. Set recursive: true to list every " <>
+          "descendant folder (with note counts) instead of just the direct ones. To see " <>
+          "every folder in the vault with note counts use list_folders. To find notes by " <>
+          "content use search_notes.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
           "folder" => %{
             "type" => "string",
-            "description" => "Folder path (e.g. \"Health\") or \"\" for root"
+            "description" => "Folder path (e.g. \"Health\") or \"\" for root. Defaults to root."
+          },
+          "recursive" => %{
+            "type" => "boolean",
+            "description" =>
+              "List every descendant folder, not just direct subfolders. Defaults to false."
           }
-        },
-        "required" => ["folder"]
+        }
       },
       outputSchema: %{
         "type" => "object",
@@ -501,9 +507,21 @@ defmodule Engram.MCP.Tools do
               },
               "required" => ["name", "path"]
             }
+          },
+          "folders" => %{
+            "type" => "array",
+            "description" => "Direct subfolders, or every descendant when recursive was true.",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                "folder" => %{"type" => "string"},
+                "count" => %{"type" => "integer", "description" => "Notes directly inside"}
+              },
+              "required" => ["folder", "count"]
+            }
           }
         },
-        "required" => ["folder", "notes", "attachments"]
+        "required" => ["folder", "notes", "attachments", "folders"]
       },
       handler: &Handlers.handle("list_folder", &1, &2, &3)
     }

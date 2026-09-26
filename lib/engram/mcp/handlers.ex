@@ -146,10 +146,12 @@ defmodule Engram.MCP.Handlers do
 
   def handle("list_folder", user, vault, args) do
     folder = args["folder"] || ""
+    recursive? = args["recursive"] || false
 
     with {:ok, notes} <- Notes.list_notes_in_folder(user, vault, folder),
-         {:ok, atts} <- Engram.Attachments.list_in_folder(user, vault, folder) do
-      render_folder({:ok, notes, atts}, folder)
+         {:ok, atts} <- Engram.Attachments.list_in_folder(user, vault, folder),
+         {:ok, all_folders} <- Notes.list_folders_with_counts(user, vault) do
+      render_folder({:ok, notes, atts, subfolders(all_folders, folder, recursive?)}, folder)
     else
       error -> render_folder(error, folder)
     end
@@ -941,30 +943,40 @@ defmodule Engram.MCP.Handlers do
   # Render list_folder output. Public (doc: false) so both branches — including
   # the failure one, which no fixture can force through Notes — are directly
   # testable, the same reason `render_search/2` is public.
-  def render_folder({:ok, notes, atts}, folder) do
+  def render_folder({:ok, notes, atts, folders}, folder) do
     label = folder_label(folder)
 
     text =
-      if notes == [] and atts == [] do
+      if notes == [] and atts == [] and folders == [] do
         "No notes found in folder: #{label}"
       else
-        header = [
-          "**Folder:** #{label}",
-          "",
-          "| Title | Path | Tags |",
-          "|-------|------|------|"
-        ]
+        entry_rows =
+          if notes == [] and atts == [] do
+            []
+          else
+            note_rows =
+              Enum.map(notes, fn n ->
+                tags = if n.tags && n.tags != [], do: Enum.join(n.tags, ", "), else: ""
+                "| #{n.title} | #{n.path} | #{tags} |"
+              end)
 
-        note_rows =
-          Enum.map(notes, fn n ->
-            tags = if n.tags && n.tags != [], do: Enum.join(n.tags, ", "), else: ""
-            "| #{n.title} | #{n.path} | #{tags} |"
-          end)
+            att_rows =
+              Enum.map(atts, fn a ->
+                "| #{Path.basename(a.path)} | #{a.path} | (attachment) |"
+              end)
 
-        att_rows =
-          Enum.map(atts, fn a -> "| #{Path.basename(a.path)} | #{a.path} | (attachment) |" end)
+            ["", "| Title | Path | Tags |", "|-------|------|------|"] ++ note_rows ++ att_rows
+          end
 
-        Enum.join(header ++ note_rows ++ att_rows, "\n")
+        folder_rows =
+          if folders == [] do
+            []
+          else
+            rows = Enum.map(folders, fn f -> "| #{f["folder"]} | #{f["count"]} |" end)
+            ["", "**Subfolders:**", "", "| Folder | Notes |", "|--------|-------|"] ++ rows
+          end
+
+        Enum.join(["**Folder:** #{label}"] ++ entry_rows ++ folder_rows, "\n")
       end
 
     structured = %{
@@ -975,7 +987,8 @@ defmodule Engram.MCP.Handlers do
           %{"title" => n.title, "path" => n.path, "tags" => n.tags || []}
         end),
       "attachments" =>
-        Enum.map(atts, fn a -> %{"name" => Path.basename(a.path), "path" => a.path} end)
+        Enum.map(atts, fn a -> %{"name" => Path.basename(a.path), "path" => a.path} end),
+      "folders" => folders
     }
 
     {:ok, text, structured}
@@ -1001,6 +1014,21 @@ defmodule Engram.MCP.Handlers do
 
   defp folder_label(folder) when folder in ["", nil], do: "(root)"
   defp folder_label(folder), do: folder
+
+  # Direct subfolders of `folder`, or every descendant when `recursive?`.
+  # `all_folders` is the full vault-wide list from `list_folders_with_counts/2`
+  # (already fetched once by the caller); filtered here in BEAM rather than
+  # re-querying per folder depth.
+  defp subfolders(all_folders, folder, recursive?) do
+    prefix = if folder == "", do: "", else: folder <> "/"
+
+    all_folders
+    |> Enum.map(&%{"folder" => &1.folder || "", "count" => &1.count})
+    |> Enum.filter(fn %{"folder" => f} ->
+      f != "" and f != folder and String.starts_with?(f, prefix) and
+        (recursive? or not String.contains?(String.replace_prefix(f, prefix, ""), "/"))
+    end)
+  end
 
   defp format_search_result(r, i, names) do
     ["## Result #{i} (score: #{Float.round(r.score, 3)})"]
