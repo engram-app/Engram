@@ -8,6 +8,8 @@ defmodule EngramWeb.McpController do
   alias Engram.Abuse.OriginStats
   alias Engram.MCP.Tools
 
+  require Logger
+
   @server_info %{"name" => "engram", "version" => "0.1.0"}
   @capabilities %{"tools" => %{"listChanged" => false}}
   # Newest first. `2025-06-18` is what makes structured tool output reachable:
@@ -752,12 +754,14 @@ defmodule EngramWeb.McpController do
   def run_tool_handler(tool, user, vault, args) do
     case tool.handler.(user, vault, args) do
       {:ok, text} ->
+        text = deprecation_note(tool, text)
         {{:ok, text_result(text)}, :ok, byte_size_safe(text)}
 
       # A converted tool (#1660) answers with both renderings. `content` stays
       # mandatory — `structuredContent` is additive, and a client that ignores
       # it must still get a usable answer.
       {:ok, text, structured} when is_map(structured) ->
+        text = deprecation_note(tool, text)
         result = Map.put(text_result(text), "structuredContent", structured)
         # `text` only, deliberately. A previous pass added a second Jason.encode
         # here so the size metric would count structuredContent too. That was
@@ -795,6 +799,17 @@ defmodule EngramWeb.McpController do
 
       {error_result(message), :error, byte_size_safe(message)}
   end
+
+  # Retired tool names (Task 3.1's `deprecated_for`) still work exactly as
+  # before — `structuredContent` is untouched — but the text `content` gets
+  # one appended line so the model learns the replacement name. A tool with no
+  # `deprecated_for` key falls through to the second clause unchanged.
+  defp deprecation_note(%{deprecated_for: replacement, name: name}, text) do
+    Logger.info("mcp deprecated tool called", tool: name, replacement: replacement)
+    text <> "\n\n(#{name} is deprecated; use #{replacement}.)"
+  end
+
+  defp deprecation_note(_tool, text), do: text
 
   # Builds a client-safe message for a trapped tool-handler failure.
   #
