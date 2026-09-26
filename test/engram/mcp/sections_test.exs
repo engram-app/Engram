@@ -90,4 +90,34 @@ defmodule Engram.MCP.SectionsTest do
   test "insert on a missing heading is :error" do
     assert Sections.insert(@note, "Nope", 2, "end", "y") == :error
   end
+
+  # Fix round 1, finding 1: CommonMark allows at most 3 leading spaces on an
+  # ATX heading; 4+ is an indented code line, not a heading, and must not end
+  # a section either.
+  test "a line indented 4+ spaces is not a heading, and does not end a section" do
+    content = "## Todo\n\na\n    ## not a heading\nb\n\n## Done\n\nx\n"
+
+    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) ==
+             [{2, "Todo"}, {2, "Done"}]
+
+    assert {:ok, text} = Sections.section(content, "Todo")
+    assert text =~ "    ## not a heading"
+    assert text =~ "b"
+    refute text =~ "## Done"
+  end
+
+  # Fix round 1, finding 2: an ATX heading may end with an optional closing
+  # sequence of #s, which must be preceded by a space and stripped along with
+  # any trailing whitespace.
+  test "an ATX closing sequence of #s is stripped from the heading text" do
+    assert Sections.headings("## Title ##") |> Enum.map(& &1.text) == ["Title"]
+    assert Sections.headings("## Title #") |> Enum.map(& &1.text) == ["Title"]
+  end
+
+  # Fix round 1, finding 3: `\s+` after the hashes matches any run of
+  # whitespace, not just a single space, so extra spaces before the heading
+  # text are tolerated. Deliberate improvement over the old exact-string match.
+  test "extra whitespace between the hashes and the heading text is tolerated" do
+    assert Sections.headings("##  Todo") |> Enum.map(& &1.text) == ["Todo"]
+  end
 end

@@ -12,8 +12,13 @@ defmodule Engram.MCP.Sections do
 
   @type heading :: %{line: non_neg_integer(), level: 1..6, text: String.t()}
 
-  # `\#` because `#{` would interpolate. Trailing `\s*` also eats a CRLF `\r`.
-  @heading_re ~r/^(\#{1,6})(?:\s+(.*?))?\s*$/
+  # `\#` because `#{` would interpolate. Leading `\s{0,3}` mirrors CommonMark:
+  # at most 3 spaces of indent, 4+ is an indented code line, not a heading
+  # (same bound as `@fence_re` below). The trailing `(?:\s+#+)?` strips an
+  # optional ATX closing sequence ("## Title ##" -> "Title"); it must be
+  # preceded by whitespace, so "## Title##" keeps the hashes as text. Trailing
+  # `\s*` also eats a CRLF `\r`.
+  @heading_re ~r/^\s{0,3}(\#{1,6})(?:\s+(.*?))?(?:\s+#+)?\s*$/
   @fence_re ~r/^\s{0,3}(`{3,}|~{3,})/
 
   @spec headings(String.t()) :: [heading()]
@@ -101,7 +106,9 @@ defmodule Engram.MCP.Sections do
   end
 
   defp heading(acc, line, i) do
-    case Regex.run(@heading_re, String.trim_leading(line)) do
+    # No String.trim_leading/1 here: @heading_re bounds the indent itself
+    # (0-3 whitespace chars), so a 4+-space line correctly fails to match.
+    case Regex.run(@heading_re, line) do
       [_, hashes] -> [%{line: i, level: String.length(hashes), text: ""} | acc]
       [_, hashes, text] -> [%{line: i, level: String.length(hashes), text: text} | acc]
       nil -> acc
