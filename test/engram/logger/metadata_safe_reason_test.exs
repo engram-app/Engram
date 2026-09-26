@@ -11,6 +11,11 @@ defmodule Engram.Logger.MetadataSafeReasonTest do
   """
   use ExUnit.Case, async: true
 
+  # Stands in for any row struct WITHOUT `redact: true` on its fields.
+  defmodule LeakyRow do
+    defstruct [:content, :title, :path]
+  end
+
   import Ecto.Query, only: [from: 2]
 
   alias Engram.Logger.Metadata
@@ -59,7 +64,10 @@ defmodule Engram.Logger.MetadataSafeReasonTest do
     # (Exception.message/1 renders inspect(term)) reintroduced by name in the
     # fix for it.
     test "Ecto.StaleEntryError does not render the struct it holds" do
-      note = %Engram.Notes.Note{content: @secret, title: "Biopsy", path: "Medical/biopsy.md"}
+      # A non-redacted struct: `Engram.Notes.Note` now hides its plaintext from
+      # inspect (`redact: true`), but safe_reason must not depend on every
+      # schema doing so, so measure it against one that still leaks.
+      note = %LeakyRow{content: @secret, title: "Biopsy", path: "Medical/biopsy.md"}
       # Built via exception/1, which is what computes the leaky message.
       e = Ecto.StaleEntryError.exception(action: :update, changeset: %Ecto.Changeset{data: note})
 
@@ -231,7 +239,7 @@ defmodule Engram.Logger.MetadataSafeReasonTest do
       assert Metadata.safe_reason({:error, :not_found}) == ":error :not_found"
       assert Metadata.safe_reason({:notes_cap_reached, 100, 50}) == ":notes_cap_reached"
 
-      note = %Engram.Notes.Note{content: @secret, path: "Medical/biopsy.md"}
+      note = %LeakyRow{content: @secret, path: "Medical/biopsy.md"}
       rendered = Metadata.safe_reason({:error, note})
 
       assert inspect({:error, note}) =~ "biopsy"
@@ -250,7 +258,7 @@ defmodule Engram.Logger.MetadataSafeReasonTest do
     # ...but only when the payload really is an atom. A %Note{} payload must
     # still be dropped.
     test "an atom tag with a struct payload still drops the payload" do
-      note = %Engram.Notes.Note{content: @secret, path: "Medical/biopsy.md"}
+      note = %LeakyRow{content: @secret, path: "Medical/biopsy.md"}
       rendered = Metadata.safe_reason({:error, note})
 
       assert rendered == ":error"

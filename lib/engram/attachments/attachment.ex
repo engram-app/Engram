@@ -8,7 +8,7 @@ defmodule Engram.Attachments.Attachment do
   schema "attachments" do
     # Phase B.3: path is virtual — populated by maybe_decrypt_attachment_fields/2.
     # Persisted form is path_ciphertext + path_nonce + path_hmac.
-    field :path, :string, virtual: true
+    field :path, :string, virtual: true, redact: true
     field :path_ciphertext, :binary
     field :path_nonce, :binary
     field :path_hmac, :binary
@@ -18,7 +18,7 @@ defmodule Engram.Attachments.Attachment do
     # Decoded plaintext is materialized into this virtual field by the read
     # path (`Engram.Attachments.get_attachment/3`). It never persists; the
     # actual ciphertext lives in S3-compatible object storage.
-    field :content, :binary, virtual: true
+    field :content, :binary, virtual: true, redact: true
     field :content_hash, :string
     field :mime_type, :string
     field :size_bytes, :integer

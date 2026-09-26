@@ -9,9 +9,9 @@ defmodule Engram.Links.NoteLink do
   use Engram.Schema
 
   schema "note_links" do
-    field :target_text, :string, virtual: true
-    field :alias, :string, virtual: true
-    field :anchor, :string, virtual: true
+    field :target_text, :string, virtual: true, redact: true
+    field :alias, :string, virtual: true, redact: true
+    field :anchor, :string, virtual: true, redact: true
 
     field :target_text_ciphertext, :binary
     field :target_text_nonce, :binary

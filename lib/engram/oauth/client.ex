@@ -58,7 +58,7 @@ defmodule Engram.OAuth.Client do
     # Plaintext, returned in the registration response and never again. Virtual
     # so it cannot be persisted or read back: a client that loses its secret
     # re-registers.
-    field :client_secret, :string, virtual: true
+    field :client_secret, :string, virtual: true, redact: true
     field :redirect_uris, {:array, :string}
     field :client_name, :string
     field :scope, :string

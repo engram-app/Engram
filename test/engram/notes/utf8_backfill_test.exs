@@ -177,9 +177,10 @@ defmodule Engram.Notes.Utf8BackfillTest do
       secret = "Dear diary, the biopsy came back positive."
       note = %Note{content: secret, title: "Biopsy results", path: "Medical/biopsy.md"}
 
-      # The struct really does inspect its plaintext, so this measures the
-      # filter rather than an empty base.
-      assert inspect(note) =~ "biopsy"
+      # The struct really does carry plaintext, so this measures the filter
+      # rather than an empty base. `structs: false` bypasses the schema's
+      # `redact: true` Inspect impl, which now hides it from a plain inspect.
+      assert inspect(note, structs: false) =~ "biopsy"
 
       assert Utf8Backfill.format_reason({:error, :version_conflict, note}) == "version_conflict"
     end
@@ -209,8 +210,9 @@ defmodule Engram.Notes.Utf8BackfillTest do
         })
 
       # Self-proving: the struct really does hold the secret, so this test is
-      # measuring Ecto's Inspect impl rather than an empty base.
-      assert inspect(loaded) =~ "biopsy"
+      # measuring Ecto's Inspect impl rather than an empty base. `structs:
+      # false` bypasses Note's `redact: true`, which now hides it on its own.
+      assert inspect(loaded, structs: false) =~ "biopsy"
 
       rendered = inspect(changeset)
 

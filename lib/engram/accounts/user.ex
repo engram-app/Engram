@@ -9,12 +9,12 @@ defmodule Engram.Accounts.User do
   @type t :: %__MODULE__{}
 
   schema "users" do
-    field :email, :string
-    field :normalized_email, :string
+    field :email, :string, redact: true
+    field :normalized_email, :string, redact: true
     field :external_id, :string
     field :password_hash, :string, redact: true
     field :role, :string, default: "member"
-    field :display_name, :string
+    field :display_name, :string, redact: true
     field :encrypted_dek, :binary, redact: true
     field :dek_version, :integer, default: 1, redact: true
     field :key_provider, :string, default: "local", redact: true
