@@ -5,6 +5,7 @@ defmodule Engram.MCP.Handlers do
   """
 
   alias Engram.{Notes, Search}
+  alias Engram.Notes.Frontmatter
 
   # -- Vault tools --
 
@@ -342,23 +343,11 @@ defmodule Engram.MCP.Handlers do
   def handle("append_to_note", user, vault, args) do
     path = args["path"] || ""
     text = args["text"] || ""
-    position = args["position"] || "end"
 
-    with :ok <- validate_append_position(position) do
+    with {:ok, position} <- resolve_append_position(args["position"]) do
       case Notes.get_note(user, vault, path) do
-        {:ok, _note} ->
-          # Read-modify-write via the CAS helper: a write landing between the
-          # read and the upsert must trigger a re-read + rebuild, not be deleted
-          # by the full-content merge (2026-07-07: MCP appends erased).
-          rmw_upsert(user, vault, path, fn content -> place_text(content, text, position) end)
-          |> upsert_reply(
-            [
-              ok: "Note appended to: #{path}",
-              conflict: "Note changed concurrently; retry: #{path}",
-              error: "Failed to append to note: #{path}"
-            ],
-            %{"path" => path, "created" => false}
-          )
+        {:ok, note} ->
+          append_to_existing(user, vault, path, note, text, position)
 
         {:error, :not_found} ->
           content = "# #{Path.basename(path, ".md")}\n\n#{text}"
@@ -1048,9 +1037,6 @@ defmodule Engram.MCP.Handlers do
     end
   end
 
-  defp validate_append_position(position) when position in ["end", "start"], do: :ok
-  defp validate_append_position(_), do: {:error, "position must be end or start"}
-
   # "end" stays byte-identical to the pre-position append (existing tests
   # pin the old behavior). "start" inserts right after the frontmatter
   # fence when present, so frontmatter bytes are never touched; with no
@@ -1058,9 +1044,73 @@ defmodule Engram.MCP.Handlers do
   defp place_text(content, text, "end"), do: String.trim_trailing(content, "\n") <> "\n" <> text
 
   defp place_text(content, text, "start") do
-    case Engram.Notes.Frontmatter.split(content) do
+    case Frontmatter.split(content) do
       {nil, body} -> text <> "\n" <> body
       {_frontmatter, body} -> String.replace_suffix(content, body, "") <> text <> "\n" <> body
+    end
+  end
+
+  # nil (missing key, or an explicit JSON null from a strict-schema client) is
+  # the only thing that defaults to "end". Everything else, including the
+  # boolean false, must be exactly "end" or "start" or it is a fixable error
+  # rather than a silent default.
+  defp resolve_append_position(nil), do: {:ok, "end"}
+  defp resolve_append_position(position) when position in ["end", "start"], do: {:ok, position}
+  defp resolve_append_position(_), do: {:error, "position must be end or start"}
+
+  defp append_to_existing(user, vault, path, note, text, position) do
+    case Notes.authoritative_content(user, note) do
+      {:ok, current} ->
+        case guard_start_frontmatter_safety(position, current, text) do
+          :ok ->
+            # Read-modify-write via the CAS helper: a write landing between the
+            # read and the upsert must trigger a re-read + rebuild, not be
+            # deleted by the full-content merge (2026-07-07: MCP appends erased).
+            rmw_upsert(user, vault, path, fn content -> place_text(content, text, position) end)
+            |> upsert_reply(
+              [
+                ok: "Note appended to: #{path}",
+                conflict: "Note changed concurrently; retry: #{path}",
+                error: "Failed to append to note: #{path}"
+              ],
+              %{"path" => path, "created" => false}
+            )
+
+          {:error, _msg} = error ->
+            error
+        end
+
+      {:error, _reason} ->
+        {:error, "Failed to append to note: #{path}"}
+    end
+  end
+
+  # position "end" never changes the note's shape, so it needs no guard.
+  #
+  # position "start" prepends `text` in front of the current body (after any
+  # frontmatter fence). The resulting body (`text <> "\n" <> body`) is what
+  # CrdtBridge.ingest_plaintext/2 re-splits into frontmatter/body on the next
+  # write, and what CrdtBridge.normalize_doc/1 re-splits on the next CRDT room
+  # bind. If that combined body itself parses as starting with real
+  # frontmatter (e.g. caller text opens with "---" and later text closes it
+  # into a YAML map), the accidental block gets silently lifted into the
+  # note's real frontmatter, regardless of whether the note had frontmatter
+  # before this write, since the body is checked independently of any
+  # existing frontmatter prefix. Refuse rather than write something that only
+  # misparses later.
+  defp guard_start_frontmatter_safety("end", _current, _text), do: :ok
+
+  defp guard_start_frontmatter_safety("start", current, text) do
+    {_frontmatter, body} = Frontmatter.split(current)
+
+    case Frontmatter.split(text <> "\n" <> body) do
+      {nil, _} ->
+        :ok
+
+      {_frontmatter, _body} ->
+        {:error,
+         "text would be read as frontmatter at the top of this note; start it with " <>
+           "something other than a --- line, or use position end"}
     end
   end
 
@@ -1156,7 +1206,7 @@ defmodule Engram.MCP.Handlers do
     # body} and already handles the edge cases the regexes here used to miss
     # (closing fence at EOF, CRLF, empty block). Stripping a leading BOM is the
     # only thing this call site adds over it.
-    {fm, body} = content |> String.replace_prefix("﻿", "") |> Engram.Notes.Frontmatter.split()
+    {fm, body} = content |> String.replace_prefix("﻿", "") |> Frontmatter.split()
 
     # Suppress an injected field only when the body actually carries it: a
     # frontmatter `title:`/`tags:` key, or (for the title) a body `# H1`.

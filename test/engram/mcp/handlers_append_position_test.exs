@@ -113,4 +113,80 @@ defmodule Engram.MCP.HandlersAppendPositionTest do
 
     assert msg =~ "position must be end or start"
   end
+
+  test "position: false is a fixable error, not a silent default to end", %{user: u, vault: v} do
+    put!(u, v, "B.md", "# B\n\nold\n")
+
+    assert {:error, msg} =
+             Handlers.handle("append_to_note", u, v, %{
+               "path" => "B.md",
+               "text" => "t",
+               "position" => false
+             })
+
+    assert msg =~ "position must be end or start"
+    assert body(u, v, "B.md") == "# B\n\nold\n"
+  end
+
+  # Review round 1: place_text builds the note's plaintext, but the doc's Y.Text
+  # BODY is what CrdtBridge.ingest_plaintext/2 re-splits on the NEXT write, and
+  # what CrdtBridge.normalize_doc/1 re-splits on the NEXT room bind. Verified via
+  # Engram.Notes.Frontmatter.split/1 directly (not asserted here, just documented):
+  # for text = "---\na: 1\n---\nhi", `text <> "\n" <> body` parses back to
+  # {"a: 1\n", "hi\n" <> body} REGARDLESS of whether the original note had
+  # frontmatter — so the guard must fire on both paths, not just the no-frontmatter
+  # one.
+  test "start refuses text that would misparse as frontmatter (no existing frontmatter)", %{
+    user: u,
+    vault: v
+  } do
+    put!(u, v, "P2.md", "# P\n\nold\n")
+
+    assert {:error, msg} =
+             Handlers.handle("append_to_note", u, v, %{
+               "path" => "P2.md",
+               "text" => "---\na: 1\n---\nhi",
+               "position" => "start"
+             })
+
+    assert msg =~
+             "text would be read as frontmatter at the top of this note; start it with " <>
+               "something other than a --- line, or use position end"
+
+    assert body(u, v, "P2.md") == "# P\n\nold\n"
+  end
+
+  test "start refuses the same misparse risk even when frontmatter already exists", %{
+    user: u,
+    vault: v
+  } do
+    put!(u, v, "F2.md", "---\ntags: [a]\n---\n# F\n\nold\n")
+    before = body(u, v, "F2.md")
+
+    assert {:error, msg} =
+             Handlers.handle("append_to_note", u, v, %{
+               "path" => "F2.md",
+               "text" => "---\na: 1\n---\nhi",
+               "position" => "start"
+             })
+
+    assert msg =~ "would be read as frontmatter"
+    assert body(u, v, "F2.md") == before
+  end
+
+  test "start allows a leading --- that never closes into a parseable frontmatter block", %{
+    user: u,
+    vault: v
+  } do
+    put!(u, v, "H.md", "# H\n\nold\n")
+
+    assert {:ok, _, _} =
+             Handlers.handle("append_to_note", u, v, %{
+               "path" => "H.md",
+               "text" => "---\nrule",
+               "position" => "start"
+             })
+
+    assert body(u, v, "H.md") =~ ~r/\A---\nrule\n# H/
+  end
 end
