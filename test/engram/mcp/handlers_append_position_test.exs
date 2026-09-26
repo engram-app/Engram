@@ -3,6 +3,7 @@ defmodule Engram.MCP.HandlersAppendPositionTest do
 
   alias Engram.MCP.Handlers
   alias Engram.Notes
+  alias Engram.Notes.Frontmatter
 
   setup do
     user = insert(:user)
@@ -28,7 +29,7 @@ defmodule Engram.MCP.HandlersAppendPositionTest do
     # original flow-style text survives, so this test only pins what
     # append_to_note itself must not touch: the frontmatter bytes.
     before = body(u, v, "F.md")
-    {frontmatter, _rest} = Engram.Notes.Frontmatter.split(before)
+    {frontmatter, _rest} = Frontmatter.split(before)
 
     assert {:ok, _, _} =
              Handlers.handle("append_to_note", u, v, %{
@@ -219,7 +220,7 @@ defmodule Engram.MCP.HandlersAppendPositionTest do
              })
 
     result = body(u, v, "FM.md")
-    assert {frontmatter, rest} = Engram.Notes.Frontmatter.split(result)
+    assert {frontmatter, rest} = Frontmatter.split(result)
     assert frontmatter != nil
     assert String.starts_with?(rest, "hello")
   end
@@ -238,7 +239,7 @@ defmodule Engram.MCP.HandlersAppendPositionTest do
              })
 
     result = body(u, v, "FM2.md")
-    assert {frontmatter, rest} = Engram.Notes.Frontmatter.split(result)
+    assert {frontmatter, rest} = Frontmatter.split(result)
     assert frontmatter != nil
     assert String.starts_with?(rest, "hello")
   end
