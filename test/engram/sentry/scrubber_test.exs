@@ -154,4 +154,24 @@ defmodule Engram.Sentry.ScrubberTest do
     assert scrubbed.user == e.user
     assert scrubbed.tags == e.tags
   end
+
+  describe "scrub/1 — crash-report extras" do
+    # Sentry's LoggerHandler lifts the inspected last message and state of a
+    # crashed GenServer into `extra`. For a channel that is the client payload
+    # and the socket (current_user, topics with raw ids).
+    test "drops last_message, genserver_state, sender pid and crash_reason" do
+      e =
+        event(%{
+          extra: %{
+            last_message: ~s(%{"path" => "Medical/biopsy.md"}),
+            genserver_state: "%Phoenix.Socket{assigns: %{current_user: ...}}",
+            pid_which_sent_last_message: "#PID<0.1.0>",
+            crash_reason: "{%MatchError{term: ...}, []}",
+            kept: "ok"
+          }
+        })
+
+      assert Scrubber.scrub(e).extra == %{kept: "ok"}
+    end
+  end
 end

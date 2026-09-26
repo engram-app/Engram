@@ -197,6 +197,14 @@ config :engram, Oban,
 
 # Configure Elixir's Logger.
 #
+# Crash reports (GenServer/Task/gen_event terminate) inspect the process's
+# last message, args and, at :debug, its state. For a channel that is the
+# client payload: plaintext `path`s, base64 Yjs updates. The report ships to
+# Loki and Sentry's LoggerHandler lifts it into `extra`, and RedactFilter never
+# sees message text. `printable_limit: 0` prints every string/charlist as
+# `"" <> ...`; atoms, numbers and struct/tuple shape stay for triage.
+config :logger, translator_inspect_opts: [printable_limit: 0, limit: 20]
+
 # `metadata:` declares which keys are emitted in formatter output. Credo's
 # `Warning.MissedMetadataKeyInLoggerConfig` check fails for any structured
 # metadata key passed to Logger.* without being listed here. New metadata

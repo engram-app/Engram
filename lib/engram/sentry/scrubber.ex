@@ -22,6 +22,12 @@ defmodule Engram.Sentry.Scrubber do
   """
 
   @pii_substrings ~w(email phone address card iban pan ssn)
+
+  # Sentry's LoggerHandler lifts a crashed GenServer's inspected last message
+  # and state into `extra`. For a channel those are the client payload and the
+  # socket (current_user, raw-id topics). The translator already truncates
+  # their strings (`translator_inspect_opts`); dropping them is the backstop.
+  @crash_extras ~w(last_message genserver_state pid_which_sent_last_message crash_reason)
   @redacted "[redacted]"
 
   @spec scrub(Sentry.Event.t()) :: Sentry.Event.t()
@@ -29,13 +35,19 @@ defmodule Engram.Sentry.Scrubber do
     %{
       event
       | request: nil,
-        extra: redact_map(event.extra),
+        extra: event.extra |> drop_crash_extras() |> redact_map(),
         user: redact_map(event.user),
         tags: redact_map(event.tags),
         contexts: redact_map(event.contexts),
         breadcrumbs: redact_breadcrumbs(event.breadcrumbs)
     }
   end
+
+  defp drop_crash_extras(extra) when is_map(extra) do
+    Map.drop(extra, @crash_extras ++ Enum.map(@crash_extras, &String.to_atom/1))
+  end
+
+  defp drop_crash_extras(extra), do: extra
 
   defp redact_map(nil), do: nil
 
