@@ -160,9 +160,8 @@ defmodule EngramWeb.McpControllerTest do
     # "folder", used to silently fall through to the handler's `|| ""`
     # default and operate on the vault root with no error. Required params
     # must be validated against inputSchema before the handler ever runs.
-    # Targets create_folder, not list_folder: task 3.5 made list_folder's
-    # `folder` optional (default "", the vault root), so this class of typo
-    # is no longer an error there by design.
+    # Targets create_folder, whose `folder` is required. list_folder's is
+    # optional; its copy of this guard is the #1492 test below.
     test "tools/call with a missing required argument returns a tool error, not a silent default",
          %{
            conn: conn
@@ -171,7 +170,17 @@ defmodule EngramWeb.McpControllerTest do
       resp = json_response(conn, 200)
 
       assert_tool_error(resp)
-      assert tool_text(conn) =~ "folder"
+      assert tool_text(conn) =~ ~s(Unknown argument "path" for create_folder)
+      assert tool_text(conn) =~ "Valid arguments: folder"
+    end
+
+    test "a stray argument on a tool that takes none says so plainly", %{conn: conn} do
+      conn = call_tool(conn, "list_vaults", %{"vault_id" => "x"})
+
+      assert_tool_error(json_response(conn, 200))
+
+      assert tool_text(conn) =~
+               ~s(Unknown argument "vault_id" for list_vaults. list_vaults takes no arguments.)
     end
 
     # #1492 REOPENED by task 3.5, closed for good here: making list_folder's

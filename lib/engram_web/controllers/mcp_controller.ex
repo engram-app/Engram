@@ -695,11 +695,16 @@ defmodule EngramWeb.McpController do
   end
 
   defp unknown_argument_message(name, unknown, properties) do
-    valid = properties |> Map.keys() |> Enum.sort() |> Enum.join(", ")
     quoted = Enum.map_join(unknown, ", ", &~s("#{&1}"))
     label = if length(unknown) == 1, do: "argument", else: "arguments"
 
-    "Unknown #{label} #{quoted} for #{name}. Valid arguments: #{valid}."
+    valid =
+      case properties |> Map.keys() |> Enum.sort() do
+        [] -> "#{name} takes no arguments."
+        keys -> "Valid arguments: #{Enum.join(keys, ", ")}."
+      end
+
+    "Unknown #{label} #{quoted} for #{name}. #{valid}"
   end
 
   defp validate_declared_args(tool, args, properties) do
