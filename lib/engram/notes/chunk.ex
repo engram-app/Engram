@@ -5,7 +5,7 @@ defmodule Engram.Notes.Chunk do
 
   schema "chunks" do
     field :position, :integer
-    field :heading_path, :string
+    field :heading_path, :string, redact: true
     field :char_start, :integer
     field :char_end, :integer
     field :token_count, :integer

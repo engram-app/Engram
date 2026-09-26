@@ -16,7 +16,15 @@ defmodule Engram.SchemaRedactionTest do
     {Engram.Links.NoteLink, ~w(target_text alias anchor)a, []},
     {Engram.Vaults.Vault, ~w(name description slug)a, []},
     {Engram.Accounts.User, ~w(email normalized_email display_name)a, []},
-    {Engram.OAuth.Client, ~w(client_secret)a, []}
+    {Engram.OAuth.Client, ~w(client_secret first_ip)a, []},
+    {Engram.Notes.Chunk, ~w(heading_path)a, []},
+    {Engram.Logs.ClientLog, ~w(message stack)a, []},
+    {Engram.Auth.DeviceAuthorization, ~w(device_code user_code vault_name)a, []},
+    {Engram.Email.Suppression, ~w(email)a, []},
+    {Engram.Onboarding.Agreement, ~w(ip_address)a, []},
+    {Engram.OAuth.RefreshToken, ~w(last_used_ip)a, []},
+    {Engram.Accounts.ApiKey, ~w(name)a, []},
+    {Engram.Invites.Invite, ~w(label)a, []}
   ]
 
   for {schema, fields, extra} <- @cases do

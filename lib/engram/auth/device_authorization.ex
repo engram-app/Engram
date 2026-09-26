@@ -4,12 +4,12 @@ defmodule Engram.Auth.DeviceAuthorization do
   import Ecto.Changeset
 
   schema "device_authorizations" do
-    field :device_code, :string
-    field :user_code, :string
+    field :device_code, :string, redact: true
+    field :user_code, :string, redact: true
     field :client_id, :string
     field :status, :string, default: "pending"
     field :expires_at, :utc_datetime
-    field :vault_name, :string
+    field :vault_name, :string, redact: true
 
     belongs_to :user, Engram.Accounts.User
     belongs_to :vault, Engram.Vaults.Vault

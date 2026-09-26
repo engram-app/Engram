@@ -106,7 +106,7 @@ defmodule Engram.OAuth.Client do
     field :kind, :string, default: "mcp"
     field :first_user_agent, :string
     # DB column was changed from :inet to :text (migration 20260530000005).
-    field :first_ip, :string
+    field :first_ip, :string, redact: true
 
     timestamps(type: :utc_datetime_usec)
   end
