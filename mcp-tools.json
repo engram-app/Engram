@@ -474,16 +474,25 @@
         "readOnlyHint": true,
         "title": "Read Notes"
       },
-      "description": "Retrieve the full content of multiple notes in one call (1-20 paths). Also reads a single note: pass one path. Use to inventory a folder (list_folder then get_notes) or to read a batch of search results without N round-trips. Missing paths are reported inline.",
+      "description": "Retrieve the full content of multiple notes in one call (1-20 paths). Also reads a single note: pass one path. Use to inventory a folder (list_folder then get_notes) or to read a batch of search results without N round-trips. Missing paths are reported inline. To save tokens on long notes, pass outline: true for the heading list only, or section with one path to read just that heading's section.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
+          "outline": {
+            "default": false,
+            "description": "true returns each note's headings (level and text) instead of its content",
+            "type": "boolean"
+          },
           "paths": {
             "description": "Note paths to read (max 20), e.g. [\"Health/A.md\", \"Health/B.md\"]",
             "items": {
               "type": "string"
             },
             "type": "array"
+          },
+          "section": {
+            "description": "Heading text without the # prefix, e.g. \"Todo\". Returns only that section (heading line included, subsections included). One path only.",
+            "type": "string"
           },
           "vault_id": {
             "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
@@ -502,6 +511,7 @@
             "items": {
               "properties": {
                 "content": {
+                  "description": "Absent when outline: true was requested",
                   "type": "string"
                 },
                 "folder": {
@@ -509,6 +519,25 @@
                 },
                 "found": {
                   "type": "boolean"
+                },
+                "outline": {
+                  "description": "Only with outline: true; replaces content",
+                  "items": {
+                    "properties": {
+                      "heading": {
+                        "type": "string"
+                      },
+                      "level": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "level",
+                      "heading"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
                 },
                 "path": {
                   "description": "Vault-relative path",

@@ -239,16 +239,27 @@ defmodule Engram.MCP.Handlers do
 
   def handle("get_notes", user, vault, args) do
     paths = args["paths"] || []
+    section = args["section"]
+    outline? = args["outline"] == true
 
     # `paths` being a list of strings is already enforced by the dispatch-level
-    # schema validator (mcp_controller.ex). The two checks left are the ones the
-    # schema does NOT declare: it has neither minItems nor maxItems.
+    # schema validator (mcp_controller.ex). The checks left are the ones the
+    # schema does NOT declare.
     cond do
       paths == [] ->
         {:error, "paths must be a non-empty array"}
 
       length(paths) > 20 ->
         {:error, "Too many paths (max 20). Split into multiple calls."}
+
+      is_binary(section) and outline? ->
+        {:error, "Pass section or outline, not both"}
+
+      is_binary(section) and String.trim(section) == "" ->
+        {:error, "section must name a heading, e.g. \"Todo\""}
+
+      is_binary(section) and length(paths) > 1 ->
+        {:error, "section reads one note at a time; pass a single path"}
 
       true ->
         fetched =
@@ -259,19 +270,9 @@ defmodule Engram.MCP.Handlers do
             end
           end)
 
-        body =
-          Enum.map_join(fetched, "\n\n---\n\n", fn
-            {_path, %{} = note} -> format_get_note(note)
-            {path, nil} -> "Note not found: #{path}"
-          end)
-
-        notes =
-          Enum.map(fetched, fn
-            {_path, %{} = note} -> Map.put(note_payload(note), "found", true)
-            {path, nil} -> %{"path" => path, "found" => false}
-          end)
-
-        {:ok, body, %{"notes" => notes}}
+        with {:ok, fetched} <- narrow_to_section(fetched, section) do
+          render_notes(user, fetched, outline?)
+        end
     end
   end
 
@@ -1475,6 +1476,68 @@ defmodule Engram.MCP.Handlers do
       "tags" => note.tags || [],
       "content" => note.content || ""
     }
+  end
+
+  defp narrow_to_section(fetched, nil), do: {:ok, fetched}
+  defp narrow_to_section([{_path, nil}] = fetched, _section), do: {:ok, fetched}
+
+  defp narrow_to_section([{path, note}], section) do
+    content = note.content || ""
+
+    case Sections.section(content, section) do
+      {:ok, text} -> {:ok, [{path, %{note | content: text}}]}
+      :error -> {:error, heading_missing_msg(path, section, content)}
+    end
+  end
+
+  defp heading_missing_msg(path, section, content) do
+    case Sections.headings(content) do
+      [] ->
+        "Heading not found in #{path}: #{section}. This note has no headings."
+
+      hs ->
+        "Heading not found in #{path}: #{section}. Headings: #{Enum.map_join(hs, ", ", & &1.text)}"
+    end
+  end
+
+  # `_user` is unused today; Task 4 threads a `links?` flag through here that
+  # needs it to resolve wikilinks, so the signature is already `render_notes/3`
+  # rather than adding a fourth positional argument on top later.
+  defp render_notes(_user, fetched, outline?) do
+    {texts, notes} =
+      fetched
+      |> Enum.map(fn
+        {path, nil} ->
+          {"Note not found: #{path}", %{"path" => path, "found" => false}}
+
+        {_path, note} ->
+          {text, payload} =
+            if outline?,
+              do: outline_entry(note),
+              else: {format_get_note(note), note_payload(note)}
+
+          {text, Map.put(payload, "found", true)}
+      end)
+      |> Enum.unzip()
+
+    {:ok, Enum.join(texts, "\n\n---\n\n"), %{"notes" => notes}}
+  end
+
+  defp outline_entry(note) do
+    outline =
+      Enum.map(
+        Sections.headings(note.content || ""),
+        &%{"level" => &1.level, "heading" => &1.text}
+      )
+
+    lines =
+      if outline == [],
+        do: ["(no headings)"],
+        else:
+          Enum.map(outline, &(String.duplicate("  ", &1["level"] - 1) <> "- " <> &1["heading"]))
+
+    payload = note |> note_payload() |> Map.delete("content") |> Map.put("outline", outline)
+    {Enum.join(["**Path:** #{note.path}" | lines], "\n"), payload}
   end
 
   defp vault_payload(v) do

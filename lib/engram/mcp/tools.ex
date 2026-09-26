@@ -639,7 +639,9 @@ defmodule Engram.MCP.Tools do
         "Retrieve the full content of multiple notes in one call (1-20 paths). " <>
           "Also reads a single note: pass one path. " <>
           "Use to inventory a folder (list_folder then get_notes) or to read a batch " <>
-          "of search results without N round-trips. Missing paths are reported inline.",
+          "of search results without N round-trips. Missing paths are reported inline. " <>
+          "To save tokens on long notes, pass outline: true for the heading list only, or " <>
+          "section with one path to read just that heading's section.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
@@ -648,6 +650,18 @@ defmodule Engram.MCP.Tools do
             "items" => %{"type" => "string"},
             "description" =>
               "Note paths to read (max 20), e.g. [\"Health/A.md\", \"Health/B.md\"]"
+          },
+          "section" => %{
+            "type" => "string",
+            "description" =>
+              "Heading text without the # prefix, e.g. \"Todo\". Returns only that section " <>
+                "(heading line included, subsections included). One path only."
+          },
+          "outline" => %{
+            "type" => "boolean",
+            "default" => false,
+            "description" =>
+              "true returns each note's headings (level and text) instead of its content"
           }
         },
         "required" => ["paths"]
@@ -668,7 +682,22 @@ defmodule Engram.MCP.Tools do
                 "title" => %{"type" => ["string", "null"]},
                 "folder" => %{"type" => "string"},
                 "tags" => %{"type" => "array", "items" => %{"type" => "string"}},
-                "content" => %{"type" => "string"}
+                "content" => %{
+                  "type" => "string",
+                  "description" => "Absent when outline: true was requested"
+                },
+                "outline" => %{
+                  "type" => "array",
+                  "description" => "Only with outline: true; replaces content",
+                  "items" => %{
+                    "type" => "object",
+                    "properties" => %{
+                      "level" => %{"type" => "integer"},
+                      "heading" => %{"type" => "string"}
+                    },
+                    "required" => ["level", "heading"]
+                  }
+                }
               },
               "required" => ["path", "found"]
             }
