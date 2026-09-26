@@ -611,14 +611,23 @@ defmodule Engram.MCP.Handlers do
 
   # -- edit_note (replaces patch_note / update_section) --
 
-  defp reject_other_mode(args, "replace_text"),
-    do: reject_params(args, @section_params, "replace_section")
+  defp reject_other_mode(args, "replace_text") do
+    with :ok <- reject_params(args, @section_params, "replace_section or insert_section"),
+         do: reject_params(args, ["position"], "insert_section")
+  end
 
-  defp reject_other_mode(args, "replace_section"),
+  defp reject_other_mode(args, "replace_section") do
+    with :ok <- reject_params(args, @text_params, "replace_text"),
+         do: reject_params(args, ["position"], "insert_section")
+  end
+
+  defp reject_other_mode(args, "insert_section"),
     do: reject_params(args, @text_params, "replace_text")
 
   defp reject_other_mode(_args, mode),
-    do: {:error, "mode must be replace_text or replace_section, got #{inspect(mode)}"}
+    do:
+      {:error,
+       "mode must be replace_text, replace_section or insert_section, got #{inspect(mode)}"}
 
   # A strict-schema client (OpenAI strict mode) sends every declared property
   # on every call, nulling out the ones it isn't using. `validate_tool_args/2`
@@ -679,6 +688,59 @@ defmodule Engram.MCP.Handlers do
           "edit_note"
         )
         |> tag_mode("replace_section", %{"replacements" => nil})
+    end
+  end
+
+  defp run_edit(user, vault, path, "insert_section", args) do
+    level = args["level"] || 2
+
+    cond do
+      not is_binary(args["heading"]) ->
+        {:error, "heading is required for mode insert_section"}
+
+      not is_binary(args["content"]) or String.trim(args["content"]) == "" ->
+        {:error, "content is required for mode insert_section"}
+
+      level < 1 or level > 6 ->
+        {:error, "level must be between 1 and 6"}
+
+      true ->
+        with {:ok, position} <- resolve_insert_position(args["position"]) do
+          user
+          |> insert_section(vault, path, args["heading"], level, position, args["content"])
+          |> tag_mode("insert_section", %{"replacements" => nil})
+        end
+    end
+  end
+
+  defp resolve_insert_position(nil), do: {:ok, "end"}
+  defp resolve_insert_position(p) when p in ["start", "end"], do: {:ok, p}
+  defp resolve_insert_position(_), do: {:error, "position must be start or end"}
+
+  # Through rmw_upsert: the rebuild runs against the authority (#1159) on every
+  # attempt, and a missing heading refuses inside it, so nothing is written.
+  defp insert_section(user, vault, path, heading, level, position, text) do
+    rebuild = fn current ->
+      case Sections.insert(current, heading, level, position, text) do
+        {:ok, updated} -> updated
+        :error -> {:error, "Heading not found: #{String.duplicate("#", level)} #{heading}"}
+      end
+    end
+
+    case rmw_upsert(user, vault, path, rebuild) do
+      {:error, :not_found} ->
+        {:error, "Note not found: #{path}"}
+
+      result ->
+        upsert_reply(
+          result,
+          [
+            ok: "Inserted at the #{position} of section '#{heading}' in #{path}",
+            conflict: "Note changed concurrently; retry: #{path}",
+            error: "Failed to update section in #{path}"
+          ],
+          %{"path" => path, "heading" => heading}
+        )
     end
   end
 

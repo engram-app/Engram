@@ -788,9 +788,10 @@ defmodule Engram.MCP.Tools do
       description:
         "Change part of an existing note. mode replace_text finds exact text and replaces " <>
           "it (first occurrence by default); mode replace_section replaces everything under " <>
-          "one heading. Fails without writing if the text or heading is not found, or if " <>
-          "expected_replacements does not match. To add text use append_to_note. To " <>
-          "rewrite the whole note use write_note.",
+          "one heading; mode insert_section adds content under a heading, at the start or " <>
+          "end of that section, keeping what is there. Fails without writing if the text or " <>
+          "heading is not found, or if expected_replacements does not match. To add text at " <>
+          "the top or bottom of the note use append_to_note. To rewrite the whole note use write_note.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
@@ -800,8 +801,8 @@ defmodule Engram.MCP.Tools do
           },
           "mode" => %{
             "type" => "string",
-            "enum" => ["replace_text", "replace_section"],
-            "description" => "replace_text or replace_section"
+            "enum" => ["replace_text", "replace_section", "insert_section"],
+            "description" => "replace_text, replace_section or insert_section"
           },
           "find" => %{
             "type" => "string",
@@ -824,18 +825,28 @@ defmodule Engram.MCP.Tools do
           },
           "heading" => %{
             "type" => "string",
-            "description" => "replace_section only: heading text without the # prefix"
+            "description" =>
+              "replace_section and insert_section: heading text without the # prefix"
           },
           "content" => %{
             "type" => "string",
-            "description" => "replace_section only: new content for under the heading"
+            "description" =>
+              "replace_section: new content for under the heading; insert_section: content to add"
           },
           "level" => %{
             "type" => "integer",
-            "description" => "replace_section only: heading level 1-6 (default 2)",
+            "description" => "replace_section and insert_section: heading level 1-6 (default 2)",
             "default" => 2,
             "minimum" => 1,
             "maximum" => 6
+          },
+          "position" => %{
+            "type" => "string",
+            "enum" => ["start", "end"],
+            "default" => "end",
+            "description" =>
+              "insert_section only: start (directly under the heading) or end (default; after " <>
+                "the section's last line, including its subsections)"
           }
         },
         "required" => ["path", "mode"]

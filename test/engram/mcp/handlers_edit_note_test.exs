@@ -245,7 +245,7 @@ defmodule Engram.MCP.HandlersEditNoteTest do
                "replace" => "b"
              })
 
-    assert msg =~ "mode must be replace_text or replace_section"
+    assert msg =~ "mode must be replace_text, replace_section or insert_section"
   end
 
   test "occurrence past the last one is not found, via edit_note", %{user: u, vault: v} do
