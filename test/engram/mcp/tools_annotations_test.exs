@@ -10,7 +10,7 @@ defmodule Engram.MCP.ToolsAnnotationsTest do
                 suggest_folder get_note get_notes get_attachment_upload_target)
 
   # Overwrites or removes content the user wrote.
-  @destructive ~w(write_note patch_note update_section delete_note delete_folder)
+  @destructive ~w(write_note edit_note patch_note update_section delete_note delete_folder)
 
   test "every tool declares a title and all four hints" do
     for tool <- Tools.all_callable() do

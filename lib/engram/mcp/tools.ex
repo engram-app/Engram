@@ -63,6 +63,7 @@ defmodule Engram.MCP.Tools do
     "create_note" => {"Create Note", false, false, false},
     "write_note" => {"Write Note", false, true, true},
     "append_to_note" => {"Append to Note", false, false, false},
+    "edit_note" => {"Edit Note", false, true, false},
     "patch_note" => {"Find and Replace in Note", false, true, false},
     "update_section" => {"Replace Note Section", false, true, true},
     "rename_note" => {"Rename Note", false, false, false},
@@ -86,6 +87,7 @@ defmodule Engram.MCP.Tools do
       create_note_def(),
       write_note_def(),
       append_to_note_def(),
+      edit_note_def(),
       rename_note_def(),
       rename_folder_def(),
       delete_note_def(),
@@ -747,6 +749,81 @@ defmodule Engram.MCP.Tools do
         "required" => ["path", "created"]
       },
       handler: &Handlers.handle("append_to_note", &1, &2, &3)
+    }
+  end
+
+  defp edit_note_def do
+    %{
+      name: "edit_note",
+      description:
+        "Change part of an existing note. mode replace_text finds exact text and replaces " <>
+          "it (first occurrence by default); mode replace_section replaces everything under " <>
+          "one heading. Fails without writing if the text or heading is not found, or if " <>
+          "expected_replacements does not match. To add text use append_to_note. To " <>
+          "rewrite the whole note use write_note.",
+      inputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "path" => %{
+            "type" => "string",
+            "description" => "Path of the note, e.g. \"Projects/Alpha.md\""
+          },
+          "mode" => %{
+            "type" => "string",
+            "enum" => ["replace_text", "replace_section"],
+            "description" => "replace_text or replace_section"
+          },
+          "find" => %{
+            "type" => "string",
+            "description" => "replace_text only: exact text to find"
+          },
+          "replace" => %{
+            "type" => "string",
+            "description" => "replace_text only: text to put in its place"
+          },
+          "occurrence" => %{
+            "type" => "integer",
+            "description" => "replace_text only: 0 = first (default), 1 = second, -1 = all",
+            "default" => 0
+          },
+          "expected_replacements" => %{
+            "type" => "integer",
+            "description" =>
+              "replace_text only: fail without writing unless exactly this many are replaced"
+          },
+          "heading" => %{
+            "type" => "string",
+            "description" => "replace_section only: heading text without the # prefix"
+          },
+          "content" => %{
+            "type" => "string",
+            "description" => "replace_section only: new content for under the heading"
+          },
+          "level" => %{
+            "type" => "integer",
+            "description" => "replace_section only: heading level 1-6 (default 2)",
+            "default" => 2
+          }
+        },
+        "required" => ["path", "mode"]
+      },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "path" => %{"type" => "string"},
+          "mode" => %{"type" => "string"},
+          "replacements" => %{
+            "type" => ["integer", "null"],
+            "description" => "replace_text: occurrences replaced"
+          },
+          "heading" => %{
+            "type" => ["string", "null"],
+            "description" => "replace_section: heading updated"
+          }
+        },
+        "required" => ["path", "mode"]
+      },
+      handler: &Handlers.handle("edit_note", &1, &2, &3)
     }
   end
 

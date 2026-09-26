@@ -382,31 +382,7 @@ defmodule Engram.MCP.Handlers do
     replace = args["replace"] || ""
     occurrence = args["occurrence"] || 0
 
-    # Read the AUTHORITY, not the `notes.content` façade: the façade lags a doc
-    # write until checkpoint, so patching from it can commit an older body and
-    # drop edits made since (#1159).
-    with {:ok, note} <- Notes.get_note(user, vault, path),
-         {:ok, current} <- Notes.authoritative_content(user, note) do
-      if String.contains?(current, find) do
-        {new_content, count} = do_replace(current, find, replace, occurrence)
-
-        # `find` is present but the requested occurrence is past the last one,
-        # so do_replace/4 returns the content untouched. Rewriting the note
-        # with its own bytes and calling that success told the caller the patch
-        # landed. Same rule as the "Text not found" branch below.
-        if count == 0 do
-          {:error, "Occurrence #{occurrence} not found in #{path}"}
-        else
-          patch_upsert(user, vault, path, note, new_content, count)
-        end
-      else
-        # Nothing was replaced, so the patch did not happen. Was `:ok`.
-        {:error, "Text not found in #{path}"}
-      end
-    else
-      {:error, :not_found} -> {:error, "Note not found: #{path}"}
-      {:error, reason} -> log_and_error("patch_note", reason, "Could not read #{path}; retry")
-    end
+    patch_text(user, vault, path, %{find: find, replace: replace, occurrence: occurrence}, nil)
   end
 
   def handle("update_section", user, vault, args) do
@@ -415,71 +391,18 @@ defmodule Engram.MCP.Handlers do
     new_content = args["content"] || ""
     level = args["level"] || 2
 
-    # Same authority rule as patch_note: section surgery against the stale
-    # `notes.content` façade would rewrite the note from an older body (#1159).
-    with {:ok, note} <- Notes.get_note(user, vault, path),
-         {:ok, current} <- Notes.authoritative_content(user, note) do
-      prefix = String.duplicate("#", max(1, min(level, 6))) <> " "
-      target = prefix <> heading
-      lines = String.split(current, "\n")
+    replace_section(user, vault, path, heading, new_content, level)
+  end
 
-      start_idx =
-        Enum.find_index(lines, fn line ->
-          String.trim(line) == String.trim(target)
-        end)
+  @text_params ~w(find replace occurrence expected_replacements old_text new_text)
+  @section_params ~w(heading content level)
 
-      if start_idx == nil do
-        # The section was not updated, so this is not a success. Was `:ok`.
-        {:error, "Heading not found: #{target}"}
-      else
-        end_idx =
-          Enum.find_index(Enum.drop(lines, start_idx + 1), fn line ->
-            stripped = String.trim_leading(line)
+  def handle("edit_note", user, vault, %{"mode" => mode} = args) do
+    path = args["path"] || ""
 
-            if String.starts_with?(stripped, "#") do
-              h_level =
-                stripped
-                |> String.graphemes()
-                |> Enum.take_while(&(&1 == "#"))
-                |> length()
-
-              rest = String.slice(stripped, h_level, 1)
-              h_level <= level and rest in [" ", ""]
-            else
-              false
-            end
-          end)
-
-        end_idx =
-          if end_idx == nil,
-            do: length(lines),
-            else: start_idx + 1 + end_idx
-
-        new_lines =
-          Enum.slice(lines, 0, start_idx + 1) ++
-            [String.trim_trailing(new_content, "\n")] ++
-            Enum.slice(lines, end_idx, length(lines))
-
-        final_content = Enum.join(new_lines, "\n")
-
-        Notes.upsert_note(user, vault, %{
-          "path" => path,
-          "content" => final_content,
-          "mtime" => now(),
-          "base_hash" => note.content_hash
-        })
-        |> upsert_reply(
-          [
-            ok: "Section '#{heading}' updated in #{path}",
-            conflict: "Note changed concurrently; retry: #{path}",
-            error: "Failed to update section in #{path}"
-          ],
-          %{"path" => path, "heading" => heading}
-        )
-      end
-    else
-      {:error, :not_found} -> {:error, "Note not found: #{path}"}
-      {:error, reason} -> log_and_error("update_section", reason, "Could not read #{path}; retry")
+    with :ok <- reject_other_mode(args, mode),
+         {:ok, result} <- run_edit(user, vault, path, mode, args) do
+      result
     end
   end
 
@@ -660,6 +583,178 @@ defmodule Engram.MCP.Handlers do
   # No "unknown tool" clause: `Tools.get/1` gates dispatch in mcp_controller.ex,
   # which answers -32602 for a name that has no definition, so nothing can reach
   # this module with a name it doesn't implement.
+
+  # -- edit_note (replaces patch_note / update_section) --
+
+  defp reject_other_mode(args, "replace_text"),
+    do: reject_params(args, @section_params, "replace_section")
+
+  defp reject_other_mode(args, "replace_section"),
+    do: reject_params(args, @text_params, "replace_text")
+
+  defp reject_other_mode(_args, mode),
+    do: {:error, "mode must be replace_text or replace_section, got #{inspect(mode)}"}
+
+  defp reject_params(args, params, owner) do
+    case Enum.find(params, &Map.has_key?(args, &1)) do
+      nil -> :ok
+      p -> {:error, "#{p} is only valid with mode #{owner}"}
+    end
+  end
+
+  defp run_edit(user, vault, path, "replace_text", args) do
+    find = args["find"] || args["old_text"]
+    replace = args["replace"] || args["new_text"]
+
+    cond do
+      not is_binary(find) ->
+        {:error, "find is required for mode replace_text"}
+
+      not is_binary(replace) ->
+        {:error, "replace is required for mode replace_text"}
+
+      true ->
+        user
+        |> patch_text(
+          vault,
+          path,
+          %{find: find, replace: replace, occurrence: args["occurrence"] || 0},
+          args["expected_replacements"]
+        )
+        |> tag_mode("replace_text", %{"heading" => nil})
+        |> then(&{:ok, &1})
+    end
+  end
+
+  defp run_edit(user, vault, path, "replace_section", args) do
+    cond do
+      not is_binary(args["heading"]) ->
+        {:error, "heading is required for mode replace_section"}
+
+      not is_binary(args["content"]) ->
+        {:error, "content is required for mode replace_section"}
+
+      true ->
+        user
+        |> replace_section(vault, path, args["heading"], args["content"], args["level"] || 2)
+        |> tag_mode("replace_section", %{"replacements" => nil})
+        |> then(&{:ok, &1})
+    end
+  end
+
+  defp tag_mode({:ok, text, structured}, mode, blanks),
+    do: {:ok, text, structured |> Map.merge(blanks) |> Map.put("mode", mode)}
+
+  defp tag_mode(other, _mode, _blanks), do: other
+
+  # Read the AUTHORITY, not the `notes.content` façade: the façade lags a doc
+  # write until checkpoint, so patching from it can commit an older body and
+  # drop edits made since (#1159).
+  defp patch_text(
+         user,
+         vault,
+         path,
+         %{find: find, replace: replace, occurrence: occurrence},
+         expected
+       ) do
+    with {:ok, note} <- Notes.get_note(user, vault, path),
+         {:ok, current} <- Notes.authoritative_content(user, note) do
+      if String.contains?(current, find) do
+        {new_content, count} = do_replace(current, find, replace, occurrence)
+
+        # `find` is present but the requested occurrence is past the last one,
+        # so do_replace/4 returns the content untouched. Rewriting the note
+        # with its own bytes and calling that success told the caller the patch
+        # landed. Same rule as the "Text not found" branch below.
+        cond do
+          count == 0 ->
+            {:error, "Occurrence #{occurrence} not found in #{path}"}
+
+          is_integer(expected) and expected != count ->
+            {:error,
+             "expected #{expected} replacement(s), found #{count} in #{path}; nothing was changed"}
+
+          true ->
+            patch_upsert(user, vault, path, note, new_content, count)
+        end
+      else
+        # Nothing was replaced, so the patch did not happen. Was `:ok`.
+        {:error, "Text not found in #{path}"}
+      end
+    else
+      {:error, :not_found} -> {:error, "Note not found: #{path}"}
+      {:error, reason} -> log_and_error("patch_note", reason, "Could not read #{path}; retry")
+    end
+  end
+
+  # Same authority rule as patch_text: section surgery against the stale
+  # `notes.content` façade would rewrite the note from an older body (#1159).
+  defp replace_section(user, vault, path, heading, new_content, level) do
+    with {:ok, note} <- Notes.get_note(user, vault, path),
+         {:ok, current} <- Notes.authoritative_content(user, note) do
+      prefix = String.duplicate("#", max(1, min(level, 6))) <> " "
+      target = prefix <> heading
+      lines = String.split(current, "\n")
+
+      start_idx =
+        Enum.find_index(lines, fn line ->
+          String.trim(line) == String.trim(target)
+        end)
+
+      if start_idx == nil do
+        # The section was not updated, so this is not a success. Was `:ok`.
+        {:error, "Heading not found: #{target}"}
+      else
+        end_idx =
+          Enum.find_index(Enum.drop(lines, start_idx + 1), fn line ->
+            stripped = String.trim_leading(line)
+
+            if String.starts_with?(stripped, "#") do
+              h_level =
+                stripped
+                |> String.graphemes()
+                |> Enum.take_while(&(&1 == "#"))
+                |> length()
+
+              rest = String.slice(stripped, h_level, 1)
+              h_level <= level and rest in [" ", ""]
+            else
+              false
+            end
+          end)
+
+        end_idx =
+          if end_idx == nil,
+            do: length(lines),
+            else: start_idx + 1 + end_idx
+
+        new_lines =
+          Enum.slice(lines, 0, start_idx + 1) ++
+            [String.trim_trailing(new_content, "\n")] ++
+            Enum.slice(lines, end_idx, length(lines))
+
+        final_content = Enum.join(new_lines, "\n")
+
+        Notes.upsert_note(user, vault, %{
+          "path" => path,
+          "content" => final_content,
+          "mtime" => now(),
+          "base_hash" => note.content_hash
+        })
+        |> upsert_reply(
+          [
+            ok: "Section '#{heading}' updated in #{path}",
+            conflict: "Note changed concurrently; retry: #{path}",
+            error: "Failed to update section in #{path}"
+          ],
+          %{"path" => path, "heading" => heading}
+        )
+      end
+    else
+      {:error, :not_found} -> {:error, "Note not found: #{path}"}
+      {:error, reason} -> log_and_error("update_section", reason, "Could not read #{path}; retry")
+    end
+  end
 
   # -- Public helpers --
 

@@ -14,7 +14,7 @@ defmodule Engram.MCP.ToolsAliasesTest do
   test "retired tools are not listed" do
     listed = Enum.map(Tools.list(), & &1.name)
     for {old, _} <- @retired, do: refute(old in listed, "#{old} is still listed")
-    assert length(listed) == 16
+    assert length(listed) == 17
   end
 
   test "retired tools still resolve through get/1 and name their replacement" do
