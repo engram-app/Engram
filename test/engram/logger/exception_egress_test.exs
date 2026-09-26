@@ -62,7 +62,7 @@ defmodule Engram.Logger.ExceptionEgressTest do
 
   describe "SafeException.sanitize_reason/1" do
     test "{exception, stacktrace} is sanitized and frame arguments are dropped" do
-      {e, st} = raised(fn -> String.to_integer(@canary) end)
+      {e, st} = raised(fn -> @canary |> Function.identity() |> String.to_integer() end)
       {safe, safe_st} = SafeException.sanitize_reason({e, st})
 
       assert is_exception(safe)

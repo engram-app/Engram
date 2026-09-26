@@ -50,7 +50,7 @@ defmodule Engram.Logger.SafeException do
   Erlang error terms, normalized first) go through `sanitize/1`; anything else
   keeps at most its atom tag.
   """
-  @spec sanitize_reason(term()) :: term()
+  @spec sanitize_reason(term()) :: atom() | tuple() | Exception.t()
   # gen_statem: `{class, reason, stack}`. Logger.Translator matches this exact
   # shape; breaking it makes Logger print the whole report inspected.
   def sanitize_reason({class, reason, stack})

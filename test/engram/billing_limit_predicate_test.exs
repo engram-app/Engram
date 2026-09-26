@@ -69,7 +69,7 @@ defmodule Engram.BillingLimitPredicateTest do
   test "an unknown key raises rather than reporting no cap" do
     user = insert(:user)
 
-    assert_raise Engram.Billing.UnknownLimitKey, fn ->
+    assert_raise Engram.Billing.UnknownLimitKeyError, fn ->
       Billing.limit_enforced?(user, :not_a_real_limit_key)
     end
   end

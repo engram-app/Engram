@@ -49,10 +49,6 @@ defmodule Engram.Observability.SpanScrubber do
   @known_exts ~w(md canvas base pdf png jpg jpeg gif webp svg bmp avif heic
                  mp3 wav m4a ogg flac mp4 webm mov mkv txt csv json zip)
 
-  # Fallback limits (the SDK defaults) if `otel_attributes`' private record
-  # ever changes shape.
-  @default_count_limit 128
-
   @impl :otel_span_processor
   def on_start(_ctx, span(attributes: attributes) = s, _config) when attributes != :undefined do
     span(s, attributes: scrub_attributes(attributes))
@@ -80,10 +76,11 @@ defmodule Engram.Observability.SpanScrubber do
   # Keep the span's configured limits, so later set_attributes calls on this
   # span stay capped. The record is private to otel_attributes.erl:
   # {attributes, count_limit, value_length_limit, dropped, map}.
+  # Dialyzer knows the shape from otel_attributes' spec, so no fallback clause:
+  # if the record ever changes, this fails loudly at the first span instead of
+  # silently dropping the limits.
   defp limits({:attributes, count_limit, length_limit, _dropped, _map}),
     do: {count_limit, length_limit}
-
-  defp limits(_), do: {@default_count_limit, :infinity}
 
   defp sensitive?(map), do: Enum.any?([@path, @query | @ip_keys], &Map.has_key?(map, &1))
 

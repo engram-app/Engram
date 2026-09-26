@@ -70,10 +70,10 @@ defmodule Engram.Billing.LimitsTest do
       assert Billing.effective_limit(user, :vaults_cap) == 1
     end
 
-    test "raises UnknownLimitKey for unknown atom key" do
+    test "raises UnknownLimitKeyError for unknown atom key" do
       user = user_without_plan()
 
-      assert_raise Engram.Billing.UnknownLimitKey, fn ->
+      assert_raise Engram.Billing.UnknownLimitKeyError, fn ->
         # lint:limit_keys ignore
         Billing.effective_limit(user, :nonexistent_feature)
       end
@@ -179,19 +179,19 @@ defmodule Engram.Billing.LimitsTest do
   end
 
   describe "atom-only API (Phase A)" do
-    test "raises UnknownLimitKey on string key" do
+    test "raises UnknownLimitKeyError on string key" do
       user = user_without_plan()
 
-      assert_raise Engram.Billing.UnknownLimitKey, fn ->
+      assert_raise Engram.Billing.UnknownLimitKeyError, fn ->
         # lint:limit_keys ignore
         Billing.effective_limit(user, "notes_cap")
       end
     end
 
-    test "raises UnknownLimitKey on unknown atom" do
+    test "raises UnknownLimitKeyError on unknown atom" do
       user = user_without_plan()
 
-      assert_raise Engram.Billing.UnknownLimitKey, fn ->
+      assert_raise Engram.Billing.UnknownLimitKeyError, fn ->
         # lint:limit_keys ignore
         Billing.effective_limit(user, :bogus_key)
       end
@@ -235,10 +235,10 @@ defmodule Engram.Billing.LimitsTest do
       assert Billing.check_feature(user, :reranker_enabled) == :ok
     end
 
-    test "still raises UnknownLimitKey on bad atom (catalog guard fires before bypass)" do
+    test "still raises UnknownLimitKeyError on bad atom (catalog guard fires before bypass)" do
       user = user_without_plan()
 
-      assert_raise Engram.Billing.UnknownLimitKey, fn ->
+      assert_raise Engram.Billing.UnknownLimitKeyError, fn ->
         # lint:limit_keys ignore
         Billing.effective_limit(user, :bogus_key)
       end

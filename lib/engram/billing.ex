@@ -20,7 +20,7 @@ defmodule Engram.Billing do
 
   require Logger
 
-  defmodule UnknownLimitKey do
+  defmodule UnknownLimitKeyError do
     @moduledoc "Raised when a limit lookup uses an unknown atom or a string key."
     defexception [:key]
 
@@ -50,11 +50,11 @@ defmodule Engram.Billing do
   never read and never warns.
 
   Uses explicit nil-checking (not ||) so that `false` values are honoured.
-  Raises `Engram.Billing.UnknownLimitKey` for string keys or atoms not in
+  Raises `Engram.Billing.UnknownLimitKeyError` for string keys or atoms not in
   `LimitKeys.all/0`.
   """
   def effective_limit(user, key) when is_atom(key) do
-    unless LimitKeys.defined?(key), do: raise(UnknownLimitKey, key: key)
+    unless LimitKeys.defined?(key), do: raise(UnknownLimitKeyError, key: key)
 
     if enforced?() do
       do_effective_limit(user, key)
@@ -63,7 +63,7 @@ defmodule Engram.Billing do
     end
   end
 
-  def effective_limit(_user, key), do: raise(UnknownLimitKey, key: key)
+  def effective_limit(_user, key), do: raise(UnknownLimitKeyError, key: key)
 
   defp enforced?, do: Application.get_env(:engram, :limits_enforced, true)
 

@@ -185,7 +185,9 @@ defmodule Engram.Sentry.ScrubberTest do
     end
 
     test "stack frame arguments are dropped" do
-      scrubbed = crash_event(fn -> String.to_integer(@secret) end) |> Scrubber.scrub()
+      scrubbed =
+        crash_event(fn -> @secret |> Function.identity() |> String.to_integer() end)
+        |> Scrubber.scrub()
 
       frames = for ex <- scrubbed.exception, ex.stacktrace, f <- ex.stacktrace.frames, do: f
       assert frames != []
