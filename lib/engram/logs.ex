@@ -8,6 +8,7 @@ defmodule Engram.Logs do
   alias Engram.Crypto.HMAC
   alias Engram.Logger.Metadata
   alias Engram.Logs.ClientLog
+  alias Engram.Logs.TextScrubber
   alias Engram.Repo
 
   require Logger
@@ -113,8 +114,12 @@ defmodule Engram.Logs do
       ts: parse_ts(get(entry, "ts", :ts)) || now,
       level: get(entry, "level", :level) |> default("info") |> clamp(@max_short_chars),
       category: get(entry, "category", :category) |> default("") |> clamp(@max_short_chars),
-      message: get(entry, "message", :message) |> default("") |> clamp(@max_message_chars),
-      stack: get(entry, "stack", :stack) |> clamp(@max_stack_chars),
+      message:
+        get(entry, "message", :message)
+        |> default("")
+        |> clamp(@max_message_chars)
+        |> TextScrubber.scrub(),
+      stack: get(entry, "stack", :stack) |> clamp(@max_stack_chars) |> TextScrubber.scrub_stack(),
       plugin_version:
         get(entry, "plugin_version", :plugin_version) |> default("") |> clamp(@max_short_chars),
       platform: get(entry, "platform", :platform) |> default("") |> clamp(@max_short_chars),

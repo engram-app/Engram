@@ -181,4 +181,39 @@ defmodule Engram.LogsReemitTest do
 
     :ok
   end
+
+  # Old plugins still in the field send raw paths in message and stack. The
+  # scrub happens once, on ingest, so neither the client_logs row nor the
+  # Loki re-emit carries them.
+  test "paths in client message and stack are scrubbed before storage and re-emit" do
+    user = insert(:user)
+
+    log =
+      capture_log(fn ->
+        {:ok, 1} =
+          Logs.insert_logs(user, [
+            %{
+              "level" => "error",
+              "category" => "push",
+              "message" =>
+                "push failed: ENOENT: no such file, open '/Users/alice/Vault/Medical/canary-3b.md'",
+              "stack" =>
+                "Error: ENOENT open '/Users/alice/Vault/Medical/canary-3b.md'\n    at push (app.js:1:2)"
+            }
+          ])
+      end)
+
+    refute log =~ "canary-3b"
+    refute log =~ "alice"
+
+    row =
+      Engram.Repo.one!(from(l in Engram.Logs.ClientLog, where: l.user_id == ^user.id),
+        skip_tenant_check: true
+      )
+
+    refute row.message =~ "canary-3b"
+    refute row.stack =~ "canary-3b"
+    refute row.stack =~ "alice"
+    assert row.stack =~ "at push (app.js:1:2)"
+  end
 end

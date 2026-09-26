@@ -1,5 +1,6 @@
 import type { Breadcrumb } from "@sentry/react";
 import type { ErrorInfo } from "react";
+import { scrubLogText } from "./lib/scrub-log-text";
 import { ROUTES, VAULT_PREFIX } from "./routes";
 
 /** First path segments that are ours, not the user's.
@@ -84,6 +85,24 @@ const onEarlyRejection = (e: PromiseRejectionEvent) => earlyErrors.push(e.reason
 if (sentryDsn) {
 	window.addEventListener("error", onEarlyError);
 	window.addEventListener("unhandledrejection", onEarlyRejection);
+}
+
+// An ApiError's message is the server's `error` field: a slug for every error
+// we raise (`not_found`, `onboarding_required`), but free text is possible and
+// could echo a path, so anything that is not slug-shaped is dropped.
+const SLUG = /^[a-z0-9_.:-]{1,64}$/u;
+
+function scrubExceptionValue(
+	type: string | undefined,
+	value: string | undefined,
+): string | undefined {
+	if (value === undefined) {
+		return value;
+	}
+	if (type === "ApiError") {
+		return SLUG.test(value) ? value : "[redacted]";
+	}
+	return scrubLogText(value);
 }
 
 export const sentryReady: Promise<SentrySdk | null> | null = sentryDsn
@@ -278,8 +297,14 @@ export function scrubBreadcrumb(crumb: Breadcrumb): Breadcrumb | null {
  *  still in the address bar, is the full URL of the page. Scrubbing the url and
  *  leaving the header would have missed the same credential by one field. */
 export function scrubEvent<
-	T extends { request?: { url?: string; headers?: Record<string, string> } },
+	T extends {
+		request?: { url?: string; headers?: Record<string, string> };
+		exception?: { values?: Array<{ type?: string; value?: string }> };
+	},
 >(event: T): T {
+	for (const ex of event.exception?.values ?? []) {
+		ex.value = scrubExceptionValue(ex.type, ex.value);
+	}
 	if (event.request?.url) {
 		event.request.url = scrubUrl(event.request.url);
 	}

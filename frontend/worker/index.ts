@@ -36,6 +36,10 @@ const STRIPPED_REQUEST_HEADERS = new Set([
 	"cf-region",
 	"cf-region-code",
 	"cf-postal-code",
+	// A referer can carry the vault slug (a user-typed vault name). The SPA's
+	// `Referrer-Policy: origin` keeps it to the origin today; this is the
+	// backstop if that header is ever loosened.
+	"referer",
 ]);
 
 interface Env {

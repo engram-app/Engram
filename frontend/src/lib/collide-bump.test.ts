@@ -25,5 +25,7 @@ describe("collideBump", () => {
 			Array.from({ length: 1001 }, (_, i) => (i === 0 ? "Untitled.md" : `Untitled ${i}.md`)),
 		);
 		expect(() => collideBump(huge, "Untitled.md", { cap: 1000 })).toThrow(/too many collisions/iu);
+		// The message reaches Sentry; the filename is a user-typed note title.
+		expect(() => collideBump(huge, "Untitled.md", { cap: 1000 })).not.toThrow(/Untitled/u);
 	});
 });

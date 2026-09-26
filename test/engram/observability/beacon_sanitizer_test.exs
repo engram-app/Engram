@@ -157,4 +157,44 @@ defmodule Engram.Observability.BeaconSanitizerTest do
     assert {:ok, out} = S.sanitize(entry, @now_us)
     refute Map.has_key?(out.attributes, "engram.note_id")
   end
+
+  describe "engram.route / engram.reason shape" do
+    defp attrs(extra),
+      do: put_in(base()["attributes"], Map.merge(%{"engram.surface" => "obsidian"}, extra))
+
+    # Plugins before beaconRoute sent the raw request path.
+    test "an old plugin's raw path is reduced to its route shape" do
+      entry = attrs(%{"engram.route" => "/notes/Medical/Divorce settlement draft.md"})
+      assert {:ok, out} = S.sanitize(entry, @now_us)
+      assert out.attributes["engram.route"] == "/notes/:seg/:seg"
+    end
+
+    test "a lowercase folder name is not mistaken for a route segment" do
+      entry = attrs(%{"engram.route" => "/api/notes/medical"})
+      assert {:ok, out} = S.sanitize(entry, @now_us)
+      assert out.attributes["engram.route"] == "/api/notes/:seg"
+    end
+
+    test "an already-shaped route passes unchanged" do
+      entry = attrs(%{"engram.route" => "/api/notes/:id"})
+      assert {:ok, out} = S.sanitize(entry, @now_us)
+      assert out.attributes["engram.route"] == "/api/notes/:id"
+    end
+
+    test "a UUID segment becomes :id" do
+      entry = attrs(%{"engram.route" => "/api/notes/0190c7e6-1111-7222-8333-444455556666"})
+      assert {:ok, out} = S.sanitize(entry, @now_us)
+      assert out.attributes["engram.route"] == "/api/notes/:id"
+    end
+
+    test "a reason must be a slug; free text is dropped" do
+      assert {:ok, ok} = S.sanitize(attrs(%{"engram.reason" => "rate_limited"}), @now_us)
+      assert ok.attributes["engram.reason"] == "rate_limited"
+
+      assert {:ok, out} =
+               S.sanitize(attrs(%{"engram.reason" => "note Medical/x.md not found"}), @now_us)
+
+      refute Map.has_key?(out.attributes, "engram.reason")
+    end
+  end
 end

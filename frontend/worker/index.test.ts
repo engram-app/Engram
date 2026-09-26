@@ -50,4 +50,20 @@ describe("worker /ph proxy", () => {
 		const res = await worker.fetch(new Request("https://app.engram.page/api/mcp"), envStub);
 		expect(res.status).toBe(410);
 	});
+
+	// Referrer-Policy: origin keeps the full URL out today; this is the backstop
+	// if that header is ever loosened. A referer can carry the vault slug.
+	it("strips the referer", async () => {
+		const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("ok"));
+		await worker.fetch(
+			new Request("https://app.engram.page/ph/capture/", {
+				method: "POST",
+				headers: { referer: "https://app.engram.page/v/divorce-2026/abc" },
+				body: "{}",
+			}),
+			envStub,
+		);
+		const sent = fetchSpy.mock.calls[0][0] as Request;
+		expect(sent.headers.get("referer")).toBeNull();
+	});
 });
