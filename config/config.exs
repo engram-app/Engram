@@ -16,6 +16,10 @@ config :engram,
 config :engram, EngramWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Bandit.PhoenixAdapter,
+  # Bandit's own 5xx log is `Exception.format/3` of the raw exception, which
+  # prints the term a MatchError/KeyError blew up on (params, note content).
+  # EngramWeb.RequestExceptionLogger logs the same event sanitized instead.
+  http: [http_options: [log_exceptions_with_status_codes: []]],
   render_errors: [
     formats: [json: EngramWeb.ErrorJSON],
     layout: false
@@ -57,7 +61,8 @@ config :engram, :storage, Engram.Storage.S3
 
 # Oban job queue (per-env overrides in dev/test/prod configs)
 config :engram, Oban,
-  engine: Oban.Engines.Basic,
+  # Sanitizes a failed job's stored error; see the module doc.
+  engine: Engram.Oban.SafeEngine,
   repo: Engram.Repo,
   # Staging poll cadence (default 1s). Fresh inserts dispatch instantly via the
   # Postgres notifier (pg_notify), which also fans out across our unclustered
@@ -197,6 +202,16 @@ config :engram, Oban,
 
 # Configure Elixir's Logger.
 #
+# Crash reports render `Exception.format/3` of the crash reason, and
+# MatchError/KeyError/... messages inspect the term that blew up (a channel's
+# client payload, a note). SafeTranslator runs first, sanitizes the reason via
+# Engram.Logger.SafeException, and hands the report to Logger.Translator.
+config :logger,
+  translators: [
+    {Engram.Logger.SafeTranslator, :translate},
+    {Logger.Translator, :translate}
+  ]
+
 # `metadata:` declares which keys are emitted in formatter output. Credo's
 # `Warning.MissedMetadataKeyInLoggerConfig` check fails for any structured
 # metadata key passed to Logger.* without being listed here. New metadata
