@@ -858,11 +858,12 @@ defmodule Engram.MCP.Tools do
           "mode" => %{"type" => "string"},
           "replacements" => %{
             "type" => ["integer", "null"],
-            "description" => "replace_text: occurrences replaced"
+            "description" => "replace_text: occurrences replaced; null for the section modes"
           },
           "heading" => %{
             "type" => ["string", "null"],
-            "description" => "replace_section: heading updated"
+            "description" =>
+              "replace_section and insert_section: the heading edited; null for replace_text"
           }
         },
         "required" => ["path", "mode"]

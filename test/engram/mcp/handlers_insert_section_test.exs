@@ -82,9 +82,12 @@ defmodule Engram.MCP.HandlersInsertSectionTest do
              insert_section(u, v, %{"heading" => "Sub", "level" => 3, "content" => "z"})
 
     assert body(u, v) =~ "### Sub\n\ns\nz\n"
+    before = body(u, v)
 
     assert {:error, "level must be between 1 and 6"} =
              insert_section(u, v, %{"heading" => "Sub", "level" => 7, "content" => "z"})
+
+    assert body(u, v) == before
   end
 
   test "bad position, blank content, missing heading and missing note are fixable", %{
