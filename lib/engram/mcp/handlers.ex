@@ -342,37 +342,42 @@ defmodule Engram.MCP.Handlers do
   def handle("append_to_note", user, vault, args) do
     path = args["path"] || ""
     text = args["text"] || ""
+    position = args["position"] || "end"
 
-    case Notes.get_note(user, vault, path) do
-      {:ok, _note} ->
-        # Read-modify-write via the CAS helper: a write landing between the
-        # read and the upsert must trigger a re-read + rebuild, not be deleted
-        # by the full-content merge (2026-07-07: MCP appends erased).
-        rmw_upsert(user, vault, path, fn content ->
-          String.trim_trailing(content, "\n") <> "\n" <> text
-        end)
-        |> upsert_reply(
-          [
-            ok: "Note appended to: #{path}",
-            conflict: "Note changed concurrently; retry: #{path}",
-            error: "Failed to append to note: #{path}"
-          ],
-          %{"path" => path, "created" => false}
-        )
+    with :ok <- validate_append_position(position) do
+      case Notes.get_note(user, vault, path) do
+        {:ok, _note} ->
+          # Read-modify-write via the CAS helper: a write landing between the
+          # read and the upsert must trigger a re-read + rebuild, not be deleted
+          # by the full-content merge (2026-07-07: MCP appends erased).
+          rmw_upsert(user, vault, path, fn content -> place_text(content, text, position) end)
+          |> upsert_reply(
+            [
+              ok: "Note appended to: #{path}",
+              conflict: "Note changed concurrently; retry: #{path}",
+              error: "Failed to append to note: #{path}"
+            ],
+            %{"path" => path, "created" => false}
+          )
 
-      {:error, :not_found} ->
-        content = "# #{Path.basename(path, ".md")}\n\n#{text}"
+        {:error, :not_found} ->
+          content = "# #{Path.basename(path, ".md")}\n\n#{text}"
 
-        Notes.upsert_note(user, vault, %{"path" => path, "content" => content, "mtime" => now()})
-        |> upsert_reply(
-          [
-            ok: "Note created: #{path}",
-            conflict: "Note changed on the server, retry: #{path}",
-            deleted: "Note was deleted: #{path}",
-            error: "Failed to create note: #{path}"
-          ],
-          %{"path" => path, "created" => true}
-        )
+          Notes.upsert_note(user, vault, %{
+            "path" => path,
+            "content" => content,
+            "mtime" => now()
+          })
+          |> upsert_reply(
+            [
+              ok: "Note created: #{path}",
+              conflict: "Note changed on the server, retry: #{path}",
+              deleted: "Note was deleted: #{path}",
+              error: "Failed to create note: #{path}"
+            ],
+            %{"path" => path, "created" => true}
+          )
+      end
     end
   end
 
@@ -1040,6 +1045,22 @@ defmodule Engram.MCP.Handlers do
       {:error, :version_conflict, _note} -> {:error, msgs[:conflict]}
       {:error, :note_deleted} -> {:error, msgs[:deleted] || msgs[:error]}
       {:error, _reason} -> {:error, msgs[:error]}
+    end
+  end
+
+  defp validate_append_position(position) when position in ["end", "start"], do: :ok
+  defp validate_append_position(_), do: {:error, "position must be end or start"}
+
+  # "end" stays byte-identical to the pre-position append (existing tests
+  # pin the old behavior). "start" inserts right after the frontmatter
+  # fence when present, so frontmatter bytes are never touched; with no
+  # frontmatter (or an empty note) it goes to the very top.
+  defp place_text(content, text, "end"), do: String.trim_trailing(content, "\n") <> "\n" <> text
+
+  defp place_text(content, text, "start") do
+    case Engram.Notes.Frontmatter.split(content) do
+      {nil, body} -> text <> "\n" <> body
+      {_frontmatter, body} -> String.replace_suffix(content, body, "") <> text <> "\n" <> body
     end
   end
 

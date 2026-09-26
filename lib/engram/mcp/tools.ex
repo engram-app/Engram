@@ -727,13 +727,21 @@ defmodule Engram.MCP.Tools do
       description:
         "Add text to the end of a note. Existing text is kept. If the note does not exist " <>
           "it is created with a `# <name>` title line first. Use for logs, journals and " <>
-          "running lists. " <>
+          "running lists. Set position to start to insert at the top (after any " <>
+          "frontmatter) instead. " <>
           "To change existing text use patch_note. To replace the whole note use write_note.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
           "path" => %{"type" => "string", "description" => "Full path for the note"},
-          "text" => %{"type" => "string", "description" => "Text to append"}
+          "text" => %{"type" => "string", "description" => "Text to append"},
+          "position" => %{
+            "type" => "string",
+            "enum" => ["end", "start"],
+            "default" => "end",
+            "description" =>
+              "end (default) appends; start inserts at the top, after any frontmatter"
+          }
         },
         "required" => ["path", "text"]
       },
