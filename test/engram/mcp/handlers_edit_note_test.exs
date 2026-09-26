@@ -81,6 +81,24 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     assert body(u, v) =~ "## Todo\nz\n## Done"
   end
 
+  test "replace_section is not fooled by a # line inside a code fence", %{user: u, vault: v} do
+    bt = String.duplicate("`", 3)
+    content = "## Todo\n\n#{bt}\n## fake\n#{bt}\nold\n\n## Done\n\nx\n"
+    {:ok, _} = Notes.upsert_note(u, v, %{"path" => "F.md", "content" => content, "mtime" => 2.0})
+
+    assert {:ok, _, _} =
+             Handlers.handle("edit_note", u, v, %{
+               "path" => "F.md",
+               "mode" => "replace_section",
+               "heading" => "Todo",
+               "content" => "new"
+             })
+
+    {:ok, note} = Notes.get_note(u, v, "F.md")
+    {:ok, out} = Notes.authoritative_content(u, note)
+    assert out == "## Todo\nnew\n## Done\n\nx\n"
+  end
+
   # Review Focus 1
   test "a parameter from the other mode is a fixable error, not a partial edit", %{
     user: u,

@@ -4,6 +4,7 @@ defmodule Engram.MCP.Handlers do
   Each function takes (user, vault, args) and returns a markdown-formatted string.
   """
 
+  alias Engram.MCP.Sections
   alias Engram.{Notes, Search}
   alias Engram.Notes.Frontmatter
 
@@ -765,6 +766,8 @@ defmodule Engram.MCP.Handlers do
   # found, and every following section got swallowed into the replacement.
   # Refusing the out-of-range level outright (before any heading search)
   # removes the mismatch instead of also clamping the end-scan to match.
+  # The finder (`Engram.MCP.Sections.find/3`) is fence- and frontmatter-aware;
+  # the level guard still refuses 0 or 7+ before any lookup.
   defp replace_section(_user, _vault, _path, _heading, _new_content, level, _op)
        when level < 1 or level > 6 do
     {:error, "level must be between 1 and 6"}
@@ -773,62 +776,33 @@ defmodule Engram.MCP.Handlers do
   defp replace_section(user, vault, path, heading, new_content, level, op) do
     with {:ok, note} <- Notes.get_note(user, vault, path),
          {:ok, current} <- Notes.authoritative_content(user, note) do
-      target = String.duplicate("#", level) <> " " <> heading
-      lines = String.split(current, "\n")
+      case Sections.find(current, heading, level) do
+        :error ->
+          # The section was not updated, so this is not a success. Was `:ok`.
+          {:error, "Heading not found: #{String.duplicate("#", level)} #{heading}"}
 
-      start_idx =
-        Enum.find_index(lines, fn line ->
-          String.trim(line) == String.trim(target)
-        end)
+        {:ok, %{start: s, stop: e}} ->
+          lines = String.split(current, "\n")
 
-      if start_idx == nil do
-        # The section was not updated, so this is not a success. Was `:ok`.
-        {:error, "Heading not found: #{target}"}
-      else
-        end_idx =
-          Enum.find_index(Enum.drop(lines, start_idx + 1), fn line ->
-            stripped = String.trim_leading(line)
+          final_content =
+            (Enum.slice(lines, 0, s + 1) ++
+               [String.trim_trailing(new_content, "\n")] ++ Enum.drop(lines, e))
+            |> Enum.join("\n")
 
-            if String.starts_with?(stripped, "#") do
-              h_level =
-                stripped
-                |> String.graphemes()
-                |> Enum.take_while(&(&1 == "#"))
-                |> length()
-
-              rest = String.slice(stripped, h_level, 1)
-              h_level <= level and rest in [" ", ""]
-            else
-              false
-            end
-          end)
-
-        end_idx =
-          if end_idx == nil,
-            do: length(lines),
-            else: start_idx + 1 + end_idx
-
-        new_lines =
-          Enum.slice(lines, 0, start_idx + 1) ++
-            [String.trim_trailing(new_content, "\n")] ++
-            Enum.slice(lines, end_idx, length(lines))
-
-        final_content = Enum.join(new_lines, "\n")
-
-        Notes.upsert_note(user, vault, %{
-          "path" => path,
-          "content" => final_content,
-          "mtime" => now(),
-          "base_hash" => note.content_hash
-        })
-        |> upsert_reply(
-          [
-            ok: "Section '#{heading}' updated in #{path}",
-            conflict: "Note changed concurrently; retry: #{path}",
-            error: "Failed to update section in #{path}"
-          ],
-          %{"path" => path, "heading" => heading}
-        )
+          Notes.upsert_note(user, vault, %{
+            "path" => path,
+            "content" => final_content,
+            "mtime" => now(),
+            "base_hash" => note.content_hash
+          })
+          |> upsert_reply(
+            [
+              ok: "Section '#{heading}' updated in #{path}",
+              conflict: "Note changed concurrently; retry: #{path}",
+              error: "Failed to update section in #{path}"
+            ],
+            %{"path" => path, "heading" => heading}
+          )
       end
     else
       {:error, :not_found} -> {:error, "Note not found: #{path}"}
