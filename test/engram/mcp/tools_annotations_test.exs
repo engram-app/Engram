@@ -13,7 +13,7 @@ defmodule Engram.MCP.ToolsAnnotationsTest do
   @destructive ~w(write_note patch_note update_section delete_note delete_folder)
 
   test "every tool declares a title and all four hints" do
-    for tool <- Tools.list() do
+    for tool <- Tools.all_callable() do
       assert is_binary(tool.title) and tool.title != "", "#{tool.name} has no title"
 
       for hint <- ~w(readOnlyHint destructiveHint idempotentHint openWorldHint) do
@@ -23,7 +23,7 @@ defmodule Engram.MCP.ToolsAnnotationsTest do
   end
 
   test "read tools are read-only and nothing else is" do
-    for tool <- Tools.list() do
+    for tool <- Tools.all_callable() do
       assert tool.annotations["readOnlyHint"] == tool.name in @read_only,
              "#{tool.name} readOnlyHint is wrong"
     end

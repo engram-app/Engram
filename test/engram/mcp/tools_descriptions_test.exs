@@ -19,8 +19,8 @@ defmodule Engram.MCP.ToolsDescriptionsTest do
 
   for {tool, names} <- @siblings, name <- names do
     test "#{tool} description names #{name}" do
-      desc = Enum.find(Tools.list(), &(&1.name == unquote(tool))).description
-      assert desc =~ unquote(name)
+      {:ok, tool_def} = Tools.get(unquote(tool))
+      assert tool_def.description =~ unquote(name)
     end
   end
 
@@ -35,8 +35,8 @@ defmodule Engram.MCP.ToolsDescriptionsTest do
 
   for {tool, phrases} <- @caveats, phrase <- phrases do
     test "#{tool} description states #{phrase}" do
-      desc = Enum.find(Tools.list(), &(&1.name == unquote(tool))).description
-      assert desc =~ unquote(phrase)
+      {:ok, tool_def} = Tools.get(unquote(tool))
+      assert tool_def.description =~ unquote(phrase)
     end
   end
 

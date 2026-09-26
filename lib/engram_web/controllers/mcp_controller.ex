@@ -130,7 +130,7 @@ defmodule EngramWeb.McpController do
   # a closed list: the atoms intern once while compiling and this module only
   # reads the finished map afterwards — nothing per-request touches the atom
   # table, which was the whole objection to `String.to_atom/1` here.
-  @tool_atoms Map.new(Tools.list(), &{&1.name, String.to_atom(&1.name)})
+  @tool_atoms Map.new(Tools.all_callable(), &{&1.name, String.to_atom(&1.name)})
 
   # The same exempt set the tool definitions use, read once at compile time
   # rather than restated here (see `dispatch_tool/4`).

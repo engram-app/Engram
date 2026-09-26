@@ -10,7 +10,7 @@ defmodule Engram.MCP.ToolsSetVaultSchemaTest do
   # the field accepts a vault NAME as well as a UUID, and a strict client that
   # honours `format` would reject a valid name before it ever reached us.
   test "no vault_id field advertises a uuid format, since names are accepted" do
-    for tool <- Engram.MCP.Tools.list(),
+    for tool <- Engram.MCP.Tools.all_callable(),
         schema = tool.inputSchema["properties"]["vault_id"],
         is_map(schema) do
       refute schema["format"] == "uuid",
@@ -21,8 +21,7 @@ defmodule Engram.MCP.ToolsSetVaultSchemaTest do
   end
 
   defp vault_id_schema(name) do
-    Engram.MCP.Tools.list()
-    |> Enum.find(&(&1.name == name))
-    |> get_in([Access.key!(:inputSchema), "properties", "vault_id"])
+    {:ok, tool} = Engram.MCP.Tools.get(name)
+    get_in(tool, [Access.key!(:inputSchema), "properties", "vault_id"])
   end
 end

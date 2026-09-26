@@ -17,6 +17,7 @@ defmodule Engram.MCP.Tools do
           optional(:title) => String.t(),
           optional(:annotations) => map(),
           optional(:outputSchema) => map(),
+          optional(:deprecated_for) => String.t(),
           required(:handler) => (map(), map(), map() ->
                                    {:ok, String.t()}
                                    | {:ok, String.t(), map()}
@@ -76,20 +77,15 @@ defmodule Engram.MCP.Tools do
   def list do
     [
       list_vaults_def(),
-      set_vault_def(),
       search_notes_def(),
       list_tags_def(),
-      list_folders_def(),
       list_folder_def(),
       create_folder_def(),
       suggest_folder_def(),
-      get_note_def(),
       get_notes_def(),
       create_note_def(),
       write_note_def(),
       append_to_note_def(),
-      patch_note_def(),
-      update_section_def(),
       rename_note_def(),
       rename_folder_def(),
       delete_note_def(),
@@ -99,6 +95,31 @@ defmodule Engram.MCP.Tools do
     ]
     |> Enum.map(&(&1 |> with_vault_id() |> with_annotations()))
   end
+
+  # Retired tool names that stay CALLABLE (clients cache tools/list and our own
+  # skills call them by name) but are no longer listed. Each keeps its old
+  # handler and schemas, so an old call behaves exactly as before. Remove an
+  # alias only after 60 days AND 30 consecutive days of zero calls:
+  #   sum by (tool) (increase(engram_prom_ex_mcp_tool_total{env="prod",tool="<old>"}[30d]))
+  @retired %{
+    "get_note" => "get_notes",
+    "list_folders" => "list_folder",
+    "patch_note" => "edit_note",
+    "update_section" => "edit_note",
+    "set_vault" => "list_vaults"
+  }
+
+  @spec aliases() :: [tool_def()]
+  def aliases do
+    [get_note_def(), list_folders_def(), patch_note_def(), update_section_def(), set_vault_def()]
+    |> Enum.map(fn tool ->
+      tool = tool |> with_vault_id() |> with_annotations()
+      Map.put(tool, :deprecated_for, Map.fetch!(@retired, tool.name))
+    end)
+  end
+
+  @spec all_callable() :: [tool_def()]
+  def all_callable, do: list() ++ aliases()
 
   @doc """
   The exact `tools/list` payload: what `McpController` serves and what
@@ -168,7 +189,7 @@ defmodule Engram.MCP.Tools do
 
   @spec get(String.t()) :: {:ok, tool_def()} | :error
   def get(name) do
-    case Enum.find(list(), &(&1.name == name)) do
+    case Enum.find(all_callable(), &(&1.name == name)) do
       nil -> :error
       tool -> {:ok, tool}
     end

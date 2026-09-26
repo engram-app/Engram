@@ -77,7 +77,7 @@ defmodule EngramWeb.McpModernEraTest do
       result = json_response(post_modern(conn, "tools/list"), 200)["result"]
 
       assert result["resultType"] == "complete"
-      assert length(result["tools"]) == 21
+      assert length(result["tools"]) == 16
     end
 
     test "and serverInfo in _meta", %{conn: conn} do
@@ -335,7 +335,7 @@ defmodule EngramWeb.McpModernEraTest do
 
       refute Map.has_key?(result, "resultType")
       refute Map.has_key?(result, "ttlMs")
-      assert length(result["tools"]) == 21
+      assert length(result["tools"]) == 16
     end
 
     test "a legacy-declared request is not held to modern _meta requirements", %{conn: conn} do
@@ -354,7 +354,7 @@ defmodule EngramWeb.McpModernEraTest do
         |> json_response(200)
         |> Map.fetch!("result")
 
-      assert length(result["tools"]) == 21
+      assert length(result["tools"]) == 16
       refute Map.has_key?(result, "resultType")
     end
 
