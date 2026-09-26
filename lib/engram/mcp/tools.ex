@@ -36,8 +36,8 @@ defmodule Engram.MCP.Tools do
   @vault_id_property %{
     "type" => "string",
     "description" =>
-      "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own " <>
-        "more than one vault — the server keeps no active-vault state between calls, so " <>
+      "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own " <>
+        "more than one vault; the server keeps no active-vault state between calls, so " <>
         "it must be passed on every vault-scoped call. Omit only if you have a single " <>
         "vault. Call list_vaults if a name does not resolve."
   }
@@ -183,7 +183,11 @@ defmodule Engram.MCP.Tools do
   defp list_vaults_def do
     %{
       name: "list_vaults",
-      description: "List all vaults owned by the current user with IDs, names, and descriptions.",
+      description:
+        "List your vaults with their IDs, names and slugs. Call this first when you own " <>
+          "more than one vault: every other vault-scoped tool needs a vault_id (a name or ID " <>
+          "from this list) to know which vault to act on. search_notes without one searches " <>
+          "all vaults.",
       inputSchema: %{"type" => "object", "properties" => %{}},
       outputSchema: %{
         "type" => "object",
@@ -227,7 +231,7 @@ defmodule Engram.MCP.Tools do
       name: "set_vault",
       description:
         "Validate and echo a vault by name or ID. NOTE: this does NOT persist an " <>
-          "active vault — MCP keeps no state between calls. To read or write a " <>
+          "active vault; MCP keeps no state between calls. To read or write a " <>
           "specific vault, pass its vault_id on each tool call; a vault's name works " <>
           "there too, so this need not be called first. Use list_vaults to see them.",
       inputSchema: %{
@@ -235,7 +239,7 @@ defmodule Engram.MCP.Tools do
         "properties" => %{
           "vault_id" => %{
             "type" => "string",
-            "description" => "Vault to validate — its name (e.g. \"Engram\") or its UUID"
+            "description" => "Vault to validate: its name (e.g. \"Engram\") or its UUID"
           }
         }
       },
@@ -428,7 +432,9 @@ defmodule Engram.MCP.Tools do
     %{
       name: "list_folder",
       description:
-        "List all notes in a specific folder. Pass an empty string to list notes in the vault root.",
+        "List the notes and attachments directly inside one folder (not subfolders). Pass " <>
+          "an empty string for the vault root. To see every folder in the vault with note " <>
+          "counts use list_folders. To find notes by content use search_notes.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
@@ -485,7 +491,7 @@ defmodule Engram.MCP.Tools do
       name: "create_folder",
       description:
         "Create an explicit empty folder in the personal knowledge base. " <>
-          "Use to scaffold folder structure before placing notes. Idempotent — " <>
+          "Use to scaffold folder structure before placing notes. Idempotent: " <>
           "calling with an existing folder name succeeds without creating duplicates.",
       inputSchema: %{
         "type" => "object",
@@ -653,7 +659,7 @@ defmodule Engram.MCP.Tools do
         "properties" => %{
           "path" => %{
             "type" => "string",
-            "description" => "Where the note landed — the server picks the folder"
+            "description" => "Where the note landed; the server picks the folder"
           }
         },
         "required" => ["path"]
@@ -666,7 +672,12 @@ defmodule Engram.MCP.Tools do
     %{
       name: "write_note",
       description:
-        "Write or update a note. Saves to storage, indexes for search, and syncs to Obsidian.",
+        "Replace a note's entire content, or create the note if it does not exist. " <>
+          "Saves, indexes for search, and syncs to Obsidian. Overwrites whatever the note held. " <>
+          "To add text without touching existing content use append_to_note. To change one " <>
+          "passage use patch_note, or one heading's section use update_section. To create a " <>
+          "note with no risk of overwriting an existing one use create_note; create_note " <>
+          "takes a title and picks the folder, not a path.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
@@ -690,7 +701,11 @@ defmodule Engram.MCP.Tools do
   defp append_to_note_def do
     %{
       name: "append_to_note",
-      description: "Append text to an existing note, or create it if it doesn't exist.",
+      description:
+        "Add text to the end of a note. Existing text is kept. If the note does not exist " <>
+          "it is created with a `# <name>` title line first. Use for logs, journals and " <>
+          "running lists. " <>
+          "To change existing text use patch_note. To replace the whole note use write_note.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
@@ -718,8 +733,10 @@ defmodule Engram.MCP.Tools do
     %{
       name: "patch_note",
       description:
-        "Find and replace text in an existing note. " <>
-          "By default replaces the first occurrence. Set occurrence to -1 to replace all.",
+        "Find exact text in an existing note and replace it. Replaces the first occurrence " <>
+          "by default; set occurrence to -1 for all, or 1 for the second. Fails if the text " <>
+          "is not found. To replace everything under a heading use update_section. To add " <>
+          "text use append_to_note. To rewrite the whole note use write_note.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
@@ -750,8 +767,10 @@ defmodule Engram.MCP.Tools do
     %{
       name: "update_section",
       description:
-        "Replace content under a specific heading in an existing note. " <>
-          "Everything from the matched heading to the next heading of same/higher level is replaced.",
+        "Replace everything under one heading in an existing note, up to the next heading " <>
+          "of the same or higher level. The heading line itself is kept. Fails if the heading " <>
+          "is not found. To change a specific passage use patch_note. To add text at the end " <>
+          "use append_to_note.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
@@ -788,7 +807,11 @@ defmodule Engram.MCP.Tools do
     %{
       name: "rename_note",
       description:
-        "Rename or move a note to a new path. Syncs to all connected Obsidian devices.",
+        "Rename or move one note to a new path; the change syncs to all Obsidian devices " <>
+          "and links pointing at it are rewritten in the background. Fails if a note " <>
+          "already exists at the new " <>
+          "path. To move a whole folder use rename_folder. To move an image or PDF use " <>
+          "move_attachment.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
@@ -813,8 +836,8 @@ defmodule Engram.MCP.Tools do
     %{
       name: "rename_folder",
       description:
-        "Rename a folder and all notes within it (including subfolders). " <>
-          "All affected notes will be reindexed and synced.",
+        "Rename or move a folder, including every note, attachment and subfolder inside it. " <>
+          "All affected notes are reindexed and synced. To move a single note use rename_note.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
@@ -841,7 +864,9 @@ defmodule Engram.MCP.Tools do
     %{
       name: "delete_note",
       description:
-        "Delete a note from the knowledge base. The deletion will sync to all connected Obsidian devices.",
+        "Permanently delete one note by path; the deletion syncs to all connected Obsidian " <>
+          "devices. Deleting a path that holds no note succeeds and reports deleted: false. " <>
+          "To remove a whole folder use delete_folder. To move a note instead use rename_note.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
