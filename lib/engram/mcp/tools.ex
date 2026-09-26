@@ -140,7 +140,7 @@ defmodule Engram.MCP.Tools do
         "name" => t.name,
         "title" => t.title,
         "description" => t.description,
-        "inputSchema" => t.inputSchema,
+        "inputSchema" => Map.put(t.inputSchema, "additionalProperties", false),
         "annotations" => t.annotations
       }
 

@@ -599,6 +599,7 @@ defmodule EngramWeb.McpController do
          user = conn.assigns.current_user,
          # §E — record origin fingerprint for daily-rollup aggregation.
          _ = OriginStats.record(user.id, List.first(get_req_header(conn, "user-agent"))),
+         args = drop_exempt_vault_id(tool, args),
          :ok <- validate_tool_args(tool, args) do
       dispatch_tool(tool, user, normalize_args(tool, args), conn)
     else
@@ -662,6 +663,25 @@ defmodule EngramWeb.McpController do
   # not be a JSON object at all (client sent a string/array/null) — reject
   # that outright, independent of whether the tool has any required args, so
   # it can't reach a handler's map access.
+
+  # The server's own `server/discover` "instructions" tell every model to pass
+  # `vault_id` on EVERY tool call, since MCP keeps no active-vault state
+  # between calls. `list_vaults` (`@vault_exempt`, no `vault_id` property at
+  # all) used to reject that as an unknown argument — a model obeying the
+  # server's own instruction had no way to avoid the error. Dropped here,
+  # before validation, but ONLY when the tool doesn't declare `vault_id`
+  # itself: `set_vault` is also in `@vault_exempt` but declares its OWN
+  # `vault_id` (the vault to validate, a real required-by-meaning arg), so it
+  # must reach `validate_declared_args` untouched. Every other undeclared key
+  # on every tool, including these two, is still rejected below.
+  defp drop_exempt_vault_id(%{name: name} = tool, args)
+       when is_map(args) and name in @vault_exempt do
+    properties = get_in(tool.inputSchema, ["properties"]) || %{}
+    if Map.has_key?(properties, "vault_id"), do: args, else: Map.delete(args, "vault_id")
+  end
+
+  defp drop_exempt_vault_id(_tool, args), do: args
+
   defp validate_tool_args(tool, args) when not is_map(args) do
     {:error, tool.name, "Arguments must be an object"}
   end
@@ -694,9 +714,26 @@ defmodule EngramWeb.McpController do
     end
   end
 
+  # A caller-supplied key name is echoed straight into this message, so an
+  # adversarial or oversized client payload must not blow up the response it
+  # caused: each echoed key is capped at 64 chars, and at most 10 keys are
+  # echoed (the rest collapse into a count) regardless of how many were sent.
+  @max_echoed_keys 10
+  @max_echoed_key_length 64
+
   defp unknown_argument_message(name, unknown, properties) do
-    quoted = Enum.map_join(unknown, ", ", &~s("#{&1}"))
-    label = if length(unknown) == 1, do: "argument", else: "arguments"
+    total = length(unknown)
+    label = if total == 1, do: "argument", else: "arguments"
+
+    quoted =
+      unknown
+      |> Enum.take(@max_echoed_keys)
+      |> Enum.map_join(", ", &~s("#{truncate_key(&1)}"))
+
+    quoted =
+      if total > @max_echoed_keys,
+        do: "#{quoted}, and #{total - @max_echoed_keys} more",
+        else: quoted
 
     valid =
       case properties |> Map.keys() |> Enum.sort() do
@@ -705,6 +742,14 @@ defmodule EngramWeb.McpController do
       end
 
     "Unknown #{label} #{quoted} for #{name}. #{valid}"
+  end
+
+  defp truncate_key(key) do
+    if String.length(key) > @max_echoed_key_length do
+      String.slice(key, 0, @max_echoed_key_length) <> "..."
+    else
+      key
+    end
   end
 
   defp validate_declared_args(tool, args, properties) do

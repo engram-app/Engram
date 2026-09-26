@@ -10,6 +10,7 @@
       },
       "description": "List your vaults with their IDs, names and slugs. Call this first when you own more than one vault: every other vault-scoped tool needs a vault_id (a name or ID from this list) to know which vault to act on. search_notes without one searches all vaults.",
       "inputSchema": {
+        "additionalProperties": false,
         "properties": {},
         "type": "object"
       },
@@ -72,6 +73,7 @@
       },
       "description": "Search your personal knowledge base. Finds relevant notes using semantic search. Searches across ALL your vaults by default; pass vault_id to limit to one. Use when the user asks about their notes, vault, knowledge, or memory.",
       "inputSchema": {
+        "additionalProperties": false,
         "properties": {
           "created_after": {
             "description": "Only notes created at/after this ISO 8601 datetime (frontmatter created/date)",
@@ -215,6 +217,7 @@
       },
       "description": "List all tags in the personal knowledge base with document counts. Use to explore what topics exist in the vault.",
       "inputSchema": {
+        "additionalProperties": false,
         "properties": {
           "vault_id": {
             "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
@@ -263,6 +266,7 @@
       },
       "description": "List the notes, attachments, and subfolders directly inside one folder. Pass an empty string for the vault root. Set recursive: true to list every descendant folder (with note counts) instead of just the direct ones. To see every folder in the vault with counts call list_folder with recursive: true on the root. To find notes by content use search_notes.",
       "inputSchema": {
+        "additionalProperties": false,
         "properties": {
           "folder": {
             "description": "Folder path (e.g. \"Health\") or \"\" for root. Defaults to root.",
@@ -374,6 +378,7 @@
       },
       "description": "Create an explicit empty folder in the personal knowledge base. Use to scaffold folder structure before placing notes. Idempotent: calling with an existing folder name succeeds without creating duplicates.",
       "inputSchema": {
+        "additionalProperties": false,
         "properties": {
           "folder": {
             "description": "Folder path, e.g. \"Projects/Active\"",
@@ -413,6 +418,7 @@
       },
       "description": "Find the best existing folder for a new note based on a description of its content. Call before create_note when the right folder is unclear.",
       "inputSchema": {
+        "additionalProperties": false,
         "properties": {
           "description": {
             "description": "What the note is about",
@@ -476,6 +482,7 @@
       },
       "description": "Retrieve the full content of multiple notes in one call (1-20 paths). Also reads a single note: pass one path. Use to inventory a folder (list_folder then get_notes) or to read a batch of search results without N round-trips. Missing paths are reported inline.",
       "inputSchema": {
+        "additionalProperties": false,
         "properties": {
           "paths": {
             "description": "Note paths to read (max 20), e.g. [\"Health/A.md\", \"Health/B.md\"]",
@@ -552,6 +559,7 @@
       },
       "description": "Create a new note with automatic folder placement. If suggested_folder is omitted, the note is placed automatically. Never overwrites: fails if a note already exists at the resulting path.",
       "inputSchema": {
+        "additionalProperties": false,
         "properties": {
           "content": {
             "description": "Markdown content",
@@ -601,6 +609,7 @@
       },
       "description": "Replace a note's entire content, or create the note if it does not exist. Saves, indexes for search, and syncs to Obsidian. Overwrites whatever the note held. To add text without touching existing content use append_to_note. To change one passage, or one heading's section, use edit_note. To create a note with no risk of overwriting an existing one use create_note; create_note takes a title and picks the folder, not a path.",
       "inputSchema": {
+        "additionalProperties": false,
         "properties": {
           "content": {
             "description": "Full markdown content",
@@ -645,6 +654,7 @@
       },
       "description": "Add text to the end of a note. Existing text is kept. If the note does not exist it is created with a `# <name>` title line first. Use for logs, journals and running lists. Set position to start to insert at the top (after any frontmatter) instead. To change existing text use edit_note. To replace the whole note use write_note.",
       "inputSchema": {
+        "additionalProperties": false,
         "properties": {
           "path": {
             "description": "Full path for the note",
@@ -703,6 +713,7 @@
       },
       "description": "Change part of an existing note. mode replace_text finds exact text and replaces it (first occurrence by default); mode replace_section replaces everything under one heading. Fails without writing if the text or heading is not found, or if expected_replacements does not match. To add text use append_to_note. To rewrite the whole note use write_note.",
       "inputSchema": {
+        "additionalProperties": false,
         "properties": {
           "content": {
             "description": "replace_section only: new content for under the heading",
@@ -799,6 +810,7 @@
       },
       "description": "Rename or move one note to a new path; the change syncs to all Obsidian devices and links pointing at it are rewritten in the background. Fails if a note already exists at the new path. To move a whole folder use rename_folder. To move an image or PDF use move_attachment.",
       "inputSchema": {
+        "additionalProperties": false,
         "properties": {
           "new_path": {
             "description": "New path for the note",
@@ -847,6 +859,7 @@
       },
       "description": "Rename or move a folder, including every note, attachment and subfolder inside it. All affected notes are reindexed and synced. To move a single note use rename_note.",
       "inputSchema": {
+        "additionalProperties": false,
         "properties": {
           "new_folder": {
             "description": "New folder path",
@@ -904,6 +917,7 @@
       },
       "description": "Permanently delete one note by path; the deletion syncs to all connected Obsidian devices. Deleting a path that holds no note succeeds and reports deleted: false. To remove a whole folder use delete_folder. To move a note instead use rename_note.",
       "inputSchema": {
+        "additionalProperties": false,
         "properties": {
           "path": {
             "description": "Path of the note to delete",
@@ -948,6 +962,7 @@
       },
       "description": "Delete a folder. Empty-only by default: if the folder contains notes or attachments, the call is refused and reports the counts. Pass recursive: true to delete the folder and everything under it. Syncs to all connected devices.",
       "inputSchema": {
+        "additionalProperties": false,
         "properties": {
           "folder": {
             "description": "Folder path to delete, e.g. \"Projects/Old\"",
@@ -1001,6 +1016,7 @@
       },
       "description": "Move or rename a single attachment (image, PDF, or other binary file) to a new path. Syncs to all connected Obsidian devices. The file's content is unchanged; only its path moves.",
       "inputSchema": {
+        "additionalProperties": false,
         "properties": {
           "new_path": {
             "description": "New path for the attachment",
@@ -1049,6 +1065,7 @@
       },
       "description": "Get the endpoint and this account's limits for uploading an attachment (image, PDF, audio, video). Returns a URL to POST the file to yourself using the credential already authorizing this connection; the bytes do not pass through this tool. Call before uploading to learn the size cap and which file types the plan allows.",
       "inputSchema": {
+        "additionalProperties": false,
         "properties": {
           "vault_id": {
             "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",

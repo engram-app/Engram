@@ -464,5 +464,49 @@ defmodule Engram.MCP.HandlersTest do
       assert body =~ "| Z | 1 |"
       refute body =~ "No notes found"
     end
+
+    # `list_folders_with_counts/2` only returns a row for a folder that holds
+    # a note DIRECTLY — an intermediate folder like "P" here has no row of
+    # its own (only "P/Q" does), so deriving subfolders purely from existing
+    # rows made "P" invisible at the root and its only note unreachable by
+    # navigation.
+    test "an intermediate folder with no direct notes is still a navigable child", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "P/Q/x.md", "content" => "x", "mtime" => 1.0})
+
+      {:ok, _, root} = Handlers.handle("list_folder", user, vault, %{"folder" => ""})
+      assert root["folders"] == [%{"folder" => "P", "count" => 0}]
+
+      {:ok, _, p} = Handlers.handle("list_folder", user, vault, %{"folder" => "P"})
+      assert p["folders"] == [%{"folder" => "P/Q", "count" => 1}]
+
+      {:ok, _, all} =
+        Handlers.handle("list_folder", user, vault, %{"folder" => "", "recursive" => true})
+
+      assert all["folders"] == [
+               %{"folder" => "P", "count" => 0},
+               %{"folder" => "P/Q", "count" => 1}
+             ]
+    end
+
+    test "prefix safety: a folder name is not a prefix match for a same-named sibling", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      for p <- ["A/a.md", "AB/b.md"],
+          do:
+            {:ok, _} =
+              Notes.upsert_note(user, vault, %{"path" => p, "content" => "x", "mtime" => 1.0})
+
+      {:ok, _, direct} = Handlers.handle("list_folder", user, vault, %{"folder" => "A"})
+      assert direct["folders"] == []
+    end
   end
 end

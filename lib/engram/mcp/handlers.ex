@@ -148,6 +148,9 @@ defmodule Engram.MCP.Handlers do
     folder = args["folder"] || ""
     recursive? = args["recursive"] || false
 
+    # `list_folders_with_counts/2` aggregates the WHOLE vault, not just
+    # `folder`'s children — one query per call regardless of folder depth,
+    # then `subfolders/3` slices it down in BEAM.
     with {:ok, notes} <- Notes.list_notes_in_folder(user, vault, folder),
          {:ok, atts} <- Engram.Attachments.list_in_folder(user, vault, folder),
          {:ok, all_folders} <- Notes.list_folders_with_counts(user, vault) do
@@ -1019,15 +1022,58 @@ defmodule Engram.MCP.Handlers do
   # `all_folders` is the full vault-wide list from `list_folders_with_counts/2`
   # (already fetched once by the caller); filtered here in BEAM rather than
   # re-querying per folder depth.
+  #
+  # `list_folders_with_counts/2` only returns a row for a folder that holds a
+  # note DIRECTLY, so an intermediate folder (e.g. "P" when only "P/Q/x.md"
+  # exists) has no row of its own. Deriving children straight from existing
+  # rows made "P" invisible at the root — its only note was unreachable by
+  # navigation. Instead: derive every child/ancestor path from the full path
+  # of each descendant ROW (which always exists, even when intermediate
+  # segments don't), and look up each derived path's count in the row map,
+  # defaulting to 0 when there is none.
   defp subfolders(all_folders, folder, recursive?) do
     prefix = if folder == "", do: "", else: folder <> "/"
+    counts = Map.new(all_folders, &{&1.folder || "", &1.count})
 
-    all_folders
-    |> Enum.map(&%{"folder" => &1.folder || "", "count" => &1.count})
-    |> Enum.filter(fn %{"folder" => f} ->
-      f != "" and f != folder and String.starts_with?(f, prefix) and
-        (recursive? or not String.contains?(String.replace_prefix(f, prefix, ""), "/"))
-    end)
+    descendant_rows =
+      counts
+      |> Map.keys()
+      |> Enum.filter(&(&1 != "" and &1 != folder and String.starts_with?(&1, prefix)))
+
+    paths =
+      if recursive? do
+        descendant_rows |> Enum.flat_map(&ancestor_chain(&1, folder)) |> Enum.uniq()
+      else
+        descendant_rows |> Enum.map(&first_child(&1, folder)) |> Enum.uniq()
+      end
+
+    paths
+    |> Enum.sort()
+    |> Enum.map(&%{"folder" => &1, "count" => Map.get(counts, &1, 0)})
+  end
+
+  # The single path segment of `descendant` immediately under `folder` —
+  # e.g. "P/Q/R" under folder "" -> "P", under folder "P" -> "P/Q".
+  defp first_child(descendant, folder) do
+    prefix = if folder == "", do: "", else: folder <> "/"
+    segment = descendant |> String.replace_prefix(prefix, "") |> String.split("/") |> hd()
+    if folder == "", do: segment, else: folder <> "/" <> segment
+  end
+
+  # Every intermediate ancestor path strictly between `folder` and
+  # `descendant`, inclusive of `descendant` itself — e.g. "P/Q/R" under
+  # folder "" -> ["P", "P/Q", "P/Q/R"].
+  defp ancestor_chain(descendant, folder) do
+    prefix = if folder == "", do: "", else: folder <> "/"
+    segments = descendant |> String.replace_prefix(prefix, "") |> String.split("/")
+
+    {chain, _} =
+      Enum.reduce(segments, {[], folder}, fn seg, {acc, path} ->
+        new_path = if path == "", do: seg, else: path <> "/" <> seg
+        {[new_path | acc], new_path}
+      end)
+
+    Enum.reverse(chain)
   end
 
   defp format_search_result(r, i, names) do

@@ -174,13 +174,55 @@ defmodule EngramWeb.McpControllerTest do
       assert tool_text(conn) =~ "Valid arguments: folder"
     end
 
-    test "a stray argument on a tool that takes none says so plainly", %{conn: conn} do
-      conn = call_tool(conn, "list_vaults", %{"vault_id" => "x"})
+    # `vault_id` used to be one of the stray arguments this rejected, but the
+    # server's own "instructions" tell every model to pass vault_id on EVERY
+    # call (see server/discover above) — a vault-scoping-exempt tool getting
+    # it back and erroring is the server contradicting its own instructions.
+    # Ruled: drop `vault_id` before validation for exempt tools only; every
+    # OTHER undeclared key is still rejected, proven by "foo" below.
+    test "a stray argument (other than vault_id) on a tool that takes none says so plainly", %{
+      conn: conn
+    } do
+      conn = call_tool(conn, "list_vaults", %{"foo" => "x"})
 
       assert_tool_error(json_response(conn, 200))
 
       assert tool_text(conn) =~
-               ~s(Unknown argument "vault_id" for list_vaults. list_vaults takes no arguments.)
+               ~s(Unknown argument "foo" for list_vaults. list_vaults takes no arguments.)
+    end
+
+    test "vault_id on a vault-scoping-exempt tool is dropped, not rejected", %{conn: conn} do
+      conn = call_tool(conn, "list_vaults", %{"vault_id" => "x"})
+      resp = json_response(conn, 200)
+
+      refute resp["error"]
+      refute resp["result"]["isError"]
+      assert tool_text(conn) =~ "Test Vault"
+    end
+
+    # A caller-supplied key name is echoed straight into the error message,
+    # so an adversarial or buggy client sending an enormous key must not
+    # blow up the response body it caused.
+    test "an unknown argument key is truncated to 64 chars in the error message", %{conn: conn} do
+      long_key = String.duplicate("k", 500)
+      conn = call_tool(conn, "list_vaults", %{long_key => "x"})
+
+      text = tool_text(conn)
+      truncated = String.duplicate("k", 64) <> "..."
+
+      assert text =~ ~s(Unknown argument "#{truncated}" for list_vaults)
+      refute text =~ long_key
+    end
+
+    test "at most 10 unknown argument keys are echoed, with a count for the rest", %{conn: conn} do
+      stray = for i <- 1..15, into: %{}, do: {"stray#{i}", "x"}
+      conn = call_tool(conn, "list_vaults", stray)
+
+      text = tool_text(conn)
+      echoed = Regex.scan(~r/"stray\d+"/, text) |> List.flatten() |> Enum.uniq()
+
+      assert length(echoed) == 10
+      assert text =~ "and 5 more"
     end
 
     # #1492 REOPENED by task 3.5, closed for good here: making list_folder's
