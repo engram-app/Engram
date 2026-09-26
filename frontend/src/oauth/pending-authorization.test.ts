@@ -4,6 +4,7 @@ import {
 	peekPendingAuthorization,
 	pendingCancelUrl,
 	stashPendingAuthorization,
+	stashPendingDeviceLink,
 } from "./pending-authorization";
 
 const SEARCH = "?client_id=cli&redirect_uri=https://app/cb&state=xyz";
@@ -21,6 +22,33 @@ describe("pending authorization stash", () => {
 			toolSlug: "antigravity",
 			clientName: "Google Antigravity",
 		});
+	});
+
+	// The plugin-first signup: Obsidian opens /link, the user signs up there,
+	// and the device code has to survive the wizard the same way a consent
+	// request does.
+	it("parks a device-link code and returns to /link with it", () => {
+		expect(stashPendingDeviceLink("ENGR-7X4K")).toBe(true);
+
+		expect(peekPendingAuthorization()).toEqual({
+			returnTo: "/link?code=ENGR-7X4K",
+			toolSlug: null,
+			clientName: "Obsidian",
+		});
+	});
+
+	it("parks a bare /link when no code has been entered yet", () => {
+		stashPendingDeviceLink("");
+
+		expect(peekPendingAuthorization()?.returnTo).toBe("/link");
+	});
+
+	// There is no OAuth client waiting on a refusal, so there is nothing to
+	// cancel to — the button must not render.
+	it("has no cancel URL for a parked device link", () => {
+		stashPendingDeviceLink("ENGR-7X4K");
+
+		expect(pendingCancelUrl()).toBeNull();
 	});
 
 	it("returns null when nothing is stashed", () => {

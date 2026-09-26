@@ -15,6 +15,8 @@ import {
 } from "../api/queries";
 import { useConfig } from "../config-context";
 import LoadingScreen from "../layout/loading-screen";
+import { peekPendingAuthorization } from "../oauth/pending-authorization";
+import { ROUTES } from "../routes";
 import { onboardingDoneTarget } from "./onboarding-next";
 import { SyncStatusPill } from "./sync-status-pill";
 import { useVaultReadyEvents } from "./use-vault-ready-events";
@@ -56,6 +58,17 @@ function VaultStep({
 		profileSaved && savedUsesObsidian,
 	);
 	const [mountedAt] = useState(() => Date.now());
+
+	// A plugin-first signup parked its device code on /link. The Obsidian panel
+	// below waits for the plugin's first sync, which cannot happen until that
+	// code is authorized back on /link — so waiting here would deadlock. Once
+	// uses_obsidian is saved the gate admits them; send them straight back.
+	useEffect(() => {
+		const parked = peekPendingAuthorization()?.returnTo;
+		if (obsidianCommitted && parked?.startsWith(ROUTES.DEVICE_LINK)) {
+			navigate(parked, { replace: true });
+		}
+	}, [obsidianCommitted, navigate]);
 
 	async function pickSource(s: Source) {
 		setSource(s);

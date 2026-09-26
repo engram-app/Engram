@@ -1,9 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, useLocation } from "react-router";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { track } from "../analytics/track";
 import { signInRedirectTarget } from "../auth/sign-in-redirect";
+import { peekPendingAuthorization, stashPendingDeviceLink } from "../oauth/pending-authorization";
 import DeviceLinkPage from "./device-link-page";
 
 vi.mock("../analytics/track", () => ({ track: vi.fn() }));
@@ -53,6 +54,13 @@ interface FakeBilling {
 	device_swap_cooldown_remaining_hours: number | null;
 }
 const billingPending = vi.hoisted(() => ({ current: false }));
+// Default: onboarded. A plugin-first signup arrives with gate_ok false.
+const setProfile = vi.hoisted(() => vi.fn().mockResolvedValue({}));
+const onboardingState = vi.hoisted(() => ({
+	current: { gate_ok: true } as
+		| { gate_ok: boolean; profile?: { uses_obsidian?: boolean } }
+		| undefined,
+}));
 const billingState = vi.hoisted(() => ({
 	current: {
 		caps: { obsidian_connections: null, mcp_connections: null, api_write_enabled: true },
@@ -69,6 +77,8 @@ vi.mock("../api/queries", async (importOriginal) => {
 			isPending: billingPending.current,
 		}),
 		useMe: () => ({ data: { id: 1, email: "me@example.com" } }),
+		useOnboardingStatus: () => ({ data: onboardingState.current }),
+		useSetOnboardingProfile: () => ({ mutateAsync: setProfile }),
 		// The cap panel reads this — keep it deterministic across tests so we
 		// don't trigger real network fetches via the partial-mock pass-through.
 		useConnections: () => ({
@@ -111,7 +121,10 @@ function pageTree(entry: string, qc: QueryClient) {
 	return (
 		<QueryClientProvider client={qc}>
 			<MemoryRouter initialEntries={[entry]}>
-				<DeviceLinkPage />
+				<Routes>
+					<Route path="/link" element={<DeviceLinkPage />} />
+					<Route path="/onboard" element={<span>wizard</span>} />
+				</Routes>
 				<LocationProbe />
 			</MemoryRouter>
 		</QueryClientProvider>
@@ -129,6 +142,9 @@ afterEach(() => {
 	// test would be consumed by the next.
 	window.sessionStorage.clear();
 	billingPending.current = false;
+	onboardingState.current = { gate_ok: true };
+	// mutateAsync always returns a promise; a bare reset would return undefined.
+	setProfile.mockReset().mockResolvedValue({});
 	vaultReadyArgs.last = null;
 	window.history.replaceState({}, "", "/link");
 	authState.current = { isSignedIn: true };
@@ -140,6 +156,102 @@ afterEach(() => {
 });
 
 describe("DeviceLinkPage", () => {
+	// Plugin-first signup (prod 2026-09-25): Obsidian opens /link, the user signs
+	// up there, and lands on a vault picker whose Sync button 403s with
+	// onboarding_required forever — /link sits outside OnboardingGate. Send them
+	// through the wizard first and bring the code back, as /oauth/consent does.
+	describe("before onboarding is finished", () => {
+		it("sends the user to the wizard with the code parked", async () => {
+			onboardingState.current = { gate_ok: false };
+			get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
+			renderPage("/link?code=ENGR-7X4K");
+
+			await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/onboard"));
+			expect(peekPendingAuthorization()?.returnTo).toBe("/link?code=ENGR-7X4K");
+			expect(post).not.toHaveBeenCalled();
+		});
+
+		// Arriving from the plugin IS the answer to "do you already use
+		// Obsidian?" — the wizard must not ask it.
+		it("pre-answers uses_obsidian before handing over to the wizard", async () => {
+			onboardingState.current = { gate_ok: false };
+			setProfile.mockResolvedValue({});
+			renderPage("/link?code=ENGR-7X4K");
+
+			await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/onboard"));
+			expect(setProfile).toHaveBeenCalledWith({ uses_obsidian: true });
+		});
+
+		// A returning user whose gate closed for another reason (new ToS, lapsed
+		// plan) already answered this. Opening /link must not rewrite it.
+		it("leaves an existing uses_obsidian answer alone", async () => {
+			onboardingState.current = { gate_ok: false, profile: { uses_obsidian: false } };
+			renderPage("/link?code=ENGR-7X4K");
+
+			await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/onboard"));
+			expect(setProfile).not.toHaveBeenCalled();
+		});
+
+		// No storage (Safari private mode, quota): bouncing would lose the code,
+		// and the vault step would then wait on a sync that can never happen.
+		it("stays on /link and points to setup when the code cannot be parked", async () => {
+			onboardingState.current = { gate_ok: false };
+			const setItem = vi.spyOn(window.sessionStorage, "setItem").mockImplementation(() => {
+				throw new Error("QuotaExceededError");
+			});
+			try {
+				renderPage("/link?code=ENGR-7X4K");
+
+				expect(await screen.findByRole("link", { name: /finish setting up/iu })).toHaveAttribute(
+					"href",
+					"/onboard",
+				);
+				expect(screen.getByTestId("location")).toHaveTextContent(/^\/link/u);
+			} finally {
+				setItem.mockRestore();
+			}
+		});
+
+		// The pre-answer is a convenience. Failing it must not strand the user.
+		it("still hands over to the wizard when the pre-answer fails", async () => {
+			onboardingState.current = { gate_ok: false };
+			setProfile.mockRejectedValue(new Error("boom"));
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+			renderPage("/link?code=ENGR-7X4K");
+
+			await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/onboard"));
+			warn.mockRestore();
+		});
+
+		it("parks the code handed over from a sign-in redirect", async () => {
+			onboardingState.current = { gate_ok: false };
+			signInRedirectTarget({ pathname: "/link", search: "?code=ENGR-7X4K", hash: "" });
+			renderPage("/link");
+
+			await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/onboard"));
+			expect(peekPendingAuthorization()?.returnTo).toBe("/link?code=ENGR-7X4K");
+		});
+
+		it("does not bounce while the onboarding status is still loading", () => {
+			onboardingState.current = undefined;
+			renderPage("/link?code=ENGR-7X4K");
+
+			expect(screen.getByTestId("location")).toHaveTextContent(/^\/link/u);
+			expect(peekPendingAuthorization()).toBeNull();
+		});
+
+		// Back from the wizard: the parked trip is spent, and a stash that
+		// outlives it would divert a later, unrelated pass through the wizard.
+		it("clears the parked link once onboarding is done", async () => {
+			stashPendingDeviceLink("ENGR-7X4K");
+			get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
+			renderPage("/link?code=ENGR-7X4K");
+
+			expect(await screen.findByRole("radio", { name: /personal/iu })).toBeInTheDocument();
+			expect(peekPendingAuthorization()).toBeNull();
+		});
+	});
+
 	it("shows a sign-in prompt when signed out", () => {
 		authState.current = { isSignedIn: false };
 		renderPage();

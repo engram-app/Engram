@@ -1,6 +1,6 @@
 # An MCP-first signup completes OAuth, then 403s `onboarding_required` forever
 
-_Last verified: 2026-09-16_
+_Last verified: 2026-09-25_
 
 ## Status
 
@@ -132,6 +132,29 @@ survives sign-out. It is cleared in `useClearQueryCacheOnUserChange` alongside t
 query cache, because otherwise user A can park an authorization, sign out from the
 wizard header, and user B finishes the wizard onto A's consent screen carrying A's
 `state` and `redirect_uri`.
+
+## Same dead end on `/link` (plugin-first signups, 2026-09-25)
+
+#1670 only fixed `/oauth/consent`. A plugin-first signup hit the identical wall on
+`/link` (`DeviceLinkPage`): in prod on 2026-09-25 a new user clicked Sync 11 times,
+each `POST /auth/device/authorize` returned 403 `onboarding_required` (the
+`RequireOnboarding` plug on `device_auth_controller.ex` `:authorize`), and the page
+rendered the raw string `onboarding_required`, because `ApiError` carries only
+`body.error`, not `message` / `resume_url`. Surfaced by the Grafana alert
+`engram-prod-loki-onboarding-refused`.
+
+**Root cause:** `/link` and `/oauth/consent` both sit OUTSIDE `OnboardingGate` in
+`frontend/src/router.tsx`, on purpose. So every page placed outside the gate must do
+its own `gate_ok` bounce.
+
+**Fix:** `stashPendingDeviceLink(code)` in `frontend/src/oauth/pending-authorization.ts`
+reuses the same sessionStorage stash; `isResumablePath` now allows `/link`;
+`DeviceLinkPage` bounces to `/onboard` when `gate_ok === false`, and auto-verify waits
+for the onboarding status to load. The wizard's `onboardingDoneTarget()` then returns
+the user to `/link?code=...`.
+
+**Rule:** any new route added outside `OnboardingGate` needs the same bounce, or it
+recreates this bug.
 
 ## How the audit was run
 
