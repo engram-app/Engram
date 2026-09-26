@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.36.0](https://github.com/engram-app/Engram/compare/0.35.0...0.36.0) (2026-09-26)
+
+
+### Features
+
+* **mcp:** consolidate to 17 tools (edit_note, get_notes, list_folder) ([#1789](https://github.com/engram-app/Engram/issues/1789)) ([e6091f0](https://github.com/engram-app/Engram/commit/e6091f0e73743439b3689b4bf4a7ac6ec591e8a0))
+
+
+### Bug Fixes
+
+* **privacy:** scrub client telemetry at ingest and in the SPA ([#1795](https://github.com/engram-app/Engram/issues/1795)) ([9f220a7](https://github.com/engram-app/Engram/commit/9f220a7bef32db170dd8d224effe98e655b3c57d))
+* **schema:** redact decrypted fields from inspect ([#1785](https://github.com/engram-app/Engram/issues/1785)) ([d9f4ff1](https://github.com/engram-app/Engram/commit/d9f4ff163004627dce9ecd6fa1ca4bc571eb6586))
+* **security:** keep user data out of logs, traces and Sentry ([#1791](https://github.com/engram-app/Engram/issues/1791)) ([d671634](https://github.com/engram-app/Engram/commit/d6716342592ad93ad6e4a0c8faac03fe4cf64ade))
+
 ## [0.35.0](https://github.com/engram-app/Engram/compare/0.34.0...0.35.0) (2026-09-26)
 
 
