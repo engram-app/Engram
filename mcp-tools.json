@@ -8,7 +8,7 @@
         "readOnlyHint": true,
         "title": "List Vaults"
       },
-      "description": "List your vaults with their IDs, names and slugs. Call this first when you own more than one vault: every other tool needs a vault_id (a name or ID from this list) to know which vault to act on.",
+      "description": "List your vaults with their IDs, names and slugs. Call this first when you own more than one vault: every other vault-scoped tool needs a vault_id (a name or ID from this list) to know which vault to act on. search_notes without one searches all vaults.",
       "inputSchema": {
         "properties": {},
         "type": "object"
@@ -74,7 +74,7 @@
       "inputSchema": {
         "properties": {
           "vault_id": {
-            "description": "Vault to validate — its name (e.g. \"Engram\") or its UUID",
+            "description": "Vault to validate: its name (e.g. \"Engram\") or its UUID",
             "type": "string"
           }
         },
@@ -281,7 +281,7 @@
       "inputSchema": {
         "properties": {
           "vault_id": {
-            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
             "type": "string"
           }
         },
@@ -329,7 +329,7 @@
       "inputSchema": {
         "properties": {
           "vault_id": {
-            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
             "type": "string"
           }
         },
@@ -382,7 +382,7 @@
             "type": "string"
           },
           "vault_id": {
-            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
             "type": "string"
           }
         },
@@ -471,7 +471,7 @@
             "type": "string"
           },
           "vault_id": {
-            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
             "type": "string"
           }
         },
@@ -515,7 +515,7 @@
             "type": "integer"
           },
           "vault_id": {
-            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
             "type": "string"
           }
         },
@@ -573,7 +573,7 @@
             "type": "string"
           },
           "vault_id": {
-            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
             "type": "string"
           }
         },
@@ -638,7 +638,7 @@
             "type": "array"
           },
           "vault_id": {
-            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
             "type": "string"
           }
         },
@@ -719,7 +719,7 @@
             "type": "string"
           },
           "vault_id": {
-            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
             "type": "string"
           }
         },
@@ -733,7 +733,7 @@
       "outputSchema": {
         "properties": {
           "path": {
-            "description": "Where the note landed — the server picks the folder",
+            "description": "Where the note landed; the server picks the folder",
             "type": "string"
           }
         },
@@ -752,7 +752,7 @@
         "readOnlyHint": false,
         "title": "Write Note"
       },
-      "description": "Replace a note's entire content, or create the note if it does not exist. Saves, indexes for search, and syncs to Obsidian. Overwrites whatever the note held. To add text without touching existing content use append_to_note. To change one passage use patch_note, or one heading's section use update_section. To create a note with no risk of overwriting an existing one use create_note.",
+      "description": "Replace a note's entire content, or create the note if it does not exist. Saves, indexes for search, and syncs to Obsidian. Overwrites whatever the note held. To add text without touching existing content use append_to_note. To change one passage use patch_note, or one heading's section use update_section. To create a note with no risk of overwriting an existing one use create_note; create_note takes a title and picks the folder, not a path.",
       "inputSchema": {
         "properties": {
           "content": {
@@ -764,7 +764,7 @@
             "type": "string"
           },
           "vault_id": {
-            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
             "type": "string"
           }
         },
@@ -796,7 +796,7 @@
         "readOnlyHint": false,
         "title": "Append to Note"
       },
-      "description": "Add text to the end of a note, creating the note if it does not exist. Never removes or changes existing content. Use for logs, journals and running lists. To change existing text use patch_note. To replace the whole note use write_note.",
+      "description": "Add text to the end of a note. Existing text is kept. If the note does not exist it is created with a `# <name>` title line first. Use for logs, journals and running lists. To change existing text use patch_note. To replace the whole note use write_note.",
       "inputSchema": {
         "properties": {
           "path": {
@@ -808,7 +808,7 @@
             "type": "string"
           },
           "vault_id": {
-            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
             "type": "string"
           }
         },
@@ -866,7 +866,7 @@
             "type": "string"
           },
           "vault_id": {
-            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
             "type": "string"
           }
         },
@@ -925,7 +925,7 @@
             "type": "string"
           },
           "vault_id": {
-            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
             "type": "string"
           }
         },
@@ -962,7 +962,7 @@
         "readOnlyHint": false,
         "title": "Rename Note"
       },
-      "description": "Rename or move one note to a new path; links pointing at it are rewritten and the change syncs to all Obsidian devices. Fails if a note already exists at the new path. To move a whole folder use rename_folder. To move an image or PDF use move_attachment.",
+      "description": "Rename or move one note to a new path; the change syncs to all Obsidian devices and links pointing at it are rewritten in the background. Fails if a note already exists at the new path. To move a whole folder use rename_folder. To move an image or PDF use move_attachment.",
       "inputSchema": {
         "properties": {
           "new_path": {
@@ -974,7 +974,7 @@
             "type": "string"
           },
           "vault_id": {
-            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
             "type": "string"
           }
         },
@@ -1022,7 +1022,7 @@
             "type": "string"
           },
           "vault_id": {
-            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
             "type": "string"
           }
         },
@@ -1075,7 +1075,7 @@
             "type": "string"
           },
           "vault_id": {
-            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
             "type": "string"
           }
         },
@@ -1124,7 +1124,7 @@
             "type": "boolean"
           },
           "vault_id": {
-            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
             "type": "string"
           }
         },
@@ -1176,7 +1176,7 @@
             "type": "string"
           },
           "vault_id": {
-            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
             "type": "string"
           }
         },
@@ -1216,7 +1216,7 @@
       "inputSchema": {
         "properties": {
           "vault_id": {
-            "description": "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault — the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
             "type": "string"
           }
         },

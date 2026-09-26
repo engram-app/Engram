@@ -21,7 +21,7 @@ defmodule Engram.MCP.Handlers do
       else
         Enum.map_join(vaults, "\n", fn v ->
           default = if v.is_default, do: " (default)", else: ""
-          desc = if v.description, do: " — #{v.description}", else: ""
+          desc = if v.description, do: ": #{v.description}", else: ""
           "- **#{v.name}**#{default} (ID: #{v.id})#{desc}"
         end)
       end
@@ -57,12 +57,12 @@ defmodule Engram.MCP.Handlers do
             {:error,
              "#{length(many)} vaults are named #{vault_id}: " <>
                "#{Enum.map_join(many, ", ", &to_string(&1.id))}. Pass one of those UUIDs, " <>
-               "or a slug — slugs are unique."}
+               "or a slug; slugs are unique."}
 
           [v] ->
             {:ok,
              "Vault **#{v.name}** (ID: #{v.id}) is valid. Pass vault_id=\"#{v.id}\" on each " <>
-               "tool call to target it — MCP stores no active vault between calls.",
+               "tool call to target it; MCP stores no active vault between calls.",
              %{"vault" => vault_payload(v)}}
         end
     end
@@ -617,7 +617,7 @@ defmodule Engram.MCP.Handlers do
     types =
       if Engram.Billing.attachments_all_types?(user),
         do: "images, PDFs, audio, video and other whitelisted binary types",
-        else: "text/* only on this plan — images, PDFs, audio and video need a paid plan"
+        else: "text/* only on this plan; images, PDFs, audio and video need a paid plan"
 
     {:ok,
      """
@@ -634,10 +634,10 @@ defmodule Engram.MCP.Handlers do
        x-vault-id: #{vault.id}
 
      json body:
-       path            required — vault-relative destination, e.g. _attachments/diagram.png
-       content_base64  required — the file bytes, base64 encoded
-       mime_type       optional — inferred from the path extension when omitted
-       mtime           optional — unix timestamp
+       path            required: vault-relative destination, e.g. _attachments/diagram.png
+       content_base64  required: the file bytes, base64 encoded
+       mime_type       optional: inferred from the path extension when omitted
+       mtime           optional: unix timestamp
 
      limits for this account:
        max_bytes: #{max_bytes}

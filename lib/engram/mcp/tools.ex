@@ -36,8 +36,8 @@ defmodule Engram.MCP.Tools do
   @vault_id_property %{
     "type" => "string",
     "description" =>
-      "Target vault — its name (e.g. \"Engram\") or its UUID. REQUIRED when you own " <>
-        "more than one vault — the server keeps no active-vault state between calls, so " <>
+      "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own " <>
+        "more than one vault; the server keeps no active-vault state between calls, so " <>
         "it must be passed on every vault-scoped call. Omit only if you have a single " <>
         "vault. Call list_vaults if a name does not resolve."
   }
@@ -185,8 +185,9 @@ defmodule Engram.MCP.Tools do
       name: "list_vaults",
       description:
         "List your vaults with their IDs, names and slugs. Call this first when you own " <>
-          "more than one vault: every other tool needs a vault_id (a name or ID from this " <>
-          "list) to know which vault to act on.",
+          "more than one vault: every other vault-scoped tool needs a vault_id (a name or ID " <>
+          "from this list) to know which vault to act on. search_notes without one searches " <>
+          "all vaults.",
       inputSchema: %{"type" => "object", "properties" => %{}},
       outputSchema: %{
         "type" => "object",
@@ -238,7 +239,7 @@ defmodule Engram.MCP.Tools do
         "properties" => %{
           "vault_id" => %{
             "type" => "string",
-            "description" => "Vault to validate — its name (e.g. \"Engram\") or its UUID"
+            "description" => "Vault to validate: its name (e.g. \"Engram\") or its UUID"
           }
         }
       },
@@ -658,7 +659,7 @@ defmodule Engram.MCP.Tools do
         "properties" => %{
           "path" => %{
             "type" => "string",
-            "description" => "Where the note landed — the server picks the folder"
+            "description" => "Where the note landed; the server picks the folder"
           }
         },
         "required" => ["path"]
@@ -675,7 +676,8 @@ defmodule Engram.MCP.Tools do
           "Saves, indexes for search, and syncs to Obsidian. Overwrites whatever the note held. " <>
           "To add text without touching existing content use append_to_note. To change one " <>
           "passage use patch_note, or one heading's section use update_section. To create a " <>
-          "note with no risk of overwriting an existing one use create_note.",
+          "note with no risk of overwriting an existing one use create_note; create_note " <>
+          "takes a title and picks the folder, not a path.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
@@ -700,8 +702,9 @@ defmodule Engram.MCP.Tools do
     %{
       name: "append_to_note",
       description:
-        "Add text to the end of a note, creating the note if it does not exist. Never " <>
-          "removes or changes existing content. Use for logs, journals and running lists. " <>
+        "Add text to the end of a note. Existing text is kept. If the note does not exist " <>
+          "it is created with a `# <name>` title line first. Use for logs, journals and " <>
+          "running lists. " <>
           "To change existing text use patch_note. To replace the whole note use write_note.",
       inputSchema: %{
         "type" => "object",
@@ -804,8 +807,9 @@ defmodule Engram.MCP.Tools do
     %{
       name: "rename_note",
       description:
-        "Rename or move one note to a new path; links pointing at it are rewritten and the " <>
-          "change syncs to all Obsidian devices. Fails if a note already exists at the new " <>
+        "Rename or move one note to a new path; the change syncs to all Obsidian devices " <>
+          "and links pointing at it are rewritten in the background. Fails if a note " <>
+          "already exists at the new " <>
           "path. To move a whole folder use rename_folder. To move an image or PDF use " <>
           "move_attachment.",
       inputSchema: %{

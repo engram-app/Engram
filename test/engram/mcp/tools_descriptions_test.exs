@@ -24,7 +24,30 @@ defmodule Engram.MCP.ToolsDescriptionsTest do
     end
   end
 
-  test "no description uses an em dash" do
-    for t <- Tools.list(), do: refute(t.description =~ "—", "#{t.name} has an em dash")
+  # Caveats a client needs before calling: which tools skip vault_id, what a
+  # new note looks like, and that link rewrites are not synchronous.
+  @caveats %{
+    "list_vaults" => ["search_notes"],
+    "append_to_note" => ["# <name>"],
+    "rename_note" => ["in the background"],
+    "write_note" => ["create_note takes a title"]
+  }
+
+  for {tool, phrases} <- @caveats, phrase <- phrases do
+    test "#{tool} description states #{phrase}" do
+      desc = Enum.find(Tools.list(), &(&1.name == unquote(tool))).description
+      assert desc =~ unquote(phrase)
+    end
   end
+
+  test "no client-visible tool text uses an em dash" do
+    for t <- Tools.wire_list(), s <- strings(t) do
+      refute s =~ "—", "#{t["name"]} has an em dash: #{s}"
+    end
+  end
+
+  defp strings(s) when is_binary(s), do: [s]
+  defp strings(m) when is_map(m), do: Enum.flat_map(Map.values(m), &strings/1)
+  defp strings(l) when is_list(l), do: Enum.flat_map(l, &strings/1)
+  defp strings(_), do: []
 end
