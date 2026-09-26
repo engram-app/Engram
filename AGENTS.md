@@ -515,7 +515,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Auditing prod for users who never onboarded (`engram_audit_ro` is RLS-bound — a correlated subquery over `users` returns 0 for every row, silently; prod Loki ships warn+ only, so successful 2xx traffic is invisible) → `docs/context/mcp-first-signup-onboarding-deadend.md`
 - MCP vault selection design — stateless `set_vault`, fate of the default vault → `docs/context/mcp-vault-selection.md`
 - Publishing to the official MCP registry (`server.json`, `mcp-publisher`, GitHub namespace auth), a personal `mcp-publisher login github` 403s on the org namespace (publish runs via OIDC on each release tag), or changing the listing title/description → `docs/context/mcp-registry-publishing.md`
-- Changing an MCP tool definition, or the TDQS lint/score job is red (regenerate `mcp-tools.json`; score baseline and gating rule) → `docs/context/mcp-tdqs-baseline.md`
+- Changing an MCP tool definition, or the TDQS lint job is red (regenerate `mcp-tools.json`; model-graded scoring is a hosted post-release report, not a CI job) → `docs/context/mcp-tdqs-baseline.md`
 - Refresh-token rotation — leeway/overlap window, token-family reuse detection → `docs/context/refresh-token-reuse-detection.md`
 - How `/settings/connections` + the onboarding checklist identify an OAuth/MCP client (slug attribution, the three hosting classes, HTTPS trust model) → `docs/context/connections-client-identity.md`
 - A client-only fixture/sentinel id reaches persisted state and rides every later request (the removed demo vault's `activeVaultId` poisoning; feature gone, bug class kept) → `docs/context/demo-vault-activevaultid-poisoning.md`

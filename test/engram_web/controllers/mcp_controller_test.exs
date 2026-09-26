@@ -77,26 +77,30 @@ defmodule EngramWeb.McpControllerTest do
       assert resp["result"]["capabilities"]["tools"]
     end
 
-    test "tools/list returns 21 tools", %{conn: conn} do
+    test "tools/list returns 17 tools", %{conn: conn} do
       conn = jsonrpc(conn, "tools/list")
       resp = json_response(conn, 200)
 
       tools = resp["result"]["tools"]
-      assert length(tools) == 21
+      assert length(tools) == 17
 
       names = Enum.map(tools, & &1["name"])
       assert "list_vaults" in names
-      assert "set_vault" in names
       assert "search_notes" in names
-      assert "get_note" in names
       assert "get_notes" in names
       assert "write_note" in names
+      assert "edit_note" in names
       assert "delete_note" in names
-      assert "patch_note" in names
-      assert "update_section" in names
       assert "create_folder" in names
       assert "move_attachment" in names
       assert "get_attachment_upload_target" in names
+
+      # Retired names (Task 3.1): still callable, no longer listed.
+      refute "set_vault" in names
+      refute "get_note" in names
+      refute "list_folders" in names
+      refute "patch_note" in names
+      refute "update_section" in names
 
       # Each tool has required fields
       Enum.each(tools, fn t ->
@@ -156,15 +160,93 @@ defmodule EngramWeb.McpControllerTest do
     # "folder", used to silently fall through to the handler's `|| ""`
     # default and operate on the vault root with no error. Required params
     # must be validated against inputSchema before the handler ever runs.
+    # Targets create_folder, whose `folder` is required. list_folder's is
+    # optional; its copy of this guard is the #1492 test below.
     test "tools/call with a missing required argument returns a tool error, not a silent default",
          %{
            conn: conn
          } do
+      conn = call_tool(conn, "create_folder", %{"path" => "Health"})
+      resp = json_response(conn, 200)
+
+      assert_tool_error(resp)
+      assert tool_text(conn) =~ ~s(Unknown argument "path" for create_folder)
+      assert tool_text(conn) =~ "Valid arguments: folder"
+    end
+
+    # `vault_id` used to be one of the stray arguments this rejected, but the
+    # server's own "instructions" tell every model to pass vault_id on EVERY
+    # call (see server/discover above) — a vault-scoping-exempt tool getting
+    # it back and erroring is the server contradicting its own instructions.
+    # Ruled: drop `vault_id` before validation for exempt tools only; every
+    # OTHER undeclared key is still rejected, proven by "foo" below.
+    test "a stray argument (other than vault_id) on a tool that takes none says so plainly", %{
+      conn: conn
+    } do
+      conn = call_tool(conn, "list_vaults", %{"foo" => "x"})
+
+      assert_tool_error(json_response(conn, 200))
+
+      assert tool_text(conn) =~
+               ~s(Unknown argument "foo" for list_vaults. list_vaults takes no arguments.)
+    end
+
+    test "vault_id on a vault-scoping-exempt tool is dropped, not rejected", %{conn: conn} do
+      conn = call_tool(conn, "list_vaults", %{"vault_id" => "x"})
+      resp = json_response(conn, 200)
+
+      refute resp["error"]
+      refute resp["result"]["isError"]
+      assert tool_text(conn) =~ "Test Vault"
+    end
+
+    # A caller-supplied key name is echoed straight into the error message,
+    # so an adversarial or buggy client sending an enormous key must not
+    # blow up the response body it caused.
+    test "an unknown argument key is truncated to 64 chars in the error message", %{conn: conn} do
+      long_key = String.duplicate("k", 500)
+      conn = call_tool(conn, "list_vaults", %{long_key => "x"})
+
+      text = tool_text(conn)
+      truncated = String.duplicate("k", 64) <> "..."
+
+      assert text =~ ~s(Unknown argument "#{truncated}" for list_vaults)
+      refute text =~ long_key
+    end
+
+    test "at most 10 unknown argument keys are echoed, with a count for the rest", %{conn: conn} do
+      stray = for i <- 1..15, into: %{}, do: {"stray#{i}", "x"}
+      conn = call_tool(conn, "list_vaults", stray)
+
+      text = tool_text(conn)
+      echoed = Regex.scan(~r/"stray\d+"/, text) |> List.flatten() |> Enum.uniq()
+
+      assert length(echoed) == 10
+      assert text =~ "and 5 more"
+    end
+
+    # #1492 REOPENED by task 3.5, closed for good here: making list_folder's
+    # `folder` optional meant the required-arg check above no longer applies
+    # to it, so an undeclared key like "path" fell all the way through to the
+    # handler's `|| ""` default and silently returned the vault root instead
+    # of erroring. Closed at the shared dispatch choke point for every tool,
+    # not patched on list_folder alone: validate_tool_args now rejects any
+    # argument key a tool's inputSchema does not declare (and does not list
+    # as a hidden_params alias), before the handler ever runs.
+    test "tools/call with an undeclared argument key is a tool error naming it, not a silent default",
+         %{conn: conn} do
       conn = call_tool(conn, "list_folder", %{"path" => "Health"})
       resp = json_response(conn, 200)
 
       assert_tool_error(resp)
-      assert tool_text(conn) =~ "folder"
+      text = tool_text(conn)
+      assert text =~ ~s(Unknown argument "path" for list_folder.)
+      assert text =~ "Valid arguments:"
+      assert text =~ "folder"
+      assert text =~ "recursive"
+      # Proves the handler never ran: a silent default would have listed the
+      # vault root's folders instead of erroring.
+      refute text =~ "**Folder:**"
     end
 
     # A rejected call now answers 200 with `isError: true` rather than a
@@ -233,6 +315,16 @@ defmodule EngramWeb.McpControllerTest do
       assert tool_text(conn) =~ "paths"
     end
 
+    test "get_notes with an undeclared argument key is a tool error naming it", %{conn: conn} do
+      conn = call_tool(conn, "get_notes", %{"path" => "Health/Supplements.md"})
+      resp = json_response(conn, 200)
+
+      assert_tool_error(resp)
+      text = tool_text(conn)
+      assert text =~ ~s(Unknown argument "path" for get_notes.)
+      assert text =~ "paths"
+    end
+
     # Adversarial-review finding: the array-typed check only validated
     # `is_list/1`, not each element's declared `items` type. `paths` is
     # declared `array of string`, so an array of numbers must still be
@@ -271,7 +363,9 @@ defmodule EngramWeb.McpControllerTest do
       conn: conn
     } do
       tools_with_required =
-        Enum.filter(Engram.MCP.Tools.list(), fn t -> (t.inputSchema["required"] || []) != [] end)
+        Enum.filter(Engram.MCP.Tools.all_callable(), fn t ->
+          (t.inputSchema["required"] || []) != []
+        end)
 
       assert tools_with_required != []
 
@@ -629,6 +723,33 @@ defmodule EngramWeb.McpControllerTest do
       result = tool_text(conn)
       assert result =~ "# Appended"
       assert result =~ "Some text."
+    end
+  end
+
+  describe "edit_note tool" do
+    # old_text/new_text are undocumented back-compat aliases for find/replace
+    # (Handlers.run_edit falls back to them) — not declared in edit_note's
+    # inputSchema on purpose, so they must be on the dispatch-level
+    # hidden_params allowlist or the new unknown-argument check added for
+    # #1492 would reject them at the controller before the handler ever runs.
+    test "replace_text accepts the old_text/new_text aliases through the controller", %{
+      conn: conn
+    } do
+      conn =
+        call_tool(conn, "edit_note", %{
+          "path" => "Health/Supplements.md",
+          "mode" => "replace_text",
+          "old_text" => "Omega 3",
+          "new_text" => "Omega 3 (fish oil)"
+        })
+
+      refute json_response(conn, 200)["result"]["isError"]
+      assert tool_text(conn) =~ "Health/Supplements.md"
+
+      conn =
+        call_tool(build_authed(conn), "get_note", %{"source_path" => "Health/Supplements.md"})
+
+      assert tool_text(conn) =~ "Omega 3 (fish oil)"
     end
   end
 

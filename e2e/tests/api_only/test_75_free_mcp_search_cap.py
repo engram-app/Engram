@@ -141,7 +141,7 @@ def test_free_mcp_search_cap_binds_and_is_shared_with_rest():
     assert body["limit_key"] == "ai_searches_per_day", body
 
     # 4. We capped searches, not the server. A non-search tool still answers.
-    folders, _ = api.mcp_call("list_folders", {"vault_id": vault_id})
+    folders, _ = api.mcp_call("list_folder", {"folder": "", "recursive": True, "vault_id": vault_id})
     assert "result" in folders, (
-        f"list_folders must not be charged to the search bucket; got {folders}"
+        f"list_folder must not be charged to the search bucket; got {folders}"
     )

@@ -19,9 +19,10 @@ defmodule Engram.PromEx.Mcp do
       response payload size; useful for capacity planning (LLM context
       consumption).
 
-  Cardinality contract: `:tool` is a closed-set atom (21 tools, see
-  `Engram.MCP.Tools.list/0`). `:status` is `:ok | :error | :invalid_args`.
-  NEVER add user_id or args.
+  Cardinality contract: `:tool` is a closed-set atom (17 listed tools plus 5
+  deprecated aliases still dispatched under their own name, see
+  `Engram.MCP.Tools.list/0` and `Engram.MCP.Tools.aliases/0`). `:status` is
+  `:ok | :error | :invalid_args`. NEVER add user_id or args.
   """
 
   use PromEx.Plugin

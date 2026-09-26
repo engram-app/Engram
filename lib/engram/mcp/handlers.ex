@@ -5,6 +5,7 @@ defmodule Engram.MCP.Handlers do
   """
 
   alias Engram.{Notes, Search}
+  alias Engram.Notes.Frontmatter
 
   # -- Vault tools --
 
@@ -145,10 +146,15 @@ defmodule Engram.MCP.Handlers do
 
   def handle("list_folder", user, vault, args) do
     folder = args["folder"] || ""
+    recursive? = args["recursive"] || false
 
+    # `list_folders_with_counts/2` aggregates the WHOLE vault, not just
+    # `folder`'s children — one query per call regardless of folder depth,
+    # then `subfolders/3` slices it down in BEAM.
     with {:ok, notes} <- Notes.list_notes_in_folder(user, vault, folder),
-         {:ok, atts} <- Engram.Attachments.list_in_folder(user, vault, folder) do
-      render_folder({:ok, notes, atts}, folder)
+         {:ok, atts} <- Engram.Attachments.list_in_folder(user, vault, folder),
+         {:ok, all_folders} <- Notes.list_folders_with_counts(user, vault) do
+      render_folder({:ok, notes, atts, subfolders(all_folders, folder, recursive?)}, folder)
     else
       error -> render_folder(error, folder)
     end
@@ -298,7 +304,7 @@ defmodule Engram.MCP.Handlers do
     # race; a create-only mode on upsert_note closes it if that ever matters.
     if Notes.note_exists?(user, vault, Notes.PathSanitizer.sanitize(path)) do
       {:error,
-       "A note already exists at #{path}. Use get_note to read it, or write_note " <>
+       "A note already exists at #{path}. Use get_notes to read it, or write_note " <>
          "to replace it, or pick a different title."}
     else
       Notes.upsert_note(user, vault, %{"path" => path, "content" => content, "mtime" => now()})
@@ -343,36 +349,48 @@ defmodule Engram.MCP.Handlers do
     path = args["path"] || ""
     text = args["text"] || ""
 
-    case Notes.get_note(user, vault, path) do
-      {:ok, _note} ->
-        # Read-modify-write via the CAS helper: a write landing between the
-        # read and the upsert must trigger a re-read + rebuild, not be deleted
-        # by the full-content merge (2026-07-07: MCP appends erased).
-        rmw_upsert(user, vault, path, fn content ->
-          String.trim_trailing(content, "\n") <> "\n" <> text
-        end)
-        |> upsert_reply(
-          [
-            ok: "Note appended to: #{path}",
-            conflict: "Note changed concurrently; retry: #{path}",
-            error: "Failed to append to note: #{path}"
-          ],
-          %{"path" => path, "created" => false}
-        )
+    with {:ok, position} <- resolve_append_position(args["position"]) do
+      case Notes.get_note(user, vault, path) do
+        {:ok, _note} ->
+          # Read-modify-write via the CAS helper: a write landing between the
+          # read and the upsert must trigger a re-read + rebuild, not be
+          # deleted by the full-content merge (2026-07-07: MCP appends
+          # erased). The frontmatter-misparse guard runs INSIDE rebuild (not
+          # here) so it checks the content rmw_upsert actually rebuilds from
+          # on every attempt, including the post-conflict retry.
+          rmw_upsert(user, vault, path, fn content ->
+            case guard_start_frontmatter_safety(position, content, text) do
+              :ok -> place_text(content, text, position)
+              {:error, _msg} = error -> error
+            end
+          end)
+          |> upsert_reply(
+            [
+              ok: "Note appended to: #{path}",
+              conflict: "Note changed concurrently; retry: #{path}",
+              error: "Failed to append to note: #{path}"
+            ],
+            %{"path" => path, "created" => false}
+          )
 
-      {:error, :not_found} ->
-        content = "# #{Path.basename(path, ".md")}\n\n#{text}"
+        {:error, :not_found} ->
+          content = "# #{Path.basename(path, ".md")}\n\n#{text}"
 
-        Notes.upsert_note(user, vault, %{"path" => path, "content" => content, "mtime" => now()})
-        |> upsert_reply(
-          [
-            ok: "Note created: #{path}",
-            conflict: "Note changed on the server, retry: #{path}",
-            deleted: "Note was deleted: #{path}",
-            error: "Failed to create note: #{path}"
-          ],
-          %{"path" => path, "created" => true}
-        )
+          Notes.upsert_note(user, vault, %{
+            "path" => path,
+            "content" => content,
+            "mtime" => now()
+          })
+          |> upsert_reply(
+            [
+              ok: "Note created: #{path}",
+              conflict: "Note changed on the server, retry: #{path}",
+              deleted: "Note was deleted: #{path}",
+              error: "Failed to create note: #{path}"
+            ],
+            %{"path" => path, "created" => true}
+          )
+      end
     end
   end
 
@@ -382,31 +400,14 @@ defmodule Engram.MCP.Handlers do
     replace = args["replace"] || ""
     occurrence = args["occurrence"] || 0
 
-    # Read the AUTHORITY, not the `notes.content` façade: the façade lags a doc
-    # write until checkpoint, so patching from it can commit an older body and
-    # drop edits made since (#1159).
-    with {:ok, note} <- Notes.get_note(user, vault, path),
-         {:ok, current} <- Notes.authoritative_content(user, note) do
-      if String.contains?(current, find) do
-        {new_content, count} = do_replace(current, find, replace, occurrence)
-
-        # `find` is present but the requested occurrence is past the last one,
-        # so do_replace/4 returns the content untouched. Rewriting the note
-        # with its own bytes and calling that success told the caller the patch
-        # landed. Same rule as the "Text not found" branch below.
-        if count == 0 do
-          {:error, "Occurrence #{occurrence} not found in #{path}"}
-        else
-          patch_upsert(user, vault, path, note, new_content, count)
-        end
-      else
-        # Nothing was replaced, so the patch did not happen. Was `:ok`.
-        {:error, "Text not found in #{path}"}
-      end
-    else
-      {:error, :not_found} -> {:error, "Note not found: #{path}"}
-      {:error, reason} -> log_and_error("patch_note", reason, "Could not read #{path}; retry")
-    end
+    patch_text(
+      user,
+      vault,
+      path,
+      %{find: find, replace: replace, occurrence: occurrence},
+      nil,
+      "patch_note"
+    )
   end
 
   def handle("update_section", user, vault, args) do
@@ -415,71 +416,17 @@ defmodule Engram.MCP.Handlers do
     new_content = args["content"] || ""
     level = args["level"] || 2
 
-    # Same authority rule as patch_note: section surgery against the stale
-    # `notes.content` façade would rewrite the note from an older body (#1159).
-    with {:ok, note} <- Notes.get_note(user, vault, path),
-         {:ok, current} <- Notes.authoritative_content(user, note) do
-      prefix = String.duplicate("#", max(1, min(level, 6))) <> " "
-      target = prefix <> heading
-      lines = String.split(current, "\n")
+    replace_section(user, vault, path, heading, new_content, level, "update_section")
+  end
 
-      start_idx =
-        Enum.find_index(lines, fn line ->
-          String.trim(line) == String.trim(target)
-        end)
+  @text_params ~w(find replace occurrence expected_replacements old_text new_text)
+  @section_params ~w(heading content level)
 
-      if start_idx == nil do
-        # The section was not updated, so this is not a success. Was `:ok`.
-        {:error, "Heading not found: #{target}"}
-      else
-        end_idx =
-          Enum.find_index(Enum.drop(lines, start_idx + 1), fn line ->
-            stripped = String.trim_leading(line)
+  def handle("edit_note", user, vault, %{"mode" => mode} = args) do
+    path = args["path"] || ""
 
-            if String.starts_with?(stripped, "#") do
-              h_level =
-                stripped
-                |> String.graphemes()
-                |> Enum.take_while(&(&1 == "#"))
-                |> length()
-
-              rest = String.slice(stripped, h_level, 1)
-              h_level <= level and rest in [" ", ""]
-            else
-              false
-            end
-          end)
-
-        end_idx =
-          if end_idx == nil,
-            do: length(lines),
-            else: start_idx + 1 + end_idx
-
-        new_lines =
-          Enum.slice(lines, 0, start_idx + 1) ++
-            [String.trim_trailing(new_content, "\n")] ++
-            Enum.slice(lines, end_idx, length(lines))
-
-        final_content = Enum.join(new_lines, "\n")
-
-        Notes.upsert_note(user, vault, %{
-          "path" => path,
-          "content" => final_content,
-          "mtime" => now(),
-          "base_hash" => note.content_hash
-        })
-        |> upsert_reply(
-          [
-            ok: "Section '#{heading}' updated in #{path}",
-            conflict: "Note changed concurrently; retry: #{path}",
-            error: "Failed to update section in #{path}"
-          ],
-          %{"path" => path, "heading" => heading}
-        )
-      end
-    else
-      {:error, :not_found} -> {:error, "Note not found: #{path}"}
-      {:error, reason} -> log_and_error("update_section", reason, "Could not read #{path}; retry")
+    with :ok <- reject_other_mode(args, mode) do
+      run_edit(user, vault, path, mode, args)
     end
   end
 
@@ -661,6 +608,234 @@ defmodule Engram.MCP.Handlers do
   # which answers -32602 for a name that has no definition, so nothing can reach
   # this module with a name it doesn't implement.
 
+  # -- edit_note (replaces patch_note / update_section) --
+
+  defp reject_other_mode(args, "replace_text"),
+    do: reject_params(args, @section_params, "replace_section")
+
+  defp reject_other_mode(args, "replace_section"),
+    do: reject_params(args, @text_params, "replace_text")
+
+  defp reject_other_mode(_args, mode),
+    do: {:error, "mode must be replace_text or replace_section, got #{inspect(mode)}"}
+
+  # A strict-schema client (OpenAI strict mode) sends every declared property
+  # on every call, nulling out the ones it isn't using. `validate_tool_args/2`
+  # already lets an explicit `null` through for an optional key, so `Map.has_key?`
+  # alone treated that as a stray cross-mode param and edit_note would refuse
+  # EVERY such call. Only a present, non-nil value from the other mode is
+  # actually a mistake.
+  defp reject_params(args, params, owner) do
+    case Enum.find(params, &(Map.has_key?(args, &1) and not is_nil(Map.get(args, &1)))) do
+      nil -> :ok
+      p -> {:error, "#{p} is only valid with mode #{owner}"}
+    end
+  end
+
+  defp run_edit(user, vault, path, "replace_text", args) do
+    find = args["find"] || args["old_text"]
+    replace = args["replace"] || args["new_text"]
+
+    cond do
+      is_nil(find) ->
+        {:error, "find is required for mode replace_text"}
+
+      not is_binary(find) ->
+        {:error, "find must be a string"}
+
+      not is_binary(replace) ->
+        {:error, "replace is required for mode replace_text"}
+
+      true ->
+        user
+        |> patch_text(
+          vault,
+          path,
+          %{find: find, replace: replace, occurrence: args["occurrence"] || 0},
+          args["expected_replacements"],
+          "edit_note"
+        )
+        |> tag_mode("replace_text", %{"heading" => nil})
+    end
+  end
+
+  defp run_edit(user, vault, path, "replace_section", args) do
+    cond do
+      not is_binary(args["heading"]) ->
+        {:error, "heading is required for mode replace_section"}
+
+      not is_binary(args["content"]) ->
+        {:error, "content is required for mode replace_section"}
+
+      true ->
+        user
+        |> replace_section(
+          vault,
+          path,
+          args["heading"],
+          args["content"],
+          args["level"] || 2,
+          "edit_note"
+        )
+        |> tag_mode("replace_section", %{"replacements" => nil})
+    end
+  end
+
+  defp tag_mode({:ok, text, structured}, mode, blanks),
+    do: {:ok, text, structured |> Map.merge(blanks) |> Map.put("mode", mode)}
+
+  defp tag_mode(other, _mode, _blanks), do: other
+
+  # Read the AUTHORITY, not the `notes.content` façade: the façade lags a doc
+  # write until checkpoint, so patching from it can commit an older body and
+  # drop edits made since (#1159).
+  #
+  # Both guards below are shared with the hidden `patch_note` alias, which
+  # calls this function directly (bypassing run_edit's cond entirely). They
+  # used to live only in run_edit, which left patch_note free to send the
+  # same corrupting input:
+  #   - `find == ""` passes is_binary and String.contains?/2 (every string
+  #     contains ""), so do_replace/4 happily prepends (occurrence 0) or
+  #     interleaves (occurrence -1) empty "replacements" and reports success —
+  #     a write that corrupts the note while claiming to have worked.
+  #   - `occurrence` has no schema minimum, so e.g. -2 reaches do_replace/4's
+  #     second clause, where `Enum.take(parts, occurrence + 1)` gets a
+  #     NEGATIVE count. Enum.take/drop silently read from the END of the list
+  #     for a negative count instead of refusing, so the "replace" landed at
+  #     the wrong position and the write reported success.
+  defp patch_text(
+         user,
+         vault,
+         path,
+         %{find: find, replace: replace, occurrence: occurrence},
+         expected,
+         op
+       ) do
+    cond do
+      find == "" ->
+        {:error, "find must not be empty for mode replace_text"}
+
+      occurrence != -1 and occurrence < 0 ->
+        {:error, "occurrence must be -1 (all) or 0 or greater"}
+
+      true ->
+        do_patch_text(user, vault, path, find, replace, occurrence, expected, op)
+    end
+  end
+
+  defp do_patch_text(user, vault, path, find, replace, occurrence, expected, op) do
+    with {:ok, note} <- Notes.get_note(user, vault, path),
+         {:ok, current} <- Notes.authoritative_content(user, note) do
+      if String.contains?(current, find) do
+        {new_content, count} = do_replace(current, find, replace, occurrence)
+
+        # `find` is present but the requested occurrence is past the last one,
+        # so do_replace/4 returns the content untouched. Rewriting the note
+        # with its own bytes and calling that success told the caller the patch
+        # landed. Same rule as the "Text not found" branch below.
+        cond do
+          count == 0 ->
+            {:error, "Occurrence #{occurrence} not found in #{path}"}
+
+          is_integer(expected) and expected != count ->
+            {:error,
+             "expected #{expected} replacement(s), found #{count} in #{path}; nothing was changed"}
+
+          true ->
+            patch_upsert(user, vault, path, note, new_content, count)
+        end
+      else
+        # Nothing was replaced, so the patch did not happen. Was `:ok`.
+        {:error, "Text not found in #{path}"}
+      end
+    else
+      {:error, :not_found} -> {:error, "Note not found: #{path}"}
+      {:error, reason} -> log_and_error(op, reason, "Could not read #{path}; retry")
+    end
+  end
+
+  # Same authority rule as patch_text: section surgery against the stale
+  # `notes.content` façade would rewrite the note from an older body (#1159).
+  #
+  # Shared with the hidden `update_section` alias, which calls this function
+  # directly. The heading-match prefix used to clamp `level` to 1..6
+  # (`max(1, min(level, 6))`) while the section-END scan below compared
+  # against the RAW `level` — so level 0 (or > 6) never satisfied
+  # `h_level <= level` for any real heading, the end of the section was never
+  # found, and every following section got swallowed into the replacement.
+  # Refusing the out-of-range level outright (before any heading search)
+  # removes the mismatch instead of also clamping the end-scan to match.
+  defp replace_section(_user, _vault, _path, _heading, _new_content, level, _op)
+       when level < 1 or level > 6 do
+    {:error, "level must be between 1 and 6"}
+  end
+
+  defp replace_section(user, vault, path, heading, new_content, level, op) do
+    with {:ok, note} <- Notes.get_note(user, vault, path),
+         {:ok, current} <- Notes.authoritative_content(user, note) do
+      target = String.duplicate("#", level) <> " " <> heading
+      lines = String.split(current, "\n")
+
+      start_idx =
+        Enum.find_index(lines, fn line ->
+          String.trim(line) == String.trim(target)
+        end)
+
+      if start_idx == nil do
+        # The section was not updated, so this is not a success. Was `:ok`.
+        {:error, "Heading not found: #{target}"}
+      else
+        end_idx =
+          Enum.find_index(Enum.drop(lines, start_idx + 1), fn line ->
+            stripped = String.trim_leading(line)
+
+            if String.starts_with?(stripped, "#") do
+              h_level =
+                stripped
+                |> String.graphemes()
+                |> Enum.take_while(&(&1 == "#"))
+                |> length()
+
+              rest = String.slice(stripped, h_level, 1)
+              h_level <= level and rest in [" ", ""]
+            else
+              false
+            end
+          end)
+
+        end_idx =
+          if end_idx == nil,
+            do: length(lines),
+            else: start_idx + 1 + end_idx
+
+        new_lines =
+          Enum.slice(lines, 0, start_idx + 1) ++
+            [String.trim_trailing(new_content, "\n")] ++
+            Enum.slice(lines, end_idx, length(lines))
+
+        final_content = Enum.join(new_lines, "\n")
+
+        Notes.upsert_note(user, vault, %{
+          "path" => path,
+          "content" => final_content,
+          "mtime" => now(),
+          "base_hash" => note.content_hash
+        })
+        |> upsert_reply(
+          [
+            ok: "Section '#{heading}' updated in #{path}",
+            conflict: "Note changed concurrently; retry: #{path}",
+            error: "Failed to update section in #{path}"
+          ],
+          %{"path" => path, "heading" => heading}
+        )
+      end
+    else
+      {:error, :not_found} -> {:error, "Note not found: #{path}"}
+      {:error, reason} -> log_and_error(op, reason, "Could not read #{path}; retry")
+    end
+  end
+
   # -- Public helpers --
 
   @doc """
@@ -712,8 +887,15 @@ defmodule Engram.MCP.Handlers do
   # Declares the read row's content_hash as `base_hash` so a write landing
   # between the read and the upsert 409s instead of being deleted by the
   # full-content merge, then retries ONCE on a fresh read. `rebuild` receives
-  # the current content and returns the new content. Public (doc: false) so
-  # the CAS interleaving is unit-testable with a racing rebuild fun.
+  # the current content and returns the new content (a binary), OR
+  # `{:error, reason}` to refuse the write entirely: rmw_upsert returns that
+  # error as-is and writes nothing. Because `rebuild` is invoked fresh on
+  # every attempt (including the retry, against the RE-READ content), any
+  # check a caller puts inside `rebuild` runs against the content actually
+  # being rebuilt from every time, not a snapshot read before rmw_upsert was
+  # called, which a concurrent write could have moved past. A guard failure
+  # is not a version conflict, so it never triggers the retry. Public (doc:
+  # false) so the CAS interleaving is unit-testable with a racing rebuild fun.
   def rmw_upsert(user, vault, path, rebuild, attempt \\ 0) do
     with {:ok, note} <- Notes.get_note(user, vault, path),
          # Rebuild from the AUTHORITY, not the `notes.content` façade. The façade
@@ -721,10 +903,11 @@ defmodule Engram.MCP.Handlers do
          # it can commit a shorter or older body (#1159). base_hash still guards
          # the concurrent-REST-write race, but it cannot detect façade lag:
          # content and content_hash go stale together.
-         {:ok, current} <- Notes.authoritative_content(user, note) do
+         {:ok, current} <- Notes.authoritative_content(user, note),
+         {:ok, new_content} <- rebuild_or_refuse(rebuild.(current)) do
       case Notes.upsert_note(user, vault, %{
              "path" => path,
-             "content" => rebuild.(current),
+             "content" => new_content,
              "mtime" => now(),
              "base_hash" => note.content_hash
            }) do
@@ -736,6 +919,9 @@ defmodule Engram.MCP.Handlers do
       end
     end
   end
+
+  defp rebuild_or_refuse(content) when is_binary(content), do: {:ok, content}
+  defp rebuild_or_refuse({:error, _reason} = error), do: error
 
   @doc false
   # Render Search.search/4 output for the search_notes tool. `names` maps
@@ -793,30 +979,40 @@ defmodule Engram.MCP.Handlers do
   # Render list_folder output. Public (doc: false) so both branches — including
   # the failure one, which no fixture can force through Notes — are directly
   # testable, the same reason `render_search/2` is public.
-  def render_folder({:ok, notes, atts}, folder) do
+  def render_folder({:ok, notes, atts, folders}, folder) do
     label = folder_label(folder)
 
     text =
-      if notes == [] and atts == [] do
+      if notes == [] and atts == [] and folders == [] do
         "No notes found in folder: #{label}"
       else
-        header = [
-          "**Folder:** #{label}",
-          "",
-          "| Title | Path | Tags |",
-          "|-------|------|------|"
-        ]
+        entry_rows =
+          if notes == [] and atts == [] do
+            []
+          else
+            note_rows =
+              Enum.map(notes, fn n ->
+                tags = if n.tags && n.tags != [], do: Enum.join(n.tags, ", "), else: ""
+                "| #{n.title} | #{n.path} | #{tags} |"
+              end)
 
-        note_rows =
-          Enum.map(notes, fn n ->
-            tags = if n.tags && n.tags != [], do: Enum.join(n.tags, ", "), else: ""
-            "| #{n.title} | #{n.path} | #{tags} |"
-          end)
+            att_rows =
+              Enum.map(atts, fn a ->
+                "| #{Path.basename(a.path)} | #{a.path} | (attachment) |"
+              end)
 
-        att_rows =
-          Enum.map(atts, fn a -> "| #{Path.basename(a.path)} | #{a.path} | (attachment) |" end)
+            ["", "| Title | Path | Tags |", "|-------|------|------|"] ++ note_rows ++ att_rows
+          end
 
-        Enum.join(header ++ note_rows ++ att_rows, "\n")
+        folder_rows =
+          if folders == [] do
+            []
+          else
+            rows = Enum.map(folders, fn f -> "| #{f["folder"]} | #{f["count"]} |" end)
+            ["", "**Subfolders:**", "", "| Folder | Notes |", "|--------|-------|"] ++ rows
+          end
+
+        Enum.join(["**Folder:** #{label}"] ++ entry_rows ++ folder_rows, "\n")
       end
 
     structured = %{
@@ -827,7 +1023,8 @@ defmodule Engram.MCP.Handlers do
           %{"title" => n.title, "path" => n.path, "tags" => n.tags || []}
         end),
       "attachments" =>
-        Enum.map(atts, fn a -> %{"name" => Path.basename(a.path), "path" => a.path} end)
+        Enum.map(atts, fn a -> %{"name" => Path.basename(a.path), "path" => a.path} end),
+      "folders" => folders
     }
 
     {:ok, text, structured}
@@ -853,6 +1050,64 @@ defmodule Engram.MCP.Handlers do
 
   defp folder_label(folder) when folder in ["", nil], do: "(root)"
   defp folder_label(folder), do: folder
+
+  # Direct subfolders of `folder`, or every descendant when `recursive?`.
+  # `all_folders` is the full vault-wide list from `list_folders_with_counts/2`
+  # (already fetched once by the caller); filtered here in BEAM rather than
+  # re-querying per folder depth.
+  #
+  # `list_folders_with_counts/2` only returns a row for a folder that holds a
+  # note DIRECTLY, so an intermediate folder (e.g. "P" when only "P/Q/x.md"
+  # exists) has no row of its own. Deriving children straight from existing
+  # rows made "P" invisible at the root — its only note was unreachable by
+  # navigation. Instead: derive every child/ancestor path from the full path
+  # of each descendant ROW (which always exists, even when intermediate
+  # segments don't), and look up each derived path's count in the row map,
+  # defaulting to 0 when there is none.
+  defp subfolders(all_folders, folder, recursive?) do
+    prefix = if folder == "", do: "", else: folder <> "/"
+    counts = Map.new(all_folders, &{&1.folder || "", &1.count})
+
+    descendant_rows =
+      counts
+      |> Map.keys()
+      |> Enum.filter(&(&1 != "" and &1 != folder and String.starts_with?(&1, prefix)))
+
+    paths =
+      if recursive? do
+        descendant_rows |> Enum.flat_map(&ancestor_chain(&1, folder)) |> Enum.uniq()
+      else
+        descendant_rows |> Enum.map(&first_child(&1, folder)) |> Enum.uniq()
+      end
+
+    paths
+    |> Enum.sort()
+    |> Enum.map(&%{"folder" => &1, "count" => Map.get(counts, &1, 0)})
+  end
+
+  # The single path segment of `descendant` immediately under `folder` —
+  # e.g. "P/Q/R" under folder "" -> "P", under folder "P" -> "P/Q".
+  defp first_child(descendant, folder) do
+    prefix = if folder == "", do: "", else: folder <> "/"
+    segment = descendant |> String.replace_prefix(prefix, "") |> String.split("/") |> hd()
+    if folder == "", do: segment, else: folder <> "/" <> segment
+  end
+
+  # Every intermediate ancestor path strictly between `folder` and
+  # `descendant`, inclusive of `descendant` itself — e.g. "P/Q/R" under
+  # folder "" -> ["P", "P/Q", "P/Q/R"].
+  defp ancestor_chain(descendant, folder) do
+    prefix = if folder == "", do: "", else: folder <> "/"
+    segments = descendant |> String.replace_prefix(prefix, "") |> String.split("/")
+
+    {chain, _} =
+      Enum.reduce(segments, {[], folder}, fn seg, {acc, path} ->
+        new_path = if path == "", do: seg, else: path <> "/" <> seg
+        {[new_path | acc], new_path}
+      end)
+
+    Enum.reverse(chain)
+  end
 
   defp format_search_result(r, i, names) do
     ["## Result #{i} (score: #{Float.round(r.score, 3)})"]
@@ -905,6 +1160,12 @@ defmodule Engram.MCP.Handlers do
   #   * `:note_deleted` is a distinct outcome, not a generic failure. Callers
   #     that name a `:deleted` message report it as one; the rest fold it into
   #     `:error`, exactly as their own ladders did.
+  #   * a binary reason is a message a `rmw_upsert` rebuild function already
+  #     built for the caller (e.g. a content-shape guard), so it is passed
+  #     through verbatim rather than replaced with the generic `msgs[:error]`.
+  #     `Notes.upsert_note/4`'s own error reasons are never binaries (its spec
+  #     is Ecto.Changeset.t() | atom() | {atom(), ...}), so this can't shadow
+  #     an internal failure detail leaking to the caller.
   # Every failure here used to come back as `{:ok, apologetic_sentence}` — a
   # write that did not happen, reported as one that did. A model reading only
   # `isError` had no way to tell a landed write from a version conflict, so it
@@ -915,7 +1176,70 @@ defmodule Engram.MCP.Handlers do
       {:ok, _note} -> {:ok, msgs[:ok], structured}
       {:error, :version_conflict, _note} -> {:error, msgs[:conflict]}
       {:error, :note_deleted} -> {:error, msgs[:deleted] || msgs[:error]}
+      {:error, reason} when is_binary(reason) -> {:error, reason}
       {:error, _reason} -> {:error, msgs[:error]}
+    end
+  end
+
+  # "end" stays byte-identical to the pre-position append (existing tests
+  # pin the old behavior). "start" inserts right after the frontmatter
+  # fence when present, so frontmatter bytes are never touched; with no
+  # frontmatter (or an empty note) it goes to the very top.
+  defp place_text(content, text, "end"), do: String.trim_trailing(content, "\n") <> "\n" <> text
+
+  defp place_text(content, text, "start") do
+    case Frontmatter.split(content) do
+      {nil, body} ->
+        text <> "\n" <> body
+
+      {_frontmatter, body} ->
+        # `content` minus the `body` suffix is everything up to and including
+        # the closing fence. When the note is ONLY frontmatter with no
+        # trailing newline, `body` is "" and that prefix is `content`
+        # unchanged (ends in "---", not "\n") — gluing `text` straight onto
+        # the fence instead of starting a new line after it, exactly the
+        # shape Frontmatter.project/4 always guarantees on write
+        # (`"---\n" <> block <> "---\n" <> body`, frontmatter.ex ~418).
+        prefix = String.replace_suffix(content, body, "")
+        prefix = if String.ends_with?(prefix, "\n"), do: prefix, else: prefix <> "\n"
+        prefix <> text <> "\n" <> body
+    end
+  end
+
+  # nil (missing key, or an explicit JSON null from a strict-schema client) is
+  # the only thing that defaults to "end". Everything else, including the
+  # boolean false, must be exactly "end" or "start" or it is a fixable error
+  # rather than a silent default.
+  defp resolve_append_position(nil), do: {:ok, "end"}
+  defp resolve_append_position(position) when position in ["end", "start"], do: {:ok, position}
+  defp resolve_append_position(_), do: {:error, "position must be end or start"}
+
+  # position "end" never changes the note's shape, so it needs no guard.
+  #
+  # position "start" prepends `text` in front of the current body (after any
+  # frontmatter fence). The resulting body (`text <> "\n" <> body`) is what
+  # CrdtBridge.ingest_plaintext/2 re-splits into frontmatter/body on the next
+  # write, and what CrdtBridge.normalize_doc/1 re-splits on the next CRDT room
+  # bind. If that combined body itself parses as starting with real
+  # frontmatter (e.g. caller text opens with "---" and later text closes it
+  # into a YAML map), the accidental block gets silently lifted into the
+  # note's real frontmatter, regardless of whether the note had frontmatter
+  # before this write, since the body is checked independently of any
+  # existing frontmatter prefix. Refuse rather than write something that only
+  # misparses later.
+  defp guard_start_frontmatter_safety("end", _current, _text), do: :ok
+
+  defp guard_start_frontmatter_safety("start", current, text) do
+    {_frontmatter, body} = Frontmatter.split(current)
+
+    case Frontmatter.split(text <> "\n" <> body) do
+      {nil, _} ->
+        :ok
+
+      {_frontmatter, _body} ->
+        {:error,
+         "text would be read as frontmatter at the top of this note; start it with " <>
+           "something other than a --- line, or use position end"}
     end
   end
 
@@ -1011,7 +1335,7 @@ defmodule Engram.MCP.Handlers do
     # body} and already handles the edge cases the regexes here used to miss
     # (closing fence at EOF, CRLF, empty block). Stripping a leading BOM is the
     # only thing this call site adds over it.
-    {fm, body} = content |> String.replace_prefix("﻿", "") |> Engram.Notes.Frontmatter.split()
+    {fm, body} = content |> String.replace_prefix("﻿", "") |> Frontmatter.split()
 
     # Suppress an injected field only when the body actually carries it: a
     # frontmatter `title:`/`tags:` key, or (for the title) a body `# H1`.

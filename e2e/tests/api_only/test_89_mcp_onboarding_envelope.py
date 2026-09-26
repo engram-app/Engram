@@ -72,7 +72,7 @@ def test_mcp_onboarding_refusal_is_jsonrpc_shaped():
                 "jsonrpc": "2.0",
                 "id": 4242,
                 "method": "tools/call",
-                "params": {"name": "list_folders", "arguments": {}},
+                "params": {"name": "list_folder", "arguments": {"folder": "", "recursive": True}},
             },
             headers=headers,
             timeout=15,

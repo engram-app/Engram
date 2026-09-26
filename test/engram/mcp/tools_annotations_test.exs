@@ -10,10 +10,10 @@ defmodule Engram.MCP.ToolsAnnotationsTest do
                 suggest_folder get_note get_notes get_attachment_upload_target)
 
   # Overwrites or removes content the user wrote.
-  @destructive ~w(write_note patch_note update_section delete_note delete_folder)
+  @destructive ~w(write_note edit_note patch_note update_section delete_note delete_folder)
 
   test "every tool declares a title and all four hints" do
-    for tool <- Tools.list() do
+    for tool <- Tools.all_callable() do
       assert is_binary(tool.title) and tool.title != "", "#{tool.name} has no title"
 
       for hint <- ~w(readOnlyHint destructiveHint idempotentHint openWorldHint) do
@@ -23,21 +23,21 @@ defmodule Engram.MCP.ToolsAnnotationsTest do
   end
 
   test "read tools are read-only and nothing else is" do
-    for tool <- Tools.list() do
+    for tool <- Tools.all_callable() do
       assert tool.annotations["readOnlyHint"] == tool.name in @read_only,
              "#{tool.name} readOnlyHint is wrong"
     end
   end
 
   test "tools that overwrite or delete content are marked destructive" do
-    for tool <- Tools.list() do
+    for tool <- Tools.all_callable() do
       assert tool.annotations["destructiveHint"] == tool.name in @destructive,
              "#{tool.name} destructiveHint is wrong"
     end
   end
 
   test "no tool reaches outside the user's own vault" do
-    for tool <- Tools.list() do
+    for tool <- Tools.all_callable() do
       refute tool.annotations["openWorldHint"], "#{tool.name} claims openWorldHint"
     end
   end

@@ -48,7 +48,7 @@ async def test_mcp_rest_obsidian_agree(vault_b, cdp_b, api_sync):
     note = api_sync.wait_for_note_content(PATH, "v3 via Obsidian", timeout=RT_TIMEOUT)
     assert note is not None, "Obsidian push never reached the server"
 
-    mcp_resp, status = api_sync.mcp_call("get_note", {"source_path": PATH})
+    mcp_resp, status = api_sync.mcp_call("get_notes", {"paths": [PATH]})
     assert status == 200
     assert "v3 via Obsidian" in _mcp_text(mcp_resp), (
         "MCP read-back disagrees with what Obsidian pushed"
