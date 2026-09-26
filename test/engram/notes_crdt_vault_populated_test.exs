@@ -12,6 +12,7 @@ defmodule Engram.NotesCrdtVaultPopulatedTest do
   use Engram.DataCase, async: false
 
   alias Engram.Notes
+  alias Engram.Vaults.WelcomeNote
 
   setup do
     user = insert(:user)
@@ -84,10 +85,10 @@ defmodule Engram.NotesCrdtVaultPopulatedTest do
     setup %{user: user, vault: vault} do
       # The controllers that seed always hold a user with a DEK; so must this.
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-      :ok = Engram.Vaults.WelcomeNote.seed(user, vault)
+      :ok = WelcomeNote.seed(user, vault)
       # `seed/2` swallows every failure and returns :ok. Without this, a seed
       # that silently wrote nothing would let every test below pass vacuously.
-      assert {:ok, _} = Notes.get_note(user, vault, Engram.Vaults.WelcomeNote.path())
+      assert {:ok, _} = Notes.get_note(user, vault, WelcomeNote.path())
       {:ok, user: user}
     end
 
@@ -130,7 +131,7 @@ defmodule Engram.NotesCrdtVaultPopulatedTest do
   test "a batch holding only the welcome path does not announce", %{user: user, vault: vault} do
     {:ok, _} =
       Notes.batch_upsert_notes(user, vault, [
-        %{"path" => Engram.Vaults.WelcomeNote.path(), "content" => "mine", "mtime" => 1.0}
+        %{"path" => WelcomeNote.path(), "content" => "mine", "mtime" => 1.0}
       ])
 
     refute_receive %Phoenix.Socket.Broadcast{event: "vault_populated"}, 200
