@@ -51,6 +51,25 @@ defmodule Engram.Logger.SafeException do
   keeps at most its atom tag.
   """
   @spec sanitize_reason(term()) :: term()
+  # gen_statem: `{class, reason, stack}`. Logger.Translator matches this exact
+  # shape; breaking it makes Logger print the whole report inspected.
+  def sanitize_reason({class, reason, stack})
+      when class in [:error, :exit, :throw] and is_list(stack) do
+    if stack == [] or stacktrace?(stack) do
+      inner =
+        if class == :error,
+          do: reason |> to_exception(stack) |> sanitize(),
+          else: sanitize_term(reason)
+
+      {class, inner, strip_args(stack)}
+    else
+      sanitize_term({class, reason, stack})
+    end
+  end
+
+  # gen_event wraps a handler crash as `{:EXIT, why}`.
+  def sanitize_reason({:EXIT, why}), do: {:EXIT, sanitize_reason(why)}
+
   def sanitize_reason({reason, stack}) when is_list(stack) and stack != [] do
     if stacktrace?(stack) do
       {reason |> to_exception(stack) |> sanitize(), strip_args(stack)}
@@ -67,15 +86,26 @@ defmodule Engram.Logger.SafeException do
   argument-free frames, whatever the kind. `:exit` and `:throw` values become a
   `RedactedError` naming the kind and the value's safe tag.
   """
-  @spec to_safe_exception(:error | :exit | :throw, term(), list()) :: {Exception.t(), list()}
-  def to_safe_exception(:error, reason, stack) when is_list(stack) do
-    {reason |> to_exception(stack) |> sanitize(), strip_args(stack)}
+  #
+  # Total over `kind`, because callers do not agree on it: Bandit reports a
+  # raise as `:exit` (Bandit.Telemetry.span_exception/4), and Oban records a
+  # job process that died as `{:EXIT, pid}`. An exception is sanitized as an
+  # exception whatever kind it arrived under.
+  @spec to_safe_exception(term(), term(), term()) :: {Exception.t(), list()}
+  def to_safe_exception(kind, reason, stack) do
+    stack = if is_list(stack), do: stack, else: []
+
+    if is_exception(reason) or kind == :error do
+      {reason |> to_exception(stack) |> sanitize(), strip_args(stack)}
+    else
+      label = kind_label(kind)
+      tag = reason |> sanitize_reason() |> Metadata.safe_reason()
+      {%RedactedError{type: label, message: "#{label}: #{tag}"}, strip_args(stack)}
+    end
   end
 
-  def to_safe_exception(kind, reason, stack) when kind in [:exit, :throw] do
-    tag = reason |> sanitize_reason() |> Metadata.safe_reason()
-    {%RedactedError{type: kind, message: "#{kind}: #{tag}"}, strip_args(List.wrap(stack))}
-  end
+  defp kind_label(kind) when kind in [:exit, :throw], do: kind
+  defp kind_label(_), do: :exit
 
   @doc """
   `Exception.format/3` of the sanitized exception: type, allowlisted message,

@@ -16,6 +16,7 @@ defmodule Engram.Logger.ExceptionEgressTest do
 
   alias Engram.Logger.RedactedError
   alias Engram.Logger.SafeException
+  alias Engram.Oban.SafeEngine
 
   @canary "Medical/canary-e61f.md"
 
@@ -76,6 +77,24 @@ defmodule Engram.Logger.ExceptionEgressTest do
       assert %RedactedError{type: MatchError} = safe
     end
 
+    test "gen_statem's {class, reason, stack} keeps its shape" do
+      {e, st} = match_error()
+
+      assert {:error, %RedactedError{type: MatchError}, safe_st} =
+               SafeException.sanitize_reason({:error, e, st})
+
+      assert Enum.all?(safe_st, fn {_m, _f, arity, _loc} -> is_integer(arity) end)
+
+      assert {:exit, :"[redacted]", _} = SafeException.sanitize_reason({:exit, payload(), st})
+    end
+
+    test "gen_event's {:EXIT, {exception, stack}} keeps its exception type" do
+      {e, st} = match_error()
+
+      assert {:EXIT, {%RedactedError{type: MatchError}, _}} =
+               SafeException.sanitize_reason({:EXIT, {e, st}})
+    end
+
     test "exit reasons keep their atom tags only" do
       assert SafeException.sanitize_reason(:normal) == :normal
       assert SafeException.sanitize_reason({:shutdown, :closed}) == {:shutdown, :closed}
@@ -115,6 +134,38 @@ defmodule Engram.Logger.ExceptionEgressTest do
 
       assert log =~ "terminating"
       assert log =~ "MatchError"
+      refute_canary(log)
+    end
+
+    defmodule StatemCrasher do
+      @behaviour :gen_statem
+
+      def callback_mode, do: :handle_event_function
+      def init(data), do: {:ok, :idle, data}
+
+      def handle_event(:info, {:crdt_create, payload}, _state, _data) do
+        %{"path" => "Expected/" <> _} = payload
+        :keep_state_and_data
+      end
+    end
+
+    # DBConnection, Postgrex.Notifications and Finch HTTP/2 pools are all
+    # gen_statems. Their report carries `reason: {class, reason, stack}` plus
+    # `queue`/`postponed` (pending messages), and the translator matches that
+    # shape: breaking it makes Logger print "Failure while translating" with
+    # the WHOLE report inspected.
+    test "a gen_statem crash over a payload map" do
+      log =
+        capture_crash(fn ->
+          {:ok, pid} = :gen_statem.start(StatemCrasher, nil, [])
+          ref = Process.monitor(pid)
+          send(pid, {:crdt_create, payload()})
+          {pid, ref}
+        end)
+
+      assert log =~ "terminating"
+      assert log =~ "MatchError"
+      refute log =~ "Failure while translating"
       refute_canary(log)
     end
 
@@ -159,22 +210,35 @@ defmodule Engram.Logger.ExceptionEgressTest do
       assert http[:http_options][:log_exceptions_with_status_codes] == []
     end
 
+    # Bandit.Telemetry.span_exception/4 rewrites `kind: :error` to `:exit`
+    # before emitting, so :exit is what production sends for a raise.
+    defp bandit_exception(e, st) do
+      capture_log(fn ->
+        EngramWeb.RequestExceptionLogger.handle_event(
+          [:bandit, :request, :exception],
+          %{},
+          %{kind: :exit, exception: e, stacktrace: st},
+          nil
+        )
+      end)
+    end
+
     test "our replacement logs the type and location, never the term" do
       {e, st} = match_error()
-
-      log =
-        capture_log(fn ->
-          EngramWeb.RequestExceptionLogger.handle_event(
-            [:bandit, :request, :exception],
-            %{},
-            %{kind: :error, exception: e, stacktrace: st},
-            nil
-          )
-        end)
+      log = bandit_exception(e, st)
 
       assert log =~ "MatchError"
+      refute log =~ "exit:"
       assert log =~ "exception_egress_test.exs"
       refute_canary(log)
+    end
+
+    test "an allowlisted exception keeps its type and message" do
+      e = %DBConnection.ConnectionError{message: "tcp recv: closed"}
+      log = bandit_exception(e, [])
+
+      assert log =~ "DBConnection.ConnectionError"
+      assert log =~ "tcp recv: closed"
     end
 
     test "a 4xx exception (not a server error) is not logged" do
@@ -196,13 +260,13 @@ defmodule Engram.Logger.ExceptionEgressTest do
 
   describe "Oban errors column" do
     test "prod config routes jobs through the sanitizing engine" do
-      assert Application.fetch_env!(:engram, Oban)[:engine] == Engram.Oban.SafeEngine
+      assert Application.fetch_env!(:engram, Oban)[:engine] == SafeEngine
     end
 
     test "the engine implements every Oban.Engines.Basic callback" do
       for {fun, arity} <- Oban.Engines.Basic.__info__(:functions),
           {fun, arity} in Oban.Engine.behaviour_info(:callbacks) do
-        assert function_exported?(Engram.Oban.SafeEngine, fun, arity),
+        assert function_exported?(SafeEngine, fun, arity),
                "SafeEngine is missing #{fun}/#{arity}"
       end
     end
@@ -211,10 +275,25 @@ defmodule Engram.Logger.ExceptionEgressTest do
       {e, st} = match_error()
       job = %Oban.Job{attempt: 1, unsaved_error: %{kind: :error, reason: e, stacktrace: st}}
 
-      %{error: stored} = job |> Engram.Oban.SafeEngine.sanitize_job() |> Oban.Job.format_attempt()
+      %{error: stored} = job |> SafeEngine.sanitize_job() |> Oban.Job.format_attempt()
 
       assert stored =~ "MatchError"
       assert stored =~ "exception_egress_test.exs"
+      refute_canary(stored)
+    end
+
+    # Oban's producer records a job process that died with an EXIT as
+    # `kind: {:EXIT, pid}` (queues/producer.ex). Raising here would leave the
+    # job `executing` with no error recorded.
+    test "a job that died with an EXIT is recorded, not crashed on" do
+      job = %Oban.Job{
+        attempt: 1,
+        unsaved_error: %{kind: {:EXIT, self()}, reason: {:shutdown, payload()}, stacktrace: []}
+      }
+
+      %{error: stored} = job |> SafeEngine.sanitize_job() |> Oban.Job.format_attempt()
+
+      assert stored =~ ":shutdown"
       refute_canary(stored)
     end
 
@@ -223,7 +302,7 @@ defmodule Engram.Logger.ExceptionEgressTest do
       e = Oban.PerformError.exception({Engram.Workers.EmbedNote, reason})
       job = %Oban.Job{attempt: 1, unsaved_error: %{kind: :error, reason: e, stacktrace: []}}
 
-      %{error: stored} = job |> Engram.Oban.SafeEngine.sanitize_job() |> Oban.Job.format_attempt()
+      %{error: stored} = job |> SafeEngine.sanitize_job() |> Oban.Job.format_attempt()
 
       assert stored =~ ":error"
       refute_canary(stored)

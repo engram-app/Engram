@@ -37,6 +37,9 @@ defmodule Engram.Logger.SafeTranslator do
       |> update(:reason, &SafeException.sanitize_reason/1)
       |> update(:last_message, &summarize/1)
       |> update(:state, fn _ -> @redacted end)
+      # gen_statem: pending and postponed events, printed at every level.
+      |> update(:queue, &summarize_all/1)
+      |> update(:postponed, &summarize_all/1)
 
     {:ok, {:logger, safe}}
   end
@@ -94,4 +97,7 @@ defmodule Engram.Logger.SafeTranslator do
   end
 
   defp summarize(_message), do: @redacted
+
+  defp summarize_all(list) when is_list(list), do: Enum.map(list, &summarize/1)
+  defp summarize_all(_), do: []
 end
