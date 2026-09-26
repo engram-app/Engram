@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.35.0](https://github.com/engram-app/Engram/compare/0.34.0...0.35.0) (2026-09-26)
+
+
+### Features
+
+* **mcp:** gate MCP tool definitions on TDQS ([#1781](https://github.com/engram-app/Engram/issues/1781)) ([5fdbcb0](https://github.com/engram-app/Engram/commit/5fdbcb04d3ed1ce0b3d1a7758800a3bc4bb1b518))
+
+
+### Bug Fixes
+
+* **crdt:** stop one live room from pinning the LRU in paced mode ([#1778](https://github.com/engram-app/Engram/issues/1778)) ([bf5ffe9](https://github.com/engram-app/Engram/commit/bf5ffe98531495982381300335f50228847ef950))
+* **e2e:** assert test_77 transport by count, not wall clock ([#1773](https://github.com/engram-app/Engram/issues/1773)) ([27072e3](https://github.com/engram-app/Engram/commit/27072e3954546184952490f996d449517689bdaa))
+* **onboarding:** detour plugin-first signups through the wizard ([#1776](https://github.com/engram-app/Engram/issues/1776)) ([e458445](https://github.com/engram-app/Engram/commit/e458445c0dc2d9649ab6f3675ecff86df8ae8d61))
+* **rls:** clear app.current_tenant when with_tenant exits ([#1779](https://github.com/engram-app/Engram/issues/1779)) ([0775d24](https://github.com/engram-app/Engram/commit/0775d24874a9529b0d47ec0048217f518bba4850))
+* **rls:** dedicated engram_maintenance role for the maintenance pool ([#1774](https://github.com/engram-app/Engram/issues/1774)) ([68ee3db](https://github.com/engram-app/Engram/commit/68ee3db146b16625740872e85458f0c970b4eb05))
+* **rls:** put account_exports under the tenant policy ([#1759](https://github.com/engram-app/Engram/issues/1759)) ([0a0b4c9](https://github.com/engram-app/Engram/commit/0a0b4c99948db7bc9768800f563b50a7119125ea))
+* **rls:** route subscriptions access for tenant policy ([#1771](https://github.com/engram-app/Engram/issues/1771)) ([21c517f](https://github.com/engram-app/Engram/commit/21c517f1c8f64a7f9790dd3eae3257a9b0fa2d59))
+* **security:** revoke vault-restricted API keys with their vault ([#1770](https://github.com/engram-app/Engram/issues/1770)) ([e6b6a9a](https://github.com/engram-app/Engram/commit/e6b6a9a880253e112245d7f85acac94b8d5faceb))
+* **sync:** fire vault_populated past the seeded welcome note ([#1783](https://github.com/engram-app/Engram/issues/1783)) ([8b0cf51](https://github.com/engram-app/Engram/commit/8b0cf518c8a693b48eba5897d32ed2c40f9d0a12))
+
 ## [0.34.0](https://github.com/engram-app/Engram/compare/0.33.0...0.34.0) (2026-09-25)
 
 
