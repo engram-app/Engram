@@ -4,6 +4,11 @@ defmodule Engram.Billing.EntitlementCacheTest do
   alias Engram.Billing.EntitlementCache
 
   setup do
+    # evict_all/0 also CacheSync-broadcasts to this node's own GenServer, so a
+    # previous test's on_exit can leave a queued "clear everything" message.
+    # Unprocessed, it wipes entries this test caches the moment anything
+    # (like the :sys.get_state below) makes the GenServer run. Drain it first.
+    :sys.get_state(EntitlementCache)
     on_exit(fn -> EntitlementCache.evict_all() end)
     :ok
   end

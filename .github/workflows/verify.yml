@@ -2900,8 +2900,9 @@ jobs:
       - name: TDQS lint (MCP tool definitions)
         # Deterministic, no model, no key (TDQS stages 1, 2 and 4). Fails on
         # a missing description, missing annotations, uncovered parameters,
-        # or a shadowing name. Scoring with a model is the separate
-        # mcp-tdqs-score workflow (report-only).
+        # or a shadowing name. Model-graded scoring is NOT run in CI; the
+        # tdqs.dev / Glama hosted report covers that after each prod release
+        # (see docs/context/mcp-tdqs-baseline.md).
         #
         # npm_config_cache: isolate npx's package cache per runner. The
         # shared ~/.npm cache on a common HOME risks an ENOTEMPTY race when

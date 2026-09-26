@@ -84,6 +84,80 @@ defmodule Engram.MCP.HandlersTest do
                  content <> "\nappended"
                end)
     end
+
+    # append_to_note's position: start guard runs INSIDE the rebuild function
+    # so it re-checks the content rmw_upsert actually rebuilds from on every
+    # attempt, not a content snapshot read before rmw_upsert's own read/retry
+    # loop (a pre-read-then-check-then-call-rmw_upsert shape would let a
+    # concurrent write land between the check and the real read/write and
+    # slip an unsafe shape through).
+    test "rebuild may refuse with {:error, msg} and nothing is written", ctx do
+      %{user: user, vault: vault} = ctx
+      alias Engram.Notes
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "refuse.md",
+          "content" => "base",
+          "mtime" => 1.0
+        })
+
+      assert {:error, "nope"} =
+               Handlers.rmw_upsert(user, vault, "refuse.md", fn _content -> {:error, "nope"} end)
+
+      {:ok, note} = Notes.get_note(user, vault, "refuse.md")
+      assert {:ok, "base"} = Notes.authoritative_content(user, note)
+    end
+
+    test "a rebuild error check runs against the FRESH re-read on retry, not the stale content",
+         ctx do
+      %{user: user, vault: vault} = ctx
+      alias Engram.Notes
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{
+          "path" => "toctou.md",
+          "content" => "safe",
+          "mtime" => 1.0
+        })
+
+      raced = :counters.new(1, [])
+
+      result =
+        Handlers.rmw_upsert(user, vault, "toctou.md", fn content ->
+          if :counters.get(raced, 1) == 0 do
+            :counters.add(raced, 1, 1)
+
+            # A concurrent write lands between rmw_upsert's read (which handed
+            # us the safe "safe" content) and its write, moving the row to
+            # "unsafe". This forces a version_conflict retry.
+            {:ok, _} =
+              Notes.upsert_note(user, vault, %{
+                "path" => "toctou.md",
+                "content" => "unsafe",
+                "mtime" => 2.0
+              })
+
+            content <> "\nappended"
+          else
+            # Retry: rmw_upsert re-read the row, so `content` here MUST be the
+            # fresh "unsafe" value, never the stale "safe" one from the first
+            # call. A check based on a pre-read snapshot would never see this.
+            if content == "unsafe" do
+              {:error, "refused: unsafe content"}
+            else
+              content <> "\nappended"
+            end
+          end
+        end)
+
+      assert {:error, "refused: unsafe content"} = result
+
+      {:ok, note} = Notes.get_note(user, vault, "toctou.md")
+      assert {:ok, "unsafe"} = Notes.authoritative_content(user, note)
+    end
   end
 
   describe "rename_folder handler" do
@@ -322,6 +396,117 @@ defmodule Engram.MCP.HandlersTest do
       assert body =~ "Docs/p.png"
       assert body =~ "(attachment)"
       refute body =~ "No notes found"
+    end
+  end
+
+  describe "list_folder subfolders (absorbs list_folders, #1660 3.5)" do
+    test "reports direct subfolders; recursive reports every descendant with counts", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      for p <- ["A/a.md", "A/B/b.md", "A/B/C/c.md", "Z/z.md"],
+          do:
+            {:ok, _} =
+              Notes.upsert_note(user, vault, %{"path" => p, "content" => "x", "mtime" => 1.0})
+
+      {:ok, _, direct} = Handlers.handle("list_folder", user, vault, %{"folder" => "A"})
+      assert Enum.map(direct["folders"], & &1["folder"]) == ["A/B"]
+
+      {:ok, _, all} =
+        Handlers.handle("list_folder", user, vault, %{"folder" => "", "recursive" => true})
+
+      assert Enum.map(all["folders"], & &1["folder"]) |> Enum.sort() == ["A", "A/B", "A/B/C", "Z"]
+      assert Enum.find(all["folders"], &(&1["folder"] == "A/B"))["count"] == 1
+    end
+
+    test "non-recursive root lists only top-level folders", %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      for p <- ["A/a.md", "A/B/b.md", "Z/z.md"],
+          do:
+            {:ok, _} =
+              Notes.upsert_note(user, vault, %{"path" => p, "content" => "x", "mtime" => 1.0})
+
+      {:ok, _, root} = Handlers.handle("list_folder", user, vault, %{"folder" => ""})
+      assert Enum.map(root["folders"], & &1["folder"]) |> Enum.sort() == ["A", "Z"]
+    end
+
+    test "a folder with no subfolders returns an empty folders list", %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Leaf/a.md", "content" => "x", "mtime" => 1.0})
+
+      {:ok, _, structured} = Handlers.handle("list_folder", user, vault, %{"folder" => "Leaf"})
+      assert structured["folders"] == []
+    end
+
+    test "renders subfolders in the text even when the folder has no direct notes or attachments",
+         %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      for p <- ["A/a.md", "Z/z.md"],
+          do:
+            {:ok, _} =
+              Notes.upsert_note(user, vault, %{"path" => p, "content" => "x", "mtime" => 1.0})
+
+      {:ok, body, structured} = Handlers.handle("list_folder", user, vault, %{"folder" => ""})
+
+      assert structured["notes"] == []
+      assert structured["attachments"] == []
+      assert Enum.map(structured["folders"], & &1["folder"]) |> Enum.sort() == ["A", "Z"]
+
+      assert body =~ "**Folder:** (root)"
+      assert body =~ "**Subfolders:**"
+      assert body =~ "| A | 1 |"
+      assert body =~ "| Z | 1 |"
+      refute body =~ "No notes found"
+    end
+
+    # `list_folders_with_counts/2` only returns a row for a folder that holds
+    # a note DIRECTLY — an intermediate folder like "P" here has no row of
+    # its own (only "P/Q" does), so deriving subfolders purely from existing
+    # rows made "P" invisible at the root and its only note unreachable by
+    # navigation.
+    test "an intermediate folder with no direct notes is still a navigable child", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "P/Q/x.md", "content" => "x", "mtime" => 1.0})
+
+      {:ok, _, root} = Handlers.handle("list_folder", user, vault, %{"folder" => ""})
+      assert root["folders"] == [%{"folder" => "P", "count" => 0}]
+
+      {:ok, _, p} = Handlers.handle("list_folder", user, vault, %{"folder" => "P"})
+      assert p["folders"] == [%{"folder" => "P/Q", "count" => 1}]
+
+      {:ok, _, all} =
+        Handlers.handle("list_folder", user, vault, %{"folder" => "", "recursive" => true})
+
+      assert all["folders"] == [
+               %{"folder" => "P", "count" => 0},
+               %{"folder" => "P/Q", "count" => 1}
+             ]
+    end
+
+    test "prefix safety: a folder name is not a prefix match for a same-named sibling", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      for p <- ["A/a.md", "AB/b.md"],
+          do:
+            {:ok, _} =
+              Notes.upsert_note(user, vault, %{"path" => p, "content" => "x", "mtime" => 1.0})
+
+      {:ok, _, direct} = Handlers.handle("list_folder", user, vault, %{"folder" => "A"})
+      assert direct["folders"] == []
     end
   end
 end

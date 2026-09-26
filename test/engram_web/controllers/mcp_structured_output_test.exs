@@ -52,7 +52,7 @@ defmodule EngramWeb.McpStructuredOutputTest do
     end
 
     test "every declared outputSchema is a JSON Schema object" do
-      for tool <- Tools.list(), schema = tool[:outputSchema], not is_nil(schema) do
+      for tool <- Tools.all_callable(), schema = tool[:outputSchema], not is_nil(schema) do
         assert schema["type"] == "object", "#{tool.name} outputSchema must be an object"
         assert is_map(schema["properties"]), "#{tool.name} outputSchema needs properties"
       end
@@ -89,7 +89,7 @@ defmodule EngramWeb.McpStructuredOutputTest do
       # Inverted into the guard that still has teeth: a NEW tool added without
       # an outputSchema fails here rather than shipping unreadable to a
       # code-mode client.
-      unconverted = for t <- Tools.list(), is_nil(t[:outputSchema]), do: t.name
+      unconverted = for t <- Tools.all_callable(), is_nil(t[:outputSchema]), do: t.name
 
       assert unconverted == [],
              "these tools declare no outputSchema: #{Enum.join(unconverted, ", ")}"
@@ -161,7 +161,7 @@ defmodule EngramWeb.McpStructuredOutputTest do
 
   describe "schema and payload agree" do
     test "every tool advertising an outputSchema returns structuredContent", %{conn: conn} do
-      declared = for t <- Tools.list(), not is_nil(t[:outputSchema]), do: t.name
+      declared = for t <- Tools.all_callable(), not is_nil(t[:outputSchema]), do: t.name
 
       assert declared != [], "no tool has been converted yet"
 

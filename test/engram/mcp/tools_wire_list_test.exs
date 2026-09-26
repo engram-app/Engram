@@ -18,6 +18,19 @@ defmodule Engram.MCP.ToolsWireListTest do
     end
   end
 
+  # An undeclared key survives dispatch as a `hidden_params` back-compat
+  # alias (edit_note's old_text/new_text), but a client reading only the
+  # advertised schema has no way to know that — and no reason to guess it.
+  # `additionalProperties: false` tells such a client up front that any key
+  # not listed in `properties` will be rejected, without advertising the
+  # hidden ones themselves.
+  test "wire_list/0 sets additionalProperties: false on every tool's inputSchema" do
+    for t <- Tools.wire_list() do
+      assert t["inputSchema"]["additionalProperties"] == false,
+             "#{t["name"]} inputSchema is missing additionalProperties: false"
+    end
+  end
+
   describe "against the live endpoint" do
     setup :authed_api_conn
 

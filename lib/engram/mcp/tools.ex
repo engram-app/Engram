@@ -17,6 +17,12 @@ defmodule Engram.MCP.Tools do
           optional(:title) => String.t(),
           optional(:annotations) => map(),
           optional(:outputSchema) => map(),
+          optional(:deprecated_for) => String.t(),
+          # Argument keys a handler reads that are deliberately NOT declared in
+          # inputSchema (an undocumented back-compat alias for a declared key),
+          # so the dispatch-level unknown-argument check in mcp_controller.ex
+          # must still let them through. See edit_note's old_text/new_text.
+          optional(:hidden_params) => [String.t()],
           required(:handler) => (map(), map(), map() ->
                                    {:ok, String.t()}
                                    | {:ok, String.t(), map()}
@@ -62,6 +68,7 @@ defmodule Engram.MCP.Tools do
     "create_note" => {"Create Note", false, false, false},
     "write_note" => {"Write Note", false, true, true},
     "append_to_note" => {"Append to Note", false, false, false},
+    "edit_note" => {"Edit Note", false, true, false},
     "patch_note" => {"Find and Replace in Note", false, true, false},
     "update_section" => {"Replace Note Section", false, true, true},
     "rename_note" => {"Rename Note", false, false, false},
@@ -76,20 +83,16 @@ defmodule Engram.MCP.Tools do
   def list do
     [
       list_vaults_def(),
-      set_vault_def(),
       search_notes_def(),
       list_tags_def(),
-      list_folders_def(),
       list_folder_def(),
       create_folder_def(),
       suggest_folder_def(),
-      get_note_def(),
       get_notes_def(),
       create_note_def(),
       write_note_def(),
       append_to_note_def(),
-      patch_note_def(),
-      update_section_def(),
+      edit_note_def(),
       rename_note_def(),
       rename_folder_def(),
       delete_note_def(),
@@ -99,6 +102,31 @@ defmodule Engram.MCP.Tools do
     ]
     |> Enum.map(&(&1 |> with_vault_id() |> with_annotations()))
   end
+
+  # Retired tool names that stay CALLABLE (clients cache tools/list and our own
+  # skills call them by name) but are no longer listed. Each keeps its old
+  # handler and schemas, so an old call behaves exactly as before. Remove an
+  # alias only after 60 days AND 30 consecutive days of zero calls:
+  #   sum by (tool) (increase(engram_prom_ex_mcp_tool_total{env="prod",tool="<old>"}[30d]))
+  @retired %{
+    "get_note" => "get_notes",
+    "list_folders" => "list_folder",
+    "patch_note" => "edit_note",
+    "update_section" => "edit_note",
+    "set_vault" => "list_vaults"
+  }
+
+  @spec aliases() :: [tool_def()]
+  def aliases do
+    [get_note_def(), list_folders_def(), patch_note_def(), update_section_def(), set_vault_def()]
+    |> Enum.map(fn tool ->
+      tool = tool |> with_vault_id() |> with_annotations()
+      Map.put(tool, :deprecated_for, Map.fetch!(@retired, tool.name))
+    end)
+  end
+
+  @spec all_callable() :: [tool_def()]
+  def all_callable, do: list() ++ aliases()
 
   @doc """
   The exact `tools/list` payload: what `McpController` serves and what
@@ -112,7 +140,7 @@ defmodule Engram.MCP.Tools do
         "name" => t.name,
         "title" => t.title,
         "description" => t.description,
-        "inputSchema" => t.inputSchema,
+        "inputSchema" => Map.put(t.inputSchema, "additionalProperties", false),
         "annotations" => t.annotations
       }
 
@@ -168,7 +196,7 @@ defmodule Engram.MCP.Tools do
 
   @spec get(String.t()) :: {:ok, tool_def()} | :error
   def get(name) do
-    case Enum.find(list(), &(&1.name == name)) do
+    case Enum.find(all_callable(), &(&1.name == name)) do
       nil -> :error
       tool -> {:ok, tool}
     end
@@ -432,18 +460,24 @@ defmodule Engram.MCP.Tools do
     %{
       name: "list_folder",
       description:
-        "List the notes and attachments directly inside one folder (not subfolders). Pass " <>
-          "an empty string for the vault root. To see every folder in the vault with note " <>
-          "counts use list_folders. To find notes by content use search_notes.",
+        "List the notes, attachments, and subfolders directly inside one folder. Pass " <>
+          "an empty string for the vault root. Set recursive: true to list every " <>
+          "descendant folder (with note counts) instead of just the direct ones. To see " <>
+          "every folder in the vault with counts call list_folder with recursive: true " <>
+          "on the root. To find notes by content use search_notes.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
           "folder" => %{
             "type" => "string",
-            "description" => "Folder path (e.g. \"Health\") or \"\" for root"
+            "description" => "Folder path (e.g. \"Health\") or \"\" for root. Defaults to root."
+          },
+          "recursive" => %{
+            "type" => "boolean",
+            "description" =>
+              "List every descendant folder, not just direct subfolders. Defaults to false."
           }
-        },
-        "required" => ["folder"]
+        }
       },
       outputSchema: %{
         "type" => "object",
@@ -478,9 +512,21 @@ defmodule Engram.MCP.Tools do
               },
               "required" => ["name", "path"]
             }
+          },
+          "folders" => %{
+            "type" => "array",
+            "description" => "Direct subfolders, or every descendant when recursive was true.",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                "folder" => %{"type" => "string"},
+                "count" => %{"type" => "integer", "description" => "Notes directly inside"}
+              },
+              "required" => ["folder", "count"]
+            }
           }
         },
-        "required" => ["folder", "notes", "attachments"]
+        "required" => ["folder", "notes", "attachments", "folders"]
       },
       handler: &Handlers.handle("list_folder", &1, &2, &3)
     }
@@ -593,6 +639,7 @@ defmodule Engram.MCP.Tools do
       name: "get_notes",
       description:
         "Retrieve the full content of multiple notes in one call (1-20 paths). " <>
+          "Also reads a single note: pass one path. " <>
           "Use to inventory a folder (list_folder then get_notes) or to read a batch " <>
           "of search results without N round-trips. Missing paths are reported inline.",
       inputSchema: %{
@@ -675,7 +722,7 @@ defmodule Engram.MCP.Tools do
         "Replace a note's entire content, or create the note if it does not exist. " <>
           "Saves, indexes for search, and syncs to Obsidian. Overwrites whatever the note held. " <>
           "To add text without touching existing content use append_to_note. To change one " <>
-          "passage use patch_note, or one heading's section use update_section. To create a " <>
+          "passage, or one heading's section, use edit_note. To create a " <>
           "note with no risk of overwriting an existing one use create_note; create_note " <>
           "takes a title and picks the folder, not a path.",
       inputSchema: %{
@@ -704,13 +751,21 @@ defmodule Engram.MCP.Tools do
       description:
         "Add text to the end of a note. Existing text is kept. If the note does not exist " <>
           "it is created with a `# <name>` title line first. Use for logs, journals and " <>
-          "running lists. " <>
-          "To change existing text use patch_note. To replace the whole note use write_note.",
+          "running lists. Set position to start to insert at the top (after any " <>
+          "frontmatter) instead. " <>
+          "To change existing text use edit_note. To replace the whole note use write_note.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
           "path" => %{"type" => "string", "description" => "Full path for the note"},
-          "text" => %{"type" => "string", "description" => "Text to append"}
+          "text" => %{"type" => "string", "description" => "Text to append"},
+          "position" => %{
+            "type" => "string",
+            "enum" => ["end", "start"],
+            "default" => "end",
+            "description" =>
+              "end (default) appends; start inserts at the top, after any frontmatter"
+          }
         },
         "required" => ["path", "text"]
       },
@@ -726,6 +781,89 @@ defmodule Engram.MCP.Tools do
         "required" => ["path", "created"]
       },
       handler: &Handlers.handle("append_to_note", &1, &2, &3)
+    }
+  end
+
+  defp edit_note_def do
+    %{
+      name: "edit_note",
+      description:
+        "Change part of an existing note. mode replace_text finds exact text and replaces " <>
+          "it (first occurrence by default); mode replace_section replaces everything under " <>
+          "one heading. Fails without writing if the text or heading is not found, or if " <>
+          "expected_replacements does not match. To add text use append_to_note. To " <>
+          "rewrite the whole note use write_note.",
+      inputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "path" => %{
+            "type" => "string",
+            "description" => "Path of the note, e.g. \"Projects/Alpha.md\""
+          },
+          "mode" => %{
+            "type" => "string",
+            "enum" => ["replace_text", "replace_section"],
+            "description" => "replace_text or replace_section"
+          },
+          "find" => %{
+            "type" => "string",
+            "description" => "replace_text only: exact text to find"
+          },
+          "replace" => %{
+            "type" => "string",
+            "description" => "replace_text only: text to put in its place"
+          },
+          "occurrence" => %{
+            "type" => "integer",
+            "description" => "replace_text only: 0 = first (default), 1 = second, -1 = all",
+            "default" => 0,
+            "minimum" => -1
+          },
+          "expected_replacements" => %{
+            "type" => "integer",
+            "description" =>
+              "replace_text only: fail without writing unless exactly this many are replaced"
+          },
+          "heading" => %{
+            "type" => "string",
+            "description" => "replace_section only: heading text without the # prefix"
+          },
+          "content" => %{
+            "type" => "string",
+            "description" => "replace_section only: new content for under the heading"
+          },
+          "level" => %{
+            "type" => "integer",
+            "description" => "replace_section only: heading level 1-6 (default 2)",
+            "default" => 2,
+            "minimum" => 1,
+            "maximum" => 6
+          }
+        },
+        "required" => ["path", "mode"]
+      },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "path" => %{"type" => "string"},
+          "mode" => %{"type" => "string"},
+          "replacements" => %{
+            "type" => ["integer", "null"],
+            "description" => "replace_text: occurrences replaced"
+          },
+          "heading" => %{
+            "type" => ["string", "null"],
+            "description" => "replace_section: heading updated"
+          }
+        },
+        "required" => ["path", "mode"]
+      },
+      # Undocumented back-compat aliases for find/replace (Handlers.run_edit
+      # falls back to these), kept off the public schema so a client building
+      # from it sees one spelling. Must still pass dispatch-level argument
+      # validation.
+      hidden_params: ~w(old_text new_text),
+      handler: &Handlers.handle("edit_note", &1, &2, &3)
     }
   end
 
@@ -746,7 +884,8 @@ defmodule Engram.MCP.Tools do
           "occurrence" => %{
             "type" => "integer",
             "description" => "Which occurrence (0=first, 1=second, -1=all)",
-            "default" => 0
+            "default" => 0,
+            "minimum" => -1
           }
         },
         "required" => ["path", "find", "replace"]
@@ -786,7 +925,9 @@ defmodule Engram.MCP.Tools do
           "level" => %{
             "type" => "integer",
             "description" => "Heading level 1-6 (default 2 for ##)",
-            "default" => 2
+            "default" => 2,
+            "minimum" => 1,
+            "maximum" => 6
           }
         },
         "required" => ["path", "heading", "content"]

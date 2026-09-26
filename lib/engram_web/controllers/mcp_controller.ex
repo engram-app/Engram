@@ -8,6 +8,8 @@ defmodule EngramWeb.McpController do
   alias Engram.Abuse.OriginStats
   alias Engram.MCP.Tools
 
+  require Logger
+
   @server_info %{"name" => "engram", "version" => "0.1.0"}
   @capabilities %{"tools" => %{"listChanged" => false}}
   # Newest first. `2025-06-18` is what makes structured tool output reachable:
@@ -130,7 +132,7 @@ defmodule EngramWeb.McpController do
   # a closed list: the atoms intern once while compiling and this module only
   # reads the finished map afterwards — nothing per-request touches the atom
   # table, which was the whole objection to `String.to_atom/1` here.
-  @tool_atoms Map.new(Tools.list(), &{&1.name, String.to_atom(&1.name)})
+  @tool_atoms Map.new(Tools.all_callable(), &{&1.name, String.to_atom(&1.name)})
 
   # The same exempt set the tool definitions use, read once at compile time
   # rather than restated here (see `dispatch_tool/4`).
@@ -537,8 +539,6 @@ defmodule EngramWeb.McpController do
   # -- Method dispatch --
 
   defp dispatch(_conn, "initialize", params) do
-    require Logger
-
     Logger.info("mcp_handshake", handshake_metadata(params))
 
     {:ok,
@@ -599,6 +599,7 @@ defmodule EngramWeb.McpController do
          user = conn.assigns.current_user,
          # §E — record origin fingerprint for daily-rollup aggregation.
          _ = OriginStats.record(user.id, List.first(get_req_header(conn, "user-agent"))),
+         args = drop_exempt_vault_id(tool, args),
          :ok <- validate_tool_args(tool, args) do
       dispatch_tool(tool, user, normalize_args(tool, args), conn)
     else
@@ -662,12 +663,96 @@ defmodule EngramWeb.McpController do
   # not be a JSON object at all (client sent a string/array/null) — reject
   # that outright, independent of whether the tool has any required args, so
   # it can't reach a handler's map access.
+
+  # The server's own `server/discover` "instructions" tell every model to pass
+  # `vault_id` on EVERY tool call, since MCP keeps no active-vault state
+  # between calls. `list_vaults` (`@vault_exempt`, no `vault_id` property at
+  # all) used to reject that as an unknown argument — a model obeying the
+  # server's own instruction had no way to avoid the error. Dropped here,
+  # before validation, but ONLY when the tool doesn't declare `vault_id`
+  # itself: `set_vault` is also in `@vault_exempt` but declares its OWN
+  # `vault_id` (the vault to validate, a real required-by-meaning arg), so it
+  # must reach `validate_declared_args` untouched. Every other undeclared key
+  # on every tool, including these two, is still rejected below.
+  defp drop_exempt_vault_id(%{name: name} = tool, args)
+       when is_map(args) and name in @vault_exempt do
+    properties = get_in(tool.inputSchema, ["properties"]) || %{}
+    if Map.has_key?(properties, "vault_id"), do: args, else: Map.delete(args, "vault_id")
+  end
+
+  defp drop_exempt_vault_id(_tool, args), do: args
+
   defp validate_tool_args(tool, args) when not is_map(args) do
     {:error, tool.name, "Arguments must be an object"}
   end
 
+  # #1492 REOPENED (found reviewing task 3.5): making an optional arg's own
+  # key the only thing that varies across a tool (list_folder's `folder`
+  # dropped out of `required`) meant a caller using the WRONG key name for
+  # it — e.g. "path" instead of "folder" — was no longer caught by the
+  # required/type checks below, since neither of those inspects a key that
+  # ISN'T declared. It fell straight through the handler's `args["folder"]
+  # || ""` fallback to the vault root, silently. This is the same
+  # silent-wrong-target class #1491/#1492 already closed for missing/
+  # wrong-typed DECLARED args, just triggered by an undeclared key instead —
+  # closed here, at the same shared choke point, for every tool at once, so
+  # it can't reopen again the next time some other tool's required arg goes
+  # optional. `hidden_params` (declared on the tool_def, not the wire
+  # `inputSchema`) is the escape hatch for a handler that intentionally
+  # reads an undocumented alias for a declared key (edit_note's
+  # `old_text`/`new_text` for `find`/`replace`) — it must stay reachable
+  # without being advertised, so it is checked for membership but never
+  # listed in the "Valid arguments" a caller sees.
   defp validate_tool_args(tool, args) do
     properties = get_in(tool.inputSchema, ["properties"]) || %{}
+    declared = MapSet.new(Map.keys(properties) ++ Map.get(tool, :hidden_params, []))
+    unknown = args |> Map.keys() |> Enum.reject(&MapSet.member?(declared, &1))
+
+    case unknown do
+      [] -> validate_declared_args(tool, args, properties)
+      _ -> {:error, tool.name, unknown_argument_message(tool.name, unknown, properties)}
+    end
+  end
+
+  # A caller-supplied key name is echoed straight into this message, so an
+  # adversarial or oversized client payload must not blow up the response it
+  # caused: each echoed key is capped at 64 chars, and at most 10 keys are
+  # echoed (the rest collapse into a count) regardless of how many were sent.
+  @max_echoed_keys 10
+  @max_echoed_key_length 64
+
+  defp unknown_argument_message(name, unknown, properties) do
+    total = length(unknown)
+    label = if total == 1, do: "argument", else: "arguments"
+
+    quoted =
+      unknown
+      |> Enum.take(@max_echoed_keys)
+      |> Enum.map_join(", ", &~s("#{truncate_key(&1)}"))
+
+    quoted =
+      if total > @max_echoed_keys,
+        do: "#{quoted}, and #{total - @max_echoed_keys} more",
+        else: quoted
+
+    valid =
+      case properties |> Map.keys() |> Enum.sort() do
+        [] -> "#{name} takes no arguments."
+        keys -> "Valid arguments: #{Enum.join(keys, ", ")}."
+      end
+
+    "Unknown #{label} #{quoted} for #{name}. #{valid}"
+  end
+
+  defp truncate_key(key) do
+    if String.length(key) > @max_echoed_key_length do
+      String.slice(key, 0, @max_echoed_key_length) <> "..."
+    else
+      key
+    end
+  end
+
+  defp validate_declared_args(tool, args, properties) do
     required = get_in(tool.inputSchema, ["required"]) || []
 
     invalid =
@@ -752,12 +837,14 @@ defmodule EngramWeb.McpController do
   def run_tool_handler(tool, user, vault, args) do
     case tool.handler.(user, vault, args) do
       {:ok, text} ->
+        text = deprecation_note(tool, text)
         {{:ok, text_result(text)}, :ok, byte_size_safe(text)}
 
       # A converted tool (#1660) answers with both renderings. `content` stays
       # mandatory — `structuredContent` is additive, and a client that ignores
       # it must still get a usable answer.
       {:ok, text, structured} when is_map(structured) ->
+        text = deprecation_note(tool, text)
         result = Map.put(text_result(text), "structuredContent", structured)
         # `text` only, deliberately. A previous pass added a second Jason.encode
         # here so the size metric would count structuredContent too. That was
@@ -780,7 +867,6 @@ defmodule EngramWeb.McpController do
       # deep in the call stack (including %Note{} virtual decrypted fields
       # if the throw came out of a crypto path). Log structured details
       # server-side; surface a low-cardinality label to the client.
-      require Logger
 
       Logger.error(
         "mcp tool dispatch trapped",
@@ -795,6 +881,17 @@ defmodule EngramWeb.McpController do
 
       {error_result(message), :error, byte_size_safe(message)}
   end
+
+  # Retired tool names (Task 3.1's `deprecated_for`) still work exactly as
+  # before — `structuredContent` is untouched — but the text `content` gets
+  # one appended line so the model learns the replacement name. A tool with no
+  # `deprecated_for` key falls through to the second clause unchanged.
+  defp deprecation_note(%{deprecated_for: replacement, name: name}, text) do
+    Logger.info("mcp deprecated tool called", tool: name, replacement: replacement)
+    text <> "\n\n(#{name} is deprecated; use #{replacement}.)"
+  end
+
+  defp deprecation_note(_tool, text), do: text
 
   # Builds a client-safe message for a trapped tool-handler failure.
   #
