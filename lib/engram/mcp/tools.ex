@@ -816,7 +816,8 @@ defmodule Engram.MCP.Tools do
           "occurrence" => %{
             "type" => "integer",
             "description" => "replace_text only: 0 = first (default), 1 = second, -1 = all",
-            "default" => 0
+            "default" => 0,
+            "minimum" => -1
           },
           "expected_replacements" => %{
             "type" => "integer",
@@ -834,7 +835,9 @@ defmodule Engram.MCP.Tools do
           "level" => %{
             "type" => "integer",
             "description" => "replace_section only: heading level 1-6 (default 2)",
-            "default" => 2
+            "default" => 2,
+            "minimum" => 1,
+            "maximum" => 6
           }
         },
         "required" => ["path", "mode"]
@@ -881,7 +884,8 @@ defmodule Engram.MCP.Tools do
           "occurrence" => %{
             "type" => "integer",
             "description" => "Which occurrence (0=first, 1=second, -1=all)",
-            "default" => 0
+            "default" => 0,
+            "minimum" => -1
           }
         },
         "required" => ["path", "find", "replace"]
@@ -921,7 +925,9 @@ defmodule Engram.MCP.Tools do
           "level" => %{
             "type" => "integer",
             "description" => "Heading level 1-6 (default 2 for ##)",
-            "default" => 2
+            "default" => 2,
+            "minimum" => 1,
+            "maximum" => 6
           }
         },
         "required" => ["path", "heading", "content"]

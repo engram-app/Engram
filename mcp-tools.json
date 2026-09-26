@@ -734,6 +734,8 @@
           "level": {
             "default": 2,
             "description": "replace_section only: heading level 1-6 (default 2)",
+            "maximum": 6,
+            "minimum": 1,
             "type": "integer"
           },
           "mode": {
@@ -747,6 +749,7 @@
           "occurrence": {
             "default": 0,
             "description": "replace_text only: 0 = first (default), 1 = second, -1 = all",
+            "minimum": -1,
             "type": "integer"
           },
           "path": {

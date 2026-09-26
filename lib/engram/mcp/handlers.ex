@@ -643,13 +643,6 @@ defmodule Engram.MCP.Handlers do
       not is_binary(find) ->
         {:error, "find must be a string"}
 
-      # `find == ""` passes is_binary and String.contains?/2 (every string
-      # contains ""), so do_replace/4 happily prepends (occurrence 0) or
-      # interleaves (occurrence -1) empty "replacements" and reports success —
-      # a write that corrupts the note while claiming to have worked.
-      find == "" ->
-        {:error, "find must not be empty for mode replace_text"}
-
       not is_binary(replace) ->
         {:error, "replace is required for mode replace_text"}
 
@@ -696,6 +689,20 @@ defmodule Engram.MCP.Handlers do
   # Read the AUTHORITY, not the `notes.content` façade: the façade lags a doc
   # write until checkpoint, so patching from it can commit an older body and
   # drop edits made since (#1159).
+  #
+  # Both guards below are shared with the hidden `patch_note` alias, which
+  # calls this function directly (bypassing run_edit's cond entirely). They
+  # used to live only in run_edit, which left patch_note free to send the
+  # same corrupting input:
+  #   - `find == ""` passes is_binary and String.contains?/2 (every string
+  #     contains ""), so do_replace/4 happily prepends (occurrence 0) or
+  #     interleaves (occurrence -1) empty "replacements" and reports success —
+  #     a write that corrupts the note while claiming to have worked.
+  #   - `occurrence` has no schema minimum, so e.g. -2 reaches do_replace/4's
+  #     second clause, where `Enum.take(parts, occurrence + 1)` gets a
+  #     NEGATIVE count. Enum.take/drop silently read from the END of the list
+  #     for a negative count instead of refusing, so the "replace" landed at
+  #     the wrong position and the write reported success.
   defp patch_text(
          user,
          vault,
@@ -704,6 +711,19 @@ defmodule Engram.MCP.Handlers do
          expected,
          op
        ) do
+    cond do
+      find == "" ->
+        {:error, "find must not be empty for mode replace_text"}
+
+      occurrence != -1 and occurrence < 0 ->
+        {:error, "occurrence must be -1 (all) or 0 or greater"}
+
+      true ->
+        do_patch_text(user, vault, path, find, replace, occurrence, expected, op)
+    end
+  end
+
+  defp do_patch_text(user, vault, path, find, replace, occurrence, expected, op) do
     with {:ok, note} <- Notes.get_note(user, vault, path),
          {:ok, current} <- Notes.authoritative_content(user, note) do
       if String.contains?(current, find) do
@@ -736,11 +756,24 @@ defmodule Engram.MCP.Handlers do
 
   # Same authority rule as patch_text: section surgery against the stale
   # `notes.content` façade would rewrite the note from an older body (#1159).
+  #
+  # Shared with the hidden `update_section` alias, which calls this function
+  # directly. The heading-match prefix used to clamp `level` to 1..6
+  # (`max(1, min(level, 6))`) while the section-END scan below compared
+  # against the RAW `level` — so level 0 (or > 6) never satisfied
+  # `h_level <= level` for any real heading, the end of the section was never
+  # found, and every following section got swallowed into the replacement.
+  # Refusing the out-of-range level outright (before any heading search)
+  # removes the mismatch instead of also clamping the end-scan to match.
+  defp replace_section(_user, _vault, _path, _heading, _new_content, level, _op)
+       when level < 1 or level > 6 do
+    {:error, "level must be between 1 and 6"}
+  end
+
   defp replace_section(user, vault, path, heading, new_content, level, op) do
     with {:ok, note} <- Notes.get_note(user, vault, path),
          {:ok, current} <- Notes.authoritative_content(user, note) do
-      prefix = String.duplicate("#", max(1, min(level, 6))) <> " "
-      target = prefix <> heading
+      target = String.duplicate("#", level) <> " " <> heading
       lines = String.split(current, "\n")
 
       start_idx =
@@ -1156,8 +1189,20 @@ defmodule Engram.MCP.Handlers do
 
   defp place_text(content, text, "start") do
     case Frontmatter.split(content) do
-      {nil, body} -> text <> "\n" <> body
-      {_frontmatter, body} -> String.replace_suffix(content, body, "") <> text <> "\n" <> body
+      {nil, body} ->
+        text <> "\n" <> body
+
+      {_frontmatter, body} ->
+        # `content` minus the `body` suffix is everything up to and including
+        # the closing fence. When the note is ONLY frontmatter with no
+        # trailing newline, `body` is "" and that prefix is `content`
+        # unchanged (ends in "---", not "\n") — gluing `text` straight onto
+        # the fence instead of starting a new line after it, exactly the
+        # shape Frontmatter.project/4 always guarantees on write
+        # (`"---\n" <> block <> "---\n" <> body`, frontmatter.ex ~418).
+        prefix = String.replace_suffix(content, body, "")
+        prefix = if String.ends_with?(prefix, "\n"), do: prefix, else: prefix <> "\n"
+        prefix <> text <> "\n" <> body
     end
   end
 

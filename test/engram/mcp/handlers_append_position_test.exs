@@ -189,4 +189,57 @@ defmodule Engram.MCP.HandlersAppendPositionTest do
 
     assert body(u, v, "H.md") =~ ~r/\A---\nrule\n# H/
   end
+
+  # Pre-merge review finding 3: a note that is ONLY frontmatter with NO
+  # trailing newline ("---\ntags: [a]\n---") has an empty body per
+  # Frontmatter.split. The old place_text/3 "start" clause built the prefix
+  # via `String.replace_suffix(content, body, "")`, which is `content`
+  # unchanged when `body` is "" — so text was glued directly onto the closing
+  # fence ("---\ntags: [a]\n---hello\n"), and that glued string no longer
+  # parses as frontmatter at all on the next read.
+  #
+  # `Notes.upsert_note/3` re-derives content via the CRDT ingest pipeline,
+  # which canonicalizes YAML (flow -> block style) whenever it recognizes
+  # frontmatter, so seeding through the normal write path would silently heal
+  # this shape before append_to_note ever saw it. `Engram.Fixtures.insert_note!/3`
+  # writes the row directly (crdt_state left nil), so `authoritative_content`
+  # returns the raw `note.content` bytes untouched (`notes.ex` ~2255) and the
+  # no-trailing-newline shape actually reaches `place_text/3`.
+  test "start on a frontmatter-only note with no trailing newline keeps the fence parseable", %{
+    user: u,
+    vault: v
+  } do
+    Engram.Fixtures.insert_note!(u, v, %{path: "FM.md", content: "---\ntags: [a]\n---"})
+
+    assert {:ok, _, _} =
+             Handlers.handle("append_to_note", u, v, %{
+               "path" => "FM.md",
+               "text" => "hello",
+               "position" => "start"
+             })
+
+    result = body(u, v, "FM.md")
+    assert {frontmatter, rest} = Engram.Notes.Frontmatter.split(result)
+    assert frontmatter != nil
+    assert String.starts_with?(rest, "hello")
+  end
+
+  test "start on a frontmatter-only note WITH a trailing newline is unaffected (empty body)", %{
+    user: u,
+    vault: v
+  } do
+    Engram.Fixtures.insert_note!(u, v, %{path: "FM2.md", content: "---\ntags: [a]\n---\n"})
+
+    assert {:ok, _, _} =
+             Handlers.handle("append_to_note", u, v, %{
+               "path" => "FM2.md",
+               "text" => "hello",
+               "position" => "start"
+             })
+
+    result = body(u, v, "FM2.md")
+    assert {frontmatter, rest} = Engram.Notes.Frontmatter.split(result)
+    assert frontmatter != nil
+    assert String.starts_with?(rest, "hello")
+  end
 end

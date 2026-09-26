@@ -254,4 +254,97 @@ defmodule Engram.MCP.HandlersEditNoteTest do
 
     assert msg =~ "Heading not found"
   end
+
+  # Pre-merge review finding 1: occurrence has no schema minimum, so -2
+  # reaches do_replace/4's second clause, which does
+  # `Enum.take(parts, occurrence + 1)` — a NEGATIVE count, which Enum.take
+  # silently reads from the END of the list instead of refusing. patch_note
+  # shares patch_text/6 with edit_note (`patch_note` calls it directly,
+  # bypassing run_edit's cond entirely), so the guard belongs in patch_text
+  # itself, not in run_edit, or the alias stays exposed.
+  test "occurrence below -1 is refused without writing, via edit_note", %{user: u, vault: v} do
+    before = body(u, v)
+
+    assert {:error, msg} =
+             Handlers.handle("edit_note", u, v, %{
+               "path" => "N.md",
+               "mode" => "replace_text",
+               "find" => "a",
+               "replace" => "b",
+               "occurrence" => -2
+             })
+
+    assert msg =~ "occurrence must be -1 (all) or 0 or greater"
+    assert body(u, v) == before
+  end
+
+  test "occurrence below -1 is refused without writing, via patch_note", %{user: u, vault: v} do
+    before = body(u, v)
+
+    assert {:error, msg} =
+             Handlers.handle("patch_note", u, v, %{
+               "path" => "N.md",
+               "find" => "a",
+               "replace" => "b",
+               "occurrence" => -2
+             })
+
+    assert msg =~ "occurrence must be -1 (all) or 0 or greater"
+    assert body(u, v) == before
+  end
+
+  # Pre-merge review finding 2: replace_section clamps the heading-match
+  # prefix to level 1..6 (`max(1, min(level, 6))`) but the section-END scan
+  # compares against the RAW `level`, so level 0 (or > 6) never satisfies
+  # `h_level <= level` for any real heading and the section "end" is never
+  # found, swallowing every following section. The guard must reject the
+  # level outright, before any heading search runs, so it fires regardless
+  # of whether a heading would even match.
+  test "level outside 1..6 is refused without writing, via edit_note", %{user: u, vault: v} do
+    before = body(u, v)
+
+    assert {:error, msg} =
+             Handlers.handle("edit_note", u, v, %{
+               "path" => "N.md",
+               "mode" => "replace_section",
+               "heading" => "Todo",
+               "content" => "z",
+               "level" => 0
+             })
+
+    assert msg =~ "level must be between 1 and 6"
+    assert body(u, v) == before
+  end
+
+  test "level outside 1..6 is refused without writing, via update_section", %{user: u, vault: v} do
+    before = body(u, v)
+
+    assert {:error, msg} =
+             Handlers.handle("update_section", u, v, %{
+               "path" => "N.md",
+               "heading" => "Todo",
+               "content" => "z",
+               "level" => 7
+             })
+
+    assert msg =~ "level must be between 1 and 6"
+    assert body(u, v) == before
+  end
+
+  # Pre-merge review finding 4: the `find == ""` guard lived only in
+  # run_edit's cond, so patch_note (which calls patch_text/6 directly) never
+  # saw it and could still corrupt the note via an always-matching empty find.
+  test "an empty find is refused without writing, via patch_note", %{user: u, vault: v} do
+    before = body(u, v)
+
+    assert {:error, msg} =
+             Handlers.handle("patch_note", u, v, %{
+               "path" => "N.md",
+               "find" => "",
+               "replace" => "y"
+             })
+
+    assert msg =~ "find must not be empty"
+    assert body(u, v) == before
+  end
 end
