@@ -336,6 +336,114 @@ defmodule Engram.Notes.CrdtRoomLruTest do
       assert over_cap_timer() == nil
     end
 
+    # A room can stay alive after its drain without anything being wedged: a
+    # second observer (the web app, another device) still holds it, and the
+    # user's next frame re-observes the same pid. That must not pin the node in
+    # paced mode, or an import during the edit re-creates 2026-09-14.
+    test "a room kept alive after its drain paces one cycle, then pacing ends" do
+      with_lru_config(drain_grace_ms: 100)
+
+      a = live_room()
+      b = live_room()
+      CrdtRoomLru.touch("a-note", a, @vault)
+      Process.sleep(5)
+      CrdtRoomLru.touch("b-note", b, @vault)
+
+      CrdtRoomLru.sweep(1)
+      Process.sleep(150)
+      # `a` was asked but is still held, and the user types in it.
+      CrdtRoomLru.touch("a-note", a, @vault)
+
+      CrdtRoomLru.sweep(1)
+      assert paced?(), "a stuck ask past its grace window paces this sweep"
+
+      # The paced sweep asked `b`, whose drain lands (it exits). `a` is still
+      # held by its second observer; it must not keep the node paced.
+      Process.exit(b, :kill)
+      Process.sleep(150)
+      CrdtRoomLru.sweep(1)
+      refute paced?(), "the same healthy room must not keep the node paced"
+    end
+
+    # A real wedge: no drain ever lands, so no room ever exits. Forgetting a
+    # stuck ask after one paced sweep must not end pacing: the rooms the paced
+    # sweep asks go stuck in turn. That includes a sweep landing INSIDE their
+    # grace window (a periodic sweep right after a paced prompt sweep), which
+    # would otherwise see nothing stuck and re-ask the whole backlog.
+    # Grace sits well above drains_received/0's 200ms quiet wait.
+    test "a continuous wedge stays paced, including a sweep inside the grace window" do
+      with_lru_config(drain_grace_ms: 1_000)
+      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(@vault))
+
+      for n <- 1..60, do: CrdtRoomLru.touch("w-#{n}", live_room(), @vault)
+
+      CrdtRoomLru.sweep(0)
+      assert drains_received() == 60, "nothing is stuck yet: the first sweep is unpaced"
+
+      for _ <- 1..3 do
+        Process.sleep(1_100)
+        CrdtRoomLru.sweep(0)
+        assert drains_received() == 16
+        assert paced?()
+      end
+
+      CrdtRoomLru.sweep(0)
+      assert drains_received() <= 16, "stuck rooms must not be re-asked unpaced"
+      assert paced?()
+    end
+
+    test "pacing ends once the stuck room exits" do
+      with_lru_config(drain_grace_ms: 0)
+
+      stuck = live_room()
+      CrdtRoomLru.touch("s-note", stuck, @vault)
+      Process.sleep(5)
+      CrdtRoomLru.touch("t-note", live_room(), @vault)
+      CrdtRoomLru.sweep(1)
+      CrdtRoomLru.sweep(1)
+      assert paced?()
+
+      Process.exit(stuck, :kill)
+      CrdtRoomLru.sweep(1)
+      CrdtRoomLru.sweep(1)
+      refute paced?()
+    end
+
+    # Matched on {note, pid}: a note whose room was replaced (the old drain
+    # landed, a new room started) is not a stuck ask.
+    test "a replacement room for an asked note is not counted as stuck" do
+      with_lru_config(drain_grace_ms: 0)
+
+      old = live_room()
+      CrdtRoomLru.touch("r-note", old, @vault)
+      Process.sleep(5)
+      CrdtRoomLru.touch("q-note", live_room(), @vault)
+      CrdtRoomLru.sweep(1)
+
+      Process.exit(old, :kill)
+      CrdtRoomLru.touch("r-note", live_room(), @vault)
+      CrdtRoomLru.sweep(1)
+
+      refute paced?()
+    end
+
+    # `Process.cancel_timer/1` cannot recall a message already delivered, so a
+    # sweep message that lost its timer must be ignored rather than run.
+    test "a prompt-sweep message from a cancelled timer is ignored" do
+      with_lru_config(max_resident: 1)
+      Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(@vault))
+
+      :ets.insert(:crdt_room_lru, {"x-note", live_room(), @vault, 1})
+      :ets.insert(:crdt_room_lru, {"y-note", live_room(), @vault, 2})
+
+      send(CrdtRoomLru, {:over_cap_sweep, make_ref()})
+      _ = :sys.get_state(CrdtRoomLru)
+
+      refute_received {:crdt_room_drain, _}
+    end
+
+    defp paced?, do: :sys.get_state(CrdtRoomLru).paced
+
     # A 30s sweep interval alone let 9 new rooms/s pile ~270 over the cap
     # before anything looked. Crossing the cap schedules a prompt sweep.
     test "a new room past the cap triggers a sweep without waiting for the interval" do
