@@ -666,8 +666,43 @@ defmodule EngramWeb.McpController do
     {:error, tool.name, "Arguments must be an object"}
   end
 
+  # #1492 REOPENED (found reviewing task 3.5): making an optional arg's own
+  # key the only thing that varies across a tool (list_folder's `folder`
+  # dropped out of `required`) meant a caller using the WRONG key name for
+  # it — e.g. "path" instead of "folder" — was no longer caught by the
+  # required/type checks below, since neither of those inspects a key that
+  # ISN'T declared. It fell straight through the handler's `args["folder"]
+  # || ""` fallback to the vault root, silently. This is the same
+  # silent-wrong-target class #1491/#1492 already closed for missing/
+  # wrong-typed DECLARED args, just triggered by an undeclared key instead —
+  # closed here, at the same shared choke point, for every tool at once, so
+  # it can't reopen again the next time some other tool's required arg goes
+  # optional. `hidden_params` (declared on the tool_def, not the wire
+  # `inputSchema`) is the escape hatch for a handler that intentionally
+  # reads an undocumented alias for a declared key (edit_note's
+  # `old_text`/`new_text` for `find`/`replace`) — it must stay reachable
+  # without being advertised, so it is checked for membership but never
+  # listed in the "Valid arguments" a caller sees.
   defp validate_tool_args(tool, args) do
     properties = get_in(tool.inputSchema, ["properties"]) || %{}
+    declared = MapSet.new(Map.keys(properties) ++ Map.get(tool, :hidden_params, []))
+    unknown = args |> Map.keys() |> Enum.reject(&MapSet.member?(declared, &1))
+
+    case unknown do
+      [] -> validate_declared_args(tool, args, properties)
+      _ -> {:error, tool.name, unknown_argument_message(tool.name, unknown, properties)}
+    end
+  end
+
+  defp unknown_argument_message(name, unknown, properties) do
+    valid = properties |> Map.keys() |> Enum.sort() |> Enum.join(", ")
+    quoted = Enum.map_join(unknown, ", ", &~s("#{&1}"))
+    label = if length(unknown) == 1, do: "argument", else: "arguments"
+
+    "Unknown #{label} #{quoted} for #{name}. Valid arguments: #{valid}."
+  end
+
+  defp validate_declared_args(tool, args, properties) do
     required = get_in(tool.inputSchema, ["required"]) || []
 
     invalid =

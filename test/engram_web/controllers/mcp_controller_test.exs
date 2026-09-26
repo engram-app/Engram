@@ -174,6 +174,30 @@ defmodule EngramWeb.McpControllerTest do
       assert tool_text(conn) =~ "folder"
     end
 
+    # #1492 REOPENED by task 3.5, closed for good here: making list_folder's
+    # `folder` optional meant the required-arg check above no longer applies
+    # to it, so an undeclared key like "path" fell all the way through to the
+    # handler's `|| ""` default and silently returned the vault root instead
+    # of erroring. Closed at the shared dispatch choke point for every tool,
+    # not patched on list_folder alone: validate_tool_args now rejects any
+    # argument key a tool's inputSchema does not declare (and does not list
+    # as a hidden_params alias), before the handler ever runs.
+    test "tools/call with an undeclared argument key is a tool error naming it, not a silent default",
+         %{conn: conn} do
+      conn = call_tool(conn, "list_folder", %{"path" => "Health"})
+      resp = json_response(conn, 200)
+
+      assert_tool_error(resp)
+      text = tool_text(conn)
+      assert text =~ ~s(Unknown argument "path" for list_folder.)
+      assert text =~ "Valid arguments:"
+      assert text =~ "folder"
+      assert text =~ "recursive"
+      # Proves the handler never ran: a silent default would have listed the
+      # vault root's folders instead of erroring.
+      refute text =~ "**Folder:**"
+    end
+
     # A rejected call now answers 200 with `isError: true` rather than a
     # JSON-RPC error, so the response shape alone no longer proves the handler
     # never ran. Assert the vault is untouched as well — this is the case
@@ -238,6 +262,16 @@ defmodule EngramWeb.McpControllerTest do
 
       assert_tool_error(resp)
       assert tool_text(conn) =~ "paths"
+    end
+
+    test "get_notes with an undeclared argument key is a tool error naming it", %{conn: conn} do
+      conn = call_tool(conn, "get_notes", %{"path" => "Health/Supplements.md"})
+      resp = json_response(conn, 200)
+
+      assert_tool_error(resp)
+      text = tool_text(conn)
+      assert text =~ ~s(Unknown argument "path" for get_notes.)
+      assert text =~ "paths"
     end
 
     # Adversarial-review finding: the array-typed check only validated
@@ -638,6 +672,33 @@ defmodule EngramWeb.McpControllerTest do
       result = tool_text(conn)
       assert result =~ "# Appended"
       assert result =~ "Some text."
+    end
+  end
+
+  describe "edit_note tool" do
+    # old_text/new_text are undocumented back-compat aliases for find/replace
+    # (Handlers.run_edit falls back to them) — not declared in edit_note's
+    # inputSchema on purpose, so they must be on the dispatch-level
+    # hidden_params allowlist or the new unknown-argument check added for
+    # #1492 would reject them at the controller before the handler ever runs.
+    test "replace_text accepts the old_text/new_text aliases through the controller", %{
+      conn: conn
+    } do
+      conn =
+        call_tool(conn, "edit_note", %{
+          "path" => "Health/Supplements.md",
+          "mode" => "replace_text",
+          "old_text" => "Omega 3",
+          "new_text" => "Omega 3 (fish oil)"
+        })
+
+      refute json_response(conn, 200)["result"]["isError"]
+      assert tool_text(conn) =~ "Health/Supplements.md"
+
+      conn =
+        call_tool(build_authed(conn), "get_note", %{"source_path" => "Health/Supplements.md"})
+
+      assert tool_text(conn) =~ "Omega 3 (fish oil)"
     end
   end
 

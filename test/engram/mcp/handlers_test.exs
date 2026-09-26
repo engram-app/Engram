@@ -442,5 +442,27 @@ defmodule Engram.MCP.HandlersTest do
       {:ok, _, structured} = Handlers.handle("list_folder", user, vault, %{"folder" => "Leaf"})
       assert structured["folders"] == []
     end
+
+    test "renders subfolders in the text even when the folder has no direct notes or attachments",
+         %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      for p <- ["A/a.md", "Z/z.md"],
+          do:
+            {:ok, _} =
+              Notes.upsert_note(user, vault, %{"path" => p, "content" => "x", "mtime" => 1.0})
+
+      {:ok, body, structured} = Handlers.handle("list_folder", user, vault, %{"folder" => ""})
+
+      assert structured["notes"] == []
+      assert structured["attachments"] == []
+      assert Enum.map(structured["folders"], & &1["folder"]) |> Enum.sort() == ["A", "Z"]
+
+      assert body =~ "**Folder:** (root)"
+      assert body =~ "**Subfolders:**"
+      assert body =~ "| A | 1 |"
+      assert body =~ "| Z | 1 |"
+      refute body =~ "No notes found"
+    end
   end
 end

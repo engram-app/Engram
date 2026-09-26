@@ -18,6 +18,11 @@ defmodule Engram.MCP.Tools do
           optional(:annotations) => map(),
           optional(:outputSchema) => map(),
           optional(:deprecated_for) => String.t(),
+          # Argument keys a handler reads that are deliberately NOT declared in
+          # inputSchema (an undocumented back-compat alias for a declared key),
+          # so the dispatch-level unknown-argument check in mcp_controller.ex
+          # must still let them through. See edit_note's old_text/new_text.
+          optional(:hidden_params) => [String.t()],
           required(:handler) => (map(), map(), map() ->
                                    {:ok, String.t()}
                                    | {:ok, String.t(), map()}
@@ -849,6 +854,11 @@ defmodule Engram.MCP.Tools do
         },
         "required" => ["path", "mode"]
       },
+      # Undocumented back-compat aliases for find/replace (Handlers.run_edit
+      # falls back to these), kept off the public schema so a client building
+      # from it sees one spelling. Must still pass dispatch-level argument
+      # validation.
+      hidden_params: ~w(old_text new_text),
       handler: &Handlers.handle("edit_note", &1, &2, &3)
     }
   end
