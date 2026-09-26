@@ -1045,8 +1045,13 @@ end
 if otlp_endpoint = System.get_env("OTEL_EXPORTER_OTLP_ENDPOINT") do
   ratio = Engram.Observability.Otel.sample_ratio(System.get_env("ENGRAM_OTEL_SAMPLE_RATIO"), 1.0)
 
+  # SpanScrubber MUST precede the exporting processor: its on_start rewrites
+  # the span (route template, no query, truncated IPs) before it is recorded.
   config :opentelemetry,
-    span_processor: :batch,
+    processors: [
+      {Engram.Observability.SpanScrubber, %{}},
+      {:otel_batch_processor, %{}}
+    ],
     traces_exporter: :otlp,
     sampler: {:parent_based, %{root: {Engram.Observability.TraceSampler, %{ratio: ratio}}}},
     resource: [

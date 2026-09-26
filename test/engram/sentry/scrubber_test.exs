@@ -154,4 +154,52 @@ defmodule Engram.Sentry.ScrubberTest do
     assert scrubbed.user == e.user
     assert scrubbed.tags == e.tags
   end
+
+  describe "scrub/1 — exception values and frame args" do
+    @secret "Dear diary, the biopsy came back positive."
+
+    # MatchError/CaseClauseError/KeyError/FunctionClauseError messages inspect
+    # the whole term. PlugCapture and capture_exception reach Sentry without
+    # passing through the logger, so RedactFilter never sees them.
+    defp crash_event(fun) do
+      {e, st} =
+        try do
+          fun.()
+        rescue
+          e -> {e, __STACKTRACE__}
+        end
+
+      Sentry.Event.create_event(exception: e, stacktrace: st)
+    end
+
+    test "a term-inspecting exception keeps its type but not its message" do
+      payload = %{"content" => @secret}
+
+      scrubbed =
+        crash_event(fn -> {:ok, _} = Function.identity({:error, payload}) end)
+        |> Scrubber.scrub()
+
+      assert [%{type: "MatchError"}] = scrubbed.exception
+      # The wire payload; `original_exception` is never serialized.
+      refute inspect(Sentry.Client.render_event(scrubbed)) =~ "biopsy"
+    end
+
+    test "stack frame arguments are dropped" do
+      scrubbed =
+        crash_event(fn -> @secret |> Function.identity() |> String.to_integer() end)
+        |> Scrubber.scrub()
+
+      frames = for ex <- scrubbed.exception, ex.stacktrace, f <- ex.stacktrace.frames, do: f
+      assert frames != []
+      assert Enum.all?(frames, &is_nil(&1.vars))
+      refute inspect(Sentry.Client.render_event(scrubbed)) =~ "biopsy"
+    end
+
+    test "an allowlisted exception keeps its message" do
+      e = %DBConnection.ConnectionError{message: "tcp recv: closed"}
+      scrubbed = Sentry.Event.create_event(exception: e) |> Scrubber.scrub()
+
+      assert [%{value: "tcp recv: closed"}] = scrubbed.exception
+    end
+  end
 end

@@ -42,6 +42,11 @@ defmodule Engram.Logger.LogCallComplianceTest do
   # flags 84 sites to protect 40 gets switched off. Widen this list rather than
   # adding exceptions to it.
   @content_paths [
+    # Egress sinks for exceptions raised over content (request params, job
+    # args, decrypted notes). Their own log call renders an exception, so the
+    # scan must see it go through SafeException.
+    "lib/engram_web/request_exception_logger.ex",
+    "lib/engram/oban/safe_engine.ex",
     # Logs exception and EXIT reasons from the liveness stamp. A Postgrex
     # error renders "Failing row contains (...)", so this file can absolutely
     # reach a row value — it was out-of-scope on the claim that it "never"
@@ -315,6 +320,9 @@ defmodule Engram.Logger.LogCallComplianceTest do
 
   @sanctioned [
     "safe_reason",
+    # Engram.Logger.SafeException: sanitizes internally, then renders.
+    "safe_format",
+    "to_safe_exception",
     "safe_exit_reason",
     "format_location",
     "error_kind",
