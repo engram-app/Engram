@@ -49,6 +49,33 @@ defmodule Engram.Observability.SpanScrubberTest do
       assert attrs[:"engram.path.depth"] == 1
     end
 
+    test "a dotted name that is not a known file type reports no extension" do
+      # The segment is still URL-encoded and user-chosen: `Dr.%20Smith` would
+      # otherwise leak "%20smith", `Q3.Layoffs` "layoffs".
+      for p <- [
+            "/api/folders/Dr.%20Smith",
+            "/api/notes/Q3.Layoffs",
+            "/api/notes/a.b.c.secretword"
+          ] do
+        attrs = SpanScrubber.scrub(%{:"http.request.method" => :GET, :"url.path" => p})
+
+        refute Map.has_key?(attrs, :"engram.path.ext"),
+               "#{p} leaked #{inspect(attrs[:"engram.path.ext"])}"
+      end
+    end
+
+    test "known file types are reported lowercased" do
+      for {p, ext} <- [
+            {"/api/notes/x.md", "md"},
+            {"/api/attachments/a/B.PNG", "png"},
+            {"/api/notes/c.canvas", "canvas"}
+          ] do
+        assert SpanScrubber.scrub(%{:"http.request.method" => :GET, :"url.path" => p})[
+                 :"engram.path.ext"
+               ] == ext
+      end
+    end
+
     test "a static route passes through untouched and gets no ref" do
       attrs =
         SpanScrubber.scrub(%{
@@ -117,6 +144,23 @@ defmodule Engram.Observability.SpanScrubberTest do
 
     test "a missing method still scrubs the path (fail closed)" do
       assert SpanScrubber.scrub(%{:"url.path" => @canary_path})[:"url.path"] == "unmatched"
+    end
+  end
+
+  describe "on_start/3" do
+    test "keeps the span's configured attribute limits" do
+      attrs =
+        :otel_attributes.new(
+          %{:"url.path" => "/api/notes/x.md", :"http.request.method" => :GET},
+          7,
+          99
+        )
+
+      out = SpanScrubber.on_start(:ctx, span(attributes: attrs), %{})
+
+      # otel_attributes' record is private to its .erl: {attributes, count, len, dropped, map}
+      assert {:attributes, 7, 99, _, map} = span(out, :attributes)
+      assert map[:"url.path"] == "/api/notes/*path"
     end
   end
 
