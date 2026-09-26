@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useLocation, useNavigate } from "react-router";
+import { Link, useLocation, useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
 import { useAutofocus } from "@/hooks/use-autofocus";
 import { destructiveAlert, fieldInput, heading, selectableRow } from "@/lib/ui-classes";
@@ -218,23 +218,35 @@ function DeviceLinkPage() {
 	// `gate_ok`, not `next_step`, for the reason given in oauth-authorize-page.
 	const onboardingQuery = useOnboardingStatus({ enabled: isSignedIn });
 	const gateOk = onboardingQuery.data?.gate_ok;
+	const answeredObsidian = typeof onboardingQuery.data?.profile?.uses_obsidian === "boolean";
 	const setProfile = useSetOnboardingProfile();
 	const bounced = useRef(false);
+	// No storage to park the code in (Safari private mode, quota). Bouncing would
+	// lose it, and the vault step would then wait on a sync that can never
+	// happen, so stay here and point at setup instead.
+	const [cannotPark, setCannotPark] = useState(false);
 	useEffect(() => {
 		if (gateOk !== false || bounced.current) {
 			return;
 		}
 		bounced.current = true;
-		stashPendingDeviceLink(urlCode);
+		if (!stashPendingDeviceLink(urlCode)) {
+			setCannotPark(true);
+			return;
+		}
 		// Arriving from the plugin answers the vault step's "do you already use
 		// Obsidian?", so answer it here. Once saved, the vault step sends them
-		// straight back to /link instead of asking. A failed write only means
-		// the question gets asked, so it must never block the handoff.
-		setProfile
-			.mutateAsync({ uses_obsidian: true })
-			.catch((err: unknown) => console.warn("onboarding uses_obsidian pre-answer failed", err))
-			.finally(() => navigate("/onboard", { replace: true }));
-	}, [gateOk, urlCode, navigate, setProfile]);
+		// straight back to /link instead of asking. Never overwrite an answer a
+		// returning user already gave (their gate can close for other reasons).
+		// A failed write only means the question gets asked, so it must never
+		// block the handoff.
+		const preAnswer = answeredObsidian
+			? Promise.resolve()
+			: setProfile
+					.mutateAsync({ uses_obsidian: true })
+					.catch((err: unknown) => console.warn("onboarding uses_obsidian pre-answer failed", err));
+		preAnswer.finally(() => navigate("/onboard", { replace: true }));
+	}, [gateOk, urlCode, answeredObsidian, navigate, setProfile]);
 
 	// Back from the wizard: the parked trip is spent.
 	useEffect(() => {
@@ -295,6 +307,23 @@ function DeviceLinkPage() {
 					<h1 className={heading}>Link Obsidian Vault</h1>
 					<p className="text-muted-foreground text-sm">
 						Please sign in to link your Obsidian vault.
+					</p>
+				</AuthPanel>
+			</AuthShell>
+		);
+	}
+
+	if (cannotPark) {
+		return (
+			<AuthShell>
+				<AuthPanel className="flex flex-col gap-3">
+					<h1 className={heading}>Link Obsidian Vault</h1>
+					<p className="text-muted-foreground text-sm">
+						Your account setup is not finished yet.{" "}
+						<Link to="/onboard" className="underline underline-offset-4">
+							Finish setting up
+						</Link>
+						, then click Link in Obsidian again.
 					</p>
 				</AuthPanel>
 			</AuthShell>

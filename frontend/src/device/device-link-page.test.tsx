@@ -57,7 +57,9 @@ const billingPending = vi.hoisted(() => ({ current: false }));
 // Default: onboarded. A plugin-first signup arrives with gate_ok false.
 const setProfile = vi.hoisted(() => vi.fn().mockResolvedValue({}));
 const onboardingState = vi.hoisted(() => ({
-	current: { gate_ok: true } as { gate_ok: boolean } | undefined,
+	current: { gate_ok: true } as
+		| { gate_ok: boolean; profile?: { uses_obsidian?: boolean } }
+		| undefined,
 }));
 const billingState = vi.hoisted(() => ({
 	current: {
@@ -178,6 +180,36 @@ describe("DeviceLinkPage", () => {
 
 			await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/onboard"));
 			expect(setProfile).toHaveBeenCalledWith({ uses_obsidian: true });
+		});
+
+		// A returning user whose gate closed for another reason (new ToS, lapsed
+		// plan) already answered this. Opening /link must not rewrite it.
+		it("leaves an existing uses_obsidian answer alone", async () => {
+			onboardingState.current = { gate_ok: false, profile: { uses_obsidian: false } };
+			renderPage("/link?code=ENGR-7X4K");
+
+			await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/onboard"));
+			expect(setProfile).not.toHaveBeenCalled();
+		});
+
+		// No storage (Safari private mode, quota): bouncing would lose the code,
+		// and the vault step would then wait on a sync that can never happen.
+		it("stays on /link and points to setup when the code cannot be parked", async () => {
+			onboardingState.current = { gate_ok: false };
+			const setItem = vi.spyOn(window.sessionStorage, "setItem").mockImplementation(() => {
+				throw new Error("QuotaExceededError");
+			});
+			try {
+				renderPage("/link?code=ENGR-7X4K");
+
+				expect(await screen.findByRole("link", { name: /finish setting up/iu })).toHaveAttribute(
+					"href",
+					"/onboard",
+				);
+				expect(screen.getByTestId("location")).toHaveTextContent(/^\/link/u);
+			} finally {
+				setItem.mockRestore();
+			}
 		});
 
 		// The pre-answer is a convenience. Failing it must not strand the user.
