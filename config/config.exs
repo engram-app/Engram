@@ -348,6 +348,14 @@ config :sentry,
 # exporter to :otlp only when OTEL_EXPORTER_OTLP_ENDPOINT is set.
 config :opentelemetry, traces_exporter: :none
 
+# Drop span EVENTS. The only producer is `record_exception/3` (Bandit and
+# Phoenix, on a crashing request), whose `exception.message` inspects the
+# failing term and `exception.stacktrace` prints top-frame arguments: note
+# paths, payloads, Paddle customer data. Events are added after span start, so
+# SpanScrubber cannot reach them. Triage keeps `error.type` + status + route.
+# If app code ever calls `Tracer.add_event`, raise this and scrub instead.
+config :opentelemetry, event_count_limit: 0
+
 # Make the W3C trace-context propagator explicit. Inbound `traceparent`
 # headers (from the plugin and web SPA) parent the server span onto the
 # client span. Previously inherited from the SDK default, declared here so
