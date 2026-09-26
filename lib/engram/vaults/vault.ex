@@ -8,9 +8,9 @@ defmodule Engram.Vaults.Vault do
   schema "vaults" do
     # Phase B.3: name is virtual — populated by maybe_decrypt_vault_fields/2.
     # Persisted form is name_ciphertext + name_nonce + name_hmac.
-    field :name, :string, virtual: true
-    field :description, :string
-    field :slug, :string
+    field :name, :string, virtual: true, redact: true
+    field :description, :string, redact: true
+    field :slug, :string, redact: true
     field :client_id, :string
     field :is_default, :boolean, default: false
     field :deleted_at, :utc_datetime

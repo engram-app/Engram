@@ -13,7 +13,7 @@ defmodule Engram.Onboarding.Agreement do
     field :document, :string
     field :version, :string
     field :accepted_at, :utc_datetime
-    field :ip_address, :string
+    field :ip_address, :string, redact: true
     field :user_agent, :string
     field :content_hash, :string
 

@@ -13,7 +13,7 @@ defmodule Engram.Email.Suppression do
   alias Engram.Repo
 
   schema "email_suppressions" do
-    field :email, :string
+    field :email, :string, redact: true
     field :reason, Ecto.Enum, values: [:bounced, :complained]
 
     timestamps(type: :utc_datetime_usec, updated_at: false)

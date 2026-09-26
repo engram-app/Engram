@@ -39,7 +39,7 @@ defmodule Engram.OAuth.RefreshToken do
     # Task 7 NOTE: :inet at the DB level may return %Postgrex.INET{} struct
     # when loaded; verify round-trip before adding to @cast_fields, may need
     # a custom Ecto type.
-    field :last_used_ip, :string
+    field :last_used_ip, :string, redact: true
 
     # The redirect the grant ACTUALLY used, copied from the authorization code
     # at exchange and carried across every rotation. Not the client's

@@ -7,7 +7,7 @@ defmodule Engram.Accounts.ApiKey do
 
   schema "api_keys" do
     field :key_hash, :string
-    field :name, :string
+    field :name, :string, redact: true
     field :last_used, :utc_datetime
 
     belongs_to :user, Engram.Accounts.User

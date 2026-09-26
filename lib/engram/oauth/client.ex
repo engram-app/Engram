@@ -58,7 +58,7 @@ defmodule Engram.OAuth.Client do
     # Plaintext, returned in the registration response and never again. Virtual
     # so it cannot be persisted or read back: a client that loses its secret
     # re-registers.
-    field :client_secret, :string, virtual: true
+    field :client_secret, :string, virtual: true, redact: true
     field :redirect_uris, {:array, :string}
     field :client_name, :string
     field :scope, :string
@@ -106,7 +106,7 @@ defmodule Engram.OAuth.Client do
     field :kind, :string, default: "mcp"
     field :first_user_agent, :string
     # DB column was changed from :inet to :text (migration 20260530000005).
-    field :first_ip, :string
+    field :first_ip, :string, redact: true
 
     timestamps(type: :utc_datetime_usec)
   end

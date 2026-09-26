@@ -18,8 +18,8 @@ defmodule Engram.Logs.ClientLog do
     field :ts, :utc_datetime
     field :level, :string, default: "info"
     field :category, :string, default: ""
-    field :message, :string, default: ""
-    field :stack, :string
+    field :message, :string, default: "", redact: true
+    field :stack, :string, redact: true
     field :plugin_version, :string, default: ""
     field :platform, :string, default: ""
     field :conn_id, :string

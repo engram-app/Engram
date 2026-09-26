@@ -10,18 +10,18 @@ defmodule Engram.Notes.Note do
     # ciphertext + HMAC columns are persisted. Engram.Crypto.maybe_decrypt_note_fields/2
     # populates these so callers can still read note.path / note.content etc.
     # after a read.
-    field :path, :string, virtual: true
-    field :folder, :string, virtual: true
-    field :tags, {:array, :string}, virtual: true, default: []
-    field :title, :string, virtual: true
-    field :content, :string, virtual: true
+    field :path, :string, virtual: true, redact: true
+    field :folder, :string, virtual: true, redact: true
+    field :tags, {:array, :string}, virtual: true, default: [], redact: true
+    field :title, :string, virtual: true, redact: true
+    field :content, :string, virtual: true, redact: true
 
     # OKF v0.1 fields (spec 2026-07-02). type/description/resource are
     # encrypted (virtuals below); the two dates are the ONLY plaintext
     # frontmatter columns (range queries need real values).
-    field :type, :string, virtual: true
-    field :description, :string, virtual: true
-    field :resource, :string, virtual: true
+    field :type, :string, virtual: true, redact: true
+    field :description, :string, virtual: true, redact: true
+    field :resource, :string, virtual: true, redact: true
     field :fm_timestamp, :utc_datetime
     field :fm_created, :utc_datetime
 
