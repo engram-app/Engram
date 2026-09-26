@@ -382,7 +382,14 @@ defmodule Engram.MCP.Handlers do
     replace = args["replace"] || ""
     occurrence = args["occurrence"] || 0
 
-    patch_text(user, vault, path, %{find: find, replace: replace, occurrence: occurrence}, nil)
+    patch_text(
+      user,
+      vault,
+      path,
+      %{find: find, replace: replace, occurrence: occurrence},
+      nil,
+      "patch_note"
+    )
   end
 
   def handle("update_section", user, vault, args) do
@@ -391,7 +398,7 @@ defmodule Engram.MCP.Handlers do
     new_content = args["content"] || ""
     level = args["level"] || 2
 
-    replace_section(user, vault, path, heading, new_content, level)
+    replace_section(user, vault, path, heading, new_content, level, "update_section")
   end
 
   @text_params ~w(find replace occurrence expected_replacements old_text new_text)
@@ -400,9 +407,8 @@ defmodule Engram.MCP.Handlers do
   def handle("edit_note", user, vault, %{"mode" => mode} = args) do
     path = args["path"] || ""
 
-    with :ok <- reject_other_mode(args, mode),
-         {:ok, result} <- run_edit(user, vault, path, mode, args) do
-      result
+    with :ok <- reject_other_mode(args, mode) do
+      run_edit(user, vault, path, mode, args)
     end
   end
 
@@ -595,8 +601,14 @@ defmodule Engram.MCP.Handlers do
   defp reject_other_mode(_args, mode),
     do: {:error, "mode must be replace_text or replace_section, got #{inspect(mode)}"}
 
+  # A strict-schema client (OpenAI strict mode) sends every declared property
+  # on every call, nulling out the ones it isn't using. `validate_tool_args/2`
+  # already lets an explicit `null` through for an optional key, so `Map.has_key?`
+  # alone treated that as a stray cross-mode param and edit_note would refuse
+  # EVERY such call. Only a present, non-nil value from the other mode is
+  # actually a mistake.
   defp reject_params(args, params, owner) do
-    case Enum.find(params, &Map.has_key?(args, &1)) do
+    case Enum.find(params, &(Map.has_key?(args, &1) and not is_nil(Map.get(args, &1)))) do
       nil -> :ok
       p -> {:error, "#{p} is only valid with mode #{owner}"}
     end
@@ -607,8 +619,18 @@ defmodule Engram.MCP.Handlers do
     replace = args["replace"] || args["new_text"]
 
     cond do
-      not is_binary(find) ->
+      is_nil(find) ->
         {:error, "find is required for mode replace_text"}
+
+      not is_binary(find) ->
+        {:error, "find must be a string"}
+
+      # `find == ""` passes is_binary and String.contains?/2 (every string
+      # contains ""), so do_replace/4 happily prepends (occurrence 0) or
+      # interleaves (occurrence -1) empty "replacements" and reports success —
+      # a write that corrupts the note while claiming to have worked.
+      find == "" ->
+        {:error, "find must not be empty for mode replace_text"}
 
       not is_binary(replace) ->
         {:error, "replace is required for mode replace_text"}
@@ -619,10 +641,10 @@ defmodule Engram.MCP.Handlers do
           vault,
           path,
           %{find: find, replace: replace, occurrence: args["occurrence"] || 0},
-          args["expected_replacements"]
+          args["expected_replacements"],
+          "edit_note"
         )
         |> tag_mode("replace_text", %{"heading" => nil})
-        |> then(&{:ok, &1})
     end
   end
 
@@ -636,9 +658,15 @@ defmodule Engram.MCP.Handlers do
 
       true ->
         user
-        |> replace_section(vault, path, args["heading"], args["content"], args["level"] || 2)
+        |> replace_section(
+          vault,
+          path,
+          args["heading"],
+          args["content"],
+          args["level"] || 2,
+          "edit_note"
+        )
         |> tag_mode("replace_section", %{"replacements" => nil})
-        |> then(&{:ok, &1})
     end
   end
 
@@ -655,7 +683,8 @@ defmodule Engram.MCP.Handlers do
          vault,
          path,
          %{find: find, replace: replace, occurrence: occurrence},
-         expected
+         expected,
+         op
        ) do
     with {:ok, note} <- Notes.get_note(user, vault, path),
          {:ok, current} <- Notes.authoritative_content(user, note) do
@@ -683,13 +712,13 @@ defmodule Engram.MCP.Handlers do
       end
     else
       {:error, :not_found} -> {:error, "Note not found: #{path}"}
-      {:error, reason} -> log_and_error("patch_note", reason, "Could not read #{path}; retry")
+      {:error, reason} -> log_and_error(op, reason, "Could not read #{path}; retry")
     end
   end
 
   # Same authority rule as patch_text: section surgery against the stale
   # `notes.content` façade would rewrite the note from an older body (#1159).
-  defp replace_section(user, vault, path, heading, new_content, level) do
+  defp replace_section(user, vault, path, heading, new_content, level, op) do
     with {:ok, note} <- Notes.get_note(user, vault, path),
          {:ok, current} <- Notes.authoritative_content(user, note) do
       prefix = String.duplicate("#", max(1, min(level, 6))) <> " "
@@ -752,7 +781,7 @@ defmodule Engram.MCP.Handlers do
       end
     else
       {:error, :not_found} -> {:error, "Note not found: #{path}"}
-      {:error, reason} -> log_and_error("update_section", reason, "Could not read #{path}; retry")
+      {:error, reason} -> log_and_error(op, reason, "Could not read #{path}; retry")
     end
   end
 
