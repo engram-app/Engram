@@ -1490,13 +1490,34 @@ defmodule Engram.MCP.Handlers do
     end
   end
 
+  # A note-scoped list, not a network response, so 50/100 are arbitrary but
+  # generous caps meant only to stop a huge note from flooding the reply.
+  @max_listed_headings 50
+  @max_heading_chars 100
+
   defp heading_missing_msg(path, section, content) do
     case Sections.headings(content) do
       [] ->
         "Heading not found in #{path}: #{section}. This note has no headings."
 
       hs ->
-        "Heading not found in #{path}: #{section}. Headings: #{Enum.map_join(hs, ", ", & &1.text)}"
+        total = length(hs)
+        listed = hs |> Enum.take(@max_listed_headings) |> Enum.map_join(", ", &truncate_heading/1)
+
+        more =
+          if total > @max_listed_headings,
+            do: ", and #{total - @max_listed_headings} more",
+            else: ""
+
+        "Heading not found in #{path}: #{section}. Headings: #{listed}#{more}"
+    end
+  end
+
+  defp truncate_heading(%{text: text}) do
+    if String.length(text) > @max_heading_chars do
+      String.slice(text, 0, @max_heading_chars) <> "..."
+    else
+      text
     end
   end
 

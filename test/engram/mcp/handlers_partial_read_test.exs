@@ -49,6 +49,30 @@ defmodule Engram.MCP.HandlersPartialReadTest do
              get(u, v, %{"paths" => ["Q.md"], "section" => "Nope"})
   end
 
+  test "the missing-section heading list is capped at 50 and each heading truncated to 100 chars",
+       %{user: u, vault: v} do
+    headings = Enum.map(1..60, &"H#{&1}")
+    content = Enum.map_join(headings, "\n\n", &"## #{&1}") <> "\n"
+
+    {:ok, _} =
+      Notes.upsert_note(u, v, %{"path" => "Many.md", "content" => content, "mtime" => 1.0})
+
+    assert {:error, msg} = get(u, v, %{"paths" => ["Many.md"], "section" => "Nope"})
+    assert msg =~ "and 10 more"
+    assert Enum.all?(Enum.take(headings, 50), &(msg =~ &1))
+    refute msg =~ "H51"
+
+    long = String.duplicate("x", 150)
+    content2 = "## #{long}\n\nbody\n"
+
+    {:ok, _} =
+      Notes.upsert_note(u, v, %{"path" => "Long.md", "content" => content2, "mtime" => 1.0})
+
+    assert {:error, msg2} = get(u, v, %{"paths" => ["Long.md"], "section" => "Nope"})
+    assert msg2 =~ "#{String.duplicate("x", 100)}..."
+    refute msg2 =~ String.duplicate("x", 101)
+  end
+
   test "section on a missing note keeps found:false", %{user: u, vault: v} do
     assert {:ok, _, %{"notes" => [%{"path" => "Gone.md", "found" => false}]}} =
              get(u, v, %{"paths" => ["Gone.md"], "section" => "Todo"})
@@ -92,5 +116,17 @@ defmodule Engram.MCP.HandlersPartialReadTest do
              get(u, v, %{"paths" => ["P.md"], "section" => nil, "outline" => nil})
 
     assert n["content"] =~ "## Done"
+  end
+
+  # Regression: neither section nor outline present must keep the pre-Task-3
+  # get_notes shape (full content, no outline key).
+  test "plain get_notes without section or outline keeps the original content shape",
+       %{user: u, vault: v} do
+    assert {:ok, text, %{"notes" => [n]}} = get(u, v, %{"paths" => ["P.md"]})
+
+    assert n["found"] == true
+    assert n["content"] =~ "## Done"
+    refute Map.has_key?(n, "outline")
+    assert text =~ "**Path:** P.md"
   end
 end
