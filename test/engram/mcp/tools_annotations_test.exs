@@ -30,14 +30,14 @@ defmodule Engram.MCP.ToolsAnnotationsTest do
   end
 
   test "tools that overwrite or delete content are marked destructive" do
-    for tool <- Tools.list() do
+    for tool <- Tools.all_callable() do
       assert tool.annotations["destructiveHint"] == tool.name in @destructive,
              "#{tool.name} destructiveHint is wrong"
     end
   end
 
   test "no tool reaches outside the user's own vault" do
-    for tool <- Tools.list() do
+    for tool <- Tools.all_callable() do
       refute tool.annotations["openWorldHint"], "#{tool.name} claims openWorldHint"
     end
   end
