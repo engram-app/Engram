@@ -539,8 +539,6 @@ defmodule EngramWeb.McpController do
   # -- Method dispatch --
 
   defp dispatch(_conn, "initialize", params) do
-    require Logger
-
     Logger.info("mcp_handshake", handshake_metadata(params))
 
     {:ok,
@@ -784,7 +782,6 @@ defmodule EngramWeb.McpController do
       # deep in the call stack (including %Note{} virtual decrypted fields
       # if the throw came out of a crypto path). Log structured details
       # server-side; surface a low-cardinality label to the client.
-      require Logger
 
       Logger.error(
         "mcp tool dispatch trapped",
