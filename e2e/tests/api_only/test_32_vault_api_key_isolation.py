@@ -228,20 +228,20 @@ def test_vault_registration_idempotent(vault_setup):
 
 
 def test_mcp_respects_vault_scoping(vault_setup):
-    """MCP get_note scopes to the vault_id ARG (MCP uses vault_id, not X-Vault-ID)."""
+    """MCP get_notes scopes to the vault_id ARG (MCP uses vault_id, not X-Vault-ID)."""
     api_a = vault_setup["api_vault_a"]
     vault_a_id = vault_setup["vault_a_id"]
 
     # MCP resolves the vault from the vault_id arg (X-Vault-ID is a REST-only
     # mechanism; the MCP server is off the VaultPlug path).
-    resp, status = api_a.mcp_call("get_note", {
-        "source_path": "E2E/VaultA-Secret.md",
+    resp, status = api_a.mcp_call("get_notes", {
+        "paths": ["E2E/VaultA-Secret.md"],
         "vault_id": vault_a_id,
     })
     assert status == 200
-    content = resp.get("result", {}).get("content", [{}])
-    text = content[0].get("text", "") if content else ""
-    assert "Vault A Secret" in text, f"Expected vault A note content, got: {text[:200]}"
+    note = resp["result"]["structuredContent"]["notes"][0]
+    assert note["found"], f"Expected vault A note to be found, got: {note}"
+    assert "Vault A Secret" in note["content"], f"Expected vault A note content, got: {note}"
 
 
 def test_mcp_cannot_see_other_vault_notes(vault_setup):
@@ -249,15 +249,14 @@ def test_mcp_cannot_see_other_vault_notes(vault_setup):
     api_a = vault_setup["api_vault_a"]
     vault_a_id = vault_setup["vault_a_id"]
 
-    resp, status = api_a.mcp_call("get_note", {
-        "source_path": "E2E/VaultB-Secret.md",
+    resp, status = api_a.mcp_call("get_notes", {
+        "paths": ["E2E/VaultB-Secret.md"],
         "vault_id": vault_a_id,
     })
     assert status == 200
-    content = resp.get("result", {}).get("content", [{}])
-    text = content[0].get("text", "") if content else ""
-    assert "Note not found" in text, (
-        f"ISOLATION BREACH: MCP scoped to vault A can see vault B note: {text[:200]}"
+    note = resp["result"]["structuredContent"]["notes"][0]
+    assert not note["found"], (
+        f"ISOLATION BREACH: MCP scoped to vault A can see vault B note: {note}"
     )
 
 
@@ -303,16 +302,15 @@ def test_mcp_vault_id_override_same_user(vault_setup):
     vault_b_id = vault_setup["vault_b_id"]
 
     # Use vault_id arg to switch from vault A context to vault B
-    resp, status = api_a.mcp_call("get_note", {
-        "source_path": "E2E/VaultB-Secret.md",
+    resp, status = api_a.mcp_call("get_notes", {
+        "paths": ["E2E/VaultB-Secret.md"],
         "vault_id": vault_b_id,
     })
     assert status == 200
-    content = resp.get("result", {}).get("content", [{}])
-    text = content[0].get("text", "") if content else ""
+    note = resp["result"]["structuredContent"]["notes"][0]
     # Unrestricted key should be able to switch vaults
-    assert "Vault B Secret" in text, (
-        f"Unrestricted key should be able to switch vaults via MCP, got: {text[:200]}"
+    assert note["found"] and "Vault B Secret" in note["content"], (
+        f"Unrestricted key should be able to switch vaults via MCP, got: {note}"
     )
 
 

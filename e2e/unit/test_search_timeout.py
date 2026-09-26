@@ -200,7 +200,7 @@ def test_this_process_still_sees_the_real_budget():
         ("search_notes", True),
         ("suggest_folder", True),
         ("create_note", True),
-        ("get_note", False),
+        ("get_notes", False),
         ("write_note", False),
     ],
 )
