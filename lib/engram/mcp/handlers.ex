@@ -88,7 +88,7 @@ defmodule Engram.MCP.Handlers do
 
     case search_kind(args) do
       {:ok, :recent} ->
-        limit = min(args["limit"] || 5, 20)
+        limit = max(1, min(args["limit"] || 5, 20))
 
         vaults
         |> Enum.flat_map(fn v ->
@@ -117,7 +117,7 @@ defmodule Engram.MCP.Handlers do
   def handle("search_notes", user, vault, args) do
     case search_kind(args) do
       {:ok, :recent} ->
-        {:ok, notes} = Notes.list_recent_notes(user, vault, min(args["limit"] || 5, 20))
+        {:ok, notes} = Notes.list_recent_notes(user, vault, max(1, min(args["limit"] || 5, 20)))
         render_recent(Enum.map(notes, &{&1, vault}), %{})
 
       {:ok, :query} ->

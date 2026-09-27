@@ -67,6 +67,22 @@ defmodule Engram.MCP.HandlersRecentTest do
              })
   end
 
+  test "limit 0 or negative floors to 1 instead of crashing", %{user: u, vault: v} do
+    assert {:ok, _, %{"results" => [_]}} = Handlers.handle("search_notes", u, v, %{"limit" => 0})
+    assert {:ok, _, %{"results" => [_]}} = Handlers.handle("search_notes", u, v, %{"limit" => -3})
+  end
+
+  test "cross-vault: limit 0 or negative floors to 1 instead of crashing", %{user: u, vault: v} do
+    other = insert(:vault, user: u)
+    {:ok, _} = Notes.upsert_note(u, other, %{"path" => "o.md", "content" => "o", "mtime" => 2.0})
+
+    assert {:ok, _, %{"results" => [_]}} =
+             Handlers.handle("search_notes", u, {:cross_vault, [v, other]}, %{"limit" => 0})
+
+    assert {:ok, _, %{"results" => [_]}} =
+             Handlers.handle("search_notes", u, {:cross_vault, [v, other]}, %{"limit" => -3})
+  end
+
   test "an empty vault answers 'No notes yet.'", %{user: u} do
     empty = insert(:vault, user: u)
 

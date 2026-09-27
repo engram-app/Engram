@@ -90,6 +90,7 @@
           "limit": {
             "default": 5,
             "description": "Maximum number of results (1-20, default 5)",
+            "minimum": 1,
             "type": "integer"
           },
           "mode": {

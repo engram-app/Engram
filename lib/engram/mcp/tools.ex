@@ -312,7 +312,8 @@ defmodule Engram.MCP.Tools do
           "limit" => %{
             "type" => "integer",
             "description" => "Maximum number of results (1-20, default 5)",
-            "default" => 5
+            "default" => 5,
+            "minimum" => 1
           },
           "tags" => %{
             "type" => "array",
