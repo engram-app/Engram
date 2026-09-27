@@ -793,4 +793,32 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     assert msg =~ "too large"
     assert read!(u, v, "Big.md") == content
   end
+
+  # Fix round 2: a hidden setext heading used to be deleted by replace_section.
+  test "replace_section refuses when a hidden setext heading follows", %{user: u, vault: v} do
+    content = put!(u, v, "Setext.md", "## A\n%% note ` %% and `y`\nB\n---\nimportant\n%% c2 %%\n")
+
+    assert {:error, msg} =
+             edit(u, v, "Setext.md", %{
+               "mode" => "replace_section",
+               "heading" => "A",
+               "content" => "new"
+             })
+
+    assert msg =~ "may run past line 3"
+    assert read!(u, v, "Setext.md") == content
+  end
+
+  test "replace_section still edits up to a real setext heading", %{user: u, vault: v} do
+    put!(u, v, "RealSetext.md", "## A\nold\n\nB\n---\nkeep\n")
+
+    assert {:ok, _, _} =
+             edit(u, v, "RealSetext.md", %{
+               "mode" => "replace_section",
+               "heading" => "A",
+               "content" => "new"
+             })
+
+    assert read!(u, v, "RealSetext.md") == "## A\nnew\nB\n---\nkeep\n"
+  end
 end

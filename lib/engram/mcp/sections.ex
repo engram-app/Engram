@@ -45,19 +45,23 @@ defmodule Engram.MCP.Sections do
   # Anchored with bounded quantifiers: no backtracking blowup.
   @atx_like ~r/^ {0,3}(\#{1,6})(?:[ \t\r]|$)/
 
+  # A setext-underline-shaped line (0-3 spaces, a run of only `=` or only
+  # `-`, trailing spaces/tabs). Same bounded, anchored shape.
+  @setext_like ~r/^ {0,3}(=+|-+)[ \t\r]*$/
+
   @type too_large :: {:too_large, pos_integer()}
+  @type refusal :: :invalid_utf8 | too_large()
 
   @doc "Largest note (bytes) any function here will parse."
   @spec max_bytes() :: 1_000_000
   def max_bytes, do: @max_bytes
 
-  @spec headings(String.t()) :: {:ok, [heading()]} | {:error, too_large()}
+  @spec headings(String.t()) :: {:ok, [heading()]} | {:error, refusal()}
   def headings(content) do
-    with :ok <- check_size(content),
-         do:
-           {:ok,
-            Enum.map(analyze(content).headings, &Map.take(&1, [:line, :level, :text, :span]))}
+    with :ok <- check_input(content), do: {:ok, public(analyze(content).headings)}
   end
+
+  defp public(hs), do: Enum.map(hs, &Map.take(&1, [:line, :level, :text, :span]))
 
   @doc """
   Locates the section under `heading` (at `level`, or any level when nil).
@@ -81,11 +85,13 @@ defmodule Engram.MCP.Sections do
              hidden_heading_at: non_neg_integer() | nil
            }}
           | :error
-          | {:error, :ambiguous | too_large()}
+          | {:error, :ambiguous | refusal()}
   def find(content, heading, level) do
-    with :ok <- check_size(content),
-         a = analyze(content),
-         {:ok, h} <- match(a.headings, String.trim(heading), level) do
+    with :ok <- check_input(content), do: locate(content, analyze(content), heading, level)
+  end
+
+  defp locate(content, a, heading, level) do
+    with {:ok, h} <- match(a.headings, String.trim(heading), level) do
       lines = String.split(content, "\n")
       # The section never owns the empty "line" after a trailing newline,
       # so a replace of the last section keeps the note's final newline.
@@ -106,8 +112,14 @@ defmodule Engram.MCP.Sections do
     end
   end
 
-  defp check_size(content) do
-    if byte_size(content) > @max_bytes, do: {:error, {:too_large, byte_size(content)}}, else: :ok
+  # Size first (cheap, bounds the UTF-8 scan); invalid UTF-8 would make the
+  # NIF raise.
+  defp check_input(content) do
+    cond do
+      byte_size(content) > @max_bytes -> {:error, {:too_large, byte_size(content)}}
+      not String.valid?(content) -> {:error, :invalid_utf8}
+      true -> :ok
+    end
   end
 
   defp match(hs, want, level) do
@@ -126,29 +138,59 @@ defmodule Engram.MCP.Sections do
     end
   end
 
+  # A line hides a heading when it is heading-shaped for this section's
+  # level, the parse does not explain it (not a heading's first line or
+  # setext underline at any depth, not a thematic break), and it is not in a
+  # closed fence or closed HTML comment. ATX shape: the line itself. Setext
+  # shape: an `=`/`-` underline directly under a non-blank line inside the
+  # section; the reported line is that text line. A `---` break directly
+  # under paragraph text inside a hidden region also refuses (accepted).
   defp hidden_heading(lines, h, stop, a) do
     from = h.line + h.span
 
     lines
     |> Enum.slice(from, stop - from)
     |> Enum.with_index(from)
-    |> Enum.find_value(fn {line, i} ->
-      case Regex.run(@atx_like, line) do
-        [_, hashes] when byte_size(hashes) <= h.level ->
-          if not MapSet.member?(a.heading_lines, i) and
-               not Enum.any?(a.safe_ranges, fn {l1, l2} -> i >= l1 and i <= l2 end),
-             do: i
+    |> Enum.reduce_while(nil, fn {line, i}, prev ->
+      at = hidden_at(line, i, prev, from, h.level)
 
-        _ ->
-          nil
-      end
+      if at && not explained?(a, i),
+        do: {:halt, at},
+        else: {:cont, line}
     end)
+    |> then(&if(is_integer(&1), do: &1))
   end
 
+  defp hidden_at(line, i, prev, from, level) do
+    case Regex.run(@atx_like, line) do
+      [_, hashes] when byte_size(hashes) <= level ->
+        i
+
+      _ ->
+        with [_, run] <- Regex.run(@setext_like, line),
+             true <- i - 1 >= from and String.trim(prev || "") != "",
+             true <- if(String.starts_with?(run, "="), do: 1, else: 2) <= level do
+          i - 1
+        else
+          _ -> nil
+        end
+    end
+  end
+
+  defp explained?(a, i) do
+    MapSet.member?(a.explained, i) or
+      Enum.any?(a.safe_ranges, fn {l1, l2} -> i >= l1 and i <= l2 end)
+  end
+
+  # A miss returns the note's headings from the same parse, so a caller
+  # listing them does not parse the note a second time.
   @spec section(String.t(), String.t()) ::
-          {:ok, String.t()} | :error | {:error, :ambiguous | too_large()}
+          {:ok, String.t()}
+          | {:error, :ambiguous | refusal() | {:not_found, [heading()]}}
   def section(content, heading) do
-    with {:ok, %{start: s, stop: e}} <- find(content, heading, nil) do
+    with :ok <- check_input(content),
+         a = analyze(content),
+         {:ok, %{start: s, stop: e}} <- section_at(content, a, heading) do
       text =
         content
         |> String.split("\n")
@@ -157,6 +199,13 @@ defmodule Engram.MCP.Sections do
         |> String.trim_trailing()
 
       {:ok, text}
+    end
+  end
+
+  defp section_at(content, a, heading) do
+    case locate(content, a, heading, nil) do
+      :error -> {:error, {:not_found, public(a.headings)}}
+      other -> other
     end
   end
 
@@ -170,7 +219,7 @@ defmodule Engram.MCP.Sections do
   @spec insert(String.t(), String.t(), 1..6, String.t(), String.t()) ::
           {:ok, String.t()}
           | :error
-          | {:error, :ambiguous | too_large() | {:hidden_heading, non_neg_integer()}}
+          | {:error, :ambiguous | refusal() | {:hidden_heading, non_neg_integer()}}
   def insert(content, heading, level, position, text) do
     with {:ok, %{start: s, stop: e, span: span} = found} <- find(content, heading, level),
          :ok <- refuse_hidden(position, found) do
@@ -278,12 +327,12 @@ defmodule Engram.MCP.Sections do
     text = String.replace(text, ~r/\r(?!\n)/, " ")
     starts = line_starts(text)
     doc = mask_obsidian_comments(text, starts, parse(text))
-    {heading_lines, safe_ranges} = walk(doc, {MapSet.new(), []})
+    {explained, safe_ranges} = walk(doc, {MapSet.new(), []})
 
     %{
       headings:
         for(%MDExNative.Comrak.Heading{} = h <- doc.nodes, do: to_heading(h, text, starts)),
-      heading_lines: heading_lines,
+      explained: explained,
       safe_ranges: safe_ranges
     }
   end
@@ -338,20 +387,30 @@ defmodule Engram.MCP.Sections do
     end)
   end
 
-  # Every line that starts a heading at ANY depth (a nested heading is a
-  # heading, just not a section boundary), and the 0-indexed line ranges of
-  # CLOSED fenced code blocks and CLOSED HTML comment blocks: the only
-  # places a heading-shaped line may legitimately sit inside a section.
-  defp walk(%MDExNative.Comrak.Heading{sourcepos: %{start: {l, _}}} = h, {hl, safe}),
-    do: walk_children(h, {MapSet.put(hl, l - 1), safe})
+  # `explained`: lines the parse accounts for that are heading-SHAPED
+  # without being hidden: every heading's first line and (setext) underline
+  # at ANY depth (a nested heading is a heading, just not a section
+  # boundary), and every thematic break. `safe`: 0-indexed line ranges of
+  # CLOSED fenced code blocks and CLOSED HTML comment blocks, the only places
+  # a heading-shaped line may legitimately sit hidden inside a section.
+  defp walk(
+         %MDExNative.Comrak.Heading{sourcepos: %{start: {l1, _}, end: {l2, _}}} = h,
+         {ex, safe}
+       ),
+       do: walk_children(h, {ex |> MapSet.put(l1 - 1) |> MapSet.put(l2 - 1), safe})
 
-  defp walk(%MDExNative.Comrak.CodeBlock{fenced: true, closed: true, sourcepos: sp}, {hl, safe}),
-    do: {hl, [range(sp) | safe]}
+  defp walk(%MDExNative.Comrak.ThematicBreak{sourcepos: %{start: {l, _}}}, {ex, safe}),
+    do: {MapSet.put(ex, l - 1), safe}
 
-  defp walk(%MDExNative.Comrak.HtmlBlock{block_type: 2, literal: lit, sourcepos: sp}, {hl, safe}) do
-    if String.contains?(lit, "-->"), do: {hl, [range(sp) | safe]}, else: {hl, safe}
+  defp walk(%MDExNative.Comrak.CodeBlock{fenced: true, closed: true, sourcepos: sp}, {ex, safe}),
+    do: {ex, [range(sp) | safe]}
+
+  defp walk(%MDExNative.Comrak.HtmlBlock{block_type: 2, literal: lit, sourcepos: sp}, {ex, safe}) do
+    if String.contains?(lit, "-->"), do: {ex, [range(sp) | safe]}, else: {ex, safe}
   end
 
+  # Any other node, known or not (a future node type included): recurse into
+  # its children, so a heading nested anywhere is still seen.
   defp walk(node, acc), do: walk_children(node, acc)
 
   defp walk_children(%{nodes: nodes}, acc), do: Enum.reduce(nodes, acc, &walk/2)

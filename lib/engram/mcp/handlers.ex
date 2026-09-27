@@ -812,6 +812,9 @@ defmodule Engram.MCP.Handlers do
 
   defp section_error(_heading, {:too_large, bytes}), do: too_large_msg(bytes)
 
+  defp section_error(_heading, :invalid_utf8),
+    do: "This note contains invalid UTF-8; use edit_note replace_text"
+
   defp too_large_msg(bytes) do
     mb = Float.round(bytes / 1_000_000, 1)
 
@@ -1712,11 +1715,9 @@ defmodule Engram.MCP.Handlers do
   defp narrow_to_section([{_path, nil}] = fetched, _section), do: {:ok, fetched}
 
   defp narrow_to_section([{path, note}], section) do
-    content = note.content || ""
-
-    case Sections.section(content, section) do
+    case Sections.section(note.content || "", section) do
       {:ok, text} -> {:ok, [{path, %{note | content: text}}]}
-      :error -> {:error, heading_missing_msg(path, section, content)}
+      {:error, {:not_found, hs}} -> {:error, heading_missing_msg(path, section, hs)}
       {:error, reason} -> {:error, section_error(section, reason)}
     end
   end
@@ -1726,22 +1727,19 @@ defmodule Engram.MCP.Handlers do
   @max_listed_headings 50
   @max_heading_chars 100
 
-  defp heading_missing_msg(path, section, content) do
-    case Sections.headings(content) do
-      {:ok, []} ->
-        "Heading not found in #{path}: #{section}. This note has no headings."
+  defp heading_missing_msg(path, section, []),
+    do: "Heading not found in #{path}: #{section}. This note has no headings."
 
-      {:ok, hs} ->
-        total = length(hs)
-        listed = hs |> Enum.take(@max_listed_headings) |> Enum.map_join(", ", &truncate_heading/1)
+  defp heading_missing_msg(path, section, hs) do
+    total = length(hs)
+    listed = hs |> Enum.take(@max_listed_headings) |> Enum.map_join(", ", &truncate_heading/1)
 
-        more =
-          if total > @max_listed_headings,
-            do: ", and #{total - @max_listed_headings} more",
-            else: ""
+    more =
+      if total > @max_listed_headings,
+        do: ", and #{total - @max_listed_headings} more",
+        else: ""
 
-        "Heading not found in #{path}: #{section}. Headings: #{listed}#{more}"
-    end
+    "Heading not found in #{path}: #{section}. Headings: #{listed}#{more}"
   end
 
   defp truncate_heading(%{text: text}) do
@@ -1895,8 +1893,12 @@ defmodule Engram.MCP.Handlers do
         outline_error(note, base, msg, budget)
 
       true ->
-        {:ok, hs} = Sections.headings(content)
-        {outline_ok(note, base, hs), budget - byte_size(content)}
+        budget = budget - byte_size(content)
+
+        case Sections.headings(content) do
+          {:ok, hs} -> {outline_ok(note, base, hs), budget}
+          {:error, reason} -> outline_error(note, base, section_error(nil, reason), budget)
+        end
     end
   end
 

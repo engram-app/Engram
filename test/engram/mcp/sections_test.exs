@@ -72,7 +72,7 @@ defmodule Engram.MCP.SectionsTest do
     assert text =~ "# shell comment, not a heading"
     assert text =~ "### Sub\n\ns"
     refute text =~ "## Done"
-    assert Sections.section(@note, "Nope") == :error
+    assert {:error, {:not_found, [_ | _]}} = Sections.section(@note, "Nope")
   end
 
   test "insert start goes directly under the heading line" do
@@ -719,5 +719,85 @@ defmodule Engram.MCP.SectionsTest do
   # :error rather than return a range built on the merged line.
   test "a lone CR inside a heading line gives :error, not a wrong range" do
     assert Sections.find("## A\rx\n## B\n", "A", 2) == :error
+  end
+
+  # --- Fix round 2 ---
+
+  # A hidden SETEXT heading must refuse the write too, not just an ATX one.
+  test "a setext heading hidden by mis-paired %% marks refuses the write" do
+    content = "## A\n%% note ` %% and `y`\nB\n---\nimportant\n%% c2 %%\n"
+    assert {:ok, %{hidden_heading_at: 2}} = Sections.find(content, "A", 2)
+    assert Sections.insert(content, "A", 2, "end", "y") == {:error, {:hidden_heading, 2}}
+  end
+
+  test "a setext heading hidden in an unclosed <pre> block refuses the write" do
+    assert {:ok, %{hidden_heading_at: 2}} =
+             Sections.find("## A\n<pre>\nB\n---\nimportant\n", "A", 2)
+  end
+
+  test "a hidden setext level-2 underline does not refuse a level-1 section" do
+    assert {:ok, %{hidden_heading_at: nil}} = Sections.find("# A\n<pre>\nB\n---\n", "A", 1)
+    assert {:ok, %{hidden_heading_at: 2}} = Sections.find("# A\n<pre>\nB\n===\n", "A", 1)
+  end
+
+  test "an x/--- pair inside a CLOSED fence still edits" do
+    content = "## A\n#{@bt}\nx\n---\n#{@bt}\n## B\n"
+    assert {:ok, %{stop: 5, hidden_heading_at: nil}} = Sections.find(content, "A", 2)
+  end
+
+  test "a real setext heading ends the section and is not hidden" do
+    content = "## A\na\n\nB\n---\nb\n"
+    assert {:ok, %{stop: 3, hidden_heading_at: nil}} = Sections.find(content, "A", 2)
+    assert {:ok, %{start: 3, span: 2, hidden_heading_at: nil}} = Sections.find(content, "B", 2)
+  end
+
+  test "a thematic break under a list item or after a blank line is not a hidden heading" do
+    assert {:ok, %{hidden_heading_at: nil}} = Sections.find("## A\n- item\n---\nx\n", "A", 2)
+    assert {:ok, %{hidden_heading_at: nil}} = Sections.find("## A\npara\n\n---\nx\n", "A", 2)
+  end
+
+  test "a setext heading nested in a list item is a heading, not a hidden one" do
+    assert {:ok, %{hidden_heading_at: nil}} =
+             Sections.find("## A\n- item\n  sub\n  ---\n## B\n", "A", 2)
+  end
+
+  # Invalid UTF-8 would make the NIF raise; refuse it as a fixable error.
+  test "invalid UTF-8 is a fixable error at every entry point" do
+    bad = "## A\n" <> <<0xFF, 0xFE>> <> "\n"
+    assert Sections.headings(bad) == {:error, :invalid_utf8}
+    assert Sections.find(bad, "A", 2) == {:error, :invalid_utf8}
+    assert Sections.section(bad, "A") == {:error, :invalid_utf8}
+    assert Sections.insert(bad, "A", 2, "end", "y") == {:error, :invalid_utf8}
+  end
+
+  test "a section miss returns the note's headings from the same parse" do
+    assert {:error, {:not_found, [%{text: "A"}, %{text: "B"}]}} =
+             Sections.section("## A\n\n## B\n", "Nope")
+  end
+
+  # Shape contract for the pinned mdex_native AST: a dependency bump that
+  # changes any struct, field or sourcepos convention Sections relies on must
+  # fail here, loudly, instead of silently mis-finding sections.
+  test "the mdex_native AST has the shape Sections relies on" do
+    md = "## é **B**\n\n#{@bt}\nx\n#{@bt}\n<!-- c -->\n\nS\n===\n\n`é%%` t\n\n#{@bt}\nopen\n"
+    %MDExNative.Comrak.Document{nodes: nodes} = MDExNative.Comrak.parse_document(md, [])
+
+    assert [
+             %MDExNative.Comrak.Heading{level: 2, setext: false, nodes: [_ | _]} = h,
+             %MDExNative.Comrak.CodeBlock{fenced: true, closed: true} = cb,
+             %MDExNative.Comrak.HtmlBlock{block_type: 2, literal: "<!-- c -->\n"},
+             %MDExNative.Comrak.Heading{level: 1, setext: true} = sh,
+             %MDExNative.Comrak.Paragraph{nodes: [%MDExNative.Comrak.Code{} = code | _]},
+             %MDExNative.Comrak.CodeBlock{fenced: true, closed: false}
+           ] = nodes
+
+    # Lines are 1-based; columns are 1-based BYTE offsets ("é" is 2 bytes).
+    # 11 bytes, 10 characters: columns count bytes.
+    assert %{start: {1, 1}, end: {1, 11}} = Map.from_struct(h.sourcepos)
+    assert [%MDExNative.Comrak.Text{sourcepos: %{start: {1, 4}}} | _] = h.nodes
+    assert %{start: {3, 1}, end: {5, 3}} = Map.from_struct(cb.sourcepos)
+    assert %{start: {8, 1}, end: {9, 3}} = Map.from_struct(sh.sourcepos)
+    # A code span's sourcepos includes its backticks.
+    assert %{start: {11, 1}, end: {11, 6}} = Map.from_struct(code.sourcepos)
   end
 end
