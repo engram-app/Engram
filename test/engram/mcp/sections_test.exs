@@ -601,7 +601,9 @@ defmodule Engram.MCP.SectionsTest do
       ["## Heading\n\n", para, para, para] |> Stream.cycle() |> Enum.take(16_000) |> Enum.join()
 
     assert byte_size(big) > 9_000_000
-    {micros, hs} = :timer.tc(fn -> headings!(big) end)
+    # Its own gate: waits on the shared gate must not count toward the bound.
+    g = start_supervised!({Engram.MCP.ParseGate, name: nil, limit: 1})
+    {micros, {:ok, hs}} = :timer.tc(fn -> Sections.headings(big, gate: g) end)
     assert length(hs) == 4_000
     assert micros < 2_000_000, "took #{div(micros, 1000)} ms"
   end

@@ -772,6 +772,61 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     assert read!(u, v, "Amb.md") == content
   end
 
+  test "insert_section and update_section work on a note over 1 MB", %{user: u, vault: v} do
+    x = String.duplicate("x", 1_200_000)
+    put!(u, v, "Big2.md", "## A\n" <> x <> "\n## B\nb\n")
+
+    assert {:ok, _, _} =
+             edit(u, v, "Big2.md", %{
+               "mode" => "insert_section",
+               "heading" => "A",
+               "position" => "end",
+               "content" => "tail"
+             })
+
+    assert read!(u, v, "Big2.md") == "## A\n" <> x <> "\ntail\n## B\nb\n"
+
+    assert {:ok, _, _} =
+             Handlers.handle("update_section", u, v, %{
+               "path" => "Big2.md",
+               "heading" => "B",
+               "content" => "new"
+             })
+
+    assert read!(u, v, "Big2.md") == "## A\n" <> x <> "\ntail\n## B\nnew\n"
+  end
+
+  test "a section edit past the deadline refuses and writes nothing", %{user: u, vault: v} do
+    content = put!(u, v, "Dl.md", "## A\nold\n## B\nb\n")
+    g = start_supervised!({Engram.MCP.ParseGate, name: nil, limit: 1, max_waiting: 4})
+    test = self()
+
+    Task.start(fn ->
+      Engram.MCP.ParseGate.run(
+        fn ->
+          send(test, {:holding, self()})
+          receive do: (:go -> :ok)
+        end,
+        gate: g,
+        parse_timeout: :infinity
+      )
+    end)
+
+    assert_receive {:holding, w}, 5_000
+    Process.put(:engram_parse_gate_opts, gate: g, deadline_ms: 50)
+
+    for args <- [
+          %{"mode" => "replace_section", "heading" => "A", "content" => "n"},
+          %{"mode" => "insert_section", "heading" => "A", "content" => "n"}
+        ] do
+      assert {:error, msg} = edit(u, v, "Dl.md", args)
+      assert msg =~ "ran out of time"
+    end
+
+    send(w, :go)
+    assert read!(u, v, "Dl.md") == content
+  end
+
   test "section edits work on a note over 1 MB (no size cap)", %{user: u, vault: v} do
     put!(u, v, "Big.md", "## A\n" <> String.duplicate("x", 1_200_000) <> "\n## B\nb\n")
 

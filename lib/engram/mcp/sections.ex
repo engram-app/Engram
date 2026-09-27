@@ -12,7 +12,7 @@ defmodule Engram.MCP.Sections do
   (`> [!note]`) or list item is content of that block, not a section
   boundary. Every parse runs through `Engram.MCP.ParseGate` (bounded
   concurrency; `opts` pass through to it), so any function here can return
-  `{:error, :busy | :parse_timeout | :parse_failed}`. Two things CommonMark does not know about are handled before
+  `{:error, :busy | :parse_timeout | :parse_failed | :deadline}`. Two things CommonMark does not know about are handled before
   parsing, both preserving line numbers:
 
     * the frontmatter block (`Engram.Notes.Frontmatter.split/1`, the same
@@ -290,7 +290,7 @@ defmodule Engram.MCP.Sections do
     if String.valid?(content) do
       ParseGate.run(
         fn -> content |> String.replace_prefix(@bom, "") |> blank_frontmatter() |> scan() end,
-        opts
+        Keyword.put(opts, :bytes, byte_size(content))
       )
     else
       {:error, :invalid_utf8}

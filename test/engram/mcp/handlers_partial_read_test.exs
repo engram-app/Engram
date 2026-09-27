@@ -173,4 +173,55 @@ defmodule Engram.MCP.HandlersPartialReadTest do
     assert {:ok, _, %{"notes" => [%{"content" => "## *A*\ny"}]}} =
              get(u, v, %{"paths" => ["Amb.md"], "section" => "*A*"})
   end
+
+  # --- Round: one deadline per call ---
+
+  # Holds the only slot of a per-test gate and points this test process's
+  # handler calls at it (process-local seam, no global env).
+  defp held_gate(deadline_ms) do
+    g = start_supervised!({Engram.MCP.ParseGate, name: nil, limit: 1, max_waiting: 4})
+    test = self()
+
+    Task.start(fn ->
+      Engram.MCP.ParseGate.run(
+        fn ->
+          send(test, {:holding, self()})
+          receive do: (:go -> :ok)
+        end,
+        gate: g,
+        parse_timeout: :infinity
+      )
+    end)
+
+    assert_receive {:holding, w}, 5_000
+    Process.put(:engram_parse_gate_opts, gate: g, deadline_ms: deadline_ms)
+    on_exit(fn -> send(w, :go) end)
+    w
+  end
+
+  test "outline over several paths stops at the call's deadline with per-note errors",
+       %{user: u, vault: v} do
+    held_gate(100)
+    paths = for i <- 1..4, do: "D#{i}.md"
+
+    for p <- paths do
+      {:ok, _} = Notes.upsert_note(u, v, %{"path" => p, "content" => "## H\n", "mtime" => 1.0})
+    end
+
+    assert {:ok, text, %{"notes" => notes}} = get(u, v, %{"paths" => paths, "outline" => true})
+    assert length(notes) == 4
+
+    for n <- notes do
+      assert n["found"] == true and not Map.has_key?(n, "outline")
+      assert n["error"] =~ "ran out of time"
+    end
+
+    assert text =~ "ran out of time"
+  end
+
+  test "a section read past the deadline is a fixable error", %{user: u, vault: v} do
+    held_gate(50)
+    assert {:error, msg} = get(u, v, %{"paths" => ["P.md"], "section" => "Todo"})
+    assert msg =~ "ran out of time"
+  end
 end

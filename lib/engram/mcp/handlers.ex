@@ -4,7 +4,7 @@ defmodule Engram.MCP.Handlers do
   Each function takes (user, vault, args) and returns a markdown-formatted string.
   """
 
-  alias Engram.MCP.Sections
+  alias Engram.MCP.{ParseGate, Sections}
   alias Engram.{Notes, Search}
   alias Engram.Notes.Frontmatter
 
@@ -317,8 +317,11 @@ defmodule Engram.MCP.Handlers do
             end
           end)
 
-        with {:ok, fetched} <- narrow_to_section(fetched, section) do
-          render_notes(user, fetched, outline?, args["include_links"] == true)
+        # One parse deadline for the whole call, across every path.
+        gate = ParseGate.call_opts()
+
+        with {:ok, fetched} <- narrow_to_section(fetched, section, gate) do
+          render_notes(user, fetched, outline?, args["include_links"] == true, gate)
         end
     end
   end
@@ -767,9 +770,12 @@ defmodule Engram.MCP.Handlers do
 
   # Through rmw_upsert: the rebuild runs against the authority (#1159) on every
   # attempt, and a missing heading refuses inside it, so nothing is written.
+  # One parse deadline for the whole call, retry included.
   defp insert_section(user, vault, path, heading, level, position, text) do
+    gate = ParseGate.call_opts()
+
     rebuild = fn current ->
-      case Sections.insert(current, heading, level, position, text) do
+      case Sections.insert(current, heading, level, position, text, gate) do
         {:ok, updated} ->
           updated
 
@@ -813,8 +819,15 @@ defmodule Engram.MCP.Handlers do
   defp section_error(_heading, :busy),
     do: "The server is busy parsing other notes; try again shortly"
 
-  defp section_error(_heading, :parse_timeout),
-    do: "Parsing this note is taking too long; try again, or edit with replace_text"
+  defp section_error(_heading, :parse_timeout) do
+    "This note is too complex to parse for section edits or outline; edit with replace_text " <>
+      "or read it with get_notes without section/outline"
+  end
+
+  defp section_error(_heading, :deadline) do
+    "This request ran out of time before this note could be parsed; try again shortly, " <>
+      "or with fewer paths"
+  end
 
   defp section_error(_heading, :parse_failed),
     do: "Parsing this note failed; edit with replace_text"
@@ -916,7 +929,7 @@ defmodule Engram.MCP.Handlers do
   defp replace_section(user, vault, path, heading, new_content, level, op) do
     with {:ok, note} <- Notes.get_note(user, vault, path),
          {:ok, current} <- Notes.authoritative_content(user, note) do
-      case Sections.find(current, heading, level) do
+      case Sections.find(current, heading, level, ParseGate.call_opts()) do
         :error ->
           # The section was not updated, so this is not a success. Was `:ok`.
           {:error, "Heading not found: #{String.duplicate("#", level)} #{heading}"}
@@ -1711,11 +1724,11 @@ defmodule Engram.MCP.Handlers do
     }
   end
 
-  defp narrow_to_section(fetched, nil), do: {:ok, fetched}
-  defp narrow_to_section([{_path, nil}] = fetched, _section), do: {:ok, fetched}
+  defp narrow_to_section(fetched, nil, _gate), do: {:ok, fetched}
+  defp narrow_to_section([{_path, nil}] = fetched, _section, _gate), do: {:ok, fetched}
 
-  defp narrow_to_section([{path, note}], section) do
-    case Sections.section(note.content || "", section) do
+  defp narrow_to_section([{path, note}], section, gate) do
+    case Sections.section(note.content || "", section, gate) do
       {:ok, text} -> {:ok, [{path, %{note | content: text}}]}
       {:error, {:not_found, hs}} -> {:error, heading_missing_msg(path, section, hs)}
       {:error, reason} -> {:error, section_error(section, reason)}
@@ -1750,7 +1763,7 @@ defmodule Engram.MCP.Handlers do
     end
   end
 
-  defp render_notes(user, fetched, outline?, links?) do
+  defp render_notes(user, fetched, outline?, links?, gate) do
     {texts, notes} =
       fetched
       |> Enum.map(fn
@@ -1760,7 +1773,7 @@ defmodule Engram.MCP.Handlers do
         {_path, note} ->
           {text, payload} =
             if outline?,
-              do: outline_entry(note),
+              do: outline_entry(note, gate),
               else: {format_get_note(note), note_payload(note)}
 
           payload = Map.put(payload, "found", true)
@@ -1870,10 +1883,10 @@ defmodule Engram.MCP.Handlers do
 
   # A parse refusal (busy, timeout, invalid UTF-8) is a per-note `error`
   # entry, so one note does not fail a whole multi-path call.
-  defp outline_entry(note) do
+  defp outline_entry(note, gate) do
     base = note |> note_payload() |> Map.delete("content")
 
-    case Sections.headings(note.content || "") do
+    case Sections.headings(note.content || "", gate) do
       {:ok, hs} ->
         outline_ok(note, base, hs)
 
