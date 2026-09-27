@@ -11,6 +11,12 @@ defmodule Engram.Vaults.Vault do
     field :name, :string, virtual: true, redact: true
     field :description, :string, redact: true
     field :slug, :string, redact: true
+    # Keyed HMAC of the slug (per-user filter key, like name_hmac): lookup and
+    # uniqueness for /v/:slug without the plaintext. `slug_suffixed` records
+    # that this vault took the id collision suffix, so the slug is derivable
+    # from name + id once the plaintext column is dropped.
+    field :slug_hmac, :binary
+    field :slug_suffixed, :boolean, default: false
     field :client_id, :string
     field :is_default, :boolean, default: false
     field :deleted_at, :utc_datetime
@@ -51,9 +57,13 @@ defmodule Engram.Vaults.Vault do
 
   def changeset(vault, attrs) do
     vault
+    # `:description` is not cast: it was a plaintext free-text field no client
+    # ever surfaced (0 rows in prod), retired rather than encrypted. The
+    # column is dropped in the contract release.
     |> cast(attrs, [
-      :description,
       :slug,
+      :slug_hmac,
+      :slug_suffixed,
       :client_id,
       :is_default,
       :user_id,
@@ -77,6 +87,7 @@ defmodule Engram.Vaults.Vault do
     )
     |> validate_encrypted_name()
     |> unique_constraint([:user_id, :slug], name: :vaults_user_id_slug_index)
+    |> unique_constraint([:user_id, :slug_hmac], name: :vaults_user_id_slug_hmac_index)
     |> unique_constraint([:user_id, :client_id], name: :vaults_user_id_client_id_index)
   end
 

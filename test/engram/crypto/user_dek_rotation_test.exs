@@ -525,6 +525,8 @@ defmodule Engram.Crypto.UserDekRotationTest do
       expected_name_hmac = Crypto.hmac_field(new_filter_key, "Personal")
 
       assert reloaded_vault.name_hmac == expected_name_hmac
+      # slug_hmac is keyed the same way; a stale one breaks /v/:slug lookup.
+      assert reloaded_vault.slug_hmac == Crypto.hmac_field(new_filter_key, reloaded_vault.slug)
     end
 
     test "note folder_hmac for empty folder is recomputed correctly", %{user: user, vault: vault} do

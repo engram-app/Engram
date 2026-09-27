@@ -150,7 +150,7 @@ defmodule EngramWeb.VaultsController do
     operation_id: "vaults-update",
     summary: "Update a vault",
     description:
-      "Updates a vault's `name`, `description`, or `is_default` flag and returns the updated " <>
+      "Updates a vault's `name` or `is_default` flag and returns the updated " <>
         "vault. Returns 404 when no such vault exists and 422 on validation errors.",
     tags: ["Vaults"],
     parameters: [id: [in: :path, type: :string, required: true, description: "Vault UUID"]],
@@ -165,7 +165,7 @@ defmodule EngramWeb.VaultsController do
 
   def update(conn, %{"id" => id} = params) do
     user = conn.assigns.current_user
-    attrs = Map.take(params, ["name", "description", "is_default"])
+    attrs = Map.take(params, ["name", "is_default"])
 
     with_scoped_vault(conn, id, fn vault_id ->
       case Vaults.update_vault(user, vault_id, attrs) do
@@ -372,7 +372,6 @@ defmodule EngramWeb.VaultsController do
     %{
       id: vault.id,
       name: vault.name,
-      description: vault.description,
       slug: vault.slug,
       is_default: vault.is_default,
       created_at: vault.created_at,

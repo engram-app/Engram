@@ -241,8 +241,7 @@ defmodule Engram.MCP.Tools do
                 # client at the one handle that does not would be a
                 # wrong-target write.
                 "slug" => %{"type" => "string", "description" => "URL-safe handle"},
-                "is_default" => %{"type" => "boolean"},
-                "description" => %{"type" => ["string", "null"]}
+                "is_default" => %{"type" => "boolean"}
               },
               "required" => ["id", "name", "slug", "is_default"]
             }
@@ -282,8 +281,7 @@ defmodule Engram.MCP.Tools do
               "id" => %{"type" => "string"},
               "name" => %{"type" => ["string", "null"]},
               "slug" => %{"type" => "string"},
-              "is_default" => %{"type" => "boolean"},
-              "description" => %{"type" => ["string", "null"]}
+              "is_default" => %{"type" => "boolean"}
             },
             "required" => ["id", "name", "slug", "is_default"]
           }

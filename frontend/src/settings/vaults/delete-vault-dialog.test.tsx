@@ -11,7 +11,6 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 const vault = {
 	id: "7",
 	name: "Work",
-	description: null,
 	slug: "work",
 	is_default: false,
 	created_at: "",

@@ -34,7 +34,9 @@ defmodule Engram.VaultsRefAmbiguityTest do
       b = register!(user, "Test-Vault")
 
       assert a.slug == "test-vault"
-      assert b.slug == "test-vault-2", "precondition: unique_slug suffixed the collision"
+
+      assert b.slug == "test-vault-#{String.slice(b.id, -6, 6)}",
+             "precondition: unique_slug suffixed the collision"
 
       assert {:ok, got} = Vaults.get_vault_by_ref(user, "Test-Vault")
       assert got.id == b.id, "resolved the vault that won the base slug instead of the named one"

@@ -39,7 +39,6 @@ const DEFAULT_VAULTS = [
 	{
 		id: "11111111-1111-1111-1111-111111111111",
 		name: "Personal",
-		description: null,
 		is_default: true,
 		note_count: 1204,
 		attachment_count: 18,
@@ -47,7 +46,6 @@ const DEFAULT_VAULTS = [
 	{
 		id: "22222222-2222-2222-2222-222222222222",
 		name: "Work",
-		description: "day job",
 		is_default: false,
 		note_count: 312,
 		attachment_count: 0,
@@ -58,7 +56,6 @@ const vaultsState = vi.hoisted(() => ({
 		{
 			id: "11111111-1111-1111-1111-111111111111",
 			name: "Personal",
-			description: null,
 			is_default: true,
 			note_count: 1204,
 			attachment_count: 18,
@@ -66,7 +63,6 @@ const vaultsState = vi.hoisted(() => ({
 		{
 			id: "22222222-2222-2222-2222-222222222222",
 			name: "Work",
-			description: "day job",
 			is_default: false,
 			note_count: 312,
 			attachment_count: 0,
@@ -74,7 +70,6 @@ const vaultsState = vi.hoisted(() => ({
 	] as Array<{
 		id: string;
 		name: string;
-		description: string | null;
 		is_default: boolean;
 		note_count: number;
 		attachment_count: number;
@@ -641,7 +636,6 @@ describe("OAuthAuthorizePage", () => {
 			return Array.from({ length: n }, (_, i) => ({
 				id: `${String(i).padStart(8, "0")}-0000-0000-0000-000000000000`,
 				name: i === 0 ? "Personal" : `Project ${i}`,
-				description: null,
 				is_default: i === 0,
 				note_count: 0,
 				attachment_count: 0,
@@ -740,6 +734,5 @@ describe("OAuthAuthorizePage", () => {
 		renderAt(VALID_QS);
 		expect(await screen.findByText("1,204 notes · 18 files")).toBeInTheDocument();
 		expect(screen.getByText("default")).toBeInTheDocument();
-		expect(screen.getByText("day job")).toBeInTheDocument();
 	});
 });

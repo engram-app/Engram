@@ -42,7 +42,8 @@ defmodule Engram.VaultsTest do
                Vaults.register_vault(user, "Notes", Ecto.UUID.generate(), extra)
 
       assert vault.name == "Notes"
-      assert vault.description == "Notes"
+      # `description` is retired (plaintext, never surfaced): extra attrs drop it.
+      assert vault.description == nil
     end
 
     test "second vault is not default", %{user: user} do
@@ -131,24 +132,39 @@ defmodule Engram.VaultsTest do
       {:ok, _, _} = Vaults.register_vault(user, "Third", Ecto.UUID.generate())
     end
 
-    test "deduplicates slug collision with numeric suffix", %{user: user} do
+    # The slug is derive-on-read from the name (the plaintext `slug` column is
+    # being retired), so a collision suffix must be derivable too: the last 6
+    # chars of the vault's own id, recorded by `slug_suffixed`. The old `-2`,
+    # `-3` counter depended on sibling state and could not be re-derived.
+    test "a colliding slug takes a stable id suffix and is flagged", %{user: user} do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
       {:ok, v1, _} = Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
       {:ok, v2, _} = Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
-
-      assert v1.slug == "notes"
-      assert v2.slug == "notes-2"
-    end
-
-    test "slug with triple collision gets -3 suffix", %{user: user} do
-      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
-
-      {:ok, _, _} = Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
-      {:ok, _, _} = Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
       {:ok, v3, _} = Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
 
-      assert v3.slug == "notes-3"
+      assert v1.slug == "notes"
+      refute v1.slug_suffixed
+      assert v2.slug == "notes-" <> String.slice(v2.id, -6, 6)
+      assert v2.slug_suffixed
+      assert v3.slug == "notes-" <> String.slice(v3.id, -6, 6)
+      assert length(Enum.uniq([v1.slug, v2.slug, v3.slug])) == 3
+    end
+
+    test "two non-Latin names (both slugify to \"vault\") can coexist", %{user: user} do
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+
+      assert {:ok, a, _} = Vaults.register_vault(user, "Заметки", Ecto.UUID.generate())
+      assert {:ok, b, _} = Vaults.register_vault(user, "日記", Ecto.UUID.generate())
+      assert a.slug == "vault"
+      assert b.slug == "vault-" <> String.slice(b.id, -6, 6)
+    end
+
+    test "slug_hmac is the keyed hmac of the slug", %{user: user} do
+      {:ok, vault, _} = Vaults.register_vault(user, "Work Notes", Ecto.UUID.generate())
+      {:ok, filter_key} = Engram.Crypto.dek_filter_key(Engram.Repo.reload!(user))
+
+      assert vault.slug_hmac == Engram.Crypto.hmac_field(filter_key, "work-notes")
     end
 
     test "a former reserved word is now just an ordinary slug", %{user: user} do
@@ -170,11 +186,11 @@ defmodule Engram.VaultsTest do
       assert vault.slug == "vault"
     end
 
-    test "description rides along in extra_attrs", %{user: user} do
+    test "description is no longer accepted in extra_attrs", %{user: user} do
       assert {:ok, vault, _} =
                Vaults.register_vault(user, "Work", "client-abc", %{description: "Work notes"})
 
-      assert vault.description == "Work notes"
+      assert vault.description == nil
       assert vault.client_id == "client-abc"
     end
 
@@ -580,14 +596,14 @@ defmodule Engram.VaultsTest do
   # ---------------------------------------------------------------------------
 
   describe "update_vault/3" do
-    test "updates name and description", %{user: user} do
+    test "updates name; description is ignored", %{user: user} do
       {:ok, vault, _} = Vaults.register_vault(user, "Old Name", Ecto.UUID.generate())
 
       assert {:ok, updated} =
                Vaults.update_vault(user, vault.id, %{name: "New Name", description: "Desc"})
 
       assert updated.name == "New Name"
-      assert updated.description == "Desc"
+      assert updated.description == nil
     end
 
     test "regenerates slug when name changes", %{user: user} do
@@ -596,6 +612,8 @@ defmodule Engram.VaultsTest do
 
       assert {:ok, updated} = Vaults.update_vault(user, vault.id, %{name: "Renamed Vault"})
       assert updated.slug == "renamed-vault"
+      {:ok, filter_key} = Engram.Crypto.dek_filter_key(Engram.Repo.reload!(user))
+      assert updated.slug_hmac == Engram.Crypto.hmac_field(filter_key, "renamed-vault")
     end
 
     test "renaming into a former reserved word takes the bare slug", %{

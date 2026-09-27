@@ -1446,8 +1446,7 @@ defmodule Engram.MCP.Handlers do
       "id" => to_string(v.id),
       "name" => v.name,
       "slug" => v.slug,
-      "is_default" => v.is_default,
-      "description" => v.description
+      "is_default" => v.is_default
     }
   end
 end

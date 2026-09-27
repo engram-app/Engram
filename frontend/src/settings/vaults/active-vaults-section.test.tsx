@@ -25,7 +25,6 @@ const vaults = [
 	{
 		id: 1,
 		name: "Work",
-		description: null,
 		slug: "work",
 		is_default: true,
 		created_at: "",
@@ -41,7 +40,6 @@ const vaults = [
 	{
 		id: 2,
 		name: "Personal",
-		description: null,
 		slug: "personal",
 		is_default: false,
 		created_at: "",

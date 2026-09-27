@@ -20,12 +20,6 @@
           "vaults": {
             "items": {
               "properties": {
-                "description": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
                 "id": {
                   "description": "Vault UUID",
                   "type": "string"
