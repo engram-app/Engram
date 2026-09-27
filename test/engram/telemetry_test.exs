@@ -42,11 +42,14 @@ defmodule Engram.TelemetryTest do
       end
     end
 
+    # No wall-clock bound: a crashing Task logs its crash report synchronously
+    # before exiting, which under full-suite log load can exceed any fixed
+    # budget. The ExUnit test timeout still bounds a genuine hang.
     defp exit_reason(fun) do
       {:exit, reason} =
         Engram.TaskSupervisor
         |> Task.Supervisor.async_nolink(fun)
-        |> Task.yield(5_000)
+        |> Task.yield(:infinity)
 
       reason
     end
