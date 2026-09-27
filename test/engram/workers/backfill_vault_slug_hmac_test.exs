@@ -125,6 +125,21 @@ defmodule Engram.Workers.BackfillVaultSlugHmacTest do
     assert {:ok, 0} = Vaults.backfill_slug_hmacs(user.id)
   end
 
+  test "a returned error (not a raise) is logged, not swallowed" do
+    user = insert(:user)
+    {:ok, vault, _} = Vaults.register_vault(user, "Work", Ecto.UUID.generate())
+    strip(vault.id)
+
+    Repo.update_all(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+      set: [encrypted_dek: nil]
+    )
+
+    log = ExUnit.CaptureLog.capture_log(fn -> perform_job(BackfillVaultSlugHmac, %{}) end)
+
+    assert log =~ "vault slug reconcile failed"
+    assert raw(vault.id).slug_hmac == nil
+  end
+
   test "one user's failure does not stop the others" do
     broken = insert(:user)
     insert(:user_limit_override, user: broken, key: "vaults_cap", value: %{"v" => 10})

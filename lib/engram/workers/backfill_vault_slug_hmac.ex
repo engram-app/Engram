@@ -33,27 +33,38 @@ defmodule Engram.Workers.BackfillVaultSlugHmac do
     |> Enum.each(&backfill_user/1)
   end
 
-  # Each user runs in its own transaction; one user's failure (e.g. a unique
+  # Each user runs in its own transaction; one user's failure (a returned
+  # error such as a KMS outage or missing DEK, or a raise such as a unique
   # violation on a hand-edited slug) is logged and must not starve the rest.
+  # Mid-rotation is expected and silent: the user is picked up next run.
   defp backfill_user(user_id) do
     case Vaults.backfill_slug_hmacs(user_id) do
-      {:ok, count} when count > 0 ->
+      {:ok, 0} ->
+        :ok
+
+      {:ok, count} ->
         Logger.info(
           "vault slugs reconciled",
           Metadata.with_category(:info, :crypto, user_id: user_id, reconciled: count)
         )
 
-      _ ->
+      {:error, :rotation_in_progress} ->
         :ok
+
+      {:error, reason} ->
+        log_failure(user_id, reason)
     end
   rescue
-    e ->
-      Logger.warning(
-        "vault slug reconcile failed",
-        Metadata.with_category(:warning, :crypto,
-          user_id: user_id,
-          reason: Metadata.safe_reason(e)
-        )
+    e -> log_failure(user_id, e)
+  end
+
+  defp log_failure(user_id, reason) do
+    Logger.warning(
+      "vault slug reconcile failed",
+      Metadata.with_category(:warning, :crypto,
+        user_id: user_id,
+        reason: Metadata.safe_reason(reason)
       )
+    )
   end
 end
