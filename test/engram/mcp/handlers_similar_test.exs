@@ -118,6 +118,12 @@ defmodule Engram.MCP.HandlersSimilarTest do
                "must"
              ]
 
+      # Review Focus (d): the tenant filter, not just the excluded ids, is what
+      # keeps a recommend call from ever crossing user/vault boundaries.
+      assert %{"key" => "user_id", "match" => %{"value" => to_string(u.id)}} in json["filter"][
+               "must"
+             ]
+
       respond(conn, [hit(u, v, o_id)])
     end)
 
@@ -125,6 +131,42 @@ defmodule Engram.MCP.HandlersSimilarTest do
              Handlers.handle("search_notes", u, v, %{"similar_to" => "S.md", "query" => nil})
 
     assert r["source_path"] == "O.md"
+  end
+
+  # Review Focus (a)-(c): RLS proves nothing in this suite (superuser
+  # connection). The real boundary is `similar_source/3` resolving the path
+  # through `Notes.scoped/2`'s explicit `user_id AND vault_id` filter. None of
+  # these register a Bypass expectation: the right outcome is that Qdrant is
+  # never called.
+  test "cross-user: another user's note by the same path is invisible", %{user: u, vault: v} do
+    {:ok, other_user} = Engram.Fixtures.user_with_dek_fixture()
+    other_vault = insert(:vault, user: other_user)
+    note_with_points(other_user, other_vault, "S.md", 1, true)
+
+    assert {:error, "Note not found: S.md"} =
+             Handlers.handle("search_notes", u, v, %{"similar_to" => "S.md"})
+  end
+
+  test "wrong vault: a note in another vault owned by the same user is invisible", %{
+    user: u,
+    vault: v
+  } do
+    other = insert(:vault, user: u)
+    note_with_points(u, other, "S.md", 1, true)
+
+    assert {:error, "Note not found: S.md"} =
+             Handlers.handle("search_notes", u, v, %{"similar_to" => "S.md"})
+  end
+
+  test "credential subset: cross-vault search only sees the vaults it was given", %{
+    user: u,
+    vault: v
+  } do
+    other = insert(:vault, user: u)
+    note_with_points(u, other, "S.md", 1, true)
+
+    assert {:error, "Note not found: S.md"} =
+             Handlers.handle("search_notes", u, {:cross_vault, [v]}, %{"similar_to" => "S.md"})
   end
 
   test "does not spend the search budget", %{bypass: bypass, user: u, vault: v} do
@@ -199,6 +241,67 @@ defmodule Engram.MCP.HandlersSimilarTest do
 
     assert msg =~ "S.md exists in 2 vaults"
     assert msg =~ "pass vault_id"
+  end
+
+  for status <- [400, 404] do
+    test "a Qdrant #{status} on recommend is the fixable not_embedded error, not an outage",
+         %{bypass: bypass, user: u, vault: v} do
+      note_with_points(u, v, "S.md", 1, true)
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+        Plug.Conn.resp(conn, unquote(status), "")
+      end)
+
+      assert {:error, msg} = Handlers.handle("search_notes", u, v, %{"similar_to" => "S.md"})
+      assert msg =~ "S.md has no stored embedding yet"
+      assert msg =~ "use query"
+    end
+  end
+
+  test "drops a stray hit that belongs to the source note itself", %{
+    bypass: bypass,
+    user: u,
+    vault: v
+  } do
+    s_ids = note_with_points(u, v, "S.md", 2, true)
+    [o_id] = note_with_points(u, v, "O.md", 1, true)
+    [stray_id | _] = s_ids
+
+    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+      # A stray point still tagged to S.md's own chunks — as if a failed
+      # delete_points_for_note left it behind and Qdrant's must_not exclusion
+      # somehow missed it. The grouped result must still not include S.md.
+      respond(conn, [hit(u, v, stray_id), hit(u, v, o_id)])
+    end)
+
+    assert {:ok, _text, %{"results" => results}} =
+             Handlers.handle("search_notes", u, v, %{"similar_to" => "S.md"})
+
+    assert Enum.map(results, & &1["source_path"]) == ["O.md"]
+  end
+
+  test "folder, tags, and limit reach the Qdrant request", %{bypass: bypass, user: u, vault: v} do
+    note_with_points(u, v, "S.md", 1, true)
+
+    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      json = Jason.decode!(body)
+      # Grouped (group_by_note: true) always over-fetches the candidate pool
+      # (max(limit * 4, profile default 20)); limit=6 -> 24.
+      assert json["limit"] == 24
+      must = json["filter"]["must"]
+      assert Enum.any?(must, &(&1["key"] == "folder_hmac"))
+      assert Enum.any?(must, &(&1["key"] == "tags_hmac"))
+      respond(conn, [])
+    end)
+
+    assert {:ok, _, _} =
+             Handlers.handle("search_notes", u, v, %{
+               "similar_to" => "S.md",
+               "folder" => "Projects",
+               "tags" => ["x"],
+               "limit" => 6
+             })
   end
 
   test "schema declares similar_to" do

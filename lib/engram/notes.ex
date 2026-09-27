@@ -2221,6 +2221,25 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  Note metadata by path, WITHOUT decrypting content/title/tags. For callers
+  that only need plain columns (`id`, `user_id`, `vault_id`,
+  `dense_indexed_hash`) — `get_note/3`'s `decrypt_or_raise!/2` would decrypt
+  fields nobody here reads, and raise on a note whose ciphertext is corrupt
+  for a caller that never needed the plaintext.
+
+  Resolution (`find_note_by_path/3` → `scoped_live/2`) is still the same
+  `user_id AND vault_id` app-level filter `get_note/3` uses, not just RLS.
+  """
+  @spec get_note_metadata(map(), map(), String.t()) :: {:ok, Note.t()} | {:error, :not_found}
+  def get_note_metadata(user, vault, path) do
+    case find_note_by_path(user, vault, path) do
+      {:ok, nil} -> {:error, :not_found}
+      {:ok, note} -> {:ok, note}
+      _ -> {:error, :not_found}
+    end
+  end
+
+  @doc """
   Current text of `note` from the authority, for callers that must
   read-modify-write it.
 

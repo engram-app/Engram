@@ -110,9 +110,11 @@ defmodule Engram.MCP.Handlers do
         render_search(Search.search(user, nil, args["query"], opts), names)
 
       {:ok, :similar} ->
-        with {:ok, note} <- similar_source(user, vaults, args["similar_to"]),
-             {:ok, ids} <- stored_points(note, args["similar_to"]) do
-          render_search(Search.similar(user, nil, ids, opts), names)
+        path = args["similar_to"]
+
+        with {:ok, note} <- similar_source(user, vaults, path),
+             {:ok, ids} <- stored_points(note, path) do
+          render_similar(Search.similar(user, nil, ids, opts), names, note, path)
         end
 
       {:error, _} = err ->
@@ -130,9 +132,16 @@ defmodule Engram.MCP.Handlers do
         render_search(Search.search(user, vault, args["query"], build_search_opts(args)), %{})
 
       {:ok, :similar} ->
-        with {:ok, note} <- similar_source(user, [vault], args["similar_to"]),
-             {:ok, ids} <- stored_points(note, args["similar_to"]) do
-          render_search(Search.similar(user, vault, ids, build_search_opts(args)), %{})
+        path = args["similar_to"]
+
+        with {:ok, note} <- similar_source(user, [vault], path),
+             {:ok, ids} <- stored_points(note, path) do
+          render_similar(
+            Search.similar(user, vault, ids, build_search_opts(args)),
+            %{},
+            note,
+            path
+          )
         end
 
       {:error, _} = err ->
@@ -1073,8 +1082,15 @@ defmodule Engram.MCP.Handlers do
   end
 
   # The source must be unambiguous: the same path can exist in several vaults.
+  # `get_note_metadata/3`, not `get_note/3` — this never reads title/content/
+  # tags, so decrypting them would be pure overhead (and a needless crash
+  # surface on corrupt ciphertext). Resolution still goes through the same
+  # `user_id AND vault_id` scoped query `get_note/3` uses (Notes.scoped/2),
+  # not just RLS, so a path that exists only in another user's vault, or only
+  # in a vault outside the `vaults` list this credential was given, resolves
+  # to :not_found here — never a cross-tenant hit.
   defp similar_source(user, vaults, path) do
-    hits = for v <- vaults, {:ok, note} <- [Notes.get_note(user, v, path)], do: {note, v}
+    hits = for v <- vaults, {:ok, note} <- [Notes.get_note_metadata(user, v, path)], do: {note, v}
 
     case hits do
       [{note, _v}] ->
@@ -1105,6 +1121,32 @@ defmodule Engram.MCP.Handlers do
     do:
       "#{path} has no stored embedding yet (it may be new, empty, or not embedded on " <>
         "your plan); try again later, or use query instead"
+
+  # Renders a `Search.similar/4` result for the `similar_to` tool path.
+  #
+  # A Qdrant 400/404 on `recommend` means the positive point ids it was given
+  # no longer resolve to a stored dense vector (stale/deleted points — the
+  # `dense_indexed_hash` pre-check in `stored_points/2` catches the note-level
+  # case, this catches the point-level one). That is the same fixable
+  # situation `not_embedded/1` already names, not a generic outage.
+  #
+  # On success, drop any hit that is the source note itself: `must_not:
+  # has_id` in `Qdrant.recommend_body/2` excludes the positive points by id,
+  # but a stale point a failed `delete_points_for_note`/reindex left behind
+  # can still belong to the source note and surface under its
+  # {vault_id, source_path} after grouping. Filtered here, after grouping,
+  # because that's where source_path/vault_id are finally decrypted.
+  defp render_similar({:error, {status, _body}}, _names, _note, path) when status in [400, 404],
+    do: {:error, not_embedded(path)}
+
+  defp render_similar({:ok, results}, names, note, path) do
+    render_search({:ok, Enum.reject(results, &source_result?(&1, note, path))}, names)
+  end
+
+  defp render_similar(other, names, _note, _path), do: render_search(other, names)
+
+  defp source_result?(result, note, path),
+    do: result[:source_path] == path and to_string(result[:vault_id]) == to_string(note.vault_id)
 
   # Same result shape as render_search/2; vault labels only in cross-vault mode.
   defp render_recent(pairs, names) do
