@@ -770,8 +770,14 @@ defmodule Engram.MCP.Handlers do
   defp insert_section(user, vault, path, heading, level, position, text) do
     rebuild = fn current ->
       case Sections.insert(current, heading, level, position, text) do
-        {:ok, updated} -> updated
-        :error -> {:error, "Heading not found: #{String.duplicate("#", level)} #{heading}"}
+        {:ok, updated} ->
+          updated
+
+        {:error, {:unclosed_comment, line}} ->
+          {:error, unclosed_comment_error(heading, line)}
+
+        :error ->
+          {:error, "Heading not found: #{String.duplicate("#", level)} #{heading}"}
       end
     end
 
@@ -790,6 +796,13 @@ defmodule Engram.MCP.Handlers do
           %{"path" => path, "heading" => heading}
         )
     end
+  end
+
+  # `line` is 0-indexed internally (Sections works in line indices); report
+  # it 1-indexed, matching how a human (or Obsidian) counts lines.
+  defp unclosed_comment_error(heading, line) do
+    "Section '#{heading}' runs into an unclosed comment (%% or <!--) at line #{line + 1}; " <>
+      "close it or edit with replace_text"
   end
 
   defp tag_mode({:ok, text, structured}, mode, blanks),
@@ -890,6 +903,13 @@ defmodule Engram.MCP.Handlers do
         :error ->
           # The section was not updated, so this is not a success. Was `:ok`.
           {:error, "Heading not found: #{String.duplicate("#", level)} #{heading}"}
+
+        # Defense in depth: a genuine unclosed comment (%% or <!--) swallowed
+        # everything up to EOF, so `stop` is not a real section boundary.
+        # Replacing through it would silently delete whatever the comment
+        # ate. Refuse instead of guessing; the write must not happen.
+        {:ok, %{unclosed_comment_at: line}} when is_integer(line) ->
+          {:error, unclosed_comment_error(heading, line)}
 
         {:ok, %{start: s, stop: e, span: span}} ->
           lines = String.split(current, "\n")

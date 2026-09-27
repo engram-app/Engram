@@ -410,4 +410,62 @@ defmodule Engram.MCP.SectionsTest do
   test "an unclosed Obsidian %% comment hides everything after it" do
     assert Sections.headings("%%\n# H") == []
   end
+
+  # Fix round 4 (final): a "%%" (or "<!--"/"-->") inside an inline code span
+  # is literal text in Obsidian, not a comment delimiter. Repro: this used to
+  # find only heading A (the %% in the code span "opened" a comment that
+  # swallowed B to EOF).
+  test "a %% inside a code span does not open a comment" do
+    content = "## A\nUse `%%` to hide text in Obsidian.\n\n## B\nkeep me\n"
+    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) == [{2, "A"}, {2, "B"}]
+
+    assert {:ok, %{stop: stop}} = Sections.find(content, "A", 2)
+    lines = String.split(content, "\n")
+    assert Enum.at(lines, stop) == "## B"
+  end
+
+  test "printf-style %% inside a code span does not open a comment" do
+    content = "## A\n`printf(\"100%%\")`\n\n## B\nkeep\n"
+    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) == [{2, "A"}, {2, "B"}]
+  end
+
+  test "a SQL LIKE '%%' inside a code span does not open a comment" do
+    content = "## A\n`LIKE '%%'`\n\n## B\nkeep\n"
+    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) == [{2, "A"}, {2, "B"}]
+  end
+
+  test "<!-- inside a code span does not open an HTML comment" do
+    content = "## A\nUse `<!--` to start a comment.\n\n## B\nkeep\n"
+    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) == [{2, "A"}, {2, "B"}]
+  end
+
+  # Fix round 4, defense in depth: a GENUINE unclosed comment must not let
+  # replace_section/insert_section(end) silently delete or misplace content
+  # past it -- find/3 flags it instead of quietly reporting stop == EOF.
+  test "find flags a section whose stop is EOF because of a genuine unclosed comment" do
+    content = "## A\n%%\nunclosed\n\n## B\nkeep\n"
+    assert {:ok, %{unclosed_comment_at: line}} = Sections.find(content, "A", 2)
+    assert line == 1
+  end
+
+  test "find does not flag a section whose stop is a real next heading" do
+    content = "## A\nx\n\n## B\nkeep\n"
+    assert {:ok, %{unclosed_comment_at: nil}} = Sections.find(content, "A", 2)
+  end
+
+  test "find does not flag a section that legitimately runs to EOF with no comment involved" do
+    content = "## A\nx\n"
+    assert {:ok, %{unclosed_comment_at: nil}} = Sections.find(content, "A", 2)
+  end
+
+  test "insert position end into a section with a genuine unclosed comment refuses" do
+    content = "## A\n%%\nunclosed\n\n## B\nkeep\n"
+    assert Sections.insert(content, "A", 2, "end", "n1") == {:error, {:unclosed_comment, 1}}
+  end
+
+  test "insert position start is unaffected by a genuine unclosed comment further down" do
+    content = "## A\n%%\nunclosed\n\n## B\nkeep\n"
+    assert {:ok, out} = Sections.insert(content, "A", 2, "start", "n1")
+    assert out =~ "## A\nn1\n%%"
+  end
 end

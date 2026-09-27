@@ -79,25 +79,30 @@ defmodule Engram.MCP.Sections do
 
   @html_block_start_re ~r/^(?:<(?:script|pre|style|textarea)(?:[\s>]|$)|<!--|<\?|<![A-Za-z]|<!\[CDATA\[|<\/?(?:#{@html_block_tags})(?:[\s>]|\/>|$))/i
 
+  # An inline code span: a backtick run, then anything (lazily) up to the
+  # NEXT occurrence of that exact same run. "%%" or "<!--" inside one is
+  # literal text in Obsidian/CommonMark, never a comment delimiter -- strip
+  # code spans before any comment-open/close check runs.
+  @code_span_re ~r/(`+).*?\1/
+
   @spec headings(String.t()) :: [heading()]
   def headings(content) do
-    scan_content = String.replace_prefix(content, @bom, "")
-
-    {found, _fence, _prev} =
-      scan_content
-      |> String.split("\n")
-      |> Enum.with_index()
-      |> Enum.drop(frontmatter_lines(scan_content))
-      |> Enum.reduce({[], nil, nil}, &scan/2)
-
+    {found, _state, _prev} = scan_all(content)
     Enum.reverse(found)
   end
 
   @spec find(String.t(), String.t(), 1..6 | nil) ::
-          {:ok, %{start: non_neg_integer(), stop: non_neg_integer(), span: pos_integer()}}
+          {:ok,
+           %{
+             start: non_neg_integer(),
+             stop: non_neg_integer(),
+             span: pos_integer(),
+             unclosed_comment_at: non_neg_integer() | nil
+           }}
           | :error
   def find(content, heading, level) do
-    hs = headings(content)
+    {found, state, _prev} = scan_all(content)
+    hs = Enum.reverse(found)
     want = String.trim(heading)
 
     case Enum.find(hs, &(&1.text == want and (is_nil(level) or &1.level == level))) do
@@ -112,8 +117,35 @@ defmodule Engram.MCP.Sections do
             x.line > h.line and x.level <= h.level and x.line
           end)
 
-        {:ok, %{start: h.line, stop: stop, span: h.span}}
+        # Defense in depth: the scan can end still "inside" an unclosed
+        # HTML/%% comment (see scan/2 below), which silently swallows
+        # everything after it -- including headings that would otherwise
+        # have ended this section. When that's WHY `stop` reached EOF for
+        # THIS heading, flag it so a write refuses instead of silently
+        # deleting or misplacing whatever the comment ate.
+        unclosed =
+          case state do
+            {kind, start}
+            when kind in [:html_comment, :obsidian_comment] and stop == line_count and
+                   start >= h.line ->
+              start
+
+            _ ->
+              nil
+          end
+
+        {:ok, %{start: h.line, stop: stop, span: h.span, unclosed_comment_at: unclosed}}
     end
+  end
+
+  defp scan_all(content) do
+    scan_content = String.replace_prefix(content, @bom, "")
+
+    scan_content
+    |> String.split("\n")
+    |> Enum.with_index()
+    |> Enum.drop(frontmatter_lines(scan_content))
+    |> Enum.reduce({[], nil, nil}, &scan/2)
   end
 
   @spec section(String.t(), String.t()) :: {:ok, String.t()} | :error
@@ -133,9 +165,16 @@ defmodule Engram.MCP.Sections do
   # "start": directly under the heading (after the underline, for a setext
   # heading). "end": after the section's last non-blank line, so blank lines
   # before the next heading stay where they are.
-  @spec insert(String.t(), String.t(), 1..6, String.t(), String.t()) :: {:ok, String.t()} | :error
+  #
+  # "start" never depends on `stop`, so it's unaffected by a genuine unclosed
+  # comment further down; "end" does depend on it (it back-scans from `e`),
+  # so it refuses rather than risk inserting past content the comment ate.
+  @spec insert(String.t(), String.t(), 1..6, String.t(), String.t()) ::
+          {:ok, String.t()} | :error | {:error, {:unclosed_comment, non_neg_integer()}}
   def insert(content, heading, level, position, text) do
-    with {:ok, %{start: s, stop: e, span: span}} <- find(content, heading, level) do
+    with {:ok, %{start: s, stop: e, span: span, unclosed_comment_at: unclosed}} <-
+           find(content, heading, level),
+         :ok <- refuse_unclosed(position, unclosed) do
       lines = String.split(content, "\n")
       text = String.trim_trailing(text, "\n")
 
@@ -159,6 +198,9 @@ defmodule Engram.MCP.Sections do
       {:ok, lines |> List.insert_at(at, text) |> Enum.join("\n")}
     end
   end
+
+  defp refuse_unclosed("end", line) when is_integer(line), do: {:error, {:unclosed_comment, line}}
+  defp refuse_unclosed(_position, _line), do: :ok
 
   # Makes `text`'s line endings match `source`'s (the note being edited).
   # Per-line, so it only ever touches the FRAGMENT being written -- never the
@@ -220,18 +262,22 @@ defmodule Engram.MCP.Sections do
   defp scan({line, i}, {acc, nil, prev}) do
     cond do
       (marker = fence_open(line)) != nil -> {acc, marker, nil}
-      html_comment_open?(line) -> {acc, :html_comment, nil}
-      obsidian_comment_open?(line) -> {acc, :obsidian_comment, nil}
+      html_comment_open?(line) -> {acc, {:html_comment, i}, nil}
+      obsidian_comment_open?(line) -> {acc, {:obsidian_comment, i}, nil}
       true -> scan_open(line, i, acc, prev)
     end
   end
 
-  defp scan({line, _i}, {acc, :html_comment, _prev}) do
-    if String.contains?(line, "-->"), do: {acc, nil, nil}, else: {acc, :html_comment, nil}
+  defp scan({line, _i}, {acc, {:html_comment, start}, _prev}) do
+    if String.contains?(strip_code_spans(line), "-->"),
+      do: {acc, nil, nil},
+      else: {acc, {:html_comment, start}, nil}
   end
 
-  defp scan({line, _i}, {acc, :obsidian_comment, _prev}) do
-    if String.contains?(line, "%%"), do: {acc, nil, nil}, else: {acc, :obsidian_comment, nil}
+  defp scan({line, _i}, {acc, {:obsidian_comment, start}, _prev}) do
+    if String.contains?(strip_code_spans(line), "%%"),
+      do: {acc, nil, nil},
+      else: {acc, {:obsidian_comment, start}, nil}
   end
 
   defp scan({line, _i}, {acc, fence, _prev}) do
@@ -242,17 +288,22 @@ defmodule Engram.MCP.Sections do
   end
 
   defp html_comment_open?(line) do
-    trimmed = Regex.replace(@leading_indent_re, line, "")
+    trimmed = line |> strip_code_spans() |> then(&Regex.replace(@leading_indent_re, &1, ""))
     String.starts_with?(trimmed, "<!--") and not String.contains?(trimmed, "-->")
   end
 
   # A line with an ODD number of "%%" occurrences has an opener with no
   # matching closer on the same line (e.g. a lone "%%", or "%% starts a
   # block"). A single self-contained "%% note %%" has an EVEN count (open +
-  # close both present) and does not start a multi-line block.
+  # close both present) and does not start a multi-line block. Code spans are
+  # stripped first: a "%%" inside `` `...` `` is literal text in Obsidian,
+  # never a comment delimiter (same rule CommonMark uses for "<!--" inside a
+  # code span, handled the same way in html_comment_open?/1 above).
   defp obsidian_comment_open?(line) do
-    line |> String.split("%%") |> length() |> Kernel.-(1) |> rem(2) == 1
+    line |> strip_code_spans() |> String.split("%%") |> length() |> Kernel.-(1) |> rem(2) == 1
   end
+
+  defp strip_code_spans(line), do: Regex.replace(@code_span_re, line, "")
 
   defp scan_open(line, i, acc, prev) do
     case Regex.run(@heading_re, line) do

@@ -479,4 +479,76 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     {:ok, out} = Notes.authoritative_content(u, note)
     assert out == "## A\r\nn1\r\nn2"
   end
+
+  # Fix round 4 (final), data-loss repro: a "%%" inside an inline code span
+  # must not "open" an Obsidian comment that swallows a later section.
+  test "replace_section on A keeps a later section that follows a code-span %%", %{
+    user: u,
+    vault: v
+  } do
+    content = "## A\nUse `%%` to hide text in Obsidian.\n\n## B\nkeep me\n"
+
+    {:ok, _} =
+      Notes.upsert_note(u, v, %{"path" => "CodeSpan.md", "content" => content, "mtime" => 8.0})
+
+    assert {:ok, _, _} =
+             Handlers.handle("edit_note", u, v, %{
+               "path" => "CodeSpan.md",
+               "mode" => "replace_section",
+               "heading" => "A",
+               "content" => "new"
+             })
+
+    {:ok, note} = Notes.get_note(u, v, "CodeSpan.md")
+    {:ok, out} = Notes.authoritative_content(u, note)
+    assert out == "## A\nnew\n## B\nkeep me\n"
+  end
+
+  # Fix round 4, defense in depth: a GENUINE unclosed comment must refuse the
+  # edit rather than silently deleting (replace_section) or misplacing
+  # (insert_section end) whatever follows it.
+  test "replace_section refuses and writes nothing when the section runs into an unclosed comment",
+       %{user: u, vault: v} do
+    content = "## A\n%%\nunclosed\n\n## B\nkeep\n"
+
+    {:ok, _} =
+      Notes.upsert_note(u, v, %{"path" => "Unclosed.md", "content" => content, "mtime" => 9.0})
+
+    assert {:error, msg} =
+             Handlers.handle("edit_note", u, v, %{
+               "path" => "Unclosed.md",
+               "mode" => "replace_section",
+               "heading" => "A",
+               "content" => "new"
+             })
+
+    assert msg =~ "unclosed comment"
+
+    {:ok, note} = Notes.get_note(u, v, "Unclosed.md")
+    {:ok, out} = Notes.authoritative_content(u, note)
+    assert out == content
+  end
+
+  test "insert_section position end refuses and writes nothing when the section runs into an unclosed comment",
+       %{user: u, vault: v} do
+    content = "## A\n%%\nunclosed\n\n## B\nkeep\n"
+
+    {:ok, _} =
+      Notes.upsert_note(u, v, %{"path" => "Unclosed2.md", "content" => content, "mtime" => 10.0})
+
+    assert {:error, msg} =
+             Handlers.handle("edit_note", u, v, %{
+               "path" => "Unclosed2.md",
+               "mode" => "insert_section",
+               "heading" => "A",
+               "position" => "end",
+               "content" => "n1"
+             })
+
+    assert msg =~ "unclosed comment"
+
+    {:ok, note} = Notes.get_note(u, v, "Unclosed2.md")
+    {:ok, out} = Notes.authoritative_content(u, note)
+    assert out == content
+  end
 end
