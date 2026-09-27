@@ -298,11 +298,17 @@ defmodule Engram.MCP.Tools do
       description:
         "Search your personal knowledge base. Finds relevant notes using semantic " <>
           "search. Searches across ALL your vaults by default; pass vault_id to limit " <>
-          "to one. Use when the user asks about their notes, vault, knowledge, or memory.",
+          "to one. Omit query to list the most recently updated notes instead. Use when " <>
+          "the user asks about their notes, vault, knowledge, or memory.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
-          "query" => %{"type" => "string", "description" => "Natural language search query"},
+          "query" => %{
+            "type" => "string",
+            "description" =>
+              "Natural language search query. Omit, or leave empty, to list the most " <>
+                "recently updated notes (filters then do not apply)."
+          },
           "limit" => %{
             "type" => "integer",
             "description" => "Maximum number of results (1-20, default 5)",
@@ -357,8 +363,7 @@ defmodule Engram.MCP.Tools do
               "Result diversity (0 = most relevant, default tuned per plan; 1 = most varied). " <>
                 "Uses Maximal Marginal Relevance to reduce redundancy among results."
           }
-        },
-        "required" => ["query"]
+        }
       },
       outputSchema: %{
         "type" => "object",

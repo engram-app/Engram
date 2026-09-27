@@ -84,22 +84,48 @@ defmodule Engram.MCP.Handlers do
   # away from (#729). Without it `vault: nil` would drop the vault clause
   # entirely and search everything the user owns.
   def handle("search_notes", user, {:cross_vault, vaults}, args) do
-    query = args["query"] || ""
-
-    opts =
-      Keyword.merge(build_search_opts(args),
-        cross_vault: true,
-        allow_cross_vault: true,
-        vault_ids: Enum.map(vaults, &to_string(&1.id))
-      )
-
     names = Map.new(vaults, &{to_string(&1.id), &1.name})
-    render_search(Search.search(user, nil, query, opts), names)
+
+    case search_kind(args) do
+      {:ok, :recent} ->
+        limit = min(args["limit"] || 5, 20)
+
+        vaults
+        |> Enum.flat_map(fn v ->
+          {:ok, notes} = Notes.list_recent_notes(user, v, limit)
+          Enum.map(notes, &{&1, v})
+        end)
+        |> Enum.sort_by(fn {n, _v} -> n.updated_at end, {:desc, DateTime})
+        |> Enum.take(limit)
+        |> render_recent(names)
+
+      {:ok, :query} ->
+        opts =
+          Keyword.merge(build_search_opts(args),
+            cross_vault: true,
+            allow_cross_vault: true,
+            vault_ids: Enum.map(vaults, &to_string(&1.id))
+          )
+
+        render_search(Search.search(user, nil, args["query"], opts), names)
+
+      {:error, _} = err ->
+        err
+    end
   end
 
   def handle("search_notes", user, vault, args) do
-    query = args["query"] || ""
-    render_search(Search.search(user, vault, query, build_search_opts(args)), %{})
+    case search_kind(args) do
+      {:ok, :recent} ->
+        {:ok, notes} = Notes.list_recent_notes(user, vault, min(args["limit"] || 5, 20))
+        render_recent(Enum.map(notes, &{&1, vault}), %{})
+
+      {:ok, :query} ->
+        render_search(Search.search(user, vault, args["query"], build_search_opts(args)), %{})
+
+      {:error, _} = err ->
+        err
+    end
   end
 
   def handle("list_tags", user, vault, _args) do
@@ -997,6 +1023,57 @@ defmodule Engram.MCP.Handlers do
   # no client could distinguish from a genuine zero-hit search, and which a
   # retry loop would never retry.
   def render_search({:error, _reason}, _names), do: {:error, "Search unavailable."}
+
+  @search_filters ~w(tags folder type created_after created_before updated_after updated_before)
+
+  # `:recent` when query is blank AND similar_to is absent (Task 6 fills the
+  # `similar_to` branch). A blank query plus a ranking filter is a fixable
+  # error, not a silently-ignored one: the recent listing is unfiltered, so
+  # honoring the call would silently return the wrong answer to a filtered ask.
+  defp search_kind(args) do
+    if String.trim(args["query"] || "") == "" do
+      case Enum.find(@search_filters, &(not is_nil(args[&1]))) do
+        nil -> {:ok, :recent}
+        p -> {:error, "#{p} needs a query or similar_to; omit it to list recently updated notes"}
+      end
+    else
+      {:ok, :query}
+    end
+  end
+
+  # Same result shape as render_search/2; vault labels only in cross-vault mode.
+  defp render_recent(pairs, names) do
+    text =
+      if pairs == [] do
+        "No notes yet."
+      else
+        Enum.join(
+          [
+            "Recently updated:"
+            | Enum.map(pairs, fn {n, _v} -> "- #{n.path} (#{n.updated_at})" end)
+          ],
+          "\n"
+        )
+      end
+
+    results =
+      Enum.map(pairs, fn {n, v} ->
+        payload = %{
+          "score" => 0,
+          "title" => n.title,
+          "source_path" => n.path,
+          "tags" => n.tags || [],
+          "text" => ""
+        }
+
+        if names == %{},
+          do: payload,
+          else:
+            Map.merge(payload, %{"vault_id" => to_string(v.id), "vault" => names[to_string(v.id)]})
+      end)
+
+    {:ok, text, %{"results" => results}}
+  end
 
   # Mirrors `format_search_result/3` field for field, so a client reading
   # structuredContent sees exactly what the markdown shows. `vault_id`/`vault`

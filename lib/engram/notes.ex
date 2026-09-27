@@ -5279,6 +5279,27 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  Most recently updated live notes in `vault`, newest first, metadata only.
+  Backs `search_notes` with no query ("what changed recently").
+  """
+  @spec list_recent_notes(map(), map(), pos_integer()) :: {:ok, [Note.t()]}
+  def list_recent_notes(user, vault, limit) when is_integer(limit) and limit > 0 do
+    {:ok, notes} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.all(
+          from(n in scoped_live(user, vault),
+            where: n.kind == "note",
+            order_by: [desc: n.updated_at, desc: n.id],
+            limit: ^limit,
+            select: struct(n, @note_meta_fields)
+          )
+        )
+      end)
+
+    {:ok, decrypt_or_raise!(notes, user)}
+  end
+
+  @doc """
   Returns all non-deleted notes in a specific folder for a user.
   Pass "" for root-level notes.
   """
