@@ -38,15 +38,46 @@ defmodule Engram.MCP.Sections do
   # contiguous run, so it does not match the FULL line.
   @setext_re ~r/^ {0,3}(=+|-+)[ \t]*\r?$/
 
-  # A line that CANNOT start or continue a setext paragraph, even though it's
-  # non-blank: an indented code line (4+ spaces, or any tab -- a tab is a
-  # 4-column stop); or, after stripping up to 3 leading spaces, a list
-  # marker (bullet or ordered), a blockquote marker, or an HTML block start.
-  # CommonMark interrupts a paragraph at any of these, so they can never be
-  # "the paragraph line" a setext underline attaches to.
+  # Lines that CANNOT start (or, for most, continue) a setext paragraph:
+  #
+  # - An indented code line (4+ spaces, or any tab -- a tab is a 4-column
+  #   stop). This one is different from the rest: it only blocks the FIRST
+  #   line of a paragraph. On a CONTINUATION line (there's already a `prev`
+  #   paragraph), CommonMark treats it as a "lazy continuation" -- still
+  #   plain text, just indented.
+  # - After stripping up to 3 leading spaces: a bullet list marker (with or
+  #   without content -- an empty item like "-" still starts a list), a
+  #   blockquote marker, or the start of a real HTML block (see
+  #   @html_block_start_re below -- NOT any line starting with "<": inline
+  #   HTML and autolinks are ordinary paragraph text).
+  # - An ordered list marker only blocks when there's no `prev` paragraph
+  #   (any list can START a block) OR when it starts at 1 (only a
+  #   start-at-1 ordered list can INTERRUPT an existing paragraph; "2. b"
+  #   mid-paragraph is lazy continuation text, marker included verbatim).
   @indented_code_re ~r/^(?: {4,}|\t)/
-  @non_paragraph_re ~r/^(?:[-+*][ \t]|\d{1,9}[.)][ \t]|>|<)/
+  @bullet_re ~r/^[-+*](?:[ \t]|$)/
+  @blockquote_re ~r/^>/
+  @ordered_re ~r/^(\d{1,9})[.)](?:[ \t]|$)/
   @leading_indent_re ~r/^ {0,3}/
+
+  # CommonMark 4.6 HTML block start conditions (types 1-6), collapsed into
+  # one regex, applied to the line with its indent already stripped:
+  # type 1 (script/pre/style/textarea), type 2 (a comment -- also handled as
+  # its own multi-line scan state, see html_comment_open?/1, but a
+  # self-closing single-line comment falls through to here), type 3 (a
+  # processing instruction), type 4 (a declaration, e.g. "<!DOCTYPE"), type
+  # 5 (CDATA), and type 6 (an opening or closing block-level tag from
+  # CommonMark's fixed list). Inline tags like "<b>" or "<a>" match none of
+  # these, so they're ordinary paragraph text.
+  @html_block_tags ~w(
+    address article aside base basefont blockquote body caption center col
+    colgroup dd details dialog dir div dl dt fieldset figcaption figure
+    footer form frame frameset h1 h2 h3 h4 h5 h6 head header hr html iframe
+    legend li link main menu menuitem nav noframes ol optgroup option p
+    param section summary table tbody td tfoot th thead title tr track ul
+  ) |> Enum.join("|")
+
+  @html_block_start_re ~r/^(?:<(?:script|pre|style|textarea)(?:[\s>]|$)|<!--|<\?|<![A-Za-z]|<!\[CDATA\[|<\/?(?:#{@html_block_tags})(?:[\s>]|\/>|$))/i
 
   @spec headings(String.t()) :: [heading()]
   def headings(content) do
@@ -124,49 +155,83 @@ defmodule Engram.MCP.Sections do
             e - back
         end
 
-      result = lines |> List.insert_at(at, text) |> Enum.join("\n")
-      {:ok, match_eol(result, content)}
+      {lines, text} = splice_eol(lines, at, at, text, content)
+      {:ok, lines |> List.insert_at(at, text) |> Enum.join("\n")}
     end
   end
 
-  # Makes `text`'s line endings match `source`'s (the note being edited),
-  # called on the FULLY joined result so a write never leaves a mix of bare
-  # LF and CRLF behind. Normalizing to LF first (rather than only replacing
-  # bare "\n") avoids doubling a "\r" that was already there, and leaves any
-  # trailing-newline convention (or lack of one) exactly as `text` already
-  # has it -- no separate handling needed for "insert landed at end of file
-  # with no trailing newline".
+  # Makes `text`'s line endings match `source`'s (the note being edited).
+  # Per-line, so it only ever touches the FRAGMENT being written -- never the
+  # untouched lines around it, even in a note that mixes a CRLF line with LF
+  # lines elsewhere.
   @spec match_eol(String.t(), String.t()) :: String.t()
   def match_eol(text, source) do
     if String.contains?(source, "\r\n") do
-      text |> String.replace("\r\n", "\n") |> String.replace("\n", "\r\n")
+      text |> String.split("\n") |> Enum.map_join("\n", &(String.trim_trailing(&1, "\r") <> "\r"))
     else
       text
     end
   end
 
-  # Not currently fenced/commented: an opening fence or an unclosed HTML
-  # comment starts a block; otherwise look for an ATX or setext heading
-  # (scan_open/4). Inside a fence, only a closing fence (same char, no info
-  # string, length >= opener) ends it. Inside an HTML comment, only a line
-  # containing "-->" ends it (its closer need not START the line, unlike a
-  # fence, so it gets its own state rather than reusing fence_close/1).
-  # Everything inside either block, including a `---`/`===` line, is
-  # invisible to heading detection.
-  defp scan({line, i}, {acc, nil, prev}) do
-    case fence_open(line) do
-      nil ->
-        if html_comment_open?(line),
-          do: {acc, :html_comment, nil},
-          else: scan_open(line, i, acc, prev)
+  # match_eol/2 alone assumes the fragment is always followed by more
+  # content (so its own last line can safely end in "\r", relying on the
+  # next line to supply the pairing "\n"). That's false exactly when the
+  # fragment lands as the new end of file in a note with no trailing
+  # newline: the line that WAS last never got a "\r" (nothing followed it),
+  # and the fragment must not gain a stray trailing "\r" either (source had
+  # no trailing newline, so neither should the result).
+  #
+  # `before_count` is where the fragment is inserted relative to `lines`
+  # (`Enum.slice(lines, 0, before_count)` is what precedes it); `after_from`
+  # is where the untouched remainder resumes (`Enum.drop(lines, after_from)`
+  # -- equal to `before_count` for a pure insert with nothing removed, but
+  # can be larger for a replace that removes a range).
+  @spec splice_eol([String.t()], non_neg_integer(), non_neg_integer(), String.t(), String.t()) ::
+          {[String.t()], String.t()}
+  def splice_eol(lines, before_count, after_from, text, source) do
+    if String.contains?(source, "\r\n") do
+      n = length(lines)
+      no_trailing_nl = not String.ends_with?(source, "\n")
 
-      marker ->
-        {acc, marker, nil}
+      lines =
+        if before_count == n and no_trailing_nl,
+          do: List.update_at(lines, before_count - 1, &(&1 <> "\r")),
+          else: lines
+
+      text = match_eol(text, source)
+
+      text =
+        if after_from >= n and no_trailing_nl, do: String.trim_trailing(text, "\r"), else: text
+
+      {lines, text}
+    else
+      {lines, text}
+    end
+  end
+
+  # Not currently fenced/commented: an opening fence, an unclosed HTML
+  # comment, or an unclosed Obsidian %% comment starts a block; otherwise
+  # look for an ATX or setext heading (scan_open/4). Inside a fence, only a
+  # closing fence (same char, no info string, length >= opener) ends it.
+  # Inside an HTML or %% comment, only a line CONTAINING the closer ends it
+  # (the closer need not START the line, unlike a fence, so each gets its
+  # own state rather than reusing fence_close/1). Everything inside any of
+  # these, including a `---`/`===` line, is invisible to heading detection.
+  defp scan({line, i}, {acc, nil, prev}) do
+    cond do
+      (marker = fence_open(line)) != nil -> {acc, marker, nil}
+      html_comment_open?(line) -> {acc, :html_comment, nil}
+      obsidian_comment_open?(line) -> {acc, :obsidian_comment, nil}
+      true -> scan_open(line, i, acc, prev)
     end
   end
 
   defp scan({line, _i}, {acc, :html_comment, _prev}) do
     if String.contains?(line, "-->"), do: {acc, nil, nil}, else: {acc, :html_comment, nil}
+  end
+
+  defp scan({line, _i}, {acc, :obsidian_comment, _prev}) do
+    if String.contains?(line, "%%"), do: {acc, nil, nil}, else: {acc, :obsidian_comment, nil}
   end
 
   defp scan({line, _i}, {acc, fence, _prev}) do
@@ -179,6 +244,14 @@ defmodule Engram.MCP.Sections do
   defp html_comment_open?(line) do
     trimmed = Regex.replace(@leading_indent_re, line, "")
     String.starts_with?(trimmed, "<!--") and not String.contains?(trimmed, "-->")
+  end
+
+  # A line with an ODD number of "%%" occurrences has an opener with no
+  # matching closer on the same line (e.g. a lone "%%", or "%% starts a
+  # block"). A single self-contained "%% note %%" has an EVEN count (open +
+  # close both present) and does not start a multi-line block.
+  defp obsidian_comment_open?(line) do
+    line |> String.split("%%") |> length() |> Kernel.-(1) |> rem(2) == 1
   end
 
   defp scan_open(line, i, acc, prev) do
@@ -195,7 +268,7 @@ defmodule Engram.MCP.Sections do
   # plain paragraph text (`prev` is `{:para, start_line, texts}`, `texts`
   # accumulating one entry per consecutive paragraph line, most recent
   # first). A blank line, an ATX heading, a fence (open or close), or any
-  # line `paragraph_line?/1` rejects all reset `prev` to `nil`, so a `---`
+  # line `paragraph_line?/2` rejects all reset `prev` to `nil`, so a `---`
   # right after any of those is a thematic break, not a heading -- and it
   # does NOT become a new paragraph candidate itself, so two underline-shaped
   # lines in a row can't chain into a heading either. The heading's `line` is
@@ -216,7 +289,7 @@ defmodule Engram.MCP.Sections do
             {acc, nil, nil}
         end
 
-      paragraph_line?(line) ->
+      paragraph_line?(line, prev) ->
         case prev do
           {:para, start, texts} -> {acc, nil, {:para, start, [String.trim(line) | texts]}}
           nil -> {acc, nil, {:para, i, [String.trim(line)]}}
@@ -234,9 +307,39 @@ defmodule Engram.MCP.Sections do
     end
   end
 
-  defp paragraph_line?(line) do
-    not Regex.match?(@indented_code_re, line) and
-      not Regex.match?(@non_paragraph_re, Regex.replace(@leading_indent_re, line, ""))
+  defp paragraph_line?(line, prev) do
+    if Regex.match?(@indented_code_re, line) do
+      # 4+ indent (or a tab) blocks only the FIRST line of a paragraph; a
+      # continuation line is a lazy continuation, still paragraph text.
+      match?({:para, _, _}, prev)
+    else
+      not blocks_paragraph?(Regex.replace(@leading_indent_re, line, ""), prev)
+    end
+  end
+
+  defp blocks_paragraph?(trimmed, prev) do
+    cond do
+      Regex.match?(@bullet_re, trimmed) ->
+        true
+
+      Regex.match?(@blockquote_re, trimmed) ->
+        true
+
+      Regex.match?(@html_block_start_re, trimmed) ->
+        true
+
+      true ->
+        case {Regex.run(@ordered_re, trimmed), prev} do
+          # No ongoing paragraph: any ordered marker (any start number)
+          # starts a list, never paragraph text.
+          {[_, _n], nil} -> true
+          # An ongoing paragraph: only a start-at-1 marker interrupts it;
+          # any other number is lazy continuation text (the marker stays
+          # in the joined text).
+          {[_, n], {:para, _, _}} -> n == "1"
+          {nil, _} -> false
+        end
+    end
   end
 
   # A backtick fence's info string may not itself contain a backtick

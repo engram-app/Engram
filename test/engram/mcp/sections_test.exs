@@ -327,4 +327,87 @@ defmodule Engram.MCP.SectionsTest do
     content = "Title\r\n=====\r\nbody\r\n"
     assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) == [{1, "Title"}]
   end
+
+  # Fix round 3, finding 1: match_eol must stay LOCAL to the edit. A note
+  # that mixes a CRLF line with LF lines elsewhere must not have its
+  # untouched lines rewritten just because the whole file "contains \r\n"
+  # somewhere.
+  test "insert only touches the inserted fragment, not lines outside the edit" do
+    content = "## A\r\nx\n## B\ny"
+    assert {:ok, out} = Sections.insert(content, "A", 2, "start", "n1")
+    assert out == "## A\r\nn1\r\nx\n## B\ny"
+    assert String.ends_with?(out, "x\n## B\ny")
+  end
+
+  # Fix round 3, finding 2: CommonMark's paragraph-INTERRUPT rules are
+  # narrower than its block-START rules. "<" only blocks a setext paragraph
+  # when it opens an actual HTML block (script/pre/style/textarea, a
+  # comment, a processing instruction, a declaration, CDATA, or a
+  # block-level tag) -- inline HTML and autolinks are just paragraph text.
+  test "an autolink does not block a setext paragraph" do
+    content = "<https://x.com> rocks\n---"
+
+    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) ==
+             [{2, "<https://x.com> rocks"}]
+  end
+
+  test "inline HTML does not block a setext paragraph" do
+    content = "<b>bold</b> x\n---"
+    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) == [{2, "<b>bold</b> x"}]
+  end
+
+  test "inline HTML on a continuation line does not block a setext paragraph" do
+    content = "x\n<b>inline</b>\n---"
+
+    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) ==
+             [{2, "x <b>inline</b>"}]
+  end
+
+  test "a script tag opening line blocks a setext paragraph (real HTML block, type 1)" do
+    assert Sections.headings("<script>\n---") == []
+  end
+
+  # A 4+ indent only matters for the FIRST line of a paragraph; on a
+  # continuation line it's a lazy continuation, still paragraph text.
+  test "a 4-space indented continuation line is a lazy continuation, not code" do
+    content = "p\n    indented cont\n==="
+
+    assert Sections.headings(content) |> Enum.map(&{&1.line, &1.level, &1.text}) ==
+             [{0, 1, "p indented cont"}]
+  end
+
+  # An ordered list only interrupts a paragraph when it starts at 1; any
+  # other start number is lazy continuation text instead.
+  test "an ordered list not starting at 1 does not interrupt a paragraph" do
+    content = "a\n2. b\n---"
+    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) == [{2, "a 2. b"}]
+  end
+
+  test "an ordered list starting at 1 does interrupt a paragraph" do
+    assert Sections.headings("a\n1. b\n---") == []
+  end
+
+  test "an empty bullet item does not start a setext paragraph" do
+    assert Sections.headings("*\n---") == []
+  end
+
+  test "an empty ordered item does not start a setext paragraph" do
+    assert Sections.headings("1.\n---") == []
+  end
+
+  # Fix round 3, finding 3: Obsidian %% comments hide headings the same way
+  # <!-- --> does.
+  test "an Obsidian %% comment block hides a heading inside it" do
+    content = "%%\n# H\n%%\n# Real"
+    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) == [{1, "Real"}]
+  end
+
+  test "a single-line Obsidian %% comment does not affect later lines" do
+    content = "%% note %%\n# Real"
+    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) == [{1, "Real"}]
+  end
+
+  test "an unclosed Obsidian %% comment hides everything after it" do
+    assert Sections.headings("%%\n# H") == []
+  end
 end

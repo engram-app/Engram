@@ -850,14 +850,16 @@ defmodule Engram.MCP.Handlers do
 
           # `s + span` keeps the whole heading: span is 2+ for a setext
           # heading (every paragraph line plus the underline), 1 for ATX.
-          # match_eol runs on the FULL joined result (not just `replacement`)
-          # so a note with no trailing newline doesn't gain a stray CR when
-          # the replacement lands at end of file.
+          # splice_eol/5 keeps the CRLF conversion LOCAL to `replacement`
+          # (and the one boundary line next to it, if replacing lands at end
+          # of file with no trailing newline) -- it never touches any other
+          # line in the note.
+          {lines, replacement} = Sections.splice_eol(lines, s + span, e, replacement, current)
+
           final_content =
             (Enum.slice(lines, 0, s + span) ++
                [replacement] ++ Enum.drop(lines, e))
             |> Enum.join("\n")
-            |> Sections.match_eol(current)
 
           Notes.upsert_note(user, vault, %{
             "path" => path,
