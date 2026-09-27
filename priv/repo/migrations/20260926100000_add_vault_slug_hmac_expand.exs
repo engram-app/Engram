@@ -6,13 +6,12 @@ defmodule Engram.Repo.Migrations.AddVaultSlugHmacExpand do
   # `slug_hmac` (keyed, per-user filter key, like `name_hmac`) carries lookup
   # and uniqueness, and `slug_suffixed` records whether this vault took the
   # collision suffix at mint so the slug stays derivable from name + id.
-  # `slug` goes nullable here so the migrate-data release can stop writing it;
-  # the contract release drops it.
+  # `slug` goes nullable in 20260926100050 so the migrate-data release can
+  # stop writing it; the contract release drops it.
   def change do
     alter table(:vaults) do
       add :slug_hmac, :binary
       add :slug_suffixed, :boolean, null: false, default: false
-      modify :slug, :text, null: true, from: {:text, null: false}
     end
   end
 end
