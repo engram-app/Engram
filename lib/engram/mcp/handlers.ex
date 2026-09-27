@@ -1545,9 +1545,11 @@ defmodule Engram.MCP.Handlers do
 
           payload = Map.put(payload, "found", true)
 
+          # One backlinks + outgoing query pair per note (N+1), not batched.
+          # Fine at get_notes' 20-path cap; revisit only if that cap rises.
           if links? do
-            links = links_payload(user, note)
-            {text <> "\n\n" <> format_links(links), Map.merge(payload, links)}
+            {links, truncation} = links_payload(user, note)
+            {text <> "\n\n" <> format_links(links, truncation), Map.merge(payload, links)}
           else
             {text, payload}
           end
@@ -1561,42 +1563,77 @@ defmodule Engram.MCP.Handlers do
   # because an edge only ever resolves inside its source note's vault
   # (Links.resolve_target/4), so a cross-vault same-named note never binds.
   #
-  # `backlinks_for_note/2` is already DB-capped at `Links.backlinks_limit/0`
-  # (200) with no caller-facing "capped" signal. The REST equivalent
-  # (NotesController, GET .../backlinks) returns the same capped list as-is,
-  # and driving 201 real encrypted edges just to assert a capped flag was
-  # already ruled too heavy for a unit test (links_test.exs). This handler
-  # follows that precedent rather than inventing a new indicator here.
-  # `outgoing`/`unresolved` come from one note's own edges (links_for_note/2),
-  # already used unbounded at that per-note scale elsewhere (note_json/2), so
-  # they need no extra cap.
+  # `backlinks_for_note/2` is DB-capped; fetching `limit + 1` is how we tell
+  # "exactly at the cap" apart from "there would have been more" without an
+  # unbounded COUNT. `outgoing`/`unresolved` come from one note's own edges
+  # (links_for_note/2, never DB-limited), so their true length is always
+  # known and the cap is applied here, after dedup, with an exact overage.
   defp links_payload(user, note) do
-    outgoing = Engram.Links.links_for_note(user, note.id)
+    limit = Engram.Links.backlinks_limit()
 
-    %{
-      "backlinks" =>
-        user
-        |> Engram.Links.backlinks_for_note(note.id)
-        |> Enum.map(& &1.source_path)
-        |> Enum.reject(&is_nil/1)
-        |> Enum.uniq(),
-      "outgoing" =>
-        outgoing |> Enum.map(& &1.target_path) |> Enum.reject(&is_nil/1) |> Enum.uniq(),
-      "unresolved" =>
-        outgoing |> Enum.filter(& &1.dangling) |> Enum.map(& &1.target_text) |> Enum.uniq()
+    raw_backlinks = Engram.Links.backlinks_for_note(user, note.id, limit: limit + 1)
+    backlinks_more? = length(raw_backlinks) > limit
+
+    backlinks =
+      raw_backlinks
+      |> Enum.map(& &1.source_path)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+      |> Enum.take(limit)
+
+    outgoing_edges = Engram.Links.links_for_note(user, note.id)
+
+    {targets, outgoing_extra} =
+      outgoing_edges
+      |> Enum.map(& &1.target_path)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+      |> cap(limit)
+
+    {unresolved, unresolved_extra} =
+      outgoing_edges
+      |> Enum.filter(& &1.dangling)
+      |> Enum.map(& &1.target_text)
+      |> Enum.uniq()
+      |> cap(limit)
+
+    links = %{
+      "backlinks" => backlinks,
+      "outgoing" => targets,
+      "unresolved" => unresolved,
+      "links_truncated" => backlinks_more? or outgoing_extra > 0 or unresolved_extra > 0
     }
+
+    {links, {backlinks_more?, outgoing_extra, unresolved_extra}}
   end
 
-  defp format_links(links) do
+  # Slices a deduped list to `limit`, returning {sliced, extra} where `extra`
+  # is the exact count of items dropped (0 when nothing was dropped).
+  defp cap(list, limit) do
+    count = length(list)
+    if count > limit, do: {Enum.take(list, limit), count - limit}, else: {list, 0}
+  end
+
+  defp format_links(links, {backlinks_more?, outgoing_extra, unresolved_extra}) do
     Enum.join(
       [
-        "Backlinks: " <> list_or_none(links["backlinks"]),
-        "Links to: " <> list_or_none(links["outgoing"]),
-        "Unresolved: " <> list_or_none(links["unresolved"])
+        "Backlinks: " <> suffixed(links["backlinks"], backlinks_more?),
+        "Links to: " <> suffixed(links["outgoing"], outgoing_extra),
+        "Unresolved: " <> suffixed(links["unresolved"], unresolved_extra)
       ],
       "\n"
     )
   end
+
+  # `more` is `true` when the count past the cap is unknown (backlinks, from
+  # the limit+1 probe), a positive integer when it is known exactly
+  # (outgoing/unresolved), or `false`/`0` when the list was not truncated.
+  defp suffixed(items, true), do: list_or_none(items) <> ", and more"
+
+  defp suffixed(items, more) when is_integer(more) and more > 0,
+    do: list_or_none(items) <> ", and #{more} more"
+
+  defp suffixed(items, _), do: list_or_none(items)
 
   defp list_or_none([]), do: "none"
   defp list_or_none(items), do: Enum.join(items, ", ")

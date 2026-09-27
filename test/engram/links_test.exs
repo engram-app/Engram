@@ -416,6 +416,25 @@ defmodule Engram.LinksTest do
       assert Links.backlinks_limit() == 200
     end
 
+    # `opts[:limit]` lets a caller (get_notes' include_links) probe for
+    # truncation with `limit: n + 1` without manufacturing 200+ real edges;
+    # a plain call with no opts must stay byte-identical to before.
+    test "opts[:limit] overrides the cap for a single call", %{user: user, vault: vault} do
+      target = Engram.Fixtures.insert_note!(user, vault, %{path: "Target.md"})
+
+      for n <- 1..3 do
+        source = Engram.Fixtures.insert_note!(user, vault, %{path: "Source#{n}.md"})
+
+        :ok =
+          Links.replace_links(user, vault, source.id, [
+            %{target: "Target", alias: nil, anchor: nil, link_type: "wikilink", position: 0}
+          ])
+      end
+
+      assert length(Links.backlinks_for_note(user, target.id, limit: 2)) == 2
+      assert length(Links.backlinks_for_note(user, target.id)) == 3
+    end
+
     test "multiple backlinks come back ordered by position, id", %{user: user, vault: vault} do
       target = Engram.Fixtures.insert_note!(user, vault, %{path: "Target.md"})
 

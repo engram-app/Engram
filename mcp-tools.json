@@ -532,6 +532,10 @@
                 "found": {
                   "type": "boolean"
                 },
+                "links_truncated": {
+                  "description": "true if backlinks, outgoing, or unresolved was cut off at the cap (include_links)",
+                  "type": "boolean"
+                },
                 "outgoing": {
                   "description": "Paths of notes this one links to (include_links)",
                   "items": {

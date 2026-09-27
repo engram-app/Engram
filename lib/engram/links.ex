@@ -877,40 +877,49 @@ defmodule Engram.Links do
   end
 
   @doc """
-  Max edges `backlinks_for_note/2` returns. Exposed so tests and callers
-  (e.g. the OpenAPI schema description) can assert against the real value
-  instead of hardcoding `200` a second place.
+  Max edges `backlinks_for_note/2` returns by default. Exposed so tests and
+  callers (e.g. the OpenAPI schema description) can assert against the real
+  value instead of hardcoding `200` a second place. Overridable via
+  `config :engram, :backlinks_limit` so a test can drive the cap with a
+  handful of notes instead of manufacturing #{@backlinks_limit}+ real ones.
   """
   @spec backlinks_limit() :: pos_integer()
-  def backlinks_limit, do: @backlinks_limit
+  def backlinks_limit, do: Application.get_env(:engram, :backlinks_limit, @backlinks_limit)
 
   @doc """
   Decrypted incoming links (backlinks) for a note — one entry per edge
   pointing at it, carrying the source note's decrypted path/title.
 
-  Capped at #{@backlinks_limit} edges (see `backlinks_limit/0`) — a
+  Capped at `backlinks_limit/0` edges (default #{@backlinks_limit}). A
   heavily-linked note (e.g. a MOC/hub note) could otherwise return an
   unbounded response. Ordered by `position, id` so the cap is stable
   across calls; that same ordering is what a future keyset-paginated
   version of this function would page on.
+
+  `opts[:limit]` overrides the cap for this call only (e.g. `limit: n + 1`
+  to detect truncation without an unbounded COUNT); omitting it keeps every
+  existing caller's behavior unchanged.
   """
-  @spec backlinks_for_note(map(), binary()) :: [map()]
-  def backlinks_for_note(user, note_id) do
+  @spec backlinks_for_note(map(), binary(), keyword()) :: [map()]
+  def backlinks_for_note(user, note_id, opts \\ []) do
     # Both outside the scope: see `resolve_target/4` above.
     user = reload_for_dek(user)
     {:ok, dek} = Crypto.get_dek(user)
+    limit = Keyword.get(opts, :limit, backlinks_limit())
 
-    result = Repo.with_tenant!(user.id, fn -> do_backlinks_for_note(user, note_id, dek) end)
+    result =
+      Repo.with_tenant!(user.id, fn -> do_backlinks_for_note(user, note_id, dek, limit) end)
+
     result
   end
 
-  defp do_backlinks_for_note(user, note_id, dek) do
+  defp do_backlinks_for_note(user, note_id, dek, limit) do
     edges =
       Repo.all(
         from(l in NoteLink,
           where: l.user_id == ^user.id and l.target_note_id == ^note_id,
           order_by: [asc: l.position, asc: l.id],
-          limit: ^@backlinks_limit
+          limit: ^limit
         ),
         skip_tenant_check: true
       )

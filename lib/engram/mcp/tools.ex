@@ -720,6 +720,11 @@ defmodule Engram.MCP.Tools do
                   "type" => "array",
                   "items" => %{"type" => "string"},
                   "description" => "Link targets that match no note (include_links)"
+                },
+                "links_truncated" => %{
+                  "type" => "boolean",
+                  "description" =>
+                    "true if backlinks, outgoing, or unresolved was cut off at the cap (include_links)"
                 }
               },
               "required" => ["path", "found"]

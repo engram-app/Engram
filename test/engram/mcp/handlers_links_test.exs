@@ -46,9 +46,11 @@ defmodule Engram.MCP.HandlersLinksTest do
     assert t["backlinks"] == ["Source.md"]
     assert t["outgoing"] == ["Source.md"]
     assert t["unresolved"] == ["Ghost"]
+    assert t["links_truncated"] == false
     assert missing == %{"path" => "Nope.md", "found" => false}
     assert text =~ "Backlinks: Source.md"
     assert text =~ "Unresolved: Ghost"
+    refute text =~ "more"
   end
 
   # Review Focus 4
@@ -85,6 +87,26 @@ defmodule Engram.MCP.HandlersLinksTest do
       {:ok, _, %{"notes" => [n]}} = Handlers.handle("get_notes", u, a, args)
       refute Map.has_key?(n, "backlinks")
       refute Map.has_key?(n, "outgoing")
+      refute Map.has_key?(n, "links_truncated")
     end
+  end
+
+  # Exercises the exact cap/format logic outgoing and backlinks also use
+  # (cap/2 + suffixed/2 in handlers.ex): dedup, slice to the limit, and
+  # report an exact overage count in both structuredContent and text.
+  # Unresolved needs no real target notes (they're dangling by definition),
+  # so this reaches Links.backlinks_limit() (200) with a single seeded note
+  # instead of the 200+ real notes a backlinks- or outgoing-specific version
+  # of this test would need.
+  test "unresolved links past the cap are truncated with an exact count", %{user: u, a: a} do
+    limit = Links.backlinks_limit()
+    targets = for n <- 1..(limit + 1), do: "[[Ghost#{n}]]"
+    seed(u, a, [{"Target.md", Enum.join(targets, " ")}])
+
+    assert {:ok, text, %{"notes" => [t]}} = get(u, a, %{"paths" => ["Target.md"]})
+    assert length(t["unresolved"]) == limit
+    assert t["links_truncated"] == true
+    assert text =~ "Unresolved: Ghost1, "
+    assert text =~ ", and 1 more"
   end
 end
