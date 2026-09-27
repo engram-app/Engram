@@ -61,6 +61,33 @@ defmodule Engram.IndexingTest do
       assert length(chunks) == chunk_count
     end
 
+    # `chunks.heading_path` was a plaintext copy of "Title > H1 > H2", written
+    # next to an encrypted copy in the Qdrant payload. Nothing reads the
+    # Postgres column, so it is no longer written (privacy audit 2026-09-26).
+    test "chunk rows carry no plaintext heading path", %{bypass: bypass, note: note, vault: vault} do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts -> {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)} end)
+
+      Bypass.expect(bypass, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": true}))
+      end)
+
+      assert {:ok, count} = Indexing.index_note(note, vault)
+      assert count > 0
+
+      import Ecto.Query
+
+      headings =
+        Engram.Repo.all(from(c in Engram.Notes.Chunk, select: c.heading_path),
+          skip_tenant_check: true
+        )
+
+      assert headings != []
+      assert Enum.all?(headings, &is_nil/1)
+    end
+
     test "a note that falls outside the index cap loses its existing chunks",
          %{bypass: bypass, user: user, note: note, vault: vault} do
       # Index it normally first, so there ARE artifacts to reclaim.
