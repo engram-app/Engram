@@ -196,7 +196,12 @@ config :engram, Oban,
        # them, and on a daily cadence that is up to 24h of "No data" on every
        # panel after each deploy. Four cheap aggregates a day buys a 6h worst
        # case. See the staleness contract in `Engram.PromEx.Crdt`.
-       {"10 */6 * * *", Engram.Workers.CrdtBloatSweep}
+       {"10 */6 * * *", Engram.Workers.CrdtBloatSweep},
+       # Reconciles vaults.slug / slug_hmac / slug_suffixed after the slug_hmac
+       # expand release; idempotent (writes only rows that differ). Daily:
+       # each run unwraps every vault-owning user's DEK. Remove with the
+       # contract release that drops vaults.slug.
+       {"25 4 * * *", Engram.Workers.BackfillVaultSlugHmac}
      ]}
   ]
 

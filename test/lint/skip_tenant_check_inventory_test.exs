@@ -99,7 +99,7 @@ defmodule Engram.SkipTenantCheckInventoryTest do
     # keyword appears once in source, which is what this lint counts.
     "engram/repo/tenancy_guard.ex" => 1,
     "engram/usage_meters.ex" => 11,
-    "engram/vaults.ex" => 1,
+    "engram/vaults.ex" => 2,
     "engram/workers/cimd_refresh.ex" => 1,
     "engram/workers/cleanup_vault.ex" => 1,
     "engram/workers/inactivity_cleanup.ex" => 4,

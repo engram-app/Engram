@@ -239,12 +239,6 @@
           "name": "Research (renamed)"
         },
         "properties": {
-          "description": {
-            "nullable": true,
-            "type": "string",
-            "x-struct": null,
-            "x-validate": null
-          },
           "is_default": {
             "type": "boolean",
             "x-struct": null,
@@ -2055,12 +2049,6 @@
           },
           "deleted_at": {
             "format": "date-time",
-            "nullable": true,
-            "type": "string",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "description": {
             "nullable": true,
             "type": "string",
             "x-struct": null,
@@ -5313,7 +5301,7 @@
       },
       "patch": {
         "callbacks": {},
-        "description": "Updates a vault's `name`, `description`, or `is_default` flag and returns the updated vault. Returns 404 when no such vault exists and 422 on validation errors.",
+        "description": "Updates a vault's `name` or `is_default` flag and returns the updated vault. Returns 404 when no such vault exists and 422 on validation errors.",
         "operationId": "vaults-update",
         "parameters": [
           {

@@ -10,7 +10,6 @@ const deleted = [
 	{
 		id: 5,
 		name: "Old",
-		description: null,
 		slug: "old",
 		is_default: false,
 		created_at: "",
