@@ -206,7 +206,14 @@ defmodule Engram.Workers.ProjectVaultIndex do
     vault = %{id: vault_id}
 
     totals =
-      pass(user, vault, vault_id, entries, @max_passes, %{applied: 0, passes: 0, last: nil})
+      pass(
+        user,
+        vault,
+        vault_id,
+        entries,
+        @max_passes,
+        %{applied: 0, passes: 0, unknown_note: 0, malformed: 0, released: 0, conflict: 0}
+      )
 
     report(vault_id, user.id, totals, duplicate_ids)
     :ok
@@ -255,7 +262,21 @@ defmodule Engram.Workers.ProjectVaultIndex do
         end
       end)
 
-    acc = %{acc | applied: acc.applied + outcome.applied, passes: acc.passes + 1, last: outcome}
+    # `unknown_note`/`malformed`/`released` are terminal per entry — an entry
+    # classified as one of them is never retried, so it can only ever appear in
+    # THIS pass's outcome and must be summed in, not overwritten. `conflict` is
+    # the opposite: it means "still stuck as of the pass that just ran", so the
+    # latest value is the right one — an entry that conflicted in pass 1 and
+    # then applied in pass 2 must stop counting as unresolved.
+    acc = %{
+      acc
+      | applied: acc.applied + outcome.applied,
+        unknown_note: acc.unknown_note + outcome.unknown_note,
+        malformed: acc.malformed + outcome.malformed,
+        released: acc.released + outcome.released,
+        conflict: outcome.conflict,
+        passes: acc.passes + 1
+    }
 
     # Re-run only the entries still stuck (`:conflict`), and only while a pass
     # BOTH made progress and left something stuck: that is the chain case, and
@@ -266,7 +287,9 @@ defmodule Engram.Workers.ProjectVaultIndex do
     # settled entry too, on every pass. Harmless for a :noop or :malformed, but
     # #1550's `:released` has a real side effect (an Oban insert) that must not
     # repeat per pass — re-running only what's still stuck fixes that and every
-    # other redundant-reprocessing case at once.
+    # other redundant-reprocessing case at once. That is also exactly why the
+    # counters above must accumulate: a terminal outcome from an EARLIER pass
+    # would otherwise vanish the moment its entry drops out of the retry list.
     if outcome.applied > 0 and outcome.conflict > 0 and passes_left > 1 do
       pass(user, vault, vault_id, Enum.reverse(retry), passes_left - 1, acc)
     else
@@ -363,6 +386,16 @@ defmodule Engram.Workers.ProjectVaultIndex do
   # inline, so a DEK rotation in progress retries the release instead of
   # losing it. Nothing else ever releases this claim: a create that never
   # lands is not a delete, so `Notes.delete_note`'s release never fires for it.
+  #
+  # KNOWN LIMIT: `ReleaseIndexEntries` has no `unique` key, and its only
+  # documented non-transient failure is rotation-in-progress (which snoozes,
+  # not discards). If a release job DID exhaust its 5 attempts some other way,
+  # the entry survives and the next checkpoint re-enqueues a fresh job for the
+  # same note_id — bounded to one extra job per checkpoint interval, not a
+  # runaway, but not deduplicated either. Not fixed here: `unique` lives on the
+  # shared worker's `use Oban.Worker` options, and every other call site
+  # (delete, batch delete) would inherit whatever window is chosen without
+  # asking for it.
   defp release_stale_claim(user, vault_id, note_id) do
     case Enqueue.enqueue(
            ReleaseIndexEntries.new_for(user.id, vault_id, [note_id]),
@@ -416,19 +449,31 @@ defmodule Engram.Workers.ProjectVaultIndex do
   # One event per run carrying what actually happened. Without it an empty index
   # and an index where all 40 entries failed to apply are byte-identical to
   # logs, metrics, Oban and Sentry simultaneously.
-  defp report(vault_id, user_id, %{applied: applied, passes: passes, last: last}, duplicates) do
-    unresolved = last.conflict + last.unknown_note + last.malformed + duplicates
+  defp report(
+         vault_id,
+         user_id,
+         %{
+           applied: applied,
+           passes: passes,
+           conflict: conflict,
+           unknown_note: unknown_note,
+           malformed: malformed,
+           released: released
+         },
+         duplicates
+       ) do
+    unresolved = conflict + unknown_note + malformed + duplicates
 
     :telemetry.execute(
       @event,
       %{
         applied: applied,
         unresolved: unresolved,
-        conflict: last.conflict,
-        unknown_note: last.unknown_note,
-        malformed: last.malformed,
+        conflict: conflict,
+        unknown_note: unknown_note,
+        malformed: malformed,
         duplicate_note_ids: duplicates,
-        released: last.released,
+        released: released,
         passes: passes
       },
       %{phase: if(unresolved == 0, do: :converged, else: :unresolved)}

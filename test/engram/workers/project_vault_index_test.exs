@@ -561,6 +561,8 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
     # pass) got re-detected and re-released each pass — one duplicate
     # ReleaseIndexEntries job per extra pass, up to @max_passes.
     test "a stale claim shares a run with a chain and is released only once", ctx do
+      attach_projection_telemetry()
+
       a = note(ctx, "a.md")
       b = note(ctx, "b.md")
       stale_id = UUIDv7.generate(System.system_time(:millisecond) - :timer.hours(2))
@@ -587,6 +589,11 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
 
       assert length(jobs) == 1,
              "one release job per stale claim per run, not one per pass (got #{length(jobs)})"
+
+      # The release happened in pass 1; the chain only converges in pass 2.
+      # `released` must survive into the final report, not get overwritten by
+      # pass 2's outcome (which never touches the already-released entry).
+      assert_receive {:projection, %{unresolved: 0, released: 1}, %{phase: :converged}}, 2_000
     end
   end
 end
