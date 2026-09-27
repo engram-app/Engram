@@ -846,14 +846,18 @@ defmodule Engram.MCP.Handlers do
 
         {:ok, %{start: s, stop: e, span: span}} ->
           lines = String.split(current, "\n")
-          replacement = new_content |> String.trim_trailing("\n") |> Sections.match_eol(current)
+          replacement = String.trim_trailing(new_content, "\n")
 
-          # `s + span` keeps the whole heading: span is 2 for a setext
-          # heading (paragraph text line + underline), 1 for ATX.
+          # `s + span` keeps the whole heading: span is 2+ for a setext
+          # heading (every paragraph line plus the underline), 1 for ATX.
+          # match_eol runs on the FULL joined result (not just `replacement`)
+          # so a note with no trailing newline doesn't gain a stray CR when
+          # the replacement lands at end of file.
           final_content =
             (Enum.slice(lines, 0, s + span) ++
                [replacement] ++ Enum.drop(lines, e))
             |> Enum.join("\n")
+            |> Sections.match_eol(current)
 
           Notes.upsert_note(user, vault, %{
             "path" => path,

@@ -13,7 +13,7 @@ defmodule Engram.MCP.Sections do
 
   alias Engram.Notes.Frontmatter
 
-  @type heading :: %{line: non_neg_integer(), level: 1..6, text: String.t(), span: 1..2}
+  @type heading :: %{line: non_neg_integer(), level: 1..6, text: String.t(), span: pos_integer()}
 
   @bom "﻿"
 
@@ -34,8 +34,19 @@ defmodule Engram.MCP.Sections do
   # A setext underline: 0-3 space indent, then a run of ONLY `=` (level 1) or
   # ONLY `-` (level 2), optional trailing spaces/tabs, optional \r. "- item"
   # fails this (has non-underline text after the dash), so list items are
-  # never mistaken for one.
+  # never mistaken for one. "- - -" (spaced dashes) also fails: `-+` is a
+  # contiguous run, so it does not match the FULL line.
   @setext_re ~r/^ {0,3}(=+|-+)[ \t]*\r?$/
+
+  # A line that CANNOT start or continue a setext paragraph, even though it's
+  # non-blank: an indented code line (4+ spaces, or any tab -- a tab is a
+  # 4-column stop); or, after stripping up to 3 leading spaces, a list
+  # marker (bullet or ordered), a blockquote marker, or an HTML block start.
+  # CommonMark interrupts a paragraph at any of these, so they can never be
+  # "the paragraph line" a setext underline attaches to.
+  @indented_code_re ~r/^(?: {4,}|\t)/
+  @non_paragraph_re ~r/^(?:[-+*][ \t]|\d{1,9}[.)][ \t]|>|<)/
+  @leading_indent_re ~r/^ {0,3}/
 
   @spec headings(String.t()) :: [heading()]
   def headings(content) do
@@ -45,14 +56,15 @@ defmodule Engram.MCP.Sections do
       scan_content
       |> String.split("\n")
       |> Enum.with_index()
-      |> Enum.drop(frontmatter_lines(content))
+      |> Enum.drop(frontmatter_lines(scan_content))
       |> Enum.reduce({[], nil, nil}, &scan/2)
 
     Enum.reverse(found)
   end
 
   @spec find(String.t(), String.t(), 1..6 | nil) ::
-          {:ok, %{start: non_neg_integer(), stop: non_neg_integer(), span: 1..2}} | :error
+          {:ok, %{start: non_neg_integer(), stop: non_neg_integer(), span: pos_integer()}}
+          | :error
   def find(content, heading, level) do
     hs = headings(content)
     want = String.trim(heading)
@@ -94,7 +106,7 @@ defmodule Engram.MCP.Sections do
   def insert(content, heading, level, position, text) do
     with {:ok, %{start: s, stop: e, span: span}} <- find(content, heading, level) do
       lines = String.split(content, "\n")
-      text = text |> String.trim_trailing("\n") |> match_eol(content)
+      text = String.trim_trailing(text, "\n")
 
       at =
         case position do
@@ -112,36 +124,49 @@ defmodule Engram.MCP.Sections do
             e - back
         end
 
-      {:ok, lines |> List.insert_at(at, text) |> Enum.join("\n")}
+      result = lines |> List.insert_at(at, text) |> Enum.join("\n")
+      {:ok, match_eol(result, content)}
     end
   end
 
-  # Converts `text`'s line endings to CRLF when `source` (the note being
-  # edited) uses CRLF, so a write never leaves a mix behind. `source` lines
-  # already end each non-final line in `\r` (the note's own bytes); we mirror
-  # that shape here (`\r` appended per line, joined with bare `\n`) so the
-  # inserted block is uniform with its neighbors once the caller joins
-  # everything back together with `\n`.
+  # Makes `text`'s line endings match `source`'s (the note being edited),
+  # called on the FULLY joined result so a write never leaves a mix of bare
+  # LF and CRLF behind. Normalizing to LF first (rather than only replacing
+  # bare "\n") avoids doubling a "\r" that was already there, and leaves any
+  # trailing-newline convention (or lack of one) exactly as `text` already
+  # has it -- no separate handling needed for "insert landed at end of file
+  # with no trailing newline".
   @spec match_eol(String.t(), String.t()) :: String.t()
   def match_eol(text, source) do
     if String.contains?(source, "\r\n") do
-      text
-      |> String.split("\n")
-      |> Enum.map_join("\n", &(String.trim_trailing(&1, "\r") <> "\r"))
+      text |> String.replace("\r\n", "\n") |> String.replace("\n", "\r\n")
     else
       text
     end
   end
 
-  # Not currently fenced: an opening fence starts one; otherwise look for an
-  # ATX or setext heading (scan_open/4). Currently fenced: only a closing
-  # fence (same char, no info string, length >= opener) ends it; everything
-  # else, including a `---`/`===` line, is invisible while inside the fence.
+  # Not currently fenced/commented: an opening fence or an unclosed HTML
+  # comment starts a block; otherwise look for an ATX or setext heading
+  # (scan_open/4). Inside a fence, only a closing fence (same char, no info
+  # string, length >= opener) ends it. Inside an HTML comment, only a line
+  # containing "-->" ends it (its closer need not START the line, unlike a
+  # fence, so it gets its own state rather than reusing fence_close/1).
+  # Everything inside either block, including a `---`/`===` line, is
+  # invisible to heading detection.
   defp scan({line, i}, {acc, nil, prev}) do
     case fence_open(line) do
-      nil -> scan_open(line, i, acc, prev)
-      marker -> {acc, marker, nil}
+      nil ->
+        if html_comment_open?(line),
+          do: {acc, :html_comment, nil},
+          else: scan_open(line, i, acc, prev)
+
+      marker ->
+        {acc, marker, nil}
     end
+  end
+
+  defp scan({line, _i}, {acc, :html_comment, _prev}) do
+    if String.contains?(line, "-->"), do: {acc, nil, nil}, else: {acc, :html_comment, nil}
   end
 
   defp scan({line, _i}, {acc, fence, _prev}) do
@@ -149,6 +174,11 @@ defmodule Engram.MCP.Sections do
       nil -> {acc, fence, nil}
       marker -> if closes?(fence, marker), do: {acc, nil, nil}, else: {acc, fence, nil}
     end
+  end
+
+  defp html_comment_open?(line) do
+    trimmed = Regex.replace(@leading_indent_re, line, "")
+    String.starts_with?(trimmed, "<!--") and not String.contains?(trimmed, "-->")
   end
 
   defp scan_open(line, i, acc, prev) do
@@ -161,12 +191,16 @@ defmodule Engram.MCP.Sections do
 
   defp atx(i, hashes, text), do: %{line: i, level: String.length(hashes), text: text, span: 1}
 
-  # A setext heading only forms when the immediately preceding line was a
-  # plain paragraph line (`prev` is `{:para, ...}`). A blank line, an ATX
-  # heading, or a fence (open or close) all reset `prev` to `nil`, so a `---`
+  # A setext heading only forms when the immediately preceding line(s) were
+  # plain paragraph text (`prev` is `{:para, start_line, texts}`, `texts`
+  # accumulating one entry per consecutive paragraph line, most recent
+  # first). A blank line, an ATX heading, a fence (open or close), or any
+  # line `paragraph_line?/1` rejects all reset `prev` to `nil`, so a `---`
   # right after any of those is a thematic break, not a heading -- and it
   # does NOT become a new paragraph candidate itself, so two underline-shaped
-  # lines in a row can't chain into a heading either.
+  # lines in a row can't chain into a heading either. The heading's `line` is
+  # the FIRST paragraph line, `span` covers every paragraph line plus the
+  # underline, and `text` joins the paragraph lines with a single space.
   defp scan_text(line, i, acc, prev) do
     cond do
       String.trim(line) == "" ->
@@ -174,15 +208,22 @@ defmodule Engram.MCP.Sections do
 
       (level = setext_level(line)) != nil ->
         case prev do
-          {:para, pidx, ptext} ->
-            {[%{line: pidx, level: level, text: ptext, span: 2} | acc], nil, nil}
+          {:para, start, texts} ->
+            text = texts |> Enum.reverse() |> Enum.join(" ")
+            {[%{line: start, level: level, text: text, span: length(texts) + 1} | acc], nil, nil}
 
-          _ ->
+          nil ->
             {acc, nil, nil}
         end
 
+      paragraph_line?(line) ->
+        case prev do
+          {:para, start, texts} -> {acc, nil, {:para, start, [String.trim(line) | texts]}}
+          nil -> {acc, nil, {:para, i, [String.trim(line)]}}
+        end
+
       true ->
-        {acc, nil, {:para, i, String.trim(line)}}
+        {acc, nil, nil}
     end
   end
 
@@ -191,6 +232,11 @@ defmodule Engram.MCP.Sections do
       [_, run] -> if String.starts_with?(run, "="), do: 1, else: 2
       nil -> nil
     end
+  end
+
+  defp paragraph_line?(line) do
+    not Regex.match?(@indented_code_re, line) and
+      not Regex.match?(@non_paragraph_re, Regex.replace(@leading_indent_re, line, ""))
   end
 
   # A backtick fence's info string may not itself contain a backtick

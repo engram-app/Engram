@@ -213,4 +213,118 @@ defmodule Engram.MCP.SectionsTest do
   test "a tab-indented heading line is code, not a heading" do
     assert Sections.headings("\t# X") == []
   end
+
+  # Fix round 2, Important: only a line that could be paragraph text can
+  # start/continue a setext paragraph. A list item, blockquote, indented
+  # code, or HTML block line followed by a dash/equals run is a thematic
+  # break (or plain content), never a setext heading.
+  test "a dash list item does not start a setext paragraph" do
+    assert Sections.headings("- item\n---") == []
+  end
+
+  test "a dash list item is not confused with a level-1 setext underline either" do
+    assert Sections.headings("- item\n===") == []
+  end
+
+  test "an ordered list item with a dot marker does not start a setext paragraph" do
+    assert Sections.headings("1. item\n---") == []
+  end
+
+  test "an ordered list item with a paren marker does not start a setext paragraph" do
+    assert Sections.headings("2) item\n---") == []
+  end
+
+  test "a star list item does not start a setext paragraph" do
+    assert Sections.headings("* item\n---") == []
+  end
+
+  test "a plus list item does not start a setext paragraph" do
+    assert Sections.headings("+ item\n---") == []
+  end
+
+  test "a blockquote line does not start a setext paragraph" do
+    assert Sections.headings("> q\n---") == []
+  end
+
+  test "a multi-line blockquote does not start a setext paragraph" do
+    assert Sections.headings("> [!note] T\n> body\n---") == []
+  end
+
+  test "a 4-space indented code line does not start a setext paragraph" do
+    assert Sections.headings("    code\n---") == []
+  end
+
+  test "a tab-indented code line does not start a setext paragraph" do
+    assert Sections.headings("\tcode\n---") == []
+  end
+
+  test "an HTML block does not start or continue a setext paragraph" do
+    assert Sections.headings("<div>\nhi\n</div>\n---") == []
+  end
+
+  test "an HTML comment block does not start or continue a setext paragraph" do
+    assert Sections.headings("<!--\nfoo\n-->\n---") == []
+  end
+
+  test "headings does not list a list item as a heading, even with a following thematic break" do
+    content = "## A\n- item\n---\n## B\nb\n"
+    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) == [{2, "A"}, {2, "B"}]
+  end
+
+  # Fix round 2, Minor 1: a multi-line paragraph immediately before an
+  # underline is ALL setext heading text, not just its last line.
+  test "a multi-line paragraph before an underline becomes one heading, text joined with spaces" do
+    content = "a\nb\n===\nx"
+
+    assert Sections.headings(content) |> Enum.map(&{&1.line, &1.level, &1.text}) ==
+             [{0, 1, "a b"}]
+  end
+
+  test "section on a multi-line setext heading includes every paragraph line plus the underline" do
+    content = "para1\npara2\n---\nbody"
+    assert {:ok, text} = Sections.section(content, "para1 para2")
+    assert text == content
+  end
+
+  test "the old single-line reading of a multi-line setext heading no longer matches" do
+    assert Sections.find("a\nb\n===\nx", "b", 1) == :error
+  end
+
+  # Fix round 2, Minor 2: the BOM must be stripped before frontmatter
+  # detection too, not just before the heading scan.
+  test "a BOM before frontmatter does not defeat frontmatter skipping" do
+    content = "﻿---\ntitle: x\n---\n# X"
+    assert Sections.headings(content) |> Enum.map(& &1.text) == ["X"]
+  end
+
+  # Fix round 2, Minor 3: appending to a CRLF note with no trailing newline
+  # must not leave a bare LF or a stray trailing CR.
+  test "insert end on a CRLF note with no trailing newline stays uniform" do
+    assert {:ok, out} = Sections.insert("## A\r\nx", "A", 2, "end", "n1")
+    assert out == "## A\r\nx\r\nn1"
+    refute out =~ ~r/[^\r]\n/
+    refute String.ends_with?(out, "\r")
+  end
+
+  # Regressions to keep green: ATX closing #s (already covered above), a
+  # spaced dash run is a thematic break not setext, a GFM table delimiter row
+  # is not setext, an indented dash run is not setext, and setext still works
+  # on a CRLF note.
+  test "a spaced dash run is not a setext underline" do
+    assert Sections.headings("para\n- - -\nmore\n") == []
+  end
+
+  test "a GFM table delimiter row is not a setext underline" do
+    content = "Col1 | Col2\n--- | ---\ndata | data\n"
+    assert Sections.headings(content) == []
+  end
+
+  test "an indented dash run is not a setext underline" do
+    assert Sections.headings("foo\n    ---\n") == []
+  end
+
+  test "a setext heading is recognized in a CRLF note" do
+    content = "Title\r\n=====\r\nbody\r\n"
+    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) == [{1, "Title"}]
+  end
 end

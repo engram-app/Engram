@@ -432,4 +432,51 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     {:ok, out} = Notes.authoritative_content(u, note)
     assert out == "Title\n=====\nnew\nNext\n====\n\nz\n"
   end
+
+  # Fix round 2, Important: a list item followed by a thematic break must not
+  # be read as a setext heading; replace_section on the PRECEDING heading
+  # must replace through both lines, leaving no stale "- item" behind.
+  test "replace_section on A drops a trailing list item and thematic break, not just up to them",
+       %{user: u, vault: v} do
+    content = "## A\n- item\n---\n## B\nb\n"
+
+    {:ok, _} =
+      Notes.upsert_note(u, v, %{"path" => "List.md", "content" => content, "mtime" => 6.0})
+
+    assert {:ok, _, _} =
+             Handlers.handle("edit_note", u, v, %{
+               "path" => "List.md",
+               "mode" => "replace_section",
+               "heading" => "A",
+               "content" => "new"
+             })
+
+    {:ok, note} = Notes.get_note(u, v, "List.md")
+    {:ok, out} = Notes.authoritative_content(u, note)
+    assert out == "## A\nnew\n## B\nb\n"
+  end
+
+  # Fix round 2, Minor 3: replace_section to end of file on a CRLF note with
+  # no trailing newline must not leave a bare LF or a stray trailing CR.
+  test "replace_section to end of file on a CRLF note with no trailing newline stays uniform", %{
+    user: u,
+    vault: v
+  } do
+    content = "## A\r\nold"
+
+    {:ok, _} =
+      Notes.upsert_note(u, v, %{"path" => "CrlfEof.md", "content" => content, "mtime" => 7.0})
+
+    assert {:ok, _, _} =
+             Handlers.handle("edit_note", u, v, %{
+               "path" => "CrlfEof.md",
+               "mode" => "replace_section",
+               "heading" => "A",
+               "content" => "n1\nn2"
+             })
+
+    {:ok, note} = Notes.get_note(u, v, "CrlfEof.md")
+    {:ok, out} = Notes.authoritative_content(u, note)
+    assert out == "## A\r\nn1\r\nn2"
+  end
 end
