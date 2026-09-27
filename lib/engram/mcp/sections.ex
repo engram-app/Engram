@@ -56,7 +56,10 @@ defmodule Engram.MCP.Sections do
         :error
 
       h ->
+        # The section never owns the empty "line" after a trailing newline,
+        # so a replace of the last section keeps the note's final newline.
         eof = content |> String.split("\n") |> length()
+        eof = if String.ends_with?(content, "\n"), do: eof - 1, else: eof
 
         stop =
           Enum.find_value(hs, eof, fn x -> x.line > h.line and x.level <= h.level and x.line end)

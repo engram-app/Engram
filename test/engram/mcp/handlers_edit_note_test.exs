@@ -552,6 +552,54 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     assert out == content
   end
 
+  # M1: replacing the LAST section of a note that ends with a newline must
+  # keep that final newline (CRLF: no stray "\r" left behind either).
+  test "replace_section on the last section of a CRLF note keeps the final CRLF", %{
+    user: u,
+    vault: v
+  } do
+    {:ok, _} =
+      Notes.upsert_note(u, v, %{
+        "path" => "Last.md",
+        "content" => "## A\r\nold\r\n",
+        "mtime" => 11.0
+      })
+
+    assert {:ok, _, _} =
+             Handlers.handle("edit_note", u, v, %{
+               "path" => "Last.md",
+               "mode" => "replace_section",
+               "heading" => "A",
+               "content" => "NEW"
+             })
+
+    {:ok, note} = Notes.get_note(u, v, "Last.md")
+    assert {:ok, "## A\r\nNEW\r\n"} = Notes.authoritative_content(u, note)
+  end
+
+  test "replace_section on the last section of an LF note keeps the final newline", %{
+    user: u,
+    vault: v
+  } do
+    {:ok, _} =
+      Notes.upsert_note(u, v, %{
+        "path" => "LastLf.md",
+        "content" => "## A\nold\n",
+        "mtime" => 12.0
+      })
+
+    assert {:ok, _, _} =
+             Handlers.handle("edit_note", u, v, %{
+               "path" => "LastLf.md",
+               "mode" => "replace_section",
+               "heading" => "A",
+               "content" => "NEW"
+             })
+
+    {:ok, note} = Notes.get_note(u, v, "LastLf.md")
+    assert {:ok, "## A\nNEW\n"} = Notes.authoritative_content(u, note)
+  end
+
   # C1 end to end: the "## B" after a comment closed by a backticked "-->"
   # must survive a replace of A.
   test "replace_section on A keeps B after an HTML comment closed inside backticks", %{
