@@ -641,7 +641,9 @@ defmodule Engram.MCP.Tools do
           "Use to inventory a folder (list_folder then get_notes) or to read a batch " <>
           "of search results without N round-trips. Missing paths are reported inline. " <>
           "To save tokens on long notes, pass outline: true for the heading list only, or " <>
-          "section with one path to read just that heading's section.",
+          "section with one path to read just that heading's section. Pass include_links: " <>
+          "true to also get, per note, the notes linking to it, the notes it links to, and " <>
+          "its links that point at no existing note.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
@@ -662,6 +664,12 @@ defmodule Engram.MCP.Tools do
             "default" => false,
             "description" =>
               "true returns each note's headings (level and text) instead of its content"
+          },
+          "include_links" => %{
+            "type" => "boolean",
+            "default" => false,
+            "description" =>
+              "true adds backlinks, outgoing and unresolved link lists to each found note"
           }
         },
         "required" => ["paths"]
@@ -697,6 +705,21 @@ defmodule Engram.MCP.Tools do
                     },
                     "required" => ["level", "heading"]
                   }
+                },
+                "backlinks" => %{
+                  "type" => "array",
+                  "items" => %{"type" => "string"},
+                  "description" => "Paths of notes linking to this one (include_links)"
+                },
+                "outgoing" => %{
+                  "type" => "array",
+                  "items" => %{"type" => "string"},
+                  "description" => "Paths of notes this one links to (include_links)"
+                },
+                "unresolved" => %{
+                  "type" => "array",
+                  "items" => %{"type" => "string"},
+                  "description" => "Link targets that match no note (include_links)"
                 }
               },
               "required" => ["path", "found"]

@@ -474,10 +474,15 @@
         "readOnlyHint": true,
         "title": "Read Notes"
       },
-      "description": "Retrieve the full content of multiple notes in one call (1-20 paths). Also reads a single note: pass one path. Use to inventory a folder (list_folder then get_notes) or to read a batch of search results without N round-trips. Missing paths are reported inline. To save tokens on long notes, pass outline: true for the heading list only, or section with one path to read just that heading's section.",
+      "description": "Retrieve the full content of multiple notes in one call (1-20 paths). Also reads a single note: pass one path. Use to inventory a folder (list_folder then get_notes) or to read a batch of search results without N round-trips. Missing paths are reported inline. To save tokens on long notes, pass outline: true for the heading list only, or section with one path to read just that heading's section. Pass include_links: true to also get, per note, the notes linking to it, the notes it links to, and its links that point at no existing note.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
+          "include_links": {
+            "default": false,
+            "description": "true adds backlinks, outgoing and unresolved link lists to each found note",
+            "type": "boolean"
+          },
           "outline": {
             "default": false,
             "description": "true returns each note's headings (level and text) instead of its content",
@@ -510,6 +515,13 @@
           "notes": {
             "items": {
               "properties": {
+                "backlinks": {
+                  "description": "Paths of notes linking to this one (include_links)",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
                 "content": {
                   "description": "Absent when outline: true was requested",
                   "type": "string"
@@ -519,6 +531,13 @@
                 },
                 "found": {
                   "type": "boolean"
+                },
+                "outgoing": {
+                  "description": "Paths of notes this one links to (include_links)",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
                 },
                 "outline": {
                   "description": "Only with outline: true; replaces content",
@@ -554,6 +573,13 @@
                     "string",
                     "null"
                   ]
+                },
+                "unresolved": {
+                  "description": "Link targets that match no note (include_links)",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
                 }
               },
               "required": [

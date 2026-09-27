@@ -271,7 +271,7 @@ defmodule Engram.MCP.Handlers do
           end)
 
         with {:ok, fetched} <- narrow_to_section(fetched, section) do
-          render_notes(user, fetched, outline?)
+          render_notes(user, fetched, outline?, args["include_links"] == true)
         end
     end
   end
@@ -1530,10 +1530,7 @@ defmodule Engram.MCP.Handlers do
     end
   end
 
-  # `_user` is unused today; Task 4 threads a `links?` flag through here that
-  # needs it to resolve wikilinks, so the signature is already `render_notes/3`
-  # rather than adding a fourth positional argument on top later.
-  defp render_notes(_user, fetched, outline?) do
+  defp render_notes(user, fetched, outline?, links?) do
     {texts, notes} =
       fetched
       |> Enum.map(fn
@@ -1546,12 +1543,63 @@ defmodule Engram.MCP.Handlers do
               do: outline_entry(note),
               else: {format_get_note(note), note_payload(note)}
 
-          {text, Map.put(payload, "found", true)}
+          payload = Map.put(payload, "found", true)
+
+          if links? do
+            links = links_payload(user, note)
+            {text <> "\n\n" <> format_links(links), Map.merge(payload, links)}
+          else
+            {text, payload}
+          end
       end)
       |> Enum.unzip()
 
     {:ok, Enum.join(texts, "\n\n---\n\n"), %{"notes" => notes}}
   end
+
+  # Both reads are user-scoped by the Links context; vault scoping holds
+  # because an edge only ever resolves inside its source note's vault
+  # (Links.resolve_target/4), so a cross-vault same-named note never binds.
+  #
+  # `backlinks_for_note/2` is already DB-capped at `Links.backlinks_limit/0`
+  # (200) with no caller-facing "capped" signal. The REST equivalent
+  # (NotesController, GET .../backlinks) returns the same capped list as-is,
+  # and driving 201 real encrypted edges just to assert a capped flag was
+  # already ruled too heavy for a unit test (links_test.exs). This handler
+  # follows that precedent rather than inventing a new indicator here.
+  # `outgoing`/`unresolved` come from one note's own edges (links_for_note/2),
+  # already used unbounded at that per-note scale elsewhere (note_json/2), so
+  # they need no extra cap.
+  defp links_payload(user, note) do
+    outgoing = Engram.Links.links_for_note(user, note.id)
+
+    %{
+      "backlinks" =>
+        user
+        |> Engram.Links.backlinks_for_note(note.id)
+        |> Enum.map(& &1.source_path)
+        |> Enum.reject(&is_nil/1)
+        |> Enum.uniq(),
+      "outgoing" =>
+        outgoing |> Enum.map(& &1.target_path) |> Enum.reject(&is_nil/1) |> Enum.uniq(),
+      "unresolved" =>
+        outgoing |> Enum.filter(& &1.dangling) |> Enum.map(& &1.target_text) |> Enum.uniq()
+    }
+  end
+
+  defp format_links(links) do
+    Enum.join(
+      [
+        "Backlinks: " <> list_or_none(links["backlinks"]),
+        "Links to: " <> list_or_none(links["outgoing"]),
+        "Unresolved: " <> list_or_none(links["unresolved"])
+      ],
+      "\n"
+    )
+  end
+
+  defp list_or_none([]), do: "none"
+  defp list_or_none(items), do: Enum.join(items, ", ")
 
   defp outline_entry(note) do
     outline =
