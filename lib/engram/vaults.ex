@@ -888,35 +888,58 @@ defmodule Engram.Vaults do
   Reconcile `slug`, `slug_hmac` and `slug_suffixed` on every one of a user's
   vaults so each slug is derivable as `slugify(name)` plus, when
   `slug_suffixed`, the vault-id suffix. Covers rows minted before the expand
-  release, legacy `-2`/`-3` slugs and old-`slugify` output (rewritten to the
-  derivable form, a one-time URL change), and renames by pre-expand code during
-  the deploy window (slug moved, `slug_hmac` stale). Idempotent: only rows that
-  differ are written. Called by `Engram.Workers.BackfillVaultSlugHmac`.
+  release, and renames by pre-expand code during the deploy window (slug
+  moved, `slug_hmac` stale). Idempotent: only rows that differ are written.
+  Called by `Engram.Workers.BackfillVaultSlugHmac`.
 
-  Rows are locked `FOR UPDATE` and the rotation gate is re-read under the lock,
-  so a concurrent DEK rotation either blocks on us (and then re-keys what we
-  wrote) or has already started (and we skip the user).
+  A slug already in either derivable form is kept as-is, whatever its
+  siblings hold, so live URLs never churn. An underivable slug (legacy
+  `-2`/`-3`, old-`slugify` output) is rewritten to the id-suffixed form, a
+  one-time URL change. Never to the bare base: that could collide with a
+  sibling created, renamed or restored concurrently; the id suffix cannot.
+
+  Takes an id, not a `%User{}`: the user row is read here `FOR SHARE`, so a
+  struct loaded before a DEK rotation can never supply the key. The lock also
+  blocks a rotation from starting mid-reconcile. Vault rows are then locked
+  in id order.
   """
-  @spec backfill_slug_hmacs(Engram.Accounts.User.t()) ::
-          {:ok, non_neg_integer()} | {:error, term()}
-  def backfill_slug_hmacs(user) do
-    Repo.with_tenant!(user.id, fn ->
-      vaults =
-        Repo.all(from(v in scoped(user), where: not is_nil(v.slug), lock: "FOR UPDATE"))
+  @spec backfill_slug_hmacs(Ecto.UUID.t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def backfill_slug_hmacs(user_id) when is_binary(user_id) do
+    Repo.with_tenant!(user_id, fn ->
+      user =
+        Repo.one!(
+          from(u in Engram.Accounts.User, where: u.id == ^user_id, lock: "FOR SHARE"),
+          skip_tenant_check: true
+        )
 
-      with :ok <- Engram.Crypto.RotationGate.check(user.id),
-           {:ok, filter_key} <- Engram.Crypto.dek_filter_key(user) do
-        {:ok,
-         vaults
-         |> Enum.map(&decrypt_vault_if_needed(&1, user))
-         |> Enum.count(&reconcile_slug(&1, user.id, filter_key))}
-      end
+      vaults =
+        Repo.all(
+          from(v in scoped(user),
+            where: not is_nil(v.slug),
+            order_by: v.id,
+            lock: "FOR UPDATE"
+          )
+        )
+
+      reconcile_slugs(user, vaults)
     end)
+  end
+
+  defp reconcile_slugs(_user, []), do: {:ok, 0}
+
+  defp reconcile_slugs(user, vaults) do
+    with :ok <- Engram.Crypto.RotationGate.check_user(user),
+         {:ok, filter_key} <- Engram.Crypto.dek_filter_key(user) do
+      {:ok,
+       vaults
+       |> Enum.map(&decrypt_vault_if_needed(&1, user))
+       |> Enum.count(&reconcile_slug(&1, filter_key))}
+    end
   end
 
   # A nil name means the name failed to decrypt: there is nothing to derive
   # the slug from, so leave the row alone and say so.
-  defp reconcile_slug(%Vault{name: nil} = vault, _user_id, _filter_key) do
+  defp reconcile_slug(%Vault{name: nil} = vault, _filter_key) do
     require Logger
 
     Logger.warning(
@@ -927,23 +950,24 @@ defmodule Engram.Vaults do
     false
   end
 
-  defp reconcile_slug(vault, user_id, filter_key) do
+  defp reconcile_slug(vault, filter_key) do
     base = slugify(vault.name)
+    suffixed = "#{base}-#{String.slice(vault.id, -6, 6)}"
 
     {slug, suffixed?} =
-      if vault.slug == base,
-        do: {base, false},
-        else: unique_slug(user_id, base, vault.id, vault.id)
+      case vault.slug do
+        ^base -> {base, false}
+        _ -> {suffixed, true}
+      end
 
     hmac = Engram.Crypto.hmac_field(filter_key, slug)
 
     if {slug, hmac, suffixed?} == {vault.slug, vault.slug_hmac, vault.slug_suffixed} do
       false
     else
-      {1, _} =
-        Repo.update_all(from(v in Vault, where: v.id == ^vault.id),
-          set: [slug: slug, slug_hmac: hmac, slug_suffixed: suffixed?]
-        )
+      Repo.update_all(from(v in Vault, where: v.id == ^vault.id),
+        set: [slug: slug, slug_hmac: hmac, slug_suffixed: suffixed?]
+      )
 
       true
     end

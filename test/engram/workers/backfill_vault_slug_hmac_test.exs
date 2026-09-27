@@ -93,7 +93,9 @@ defmodule Engram.Workers.BackfillVaultSlugHmacTest do
     assert raw(first.id).slug == "notes"
   end
 
-  test "rewrites an old-slugify slug to the base when no sibling holds it" do
+  test "rewrites an underivable slug to the id-suffixed form, never the bare base" do
+    # The bare base could collide with a sibling created, renamed or restored
+    # concurrently; the id suffix cannot.
     user = insert(:user)
     {:ok, vault, _} = Vaults.register_vault(user, "My Vault", Ecto.UUID.generate())
     set_raw(vault.id, slug: "my_vault", slug_hmac: nil)
@@ -101,8 +103,46 @@ defmodule Engram.Workers.BackfillVaultSlugHmacTest do
     assert :ok = perform_job(BackfillVaultSlugHmac, %{})
 
     row = raw(vault.id)
-    assert row.slug == "my-vault"
-    refute row.slug_suffixed
+    assert row.slug == "my-vault-#{id6(vault)}"
+    assert row.slug_suffixed
+  end
+
+  test "keeps a valid suffixed slug when its base holder is deleted, so restore still works" do
+    user = insert(:user)
+    insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+    {:ok, a, _} = Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
+    {:ok, b, _} = Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
+    {:ok, _} = Vaults.delete_vault(user, a.id)
+
+    assert :ok = perform_job(BackfillVaultSlugHmac, %{})
+
+    assert raw(b.id).slug == "notes-#{id6(b)}"
+    assert {:ok, _} = Vaults.restore_vault(user, a.id)
+  end
+
+  test "a user with no vaults derives no key" do
+    user = insert(:user, encrypted_dek: nil)
+    assert {:ok, 0} = Vaults.backfill_slug_hmacs(user.id)
+  end
+
+  test "one user's failure does not stop the others" do
+    broken = insert(:user)
+    insert(:user_limit_override, user: broken, key: "vaults_cap", value: %{"v" => 10})
+    {:ok, a, _} = Vaults.register_vault(broken, "Notes", Ecto.UUID.generate())
+    # B's own derivable slug is exactly A's rewrite target, so B is left alone
+    # and A's rewrite hits the unique index whichever row goes first.
+    {:ok, _b, _} = Vaults.register_vault(broken, "Notes #{id6(a)}", Ecto.UUID.generate())
+    set_raw(a.id, slug: "legacy")
+
+    healthy = insert(:user)
+    {:ok, vault, _} = Vaults.register_vault(healthy, "Work", Ecto.UUID.generate())
+    strip(vault.id)
+
+    log = ExUnit.CaptureLog.capture_log(fn -> perform_job(BackfillVaultSlugHmac, %{}) end)
+
+    assert log =~ "vault slug reconcile failed"
+    assert raw(a.id).slug == "legacy", "the broken user's transaction rolled back"
+    assert raw(vault.id).slug_hmac != nil
   end
 
   test "repairs a stale non-NULL slug_hmac left by a pre-expand rename" do
@@ -129,7 +169,7 @@ defmodule Engram.Workers.BackfillVaultSlugHmacTest do
     )
 
     # `user` still carries dek_rotation_locked_at: nil.
-    assert {:error, :rotation_in_progress} = Vaults.backfill_slug_hmacs(user)
+    assert {:error, :rotation_in_progress} = Vaults.backfill_slug_hmacs(user.id)
     assert raw(vault.id).slug_hmac == nil
   end
 
