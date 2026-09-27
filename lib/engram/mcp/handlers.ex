@@ -773,8 +773,8 @@ defmodule Engram.MCP.Handlers do
         {:ok, updated} ->
           updated
 
-        {:error, {:unclosed_comment, line}} ->
-          {:error, unclosed_comment_error(heading, line)}
+        {:error, {kind, line}} when kind in [:unclosed_comment, :unclosed_fence] ->
+          {:error, unclosed_error(heading, kind, line)}
 
         :error ->
           {:error, "Heading not found: #{String.duplicate("#", level)} #{heading}"}
@@ -800,8 +800,13 @@ defmodule Engram.MCP.Handlers do
 
   # `line` is 0-indexed internally (Sections works in line indices); report
   # it 1-indexed, matching how a human (or Obsidian) counts lines.
-  defp unclosed_comment_error(heading, line) do
-    "Section '#{heading}' runs into an unclosed comment (%% or <!--) at line #{line + 1}; " <>
+  defp unclosed_error(heading, kind, line) do
+    what =
+      if kind == :unclosed_fence,
+        do: "an unclosed code fence",
+        else: "an unclosed comment (%% or <!--)"
+
+    "Section '#{heading}' runs into #{what} at line #{line + 1}; " <>
       "close it or edit with replace_text"
   end
 
@@ -904,12 +909,15 @@ defmodule Engram.MCP.Handlers do
           # The section was not updated, so this is not a success. Was `:ok`.
           {:error, "Heading not found: #{String.duplicate("#", level)} #{heading}"}
 
-        # Defense in depth: an unclosed comment (%% or <!--) swallowed a
-        # heading up to EOF, so `stop` is not a real section boundary.
-        # Replacing through it would silently delete whatever the comment
-        # ate. Refuse instead of guessing; the write must not happen.
+        # Defense in depth: an unclosed comment (%% or <!--) or code fence
+        # swallowed a heading up to EOF, so `stop` is not a real section
+        # boundary. Replacing through it would silently delete whatever the
+        # block ate. Refuse instead of guessing; the write must not happen.
         {:ok, %{unclosed_comment_at: line}} when is_integer(line) ->
-          {:error, unclosed_comment_error(heading, line)}
+          {:error, unclosed_error(heading, :unclosed_comment, line)}
+
+        {:ok, %{unclosed_fence_at: line}} when is_integer(line) ->
+          {:error, unclosed_error(heading, :unclosed_fence, line)}
 
         {:ok, %{start: s, stop: e, span: span}} ->
           lines = String.split(current, "\n")

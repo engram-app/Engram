@@ -491,6 +491,29 @@ defmodule Engram.MCP.SectionsTest do
     assert {:ok, %{stop: 5}} = Sections.find(content, "A", 2)
   end
 
+  # I1, second variant: a column-0 fence under a list item's fence is NOT its
+  # closer; it ends the list and opens a new top-level fence that never
+  # closes, so "## B" really is code (CommonMark). The section A then only
+  # reaches EOF because of that unclosed fence, so a write must refuse.
+  test "a column-0 fence under a list item's fence opens a new unclosed fence" do
+    content = "## A\n1. step\n   #{@bt}bash\n   run\n#{@bt}\n## B\nimportant\n"
+    assert lt(content) == [{0, "A"}]
+
+    assert {:ok, %{unclosed_fence_at: 4, unclosed_comment_at: nil}} =
+             Sections.find(content, "A", 2)
+
+    assert Sections.insert(content, "A", 2, "end", "n1") == {:error, {:unclosed_fence, 4}}
+  end
+
+  test "an unclosed fence that swallows no heading is not flagged" do
+    assert {:ok, %{stop: 3, unclosed_fence_at: nil}} =
+             Sections.find("## A\n#{@bt}\ncode\n", "A", 2)
+  end
+
+  test "an unclosed fence swallowing only a DEEPER heading is not flagged" do
+    assert {:ok, %{unclosed_fence_at: nil}} = Sections.find("## A\n#{@bt}\n### c\n", "A", 2)
+  end
+
   test "an unclosed HTML comment that swallows a heading is flagged" do
     content = "## A\n<!--\n## B\nkeep\n"
     assert lt(content) == [{0, "A"}]

@@ -600,6 +600,53 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     assert {:ok, "## A\nNEW\n"} = Notes.authoritative_content(u, note)
   end
 
+  # A section that reaches EOF only because an unclosed code fence swallowed
+  # the next heading: refuse, write nothing.
+  test "replace_section refuses and writes nothing when the section runs into an unclosed fence",
+       %{user: u, vault: v} do
+    fence = String.duplicate("`", 3)
+    content = "## A\n1. step\n   #{fence}bash\n   run\n#{fence}\n## B\nimportant\n"
+
+    {:ok, _} =
+      Notes.upsert_note(u, v, %{"path" => "Fence.md", "content" => content, "mtime" => 13.0})
+
+    assert {:error, msg} =
+             Handlers.handle("edit_note", u, v, %{
+               "path" => "Fence.md",
+               "mode" => "replace_section",
+               "heading" => "A",
+               "content" => "new"
+             })
+
+    assert msg =~ "unclosed code fence at line 5"
+
+    {:ok, note} = Notes.get_note(u, v, "Fence.md")
+    assert {:ok, ^content} = Notes.authoritative_content(u, note)
+  end
+
+  test "insert_section position end refuses when the section runs into an unclosed fence",
+       %{user: u, vault: v} do
+    fence = String.duplicate("`", 3)
+    content = "## A\n#{fence}\n## B\nimportant\n"
+
+    {:ok, _} =
+      Notes.upsert_note(u, v, %{"path" => "Fence2.md", "content" => content, "mtime" => 14.0})
+
+    assert {:error, msg} =
+             Handlers.handle("edit_note", u, v, %{
+               "path" => "Fence2.md",
+               "mode" => "insert_section",
+               "heading" => "A",
+               "position" => "end",
+               "content" => "n1"
+             })
+
+    assert msg =~ "unclosed code fence at line 2"
+
+    {:ok, note} = Notes.get_note(u, v, "Fence2.md")
+    assert {:ok, ^content} = Notes.authoritative_content(u, note)
+  end
+
   # C1 end to end: the "## B" after a comment closed by a backticked "-->"
   # must survive a replace of A.
   test "replace_section on A keeps B after an HTML comment closed inside backticks", %{

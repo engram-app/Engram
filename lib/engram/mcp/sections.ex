@@ -44,7 +44,8 @@ defmodule Engram.MCP.Sections do
              start: non_neg_integer(),
              stop: non_neg_integer(),
              span: pos_integer(),
-             unclosed_comment_at: non_neg_integer() | nil
+             unclosed_comment_at: non_neg_integer() | nil,
+             unclosed_fence_at: non_neg_integer() | nil
            }}
           | :error
   def find(content, heading, level) do
@@ -64,27 +65,34 @@ defmodule Engram.MCP.Sections do
         stop =
           Enum.find_value(hs, eof, fn x -> x.line > h.line and x.level <= h.level and x.line end)
 
+        {comment, fence} = unclosed(blocker, h, stop == eof, content)
+
         {:ok,
          %{
            start: h.line,
            stop: stop,
            span: h.span,
-           unclosed_comment_at: unclosed(blocker, h, stop == eof, content)
+           unclosed_comment_at: comment,
+           unclosed_fence_at: fence
          }}
     end
   end
 
-  # Defense in depth: an unclosed HTML comment or `%%` comment runs to EOF and swallows every heading after it. When that is WHY this
+  # Defense in depth: an unclosed HTML comment, `%%` comment or code fence
+  # runs to EOF and swallows every heading after it. When that is WHY this
   # section reaches EOF (the swallowed text holds a heading that would have
   # ended it), flag it so a write refuses instead of deleting or misplacing
   # what the block ate. An unclosed block with no such heading after it is
   # harmless to this section and is not flagged.
-  defp unclosed({:comment, at}, h, true, content) when at >= h.line do
+  defp unclosed({kind, at}, h, true, content) when at >= h.line do
     rest = content |> String.split("\n") |> Enum.drop(at + 1) |> Enum.join("\n")
-    if Enum.any?(scan(rest).headings, &(&1.level <= h.level)), do: at
+
+    if Enum.any?(scan(rest).headings, &(&1.level <= h.level)),
+      do: if(kind == :fence, do: {nil, at}, else: {at, nil}),
+      else: {nil, nil}
   end
 
-  defp unclosed(_blocker, _h, _at_eof, _content), do: nil
+  defp unclosed(_blocker, _h, _at_eof, _content), do: {nil, nil}
 
   @spec section(String.t(), String.t()) :: {:ok, String.t()} | :error
   def section(content, heading) do
@@ -110,7 +118,7 @@ defmodule Engram.MCP.Sections do
   @spec insert(String.t(), String.t(), 1..6, String.t(), String.t()) ::
           {:ok, String.t()}
           | :error
-          | {:error, {:unclosed_comment, non_neg_integer()}}
+          | {:error, {:unclosed_comment | :unclosed_fence, non_neg_integer()}}
   def insert(content, heading, level, position, text) do
     with {:ok, %{start: s, stop: e, span: span} = found} <- find(content, heading, level),
          :ok <- refuse_unclosed(position, found) do
@@ -140,6 +148,9 @@ defmodule Engram.MCP.Sections do
 
   defp refuse_unclosed("end", %{unclosed_comment_at: l}) when is_integer(l),
     do: {:error, {:unclosed_comment, l}}
+
+  defp refuse_unclosed("end", %{unclosed_fence_at: l}) when is_integer(l),
+    do: {:error, {:unclosed_fence, l}}
 
   defp refuse_unclosed(_position, _found), do: :ok
 
@@ -244,8 +255,11 @@ defmodule Engram.MCP.Sections do
     end)
   end
 
-  # Only a TOP-level unclosed comment runs to EOF: one nested in a list item
+  # Only a TOP-level unclosed block runs to EOF: one nested in a list item
   # or blockquote ends with its container, which a column-0 heading closes.
+  defp open_block(%MDEx.CodeBlock{fenced: true, closed: false, sourcepos: %{start: {l, _}}}),
+    do: {:fence, l - 1}
+
   defp open_block(%MDEx.HtmlBlock{block_type: 2, literal: lit, sourcepos: %{start: {l, _}}}) do
     if String.contains?(lit, "-->"), do: nil, else: {:comment, l - 1}
   end
