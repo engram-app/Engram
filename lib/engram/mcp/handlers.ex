@@ -773,8 +773,8 @@ defmodule Engram.MCP.Handlers do
         {:ok, updated} ->
           updated
 
-        {:error, {kind, line}} when kind in [:unclosed_comment, :unclosed_fence] ->
-          {:error, unclosed_error(heading, kind, line)}
+        {:error, reason} ->
+          {:error, section_error(heading, reason)}
 
         :error ->
           {:error, "Heading not found: #{String.duplicate("#", level)} #{heading}"}
@@ -798,16 +798,25 @@ defmodule Engram.MCP.Handlers do
     end
   end
 
-  # `line` is 0-indexed internally (Sections works in line indices); report
-  # it 1-indexed, matching how a human (or Obsidian) counts lines.
-  defp unclosed_error(heading, kind, line) do
-    what =
-      if kind == :unclosed_fence,
-        do: "an unclosed code fence",
-        else: "an unclosed comment (%% or <!--)"
+  # Every fixable refusal from Engram.MCP.Sections, as the message the
+  # caller sees. `line` is 0-indexed internally (Sections works in line
+  # indices); report it 1-indexed, matching how a human (or Obsidian) counts.
+  defp section_error(heading, {:hidden_heading, line}) do
+    "Section '#{heading}' may run past line #{line + 1}, which looks like a heading but is " <>
+      "hidden (by an unclosed code block, HTML block or %% comment); close it or edit with " <>
+      "replace_text"
+  end
 
-    "Section '#{heading}' runs into #{what} at line #{line + 1}; " <>
-      "close it or edit with replace_text"
+  defp section_error(heading, :ambiguous),
+    do: "Heading '#{heading}' matches several headings; pass the exact heading text"
+
+  defp section_error(_heading, {:too_large, bytes}), do: too_large_msg(bytes)
+
+  defp too_large_msg(bytes) do
+    mb = Float.round(bytes / 1_000_000, 1)
+
+    "This note is too large for section edits or outline (#{mb} MB, limit 1 MB); " <>
+      "use edit_note replace_text or read the note with get_notes"
   end
 
   defp tag_mode({:ok, text, structured}, mode, blanks),
@@ -909,15 +918,15 @@ defmodule Engram.MCP.Handlers do
           # The section was not updated, so this is not a success. Was `:ok`.
           {:error, "Heading not found: #{String.duplicate("#", level)} #{heading}"}
 
-        # Defense in depth: an unclosed comment (%% or <!--) or code fence
-        # swallowed a heading up to EOF, so `stop` is not a real section
-        # boundary. Replacing through it would silently delete whatever the
-        # block ate. Refuse instead of guessing; the write must not happen.
-        {:ok, %{unclosed_comment_at: line}} when is_integer(line) ->
-          {:error, unclosed_error(heading, :unclosed_comment, line)}
+        {:error, reason} ->
+          {:error, section_error(heading, reason)}
 
-        {:ok, %{unclosed_fence_at: line}} when is_integer(line) ->
-          {:error, unclosed_error(heading, :unclosed_fence, line)}
+        # Defense in depth: a heading-shaped line inside the section is not a
+        # heading in the parse (an unclosed block or %% comment hid it), so
+        # `stop` may not be a real section boundary. Replacing through it
+        # could silently delete what was hidden. Refuse; write nothing.
+        {:ok, %{hidden_heading_at: line}} when is_integer(line) ->
+          {:error, section_error(heading, {:hidden_heading, line})}
 
         {:ok, %{start: s, stop: e, span: span}} ->
           lines = String.split(current, "\n")
@@ -1708,6 +1717,7 @@ defmodule Engram.MCP.Handlers do
     case Sections.section(content, section) do
       {:ok, text} -> {:ok, [{path, %{note | content: text}}]}
       :error -> {:error, heading_missing_msg(path, section, content)}
+      {:error, reason} -> {:error, section_error(section, reason)}
     end
   end
 
@@ -1718,10 +1728,10 @@ defmodule Engram.MCP.Handlers do
 
   defp heading_missing_msg(path, section, content) do
     case Sections.headings(content) do
-      [] ->
+      {:ok, []} ->
         "Heading not found in #{path}: #{section}. This note has no headings."
 
-      hs ->
+      {:ok, hs} ->
         total = length(hs)
         listed = hs |> Enum.take(@max_listed_headings) |> Enum.map_join(", ", &truncate_heading/1)
 
@@ -1742,30 +1752,39 @@ defmodule Engram.MCP.Handlers do
     end
   end
 
+  # Total note bytes one get_notes outline call may parse. Each note is
+  # also capped at Sections.max_bytes/0; past the budget a note gets an
+  # `error` entry instead of failing the whole call.
+  @outline_budget_bytes 2_000_000
+
   defp render_notes(user, fetched, outline?, links?) do
     {texts, notes} =
       fetched
-      |> Enum.map(fn
-        {path, nil} ->
-          {"Note not found: #{path}", %{"path" => path, "found" => false}}
+      |> Enum.map_reduce(@outline_budget_bytes, fn
+        {path, nil}, budget ->
+          {{"Note not found: #{path}", %{"path" => path, "found" => false}}, budget}
 
-        {_path, note} ->
-          {text, payload} =
+        {_path, note}, budget ->
+          {{text, payload}, budget} =
             if outline?,
-              do: outline_entry(note),
-              else: {format_get_note(note), note_payload(note)}
+              do: outline_entry(note, budget),
+              else: {{format_get_note(note), note_payload(note)}, budget}
 
           payload = Map.put(payload, "found", true)
 
           # One backlinks + outgoing query pair per note (N+1), not batched.
           # Fine at get_notes' 20-path cap; revisit only if that cap rises.
-          if links? do
-            {links, truncation} = links_payload(user, note)
-            {text <> "\n\n" <> format_links(links, truncation), Map.merge(payload, links)}
-          else
-            {text, payload}
-          end
+          entry =
+            if links? do
+              {links, truncation} = links_payload(user, note)
+              {text <> "\n\n" <> format_links(links, truncation), Map.merge(payload, links)}
+            else
+              {text, payload}
+            end
+
+          {entry, budget}
       end)
+      |> elem(0)
       |> Enum.unzip()
 
     {:ok, Enum.join(texts, "\n\n---\n\n"), %{"notes" => notes}}
@@ -1860,12 +1879,32 @@ defmodule Engram.MCP.Handlers do
   defp list_or_none([]), do: "none"
   defp list_or_none(items), do: Enum.join(items, ", ")
 
-  defp outline_entry(note) do
-    outline =
-      Enum.map(
-        Sections.headings(note.content || ""),
-        &%{"level" => &1.level, "heading" => &1.text}
-      )
+  defp outline_entry(note, budget) do
+    content = note.content || ""
+    base = note |> note_payload() |> Map.delete("content")
+
+    cond do
+      byte_size(content) > Sections.max_bytes() ->
+        outline_error(note, base, too_large_msg(byte_size(content)), budget)
+
+      byte_size(content) > budget ->
+        msg =
+          "Outline skipped: this call already parsed its 2 MB outline budget; " <>
+            "request this note's outline in a separate call"
+
+        outline_error(note, base, msg, budget)
+
+      true ->
+        {:ok, hs} = Sections.headings(content)
+        {outline_ok(note, base, hs), budget - byte_size(content)}
+    end
+  end
+
+  defp outline_error(note, base, msg, budget),
+    do: {{"**Path:** #{note.path}\n#{msg}", Map.put(base, "error", msg)}, budget}
+
+  defp outline_ok(note, base, hs) do
+    outline = Enum.map(hs, &%{"level" => &1.level, "heading" => &1.text})
 
     lines =
       if outline == [],
@@ -1873,8 +1912,7 @@ defmodule Engram.MCP.Handlers do
         else:
           Enum.map(outline, &(String.duplicate("  ", &1["level"] - 1) <> "- " <> &1["heading"]))
 
-    payload = note |> note_payload() |> Map.delete("content") |> Map.put("outline", outline)
-    {Enum.join(["**Path:** #{note.path}" | lines], "\n"), payload}
+    {Enum.join(["**Path:** #{note.path}" | lines], "\n"), Map.put(base, "outline", outline)}
   end
 
   defp vault_payload(v) do

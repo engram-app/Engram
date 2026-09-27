@@ -3,6 +3,11 @@ defmodule Engram.MCP.SectionsTest do
 
   alias Engram.MCP.Sections
 
+  defp headings!(content) do
+    assert {:ok, hs} = Sections.headings(content)
+    hs
+  end
+
   # Built with String.duplicate so this file never holds a literal fence.
   @bt String.duplicate("`", 3)
   @note Enum.join(
@@ -35,17 +40,17 @@ defmodule Engram.MCP.SectionsTest do
         )
 
   test "headings skip frontmatter and fenced code" do
-    assert Enum.map(Sections.headings(@note), &{&1.level, &1.text}) ==
+    assert Enum.map(headings!(@note), &{&1.level, &1.text}) ==
              [{1, "Title"}, {2, "Todo"}, {3, "Sub"}, {2, "Done"}]
   end
 
   test "tilde fences and unclosed fences hide headings too" do
-    assert Sections.headings("## A\n~~~\n## B\n~~~\n## C") |> Enum.map(& &1.text) == ["A", "C"]
-    assert Sections.headings("## A\n" <> @bt <> "\n## B") |> Enum.map(& &1.text) == ["A"]
+    assert headings!("## A\n~~~\n## B\n~~~\n## C") |> Enum.map(& &1.text) == ["A", "C"]
+    assert headings!("## A\n" <> @bt <> "\n## B") |> Enum.map(& &1.text) == ["A"]
   end
 
   test "hashtags, 7 hashes and CRLF" do
-    assert Sections.headings("#tag\n####### x\n## A\r\nbody\r\n") |> Enum.map(& &1.text) == ["A"]
+    assert headings!("#tag\n####### x\n## A\r\nbody\r\n") |> Enum.map(& &1.text) == ["A"]
   end
 
   test "find spans nested subsections and stops at the next same-or-higher heading" do
@@ -97,7 +102,7 @@ defmodule Engram.MCP.SectionsTest do
   test "a line indented 4+ spaces is not a heading, and does not end a section" do
     content = "## Todo\n\na\n    ## not a heading\nb\n\n## Done\n\nx\n"
 
-    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) ==
+    assert headings!(content) |> Enum.map(&{&1.level, &1.text}) ==
              [{2, "Todo"}, {2, "Done"}]
 
     assert {:ok, text} = Sections.section(content, "Todo")
@@ -110,29 +115,29 @@ defmodule Engram.MCP.SectionsTest do
   # sequence of #s, which must be preceded by a space and stripped along with
   # any trailing whitespace.
   test "an ATX closing sequence of #s is stripped from the heading text" do
-    assert Sections.headings("## Title ##") |> Enum.map(& &1.text) == ["Title"]
-    assert Sections.headings("## Title #") |> Enum.map(& &1.text) == ["Title"]
+    assert headings!("## Title ##") |> Enum.map(& &1.text) == ["Title"]
+    assert headings!("## Title #") |> Enum.map(& &1.text) == ["Title"]
   end
 
   # Fix round 1, finding 3: `\s+` after the hashes matches any run of
   # whitespace, not just a single space, so extra spaces before the heading
   # text are tolerated. Deliberate improvement over the old exact-string match.
   test "extra whitespace between the hashes and the heading text is tolerated" do
-    assert Sections.headings("##  Todo") |> Enum.map(& &1.text) == ["Todo"]
+    assert headings!("##  Todo") |> Enum.map(& &1.text) == ["Todo"]
   end
 
   # Review round 2, finding 1: a closing fence may not carry an info string.
   # "```elixir" inside an already-open fence is still code, not a closer.
   test "a closing fence must not carry an info string" do
     content = @bt <> "\n" <> @bt <> "elixir\n# X\n" <> @bt <> "\n# Y"
-    assert Sections.headings(content) |> Enum.map(& &1.text) == ["Y"]
+    assert headings!(content) |> Enum.map(& &1.text) == ["Y"]
   end
 
   # Review round 2, finding 2: CommonMark forbids a backtick in a backtick
   # fence's info string (ambiguous with inline code spans), so this line
   # never opens a fence at all.
   test "a backtick fence opener with a backtick in its info string is not a fence" do
-    assert Sections.headings("#{@bt} a`b\n# X") |> Enum.map(& &1.text) == ["X"]
+    assert headings!("#{@bt} a`b\n# X") |> Enum.map(& &1.text) == ["X"]
   end
 
   # Review round 2, finding 3: inserting into a CRLF note must not leave a
@@ -152,7 +157,7 @@ defmodule Engram.MCP.SectionsTest do
   test "a setext heading is recognized, with text on the paragraph line" do
     content = "Title\n=====\n\nbody\n\nSubtitle\n--------\n\nmore\n"
 
-    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) ==
+    assert headings!(content) |> Enum.map(&{&1.level, &1.text}) ==
              [{1, "Title"}, {2, "Subtitle"}]
   end
 
@@ -162,26 +167,26 @@ defmodule Engram.MCP.SectionsTest do
   end
 
   test "a thematic break after a blank line is not a setext heading" do
-    assert Sections.headings("para\n\n---\nmore\n") == []
+    assert headings!("para\n\n---\nmore\n") == []
   end
 
   test "a list item line is not a setext underline" do
-    assert Sections.headings("para\n- item\n") == []
+    assert headings!("para\n- item\n") == []
   end
 
   test "an underline inside a fence is not a setext heading" do
     content = @bt <> "\npara\n---\n" <> @bt <> "\n"
-    assert Sections.headings(content) == []
+    assert headings!(content) == []
   end
 
   test "a setext underline right after an ATX heading is not setext" do
-    assert Sections.headings("## Real\n---\nmore\n") |> Enum.map(&{&1.level, &1.text}) ==
+    assert headings!("## Real\n---\nmore\n") |> Enum.map(&{&1.level, &1.text}) ==
              [{2, "Real"}]
   end
 
   test "a setext underline right after a fence close is not setext" do
     content = "para\n" <> @bt <> "\n" <> @bt <> "\n---\nmore\n"
-    assert Sections.headings(content) == []
+    assert headings!(content) == []
   end
 
   test "section on a setext heading includes both heading lines and stops before the next same-level heading" do
@@ -201,7 +206,7 @@ defmodule Engram.MCP.SectionsTest do
   # column counting, not character counting.
   test "a UTF-8 BOM at the start of the file does not hide the first heading" do
     content = "﻿# Title\n\nbody\n"
-    assert Sections.headings(content) |> Enum.map(&{&1.line, &1.text}) == [{0, "Title"}]
+    assert headings!(content) |> Enum.map(&{&1.line, &1.text}) == [{0, "Title"}]
   end
 
   test "a UTF-8 BOM does not shift line numbers, and insert keeps the BOM in the output" do
@@ -211,7 +216,7 @@ defmodule Engram.MCP.SectionsTest do
   end
 
   test "a tab-indented heading line is code, not a heading" do
-    assert Sections.headings("\t# X") == []
+    assert headings!("\t# X") == []
   end
 
   # Fix round 2, Important: only a line that could be paragraph text can
@@ -219,56 +224,56 @@ defmodule Engram.MCP.SectionsTest do
   # code, or HTML block line followed by a dash/equals run is a thematic
   # break (or plain content), never a setext heading.
   test "a dash list item does not start a setext paragraph" do
-    assert Sections.headings("- item\n---") == []
+    assert headings!("- item\n---") == []
   end
 
   test "a dash list item is not confused with a level-1 setext underline either" do
-    assert Sections.headings("- item\n===") == []
+    assert headings!("- item\n===") == []
   end
 
   test "an ordered list item with a dot marker does not start a setext paragraph" do
-    assert Sections.headings("1. item\n---") == []
+    assert headings!("1. item\n---") == []
   end
 
   test "an ordered list item with a paren marker does not start a setext paragraph" do
-    assert Sections.headings("2) item\n---") == []
+    assert headings!("2) item\n---") == []
   end
 
   test "a star list item does not start a setext paragraph" do
-    assert Sections.headings("* item\n---") == []
+    assert headings!("* item\n---") == []
   end
 
   test "a plus list item does not start a setext paragraph" do
-    assert Sections.headings("+ item\n---") == []
+    assert headings!("+ item\n---") == []
   end
 
   test "a blockquote line does not start a setext paragraph" do
-    assert Sections.headings("> q\n---") == []
+    assert headings!("> q\n---") == []
   end
 
   test "a multi-line blockquote does not start a setext paragraph" do
-    assert Sections.headings("> [!note] T\n> body\n---") == []
+    assert headings!("> [!note] T\n> body\n---") == []
   end
 
   test "a 4-space indented code line does not start a setext paragraph" do
-    assert Sections.headings("    code\n---") == []
+    assert headings!("    code\n---") == []
   end
 
   test "a tab-indented code line does not start a setext paragraph" do
-    assert Sections.headings("\tcode\n---") == []
+    assert headings!("\tcode\n---") == []
   end
 
   test "an HTML block does not start or continue a setext paragraph" do
-    assert Sections.headings("<div>\nhi\n</div>\n---") == []
+    assert headings!("<div>\nhi\n</div>\n---") == []
   end
 
   test "an HTML comment block does not start or continue a setext paragraph" do
-    assert Sections.headings("<!--\nfoo\n-->\n---") == []
+    assert headings!("<!--\nfoo\n-->\n---") == []
   end
 
   test "headings does not list a list item as a heading, even with a following thematic break" do
     content = "## A\n- item\n---\n## B\nb\n"
-    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) == [{2, "A"}, {2, "B"}]
+    assert headings!(content) |> Enum.map(&{&1.level, &1.text}) == [{2, "A"}, {2, "B"}]
   end
 
   # Fix round 2, Minor 1: a multi-line paragraph immediately before an
@@ -276,7 +281,7 @@ defmodule Engram.MCP.SectionsTest do
   test "a multi-line paragraph before an underline becomes one heading, text joined with spaces" do
     content = "a\nb\n===\nx"
 
-    assert Sections.headings(content) |> Enum.map(&{&1.line, &1.level, &1.text}) ==
+    assert headings!(content) |> Enum.map(&{&1.line, &1.level, &1.text}) ==
              [{0, 1, "a b"}]
   end
 
@@ -294,7 +299,7 @@ defmodule Engram.MCP.SectionsTest do
   # detection too, not just before the heading scan.
   test "a BOM before frontmatter does not defeat frontmatter skipping" do
     content = "﻿---\ntitle: x\n---\n# X"
-    assert Sections.headings(content) |> Enum.map(& &1.text) == ["X"]
+    assert headings!(content) |> Enum.map(& &1.text) == ["X"]
   end
 
   # Fix round 2, Minor 3: appending to a CRLF note with no trailing newline
@@ -311,21 +316,21 @@ defmodule Engram.MCP.SectionsTest do
   # is not setext, an indented dash run is not setext, and setext still works
   # on a CRLF note.
   test "a spaced dash run is not a setext underline" do
-    assert Sections.headings("para\n- - -\nmore\n") == []
+    assert headings!("para\n- - -\nmore\n") == []
   end
 
   test "a GFM table delimiter row is not a setext underline" do
     content = "Col1 | Col2\n--- | ---\ndata | data\n"
-    assert Sections.headings(content) == []
+    assert headings!(content) == []
   end
 
   test "an indented dash run is not a setext underline" do
-    assert Sections.headings("foo\n    ---\n") == []
+    assert headings!("foo\n    ---\n") == []
   end
 
   test "a setext heading is recognized in a CRLF note" do
     content = "Title\r\n=====\r\nbody\r\n"
-    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) == [{1, "Title"}]
+    assert headings!(content) |> Enum.map(&{&1.level, &1.text}) == [{1, "Title"}]
   end
 
   # Fix round 3, finding 1: match_eol must stay LOCAL to the edit. A note
@@ -349,24 +354,24 @@ defmodule Engram.MCP.SectionsTest do
   test "an autolink does not block a setext paragraph" do
     content = "<https://x.com> rocks\n---"
 
-    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) ==
+    assert headings!(content) |> Enum.map(&{&1.level, &1.text}) ==
              [{2, "https://x.com rocks"}]
   end
 
   test "inline HTML does not block a setext paragraph" do
     content = "<b>bold</b> x\n---"
-    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) == [{2, "<b>bold</b> x"}]
+    assert headings!(content) |> Enum.map(&{&1.level, &1.text}) == [{2, "<b>bold</b> x"}]
   end
 
   test "inline HTML on a continuation line does not block a setext paragraph" do
     content = "x\n<b>inline</b>\n---"
 
-    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) ==
+    assert headings!(content) |> Enum.map(&{&1.level, &1.text}) ==
              [{2, "x <b>inline</b>"}]
   end
 
   test "a script tag opening line blocks a setext paragraph (real HTML block, type 1)" do
-    assert Sections.headings("<script>\n---") == []
+    assert headings!("<script>\n---") == []
   end
 
   # A 4+ indent only matters for the FIRST line of a paragraph; on a
@@ -374,7 +379,7 @@ defmodule Engram.MCP.SectionsTest do
   test "a 4-space indented continuation line is a lazy continuation, not code" do
     content = "p\n    indented cont\n==="
 
-    assert Sections.headings(content) |> Enum.map(&{&1.line, &1.level, &1.text}) ==
+    assert headings!(content) |> Enum.map(&{&1.line, &1.level, &1.text}) ==
              [{0, 1, "p indented cont"}]
   end
 
@@ -382,35 +387,35 @@ defmodule Engram.MCP.SectionsTest do
   # other start number is lazy continuation text instead.
   test "an ordered list not starting at 1 does not interrupt a paragraph" do
     content = "a\n2. b\n---"
-    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) == [{2, "a 2. b"}]
+    assert headings!(content) |> Enum.map(&{&1.level, &1.text}) == [{2, "a 2. b"}]
   end
 
   test "an ordered list starting at 1 does interrupt a paragraph" do
-    assert Sections.headings("a\n1. b\n---") == []
+    assert headings!("a\n1. b\n---") == []
   end
 
   test "an empty bullet item does not start a setext paragraph" do
-    assert Sections.headings("*\n---") == []
+    assert headings!("*\n---") == []
   end
 
   test "an empty ordered item does not start a setext paragraph" do
-    assert Sections.headings("1.\n---") == []
+    assert headings!("1.\n---") == []
   end
 
   # Fix round 3, finding 3: Obsidian %% comments hide headings the same way
   # <!-- --> does.
   test "an Obsidian %% comment block hides a heading inside it" do
     content = "%%\n# H\n%%\n# Real"
-    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) == [{1, "Real"}]
+    assert headings!(content) |> Enum.map(&{&1.level, &1.text}) == [{1, "Real"}]
   end
 
   test "a single-line Obsidian %% comment does not affect later lines" do
     content = "%% note %%\n# Real"
-    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) == [{1, "Real"}]
+    assert headings!(content) |> Enum.map(&{&1.level, &1.text}) == [{1, "Real"}]
   end
 
   test "an unclosed Obsidian %% comment hides everything after it" do
-    assert Sections.headings("%%\n# H") == []
+    assert headings!("%%\n# H") == []
   end
 
   # Fix round 4 (final): a "%%" (or "<!--"/"-->") inside an inline code span
@@ -419,7 +424,7 @@ defmodule Engram.MCP.SectionsTest do
   # swallowed B to EOF).
   test "a %% inside a code span does not open a comment" do
     content = "## A\nUse `%%` to hide text in Obsidian.\n\n## B\nkeep me\n"
-    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) == [{2, "A"}, {2, "B"}]
+    assert headings!(content) |> Enum.map(&{&1.level, &1.text}) == [{2, "A"}, {2, "B"}]
 
     assert {:ok, %{stop: stop}} = Sections.find(content, "A", 2)
     lines = String.split(content, "\n")
@@ -428,17 +433,17 @@ defmodule Engram.MCP.SectionsTest do
 
   test "printf-style %% inside a code span does not open a comment" do
     content = "## A\n`printf(\"100%%\")`\n\n## B\nkeep\n"
-    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) == [{2, "A"}, {2, "B"}]
+    assert headings!(content) |> Enum.map(&{&1.level, &1.text}) == [{2, "A"}, {2, "B"}]
   end
 
   test "a SQL LIKE '%%' inside a code span does not open a comment" do
     content = "## A\n`LIKE '%%'`\n\n## B\nkeep\n"
-    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) == [{2, "A"}, {2, "B"}]
+    assert headings!(content) |> Enum.map(&{&1.level, &1.text}) == [{2, "A"}, {2, "B"}]
   end
 
   test "<!-- inside a code span does not open an HTML comment" do
     content = "## A\nUse `<!--` to start a comment.\n\n## B\nkeep\n"
-    assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) == [{2, "A"}, {2, "B"}]
+    assert headings!(content) |> Enum.map(&{&1.level, &1.text}) == [{2, "A"}, {2, "B"}]
   end
 
   # Fix round 4, defense in depth: a GENUINE unclosed comment must not let
@@ -446,23 +451,23 @@ defmodule Engram.MCP.SectionsTest do
   # past it -- find/3 flags it instead of quietly reporting stop == EOF.
   test "find flags a section whose stop is EOF because of a genuine unclosed comment" do
     content = "## A\n%%\nunclosed\n\n## B\nkeep\n"
-    assert {:ok, %{unclosed_comment_at: line}} = Sections.find(content, "A", 2)
-    assert line == 1
+    assert {:ok, %{hidden_heading_at: line}} = Sections.find(content, "A", 2)
+    assert line == 4
   end
 
   test "find does not flag a section whose stop is a real next heading" do
     content = "## A\nx\n\n## B\nkeep\n"
-    assert {:ok, %{unclosed_comment_at: nil}} = Sections.find(content, "A", 2)
+    assert {:ok, %{hidden_heading_at: nil}} = Sections.find(content, "A", 2)
   end
 
   test "find does not flag a section that legitimately runs to EOF with no comment involved" do
     content = "## A\nx\n"
-    assert {:ok, %{unclosed_comment_at: nil}} = Sections.find(content, "A", 2)
+    assert {:ok, %{hidden_heading_at: nil}} = Sections.find(content, "A", 2)
   end
 
   test "insert position end into a section with a genuine unclosed comment refuses" do
     content = "## A\n%%\nunclosed\n\n## B\nkeep\n"
-    assert Sections.insert(content, "A", 2, "end", "n1") == {:error, {:unclosed_comment, 1}}
+    assert Sections.insert(content, "A", 2, "end", "n1") == {:error, {:hidden_heading, 4}}
   end
 
   test "insert position start is unaffected by a genuine unclosed comment further down" do
@@ -473,14 +478,14 @@ defmodule Engram.MCP.SectionsTest do
 
   # --- CommonMark parser (MDEx) regressions: review findings C1, I1, I2, I3 ---
 
-  defp lt(content), do: Sections.headings(content) |> Enum.map(&{&1.line, &1.text})
+  defp lt(content), do: headings!(content) |> Enum.map(&{&1.line, &1.text})
 
   # C1: HTML comment content is not markdown, so a "-->" inside what looks
   # like a code span still closes the comment.
   test "a --> inside backticks closes an open HTML comment" do
     content = "## A\nbody\n<!--\na `-->` b\n## B\nimportant\n<!-- c -->\n"
     assert lt(content) == [{0, "A"}, {4, "B"}]
-    assert {:ok, %{stop: 4, unclosed_comment_at: nil}} = Sections.find(content, "A", 2)
+    assert {:ok, %{stop: 4, hidden_heading_at: nil}} = Sections.find(content, "A", 2)
   end
 
   # I1: a fence closer indented past the list item's content column still
@@ -499,30 +504,30 @@ defmodule Engram.MCP.SectionsTest do
     content = "## A\n1. step\n   #{@bt}bash\n   run\n#{@bt}\n## B\nimportant\n"
     assert lt(content) == [{0, "A"}]
 
-    assert {:ok, %{unclosed_fence_at: 4, unclosed_comment_at: nil}} =
+    assert {:ok, %{hidden_heading_at: 5}} =
              Sections.find(content, "A", 2)
 
-    assert Sections.insert(content, "A", 2, "end", "n1") == {:error, {:unclosed_fence, 4}}
+    assert Sections.insert(content, "A", 2, "end", "n1") == {:error, {:hidden_heading, 5}}
   end
 
   test "an unclosed fence that swallows no heading is not flagged" do
-    assert {:ok, %{stop: 3, unclosed_fence_at: nil}} =
+    assert {:ok, %{stop: 3, hidden_heading_at: nil}} =
              Sections.find("## A\n#{@bt}\ncode\n", "A", 2)
   end
 
   test "an unclosed fence swallowing only a DEEPER heading is not flagged" do
-    assert {:ok, %{unclosed_fence_at: nil}} = Sections.find("## A\n#{@bt}\n### c\n", "A", 2)
+    assert {:ok, %{hidden_heading_at: nil}} = Sections.find("## A\n#{@bt}\n### c\n", "A", 2)
   end
 
   test "an unclosed HTML comment that swallows a heading is flagged" do
     content = "## A\n<!--\n## B\nkeep\n"
     assert lt(content) == [{0, "A"}]
-    assert {:ok, %{unclosed_comment_at: 1}} = Sections.find(content, "A", 2)
+    assert {:ok, %{hidden_heading_at: 2}} = Sections.find(content, "A", 2)
   end
 
   test "an unclosed comment that swallows no ending heading is not flagged" do
-    assert {:ok, %{unclosed_comment_at: nil}} = Sections.find("## A\n%%\nnote\n### c\n", "A", 2)
-    assert {:ok, %{unclosed_comment_at: nil}} = Sections.find("## A\n<!--\nnote\n", "A", 2)
+    assert {:ok, %{hidden_heading_at: nil}} = Sections.find("## A\n%%\nnote\n### c\n", "A", 2)
+    assert {:ok, %{hidden_heading_at: nil}} = Sections.find("## A\n<!--\nnote\n", "A", 2)
   end
 
   # I2: lazy continuation lines belong to the list item / blockquote
@@ -548,14 +553,14 @@ defmodule Engram.MCP.SectionsTest do
   test "a GFM table does not produce a setext heading and does not end a section" do
     content = "## A\n| h |\n| --- |\n| v |\n\nx\n===\n## B\n"
 
-    assert Sections.headings(content) |> Enum.map(&{&1.line, &1.level, &1.text}) ==
+    assert headings!(content) |> Enum.map(&{&1.line, &1.level, &1.text}) ==
              [{0, 2, "A"}, {5, 1, "x"}, {7, 2, "B"}]
   end
 
   test "%% inside a fenced code block does not open a comment" do
     content = "## A\n#{@bt}\n%%\n#{@bt}\n## B\nkeep\n"
     assert lt(content) == [{0, "A"}, {4, "B"}]
-    assert {:ok, %{unclosed_comment_at: nil}} = Sections.find(content, "A", 2)
+    assert {:ok, %{hidden_heading_at: nil}} = Sections.find(content, "A", 2)
   end
 
   test "an inline %% comment masks only its own text, and an unclosed one hides the rest" do
@@ -584,18 +589,135 @@ defmodule Engram.MCP.SectionsTest do
     assert {:ok, %{stop: 2}} = Sections.find(content, "A", 2)
   end
 
-  # I3: the old scanner took ~26 s on a 9 MB note.
-  test "headings on a ~9 MB note of ordinary prose finishes in under 2 seconds" do
+  # I3: the old scanner took ~26 s on a 9 MB note. Notes over 1 MB are now
+  # refused outright; one just under the cap must parse well within budget.
+  test "headings on a ~1 MB note of ordinary prose finishes in under 1 second" do
     para =
       String.duplicate("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do. ", 12) <>
         "\n\n"
 
     big =
-      ["## Heading\n\n", para, para, para] |> Stream.cycle() |> Enum.take(16_000) |> Enum.join()
+      ["## Heading\n\n", para, para, para] |> Stream.cycle() |> Enum.take(1_680) |> Enum.join()
 
-    assert byte_size(big) > 9_000_000
-    {micros, hs} = :timer.tc(fn -> Sections.headings(big) end)
-    assert length(hs) == 4_000
-    assert micros < 2_000_000, "took #{div(micros, 1000)} ms"
+    assert byte_size(big) in 950_000..1_000_000
+    {micros, hs} = :timer.tc(fn -> headings!(big) end)
+    assert length(hs) == 420
+    assert micros < 1_000_000, "took #{div(micros, 1000)} ms"
+  end
+
+  # --- Fix round (adversarial review of the MDEx swap) ---
+
+  test "every entry point refuses a note over 1 MB without parsing it" do
+    big = "## A\n" <> String.duplicate("x", 1_000_000)
+    n = byte_size(big)
+    assert Sections.headings(big) == {:error, {:too_large, n}}
+    assert Sections.find(big, "A", 2) == {:error, {:too_large, n}}
+    assert Sections.section(big, "A") == {:error, {:too_large, n}}
+    assert Sections.insert(big, "A", 2, "end", "y") == {:error, {:too_large, n}}
+    exact = "## A\n" <> String.duplicate("x", 1_000_000 - 5)
+    assert {:ok, [_]} = Sections.headings(exact)
+  end
+
+  # F1: an unclosed HTML block of types 1, 3, 4, 5 (and 6/7, which end only
+  # at a blank line) hides the next heading; a write must refuse.
+  for opener <- ~w(<pre> <script> <style> <textarea> <?php <!DOCTYPE <![CDATA[ <div>) do
+    test "an unclosed #{opener} block hiding the next heading refuses the write" do
+      content = "## A\n#{unquote(opener)}\ncode\n## B\nimportant\n"
+      assert {:ok, %{hidden_heading_at: 3}} = Sections.find(content, "A", 2)
+      assert Sections.insert(content, "A", 2, "end", "y") == {:error, {:hidden_heading, 3}}
+    end
+  end
+
+  # F2: a backtick inside a %% comment mis-pairs the %% marks and hides B.
+  test "a heading hidden by mis-paired %% marks refuses the write" do
+    content = "## A\n%% note ` %% and `y`\n## B\nimportant\n%% c2 %%\n"
+    assert {:ok, %{hidden_heading_at: 2}} = Sections.find(content, "A", 2)
+  end
+
+  test "a legit multi-line %% comment holding a heading refuses (accepted false refuse)" do
+    content = "## A\n%%\n## draft\n%%\nbody\n## B\n"
+    assert {:ok, %{stop: 5, hidden_heading_at: 2}} = Sections.find(content, "A", 2)
+  end
+
+  test "a heading-shaped line in a CLOSED fence does not refuse" do
+    content = "## A\n#{@bt}bash\n# comment\n## x\n#{@bt}\n## B\n"
+    assert {:ok, %{stop: 5, hidden_heading_at: nil}} = Sections.find(content, "A", 2)
+  end
+
+  test "a heading-shaped line in a CLOSED fence inside a list item does not refuse" do
+    content = "## A\n- step\n  #{@bt}\n  ## x\n  #{@bt}\n## B\n"
+    assert {:ok, %{stop: 5, hidden_heading_at: nil}} = Sections.find(content, "A", 2)
+  end
+
+  test "a heading-shaped line in a CLOSED HTML comment block does not refuse" do
+    content = "## A\n<!--\n## x\n-->\n## B\n"
+    assert {:ok, %{stop: 4, hidden_heading_at: nil}} = Sections.find(content, "A", 2)
+  end
+
+  test "a heading nested in a list item is a heading, not a hidden one" do
+    content = "## A\n- item\n\n  ## nested\n## B\n"
+    assert {:ok, %{stop: 4, hidden_heading_at: nil}} = Sections.find(content, "A", 2)
+  end
+
+  test "a hidden DEEPER heading-shaped line does not refuse" do
+    assert {:ok, %{hidden_heading_at: nil}} =
+             Sections.find("## A\n<pre>\n### c\n", "A", 2)
+  end
+
+  # F3: the raw heading text wins over another heading that only RENDERS to it.
+  for {styled, plain} <- [
+        {"**A**", "A"},
+        {"a &amp; b", "a & b"},
+        {"`x`", "x"},
+        {"[x](u)", "x"}
+      ] do
+    test "#{plain} picks the plain heading over #{styled}" do
+      content = "## #{unquote(styled)}\nstyled\n## #{unquote(plain)}\nplain\n"
+      assert {:ok, %{start: 2}} = Sections.find(content, unquote(plain), 2)
+      assert {:ok, "## " <> _ = text} = Sections.section(content, unquote(plain))
+      assert text =~ "plain"
+      assert {:ok, %{start: 0}} = Sections.find(content, unquote(styled), 2)
+    end
+  end
+
+  # F4: raw markup matches as written, and the rendered form still matches
+  # when exactly one heading renders to it.
+  for {raw, rendered} <- [
+        {"**Bold**", "Bold"},
+        {"`code`", "code"},
+        {"[l](u)", "l"},
+        {"a &amp; b", "a & b"},
+        {"\\#x", "#x"}
+      ] do
+    test "raw #{raw} and rendered #{rendered} both match" do
+      content = "## #{unquote(raw)} ##\nbody\n## Next\n"
+      assert {:ok, %{start: 0, stop: 2}} = Sections.find(content, unquote(raw), 2)
+      assert {:ok, %{start: 0, stop: 2}} = Sections.find(content, unquote(rendered), 2)
+    end
+  end
+
+  test "rendered text shared by several headings (none raw) is ambiguous" do
+    content = "## **A**\nx\n## *A*\ny\n"
+    assert Sections.find(content, "A", 2) == {:error, :ambiguous}
+    assert Sections.section(content, "A") == {:error, :ambiguous}
+    assert Sections.insert(content, "A", 2, "end", "z") == {:error, :ambiguous}
+  end
+
+  test "raw match is at the requested level; a rendered match elsewhere does not count" do
+    content = "# **A**\nx\n## A\ny\n"
+    assert {:ok, %{start: 0}} = Sections.find(content, "A", 1)
+    assert {:ok, %{start: 2}} = Sections.find(content, "A", 2)
+  end
+
+  test "a multi-line setext heading matches on its joined raw lines" do
+    content = "**a**\nb\n===\nx\n"
+    assert {:ok, %{start: 0, span: 3}} = Sections.find(content, "**a** b", 1)
+    assert {:ok, %{start: 0}} = Sections.find(content, "a b", 1)
+  end
+
+  # F6 (fails safe): a lone CR merges two lines in the parse; find must say
+  # :error rather than return a range built on the merged line.
+  test "a lone CR inside a heading line gives :error, not a wrong range" do
+    assert Sections.find("## A\rx\n## B\n", "A", 2) == :error
   end
 end

@@ -522,7 +522,7 @@ defmodule Engram.MCP.HandlersEditNoteTest do
                "content" => "new"
              })
 
-    assert msg =~ "unclosed comment"
+    assert msg =~ "may run past line 5, which looks like a heading but is hidden"
 
     {:ok, note} = Notes.get_note(u, v, "Unclosed.md")
     {:ok, out} = Notes.authoritative_content(u, note)
@@ -545,7 +545,7 @@ defmodule Engram.MCP.HandlersEditNoteTest do
                "content" => "n1"
              })
 
-    assert msg =~ "unclosed comment"
+    assert msg =~ "may run past line 5, which looks like a heading but is hidden"
 
     {:ok, note} = Notes.get_note(u, v, "Unclosed2.md")
     {:ok, out} = Notes.authoritative_content(u, note)
@@ -618,7 +618,7 @@ defmodule Engram.MCP.HandlersEditNoteTest do
                "content" => "new"
              })
 
-    assert msg =~ "unclosed code fence at line 5"
+    assert msg =~ "may run past line 6, which looks like a heading but is hidden"
 
     {:ok, note} = Notes.get_note(u, v, "Fence.md")
     assert {:ok, ^content} = Notes.authoritative_content(u, note)
@@ -641,7 +641,7 @@ defmodule Engram.MCP.HandlersEditNoteTest do
                "content" => "n1"
              })
 
-    assert msg =~ "unclosed code fence at line 2"
+    assert msg =~ "may run past line 3, which looks like a heading but is hidden"
 
     {:ok, note} = Notes.get_note(u, v, "Fence2.md")
     assert {:ok, ^content} = Notes.authoritative_content(u, note)
@@ -670,5 +670,127 @@ defmodule Engram.MCP.HandlersEditNoteTest do
 
     assert {:ok, "## A\nnew\n## B\nimportant\n<!-- c -->\n"} =
              Notes.authoritative_content(u, note)
+  end
+
+  # --- Fix round (adversarial) ---
+
+  defp edit(u, v, path, args),
+    do: Handlers.handle("edit_note", u, v, Map.put(args, "path", path))
+
+  defp put!(u, v, path, content) do
+    {:ok, _} = Notes.upsert_note(u, v, %{"path" => path, "content" => content, "mtime" => 20.0})
+    content
+  end
+
+  defp read!(u, v, path) do
+    {:ok, note} = Notes.get_note(u, v, path)
+    {:ok, out} = Notes.authoritative_content(u, note)
+    out
+  end
+
+  # F1: an unclosed <pre> used to make replace_section delete "## B".
+  test "replace_section refuses when an unclosed HTML block hides the next heading", %{
+    user: u,
+    vault: v
+  } do
+    content = put!(u, v, "Pre.md", "## A\n<pre>\ncode\n## B\nimportant\n")
+
+    assert {:error, msg} =
+             edit(u, v, "Pre.md", %{
+               "mode" => "replace_section",
+               "heading" => "A",
+               "content" => "new"
+             })
+
+    assert msg =~ "may run past line 4"
+    assert read!(u, v, "Pre.md") == content
+  end
+
+  # F2 end to end.
+  test "replace_section refuses when mis-paired %% marks hide the next heading", %{
+    user: u,
+    vault: v
+  } do
+    content = put!(u, v, "Pct.md", "## A\n%% note ` %% and `y`\n## B\nimportant\n%% c2 %%\n")
+
+    assert {:error, _} =
+             edit(u, v, "Pct.md", %{
+               "mode" => "replace_section",
+               "heading" => "A",
+               "content" => "new"
+             })
+
+    assert read!(u, v, "Pct.md") == content
+  end
+
+  test "replace_section still edits across a closed fence holding # lines", %{user: u, vault: v} do
+    fence = String.duplicate("`", 3)
+    put!(u, v, "Closed.md", "## A\n#{fence}bash\n## x\n#{fence}\n## B\nkeep\n")
+
+    assert {:ok, _, _} =
+             edit(u, v, "Closed.md", %{
+               "mode" => "replace_section",
+               "heading" => "A",
+               "content" => "new"
+             })
+
+    assert read!(u, v, "Closed.md") == "## A\nnew\n## B\nkeep\n"
+  end
+
+  # F3: main edited the plain heading; the rendered-text match must not
+  # steal it for the bold one.
+  test "replace_section picks the plain heading over one that renders the same", %{
+    user: u,
+    vault: v
+  } do
+    put!(u, v, "Two.md", "## **A**\nx\n## A\ny\n")
+
+    assert {:ok, _, _} =
+             edit(u, v, "Two.md", %{
+               "mode" => "replace_section",
+               "heading" => "A",
+               "content" => "new"
+             })
+
+    assert read!(u, v, "Two.md") == "## **A**\nx\n## A\nnew\n"
+  end
+
+  test "an ambiguous rendered heading refuses both section modes and writes nothing", %{
+    user: u,
+    vault: v
+  } do
+    content = put!(u, v, "Amb.md", "## **A**\nx\n## *A*\ny\n")
+
+    for args <- [
+          %{"mode" => "replace_section", "heading" => "A", "content" => "n"},
+          %{"mode" => "insert_section", "heading" => "A", "content" => "n"}
+        ] do
+      assert {:error, "Heading 'A' matches several headings; pass the exact heading text"} =
+               edit(u, v, "Amb.md", args)
+    end
+
+    assert read!(u, v, "Amb.md") == content
+  end
+
+  test "section edits on a note over 1 MB refuse with a fixable error", %{user: u, vault: v} do
+    content = put!(u, v, "Big.md", "## A\n" <> String.duplicate("x", 1_200_000) <> "\n")
+
+    for args <- [
+          %{"mode" => "replace_section", "heading" => "A", "content" => "n"},
+          %{"mode" => "insert_section", "heading" => "A", "content" => "n"}
+        ] do
+      assert {:error, msg} = edit(u, v, "Big.md", args)
+      assert msg =~ "too large for section edits or outline (1.2 MB, limit 1 MB)"
+    end
+
+    assert {:error, msg} =
+             Handlers.handle("update_section", u, v, %{
+               "path" => "Big.md",
+               "heading" => "A",
+               "content" => "n"
+             })
+
+    assert msg =~ "too large"
+    assert read!(u, v, "Big.md") == content
   end
 end

@@ -129,4 +129,76 @@ defmodule Engram.MCP.HandlersPartialReadTest do
     refute Map.has_key?(n, "outline")
     assert text =~ "**Path:** P.md"
   end
+
+  # --- Fix round (adversarial): size caps and ambiguous headings ---
+
+  defp big_note(heading, bytes) do
+    body = "## #{heading}\n" <> String.duplicate("word ", div(bytes, 5)) <> "\n"
+    binary_part(body, 0, bytes)
+  end
+
+  test "section on a note over 1 MB is a fixable too-large error", %{user: u, vault: v} do
+    {:ok, _} =
+      Notes.upsert_note(u, v, %{
+        "path" => "Huge.md",
+        "content" => big_note("A", 1_100_000),
+        "mtime" => 1.0
+      })
+
+    assert {:error, msg} = get(u, v, %{"paths" => ["Huge.md"], "section" => "A"})
+
+    assert msg ==
+             "This note is too large for section edits or outline (1.1 MB, limit 1 MB); " <>
+               "use edit_note replace_text or read the note with get_notes"
+  end
+
+  test "outline gives a per-note error past 1 MB or the 2 MB call budget, not a failed call",
+       %{user: u, vault: v} do
+    for {path, bytes} <- [{"O1.md", 900_000}, {"O2.md", 900_000}, {"O3.md", 900_000}] do
+      {:ok, _} =
+        Notes.upsert_note(u, v, %{
+          "path" => path,
+          "content" => big_note("H", bytes),
+          "mtime" => 1.0
+        })
+    end
+
+    {:ok, _} =
+      Notes.upsert_note(u, v, %{
+        "path" => "O4.md",
+        "content" => big_note("H", 1_100_000),
+        "mtime" => 1.0
+      })
+
+    assert {:ok, text, %{"notes" => [n4, n1, n2, n3, p]}} =
+             get(u, v, %{
+               "paths" => ["O4.md", "O1.md", "O2.md", "O3.md", "P.md"],
+               "outline" => true
+             })
+
+    assert n4["found"] == true and n4["error"] =~ "too large" and not Map.has_key?(n4, "outline")
+    assert [%{"heading" => "H"}] = n1["outline"]
+    assert [%{"heading" => "H"}] = n2["outline"]
+    assert n3["found"] == true and n3["error"] =~ "2 MB outline budget"
+    refute Map.has_key?(n3, "outline")
+    # A small note after the budget is spent still fits.
+    assert [_ | _] = p["outline"]
+    assert text =~ "Outline skipped"
+  end
+
+  test "a section name that only renders like several headings is a fixable error",
+       %{user: u, vault: v} do
+    {:ok, _} =
+      Notes.upsert_note(u, v, %{
+        "path" => "Amb.md",
+        "content" => "## **A**\nx\n## *A*\ny\n",
+        "mtime" => 1.0
+      })
+
+    assert {:error, "Heading 'A' matches several headings; pass the exact heading text"} =
+             get(u, v, %{"paths" => ["Amb.md"], "section" => "A"})
+
+    assert {:ok, _, %{"notes" => [%{"content" => "## *A*\ny"}]}} =
+             get(u, v, %{"paths" => ["Amb.md"], "section" => "*A*"})
+  end
 end

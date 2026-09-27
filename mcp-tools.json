@@ -528,6 +528,10 @@
                   "description": "Absent when outline: true was requested",
                   "type": "string"
                 },
+                "error": {
+                  "description": "Only with outline: true, when this note's outline was not computed (note over 1 MB, or the call's 2 MB outline budget was used up)",
+                  "type": "string"
+                },
                 "folder": {
                   "type": "string"
                 },
@@ -546,7 +550,7 @@
                   "type": "array"
                 },
                 "outline": {
-                  "description": "Only with outline: true; replaces content",
+                  "description": "Only with outline: true; replaces content. Absent when error is set",
                   "items": {
                     "properties": {
                       "heading": {

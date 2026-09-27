@@ -710,7 +710,8 @@ defmodule Engram.MCP.Tools do
                 },
                 "outline" => %{
                   "type" => "array",
-                  "description" => "Only with outline: true; replaces content",
+                  "description" =>
+                    "Only with outline: true; replaces content. Absent when error is set",
                   "items" => %{
                     "type" => "object",
                     "properties" => %{
@@ -719,6 +720,12 @@ defmodule Engram.MCP.Tools do
                     },
                     "required" => ["level", "heading"]
                   }
+                },
+                "error" => %{
+                  "type" => "string",
+                  "description" =>
+                    "Only with outline: true, when this note's outline was not computed " <>
+                      "(note over 1 MB, or the call's 2 MB outline budget was used up)"
                 },
                 "backlinks" => %{
                   "type" => "array",

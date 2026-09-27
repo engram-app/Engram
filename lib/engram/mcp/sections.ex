@@ -4,13 +4,14 @@ defmodule Engram.MCP.Sections do
   insert_section) and get_notes (section, outline). Pure: string in, data out.
 
   Where a heading is, and where its section ends, comes from a CommonMark
-  parser (MDEx, i.e. comrak) with source positions, never from a hand-written
+  parser (comrak, via the mdex_native NIF) with source positions, never from a hand-written
   line scanner: every scanner bug here was a silent data-loss bug, because a
   missed next heading makes replace_section overwrite the rest of the note.
 
   Only DOCUMENT-LEVEL headings count. A heading inside a blockquote, callout
   (`> [!note]`) or list item is content of that block, not a section
-  boundary. Two things CommonMark does not know about are handled before
+  boundary. Every entry point refuses a note over 1 MB (`max_bytes/0`).
+  Two things CommonMark does not know about are handled before
   parsing, both preserving line numbers:
 
     * the frontmatter block (`Engram.Notes.Frontmatter.split/1`, the same
@@ -35,66 +36,117 @@ defmodule Engram.MCP.Sections do
   # it (CRLF fences included), so it is blanked out before parsing instead.
   @parse_opts [extension: [table: true, strikethrough: true]]
 
-  @spec headings(String.t()) :: [heading()]
-  def headings(content), do: analyze(content).headings
+  # Parsing is linear but not cheap (dense markup ~2 s/MB, pathological
+  # input far worse) and runs on the shared dirty CPU schedulers, so every
+  # entry point refuses a note past this size instead of parsing it.
+  @max_bytes 1_000_000
 
+  # An ATX-heading-shaped line (0-3 spaces, 1-6 `#`, then space/tab/EOL).
+  # Anchored with bounded quantifiers: no backtracking blowup.
+  @atx_like ~r/^ {0,3}(\#{1,6})(?:[ \t\r]|$)/
+
+  @type too_large :: {:too_large, pos_integer()}
+
+  @doc "Largest note (bytes) any function here will parse."
+  @spec max_bytes() :: 1_000_000
+  def max_bytes, do: @max_bytes
+
+  @spec headings(String.t()) :: {:ok, [heading()]} | {:error, too_large()}
+  def headings(content) do
+    with :ok <- check_size(content),
+         do:
+           {:ok,
+            Enum.map(analyze(content).headings, &Map.take(&1, [:line, :level, :text, :span]))}
+  end
+
+  @doc """
+  Locates the section under `heading` (at `level`, or any level when nil).
+
+  Matching: an exact match on the heading's RAW source text wins (first
+  one); otherwise the RENDERED text (`**A**` -> "A") matches only when
+  exactly one heading renders to it, and several give `{:error, :ambiguous}`.
+
+  `hidden_heading_at` is the first line inside the section that looks like
+  a heading of this level or higher but is not one in the parse, outside any
+  closed code fence or closed HTML comment. Something (an unclosed block, a
+  `%%` comment, a parser surprise) hid it, so `stop` may be past where the
+  author thinks the section ends: writers must refuse.
+  """
   @spec find(String.t(), String.t(), 1..6 | nil) ::
           {:ok,
            %{
              start: non_neg_integer(),
              stop: non_neg_integer(),
              span: pos_integer(),
-             unclosed_comment_at: non_neg_integer() | nil,
-             unclosed_fence_at: non_neg_integer() | nil
+             hidden_heading_at: non_neg_integer() | nil
            }}
           | :error
+          | {:error, :ambiguous | too_large()}
   def find(content, heading, level) do
-    %{headings: hs, blocker: blocker} = analyze(content)
-    want = String.trim(heading)
+    with :ok <- check_size(content),
+         a = analyze(content),
+         {:ok, h} <- match(a.headings, String.trim(heading), level) do
+      lines = String.split(content, "\n")
+      # The section never owns the empty "line" after a trailing newline,
+      # so a replace of the last section keeps the note's final newline.
+      eof = if String.ends_with?(content, "\n"), do: length(lines) - 1, else: length(lines)
 
-    case Enum.find(hs, &(&1.text == want and (is_nil(level) or &1.level == level))) do
-      nil ->
-        :error
+      stop =
+        Enum.find_value(a.headings, eof, fn x ->
+          x.line > h.line and x.level <= h.level and x.line
+        end)
 
-      h ->
-        # The section never owns the empty "line" after a trailing newline,
-        # so a replace of the last section keeps the note's final newline.
-        eof = content |> String.split("\n") |> length()
-        eof = if String.ends_with?(content, "\n"), do: eof - 1, else: eof
-
-        stop =
-          Enum.find_value(hs, eof, fn x -> x.line > h.line and x.level <= h.level and x.line end)
-
-        {comment, fence} = unclosed(blocker, h, stop == eof, content)
-
-        {:ok,
-         %{
-           start: h.line,
-           stop: stop,
-           span: h.span,
-           unclosed_comment_at: comment,
-           unclosed_fence_at: fence
-         }}
+      {:ok,
+       %{
+         start: h.line,
+         stop: stop,
+         span: h.span,
+         hidden_heading_at: hidden_heading(lines, h, stop, a)
+       }}
     end
   end
 
-  # Defense in depth: an unclosed HTML comment, `%%` comment or code fence
-  # runs to EOF and swallows every heading after it. When that is WHY this
-  # section reaches EOF (the swallowed text holds a heading that would have
-  # ended it), flag it so a write refuses instead of deleting or misplacing
-  # what the block ate. An unclosed block with no such heading after it is
-  # harmless to this section and is not flagged.
-  defp unclosed({kind, at}, h, true, content) when at >= h.line do
-    rest = content |> String.split("\n") |> Enum.drop(at + 1) |> Enum.join("\n")
-
-    if Enum.any?(scan(rest).headings, &(&1.level <= h.level)),
-      do: if(kind == :fence, do: {nil, at}, else: {at, nil}),
-      else: {nil, nil}
+  defp check_size(content) do
+    if byte_size(content) > @max_bytes, do: {:error, {:too_large, byte_size(content)}}, else: :ok
   end
 
-  defp unclosed(_blocker, _h, _at_eof, _content), do: {nil, nil}
+  defp match(hs, want, level) do
+    hs = Enum.filter(hs, &(is_nil(level) or &1.level == level))
 
-  @spec section(String.t(), String.t()) :: {:ok, String.t()} | :error
+    case Enum.find(hs, &(&1.raw == want)) do
+      nil ->
+        case Enum.filter(hs, &(&1.text == want)) do
+          [h] -> {:ok, h}
+          [] -> :error
+          _ -> {:error, :ambiguous}
+        end
+
+      h ->
+        {:ok, h}
+    end
+  end
+
+  defp hidden_heading(lines, h, stop, a) do
+    from = h.line + h.span
+
+    lines
+    |> Enum.slice(from, stop - from)
+    |> Enum.with_index(from)
+    |> Enum.find_value(fn {line, i} ->
+      case Regex.run(@atx_like, line) do
+        [_, hashes] when byte_size(hashes) <= h.level ->
+          if not MapSet.member?(a.heading_lines, i) and
+               not Enum.any?(a.safe_ranges, fn {l1, l2} -> i >= l1 and i <= l2 end),
+             do: i
+
+        _ ->
+          nil
+      end
+    end)
+  end
+
+  @spec section(String.t(), String.t()) ::
+          {:ok, String.t()} | :error | {:error, :ambiguous | too_large()}
   def section(content, heading) do
     with {:ok, %{start: s, stop: e}} <- find(content, heading, nil) do
       text =
@@ -112,16 +164,16 @@ defmodule Engram.MCP.Sections do
   # heading). "end": after the section's last non-blank line, so blank lines
   # before the next heading stay where they are.
   #
-  # "start" never depends on `stop`, so it's unaffected by an unclosed block
+  # "start" never depends on `stop`, so it's unaffected by a hidden heading
   # further down; "end" does depend on it (it back-scans from `e`), so it
-  # refuses rather than risk inserting past content the block ate.
+  # refuses rather than risk inserting past content something hid.
   @spec insert(String.t(), String.t(), 1..6, String.t(), String.t()) ::
           {:ok, String.t()}
           | :error
-          | {:error, {:unclosed_comment | :unclosed_fence, non_neg_integer()}}
+          | {:error, :ambiguous | too_large() | {:hidden_heading, non_neg_integer()}}
   def insert(content, heading, level, position, text) do
     with {:ok, %{start: s, stop: e, span: span} = found} <- find(content, heading, level),
-         :ok <- refuse_unclosed(position, found) do
+         :ok <- refuse_hidden(position, found) do
       lines = String.split(content, "\n")
       text = String.trim_trailing(text, "\n")
 
@@ -146,13 +198,10 @@ defmodule Engram.MCP.Sections do
     end
   end
 
-  defp refuse_unclosed("end", %{unclosed_comment_at: l}) when is_integer(l),
-    do: {:error, {:unclosed_comment, l}}
+  defp refuse_hidden("end", %{hidden_heading_at: l}) when is_integer(l),
+    do: {:error, {:hidden_heading, l}}
 
-  defp refuse_unclosed("end", %{unclosed_fence_at: l}) when is_integer(l),
-    do: {:error, {:unclosed_fence, l}}
-
-  defp refuse_unclosed(_position, _found), do: :ok
+  defp refuse_hidden(_position, _found), do: :ok
 
   # Makes `text`'s line endings match `source`'s (the note being edited).
   # Per-line, so it only ever touches the FRAGMENT being written -- never the
@@ -221,25 +270,59 @@ defmodule Engram.MCP.Sections do
     end
   end
 
-  # `text` must already be free of BOM and frontmatter. Returns the
-  # document-level headings plus the block (if any) left open at EOF.
+  # `text` must already be free of BOM and frontmatter. One parse, plus one
+  # more only when `%%` comments had to be masked.
   defp scan(text) do
     # CommonMark also ends a line at a lone "\r"; callers count lines by
     # "\n" only, so a lone "\r" becomes a space (same byte offsets).
     text = String.replace(text, ~r/\r(?!\n)/, " ")
-    doc = parse(text)
-    {doc, pct_open} = mask_obsidian_comments(text, doc)
+    starts = line_starts(text)
+    doc = mask_obsidian_comments(text, starts, parse(text))
+    {heading_lines, safe_ranges} = walk(doc, {MapSet.new(), []})
 
     %{
-      headings: for(%MDEx.Heading{} = h <- doc.nodes, do: to_heading(h)),
-      blocker: if(pct_open, do: {:comment, pct_open}, else: open_block(List.last(doc.nodes)))
+      headings:
+        for(%MDExNative.Comrak.Heading{} = h <- doc.nodes, do: to_heading(h, text, starts)),
+      heading_lines: heading_lines,
+      safe_ranges: safe_ranges
     }
   end
 
-  defp parse(text), do: MDEx.parse_document!(text, @parse_opts)
+  defp parse(text), do: MDExNative.Comrak.parse_document(text, @parse_opts)
 
-  defp to_heading(%MDEx.Heading{sourcepos: %{start: {l1, _}, end: {l2, _}}} = h) do
-    %{line: l1 - 1, level: h.level, text: String.trim(plain_text(h.nodes)), span: l2 - l1 + 1}
+  defp to_heading(
+         %MDExNative.Comrak.Heading{sourcepos: %{start: {l1, _}, end: {l2, _}}} = h,
+         text,
+         starts
+       ) do
+    %{
+      line: l1 - 1,
+      level: h.level,
+      text: String.trim(plain_text(h.nodes)),
+      raw: raw_text(h, text, starts),
+      span: l2 - l1 + 1
+    }
+  end
+
+  # The heading's inline content exactly as written (`**A**`, `a &amp; b`,
+  # `\#x`): from the heading's own start (past the opening `#`s for ATX) to
+  # the last inline node's end, so no closing `#`s. Not from the FIRST inline
+  # node's start: comrak starts a leading escape's text after the backslash.
+  # A multi-line setext heading's lines are trimmed and joined with a space,
+  # the same way its rendered text is.
+  defp raw_text(%MDExNative.Comrak.Heading{nodes: []}, _text, _starts), do: ""
+
+  defp raw_text(%MDExNative.Comrak.Heading{sourcepos: %{start: {l1, c1}}} = h, text, starts) do
+    %{sourcepos: %{end: {l2, c2}}} = List.last(h.nodes)
+    from = elem(starts, l1 - 1) + c1 - 1
+    to = elem(starts, l2 - 1) + c2
+    raw = text |> binary_part(from, to - from) |> String.trim_leading()
+    raw = if h.setext, do: raw, else: binary_part(raw, h.level, byte_size(raw) - h.level)
+
+    raw
+    |> String.split("\n")
+    |> Enum.map_join(" ", &String.trim/1)
+    |> String.trim()
   end
 
   # Inline markup rendered to its text: `**B**` -> "B", `[l](u)` -> "l",
@@ -248,52 +331,51 @@ defmodule Engram.MCP.Sections do
   defp plain_text(nodes) do
     Enum.map_join(nodes, fn
       %{literal: lit} -> lit
-      %MDEx.SoftBreak{} -> " "
-      %MDEx.LineBreak{} -> " "
+      %MDExNative.Comrak.SoftBreak{} -> " "
+      %MDExNative.Comrak.LineBreak{} -> " "
       %{nodes: children} -> plain_text(children)
       _ -> ""
     end)
   end
 
-  # Only a TOP-level unclosed block runs to EOF: one nested in a list item
-  # or blockquote ends with its container, which a column-0 heading closes.
-  defp open_block(%MDEx.CodeBlock{fenced: true, closed: false, sourcepos: %{start: {l, _}}}),
-    do: {:fence, l - 1}
+  # Every line that starts a heading at ANY depth (a nested heading is a
+  # heading, just not a section boundary), and the 0-indexed line ranges of
+  # CLOSED fenced code blocks and CLOSED HTML comment blocks: the only
+  # places a heading-shaped line may legitimately sit inside a section.
+  defp walk(%MDExNative.Comrak.Heading{sourcepos: %{start: {l, _}}} = h, {hl, safe}),
+    do: walk_children(h, {MapSet.put(hl, l - 1), safe})
 
-  defp open_block(%MDEx.HtmlBlock{block_type: 2, literal: lit, sourcepos: %{start: {l, _}}}) do
-    if String.contains?(lit, "-->"), do: nil, else: {:comment, l - 1}
+  defp walk(%MDExNative.Comrak.CodeBlock{fenced: true, closed: true, sourcepos: sp}, {hl, safe}),
+    do: {hl, [range(sp) | safe]}
+
+  defp walk(%MDExNative.Comrak.HtmlBlock{block_type: 2, literal: lit, sourcepos: sp}, {hl, safe}) do
+    if String.contains?(lit, "-->"), do: {hl, [range(sp) | safe]}, else: {hl, safe}
   end
 
-  defp open_block(_node), do: nil
+  defp walk(node, acc), do: walk_children(node, acc)
+
+  defp walk_children(%{nodes: nodes}, acc), do: Enum.reduce(nodes, acc, &walk/2)
+  defp walk_children(_node, acc), do: acc
+
+  defp range(%{start: {l1, _}, end: {l2, _}}), do: {l1 - 1, l2 - 1}
 
   # Obsidian `%%` comments: every `%%` outside code (a code block or an
   # inline code span, per the first parse) toggles a comment; the regions
   # are overwritten with spaces (newlines kept, so lines and byte offsets
   # do not move) and the text re-parsed. An unclosed `%%` hides everything
-  # after it. Returns the re-parsed doc and the unclosed opener's line.
+  # after it.
   #
-  # ponytail: one pass. Code spans are taken from the UNmasked parse, so a
-  # backtick inside a `%%` comment can still pair with one after it and hide
-  # a later `%%`; fixing that needs a parse-mask-reparse loop to a fixed
-  # point, add it if it ever shows up in a real note.
-  defp mask_obsidian_comments(text, doc) do
-    case :binary.matches(text, "%%") do
-      [] ->
-        {doc, nil}
-
-      matches ->
-        starts = line_starts(text)
-        code = doc |> code_ranges(starts, []) |> Enum.reverse()
-
-        case matches |> Enum.map(&elem(&1, 0)) |> outside(code, []) do
-          [] ->
-            {doc, nil}
-
-          marks ->
-            {masked, open_at} = mask(text, marks)
-            open_line = open_at && line_of(starts, open_at)
-            {parse(masked), open_line}
-        end
+  # ponytail: one pass. Code spans come from the UNmasked parse, so a
+  # backtick inside a `%%` comment can pair with one after it and mis-pair
+  # later `%%`s. find/3's hidden-heading check turns that into a refused
+  # write rather than a wrong section; a fixed-point loop would fix the read.
+  defp mask_obsidian_comments(text, starts, doc) do
+    with [_ | _] = matches <- :binary.matches(text, "%%"),
+         code = doc |> code_ranges(starts, []) |> Enum.reverse(),
+         [_ | _] = marks <- matches |> Enum.map(&elem(&1, 0)) |> outside(code, []) do
+      text |> mask(marks) |> parse()
+    else
+      [] -> doc
     end
   end
 
@@ -302,20 +384,22 @@ defmodule Engram.MCP.Sections do
     [0 | for({at, _} <- :binary.matches(text, "\n"), do: at + 1)] |> List.to_tuple()
   end
 
-  defp line_of(starts, offset) do
-    Enum.find(0..(tuple_size(starts) - 1)//1, fn i ->
-      i + 1 == tuple_size(starts) or elem(starts, i + 1) > offset
-    end)
-  end
-
   # [{from, to}] byte ranges (to exclusive) of code, in document order.
   # sourcepos columns are 1-based BYTE columns.
-  defp code_ranges(%MDEx.CodeBlock{sourcepos: %{start: {l1, _}, end: {l2, _}}}, starts, acc) do
+  defp code_ranges(
+         %MDExNative.Comrak.CodeBlock{sourcepos: %{start: {l1, _}, end: {l2, _}}},
+         starts,
+         acc
+       ) do
     to = if l2 < tuple_size(starts), do: elem(starts, l2), else: :infinity
     [{elem(starts, l1 - 1), to} | acc]
   end
 
-  defp code_ranges(%MDEx.Code{sourcepos: %{start: {l1, c1}, end: {l2, c2}}}, starts, acc) do
+  defp code_ranges(
+         %MDExNative.Comrak.Code{sourcepos: %{start: {l1, c1}, end: {l2, c2}}},
+         starts,
+         acc
+       ) do
     [{elem(starts, l1 - 1) + c1 - 1, elem(starts, l2 - 1) + c2} | acc]
   end
 
@@ -346,13 +430,11 @@ defmodule Engram.MCP.Sections do
   defp mask(text, [open], pos, acc) do
     tail = binary_part(text, open, byte_size(text) - open)
 
-    {IO.iodata_to_binary(Enum.reverse([blank(tail), binary_part(text, pos, open - pos) | acc])),
-     open}
+    IO.iodata_to_binary(Enum.reverse([blank(tail), binary_part(text, pos, open - pos) | acc]))
   end
 
   defp mask(text, [], pos, acc) do
-    {IO.iodata_to_binary(Enum.reverse([binary_part(text, pos, byte_size(text) - pos) | acc])),
-     nil}
+    IO.iodata_to_binary(Enum.reverse([binary_part(text, pos, byte_size(text) - pos) | acc]))
   end
 
   defp blank(part) do

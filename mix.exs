@@ -191,9 +191,11 @@ defmodule Engram.MixProject do
       {:lingua, "~> 0.3.0"},
       {:rustler_precompiled, "~> 0.9.0", override: true},
 
-      # CommonMark parser (comrak Rust NIF, precompiled) for MCP section
-      # boundaries (Engram.MCP.Sections).
-      {:mdex, "~> 0.14.0"},
+      # CommonMark parser for MCP section boundaries (Engram.MCP.Sections):
+      # comrak as a precompiled Rust NIF. mdex_native directly, not the `mdex`
+      # wrapper: Sections reads the native AST, and mdex's Elixir-side struct
+      # conversion was ~4x the parse itself on dense markup.
+      {:mdex_native, "~> 0.2.9"},
 
       # Test
       {:ex_machina, "~> 2.8", only: :test},
