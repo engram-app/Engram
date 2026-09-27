@@ -78,7 +78,8 @@ defmodule Engram.Workers.ProjectVaultIndex do
   alias Engram.{Accounts, Crypto, Notes, Repo}
   alias Engram.Crypto.RotationGate
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtIndexDoc, VaultIndexState}
+  alias Engram.Notes.{CrdtIndexDoc, Enqueue, VaultIndexState}
+  alias Engram.Workers.ReleaseIndexEntries
 
   require Logger
 
@@ -88,6 +89,18 @@ defmodule Engram.Workers.ProjectVaultIndex do
   # per-vault `unique` window relies on. The cap is here so a swap (which cannot
   # converge at all) stops churning, not because 6 rounds means failure.
   @max_passes 5
+
+  # #1550: a client can claim a path before `crdt_create` is acked. If the
+  # create never lands, the claim outlives it and names a note that will never
+  # exist — projection then reports the same entry unresolved on every run
+  # forever, which is the "permanently wedged" bug. Four of six creates in the
+  # incident that filed #1550 self-healed within 8 minutes; the two that didn't
+  # were still unresolved 16+ hours later. An hour is comfortably past any
+  # observed legitimate delay and comfortably short of "permanent", so treat an
+  # entry as abandoned (never seen a matching row, id older than this) rather
+  # than in flight. Tunable — raise it if a slower create path proves 1h too
+  # eager.
+  @stale_claim_grace_ms :timer.hours(1)
 
   @event [:engram, :crdt, :index_projection]
 
@@ -252,7 +265,8 @@ defmodule Engram.Workers.ProjectVaultIndex do
     end
   end
 
-  defp blank_outcome, do: %{applied: 0, noop: 0, conflict: 0, unknown_note: 0, malformed: 0}
+  defp blank_outcome,
+    do: %{applied: 0, noop: 0, conflict: 0, unknown_note: 0, malformed: 0, released: 0}
 
   defp tally(outcome, key), do: Map.update!(outcome, key, &(&1 + 1))
 
@@ -281,22 +295,28 @@ defmodule Engram.Workers.ProjectVaultIndex do
 
       _ ->
         # The index names a note this vault does not have — wrong vault, soft
-        # deleted, or a stale id. NOT ours to invent: creating one would make
-        # projection a writer of identity, which is the client's job.
-        #
-        # Logged, unlike before. An index naming rows we do not have IS the
-        # drift class #167 exists to eliminate; making it the one outcome with
-        # no signal at all had it exactly backwards.
-        Logger.warning(
-          "vault index projection skipped an entry naming an unknown note",
-          Metadata.with_category(:warning, :sync,
-            user_id: user.id,
-            vault_id: vault_id,
-            note_id: note_id
+        # deleted, a create still in flight, or (#1550) a create that never
+        # will land. NOT ours to invent: creating one would make projection a
+        # writer of identity, which is the client's job. Age is the only signal
+        # available to tell "still in flight" from "never coming" apart — see
+        # `@stale_claim_grace_ms`.
+        if stale_claim?(note_id) do
+          release_stale_claim(user, vault_id, note_id)
+        else
+          # Logged, unlike before. An index naming rows we do not have IS the
+          # drift class #167 exists to eliminate; making it the one outcome
+          # with no signal at all had it exactly backwards.
+          Logger.warning(
+            "vault index projection skipped an entry naming an unknown note",
+            Metadata.with_category(:warning, :sync,
+              user_id: user.id,
+              vault_id: vault_id,
+              note_id: note_id
+            )
           )
-        )
 
-        :unknown_note
+          :unknown_note
+        end
     end
   end
 
@@ -314,6 +334,43 @@ defmodule Engram.Workers.ProjectVaultIndex do
     )
 
     :malformed
+  end
+
+  # UUIDv7 encodes its own mint time, so an entry's age needs no extra state.
+  # `false` for anything that isn't a v7 UUID — never guess an id we can't
+  # read, and a v4 id (the shape a pre-#431 client or a test double might send)
+  # must fall through to the existing unknown-note path unaffected.
+  defp stale_claim?(note_id) do
+    case Ecto.UUID.dump(note_id) do
+      {:ok, <<ms::48, 7::4, _::76>>} ->
+        System.system_time(:millisecond) - ms > @stale_claim_grace_ms
+
+      _ ->
+        false
+    end
+  end
+
+  # Async and uniform with every other release (`ReleaseIndexEntries`) — never
+  # inline, so a DEK rotation in progress retries the release instead of
+  # losing it. Nothing else ever releases this claim: a create that never
+  # lands is not a delete, so `Notes.delete_note`'s release never fires for it.
+  defp release_stale_claim(user, vault_id, note_id) do
+    _ =
+      Enqueue.enqueue(
+        ReleaseIndexEntries.new_for(user.id, vault_id, [note_id]),
+        "release_index_entries"
+      )
+
+    Logger.warning(
+      "vault index projection released a stale claim for a note that never arrived",
+      Metadata.with_category(:warning, :sync,
+        user_id: user.id,
+        vault_id: vault_id,
+        note_id: note_id
+      )
+    )
+
+    :released
   end
 
   defp rename(user, vault, note, path, vault_id) do
@@ -354,6 +411,7 @@ defmodule Engram.Workers.ProjectVaultIndex do
         unknown_note: last.unknown_note,
         malformed: last.malformed,
         duplicate_note_ids: duplicates,
+        released: last.released,
         passes: passes
       },
       %{phase: if(unresolved == 0, do: :converged, else: :unresolved)}

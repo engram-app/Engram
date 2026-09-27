@@ -487,4 +487,73 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
       assert path_of(ctx, real.id) == "New/shape.md"
     end
   end
+
+  # #1550: a client can claim a path before `crdt_create` is acked. If the
+  # create never lands, the claim outlives it and names a note that will never
+  # exist. Age (encoded in the note_id's own UUIDv7 bits) is the only signal
+  # available to tell that apart from a create still in flight.
+  describe "a claim for a note that never arrives (#1550)" do
+    test "a claim younger than the grace period is left alone, not released", ctx do
+      attach_projection_telemetry()
+
+      real = note(ctx, "Old/real.md")
+      in_flight_id = UUIDv7.generate()
+
+      seed_index(ctx, [
+        {"ghost.md", in_flight_id},
+        {"New/real.md", real.id}
+      ])
+
+      assert :ok = run(ctx)
+
+      assert_receive {:projection, %{unresolved: 1, released: 0}, %{phase: :unresolved}}, 2_000
+      assert path_of(ctx, real.id) == "New/real.md"
+      assert %{"note_id" => ^in_flight_id} = index_entries(ctx)["ghost.md"]
+
+      :ok = drain_releases()
+
+      assert %{"note_id" => ^in_flight_id} = index_entries(ctx)["ghost.md"],
+             "a claim still inside the grace period must not be released"
+    end
+
+    test "a claim older than the grace period is released and stops counting as unresolved",
+         ctx do
+      attach_projection_telemetry()
+
+      real = note(ctx, "Old/real.md")
+      stale_id = UUIDv7.generate(System.system_time(:millisecond) - :timer.hours(2))
+
+      seed_index(ctx, [
+        {"ghost.md", stale_id},
+        {"New/real.md", real.id}
+      ])
+
+      assert :ok = run(ctx)
+
+      assert_receive {:projection, %{unresolved: 0, released: 1}, %{phase: :converged}}, 2_000
+      assert path_of(ctx, real.id) == "New/real.md"
+
+      :ok = drain_releases()
+
+      refute Map.has_key?(index_entries(ctx), "ghost.md"),
+             "the stale claim must be gone once the release job runs"
+    end
+
+    test "a v4 id (not UUIDv7) is never treated as stale", ctx do
+      attach_projection_telemetry()
+
+      real = note(ctx, "Old/real.md")
+      v4_id = Ecto.UUID.generate()
+
+      seed_index(ctx, [
+        {"ghost.md", v4_id},
+        {"New/real.md", real.id}
+      ])
+
+      assert :ok = run(ctx)
+
+      assert_receive {:projection, %{unresolved: 1, released: 0}, %{phase: :unresolved}}, 2_000
+      assert %{"note_id" => ^v4_id} = index_entries(ctx)["ghost.md"]
+    end
+  end
 end
