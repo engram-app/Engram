@@ -1563,23 +1563,29 @@ defmodule Engram.MCP.Handlers do
   # because an edge only ever resolves inside its source note's vault
   # (Links.resolve_target/4), so a cross-vault same-named note never binds.
   #
-  # `backlinks_for_note/2` is DB-capped; fetching `limit + 1` is how we tell
-  # "exactly at the cap" apart from "there would have been more" without an
-  # unbounded COUNT. `outgoing`/`unresolved` come from one note's own edges
-  # (links_for_note/2, never DB-limited), so their true length is always
-  # known and the cap is applied here, after dedup, with an exact overage.
-  defp links_payload(user, note) do
-    limit = Engram.Links.backlinks_limit()
+  # `backlinks_for_note/2` is DB-capped; fetching `limit + 1` DISTINCT
+  # sources is how we tell "exactly at the cap" apart from "there would have
+  # been more" without an unbounded COUNT. `distinct_sources: true` is
+  # required here because one source note can carry several edges to the
+  # same target, so a raw edge count would over-report truncation.
+  # `outgoing`/`unresolved` come from one note's own edges (links_for_note/2,
+  # never DB-limited), so their true length is always known and the cap is
+  # applied here, after dedup, with an exact overage.
+  #
+  # `@doc false` and public (not `defp`) only so a test can pass a small
+  # `limit` directly instead of manufacturing `Links.backlinks_limit/0` + 1
+  # real notes.
+  @doc false
+  @spec links_payload(map(), map(), pos_integer()) ::
+          {map(), {boolean(), non_neg_integer(), non_neg_integer()}}
+  def links_payload(user, note, limit \\ Engram.Links.backlinks_limit()) do
+    raw_backlinks =
+      Engram.Links.backlinks_for_note(user, note.id, limit: limit + 1, distinct_sources: true)
 
-    raw_backlinks = Engram.Links.backlinks_for_note(user, note.id, limit: limit + 1)
     backlinks_more? = length(raw_backlinks) > limit
 
     backlinks =
-      raw_backlinks
-      |> Enum.map(& &1.source_path)
-      |> Enum.reject(&is_nil/1)
-      |> Enum.uniq()
-      |> Enum.take(limit)
+      raw_backlinks |> Enum.map(& &1.source_path) |> Enum.reject(&is_nil/1) |> Enum.take(limit)
 
     outgoing_edges = Engram.Links.links_for_note(user, note.id)
 
@@ -1614,7 +1620,11 @@ defmodule Engram.MCP.Handlers do
     if count > limit, do: {Enum.take(list, limit), count - limit}, else: {list, 0}
   end
 
-  defp format_links(links, {backlinks_more?, outgoing_extra, unresolved_extra}) do
+  # Public + `@doc false` alongside `links_payload/3`, so a test can render
+  # the text for a `links_payload/3` call made with a small injected limit.
+  @doc false
+  @spec format_links(map(), {boolean(), non_neg_integer(), non_neg_integer()}) :: String.t()
+  def format_links(links, {backlinks_more?, outgoing_extra, unresolved_extra}) do
     Enum.join(
       [
         "Backlinks: " <> suffixed(links["backlinks"], backlinks_more?),

@@ -1,75 +1,70 @@
 defmodule Engram.MCP.HandlersLinksTruncationTest do
-  use Engram.DataCase, async: false
+  use Engram.DataCase, async: true
 
   alias Engram.Links
   alias Engram.MCP.Handlers
+  alias Engram.Notes
 
-  # Backlinks are the one list `Links.backlinks_for_note/3` itself caps in
-  # the database (see links.ex), so proving the handler's truncation signal
-  # for it end-to-end would otherwise need 200+ real encrypted source notes.
-  # `Links.backlinks_limit/0` reads `config :engram, :backlinks_limit`
-  # precisely so a test can drive the same cap with a handful of notes
-  # instead. `async: false` + on_exit restore mirrors the existing pattern
-  # for other global config overrides in this suite (handlers_test.exs,
-  # handlers_upload_target_test.exs).
   setup do
-    prev = Application.get_env(:engram, :backlinks_limit)
-    Application.put_env(:engram, :backlinks_limit, 2)
-
-    on_exit(fn ->
-      if is_nil(prev),
-        do: Application.delete_env(:engram, :backlinks_limit),
-        else: Application.put_env(:engram, :backlinks_limit, prev)
-    end)
-
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
     vault = insert(:vault, user: user)
-    %{user: user, vault: vault}
+    {:ok, target} = Notes.upsert_note(user, vault, %{"path" => "Target.md", "mtime" => 1.0})
+    %{user: user, vault: vault, target: target}
   end
 
-  test "backlinks past the (overridden) cap are truncated with an unknown count", %{
+  defp link_to_target(user, vault, source_path, edge_count) do
+    {:ok, source} =
+      Notes.upsert_note(user, vault, %{"path" => source_path, "mtime" => 1.0})
+
+    edges =
+      for n <- 0..(edge_count - 1) do
+        %{target: "Target", alias: nil, anchor: nil, link_type: "wikilink", position: n}
+      end
+
+    :ok = Links.replace_links(user, vault, source.id, edges)
+  end
+
+  # `Handlers.links_payload/3` (public, `@doc false`) takes a limit
+  # explicitly, so this drives the real (small) cap with a handful of real
+  # notes instead of manufacturing `Links.backlinks_limit/0` + 1 of them.
+  #
+  # Regression: `backlinks_more?` used to come from the raw edge count. One
+  # source note can carry several edges to the same target (one row per
+  # occurrence), while the exposed `backlinks` list is one entry per source.
+  # A source that links twice must not, by itself, look like two backlinks.
+  test "one source linking twice does not falsely trip truncation at the cap", %{
     user: u,
-    vault: v
+    vault: v,
+    target: target
   } do
-    _target = Engram.Fixtures.insert_note!(u, v, %{path: "Target.md"})
+    link_to_target(u, v, "SourceA.md", 2)
+    link_to_target(u, v, "SourceB.md", 1)
 
-    for n <- 1..3 do
-      source = Engram.Fixtures.insert_note!(u, v, %{path: "Source#{n}.md"})
+    # 2 unique sources, 3 edges total. limit: 2 is "right at the cap" for
+    # unique sources; the old raw-edge-count logic would have seen limit + 1
+    # = 3 rows and wrongly reported truncation.
+    {links, truncation} = Handlers.links_payload(u, target, 2)
 
-      :ok =
-        Links.replace_links(u, v, source.id, [
-          %{target: "Target", alias: nil, anchor: nil, link_type: "wikilink", position: 0}
-        ])
-    end
-
-    assert {:ok, text, %{"notes" => [t]}} =
-             Handlers.handle("get_notes", u, v, %{
-               "paths" => ["Target.md"],
-               "include_links" => true
-             })
-
-    assert length(t["backlinks"]) == 2
-    assert t["links_truncated"] == true
-    assert text =~ "Backlinks: Source1.md, Source2.md, and more"
+    assert length(links["backlinks"]) == 2
+    assert links["links_truncated"] == false
+    refute Handlers.format_links(links, truncation) =~ "more"
   end
 
-  test "at or under the (overridden) cap, nothing is marked truncated", %{user: u, vault: v} do
-    _target = Engram.Fixtures.insert_note!(u, v, %{path: "Target.md"})
-    source = Engram.Fixtures.insert_note!(u, v, %{path: "Source.md"})
+  test "a third unique source past the cap does trip truncation", %{
+    user: u,
+    vault: v,
+    target: target
+  } do
+    link_to_target(u, v, "SourceA.md", 2)
+    link_to_target(u, v, "SourceB.md", 1)
+    link_to_target(u, v, "SourceC.md", 1)
 
-    :ok =
-      Links.replace_links(u, v, source.id, [
-        %{target: "Target", alias: nil, anchor: nil, link_type: "wikilink", position: 0}
-      ])
+    {links, truncation} = Handlers.links_payload(u, target, 2)
 
-    assert {:ok, text, %{"notes" => [t]}} =
-             Handlers.handle("get_notes", u, v, %{
-               "paths" => ["Target.md"],
-               "include_links" => true
-             })
+    assert length(links["backlinks"]) == 2
+    assert links["links_truncated"] == true
 
-    assert t["backlinks"] == ["Source.md"]
-    assert t["links_truncated"] == false
-    refute text =~ "more"
+    assert Handlers.format_links(links, truncation) =~
+             "Backlinks: SourceA.md, SourceB.md, and more"
   end
 end

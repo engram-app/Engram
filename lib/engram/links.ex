@@ -879,12 +879,10 @@ defmodule Engram.Links do
   @doc """
   Max edges `backlinks_for_note/2` returns by default. Exposed so tests and
   callers (e.g. the OpenAPI schema description) can assert against the real
-  value instead of hardcoding `200` a second place. Overridable via
-  `config :engram, :backlinks_limit` so a test can drive the cap with a
-  handful of notes instead of manufacturing #{@backlinks_limit}+ real ones.
+  value instead of hardcoding `200` a second place.
   """
   @spec backlinks_limit() :: pos_integer()
-  def backlinks_limit, do: Application.get_env(:engram, :backlinks_limit, @backlinks_limit)
+  def backlinks_limit, do: @backlinks_limit
 
   @doc """
   Decrypted incoming links (backlinks) for a note — one entry per edge
@@ -899,6 +897,13 @@ defmodule Engram.Links do
   `opts[:limit]` overrides the cap for this call only (e.g. `limit: n + 1`
   to detect truncation without an unbounded COUNT); omitting it keeps every
   existing caller's behavior unchanged.
+
+  `opts[:distinct_sources]` (default `false`), when `true`, returns at most
+  one row per distinct `source_note_id` instead of one row per edge. A
+  single source note can link to the same target more than once (several
+  edges, one source), so counting raw edges against `limit + 1` cannot tell
+  "more edges" from "more distinct linking notes". get_notes' truncation
+  probe needs the latter.
   """
   @spec backlinks_for_note(map(), binary(), keyword()) :: [map()]
   def backlinks_for_note(user, note_id, opts \\ []) do
@@ -906,21 +911,19 @@ defmodule Engram.Links do
     user = reload_for_dek(user)
     {:ok, dek} = Crypto.get_dek(user)
     limit = Keyword.get(opts, :limit, backlinks_limit())
+    distinct_sources? = Keyword.get(opts, :distinct_sources, false)
 
     result =
-      Repo.with_tenant!(user.id, fn -> do_backlinks_for_note(user, note_id, dek, limit) end)
+      Repo.with_tenant!(user.id, fn ->
+        do_backlinks_for_note(user, note_id, dek, limit, distinct_sources?)
+      end)
 
     result
   end
 
-  defp do_backlinks_for_note(user, note_id, dek, limit) do
+  defp do_backlinks_for_note(user, note_id, dek, limit, distinct_sources?) do
     edges =
-      Repo.all(
-        from(l in NoteLink,
-          where: l.user_id == ^user.id and l.target_note_id == ^note_id,
-          order_by: [asc: l.position, asc: l.id],
-          limit: ^limit
-        ),
+      Repo.all(backlinks_edges_query(user.id, note_id, limit, distinct_sources?),
         skip_tenant_check: true
       )
 
@@ -1000,6 +1003,29 @@ defmodule Engram.Links do
           )
       }
     end)
+  end
+
+  # Default: one row per edge, same where/order/limit as before this option
+  # existed, so every caller that omits `distinct_sources` is byte-identical.
+  defp backlinks_edges_query(user_id, note_id, limit, false) do
+    from(l in NoteLink,
+      where: l.user_id == ^user_id and l.target_note_id == ^note_id,
+      order_by: [asc: l.position, asc: l.id],
+      limit: ^limit
+    )
+  end
+
+  # DISTINCT ON collapses multiple edges from the same source note to its
+  # first (by position, id), so `limit + 1` here counts distinct linking
+  # notes, not link occurrences. Postgres requires the leading ORDER BY
+  # column to match the DISTINCT ON column.
+  defp backlinks_edges_query(user_id, note_id, limit, true) do
+    from(l in NoteLink,
+      where: l.user_id == ^user_id and l.target_note_id == ^note_id,
+      distinct: l.source_note_id,
+      order_by: [asc: l.source_note_id, asc: l.position, asc: l.id],
+      limit: ^limit
+    )
   end
 
   # Read paths (called straight from controllers with `conn.assigns.current_user`)
