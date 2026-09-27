@@ -145,4 +145,29 @@ defmodule Engram.MCP.HandlersInsertSectionTest do
     assert "insert_section" in props["mode"]["enum"]
     assert props["position"]["enum"] == ["start", "end"]
   end
+
+  # Review round 2, finding 1: a closing fence may not carry an info string,
+  # so "```js" inside an open fence must not close it -- else "end" lands at
+  # the wrong boundary (or past the next heading entirely).
+  test "position end on a fence whose closer carries an info string lands before the next heading",
+       %{user: u, vault: v} do
+    content = "## A\n```\n```js\n```\n## B\nkeep\n"
+
+    {:ok, _} =
+      Notes.upsert_note(u, v, %{"path" => "Fence2.md", "content" => content, "mtime" => 3.0})
+
+    assert {:ok, _, _} =
+             Handlers.handle("edit_note", u, v, %{
+               "path" => "Fence2.md",
+               "mode" => "insert_section",
+               "heading" => "A",
+               "level" => 2,
+               "position" => "end",
+               "content" => "n1"
+             })
+
+    {:ok, note} = Notes.get_note(u, v, "Fence2.md")
+    {:ok, out} = Notes.authoritative_content(u, note)
+    assert out == "## A\n```\n```js\n```\nn1\n## B\nkeep\n"
+  end
 end

@@ -844,12 +844,15 @@ defmodule Engram.MCP.Handlers do
           # The section was not updated, so this is not a success. Was `:ok`.
           {:error, "Heading not found: #{String.duplicate("#", level)} #{heading}"}
 
-        {:ok, %{start: s, stop: e}} ->
+        {:ok, %{start: s, stop: e, span: span}} ->
           lines = String.split(current, "\n")
+          replacement = new_content |> String.trim_trailing("\n") |> Sections.match_eol(current)
 
+          # `s + span` keeps the whole heading: span is 2 for a setext
+          # heading (paragraph text line + underline), 1 for ATX.
           final_content =
-            (Enum.slice(lines, 0, s + 1) ++
-               [String.trim_trailing(new_content, "\n")] ++ Enum.drop(lines, e))
+            (Enum.slice(lines, 0, s + span) ++
+               [replacement] ++ Enum.drop(lines, e))
             |> Enum.join("\n")
 
           Notes.upsert_note(user, vault, %{

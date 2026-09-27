@@ -365,4 +365,71 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     assert msg =~ "find must not be empty"
     assert body(u, v) == before
   end
+
+  # Review round 2, finding 1: a closing fence may not carry an info string.
+  # "```js" inside an already-open fence must not close it, or replace_section
+  # deletes everything up to and including the NEXT heading it wrongly sees
+  # as still "inside" the (falsely-reopened) fence region.
+  test "replace_section on a fence whose closer carries an info string does not delete the next section",
+       %{user: u, vault: v} do
+    content = "## A\n```\n```js\n```\n## B\nkeep\n"
+
+    {:ok, _} =
+      Notes.upsert_note(u, v, %{"path" => "Fence2.md", "content" => content, "mtime" => 3.0})
+
+    assert {:ok, _, _} =
+             Handlers.handle("edit_note", u, v, %{
+               "path" => "Fence2.md",
+               "mode" => "replace_section",
+               "heading" => "A",
+               "content" => "new"
+             })
+
+    {:ok, note} = Notes.get_note(u, v, "Fence2.md")
+    {:ok, out} = Notes.authoritative_content(u, note)
+    assert out == "## A\nnew\n## B\nkeep\n"
+  end
+
+  # Review round 2, finding 3: replace_section must not mix line endings when
+  # rewriting a CRLF note.
+  test "replace_section keeps the note's CRLF line endings uniform", %{user: u, vault: v} do
+    content = "## A\r\nold\r\n## B\r\nkeep\r\n"
+
+    {:ok, _} =
+      Notes.upsert_note(u, v, %{"path" => "Crlf.md", "content" => content, "mtime" => 4.0})
+
+    assert {:ok, _, _} =
+             Handlers.handle("edit_note", u, v, %{
+               "path" => "Crlf.md",
+               "mode" => "replace_section",
+               "heading" => "A",
+               "content" => "n1\nn2"
+             })
+
+    {:ok, note} = Notes.get_note(u, v, "Crlf.md")
+    {:ok, out} = Notes.authoritative_content(u, note)
+    assert out == "## A\r\nn1\r\nn2\r\n## B\r\nkeep\r\n"
+  end
+
+  # Review round 2, finding 4: a setext heading occupies two lines; replacing
+  # its section must keep BOTH the paragraph text and the underline.
+  test "replace_section on a setext heading keeps the underline line", %{user: u, vault: v} do
+    content = "Title\n=====\n\nold\n\nNext\n====\n\nz\n"
+
+    {:ok, _} =
+      Notes.upsert_note(u, v, %{"path" => "Setext.md", "content" => content, "mtime" => 5.0})
+
+    assert {:ok, _, _} =
+             Handlers.handle("edit_note", u, v, %{
+               "path" => "Setext.md",
+               "mode" => "replace_section",
+               "heading" => "Title",
+               "level" => 1,
+               "content" => "new"
+             })
+
+    {:ok, note} = Notes.get_note(u, v, "Setext.md")
+    {:ok, out} = Notes.authoritative_content(u, note)
+    assert out == "Title\n=====\nnew\nNext\n====\n\nz\n"
+  end
 end
