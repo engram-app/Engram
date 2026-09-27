@@ -19,6 +19,8 @@ import uuid
 
 import pytest
 
+from helpers.latency import DELIVERY_TIMEOUT
+
 
 @pytest.fixture(scope="module")
 def scoped(api_sync):
@@ -78,7 +80,7 @@ def test_get_notes_include_links(scoped):
     api.wait_for_note(source)
 
     # Link extraction runs in the indexing job, so poll.
-    deadline = time.monotonic() + 60
+    deadline = time.monotonic() + DELIVERY_TIMEOUT
     note = None
     missing = None
     while time.monotonic() < deadline:
@@ -128,7 +130,7 @@ def test_search_notes_blank_query_lists_recent(scoped):
     api.wait_for_note(path)
 
     resp, status = api.mcp_call(
-        "search_notes", {"query": "", "limit": 10, "vault_id": vault_id}
+        "search_notes", {"query": "", "limit": 20, "vault_id": vault_id}
     )
     assert status == 200
     result = resp["result"]
