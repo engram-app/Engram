@@ -555,5 +555,38 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
       assert_receive {:projection, %{unresolved: 1, released: 0}, %{phase: :unresolved}}, 2_000
       assert %{"note_id" => ^v4_id} = index_entries(ctx)["ghost.md"]
     end
+
+    # The fixpoint loop used to retry the FULL entries list on every pass, so a
+    # stale claim sharing a run with a rename chain (which forces a second
+    # pass) got re-detected and re-released each pass — one duplicate
+    # ReleaseIndexEntries job per extra pass, up to @max_passes.
+    test "a stale claim shares a run with a chain and is released only once", ctx do
+      a = note(ctx, "a.md")
+      b = note(ctx, "b.md")
+      stale_id = UUIDv7.generate(System.system_time(:millisecond) - :timer.hours(2))
+
+      # b.md -> a.id: a wants b's path, and b is vacating it — a chain that
+      # needs a second pass, exactly the condition that used to double-release.
+      seed_index(ctx, [
+        {"b.md", a.id},
+        {"c.md", b.id},
+        {"ghost.md", stale_id}
+      ])
+
+      assert :ok = run(ctx)
+
+      assert path_of(ctx, a.id) == "b.md", "the chain must still converge"
+      assert path_of(ctx, b.id) == "c.md"
+
+      jobs =
+        Repo.all(
+          from(j in Oban.Job,
+            where: j.worker == "Engram.Workers.ReleaseIndexEntries" and j.state == "available"
+          )
+        )
+
+      assert length(jobs) == 1,
+             "one release job per stale claim per run, not one per pass (got #{length(jobs)})"
+    end
   end
 end

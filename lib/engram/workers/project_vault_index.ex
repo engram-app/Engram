@@ -247,19 +247,28 @@ defmodule Engram.Workers.ProjectVaultIndex do
   end
 
   defp pass(user, vault, vault_id, entries, passes_left, acc) do
-    outcome =
-      Enum.reduce(entries, blank_outcome(), fn entry, o ->
-        tally(o, apply_entry(user, vault, vault_id, entry))
+    {outcome, retry} =
+      Enum.reduce(entries, {blank_outcome(), []}, fn entry, {o, retry} ->
+        case apply_entry(user, vault, vault_id, entry) do
+          :conflict = result -> {tally(o, result), [entry | retry]}
+          result -> {tally(o, result), retry}
+        end
       end)
 
     acc = %{acc | applied: acc.applied + outcome.applied, passes: acc.passes + 1, last: outcome}
 
-    # Re-run only while a pass BOTH made progress and left something stuck: that
-    # is the chain case, and the next pass can place what was blocked. Zero
-    # progress means a swap or a genuine disagreement, and another identical
-    # pass would only churn.
+    # Re-run only the entries still stuck (`:conflict`), and only while a pass
+    # BOTH made progress and left something stuck: that is the chain case, and
+    # the next pass can place what was blocked. Zero progress means a swap or a
+    # genuine disagreement, and another identical pass would only churn.
+    #
+    # Retrying the full `entries` list here used to re-run every already-
+    # settled entry too, on every pass. Harmless for a :noop or :malformed, but
+    # #1550's `:released` has a real side effect (an Oban insert) that must not
+    # repeat per pass — re-running only what's still stuck fixes that and every
+    # other redundant-reprocessing case at once.
     if outcome.applied > 0 and outcome.conflict > 0 and passes_left > 1 do
-      pass(user, vault, vault_id, entries, passes_left - 1, acc)
+      pass(user, vault, vault_id, Enum.reverse(retry), passes_left - 1, acc)
     else
       acc
     end
@@ -355,22 +364,30 @@ defmodule Engram.Workers.ProjectVaultIndex do
   # losing it. Nothing else ever releases this claim: a create that never
   # lands is not a delete, so `Notes.delete_note`'s release never fires for it.
   defp release_stale_claim(user, vault_id, note_id) do
-    _ =
-      Enqueue.enqueue(
-        ReleaseIndexEntries.new_for(user.id, vault_id, [note_id]),
-        "release_index_entries"
-      )
+    case Enqueue.enqueue(
+           ReleaseIndexEntries.new_for(user.id, vault_id, [note_id]),
+           "release_index_entries"
+         ) do
+      {:ok, _job} ->
+        Logger.warning(
+          "vault index projection released a stale claim for a note that never arrived",
+          Metadata.with_category(:warning, :sync,
+            user_id: user.id,
+            vault_id: vault_id,
+            note_id: note_id
+          )
+        )
 
-    Logger.warning(
-      "vault index projection released a stale claim for a note that never arrived",
-      Metadata.with_category(:warning, :sync,
-        user_id: user.id,
-        vault_id: vault_id,
-        note_id: note_id
-      )
-    )
+        :released
 
-    :released
+      {:error, _reason} ->
+        # Enqueue.enqueue/2 already logged and emitted its own failure
+        # telemetry. Reporting :released here anyway would tell a dashboard the
+        # claim is resolved when the job to resolve it was never queued — fall
+        # back to the ordinary unresolved path so the next run gets another
+        # chance instead of the claim silently going unfixed.
+        :unknown_note
+    end
   end
 
   defp rename(user, vault, note, path, vault_id) do
