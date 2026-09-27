@@ -86,6 +86,13 @@ defmodule Engram.MCP.Handlers do
   def handle("search_notes", user, {:cross_vault, vaults}, args) do
     names = Map.new(vaults, &{to_string(&1.id), &1.name})
 
+    opts =
+      Keyword.merge(build_search_opts(args),
+        cross_vault: true,
+        allow_cross_vault: true,
+        vault_ids: Enum.map(vaults, &to_string(&1.id))
+      )
+
     case search_kind(args) do
       {:ok, :recent} ->
         limit = max(1, min(args["limit"] || 5, 20))
@@ -100,14 +107,13 @@ defmodule Engram.MCP.Handlers do
         |> render_recent(names)
 
       {:ok, :query} ->
-        opts =
-          Keyword.merge(build_search_opts(args),
-            cross_vault: true,
-            allow_cross_vault: true,
-            vault_ids: Enum.map(vaults, &to_string(&1.id))
-          )
-
         render_search(Search.search(user, nil, args["query"], opts), names)
+
+      {:ok, :similar} ->
+        with {:ok, note} <- similar_source(user, vaults, args["similar_to"]),
+             {:ok, ids} <- stored_points(note, args["similar_to"]) do
+          render_search(Search.similar(user, nil, ids, opts), names)
+        end
 
       {:error, _} = err ->
         err
@@ -122,6 +128,12 @@ defmodule Engram.MCP.Handlers do
 
       {:ok, :query} ->
         render_search(Search.search(user, vault, args["query"], build_search_opts(args)), %{})
+
+      {:ok, :similar} ->
+        with {:ok, note} <- similar_source(user, [vault], args["similar_to"]),
+             {:ok, ids} <- stored_points(note, args["similar_to"]) do
+          render_search(Search.similar(user, vault, ids, build_search_opts(args)), %{})
+        end
 
       {:error, _} = err ->
         err
@@ -1026,20 +1038,73 @@ defmodule Engram.MCP.Handlers do
 
   @search_filters ~w(tags folder type created_after created_before updated_after updated_before)
 
-  # `:recent` when query is blank AND similar_to is absent (Task 6 fills the
-  # `similar_to` branch). A blank query plus a ranking filter is a fixable
-  # error, not a silently-ignored one: the recent listing is unfiltered, so
-  # honoring the call would silently return the wrong answer to a filtered ask.
+  # `:recent` when query is blank AND similar_to is absent. `similar_to` and a
+  # non-blank query never combine: naming a source note AND asking a question
+  # is an ambiguous request, not a widened one. A blank query plus a ranking
+  # filter is a fixable error, not a silently-ignored one: the recent listing
+  # is unfiltered, so honoring the call would silently return the wrong answer
+  # to a filtered ask.
   defp search_kind(args) do
-    if String.trim(args["query"] || "") == "" do
-      case Enum.find(@search_filters, &(not is_nil(args[&1]))) do
-        nil -> {:ok, :recent}
-        p -> {:error, "#{p} needs a query or similar_to; omit it to list recently updated notes"}
-      end
-    else
-      {:ok, :query}
+    similar = args["similar_to"]
+    blank? = String.trim(args["query"] || "") == ""
+
+    cond do
+      is_binary(similar) and not blank? ->
+        {:error, "Pass query or similar_to, not both"}
+
+      is_binary(similar) and String.trim(similar) == "" ->
+        {:error, "similar_to must be a note path"}
+
+      is_binary(similar) ->
+        {:ok, :similar}
+
+      blank? ->
+        case Enum.find(@search_filters, &(not is_nil(args[&1]))) do
+          nil ->
+            {:ok, :recent}
+
+          p ->
+            {:error, "#{p} needs a query or similar_to; omit it to list recently updated notes"}
+        end
+
+      true ->
+        {:ok, :query}
     end
   end
+
+  # The source must be unambiguous: the same path can exist in several vaults.
+  defp similar_source(user, vaults, path) do
+    hits = for v <- vaults, {:ok, note} <- [Notes.get_note(user, v, path)], do: {note, v}
+
+    case hits do
+      [{note, _v}] ->
+        {:ok, note}
+
+      [] ->
+        {:error, "Note not found: #{path}"}
+
+      many ->
+        names = Enum.map_join(many, ", ", fn {_n, v} -> v.name end)
+        {:error, "#{path} exists in #{length(many)} vaults (#{names}); pass vault_id to pick one"}
+    end
+  end
+
+  # `dense_indexed_hash` is nil unless the last index pass wrote dense vectors
+  # (EmbedNote.stamp_embed_hash/3). Qdrant rejects a recommend whose positive
+  # point has no dense vector, so refuse here with a message the caller can act on.
+  defp stored_points(%{dense_indexed_hash: nil}, path), do: {:error, not_embedded(path)}
+
+  defp stored_points(note, path) do
+    case Engram.Indexing.point_ids_for_note(note) do
+      [] -> {:error, not_embedded(path)}
+      ids -> {:ok, ids}
+    end
+  end
+
+  defp not_embedded(path),
+    do:
+      "#{path} has no stored embedding yet (it may be new, empty, or not embedded on " <>
+        "your plan); try again later, or use query instead"
 
   # Same result shape as render_search/2; vault labels only in cross-vault mode.
   defp render_recent(pairs, names) do
