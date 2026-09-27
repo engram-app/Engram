@@ -889,7 +889,7 @@ defmodule Engram.MCP.Handlers do
   # found, and every following section got swallowed into the replacement.
   # Refusing the out-of-range level outright (before any heading search)
   # removes the mismatch instead of also clamping the end-scan to match.
-  # The finder (`Engram.MCP.Sections.find/3`) is fence- and frontmatter-aware;
+  # The finder (`Engram.MCP.Sections.find/3`) is a CommonMark parser;
   # the level guard still refuses 0 or 7+ before any lookup.
   defp replace_section(_user, _vault, _path, _heading, _new_content, level, _op)
        when level < 1 or level > 6 do
@@ -904,8 +904,8 @@ defmodule Engram.MCP.Handlers do
           # The section was not updated, so this is not a success. Was `:ok`.
           {:error, "Heading not found: #{String.duplicate("#", level)} #{heading}"}
 
-        # Defense in depth: a genuine unclosed comment (%% or <!--) swallowed
-        # everything up to EOF, so `stop` is not a real section boundary.
+        # Defense in depth: an unclosed comment (%% or <!--) swallowed a
+        # heading up to EOF, so `stop` is not a real section boundary.
         # Replacing through it would silently delete whatever the comment
         # ate. Refuse instead of guessing; the write must not happen.
         {:ok, %{unclosed_comment_at: line}} when is_integer(line) ->

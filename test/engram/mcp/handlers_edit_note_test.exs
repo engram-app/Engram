@@ -551,4 +551,29 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     {:ok, out} = Notes.authoritative_content(u, note)
     assert out == content
   end
+
+  # C1 end to end: the "## B" after a comment closed by a backticked "-->"
+  # must survive a replace of A.
+  test "replace_section on A keeps B after an HTML comment closed inside backticks", %{
+    user: u,
+    vault: v
+  } do
+    content = "## A\nbody\n<!--\na `-->` b\n## B\nimportant\n<!-- c -->\n"
+
+    {:ok, _} =
+      Notes.upsert_note(u, v, %{"path" => "C1.md", "content" => content, "mtime" => 15.0})
+
+    assert {:ok, _, _} =
+             Handlers.handle("edit_note", u, v, %{
+               "path" => "C1.md",
+               "mode" => "replace_section",
+               "heading" => "A",
+               "content" => "new"
+             })
+
+    {:ok, note} = Notes.get_note(u, v, "C1.md")
+
+    assert {:ok, "## A\nnew\n## B\nimportant\n<!-- c -->\n"} =
+             Notes.authoritative_content(u, note)
+  end
 end

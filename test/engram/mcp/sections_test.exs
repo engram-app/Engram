@@ -344,11 +344,13 @@ defmodule Engram.MCP.SectionsTest do
   # when it opens an actual HTML block (script/pre/style/textarea, a
   # comment, a processing instruction, a declaration, CDATA, or a
   # block-level tag) -- inline HTML and autolinks are just paragraph text.
+  # Heading text is the RENDERED inline text (CommonMark parser): an
+  # autolink renders as its URL, without the angle brackets.
   test "an autolink does not block a setext paragraph" do
     content = "<https://x.com> rocks\n---"
 
     assert Sections.headings(content) |> Enum.map(&{&1.level, &1.text}) ==
-             [{2, "<https://x.com> rocks"}]
+             [{2, "https://x.com rocks"}]
   end
 
   test "inline HTML does not block a setext paragraph" do
@@ -467,5 +469,110 @@ defmodule Engram.MCP.SectionsTest do
     content = "## A\n%%\nunclosed\n\n## B\nkeep\n"
     assert {:ok, out} = Sections.insert(content, "A", 2, "start", "n1")
     assert out =~ "## A\nn1\n%%"
+  end
+
+  # --- CommonMark parser (MDEx) regressions: review findings C1, I1, I2, I3 ---
+
+  defp lt(content), do: Sections.headings(content) |> Enum.map(&{&1.line, &1.text})
+
+  # C1: HTML comment content is not markdown, so a "-->" inside what looks
+  # like a code span still closes the comment.
+  test "a --> inside backticks closes an open HTML comment" do
+    content = "## A\nbody\n<!--\na `-->` b\n## B\nimportant\n<!-- c -->\n"
+    assert lt(content) == [{0, "A"}, {4, "B"}]
+    assert {:ok, %{stop: 4, unclosed_comment_at: nil}} = Sections.find(content, "A", 2)
+  end
+
+  # I1: a fence closer indented past the list item's content column still
+  # closes the fence (up to 3 spaces relative to the content column).
+  test "a fence closer indented relative to a list item's content column closes the fence" do
+    content = "## A\n1. step\n   #{@bt}bash\n   run\n    #{@bt}\n## B\nimportant\n"
+    assert lt(content) == [{0, "A"}, {5, "B"}]
+    assert {:ok, %{stop: 5}} = Sections.find(content, "A", 2)
+  end
+
+  test "an unclosed HTML comment that swallows a heading is flagged" do
+    content = "## A\n<!--\n## B\nkeep\n"
+    assert lt(content) == [{0, "A"}]
+    assert {:ok, %{unclosed_comment_at: 1}} = Sections.find(content, "A", 2)
+  end
+
+  test "an unclosed comment that swallows no ending heading is not flagged" do
+    assert {:ok, %{unclosed_comment_at: nil}} = Sections.find("## A\n%%\nnote\n### c\n", "A", 2)
+    assert {:ok, %{unclosed_comment_at: nil}} = Sections.find("## A\n<!--\nnote\n", "A", 2)
+  end
+
+  # I2: lazy continuation lines belong to the list item / blockquote
+  # paragraph, so the underline after them is not a setext underline.
+  test "a --- after a list item's continuation line is a thematic break, not setext" do
+    assert lt("## A\n- first point\n  more about it\n---\n\nrest of A\n## B") ==
+             [{0, "A"}, {6, "B"}]
+  end
+
+  test "an === after a blockquote lazy continuation is not setext" do
+    assert lt("## A\n> quote\nlazy line\n===") == [{0, "A"}]
+  end
+
+  # Only document-level headings are section boundaries.
+  test "headings inside a blockquote, callout or list item do not count" do
+    content = "## A\n> ## Q\n\n> [!note] T\n> ## C\n\n- ## L\n  ## L2\n\n## B\n"
+    assert lt(content) == [{0, "A"}, {9, "B"}]
+    assert {:ok, text} = Sections.section(content, "A")
+    assert text =~ "> ## Q"
+    assert text =~ "  ## L2"
+  end
+
+  test "a GFM table does not produce a setext heading and does not end a section" do
+    content = "## A\n| h |\n| --- |\n| v |\n\nx\n===\n## B\n"
+
+    assert Sections.headings(content) |> Enum.map(&{&1.line, &1.level, &1.text}) ==
+             [{0, 2, "A"}, {5, 1, "x"}, {7, 2, "B"}]
+  end
+
+  test "%% inside a fenced code block does not open a comment" do
+    content = "## A\n#{@bt}\n%%\n#{@bt}\n## B\nkeep\n"
+    assert lt(content) == [{0, "A"}, {4, "B"}]
+    assert {:ok, %{unclosed_comment_at: nil}} = Sections.find(content, "A", 2)
+  end
+
+  test "an inline %% comment masks only its own text, and an unclosed one hides the rest" do
+    content = "## A %% hidden %%\n%% x\n## H\n%%\n## B %% y\n## C"
+    assert lt(content) == [{0, "A"}, {4, "B"}]
+  end
+
+  test "heading text is the rendered inline text" do
+    assert lt("## **Bold** `code` ~~s~~ [l](u) \\# &amp; ##\n") == [{0, "Bold code s l # &"}]
+  end
+
+  test "a lone CR is not a line break for line numbering" do
+    assert lt("a\rb\n## H\n") == [{1, "H"}]
+  end
+
+  test "CRLF frontmatter is skipped and line numbers are preserved" do
+    assert lt("---\r\ntitle: x\r\n---\r\n# X\r\n") == [{3, "X"}]
+  end
+
+  # I3: a long run of spaces must not make a heading silently disappear
+  # (the old regex hit PCRE's match limit and returned no match).
+  test "a heading with 12000 spaces inside is still a heading" do
+    content = "## A\na\n## B" <> String.duplicate(" ", 12_000) <> "x\nkeep\n"
+    assert [{0, "A"}, {2, b}] = lt(content)
+    assert String.starts_with?(b, "B ") and String.ends_with?(b, " x")
+    assert {:ok, %{stop: 2}} = Sections.find(content, "A", 2)
+  end
+
+  # I3: the old scanner took ~26 s on a 9 MB note.
+  test "headings on a ~9 MB note of ordinary prose finishes in under 2 seconds" do
+    para =
+      String.duplicate("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do. ", 12) <>
+        "\n\n"
+
+    big =
+      ["## Heading\n\n", para, para, para] |> Stream.cycle() |> Enum.take(16_000) |> Enum.join()
+
+    assert byte_size(big) > 9_000_000
+    {micros, hs} = :timer.tc(fn -> Sections.headings(big) end)
+    assert length(hs) == 4_000
+    assert micros < 2_000_000, "took #{div(micros, 1000)} ms"
   end
 end

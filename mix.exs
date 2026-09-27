@@ -191,6 +191,10 @@ defmodule Engram.MixProject do
       {:lingua, "~> 0.3.0"},
       {:rustler_precompiled, "~> 0.9.0", override: true},
 
+      # CommonMark parser (comrak Rust NIF, precompiled) for MCP section
+      # boundaries (Engram.MCP.Sections).
+      {:mdex, "~> 0.14.0"},
+
       # Test
       {:ex_machina, "~> 2.8", only: :test},
       {:mox, "~> 1.1", only: :test},

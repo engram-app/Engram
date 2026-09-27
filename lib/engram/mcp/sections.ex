@@ -3,12 +3,23 @@ defmodule Engram.MCP.Sections do
   Markdown heading lookup shared by edit_note (replace_section,
   insert_section) and get_notes (section, outline). Pure: string in, data out.
 
-  Lines inside the frontmatter block or a fenced code block are never
-  headings, so a YAML `# comment` or a shell `# comment` in a fence can
-  neither be matched nor end a section early. Setext headings (a paragraph
-  line underlined with `=`/`-`) are recognized alongside ATX (`#`) headings.
-  A leading UTF-8 BOM is ignored for scanning only; line numbers and any
-  content this module returns are unaffected by it.
+  Where a heading is, and where its section ends, comes from a CommonMark
+  parser (MDEx, i.e. comrak) with source positions, never from a hand-written
+  line scanner: every scanner bug here was a silent data-loss bug, because a
+  missed next heading makes replace_section overwrite the rest of the note.
+
+  Only DOCUMENT-LEVEL headings count. A heading inside a blockquote, callout
+  (`> [!note]`) or list item is content of that block, not a section
+  boundary. Two things CommonMark does not know about are handled before
+  parsing, both preserving line numbers:
+
+    * the frontmatter block (`Engram.Notes.Frontmatter.split/1`, the same
+      rule the rest of Engram uses) is blanked out;
+    * Obsidian `%% comments %%` outside code are masked to spaces (an
+      unclosed `%%` hides the rest of the note, as in Obsidian).
+
+  A leading UTF-8 BOM is ignored; line numbers index
+  `String.split(content, "\\n")` and are unaffected by it.
   """
 
   alias Engram.Notes.Frontmatter
@@ -17,79 +28,15 @@ defmodule Engram.MCP.Sections do
 
   @bom "﻿"
 
-  # `\#` because `#{` would interpolate. Leading ` {0,3}` mirrors CommonMark:
-  # at most 3 spaces of indent, 4+ (or any tab, which is a 4-column stop) is
-  # an indented code line, not a heading (same bound as the fence and setext
-  # regexes below). The trailing `(?:\s+#+)?` strips an optional ATX closing
-  # sequence ("## Title ##" -> "Title"); it must be preceded by whitespace, so
-  # "## Title##" keeps the hashes as text. Trailing `\s*` also eats a CRLF `\r`.
-  @heading_re ~r/^ {0,3}(\#{1,6})(?:\s+(.*?))?(?:\s+#+)?\s*$/
-
-  # Opening fence: captures the marker run and the rest of the line (info
-  # string). Closing fence: no info string allowed, only trailing spaces/tabs
-  # and an optional \r.
-  @fence_open_re ~r/^ {0,3}(`{3,}|~{3,})(.*)$/
-  @fence_close_re ~r/^ {0,3}(`{3,}|~{3,})[ \t]*\r?$/
-
-  # A setext underline: 0-3 space indent, then a run of ONLY `=` (level 1) or
-  # ONLY `-` (level 2), optional trailing spaces/tabs, optional \r. "- item"
-  # fails this (has non-underline text after the dash), so list items are
-  # never mistaken for one. "- - -" (spaced dashes) also fails: `-+` is a
-  # contiguous run, so it does not match the FULL line.
-  @setext_re ~r/^ {0,3}(=+|-+)[ \t]*\r?$/
-
-  # Lines that CANNOT start (or, for most, continue) a setext paragraph:
-  #
-  # - An indented code line (4+ spaces, or any tab -- a tab is a 4-column
-  #   stop). This one is different from the rest: it only blocks the FIRST
-  #   line of a paragraph. On a CONTINUATION line (there's already a `prev`
-  #   paragraph), CommonMark treats it as a "lazy continuation" -- still
-  #   plain text, just indented.
-  # - After stripping up to 3 leading spaces: a bullet list marker (with or
-  #   without content -- an empty item like "-" still starts a list), a
-  #   blockquote marker, or the start of a real HTML block (see
-  #   @html_block_start_re below -- NOT any line starting with "<": inline
-  #   HTML and autolinks are ordinary paragraph text).
-  # - An ordered list marker only blocks when there's no `prev` paragraph
-  #   (any list can START a block) OR when it starts at 1 (only a
-  #   start-at-1 ordered list can INTERRUPT an existing paragraph; "2. b"
-  #   mid-paragraph is lazy continuation text, marker included verbatim).
-  @indented_code_re ~r/^(?: {4,}|\t)/
-  @bullet_re ~r/^[-+*](?:[ \t]|$)/
-  @blockquote_re ~r/^>/
-  @ordered_re ~r/^(\d{1,9})[.)](?:[ \t]|$)/
-  @leading_indent_re ~r/^ {0,3}/
-
-  # CommonMark 4.6 HTML block start conditions (types 1-6), collapsed into
-  # one regex, applied to the line with its indent already stripped:
-  # type 1 (script/pre/style/textarea), type 2 (a comment -- also handled as
-  # its own multi-line scan state, see html_comment_open?/1, but a
-  # self-closing single-line comment falls through to here), type 3 (a
-  # processing instruction), type 4 (a declaration, e.g. "<!DOCTYPE"), type
-  # 5 (CDATA), and type 6 (an opening or closing block-level tag from
-  # CommonMark's fixed list). Inline tags like "<b>" or "<a>" match none of
-  # these, so they're ordinary paragraph text.
-  @html_block_tags ~w(
-    address article aside base basefont blockquote body caption center col
-    colgroup dd details dialog dir div dl dt fieldset figcaption figure
-    footer form frame frameset h1 h2 h3 h4 h5 h6 head header hr html iframe
-    legend li link main menu menuitem nav noframes ol optgroup option p
-    param section summary table tbody td tfoot th thead title tr track ul
-  ) |> Enum.join("|")
-
-  @html_block_start_re ~r/^(?:<(?:script|pre|style|textarea)(?:[\s>]|$)|<!--|<\?|<![A-Za-z]|<!\[CDATA\[|<\/?(?:#{@html_block_tags})(?:[\s>]|\/>|$))/i
-
-  # An inline code span: a backtick run, then anything (lazily) up to the
-  # NEXT occurrence of that exact same run. "%%" or "<!--" inside one is
-  # literal text in Obsidian/CommonMark, never a comment delimiter -- strip
-  # code spans before any comment-open/close check runs.
-  @code_span_re ~r/(`+).*?\1/
+  # GFM tables (so a delimiter row is never a setext underline) and
+  # strikethrough (heading text), matching what Obsidian renders. Raw HTML
+  # stays at the CommonMark default. Frontmatter is NOT comrak's
+  # front_matter_delimiter: Frontmatter.split/1 is Engram's one definition of
+  # it (CRLF fences included), so it is blanked out before parsing instead.
+  @parse_opts [extension: [table: true, strikethrough: true]]
 
   @spec headings(String.t()) :: [heading()]
-  def headings(content) do
-    {found, _state, _prev} = scan_all(content)
-    Enum.reverse(found)
-  end
+  def headings(content), do: analyze(content).headings
 
   @spec find(String.t(), String.t(), 1..6 | nil) ::
           {:ok,
@@ -101,8 +48,7 @@ defmodule Engram.MCP.Sections do
            }}
           | :error
   def find(content, heading, level) do
-    {found, state, _prev} = scan_all(content)
-    hs = Enum.reverse(found)
+    %{headings: hs, blocker: blocker} = analyze(content)
     want = String.trim(heading)
 
     case Enum.find(hs, &(&1.text == want and (is_nil(level) or &1.level == level))) do
@@ -110,43 +56,32 @@ defmodule Engram.MCP.Sections do
         :error
 
       h ->
-        line_count = content |> String.split("\n") |> length()
+        eof = content |> String.split("\n") |> length()
 
         stop =
-          Enum.find_value(hs, line_count, fn x ->
-            x.line > h.line and x.level <= h.level and x.line
-          end)
+          Enum.find_value(hs, eof, fn x -> x.line > h.line and x.level <= h.level and x.line end)
 
-        # Defense in depth: the scan can end still "inside" an unclosed
-        # HTML/%% comment (see scan/2 below), which silently swallows
-        # everything after it -- including headings that would otherwise
-        # have ended this section. When that's WHY `stop` reached EOF for
-        # THIS heading, flag it so a write refuses instead of silently
-        # deleting or misplacing whatever the comment ate.
-        unclosed =
-          case state do
-            {kind, start}
-            when kind in [:html_comment, :obsidian_comment] and stop == line_count and
-                   start >= h.line ->
-              start
-
-            _ ->
-              nil
-          end
-
-        {:ok, %{start: h.line, stop: stop, span: h.span, unclosed_comment_at: unclosed}}
+        {:ok,
+         %{
+           start: h.line,
+           stop: stop,
+           span: h.span,
+           unclosed_comment_at: unclosed(blocker, h, stop == eof, content)
+         }}
     end
   end
 
-  defp scan_all(content) do
-    scan_content = String.replace_prefix(content, @bom, "")
-
-    scan_content
-    |> String.split("\n")
-    |> Enum.with_index()
-    |> Enum.drop(frontmatter_lines(scan_content))
-    |> Enum.reduce({[], nil, nil}, &scan/2)
+  # Defense in depth: an unclosed HTML comment or `%%` comment runs to EOF and swallows every heading after it. When that is WHY this
+  # section reaches EOF (the swallowed text holds a heading that would have
+  # ended it), flag it so a write refuses instead of deleting or misplacing
+  # what the block ate. An unclosed block with no such heading after it is
+  # harmless to this section and is not flagged.
+  defp unclosed({:comment, at}, h, true, content) when at >= h.line do
+    rest = content |> String.split("\n") |> Enum.drop(at + 1) |> Enum.join("\n")
+    if Enum.any?(scan(rest).headings, &(&1.level <= h.level)), do: at
   end
+
+  defp unclosed(_blocker, _h, _at_eof, _content), do: nil
 
   @spec section(String.t(), String.t()) :: {:ok, String.t()} | :error
   def section(content, heading) do
@@ -166,15 +101,16 @@ defmodule Engram.MCP.Sections do
   # heading). "end": after the section's last non-blank line, so blank lines
   # before the next heading stay where they are.
   #
-  # "start" never depends on `stop`, so it's unaffected by a genuine unclosed
-  # comment further down; "end" does depend on it (it back-scans from `e`),
-  # so it refuses rather than risk inserting past content the comment ate.
+  # "start" never depends on `stop`, so it's unaffected by an unclosed block
+  # further down; "end" does depend on it (it back-scans from `e`), so it
+  # refuses rather than risk inserting past content the block ate.
   @spec insert(String.t(), String.t(), 1..6, String.t(), String.t()) ::
-          {:ok, String.t()} | :error | {:error, {:unclosed_comment, non_neg_integer()}}
+          {:ok, String.t()}
+          | :error
+          | {:error, {:unclosed_comment, non_neg_integer()}}
   def insert(content, heading, level, position, text) do
-    with {:ok, %{start: s, stop: e, span: span, unclosed_comment_at: unclosed}} <-
-           find(content, heading, level),
-         :ok <- refuse_unclosed(position, unclosed) do
+    with {:ok, %{start: s, stop: e, span: span} = found} <- find(content, heading, level),
+         :ok <- refuse_unclosed(position, found) do
       lines = String.split(content, "\n")
       text = String.trim_trailing(text, "\n")
 
@@ -199,8 +135,10 @@ defmodule Engram.MCP.Sections do
     end
   end
 
-  defp refuse_unclosed("end", line) when is_integer(line), do: {:error, {:unclosed_comment, line}}
-  defp refuse_unclosed(_position, _line), do: :ok
+  defp refuse_unclosed("end", %{unclosed_comment_at: l}) when is_integer(l),
+    do: {:error, {:unclosed_comment, l}}
+
+  defp refuse_unclosed(_position, _found), do: :ok
 
   # Makes `text`'s line endings match `source`'s (the note being edited).
   # Per-line, so it only ever touches the FRAGMENT being written -- never the
@@ -251,184 +189,158 @@ defmodule Engram.MCP.Sections do
     end
   end
 
-  # Not currently fenced/commented: an opening fence, an unclosed HTML
-  # comment, or an unclosed Obsidian %% comment starts a block; otherwise
-  # look for an ATX or setext heading (scan_open/4). Inside a fence, only a
-  # closing fence (same char, no info string, length >= opener) ends it.
-  # Inside an HTML or %% comment, only a line CONTAINING the closer ends it
-  # (the closer need not START the line, unlike a fence, so each gets its
-  # own state rather than reusing fence_close/1). Everything inside any of
-  # these, including a `---`/`===` line, is invisible to heading detection.
-  defp scan({line, i}, {acc, nil, prev}) do
-    cond do
-      (marker = fence_open(line)) != nil -> {acc, marker, nil}
-      html_comment_open?(line) -> {acc, {:html_comment, i}, nil}
-      obsidian_comment_open?(line) -> {acc, {:obsidian_comment, i}, nil}
-      true -> scan_open(line, i, acc, prev)
-    end
+  # -- Parsing --
+
+  defp analyze(content) do
+    content |> String.replace_prefix(@bom, "") |> blank_frontmatter() |> scan()
   end
 
-  defp scan({line, _i}, {acc, {:html_comment, start}, _prev}) do
-    if String.contains?(strip_code_spans(line), "-->"),
-      do: {acc, nil, nil},
-      else: {acc, {:html_comment, start}, nil}
-  end
-
-  defp scan({line, _i}, {acc, {:obsidian_comment, start}, _prev}) do
-    if String.contains?(strip_code_spans(line), "%%"),
-      do: {acc, nil, nil},
-      else: {acc, {:obsidian_comment, start}, nil}
-  end
-
-  defp scan({line, _i}, {acc, fence, _prev}) do
-    case fence_close(line) do
-      nil -> {acc, fence, nil}
-      marker -> if closes?(fence, marker), do: {acc, nil, nil}, else: {acc, fence, nil}
-    end
-  end
-
-  defp html_comment_open?(line) do
-    trimmed = line |> strip_code_spans() |> then(&Regex.replace(@leading_indent_re, &1, ""))
-    String.starts_with?(trimmed, "<!--") and not String.contains?(trimmed, "-->")
-  end
-
-  # A line with an ODD number of "%%" occurrences has an opener with no
-  # matching closer on the same line (e.g. a lone "%%", or "%% starts a
-  # block"). A single self-contained "%% note %%" has an EVEN count (open +
-  # close both present) and does not start a multi-line block. Code spans are
-  # stripped first: a "%%" inside `` `...` `` is literal text in Obsidian,
-  # never a comment delimiter (same rule CommonMark uses for "<!--" inside a
-  # code span, handled the same way in html_comment_open?/1 above).
-  defp obsidian_comment_open?(line) do
-    line |> strip_code_spans() |> String.split("%%") |> length() |> Kernel.-(1) |> rem(2) == 1
-  end
-
-  defp strip_code_spans(line), do: Regex.replace(@code_span_re, line, "")
-
-  defp scan_open(line, i, acc, prev) do
-    case Regex.run(@heading_re, line) do
-      [_, hashes] -> {[atx(i, hashes, "") | acc], nil, nil}
-      [_, hashes, text] -> {[atx(i, hashes, text) | acc], nil, nil}
-      nil -> scan_text(line, i, acc, prev)
-    end
-  end
-
-  defp atx(i, hashes, text), do: %{line: i, level: String.length(hashes), text: text, span: 1}
-
-  # A setext heading only forms when the immediately preceding line(s) were
-  # plain paragraph text (`prev` is `{:para, start_line, texts}`, `texts`
-  # accumulating one entry per consecutive paragraph line, most recent
-  # first). A blank line, an ATX heading, a fence (open or close), or any
-  # line `paragraph_line?/2` rejects all reset `prev` to `nil`, so a `---`
-  # right after any of those is a thematic break, not a heading -- and it
-  # does NOT become a new paragraph candidate itself, so two underline-shaped
-  # lines in a row can't chain into a heading either. The heading's `line` is
-  # the FIRST paragraph line, `span` covers every paragraph line plus the
-  # underline, and `text` joins the paragraph lines with a single space.
-  defp scan_text(line, i, acc, prev) do
-    cond do
-      String.trim(line) == "" ->
-        {acc, nil, nil}
-
-      (level = setext_level(line)) != nil ->
-        case prev do
-          {:para, start, texts} ->
-            text = texts |> Enum.reverse() |> Enum.join(" ")
-            {[%{line: start, level: level, text: text, span: length(texts) + 1} | acc], nil, nil}
-
-          nil ->
-            {acc, nil, nil}
-        end
-
-      paragraph_line?(line, prev) ->
-        case prev do
-          {:para, start, texts} -> {acc, nil, {:para, start, [String.trim(line) | texts]}}
-          nil -> {acc, nil, {:para, i, [String.trim(line)]}}
-        end
-
-      true ->
-        {acc, nil, nil}
-    end
-  end
-
-  defp setext_level(line) do
-    case Regex.run(@setext_re, line) do
-      [_, run] -> if String.starts_with?(run, "="), do: 1, else: 2
-      nil -> nil
-    end
-  end
-
-  defp paragraph_line?(line, prev) do
-    if Regex.match?(@indented_code_re, line) do
-      # 4+ indent (or a tab) blocks only the FIRST line of a paragraph; a
-      # continuation line is a lazy continuation, still paragraph text.
-      match?({:para, _, _}, prev)
-    else
-      not blocks_paragraph?(Regex.replace(@leading_indent_re, line, ""), prev)
-    end
-  end
-
-  defp blocks_paragraph?(trimmed, prev) do
-    cond do
-      Regex.match?(@bullet_re, trimmed) ->
-        true
-
-      Regex.match?(@blockquote_re, trimmed) ->
-        true
-
-      Regex.match?(@html_block_start_re, trimmed) ->
-        true
-
-      true ->
-        case {Regex.run(@ordered_re, trimmed), prev} do
-          # No ongoing paragraph: any ordered marker (any start number)
-          # starts a list, never paragraph text.
-          {[_, _n], nil} -> true
-          # An ongoing paragraph: only a start-at-1 marker interrupts it;
-          # any other number is lazy continuation text (the marker stays
-          # in the joined text).
-          {[_, n], {:para, _, _}} -> n == "1"
-          {nil, _} -> false
-        end
-    end
-  end
-
-  # A backtick fence's info string may not itself contain a backtick
-  # (CommonMark: ambiguous with inline code spans); a tilde fence's may
-  # contain anything, backticks included.
-  defp fence_open(line) do
-    case Regex.run(@fence_open_re, line) do
-      [_, marker, rest] ->
-        if String.starts_with?(marker, "`") and String.contains?(rest, "`"), do: nil, else: marker
-
-      nil ->
-        nil
-    end
-  end
-
-  defp fence_close(line) do
-    case Regex.run(@fence_close_re, line) do
-      [_, marker] -> marker
-      nil -> nil
-    end
-  end
-
-  # A fence closes on the same character, at least as long as the opener.
-  defp closes?(open, marker),
-    do:
-      String.first(open) == String.first(marker) and
-        String.length(marker) >= String.length(open)
-
-  # Lines taken by the frontmatter block, so the scan starts after it.
-  defp frontmatter_lines(content) do
-    case Frontmatter.split(content) do
+  # Replaces the frontmatter block with the same number of empty lines.
+  defp blank_frontmatter(text) do
+    case Frontmatter.split(text) do
       {nil, _body} ->
-        0
+        text
 
       {_block, body} ->
-        prefix = String.replace_suffix(content, body, "")
-        n = prefix |> String.split("\n") |> length()
-        if String.ends_with?(prefix, "\n"), do: n - 1, else: n
+        prefix = binary_part(text, 0, byte_size(text) - byte_size(body))
+        String.duplicate("\n", length(:binary.matches(prefix, "\n"))) <> body
     end
+  end
+
+  # `text` must already be free of BOM and frontmatter. Returns the
+  # document-level headings plus the block (if any) left open at EOF.
+  defp scan(text) do
+    # CommonMark also ends a line at a lone "\r"; callers count lines by
+    # "\n" only, so a lone "\r" becomes a space (same byte offsets).
+    text = String.replace(text, ~r/\r(?!\n)/, " ")
+    doc = parse(text)
+    {doc, pct_open} = mask_obsidian_comments(text, doc)
+
+    %{
+      headings: for(%MDEx.Heading{} = h <- doc.nodes, do: to_heading(h)),
+      blocker: if(pct_open, do: {:comment, pct_open}, else: open_block(List.last(doc.nodes)))
+    }
+  end
+
+  defp parse(text), do: MDEx.parse_document!(text, @parse_opts)
+
+  defp to_heading(%MDEx.Heading{sourcepos: %{start: {l1, _}, end: {l2, _}}} = h) do
+    %{line: l1 - 1, level: h.level, text: String.trim(plain_text(h.nodes)), span: l2 - l1 + 1}
+  end
+
+  # Inline markup rendered to its text: `**B**` -> "B", `[l](u)` -> "l",
+  # a code span -> its content, a soft/hard break -> " ". Raw inline HTML
+  # keeps its literal (it is part of what the reader sees in the source).
+  defp plain_text(nodes) do
+    Enum.map_join(nodes, fn
+      %{literal: lit} -> lit
+      %MDEx.SoftBreak{} -> " "
+      %MDEx.LineBreak{} -> " "
+      %{nodes: children} -> plain_text(children)
+      _ -> ""
+    end)
+  end
+
+  # Only a TOP-level unclosed comment runs to EOF: one nested in a list item
+  # or blockquote ends with its container, which a column-0 heading closes.
+  defp open_block(%MDEx.HtmlBlock{block_type: 2, literal: lit, sourcepos: %{start: {l, _}}}) do
+    if String.contains?(lit, "-->"), do: nil, else: {:comment, l - 1}
+  end
+
+  defp open_block(_node), do: nil
+
+  # Obsidian `%%` comments: every `%%` outside code (a code block or an
+  # inline code span, per the first parse) toggles a comment; the regions
+  # are overwritten with spaces (newlines kept, so lines and byte offsets
+  # do not move) and the text re-parsed. An unclosed `%%` hides everything
+  # after it. Returns the re-parsed doc and the unclosed opener's line.
+  #
+  # ponytail: one pass. Code spans are taken from the UNmasked parse, so a
+  # backtick inside a `%%` comment can still pair with one after it and hide
+  # a later `%%`; fixing that needs a parse-mask-reparse loop to a fixed
+  # point, add it if it ever shows up in a real note.
+  defp mask_obsidian_comments(text, doc) do
+    case :binary.matches(text, "%%") do
+      [] ->
+        {doc, nil}
+
+      matches ->
+        starts = line_starts(text)
+        code = doc |> code_ranges(starts, []) |> Enum.reverse()
+
+        case matches |> Enum.map(&elem(&1, 0)) |> outside(code, []) do
+          [] ->
+            {doc, nil}
+
+          marks ->
+            {masked, open_at} = mask(text, marks)
+            open_line = open_at && line_of(starts, open_at)
+            {parse(masked), open_line}
+        end
+    end
+  end
+
+  # Byte offset of the start of each line (0-indexed line -> offset).
+  defp line_starts(text) do
+    [0 | for({at, _} <- :binary.matches(text, "\n"), do: at + 1)] |> List.to_tuple()
+  end
+
+  defp line_of(starts, offset) do
+    Enum.find(0..(tuple_size(starts) - 1)//1, fn i ->
+      i + 1 == tuple_size(starts) or elem(starts, i + 1) > offset
+    end)
+  end
+
+  # [{from, to}] byte ranges (to exclusive) of code, in document order.
+  # sourcepos columns are 1-based BYTE columns.
+  defp code_ranges(%MDEx.CodeBlock{sourcepos: %{start: {l1, _}, end: {l2, _}}}, starts, acc) do
+    to = if l2 < tuple_size(starts), do: elem(starts, l2), else: :infinity
+    [{elem(starts, l1 - 1), to} | acc]
+  end
+
+  defp code_ranges(%MDEx.Code{sourcepos: %{start: {l1, c1}, end: {l2, c2}}}, starts, acc) do
+    [{elem(starts, l1 - 1) + c1 - 1, elem(starts, l2 - 1) + c2} | acc]
+  end
+
+  defp code_ranges(%{nodes: nodes}, starts, acc),
+    do: Enum.reduce(nodes, acc, &code_ranges(&1, starts, &2))
+
+  defp code_ranges(_node, _starts, acc), do: acc
+
+  # Both lists are sorted: a merge walk, O(matches + ranges).
+  defp outside([], _code, acc), do: Enum.reverse(acc)
+  defp outside(ms, [{_from, to} | code], acc) when hd(ms) >= to, do: outside(ms, code, acc)
+  defp outside([m | ms], [{from, _} | _] = code, acc) when m >= from, do: outside(ms, code, acc)
+  defp outside([m | ms], code, acc), do: outside(ms, code, [m | acc])
+
+  # Pairs the marks (open, close, open, close, ...) and blanks each pair,
+  # delimiters included. An odd mark out blanks to EOF.
+  defp mask(text, marks), do: mask(text, marks, 0, [])
+
+  defp mask(text, [open, close | rest], pos, acc) do
+    acc = [
+      blank(binary_part(text, open, close + 2 - open)),
+      binary_part(text, pos, open - pos) | acc
+    ]
+
+    mask(text, rest, close + 2, acc)
+  end
+
+  defp mask(text, [open], pos, acc) do
+    tail = binary_part(text, open, byte_size(text) - open)
+
+    {IO.iodata_to_binary(Enum.reverse([blank(tail), binary_part(text, pos, open - pos) | acc])),
+     open}
+  end
+
+  defp mask(text, [], pos, acc) do
+    {IO.iodata_to_binary(Enum.reverse([binary_part(text, pos, byte_size(text) - pos) | acc])),
+     nil}
+  end
+
+  defp blank(part) do
+    part
+    |> String.split("\n")
+    |> Enum.map_intersperse("\n", &String.duplicate(" ", byte_size(&1)))
   end
 end
