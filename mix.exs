@@ -195,10 +195,10 @@ defmodule Engram.MixProject do
       # comrak as a precompiled Rust NIF. mdex_native directly, not the `mdex`
       # wrapper: Sections reads the native AST, and mdex's Elixir-side struct
       # conversion was ~4x the parse itself on dense markup.
-      # Pinned exactly: 0.x ships AST shape changes in patch releases, and
-      # Sections pattern-matches that AST (shape-contract test in
-      # test/engram/mcp/sections_test.exs).
-      {:mdex_native, "== 0.2.9"},
+      # 0.x can ship AST shape changes in patch releases, and Sections
+      # pattern-matches that AST: the shape-contract test in
+      # test/engram/mcp/sections_test.exs is the guard for any bump.
+      {:mdex_native, "~> 0.2.9"},
 
       # Test
       {:ex_machina, "~> 2.8", only: :test},

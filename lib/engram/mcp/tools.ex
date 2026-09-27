@@ -724,8 +724,9 @@ defmodule Engram.MCP.Tools do
                 "error" => %{
                   "type" => "string",
                   "description" =>
-                    "Only with outline: true, when this note's outline was not computed " <>
-                      "(note over 1 MB, or the call's 2 MB outline budget was used up)"
+                    "Only with outline: true, when this note's outline could not be computed " <>
+                      "(server busy, parse timed out, or invalid UTF-8); retry or read it " <>
+                      "without outline"
                 },
                 "backlinks" => %{
                   "type" => "array",

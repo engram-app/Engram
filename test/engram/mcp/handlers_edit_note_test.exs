@@ -772,26 +772,17 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     assert read!(u, v, "Amb.md") == content
   end
 
-  test "section edits on a note over 1 MB refuse with a fixable error", %{user: u, vault: v} do
-    content = put!(u, v, "Big.md", "## A\n" <> String.duplicate("x", 1_200_000) <> "\n")
+  test "section edits work on a note over 1 MB (no size cap)", %{user: u, vault: v} do
+    put!(u, v, "Big.md", "## A\n" <> String.duplicate("x", 1_200_000) <> "\n## B\nb\n")
 
-    for args <- [
-          %{"mode" => "replace_section", "heading" => "A", "content" => "n"},
-          %{"mode" => "insert_section", "heading" => "A", "content" => "n"}
-        ] do
-      assert {:error, msg} = edit(u, v, "Big.md", args)
-      assert msg =~ "too large for section edits or outline (1.2 MB, limit 1 MB)"
-    end
-
-    assert {:error, msg} =
-             Handlers.handle("update_section", u, v, %{
-               "path" => "Big.md",
+    assert {:ok, _, _} =
+             edit(u, v, "Big.md", %{
+               "mode" => "replace_section",
                "heading" => "A",
                "content" => "n"
              })
 
-    assert msg =~ "too large"
-    assert read!(u, v, "Big.md") == content
+    assert read!(u, v, "Big.md") == "## A\nn\n## B\nb\n"
   end
 
   # Fix round 2: a hidden setext heading used to be deleted by replace_section.

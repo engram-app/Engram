@@ -10,8 +10,9 @@ defmodule Engram.MCP.Sections do
 
   Only DOCUMENT-LEVEL headings count. A heading inside a blockquote, callout
   (`> [!note]`) or list item is content of that block, not a section
-  boundary. Every entry point refuses a note over 1 MB (`max_bytes/0`).
-  Two things CommonMark does not know about are handled before
+  boundary. Every parse runs through `Engram.MCP.ParseGate` (bounded
+  concurrency; `opts` pass through to it), so any function here can return
+  `{:error, :busy | :parse_timeout | :parse_failed}`. Two things CommonMark does not know about are handled before
   parsing, both preserving line numbers:
 
     * the frontmatter block (`Engram.Notes.Frontmatter.split/1`, the same
@@ -23,6 +24,7 @@ defmodule Engram.MCP.Sections do
   `String.split(content, "\\n")` and are unaffected by it.
   """
 
+  alias Engram.MCP.ParseGate
   alias Engram.Notes.Frontmatter
 
   @type heading :: %{line: non_neg_integer(), level: 1..6, text: String.t(), span: pos_integer()}
@@ -36,11 +38,6 @@ defmodule Engram.MCP.Sections do
   # it (CRLF fences included), so it is blanked out before parsing instead.
   @parse_opts [extension: [table: true, strikethrough: true]]
 
-  # Parsing is linear but not cheap (dense markup ~2 s/MB, pathological
-  # input far worse) and runs on the shared dirty CPU schedulers, so every
-  # entry point refuses a note past this size instead of parsing it.
-  @max_bytes 1_000_000
-
   # An ATX-heading-shaped line (0-3 spaces, 1-6 `#`, then space/tab/EOL).
   # Anchored with bounded quantifiers: no backtracking blowup.
   @atx_like ~r/^ {0,3}(\#{1,6})(?:[ \t\r]|$)/
@@ -49,16 +46,11 @@ defmodule Engram.MCP.Sections do
   # `-`, trailing spaces/tabs). Same bounded, anchored shape.
   @setext_like ~r/^ {0,3}(=+|-+)[ \t\r]*$/
 
-  @type too_large :: {:too_large, pos_integer()}
-  @type refusal :: :invalid_utf8 | too_large()
+  @type refusal :: :invalid_utf8 | ParseGate.error()
 
-  @doc "Largest note (bytes) any function here will parse."
-  @spec max_bytes() :: 1_000_000
-  def max_bytes, do: @max_bytes
-
-  @spec headings(String.t()) :: {:ok, [heading()]} | {:error, refusal()}
-  def headings(content) do
-    with :ok <- check_input(content), do: {:ok, public(analyze(content).headings)}
+  @spec headings(String.t(), keyword()) :: {:ok, [heading()]} | {:error, refusal()}
+  def headings(content, opts \\ []) do
+    with {:ok, a} <- analyze(content, opts), do: {:ok, public(a.headings)}
   end
 
   defp public(hs), do: Enum.map(hs, &Map.take(&1, [:line, :level, :text, :span]))
@@ -76,7 +68,7 @@ defmodule Engram.MCP.Sections do
   `%%` comment, a parser surprise) hid it, so `stop` may be past where the
   author thinks the section ends: writers must refuse.
   """
-  @spec find(String.t(), String.t(), 1..6 | nil) ::
+  @spec find(String.t(), String.t(), 1..6 | nil, keyword()) ::
           {:ok,
            %{
              start: non_neg_integer(),
@@ -86,8 +78,8 @@ defmodule Engram.MCP.Sections do
            }}
           | :error
           | {:error, :ambiguous | refusal()}
-  def find(content, heading, level) do
-    with :ok <- check_input(content), do: locate(content, analyze(content), heading, level)
+  def find(content, heading, level, opts \\ []) do
+    with {:ok, a} <- analyze(content, opts), do: locate(content, a, heading, level)
   end
 
   defp locate(content, a, heading, level) do
@@ -109,16 +101,6 @@ defmodule Engram.MCP.Sections do
          span: h.span,
          hidden_heading_at: hidden_heading(lines, h, stop, a)
        }}
-    end
-  end
-
-  # Size first (cheap, bounds the UTF-8 scan); invalid UTF-8 would make the
-  # NIF raise.
-  defp check_input(content) do
-    cond do
-      byte_size(content) > @max_bytes -> {:error, {:too_large, byte_size(content)}}
-      not String.valid?(content) -> {:error, :invalid_utf8}
-      true -> :ok
     end
   end
 
@@ -184,12 +166,11 @@ defmodule Engram.MCP.Sections do
 
   # A miss returns the note's headings from the same parse, so a caller
   # listing them does not parse the note a second time.
-  @spec section(String.t(), String.t()) ::
+  @spec section(String.t(), String.t(), keyword()) ::
           {:ok, String.t()}
           | {:error, :ambiguous | refusal() | {:not_found, [heading()]}}
-  def section(content, heading) do
-    with :ok <- check_input(content),
-         a = analyze(content),
+  def section(content, heading, opts \\ []) do
+    with {:ok, a} <- analyze(content, opts),
          {:ok, %{start: s, stop: e}} <- section_at(content, a, heading) do
       text =
         content
@@ -216,12 +197,12 @@ defmodule Engram.MCP.Sections do
   # "start" never depends on `stop`, so it's unaffected by a hidden heading
   # further down; "end" does depend on it (it back-scans from `e`), so it
   # refuses rather than risk inserting past content something hid.
-  @spec insert(String.t(), String.t(), 1..6, String.t(), String.t()) ::
+  @spec insert(String.t(), String.t(), 1..6, String.t(), String.t(), keyword()) ::
           {:ok, String.t()}
           | :error
           | {:error, :ambiguous | refusal() | {:hidden_heading, non_neg_integer()}}
-  def insert(content, heading, level, position, text) do
-    with {:ok, %{start: s, stop: e, span: span} = found} <- find(content, heading, level),
+  def insert(content, heading, level, position, text, opts \\ []) do
+    with {:ok, %{start: s, stop: e, span: span} = found} <- find(content, heading, level, opts),
          :ok <- refuse_hidden(position, found) do
       lines = String.split(content, "\n")
       text = String.trim_trailing(text, "\n")
@@ -303,8 +284,17 @@ defmodule Engram.MCP.Sections do
 
   # -- Parsing --
 
-  defp analyze(content) do
-    content |> String.replace_prefix(@bom, "") |> blank_frontmatter() |> scan()
+  # Invalid UTF-8 would make the NIF raise. The whole analysis runs in the
+  # gate's task, so only the small result (never the AST) is copied back.
+  defp analyze(content, opts) do
+    if String.valid?(content) do
+      ParseGate.run(
+        fn -> content |> String.replace_prefix(@bom, "") |> blank_frontmatter() |> scan() end,
+        opts
+      )
+    else
+      {:error, :invalid_utf8}
+    end
   end
 
   # Replaces the frontmatter block with the same number of empty lines.

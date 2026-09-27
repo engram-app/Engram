@@ -810,17 +810,17 @@ defmodule Engram.MCP.Handlers do
   defp section_error(heading, :ambiguous),
     do: "Heading '#{heading}' matches several headings; pass the exact heading text"
 
-  defp section_error(_heading, {:too_large, bytes}), do: too_large_msg(bytes)
+  defp section_error(_heading, :busy),
+    do: "The server is busy parsing other notes; try again shortly"
+
+  defp section_error(_heading, :parse_timeout),
+    do: "Parsing this note is taking too long; try again, or edit with replace_text"
+
+  defp section_error(_heading, :parse_failed),
+    do: "Parsing this note failed; edit with replace_text"
 
   defp section_error(_heading, :invalid_utf8),
     do: "This note contains invalid UTF-8; use edit_note replace_text"
-
-  defp too_large_msg(bytes) do
-    mb = Float.round(bytes / 1_000_000, 1)
-
-    "This note is too large for section edits or outline (#{mb} MB, limit 1 MB); " <>
-      "use edit_note replace_text or read the note with get_notes"
-  end
 
   defp tag_mode({:ok, text, structured}, mode, blanks),
     do: {:ok, text, structured |> Map.merge(blanks) |> Map.put("mode", mode)}
@@ -1750,39 +1750,30 @@ defmodule Engram.MCP.Handlers do
     end
   end
 
-  # Total note bytes one get_notes outline call may parse. Each note is
-  # also capped at Sections.max_bytes/0; past the budget a note gets an
-  # `error` entry instead of failing the whole call.
-  @outline_budget_bytes 2_000_000
-
   defp render_notes(user, fetched, outline?, links?) do
     {texts, notes} =
       fetched
-      |> Enum.map_reduce(@outline_budget_bytes, fn
-        {path, nil}, budget ->
-          {{"Note not found: #{path}", %{"path" => path, "found" => false}}, budget}
+      |> Enum.map(fn
+        {path, nil} ->
+          {"Note not found: #{path}", %{"path" => path, "found" => false}}
 
-        {_path, note}, budget ->
-          {{text, payload}, budget} =
+        {_path, note} ->
+          {text, payload} =
             if outline?,
-              do: outline_entry(note, budget),
-              else: {{format_get_note(note), note_payload(note)}, budget}
+              do: outline_entry(note),
+              else: {format_get_note(note), note_payload(note)}
 
           payload = Map.put(payload, "found", true)
 
           # One backlinks + outgoing query pair per note (N+1), not batched.
           # Fine at get_notes' 20-path cap; revisit only if that cap rises.
-          entry =
-            if links? do
-              {links, truncation} = links_payload(user, note)
-              {text <> "\n\n" <> format_links(links, truncation), Map.merge(payload, links)}
-            else
-              {text, payload}
-            end
-
-          {entry, budget}
+          if links? do
+            {links, truncation} = links_payload(user, note)
+            {text <> "\n\n" <> format_links(links, truncation), Map.merge(payload, links)}
+          else
+            {text, payload}
+          end
       end)
-      |> elem(0)
       |> Enum.unzip()
 
     {:ok, Enum.join(texts, "\n\n---\n\n"), %{"notes" => notes}}
@@ -1877,33 +1868,20 @@ defmodule Engram.MCP.Handlers do
   defp list_or_none([]), do: "none"
   defp list_or_none(items), do: Enum.join(items, ", ")
 
-  defp outline_entry(note, budget) do
-    content = note.content || ""
+  # A parse refusal (busy, timeout, invalid UTF-8) is a per-note `error`
+  # entry, so one note does not fail a whole multi-path call.
+  defp outline_entry(note) do
     base = note |> note_payload() |> Map.delete("content")
 
-    cond do
-      byte_size(content) > Sections.max_bytes() ->
-        outline_error(note, base, too_large_msg(byte_size(content)), budget)
+    case Sections.headings(note.content || "") do
+      {:ok, hs} ->
+        outline_ok(note, base, hs)
 
-      byte_size(content) > budget ->
-        msg =
-          "Outline skipped: this call already parsed its 2 MB outline budget; " <>
-            "request this note's outline in a separate call"
-
-        outline_error(note, base, msg, budget)
-
-      true ->
-        budget = budget - byte_size(content)
-
-        case Sections.headings(content) do
-          {:ok, hs} -> {outline_ok(note, base, hs), budget}
-          {:error, reason} -> outline_error(note, base, section_error(nil, reason), budget)
-        end
+      {:error, reason} ->
+        msg = section_error(nil, reason)
+        {"**Path:** #{note.path}\n#{msg}", Map.put(base, "error", msg)}
     end
   end
-
-  defp outline_error(note, base, msg, budget),
-    do: {{"**Path:** #{note.path}\n#{msg}", Map.put(base, "error", msg)}, budget}
 
   defp outline_ok(note, base, hs) do
     outline = Enum.map(hs, &%{"level" => &1.level, "heading" => &1.text})

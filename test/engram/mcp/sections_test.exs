@@ -589,33 +589,31 @@ defmodule Engram.MCP.SectionsTest do
     assert {:ok, %{stop: 2}} = Sections.find(content, "A", 2)
   end
 
-  # I3: the old scanner took ~26 s on a 9 MB note. Notes over 1 MB are now
-  # refused outright; one just under the cap must parse well within budget.
-  test "headings on a ~1 MB note of ordinary prose finishes in under 1 second" do
+  # I3: the old scanner took ~26 s on a 9 MB note. There is no size cap
+  # (concurrency is bounded by Engram.MCP.ParseGate instead), so a large note
+  # of ordinary prose must parse well within budget.
+  test "headings on a ~9 MB note of ordinary prose finishes in under 2 seconds" do
     para =
       String.duplicate("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do. ", 12) <>
         "\n\n"
 
     big =
-      ["## Heading\n\n", para, para, para] |> Stream.cycle() |> Enum.take(1_680) |> Enum.join()
+      ["## Heading\n\n", para, para, para] |> Stream.cycle() |> Enum.take(16_000) |> Enum.join()
 
-    assert byte_size(big) in 950_000..1_000_000
+    assert byte_size(big) > 9_000_000
     {micros, hs} = :timer.tc(fn -> headings!(big) end)
-    assert length(hs) == 420
-    assert micros < 1_000_000, "took #{div(micros, 1000)} ms"
+    assert length(hs) == 4_000
+    assert micros < 2_000_000, "took #{div(micros, 1000)} ms"
   end
 
   # --- Fix round (adversarial review of the MDEx swap) ---
 
-  test "every entry point refuses a note over 1 MB without parsing it" do
-    big = "## A\n" <> String.duplicate("x", 1_000_000)
-    n = byte_size(big)
-    assert Sections.headings(big) == {:error, {:too_large, n}}
-    assert Sections.find(big, "A", 2) == {:error, {:too_large, n}}
-    assert Sections.section(big, "A") == {:error, {:too_large, n}}
-    assert Sections.insert(big, "A", 2, "end", "y") == {:error, {:too_large, n}}
-    exact = "## A\n" <> String.duplicate("x", 1_000_000 - 5)
-    assert {:ok, [_]} = Sections.headings(exact)
+  test "a note over 1 MB is parsed and edited like any other (no size cap)" do
+    big = "## A\n" <> String.duplicate("x", 1_200_000) <> "\n## B\nb\n"
+    assert {:ok, [%{text: "A"}, %{text: "B", line: 2}]} = Sections.headings(big)
+    assert {:ok, %{start: 0, stop: 2}} = Sections.find(big, "A", 2)
+    assert {:ok, out} = Sections.insert(big, "A", 2, "start", "y")
+    assert String.starts_with?(out, "## A\ny\nxxx")
   end
 
   # F1: an unclosed HTML block of types 1, 3, 4, 5 (and 6/7, which end only
