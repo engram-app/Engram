@@ -433,9 +433,11 @@ defmodule Engram.MCP.Sections do
   #
   #   * `%%` comments: every `%%` outside code toggles a comment; an
   #     unclosed `%%` hides everything after it.
-  #   * `$$` display math: a line that is exactly `$$` (trimmed) opens a
-  #     block, the next such line closes it. Its lines are TeX, not markdown
-  #     (a `## x` inside is no heading). An unpaired `$$` is left alone.
+  #   * `$$` display math: `$$` tokens outside code, HTML blocks and `%%`
+  #     comments pair in order; a pair spanning lines masks those lines. Its
+  #     lines are TeX, not markdown (a `## x` inside is no heading). An odd
+  #     token count masks nothing: a guessed pairing that swallows a real
+  #     heading would also allow-list it, and a write would delete it.
   #     comrak's math_dollars extension does not help: it parses `$$` as
   #     INLINE math, after block structure has already made `## x` a heading.
   #
@@ -453,29 +455,25 @@ defmodule Engram.MCP.Sections do
       code = doc |> code_ranges(starts, []) |> Enum.reverse()
       marks = pct |> Enum.map(&elem(&1, 0)) |> outside(code, [])
       masked = if marks == [], do: text, else: mask(text, marks)
-      math = math_blocks(masked, starts, dollars, code)
+      math = math_blocks(masked, starts, dollars, doc)
       masked = blank_lines(masked, starts, math)
 
       if masked == text, do: {doc, []}, else: {parse(masked), math}
     end
   end
 
-  # [{open_line, close_line}] for `$$` lines outside code, paired in order.
-  defp math_blocks(text, starts, dollars, code) do
+  # [{open_line, close_line}] of multi-line `$$` pairs; [] when unbalanced.
+  defp math_blocks(text, starts, dollars, doc) do
+    skip = doc |> code_ranges(starts, [], true) |> Enum.reverse()
+
     dollars
     |> Enum.map(&elem(&1, 0))
-    |> outside(code, [])
-    |> Enum.map(&line_of(starts, &1))
-    |> Enum.dedup()
-    |> Enum.filter(&(line_text(text, starts, &1) |> String.trim() == "$$"))
-    |> Enum.chunk_every(2, 2, :discard)
-    |> Enum.map(fn [open, close] -> {open, close} end)
-  end
-
-  defp line_text(text, starts, l) do
-    from = elem(starts, l)
-    to = if l + 1 < tuple_size(starts), do: elem(starts, l + 1) - 1, else: byte_size(text)
-    binary_part(text, from, to - from)
+    |> outside(skip, [])
+    |> Enum.filter(&(binary_part(text, &1, 2) == "$$"))
+    |> then(&if(rem(length(&1), 2) == 0, do: &1, else: []))
+    |> Enum.chunk_every(2)
+    |> Enum.map(fn [open, close] -> {line_of(starts, open), line_of(starts, close)} end)
+    |> Enum.reject(fn {l1, l2} -> l1 == l2 end)
   end
 
   # Blanks whole line ranges in ONE pass (ranges sorted, disjoint).
@@ -514,10 +512,24 @@ defmodule Engram.MCP.Sections do
 
   # [{from, to}] byte ranges (to exclusive) of code, in document order.
   # sourcepos columns are 1-based BYTE columns.
+  # `html?` also counts HTML blocks as code (for `$$` pairing only).
+  defp code_ranges(node, starts, acc, html? \\ false)
+
+  defp code_ranges(
+         %MDExNative.Comrak.HtmlBlock{sourcepos: %{start: {l1, _}, end: {l2, _}}},
+         starts,
+         acc,
+         true
+       ) do
+    to = if l2 < tuple_size(starts), do: elem(starts, l2), else: :infinity
+    [{elem(starts, l1 - 1), to} | acc]
+  end
+
   defp code_ranges(
          %MDExNative.Comrak.CodeBlock{sourcepos: %{start: {l1, _}, end: {l2, _}}},
          starts,
-         acc
+         acc,
+         _html?
        ) do
     to = if l2 < tuple_size(starts), do: elem(starts, l2), else: :infinity
     [{elem(starts, l1 - 1), to} | acc]
@@ -526,15 +538,16 @@ defmodule Engram.MCP.Sections do
   defp code_ranges(
          %MDExNative.Comrak.Code{sourcepos: %{start: {l1, c1}, end: {l2, c2}}},
          starts,
-         acc
+         acc,
+         _html?
        ) do
     [{elem(starts, l1 - 1) + c1 - 1, elem(starts, l2 - 1) + c2} | acc]
   end
 
-  defp code_ranges(%{nodes: nodes}, starts, acc),
-    do: Enum.reduce(nodes, acc, &code_ranges(&1, starts, &2))
+  defp code_ranges(%{nodes: nodes}, starts, acc, html?),
+    do: Enum.reduce(nodes, acc, &code_ranges(&1, starts, &2, html?))
 
-  defp code_ranges(_node, _starts, acc), do: acc
+  defp code_ranges(_node, _starts, acc, _html?), do: acc
 
   # Both lists are sorted: a merge walk, O(matches + ranges).
   defp outside([], _code, acc), do: Enum.reverse(acc)

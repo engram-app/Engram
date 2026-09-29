@@ -827,4 +827,32 @@ defmodule Engram.MCP.SectionsTest do
   test "an unclosed $$ is left alone" do
     assert lt("## A\n$$\n## B\n") == [{0, "A"}, {2, "B"}]
   end
+
+  # A mis-paired $$ used to mask a real heading AND allow-list it, so a
+  # replace_section of A silently deleted B.
+  test "$$ inside an HTML comment or HTML block does not pair" do
+    for content <- [
+          "## A\n<!--\n$$\n-->\n## B\nb\n$$\n",
+          "## A\n<div>\n$$\n</div>\n\n## B\nb\n$$\n"
+        ] do
+      b = Enum.find_index(String.split(content, "\n"), &(&1 == "## B"))
+      assert {:ok, %{stop: ^b}} = Sections.find(content, "A", 2), inspect(content)
+    end
+  end
+
+  test "a $$ with text on its line is a delimiter too" do
+    content = "## A\n$$x\n$$\n## B\n$$\ny\n$$\n"
+    assert lt(content) == [{0, "A"}, {3, "B"}]
+    assert {:ok, %{stop: 3}} = Sections.find(content, "A", 2)
+  end
+
+  test "an odd number of $$ masks nothing" do
+    content = "## A\n$$\n## x\n$$\n$$\n## B\n"
+    assert lt(content) == [{0, "A"}, {2, "x"}, {5, "B"}]
+  end
+
+  test "inline $$math$$ on one line does not blank the line" do
+    content = "## A\ntext $$a$$\n---\n## B\n"
+    assert lt(content) == [{0, "A"}, {1, "text $$a$$"}, {3, "B"}]
+  end
 end
