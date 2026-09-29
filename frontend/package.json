@@ -83,7 +83,7 @@
 		"react": "^19.3.0",
 		"react-dom": "^19.3.0",
 		"react-markdown": "^10.1.0",
-		"react-pdf": "^10.5.0",
+		"react-pdf": "^11.0.0",
 		"react-resizable-panels": "^4.13.2",
 		"react-router": "^8.4.0",
 		"rehype-autolink-headings": "^7.1.0",
