@@ -47,6 +47,21 @@ defmodule Engram.Accounts.Export.StreamerTest do
     :ok
   end
 
+  describe "no vault slug leaves the database" do
+    test "the S3 key is keyed by vault id and the part map carries no name" do
+      user = insert(:user) |> as_pro()
+      vault = insert(:vault, user: user)
+      _note = insert(:note, user: user, vault: vault)
+
+      {:ok, export} = Export.request(user)
+      assert :ok = perform_job(AccountExport, %{"export_id" => export.id})
+
+      [part] = Repo.reload!(export, skip_tenant_check: true).s3_keys
+      assert part["key"] == "exports/#{user.id}/#{export.id}/#{vault.id}.part-1of1.zip"
+      refute Map.has_key?(part, "vault_name")
+    end
+  end
+
   describe "attachments are not emitted (deferred to Task 13)" do
     test "vault with attachments produces a zip containing no attachment entries" do
       user = insert(:user) |> as_pro()

@@ -65,7 +65,9 @@ defmodule Engram.Workers.VaultDeletedEmail do
          label when is_binary(label) and label != "" <- decrypted.name do
       label
     else
-      _ -> vault.slug
+      # The slug derives from the name, so an unreadable name has no slug to
+      # fall back to either.
+      _ -> "Untitled vault"
     end
   end
 end

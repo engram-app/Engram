@@ -75,7 +75,9 @@ defmodule Engram.Workers.AccountExportTest do
         assert is_integer(entry["of"])
         assert is_integer(entry["size_bytes"])
         assert is_binary(entry["vault_id"])
-        assert is_binary(entry["vault_name"])
+        # No vault name or slug: both derive from the encrypted name, and
+        # this map is stored in plaintext on the export row.
+        refute Map.has_key?(entry, "vault_name")
       end)
 
       # The S3 sink actually has the blob.
@@ -84,9 +86,9 @@ defmodule Engram.Workers.AccountExportTest do
       assert byte_size(body) == size
     end
 
-    test "key encodes user_id, export_id, and vault slug" do
+    test "key encodes user_id, export_id, and vault id, never a slug" do
       user = insert(:user) |> as_pro()
-      vault = insert(:vault, user: user)
+      vault = insert(:vault, user: user, slug: "legacy-plaintext")
       _note = insert(:note, user: user, vault: vault)
 
       {:ok, export} = Export.request(user)
@@ -94,12 +96,9 @@ defmodule Engram.Workers.AccountExportTest do
 
       reloaded = Repo.reload!(export, skip_tenant_check: true)
 
-      Enum.each(reloaded.s3_keys, fn %{"key" => key, "vault_name" => name} ->
-        assert String.contains?(key, "exports/#{user.id}/")
-        assert String.contains?(key, "#{export.id}/")
-        assert String.contains?(key, vault.slug)
-        # Until Task 13 wires DEK-decrypt, vault_name mirrors the slug.
-        assert name == vault.slug
+      Enum.each(reloaded.s3_keys, fn %{"key" => key} ->
+        assert key == "exports/#{user.id}/#{export.id}/#{vault.id}.part-1of1.zip"
+        refute String.contains?(key, "legacy-plaintext")
       end)
     end
 
