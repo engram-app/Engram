@@ -91,6 +91,9 @@ defmodule Engram.Application do
         # observer that dies immediately, and `async_nolink` keeps a crashing
         # apply from taking the channel (and its other rooms) with it.
         {Task.Supervisor, name: Engram.TaskSupervisor},
+        # Bounds concurrent MCP markdown parses (dirty-CPU NIF). Its tasks run
+        # under Engram.TaskSupervisor, so it starts after it.
+        Engram.MCP.ParseGate,
         # Pyroscope continuous CPU profiler. Returns nil when GRAFANA_PYROSCOPE_URL
         # is unset (dev, test, self-host), and Enum.reject below filters it out.
         pyroscope_child(),

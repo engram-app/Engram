@@ -298,15 +298,30 @@ defmodule Engram.MCP.Tools do
       description:
         "Search your personal knowledge base. Finds relevant notes using semantic " <>
           "search. Searches across ALL your vaults by default; pass vault_id to limit " <>
-          "to one. Use when the user asks about their notes, vault, knowledge, or memory.",
+          "to one. Omit query to list the most recently updated notes instead. Pass " <>
+          "similar_to with a note path, instead of query, to find notes like that one. " <>
+          "Use when the user asks about their notes, vault, knowledge, or memory.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
-          "query" => %{"type" => "string", "description" => "Natural language search query"},
+          "query" => %{
+            "type" => "string",
+            "description" =>
+              "Natural language search query. Omit, or leave empty, to list the most " <>
+                "recently updated notes (filters then do not apply)."
+          },
+          "similar_to" => %{
+            "type" => "string",
+            "description" =>
+              "Path of a note, e.g. \"Projects/Alpha.md\": return notes similar to it, using " <>
+                "its stored embedding (no query needed). Do not combine with query. The note " <>
+                "itself is excluded; filters still apply."
+          },
           "limit" => %{
             "type" => "integer",
             "description" => "Maximum number of results (1-20, default 5)",
-            "default" => 5
+            "default" => 5,
+            "minimum" => 1
           },
           "tags" => %{
             "type" => "array",
@@ -357,8 +372,7 @@ defmodule Engram.MCP.Tools do
               "Result diversity (0 = most relevant, default tuned per plan; 1 = most varied). " <>
                 "Uses Maximal Marginal Relevance to reduce redundancy among results."
           }
-        },
-        "required" => ["query"]
+        }
       },
       outputSchema: %{
         "type" => "object",
@@ -639,7 +653,11 @@ defmodule Engram.MCP.Tools do
         "Retrieve the full content of multiple notes in one call (1-20 paths). " <>
           "Also reads a single note: pass one path. " <>
           "Use to inventory a folder (list_folder then get_notes) or to read a batch " <>
-          "of search results without N round-trips. Missing paths are reported inline.",
+          "of search results without N round-trips. Missing paths are reported inline. " <>
+          "To save tokens on long notes, pass outline: true for the heading list only, or " <>
+          "section with one path to read just that heading's section. Pass include_links: " <>
+          "true to also get, per note, the notes linking to it, the notes it links to, and " <>
+          "its links that point at no existing note.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
@@ -648,6 +666,24 @@ defmodule Engram.MCP.Tools do
             "items" => %{"type" => "string"},
             "description" =>
               "Note paths to read (max 20), e.g. [\"Health/A.md\", \"Health/B.md\"]"
+          },
+          "section" => %{
+            "type" => "string",
+            "description" =>
+              "Heading text without the # prefix, e.g. \"Todo\". Returns only that section " <>
+                "(heading line included, subsections included). One path only."
+          },
+          "outline" => %{
+            "type" => "boolean",
+            "default" => false,
+            "description" =>
+              "true returns each note's headings (level and text) instead of its content"
+          },
+          "include_links" => %{
+            "type" => "boolean",
+            "default" => false,
+            "description" =>
+              "true adds backlinks, outgoing and unresolved link lists to each found note"
           }
         },
         "required" => ["paths"]
@@ -668,7 +704,50 @@ defmodule Engram.MCP.Tools do
                 "title" => %{"type" => ["string", "null"]},
                 "folder" => %{"type" => "string"},
                 "tags" => %{"type" => "array", "items" => %{"type" => "string"}},
-                "content" => %{"type" => "string"}
+                "content" => %{
+                  "type" => "string",
+                  "description" => "Absent when outline: true was requested"
+                },
+                "outline" => %{
+                  "type" => "array",
+                  "description" =>
+                    "Only with outline: true; replaces content. Absent when error is set",
+                  "items" => %{
+                    "type" => "object",
+                    "properties" => %{
+                      "level" => %{"type" => "integer"},
+                      "heading" => %{"type" => "string"}
+                    },
+                    "required" => ["level", "heading"]
+                  }
+                },
+                "error" => %{
+                  "type" => "string",
+                  "description" =>
+                    "Only with outline: true, when this note's outline could not be computed: " <>
+                      "server busy, the call ran out of time, the note is too complex to parse, " <>
+                      "parsing failed, or the note has invalid UTF-8. Outline omitted"
+                },
+                "backlinks" => %{
+                  "type" => "array",
+                  "items" => %{"type" => "string"},
+                  "description" => "Paths of notes linking to this one (include_links)"
+                },
+                "outgoing" => %{
+                  "type" => "array",
+                  "items" => %{"type" => "string"},
+                  "description" => "Paths of notes this one links to (include_links)"
+                },
+                "unresolved" => %{
+                  "type" => "array",
+                  "items" => %{"type" => "string"},
+                  "description" => "Link targets that match no note (include_links)"
+                },
+                "links_truncated" => %{
+                  "type" => "boolean",
+                  "description" =>
+                    "true if backlinks, outgoing, or unresolved was cut off at the cap (include_links)"
+                }
               },
               "required" => ["path", "found"]
             }
@@ -788,9 +867,10 @@ defmodule Engram.MCP.Tools do
       description:
         "Change part of an existing note. mode replace_text finds exact text and replaces " <>
           "it (first occurrence by default); mode replace_section replaces everything under " <>
-          "one heading. Fails without writing if the text or heading is not found, or if " <>
-          "expected_replacements does not match. To add text use append_to_note. To " <>
-          "rewrite the whole note use write_note.",
+          "one heading; mode insert_section adds content under a heading, at the start or " <>
+          "end of that section, keeping what is there. Fails without writing if the text or " <>
+          "heading is not found, or if expected_replacements does not match. To add text at " <>
+          "the top or bottom of the note use append_to_note. To rewrite the whole note use write_note.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
@@ -800,8 +880,8 @@ defmodule Engram.MCP.Tools do
           },
           "mode" => %{
             "type" => "string",
-            "enum" => ["replace_text", "replace_section"],
-            "description" => "replace_text or replace_section"
+            "enum" => ["replace_text", "replace_section", "insert_section"],
+            "description" => "replace_text, replace_section or insert_section"
           },
           "find" => %{
             "type" => "string",
@@ -824,18 +904,28 @@ defmodule Engram.MCP.Tools do
           },
           "heading" => %{
             "type" => "string",
-            "description" => "replace_section only: heading text without the # prefix"
+            "description" =>
+              "replace_section and insert_section: heading text without the # prefix"
           },
           "content" => %{
             "type" => "string",
-            "description" => "replace_section only: new content for under the heading"
+            "description" =>
+              "replace_section: new content for under the heading; insert_section: content to add"
           },
           "level" => %{
             "type" => "integer",
-            "description" => "replace_section only: heading level 1-6 (default 2)",
+            "description" => "replace_section and insert_section: heading level 1-6 (default 2)",
             "default" => 2,
             "minimum" => 1,
             "maximum" => 6
+          },
+          "position" => %{
+            "type" => "string",
+            "enum" => ["start", "end"],
+            "default" => "end",
+            "description" =>
+              "insert_section only: start (directly under the heading) or end (default; after " <>
+                "the section's last line, including its subsections)"
           }
         },
         "required" => ["path", "mode"]
@@ -847,11 +937,12 @@ defmodule Engram.MCP.Tools do
           "mode" => %{"type" => "string"},
           "replacements" => %{
             "type" => ["integer", "null"],
-            "description" => "replace_text: occurrences replaced"
+            "description" => "replace_text: occurrences replaced; null for the section modes"
           },
           "heading" => %{
             "type" => ["string", "null"],
-            "description" => "replace_section: heading updated"
+            "description" =>
+              "replace_section and insert_section: the heading edited; null for replace_text"
           }
         },
         "required" => ["path", "mode"]

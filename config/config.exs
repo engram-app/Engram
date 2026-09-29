@@ -410,6 +410,18 @@ config :ex_aws, :req_opts, receive_timeout: 30_000
 # too; pinning it in base config keeps prod off Tesla's default adapter.
 config :tesla, JokenJwks.HttpFetcher, adapter: Tesla.Adapter.Httpc
 
+# MCP section/outline parsing (Engram.MCP.ParseGate): at most `limit` comrak
+# parses in flight per node (unset: dirty CPU schedulers - 1, min 1; set
+# `limit: n` to override). A caller waits up to `acquire_timeout` ms for a
+# slot (at most `max_waiting` queue) and `parse_timeout` ms for the result,
+# all within one `deadline_ms` per tool call, then gets a fixable error; the
+# parse itself still finishes.
+config :engram, Engram.MCP.ParseGate,
+  acquire_timeout: 5_000,
+  parse_timeout: 15_000,
+  max_waiting: 16,
+  deadline_ms: 20_000
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"

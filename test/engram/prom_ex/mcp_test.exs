@@ -44,6 +44,23 @@ defmodule Engram.PromEx.McpTest do
              end)
     end
 
+    test "declares a section_parse duration histogram (to 60 s) and outcome counter" do
+      metrics =
+        McpPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+
+      target = [:engram, :mcp, :section_parse, :stop]
+      parse = Enum.filter(metrics, &(&1.event_name == target))
+
+      assert [%Telemetry.Metrics.Distribution{} = d] =
+               Enum.filter(parse, &match?(%Telemetry.Metrics.Distribution{}, &1))
+
+      assert d.tags == [:outcome]
+      assert List.last(d.reporter_options[:buckets]) == 60_000
+
+      assert [%Telemetry.Metrics.Counter{tags: [:outcome]}] =
+               Enum.filter(parse, &match?(%Telemetry.Metrics.Counter{}, &1))
+    end
+
     test "no per-tenant tags" do
       metrics =
         McpPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
