@@ -2,6 +2,8 @@ defmodule Engram.VaultsTest do
   use Engram.DataCase, async: true
   use Oban.Testing, repo: Engram.Repo
 
+  import Ecto.Query
+
   alias Engram.Billing.OverrideCache
   alias Engram.Connections
   alias Engram.Vaults
@@ -19,6 +21,89 @@ defmodule Engram.VaultsTest do
   # ---------------------------------------------------------------------------
   # register_vault/4
   # ---------------------------------------------------------------------------
+
+  describe "slug is derived on read and looked up by hmac" do
+    defp raw_slug(vault_id) do
+      Engram.Repo.one!(
+        from(v in Engram.Vaults.Vault, where: v.id == ^vault_id, select: v.slug),
+        skip_tenant_check: true
+      )
+    end
+
+    # The state the next release leaves rows in; this release must already
+    # read correctly from it (rollback target).
+    defp clear_stored_slug(vault_id) do
+      Engram.Repo.update_all(
+        from(v in Engram.Vaults.Vault, where: v.id == ^vault_id),
+        [set: [slug: nil]],
+        skip_tenant_check: true
+      )
+    end
+
+    test "create still writes the stored slug, for the previous release", %{user: user} do
+      {:ok, vault, _} = Vaults.register_vault(user, "My Notes", Ecto.UUID.generate())
+
+      assert vault.slug == "my-notes"
+      assert raw_slug(vault.id) == "my-notes"
+    end
+
+    test "a slug resolves and reads back with the stored slug cleared", %{user: user} do
+      {:ok, vault, _} = Vaults.register_vault(user, "My Notes", Ecto.UUID.generate())
+      clear_stored_slug(vault.id)
+
+      assert {:ok, found} = Vaults.get_vault_by_ref(user, "my-notes")
+      assert found.id == vault.id
+      assert found.slug == "my-notes"
+      assert [%{slug: "my-notes"}] = Vaults.list_vaults(user)
+    end
+
+    test "a suffixed vault resolves by its suffixed slug", %{user: user} do
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+      {:ok, _first, _} = Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
+      {:ok, second, _} = Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
+      clear_stored_slug(second.id)
+
+      assert {:ok, found} = Vaults.get_vault_by_ref(user, second.slug)
+      assert found.id == second.id
+    end
+
+    test "rename: the new slug resolves, the old one does not", %{user: user} do
+      {:ok, vault, _} = Vaults.register_vault(user, "Old Name", Ecto.UUID.generate())
+      {:ok, renamed} = Vaults.update_vault(user, vault.id, %{name: "New Name"})
+      clear_stored_slug(vault.id)
+
+      assert renamed.slug == "new-name"
+      assert {:ok, %{id: id}} = Vaults.get_vault_by_ref(user, "new-name")
+      assert id == vault.id
+      assert {:error, :not_found} = Vaults.get_vault_by_ref(user, "old-name")
+    end
+
+    test "a rename keeps its bare URL through the next reconcile", %{user: user} do
+      {:ok, vault, _} = Vaults.register_vault(user, "Old Name", Ecto.UUID.generate())
+      {:ok, _} = Vaults.update_vault(user, vault.id, %{name: "New Name"})
+
+      assert {:ok, 0} = Vaults.backfill_slug_hmacs(user.id)
+      assert {:ok, %{id: id}} = Vaults.get_vault_by_ref(user, "new-name")
+      assert id == vault.id
+    end
+
+    test "a row with no slug and no slug_hmac can still be deleted", %{user: user} do
+      {:ok, vault, _} = Vaults.register_vault(user, "Work", Ecto.UUID.generate())
+
+      Engram.Repo.update_all(
+        from(v in Engram.Vaults.Vault, where: v.id == ^vault.id),
+        [set: [slug: nil, slug_hmac: nil]],
+        skip_tenant_check: true
+      )
+
+      assert {:ok, _} = Vaults.delete_vault(user, vault.id)
+    end
+
+    test "another user's slug does not resolve", %{user: user, other_user: other} do
+      {:ok, _vault, _} = Vaults.register_vault(other, "Private", Ecto.UUID.generate())
+      assert {:error, :not_found} = Vaults.get_vault_by_ref(user, "private")
+    end
+  end
 
   describe "register_vault/4" do
     test "creates a vault with generated slug", %{user: user} do

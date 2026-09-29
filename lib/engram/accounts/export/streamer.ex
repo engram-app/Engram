@@ -23,11 +23,9 @@ defmodule Engram.Accounts.Export.Streamer do
   `mark_ready` still flips the status to `:ready`, and any subsequent
   `mint_download_url` call returns `{:error, :no_such_part}`.
 
-  Filenames inside the zip use `vault.slug` rather than the decrypted
-  `vault.name` because note paths are encrypted (Phase B.3) and we don't
-  yet hand the streamer a DEK; the same slug is also what appears in the
-  s3 key so the user can correlate the download to the vault they
-  recognise in the UI.
+  S3 keys are keyed by `vault.id`, not the vault's slug or name: both derive
+  from the (encrypted) vault name, and the key is stored in plaintext on the
+  export row and in the bucket listing.
   """
 
   import Ecto.Query
@@ -131,8 +129,7 @@ defmodule Engram.Accounts.Export.Streamer do
             "size_bytes" => total_bytes,
             "part" => 1,
             "of" => 1,
-            "vault_id" => vault.id,
-            "vault_name" => vault.slug
+            "vault_id" => vault.id
           }
 
           {[part_map], total_bytes}
@@ -228,6 +225,6 @@ defmodule Engram.Accounts.Export.Streamer do
   end
 
   defp part_key(export, vault, idx, of) do
-    "exports/#{export.user_id}/#{export.id}/#{vault.slug}.part-#{idx}of#{of}.zip"
+    "exports/#{export.user_id}/#{export.id}/#{vault.id}.part-#{idx}of#{of}.zip"
   end
 end

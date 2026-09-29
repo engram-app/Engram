@@ -1,15 +1,12 @@
 defmodule Engram.Workers.BackfillVaultSlugHmac do
   @moduledoc """
-  Reconciles `vaults.slug` / `slug_hmac` / `slug_suffixed` after the expand
-  release (`20260926100000_add_vault_slug_hmac_expand`); see
-  `Vaults.backfill_slug_hmacs/1`.
+  Keeps `vaults.slug` / `slug_hmac` / `slug_suffixed` consistent with the
+  slug derived from the decrypted name; see `Vaults.backfill_slug_hmacs/1`.
 
   The HMAC needs each user's DEK-derived filter key, so it cannot run in the
-  migration. Daily cron over every row (not only NULL ones) so renames by
-  pre-expand code during the deploy window, or after a rollback, heal too.
-  Users mid-DEK-rotation are skipped and picked up next run. Daily, not
-  hourly: each run unwraps every vault-owning user's DEK into the worker's
-  DekCache, and the lookup switch waits for a clean run anyway.
+  migration. Daily cron over every row, so rows the previous release writes
+  during a rolling deploy or after a rollback heal too. Users mid-DEK-rotation
+  are skipped and picked up next run.
   Removed with the contract release that drops `vaults.slug`.
   """
   use Oban.Worker, queue: :crypto_backfill, max_attempts: 3, unique: [period: 3600]

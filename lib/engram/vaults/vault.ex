@@ -10,11 +10,17 @@ defmodule Engram.Vaults.Vault do
     # Persisted form is name_ciphertext + name_nonce + name_hmac.
     field :name, :string, virtual: true, redact: true
     field :description, :string, redact: true
+    # Read path never uses the stored value: the slug is derived from the
+    # decrypted name (`Vaults.derive_slug/2`, set by maybe_decrypt_vault_fields/2)
+    # and looked up via slug_hmac. Still WRITTEN by this release so a rollback
+    # to (or a rolling deploy alongside) the previous release, which reads it,
+    # keeps working. The next release stops writing it and clears it; the
+    # contract release drops it. Nothing here requires it, so a NULL is fine.
     field :slug, :string, redact: true
     # Keyed HMAC of the slug (per-user filter key, like name_hmac): lookup and
     # uniqueness for /v/:slug without the plaintext. `slug_suffixed` records
-    # that this vault took the id collision suffix, so the slug is derivable
-    # from name + id once the plaintext column is dropped.
+    # that this vault took the id collision suffix at mint, so the slug is
+    # derivable from name + id.
     field :slug_hmac, :binary
     field :slug_suffixed, :boolean, default: false
     field :client_id, :string
@@ -36,24 +42,10 @@ defmodule Engram.Vaults.Vault do
     timestamps(type: :utc_datetime, inserted_at: :created_at)
   end
 
-  # No reserved-slug list. Vault routes live under `/v/:slug` (see
-  # router.ex), so a slug cannot collide with a top-level app route,
-  # a Plug.Static mount, a Phoenix scope, or a Cloudflare rule. The former
-  # list -- and its mirror in frontend/src/api/reserved-slugs.ts -- were
-  # both deleted along with the root-level `/:slug` route that made them
-  # necessary.
-  #
-  # What replaces it is a SHAPE check, not a name list. Deleting the
-  # exclusion left `:slug` with no value-level validation at all, resting
-  # the whole "a slug is safe in a URL" claim on `Vaults.slugify/1` being
-  # well-behaved -- and at the time it was not: it emitted invalid UTF-8
-  # for any non-ASCII name. `slugify/1` is fixed, and this makes its
-  # contract enforceable at the boundary rather than merely intended.
-  # Exactly the codomain of `Vaults.slugify/1`: alphanumeric groups joined by
-  # single hyphens. Deliberately tighter than "starts alphanumeric" -- that
-  # looser form admitted "trailing-" and "double--hyphen", which slugify
-  # cannot produce, so it would have validated a shape no caller should send.
-  @slug_format ~r/\A[a-z0-9]+(-[a-z0-9]+)*\z/
+  # No reserved-slug list and no slug shape check: vault routes live under
+  # `/v/:slug`, and the slug is only ever `Vaults.slugify/1` output computed
+  # server-side, whose contract (alphanumeric groups joined by single
+  # hyphens) is tested there. No client value reaches it.
 
   def changeset(vault, attrs) do
     vault
@@ -73,23 +65,20 @@ defmodule Engram.Vaults.Vault do
       :name_hmac,
       :dek_version
     ])
-    |> validate_required([:slug, :user_id])
-    # Normalize BEFORE validating: callers pass a raw-ish slug and the
-    # trim/downcase is part of accepting it, not a post-validation tidy.
-    # With these the other way round, "  Work  " failed the format check.
-    |> update_change(:slug, &(&1 |> String.trim() |> String.downcase()))
-    # Length BEFORE format: `:slug` is an unbounded text column, so running a
-    # regex first means a multi-megabyte value is scanned before it is
-    # rejected for being too long.
-    |> validate_length(:slug, max: 120)
-    |> validate_format(:slug, @slug_format,
-      message: "must be lowercase alphanumeric with hyphens, starting with a letter or digit"
-    )
+    |> validate_required([:user_id])
+    |> validate_slug_hmac_on_insert()
     |> validate_encrypted_name()
-    |> unique_constraint([:user_id, :slug], name: :vaults_user_id_slug_index)
     |> unique_constraint([:user_id, :slug_hmac], name: :vaults_user_id_slug_hmac_index)
     |> unique_constraint([:user_id, :client_id], name: :vaults_user_id_client_id_index)
   end
+
+  # Required on insert only: an update must never be blocked by a legacy row
+  # the reconciler has not reached (delete/restore/set-default of such a row
+  # would otherwise fail).
+  defp validate_slug_hmac_on_insert(%{data: %{__meta__: %{state: :built}}} = cs),
+    do: validate_required(cs, [:slug_hmac])
+
+  defp validate_slug_hmac_on_insert(cs), do: cs
 
   # Phase B invariant: a vault row must carry the encrypted-name trio. The trio
   # is populated by inject_name_phase_b/3 from the client-supplied `name`, so a

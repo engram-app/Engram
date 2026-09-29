@@ -11,15 +11,20 @@ defmodule EngramWeb.McpVaultRefTest do
   """
   use EngramWeb.ConnCase, async: true
 
+  defp named_vault!(user, name) do
+    {:ok, vault, _} = Engram.Vaults.register_vault(user, name, Ecto.UUID.generate())
+    vault
+  end
+
   setup %{conn: conn} do
     user = insert(:user)
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+    insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
-    # vault_a goes through the public path so its encrypted name really decrypts
-    # to "Test Vault". vault_b uses the factory because the default plan caps a
-    # user at one registered vault; resolution is slug-based either way.
+    # Both vaults go through the public path so their encrypted names really
+    # decrypt: the slug is derived from the name, never stored.
     {:ok, vault_a, _} = Engram.Vaults.register_vault(user, "Test Vault", Ecto.UUID.generate())
-    vault_b = insert(:vault, user: user, slug: "second-vault")
+    {:ok, vault_b, _} = Engram.Vaults.register_vault(user, "Second Vault", Ecto.UUID.generate())
 
     {:ok, _} =
       Engram.Notes.upsert_note(user, vault_a, %{
@@ -117,7 +122,8 @@ defmodule EngramWeb.McpVaultRefTest do
       conn: conn,
       user: user
     } do
-      insert(:vault, user: user, slug: "vault")
+      # A CJK name is what really lands on the "vault" slug.
+      named_vault!(user, "中文")
 
       for junk <- ["日本語", "???", "", "🏠", "Русский"] do
         conn = call_tool(conn, "get_note", %{"source_path" => "a.md", "vault_id" => junk})
@@ -131,7 +137,7 @@ defmodule EngramWeb.McpVaultRefTest do
       conn: conn,
       user: user
     } do
-      decoy = insert(:vault, user: user, slug: "vault")
+      decoy = named_vault!(user, "中文")
       conn = call_tool(conn, "set_vault", %{"vault_id" => "日本語"})
 
       refute tool_text(conn) =~ to_string(decoy.id)
@@ -145,7 +151,7 @@ defmodule EngramWeb.McpVaultRefTest do
     # therefore takes the UUID branch, casts to garbage, and never reaches the
     # slug lookup.
     test "a 16-character vault name still resolves", %{conn: conn, user: user} do
-      insert(:vault, user: user, slug: "engram-workspace")
+      named_vault!(user, "Engram Workspace")
 
       assert String.length("Engram Workspace") == 16
 
@@ -159,7 +165,7 @@ defmodule EngramWeb.McpVaultRefTest do
     test "get_note and set_vault agree on a 16-character name", %{conn: conn, user: user} do
       # They resolve through different code paths; disagreement is what teaches
       # a model that names are unreliable.
-      v = insert(:vault, user: user, slug: "engram-workspace")
+      v = named_vault!(user, "Engram Workspace")
 
       assert tool_text(call_tool(conn, "set_vault", %{"vault_id" => "Engram Workspace"})) =~
                to_string(v.id)

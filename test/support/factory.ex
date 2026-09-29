@@ -116,7 +116,7 @@ defmodule Engram.Factory do
     %Engram.Vaults.Vault{
       id: Ecto.UUID.generate(),
       user: build(:user),
-      slug: sequence(:vault_slug, &"vault-#{&1}"),
+      slug_hmac: rand_binary(32),
       is_default: false,
       name_ciphertext: rand_binary(),
       name_nonce: rand_binary(12),
