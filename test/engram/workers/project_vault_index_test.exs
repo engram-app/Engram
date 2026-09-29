@@ -539,6 +539,39 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
              "the stale claim must be gone once the release job runs"
     end
 
+    # Third review pass: detection and release are two different moments —
+    # ProjectVaultIndex enqueues the release when it FIRST sees the note
+    # missing, but the job runs later. If the real create lands in that
+    # window, Identity.release/3 deletes by note_id unconditionally with no
+    # check that the note is still gone, so the just-arrived note would be
+    # un-indexed by a release job aimed at a note that no longer matches its
+    # own premise.
+    test "a note that arrives after detection but before the release job runs keeps its entry",
+         ctx do
+      attach_projection_telemetry()
+
+      stale_id = UUIDv7.generate(System.system_time(:millisecond) - :timer.hours(2))
+
+      seed_index(ctx, [{"ghost.md", stale_id}])
+
+      assert :ok = run(ctx)
+      assert_receive {:projection, %{released: 1}, %{phase: :converged}}, 2_000
+
+      # The overdue create finally lands, reusing the same id the release job
+      # already targets.
+      {:ok, _late_arrival} =
+        Notes.upsert_note(ctx.user, ctx.vault, %{
+          "id" => stale_id,
+          "path" => "ghost.md",
+          "content" => "finally here"
+        })
+
+      :ok = drain_releases()
+
+      assert %{"note_id" => ^stale_id} = index_entries(ctx)["ghost.md"],
+             "a note that arrived before the release job ran must not be un-indexed"
+    end
+
     test "a v4 id (not UUIDv7) is never treated as stale", ctx do
       attach_projection_telemetry()
 

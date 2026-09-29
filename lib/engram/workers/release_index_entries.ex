@@ -42,15 +42,30 @@ defmodule Engram.Workers.ReleaseIndexEntries do
   ## Consistency
 
   A path is briefly still claimed by a deleted note between the commit and this
-  job running. Nothing can *resurrect* the note (projection's `get_note_by_id`
-  is `scoped_live`, so the entry reads as an unknown note), and creating a file
-  at that path is unaffected because creation does not claim. Only a RENAME
-  onto that exact path inside the window is refused, and it succeeds on retry.
+  job running. Nothing can *resurrect* a genuinely deleted note (projection's
+  `get_note_by_id` is `scoped_live`, so the entry reads as an unknown note),
+  and creating a file at that path is unaffected because creation does not
+  claim. Only a RENAME onto that exact path inside the window is refused, and
+  it succeeds on retry.
+
+  That guarantee is what every caller BEFORE #1550 relied on: the row really
+  is gone, permanently, by the time this job runs, because the caller enqueues
+  it from inside (or right after) the transaction that deleted it. #1550's
+  caller (`ProjectVaultIndex`) breaks that premise on purpose — it enqueues a
+  release for a note it saw as MISSING, not deleted, and a missing note can
+  still arrive: the create it's waiting on can land in the window between
+  detection and this job running, especially under a `RotationGate` snooze.
+  `Identity.release/3` deletes by note_id unconditionally with no such check,
+  so `release/3` below re-verifies the note is still gone immediately before
+  calling it — a no-op read for every pre-#1550 caller (their note really is
+  gone), and the only thing standing between #1550's caller and un-indexing a
+  note that just arrived.
   """
   use Oban.Worker, queue: :crdt_checkpoint, max_attempts: 5
 
   alias Engram.Accounts
   alias Engram.Crypto.RotationGate
+  alias Engram.Notes
   alias Engram.Notes.Identity
 
   @impl Oban.Worker
@@ -89,7 +104,18 @@ defmodule Engram.Workers.ReleaseIndexEntries do
   end
 
   defp release(user, vault_id, note_ids) do
-    case Identity.release(user, vault_id, note_ids) do
+    # See "Consistency" above: a note this job was told is gone may have
+    # arrived since it was enqueued. `%{id: vault_id}` is the same
+    # bare-map-as-vault shape `ProjectVaultIndex` uses — `get_note_by_id/3`
+    # only ever reads `vault.id`.
+    vault = %{id: vault_id}
+
+    still_gone =
+      Enum.reject(note_ids, fn note_id ->
+        match?({:ok, _note}, Notes.get_note_by_id(user, vault, note_id))
+      end)
+
+    case Identity.release(user, vault_id, still_gone) do
       :ok -> :ok
       {:error, reason} -> {:error, reason}
     end

@@ -387,15 +387,19 @@ defmodule Engram.Workers.ProjectVaultIndex do
   # losing it. Nothing else ever releases this claim: a create that never
   # lands is not a delete, so `Notes.delete_note`'s release never fires for it.
   #
-  # KNOWN LIMIT: `ReleaseIndexEntries` has no `unique` key, and its only
-  # documented non-transient failure is rotation-in-progress (which snoozes,
-  # not discards). If a release job DID exhaust its 5 attempts some other way,
-  # the entry survives and the next checkpoint re-enqueues a fresh job for the
-  # same note_id — bounded to one extra job per checkpoint interval, not a
-  # runaway, but not deduplicated either. Not fixed here: `unique` lives on the
-  # shared worker's `use Oban.Worker` options, and every other call site
-  # (delete, batch delete) would inherit whatever window is chosen without
-  # asking for it.
+  # KNOWN LIMIT: `ReleaseIndexEntries` has no `unique` key. Its only documented
+  # non-transient failure is rotation-in-progress, which SNOOZES rather than
+  # discards — but a snoozed job still occupies its note_id until it succeeds,
+  # and a rotation can span several checkpoints on an active vault. Each of
+  # those checkpoints re-detects the same stale entry and enqueues its own
+  # fresh release job while the earlier ones are still snoozed, so the actual
+  # bound is one job per checkpoint that runs before the prior release
+  # succeeds — proportional to rotation length, not flatly "one extra job".
+  # Still self-resolving (every one of them eventually runs and releasing is
+  # idempotent) and not fixed here for the same reason as before: `unique`
+  # lives on the shared worker's `use Oban.Worker` options, and every other
+  # call site (delete, batch delete) would inherit whatever window is chosen
+  # without asking for it.
   defp release_stale_claim(user, vault_id, note_id) do
     case Enqueue.enqueue(
            ReleaseIndexEntries.new_for(user.id, vault_id, [note_id]),
@@ -413,12 +417,25 @@ defmodule Engram.Workers.ProjectVaultIndex do
 
         :released
 
-      {:error, _reason} ->
-        # Enqueue.enqueue/2 already logged and emitted its own failure
-        # telemetry. Reporting :released here anyway would tell a dashboard the
-        # claim is resolved when the job to resolve it was never queued — fall
-        # back to the ordinary unresolved path so the next run gets another
-        # chance instead of the claim silently going unfixed.
+      {:error, reason} ->
+        # Enqueue.enqueue/2 already logged its own generic failure line, but
+        # without a note_id or vault_id — every OTHER outcome in apply_entry
+        # logs with that metadata, and this is the one branch a vault-scoped
+        # log search would otherwise miss. Reporting :released here anyway
+        # would tell a dashboard the claim is resolved when the job to resolve
+        # it was never queued — fall back to the ordinary unresolved path so
+        # the next run gets another chance instead of the claim silently going
+        # unfixed.
+        Logger.warning(
+          "vault index projection could not enqueue a stale-claim release: " <>
+            "#{Metadata.safe_reason(reason)}",
+          Metadata.with_category(:warning, :sync,
+            user_id: user.id,
+            vault_id: vault_id,
+            note_id: note_id
+          )
+        )
+
         :unknown_note
     end
   end
