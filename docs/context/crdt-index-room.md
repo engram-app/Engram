@@ -1,6 +1,6 @@
 # The per-vault CRDT index room — shape, wire, and what it must NOT do yet
 
-_Last verified: 2026-08-15_
+_Last verified: 2026-09-27_
 
 **TL;DR:** `{:global, {:crdt_index, vault_id}}`, one `Y.Map` named `filemeta_v0`
 (`path -> %{note_id, type, hash}`), riding the existing per-vault `crdt:` channel as
@@ -11,11 +11,21 @@ the #1152 drain is still unwired (step 3). See `crdt-identity-authority.md` for 
 decision, and note that projection must NEVER claim (`rename_note/5` takes
 `index: :skip` for it) or it feeds itself.
 
-No CLIENT writes the map yet (Engram-obsidian#362), so in production it is still
-empty and projection is a no-op — a fact about the client we ship, not about what
-the server accepts.
+**Stale — the client shipped writing this map.** This section originally read
+"no client writes the map yet ... projection is a no-op", true as of #1150/#1151
+but false since the plugin's SyncStore landed (Engram-obsidian#431, stable
+v1.25.0) and #1388 made the map authoritative. In production the map is
+populated and projection is live.
 
-Shipped: PR #1383 (`feat/crdt-index-room`). Refs #1150, #1146, #1152,
+That exposed a real defect: a client can claim a path before `crdt_create` is
+acked, and if the create never lands the claim outlives it, naming a note that
+will never exist. `ProjectVaultIndex` now releases such a claim once its
+UUIDv7-encoded mint time is older than an hour (`@stale_claim_grace_ms`) —
+see #1550 and `Engram.Workers.ReleaseIndexEntries`. A create still in flight
+(younger than the grace period) is left alone and reported `unresolved`, not
+released.
+
+Shipped: PR #1383 (`feat/crdt-index-room`). Refs #1150, #1146, #1152, #1550,
 engram-app/engram-workspace#167.
 
 ---
