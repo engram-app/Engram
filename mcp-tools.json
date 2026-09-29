@@ -529,7 +529,7 @@
                   "type": "string"
                 },
                 "error": {
-                  "description": "Only with outline: true, when this note's outline could not be computed (server busy, parse timed out, or invalid UTF-8); retry or read it without outline",
+                  "description": "Only with outline: true, when this note's outline could not be computed: server busy, the call ran out of time, the note is too complex to parse, parsing failed, or the note has invalid UTF-8. Outline omitted",
                   "type": "string"
                 },
                 "folder": {

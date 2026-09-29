@@ -867,4 +867,17 @@ defmodule Engram.MCP.HandlersEditNoteTest do
 
     assert read!(u, v, "RealSetext.md") == "## A\nnew\nB\n---\nkeep\n"
   end
+
+  test "replace_section keeps the next section after a $$ math block", %{user: u, vault: v} do
+    put!(u, v, "Math.md", "## A\n$$\n## x\n$$\nkeep\n## B\nb\n")
+
+    assert {:ok, _, _} =
+             edit(u, v, "Math.md", %{
+               "mode" => "replace_section",
+               "heading" => "A",
+               "content" => "new"
+             })
+
+    assert read!(u, v, "Math.md") == "## A\nnew\n## B\nb\n"
+  end
 end

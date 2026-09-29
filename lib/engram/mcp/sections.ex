@@ -49,9 +49,7 @@ defmodule Engram.MCP.Sections do
   @type refusal :: :invalid_utf8 | ParseGate.error()
 
   @spec headings(String.t(), keyword()) :: {:ok, [heading()]} | {:error, refusal()}
-  def headings(content, opts \\ []) do
-    with {:ok, a} <- analyze(content, opts), do: {:ok, public(a.headings)}
-  end
+  def headings(content, opts \\ []), do: analyze(content, opts, &public(&1.headings))
 
   defp public(hs), do: Enum.map(hs, &Map.take(&1, [:line, :level, :text, :span]))
 
@@ -79,10 +77,12 @@ defmodule Engram.MCP.Sections do
           | :error
           | {:error, :ambiguous | refusal()}
   def find(content, heading, level, opts \\ []) do
-    with {:ok, a} <- analyze(content, opts), do: locate(content, a, heading, level)
+    with {:ok, found} <- analyze(content, opts, &locate(content, &1, heading, level, true)),
+         do: found
   end
 
-  defp locate(content, a, heading, level) do
+  # `hidden?` computes `hidden_heading_at`; reads (section/3) skip it.
+  defp locate(content, a, heading, level, hidden?) do
     with {:ok, h} <- match(a.headings, String.trim(heading), level) do
       lines = String.split(content, "\n")
       # The section never owns the empty "line" after a trailing newline,
@@ -99,7 +99,7 @@ defmodule Engram.MCP.Sections do
          start: h.line,
          stop: stop,
          span: h.span,
-         hidden_heading_at: hidden_heading(lines, h, stop, a)
+         hidden_heading_at: if(hidden?, do: hidden_heading(lines, h, stop, a))
        }}
     end
   end
@@ -127,23 +127,39 @@ defmodule Engram.MCP.Sections do
   # shape: an `=`/`-` underline directly under a non-blank line inside the
   # section; the reported line is that text line. A `---` break directly
   # under paragraph text inside a hidden region also refuses (accepted).
+  # Linear: lines are visited in order and `a.safe_ranges` is sorted, so
+  # the allow-list is a merge walk (was O(lines x closed fences)).
   defp hidden_heading(lines, h, stop, a) do
     from = h.line + h.span
 
     lines
     |> Enum.slice(from, stop - from)
     |> Enum.with_index(from)
-    |> Enum.reduce_while(nil, fn {line, i}, prev ->
+    |> Enum.reduce_while({nil, a.safe_ranges}, fn {line, i}, {prev, safe} ->
+      safe = Enum.drop_while(safe, fn {_l1, l2} -> l2 < i end)
       at = hidden_at(line, i, prev, from, h.level)
 
-      if at && not explained?(a, i),
+      if at && not (MapSet.member?(a.explained, i) or covered?(safe, i)),
         do: {:halt, at},
-        else: {:cont, line}
+        else: {:cont, {line, safe}}
     end)
     |> then(&if(is_integer(&1), do: &1))
   end
 
+  defp covered?([{l1, _l2} | _], i), do: l1 <= i
+  defp covered?([], _i), do: false
+
+  # Cheap prefilter: only a line whose first non-indent byte (0-3 spaces)
+  # is `#`, `=` or `-` can be heading-shaped, so most lines skip the regexes.
+  defp shaped?(<<" ", rest::binary>>, n) when n < 3, do: shaped?(rest, n + 1)
+  defp shaped?(<<c, _::binary>>, _n) when c in [?#, ?=, ?-], do: true
+  defp shaped?(_line, _n), do: false
+
   defp hidden_at(line, i, prev, from, level) do
+    if shaped?(line, 0), do: shaped_at(line, i, prev, from, level)
+  end
+
+  defp shaped_at(line, i, prev, from, level) do
     case Regex.run(@atx_like, line) do
       [_, hashes] when byte_size(hashes) <= level ->
         i
@@ -159,19 +175,14 @@ defmodule Engram.MCP.Sections do
     end
   end
 
-  defp explained?(a, i) do
-    MapSet.member?(a.explained, i) or
-      Enum.any?(a.safe_ranges, fn {l1, l2} -> i >= l1 and i <= l2 end)
-  end
-
   # A miss returns the note's headings from the same parse, so a caller
   # listing them does not parse the note a second time.
   @spec section(String.t(), String.t(), keyword()) ::
           {:ok, String.t()}
           | {:error, :ambiguous | refusal() | {:not_found, [heading()]}}
   def section(content, heading, opts \\ []) do
-    with {:ok, a} <- analyze(content, opts),
-         {:ok, %{start: s, stop: e}} <- section_at(content, a, heading) do
+    with {:ok, located} <- analyze(content, opts, &section_at(content, &1, heading)),
+         {:ok, %{start: s, stop: e}} <- located do
       text =
         content
         |> String.split("\n")
@@ -184,7 +195,7 @@ defmodule Engram.MCP.Sections do
   end
 
   defp section_at(content, a, heading) do
-    case locate(content, a, heading, nil) do
+    case locate(content, a, heading, nil, false) do
       :error -> {:error, {:not_found, public(a.headings)}}
       other -> other
     end
@@ -284,12 +295,16 @@ defmodule Engram.MCP.Sections do
 
   # -- Parsing --
 
-  # Invalid UTF-8 would make the NIF raise. The whole analysis runs in the
-  # gate's task, so only the small result (never the AST) is copied back.
-  defp analyze(content, opts) do
+  # Invalid UTF-8 would make the NIF raise. The whole analysis AND `then`
+  # (the section lookup built on it) run in the gate's task, so the slot,
+  # the parse timeout and the call's deadline cover all of it, and only the
+  # small result (never the AST) is copied back.
+  defp analyze(content, opts, then) do
     if String.valid?(content) do
       ParseGate.run(
-        fn -> content |> String.replace_prefix(@bom, "") |> blank_frontmatter() |> scan() end,
+        fn ->
+          content |> String.replace_prefix(@bom, "") |> blank_frontmatter() |> scan() |> then.()
+        end,
         Keyword.put(opts, :bytes, byte_size(content))
       )
     else
@@ -310,20 +325,20 @@ defmodule Engram.MCP.Sections do
   end
 
   # `text` must already be free of BOM and frontmatter. One parse, plus one
-  # more only when `%%` comments had to be masked.
+  # more only when `%%` comments or `$$` math blocks had to be masked.
   defp scan(text) do
     # CommonMark also ends a line at a lone "\r"; callers count lines by
     # "\n" only, so a lone "\r" becomes a space (same byte offsets).
     text = String.replace(text, ~r/\r(?!\n)/, " ")
     starts = line_starts(text)
-    doc = mask_obsidian_comments(text, starts, parse(text))
-    {explained, safe_ranges} = walk(doc, {MapSet.new(), []})
+    {doc, math} = mask_obsidian(text, starts, parse(text))
+    {explained, safe_ranges} = walk(doc, {MapSet.new(), math})
 
     %{
       headings:
         for(%MDExNative.Comrak.Heading{} = h <- doc.nodes, do: to_heading(h, text, starts)),
       explained: explained,
-      safe_ranges: safe_ranges
+      safe_ranges: Enum.sort(safe_ranges)
     }
   end
 
@@ -381,8 +396,9 @@ defmodule Engram.MCP.Sections do
   # without being hidden: every heading's first line and (setext) underline
   # at ANY depth (a nested heading is a heading, just not a section
   # boundary), and every thematic break. `safe`: 0-indexed line ranges of
-  # CLOSED fenced code blocks and CLOSED HTML comment blocks, the only places
-  # a heading-shaped line may legitimately sit hidden inside a section.
+  # CLOSED fenced code blocks and CLOSED HTML comment blocks (plus the masked
+  # `$$` math blocks, seeded by scan/1), the only places a heading-shaped
+  # line may legitimately sit hidden inside a section.
   defp walk(
          %MDExNative.Comrak.Heading{sourcepos: %{start: {l1, _}, end: {l2, _}}} = h,
          {ex, safe}
@@ -408,24 +424,87 @@ defmodule Engram.MCP.Sections do
 
   defp range(%{start: {l1, _}, end: {l2, _}}), do: {l1 - 1, l2 - 1}
 
-  # Obsidian `%%` comments: every `%%` outside code (a code block or an
-  # inline code span, per the first parse) toggles a comment; the regions
-  # are overwritten with spaces (newlines kept, so lines and byte offsets
-  # do not move) and the text re-parsed. An unclosed `%%` hides everything
-  # after it.
+  # Obsidian syntax CommonMark does not know, masked to spaces (newlines
+  # kept, so lines and byte offsets do not move) before ONE re-parse. Code
+  # (code blocks and inline code spans) comes from the first parse; neither
+  # construct is recognized inside it. Returns the doc and the 0-indexed
+  # line ranges of the masked math blocks (closed, so allow-listed like a
+  # closed fence).
+  #
+  #   * `%%` comments: every `%%` outside code toggles a comment; an
+  #     unclosed `%%` hides everything after it.
+  #   * `$$` display math: a line that is exactly `$$` (trimmed) opens a
+  #     block, the next such line closes it. Its lines are TeX, not markdown
+  #     (a `## x` inside is no heading). An unpaired `$$` is left alone.
+  #     comrak's math_dollars extension does not help: it parses `$$` as
+  #     INLINE math, after block structure has already made `## x` a heading.
   #
   # ponytail: one pass. Code spans come from the UNmasked parse, so a
   # backtick inside a `%%` comment can pair with one after it and mis-pair
-  # later `%%`s. find/3's hidden-heading check turns that into a refused
+  # later `%%`s. find/4's hidden-heading check turns that into a refused
   # write rather than a wrong section; a fixed-point loop would fix the read.
-  defp mask_obsidian_comments(text, starts, doc) do
-    with [_ | _] = matches <- :binary.matches(text, "%%"),
-         code = doc |> code_ranges(starts, []) |> Enum.reverse(),
-         [_ | _] = marks <- matches |> Enum.map(&elem(&1, 0)) |> outside(code, []) do
-      text |> mask(marks) |> parse()
+  defp mask_obsidian(text, starts, doc) do
+    pct = :binary.matches(text, "%%")
+    dollars = :binary.matches(text, "$$")
+
+    if pct == [] and dollars == [] do
+      {doc, []}
     else
-      [] -> doc
+      code = doc |> code_ranges(starts, []) |> Enum.reverse()
+      marks = pct |> Enum.map(&elem(&1, 0)) |> outside(code, [])
+      masked = if marks == [], do: text, else: mask(text, marks)
+      math = math_blocks(masked, starts, dollars, code)
+      masked = blank_lines(masked, starts, math)
+
+      if masked == text, do: {doc, []}, else: {parse(masked), math}
     end
+  end
+
+  # [{open_line, close_line}] for `$$` lines outside code, paired in order.
+  defp math_blocks(text, starts, dollars, code) do
+    dollars
+    |> Enum.map(&elem(&1, 0))
+    |> outside(code, [])
+    |> Enum.map(&line_of(starts, &1))
+    |> Enum.dedup()
+    |> Enum.filter(&(line_text(text, starts, &1) |> String.trim() == "$$"))
+    |> Enum.chunk_every(2, 2, :discard)
+    |> Enum.map(fn [open, close] -> {open, close} end)
+  end
+
+  defp line_text(text, starts, l) do
+    from = elem(starts, l)
+    to = if l + 1 < tuple_size(starts), do: elem(starts, l + 1) - 1, else: byte_size(text)
+    binary_part(text, from, to - from)
+  end
+
+  # Blanks whole line ranges in ONE pass (ranges sorted, disjoint).
+  defp blank_lines(text, _starts, []), do: text
+
+  defp blank_lines(text, starts, ranges) do
+    {parts, pos} =
+      Enum.reduce(ranges, {[], 0}, fn {l1, l2}, {acc, pos} ->
+        from = elem(starts, l1)
+        to = if l2 + 1 < tuple_size(starts), do: elem(starts, l2 + 1) - 1, else: byte_size(text)
+
+        {[blank(binary_part(text, from, to - from)), binary_part(text, pos, from - pos) | acc],
+         to}
+      end)
+
+    IO.iodata_to_binary(Enum.reverse([binary_part(text, pos, byte_size(text) - pos) | parts]))
+  end
+
+  # Line of a byte offset: binary search over the line-start offsets.
+  defp line_of(starts, offset), do: line_of(starts, offset, 0, tuple_size(starts) - 1)
+
+  defp line_of(_starts, _offset, lo, hi) when lo >= hi, do: lo
+
+  defp line_of(starts, offset, lo, hi) do
+    mid = div(lo + hi + 1, 2)
+
+    if elem(starts, mid) <= offset,
+      do: line_of(starts, offset, mid, hi),
+      else: line_of(starts, offset, lo, mid - 1)
   end
 
   # Byte offset of the start of each line (0-indexed line -> offset).

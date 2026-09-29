@@ -800,4 +800,31 @@ defmodule Engram.MCP.SectionsTest do
     # A code span's sourcepos includes its backticks.
     assert %{start: {11, 1}, end: {11, 6}} = Map.from_struct(code.sourcepos)
   end
+
+  # --- Final review: linear hidden-heading check, math blocks ---
+
+  # Was O(lines x closed fences) outside the gate: 20k blocks took ~5.6 s.
+  test "find over 20k closed fences holding # lines is linear" do
+    content = "# A\n" <> String.duplicate("#{@bt}\n# a\n#{@bt}\n", 20_000) <> "# B\n"
+    g = start_supervised!({Engram.MCP.ParseGate, name: nil, limit: 1})
+    {micros, result} = :timer.tc(fn -> Sections.find(content, "A", 1, gate: g) end)
+    assert {:ok, %{stop: 60_001, hidden_heading_at: nil}} = result
+    assert micros < 2_000_000, "took #{div(micros, 1000)} ms"
+  end
+
+  # Obsidian $$ display math is block-level: its lines are not markdown.
+  test "a heading-shaped line inside a $$ math block is not a heading and not hidden" do
+    content = "## A\n$$\n## x\n$$\nkeep\n## B\n"
+    assert lt(content) == [{0, "A"}, {5, "B"}]
+    assert {:ok, %{stop: 5, hidden_heading_at: nil}} = Sections.find(content, "A", 2)
+  end
+
+  test "$$ inside a fenced code block does not open a math block" do
+    content = "## A\n#{@bt}\n$$\n#{@bt}\n## B\n$$\n"
+    assert lt(content) == [{0, "A"}, {4, "B"}]
+  end
+
+  test "an unclosed $$ is left alone" do
+    assert lt("## A\n$$\n## B\n") == [{0, "A"}, {2, "B"}]
+  end
 end
