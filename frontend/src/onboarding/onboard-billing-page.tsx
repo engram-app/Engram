@@ -7,13 +7,14 @@ import { api } from "../api/client";
 import { type OnboardingStatus, useBillingStatus, useOnboardingStatus } from "../api/queries";
 import BillingPage from "../billing/billing-page";
 import { FREE_TIER } from "../billing/plan-cards";
+import LoadingScreen from "../layout/loading-screen";
 import { onboardingNext } from "./onboarding-next";
 
 export default function OnboardBillingPage() {
 	const navigate = useNavigate();
 	const qc = useQueryClient();
 	const { data: onboarding } = useOnboardingStatus();
-	const { data: billing } = useBillingStatus();
+	const { data: billing, isLoading: billingLoading } = useBillingStatus();
 	const [freeLoading, setFreeLoading] = useState(false);
 	// True while the inline Paddle checkout view is open — hides our own header +
 	// free link so they don't sit stuck above/below the payment form.
@@ -52,13 +53,21 @@ export default function OnboardBillingPage() {
 	// Only a live subscription bounces — the same `active` signal BillingPage
 	// uses to choose plan picker vs plan panel. Free users are exempt: the tools
 	// step and the checklist link them here to upgrade, and bouncing them made
-	// that link a dead end. A lapsed subscriber (paid tier, inactive) must be
-	// able to resubscribe. Never bounce mid-checkout: billing flips active
-	// before onActivated runs, and unmounting there drops the "Setting up your
-	// account" bridge. Waits for billing so a paid user isn't mistaken for Free
-	// while it loads. (Self-host never reaches here: billing isn't in `steps`.)
-	if (onboarding && onboarding.next_step !== "billing" && billing?.active && !checkoutActive) {
-		return <Navigate to={onboardingNext(onboarding)} replace />;
+	// that link a dead end. A lapsed subscriber arrives as tier `free` with the
+	// old plan only in `subscription`, so they reach the picker too. Never
+	// bounce mid-checkout: billing flips active before onActivated runs, and
+	// unmounting there drops the "Setting up your account" bridge.
+	// (Self-host never reaches here: billing isn't in `steps`.)
+	if (onboarding && onboarding.next_step !== "billing" && !checkoutActive) {
+		// Cold cache: hold a loader so a paid user never gets a clickable picker.
+		if (billingLoading) {
+			return <LoadingScreen />;
+		}
+		// No billing answer (fetch failed): BillingPage has no error branch and
+		// would sit on its skeleton, so fall back to the onboarding status alone.
+		if (!billing || billing.active) {
+			return <Navigate to={onboardingNext(onboarding)} replace />;
+		}
 	}
 
 	return (
