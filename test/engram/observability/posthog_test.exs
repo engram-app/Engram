@@ -188,6 +188,36 @@ defmodule Engram.Observability.PostHogTest do
       assert body["properties"]["surface"] == "mcp"
     end
 
+    test "a string-key surface cannot override either", %{user: user} do
+      PostHog.capture_activity(user, :mcp, %{"surface" => "evil"})
+
+      assert_receive {:posthog_body, body}, 1_000
+      assert body["properties"]["surface"] == "mcp"
+    end
+
+    test "a user without an email is skipped, not raised", %{user: user} do
+      assert :ok = PostHog.capture_activity(%{user | email: nil}, :mcp)
+      refute_receive {:posthog_body, _}, 200
+    end
+
+    test "the disabled path never touches the rate limiter", %{user: user} do
+      Application.delete_env(:engram, :posthog_key)
+      handler = "ph-disabled-#{System.unique_integer([:positive])}"
+      parent = self()
+
+      :telemetry.attach(
+        handler,
+        [:engram, :rate_limiter, :hit],
+        fn _, _, meta, _ -> send(parent, {:limiter_hit, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert :ok = PostHog.capture_activity(user, :mcp)
+      refute_receive {:limiter_hit, _}, 200
+    end
+
     test "rejects a surface outside the allowlist", %{user: user} do
       assert_raise FunctionClauseError, fn -> PostHog.capture_activity(user, :nope) end
     end

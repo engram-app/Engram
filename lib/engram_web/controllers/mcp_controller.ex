@@ -7,6 +7,7 @@ defmodule EngramWeb.McpController do
 
   alias Engram.Abuse.OriginStats
   alias Engram.MCP.Tools
+  alias Engram.Observability.PostHog
 
   require Logger
 
@@ -610,7 +611,7 @@ defmodule EngramWeb.McpController do
         # `with`/`else` doesn't carry earlier clauses' bindings into `else` —
         # validate_tool_args threads the tool name through its own error
         # value rather than relying on an outer `tool` binding here.
-        emit_rejected_call_telemetry(tool_name, start_mono, msg)
+        emit_rejected_call_telemetry(conn.assigns.current_user, tool_name, start_mono, msg)
 
         # A Tool Execution Error, not a Protocol Error. The spec reserves
         # protocol errors for an unknown tool or a malformed request, and
@@ -641,7 +642,7 @@ defmodule EngramWeb.McpController do
   # a real dispatch, so a call rejected by argument validation is still
   # visible on the MCP PromEx dashboards instead of disappearing entirely
   # (found in adversarial review of #1491/#1492's fix).
-  defp emit_rejected_call_telemetry(tool_name, start_mono, msg) do
+  defp emit_rejected_call_telemetry(user, tool_name, start_mono, msg) do
     tool_atom = Map.get(@tool_atoms, tool_name, :unknown)
 
     :telemetry.execute(
@@ -649,6 +650,8 @@ defmodule EngramWeb.McpController do
       %{duration: System.monotonic_time() - start_mono, result_bytes: byte_size_safe(msg)},
       %{tool: tool_atom, status: :invalid_args}
     )
+
+    emit_tool_analytics(user, tool_atom, :invalid_args)
   end
 
   # #1491/#1492 — the JSON-RPC layer never checked a call's arguments against
@@ -835,15 +838,15 @@ defmodule EngramWeb.McpController do
     result
   end
 
-  # Product analytics, not ops telemetry: who is using MCP and which tools. Both
-  # labels are bounded (`tool_atom` is `:unknown` for anything off the allowlist,
-  # `status` is `:ok | :error`), so no client-supplied text reaches PostHog.
+  # Product analytics, not ops telemetry: who is using MCP and which tools. Every
+  # label is bounded (`tool_atom` is `:unknown` off the allowlist; `status` is a
+  # fixed atom), so no client-supplied text reaches PostHog. The tool event is
+  # throttled per user and tool (1/min) so an agent loop cannot flood PostHog:
+  # it measures minutes a tool was in use, not raw call count.
   defp emit_tool_analytics(user, tool_atom, status) do
-    alias Engram.Observability.PostHog
-
     PostHog.capture_activity(user, :mcp)
 
-    PostHog.capture(PostHog.analytics_id(user.email), "mcp_tool_called", %{
+    PostHog.capture_throttled(user, "mcp_tool_called", Atom.to_string(tool_atom), 60_000, %{
       tool: Atom.to_string(tool_atom),
       status: Atom.to_string(status)
     })

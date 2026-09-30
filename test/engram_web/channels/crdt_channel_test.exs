@@ -2904,7 +2904,7 @@ defmodule EngramWeb.CrdtChannelTest do
   end
 
   describe "activity analytics" do
-    test "joining the crdt channel emits a throttled obsidian_sync surface_active" do
+    setup do
       EngramWeb.RateLimiter.reset_buckets!()
       bypass = Bypass.open()
 
@@ -2928,25 +2928,52 @@ defmodule EngramWeb.CrdtChannelTest do
         Plug.Conn.resp(c, 200, "1")
       end)
 
-      user = insert(:user)
-      {:ok, user} = Crypto.ensure_user_dek(user)
-      {:ok, vault, _} = Vaults.register_vault(user, "ActivityJoin", Ecto.UUID.generate())
+      :ok
+    end
 
-      for _ <- 1..2 do
-        {:ok, _, _} =
-          subscribe_and_join(
-            user_socket(user),
-            EngramWeb.CrdtChannel,
-            "crdt:#{user.id}:#{vault.id}",
-            %{"crdt_proto" => 2}
-          )
+    test "joining alone (an idle plugin) is not activity", %{user: user, vault: vault} do
+      {:ok, _, _} =
+        subscribe_and_join(
+          user_socket(user),
+          EngramWeb.CrdtChannel,
+          "crdt:#{user.id}:#{vault.id}",
+          %{"crdt_proto" => 2}
+        )
+
+      refute_receive {:posthog_body, _}, 300
+    end
+
+    test "a pushed edit emits one throttled obsidian_sync surface_active", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/a.md", "content" => "base"})
+
+      for prefix <- ["ONE-", "TWO-"] do
+        frame = client_sync_update(socket, note.id, prefix)
+
+        ref =
+          push(socket, "crdt_doc_update", %{"doc_id" => note.id, "b64" => Base.encode64(frame)})
+
+        assert_reply ref, :ok, %{doc_id: _}, 3000
       end
 
-      assert_receive {:posthog_body, body}, 1_000
-      assert body["event"] == "surface_active"
+      Process.sleep(400)
+      events = drain_posthog([])
+      active = Enum.filter(events, &(&1["event"] == "surface_active"))
+
+      assert [body] = active
       assert body["properties"]["surface"] == "obsidian_sync"
       assert body["distinct_id"] == Engram.Observability.PostHog.analytics_id(user.email)
-      refute_receive {:posthog_body, _}, 300
+    end
+
+    defp drain_posthog(acc) do
+      receive do
+        {:posthog_body, b} -> drain_posthog([b | acc])
+      after
+        0 -> acc
+      end
     end
   end
 end

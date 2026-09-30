@@ -12,7 +12,8 @@ defmodule Engram.Observability.PostHog do
   `frontend/src/auth/use-identify-user-on-auth-change.ts`) binds anonymous
   device events to the user's distinct_id. Server-side events use the same
   distinct_id so funnels join across the timeline. Live call sites: notes.ex
-  (note create/search), search.ex, vaults_controller.ex, and
+  (note create/search), search.ex, vaults_controller.ex, the MCP controller and
+  CRDT channel (`capture_activity/3`), and
   `EngramWeb.Webhooks.PostHogForwarder` for the Clerk/Paddle webhook events.
   """
 
@@ -53,28 +54,41 @@ defmodule Engram.Observability.PostHog do
   @doc """
   Record that `user` was active on `surface` (`:obsidian_sync`, `:mcp`, `:web`).
 
-  Emits `surface_active`, at most once per user and surface per 5 minutes, so a
-  hot path (live edits, MCP calls) can call this on every event. `props` are
-  merged in but never override `surface`. Same distinct_id as `capture/3`, so
-  it joins the frontend identify. Throttling is per node: a cluster emits at
-  most one event per node per window, which still counts each person once.
+  Emits `surface_active`, throttled to one per user and surface per 5-minute
+  fixed window (epoch-aligned, so two events can land a few seconds apart across
+  a window edge). The limiter is cluster-shared under `:distributed_ets`. `props`
+  are merged in but can never set `surface`, under either key type.
   """
-  @spec capture_activity(%{id: term(), email: String.t()}, atom(), map()) :: :ok
+  @spec capture_activity(map(), atom(), map()) :: :ok
   def capture_activity(user, surface, props \\ %{}) when surface in @surfaces do
-    key = "ph_active:#{user.id}:#{surface}"
+    props = props |> Map.drop([:surface, "surface"]) |> Map.put(:surface, Atom.to_string(surface))
+    capture_throttled(user, "surface_active", Atom.to_string(surface), @activity_window_ms, props)
+  end
 
-    case EngramWeb.RateLimiter.hit(key, @activity_window_ms, 1, :analytics_activity) do
-      {:allow, _} ->
-        capture(
-          analytics_id(user.email),
-          "surface_active",
-          Map.put(props, :surface, Atom.to_string(surface))
-        )
-
-      {:deny, _} ->
-        :ok
+  @doc """
+  Like `capture/3` for a signed-in user, but at most one `event` per user and
+  `dedupe` value per `window_ms`. Cheap on the disabled path (no limiter hit, no
+  HMAC), and a user without an email is skipped rather than raising, so an
+  analytics call can never break the request that made it.
+  """
+  @spec capture_throttled(map(), String.t(), String.t(), pos_integer(), map()) :: :ok
+  def capture_throttled(%{id: id, email: email}, event, dedupe, window_ms, props)
+      when is_binary(email) do
+    with {_key, _host} <- config(),
+         {:allow, _} <-
+           EngramWeb.RateLimiter.hit(
+             "ph:#{event}:#{id}:#{dedupe}",
+             window_ms,
+             1,
+             :analytics_activity
+           ) do
+      capture(analytics_id(email), event, props)
+    else
+      _ -> :ok
     end
   end
+
+  def capture_throttled(_user, _event, _dedupe, _window_ms, _props), do: :ok
 
   defp config do
     case Application.get_env(:engram, :posthog_key) do

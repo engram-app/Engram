@@ -76,22 +76,40 @@ defmodule EngramWeb.McpActivityTest do
     assert called["properties"]["status"] == "ok"
   end
 
-  test "a second call is throttled for surface_active but still counts as a tool call", %{
+  test "repeat calls: surface_active once, mcp_tool_called once per tool per window", %{
     conn: conn
   } do
     call(conn, "list_vaults")
     call(conn, "list_vaults")
+    call(conn, "list_tags")
 
     events = drain()
     assert Enum.count(events, &(&1["event"] == "surface_active")) == 1
-    assert Enum.count(events, &(&1["event"] == "mcp_tool_called")) == 2
+
+    tools =
+      for e <- events, e["event"] == "mcp_tool_called", do: e["properties"]["tool"]
+
+    assert Enum.sort(tools) == ["list_tags", "list_vaults"]
   end
 
-  test "an unknown tool is labelled :unknown, never the client-supplied name", %{conn: conn} do
+  test "an invalid-args call still counts as MCP activity", %{conn: conn} do
+    post(conn, "/api/mcp", %{
+      "jsonrpc" => "2.0",
+      "id" => 1,
+      "method" => "tools/call",
+      "params" => %{"name" => "list_vaults", "arguments" => %{"foo" => "x"}}
+    })
+
+    events = drain()
+    assert Enum.any?(events, &(&1["event"] == "surface_active"))
+
+    called = Enum.find(events, &(&1["event"] == "mcp_tool_called"))
+    assert called["properties"]["status"] == "invalid_args"
+  end
+
+  test "an unknown tool name never reaches PostHog", %{conn: conn} do
     call(conn, "totally_made_up_tool_name")
 
-    for e <- drain(), e["event"] == "mcp_tool_called" do
-      refute e["properties"]["tool"] =~ "made_up"
-    end
+    assert drain() == []
   end
 end

@@ -130,7 +130,6 @@ defmodule EngramWeb.CrdtChannel do
   # separately (UserDekRotation).
   defp join_authenticated("crdt:" <> ids, socket) do
     user = socket.assigns.current_user
-    Engram.Observability.PostHog.capture_activity(user, :obsidian_sync)
 
     join_vault("crdt:" <> ids, user, to_string(user.id), socket)
   end
@@ -253,6 +252,8 @@ defmodule EngramWeb.CrdtChannel do
          :ok <- guard_frame(frame),
          {:ok, socket, %{room: room}} <- ensure_room(socket, doc_id, frame_class_b64(b64)),
          :ok <- relay_frame(room, frame) do
+      if frame_class_b64(b64) == :edit, do: note_sync_activity(socket)
+
       # ACK the push. Clients attach reply handlers to distinguish delivery
       # from loss; with no ack every successful push "times out" client-side —
       # the web SPA re-handshook every open note every ~3.5s forever
@@ -574,6 +575,7 @@ defmodule EngramWeb.CrdtChannel do
          :ok <- guard_frame(frame),
          {:ok, update} <- take_sync_update(frame),
          {:ok, %{head: head}} <- apply_room_free(socket, note_id, update) do
+      note_sync_activity(socket)
       {:reply, {:ok, %{doc_id: note_id, head: head}}, socket}
     else
       {:error, :rate_limited} ->
@@ -1913,6 +1915,12 @@ defmodule EngramWeb.CrdtChannel do
   # edit budget. Without the size gate a client could relabel every edit as
   # STEP2 and mutate at 10x the intended cap.
   @hs_step2_max_b64 4096
+
+  # Product analytics: the user pushed a real edit, not merely connected. Join
+  # and handshake frames are deliberately excluded (an idle plugin reconnects
+  # and handshakes every note without the user doing anything).
+  defp note_sync_activity(socket),
+    do: Engram.Observability.PostHog.capture_activity(socket.assigns.current_user, :obsidian_sync)
 
   defp frame_class_b64(<<prefix::binary-size(4), _::binary>> = b64) do
     case Base.decode64(prefix) do
