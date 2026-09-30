@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.37.0](https://github.com/engram-app/Engram/compare/0.36.0...0.37.0) (2026-09-30)
+
+
+### Features
+
+* **mcp:** parity params for search, read and edit ([#1800](https://github.com/engram-app/Engram/issues/1800)) ([6672ba4](https://github.com/engram-app/Engram/commit/6672ba4ec72bb867ec1df3eab0b292ece0a208e3))
+
+
+### Bug Fixes
+
+* **sync:** release a filemeta_v0 claim for a note that never arrives ([#1801](https://github.com/engram-app/Engram/issues/1801)) ([0f810bd](https://github.com/engram-app/Engram/commit/0f810bdd7f8d8e78298c4815e99373873c498352))
+* **vaults:** derive vault slugs on read; stop leaking them in exports ([#1808](https://github.com/engram-app/Engram/issues/1808)) ([8581869](https://github.com/engram-app/Engram/commit/8581869d60b43a106028e623b4a9538c450d79ad))
+
 ## [0.36.0](https://github.com/engram-app/Engram/compare/0.35.0...0.36.0) (2026-09-27)
 
 
