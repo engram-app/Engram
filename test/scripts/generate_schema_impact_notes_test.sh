@@ -105,4 +105,75 @@ output_real=$(cd "$tmp_repo" && GH_OUTPUT_OVERRIDE='[
 echo "$output_real" | grep -q '#101' || fail "Test 8: real git-log extraction missed in-range #101"
 echo "$output_real" | grep -q '#100' && fail "Test 8: real git-log extraction included out-of-range #100" || true
 
-echo "All tests passed (8)."
+# --- Tests 9-13: REAL irreversible detection (no IRREVERSIBLE_OVERRIDE) ---
+# Tests 1-8 all set the override, so the live git-diff + grep path was never
+# exercised -- and it reported IRREVERSIBLE for a release that changed no
+# migration at all (`xargs -r` exits 0 on empty input, and the `if` read
+# that as "a marked file was found"). Each case below runs against a real
+# scratch repo.
+scratch_list="$(mktemp)"
+trap 'rm -rf "$tmp_repo"; xargs -r rm -rf < "$scratch_list"; rm -f "$scratch_list"' EXIT
+phase_pr='[{"number":300,"labels":[{"name":"phase/migrate-data"}],"title":"Backfill"}]'
+mig_dir="priv/repo/migrations"
+
+# new_range <setup-fn>: fresh repo, base commit, then <setup-fn> inside it;
+# prints "<repo> <base> <head>".
+new_range() {
+  local repo base
+  repo="$(mktemp -d)"
+  echo "$repo" >> "$scratch_list"
+  git -c init.defaultBranch=main -C "$repo" init -q
+  mkdir -p "$repo/$mig_dir"
+  echo "# old, reversible" > "$repo/$mig_dir/20260101000000_old.exs"
+  echo "# rollback-irreversible" > "$repo/$mig_dir/20260101000001_old_irreversible.exs"
+  git -C "$repo" add -A
+  git -C "$repo" -c user.email=t@e.com -c user.name=t commit -q -m "chore: base"
+  base=$(git -C "$repo" rev-parse HEAD)
+  (cd "$repo" && "$1")
+  git -C "$repo" add -A
+  git -C "$repo" -c user.email=t@e.com -c user.name=t commit -q --allow-empty -m "feat: change (#300)"
+  echo "$repo $base $(git -C "$repo" rev-parse HEAD)"
+}
+
+run_real() {
+  local repo=$1 base=$2 head=$3
+  (cd "$repo" && GH_OUTPUT_OVERRIDE="$phase_pr" MERGED_PR_NUMBERS_OVERRIDE='300' \
+    bash "$SCRIPT" "$base" "$head")
+}
+
+no_migration_change() { echo "code" > lib.ex; }
+add_reversible() { echo "# reversible" > "$mig_dir/20260201000000_new.exs"; }
+add_irreversible() { echo "# rollback-irreversible" > "$mig_dir/20260201000000_new.exs"; }
+delete_irreversible() { rm "$mig_dir/20260101000001_old_irreversible.exs"; }
+
+# shellcheck disable=SC2046
+set -- $(new_range no_migration_change)
+out=$(run_real "$@")
+echo "$out" | grep -q 'IRREVERSIBLE' && fail "Test 9: no migration changed, but IRREVERSIBLE was reported" || true
+echo "$out" | grep -q 'Engram.Release.rollback' || fail "Test 9: rollback hint missing"
+
+# shellcheck disable=SC2046
+set -- $(new_range add_reversible)
+out=$(run_real "$@")
+echo "$out" | grep -q 'IRREVERSIBLE' && fail "Test 10: only a reversible migration, but IRREVERSIBLE was reported" || true
+
+# shellcheck disable=SC2046
+set -- $(new_range add_irreversible)
+out=$(run_real "$@")
+echo "$out" | grep -q 'IRREVERSIBLE' || fail "Test 11: a marked migration was added, but IRREVERSIBLE is missing"
+
+# shellcheck disable=SC2046
+set -- $(new_range delete_irreversible)
+out=$(run_real "$@")
+echo "$out" | grep -q 'IRREVERSIBLE' && fail "Test 12: a DELETED marked migration is not in this release" || true
+
+# A range git cannot resolve must fail loudly, not print a banner that
+# silently claims "reversible".
+# shellcheck disable=SC2046
+set -- $(new_range no_migration_change)
+if (cd "$1" && GH_OUTPUT_OVERRIDE="$phase_pr" MERGED_PR_NUMBERS_OVERRIDE='300' \
+      bash "$SCRIPT" deadbeefdeadbeef "$3") >/dev/null 2>&1; then
+  fail "Test 13: an unresolvable range exited 0"
+fi
+
+echo "All tests passed (13)."
