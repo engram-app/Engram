@@ -244,6 +244,14 @@ defmodule EngramWeb.Router do
     get "/oauth-protected-resource/api/mcp", WellKnownController, :protected_resource
   end
 
+  # OpenAI's plugin portal proves we own the MCP domain by fetching this and
+  # comparing the body to the token it issued. No pipeline: `:api` 406s a
+  # text/plain Accept, and `:public_cacheable` would pin a stale token at the
+  # edge after a new draft rotates it.
+  scope "/.well-known", EngramWeb do
+    get "/openai-apps-challenge", WellKnownController, :openai_apps_challenge
+  end
+
   # OAuth 2.1 endpoints — public + rate-limited per IP. Endpoint handlers
   # validate client_id, redirect_uri, and PKCE themselves; no router-level
   # auth. DCR mints public PKCE clients with no `client_secret`.
