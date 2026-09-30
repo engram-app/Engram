@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.38.0](https://github.com/engram-app/Engram/compare/0.37.0...0.38.0) (2026-09-30)
+
+
+### Features
+
+* **mcp:** serve the OpenAI apps domain challenge ([#1811](https://github.com/engram-app/Engram/issues/1811)) ([8d2ef68](https://github.com/engram-app/Engram/commit/8d2ef68f23862de3db021c1da5c38d1933113917))
+
 ## [0.37.0](https://github.com/engram-app/Engram/compare/0.36.0...0.37.0) (2026-09-30)
 
 
