@@ -49,12 +49,15 @@ export default function OnboardBillingPage() {
 	// tab, or returned to /onboard/billing after subscribing) — bounce forward
 	// to their actual next step instead of re-showing the plan picker. Keys off
 	// `next_step`, not `steps` (billing stays in `steps` even once satisfied).
-	// Free users are exempt: the tools step and the checklist link them here to
-	// upgrade, and bouncing them back made that link a dead end. Waits for the
-	// billing status so a paid user isn't mistaken for Free while it loads.
-	// (Self-host never reaches here: billing isn't in its `steps`.)
-	const isPaid = billing !== undefined && billing.tier !== "free" && billing.tier !== "none";
-	if (onboarding && onboarding.next_step !== "billing" && isPaid) {
+	// Only a live subscription bounces — the same `active` signal BillingPage
+	// uses to choose plan picker vs plan panel. Free users are exempt: the tools
+	// step and the checklist link them here to upgrade, and bouncing them made
+	// that link a dead end. A lapsed subscriber (paid tier, inactive) must be
+	// able to resubscribe. Never bounce mid-checkout: billing flips active
+	// before onActivated runs, and unmounting there drops the "Setting up your
+	// account" bridge. Waits for billing so a paid user isn't mistaken for Free
+	// while it loads. (Self-host never reaches here: billing isn't in `steps`.)
+	if (onboarding && onboarding.next_step !== "billing" && billing?.active && !checkoutActive) {
 		return <Navigate to={onboardingNext(onboarding)} replace />;
 	}
 

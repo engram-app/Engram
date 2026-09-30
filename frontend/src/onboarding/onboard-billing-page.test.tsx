@@ -508,6 +508,90 @@ describe("OnboardBillingPage — revisit after the billing step", () => {
 		expect(screen.queryByTestId("tools-page")).not.toBeInTheDocument();
 	});
 
+	// Same signal BillingPage uses to pick picker vs plan panel: `active`. A
+	// lapsed subscriber can carry a paid `tier` with `active: false`; they must
+	// be able to resubscribe, not get bounced.
+	it("keeps a lapsed subscriber (paid tier, inactive) on the plan picker", async () => {
+		mockPastBilling({ ...BILLING_INACTIVE, tier: "starter" } as typeof BILLING_INACTIVE);
+
+		renderOnboardBilling();
+
+		await waitFor(() =>
+			expect(screen.getAllByRole("button", { name: /start free trial/iu }).length).toBeGreaterThan(
+				0,
+			),
+		);
+		expect(screen.queryByTestId("tools-page")).not.toBeInTheDocument();
+	});
+
+	// A Free user upgrading from the tools step: billing flips active before the
+	// onboarding status refetch lands. The page must hold its "Setting up" view
+	// and let onActivated navigate, not unmount the moment billing goes active.
+	it("holds the finalizing view while a Free user's upgrade activates", async () => {
+		capturedEventCallback = undefined;
+		for (const k of Object.keys(channelHandlers)) {
+			delete channelHandlers[k];
+		}
+		let billingActive = false;
+		let releaseStatus: () => void = () => {};
+		const statusGate = new Promise<void>((r) => {
+			releaseStatus = r;
+		});
+		let statusCalls = 0;
+		get.mockImplementation(async (url: string) => {
+			if (url === "/billing/status") {
+				return billingActive ? BILLING_ACTIVE : BILLING_INACTIVE;
+			}
+			if (url === "/billing/config") {
+				return BILLING_CONFIG;
+			}
+			if (url === "/me") {
+				return { user: ME };
+			}
+			if (url === "/onboarding/status") {
+				statusCalls += 1;
+				// First read is the initial page load; later reads wait on the gate.
+				if (statusCalls > 1) {
+					await statusGate;
+				}
+				return STATUS_TOOLS;
+			}
+			throw new Error(`unexpected GET ${url}`);
+		});
+
+		renderOnboardBilling();
+
+		await waitFor(() => expect(channelHandlers.subscription_activated).toBeDefined());
+		await waitFor(() => expect(capturedEventCallback).toBeDefined());
+		await act(async () => {
+			capturedEventCallback!({
+				name: "checkout.payment.initiated",
+				data: { transaction_id: "txn_free_upgrade" },
+			});
+		});
+
+		billingActive = true;
+		await act(async () => {
+			channelHandlers.subscription_activated!({
+				tier: "starter",
+				status: "trialing",
+				subscription_id: "sub_up",
+			});
+			await Promise.resolve();
+		});
+		await flush();
+
+		expect(screen.getByText(/setting up your account/iu)).toBeInTheDocument();
+		expect(screen.queryByTestId("tools-page")).not.toBeInTheDocument();
+
+		await act(async () => {
+			releaseStatus();
+			await Promise.resolve();
+		});
+		await waitFor(() => expect(screen.getByTestId("tools-page")).toBeInTheDocument());
+		expect(toolsPageMounts).toBe(1);
+	});
+
 	it("still sends a paid user forward to their next step", async () => {
 		mockPastBilling(BILLING_ACTIVE);
 
