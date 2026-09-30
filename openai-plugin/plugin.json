@@ -21,9 +21,9 @@
   "extensions": {
     "com.openai": {
       "interface": {
-        "displayName": "Engram for Obsidian",
-        "shortDescription": "Your Obsidian vault in ChatGPT",
-        "longDescription": "Engram connects your Obsidian vault to ChatGPT. Search, read, create and edit your Obsidian notes from any chat, even with Obsidian closed, on your phone, or in a browser.\n\nHow it works: the Engram Vault Sync plugin for Obsidian syncs your vault to Engram in real time. ChatGPT reads and writes those notes through Engram, and every change syncs back into Obsidian as plain markdown you can open and edit.\n\nWhat you can do: ask questions about your notes, find an exact term, error message or ID, save a decision or summary as a new note, append to running lists and logs, and organize notes into folders.\n\nWho it is for: Obsidian users who want ChatGPT to remember what they have written, in a memory they can read and correct.\n\nLimitations: requires an Engram account, and syncing from Obsidian requires the Engram Vault Sync plugin. Engram only accesses the vaults of the account you connect. Engram is an independent product and is not affiliated with or endorsed by Obsidian.",
+        "displayName": "Engram",
+        "shortDescription": "Memory for your Obsidian vault",
+        "longDescription": "Engram gives ChatGPT a memory that lives in your Obsidian vault. Search, read, create and edit your Obsidian notes from any chat, even with Obsidian closed, on your phone, or in a browser.\n\nHow it works: the Engram Vault Sync plugin for Obsidian syncs your vault to Engram in real time. ChatGPT reads and writes those notes through Engram, and every change syncs back into Obsidian as plain markdown you can open and edit.\n\nWhat you can do: ask questions about your notes, find an exact term, error message or ID, save a decision or summary as a new note, append to running lists and logs, and organize notes into folders.\n\nWho it is for: Obsidian users who want ChatGPT to remember what they have written, in a memory they can read and correct.\n\nLimitations: requires an Engram account, and syncing from Obsidian requires the Engram Vault Sync plugin. Engram only accesses the vaults of the account you connect. Engram is an independent product and is not affiliated with or endorsed by Obsidian.",
         "developerName": "Engram",
         "category": "Productivity",
         "capabilities": [
