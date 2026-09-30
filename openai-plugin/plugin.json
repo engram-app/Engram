@@ -2,7 +2,7 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "engram",
   "version": "1.0.1",
-  "description": "Connect your Obsidian vault to ChatGPT: search, read, create and edit your Obsidian notes from any chat through Engram.",
+  "description": "Shared memory for Claude, ChatGPT and any MCP client. Read and edit it in Obsidian or the web app.",
   "author": {
     "name": "Engram",
     "email": "support@engram.page",
@@ -21,13 +21,13 @@
   "extensions": {
     "com.openai": {
       "interface": {
-        "displayName": "Engram",
-        "shortDescription": "Memory for your Obsidian vault",
-        "longDescription": "Engram gives ChatGPT a memory that lives in your Obsidian vault. Search, read, create and edit your Obsidian notes from any chat, even with Obsidian closed, on your phone, or in a browser.\n\nHow it works: the Engram Vault Sync plugin for Obsidian syncs your vault to Engram in real time. ChatGPT reads and writes those notes through Engram, and every change syncs back into Obsidian as plain markdown you can open and edit.\n\nWhat you can do: ask questions about your notes, find an exact term, error message or ID, save a decision or summary as a new note, append to running lists and logs, and organize notes into folders.\n\nWho it is for: Obsidian users who want ChatGPT to remember what they have written, in a memory they can read and correct.\n\nLimitations: requires an Engram account, and syncing from Obsidian requires the Engram Vault Sync plugin. Engram only accesses the vaults of the account you connect. Engram is an independent product and is not affiliated with or endorsed by Obsidian.",
+        "displayName": "Engram AI Memory",
+        "shortDescription": "AI memory you edit in Obsidian",
+        "longDescription": "Engram is one memory for all your AI tools. Claude, ChatGPT, Grok, Cursor and any other MCP client read from and write to the same memory, so what you tell one, the others can find.\n\nThat memory is plain markdown notes. There is no extraction step where an AI decides what to keep: the memory is the note itself. You can read exactly what your AI remembers, and when something is wrong, you fix the line and every AI sees the fix.\n\nRead and edit your memory in Obsidian, where the Engram plugin syncs it in real time, in the Engram web app, or on your phone. It works with Obsidian closed.\n\nSearch combines keyword and semantic matching, so an exact string like an error message, a config key or an ID is findable, not just something similar. Notes are encrypted at rest with a per-user key. Sign-in is OAuth, and you can revoke any client's access from your account.",
         "developerName": "Engram",
         "category": "Productivity",
         "capabilities": [
-          "Search Obsidian notes",
+          "Search memory",
           "Read notes",
           "Create notes",
           "Edit and append to notes",
@@ -38,9 +38,9 @@
         "privacyPolicyURL": "https://engram.page/privacy",
         "termsOfServiceURL": "https://engram.page/terms",
         "defaultPrompt": [
-          "What do my Obsidian notes say about my current project?",
-          "Save the decisions from this chat to my Obsidian vault.",
-          "What folders are in my Obsidian vault?"
+          "Remember that our search API allows 60 requests per minute.",
+          "What value did I set for POOL_SIZE in my deploy notes?",
+          "Summarize everything my notes say about the Q3 launch plan."
         ],
         "brandColor": "#8B4FE8",
         "composerIcon": "./assets/icon.svg",
