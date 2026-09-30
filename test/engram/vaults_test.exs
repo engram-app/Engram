@@ -40,11 +40,28 @@ defmodule Engram.VaultsTest do
       )
     end
 
-    test "create still writes the stored slug, for the previous release", %{user: user} do
+    test "create stores no plaintext slug; the returned slug is derived", %{user: user} do
       {:ok, vault, _} = Vaults.register_vault(user, "My Notes", Ecto.UUID.generate())
 
       assert vault.slug == "my-notes"
-      assert raw_slug(vault.id) == "my-notes"
+      assert raw_slug(vault.id) == nil
+    end
+
+    test "a rename clears a legacy plaintext slug instead of leaving the old name", %{
+      user: user
+    } do
+      {:ok, vault, _} = Vaults.register_vault(user, "Old Name", Ecto.UUID.generate())
+
+      Engram.Repo.update_all(
+        from(v in Engram.Vaults.Vault, where: v.id == ^vault.id),
+        [set: [slug: "old-name"]],
+        skip_tenant_check: true
+      )
+
+      {:ok, renamed} = Vaults.update_vault(user, vault.id, %{name: "New Name"})
+
+      assert renamed.slug == "new-name"
+      assert raw_slug(vault.id) == nil
     end
 
     test "a slug resolves and reads back with the stored slug cleared", %{user: user} do
