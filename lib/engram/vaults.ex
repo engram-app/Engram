@@ -883,17 +883,20 @@ defmodule Engram.Vaults do
   end
 
   @doc """
-  Keep every vault's `slug`, `slug_hmac` and `slug_suffixed` consistent with
-  the slug derived from its decrypted name (`derive_slug/2`), which is what
-  reads and lookups now use. Heals rows the previous release wrote during a
-  rolling deploy or after a rollback. Idempotent: only rows that differ are
-  written. Returns the number of rows written. Called by
+  Clear each vault's plaintext `slug`, first making sure `slug_hmac` and
+  `slug_suffixed` describe the slug reads derive from the decrypted name
+  (`derive_slug/2`). Only rows still holding a plaintext slug are touched:
+  legacy rows, and rows an older release writes during a rolling deploy or
+  after a rollback. Returns the number of rows cleared. Called by
   `Engram.Workers.BackfillVaultSlugHmac`.
 
-  A stored slug already equal to `slugify(name)` is the bare form; anything
-  else maps to the id-suffixed form, never the bare base, so no sibling can
-  collide. The stored slug is read from the raw row: decrypting replaces it
-  with the derived value.
+  The current `slug_hmac` decides the form: if it already matches the bare
+  or the id-suffixed slug, that form is kept, so a plaintext slug left stale
+  by a rename can never move the URL. Only a row whose hmac matches neither
+  falls back to the stored slug: bare if it equals `slugify(name)`,
+  otherwise the id-suffixed form (never the bare base, so no sibling can
+  collide). The stored slug is read from the raw row: decrypting replaces
+  it with the derived value.
 
   Takes an id, not a `%User{}`: the user row is read here `FOR SHARE`, so a
   struct loaded before a DEK rotation can never supply the key. The lock also
@@ -948,19 +951,21 @@ defmodule Engram.Vaults do
   end
 
   defp reconcile_slug(raw, vault, filter_key) do
-    suffixed? = raw.slug != slugify(vault.name)
-    slug = derive_slug(vault.name, %{vault | slug_suffixed: suffixed?})
-    hmac = Engram.Crypto.hmac_field(filter_key, slug)
+    hmac_of =
+      &Engram.Crypto.hmac_field(filter_key, derive_slug(vault.name, %{vault | slug_suffixed: &1}))
 
-    if {slug, hmac, suffixed?} == {raw.slug, raw.slug_hmac, raw.slug_suffixed} do
-      false
-    else
-      Repo.update_all(from(v in Vault, where: v.id == ^vault.id),
-        set: [slug: slug, slug_hmac: hmac, slug_suffixed: suffixed?]
-      )
+    suffixed? =
+      cond do
+        raw.slug_hmac == hmac_of.(false) -> false
+        raw.slug_hmac == hmac_of.(true) -> true
+        true -> raw.slug != slugify(vault.name)
+      end
 
-      true
-    end
+    Repo.update_all(from(v in Vault, where: v.id == ^vault.id),
+      set: [slug: nil, slug_hmac: hmac_of.(suffixed?), slug_suffixed: suffixed?]
+    )
+
+    true
   end
 
   defp count_vaults(user_id) do
@@ -1027,16 +1032,16 @@ defmodule Engram.Vaults do
       else: attrs
   end
 
-  # Reads never use the stored `slug` (derived via `derive_slug/2`, looked up
-  # via slug_hmac). It is still written so the previous release keeps working
-  # on rollback and during a rolling deploy; the next release stops writing it.
+  # Only the keyed hmac and the suffix flag are stored; the slug is derived on
+  # read (`derive_slug/2`). `slug: nil` also clears a legacy plaintext slug on
+  # rename, so the old name does not linger until the reconciler runs.
   # Callers have run ensure_user_dek/1.
   defp put_slug(attrs, user, name, vault_id, except_id) do
     {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
     {slug, suffixed?} = unique_slug(user.id, filter_key, slugify(name), vault_id, except_id)
 
     Map.merge(attrs, %{
-      slug: slug,
+      slug: nil,
       slug_hmac: Engram.Crypto.hmac_field(filter_key, slug),
       slug_suffixed: suffixed?
     })
