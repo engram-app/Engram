@@ -83,8 +83,17 @@ if [ -n "${IRREVERSIBLE_OVERRIDE:-}" ]; then
   irreversible="$IRREVERSIBLE_OVERRIDE"
 else
   irreversible=false
-  if git diff --name-only "$BASE_SHA...$HEAD_SHA" -- 'priv/repo/migrations/*.exs' 2>/dev/null \
-     | xargs -r grep -l '# rollback-irreversible' >/dev/null 2>&1; then
+  # Migrations ADDED or MODIFIED in the range (a deleted file is not in this
+  # release). Captured separately so a git failure fails the run instead of
+  # silently reading as "reversible", same reasoning as the gh call above.
+  if ! changed=$(git diff --name-only --diff-filter=AM "$BASE_SHA...$HEAD_SHA" -- 'priv/repo/migrations/*.exs' 2>&1); then
+    echo "::error::generate_schema_impact_notes: git diff $BASE_SHA...$HEAD_SHA failed -- cannot tell whether this release has an irreversible migration. Output: $changed" >&2
+    exit 1
+  fi
+  # Only grep when there are files. Piping an empty list through `xargs -r`
+  # skips grep and exits 0, which read as "found a marked file" and stamped
+  # IRREVERSIBLE on releases that changed no migration at all.
+  if [ -n "$changed" ] && echo "$changed" | xargs grep -l '# rollback-irreversible' >/dev/null; then
     irreversible=true
   fi
 fi
