@@ -136,4 +136,15 @@ defmodule EngramWeb.WellKnownController do
       }
     )
   end
+
+  @doc """
+  OpenAI plugin-directory domain verification. Serves the token from
+  `OPENAI_APPS_CHALLENGE` as the bare body; 404 when unset (self-host).
+  """
+  def openai_apps_challenge(conn, _params) do
+    case Application.get_env(:engram, :openai_apps_challenge) do
+      token when is_binary(token) and token != "" -> text(conn, token)
+      _ -> send_resp(conn, 404, "")
+    end
+  end
 end

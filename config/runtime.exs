@@ -917,6 +917,12 @@ if config_env() == :prod do
       allowed_extra_hosts: extra_hosts
   end
 
+  # Token OpenAI's plugin portal issues for domain verification; served at
+  # /.well-known/openai-apps-challenge. See EngramWeb.WellKnownController.
+  if token = System.get_env("OPENAI_APPS_CHALLENGE") do
+    config :engram, :openai_apps_challenge, String.trim(token)
+  end
+
   # Absolute base URL of the frontend (SPA) host. After the saas eject the SPA
   # lives on a different origin (app.engram.page) than the backend it reaches
   # on api./mcp.engram.page, so the OAuth /authorize flow must 302 the consent

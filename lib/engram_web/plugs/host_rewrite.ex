@@ -134,7 +134,8 @@ defmodule EngramWeb.Plugs.HostRewrite do
 
   @mcp_wellknown_prefixes [
     "/.well-known/oauth-protected-resource",
-    "/.well-known/oauth-authorization-server"
+    "/.well-known/oauth-authorization-server",
+    "/.well-known/openai-apps-challenge"
   ]
 
   defp handle_mcp_host(conn) do
