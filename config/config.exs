@@ -197,9 +197,9 @@ config :engram, Oban,
        # panel after each deploy. Four cheap aggregates a day buys a 6h worst
        # case. See the staleness contract in `Engram.PromEx.Crdt`.
        {"10 */6 * * *", Engram.Workers.CrdtBloatSweep},
-       # Keeps vaults.slug / slug_hmac / slug_suffixed consistent with the
-       # derived slug; idempotent (writes only rows that differ). Remove with
-       # the contract release that drops vaults.slug.
+       # Clears plaintext vaults.slug after making slug_hmac / slug_suffixed
+       # describe the derived slug; idempotent (only rows still holding a
+       # slug). Remove with the contract release that drops vaults.slug.
        {"25 4 * * *", Engram.Workers.BackfillVaultSlugHmac}
      ]}
   ]

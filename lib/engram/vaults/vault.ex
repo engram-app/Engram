@@ -10,12 +10,10 @@ defmodule Engram.Vaults.Vault do
     # Persisted form is name_ciphertext + name_nonce + name_hmac.
     field :name, :string, virtual: true, redact: true
     field :description, :string, redact: true
-    # Read path never uses the stored value: the slug is derived from the
-    # decrypted name (`Vaults.derive_slug/2`, set by maybe_decrypt_vault_fields/2)
-    # and looked up via slug_hmac. Still WRITTEN by this release so a rollback
-    # to (or a rolling deploy alongside) the previous release, which reads it,
-    # keeps working. The next release stops writing it and clears it; the
-    # contract release drops it. Nothing here requires it, so a NULL is fine.
+    # Never written with a value: the slug is derived from the decrypted name
+    # (`Vaults.derive_slug/2`, set by maybe_decrypt_vault_fields/2) and looked
+    # up via slug_hmac. Writes set it to NULL, and BackfillVaultSlugHmac clears
+    # any plaintext an older release left. The contract release drops it.
     field :slug, :string, redact: true
     # Keyed HMAC of the slug (per-user filter key, like name_hmac): lookup and
     # uniqueness for /v/:slug without the plaintext. `slug_suffixed` records
