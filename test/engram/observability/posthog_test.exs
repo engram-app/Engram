@@ -136,4 +136,67 @@ defmodule Engram.Observability.PostHogTest do
                "6f2afb8435bef1b20c37300002a4827c68eca6aa666c401626d5d227624e2bb6"
     end
   end
+
+  describe "capture_activity/3" do
+    setup do
+      EngramWeb.RateLimiter.reset_buckets!()
+      bypass = Bypass.open()
+      Application.put_env(:engram, :posthog_key, "phc_test_token")
+      Application.put_env(:engram, :posthog_host, "http://localhost:#{bypass.port}")
+      parent = self()
+
+      Bypass.stub(bypass, "POST", "/capture/", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(parent, {:posthog_body, Jason.decode!(body)})
+        Plug.Conn.resp(conn, 200, "1")
+      end)
+
+      %{user: %{id: System.unique_integer([:positive]), email: "Activity@Example.com"}}
+    end
+
+    test "emits surface_active with the keyed analytics id and the surface", %{user: user} do
+      assert :ok = PostHog.capture_activity(user, :obsidian_sync)
+
+      assert_receive {:posthog_body, body}, 1_000
+      assert body["event"] == "surface_active"
+      assert body["distinct_id"] == PostHog.analytics_id(user.email)
+      assert body["properties"]["surface"] == "obsidian_sync"
+    end
+
+    test "throttles repeat calls for the same user and surface", %{user: user} do
+      for _ <- 1..5, do: assert(:ok = PostHog.capture_activity(user, :mcp))
+
+      assert_receive {:posthog_body, _}, 1_000
+      refute_receive {:posthog_body, _}, 300
+    end
+
+    test "a different surface or user is not throttled", %{user: user} do
+      other = %{user | id: user.id + 1}
+
+      PostHog.capture_activity(user, :mcp)
+      PostHog.capture_activity(user, :obsidian_sync)
+      PostHog.capture_activity(other, :mcp)
+
+      for _ <- 1..3, do: assert_receive({:posthog_body, _}, 1_000)
+    end
+
+    test "merges extra properties but the surface cannot be overridden", %{user: user} do
+      PostHog.capture_activity(user, :mcp, %{tool: "search_notes", surface: "evil"})
+
+      assert_receive {:posthog_body, body}, 1_000
+      assert body["properties"]["tool"] == "search_notes"
+      assert body["properties"]["surface"] == "mcp"
+    end
+
+    test "rejects a surface outside the allowlist", %{user: user} do
+      assert_raise FunctionClauseError, fn -> PostHog.capture_activity(user, :nope) end
+    end
+
+    test "is a no-op when posthog_key is unset", %{user: user} do
+      Application.delete_env(:engram, :posthog_key)
+
+      assert :ok = PostHog.capture_activity(user, :web)
+      refute_receive {:posthog_body, _}, 200
+    end
+  end
 end

@@ -47,6 +47,35 @@ defmodule Engram.Observability.PostHog do
     end
   end
 
+  @surfaces [:obsidian_sync, :mcp, :web]
+  @activity_window_ms :timer.minutes(5)
+
+  @doc """
+  Record that `user` was active on `surface` (`:obsidian_sync`, `:mcp`, `:web`).
+
+  Emits `surface_active`, at most once per user and surface per 5 minutes, so a
+  hot path (live edits, MCP calls) can call this on every event. `props` are
+  merged in but never override `surface`. Same distinct_id as `capture/3`, so
+  it joins the frontend identify. Throttling is per node: a cluster emits at
+  most one event per node per window, which still counts each person once.
+  """
+  @spec capture_activity(%{id: term(), email: String.t()}, atom(), map()) :: :ok
+  def capture_activity(user, surface, props \\ %{}) when surface in @surfaces do
+    key = "ph_active:#{user.id}:#{surface}"
+
+    case EngramWeb.RateLimiter.hit(key, @activity_window_ms, 1, :analytics_activity) do
+      {:allow, _} ->
+        capture(
+          analytics_id(user.email),
+          "surface_active",
+          Map.put(props, :surface, Atom.to_string(surface))
+        )
+
+      {:deny, _} ->
+        :ok
+    end
+  end
+
   defp config do
     case Application.get_env(:engram, :posthog_key) do
       key when is_binary(key) and byte_size(key) > 0 ->

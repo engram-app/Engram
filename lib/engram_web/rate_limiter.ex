@@ -31,6 +31,7 @@ defmodule EngramWeb.RateLimiter do
           | :voyage_embed
           | :cimd_fetch
           | :ai_search
+          | :analytics_activity
           | :other
 
   @doc """
