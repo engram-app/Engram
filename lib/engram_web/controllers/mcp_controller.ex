@@ -830,7 +830,23 @@ defmodule EngramWeb.McpController do
       %{tool: tool_atom, status: status}
     )
 
+    emit_tool_analytics(user, tool_atom, status)
+
     result
+  end
+
+  # Product analytics, not ops telemetry: who is using MCP and which tools. Both
+  # labels are bounded (`tool_atom` is `:unknown` for anything off the allowlist,
+  # `status` is `:ok | :error`), so no client-supplied text reaches PostHog.
+  defp emit_tool_analytics(user, tool_atom, status) do
+    alias Engram.Observability.PostHog
+
+    PostHog.capture_activity(user, :mcp)
+
+    PostHog.capture(PostHog.analytics_id(user.email), "mcp_tool_called", %{
+      tool: Atom.to_string(tool_atom),
+      status: Atom.to_string(status)
+    })
   end
 
   @doc false

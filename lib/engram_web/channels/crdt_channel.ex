@@ -130,6 +130,7 @@ defmodule EngramWeb.CrdtChannel do
   # separately (UserDekRotation).
   defp join_authenticated("crdt:" <> ids, socket) do
     user = socket.assigns.current_user
+    Engram.Observability.PostHog.capture_activity(user, :obsidian_sync)
 
     join_vault("crdt:" <> ids, user, to_string(user.id), socket)
   end

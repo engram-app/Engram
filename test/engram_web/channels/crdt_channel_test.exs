@@ -2902,4 +2902,51 @@ defmodule EngramWeb.CrdtChannelTest do
       Sandbox.allow(Repo, self(), joined.channel_pid)
     end
   end
+
+  describe "activity analytics" do
+    test "joining the crdt channel emits a throttled obsidian_sync surface_active" do
+      EngramWeb.RateLimiter.reset_buckets!()
+      bypass = Bypass.open()
+
+      prior =
+        {Application.get_env(:engram, :posthog_key), Application.get_env(:engram, :posthog_host)}
+
+      Application.put_env(:engram, :posthog_key, "phc_test_token")
+      Application.put_env(:engram, :posthog_host, "http://localhost:#{bypass.port}")
+
+      on_exit(fn ->
+        {key, host} = prior
+        Application.put_env(:engram, :posthog_key, key)
+        Application.put_env(:engram, :posthog_host, host)
+      end)
+
+      parent = self()
+
+      Bypass.stub(bypass, "POST", "/capture/", fn c ->
+        {:ok, body, c} = Plug.Conn.read_body(c)
+        send(parent, {:posthog_body, Jason.decode!(body)})
+        Plug.Conn.resp(c, 200, "1")
+      end)
+
+      user = insert(:user)
+      {:ok, user} = Crypto.ensure_user_dek(user)
+      {:ok, vault, _} = Vaults.register_vault(user, "ActivityJoin", Ecto.UUID.generate())
+
+      for _ <- 1..2 do
+        {:ok, _, _} =
+          subscribe_and_join(
+            user_socket(user),
+            EngramWeb.CrdtChannel,
+            "crdt:#{user.id}:#{vault.id}",
+            %{"crdt_proto" => 2}
+          )
+      end
+
+      assert_receive {:posthog_body, body}, 1_000
+      assert body["event"] == "surface_active"
+      assert body["properties"]["surface"] == "obsidian_sync"
+      assert body["distinct_id"] == Engram.Observability.PostHog.analytics_id(user.email)
+      refute_receive {:posthog_body, _}, 300
+    end
+  end
 end
