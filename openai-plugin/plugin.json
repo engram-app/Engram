@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "engram",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Memory for ChatGPT that you can read and edit. Search, read and write the notes in your Engram vault, which also syncs with Obsidian and the Engram web app.",
   "author": {
     "name": "Engram",
@@ -37,7 +37,7 @@
         "privacyPolicyURL": "https://engram.page/privacy",
         "termsOfServiceURL": "https://engram.page/terms",
         "defaultPrompt": [
-          "What do my notes say about the launch plan?",
+          "Why is the website rebuild parked?",
           "Save a note with the decisions from this chat.",
           "What folders are in my vault?"
         ],
@@ -50,33 +50,33 @@
           "positive": [
             {
               "description": "Answer a question from an existing note",
-              "prompt": "What do my notes say about the launch plan?",
+              "prompt": "Why is the website rebuild parked?",
               "tools_triggered": "search_notes",
-              "expected_behavior": "Finds Projects/Launch Plan.md and answers from its content, naming the note as the source."
+              "expected_behavior": "Answers from '20 Projects/Website rebuild/Website rebuild - why it stays parked.md': every client came from referrals, the site produced zero enquiries, and Priya is needed for the Brightwell deadline. Parked until Q4; it unparks if Lampeter Foods goes ahead. Names the note as the source."
             },
             {
               "description": "Read a specific note",
-              "prompt": "Open my kickoff meeting notes and list the action items.",
+              "prompt": "Open my playbook on estimating a project and list the steps of the method.",
               "tools_triggered": "search_notes, get_notes",
-              "expected_behavior": "Reads Meetings/Kickoff.md and lists its action items exactly as written, without inventing owners or dates."
+              "expected_behavior": "Reads '30 Playbooks/Estimating a project.md' and lists its six method steps as written, including adding 40 percent to discovery and converting at 2.75 delivery days per week."
             },
             {
               "description": "Create a new note",
-              "prompt": "Save a note called Book Ideas with three science fiction book recommendations.",
+              "prompt": "Save a note called Book Ideas in my 60 Reading folder with three science fiction book recommendations.",
               "tools_triggered": "create_note",
-              "expected_behavior": "Creates a note titled Book Ideas containing three recommendations and reports the path it was saved to."
+              "expected_behavior": "Creates '60 Reading/Book Ideas.md' containing three recommendations and reports the path it was saved to."
             },
             {
               "description": "Append to an existing note",
-              "prompt": "Add 'confirm the venue' to the end of my launch plan.",
+              "prompt": "Add 'Confirm the SSL certificate auto-renews' to the end of my website launch checklist.",
               "tools_triggered": "search_notes, append_to_note",
-              "expected_behavior": "Appends the line 'confirm the venue' to the end of Projects/Launch Plan.md and leaves the rest of the note unchanged."
+              "expected_behavior": "Appends the line to the end of '20 Projects/Website rebuild/Website rebuild - launch checklist.md' and leaves the rest of the note unchanged."
             },
             {
               "description": "Browse vault structure",
               "prompt": "What folders are in my vault?",
               "tools_triggered": "list_folder",
-              "expected_behavior": "Lists the top-level folders of the test vault: Meetings, Projects and Reading."
+              "expected_behavior": "Lists the top-level folders: 00 Inbox, 10 Clients, 20 Projects, 30 Playbooks, 40 Meetings, 40 Operations, 50 Areas, 60 Reading, 70 Daily, 80 People and 90 Archive."
             }
           ],
           "negative": [
@@ -98,7 +98,7 @@
         "commerce_description": "The plugin does not sell products or process payments."
       },
       "publication": {
-        "release_notes": "Initial release: search, read, create, edit and organize notes in an Engram vault."
+        "release_notes": "Test cases now match the Northwind Studio sample vault in the reviewer account."
       }
     }
   }
