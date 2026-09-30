@@ -55,6 +55,7 @@ defmodule EngramWeb.Router do
     plug EngramWeb.Plugs.RequireOnboarding
     plug EngramWeb.Plugs.RequireActiveSubscription
     plug EngramWeb.Plugs.BumpActivity
+    plug EngramWeb.Plugs.WebActivity
     # AFTER BumpActivity, deliberately. An earlier position gave a nicer
     # message (upgrade beats "finish onboarding") and cost liveness: a refused
     # request never stamps `last_active_at`, both transports refuse a
@@ -348,6 +349,7 @@ defmodule EngramWeb.Router do
       # holds a valid JWT; without this they could mint API keys, CRUD vaults,
       # and change billing until token expiry.
       EngramWeb.Plugs.AccountLifecycle,
+      EngramWeb.Plugs.WebActivity,
       EngramWeb.Plugs.RotationLockCheck,
       EngramWeb.Plugs.RequireApiRpsBudget
     ]

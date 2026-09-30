@@ -112,4 +112,41 @@ defmodule EngramWeb.McpActivityTest do
 
     assert drain() == []
   end
+
+  defp initialize(conn, client_info) do
+    post(conn, "/api/mcp", %{
+      "jsonrpc" => "2.0",
+      "id" => 1,
+      "method" => "initialize",
+      "params" => %{"protocolVersion" => "2025-03-26", "clientInfo" => client_info}
+    })
+  end
+
+  test "initialize emits mcp_client_connected with a bucketed client family", %{
+    conn: conn,
+    user: user
+  } do
+    initialize(conn, %{"name" => "Claude-Code", "version" => "2.1.0"})
+
+    events = drain()
+    connected = Enum.find(events, &(&1["event"] == "mcp_client_connected"))
+    assert connected["distinct_id"] == PostHog.analytics_id(user.email)
+    assert connected["properties"]["client"] == "claude-code"
+    assert Enum.any?(events, &(&1["event"] == "surface_active"))
+  end
+
+  test "an unrecognised or hostile client name is bucketed as other", %{conn: conn} do
+    initialize(conn, %{"name" => "<script>alert(1)</script>" <> String.duplicate("x", 500)})
+
+    connected = Enum.find(drain(), &(&1["event"] == "mcp_client_connected"))
+    assert connected["properties"]["client"] == "other"
+  end
+
+  test "a non-object clientInfo is bucketed as other, not a crash", %{conn: conn} do
+    conn = initialize(conn, "claude")
+
+    assert json_response(conn, 200)["result"]["serverInfo"]
+    connected = Enum.find(drain(), &(&1["event"] == "mcp_client_connected"))
+    assert connected["properties"]["client"] == "other"
+  end
 end

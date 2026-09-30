@@ -539,8 +539,9 @@ defmodule EngramWeb.McpController do
 
   # -- Method dispatch --
 
-  defp dispatch(_conn, "initialize", params) do
+  defp dispatch(conn, "initialize", params) do
     Logger.info("mcp_handshake", handshake_metadata(params))
+    emit_client_connected(conn.assigns[:current_user], params)
 
     {:ok,
      %{
@@ -837,6 +838,43 @@ defmodule EngramWeb.McpController do
 
     result
   end
+
+  # Client families we name in analytics, matched against the lowercased
+  # `clientInfo.name`. Order matters: "claude-code" before "claude". Anything
+  # else is "other", so an arbitrary client string can never become a PostHog
+  # property value (bounded cardinality, nothing attacker-chosen).
+  @client_families [
+    {"claude-code", "claude-code"},
+    {"claude", "claude"},
+    {"chatgpt", "chatgpt"},
+    {"openai", "chatgpt"},
+    {"cursor", "cursor"},
+    {"windsurf", "windsurf"},
+    {"vscode", "vscode"},
+    {"visual studio code", "vscode"},
+    {"cline", "cline"},
+    {"zed", "zed"},
+    {"goose", "goose"}
+  ]
+
+  defp emit_client_connected(user, params) do
+    family = client_family(params)
+    PostHog.capture_activity(user, :mcp)
+
+    PostHog.capture_throttled(user, "mcp_client_connected", family, :timer.hours(1), %{
+      client: family
+    })
+  end
+
+  defp client_family(%{"clientInfo" => %{"name" => name}}) when is_binary(name) do
+    name = name |> String.slice(0, 64) |> String.downcase()
+
+    Enum.find_value(@client_families, "other", fn {needle, family} ->
+      if String.contains?(name, needle), do: family
+    end)
+  end
+
+  defp client_family(_params), do: "other"
 
   # Product analytics, not ops telemetry: who is using MCP and which tools. Every
   # label is bounded (`tool_atom` is `:unknown` off the allowlist; `status` is a

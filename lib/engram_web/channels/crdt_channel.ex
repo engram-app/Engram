@@ -1919,8 +1919,25 @@ defmodule EngramWeb.CrdtChannel do
   # Product analytics: the user pushed a real edit, not merely connected. Join
   # and handshake frames are deliberately excluded (an idle plugin reconnects
   # and handshakes every note without the user doing anything).
-  defp note_sync_activity(socket),
-    do: Engram.Observability.PostHog.capture_activity(socket.assigns.current_user, :obsidian_sync)
+  #
+  # `plugin_version` and `client_type` are already length-bounded at the socket /
+  # join boundary (user_socket.ex bounded_version/1, client_type/1 above), so
+  # they are safe to forward. They give plugin-version adoption for free.
+  defp note_sync_activity(socket) do
+    props =
+      %{
+        plugin_version: socket.assigns[:plugin_version],
+        client_type: socket.assigns[:client_type]
+      }
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+      |> Map.new()
+
+    Engram.Observability.PostHog.capture_activity(
+      socket.assigns.current_user,
+      :obsidian_sync,
+      props
+    )
+  end
 
   defp frame_class_b64(<<prefix::binary-size(4), _::binary>> = b64) do
     case Base.decode64(prefix) do

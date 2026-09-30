@@ -2968,6 +2968,32 @@ defmodule EngramWeb.CrdtChannelTest do
       assert body["distinct_id"] == Engram.Observability.PostHog.analytics_id(user.email)
     end
 
+    test "the event carries the bounded plugin_version and client_type", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/b.md", "content" => "base"})
+
+      {:ok, _, joined} =
+        user_socket(user)
+        |> Phoenix.Socket.assign(:plugin_version, "1.28.0")
+        |> subscribe_and_join(EngramWeb.CrdtChannel, "crdt:#{user.id}:#{vault.id}", %{
+          "crdt_proto" => 2,
+          "client_type" => "obsidian"
+        })
+
+      Sandbox.allow(Repo, self(), joined.channel_pid)
+
+      frame = client_sync_update(joined, note.id, "PV-")
+      ref = push(joined, "crdt_doc_update", %{"doc_id" => note.id, "b64" => Base.encode64(frame)})
+      assert_reply ref, :ok, %{doc_id: _}, 3000
+
+      Process.sleep(400)
+      [body] = Enum.filter(drain_posthog([]), &(&1["event"] == "surface_active"))
+      assert body["properties"]["plugin_version"] == "1.28.0"
+      assert body["properties"]["client_type"] == "obsidian"
+    end
+
     defp drain_posthog(acc) do
       receive do
         {:posthog_body, b} -> drain_posthog([b | acc])
