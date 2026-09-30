@@ -4,6 +4,8 @@ import type { ReactNode } from "react";
 import { useSyncExternalStore } from "react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CHECKLIST_ITEMS } from "../analytics/events";
+import { track } from "../analytics/track";
 import type { BillingStatus, Connection, OnboardingAction, OnboardingStatus } from "../api/queries";
 import { ChecklistWidget, DOC_URLS } from "./checklist-widget";
 import { TOOL_ASSISTANTS, TOOL_CODING } from "./onboarding-tools";
@@ -38,6 +40,9 @@ let billingStatusValue: { data: Partial<BillingStatus> | undefined; isLoading: b
 	data: { tier: "free", active: false } as Partial<BillingStatus>,
 	isLoading: false,
 };
+
+vi.mock("../analytics/track", () => ({ track: vi.fn() }));
+const mockTrack = vi.mocked(track);
 
 vi.mock("./use-onboarding-actions", () => ({
 	useOnboardingActions: () => onboardingActionsValue,
@@ -126,6 +131,7 @@ function setViewport(kind: "desktop" | "mobile") {
 }
 
 beforeEach(() => {
+	mockTrack.mockClear();
 	setViewport("desktop");
 	actionsList = [];
 	recordAsyncMock = vi.fn().mockResolvedValue({ status: "ok" });
@@ -597,5 +603,46 @@ describe("ChecklistWidget, Free-tier reminder", () => {
 
 		expect(screen.queryByText(/free.*1 connection/iu)).toBeNull();
 		expect(screen.queryByRole("link", { name: /upgrade/iu })).toBeNull();
+	});
+});
+
+describe("ChecklistWidget, interaction tracking", () => {
+	it("reports the row whose setup guide was opened", () => {
+		render(wrap(<ChecklistWidget />));
+
+		fireEvent.click(screen.getAllByRole("link", { name: /setup guide/iu })[0]!);
+
+		expect(mockTrack).toHaveBeenCalledWith("checklist_action", {
+			item: "claude",
+			action: "guide_opened",
+		});
+	});
+
+	it("reports the row that was dismissed", () => {
+		render(wrap(<ChecklistWidget />));
+
+		fireEvent.click(screen.getByLabelText(/dismiss connect claude/iu));
+
+		expect(mockTrack).toHaveBeenCalledWith("checklist_action", {
+			item: "claude",
+			action: "dismissed",
+		});
+	});
+
+	it("reports the Free-tier Upgrade link as coming from the checklist", () => {
+		render(wrap(<ChecklistWidget />));
+
+		fireEvent.click(screen.getByRole("link", { name: /upgrade/iu }));
+
+		expect(mockTrack).toHaveBeenCalledWith("upgrade_link_clicked", { source: "checklist" });
+	});
+
+	// track() drops any item outside CHECKLIST_ITEMS, so a doc row missing from
+	// the list would silently emit nothing.
+	it("lists every doc-backed row, plus vault and discord, as a trackable item", () => {
+		const missing = [...Object.keys(DOC_URLS), "vault", "join_discord"].filter(
+			(k) => !(CHECKLIST_ITEMS as readonly string[]).includes(k),
+		);
+		expect(missing).toEqual([]);
 	});
 });

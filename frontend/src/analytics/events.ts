@@ -14,7 +14,11 @@ export type EngramEvent =
 	| "checkout_abandoned"
 	| "mcp_connect_attempted"
 	| "mcp_connect_succeeded"
-	| "mcp_connect_failed";
+	| "mcp_connect_failed"
+	| "upgrade_link_clicked"
+	| "checklist_action"
+	| "vault_source_picked"
+	| "plugin_listing_opened";
 
 /** Mirrors Engram.Onboarding.gate/2's next_step. One state machine, not two. */
 export type OnboardingStep = "agreement" | "billing" | "tools" | "vault" | "done";
@@ -34,6 +38,41 @@ export type CheckoutMethod = (typeof CHECKOUT_METHODS)[number];
 // every other enum here is self-contained, and importing from billing would
 // be the only cross-domain edge in this file.
 export const CHECKOUT_TIERS = ["starter", "pro"] as const;
+
+// Where an "Upgrade" link was clicked. The wizard's tools step and the
+// post-wizard checklist both send Free users to /onboard/billing.
+export const UPGRADE_SOURCES = ["tools_step", "checklist"] as const;
+
+// Every row the checklist can render: vault, discord, the Obsidian plugin and
+// one per selectable tool slug (onboarding-tools.ts). Enumerated because a
+// dropped-not-forwarded item is the privacy contract; checklist-widget.test.tsx
+// fails if a doc-backed row is missing here.
+export const CHECKLIST_ITEMS = [
+	"vault",
+	"join_discord",
+	"install_obsidian_plugin",
+	"claude",
+	"chatgpt",
+	"grok",
+	"mistral",
+	"open_webui",
+	"lobechat",
+	"claude_code",
+	"cursor",
+	"devin",
+	"windsurf",
+	"cline",
+	"continue",
+	"opencode",
+	"github_copilot",
+	"antigravity",
+	"other_mcp",
+] as const;
+
+export const CHECKLIST_ACTIONS = ["guide_opened", "dismissed"] as const;
+
+// The two cards on the wizard's vault step.
+export const VAULT_SOURCES = ["obsidian", "fresh"] as const;
 
 export const MCP_CLIENTS = ["chatgpt", "claude", "cursor", "other"] as const;
 
@@ -74,6 +113,10 @@ export type PropKind =
 	| "checkout_method"
 	| "tier"
 	| "mcp_client"
+	| "upgrade_source"
+	| "checklist_item"
+	| "checklist_action"
+	| "vault_source"
 	| "error_code"
 	| "gate_reasons"
 	| "boolean"
@@ -102,4 +145,9 @@ export const EVENT_SCHEMAS: Record<EngramEvent, Record<string, PropKind>> = {
 	mcp_connect_attempted: { client: "mcp_client" },
 	mcp_connect_succeeded: { client: "mcp_client" },
 	mcp_connect_failed: { client: "mcp_client", reason: "error_code" },
+	upgrade_link_clicked: { source: "upgrade_source" },
+	checklist_action: { item: "checklist_item", action: "checklist_action" },
+	vault_source_picked: { source: "vault_source" },
+	// No properties: the click itself is the signal.
+	plugin_listing_opened: {},
 };

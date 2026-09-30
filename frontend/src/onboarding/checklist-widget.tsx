@@ -3,6 +3,7 @@ import { Waypoints } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { track } from "../analytics/track";
 import { type OnboardingStatus, useConnections, useOnboardingStatus } from "../api/queries";
 import { useIsFreeTier } from "../billing/use-is-free-tier";
 import { Button } from "../components/ui/button";
@@ -333,7 +334,14 @@ function ChecklistBody({ visible, total, completed, pct, isFreeTier, onDismiss }
 							<span className="flex items-center gap-1">
 								{i.docUrl ? (
 									<Button asChild size="sm" variant="outline">
-										<a href={i.docUrl} target="_blank" rel="noreferrer">
+										<a
+											href={i.docUrl}
+											target="_blank"
+											rel="noreferrer"
+											onClick={() =>
+												track("checklist_action", { item: i.key, action: "guide_opened" })
+											}
+										>
 											{i.actionLabel ?? "Setup guide"} ↗
 										</a>
 									</Button>
@@ -343,7 +351,10 @@ function ChecklistBody({ visible, total, completed, pct, isFreeTier, onDismiss }
 										type="button"
 										aria-label={`Dismiss ${i.label}`}
 										className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-										onClick={() => onDismiss(i.key)}
+										onClick={() => {
+											track("checklist_action", { item: i.key, action: "dismissed" });
+											onDismiss(i.key);
+										}}
 									>
 										×
 									</button>
@@ -358,6 +369,7 @@ function ChecklistBody({ visible, total, completed, pct, isFreeTier, onDismiss }
 					You're on Free, 1 connection.{" "}
 					<Link
 						to="/onboard/billing"
+						onClick={() => track("upgrade_link_clicked", { source: "checklist" })}
 						className="font-medium text-foreground underline underline-offset-4"
 					>
 						Upgrade
