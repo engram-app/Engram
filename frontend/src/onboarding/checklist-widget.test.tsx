@@ -639,6 +639,19 @@ describe("ChecklistWidget, interaction tracking", () => {
 
 	// track() drops any item outside CHECKLIST_ITEMS, so a doc row missing from
 	// the list would silently emit nothing.
+	// The catalog is the source of truth for which tool rows can exist. A tool
+	// added there without a CHECKLIST_ITEMS entry would have every click dropped
+	// and reported to Sentry, even when it has no DOC_URLS entry to trip the
+	// test below.
+	it("lists every selectable catalog tool as a trackable item", () => {
+		const missing = [...TOOL_ASSISTANTS, ...TOOL_CODING]
+			.filter((t) => !t.unavailable)
+			.map((t) => t.slug)
+			.filter((slug) => !(CHECKLIST_ITEMS as readonly string[]).includes(slug));
+
+		expect(missing).toEqual([]);
+	});
+
 	it("lists every doc-backed row, plus vault and discord, as a trackable item", () => {
 		const missing = [...Object.keys(DOC_URLS), "vault", "join_discord"].filter(
 			(k) => !(CHECKLIST_ITEMS as readonly string[]).includes(k),
