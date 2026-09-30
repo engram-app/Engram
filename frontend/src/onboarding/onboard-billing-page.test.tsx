@@ -466,3 +466,53 @@ describe("OnboardBillingPage — Free tier CTA", () => {
 		await waitFor(() => expect(screen.getByTestId("vault-page")).toBeInTheDocument());
 	});
 });
+
+describe("OnboardBillingPage — revisit after the billing step", () => {
+	beforeEach(() => {
+		toolsPageMounts = 0;
+		get.mockReset();
+		post.mockReset();
+		socketCtor.mockClear();
+	});
+
+	function mockPastBilling(billing: typeof BILLING_INACTIVE | typeof BILLING_ACTIVE) {
+		get.mockImplementation(async (url: string) => {
+			if (url === "/billing/status") {
+				return billing;
+			}
+			if (url === "/billing/config") {
+				return BILLING_CONFIG;
+			}
+			if (url === "/me") {
+				return { user: ME };
+			}
+			if (url === "/onboarding/status") {
+				return STATUS_TOOLS;
+			}
+			throw new Error(`unexpected GET ${url}`);
+		});
+	}
+
+	// The tools step links Free users here ("Upgrade"). Bouncing them straight
+	// back to tools made that link a dead end.
+	it("keeps a Free user on the plan picker so the Upgrade link works", async () => {
+		mockPastBilling(BILLING_INACTIVE);
+
+		renderOnboardBilling();
+
+		await waitFor(() =>
+			expect(screen.getAllByRole("button", { name: /start free trial/iu }).length).toBeGreaterThan(
+				0,
+			),
+		);
+		expect(screen.queryByTestId("tools-page")).not.toBeInTheDocument();
+	});
+
+	it("still sends a paid user forward to their next step", async () => {
+		mockPastBilling(BILLING_ACTIVE);
+
+		renderOnboardBilling();
+
+		await waitFor(() => expect(screen.getByTestId("tools-page")).toBeInTheDocument());
+	});
+});

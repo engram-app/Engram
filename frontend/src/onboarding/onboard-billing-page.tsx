@@ -4,7 +4,7 @@ import { Navigate, useNavigate } from "react-router";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { api } from "../api/client";
-import { type OnboardingStatus, useOnboardingStatus } from "../api/queries";
+import { type OnboardingStatus, useBillingStatus, useOnboardingStatus } from "../api/queries";
 import BillingPage from "../billing/billing-page";
 import { FREE_TIER } from "../billing/plan-cards";
 import { onboardingNext } from "./onboarding-next";
@@ -13,6 +13,7 @@ export default function OnboardBillingPage() {
 	const navigate = useNavigate();
 	const qc = useQueryClient();
 	const { data: onboarding } = useOnboardingStatus();
+	const { data: billing } = useBillingStatus();
 	const [freeLoading, setFreeLoading] = useState(false);
 	// True while the inline Paddle checkout view is open — hides our own header +
 	// free link so they don't sit stuck above/below the payment form.
@@ -48,7 +49,12 @@ export default function OnboardBillingPage() {
 	// tab, or returned to /onboard/billing after subscribing) — bounce forward
 	// to their actual next step instead of re-showing the plan picker. Keys off
 	// `next_step`, not `steps` (billing stays in `steps` even once satisfied).
-	if (onboarding && onboarding.next_step !== "billing") {
+	// Free users are exempt: the tools step and the checklist link them here to
+	// upgrade, and bouncing them back made that link a dead end. Waits for the
+	// billing status so a paid user isn't mistaken for Free while it loads.
+	// (Self-host never reaches here: billing isn't in its `steps`.)
+	const isPaid = billing !== undefined && billing.tier !== "free" && billing.tier !== "none";
+	if (onboarding && onboarding.next_step !== "billing" && isPaid) {
 		return <Navigate to={onboardingNext(onboarding)} replace />;
 	}
 
