@@ -49,6 +49,7 @@ defmodule Engram.Observability.PostHog do
   end
 
   @surfaces [:obsidian_sync, :mcp, :web]
+  @type surface :: :obsidian_sync | :mcp | :web
   @activity_window_ms :timer.minutes(5)
 
   @doc """
@@ -59,7 +60,7 @@ defmodule Engram.Observability.PostHog do
   a window edge). The limiter is cluster-shared under `:distributed_ets`. `props`
   are merged in but can never set `surface`, under either key type.
   """
-  @spec capture_activity(map(), atom(), map()) :: :ok
+  @spec capture_activity(map(), surface(), map()) :: :ok
   def capture_activity(user, surface, props \\ %{}) when surface in @surfaces do
     props = props |> Map.drop([:surface, "surface"]) |> Map.put(:surface, Atom.to_string(surface))
     capture_throttled(user, "surface_active", Atom.to_string(surface), @activity_window_ms, props)
