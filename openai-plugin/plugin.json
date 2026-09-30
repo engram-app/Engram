@@ -2,7 +2,7 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "engram",
   "version": "1.0.1",
-  "description": "Memory for ChatGPT that you can read and edit. Search, read and write the notes in your Engram vault, which also syncs with Obsidian and the Engram web app.",
+  "description": "Connect your Obsidian vault to ChatGPT: search, read, create and edit your Obsidian notes from any chat through Engram.",
   "author": {
     "name": "Engram",
     "email": "support@engram.page",
@@ -11,22 +11,23 @@
   "homepage": "https://engram.page",
   "repository": "https://github.com/engram-app/engram",
   "keywords": [
+    "obsidian",
+    "obsidian vault",
     "notes",
     "memory",
-    "obsidian",
-    "knowledge base",
-    "markdown"
+    "markdown",
+    "knowledge base"
   ],
   "extensions": {
     "com.openai": {
       "interface": {
-        "displayName": "Engram",
-        "shortDescription": "AI memory you can edit",
-        "longDescription": "Engram gives ChatGPT a memory made of plain markdown notes that you own. ChatGPT can search your notes, read them, create new ones, and edit or append to existing ones. The same notes sync to Obsidian and the Engram web app, so you can read and correct anything ChatGPT saved.\n\nUse it to ask questions about what you have written, save a decision or a summary for later, keep running lists and logs, or organize notes into folders.\n\nWho it is for: people who keep notes in Obsidian or want an AI memory they can inspect and edit, instead of one they cannot see.\n\nLimitations: requires an Engram account. Engram only accesses the vaults of the account you connect.",
+        "displayName": "Engram for Obsidian",
+        "shortDescription": "Your Obsidian vault in ChatGPT",
+        "longDescription": "Engram connects your Obsidian vault to ChatGPT. Search, read, create and edit your Obsidian notes from any chat, even with Obsidian closed, on your phone, or in a browser.\n\nHow it works: the Engram Vault Sync plugin for Obsidian syncs your vault to Engram in real time. ChatGPT reads and writes those notes through Engram, and every change syncs back into Obsidian as plain markdown you can open and edit.\n\nWhat you can do: ask questions about your notes, find an exact term, error message or ID, save a decision or summary as a new note, append to running lists and logs, and organize notes into folders.\n\nWho it is for: Obsidian users who want ChatGPT to remember what they have written, in a memory they can read and correct.\n\nLimitations: requires an Engram account, and syncing from Obsidian requires the Engram Vault Sync plugin. Engram only accesses the vaults of the account you connect. Engram is an independent product and is not affiliated with or endorsed by Obsidian.",
         "developerName": "Engram",
         "category": "Productivity",
         "capabilities": [
-          "Search notes",
+          "Search Obsidian notes",
           "Read notes",
           "Create notes",
           "Edit and append to notes",
@@ -37,9 +38,9 @@
         "privacyPolicyURL": "https://engram.page/privacy",
         "termsOfServiceURL": "https://engram.page/terms",
         "defaultPrompt": [
-          "Why is the website rebuild parked?",
-          "Save a note with the decisions from this chat.",
-          "What folders are in my vault?"
+          "What do my Obsidian notes say about my current project?",
+          "Save the decisions from this chat to my Obsidian vault.",
+          "What folders are in my Obsidian vault?"
         ],
         "brandColor": "#8B4FE8",
         "composerIcon": "./assets/icon.svg",
