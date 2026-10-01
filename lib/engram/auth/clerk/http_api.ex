@@ -13,11 +13,12 @@ defmodule Engram.Auth.Clerk.HttpApi do
 
   require Logger
 
-  @base_url "https://api.clerk.com/v1"
+  @default_base_url "https://api.clerk.com/v1"
 
   @impl true
   def delete_user(clerk_user_id) when is_binary(clerk_user_id) do
-    url = "#{@base_url}/users/#{URI.encode_www_form(clerk_user_id)}"
+    base_url = Application.get_env(:engram, :clerk_api_base_url, @default_base_url)
+    url = "#{base_url}/users/#{URI.encode_www_form(clerk_user_id)}"
 
     case Application.get_env(:engram, :clerk_secret_key) do
       blank when blank in [nil, ""] ->
@@ -35,6 +36,18 @@ defmodule Engram.Auth.Clerk.HttpApi do
 
         case :httpc.request(:delete, {String.to_charlist(url), headers}, [], []) do
           {:ok, {{_, status, _}, _, _}} when status in 200..299 ->
+            :ok
+
+          # Deleting is idempotent: 404 means the Clerk user is already gone,
+          # which is the outcome the caller wants. A Clerk-initiated deletion
+          # (user.deleted webhook -> our hard-delete -> this call) always lands
+          # here, so treating it as a failure logged an error on every one.
+          {:ok, {{_, 404, _}, _, _}} ->
+            Logger.info(
+              "Clerk delete_user: user already gone",
+              Metadata.with_category(:info, :auth, clerk_user_id: clerk_user_id)
+            )
+
             :ok
 
           {:ok, {{_, status, _}, _, body}} ->
