@@ -73,6 +73,29 @@ describe("OnboardVaultPage: step-completion tracking", () => {
 	});
 });
 
+describe("OnboardVaultPage: interaction tracking", () => {
+	beforeEach(() => {
+		mockTrack.mockClear();
+	});
+
+	it("reports which source the user picked", () => {
+		renderPage();
+
+		fireEvent.click(screen.getByText(/starting fresh/iu));
+
+		expect(mockTrack).toHaveBeenCalledWith("vault_source_picked", { source: "fresh" });
+	});
+
+	it("reports when the plugin listing is opened from the install steps", () => {
+		renderPage();
+		fireEvent.click(screen.getByText(/i already use obsidian/iu));
+
+		fireEvent.click(screen.getByRole("link", { name: /plugin listing/iu }));
+
+		expect(mockTrack).toHaveBeenCalledWith("plugin_listing_opened");
+	});
+});
+
 // Plugin-first signup, parked on /link with its device code. "I already use
 // Obsidian" normally waits for the plugin's first sync, but that plugin cannot
 // sync until its code is authorized back on /link: waiting here is a deadlock.

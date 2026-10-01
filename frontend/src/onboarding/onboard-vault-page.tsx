@@ -71,6 +71,9 @@ function VaultStep({
 	}, [obsidianCommitted, navigate]);
 
 	async function pickSource(s: Source) {
+		if (s !== null && s !== source) {
+			track("vault_source_picked", { source: s });
+		}
 		setSource(s);
 		// Re-entry guard: a fast double-click on the Obsidian card would
 		// otherwise dispatch two concurrent PATCHes. The `obsidianCommitted`
@@ -288,6 +291,7 @@ function ObsidianInlinePanel({ userId, isCommitting, onCommit }: ObsidianInlineP
 								href="https://community.obsidian.md/plugins/engram-vault-sync"
 								target="_blank"
 								rel="noreferrer noopener"
+								onClick={() => track("plugin_listing_opened")}
 								className="font-medium text-primary underline-offset-2 hover:underline"
 							>
 								plugin listing
