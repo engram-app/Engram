@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.38.1](https://github.com/engram-app/Engram/compare/0.38.0...0.38.1) (2026-09-30)
+
+
+### Bug Fixes
+
+* **vaults:** stop storing plaintext vault slugs ([#1818](https://github.com/engram-app/Engram/issues/1818)) ([c94de48](https://github.com/engram-app/Engram/commit/c94de4803e0b84078df661c4694df54a7252e56e))
+
 ## [0.38.0](https://github.com/engram-app/Engram/compare/0.37.0...0.38.0) (2026-09-30)
 
 

@@ -86,10 +86,11 @@ const authAdapter: AuthAdapter = {
 	hasBuiltInUI: false,
 };
 
-function renderOnboardBilling() {
-	const qc = new QueryClient({
+function renderOnboardBilling(
+	qc: QueryClient = new QueryClient({
 		defaultOptions: { queries: { retry: false, gcTime: 0 } },
-	});
+	}),
+) {
 	return render(
 		<QueryClientProvider client={qc}>
 			<AuthContext.Provider value={authAdapter}>
@@ -334,6 +335,8 @@ describe("OnboardBillingPage — push activation", () => {
 		});
 		// Pre-warm cache: user already advanced past billing in another tab.
 		qc.setQueryData(["onboarding", "status"], STATUS_TOOLS);
+		// useAppBootstrap seeds billing alongside onboarding on first load.
+		qc.setQueryData(["billing", "status"], BILLING_ACTIVE);
 
 		render(
 			<QueryClientProvider client={qc}>
@@ -464,5 +467,215 @@ describe("OnboardBillingPage — Free tier CTA", () => {
 
 		await waitFor(() => expect(post).toHaveBeenCalledWith("/onboarding/accept_free_tier"));
 		await waitFor(() => expect(screen.getByTestId("vault-page")).toBeInTheDocument());
+	});
+});
+
+describe("OnboardBillingPage — revisit after the billing step", () => {
+	beforeEach(() => {
+		toolsPageMounts = 0;
+		get.mockReset();
+		post.mockReset();
+		socketCtor.mockClear();
+	});
+
+	function mockPastBilling(billing: typeof BILLING_INACTIVE | typeof BILLING_ACTIVE) {
+		get.mockImplementation(async (url: string) => {
+			if (url === "/billing/status") {
+				return billing;
+			}
+			if (url === "/billing/config") {
+				return BILLING_CONFIG;
+			}
+			if (url === "/me") {
+				return { user: ME };
+			}
+			if (url === "/onboarding/status") {
+				return STATUS_TOOLS;
+			}
+			throw new Error(`unexpected GET ${url}`);
+		});
+	}
+
+	// The tools step links Free users here ("Upgrade"). Bouncing them straight
+	// back to tools made that link a dead end.
+	it("keeps a Free user on the plan picker so the Upgrade link works", async () => {
+		mockPastBilling(BILLING_INACTIVE);
+
+		renderOnboardBilling();
+
+		await waitFor(() =>
+			expect(screen.getAllByRole("button", { name: /start free trial/iu }).length).toBeGreaterThan(
+				0,
+			),
+		);
+		expect(screen.queryByTestId("tools-page")).not.toBeInTheDocument();
+	});
+
+	// The backend derives top-level `tier` and `active` from one value, so a
+	// lapsed subscriber arrives as `tier: "free"` with the old plan only in
+	// `subscription`. They must reach the picker to resubscribe.
+	it("keeps a lapsed subscriber on the plan picker", async () => {
+		mockPastBilling({
+			...BILLING_INACTIVE,
+			subscription: { status: "canceled", tier: "starter", current_period_end: "2026-08-01" },
+		} as unknown as typeof BILLING_INACTIVE);
+
+		renderOnboardBilling();
+
+		await waitFor(() =>
+			expect(screen.getAllByRole("button", { name: /start free trial/iu }).length).toBeGreaterThan(
+				0,
+			),
+		);
+		expect(screen.queryByTestId("tools-page")).not.toBeInTheDocument();
+	});
+
+	// Cold cache: billing hasn't answered yet. We must not guess. Bouncing would
+	// strand a Free user who came to upgrade; rendering the picker would hand a
+	// paid user a clickable "Continue with Free". Hold a loader, then decide.
+	it("holds a loader while billing loads, then shows the picker to a Free user", async () => {
+		let releaseBilling: () => void = () => {};
+		const billingGate = new Promise<void>((r) => {
+			releaseBilling = r;
+		});
+		get.mockImplementation(async (url: string) => {
+			if (url === "/billing/status") {
+				await billingGate;
+				return BILLING_INACTIVE;
+			}
+			if (url === "/billing/config") {
+				return BILLING_CONFIG;
+			}
+			if (url === "/me") {
+				return { user: ME };
+			}
+			if (url === "/onboarding/status") {
+				return STATUS_TOOLS;
+			}
+			throw new Error(`unexpected GET ${url}`);
+		});
+
+		const qc = new QueryClient({
+			defaultOptions: { queries: { retry: false, gcTime: 0 } },
+		});
+		// OnboardLayout holds a loader until onboarding status is in, so this page
+		// never mounts without it; billing is the only cold query.
+		qc.setQueryData(["onboarding", "status"], STATUS_TOOLS);
+		renderOnboardBilling(qc);
+		await flush();
+
+		expect(screen.queryByRole("button", { name: /continue with free/iu })).not.toBeInTheDocument();
+		expect(screen.queryByTestId("tools-page")).not.toBeInTheDocument();
+
+		await act(async () => {
+			releaseBilling();
+			await Promise.resolve();
+		});
+		await waitFor(() =>
+			expect(screen.getAllByRole("button", { name: /start free trial/iu }).length).toBeGreaterThan(
+				0,
+			),
+		);
+		expect(screen.queryByTestId("tools-page")).not.toBeInTheDocument();
+	});
+
+	// If billing can't be read, fall back to the onboarding status alone, as
+	// before. BillingPage has no error branch and would sit on its skeleton.
+	it("bounces forward when billing status fails to load", async () => {
+		get.mockImplementation(async (url: string) => {
+			if (url === "/billing/status") {
+				throw new Error("500");
+			}
+			if (url === "/billing/config") {
+				return BILLING_CONFIG;
+			}
+			if (url === "/me") {
+				return { user: ME };
+			}
+			if (url === "/onboarding/status") {
+				return STATUS_TOOLS;
+			}
+			throw new Error(`unexpected GET ${url}`);
+		});
+
+		renderOnboardBilling();
+
+		await waitFor(() => expect(screen.getByTestId("tools-page")).toBeInTheDocument());
+	});
+
+	// A Free user upgrading from the tools step: billing flips active before the
+	// onboarding status refetch lands. The page must hold its "Setting up" view
+	// and let onActivated navigate, not unmount the moment billing goes active.
+	it("holds the finalizing view while a Free user's upgrade activates", async () => {
+		capturedEventCallback = undefined;
+		for (const k of Object.keys(channelHandlers)) {
+			delete channelHandlers[k];
+		}
+		let billingActive = false;
+		let releaseStatus: () => void = () => {};
+		const statusGate = new Promise<void>((r) => {
+			releaseStatus = r;
+		});
+		let statusCalls = 0;
+		get.mockImplementation(async (url: string) => {
+			if (url === "/billing/status") {
+				return billingActive ? BILLING_ACTIVE : BILLING_INACTIVE;
+			}
+			if (url === "/billing/config") {
+				return BILLING_CONFIG;
+			}
+			if (url === "/me") {
+				return { user: ME };
+			}
+			if (url === "/onboarding/status") {
+				statusCalls += 1;
+				// First read is the initial page load; later reads wait on the gate.
+				if (statusCalls > 1) {
+					await statusGate;
+				}
+				return STATUS_TOOLS;
+			}
+			throw new Error(`unexpected GET ${url}`);
+		});
+
+		renderOnboardBilling();
+
+		await waitFor(() => expect(channelHandlers.subscription_activated).toBeDefined());
+		await waitFor(() => expect(capturedEventCallback).toBeDefined());
+		await act(async () => {
+			capturedEventCallback!({
+				name: "checkout.payment.initiated",
+				data: { transaction_id: "txn_free_upgrade" },
+			});
+		});
+
+		billingActive = true;
+		await act(async () => {
+			channelHandlers.subscription_activated!({
+				tier: "starter",
+				status: "trialing",
+				subscription_id: "sub_up",
+			});
+			await Promise.resolve();
+		});
+		await flush();
+
+		expect(screen.getByText(/setting up your account/iu)).toBeInTheDocument();
+		expect(screen.queryByTestId("tools-page")).not.toBeInTheDocument();
+
+		await act(async () => {
+			releaseStatus();
+			await Promise.resolve();
+		});
+		await waitFor(() => expect(screen.getByTestId("tools-page")).toBeInTheDocument());
+		expect(toolsPageMounts).toBe(1);
+	});
+
+	it("still sends a paid user forward to their next step", async () => {
+		mockPastBilling(BILLING_ACTIVE);
+
+		renderOnboardBilling();
+
+		await waitFor(() => expect(screen.getByTestId("tools-page")).toBeInTheDocument());
 	});
 });

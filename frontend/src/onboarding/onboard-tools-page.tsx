@@ -83,6 +83,7 @@ function ToolsForm({ initialTools, isPending, hasError, isFree, onSubmit }: Tool
 					Free tier, pick 1 to start.{" "}
 					<Link
 						to="/onboard/billing"
+						onClick={() => track("upgrade_link_clicked", { source: "tools_step" })}
 						className="font-medium text-foreground underline underline-offset-4"
 					>
 						Upgrade
