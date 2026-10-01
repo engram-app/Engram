@@ -240,7 +240,6 @@ defmodule Engram.Notes.CrdtRoomLru do
         write_concurrency: true
       ])
 
-    schedule_sweep()
     {:ok, initial_state()}
   end
 
@@ -249,7 +248,12 @@ defmodule Engram.Notes.CrdtRoomLru do
   # rooms coalesces into one sweep instead of one per room.
   # `paced`: the last sweep found stuck drains. Prompt sweeps stand down until a
   # sweep finds none, so a wedge gets at most one paced batch per interval.
-  defp initial_state, do: %{asked: %{}, over_cap_timer: nil, paced: false}
+  # `sweep_ref`: token of the live periodic timer. `reset/0` re-arms it from
+  # the current config, and a timer armed before that is ignored when it
+  # fires (a delivered message cannot be recalled), so a test that resets
+  # cannot have the app's own sweep interleave with its sweeps (#1792).
+  defp initial_state,
+    do: %{asked: %{}, over_cap_timer: nil, paced: false, sweep_ref: schedule_sweep()}
 
   @impl true
   def handle_call({:sweep, cap}, _from, state) do
@@ -277,11 +281,12 @@ defmodule Engram.Notes.CrdtRoomLru do
   end
 
   @impl true
-  def handle_info(:sweep, state) do
+  def handle_info({:sweep, ref}, %{sweep_ref: ref} = state) do
     state = do_sweep(max_resident(), state)
-    schedule_sweep()
-    {:noreply, state}
+    {:noreply, %{state | sweep_ref: schedule_sweep()}}
   end
+
+  def handle_info({:sweep, _stale}, state), do: {:noreply, state}
 
   # Only the sweep for the CURRENT timer runs. `Process.cancel_timer/1` cannot
   # recall a message already delivered, so a cancelled one may still arrive.
@@ -432,7 +437,11 @@ defmodule Engram.Notes.CrdtRoomLru do
     end
   end
 
-  defp schedule_sweep, do: Process.send_after(self(), :sweep, sweep_interval_ms())
+  defp schedule_sweep do
+    ref = make_ref()
+    _ = Process.send_after(self(), {:sweep, ref}, sweep_interval_ms())
+    ref
+  end
 
   defp cfg, do: Application.get_env(:engram, __MODULE__, [])
   defp sweep_interval_ms, do: Keyword.get(cfg(), :sweep_interval_ms) || @default_sweep_interval_ms

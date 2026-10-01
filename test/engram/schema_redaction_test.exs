@@ -17,7 +17,6 @@ defmodule Engram.SchemaRedactionTest do
     {Engram.Vaults.Vault, ~w(name description slug)a, []},
     {Engram.Accounts.User, ~w(email normalized_email display_name)a, []},
     {Engram.OAuth.Client, ~w(client_secret first_ip)a, []},
-    {Engram.Notes.Chunk, ~w(heading_path)a, []},
     {Engram.Logs.ClientLog, ~w(message stack)a, []},
     {Engram.Auth.DeviceAuthorization, ~w(device_code user_code vault_name)a, []},
     {Engram.Email.Suppression, ~w(email)a, []},

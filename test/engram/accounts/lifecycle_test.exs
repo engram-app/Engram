@@ -118,7 +118,6 @@ defmodule Engram.Accounts.LifecycleTest do
             user_id: user.id,
             vault_id: vault.id,
             position: 0,
-            heading_path: "Title",
             char_start: 0,
             char_end: 10,
             token_count: 3,
