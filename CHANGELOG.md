@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.38.1](https://github.com/engram-app/Engram/compare/0.38.0...0.38.1) (2026-09-30)
+
+
+### Bug Fixes
+
+* **vaults:** stop storing plaintext vault slugs ([#1818](https://github.com/engram-app/Engram/issues/1818)) ([c94de48](https://github.com/engram-app/Engram/commit/c94de4803e0b84078df661c4694df54a7252e56e))
+
+## [0.38.0](https://github.com/engram-app/Engram/compare/0.37.0...0.38.0) (2026-09-30)
+
+
+### Features
+
+* **mcp:** serve the OpenAI apps domain challenge ([#1811](https://github.com/engram-app/Engram/issues/1811)) ([8d2ef68](https://github.com/engram-app/Engram/commit/8d2ef68f23862de3db021c1da5c38d1933113917))
+
+## [0.37.0](https://github.com/engram-app/Engram/compare/0.36.0...0.37.0) (2026-09-30)
+
+
+### Features
+
+* **mcp:** parity params for search, read and edit ([#1800](https://github.com/engram-app/Engram/issues/1800)) ([6672ba4](https://github.com/engram-app/Engram/commit/6672ba4ec72bb867ec1df3eab0b292ece0a208e3))
+
+
+### Bug Fixes
+
+* **sync:** release a filemeta_v0 claim for a note that never arrives ([#1801](https://github.com/engram-app/Engram/issues/1801)) ([0f810bd](https://github.com/engram-app/Engram/commit/0f810bdd7f8d8e78298c4815e99373873c498352))
+* **vaults:** derive vault slugs on read; stop leaking them in exports ([#1808](https://github.com/engram-app/Engram/issues/1808)) ([8581869](https://github.com/engram-app/Engram/commit/8581869d60b43a106028e623b4a9538c450d79ad))
+
+## [0.36.0](https://github.com/engram-app/Engram/compare/0.35.0...0.36.0) (2026-09-27)
+
+
+### Features
+
+* **mcp:** consolidate to 17 tools (edit_note, get_notes, list_folder) ([#1789](https://github.com/engram-app/Engram/issues/1789)) ([e6091f0](https://github.com/engram-app/Engram/commit/e6091f0e73743439b3689b4bf4a7ac6ec591e8a0))
+* **vaults:** add slug_hmac and derivable slugs (expand) ([#1797](https://github.com/engram-app/Engram/issues/1797)) ([dbf3116](https://github.com/engram-app/Engram/commit/dbf31164bca634de798f7af8ccc25af0866ec168))
+
+
+### Bug Fixes
+
+* **privacy:** scrub client telemetry at ingest and in the SPA ([#1795](https://github.com/engram-app/Engram/issues/1795)) ([9f220a7](https://github.com/engram-app/Engram/commit/9f220a7bef32db170dd8d224effe98e655b3c57d))
+* **privacy:** stop storing plaintext chunk headings ([#1796](https://github.com/engram-app/Engram/issues/1796)) ([100cebd](https://github.com/engram-app/Engram/commit/100cebd1aa6ba4b12a3f31a4e1b86132e432c910))
+* **schema:** redact decrypted fields from inspect ([#1785](https://github.com/engram-app/Engram/issues/1785)) ([d9f4ff1](https://github.com/engram-app/Engram/commit/d9f4ff163004627dce9ecd6fa1ca4bc571eb6586))
+* **security:** keep user data out of logs, traces and Sentry ([#1791](https://github.com/engram-app/Engram/issues/1791)) ([d671634](https://github.com/engram-app/Engram/commit/d6716342592ad93ad6e4a0c8faac03fe4cf64ade))
+
 ## [0.35.0](https://github.com/engram-app/Engram/compare/0.34.0...0.35.0) (2026-09-26)
 
 

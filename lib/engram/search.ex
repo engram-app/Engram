@@ -41,6 +41,24 @@ defmodule Engram.Search do
   end
 
   @doc """
+  Notes similar to a stored note, from that note's chunk points (`point_ids`)
+  via Qdrant recommend. Same vault guard, entitlement, filters and grouping as
+  `search/4`, but NO `ai_searches_per_day` spend: that budget meters the query
+  embed, and this path makes none. Results are grouped per note.
+  """
+  def similar(user, vault, point_ids, opts \\ []) when is_list(point_ids) and point_ids != [] do
+    with :ok <- vault_ids_present?(vault, opts),
+         :ok <- cross_vault_entitlement(user, opts) do
+      do_search_instrumented(
+        user,
+        vault,
+        {:similar, point_ids},
+        Keyword.merge(opts, mode: :similar, group_by_note: true)
+      )
+    end
+  end
+
+  @doc """
   Search notes for a user within a vault. Returns {:ok, results} where each result has:
   score, text, title, heading_path, source_path, tags.
 
@@ -297,11 +315,12 @@ defmodule Engram.Search do
     # so MMR has more than `limit` to choose from. `candidate_pool` defaults to
     # 20 via the profile (SearchProfile.@default_pool).
     pool = max(limit * 4, profile.candidate_pool)
-    rerank_for_user? = reranker_active?() and profile.reranker
     # Grouped path ALWAYS over-fetches the pool: grouping needs more than
     # `note_limit` chunks to populate `note_limit` notes, and the full pool must
     # also survive the reranker so collapse_to_notes sees every candidate (even
     # at diversity 0, where it must not be starved down to `limit` chunks).
+    # A similar_to query is `{:similar, ids}`, not text: nothing to rerank against.
+    rerank_for_user? = reranker_active?() and profile.reranker and is_binary(query)
     fetch_limit = if group? or rerank_for_user? or need_vectors?, do: pool, else: limit
     # Keep the whole pool through the reranker when diversifying or grouping so
     # MMR / collapse can see it; otherwise the reranker cuts straight to `limit`
@@ -445,6 +464,10 @@ defmodule Engram.Search do
         end
     end
   end
+
+  # similar_to: the source note's stored dense vectors, averaged by Qdrant.
+  defp run_legs(:similar, _user, {:similar, point_ids}, search_opts, _profile),
+    do: Qdrant.recommend(collection(), point_ids, search_opts)
 
   # Caller-supplied :mode is external input (MCP/API) — an unknown mode must
   # return an error tuple, not raise FunctionClauseError mid-pipeline.

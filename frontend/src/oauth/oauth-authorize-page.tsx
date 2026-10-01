@@ -599,11 +599,6 @@ export default function OAuthAuthorizePage() {
 												{v.is_default ? (
 													<span className="text-muted-foreground text-xs">default</span>
 												) : null}
-												{v.description ? (
-													<span className="truncate text-muted-foreground text-xs">
-														{v.description}
-													</span>
-												) : null}
 											</span>
 											<span className="shrink-0 text-muted-foreground text-xs">
 												{countLabel(v.note_count, v.attachment_count)}

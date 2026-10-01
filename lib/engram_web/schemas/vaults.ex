@@ -9,7 +9,6 @@ defmodule EngramWeb.Schemas.Vault do
     properties: %{
       id: %Schema{type: :string, format: :uuid},
       name: %Schema{type: :string},
-      description: %Schema{type: :string, nullable: true},
       slug: %Schema{type: :string, nullable: true},
       is_default: %Schema{type: :boolean},
       created_at: %Schema{type: :string, format: :"date-time", nullable: true},
@@ -88,7 +87,6 @@ defmodule EngramWeb.Schemas.UpdateVaultRequest do
     type: :object,
     properties: %{
       name: %Schema{type: :string},
-      description: %Schema{type: :string, nullable: true},
       is_default: %Schema{type: :boolean}
     },
     example: %{

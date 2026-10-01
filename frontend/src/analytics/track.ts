@@ -2,6 +2,8 @@ import posthog from "posthog-js";
 import { isMember } from "../lib/is-member";
 import { captureError } from "../sentry";
 import {
+	CHECKLIST_ACTIONS,
+	CHECKLIST_ITEMS,
 	CHECKOUT_METHODS,
 	CHECKOUT_TIERS,
 	type EngramEvent,
@@ -11,6 +13,8 @@ import {
 	MCP_CLIENTS,
 	ONBOARDING_STEPS,
 	type PropKind,
+	UPGRADE_SOURCES,
+	VAULT_SOURCES,
 } from "./events";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -31,6 +35,14 @@ function isKind(kind: PropKind, value: unknown): boolean {
 			return isMember(CHECKOUT_TIERS, value);
 		case "mcp_client":
 			return isMember(MCP_CLIENTS, value);
+		case "upgrade_source":
+			return isMember(UPGRADE_SOURCES, value);
+		case "checklist_item":
+			return isMember(CHECKLIST_ITEMS, value);
+		case "checklist_action":
+			return isMember(CHECKLIST_ACTIONS, value);
+		case "vault_source":
+			return isMember(VAULT_SOURCES, value);
 		case "error_code":
 			return isMember(ERROR_CODES, value);
 		case "gate_reasons":

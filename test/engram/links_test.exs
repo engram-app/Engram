@@ -416,6 +416,80 @@ defmodule Engram.LinksTest do
       assert Links.backlinks_limit() == 200
     end
 
+    # `opts[:limit]` lets a caller (get_notes' include_links) probe for
+    # truncation with `limit: n + 1` without manufacturing 200+ real edges;
+    # a plain call with no opts must stay byte-identical to before.
+    test "opts[:limit] overrides the cap for a single call", %{user: user, vault: vault} do
+      target = Engram.Fixtures.insert_note!(user, vault, %{path: "Target.md"})
+
+      for n <- 1..3 do
+        source = Engram.Fixtures.insert_note!(user, vault, %{path: "Source#{n}.md"})
+
+        :ok =
+          Links.replace_links(user, vault, source.id, [
+            %{target: "Target", alias: nil, anchor: nil, link_type: "wikilink", position: 0}
+          ])
+      end
+
+      assert length(Links.backlinks_for_note(user, target.id, limit: 2)) == 2
+      assert length(Links.backlinks_for_note(user, target.id)) == 3
+    end
+
+    # A source note with several edges to the same target must count once,
+    # not once per edge. This was the false-positive get_notes' truncation
+    # probe hit before this option existed.
+    test "opts[:distinct_sources] collapses one source's multiple edges to one row", %{
+      user: user,
+      vault: vault
+    } do
+      target = Engram.Fixtures.insert_note!(user, vault, %{path: "Target.md"})
+      source = Engram.Fixtures.insert_note!(user, vault, %{path: "Source.md"})
+
+      :ok =
+        Links.replace_links(user, vault, source.id, [
+          %{target: "Target", alias: nil, anchor: nil, link_type: "wikilink", position: 0},
+          %{target: "Target", alias: nil, anchor: nil, link_type: "wikilink", position: 1}
+        ])
+
+      assert length(Links.backlinks_for_note(user, target.id)) == 2
+
+      assert [%{source_note_id: sid}] =
+               Links.backlinks_for_note(user, target.id, distinct_sources: true)
+
+      assert sid == source.id
+    end
+
+    test "opts[:distinct_sources] counts unique linking notes past duplicate edges", %{
+      user: user,
+      vault: vault
+    } do
+      target = Engram.Fixtures.insert_note!(user, vault, %{path: "Target.md"})
+
+      dup_source = Engram.Fixtures.insert_note!(user, vault, %{path: "Dup.md"})
+
+      :ok =
+        Links.replace_links(user, vault, dup_source.id, [
+          %{target: "Target", alias: nil, anchor: nil, link_type: "wikilink", position: 0},
+          %{target: "Target", alias: nil, anchor: nil, link_type: "wikilink", position: 1}
+        ])
+
+      other = Engram.Fixtures.insert_note!(user, vault, %{path: "Other.md"})
+
+      :ok =
+        Links.replace_links(user, vault, other.id, [
+          %{target: "Target", alias: nil, anchor: nil, link_type: "wikilink", position: 0}
+        ])
+
+      # 3 edges total from 2 unique sources. With limit: 2 (probing for "more
+      # than 1 unique source"), the raw edge count would wrongly say 3 > 1;
+      # distinct_sources correctly says 2 (not > 1).
+      assert length(Links.backlinks_for_note(user, target.id)) == 3
+      assert length(Links.backlinks_for_note(user, target.id, distinct_sources: true)) == 2
+
+      assert length(Links.backlinks_for_note(user, target.id, limit: 1, distinct_sources: true)) ==
+               1
+    end
+
     test "multiple backlinks come back ordered by position, id", %{user: user, vault: vault} do
       target = Engram.Fixtures.insert_note!(user, vault, %{path: "Target.md"})
 

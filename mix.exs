@@ -5,7 +5,7 @@ defmodule Engram.MixProject do
     [
       app: :engram,
       # x-release-please-start-version
-      version: "0.35.0",
+      version: "0.38.1",
       # x-release-please-end-version
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -190,6 +190,15 @@ defmodule Engram.MixProject do
       # The override forces 0.9.x which lingua compiles and runs against fine.
       {:lingua, "~> 0.3.0"},
       {:rustler_precompiled, "~> 0.9.0", override: true},
+
+      # CommonMark parser for MCP section boundaries (Engram.MCP.Sections):
+      # comrak as a precompiled Rust NIF. mdex_native directly, not the `mdex`
+      # wrapper: Sections reads the native AST, and mdex's Elixir-side struct
+      # conversion was ~4x the parse itself on dense markup.
+      # 0.x can ship AST shape changes in patch releases, and Sections
+      # pattern-matches that AST: the shape-contract test in
+      # test/engram/mcp/sections_test.exs is the guard for any bump.
+      {:mdex_native, "~> 0.2.9"},
 
       # Test
       {:ex_machina, "~> 2.8", only: :test},

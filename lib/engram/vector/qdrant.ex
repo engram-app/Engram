@@ -819,6 +819,37 @@ defmodule Engram.Vector.Qdrant do
     |> maybe_with_vector(search_opts)
   end
 
+  @doc """
+  Points similar to the given stored points: Qdrant averages their dense
+  vectors (`average_vector`) and searches with the centroid. No embed call.
+  The given points are excluded from the results. Same options as `search/3`.
+  """
+  def recommend(col \\ nil, point_ids, search_opts) do
+    col = col || collection()
+
+    instrument(:recommend, fn ->
+      do_search(col, [json: recommend_body(point_ids, search_opts)] ++ req_opts(:search))
+    end)
+  end
+
+  @doc false
+  def recommend_body(point_ids, search_opts) do
+    %{
+      query: %{recommend: %{positive: point_ids, strategy: "average_vector"}},
+      using: "dense",
+      filter: Map.put(build_tenant_filter(search_opts), :must_not, [%{has_id: point_ids}]),
+      limit: Keyword.get(search_opts, :limit, 5),
+      with_payload: true
+    }
+    |> then(fn b ->
+      case quantization_params(search_opts) do
+        nil -> b
+        params -> Map.put(b, :params, params)
+      end
+    end)
+    |> maybe_with_vector(search_opts)
+  end
+
   defp do_search(col, opts) do
     case Req.post("#{base_url()}/collections/#{col}/points/query", opts) do
       {:ok, %{status: 200, body: %{"result" => result}}} ->

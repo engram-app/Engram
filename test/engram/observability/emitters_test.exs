@@ -54,6 +54,19 @@ defmodule Engram.Observability.EmittersTest do
     end)
   end
 
+  # For requests that legitimately emit more than one event (an authenticated
+  # SPA request also sends a throttled `surface_active`), so `expect_once` would
+  # fail the second POST. Tests then match the event they care about by name.
+  defp expect_captures(bypass) do
+    parent = self()
+
+    Bypass.expect(bypass, "POST", "/capture/", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      send(parent, {:posthog_body, Jason.decode!(body)})
+      Plug.Conn.resp(conn, 200, "1")
+    end)
+  end
+
   defp user_with_clerk_id(opts \\ []) do
     ext_id = Keyword.get(opts, :external_id, "user_clerk_#{System.unique_integer([:positive])}")
 
@@ -165,14 +178,13 @@ defmodule Engram.Observability.EmittersTest do
     test "fires on GET /vaults/:id success", %{conn: conn, bypass: bypass} do
       user = user_with_clerk_id()
       {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test", Ecto.UUID.generate())
-      expect_capture(bypass)
+      expect_captures(bypass)
 
       conn = conn |> authenticate(user) |> get("/api/vaults/#{vault.id}")
 
       assert %{"vault" => %{"id" => _}} = json_response(conn, 200)
 
-      assert_receive {:posthog_body, body}, 1_500
-      assert body["event"] == "vault_opened"
+      assert_receive {:posthog_body, %{"event" => "vault_opened"} = body}, 1_500
       assert body["distinct_id"] == PostHog.analytics_id(user.email)
       assert body["properties"]["vault_id"] == vault.id
     end

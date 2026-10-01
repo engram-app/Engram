@@ -487,4 +487,146 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
       assert path_of(ctx, real.id) == "New/shape.md"
     end
   end
+
+  # #1550: a client can claim a path before `crdt_create` is acked. If the
+  # create never lands, the claim outlives it and names a note that will never
+  # exist. Age (encoded in the note_id's own UUIDv7 bits) is the only signal
+  # available to tell that apart from a create still in flight.
+  describe "a claim for a note that never arrives (#1550)" do
+    test "a claim younger than the grace period is left alone, not released", ctx do
+      attach_projection_telemetry()
+
+      real = note(ctx, "Old/real.md")
+      in_flight_id = UUIDv7.generate()
+
+      seed_index(ctx, [
+        {"ghost.md", in_flight_id},
+        {"New/real.md", real.id}
+      ])
+
+      assert :ok = run(ctx)
+
+      assert_receive {:projection, %{unresolved: 1, released: 0}, %{phase: :unresolved}}, 2_000
+      assert path_of(ctx, real.id) == "New/real.md"
+      assert %{"note_id" => ^in_flight_id} = index_entries(ctx)["ghost.md"]
+
+      :ok = drain_releases()
+
+      assert %{"note_id" => ^in_flight_id} = index_entries(ctx)["ghost.md"],
+             "a claim still inside the grace period must not be released"
+    end
+
+    test "a claim older than the grace period is released and stops counting as unresolved",
+         ctx do
+      attach_projection_telemetry()
+
+      real = note(ctx, "Old/real.md")
+      stale_id = UUIDv7.generate(System.system_time(:millisecond) - :timer.hours(2))
+
+      seed_index(ctx, [
+        {"ghost.md", stale_id},
+        {"New/real.md", real.id}
+      ])
+
+      assert :ok = run(ctx)
+
+      assert_receive {:projection, %{unresolved: 0, released: 1}, %{phase: :converged}}, 2_000
+      assert path_of(ctx, real.id) == "New/real.md"
+
+      :ok = drain_releases()
+
+      refute Map.has_key?(index_entries(ctx), "ghost.md"),
+             "the stale claim must be gone once the release job runs"
+    end
+
+    # Third review pass: detection and release are two different moments —
+    # ProjectVaultIndex enqueues the release when it FIRST sees the note
+    # missing, but the job runs later. If the real create lands in that
+    # window, Identity.release/3 deletes by note_id unconditionally with no
+    # check that the note is still gone, so the just-arrived note would be
+    # un-indexed by a release job aimed at a note that no longer matches its
+    # own premise.
+    test "a note that arrives after detection but before the release job runs keeps its entry",
+         ctx do
+      attach_projection_telemetry()
+
+      stale_id = UUIDv7.generate(System.system_time(:millisecond) - :timer.hours(2))
+
+      seed_index(ctx, [{"ghost.md", stale_id}])
+
+      assert :ok = run(ctx)
+      assert_receive {:projection, %{released: 1}, %{phase: :converged}}, 2_000
+
+      # The overdue create finally lands, reusing the same id the release job
+      # already targets.
+      {:ok, _late_arrival} =
+        Notes.upsert_note(ctx.user, ctx.vault, %{
+          "id" => stale_id,
+          "path" => "ghost.md",
+          "content" => "finally here"
+        })
+
+      :ok = drain_releases()
+
+      assert %{"note_id" => ^stale_id} = index_entries(ctx)["ghost.md"],
+             "a note that arrived before the release job ran must not be un-indexed"
+    end
+
+    test "a v4 id (not UUIDv7) is never treated as stale", ctx do
+      attach_projection_telemetry()
+
+      real = note(ctx, "Old/real.md")
+      v4_id = Ecto.UUID.generate()
+
+      seed_index(ctx, [
+        {"ghost.md", v4_id},
+        {"New/real.md", real.id}
+      ])
+
+      assert :ok = run(ctx)
+
+      assert_receive {:projection, %{unresolved: 1, released: 0}, %{phase: :unresolved}}, 2_000
+      assert %{"note_id" => ^v4_id} = index_entries(ctx)["ghost.md"]
+    end
+
+    # The fixpoint loop used to retry the FULL entries list on every pass, so a
+    # stale claim sharing a run with a rename chain (which forces a second
+    # pass) got re-detected and re-released each pass — one duplicate
+    # ReleaseIndexEntries job per extra pass, up to @max_passes.
+    test "a stale claim shares a run with a chain and is released only once", ctx do
+      attach_projection_telemetry()
+
+      a = note(ctx, "a.md")
+      b = note(ctx, "b.md")
+      stale_id = UUIDv7.generate(System.system_time(:millisecond) - :timer.hours(2))
+
+      # b.md -> a.id: a wants b's path, and b is vacating it — a chain that
+      # needs a second pass, exactly the condition that used to double-release.
+      seed_index(ctx, [
+        {"b.md", a.id},
+        {"c.md", b.id},
+        {"ghost.md", stale_id}
+      ])
+
+      assert :ok = run(ctx)
+
+      assert path_of(ctx, a.id) == "b.md", "the chain must still converge"
+      assert path_of(ctx, b.id) == "c.md"
+
+      jobs =
+        Repo.all(
+          from(j in Oban.Job,
+            where: j.worker == "Engram.Workers.ReleaseIndexEntries" and j.state == "available"
+          )
+        )
+
+      assert length(jobs) == 1,
+             "one release job per stale claim per run, not one per pass (got #{length(jobs)})"
+
+      # The release happened in pass 1; the chain only converges in pass 2.
+      # `released` must survive into the final report, not get overwritten by
+      # pass 2's outcome (which never touches the already-released entry).
+      assert_receive {:projection, %{unresolved: 0, released: 1}, %{phase: :converged}}, 2_000
+    end
+  end
 end

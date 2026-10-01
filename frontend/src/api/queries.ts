@@ -1541,7 +1541,6 @@ export function useRevokePat() {
 export interface Vault {
 	id: string;
 	name: string;
-	description: string | null;
 	slug: string;
 	is_default: boolean;
 	created_at: string;
@@ -1641,15 +1640,8 @@ export function usePurgeVault() {
 export function useUpdateVault() {
 	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: ({
-			id,
-			...attrs
-		}: {
-			id: string;
-			name?: string;
-			description?: string;
-			is_default?: boolean;
-		}) => api.patch<{ vault: Vault }>(`/vaults/${id}`, attrs),
+		mutationFn: ({ id, ...attrs }: { id: string; name?: string; is_default?: boolean }) =>
+			api.patch<{ vault: Vault }>(`/vaults/${id}`, attrs),
 		onSuccess: () => qc.invalidateQueries({ queryKey: ["vaults"] }),
 	});
 }

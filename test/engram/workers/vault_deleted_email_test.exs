@@ -39,6 +39,21 @@ defmodule Engram.Workers.VaultDeletedEmailTest do
     assert :ok = VaultDeletedEmail.perform(job)
   end
 
+  test "an undecryptable name falls back to a generic label, never a slug", %{user: user} do
+    # Factory ciphertext is random bytes, so the name cannot be decrypted.
+    # A legacy row still holding a plaintext slug must not leak it either.
+    vault = insert(:vault, user: user, slug: "secret-slug", deleted_at: DateTime.utc_now())
+
+    expect(Engram.Email.ProviderMock, :send, 1, fn _to, _subject, html, _opts ->
+      assert html =~ "Untitled vault"
+      refute html =~ "secret-slug"
+      :ok
+    end)
+
+    job = %Oban.Job{args: %{"user_id" => user.id, "vault_id" => vault.id}}
+    assert :ok = VaultDeletedEmail.perform(job)
+  end
+
   test "perform is a no-op when the vault was restored before send", %{user: user} do
     {:ok, v, _} = Vaults.register_vault(user, "Restored", Ecto.UUID.generate())
     {:ok, _} = Vaults.delete_vault(user, v.id)

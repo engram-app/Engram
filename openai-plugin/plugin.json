@@ -1,0 +1,105 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "engram",
+  "version": "1.0.0",
+  "description": "Memory for ChatGPT that you can read and edit. Search, read and write the notes in your Engram vault, which also syncs with Obsidian and the Engram web app.",
+  "author": {
+    "name": "Engram",
+    "email": "support@engram.page",
+    "url": "https://engram.page"
+  },
+  "homepage": "https://engram.page",
+  "repository": "https://github.com/engram-app/engram",
+  "keywords": [
+    "notes",
+    "memory",
+    "obsidian",
+    "knowledge base",
+    "markdown"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Engram",
+        "shortDescription": "AI memory you can edit",
+        "longDescription": "Engram gives ChatGPT a memory made of plain markdown notes that you own. ChatGPT can search your notes, read them, create new ones, and edit or append to existing ones. The same notes sync to Obsidian and the Engram web app, so you can read and correct anything ChatGPT saved.\n\nUse it to ask questions about what you have written, save a decision or a summary for later, keep running lists and logs, or organize notes into folders.\n\nWho it is for: people who keep notes in Obsidian or want an AI memory they can inspect and edit, instead of one they cannot see.\n\nLimitations: requires an Engram account. Engram only accesses the vaults of the account you connect.",
+        "developerName": "Engram",
+        "category": "Productivity",
+        "capabilities": [
+          "Search notes",
+          "Read notes",
+          "Create notes",
+          "Edit and append to notes",
+          "Organize folders"
+        ],
+        "websiteURL": "https://engram.page",
+        "supportURL": "https://engram.page/support",
+        "privacyPolicyURL": "https://engram.page/privacy",
+        "termsOfServiceURL": "https://engram.page/terms",
+        "defaultPrompt": [
+          "What do my notes say about the launch plan?",
+          "Save a note with the decisions from this chat.",
+          "What folders are in my vault?"
+        ],
+        "brandColor": "#8B4FE8",
+        "composerIcon": "./assets/icon.svg",
+        "logo": "./assets/logo.png"
+      },
+      "review": {
+        "test_cases": {
+          "positive": [
+            {
+              "description": "Answer a question from an existing note",
+              "prompt": "What do my notes say about the launch plan?",
+              "tools_triggered": "search_notes",
+              "expected_behavior": "Finds Projects/Launch Plan.md and answers from its content, naming the note as the source."
+            },
+            {
+              "description": "Read a specific note",
+              "prompt": "Open my kickoff meeting notes and list the action items.",
+              "tools_triggered": "search_notes, get_notes",
+              "expected_behavior": "Reads Meetings/Kickoff.md and lists its action items exactly as written, without inventing owners or dates."
+            },
+            {
+              "description": "Create a new note",
+              "prompt": "Save a note called Book Ideas with three science fiction book recommendations.",
+              "tools_triggered": "create_note",
+              "expected_behavior": "Creates a note titled Book Ideas containing three recommendations and reports the path it was saved to."
+            },
+            {
+              "description": "Append to an existing note",
+              "prompt": "Add 'confirm the venue' to the end of my launch plan.",
+              "tools_triggered": "search_notes, append_to_note",
+              "expected_behavior": "Appends the line 'confirm the venue' to the end of Projects/Launch Plan.md and leaves the rest of the note unchanged."
+            },
+            {
+              "description": "Browse vault structure",
+              "prompt": "What folders are in my vault?",
+              "tools_triggered": "list_folder",
+              "expected_behavior": "Lists the top-level folders of the test vault: Meetings, Projects and Reading."
+            }
+          ],
+          "negative": [
+            {
+              "description": "Request unrelated to notes",
+              "prompt": "What's the weather in Paris tomorrow?"
+            },
+            {
+              "description": "Access another person's notes",
+              "prompt": "Show me the notes in my coworker's Engram vault."
+            },
+            {
+              "description": "Action Engram does not support",
+              "prompt": "Email my launch plan to my team."
+            }
+          ]
+        },
+        "commerce": false,
+        "commerce_description": "The plugin does not sell products or process payments."
+      },
+      "publication": {
+        "release_notes": "Initial release: search, read, create, edit and organize notes in an Engram vault."
+      }
+    }
+  }
+}

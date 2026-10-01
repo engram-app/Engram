@@ -326,7 +326,19 @@ defmodule Engram.Crypto.UserDekRotation do
     )
   end
 
-  defp rewrap_vault_columns(
+  # slug_hmac is keyed by the same filter key as name_hmac; left on the old key
+  # it would stop matching and /v/:slug lookup would 404 after rotation. The
+  # slug is derived from the name (no ciphertext of its own), so it is
+  # re-hashed from the plaintext name the rewrap decrypts.
+  defp rewrap_vault_columns(vault, old_dek, new_dek, new_filter_key, new_dek_version),
+    do: rewrap_vault_name_columns(vault, old_dek, new_dek, new_filter_key, new_dek_version)
+
+  defp slug_hmac_update(:name, name, vault, filter_key),
+    do: [{:slug_hmac, Crypto.hmac_field(filter_key, Engram.Vaults.derive_slug(name, vault))}]
+
+  defp slug_hmac_update(_column, _plaintext, _vault, _filter_key), do: []
+
+  defp rewrap_vault_name_columns(
          %Engram.Vaults.Vault{} = vault,
          old_dek,
          new_dek,
@@ -363,6 +375,7 @@ defmodule Engram.Crypto.UserDekRotation do
               {ct_field, new_ct},
               {nonce_field, new_nonce},
               {hmac_key, Crypto.hmac_field(new_filter_key, plaintext)}
+              | slug_hmac_update(column, plaintext, vault, new_filter_key)
             ]
 
           :already_rotated ->

@@ -20,12 +20,6 @@
           "vaults": {
             "items": {
               "properties": {
-                "description": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
                 "id": {
                   "description": "Vault UUID",
                   "type": "string"
@@ -71,7 +65,7 @@
         "readOnlyHint": true,
         "title": "Search Notes"
       },
-      "description": "Search your personal knowledge base. Finds relevant notes using semantic search. Searches across ALL your vaults by default; pass vault_id to limit to one. Use when the user asks about their notes, vault, knowledge, or memory.",
+      "description": "Search your personal knowledge base. Finds relevant notes using semantic search. Searches across ALL your vaults by default; pass vault_id to limit to one. Omit query to list the most recently updated notes instead. Pass similar_to with a note path, instead of query, to find notes like that one. Use when the user asks about their notes, vault, knowledge, or memory.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -96,6 +90,7 @@
           "limit": {
             "default": 5,
             "description": "Maximum number of results (1-20, default 5)",
+            "minimum": 1,
             "type": "integer"
           },
           "mode": {
@@ -109,7 +104,11 @@
             "type": "string"
           },
           "query": {
-            "description": "Natural language search query",
+            "description": "Natural language search query. Omit, or leave empty, to list the most recently updated notes (filters then do not apply).",
+            "type": "string"
+          },
+          "similar_to": {
+            "description": "Path of a note, e.g. \"Projects/Alpha.md\": return notes similar to it, using its stored embedding (no query needed). Do not combine with query. The note itself is excluded; filters still apply.",
             "type": "string"
           },
           "tags": {
@@ -136,9 +135,6 @@
             "type": "string"
           }
         },
-        "required": [
-          "query"
-        ],
         "type": "object"
       },
       "name": "search_notes",
@@ -480,16 +476,30 @@
         "readOnlyHint": true,
         "title": "Read Notes"
       },
-      "description": "Retrieve the full content of multiple notes in one call (1-20 paths). Also reads a single note: pass one path. Use to inventory a folder (list_folder then get_notes) or to read a batch of search results without N round-trips. Missing paths are reported inline.",
+      "description": "Retrieve the full content of multiple notes in one call (1-20 paths). Also reads a single note: pass one path. Use to inventory a folder (list_folder then get_notes) or to read a batch of search results without N round-trips. Missing paths are reported inline. To save tokens on long notes, pass outline: true for the heading list only, or section with one path to read just that heading's section. Pass include_links: true to also get, per note, the notes linking to it, the notes it links to, and its links that point at no existing note.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
+          "include_links": {
+            "default": false,
+            "description": "true adds backlinks, outgoing and unresolved link lists to each found note",
+            "type": "boolean"
+          },
+          "outline": {
+            "default": false,
+            "description": "true returns each note's headings (level and text) instead of its content",
+            "type": "boolean"
+          },
           "paths": {
             "description": "Note paths to read (max 20), e.g. [\"Health/A.md\", \"Health/B.md\"]",
             "items": {
               "type": "string"
             },
             "type": "array"
+          },
+          "section": {
+            "description": "Heading text without the # prefix, e.g. \"Todo\". Returns only that section (heading line included, subsections included). One path only.",
+            "type": "string"
           },
           "vault_id": {
             "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
@@ -507,7 +517,19 @@
           "notes": {
             "items": {
               "properties": {
+                "backlinks": {
+                  "description": "Paths of notes linking to this one (include_links)",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
                 "content": {
+                  "description": "Absent when outline: true was requested",
+                  "type": "string"
+                },
+                "error": {
+                  "description": "Only with outline: true, when this note's outline could not be computed: server busy, the call ran out of time, the note is too complex to parse, parsing failed, or the note has invalid UTF-8. Outline omitted",
                   "type": "string"
                 },
                 "folder": {
@@ -515,6 +537,36 @@
                 },
                 "found": {
                   "type": "boolean"
+                },
+                "links_truncated": {
+                  "description": "true if backlinks, outgoing, or unresolved was cut off at the cap (include_links)",
+                  "type": "boolean"
+                },
+                "outgoing": {
+                  "description": "Paths of notes this one links to (include_links)",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "outline": {
+                  "description": "Only with outline: true; replaces content. Absent when error is set",
+                  "items": {
+                    "properties": {
+                      "heading": {
+                        "type": "string"
+                      },
+                      "level": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "level",
+                      "heading"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
                 },
                 "path": {
                   "description": "Vault-relative path",
@@ -531,6 +583,13 @@
                     "string",
                     "null"
                   ]
+                },
+                "unresolved": {
+                  "description": "Link targets that match no note (include_links)",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
                 }
               },
               "required": [
@@ -711,12 +770,12 @@
         "readOnlyHint": false,
         "title": "Edit Note"
       },
-      "description": "Change part of an existing note. mode replace_text finds exact text and replaces it (first occurrence by default); mode replace_section replaces everything under one heading. Fails without writing if the text or heading is not found, or if expected_replacements does not match. To add text use append_to_note. To rewrite the whole note use write_note.",
+      "description": "Change part of an existing note. mode replace_text finds exact text and replaces it (first occurrence by default); mode replace_section replaces everything under one heading; mode insert_section adds content under a heading, at the start or end of that section, keeping what is there. Fails without writing if the text or heading is not found, or if expected_replacements does not match. To add text at the top or bottom of the note use append_to_note. To rewrite the whole note use write_note.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "content": {
-            "description": "replace_section only: new content for under the heading",
+            "description": "replace_section: new content for under the heading; insert_section: content to add",
             "type": "string"
           },
           "expected_replacements": {
@@ -728,21 +787,22 @@
             "type": "string"
           },
           "heading": {
-            "description": "replace_section only: heading text without the # prefix",
+            "description": "replace_section and insert_section: heading text without the # prefix",
             "type": "string"
           },
           "level": {
             "default": 2,
-            "description": "replace_section only: heading level 1-6 (default 2)",
+            "description": "replace_section and insert_section: heading level 1-6 (default 2)",
             "maximum": 6,
             "minimum": 1,
             "type": "integer"
           },
           "mode": {
-            "description": "replace_text or replace_section",
+            "description": "replace_text, replace_section or insert_section",
             "enum": [
               "replace_text",
-              "replace_section"
+              "replace_section",
+              "insert_section"
             ],
             "type": "string"
           },
@@ -754,6 +814,15 @@
           },
           "path": {
             "description": "Path of the note, e.g. \"Projects/Alpha.md\"",
+            "type": "string"
+          },
+          "position": {
+            "default": "end",
+            "description": "insert_section only: start (directly under the heading) or end (default; after the section's last line, including its subsections)",
+            "enum": [
+              "start",
+              "end"
+            ],
             "type": "string"
           },
           "replace": {
@@ -775,7 +844,7 @@
       "outputSchema": {
         "properties": {
           "heading": {
-            "description": "replace_section: heading updated",
+            "description": "replace_section and insert_section: the heading edited; null for replace_text",
             "type": [
               "string",
               "null"
@@ -788,7 +857,7 @@
             "type": "string"
           },
           "replacements": {
-            "description": "replace_text: occurrences replaced",
+            "description": "replace_text: occurrences replaced; null for the section modes",
             "type": [
               "integer",
               "null"

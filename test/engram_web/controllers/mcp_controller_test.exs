@@ -1508,4 +1508,49 @@ defmodule EngramWeb.McpControllerTest do
       assert text =~ "ai_searches_per_day"
     end
   end
+
+  describe "search_notes with no query lists recent notes (#1793)" do
+    # query dropped out of `required` on purpose: absent/blank query means
+    # "list recently updated notes" rather than "missing argument". This is
+    # the same silent-wrong-target choke point #1491/#1492 guard elsewhere —
+    # pinned here so a future required-arg regression is caught end-to-end,
+    # not just in the handler unit tests.
+    test "an empty arguments map lists recent notes, not an argument error", %{conn: conn} do
+      conn = call_tool(conn, "search_notes", %{})
+      resp = json_response(conn, 200)
+
+      refute resp["error"]
+      refute tool_text(conn) =~ "Invalid or missing argument(s)"
+      assert tool_text(conn) =~ "Recently updated"
+    end
+
+    test "query: nil lists recent notes, not an argument error", %{conn: conn} do
+      conn = call_tool(conn, "search_notes", %{"query" => nil})
+      resp = json_response(conn, 200)
+
+      refute resp["error"]
+      refute tool_text(conn) =~ "Invalid or missing argument(s)"
+      assert tool_text(conn) =~ "Recently updated"
+    end
+
+    test "a filter with no query is a tool error naming the filter", %{conn: conn} do
+      conn = call_tool(conn, "search_notes", %{"tags" => ["health"]})
+      resp = json_response(conn, 200)
+
+      assert_tool_error(resp)
+      assert tool_text(conn) =~ "tags needs a query or similar_to"
+    end
+
+    # The schema's "minimum" is advertisory only — validate_declared_args
+    # checks JSON type, not numeric bounds — so the handler's own floor
+    # (max(1, ...)) is what actually keeps this from crashing.
+    test "limit 0 is not rejected by the controller and still returns a listing", %{conn: conn} do
+      conn = call_tool(conn, "search_notes", %{"limit" => 0})
+      resp = json_response(conn, 200)
+
+      refute resp["error"]
+      refute tool_text(conn) =~ "Invalid or missing argument(s)"
+      assert tool_text(conn) =~ "Recently updated"
+    end
+  end
 end

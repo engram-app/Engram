@@ -78,7 +78,8 @@ defmodule Engram.Workers.ProjectVaultIndex do
   alias Engram.{Accounts, Crypto, Notes, Repo}
   alias Engram.Crypto.RotationGate
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtIndexDoc, VaultIndexState}
+  alias Engram.Notes.{CrdtIndexDoc, Enqueue, VaultIndexState}
+  alias Engram.Workers.ReleaseIndexEntries
 
   require Logger
 
@@ -88,6 +89,18 @@ defmodule Engram.Workers.ProjectVaultIndex do
   # per-vault `unique` window relies on. The cap is here so a swap (which cannot
   # converge at all) stops churning, not because 6 rounds means failure.
   @max_passes 5
+
+  # #1550: a client can claim a path before `crdt_create` is acked. If the
+  # create never lands, the claim outlives it and names a note that will never
+  # exist — projection then reports the same entry unresolved on every run
+  # forever, which is the "permanently wedged" bug. Four of six creates in the
+  # incident that filed #1550 self-healed within 8 minutes; the two that didn't
+  # were still unresolved 16+ hours later. An hour is comfortably past any
+  # observed legitimate delay and comfortably short of "permanent", so treat an
+  # entry as abandoned (never seen a matching row, id older than this) rather
+  # than in flight. Tunable — raise it if a slower create path proves 1h too
+  # eager.
+  @stale_claim_grace_ms :timer.hours(1)
 
   @event [:engram, :crdt, :index_projection]
 
@@ -193,7 +206,14 @@ defmodule Engram.Workers.ProjectVaultIndex do
     vault = %{id: vault_id}
 
     totals =
-      pass(user, vault, vault_id, entries, @max_passes, %{applied: 0, passes: 0, last: nil})
+      pass(
+        user,
+        vault,
+        vault_id,
+        entries,
+        @max_passes,
+        %{applied: 0, passes: 0, unknown_note: 0, malformed: 0, released: 0, conflict: 0}
+      )
 
     report(vault_id, user.id, totals, duplicate_ids)
     :ok
@@ -234,25 +254,51 @@ defmodule Engram.Workers.ProjectVaultIndex do
   end
 
   defp pass(user, vault, vault_id, entries, passes_left, acc) do
-    outcome =
-      Enum.reduce(entries, blank_outcome(), fn entry, o ->
-        tally(o, apply_entry(user, vault, vault_id, entry))
+    {outcome, retry} =
+      Enum.reduce(entries, {blank_outcome(), []}, fn entry, {o, retry} ->
+        case apply_entry(user, vault, vault_id, entry) do
+          :conflict = result -> {tally(o, result), [entry | retry]}
+          result -> {tally(o, result), retry}
+        end
       end)
 
-    acc = %{acc | applied: acc.applied + outcome.applied, passes: acc.passes + 1, last: outcome}
+    # `unknown_note`/`malformed`/`released` are terminal per entry — an entry
+    # classified as one of them is never retried, so it can only ever appear in
+    # THIS pass's outcome and must be summed in, not overwritten. `conflict` is
+    # the opposite: it means "still stuck as of the pass that just ran", so the
+    # latest value is the right one — an entry that conflicted in pass 1 and
+    # then applied in pass 2 must stop counting as unresolved.
+    acc = %{
+      acc
+      | applied: acc.applied + outcome.applied,
+        unknown_note: acc.unknown_note + outcome.unknown_note,
+        malformed: acc.malformed + outcome.malformed,
+        released: acc.released + outcome.released,
+        conflict: outcome.conflict,
+        passes: acc.passes + 1
+    }
 
-    # Re-run only while a pass BOTH made progress and left something stuck: that
-    # is the chain case, and the next pass can place what was blocked. Zero
-    # progress means a swap or a genuine disagreement, and another identical
-    # pass would only churn.
+    # Re-run only the entries still stuck (`:conflict`), and only while a pass
+    # BOTH made progress and left something stuck: that is the chain case, and
+    # the next pass can place what was blocked. Zero progress means a swap or a
+    # genuine disagreement, and another identical pass would only churn.
+    #
+    # Retrying the full `entries` list here used to re-run every already-
+    # settled entry too, on every pass. Harmless for a :noop or :malformed, but
+    # #1550's `:released` has a real side effect (an Oban insert) that must not
+    # repeat per pass — re-running only what's still stuck fixes that and every
+    # other redundant-reprocessing case at once. That is also exactly why the
+    # counters above must accumulate: a terminal outcome from an EARLIER pass
+    # would otherwise vanish the moment its entry drops out of the retry list.
     if outcome.applied > 0 and outcome.conflict > 0 and passes_left > 1 do
-      pass(user, vault, vault_id, entries, passes_left - 1, acc)
+      pass(user, vault, vault_id, Enum.reverse(retry), passes_left - 1, acc)
     else
       acc
     end
   end
 
-  defp blank_outcome, do: %{applied: 0, noop: 0, conflict: 0, unknown_note: 0, malformed: 0}
+  defp blank_outcome,
+    do: %{applied: 0, noop: 0, conflict: 0, unknown_note: 0, malformed: 0, released: 0}
 
   defp tally(outcome, key), do: Map.update!(outcome, key, &(&1 + 1))
 
@@ -281,22 +327,28 @@ defmodule Engram.Workers.ProjectVaultIndex do
 
       _ ->
         # The index names a note this vault does not have — wrong vault, soft
-        # deleted, or a stale id. NOT ours to invent: creating one would make
-        # projection a writer of identity, which is the client's job.
-        #
-        # Logged, unlike before. An index naming rows we do not have IS the
-        # drift class #167 exists to eliminate; making it the one outcome with
-        # no signal at all had it exactly backwards.
-        Logger.warning(
-          "vault index projection skipped an entry naming an unknown note",
-          Metadata.with_category(:warning, :sync,
-            user_id: user.id,
-            vault_id: vault_id,
-            note_id: note_id
+        # deleted, a create still in flight, or (#1550) a create that never
+        # will land. NOT ours to invent: creating one would make projection a
+        # writer of identity, which is the client's job. Age is the only signal
+        # available to tell "still in flight" from "never coming" apart — see
+        # `@stale_claim_grace_ms`.
+        if stale_claim?(note_id) do
+          release_stale_claim(user, vault_id, note_id)
+        else
+          # Logged, unlike before. An index naming rows we do not have IS the
+          # drift class #167 exists to eliminate; making it the one outcome
+          # with no signal at all had it exactly backwards.
+          Logger.warning(
+            "vault index projection skipped an entry naming an unknown note",
+            Metadata.with_category(:warning, :sync,
+              user_id: user.id,
+              vault_id: vault_id,
+              note_id: note_id
+            )
           )
-        )
 
-        :unknown_note
+          :unknown_note
+        end
     end
   end
 
@@ -314,6 +366,78 @@ defmodule Engram.Workers.ProjectVaultIndex do
     )
 
     :malformed
+  end
+
+  # UUIDv7 encodes its own mint time, so an entry's age needs no extra state.
+  # `false` for anything that isn't a v7 UUID — never guess an id we can't
+  # read, and a v4 id (the shape a pre-#431 client or a test double might send)
+  # must fall through to the existing unknown-note path unaffected.
+  defp stale_claim?(note_id) do
+    case Ecto.UUID.dump(note_id) do
+      {:ok, <<ms::48, 7::4, _::76>>} ->
+        System.system_time(:millisecond) - ms > @stale_claim_grace_ms
+
+      _ ->
+        false
+    end
+  end
+
+  # Async and uniform with every other release (`ReleaseIndexEntries`) — never
+  # inline, so a DEK rotation in progress retries the release instead of
+  # losing it. Nothing else ever releases this claim: a create that never
+  # lands is not a delete, so `Notes.delete_note`'s release never fires for it.
+  #
+  # KNOWN LIMIT: `ReleaseIndexEntries` has no `unique` key. Its only documented
+  # non-transient failure is rotation-in-progress, which SNOOZES rather than
+  # discards — but a snoozed job still occupies its note_id until it succeeds,
+  # and a rotation can span several checkpoints on an active vault. Each of
+  # those checkpoints re-detects the same stale entry and enqueues its own
+  # fresh release job while the earlier ones are still snoozed, so the actual
+  # bound is one job per checkpoint that runs before the prior release
+  # succeeds — proportional to rotation length, not flatly "one extra job".
+  # Still self-resolving (every one of them eventually runs and releasing is
+  # idempotent) and not fixed here for the same reason as before: `unique`
+  # lives on the shared worker's `use Oban.Worker` options, and every other
+  # call site (delete, batch delete) would inherit whatever window is chosen
+  # without asking for it.
+  defp release_stale_claim(user, vault_id, note_id) do
+    case Enqueue.enqueue(
+           ReleaseIndexEntries.new_for(user.id, vault_id, [note_id]),
+           "release_index_entries"
+         ) do
+      {:ok, _job} ->
+        Logger.warning(
+          "vault index projection released a stale claim for a note that never arrived",
+          Metadata.with_category(:warning, :sync,
+            user_id: user.id,
+            vault_id: vault_id,
+            note_id: note_id
+          )
+        )
+
+        :released
+
+      {:error, reason} ->
+        # Enqueue.enqueue/2 already logged its own generic failure line, but
+        # without a note_id or vault_id — every OTHER outcome in apply_entry
+        # logs with that metadata, and this is the one branch a vault-scoped
+        # log search would otherwise miss. Reporting :released here anyway
+        # would tell a dashboard the claim is resolved when the job to resolve
+        # it was never queued — fall back to the ordinary unresolved path so
+        # the next run gets another chance instead of the claim silently going
+        # unfixed.
+        Logger.warning(
+          "vault index projection could not enqueue a stale-claim release: " <>
+            "#{Metadata.safe_reason(reason)}",
+          Metadata.with_category(:warning, :sync,
+            user_id: user.id,
+            vault_id: vault_id,
+            note_id: note_id
+          )
+        )
+
+        :unknown_note
+    end
   end
 
   defp rename(user, vault, note, path, vault_id) do
@@ -342,18 +466,31 @@ defmodule Engram.Workers.ProjectVaultIndex do
   # One event per run carrying what actually happened. Without it an empty index
   # and an index where all 40 entries failed to apply are byte-identical to
   # logs, metrics, Oban and Sentry simultaneously.
-  defp report(vault_id, user_id, %{applied: applied, passes: passes, last: last}, duplicates) do
-    unresolved = last.conflict + last.unknown_note + last.malformed + duplicates
+  defp report(
+         vault_id,
+         user_id,
+         %{
+           applied: applied,
+           passes: passes,
+           conflict: conflict,
+           unknown_note: unknown_note,
+           malformed: malformed,
+           released: released
+         },
+         duplicates
+       ) do
+    unresolved = conflict + unknown_note + malformed + duplicates
 
     :telemetry.execute(
       @event,
       %{
         applied: applied,
         unresolved: unresolved,
-        conflict: last.conflict,
-        unknown_note: last.unknown_note,
-        malformed: last.malformed,
+        conflict: conflict,
+        unknown_note: unknown_note,
+        malformed: malformed,
         duplicate_note_ids: duplicates,
+        released: released,
         passes: passes
       },
       %{phase: if(unresolved == 0, do: :converged, else: :unresolved)}

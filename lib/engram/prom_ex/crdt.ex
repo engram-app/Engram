@@ -38,6 +38,7 @@ defmodule Engram.PromEx.Crdt do
     * `engram_prom_ex_crdt_index_checkpoint_total` — tags `[:phase]`.
     * `engram_prom_ex_crdt_index_projection_total` — tags `[:phase]`.
     * `engram_prom_ex_crdt_index_projection_unresolved_total` — tags `[:phase]`.
+    * `engram_prom_ex_crdt_index_projection_released_total` — tags `[:phase]`.
 
   `[:engram, :crdt, :index_projection]` — one event per projection run
   (`Engram.Workers.ProjectVaultIndex`), `%{phase: :converged | :unresolved | …}`.
@@ -470,6 +471,18 @@ defmodule Engram.PromEx.Crdt do
           description:
             "Index entries a projection run could not apply (conflict, unknown note, malformed, " <>
               "or a note claimed by two paths).",
+          tags: [:phase]
+        ),
+        # #1550: an entry naming a note that never arrived, released once its
+        # UUIDv7 mint time clears the grace period. Distinct from `unresolved`
+        # on purpose — a released claim is resolved, not stuck, and burying it
+        # in the same series would make it look like the vault stayed broken.
+        sum(
+          metric_prefix ++ [:index_projection, :released, :total],
+          event_name: @projection_event,
+          measurement: :released,
+          description:
+            "Index entries naming a note that never arrived, released once stale (#1550).",
           tags: [:phase]
         )
       ]

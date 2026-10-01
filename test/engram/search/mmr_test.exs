@@ -49,15 +49,21 @@ defmodule Engram.Search.MMRTest do
   # #1617: every greedy step recomputed full cosines (magnitudes included)
   # against every picked item, and `remaining -- [best]` deep-compared 1024-float
   # maps. The REST maximum (limit 50) over a ~200 pool measured 76s of CPU.
-  test "a limit-50 rerank over 200 real-width vectors finishes promptly" do
+  #
+  # Bounded in reductions (BEAM work units), not wall-clock: a 5s wall budget
+  # flaked under full-suite load while the fixed code itself takes ~4s on a
+  # busy dev box. Measured on this seeded input: fixed ~30M, pre-#1617 ~2.1B.
+  # 150M leaves 5x headroom and still fails the old algorithm 14x over.
+  test "a limit-50 rerank over 200 real-width vectors stays within its work budget" do
     :rand.seed(:exsss, {1, 2, 3})
     cands = for i <- 1..200, do: c(1.0 - i / 1000, random_vec(1024))
 
-    task = Task.async(fn -> MMR.rerank(cands, 50, 0.3) end)
-    result = Task.yield(task, 5_000) || Task.shutdown(task, :brutal_kill)
+    {:reductions, r0} = Process.info(self(), :reductions)
+    picked = MMR.rerank(cands, 50, 0.3)
+    {:reductions, r1} = Process.info(self(), :reductions)
 
-    assert {:ok, picked} = result, "MMR took longer than 5s for limit=50 over 200 candidates"
     assert length(picked) == 50
+    assert r1 - r0 < 150_000_000, "MMR used #{r1 - r0} reductions (budget 150M)"
   end
 
   # Pins the selection order to the original O(n^3) definition, so the faster

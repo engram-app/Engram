@@ -217,10 +217,10 @@ defmodule Engram.Vaults do
           |> Map.merge(%{
             name: name,
             client_id: client_id,
-            slug: unique_slug(user.id, slugify(name)),
             user_id: user.id,
             is_default: current_count == 0
           })
+          |> put_slug(user, name, vault_id, nil)
           |> inject_name_phase_b(user, vault_id)
 
         # `mode: :savepoint` is load-bearing, not defensive. The lookup above is
@@ -554,9 +554,15 @@ defmodule Engram.Vaults do
     user = fresh_user(user)
 
     result =
-      Repo.with_tenant(user.id, fn ->
-        Repo.one(from(v in active(scoped(user)), where: v.slug == ^slug, select: v.id))
-      end)
+      with {:ok, filter_key} <- Engram.Crypto.dek_filter_key(user) do
+        slug_hmac = Engram.Crypto.hmac_field(filter_key, slug)
+
+        Repo.with_tenant(user.id, fn ->
+          Repo.one(
+            from(v in active(scoped(user)), where: v.slug_hmac == ^slug_hmac, select: v.id)
+          )
+        end)
+      end
 
     case result do
       # ponytail: second query, so name resolution reuses get_vault/2's
@@ -639,7 +645,7 @@ defmodule Engram.Vaults do
   defp do_update_vault(user, vault, attrs) do
     attrs =
       attrs
-      |> then(&maybe_regenerate_slug(user.id, vault, &1))
+      |> then(&maybe_regenerate_slug(user, vault, &1))
       |> inject_name_phase_b(user, vault.id)
 
     if Map.get(attrs, :is_default) == true do
@@ -864,7 +870,8 @@ defmodule Engram.Vaults do
       aad = Engram.Crypto.aad_for_row(:vaults, :name, vault_id)
       {ct, n} = Engram.Crypto.Envelope.encrypt(name, dek, aad)
 
-      Map.merge(attrs, %{
+      attrs
+      |> Map.merge(%{
         name_ciphertext: ct,
         name_nonce: n,
         name_hmac: Engram.Crypto.hmac_field(filter_key, name),
@@ -873,6 +880,92 @@ defmodule Engram.Vaults do
     else
       attrs
     end
+  end
+
+  @doc """
+  Clear each vault's plaintext `slug`, first making sure `slug_hmac` and
+  `slug_suffixed` describe the slug reads derive from the decrypted name
+  (`derive_slug/2`). Only rows still holding a plaintext slug are touched:
+  legacy rows, and rows an older release writes during a rolling deploy or
+  after a rollback. Returns the number of rows cleared. Called by
+  `Engram.Workers.BackfillVaultSlugHmac`.
+
+  The current `slug_hmac` decides the form: if it already matches the bare
+  or the id-suffixed slug, that form is kept, so a plaintext slug left stale
+  by a rename can never move the URL. Only a row whose hmac matches neither
+  falls back to the stored slug: bare if it equals `slugify(name)`,
+  otherwise the id-suffixed form (never the bare base, so no sibling can
+  collide). The stored slug is read from the raw row: decrypting replaces
+  it with the derived value.
+
+  Takes an id, not a `%User{}`: the user row is read here `FOR SHARE`, so a
+  struct loaded before a DEK rotation can never supply the key. The lock also
+  blocks a rotation from starting mid-reconcile. Vault rows are then locked
+  in id order.
+  """
+  @spec backfill_slug_hmacs(Ecto.UUID.t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def backfill_slug_hmacs(user_id) when is_binary(user_id) do
+    Repo.with_tenant!(user_id, fn ->
+      user =
+        Repo.one!(
+          from(u in Engram.Accounts.User, where: u.id == ^user_id, lock: "FOR SHARE"),
+          skip_tenant_check: true
+        )
+
+      vaults =
+        Repo.all(
+          from(v in scoped(user),
+            where: not is_nil(v.slug),
+            order_by: v.id,
+            lock: "FOR UPDATE"
+          )
+        )
+
+      reconcile_slugs(user, vaults)
+    end)
+  end
+
+  defp reconcile_slugs(_user, []), do: {:ok, 0}
+
+  defp reconcile_slugs(user, vaults) do
+    with :ok <- Engram.Crypto.RotationGate.check_user(user),
+         {:ok, filter_key} <- Engram.Crypto.dek_filter_key(user) do
+      {:ok,
+       Enum.count(vaults, fn raw ->
+         reconcile_slug(raw, decrypt_vault_if_needed(raw, user), filter_key)
+       end)}
+    end
+  end
+
+  # A nil name means the name failed to decrypt: there is nothing to derive
+  # the slug from, so leave the row alone and say so.
+  defp reconcile_slug(_raw, %Vault{name: nil} = vault, _filter_key) do
+    require Logger
+
+    Logger.warning(
+      "vault slug not reconcilable: name undecryptable",
+      Metadata.with_category(:warning, :crypto, vault_id: vault.id)
+    )
+
+    false
+  end
+
+  defp reconcile_slug(raw, vault, filter_key) do
+    hmac_of =
+      &Engram.Crypto.hmac_field(filter_key, derive_slug(vault.name, %{vault | slug_suffixed: &1}))
+
+    suffixed? =
+      cond do
+        raw.slug_hmac == hmac_of.(false) -> false
+        raw.slug_hmac == hmac_of.(true) -> true
+        true -> raw.slug != slugify(vault.name)
+      end
+
+    Repo.update_all(from(v in Vault, where: v.id == ^vault.id),
+      set: [slug: nil, slug_hmac: hmac_of.(suffixed?), slug_suffixed: suffixed?]
+    )
+
+    true
   end
 
   defp count_vaults(user_id) do
@@ -931,19 +1024,43 @@ defmodule Engram.Vaults do
     end
   end
 
-  defp maybe_regenerate_slug(user_id, vault, attrs) do
+  defp maybe_regenerate_slug(user, vault, attrs) do
     new_name = Map.get(attrs, :name) || Map.get(attrs, "name")
 
-    if new_name && new_name != vault.name do
-      slug = unique_slug(user_id, slugify(new_name), vault.id)
-      Map.put(attrs, :slug, slug)
-    else
-      attrs
-    end
+    if new_name && new_name != vault.name,
+      do: put_slug(attrs, user, new_name, vault.id, vault.id),
+      else: attrs
+  end
+
+  # Only the keyed hmac and the suffix flag are stored; the slug is derived on
+  # read (`derive_slug/2`). `slug: nil` also clears a legacy plaintext slug on
+  # rename, so the old name does not linger until the reconciler runs.
+  # Callers have run ensure_user_dek/1.
+  defp put_slug(attrs, user, name, vault_id, except_id) do
+    {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
+    {slug, suffixed?} = unique_slug(user.id, filter_key, slugify(name), vault_id, except_id)
+
+    Map.merge(attrs, %{
+      slug: nil,
+      slug_hmac: Engram.Crypto.hmac_field(filter_key, slug),
+      slug_suffixed: suffixed?
+    })
+  end
+
+  @doc """
+  The vault's URL slug, derived from its decrypted `name`: `slugify(name)`,
+  plus the last 6 characters of the id when the vault took the collision
+  suffix at mint (`slug_suffixed`). The slug is never stored; `slug_hmac`
+  carries lookup and uniqueness.
+  """
+  @spec derive_slug(String.t(), Vault.t()) :: String.t()
+  def derive_slug(name, %Vault{id: id, slug_suffixed: suffixed?}) do
+    base = slugify(name)
+    if suffixed?, do: "#{base}-#{String.slice(id, -6, 6)}", else: base
   end
 
   # slugify/1 truncates here, well under Vault's `validate_length(:slug, max: 120)`.
-  # The gap is deliberate: `unique_slug/3` appends a dedup suffix (up to "-1000"),
+  # The gap is deliberate: `unique_slug/4` appends a 7-char id suffix,
   # and without headroom a maximal base slug would produce a slug the changeset
   # then rejects -- a 422 on a field the client never sent.
   @slug_max_base 100
@@ -1056,28 +1173,22 @@ defmodule Engram.Vaults do
     end)
   end
 
-  # Finds a slug that doesn't collide with any existing non-deleted vault for this user.
-  # Optionally excludes `except_id` (for renames — the vault itself doesn't count).
-  defp unique_slug(user_id, base_slug, except_id \\ nil) do
-    query = from(v in active(scoped(user_id)), select: v.slug)
+  # The slug this vault takes: `base_slug`, or `base_slug-<last 6 of its id>`
+  # when a live sibling already holds the base. Returns `{slug, suffixed?}`.
+  #
+  # The suffix is derivable from the vault itself (id + the `slug_suffixed`
+  # flag), not from sibling state, because the slug is moving to
+  # derive-on-read from the decrypted name and the plaintext `slug` column is
+  # being retired. The old `-2`/`-3` counter could not be re-derived. `except_id`
+  # excludes the vault itself on rename.
+  defp unique_slug(user_id, filter_key, base_slug, vault_id, except_id) do
+    base_hmac = Engram.Crypto.hmac_field(filter_key, base_slug)
+    query = from(v in active(scoped(user_id)), where: v.slug_hmac == ^base_hmac, select: v.id)
+    query = if except_id, do: from(v in query, where: v.id != ^except_id), else: query
 
-    query =
-      if except_id do
-        from v in query, where: v.id != ^except_id
-      else
-        query
-      end
-
-    existing = Repo.all(query)
-
-    if base_slug in existing do
-      Enum.find_value(2..1000, fn n ->
-        candidate = "#{base_slug}-#{n}"
-        if candidate not in existing, do: candidate
-      end)
-    else
-      base_slug
-    end
+    if Repo.exists?(query),
+      do: {"#{base_slug}-#{String.slice(vault_id, -6, 6)}", true},
+      else: {base_slug, false}
   end
 
   # with_tenant wraps the result in {:ok, value} — unwrap it cleanly.

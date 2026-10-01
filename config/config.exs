@@ -196,7 +196,11 @@ config :engram, Oban,
        # them, and on a daily cadence that is up to 24h of "No data" on every
        # panel after each deploy. Four cheap aggregates a day buys a 6h worst
        # case. See the staleness contract in `Engram.PromEx.Crdt`.
-       {"10 */6 * * *", Engram.Workers.CrdtBloatSweep}
+       {"10 */6 * * *", Engram.Workers.CrdtBloatSweep},
+       # Clears plaintext vaults.slug after making slug_hmac / slug_suffixed
+       # describe the derived slug; idempotent (only rows still holding a
+       # slug). Remove with the contract release that drops vaults.slug.
+       {"25 4 * * *", Engram.Workers.BackfillVaultSlugHmac}
      ]}
   ]
 
@@ -405,6 +409,18 @@ config :ex_aws, :req_opts, receive_timeout: 30_000
 # the JWKS verification path needs no hackney. dev.exs and test.exs set this
 # too; pinning it in base config keeps prod off Tesla's default adapter.
 config :tesla, JokenJwks.HttpFetcher, adapter: Tesla.Adapter.Httpc
+
+# MCP section/outline parsing (Engram.MCP.ParseGate): at most `limit` comrak
+# parses in flight per node (unset: dirty CPU schedulers - 1, min 1; set
+# `limit: n` to override). A caller waits up to `acquire_timeout` ms for a
+# slot (at most `max_waiting` queue) and `parse_timeout` ms for the result,
+# all within one `deadline_ms` per tool call, then gets a fixable error; the
+# parse itself still finishes.
+config :engram, Engram.MCP.ParseGate,
+  acquire_timeout: 5_000,
+  parse_timeout: 15_000,
+  max_waiting: 16,
+  deadline_ms: 20_000
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.

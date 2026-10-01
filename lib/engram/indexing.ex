@@ -620,18 +620,26 @@ defmodule Engram.Indexing do
   #
   # Only the READ is scoped; the Qdrant call stays outside, so no transaction
   # is held across a network round trip.
-  defp delete_points_for_note(note) do
+  @doc """
+  Qdrant point ids recorded on `note`'s chunk rows, in chunk order.
+  Tenant-scoped: unscoped, RLS filters this read to [] silently.
+  """
+  @spec point_ids_for_note(map()) :: [String.t()]
+  def point_ids_for_note(note) do
     {:ok, point_ids} =
       Repo.with_tenant(note.user_id, fn ->
         Chunk
         |> where([c], c.note_id == ^note.id)
+        |> order_by([c], c.position)
         |> select([c], c.qdrant_point_id)
         |> Repo.all()
       end)
 
-    point_ids
-    |> Enum.reject(&is_nil/1)
-    |> then(&Qdrant.delete_points(collection(), &1))
+    Enum.reject(point_ids, &is_nil/1)
+  end
+
+  defp delete_points_for_note(note) do
+    Qdrant.delete_points(collection(), point_ids_for_note(note))
   end
 
   # ---------------------------------------------------------------------------

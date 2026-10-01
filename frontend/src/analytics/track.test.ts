@@ -110,3 +110,35 @@ describe("track property validation", () => {
 		});
 	});
 });
+
+describe("track onboarding interaction events", () => {
+	it.each([
+		["upgrade_link_clicked", { source: "tools_step" }],
+		["upgrade_link_clicked", { source: "checklist" }],
+		["checklist_action", { item: "chatgpt", action: "guide_opened" }],
+		["checklist_action", { item: "join_discord", action: "dismissed" }],
+		["vault_source_picked", { source: "obsidian" }],
+		["vault_source_picked", { source: "fresh" }],
+		["plugin_listing_opened", {}],
+	] as const)("allows %s %j", (event, props) => {
+		track(event, props);
+		expect(posthog.capture).toHaveBeenCalledWith(event, props);
+		expect(mockCapture).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["a url as the upgrade source", "upgrade_link_clicked", { source: "https://evil.example" }],
+		[
+			"a note title as the checklist item",
+			"checklist_action",
+			{ item: "My journal", action: "dismissed" },
+		],
+		["an unknown checklist action", "checklist_action", { item: "claude", action: "rage_clicked" }],
+		["a path as the vault source", "vault_source_picked", { source: "Work/Q3.md" }],
+		["any property on the listing click", "plugin_listing_opened", { url: "https://x.example" }],
+	] as const)("rejects %s", (_label, event, props) => {
+		track(event, props);
+		expect(posthog.capture).not.toHaveBeenCalled();
+		expect(mockCapture).toHaveBeenCalledOnce();
+	});
+});

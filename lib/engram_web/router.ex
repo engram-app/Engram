@@ -55,6 +55,7 @@ defmodule EngramWeb.Router do
     plug EngramWeb.Plugs.RequireOnboarding
     plug EngramWeb.Plugs.RequireActiveSubscription
     plug EngramWeb.Plugs.BumpActivity
+    plug EngramWeb.Plugs.WebActivity
     # AFTER BumpActivity, deliberately. An earlier position gave a nicer
     # message (upgrade beats "finish onboarding") and cost liveness: a refused
     # request never stamps `last_active_at`, both transports refuse a
@@ -244,6 +245,14 @@ defmodule EngramWeb.Router do
     get "/oauth-protected-resource/api/mcp", WellKnownController, :protected_resource
   end
 
+  # OpenAI's plugin portal proves we own the MCP domain by fetching this and
+  # comparing the body to the token it issued. No pipeline: `:api` 406s a
+  # text/plain Accept, and `:public_cacheable` would pin a stale token at the
+  # edge after a new draft rotates it.
+  scope "/.well-known", EngramWeb do
+    get "/openai-apps-challenge", WellKnownController, :openai_apps_challenge
+  end
+
   # OAuth 2.1 endpoints — public + rate-limited per IP. Endpoint handlers
   # validate client_id, redirect_uri, and PKCE themselves; no router-level
   # auth. DCR mints public PKCE clients with no `client_secret`.
@@ -340,6 +349,7 @@ defmodule EngramWeb.Router do
       # holds a valid JWT; without this they could mint API keys, CRUD vaults,
       # and change billing until token expiry.
       EngramWeb.Plugs.AccountLifecycle,
+      EngramWeb.Plugs.WebActivity,
       EngramWeb.Plugs.RotationLockCheck,
       EngramWeb.Plugs.RequireApiRpsBudget
     ]

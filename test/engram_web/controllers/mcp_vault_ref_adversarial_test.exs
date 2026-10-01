@@ -16,11 +16,18 @@ defmodule EngramWeb.McpVaultRefAdversarialTest do
 
   require Logger
 
+  defp named_vault!(user, name) do
+    {:ok, vault, _} = Engram.Vaults.register_vault(user, name, Ecto.UUID.generate())
+    vault
+  end
+
   setup %{conn: conn} do
     user = insert(:user)
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+    # Unlimited: the fixtures below register real named vaults.
+    insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, vault_a, _} = Engram.Vaults.register_vault(user, "Test Vault", Ecto.UUID.generate())
-    vault_b = insert(:vault, user: user, slug: "second-vault")
+    {:ok, vault_b, _} = Engram.Vaults.register_vault(user, "Second Vault", Ecto.UUID.generate())
 
     {:ok, _} =
       Engram.Notes.upsert_note(user, vault_b, %{
@@ -118,7 +125,7 @@ defmodule EngramWeb.McpVaultRefAdversarialTest do
     # tool rejected.
     test "a vault named like a UUID resolves on both paths", %{conn: conn, user: user} do
       uuidish = "550e8400-e29b-41d4-a716-446655440000"
-      v = insert(:vault, user: user, slug: uuidish)
+      v = named_vault!(user, uuidish)
 
       {:ok, _} =
         Engram.Notes.upsert_note(user, v, %{
@@ -141,7 +148,6 @@ defmodule EngramWeb.McpVaultRefAdversarialTest do
       conn: conn,
       user: user
     } do
-      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
       {:ok, a, _} = Engram.Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
       {:ok, b, _} = Engram.Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
 
@@ -163,7 +169,6 @@ defmodule EngramWeb.McpVaultRefAdversarialTest do
       # Naming the candidates is actionable for a credential that can already
       # list every vault. For a restricted one it re-opens the enumeration
       # oracle, so it must get the same scope-shaped refusal as anything else.
-      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
       {:ok, _, _} = Engram.Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
       {:ok, _, _} = Engram.Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
       restrict_key_to!(key_row, vault_a)
@@ -181,7 +186,6 @@ defmodule EngramWeb.McpVaultRefAdversarialTest do
     end
 
     test "set_vault refuses an ambiguous name too", %{conn: conn, user: user} do
-      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
       {:ok, a, _} = Engram.Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
       {:ok, b, _} = Engram.Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
 

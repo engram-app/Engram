@@ -4,6 +4,7 @@ defmodule Engram.MCP.Handlers do
   Each function takes (user, vault, args) and returns a markdown-formatted string.
   """
 
+  alias Engram.MCP.{ParseGate, Sections}
   alias Engram.{Notes, Search}
   alias Engram.Notes.Frontmatter
 
@@ -83,7 +84,7 @@ defmodule Engram.MCP.Handlers do
   # away from (#729). Without it `vault: nil` would drop the vault clause
   # entirely and search everything the user owns.
   def handle("search_notes", user, {:cross_vault, vaults}, args) do
-    query = args["query"] || ""
+    names = Map.new(vaults, &{to_string(&1.id), &1.name})
 
     opts =
       Keyword.merge(build_search_opts(args),
@@ -92,13 +93,60 @@ defmodule Engram.MCP.Handlers do
         vault_ids: Enum.map(vaults, &to_string(&1.id))
       )
 
-    names = Map.new(vaults, &{to_string(&1.id), &1.name})
-    render_search(Search.search(user, nil, query, opts), names)
+    case search_kind(args) do
+      {:ok, :recent} ->
+        limit = max(1, min(args["limit"] || 5, 20))
+
+        vaults
+        |> Enum.flat_map(fn v ->
+          {:ok, notes} = Notes.list_recent_notes(user, v, limit)
+          Enum.map(notes, &{&1, v})
+        end)
+        |> Enum.sort_by(fn {n, _v} -> n.updated_at end, {:desc, DateTime})
+        |> Enum.take(limit)
+        |> render_recent(names)
+
+      {:ok, :query} ->
+        render_search(Search.search(user, nil, args["query"], opts), names)
+
+      {:ok, :similar} ->
+        path = args["similar_to"]
+
+        with {:ok, note} <- similar_source(user, vaults, path),
+             {:ok, ids} <- stored_points(note, path) do
+          render_similar(Search.similar(user, nil, ids, opts), names, note, path)
+        end
+
+      {:error, _} = err ->
+        err
+    end
   end
 
   def handle("search_notes", user, vault, args) do
-    query = args["query"] || ""
-    render_search(Search.search(user, vault, query, build_search_opts(args)), %{})
+    case search_kind(args) do
+      {:ok, :recent} ->
+        {:ok, notes} = Notes.list_recent_notes(user, vault, max(1, min(args["limit"] || 5, 20)))
+        render_recent(Enum.map(notes, &{&1, vault}), %{})
+
+      {:ok, :query} ->
+        render_search(Search.search(user, vault, args["query"], build_search_opts(args)), %{})
+
+      {:ok, :similar} ->
+        path = args["similar_to"]
+
+        with {:ok, note} <- similar_source(user, [vault], path),
+             {:ok, ids} <- stored_points(note, path) do
+          render_similar(
+            Search.similar(user, vault, ids, build_search_opts(args)),
+            %{},
+            note,
+            path
+          )
+        end
+
+      {:error, _} = err ->
+        err
+    end
   end
 
   def handle("list_tags", user, vault, _args) do
@@ -238,16 +286,27 @@ defmodule Engram.MCP.Handlers do
 
   def handle("get_notes", user, vault, args) do
     paths = args["paths"] || []
+    section = args["section"]
+    outline? = args["outline"] == true
 
     # `paths` being a list of strings is already enforced by the dispatch-level
-    # schema validator (mcp_controller.ex). The two checks left are the ones the
-    # schema does NOT declare: it has neither minItems nor maxItems.
+    # schema validator (mcp_controller.ex). The checks left are the ones the
+    # schema does NOT declare.
     cond do
       paths == [] ->
         {:error, "paths must be a non-empty array"}
 
       length(paths) > 20 ->
         {:error, "Too many paths (max 20). Split into multiple calls."}
+
+      is_binary(section) and outline? ->
+        {:error, "Pass section or outline, not both"}
+
+      is_binary(section) and String.trim(section) == "" ->
+        {:error, "section must name a heading, e.g. \"Todo\""}
+
+      is_binary(section) and length(paths) > 1 ->
+        {:error, "section reads one note at a time; pass a single path"}
 
       true ->
         fetched =
@@ -258,19 +317,12 @@ defmodule Engram.MCP.Handlers do
             end
           end)
 
-        body =
-          Enum.map_join(fetched, "\n\n---\n\n", fn
-            {_path, %{} = note} -> format_get_note(note)
-            {path, nil} -> "Note not found: #{path}"
-          end)
+        # One parse deadline for the whole call, across every path.
+        gate = ParseGate.call_opts()
 
-        notes =
-          Enum.map(fetched, fn
-            {_path, %{} = note} -> Map.put(note_payload(note), "found", true)
-            {path, nil} -> %{"path" => path, "found" => false}
-          end)
-
-        {:ok, body, %{"notes" => notes}}
+        with {:ok, fetched} <- narrow_to_section(fetched, section, gate) do
+          render_notes(user, fetched, outline?, args["include_links"] == true, gate)
+        end
     end
   end
 
@@ -610,14 +662,23 @@ defmodule Engram.MCP.Handlers do
 
   # -- edit_note (replaces patch_note / update_section) --
 
-  defp reject_other_mode(args, "replace_text"),
-    do: reject_params(args, @section_params, "replace_section")
+  defp reject_other_mode(args, "replace_text") do
+    with :ok <- reject_params(args, @section_params, "replace_section or insert_section"),
+         do: reject_params(args, ["position"], "insert_section")
+  end
 
-  defp reject_other_mode(args, "replace_section"),
+  defp reject_other_mode(args, "replace_section") do
+    with :ok <- reject_params(args, @text_params, "replace_text"),
+         do: reject_params(args, ["position"], "insert_section")
+  end
+
+  defp reject_other_mode(args, "insert_section"),
     do: reject_params(args, @text_params, "replace_text")
 
   defp reject_other_mode(_args, mode),
-    do: {:error, "mode must be replace_text or replace_section, got #{inspect(mode)}"}
+    do:
+      {:error,
+       "mode must be replace_text, replace_section or insert_section, got #{inspect(mode)}"}
 
   # A strict-schema client (OpenAI strict mode) sends every declared property
   # on every call, nulling out the ones it isn't using. `validate_tool_args/2`
@@ -680,6 +741,99 @@ defmodule Engram.MCP.Handlers do
         |> tag_mode("replace_section", %{"replacements" => nil})
     end
   end
+
+  defp run_edit(user, vault, path, "insert_section", args) do
+    level = args["level"] || 2
+
+    cond do
+      not is_binary(args["heading"]) ->
+        {:error, "heading is required for mode insert_section"}
+
+      not is_binary(args["content"]) or String.trim(args["content"]) == "" ->
+        {:error, "content is required for mode insert_section"}
+
+      level < 1 or level > 6 ->
+        {:error, "level must be between 1 and 6"}
+
+      true ->
+        with {:ok, position} <- resolve_insert_position(args["position"]) do
+          user
+          |> insert_section(vault, path, args["heading"], level, position, args["content"])
+          |> tag_mode("insert_section", %{"replacements" => nil})
+        end
+    end
+  end
+
+  defp resolve_insert_position(nil), do: {:ok, "end"}
+  defp resolve_insert_position(p) when p in ["start", "end"], do: {:ok, p}
+  defp resolve_insert_position(_), do: {:error, "position must be start or end"}
+
+  # Through rmw_upsert: the rebuild runs against the authority (#1159) on every
+  # attempt, and a missing heading refuses inside it, so nothing is written.
+  # One parse deadline for the whole call, retry included.
+  defp insert_section(user, vault, path, heading, level, position, text) do
+    gate = ParseGate.call_opts()
+
+    rebuild = fn current ->
+      case Sections.insert(current, heading, level, position, text, gate) do
+        {:ok, updated} ->
+          updated
+
+        {:error, reason} ->
+          {:error, section_error(heading, reason)}
+
+        :error ->
+          {:error, "Heading not found: #{String.duplicate("#", level)} #{heading}"}
+      end
+    end
+
+    case rmw_upsert(user, vault, path, rebuild) do
+      {:error, :not_found} ->
+        {:error, "Note not found: #{path}"}
+
+      result ->
+        upsert_reply(
+          result,
+          [
+            ok: "Inserted at the #{position} of section '#{heading}' in #{path}",
+            conflict: "Note changed concurrently; retry: #{path}",
+            error: "Failed to update section in #{path}"
+          ],
+          %{"path" => path, "heading" => heading}
+        )
+    end
+  end
+
+  # Every fixable refusal from Engram.MCP.Sections, as the message the
+  # caller sees. `line` is 0-indexed internally (Sections works in line
+  # indices); report it 1-indexed, matching how a human (or Obsidian) counts.
+  defp section_error(heading, {:hidden_heading, line}) do
+    "Section '#{heading}' may run past line #{line + 1}, which looks like a heading but is " <>
+      "hidden (by an unclosed code block, HTML block or %% comment); close it or edit with " <>
+      "replace_text"
+  end
+
+  defp section_error(heading, :ambiguous),
+    do: "Heading '#{heading}' matches several headings; pass the exact heading text"
+
+  defp section_error(_heading, :busy),
+    do: "The server is busy parsing other notes; try again shortly"
+
+  defp section_error(_heading, :parse_timeout) do
+    "This note is too complex to parse for section edits or outline; edit with replace_text " <>
+      "or read it with get_notes without section/outline"
+  end
+
+  defp section_error(_heading, :deadline) do
+    "This request ran out of time before this note could be parsed; try again shortly, " <>
+      "or with fewer paths"
+  end
+
+  defp section_error(_heading, :parse_failed),
+    do: "Parsing this note failed; edit with replace_text"
+
+  defp section_error(_heading, :invalid_utf8),
+    do: "This note contains invalid UTF-8; use edit_note replace_text"
 
   defp tag_mode({:ok, text, structured}, mode, blanks),
     do: {:ok, text, structured |> Map.merge(blanks) |> Map.put("mode", mode)}
@@ -765,6 +919,8 @@ defmodule Engram.MCP.Handlers do
   # found, and every following section got swallowed into the replacement.
   # Refusing the out-of-range level outright (before any heading search)
   # removes the mismatch instead of also clamping the end-scan to match.
+  # The finder (`Engram.MCP.Sections.find/3`) is a CommonMark parser;
+  # the level guard still refuses 0 or 7+ before any lookup.
   defp replace_section(_user, _vault, _path, _heading, _new_content, level, _op)
        when level < 1 or level > 6 do
     {:error, "level must be between 1 and 6"}
@@ -773,62 +929,52 @@ defmodule Engram.MCP.Handlers do
   defp replace_section(user, vault, path, heading, new_content, level, op) do
     with {:ok, note} <- Notes.get_note(user, vault, path),
          {:ok, current} <- Notes.authoritative_content(user, note) do
-      target = String.duplicate("#", level) <> " " <> heading
-      lines = String.split(current, "\n")
+      case Sections.find(current, heading, level, ParseGate.call_opts()) do
+        :error ->
+          # The section was not updated, so this is not a success. Was `:ok`.
+          {:error, "Heading not found: #{String.duplicate("#", level)} #{heading}"}
 
-      start_idx =
-        Enum.find_index(lines, fn line ->
-          String.trim(line) == String.trim(target)
-        end)
+        {:error, reason} ->
+          {:error, section_error(heading, reason)}
 
-      if start_idx == nil do
-        # The section was not updated, so this is not a success. Was `:ok`.
-        {:error, "Heading not found: #{target}"}
-      else
-        end_idx =
-          Enum.find_index(Enum.drop(lines, start_idx + 1), fn line ->
-            stripped = String.trim_leading(line)
+        # Defense in depth: a heading-shaped line inside the section is not a
+        # heading in the parse (an unclosed block or %% comment hid it), so
+        # `stop` may not be a real section boundary. Replacing through it
+        # could silently delete what was hidden. Refuse; write nothing.
+        {:ok, %{hidden_heading_at: line}} when is_integer(line) ->
+          {:error, section_error(heading, {:hidden_heading, line})}
 
-            if String.starts_with?(stripped, "#") do
-              h_level =
-                stripped
-                |> String.graphemes()
-                |> Enum.take_while(&(&1 == "#"))
-                |> length()
+        {:ok, %{start: s, stop: e, span: span}} ->
+          lines = String.split(current, "\n")
+          replacement = String.trim_trailing(new_content, "\n")
 
-              rest = String.slice(stripped, h_level, 1)
-              h_level <= level and rest in [" ", ""]
-            else
-              false
-            end
-          end)
+          # `s + span` keeps the whole heading: span is 2+ for a setext
+          # heading (every paragraph line plus the underline), 1 for ATX.
+          # splice_eol/5 keeps the CRLF conversion LOCAL to `replacement`
+          # (and the one boundary line next to it, if replacing lands at end
+          # of file with no trailing newline) -- it never touches any other
+          # line in the note.
+          {lines, replacement} = Sections.splice_eol(lines, s + span, e, replacement, current)
 
-        end_idx =
-          if end_idx == nil,
-            do: length(lines),
-            else: start_idx + 1 + end_idx
+          final_content =
+            (Enum.slice(lines, 0, s + span) ++
+               [replacement] ++ Enum.drop(lines, e))
+            |> Enum.join("\n")
 
-        new_lines =
-          Enum.slice(lines, 0, start_idx + 1) ++
-            [String.trim_trailing(new_content, "\n")] ++
-            Enum.slice(lines, end_idx, length(lines))
-
-        final_content = Enum.join(new_lines, "\n")
-
-        Notes.upsert_note(user, vault, %{
-          "path" => path,
-          "content" => final_content,
-          "mtime" => now(),
-          "base_hash" => note.content_hash
-        })
-        |> upsert_reply(
-          [
-            ok: "Section '#{heading}' updated in #{path}",
-            conflict: "Note changed concurrently; retry: #{path}",
-            error: "Failed to update section in #{path}"
-          ],
-          %{"path" => path, "heading" => heading}
-        )
+          Notes.upsert_note(user, vault, %{
+            "path" => path,
+            "content" => final_content,
+            "mtime" => now(),
+            "base_hash" => note.content_hash
+          })
+          |> upsert_reply(
+            [
+              ok: "Section '#{heading}' updated in #{path}",
+              conflict: "Note changed concurrently; retry: #{path}",
+              error: "Failed to update section in #{path}"
+            ],
+            %{"path" => path, "heading" => heading}
+          )
       end
     else
       {:error, :not_found} -> {:error, "Note not found: #{path}"}
@@ -951,6 +1097,143 @@ defmodule Engram.MCP.Handlers do
   # no client could distinguish from a genuine zero-hit search, and which a
   # retry loop would never retry.
   def render_search({:error, _reason}, _names), do: {:error, "Search unavailable."}
+
+  @search_filters ~w(tags folder type created_after created_before updated_after updated_before)
+
+  # `:recent` when query is blank AND similar_to is absent. `similar_to` and a
+  # non-blank query never combine: naming a source note AND asking a question
+  # is an ambiguous request, not a widened one. A blank query plus a ranking
+  # filter is a fixable error, not a silently-ignored one: the recent listing
+  # is unfiltered, so honoring the call would silently return the wrong answer
+  # to a filtered ask.
+  defp search_kind(args) do
+    similar = args["similar_to"]
+    blank? = String.trim(args["query"] || "") == ""
+
+    cond do
+      is_binary(similar) and not blank? ->
+        {:error, "Pass query or similar_to, not both"}
+
+      is_binary(similar) and String.trim(similar) == "" ->
+        {:error, "similar_to must be a note path"}
+
+      is_binary(similar) ->
+        {:ok, :similar}
+
+      blank? ->
+        case Enum.find(@search_filters, &(not is_nil(args[&1]))) do
+          nil ->
+            {:ok, :recent}
+
+          p ->
+            {:error, "#{p} needs a query or similar_to; omit it to list recently updated notes"}
+        end
+
+      true ->
+        {:ok, :query}
+    end
+  end
+
+  # The source must be unambiguous: the same path can exist in several vaults.
+  # `get_note_metadata/3`, not `get_note/3` — this never reads title/content/
+  # tags, so decrypting them would be pure overhead (and a needless crash
+  # surface on corrupt ciphertext). Resolution still goes through the same
+  # `user_id AND vault_id` scoped query `get_note/3` uses (Notes.scoped/2),
+  # not just RLS, so a path that exists only in another user's vault, or only
+  # in a vault outside the `vaults` list this credential was given, resolves
+  # to :not_found here — never a cross-tenant hit.
+  defp similar_source(user, vaults, path) do
+    hits = for v <- vaults, {:ok, note} <- [Notes.get_note_metadata(user, v, path)], do: {note, v}
+
+    case hits do
+      [{note, _v}] ->
+        {:ok, note}
+
+      [] ->
+        {:error, "Note not found: #{path}"}
+
+      many ->
+        names = Enum.map_join(many, ", ", fn {_n, v} -> v.name end)
+        {:error, "#{path} exists in #{length(many)} vaults (#{names}); pass vault_id to pick one"}
+    end
+  end
+
+  # `dense_indexed_hash` is nil unless the last index pass wrote dense vectors
+  # (EmbedNote.stamp_embed_hash/3). Qdrant rejects a recommend whose positive
+  # point has no dense vector, so refuse here with a message the caller can act on.
+  defp stored_points(%{dense_indexed_hash: nil}, path), do: {:error, not_embedded(path)}
+
+  defp stored_points(note, path) do
+    case Engram.Indexing.point_ids_for_note(note) do
+      [] -> {:error, not_embedded(path)}
+      ids -> {:ok, ids}
+    end
+  end
+
+  defp not_embedded(path),
+    do:
+      "#{path} has no stored embedding yet (it may be new, empty, or not embedded on " <>
+        "your plan); try again later, or use query instead"
+
+  # Renders a `Search.similar/4` result for the `similar_to` tool path.
+  #
+  # A Qdrant 400/404 on `recommend` means the positive point ids it was given
+  # no longer resolve to a stored dense vector (stale/deleted points — the
+  # `dense_indexed_hash` pre-check in `stored_points/2` catches the note-level
+  # case, this catches the point-level one). That is the same fixable
+  # situation `not_embedded/1` already names, not a generic outage.
+  #
+  # On success, drop any hit that is the source note itself: `must_not:
+  # has_id` in `Qdrant.recommend_body/2` excludes the positive points by id,
+  # but a stale point a failed `delete_points_for_note`/reindex left behind
+  # can still belong to the source note and surface under its
+  # {vault_id, source_path} after grouping. Filtered here, after grouping,
+  # because that's where source_path/vault_id are finally decrypted.
+  defp render_similar({:error, {status, _body}}, _names, _note, path) when status in [400, 404],
+    do: {:error, not_embedded(path)}
+
+  defp render_similar({:ok, results}, names, note, path) do
+    render_search({:ok, Enum.reject(results, &source_result?(&1, note, path))}, names)
+  end
+
+  defp render_similar(other, names, _note, _path), do: render_search(other, names)
+
+  defp source_result?(result, note, path),
+    do: result[:source_path] == path and to_string(result[:vault_id]) == to_string(note.vault_id)
+
+  # Same result shape as render_search/2; vault labels only in cross-vault mode.
+  defp render_recent(pairs, names) do
+    text =
+      if pairs == [] do
+        "No notes yet."
+      else
+        Enum.join(
+          [
+            "Recently updated:"
+            | Enum.map(pairs, fn {n, _v} -> "- #{n.path} (#{n.updated_at})" end)
+          ],
+          "\n"
+        )
+      end
+
+    results =
+      Enum.map(pairs, fn {n, v} ->
+        payload = %{
+          "score" => 0,
+          "title" => n.title,
+          "source_path" => n.path,
+          "tags" => n.tags || [],
+          "text" => ""
+        }
+
+        if names == %{},
+          do: payload,
+          else:
+            Map.merge(payload, %{"vault_id" => to_string(v.id), "vault" => names[to_string(v.id)]})
+      end)
+
+    {:ok, text, %{"results" => results}}
+  end
 
   # Mirrors `format_search_result/3` field for field, so a client reading
   # structuredContent sees exactly what the markdown shows. `vault_id`/`vault`
@@ -1441,13 +1724,196 @@ defmodule Engram.MCP.Handlers do
     }
   end
 
+  defp narrow_to_section(fetched, nil, _gate), do: {:ok, fetched}
+  defp narrow_to_section([{_path, nil}] = fetched, _section, _gate), do: {:ok, fetched}
+
+  defp narrow_to_section([{path, note}], section, gate) do
+    case Sections.section(note.content || "", section, gate) do
+      {:ok, text} -> {:ok, [{path, %{note | content: text}}]}
+      {:error, {:not_found, hs}} -> {:error, heading_missing_msg(path, section, hs)}
+      {:error, reason} -> {:error, section_error(section, reason)}
+    end
+  end
+
+  # A note-scoped list, not a network response, so 50/100 are arbitrary but
+  # generous caps meant only to stop a huge note from flooding the reply.
+  @max_listed_headings 50
+  @max_heading_chars 100
+
+  defp heading_missing_msg(path, section, []),
+    do: "Heading not found in #{path}: #{section}. This note has no headings."
+
+  defp heading_missing_msg(path, section, hs) do
+    total = length(hs)
+    listed = hs |> Enum.take(@max_listed_headings) |> Enum.map_join(", ", &truncate_heading/1)
+
+    more =
+      if total > @max_listed_headings,
+        do: ", and #{total - @max_listed_headings} more",
+        else: ""
+
+    "Heading not found in #{path}: #{section}. Headings: #{listed}#{more}"
+  end
+
+  defp truncate_heading(%{text: text}) do
+    if String.length(text) > @max_heading_chars do
+      String.slice(text, 0, @max_heading_chars) <> "..."
+    else
+      text
+    end
+  end
+
+  defp render_notes(user, fetched, outline?, links?, gate) do
+    {texts, notes} =
+      fetched
+      |> Enum.map(fn
+        {path, nil} ->
+          {"Note not found: #{path}", %{"path" => path, "found" => false}}
+
+        {_path, note} ->
+          {text, payload} =
+            if outline?,
+              do: outline_entry(note, gate),
+              else: {format_get_note(note), note_payload(note)}
+
+          payload = Map.put(payload, "found", true)
+
+          # One backlinks + outgoing query pair per note (N+1), not batched.
+          # Fine at get_notes' 20-path cap; revisit only if that cap rises.
+          if links? do
+            {links, truncation} = links_payload(user, note)
+            {text <> "\n\n" <> format_links(links, truncation), Map.merge(payload, links)}
+          else
+            {text, payload}
+          end
+      end)
+      |> Enum.unzip()
+
+    {:ok, Enum.join(texts, "\n\n---\n\n"), %{"notes" => notes}}
+  end
+
+  # Both reads are user-scoped by the Links context; vault scoping holds
+  # because an edge only ever resolves inside its source note's vault
+  # (Links.resolve_target/4), so a cross-vault same-named note never binds.
+  #
+  # `backlinks_for_note/2` is DB-capped; fetching `limit + 1` DISTINCT
+  # sources is how we tell "exactly at the cap" apart from "there would have
+  # been more" without an unbounded COUNT. `distinct_sources: true` is
+  # required here because one source note can carry several edges to the
+  # same target, so a raw edge count would over-report truncation.
+  # `outgoing`/`unresolved` come from one note's own edges (links_for_note/2,
+  # never DB-limited), so their true length is always known and the cap is
+  # applied here, after dedup, with an exact overage.
+  #
+  # `@doc false` and public (not `defp`) only so a test can pass a small
+  # `limit` directly instead of manufacturing `Links.backlinks_limit/0` + 1
+  # real notes.
+  @doc false
+  @spec links_payload(map(), map(), pos_integer()) ::
+          {map(), {boolean(), non_neg_integer(), non_neg_integer()}}
+  def links_payload(user, note, limit \\ Engram.Links.backlinks_limit()) do
+    raw_backlinks =
+      Engram.Links.backlinks_for_note(user, note.id, limit: limit + 1, distinct_sources: true)
+
+    backlinks_more? = length(raw_backlinks) > limit
+
+    backlinks =
+      raw_backlinks |> Enum.map(& &1.source_path) |> Enum.reject(&is_nil/1) |> Enum.take(limit)
+
+    outgoing_edges = Engram.Links.links_for_note(user, note.id)
+
+    {targets, outgoing_extra} =
+      outgoing_edges
+      |> Enum.map(& &1.target_path)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+      |> cap(limit)
+
+    {unresolved, unresolved_extra} =
+      outgoing_edges
+      |> Enum.filter(& &1.dangling)
+      |> Enum.map(& &1.target_text)
+      |> Enum.uniq()
+      |> cap(limit)
+
+    links = %{
+      "backlinks" => backlinks,
+      "outgoing" => targets,
+      "unresolved" => unresolved,
+      "links_truncated" => backlinks_more? or outgoing_extra > 0 or unresolved_extra > 0
+    }
+
+    {links, {backlinks_more?, outgoing_extra, unresolved_extra}}
+  end
+
+  # Slices a deduped list to `limit`, returning {sliced, extra} where `extra`
+  # is the exact count of items dropped (0 when nothing was dropped).
+  defp cap(list, limit) do
+    count = length(list)
+    if count > limit, do: {Enum.take(list, limit), count - limit}, else: {list, 0}
+  end
+
+  # Public + `@doc false` alongside `links_payload/3`, so a test can render
+  # the text for a `links_payload/3` call made with a small injected limit.
+  @doc false
+  @spec format_links(map(), {boolean(), non_neg_integer(), non_neg_integer()}) :: String.t()
+  def format_links(links, {backlinks_more?, outgoing_extra, unresolved_extra}) do
+    Enum.join(
+      [
+        "Backlinks: " <> suffixed(links["backlinks"], backlinks_more?),
+        "Links to: " <> suffixed(links["outgoing"], outgoing_extra),
+        "Unresolved: " <> suffixed(links["unresolved"], unresolved_extra)
+      ],
+      "\n"
+    )
+  end
+
+  # `more` is `true` when the count past the cap is unknown (backlinks, from
+  # the limit+1 probe), a positive integer when it is known exactly
+  # (outgoing/unresolved), or `false`/`0` when the list was not truncated.
+  defp suffixed(items, true), do: list_or_none(items) <> ", and more"
+
+  defp suffixed(items, more) when is_integer(more) and more > 0,
+    do: list_or_none(items) <> ", and #{more} more"
+
+  defp suffixed(items, _), do: list_or_none(items)
+
+  defp list_or_none([]), do: "none"
+  defp list_or_none(items), do: Enum.join(items, ", ")
+
+  # A parse refusal (busy, timeout, invalid UTF-8) is a per-note `error`
+  # entry, so one note does not fail a whole multi-path call.
+  defp outline_entry(note, gate) do
+    base = note |> note_payload() |> Map.delete("content")
+
+    case Sections.headings(note.content || "", gate) do
+      {:ok, hs} ->
+        outline_ok(note, base, hs)
+
+      {:error, reason} ->
+        msg = section_error(nil, reason)
+        {"**Path:** #{note.path}\n#{msg}", Map.put(base, "error", msg)}
+    end
+  end
+
+  defp outline_ok(note, base, hs) do
+    outline = Enum.map(hs, &%{"level" => &1.level, "heading" => &1.text})
+
+    lines =
+      if outline == [],
+        do: ["(no headings)"],
+        else:
+          Enum.map(outline, &(String.duplicate("  ", &1["level"] - 1) <> "- " <> &1["heading"]))
+
+    {Enum.join(["**Path:** #{note.path}" | lines], "\n"), Map.put(base, "outline", outline)}
+  end
+
   defp vault_payload(v) do
     %{
       "id" => to_string(v.id),
       "name" => v.name,
       "slug" => v.slug,
-      "is_default" => v.is_default,
-      "description" => v.description
+      "is_default" => v.is_default
     }
   end
 end

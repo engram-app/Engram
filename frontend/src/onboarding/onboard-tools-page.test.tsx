@@ -96,6 +96,14 @@ describe("OnboardToolsPage: Free tier", () => {
 		expect(link).toHaveAttribute("href", "/onboard/billing");
 	});
 
+	it("reports which surface the Upgrade click came from", () => {
+		render(wrap(<OnboardToolsPage />));
+
+		fireEvent.click(screen.getByRole("link", { name: /upgrade/iu }));
+
+		expect(mockTrack).toHaveBeenCalledWith("upgrade_link_clicked", { source: "tools_step" });
+	});
+
 	it("single-select: picking a second tool deselects the first", () => {
 		render(wrap(<OnboardToolsPage />));
 

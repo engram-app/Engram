@@ -108,7 +108,9 @@ defmodule EngramWeb.Plugs.HostRewriteTest do
       for path <- [
             "/.well-known/oauth-protected-resource",
             "/.well-known/oauth-protected-resource/api/mcp",
-            "/.well-known/oauth-authorization-server"
+            "/.well-known/oauth-authorization-server",
+            # OpenAI's plugin portal verifies the MCP domain by fetching this.
+            "/.well-known/openai-apps-challenge"
           ] do
         conn =
           conn(:get, path)
