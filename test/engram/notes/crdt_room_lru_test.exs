@@ -101,8 +101,10 @@ defmodule Engram.Notes.CrdtRoomLruTest do
 
   describe "sweep" do
     setup do
-      CrdtRoomLru.reset()
+      # Same isolation as "eviction accounting" below (#1792).
       on_exit(&CrdtRoomLru.reset/0)
+      with_lru_config(sweep_interval_ms: 3_600_000)
+      CrdtRoomLru.reset()
       :ok
     end
 
@@ -186,8 +188,12 @@ defmodule Engram.Notes.CrdtRoomLruTest do
 
   describe "eviction accounting" do
     setup do
-      CrdtRoomLru.reset()
+      # The app's own periodic sweep must not interleave with a test's
+      # sweeps (#1792). on_exit runs LIFO: the config is restored first, so
+      # the final reset re-arms the app timer at its normal interval.
       on_exit(&CrdtRoomLru.reset/0)
+      with_lru_config(sweep_interval_ms: 3_600_000)
+      CrdtRoomLru.reset()
 
       test_pid = self()
       handler = "lru-#{System.unique_integer([:positive])}"
@@ -473,6 +479,31 @@ defmodule Engram.Notes.CrdtRoomLruTest do
       CrdtRoomLru.touch("c-note", live_room(), @vault)
       assert over_cap_timer() != nil
     end
+
+    test "reset re-arms the periodic sweep from the current config" do
+      with_lru_config(sweep_interval_ms: 30)
+      CrdtRoomLru.reset()
+      first = sweep_ref()
+
+      Process.sleep(150)
+      assert sweep_ref() != first, "the periodic sweep did not fire on the re-armed interval"
+    end
+
+    test "a periodic timer armed before reset never fires a sweep" do
+      with_lru_config(sweep_interval_ms: 30)
+      CrdtRoomLru.reset()
+      stale = sweep_ref()
+
+      with_lru_config(sweep_interval_ms: 3_600_000)
+      CrdtRoomLru.reset()
+      current = sweep_ref()
+
+      Process.sleep(150)
+      assert sweep_ref() == current, "a timer from before reset ran a sweep"
+      refute current == stale
+    end
+
+    defp sweep_ref, do: :sys.get_state(CrdtRoomLru).sweep_ref
 
     # `:sys.get_state/1` is a call, so it is served after any cast `touch/3`
     # already sent from this process.
