@@ -1072,11 +1072,10 @@ defmodule Engram.Indexing do
       user_id: note.user_id,
       vault_id: note.vault_id,
       position: chunk.position,
-      # Never written: the heading path ("Title > H1 > H2") is note content and
+      # No heading_path: the heading ("Title > H1 > H2") is note content and
       # lives encrypted in the Qdrant payload, which is where search reads it.
-      # The Postgres column is nulled by the 20260926 migrate-data migration
-      # and dropped in the following contract release.
-      heading_path: nil,
+      # The Postgres column was nulled by the 20260926 migrate-data migration
+      # and is dropped by the next contract release.
       char_start: chunk.char_start,
       char_end: chunk.char_end,
       token_count: token_count,

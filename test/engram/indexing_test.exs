@@ -77,15 +77,19 @@ defmodule Engram.IndexingTest do
       assert {:ok, count} = Indexing.index_note(note, vault)
       assert count > 0
 
-      import Ecto.Query
+      # The schema no longer knows the column (so the contract release can drop
+      # it without breaking the release before it); read it raw until then.
+      refute :heading_path in Engram.Notes.Chunk.__schema__(:fields)
 
-      headings =
-        Engram.Repo.all(from(c in Engram.Notes.Chunk, select: c.heading_path),
+      %{rows: rows} =
+        Engram.Repo.query!(
+          "SELECT heading_path FROM chunks WHERE note_id = $1",
+          [Ecto.UUID.dump!(note.id)],
           skip_tenant_check: true
         )
 
-      assert headings != []
-      assert Enum.all?(headings, &is_nil/1)
+      assert rows != []
+      assert Enum.all?(rows, &(&1 == [nil]))
     end
 
     test "a note that falls outside the index cap loses its existing chunks",

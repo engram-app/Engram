@@ -5,7 +5,10 @@ defmodule Engram.Notes.Chunk do
 
   schema "chunks" do
     field :position, :integer
-    field :heading_path, :string, redact: true
+    # No `heading_path`: the plaintext column is never written or read (the
+    # heading lives encrypted in the Qdrant payload) and is dropped by the
+    # next contract release. Removed from the schema first so that release
+    # cannot break this one mid-deploy.
     field :char_start, :integer
     field :char_end, :integer
     field :token_count, :integer
@@ -28,7 +31,6 @@ defmodule Engram.Notes.Chunk do
     chunk
     |> cast(attrs, [
       :position,
-      :heading_path,
       :char_start,
       :char_end,
       :token_count,
