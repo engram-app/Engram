@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.39.0](https://github.com/engram-app/Engram/compare/0.38.1...0.39.0) (2026-10-01)
+
+
+### Features
+
+* **analytics:** track Obsidian sync and MCP activity in PostHog ([#1813](https://github.com/engram-app/Engram/issues/1813)) ([5bddc91](https://github.com/engram-app/Engram/commit/5bddc918b78a06f3bb5e49b58e78e59b5a570184))
+* **analytics:** track onboarding clicks we could not see ([#1821](https://github.com/engram-app/Engram/issues/1821)) ([7bd33f8](https://github.com/engram-app/Engram/commit/7bd33f823b2c46b919fbdf8891e301ff3afa2452))
+
+
+### Bug Fixes
+
+* **onboarding:** let Free users reach the plan picker from Upgrade ([#1814](https://github.com/engram-app/Engram/issues/1814)) ([8a189a1](https://github.com/engram-app/Engram/commit/8a189a12236aadc508245b2ea81958d8a60bf9e4))
+
 ## [0.38.1](https://github.com/engram-app/Engram/compare/0.38.0...0.38.1) (2026-09-30)
 
 
