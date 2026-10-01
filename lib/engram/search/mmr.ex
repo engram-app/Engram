@@ -81,5 +81,14 @@ defmodule Engram.Search.MMR do
 
   defp dot(nil, _), do: 0.0
   defp dot(_, nil), do: 0.0
-  defp dot(a, b), do: Enum.zip_reduce(a, b, 0.0, fn x, y, acc -> acc + x * y end)
+  defp dot(a, b), do: dot(a, b, 0.0)
+
+  # Direct recursion, not `Enum.zip_reduce/4`: drops the per-element closure
+  # call (reductions 30M -> 11M on a limit-50 rerank over 200 x 1024), but
+  # wall time only improves ~10-20%, because the cost is boxed-float
+  # allocation in ~10M multiply-adds, not the call. Float binaries measured
+  # slower. The real fix is out of this module (Qdrant-side MMR or Nx); see
+  # #1798.
+  defp dot([x | xs], [y | ys], acc), do: dot(xs, ys, acc + x * y)
+  defp dot(_, _, acc), do: acc
 end
