@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "engram",
-  "version": "1.0.1",
+  "version": "1.0.0",
   "description": "Shared memory for Claude, ChatGPT and any MCP client. Read and edit it in Obsidian or the web app.",
   "author": {
     "name": "Engram",
@@ -99,7 +99,7 @@
         "commerce_description": "The plugin does not sell products or process payments."
       },
       "publication": {
-        "release_notes": "Test cases now match the Northwind Studio sample vault in the reviewer account."
+        "release_notes": "Initial release: search, read, create, edit and organize notes in an Engram vault."
       }
     }
   }
