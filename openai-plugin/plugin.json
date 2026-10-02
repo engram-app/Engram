@@ -2,7 +2,7 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "engram",
   "version": "1.0.0",
-  "description": "Shared memory for Claude, ChatGPT and any MCP client. Read and edit it in Obsidian or the web app.",
+  "description": "AI memory made of plain markdown notes you can read and edit in Obsidian or the web app.",
   "author": {
     "name": "Engram",
     "email": "support@engram.page",
@@ -23,7 +23,7 @@
       "interface": {
         "displayName": "Engram AI Memory",
         "shortDescription": "AI memory you edit in Obsidian",
-        "longDescription": "Engram is one memory for all your AI tools. Claude, ChatGPT, Grok, Cursor and any other MCP client read from and write to the same memory, so what you tell one, the others can find.\n\nThat memory is plain markdown notes. There is no extraction step where an AI decides what to keep: the memory is the note itself. You can read exactly what your AI remembers, and when something is wrong, you fix the line and every AI sees the fix.\n\nRead and edit your memory in Obsidian, where the Engram plugin syncs it in real time, in the Engram web app, or on your phone. It works with Obsidian closed.\n\nSearch combines keyword and semantic matching, so an exact string like an error message, a config key or an ID is findable, not just something similar. Notes are encrypted at rest with a per-user key. Sign-in is OAuth, and you can revoke any client's access from your account.",
+        "longDescription": "Engram is AI memory you can read and edit. What you save in one conversation is there to recall in the next.\n\nThat memory is plain markdown notes. The memory is the note itself, so you can read exactly what is remembered, and when something is wrong, you fix the line and the fix is what gets recalled.\n\nRead and edit your memory in Obsidian, where the Engram plugin syncs it in real time, in the Engram web app, or on your phone. It works with Obsidian closed.\n\nSearch combines keyword and semantic matching, so an exact string like an error message, a config key or an ID is findable, not just something similar. Notes are encrypted at rest with a per-user key. Sign-in is OAuth, and you can revoke access from your account.",
         "developerName": "Engram",
         "category": "Productivity",
         "capabilities": [
@@ -96,7 +96,8 @@
           ]
         },
         "commerce": false,
-        "commerce_description": "The plugin does not sell products or process payments."
+        "commerce_description": "The plugin does not sell products or process payments.",
+        "demo_recording_url": "https://youtu.be/-25120oVXF0"
       },
       "publication": {
         "release_notes": "Initial release: search, read, create, edit and organize notes in an Engram vault."
