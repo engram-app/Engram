@@ -86,7 +86,10 @@ describe("TelemetryTab", () => {
 		render(<TelemetryTab />);
 
 		expect(await screen.findByRole("status")).toBeTruthy();
-		expect((screen.getByRole("checkbox") as HTMLInputElement).disabled).toBe(true);
+		const box = screen.getByRole("checkbox") as HTMLInputElement;
+		expect(box.disabled).toBe(true);
+		// Nothing is sent, so the toggle must not read as "on".
+		expect(box.checked).toBe(false);
 	});
 
 	it("keeps the toggle where it was when saving fails", async () => {

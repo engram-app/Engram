@@ -52,7 +52,7 @@ export default function TelemetryTab() {
 			<label className="mt-4 flex items-center gap-2 text-foreground text-sm">
 				<input
 					type="checkbox"
-					checked={state.telemetry_enabled !== false}
+					checked={state.telemetry_enabled !== false && !state.env_disabled}
 					disabled={saving || state.env_disabled}
 					onChange={(e) => answer(e.target.checked)}
 				/>
