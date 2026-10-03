@@ -26,9 +26,12 @@ defmodule Engram.Notes.Revisions do
 
   Every statement runs with `mode: :savepoint`, so a failure rolls back only
   itself and leaves the caller's transaction usable. The function-level rescue
-  logs and returns `:error`. That is a deliberate isolation boundary, not a
-  silent swallow: losing one history entry is the right trade against losing
-  the user's write, and the log line says so on its own key.
+  is total (every exception, not just database errors): a cast error, a bad
+  AAD argument or a billing lookup failure must not fail the caller's save any
+  more than a constraint violation may. It logs at error level with a
+  redacted reason and returns `:error`. That is a deliberate isolation
+  boundary, not a silent swallow: losing one history entry is the right trade
+  against losing the user's write, and the log line says so on its own key.
   """
   import Ecto.Query
 
@@ -61,7 +64,7 @@ defmodule Engram.Notes.Revisions do
       when is_binary(actor) do
     if recording?(user), do: do_record_write(existing, actor, now), else: :skipped
   rescue
-    e in [Postgrex.Error, DBConnection.ConnectionError, Ecto.ConstraintError] ->
+    e ->
       Logger.error(
         "history record_write failed note_id=#{existing.id} err=#{Metadata.safe_reason(e)} " <>
           "at=#{Metadata.format_location(__STACKTRACE__)}",

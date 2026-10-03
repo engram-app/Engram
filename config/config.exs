@@ -433,13 +433,9 @@ config :engram, Engram.MCP.ParseGate,
   max_waiting: 16,
   deadline_ms: 20_000
 
-# Import environment specific config. This must remain at the bottom
-# of this file so it overrides the configuration defined above.
 # Self-host install census ping: prod builds only, so a dev `mix phx.server` or a
 # source run never pings the real collector and pollutes the install count.
 config :engram, :census_ping, config_env() == :prod
-
-import_config "#{config_env()}.exs"
 
 # Note version history (#1710). On in dev and test. Prod reads
 # HISTORY_RECORDING in runtime.exs and stays OFF until #1713 (DEK rotation
@@ -448,3 +444,7 @@ import_config "#{config_env()}.exs"
 # before #1715 a deleted account's blobs would stay in storage.
 config :engram, :history_recording, true
 config :engram, :history_session_gap_minutes, 10
+
+# Import environment specific config. This must remain at the bottom
+# of this file so it overrides the configuration defined above.
+import_config "#{config_env()}.exs"

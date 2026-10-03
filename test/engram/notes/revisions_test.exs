@@ -117,6 +117,35 @@ defmodule Engram.Notes.RevisionsTest do
     assert revisions(u, existing.id) == []
   end
 
+  test "history with no open version keeps the replaced text as an edit copy", %{
+    user: u,
+    vault: v
+  } do
+    existing = create(u, v, "orphan.md", "first")
+    :ok = record(u, existing, "sync", DateTime.utc_now())
+
+    tenant(u, fn ->
+      Repo.update_all(
+        from(r in Revision, where: r.note_id == ^existing.id and is_nil(r.closed_at)),
+        set: [closed_at: DateTime.utc_now()]
+      )
+    end)
+
+    {:ok, _} = Notes.upsert_note(u, v, %{"path" => "orphan.md", "content" => "second"})
+    before_write = raw(u, existing.id)
+
+    assert :ok = record(u, before_write, "sync", DateTime.utc_now())
+
+    revs = revisions(u, existing.id)
+    copy = Enum.find(revs, &(&1.origin == "edit" and &1.closed_at && text_of(u, &1) == "second"))
+    assert copy
+    assert %Revision{actor: "sync"} = open(revs)
+  end
+
+  test "decrypt_pending with no pending copy is :nothing_pending", %{user: u} do
+    assert {:error, :nothing_pending} = Revisions.decrypt_pending(%Revision{}, u)
+  end
+
   # History must never fail a save. A note id that does not exist makes the
   # baseline INSERT violate its foreign key; the savepoint absorbs it, and a
   # later statement in the SAME transaction still runs.
