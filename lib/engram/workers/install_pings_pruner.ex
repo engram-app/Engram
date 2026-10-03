@@ -24,8 +24,8 @@ defmodule Engram.Workers.InstallPingsPruner do
 
   @impl Oban.Worker
   def perform(%Oban.Job{}) do
-    # NaiveDateTime to match the physical `timestamp without time zone` column.
-    cutoff = NaiveDateTime.utc_now() |> NaiveDateTime.add(-@retention_days * 24 * 3600, :second)
+    # DateTime to match the physical `timestamptz` column.
+    cutoff = DateTime.utc_now() |> DateTime.add(-@retention_days * 24 * 3600, :second)
     {:ok, prune(cutoff, 0)}
   end
 
