@@ -25,7 +25,8 @@ defmodule Engram.Notes.Revisions do
   ## History never fails a save
 
   Every statement runs with `mode: :savepoint`, so a failure rolls back only
-  itself and leaves the caller's transaction usable. The function-level rescue
+  itself and leaves the caller's transaction usable. The billing lookup, whose
+  statements Billing issues itself, runs under `contain/1` for the same reason. The function-level rescue
   is total (every exception, not just database errors): a cast error, a bad
   AAD argument or a billing lookup failure must not fail the caller's save any
   more than a constraint violation may. It logs at error level with a
@@ -51,7 +52,41 @@ defmodule Engram.Notes.Revisions do
   @spec recording?(User.t()) :: boolean()
   def recording?(%User{} = user) do
     Application.get_env(:engram, :history_recording, false) and
-      Billing.granted?(user, :history_enabled)
+      contain(fn -> Billing.granted?(user, :history_enabled) end)
+  end
+
+  @doc """
+  Run `fun` under its own SAVEPOINT when inside a transaction, and roll back to
+  it if `fun` raises, then re-raise.
+
+  `Billing.granted?/2` reads the DB on a cache miss, inside the caller's write
+  transaction. A failed statement there would leave that transaction aborted
+  and fail the user's save even though `record_write/4` rescues the exception.
+  The per-statement `mode: :savepoint` option cannot reach queries Billing
+  issues itself, and a nested `Repo.transaction/2` takes no savepoint
+  (DBConnection runs it inline in the outer transaction), so this issues the
+  savepoint statements directly.
+  """
+  @spec contain((-> result)) :: result when result: term()
+  def contain(fun) when is_function(fun, 0) do
+    if Repo.in_transaction?() do
+      _ = Repo.query!("SAVEPOINT history_contain")
+
+      try do
+        fun.()
+      rescue
+        e ->
+          _ = Repo.query!("ROLLBACK TO SAVEPOINT history_contain")
+          _ = Repo.query!("RELEASE SAVEPOINT history_contain")
+          reraise e, __STACKTRACE__
+      else
+        result ->
+          _ = Repo.query!("RELEASE SAVEPOINT history_contain")
+          result
+      end
+    else
+      fun.()
+    end
   end
 
   @doc """

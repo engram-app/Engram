@@ -167,4 +167,41 @@ defmodule Engram.Notes.RevisionsTest do
     assert result == :error
     assert count >= 1
   end
+
+  describe "the billing lookup is contained" do
+    test "a failed statement inside contain/1 leaves the transaction usable", %{user: u} do
+      result =
+        tenant(u, fn ->
+          assert_raise Postgrex.Error, fn ->
+            Revisions.contain(fn -> Repo.query!("SELECT 1 / 0") end)
+          end
+
+          Repo.query!("SELECT 1").rows
+        end)
+
+      assert result == [[1]]
+    end
+
+    test "contain/1 returns the function's value", %{user: u} do
+      assert tenant(u, fn -> Revisions.contain(fn -> :value end) end) == :value
+    end
+
+    test "a billing DB error fails the history step, not the caller's transaction",
+         %{user: u, vault: v} do
+      existing = create(u, v, "billing.md", "text")
+      Engram.Billing.OverrideCache.evict(u.id)
+
+      result =
+        tenant(u, fn ->
+          # Nothing resolves under this search_path, so the override lookup
+          # inside Billing.granted?/2 fails with undefined_table.
+          Repo.query!("SET LOCAL search_path TO history_no_such_schema")
+          history = Revisions.record_write(existing, u, "sync")
+          Repo.query!("SET LOCAL search_path TO public")
+          {history, Repo.query!("SELECT count(*) FROM notes").num_rows}
+        end)
+
+      assert result == {:error, 1}
+    end
+  end
 end
