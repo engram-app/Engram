@@ -451,7 +451,9 @@ export default function FolderTree() {
 			return path === undefined ? [] : [{ id, path }];
 		});
 		const folderPaths = rows.filter((r) => parseItemId(r.id).kind === "folder").map((r) => r.path);
-		return rows.filter((r) => !folderPaths.some((f) => r.path.startsWith(`${f}/`))).map((r) => r.id);
+		return rows
+			.filter((r) => !folderPaths.some((f) => r.path.startsWith(`${f}/`)))
+			.map((r) => r.id);
 	}
 
 	// Raw ids decide whether a right-click landed INSIDE the selection; the
