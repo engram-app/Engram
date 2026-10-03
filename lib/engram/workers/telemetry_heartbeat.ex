@@ -12,7 +12,8 @@ defmodule Engram.Workers.TelemetryHeartbeat do
 
   @impl Oban.Worker
   def perform(%Oban.Job{}) do
-    if Heartbeat.enabled?(), do: Heartbeat.send_ping()
+    # Result deliberately dropped: the next daily run is the retry.
+    _ = if Heartbeat.enabled?(), do: Heartbeat.send_ping()
     :ok
   end
 end
