@@ -195,6 +195,13 @@ Paddle is the Merchant-of-Record. Server keys gate API calls; the client token f
 |----------|---------|---------|
 | `FANOUT_PACING_ENABLED` | unset (pacing **on**) | `false` falls back to unpaced inline broadcast per note, the instant-rollback lever for the vault-channel fan-out pacer (#1002). Read into app config at boot; `Engram.Notes.FanoutPacer` reads that config per call, so flipping it without a new task needs a remote-console `Application.put_env`. The cold-queue depth gauge exists (`..._fanout_pacer_queue_depth`, `Engram.PromEx.Reliability`); check it before using this lever. |
 
+## Note history (#1710)
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `HISTORY_RECORDING` | `false` in prod (on elsewhere) | `true` turns on note version recording in prod. Stays off until DEK rotation rewraps history (#1713) and the orphan sweep walks `revisions/` (#1715). See `docs/context/note-revisions-history.md`. |
+| `HISTORY_SESSION_GAP_MINUTES` | `10` | Idle minutes after which the next save starts a new version. |
+
 ## Observability (Sentry / PostHog / Pyroscope / Metrics)
 
 Each block is opt-in: unset → no-op (dev/test/self-host emit nothing).

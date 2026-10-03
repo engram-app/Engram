@@ -27,6 +27,10 @@ defmodule Engram.Workers.FinalizeRevisionSweep do
   @stale_after_seconds 600
   @batch 1_000
 
+  # Finite so a hung job cannot pin a maintenance slot forever (#1496).
+  @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(10)
+
   @impl Oban.Worker
   def perform(%Oban.Job{}) do
     if tenancy_unsafe?() do

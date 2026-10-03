@@ -39,6 +39,10 @@ defmodule Engram.Workers.FinalizeRevision do
     )
   end
 
+  # Finite so a hung storage PUT cannot pin a maintenance slot forever (#1496).
+  @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(10)
+
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"note_id" => note_id, "user_id" => user_id}}) do
     case Accounts.get_user(user_id) do
