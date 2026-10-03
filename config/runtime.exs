@@ -1075,5 +1075,12 @@ if config_env() == :prod do
 end
 
 if gap = System.get_env("HISTORY_SESSION_GAP_MINUTES") do
-  config :engram, :history_session_gap_minutes, String.to_integer(gap)
+  minutes = String.to_integer(gap)
+
+  # 0 would start a new version on every save; a negative gap is meaningless.
+  if minutes < 1 do
+    raise "HISTORY_SESSION_GAP_MINUTES must be at least 1, got: #{inspect(gap)}"
+  end
+
+  config :engram, :history_session_gap_minutes, minutes
 end
