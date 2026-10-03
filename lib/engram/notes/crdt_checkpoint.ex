@@ -21,8 +21,18 @@ defmodule Engram.Notes.CrdtCheckpoint do
   alias Engram.{Accounts, Crypto, Notes, Repo, Vaults}
   alias Engram.Crypto.RotationGate
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtBloat, CrdtBridge, CrdtDeliver, CrdtUpdateLog, Enqueue, Helpers, Note}
-  alias Engram.Workers.{EmbedNote, ExtractNoteLinks}
+
+  alias Engram.Notes.{
+    ContentCommit,
+    CrdtBloat,
+    CrdtBridge,
+    CrdtDeliver,
+    CrdtUpdateLog,
+    Helpers,
+    Note
+  }
+
+  alias Engram.Workers.EmbedNote
 
   require Logger
 
@@ -256,20 +266,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
           {prev_hash, new_hash, path, embed_priority} ->
             _ =
               if prev_hash != new_hash do
-                _ =
-                  Enqueue.enqueue(
-                    EmbedNote.new_debounced(note_id, user_id, priority: embed_priority),
-                    "embed_note"
-                  )
-
-                # #648 lever 1 — see ExtractNoteLinks moduledoc. Covers the
-                # whole CRDT surface (genesis included: content only ever
-                # lands in notes.content through this checkpoint).
-                _ =
-                  Enqueue.enqueue(
-                    ExtractNoteLinks.new_debounced(note_id, user_id),
-                    "extract_note_links"
-                  )
+                :ok = ContentCommit.after_commit(note_id, user_id, embed_priority: embed_priority)
 
                 # Deliver-out gap: a web-editor edit lands ONLY via this checkpoint,
                 # which (unlike REST/MCP writes) never announced. A client not

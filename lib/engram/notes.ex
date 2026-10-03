@@ -16,6 +16,7 @@ defmodule Engram.Notes do
 
   alias Engram.Notes.{
     Chunk,
+    ContentCommit,
     CrdtBridge,
     CrdtDeliver,
     CrdtPersistence,
@@ -39,6 +40,7 @@ defmodule Engram.Notes do
     DeleteNoteIndex,
     EmbedNote,
     ExtractNoteLinks,
+    FinalizeRevision,
     RebindNoteLinks,
     ReleaseIndexEntries,
     RewriteNoteLinks
@@ -464,20 +466,10 @@ defmodule Engram.Notes do
         {:ok, {:ok, {prev_hash, note, _merged_text, _content_hash}}} ->
           _ =
             if prev_hash != note.content_hash do
-              _ =
-                Enqueue.enqueue(
-                  EmbedNote.new_debounced(note.id, user.id,
-                    priority: EmbedNote.priority_for(note)
-                  ),
-                  "embed_note"
+              :ok =
+                ContentCommit.after_commit(note.id, user.id,
+                  embed_priority: EmbedNote.priority_for(note)
                 )
-
-              # #648 lever 1 — cheap edge extraction must not ride the embed
-              # debounce (30s) or the embed budget gate; ~2s leading edge.
-              Enqueue.enqueue(
-                ExtractNoteLinks.new_debounced(note.id, user.id),
-                "extract_note_links"
-              )
             end
 
           note = decrypt_or_raise!(note, user)
@@ -544,20 +536,10 @@ defmodule Engram.Notes do
           # new-path upsert until they next pull.
           _ =
             if prev_hash != note.content_hash do
-              _ =
-                Enqueue.enqueue(
-                  EmbedNote.new_debounced(note.id, user.id,
-                    priority: EmbedNote.priority_for(note)
-                  ),
-                  "embed_note"
+              :ok =
+                ContentCommit.after_commit(note.id, user.id,
+                  embed_priority: EmbedNote.priority_for(note)
                 )
-
-              # #648 lever 1 — cheap edge extraction must not ride the embed
-              # debounce (30s) or the embed budget gate; ~2s leading edge.
-              Enqueue.enqueue(
-                ExtractNoteLinks.new_debounced(note.id, user.id),
-                "extract_note_links"
-              )
             end
 
           note = decrypt_or_raise!(note, user)
