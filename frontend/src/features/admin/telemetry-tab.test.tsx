@@ -32,41 +32,23 @@ beforeEach(() => {
 });
 
 describe("TelemetryTab", () => {
-	it("asks once when the operator has not answered", async () => {
+	it("shows the toggle ON when nothing has been answered (on by default)", async () => {
 		mockGet.mockResolvedValue(state());
 		render(<TelemetryTab />);
 
-		expect(await screen.findByRole("button", { name: "Share anonymous stats" })).toBeTruthy();
-		expect(screen.getByRole("button", { name: "No thanks" })).toBeTruthy();
-		expect(screen.queryByRole("checkbox")).toBeNull();
+		expect(((await screen.findByRole("checkbox")) as HTMLInputElement).checked).toBe(true);
+		expect(screen.queryByRole("button")).toBeNull();
 	});
 
-	it("records yes and swaps the prompt for a checked toggle", async () => {
-		mockGet.mockResolvedValue(state());
-		mockSet.mockResolvedValue(state({ telemetry_enabled: true }));
+	it("shows the toggle OFF once the operator turned it off", async () => {
+		mockGet.mockResolvedValue(state({ telemetry_enabled: false }));
 		render(<TelemetryTab />);
 
-		fireEvent.click(await screen.findByRole("button", { name: "Share anonymous stats" }));
-
-		await waitFor(() => expect(mockSet).toHaveBeenCalledWith(true));
-		const box = (await screen.findByRole("checkbox")) as HTMLInputElement;
-		expect(box.checked).toBe(true);
-		expect(screen.queryByRole("button", { name: "No thanks" })).toBeNull();
-	});
-
-	it("records no", async () => {
-		mockGet.mockResolvedValue(state());
-		mockSet.mockResolvedValue(state({ telemetry_enabled: false }));
-		render(<TelemetryTab />);
-
-		fireEvent.click(await screen.findByRole("button", { name: "No thanks" }));
-
-		await waitFor(() => expect(mockSet).toHaveBeenCalledWith(false));
 		expect(((await screen.findByRole("checkbox")) as HTMLInputElement).checked).toBe(false);
 	});
 
-	it("lets an answered operator flip the toggle", async () => {
-		mockGet.mockResolvedValue(state({ telemetry_enabled: true }));
+	it("turns it off from the default state", async () => {
+		mockGet.mockResolvedValue(state());
 		mockSet.mockResolvedValue(state({ telemetry_enabled: false }));
 		render(<TelemetryTab />);
 
@@ -78,8 +60,21 @@ describe("TelemetryTab", () => {
 		);
 	});
 
+	it("turns it back on", async () => {
+		mockGet.mockResolvedValue(state({ telemetry_enabled: false }));
+		mockSet.mockResolvedValue(state({ telemetry_enabled: true }));
+		render(<TelemetryTab />);
+
+		fireEvent.click(await screen.findByRole("checkbox"));
+
+		await waitFor(() => expect(mockSet).toHaveBeenCalledWith(true));
+		await waitFor(() =>
+			expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(true),
+		);
+	});
+
 	it("shows the exact payload that is sent", async () => {
-		mockGet.mockResolvedValue(state({ telemetry_enabled: true }));
+		mockGet.mockResolvedValue(state());
 		render(<TelemetryTab />);
 
 		const pre = await screen.findByText(/"runtime": "docker"/);
@@ -87,21 +82,21 @@ describe("TelemetryTab", () => {
 	});
 
 	it("says so and disables the toggle when the environment forbids telemetry", async () => {
-		mockGet.mockResolvedValue(state({ telemetry_enabled: true, env_disabled: true }));
+		mockGet.mockResolvedValue(state({ env_disabled: true }));
 		render(<TelemetryTab />);
 
 		expect(await screen.findByRole("status")).toBeTruthy();
 		expect((screen.getByRole("checkbox") as HTMLInputElement).disabled).toBe(true);
 	});
 
-	it("keeps the prompt and surfaces an error when saving fails", async () => {
+	it("keeps the toggle where it was when saving fails", async () => {
 		mockGet.mockResolvedValue(state());
 		mockSet.mockRejectedValue(new Error("boom"));
 		render(<TelemetryTab />);
 
-		fireEvent.click(await screen.findByRole("button", { name: "Share anonymous stats" }));
+		fireEvent.click(await screen.findByRole("checkbox"));
 
 		await waitFor(() => expect(mockSet).toHaveBeenCalled());
-		expect(await screen.findByRole("button", { name: "Share anonymous stats" })).toBeTruthy();
+		expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(true);
 	});
 });
