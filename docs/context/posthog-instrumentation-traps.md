@@ -2,6 +2,8 @@
 
 _Last verified: 2026-09-17. Shipped on branch `docs/posthog-funnel-plan`._
 
+> Server-side activity events (`surface_active` and friends), the id-format cutover and the Grafana dashboards: see `product-activity-analytics.md`.
+
 Read this before touching anything under `frontend/src/analytics/`,
 `Engram.Observability.PostHog`, or the `/ph` proxy — and **definitely** before
 bumping `posthog-js`.
