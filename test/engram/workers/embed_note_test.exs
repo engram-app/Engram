@@ -1027,4 +1027,72 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
     end
   end
+
+  describe "perform/1 — crash-loop guard (prod worker OOM, 2026-10-03)" do
+    # A note whose embed kills the node never returns an error, so the
+    # poison cooldown above never fires. Oban's Lifeline puts the orphaned job
+    # back WITHOUT recording an error, and ReconcileEmbeddings enqueues fresh
+    # ones, so the same note crash-looped the worker for six hours. An attempt
+    # that started but left no error behind is a hard death; two of them in a
+    # day quarantine the note before it can kill the node again.
+    defp orphan_job!(note, opts) do
+      %Oban.Job{
+        worker: "Engram.Workers.EmbedNote",
+        queue: "embed",
+        args: %{"note_id" => note.id, "user_id" => note.user_id},
+        state: Keyword.get(opts, :state, "executing"),
+        attempt: Keyword.get(opts, :attempt, 1),
+        max_attempts: 5,
+        errors: Keyword.get(opts, :errors, []),
+        attempted_at:
+          DateTime.add(DateTime.utc_now(), -Keyword.get(opts, :ago_min, 30) * 60, :second)
+      }
+      |> Repo.insert!()
+    end
+
+    defp args(note), do: %{note_id: note.id, user_id: note.user_id}
+
+    test "two hard deaths quarantine the note without embedding it", %{note: note} do
+      orphan_job!(note, [])
+      orphan_job!(note, state: "available", attempt: 1)
+
+      # No MockEmbedder expectation: an embed call here fails the test.
+      assert {:cancel, :repeated_node_death} = perform_job(EmbedNote, args(note))
+
+      updated = Repo.get!(Note, note.id, skip_tenant_check: true)
+      cooldown = DateTime.diff(updated.embed_retry_after, DateTime.utc_now())
+      assert cooldown > 20_000, "quarantine was #{cooldown}s, expected the 6h poison cooldown"
+    end
+
+    test "one hard death (a deploy can cause that) still embeds", %{bypass: bypass, note: note} do
+      orphan_job!(note, [])
+      stub_qdrant(bypass)
+
+      expect(Engram.MockEmbedder, :embed_texts, fn texts ->
+        {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+      end)
+
+      assert :ok = perform_job(EmbedNote, args(note))
+    end
+
+    test "a job still running elsewhere and graceful failures are not deaths",
+         %{bypass: bypass, note: note} do
+      orphan_job!(note, ago_min: 1)
+      orphan_job!(note, ago_min: 2)
+
+      orphan_job!(note,
+        state: "retryable",
+        attempt: 2,
+        errors: [%{"error" => "x"}, %{"error" => "y"}]
+      )
+
+      stub_qdrant(bypass)
+
+      expect(Engram.MockEmbedder, :embed_texts, fn texts ->
+        {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+      end)
+
+      assert :ok = perform_job(EmbedNote, args(note))
+    end
+  end
 end
