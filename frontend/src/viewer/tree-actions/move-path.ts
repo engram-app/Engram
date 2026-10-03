@@ -16,7 +16,7 @@ export interface MoveNode {
  * Rejects:
  *  - moving a folder into itself
  *  - moving a folder into one of its own descendants
- *  - a no-op file move (file already lives in the target folder)
+ *  - a no-op move (the file or folder already lives in the target folder)
  */
 export function isValidMoveTarget(node: MoveNode, targetFolder: string): boolean {
 	if (node.kind === "folder") {
@@ -30,7 +30,7 @@ export function isValidMoveTarget(node: MoveNode, targetFolder: string): boolean
 	const currentFolder = node.path.includes("/")
 		? node.path.slice(0, node.path.lastIndexOf("/"))
 		: "";
-	if (node.kind === "file" && currentFolder === targetFolder) {
+	if (currentFolder === targetFolder) {
 		return false;
 	}
 	return true;

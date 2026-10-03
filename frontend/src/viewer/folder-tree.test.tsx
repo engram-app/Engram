@@ -613,6 +613,29 @@ describe("FolderTree (HT)", () => {
 			expect(copyMock).toHaveBeenCalledWith("[[a]]\n[[b]]\n[[c]]");
 		});
 
+		it("moves selected notes back to the vault root", async () => {
+			mock.folders = [{ id: "1", parent_id: null, name: "Projects", count: 2 }];
+			mock.notes = [
+				{ ...note("42", "a"), path: "Projects/a.md", folder: "Projects" },
+				{ ...note("43", "b"), path: "Projects/b.md", folder: "Projects" },
+			];
+			renderTree();
+			fireEvent.click(await screen.findByRole("treeitem", { name: "Projects" }));
+			fireEvent.click(await screen.findByRole("treeitem", { name: "a" }));
+			fireEvent.click(screen.getByRole("treeitem", { name: "b" }), { shiftKey: true });
+			fireEvent.contextMenu(screen.getByRole("treeitem", { name: "a" }), {
+				clientX: 5,
+				clientY: 5,
+			});
+			fireEvent.click(await screen.findByRole("menuitem", { name: "Move 2 items to…" }));
+			fireEvent.click(await screen.findByRole("option", { name: "/ (root)" }));
+			const [vars] = batchMoveNotesMutate.mock.calls[0] as [
+				{ ids: string[]; target_folder: string },
+			];
+			expect([...vars.ids].sort()).toEqual(["42", "43"]);
+			expect(vars.target_folder).toBe("");
+		});
+
 		// Obsidian's rule: right-clicking OUTSIDE the selection acts on that row
 		// alone, so the user can't bulk-delete rows they aren't pointing at.
 		it("right-click outside the selection opens the single-row menu", async () => {

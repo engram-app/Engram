@@ -21,10 +21,12 @@ export function MoveDialog({ folders, nodes, onPick, onCancel }: Props) {
 	const placeholder = buildMessage(nodes);
 
 	const candidates = useMemo(() => {
+		// The vault root ("") is always a destination, but it isn't a folder row,
+		// so callers don't list it. Add it here once rather than in every caller.
 		// A folder is eligible only if it's a valid move target for EVERY node.
-		const eligible = folders
-			.map((f) => f.name)
-			.filter((name) => nodes.every((node) => isValidMoveTarget(node, name)));
+		const eligible = ["", ...folders.map((f) => f.name).filter((name) => name !== "")].filter(
+			(name) => nodes.every((node) => isValidMoveTarget(node, name)),
+		);
 		if (!query) {
 			return eligible;
 		}
