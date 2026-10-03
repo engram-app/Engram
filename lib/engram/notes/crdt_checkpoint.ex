@@ -29,7 +29,8 @@ defmodule Engram.Notes.CrdtCheckpoint do
     CrdtDeliver,
     CrdtUpdateLog,
     Helpers,
-    Note
+    Note,
+    Revisions
   }
 
   alias Engram.Workers.EmbedNote
@@ -554,6 +555,15 @@ defmodule Engram.Notes.CrdtCheckpoint do
         case Repo.update_all(fenced_query, set: set) do
           {1, _} ->
             prune_tail(note_id, vault_id, prune)
+
+            # #1710. AFTER the fenced write, in the same transaction: the {0, _}
+            # arm below commits the transaction too, so a history step placed
+            # before the write would record a version for a save that never
+            # happened. `note` is the PRE-write row, so its content_ciphertext
+            # is exactly the text this checkpoint replaced. Every edit that
+            # reaches a checkpoint is the user's own CRDT clients: actor "sync".
+            _ = Revisions.record_write(note, user, "sync")
+
             {prev, content_hash, note.path}
 
           {0, _} ->
