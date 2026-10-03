@@ -4,10 +4,10 @@ defmodule Engram.Telemetry.Heartbeat do
   so we can count installs and platforms. Nothing else is ever sent: no counts,
   no hostnames, no user data.
 
-  On by default for self-host: an operator who has not answered
-  (`Instance.telemetry_enabled/0` is `nil`) counts as on. Off on SaaS, when the
-  operator turned it off in the admin UI, and whenever `DO_NOT_TRACK=1` or
-  `ENGRAM_TELEMETRY=off`.
+  On by default for self-host prod builds: an operator who has not answered
+  (`Instance.telemetry_enabled/0` is `nil`) counts as on. Off in non-prod builds
+  (`:census_ping`), on SaaS, when the operator turned it off in the admin UI, and
+  whenever `DO_NOT_TRACK=1` or `ENGRAM_TELEMETRY=off`.
   """
   alias Engram.Instance
 
@@ -16,9 +16,16 @@ defmodule Engram.Telemetry.Heartbeat do
   @url "https://api.engram.page/api/telemetry/ping"
 
   def enabled? do
-    not Application.get_env(:engram, :billing_enabled, false) and
-      not env_disabled?() and
-      Instance.telemetry_enabled() != false
+    allowed?() and Instance.telemetry_enabled() != false
+  end
+
+  # Everything that forbids the ping regardless of the stored answer: not a prod
+  # build (dev/source runs must not pollute the count), SaaS, or the operator's
+  # environment.
+  defp allowed? do
+    Application.get_env(:engram, :census_ping, false) and
+      not Application.get_env(:engram, :billing_enabled, false) and
+      not env_disabled?()
   end
 
   @doc """
@@ -26,13 +33,13 @@ defmodule Engram.Telemetry.Heartbeat do
   names the switches instead of reporting the stored answer.
   """
   def log_boot_notice do
-    if Application.get_env(:engram, :billing_enabled, false) or env_disabled?() do
-      :ok
-    else
+    if allowed?() do
       Logger.info(
         "Engram sends an anonymous daily usage ping (install id, version, OS, arch, runtime). " <>
           "Turn it off with ENGRAM_TELEMETRY=off, DO_NOT_TRACK=1, or Administration > Usage statistics."
       )
+    else
+      :ok
     end
   end
 

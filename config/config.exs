@@ -428,4 +428,8 @@ config :engram, Engram.MCP.ParseGate,
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
+# Self-host install census ping: prod builds only, so a dev `mix phx.server` or a
+# source run never pings the real collector and pollutes the install count.
+config :engram, :census_ping, config_env() == :prod
+
 import_config "#{config_env()}.exs"

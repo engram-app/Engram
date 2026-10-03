@@ -6,12 +6,16 @@ defmodule Engram.Telemetry.HeartbeatTest do
 
   setup do
     prev_billing = Application.get_env(:engram, :billing_enabled)
+    prev_census = Application.get_env(:engram, :census_ping)
     Application.put_env(:engram, :billing_enabled, false)
+    # config/config.exs enables it for prod builds only; tests opt in explicitly.
+    Application.put_env(:engram, :census_ping, true)
     System.delete_env("DO_NOT_TRACK")
     System.delete_env("ENGRAM_TELEMETRY")
 
     on_exit(fn ->
       Application.put_env(:engram, :billing_enabled, prev_billing)
+      Application.put_env(:engram, :census_ping, prev_census)
       System.delete_env("DO_NOT_TRACK")
       System.delete_env("ENGRAM_TELEMETRY")
     end)
@@ -51,6 +55,11 @@ defmodule Engram.Telemetry.HeartbeatTest do
       refute Heartbeat.enabled?()
     end
 
+    test "false outside prod builds, so dev and source runs never ping the real collector" do
+      Application.put_env(:engram, :census_ping, false)
+      refute Heartbeat.enabled?()
+    end
+
     test "DO_NOT_TRACK=1 overrides the default and an explicit yes" do
       {:ok, _} = Instance.set_telemetry_enabled(true)
       System.put_env("DO_NOT_TRACK", "1")
@@ -80,6 +89,11 @@ defmodule Engram.Telemetry.HeartbeatTest do
 
       assert log =~ "anonymous daily usage ping"
       assert log =~ "ENGRAM_TELEMETRY=off"
+    end
+
+    test "is silent outside prod builds (nothing is sent there)" do
+      Application.put_env(:engram, :census_ping, false)
+      assert capture_log(fn -> Heartbeat.log_boot_notice() end) == ""
     end
 
     test "is silent on SaaS" do

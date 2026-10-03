@@ -54,3 +54,6 @@ Collector is unauthenticated: one IP can inflate the count up to the rate limit 
   the ping needs a line is a legal call, left open.
 
 - Retention: `Engram.Workers.InstallPingsPruner` (cron `30 4 * * *`) deletes rows with `updated_at` older than 35 days (> the gauge's 30-day window), in 5k batches.
+
+- Prod-only gate (code review #2): `config :engram, :census_ping, config_env() == :prod` in `config/config.exs`; `Heartbeat.allowed?/0` requires it, so a dev `mix phx.server` or any source run never pings the real collector and pollutes the count. Tests that exercise the sender must `Application.put_env(:engram, :census_ping, true)` (and restore it), exactly like `:billing_enabled`. A prod-built Docker CI stack still pings if it is up at 05:17 UTC; accepted (daily, short-lived).
+- Accepted, not fixed: the collector's counts are spoofable (any UUID, bounded only by the rate limit and the 35-day pruner); treat `engram_installs_seen` as an estimate.

@@ -8,7 +8,9 @@ defmodule Engram.Workers.TelemetryHeartbeatTest do
   setup do
     prev_billing = Application.get_env(:engram, :billing_enabled)
     prev_opts = Application.get_env(:engram, :telemetry_req_options)
+    prev_census = Application.get_env(:engram, :census_ping)
     Application.put_env(:engram, :billing_enabled, false)
+    Application.put_env(:engram, :census_ping, true)
 
     Application.put_env(:engram, :telemetry_req_options,
       plug: {Req.Test, Engram.Telemetry.Heartbeat}
@@ -19,6 +21,7 @@ defmodule Engram.Workers.TelemetryHeartbeatTest do
 
     on_exit(fn ->
       Application.put_env(:engram, :billing_enabled, prev_billing)
+      Application.put_env(:engram, :census_ping, prev_census)
 
       if prev_opts,
         do: Application.put_env(:engram, :telemetry_req_options, prev_opts),
