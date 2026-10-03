@@ -17,7 +17,20 @@ defmodule Engram.Parsers.Markdown do
   # ordering. Do NOT bump for a change that cannot move a boundary (a typespec,
   # a comment, a refactor with identical output). Every bump costs one re-embed
   # pass over the corpus.
-  @chunker_version 1
+  #
+  # 2 — base64 blobs are stripped from chunk text (`drop_blobs/1`).
+  @chunker_version 2
+
+  # A run of base64 alphabet (standard + URL-safe) this long, mixing upper
+  # case, lower case and digits, is encoded binary, not words: inline `data:`
+  # images, Excalidraw `compressed-json`, encrypted-text plugins. No prose word
+  # or URL (punctuation breaks the run) is 100 characters of this class, and a
+  # hex digest or a run of one letter lacks the mix, so both are kept. Random
+  # base64 misses a digit in 100 chars with odds ~1e-9. The optional
+  # `data:<mime>;base64,` prefix goes with it so `![x](data:...)` leaves only
+  # `![x]()`. Possessive: never hand PCRE a per-character backtrack on content
+  # this size (see `Engram.Links.Parser`'s @md_link_re for what that costs).
+  @blob_run ~r/(?:data:[\w\/+.-]++;base64,)?[A-Za-z0-9+\/=_-]{100,}+/
 
   @doc """
   Version of the chunking algorithm in this build (#1620).
@@ -67,6 +80,7 @@ defmodule Engram.Parsers.Markdown do
 
     (body_chunks ++ frontmatter_chunk(content, folder, title))
     |> Enum.flat_map(&enforce_size_cap/1)
+    |> Enum.flat_map(&drop_blobs/1)
     |> Enum.with_index()
     |> Enum.map(fn {chunk, idx} -> Map.put(chunk, :position, idx) end)
   end
@@ -116,6 +130,31 @@ defmodule Engram.Parsers.Markdown do
   #
   # The separator is re-appended because `context_prefix_of/1` returns the
   # prefix WITH its trailing "\n\n", which the truncation cuts off.
+  # The stored note keeps every byte; only the indexed text loses the blob.
+  # Runs after `enforce_size_cap/1`, so a megabyte image arrives here as
+  # 2 KB pieces and most pieces vanish whole. Positions are assigned after this,
+  # so dropping a chunk leaves no gap.
+  defp drop_blobs(%{text: text} = chunk) do
+    if Regex.match?(@blob_run, text) do
+      prefix = context_prefix_of(chunk)
+
+      stripped =
+        @blob_run |> Regex.replace(text, &if(encoded?(&1), do: "", else: &1)) |> String.trim()
+
+      # Nothing but markup left (`)`, `![]()`): no vector is worth a point.
+      if Regex.match?(~r/\A[^\p{L}\p{N}]*\z/u, stripped),
+        do: [],
+        else: [%{chunk | text: stripped, context_text: prefix <> stripped}]
+    else
+      [chunk]
+    end
+  end
+
+  defp encoded?(run),
+    do:
+      Regex.match?(~r/[A-Z]/, run) and Regex.match?(~r/[a-z]/, run) and
+        Regex.match?(~r/[0-9]/, run)
+
   defp cap_prefix(prefix) when byte_size(prefix) <= @max_prefix_bytes, do: prefix
 
   defp cap_prefix(prefix) do
