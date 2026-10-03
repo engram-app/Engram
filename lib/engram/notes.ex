@@ -938,7 +938,8 @@ defmodule Engram.Notes do
                :none ->
                  genesis_adopt_or_insert(user, vault, canonical_id, sanitized_path, folder)
              end
-           end) do
+           end)
+           |> finalize_moved_revision(user) do
         # Only genesis_resurrect/genesis_insert_bare tag their success with
         # :announce (a REAL create/resurrect). The idempotent same-path and
         # adopt-existing-live-note branches change nothing, so they return a
@@ -995,6 +996,21 @@ defmodule Engram.Notes do
       {:error, _} = err -> err
     end
   end
+
+  # #1710: a relocate/resurrect that changed content (uncheckpointed CRDT tail
+  # folded in by move_note) may have closed a version. Enqueue its finalize
+  # here, after the transaction committed, the same post-commit position as
+  # ContentCommit.after_commit/3. Strips the flag so the clauses above see the
+  # plain 3-tuple.
+  defp finalize_moved_revision({:ok, {:ok, note, tag, content_changed?}}, user) do
+    _ =
+      if content_changed?,
+        do: Enqueue.enqueue(FinalizeRevision.new_for_note(note.id, user.id), "finalize_revision")
+
+    {:ok, {:ok, note, tag}}
+  end
+
+  defp finalize_moved_revision(result, _user), do: result
 
   # The web app renames and moves EVERY note through `crdt_create`: `queries.ts`
   # `useRenameNote` calls `crdtCreateNote(id, new_path)` under the comment
@@ -1276,7 +1292,7 @@ defmodule Engram.Notes do
           }
 
           case move_note(decrypted, base_attrs, user, sanitized_path, folder, "sync") do
-            {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
+            {:ok, {:moved, prev_hash, updated, _merged_text, content_hash}} ->
               case Crypto.maybe_decrypt_note_fields(updated, user) do
                 {:ok, moved} ->
                   Logger.info(
@@ -1331,7 +1347,7 @@ defmodule Engram.Notes do
                   # Carry the OLD path so the post-commit handler can fan an
                   # old-path delete to peers (a web receiver has no local mirror
                   # to drop the note from its old folder otherwise).
-                  {:ok, moved, {:announce_moved, decrypted.path}}
+                  {:ok, moved, {:announce_moved, decrypted.path}, prev_hash != content_hash}
 
                 {:error, reason} ->
                   log_resurrect_decrypt_failure(reason, user, updated)
@@ -1442,7 +1458,7 @@ defmodule Engram.Notes do
       }
 
       case move_note(prior, base_attrs, user, sanitized_path, folder, "sync") do
-        {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
+        {:ok, {:moved, prev_hash, updated, _merged_text, content_hash}} ->
           case Crypto.maybe_decrypt_note_fields(updated, user) do
             {:ok, decrypted} ->
               # #591 — treat a resurrect like a create: the note is live again
@@ -1472,7 +1488,7 @@ defmodule Engram.Notes do
               # A rename-restore carries the OLD (tombstone) path so peers clear
               # it; a same-path resurrect just announces.
               tag = if renamed?, do: {:announce_moved, prior.path}, else: :announce
-              {:ok, decrypted, tag}
+              {:ok, decrypted, tag, prev_hash != content_hash}
 
             {:error, reason} ->
               log_resurrect_decrypt_failure(reason, user, updated)

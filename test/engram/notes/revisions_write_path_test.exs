@@ -5,7 +5,7 @@ defmodule Engram.Notes.RevisionsWritePathTest do
   import Ecto.Query
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, Note, Revision, Revisions}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtPersistence, Note, Revision, Revisions}
   alias Engram.Workers.FinalizeRevision
 
   setup do
@@ -128,6 +128,57 @@ defmodule Engram.Notes.RevisionsWritePathTest do
         Notes.upsert_note(u, v, %{"id" => id, "path" => "B.md", "content" => "v1"}, actor: "mcp")
 
       assert length(revisions(u, id)) == count
+    end
+  end
+
+  # An uncheckpointed CRDT edit: the tail holds `text`, the note row does not.
+  def tail_edit(user, vault, note_id, text) do
+    {:ok, raw} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note_id) end)
+    {:ok, state} = Crypto.decrypt_crdt_state(raw, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(state)
+    {:ok, sv} = Yex.encode_state_vector(doc)
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), text)
+    {:ok, update} = Yex.encode_state_as_update(doc, sv)
+    room = %{user_id: user.id, vault_id: vault.id, note_id: note_id, user: user}
+    _ = CrdtPersistence.update_v1(room, update, nil, doc)
+    :ok
+  end
+
+  def drop_finalize_jobs,
+    do: Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.FinalizeRevision"))
+
+  describe "CRDT relocate" do
+    test "a content-changing relocate enqueues its finalize", %{user: u, vault: v} do
+      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "r1.md", "content" => "before"})
+      :ok = tail_edit(u, v, note.id, "after")
+      drop_finalize_jobs()
+
+      {:ok, moved} = Notes.genesis_crdt_note(u, v, note.id, "r2.md")
+
+      assert moved.path == "r2.md"
+      revs = revisions(u, note.id)
+      assert text_of(u, Enum.find(revs, &(&1.origin == "baseline"))) == "before"
+      assert_enqueued(worker: FinalizeRevision, args: %{note_id: note.id})
+    end
+
+    test "a pure relocate enqueues none", %{user: u, vault: v} do
+      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "p1.md", "content" => "same"})
+      drop_finalize_jobs()
+
+      {:ok, _} = Notes.genesis_crdt_note(u, v, note.id, "p2.md")
+
+      refute_enqueued(worker: FinalizeRevision, args: %{note_id: note.id})
+    end
+
+    test "a content-changing resurrect enqueues its finalize", %{user: u, vault: v} do
+      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "z1.md", "content" => "before"})
+      :ok = tail_edit(u, v, note.id, "after")
+      :ok = Notes.delete_note(u, v, "z1.md")
+      drop_finalize_jobs()
+
+      {:ok, _} = Notes.genesis_crdt_note(u, v, note.id, "z2.md")
+
+      assert_enqueued(worker: FinalizeRevision, args: %{note_id: note.id})
     end
   end
 
