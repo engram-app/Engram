@@ -396,7 +396,9 @@ defmodule EngramWeb.McpController do
   def unsupported_transport_delete(conn, _params), do: method_not_allowed(conn)
 
   defp method_not_allowed(conn) do
+    # Normal step of every Streamable-HTTP connect, so log it at :info, not :warning.
     conn
+    |> assign(:expected_client_status, true)
     |> put_resp_header("allow", "POST")
     |> send_resp(405, "")
   end
