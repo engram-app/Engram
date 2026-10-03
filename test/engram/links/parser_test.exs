@@ -291,4 +291,43 @@ defmodule Engram.Links.ParserTest do
       assert binary_part(content, occ.target_start, occ.target_len) == occ.target_raw
     end
   end
+
+  describe "long link destinations (prod worker OOM, 2026-10-03)" do
+    # An imported note inlined images as `![](data:image/png;base64,...)`, a
+    # markdown link whose destination is megabytes long. The destination group
+    # used to match one character per iteration, and PCRE keeps a backtrack
+    # frame per iteration: ~0.8 KB of memory per destination character, so a
+    # 1 MB image cost ~800 MB and 5-6 s and OOM-killed the worker. Time is the
+    # stand-in for memory here because the two grew together.
+    defp data_uri_image(bytes) do
+      "![img](data:image/png;base64," <>
+        Base.encode64(:crypto.strong_rand_bytes(div(bytes * 3, 4))) <> ")"
+    end
+
+    test "a 1 MB data URI image extracts in well under a second" do
+      content = "# Note\n\n" <> data_uri_image(1_000_000) <> "\n"
+
+      {micros, links} = :timer.tc(fn -> Parser.extract(content) end)
+
+      # data: is an external scheme, so the image is not a vault link.
+      assert links == []
+      assert micros < 1_000_000, "took #{div(micros, 1000)} ms"
+    end
+
+    test "links around a data URI image still extract at the right offsets" do
+      before = "See [A](A.md) "
+      content = before <> data_uri_image(50_000) <> " and [[B]]."
+
+      assert [
+               %{target: "A.md", form: :markdown, position: 4},
+               %{target: "B", form: :wiki, position: pos}
+             ] = Parser.extract(content)
+
+      assert binary_part(content, pos, 5) == "[[B]]"
+    end
+
+    test "balanced parentheses inside a destination still match" do
+      assert [%{target: "Note (draft).md"}] = Parser.extract("[x](Note%20(draft).md)")
+    end
+  end
 end
