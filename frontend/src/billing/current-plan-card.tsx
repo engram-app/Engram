@@ -1,5 +1,5 @@
 import { Sparkles } from "lucide-react";
-import type { ReactNode } from "react";
+import { Children, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import type { BillingStatus, IndexStatus } from "../api/queries";
 import { unsearchableNotesNotice } from "./plan-cards";
@@ -74,7 +74,12 @@ export default function CurrentPlanCard({
 				</dl>
 			) : null}
 
-			{Boolean(children) && <div className="border-border border-t pt-4">{children}</div>}
+			{/* toArray drops null/false/undefined. `Boolean(children)` was true for
+			    an array of all-`false` conditionals, which drew the divider over
+			    nothing on the Free plan. */}
+			{Children.toArray(children).length > 0 && (
+				<div className="border-border border-t pt-4">{children}</div>
+			)}
 		</section>
 	);
 }

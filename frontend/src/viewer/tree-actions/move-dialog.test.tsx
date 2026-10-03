@@ -27,6 +27,33 @@ describe("MoveDialog", () => {
 		expect(screen.getByText("docs")).toBeInTheDocument();
 	});
 
+	// Callers pass their folder rows, and the vault root is not a folder row.
+	// Both the tree and the note page left it out, so nothing could be moved
+	// back to the top level.
+	it("offers root even when the caller's folders omit it, exactly once", () => {
+		render(
+			<MoveDialog
+				folders={[{ name: "src" }]}
+				nodes={[{ kind: "file", path: "src/a.md" }]}
+				onPick={() => {}}
+				onCancel={() => {}}
+			/>,
+		);
+		expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["/ (root)"]);
+	});
+
+	it("does not list root twice when the caller includes it", () => {
+		render(
+			<MoveDialog
+				folders={folders}
+				nodes={[{ kind: "file", path: "notes/a.md" }]}
+				onPick={() => {}}
+				onCancel={() => {}}
+			/>,
+		);
+		expect(screen.getAllByText("/ (root)")).toHaveLength(1);
+	});
+
 	it("filters by typed query", () => {
 		render(
 			<MoveDialog

@@ -2,7 +2,7 @@ import { Navigate, useLocation, useParams } from "react-router";
 import { getActiveVaultId } from "../api/active-vault";
 import { useVaults } from "../api/queries";
 import { preferredVault } from "../api/vault-slug";
-import NotFoundPage from "../not-found";
+import { EmptyVaultState } from "../layout/empty-vault-state";
 import { vaultPath } from "../routes";
 import LoadingPane from "./loading-pane";
 
@@ -20,8 +20,11 @@ export default function LegacyNoteRedirect() {
 		return <LoadingPane />;
 	}
 	const vault = preferredVault(vaults, getActiveVaultId());
+	// No vault to rewrite into. Same state `/` shows; a full-page 404 here
+	// would render nested inside the app shell. (`id` is always set: the route
+	// is `/note/:id`.)
 	if (!(vault && id)) {
-		return <NotFoundPage />;
+		return <EmptyVaultState />;
 	}
 	return (
 		<Navigate

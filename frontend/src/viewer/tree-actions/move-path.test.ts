@@ -17,6 +17,14 @@ describe("isValidMoveTarget", () => {
 	it("accepts moving a file to root", () => {
 		expect(isValidMoveTarget({ kind: "file", path: "src/a.md" }, "")).toBe(true);
 	});
+	// Same no-op rule as a file: a folder already in the target parent.
+	it("rejects moving a folder to the parent it is already in", () => {
+		expect(isValidMoveTarget({ kind: "folder", path: "src" }, "")).toBe(false);
+		expect(isValidMoveTarget({ kind: "folder", path: "src/a" }, "src")).toBe(false);
+	});
+	it("accepts moving a nested folder to root", () => {
+		expect(isValidMoveTarget({ kind: "folder", path: "src/a" }, "")).toBe(true);
+	});
 	it("accepts moving a folder to a sibling parent", () => {
 		expect(isValidMoveTarget({ kind: "folder", path: "src/a" }, "dst")).toBe(true);
 	});

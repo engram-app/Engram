@@ -109,6 +109,27 @@ export function actionsFor({
 	return FILE_ACTIONS;
 }
 
+// The menu for a multi-selection. Only actions that mean the same thing for
+// every row: rename and duplicate are per-item, and creation needs ONE target
+// folder. Labels carry the count so it's obvious the action hits them all.
+export function selectionActions(
+	kinds: readonly ("file" | "folder" | "attachment")[],
+): readonly Action[] {
+	const notes = kinds.filter((k) => k === "file").length;
+	return [
+		{ id: "move", label: `Move ${kinds.length} items to…` },
+		...(notes > 0
+			? [
+					{
+						id: "copy-wikilink" as const,
+						label: notes === 1 ? "Copy wikilink" : `Copy ${notes} wikilinks`,
+					},
+				]
+			: []),
+		{ id: "delete", label: `Delete ${kinds.length} items`, destructive: true },
+	];
+}
+
 export type ViewMode = "rendered" | "raw" | "reading";
 
 // The note page's kebab. Deliberately NOT part of `actionsFor` — that function
