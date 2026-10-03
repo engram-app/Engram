@@ -93,7 +93,7 @@ defmodule Engram.Storage do
   the mutable vault path so move/rename never relocates the blob and a new
   upload to a vacated path computes a fresh key (no clobber).
 
-  This is the ONLY key builder. `key/3`, which produced
+  This is the only key builder for attachments; `revision_key/4` below is the only one for note versions. `key/3`, which produced
   `"user/vault/<cleartext path>"`, is deleted — a storage key ends up in the S3
   URL and therefore in S3 access logs, CDN logs and bucket listings, none of
   which any control in this codebase can reach, so the path must not be in the
@@ -107,5 +107,24 @@ defmodule Engram.Storage do
   def object_key(user_id, vault_id, att_id)
       when is_binary(user_id) and is_binary(vault_id) and is_binary(att_id) and att_id != "" do
     "#{user_id}/#{vault_id}/objects/#{att_id}"
+  end
+
+  @doc """
+  Storage key for a note version's blob (#1710).
+
+  Top-level `revisions/` rather than under `<user_id>/`: S3 lifecycle filters
+  only match from the start of a key, and the bucket keeps noncurrent versions,
+  so this object class needs its own rule (#1714), the same way `exports/`
+  has one. Every segment is a UUID, so no plaintext reaches storage URLs or
+  access logs, and `revisions` can never equal a user id, so these keys cannot
+  collide with `<user_id>/<vault_id>/objects/...`.
+
+  `Engram.Storage.S3.list_user_prefixes/0` skips this prefix (it is not a
+  UUID), so the orphan sweep does not see these blobs until #1715 teaches it to.
+  """
+  def revision_key(user_id, vault_id, note_id, revision_id)
+      when is_binary(user_id) and is_binary(vault_id) and is_binary(note_id) and
+             is_binary(revision_id) do
+    "revisions/#{user_id}/#{vault_id}/#{note_id}/#{revision_id}"
   end
 end
