@@ -11,9 +11,13 @@ defmodule Engram.Telemetry.Heartbeat do
 
   def enabled? do
     not Application.get_env(:engram, :billing_enabled, false) and
-      System.get_env("DO_NOT_TRACK") != "1" and
-      System.get_env("ENGRAM_TELEMETRY") != "off" and
+      not env_disabled?() and
       Instance.telemetry_enabled() == true
+  end
+
+  @doc "True when the operator's environment forbids telemetry, whatever the stored opt-in says."
+  def env_disabled? do
+    System.get_env("DO_NOT_TRACK") == "1" or System.get_env("ENGRAM_TELEMETRY") == "off"
   end
 
   def payload do

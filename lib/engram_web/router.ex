@@ -516,6 +516,10 @@ defmodule EngramWeb.Router do
     # PATCH (not PUT): the frontend `api` client exposes get/post/patch/del, no put.
     patch "/registration", RegistrationController, :update
 
+    # Self-host install census opt-in (what is sent + the operator's answer).
+    get "/telemetry", TelemetryController, :show
+    patch "/telemetry", TelemetryController, :update
+
     resources "/invites", InviteController, only: [:index, :create, :delete]
 
     get "/users", UserController, :index
