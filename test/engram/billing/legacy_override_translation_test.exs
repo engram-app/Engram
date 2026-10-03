@@ -47,7 +47,10 @@ defmodule Engram.Billing.LegacyOverrideTranslationTest do
     )
   end
 
-  defp reload(user), do: Repo.get!(Engram.Accounts.User, user.id) |> Repo.preload(:subscription)
+  defp reload(user),
+    do:
+      Repo.get!(Engram.Accounts.User, user.id)
+      |> Repo.preload(:subscription, skip_tenant_check: true)
 
   test "an operator's dunning suppression survives the rename" do
     user = insert(:user)

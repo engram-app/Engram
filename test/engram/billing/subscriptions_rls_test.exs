@@ -46,10 +46,16 @@ defmodule Engram.Billing.SubscriptionsRlsTest do
     %{user: Accounts.get_user!(user.id), sub: sub}
   end
 
-  test "control: the dropped role cannot see the subscription", %{sub: sub} do
+  # No-tenant is NOT the control any more: `subscriptions_discovery` deliberately
+  # lets that state read. The control is a DIFFERENT tenant seeing zero rows.
+  test "control: the dropped role under another tenant cannot see the subscription", %{sub: sub} do
+    other = insert(:user)
+
     outcome =
       as_prod_role(fn ->
-        Repo.one(from(s in Subscription, where: s.id == ^sub.id, select: count(s.id)))
+        Repo.with_tenant!(other.id, fn ->
+          Repo.one(from(s in Subscription, where: s.id == ^sub.id, select: count(s.id)))
+        end)
       end)
 
     assert outcome == {:returned, 0},
@@ -178,25 +184,29 @@ defmodule Engram.Billing.SubscriptionsRlsTest do
     end
 
     test "subscription.updated finds the row by paddle id on the app pool", %{sub: sub} do
-      assert {:returned, {:ok, %Subscription{status: "past_due", tier: "pro"}}} =
-               as_prod_role(fn ->
+      # Committing harness: the write is the point, and the discovery read +
+      # tenant-scoped update never raise. Read back on the same connection.
+      assert {:ok, %Subscription{status: "past_due", tier: "pro"}} =
+               as_prod_role_committing(fn ->
                  Billing.upsert_from_paddle_event(
                    event("subscription.updated", sub, "past_due", "pri_pro_monthly_test")
                  )
                end)
 
-      assert %Subscription{status: "past_due"} = Repo.get!(Subscription, sub.id, skip_tenant_check: true)
+      assert %Subscription{status: "past_due"} =
+               Repo.get!(Subscription, sub.id, skip_tenant_check: true)
     end
 
     test "subscription.canceled persists, it is not a silent not_found no-op", %{sub: sub} do
-      assert {:returned, {:ok, %Subscription{status: "canceled"}}} =
-               as_prod_role(fn ->
+      assert {:ok, %Subscription{status: "canceled"}} =
+               as_prod_role_committing(fn ->
                  Billing.upsert_from_paddle_event(
                    event("subscription.canceled", sub, "canceled", "pri_starter_monthly_test")
                  )
                end)
 
-      assert %Subscription{status: "canceled"} = Repo.get!(Subscription, sub.id, skip_tenant_check: true)
+      assert %Subscription{status: "canceled"} =
+               Repo.get!(Subscription, sub.id, skip_tenant_check: true)
     end
 
     test "discovery still works after a COMPLETED tenant block earlier in the same transaction",
@@ -210,17 +220,6 @@ defmodule Engram.Billing.SubscriptionsRlsTest do
                  Billing.upsert_from_paddle_event(
                    event("subscription.updated", sub, "past_due", "pri_pro_monthly_test")
                  )
-               end)
-    end
-
-    test "CONTROL: with another tenant set, the row is invisible", %{sub: sub} do
-      other = insert(:user)
-
-      assert {:returned, 0} =
-               as_prod_role(fn ->
-                 Repo.with_tenant!(other.id, fn ->
-                   Repo.one(from(s in Subscription, where: s.id == ^sub.id, select: count(s.id)))
-                 end)
                end)
     end
 
@@ -239,15 +238,18 @@ defmodule Engram.Billing.SubscriptionsRlsTest do
     end
 
     test "unscoped UPDATE and DELETE report 0 rows (discovery widens SELECT only)", %{sub: sub} do
-      assert {:returned, {{0, nil}, {0, nil}}} =
-               as_prod_role(fn ->
+      # Committing harness: filtered writes never raise, and the persisted
+      # effect (row still "active", still present) is the assertion.
+      assert {{0, nil}, {0, nil}} =
+               as_prod_role_committing(fn ->
                  q = from(s in Subscription, where: s.id == ^sub.id)
 
                  {Repo.update_all(q, [set: [status: "canceled"]], skip_tenant_check: true),
                   Repo.delete_all(q, skip_tenant_check: true)}
                end)
 
-      assert %Subscription{status: "active"} = Repo.get!(Subscription, sub.id, skip_tenant_check: true)
+      assert %Subscription{status: "active"} =
+               Repo.get!(Subscription, sub.id, skip_tenant_check: true)
     end
 
     test "unscoped INSERT raises 42501", %{user: user} do

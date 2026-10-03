@@ -25,7 +25,6 @@ defmodule Engram.RlsCoverageTest do
     oauth_refresh_tokens
     password_reset_tokens
     refresh_tokens
-    subscriptions
     usage_meters
     user_limit_overrides
   )
