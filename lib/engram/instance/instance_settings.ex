@@ -8,6 +8,8 @@ defmodule Engram.Instance.InstanceSettings do
   schema "instance_settings" do
     field :registration_mode, :string, default: "invite_only"
     field :bootstrap_completed_at, :utc_datetime
+    field :install_id, Ecto.UUID
+    field :telemetry_enabled, :boolean
     timestamps(type: :utc_datetime)
   end
 
