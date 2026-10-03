@@ -32,6 +32,7 @@ defmodule Engram.PromEx do
       Engram.PromEx.Crdt,
       Engram.PromEx.Reliability,
       Engram.PromEx.Usage,
+      Engram.PromEx.Installs,
       Engram.PromEx.RateLimiter,
       Engram.PromEx.Profiling
     ]

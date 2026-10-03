@@ -6,6 +6,7 @@ import { copyToClipboard } from "@/lib/clipboard";
 import InvitesTab from "./InvitesTab";
 import MembersTab from "./MembersTab";
 import RegistrationTab from "./RegistrationTab";
+import TelemetryTab from "./TelemetryTab";
 
 export default function AdminPanel() {
 	const config = useConfig();
@@ -115,6 +116,15 @@ export default function AdminPanel() {
 				</h2>
 				<div className="rounded-lg border border-border bg-card p-4 sm:p-6">
 					<RegistrationTab />
+				</div>
+			</section>
+
+			<section aria-labelledby="telemetry-heading" className="space-y-3">
+				<h2 id="telemetry-heading" className="font-semibold text-foreground text-sm">
+					Usage statistics
+				</h2>
+				<div className="rounded-lg border border-border bg-card p-4 sm:p-6">
+					<TelemetryTab />
 				</div>
 			</section>
 		</article>

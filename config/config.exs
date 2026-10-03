@@ -153,6 +153,8 @@ config :engram, Oban,
        {"0 3 * * *", Engram.Billing.Workers.OverrideExpirySweep},
        {"30 3 * * *", Engram.Workers.InactivityCleanup},
        {"0 4 * * *", Engram.Workers.OriginAbuseSweep},
+       # Daily self-host install census; no-op on SaaS and unless opted in.
+       {"17 5 * * *", Engram.Workers.TelemetryHeartbeat},
        # Daily client_logs retention sweep (Engram#792 — the log sink was
        # unbounded at ~98% of the DB).
        {"15 4 * * *", Engram.Workers.ClientLogsPruner},
