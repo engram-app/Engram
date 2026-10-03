@@ -7,7 +7,7 @@ defmodule Engram.Telemetry.Heartbeat do
   On by default for self-host prod builds: an operator who has not answered
   (`Instance.telemetry_enabled/0` is `nil`) counts as on. Off in non-prod builds
   (`:census_ping`), on SaaS, when the operator turned it off in the admin UI, and
-  whenever `DO_NOT_TRACK=1` or `ENGRAM_TELEMETRY=off`.
+  whenever `ENGRAM_TELEMETRY=false` (the one env var; the in-app toggle is the other way).
   """
   alias Engram.Instance
 
@@ -36,7 +36,7 @@ defmodule Engram.Telemetry.Heartbeat do
     if allowed?() do
       Logger.info(
         "Engram sends an anonymous daily usage ping (install id, version, OS, arch, runtime). " <>
-          "Turn it off with ENGRAM_TELEMETRY=off, DO_NOT_TRACK=1, or Administration > Usage statistics."
+          "Turn it off with ENGRAM_TELEMETRY=false or in Administration > Usage statistics."
       )
     else
       :ok
@@ -45,7 +45,7 @@ defmodule Engram.Telemetry.Heartbeat do
 
   @doc "True when the operator's environment forbids telemetry, whatever the stored answer says."
   def env_disabled? do
-    env_in?("DO_NOT_TRACK", ~w(1 true yes)) or env_in?("ENGRAM_TELEMETRY", ~w(off))
+    env_in?("ENGRAM_TELEMETRY", ~w(false 0 no off))
   end
 
   defp env_in?(var, values) do

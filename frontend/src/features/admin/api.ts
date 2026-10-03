@@ -23,7 +23,7 @@ export interface TelemetryPayload {
 export interface TelemetryState {
 	/** null = the operator has not been asked yet. */
 	telemetry_enabled: boolean | null;
-	/** DO_NOT_TRACK / ENGRAM_TELEMETRY forbids sending, whatever the setting says. */
+	/** ENGRAM_TELEMETRY=false forbids sending, whatever the setting says. */
 	env_disabled: boolean;
 	payload: TelemetryPayload;
 }

@@ -12,7 +12,7 @@ Daily census of self-host installs, **on by default** (decision 2026-10-03: opt-
 - `lib/engram/telemetry/heartbeat.ex` (payload, `enabled?/0`, `send_ping/0`) + `lib/engram/workers/telemetry_heartbeat.ex`, Oban cron `17 5 * * *` (`config/config.exs:157`).
 - Payload is exactly `{id, version, os, arch, runtime}`. Nothing else, ever.
 - `id` = random uuid in `instance_telemetry.install_id` (`Engram.Instance.install_id/0`; `INSERT ... ON CONFLICT DO NOTHING` then read back, so concurrent mints converge on the first).
-- State = `instance_telemetry.telemetry_enabled`, tri-state: `NULL` = never answered (counts as ON), `true` = acknowledged, `false` = turned off. Off on SaaS (`:billing_enabled`). `DO_NOT_TRACK=1` or `ENGRAM_TELEMETRY=off` override everything. `Heartbeat.log_boot_notice/0` prints one boot line naming the switches so the default is never silent.
+- State = `instance_telemetry.telemetry_enabled`, tri-state: `NULL` = never answered (counts as ON), `true` = acknowledged, `false` = turned off. Off on SaaS (`:billing_enabled`). `ENGRAM_TELEMETRY=false` overrides everything (the one env var, deliberately: `DO_NOT_TRACK` is ignored; `true` does not override an admin who turned it off). `Heartbeat.log_boot_notice/0` prints one boot line naming the switches so the default is never silent.
 - URL is hardcoded `https://api.engram.page/api/telemetry/ping`. `app.engram.page` 405s API POSTs (workspace `docs/context/public-url-host-split.md`).
 
 ## Collector (SaaS)
@@ -60,6 +60,6 @@ Collector is unauthenticated: one IP can inflate the count up to the rate limit 
 
 - **Why census state has its own table, not `instance_settings`** (code review): the daily ping can run on a fresh instance before any admin exists. An `instance_settings` row created that early bakes in a `registration_mode` and silently freezes `ENGRAM_DEFAULT_REGISTRATION_MODE` (`registration_mode/0` reads the row once one exists). Making the column nullable was the first idea, but squawk's `ban-drop-not-null` rejects `DROP NOT NULL`. The singleton `instance_telemetry` row (same sentinel id) sidesteps both; `install_id` / `set_telemetry_enabled` never touch `instance_settings`, and a test asserts it.
 - **PromEx metric names carry `prom_ex`:** `PromEx.metric_prefix(:engram, :installs)` is `[:engram, :prom_ex, :installs]`, so the gauge is `engram_prom_ex_installs_seen`, not `engram_installs_seen`. Dashboard and alert queries must use the full name (confirmed by `mix run --no-start`, and by the existing `engram_prom_ex_crdt_*` series).
-- Env parsing: `DO_NOT_TRACK` disables on `1`/`true`/`yes` (any case); `ENGRAM_TELEMETRY=off` any case. Known gap, accepted: installs behind one NAT share the collector's 10/min/IP bucket and all fire at 05:17 UTC, so a large NAT could drop pings silently (census undercounts).
+- Env parsing: `ENGRAM_TELEMETRY` disables on `false` (also `0`/`no`/`off`, any case, trimmed); any other value defers to the in-app setting. Known gap, accepted: installs behind one NAT share the collector's 10/min/IP bucket and all fire at 05:17 UTC, so a large NAT could drop pings silently (census undercounts).
 - Local test DB tip: `MIX_TEST_PARTITION=_name` gives an isolated, freshly migrated `engram_test_name` database. The shared `engram_test` is polluted by other worktrees' migrations (e.g. `note_revisions` breaks `RepoTenantGuardTest`).
 

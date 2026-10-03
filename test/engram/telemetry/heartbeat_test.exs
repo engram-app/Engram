@@ -60,31 +60,33 @@ defmodule Engram.Telemetry.HeartbeatTest do
       refute Heartbeat.enabled?()
     end
 
-    test "DO_NOT_TRACK=1 overrides the default and an explicit yes" do
+    test "ENGRAM_TELEMETRY=false overrides the default and an explicit yes" do
       {:ok, _} = Instance.set_telemetry_enabled(true)
-      System.put_env("DO_NOT_TRACK", "1")
+      System.put_env("ENGRAM_TELEMETRY", "false")
       refute Heartbeat.enabled?()
     end
 
-    test "DO_NOT_TRACK accepts true/yes in any case, but not 0" do
-      for on <- ["true", "TRUE", "yes", "Yes"] do
-        System.put_env("DO_NOT_TRACK", on)
-        refute Heartbeat.enabled?(), "DO_NOT_TRACK=#{on} should disable"
+    test "ENGRAM_TELEMETRY=false disables in any case; other values defer to the in-app setting" do
+      for off <- ["false", "FALSE", "False", " false ", "0", "no", "off"] do
+        System.put_env("ENGRAM_TELEMETRY", off)
+        refute Heartbeat.enabled?(), "ENGRAM_TELEMETRY=#{inspect(off)} should disable"
       end
 
-      System.put_env("DO_NOT_TRACK", "0")
+      for other <- ["true", "1", "on", ""] do
+        System.put_env("ENGRAM_TELEMETRY", other)
+        assert Heartbeat.enabled?(), "ENGRAM_TELEMETRY=#{inspect(other)} should not disable"
+      end
+    end
+
+    test "ENGRAM_TELEMETRY=true cannot override an admin who turned it off" do
+      {:ok, _} = Instance.set_telemetry_enabled(false)
+      System.put_env("ENGRAM_TELEMETRY", "true")
+      refute Heartbeat.enabled?()
+    end
+
+    test "ENGRAM_TELEMETRY is the only switch: DO_NOT_TRACK is deliberately ignored" do
+      System.put_env("DO_NOT_TRACK", "1")
       assert Heartbeat.enabled?()
-    end
-
-    test "ENGRAM_TELEMETRY=OFF is case-insensitive" do
-      System.put_env("ENGRAM_TELEMETRY", "OFF")
-      refute Heartbeat.enabled?()
-    end
-
-    test "ENGRAM_TELEMETRY=off overrides the default and an explicit yes" do
-      {:ok, _} = Instance.set_telemetry_enabled(true)
-      System.put_env("ENGRAM_TELEMETRY", "off")
-      refute Heartbeat.enabled?()
     end
   end
 
@@ -103,7 +105,7 @@ defmodule Engram.Telemetry.HeartbeatTest do
       log = capture_log(fn -> Heartbeat.log_boot_notice() end)
 
       assert log =~ "anonymous daily usage ping"
-      assert log =~ "ENGRAM_TELEMETRY=off"
+      assert log =~ "ENGRAM_TELEMETRY=false"
     end
 
     test "is silent outside prod builds (nothing is sent there)" do
@@ -117,7 +119,7 @@ defmodule Engram.Telemetry.HeartbeatTest do
     end
 
     test "is silent when the environment already forbids the ping" do
-      System.put_env("ENGRAM_TELEMETRY", "off")
+      System.put_env("ENGRAM_TELEMETRY", "false")
       assert capture_log(fn -> Heartbeat.log_boot_notice() end) == ""
     end
   end

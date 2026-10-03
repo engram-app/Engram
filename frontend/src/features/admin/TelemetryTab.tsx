@@ -44,8 +44,8 @@ export default function TelemetryTab() {
 
 			{Boolean(state.env_disabled) && (
 				<p role="status" className="mt-3 rounded-md border border-border bg-muted p-3 text-sm">
-					Disabled by this instance's environment (<code>DO_NOT_TRACK</code> or{" "}
-					<code>ENGRAM_TELEMETRY</code>). Nothing is sent.
+					Disabled by this instance's environment (<code>ENGRAM_TELEMETRY=false</code>). Nothing is
+					sent.
 				</p>
 			)}
 

@@ -50,7 +50,7 @@ function AdminTelemetryPrompt() {
 			<p className="text-muted-foreground text-xs">
 				Once a day: a random install ID, version, OS, CPU architecture, and whether this runs in
 				Docker. Never your notes, users, or hostnames. We do not store your IP address. Turn it off
-				here, under Administration, or with <code>ENGRAM_TELEMETRY=off</code>.
+				here, under Administration, or with <code>ENGRAM_TELEMETRY=false</code>.
 			</p>
 			<p className="flex flex-wrap gap-2">
 				<button

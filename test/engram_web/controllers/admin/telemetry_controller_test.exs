@@ -36,7 +36,7 @@ defmodule EngramWeb.Admin.TelemetryControllerTest do
   end
 
   test "GET flags an environment override", %{conn: conn} do
-    System.put_env("DO_NOT_TRACK", "1")
+    System.put_env("ENGRAM_TELEMETRY", "false")
     admin = insert(:user, role: "admin")
     body = conn |> authenticate(admin) |> get(~p"/api/admin/telemetry") |> json_response(200)
 
