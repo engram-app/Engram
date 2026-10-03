@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { Navigate, Outlet, useParams } from "react-router";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
 import { setActiveVaultId, useActiveVaultId } from "../api/active-vault";
 import { useVaults } from "../api/queries";
 import { vaultBySlug } from "../api/vault-slug";
@@ -26,7 +27,7 @@ function UnknownVault({ slug }: { slug: string }) {
 // folder-tree, trace, remote-log) read it unchanged.
 export default function VaultRoute() {
 	const { slug } = useParams();
-	const { data: vaults, isPending } = useVaults();
+	const { data: vaults, isPending, isError, refetch } = useVaults();
 	const activeId = useActiveVaultId();
 	const vault = vaultBySlug(vaults, slug);
 
@@ -42,6 +43,18 @@ export default function VaultRoute() {
 	// bad slug.
 	if (isPending && !vaults) {
 		return <LoadingPane />;
+	}
+	// A failed list is not an unknown slug: keep the URL (it may be a deep
+	// link) and let the user retry instead of claiming the vault doesn't exist.
+	if (isError && !vaults) {
+		return (
+			<section className="flex flex-col items-start gap-3 p-6">
+				<p className="text-destructive">Couldn't load your vaults.</p>
+				<Button variant="outline" onClick={() => refetch()}>
+					Try again
+				</Button>
+			</section>
+		);
 	}
 	if (!vault) {
 		return <UnknownVault slug={slug ?? ""} />;

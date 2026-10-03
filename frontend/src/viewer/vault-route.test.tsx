@@ -13,9 +13,11 @@ const vaults = [
 
 let mockVaults: unknown[] | undefined = vaults;
 let mockPending = false;
+let mockError = false;
+const refetch = vi.fn();
 
 vi.mock("../api/queries", () => ({
-	useVaults: () => ({ data: mockVaults, isPending: mockPending }),
+	useVaults: () => ({ data: mockVaults, isPending: mockPending, isError: mockError, refetch }),
 }));
 
 const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
@@ -35,6 +37,8 @@ function VaultProbe() {
 beforeEach(() => {
 	mockVaults = vaults;
 	mockPending = false;
+	mockError = false;
+	refetch.mockClear();
 	setActiveVaultId(null);
 	toastError.mockClear();
 });
@@ -88,6 +92,18 @@ describe("VaultRoute", () => {
 		renderRoute("/v/nope/n-1");
 		await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/v/personal"));
 		expect(toastError).toHaveBeenCalledTimes(1);
+	});
+
+	// A failed list is not an unknown slug. Treating it as one told the user
+	// their vault didn't exist and replaced the URL, losing the deep link.
+	it("keeps the URL and offers a retry when the vault list fails to load", async () => {
+		mockVaults = undefined;
+		mockError = true;
+		renderRoute("/v/work/n-1");
+		expect(screen.getByTestId("loc")).toHaveTextContent("/v/work/n-1");
+		expect(toastError).not.toHaveBeenCalled();
+		screen.getByRole("button", { name: /try again/i }).click();
+		expect(refetch).toHaveBeenCalled();
 	});
 
 	it("waits rather than 404ing while the vault list is loading", () => {
