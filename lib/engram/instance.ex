@@ -105,7 +105,10 @@ defmodule Engram.Instance do
     end
   end
 
-  @doc "Operator's telemetry answer: `nil` = not asked yet, otherwise `true`/`false`."
+  @doc """
+  Operator's telemetry answer: `nil` = never answered (the census ping counts as
+  on), `true` = acknowledged, `false` = turned off.
+  """
   def telemetry_enabled do
     case settings() do
       nil -> nil

@@ -31,11 +31,12 @@ defmodule Engram.Telemetry.HeartbeatTest do
   end
 
   describe "enabled?/0" do
-    test "false until the operator opts in" do
-      refute Heartbeat.enabled?()
+    test "true by default: an operator who has not answered counts as on" do
+      assert Instance.telemetry_enabled() == nil
+      assert Heartbeat.enabled?()
     end
 
-    test "true once opted in" do
+    test "true once acknowledged" do
       {:ok, _} = Instance.set_telemetry_enabled(true)
       assert Heartbeat.enabled?()
     end
@@ -45,22 +46,50 @@ defmodule Engram.Telemetry.HeartbeatTest do
       refute Heartbeat.enabled?()
     end
 
-    test "false on SaaS (billing_enabled) even if opted in" do
-      {:ok, _} = Instance.set_telemetry_enabled(true)
+    test "false on SaaS (billing_enabled) even when on by default" do
       Application.put_env(:engram, :billing_enabled, true)
       refute Heartbeat.enabled?()
     end
 
-    test "DO_NOT_TRACK=1 overrides an opt-in" do
+    test "DO_NOT_TRACK=1 overrides the default and an explicit yes" do
       {:ok, _} = Instance.set_telemetry_enabled(true)
       System.put_env("DO_NOT_TRACK", "1")
       refute Heartbeat.enabled?()
     end
 
-    test "ENGRAM_TELEMETRY=off overrides an opt-in" do
+    test "ENGRAM_TELEMETRY=off overrides the default and an explicit yes" do
       {:ok, _} = Instance.set_telemetry_enabled(true)
       System.put_env("ENGRAM_TELEMETRY", "off")
       refute Heartbeat.enabled?()
+    end
+  end
+
+  describe "log_boot_notice/0" do
+    import ExUnit.CaptureLog
+
+    # config/test.exs pins :warning, which would drop the info line and turn the
+    # "silent" cases below into vacuous passes.
+    setup do
+      prev = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: prev) end)
+    end
+
+    test "tells a self-host operator the ping is on and how to turn it off" do
+      log = capture_log(fn -> Heartbeat.log_boot_notice() end)
+
+      assert log =~ "anonymous daily usage ping"
+      assert log =~ "ENGRAM_TELEMETRY=off"
+    end
+
+    test "is silent on SaaS" do
+      Application.put_env(:engram, :billing_enabled, true)
+      assert capture_log(fn -> Heartbeat.log_boot_notice() end) == ""
+    end
+
+    test "is silent when the environment already forbids the ping" do
+      System.put_env("ENGRAM_TELEMETRY", "off")
+      assert capture_log(fn -> Heartbeat.log_boot_notice() end) == ""
     end
   end
 end

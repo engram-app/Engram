@@ -36,13 +36,18 @@ defmodule Engram.Workers.TelemetryHeartbeatTest do
     :ok
   end
 
-  test "sends nothing when the operator has not opted in" do
+  test "sends by default when the operator has not answered" do
+    assert :ok = perform_job(TelemetryHeartbeat, %{})
+    assert_received {:ping, "POST", "/api/telemetry/ping", _}
+  end
+
+  test "sends nothing once the operator turned it off" do
+    {:ok, _} = Instance.set_telemetry_enabled(false)
     assert :ok = perform_job(TelemetryHeartbeat, %{})
     refute_received {:ping, _, _, _}
   end
 
-  test "POSTs the fixed payload to /api/telemetry/ping when opted in" do
-    {:ok, _} = Instance.set_telemetry_enabled(true)
+  test "POSTs the fixed payload to /api/telemetry/ping" do
     id = Instance.install_id()
 
     assert :ok = perform_job(TelemetryHeartbeat, %{})
