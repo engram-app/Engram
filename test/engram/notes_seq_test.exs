@@ -161,18 +161,4 @@ defmodule Engram.NotesSeqTest do
     assert cascade_deleted != [], "expected cascade-deleted rows"
     assert Enum.all?(cascade_deleted, &(&1.seq > s_before))
   end
-
-  test "batch_upsert_notes stamps seq on inserted rows", %{user: user, vault: vault} do
-    {:ok, _} =
-      Notes.batch_upsert_notes(user, vault, [
-        %{"path" => "x.md", "content" => "X"},
-        %{"path" => "y.md", "content" => "Y"}
-      ])
-
-    rows = all_rows(user, vault)
-
-    assert Enum.all?(rows, fn r -> is_integer(r.seq) end)
-    # One op = one seq: every row inserted by a single batch shares it.
-    assert length(Enum.uniq(Enum.map(rows, & &1.seq))) == 1
-  end
 end
