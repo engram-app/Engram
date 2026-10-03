@@ -24,9 +24,18 @@ interface Props {
 	menuOpenId?: string | null;
 	onContextMenu?: (itemId: string, x: number, y: number) => void;
 	onLongPress?: (itemId: string) => void;
+	// True while more than one row is selected. HT selects whatever was clicked
+	// last, so a lone selection is just "the row you clicked" and gets no fill;
+	// only a real multi-selection is worth showing.
+	multiSelect?: boolean;
 }
 
-function rowClass(instance: ItemInstance<LoaderItem>, active: boolean, menuOpen: boolean): string {
+function rowClass(
+	instance: ItemInstance<LoaderItem>,
+	active: boolean,
+	menuOpen: boolean,
+	multiSelect: boolean,
+): string {
 	// `isDragTarget` is provided by dragAndDropFeature; guard in case the row is
 	// rendered without it (tests).
 	const dragOver = "isDragTarget" in instance ? (instance.isDragTarget?.() ?? false) : false;
@@ -40,7 +49,9 @@ function rowClass(instance: ItemInstance<LoaderItem>, active: boolean, menuOpen:
 		// `accent`, so the two states stay clearly distinct.
 		active
 			? "bg-tree-selected font-medium text-tree-selected-foreground"
-			: "text-foreground hover:bg-accent hover:text-accent-foreground",
+			: multiSelect && instance.isSelected()
+				? "bg-accent text-accent-foreground"
+				: "text-foreground hover:bg-accent hover:text-accent-foreground",
 		dragOver ? "bg-primary/15 ring-1 ring-ring ring-inset" : "",
 		// Inset so the outline can't bleed into the 1px gutter and collide with the
 		// neighbouring row. `muted-foreground` rather than `border`, which is too
@@ -113,7 +124,28 @@ function Chevron({ open }: { open: boolean }) {
 	);
 }
 
-export function TreeRow({ instance, activeId, menuOpenId, onContextMenu, onLongPress }: Props) {
+// Rows are real <a href>s. A modifier-click is a selection gesture here (HT
+// handles shift = range, ctrl/cmd = toggle), so the browser must not ALSO run
+// its own default: ctrl opens a new tab, shift a new window. Middle-click is a
+// separate event, so "open in new tab" stays one gesture away.
+function linkClick(htProps: Record<string, unknown>) {
+	const htClick: { onClick?: (e: React.MouseEvent) => void } = htProps;
+	return (e: React.MouseEvent) => {
+		htClick.onClick?.(e);
+		if (e.shiftKey || e.ctrlKey || e.metaKey) {
+			e.preventDefault();
+		}
+	};
+}
+
+export function TreeRow({
+	instance,
+	activeId,
+	menuOpenId,
+	onContextMenu,
+	onLongPress,
+	multiSelect = false,
+}: Props) {
 	const itemId = instance.getId();
 	const slug = useActiveVaultSlug();
 	const longPressHandlers = useLongPress({
@@ -189,7 +221,7 @@ export function TreeRow({ instance, activeId, menuOpenId, onContextMenu, onLongP
 				onContextMenu={contextMenuHandler}
 				aria-expanded={instance.isExpanded()}
 				aria-selected={instance.isSelected()}
-				className={rowClass(instance, active, menuOpen)}
+				className={rowClass(instance, active, menuOpen, multiSelect)}
 				style={{ paddingLeft: `${folderPad}px`, height: TREE_ROW_HEIGHT }}
 			>
 				<IndentGuides depth={depth} />
@@ -213,15 +245,17 @@ export function TreeRow({ instance, activeId, menuOpenId, onContextMenu, onLongP
 		// the legacy /note/:id, which redirects, while the active vault's slug is
 		// still resolving. The HT itemId stays path-keyed (internal tree
 		// machinery).
+		const attachmentProps = instance.getProps();
 		return (
 			<Link
 				to={noteHref(slug, item.id)}
-				{...instance.getProps()}
+				{...attachmentProps}
+				onClick={linkClick(attachmentProps)}
 				{...longPressProps}
 				onContextMenu={contextMenuHandler}
 				aria-selected={instance.isSelected()}
 				aria-current={active ? "page" : undefined}
-				className={rowClass(instance, active, menuOpen)}
+				className={rowClass(instance, active, menuOpen, multiSelect)}
 				style={{ paddingLeft: `${notePad}px`, height: TREE_ROW_HEIGHT }}
 			>
 				<IndentGuides depth={depth} />
@@ -261,12 +295,13 @@ export function TreeRow({ instance, activeId, menuOpenId, onContextMenu, onLongP
 		<Link
 			to={noteHref(slug, item.id)}
 			{...htProps}
+			onClick={linkClick(htProps)}
 			{...longPressProps}
 			onContextMenu={contextMenuHandler}
 			onDragStart={handleNoteDragStart}
 			aria-selected={instance.isSelected()}
 			aria-current={active ? "page" : undefined}
-			className={rowClass(instance, active, menuOpen)}
+			className={rowClass(instance, active, menuOpen, multiSelect)}
 			style={{ paddingLeft: `${notePad}px`, height: TREE_ROW_HEIGHT }}
 		>
 			<IndentGuides depth={depth} />

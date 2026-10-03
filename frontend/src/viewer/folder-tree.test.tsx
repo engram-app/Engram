@@ -16,6 +16,9 @@ vi.mock("sonner", () => ({
 	toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
 
+const { copyMock } = vi.hoisted(() => ({ copyMock: vi.fn(() => Promise.resolve(true)) }));
+vi.mock("../lib/clipboard", () => ({ copyToClipboard: copyMock }));
+
 // The tree loader loads a folder's note list from the vault tree on a cache
 // miss. Nothing here seeds that tree, so without this the miss path reaches the
 // real network; the loader swallows the failure, but the attempt still logs.
@@ -517,6 +520,112 @@ describe("FolderTree (HT)", () => {
 		await screen.findByRole("menu");
 		expect(screen.queryByRole("menuitem", { name: "New note here" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: "New subfolder" })).not.toBeInTheDocument();
+	});
+
+	describe("multi-select", () => {
+		const note = (id: string, name: string) => ({
+			...DEFAULT_ROOT_NOTE,
+			id,
+			path: `${name}.md`,
+			title: name,
+		});
+
+		beforeEach(() => {
+			mock.folders = [];
+			mock.notes = [note("42", "a"), note("43", "b"), note("44", "c")];
+			copyMock.mockClear();
+		});
+
+		async function shiftSelectAll() {
+			const a = await screen.findByRole("treeitem", { name: "a" });
+			fireEvent.click(a);
+			fireEvent.click(screen.getByRole("treeitem", { name: "c" }), { shiftKey: true });
+		}
+
+		it("shift-click selects the range", async () => {
+			renderTree();
+			await shiftSelectAll();
+			for (const name of ["a", "b", "c"]) {
+				expect(screen.getByRole("treeitem", { name })).toHaveAttribute("aria-selected", "true");
+			}
+		});
+
+		it("ctrl-click adds one row without selecting the ones between", async () => {
+			renderTree();
+			fireEvent.click(await screen.findByRole("treeitem", { name: "a" }));
+			fireEvent.click(screen.getByRole("treeitem", { name: "c" }), { ctrlKey: true });
+			expect(screen.getByRole("treeitem", { name: "a" })).toHaveAttribute("aria-selected", "true");
+			expect(screen.getByRole("treeitem", { name: "b" })).toHaveAttribute("aria-selected", "false");
+			expect(screen.getByRole("treeitem", { name: "c" })).toHaveAttribute("aria-selected", "true");
+		});
+
+		it("right-click inside the selection opens the selection menu", async () => {
+			renderTree();
+			await shiftSelectAll();
+			fireEvent.contextMenu(screen.getByRole("treeitem", { name: "b" }), {
+				clientX: 5,
+				clientY: 5,
+			});
+			expect(await screen.findByRole("menuitem", { name: "Delete 3 items" })).toBeInTheDocument();
+			expect(screen.queryByRole("menuitem", { name: "Rename" })).not.toBeInTheDocument();
+		});
+
+		it("deletes every selected note in one batch", async () => {
+			renderTree();
+			await shiftSelectAll();
+			fireEvent.contextMenu(screen.getByRole("treeitem", { name: "b" }), {
+				clientX: 5,
+				clientY: 5,
+			});
+			fireEvent.click(await screen.findByRole("menuitem", { name: "Delete 3 items" }));
+			fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+			expect(batchDeleteNotesMutate).toHaveBeenCalledTimes(1);
+			const [{ ids }] = batchDeleteNotesMutate.mock.calls[0] as [{ ids: string[] }];
+			expect([...ids].sort()).toEqual(["42", "43", "44"]);
+		});
+
+		it("moves every selected note in one batch", async () => {
+			mock.folders = [{ id: "1", parent_id: null, name: "Projects", count: 0 }];
+			renderTree();
+			await shiftSelectAll();
+			fireEvent.contextMenu(screen.getByRole("treeitem", { name: "a" }), {
+				clientX: 5,
+				clientY: 5,
+			});
+			fireEvent.click(await screen.findByRole("menuitem", { name: "Move 3 items to…" }));
+			fireEvent.click(await screen.findByRole("option", { name: "Projects" }));
+			expect(batchMoveNotesMutate).toHaveBeenCalledTimes(1);
+			const [vars] = batchMoveNotesMutate.mock.calls[0] as [
+				{ ids: string[]; target_folder: string },
+			];
+			expect([...vars.ids].sort()).toEqual(["42", "43", "44"]);
+			expect(vars.target_folder).toBe("Projects");
+		});
+
+		it("copies one wikilink per selected note, in tree order", async () => {
+			renderTree();
+			await shiftSelectAll();
+			fireEvent.contextMenu(screen.getByRole("treeitem", { name: "b" }), {
+				clientX: 5,
+				clientY: 5,
+			});
+			fireEvent.click(await screen.findByRole("menuitem", { name: "Copy 3 wikilinks" }));
+			expect(copyMock).toHaveBeenCalledWith("[[a]]\n[[b]]\n[[c]]");
+		});
+
+		// Obsidian's rule: right-clicking OUTSIDE the selection acts on that row
+		// alone, so the user can't bulk-delete rows they aren't pointing at.
+		it("right-click outside the selection opens the single-row menu", async () => {
+			mock.notes = [note("42", "a"), note("43", "b"), note("44", "c"), note("45", "d")];
+			renderTree();
+			await shiftSelectAll();
+			fireEvent.contextMenu(screen.getByRole("treeitem", { name: "d" }), {
+				clientX: 5,
+				clientY: 5,
+			});
+			expect(await screen.findByRole("menuitem", { name: "Rename" })).toBeInTheDocument();
+			expect(screen.queryByRole("menuitem", { name: /items/u })).not.toBeInTheDocument();
+		});
 	});
 
 	it("long-press (touch) on a row opens the ActionDrawer", async () => {

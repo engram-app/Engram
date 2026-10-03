@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ACTION_ICONS, actionsFor, noteMenuActions } from "./action-list";
+import { ACTION_ICONS, actionsFor, noteMenuActions, selectionActions } from "./action-list";
 
 describe("actionsFor", () => {
 	it("file actions: rename, move, duplicate, copy-wikilink, delete", () => {
@@ -87,5 +87,27 @@ describe("noteMenuActions", () => {
 	it("leaves the tree's file menu unchanged", () => {
 		const ids = actionsFor({ kind: "file" }).map((a) => a.id);
 		expect(ids).toEqual(["rename", "move", "duplicate", "copy-wikilink", "delete"]);
+	});
+});
+
+describe("selectionActions", () => {
+	it("offers move, copy-wikilink and delete, with the count in each label", () => {
+		expect(selectionActions(["file", "file", "folder"])).toEqual([
+			{ id: "move", label: "Move 3 items to…" },
+			{ id: "copy-wikilink", label: "Copy 2 wikilinks" },
+			{ id: "delete", label: "Delete 3 items", destructive: true },
+		]);
+	});
+
+	// Only notes have a wikilink worth copying; folders and attachments are
+	// skipped, so the label counts what will actually land on the clipboard.
+	it("drops copy-wikilink when no note is selected", () => {
+		const ids = selectionActions(["folder", "attachment"]).map((a) => a.id);
+		expect(ids).toEqual(["move", "delete"]);
+	});
+
+	it("singular wikilink label for one note", () => {
+		const copy = selectionActions(["file", "attachment"]).find((a) => a.id === "copy-wikilink");
+		expect(copy?.label).toBe("Copy wikilink");
 	});
 });
