@@ -7,7 +7,9 @@ defmodule Engram.Workers.FinalizeRevisionSweep do
   `note_revisions.pending_*` with nothing coming for it. This finds copies older
   than ten minutes (well past any live job's 5s schedule plus retries) and
   enqueues them again. Re-enqueueing is safe: `FinalizeRevision` takes a lock
-  and re-reads, so a duplicate finds nothing to do.
+  and re-reads, so a duplicate finds nothing to do. Copies parked as
+  undecryptable (`finalize_failed_at`) are skipped, or each would come back
+  every hour.
 
   Refuses rather than sweeping blind where RLS is enforced and no maintenance
   pool is configured, the same guard as `Engram.Workers.OrphanSweep`: the read
@@ -52,8 +54,14 @@ defmodule Engram.Workers.FinalizeRevisionSweep do
     pairs =
       Repo.maintenance().all(
         from(r in Revision,
-          where: not is_nil(r.pending_ciphertext) and r.updated_at < ^cutoff,
-          distinct: true,
+          where:
+            not is_nil(r.pending_ciphertext) and is_nil(r.finalize_failed_at) and
+              r.updated_at < ^cutoff,
+          # Oldest first, so a backlog over @batch drains in order. group_by,
+          # not distinct: Postgres rejects ORDER BY on a column a DISTINCT
+          # select leaves out.
+          group_by: [r.note_id, r.user_id],
+          order_by: min(r.updated_at),
           select: {r.note_id, r.user_id},
           limit: @batch
         ),

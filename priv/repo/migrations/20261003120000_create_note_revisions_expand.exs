@@ -40,6 +40,9 @@ defmodule Engram.Repo.Migrations.CreateNoteRevisionsExpand do
       add :pending_ciphertext, :binary
       add :pending_nonce, :binary
       add :pending_dek_version, :integer
+      # Set when the copy can never decrypt. FinalizeRevision parks the row
+      # instead of retrying it forever and blocking the note's later versions.
+      add :finalize_failed_at, :timestamptz
 
       add :storage_key, :text
       add :blob_nonce, :binary
@@ -59,7 +62,7 @@ defmodule Engram.Repo.Migrations.CreateNoteRevisionsExpand do
     create index(:note_revisions, [:note_id, :inserted_at])
 
     create index(:note_revisions, [:updated_at],
-             where: "pending_ciphertext IS NOT NULL",
+             where: "pending_ciphertext IS NOT NULL AND finalize_failed_at IS NULL",
              name: :note_revisions_pending
            )
 

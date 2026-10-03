@@ -1,3 +1,12 @@
+defmodule Engram.Workers.FinalizeRevisionTest.FailingStorage do
+  @moduledoc false
+  # A storage PUT that always fails, and tells the test it was attempted.
+  def put(key, _binary, _opts) do
+    send(self(), {:put_attempted, key})
+    {:error, :unavailable}
+  end
+end
+
 defmodule Engram.Workers.FinalizeRevisionTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
@@ -88,5 +97,78 @@ defmodule Engram.Workers.FinalizeRevisionTest do
     {:ok, _} = Oban.insert(FinalizeRevision.new_for_note(note_id, user_id))
 
     assert length(all_enqueued(worker: FinalizeRevision, args: %{note_id: note_id})) == 1
+  end
+
+  describe "a version that can never decrypt" do
+    # A second pending copy behind the baseline: an MCP write closes the open
+    # sync version, copying the note's text ("keep me") into it.
+    setup %{user: u, vault: v, note: n, baseline: b} do
+      {:ok, _} =
+        Notes.upsert_note(u, v, %{"path" => "f.md", "content" => "ai text"}, actor: "mcp")
+
+      {:ok, later} =
+        Repo.with_tenant(u.id, fn ->
+          Repo.one!(
+            from(r in Revision,
+              where: r.note_id == ^n.id and r.id != ^b.id and not is_nil(r.pending_ciphertext)
+            )
+          )
+        end)
+
+      %{later: later}
+    end
+
+    defp corrupt(user, rev) do
+      <<first, rest::binary>> = rev.pending_ciphertext
+
+      {:ok, {1, _}} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.update_all(from(r in Revision, where: r.id == ^rev.id),
+            set: [pending_ciphertext: <<Bitwise.bxor(first, 0xFF), rest::binary>>]
+          )
+        end)
+    end
+
+    test "is parked and does not block later versions of the note",
+         %{user: u, note: n, baseline: b, later: later} do
+      corrupt(u, b)
+
+      assert :ok = perform_job(FinalizeRevision, %{note_id: n.id, user_id: u.id})
+
+      parked = reload(u, b.id)
+      assert parked.finalize_failed_at
+      assert parked.pending_ciphertext
+      assert parked.storage_key == nil
+
+      done = reload(u, later.id)
+      assert done.pending_ciphertext == nil
+      assert {:ok, "keep me"} = blob_text(u, done, done.id)
+    end
+
+    test "a parked version is not retried", %{user: u, note: n, baseline: b} do
+      corrupt(u, b)
+      :ok = perform_job(FinalizeRevision, %{note_id: n.id, user_id: u.id})
+      parked = reload(u, b.id)
+
+      assert :ok = perform_job(FinalizeRevision, %{note_id: n.id, user_id: u.id})
+      assert reload(u, b.id).finalize_failed_at == parked.finalize_failed_at
+    end
+  end
+
+  test "a storage failure tries every version, then errors so Oban retries",
+       %{user: u, vault: v, note: n, baseline: b} do
+    {:ok, _} = Notes.upsert_note(u, v, %{"path" => "f.md", "content" => "ai text"}, actor: "mcp")
+    previous = Application.get_env(:engram, :storage)
+    Application.put_env(:engram, :storage, __MODULE__.FailingStorage)
+    on_exit(fn -> Application.put_env(:engram, :storage, previous) end)
+
+    assert {:error, :unavailable} =
+             perform_job(FinalizeRevision, %{note_id: n.id, user_id: u.id})
+
+    assert_received {:put_attempted, _}
+    assert_received {:put_attempted, _}
+    rev = reload(u, b.id)
+    assert rev.pending_ciphertext
+    assert rev.finalize_failed_at == nil
   end
 end

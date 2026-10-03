@@ -47,4 +47,18 @@ defmodule Engram.Workers.FinalizeRevisionSweepTest do
     assert :ok = perform_job(FinalizeRevisionSweep, %{})
     refute_enqueued(worker: FinalizeRevision, args: %{note_id: n.id})
   end
+
+  test "skips a copy parked as undecryptable", %{user: u, note: n} do
+    age_pending(u, n.id, 3600)
+
+    {:ok, _} =
+      Repo.with_tenant(u.id, fn ->
+        Repo.update_all(from(r in Revision, where: r.note_id == ^n.id),
+          set: [finalize_failed_at: DateTime.utc_now()]
+        )
+      end)
+
+    assert :ok = perform_job(FinalizeRevisionSweep, %{})
+    refute_enqueued(worker: FinalizeRevision, args: %{note_id: n.id})
+  end
 end

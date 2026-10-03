@@ -22,6 +22,14 @@ defmodule Engram.Workers.FinalizeRevision do
   The lock is held across the storage PUT, which keeps a tenant transaction
   open for the length of one upload. That is acceptable on the `maintenance`
   queue (worker nodes only, concurrency 2).
+
+  ## A copy that can never decrypt
+
+  `{:error, :decrypt_failed}` is permanent: retrying cannot change the bytes.
+  Such a row gets `finalize_failed_at` and is skipped from then on, by this job
+  and by the sweep, so it cannot block the note's later versions. Any other
+  error (a storage PUT, a DEK fetch) is transient: the job still attempts every
+  other version, then returns the first such error so Oban retries.
   """
   use Oban.Worker, queue: :maintenance, max_attempts: 10
 
@@ -29,7 +37,10 @@ defmodule Engram.Workers.FinalizeRevision do
 
   alias Engram.{Accounts, Crypto, Repo, Storage}
   alias Engram.Crypto.Envelope
+  alias Engram.Logger.Metadata
   alias Engram.Notes.{Revision, Revisions}
+
+  require Logger
 
   @doc """
   Finalize a note's pending copies a few seconds after the write, collapsing
@@ -74,18 +85,19 @@ defmodule Engram.Workers.FinalizeRevision do
       Repo.with_tenant(user.id, fn ->
         Repo.all(
           from(r in Revision,
-            where: r.note_id == ^note_id and not is_nil(r.pending_ciphertext),
+            where:
+              r.note_id == ^note_id and not is_nil(r.pending_ciphertext) and
+                is_nil(r.finalize_failed_at),
+            order_by: [asc: r.inserted_at, asc: r.id],
             select: r.id
           )
         )
       end)
 
-    Enum.reduce_while(ids, :ok, fn id, :ok ->
-      case finalize_one(id, user) do
-        :ok -> {:cont, :ok}
-        {:error, _} = err -> {:halt, err}
-      end
-    end)
+    # Every version gets its attempt before a transient error is returned.
+    ids
+    |> Enum.map(&finalize_one(&1, user))
+    |> Enum.find(:ok, &match?({:error, _}, &1))
   end
 
   @doc false
@@ -95,8 +107,11 @@ defmodule Engram.Workers.FinalizeRevision do
         Repo.advisory_lock!(revision_id)
 
         case Repo.get(Revision, revision_id) do
-          %Revision{pending_ciphertext: ct} = rev when is_binary(ct) -> upload(rev, user)
-          _already_done_or_gone -> :ok
+          %Revision{pending_ciphertext: ct, finalize_failed_at: nil} = rev when is_binary(ct) ->
+            rev |> upload(user) |> park_if_undecryptable(rev)
+
+          _done_parked_or_gone ->
+            :ok
         end
       end)
 
@@ -129,4 +144,24 @@ defmodule Engram.Workers.FinalizeRevision do
       end
     end
   end
+
+  # Still under the advisory lock taken in finalize_one/2.
+  defp park_if_undecryptable({:error, :decrypt_failed} = reason, rev) do
+    now = DateTime.utc_now()
+
+    {1, _} =
+      Repo.update_all(from(r in Revision, where: r.id == ^rev.id),
+        set: [finalize_failed_at: now, updated_at: now]
+      )
+
+    Logger.error(
+      "finalize_revision parked an undecryptable copy note_id=#{rev.note_id} " <>
+        "revision_id=#{rev.id} err=#{Metadata.safe_reason(reason)}",
+      Metadata.with_category(:error, :oban, note_id: rev.note_id)
+    )
+
+    :ok
+  end
+
+  defp park_if_undecryptable(result, _rev), do: result
 end

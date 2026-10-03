@@ -30,6 +30,7 @@ defmodule Engram.Notes.Revision do
     field :pending_ciphertext, :binary, redact: true
     field :pending_nonce, :binary, redact: true
     field :pending_dek_version, :integer
+    field :finalize_failed_at, :utc_datetime_usec
     field :storage_key, :string
     field :blob_nonce, :binary
     field :content_hash, :string
