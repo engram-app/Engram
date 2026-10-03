@@ -155,6 +155,8 @@ config :engram, Oban,
        {"0 4 * * *", Engram.Workers.OriginAbuseSweep},
        # Daily self-host install census; no-op on SaaS and unless opted in.
        {"17 5 * * *", Engram.Workers.TelemetryHeartbeat},
+       # Daily retention sweep for the census collector table (unbounded otherwise).
+       {"30 4 * * *", Engram.Workers.InstallPingsPruner},
        # Daily client_logs retention sweep (Engram#792 — the log sink was
        # unbounded at ~98% of the DB).
        {"15 4 * * *", Engram.Workers.ClientLogsPruner},

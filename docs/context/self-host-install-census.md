@@ -52,3 +52,5 @@ Collector is unauthenticated: one IP can inflate the count up to the rate limit 
   `Logger.configure(level: :info)` or its "silent" cases pass vacuously.
 - Privacy policy (`engram-marketing` `src/legal/`) does not mention self-host at all; whether
   the ping needs a line is a legal call, left open.
+
+- Retention: `Engram.Workers.InstallPingsPruner` (cron `30 4 * * *`) deletes rows with `updated_at` older than 35 days (> the gauge's 30-day window), in 5k batches.
