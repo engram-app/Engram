@@ -15,6 +15,8 @@ defmodule Engram.Notes.Revision do
 
   @origins ~w(edit baseline restore import)
 
+  @type t :: %__MODULE__{}
+
   schema "note_revisions" do
     field :note_id, Ecto.UUID
     field :user_id, Ecto.UUID
