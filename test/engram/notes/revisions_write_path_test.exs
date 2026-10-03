@@ -6,6 +6,7 @@ defmodule Engram.Notes.RevisionsWritePathTest do
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
   alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, Note, Revision, Revisions}
+  alias Engram.Workers.FinalizeRevision
 
   setup do
     user = insert(:user)
@@ -127,6 +128,34 @@ defmodule Engram.Notes.RevisionsWritePathTest do
         Notes.upsert_note(u, v, %{"id" => id, "path" => "B.md", "content" => "v1"}, actor: "mcp")
 
       assert length(revisions(u, id)) == count
+    end
+  end
+
+  describe "finalize jobs" do
+    test "a batch update enqueues one while recording is on", %{user: u, vault: v} do
+      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "on.md", "content" => "v1"})
+      Notes.batch_upsert_notes(u, v, [%{"path" => "on.md", "content" => "v2"}])
+      assert_enqueued(worker: FinalizeRevision, args: %{note_id: note.id})
+    end
+  end
+
+  describe "recording off" do
+    setup do
+      previous = Application.get_env(:engram, :history_recording)
+      Application.put_env(:engram, :history_recording, false)
+      on_exit(fn -> Application.put_env(:engram, :history_recording, previous) end)
+    end
+
+    test "an upsert enqueues no finalize job", %{user: u, vault: v} do
+      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "off.md", "content" => "v1"})
+      {:ok, _} = Notes.upsert_note(u, v, %{"path" => "off.md", "content" => "v2"})
+      refute_enqueued(worker: FinalizeRevision, args: %{note_id: note.id})
+    end
+
+    test "a batch write enqueues no finalize job", %{user: u, vault: v} do
+      Notes.batch_upsert_notes(u, v, [%{"path" => "boff.md", "content" => "v1"}])
+      Notes.batch_upsert_notes(u, v, [%{"path" => "boff.md", "content" => "v2"}])
+      refute_enqueued(worker: FinalizeRevision)
     end
   end
 end

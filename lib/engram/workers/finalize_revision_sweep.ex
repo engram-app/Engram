@@ -61,7 +61,7 @@ defmodule Engram.Workers.FinalizeRevisionSweep do
       )
 
     jobs =
-      Enum.map(pairs, fn {note_id, user_id} -> FinalizeRevision.new_for_note(note_id, user_id) end)
+      Enum.map(pairs, fn {note_id, user_id} -> FinalizeRevision.job(note_id, user_id) end)
 
     _ = if jobs != [], do: Oban.insert_all(jobs)
     :ok

@@ -31,8 +31,25 @@ defmodule Engram.Workers.FinalizeRevision do
   alias Engram.Crypto.Envelope
   alias Engram.Notes.{Revision, Revisions}
 
-  @doc "Finalize a note's pending copies a few seconds after the write, collapsing bursts."
+  @doc """
+  Finalize a note's pending copies a few seconds after the write, collapsing
+  bursts. `:skip` while history recording is off: no write leaves a copy then,
+  and a no-op job per save would crowd the 2-slot `maintenance` queue.
+  `Engram.Notes.Enqueue.enqueue/2` and the batch path both drop `:skip`.
+  """
+  @spec new_for_note(String.t(), String.t()) :: Oban.Job.changeset() | :skip
   def new_for_note(note_id, user_id) when is_binary(note_id) and is_binary(user_id) do
+    if Application.get_env(:engram, :history_recording, false),
+      do: job(note_id, user_id),
+      else: :skip
+  end
+
+  @doc """
+  The job itself, regardless of the switch. The sweep uses this: copies written
+  before recording was switched off still need moving to storage.
+  """
+  @spec job(String.t(), String.t()) :: Oban.Job.changeset()
+  def job(note_id, user_id) when is_binary(note_id) and is_binary(user_id) do
     new(%{note_id: note_id, user_id: user_id},
       schedule_in: 5,
       unique: [period: 60, keys: [:note_id], states: [:available, :scheduled, :retryable]]
