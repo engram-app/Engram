@@ -50,7 +50,7 @@ function rowClass(
 		active
 			? "bg-tree-selected font-medium text-tree-selected-foreground"
 			: multiSelect && instance.isSelected()
-				? "bg-accent text-accent-foreground"
+				? "bg-tree-multi-selected text-foreground"
 				: "text-foreground hover:bg-accent hover:text-accent-foreground",
 		dragOver ? "bg-primary/15 ring-1 ring-ring ring-inset" : "",
 		// Inset so the outline can't bleed into the 1px gutter and collide with the

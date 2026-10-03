@@ -125,6 +125,7 @@
 	--color-destructive: var(--destructive);
 	--color-tree-selected: var(--tree-selected);
 	--color-tree-selected-foreground: var(--tree-selected-foreground);
+	--color-tree-multi-selected: var(--tree-multi-selected);
 	--color-accent-foreground: var(--accent-foreground);
 	--color-accent: var(--accent);
 	--color-muted-foreground: var(--muted-foreground);
@@ -185,6 +186,9 @@
 	   `accent` (near-white here), so the two can't be confused. */
 	--tree-selected: oklch(21.03% 0.0059 285.89);
 	--tree-selected-foreground: oklch(98.50% 0 0);
+	/* Rows in a multi-selection. Between hover (accent) and the open-note chip,
+	   so all three states read apart. */
+	--tree-multi-selected: oklch(90.00% 0.004 286.32);
 	--border: oklch(91.97% 0.004 286.32);
 	--input: oklch(91.97% 0.004 286.32);
 	--ring: oklch(60.89% 0.1109 221.72);
@@ -234,6 +238,7 @@
 	   distinct third step rather than a slightly-darker smudge. */
 	--tree-selected: oklch(38.00% 0.004 286.11);
 	--tree-selected-foreground: oklch(97.00% 0.005 334);
+	--tree-multi-selected: oklch(32.00% 0.004 286.11);
 	--border: oklch(39.39% 0.0182 207.04);
 	--input: oklch(39.39% 0.0182 207.04);
 	--ring: oklch(87.00% 0.1481 202.88);

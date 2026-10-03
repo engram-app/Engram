@@ -268,8 +268,9 @@ describe("TreeRow", () => {
 	});
 
 	describe("multi-selection highlight", () => {
-		// Whitespace-bounded: `\b` would also match the hover state, `hover:bg-accent`.
-		const selectedFill = /(?:^|\s)bg-accent(?:\s|$)/u;
+		// Its own token, not the hover `accent`: in the light theme accent is a
+		// near-white on white, and a selected range was hard to see.
+		const selectedFill = /(?:^|\s)bg-tree-multi-selected(?:\s|$)/u;
 
 		it("fills selected rows while a multi-selection is active", () => {
 			const instance = mockInstance({ data: noteItem, isSelected: true });
