@@ -440,3 +440,11 @@ config :engram, Engram.MCP.ParseGate,
 config :engram, :census_ping, config_env() == :prod
 
 import_config "#{config_env()}.exs"
+
+# Note version history (#1710). On in dev and test. Prod reads
+# HISTORY_RECORDING in runtime.exs and stays OFF until #1713 (DEK rotation
+# covers note_revisions) and #1715 (the orphan sweep walks revisions/) ship:
+# before #1713 a key rotation would make stored versions undecryptable, and
+# before #1715 a deleted account's blobs would stay in storage.
+config :engram, :history_recording, true
+config :engram, :history_session_gap_minutes, 10

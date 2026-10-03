@@ -1068,3 +1068,12 @@ if otlp_endpoint = System.get_env("OTEL_EXPORTER_OTLP_ENDPOINT") do
     otlp_protocol: :http_protobuf,
     otlp_endpoint: otlp_endpoint
 end
+
+# Note version history (#1710). See config.exs for why prod defaults off.
+if config_env() == :prod do
+  config :engram, :history_recording, System.get_env("HISTORY_RECORDING", "false") == "true"
+end
+
+if gap = System.get_env("HISTORY_SESSION_GAP_MINUTES") do
+  config :engram, :history_session_gap_minutes, String.to_integer(gap)
+end
