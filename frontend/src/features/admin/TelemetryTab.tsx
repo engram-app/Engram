@@ -38,8 +38,8 @@ export default function TelemetryTab() {
 		<>
 			<p className="text-muted-foreground text-sm">
 				Help count Engram installs. Once a day this instance can send a random install ID, the
-				version, OS, CPU architecture, and whether it runs in Docker. Never your notes, users, or IP
-				address.
+				version, OS, CPU architecture, and whether it runs in Docker. Never your notes, users, or
+				hostnames. We do not store your IP address.
 			</p>
 
 			{Boolean(state.env_disabled) && (

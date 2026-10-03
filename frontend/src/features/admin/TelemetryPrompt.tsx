@@ -51,7 +51,8 @@ function AdminTelemetryPrompt() {
 			<p className="font-medium text-foreground">Help count Engram installs?</p>
 			<p className="text-muted-foreground text-xs">
 				Once a day: a random install ID, version, OS, CPU architecture, and whether this runs in
-				Docker. Never your notes, users, or IP address. Change it any time under Administration.
+				Docker. Never your notes, users, or hostnames. We do not store your IP address. Change it
+				any time under Administration.
 			</p>
 			<p className="flex flex-wrap gap-2">
 				<button
