@@ -41,7 +41,7 @@ defmodule EngramWeb.NotesController do
       user = conn.assigns.current_user
       vault = conn.assigns.current_vault
 
-      case Notes.upsert_note(user, vault, params) do
+      case Notes.upsert_note(user, vault, params, actor: EngramWeb.WriteActor.for_conn(conn)) do
         {:ok, note} ->
           json(conn, %{note: note_json(note, user)})
 
@@ -137,11 +137,16 @@ defmodule EngramWeb.NotesController do
           {:ok, base} ->
             content = String.trim_trailing(base, "\n") <> "\n" <> text
 
-            case Notes.upsert_note(user, vault, %{
-                   "path" => path,
-                   "content" => content,
-                   "mtime" => note.mtime
-                 }) do
+            case Notes.upsert_note(
+                   user,
+                   vault,
+                   %{
+                     "path" => path,
+                     "content" => content,
+                     "mtime" => note.mtime
+                   },
+                   actor: EngramWeb.WriteActor.for_conn(conn)
+                 ) do
               {:ok, updated} ->
                 json(conn, %{created: false, path: path, note: note_json(updated, user)})
 
@@ -192,11 +197,16 @@ defmodule EngramWeb.NotesController do
         content = "# #{filename}\n\n#{text}"
         mtime = System.os_time(:second) * 1.0
 
-        case Notes.upsert_note(user, vault, %{
-               "path" => path,
-               "content" => content,
-               "mtime" => mtime
-             }) do
+        case Notes.upsert_note(
+               user,
+               vault,
+               %{
+                 "path" => path,
+                 "content" => content,
+                 "mtime" => mtime
+               },
+               actor: EngramWeb.WriteActor.for_conn(conn)
+             ) do
           {:ok, note} ->
             json(conn, %{created: true, path: path, note: note_json(note, user)})
 

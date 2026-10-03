@@ -8,6 +8,10 @@ defmodule Engram.MCP.Handlers do
   alias Engram.{Notes, Search}
   alias Engram.Notes.Frontmatter
 
+  # #1710: every MCP note write is the "mcp" history actor. The
+  # HandlersWriteActorTest counts that every upsert_note call passes this.
+  @write_opts [actor: "mcp"]
+
   # -- Vault tools --
 
   # `vaults` is pre-scoped by the controller to the set THIS credential can use
@@ -359,7 +363,12 @@ defmodule Engram.MCP.Handlers do
        "A note already exists at #{path}. Use get_notes to read it, or write_note " <>
          "to replace it, or pick a different title."}
     else
-      Notes.upsert_note(user, vault, %{"path" => path, "content" => content, "mtime" => now()})
+      Notes.upsert_note(
+        user,
+        vault,
+        %{"path" => path, "content" => content, "mtime" => now()},
+        @write_opts
+      )
       |> upsert_reply(
         [
           ok: "Note created: #{path}",
@@ -384,7 +393,12 @@ defmodule Engram.MCP.Handlers do
     if byte_size(content) > Notes.max_note_bytes() do
       {:error, "note exceeds maximum size of 10MB"}
     else
-      Notes.upsert_note(user, vault, %{"path" => path, "content" => content, "mtime" => now()})
+      Notes.upsert_note(
+        user,
+        vault,
+        %{"path" => path, "content" => content, "mtime" => now()},
+        @write_opts
+      )
       |> upsert_reply(
         [
           ok: "Note saved: #{path}",
@@ -428,11 +442,16 @@ defmodule Engram.MCP.Handlers do
         {:error, :not_found} ->
           content = "# #{Path.basename(path, ".md")}\n\n#{text}"
 
-          Notes.upsert_note(user, vault, %{
-            "path" => path,
-            "content" => content,
-            "mtime" => now()
-          })
+          Notes.upsert_note(
+            user,
+            vault,
+            %{
+              "path" => path,
+              "content" => content,
+              "mtime" => now()
+            },
+            @write_opts
+          )
           |> upsert_reply(
             [
               ok: "Note created: #{path}",
@@ -961,12 +980,17 @@ defmodule Engram.MCP.Handlers do
                [replacement] ++ Enum.drop(lines, e))
             |> Enum.join("\n")
 
-          Notes.upsert_note(user, vault, %{
-            "path" => path,
-            "content" => final_content,
-            "mtime" => now(),
-            "base_hash" => note.content_hash
-          })
+          Notes.upsert_note(
+            user,
+            vault,
+            %{
+              "path" => path,
+              "content" => final_content,
+              "mtime" => now(),
+              "base_hash" => note.content_hash
+            },
+            @write_opts
+          )
           |> upsert_reply(
             [
               ok: "Section '#{heading}' updated in #{path}",
@@ -1051,12 +1075,17 @@ defmodule Engram.MCP.Handlers do
          # content and content_hash go stale together.
          {:ok, current} <- Notes.authoritative_content(user, note),
          {:ok, new_content} <- rebuild_or_refuse(rebuild.(current)) do
-      case Notes.upsert_note(user, vault, %{
-             "path" => path,
-             "content" => new_content,
-             "mtime" => now(),
-             "base_hash" => note.content_hash
-           }) do
+      case Notes.upsert_note(
+             user,
+             vault,
+             %{
+               "path" => path,
+               "content" => new_content,
+               "mtime" => now(),
+               "base_hash" => note.content_hash
+             },
+             @write_opts
+           ) do
         {:error, :version_conflict, _} when attempt == 0 ->
           rmw_upsert(user, vault, path, rebuild, 1)
 
@@ -1527,12 +1556,17 @@ defmodule Engram.MCP.Handlers do
   end
 
   defp patch_upsert(user, vault, path, note, new_content, count) do
-    Notes.upsert_note(user, vault, %{
-      "path" => path,
-      "content" => new_content,
-      "mtime" => now(),
-      "base_hash" => note.content_hash
-    })
+    Notes.upsert_note(
+      user,
+      vault,
+      %{
+        "path" => path,
+        "content" => new_content,
+        "mtime" => now(),
+        "base_hash" => note.content_hash
+      },
+      @write_opts
+    )
     |> upsert_reply(
       [
         ok: "Replaced #{count} occurrence(s) in #{path}",
