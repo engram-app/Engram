@@ -27,7 +27,8 @@ defmodule Engram.Notes do
     Identity,
     Note,
     OkfFields,
-    PathSanitizer
+    PathSanitizer,
+    Revisions
   }
 
   alias Engram.Observability.PostHog
@@ -1274,7 +1275,7 @@ defmodule Engram.Notes do
             mtime: decrypted.mtime
           }
 
-          case move_note(decrypted, base_attrs, user, sanitized_path, folder) do
+          case move_note(decrypted, base_attrs, user, sanitized_path, folder, "sync") do
             {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
               case Crypto.maybe_decrypt_note_fields(updated, user) do
                 {:ok, moved} ->
@@ -1440,7 +1441,7 @@ defmodule Engram.Notes do
         mtime: prior.mtime
       }
 
-      case move_note(prior, base_attrs, user, sanitized_path, folder) do
+      case move_note(prior, base_attrs, user, sanitized_path, folder, "sync") do
         {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
           case Crypto.maybe_decrypt_note_fields(updated, user) do
             {:ok, decrypted} ->
@@ -1624,16 +1625,19 @@ defmodule Engram.Notes do
   # No live note exists at this path. Route by the client-supplied note_id.
   # Must run inside the caller's `Repo.with_tenant` block (does tenant-scoped
   # reads/writes).
-  defp upsert_pathless(
-         client_id,
-         vault,
-         base_attrs,
-         user,
-         sanitized_path,
-         folder,
-         tags,
-         lookup_query
-       ) do
+  defp upsert_pathless(%{
+         client_id: client_id,
+         vault: vault,
+         base: base_attrs,
+         user: user,
+         path: sanitized_path,
+         folder: folder,
+         tags: tags,
+         query: lookup_query,
+         opts: opts
+       }) do
+    actor = Keyword.get(opts, :actor, "api")
+
     case existing_by_client_id(client_id, vault) do
       %Note{deleted_at: nil} = live ->
         # Live id-collision: this note_id already names a LIVE note at a
@@ -1660,7 +1664,7 @@ defmodule Engram.Notes do
         if recent_same_path_tombstone?(prior, sanitized_path, user) do
           {:error, :recently_deleted}
         else
-          move_note(prior, base_attrs, user, sanitized_path, folder)
+          move_note(prior, base_attrs, user, sanitized_path, folder, actor)
         end
 
       nil ->
@@ -1715,7 +1719,7 @@ defmodule Engram.Notes do
   # constraint, so a rare race (another live note grabbed the target path
   # between the lookup and this update) surfaces as `{:error, changeset}`
   # instead of raising and aborting the tenant transaction.
-  defp move_note(prior, base_attrs, user, sanitized_path, folder) do
+  defp move_note(prior, base_attrs, user, sanitized_path, folder, actor) do
     was_tombstoned = not is_nil(prior.deleted_at)
 
     with {:ok, crdt} <-
@@ -1768,6 +1772,13 @@ defmodule Engram.Notes do
               if was_tombstoned do
                 :ok = UsageMeters.inc_notes_count(user.id, 1)
               end
+
+            # #1710. AFTER the fenced write, same transaction: a lost fence
+            # returns :stale_snapshot below and must record nothing. `prior` is
+            # the PRE-write row. The hash check keeps a pure rename out of history.
+            _ =
+              if prior.content_hash != crdt.content_hash,
+                do: Revisions.record_write(prior, user, actor)
 
             # Tagged `:moved` (not the plain 4-tuple do_rewrite_note returns) so
             # the caller broadcasts unconditionally: a rename keeps the same
@@ -1827,7 +1838,8 @@ defmodule Engram.Notes do
 
       true ->
         do_rewrite_note(existing, base_attrs, user, sanitized_path, folder,
-          db_mode: Keyword.get(opts, :db_mode)
+          db_mode: Keyword.get(opts, :db_mode),
+          actor: Keyword.get(opts, :actor, "api")
         )
     end
   end
@@ -1878,7 +1890,7 @@ defmodule Engram.Notes do
     result =
       case Repo.one(w.query) do
         nil ->
-          upsert_pathless(w.client_id, w.vault, w.base, w.user, w.path, w.folder, w.tags, w.query)
+          upsert_pathless(w)
 
         existing ->
           # Test-only seam: parks here, between the row read and the write, so a
@@ -1999,6 +2011,15 @@ defmodule Engram.Notes do
           # so callers can include the stored hash in broadcast digests without
           # re-deriving it.
           {:ok, updated} ->
+            # #1710. AFTER the fenced write, in the same transaction:
+            # `lookup_and_write` retries a lost fence INSIDE this transaction,
+            # so a history step placed before the write would commit a version
+            # for the losing attempt. `existing` is the PRE-write row. The
+            # hash check keeps a write that rewrote no text out of history.
+            _ =
+              if existing.content_hash != crdt.content_hash,
+                do: Revisions.record_write(existing, user, Keyword.get(opts, :actor, "api"))
+
             {:ok, {existing.content_hash, updated, crdt.merged_text, crdt.content_hash}}
 
           {:error, changeset} ->

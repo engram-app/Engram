@@ -56,4 +56,77 @@ defmodule Engram.Notes.RevisionsWritePathTest do
       assert length(revisions(u, note.id)) == count
     end
   end
+
+  describe "upsert_note" do
+    test "an update records with the caller's actor", %{user: u, vault: v} do
+      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "up.md", "content" => "v1"})
+
+      {:ok, _} = Notes.upsert_note(u, v, %{"path" => "up.md", "content" => "v2"}, actor: "mcp")
+
+      revs = revisions(u, note.id)
+      assert text_of(u, Enum.find(revs, &(&1.origin == "baseline"))) == "v1"
+      assert %Revision{actor: "mcp"} = open(revs)
+    end
+
+    test "no actor means \"api\"", %{user: u, vault: v} do
+      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "api.md", "content" => "v1"})
+      {:ok, _} = Notes.upsert_note(u, v, %{"path" => "api.md", "content" => "v2"})
+      assert %Revision{actor: "api"} = open(revisions(u, note.id))
+    end
+
+    test "you typing, then an MCP write: your version holds exactly your text",
+         %{user: u, vault: v} do
+      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "split.md", "content" => "start"})
+      checkpoint_text(u, v, note.id, "you typed this")
+      yours = open(revisions(u, note.id))
+
+      {:ok, _} =
+        Notes.upsert_note(u, v, %{"path" => "split.md", "content" => "ai rewrote"}, actor: "mcp")
+
+      revs = revisions(u, note.id)
+      assert text_of(u, Enum.find(revs, &(&1.id == yours.id))) == "you typed this"
+      assert %Revision{actor: "mcp"} = open(revs)
+    end
+
+    test "an idempotent re-push records nothing", %{user: u, vault: v} do
+      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "same.md", "content" => "v1"})
+      {:ok, _} = Notes.upsert_note(u, v, %{"path" => "same.md", "content" => "v2"}, actor: "mcp")
+      count = length(revisions(u, note.id))
+
+      {:ok, _} = Notes.upsert_note(u, v, %{"path" => "same.md", "content" => "v2"}, actor: "mcp")
+
+      assert length(revisions(u, note.id)) == count
+    end
+
+    test "batch updates record as import", %{user: u, vault: v} do
+      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "bulk.md", "content" => "v1"})
+      Notes.batch_upsert_notes(u, v, [%{"path" => "bulk.md", "content" => "v2"}])
+      assert %Revision{actor: "import", origin: "import"} = open(revisions(u, note.id))
+    end
+
+    test "a content-changing id-keyed move records with the caller's actor",
+         %{user: u, vault: v} do
+      id = UUIDv7.generate()
+      {:ok, _} = Notes.upsert_note(u, v, %{"id" => id, "path" => "A.md", "content" => "v1"})
+      :ok = Notes.delete_note(u, v, "A.md")
+
+      {:ok, moved} =
+        Notes.upsert_note(u, v, %{"id" => id, "path" => "B.md", "content" => "v2"}, actor: "mcp")
+
+      assert moved.path == "B.md"
+      assert %Revision{actor: "mcp"} = open(revisions(u, id))
+    end
+
+    test "a pure id-keyed rename records nothing", %{user: u, vault: v} do
+      id = UUIDv7.generate()
+      {:ok, _} = Notes.upsert_note(u, v, %{"id" => id, "path" => "A.md", "content" => "v1"})
+      :ok = Notes.delete_note(u, v, "A.md")
+      count = length(revisions(u, id))
+
+      {:ok, _} =
+        Notes.upsert_note(u, v, %{"id" => id, "path" => "B.md", "content" => "v1"}, actor: "mcp")
+
+      assert length(revisions(u, id)) == count
+    end
+  end
 end
