@@ -1,6 +1,7 @@
 import {
 	keepPreviousData,
 	type QueryClient,
+	type QueryFunctionContext,
 	useMutation,
 	useQuery,
 	useQueryClient,
@@ -207,14 +208,52 @@ const MAX_STALE_TREE_REFETCHES = 3;
  * so it cannot oscillate between two states; each iteration strictly consumes
  * the generation value that triggered it.
  */
-async function fetchVaultTreeFresh(): Promise<VaultTree> {
+async function fetchVaultTreeFresh({ client, queryKey }: QueryFunctionContext): Promise<VaultTree> {
 	let seen = treeInvalidationGen;
 	let tree = await api.get<VaultTree>("/vault/tree");
 	for (let i = 0; treeInvalidationGen !== seen && i < MAX_STALE_TREE_REFETCHES; i++) {
 		seen = treeInvalidationGen;
 		tree = await api.get<VaultTree>("/vault/tree");
 	}
-	return tree;
+	return rebasePendingTreeWrites(client, queryKey[1], tree);
+}
+
+/**
+ * Mutation key for the bulk note writes whose optimistic patch must survive a
+ * refetch. Each is one crdt op per note, and the sync events for the first ones
+ * trigger a tree refetch while the rest are still in flight, so the server's
+ * answer is half-applied. Landing it as-is snapped the unfinished notes back
+ * to where they came from until the batch settled.
+ */
+const TREE_WRITE_KEY = "vault-tree-write";
+
+/** The write's optimistic patch, re-applied to every tree fetched while it is
+ *  pending. Must be idempotent: the server may already have applied part or
+ *  all of it. */
+interface TreeWriteMeta extends Record<string, unknown> {
+	// Method syntax on purpose: its parameters are bivariant, so each hook can
+	// type `vars` as its own variables and still satisfy this.
+	rebase(tree: VaultTree, vars: unknown): VaultTree;
+}
+
+/**
+ * Server tree + the writes still in flight = what the user should see. Read
+ * AFTER the fetch resolves, so a write that failed while the request was out
+ * (its settle refetch is this very fetch) is no longer pending and is not
+ * re-applied.
+ */
+function rebasePendingTreeWrites(
+	client: QueryClient,
+	vaultId: unknown,
+	tree: VaultTree,
+): VaultTree {
+	const pending = client
+		.getMutationCache()
+		.findAll({ mutationKey: [TREE_WRITE_KEY, vaultId], status: "pending" });
+	return pending.reduce((t, m) => {
+		const rebase = m.options.meta?.rebase;
+		return typeof rebase === "function" ? rebase(t, m.state.variables) : t;
+	}, tree);
 }
 
 /**
@@ -2031,6 +2070,10 @@ export function useBatchDeleteNotes() {
 		// failure leaves some ids deleted while onError restores every row).
 		// Fine for typical multi-selects; add a server batch op if very large
 		// selections appear.
+		mutationKey: [TREE_WRITE_KEY, vaultId],
+		meta: {
+			rebase: (t: VaultTree, v: { ids: string[] }) => removeNotes(t, v.ids),
+		} satisfies TreeWriteMeta,
 		mutationFn: async ({ ids }) => {
 			await Promise.all(ids.map((id) => crdtDeleteNote(id)));
 			return { deleted: ids.length };
@@ -2070,6 +2113,11 @@ export function useBatchMoveNotes() {
 		{ ids: string[]; target_folder: string; paths?: Record<string, string> },
 		TreeContext
 	>({
+		mutationKey: [TREE_WRITE_KEY, vaultId],
+		meta: {
+			rebase: (t: VaultTree, v: { ids: string[]; target_folder: string }) =>
+				moveNotes(t, v.ids, v.target_folder),
+		} satisfies TreeWriteMeta,
 		// Move = one crdt_create per id at `target_folder/<current basename>` (the
 		// rename-as-move relocate). `paths` (id → current path) MUST be resolved by
 		// the caller BEFORE the optimistic onMutate re-paths the tree — resolving

@@ -39,6 +39,7 @@ import {
 	useUploadAttachment,
 	useVaults,
 	type VaultTree,
+	vaultTreeQueryOptions,
 } from "./queries";
 import { dirOf } from "./vault-tree-patch";
 
@@ -2349,5 +2350,85 @@ describe("useMe outside a QueryClientProvider", () => {
 	it("does not throw when the client is passed explicitly", () => {
 		const client = new QueryClient();
 		expect(() => renderHook(() => useMe({ enabled: false, client }))).not.toThrow();
+	});
+});
+
+// A bulk move/delete is one crdt op per note, and the sync events for the
+// first ones trigger a tree refetch while the rest are still in flight. That
+// response is half-applied. Every tree fetch therefore re-applies the still-
+// pending writes on top of what the server sent, so the optimistic state
+// survives any refetch and nothing has to hold sync back.
+describe("tree fetches rebase pending bulk writes", () => {
+	const note = (id: string, path: string) => ({ id, path, created_at: "c", updated_at: "u" });
+	const tree = (...notes: ReturnType<typeof note>[]): VaultTree => ({
+		folders: [],
+		notes,
+		attachments: [],
+	});
+	const paths = () =>
+		(qc.getQueryData<VaultTree>(["vault-tree", "42"])?.notes ?? [])
+			.map((n) => `${n.id}:${n.path}`)
+			.sort();
+	const refetchTree = () => qc.fetchQuery({ ...vaultTreeQueryOptions("42"), staleTime: 0 });
+
+	it("keeps a pending move when a half-applied tree lands", async () => {
+		qc.setQueryData(["vault-tree", "42"], tree(note("1", "a/x.md"), note("2", "b/y.md")));
+		const releases: Array<(v: string) => void> = [];
+		crdtCreateNote.mockImplementation(() => new Promise((r) => releases.push(r)));
+		const { result } = renderHook(() => useBatchMoveNotes(), { wrapper });
+		act(() => {
+			result.current.mutate({
+				ids: ["1", "2"],
+				target_folder: "dst",
+				paths: { "1": "a/x.md", "2": "b/y.md" },
+			});
+		});
+		await waitFor(() => expect(releases).toHaveLength(2));
+
+		// The server has committed note 1's move but not note 2's yet.
+		get.mockResolvedValueOnce(tree(note("1", "dst/x.md"), note("2", "b/y.md")));
+		await act(() => refetchTree());
+		expect(paths()).toEqual(["1:dst/x.md", "2:dst/y.md"]);
+
+		get.mockResolvedValue(tree(note("1", "dst/x.md"), note("2", "dst/y.md")));
+		await act(async () => {
+			for (const r of releases) {
+				r("");
+			}
+		});
+		await waitFor(() => expect(result.current.isSuccess).toBe(true));
+		expect(paths()).toEqual(["1:dst/x.md", "2:dst/y.md"]);
+	});
+
+	it("keeps a pending delete when a half-applied tree lands", async () => {
+		qc.setQueryData(
+			["vault-tree", "42"],
+			tree(note("1", "x.md"), note("2", "y.md"), note("3", "z.md")),
+		);
+		crdtDeleteNote.mockImplementation(() => new Promise(() => {}));
+		const { result } = renderHook(() => useBatchDeleteNotes(), { wrapper });
+		act(() => {
+			result.current.mutate({ ids: ["1", "2"] });
+		});
+		await waitFor(() => expect(crdtDeleteNote).toHaveBeenCalledTimes(2));
+
+		get.mockResolvedValueOnce(tree(note("2", "y.md"), note("3", "z.md")));
+		await act(() => refetchTree());
+		expect(paths()).toEqual(["3:z.md"]);
+	});
+
+	// The settle refetch runs after the failure; re-applying the failed move
+	// there would show notes somewhere the server never put them.
+	it("does not re-apply a move that failed", async () => {
+		qc.setQueryData(["vault-tree", "42"], tree(note("1", "a/x.md")));
+		crdtCreateNote.mockImplementation(() => Promise.reject(new Error("nope")));
+		get.mockResolvedValue(tree(note("1", "a/x.md")));
+		const { result } = renderHook(() => useBatchMoveNotes(), { wrapper });
+		act(() => {
+			result.current.mutate({ ids: ["1"], target_folder: "dst", paths: { "1": "a/x.md" } });
+		});
+		await waitFor(() => expect(result.current.isError).toBe(true));
+		await act(() => refetchTree());
+		expect(paths()).toEqual(["1:a/x.md"]);
 	});
 });
