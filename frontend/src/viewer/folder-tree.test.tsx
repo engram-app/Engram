@@ -636,6 +636,58 @@ describe("FolderTree (HT)", () => {
 			expect(vars.target_folder).toBe("");
 		});
 
+		// A range from a folder down past its own notes selects both the folder
+		// and what is inside it. Acting on both moved notes OUT of the folder
+		// they were travelling with, and deleted them twice (a per-note delete
+		// racing the folder's cascade).
+		it("acts on a selected folder, not also on the notes inside it", async () => {
+			mock.folders = [{ id: "1", parent_id: null, name: "Projects", count: 1 }];
+			mock.notes = [
+				{ ...note("42", "a"), path: "Projects/a.md", folder: "Projects" },
+				note("43", "b"),
+			];
+			renderTree();
+			fireEvent.click(await screen.findByRole("treeitem", { name: "Projects" }));
+			await screen.findByRole("treeitem", { name: "a" });
+			fireEvent.click(screen.getByRole("treeitem", { name: "b" }), { shiftKey: true });
+			expect(screen.getByRole("treeitem", { name: "a" })).toHaveAttribute("aria-selected", "true");
+			fireEvent.contextMenu(screen.getByRole("treeitem", { name: "b" }), {
+				clientX: 5,
+				clientY: 5,
+			});
+			fireEvent.click(await screen.findByRole("menuitem", { name: "Delete 2 items" }));
+			fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+			expect(batchDeleteFoldersMutate).toHaveBeenCalledWith({ ids: ["1"] });
+			expect(batchDeleteNotesMutate).toHaveBeenCalledWith({ ids: ["43"] });
+		});
+
+		// headless-tree keeps selected ids after their rows are gone (deleted on
+		// another device, or inside a folder deleted from the single-row menu).
+		// Sending one to the server failed the whole batch.
+		it("drops selected rows that no longer exist", async () => {
+			const { rerender } = renderTree();
+			await shiftSelectAll();
+			mock.notes = [note("42", "a"), note("43", "b")];
+			rerender(
+				<QueryClientProvider client={new QueryClient()}>
+					<MemoryRouter>
+						<FolderTreeProvider>
+							<FolderTree />
+						</FolderTreeProvider>
+					</MemoryRouter>
+				</QueryClientProvider>,
+			);
+			await waitFor(() => expect(screen.queryByRole("treeitem", { name: "c" })).toBeNull());
+			fireEvent.contextMenu(screen.getByRole("treeitem", { name: "b" }), {
+				clientX: 5,
+				clientY: 5,
+			});
+			fireEvent.click(await screen.findByRole("menuitem", { name: "Delete 2 items" }));
+			fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+			const [{ ids }] = batchDeleteNotesMutate.mock.calls[0] as [{ ids: string[] }];
+			expect([...ids].sort()).toEqual(["42", "43"]);
+		});
+
 		// Obsidian's rule: right-clicking OUTSIDE the selection acts on that row
 		// alone, so the user can't bulk-delete rows they aren't pointing at.
 		it("right-click outside the selection opens the single-row menu", async () => {

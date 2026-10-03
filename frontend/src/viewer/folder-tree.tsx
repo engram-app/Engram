@@ -423,16 +423,50 @@ export default function FolderTree() {
 		setDialog({ kind: "move", nodes, itemIds });
 	}
 
-	// Ids of every selected row, in tree order. Only a real multi-selection
-	// counts: HT selects whatever was clicked last, so one id is just "the row
-	// you clicked".
-	const selectedIds = tree.getSelectedItems().map((i) => i.getId());
-	const multiSelect = selectedIds.length > 1;
+	// Path of a row the tree still holds, or undefined once it is gone.
+	function livePath(itemId: string): string | undefined {
+		const p = parseItemId(itemId);
+		if (p.kind === "note") {
+			return lookupNote(p.id)?.path;
+		}
+		if (p.kind === "folder") {
+			return allFolders.find((f) => f.id === p.id)?.name;
+		}
+		if (p.kind === "attachment") {
+			return attachments.some((a) => a.path === p.path) ? p.path : undefined;
+		}
+		return undefined;
+	}
+
+	// What a bulk action should act on. Two things HT's raw selection gets wrong:
+	// - it keeps ids after their rows are gone (deleted on another device, or
+	//   inside a folder deleted from the single-row menu), and sending one to
+	//   the server fails the whole batch;
+	// - a range from a folder down past its own notes holds both, and acting on
+	//   both pulled the notes out of the folder they were moving with, or
+	//   deleted them twice. The folder already carries them.
+	function actionableSelection(ids: string[]): string[] {
+		const rows = ids.flatMap((id) => {
+			const path = livePath(id);
+			return path === undefined ? [] : [{ id, path }];
+		});
+		const folderPaths = rows.filter((r) => parseItemId(r.id).kind === "folder").map((r) => r.path);
+		return rows.filter((r) => !folderPaths.some((f) => r.path.startsWith(`${f}/`))).map((r) => r.id);
+	}
+
+	// Raw ids decide whether a right-click landed INSIDE the selection; the
+	// actionable ones are what the menu acts on and counts. Only a real
+	// multi-selection counts: HT selects whatever was clicked last, so one id is
+	// just "the row you clicked".
+	const rawSelectedIds = tree.getSelectedItems().map((i) => i.getId());
+	const selectedIds = actionableSelection(rawSelectedIds);
+	const multiSelect = rawSelectedIds.length > 1;
 
 	function handleContextMenu(itemId: string, x: number, y: number) {
 		// Obsidian's rule: right-clicking OUTSIDE the selection acts on that row
 		// alone, so a bulk action can never hit rows the user isn't pointing at.
-		const selection = multiSelect && selectedIds.includes(itemId) ? selectedIds : undefined;
+		const selection =
+			selectedIds.length > 1 && rawSelectedIds.includes(itemId) ? selectedIds : undefined;
 		setDialog({ kind: "context", itemId, position: { x, y }, selection });
 	}
 
