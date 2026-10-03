@@ -172,7 +172,7 @@ describe("PlanChangePanel", () => {
 		// `subscription_new_items_not_valid` for cadence swaps). The picker
 		// would 422 on every selection — render the notice instead.
 		const trial = billing({
-			tier: "trial",
+			tier: "pro",
 			trial_days_remaining: 4,
 			subscription: { status: "trialing", tier: "pro", current_period_end: "2026-06-11" },
 		});
@@ -190,7 +190,7 @@ describe("PlanChangePanel", () => {
 	it('trial: "Cancel free trial" button invokes onSwitchToCancel', () => {
 		const onSwitchToCancel = vi.fn();
 		const trial = billing({
-			tier: "trial",
+			tier: "pro",
 			subscription: { status: "trialing", tier: "pro", current_period_end: "2026-06-11" },
 		});
 
@@ -209,7 +209,7 @@ describe("PlanChangePanel", () => {
 		// (`subscription_locked_renewal` or similar) — the user has no way
 		// to know they already canceled.
 		const trial = billing({
-			tier: "trial",
+			tier: "pro",
 			subscription: { status: "trialing", tier: "pro", current_period_end: "2026-06-11" },
 		});
 

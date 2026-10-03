@@ -1112,7 +1112,7 @@ export function useDeleteSelf() {
 
 // Billing types
 export interface BillingStatus {
-	tier: "free" | "none" | "trial" | "starter" | "pro";
+	tier: "free" | "starter" | "pro";
 	active: boolean;
 	trial_days_remaining: number;
 	subscription: {

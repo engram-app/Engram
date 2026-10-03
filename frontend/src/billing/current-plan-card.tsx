@@ -6,15 +6,13 @@ import { unsearchableNotesNotice } from "./plan-cards";
 
 const TIER_LABELS: Record<BillingStatus["tier"], string> = {
 	free: "Free",
-	none: "No Plan",
-	trial: "Free Trial",
 	starter: "Starter",
 	pro: "Pro",
 };
 
-// Paid + trial tiers get the flashier pill — gradient, ring, sparkle.
-// Free/none stay muted; promoting an absent plan would mis-signal.
-const FLASHY_TIERS: BillingStatus["tier"][] = ["starter", "pro", "trial"];
+// Paid tiers get the flashier pill — gradient, ring, sparkle.
+// Free stays muted.
+const FLASHY_TIERS: BillingStatus["tier"][] = ["starter", "pro"];
 
 export default function CurrentPlanCard({
 	billing,

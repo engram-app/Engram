@@ -16,5 +16,5 @@ export function useIsFreeTier(): boolean {
 	if (!billingEnabled) {
 		return false;
 	}
-	return data?.tier === "free" || data?.tier === "none";
+	return data?.tier === "free";
 }
