@@ -3,7 +3,6 @@ defmodule Engram.NotesTest do
   use Oban.Testing, repo: Engram.Repo
 
   alias Engram.Notes
-  alias Engram.Notes.CrdtBridge
 
   setup do
     user = insert(:user)

@@ -1,8 +1,6 @@
 defmodule Engram.NotesOkfWriteTest do
   use Engram.DataCase, async: true
 
-  import Ecto.Query
-
   alias Engram.{Crypto, Notes, Repo, Vaults}
   alias Engram.Notes.Note
 
