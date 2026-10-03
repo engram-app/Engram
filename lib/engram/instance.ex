@@ -8,9 +8,8 @@ defmodule Engram.Instance do
     that creates the admin user. Subsequent signups read it via
     `bootstrap_pending?/0` (one PK SELECT, independent of user count).
   """
-  import Ecto.Query, only: [from: 2]
-
   alias Engram.Instance.InstanceSettings
+  alias Engram.Instance.TelemetrySettings
   alias Engram.Repo
 
   @default_mode "invite_only"
@@ -95,13 +94,25 @@ defmodule Engram.Instance do
   end
 
   @doc """
-  Random anonymous id for this install, minted on first call. COALESCE in the
-  upsert keeps the first writer's id if two nodes mint concurrently.
+  Random anonymous id for this install, minted on first call. The insert is
+  `ON CONFLICT DO NOTHING` and the id is then read back, so two nodes minting
+  at once converge on the first writer's id.
   """
   def install_id do
-    case settings() do
-      %InstanceSettings{install_id: id} when is_binary(id) -> id
-      _ -> mint_install_id()
+    case telemetry_row() do
+      %TelemetrySettings{install_id: id} ->
+        id
+
+      nil ->
+        {:ok, _} =
+          Repo.insert(%TelemetrySettings{id: @singleton_id, install_id: Ecto.UUID.generate()},
+            on_conflict: :nothing,
+            conflict_target: :id,
+            skip_tenant_check: true
+          )
+
+        %TelemetrySettings{install_id: id} = telemetry_row()
+        id
     end
   end
 
@@ -110,17 +121,17 @@ defmodule Engram.Instance do
   on), `true` = acknowledged, `false` = turned off.
   """
   def telemetry_enabled do
-    case settings() do
+    case telemetry_row() do
       nil -> nil
-      %InstanceSettings{telemetry_enabled: v} -> v
+      %TelemetrySettings{telemetry_enabled: v} -> v
     end
   end
 
   def set_telemetry_enabled(enabled) when is_boolean(enabled) do
     Repo.insert(
-      %InstanceSettings{
+      %TelemetrySettings{
         id: @singleton_id,
-        registration_mode: default_mode(),
+        install_id: Ecto.UUID.generate(),
         telemetry_enabled: enabled
       },
       on_conflict: [set: [telemetry_enabled: enabled, updated_at: DateTime.utc_now(:second)]],
@@ -129,28 +140,5 @@ defmodule Engram.Instance do
     )
   end
 
-  defp mint_install_id do
-    new = Ecto.UUID.generate()
-
-    {:ok, %InstanceSettings{install_id: id}} =
-      Repo.insert(
-        %InstanceSettings{id: @singleton_id, registration_mode: default_mode(), install_id: new},
-        on_conflict:
-          from(s in InstanceSettings,
-            update: [
-              set: [install_id: fragment("COALESCE(?, ?)", s.install_id, type(^new, Ecto.UUID))]
-            ]
-          ),
-        conflict_target: :id,
-        returning: true,
-        skip_tenant_check: true
-      )
-
-    id
-  end
-
-  defp settings, do: Repo.get(InstanceSettings, @singleton_id, skip_tenant_check: true)
-
-  # A fresh row must not freeze the schema default over the app-env default.
-  defp default_mode, do: Application.get_env(:engram, :default_registration_mode, @default_mode)
+  defp telemetry_row, do: Repo.get(TelemetrySettings, @singleton_id, skip_tenant_check: true)
 end

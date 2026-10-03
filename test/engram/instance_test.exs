@@ -26,16 +26,21 @@ defmodule Engram.InstanceTest do
       id = Instance.install_id()
       assert {:ok, _} = Ecto.UUID.cast(id)
       assert Instance.install_id() == id
-      assert Engram.Repo.aggregate(Engram.Instance.InstanceSettings, :count) == 1
+      assert Engram.Repo.aggregate(Engram.Instance.TelemetrySettings, :count) == 1
     end
 
-    test "does not freeze the app-env registration default into a new row" do
+    test "never creates an instance_settings row, so it cannot freeze the registration default" do
       prev = Application.get_env(:engram, :default_registration_mode)
-      Application.put_env(:engram, :default_registration_mode, "open")
+      Application.put_env(:engram, :default_registration_mode, "invite_only")
       on_exit(fn -> Application.put_env(:engram, :default_registration_mode, prev) end)
 
       _ = Instance.install_id()
+      assert Engram.Repo.aggregate(Engram.Instance.InstanceSettings, :count) == 0
+
+      # An env change after the first ping still applies.
+      Application.put_env(:engram, :default_registration_mode, "open")
       assert Instance.registration_mode() == "open"
+      assert Instance.bootstrap_pending?()
     end
 
     test "leaves an existing registration_mode and bootstrap stamp alone" do
@@ -65,13 +70,19 @@ defmodule Engram.InstanceTest do
       assert Instance.registration_mode() == "open"
     end
 
-    test "set_telemetry_enabled/1 on a fresh instance keeps the app-env default mode" do
-      prev = Application.get_env(:engram, :default_registration_mode)
-      Application.put_env(:engram, :default_registration_mode, "open")
-      on_exit(fn -> Application.put_env(:engram, :default_registration_mode, prev) end)
+    test "answering before any ping still mints one stable install_id" do
+      {:ok, _} = Instance.set_telemetry_enabled(false)
+      id = Instance.install_id()
 
+      assert {:ok, _} = Ecto.UUID.cast(id)
+      assert Instance.install_id() == id
+      assert Instance.telemetry_enabled() == false
+      assert Engram.Repo.aggregate(Engram.Instance.TelemetrySettings, :count) == 1
+    end
+
+    test "set_telemetry_enabled/1 never creates an instance_settings row either" do
       {:ok, _} = Instance.set_telemetry_enabled(true)
-      assert Instance.registration_mode() == "open"
+      assert Engram.Repo.aggregate(Engram.Instance.InstanceSettings, :count) == 0
     end
   end
 end

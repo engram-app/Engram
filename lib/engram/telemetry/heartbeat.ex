@@ -45,7 +45,14 @@ defmodule Engram.Telemetry.Heartbeat do
 
   @doc "True when the operator's environment forbids telemetry, whatever the stored answer says."
   def env_disabled? do
-    System.get_env("DO_NOT_TRACK") == "1" or System.get_env("ENGRAM_TELEMETRY") == "off"
+    env_in?("DO_NOT_TRACK", ~w(1 true yes)) or env_in?("ENGRAM_TELEMETRY", ~w(off))
+  end
+
+  defp env_in?(var, values) do
+    case System.get_env(var) do
+      nil -> false
+      v -> String.downcase(String.trim(v)) in values
+    end
   end
 
   def payload do

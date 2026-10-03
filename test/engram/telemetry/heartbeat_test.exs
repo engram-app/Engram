@@ -66,6 +66,21 @@ defmodule Engram.Telemetry.HeartbeatTest do
       refute Heartbeat.enabled?()
     end
 
+    test "DO_NOT_TRACK accepts true/yes in any case, but not 0" do
+      for on <- ["true", "TRUE", "yes", "Yes"] do
+        System.put_env("DO_NOT_TRACK", on)
+        refute Heartbeat.enabled?(), "DO_NOT_TRACK=#{on} should disable"
+      end
+
+      System.put_env("DO_NOT_TRACK", "0")
+      assert Heartbeat.enabled?()
+    end
+
+    test "ENGRAM_TELEMETRY=OFF is case-insensitive" do
+      System.put_env("ENGRAM_TELEMETRY", "OFF")
+      refute Heartbeat.enabled?()
+    end
+
     test "ENGRAM_TELEMETRY=off overrides the default and an explicit yes" do
       {:ok, _} = Instance.set_telemetry_enabled(true)
       System.put_env("ENGRAM_TELEMETRY", "off")
