@@ -16,14 +16,21 @@ defmodule Engram.Telemetry.InstallPing do
   end
 
   @fields [:id, :version, :os, :arch, :runtime]
+  @oses ~w(linux darwin windows other)
+  @arches ~w(amd64 arm64 other)
+  @runtimes ~w(docker source)
+
+  def oses, do: @oses
+  def arches, do: @arches
+  def runtimes, do: @runtimes
 
   def changeset(ping, attrs) do
     ping
     |> cast(attrs, @fields)
     |> validate_required(@fields)
     |> validate_length(:version, max: 32)
-    |> validate_inclusion(:os, ~w(linux darwin windows other))
-    |> validate_inclusion(:arch, ~w(amd64 arm64 other))
-    |> validate_inclusion(:runtime, ~w(docker source))
+    |> validate_inclusion(:os, @oses)
+    |> validate_inclusion(:arch, @arches)
+    |> validate_inclusion(:runtime, @runtimes)
   end
 end
