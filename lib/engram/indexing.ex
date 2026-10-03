@@ -309,11 +309,16 @@ defmodule Engram.Indexing do
 
   # Bounded upsert bodies: thousands of 1024-dim float vectors as one JSON PUT
   # is tens of MB; Qdrant handles batches fine but the single request does not.
+  # 64, not 256: JSON-encoding a batch is this process's heap peak (each float
+  # becomes a list cell plus a formatted binary), and at 256 it measured ~54 MB
+  # on its own. 64 keeps it ~4x lower for a few more round trips per big note.
+  @upsert_batch 64
+
   defp upsert_points_batched(points) do
     points
-    |> Enum.chunk_every(256)
+    |> Enum.chunk_every(@upsert_batch)
     |> Enum.reduce_while(:ok, fn batch, :ok ->
-      case Qdrant.upsert_points(collection(), batch) do
+      case Qdrant.upsert_points(collection(), Enum.map(batch, &unpack_point/1)) do
         :ok -> {:cont, :ok}
         other -> {:halt, other}
       end
@@ -761,12 +766,27 @@ defmodule Engram.Indexing do
   defp maybe_embed(false, texts), do: {:ok, Enum.map(texts, fn _ -> nil end)}
   defp maybe_embed(true, texts), do: embed_for_indexing(texts)
 
+  # A dense vector is held as packed float32 between the embed call and the
+  # Qdrant upsert, not as the embedder's float list. As a list each element
+  # costs a cons cell plus a boxed float (~32 bytes on the process heap); packed
+  # it is 4 bytes in an off-heap binary. The whole note's vectors live until
+  # commit, so for a 2,000-chunk note that is ~65 MB of heap versus ~8 MB
+  # off-heap (prod worker OOM, 2026-10-03). Lossless: Voyage's floats ARE
+  # float32. Unpacked one upsert batch at a time in `upsert_points_batched/1`.
+  defp pack_vector(vector), do: for(x <- vector, into: <<>>, do: <<x::float-32-little>>)
+
+  defp unpack_point(%{vector: %{"dense" => dense} = named} = point) when is_binary(dense) do
+    %{point | vector: %{named | "dense" => for(<<x::float-32-little <- dense>>, do: x)}}
+  end
+
+  defp unpack_point(point), do: point
+
   defp embed_for_indexing(texts) do
     texts
     |> batch_texts()
     |> Enum.reduce_while({:ok, []}, fn batch, {:ok, acc} ->
       case do_embed_batch(batch) do
-        {:ok, vectors} -> {:cont, {:ok, [vectors | acc]}}
+        {:ok, vectors} -> {:cont, {:ok, [Enum.map(vectors, &pack_vector/1) | acc]}}
         other -> {:halt, other}
       end
     end)
