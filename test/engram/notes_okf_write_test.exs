@@ -1,8 +1,6 @@
 defmodule Engram.NotesOkfWriteTest do
   use Engram.DataCase, async: true
 
-  import Ecto.Query
-
   alias Engram.{Crypto, Notes, Repo, Vaults}
   alias Engram.Notes.Note
 
@@ -58,18 +56,5 @@ defmodule Engram.NotesOkfWriteTest do
     assert is_nil(raw.fm_timestamp)
     assert is_nil(raw.type_ciphertext)
     assert is_nil(raw.type_hmac)
-  end
-
-  test "batch upsert persists OKF columns", %{user: user, vault: vault} do
-    {:ok, _} =
-      Notes.batch_upsert_notes(user, vault, [%{"path" => "d/b.md", "content" => @content}])
-
-    {:ok, raw} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.one(from n in Note, where: n.vault_id == ^vault.id)
-      end)
-
-    assert raw.fm_timestamp == ~U[2026-05-28 14:30:00Z]
-    refute is_nil(raw.type_hmac)
   end
 end

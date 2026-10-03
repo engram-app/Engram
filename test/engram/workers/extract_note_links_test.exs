@@ -129,37 +129,6 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
 
       assert [] == all_enqueued(worker: ExtractNoteLinks)
     end
-
-    test "batch upsert enqueues one extraction job per changed note", %{
-      user: user,
-      vault: vault
-    } do
-      notes = [
-        %{"path" => "ba.md", "content" => "alpha", "mtime" => 1.0},
-        %{"path" => "bb.md", "content" => "beta", "mtime" => 1.0}
-      ]
-
-      assert {:ok, %{results: results}} = Notes.batch_upsert_notes(user, vault, notes)
-      ids = Enum.map(results, & &1.id)
-
-      jobs = all_enqueued(worker: ExtractNoteLinks)
-      assert Enum.sort(Enum.map(jobs, & &1.args["note_id"])) == Enum.sort(ids)
-    end
-
-    test "batch upsert skips the extraction job when content is unchanged", %{
-      user: user,
-      vault: vault
-    } do
-      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "bc.md", "content" => "same"})
-      Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.ExtractNoteLinks"))
-
-      assert {:ok, %{results: [%{status: :ok}]}} =
-               Notes.batch_upsert_notes(user, vault, [
-                 %{"path" => "bc.md", "content" => "same", "mtime" => 2.0}
-               ])
-
-      assert [] == all_enqueued(worker: ExtractNoteLinks)
-    end
   end
 
   describe "bind-time rename repair (lever 2)" do

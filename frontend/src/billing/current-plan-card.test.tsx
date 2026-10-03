@@ -101,7 +101,7 @@ describe("CurrentPlanCard", () => {
 		render(
 			<CurrentPlanCard
 				billing={status({
-					tier: "trial",
+					tier: "pro",
 					trial_days_remaining: 5,
 					subscription: {
 						status: "trialing",

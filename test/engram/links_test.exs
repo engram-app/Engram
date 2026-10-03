@@ -566,19 +566,6 @@ defmodule Engram.LinksTest do
       assert live.basename_hmac == expected
     end
 
-    test "batch_upsert_notes stamps basename_hmac", %{user: user, vault: vault} do
-      {:ok, %{results: [%{status: :ok}]}} =
-        Engram.Notes.batch_upsert_notes(user, vault, [
-          %{"path" => "Batch/Cased NAME.md", "content" => "x", "mtime" => 1_000.0}
-        ])
-
-      {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
-      expected = Engram.Crypto.hmac_field(filter_key, "cased name")
-
-      {:ok, [note]} = Repo.with_tenant(user.id, fn -> Repo.all(Engram.Notes.Note) end)
-      assert note.basename_hmac == expected
-    end
-
     test "upsert_attachment stamps basename_hmac", %{user: user, vault: vault} do
       {:ok, att} =
         Engram.Attachments.upsert_attachment(user, vault, %{

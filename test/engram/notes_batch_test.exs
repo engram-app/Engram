@@ -624,11 +624,9 @@ defmodule Engram.NotesBatchSetBasedTest do
       user: user,
       vault: vault
     } do
-      {:ok, %{results: r1}} =
-        Notes.batch_upsert_notes(user, vault, for(i <- 1..500, do: %{path: "BigStamp/n#{i}.md"}))
-
-      {:ok, %{results: r2}} = Notes.batch_upsert_notes(user, vault, [%{path: "BigStamp/n501.md"}])
-      assert Enum.all?(r1 ++ r2, &(&1.status == :ok))
+      for i <- 1..501 do
+        Engram.Fixtures.insert_note!(user, vault, %{path: "BigStamp/n#{i}.md", content: "x"})
+      end
 
       {:ok, _marker} = Notes.create_folder_marker(user, vault, "BigStamp")
 
@@ -644,14 +642,6 @@ defmodule Engram.NotesBatchSetBasedTest do
         end)
 
       assert length(ids) == 1003
-    end
-
-    # Upsert keeps a hard cap: each entry costs an encrypt + CRDT merge, so
-    # an unbounded request is a real compute-DoS vector, and no client sends
-    # >500 (the plugin chunks at ≤100).
-    test "batch_upsert_notes rejects more than 500 entries", %{user: user, vault: vault} do
-      params = for i <- 1..501, do: %{path: "bulk/n#{i}.md"}
-      assert {:error, :batch_too_large} = Notes.batch_upsert_notes(user, vault, params)
     end
   end
 end
