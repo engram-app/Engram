@@ -6,13 +6,13 @@ _Last verified: 2026-10-03_
 Working in code (PR engram-app/Engram#1828, not yet merged). NOT verified through the real Cloudflare edge.
 
 ## What This Is
-Opt-in daily census of self-host installs. Self-host POSTs `{id, version, os, arch, runtime}` to the SaaS collector; SaaS exposes a Grafana gauge.
+Daily census of self-host installs, **on by default** (decision 2026-10-03: opt-in would undercount badly, and an install whose admin never opens the UI would never ping). Self-host POSTs `{id, version, os, arch, runtime}` to the SaaS collector; SaaS exposes a Grafana gauge.
 
 ## Sender (self-host)
 - `lib/engram/telemetry/heartbeat.ex` (payload, `enabled?/0`, `send_ping/0`) + `lib/engram/workers/telemetry_heartbeat.ex`, Oban cron `17 5 * * *` (`config/config.exs:157`).
 - Payload is exactly `{id, version, os, arch, runtime}`. Nothing else, ever.
 - `id` = random uuid in `instance_settings.install_id` (`Engram.Instance.install_id/0`, `mint_install_id` uses a COALESCE upsert so concurrent mints keep the first).
-- Opt-in = `instance_settings.telemetry_enabled`, tri-state (NULL = never asked). Off on SaaS (`:billing_enabled`). `DO_NOT_TRACK=1` or `ENGRAM_TELEMETRY=off` override a stored opt-in.
+- State = `instance_settings.telemetry_enabled`, tri-state: `NULL` = never answered (counts as ON), `true` = acknowledged, `false` = turned off. Off on SaaS (`:billing_enabled`). `DO_NOT_TRACK=1` or `ENGRAM_TELEMETRY=off` override everything. `Heartbeat.log_boot_notice/0` prints one boot line naming the switches so the default is never silent.
 - URL is hardcoded `https://api.engram.page/api/telemetry/ping`. `app.engram.page` 405s API POSTs (workspace `docs/context/public-url-host-split.md`).
 
 ## Collector (SaaS)
@@ -21,7 +21,7 @@ Opt-in daily census of self-host installs. Self-host POSTs `{id, version, os, ar
 
 ## Admin UI (self-host)
 - `GET/PATCH /api/admin/telemetry` (`router.ex:520-521`, `EngramWeb.Admin.TelemetryController`). PATCH because the SPA api client has no `put`.
-- `frontend/src/features/admin/TelemetryTab.tsx`, `TelemetryPrompt.tsx` (ask-once card in `layout/app-layout.tsx`, self-host admins only).
+- `frontend/src/features/admin/TelemetryTab.tsx`, `TelemetryPrompt.tsx` (informational "Got it" / "Turn off" card in `layout/app-layout.tsx`, self-host admins only; the tab is a plain toggle).
 
 ## Visibility
 `engram_installs_seen{os,arch,runtime}` PromEx polling gauge (`lib/engram/prom_ex/installs.ex`), 30-day window, SaaS only. All 24 enum combos (4x3x2) emitted every poll including zeros, because a `last_value` for a vanished label set freezes at its last value. Aggregate with `max`, not `sum` (every node reports the same DB count). Never add `version` or `id` as a label.
@@ -42,3 +42,13 @@ Collector is unauthenticated: one IP can inflate the count up to the rate limit 
 ## Follow-ups not done
 - Grafana panel (lives in engram-infra).
 - Public self-host docs page (engram-marketing, `src/content/docs/docs/self-host/telemetry.mdx`).
+
+## Default-on consequences (2026-10-03)
+
+- Marketing copy that said "no telemetry" / "off by default" had to change in the same
+  release: `engram-marketing` `src/pages/index.astro`, `src/lib/features.ts` (+ 10 locale
+  strings), `docs/why-engram`. Check those before changing the default again.
+- `config/test.exs` pins `:logger` to `:warning`, so a test of an `info` log line must
+  `Logger.configure(level: :info)` or its "silent" cases pass vacuously.
+- Privacy policy (`engram-marketing` `src/legal/`) does not mention self-host at all; whether
+  the ping needs a line is a legal call, left open.
