@@ -1,10 +1,8 @@
-# AWS KMS Provider Integration — Phase 1 Gotchas
+# ExAws KMS traps
 
-_Last verified: 2026-06-18_
+_Last verified: 2026-10-03_
 
-> Non-obvious discoveries from Phase 1 (PR #110). Prevents rediscovery in Phase 2 (BootCanary polymorphism) and Phase 3 (ProviderMigration).
->
-> **Status update 2026-06-18:** All three phases shipped. Phase 2 — `Engram.Crypto.BootCanary.verify!/0` calls `Resolver.provider()` + `provider.boot_check/0` + `provider.unwrap_dek_no_fallback/2`; `MasterRotation` uses `Resolver.provider_for/1`. **Phase 3 — the cross-provider migration state machine is live:** `Engram.Crypto.ProviderMigration` (`lib/engram/crypto/provider_migration.ex`) + the `Engram.Workers.MigrateUserProvider` Oban worker + the `mix engram.migrate_provider` task (`lib/mix/tasks/engram.migrate_provider.ex`). Per-user Local→KMS migration no longer requires a DB wipe — see the corrected "Phase 3" note at the bottom.
+Prod wraps every per-user DEK with AWS KMS (`KEY_PROVIDER=aws_kms`, task-role creds). Read this before touching `Engram.AwsKms.ExAws`, `KeyProvider.AwsKms`, or any `:ex_aws` config. Per-user Local→KMS migration is `Engram.Crypto.ProviderMigration` + `mix engram.migrate_provider`.
 
 ## Architecture — Three Layers
 
@@ -98,10 +96,10 @@ config :ex_aws, :kms,
 The S3 storage backend (AWS S3 in prod / MinIO in self-host) sets **global** `:ex_aws` creds:
 
 ```elixir
-# runtime.exs — storage config
+# runtime.exs, storage config, static-creds branch (MinIO / non-AWS S3)
 config :ex_aws,
-  access_key_id: System.get_env("STORAGE_ACCESS_KEY_ID"),
-  secret_access_key: System.get_env("STORAGE_SECRET_ACCESS_KEY"),
+  access_key_id: System.fetch_env!("STORAGE_ACCESS_KEY_ID"),
+  secret_access_key: System.fetch_env!("STORAGE_SECRET_ACCESS_KEY"),
   region: System.get_env("STORAGE_REGION", "auto")
 ```
 
@@ -136,7 +134,7 @@ else
 end
 ```
 
-ExAws merges service-scoped config into the global namespace at request time, so both credential sets coexist. (See `config/runtime.exs` ~L482-500.)
+ExAws merges service-scoped config into the global namespace at request time, so both credential sets coexist. (See the `KEY_PROVIDER` block in `config/runtime.exs`.)
 
 ## Provider Tag Byte `0xAA` Rationale
 
@@ -146,12 +144,14 @@ Local provider uses `0x01` and `0x02` as version bytes within its own namespace.
 - `Engram.Crypto.KeyProvider.identify_from_blob/1` dispatches by leading byte:
 
 ```elixir
-def identify_from_blob(<<0xAA, _rest::binary>>), do: :aws_kms
-def identify_from_blob(<<0x01, 0x01, _::binary-size(60)>>), do: :local  # v1 = key rotation
-def identify_from_blob(<<0x02, 0x01, _::binary-size(60)>>), do: :local  # v2 = key rotation
+def identify_from_blob(<<0xAA, _rest::binary>>), do: {:ok, KeyProvider.AwsKms}
+def identify_from_blob(<<0x01, 0x01, _::binary-size(60)>>), do: {:ok, KeyProvider.Local}
+def identify_from_blob(<<0x02, 0x01, _::binary-size(60)>>), do: {:ok, KeyProvider.Local}
+def identify_from_blob(blob) when byte_size(blob) == 60, do: {:ok, KeyProvider.Local}
+def identify_from_blob(_other), do: {:error, :unrecognised_blob}
 ```
 
-Phase 1 shipped this helper unwired; **Phase 3 (ProviderMigration, now shipped) wires it into the read path** to route decryption during the Local→KMS migration window.
+The read path (`Engram.Crypto`) and `ProviderMigration` both dispatch on it.
 
 ## EncryptionContext for AAD Binding
 
@@ -162,7 +162,7 @@ def encryption_context(uid),
 
 Bound on every Encrypt/Decrypt/ReEncrypt call. AWS KMS enforces it — wrong `user_id` returns `InvalidCiphertextException` (mapped to `:context_mismatch`).
 
-IAM policy can further restrict via `kms:EncryptionContext:purpose` StringEquals condition (example in Phase 4 cutover checklist).
+IAM policy can further restrict via a `kms:EncryptionContext:purpose` StringEquals condition.
 
 ## Error Class Mapping
 
@@ -181,15 +181,3 @@ From `KeyProvider.AwsKms.unwrap_dek/2`:
 - **`Engram.AwsKms.ExAws` tested via Bypass** — exercises the actual ExAws request/response shapes, catches version drift.
 - **`KeyProvider.AwsKms` tested via Mox** — stubs `Engram.AwsKms`, stays hermetic.
 - **Conformance suite** (`provider_conformance_test.exs`) — parametrised loop exercises both Local and AwsKms through identical assertions. AwsKms's Mox stubs use an ETS-backed `(ciphertext → plaintext)` table so wrap→unwrap round-trips work.
-
-## Phase 1 Scope: What Ships vs Not
-
-### Ships
-- Provider + behaviour + Mox seam + conformance suite + `Config.validate!/0` extension + `runtime.exs` opt-in arm + `identify_from_blob/1` primitive.
-
-### Did NOT ship at PR #110 — now resolved
-- ~~BootCanary polymorphism (Phase 2)~~ — shipped post PR #110; see status update.
-- ~~ProviderMigration state machine (Phase 3)~~ — **SHIPPED**: `Engram.Crypto.ProviderMigration` + `Engram.Workers.MigrateUserProvider` + `mix engram.migrate_provider`. `identify_from_blob/1` is now wired into the read path so Local and KMS blobs are routed during the migration window.
-- IAM / CMK provisioning for prod — handled in **engram-infra Terraform**, not Fly. Prod runs on AWS ECS Fargate: KMS access is granted via the **task role** (no static keys in env), and the master/app secrets live in **AWS SSM Parameter Store** (SOPS-managed), NOT Fly secrets.
-
-Key impl detail (corrected): The per-user provider-migration machinery now exists, so cutover **migrates** users (re-wraps each DEK Local→KMS via `ProviderMigration`) rather than wiping the DB. The old "staging cutover wipes the DB" note applied only before Phase 3 landed.

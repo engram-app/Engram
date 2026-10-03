@@ -33,7 +33,7 @@ Restored `rds:engram-prod-2026-09-05-08-14` into `engram-prod-drill255` (db.t4g.
 
 **7 min 34 s is the instance-ready number, not end-to-end DR.** Full recovery adds the `DATABASE_URL` cutover and an ECS service redeploy on top. Budget ~15 min end-to-end and re-measure if the DB ever grows past 20 GB — restore time scales with volume size.
 
-**Content checks:** schema_migrations 51 rows, max version `20260902130000`; 39 tables, 144 indexes, 11 RLS policies, extensions `pg_stat_statements,plpgsql` — all identical to live prod. Row counts differed (restored 8271 notes / 19 vaults vs live 1885 / 11) and the delta reconciled exactly: 8 soft-deleted test vaults holding precisely 6386 notes were force-purged in prod at 08:43 by `CleanupVault` (`"force": true` jobs inserted 08:43:19–08:43:51 — the "delete permanently now" path), i.e. after the 08:14 snapshot. Live vault count matched on both sides. **Verify this kind of delta before accepting it** — a restore that silently holds different rows than you expect is the failure mode this drill exists to catch.
+**Verify row-count deltas before accepting a restore.** The 2026-09-05 drill's notes/vaults differed from live and reconciled exactly to a force-purge that ran after the snapshot. A restore that silently holds different rows than you expect is the failure mode the drill exists to catch.
 
 **Gotchas hit while running it, worth knowing before the real thing:**
 
@@ -43,14 +43,7 @@ Restored `rds:engram-prod-2026-09-05-08-14` into `engram-prod-drill255` (db.t4g.
 
 ### S3 attachments — versioning ✅, delete→restore proof PASSED
 
-Proof run 2026-09-05 against the live prod bucket with the `engram-breakglass` identity (the `engram-infra-operator` identity is control-plane only and gets `AccessDenied` on `s3:PutObject` — that separation is deliberate, do **not** broaden the operator policy):
-
-1. `put-object` a 36-byte test object under `_dr-drill/` → version `QDY5Jd…`
-2. `delete-object` (no version-id) → delete marker `lra2.O3…`; `get-object` then returns `NoSuchKey` ✅
-3. `list-object-versions` shows the original version intact, delete marker latest ✅
-4. `delete-object --version-id <delete-marker>` removes the marker
-5. `get-object` returns the original; **md5 matches the source byte-for-byte** ✅
-6. Test object and its version permanently deleted; bucket left clean (`_dr-drill/` prefix empty)
+Proof run 2026-09-05 with the `engram-breakglass` identity: put, delete, confirm `NoSuchKey`, remove the delete marker, and the original came back md5-identical. The `engram-infra-operator` identity is control-plane only and gets `AccessDenied` on `s3:PutObject`; that separation is deliberate, do **not** broaden the operator policy.
 
 **Recovery window is 30 days, not forever.** The bucket lifecycle rule `expire-noncurrent-versions` sets `NoncurrentDays: 30`, so a deleted or overwritten attachment is recoverable for 30 days and then gone permanently. No cross-region replication at launch.
 
@@ -119,18 +112,10 @@ Without that flag, the sweep aborts every tick and the notes are never repaired 
 
 **Paddle account suspended.** Service continues; billing/revenue paused; customer data unaffected (Paddle is Merchant of Record — revenue data lives in Paddle's dashboard, exportable there). No engram-side data action required.
 
-**Encryption master key compromised.** Rotate the master key via the T3.5 procedure — see `docs/context/encryption-operations.md` (master-key rotation + BootCanary). Per-user DEKs are re-wrapped; note plaintext is never exposed.
+**Key compromise.** Prod wraps DEKs with the AWS KMS CMK and has no master key; a suspected single-user DEK leak is the T3.7 per-user DEK rotation in `docs/context/encryption-operations.md`. On staging/self-host (Local provider), master-key compromise is the T3.5 rotation in the same doc. Note plaintext is never exposed by a re-wrap.
 
 ## Out of scope (launch-minimum)
 
 Multi-region failover drills, cross-AZ HA testing, full simulation of non-RDS scenarios, and a Paddle data-export procedure are all deferred — see #255 for rationale. Drill RDS only; trust the existing rotation runbooks (linked above) for the rest.
-
-## Acceptance (#255) — COMPLETE
-
-- [x] S3 versioning ON + delete→restore proof (2026-09-05, bytes matched)
-- [x] Qdrant snapshot mechanism verified + retention noted (verdict: none exist; rebuild procedure documented above)
-- [x] RDS snapshot retention verified live (7 days, snapshots present, PITR within ~4 min)
-- [x] RDS restore drill → throwaway instance → schema diff → RTO 7m34s, RPO ~4 min (2026-09-05)
-- [x] Cross-linked from `engram-workspace/docs/context/launch-day-procedure.md` pre-flight row 10 + workspace `CLAUDE.md`
 
 **Re-drill when** the DB grows materially past 20 GB, the instance class changes, or multi-AZ is promoted — restore time scales with volume size and the recorded RTO stops being true.

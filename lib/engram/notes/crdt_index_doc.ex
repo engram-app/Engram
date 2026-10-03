@@ -26,10 +26,7 @@ defmodule Engram.Notes.CrdtIndexDoc do
     `index: :skip` for exactly that caller, because deriving rows FROM the map
     and then writing to it is a feedback loop.
 
-  No CLIENT writes it yet; that is Engram-obsidian#362, with #363 handing
-  identity over outright. So in production the map is still empty and
-  projection is a no-op — which is a statement about the client we ship, not
-  about what the server accepts.
+  The plugin writes the map since Engram-obsidian#362, so projection is live.
 
   ## The idle drain (#1152)
 

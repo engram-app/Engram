@@ -39,6 +39,16 @@ defmodule EngramWeb.Plugs.CORSTest do
     assert String.contains?(String.downcase(allow_headers), "x-device-id")
   end
 
+  test "preflight allows the W3C traceparent header the SPA's OTel fetch instrumentation sends" do
+    conn =
+      build_conn()
+      |> put_req_header("origin", "https://app.engram.dev")
+      |> options("/api/health")
+
+    [allow_headers] = get_resp_header(conn, "access-control-allow-headers")
+    assert String.contains?(String.downcase(allow_headers), "traceparent")
+  end
+
   test "preflight allows PATCH — the SPA verb for /onboarding/profile and friends" do
     # The web SPA's api client (api/client.ts) exposes patch (no put), and
     # several routes use PATCH: /onboarding/profile, /me, /vaults/:id,

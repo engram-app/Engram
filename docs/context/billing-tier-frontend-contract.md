@@ -1,9 +1,6 @@
 # Context Doc: Billing tier contract (backend → frontend)
 
-_Last verified: 2026-06-18_
-
-## Status
-Working — fixed in PR #309 (`fix/onboarding-flow`).
+_Last verified: 2026-10-03_
 
 ## What This Is
 The `tier` value the backend reports for a user, and the rule any consumer (the
@@ -19,13 +16,13 @@ made the onboarding billing step render blank.
 **A user with no/canceled/expired subscription is `:free`, NOT `:none`.** Pricing
 v2 changed the default. There is **no `:trial` tier** — trial-status
 subscriptions surface as their paid tier (`:starter`/`:pro`), because the
-`@entitled_statuses` set is `active | trialing | past_due` (`billing.ex:148`).
+`@entitled_statuses` set is `active | trialing | past_due` (`lib/engram/billing.ex`).
 
 **Two distinct "active" notions — do not conflate them:**
 - The `active` field in the `/api/billing/status` JSON body is computed as
-  **`Billing.tier(user) in [:starter, :pro]`** (`billing_controller.ex:16`). It
+  **`Billing.tier(user) in [:starter, :pro]`** (`BillingController.status_payload/1`). It
   means "on a paid tier". A `:free` user is `active: false` here.
-- `Engram.Billing.active?/1` (`billing.ex:200`) is a **separate, suspension-only**
+- `Engram.Billing.active?/1` is a **separate, suspension-only**
   predicate: `is_nil(user.suspended_at)`. It is NOT the source of the response
   field, and it is true for healthy Free users. Don't assume the JSON `active`
   flag mirrors `active?/1`; they answer different questions.
@@ -40,13 +37,12 @@ subscriptions surface as their paid tier (`:starter`/`:pro`), because the
 
 ## Gotchas
 - **`tier === 'none'` is stale.** Before pricing v2 a subscriptionless user was
-  `none`; now they're `free`. Frontend code (`TIER_LABELS`, `needsSubscription`,
-  the `BillingStatus.tier` TS union) written against `none` produced:
-  - an **empty plan badge** (`TIER_LABELS["free"]` was `undefined`), and
-  - **hidden plan cards** (`needsSubscription = tier === 'none'` was false for
-    `free`), so the onboarding billing step looked blank/broken.
+  `none`; now they're `free`. Code keyed on `none` once rendered an empty plan
+  badge and hid the plan cards. `needsSubscription` is now `!billing.active`.
+  **The `BillingStatus.tier` TS union still lists `"none"` and `"trial"`**
+  (`frontend/src/api/queries.ts`); neither value is ever sent.
 - **Onboarding gates on tier OR an explicit Free choice.**
-  `Engram.Onboarding.status/1` (`onboarding.ex:166`) computes
+  `Engram.Onboarding.status/1` computes
   `subscription_ok` as: self-host (`billing_enabled=false`) **or**
   `Billing.tier(user) in [:starter, :pro]` **or**
   `user.free_tier_accepted_at` is set. It does **not** call `active?/1`.
@@ -54,10 +50,6 @@ subscriptions surface as their paid tier (`:starter`/`:pro`), because the
   paid plan or click **"Continue with Free"** (which sets `free_tier_accepted_at`
   and lets the wizard advance). So `free` IS a valid finish state for onboarding —
   it just requires the explicit Free acceptance, not merely "tier == free".
-- **No SPA error boundary.** An uncaught render error in a route element blanks
-  the subtree (react-router default) with no console-visible app error. A blank
-  step ≠ a crash here — it was a data/contract issue, confirmed by mounting the
-  component in a vitest test with realistic data.
 - **Tests mock `../api/queries` and `tsc` passed** even with `free` missing from
   the TS union — neither caught the drift. Only the rendered DOM + reading the
   diff surfaced it. TS unions mirroring a server contract are a silent-drift spot.
@@ -66,10 +58,10 @@ subscriptions surface as their paid tier (`:starter`/`:pro`), because the
 - Backend: `lib/engram/billing.ex` (`tier/1`, `active?/1`),
   `lib/engram_web/controllers/billing_controller.ex` (`status`, `config`).
 - Frontend: `frontend/src/api/queries.ts` (`BillingStatus.tier` union),
-  `frontend/src/billing/billing-page.tsx` (`TIER_LABELS`, `needsSubscription`),
+  `frontend/src/billing/billing-page.tsx` (`needsSubscription`),
+  `frontend/src/billing/current-plan-card.tsx` and `cancel-panel.tsx` (`TIER_LABELS`),
   `frontend/src/onboarding/onboard-billing-page.tsx`.
 
 ## References
-- PR #309 (header restyle + free-tier billing fix).
 - `docs/context/paddle-integration.md` (webhook/lifecycle side of subscriptions).
 - Server-side tier enforcement is guarded by `test/engram/billing/limit_enforcement_test.exs` — every `LimitKeys` key with a restrictive Free default must be referenced in `lib/`, or listed in that test's `@unenforced` with a reason.

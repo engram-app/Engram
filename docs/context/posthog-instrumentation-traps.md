@@ -1,6 +1,6 @@
 # PostHog instrumentation — the traps that cost real time
 
-_Last verified: 2026-09-17. Shipped on branch `docs/posthog-funnel-plan`._
+_Last verified: 2026-10-03_
 
 > Server-side activity events (`surface_active` and friends), the id-format cutover and the Grafana dashboards: see `product-activity-analytics.md`.
 
@@ -19,7 +19,7 @@ posthog-js attaches `$current_url`, `$host`, `$pathname`, `$referrer`,
 builder — **`autocapture: false` does not disable it.**
 
 Vault routes are `/v/:slug`, and slug is `slugify(vault_name)`
-(`lib/engram/vaults.ex:220`). So without a sanitizer, **vault names leave the
+(`slugify/1` in `lib/engram/vaults.ex`). So without a sanitizer, **vault names leave the
 browser inside the URL** on any event fired from a vault page.
 
 This shipped past six reviews. Every one checked the properties we pass; none
@@ -33,7 +33,7 @@ The strip lives in `frontend/src/analytics/init.ts` via `sanitize_properties`.
 
 ### `sanitize_properties` is deprecated — this control fails OPEN
 
-In `posthog-js@1.429.1` it is deprecated. **A future major removes it, the strip
+It was deprecated as of `posthog-js@1.429.1`; the app is on `^1.434.14` and still uses it. **A future major removes it, the strip
 silently stops, and nothing fails.** The test mocks `posthog` wholesale, so it
 cannot catch the regression either.
 
@@ -67,7 +67,7 @@ symptom is a feature silently not working.**
 
 ## 4. Self-host must emit nothing, and `--mode` will not save you
 
-`Dockerfile:42-46` exists so self-host bundles never carry the SaaS token, and
+The `ARG VITE_POSTHOG_KEY` block in the `Dockerfile` exists so self-host bundles never carry the SaaS token, and
 the image builds `build:selfhost`. **Never pass `VITE_POSTHOG_KEY` to a Docker
 build.**
 
@@ -103,7 +103,7 @@ It is the stable pseudonymous identity behind every PostHog person. Rotating it
 re-identifies the entire user base and orphans all history. It is deliberately
 exempt from rotation sweeps — see `engram-infra/docs/context/sops-operator-guide.md`.
 
-If it is unset while `POSTHOG_KEY` is set, `runtime.exs` falls back to a random
+If it is unset while `POSTHOG_API_KEY` is set, `runtime.exs` falls back to a random
 per-boot key and now logs a warning. Before that warning existed, this would
 have silently re-identified everyone on every deploy.
 
@@ -117,15 +117,7 @@ A task can be purely additive and still break them — "additive" describes the
 diff, but the risk lives in the suite. **If a task adds an env var, a route, a
 schema field, or a config key, run the full suite**, not just its own tests.
 
-## 9. Published legal versions are immutable
-
-`docs/context/terms-reacceptance-mechanism.md:62` — a correction is a NEW
-version file, never an edit to an existing one, and a DB guard rejects a mutated
-`content_hash`. Editing `privacy-<date>.md` in place also drifts four copies
-across two repos plus a cross-repo CI check, and breaks `build:selfhost`'s
-`check-legal-manifest.ts`.
-
 ## References
 
-- `engram-workspace/docs/context/user-churn-audit-2026-09-17.md` — the audit that motivated all of this.
-- `engram-workspace/docs/context/cookie-audit-2026-05-24.md` — the no-banner decision and the init options that are load-bearing for it.
+- `../engram-workspace/docs/context/prod-user-forensics.md`, how prod user activity is traced.
+- `../engram-workspace/docs/context/cookie-audit-2026-05-24.md`, the no-banner decision and the init options that are load-bearing for it.

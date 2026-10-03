@@ -1,17 +1,17 @@
 defmodule Engram.PromEx.Usage do
   @moduledoc """
-  PromEx plugin for usage-cap enforcement counters. Makes the daily
-  token-bucket cap (`Engram.Usage.DailyCap`) observable on the scraped
-  `/metrics` endpoint.
+  PromEx plugin for usage-cap enforcement counters.
+
+  **Currently unemitted.** The daily token-bucket cap this was written for
+  (`Engram.Usage.DailyCap`) was deleted and nothing emits
+  `[:engram, :usage, :daily_cap]` now, so the metric below stays at zero.
+  The definition is kept for when a cap check emits it again.
 
   Events + metrics:
 
     * `[:engram, :usage, :daily_cap]` → `..._daily_cap_total`, tags
-      `[:kind, :decision]` — every cap check, split by bucket `kind`
-      (e.g. `inapp_search`) and `decision` (`allow` | `deny` |
-      `fail_open`). `fail_open` is the outage signal: the DB errored and
-      the call allowed through, so a non-trivial rate there means the cap
-      is not actually enforcing.
+      `[:kind, :decision]`: cap checks split by bucket `kind` and `decision`
+      (`allow` | `deny` | `fail_open`).
 
   Cardinality contract: `kind` is a fixed bucket label and `decision` is
   one of three atoms — both bounded. NEVER add user_id.

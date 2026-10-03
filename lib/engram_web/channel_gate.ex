@@ -10,11 +10,9 @@ defmodule EngramWeb.ChannelGate do
   ## What is mirrored, and what is NOT
 
   The vault scope pipes `:authed_api` (`router.ex:49-68`), which runs
-  **eleven** plugs — not three, and not the shorter list an earlier version of
-  this doc claimed. (It said "twelve" for a while: that was this list's old
-  miscount, which counted the since-DELETED `EnforceSearchCap` as a pipeline
-  member, carried forward when `RequirePluginVersion` was added.) Below in PIPELINE order, which is also the order `check/3`
-  applies them; derive one from the other only in that order.
+  **twelve** plugs (`WebActivity` was added after `BumpActivity`; the deleted
+  `EnforceSearchCap` once inflated an older count). Below in PIPELINE order, which is also the order
+  `check/3` applies them; derive one from the other only in that order.
 
   Mirrored:
 
@@ -55,6 +53,9 @@ defmodule EngramWeb.ChannelGate do
       breaks the handshake. Entitlement decided on a wire byte also sits
       ahead of `ensure_room/3`, i.e. ahead of real side effects. If this is
       ever wanted, gate it where the write happens, not on the frame. #1433.
+    * `WebActivity`, analytics only (PostHog `:web` event for Clerk-session
+      requests); not mirrored on join. `CrdtChannel` emits its own `:crdt`
+      activity event instead, so there is no socket-side `:web` count.
     * `PreAuthRateLimit` (plug 1) — no equivalent, so there is **no join rate
       limiter at all**, which is why `check/3` sits behind the free topic
       ownership match.
@@ -66,8 +67,8 @@ defmodule EngramWeb.ChannelGate do
       plug count wrong as a result. There is no channel search either way.
 
   (`Auth` (2) is not listed above because `UserSocket.connect/3` IS it. The
-  arithmetic: 7 mirrored + 3 genuinely-not-mirrored (`PreAuthRateLimit`,
-  `DeviceFingerprint`, `RequireApiWriteEnabled`) + `Auth` = 11. The eleventh
+  arithmetic: 7 mirrored + 4 genuinely-not-mirrored (`PreAuthRateLimit`,
+  `DeviceFingerprint`, `RequireApiWriteEnabled`, `WebActivity`) + `Auth` = 12. The twelfth
   and last in router order is `RequireApiWriteEnabled`, the gap declared open
   above.)
 

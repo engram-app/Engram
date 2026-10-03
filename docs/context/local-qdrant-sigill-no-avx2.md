@@ -1,6 +1,6 @@
 # Local Qdrant dies mid-upsert: `socket closed` against a "healthy" container
 
-_Last verified: 2026-09-11_
+_Last verified: 2026-10-03_
 
 **Trigger:** a bulk upsert into a local Qdrant collection fails on the first
 batch, from Elixir:
@@ -107,10 +107,10 @@ Binary quantization is already switchable — it is not a code change.
 | Inside a one-off script / IEx | `Application.put_env(:engram, :qdrant_binary_quantization, false)` |
 
 Both land on `ServiceConfig.get(:qdrant_binary_quantization, true)` in
-`lib/engram/vector/qdrant.ex:37`, which gates two sites:
+`lib/engram/vector/qdrant.ex:38`, which gates two sites:
 
-- collection creation (`:193`) — omits `quantization_config` entirely
-- per-query params (`:631`) — skips the binary funnel + rescore
+- collection creation (`:230`), omits `quantization_config` entirely
+- per-query params (`:689`), skips the binary funnel + rescore
 
 The switch must be set **before the collection is created**; it changes the
 create body, so an already-quantized collection stays quantized.
@@ -126,14 +126,13 @@ payload-index timing work.
 - Do not chase memory. `oom=false` and 20 GB free are both accurate and both
   irrelevant.
 - This host has bitten us the same way before, with a different binary: the
-  prebuilt Supabase CLI SIGILLs here because it is compiled `GOAMD64=v3`. See
-  `docs/context/local-supabase-audit.md` (Gotcha 1). **Any prebuilt binary that
+  prebuilt Supabase CLI SIGILLs here because it is compiled `GOAMD64=v3`;
+  rebuilding from source with `GOAMD64=v1` works. **Any prebuilt binary that
   assumes AVX2 is suspect on this machine.**
 
 ## References
 
-- `lib/engram/vector/qdrant.ex` — `binary_quantization_enabled?/0` (:37), create body (:193), query params (:631)
+- `lib/engram/vector/qdrant.ex`, `binary_quantization_enabled?/0` (:38), create body (:230), query params (:689)
 - `config/runtime.exs:202` — `QDRANT_BINARY_QUANTIZATION` wiring
 - `docs/context/environment-variables.md` — the env-var row
-- `docs/context/local-supabase-audit.md` — same CPU, same missing-AVX2 class
 - `docs/context/ci-registry-down-during-appdata-backup.md` — the `RestartCount` diagnostic, read the other way

@@ -1,15 +1,15 @@
 # Rate limiter & cap architecture — and why NOT Mnesia, why NOT Redis
 
-_Last verified: 2026-07-08_
+_Last verified: 2026-10-03_
 
-**TL;DR:** Engram rate limiting is **Postgres + BEAM only, zero Redis**. Two mechanisms, split by limiter character:
+**TL;DR:** Engram rate limiting is **BEAM only, zero Redis, no database on the request path.** Every limiter, including the `ai_searches_per_day` budget, is a Hammer ETS counter behind `EngramWeb.RateLimiter`.
 
-- **Short-window abuse/burst limiters** (preauth 60s, auth, `api_rps` 1s, Voyage RPM) → **`EngramWeb.RateLimiter.DistributedETS`**: per-node Hammer ETS counter + `Phoenix.PubSub` broadcast. Eventually consistent, permissive on failure.
-- **Billing-exact daily cap** (`ai_searches_per_day`) → **`Engram.Usage.DailyCap`**: a lazy-refill **token bucket in Postgres** (`usage_buckets`), durable across deploys, with an ETS fast-deny cache. Rolling, not calendar-daily: capacity is the allowance and refill is `allowance/86_400` per second, so there is no midnight cliff and no cron. This line used to name `external_ai_searches_per_day` / `inapp_searches_per_day`, which were two of the six keys this single meter replaced.
+- **Short-window abuse/burst limiters** (preauth 60s, auth, `api_rps` 1s, Voyage RPM) and the **daily AI search budget** share one mechanism: per-node Hammer ETS + `Phoenix.PubSub` broadcast (`EngramWeb.RateLimiter.DistributedETS`). Eventually consistent, permissive on failure.
+- **`ai_searches_per_day`** is spent at the cost site, `Engram.Search.spend_search_budget/1`: `RateLimiter.hit("ai_search:<user_id>", 86_400_000, cap, :ai_search)`. Fixed, epoch-aligned 24h window (a user can spend the budget either side of a boundary), and the count resets when a node restarts, so a rolling deploy hands everyone a fresh budget. Accepted on purpose (#1553): it replaced a Postgres token bucket (`Engram.Usage.DailyCap` + `usage_buckets`) that was exact and durable but cost a DB round trip per search.
 
 Backend selection (`EngramWeb.RateLimiter.backend/0`): `:ets` (self-host / dev / test — per-node, no broadcast) | `:distributed_ets` (clustered SaaS prod, keyed on `DNS_CLUSTER_QUERY` in `runtime.exs`).
 
-Shipped: PRs #680 (PG cap), #684 (ETS+PubSub limiter + delete all Redis), engram-infra #608 (ElastiCache teardown). Live in prod since release `v0.5.495` (2026-06-21).
+Redis removed in #684 (engram-infra #608 tore down ElastiCache).
 
 ---
 
@@ -39,7 +39,7 @@ So Mnesia costs the most and delivers the least for this use case. Skip it.
 Redis/Valkey (ElastiCache) was previously the SaaS-only shared store for exact cross-node counters. Removed because:
 - It was a **side-store, not load-bearing** — BEAM already provides pub/sub (`:pg`/dist-Erlang), cache (ETS), and the job queue (Oban on Postgres) natively. On Node/Rails, Redis is the Channels backplane; on BEAM, distributed Erlang *is* the backplane.
 - It was a managed service + SG + SOPS secret + SSM env to operate, ~$12/mo, and a **fail-open surface** (non-HA single node; a recreate once silently disabled rate limiting — see engram-infra `docs/context/tf-plan-operations.md`).
-- The one counter that genuinely needed exactness (the billing daily cap) is better served by **Postgres** (durable across deploys, exact regardless of node count) — which ElastiCache never gave (it's wiped on failover too).
+- The daily search budget does not need cross-deploy exactness; it biases permissive like every other limiter (see TL;DR).
 
 ## How DistributedETS avoids the echo loop / double-count
 
@@ -48,11 +48,10 @@ Redis/Valkey (ElastiCache) was previously the SaaS-only shared store for exact c
 ## Tradeoffs accepted
 
 - **Eventual consistency**: overshoot ≈ rate × intra-cluster PubSub propagation (~ms); new nodes start empty; netsplits drop in-flight increments. All failure modes bias **permissive** — correct for abuse/burst limiters.
-- **Voyage RPM** is a *global external-quota* throttle, not a per-user abuse cap, so eventual consistency can briefly exceed Voyage's account RPM (new-node/netsplit). **Accepted** (60s window ≫ ms propagation; Voyage 429s handled downstream) — tracked in issue #685; tighten via per-node budget division if it bites.
-- **Rate-limiter telemetry** is in-tree via `Engram.PromEx.RateLimiter` (`lib/engram/prom_ex/rate_limiter.ex`); #687 tracks any remaining completion.
+- **Voyage RPM** is a *global external-quota* throttle, not a per-user abuse cap, so eventual consistency can briefly exceed Voyage's account RPM (new-node/netsplit). **Accepted** (60s window ≫ ms propagation; Voyage 429s handled downstream; #685 closed). Tighten via per-node budget division if it bites.
+- **Rate-limiter telemetry** is in-tree via `Engram.PromEx.RateLimiter` (`lib/engram/prom_ex/rate_limiter.ex`).
 
 ## Pointers
 
-- Code: `lib/engram_web/rate_limiter.ex` (façade), `lib/engram_web/rate_limiter/distributed_ets.ex`, `lib/engram_web/rate_limiter/ets.ex`, `lib/engram/usage/daily_cap.ex` (+ `daily_cap/cache.ex`), `lib/engram_web/plugs/enforce_search_cap.ex`.
-- Follow-ups: #685 (Voyage overshoot), #686 (PubSub volume at scale), #687 (rate-limiter telemetry), #688 (`usage_buckets` lifecycle cleanup), #689 (daily-cap telemetry).
-- Deferred infra: RDS Multi-AZ (separate HA/cost call), SOPS `redis_auth_token` removal (dead encrypted value).
+- Code: `lib/engram_web/rate_limiter.ex` (façade), `lib/engram_web/rate_limiter/distributed_ets.ex`, `lib/engram_web/rate_limiter/ets.ex`, `Engram.Search.spend_search_budget/1` (`lib/engram/search.ex`).
+- Open follow-up: #686 (PubSub broadcast volume at scale).

@@ -1,6 +1,6 @@
 # Context Doc: Onboarding/billing gate vs. the WebSocket sync path
 
-_Last verified: 2026-08-19_
+_Last verified: 2026-10-03_
 
 ## Status
 Working — gate now enforced on both transports (PR #1426). Test-suite coverage still compromised, see Gotchas + issue #1427.
@@ -14,28 +14,11 @@ Backend (`engram-app/Engram`), Elixir/Phoenix. SaaS mode only —
 self-host (`billing_enabled=false`) auto-passes terms + subscription.
 
 ## The failure
-Reproduced on staging 2026-08-19: an account that had **neither accepted the ToS nor
-selected a plan** synced a full vault from Obsidian, and the plugin displayed it as
-"Free tier" (`Billing.tier/1` returns `:free` for "no subscription", which reads as a
-normal state rather than a blocked one).
-
-`RequireOnboarding` was wired only on the vault-scoped **router** pipeline
-(`router.ex:55` today; it moved with later pipeline edits). It correctly 403'd `/api/notes`, `/api/search`, `/api/folders`.
-But a Plug takes a `conn` and **never runs on a socket** — and sync had moved to
-Phoenix Channels. The live path checked token validity (`user_socket.ex`
-`connect/3`), `crdt_proto` version, the DEK rotation lock,
-topic ownership, and the credential's vault scope (now `Engram.Permissions`,
-the single source of truth for what a credential may reach). What it did **not** check
-was entitlement: nothing asked about ToS, plan, or wizard completion.
-
-Note the rotation check in that list — the gate is now ordered deliberately
-around it (see Gotchas). A summary that omits it gives a future reader no
-reason to preserve the ordering.
-
-All the existing checks passing → join → full read/write sync. The plugin barely touches REST, so it never
-met the gate it was supposed to fail. `POST /api/vaults/register` (user-scoped
-pipeline, intentionally ungated so the wizard can create a first vault) supplied the
-vault.
+`RequireOnboarding` was wired only on the vault-scoped router pipeline. A Plug takes
+a `conn` and **never runs on a socket**, and sync runs over Phoenix Channels, so an
+account with no ToS acceptance and no plan synced a full vault from Obsidian (the
+plugin showed "Free tier": `Billing.tier/1` returns `:free` for "no subscription").
+`POST /api/vaults/register` (user-scoped, deliberately ungated) supplied the vault.
 
 ## Where the gates live now
 Two layers:
@@ -47,30 +30,10 @@ Two layers:
   vault-scoped pipeline. Composes lifecycle + onboarding and returns the map to
   reply straight from `join/3`. `SyncChannel` and `CrdtChannel` both call it.
 
-The vault scope pipes `:authed_api` (`router.ex:49-68`), which runs **eleven**
-plugs — not three. Do not trust a summary that says otherwise; that
-miscount is what let the gaps below go unnoticed.
-
-Listed in **pipeline execution order** (`router.ex:50-67`) — `ChannelGate`'s
-`with` chain follows the same order deliberately, so do not re-sort this.
-
-> This table is a SECOND COPY of the ledger in `channel_gate.ex`'s moduledoc.
-> They have drifted more than once, in both directions. Change both, or delete
-> this one and link there.
-
-| `:authed_api` plug | HTTP | Socket |
-|---|---|---|
-| `PreAuthRateLimit` | 429 | ❌ — **there is no join rate limiter at all** |
-| `Auth` | 401 | `UserSocket.connect/3` |
-| `AccountDeleted` | 410 `account_deleted` | ✅ #1429 |
-| `DeviceFingerprint` | — | ❌ |
-| `RotationLockCheck` | 503 `rotation_in_progress` | ✅ #1434 |
-| `RequireOnboarding` | 403 `onboarding_required` | ✅ #1426 |
-| `RequireActiveSubscription` | 402 `account_suspended` | ✅ #1429 |
-| `BumpActivity` | stamps `last_active_at` | ✅ #1429 — load-bearing, see below |
-| `RequirePluginVersion` | 426 `plugin_upgrade_required` | ✅ |
-| `RequireApiRpsBudget` | 429 | ⚠️ #1433 — only the `cap == 0` case, at join |
-| `RequireApiWriteEnabled` | 402 | ❌ — attempted and reverted, see `channel_gate.ex` |
+The vault scope pipes `:authed_api` (`router.ex`), which runs **twelve** plugs.
+Which of them are mirrored on sockets, and which are deliberately not, is the
+ledger in the `EngramWeb.ChannelGate` moduledoc. Read it there; do not keep a
+second copy here (the old copy drifted).
 
 **API-key sockets are gated; JWT sockets are not.** Pricing v2 §G is a
 paid-API entitlement, and the exemption keys on `current_api_key` being
@@ -92,13 +55,9 @@ touches REST" into a permanently locked-out account in daily active use.
 Port the enforcement half and the liveness half together, always.
 
 **Adding a route to the vault pipeline gets you the plugs. Adding a _channel_
-gets you nothing — call `ChannelGate.check/2` from its `join/3`. And adding a
+gets you nothing, call `ChannelGate.check/3` from its `join/3`. And adding a
 plug to the pipeline does NOT add it to sockets: decide explicitly and put it
 in `ChannelGate`.**
-
-#1426 shipped with only the middle row ported, which is exactly how the
-original bug happened one layer up — a rule that lived in one transport's
-plumbing. #1429 closed the other two.
 
 ## Failed Approaches / Dead Ends
 - **Gating `UserSocket.connect/3`.** Tidier-looking and wrong: it deadlocks signup.
@@ -117,8 +76,8 @@ plumbing. #1429 closed the other two.
 
 ## Ordering (do not "tidy" this)
 In `CrdtChannel`: `crdt_proto` → **topic ownership match** →
-`ChannelGate.check/2` → vault resolve. In `SyncChannel`: topic ownership
-match → `ChannelGate.check/2` → vault resolve.
+`ChannelGate.check/3` → vault resolve. In `SyncChannel`: topic ownership
+match → `ChannelGate.check/3` → vault resolve.
 
 Rotation used to sit ahead of the ownership match in `CrdtChannel`; #1434
 moved it inside `ChannelGate` so `SyncChannel` gets it too. Behaviour change
@@ -132,7 +91,7 @@ The gate goes last because:
 - the plugin's identity self-heal keys on `reason === "unauthorized"`
   specifically (`channel.ts`, e2e test_84) — replacing that reason wedges it;
 - a user mid-DEK-rotation on their OWN topic must still hear
-  `rotation_in_progress` — `check/2` runs `rotation/1` before `onboarding/1`
+  `rotation_in_progress`, `check/3` runs `rotation/1` before `onboarding/1`
   for exactly this, and there is a test on it. Only the FOREIGN-topic case
   changed: #1434 moved rotation behind the ownership match, so a mid-rotation
   user probing someone else's topic now correctly gets `unauthorized`.
@@ -175,7 +134,7 @@ There are mutation-checked tests for all three in
   is a client convention, not an enforced one — and this topic is reachable
   pre-onboarding by design.
 - **Lifecycle is never cached and never read off the socket struct.**
-  `ChannelGate.check/2` re-reads the row on every join. An admin suspension has
+  `ChannelGate.check/3` re-reads the row on every join. An admin suspension has
   to bite on the *next* join: `SessionInvalidator` kills the live socket, but
   the JWT stays valid and the client reconnects within seconds. `GateCache`
   holds PASS verdicts for 60s, so routing the lifecycle check through it would

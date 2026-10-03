@@ -1,6 +1,6 @@
 # Context Doc: Lingua language-detection memory (the `low_accuracy_mode` dial)
 
-_Last verified: 2026-07-03_
+_Last verified: 2026-10-03_
 
 ## Status
 Working — `low_accuracy_mode: true` set in `lib/engram/keyword_index/lang_detect.ex` (PR fixing #891/#892).
@@ -17,7 +17,7 @@ Working — `low_accuracy_mode: true` set in `lib/engram/keyword_index/lang_dete
 - The memory is **off-heap** — invisible to `:erlang.memory` / PromEx BEAM metrics. Only container RSS / `smaps` `Anonymous` / ECS `MemoryUtilized` see it.
 
 ## Why it mattered (incident #891/#892)
-On the 1024 MB Fargate task (512 CPU / 1024 MB, 3 containers, no per-container limits), full-accuracy model loading during an indexing burst pushed the engram container to the task ceiling → `OutOfMemoryError` → OOM crash-loop, connection-independent. Because the load is one-time-global and reaches ~945 MB **regardless of embed concurrency**, lowering `embed` concurrency alone does NOT bound it — `low_accuracy_mode` is the actual fix.
+On the then 1024 MB Fargate task (shared by 3 containers, no per-container limits), full-accuracy model loading during an indexing burst pushed the engram container to the task ceiling → `OutOfMemoryError` → OOM crash-loop, connection-independent. Because the load is one-time-global and reaches ~945 MB **regardless of embed concurrency**, lowering `embed` concurrency alone does NOT bound it, `low_accuracy_mode` is the actual fix.
 
 ## The dial
 `lib/engram/keyword_index/lang_detect.ex`, in the `Lingua.detect/2` call:
@@ -27,7 +27,7 @@ low_accuracy_mode: true,   # trigram-only ~55 MB; false = full ~945 MB/node
 Trade memory back for accuracy by flipping to `false` — but budget ~945 MB resident NIF memory **per node** and raise the ECS task memory accordingly. For our use (coarse language ID to pick a stemmer, gated at `@floor 0.40` confidence with a raw-index fallback), low accuracy is sufficient.
 
 ## How to measure it
-The FireLens `null` output blacks out app logs (see #894), so measure via a one-off ECS task that `eval`s a script writing to S3:
+Measure from a one-off ECS task (or locally) rather than inferring from BEAM metrics:
 - Start the app (Oban neutralized), warm `Lingua.detect(..., low_accuracy_mode: <mode>)` over real note chunks, 8-concurrent, 2+ rounds.
 - Sample `/proc/self/smaps_rollup` `Anonymous:` (the off-heap number) — `:erlang.memory` will NOT show it.
 - Run each mode in a **separate task** — the global model cache persists for the process life, so you can't compare modes in one process.

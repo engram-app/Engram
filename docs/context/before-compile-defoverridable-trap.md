@@ -1,10 +1,10 @@
 # `__before_compile__` defs lose to `defoverridable` defaults — silent handle_info shadowing
 
-_Last verified: 2026-08-02_
+_Last verified: 2026-10-03_
 
 Discovered building `Engram.Cache.NodeLocalEts` (PR #1203), the shared `use` macro for the node-local ETS caches.
 
-## The trap (Elixir 1.19)
+## The trap
 
 Defs generated in a `__before_compile__` hook do **not** take precedence over defaults installed via `defoverridable`. `use GenServer` injects a default catch-all `handle_info/2` and marks it `defoverridable`. A `handle_info/2` clause emitted from a `@before_compile` hook does not count as "overriding" it — the GenServer default wins, silently.
 
@@ -14,7 +14,7 @@ Symptom shape: no compile error, no warning, no runtime crash. The cache's evict
 
 **Inject overridable-callback clauses from `__using__` (module-body position), never from `__before_compile__`.**
 
-Module-body defs replace `defoverridable` defaults; before_compile-emitted defs do not. This is why `Engram.Cache.NodeLocalEts.__using__/1` assembles everything — including the `handle_info` clauses — into one module-body block (`lib/engram/cache/node_local_ets.ex:48-50`). Bonus: module-body injection also lets a cache override the injected `delete_local/1` the normal way (it's `defoverridable delete_local: 1`).
+Module-body defs replace `defoverridable` defaults; before_compile-emitted defs do not. This is why `Engram.Cache.NodeLocalEts.__using__/1` assembles everything, including the `handle_info` clauses, into one module-body block (the `{:__block__, ...}` returned by `__using__/1` in `lib/engram/cache/node_local_ets.ex`). Bonus: module-body injection also lets a cache override the injected `delete_local/1` the normal way (it's `defoverridable delete_local: 1`).
 
 If you need before_compile for something else (e.g. accumulating attributes), keep the callback clauses out of it.
 

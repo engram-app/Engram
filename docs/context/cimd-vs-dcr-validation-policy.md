@@ -1,6 +1,6 @@
 # CIMD documents are negotiated, DCR registrations are policed — don't share the changeset
 
-_Last verified: 2026-08-04_
+_Last verified: 2026-10-03_
 
 Root cause of the 2026-08-04 prod outage where **every Claude connect died on `invalid_client`**. Fix in `fix/cimd-spec-validation`. Related: [[connections-client-identity]], [[mcp-oauth]].
 
@@ -58,7 +58,15 @@ Applying registration policy to a published document means any metadata we happe
 
 The likeliest concrete trigger: Anthropic's hosted document declaring a `urn:ietf:params:oauth:grant-type:*` entry (Enterprise Managed Auth does token exchange), tripping `validate_subset(:grant_types, ~w(authorization_code refresh_token))`.
 
-**The fix is the split, not a longer allowlist.** Widening the subset list would have worked until the next field. `Cimd.negotiate/1` now intersects capability metadata and drops decoration *before* the changeset; safety rules (redirect URIs, the self-referential `client_id` binding, confidential-method refusal) stay shared and still refuse.
+**The fix is the split, not a longer allowlist.** Widening the subset list would have worked until the next field. `Cimd.negotiate/1` now intersects capability metadata and drops decoration *before* the changeset; safety rules (redirect URIs, the self-referential `client_id` binding, refusal of secret-based auth methods) stay shared and still refuse. `private_key_jwt` is accepted when the document carries a `jwks_uri` (#1633).
+
+## Preferred vs permitted auth method
+
+A vendor document has a preferred `token_endpoint_auth_method` and a permitted `token_endpoint_auth_methods_supported`. ChatGPT prefers `private_key_jwt` but exchanges as a public PKCE client, so authorize against the permitted set (`Client.permitted_auth_methods/1`, the union of both). A row older than the supported-set column (NULL) yields only the preferred method and never widens; the next refetch fills it in.
+
+The document TTL is 24h and `Engram.Workers.CimdRefresh` sweeps daily. To force a refetch, set `cimd_fetched_at = NULL` rather than deleting the row.
+
+`request_path` is `[REDACTED]` in request logs, so grep OAuth traffic by `route` (e.g. `EngramWeb.OAuthTokenController#exchange`).
 
 ## Two things that made it undiagnosable
 

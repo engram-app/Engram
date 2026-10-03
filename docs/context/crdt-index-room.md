@@ -1,28 +1,21 @@
-# The per-vault CRDT index room — shape, wire, and what it must NOT do yet
+# The per-vault CRDT index room: shape, wire, residency, projection
 
-_Last verified: 2026-09-27_
+_Last verified: 2026-10-03_
 
 **TL;DR:** `{:global, {:crdt_index, vault_id}}`, one `Y.Map` named `filemeta_v0`
 (`path -> %{note_id, type, hash}`), riding the existing per-vault `crdt:` channel as
 `crdt_index_msg`. **This map is AUTHORITATIVE for note paths** as of #1151 step 2 —
 `Engram.Notes.Identity` is the only server-side writer, `Engram.Workers.ProjectVaultIndex`
-reads it and derives the `notes.path_*` columns. Durability shipped in #1151 step 1, with a per-update tail log in #1391;
-the #1152 drain is still unwired (step 3). See `crdt-identity-authority.md` for the
-decision, and note that projection must NEVER claim (`rename_note/5` takes
-`index: :skip` for it) or it feeds itself.
+reads it and derives the `notes.path_*` columns. Durability shipped in #1151 step 1, with a
+per-update tail log in #1391; the idle drain is wired (#1487, see "Residency" below). See
+`crdt-identity-authority.md` for the decision, and note that projection must NEVER claim
+(`rename_note/5` takes `index: :skip` for it) or it feeds itself.
 
-**Stale — the client shipped writing this map.** This section originally read
-"no client writes the map yet ... projection is a no-op", true as of #1150/#1151
-but false since the plugin's SyncStore landed (Engram-obsidian#431, stable
-v1.25.0) and #1388 made the map authoritative. In production the map is
-populated and projection is live.
-
-That exposed a real defect: a client can claim a path before `crdt_create` is
-acked, and if the create never lands the claim outlives it, naming a note that
-will never exist. `ProjectVaultIndex` now releases such a claim once its
-UUIDv7-encoded mint time is older than an hour (`@stale_claim_grace_ms`) —
-see #1550 and `Engram.Workers.ReleaseIndexEntries`. A create still in flight
-(younger than the grace period) is left alone and reported `unresolved`, not
+The plugin writes this map (SyncStore, Engram-obsidian#362/#431), so projection is live in
+production. A client can claim a path before `crdt_create` is acked; if the create never lands,
+the claim names a note that will never exist. `ProjectVaultIndex` releases such a claim once its
+UUIDv7 mint time is older than an hour (`@stale_claim_grace_ms`, #1550,
+`Engram.Workers.ReleaseIndexEntries`). A younger in-flight create is reported `unresolved`, not
 released.
 
 Shipped: PR #1383 (`feat/crdt-index-room`). Refs #1150, #1146, #1152, #1550,
@@ -32,9 +25,8 @@ engram-app/engram-workspace#167.
 
 ## Why the room exists
 
-Identity today lives in three places that have to agree — `NoteIdMap` in the client, the REST
-manifest, and the seq cursor. `sync-pattern-audit.md` — in the **engram-workspace** repo, not this one
-(`../engram-workspace/docs/context/sync-pattern-audit.md`) — traces every drift incident to
+Identity lived in three places that had to agree: `NoteIdMap` in the client, the REST
+manifest, and the seq cursor. `sync-pattern-audit.md` (this repo) traces every drift incident to
 that split, and lists the ~18 functions in `plugin/src/sync.ts` that exist only to keep them
 agreeing. The class disappears when identity converges through the **same channel as
 content**, as a `Y.Map` inside a synced doc. This room is that map.
@@ -43,29 +35,13 @@ The name `filemeta_v0` is the wire contract shared with the client: a single fla
 path is the shape that removes the drift class, and pinning the name makes the correspondence
 checkable rather than folkloric.
 
-## The trap: #1150 and #1152 combined badly (now half-resolved)
+## Rule: a room may only drain if `unbind` checkpoints it
 
-Draining a **note** room is lossless *only* because `terminate/2` → `CrdtPersistence.unbind/3`
-checkpoints on the way out. At #1150 the index room had **no persistence at all**
-(`CrdtIndexPersistence.bind/3` was a no-op; `bind/3` is the only required callback —
-`deps/y_ex/lib/protocols/shared_doc.ex:350`).
-
-So giving the index room `idle_exit_ms` would have exited it and **evaporated the entire index**.
-The drain would be working perfectly — it just had nothing to save here. Nothing in #1152's own
-suite could catch that, because from the drain's side the behaviour is identical.
-
-**#1151 step 1 fixes the missing half:** `CrdtIndexPersistence` now encrypts the doc into
-`vault_index_states` on `unbind/3` and restores it on `bind/3`. See "Durability" below.
-
-**The index room still runs no `CrdtCheckpointTimer` and sets no `idle_exit_ms`.** Opting in is a
-deliberate, separate step (#1151 step 3) — durability makes the drain *safe*, it does not make it
-*enabled*, and the two must not be conflated. Residency stays bounded the old way (`auto_exit` on
-last observer).
-
-`crdt_index_room_test.exs` pins this by inspecting what the room is **linked to** — a
-`CrdtCheckpointTimer` links itself to its room, so its absence is the real invariant. An earlier
-version of that test asserted over the `opts` the test itself passed in, which could never fail;
-see "Testing notes" below.
+Draining a **note** room is lossless only because `terminate/2` → `CrdtPersistence.unbind/3`
+checkpoints on the way out. At #1150 the index room had no persistence (`bind/3` was a no-op), so
+an idle exit would have evaporated the whole index while the drain itself behaved perfectly.
+Nothing in the drain's own suite could catch that. `CrdtIndexPersistence` now encrypts the doc into
+`vault_index_states` on `unbind/3` and restores it on `bind/3`, plus the #1391 tail log.
 
 ## Wire
 
@@ -78,13 +54,9 @@ see "Testing notes" below.
   (and a small step2) rides the handshake lane and everything else — including every `sync_update`
   — rides the edit lane.
 
-  An earlier version of this doc claimed index frames ride the handshake bucket outright, on the
-  reasoning that index sync is once-per-connect. True of the handshake, false of the writes #1151
-  adds: a rename or create writes `filemeta_v0`, which is a `sync_update`, which bills the user's
-  edit budget. Whether that is right belongs to #1151, where those writes exist and their volume is
-  known — moving ALL index traffic onto the handshake lane only relocates the starvation risk onto
-  handshakes, which is the 2026-07-07 cross-file-overwrite shape. Both lanes are now pinned by
-  tests so the decision is made against measured behaviour rather than a comment.
+  Do not move all index traffic onto the handshake lane: a rename or create writes `filemeta_v0`
+  as a `sync_update`, and relocating it only moves the starvation risk onto handshakes (the
+  2026-07-07 cross-file-overwrite shape). Both lanes are pinned by tests.
 - **Frame-relay ordering.** `handle_info({:yjs, frame, room})` checks `index_room` FIRST, so an index
   room can never be mistaken for a note room whose pid was reused.
 - **Monitor + cache eviction.** Same rationale as note rooms: a dead room left in the cache means
@@ -102,8 +74,9 @@ second room type can reuse it — `:global` can hand back a room that is mid-ter
 Two tests in the first draft of this work were **vacuous**, both caught by asking "would this go
 red if the implementation were wrong?":
 
-- the no-drain test asserted over the `opts` the test passed in — its own input, not the
-  implementation. Now inspects the room's links, and was mutation-tested (wire a timer in → red).
+- the timer test asserted over the `opts` the test passed in, its own input, not the
+  implementation. It now inspects the room's links (a `CrdtCheckpointTimer` links itself to its
+  room).
 - the rate-bucket test used `assert_push`, but with the edit budget pinned to 1 the FIRST frame
   succeeds either way. Now asserts the REPLY of all three frames; mutation-tested by switching the
   handler to `check_rate(socket, :edit)` → red.
@@ -122,14 +95,22 @@ What actually bounds it today:
 - **Rate limit** — the same lanes as note frames (`frame_class_b64/1`): step1/small-step2 on the
   handshake budget, every `sync_update` on the edit budget.
 - **5 MB decoded-frame ceiling** — `guard_frame/1`, shared with the note path.
-- **`auto_exit`** — the room dies when the last socket on the vault disconnects.
+- **`auto_exit` + idle drain**: see "Residency".
 - **Durability** — since #1151 an exiting room checkpoints, so a restart is no longer a wipe.
 
-**The open residency item:** the index room runs no `CrdtCheckpointTimer`, so it gets neither the
-#1152 idle drain nor LRU tracking, and `auto_exit` is session-length. A client that stays connected
-can keep growing one doc. The timer is note-keyed (`note_id` threads through its state and its
-`CrdtRoomLru.touch/3` call), so serving the index room means generalising it — that is the real
-fix, and it is tracked rather than papered over with a flag.
+## Residency
+
+`CrdtIndexDoc.start_link/1` starts a `CrdtCheckpointTimer` in `mode: :index`: keyed on
+`vault_id`, LRU-tracked, and it **never checkpoints on a tick**. Only the room's own persistence
+state knows which tail rows failed to replay, so a checkpoint not driven by `unbind/3` would prune
+rows it never folded in. The drain does the exiting: observers let go, `auto_exit` fires,
+`terminate/2` checkpoints.
+
+The drain is ON unconditionally, with no off switch: this room is observed while ANY socket on the
+vault is connected, so without it residency is session-length (#1149 measured 7.91 MB per 10k-note
+vault). The interval resolves per-room opt → `CRDT_IDLE_EXIT_MS` → `@default_idle_exit_ms`
+(300_000), never `nil`. Only index WRITES count as activity, so residency tracks mutation, not
+connection count. `crdt_index_room_test.exs` "the room runs an INDEX-mode timer" pins it.
 
 ## Projection onto the notes rows (#1151 step 2)
 
@@ -144,14 +125,11 @@ reconcile-by-absence implementation would read an empty index as "this vault has
 delete the vault. It follows that projection can never delete, and never touches a note the index
 does not mention.
 
-**Do not read that as "dormant".** An earlier draft argued the feature was inert because no client
-writes the index yet. That is a claim about the client we ship, not about what the server accepts:
-`crdt_channel.ex`'s `crdt_index_msg` handler relays any well-formed frame from any authenticated
+**The server accepts any writer, not just our client.** `crdt_channel.ex`'s `crdt_index_msg` handler relays any well-formed frame from any authenticated
 socket on the vault, with no write gate. With projection live, a client that writes
 `filemeta_v0["x.md"] = {note_id: …}` moves a real note — tombstone at the old path, Qdrant repath,
 link rewrite, `delete` broadcast to every device. User-scoped, so not a tenancy hole, but it is a
-real capability and it exists now. Inertness is a property of the WORKER (empty in, nothing out),
-not of the system.
+real capability.
 
 **Entries interact, so one pass is not enough.** A CHAIN (A wants the path B is vacating) converges
 only if B is applied first — and that is not a coin flip: Erlang small maps iterate in TERM order,
@@ -188,9 +166,8 @@ disagreeing is not something projection resolves, because the client owns identi
 
 | | |
 |---|---|
-| enabling the idle drain + the wire flag | #1151 step 3 |
-| client adoption, `getManifest` removal | Engram-obsidian#362/#363 (`phase/contract`) |
-| compaction | #1153 — entangled with the #958 checkpoint-union hazard |
+| `getManifest` removal | Engram-obsidian#363 (`phase/contract`, open) |
+| compaction | #1153, entangled with the #958 checkpoint-union hazard |
 | per-folder sharding | #1154 (p3) |
 
 **#167 does not close until #363.** Everything before it is scaffolding, and the p0's original

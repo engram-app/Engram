@@ -1,6 +1,6 @@
 # Frontend login boot performance — architecture, measurement, guardrails
 
-_Last verified: 2026-07-02_
+_Last verified: 2026-10-03_
 
 Context for anyone touching SPA boot / sign-in latency. Established in PR #842
 (2026-07-02), which cut the eager entry from 894 KB (274 KB gz) to 447 KB
@@ -44,6 +44,14 @@ control.
   `router.tsx`, `main.tsx`, or the auth pages at module scope is on the
   sign-in critical path — check the chunk breakdown before adding imports
   there.
+- **No custom `manualChunks`.** Forcing both a `react` and a `clerk` vendor
+  chunk made rolldown place react inside the clerk-named chunk; the eager
+  entry needs react, so the whole Clerk SDK became a static import of the
+  entry (eager). Rolldown defaults keep Clerk lazy inside the
+  `clerk-auth-provider` / `clerk-sign-in` chunks; the modulepreload links
+  parallelize them without making them eager.
+- **Cache headers live in `public/_headers`:** hashed `/assets` immutable for
+  1y; `index.html` + `config.json` `no-cache` so deploys propagate.
 - **Sentry + posthog are dynamic imports.** `sentryReady` resolves to
   `null` on SDK load failure (ad-blockers match "sentry" in URLs); early
   window errors are buffered and flushed into `captureException` at init.
@@ -51,8 +59,8 @@ control.
   `captureReactException(error, errorInfo)` to keep componentStack. Don't
   reintroduce a top-level `import * as Sentry`.
 - **Every lazy chunk needs a failure story.** A deploy rotates hashed asset
-  names under open tabs; a lazy render then 404s and lands on React Router's
-  default error page (no route defines `errorElement`). The
+  names under open tabs; a lazy render then 404s and lands on the route
+  `errorElement` (`RouteErrorBoundary`). The
   `vite:preloadError` listener in main.tsx reloads once (30 s sessionStorage
   guard) to self-heal. Cosmetic chunks (Toaster) additionally sit behind an
   error boundary that renders null. Rarely-shown dialogs (upgrade dialog) are
@@ -88,9 +96,17 @@ grep -c "node_modules/yjs" /tmp/dist/assets/index-*.js.map
 The maps survive in a custom `--outDir` because the strip-sourcemaps plugin
 only cleans the default `../priv/static/app` output.
 
+## Verifying a saas build
+
+After `bun run build:saas`:
+
+- `dist/index.html` has the `preconnect` to clerk.engram.page,
+  `__ENGRAM_CONFIG__`, and the two clerk `modulepreload` links.
+- The entry `index-*.js` has NO `import ... from "./clerk-*.js"` (if it does,
+  the `manualChunks` regression is back).
+- `posthog` is not in the entry `index-*.js`.
+
 ## Related
 
-- PR #842 (perf wave + review hardening), PR #841-era chunk history in
-  router.tsx comments
-- e2e flakes surfaced during the merge: #843 (SPA CRDT interleave assertion),
-  #844 (plugin CRDT propagation timeout) — both contention-window flakes
+- PR #842 (perf wave + review hardening), PR #673 (inline bootstrap,
+  preconnect, modulepreload), chunk history in router.tsx comments

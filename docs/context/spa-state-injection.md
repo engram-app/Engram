@@ -1,9 +1,10 @@
 # Context Doc: SPA State Injection Pattern
 
-_Last verified: 2026-05-30_
+_Last verified: 2026-10-03_
 
 ## Status
-Working. Pattern established in earlier PRs (`authProvider`, `billingEnabled`, etc.); extended in PR #350 with `bootstrap` for self-host first-run UX.
+Working. Self-host: Phoenix injects per request. Saas: the same global is inlined
+into `index.html` at build time (see "Saas" below).
 
 ## What This Is
 How Engram ships server-known state to the React SPA without a fetch
@@ -15,16 +16,21 @@ synchronously during module init.
 
 NOT true React SSR. The HTML structure is still empty until React mounts.
 This pattern only solves the "I need server state for first-render-correct
-UI" problem. For shipping rendered HTML, see issue #353 (future work).
+UI" problem.
 
 ## Environment
-Backend: Elixir/Phoenix. Frontend: React 18 + Vite SPA. Pattern works in
-both modes:
+Backend: Elixir/Phoenix. Frontend: React 19 + Vite SPA. Pattern works in
+these modes:
 
 * **Prod** (Phoenix serves `priv/static/app/index.html`): injection runs;
   config available synchronously on first paint.
 * **Dev** (Vite dev server on :5173 serves `index.html` directly): no
   injection; consumers must fall back to a fetch or `import.meta.env`.
+* **Saas** (Cloudflare Worker serves `frontend/dist`, no Phoenix shell):
+  `build:saas` sets `VITE_INLINE_BOOTSTRAP_CONFIG=1`, and the
+  `engram-inline-bootstrap` plugin in `vite.config.ts` inlines
+  `window.__ENGRAM_CONFIG__` from `scripts/bootstrap-config.ts`. The same
+  mapping writes `dist/config.json` as a fallback.
 
 ## How It Works
 
@@ -50,31 +56,16 @@ both modes:
 
 1. `loadConfig()` (async) reads `window.__ENGRAM_CONFIG__` at module init time.
 2. Validates `authProvider`. Returns a typed `EngramConfig`.
-3. If the injected config is missing (Vite dev), falls back to fetching
-   `/config.json`, then to defaults.
+3. If the injected config is missing, falls back to fetching
+   `/config.json`, then to `VITE_*` defaults.
 4. Exports `export const configPromise = loadConfig()` — a single eager
    `Promise<EngramConfig>` resolved once at module init. Consumers await it
    (e.g. before bootstrapping the React root), not a hook.
 
-**Per-consumer pattern (e.g., `frontend/src/auth/use-bootstrap.ts`):**
-
-```typescript
-import { config } from '../config'
-
-let cached: Bootstrap | null | undefined = config.bootstrap
-let inflight: Promise<Bootstrap | null> | null = null
-
-export function useBootstrap(): BootstrapState {
-  const [state, setState] = useState<BootstrapState>(cached)
-  useEffect(() => {
-    if (cached !== undefined) return                  // SSR-injected or already fetched
-    fetchBootstrap().then(setState)                   // dev fallback
-  }, [])
-  return state
-}
-```
-
-The `undefined | null | T` tri-state lets the UI distinguish "still
+**Per-consumer pattern (`frontend/src/auth/use-bootstrap.ts`):** a
+module-level `cached` seeded from `ConfigContext`'s `bootstrap` on first hook
+call, plus one shared in-flight `fetch` of `/api/auth/bootstrap` when the seed
+is `undefined` (not injected). The `undefined | null | T` tri-state lets the UI distinguish "still
 loading" (render a placeholder) from "definitively no data" (Clerk / 404 /
 error → use defaults).
 
@@ -93,11 +84,18 @@ error → use defaults).
    compute from a context fn. Self-host-only fields gate on
    `provider == "local"` and return `nil` under Clerk.
 
-3. **Frontend** — extend the `EngramConfig` interface and
-   `loadConfig()` in `frontend/src/config.ts` to include the new field.
-   Type it as `T | null | undefined` if it can be absent.
+3. **Frontend**, extend the `EngramConfig` interface and `normalize()` /
+   `defaultConfig()` in `frontend/src/config.ts`. Type it as
+   `T | null | undefined` if it can be absent.
 
-4. **Consumer** — import `config` synchronously where you need it. For
+   **Saas too:** add the field to `BootstrapConfig` in
+   `frontend/scripts/bootstrap-config.ts`, or saas never receives it and
+   `normalize()` silently falls back to the default. (`tracingEnabled` is in
+   neither `SpaController` nor `bootstrap-config.ts` today, so it is false
+   everywhere.)
+
+4. **Consumer**, read it via `useConfig()`; non-React code uses a module
+   singleton set in `BootstrapGate` (as `getApiBase()` does). For
    tri-state fields that the UI must wait on, use a `useBootstrap`-style
    hook with cache + dev fetch fallback.
 
@@ -135,10 +133,7 @@ error → use defaults).
   (c) the SSR injection already solves it for prod.
 * **Node sidecar for full React `renderToString`**. Explored, rejected.
   Operational nightmare (two runtimes, IPC, pool management, error
-  surfaces). See issue #353 for the full SSR architecture discussion.
-* **Vite plugin to mirror Phoenix's injection in dev**. Looked at —
-  small extra plumbing for the dev-flash trade-off most teams accept.
-  Live with the fetch fallback in dev; prod is what users see.
+  surfaces). Issue #353 (closed).
 
 ## Gotchas
 
@@ -162,23 +157,17 @@ error → use defaults).
   forward to the same backend.
 
 * **Cache invalidation in dev**. `SpaController` caches the split
-  `(pre, post)` around `</head>` in `:persistent_term`. In `:dev`/`:test`
-  the cache is disabled (`config :engram, :spa_cache_enabled?, false`),
-  so `vite build` rewriting the file with new asset hashes is picked up
+  `(pre, post)` around `</head>` in `:persistent_term`. In `:dev` the
+  cache is disabled (`config :engram, :spa_cache_enabled?, false` in
+  `config/dev.exs`; `SpaControllerTest` erases the term in `setup`
+  instead), so `vite build` rewriting the file with new asset hashes is picked up
   on the next request without a Phoenix restart. The config script
   itself is rebuilt per request — config changes (e.g., flipping
   `AUTH_PROVIDER`) take effect on next page load, no cache to bust.
 
 * **CSP `unsafe-inline`**. Because the config script is inline, the CSP
-  in `router.ex` has to allow `script-src 'unsafe-inline'`. TODO: switch
+  in `lib/engram_web/csp.ex` has to allow `script-src 'unsafe-inline'`. TODO: switch
   to a per-request nonce (already noted in `router.ex`).
-
-* **Test cache state**. `SpaControllerTest` clears the
-  `:persistent_term` cache in `setup` so each test gets a fresh file
-  read. New tests that mutate `Application.put_env` for the config
-  should also clear the cache (the cache only covers the HTML split,
-  not the config map — but worth knowing if a future test ever caches
-  more).
 
 ## References
 
@@ -187,6 +176,5 @@ error → use defaults).
 * Tests: `test/engram_web/controllers/spa_controller_test.exs`
 * Router (CSP + SPA route whitelist):
   `lib/engram_web/router.ex` around the SpaController routes
-* Future SSR architecture discussion: issue #353
-* PR that established this doc: #350 (extended pattern with `bootstrap`
-  field for self-host first-run UX)
+* Saas inlining: `frontend/vite.config.ts` (`inlineBootstrap`),
+  `frontend/scripts/bootstrap-config.ts`

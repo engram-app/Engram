@@ -1,6 +1,6 @@
 # Context Doc: Derived (marker-less) folders vs marker folders
 
-_Last verified: 2026-08-25 (Engram PR #1472, merged as `4341fdc3`)_
+_Last verified: 2026-10-03 (fix: Engram PR #1472, `4341fdc3`)_
 
 ## Status
 Fixed. `DELETE /api/folders/*path` now takes `?recursive=true`, which is what the
@@ -15,7 +15,7 @@ traces back to code that only ever considered one of them.
 UUID and appears in `/api/folders` with that id. Two things create one:
 - `POST /api/folders` — the web app's "New folder" button.
 - The plugin's first-sync seeding, `seedEmptyFolders()` in
-  `plugin/src/sync.ts:3427` — one marker per local folder whose **entire subtree
+  `plugin/src/sync.ts`, one marker per local folder whose **entire subtree
   holds no syncable file**. Without it a truly-empty folder (or one holding only
   `.txt`/`.excalidraw`) would never appear in the web UI.
 
@@ -28,11 +28,11 @@ it, because `seedEmptyFolders` deliberately skips any folder with a note beneath
 
 ### The third source nobody remembers
 
-`synthesizeFolders(real, attachments)` builds folder rows from **two** caches:
-`/api/folders` **and** the attachments cache. A directory holding **only
-attachments** is a `syn:` folder sourced purely from `["attachments", vaultId]`
-and has no representation in `/api/folders` at all. Any invalidation that only
-touches `["folders", vaultId]` leaves that whole folder shape stale.
+`synthesizeFolders(real, attachments)` builds folder rows from the folder
+list **and** the attachments, both `select`s of the one
+`['vault-tree', vaultId]` cache (`selectFolders` in `frontend/src/api/queries.ts`).
+A directory holding **only attachments** is a `syn:` folder with no folder
+row at all; it exists only because an attachment path is under it.
 
 ## The bug (#1472)
 
@@ -48,7 +48,7 @@ only the marker row. For a derived folder there is no marker, so the call
    plugin**.
 
 Folders **with** markers worked fine: `partition()` in
-`frontend/src/viewer/folder-tree.tsx:546` routes real ids to
+`frontend/src/viewer/folder-tree.tsx` routes real ids to
 `POST /folders/batch-delete`, which cascades. Only the `syn:` ids fall through to
 the path route, one call each.
 
@@ -58,7 +58,7 @@ already used. `frontend/src/api/queries.ts` `useDeleteFolder` sends it always,
 because that hook only ever deletes derived folders.
 
 **Marker-only must stay the DEFAULT.** The plugin's `handleFolderDelete`
-(`plugin/src/sync.ts:3401`) fires only for folders in its `explicitFolders` set,
+(`plugin/src/sync.ts`) fires only for folders in its `explicitFolders` set,
 and Obsidian pushes its own per-note deletes alongside the folder delete. A
 recursive default would let the server delete notes the plugin deliberately kept.
 
@@ -86,10 +86,6 @@ and only the refetch brought it back.
 
 ## Gotchas
 
-- **`git diff origin/main` (two-dot) lies on a branch cut before main advanced.**
-  It renders the newer main commits as spurious *deletions*. Use
-  `git diff origin/main...HEAD`. This misled a code-review agent into reviewing an
-  entirely different branch.
 - **`BatchOps.broadcast_batch` emits NO log line**
   (`lib/engram_web/controllers/batch_ops.ex:42`). Absence of `folders.batch` in
   the logs is **not** evidence the broadcast didn't fire.
@@ -105,11 +101,11 @@ and only the refetch brought it back.
   `params["x"] == "true"` means `?x=1` **silently no-ops** — a 204 on a
   destructive endpoint that deleted nothing. Convention here is `type: :string`
   with the accepted literals spelled out in the description (see the `?raw` param
-  on the attachments controller).
-- **Any new delete path must invalidate the attachments cache too.** See "third
-  source" above — otherwise the recursive delete removes the attachment
-  server-side while the stale cache keeps re-deriving the folder, reproducing the
-  exact revert for a different folder shape.
+  on the attachments controller). `FoldersController.truthy?/1` now accepts
+  `true`, `1` and `yes` for `?recursive`.
+- **Any new delete path must also drop attachment rows from the vault-tree
+  cache.** See "third source" above: a stale attachment keeps re-deriving the
+  folder, reproducing the same revert for a different folder shape.
 
 ## Failed approaches / local-environment traps
 
@@ -128,9 +124,9 @@ and only the refetch brought it back.
 - `lib/engram_web/controllers/folders_controller.ex` — `delete/2`, `truthy?/1`, `delete_recursive/4`
 - `lib/engram/folders.ex` — moduledoc documents both DELETE paths
 - `frontend/src/viewer/tree/synthesize-folders.ts` — the `syn:<path>` id scheme
-- `frontend/src/viewer/folder-tree.tsx:546` — `partition()`, marker vs derived dispatch
+- `frontend/src/viewer/folder-tree.tsx`, `partition()`, marker vs derived dispatch
 - `frontend/src/api/queries.ts` — `useDeleteFolder`
-- `plugin/src/sync.ts` — `handleFolderDelete` (3401), `seedEmptyFolders` (3427), `syncExplicitFolders` (8312)
+- `plugin/src/sync.ts`, `handleFolderDelete`, `seedEmptyFolders`, `syncExplicitFolders`
 - `docs/context/crdt-create-is-a-rename.md` — the same "one route serves two meanings" trap on the note side
 - `docs/context/folder-tree-optimistic-rebuild.md` — optimistic tree updates + rebuild triggers
 - `docs/context/headless-chromium-no-raf-playwright.md` — local Playwright/Chromium flakes

@@ -22,7 +22,7 @@
 #   CondInsteadOfIfElse, DoubleBooleanNegation, ABCSize, AppendSingleItem,
 #   ModuleDependencies, VariableRebinding, SkipTestWithoutComment.
 #
-# Ratchet baseline lives at docs/context/quality-tooling-baseline.md.
+# Threshold and deferral rationale is inline below.
 %{
   configs: [
     %{

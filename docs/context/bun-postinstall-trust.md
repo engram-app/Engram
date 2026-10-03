@@ -1,6 +1,6 @@
 # Context Doc: Bun lifecycle-script trust (pngquant-bin CI flake fix)
 
-_Last verified: 2026-07-08 (bun 1.3.11, against `frontend/package.json`; issue #975, PR #981)_
+_Last verified: 2026-10-03 (trust semantics measured on bun 1.3.11, against `frontend/package.json`; issue #975, PR #981)_
 
 ## What This Is
 
@@ -52,5 +52,5 @@ reproduces the CI failure verbatim (`error: postinstall script from "pngquant-bi
 
 ## Related
 
-- `docs/context/runner-vm-setup.md` — shared egress / registry proxy
+- `../engram-workspace/docs/context/runner-vm-setup.md`: shared egress / registry proxy
 - Issue #975, PR #981

@@ -412,9 +412,8 @@ end
 #
 # KEEP until #1004 is closed. This is deliberately a documented config path
 # rather than a per-node remote-console `Application.put_env` — that was the
-# explicit ask in #1004. Until the pacer telemetry gauge and cold-queue depth
-# alarm in that issue land, we are blind to the queue backing up, so the
-# rollback lever is more valuable, not less.
+# explicit ask in #1004. The queue-depth gauge shipped (#1487); the alarm in
+# #1004 is still open.
 if pacing = System.get_env("FANOUT_PACING_ENABLED") do
   config :engram, :fanout_pacing_enabled, pacing == "true"
 end

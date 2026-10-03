@@ -206,13 +206,8 @@ defmodule Engram.OAuth.Cimd do
   # shared changeset validation, because an unsafe redirect is a code-leak
   # vector, not a capability we can politely decline.
   #
-  # KNOWN RESIDUAL: `validate_length(:redirect_uris, max: 10)` is DCR anti-abuse
-  # policy, not safety, and it still hard-rejects — so the split below is not
-  # total. A vendor publishing an eleventh redirect loses its connector the same
-  # way an extra grant_type used to. Left as-is on purpose: silently dropping the
-  # overflow could discard the very URI in use and fail later and worse, and the
-  # bound is already redundant for CIMD (the body is capped mid-stream). Revisit
-  # if a real document ever approaches it — Claude's publishes two.
+  # The redirect cap is per path: 10 for DCR (anti-abuse), 50 for CIMD (`Client`
+  # `@max_redirect_uris_cimd`); the body is already capped mid-stream.
   defp negotiate(document) do
     with {:ok, grants} <-
            intersect(

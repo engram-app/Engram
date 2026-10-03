@@ -1120,8 +1120,8 @@ defmodule Engram.Notes do
             # ADOPTED, not created: the path is already owned by a live note under
             # a DIFFERENT id, and this caller's content frame was never applied to
             # it. Tagged so the batch leg can say so instead of reporting a create
-            # (see crdt_channel prepare_create/4) -- a plain {:ok, note} here reads
-            # as success and silently discards the client's body.
+            # -- a plain {:ok, note} here reads as success and silently discards
+            # the client's body.
             {:ok, decrypt_or_raise!(live, user), :adopted}
 
           nil ->
@@ -4564,7 +4564,7 @@ defmodule Engram.Notes do
   # opens its own `with_tenant` per call, and a folder rename is exactly the
   # event that leaves MANY notes stale at once, so per-note resolution would be
   # hundreds of serial checkouts inside one channel `handle_in` — the shape
-  # behind `docs/context/crdt-sync-pool-exhaustion-loop-2026-07-09.md`.
+  # behind `../engram-workspace/docs/context/crdt-sync-pool-exhaustion-loop-2026-07-09.md`.
   #
   # ponytail: one query + N in-transaction rebuilds per page. When `content`
   # gains a `crdt_head`-style invalidate-on-write flag (BEFORE UPDATE trigger +
@@ -4656,7 +4656,7 @@ defmodule Engram.Notes do
     # pooled connection across up to @resolve_chunk doc rebuilds on a channel
     # `handle_in` — with N devices in `crdt_catchup_since` at once, that is the
     # pool-exhaustion shape in
-    # `docs/context/crdt-sync-pool-exhaustion-loop-2026-07-09.md`.
+    # `../engram-workspace/docs/context/crdt-sync-pool-exhaustion-loop-2026-07-09.md`.
     raw_by_id = Map.new(fresh_rows, &{&1.id, &1})
     fresh_by_id = Map.new(decrypt_or_raise!(fresh_rows, user), &{&1.id, &1})
 

@@ -1,6 +1,6 @@
 defmodule Engram.Workers.OrphanSweep do
   @moduledoc """
-  Weekly cross-store orphan reaper.
+  Daily cross-store orphan reaper.
 
   Event-driven deletes (`Qdrant.delete_by_user/2`, `Storage.delete_prefix/1`)
   are the primary cleanup path on user/vault/note delete. They are
@@ -21,7 +21,7 @@ defmodule Engram.Workers.OrphanSweep do
   Soft-deleted users are kept in the live set on purpose: we don't want
   this worker racing the inactivity-cleanup ladder. Hard-delete clears
   the row; from then on the orphan-sweep will catch any leftover blobs
-  or points on the next weekly tick.
+  or points on the next daily tick.
 
   Telemetry: emits `[:engram, :orphan_sweep, :result]` with counts per
   store. Failures inside a store are logged + counted but do not raise —
@@ -101,7 +101,7 @@ defmodule Engram.Workers.OrphanSweep do
     end
   end
 
-  # One query per weekly run. Deliberately not cached: the answer depends on
+  # One query per daily run. Deliberately not cached: the answer depends on
   # the credential this node connected with, and a node that gets a new pool
   # gets a new boot.
   defp tenancy_unsafe? do
@@ -581,7 +581,7 @@ defmodule Engram.Workers.OrphanSweep do
   # this comment to reason about whether prod lost data. With the reads blinded,
   # `candidates == scanned`, so the ratio is 1.0 and `runaway?/2` ABORTS any
   # collection at or above `@runaway_floor`. Prod's collection is well past it,
-  # so prod would have logged a loud weekly abort and deleted nothing. Mass
+  # so prod would have logged a loud daily abort and deleted nothing. Mass
   # deletion needs a collection UNDER the floor — a fresh self-host, a small
   # staging, a repointed collection. The quieter half is the one that would have
   # gone unnoticed: `chunk_page/1` returns `[]`, so `sweep_missing_points/1`

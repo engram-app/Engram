@@ -12,8 +12,8 @@ to the server, then FORGOTTEN by the wipe) rather than create a brand-new
 note. A brand-new note's id<->path pairing is conveyed directly by the CRDT
 enrollment/join handshake regardless of noteIdMap state, so it does not
 exercise the bug (verified: both a pre-#187 and a #187+ plugin pass a
-new-note pull). The actual crux — per docs/context/noteidmap-stale-breaks-sync.md
-— is resolving the id of a note the device already knew and then forgot.
+new-note pull). The actual crux is resolving the id of a note the device already knew and
+then forgot.
 
 KNOWN LIMITATION (bite-check): running this exact scenario against a plugin
 build predating #187 (dfc40db~1, commit 7e73d95) still PASSES in this local

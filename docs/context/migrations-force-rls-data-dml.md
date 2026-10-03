@@ -1,20 +1,20 @@
 # Data migrations vs FORCE ROW LEVEL SECURITY — silent 0-row no-op
 
-_Last verified: 2026-07-02_
+_Last verified: 2026-10-03_
 
 ## The trap
 
 Raw DML (`execute("UPDATE/DELETE/INSERT ...")`) in a migration against a
-tenant-scoped table (`Engram.Repo.tenant_tables/0`) **silently touches zero
-rows on prod** and succeeds anyway:
+tenant-scoped table (`Engram.Repo.tenant_tables/0`) runs with no
+`app.current_tenant`. Tenant tables carry `FORCE ROW LEVEL SECURITY`, so for a
+migrator that does not bypass RLS the tenant policy filters every row: the DML
+"succeeds" on 0 rows, no error, migration marked applied.
 
-- Tenant tables carry `FORCE ROW LEVEL SECURITY`, so even the table owner is
-  policy-bound.
-- The prod migrator role (`engram_admin`, the RDS master) owns the tables but
-  has neither SUPERUSER nor BYPASSRLS.
-- Migrations set no `app.current_tenant`, so the tenant policy's
-  `current_setting(..., true)` is NULL → every row filtered → DML "succeeds"
-  on 0 rows, no error, migration marked applied.
+Whether prod's migrator bypasses is not something to rely on. `engram_admin`
+(RDS master) has neither SUPERUSER nor BYPASSRLS, yet was measured reading past
+FORCE RLS on 2026-09-25, attributed to its role memberships with the mechanism
+unpinned (#1726, `rls-tenancy-probe-boot-log.md`). Any role or RDS change can
+flip it. Use the pattern below regardless.
 
 **Dev/CI mask the bug completely**: their Docker `POSTGRES_USER` is a
 superuser, which bypasses RLS regardless of FORCE, so the migration works

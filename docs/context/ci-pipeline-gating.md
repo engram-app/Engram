@@ -18,34 +18,33 @@ merge gate is now the **deterministic** layer:
 - and the new **headless-protocol** tier (real engine vs real backend, event
   barriers, no Obsidian) — currently report-only, baking toward required.
 
-Flaky is no longer blocking, but flaky is still **visible** and still hard-gates
-the nightly run and every release.
+Flaky is no longer blocking, but flaky is still **visible** (warnings on every
+ref, the nightly flake ledger) and still blocks every release.
 
-> **Updated 2026-08-05 (#1244).** "Hard-gates `main`" used to mean main
-> re-executed every suite from scratch. It no longer does: main replays the
-> branch's proof via the content-addressed marker store when the tree hash
-> matches, and only executes what **missed**. The proof is the same proof —
-> same content, same full run — it just is not repeated. The genuine
-> re-execution before ship is the release gate below, which dispatches with
-> `force_full=true` against the tagged commit. See
-> [ci-fingerprint-markers.md](ci-fingerprint-markers.md) for the invariant
-> that makes replaying safe.
+main does not re-execute suites from scratch. It replays the branch's proof via
+the content-addressed marker store when the tree hash matches and executes only
+what **missed**. The genuine re-execution before ship is the release gate, which
+dispatches with `force_full=true` against the tagged commit. See
+[ci-fingerprint-markers.md](ci-fingerprint-markers.md) for the invariant that
+makes replaying safe.
 
 ## Triggers
 
 | Trigger | Meaning | `is-full`? |
 |---|---|---|
 | push to a branch (PR) | Normal PR validation | ❌ fingerprint decides what to skip |
-| push to `main` (post-merge) | Full safety-net run | ✅ forced |
+| push to `main` (post-merge) | Replays branch markers, runs only what missed | ❌ (marker store decides) |
 | `schedule` (06:00 UTC) | Nightly full run + flake measurement | ✅ forced |
 | `workflow_dispatch` `force_full=true` | Manual "run everything" | ✅ forced |
 | `repository_dispatch` | Backend runs e2e for a **plugin** PR, posts a `backend/e2e` status back | — |
-| push to `release-please--**` | Release-PR validation. **Must** be push-triggered — see "Why a dispatched check does not count" below. All e2e-* suites self-skip on this ref (the guard is on `github.ref_name`, not the event) — main just hard-gated identical content, so only the deterministic gate runs | ❌ |
+| push to `release-please--**` | Release-PR validation. **Must** be push-triggered, see "Why a dispatched check does not count" below. All e2e-* suites self-skip on this ref (the guard is on `github.ref_name`, not the event), main already ran identical content, so only the deterministic gate runs | ❌ |
 | `release-v*` tag | `deploy-prod.yml` → release e2e gate → deploy | ✅ (force_full) |
 
 `is-full` (computed by the `fingerprint` job) forces the full suite to actually
-execute instead of cache-skipping. It is true on `main` pushes, `schedule`,
-`[ci-full]` in the commit message, and `force_full` dispatch.
+execute instead of cache-skipping. It is true only on `schedule`, `[ci-full]` in
+the commit message, and `force_full` dispatch. main is tracked separately
+(`IS_MAIN`) and only to stop a squash-merge's `[e2e: ...]` tag narrowing main's
+e2e matrix.
 
 ## Jobs (verify.yml) — what each does and whether it gates
 
@@ -57,6 +56,7 @@ execute instead of cache-skipping. It is true on `main` pushes, `schedule`,
 | `unit-tests` | `mix test` — includes the CRDT head-consistency property test (deterministic convergence proof) |
 | `lint` | format + credo + compile-warnings-as-errors |
 | `frontend-lint` | SPA build/lint + legal-manifest hash (skipped on cross-repo dispatch) |
+| `e2e-lint` | lint of the e2e harness |
 | `storage-database` | storage + DB-layer tests |
 | `static-checks` | dialyzer / static analysis |
 | `migration-gates` | migration immutability + `phase/*` gates (deploy guardrail) |
@@ -65,9 +65,9 @@ execute instead of cache-skipping. It is true on `main` pushes, `schedule`,
 
 | Job | What it does | Where it DOES gate |
 |---|---|---|
-| `e2e-clerk` | Real Obsidian + Clerk auth E2E | main / nightly / release |
-| `e2e-crdt` | Real Obsidian CRDT sync E2E | main / nightly / release |
-| `e2e-browser` | Real browser / SPA E2E | main / nightly / release |
+| `e2e-clerk` | Real Obsidian + Clerk auth E2E | release only |
+| `e2e-crdt` | Real Obsidian CRDT sync E2E | release only |
+| `e2e-browser` | Real browser / SPA E2E | release only |
 | `headless-protocol` | Real SyncEngine vs real backend over WS, event barriers, no Obsidian/Xvfb | (baking — report-only everywhere until it graduates) |
 
 ### Infra / orchestration — not gates, they make the above work
@@ -97,9 +97,11 @@ internally decides a flaky e2e is a `::warning::` while a red unit-test is
 `::error::`. So the de-gate was a workflow edit, never a ruleset edit.
 
 `ci`'s `needs`: `[fingerprint, version-check, unit-tests, lint, frontend-lint,
-storage-database, e2e-clerk, e2e-crdt, e2e-browser, migration-gates,
-static-checks]`. It exits non-zero only if a **deterministic** need failed;
-`e2e-*` failures become warnings.
+e2e-lint, storage-database, e2e-clerk, e2e-crdt, e2e-browser, migration-gates,
+static-checks]`. It exits non-zero if a **deterministic** need failed, if
+`fingerprint` itself did not succeed (every gate skipped, nothing verified), or
+if `e2e-target-suite` is set (a targeted `[e2e: ...]` run is never mergeable).
+`e2e-*` failures become warnings on every ref, main included.
 
 A **skipped** required check counts as passing to GitHub rulesets, which is why
 a workflow-only or cache-skipped PR shows `ci: skipped` yet is mergeable.
@@ -140,7 +142,7 @@ fine — that control comparison is what isolates it.
 | Check | PR | main (post-merge) | nightly | release (`release-v*`) |
 |---|---|---|---|---|
 | Deterministic (unit/lint/migration/…) | 🔒 gate | 🔒 gate ♻️ | runs | 🔒 gate |
-| Real-Obsidian e2e | 👁 report | 🔒 gate ♻️ | 🔒 gate + logged | 🔒 **blocks deploy** |
+| Real-Obsidian e2e | 👁 report | 👁 report ♻️ | 👁 logged | 🔒 **blocks deploy** |
 | `headless-protocol` | 👁 report | 👁 report | 👁 logged | — |
 | Flake ledger | — | — | ✍️ writes | — |
 
@@ -182,5 +184,5 @@ that graduates, not at the flaky Obsidian suites.
 
 - Backend de-gate + sim tier + fence fix: see the testing-migration memory and
   `docs/context/testing-architecture-migration.md`.
-- Sim fidelity gaps: `docs/context/crdt-convergence-sim-fidelity-gaps.md`.
-- Runner infrastructure: `docs/context/runner-vm-setup.md`.
+- Sim fidelity gaps: plugin repo `docs/context/crdt-convergence-sim-fidelity-gaps.md`.
+- Runner infrastructure: `../engram-workspace/docs/context/runner-vm-setup.md`.

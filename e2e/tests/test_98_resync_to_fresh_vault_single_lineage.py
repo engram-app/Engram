@@ -18,7 +18,7 @@ only material difference between the passing e2e and the failing real run.
 
 Related prior art, same asymmetry, different symptom: the cross-vault id re-mint
 in `do_bare_insert` (writes global, reads vault-scoped) — see
-docs/context/crdt-wrong-mint-cross-file-overwrite.md.
+docs/context/crdt-lineage-doubling.md.
 
 Asserts on lineage COUNT, not bytes, for the reasons in `lineage_probe`: the two
 insertions sometimes interleave rather than concatenate, and viewing a note

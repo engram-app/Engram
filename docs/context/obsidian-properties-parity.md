@@ -37,11 +37,11 @@ bundled JS and conclude the rules do not exist.
 |---|---|---|
 | container padding | `--metadata-padding: 8px 0` | `py-2` |
 | gap down to the body | `margin-block-end: 2rem` | `mb-8` |
-| container background / border | transparent, `border-width: 0` | none |
+| container background / border | transparent, `border-width: 0` | same |
 | gap between rows | `--metadata-gap: 3px` | `gap-[3px]` |
-| row radius | `--metadata-property-radius: 6px` | `rounded-md` |
+| row radius / border | `--metadata-property-radius: 6px`, no border | `rounded-md border border-border` |
 | row layout | `display: flex; align-items: start` | same |
-| key column width | `--metadata-label-width: 9em` → 144px, `flex-shrink: 0` | `w-36 min-w-36 shrink-0` |
+| key column width | `--metadata-label-width: 9em` → 144px, `flex-shrink: 0` | `w-36 min-w-36 shrink-0`, plus `border-r` |
 | key font size | `--font-smaller: 0.875em` → 14px | `text-sm` |
 | key colour | `--text-muted` | `text-muted-foreground` |
 | cell padding | `--metadata-input-padding: 4px 8px` | `px-2 py-1` |
@@ -65,12 +65,17 @@ value back to transparent. So focusing a *value* tints nothing at all — the
 caret is the entire affordance.
 
 This is why so many community CSS snippets exist for "properties on hover":
-the stock look is deliberately bare. We replicated it as-is. If it reads as
-too flat for the web app, the one-line change is a `hover:bg-muted` on the row
-in `properties-widget.tsx` — that is what the popular snippets do.
+the stock look is deliberately bare. We first replicated it as-is; #1520 then
+added the borders listed below. If it still reads as too flat, the one-line
+change is a `hover:bg-muted` on the row in `properties-widget.tsx`, which is
+what the popular snippets do.
 
 ## Where we deliberately diverge
 
+- **Borders (#1520).** Each row is a bordered box and the key cell has a right
+  border (Obsidian's `--metadata-divider` turned on). Stock Obsidian ships
+  both at 0 width, which leaves an empty value as an invisible target with no
+  hint the row is editable.
 - **Row actions.** Obsidian puts move/remove in a right-click menu and shows
   nothing in the row. We keep the `^ v x` buttons but reveal them on
   hover/focus, so the resting state matches without losing the capability.

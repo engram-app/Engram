@@ -1,72 +1,48 @@
 # Context Doc: Worktree Deps Artifact Staleness (pre-push hook failures)
 
-_Last verified: 2026-09-18_
-
-## Status
-Working (documented gotcha — not a bug, requires manual fix per worktree)
+_Last verified: 2026-10-03_
 
 ## What This Is
-Git worktrees in the engram backend hardlink `deps/` and `_build/` from the parent checkout via the post-checkout hook. Some Erlang deps contain **generated** `.beam` files (from `.yrl`/`.xrl` parser sources) that can be missing or inconsistent in the worktree. This causes `mix compile --warnings-as-errors` failures in the pre-push hook even when `mix test` passes.
+A worktree's `_build/` can hold an incomplete dep: a missing yecc/leex-generated
+`.beam` (`expo`, `jose`) or a dep ebin missing its main module. Compile then
+fails in the pre-push hook with a "module not available" error that reads like a
+code defect.
 
-## Symptom
+## Where the bad `_build` comes from
+`.githooks/post-checkout` hardlinks `deps/` and `frontend/node_modules` from the
+canonical checkout into each new worktree. Since #1487 (2026-08-27) it
+deliberately does **not** seed `_build/`: a hardlinked `_build` let one
+worktree's rebuild poison every other's, and a half-built canonical propagated
+missing generated beams.
 
-Pre-push hook fails with:
+You can still hit this when:
+- the worktree was created before #1487, or by a canonical checkout whose
+  `.githooks/` predates it (the hook that runs is the canonical's working copy),
+  so its `_build` is still hardlinked;
+- a dep compile was interrupted and left a partial ebin.
+
+## Symptoms
 
 ```
 ** (UndefinedFunctionError) function :expo_po_parser.parse/1 is undefined
     (module :expo_po_parser is not available)
 ```
 
-Traced through `Gettext.Compiler.compile_po_file` → `Expo.PO.parse_file!`. Plain `mix test` may pass; the strict `--force` recompile in the hook is what surfaces the missing generated beam.
+Traced through `Gettext.Compiler.compile_po_file` → `Expo.PO.parse_file!`.
+`:expo_po_parser` is generated from `.yrl` sources inside the `expo` dep.
 
-A related earlier symptom in the same family: a stale `y_ex` (CRDT lib) artifact causing compile errors, fixed by `mix clean && mix compile`.
-
-## Root Cause
-
-`:expo_po_parser` is a **yecc/leex-generated Erlang module** compiled from `.yrl`/`.xrl` sources inside the `expo` dep (gettext's PO parser). The hardlinked `_build/` artifact can leave this generated `.beam` missing or inconsistent in the worktree because:
-- The hardlink is a snapshot; if the parent checkout never fully compiled `expo` (or compiled it under different conditions), the generated beam may not exist in the hardlinked tree.
-- The worktree gets a hardlinked reference, not a fresh build.
-
-## Fix
-
-```bash
-# In the worktree root:
-mix deps.compile expo --force
-# Then re-run the hook target:
-mix compile --warnings-as-errors
-```
-
-This rebuilds the two generated parser files (`.erl` + `.beam`) inside the worktree's `_build/`. For the broader `y_ex`/CRDT class of stale artifacts:
-
-```bash
-mix clean && mix compile
-```
-
-## Second instance: `hammer` (2026-09-18)
-
-Same class, but the error names **your** file, not the dep:
+Or, naming **your** file instead of the dep:
 
 ```
 error: module Hammer is not loaded and could not be found.
  7 │   use Hammer, backend: :ets
     └─ lib/engram_web/rate_limiter/ets.ex:7
-== Compilation error in file lib/engram_web/rate_limiter/ets.ex ==
 ```
 
-Nothing points at `deps/hammer`, so this reads like a code defect in the rate
-limiter. It is not — `_build/dev/lib/hammer/ebin/` held only the three
-`Mix.Tasks.Hammer.Install` artifacts; `Elixir.Hammer.beam` was absent.
+Here `_build/dev/lib/hammer/ebin/` held only the `Mix.Tasks.Hammer.Install`
+beams; `Elixir.Hammer.beam` was absent.
 
-Two traps on the way to the fix:
-
-- **`mix deps.compile hammer` (no `--force`) silently no-ops.** It prints
-  `==> hammer` / `Generated hammer app` and exits 0 while the ebin stays
-  incomplete. Only `rm -rf _build/dev/lib/hammer` first (or `--force`) makes it
-  compile the 14 files.
-- **The parent checkout compiling clean proves nothing**, and neither does
-  checking out an unmodified tree in the *same* worktree — the bad `_build` is
-  the worktree's, so `git stash` + recompile still fails and invites the wrong
-  conclusion that the breakage is on `main`.
+## Fix
 
 Check the ebin directly before theorising:
 
@@ -74,15 +50,30 @@ Check the ebin directly before theorising:
 ls _build/dev/lib/<dep>/ebin/ | head
 ```
 
+Then rebuild that dep with `--force`:
+
+```bash
+mix deps.compile <dep> --force    # e.g. expo, hammer
+mix compile --warnings-as-errors
+```
+
+If the worktree's `_build` is still hardlinked (old worktree), break the link:
+`rm -rf _build && mix compile`.
+
 ## Gotchas
 
-- `mix test` passing is NOT proof that `mix compile --warnings-as-errors` will pass in the hook. The hook uses `--force` which triggers a full recompile and surfaces missing generated beams that the incremental compiler skips.
-- Only affects **worktrees** (hardlinked deps), not the parent checkout or a clean `git clone`.
-- `mix deps.compile expo --force` is surgical — prefer it over `mix clean && mix compile` (which recompiles everything and takes much longer).
+- **`mix deps.compile <dep>` without `--force` silently no-ops.** It prints
+  `Generated <dep> app` and exits 0 while the ebin stays incomplete.
+- **The canonical checkout compiling clean proves nothing**, and neither does
+  `git stash` + recompile in the same worktree. The bad `_build` is the
+  worktree's, so both invite the wrong conclusion that `main` is broken.
+- Only affects worktrees, not the canonical checkout or a clean `git clone`.
 
 ## References
 
-- Related worktree env-file gap (`.env.local` not carried): `docs/context/local-dev-preview-stack.md`
-- Broader worktree deps staleness note (lockfile drift, not parser beams): `docs/context/read-path-decrypt-perf.md` line 48
-- Worktree usage pattern: `docs/workspace-pattern.md` (workspace root)
-- Same hardlink surface, different root cause (pushing on the system OTP 26 corrupts the `opentelemetry` rebar build): `docs/context/worktree-push-otp-mismatch-rebar-dep.md`
+- `.githooks/post-checkout`: what is and is not seeded, and why
+- Worktree env files (`.env.local` is gitignored and not carried):
+  `../engram-workspace/docs/context/engram-dev-modes.md`
+- Same hardlink surface, different root cause (pushing on the system OTP 26
+  corrupts the `opentelemetry` rebar build):
+  [worktree-push-otp-mismatch-rebar-dep.md](worktree-push-otp-mismatch-rebar-dep.md)

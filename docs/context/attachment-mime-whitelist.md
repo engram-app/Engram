@@ -1,6 +1,6 @@
 # Attachment MIME / Extension Whitelist (Pricing v2 §H)
 
-_Last verified: 2026-06-18_
+_Last verified: 2026-10-03_
 
 Two-phase abuse defense against using Free vault storage as a malware /
 illegal-content cache. Phase 1 ships at pricing v2 launch; Phase 2 is
@@ -9,7 +9,8 @@ deferred but the milestone trigger is documented here.
 ## Phase 1 — shipped
 
 **Module:** `Engram.Storage.MimeWhitelist`
-**Wired into:** `EngramWeb.AttachmentsController.upload/2`
+**Enforced in:** `Engram.Attachments.upsert_attachment/3`, so REST, MCP, Oban and console callers all hit it. `AttachmentsController` also checks it to shape the 415, after the Free-tier text-only gate (402).
+**Normalization:** decisions use `MimeWhitelist.normalize/1` (params stripped, trimmed, downcased); `\n`, `\r` and `\0` are rejected before normalizing. The stored MIME is the uploader's exact string.
 **Rejection status:** HTTP 415 with `{"error": "mime_not_allowed", "mime_type": "..."}` or `{"error": "extension_not_allowed", "extension": "..."}`
 
 ### What's allowed
@@ -42,6 +43,12 @@ deferred but the milestone trigger is documented here.
 
 Both default off. SaaS (`app.engram.page`) does not set either.
 
+### Known gap: `.zip` from Obsidian
+
+The plugin syncs `.zip` as a binary attachment (`BINARY_EXTENSIONS` in
+`plugin/src/sync.ts`), but `application/zip` is not allowlisted. Every zip in
+a vault gets a 415, so those files silently never sync.
+
 ## Phase 2 — deferred
 
 **Trigger:** schedule PhotoDNA / DMCA review when active Free users
@@ -69,23 +76,8 @@ attacker's blob also has to be opened by a victim who clicked through —
 which means the extension is what the OS uses, which means our blocklist
 catches it. Phase 2 PhotoDNA addresses the residual image-payload case.
 
-## Operator launch checklist
+## Tests
 
-1. Decide policy for SaaS: gate ON by default. No env vars needed on
-   AWS — module defaults match the SaaS posture.
-2. For self-host docs, add a note to `engram.ax` quick-start docs that
-   `ATTACHMENT_MIME_BYPASS=true` is available for operators who need to
-   distribute executables from their personal vault.
-3. Re-evaluate the deny list quarterly — new RCE-bearing extensions
-   appear (`.lnk` joined recently; `.url` and `.scf` are emerging).
-
-## Test surface
-
-- Unit: `test/engram/storage/mime_whitelist_test.exs` — 20 cases
-  covering prefix allow, explicit allow, MIME reject, extension reject,
-  bypass, operator extras.
-- Controller: `test/engram_web/controllers/attachments_controller_test.exs`
-  — added 3 cases (`.exe` belt-and-braces, `x-msdownload`, unknown
-  extension defaults).
-- E2E: `e2e/tests/api_only/test_70_attachment_mime_whitelist.py` — full
-  API round-trip including PDF accept.
+- `test/engram/storage/mime_whitelist_test.exs`
+- `test/engram_web/controllers/attachments_controller_test.exs`
+- `e2e/tests/api_only/test_70_attachment_mime_whitelist.py`
