@@ -180,6 +180,9 @@ config :engram, Oban,
         {"23 * * * *", Engram.Workers.ClientLogsPruner},
         {"28 * * * *", Engram.Workers.InstallPingsPruner},
         {"38 * * * *", Engram.Workers.IdempotencyPrune},
+        # Note-version outbox copies whose FinalizeRevision job was lost
+        # between commit and enqueue (#1710).
+        {"43 * * * *", Engram.Workers.FinalizeRevisionSweep},
         # Export archives past the 7-day download window (#859).
         {"53 * * * *", Engram.Workers.ExportExpirySweep},
         # Paddle drift check. Daily: drift logs at :error to Sentry, and a
