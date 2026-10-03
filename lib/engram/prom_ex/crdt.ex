@@ -4,7 +4,7 @@ defmodule Engram.PromEx.Crdt do
 
   Subscribes to:
 
-    * `[:engram, :crdt, :room_start]` — `%{count: 1}`, no metadata. One event
+    * `[:engram, :crdt, :room_start]`, `%{count: 1}`, metadata `%{source: atom}`. One event
       per room process actually created (`Engram.Notes.CrdtDoc.start_link/1`),
       so a lookup that resolves to an existing room does not count. The ARRIVAL
       counterpart to `room_drain` below; without it, room allocation over a
@@ -33,7 +33,7 @@ defmodule Engram.PromEx.Crdt do
 
   Metrics:
 
-    * `engram_prom_ex_crdt_room_start_total` — untagged.
+    * `engram_prom_ex_crdt_room_start_total`, tags `[:source]`.
     * `engram_prom_ex_crdt_room_drain_total` — tags `[:phase]`.
     * `engram_prom_ex_crdt_index_checkpoint_total` — tags `[:phase]`.
     * `engram_prom_ex_crdt_index_projection_total` — tags `[:phase]`.

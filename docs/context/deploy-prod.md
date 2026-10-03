@@ -1,6 +1,6 @@
 # Deploy to AWS prod
 
-_Last verified: 2026-06-18_
+_Last verified: 2026-10-03_
 
 When to read this: shipping code to `app.engram.page`, rolling back a bad deploy, or debugging the deploy pipeline.
 
@@ -10,9 +10,9 @@ Two-stage pipeline. Image build lives in this repo; image-tag selection lives in
 
 1. **`build-and-publish-image` job in `verify.yml`** (this repo) — runs on every push to `main` (the former standalone `build-ecr.yml`, since folded into `verify.yml`). Builds the Docker image and pushes to ECR tagged `sha-<7>`. The image sits in ECR; **nothing rolls.**
 
-2. **`deploy-prod.yml`** (this repo) — runs only when a `release-v*` git tag is pushed. Opens a PR in engram-infra rewriting `engram_image_tag` default to the `sha-<7>` of the tagged commit, and **stops there — it does NOT merge and does NOT enable auto-merge** (#1155; see "Promotion gate" below). Prod does not move until a human merges that PR. The workflow prints the exact command in its step summary.
+2. **`deploy-prod.yml`** (this repo), runs only when a `release-v*` git tag is pushed. Job `release-e2e-gate` first dispatches `verify.yml` with `force_full` on the tagged commit and blocks the deploy unless the full-Obsidian e2e jobs pass (emergency override: an annotated tag whose message contains `[skip-release-e2e]`). Job `open-infra-pr` then opens a PR in engram-infra rewriting `engram_image_tag` default to the `sha-<7>` of the tagged commit, and **stops there, it does NOT merge and does NOT enable auto-merge** (#1155; see "Promotion gate" below). Prod does not move until a human merges that PR. The workflow prints the exact command in its step summary.
 
-3. **engram-infra `terraform (prod)`** (engram-infra `.github/workflows/ci.yml`, `matrix: env: [staging, prod]`) — runs `terraform apply -auto-approve` on push to main. The new image tag flows into `aws_ecs_task_definition.engram`; a new revision is registered; `aws_ecs_service.engram` rolls onto it.
+3. **engram-infra `terraform (prod)`** (engram-infra `.github/workflows/ci.yml`, `matrix: env: [staging, prod]`), runs `terraform apply -auto-approve` on push to main. The new image tag flows into `aws_ecs_task_definition.engram`, which is `for_each` over the `web` and `worker` node roles. Both services roll: `engram-saas-prod` (web) and `engram-worker-prod` (Oban worker). One tag, two task-def revisions.
 
 The OIDC build role (`engram-saas-prod-ecr-push`) trusts `refs/heads/main` + `refs/tags/v*` only — build can never accidentally roll. The deploy workflow no longer assumes any AWS role: it only opens a cross-repo PR via the `engram-infra-tf` GitHub App.
 
@@ -20,7 +20,8 @@ The OIDC build role (`engram-saas-prod-ecr-push`) trusts `refs/heads/main` + `re
 
 **The normal path is automatic — you do not tag by hand.** Merging the
 release-please PR makes release-please.yml push `release-v<version>` itself, so
-`deploy-prod.yml` fires without anyone running the commands below.
+`deploy-prod.yml` fires without anyone running the commands below. A hand push of that tag is rejected as
+`already exists`; that is expected.
 
 That is also why deploy-prod cannot assume the image already exists: the tag is
 pushed by the *same* main push that starts main CI, and `build-and-publish-image`
@@ -71,7 +72,7 @@ curl -s https://staging.engram.page/api/health | jq .
 #    -> engram-infra Actions tab, `terraform (staging)` apply log
 
 # 3. a real client handshake works, not just HTTP 200
-#    -> docs/context/staging-mcp-oauth-connect.md
+#    -> docs/context/oauth-discovery-urls-behind-edge-tls.md
 ```
 
 Then promote. The `Deploy prod` job summary prints this exact line with the PR
@@ -111,6 +112,10 @@ aws ecs describe-services --cluster engram-prod --services engram-saas-prod \
 aws ecs describe-task-definition --task-definition engram-saas-prod \
   --query 'taskDefinition.containerDefinitions[0].image' --output text
 
+# Worker tier (same commands, family engram-worker-prod)
+aws ecs describe-task-definition --task-definition engram-worker-prod \
+  --query 'taskDefinition.containerDefinitions[0].image' --output text
+
 # Recent revisions (most recent first)
 aws ecs list-task-definitions --family-prefix engram-saas-prod --sort DESC --max-items 10
 
@@ -129,8 +134,8 @@ Operator AWS profile is `engram-infra-operator` (read-only — `operator-cheatsh
 ## Failure modes
 
 - **`deploy-prod.yml` step "Rewrite engram_image_tag default" fails** — regex regression. Check `main/envs/prod/variables.tf` shape in engram-infra; the workflow expects exactly one `variable "engram_image_tag"` block with a `default = "..."` line.
-- **Bot PR opens but doesn't auto-merge** — engram-infra CI failing (typically tflint or terraform plan). Open the PR, read the failing check, fix root cause in engram-infra. The bot will reuse the `bot/bump-engram-prod` branch on the next release tag.
-- **`terraform (prod)` fails on `reading ECR Images: couldn't find resource`** — the `sha-<7>` image isn't in ECR, so `data.aws_ecr_image.engram_pin_check` (ecs.tf) and `engram_image_pin` (ecr.tf) fail the plan. This used to happen on *every* release: the tag is pushed the instant the release commit lands on main, and `build-and-publish-image` finishes ~20 min later, while the release e2e gate only absorbed ~14 min — `release-v0.10.0` and `release-v0.11.0` both died this way. `open-infra-pr` now waits for that job before writing the pin, so a fresh occurrence means the wait timed out (>30 min) or the job genuinely failed. Confirm with `aws ecr describe-images`, then re-run the failed `terraform (prod)` check — or, if the bot PR has gone behind main, `gh pr update-branch <n>` in engram-infra, which re-runs the checks and lets auto-merge finish.
+- **Bot PR checks are red**: engram-infra CI failing (typically tflint or terraform plan). Read the failing check, fix root cause in engram-infra. The bot reuses the `bot/bump-engram-prod` branch on the next release tag.
+- **`terraform (prod)` fails on `reading ECR Images: couldn't find resource`**: the `sha-<7>` image isn't in ECR, so `data.aws_ecr_image.engram_pin_check` (ecs.tf) and `engram_image_pin` (ecr.tf) fail the plan. This used to happen on *every* release: the tag is pushed the instant the release commit lands on main, and `build-and-publish-image` finishes ~20 min later, while the release e2e gate only absorbed ~14 min, `release-v0.10.0` and `release-v0.11.0` both died this way. `open-infra-pr` now waits for that job before writing the pin, so a fresh occurrence means the wait timed out (>30 min) or the job genuinely failed. Confirm with `aws ecr describe-images`, then re-run the failed `terraform (prod)` check, or, if the bot PR has gone behind main, `gh pr update-branch <n>` in engram-infra to re-run the checks, then merge it.
 - **Service crash-loops after deploy** — task running but health checks fail. Check CloudWatch Logs `/ecs/engram-saas-prod`, then forward-roll to the last-known-good `sha-<7>` via a new release tag.
 - **App token mint step 403s** — `engram-infra-tf` App permissions changed. Required: `contents: read & write` + `pull-requests: read & write` on engram-infra. Adjust at https://github.com/organizations/engram-app/settings/apps/engram-infra-tf.
 
@@ -138,16 +143,9 @@ Operator AWS profile is `engram-infra-operator` (read-only — `operator-cheatsh
 
 The GitOps path is the only sanctioned route. If engram-infra CI is wedged AND a deploy must ship NOW, an operator with prod admin credentials (Roles Anywhere break-glass — see `operator-cheatsheet.md` in engram-infra) can `aws ecs register-task-definition` + `update-service` directly. After the incident, **immediately** open an engram-infra PR bumping `engram_image_tag` to match what's live, otherwise the next routine `terraform apply` reverts the service.
 
-The dedicated `engram-saas-prod-ecs-deploy` IAM role was removed when the workflow migrated to GitOps (engram-infra PR — TODO). No CI workflow needs ECS-write OIDC anymore.
+## Verifying prod moved
 
-## Why GitOps (not imperative)
+A green `deploy-prod.yml` means an engram-infra PR was opened. A green `terraform apply` means UpdateService was called: no ECS service in engram-infra `main/` sets `wait_for_steady_state`, so apply returns before the rollout finishes.
 
-The previous shape called `aws ecs register-task-definition` + `update-service` directly from this workflow. That stored the live image tag only in ECS state, never in git, which:
-
-1. **Broke GitOps.** Desired state must be in git.
-2. **Caused real TF drift.** `aws_ecs_service.engram` has `lifecycle.ignore_changes = [desired_count]` only — not `task_definition`. The next routine `tf apply` on engram-infra would have reverted the service to revision 1 (the TF-managed task def pointing at the old default).
-3. **Was asymmetric with staging.** Staging-fastraid already runs the var-bump-PR pattern via engram-infra's `tf-apply` daemon. Prod now mirrors it.
-
-## Why tag-gated (not merge-to-deploy)
-
-Pre-revenue, merge-to-deploy is fine. Post-launch, every PR shipping immediately creates pressure: tests pass means deploy, no human gate, no batch-windowing. Tag-gated lets the operator (a) batch multiple merges into one release, (b) hold deploys during incident windows, (c) audit exactly what shipped when via `git tag --list 'release-v*'`. The cost is one extra step per release (`git tag && git push`) — worth it for a paid product.
+- **Without AWS creds**, query Grafana Prometheus: `count by (role) (up{job="prometheus.scrape.engram_app"})`. A completed rolling replacement doubles each role's target count, then settles (observed `web 2 → 4 → 2`, `worker 1 → 2 → 1`). The worker doubling is what proves the Oban cron tier rolled, not just web; split `by (role)`, a total hides it.
+- **A frozen Loki frontier at night is not a logging outage.** Prod logs only on activity, so after a deploy's burst the newest line can stop for an hour or more. Before calling logs dead, run `query_loki_stats` over a comparable pre-deploy quiet window (same zeroes = normal), confirm the `up{...}` query above is current, and `curl -s https://api.engram.page/api/health` (reports `version` and `build_sha`).

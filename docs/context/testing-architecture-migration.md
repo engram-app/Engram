@@ -10,7 +10,9 @@ The full-Obsidian e2e suites — `e2e-clerk`, `e2e-crdt`, `e2e-browser` — move
 from **hard gate** to **report-only** in the `ci` aggregate job. They still run
 on every push and post their own PR checks, but a failure emits `::warning::`
 instead of failing the merge (see `verify.yml`, the `ci` job's "REPORT-ONLY"
-block). They remain the gate on **main / nightly / `release-v*`**.
+block). The only place they still gate is the **`release-v*`** e2e gate in
+`deploy-prod.yml` (`release-e2e-gate`). On main and nightly a red e2e is a
+`::warning::` plus a ledger row; nothing blocks.
 
 ## Why
 
@@ -20,6 +22,17 @@ the code under test (runner contention, boot timing, Clerk rate limits). A gate
 that's a coin-flip stops nothing real while blocking correct, unit-proven work.
 So convergence is now gated **deterministically** elsewhere, and the flaky
 integration suite became a signal, not a blocker.
+
+A model-server sim tier has blind spots you won't guess up front: server
+defects (Engram-obsidian#285, stale converge head) are invisible to it, and
+#282 only reproduced after the model grew the real self-inclusive `update_v1`
+echo. Never claim the client sim covers server behaviour. Demote an e2e test
+only when its assertion has a NAMED sim or headless equivalent (strangler,
+never wholesale).
+
+e2e devices start fresh (no cursor), so every sync is a GENESIS pull. Bugs
+that need a RESUMED device stay invisible unless the fixture seeds `data.json`
+with a cursor (see `e2e/tests/test_82_resumed_device_stale_idmap.py`).
 
 ## What gates convergence now (deterministic, hard-required)
 

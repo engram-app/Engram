@@ -1,6 +1,6 @@
 # y-indexeddb `whenSynced` never resolves after `destroy()`
 
-_Last verified: 2026-07-02_
+_Last verified: 2026-10-03_
 
 **Trigger:** Any code that awaits `IndexeddbPersistence.whenSynced` (directly or
 via a cached promise) while `destroy()` can race the initial IndexedDB load will
@@ -17,21 +17,11 @@ closures, and the destroyed `Y.Doc`.
 
 ## Where it bit us (PR #871)
 
-`frontend/src/crdt/manager.ts` `entry()` cached a `ready` promise backed by
-`persistence.whenSynced`. On fast note-switch, `closeDoc()` could be called while
-a note was still mid-load:
-
-1. `closeDoc` called `doc.destroy()` then `persistence.destroy()`.
-2. The in-progress `entry()` was awaiting `ready` (= `whenSynced`), which now
-   never resolved.
-3. Every caller that had already called `entry()` — `getDoc`, `applyRemoteUpdate`,
-   `encodeStateVector`, `handleFrame`, `startSync` — suspended permanently.
-4. Post-await liveness guards (`hasDoc`, epoch checks) written for exactly this
-   race were unreachable dead code.
-
-Found only during the final whole-branch review of PR #871. Per-task reviews and
-unit tests missed it because tests stubbed `getDoc` with manually-resolved
-promises, hiding the hang at the `entry()` level.
+`frontend/src/crdt/manager.ts` `entry()` cached a `ready` promise backed by `whenSynced`. A fast
+note-switch called `closeDoc()` mid-load, and every caller awaiting that entry (`getDoc`,
+`applyRemoteUpdate`, `handleFrame`, ...) suspended forever, leaving their post-await liveness guards
+unreachable. The plugin awaits `whenSynced` too (`src/crdt/provider-registry.ts`, behind
+`lifetime.guard(e.ready)`).
 
 ## Fix (now in `manager.ts`)
 

@@ -1,111 +1,50 @@
 # Context Doc: Elixir Architecture Decisions
 
-_Last verified: 2026-06-22_
+_Last verified: 2026-10-03_
 
-_Original audit: 2026-04-02. Reconciled with shipped reality: 2026-06-18._
+The why behind the backend's shape, and what was rejected. Versions live in
+`mix.exs`; prod env lives in engram-infra `main/envs/prod/*.tf`.
 
-> **PARTIALLY SUPERSEDED — read the inline corrections.**
-> This is the original (2026-04-02) decision-log. Several early-launch choices
-> changed once the product shipped. The **language/OTP/RLS/PubSub/Oban/Qdrant**
-> core decisions still hold. The **deployment, hosting, ID, MCP, Redis, email,
-> and billing** rows below were since reversed — each carries an inline
-> **UPDATE** note, and the Fly-based "Infrastructure Setup" runbook at the
-> bottom is dead (see `docs/context/deploy-prod.md` for the live AWS GitOps
-> deploy). Do NOT run any `fly` command against prod.
->
-> **Shipped reality (2026-06-18):** PROD = AWS ECS Fargate + RDS + S3,
-> deployed via `release-v*` tag → engram-infra Terraform reconcile (GitOps).
-> FastRaid = staging. PKs are `uuid` (uuidv7). MCP is hand-rolled (no external
-> MCP dep). Redix is not a dependency. Email = Resend (shipped). Billing =
-> Paddle (shipped).
+## Current decisions
 
-## What This Is
-Complete decision audit for the Engram Elixir/Phoenix architecture. Captures what was chosen, what was rejected, and why — with inline UPDATE notes where the shipped product diverged from the original call.
+| Area | Decision | Why |
+|------|----------|-----|
+| Language | Elixir/Phoenix | BEAM for many concurrent connections, OTP supervision, Channels for bidirectional sync. |
+| Real-time | Phoenix Channels + `Phoenix.PubSub` (pg) | Bidirectional, cluster-native fan-out, no broker. |
+| Clustering | `DNSCluster` on `DNS_CLUSTER_QUERY` (AWS Cloud Map in prod) | Live since Engram#717. Unset (self-host, single node) means no clustering. |
+| Multi-tenancy | Postgres RLS, `SET LOCAL` tenant per transaction | DB-enforced, fail-closed. A `Repo.prepare_query` tripwire raises on unscoped tenant queries. See `database-schema-rls.md`. |
+| DB roles | `engram_owner` (migrations), `engram_app` (runtime, under RLS), `engram_maintenance` (maintenance pool) | See `maintenance-db-role.md`. |
+| IDs | `uuid` PKs from `uuidv7()` | Time-ordered; notes are id-addressable. Requires Postgres 18. |
+| Caching | Node-local ETS, evictions over `Engram.Cluster.CacheSync` | No Redis. Caches that must be coherent also LISTEN on Postgres NOTIFY. See `perf-caching-invalidation.md`. |
+| Rate limiting | Hammer: ETS, distributed ETS + PubSub when clustered; Postgres token bucket (`usage_buckets`) for the durable daily search cap | No Redis. See `rate-limiter-architecture.md`. |
+| Job queue | Oban on the same Postgres | Durable jobs, no new infra. No Oban Pro. See `async-indexing-pipeline.md`. |
+| Auth | Clerk JWTs via Joken + `joken_jwks`; API keys as SHA256 hashes, looked up directly by indexed `key_hash` | No key cache. |
+| Embeddings | Voyage, asymmetric: `voyage-4-large` (1024d) for documents, `voyage-4-lite` for queries | Shared Voyage 4 space. Self-host uses Ollama (`lib/engram/embedders/ollama.ex`). |
+| Vector DB | Qdrant, thin Req HTTP wrapper | No official Elixir SDK; the REST API is small. |
+| Search | Hybrid dense + BM25 sparse with server-side RRF; reranker pluggable (`RERANKER_BACKEND=jina|none`, default `none`, unset in prod) | See `chunk-boundary-stability.md`. |
+| Markdown | Line/regex section splitter (`lib/engram/parsers/markdown.ex`) for chunking; `mdex_native` (comrak) for MCP section boundaries | Earmark is still in `mix.exs` but no code in `lib/` uses it. |
+| MCP server | Hand-rolled (`lib/engram/mcp/`) | No external MCP dependency. |
+| Storage | ExAws S3 (+ KMS) | AWS S3 in prod, MinIO for self-host/staging. |
+| Email | Resend, gated on `RESEND_API_KEY` | |
+| Billing | Paddle (Merchant of Record) | See `paddle-integration.md`. |
+| Observability | PromEx + Sentry | |
+| App structure | Single OTP app, `one_for_one` | No umbrella. A web/worker split is a runtime role (`ENGRAM_NODE_ROLE`), not a separate app. |
+| Prod | AWS ECS Fargate + RDS + S3, GitOps deploy | See `deploy-prod.md`. FastRaid is staging. |
 
-## Decision Audit (2026-04-02)
+## Rejected alternatives
 
-| Area | Decision | Rationale |
-|------|----------|-----------|
-| **Language** | **Elixir/Phoenix** | BEAM VM purpose-built for massive concurrent connections, OTP supervision trees for self-healing, Phoenix Channels for bidirectional real-time sync |
-| **Real-time** | **Phoenix Channels (WebSocket)** | Bidirectional, built-in presence tracking, cluster-native PubSub, no reconnect hacks |
-| **Multi-tenancy** | **PostgreSQL RLS + tenant_id** | DB-enforced isolation via `SET LOCAL` per transaction, fail-closed (no tenant = no rows), defense-in-depth |
-| **DB roles** | **Two roles** | `engram_owner` (migrations, bypasses RLS) + `engram_app` (runtime, subject to RLS) |
-| **Clustering** | **dns_cluster** | Auto node discovery via DNS, enables distributed PubSub. _UPDATE: prod runs on AWS ECS Fargate, not Fly — discovery is via the platform's service DNS, not Fly `.internal`._ |
-| **PubSub** | **Phoenix.PubSub.PG2** | Native Erlang distribution, cross-region broadcast, no Redis needed |
-| **Caching** | **ETS** (Erlang Term Storage) | In-process, clustered via PubSub if needed, eliminates Redis dependency |
-| **Rate limiting** | **Hammer** | Token bucket, ETS backend, Plug integration. _UPDATE (2026-06-21): the Redis backend was removed — clustered prod uses a distributed ETS + Phoenix.PubSub limiter, self-host plain ETS; the durable daily search cap moved to a Postgres token bucket (`usage_buckets`)._ |
-| **Auth: JWT** | **Joken** | Lightweight, Plug-native |
-| **Auth: API keys** | **SHA256 hash + ETS cache** | Same security model, fast in-process caching |
-| **S3 client** | **ExAws + ExAws.S3** | Battle-tested, S3-compatible. _UPDATE: attachments live in AWS S3 (not Fly Tigris)._ |
-| **Qdrant client** | **Custom Req HTTP wrapper** (~150 LOC) | No official Elixir SDK; REST API is simple, thin wrapper sufficient |
-| **Embeddings** | **Req HTTP wrapper** (~30 LOC) | Same Voyage AI REST API, just different HTTP client |
-| **Markdown parsing** | **Earmark AST + custom walker** | Earmark provides full AST, chunking logic reimplemented (~150 LOC) |
-| **MCP server** | **Hand-rolled** (Elixir) | _UPDATE: Hermes MCP was NOT adopted — the MCP server is hand-rolled (`lib/engram/mcp/`), no external MCP dependency in mix.exs. The "MCP fallback" row below (raw JSON-RPC) is effectively what shipped._ |
-| **Job queue** | **Oban** (PostgreSQL-backed) | Durable jobs survive crashes/deploys, built-in retry/backoff/dedup/rate-limiting, no new infra (uses existing Postgres) |
-| **Testing** | **ExUnit + ExMachina + Mox + Bypass** | `async: true` parallel tests, Ecto.Sandbox per-test transactions |
-| **Deployment** | ~~`fly launch`~~ → **AWS ECS Fargate (GitOps)** | _UPDATE: Fly was dropped. Prod deploys by pushing a `release-v*` git tag, which opens a PR in engram-infra rewriting the ECS image tag; engram-infra's Terraform applies it and rolls the service. No fly.toml, no `fly` commands. See `docs/context/deploy-prod.md`._ |
-| **Observability** | **PromEx + Sentry** | PromEx auto-instruments Phoenix/Ecto/Oban/BEAM metrics; Sentry captures errors with stack traces. Both free tier. |
-| **Backups** | **RDS snapshots** (daily) + S3 versioning | _UPDATE: prod runs on AWS RDS, so backups are RDS automated snapshots (7d) + S3 versioning, not Fly volume snapshots. Qdrant data is reconstructable from Postgres. See `docs/context/disaster-recovery.md`._ |
-| **RLS enforcement** | **Layered defense** | Process-dict guard in `Repo.prepare_query` raises on unscoped tenant queries. Safe with PgBouncer transaction mode + Ecto.Sandbox. |
-| **IDs** | **`uuid` (uuidv7) PKs** | _UPDATE: BIGSERIAL was reversed — primary keys are `uuid` generated by `uuidv7()` (time-ordered). Note URLs are now id-addressable. The earlier "BIGSERIAL internal only / path as identifier" plan is dead._ |
-| **App structure** | **Single OTP app** | No umbrella. Single app is simpler at this scale. Split indexing into separate app only if deployment topology requires it. |
-| **Supervision** | **one_for_one** | Independent worker processes. Channel crashes don't affect Oban, Oban crashes don't affect Channels. |
-| **Self-hosted embedding** | **Ollama only** | voyage-4-nano requires Voyage API key, contradicts "free, user's own infra." Ollama is truly local. |
-| **MCP fallback** | _N/A — fallback became the implementation_ | The "raw JSON-RPC server" fallback is what shipped; Hermes MCP was never adopted. |
-| **Tokenizer for chunking** | Approximate word-based (~4 chars/token) | Voyage handles actual tokenization. 512 "tokens" is a soft target. |
-| **Email** | **Resend** (shipped) | _UPDATE: "none for launch" reversed — transactional email ships via Resend, gated on `RESEND_API_KEY` (see `config/runtime.exs`). Inbound bounce/complaint webhook at `POST /webhooks/resend`._ |
-| **Billing** | **Paddle (shipped, Phase 10)** | Paddle (Merchant-of-Record) handles VAT/sales tax globally. _UPDATE: shipped — webhook receiver, billing config endpoint, subscriptions, RequireOnboarding gate all live._ |
-| **Load testing** | Deferred to Phase 9 (Deploy) | Key questions: WebSocket connections/machine, embedding throughput, Voyage rate ceiling impact on bulk operations. |
-
-## Unchanged Decisions
-
-| Area | Decision | Details |
-|------|----------|---------|
-| **Embedding provider** | Voyage AI `voyage-4-large` (1024d, $0.06/M tokens) | Top MTEB, shared space with nano, matryoshka support |
-| **Vector DB** | Qdrant Cloud (free tier 1GB) | Same provider, REST API access |
-| **Compute** | ~~Fly.io~~ → **AWS ECS Fargate** | _UPDATE: prod runs on AWS ECS Fargate (FastRaid = staging)._ |
-| **Database** | ~~Fly Postgres~~ → **AWS RDS** | With RLS policies. Postgres pinned `18.4`. |
-| **Attachments** | ~~Fly Tigris~~ → **AWS S3** | ExAws client |
-| **No reranker** | Vector-only search to start | Will benchmark Voyage Rerank 2.5 vs Jina later |
-| **Dimensions** | 1024d (Voyage default) | Benchmark 512d later via matryoshka |
-
-## Library Dependencies
-
-| Library | Version | Purpose | Maturity |
-|---------|---------|---------|----------|
-| **Phoenix** | ~> 1.8.5 | Web framework, Channels, PubSub | Production |
-| **ecto_sql** | ~> 3.13 | Database layer, migrations, schemas | Production |
-| **Oban** | ~> 2.18 | PostgreSQL-backed job queue | Production |
-| **Joken** (+ joken_jwks) | ~> 2.6 | JWT sign/verify (Clerk JWKS) | Production |
-| **ExAws** + **ExAws.S3** + **ExAws.KMS** | ~> 2.5 / 2.4 | S3 client (AWS S3) + KMS | Production |
-| **Hammer** | ~> 7.3 | Rate limiting (ETS default; distributed ETS + Phoenix.PubSub for clustered prod — `hammer_backend_redis` removed 2026-06-21) | Production |
-| **Earmark** | ~> 1.4 | Markdown → AST parsing | Production |
-| **Req** | ~> 0.5 | HTTP client (Qdrant, Voyage AI) | Production |
-| _MCP server_ | (hand-rolled) | No external MCP dep — `lib/engram/mcp/` | — |
-| **PromEx** | ~> 1.11 | Prometheus metrics (Phoenix, Ecto, Oban, BEAM) | Production |
-| **Sentry** | ~> 10.0 | Error tracking | Production |
-| **dns_cluster** | ~> 0.2.0 | Node discovery via DNS | Production |
-| **ExMachina** | ~> 2.8 (test) | Test factories | Production |
-| **Mox** | ~> 1.1 (test) | Behaviour-based mocks | Production |
-| **Bypass** | ~> 2.1 (test) | HTTP mock server | Production |
-
-_Note: there is **no Redis/Redix dependency**. The `hammer_backend_redis` + ElastiCache path was removed 2026-06-21 — clustered SaaS prod uses a distributed ETS + Phoenix.PubSub rate limiter, self-host uses plain ETS, and the durable daily search cap is a Postgres token bucket._
-
-## Development Environment
-
-Local dev uses Docker Compose (`docker compose up --build` from the repo root: Elixir + PostgreSQL + Qdrant + Ollama + MinIO). See `docs/context/dev-iteration-loop.md` for the day-to-day loop. The original FastRaid-Docker-against-real-cloud-adapters model is no longer the dev default; FastRaid now runs the **staging** environment, not local dev.
-
-## Infrastructure Setup
-
-> **DEAD — historical only.** This Fly.io bring-up runbook never went to prod.
-> Prod runs on **AWS ECS Fargate + RDS + S3**, deployed via GitOps (push a
-> `release-v*` tag → engram-infra Terraform reconciles the ECS image tag).
-> Secrets are SOPS-encrypted → SSM → ECS task env (`APP_SECRETS_JSON` blob),
-> NOT `fly secrets set`. For the live deploy procedure see
-> `docs/context/deploy-prod.md`. Do NOT run any `fly` command — there is no
-> Fly app and no `engram.fly.dev`.
+| Rejected | Why |
+|----------|-----|
+| Kafka / RabbitMQ | Oban on the existing Postgres covers it with no new failure mode. |
+| Redis (PubSub, cache, Hammer backend) | BEAM-native PubSub, ETS and Postgres cover every use. Redis was removed entirely. |
+| Hermes MCP | Not adopted; the hand-rolled JSON-RPC server is what shipped. |
+| BIGSERIAL internal ids with path as identifier | Reversed for `uuidv7` PKs. |
+| voyage-4-nano for self-host embeddings | Still needs a Voyage API key, which contradicts "free, on your own infra". Ollama instead. |
+| Umbrella app | Not needed at this scale. |
+| Fly.io (compute, Postgres, Tigris) | Prod went to AWS. There is no Fly app; never run `fly` commands. |
+| Exact tokenizer for chunking | ~4 chars/token is enough; Voyage tokenizes. |
 
 ## References
-- Build phases: see CLAUDE.md
-- Live prod deploy: `docs/context/deploy-prod.md`
-- Pricing: see `../engram-workspace/docs/context/pricing-strategy.md` (workspace repo, relative to the engram repo root)
+- `mix.exs` (dependencies and versions)
+- `docs/context/deploy-prod.md`, `docs/context/disaster-recovery.md`
+- Pricing: `../engram-workspace/docs/context/pricing-tiers-v2-decisions.md`

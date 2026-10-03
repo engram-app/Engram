@@ -28,7 +28,7 @@ defmodule Engram.AccountsPurgeVaultsRlsTest do
   `Vaults.list_vaults/1` DEK-decrypt chain, since the purge only needs vault
   ids". Skipping the decrypt chain is the legitimate half; "bypasses RLS" was
   never true of `skip_tenant_check:`, which is exactly the inversion
-  `docs/context/skip-tenant-check-audit.md` exists to record.
+  `docs/context/database-schema-rls.md` exists to record.
 
   ## Why the assertion happens inside the closure
 

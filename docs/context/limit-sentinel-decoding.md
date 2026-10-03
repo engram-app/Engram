@@ -22,31 +22,17 @@ Use the decoders instead:
   collapse to `nil`.
 - **`Billing.granted?(user, key)`** → `boolean`. The predicate half of
   `check_feature/2`; enforcement-off grants.
-- `check_limit/3`, `limit_enforced?/2` — unchanged, and `limit_enforced?/2` is
-  now defined as `cap(user, key) != nil` so the three cannot disagree.
+- `check_limit/3`, `limit_enforced?/2`, the gate. Both read
+  `effective_limit/2` directly (`not in @no_cap`), NOT through `cap/2`; see
+  below for why.
 
 ## Why this doc exists
 
-Before `cap/2`, eight modules decoded those four values privately under seven
-different names — `normalize_cap`, `normalize_int`, `as_int`, `as_bool`,
-`cap_json`, `bool_json`, `render_limit` — plus inline
-`limit in [:unlimited, nil, -1]` guards in two plugs. **They did not agree, and
-the disagreements were all about `-1`.** Four live bugs, all the same shape:
-
-- `Engram.Accounts.Export` — `normalize_cap/1` knew only `:unlimited`, so `-1`
-  arrived as a real ceiling and `count >= -1` refused **every export**.
-- `Engram.ConversationMeter` — `day_cap_exceeded?/2` enumerated `:unlimited` and
-  `nil` but not `-1`, so `today > -1` rate-limited the **first** MCP call.
-- `Engram.ConversationMeter` — `normalize_int/2` let `-1` through as a
-  **-1 minute** conversation window: every tick looked expired, rotated a new
-  conversation, and burned `ai_conversations_per_day` in a few calls.
-- `Engram.Search.SearchProfile` — `as_int/2` yielded `candidate_pool: -1` and
-  `diversity: -0.01`.
-
-In every case an override meaning "give this user unlimited" made them **more**
-restricted than the default. That is the same enforcement-off-inverts-the-rule
-shape as the `attachments_text_only` polarity bug in `LimitKeys` — a sentinel
-decoded per-caller will eventually be decoded backwards by one of them.
+Before `cap/2`, eight modules decoded these values privately and disagreed about
+`-1`. In every case an override meaning "give this user unlimited" made them
+**more** restricted than the default (exports refused, the first MCP call
+rate-limited, a -1 minute conversation window). A sentinel decoded per-caller
+will eventually be decoded backwards by one of them.
 
 ## `cap/2` is the dial decoder; `limit_enforced?/2` + `check_limit/3` are the gate
 

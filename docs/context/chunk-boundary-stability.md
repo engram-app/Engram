@@ -1,6 +1,6 @@
 # Context Doc: Chunk Boundary Stability Under Edits
 
-_Last verified: 2026-09-09_
+_Last verified: 2026-10-03_
 
 ## Status
 
@@ -8,9 +8,9 @@ Working, with a known bad shape. Measured 2026-09-09 while building the
 chunk-reuse diff (#1592). No code change made — this doc records the
 measurements so the follow-up is a decision rather than a rediscovery.
 
-Sibling doc: `chunking-retrieval-strategy.md` covers chunking for *retrieval
-quality*. This one covers chunk boundary *stability*, which only started
-mattering once #1592 made unchanged chunks reusable.
+This is the one chunking doc. It covers boundary *stability* (a cost driver
+since #1592 made unchanged chunks reusable) and, at the end, the chunking
+strategies rejected for retrieval quality.
 
 ## What This Is
 
@@ -29,7 +29,7 @@ Headings are what bound the cascade — a section break resets the packing.
 
 ## Measured Behaviour
 
-Reuse rate for a **one-word edit** in a 10MB note (the `notes_controller.ex`
+Reuse rate for a **one-word edit** in a 10MB note (the `Notes`
 `@max_note_bytes` ceiling), ~5000 chunks:
 
 | Note shape | chunks re-embedded | notes |
@@ -105,7 +105,10 @@ new chunk when the paragraph's own hash says "anchor"
 reaching `min_chars`). Because the boundary depends on that one paragraph and
 not on everything packed before it, the packing resyncs within a chunk or two
 of any edit. This is the rsync/restic content-defined-chunking property.
-Roughly 30 lines in `split_text/2`.
+Roughly 30 lines in `split_text/2`. Any boundary change must also bump
+`@chunker_version` (`markdown.ex`), or `EmbedNote` keeps hash-skipping notes
+chunked the old way (#1620). The backfill is operator-driven per vault via
+`ReindexKeyword`.
 
 `k=8, min=512` is the measured sweet spot: median 2, worst 9, zero cascades,
 +40% chunks.
@@ -133,6 +136,27 @@ heading-free section? If it is a handful, this is not worth building.
   10MB note with normal headings re-embeds 6 chunks out of 5000.
 - Even the worst case is no worse than the pre-#1592 behaviour, which
   re-embedded every chunk on every edit unconditionally.
+
+## Retrieval: what ships and what was rejected
+
+Heading-aware sections, sub-chunked at ~512 tokens (2048 bytes, ~4 chars per
+token; Voyage does the real tokenization), no overlap, with
+`folder > title > headings` prepended before embedding. There is no
+structure preservation: `split_text/2` splits on spaces, so code blocks,
+lists and tables can be cut mid-block.
+
+Search is hybrid by default (dense + BM25 sparse in the same Qdrant point,
+fused server-side with RRF) for both `GET /api/search` and
+`Engram.Search.search/4`; `?mode=vector|keyword` picks one leg. Sparse
+tokens are stored as `HMAC(user_DEK, token)`, never plaintext. A hybrid
+`score` is an RRF rank score, not a cosine similarity.
+
+| Rejected | Why |
+|---|---|
+| Semantic chunking | NAACL 2025: fixed-size matches or beats it. Headings already give natural boundaries. Extra embedding cost. |
+| voyage-context-3 | Voyage 3 generation, not in the Voyage 4 shared space, 50% more expensive. |
+| Late chunking (Jina) | Needs Jina-specific models, incompatible with Voyage. |
+| LLM-based chunking | $50-$1,250 to re-index 5K notes, and every edit triggers LLM calls. |
 
 ## Reproducing
 
@@ -166,7 +190,6 @@ count hides it.
 - `lib/engram/parsers/markdown.ex` — `split_text/2`, `build_chunks/3`,
   `split_into_sections/2`
 - `lib/engram/indexing.ex` — `plan_chunks/3` (the reuse diff)
-- `lib/engram_web/controllers/notes_controller.ex:14` — `@max_note_bytes`, 10MB
-- `docs/context/chunking-retrieval-strategy.md` — chunking for retrieval quality
+- `lib/engram/notes.ex`, `@max_note_bytes`, 10MB
 - Issue #1592 — chunk reuse on the write path
 - Issue #1594 — the follow-up: content-anchored boundaries, gated on section size

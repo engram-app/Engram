@@ -1,7 +1,8 @@
 defmodule Engram.Logger.Category do
   @moduledoc """
   Single source of truth for log `category` atoms and the Loki sink-routing
-  decision. See docs/superpowers/specs/2026-06-23-logging-taxonomy-redesign-design.md.
+  decision. The design spec lives in the Engram vault
+  (`50 Engineering/_Superpowers Specs/`, logging taxonomy redesign, 2026-06-23).
 
   Routing rule (sink model A): CloudWatch gets everything (Fluent Bit `Match *`);
   Loki keeps a line iff `loki_ship?/2` is true — all warnings/errors, plus

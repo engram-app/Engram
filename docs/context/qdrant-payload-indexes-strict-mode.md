@@ -1,6 +1,6 @@
 # Context Doc: Qdrant payload indexes under strict mode
 
-_Last verified: 2026-09-11_
+_Last verified: 2026-10-03_
 
 ## Status
 Fixed (#1609). `ensure_collection/2` now reconciles missing payload indexes on every boot.
@@ -31,7 +31,7 @@ Any new filter key MUST be added to `@payload_index_fields` (keyword: equality/a
 3. Read `.result.payload_schema` (which fields are indexed) and `.result.config.strict_mode_config`.
 
 ## Gotchas
-- **Known ceiling (the `ponytail:` comment in `ensure_payload_indexes/2`):** if `collection_info` is unreadable at boot, `verify_collection_shape/1` returns `:unknown`, the index check is skipped, and the memo holds `:ok` until the node restarts. Another node or the next boot reconciles.
+- If `collection_info` is unreadable at boot, `verify_collection_shape/1` returns `{:ok, :unknown}`, `do_ensure_collection/2` returns `:unverified`, and nothing is memoised: the next caller checks again. Caching that result would strand the node without its indexes, which is #1609 itself.
 - A collection dropped or recreated out of band needs `forget_collection_memo/0`, or the node keeps skipping `ensure_collection`.
 - Staging green says nothing about filters. Check prod `payload_schema` when a filter-only search fails.
 

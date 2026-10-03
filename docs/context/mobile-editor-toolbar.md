@@ -107,8 +107,8 @@ content the Y.Text lacks is emptied on the first sync.
 CodeMirror maps a caret sitting exactly on an insertion point to *before* the
 inserted text. Tapping the list button left the cursor to the left of the `- `,
 so the next keystroke landed in front of the bullet. `format-commands.ts`
-dispatches line-marker edits through `dispatchKeepingCaretAfterInsert`, which
-maps the selection with `assoc = 1`.
+applies line-marker edits through `applyLineChanges`, which maps the selection
+with `assoc = 1` and refocuses the editor.
 
 Related: `toggleCheckbox` edits **only the marker**, never the whole line.
 Rewriting the line wholesale maps the caret to the line start, so tapping the
@@ -179,5 +179,27 @@ Adding `useMediaQuery` to a component with existing tests silently flips them
 all to the mobile branch unless the stub is set.
 
 In a real browser, `?keyboard` on any note URL forces a 300px inset so the bar
-can be positioned without a physical keyboard. `KEYBOARD_MIN_PX = 120` keeps a
-collapsing mobile address bar from reading as a keyboard.
+can be positioned without a physical keyboard.
+
+## Why `visualViewport`, and the meta tag it depends on
+
+Of the three keyboard APIs, only `window.visualViewport` works everywhere
+including iOS. `navigator.virtualKeyboard` + `env(keyboard-inset-*)` is a WICG
+incubation with no Apple or Mozilla commitment (WebKit bug 230225), and the
+`interactive-widget` viewport key is Chromium-only so far (WebKit bug 259770).
+Both WebKit bugs were `NEW` on 2026-08-02; re-check before relying on either.
+
+`frontend/index.html` sets `interactive-widget=resizes-content`. That is what
+makes the inset formula right on both platforms: on Android the layout
+viewport shrinks too, so the inset reads ~0 and `bottom-0` already sits above
+the keyboard; on iOS the layout viewport is untouched, so the inset is the real
+keyboard height. Changing it to `resizes-visual` or `overlays-content` makes
+the formula double-count on Android.
+
+The meta tag was added in #663 for onboarding, but on iOS it is inert; the
+keyboard-overlap fix there was carried by `h-dvh`. Do not read the tag as iOS
+coverage.
+
+`visualViewport` also fires on pinch-zoom (gate on editor focus) and iOS
+changes `offsetTop` without a resize when it scrolls the caret into view
+(listen to `scroll` too).

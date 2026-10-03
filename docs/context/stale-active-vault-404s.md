@@ -39,6 +39,12 @@ environment whose DB was wiped (staging is wipeable) — is a well-formed UUID.
 Nothing rejects it client-side, so it keeps riding along and the backend 404s
 everything.
 
+Bug class: a client-only fixture or sentinel id (the removed onboarding demo
+vault's `demo-vault-*`) that reaches persisted state such as localStorage
+`engram.activeVaultId` outlives the feature that minted it, and every later
+request carries it (`vault_id_malformed`). Keep fixture ids out of anything
+durable.
+
 **A stale id is strictly worse than no id.** With no header at all, `VaultPlug`
 falls back to the user's default vault and the app works.
 

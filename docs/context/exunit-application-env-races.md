@@ -1,6 +1,6 @@
 # ExUnit Application.put_env race — async-mutator anti-pattern
 
-_Last verified: 2026-05-21_
+_Last verified: 2026-10-03_
 
 Tests that mutate `Application.put_env/3` (or `Application.delete_env/2`) while declared `async: true` are a flake source. `Application` env is a single global ETS table — the Ecto SQL sandbox isolates DB rows per test, but does **nothing** for application env. Concurrent readers in other async modules can observe the temporary value mid-test.
 
@@ -44,30 +44,34 @@ ExUnit schedules `async: true` cases first, then `async: false` cases serially �
 
 **Do not** apply `async: false` to the readers. That hides this race in one consumer at a time while leaving the same trap for the next consumer of the same config key.
 
-## Audit (as of PR #188)
+## Finding current async mutators
 
-Other async modules that mutate Application env, **not yet known to flake** (no observed CI failure):
+```bash
+grep -rl 'Application.put_env\|Application.delete_env' test/ | xargs grep -l 'async: true'
+```
 
-- `test/engram/embedders/voyage_test.exs` — `:voyage_url`, `:voyage_api_key`
-- `test/engram_web/endpoint_config_test.exs` — `:websocket_check_origin`
-
-Both are preemptive risks. They survive only because no other async test currently calls into the code that reads those keys during the same window. The moment such a reader is added, they will flake the same way.
+Each hit is safe only while nothing else reads the mutated key during the same
+window.
 
 ## Rule of thumb when reviewing test code
 
 If a test calls `Application.put_env`, check that:
 
 1. The module is `async: false`, **or**
-2. The key being mutated is read by nothing else during tests (e.g. config that only affects this module's behavior).
+2. The read goes through `Engram.ServiceConfig.get/2` and the test installs a
+   per-process override, **or**
+3. The key being mutated is read by nothing else during tests.
 
-(2) is fragile — a new code path elsewhere that reads the key turns the test into a flake source. Default to (1).
+(3) is fragile: a new code path elsewhere that reads the key turns the test into
+a flake source.
 
-## Alternative architectures (out of scope for the immediate fix)
+## The per-process alternative
 
-If a config flag is read enough that serializing its mutator slows CI noticeably, push the override into a process-scoped mechanism:
-
-- `Process.put/2` inside the call site (only the test process sees the override).
-- A `Mox`-style explicit-set helper that stores per-process state.
-- A `ProcessTree.get/2`-style fallback chain.
-
-None of these were warranted for `:limits_enforced` (one short test module, milliseconds saved). Documented here so the next reviewer doesn't reach for `async: false` reflexively when the right answer is "stop reading from global env."
+When serializing a mutator is too costly, route the read through
+`Engram.ServiceConfig` (`lib/engram/service_config.ex`). It stores overrides in
+ETS keyed by the owning test process and resolves via `[self() | $callers]`, so
+`Task` children and inline `Oban.Testing.perform_job/2` see the override. It is
+compile-gated to test builds; in prod `get/2` is a plain
+`Application.get_env/3`. The Voyage and Qdrant client tests use it to run
+`async: true`. Add a key there rather than reaching for `async: false` when the
+config is read widely.

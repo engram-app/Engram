@@ -1,21 +1,10 @@
 # Self-host must grant everything: boolean limit-key polarity
 
-_Last verified: 2026-08-31_
+_Last verified: 2026-10-03_
 
-## Status
-
-FIXED — backend PR #1439 (`fix/one-limits-source`), plugin PR #457. The rule
-below is now enforced by a test, not by discipline.
-
-## The symptom
-
-A self-hosted instance silently dropped **every image and PDF** on first sync.
-319 notes uploaded, 0 attachments, and the client reported success. No error,
-no `POST /api/attachments` in the server log — the plugin never asked. The
-server would have accepted all of them (`Storage.S3.put/2` verified working,
-`text_only?(user)` returned `false`).
-
-Reported by the user as "why did non-md files break".
+**Symptom this explains:** a self-hosted instance uploads every note but no
+images or PDFs, with no error and no `POST /api/attachments` in the server log.
+Fixed in backend #1439 and plugin #457; the rule below is enforced by a test.
 
 ## The mechanism
 
@@ -134,17 +123,17 @@ Server-side, against the running instance (Tidewave `project_eval`):
 ```
 
 If `raw` is `:unlimited` but `caps` is a restriction, the polarity rule is
-broken again. `billing_enabled` and `limits_enforced` are derived from the
-identical expression (`auth_provider == :clerk and PADDLE_API_KEY != nil`),
-so they should never disagree; `:self_host` is configured nowhere and read by
-nothing.
+broken again. `billing_enabled` and `limits_enforced` share a default
+(`auth_provider == :clerk and PADDLE_API_KEY != nil`), but
+`ENGRAM_LIMITS_ENFORCED=true|false` overrides `limits_enforced` alone, so they
+can disagree. `:self_host` is configured nowhere and read by nothing.
 
 Client-side, the tell is **silence**: a plan-gated attachment produces no HTTP
 request at all, and parks an *informational* issue in Sync Center rather than
 an error. `resyncSkippedAttachments()` (Sync Center action) bypasses the
 pre-gate and re-uploads whatever is parked.
 
-## Related gotchas from the same wave (2026-08-20)
+## Related gotchas
 
 - **`openapi.json` is committed and drift-gated.** Removing a route leaves it
   stale and fails the `unit-tests` job (not the test suite — a separate step).
@@ -171,4 +160,5 @@ pre-gate and re-uploads whatever is parked.
   `inactivity_warnings_exempt?/1` (`@legacy_inverted_keys` removed in #1535)
 - `test/engram/billing/limit_keys_test.exs` — the no-inverted-boolean invariant
 - Plugin `src/plan-state.ts`, `src/auth-state.ts` (`CLEARED_AUTH_VALUES`) —
-  the plan is a per-backend verdict and is dropped when the server changes
+  the plan is a per-backend verdict and is dropped when the server changes.
+  The plugin still uses the inverted name `attachmentsTextOnly` client-side.

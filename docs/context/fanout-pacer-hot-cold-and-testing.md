@@ -1,14 +1,16 @@
 # Context Doc: FanoutPacer — hot/cold classification and how to test it
 
-_Last verified: 2026-08-03_
+_Last verified: 2026-10-03_
 
 ## Status
 
 Working. Pacing is ON by default in prod (`Engram.Notes.FanoutPacer`, shipped
-#1002 / #1003). Ops-hardening follow-ups are tracked in
-[#1004](https://github.com/engram-app/Engram/issues/1004) and are **not done** —
-notably there is still no telemetry gauge for cold-queue depth, so a backing-up
-queue is invisible in prod.
+#1002 / #1003). Each drain tick emits `[:engram, :fanout_pacer, :drain]`
+(`queued`, `max_topic_depth`, `topics`), exported as
+`..._fanout_pacer_queue_depth` / `_queued` / `_topics`
+(`Engram.PromEx.Reliability`), and logs a warning at `queue_warn_depth`.
+The rest of the ops hardening is
+[#1004](https://github.com/engram-app/Engram/issues/1004) (open).
 
 ## What This Is
 
@@ -88,14 +90,14 @@ itself — `cold?(note_id) || true` trips warnings-as-errors and never compiles.
 `FANOUT_PACING_ENABLED=false` falls back to unpaced inline broadcast for every
 note. Kept deliberately (PR #1217) even though it is unset in every deploy:
 [#1004](https://github.com/engram-app/Engram/issues/1004) asks for a documented
-config path rather than a per-node remote-console `Application.put_env`, and
-until its cold-queue depth gauge lands we are blind to the queue backing up —
-which makes the lever worth more, not less.
+config path rather than a per-node remote-console `Application.put_env`. Watch
+the queue-depth gauge before reaching for it.
 
 ## References
 
 - `lib/engram/notes/fanout_pacer.ex` — `emit/4`, `cold?/1`, `handle_info(:drain)`
 - `test/engram/notes/fanout_pacer_test.exs` — `await_drained/2`
 - PRs #1002 / #1003 (pacer), #1217 (flag kept + documented), #1218 (flake fix)
-- Issue #1004 — ops hardening (telemetry gauge, bounded-queue alarm)
+- Issue #1004: ops hardening (open)
+- `lib/engram/prom_ex/reliability.ex`: the queue-depth metrics
 - `docs/context/environment-variables.md` — the knob table

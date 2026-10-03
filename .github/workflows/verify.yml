@@ -722,15 +722,11 @@ jobs:
           fetch-depth: 0
 
       - name: Normalize source mtimes to last-commit-time
-        # actions/checkout always stamps every file with a fresh "now" mtime.
-        # Mix's staleness check is `current_mtime > manifest_mtime` (no content-hash
-        # fallback), and the restored _build cache's manifest holds the OLD mtimes
-        # from whenever it was last compiled — so a fresh checkout makes every file
-        # look newer than the manifest expects and forces a full recompile every
-        # run, regardless of how good the cache-key match is. Resetting each
-        # source file's mtime to its actual last-commit time makes unchanged files
-        # land back at (or before) the mtime the manifest already recorded, so only
-        # genuinely-changed files are recompiled. See
+        # Vestigial: on Elixir 1.17 Mix compares content digests and uses mtime
+        # only to pick files to re-hash, so touching sources recompiles 0 files
+        # (re-measured 2026-10-03). The real full-recompile cause was the
+        # absolute project root in the manifest, fixed by the /app bind mount.
+        # Candidate for removal along with fetch-depth: 0. See
         # docs/context/ci-mix-compile-cache-runner-path.md.
         run: |
           git ls-files -z -- lib test/support mix.exs mix.lock config \

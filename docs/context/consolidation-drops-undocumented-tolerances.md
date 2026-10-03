@@ -1,12 +1,6 @@
 # Consolidating onto a shared function drops tolerances nobody wrote down
 
-_Last verified: 2026-09-15 (PR #1645, `Engram.Notes.Frontmatter.split/1`)_
-
-## Status
-
-Fixed and pinned by tests at both layers. The lesson is the durable part —
-read this before the next "replace the hand-rolled copy with the shared helper"
-change.
+_Last verified: 2026-10-03 (PR #1645, `Engram.Notes.Frontmatter.split/1`)_
 
 ## The one idea
 
@@ -67,25 +61,6 @@ input.
 rather than `@fence_line_pattern`. Each half worked alone — that is exactly how
 the gap survived review of the codec itself.
 
-## Line shifts re-invalidate `.sobelow-skips` on almost every merge
-
-Not new, but it costs 10 minutes each time it is rediscovered, and it hit twice
-on one branch here:
-
-- 5 lines added to a router pipeline shifted the `:spa` pipeline's `Config.CSP`
-  false positive from `router.ex:180` to `:185`.
-- A 9-line function added near the top of `notes.ex` shifted two
-  `Misc.BinToTerm` and one `SQL.Query` entry by exactly +12.
-
-Both times the pre-push hook failed with what reads like a **new** security
-finding. It is not; skips are pinned by fingerprint (`check,file:line,hash`), so
-any change to line numbers *above* a pinned finding invalidates it.
-
-Remedy and the 30-second triage are documented in full — including why the `rm`
-is mandatory and why regenerating is itself a risk window — in
-`docs/context/sobelow-silent-no-op-and-fingerprint-skips.md`. Do not re-derive
-it; read that doc.
-
 ## Credo cannot see metadata keys built inside a helper
 
 `Warning.MissedMetadataKeyInLoggerConfig` only sees keys passed **literally** at
@@ -112,5 +87,3 @@ static check defends.
 - `test/engram/notes/frontmatter_test.exs`,
   `test/engram/mcp/handlers_get_note_test.exs` — CRLF coverage at both layers
 - `config/config.exs` — `:logger, :default_formatter` metadata allowlist
-- `docs/context/sobelow-silent-no-op-and-fingerprint-skips.md` — fingerprint
-  skips, regeneration, and what a fingerprint does not protect

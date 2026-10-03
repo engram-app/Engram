@@ -81,10 +81,11 @@ Do not copy the `*` onto a route that answers differently per user.
    | `staging.engram.page` | 200 B (doc) | 72408 B | **3940 B (SPA)** |
 
    A zone-wide Cache Rule would therefore have made the **SPA HTML shell**
-   edge-cacheable on `app` under three paths. The shell sends no explicit
-   `Cache-Control` (see `frontend/public/_headers`: the `/*` block sets
-   security headers only), so `respect_origin` falls back to Cloudflare's own
-   default TTL and pins a stale shell that survives a deploy and references
+   edge-cacheable on `app` under three paths. `frontend/public/_headers` sets
+   `no-cache` only on `/`, `/index.html` and `/config.json`; an SPA-fallback
+   deep path like `/.well-known/oauth-*` gets no `Cache-Control`, so
+   `respect_origin` falls back to Cloudflare's own default TTL and pins a stale
+   shell that survives a deploy and references
    purged asset hashes. That is an outage produced by a rule whose stated
    purpose was caching two JSON documents. The rule is now host-scoped to
    `api` + `mcp`.
@@ -111,15 +112,6 @@ Do not copy the `*` onto a route that answers differently per user.
 - **Ordering between the two repos is safe either way.** If the infra rule
   lands first, the app is still sending Phoenix's default `private`, and
   `respect_origin` declines to cache. No window of wrongness.
-- **A cookie's `Secure` flag is decided by the CANONICAL scheme, not the dialed
-  host.** `refresh_cookie_opts/1` in `local_auth_controller.ex` sets `secure`
-  from `Endpoint.url()` alone. Keying it off `conn.host == canonical_host`
-  looks more precise and is worse: it silently drops `Secure` on any *other*
-  TLS hostname in a multi-host `PHX_HOST`, and `SameSite=Lax` does not cover
-  that gap because Lax still rides top-level navigations. The accepted cost is
-  that a plaintext alias can no longer persist a login — the browser takes the
-  201, discards the Secure cookie, and `/api/auth/refresh` 401s an hour later.
-  Serve the alias over TLS; do not reintroduce the host comparison.
 - **`x-request-id` is cached with the body**, so a hit replays the request id
   of whichever request filled the cache. Use `cf-ray` to correlate these
   endpoints; the id is still accurate on a MISS.

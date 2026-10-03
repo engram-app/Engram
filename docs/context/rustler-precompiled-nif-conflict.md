@@ -1,9 +1,6 @@
 # Context Doc: rustler_precompiled NIF version conflict (mjml vs lingua)
 
-_Last verified: 2026-06-29_
-
-## Status
-Working — resolved via a single Mix override.
+_Last verified: 2026-10-03_
 
 ## What This Is
 engram pulls in multiple Rust NIFs through `rustler_precompiled`. Two of them
@@ -17,7 +14,7 @@ pin **incompatible** `rustler_precompiled` requirements, which makes
 |-----|---------|-----------------------------------|
 | `mjml` (6.0.0) | Email templating (MJML → HTML, mrml NIF) | `~> 0.9.0` (i.e. `>= 0.9.0 and < 0.10.0`) |
 | `lingua` (0.3.6) | Keyword-leg language detection | `~> 0.8.4` (i.e. `>= 0.8.4 and < 0.9.0`) |
-| `y_ex` (0.10.5) | CRDT (yrs NIF) | `>= 0.6.0` |
+| `y_ex` (0.11.0) | CRDT (yrs NIF) | `>= 0.6.0` |
 
 `mjml` needs `>= 0.9.0`, `lingua` caps at `< 0.9.0` → **no version satisfies
 both**. `mix deps.get` fails to resolve.
@@ -39,14 +36,9 @@ No Dockerfile change and no Rust toolchain are needed — both NIFs download
 their precompiled `.so` at `deps.get` time.
 
 ## Verified
-Built in the prod builder image
-(`hexpm/elixir:1.17.3-erlang-27.1.2-debian-bookworm-...`, OTP 27, **no Rust
-toolchain installed**):
-- All three deps resolve with the override.
-- Both NIFs download precompiled: `mjml` (nif-2.16) and `lingua` (nif-2.15),
-  both `x86_64-unknown-linux-gnu`.
-- Both load + run at runtime: lingua detects language and mjml renders
-  (`{{:ok, :german}, :ok}`).
+In the prod builder image (OTP 27, no Rust toolchain) both NIFs download
+precompiled (`mjml` nif-2.16, `lingua` nif-2.15, `x86_64-unknown-linux-gnu`) and
+load and run.
 
 ### NIF version forward-compat
 A `nif-2.15` precompiled `.so` loads fine on OTP 27 (ERTS NIF 2.17).

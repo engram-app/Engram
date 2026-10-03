@@ -71,18 +71,10 @@ added**. To compute one, HMAC-SHA256 the lowercased email with the prod
 `hmac_key_analytics_id` from `engram-infra/secrets/prod.enc.yaml`. Do it inside one
 subprocess so the key never reaches stdout (see `sops-operator-guide.md`).
 
-## Traps hit building this
+## Test traps
 
-- **sobelow pins by file:line.** Adding a line above the `:spa` pipeline in
-  `router.ex` moved a reviewed `Config.CSP` finding from `:185` to `:186`, so
-  `lint` failed. Re-pin that one line in `.sobelow-skips`, don't suppress.
-  See `sobelow-silent-no-op-and-fingerprint-skips.md`.
 - **A request that emits two events breaks `expect_once`.** An authenticated web
   request now sends `surface_active` as well as the event under test. Use
   `Bypass.expect` and match by event name (`emitters_test.exs`).
-- **A fresh backend worktree may not get its deps.** The post-checkout hook did
-  not fire; hardlink `deps/` and `_build/` from the canonical checkout, run
-  `mix deps.get`, then `MIX_ENV=test mix deps.compile --force` if beams are stale
-  (symptom: `:expo_po_parser is not available`).
 - **Plugin-version gate in tests.** A channel test joining with a made-up
   `plugin_version` is refused with `plugin_upgrade_required` below the floor.

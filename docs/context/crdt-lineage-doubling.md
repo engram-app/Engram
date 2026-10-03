@@ -1,13 +1,15 @@
 # CRDT lineage doubling — why the same edit must be encoded exactly once
 
-_Last verified: 2026-08-18_
+_Last verified: 2026-10-03_
 
-**Status:** two distinct mechanisms share this symptom.
-1. **Dual-encoder** (the original) — root-caused + fixed 2026-07-02 (PR #846,
-   deliver-out state-apply commit). Everything below through "Debugging recipe"
-   describes this one.
-2. **Flatten boundary** (#958) — OPEN as of 2026-08-18, reproduced. See
-   "Second mechanism" at the end. Do not read the "fixed" above as covering it.
+**Status:** three distinct mechanisms share this symptom.
+1. **Dual-encoder** (server): fixed 2026-07-02 (PR #846). Everything below
+   through "Debugging recipe" describes this one.
+2. **Flatten boundary** (#958): OPEN, reproduced. See "Second mechanism".
+   Latent today: the flatten gate effectively never fires (#1707 closed, prod
+   bloat ratio 1.01).
+3. **Idempotent write that still mints ops** (plugin frontmatter re-seed):
+   fixed in Engram-obsidian#464. See "Third mechanism".
 
 **Symptom class:** stored/live note content duplicates or char-interleaves under
 rapid REST writes with a live room: `"Iteration 6"` + `"Iteration 7"` →
@@ -31,20 +33,10 @@ this is CRDT semantics.
 
 ## How we violated it (pre-fix architecture)
 
-A REST/MCP write used to be encoded **twice**:
-
-1. `Notes.maybe_merge_crdt/4` diffs the incoming plaintext against the snapshot
-   on a fresh doc (fresh random client-id) → ops stored in `notes.crdt_state`.
-2. `CrdtDeliver.deliver_out` → `ingest_plaintext(room_doc, content)` re-diffed
-   the same plaintext against the room's text with the **room's** client-id →
-   ops broadcast to observers AND appended to `crdt_update_log` by `update_v1`.
-
-While REST merges ignored the tail (pre-#846), the stored row stayed clean and
-only the ROOM doc was poisoned (surfacing as checkpoint clobbers = flake #547).
-When #846's REST merge started replaying the tail (to preserve live typing in
-the settle window), every REST write unioned encoding (2) from the tail with
-encoding (1) already in the snapshot → deterministic doubling, cascading per
-write.
+A REST/MCP write was encoded twice: `Notes.maybe_merge_crdt/4` diffed it onto a fresh doc (fresh
+client-id) into `notes.crdt_state`, and `CrdtDeliver.deliver_out` re-diffed the same plaintext onto
+the room doc with the room's client-id, which `update_v1` appended to `crdt_update_log`. Once the
+REST merge replayed the tail (#846), every write unioned both encodings: deterministic doubling.
 
 ## The fix
 
@@ -61,15 +53,11 @@ you must synchronize on the room text converging AND the tail row landing
 before issuing the next REST write, or the race window closes and the test
 passes vacuously.
 
-## Remaining single-encoder hazards (open)
+## Remaining single-encoder hazard
 
-- **Client-side echo:** the plugin's `sendUpdateRaw` forwards every local-origin
-  ydoc update. A client that seeds its ydoc from disk while the server already
-  has state (the `seedOnce` enroll race) injects a foreign-lineage full-text
-  insert — same doubling, server cannot defend. Plugin-side "flatten lineage
-  adoption" is the deferred fix (see PR #846 deferred list).
-- Old `crdt_update_log` rows written by the pre-fix deliver are room-lineage
-  encodings; they age out at the next checkpoint prune. No migration needed.
+A client that seeds its ydoc from disk while the server already has state injects a
+foreign-lineage full-text insert. Same doubling, and the server cannot defend. The frontmatter case
+of this is the third mechanism below.
 
 ## Debugging recipe that cracked it
 
@@ -83,11 +71,6 @@ passes vacuously.
    commit message `[e2e: clerk/test_78 or test_49]` runs just those tests.
 3. The MERGE-DIAG line `snapshot="…2" tail_doc="…22"` is the smoking gun shape.
 4. Revert the diag commit before merge.
-
-Caveat for local unit repro: the shared local test DB may carry migrations from
-other branches (`mix ecto.reset` under MIX_ENV=test before trusting a big local
-failure count), and `Repo.with_tenant` wraps returns in `{:ok, _}` (see
-`with-tenant-return-wrapping.md`).
 
 ## Second mechanism: the flatten boundary (#958, OPEN)
 
@@ -149,8 +132,9 @@ row's lineage" from "the live doc is merely behind" — the distinction every
 proposed fix silently needs and none can currently make. Genesis then declares
 its own reset rather than being special-cased at the call site.
 
-Schema + protocol change, so it wants a design pass, and it should land before
-#1151 mirrors this seam for the index room.
+Schema + protocol change, so it wants a design pass. The index room does not
+flatten (`CrdtIndexPersistence` has no flatten path), so it does not share this
+seam today.
 
 ### Reproducing it
 
@@ -159,3 +143,30 @@ normally, then `CrdtBridge.flatten` the row state and write it back directly
 (mirroring what `maybe_flatten` + `checkpoint_write` persist), then edit the
 ORIGINAL doc and checkpoint again. The flatten ceilings (500KB AND 1000
 client-ids) are not needed to demonstrate the mechanism.
+
+## Third mechanism: an idempotent write that still mints ops
+
+Writing an identical value into a Yjs type still records ops and makes the
+writer a NEW client. Plugin `note-seed.ts` `applyFrontmatterInto` replaced the
+frontmatter order array unconditionally, so the flush echo of YAML that does not
+round-trip (inline arrays, quoted scalars, comments, blank lines in the block)
+minted a second lineage on FIRST sync. Fixed in Engram-obsidian#464. Guard at the
+op-minting site, not at function entry: a guard at `applyLocalEdit` entry broke
+re-sync into a fresh vault (`test_98` went 0/25 to 65/65 doubled).
+
+**Signature:** the stored doc holds exactly two clients, each with a clock equal
+to half the character count (`e2e/helpers/lineage_probe.py`). Count clients per
+note together with their clocks, not bytes: a first-half == second-half detector
+found 17 of 60 when the real count was 224 of 316.
+
+**Diagnosis traps:**
+- Opening the note in the web app heals it, so anything a human inspects has
+  already converged.
+- `content == crdt` proves nothing: `content` is derived from the doc.
+- Note count, room count and `genesis_seed` outcomes all look healthy.
+- Unit harnesses that never connect a real transport pass against the bug.
+
+**Fences:** e2e `test_100_frontmatter_echo_single_lineage.py` (prefix-scoped
+since #1459; see `e2e-session-vault-scoping-trap.md`) and plugin
+`tests/crdt/seed-gate.test.ts` "a second device re-seeding the SAME content adds
+no client".

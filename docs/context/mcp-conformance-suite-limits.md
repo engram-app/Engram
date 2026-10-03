@@ -1,13 +1,13 @@
 # Context Doc: What the MCP conformance suite does and does not prove
 
-_Last verified: 2026-09-17 (protocol stage re-measured against staging `e8aadd6e`)_
+_Last verified: 2026-10-03_
 
 ## Status
 `scripts/mcp-conformance.sh` works and **is wired into CI**: `cron.yml` runs the `mcp-conformance` job daily at 05:40 UTC over a two-cell matrix — staging (`stages: spec,oauth`) and prod (`stages: spec`). It passes.
 
 Note what that matrix reaches. **The OAuth/CIMD stage runs against staging only**; prod gets the RFC 9728 assertions and nothing else, deliberately, because the OAuth stage performs real DCR and CIMD registrations that write client rows.
 
-A cron grades a *deployment*, not a PR: on a PR the deployment still runs `main`, so this job can never gate the code under review — it reports a regression the morning after it merges. That reasoning is unchanged, and a per-PR gate against the PR's own build is still the target; see "Getting it gating" below.
+A cron grades a *deployment*, not a PR: on a PR the deployment still runs `main`, so it reports a regression the morning after it merges. The per-PR gate is `e2e/tests/api_only/test_88_mcp_conformance.py`, which runs the script against the CI stack with `GATED_STAGES = "spec"`; the stack mints its own key, so no `ENGRAM_CONFORMANCE_TOKEN` secret is needed.
 
 The two spec violations this doc is about are **already covered by ExUnit** (`mcp_transport_test.exs`, `well_known_controller_test.exs`), which does gate every PR. What is missing is the third-party-client signal, not regression protection for these specific bugs — and see "CIMD coverage is one vendor's document" for the limit a green cron hides.
 
@@ -22,9 +22,9 @@ That is not a gap in the runner; it is what a client compatibility tester is. Th
 
 > A suite that only exercises clients that already work cannot report a client that does not.
 
-Found the hard way on 2026-09-14. ChatGPT declares `token_endpoint_auth_method: private_key_jwt`; `Engram.OAuth.Cimd` refuses every method but `none`, so each ChatGPT connect 400s at `OAuthAuthorizeController#show`. The daily job ran green against staging **and** prod at 10:56 UTC that morning, ~4.5 hours before a real signup hit the refusal and deleted their account. Zero successful ChatGPT grants had ever been recorded. See #1633 and #1635.
+Found the hard way on 2026-09-14: ChatGPT declares `private_key_jwt`, the CIMD path then refused every method but `none`, and every ChatGPT connect failed while this suite ran green (#1633, #1635, both closed).
 
-**Rule:** listing a vendor as supported in `docs/context/connections-client-identity.md` is not backed by anything in this suite. Vendor acceptance needs its own check — fetch the vendor's published document and run it through the CIMD validator. That needs no MCPJam, no deployed target and no loopback opt-in, so unlike the `oauth` stage it *can* gate a PR.
+**Rule:** listing a vendor as supported in `docs/context/connections-client-identity.md` is not backed by anything in this suite. Vendor acceptance is `Engram.OAuth.Cimd.VendorConformanceTest`: it fetches real vendor documents and runs them through the CIMD validator. It is opt-in (`VENDOR_CONFORMANCE=1`) and runs from `cron.yml`, so a vendor outage cannot block a merge. Add a vendor's document there when you claim support for it.
 
 ## The trap: green means "a lenient client coped", not "we are compliant"
 
@@ -116,33 +116,15 @@ So do **not** flip `GATED_STAGES` to `"spec,protocol"`. It would be red forever,
 
 **What protects this work instead:** ExUnit. `mcp_modern_era_test.exs` (29 tests) and the `outputSchema`/`structuredContent` sweep in `mcp_structured_output_test.exs` both gate every push, and the sweep fails if a tool advertises a schema it does not honour. Regression protection lives there; the conformance suite's job is the third-party-client signal.
 
-### Retracted: "`ping` is deliberately NOT on the fix list"
-
-This document used to say `ping` was not worth implementing because `2026-07-28` removes it (SEP-2575), so MCPJam "only asks because of the revision we announce."
-
-**That was backwards and it is retracted.** `2026-07-28` was the revision our header gate *refused*, so its removal could never apply to a request we served — while `ping` is a base-protocol MUST in all three revisions we did serve. A third-party client failed us on it at both `2025-03-26` and `2025-06-18`. Shipped in #1680.
-
-The general lesson is worth more than the specific call: **do not excuse a gap using a spec revision you do not serve.**
+**Do not excuse a gap using a spec revision you do not serve.** `ping` was once left unimplemented because `2026-07-28` removes it, but it is a base-protocol MUST in every revision we serve (fixed in #1680).
 
 **Gotcha: the CLI writes advisories to STDOUT, ahead of the JSON.** `json.load` on the raw capture therefore fails and the run reports NO SIGNAL — a harness fault wearing a server verdict's clothes. `scripts/lib/report_io.py` locates the document and keeps the preamble (it often explains the failures beneath it). Redirecting stderr does not help; these are stdout.
 
-## Getting it gating
+## Still open: completing the flow past consent
 
-The blocker was never Playwright — it is that the suite must run against **the PR's own build**, not staging. The e2e stack already provides that, and the pieces are all present:
-
-- `e2e-browser` boots the PR's backend on a dynamic port, including a Clerk-enabled variant (`PW_CLERK_BACKEND_PORT`).
-- `e2e/tests/api_only/test_71_connections.py` already drives the **whole** OAuth flow headlessly — `register_client` → `consent(jwt_token, client_id)` → `_extract_code` → `exchange_code`. Consent is approved with a Clerk JWT against the consent endpoint. **No browser automation is required**, which was the assumption that made this look expensive.
-- `e2e/helpers/auth_provider.py` and `clerk_auth.py` mint a user plus an API key, so `ENGRAM_CONFORMANCE_TOKEN` does not need to exist as a repo secret at all — a local stack mints its own.
-
-Remaining work:
-
-1. Host the script as an `api_only` e2e test pointed at the local backend. Gates on every PR via `e2e-clerk`; stages 1–3 all grade, and the token secret disappears.
-2. Complete the flow past consent by driving the CLI with `--auth-mode interactive --print-url` and approving the emitted URL with the existing JWT helper. That un-skips `token_request`, `received_tokens`, `authenticated_mcp_request`, and restores the `--conformance-checks` negative checks (invalid client, invalid redirect, token format), which have never run.
-3. Make sure the fingerprint does not skip it for OAuth-relevant diffs (`lib/engram/oauth/**`, `lib/engram_web/controllers/oauth_*`, `well_known_controller`, `router.ex`, this script). A gating job that fingerprint-skips is gating in name only.
+`e2e/tests/api_only/test_71_connections.py` already drives the whole OAuth flow headlessly (consent approved with a Clerk JWT, no browser). Driving the CLI with `--auth-mode interactive --print-url` and approving the emitted URL the same way would un-skip `token_request`, `received_tokens`, `authenticated_mcp_request`, and restore the `--conformance-checks` negative checks, which have never run. Make sure the fingerprint does not skip it for OAuth-relevant diffs.
 
 ## Related
 - `docs/context/cimd-vs-dcr-validation-policy.md` — why DCR and CIMD validate differently
-- `docs/context/staging-mcp-oauth-connect.md` — the proxy/route/metadata failure chain for a client that cannot connect at all
-- engram-app/Engram#1633 — ChatGPT refused: CIMD rejects `private_key_jwt`, and we have no `client_assertion` support
-- engram-app/Engram#1634 — discovery advertises `client_secret_post`/`client_secret_basic` that the CIMD path then refuses
-- engram-app/Engram#1635 — CIMD conformance covers exactly one vendor document, so a refused vendor cannot turn it red
+- `docs/context/oauth-discovery-urls-behind-edge-tls.md`: host/port/proxy failures for a client that cannot connect at all
+- engram-app/Engram#1633, #1634, #1635 (closed): the ChatGPT `private_key_jwt` refusal and the one-vendor coverage gap

@@ -1,162 +1,14 @@
 # Context Doc: Encryption-at-Rest Operations
 
-_Last verified: 2026-06-18 (post-B.4)_
+_Last verified: 2026-10-03_
 
-> **⚠ The toggle/cooldown half of this runbook is historical — the feature is GONE.** Phase B.3 (PR #71, 0.5.28) retired the vault decrypt path, and B.4 (PR #72, 0.5.29) retired the encrypt toggle entirely. **As of today (verified against `lib/`):** there are NO `/api/vaults/:id/encrypt`, `/decrypt`, or `/encryption_progress` routes; no `EncryptVault`/`DecryptVault` workers; no `users.encryption_toggle_cooldown_days` column; no `mix engram.set_cooldown` task; and no `encryption_status` / `last_toggle_at` vault fields. Encryption is unconditional and one-way; per-note read decryption happens transparently. The "Per-User Toggle Cooldown", "Toggle Flow & State Machine", and the related triage recipes below describe the **pre-B.4 world** and are kept only for archaeological context — do not act on them.
->
-> **Current operator surface (post-B.4):**
-> - Every vault is encrypted at rest by default at create time. There is no per-vault toggle, no cooldown, no in-flight encrypt job to monitor.
-> - Path/folder/tags/name + `notes.content`/`title` plaintext columns were dropped (B.3/B.4).
-> - Content is encrypted at rest; the ONLY plaintext frontmatter columns are the dates `notes.fm_timestamp`/`fm_created` (OKF wave 2026-07-02), kept plain for range queries. Frontmatter `type` is encrypted with a `type_hmac` blind index; `description`/`resource` are encrypted display-only. Rotation (T3.7) rewraps all three and re-derives `type_hmac`.
-> - To check vault state, query Postgres directly or use the engram MCP `list_vaults`.
-> - The live operator runbooks that still apply are the **Tier-3 sections** further down: master-key rotation (T3.5), master-key backup, and per-user DEK rotation (T3.7).
+Operator runbooks for encryption at rest. Encryption is unconditional: every note, vault, attachment and Qdrant payload is encrypted under a per-user DEK; there is no per-vault toggle. Path/folder/tags/name are HMAC blind indexes plus encrypted display values. The only plaintext frontmatter columns are the dates `notes.fm_timestamp`/`fm_created` (kept plain for range queries); frontmatter `type` is encrypted with a `type_hmac` blind index, `description`/`resource` are encrypted display-only. DEK rotation rewraps all three and re-derives `type_hmac`.
 
-## Status (historical — pre-B.3)
-
-**Two parallel surfaces — different rules:**
-
-- **Notes (Phase 1-6, PRs #37/#38/#43/#50):** per-user opt-in toggle, encryption-at-rest in Postgres + Qdrant payload. Toggle/cooldown semantics described below still apply. Will be retired under Tier 2 Phase E.
-- **Attachments (Tier 2 Phase A complete, PRs #58→#62, 0.5.19):** **mandatory at-rest encryption** for every user, no toggle. Bytes live in S3-compatible storage only (MinIO local / AWS S3 prod). The legacy BYTEA `content` column was dropped in PR #62. `STORAGE_BACKEND=s3` is the only accepted value at boot.
-
-The toggle described in this runbook governs **notes only**. Attachments encrypt unconditionally — no operator action needed.
-
-### Phase A — Attachment encryption (PR #58, 0.5.15)
-
-- New uploads encrypt before S3 put when `STORAGE_BACKEND=s3` is active.
-- Legacy BYTEA reads continue to work unchanged (dual-flow `get_attachment`).
-- `mix engram.backfill_bytea_to_s3` enqueues one Oban job per (user, vault) with legacy rows.
-- Worker is idempotent and cursor-driven; rerun is safe.
-- BYTEA column NOT yet dropped — happens in PR #62 after PR #61 cuts writes to S3-only.
-- Telemetry events for encrypt/decrypt are deferred to PR #59 (Phase A reland keeps surface area minimal).
-
-### A.4 — Cut writes to S3-only (PR #61, 0.5.18)
-
-- `prepare_upload/6` no longer branches on adapter — single encrypted S3 write path.
-- `STORAGE_BACKEND=database` is now a fatal misconfig: `runtime.exs` raises at boot.
-- Boot default flipped from `database` → `s3`; legacy `Storage.Database` adapter remains for read-only access to pre-encryption BYTEA rows until A.5 retires it.
-- Defense in depth: even if adapter somehow resolves to `Storage.Database`, `prepare_upload/6` returns `{:error, :writes_disabled}` rather than silently overwriting BYTEA with ciphertext (the 2026-05-02 corruption shape).
-- BYTEA `content` column + `Storage.Database` adapter retire in PR #62 (A.5) once selfhost is verified at zero `WHERE encryption_version = 0 AND content IS NOT NULL` rows.
-
-### A.5 — Drop BYTEA `content` column + retire `Storage.Database` (PR #62, 0.5.19)
-
-- Migration `20260502093330_drop_attachment_bytea_content` drops the `content` column and the `attachments_legacy_plaintext_idx` partial index. **Irreversible** — `down/0` raises.
-- Pre-merge probe (2026-05-02): saas had 105 attachments, 0 legacy; selfhost had 0 attachments. Zero rows lost.
-- Schema: `Engram.Attachments.Attachment.content` is now a `:virtual` field — set in-memory by `decrypt/3` only.
-- Read path (`get_attachment/3`) collapsed to a single S3 fetch + decrypt; the `content non-nil` short-circuit is gone.
-- `Engram.Storage.Database` module deleted. `Engram.Workers.BackfillByteaToS3` worker + `mix engram.backfill_bytea_to_s3` task deleted (no callers left).
-- `runtime.exs` only accepts `STORAGE_BACKEND=s3`; any other value (including `database`) raises at boot.
-- Validations now require `encryption_version == 1` and `content_nonce` on every row. The dual-version branch in `decrypt_if_needed` is gone — version 0 is unrepresentable.
-
-## What This Is
-Operator runbook for encryption toggling, per-user cooldown, and incident triage.
-
-## Per-User Toggle Cooldown (HISTORICAL — removed in B.4; does not exist today)
-
-> This entire section describes a feature that no longer exists. The endpoints, the `users.encryption_toggle_cooldown_days` column, and the `mix engram.set_cooldown` task were all removed when the encrypt/decrypt toggle was retired (B.3/B.4). Retained for context only.
-
-Users could encrypt/decrypt their vaults via the plugin (`POST /api/vaults/:id/encrypt`, `POST /api/vaults/:id/decrypt`). To prevent abusive flapping, each user had an independent `users.encryption_toggle_cooldown_days INTEGER NULL` column.
-
-| Value | Behavior |
-|-------|----------|
-| `NULL` (default) | No cooldown — user can re-toggle immediately. This is the self-hosted default. |
-| `0` | Treated identically to `NULL` (no cooldown). |
-| `N > 0` | User must wait `N` days between encrypt and decrypt toggles. Server returns `429` with an ISO-8601 `retry_after` body when the gate fires. |
-
-The plugin reads the effective `cooldown_days` from the vault JSON (`/api/vaults`) so it can surface "next toggle in N days" without a probe POST.
-
-### Setting the cooldown
-
-```bash
-# HISTORICAL — neither of these works today. The function and the Mix
-# task were removed with the toggle feature (B.4).
-# iex> Engram.Accounts.set_encryption_toggle_cooldown_days(user, 7)
-# mix engram.set_cooldown <user_id> <days|null>
-```
-
-The Mix task accepts `null`, `none`, or `NULL` to clear the column. Negative values are rejected at the function-clause level — there is no `0`-vs-`NULL` distinction at the Crypto layer (both bypass the cooldown predicate).
-
-Hosted-mode default policy (until Paddle webhook wiring lands per follow-up #10): the operator sets cooldown manually per user, typically by tier (Free=1 day, Pro=NULL).
-
-## Toggle Flow & State Machine
-
-`vaults.encryption_status` transitions:
-
-```
-none ─encrypt─▶ encrypting ─backfill done─▶ encrypted
-                                                │
-                                          decrypt-request
-                                                ▼
-                                          decrypt_pending  (24h cancel window)
-                                                │
-                                       cancel│   │auto after 24h
-                                                ▼
-                                          decrypting ─backfill done─▶ none
-```
-
-`vaults.last_toggle_at` is set on every state-changing call (encrypt, decrypt, cancel). The cooldown predicate compares `last_toggle_at` against the user's `encryption_toggle_cooldown_days`.
-
-The 24-hour `decrypt_pending` window is **cancellable**: the user can `DELETE /api/vaults/:id/decrypt` to abort, which returns the vault to `encrypted` without consuming a cooldown cycle.
-
-## What's Encrypted
-
-| Surface | Field(s) | Status |
-|---------|----------|--------|
-| Postgres `notes` | `content`, `title`, `tags` | ✅ ciphertext when vault is encrypted |
-| Qdrant payload | `text`, `title`, `heading_path` | ✅ ciphertext (Jina/Voyage never sees plaintext for encrypted vaults) |
-| Postgres `attachments` | `content` column | ✅ **dropped entirely** (PR #62) — bytes live in S3 only |
-| Postgres `attachments` | `name` / `path` | ❌ plaintext (Tier 2 Phase B pending) |
-| S3 attachment bytes | binary blob | ✅ ciphertext (mandatory, AES-GCM via per-user DEK; PR #58→#62) |
-
-**Remaining plaintext surfaces under Tier 2:** attachment paths/names, note source paths, folder names, tags. These get HMAC fingerprints + encrypted display values in Phase B. Until Phase B ships, communicate this honestly in support contexts — bytes are sealed, but field names that index them are not.
-
-## Triage Recipes
-
-### A user reports stuck encryption
-
-Check the vault row:
-```sql
-SELECT id, encryption_status, encrypted, last_toggle_at, decrypt_requested_at
-FROM vaults WHERE id = <vault_id>;
-```
-
-If status is `encrypting` or `decrypting`, look at the Oban queue:
-```sql
-SELECT id, worker, args, state, attempt, errors
-FROM oban_jobs
-WHERE worker LIKE '%EncryptVault%' OR worker LIKE '%DecryptVault%'
-ORDER BY id DESC LIMIT 20;
-```
-
-A discarded job means retries exhausted — read `errors[*].error` to diagnose. The worker is **idempotent on retry** as of PR #50: it filters out notes whose ciphertext is already populated, so re-enqueueing is safe.
-
-### A user is hitting 429 unexpectedly
-
-Check the user's cooldown:
-```sql
-SELECT id, email, encryption_toggle_cooldown_days FROM users WHERE id = <user_id>;
-```
-
-The 429 body's `retry_after` is `last_toggle_at + cooldown_days`. If cooldown_days is set unintentionally (e.g., during a tier downgrade), clear it via the Mix task.
-
-### A user asks "is my data encrypted?"
-
-Confirm both:
-1. `vaults.encryption_status = 'encrypted'` for their active vault.
-2. They have **no attachments** in that vault, OR they understand attachments are still plaintext.
-
-Attachment AAD bind shipped as part of T3.x — see Tier-3 sections below.
-
-## References
-
-- Phase 6 implementation: PR #43 (toggle endpoints + backfill workers)
-- Cooldown implementation: PR #50 (per-user cooldown), PR #51 (mix task)
-- Plugin UI: PR #24 (encryption tab + status badge), PR #25 (error handling + persistent status row)
+**Which key wraps the DEKs depends on the deploy.** Prod uses AWS KMS (`KEY_PROVIDER=aws_kms`) and sets no `ENCRYPTION_MASTER_KEY` (engram-infra `main/envs/prod/ecs_secrets.tf`). Staging and self-host use the Local provider with `ENCRYPTION_MASTER_KEY`. So the master-key rotation and backup sections apply to staging/self-host only; per-user DEK rotation (T3.7) applies everywhere. KMS traps: `aws-kms-provider-integration.md`.
 
 ---
 
-## Tier-3 / T3.5 — Master-key rotation runbook
-
-_Added 2026-05-08 with PR #78 (T3.5)._
+## Tier-3 / T3.5, Master-key rotation runbook (Local provider: staging, self-host)
 
 The master key (`ENCRYPTION_MASTER_KEY`) wraps every user's per-user DEK. Rotation is the operator action of swapping the master key without losing access to existing wrapped DEKs. T3.5 added:
 
@@ -246,11 +98,9 @@ If you discover post-step-5 that the new key is wrong (lost, corrupted, mistyped
 
 ---
 
-## Tier-3 / T3.5.6 — Master-key backup procedure
+## Tier-3 / T3.5.6, Master-key backup procedure (Local provider)
 
-_Added 2026-05-08 with PR #78 (T3.5)._
-
-> **Environment reality check (updated 2026-06-18):** prod is **AWS ECS Fargate** (`app.engram.page`); FastRaid runs **staging** (`staging.engram.page`), NOT prod. The master key on prod lives in **AWS SSM Parameter Store (SecureString, SOPS-managed via engram-infra TF)** — not a FastRaid container env. The "named owners" convention below applies to the saas instance; selfhost users carry their own backup obligation, captured in product-level UX (out of scope here).
+> Prod has no master key (KMS wraps its DEKs). This section covers the staging key and any self-host operator's own key.
 
 ### What to back up
 
@@ -265,14 +115,14 @@ Sources of truth:
 
 **Tier-3 launch baseline (today):**
 
-1. **Primary:** prod's authoritative copy lives in **AWS SSM Parameter Store** (SecureString), sourced from the SOPS-encrypted secrets file in engram-infra TF. (Staging on FastRaid keeps its own separate key in its Unraid template ENV.) Owner: open-claw.
+1. **Primary:** staging's key is in the SOPS-encrypted engram-infra secrets for `staging-fastraid`. Owner: open-claw.
 2. **Secondary:** sealed printout in a physical safe at owner's residence. Owner: open-claw.
 3. **Off-site copy:** encrypted, stored in 1Password personal vault. Owner: open-claw.
 
 **Tier-3 follow-up (post-launch):**
 
 - Add at least one independent backup with a non-owner trustee (legal next-of-kin or a designated co-signatory).
-- Add a quarterly restore drill schedule (next drill: **2026-08-08**).
+- Add a quarterly restore drill schedule.
 
 ### When to rotate
 
@@ -283,7 +133,7 @@ Sources of truth:
 ### Restore drill (quarterly)
 
 1. On a non-prod laptop, decrypt the off-site copy.
-2. Boot a fresh copy of the latest engram image with `ENCRYPTION_MASTER_KEY=<RESTORED>` against a recent prod database snapshot in a dev compose stack.
+2. Boot a fresh copy of the latest engram image with `ENCRYPTION_MASTER_KEY=<RESTORED>` against a recent snapshot of the database that key protects, in a dev compose stack.
 3. Confirm `Engram.Crypto.BootCanary.verify!()` passes — i.e., the restored key matches what's in `system_canaries`.
 4. List a few notes via the API to confirm content decrypts.
 5. Tear down the test stack. Drill complete.
@@ -298,7 +148,6 @@ If the drill fails, surface it as a P0 immediately; the off-site copy is suspect
 | Drill scheduler | open-claw (until backup owner exists) | Runs quarterly drill, escalates failures |
 | Backup trustee | _[unassigned — to be appointed before saas paying-customers]_ | Emergency decryption authority |
 
-Next drill: **2026-08-08**. Track in `~/Calendar` or equivalent.
 
 ## T3.7.4 — DEK leak incident response runbook
 
@@ -356,9 +205,8 @@ Worker uniqueness on `[:user_id]` collapses duplicate enqueues to the same job �
 
 ### Telemetry to watch
 
-- `engram.crypto.rotate.dek.count{status="ok"}` ≥ 1 — rotation completed.
-- `engram.crypto.rotate.dek.count{status="failed"}` — investigate immediately. Reason label in event metadata.
-- `engram.crypto.rotate.dek.duration_us` — verify within the expected band for note count.
+- `[:engram, :crypto, :rotate, :dek]`, one event per rotation, status in metadata. A failed status means investigate immediately.
+- `[:engram, :crypto, :rotate, :dek, :row_failed]`, a row that failed to re-encrypt mid-sweep.
 
 ### Verify completion
 
@@ -369,13 +217,13 @@ Both must hold:
 - `dek_version` advanced by exactly 1 from the pre-rotation snapshot.
 - `dek_rotation_locked_at` is NULL.
 
-If `dek_version` did not advance OR `dek_rotation_locked_at` is still set, rotation failed mid-flight. Inspect Logger.error output (category `:crypto_rotation`) for the failing phase, fix the underlying cause, then re-run the same command. Resume is best-effort: the sweep loops use decrypt-as-discriminator (try old DEK, fall through to new DEK), so any rows already rotated by the failed run are tolerated on the retry; remaining rows finish under the new DEK.
+If `dek_version` did not advance OR `dek_rotation_locked_at` is still set, rotation failed mid-flight. Inspect Logger.error output (category `:crypto`) for the failing phase, fix the underlying cause, then re-run the same command. Resume is best-effort: the sweep loops use decrypt-as-discriminator (try old DEK, fall through to new DEK), so any rows already rotated by the failed run are tolerated on the retry; remaining rows finish under the new DEK.
 
 ### Rollback
 
 DEK rotation has NO clean rollback once `users.encrypted_dek` is flipped (final phase of the orchestrator). Pre-flip rollback: re-acquire the lock, manually clear `attachments.dek_version_pending` and revert any partially-rotated rows from a backup. Post-flip rollback: not supported. Restore from a database snapshot taken before the rotation if absolutely required.
 
-The lock-during-rotation contract — `RotationLockCheck` plug for REST routes plus `RotationGate` checks in Phoenix channels (`SyncChannel`) and Oban writers (`EmbedNote`, `BackfillContentHashHmac`) — blocks all per-user write paths during the rotation window. Reads are also gated to avoid the brief sweep-progress window where rotated rows would decrypt-fail under the still-cached old DEK. The post-flip risks are operator error in the rotation command itself (catastrophic but defended by pre-flight checks above) and any new writer that accesses the user's DEK without going through the gate.
+The lock-during-rotation contract, `RotationLockCheck` plug for REST routes plus `RotationGate` checks in the channel gate (`EngramWeb.ChannelGate`), CRDT persistence and Oban writers (`BackfillContentHashHmac`, `BackfillCrdtHead`), blocks all per-user write paths during the rotation window. Reads are also gated to avoid the brief sweep-progress window where rotated rows would decrypt-fail under the still-cached old DEK. The post-flip risks are operator error in the rotation command itself (catastrophic but defended by pre-flight checks above) and any new writer that accesses the user's DEK without going through the gate.
 
 ### Half-state recovery (after a mid-attachment crash)
 
@@ -424,7 +272,9 @@ five weeks, so every current row was already written with an HMAC hash.
 
 ### Enqueue
 
-    docker exec engram-saas /app/bin/engram rpc 'Engram.ContentHash.Backfill.enqueue_all()'
+    /app/bin/engram rpc 'Engram.ContentHash.Backfill.enqueue_all()'
+
+(Prod: run it through `aws ecs execute-command` as in the DEK rotation section above.)
 
 Returns `%{notes: N, attachments: M}` — the number of `BackfillContentHashHmac`
 jobs enqueued per scope, one per (user, vault) pair that still holds a legacy

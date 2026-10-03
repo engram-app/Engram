@@ -1,9 +1,9 @@
 # Context Doc: Several unrelated e2e-crdt tests fail at once — check whether both Obsidian instances died
 
-_Last verified: 2026-09-23_
+_Last verified: 2026-10-03_
 
 ## Status
-Working (diagnosis method). The underlying contention is unfixed; the instrumentation that would make it self-evident is not built yet (see "The cheap fix").
+Working (diagnosis method). The underlying contention is unfixed. Since #1734 the artifacts carry Obsidian stderr and host forensics, so an OOM kill is now a grep (see "Confirming the kill").
 
 ## What This Is
 A failure class, not a bug. When a handful of *unrelated* CRDT e2e tests go red in one
@@ -13,7 +13,7 @@ mid-run. If they did, every downstream failure is one event seen from several an
 
 ## Environment
 - `e2e-crdt` job in `.github/workflows/verify.yml`, self-hosted isolated runner pool
-- All 7 runners live on ONE 8 vCPU / 16 GB VM (10.20.99.10) — see `docs/context/runner-vm-setup.md`
+- Runners share 8 vCPU / 16 GB VMs; several heavy e2e jobs can land on one box. See `../engram-workspace/docs/context/runner-vm-setup.md`
 - Two headless Obsidian (Electron) instances per run, driven over CDP, under Xvfb
 
 ## The signature
@@ -56,25 +56,23 @@ Three concurrent Obsidian/Electron stacks plus a Docker image build, on 16 GB. T
 Electron processes are by far the largest RSS on the box, and both were killed two seconds
 apart inside that peak. That is an OOM-killer cascade signature.
 
-## Why this is inference, not proof — and the cheap fix
+## Confirming the kill
 
-There is **no kill record**, because:
+Before #1734 there was no kill record (Obsidian stderr went to `DEVNULL`, no
+`dmesg` was uploaded), so this was inference. Now:
 
-- `e2e/helpers/obsidian.py:292` launches Obsidian with `stderr=subprocess.DEVNULL`.
-  Xvfb's stderr *is* captured (`/tmp/xvfb-stderr-<display>-<pid>.log`, same file, lines
-  230–248); Obsidian's is thrown away.
-- No `dmesg` and no memory snapshot is uploaded with the artifacts.
+- Obsidian stderr is written to `/tmp/obsidian-stderr-<name>-<pid>.log`
+  (`e2e/helpers/obsidian.py`, same treatment Xvfb gets) and uploaded as
+  `obsidian-stderr-*.log`.
+- Teardown captures `dmesg -T`, `free -m` and top processes by RSS into `host-forensics.log`.
 
-Capturing Obsidian's stderr to a file under `MARKER_PREFIX`, plus a `dmesg -T | tail -50`
-and `free -m` step in e2e teardown, would make an OOM kill appear verbatim as
-`Out of memory: Killed process … (obsidian)`. Roughly five lines of change, and it converts
-this whole class from a multi-hour inference into a one-line grep. Issues **#1522** and
-**#1503** have been open for weeks on exactly this ambiguity.
+Grep those for `Out of memory: Killed process … (obsidian)` before counting
+failures as bugs.
 
 ## Related live landmine (NOT the cause here)
 
 `e2e-crdt` computes its Xvfb display window as `(GITHUB_RUN_NUMBER % 15) * 6 + 150`
-(`verify.yml:1661`; `e2e-clerk` uses the same formula with base `+50`), and pre-cleanup runs
+(`verify.yml` e2e-crdt job; `e2e-clerk` uses the same formula with base `+50`), and pre-cleanup runs
 `pkill -9 -f "Xvfb :$d"` across that window. Only **15 buckets** — and because the runners
 share a PID namespace, that pkill can reach another job's Xvfb. Two `e2e-crdt` runs whose
 run numbers differ by a multiple of 15 collide outright.
@@ -107,9 +105,9 @@ runs was **comment-only** changes on both sides (backend #1721, plugin #526).
   refused" is ONE fault, not two. Sort failures by timestamp before counting them as bugs.
 
 ## References
-- `e2e/helpers/obsidian.py` (launch, stderr handling: lines 230–248 Xvfb, 291–292 Obsidian)
-- `.github/workflows/verify.yml` — `e2e-crdt` job (display window at 1653–1666, pre-cleanup below it)
-- `docs/context/runner-vm-setup.md` — the shared-VM runner pool
+- `e2e/helpers/obsidian.py` (launch, Xvfb and Obsidian stderr capture)
+- `.github/workflows/verify.yml`, `e2e-crdt` job (display window `BASE=...`, pre-cleanup below it)
+- `../engram-workspace/docs/context/runner-vm-setup.md`, the shared-VM runner pool
 - `docs/context/ci-pipeline-gating.md` — what gates vs what only warns
 - `docs/context/e2e-clerk-failure-taxonomy.md` — sibling taxonomy for the `e2e-clerk` job
-- Issues #1522, #1503
+- Issues #1522, #1503 (closed); #1734 (stderr + forensics capture)

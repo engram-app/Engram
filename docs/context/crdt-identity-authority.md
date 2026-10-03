@@ -50,10 +50,10 @@ So a claim onto a path a different note already holds is refused, and
 
 **But the map cannot enforce uniqueness on its own, and this is the single
 easiest thing to get wrong here.** `Identity.claim/3` only sees collisions
-recorded IN THE MAP, and until Engram-obsidian#362 no client writes it — so in
-production almost every note has no entry and almost every real collision is
-invisible to the claim. Callers therefore validate against the ROWS *before*
-claiming (`claim_rename/5`, `validate_move_targets/3`, `claim_cascade/4`).
+recorded IN THE MAP. A note whose entry was never written (anything that
+predates the client writing the map, Engram-obsidian#362) is invisible to the
+claim, so its collisions are too. Callers therefore validate against the ROWS
+*before* claiming (`claim_rename/5`, `validate_move_targets/3`, `claim_cascade/4`).
 
 Skipping that row check is not "the same error, slightly later". The claim is
 durable: the row write fails, the API reports a conflict, and the target path is
@@ -173,5 +173,5 @@ One residual, deliberately not closed: a client writing `filemeta_v0` directly
 over the channel bypasses `Identity` entirely, so its update reaches
 `update_v1/4` and is dropped by `append_tail`'s gate (`phase=skipped_rotation`).
 `SessionInvalidator.disconnect_user/1` drains sockets at the top of a rotation,
-which narrows the window rather than eliminating it. It has no production
-exposure until Engram-obsidian#362 makes a client write the map.
+which narrows the window rather than eliminating it. The plugin writes the map
+since Engram-obsidian#362, so this window is live in production.

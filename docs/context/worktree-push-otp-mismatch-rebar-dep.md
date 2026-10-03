@@ -1,6 +1,6 @@
 # Context Doc: Wrong-OTP `git push` from a worktree corrupts the `opentelemetry` rebar build
 
-_Last verified: 2026-09-16_
+_Last verified: 2026-10-03_
 
 ## Status
 Working (documented gotcha — recovery is two commands; always push with `mise exec --`)
@@ -79,19 +79,14 @@ trees before concluding the blast radius was worktree-only.
   exit 144. Kill by PID, or use a pattern that cannot match the new command.
   Same self-match failure already documented for `pkill -f session-manager-plugin`.
 
-- **`cmd | tail` returns tail's exit code.** `mix test | tail -8` reported
-  success while the suite actually had a failure. Redirect to a file and echo
-  `$?`. Already recorded in `AGENTS.md` → Testing → "Never pipe a gate command
-  through `tail`"; it recurred here.
-
-- **Related toolchain drift: biome.** `frontend/package.json` pins
-  `@biomejs/biome` 2.5.12, but a worktree's hardlinked `node_modules` can carry
-  2.5.11, which aborts with a CONFIG error (unknown rule names) on **every** file
-  including untouched ones — frontend lint is unverifiable locally in that state.
-  Reproduce CI's version without mutating the shared `node_modules`:
+- **Related toolchain drift: biome.** A worktree's hardlinked `node_modules` can
+  carry an older `@biomejs/biome` than `frontend/package.json` pins. The older
+  version aborts with a CONFIG error (unknown rule names) on **every** file,
+  including untouched ones, so frontend lint is unverifiable locally in that
+  state. Run the pinned version without mutating the shared `node_modules`:
 
   ```bash
-  bunx @biomejs/biome@2.5.12 check --error-on-warnings <paths>
+  bunx @biomejs/biome@<version from frontend/package.json> check --error-on-warnings <paths>
   ```
 
   CI's `frontend-lint` job installs its own deps and is authoritative.

@@ -1,12 +1,10 @@
 # Context Doc: OAuth discovery URLs behind edge-terminated TLS
 
-_Last verified: 2026-08-05_
+_Last verified: 2026-10-03_
 
 ## Status
 
-Fixed. `EngramWeb.OAuthMetadata.with_port/2` now treats **both** 80 and 443 as "no port".
-The bug never reached prod — it was caught on staging while prod still ran
-`release-v0.13.0`.
+Fixed. `EngramWeb.OAuthMetadata.with_port/2` treats **both** 80 and 443 as "no port".
 
 ## The symptom
 
@@ -64,7 +62,7 @@ has it:
 - **Unit suite** — `config/test.exs` runs the endpoint on plain http, so the canonical
   scheme matches the socket. `well_known_host_test.exs` even asserted `port: 80` is
   omitted, and passed, because there `with_port(base, "http", 80)` hit the elision clause.
-- **Per-PR conformance gate** (`CONFORMANCE_STAGES=spec` against the CI stack) — the client
+- **Per-PR conformance gate** (`test_88_mcp_conformance.py`, `GATED_STAGES = "spec"` against the CI stack): the client
   genuinely dials `localhost:4000`, so the port genuinely belongs in the URL.
 - **Nightly conformance** against staging *would* have caught it (its `case "$advertised"`
   accepts only `$TARGET_URL` or `$ORIGIN`), but it runs 05:40 UTC and the change merged at
@@ -115,6 +113,16 @@ Ruled out while hunting this, worth not re-deriving:
   Clerk/Paddle. `SsrfGuard` pins to a resolved public address; no proxy interaction.
 
 ## Gotchas
+
+- **Every hostname a container serves must be in `PHX_HOST`** (comma-separated; the first
+  entry is canonical). `OAuthMetadata.base_url/1` reflects the request host only if it is in
+  that list, otherwise it falls back to the canonical host, and the client's RFC 9728
+  `resource` check fails.
+- **Nginx Proxy Manager's "Block Common Exploits" toggle 403s any query string containing
+  `=http://`.** That kills RFC 8252 loopback redirects (Claude Code CLI) but not https
+  callbacks (Claude web/desktop), so test OAuth with the CLI specifically. A 403 with an
+  openresty body and no Phoenix headers (`x-request-id`, CSP) means the proxy answered, not
+  the app.
 
 - **Never pipe the conformance script.** `scripts/mcp-conformance.sh … | tail` reports
   `tail`'s exit code — it printed `SPEC VIOLATION` and exited 0 through a pipe, 1 without.

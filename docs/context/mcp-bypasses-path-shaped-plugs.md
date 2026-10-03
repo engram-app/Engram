@@ -5,7 +5,7 @@ plug, or a Free-tier cap is not firing for a user who is clearly over it.
 
 ## The trap
 
-`EngramWeb.Plugs.EnforceSearchCap` sat on the shared `:authed_api` pipeline —
+`EngramWeb.Plugs.EnforceSearchCap` (since deleted) sat on the shared `:authed_api` pipeline , 
 the pipeline whose own comment says it is used by BOTH the REST scope and the
 MCP scope "so a new security control can't be added to one and silently missed
 on the other". It was still missed on MCP, because the plug's first clause is:
@@ -14,23 +14,20 @@ on the other". It was still missed on MCP, because the plug's first clause is:
 def call(%Plug.Conn{method: "POST", request_path: "/api/search"} = conn, _opts)
 ```
 
-MCP is a single route. Every tool — `search_notes`, `create_note`, all 21 of
-them — arrives as `POST /api/mcp` with the operation named in the **JSON-RPC
+MCP is a single route. Every tool (`search_notes`, `create_note`, all 17 of
+them) arrives as `POST /api/mcp` with the operation named in the **JSON-RPC
 body**, not the path. A plug matching on `request_path` therefore sees `/api/mcp`
 and falls through to the `def call(conn, _opts), do: conn` catch-all for the
 entire MCP transport.
 
-Result: `external_ai_searches_per_day` (15/day on Free) was unenforced on MCP —
-the exact client class the plug's own moduledoc named. The only remaining bound
-was `ConversationMeter` (5 conversations x 50 queries = ~250 tool calls/day, and
-every tool counts, not just searches), so Free got roughly 16x its intended
-search allowance. Fixed by engram#1527.
+Result: the Free search cap was unenforced on MCP, the exact client class the
+plug's own moduledoc named. Fixed by engram#1527.
 
 **Being on the shared pipeline is not the same as running.** The pipeline
 guarantees the plug is *invoked*; a path guard inside it decides whether it
 *does anything*.
 
-## Second instance: `attachments_enabled` (engram#TBD)
+## Second instance: `attachments_enabled`
 
 Same class, no plug involved — the gate was in a **controller action**.
 `AttachmentsController.rename/2` checked `attachments_enabled` and then called
@@ -89,88 +86,48 @@ Verified by mutation: deleting the `check_feature` line from
 
 ## Why the tests did not catch it
 
-`test/engram_web/plugs/enforce_search_cap_test.exs` calls `EnforceSearchCap.call/2`
+The plug's unit test called `EnforceSearchCap.call/2`
 directly on a synthesized conn whose `request_path` is already `/api/search`. It
 proves the rule, never the routing. A unit test that hands the plug the exact
 conn shape it pattern-matches on can never discover that no real request has
 that shape.
 
-The regression tests added with the fix drive `POST /api/mcp` through the real
-router (`test/engram_web/controllers/mcp_controller_test.exs`, describe
-`"external_ai_searches_per_day over MCP"`).
+The regression tests drive `POST /api/mcp` through the real router
+(`test/engram_web/controllers/mcp_controller_test.exs`, describe
+`"ai_searches_per_day over MCP"`).
 
-## Superseded for search (2026-09-01): charge at the cost site
+## Search is charged at the cost site
 
-`EnforceSearchCap` and `Engram.Usage.SearchCap` are **deleted**. The search
-budget is now charged inside `Engram.Search.search/4` — the single funnel every
-retrieval passes through, and where the Voyage embed happens.
-
-That inverts the default. The old shape was "explicitly charge these two tools,"
-against a hand-maintained `MCP.Tools.search_tools/0` list plus a test watching
-the list. The new shape is "every retrieval is charged unless it passes
-`charge: false`," so a new transport or tool inherits metering instead of needing
-to be added to anything. `SearchToolCoverageTest` is deleted with the list.
-
-`ConversationMeter` is gone too: six catalog keys collapsed into one
-(`ai_searches_per_day`, Free 20). See `limit-sentinel-decoding.md`'s sibling
-note and `Engram.Billing.LimitKeys`.
-
-The rest of this doc still stands as the record of the bug class and as the rule
-for any limit that is NOT a retrieval — an attachment cap, a device cap, a
-connection cap all still live behind plugs or context functions and can still be
-missed on a transport.
+The search budget (`ai_searches_per_day`) is charged inside
+`Engram.Search.search/4`, the single funnel every retrieval passes through and
+where the Voyage embed happens. A new transport or tool inherits metering
+instead of needing to be added to a list. There is no exemption:
+`MCP.Handlers.auto_place_folder/4` (the search behind `create_note` /
+`write_note` folder placement) is charged too, but degrades to the default
+folder on a refusal instead of failing the write.
 
 ## The rule
 
-A limit that must hold across transports lives in a **plain module**, not in a
-plug. `Engram.Usage.SearchCap.spend/2` owns both the bucket choice
-(external vs in-app) and the spend; the plug and `EngramWeb.McpController` each
-call it and only differ in how they render a denial (402 via `LimitResponse` on
-REST, JSON-RPC `-32_005` on MCP).
+A limit that must hold across transports lives in a **plain module** (a context
+function), not in a plug. Transports differ only in how they render a denial
+(402 via `LimitResponse` on REST, `isError` / JSON-RPC error on MCP).
 
 When you add a cap, ask: **can this operation be reached over MCP?** If yes, the
-plug is at most half the gate. Grep the MCP handlers for the underlying context
-call (e.g. `grep -rn "Search.search(" lib/`) and confirm every call site is
-covered — MCP handlers call `Engram.*` contexts directly and never re-enter the
-HTTP stack.
+plug is at most half the gate. MCP handlers call `Engram.*` contexts directly
+and never re-enter the HTTP stack, so grep the handlers for the underlying
+context call and confirm every call site is covered.
 
-## Residual hole: uncharged searches via the write path
+## Deliberate exemption (do not "fix" this)
 
-`auto_place_folder/4` is exempt on purpose (see below), and that leaves the cap
-partially evadable. Repeated `write_note` against an EXISTING path grows no note
-count, so `notes_cap` never binds, and each call runs one uncharged search. The
-ceiling is `ConversationMeter` (~250 tool calls/day), so a determined Free client
-can reach roughly 250 searches/day against an intended 15.
-
-Accepted, not overlooked. Charging it would fail note creation with a search-cap
-error, which is a worse product than a bounded bypass that still costs the
-attacker a write per search. If this ever needs closing, the lever is a separate
-cheap bucket for write-path auto-placement, not folding it into
-`external_ai_searches_per_day`.
-
-## Deliberate exemptions (do not "fix" these)
-
-- **`auto_place_folder`** (`Engram.MCP.Handlers`, reached from `create_note` /
-  `write_note`) runs a search internally for folder auto-placement. It is NOT
-  charged to the search bucket: the search is incidental to a write, is not the
-  abuse vector, and charging it would fail note creation with a search-cap error.
 - **`cross_vault_search`** is a Pro feature on REST but is deliberately bypassed
-  on MCP via `allow_cross_vault: true` — multi-vault search is the MCP default
-  on every tier (product decision 2026-07-10). See `Engram.Search.cross_vault_allowed/2`.
+  on MCP via `allow_cross_vault: true`: multi-vault search is the MCP default
+  on every tier. See `Engram.Search.cross_vault_allowed/2`.
 
 ## Observability
 
-There is still **no per-user usage counter** in Loki or Prometheus, and
-`Billing.plan_state/1` returns caps only, never current counts — so "how close
-is this user to their cap" is unanswerable from observability. The only signals
-are:
-
-- `engram_prom_ex_usage_daily_cap_total{kind,decision}` — allow/deny/fail_open
-  counts per bucket, from `Engram.Usage.DailyCap` (no `user_id` tag, by design).
-- `Engram.UsageMeters.notes_count/1` — DB-side, reachable only via ECS Exec + IEx.
-
-Cap-reached events are returned to the caller (402 / `-32_005`), not logged, so
-Loki will not show them either.
+There is **no per-user usage counter** in Loki or Prometheus, and
+`Billing.plan_state/1` returns caps only, never current counts. Cap-reached
+events are returned to the caller, not logged.
 
 ## The backstops that did not catch it, and why
 
@@ -215,8 +172,7 @@ $ mix test test/path/to/relevant_test.exs
 ```
 
 If it stays green, the limit is unproven no matter how many unit tests the
-gate's module has. `ConversationMeter.tick/1` had 8 unit tests and could be
-deleted from `McpController.dispatch/3` with 91 tests still passing.
+gate's module has.
 
 Match the test to where enforcement lives — a route test for a plug or
 controller gate, a worker test for `EmbedNote` / `InactivityCleanup`, a context

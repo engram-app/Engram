@@ -14,8 +14,8 @@ defmodule Engram.Storage.MimeWhitelist do
 
   Self-host operators can bypass entirely (`ATTACHMENT_MIME_BYPASS=true`)
   or extend the allowlist (`ATTACHMENT_MIME_ALLOWLIST_EXTRA=mime1,mime2`).
-  See `backend/docs/context/paddle-v2-launch-runbook.md` for the deferred
-  Phase 2 (PhotoDNA / DMCA) milestone trigger.
+  See `docs/context/attachment-mime-whitelist.md` for the deferred Phase 2
+  (PhotoDNA / DMCA) milestone trigger.
   """
 
   @mime_prefixes ~w(image/ audio/ video/ text/)

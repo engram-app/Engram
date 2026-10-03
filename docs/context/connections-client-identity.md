@@ -1,6 +1,6 @@
 Title: Connections client identity: slug attribution, the three hosting classes, and the HTTPS trust model
 
-_Last verified: 2026-08-02 (`resolve/4` now takes the grant's single redirect, not the client's registered list, #1204/#1207. CIMD shipped 2026-07-31, #1148; guessed `software_id` entries deleted, #1156. Rewritten 2026-07-30 fixing connector attribution for loopback + self-hosted clients; originally 2026-06-15)_
+_Last verified: 2026-10-03_
 
 How `/settings/connections` cards and the onboarding checklist identify an OAuth/MCP client (logo, display_name, verified badge, checklist auto-check).
 
@@ -73,26 +73,8 @@ controls a host the vendor owns":
 
 Nothing else may ever grant it.
 
-> **Tightened 2026-07-30.** `software_id` used to grant `verified: true`. It is
-> an RFC 7591 field the client sends *about itself* in the DCR body, exactly as
-> self-asserted as `client_name`, so anyone could register
-> `software_id: "anthropic-claude-desktop"` and appear in a victim's connections
-> list as a verified Claude Desktop, logo and all. Not an authorization-time
-> phishing vector (the consent screen shows only `client_id` + `client_name`),
-> but it made a rogue grant look trustworthy enough not to revoke. It now
-> supplies identity only, and only when no vendor host outranks it.
->
-> **Residue removed 2026-07-31 (#1156).** The tightening above left the rogue
-> client with Claude's logo and display name; it only lost the badge. The four
-> guessed `@software_id` entries were then deleted, so a self-asserted
-> `software_id` now resolves to the unverified placeholder and grants **no
-> vendor identity at all**. Only our own `engram-vault-sync` remains, and it
-> needs the entry: it redirects to a custom scheme, so no host can attribute
-> it, and its `client_name` derives no catalog slug.
->
-> Device-flow rows are unaffected, `device_rows/1`
-> hardcodes `verified: true`, which is legitimate because our own server mints
-> the `family_id`; no client-supplied metadata is involved.
+Device-flow rows hardcode `verified: true` (`device_rows/1`), which is legitimate
+because our own server mints the `family_id`; no client-supplied metadata is involved.
 
 - **Why HTTPS host is un-spoofable:** a forged DCR client can *claim* `redirect_uri=https://claude.ai/...`, but the auth code is then delivered to claude.ai, not to the attacker. The vendor controls the callback handler.
 - **Why custom schemes / http are NOT:** `com.evil.app://claude.ai/cb` and `http://claude.ai/...` both parse to host `claude.ai` but deliver the code to an attacker-controlled handler. `lookup_by_host/1` enforces `%URI{scheme: "https", userinfo: nil}`. (Code review caught this; the naive host-only match was exploitable.)
@@ -155,8 +137,6 @@ unexpressible rather than fixed-for-now.
 Severity was bounded by the consent screen showing no badge at all, so this aided
 *survival of review* rather than the initial phish — see "Known gap" below.
 
-> **Correction (2026-07-30).** This doc previously said custom schemes and localhost were *"identify-only: they may set icon/name but never grant verified."* That was the intended design; the code never implemented it, `lookup_by_host/1` returned the empty placeholder, so loopback clients got **no slug at all** and their checklist row could never tick. The doc/code mismatch is why the gap survived six weeks. Slug attribution for those clients now comes from `client_name`.
-
 ## Observed registrations (prod 2026-07-30, staging 2026-08-01)
 
 Ground truth from real grants, not published docs:
@@ -180,16 +160,7 @@ Mistral and Antigravity are the cases where **name** derivation fails
 saves it. Open WebUI, Cline and OpenCode are the exact inverse. Neither layer
 alone covers all of them, keep both.
 
-**Devin and LobeHub added 2026-08-01** (staging), both by vendor host. Two
-things they illustrate:
-
-- **Devin carries `slug: nil`.** There is no `devin` in
-  `Engram.Onboarding.valid_tools/0`, and adding one is gated on a
-  `/docs/integrations/devin/` page existing — `checklist-widget.tsx` has a
-  parity test (#1157) requiring every selectable slug to own a doc URL, and that
-  page 404s today. Attribution and the badge do not depend on the slug, so the
-  entry is useful without a checklist row.
-- **LobeHub maps to the `lobechat` slug.** LobeHub is the cloud host, LobeChat
+**LobeHub maps to the `lobechat` slug.** LobeHub is the cloud host, LobeChat
   the product and the catalog slug. The observed `client_name` is `"LobeHub"`,
   which does *not* derive to `lobechat`, so the host map carries it. This is
   cloud-only: a **self-hosted** LobeChat redirects to the operator's own domain,
@@ -202,14 +173,6 @@ can never prove anything). It is the worked example of why CIMD exists.
 > **Do not assume a client registers under its product name.** Three of nine
 > observed clients append a suffix (`-client`, `(<server>)`). The name layer is a
 > fallback for clients with no usable host, not a primary identifier.
-
-**Cline and OpenCode are the predictions this design got to cash.** Both were
-written into the test suite as *never-observed* connectors, asserting that
-`"Cline" -> cline` and `"OpenCode" -> opencode` would derive from the catalog
-with no new config. Both then registered for real within the hour and did
-exactly that. That is the argument for normalizing names back into slug shape
-rather than hand-maintaining a vendor map: the map only ever covers connectors
-someone already noticed, and these two would have needed a code change each.
 
 Note the shared `/mcp/oauth/callback` path: Cline and OpenCode register the same
 loopback shape and differ only by `client_name` and port (both are also
@@ -246,13 +209,6 @@ accidental collisions, not squatting. **PKCE is the actual defence** and is
 mandatory: an app that intercepts the redirect gets a code it cannot redeem.
 `javascript:` / `data:` / `file:` are still rejected, and custom schemes remain
 permanently unverifiable.
-
-> **Cursor's published redirect URLs are not what it registers.**
-> `cursor.com/docs/mcp` documents `https://www.cursor.com/agents/mcp/oauth/callback`
-> and `http://localhost:8787/callback`. Those describe the *static OAuth* path
-> where you pre-register URLs with a provider. Under DCR the desktop client
-> sends `cursor://anysphere.cursor-mcp/oauth/callback`. Third case today where
-> vendor docs disagreed with an observed registration; trust the row.
 
 ## Loopback clients get a port exemption at authorize (RFC 8252 §7.3)
 
@@ -332,13 +288,9 @@ SELECT software_id, client_name, redirect_uris FROM oauth_clients;
 
 `@lobehub/icons-static-svg` is already a dependency and already covers every catalog slug. Use `ToolMark slug={...}` (`frontend/src/onboarding/tool-icon.tsx`). The backend `logo: "/assets/clients/*.svg"` field is a legacy parallel system still needed only for `engram-vault-sync` and `vscode`; `grok.svg`/`mistral.svg` were never created and don't need to be.
 
-## Deleted: the 4 guessed `software_id` entries (2026-07-31, #1156)
+## `software_id` allowlist
 
-`anthropic-claude-desktop`, `cursor.sh`, `openai-chatgpt`, `vscode-engram` were UNVALIDATED guesses, and are now **gone**. Prod data proved they never fire (the real ChatGPT and Claude grants both arrive with `software_id: null`; Cursor registers `cursor://` with no `software_id`). They were not merely dead config, they were a free vendor-logo grant for anyone who read the source: registering `software_id: "anthropic-claude-desktop"` put Anthropic's logo and name on a rogue grant in the victim's connections list, with no `unverified` chip (the chip is suppressed whenever a slug resolves, deliberately, so Claude Code is not badged as suspect).
-
-`engram-vault-sync` is the only remaining entry and the only proven-real one.
-
-**Rule going forward: add a key here only for a `software_id` observed on a real registration.** A guess re-opens the impersonation. Check the `mcp_dcr_unattributed_client` tripwire for what clients actually send.
+`engram-vault-sync` is the only entry. **Add a key only for a `software_id` observed on a real registration.** A guessed entry hands a vendor logo and name to anyone who registers it. Check the `mcp_dcr_unattributed_client` tripwire for what clients actually send.
 
 `@name_aliases` currently carries one **inferred, not observed** entry: `visual_studio_code` → `github_copilot`. VS Code drives MCP OAuth itself, above the extension, so a Copilot user's grant is expected to arrive under the product name. The tripwire will confirm or refute it.
 
@@ -350,39 +302,11 @@ SELECT software_id, client_name, redirect_uris FROM oauth_clients;
 - **Researching redirect URLs for the remaining connectors.** There is nothing to find. Vendors do not publish DCR `client_name`/`redirect_uri` values, and loopback/self-hosted clients have no fixed host by construction. Instrument, don't search.
 - **Allowlisting a self-hosted instance's host.** Verifies exactly one operator and nobody else. Don't.
 
-## Google: Antigravity yes, Gemini no (2026-07-30)
+## Google: Antigravity yes, Gemini no
 
-Google sunset **Gemini CLI** for AI Pro / Ultra / free tiers on **2026-06-18**
-(also Gemini Code Assist IDE extensions), directing those users to **Antigravity
-CLI**. Enterprise (Code Assist Standard/Enterprise, Google Cloud) and paid API
-keys keep Gemini CLI, and the repo is still maintained, so it is a tier-scoped
-sunset, not a deprecation.
-([announcement](https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/))
-
-Catalog decisions that follow:
-
-- **`antigravity` is a real slug** (TOOL_CODING), attributed by the
-  `antigravity.google` **host** entry, verified, with a logo. It registers as
-  `antigravity-client`, so name derivation does *not* catch it; the initial
-  assumption that it would was wrong and is pinned by a regression test.
-- Antigravity connects to a DCR server with **nothing but a `serverUrl`**, the
-  `oauth: {clientId, clientSecret}` block in its docs is only for servers without
-  DCR, so our public-PKCE-only registration is fine. Config lives at
-  `~/.gemini/config/mcp_config.json` (or workspace `.agents/mcp_config.json`);
-  the key **must** be `serverUrl` (`url`/`httpUrl` are rejected). Auth is
-  copy-paste-the-code via Agent Settings → Customizations → Authenticate, and
-  MCP tools default to **Ask** mode until allowed with `mcp(engram/*)`.
-- **`gemini` is deliberately NOT a selectable slug.** The consumer Gemini app has
-  no UI for adding a custom remote MCP server. That is Gemini Enterprise (Cloud
-  console → Data Stores → Custom MCP Server) or Antigravity. Making it
-  selectable would manufacture an uncompletable checklist row, the same defect
-  this whole doc is about.
-- It is still **listed and greyed** in the FTUX picker via `ToolOption.unavailable`,
-  because a silent absence reads as an Engram gap rather than a platform one. The
-  slug is absent from `@valid_tools`, so it cannot reach a profile even if the UI
-  is bypassed.
-- **No `gemini_cli` slug.** Adding a product Google is retiring would be new dead
-  config. If an enterprise Gemini CLI user connects, the tripwire logs it.
+- **`antigravity`** is attributed by the `antigravity.google` host. It registers as `antigravity-client`, so name derivation does not catch it (pinned by a test).
+- **`gemini` is deliberately NOT a selectable slug.** The consumer Gemini app cannot add a custom remote MCP server, so a selectable row could never tick. It is listed greyed in the FTUX picker (`ToolOption.unavailable`) and absent from `@valid_tools`.
+- **No `gemini_cli` slug.** Gemini CLI is sunset for consumer tiers; the tripwire logs any enterprise user who connects.
 
 ## The real fix for local clients: CIMD (SHIPPED 2026-07-31, #1148)
 
@@ -411,8 +335,8 @@ Status and why it matters:
 
 `Engram.OAuth.Cimd` + `Engram.OAuth.Cimd.HttpFetcher` + `Engram.Http.SsrfGuard`.
 
-- **DCR did not go away and will not.** Seven of the nine observed connectors do
-  not use CIMD, and self-hosted clients never can (no vendor to publish a
+- **DCR did not go away and will not.** Most observed connectors do not use
+  CIMD, and self-hosted clients never can (no vendor to publish a
   document). The two paths are independent: a CIMD client sends a URL-shaped
   `client_id` and never touches `/oauth/register`.
 - **The PK was NOT widened.** `oauth_clients.client_id` stays a uuid; a unique
@@ -431,14 +355,12 @@ Status and why it matters:
 - **A failed refresh keeps serving the stale row**, including when the *new*
   document fails validation. A vendor's five-minute outage must not lock out
   every user of that client.
-- **Confidential auth methods in a document are refused, not downgraded.** A CIMD
-  client never registered, so no secret exists: honouring it leaves the client
-  unable to authenticate (nil hash), and downgrading to `none` makes it send a
-  secret that `authenticate_client/2` must then reject for being present at all.
-  Both failures are opaque; refusing the document is legible.
-- **Document metadata is validated by `registration_changeset/2`**, not a parallel
-  CIMD path, so the redirect-URI rules hardened in #1147 (the `https:///cb`
-  host-less trap, array bounds, unsafe schemes) apply verbatim and cannot drift.
+- **Secret-based auth methods in a document are refused, not downgraded.** A CIMD
+  client never registered, so no secret exists. `private_key_jwt` is accepted
+  when the document carries a `jwks_uri` (#1633).
+- **Document metadata is negotiated, not policed.** `Cimd.negotiate/1` intersects
+  capability metadata, then `Client.cimd_changeset/3` applies the shared safety
+  rules (redirect URIs, `client_id` binding). See `cimd-vs-dcr-validation-policy.md`.
 
 ### The seam that was easy to get wrong
 
@@ -449,63 +371,25 @@ them with a bare `==` and would have rejected the *legitimate* client:
 through `Engram.OAuth.internal_client_id/2`, which short-circuits when the wire id
 already matches so the DCR path pays for no extra query.
 
-`get_client/1` is a pure DB lookup. **Only `/oauth/authorize` may fetch a
-document** — if token exchange or revocation could, a vendor outage would break
-already-granted access.
+`get_client/1` is a pure DB lookup. **Token exchange and revocation never fetch
+a document**; only `/oauth/authorize` and the daily `Engram.Workers.CimdRefresh`
+sweep do. Otherwise a vendor outage would break already-granted access.
 
-### SSRF: most of the work (`Engram.Http.SsrfGuard`)
+### SSRF (`Engram.Http.SsrfGuard`)
 
-`/oauth/authorize` is unauthenticated, so this is an unauthenticated-request-
-triggered outbound fetch: an SSRF primitive AND a traffic amplifier aimed at third
-parties. There was no SSRF guard anywhere in `lib/` before this.
+`/oauth/authorize` is unauthenticated, so a document fetch is an
+unauthenticated-request-triggered outbound call. The guard's moduledoc covers
+the address rules, pinning and redirects. Rate limits: discovery of an unseen
+URL is capped per host and globally (60/min); refresh of a known client has its
+own per-host bucket (10/min), so an attacker cycling hosts cannot starve
+refreshes for vendors real users depend on.
 
-- https only, port 443 only, no userinfo, no fragment.
-- Every resolved address checked against the IANA special-purpose ranges,
-  including CGNAT `100.64/10`, link-local `169.254/16` (cloud metadata), IPv6
-  ULA/link-local, and the v4-embedding transition ranges 6to4 `2002::/16` and
-  Teredo `2001::/32` (a relay forwards those to an internal v4 host).
-- IPv4-mapped IPv6 is unwrapped and judged as its inner v4 address:
-  `::ffff:169.254.169.254` is the metadata service in a v6 costume.
-- If **any** address for a name is non-public, the whole name is refused — a
-  resolver answering with both a public and an internal address is either
-  split-horizon or hostile and we cannot tell which.
-- **Pinning**, the subtle one: the guard returns a URL with the host replaced by
-  the address it validated, and the caller connects to *that* while passing the
-  original hostname for SNI + certificate verification (Req's
-  `connect_options: [hostname: ...]`). Handing the *hostname* to the HTTP client
-  would re-resolve it, and the second answer is free to be `127.0.0.1` — DNS
-  rebinding, where the check and the connection disagree.
-- **Redirects are not followed.** A redirect is a new URL that would bypass the
-  guard that approved the first one. A vendor that redirects its metadata document
-  does not work, and that is the correct outcome.
-- Body capped mid-stream at 64 KB.
-- **Two rate-limit budgets, deliberately separate.** *Discovery* (a URL we have
-  never seen) is the attacker-reachable path and is capped per-host (10/min) AND
-  globally (60/min) — per-host alone does nothing against a caller varying the
-  host, which is the amplification case. *Refresh* of an already-known client
-  gets its own per-host bucket (10/min), because sharing one global budget would
-  let an attacker cycling hosts starve refreshes for vendors real users are
-  connected to, turning the anti-amplification control into a DoS vector against
-  our own clients. Pinned by a test.
-
-> **⚠ There is NO feature flag, deliberately.** An earlier revision gated this on
-> `ENGRAM_CIMD_ENABLED` (default off) so the capability could be advertised
-> staging-first. That was removed before merge: it was a knob that would be set to
-> `true` once and never touched again, and a default-off flag nobody remembers to
-> set is the worse failure — CIMD looks shipped, silently does nothing, and no
-> tripwire fires because no CIMD traffic ever arrives.
->
-> What that means operationally: **CIMD goes live the moment this deploys.** Claude
-> Code stops choosing DCR as soon as it sees
-> `client_id_metadata_document_supported`, and it does **not** fall back if our
-> path is broken, so new Claude Code connections would fail rather than degrade.
-> Existing DCR grants are separate rows and are unaffected either way. Backing it
-> out is a revert of the advertisement line plus a deploy, not a config change.
+There is no feature flag: advertising `client_id_metadata_document_supported`
+makes Claude clients use CIMD immediately, with no fallback to DCR.
 
 **Tripwires:** `mcp_cimd_rejected` (a document was refused — reason + host, host
 only because `:lifecycle` ships to Loki) and `mcp_cimd_stale_retained` (a refresh
-failed and we are serving yesterday's document). Since there is no flag to blame,
-these two are the first place to look if connectors start failing after a deploy.
+failed and we are serving yesterday's document). These two are the first place to look if connectors start failing after a deploy.
 
 ## "Why is Claude Code unverified? Am I connected wrong?"
 
