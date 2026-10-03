@@ -87,11 +87,12 @@ defmodule Engram.Notes.RevisionsTest do
     :ok = record(u, existing, "sync", DateTime.utc_now())
     yours = open(revisions(u, existing.id))
 
-    # Setup only: upsert_note records history itself now (#1710), so switch
-    # recording off to change the row's text without adding a version.
-    Application.put_env(:engram, :history_recording, false)
-    {:ok, _} = Notes.upsert_note(u, v, %{"path" => "ai.md", "content" => "what you typed"})
-    Application.put_env(:engram, :history_recording, true)
+    # Setup only: change the row's text without adding a version. A "sync"
+    # write inside the session gap merges into the open sync version.
+    {:ok, _} =
+      Notes.upsert_note(u, v, %{"path" => "ai.md", "content" => "what you typed"}, actor: "sync")
+
+    assert length(revisions(u, existing.id)) == 2
     before_ai = raw(u, existing.id)
 
     :ok = record(u, before_ai, "mcp", DateTime.utc_now())
