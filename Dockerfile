@@ -70,7 +70,14 @@ FROM ${BUILDER_IMAGE} AS builder
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update -y && apt-get install -y build-essential git
+    apt-get update -y && apt-get install -y build-essential git curl ca-certificates
+
+# Rust for the in-house NIFs (native/), BUILDER STAGE ONLY: the release ships
+# the compiled .so and the runner image has no Rust. Version pinned to
+# native/engram_native/rust-toolchain.toml (keep the two in sync).
+ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:$PATH
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --no-modify-path --profile minimal --default-toolchain 1.94.1
 
 WORKDIR /app
 
@@ -125,6 +132,7 @@ RUN --mount=type=cache,target=/app/deps,id=mix-deps,sharing=locked \
 # changes don't invalidate the Elixir compile layer.
 # (runtime.exs already copied above — not re-copied here.)
 COPY lib lib
+COPY native native
 COPY priv priv
 COPY --from=frontend /priv/static/app priv/static/app
 # rel/ holds env.sh.eex, whose ECS_ENABLE_CLUSTER gate exports
@@ -150,6 +158,7 @@ COPY rel rel
 RUN --mount=type=cache,target=/app/deps,id=mix-deps,sharing=locked \
     --mount=type=cache,target=/root/.hex,id=mix-hex,sharing=locked \
     --mount=type=cache,target=/root/.cache/rebar3,id=mix-rebar,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry,sharing=locked \
     mix deps.get --only $MIX_ENV && \
     mix compile --force && \
     mix release && \

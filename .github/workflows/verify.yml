@@ -763,8 +763,12 @@ jobs:
           FROM ${MIX_BUILDER_IMAGE}
           ARG HEX_MIRROR=""
           ENV HEX_MIRROR=\${HEX_MIRROR}
-          RUN apt-get update -y && apt-get install -y --no-install-recommends build-essential git \
+          RUN apt-get update -y && apt-get install -y --no-install-recommends build-essential git curl ca-certificates \
               && rm -rf /var/lib/apt/lists/*
+          # Rust for native/ (in-house NIFs); same pin as the release Dockerfile.
+          ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:\$PATH
+          RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --no-modify-path --profile minimal --default-toolchain 1.94.1
           RUN mix local.hex --force && mix local.rebar --force
           EOF
 
@@ -2472,6 +2476,16 @@ jobs:
           restore-keys: |
             ${{ needs.prebuild-mix.outputs.build-test-restore }}
 
+      - name: Rust toolchain (native/ NIFs)
+        # rustup into the runner user's home, once per VM; the version comes
+        # from native/engram_native/rust-toolchain.toml on first cargo run.
+        run: |
+          if ! command -v rustup >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/rustup" ]; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
       - name: Fetch deps (if missing or lockfile changed)
         # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`
         # fallback can populate deps/ from a stale cache when the
@@ -2800,6 +2814,16 @@ jobs:
           key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
           restore-keys: |
             ${{ needs.prebuild-mix.outputs.build-dev-restore }}
+
+      - name: Rust toolchain (native/ NIFs)
+        # rustup into the runner user's home, once per VM; the version comes
+        # from native/engram_native/rust-toolchain.toml on first cargo run.
+        run: |
+          if ! command -v rustup >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/rustup" ]; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Fetch deps (if missing or lockfile changed)
         # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`
@@ -3534,6 +3558,16 @@ jobs:
           restore-keys: |
             ${{ needs.prebuild-mix.outputs.build-dev-restore }}
 
+      - name: Rust toolchain (native/ NIFs)
+        # rustup into the runner user's home, once per VM; the version comes
+        # from native/engram_native/rust-toolchain.toml on first cargo run.
+        run: |
+          if ! command -v rustup >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/rustup" ]; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
       - name: Install deps
         if: steps.gate.outputs.proceed == 'true' && steps.cache-deps.outputs.cache-hit != 'true'
         run: mix deps.get --check-locked
@@ -4139,6 +4173,16 @@ jobs:
           PG_PORT=$(docker port "$PG_CONTAINER" 5432/tcp | head -1 | cut -d: -f2)
           echo "pg_port=$PG_PORT" >> "$GITHUB_OUTPUT"
           echo "Postgres on port $PG_PORT"
+
+      - name: Rust toolchain (native/ NIFs)
+        # rustup into the runner user's home, once per VM; the version comes
+        # from native/engram_native/rust-toolchain.toml on first cargo run.
+        run: |
+          if ! command -v rustup >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/rustup" ]; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Fetch deps (if missing or lockfile changed)
         # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`
