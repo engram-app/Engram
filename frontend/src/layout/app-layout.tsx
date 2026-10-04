@@ -5,7 +5,6 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { useBillingStatus } from "../api/queries";
 import { useChannel } from "../api/use-channel";
-import TelemetryPrompt from "../features/admin/TelemetryPrompt";
 import { AttachmentUploadProvider } from "../viewer/attachment-upload/provider";
 import { ActiveEditorProvider } from "../viewer/editor/active-editor-context";
 import { preloadNoteChunks } from "../viewer/note-chunks";
@@ -158,7 +157,6 @@ export default function AppLayout() {
 					    note page publishes its editor here, the sidebar tools consume it. */}
 					<ActiveEditorProvider>
 						<AppLayoutInner />
-						<TelemetryPrompt />
 					</ActiveEditorProvider>
 				</AttachmentUploadProvider>
 			</RailViewProvider>
