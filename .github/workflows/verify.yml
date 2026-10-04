@@ -2498,6 +2498,20 @@ jobs:
           ' "$RUST_VERSION"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
+      - name: Rust unit tests (native/ NIFs)
+        # The Rust-only tests: the segmented-parse fuzz (segmented ==
+        # whole-document), the pulldown-cmark panic guard, linear-time
+        # bounds. mix test only loads the NIF, so without this step they ran
+        # nowhere, and Dependabot auto-merges grouped cargo bumps.
+        # Release for the timing asserts, without LTO (that is for the
+        # shipped .so). The target dir persists per VM; cargo locks it.
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+        run: |
+          CARGO_TARGET_DIR="$HOME/.cache/engram-native-target" \
+            cargo test --release --locked --manifest-path native/engram_native/Cargo.toml
+
       - name: Fetch deps (if missing or lockfile changed)
         # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`
         # fallback can populate deps/ from a stale cache when the
