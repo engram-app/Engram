@@ -952,6 +952,94 @@ defmodule Engram.Indexing do
 
   defp embed_texts(plan), do: for({:embed, chunk} <- plan.entries, do: chunk.context_text)
 
+  defp note_language(chunks) do
+    chunks
+    |> Enum.reject(&(&1.heading_path == "frontmatter"))
+    |> Enum.take(3)
+    |> Enum.map_join("\n\n", & &1.text)
+    |> detect_language()
+  end
+
+  @doc """
+  Sparse-only re-index: rebuild the keyword vector of every point this note
+  still owns, in place (Qdrant update-vectors). No embedder call, no points
+  added or removed, dense vectors and payloads untouched. This is how stored
+  keyword vectors follow a tokenizer change without a Voyage bill.
+
+  A chunk is rewritten only if it still matches a stored point by
+  fingerprint (dense, or sparse-only for points that never had a dense
+  vector), i.e. the same match chunk reuse makes. A chunk edited since the
+  last index has no point to fix; the next normal embed replaces it.
+
+  Returns `{:ok, points_updated}`.
+  """
+  def resparse_note(note, user) do
+    chunks = Markdown.parse(note.content || "", note.path)
+
+    with {:ok, content_key} <- Crypto.dek_content_hash_key(user),
+         {:ok, filter_key} <- Crypto.dek_filter_key(user) do
+      case match_stored_points(note, chunks, content_key) do
+        [] ->
+          {:ok, 0}
+
+        matched ->
+          avgdl = Engram.KeywordIndex.Stats.avgdl(note.user_id, note.vault_id)
+
+          sparse =
+            KeywordIndex.module().encode_documents(
+              Enum.map(matched, fn {chunk, _point_id} -> chunk.text end),
+              filter_key,
+              avgdl,
+              note_language(chunks)
+            )
+
+          points =
+            Enum.zip_with(matched, sparse, fn {_chunk, point_id}, {vector, _doc_len} ->
+              %{id: point_id, vector: %{"keyword" => vector}}
+            end)
+
+          with :ok <- update_vectors_batched(points), do: {:ok, length(points)}
+      end
+    end
+  end
+
+  defp match_stored_points(note, chunks, content_key) do
+    {:ok, rows} =
+      Repo.with_tenant(note.user_id, fn ->
+        Chunk
+        |> where([c], c.note_id == ^note.id and not is_nil(c.qdrant_point_id))
+        |> select([c], {c.context_hmac, c.qdrant_point_id})
+        |> Repo.all()
+      end)
+
+    by_hmac = Enum.group_by(rows, &elem(&1, 0), &elem(&1, 1))
+
+    {matched, _left} =
+      Enum.flat_map_reduce(chunks, by_hmac, fn chunk, acc ->
+        dense = fingerprint(content_key, chunk.context_text, true)
+        sparse = fingerprint(content_key, chunk.context_text, false)
+
+        case {Map.get(acc, dense), Map.get(acc, sparse)} do
+          {[id | rest], _} -> {[{chunk, id}], Map.put(acc, dense, rest)}
+          {_, [id | rest]} -> {[{chunk, id}], Map.put(acc, sparse, rest)}
+          _ -> {[], acc}
+        end
+      end)
+
+    matched
+  end
+
+  defp update_vectors_batched(points) do
+    points
+    |> Enum.chunk_every(@upsert_batch)
+    |> Enum.reduce_while(:ok, fn batch, :ok ->
+      case Qdrant.update_vectors(collection(), Enum.map(batch, &unpack_point/1)) do
+        :ok -> {:cont, :ok}
+        other -> {:halt, other}
+      end
+    end)
+  end
+
   # The embedder contract (`Engram.Embedder.embed_texts/1`) promises a vector
   # list but not that it is the same length as the input, and the Voyage
   # adapter maps whatever `data` the API returned without counting it.
@@ -1015,13 +1103,7 @@ defmodule Engram.Indexing do
     # A note that is ONLY frontmatter then yields no sample and falls back to raw
     # token indexing, which is the right answer — YAML keys should not pick a
     # stemmer for prose that doesn't exist.
-    language =
-      plan.entries
-      |> Enum.map(&entry_chunk/1)
-      |> Enum.reject(&(&1.heading_path == "frontmatter"))
-      |> Enum.take(3)
-      |> Enum.map_join("\n\n", & &1.text)
-      |> detect_language()
+    language = note_language(Enum.map(plan.entries, &entry_chunk/1))
 
     note_payload = note_payload(note)
     ctx = {note, user, note_payload, now}

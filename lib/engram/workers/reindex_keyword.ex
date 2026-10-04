@@ -35,19 +35,25 @@ defmodule Engram.Workers.ReindexKeyword do
   alias Engram.Logger.Metadata
   alias Engram.Notes.Note
   alias Engram.Repo
-  alias Engram.Workers.EmbedNote
+  alias Engram.Workers.{EmbedNote, ResparseNote}
 
   require Logger
 
   # `user_id` rides the args because `perform/1` cannot derive it: the `vaults`
   # row that would supply it is under the tenant policy this job needs scoped
   # in the first place.
-  @spec enqueue(Ecto.UUID.t(), Ecto.UUID.t()) :: :ok | {:error, term()}
+  #
+  # `mode`:
+  #   * `:full` (default): re-embed every note. Re-normalizes BM25 against the
+  #     current avgdl and backfills notes missing a keyword leg. Bills Voyage.
+  #   * `:sparse`: rebuild keyword vectors in place (`ResparseNote`), dense
+  #     vectors untouched, zero Voyage spend. For a TOKENIZER change.
+  @spec enqueue(Ecto.UUID.t(), Ecto.UUID.t(), :full | :sparse) :: :ok | {:error, term()}
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(10)
 
-  def enqueue(user_id, vault_id) do
-    args = %{user_id: to_string(user_id), vault_id: to_string(vault_id)}
+  def enqueue(user_id, vault_id, mode \\ :full) when mode in [:full, :sparse] do
+    args = %{user_id: to_string(user_id), vault_id: to_string(vault_id), mode: to_string(mode)}
 
     case args |> new() |> Oban.insert() do
       {:ok, _job} -> :ok
@@ -71,6 +77,26 @@ defmodule Engram.Workers.ReindexKeyword do
     {:discard, :missing_user_id}
   end
 
+  def perform(%Oban.Job{args: %{"user_id" => user_id, "vault_id" => vault_id, "mode" => "sparse"}}) do
+    Repo.with_tenant!(user_id, fn ->
+      jobs =
+        for id <- live_note_ids(vault_id) do
+          ResparseNote.new(%{note_id: to_string(id), user_id: user_id},
+            priority: EmbedNote.backfill_priority()
+          )
+        end
+
+      _ = if jobs != [], do: Oban.insert_all(jobs)
+
+      Logger.info(
+        "reindex_keyword sparse: enqueued resparse",
+        Metadata.with_category(:info, :oban, vault_id: vault_id, total_count: length(jobs))
+      )
+    end)
+
+    :ok
+  end
+
   def perform(%Oban.Job{args: %{"user_id" => user_id, "vault_id" => vault_id}}) do
     # ONE `with_tenant/2` over the whole body. Two separate things inside need
     # the tenant and both fail silently without it:
@@ -88,13 +114,16 @@ defmodule Engram.Workers.ReindexKeyword do
     Repo.with_tenant!(user_id, fn -> do_reindex(vault_id) end)
   end
 
+  defp live_note_ids(vault_id) do
+    from(n in Note,
+      where: n.vault_id == ^vault_id and is_nil(n.deleted_at) and n.kind == "note",
+      select: n.id
+    )
+    |> Repo.all()
+  end
+
   defp do_reindex(vault_id) do
-    note_ids =
-      from(n in Note,
-        where: n.vault_id == ^vault_id and is_nil(n.deleted_at) and n.kind == "note",
-        select: n.id
-      )
-      |> Repo.all()
+    note_ids = live_note_ids(vault_id)
 
     # `avgdl` is a per-node ETS cache with a 10-minute TTL
     # (`KeywordIndex.StatsCache`), and `Indexing.prepare_index/3` reads it per
