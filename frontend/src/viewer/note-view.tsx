@@ -16,7 +16,7 @@ import { useIsFreeTier } from "../billing/use-is-free-tier";
 import { AttachmentFallback } from "./attachment-fallback";
 import AttachmentImg from "./attachment-img";
 import MermaidBlock from "./mermaid-block";
-import { ATTACHMENT_SCHEME, noteBody } from "./note-body";
+import { ATTACHMENT_SCHEME, noteBody, remarkEmbeds } from "./note-body";
 import {
 	buildWikiMap,
 	type ManifestNote,
@@ -67,6 +67,7 @@ const remarkPluginsFor = (
 			aliasDivider: "|",
 		},
 	],
+	remarkEmbeds,
 ];
 
 const rehypePlugins: PluggableList = [

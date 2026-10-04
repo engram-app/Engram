@@ -21,10 +21,6 @@ describe("noteBody", () => {
 		expect(body).toContain("pwned");
 	});
 
-	test("rewrites attachment embeds", () => {
-		expect(noteBody("![[pic.png|Alt]]")).toBe("![Alt](engram-attachment:pic.png)");
-	});
-
 	test("a note without frontmatter passes through", () => {
 		expect(noteBody("plain")).toBe("plain");
 	});

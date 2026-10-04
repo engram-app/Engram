@@ -226,6 +226,36 @@ describe("NoteView attachment gating", () => {
 	});
 });
 
+// Embeds are rewritten on the parsed markdown tree, not by a regex over the
+// raw text: the regex also rewrote examples inside code blocks, and paths
+// with spaces or parentheses broke out of the generated markdown link.
+describe("NoteView attachment embeds", () => {
+	it("leaves an embed inside a code block as literal text", () => {
+		mockTier = "pro";
+		renderNote("```\n![[image.png]]\n```\n");
+		expect(screen.queryByTestId("attachment-img")).toBeNull();
+		expect(document.querySelector("code")?.textContent).toContain("![[image.png]]");
+	});
+
+	it("keeps a path with spaces and parentheses whole", () => {
+		mockTier = "pro";
+		renderNote("![[My Photo (1).png]]\n");
+		expect(screen.getByTestId("attachment-img")).toHaveTextContent("My Photo (1).png");
+	});
+
+	it("uses the alias as alt text and the target as the path", () => {
+		mockTier = "pro";
+		renderNote("![[pic.png|A caption]]\n");
+		expect(screen.getByTestId("attachment-img")).toHaveTextContent("pic.png");
+	});
+
+	it("a plain wikilink is not an embed", () => {
+		mockTier = "pro";
+		renderNote("See [[Other note]] here\n");
+		expect(screen.queryByTestId("attachment-img")).toBeNull();
+	});
+});
+
 describe("NoteView callout colour republish", () => {
 	// The editor side of this contract is pinned in callout-decoration.test.ts;
 	// the reading side was pinned by nothing. Both panes have to hand CSS the
