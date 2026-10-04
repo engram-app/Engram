@@ -3,12 +3,14 @@ import { isReverificationCancelledError } from "@clerk/react/errors";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { useT } from "@/i18n/locale-provider";
 import { SettingsSectionCard } from "./section-card";
 
 const inputClass =
 	"mt-1 block w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring";
 
 export function PasswordSection() {
+	const { t } = useT();
 	const { user, isLoaded } = useUser();
 	const [current, setCurrent] = useState("");
 	const [next, setNext] = useState("");
@@ -31,17 +33,17 @@ export function PasswordSection() {
 			});
 			setCurrent("");
 			setNext("");
-			toast.success("Password updated");
+			toast.success(t("Password updated"));
 		} catch (e) {
 			if (isReverificationCancelledError(e)) {
 				return;
 			}
-			toast.error("Could not update password");
+			toast.error(t("Could not update password"));
 		}
 	}
 
 	return (
-		<SettingsSectionCard title="Password" description="Set or change your password.">
+		<SettingsSectionCard title={t("Password")} description={t("Set or change your password.")}>
 			<form
 				onSubmit={(e) => {
 					e.preventDefault();
@@ -50,7 +52,7 @@ export function PasswordSection() {
 			>
 				{Boolean(hasPassword) && (
 					<label className="block font-medium text-foreground text-sm">
-						Current password
+						{t("Current password")}
 						<input
 							className={inputClass}
 							type="password"
@@ -60,7 +62,7 @@ export function PasswordSection() {
 					</label>
 				)}
 				<label className="mt-4 block font-medium text-foreground text-sm">
-					New password
+					{t("New password")}
 					<input
 						className={inputClass}
 						type="password"
@@ -69,10 +71,10 @@ export function PasswordSection() {
 					/>
 				</label>
 				<p className="mt-1 text-muted-foreground text-xs">
-					Changing your password signs you out of all other sessions.
+					{t("Changing your password signs you out of all other sessions.")}
 				</p>
 				<Button className="mt-4" type="submit">
-					{hasPassword ? "Update password" : "Set password"}
+					{hasPassword ? t("Update password") : t("Set password")}
 				</Button>
 			</form>
 		</SettingsSectionCard>

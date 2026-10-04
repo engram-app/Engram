@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { useT } from "@/i18n/locale-provider";
 import { api } from "../../api/client";
 import { useAuthAdapter } from "../../auth/use-auth-adapter";
 import { ROUTES } from "../../routes";
@@ -11,6 +12,7 @@ const inputClass =
 	"mt-1 block w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring";
 
 export function PasswordSectionLocal() {
+	const { t } = useT();
 	const { logout } = useAuthAdapter();
 	const navigate = useNavigate();
 	const [oldPw, setOldPw] = useState("");
@@ -24,22 +26,22 @@ export function PasswordSectionLocal() {
 		setError(null);
 
 		if (newPw !== confirmPw) {
-			setError("Passwords do not match");
+			setError(t("Passwords do not match"));
 			return;
 		}
 		if (newPw.length < 8) {
-			setError("New password must be at least 8 characters");
+			setError(t("New password must be at least 8 characters"));
 			return;
 		}
 
 		setSubmitting(true);
 		try {
 			await api.post("/auth/password/change", { old_password: oldPw, new_password: newPw });
-			toast.success("Password changed — please sign in again");
+			toast.success(t("Password changed — please sign in again"));
 			await logout();
 			navigate(ROUTES.SIGN_IN);
 		} catch (err) {
-			const msg = err instanceof Error ? err.message : "Password change failed";
+			const msg = err instanceof Error ? err.message : t("Password change failed");
 			setError(msg);
 		} finally {
 			setSubmitting(false);
@@ -48,12 +50,12 @@ export function PasswordSectionLocal() {
 
 	return (
 		<SettingsSectionCard
-			title="Password"
-			description="Changing your password signs you out on all devices."
+			title={t("Password")}
+			description={t("Changing your password signs you out on all devices.")}
 		>
 			<form onSubmit={onSubmit} className="space-y-3">
 				<label className="block font-medium text-foreground text-sm">
-					Current password
+					{t("Current password")}
 					<input
 						className={inputClass}
 						type="password"
@@ -64,7 +66,7 @@ export function PasswordSectionLocal() {
 					/>
 				</label>
 				<label className="block font-medium text-foreground text-sm">
-					New password
+					{t("New password")}
 					<input
 						className={inputClass}
 						type="password"
@@ -75,7 +77,7 @@ export function PasswordSectionLocal() {
 					/>
 				</label>
 				<label className="block font-medium text-foreground text-sm">
-					Confirm new password
+					{t("Confirm new password")}
 					<input
 						className={inputClass}
 						type="password"
@@ -87,7 +89,7 @@ export function PasswordSectionLocal() {
 				</label>
 				{Boolean(error) && <p className="text-destructive text-sm">{error}</p>}
 				<Button type="submit" size="sm" disabled={submitting}>
-					{submitting ? "Changing…" : "Change password"}
+					{submitting ? t("Changing…") : t("Change password")}
 				</Button>
 			</form>
 		</SettingsSectionCard>

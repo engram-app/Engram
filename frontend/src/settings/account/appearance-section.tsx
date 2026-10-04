@@ -1,25 +1,28 @@
 import { Monitor, Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useT } from "@/i18n/locale-provider";
+import { msg } from "@/i18n/msg";
 import type { ThemeChoice } from "@/theme/storage";
 import { useTheme } from "@/theme/theme-provider";
 import { SettingsSectionCard } from "./section-card";
 
 const OPTIONS: ReadonlyArray<{ value: ThemeChoice; label: string; Icon: typeof Sun }> = [
-	{ value: "light", label: "Light", Icon: Sun },
-	{ value: "dark", label: "Dark", Icon: Moon },
-	{ value: "system", label: "System", Icon: Monitor },
+	{ value: "light", label: msg("Light"), Icon: Sun },
+	{ value: "dark", label: msg("Dark"), Icon: Moon },
+	{ value: "system", label: msg("System"), Icon: Monitor },
 ];
 
 export function AppearanceSection() {
+	const { t } = useT();
 	const { theme, setTheme } = useTheme();
 	return (
 		<SettingsSectionCard
-			title="Appearance"
-			description="Choose how Engram looks on this device."
+			title={t("Appearance")}
+			description={t("Choose how Engram looks on this device.")}
 			centerAction
 			headerAction={
 				<fieldset className="flex flex-wrap gap-2">
-					<legend className="sr-only">Theme</legend>
+					<legend className="sr-only">{t("Theme")}</legend>
 					{OPTIONS.map(({ value, label, Icon }) => (
 						<Button
 							key={value}
@@ -31,7 +34,7 @@ export function AppearanceSection() {
 							onClick={() => setTheme(value)}
 						>
 							<Icon className="size-4" />
-							{label}
+							{t(label)}
 						</Button>
 					))}
 				</fieldset>
