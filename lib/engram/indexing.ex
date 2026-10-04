@@ -778,7 +778,7 @@ defmodule Engram.Indexing do
   # float32. Unpacked one upsert batch at a time in `upsert_points_batched/1`.
   # An embedder may already return packed float32 (Voyage does, for indexing).
   defp pack_vector(packed) when is_binary(packed), do: packed
-  defp pack_vector(vector), do: for(x <- vector, into: <<>>, do: <<x::float-32-little>>)
+  defp pack_vector(vector), do: Engram.Native.pack_f32(vector)
 
   # Straight from the packed binary to the JSON array text, as a pre-encoded
   # fragment. Unpacking to a float list and letting Jason walk it was the heap
@@ -788,29 +788,16 @@ defmodule Engram.Indexing do
     %{point | vector: Map.new(named, fn {name, v} -> {name, vector_json(v)} end)}
   end
 
-  defp vector_json(dense) when is_binary(dense), do: Jason.Fragment.new(dense_json(dense))
+  # Formatted in Rust (`Engram.Native.dense_json/1`): no per-float term at all,
+  # and each value printed as its shortest f32 decimal, half the text of the
+  # widened-f64 form for the same stored f32.
+  defp vector_json(dense) when is_binary(dense),
+    do: Jason.Fragment.new(Engram.Native.dense_json(dense))
 
   # Packed sparse (`KeywordIndex.packed_sparse`), written straight to JSON for
   # the same reason as the dense leg.
-  defp vector_json(%{indices: indices, values: values}) when is_binary(indices) do
-    ids = for <<d::unsigned-little-32 <- indices>>, do: Integer.to_string(d)
-    ws = for <<w::float-little-64 <- values>>, do: :erlang.float_to_binary(w, [:short])
-
-    Jason.Fragment.new(
-      IO.iodata_to_binary([
-        ~s({"indices":[),
-        Enum.intersperse(ids, ","),
-        ~s(],"values":[),
-        Enum.intersperse(ws, ","),
-        "]}"
-      ])
-    )
-  end
-
-  defp dense_json(packed) do
-    floats = for <<x::float-32-little <- packed>>, do: :erlang.float_to_binary(x, [:short])
-    IO.iodata_to_binary(["[", Enum.intersperse(floats, ","), "]"])
-  end
+  defp vector_json(%{indices: indices, values: values}) when is_binary(indices),
+    do: Jason.Fragment.new(Engram.Native.sparse_json(indices, values))
 
   defp embed_for_indexing(texts) do
     texts
@@ -888,8 +875,8 @@ defmodule Engram.Indexing do
   # the second chunk silently adopts the first one's point.
   defp plan_chunks(note, chunks, content_key, dense?) do
     chunks =
-      Enum.map(chunks, fn chunk ->
-        Map.put(chunk, :context_hmac, fingerprint(content_key, chunk.context_text, dense?))
+      Enum.zip_with(chunks, fingerprints(content_key, chunks, dense?), fn chunk, hmac ->
+        Map.put(chunk, :context_hmac, hmac)
       end)
 
     # Tenant-scoped: unscoped this read is filtered to [], so reuse never
@@ -942,13 +929,20 @@ defmodule Engram.Indexing do
   # stamped the note densely indexed with nothing behind the stamp, and a
   # sparse-only pass kept vectors it had decided not to pay for. The model is in it for
   # the same reason, since another model's vector is not reusable either.
-  defp fingerprint(content_key, context_text, true) do
-    Crypto.hmac_content_hash(content_key, "dense:#{effective_embed_model()}\n" <> context_text)
+  #
+  # One NIF call for the whole note (`Engram.Native.hmac_hex_many/3`): the same
+  # hex HMAC as `Crypto.hmac_content_hash/2` over `prefix <> context_text`,
+  # without building each prefixed copy or hex-encoding in Elixir.
+  defp fingerprints(content_key, chunks, dense?) do
+    Engram.Native.hmac_hex_many(
+      content_key,
+      fingerprint_prefix(dense?),
+      Enum.map(chunks, & &1.context_text)
+    )
   end
 
-  defp fingerprint(content_key, context_text, false) do
-    Crypto.hmac_content_hash(content_key, "sparse\n" <> context_text)
-  end
+  defp fingerprint_prefix(true), do: "dense:#{effective_embed_model()}\n"
+  defp fingerprint_prefix(false), do: "sparse\n"
 
   defp embed_texts(plan), do: for({:embed, chunk} <- plan.entries, do: chunk.context_text)
 
@@ -990,20 +984,63 @@ defmodule Engram.Indexing do
 
           sparse =
             KeywordIndex.module().encode_documents(
-              Enum.map(matched, fn {chunk, _point_id} -> chunk.text end),
+              Enum.map(matched, fn {chunk, _point_id} -> chunk.context_text end),
               filter_key,
               avgdl,
               note_language(chunks)
             )
 
-          points =
-            Enum.zip_with(matched, sparse, fn {_chunk, point_id}, {vector, _doc_len} ->
-              %{id: point_id, vector: %{"keyword" => vector}}
+          {points, lengths} =
+            Enum.zip_with(matched, sparse, fn {_chunk, point_id}, {vector, doc_len} ->
+              {%{id: point_id, vector: %{"keyword" => vector}}, {point_id, doc_len}}
             end)
+            |> Enum.unzip()
 
-          with :ok <- update_vectors_batched(points), do: {:ok, length(points), unmatched}
+          with :ok <- update_vectors_batched(points),
+               :ok <- persist_token_counts(note, lengths),
+               do: {:ok, length(points), unmatched}
       end
     end
+  end
+
+  # `chunks.token_count` is the only input to the vault's `avgdl`, so a
+  # resparse that changes what is encoded must move the stored lengths with
+  # it, or BM25 normalizes against lengths of a string it no longer encodes.
+  # One statement for the whole note.
+  defp persist_token_counts(note, lengths) do
+    {ids, counts} = Enum.unzip(lengths)
+    ids = Enum.map(ids, &Ecto.UUID.dump!/1)
+
+    {:ok, {updated, _}} =
+      Repo.with_tenant(note.user_id, fn ->
+        Chunk
+        |> join(
+          :inner,
+          [c],
+          v in fragment("SELECT * FROM unnest(?::uuid[], ?::int[]) AS v(id, n)", ^ids, ^counts),
+          on: c.qdrant_point_id == v.id
+        )
+        |> where([c], c.note_id == ^note.id)
+        |> update([c, v], set: [token_count: v.n])
+        |> Repo.update_all([])
+      end)
+
+    # Fewer rows than points: a concurrent EmbedNote replaced the note's chunk
+    # rows between the match and this update. Its own pass wrote lengths for
+    # the new rows, so nothing is lost, but a persistent gap would mean
+    # mis-scoped writes; leave a trail rather than fail the job.
+    if updated != length(ids) do
+      Logger.warning(
+        "resparse token_count update matched fewer rows than points",
+        Metadata.with_category(:warning, :search,
+          note_id: note.id,
+          expected: length(ids),
+          updated: updated
+        )
+      )
+    end
+
+    :ok
   end
 
   defp match_stored_points(note, chunks, content_key) do
@@ -1017,11 +1054,15 @@ defmodule Engram.Indexing do
 
     by_hmac = Enum.group_by(rows, &elem(&1, 0), &elem(&1, 1))
 
-    {matched, _left} =
-      Enum.flat_map_reduce(chunks, by_hmac, fn chunk, acc ->
-        dense = fingerprint(content_key, chunk.context_text, true)
-        sparse = fingerprint(content_key, chunk.context_text, false)
+    keyed =
+      Enum.zip([
+        chunks,
+        fingerprints(content_key, chunks, true),
+        fingerprints(content_key, chunks, false)
+      ])
 
+    {matched, _left} =
+      Enum.flat_map_reduce(keyed, by_hmac, fn {chunk, dense, sparse}, acc ->
         case {Map.get(acc, dense), Map.get(acc, sparse)} do
           {[id | rest], _} -> {[{chunk, id}], Map.put(acc, dense, rest)}
           {_, [id | rest]} -> {[{chunk, id}], Map.put(acc, sparse, rest)}
@@ -1113,10 +1154,13 @@ defmodule Engram.Indexing do
 
     # The whole note in one call so the encoder can share per-note work (the
     # token -> dim memo) across chunks. One sparse vector per :embed entry, in
-    # the same order as `vectors`.
+    # the same order as `vectors`. `context_text`, not `text`: the folder, title
+    # and heading path live only in the prefix, and a note with no H1 is
+    # otherwise unfindable by its own name on the keyword leg (#1615).
+    # `resparse_note/2` must encode the same string.
     sparse =
       KeywordIndex.module().encode_documents(
-        for({:embed, chunk} <- plan.entries, do: chunk.text),
+        for({:embed, chunk} <- plan.entries, do: chunk.context_text),
         filter_key,
         avgdl,
         language

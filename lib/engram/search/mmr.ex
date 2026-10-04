@@ -9,12 +9,12 @@ defmodule Engram.Search.MMR do
 
   `d == 0.0` short-circuits to the relevance order (no vectors required).
 
-  Cost is O(pool × limit) dot products (#1617). Vectors are normalised once so
-  a cosine is a plain dot product, and each candidate carries its running max
-  similarity to the picked set, so a step compares against the newest pick
-  only. The previous version recomputed full cosines against every pick on
-  every step and deep-compared 1024-float maps to drop the pick: 76s of CPU
-  for one limit-50 request over a ~200 pool.
+  The selection runs in Rust (`Engram.Native.mmr_select/4`, #1798): O(pool ×
+  limit) dot products over unit vectors, each candidate carrying its running
+  max similarity to the picked set (#1617). In Elixir every multiply-add
+  allocated a boxed float, ~2.5 s for a limit-50 rerank over a 200 × 1024
+  pool. A nil or zero vector has no direction: similarity 0.0, no penalty.
+  Ties resolve in pool order.
   """
 
   @spec rerank([map()], pos_integer(), float()) :: [map()]
@@ -23,72 +23,15 @@ defmodule Engram.Search.MMR do
   def rerank(candidates, limit, diversity) when diversity == 0.0,
     do: Enum.take(candidates, limit)
 
+  def rerank(_candidates, limit, _diversity) when limit <= 0, do: []
+
   def rerank(candidates, limit, diversity)
       when is_list(candidates) and is_number(diversity) do
-    normed = prepare(candidates)
+    pool = List.to_tuple(candidates)
 
-    select(normed, [], min(limit, length(normed)), diversity)
-    |> Enum.reverse()
-    |> Enum.map(& &1.candidate)
+    candidates
+    |> Enum.map(&Map.get(&1, :vector))
+    |> Engram.Native.mmr_select(Enum.map(candidates, & &1.score), limit, diversity)
+    |> Enum.map(&elem(pool, &1))
   end
-
-  # ── greedy selection ──────────────────────────────────────────────
-
-  defp select(_remaining, acc, 0, _d), do: acc
-  defp select([], acc, _n, _d), do: acc
-
-  defp select(remaining, acc, n, d) do
-    # `max_by` keeps the FIRST maximum, so ties still resolve in pool order.
-    {best, best_idx} =
-      remaining
-      |> Enum.with_index()
-      |> Enum.max_by(fn {item, _idx} -> mmr_score(item, acc, d) end)
-
-    rest =
-      for {item, idx} <- Enum.with_index(remaining), idx != best_idx do
-        %{item | max_sim: running_max(item.max_sim, dot(item.unit, best.unit))}
-      end
-
-    select(rest, [best | acc], n - 1, d)
-  end
-
-  defp mmr_score(item, [], _d), do: item.rel
-  defp mmr_score(item, _selected, d), do: (1.0 - d) * item.rel - d * item.max_sim
-
-  defp running_max(nil, sim), do: sim
-  defp running_max(prev, sim), do: max(prev, sim)
-
-  # ── helpers ───────────────────────────────────────────────────────
-
-  defp prepare(candidates) do
-    scores = Enum.map(candidates, & &1.score)
-    {min_s, max_s} = {Enum.min(scores, fn -> 0.0 end), Enum.max(scores, fn -> 0.0 end)}
-    range = max_s - min_s
-
-    Enum.map(candidates, fn cand ->
-      rel = if range == 0.0, do: 1.0, else: (cand.score - min_s) / range
-      %{candidate: cand, rel: rel, unit: unit(Map.get(cand, :vector)), max_sim: nil}
-    end)
-  end
-
-  # A nil or zero vector has no direction: similarity 0.0 (no penalty).
-  defp unit(nil), do: nil
-
-  defp unit(v) when is_list(v) do
-    mag = :math.sqrt(Enum.reduce(v, 0.0, fn x, acc -> acc + x * x end))
-    if mag == 0.0, do: nil, else: Enum.map(v, &(&1 / mag))
-  end
-
-  defp dot(nil, _), do: 0.0
-  defp dot(_, nil), do: 0.0
-  defp dot(a, b), do: dot(a, b, 0.0)
-
-  # Direct recursion, not `Enum.zip_reduce/4`: drops the per-element closure
-  # call (reductions 30M -> 11M on a limit-50 rerank over 200 x 1024), but
-  # wall time only improves ~10-20%, because the cost is boxed-float
-  # allocation in ~10M multiply-adds, not the call. Float binaries measured
-  # slower. The real fix is out of this module (Qdrant-side MMR or Nx); see
-  # #1798.
-  defp dot([x | xs], [y | ys], acc), do: dot(xs, ys, acc + x * y)
-  defp dot(_, _, acc), do: acc
 end

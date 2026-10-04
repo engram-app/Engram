@@ -7,6 +7,10 @@ defmodule Engram.Vector.QdrantHybridTest do
   setup do
     bypass = Bypass.open()
     ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+    # The search path fails fast at 5s (`:qdrant_search_timeout`), a prod
+    # budget. Under full-suite load a Bypass reply can starve past it, which
+    # reads as `%Req.TransportError{reason: :timeout}`, not a real failure.
+    ServiceConfig.put_override(:qdrant_search_timeout, 30_000)
     %{bypass: bypass}
   end
 

@@ -41,6 +41,12 @@ defmodule Engram.Search.MMRTest do
     assert [^a, ^b] = MMR.rerank([a, b], 2, 1.0)
   end
 
+  test "a non-positive limit picks nothing" do
+    cands = [c(0.9, [1.0, 0.0]), c(0.8, [0.0, 1.0])]
+    assert MMR.rerank(cands, 0, 0.5) == []
+    assert MMR.rerank(cands, -1, 0.5) == []
+  end
+
   test "empty candidate list returns empty" do
     assert MMR.rerank([], 5, 1.0) == []
     assert MMR.rerank([], 5, 0.0) == []
@@ -83,6 +89,48 @@ defmodule Engram.Search.MMRTest do
     end
   end
 
+  # The Rust port at real width: same picks as the definition, including
+  # pools with nil and zero vectors and exact-tie scores.
+  test "matches the reference definition at 1024 dims" do
+    :rand.seed(:exsss, {7, 8, 9})
+
+    for round <- 1..3 do
+      cands =
+        for i <- 1..20 do
+          vec =
+            cond do
+              rem(i, 7) == 0 -> nil
+              rem(i, 9) == 0 -> List.duplicate(0.0, 1024)
+              true -> random_vec(1024)
+            end
+
+          # Round 3 repeats scores so ties have to break in pool order.
+          score = if round == 3, do: Float.round(:rand.uniform(), 1), else: :rand.uniform()
+          c(score, vec)
+        end
+
+      for d <- [0.1, 0.5, 1.0] do
+        assert MMR.rerank(cands, 8, d) == reference(cands, 8, d)
+      end
+    end
+  end
+
+  # Qdrant's JSON can carry integral numbers (`0`, `1`), which decode as
+  # integers, not floats.
+  test "integer scores and vector components are numbers like any other" do
+    a = c(1, [1, 0])
+    b = c(0.9, [1.0, 0.0])
+    o = c(0, [0, 1])
+    assert MMR.rerank([a, b, o], 3, 1.0) == [a, o, b]
+    assert MMR.rerank([a, b, o], 3, 1) == [a, o, b]
+  end
+
+  test "a vector that is not a list or nil is refused" do
+    for bad <- ["packed", true, :foo, [1.0, 2.0 | 3.0]] do
+      assert_raise ArgumentError, fn -> MMR.rerank([c(0.9, [1.0, 0.0]), c(0.8, bad)], 2, 0.5) end
+    end
+  end
+
   defp random_vec(dims), do: for(_ <- 1..dims, do: :rand.uniform() - 0.5)
 
   defp reference(cands, limit, d) do
@@ -115,7 +163,8 @@ defmodule Engram.Search.MMRTest do
     dot = a |> Enum.zip(b) |> Enum.reduce(0.0, fn {x, y}, acc -> acc + x * y end)
     na = :math.sqrt(Enum.reduce(a, 0.0, &(&1 * &1 + &2)))
     nb = :math.sqrt(Enum.reduce(b, 0.0, &(&1 * &1 + &2)))
-    dot / (na * nb)
+    # A zero vector has no direction: similarity 0.0, like nil.
+    if na == 0.0 or nb == 0.0, do: 0.0, else: dot / (na * nb)
   end
 
   test "absent :vector key (not nil — key missing entirely) degrades safely without raising" do

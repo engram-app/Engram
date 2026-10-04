@@ -31,13 +31,32 @@ costs about that), or code that needs to call back into the BEAM.
 | Code | Why | Evidence |
 |---|---|---|
 | `Engram.Parsers.Markdown.parse/2` (chunker, blob strip, frontmatter) | regex-heavy, runs on every embed | fuzz 2026-10-03: huge frontmatter ~39 s CPU/MB; many tiny headings ~8 s and +329 MB per MB |
-| `Indexing` packing/JSON of vectors (`dense_json`, `vector_json`) | per-float formatting over 1024-dim vectors | hot during upsert of large notes |
-| Content fingerprints (`Crypto.hmac_content_hash` over `context_text`) | one HMAC per chunk, plus string building | cheap per call; port together with the chunker, not alone |
+
+Once the chunker is native, return each chunk's fingerprint from the same
+pass (`hmac_hex_many` already does the HMAC; the chunker would skip the
+`context_text` round trip through Elixir).
 
 Port the chunker behind its existing module API, the way the keyword encoder
 kept `Tokenizer`/`QdrantSparse` and the link scanner kept `Links.Parser`. It
 can reuse `links.rs`'s segmented pulldown-cmark pass for code ranges. It
 bumps `@chunker_version`, which re-embeds every note: ship it alone.
+
+Measured on the search and upsert NIFs (2026-10-04, dev box, min of 5-7,
+identical output to the Elixir they replaced):
+
+| NIF | Input | Elixir | Rust |
+|---|---|---|---|
+| `json_decode` (Qdrant query body) | 200 x 1024 vectors, 2.3 MB | 270-290 ms | 59-65 ms |
+| `mmr_select` | 200 x 1024 pool, limit 50 | 654 ms | 28.5 ms |
+| `dense_json` | 2,000 x 1024-d | 542 ms | 106 ms (text 43% smaller) |
+| `sparse_json` | 2,000 x 200 dims | 205 ms | 38 ms |
+| `pack_f32` | 2,000 x 1024 floats | 175 ms | 44 ms |
+| `hmac_hex_many` | 2,000 x 2 KB / 5 x 1.5 KB | 53.7 ms / 56 us | 28.6 ms / 39 us |
+
+`hmac_hex_many` beats OpenSSL-backed `:crypto.mac` only because it BATCHES:
+one call per note, no prefixed copy per chunk, hex in Rust. A per-chunk NIF
+would have lost to the NIF call overhead. Batch small pure calls; do not
+port them one-for-one.
 
 Measured on the keyword encoder (dev box, minimum of 5 interleaved runs):
 
@@ -186,6 +205,16 @@ adding callers.
   lone `\r` in one scanner and not in another). A fuzz test asserts
   segmented == whole-document on generated markdown; run it at 2M cases
   after touching the cut rules.
+- **Dense vector JSON prints the shortest f32, not the widened f64.** Qdrant
+  stores f32, so `0.1` lands on the same f32 as `0.10000000149011612` did;
+  a cargo test sweeps 2M bit patterns through f64 -> f32 to prove it. A test
+  that reads the upserted JSON back must compare as f32.
+- **`Jason.decode/1` keeps the FIRST of a repeated object key** (not the last,
+  which is what `serde_json::Value` does). `json_decode` builds terms with a
+  `DeserializeSeed` and de-duplicates first-wins. serde_json refuses nesting
+  past 128 levels; Jason has no limit (Qdrant never nests that deep).
+- **Run cargo tests with `--release`** (as CI does): the linearity tests in
+  `links.rs`/`meta.rs` time themselves and fail in a debug build.
 - **This dev box cannot run Qdrant.** Its Xeon E5-2650 v2 lacks AVX2, and
   Qdrant 1.17 dies with SIGILL (exit 132) on collection create. Qdrant
   integration tests run in CI only.

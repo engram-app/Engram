@@ -3,7 +3,10 @@
 //! `:erlang.memory(:binary)`). See docs/context for the memory standard.
 mod links;
 mod memory;
+mod json;
 mod meta;
+mod mmr;
+mod vectors;
 mod tokenizer;
 
 // Not under `cargo test`: enif_alloc only exists inside a running BEAM.
@@ -12,7 +15,7 @@ mod tokenizer;
 static ALLOCATOR: memory::Counting = memory::Counting;
 
 use hmac::{Hmac, Mac};
-use rustler::{Binary, Encoder, Env, NewBinary, Term};
+use rustler::{Binary, Encoder, Env, Error, ListIterator, NewBinary, NifResult, Term};
 use sha2::Sha256;
 use std::collections::HashMap;
 
@@ -188,6 +191,130 @@ fn note_tags_nif<'a>(env: Env<'a>, content: &str) -> (Vec<Term<'a>>, usize) {
 #[rustler::nif(schedule = "DirtyCpu")]
 fn note_tags_dirty_nif<'a>(env: Env<'a>, content: &str) -> (Vec<Term<'a>>, usize) {
     note_tags(env, content)
+}
+
+// A JSON number decodes to an integer when it has no fraction (`0`, `1`).
+fn number(t: Term) -> NifResult<f64> {
+    t.decode::<f64>().or_else(|_| t.decode::<i64>().map(|i| i as f64))
+}
+
+fn vector(t: Term) -> NifResult<Option<Vec<f64>>> {
+    // `nil` only: no vector, similarity 0.0. Any other atom is refused, as
+    // the Elixir version's `unit/1` refused it.
+    if t.is_atom() {
+        return match t.decode::<rustler::Atom>() {
+            Ok(a) if a == rustler::types::atom::nil() => Ok(None),
+            _ => Err(Error::BadArg),
+        };
+    }
+    // `list_length` fails on an improper list (`[1.0 | 2.0]`), which the
+    // iterator alone would silently truncate.
+    let len = t.list_length().map_err(|_| Error::BadArg)?;
+    let items: ListIterator = t.decode().map_err(|_| Error::BadArg)?;
+    let mut out = Vec::with_capacity(len);
+    for item in items {
+        out.push(number(item)?);
+    }
+    Ok(Some(out))
+}
+
+/// MMR picks: indices into the pool, in pick order. `vectors` entries are a
+/// float list or `nil`. Dirty: a pool is ~200 x 1024 floats.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn mmr_select_nif(vectors: Vec<Term>, scores: Vec<Term>, limit: usize, d: f64) -> NifResult<(Vec<usize>, usize)> {
+    let base = memory::begin();
+    let vectors = vectors.into_iter().map(vector).collect::<NifResult<Vec<_>>>()?;
+    let scores = scores.into_iter().map(number).collect::<NifResult<Vec<_>>>()?;
+    if vectors.len() != scores.len() {
+        return Err(Error::BadArg);
+    }
+    let picked = mmr::select(vectors, &scores, limit, d);
+    Ok((picked, memory::peak_since(base)))
+}
+
+fn finish<'a>(env: Env<'a>, out: Option<Vec<u8>>, base: isize) -> NifResult<(Binary<'a>, usize)> {
+    let out = out.ok_or(Error::BadArg)?;
+    let bin = to_binary(env, &out);
+    drop(out);
+    Ok((bin, memory::peak_since(base)))
+}
+
+// The three below run on the CALLING scheduler: one vector per call (1024
+// float32s, or one chunk's sparse dims), tens of microseconds. Queueing them
+// behind a keyword encode on prod's single dirty scheduler would cost more.
+
+/// Numbers (floats or integers) -> packed float32 LE.
+#[rustler::nif]
+fn pack_f32_nif<'a>(env: Env<'a>, values: Term<'a>) -> NifResult<(Binary<'a>, usize)> {
+    let base = memory::begin();
+    let floats = vector(values)?.ok_or(Error::BadArg)?;
+    let out = vectors::pack_f32(&floats);
+    drop(floats);
+    finish(env, out, base)
+}
+
+/// Packed float32 LE -> JSON array text.
+#[rustler::nif]
+fn dense_json_nif<'a>(env: Env<'a>, packed: Binary<'a>) -> NifResult<(Binary<'a>, usize)> {
+    let base = memory::begin();
+    finish(env, vectors::dense_json(packed.as_slice()), base)
+}
+
+/// Packed sparse -> `{"indices":[..],"values":[..]}` text.
+#[rustler::nif]
+fn sparse_json_nif<'a>(env: Env<'a>, indices: Binary<'a>, values: Binary<'a>) -> NifResult<(Binary<'a>, usize)> {
+    let base = memory::begin();
+    finish(env, vectors::sparse_json(indices.as_slice(), values.as_slice()), base)
+}
+
+/// Lowercase hex HMAC-SHA256 of `prefix <> text` for each text, one key
+/// setup for the whole batch. Matches `Crypto.hmac_content_hash/2`.
+fn hmac_hex_many<'a>(env: Env<'a>, key: Binary<'a>, prefix: Binary<'a>, texts: Vec<Binary<'a>>) -> NifResult<(Vec<Binary<'a>>, usize)> {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let base = memory::begin();
+    let keyed = Hmac::<Sha256>::new_from_slice(key.as_slice()).map_err(|_| Error::BadArg)?;
+    let out = texts
+        .iter()
+        .map(|t| {
+            let mut mac = keyed.clone();
+            mac.update(prefix.as_slice());
+            mac.update(t.as_slice());
+            let digest = mac.finalize().into_bytes();
+            let mut hex = NewBinary::new(env, 64);
+            for (i, b) in digest.iter().enumerate() {
+                hex.as_mut_slice()[2 * i] = HEX[(b >> 4) as usize];
+                hex.as_mut_slice()[2 * i + 1] = HEX[(b & 15) as usize];
+            }
+            hex.into()
+        })
+        .collect();
+    Ok((out, memory::peak_since(base)))
+}
+
+#[rustler::nif]
+fn hmac_hex_many_nif<'a>(env: Env<'a>, key: Binary<'a>, prefix: Binary<'a>, texts: Vec<Binary<'a>>) -> NifResult<(Vec<Binary<'a>>, usize)> {
+    hmac_hex_many(env, key, prefix, texts)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn hmac_hex_many_dirty_nif<'a>(env: Env<'a>, key: Binary<'a>, prefix: Binary<'a>, texts: Vec<Binary<'a>>) -> NifResult<(Vec<Binary<'a>>, usize)> {
+    hmac_hex_many(env, key, prefix, texts)
+}
+
+fn json_decode<'a>(env: Env<'a>, text: Binary<'a>) -> NifResult<(Term<'a>, usize)> {
+    let base = memory::begin();
+    let term = json::decode(env, text.as_slice()).map_err(|_| Error::BadArg)?;
+    Ok((term, memory::peak_since(base)))
+}
+
+#[rustler::nif]
+fn json_decode_nif<'a>(env: Env<'a>, text: Binary<'a>) -> NifResult<(Term<'a>, usize)> {
+    json_decode(env, text)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn json_decode_dirty_nif<'a>(env: Env<'a>, text: Binary<'a>) -> NifResult<(Term<'a>, usize)> {
+    json_decode(env, text)
 }
 
 rustler::init!("Elixir.Engram.Native");

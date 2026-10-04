@@ -868,48 +868,69 @@ defmodule Engram.Vector.Qdrant do
     |> maybe_with_vector(search_opts)
   end
 
+  # The body is decoded in Rust (`Engram.Native.json_decode/1`): with vectors
+  # requested it is ~200 x 1024 floats, 2.3 MB of JSON that took Jason ~290 ms
+  # per search, ten times the MMR pass that consumes it.
   defp do_search(col, opts) do
-    case Req.post("#{base_url()}/collections/#{col}/points/query", opts) do
-      {:ok, %{status: 200, body: %{"result" => result}}} ->
-        points = if is_list(result), do: result, else: result["points"] || []
+    case Req.post("#{base_url()}/collections/#{col}/points/query", opts ++ [decode_body: false]) do
+      {:ok, %{status: 200, body: raw}} when is_binary(raw) ->
+        case Engram.Native.json_decode(raw) do
+          {:ok, %{"result" => result}} -> {:ok, search_results(result)}
+          {:ok, other} -> {:error, {200, other}}
+          {:error, _} -> {:error, {200, raw}}
+        end
 
-        results =
-          Enum.map(points, fn p ->
-            payload = p["payload"] || %{}
-
-            %{
-              score: p["score"],
-              vector: get_in(p, ["vector", "dense"]),
-              text: Map.get(payload, "text"),
-              title: Map.get(payload, "title"),
-              heading_path: Map.get(payload, "heading_path"),
-              # #590: new points carry no plaintext source_path/tags — these
-              # read nil/[] and Search.rehydrate_display_fields/2 refills them
-              # from the encrypted notes row. Kept as a fallback for old points
-              # not yet stripped by the backfill (delete_leaked_plaintext_keys).
-              source_path: Map.get(payload, "source_path"),
-              tags: Map.get(payload, "tags") || [],
-              vault_id: Map.get(payload, "vault_id"),
-              qdrant_id: p["id"],
-              # Nonce keys are only present on encrypted-vault chunks; nil otherwise.
-              text_nonce: Map.get(payload, "text_nonce"),
-              title_nonce: Map.get(payload, "title_nonce"),
-              heading_path_nonce: Map.get(payload, "heading_path_nonce"),
-              # T3.6 — present on AAD-bound payloads (>= v2). Drives the
-              # bind-vs-empty AAD decision in `Engram.Crypto.qdrant_aad/3`.
-              aad_version: Map.get(payload, "aad_version")
-            }
-            |> Enum.reject(fn {_k, v} -> is_nil(v) end)
-            |> Map.new()
-          end)
-
-        {:ok, results}
-
-      {:ok, %{status: status, body: body}} ->
-        {:error, {status, body}}
+      {:ok, %{status: status, body: body} = resp} ->
+        {:error, {status, decode_error_body(resp, body)}}
 
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  # What Req's default decoding produced before `decode_body: false`: JSON by
+  # content type is decoded, anything else stays raw.
+  defp decode_error_body(resp, body) when is_binary(body) do
+    json? = Enum.any?(Req.Response.get_header(resp, "content-type"), &(&1 =~ "json"))
+
+    case json? && Jason.decode(body) do
+      {:ok, decoded} -> decoded
+      _ -> body
+    end
+  end
+
+  defp decode_error_body(_resp, body), do: body
+
+  defp search_results(result) do
+    points = if is_list(result), do: result, else: result["points"] || []
+
+    Enum.map(points, fn p ->
+      payload = p["payload"] || %{}
+
+      %{
+        score: p["score"],
+        vector: get_in(p, ["vector", "dense"]),
+        text: Map.get(payload, "text"),
+        title: Map.get(payload, "title"),
+        heading_path: Map.get(payload, "heading_path"),
+        # #590: new points carry no plaintext source_path/tags — these
+        # read nil/[] and Search.rehydrate_display_fields/2 refills them
+        # from the encrypted notes row. Kept as a fallback for old points
+        # not yet stripped by the backfill (delete_leaked_plaintext_keys).
+        source_path: Map.get(payload, "source_path"),
+        tags: Map.get(payload, "tags") || [],
+        vault_id: Map.get(payload, "vault_id"),
+        qdrant_id: p["id"],
+        # Nonce keys are only present on encrypted-vault chunks; nil otherwise.
+        text_nonce: Map.get(payload, "text_nonce"),
+        title_nonce: Map.get(payload, "title_nonce"),
+        heading_path_nonce: Map.get(payload, "heading_path_nonce"),
+        # T3.6 — present on AAD-bound payloads (>= v2). Drives the
+        # bind-vs-empty AAD decision in `Engram.Crypto.qdrant_aad/3`.
+        aad_version: Map.get(payload, "aad_version")
+      }
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+      |> Map.new()
+    end)
   end
 end

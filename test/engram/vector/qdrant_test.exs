@@ -382,6 +382,63 @@ defmodule Engram.Vector.QdrantTest do
       assert hd(results).score == 0.95
     end
 
+    # The body is decoded in Rust (Engram.Native.json_decode/1); the error
+    # shapes callers match on are unchanged.
+    test "a 200 with a malformed body is an error carrying the raw text", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/query", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": [))
+      end)
+
+      assert {:error, {200, ~s({"result": [)}} =
+               Qdrant.search("test_col", List.duplicate(0.1, 4), user_id: "1", limit: 5)
+    end
+
+    test "a 200 without a result key is an error carrying the decoded body", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/query", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"status": "ok"}))
+      end)
+
+      assert {:error, {200, %{"status" => "ok"}}} =
+               Qdrant.search("test_col", List.duplicate(0.1, 4), user_id: "1", limit: 5)
+    end
+
+    # As Req's own decoding did: by content type, not by whether it parses.
+    test "an error body is decoded only when it is JSON by content type", %{bypass: bypass} do
+      for {type, body, expected} <- [
+            {"application/json", ~s({"status":{"error":"bad"}}),
+             %{"status" => %{"error" => "bad"}}},
+            {"text/plain", "404", "404"},
+            {"text/plain", "gateway down", "gateway down"}
+          ] do
+        Bypass.expect_once(bypass, "POST", "/collections/test_col/points/query", fn conn ->
+          conn
+          |> Plug.Conn.put_resp_content_type(type)
+          |> Plug.Conn.send_resp(400, body)
+        end)
+
+        assert {:error, {400, ^expected}} =
+                 Qdrant.search("test_col", List.duplicate(0.1, 4), user_id: "1", limit: 5)
+      end
+    end
+
+    test "dense vectors come back as float lists, integral values as integers",
+         %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/query", fn conn ->
+        body = ~s({"result":[{"id":"u","score":1,"payload":{},"vector":{"dense":[0.25,0,-1.5]}}]})
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, body)
+      end)
+
+      assert {:ok, [%{score: 1, vector: [0.25, 0, -1.5]}]} =
+               Qdrant.search("test_col", List.duplicate(0.1, 4), user_id: "1", limit: 5)
+    end
+
     test "translates :folder_hmac opt to folder_hmac filter key (Phase B.2.3)",
          %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/collections/test_col/points/query", fn conn ->

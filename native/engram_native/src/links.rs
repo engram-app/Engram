@@ -485,8 +485,15 @@ mod tests {
     #[test]
     fn linear_on_bracket_runs() {
         let s = "[".repeat(1_000_000) + &"(".repeat(1_000_000);
-        let t = std::time::Instant::now();
-        assert_eq!(matches(&s), vec![]);
-        assert!(t.elapsed().as_millis() < 500);
+        // Min of 3, so a parallel test's load spike cannot fail it (~30 ms typical).
+        let best = (0..3)
+            .map(|_| {
+                let t = std::time::Instant::now();
+                assert_eq!(matches(&s), vec![]);
+                t.elapsed()
+            })
+            .min()
+            .unwrap();
+        assert!(best.as_millis() < 500, "{best:?}");
     }
 }
