@@ -1,6 +1,8 @@
 import { useId, useState } from "react";
 import { SearchField } from "@/components/search-field";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useT } from "@/i18n/locale-provider";
+import type { Vars } from "@/i18n/translate";
 import {
 	LIST_ROW_GAP,
 	LIST_ROW_HEIGHT,
@@ -23,7 +25,8 @@ interface Props {
 	className?: string;
 }
 
-const label = (name: string): string => (name === "" ? "/ (root)" : name);
+const label = (name: string, t: (en: string, vars?: Vars) => string): string =>
+	name === "" ? t("/ (root)") : name;
 
 // Search box + scrollable list of folders, same row look as the file tree.
 // Arrow keys on the search box or the list move the selection.
@@ -33,16 +36,17 @@ export function FolderPicker({
 	value,
 	onChange,
 	onActivate,
-	placeholder = "Search folders…",
+	placeholder,
 	className,
 }: Props) {
+	const { t } = useT();
 	const id = useId();
 	const optionId = (i: number): string => `${id}-opt-${i}`;
 	const [query, setQuery] = useState("");
 	const matchesFor = (text: string) => {
 		const q = text.trim().toLowerCase();
 		return (includeRoot ? ["", ...folders] : folders).filter((name) =>
-			label(name).toLowerCase().includes(q),
+			label(name, t).toLowerCase().includes(q),
 		);
 	};
 	const matches = matchesFor(query);
@@ -70,11 +74,11 @@ export function FolderPicker({
 		<div className={cn("flex min-h-0 flex-col", className)}>
 			<SearchField
 				role="combobox"
-				aria-label="Search folders"
+				aria-label={t("Search folders")}
 				aria-expanded
 				aria-controls={`${id}-list`}
 				aria-activedescendant={activeIndex >= 0 ? optionId(activeIndex) : undefined}
-				placeholder={placeholder}
+				placeholder={placeholder ?? t("Search folders…")}
 				autoFocus
 				autoComplete="off"
 				spellCheck={false}
@@ -104,7 +108,7 @@ export function FolderPicker({
 				<div
 					id={`${id}-list`}
 					role="listbox"
-					aria-label="Destination folder"
+					aria-label={t("Destination folder")}
 					tabIndex={0}
 					onKeyDown={onKeyDown}
 					aria-activedescendant={activeIndex >= 0 ? optionId(activeIndex) : undefined}
@@ -128,10 +132,10 @@ export function FolderPicker({
 								"cursor-pointer pl-2 outline-none",
 							)}
 						>
-							<span className="truncate">{label(name)}</span>
+							<span className="truncate">{label(name, t)}</span>
 						</div>
 					))}
-					{matches.length === 0 ? <p className={listEmpty}>No folders match</p> : null}
+					{matches.length === 0 ? <p className={listEmpty}>{t("No folders match")}</p> : null}
 				</div>
 			</ScrollArea>
 		</div>

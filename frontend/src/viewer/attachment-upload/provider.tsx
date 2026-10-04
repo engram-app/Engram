@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useAttachments, useFolders, useUploadAttachment } from "@/api/queries";
+import { useT } from "@/i18n/locale-provider";
 import { AttachmentUploadDialog } from "./upload-dialog";
 import { uploadFilesTo } from "./upload-files";
 
@@ -39,6 +40,7 @@ export function useFileDropUpload(): UploadApi["uploadFiles"] | null {
 }
 
 export function AttachmentUploadProvider({ children }: { children: React.ReactNode }) {
+	const { t, tn } = useT();
 	const [files, setFiles] = useState<File[] | null>(null); // null = dialog closed
 	const [pendingFolder, setPendingFolder] = useState(""); // default dest for the next dialog
 	const pickerRef = useRef<HTMLInputElement>(null);
@@ -64,14 +66,31 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
 				existing: attachments ?? [],
 				files: dropped,
 				folder,
+				t,
 			});
-			if (done.length > 0) {
+			if (done.length === 1) {
+				const name = done[0]?.split("/").pop() ?? t("file");
 				toast.success(
-					`Uploaded ${done.length === 1 ? (done[0]?.split("/").pop() ?? "file") : `${done.length} files`}${folder ? ` to ${folder}` : ""}`,
+					folder
+						? t("Uploaded {name} to {folder}", { name, folder })
+						: t("Uploaded {name}", { name }),
+				);
+			} else if (done.length > 1) {
+				toast.success(
+					folder
+						? tn(
+								{
+									one: "Uploaded {count} file to {folder}",
+									other: "Uploaded {count} files to {folder}",
+								},
+								done.length,
+								{ folder },
+							)
+						: tn({ one: "Uploaded {count} file", other: "Uploaded {count} files" }, done.length),
 				);
 			}
 		},
-		[upload.mutateAsync, attachments],
+		[upload.mutateAsync, attachments, t, tn],
 	);
 
 	// A file dropped anywhere that is not a drop target does nothing, and must not

@@ -4,6 +4,9 @@ import { type ReactNode, useId, useMemo, useState } from "react";
 import { HelpTip } from "@/components/help-tip";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useT } from "@/i18n/locale-provider";
+import { msg } from "@/i18n/msg";
+import { Trans } from "@/i18n/trans";
 import { useActiveEditor } from "../editor/active-editor-context";
 import { insertSnippet } from "../editor/format-commands";
 import NoteView from "../note-view";
@@ -79,6 +82,7 @@ const REF_LINK = "text-xs underline underline-offset-2 hover:text-foreground";
  * here for more" instead of disappearing into the sentence.
  */
 function RefLink({ link }: { link?: { href: string; label: string } }) {
+	const { t } = useT();
 	if (!link) {
 		return null;
 	}
@@ -89,7 +93,7 @@ function RefLink({ link }: { link?: { href: string; label: string } }) {
 			rel="noreferrer"
 			className={`mt-1.5 inline-block ${REF_LINK}`}
 		>
-			{link.label}
+			{t(link.label)}
 		</a>
 	);
 }
@@ -98,19 +102,23 @@ function RefLink({ link }: { link?: { href: string; label: string } }) {
 // Markdown in 2004. Quoted rather than paraphrased because it IS the answer to
 // "why this instead of a rich-text editor", and because a reference panel that
 // puts words in the inventor's mouth is a bad look. Source is linked below it.
-const GRUBER_QUOTE =
-	"A Markdown-formatted document should be publishable as-is, as plain text, without looking like it's been marked up with tags or formatting instructions.";
+const GRUBER_QUOTE = msg(
+	"A Markdown-formatted document should be publishable as-is, as plain text, without looking like it's been marked up with tags or formatting instructions.",
+);
 
 const OVERVIEW_LINKS: readonly { href: string; label: string }[] = [
 	// The original. Still the most complete statement of the base syntax.
-	{ href: "https://daringfireball.net/projects/markdown/syntax", label: "Gruber's syntax guide" },
+	{
+		href: "https://daringfireball.net/projects/markdown/syntax",
+		label: msg("Gruber's syntax guide"),
+	},
 	// CommonMark is the spec every modern renderer (ours included, via remark)
 	// actually implements; the tutorial is the fastest way in.
-	{ href: "https://commonmark.org/help/", label: "CommonMark in 10 minutes" },
+	{ href: "https://commonmark.org/help/", label: msg("CommonMark in 10 minutes") },
 	// Obsidian's, because the extras below — callouts, wikilinks, properties —
 	// are its flavour rather than base Markdown, and its docs are the reference
 	// for those.
-	{ href: "https://help.obsidian.md/syntax", label: "Obsidian's flavour" },
+	{ href: "https://help.obsidian.md/syntax", label: msg("Obsidian's flavour") },
 ];
 
 /**
@@ -122,27 +130,30 @@ const OVERVIEW_LINKS: readonly { href: string; label: string }[] = [
  * of nowhere.
  */
 function Overview() {
+	const { t } = useT();
 	return (
 		<>
-			<h2 className={ROW_HEADING}>Markdown</h2>
+			<h2 className={ROW_HEADING}>{t("Markdown")}</h2>
 			<p className="mt-1 text-muted-foreground leading-relaxed">
-				A handful of punctuation marks that mean formatting. John Gruber designed it in 2004 with
-				one overriding goal: readability.
+				{t(
+					"A handful of punctuation marks that mean formatting. John Gruber designed it in 2004 with one overriding goal: readability.",
+				)}
 			</p>
 			<blockquote className="mt-2 border-border border-l-2 pl-2.5 text-foreground italic leading-relaxed">
-				{GRUBER_QUOTE}
+				{t(GRUBER_QUOTE)}
 			</blockquote>
 			<p className="mt-2 text-muted-foreground leading-relaxed">
-				That is why your notes are plain <code className="font-mono">.md</code> files rather than a
-				database row. The source stays readable on its own, and any editor, script or version
-				control can read it, with or without Engram.
+				<Trans
+					text="That is why your notes are plain {md} files rather than a database row. The source stays readable on its own, and any editor, script or version control can read it, with or without Engram."
+					slots={{ md: <code className="font-mono">.md</code> }}
+				/>
 			</p>
 			{/* flex-wrap, not a list: three short links read as one row at a
 			    comfortable panel width and stack themselves when it narrows. */}
 			<nav className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
 				{OVERVIEW_LINKS.map((link) => (
 					<a key={link.href} href={link.href} target="_blank" rel="noreferrer" className={REF_LINK}>
-						{link.label}
+						{t(link.label)}
 					</a>
 				))}
 			</nav>
@@ -202,6 +213,7 @@ function Preview({ entry, className = "" }: { entry: SyntaxEntry; className?: st
 }
 
 function InsertButton({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean }) {
+	const { t } = useT();
 	const { getView } = useActiveEditor();
 	return (
 		<Button
@@ -214,8 +226,12 @@ function InsertButton({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boo
 					insertSnippet(view, entry.syntax, { block: entry.block });
 				}
 			}}
-			aria-label={`Insert ${entry.label}`}
-			title={canInsert ? `Insert ${entry.label} at the cursor` : "Open a note to insert"}
+			aria-label={t("Insert {label}", { label: t(entry.label) })}
+			title={
+				canInsert
+					? t("Insert {label} at the cursor", { label: t(entry.label) })
+					: t("Open a note to insert")
+			}
 			// self-stretch + h-auto: the hit area spans the row's full height rather
 			// than being a small square floating at the top, so the button is easy to
 			// aim at next to a tall callout or table.
@@ -287,6 +303,7 @@ function GalleryRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boole
  * templates — see the inline note on the flex row below.)
  */
 function TemplateRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean }) {
+	const { t } = useT();
 	const previewable = entry.renderable !== false;
 	// Nothing to show on the right? Then the template gets the whole row instead
 	// of being squeezed into its column — that is what kept the long image
@@ -344,11 +361,11 @@ function TemplateRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: bool
 							<Preview entry={entry} className="block min-w-min shrink-[99] overflow-hidden" />
 						</>
 					) : entry.blurb ? (
-						<span className="min-w-0 flex-1 text-muted-foreground text-xs">{entry.blurb}</span>
+						<span className="min-w-0 flex-1 text-muted-foreground text-xs">{t(entry.blurb)}</span>
 					) : null}
 				</span>
 				{previewable && entry.blurb ? (
-					<span className="mt-0.5 block text-muted-foreground text-xs">{entry.blurb}</span>
+					<span className="mt-0.5 block text-muted-foreground text-xs">{t(entry.blurb)}</span>
 				) : null}
 				{/* BlockRow has always rendered entry.link; this row silently dropped
 				    it, so an entry that carried one lost it by virtue of which layout
@@ -370,6 +387,7 @@ function TemplateRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: bool
  * addressable for styling.
  */
 function ContextLines({ lines }: { lines?: readonly string[] }) {
+	const { t } = useT();
 	// Keyed by INDEX, not by text: these are fixed, ordered lines that never
 	// reorder, and two blanks (or two identical lines) in one prelude would
 	// otherwise collide on the same key.
@@ -380,7 +398,7 @@ function ContextLines({ lines }: { lines?: readonly string[] }) {
 			// could only assert it.
 			// biome-ignore lint/suspicious/noArrayIndexKey: static, never-reordered lines
 			<span key={i} className="block text-muted-foreground/50 italic">
-				leave this line empty
+				{t("leave this line empty")}
 			</span>
 		) : (
 			// biome-ignore lint/suspicious/noArrayIndexKey: static, never-reordered lines
@@ -402,17 +420,18 @@ function ContextLines({ lines }: { lines?: readonly string[] }) {
  * separator rather than as the specimen.
  */
 function BlockRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean }) {
+	const { t } = useT();
 	return (
 		<Row entry={entry} canInsert={canInsert}>
 			<span className="block min-w-0 flex-1 px-3 py-2">
-				<p className={`mb-1 ${ROW_HEADING}`}>{entry.label}</p>
+				<p className={`mb-1 ${ROW_HEADING}`}>{t(entry.label)}</p>
 
 				{/* Blurb sits directly under the heading, as a subtitle. Trailing it
 			    after the source made it read as a footer nobody looks at, and it is
 			    the one part of the row that cannot be inferred from the preview.
 			    text-foreground, not muted: at muted/xs it read as a footnote you
 			    skip. Regular weight keeps it under the heading. */}
-				{entry.blurb ? <p className="mb-1.5 text-foreground text-xs">{entry.blurb}</p> : null}
+				{entry.blurb ? <p className="mb-1.5 text-foreground text-xs">{t(entry.blurb)}</p> : null}
 
 				{/* Above the template, not trailing the row: a link to someone else's
 				    grammar is context for reading what follows, and at the bottom it
@@ -430,7 +449,7 @@ function BlockRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean
 					<ContextLines lines={entry.templatePrelude} />
 					{/* The payload specifically — the context lines around it are not
 					    inserted, which is why the title sits here, not on the block. */}
-					<span title="Inserted at the cursor" className="block text-foreground">
+					<span title={t("Inserted at the cursor")} className="block text-foreground">
 						<TemplateSource syntax={entry.syntax} />
 					</span>
 					<ContextLines lines={entry.templatePostlude} />
@@ -457,12 +476,13 @@ function BlockRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean
 const DEFAULT_OPEN: ReadonlySet<string> = new Set(["Text"]);
 
 export default function MarkdownReferencePanel() {
+	const { t } = useT();
 	const [query, setQuery] = useState("");
 	const [openCategories, setOpenCategories] = useState<ReadonlySet<string>>(DEFAULT_OPEN);
 	const { hasEditor } = useActiveEditor();
 	const searchId = useId();
 
-	const groups = useMemo(() => groupByCategory(filterSyntax(query)), [query]);
+	const groups = useMemo(() => groupByCategory(filterSyntax(query, t)), [query, t]);
 	const searching = query.trim() !== "";
 
 	// A search opens every matching section — hiding the hit the user just
@@ -495,27 +515,27 @@ export default function MarkdownReferencePanel() {
 		});
 
 	return (
-		<section className="flex h-full min-h-0 flex-col" aria-label="Markdown reference">
+		<section className="flex h-full min-h-0 flex-col" aria-label={t("Markdown reference")}>
 			<search className="flex shrink-0 items-center gap-2 border-border border-b px-3 py-2">
 				<label className="sr-only" htmlFor={searchId}>
-					Search markdown syntax
+					{t("Search markdown syntax")}
 				</label>
 				<input
 					id={searchId}
 					type="search"
 					value={query}
 					onChange={(e) => setQuery(e.target.value)}
-					placeholder="Search syntax…"
+					placeholder={t("Search syntax…")}
 					className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
 				/>
-				<HelpTip label="About markdown">
+				<HelpTip label={t("About markdown")}>
 					<Overview />
 				</HelpTip>
 			</search>
 
 			{!hasEditor && (
 				<p className="shrink-0 border-border border-b bg-muted/40 px-3 py-1.5 text-muted-foreground text-xs">
-					Open a note to insert snippets.
+					{t("Open a note to insert snippets.")}
 				</p>
 			)}
 
@@ -527,7 +547,7 @@ export default function MarkdownReferencePanel() {
 			<ScrollArea className="min-h-0 flex-1 pr-2.5">
 				{groups.length === 0 ? (
 					<p className="px-3 py-6 text-center text-muted-foreground text-sm">
-						No syntax matches “{query}”.
+						{t("No syntax matches “{query}”.", { query })}
 					</p>
 				) : (
 					groups.map(([category, entries]) => {
@@ -546,7 +566,7 @@ export default function MarkdownReferencePanel() {
 								    what lets it sit over a rendered preview without smearing. */}
 								<summary className="sticky top-0 z-10 flex cursor-pointer list-none items-center gap-1.5 border-border border-y bg-muted px-3 py-2 font-semibold text-foreground text-sm uppercase tracking-wider hover:bg-accent">
 									<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-open/cat:rotate-90" />
-									{category}
+									{t(category)}
 									<span className="ml-auto rounded-full bg-background px-1.5 py-0.5 font-normal text-[10px] text-muted-foreground tabular-nums tracking-normal">
 										{entries.length}
 									</span>
@@ -562,7 +582,7 @@ export default function MarkdownReferencePanel() {
 														{intro.syntax}
 													</pre>
 												) : null}
-												<p className="text-muted-foreground text-xs">{intro.note}</p>
+												<p className="text-muted-foreground text-xs">{t(intro.note)}</p>
 												<RefLink link={intro.link} />
 											</section>
 										) : null}
