@@ -195,7 +195,7 @@ defmodule Engram.Workers.EmbedNote.CrashGuard do
   defp write(note, set) do
     {:ok, _} =
       Repo.with_tenant(note.user_id, fn ->
-        Repo.update_all(from(n in Note, where: n.id == ^note.id), set: set)
+        Repo.update_all(from(n in Note, where: n.id == ^note.id and n.kind == "note"), set: set)
       end)
 
     :ok
