@@ -155,6 +155,10 @@
 			"linter": { "rules": { "nursery": { "useTailwindShorthandClasses": "off" } } }
 		},
 		{
+			"includes": ["src/i18n/locale/*.ts"],
+			"linter": { "rules": { "style": { "useFilenamingConvention": "off" } } }
+		},
+		{
 			"includes": ["**/*.css"],
 			"linter": { "rules": { "nursery": { "useLayeredStyles": "off" } } }
 		},
