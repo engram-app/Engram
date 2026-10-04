@@ -22,7 +22,7 @@ The why behind the backend's shape, and what was rejected. Versions live in
 | Embeddings | Voyage, asymmetric: `voyage-4-large` (1024d) for documents, `voyage-4-lite` for queries | Shared Voyage 4 space. Self-host uses Ollama (`lib/engram/embedders/ollama.ex`). |
 | Vector DB | Qdrant, thin Req HTTP wrapper | No official Elixir SDK; the REST API is small. |
 | Search | Hybrid dense + BM25 sparse with server-side RRF; reranker pluggable (`RERANKER_BACKEND=jina|none`, default `none`, unset in prod) | See `chunk-boundary-stability.md`. |
-| Markdown | Line/regex section splitter (`lib/engram/parsers/markdown.ex`) for chunking; `mdex_native` (comrak) for MCP section boundaries | Earmark is still in `mix.exs` but no code in `lib/` uses it. |
+| Markdown | Line/regex section splitter (`lib/engram/parsers/markdown.ex`) for chunking; `mdex_native` (comrak) for MCP section boundaries | Earmark was removed (unused). Links, titles and tags parse in Rust (`native/engram_native`, see `native-nifs.md`). |
 | MCP server | Hand-rolled (`lib/engram/mcp/`) | No external MCP dependency. |
 | Storage | ExAws S3 (+ KMS) | AWS S3 in prod, MinIO for self-host/staging. |
 | Email | Resend, gated on `RESEND_API_KEY` | |
