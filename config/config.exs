@@ -313,6 +313,17 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+# Audio formats Obsidian recorders produce that the `mime` library does not
+# name. Without these, Storage.MimeWhitelist.detect_mime/1 calls them
+# application/octet-stream and the upload is refused. Compile-time, but Mix
+# recompiles `mime` on its own when this map changes. Only add what the
+# library lacks: an extension it already maps (e.g. .opus) fails its build.
+config :mime, :types, %{
+  "audio/mp4" => ["m4a"],
+  "audio/ogg" => ["ogg"],
+  "audio/flac" => ["flac"]
+}
+
 # Phoenix logs socket connect params verbatim ("CONNECTED TO ... Parameters:
 # %{...}") at :info, and its default filter is ["password"] only — so the raw
 # WS auth token was printed on every connect, into CloudWatch and Loki.

@@ -225,4 +225,38 @@ defmodule Engram.Storage.MimeWhitelistTest do
       end
     end
   end
+
+  # Detection comes from the `mime` library (plus the audio types Obsidian
+  # recorders produce, registered in config). A file it cannot name is
+  # application/octet-stream and refused, so every common attachment type
+  # must be named or the upload fails silently.
+  describe "detect_mime/1" do
+    test "names the formats Obsidian vaults commonly hold" do
+      for {file, mime} <- [
+            {"a.png", "image/png"},
+            {"a.HEIC", "image/heic"},
+            {"a.avif", "image/avif"},
+            {"a.webm", "video/webm"},
+            {"a.mov", "video/quicktime"},
+            {"a.m4a", "audio/mp4"},
+            {"a.ogg", "audio/ogg"},
+            {"a.flac", "audio/flac"},
+            {"a.wav", "audio/wav"},
+            {"a.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+            {"a.csv", "text/csv"},
+            {"a.md", "text/markdown"}
+          ] do
+        assert MimeWhitelist.detect_mime(file) == mime, file
+        assert MimeWhitelist.check(mime, file) == :ok, file
+      end
+    end
+
+    test "unknown extensions and nil are octet-stream, which is refused" do
+      assert MimeWhitelist.detect_mime("a.unknownext") == "application/octet-stream"
+      assert MimeWhitelist.detect_mime(nil) == "application/octet-stream"
+
+      assert {:error, {:mime_not_allowed, _}} =
+               MimeWhitelist.check("application/octet-stream", "a.bin")
+    end
+  end
 end
