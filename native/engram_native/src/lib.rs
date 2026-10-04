@@ -199,12 +199,19 @@ fn number(t: Term) -> NifResult<f64> {
 }
 
 fn vector(t: Term) -> NifResult<Option<Vec<f64>>> {
+    // `nil` only: no vector, similarity 0.0. Any other atom is refused, as
+    // the Elixir version's `unit/1` refused it.
     if t.is_atom() {
-        // `nil`: no vector, similarity 0.0.
-        return Ok(None);
+        return match t.decode::<rustler::Atom>() {
+            Ok(a) if a == rustler::types::atom::nil() => Ok(None),
+            _ => Err(Error::BadArg),
+        };
     }
+    // `list_length` fails on an improper list (`[1.0 | 2.0]`), which the
+    // iterator alone would silently truncate.
+    let len = t.list_length().map_err(|_| Error::BadArg)?;
     let items: ListIterator = t.decode().map_err(|_| Error::BadArg)?;
-    let mut out = Vec::with_capacity(t.list_length().unwrap_or(0));
+    let mut out = Vec::with_capacity(len);
     for item in items {
         out.push(number(item)?);
     }

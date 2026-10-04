@@ -83,11 +83,14 @@ defmodule Engram.Workers.ReindexKeyword do
   end
 
   def perform(%Oban.Job{args: %{"user_id" => user_id, "vault_id" => vault_id, "mode" => "sparse"}}) do
-    # Same stale-average trap as `do_reindex/1`. Each resparse also rewrites
-    # its chunks' `token_count`, so when the encoded string changed length
-    # (#1615 added the context prefix) avgdl moves DURING the pass: notes done
-    # early are normalized against an older average. A second `:sparse` pass
-    # settles them.
+    # Drops a cached average from before this run. It does not make the pass
+    # self-consistent: each resparse rewrites its chunks' `token_count`, the
+    # first resparse refills the per-node cache (10-minute TTL) from mostly OLD
+    # lengths, and when the encoded string changed length (#1615 added the
+    # context prefix) notes done early are normalized against that. Run a
+    # second `:sparse` pass once the first has DRAINED: `ResparseNote` is
+    # unique on available/scheduled, so one enqueued earlier is deduplicated
+    # against first-pass jobs still waiting.
     :ok = Stats.evict(vault_id)
 
     Repo.with_tenant!(user_id, fn ->

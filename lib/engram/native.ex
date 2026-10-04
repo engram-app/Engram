@@ -116,7 +116,7 @@ defmodule Engram.Native do
     # input_bytes: the f64s the NIF holds, from one vector's width. Summing
     # every list's length would walk the whole pool in Elixir, the cost this
     # NIF exists to remove.
-    width = Enum.find_value(vectors, 0, &(&1 && length(&1)))
+    width = Enum.find_value(vectors, 0, &(is_list(&1) && length(&1)))
 
     call(:mmr_select, length(scores) * (width + 1) * 8, %{dirty: true}, fn ->
       mmr_select_nif(vectors, scores, limit, diversity / 1)
@@ -168,7 +168,8 @@ defmodule Engram.Native do
 
   @doc """
   `Jason.decode/1`'s result, in Rust: string keys, the first of a repeated
-  key wins, integers stay integers, floats correctly rounded. Malformed text
+  key wins, integers stay integers, floats correctly rounded. Differs only
+  where Qdrant never goes: integers past 64 bits and `-0` decode as floats. Malformed text
   (or nesting past 128 levels) is `{:error, :invalid_json}`. Up to 16 KB runs
   on the calling scheduler.
   """

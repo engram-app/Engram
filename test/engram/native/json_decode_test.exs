@@ -42,6 +42,12 @@ defmodule Engram.Native.JsonDecodeTest do
     assert Native.json_decode(body) == Jason.decode(body)
   end
 
+  # Documented difference: serde reports "-0" as the float -0.0, Jason as the
+  # integer 0. Qdrant never emits it; pinned so a change is deliberate.
+  test "-0 decodes as -0.0" do
+    assert Native.json_decode("-0") == {:ok, -0.0}
+  end
+
   test "malformed text is an error, never a partial decode" do
     for bad <- ["{", "", "[1,]", "nul", ~s({"a":1}x)] do
       assert Native.json_decode(bad) == {:error, :invalid_json}, bad

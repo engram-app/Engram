@@ -41,6 +41,12 @@ defmodule Engram.Search.MMRTest do
     assert [^a, ^b] = MMR.rerank([a, b], 2, 1.0)
   end
 
+  test "a non-positive limit picks nothing" do
+    cands = [c(0.9, [1.0, 0.0]), c(0.8, [0.0, 1.0])]
+    assert MMR.rerank(cands, 0, 0.5) == []
+    assert MMR.rerank(cands, -1, 0.5) == []
+  end
+
   test "empty candidate list returns empty" do
     assert MMR.rerank([], 5, 1.0) == []
     assert MMR.rerank([], 5, 0.0) == []
@@ -120,7 +126,9 @@ defmodule Engram.Search.MMRTest do
   end
 
   test "a vector that is not a list or nil is refused" do
-    assert_raise ArgumentError, fn -> MMR.rerank([c(0.9, "packed"), c(0.8, nil)], 2, 0.5) end
+    for bad <- ["packed", true, :foo, [1.0, 2.0 | 3.0]] do
+      assert_raise ArgumentError, fn -> MMR.rerank([c(0.9, [1.0, 0.0]), c(0.8, bad)], 2, 0.5) end
+    end
   end
 
   defp random_vec(dims), do: for(_ <- 1..dims, do: :rand.uniform() - 0.5)

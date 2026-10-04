@@ -880,23 +880,26 @@ defmodule Engram.Vector.Qdrant do
           {:error, _} -> {:error, {200, raw}}
         end
 
-      {:ok, %{status: status, body: body}} ->
-        {:error, {status, decode_error_body(body)}}
+      {:ok, %{status: status, body: body} = resp} ->
+        {:error, {status, decode_error_body(resp, body)}}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  # What Req's default decoding produced before `decode_body: false`.
-  defp decode_error_body(body) when is_binary(body) do
-    case Jason.decode(body) do
+  # What Req's default decoding produced before `decode_body: false`: JSON by
+  # content type is decoded, anything else stays raw.
+  defp decode_error_body(resp, body) when is_binary(body) do
+    json? = Enum.any?(Req.Response.get_header(resp, "content-type"), &(&1 =~ "json"))
+
+    case json? && Jason.decode(body) do
       {:ok, decoded} -> decoded
-      {:error, _} -> body
+      _ -> body
     end
   end
 
-  defp decode_error_body(body), do: body
+  defp decode_error_body(_resp, body), do: body
 
   defp search_results(result) do
     points = if is_list(result), do: result, else: result["points"] || []

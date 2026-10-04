@@ -23,6 +23,8 @@ defmodule Engram.Search.MMR do
   def rerank(candidates, limit, diversity) when diversity == 0.0,
     do: Enum.take(candidates, limit)
 
+  def rerank(_candidates, limit, _diversity) when limit <= 0, do: []
+
   def rerank(candidates, limit, diversity)
       when is_list(candidates) and is_number(diversity) do
     pool = List.to_tuple(candidates)

@@ -1011,7 +1011,7 @@ defmodule Engram.Indexing do
     {ids, counts} = Enum.unzip(lengths)
     ids = Enum.map(ids, &Ecto.UUID.dump!/1)
 
-    {:ok, _} =
+    {:ok, {updated, _}} =
       Repo.with_tenant(note.user_id, fn ->
         Chunk
         |> join(
@@ -1024,6 +1024,21 @@ defmodule Engram.Indexing do
         |> update([c, v], set: [token_count: v.n])
         |> Repo.update_all([])
       end)
+
+    # Fewer rows than points: a concurrent EmbedNote replaced the note's chunk
+    # rows between the match and this update. Its own pass wrote lengths for
+    # the new rows, so nothing is lost, but a persistent gap would mean
+    # mis-scoped writes; leave a trail rather than fail the job.
+    if updated != length(ids) do
+      Logger.warning(
+        "resparse token_count update matched fewer rows than points",
+        Metadata.with_category(:warning, :search,
+          note_id: note.id,
+          expected: length(ids),
+          updated: updated
+        )
+      )
+    end
 
     :ok
   end

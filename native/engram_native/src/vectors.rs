@@ -3,8 +3,10 @@
 
 use std::fmt::Write;
 
-/// Numbers -> packed float32 LE. None if a value is not finite as an f32
-/// (the Elixir `<<x::float-32>>` raised on those).
+/// Numbers -> packed float32 LE. None if a value is not finite as an f32.
+/// The Elixir `<<x::float-32>>` packed an out-of-range value as +/-inf, and
+/// `dense_json`'s binary generator then dropped it, leaving the vector one
+/// dimension short; refusing is the fix.
 pub fn pack_f32(values: &[f64]) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(values.len() * 4);
     for &v in values {
@@ -25,9 +27,10 @@ pub fn dense_json(packed: &[u8]) -> Option<Vec<u8>> {
     if !packed.len().is_multiple_of(4) {
         return None;
     }
-    // Worst case "-1.1754944e-38" is 14 bytes + comma: sized up front so the
-    // buffer never reallocates (a realloc holds old + new at once).
-    let mut out = Vec::with_capacity(packed.len() / 4 * 15 + 2);
+    // Longest ryu f32 text is 16 bytes (e.g. "-0.000012345678", found by an
+    // exhaustive sweep of every f32), + comma: sized up front so the buffer
+    // never reallocates (a realloc holds old + new at once).
+    let mut out = Vec::with_capacity(packed.len() / 4 * 17 + 2);
     let mut buf = ryu::Buffer::new();
     out.push(b'[');
     for (i, c) in packed.chunks_exact(4).enumerate() {

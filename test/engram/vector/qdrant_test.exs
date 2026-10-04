@@ -406,13 +406,18 @@ defmodule Engram.Vector.QdrantTest do
                Qdrant.search("test_col", List.duplicate(0.1, 4), user_id: "1", limit: 5)
     end
 
-    test "an error status keeps a JSON body decoded and a plain one raw", %{bypass: bypass} do
-      for {body, expected} <- [
-            {~s({"status":{"error":"bad"}}), %{"status" => %{"error" => "bad"}}},
-            {"gateway down", "gateway down"}
+    # As Req's own decoding did: by content type, not by whether it parses.
+    test "an error body is decoded only when it is JSON by content type", %{bypass: bypass} do
+      for {type, body, expected} <- [
+            {"application/json", ~s({"status":{"error":"bad"}}),
+             %{"status" => %{"error" => "bad"}}},
+            {"text/plain", "404", "404"},
+            {"text/plain", "gateway down", "gateway down"}
           ] do
         Bypass.expect_once(bypass, "POST", "/collections/test_col/points/query", fn conn ->
-          Plug.Conn.send_resp(conn, 400, body)
+          conn
+          |> Plug.Conn.put_resp_content_type(type)
+          |> Plug.Conn.send_resp(400, body)
         end)
 
         assert {:error, {400, ^expected}} =

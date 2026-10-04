@@ -7,9 +7,10 @@
 //! Terms are built straight from the parser (a `DeserializeSeed` carrying the
 //! `Env`), with no intermediate Rust tree.
 //!
-//! Two documented differences, neither reachable from Qdrant: integers beyond
-//! i64/u64 come back as floats (Jason: bignum), and nesting past serde_json's
-//! 128 levels is an error (Jason: no limit).
+//! Three documented differences, none reachable from Qdrant: integers beyond
+//! i64/u64 come back as floats (Jason: bignum), `-0` comes back as the float
+//! `-0.0` (Jason: the integer 0), and nesting past serde_json's 128 levels is
+//! an error (Jason: no limit).
 
 use rustler::{Encoder, Env, Term};
 use serde::de::{DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};

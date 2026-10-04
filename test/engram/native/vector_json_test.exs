@@ -100,9 +100,11 @@ defmodule Engram.Native.VectorJsonTest do
     # Output text is at most ~16 bytes per f32 and ~25 per sparse pair; the
     # peak is that one buffer (its BEAM copy is not Rust heap).
     test "native peak stays within the output buffer" do
-      packed = old_pack(random_floats(4096))
+      # ~1e-5 values print longest ("-0.000012345678", 15 chars + comma), so
+      # an undersized buffer would reallocate and hold old + new at once.
+      packed = old_pack(for(i <- 1..4096, do: -1.2345678e-5 * (1 + rem(i, 7) / 10)))
       {_, peak} = Native.dense_json_nif(packed)
-      assert peak <= 15 * 4096 + 4_096
+      assert peak <= 17 * 4096 + 4_096
 
       {_, peak} = Native.pack_f32_nif(random_floats(4096))
       assert peak <= 8 * 4096 + 4 * 4096 + 4_096
