@@ -53,6 +53,7 @@ defmodule Engram.Workers.EmbedNote do
   alias Engram.UsageMeters
   alias Engram.Vaults.Vault
   alias Engram.Workers.BackgroundPriority
+  alias Engram.Workers.EmbedNote.CrashGuard
 
   require Logger
 
@@ -66,95 +67,9 @@ defmodule Engram.Workers.EmbedNote do
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(10)
 
-  # Crash-loop guard (prod worker OOM, 2026-10-03). A note whose embed kills
-  # the node never returns, so `maybe_mark_poison/3` never parks it: Oban's
-  # Lifeline puts the orphaned job back WITHOUT recording an error, and
-  # ReconcileEmbeddings keeps enqueuing fresh ones, so one note OOM-killed the
-  # worker every few minutes for six hours. An attempt that started and left no
-  # error behind is a hard death. One can be a deploy cutting a job short; a
-  # second inside the window is the note, and it is quarantined for the poison
-  # cooldown before it can take the node (and every job beside it) down again.
-  @max_hard_deaths 2
-  @death_window_hours 24
-  # An attempt still `executing` this long after it started is dead: Oban's own
-  # timeout above would have ended it gracefully at 10 minutes.
-  @orphan_after_minutes 15
-
-  defp hard_deaths(%Oban.Job{id: id, args: %{"note_id" => note_id}}) do
-    stale = DateTime.add(DateTime.utc_now(), -@orphan_after_minutes * 60, :second)
-    since = DateTime.add(DateTime.utc_now(), -@death_window_hours * 3600, :second)
-
-    from(j in Oban.Job,
-      where: j.worker == "Engram.Workers.EmbedNote",
-      where: fragment("? ->> 'note_id'", j.args) == ^to_string(note_id),
-      where: j.inserted_at > ^since
-    )
-    |> exclude_self(id)
-    |> select(
-      [j],
-      fragment(
-        "COALESCE(SUM(GREATEST(? - COALESCE(cardinality(?), 0) - CASE WHEN ? = 'completed' OR (? = 'executing' AND ? >= ?) THEN 1 ELSE 0 END, 0)), 0)::int",
-        j.attempt,
-        j.errors,
-        j.state,
-        j.state,
-        j.attempted_at,
-        ^stale
-      )
-    )
-    |> Repo.one()
-  end
-
-  defp hard_deaths(_job), do: 0
-
-  # nil on a job built in memory (Oban.Testing) rather than fetched.
-  defp exclude_self(query, nil), do: query
-  defp exclude_self(query, id), do: where(query, [j], j.id != ^id)
-
-  defp quarantine(%{"note_id" => note_id, "user_id" => user_id}, deaths) do
-    cooldown = Application.get_env(:engram, :embed_poison_cooldown_seconds, 21_600)
-    retry_after = DateTime.add(DateTime.utc_now(), cooldown, :second)
-
-    {:ok, _} =
-      Repo.with_tenant(user_id, fn ->
-        Repo.update_all(from(n in Note, where: n.id == ^note_id),
-          set: [embed_retry_after: retry_after, embed_budget_parked: nil]
-        )
-      end)
-
-    Logger.error(
-      "embed_crash_quarantined",
-      Metadata.with_category(:error, :search,
-        user_id: user_id,
-        note_id: note_id,
-        result: %{hard_deaths: deaths},
-        cooldown_seconds: cooldown
-      )
-    )
-
-    :telemetry.execute([:engram, :embed, :crash_quarantine], %{count: 1, hard_deaths: deaths}, %{
-      note_id: note_id,
-      user_id: user_id
-    })
-
-    {:cancel, :repeated_node_death}
-  end
-
-  # A legacy job with no tenant in its args cannot park the note (RLS), but it
-  # still must not run the embed that keeps killing the node.
-  defp quarantine(_args, _deaths), do: {:cancel, :repeated_node_death}
-
   @impl Oban.Worker
   def perform(%Oban.Job{args: args} = job) do
     :ok = BackgroundPriority.demote()
-
-    case hard_deaths(job) do
-      deaths when deaths >= @max_hard_deaths -> quarantine(args, deaths)
-      _ -> do_perform(job)
-    end
-  end
-
-  defp do_perform(%Oban.Job{args: args} = job) do
     # T3.2 — `old_path_hmac` is a base64-encoded HMAC, never plaintext path.
     old_path_hmac_b64 = args["old_path_hmac"]
 
@@ -265,15 +180,41 @@ defmodule Engram.Workers.EmbedNote do
             # old behaviour) left the note with no BM25 index either, so it
             # vanished from keyword search too. The meter is charged inside
             # the pass, by the reservation (see `reserve_embed_tokens/2`).
-            case run_embed(note, user, old_path_hmac_b64) do
-              :ok ->
-                :ok
+            case CrashGuard.check(note, job) do
+              :run ->
+                case guarded_embed(note, user, old_path_hmac_b64) do
+                  :ok ->
+                    :ok
+
+                  other ->
+                    _ = maybe_mark_poison(note, other, job)
+                    other
+                end
 
               other ->
-                _ = maybe_mark_poison(note, other, job)
                 other
             end
         end
+    end
+  end
+
+  # The dead-man stamp brackets the embed: written before, cleared however the
+  # attempt returns, raise and exit included. Only a killed node leaves it.
+  defp guarded_embed(note, user, old_path_hmac_b64) do
+    :ok = CrashGuard.stamp(note)
+
+    try do
+      result = run_embed(note, user, old_path_hmac_b64)
+      :ok = CrashGuard.clear(note, result)
+      result
+    rescue
+      e ->
+        _ = CrashGuard.clear(note, :error)
+        reraise e, __STACKTRACE__
+    catch
+      :exit, reason ->
+        _ = CrashGuard.clear(note, :error)
+        exit(reason)
     end
   end
 
