@@ -6,15 +6,21 @@ import { search, searchKeymap } from "@codemirror/search";
 import { Compartment, EditorState, Prec } from "@codemirror/state";
 import { oneDarkTheme } from "@codemirror/theme-one-dark";
 import { drawSelection, EditorView, keymap } from "@codemirror/view";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { yCollab, yUndoManagerKeymap } from "y-codemirror.next";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
+import { useAttachments, useUploadAttachment } from "../api/queries";
 import { useTheme } from "../theme/theme-provider";
+import { loadAttachmentUrl, resolveAttachmentTarget } from "./attachment-blob";
+import { uploadFilesTo } from "./attachment-upload/upload-files";
+import { refreshAttachmentEmbeds } from "./editor/attachment-embed";
 import { indentKeymap } from "./editor/format-commands";
 import { frontmatterShortcut } from "./editor/frontmatter-shortcut";
 import { headingFold, noParagraphFold } from "./editor/heading-fold";
+import { itemDrop } from "./editor/item-drop";
 import { livePreviewExtensions } from "./editor/live-preview";
+import { type DraggedVaultItem, linkTextFor } from "./vault-item-drag";
 
 // height:auto + overflow:visible hand scrolling to the page's ScrollArea, so
 // the inline title and properties scroll with the text instead of staying
@@ -87,6 +93,7 @@ export function decorationsFor(
 	openWikiLink: (name: string) => void,
 	wikiCompletionPaths: () => string[],
 	openMarkdownLink: (href: string) => boolean,
+	resolveAttachment?: (target: string) => string | null,
 ) {
 	return mode === "rendered"
 		? livePreviewExtensions({
@@ -94,6 +101,9 @@ export function decorationsFor(
 				openWikiLink,
 				wikiCompletionPaths,
 				openMarkdownLink,
+				attachments: resolveAttachment
+					? { resolve: resolveAttachment, load: loadAttachmentUrl }
+					: undefined,
 			})
 		: [markdown({ base: markdownLanguage, extensions: noParagraphFold })];
 }
@@ -120,11 +130,16 @@ export function buildEditorState(
 	wikiCompletionPaths: () => string[],
 	openMarkdownLink: (href: string) => boolean,
 	onFrontmatterShortcut?: () => boolean,
+	resolveAttachment?: (target: string) => string | null,
+	drop?: Parameters<typeof itemDrop>[0],
 ): EditorState {
 	return EditorState.create({
 		doc: ytext.toString(),
 		extensions: [
 			...(onFrontmatterShortcut ? [frontmatterShortcut(onFrontmatterShortcut)] : []),
+			// Sidebar note/attachment dropped on the text becomes a link/embed. Base
+			// (not the mode compartment) so it also works in Raw mode.
+			...(drop ? [itemDrop(drop)] : []),
 			// CodeMirror's content DOM sets spellcheck="false" by default (it's
 			// built for code, not prose). This is a markdown/prose editor, so
 			// override it back on — the browser's native spellcheck is the only
@@ -174,7 +189,14 @@ export function buildEditorState(
 			// The ONLY source of the markdown language: swapping this compartment is
 			// what toggles Rendered vs Raw mode. See decorationsFor above.
 			decorationsCompartment.of(
-				decorationsFor(mode, resolveWikiLink, openWikiLink, wikiCompletionPaths, openMarkdownLink),
+				decorationsFor(
+					mode,
+					resolveWikiLink,
+					openWikiLink,
+					wikiCompletionPaths,
+					openMarkdownLink,
+					resolveAttachment,
+				),
 			),
 			// yCollab keeps the view and Y.Text in sync AFTER this initial seed and
 			// wires local edits back into the Y.Text (→ CRDT channel). MUST stay in
@@ -202,6 +224,35 @@ export default function NoteEditor({
 	onFrontmatterShortcut,
 }: NoteEditorProps) {
 	const { resolved } = useTheme();
+	const { data: attachments } = useAttachments();
+	// Read through a ref: the extension is baked into the state at creation, and a
+	// new list must neither recreate the view nor reconfigure the decoration layer
+	// (that would rebuild the markdown language and re-parse the whole note after
+	// every upload). Embeds are told to re-resolve with an effect instead (below).
+	const attachmentsRef = useRef(attachments);
+	attachmentsRef.current = attachments;
+	const resolveAttachment = useCallback(
+		(target: string) => resolveAttachmentTarget(attachmentsRef.current ?? [], target),
+		[],
+	);
+	const upload = useUploadAttachment();
+	const uploadRef = useRef(upload.mutateAsync);
+	uploadRef.current = upload.mutateAsync;
+	// Sidebar items and OS files dropped on the text. Files go to the vault root
+	// (Obsidian's default), under a name that does not clobber an existing file,
+	// and come back as ![[embeds]] for the editor to insert.
+	const drop = useRef<Parameters<typeof itemDrop>[0]>({
+		linkText: (item: DraggedVaultItem) => linkTextFor(item, attachmentsRef.current ?? []),
+		onFiles: async (files) => {
+			const paths = await uploadFilesTo({
+				upload: uploadRef.current,
+				existing: attachmentsRef.current ?? [],
+				files,
+				folder: "",
+			});
+			return paths.map((path) => `![[${path}]]`);
+		},
+	}).current;
 	const hostRef = useRef<HTMLDivElement>(null);
 	const viewRef = useRef<EditorView | null>(null);
 	// Ref-style callback: always holds the latest onView without being an effect
@@ -223,7 +274,7 @@ export default function NoteEditor({
 	// hatch for the toolbar, not a doc/theme dependency -- including it would
 	// tear down and recreate the view (yCollab-detach hazard) whenever the
 	// caller passes a differently-identitied callback.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: mode/resolveWikiLink/openWikiLink/wikiCompletionPaths/openMarkdownLink/onView are intentionally excluded, see comment above.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: mode/resolveWikiLink/openWikiLink/wikiCompletionPaths/openMarkdownLink/resolveAttachment/onView are intentionally excluded, see comment above.
 	useEffect(() => {
 		const parent = hostRef.current;
 		if (!parent) {
@@ -240,6 +291,8 @@ export default function NoteEditor({
 				wikiCompletionPaths,
 				openMarkdownLink,
 				() => Boolean(onShortcutRef.current?.()),
+				resolveAttachment,
+				drop,
 			),
 			parent,
 		});
@@ -252,6 +305,13 @@ export default function NoteEditor({
 		};
 	}, [ytext, awareness, resolved]);
 
+	// The list can land (or change) after the view mounted: tell the embeds to
+	// resolve again. `attachments` is the trigger, not an input of the effect.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: see above
+	useEffect(() => {
+		viewRef.current?.dispatch({ effects: refreshAttachmentEmbeds.of(null) });
+	}, [attachments]);
+
 	// Swap the decoration layer live when mode changes — view stays, yCollab stays.
 	useEffect(() => {
 		const view = viewRef.current;
@@ -260,10 +320,26 @@ export default function NoteEditor({
 		}
 		view.dispatch({
 			effects: decorationsCompartment.reconfigure(
-				decorationsFor(mode, resolveWikiLink, openWikiLink, wikiCompletionPaths, openMarkdownLink),
+				decorationsFor(
+					mode,
+					resolveWikiLink,
+					openWikiLink,
+					wikiCompletionPaths,
+					openMarkdownLink,
+					resolveAttachment,
+				),
 			),
 		});
-	}, [mode, resolveWikiLink, openWikiLink, wikiCompletionPaths, openMarkdownLink]);
+	}, [
+		mode,
+		resolveWikiLink,
+		openWikiLink,
+		wikiCompletionPaths,
+		openMarkdownLink,
+		resolveAttachment,
+	]);
 
-	return <div ref={hostRef} />;
+	// data-file-drop: the upload provider leaves OS-file drops on this element to
+	// the editor (see attachment-upload/provider).
+	return <div ref={hostRef} data-file-drop />;
 }

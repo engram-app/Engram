@@ -1,7 +1,8 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { createEvent, fireEvent, render, screen } from "@testing-library/react";
 import { act } from "react";
 import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
+import { FileDropTargetContext } from "./file-drop-region";
 import type { LoaderItem } from "./loader";
 import { TreeRow } from "./tree-row";
 import type { TreeItem } from "./types";
@@ -11,6 +12,12 @@ import type { TreeItem } from "./types";
 // valid; individual tests override with mockReturnValueOnce.
 const activeSlugMock = vi.fn<() => string | null>(() => null);
 vi.mock("../../api/vault-slug", () => ({ useActiveVaultSlug: () => activeSlugMock() }));
+
+// Drops upload through the provider's hook; drive it from the test.
+const uploadFilesMock = vi.fn<(files: File[], folder: string) => Promise<void>>(() =>
+	Promise.resolve(),
+);
+vi.mock("../attachment-upload/provider", () => ({ useFileDropUpload: () => uploadFilesMock }));
 
 const folderItem: TreeItem = {
 	kind: "folder",
@@ -42,6 +49,7 @@ const attachmentItem: TreeItem = {
 };
 
 interface InstanceOverrides {
+	expand?: () => void;
 	data?: TreeItem;
 	props?: Record<string, unknown>;
 	isExpanded?: boolean;
@@ -75,6 +83,7 @@ function mockInstance(overrides: InstanceOverrides = {}) {
 		getProps: () => overrides.props ?? {},
 		getItemMeta: () => ({ level: overrides.level ?? 0 }),
 		isExpanded: () => overrides.isExpanded ?? false,
+		expand: overrides.expand ?? vi.fn(),
 		isSelected: () => overrides.isSelected ?? false,
 		isFocused: () => overrides.isFocused ?? false,
 		isRenaming: () => overrides.isRenaming ?? false,
@@ -167,7 +176,7 @@ describe("TreeRow", () => {
 	// The highlight is pinned to the OPEN file (the route), not to whatever was
 	// clicked last. Clicking a folder expands it; it must not steal the chip.
 	describe("active highlight", () => {
-		const chip = /bg-tree-selected/u;
+		const chip = /bg-row-selected/u;
 
 		it("paints the note that matches the open route id", () => {
 			const instance = mockInstance({ data: noteItem });
@@ -270,7 +279,7 @@ describe("TreeRow", () => {
 	describe("multi-selection highlight", () => {
 		// Its own token, not the hover `accent`: in the light theme accent is a
 		// near-white on white, and a selected range was hard to see.
-		const selectedFill = /(?:^|\s)bg-tree-multi-selected(?:\s|$)/u;
+		const selectedFill = /(?:^|\s)bg-row-multi-selected(?:\s|$)/u;
 
 		it("fills selected rows while a multi-selection is active", () => {
 			const instance = mockInstance({ data: noteItem, isSelected: true });
@@ -500,6 +509,31 @@ describe("TreeRow", () => {
 		expect(clearData).toHaveBeenCalledWith("text/plain");
 	});
 
+	it("tags a dragged note and attachment so the editor can link them on drop", () => {
+		for (const [data, kind] of [
+			[noteItem, "note"],
+			[attachmentItem, "attachment"],
+		] as const) {
+			const htDragStart = vi.fn();
+			const instance = mockInstance({ data, props: { onDragStart: htDragStart } });
+			const { unmount } = render(
+				<MemoryRouter>
+					<TreeRow instance={instance} />
+				</MemoryRouter>,
+			);
+			const setData = vi.fn();
+			fireEvent.dragStart(screen.getByRole("link"), {
+				dataTransfer: { clearData: vi.fn(), setData, types: [] },
+			});
+			expect(htDragStart).toHaveBeenCalledOnce();
+			expect(setData).toHaveBeenCalledWith(
+				"application/x-engram-vault-item",
+				JSON.stringify({ kind, path: data.path }),
+			);
+			unmount();
+		}
+	});
+
 	it("renders attachment as a link to /note/:id (uuid, not path)", () => {
 		const instance = mockInstance({ data: attachmentItem });
 		render(
@@ -535,5 +569,110 @@ describe("TreeRow", () => {
 		);
 		const badge = screen.getByText("PNG");
 		expect(badge).toBeInTheDocument();
+	});
+});
+
+describe("TreeRow file drops", () => {
+	const fileDrag = (over: Record<string, unknown> = {}) => ({
+		dataTransfer: { types: ["Files"], files: [new File(["x"], "p.png")], dropEffect: "none" },
+		...over,
+	});
+
+	// The DOM test env drops `relatedTarget` from a DragEvent init, so set it directly.
+	const dragLeave = (el: Element, relatedTarget: Element | null) => {
+		const ev = createEvent.dragLeave(el, fileDrag());
+		Object.defineProperty(ev, "relatedTarget", { value: relatedTarget });
+		fireEvent(el, ev);
+	};
+
+	function renderRow(data: TreeItem, props: Record<string, unknown> = {}, expand = vi.fn()) {
+		const setFolder = vi.fn();
+		render(
+			<MemoryRouter>
+				<FileDropTargetContext.Provider value={{ folder: null, setFolder }}>
+					<TreeRow instance={mockInstance({ data, props, expand })} />
+				</FileDropTargetContext.Provider>
+			</MemoryRouter>,
+		);
+		return { setFolder, expand };
+	}
+
+	it("a folder row aims at itself and uploads into it", () => {
+		uploadFilesMock.mockClear();
+		const { setFolder } = renderRow(folderItem);
+		const row = screen.getByRole("treeitem");
+		fireEvent.dragOver(row, fileDrag());
+		expect(setFolder).toHaveBeenCalledWith("Projects");
+		fireEvent.drop(row, fileDrag());
+		expect(uploadFilesMock).toHaveBeenCalledWith([expect.any(File)], "Projects");
+	});
+
+	it("a note row aims at its PARENT folder: a file cannot be dropped on a file", () => {
+		uploadFilesMock.mockClear();
+		const { setFolder } = renderRow(noteItem);
+		const row = screen.getByRole("link");
+		fireEvent.dragOver(row, fileDrag());
+		expect(setFolder).toHaveBeenCalledWith("Projects");
+		fireEvent.drop(row, fileDrag());
+		expect(uploadFilesMock).toHaveBeenCalledWith([expect.any(File)], "Projects");
+	});
+
+	it("an attachment at the vault root aims at the root", () => {
+		uploadFilesMock.mockClear();
+		renderRow({ ...attachmentItem, path: "a.png" });
+		fireEvent.drop(screen.getByRole("link"), fileDrag());
+		expect(uploadFilesMock).toHaveBeenCalledWith([expect.any(File)], "");
+	});
+
+	it("leaves tree-internal drags (no Files) to headless-tree's own handlers", () => {
+		const htOver = vi.fn();
+		const htDrop = vi.fn();
+		const { setFolder } = renderRow(folderItem, { onDragOver: htOver, onDrop: htDrop });
+		const row = screen.getByRole("treeitem");
+		const internal = { dataTransfer: { types: ["text/plain"], files: [] } };
+		fireEvent.dragOver(row, internal);
+		fireEvent.drop(row, internal);
+		expect(htOver).toHaveBeenCalledOnce();
+		expect(htDrop).toHaveBeenCalledOnce();
+		expect(setFolder).not.toHaveBeenCalled();
+	});
+
+	it("moving between a folder row's own parts does not cancel the hover-open; leaving it does", () => {
+		vi.useFakeTimers();
+		const expand = vi.fn();
+		renderRow(folderItem, {}, expand);
+		const row = screen.getByRole("treeitem");
+		fireEvent.dragOver(row, fileDrag());
+		dragLeave(row, row.firstElementChild);
+		act(() => {
+			vi.advanceTimersByTime(700);
+		});
+		expect(expand).toHaveBeenCalledOnce();
+		vi.useRealTimers();
+
+		vi.useFakeTimers();
+		const expand2 = vi.fn();
+		renderRow(folderItem, {}, expand2);
+		const row2 = screen.getAllByRole("treeitem").at(-1) as HTMLElement;
+		fireEvent.dragOver(row2, fileDrag());
+		dragLeave(row2, null);
+		act(() => {
+			vi.advanceTimersByTime(700);
+		});
+		expect(expand2).not.toHaveBeenCalled();
+		vi.useRealTimers();
+	});
+
+	it("opens a collapsed folder after a file hovers it for a moment", () => {
+		vi.useFakeTimers();
+		const expand = vi.fn();
+		renderRow(folderItem, {}, expand);
+		fireEvent.dragOver(screen.getByRole("treeitem"), fileDrag());
+		expect(expand).not.toHaveBeenCalled();
+		act(() => {
+			vi.advanceTimersByTime(700);
+		});
+		expect(expand).toHaveBeenCalledOnce();
+		vi.useRealTimers();
 	});
 });

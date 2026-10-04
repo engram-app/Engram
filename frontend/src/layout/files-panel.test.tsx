@@ -3,11 +3,13 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 import FilesPanel from "./files-panel";
+import { RailViewProvider } from "./rail-view-context";
 
 // FilesPanel → FolderActions reads useAttachmentUpload; stub the provider so the
 // panel renders without an AttachmentUploadProvider wrapper.
 vi.mock("../viewer/attachment-upload/provider", () => ({
 	useAttachmentUpload: () => ({ openUpload: vi.fn() }),
+	useFileDropUpload: () => null,
 }));
 
 function renderPanel() {
@@ -15,7 +17,10 @@ function renderPanel() {
 	return render(
 		<QueryClientProvider client={qc}>
 			<MemoryRouter>
-				<FilesPanel />
+				{/* The header's collapse button talks to the rail's sidebar state. */}
+				<RailViewProvider>
+					<FilesPanel />
+				</RailViewProvider>
 			</MemoryRouter>
 		</QueryClientProvider>,
 	);

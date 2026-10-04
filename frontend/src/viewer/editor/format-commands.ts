@@ -1,14 +1,18 @@
-import { indentWithTab } from "@codemirror/commands";
-import { syntaxTree } from "@codemirror/language";
+import { indentLess, indentMore } from "@codemirror/commands";
+import { indentUnit, syntaxTree } from "@codemirror/language";
 import {
 	type ChangeSpec,
 	EditorSelection,
 	type EditorState,
 	type Extension,
 	type Line,
+	Prec,
 } from "@codemirror/state";
 import { type EditorView, keymap } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
+
+/** A line that is only indentation. */
+const INDENT_ONLY = /^[ \t]+$/u;
 
 /** Opens with a line of only `-` or `=` — what CommonMark reads as a setext heading underline. */
 const SETEXT_UNDERLINE = /^[-=]+[ \t]*(?:\n|$)/;
@@ -173,8 +177,254 @@ function enclosingEmphasis(
 	return null;
 }
 
-/** Tab indents / Shift-Tab dedents the selected lines (Obsidian parity). */
-export const indentKeymap: Extension = keymap.of([indentWithTab]);
+/** A list item line: `\t- foo`, `  12. foo`, `1) foo`. */
+const LIST_ITEM = /^(?<indent>[ \t]*)(?:[-*+]|(?<num>\d+)(?<delim>[.)]))(?<gap> +)/u;
+/** Columns per tab stop (CodeMirror's default, and Obsidian's). */
+const TAB_COLS = 4;
+
+interface ListItem {
+	/** Indent width in columns, tabs expanded: what "same level" means. */
+	cols: number;
+	/** Ordered number, or null for a bullet. */
+	num: number | null;
+	delim: string;
+}
+
+function indentCols(ws: string): number {
+	let cols = 0;
+	for (const ch of ws) {
+		cols += ch === "\t" ? TAB_COLS - (cols % TAB_COLS) : 1;
+	}
+	return cols;
+}
+
+function listItem(text: string): ListItem | null {
+	const m = LIST_ITEM.exec(text);
+	if (!m?.groups) {
+		return null;
+	}
+	const { indent = "", num, delim = "" } = m.groups;
+	return { cols: indentCols(indent), num: num === undefined ? null : Number(num), delim };
+}
+
+/** The ordered marker's number on `text`, swapped for `n`. */
+function withNumber(text: string, n: number): string {
+	return text.replace(/^(?<indent>[ \t]*)\d+/u, `$<indent>${n}`);
+}
+
+/** Number of the nearest same-level item above `at` (0 if a parent or the list start comes first). */
+function numberAbove(lines: string[], at: number, cols: number): number {
+	for (let i = at - 1; i >= 0; i--) {
+		const text = lines[i] ?? "";
+		if (text.trim() === "") {
+			continue;
+		}
+		const item = listItem(text);
+		if (!item) {
+			if (/^\S/u.test(text)) {
+				return 0;
+			}
+			continue;
+		}
+		if (item.cols < cols) {
+			return 0;
+		}
+		if (item.cols === cols) {
+			return item.num ?? 0;
+		}
+	}
+	return 0;
+}
+
+/** Re-number the ordered item at `at` to follow its same-level predecessor. */
+function renumberAt(lines: string[], at: number): void {
+	const item = listItem(lines[at] ?? "");
+	if (item && item.num !== null) {
+		lines[at] = withNumber(lines[at] ?? "", numberAbove(lines, at, item.cols) + 1);
+	}
+}
+
+/** Re-number the ordered siblings at `cols` below `from`, until the list level ends. */
+function renumberBelow(lines: string[], from: number, cols: number): void {
+	for (let i = from + 1; i < lines.length; i++) {
+		const text = lines[i] ?? "";
+		if (text.trim() === "") {
+			continue;
+		}
+		const item = listItem(text);
+		if (!item) {
+			if (/^\S/u.test(text)) {
+				return;
+			}
+			continue;
+		}
+		if (item.cols < cols) {
+			return;
+		}
+		if (item.cols === cols) {
+			renumberAt(lines, i);
+		}
+	}
+}
+
+/**
+ * Tab / Shift-Tab on list lines `first..last`, as Obsidian does it (verified
+ * against Obsidian 1.12 defaults): one `\t` in or out per press, never refused.
+ * An ordered number restarts at the new level, and the siblings it left or
+ * joined are renumbered. Returns null unless EVERY line is a list item, so the
+ * caller can fall back to a plain indent.
+ */
+function shiftListLines(
+	lines: string[],
+	first: number,
+	last: number,
+	dir: 1 | -1,
+): string[] | null {
+	const out = [...lines];
+	const levels = new Set<number>();
+	for (let i = first; i <= last; i++) {
+		const item = listItem(out[i] ?? "");
+		if (!item) {
+			return null;
+		}
+		levels.add(item.cols);
+	}
+	for (let i = first; i <= last; i++) {
+		const text = out[i] ?? "";
+		out[i] = dir > 0 ? `\t${text}` : text.replace(/^(?:\t| {1,4})/u, "");
+	}
+	for (let i = first; i <= last; i++) {
+		renumberAt(out, i);
+		levels.add(listItem(out[i] ?? "")?.cols ?? 0);
+	}
+	for (const cols of levels) {
+		renumberBelow(out, last, cols);
+	}
+	return out;
+}
+
+/** The smallest single replacement turning `before` into `after`, so the caret keeps its place. */
+function lineDiff(line: Line, after: string): ChangeSpec | null {
+	const before = line.text;
+	let start = 0;
+	while (start < before.length && start < after.length && before[start] === after[start]) {
+		start++;
+	}
+	let end = 0;
+	while (
+		end < before.length - start &&
+		end < after.length - start &&
+		before.at(-1 - end) === after.at(-1 - end)
+	) {
+		end++;
+	}
+	if (before === after) {
+		return null;
+	}
+	return {
+		from: line.from + start,
+		to: line.from + before.length - end,
+		insert: after.slice(start, after.length - end),
+	};
+}
+
+function shiftList(view: EditorView, dir: 1 | -1): boolean {
+	const { state } = view;
+	// One span from first to last line is wrong for separate cursors (it would shift the
+	// lines between them too); leave those to the plain per-line indent.
+	if (state.selection.ranges.length > 1) {
+		return false;
+	}
+	const sel = selectedLines(state);
+	const [head] = sel;
+	const tail = sel.at(-1);
+	if (!(head && tail)) {
+		return false;
+	}
+	const lines = state.doc.toString().split("\n");
+	const shifted = shiftListLines(lines, head.number - 1, tail.number - 1, dir);
+	if (!shifted) {
+		return false;
+	}
+	const changes: ChangeSpec[] = [];
+	for (let i = 0; i < shifted.length; i++) {
+		const change = lineDiff(state.doc.line(i + 1), shifted[i] ?? "");
+		if (change) {
+			changes.push(change);
+		}
+	}
+	if (changes.length > 0) {
+		view.dispatch({ changes });
+	}
+	return true;
+}
+
+export const indentListItem = (view: EditorView): boolean => shiftList(view, 1);
+export const outdentListItem = (view: EditorView): boolean => shiftList(view, -1);
+
+/** What Tab does: nest a list item, or indent any other line. Also the mobile Indent button. */
+export const indentSelection = (view: EditorView): boolean =>
+	indentListItem(view) || indentMore(view);
+
+/** What Shift-Tab does: un-nest a list item, or outdent any other line. Also the mobile Outdent button. */
+export const outdentSelection = (view: EditorView): boolean =>
+	outdentListItem(view) || indentLess(view);
+
+/**
+ * Enter on a line that is only indentation un-indents it and stops, instead of
+ * adding another indented line (Obsidian: Enter in tab mode continues the indent,
+ * and a second Enter with nothing typed leaves it). List items are the markdown
+ * keymap's job, so this declines inside one.
+ */
+export function exitIndentedLine(view: EditorView): boolean {
+	const { state } = view;
+	const sel = state.selection.main;
+	if (!sel.empty) {
+		return false;
+	}
+	const line = state.doc.lineAt(sel.head);
+	if (sel.head !== line.to || !INDENT_ONLY.test(line.text)) {
+		return false;
+	}
+	// Inside a fenced block an indent-only line is just code: Enter must add a line.
+	for (let n: SyntaxNode | null = syntaxTree(state).resolveInner(line.from, -1); n; n = n.parent) {
+		if (n.name === "FencedCode") {
+			return false;
+		}
+	}
+	// The parser ends a list item at its last line with text, so an indent-only line
+	// below one is outside the node. Ask about the nearest line above with text.
+	let above = line.number - 1;
+	while (above >= 1 && state.doc.line(above).text.trim() === "") {
+		above--;
+	}
+	if (above >= 1) {
+		const pos = state.doc.line(above).to;
+		for (let n: SyntaxNode | null = syntaxTree(state).resolveInner(pos, -1); n; n = n.parent) {
+			if (n.name === "ListItem") {
+				return false;
+			}
+		}
+	}
+	view.dispatch({
+		changes: { from: line.from, to: line.to, insert: "" },
+		selection: { anchor: line.from },
+		userEvent: "delete.dedent",
+	});
+	return true;
+}
+
+/**
+ * Tab / Shift-Tab, Obsidian parity: list items shift by one tab (see
+ * shiftListLines); every other line gets a plain tab indent. `indentUnit` is a
+ * tab so the plain path matches.
+ */
+export const indentKeymap: Extension = [
+	indentUnit.of("\t"),
+	keymap.of([{ key: "Tab", run: indentSelection, shift: outdentSelection }]),
+	// Above the markdown keymap's own Enter, which would otherwise add a line.
+	Prec.highest(keymap.of([{ key: "Enter", run: exitIndentedLine }])),
+];
 
 /**
  * Wrap each selection range with `before`/`after` markers (e.g. `**` for bold),

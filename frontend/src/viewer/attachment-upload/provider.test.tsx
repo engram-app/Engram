@@ -2,9 +2,14 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AttachmentUploadProvider, useAttachmentUpload } from "./provider";
 
+const mutateAsync = vi.fn();
 vi.mock("@/api/queries", () => ({
 	useFolders: () => ({ data: [{ name: "docs" }] }),
+	useAttachments: () => ({ data: [{ path: "docs/a.png" }] }),
+	useUploadAttachment: () => ({ mutateAsync }),
 }));
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("./file-to-base64", () => ({ fileToBase64: () => Promise.resolve("AAAA") }));
 // Render a sentinel instead of the real dialog so this test stays unit-scoped.
 vi.mock("./upload-dialog", () => ({
 	AttachmentUploadDialog: ({ initialFiles }: { initialFiles: File[] }) => (
@@ -21,7 +26,7 @@ function TriggerButton() {
 }
 
 function fileDragEvent(type: string, withFiles: boolean) {
-	const ev = new Event(type, { bubbles: true }) as unknown as DragEvent;
+	const ev = new Event(type, { bubbles: true, cancelable: true }) as unknown as DragEvent;
 	Object.defineProperty(ev, "dataTransfer", {
 		value: {
 			types: withFiles ? ["Files"] : ["text/plain"],
@@ -45,34 +50,76 @@ describe("AttachmentUploadProvider", () => {
 		fireEvent.click(screen.getByText("open"));
 		await waitFor(() => expect(screen.getByTestId("dialog")).toHaveTextContent("fromButton.txt"));
 	});
+});
 
-	it("shows the drop overlay only for a Files drag, not an internal drag", () => {
+describe("AttachmentUploadProvider drops", () => {
+	it("never opens the dialog for a dropped file; it blocks the browser opening it", () => {
 		render(
 			<AttachmentUploadProvider>
-				<span>child</span>
+				<span data-testid="outside">elsewhere</span>
 			</AttachmentUploadProvider>,
 		);
-		// internal (no Files) drag — overlay stays hidden. act() flushes the
-		// window-listener's state update (React 19 batches it, so a bare dispatch +
-		// sync assert races the render).
+		const ev = fileDragEvent("drop", true);
 		act(() => {
-			window.dispatchEvent(fileDragEvent("dragenter", false));
+			screen.getByTestId("outside").dispatchEvent(ev);
 		});
-		expect(screen.queryByText(/drop files to upload/iu)).toBeNull();
-		// external Files drag — overlay shows
-		act(() => {
-			window.dispatchEvent(fileDragEvent("dragenter", true));
-		});
-		expect(screen.getByText(/drop files to upload/iu)).toBeInTheDocument();
+		expect(screen.queryByTestId("dialog")).toBeNull();
+		expect(ev.defaultPrevented).toBe(true);
 	});
 
-	it("opens the dialog with dropped files", async () => {
+	it("shows 'not allowed' for a file dragged over a non-target, and leaves targets alone", () => {
 		render(
 			<AttachmentUploadProvider>
-				<span>child</span>
+				<span data-testid="outside">elsewhere</span>
+				<div data-file-drop>
+					<span data-testid="target">here</span>
+				</div>
 			</AttachmentUploadProvider>,
 		);
-		window.dispatchEvent(fileDragEvent("drop", true));
-		await waitFor(() => expect(screen.getByTestId("dialog")).toHaveTextContent("dropped.txt"));
+		const out = fileDragEvent("dragover", true);
+		act(() => {
+			screen.getByTestId("outside").dispatchEvent(out);
+		});
+		expect(out.defaultPrevented).toBe(true);
+		const over = fileDragEvent("dragover", true);
+		act(() => {
+			screen.getByTestId("target").dispatchEvent(over);
+		});
+		expect(over.defaultPrevented).toBe(false);
+	});
+
+	it("ignores internal (non-file) drags", () => {
+		render(
+			<AttachmentUploadProvider>
+				<span data-testid="outside">elsewhere</span>
+			</AttachmentUploadProvider>,
+		);
+		const ev = fileDragEvent("dragover", false);
+		act(() => {
+			screen.getByTestId("outside").dispatchEvent(ev);
+		});
+		expect(ev.defaultPrevented).toBe(false);
+	});
+
+	it("uploadFiles uploads straight to the folder with no dialog", async () => {
+		mutateAsync.mockResolvedValue({});
+		function Drop() {
+			const { uploadFiles } = useAttachmentUpload();
+			return (
+				<button type="button" onClick={() => uploadFiles([new File(["x"], "a.png")], "docs")}>
+					drop
+				</button>
+			);
+		}
+		render(
+			<AttachmentUploadProvider>
+				<Drop />
+			</AttachmentUploadProvider>,
+		);
+		fireEvent.click(screen.getByText("drop"));
+		await waitFor(() =>
+			expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ path: "docs/a 1.png" })),
+		);
+		expect(screen.queryByTestId("dialog")).toBeNull();
 	});
 });

@@ -1,7 +1,12 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { Download } from "lucide-react";
+import { lazy, type ReactNode, Suspense, useEffect, useState } from "react";
 import { useParams } from "react-router";
+import { Button } from "@/components/ui/button";
+import { encodePathSegments } from "@/lib/path";
 import { ApiError, api, isNotFound } from "../api/client";
 import { useAttachments } from "../api/queries";
+import { DocumentHeader } from "./document-header";
+import { DocumentSurface } from "./document-surface";
 import LoadingPane from "./loading-pane";
 import PreviewColumn from "./preview-column";
 
@@ -41,9 +46,8 @@ export default function AttachmentPage() {
 		}
 		let revoke: string | null = null;
 		let cancelled = false;
-		const encoded = path.split("/").map(encodeURIComponent).join("/");
 		api
-			.getBlob(`/attachments/${encoded}?raw=1`)
+			.getBlob(`/attachments/${encodePathSegments(path)}?raw=1`)
 			.then((blob) => {
 				if (cancelled) {
 					return;
@@ -79,30 +83,29 @@ export default function AttachmentPage() {
 	// List loaded but no attachment with this id (deleted, or a stale link).
 	if (!att) {
 		return (
-			<section className="p-6">
-				<p className="text-destructive text-sm">Attachment not found.</p>
-			</section>
+			<DocumentSurface>
+				<p className="p-6 text-destructive text-sm">Attachment not found.</p>
+			</DocumentSurface>
 		);
 	}
+
+	let body: ReactNode;
 	if (error) {
-		return (
-			<section className="p-6">
-				<p className="text-destructive text-sm">
-					{error === "missing"
-						? `${filename} no longer exists.`
-						: `Couldn't load ${filename} — it may be temporarily unavailable.`}
-				</p>
-			</section>
+		body = (
+			<p className="p-6 text-destructive text-sm">
+				{error === "missing"
+					? `${filename} no longer exists.`
+					: `Couldn't load ${filename} — it may be temporarily unavailable.`}
+			</p>
 		);
-	}
-	if (!url) {
-		return <LoadingPane />;
-	}
-	if (mime.startsWith("image/")) {
-		return (
+	} else if (!url) {
+		body = <LoadingPane />;
+	} else if (mime.startsWith("image/")) {
+		body = (
 			<PreviewColumn>
 				<div className="flex w-full justify-center p-4">
 					<img
+						draggable={false}
 						src={url}
 						alt={filename}
 						className="max-w-full rounded shadow-md"
@@ -111,24 +114,50 @@ export default function AttachmentPage() {
 				</div>
 			</PreviewColumn>
 		);
-	}
-	if (mime === "application/pdf") {
-		return (
+	} else if (mime === "application/pdf") {
+		body = (
 			<Suspense fallback={<LoadingPane />}>
 				<PdfView url={url} filename={filename} />
 			</Suspense>
 		);
+	} else {
+		body = (
+			<p className="p-6 text-muted-foreground text-sm">
+				Preview not supported for {filename}. Use Download above to save it.
+			</p>
+		);
 	}
+
+	// Same surface and header as a note, so an attachment reads as a page in the
+	// vault rather than replacing the document view.
 	return (
-		<section className="p-6">
-			<p className="mb-3 text-muted-foreground text-sm">Preview not supported for {filename}.</p>
-			<a
-				href={url}
-				download={filename}
-				className="inline-flex items-center rounded bg-primary px-3 py-2 text-primary-foreground text-sm"
-			>
-				Download {filename}
-			</a>
-		</section>
+		<DocumentSurface>
+			<DocumentHeader
+				folder={path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : undefined}
+				title={path}
+				name={<span className="min-w-0 truncate font-medium">{filename}</span>}
+				// Always rendered, disabled until the bytes land: an icon button is taller
+				// than the bare text row, so mounting it late made the header jump.
+				actions={
+					url ? (
+						<Button variant="ghost" size="icon" asChild>
+							<a
+								href={url}
+								download={filename}
+								aria-label={`Download ${filename}`}
+								title="Download"
+							>
+								<Download className="size-4" />
+							</a>
+						</Button>
+					) : (
+						<Button variant="ghost" size="icon" disabled aria-label="Download" title="Download">
+							<Download className="size-4" />
+						</Button>
+					)
+				}
+			/>
+			{body}
+		</DocumentSurface>
 	);
 }

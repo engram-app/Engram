@@ -2,7 +2,10 @@ import { useRef, useState } from "react";
 import { ApiError, LimitExceededError } from "@/api/client";
 import { useUploadAttachment } from "@/api/queries";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { fileToBase64 } from "./file-to-base64";
+import { FolderPicker } from "./folder-picker";
 
 type RowStatus = "pending" | "uploading" | "done" | "error";
 interface Row {
@@ -66,8 +69,6 @@ function messageFor(err: unknown): string {
 const patch = (rows: Row[], i: number, next: Partial<Row>): Row[] =>
 	rows.map((row, idx) => (idx === i ? { ...row, ...next } : row));
 
-const optionId = (i: number): string => `upload-folder-opt-${i}`;
-
 export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, onClose }: Props) {
 	const [rows, setRows] = useState<Row[]>(() =>
 		initialFiles.map((file): Row => ({ file, status: "pending" })),
@@ -76,30 +77,6 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 	const [busy, setBusy] = useState(false);
 	const addRef = useRef<HTMLInputElement>(null);
 	const upload = useUploadAttachment();
-
-	// Root first, then real folders.
-	const candidates = ["", ...folders.map((f) => f.name)];
-	// Index of the selected option — drives aria-activedescendant + arrow-key nav.
-	const activeIndex = Math.max(0, candidates.indexOf(folder));
-
-	// Listbox keyboard support (selection follows focus): arrows + Home/End move
-	// the selection so the picker is operable without a mouse.
-	function onFolderKeyDown(e: React.KeyboardEvent) {
-		let next = activeIndex;
-		if (e.key === "ArrowDown") {
-			next = Math.min(activeIndex + 1, candidates.length - 1);
-		} else if (e.key === "ArrowUp") {
-			next = Math.max(activeIndex - 1, 0);
-		} else if (e.key === "Home") {
-			next = 0;
-		} else if (e.key === "End") {
-			next = candidates.length - 1;
-		} else {
-			return;
-		}
-		e.preventDefault();
-		setFolder(candidates[next] ?? "");
-	}
 
 	async function commit() {
 		setBusy(true);
@@ -141,94 +118,80 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 	const allDone = rows.length > 0 && rows.every((r) => r.status === "done");
 
 	return (
-		<dialog
-			open
-			aria-label="Upload attachments"
-			className="fixed inset-0 z-50 m-auto h-[28rem] w-[32rem] rounded-lg bg-card p-0 shadow-xl"
-		>
-			<header className="flex items-center justify-between border-border border-b px-4 py-3">
-				<h2 className="font-semibold text-sm">Upload attachments</h2>
-				<Button variant="ghost" size="sm" onClick={onClose}>
-					Close
-				</Button>
-			</header>
-
-			{candidates.length > 1 && (
-				<section className="px-4 py-3">
-					<span className="mb-1 block font-medium text-muted-foreground text-xs">
-						Destination folder
-					</span>
-					<div
-						role="listbox"
-						aria-label="Destination folder"
-						tabIndex={0}
-						aria-activedescendant={optionId(activeIndex)}
-						onKeyDown={onFolderKeyDown}
-						className="max-h-24 overflow-y-auto rounded border border-border focus:outline-none focus:ring-2 focus:ring-ring"
-					>
-						{candidates.map((name, i) => (
-							// biome-ignore lint/a11y/useFocusableInteractive lint/a11y/useKeyWithClickEvents: option in an aria-activedescendant listbox; options are intentionally not individually focusable and keyboard activation is handled on the listbox container above
-							<div
-								key={name || "__root__"}
-								id={optionId(i)}
-								role="option"
-								aria-selected={name === folder}
-								onClick={() => setFolder(name)}
-								className={`cursor-pointer px-3 py-1 text-sm ${name === folder ? "bg-accent text-accent-foreground" : ""}`}
-							>
-								{name === "" ? "/ (root)" : `${name}`}
-							</div>
-						))}
-					</div>
-				</section>
-			)}
-
-			<ul className="max-h-40 overflow-y-auto px-4">
-				{rows.map((row) => (
-					<li
-						key={`${row.file.name}-${row.file.size}-${row.file.lastModified}`}
-						className="flex items-center justify-between border-border/50 border-b py-1.5 text-sm"
-					>
-						<span className="truncate">{row.file.name}</span>
-						<span className="ml-2 shrink-0 text-muted-foreground text-xs">
-							{row.status === "error" ? (
-								<span className="text-destructive">{row.error}</span>
-							) : row.status === "uploading" ? (
-								"Uploading…"
-							) : row.status === "done" ? (
-								"Done"
-							) : (
-								`${humanSize(row.file.size)} · ${row.file.type || "unknown"}`
-							)}
-						</span>
-					</li>
-				))}
-			</ul>
-
-			<footer className="flex items-center justify-end gap-2 border-border border-t px-4 py-3">
-				<input
-					ref={addRef}
-					type="file"
-					multiple
-					hidden
-					onChange={(e) => {
-						addFiles(e.target.files);
-						e.target.value = "";
-					}}
-				/>
-				<Button variant="ghost" size="sm" onClick={() => addRef.current?.click()} disabled={busy}>
-					Add files
-				</Button>
-				{allDone ? (
-					<Button size="sm" onClick={onClose}>
-						Done
+		<Dialog open onOpenChange={(open) => !open && onClose()}>
+			<DialogContent
+				aria-describedby={undefined}
+				showCloseButton={false}
+				className="flex h-[min(36rem,85vh)] max-w-xl flex-col gap-0 p-0 sm:max-w-xl"
+			>
+				<header className="flex items-center justify-between border-border border-b px-4 py-3">
+					<DialogTitle className="text-sm">Upload attachments</DialogTitle>
+					<Button variant="ghost" size="sm" onClick={onClose}>
+						Close
 					</Button>
-				) : (
-					<Button size="sm" onClick={commit} disabled={busy || rows.length === 0}>
-						Upload
-					</Button>
+				</header>
+
+				{folders.length > 0 && (
+					<section className="flex min-h-0 flex-1 flex-col px-4 py-3">
+						<h3 className="mb-2 font-semibold text-base text-foreground">Destination folder</h3>
+						<FolderPicker
+							folders={folders.map((f) => f.name)}
+							value={folder}
+							onChange={setFolder}
+							className="flex-1"
+						/>
+					</section>
 				)}
-			</footer>
-		</dialog>
+
+				<ScrollArea className="shrink-0 border-border border-t" viewportClassName="max-h-40">
+					<ul className="px-4">
+						{rows.map((row) => (
+							<li
+								key={`${row.file.name}-${row.file.size}-${row.file.lastModified}`}
+								className="flex items-center justify-between border-border/50 border-b py-1.5 text-sm last:border-b-0"
+							>
+								<span className="truncate">{row.file.name}</span>
+								<span className="ml-2 shrink-0 text-muted-foreground text-xs">
+									{row.status === "error" ? (
+										<span className="text-destructive">{row.error}</span>
+									) : row.status === "uploading" ? (
+										"Uploading…"
+									) : row.status === "done" ? (
+										"Done"
+									) : (
+										`${humanSize(row.file.size)} · ${row.file.type || "unknown"}`
+									)}
+								</span>
+							</li>
+						))}
+					</ul>
+				</ScrollArea>
+
+				<footer className="flex items-center justify-end gap-2 border-border border-t px-4 py-3">
+					<input
+						ref={addRef}
+						type="file"
+						multiple
+						hidden
+						onChange={(e) => {
+							addFiles(e.target.files);
+							e.target.value = "";
+						}}
+					/>
+					<Button variant="ghost" size="sm" onClick={() => addRef.current?.click()} disabled={busy}>
+						Upload more
+					</Button>
+					{allDone ? (
+						<Button size="sm" onClick={onClose}>
+							Done
+						</Button>
+					) : (
+						<Button size="sm" onClick={commit} disabled={busy || rows.length === 0}>
+							Upload
+						</Button>
+					)}
+				</footer>
+			</DialogContent>
+		</Dialog>
 	);
 }

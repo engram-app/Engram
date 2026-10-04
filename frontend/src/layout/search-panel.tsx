@@ -1,6 +1,7 @@
-import { Search, SlidersHorizontal, X } from "lucide-react";
+import { SlidersHorizontal, X } from "lucide-react";
 import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router";
+import { SearchField } from "@/components/search-field";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,6 +29,7 @@ import { useActiveVaultSlug } from "../api/vault-slug";
 import { unsearchableNotesNotice } from "../billing/plan-cards";
 import { noteHref } from "../routes";
 import { settingsTo } from "../settings/settings-hash";
+import CollapseSidebarButton from "./collapse-sidebar-button";
 import { useRailView } from "./rail-view-context";
 import { pushRecent, readRecent } from "./recent-searches";
 
@@ -288,40 +290,39 @@ function SearchPanel({
 	return (
 		<div className="flex h-full flex-col">
 			{hideHeader ? null : (
-				<header className="flex shrink-0 items-center justify-between border-border border-b px-3 py-2">
+				<header className="flex shrink-0 items-center justify-between border-border border-b py-1 pr-1 pl-3">
 					<h2 className="font-semibold text-muted-foreground text-xs uppercase tracking-wide">
 						Search
 					</h2>
-					<Button
-						variant="ghost"
-						size="icon-sm"
-						aria-label="Close search"
-						title="Return to files"
-						onClick={close}
-					>
-						<X className="size-4" />
-					</Button>
+					<div className="flex items-center">
+						<Button
+							variant="ghost"
+							size="icon-sm"
+							aria-label="Close search"
+							title="Return to files"
+							onClick={close}
+						>
+							<X className="size-4" />
+						</Button>
+						<CollapseSidebarButton />
+					</div>
 				</header>
 			)}
 			<div className="border-border border-b p-2">
 				<div className="flex items-center gap-1.5">
-					<label className="relative block flex-1">
-						<Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-						<input
-							ref={inputRef}
-							type="search"
-							placeholder="Search your notes…"
-							value={input}
-							onChange={(e) => {
-								setInput(e.target.value);
-								// Drop the highlight: on the next query that index points at a
-								// row that is no longer on screen, and Enter would open it.
-								setActiveIndex(-1);
-							}}
-							onKeyDown={onInputKeyDown}
-							className="w-full rounded-md border border-border bg-background py-1.5 pr-2 pl-7 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-						/>
-					</label>
+					<SearchField
+						className="flex-1"
+						ref={inputRef}
+						placeholder="Search your notes…"
+						value={input}
+						onChange={(e) => {
+							setInput(e.target.value);
+							// Drop the highlight: on the next query that index points at a
+							// row that is no longer on screen, and Enter would open it.
+							setActiveIndex(-1);
+						}}
+						onKeyDown={onInputKeyDown}
+					/>
 					<button
 						type="button"
 						// Icon-only, so the count has to reach a screen reader through the

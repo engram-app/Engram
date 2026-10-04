@@ -21,13 +21,21 @@ function railButtonClass(active: boolean): string {
 }
 
 function ViewButton({ id, label, Icon }: { id: RailView; label: string; Icon: typeof Search }) {
-	const { view, setView } = useRailView();
+	const { view, setView, sidebarOpen, setSidebarOpen } = useRailView();
 	const location = useLocation();
 	const navigate = useNavigate();
 	const onSettings = isSettingsHash(location.hash);
-	const active = view === id && !onSettings;
+	// A collapsed sidebar shows no view, so no button reads as active.
+	const active = view === id && sidebarOpen && !onSettings;
 	const onClick = () => {
+		// The active view's button is also its close button, like the right-hand
+		// tool buttons: clicking what is showing hides it.
+		if (active) {
+			setSidebarOpen(false);
+			return;
+		}
 		setView(id);
+		setSidebarOpen(true);
 		if (onSettings) {
 			// Strip the settings hash, stay on the page underneath.
 			navigate({ pathname: location.pathname, search: location.search, hash: "" });

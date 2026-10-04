@@ -60,3 +60,47 @@ describe("RailViewContext", () => {
 		expect(screen.getByTestId("view").textContent).toBe("files");
 	});
 });
+
+function SidebarProbe() {
+	const { sidebarOpen, setSidebarOpen } = useRailView();
+	return (
+		<>
+			<span data-testid="open">{String(sidebarOpen)}</span>
+			<button type="button" onClick={() => setSidebarOpen(!sidebarOpen)}>
+				flip
+			</button>
+		</>
+	);
+}
+
+describe("RailViewContext — left sidebar open state", () => {
+	beforeEach(() => window.localStorage.clear());
+
+	const renderProbe = () =>
+		render(
+			<RailViewProvider>
+				<SidebarProbe />
+			</RailViewProvider>,
+		);
+
+	it("starts open", () => {
+		renderProbe();
+		expect(screen.getByTestId("open").textContent).toBe("true");
+	});
+
+	it("persists a collapse and restores it on the next mount", () => {
+		const { unmount } = renderProbe();
+		act(() => screen.getByText("flip").click());
+		expect(screen.getByTestId("open").textContent).toBe("false");
+		expect(window.localStorage.getItem("engram:sidebar-open")).toBe("false");
+		unmount();
+		renderProbe();
+		expect(screen.getByTestId("open").textContent).toBe("false");
+	});
+
+	it("ignores malformed stored values and stays open", () => {
+		window.localStorage.setItem("engram:sidebar-open", "maybe");
+		renderProbe();
+		expect(screen.getByTestId("open").textContent).toBe("true");
+	});
+});

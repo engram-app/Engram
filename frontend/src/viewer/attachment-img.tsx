@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { encodePathSegments } from "@/lib/path";
 import { ApiError, api, isNotFound } from "../api/client";
 
 // 'missing' only for a real 404; a transient 5xx/network failure must NOT claim
@@ -12,9 +13,8 @@ export default function AttachmentImg({ path, alt }: { path: string; alt?: strin
 	useEffect(() => {
 		let revoke: string | null = null;
 		let cancelled = false;
-		const encoded = path.split("/").map(encodeURIComponent).join("/");
 		api
-			.getBlob(`/attachments/${encoded}?raw=1`)
+			.getBlob(`/attachments/${encodePathSegments(path)}?raw=1`)
 			.then((blob) => {
 				if (cancelled) {
 					return;

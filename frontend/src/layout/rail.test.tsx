@@ -239,3 +239,57 @@ describe("Rail", () => {
 		expect(screen.getByTestId("pathname").textContent).toBe("/");
 	});
 });
+
+// The active view button doubles as the left sidebar's open/close toggle: the
+// same gesture the right-hand tool buttons already offer.
+describe("Rail — collapsing the left sidebar", () => {
+	function OpenProbe() {
+		const { view, sidebarOpen } = useRailView();
+		return <output data-testid="state">{`${view}:${sidebarOpen ? "open" : "closed"}`}</output>;
+	}
+	const state = () => screen.getByTestId("state").textContent;
+	const renderRail = (initialEntries?: string[]) =>
+		render(
+			<Wrap initialEntries={initialEntries}>
+				<Rail />
+				<OpenProbe />
+				<LocationProbe />
+			</Wrap>,
+		);
+
+	it("clicking the active view collapses the sidebar, clicking it again reopens it", () => {
+		renderRail();
+		expect(state()).toBe("files:open");
+		fireEvent.click(screen.getByRole("button", { name: "Files" }));
+		expect(state()).toBe("files:closed");
+		fireEvent.click(screen.getByRole("button", { name: "Files" }));
+		expect(state()).toBe("files:open");
+	});
+
+	it("a collapsed sidebar shows no active view", () => {
+		renderRail();
+		fireEvent.click(screen.getByRole("button", { name: "Files" }));
+		expect(screen.getByRole("button", { name: "Files" })).not.toHaveAttribute("aria-current");
+	});
+
+	it("clicking the other view switches to it and keeps the sidebar open", () => {
+		renderRail();
+		fireEvent.click(screen.getByRole("button", { name: "Search" }));
+		expect(state()).toBe("search:open");
+	});
+
+	it("clicking any view while collapsed opens the sidebar on that view", () => {
+		renderRail();
+		fireEvent.click(screen.getByRole("button", { name: "Files" }));
+		expect(state()).toBe("files:closed");
+		fireEvent.click(screen.getByRole("button", { name: "Search" }));
+		expect(state()).toBe("search:open");
+	});
+
+	it("leaving settings by clicking Files opens the sidebar instead of collapsing it", () => {
+		renderRail(["/v/health#settings/account"]);
+		fireEvent.click(screen.getByRole("button", { name: "Files" }));
+		expect(state()).toBe("files:open");
+		expect(screen.getByTestId("loc").textContent).not.toContain("settings");
+	});
+});

@@ -1,10 +1,13 @@
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { EditorState } from "@codemirror/state";
+import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, test } from "vitest";
 import {
+	exitIndentedLine,
+	indentListItem,
 	insertLink,
 	insertSnippet,
+	outdentListItem,
 	setHeading,
 	toggleCheckbox,
 	toggleCode,
@@ -567,5 +570,148 @@ describe("format-commands", () => {
 			toggleCheckbox(view);
 			expect(view.state.doc.toString()).toBe("");
 		});
+	});
+});
+
+// Tab / Shift-Tab on list items copy Obsidian, observed in real Obsidian 1.12
+// (default settings: indent with tabs). Each Tab inserts exactly one `\t` and
+// never refuses; ordered numbers restart at the new level on Tab and renumber
+// (including the siblings below) on either key.
+describe("list Tab / Shift-Tab (Obsidian parity)", () => {
+	const caretAtEnd = (doc: string) => mount(doc, doc.length, doc.length);
+	const caretOn = (doc: string, needle: string) => {
+		const at = doc.indexOf(needle) + needle.length;
+		return mount(doc, at, at);
+	};
+
+	test("Tab inserts one tab and restarts an ordered item at 1", () => {
+		caretAtEnd("1. asdfsf\n2. second");
+		expect(indentListItem(view)).toBe(true);
+		expect(view.state.doc.toString()).toBe("1. asdfsf\n\t1. second");
+	});
+
+	test("Tab never refuses: every press adds another tab", () => {
+		caretAtEnd("1. asdfsf\n2. second");
+		for (let n = 1; n <= 5; n++) {
+			indentListItem(view);
+			expect(view.state.doc.toString()).toBe(`1. asdfsf\n${"\t".repeat(n)}1. second`);
+		}
+	});
+
+	test("Shift-Tab removes one tab per press and renumbers at the parent level", () => {
+		caretAtEnd("1. asdfsf\n\t\t1. second");
+		outdentListItem(view);
+		expect(view.state.doc.toString()).toBe("1. asdfsf\n\t1. second");
+		outdentListItem(view);
+		expect(view.state.doc.toString()).toBe("1. asdfsf\n2. second");
+	});
+
+	test("bullets just gain and lose a tab", () => {
+		caretAtEnd("- a\n- b");
+		indentListItem(view);
+		expect(view.state.doc.toString()).toBe("- a\n\t- b");
+		outdentListItem(view);
+		expect(view.state.doc.toString()).toBe("- a\n- b");
+	});
+
+	test("nesting an item renumbers the siblings below it", () => {
+		caretOn("1. a\n2. b\n3. c", "2. b");
+		indentListItem(view);
+		expect(view.state.doc.toString()).toBe("1. a\n\t1. b\n2. c");
+	});
+
+	test("un-nesting renumbers the item and the siblings below it", () => {
+		caretOn("1. a\n\t1. b\n2. c", "1. b");
+		outdentListItem(view);
+		expect(view.state.doc.toString()).toBe("1. a\n2. b\n3. c");
+	});
+
+	test("Tab continues numbering when the new level already has siblings", () => {
+		caretAtEnd("1. a\n\t1. b\n2. c");
+		indentListItem(view);
+		expect(view.state.doc.toString()).toBe("1. a\n\t1. b\n\t2. c");
+	});
+
+	test("Tab keeps the caret in the text", () => {
+		caretAtEnd("1. a\n2. b");
+		indentListItem(view);
+		expect(view.state.selection.main.head).toBe(view.state.doc.length);
+	});
+
+	test("Tab / Shift-Tab on a multi-line selection shifts every selected item", () => {
+		const doc = "- a\n- b\n- c";
+		mount(doc, 4, doc.length);
+		indentListItem(view);
+		expect(view.state.doc.toString()).toBe("- a\n\t- b\n\t- c");
+		outdentListItem(view);
+		expect(view.state.doc.toString()).toBe("- a\n- b\n- c");
+	});
+
+	test("Shift-Tab on a top-level item changes nothing but is still handled", () => {
+		caretAtEnd("1. a\n2. b");
+		expect(outdentListItem(view)).toBe(true);
+		expect(view.state.doc.toString()).toBe("1. a\n2. b");
+	});
+
+	test("Shift-Tab also strips a legacy space indent (up to 4)", () => {
+		caretAtEnd("1. a\n   1. b");
+		outdentListItem(view);
+		expect(view.state.doc.toString()).toBe("1. a\n2. b");
+	});
+
+	test("a non-list line is not handled (falls through to plain indent)", () => {
+		caretAtEnd("just text");
+		expect(indentListItem(view)).toBe(false);
+		expect(view.state.doc.toString()).toBe("just text");
+	});
+});
+
+describe("exitIndentedLine (Enter in tab mode)", () => {
+	test("Enter on an indent-only line removes the indent and adds no line", () => {
+		const doc = "para\n\n\tcode\n\t";
+		mount(doc, doc.length, doc.length);
+		expect(exitIndentedLine(view)).toBe(true);
+		expect(view.state.doc.toString()).toBe("para\n\n\tcode\n");
+		expect(view.state.selection.main.head).toBe(view.state.doc.length);
+	});
+
+	test("does nothing on a line with text, a non-empty selection, or a caret mid-indent", () => {
+		mount("\tcode", 5, 5);
+		expect(exitIndentedLine(view)).toBe(false);
+		mount("\t\t", 0, 2);
+		expect(exitIndentedLine(view)).toBe(false);
+		mount("\t\t", 1, 1);
+		expect(exitIndentedLine(view)).toBe(false);
+	});
+
+	test("inside a fenced code block an indent-only line is code: Enter is left to add a line", () => {
+		const doc = "```py\n\tx = 1\n\t";
+		mount(doc, doc.length, doc.length);
+		expect(exitIndentedLine(view)).toBe(false);
+	});
+
+	test("leaves a list item's own Enter to the markdown keymap", () => {
+		const doc = "- item\n\t";
+		mount(doc, doc.length, doc.length);
+		expect(exitIndentedLine(view)).toBe(false);
+	});
+});
+
+describe("indentListItem with several cursors", () => {
+	test("declines, so lines between the cursors are not shifted too", () => {
+		const doc = "- a\n- b\n- c";
+		view = new EditorView({
+			state: EditorState.create({
+				doc,
+				selection: EditorSelection.create([EditorSelection.cursor(1), EditorSelection.cursor(9)]),
+				extensions: [
+					markdown({ base: markdownLanguage }),
+					EditorState.allowMultipleSelections.of(true),
+				],
+			}),
+			parent: document.body,
+		});
+		expect(indentListItem(view)).toBe(false);
+		expect(view.state.doc.toString()).toBe(doc);
 	});
 });

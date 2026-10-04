@@ -190,6 +190,22 @@ describe("KeyboardBar", () => {
 		expect(view.state.doc.toString().startsWith("\t\t")).toBe(false);
 	});
 
+	// Phones have no Tab key, so these buttons are the only way to nest a list
+	// item there: they must do what Tab does (one tab, number restarts).
+	it("Indent nests a list item like Tab does, restarting the number", () => {
+		const doc = "1. a\n2. b";
+		mount(doc, doc.length);
+		fireEvent.click(screen.getByRole("button", { name: "Indent" }));
+		expect(view.state.doc.toString()).toBe("1. a\n\t1. b");
+	});
+
+	it("Outdent un-nests a list item and renumbers it", () => {
+		const doc = "1. a\n\t1. b";
+		mount(doc, doc.length);
+		fireEvent.click(screen.getByRole("button", { name: "Outdent" }));
+		expect(view.state.doc.toString()).toBe("1. a\n2. b");
+	});
+
 	it("toggles a checkbox onto the caret line", () => {
 		mount("buy milk");
 		fireEvent.click(screen.getByRole("button", { name: "Toggle checkbox" }));

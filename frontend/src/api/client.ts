@@ -118,6 +118,12 @@ export function isNotFound(err: unknown): boolean {
 	return err instanceof ApiError && err.status === 404;
 }
 
+/** The request named an id the server can't parse (400 "invalid id"), as opposed to a
+ *  well-formed id with no resource behind it (404) or some other bad request. */
+export function isInvalidId(err: unknown): boolean {
+	return err instanceof ApiError && err.status === 400 && err.message === "invalid id";
+}
+
 export class LimitExceededError extends Error {
 	readonly name = "LimitExceededError";
 	constructor(

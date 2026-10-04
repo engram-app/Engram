@@ -99,3 +99,25 @@ it('shows "not found" when no attachment matches the id', () => {
 	renderAt("missing-id");
 	expect(screen.getByText(/not found/iu)).toBeInTheDocument();
 });
+
+// An attachment is a page in the vault like a note: same surface and header,
+// not a bare preview that replaces the document view.
+it("shows the document header with folder and filename while the bytes load", () => {
+	mockAttachments = [att({ id: "p-1", path: "Medical/lab.pdf" })];
+	vi.spyOn(api, "getBlob").mockReturnValue(new Promise(() => undefined));
+	renderAt("p-1");
+	expect(screen.getByTestId("document-surface")).toBeInTheDocument();
+	expect(screen.getByText("Medical/")).toBeInTheDocument();
+	expect(screen.getByText("lab.pdf")).toBeInTheDocument();
+	// Held in place (disabled) so the header does not change height when the bytes land.
+	expect(screen.queryByRole("link", { name: /download/iu })).not.toBeInTheDocument();
+	expect(screen.getByRole("button", { name: "Download" })).toBeDisabled();
+});
+
+it("offers a download link in the header once the bytes load", async () => {
+	mockAttachments = [att({ id: "i-1", path: "a.png", mime_type: "image/png" })];
+	vi.spyOn(api, "getBlob").mockResolvedValueOnce(new Blob(["x"], { type: "image/png" }));
+	renderAt("i-1");
+	const link = await screen.findByRole("link", { name: "Download a.png" });
+	expect(link).toHaveAttribute("download", "a.png");
+});

@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { FolderPicker } from "../attachment-upload/folder-picker";
 import { isValidMoveTarget, type MoveNode } from "./move-path";
 
 interface Props {
@@ -16,75 +18,39 @@ function buildMessage(nodes: MoveNode[]): string {
 }
 
 export function MoveDialog({ folders, nodes, onPick, onCancel }: Props) {
-	const [query, setQuery] = useState("");
-	const [active, setActive] = useState(0);
-	const placeholder = buildMessage(nodes);
+	const title = buildMessage(nodes);
 
-	const candidates = useMemo(() => {
-		// The vault root ("") is always a destination, but it isn't a folder row,
-		// so callers don't list it. Add it here once rather than in every caller.
-		// A folder is eligible only if it's a valid move target for EVERY node.
-		const eligible = ["", ...folders.map((f) => f.name).filter((name) => name !== "")].filter(
-			(name) => nodes.every((node) => isValidMoveTarget(node, name)),
-		);
-		if (!query) {
-			return eligible;
-		}
-		const q = query.toLowerCase();
-		return eligible.filter((name) => (name || "root").toLowerCase().includes(q));
-	}, [folders, nodes, query]);
+	// The vault root ("") is always a candidate, but it isn't a folder row, so
+	// callers don't list it; add it here once rather than in every caller. A folder
+	// is eligible only if it is a valid move target for EVERY node (which can rule
+	// the root out too, e.g. a note already at the top level).
+	const eligible = useMemo(
+		() =>
+			["", ...folders.map((f) => f.name).filter((name) => name !== "")].filter((name) =>
+				nodes.every((node) => isValidMoveTarget(node, name)),
+			),
+		[folders, nodes],
+	);
+	const [active, setActive] = useState(eligible[0] ?? "");
 
 	return (
-		<dialog
-			open
-			className="fixed inset-0 z-50 m-auto size-96 rounded-lg border border-border bg-popover text-popover-foreground shadow-xl"
-		>
-			{nodes.length > 1 && (
-				<p className="border-border border-b px-3 py-2 font-medium text-sm">{placeholder}</p>
-			)}
-			<input
-				role="combobox"
-				aria-expanded={candidates.length > 0}
-				aria-controls="move-dialog-listbox"
-				autoFocus
-				value={query}
-				onChange={(e) => {
-					setQuery(e.target.value);
-					setActive(0);
-				}}
-				onKeyDown={(e) => {
-					if (e.key === "ArrowDown") {
-						setActive((a) => Math.min(a + 1, candidates.length - 1));
-					}
-					if (e.key === "ArrowUp") {
-						setActive((a) => Math.max(a - 1, 0));
-					}
-					if (e.key === "Enter" && candidates[active] !== undefined) {
-						onPick(candidates[active]);
-					}
-					if (e.key === "Escape") {
-						onCancel();
-					}
-				}}
-				placeholder={placeholder}
-				className="w-full border-border border-b bg-transparent p-3 text-sm outline-none"
-			/>
-			<div id="move-dialog-listbox" role="listbox" className="max-h-72 overflow-y-auto py-1">
-				{candidates.map((name, i) => (
-					// biome-ignore lint/a11y/useFocusableInteractive lint/a11y/useKeyWithClickEvents: option in a combobox-controlled listbox; options are intentionally not individually focusable and keyboard activation is handled on the input above
-					<div
-						key={name || "__root__"}
-						role="option"
-						aria-selected={i === active}
-						onClick={() => onPick(name)}
-						className={`cursor-pointer px-3 py-1.5 text-sm ${
-							i === active ? "bg-accent text-accent-foreground" : ""
-						}`}
-					>
-						{name === "" ? "/ (root)" : `${name}`}
-					</div>
-				))}
-			</div>
-		</dialog>
+		<Dialog open onOpenChange={(open) => !open && onCancel()}>
+			<DialogContent
+				aria-describedby={undefined}
+				showCloseButton={false}
+				className="flex h-[min(28rem,80vh)] max-w-md flex-col"
+			>
+				<DialogTitle className="text-sm">{title}</DialogTitle>
+				<FolderPicker
+					folders={eligible.filter((name) => name !== "")}
+					includeRoot={eligible.includes("")}
+					value={active}
+					onChange={setActive}
+					onActivate={onPick}
+					placeholder={title}
+					className="flex-1"
+				/>
+			</DialogContent>
+		</Dialog>
 	);
 }
