@@ -160,7 +160,11 @@ defmodule Engram.IndexingMemoryTest do
 
     {:ok, key} = Engram.Crypto.dek_filter_key(user)
     avgdl = Engram.KeywordIndex.Stats.avgdl(note.user_id, note.vault_id)
-    {expected, _len} = Engram.KeywordIndex.QdrantSparse.encode_document(text, key, avgdl, nil)
+    # The keyword leg encodes `context_text`, title prefix included (#1615).
+    [chunk] = Engram.Parsers.Markdown.parse(text, "Kw.md")
+
+    {expected, _len} =
+      Engram.KeywordIndex.QdrantSparse.encode_document(chunk.context_text, key, avgdl, nil)
 
     assert keyword == %{"indices" => expected.indices, "values" => expected.values}
   end

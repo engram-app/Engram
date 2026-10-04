@@ -67,9 +67,11 @@ defmodule Engram.IndexingKeywordTest do
     # "deploying" must produce the "deploy" stem dim (Slice-1 English dual-emit)
     assert QdrantSparse.dim(key, "deploy") in indices
 
-    # token_count = RAW token count (language nil), not dual-emit count
+    # token_count = RAW token count (language nil), not dual-emit count, over
+    # the same `context_text` (title prefix included) the encoder sees (#1615).
     alias Engram.KeywordIndex.Tokenizer
-    expected_raw = chunk_text |> Tokenizer.tokens(nil) |> length()
+    [chunk] = Engram.Parsers.Markdown.parse(chunk_text, "stem_test.md")
+    expected_raw = chunk.context_text |> Tokenizer.tokens(nil) |> length()
     assert hd(prepared.chunk_rows).token_count == expected_raw
   end
 
@@ -157,6 +159,7 @@ defmodule Engram.IndexingKeywordTest do
     assert QdrantSparse.dim(key, "alpha") in indices
     refute Enum.any?(indices, &(&1 == "alpha"))
 
-    assert hd(prepared.chunk_rows).token_count == 3
+    # "n" (the title, from the context prefix) + three body words (#1615).
+    assert hd(prepared.chunk_rows).token_count == 4
   end
 end

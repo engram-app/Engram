@@ -990,20 +990,48 @@ defmodule Engram.Indexing do
 
           sparse =
             KeywordIndex.module().encode_documents(
-              Enum.map(matched, fn {chunk, _point_id} -> chunk.text end),
+              Enum.map(matched, fn {chunk, _point_id} -> chunk.context_text end),
               filter_key,
               avgdl,
               note_language(chunks)
             )
 
-          points =
-            Enum.zip_with(matched, sparse, fn {_chunk, point_id}, {vector, _doc_len} ->
-              %{id: point_id, vector: %{"keyword" => vector}}
+          {points, lengths} =
+            Enum.zip_with(matched, sparse, fn {_chunk, point_id}, {vector, doc_len} ->
+              {%{id: point_id, vector: %{"keyword" => vector}}, {point_id, doc_len}}
             end)
+            |> Enum.unzip()
 
-          with :ok <- update_vectors_batched(points), do: {:ok, length(points), unmatched}
+          with :ok <- update_vectors_batched(points),
+               :ok <- persist_token_counts(note, lengths),
+               do: {:ok, length(points), unmatched}
       end
     end
+  end
+
+  # `chunks.token_count` is the only input to the vault's `avgdl`, so a
+  # resparse that changes what is encoded must move the stored lengths with
+  # it, or BM25 normalizes against lengths of a string it no longer encodes.
+  # One statement for the whole note.
+  defp persist_token_counts(note, lengths) do
+    {ids, counts} = Enum.unzip(lengths)
+    ids = Enum.map(ids, &Ecto.UUID.dump!/1)
+
+    {:ok, _} =
+      Repo.with_tenant(note.user_id, fn ->
+        Chunk
+        |> join(
+          :inner,
+          [c],
+          v in fragment("SELECT * FROM unnest(?::uuid[], ?::int[]) AS v(id, n)", ^ids, ^counts),
+          on: c.qdrant_point_id == v.id
+        )
+        |> where([c], c.note_id == ^note.id)
+        |> update([c, v], set: [token_count: v.n])
+        |> Repo.update_all([])
+      end)
+
+    :ok
   end
 
   defp match_stored_points(note, chunks, content_key) do
@@ -1113,10 +1141,13 @@ defmodule Engram.Indexing do
 
     # The whole note in one call so the encoder can share per-note work (the
     # token -> dim memo) across chunks. One sparse vector per :embed entry, in
-    # the same order as `vectors`.
+    # the same order as `vectors`. `context_text`, not `text`: the folder, title
+    # and heading path live only in the prefix, and a note with no H1 is
+    # otherwise unfindable by its own name on the keyword leg (#1615).
+    # `resparse_note/2` must encode the same string.
     sparse =
       KeywordIndex.module().encode_documents(
-        for({:embed, chunk} <- plan.entries, do: chunk.text),
+        for({:embed, chunk} <- plan.entries, do: chunk.context_text),
         filter_key,
         avgdl,
         language
