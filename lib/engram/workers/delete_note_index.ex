@@ -111,7 +111,9 @@ defmodule Engram.Workers.DeleteNoteIndex do
   defp live?(user_id, note_id) do
     {:ok, live?} =
       Repo.with_tenant(user_id, fn ->
-        Repo.exists?(from(n in Note, where: n.id == ^note_id and is_nil(n.deleted_at)))
+        Repo.exists?(
+          from(n in Note, where: n.id == ^note_id and n.kind == "note" and is_nil(n.deleted_at))
+        )
       end)
 
     live?
