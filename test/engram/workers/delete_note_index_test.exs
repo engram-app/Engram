@@ -21,7 +21,7 @@ defmodule Engram.Workers.DeleteNoteIndexTest do
     user = insert(:user)
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
     vault = insert(:vault, user: user)
-    note = insert(:note, user: user, vault: vault)
+    note = insert(:note, user: user, vault: vault, deleted_at: DateTime.utc_now())
 
     Repo.insert!(
       %Chunk{
@@ -110,5 +110,18 @@ defmodule Engram.Workers.DeleteNoteIndexTest do
 
     assert :ok = perform_job(DeleteNoteIndex, args(note))
     assert chunk_count(note) == 0
+  end
+
+  # #1610: a late run must not wipe the index of a note that is live again.
+  test "no-ops when the note was resurrected", %{note: note} do
+    Repo.update_all(
+      from(n in Engram.Notes.Note, where: n.id == ^note.id),
+      [set: [deleted_at: nil]],
+      skip_tenant_check: true
+    )
+
+    # No Bypass.expect: any Qdrant call fails the test.
+    assert :ok = perform_job(DeleteNoteIndex, args(note))
+    assert chunk_count(note) == 1
   end
 end

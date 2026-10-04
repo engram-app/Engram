@@ -10,9 +10,13 @@ defmodule Engram.Workers.DeleteNoteIndex do
 
   use Oban.Worker, queue: :indexing, max_attempts: 3
 
+  import Ecto.Query, only: [from: 2]
+
   alias Engram.Indexing
   alias Engram.Links
   alias Engram.Notes.Enqueue
+  alias Engram.Notes.Note
+  alias Engram.Repo
   alias Engram.Workers.IndexCapMaintenance
   alias Engram.Workers.RebindNoteLinks
 
@@ -42,7 +46,10 @@ defmodule Engram.Workers.DeleteNoteIndex do
     case Base.decode64(path_hmac_b64) do
       {:ok, path_hmac} ->
         note = %{id: note_id, user_id: user_id, vault_id: vault_id, path_hmac: path_hmac}
-        unlink_then_delete_index(note, args)
+
+        # #1610: the note was resurrected before this ran (id-keyed rename,
+        # restore). Wiping its index now would leave a live note unsearchable.
+        if live?(user_id, note_id), do: :ok, else: unlink_then_delete_index(note, args)
 
       :error ->
         {:discard, "invalid path_hmac base64 for note_id=#{note_id}"}
@@ -94,6 +101,15 @@ defmodule Engram.Workers.DeleteNoteIndex do
     _ = IndexCapMaintenance.enqueue(user_id, :backfill_slots)
 
     Indexing.delete_note_index(note)
+  end
+
+  defp live?(user_id, note_id) do
+    {:ok, live?} =
+      Repo.with_tenant(user_id, fn ->
+        Repo.exists?(from(n in Note, where: n.id == ^note_id and is_nil(n.deleted_at)))
+      end)
+
+    live?
   end
 
   defp maybe_enqueue_rebind(_user_id, _vault_id, nil), do: :ok
