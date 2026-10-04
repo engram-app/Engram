@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { useT } from "@/i18n/locale-provider";
 import { FolderPicker } from "../attachment-upload/folder-picker";
 import { isValidMoveTarget, type MoveNode } from "./move-path";
 
@@ -10,15 +11,19 @@ interface Props {
 	onCancel: () => void;
 }
 
-function buildMessage(nodes: MoveNode[]): string {
+function buildMessage(
+	nodes: MoveNode[],
+	{ t, tn }: Pick<ReturnType<typeof useT>, "t" | "tn">,
+): string {
 	if (nodes.length > 1) {
-		return `Move ${nodes.length} items to…`;
+		return tn({ one: "Move {count} item to…", other: "Move {count} items to…" }, nodes.length);
 	}
-	return "Move to…";
+	return t("Move to…");
 }
 
 export function MoveDialog({ folders, nodes, onPick, onCancel }: Props) {
-	const title = buildMessage(nodes);
+	const { t, tn } = useT();
+	const title = buildMessage(nodes, { t, tn });
 
 	// The vault root ("") is always a candidate, but it isn't a folder row, so
 	// callers don't list it; add it here once rather than in every caller. A folder

@@ -12,6 +12,9 @@ import {
 	TextCursorInput,
 	Trash2,
 } from "lucide-react";
+import type { useT } from "@/i18n/locale-provider";
+import { msg } from "@/i18n/msg";
+import { translate, translatePlural } from "@/i18n/translate";
 
 // Keyed by id rather than carried on each Action — the three lists below repeat
 // the same ids, so one map keeps a single icon per action instead of three.
@@ -37,7 +40,7 @@ const FILE_ACTIONS: readonly Action[] = [
 	{ id: "move", label: "Move to…" },
 	{ id: "duplicate", label: "Duplicate" },
 	{ id: "copy-wikilink", label: "Copy wikilink" },
-	{ id: "delete", label: "Delete", destructive: true },
+	{ id: "delete", label: msg("Delete"), destructive: true },
 ];
 
 // Creation first — the common right-click intent on a folder is "put something
@@ -48,14 +51,14 @@ const FOLDER_ACTIONS: readonly Action[] = [
 	{ id: "new-folder", label: "New subfolder" },
 	{ id: "rename", label: "Rename" },
 	{ id: "move", label: "Move to…" },
-	{ id: "delete", label: "Delete", destructive: true },
+	{ id: "delete", label: msg("Delete"), destructive: true },
 ];
 
 // Attachments are binary blobs — no duplicate/copy-wikilink.
 const ATTACHMENT_ACTIONS: readonly Action[] = [
 	{ id: "rename", label: "Rename" },
 	{ id: "move", label: "Move to…" },
-	{ id: "delete", label: "Delete", destructive: true },
+	{ id: "delete", label: msg("Delete"), destructive: true },
 ];
 
 // Right-clicking empty tree space acts on the vault root. No rename/move/delete
@@ -65,6 +68,12 @@ const ROOT_ACTIONS: readonly Action[] = [
 	{ id: "new-note", label: "New note" },
 	{ id: "new-folder", label: "New folder" },
 ];
+
+type Translator = Pick<ReturnType<typeof useT>, "t" | "tn">;
+const ENGLISH: Translator = {
+	t: (en, vars) => translate({}, en, vars),
+	tn: (en, count, vars) => translatePlural({}, "en", en, count, vars),
+};
 
 export type ActionId =
 	| "new-note"
@@ -112,21 +121,32 @@ export function actionsFor({
 // The menu for a multi-selection. Only actions that mean the same thing for
 // every row: rename and duplicate are per-item, and creation needs ONE target
 // folder. Labels carry the count so it's obvious the action hits them all.
+//
+// These labels carry a count, so they are built per call with the caller's
+// translator (`useT()`); the default is the untranslated English one.
 export function selectionActions(
 	kinds: readonly ("file" | "folder" | "attachment")[],
+	{ tn }: Translator = ENGLISH,
 ): readonly Action[] {
 	const notes = kinds.filter((k) => k === "file").length;
 	return [
-		{ id: "move", label: `Move ${kinds.length} items to…` },
+		{
+			id: "move",
+			label: tn({ one: "Move {count} item to…", other: "Move {count} items to…" }, kinds.length),
+		},
 		...(notes > 0
 			? [
 					{
 						id: "copy-wikilink" as const,
-						label: notes === 1 ? "Copy wikilink" : `Copy ${notes} wikilinks`,
+						label: tn({ one: "Copy wikilink", other: "Copy {count} wikilinks" }, notes),
 					},
 				]
 			: []),
-		{ id: "delete", label: `Delete ${kinds.length} items`, destructive: true },
+		{
+			id: "delete",
+			label: tn({ one: "Delete {count} item", other: "Delete {count} items" }, kinds.length),
+			destructive: true,
+		},
 	];
 }
 
@@ -140,15 +160,15 @@ export function noteMenuActions(mode: ViewMode): readonly Action[] {
 		// Label, not id: `view-rendered`/`"rendered"` stay put through the whole
 		// state machine (note-page's ViewMode, NoteEditor's compartment). Only the
 		// three strings a user reads are Edit / Raw / Reading.
-		{ id: "view-rendered", label: "Edit", active: mode === "rendered" },
-		{ id: "view-raw", label: "Raw", active: mode === "raw" },
-		{ id: "view-reading", label: "Reading", active: mode === "reading" },
+		{ id: "view-rendered", label: msg("Edit"), active: mode === "rendered" },
+		{ id: "view-raw", label: msg("Raw"), active: mode === "raw" },
+		{ id: "view-reading", label: msg("Reading"), active: mode === "reading" },
 		{ id: "rename", label: "Rename" },
 		{ id: "move", label: "Move to…" },
 		{ id: "duplicate", label: "Duplicate" },
 		{ id: "copy-wikilink", label: "Copy wikilink" },
 		{ id: "add-property", label: "Add property" },
-		{ id: "delete", label: "Delete", destructive: true },
+		{ id: "delete", label: msg("Delete"), destructive: true },
 	];
 }
 

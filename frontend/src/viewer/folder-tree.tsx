@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router";
 import { toast } from "sonner";
+import { useT } from "@/i18n/locale-provider";
 import {
 	type AttachmentSummary,
 	type Folder,
@@ -71,6 +72,7 @@ type DialogState =
 	| { kind: "drawer"; itemId: string };
 
 export default function FolderTree() {
+	const { t, tn } = useT();
 	const { data: folders, isLoading, isError } = useFolders();
 	// Every note in the vault, in one array. These three hooks are all views of
 	// the SAME `['vault-tree']` query, so this is one fetch and one observer set
@@ -224,7 +226,7 @@ export default function FolderTree() {
 	// headless-tree, whose getContainerProps supplies the empty-space drop handler
 	// (drops not on a row resolve to the vault root). Depends only on the stable
 	// `tree` instance — avoids ref churn from the new-object-every-render props.
-	const containerProps = tree.getContainerProps("Files");
+	const containerProps = tree.getContainerProps(t("Files"));
 	const setContainerEl = useCallback(
 		(el: HTMLDivElement | null) => {
 			scrollRef.current = el;
@@ -442,16 +444,16 @@ export default function FolderTree() {
 			// allFolders: the synthesized superset, so an attachment-only dir gets
 			// its real name in the drawer instead of a generic "Folder".
 			const f = allFolders.find((x) => x.id === p.id);
-			return f ? (f.name.split("/").pop() ?? f.name) : "Folder";
+			return f ? (f.name.split("/").pop() ?? f.name) : t("Folder");
 		}
 		if (p.kind === "note") {
 			const n = lookupNote(p.id);
-			return n ? noteName(n.path) : "Note";
+			return n ? noteName(n.path) : t("Note");
 		}
 		if (p.kind === "attachment") {
 			return p.path.split("/").pop() ?? p.path;
 		}
-		return "Vault root";
+		return t("Vault root");
 	}
 
 	function openDelete(itemIds: string[]) {
@@ -525,8 +527,10 @@ export default function FolderTree() {
 		}
 		copyToClipboard(links.join("\n")).then((ok) =>
 			ok
-				? toast.success(links.length === 1 ? "Copied wikilink" : `Copied ${links.length} wikilinks`)
-				: toast.error("Copy failed"),
+				? toast.success(
+						tn({ one: "Copied wikilink", other: "Copied {count} wikilinks" }, links.length),
+					)
+				: toast.error(t("Copy failed")),
 		);
 	}
 
@@ -598,7 +602,7 @@ export default function FolderTree() {
 				// here too put a second, vaguer toast on top of the useful one.
 				duplicateNote.mutate(
 					{ src_path: note.path, new_path },
-					{ onSuccess: () => toast.success("Duplicated") },
+					{ onSuccess: () => toast.success(t("Duplicated")) },
 				);
 				break;
 			}
@@ -702,14 +706,14 @@ export default function FolderTree() {
 	if (isLoading) {
 		return (
 			<p data-testid="folder-tree-root" className="flex-1 px-3 py-2 text-muted-foreground text-xs">
-				Loading…
+				{t("Loading…")}
 			</p>
 		);
 	}
 	if (isError) {
 		return (
 			<p data-testid="folder-tree-root" className="flex-1 px-3 py-2 text-destructive text-xs">
-				Failed to load folders.
+				{t("Failed to load folders.")}
 			</p>
 		);
 	}
@@ -754,7 +758,7 @@ export default function FolderTree() {
 						style={{ height: virtualizer.getTotalSize(), minHeight: "100%", position: "relative" }}
 					>
 						{isEmpty ? (
-							<p className="px-1 py-0.5 text-muted-foreground text-xs">No notes yet.</p>
+							<p className="px-1 py-0.5 text-muted-foreground text-xs">{t("No notes yet.")}</p>
 						) : null}
 						{/* One outline around the folder a dragged file would land in: its row
 					    through its last descendant. Rows are fixed-height slots, so the
@@ -807,7 +811,10 @@ export default function FolderTree() {
 				<ContextMenu
 					actions={
 						dialog.selection
-							? selectionActions(dialog.selection.map(kindOf).filter((k) => k !== "root"))
+							? selectionActions(
+									dialog.selection.map(kindOf).filter((k) => k !== "root"),
+									{ t, tn },
+								)
 							: actionsFor({ kind: kindOf(dialog.itemId) })
 					}
 					position={dialog.position}
