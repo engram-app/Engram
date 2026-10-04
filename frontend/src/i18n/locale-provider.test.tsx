@@ -6,12 +6,13 @@ const captureError = vi.fn();
 vi.mock("../sentry", () => ({ captureError: (...args: unknown[]) => captureError(...args) }));
 
 function Probe() {
-	const { t, tn, locale, setLocale } = useT();
+	const { t, tn, locale, renderedLocale, setLocale } = useT();
 	return (
 		<>
 			<p>{t("Hello {name}", { name: "Todd" })}</p>
 			<p>{tn({ one: "{count} file", other: "{count} files" }, 2)}</p>
 			<output>{locale}</output>
+			<output aria-label="rendered">{renderedLocale}</output>
 			<button type="button" onClick={() => setLocale("en")}>
 				english
 			</button>
@@ -154,5 +155,42 @@ describe("LocaleProvider", () => {
 		await act(async () => undefined);
 		expect(captureError).not.toHaveBeenCalled();
 		expect(screen.getByText("Hello Todd")).toBeInTheDocument();
+	});
+
+	describe("renderedLocale", () => {
+		const rendered = () => screen.getByLabelText("rendered").textContent;
+
+		it("is en with no provider", () => {
+			render(<Probe />);
+			expect(rendered()).toBe("en");
+		});
+
+		it("is en while loading, for an empty catalog, and after a failed load", async () => {
+			window.localStorage.setItem("engram:locale", "de");
+			const load = vi.fn(async () => ({ default: {} }));
+			mount({ de: load });
+			expect(rendered()).toBe("en");
+			await vi.waitFor(() => expect(load).toHaveBeenCalled());
+			await act(async () => undefined);
+			expect(rendered()).toBe("en");
+		});
+
+		it("is en after a failed load", async () => {
+			window.localStorage.setItem("engram:locale", "de");
+			mount({
+				de: async () => {
+					throw new Error("chunk 404");
+				},
+			});
+			await vi.waitFor(() => expect(captureError).toHaveBeenCalled());
+			expect(rendered()).toBe("en");
+		});
+
+		it("is the locale once a non-empty catalog is loaded", async () => {
+			window.localStorage.setItem("engram:locale", "de");
+			mount({ de });
+			await screen.findByText("Hallo Todd");
+			expect(rendered()).toBe("de");
+		});
 	});
 });

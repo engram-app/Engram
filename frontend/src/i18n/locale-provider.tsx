@@ -30,6 +30,9 @@ type PluralEn = PluralForms & { other: string };
 
 interface LocaleContextValue {
 	locale: Locale;
+	// What is actually on screen: `locale` once its catalog has keys, else "en".
+	// Third parties (Clerk, Paddle) follow this, not the selected `locale`.
+	renderedLocale: Locale;
 	setLocale: (next: Locale) => void;
 	t: (en: string, vars?: Vars) => string;
 	tn: (en: PluralEn, count: number, vars?: Vars) => string;
@@ -39,6 +42,7 @@ interface LocaleContextValue {
 // an untranslated string is the designed fallback, not an error.
 const ENGLISH: LocaleContextValue = {
 	locale: "en",
+	renderedLocale: "en",
 	setLocale: () => undefined,
 	t: (en, vars) => translate({}, en, vars),
 	tn: (en, count, vars) => translatePlural({}, "en", en, count, vars),
@@ -83,12 +87,12 @@ export function LocaleProvider({
 		};
 	}, [locale, loaders]);
 
-	// lang follows what is rendered: empty stubs and failed loads are English.
-	const translated = Object.keys(catalog).length > 0;
+	// What is rendered: empty stubs and failed loads are English.
+	const renderedLocale = Object.keys(catalog).length > 0 ? locale : "en";
 	// Layout effect: lang must change in the same commit as the text it describes.
 	useLayoutEffect(() => {
-		document.documentElement.lang = translated ? locale : "en";
-	}, [locale, translated]);
+		document.documentElement.lang = renderedLocale;
+	}, [renderedLocale]);
 
 	const setLocale = useCallback((next: Locale) => {
 		setStoredLocale(next);
@@ -98,11 +102,12 @@ export function LocaleProvider({
 	const value = useMemo<LocaleContextValue>(
 		() => ({
 			locale,
+			renderedLocale,
 			setLocale,
 			t: (en, vars) => translate(catalog, en, vars),
 			tn: (en, count, vars) => translatePlural(catalog, locale, en, count, vars),
 		}),
-		[locale, setLocale, catalog],
+		[locale, renderedLocale, setLocale, catalog],
 	);
 	return <LocaleContext.Provider value={value}>{children}</LocaleContext.Provider>;
 }
