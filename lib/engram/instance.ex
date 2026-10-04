@@ -9,6 +9,7 @@ defmodule Engram.Instance do
     `bootstrap_pending?/0` (one PK SELECT, independent of user count).
   """
   alias Engram.Instance.InstanceSettings
+  alias Engram.Instance.TelemetrySettings
   alias Engram.Repo
 
   @default_mode "invite_only"
@@ -91,4 +92,53 @@ defmodule Engram.Instance do
       {:error, :invalid_mode}
     end
   end
+
+  @doc """
+  Random anonymous id for this install, minted on first call. The insert is
+  `ON CONFLICT DO NOTHING` and the id is then read back, so two nodes minting
+  at once converge on the first writer's id.
+  """
+  def install_id do
+    case telemetry_row() do
+      %TelemetrySettings{install_id: id} ->
+        id
+
+      nil ->
+        {:ok, _} =
+          Repo.insert(%TelemetrySettings{id: @singleton_id, install_id: Ecto.UUID.generate()},
+            on_conflict: :nothing,
+            conflict_target: :id,
+            skip_tenant_check: true
+          )
+
+        %TelemetrySettings{install_id: id} = telemetry_row()
+        id
+    end
+  end
+
+  @doc """
+  Operator's telemetry answer: `nil` = never answered (the census ping counts as
+  on), `true` = acknowledged, `false` = turned off.
+  """
+  def telemetry_enabled do
+    case telemetry_row() do
+      nil -> nil
+      %TelemetrySettings{telemetry_enabled: v} -> v
+    end
+  end
+
+  def set_telemetry_enabled(enabled) when is_boolean(enabled) do
+    Repo.insert(
+      %TelemetrySettings{
+        id: @singleton_id,
+        install_id: Ecto.UUID.generate(),
+        telemetry_enabled: enabled
+      },
+      on_conflict: [set: [telemetry_enabled: enabled, updated_at: DateTime.utc_now(:second)]],
+      conflict_target: :id,
+      skip_tenant_check: true
+    )
+  end
+
+  defp telemetry_row, do: Repo.get(TelemetrySettings, @singleton_id, skip_tenant_check: true)
 end

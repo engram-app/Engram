@@ -307,6 +307,9 @@ defmodule EngramWeb.Router do
     post "/auth/device/token", DeviceAuthController, :token
     post "/auth/token/refresh", DeviceAuthController, :refresh
 
+    # Self-host install census collector (SaaS only; self-host answers 404).
+    post "/telemetry/ping", InstallPingController, :create
+
     # Public: explain why a just-completed sign-up was rejected (multi-account
     # block deletes the Clerk user, so there is no session to authenticate with).
     get "/auth/signup-rejection", SignupRejectionController, :show
@@ -512,6 +515,10 @@ defmodule EngramWeb.Router do
     get "/registration", RegistrationController, :show
     # PATCH (not PUT): the frontend `api` client exposes get/post/patch/del, no put.
     patch "/registration", RegistrationController, :update
+
+    # Self-host install census opt-in (what is sent + the operator's answer).
+    get "/telemetry", TelemetryController, :show
+    patch "/telemetry", TelemetryController, :update
 
     resources "/invites", InviteController, only: [:index, :create, :delete]
 

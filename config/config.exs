@@ -156,6 +156,10 @@ config :engram, Oban,
        {"0 3 * * *", Engram.Billing.Workers.OverrideExpirySweep},
        {"30 3 * * *", Engram.Workers.InactivityCleanup},
        {"0 4 * * *", Engram.Workers.OriginAbuseSweep},
+       # Daily self-host install census; no-op on SaaS and unless opted in.
+       {"17 5 * * *", Engram.Workers.TelemetryHeartbeat},
+       # Daily retention sweep for the census collector table (unbounded otherwise).
+       {"30 4 * * *", Engram.Workers.InstallPingsPruner},
        # Daily client_logs retention sweep (Engram#792 — the log sink was
        # unbounded at ~98% of the DB).
        {"15 4 * * *", Engram.Workers.ClientLogsPruner},
@@ -427,4 +431,8 @@ config :engram, Engram.MCP.ParseGate,
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
+# Self-host install census ping: prod builds only, so a dev `mix phx.server` or a
+# source run never pings the real collector and pollutes the install count.
+config :engram, :census_ping, config_env() == :prod
+
 import_config "#{config_env()}.exs"

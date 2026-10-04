@@ -12,6 +12,22 @@ export interface AdminUser {
 	last_active: string | null;
 }
 
+export interface TelemetryPayload {
+	id: string;
+	version: string;
+	os: string;
+	arch: string;
+	runtime: string;
+}
+
+export interface TelemetryState {
+	/** null = the operator has not been asked yet. */
+	telemetry_enabled: boolean | null;
+	/** ENGRAM_TELEMETRY=false forbids sending, whatever the setting says. */
+	env_disabled: boolean;
+	payload: TelemetryPayload;
+}
+
 export interface Invite {
 	id: string;
 	label: string | null;
@@ -27,6 +43,9 @@ export const adminApi = {
 	getRegistration: () => api.get<{ registration_mode: RegistrationMode }>("/admin/registration"),
 	setRegistration: (mode: RegistrationMode) =>
 		api.patch<{ registration_mode: RegistrationMode }>("/admin/registration", { mode }),
+
+	getTelemetry: () => api.get<TelemetryState>("/admin/telemetry"),
+	setTelemetry: (enabled: boolean) => api.patch<TelemetryState>("/admin/telemetry", { enabled }),
 
 	listInvites: () => api.get<{ invites: Invite[] }>("/admin/invites"),
 	createInvite: (body: { label?: string; max_uses?: number; expires_in_days?: number | null }) =>
