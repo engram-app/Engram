@@ -13,6 +13,10 @@ describe("interpolate", () => {
 	it("returns the template when there are no vars", () => {
 		expect(interpolate("Hi {name}")).toBe("Hi {name}");
 	});
+	it("does not interpolate inherited properties from prototype chain", () => {
+		expect(interpolate("x {toString}", {})).toBe("x {toString}");
+		expect(interpolate("x {constructor}", {})).toBe("x {constructor}");
+	});
 });
 
 describe("translate", () => {

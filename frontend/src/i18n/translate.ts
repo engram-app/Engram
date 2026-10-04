@@ -10,17 +10,9 @@ export function interpolate(template: string, vars?: Vars): string {
 	if (!vars) {
 		return template;
 	}
-	return template.replace(PLACEHOLDER, (match, ...args) => {
-		const groups = args.at(-1);
-		if (typeof groups === "object" && groups !== null && "name" in groups) {
-			// biome-ignore lint/nursery/noUnsafeTypeAssertion: args.at(-1) is the groups object from regex match, accessible only via runtime type narrowing
-			const { name } = groups as Record<string, unknown>;
-			if (typeof name === "string" && name in vars) {
-				return String(vars[name]);
-			}
-		}
-		return match;
-	});
+	return template.replace(PLACEHOLDER, (match, name: string) =>
+		Object.hasOwn(vars, name) ? String(vars[name]) : match,
+	);
 }
 
 export function translate(catalog: Catalog, en: string, vars?: Vars): string {
