@@ -1,5 +1,6 @@
 import { FolderTree, Search, Settings } from "lucide-react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router";
+import { useT } from "@/i18n/locale-provider";
 import { isSettingsHash, settingsTo } from "../settings/settings-hash";
 import { type RailView, useRailView } from "./rail-view-context";
 import { RIGHT_TOOLS, type RightToolDescriptor, useRightTools } from "./right-tools-context";
@@ -56,18 +57,19 @@ function ViewButton({ id, label, Icon }: { id: RailView; label: string; Icon: ty
 }
 
 function ToolButton({ tool }: { tool: RightToolDescriptor }) {
+	const { t } = useT();
 	const { resolvedId, toggleActive, isAvailable } = useRightTools();
 	const available = isAvailable(tool.id);
 	const active = resolvedId === tool.id;
 	return (
 		<button
 			type="button"
-			aria-label={tool.label}
+			aria-label={t(tool.label)}
 			// aria-pressed, not aria-current: these toggle a panel open and shut,
 			// they do not mark the current location the way the view buttons do.
 			aria-pressed={active}
 			disabled={!available}
-			title={available ? tool.label : `${tool.label} (open a note first)`}
+			title={available ? t(tool.label) : t("{label} (open a note first)", { label: t(tool.label) })}
 			onClick={() => toggleActive(tool.id)}
 			className={`${railButtonClass(active)} disabled:pointer-events-none disabled:opacity-40`}
 		>
@@ -77,23 +79,24 @@ function ToolButton({ tool }: { tool: RightToolDescriptor }) {
 }
 
 export default function Rail() {
+	const { t } = useT();
 	const location = useLocation();
 	const onSettings = isSettingsHash(location.hash);
 	return (
 		<nav
-			aria-label="App navigation"
+			aria-label={t("App navigation")}
 			className="flex h-full w-12 shrink-0 flex-col items-center gap-2 border-border border-r bg-card pt-3 pb-4"
 		>
 			<NavLink
 				to="/"
-				aria-label="Engram home"
+				aria-label={t("Engram home")}
 				className="mb-3 flex size-10 items-center justify-center rounded-md"
 			>
 				<img src="/engram-mark.svg" alt="" className="size-8" />
 			</NavLink>
 
-			<ViewButton id="files" label="Files" Icon={FolderTree} />
-			<ViewButton id="search" label="Search" Icon={Search} />
+			<ViewButton id="files" label={t("Files")} Icon={FolderTree} />
+			<ViewButton id="search" label={t("Search")} Icon={Search} />
 
 			<hr className="my-1 w-6 border-border border-t" />
 
@@ -104,8 +107,8 @@ export default function Rail() {
 			<div className="flex-1" />
 			<Link
 				to={settingsTo("account", location.search)}
-				aria-label="Settings"
-				title="Settings"
+				aria-label={t("Settings")}
+				title={t("Settings")}
 				aria-current={onSettings ? "page" : undefined}
 				className={railButtonClass(onSettings)}
 			>

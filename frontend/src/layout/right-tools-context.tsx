@@ -8,6 +8,7 @@ import {
 	useMemo,
 	useState,
 } from "react";
+import { msg } from "@/i18n/msg";
 import { isMember } from "../lib/is-member";
 
 // The right sidebar used to be a single pushed slot: NotePage called
@@ -33,9 +34,9 @@ interface RightToolDescriptor {
 }
 
 const RIGHT_TOOLS: readonly RightToolDescriptor[] = [
-	{ id: "outline", label: "Outline", Icon: ListTree, contextual: true },
-	{ id: "backlinks", label: "Backlinks", Icon: Link2, contextual: true },
-	{ id: "reference", label: "Reference", Icon: BookMarked, contextual: false },
+	{ id: "outline", label: msg("Outline"), Icon: ListTree, contextual: true },
+	{ id: "backlinks", label: msg("Backlinks"), Icon: Link2, contextual: true },
+	{ id: "reference", label: msg("Reference"), Icon: BookMarked, contextual: false },
 ];
 
 const STORAGE_KEY = "engram:right-tool";

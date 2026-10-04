@@ -10,6 +10,8 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useT } from "@/i18n/locale-provider";
+import { msg } from "@/i18n/msg";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
 import { isMember } from "../lib/is-member";
 import { settingsTo } from "../settings/settings-hash";
@@ -23,9 +25,9 @@ import { useTheme } from "../theme/theme-provider";
 // email initial. Theme picker folded in here as radio rows so the rail's
 // 32px-button slot doesn't need a second control.
 const THEME_OPTIONS: ReadonlyArray<{ value: ThemeChoice; label: string; Icon: typeof Sun }> = [
-	{ value: "light", label: "Light", Icon: Sun },
-	{ value: "dark", label: "Dark", Icon: Moon },
-	{ value: "system", label: "System", Icon: Monitor },
+	{ value: "light", label: msg("Light"), Icon: Sun },
+	{ value: "dark", label: msg("Dark"), Icon: Moon },
+	{ value: "system", label: msg("System"), Icon: Monitor },
 ];
 
 // Radix hands onValueChange a bare string; check it against the rendered list.
@@ -33,6 +35,7 @@ const THEME_KEYS: readonly ThemeChoice[] = THEME_OPTIONS.map((o) => o.value);
 
 export default function UserMenu() {
 	const { user, logout } = useAuthAdapter();
+	const { t } = useT();
 	const { theme, setTheme } = useTheme();
 	const location = useLocation();
 	const initial = user?.email?.[0]?.toUpperCase() ?? "?";
@@ -40,7 +43,7 @@ export default function UserMenu() {
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger
-				aria-label="User menu"
+				aria-label={t("User menu")}
 				className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
 			>
 				{user?.imageUrl ? (
@@ -59,12 +62,12 @@ export default function UserMenu() {
 				<DropdownMenuItem asChild className="gap-2.5 px-3 py-2.5 text-sm">
 					<Link to={settingsTo("account", location.search)}>
 						<Settings className="size-4" />
-						Settings
+						{t("Settings")}
 					</Link>
 				</DropdownMenuItem>
 				<DropdownMenuSeparator />
 				<DropdownMenuLabel className="px-3 pt-2 pb-1 text-muted-foreground text-xs uppercase tracking-wide">
-					Theme
+					{t("Theme")}
 				</DropdownMenuLabel>
 				<DropdownMenuRadioGroup
 					value={theme}
@@ -77,7 +80,7 @@ export default function UserMenu() {
 					{THEME_OPTIONS.map(({ value, label, Icon }) => (
 						<DropdownMenuRadioItem key={value} value={value} className="gap-2.5 px-3 py-2 text-sm">
 							<Icon className="size-4" />
-							{label}
+							{t(label)}
 						</DropdownMenuRadioItem>
 					))}
 				</DropdownMenuRadioGroup>
@@ -89,7 +92,7 @@ export default function UserMenu() {
 					}}
 				>
 					<LogOut className="size-4" />
-					Sign out
+					{t("Sign out")}
 				</DropdownMenuItem>
 			</DropdownMenuContent>
 		</DropdownMenu>

@@ -1,9 +1,11 @@
 import { FolderTree, Search } from "lucide-react";
+import { useT } from "@/i18n/locale-provider";
+import { msg } from "@/i18n/msg";
 import { type RailView, useRailView } from "./rail-view-context";
 
 const VIEWS: ReadonlyArray<{ id: RailView; label: string; Icon: typeof Search }> = [
-	{ id: "files", label: "Files", Icon: FolderTree },
-	{ id: "search", label: "Search", Icon: Search },
+	{ id: "files", label: msg("Files"), Icon: FolderTree },
+	{ id: "search", label: msg("Search"), Icon: Search },
 ];
 
 /**
@@ -20,9 +22,10 @@ const VIEWS: ReadonlyArray<{ id: RailView; label: string; Icon: typeof Search }>
  */
 export default function SidebarViewToggle() {
 	const { view, setView } = useRailView();
+	const { t } = useT();
 	return (
 		<nav
-			aria-label="Sidebar views"
+			aria-label={t("Sidebar views")}
 			className="flex shrink-0 border-border border-t bg-card [&>button]:h-11"
 		>
 			{VIEWS.map(({ id, label, Icon }) => {
@@ -42,7 +45,7 @@ export default function SidebarViewToggle() {
 						}`}
 					>
 						<Icon className="size-4" />
-						{label}
+						{t(label)}
 					</button>
 				);
 			})}

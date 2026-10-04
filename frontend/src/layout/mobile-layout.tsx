@@ -11,6 +11,7 @@ import {
 	SheetTitle,
 	SheetTrigger,
 } from "@/components/ui/sheet";
+import { useT } from "@/i18n/locale-provider";
 import FolderTree from "../viewer/folder-tree";
 import FolderActions from "./folder-actions";
 import { FolderTreeProvider } from "./folder-tree-context";
@@ -33,6 +34,7 @@ function closeOnLinkClick(close: () => void) {
 }
 
 export default function MobileLayout() {
+	const { t } = useT();
 	const { resolvedId, setActive, isAvailable } = useRightTools();
 	const { view } = useRailView();
 	const [leftOpen, setLeftOpen] = useState(false);
@@ -65,7 +67,7 @@ export default function MobileLayout() {
 				<section className="flex items-center gap-1">
 					<Sheet open={leftOpen} onOpenChange={setLeftOpen}>
 						<SheetTrigger asChild>
-							<Button variant="ghost" size="icon" aria-label="Open files" className="size-11">
+							<Button variant="ghost" size="icon" aria-label={t("Open files")} className="size-11">
 								<Menu />
 							</Button>
 						</SheetTrigger>
@@ -77,13 +79,13 @@ export default function MobileLayout() {
 							<FolderTreeProvider>
 								<section className="flex shrink-0 items-center justify-between border-border border-b px-3 py-2">
 									<SheetTitle className="font-medium text-base">
-										{view === "search" ? "Search" : "Files"}
+										{view === "search" ? t("Search") : t("Files")}
 									</SheetTitle>
 									<SheetDescription className="sr-only">
-										{view === "search" ? "Search your notes" : "Folder navigation"}
+										{view === "search" ? t("Search your notes") : t("Folder navigation")}
 									</SheetDescription>
 									<SheetClose asChild>
-										<Button variant="ghost" size="icon-sm" aria-label="Close">
+										<Button variant="ghost" size="icon-sm" aria-label={t("Close")}>
 											<X />
 										</Button>
 									</SheetClose>
@@ -116,7 +118,7 @@ export default function MobileLayout() {
 						Engram
 					</Link>
 				</section>
-				<nav className="flex items-center gap-1" aria-label="Main navigation">
+				<nav className="flex items-center gap-1" aria-label={t("Main navigation")}>
 					<UserMenu />
 					{/* Always available now — the reference tool is valid on every route,
 					    unlike the outline this drawer used to be gated on. */}
@@ -125,7 +127,7 @@ export default function MobileLayout() {
 							<Button
 								variant="ghost"
 								size="icon"
-								aria-label="Open tools"
+								aria-label={t("Open tools")}
 								className="size-11"
 								onClick={openRight}
 							>
@@ -138,9 +140,9 @@ export default function MobileLayout() {
 							className="flex flex-col gap-0 p-0 data-[side=right]:w-[85vw] sm:max-w-none"
 							onClick={closeOnLinkClick(() => setRightOpen(false))}
 						>
-							<SheetTitle className="sr-only">Sidebar tools</SheetTitle>
+							<SheetTitle className="sr-only">{t("Sidebar tools")}</SheetTitle>
 							<SheetDescription className="sr-only">
-								Note outline and markdown reference
+								{t("Note outline and markdown reference")}
 							</SheetDescription>
 							<RightToolPanel onCollapse={() => setRightOpen(false)} />
 						</SheetContent>

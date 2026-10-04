@@ -6,13 +6,15 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useT } from "@/i18n/locale-provider";
+import { msg } from "@/i18n/msg";
 import type { ThemeChoice } from "./storage";
 import { useTheme } from "./theme-provider";
 
 const OPTIONS: ReadonlyArray<{ value: ThemeChoice; label: string; Icon: typeof Sun }> = [
-	{ value: "light", label: "Light", Icon: Sun },
-	{ value: "dark", label: "Dark", Icon: Moon },
-	{ value: "system", label: "System", Icon: Monitor },
+	{ value: "light", label: msg("Light"), Icon: Sun },
+	{ value: "dark", label: msg("Dark"), Icon: Moon },
+	{ value: "system", label: msg("System"), Icon: Monitor },
 ];
 
 function ActiveIcon({ choice }: { choice: ThemeChoice }) {
@@ -27,6 +29,9 @@ function ActiveIcon({ choice }: { choice: ThemeChoice }) {
 
 export default function ThemeToggle() {
 	const { theme, setTheme } = useTheme();
+	const { t } = useT();
+	const current = OPTIONS.find((o) => o.value === theme);
+	const themeLabel = t("Theme: {theme}", { theme: current ? t(current.label) : theme });
 
 	return (
 		<DropdownMenu>
@@ -34,14 +39,14 @@ export default function ThemeToggle() {
 				<Button
 					variant="ghost"
 					size="icon"
-					aria-label={`Theme: ${theme}`}
-					title={`Theme: ${theme}`}
+					aria-label={themeLabel}
+					title={themeLabel}
 					data-theme-choice={theme}
 				>
 					<ActiveIcon choice={theme} />
 				</Button>
 			</DropdownMenuTrigger>
-			<DropdownMenuContent align="end" aria-label="Theme">
+			<DropdownMenuContent align="end" aria-label={t("Theme")}>
 				{OPTIONS.map(({ value, label, Icon }) => (
 					<DropdownMenuItem
 						key={value}
@@ -50,7 +55,7 @@ export default function ThemeToggle() {
 						aria-current={theme === value ? "true" : undefined}
 					>
 						<Icon className="mr-2 size-4" />
-						{label}
+						{t(label)}
 					</DropdownMenuItem>
 				))}
 			</DropdownMenuContent>
