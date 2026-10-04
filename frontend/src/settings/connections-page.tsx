@@ -11,6 +11,8 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { useAutofocus } from "@/hooks/use-autofocus";
+import { useT } from "@/i18n/locale-provider";
+import type { Vars } from "@/i18n/translate";
 import { copyToClipboard } from "@/lib/clipboard";
 import { formatDate } from "@/lib/format-date";
 import { SettingsSectionCard } from "@/settings/account/section-card";
@@ -70,9 +72,9 @@ const SEARCH_THRESHOLD = 8;
 
 // `null` means every vault, NOT none — shared with the API-key table so the
 // two cannot describe the same restriction differently.
-function vaultLabel(connection: Connection): string {
+function vaultLabel(connection: Connection, t: (en: string, vars?: Vars) => string): string {
 	return connection.vault_ids === null
-		? "All vaults"
+		? t("All vaults")
 		: connection.vault_ids
 				// A name is null when the vault is gone or out of the caller's own
 				// scope. OAuth grants narrow themselves when a vault is deleted, but
@@ -82,7 +84,7 @@ function vaultLabel(connection: Connection): string {
 				// — and the entry must still be COUNTED, because a key restricted to
 				// one deleted vault would otherwise render empty and read as
 				// unrestricted.
-				.map((_id, i) => connection.vault_names?.[i] ?? "(deleted vault)")
+				.map((_id, i) => connection.vault_names?.[i] ?? t("(deleted vault)"))
 				.join(", ");
 }
 
@@ -93,6 +95,7 @@ function ConnectionCard({
 	connection: Connection;
 	onRevoke: () => void;
 }) {
+	const { t } = useT();
 	return (
 		<article className="group flex items-start rounded-lg border border-border bg-card">
 			{/* <details> wraps the summary + expanded dl. The Revoke button is a
@@ -132,7 +135,7 @@ function ConnectionCard({
 							{connection.label ??
 								(connection.slug ? TOOL_LABELS[connection.slug] : null) ??
 								connection.name ??
-								"Unnamed"}
+								t("Unnamed")}
 							{/* A chip only where it carries information. A recognized
 							    client (slug resolved, official brand mark alongside) is
 							    presented plainly. Badging Claude Code as suspect is
@@ -147,46 +150,46 @@ function ConnectionCard({
 							    the redirect could never prove either way. */}
 							{!(connection.verified || connection.slug) && (
 								<span className="ms-2 rounded bg-muted px-1.5 py-0.5 align-middle font-normal text-muted-foreground text-xs">
-									unverified
+									{t("unverified")}
 								</span>
 							)}
 						</div>
 						<div className="truncate text-muted-foreground text-xs">
 							<strong className="font-semibold">
-								{connection.kind === "obsidian" ? "Vault:" : "Vaults:"}
+								{connection.kind === "obsidian" ? t("Vault:") : t("Vaults:")}
 							</strong>{" "}
-							{vaultLabel(connection)}
+							{vaultLabel(connection, t)}
 						</div>
 					</div>
 				</summary>
 				<dl className="mt-1 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 px-3 text-muted-foreground text-xs [&_dt]:font-semibold">
 					{Boolean(connection.software_version) && (
 						<>
-							<dt>Version:</dt>
+							<dt>{t("Version:")}</dt>
 							<dd>{connection.software_version}</dd>
 						</>
 					)}
 					{connection.connected_at ? (
 						<>
-							<dt>Connected:</dt>
+							<dt>{t("Connected:")}</dt>
 							<dd>{new Date(connection.connected_at).toLocaleString()}</dd>
 						</>
 					) : null}
 					{connection.last_used_at ? (
 						<>
-							<dt>Last active:</dt>
+							<dt>{t("Last active:")}</dt>
 							<dd>{new Date(connection.last_used_at).toLocaleString()}</dd>
 						</>
 					) : null}
 					{Boolean(connection.scope) && (
 						<>
-							<dt>Scopes:</dt>
+							<dt>{t("Scopes:")}</dt>
 							<dd>{connection.scope}</dd>
 						</>
 					)}
 					{connection.kind === "mcp" && (
 						<>
-							<dt>Identity:</dt>
+							<dt>{t("Identity:")}</dt>
 							<dd>
 								{/* Two different proofs, and the copy must not conflate them.
 								    A redirect-verified client proved itself by where the
@@ -204,16 +207,20 @@ function ConnectionCard({
 								    verification the backend never granted. The server stays
 								    the only thing that decides `verified`. */}
 								{connection.verified && connection.cimd_url
-									? "Verified. The app publishes its identity at a domain it owns."
+									? t("Verified. The app publishes its identity at a domain it owns.")
 									: connection.verified
-										? "Verified. Sign-in redirects to a domain the vendor owns."
+										? t("Verified. Sign-in redirects to a domain the vendor owns.")
 										: connection.slug
-											? "Self-reported. Local and self-hosted apps have no domain to check, so this is normal."
-											: "Unrecognized client. Revoke it if you don't recognize the redirect below."}
+											? t(
+													"Self-reported. Local and self-hosted apps have no domain to check, so this is normal.",
+												)
+											: t(
+													"Unrecognized client. Revoke it if you don't recognize the redirect below.",
+												)}
 							</dd>
 						</>
 					)}
-					<dt>Identifier:</dt>
+					<dt>{t("Identifier:")}</dt>
 					{/* For a CIMD client the URL *is* the public identifier, and unlike an
 					    opaque UUID the user can check it by visiting it. The internal
 					    client_id stays what the revoke button keys on. */}
@@ -222,13 +229,13 @@ function ConnectionCard({
 					</dd>
 					{Boolean(connection.first_ip) && (
 						<>
-							<dt>First IP:</dt>
+							<dt>{t("First IP:")}</dt>
 							<dd>{connection.first_ip}</dd>
 						</>
 					)}
 					{Boolean(connection.first_user_agent) && (
 						<>
-							<dt>User agent:</dt>
+							<dt>{t("User agent:")}</dt>
 							<dd className="break-all">{connection.first_user_agent}</dd>
 						</>
 					)}
@@ -239,13 +246,13 @@ function ConnectionCard({
 					    grant look like Claude (#1204). */}
 					{Boolean(connection.redirect_uri) && (
 						<>
-							<dt>Delivered to:</dt>
+							<dt>{t("Delivered to:")}</dt>
 							<dd className="break-all font-mono">{connection.redirect_uri}</dd>
 						</>
 					)}
 					{connection.redirect_uris.length > 0 && (
 						<>
-							<dt>Registered redirects:</dt>
+							<dt>{t("Registered redirects:")}</dt>
 							<dd className="break-all">{connection.redirect_uris.join(", ")}</dd>
 						</>
 					)}
@@ -256,7 +263,7 @@ function ConnectionCard({
 				onClick={onRevoke}
 				className="shrink-0 self-center p-3 text-destructive text-sm hover:text-destructive/80"
 			>
-				Revoke
+				{t("Revoke")}
 			</button>
 		</article>
 	);
@@ -289,27 +296,30 @@ function PatSection({
 	canCreate: boolean;
 	onRevoke: (pat: Connection) => void;
 }) {
+	const { t } = useT();
 	const [showCreate, setShowCreate] = useState(false);
 	const [newKey, setNewKey] = useState<{ key: string; id: string; name: string } | null>(null);
 	const location = useLocation();
 
 	return (
 		<SettingsSectionCard
-			title={`API keys (${total})`}
+			title={t("API keys ({total})", { total })}
 			headerAction={
-				canCreate ? <Button onClick={() => setShowCreate(true)}>+ New Key</Button> : undefined
+				canCreate ? (
+					<Button onClick={() => setShowCreate(true)}>{t("+ New Key")}</Button>
+				) : undefined
 			}
 		>
 			{!canCreate && (
 				<aside className="mb-4 flex items-center justify-between gap-4 rounded-lg border border-border bg-muted/50 px-4 py-3">
 					<p className="text-muted-foreground text-sm">
-						Upgrade to Pro to create API keys for scripting and external integrations.
+						{t("Upgrade to Pro to create API keys for scripting and external integrations.")}
 					</p>
 					<Link
 						to={settingsTo("billing", location.search)}
 						className="shrink-0 rounded-md bg-primary px-3 py-1.5 font-medium text-primary-foreground text-sm hover:bg-primary/90"
 					>
-						Upgrade
+						{t("Upgrade")}
 					</Link>
 				</aside>
 			)}
@@ -318,8 +328,8 @@ function PatSection({
 				<EmptyState
 					text={
 						filtering
-							? "No matches."
-							: "No API keys yet. Generate one to connect scripts or external tools."
+							? t("No matches.")
+							: t("No API keys yet. Generate one to connect scripts or external tools.")
 					}
 				/>
 			) : (
@@ -328,11 +338,11 @@ function PatSection({
 						<table className="w-full min-w-[640px] text-sm">
 							<thead className="bg-muted text-left text-muted-foreground text-xs uppercase tracking-wide">
 								<tr>
-									<th className="px-4 py-3 font-medium">Name</th>
-									<th className="px-4 py-3 font-medium">Vaults</th>
-									<th className="px-4 py-3 font-medium">Key</th>
-									<th className="px-4 py-3 font-medium">Created</th>
-									<th className="px-4 py-3 font-medium">Last used</th>
+									<th className="px-4 py-3 font-medium">{t("Name")}</th>
+									<th className="px-4 py-3 font-medium">{t("Vaults")}</th>
+									<th className="px-4 py-3 font-medium">{t("Key")}</th>
+									<th className="px-4 py-3 font-medium">{t("Created")}</th>
+									<th className="px-4 py-3 font-medium">{t("Last used")}</th>
 									<th className="px-4 py-3" />
 								</tr>
 							</thead>
@@ -340,9 +350,9 @@ function PatSection({
 								{pats.map((p) => (
 									<tr key={p.key_id}>
 										<td className="px-4 py-3 font-medium text-foreground">
-											{p.name || "(unnamed)"}
+											{p.name || t("(unnamed)")}
 										</td>
-										<td className="px-4 py-3 text-muted-foreground">{vaultLabel(p)}</td>
+										<td className="px-4 py-3 text-muted-foreground">{vaultLabel(p, t)}</td>
 										<td className="px-4 py-3 font-mono text-muted-foreground text-xs">
 											engram_••••••
 										</td>
@@ -358,7 +368,7 @@ function PatSection({
 												onClick={() => onRevoke(p)}
 												className="text-destructive text-sm hover:text-destructive/80"
 											>
-												Revoke
+												{t("Revoke")}
 											</button>
 										</td>
 									</tr>
@@ -393,6 +403,7 @@ function CreatePatModal({
 	onClose: () => void;
 	onCreated: (k: CreatedApiKey) => void;
 }) {
+	const { t } = useT();
 	const [name, setName] = useState("");
 	const create = useCreatePat();
 	const nameRef = useAutofocus<HTMLInputElement>();
@@ -411,20 +422,20 @@ function CreatePatModal({
 	}
 
 	return (
-		<ModalShell onClose={onClose} title="New API Key">
+		<ModalShell onClose={onClose} title={t("New API Key")}>
 			<form onSubmit={submit} className="space-y-4">
 				<label className="block">
-					<span className="font-medium text-foreground text-sm">Name</span>
+					<span className="font-medium text-foreground text-sm">{t("Name")}</span>
 					<input
 						ref={nameRef}
 						value={name}
 						onChange={(e) => setName(e.target.value)}
-						placeholder="e.g. ci-bot"
+						placeholder={t("e.g. ci-bot")}
 						maxLength={64}
 						className="mt-1 block w-full rounded-md border border-input bg-card px-3 py-2 text-foreground text-sm focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
 					/>
 					<span className="mt-1 block text-muted-foreground text-xs">
-						Helps you identify the key later, pick something memorable.
+						{t("Helps you identify the key later, pick something memorable.")}
 					</span>
 				</label>
 
@@ -432,7 +443,7 @@ function CreatePatModal({
 					<p className="text-destructive text-sm" role="alert">
 						{create.error instanceof ApiError
 							? create.error.message
-							: "Could not create key. Try again."}
+							: t("Could not create key. Try again.")}
 					</p>
 				)}
 
@@ -442,14 +453,14 @@ function CreatePatModal({
 						onClick={onClose}
 						className="rounded-md px-4 py-2 text-foreground text-sm hover:bg-accent"
 					>
-						Cancel
+						{t("Cancel")}
 					</button>
 					<button
 						type="submit"
 						disabled={create.isPending || name.trim().length === 0}
 						className="rounded-md bg-primary px-4 py-2 font-medium text-primary-foreground text-sm hover:bg-primary/90 disabled:opacity-50"
 					>
-						{create.isPending ? "Generating…" : "Generate Key"}
+						{create.isPending ? t("Generating…") : t("Generate Key")}
 					</button>
 				</footer>
 			</form>
@@ -466,6 +477,7 @@ function RevealKeyModal({
 	createdKey: { key: string; id: string; name: string };
 	onClose: () => void;
 }) {
+	const { t } = useT();
 	const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
 	const keyFieldRef = useRef<HTMLInputElement>(null);
 
@@ -482,10 +494,12 @@ function RevealKeyModal({
 	}
 
 	return (
-		<ModalShell onClose={onClose} title="Save your API key">
+		<ModalShell onClose={onClose} title={t("Save your API key")}>
 			<div className="space-y-4">
 				<p className="rounded-md bg-amber-50 px-3 py-2 text-amber-800 text-sm dark:bg-amber-950 dark:text-amber-200">
-					This is the only time the key will be shown. Copy it now and store it somewhere safe.
+					{t(
+						"This is the only time the key will be shown. Copy it now and store it somewhere safe.",
+					)}
 				</p>
 
 				<div className="flex items-stretch gap-2">
@@ -496,22 +510,24 @@ function RevealKeyModal({
 						onFocus={selectAll}
 						onClick={selectAll}
 						className="min-w-0 flex-1 rounded-md border border-input bg-muted px-3 py-2 font-mono text-foreground text-sm focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
-						aria-label="API key"
+						aria-label={t("API key")}
 					/>
 					<button
 						type="button"
 						onClick={copy}
-						aria-label="Copy API key"
+						aria-label={t("Copy API key")}
 						className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-primary bg-primary px-3 py-2 font-medium text-primary-foreground text-sm shadow-sm transition-colors hover:bg-primary/90 active:scale-[0.98]"
 					>
 						<CopyIcon copied={copyState === "copied"} />
-						<span className="min-w-12 text-left">{copyState === "copied" ? "Copied" : "Copy"}</span>
+						<span className="min-w-12 text-left">
+							{copyState === "copied" ? t("Copied") : t("Copy")}
+						</span>
 					</button>
 				</div>
 
 				{copyState === "error" && (
 					<p className="text-destructive text-sm" role="alert">
-						Copy failed, click the field and press Cmd/Ctrl+C to copy manually.
+						{t("Copy failed, click the field and press Cmd/Ctrl+C to copy manually.")}
 					</p>
 				)}
 
@@ -521,7 +537,7 @@ function RevealKeyModal({
 						onClick={onClose}
 						className="rounded-md border border-input bg-card px-4 py-2 font-medium text-foreground text-sm shadow-sm hover:bg-accent"
 					>
-						Done
+						{t("Done")}
 					</button>
 				</footer>
 			</div>
@@ -574,6 +590,7 @@ function ConfirmRevokeModal({
 	onConfirm: () => Promise<unknown>;
 	onClose: () => void;
 }) {
+	const { t } = useT();
 	const [submitting, setSubmitting] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
@@ -586,10 +603,10 @@ function ConfirmRevokeModal({
 		} catch (e) {
 			setError(
 				e instanceof ApiError
-					? `${e.status}: ${e.message}`
+					? t("{status}: {message}", { status: e.status, message: e.message })
 					: e instanceof Error
 						? e.message
-						: "Revoke failed",
+						: t("Revoke failed"),
 			);
 			setSubmitting(false);
 		}
@@ -608,7 +625,7 @@ function ConfirmRevokeModal({
 		>
 			<DialogContent>
 				<DialogHeader>
-					<DialogTitle>Revoke "{name}"?</DialogTitle>
+					<DialogTitle>{t('Revoke "{name}"?', { name })}</DialogTitle>
 					<DialogDescription>{description}</DialogDescription>
 				</DialogHeader>
 				{Boolean(error) && (
@@ -621,10 +638,10 @@ function ConfirmRevokeModal({
 				)}
 				<DialogFooter>
 					<Button type="button" variant="outline" onClick={onClose} disabled={submitting}>
-						Cancel
+						{t("Cancel")}
 					</Button>
 					<Button type="button" variant="destructive" onClick={handleConfirm} disabled={submitting}>
-						{submitting ? "Revoking…" : "Revoke"}
+						{submitting ? t("Revoking…") : t("Revoke")}
 					</Button>
 				</DialogFooter>
 			</DialogContent>
@@ -641,11 +658,12 @@ function ModalShell({
 	onClose: () => void;
 	children: React.ReactNode;
 }) {
+	const { t } = useT();
 	return (
 		<div className="fixed inset-0 z-50 flex items-center justify-center p-4">
 			<button
 				type="button"
-				aria-label="Close dialog"
+				aria-label={t("Close dialog")}
 				onClick={onClose}
 				className="fixed inset-0 bg-black/50"
 			/>
@@ -667,6 +685,7 @@ function ModalShell({
 }
 
 export default function ConnectionsPage() {
+	const { t } = useT();
 	const { data: connections, isLoading, error } = useConnections();
 	const caps = useTierCaps();
 	const revokeOauth = useRevokeOauthConnection();
@@ -681,12 +700,14 @@ export default function ConnectionsPage() {
 	const searchRef = useRef<HTMLInputElement>(null);
 
 	if (isLoading) {
-		return <p className="text-muted-foreground text-sm">Loading…</p>;
+		return <p className="text-muted-foreground text-sm">{t("Loading…")}</p>;
 	}
 	if (error) {
 		return (
 			<p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-destructive text-sm">
-				Failed to load: {error instanceof Error ? error.message : "unknown error"}
+				{t("Failed to load: {message}", {
+					message: error instanceof Error ? error.message : t("unknown error"),
+				})}
 			</p>
 		);
 	}
@@ -697,7 +718,8 @@ export default function ConnectionsPage() {
 	// Name and vaults are what a row is recognized by, so they are what it is
 	// found by. `vaultLabel` covers the "All vaults" case too.
 	const matches = (c: Connection) =>
-		!needle || `${c.label ?? ""} ${c.name ?? ""} ${vaultLabel(c)}`.toLowerCase().includes(needle);
+		!needle ||
+		`${c.label ?? ""} ${c.name ?? ""} ${vaultLabel(c, t)}`.toLowerCase().includes(needle);
 
 	const shown = list.filter(matches);
 	const obs = shown.filter((c) => c.kind === "obsidian");
@@ -716,7 +738,7 @@ export default function ConnectionsPage() {
 		<article className="space-y-8">
 			<header>
 				<div className="flex items-start justify-between gap-2">
-					<h1 className="font-semibold text-foreground text-xl">Connections</h1>
+					<h1 className="font-semibold text-foreground text-xl">{t("Connections")}</h1>
 					{showSearch && !searching && (
 						<button
 							type="button"
@@ -726,7 +748,7 @@ export default function ConnectionsPage() {
 								// an autoFocus attribute stealing it on mount.
 								requestAnimationFrame(() => searchRef.current?.focus());
 							}}
-							aria-label="Search connections"
+							aria-label={t("Search connections")}
 							className="rounded p-1 text-muted-foreground hover:text-foreground"
 						>
 							<Search className="size-4" />
@@ -734,7 +756,7 @@ export default function ConnectionsPage() {
 					)}
 				</div>
 				<p className="mt-1 text-muted-foreground text-sm">
-					Manage what's connected to your Engram account.
+					{t("Manage what's connected to your Engram account.")}
 				</p>
 				{searching ? (
 					<input
@@ -743,12 +765,12 @@ export default function ConnectionsPage() {
 						value={filter}
 						onChange={(e) => setFilter(e.target.value)}
 						onBlur={() => filter === "" && setSearching(false)}
-						placeholder="Search connections"
-						aria-label="Search connections"
+						placeholder={t("Search connections")}
+						aria-label={t("Search connections")}
 						className="mt-3 w-full rounded-lg border border-border bg-background p-2 text-sm"
 					/>
 				) : null}
-				<nav aria-label="Connection documentation" className="mt-4 grid gap-2 sm:grid-cols-2">
+				<nav aria-label={t("Connection documentation")} className="mt-4 grid gap-2 sm:grid-cols-2">
 					<a
 						href="https://engram.page/docs/integrations/"
 						target="_blank"
@@ -756,11 +778,12 @@ export default function ConnectionsPage() {
 						className="group rounded-lg border border-border bg-card p-3 hover:border-primary"
 					>
 						<p className="font-medium text-foreground text-sm group-hover:text-primary">
-							AI integrations →
+							{t("AI integrations →")}
 						</p>
 						<p className="mt-0.5 text-muted-foreground text-xs">
-							Step-by-step setup for Claude Desktop, Cursor, ChatGPT, and other AI apps that support
-							custom integrations.
+							{t(
+								"Step-by-step setup for Claude Desktop, Cursor, ChatGPT, and other AI apps that support custom integrations.",
+							)}
 						</p>
 					</a>
 					<a
@@ -770,22 +793,22 @@ export default function ConnectionsPage() {
 						className="group rounded-lg border border-border bg-card p-3 hover:border-primary"
 					>
 						<p className="font-medium text-foreground text-sm group-hover:text-primary">
-							MCP protocol →
+							{t("MCP protocol →")}
 						</p>
 						<p className="mt-0.5 text-muted-foreground text-xs">
-							Connect Engram anywhere that supports MCP.
+							{t("Connect Engram anywhere that supports MCP.")}
 						</p>
 					</a>
 				</nav>
 			</header>
 
-			<SettingsSectionCard title={`Obsidian plugins (${obsCount})`}>
+			<SettingsSectionCard title={t("Obsidian plugins ({count})", { count: obsCount })}>
 				{obs.length === 0 ? (
 					<EmptyState
 						text={
 							needle
-								? "No matches."
-								: "Install the Engram Vault Sync plugin in Obsidian to connect this vault."
+								? t("No matches.")
+								: t("Install the Engram Vault Sync plugin in Obsidian to connect this vault.")
 						}
 					/>
 				) : (
@@ -796,8 +819,8 @@ export default function ConnectionsPage() {
 									connection={c}
 									onRevoke={() =>
 										setPendingRevoke({
-											name: c.name ?? "this connection",
-											description: "The plugin will lose access to your vault.",
+											name: c.name ?? t("this connection"),
+											description: t("The plugin will lose access to your vault."),
 											// Obsidian uses device-flow exclusively today; route all
 											// Obsidian revocations through the device endpoint. When
 											// MCP-style Obsidian clients ship we will need a
@@ -812,13 +835,15 @@ export default function ConnectionsPage() {
 				)}
 			</SettingsSectionCard>
 
-			<SettingsSectionCard title={`AI tools & integrations (${mcpCount})`}>
+			<SettingsSectionCard title={t("AI tools & integrations ({count})", { count: mcpCount })}>
 				{mcp.length === 0 ? (
 					<EmptyState
 						text={
 							needle
-								? "No matches."
-								: "Connect Claude Desktop, Cursor, or another MCP client to use Engram as a tool."
+								? t("No matches.")
+								: t(
+										"Connect Claude Desktop, Cursor, or another MCP client to use Engram as a tool.",
+									)
 						}
 					/>
 				) : (
@@ -831,8 +856,8 @@ export default function ConnectionsPage() {
 									connection={c}
 									onRevoke={() =>
 										setPendingRevoke({
-											name: c.name ?? "this connection",
-											description: "This client will lose access to your account.",
+											name: c.name ?? t("this connection"),
+											description: t("This client will lose access to your account."),
 											// family_id scopes the revoke to THIS grant. Without it a
 											// user with two grants for one client loses both.
 											onConfirm: () =>
@@ -856,8 +881,8 @@ export default function ConnectionsPage() {
 				canCreate={caps.apiWriteEnabled}
 				onRevoke={(p) =>
 					setPendingRevoke({
-						name: p.name ?? "this key",
-						description: "This API key will stop working immediately and cannot be restored.",
+						name: p.name ?? t("this key"),
+						description: t("This API key will stop working immediately and cannot be restored."),
 						onConfirm: () => revokePat.mutateAsync(p.key_id!),
 					})
 				}
