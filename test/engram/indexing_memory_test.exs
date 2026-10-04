@@ -21,6 +21,7 @@ defmodule Engram.IndexingMemoryTest do
   setup :verify_on_exit!
 
   @dims 1024
+  @sparse_cap 80 * 1_048_576
 
   setup do
     bypass = Bypass.open()
@@ -89,6 +90,79 @@ defmodule Engram.IndexingMemoryTest do
 
     assert {:ok, {:ok, count}} = result
     assert count >= 2_000
+  end
+
+  test "an embedder returning packed float32 is upserted as the same floats",
+       %{user: user, vault: vault} do
+    vec = for i <- 1..@dims, do: i / 1024 - 0.5
+    packed = for x <- vec, into: <<>>, do: <<x::float-32-little>>
+
+    stub(Engram.MockEmbedder, :embed_texts, fn texts ->
+      {:ok, Enum.map(texts, fn _ -> packed end)}
+    end)
+
+    note =
+      Engram.Fixtures.insert_note!(user, vault, %{
+        path: "Packed.md",
+        content: "# Packed\n\nA short note."
+      })
+      |> decrypted(user)
+
+    assert {:ok, _} = Indexing.index_note(note, vault, user)
+    assert_receive {:upsert, %{"points" => [%{"vector" => %{"dense" => dense}} | _]}}
+    assert dense == vec
+  end
+
+  # Sparse vectors used to be the heap: two list cells and a boxed float per
+  # term, ~48 B, held for the whole note. A note with a wide vocabulary (code,
+  # identifiers, logs) has hundreds of terms per chunk. Measured on this note
+  # (4.8 MB, 4,000 chunks): 28 MB of sparse lists live, killed even at a 160 MB
+  # cap. Packed, they are off-heap binaries and the same note indexes under
+  # 40 MB; 80 MB leaves room for GC/OTP variance.
+  @tag timeout: :timer.minutes(5)
+  test "a wide-vocabulary note's sparse vectors stay off the heap", %{user: user, vault: vault} do
+    stub(Engram.MockEmbedder, :embed_texts, fn texts ->
+      {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+    end)
+
+    :rand.seed(:exsss, {1, 2, 3})
+    word = fn -> for(_ <- 1..7, into: "", do: <<Enum.random(?a..?z)>>) end
+
+    content =
+      Enum.map_join(1..2_000, "\n\n", fn i ->
+        "## Part #{i}\n\n" <> Enum.map_join(1..300, " ", fn _ -> word.() end)
+      end)
+
+    note =
+      Engram.Fixtures.insert_note!(user, vault, %{path: "Big/Vocab.md", content: content})
+      |> decrypted(user)
+
+    Process.flag(:trap_exit, true)
+    result = run_with_heap_cap(@sparse_cap, fn -> Indexing.index_note(note, vault, user) end)
+
+    assert {:ok, {:ok, count}} = result
+    assert count >= 2_000
+  end
+
+  test "upserted keyword vectors are the encoder's values, exactly", %{user: user, vault: vault} do
+    stub(Engram.MockEmbedder, :embed_texts, fn texts ->
+      {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+    end)
+
+    text = "Ferritin ferritin iron panel, İstanbul ﬁle naïve 東京 0.75 x_y"
+
+    note =
+      Engram.Fixtures.insert_note!(user, vault, %{path: "Kw.md", content: text})
+      |> decrypted(user)
+
+    assert {:ok, _} = Indexing.index_note(note, vault, user)
+    assert_receive {:upsert, %{"points" => [%{"vector" => %{"keyword" => keyword}}]}}
+
+    {:ok, key} = Engram.Crypto.dek_filter_key(user)
+    avgdl = Engram.KeywordIndex.Stats.avgdl(note.user_id, note.vault_id)
+    {expected, _len} = Engram.KeywordIndex.QdrantSparse.encode_document(text, key, avgdl, nil)
+
+    assert keyword == %{"indices" => expected.indices, "values" => expected.values}
   end
 
   test "upserted dense vectors are the embedder's values, exactly", %{user: user, vault: vault} do

@@ -3,7 +3,8 @@
 # group_hash  <group> <beam_tag> -> sha256 of tracked content under those paths (+ beam tag)
 group_paths() {
   case "$1" in
-    elixir-src)  echo "lib config mix.lock" ;;        # mix.exs handled separately (version-stripped)
+    # native/: the Rust NIF crate rustler compiles during `mix compile`.
+    elixir-src)  echo "lib config mix.lock native" ;; # mix.exs handled separately (version-stripped)
     # Not just test/: the unit-tests JOB also runs the OpenAPI drift gate
     # (diffs the committed openapi.json against a fresh regen) and squawk
     # (which auto-discovers .squawk.toml from cwd). Both were outside every

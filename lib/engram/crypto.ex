@@ -921,12 +921,10 @@ defmodule Engram.Crypto do
 
     with {:ok, text_ct} <- safe_decode64(Map.get(candidate, :text)),
          {:ok, text_nonce} <- safe_decode64(Map.get(candidate, :text_nonce)),
-         {:ok, title_ct} <- safe_decode64(Map.get(candidate, :title)),
-         {:ok, title_nonce} <- safe_decode64(Map.get(candidate, :title_nonce)),
          {:ok, hp_ct} <- safe_decode64(Map.get(candidate, :heading_path)),
          {:ok, hp_nonce} <- safe_decode64(Map.get(candidate, :heading_path_nonce)),
          {:ok, text} <- Envelope.decrypt(text_ct, text_nonce, dek, text_aad),
-         {:ok, title} <- Envelope.decrypt(title_ct, title_nonce, dek, title_aad),
+         {:ok, title} <- decrypt_optional_title(candidate, dek, title_aad),
          {:ok, heading_path} <- Envelope.decrypt(hp_ct, hp_nonce, dek, hp_aad) do
       decrypted =
         candidate
@@ -960,6 +958,21 @@ defmodule Engram.Crypto do
         )
 
         []
+    end
+  end
+
+  # Search takes the title from the note row (`rehydrate_display_fields/2`),
+  # so a point need not carry one: absent decrypts to nil rather than failing
+  # the whole candidate. Present-but-corrupt still fails, as before.
+  defp decrypt_optional_title(candidate, dek, aad) do
+    case {Map.get(candidate, :title), Map.get(candidate, :title_nonce)} do
+      {nil, nil} ->
+        {:ok, nil}
+
+      {ct64, nonce64} ->
+        with {:ok, ct} <- safe_decode64(ct64),
+             {:ok, nonce} <- safe_decode64(nonce64),
+             do: Envelope.decrypt(ct, nonce, dek, aad)
     end
   end
 

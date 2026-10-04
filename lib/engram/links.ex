@@ -129,19 +129,19 @@ defmodule Engram.Links do
     # matches zero rows, which is the worse half: a stale edge set survives a
     # rewrite with no error anywhere.
     #
-    # Scoped HERE and not at the callers, deliberately. `commit_index/1` calls
-    # this AFTER its own tenant block has committed, and in production that
-    # block is a real top-level transaction whose SET LOCAL is discarded at
-    # commit — so the tenant is already gone by the time this runs. Relying on
-    # a caller's tenant only appears to work under the test sandbox, where
+    # Scoped HERE and not at the callers, deliberately. Callers such as
+    # `ExtractNoteLinks` and `Rewriter.finish/4` reach this with no tenant in
+    # force, or after their own tenant block has committed (a real top-level
+    # transaction whose SET LOCAL is discarded at commit). Relying on a
+    # caller's tenant only appears to work under the test sandbox, where
     # everything shares one outer transaction and the setting leaks forward.
     #
     # Re-entrant for the same tenant, so `BackfillNoteLinks` (which already
     # holds `with_tenant(user_id, ...)`) pays nothing.
     Repo.with_tenant(user.id, fn ->
       # Serialize concurrent extraction for one source note. Two writers
-      # (ExtractNoteLinks fast path + the embed pipeline's commit_index, or
-      # duplicate bulk jobs) interleaving this delete+insert under READ
+      # (overlapping ExtractNoteLinks runs, a Rewriter repair, or duplicate
+      # bulk jobs) interleaving this delete+insert under READ
       # COMMITTED can violate unique_index([:source_note_id, :position]):
       # B's DELETE cannot see A's uncommitted inserts. Both runs write a
       # freshly-parsed row set, so strict last-writer-wins under this lock
@@ -182,11 +182,9 @@ defmodule Engram.Links do
   #
   # Scoped HERE and not at the callers, for the same reason `replace_links/4`
   # is: this prefetch runs BEFORE that function opens its own `with_tenant`
-  # (it feeds the rows that block inserts), and FIVE caller paths reach it with
-  # no tenant in force — `commit_index/1` after its tenant block has already
-  # committed, `index_note_with_usage/3`'s `:no_chunks` branch,
-  # `ExtractNoteLinks` (whose block covers only the vault fetch),
-  # `Rewriter.finish/4`, and `Rewriter.rewrite_legacy/5` (reached from
+  # (it feeds the rows that block inserts), and three caller paths reach it
+  # with no tenant in force — `ExtractNoteLinks` (whose block covers only the
+  # vault fetch), `Rewriter.finish/4`, and `Rewriter.rewrite_legacy/5` (reached from
   # `attempt/6`'s `{:legacy, _}` branch, after `load_doc/2`'s block has
   # closed). Filtered, both reads return no candidates and every edge is
   # written DANGLING — silently, because the `insert_all` downstream IS scoped

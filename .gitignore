@@ -53,3 +53,7 @@ frontend/playwright-report/
 frontend/e2e/.auth-state.json
 .superpowers/
 conformance-results/
+
+# Rust NIF build output (rustler compiles native/* into priv/native at mix compile)
+/native/*/target/
+/priv/native/

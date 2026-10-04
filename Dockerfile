@@ -72,6 +72,15 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update -y && apt-get install -y build-essential git
 
+# Rust for the in-house NIFs (native/), BUILDER STAGE ONLY: the release ships
+# the compiled .so and the runner image has no Rust. Copied from the official
+# image pinned by DIGEST (same bookworm base, so the same glibc) rather than
+# piping an installer into a shell. Version matches
+# native/engram_native/rust-toolchain.toml; keep the two in sync.
+COPY --from=rust:1.94.1-slim-bookworm@sha256:cf9dd0ec73e75f827fe59123fff9dc65af1a1c8363c3c31ee8d7f8ad0b6a5fb2 /usr/local/rustup /usr/local/rustup
+COPY --from=rust:1.94.1-slim-bookworm@sha256:cf9dd0ec73e75f827fe59123fff9dc65af1a1c8363c3c31ee8d7f8ad0b6a5fb2 /usr/local/cargo /usr/local/cargo
+ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:$PATH
+
 WORKDIR /app
 
 ENV MIX_ENV="prod"
@@ -125,6 +134,7 @@ RUN --mount=type=cache,target=/app/deps,id=mix-deps,sharing=locked \
 # changes don't invalidate the Elixir compile layer.
 # (runtime.exs already copied above — not re-copied here.)
 COPY lib lib
+COPY native native
 COPY priv priv
 COPY --from=frontend /priv/static/app priv/static/app
 # rel/ holds env.sh.eex, whose ECS_ENABLE_CLUSTER gate exports
@@ -150,6 +160,7 @@ COPY rel rel
 RUN --mount=type=cache,target=/app/deps,id=mix-deps,sharing=locked \
     --mount=type=cache,target=/root/.hex,id=mix-hex,sharing=locked \
     --mount=type=cache,target=/root/.cache/rebar3,id=mix-rebar,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry,sharing=locked \
     mix deps.get --only $MIX_ENV && \
     mix compile --force && \
     mix release && \

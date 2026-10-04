@@ -10,45 +10,23 @@ defmodule Engram.LinksLifecycleTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
-  import Mox
-
   alias Engram.Attachments
   alias Engram.Links
   alias Engram.Notes
-  alias Engram.Workers.EmbedNote
-
-  setup :verify_on_exit!
+  alias Engram.Workers.ExtractNoteLinks
 
   setup do
-    bypass = Bypass.open()
-    Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
-    on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
-
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
     vault = insert(:vault, user: user)
 
-    %{user: user, vault: vault, bypass: bypass}
+    %{user: user, vault: vault}
   end
 
-  defp stub_qdrant(bypass) do
-    Bypass.expect(bypass, fn conn ->
-      conn
-      |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(200, ~s({"result": true}))
-    end)
-  end
-
-  # Runs the note through the real index pipeline (parse -> embed -> Links)
-  # exactly like EmbedNoteTest — the debounced job upsert_note enqueued isn't
-  # scheduled to run yet, so we perform it directly.
-  defp index!(bypass, note_id) do
-    Engram.MockEmbedder
-    |> expect(:embed_texts, fn texts ->
-      {:ok, Enum.map(texts, fn _ -> List.duplicate(0.1, 3) end)}
-    end)
-
-    stub_qdrant(bypass)
-    assert :ok = perform_job(EmbedNote, %{note_id: note_id})
+  # Writes the note's outgoing edges the way production does: the
+  # ExtractNoteLinks job every content change enqueues. The debounced job
+  # upsert_note enqueued isn't scheduled to run yet, so perform it directly.
+  defp extract_links!(user, note_id) do
+    assert :ok = perform_job(ExtractNoteLinks, %{note_id: note_id, user_id: user.id})
   end
 
   defp drain_indexing! do
@@ -60,11 +38,11 @@ defmodule Engram.LinksLifecycleTest do
     link
   end
 
-  test "creating the target binds existing danglers", %{user: user, vault: vault, bypass: bypass} do
+  test "creating the target binds existing danglers", %{user: user, vault: vault} do
     {:ok, source} =
       Notes.upsert_note(user, vault, %{"path" => "Source1.md", "content" => "See [[Later]]."})
 
-    index!(bypass, source.id)
+    extract_links!(user, source.id)
 
     assert only_link(user, source.id).dangling
 
@@ -80,13 +58,12 @@ defmodule Engram.LinksLifecycleTest do
 
   test "renaming a note re-resolves danglers to its new name", %{
     user: user,
-    vault: vault,
-    bypass: bypass
+    vault: vault
   } do
     {:ok, source} =
       Notes.upsert_note(user, vault, %{"path" => "Source2.md", "content" => "See [[Fresh]]."})
 
-    index!(bypass, source.id)
+    extract_links!(user, source.id)
     assert only_link(user, source.id).dangling
 
     {:ok, old_note} = Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# Old"})
@@ -104,8 +81,7 @@ defmodule Engram.LinksLifecycleTest do
   test "renaming AWAY (REST) rewrites the link to follow its target instead of falling back to basename rebind",
        %{
          user: user,
-         vault: vault,
-         bypass: bypass
+         vault: vault
        } do
     {:ok, a_short} = Notes.upsert_note(user, vault, %{"path" => "A.md", "content" => "# A short"})
 
@@ -115,7 +91,7 @@ defmodule Engram.LinksLifecycleTest do
     {:ok, source} =
       Notes.upsert_note(user, vault, %{"path" => "Source3.md", "content" => "See [[A]]."})
 
-    index!(bypass, source.id)
+    extract_links!(user, source.id)
     assert only_link(user, source.id).target_note_id == a_short.id
 
     {:ok, _renamed} = Notes.rename_note(user, vault, "A.md", "Z.md")
@@ -137,8 +113,7 @@ defmodule Engram.LinksLifecycleTest do
 
   test "delete flips incoming edges to dangling and drops outgoing", %{
     user: user,
-    vault: vault,
-    bypass: bypass
+    vault: vault
   } do
     {:ok, target} =
       Notes.upsert_note(user, vault, %{
@@ -149,8 +124,8 @@ defmodule Engram.LinksLifecycleTest do
     {:ok, source} =
       Notes.upsert_note(user, vault, %{"path" => "Source4.md", "content" => "See [[Target4]]."})
 
-    index!(bypass, target.id)
-    index!(bypass, source.id)
+    extract_links!(user, target.id)
+    extract_links!(user, source.id)
 
     assert only_link(user, target.id).dangling
     assert only_link(user, source.id).target_note_id == target.id
@@ -169,14 +144,14 @@ defmodule Engram.LinksLifecycleTest do
   # web/plugin create+rename path; REST upsert_note/rename_note only serves
   # the public API + MCP now. Fix report addendum (task-6 review). ---
 
-  test "CRDT genesis create binds existing danglers", %{user: user, vault: vault, bypass: bypass} do
+  test "CRDT genesis create binds existing danglers", %{user: user, vault: vault} do
     {:ok, source} =
       Notes.upsert_note(user, vault, %{
         "path" => "CrdtSource1.md",
         "content" => "See [[CrdtLater]]."
       })
 
-    index!(bypass, source.id)
+    extract_links!(user, source.id)
     assert only_link(user, source.id).dangling
 
     id = Ecto.UUID.generate()
@@ -189,7 +164,7 @@ defmodule Engram.LinksLifecycleTest do
   end
 
   test "CRDT relocate (rename-as-move, same id) re-resolves edges that pointed at the old name",
-       %{user: user, vault: vault, bypass: bypass} do
+       %{user: user, vault: vault} do
     {:ok, a_short} =
       Notes.upsert_note(user, vault, %{"path" => "CrdtA.md", "content" => "# A short"})
 
@@ -204,7 +179,7 @@ defmodule Engram.LinksLifecycleTest do
     {:ok, source} =
       Notes.upsert_note(user, vault, %{"path" => "CrdtSource3.md", "content" => "See [[CrdtA]]."})
 
-    index!(bypass, source.id)
+    extract_links!(user, source.id)
     assert only_link(user, source.id).target_note_id == a_short.id
 
     # Same id, different FREE path — genesis_crdt_note's Phase E2 relocate leg
@@ -230,8 +205,7 @@ defmodule Engram.LinksLifecycleTest do
 
   test "batch delete un-shadows a same-basename sibling", %{
     user: user,
-    vault: vault,
-    bypass: bypass
+    vault: vault
   } do
     {:ok, short} = Notes.upsert_note(user, vault, %{"path" => "Dup.md", "content" => "# short"})
     {:ok, long} = Notes.upsert_note(user, vault, %{"path" => "b/Dup.md", "content" => "# long"})
@@ -244,7 +218,7 @@ defmodule Engram.LinksLifecycleTest do
     {:ok, source} =
       Notes.upsert_note(user, vault, %{"path" => "Source5.md", "content" => "See [[Dup]]."})
 
-    index!(bypass, source.id)
+    extract_links!(user, source.id)
     assert only_link(user, source.id).target_note_id == short.id
 
     assert {:ok, %{deleted: 1}} = Notes.batch_delete_notes(user, vault, [short.id])
@@ -271,8 +245,7 @@ defmodule Engram.LinksLifecycleTest do
 
   test "embedding an attachment before it exists binds once it's uploaded", %{
     user: user,
-    vault: vault,
-    bypass: bypass
+    vault: vault
   } do
     {:ok, source} =
       Notes.upsert_note(user, vault, %{
@@ -280,7 +253,7 @@ defmodule Engram.LinksLifecycleTest do
         "content" => "![[photo.png]]"
       })
 
-    index!(bypass, source.id)
+    extract_links!(user, source.id)
     assert only_link(user, source.id).dangling
 
     att = upload!(user, vault, "photo.png")
@@ -293,15 +266,14 @@ defmodule Engram.LinksLifecycleTest do
 
   test "moving an attachment (REST) rewrites the link to follow it instead of dangling", %{
     user: user,
-    vault: vault,
-    bypass: bypass
+    vault: vault
   } do
     att = upload!(user, vault, "Movable.png")
 
     {:ok, source} =
       Notes.upsert_note(user, vault, %{"path" => "Source7.md", "content" => "![[Movable.png]]"})
 
-    index!(bypass, source.id)
+    extract_links!(user, source.id)
     refute only_link(user, source.id).dangling
 
     {:ok, _} = Attachments.move_attachment(user, vault, "Movable.png", "moved/Renamed.png")
@@ -321,15 +293,14 @@ defmodule Engram.LinksLifecycleTest do
 
   test "an attachment rename binds a dangler waiting on its new name", %{
     user: user,
-    vault: vault,
-    bypass: bypass
+    vault: vault
   } do
     _att = upload!(user, vault, "Stays.png")
 
     {:ok, source} =
       Notes.upsert_note(user, vault, %{"path" => "Source9.md", "content" => "![[Fresh.png]]"})
 
-    index!(bypass, source.id)
+    extract_links!(user, source.id)
     assert only_link(user, source.id).dangling
 
     {:ok, moved} = Attachments.move_attachment(user, vault, "Stays.png", "Fresh.png")
@@ -342,15 +313,14 @@ defmodule Engram.LinksLifecycleTest do
 
   test "deleting an attachment flips the incoming edge to dangling", %{
     user: user,
-    vault: vault,
-    bypass: bypass
+    vault: vault
   } do
     att = upload!(user, vault, "Gone.png")
 
     {:ok, source} =
       Notes.upsert_note(user, vault, %{"path" => "Source8.md", "content" => "![[Gone.png]]"})
 
-    index!(bypass, source.id)
+    extract_links!(user, source.id)
     link = only_link(user, source.id)
     refute link.dangling
     assert link.target_attachment_id == att.id
@@ -364,15 +334,14 @@ defmodule Engram.LinksLifecycleTest do
 
   test "batch-deleting an attachment flips the incoming edge to dangling", %{
     user: user,
-    vault: vault,
-    bypass: bypass
+    vault: vault
   } do
     att = upload!(user, vault, "GoneBatch.png")
 
     {:ok, source} =
       Notes.upsert_note(user, vault, %{"path" => "Source10.md", "content" => "![[GoneBatch.png]]"})
 
-    index!(bypass, source.id)
+    extract_links!(user, source.id)
     link = only_link(user, source.id)
     refute link.dangling
     assert link.target_attachment_id == att.id
@@ -391,8 +360,7 @@ defmodule Engram.LinksLifecycleTest do
   # in the batch rather than only the first/last.
   test "batch-deleting two attachments flips both incoming edges", %{
     user: user,
-    vault: vault,
-    bypass: bypass
+    vault: vault
   } do
     att_a = upload!(user, vault, "BatchA.png")
     att_b = upload!(user, vault, "BatchB.png")
@@ -403,8 +371,8 @@ defmodule Engram.LinksLifecycleTest do
     {:ok, source_b} =
       Notes.upsert_note(user, vault, %{"path" => "SourceB.md", "content" => "![[BatchB.png]]"})
 
-    index!(bypass, source_a.id)
-    index!(bypass, source_b.id)
+    extract_links!(user, source_a.id)
+    extract_links!(user, source_b.id)
 
     link_a = only_link(user, source_a.id)
     link_b = only_link(user, source_b.id)

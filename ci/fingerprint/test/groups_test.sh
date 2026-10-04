@@ -47,6 +47,9 @@ lint .sobelow-skips Sobelow
 lint mix.lock Hex-CVE-audit-mix_audit
 e2e-browser frontend browser-e2e-serves-the-SPA
 storage-database Dockerfile boots-the-release-image
+unit-tests native Run-Elixir-unit-tests-compiles-the-Rust-NIF
+lint native Compile-warnings-as-errors
+storage-database native boots-the-release-image
 PAIRS
 [ "$fail" = 0 ] && echo "groups_test OK"
 exit $fail
