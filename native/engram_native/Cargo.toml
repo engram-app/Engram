@@ -9,7 +9,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 rustler = "0.37"
-hmac = "0.12"
+hmac = "0.13"
 sha2 = "0.10"
 unicode-normalization = "0.1"
 unicode-segmentation = "1"
