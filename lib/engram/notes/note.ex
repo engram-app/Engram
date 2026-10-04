@@ -52,6 +52,11 @@ defmodule Engram.Notes.Note do
     # enqueues (upsert/rename) always run.
     field :embed_retry_after, :utc_datetime_usec
     field :embed_budget_parked, :boolean
+    # Crash-loop dead-man stamp, see Engram.Workers.EmbedNote.CrashGuard.
+    field :embed_started_at, :utc_datetime_usec
+    field :embed_started_by, :string
+    field :embed_started_hash, :string
+    field :embed_crashes, :integer
     field :mtime, :float
     field :deleted_at, :utc_datetime_usec
     field :content_ciphertext, :binary

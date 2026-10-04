@@ -1027,4 +1027,157 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
     end
   end
+
+  describe "perform/1 — a note with nothing to index" do
+    # Review of #1835: blob stripping made an image-only note parse to zero
+    # chunks. A zero-chunk pass left `dense_indexed_hash` nil and cleared the
+    # backoff, and ReconcileEmbeddings re-selects `is_nil(dense_indexed_hash)`
+    # for paid users every tick: a multi-MB decrypt and parse every 15 min.
+    test "an image-only note is stamped dense-complete", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      image = Base.encode64(:crypto.strong_rand_bytes(30_000))
+
+      note =
+        Engram.Fixtures.insert_note!(user, vault, %{
+          path: "Only/Image.md",
+          content: "![](data:image/png;base64," <> image <> ")"
+        })
+
+      # A never-indexed note has no points to purge, so Qdrant may go untouched.
+      stub_qdrant_optional(bypass)
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id, user_id: user.id})
+
+      updated = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert updated.embed_hash == updated.content_hash
+      assert updated.dense_indexed_hash == updated.content_hash
+    end
+  end
+
+  describe "perform/1 — crash-loop guard (prod worker OOM, 2026-10-03)" do
+    # A note whose embed kills the node never returns, so the poison cooldown
+    # above never fires, and the same note OOM-killed the worker for six hours.
+    # EmbedNote stamps the note before embedding and clears the stamp when the
+    # attempt returns. A stamp left by a node that is gone is one death,
+    # charged to that note alone. The first death re-runs the note alone in
+    # the `embed_isolated` queue; a death there quarantines it.
+    alias Engram.Workers.EmbedNote.CrashGuard
+
+    defp stamp!(note, attrs) do
+      defaults = [
+        embed_started_at: DateTime.utc_now(),
+        embed_started_by: "engram@10.0.0.9/deadbeef",
+        embed_started_hash: note.content_hash,
+        embed_crashes: nil
+      ]
+
+      from(n in Note, where: n.id == ^note.id)
+      |> Repo.update_all([set: Keyword.merge(defaults, attrs)], skip_tenant_check: true)
+    end
+
+    defp reload(note), do: Repo.get!(Note, note.id, skip_tenant_check: true)
+    defp args(note), do: %{note_id: note.id, user_id: note.user_id}
+
+    defp ok_embedder,
+      do:
+        expect(Engram.MockEmbedder, :embed_texts, fn texts ->
+          {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+        end)
+
+    test "a success leaves no stamp and no crash count", %{bypass: bypass, note: note} do
+      stamp!(note, embed_started_at: nil, embed_started_by: nil, embed_crashes: 1)
+      stub_qdrant(bypass)
+      ok_embedder()
+
+      assert :ok = perform_job(EmbedNote, args(note), queue: :embed_isolated)
+
+      updated = reload(note)
+      assert is_nil(updated.embed_started_at)
+      assert updated.embed_crashes in [nil, 0]
+    end
+
+    test "a graceful failure clears the stamp", %{bypass: bypass, note: note} do
+      stub_qdrant_optional(bypass)
+      expect(Engram.MockEmbedder, :embed_texts, fn _ -> {:error, {500, "boom"}} end)
+
+      assert {:error, _} = perform_job(EmbedNote, args(note))
+      assert is_nil(reload(note).embed_started_at)
+    end
+
+    test "a stamp from a node that is gone moves the note to the isolated queue", %{note: note} do
+      stamp!(note, [])
+
+      # No embedder expectation: embedding here fails the test.
+      assert {:cancel, :isolated_after_node_death} = perform_job(EmbedNote, args(note))
+
+      updated = reload(note)
+      assert updated.embed_crashes == 1
+      assert is_nil(updated.embed_started_at)
+      assert_enqueued(worker: EmbedNote, queue: :embed_isolated, args: %{note_id: note.id})
+    end
+
+    test "a second death, in isolation, quarantines the note and cancels its other jobs",
+         %{note: note} do
+      stamp!(note, embed_crashes: 1)
+      {:ok, other} = Oban.insert(EmbedNote.new(args(note), unique: false))
+
+      assert {:cancel, :repeated_node_death} =
+               perform_job(EmbedNote, args(note), queue: :embed_isolated)
+
+      updated = reload(note)
+      assert updated.embed_crashes == 2
+      cooldown = DateTime.diff(updated.embed_retry_after, DateTime.utc_now())
+      assert cooldown > 20_000, "quarantine was #{cooldown}s, expected >= 6h"
+      assert Repo.reload!(other).state == "cancelled"
+    end
+
+    test "a quarantined note is not embedded until its cooldown passes", %{note: note} do
+      stamp!(note,
+        embed_started_at: nil,
+        embed_started_by: nil,
+        embed_crashes: 2
+      )
+
+      from(n in Note, where: n.id == ^note.id)
+      |> Repo.update_all([set: [embed_retry_after: DateTime.add(DateTime.utc_now(), 3600)]],
+        skip_tenant_check: true
+      )
+
+      assert {:cancel, :quarantined} = perform_job(EmbedNote, args(note), queue: :embed_isolated)
+    end
+
+    test "each later quarantine doubles the cooldown" do
+      assert CrashGuard.cooldown_seconds(2) == 21_600
+      assert CrashGuard.cooldown_seconds(3) == 43_200
+      assert CrashGuard.cooldown_seconds(30) == 7 * 86_400
+    end
+
+    test "editing the note forgives its crashes", %{bypass: bypass, note: note} do
+      stamp!(note, embed_started_hash: "an-older-content-hash", embed_crashes: 1)
+      stub_qdrant(bypass)
+      ok_embedder()
+
+      assert :ok = perform_job(EmbedNote, args(note))
+      assert reload(note).embed_crashes in [nil, 0]
+    end
+
+    test "a fresh stamp from this node is a run in progress, not a death", %{note: note} do
+      stamp!(note, embed_started_by: CrashGuard.runner_id())
+
+      assert {:snooze, _} = perform_job(EmbedNote, args(note))
+      assert reload(note).embed_crashes in [nil, 0]
+    end
+
+    test "a stamp older than any attempt can live is a death even from this node", %{note: note} do
+      stamp!(note,
+        embed_started_by: CrashGuard.runner_id(),
+        embed_started_at: DateTime.add(DateTime.utc_now(), -20 * 60)
+      )
+
+      assert {:cancel, :isolated_after_node_death} = perform_job(EmbedNote, args(note))
+    end
+  end
 end

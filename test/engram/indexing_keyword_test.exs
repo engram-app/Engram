@@ -145,7 +145,9 @@ defmodule Engram.IndexingKeywordTest do
     [point | _] = prepared.qdrant_points
 
     assert %{"dense" => dense, "keyword" => %{indices: indices, values: values}} = point.vector
-    assert is_list(dense)
+    # Held packed (float32) until the Qdrant upsert unpacks it per batch — see
+    # Indexing.pack_vector/1. Three dims in, three float32s here.
+    assert byte_size(dense) == 3 * 4
     assert length(indices) == length(values)
     assert indices != []
 

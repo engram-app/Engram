@@ -17,7 +17,19 @@ defmodule Engram.Parsers.Markdown do
   # ordering. Do NOT bump for a change that cannot move a boundary (a typespec,
   # a comment, a refactor with identical output). Every bump costs one re-embed
   # pass over the corpus.
-  @chunker_version 1
+  #
+  # 2 — base64 blobs are stripped from section text (`strip_blobs/1`).
+  @chunker_version 2
+
+  # A run of base64 alphabet (standard + URL-safe) at least this long is a
+  # candidate blob: inline `data:` images, Excalidraw `compressed-json`,
+  # encrypted-text plugins. `encoded?/1` then decides by letter mix, because
+  # `/`, `-` and `_` are in the class and a long URL or file path is one run
+  # too. The optional `data:<mime>;base64,` prefix goes with the run so
+  # `![x](data:...)` leaves only `![x]()`. Possessive: never hand PCRE a
+  # per-character backtrack on content this size (see `Engram.Links.Parser`'s
+  # @md_link_re for what that costs).
+  @blob_run ~r/(?:data:[\w\/+.-]++;base64,)?[A-Za-z0-9+\/=_-]{100,}+/
 
   @doc """
   Version of the chunking algorithm in this build (#1620).
@@ -188,6 +200,7 @@ defmodule Engram.Parsers.Markdown do
   defp frontmatter_chunk(content, folder, title) do
     case Engram.Notes.Frontmatter.split(content) do
       {block, _body} when is_binary(block) and block != "" ->
+        block = strip_blobs(block)
         context_prefix = build_context_prefix(folder, "#{title} > frontmatter")
 
         [
@@ -314,15 +327,17 @@ defmodule Engram.Parsers.Markdown do
   defp build_chunks(sections, folder, title) do
     sections
     |> Enum.flat_map(fn section ->
-      text = section.lines |> Enum.reverse() |> Enum.join("\n") |> String.trim()
+      text =
+        section.lines |> Enum.reverse() |> Enum.join("\n") |> strip_blobs() |> String.trim()
+
       heading_path = build_heading_path(title, section.heading_stack)
       context_prefix = build_context_prefix(folder, heading_path)
 
       sub_chunks =
-        if byte_size(text) > @max_chunk_chars do
-          split_text(text, @max_chunk_chars)
-        else
-          [text]
+        cond do
+          markup_only?(text) -> []
+          byte_size(text) > @max_chunk_chars -> split_text(text, @max_chunk_chars)
+          true -> [text]
         end
 
       Enum.with_index(sub_chunks)
@@ -346,6 +361,49 @@ defmodule Engram.Parsers.Markdown do
   end
 
   # No headings in document — use the document title
+  # The stored note keeps every byte; only the indexed text loses the blob.
+  # Applied to whole section text BEFORE the size split, so a megabyte image
+  # is one regex replace instead of ~500 throwaway 2 KB chunks, and no
+  # sub-100-character tail of it survives at a split edge.
+  defp strip_blobs(text) do
+    if Regex.match?(@blob_run, text),
+      do: Regex.replace(@blob_run, text, &if(encoded?(&1), do: "", else: &1)),
+      else: text
+  end
+
+  # Random base64 is ~41% upper case, ~41% lower case, ~16% digits; over 100+
+  # characters it clears these floors with overwhelming odds. A URL or file
+  # path in the same character class is mostly lower case with an occasional
+  # capital, an identifier has no digits, a hex digest has no upper case.
+  #
+  # Counted over the first 4 KB in one byte pass. A whole-run `Regex.scan`
+  # builds a list entry per match: ~760k of them for one 1.9 MB image, which
+  # put the 2026-10-03 note back at +446 MB.
+  @encoded_sample 4096
+
+  defp encoded?(run) do
+    sample = binary_part(run, 0, min(byte_size(run), @encoded_sample))
+    {upper, lower, digit} = count_classes(sample, 0, 0, 0)
+    len = byte_size(sample)
+    upper >= len * 0.2 and lower >= len * 0.2 and digit >= len * 0.05
+  end
+
+  defp count_classes(<<c, rest::binary>>, u, l, d) when c in ?A..?Z,
+    do: count_classes(rest, u + 1, l, d)
+
+  defp count_classes(<<c, rest::binary>>, u, l, d) when c in ?a..?z,
+    do: count_classes(rest, u, l + 1, d)
+
+  defp count_classes(<<c, rest::binary>>, u, l, d) when c in ?0..?9,
+    do: count_classes(rest, u, l, d + 1)
+
+  defp count_classes(<<_, rest::binary>>, u, l, d), do: count_classes(rest, u, l, d)
+  defp count_classes(<<>>, u, l, d), do: {u, l, d}
+
+  # A section left with no letter or digit carried only the blob and its
+  # markup (`![x]()`): a vector of `)` is worth no point.
+  defp markup_only?(text), do: not Regex.match?(~r/[\p{L}\p{N}]/u, text)
+
   defp build_heading_path(title, []), do: title
 
   # Stack starts with h1: replace h1 text with the extracted title (may differ if frontmatter

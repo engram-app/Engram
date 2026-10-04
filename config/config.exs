@@ -98,6 +98,9 @@ config :engram, Oban,
     # With that bounded, embed concurrency is back to 5 (peak ≈ 560 MB, safe under
     # the 1024 MB task). ObanQueueConfigTest keeps a sane ceiling as a tripwire.
     embed: 5,
+    # A note whose embed killed the node once re-runs here ALONE, so a second
+    # death is its own and not a neighbour's (EmbedNote.CrashGuard).
+    embed_isolated: 1,
     reindex: 1,
     maintenance: 2,
     crypto_backfill: 1,
