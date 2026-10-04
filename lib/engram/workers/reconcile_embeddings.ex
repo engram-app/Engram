@@ -223,15 +223,16 @@ defmodule Engram.Workers.ReconcileEmbeddings do
           )
         )
 
-        Oban.insert_all(
-          Enum.map(
-            fresh,
-            &EmbedNote.new_debounced(&1, Map.fetch!(user_by_note, &1),
-              clamp: false,
-              priority: EmbedNote.backfill_priority()
+        _ =
+          Oban.insert_all(
+            Enum.map(
+              fresh,
+              &EmbedNote.new_debounced(&1, Map.fetch!(user_by_note, &1),
+                clamp: false,
+                priority: EmbedNote.backfill_priority()
+              )
             )
           )
-        )
 
         # Backstop for the link graph. ExtractNoteLinks is the only note_links
         # writer and is enqueued beside EmbedNote after the write commits, so
