@@ -1,5 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { heading } from "@/lib/ui-classes";
+import { useT } from "./i18n/locale-provider";
+import { Trans } from "./i18n/trans";
 import AuthBackdrop from "./layout/auth-backdrop";
 import AuthPanel from "./layout/auth-panel";
 
@@ -25,6 +27,12 @@ interface ErrorFallbackProps {
 }
 
 export default function ErrorFallback({ error, eventId, reported = false }: ErrorFallbackProps) {
+	const { t } = useT();
+	const supportLink = (
+		<a className="underline" href="mailto:support@engram.page">
+			support@engram.page
+		</a>
+	);
 	const message = error instanceof Error ? error.message : String(error);
 
 	return (
@@ -40,31 +48,40 @@ export default function ErrorFallback({ error, eventId, reported = false }: Erro
 				<div className="relative z-10 flex min-h-0 flex-1 flex-col overflow-y-auto">
 					<AuthPanel className="flex flex-col items-center gap-4 text-center">
 						<p className="bg-gradient-to-r from-brand-purple to-primary bg-clip-text font-extrabold text-7xl text-transparent leading-none tracking-tight sm:text-8xl">
-							Oops
+							{t("Oops")}
 						</p>
-						<h1 className={heading}>Something went wrong</h1>
+						<h1 className={heading}>{t("Something went wrong")}</h1>
 						<p className="max-w-md text-muted-foreground text-sm">
-							An unexpected error broke this page.{reported ? " It has been reported." : ""} Try
-							reloading. If it keeps happening, contact{" "}
-							<a className="underline" href="mailto:support@engram.page">
-								support@engram.page
-							</a>
-							.
+							{reported ? (
+								<Trans
+									text="An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}."
+									slots={{ support: supportLink }}
+								/>
+							) : (
+								<Trans
+									text="An unexpected error broke this page. Try reloading. If it keeps happening, contact {support}."
+									slots={{ support: supportLink }}
+								/>
+							)}
 						</p>
 
 						{reported && eventId ? (
 							<p className="text-muted-foreground text-xs">
-								Reference:{" "}
-								<code className="rounded bg-muted px-1.5 py-0.5 font-mono">{eventId}</code>
+								<Trans
+									text="Reference: {id}"
+									slots={{
+										id: <code className="rounded bg-muted px-1.5 py-0.5 font-mono">{eventId}</code>,
+									}}
+								/>
 							</p>
 						) : null}
 
 						<div className="mt-2 flex flex-wrap items-center justify-center gap-3">
 							<Button type="button" onClick={() => window.location.reload()}>
-								Reload
+								{t("Reload")}
 							</Button>
 							<Button asChild variant="outline">
-								<a href="/">Back to home</a>
+								<a href="/">{t("Back to home")}</a>
 							</Button>
 						</div>
 
