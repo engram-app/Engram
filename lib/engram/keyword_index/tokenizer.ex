@@ -36,8 +36,4 @@ defmodule Engram.KeywordIndex.Tokenizer do
   @doc false
   def lang(nil), do: nil
   def lang(language) when is_atom(language), do: Atom.to_string(language)
-
-  @doc "Languages with a Snowball stemmer, as atoms."
-  @spec stem_languages() :: [atom()]
-  def stem_languages, do: Enum.map(Engram.Native.stem_languages(), &String.to_atom/1)
 end
