@@ -1,9 +1,11 @@
 import { Link, useParams } from "react-router";
+import { useT } from "@/i18n/locale-provider";
 import { useBacklinks } from "../api/queries";
 import { noteName } from "../lib/note-name";
 import { noteHref } from "../routes";
 
 export default function BacklinksPanel({ noteId }: { noteId: string | null }) {
+	const { t } = useT();
 	const { slug } = useParams();
 	const { data, isLoading } = useBacklinks(noteId);
 
@@ -14,14 +16,14 @@ export default function BacklinksPanel({ noteId }: { noteId: string | null }) {
 	const backlinks = data ?? [];
 
 	return (
-		<nav aria-label="Backlinks" className="text-sm">
+		<nav aria-label={t("Backlinks")} className="text-sm">
 			<header className="border-border border-b px-3 py-2">
 				<p className="font-medium text-[10px] text-muted-foreground uppercase tracking-wide">
-					Backlinks
+					{t("Backlinks")}
 				</p>
 			</header>
 			{backlinks.length === 0 ? (
-				<p className="px-3 py-2 text-muted-foreground text-xs">No backlinks yet</p>
+				<p className="px-3 py-2 text-muted-foreground text-xs">{t("No backlinks yet")}</p>
 			) : (
 				<ul className="space-y-px py-2">
 					{backlinks.map((b) => (

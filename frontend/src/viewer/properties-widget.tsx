@@ -4,6 +4,8 @@ import { toast } from "sonner";
 import type * as Y from "yjs";
 import { HelpTip } from "@/components/help-tip";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useT } from "@/i18n/locale-provider";
+import { Trans } from "@/i18n/trans";
 import { cn } from "@/lib/utils";
 import {
 	addKey,
@@ -58,6 +60,7 @@ function PropertyKeyInput({
 	/** Hands the live input up to the row, which is where the type menu lives. */
 	elRef?: (el: HTMLInputElement | null) => void;
 }) {
+	const { t } = useT();
 	const [draft, setDraft] = useState(name);
 	const ref = useRef<HTMLInputElement>(null);
 	useEffect(() => {
@@ -77,7 +80,7 @@ function PropertyKeyInput({
 			// a value snapping back is easy to miss, and the user walks away
 			// believing the rename landed.
 			if (next !== "") {
-				toast.error(`A property named "${next}" already exists`);
+				toast.error(t('A property named "{name}" already exists', { name: next }));
 			}
 			setDraft(name);
 		}
@@ -89,7 +92,7 @@ function PropertyKeyInput({
 				ref.current = el;
 				elRef?.(el);
 			}}
-			aria-label={`Rename ${name}`}
+			aria-label={t("Rename {name}", { name })}
 			// Highlighted when Engram READS the key rather than merely storing it.
 			// No tooltip: the `?` beside the heading is where the explanation
 			// lives, and a per-key hover repeating it is noise on every row.
@@ -132,27 +135,35 @@ interface Props {
  *  most keys are stored and handed back unchanged, but a handful are read,
  *  indexed and used by search, and nothing on screen said which. */
 function PropertiesHelp() {
+	const { t } = useT();
 	return (
 		<>
 			<p>
-				Properties are the note's <strong>frontmatter</strong>: a block at the very top of the file,
-				fenced by <code>---</code>. Obsidian shows the same block as Properties, so a note edited in
-				either place reads the same in both.
+				<Trans
+					text="Properties are the note's {frontmatter}: a block at the very top of the file, fenced by {fence}. Obsidian shows the same block as Properties, so a note edited in either place reads the same in both."
+					slots={{
+						frontmatter: <strong>{t("frontmatter")}</strong>,
+						fence: <code>---</code>,
+					}}
+				/>
 			</p>
 			<p className="mt-2">
-				Any property you add is stored and synced. These are the ones Engram also{" "}
-				<strong>reads</strong> — it indexes them into their own columns and search uses them, so
-				filling them in does more than record a note about the note:
+				<Trans
+					text="Any property you add is stored and synced. These are the ones Engram also {reads} — it indexes them into their own columns and search uses them, so filling them in does more than record a note about the note:"
+					slots={{ reads: <strong>{t("reads")}</strong> }}
+				/>
 			</p>
 			<dl className="mt-2 space-y-1">
 				{OKF_FIELD_HELP.map(({ key, aliases, expectsLabel, what }) => (
 					<div key={key} className="flex gap-2">
 						<dt className="w-24 shrink-0 font-mono text-foreground">{key}</dt>
 						<dd className="flex-1 text-muted-foreground">
-							{what} Wants {expectsLabel}.
+							{t("{what} Wants {expectsLabel}.", { what, expectsLabel })}
 							{aliases.length > 0 ? (
 								<span className="block opacity-80">
-									also accepts {aliases.map((a) => `\`${a}\``).join(" or ")}
+									{t("also accepts {aliases}", {
+										aliases: aliases.map((a) => `\`${a}\``).join(` ${t("or")} `),
+									})}
 								</span>
 							) : null}
 						</dd>
@@ -160,23 +171,28 @@ function PropertiesHelp() {
 				))}
 			</dl>
 			<p className="mt-2">
-				These field names come from the{" "}
-				<a
-					href="https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf"
-					target="_blank"
-					rel="noreferrer noopener"
-					className="text-primary underline underline-offset-2"
-				>
-					Open Knowledge Format
-				</a>
-				, the open standard Engram follows — so using them keeps your notes portable to anything
-				else that reads OKF. Any other name is yours to invent; it syncs like everything else.
+				<Trans
+					text="These field names come from the {okf}, the open standard Engram follows — so using them keeps your notes portable to anything else that reads OKF. Any other name is yours to invent; it syncs like everything else."
+					slots={{
+						okf: (
+							<a
+								href="https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf"
+								target="_blank"
+								rel="noreferrer noopener"
+								className="text-primary underline underline-offset-2"
+							>
+								{t("Open Knowledge Format")}
+							</a>
+						),
+					}}
+				/>
 			</p>
 		</>
 	);
 }
 
 export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) {
+	const { t } = useT();
 	const [rows, setRows] = useState<PropertyRow[]>(() => readRows(doc));
 	const newKeyRef = useRef<HTMLInputElement>(null);
 	// Holds whichever control the chosen type renders — a checkbox is a
@@ -239,7 +255,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 			return "empty";
 		}
 		if (!addKey(doc, newKey, newType)) {
-			toast.error(`A property named "${key}" already exists`);
+			toast.error(t('A property named "{name}" already exists', { name: key }));
 			return "duplicate";
 		}
 		if (newValue !== "") {
@@ -394,7 +410,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 						aria-hidden="true"
 						className="-ml-[18px] size-3.5 opacity-100 transition-[opacity,rotate] group-open/props:rotate-90 group-open/props:opacity-0 group-open/props:group-hover/summary:opacity-100 group-open/props:group-focus-visible/summary:opacity-100"
 					/>
-					Properties
+					{t("Properties")}
 					{/* Inside the summary so it sits with the label — which means a
 					    click on it would also fire the summary's default action and
 					    COLLAPSE the thing you just asked about.
@@ -402,7 +418,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 					    Undone rather than prevented -- see the ref above for why
 					    preventDefault is not available here. */}
 					<span className="ml-1 inline-flex align-middle">
-						<HelpTip label="About properties" align="start">
+						<HelpTip label={t("About properties")} align="start">
 							<PropertiesHelp />
 						</HelpTip>
 					</span>
@@ -415,7 +431,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 								<dt className={KEY_CELL}>
 									<PropertyTypeMenu
 										value={type}
-										onChange={(t) => setType(doc, row.key, t)}
+										onChange={(next) => setType(doc, row.key, next)}
 										focusAfterSelect={() => keyEls.current.get(row.key) ?? null}
 									/>
 									<PropertyKeyInput
@@ -444,7 +460,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 							    for a right-click menu, which is where Obsidian keeps it. */}
 								<button
 									type="button"
-									aria-label={`Remove ${row.key}`}
+									aria-label={t("Remove {key}", { key: row.key })}
 									onClick={() => removeKey(doc, row.key)}
 									className="mr-1 flex size-7 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus:opacity-100 group-hover:opacity-100"
 								>
@@ -461,24 +477,24 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 							<dt className={KEY_CELL}>
 								<PropertyTypeMenu
 									value={newType}
-									onChange={(t) => {
-										if (t === newType) {
+									onChange={(next) => {
+										if (next === newType) {
 											return;
 										}
-										setNewType(t);
+										setNewType(next);
 										// Reset the pending value with the type. A half-typed
 										// string means nothing to the new control (a date input
 										// silently drops "hello"), and an unchecked checkbox has
 										// to commit `false` rather than commit nothing at all —
 										// commitNewKey skips an empty value.
-										setNewValue(t === "checkbox" ? "false" : "");
+										setNewValue(next === "checkbox" ? "false" : "");
 									}}
 									focusAfterSelect={() => newKeyRef.current}
 								/>
 								<input
 									ref={newKeyRef}
 									className="w-full min-w-0 border-0 bg-transparent px-2 py-1 text-muted-foreground text-sm outline-none placeholder:text-muted-foreground/60"
-									placeholder="Property name"
+									placeholder={t("Property name")}
 									value={newKey}
 									onChange={(e) => setNewKey(e.target.value)}
 									// Enter moves ALONG the row rather than committing —
@@ -501,7 +517,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 										ref={(el) => {
 											newValueRef.current = el;
 										}}
-										aria-label="New property value"
+										aria-label={t("New property value")}
 										// Every other value control here cancels on Escape. Without
 										// this the checkbox branch swallowed it, and tabbing away
 										// then COMMITTED the property the user was cancelling.
@@ -525,12 +541,12 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 											newValueRef.current = el;
 										}}
 										type={htmlInputType(newType)}
-										aria-label="New property value"
+										aria-label={t("New property value")}
 										className="w-full min-w-0 border-0 bg-transparent py-1 pr-2 text-foreground text-sm outline-none placeholder:text-muted-foreground/60"
 										// A date/datetime/number input draws its own skeleton
 										// (mm/dd/yyyy, the spinner); a placeholder on top of that
 										// is noise, and browsers ignore it anyway.
-										placeholder={newType === "text" || newType === "list" ? "Value" : undefined}
+										placeholder={newType === "text" || newType === "list" ? t("Value") : undefined}
 										value={newValue}
 										onChange={(e) => setNewValue(e.target.value)}
 										onKeyDown={(e) => {
@@ -551,14 +567,14 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 
 				<button
 					type="button"
-					aria-label="Add property"
+					aria-label={t("Add property")}
 					// Obsidian's .metadata-add-button: 6px inline-start, 0.5em above,
 					// at the label's font size.
 					className="mt-2 flex items-center gap-1 pl-1.5 text-muted-foreground text-sm hover:text-foreground"
 					onClick={() => setAdding(true)}
 				>
 					<Plus aria-hidden="true" className="size-3.5" />
-					Add property
+					{t("Add property")}
 				</button>
 			</details>
 		</section>
