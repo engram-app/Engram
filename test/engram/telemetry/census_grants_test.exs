@@ -92,4 +92,13 @@ defmodule Engram.Telemetry.CensusGrantsTest do
     assert {:returned, :ok} = as_prod_role(&crud_install_pings/0)
     assert {:returned, :ok} = as_prod_role(&crud_instance_telemetry/0)
   end
+
+  test "the grant SQL is a no-op where the tables do not exist yet (previous release's schema)" do
+    # CI's n1-compat gate applies this PR's new migrations over the last
+    # release's schema, which predates the census tables. DDL is transactional,
+    # so the DROP is undone when the sandbox rolls back.
+    Repo.query!("DROP TABLE install_pings, instance_telemetry")
+
+    assert %Postgrex.Result{} = Repo.query!(migration().grant_sql())
+  end
 end

@@ -14,9 +14,25 @@ defmodule Engram.Repo.Migrations.GrantCensusTablesExpand do
   # added and break the census writers (heartbeat, collector, pruner) on a
   # plain rollback of this one version.
 
+  # Conditional on the tables existing: CI's n1-compat gate applies a PR's new
+  # migrations over the PREVIOUS RELEASE's schema, which predates the census
+  # tables (they are created by the two migrations just before this one, in the
+  # same release). A plain GRANT fails there with 42P01. Where the tables exist
+  # (every real rollout) the GRANTs run exactly as before.
   @doc false
   def grant_sql do
-    "GRANT SELECT, INSERT, UPDATE, DELETE ON instance_telemetry, install_pings TO engram_app"
+    """
+    DO $$
+    BEGIN
+      IF to_regclass('public.instance_telemetry') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE, DELETE ON instance_telemetry TO engram_app;
+      END IF;
+      IF to_regclass('public.install_pings') IS NOT NULL THEN
+        GRANT SELECT, INSERT, UPDATE, DELETE ON install_pings TO engram_app;
+      END IF;
+    END
+    $$;
+    """
   end
 
   def up, do: execute(grant_sql())
