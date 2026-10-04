@@ -23,32 +23,40 @@ defmodule Engram.NotesDeleteClearsEmbedHashTest do
     {:ok, note} = Notes.upsert_note(user, vault, %{"path" => path, "content" => "# body"})
 
     from(n in Note, where: n.id == ^note.id)
-    |> Repo.update_all([set: [embed_hash: "stamped"]], skip_tenant_check: true)
+    |> Repo.update_all([set: [embed_hash: "stamped", dense_indexed_hash: "stamped"]],
+      skip_tenant_check: true
+    )
 
     note
   end
 
+  # Both columns, as a pair: `Indexing.flag_notes_for_rebuild/2` documents
+  # that clearing only one of them is a silent no-op.
   defp embed_hash(note) do
-    Repo.one(from(n in Note, where: n.id == ^note.id, select: n.embed_hash),
+    Repo.one(
+      from(n in Note,
+        where: n.id == ^note.id,
+        select: {n.embed_hash, n.dense_indexed_hash}
+      ),
       skip_tenant_check: true
     )
   end
 
-  test "delete_note nulls embed_hash", %{user: user, vault: vault} do
+  test "delete_note nulls both index hashes", %{user: user, vault: vault} do
     note = embedded_note(user, vault, "A.md")
     :ok = Notes.delete_note(user, vault, "A.md")
-    assert embed_hash(note) == nil
+    assert embed_hash(note) == {nil, nil}
   end
 
-  test "batch_delete_notes nulls embed_hash", %{user: user, vault: vault} do
+  test "batch_delete_notes nulls both index hashes", %{user: user, vault: vault} do
     note = embedded_note(user, vault, "B.md")
     {:ok, _} = Notes.batch_delete_notes(user, vault, [note.id])
-    assert embed_hash(note) == nil
+    assert embed_hash(note) == {nil, nil}
   end
 
-  test "delete_folder nulls embed_hash", %{user: user, vault: vault} do
+  test "delete_folder nulls both index hashes", %{user: user, vault: vault} do
     note = embedded_note(user, vault, "Dir/C.md")
     {:ok, _} = Notes.delete_folder(user, vault, "Dir")
-    assert embed_hash(note) == nil
+    assert embed_hash(note) == {nil, nil}
   end
 end

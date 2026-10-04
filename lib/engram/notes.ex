@@ -3033,7 +3033,13 @@ defmodule Engram.Notes do
             {updated, _} =
               from(n in Note, where: n.id == ^note.id and is_nil(n.deleted_at))
               |> Repo.update_all(
-                set: [deleted_at: now, updated_at: now, seq: seq, embed_hash: nil]
+                set: [
+                  deleted_at: now,
+                  updated_at: now,
+                  seq: seq,
+                  embed_hash: nil,
+                  dense_indexed_hash: nil
+                ]
               )
 
             # Decrement by rows actually transitioned live → deleted, so a
@@ -3158,7 +3164,13 @@ defmodule Engram.Notes do
               {updated, _} =
                 from(n in Note, where: n.id in ^ids and is_nil(n.deleted_at))
                 |> Repo.update_all(
-                  set: [deleted_at: now, updated_at: now, seq: seq, embed_hash: nil]
+                  set: [
+                    deleted_at: now,
+                    updated_at: now,
+                    seq: seq,
+                    embed_hash: nil,
+                    dense_indexed_hash: nil
+                  ]
                 )
 
               :ok = UsageMeters.dec_notes_count(user.id, updated)
@@ -5305,7 +5317,13 @@ defmodule Engram.Notes do
                 chunk
                 |> fenced_delete_query()
                 |> Repo.update_all(
-                  set: [deleted_at: now, updated_at: now, seq: seq, embed_hash: nil]
+                  set: [
+                    deleted_at: now,
+                    updated_at: now,
+                    seq: seq,
+                    embed_hash: nil,
+                    dense_indexed_hash: nil
+                  ]
                 )
 
               MapSet.union(acc, MapSet.new(returned_ids))
