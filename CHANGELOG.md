@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.41.0](https://github.com/engram-app/Engram/compare/0.40.0...0.41.0) (2026-10-04)
+
+
+### Features
+
+* **frontend:** editor, upload and navigation polish ([#1848](https://github.com/engram-app/Engram/issues/1848)) ([802815f](https://github.com/engram-app/Engram/commit/802815fb91fe52b4595a6af2fb9b3ebf66606a00))
+* **keyword:** encode keyword vectors in a Rust NIF (15-43x faster) with native memory metrics ([edba447](https://github.com/engram-app/Engram/commit/edba447138f27b98156e3c1644f0e7d74d28f8ef))
+* **keyword:** sparse-only keyword re-index with no embedding spend ([edba447](https://github.com/engram-app/Engram/commit/edba447138f27b98156e3c1644f0e7d74d28f8ef))
+* **telemetry:** self-host install census (on by default, ENGRAM_TELEMETRY=false to disable) ([#1828](https://github.com/engram-app/Engram/issues/1828)) ([ea66e30](https://github.com/engram-app/Engram/commit/ea66e304add317d477e0d98a448aed0456c0005f))
+
+
+### Bug Fixes
+
+* **attachments:** detect MIME types with the mime library ([2a2304c](https://github.com/engram-app/Engram/commit/2a2304cff81a54a1b3f0a3374629683ebfc10285))
+* export 24h cap, cron alert secret, editor search panel ([#1842](https://github.com/engram-app/Engram/issues/1842)) ([774408a](https://github.com/engram-app/Engram/commit/774408a672e0948cc457919e010e41353b898978))
+* **search:** re-index resurrected notes ([#1847](https://github.com/engram-app/Engram/issues/1847)) ([6c86e8b](https://github.com/engram-app/Engram/commit/6c86e8b601bcff101dfd328bb5e6c6804c11a934)), closes [#1610](https://github.com/engram-app/Engram/issues/1610)
+* **search:** show a note's current title after a rename ([edba447](https://github.com/engram-app/Engram/commit/edba447138f27b98156e3c1644f0e7d74d28f8ef))
+* **security:** revoke engram_app writes on plans, canaries ([#1850](https://github.com/engram-app/Engram/issues/1850)) ([20323d1](https://github.com/engram-app/Engram/commit/20323d1a7ce6efbe5886ee8124738dbcf5c8cf95))
+* **telemetry:** grant engram_app on the census tables explicitly ([#1839](https://github.com/engram-app/Engram/issues/1839)) ([577ae64](https://github.com/engram-app/Engram/commit/577ae647d05357d64845593376776e2511a17f3d))
+* **telemetry:** remove the first-run notice card from the home screen ([#1843](https://github.com/engram-app/Engram/issues/1843)) ([caec096](https://github.com/engram-app/Engram/commit/caec09665c3d0ded17ad8b1b164a1f22f32913cd))
+* **viewer:** render embeds from the parsed tree ([2a2304c](https://github.com/engram-app/Engram/commit/2a2304cff81a54a1b3f0a3374629683ebfc10285))
+* **viewer:** stop gray-matter from eval'ing note frontmatter ([2a2304c](https://github.com/engram-app/Engram/commit/2a2304cff81a54a1b3f0a3374629683ebfc10285))
+
+
+### Performance Improvements
+
+* **indexing:** pack sparse and dense vectors, parse links once per edit ([edba447](https://github.com/engram-app/Engram/commit/edba447138f27b98156e3c1644f0e7d74d28f8ef))
+* **links:** extract links in a Rust NIF ([2a2304c](https://github.com/engram-app/Engram/commit/2a2304cff81a54a1b3f0a3374629683ebfc10285))
+* **notes:** extract title and tags in a Rust NIF ([2a2304c](https://github.com/engram-app/Engram/commit/2a2304cff81a54a1b3f0a3374629683ebfc10285))
+
 ## [0.40.0](https://github.com/engram-app/Engram/compare/0.39.0...0.40.0) (2026-10-04)
 
 
