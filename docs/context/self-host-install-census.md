@@ -21,7 +21,7 @@ Daily census of self-host installs, **on by default** (decision 2026-10-03: opt-
 
 ## Admin UI (self-host)
 - `GET/PATCH /api/admin/telemetry` (`router.ex:520-521`, `EngramWeb.Admin.TelemetryController`). PATCH because the SPA api client has no `put`.
-- `frontend/src/features/admin/TelemetryTab.tsx`, `TelemetryPrompt.tsx` (informational "Got it" / "Turn off" card in `layout/app-layout.tsx`, self-host admins only; the tab is a plain toggle).
+- `frontend/src/features/admin/TelemetryTab.tsx`: a plain toggle under Administration > Usage statistics, with the exact payload. There is deliberately NO first-run card/toast on the home screen (a "Got it" / "Turn off" `TelemetryPrompt` shipped in #1828 and was removed before the first release at the owner's request); disclosure is the boot log line, this tab, and the docs page. `telemetry_enabled = true` is therefore only ever set by toggling the tab.
 
 ## Visibility
 `engram_prom_ex_installs_seen{os,arch,runtime}` PromEx polling gauge (`lib/engram/prom_ex/installs.ex`), 30-day window, SaaS only. All 24 enum combos (4x3x2) emitted every poll including zeros, because a `last_value` for a vanished label set freezes at its last value. Aggregate with `max`, not `sum` (every node reports the same DB count). Never add `version` or `id` as a label.
