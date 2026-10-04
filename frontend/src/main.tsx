@@ -8,6 +8,7 @@ import { queryClient } from "./api/query-client";
 import { configPromise, type EngramConfig } from "./config";
 import { ConfigProvider } from "./config-context";
 import ErrorFallback from "./error-fallback";
+import { LocaleProvider } from "./i18n/locale-provider";
 import LoadingScreen from "./layout/loading-screen";
 import { createAppRouter, installAppRouter } from "./router";
 import { captureError } from "./sentry";
@@ -106,20 +107,22 @@ function AppShell({ config }: { config: EngramConfig }) {
 	return (
 		<ConfigProvider config={config}>
 			<ThemeProvider>
-				<Suspense fallback={<LoadingScreen />}>
-					<AuthProvider>
-						<QueryClientProvider client={queryClient}>
-							<RouterProvider router={router} />
-							{/* Own boundary — a suspending Toaster must not trip the outer
-							    fallback and blank the app to LoadingScreen. */}
-							<OptionalBoundary>
-								<Suspense fallback={null}>
-									<Toaster richColors closeButton />
-								</Suspense>
-							</OptionalBoundary>
-						</QueryClientProvider>
-					</AuthProvider>
-				</Suspense>
+				<LocaleProvider>
+					<Suspense fallback={<LoadingScreen />}>
+						<AuthProvider>
+							<QueryClientProvider client={queryClient}>
+								<RouterProvider router={router} />
+								{/* Own boundary — a suspending Toaster must not trip the outer
+								    fallback and blank the app to LoadingScreen. */}
+								<OptionalBoundary>
+									<Suspense fallback={null}>
+										<Toaster richColors closeButton />
+									</Suspense>
+								</OptionalBoundary>
+							</QueryClientProvider>
+						</AuthProvider>
+					</Suspense>
+				</LocaleProvider>
 			</ThemeProvider>
 		</ConfigProvider>
 	);

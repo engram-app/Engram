@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { LocaleProvider } from "@/i18n/locale-provider";
 import { AppearanceSection } from "./appearance-section";
 
 const setTheme = vi.fn();
@@ -27,5 +28,20 @@ describe("AppearanceSection", () => {
 		render(<AppearanceSection />);
 		fireEvent.click(screen.getByRole("button", { name: /dark/iu }));
 		expect(setTheme).toHaveBeenCalledWith("dark");
+	});
+
+	it("lists every locale by its own name and persists a pick", () => {
+		window.localStorage.clear();
+		render(
+			<LocaleProvider loaders={{}}>
+				<AppearanceSection />
+			</LocaleProvider>,
+		);
+		const select = screen.getByRole("combobox", { name: /language/iu });
+		expect(screen.getByRole("option", { name: "日本語" })).toBeInTheDocument();
+		expect(screen.getByRole("option", { name: "English" })).toBeInTheDocument();
+		fireEvent.change(select, { target: { value: "ja" } });
+		expect(window.localStorage.getItem("engram:locale")).toBe("ja");
+		expect(select).toHaveValue("ja");
 	});
 });
