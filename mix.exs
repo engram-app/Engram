@@ -103,9 +103,6 @@ defmodule Engram.MixProject do
       # Job queue
       {:oban, "~> 2.18"},
 
-      # Markdown parsing
-      {:earmark, "~> 1.4"},
-
       # YAML parsing and generation for frontmatter codec
       {:yaml_elixir, "~> 2.11"},
       {:ymlr, "~> 5.1"},
