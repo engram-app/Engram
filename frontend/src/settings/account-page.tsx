@@ -1,3 +1,4 @@
+import { useT } from "@/i18n/locale-provider";
 import { AppearanceSection } from "./account/appearance-section";
 import { CommunitySection } from "./account/community-section";
 import { ConnectedAccountsSection } from "./account/connected-accounts-section";
@@ -13,12 +14,13 @@ import { SessionsSection } from "./account/sessions-section";
 const OAUTH_PROVIDERS = ["oauth_google", "oauth_github", "oauth_discord"] as const;
 
 export default function AccountPage() {
+	const { t } = useT();
 	return (
 		<article className="space-y-6">
 			<header>
-				<h1 className="font-semibold text-foreground text-xl">Account</h1>
+				<h1 className="font-semibold text-foreground text-xl">{t("Account")}</h1>
 				<p className="mt-1 text-muted-foreground text-sm">
-					Manage your profile, security, and active sessions.
+					{t("Manage your profile, security, and active sessions.")}
 				</p>
 			</header>
 			<ProfileSection />
