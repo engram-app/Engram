@@ -29,6 +29,18 @@ defmodule Engram.Native do
   @doc "The keyword tokenizer: `{tokens, raw_len}`."
   def tokens_with_len(_text, _language), do: :erlang.nif_error(:nif_not_loaded)
 
+  @doc false
+  def link_extract_nif(_content), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
+  Links for `Engram.Links.Parser`: `{[{position, kind, target_start,
+  target_len, target, alias, anchor}], scrub_count}`, in position order.
+  `content` must be valid UTF-8. Emits `[:engram, :nif, :call, :stop]`.
+  """
+  def link_extract(content) do
+    call(:link_extract, content, fn -> link_extract_nif(content) end)
+  end
+
   @doc "Live bytes held by this library's Rust heap, process-wide."
   def live_bytes, do: :erlang.nif_error(:nif_not_loaded)
 

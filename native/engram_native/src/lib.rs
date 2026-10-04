@@ -1,6 +1,7 @@
 //! In-house NIFs. Each is a pure function over binaries, runs on a dirty CPU
 //! scheduler, and returns BEAM binaries (so its OUTPUT is visible to
 //! `:erlang.memory(:binary)`). See docs/context for the memory standard.
+mod links;
 mod memory;
 mod tokenizer;
 
@@ -10,7 +11,7 @@ mod tokenizer;
 static ALLOCATOR: memory::Counting = memory::Counting;
 
 use hmac::{Hmac, Mac};
-use rustler::{Binary, Env, NewBinary};
+use rustler::{Binary, Encoder, Env, NewBinary, Term};
 use sha2::Sha256;
 use std::collections::HashMap;
 
@@ -120,6 +121,22 @@ fn live_bytes() -> isize {
 #[rustler::nif(schedule = "DirtyCpu")]
 fn tokens_with_len(text: &str, lang: Option<String>) -> (Vec<String>, usize) {
     tokenizer::tokens_with_len(text, lang.as_deref())
+}
+
+/// `Links.Parser.extract/1`: `{[{position, kind, target_start, target_len,
+/// target, alias, anchor}], scrub_count}`, and the call's native peak. Each
+/// link is encoded as a term the moment it is built, so the output never
+/// exists as a Rust copy. Linear in the note; no size bound, notes of any
+/// size must index.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn link_extract_nif<'a>(env: Env<'a>, content: &str) -> ((Vec<Term<'a>>, usize), usize) {
+    let base = memory::begin();
+    let mut terms = Vec::new();
+    let scrubs = links::extract(content, |(pos, kind, ts, tl, target, alias, anchor)| {
+        terms.push((pos, kind, ts, tl, target.as_ref(), alias, anchor.as_deref()).encode(env));
+    });
+    let peak = memory::peak_since(base);
+    ((terms, scrubs), peak)
 }
 
 rustler::init!("Elixir.Engram.Native");

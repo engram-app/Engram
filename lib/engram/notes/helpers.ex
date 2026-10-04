@@ -59,10 +59,20 @@ defmodule Engram.Notes.Helpers do
     if String.valid?(str) do
       str
     else
-      :telemetry.execute([:engram, :notes, :utf8_scrub], %{count: 1}, %{boundary: boundary})
-      if boundary == :write, do: log_write_scrub()
+      report_scrub(boundary)
       do_scrub_utf8(str, <<>>)
     end
+  end
+
+  @doc """
+  The telemetry (and, on `:write`, the log) of one scrub, for a caller that
+  scrubbed outside `scrub_utf8/2`: `Links.Parser`, whose Rust side decodes
+  and scrubs percent escapes.
+  """
+  def report_scrub(boundary) when boundary in @scrub_boundaries do
+    :telemetry.execute([:engram, :notes, :utf8_scrub], %{count: 1}, %{boundary: boundary})
+    if boundary == :write, do: log_write_scrub()
+    :ok
   end
 
   defp log_write_scrub do
