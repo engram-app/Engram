@@ -16,8 +16,10 @@ alias Engram.Billing.{LimitKeys, Plan, PlanCache}
 # Seed the three pricing tiers from LimitKeys catalog. Idempotent —
 # on_conflict replaces the limits JSONB so re-running ecto.setup drives
 # the matrix back to catalog defaults. Releases do NOT run this file, and
-# `engram_app` cannot write `plans` (#1766): change a deployed tier's limits
-# with a migration (runs as the migrator) or via `Engram.Repo.Maintenance`.
+# `engram_app` cannot write `plans` (#1766). Editing these rows does not
+# change a deployed tier anyway: `users.plan_id` is unset in production, so
+# limits resolve via overrides, `ENGRAM_<TIER>_<KEY>` env or `LimitKeys`
+# (see `Engram.Billing.effective_limit/2`).
 for tier <- LimitKeys.tiers() do
   limits =
     for key <- LimitKeys.all(), into: %{} do
