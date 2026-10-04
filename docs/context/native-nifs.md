@@ -37,7 +37,9 @@ following closes part of it:
 4. **Watch what nobody attributes.** `[:engram, :vm, :native_memory]` (polled
    every 15 s) reports `rss - :erlang.memory(:total)` as `unaccounted`. A
    third-party NIF on its own allocator only shows up there. It is tens of
-   MB at boot (code, shared libraries), so alert on growth, not level.
+   MB at boot (code, shared libraries) and can go negative (the BEAM counts
+   allocated memory the OS has not made resident), so alert on growth, not
+   level.
 5. **Never a hard allocation limit.** A null from the allocator aborts the
    whole node and `catch_unwind` cannot stop it. Bound memory by design and
    prove it with the peak instead (below).

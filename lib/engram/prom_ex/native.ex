@@ -11,7 +11,8 @@ defmodule Engram.PromEx.Native do
       know about) is the only signal for native memory held OUTSIDE them:
       a third-party NIF on its own allocator (y_ex, lingua) shows up only
       there. Alert on its growth, not its level: shared libraries and code
-      already put tens of MB there at boot.
+      already put tens of MB there at boot, and it can even go negative,
+      because the BEAM counts allocated memory the OS has not made resident.
 
   Cardinality contract: `:nif` is a closed set of atoms named in
   `Engram.Native`. Never tag with user, vault or note ids.
