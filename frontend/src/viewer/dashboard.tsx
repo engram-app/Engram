@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { Link, Navigate, useSearchParams } from "react-router";
+import { formatDate } from "@/lib/format-date";
 import { type NoteSummary, useFolderNotes, useSyncManifest, useVaults } from "../api/queries";
 import { useActiveVaultSlug } from "../api/vault-slug";
 import { EmptyVaultState } from "../layout/empty-vault-state";
@@ -8,14 +9,6 @@ import { noteName } from "../lib/note-name";
 import { noteHref } from "../routes";
 import LoadingPane from "./loading-pane";
 import NoteToc from "./note-toc";
-
-function formatDate(iso: string): string {
-	return new Date(iso).toLocaleDateString(undefined, {
-		year: "numeric",
-		month: "short",
-		day: "numeric",
-	});
-}
 
 interface NoteRowProps {
 	note: NoteSummary;

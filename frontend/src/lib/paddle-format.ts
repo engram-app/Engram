@@ -1,3 +1,5 @@
+import { formatDate as formatShortDate } from "./format-date";
+
 // Structural alias — accepts both CheckoutEventsTimePeriod and TimePeriod
 interface TimePeriodLike {
 	frequency: number;
@@ -16,11 +18,7 @@ const INTERVAL_LABELS: Record<string, { noun: string; adjective: string }> = {
 };
 
 export function formatDate(isoString: string, locale = "en-US"): string {
-	return new Intl.DateTimeFormat(locale, {
-		year: "numeric",
-		month: "short",
-		day: "numeric",
-	}).format(new Date(isoString));
+	return formatShortDate(isoString, locale);
 }
 
 /**
