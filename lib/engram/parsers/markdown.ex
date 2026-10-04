@@ -375,14 +375,30 @@ defmodule Engram.Parsers.Markdown do
   # characters it clears these floors with overwhelming odds. A URL or file
   # path in the same character class is mostly lower case with an occasional
   # capital, an identifier has no digits, a hex digest has no upper case.
-  defp encoded?(run) do
-    len = byte_size(run)
+  #
+  # Counted over the first 4 KB in one byte pass. A whole-run `Regex.scan`
+  # builds a list entry per match: ~760k of them for one 1.9 MB image, which
+  # put the 2026-10-03 note back at +446 MB.
+  @encoded_sample 4096
 
-    count(run, ~r/[A-Z]/) >= len * 0.2 and count(run, ~r/[a-z]/) >= len * 0.2 and
-      count(run, ~r/[0-9]/) >= len * 0.05
+  defp encoded?(run) do
+    sample = binary_part(run, 0, min(byte_size(run), @encoded_sample))
+    {upper, lower, digit} = count_classes(sample, 0, 0, 0)
+    len = byte_size(sample)
+    upper >= len * 0.2 and lower >= len * 0.2 and digit >= len * 0.05
   end
 
-  defp count(run, re), do: re |> Regex.scan(run) |> length()
+  defp count_classes(<<c, rest::binary>>, u, l, d) when c in ?A..?Z,
+    do: count_classes(rest, u + 1, l, d)
+
+  defp count_classes(<<c, rest::binary>>, u, l, d) when c in ?a..?z,
+    do: count_classes(rest, u, l + 1, d)
+
+  defp count_classes(<<c, rest::binary>>, u, l, d) when c in ?0..?9,
+    do: count_classes(rest, u, l, d + 1)
+
+  defp count_classes(<<_, rest::binary>>, u, l, d), do: count_classes(rest, u, l, d)
+  defp count_classes(<<>>, u, l, d), do: {u, l, d}
 
   # A section left with no letter or digit carried only the blob and its
   # markup (`![x]()`): a vector of `)` is worth no point.

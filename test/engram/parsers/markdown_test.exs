@@ -371,6 +371,27 @@ defmodule Engram.Parsers.MarkdownTest do
       assert Enum.any?(texts, &String.contains?(&1, "outro words here"))
     end
 
+    test "stripping a 2 MB image stays within a 40 MB heap" do
+      # Deciding a run is encoded once counted letters with Regex.scan, a list
+      # entry per match: ~760k for this image, +446 MB in the end-to-end repro.
+      content = "# Pic\n\nbefore ![x](data:image/png;base64," <> b64(2_000_000) <> ") after"
+
+      task =
+        Task.async(fn ->
+          Process.flag(:max_heap_size, %{
+            size: div(40 * 1_048_576, 8),
+            kill: true,
+            error_logger: false
+          })
+
+          Markdown.parse(content, "Pic.md")
+        end)
+
+      Process.flag(:trap_exit, true)
+      assert {:ok, chunks} = Task.yield(task, 60_000) || Task.shutdown(task)
+      assert Enum.any?(chunks, &String.contains?(&1.text, "after"))
+    end
+
     test "a long run of one letter is not mistaken for a blob" do
       run = String.duplicate("a", 300)
       [chunk] = Markdown.parse("# N\n\n" <> run, "N.md")
