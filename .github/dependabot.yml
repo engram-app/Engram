@@ -40,6 +40,26 @@ updates:
         applies-to: version-updates
         update-types: [patch, minor]
 
+  # In-house Rust NIFs (native/engram_native). On 0.x crates a
+  # "minor" bump (pulldown-cmark 0.13 -> 0.14) is semver-breaking, so
+  # a grouped (auto-merged) PR can change parsing. verify.yml runs
+  # `cargo test` plus the Elixir golden sets on it before merge.
+  - package-ecosystem: cargo
+    directory: /native/engram_native
+    schedule:
+      interval: weekly
+      day: wednesday
+    open-pull-requests-limit: 10
+    cooldown:
+      default-days: 3
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
+    groups:
+      cargo-minor:
+        applies-to: version-updates
+        update-types: [patch, minor]
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
