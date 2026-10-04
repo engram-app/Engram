@@ -782,6 +782,8 @@ defmodule Engram.Indexing do
   # commit, so for a 2,000-chunk note that is ~65 MB of heap versus ~8 MB
   # off-heap (prod worker OOM, 2026-10-03). Lossless: Voyage's floats ARE
   # float32. Unpacked one upsert batch at a time in `upsert_points_batched/1`.
+  # An embedder may already return packed float32 (Voyage does, for indexing).
+  defp pack_vector(packed) when is_binary(packed), do: packed
   defp pack_vector(vector), do: for(x <- vector, into: <<>>, do: <<x::float-32-little>>)
 
   # Straight from the packed binary to the JSON array text, as a pre-encoded

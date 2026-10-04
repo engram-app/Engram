@@ -134,6 +134,44 @@ defmodule Engram.Embedders.VoyageTest do
       assert_receive {:body, %{"input_type" => "document", "output_dimension" => 512}}
     end
 
+    # Indexing asks for packed float32 (base64): ~3x smaller responses and no
+    # JSON float parsing; Indexing holds vectors packed anyway. Search keeps
+    # float lists, which go straight into the Qdrant query.
+    test "indexing requests base64 vectors; search does not", %{bypass: bypass} do
+      test_pid = self()
+
+      Bypass.expect(bypass, "POST", "/v1/embeddings", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:body, Jason.decode!(body)})
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"data":[{"embedding":[0.1]}]}))
+      end)
+
+      assert {:ok, _} = Voyage.embed_texts(["hello"])
+      assert_receive {:body, %{"encoding_format" => "base64"}}
+
+      assert {:ok, _} = Voyage.embed_texts(["hello"], purpose: :query)
+      assert_receive {:body, query_body}
+      refute Map.has_key?(query_body, "encoding_format")
+    end
+
+    test "base64 vectors come back as packed float32 binaries", %{bypass: bypass} do
+      packed = <<0.5::float-32-little, -1.0::float-32-little, 0.25::float-32-little>>
+
+      Bypass.expect_once(bypass, "POST", "/v1/embeddings", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{"data" => [%{"embedding" => Base.encode64(packed)}]})
+        )
+      end)
+
+      assert {:ok, [^packed]} = Voyage.embed_texts(["hello"])
+    end
+
     test "search sends input_type query", %{bypass: bypass} do
       expect_body(bypass)
 

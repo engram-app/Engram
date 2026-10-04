@@ -91,6 +91,27 @@ defmodule Engram.IndexingMemoryTest do
     assert count >= 2_000
   end
 
+  test "an embedder returning packed float32 is upserted as the same floats",
+       %{user: user, vault: vault} do
+    vec = for i <- 1..@dims, do: i / 1024 - 0.5
+    packed = for x <- vec, into: <<>>, do: <<x::float-32-little>>
+
+    stub(Engram.MockEmbedder, :embed_texts, fn texts ->
+      {:ok, Enum.map(texts, fn _ -> packed end)}
+    end)
+
+    note =
+      Engram.Fixtures.insert_note!(user, vault, %{
+        path: "Packed.md",
+        content: "# Packed\n\nA short note."
+      })
+      |> decrypted(user)
+
+    assert {:ok, _} = Indexing.index_note(note, vault, user)
+    assert_receive {:upsert, %{"points" => [%{"vector" => %{"dense" => dense}} | _]}}
+    assert dense == vec
+  end
+
   test "upserted dense vectors are the embedder's values, exactly", %{user: user, vault: vault} do
     vec = for i <- 1..@dims, do: i / 1024 - 0.5
 
