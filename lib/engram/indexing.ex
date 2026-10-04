@@ -83,7 +83,7 @@ defmodule Engram.Indexing do
     user = user || Engram.Accounts.get_user_with_subscription!(note.user_id)
 
     case prepare_index(note, vault, user, opts) do
-      {:ok, {:no_chunks, link_rows}} ->
+      {:ok, {reason, link_rows}} when reason in [:no_chunks, :over_cap] ->
         case Crypto.get_dek(user) do
           {:ok, _dek} ->
             # `:no_chunks` means this note must end up with ZERO index
@@ -98,9 +98,16 @@ defmodule Engram.Indexing do
             # let the caller stamp `embed_hash` and never revisit the note, so
             # the points it failed to remove would stay searchable forever.
             # Returning the error costs one Oban retry.
+            #
+            # The 4th element says whether the dense leg is complete. A note
+            # with nothing to index (empty, or only base64 blobs) has all of
+            # the dense vectors it ever will, so `true`: leaving it `false`
+            # keeps `dense_indexed_hash` nil and ReconcileEmbeddings re-selects
+            # it for paid users every tick. Over the cap it is `false`, so the
+            # note is backfilled when the cap is raised.
             with :ok <- purge_stale_index(note) do
               :ok = Engram.Links.replace_links(user, vault, note.id, link_rows)
-              {:ok, 0, 0, false}
+              {:ok, 0, 0, reason == :no_chunks}
             end
 
           {:error, :no_dek} = err ->
@@ -125,6 +132,8 @@ defmodule Engram.Indexing do
   slow Voyage AI HTTP call run outside any Postgres connection.
 
   Returns:
+    * `{:ok, {:over_cap, link_rows}}` — outside the user's indexed-note cap;
+      same handling as `:no_chunks`, but the dense leg stays incomplete
     * `{:ok, {:no_chunks, link_rows}}` — note has no parseable chunks; caller
       must still persist `link_rows` (a note emptied to "" must clear its
       stale outgoing edges, same as any other re-index)
@@ -186,7 +195,7 @@ defmodule Engram.Indexing do
         # Outside the user's indexed-note cap: persist link rows (the graph is
         # not search and is not capped) but write no chunks and no Qdrant
         # points.
-        {:ok, {:no_chunks, link_rows}}
+        {:ok, {:over_cap, link_rows}}
       end
     end
   end

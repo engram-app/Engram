@@ -594,6 +594,15 @@ defmodule Engram.Workers.EmbedNote do
     # re-run it every tick.
     set =
       cond do
+        # Nothing to index: the content's dense leg is complete with zero
+        # vectors (Indexing reports `dense? = true` only on that branch).
+        chunk_count == 0 and dense? ->
+          [
+            dense_indexed_hash: note.content_hash,
+            embed_retry_after: nil,
+            embed_budget_parked: nil
+          ]
+
         chunk_count == 0 ->
           [dense_indexed_hash: nil, embed_retry_after: nil, embed_budget_parked: nil]
 

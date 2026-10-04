@@ -1028,6 +1028,35 @@ defmodule Engram.Workers.EmbedNoteTest do
     end
   end
 
+  describe "perform/1 — a note with nothing to index" do
+    # Review of #1835: blob stripping made an image-only note parse to zero
+    # chunks. A zero-chunk pass left `dense_indexed_hash` nil and cleared the
+    # backoff, and ReconcileEmbeddings re-selects `is_nil(dense_indexed_hash)`
+    # for paid users every tick: a multi-MB decrypt and parse every 15 min.
+    test "an image-only note is stamped dense-complete", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      image = Base.encode64(:crypto.strong_rand_bytes(30_000))
+
+      note =
+        Engram.Fixtures.insert_note!(user, vault, %{
+          path: "Only/Image.md",
+          content: "![](data:image/png;base64," <> image <> ")"
+        })
+
+      # A never-indexed note has no points to purge, so Qdrant may go untouched.
+      stub_qdrant_optional(bypass)
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id, user_id: user.id})
+
+      updated = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert updated.embed_hash == updated.content_hash
+      assert updated.dense_indexed_hash == updated.content_hash
+    end
+  end
+
   describe "perform/1 — crash-loop guard (prod worker OOM, 2026-10-03)" do
     # A note whose embed kills the node never returns an error, so the
     # poison cooldown above never fires. Oban's Lifeline puts the orphaned job
