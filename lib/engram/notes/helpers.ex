@@ -8,9 +8,6 @@ defmodule Engram.Notes.Helpers do
 
   require Logger
 
-  @frontmatter_re ~r/\A---\r?\n(.*?)\r?\n---/s
-  @heading_re ~r/^#\s+(.+)$/m
-
   @doc """
   Replaces invalid UTF-8 byte sequences with the Unicode replacement
   character (U+FFFD `�`), returning a guaranteed-valid UTF-8 string.
@@ -141,43 +138,27 @@ defmodule Engram.Notes.Helpers do
   defp scrub_broadcast_tag(tag), do: tag
 
   @doc """
-  Extracts the note title from content (frontmatter > h1 heading > filename).
+  Extracts the note title from content (frontmatter > h1 heading outside
+  code > filename). The rules run in Rust: native/engram_native/src/meta.rs.
   """
   @spec extract_title(String.t(), String.t()) :: String.t() | nil
   def extract_title(content, path) do
-    extract_frontmatter_title(content) ||
-      extract_heading_title(content) ||
-      filename_without_extension(path)
+    Engram.Native.note_title(scrub_utf8(content)) || filename_without_extension(path)
   end
-
-  # Inline Obsidian tag: `#tag` or nested `#area/sub`. Must be preceded by
-  # start-of-string or whitespace (so `word#x` and `https://h/#frag` are NOT
-  # tags) and must start with a word char (so `# heading` — a space after the
-  # hash — is NOT a tag). `{}` delimiter avoids escaping the `/`.
-  #
-  # The `u` (unicode) flag is load-bearing: without it Erlang's `re` runs in
-  # byte mode, where its char tables treat a multibyte char's lead byte (e.g.
-  # `0xE2` of an en-dash `–`) as a word char but the continuation bytes as not —
-  # so `#628–` captured `628` + a lone `0xE2`, an INVALID-UTF-8 tag emitted from
-  # perfectly valid content. That's the root cause of the corrupt tags found at
-  # rest in prod (#741). `u` makes the scan codepoint-aware, so `–` is one
-  # non-word codepoint and the capture stops cleanly at `628`.
-  @inline_tag_re ~r{(?:^|\s)#([\w][\w/-]*)}u
 
   @doc """
   Extracts tags from a note: YAML frontmatter tags merged with inline
   `#tags` (incl. nested `#area/sub`) found in the body.
 
-  Inline scanning skips fenced + inline code, URL fragments, and heading
+  Inline scanning skips code (CommonMark ranges), URL fragments, and heading
   markers, and drops purely-numeric matches (`#42`) — none of which are
   tags in Obsidian. Frontmatter tags come first; duplicates are removed.
-  Returns [] if none found.
+  Returns [] if none found. The rules run in Rust:
+  native/engram_native/src/meta.rs.
   """
   @spec extract_tags(String.t()) :: [String.t()]
   def extract_tags(content) do
-    frontmatter_tags = extract_frontmatter_tags(content)
-    inline_tags = extract_inline_tags(content)
-    Enum.uniq(frontmatter_tags ++ inline_tags)
+    Engram.Native.note_tags(scrub_utf8(content))
   end
 
   @doc """
@@ -196,202 +177,10 @@ defmodule Engram.Notes.Helpers do
   # Private helpers
   # ---------------------------------------------------------------------------
 
-  defp extract_frontmatter(content) do
-    case Regex.run(@frontmatter_re, content, capture: :all_but_first) do
-      [fm] when is_binary(fm) -> fm
-      _ -> nil
-    end
-  end
-
-  defp extract_frontmatter_title(content) do
-    with fm when fm != nil <- extract_frontmatter(content) do
-      case Regex.run(~r/^title:\s*(.+)$/m, fm, capture: :all_but_first) do
-        [title] when is_binary(title) -> String.trim(title)
-        _ -> nil
-      end
-    end
-  end
-
-  defp extract_heading_title(content) do
-    # Skip past frontmatter block before searching for heading
-    body = Regex.replace(@frontmatter_re, content, "")
-
-    case Regex.run(@heading_re, body, capture: :all_but_first) do
-      [heading] when is_binary(heading) -> String.trim(heading)
-      _ -> nil
-    end
-  end
-
   defp filename_without_extension(path) do
     case String.split(path, "/") |> List.last() do
       nil -> ""
       filename when is_binary(filename) -> Path.rootname(filename)
     end
-  end
-
-  defp extract_frontmatter_tags(content) do
-    with fm when fm != nil <- extract_frontmatter(content),
-         {:ok, tags} <- parse_frontmatter_tags(fm) do
-      tags
-    else
-      _ -> []
-    end
-  end
-
-  defp extract_inline_tags(content) do
-    content
-    |> strip_frontmatter()
-    |> strip_code()
-    |> then(&Regex.scan(@inline_tag_re, &1, capture: :all_but_first))
-    |> List.flatten()
-    # Trim trailing separators left by e.g. `#foo/` at a word boundary.
-    |> Enum.map(&Regex.replace(~r{[/-]+$}, &1, ""))
-    |> Enum.reject(&(&1 == "" or numeric_tag?(&1)))
-  end
-
-  # Obsidian rejects purely-numeric tags (so `#42`, `#1/2` are not tags).
-  defp numeric_tag?(tag), do: Regex.match?(~r{^[\d/_-]+$}, tag)
-
-  defp strip_frontmatter(content), do: Regex.replace(@frontmatter_re, content, "")
-
-  # Fenced (``` / ~~~) and inline (`…`) code spans, stripped before scanning
-  # so a `#tag` written as a code example isn't indexed.
-  @code_span_res [~r/```.*?```/s, ~r/~~~.*?~~~/s, ~r/`[^`\n]*`/]
-
-  # Replace code spans with a space (not "") so a preceding word can't fuse
-  # onto a following `#tag` across the removed span.
-  defp strip_code(text) do
-    Enum.reduce(@code_span_res, text, &Regex.replace(&1, &2, " "))
-  end
-
-  defp parse_frontmatter_tags(fm) do
-    cond do
-      # Block-style list: `tags:` alone on its line, items as `  - item` below.
-      block = parse_block_list_tags(fm) ->
-        {:ok, block}
-
-      # Inline value on the same line: `tags: [a, b]` or `tags: a, b`.
-      # `[ \t]*` (no newline) + `\S` keeps the match on the `tags:` line so it
-      # never spills onto a following `- item` line.
-      match = Regex.run(~r/^tags:[ \t]*(\S.*)$/m, fm, capture: :all_but_first) ->
-        [raw] = match
-        {:ok, parse_tag_value(String.trim(raw))}
-
-      true ->
-        :error
-    end
-  end
-
-  # YAML block list under a bare `tags:` line. Returns nil when not block-style
-  # so the caller falls through to inline parsing.
-  defp parse_block_list_tags(fm) do
-    case Regex.run(~r/^tags:[ \t]*\r?\n(.*)/ms, fm, capture: :all_but_first) do
-      [rest] ->
-        items =
-          rest
-          |> String.split("\n")
-          |> Enum.take_while(&Regex.match?(~r/^\s*-\s+/, &1))
-          |> Enum.map(&(&1 |> String.replace(~r/^\s*-\s+/, "") |> tag_item()))
-          |> Enum.reject(&(&1 == ""))
-
-        if items == [], do: nil, else: items
-
-      _ ->
-        nil
-    end
-  end
-
-  # Strip surrounding matching quotes from a YAML scalar (and trim whitespace).
-  defp unquote_tag(raw) do
-    s = String.trim(raw)
-
-    cond do
-      String.length(s) >= 2 and String.starts_with?(s, "\"") and String.ends_with?(s, "\"") ->
-        String.slice(s, 1, String.length(s) - 2)
-
-      String.length(s) >= 2 and String.starts_with?(s, "'") and String.ends_with?(s, "'") ->
-        String.slice(s, 1, String.length(s) - 2)
-
-      true ->
-        s
-    end
-  end
-
-  defp parse_tag_value("[]"), do: []
-
-  defp parse_tag_value("[" <> rest) do
-    # YAML inline list: [tag1, tag2]
-    rest
-    |> String.trim_trailing("]")
-    |> String.split(",")
-    |> Enum.map(&tag_item/1)
-    |> Enum.reject(&(&1 == ""))
-  end
-
-  defp parse_tag_value(raw) do
-    # Comma-separated string: tag1, tag2
-    raw
-    |> String.split(",")
-    |> Enum.map(&tag_item/1)
-    |> Enum.reject(&(&1 == ""))
-  end
-
-  # One tag, or "" for something that is not one.
-  #
-  # `tags:` is read off the raw YAML with a regex rather than from the parsed
-  # value, so a scalar YAML would NOT give back as a string arrived here as its
-  # source text: `tags: true` became a tag literally named "true", which then
-  # showed up in the vault's tag list. Dropping bad input is one thing;
-  # inventing a tag out of it is another.
-  #
-  # The test is ASKED OF THE YAML PARSER, not pattern-matched. Two rounds of
-  # hand-written rules got it wrong in both directions: `~w(true false null ~)`
-  # plus a downcase rejected `tRue` and `nUll`, which YAML 1.2 hands back as
-  # ordinary strings, while a plain-decimal regex let `0x10`, `1e5`, `+1`, `.5`,
-  # `0o17` and `.inf` through as tags — the very bug being fixed. The grammar is
-  # the parser's to know.
-  #
-  # Fails OPEN. A scalar the parser cannot read (`a: b`, a stray bracket) is
-  # kept, because refusing to guess must never cost the user a tag.
-  #
-  # QUOTED text is always a tag: `tags: "true"` is a user asking for a tag named
-  # true, and silently dropping it would be the same class of bug. So the check
-  # runs on the raw item, before the quotes come off.
-  #
-  # NOTE: deliberately NOT aligned with `numeric_tag?/1`, which the inline
-  # scanner uses. That rule rejects `1/2`, `1_000`, `3-5` and `2024-01-02`, all
-  # of which YAML returns as strings — it is the stricter and less correct of
-  # the two, and matching it here would delete real tags.
-  defp tag_item(raw) do
-    trimmed = String.trim(raw)
-    value = unquote_tag(trimmed)
-
-    cond do
-      String.starts_with?(trimmed, ~s(")) or String.starts_with?(trimmed, "'") -> value
-      non_string_scalar?(trimmed) -> ""
-      true -> value
-    end
-  end
-
-  # Would YAML read this scalar as something other than a string?
-  #
-  # Rules, not a parser. Asking YamlElixir is the obviously-correct thing and it
-  # was the first fix here, but it costs ~2.6ms per call and this runs per tag
-  # per note write: a note tagged `todo` (t is a plausible boolean prefix, so the
-  # cheap gate could not exclude it) paid that on every save, and it was enough
-  # to time out an e2e that waits on content propagation.
-  #
-  # The rules below are pinned AGAINST YamlElixir in helpers_test.exs, over the
-  # cases that made the two earlier hand-written attempts wrong in both
-  # directions -- `tRue`/`nUll`/`1_000`/`1/2` are strings, `0x10`/`1e5`/`+1`/
-  # `.5`/`0o17`/`.inf` are not. The oracle lives in the test, where 2.6ms is free.
-  @yaml_bool_null ~w(true True TRUE false False FALSE null Null NULL ~)
-
-  # YAML 1.2 core numerics. Deliberately NOT 1.1: no `1_000` (underscores), and
-  # no yes/no/on/off, both of which YamlElixir returns as strings.
-  @yaml_number_re ~r/^(?:[-+]?\d+|0o[0-7]+|0x[0-9a-fA-F]+|[-+]?(?:\.\d+|\d+(?:\.\d*)?)(?:[eE][-+]?\d+)?|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$/
-
-  defp non_string_scalar?(item) do
-    item in @yaml_bool_null or Regex.match?(@yaml_number_re, item)
   end
 end

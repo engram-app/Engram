@@ -61,7 +61,7 @@ defmodule Engram.Native.LinkExtractTest do
             String.duplicate("- item with `code` and [[Link]]\n", 33_000),
             String.duplicate("Prose about [[Topic]] and [l](a.md).\n\n", 25_000)
           ] do
-        {_matches, peak} = Engram.Native.link_extract_nif(content)
+        {_matches, peak} = Engram.Native.link_extract_dirty_nif(content)
         assert peak <= 10 * byte_size(content), "#{peak} for #{binary_part(content, 0, 20)}"
       end
     end

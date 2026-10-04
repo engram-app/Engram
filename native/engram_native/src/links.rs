@@ -37,9 +37,9 @@ fn frontmatter_len(s: &str) -> usize {
 /// inline item for its whole input: ~36x the input on dense inline markdown,
 /// 73x on code-heavy notes. One segment's tree is freed before the next.
 ///
-/// A cut goes after a blank line whose next line starts at column 0. That
-/// line closes every paragraph, container and indented block, so the rest
-/// parses the same alone, unless a fenced or raw-HTML block is still open.
+/// A cut goes before a column-0 line that closes every open paragraph,
+/// container and indented block (see `next_cut`), so the rest parses the
+/// same alone, unless a fenced or raw-HTML block is still open.
 /// pulldown-cmark itself says whether one is: an open block runs to the end
 /// of the segment. A rejected cut is retried at twice the length, so the
 /// total parse work stays linear.
@@ -49,14 +49,23 @@ fn excluded(s: &str, segment: usize) -> Vec<(usize, usize)> {
     if fm > 0 {
         out.push((0, fm));
     }
-    let body = &s[fm..];
+    code_ranges(&s[fm..], fm, segment, &mut out);
+    out
+}
+
+/// Every code span and code block in `body` as sorted (start, end) byte
+/// ranges offset by `base`, parsed in segments (see `excluded`).
+pub fn code_ranges(body: &str, base: usize, segment: usize, out: &mut Vec<(usize, usize)>) {
+    if !may_have_code(body) {
+        return;
+    }
     let mut start = 0;
     let mut want = segment;
     while start < body.len() {
         let cut = next_cut(body, start.saturating_add(want));
         let end = cut.unwrap_or(body.len());
         let mut ranges = Vec::new();
-        if code_ranges(&body[start..end], fm + start, &mut ranges) || cut.is_none() {
+        if segment_code_ranges(&body[start..end], base + start, &mut ranges) || cut.is_none() {
             out.append(&mut ranges);
             start = end;
             want = segment;
@@ -64,12 +73,18 @@ fn excluded(s: &str, segment: usize) -> Vec<(usize, usize)> {
             want = 2 * (end - start);
         }
     }
-    out
+}
+
+/// A code span needs a backtick, a fence ``` or `~~~`, and indented code
+/// four columns of indent: a tab or four spaces in a row. Without any of
+/// them pulldown-cmark finds no code, and most notes skip it entirely.
+fn may_have_code(s: &str) -> bool {
+    s.contains(['`', '\t']) || s.contains("~~~") || s.contains("    ")
 }
 
 /// Pushes code ranges, offset by `base`. False if a fenced or raw-HTML block
 /// runs to the end of `s`, i.e. may still be open.
-fn code_ranges(s: &str, base: usize, out: &mut Vec<(usize, usize)>) -> bool {
+fn segment_code_ranges(s: &str, base: usize, out: &mut Vec<(usize, usize)>) -> bool {
     let mut closed = true;
     for (event, r) in Parser::new_ext(s, Options::ENABLE_TABLES).into_offset_iter() {
         match event {
@@ -412,6 +427,11 @@ mod tests {
             let n = 1 + (next() % 40) as usize;
             let doc: String = (0..n).map(|_| pieces[(next() % pieces.len() as u64) as usize]).collect();
             assert_eq!(matches_segmented(&doc, 1), matches_segmented(&doc, usize::MAX), "{doc:?}");
+            if !may_have_code(&doc) {
+                let mut ranges = Vec::new();
+                segment_code_ranges(&doc, 0, &mut ranges);
+                assert!(ranges.is_empty(), "may_have_code missed {doc:?}");
+            }
         }
     }
 
