@@ -36,6 +36,48 @@ defmodule Engram.KeywordIndex.QdrantSparseTest do
     assert by_dim[QdrantSparse.dim(key, "alpha")] > by_dim[QdrantSparse.dim(key, "beta")]
   end
 
+  # The batch form shares one token -> dim memo across a note's chunks, so a
+  # word repeated in every chunk is HMAC'd once instead of once per chunk. It
+  # must be exactly the per-chunk encoding: the stored index cannot drift, or
+  # every unchanged note would need re-indexing.
+  test "encode_documents is exactly encode_document per text", %{key_a: key} do
+    texts = [
+      "Running fast, running far.",
+      "",
+      "Ferritin ferritin İstanbul ﬁle naïve 東京 run",
+      "running fast again — and again",
+      String.duplicate("alpha beta gamma ", 50)
+    ]
+
+    for lang <- [nil, :en] do
+      expected = Enum.map(texts, &reference_encode(&1, key, 7.5, lang))
+      assert QdrantSparse.encode_documents(texts, key, 7.5, lang) == expected
+      assert Enum.map(texts, &QdrantSparse.encode_document(&1, key, 7.5, lang)) == expected
+    end
+  end
+
+  # The pre-memo encoder, verbatim: one HMAC and one full BM25 weight per
+  # (chunk, distinct token). The bar the optimized code must match exactly.
+  defp reference_encode(text, key, avgdl, lang) do
+    {tokens, doc_len} = Engram.KeywordIndex.Tokenizer.tokens_with_len(text, lang)
+
+    {indices, values} =
+      tokens
+      |> Enum.frequencies()
+      |> Enum.reduce(%{}, fn {token, tf}, acc ->
+        w = Engram.KeywordIndex.Bm25.tf_weight(tf, doc_len, avgdl)
+        Map.update(acc, QdrantSparse.dim(key, token), w, &(&1 + w))
+      end)
+      |> Map.to_list()
+      |> Enum.unzip()
+
+    {%{indices: indices, values: values}, doc_len}
+  end
+
+  test "encode_documents of no texts is empty", %{key_a: key} do
+    assert QdrantSparse.encode_documents([], key, 7.5, :en) == []
+  end
+
   test "encode_query gives unit values, deduped dims", %{key_a: key} do
     %{indices: indices, values: values} = QdrantSparse.encode_query("beta beta", key)
     assert indices == [QdrantSparse.dim(key, "beta")]

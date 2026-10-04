@@ -17,9 +17,9 @@ defmodule Engram.IndexingLanguageTest do
     alias Engram.KeywordIndex.QdrantSparse
 
     @impl true
-    def encode_document(text, filter_key, avgdl, language) do
-      send(self(), {:encode_document_language, language})
-      QdrantSparse.encode_document(text, filter_key, avgdl, language)
+    def encode_documents(texts, filter_key, avgdl, language) do
+      for _ <- texts, do: send(self(), {:encode_document_language, language})
+      QdrantSparse.encode_documents(texts, filter_key, avgdl, language)
     end
 
     @impl true

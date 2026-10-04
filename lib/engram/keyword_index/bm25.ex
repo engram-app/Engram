@@ -27,4 +27,16 @@ defmodule Engram.KeywordIndex.Bm25 do
     norm = 1 - b + b * doc_len / avgdl
     tf * (k1 + 1) / (tf + k1 * norm)
   end
+
+  @doc """
+  `tf_weight/3` split in two for the per-chunk hot loop: the length
+  normalizer depends only on the chunk, so compute it once with
+  `length_norm/2` and weigh each term with `tf_weight_normed/2`. Same
+  arithmetic in the same order, so results are bit-identical.
+  """
+  @spec length_norm(non_neg_integer(), float()) :: float()
+  def length_norm(doc_len, avgdl) when avgdl > 0, do: 1 - @b + @b * doc_len / avgdl
+
+  @spec tf_weight_normed(non_neg_integer(), float()) :: float()
+  def tf_weight_normed(tf, norm), do: tf * (@k1 + 1) / (tf + @k1 * norm)
 end

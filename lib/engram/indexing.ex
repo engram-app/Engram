@@ -1007,14 +1007,26 @@ defmodule Engram.Indexing do
       |> detect_language()
 
     note_payload = note_payload(note)
-    ctx = {note, user, note_payload, filter_key, avgdl, language, now}
+    ctx = {note, user, note_payload, now}
+
+    # The whole note in one call so the encoder can share per-note work (the
+    # token -> dim memo) across chunks. One sparse vector per :embed entry, in
+    # the same order as `vectors`.
+    sparse =
+      KeywordIndex.module().encode_documents(
+        for({:embed, chunk} <- plan.entries, do: chunk.text),
+        filter_key,
+        avgdl,
+        language
+      )
 
     prepared =
-      Enum.reduce_while(plan.entries, {:ok, [], vectors}, fn entry, {:ok, acc, pending} ->
-        case build_entry(entry, ctx, pending) do
-          {:ok, built, rest} -> {:cont, {:ok, [built | acc], rest}}
-          {:error, _reason} = err -> {:halt, err}
-        end
+      Enum.reduce_while(plan.entries, {:ok, [], Enum.zip(vectors, sparse)}, fn
+        entry, {:ok, acc, pending} ->
+          case build_entry(entry, ctx, pending) do
+            {:ok, built, rest} -> {:cont, {:ok, [built | acc], rest}}
+            {:error, _reason} = err -> {:halt, err}
+          end
       end)
 
     with {:ok, reversed, _spent} <- prepared do
@@ -1039,18 +1051,15 @@ defmodule Engram.Indexing do
   # A reused chunk costs nothing but a row: no embed, no tokenizer pass, no
   # encryption. Its `token_count` rides along from the row it replaces rather
   # than being recomputed from text that has not changed.
-  defp build_entry({:reuse, chunk, point_id, tokens}, {note, _u, _p, _fk, _a, _l, now}, pending) do
+  defp build_entry({:reuse, chunk, point_id, tokens}, {note, _u, _p, now}, pending) do
     {:ok, %{row: chunk_row(note, chunk, point_id, tokens, now), point: nil}, pending}
   end
 
-  defp build_entry({:embed, chunk}, ctx, [vector | rest]) do
-    {note, user, note_payload, filter_key, avgdl, language, now} = ctx
+  # `doc_len` is the raw token count from the same tokenization pass as the
+  # sparse vector, also persisted as `chunks.token_count`.
+  defp build_entry({:embed, chunk}, ctx, [{vector, {sparse, doc_len}} | rest]) do
+    {note, user, note_payload, now} = ctx
     point_id = Ecto.UUID.generate()
-
-    # One tokenization pass yields both the sparse vector and `doc_len`
-    # (the raw token count, also persisted as `chunks.token_count`).
-    {sparse, doc_len} =
-      KeywordIndex.module().encode_document(chunk.text, filter_key, avgdl, language)
 
     # `chunk_index` used to live here. Nothing ever read it, and dropping it is
     # what lets a reused point be refreshed for the whole note in ONE
