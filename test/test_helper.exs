@@ -13,6 +13,13 @@ Engram.ServiceConfig.ensure_table()
 # preserving full diagnostic output for real failures.
 ExUnit.configure(capture_log: true)
 
+# #1210: building the OpenAPI spec `ensure_loaded`s every schema module through
+# the single code server. Cold, that is ~0.7 s on an idle box; inside a timed
+# test under a loaded parallel suite it queued past ExUnit's 60 s timeout.
+# Prod is unaffected (releases run in embedded mode, every module preloaded).
+# Pay it once here, outside any test.
+_ = EngramWeb.ApiSpec.spec()
+
 # Infra-dependent tags excluded by default; opt in via env var.
 # - :qdrant_integration needs a running Qdrant (CI stack) → QDRANT_INTEGRATION=1
 # - :cluster needs BEAM distribution (epmd + longnames). CI's unit-tests runner
