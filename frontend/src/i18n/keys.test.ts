@@ -1,57 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { findProblems, usedEntries, usedKeys } from "./keys-scan";
 import type { Catalog } from "./translate";
-
-const T_CALL = /\bt\(\s*"(?<key>(?:[^"\\]|\\.)*)"/gu;
-const TN_CALL = /\btn\(\s*\{(?:"(?:[^"\\]|\\.)*"|[^"}])*?\bother:\s*"(?<key>(?:[^"\\]|\\.)*)"/gu;
-const TRANS_PROP = /<Trans\s[^>]*?\btext="(?<key>(?:[^"\\]|\\.)*)"/gu;
-const TOKEN = /\{(?<name>\w+)\}/gu;
-
-function tokens(text: string): Set<string> {
-	return new Set([...text.matchAll(TOKEN)].map((m) => m.groups?.name ?? ""));
-}
-
-function usedKeys(sources: readonly string[]): Set<string> {
-	const keys = new Set<string>();
-	for (const source of sources) {
-		for (const re of [T_CALL, TN_CALL, TRANS_PROP]) {
-			for (const match of source.matchAll(re)) {
-				const key: unknown = JSON.parse(`"${match.groups?.key ?? ""}"`);
-				if (typeof key === "string") {
-					keys.add(key);
-				}
-			}
-		}
-	}
-	return keys;
-}
-
-function findProblems(used: Set<string>, catalogs: Record<string, Catalog>): string[] {
-	const problems: string[] = [];
-	const everyKey = new Set(Object.values(catalogs).flatMap((c) => Object.keys(c)));
-	for (const [locale, catalog] of Object.entries(catalogs)) {
-		for (const [key, value] of Object.entries(catalog)) {
-			if (!used.has(key)) {
-				problems.push(`${locale}: orphan key ${JSON.stringify(key)}`);
-			}
-			const want = tokens(key);
-			const forms = typeof value === "string" ? [value] : Object.values(value);
-			for (const form of forms) {
-				const got = tokens(form);
-				const dropped = typeof value === "string" && [...want].some((x) => !got.has(x));
-				const invented = [...got].some((x) => !want.has(x));
-				if (dropped || invented) {
-					problems.push(`${locale}: placeholder mismatch in ${JSON.stringify(key)}`);
-				}
-			}
-		}
-		for (const key of everyKey) {
-			if (!(key in catalog)) {
-				problems.push(`${locale}: missing key ${JSON.stringify(key)}`);
-			}
-		}
-	}
-	return problems;
-}
 
 describe("findProblems (self-check)", () => {
 	const used = new Set(["Hello {name}", "{count} files"]);
@@ -98,6 +47,43 @@ describe("usedKeys (self-check)", () => {
 		expect([...usedKeys([src])].sort()).toEqual(
 			["Hello {name}", "{count} files", "Type {w}", 'Say "hi"'].sort(),
 		);
+	});
+	it("finds msg() keys", () => {
+		const src = `const ITEMS = [{ label: msg("Settings") }, msg("Say \\"hi\\"")]`;
+		expect([...usedKeys([src])].sort()).toEqual(['Say "hi"', "Settings"].sort());
+	});
+	it("finds a multi-line tn object", () => {
+		const src = `tn(
+			{
+				one: "{count} note",
+				other: "{count} notes",
+			},
+			n,
+		)`;
+		expect([...usedKeys([src])]).toEqual(["{count} notes"]);
+	});
+	it("finds an escaped-quote key", () => {
+		expect([...usedKeys([`t("A \\"quoted\\" word")`])]).toEqual(['A "quoted" word']);
+	});
+});
+
+describe("usedEntries (self-check)", () => {
+	it("returns the one form beside other for a counted string", () => {
+		const src = `tn({ one: "{count} file", other: "{count} files" }, n)`;
+		expect(usedEntries([src])).toEqual([
+			{ key: "{count} files", plural: { one: "{count} file", other: "{count} files" } },
+		]);
+	});
+	it("handles other before one and a plural with no one", () => {
+		expect(usedEntries([`tn({ other: "{count} b", one: "{count} a" }, n)`])).toEqual([
+			{ key: "{count} b", plural: { one: "{count} a", other: "{count} b" } },
+		]);
+		expect(usedEntries([`tn({ other: "{count} c" }, n)`])).toEqual([
+			{ key: "{count} c", plural: { other: "{count} c" } },
+		]);
+	});
+	it("returns plain entries without plural and dedupes", () => {
+		expect(usedEntries([`t("A") msg("A") t("B")`])).toEqual([{ key: "A" }, { key: "B" }]);
 	});
 });
 
