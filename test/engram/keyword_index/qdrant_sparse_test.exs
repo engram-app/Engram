@@ -3,6 +3,7 @@ defmodule Engram.KeywordIndex.QdrantSparseTest do
 
   alias Engram.Crypto
   alias Engram.KeywordIndex.QdrantSparse
+  alias Engram.KeywordIndex.Tokenizer
 
   setup do
     {:ok, user_a} = insert(:user) |> Crypto.ensure_user_dek()
@@ -74,7 +75,7 @@ defmodule Engram.KeywordIndex.QdrantSparseTest do
   # shared tokenizer), holding the Rust HMAC and BM25 to it: one HMAC and one full BM25 weight per
   # (chunk, distinct token). The bar the optimized code must match exactly.
   defp reference_encode(text, key, avgdl, lang) do
-    {tokens, doc_len} = Engram.KeywordIndex.Tokenizer.tokens_with_len(text, lang)
+    {tokens, doc_len} = Tokenizer.tokens_with_len(text, lang)
 
     {indices, values} =
       tokens
@@ -126,8 +127,8 @@ defmodule Engram.KeywordIndex.QdrantSparseTest do
     # A token that long is never a real word, so it is indexed raw.
     test "tokens over 64 bytes are not stemmed" do
       long = String.duplicate("running", 10)
-      assert Engram.KeywordIndex.Tokenizer.tokens(long, :en) == [long]
-      assert Engram.KeywordIndex.Tokenizer.tokens("running", :en) == ["running", "run"]
+      assert Tokenizer.tokens(long, :en) == [long]
+      assert Tokenizer.tokens("running", :en) == ["running", "run"]
     end
 
     test "a query's keyword leg reads at most its first 4096 characters", %{key_a: key} do
