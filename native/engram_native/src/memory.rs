@@ -12,12 +12,18 @@
 //! Never a hard limit that returns null: an allocation failure aborts the
 //! whole node, and catch_unwind cannot stop it. Bound memory by design and
 //! prove it with the peak instead (test/engram/native).
-use rustler::EnifAllocator;
 use std::alloc::{GlobalAlloc, Layout};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicIsize, Ordering::Relaxed};
 
 pub struct Counting;
+
+// `enif_alloc` only exists inside a running BEAM; `cargo test` counts over the
+// system allocator instead, so the counting itself is under test too.
+#[cfg(not(test))]
+const INNER: rustler::EnifAllocator = rustler::EnifAllocator;
+#[cfg(test)]
+const INNER: std::alloc::System = std::alloc::System;
 
 static LIVE: AtomicIsize = AtomicIsize::new(0);
 
@@ -44,7 +50,7 @@ fn track(delta: isize) {
 
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let ptr = EnifAllocator.alloc(layout);
+        let ptr = INNER.alloc(layout);
         if !ptr.is_null() {
             track(layout.size() as isize);
         }
@@ -52,7 +58,7 @@ unsafe impl GlobalAlloc for Counting {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        EnifAllocator.dealloc(ptr, layout);
+        INNER.dealloc(ptr, layout);
         track(-(layout.size() as isize));
     }
     // `realloc` keeps the default (alloc + copy + dealloc through the two
@@ -74,4 +80,20 @@ pub fn peak_since(base: isize) -> usize {
 
 pub fn live_bytes() -> isize {
     LIVE.load(Relaxed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn peak_counts_this_threads_allocations_and_live_returns_to_base() {
+        let base = begin();
+        let v: Vec<u8> = Vec::with_capacity(1 << 20);
+        drop(v);
+        assert!(peak_since(base) >= 1 << 20);
+        // Other test threads allocate concurrently; only this thread's
+        // counter is exact.
+        assert_eq!(T_LIVE.with(|l| l.get()), base);
+    }
 }

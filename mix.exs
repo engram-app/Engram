@@ -187,7 +187,10 @@ defmodule Engram.MixProject do
 
       # In-house NIFs (native/engram_native): CPU hot paths ported to Rust.
       # Compiled from source, so the release builder needs a Rust toolchain.
-      {:rustler, "~> 0.37", runtime: false},
+      # Matches the crate's rustler version (Cargo.toml). `override`: lingua
+      # pins an optional `rustler ~> 0.37.1`, which it only needs to force-
+      # build; it loads its precompiled NIF, so ours may move ahead of it.
+      {:rustler, "~> 0.38", runtime: false, override: true},
 
       # CommonMark parser for MCP section boundaries (Engram.MCP.Sections):
       # comrak as a precompiled Rust NIF. mdex_native directly, not the `mdex`

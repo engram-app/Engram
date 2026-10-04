@@ -1,20 +1,19 @@
 //! In-house NIFs. Each is a pure function over binaries, runs on a dirty CPU
 //! scheduler, and returns BEAM binaries (so its OUTPUT is visible to
 //! `:erlang.memory(:binary)`). See docs/context for the memory standard.
+mod json;
 mod links;
 mod memory;
-mod json;
 mod meta;
 mod mmr;
-mod vectors;
 mod tokenizer;
+mod vectors;
 
-// Not under `cargo test`: enif_alloc only exists inside a running BEAM.
-#[cfg(not(test))]
+// Under `cargo test` it counts over the system allocator (see memory.rs).
 #[global_allocator]
 static ALLOCATOR: memory::Counting = memory::Counting;
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use rustler::{Binary, Encoder, Env, Error, ListIterator, NewBinary, NifResult, Term};
 use sha2::Sha256;
 use std::collections::HashMap;
@@ -32,7 +31,13 @@ fn dim(key: &[u8], token: &str) -> u32 {
 }
 
 /// One chunk -> (u32 LE indices sorted ascending, f64 LE values, raw doc_len).
-fn encode(text: &str, key: &[u8], avgdl: f64, lang: Option<&str>, memo: &mut HashMap<String, u32>) -> (Vec<u8>, Vec<u8>, usize) {
+fn encode(
+    text: &str,
+    key: &[u8],
+    avgdl: f64,
+    lang: Option<&str>,
+    memo: &mut HashMap<String, u32>,
+) -> (Vec<u8>, Vec<u8>, usize) {
     let (tokens, doc_len) = tokenizer::tokens_with_len(text, lang);
     let norm = (1.0 - B) + B * (doc_len as f64) / avgdl;
 
@@ -195,7 +200,8 @@ fn note_tags_dirty_nif<'a>(env: Env<'a>, content: &str) -> (Vec<Term<'a>>, usize
 
 // A JSON number decodes to an integer when it has no fraction (`0`, `1`).
 fn number(t: Term) -> NifResult<f64> {
-    t.decode::<f64>().or_else(|_| t.decode::<i64>().map(|i| i as f64))
+    t.decode::<f64>()
+        .or_else(|_| t.decode::<i64>().map(|i| i as f64))
 }
 
 fn vector(t: Term) -> NifResult<Option<Vec<f64>>> {
@@ -221,10 +227,21 @@ fn vector(t: Term) -> NifResult<Option<Vec<f64>>> {
 /// MMR picks: indices into the pool, in pick order. `vectors` entries are a
 /// float list or `nil`. Dirty: a pool is ~200 x 1024 floats.
 #[rustler::nif(schedule = "DirtyCpu")]
-fn mmr_select_nif(vectors: Vec<Term>, scores: Vec<Term>, limit: usize, d: f64) -> NifResult<(Vec<usize>, usize)> {
+fn mmr_select_nif(
+    vectors: Vec<Term>,
+    scores: Vec<Term>,
+    limit: usize,
+    d: f64,
+) -> NifResult<(Vec<usize>, usize)> {
     let base = memory::begin();
-    let vectors = vectors.into_iter().map(vector).collect::<NifResult<Vec<_>>>()?;
-    let scores = scores.into_iter().map(number).collect::<NifResult<Vec<_>>>()?;
+    let vectors = vectors
+        .into_iter()
+        .map(vector)
+        .collect::<NifResult<Vec<_>>>()?;
+    let scores = scores
+        .into_iter()
+        .map(number)
+        .collect::<NifResult<Vec<_>>>()?;
     if vectors.len() != scores.len() {
         return Err(Error::BadArg);
     }
@@ -262,14 +279,27 @@ fn dense_json_nif<'a>(env: Env<'a>, packed: Binary<'a>) -> NifResult<(Binary<'a>
 
 /// Packed sparse -> `{"indices":[..],"values":[..]}` text.
 #[rustler::nif]
-fn sparse_json_nif<'a>(env: Env<'a>, indices: Binary<'a>, values: Binary<'a>) -> NifResult<(Binary<'a>, usize)> {
+fn sparse_json_nif<'a>(
+    env: Env<'a>,
+    indices: Binary<'a>,
+    values: Binary<'a>,
+) -> NifResult<(Binary<'a>, usize)> {
     let base = memory::begin();
-    finish(env, vectors::sparse_json(indices.as_slice(), values.as_slice()), base)
+    finish(
+        env,
+        vectors::sparse_json(indices.as_slice(), values.as_slice()),
+        base,
+    )
 }
 
 /// Lowercase hex HMAC-SHA256 of `prefix <> text` for each text, one key
 /// setup for the whole batch. Matches `Crypto.hmac_content_hash/2`.
-fn hmac_hex_many<'a>(env: Env<'a>, key: Binary<'a>, prefix: Binary<'a>, texts: Vec<Binary<'a>>) -> NifResult<(Vec<Binary<'a>>, usize)> {
+fn hmac_hex_many<'a>(
+    env: Env<'a>,
+    key: Binary<'a>,
+    prefix: Binary<'a>,
+    texts: Vec<Binary<'a>>,
+) -> NifResult<(Vec<Binary<'a>>, usize)> {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let base = memory::begin();
     let keyed = Hmac::<Sha256>::new_from_slice(key.as_slice()).map_err(|_| Error::BadArg)?;
@@ -292,12 +322,22 @@ fn hmac_hex_many<'a>(env: Env<'a>, key: Binary<'a>, prefix: Binary<'a>, texts: V
 }
 
 #[rustler::nif]
-fn hmac_hex_many_nif<'a>(env: Env<'a>, key: Binary<'a>, prefix: Binary<'a>, texts: Vec<Binary<'a>>) -> NifResult<(Vec<Binary<'a>>, usize)> {
+fn hmac_hex_many_nif<'a>(
+    env: Env<'a>,
+    key: Binary<'a>,
+    prefix: Binary<'a>,
+    texts: Vec<Binary<'a>>,
+) -> NifResult<(Vec<Binary<'a>>, usize)> {
     hmac_hex_many(env, key, prefix, texts)
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
-fn hmac_hex_many_dirty_nif<'a>(env: Env<'a>, key: Binary<'a>, prefix: Binary<'a>, texts: Vec<Binary<'a>>) -> NifResult<(Vec<Binary<'a>>, usize)> {
+fn hmac_hex_many_dirty_nif<'a>(
+    env: Env<'a>,
+    key: Binary<'a>,
+    prefix: Binary<'a>,
+    texts: Vec<Binary<'a>>,
+) -> NifResult<(Vec<Binary<'a>>, usize)> {
     hmac_hex_many(env, key, prefix, texts)
 }
 
