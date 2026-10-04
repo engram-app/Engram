@@ -4,6 +4,7 @@ import {
 	useCallback,
 	useContext,
 	useEffect,
+	useLayoutEffect,
 	useMemo,
 	useState,
 } from "react";
@@ -84,7 +85,8 @@ export function LocaleProvider({
 
 	// lang follows what is rendered: empty stubs and failed loads are English.
 	const translated = Object.keys(catalog).length > 0;
-	useEffect(() => {
+	// Layout effect: lang must change in the same commit as the text it describes.
+	useLayoutEffect(() => {
 		document.documentElement.lang = translated ? locale : "en";
 	}, [locale, translated]);
 
