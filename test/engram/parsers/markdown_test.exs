@@ -350,6 +350,27 @@ defmodule Engram.Parsers.MarkdownTest do
       end
     end
 
+    test "a long URL path with mixed case and digits is kept whole" do
+      url =
+        "https://github.com/engram-app/Engram/blob/0f3e4fa0c1b2d3e4f5a6b7c8d9e0f1a2b3c4d5e6/" <>
+          "lib/engram_web/controllers/api/notes_controller.ex#L10"
+
+      [chunk] = Markdown.parse("# Links\n\nSee " <> url <> " for the handler.", "Links.md")
+      assert chunk.text =~ url
+    end
+
+    test "no fragment of a blob survives at a split boundary" do
+      # "intro " + blob is cut into 2,048-byte pieces; sized so the blob's last
+      # 44 characters land alone at the start of the final piece.
+      blob = binary_part(b64(60_000), 0, 2_048 * 24 + 44)
+      content = "# N\n\nintro " <> blob <> " outro words here"
+
+      texts = Markdown.parse(content, "N.md") |> Enum.map(& &1.text)
+
+      refute Enum.any?(texts, &String.contains?(&1, binary_part(blob, byte_size(blob) - 30, 30)))
+      assert Enum.any?(texts, &String.contains?(&1, "outro words here"))
+    end
+
     test "a long run of one letter is not mistaken for a blob" do
       run = String.duplicate("a", 300)
       [chunk] = Markdown.parse("# N\n\n" <> run, "N.md")

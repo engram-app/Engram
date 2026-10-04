@@ -18,18 +18,17 @@ defmodule Engram.Parsers.Markdown do
   # a comment, a refactor with identical output). Every bump costs one re-embed
   # pass over the corpus.
   #
-  # 2 — base64 blobs are stripped from chunk text (`drop_blobs/1`).
+  # 2 — base64 blobs are stripped from section text (`strip_blobs/1`).
   @chunker_version 2
 
-  # A run of base64 alphabet (standard + URL-safe) this long, mixing upper
-  # case, lower case and digits, is encoded binary, not words: inline `data:`
-  # images, Excalidraw `compressed-json`, encrypted-text plugins. No prose word
-  # or URL (punctuation breaks the run) is 100 characters of this class, and a
-  # hex digest or a run of one letter lacks the mix, so both are kept. Random
-  # base64 misses a digit in 100 chars with odds ~1e-9. The optional
-  # `data:<mime>;base64,` prefix goes with it so `![x](data:...)` leaves only
-  # `![x]()`. Possessive: never hand PCRE a per-character backtrack on content
-  # this size (see `Engram.Links.Parser`'s @md_link_re for what that costs).
+  # A run of base64 alphabet (standard + URL-safe) at least this long is a
+  # candidate blob: inline `data:` images, Excalidraw `compressed-json`,
+  # encrypted-text plugins. `encoded?/1` then decides by letter mix, because
+  # `/`, `-` and `_` are in the class and a long URL or file path is one run
+  # too. The optional `data:<mime>;base64,` prefix goes with the run so
+  # `![x](data:...)` leaves only `![x]()`. Possessive: never hand PCRE a
+  # per-character backtrack on content this size (see `Engram.Links.Parser`'s
+  # @md_link_re for what that costs).
   @blob_run ~r/(?:data:[\w\/+.-]++;base64,)?[A-Za-z0-9+\/=_-]{100,}+/
 
   @doc """
@@ -80,7 +79,6 @@ defmodule Engram.Parsers.Markdown do
 
     (body_chunks ++ frontmatter_chunk(content, folder, title))
     |> Enum.flat_map(&enforce_size_cap/1)
-    |> Enum.flat_map(&drop_blobs/1)
     |> Enum.with_index()
     |> Enum.map(fn {chunk, idx} -> Map.put(chunk, :position, idx) end)
   end
@@ -130,31 +128,6 @@ defmodule Engram.Parsers.Markdown do
   #
   # The separator is re-appended because `context_prefix_of/1` returns the
   # prefix WITH its trailing "\n\n", which the truncation cuts off.
-  # The stored note keeps every byte; only the indexed text loses the blob.
-  # Runs after `enforce_size_cap/1`, so a megabyte image arrives here as
-  # 2 KB pieces and most pieces vanish whole. Positions are assigned after this,
-  # so dropping a chunk leaves no gap.
-  defp drop_blobs(%{text: text} = chunk) do
-    if Regex.match?(@blob_run, text) do
-      prefix = context_prefix_of(chunk)
-
-      stripped =
-        @blob_run |> Regex.replace(text, &if(encoded?(&1), do: "", else: &1)) |> String.trim()
-
-      # Nothing but markup left (`)`, `![]()`): no vector is worth a point.
-      if Regex.match?(~r/\A[^\p{L}\p{N}]*\z/u, stripped),
-        do: [],
-        else: [%{chunk | text: stripped, context_text: prefix <> stripped}]
-    else
-      [chunk]
-    end
-  end
-
-  defp encoded?(run),
-    do:
-      Regex.match?(~r/[A-Z]/, run) and Regex.match?(~r/[a-z]/, run) and
-        Regex.match?(~r/[0-9]/, run)
-
   defp cap_prefix(prefix) when byte_size(prefix) <= @max_prefix_bytes, do: prefix
 
   defp cap_prefix(prefix) do
@@ -227,6 +200,7 @@ defmodule Engram.Parsers.Markdown do
   defp frontmatter_chunk(content, folder, title) do
     case Engram.Notes.Frontmatter.split(content) do
       {block, _body} when is_binary(block) and block != "" ->
+        block = strip_blobs(block)
         context_prefix = build_context_prefix(folder, "#{title} > frontmatter")
 
         [
@@ -353,15 +327,17 @@ defmodule Engram.Parsers.Markdown do
   defp build_chunks(sections, folder, title) do
     sections
     |> Enum.flat_map(fn section ->
-      text = section.lines |> Enum.reverse() |> Enum.join("\n") |> String.trim()
+      text =
+        section.lines |> Enum.reverse() |> Enum.join("\n") |> strip_blobs() |> String.trim()
+
       heading_path = build_heading_path(title, section.heading_stack)
       context_prefix = build_context_prefix(folder, heading_path)
 
       sub_chunks =
-        if byte_size(text) > @max_chunk_chars do
-          split_text(text, @max_chunk_chars)
-        else
-          [text]
+        cond do
+          markup_only?(text) -> []
+          byte_size(text) > @max_chunk_chars -> split_text(text, @max_chunk_chars)
+          true -> [text]
         end
 
       Enum.with_index(sub_chunks)
@@ -385,6 +361,33 @@ defmodule Engram.Parsers.Markdown do
   end
 
   # No headings in document — use the document title
+  # The stored note keeps every byte; only the indexed text loses the blob.
+  # Applied to whole section text BEFORE the size split, so a megabyte image
+  # is one regex replace instead of ~500 throwaway 2 KB chunks, and no
+  # sub-100-character tail of it survives at a split edge.
+  defp strip_blobs(text) do
+    if Regex.match?(@blob_run, text),
+      do: Regex.replace(@blob_run, text, &if(encoded?(&1), do: "", else: &1)),
+      else: text
+  end
+
+  # Random base64 is ~41% upper case, ~41% lower case, ~16% digits; over 100+
+  # characters it clears these floors with overwhelming odds. A URL or file
+  # path in the same character class is mostly lower case with an occasional
+  # capital, an identifier has no digits, a hex digest has no upper case.
+  defp encoded?(run) do
+    len = byte_size(run)
+
+    count(run, ~r/[A-Z]/) >= len * 0.2 and count(run, ~r/[a-z]/) >= len * 0.2 and
+      count(run, ~r/[0-9]/) >= len * 0.05
+  end
+
+  defp count(run, re), do: re |> Regex.scan(run) |> length()
+
+  # A section left with no letter or digit carried only the blob and its
+  # markup (`![x]()`): a vector of `)` is worth no point.
+  defp markup_only?(text), do: not Regex.match?(~r/[\p{L}\p{N}]/u, text)
+
   defp build_heading_path(title, []), do: title
 
   # Stack starts with h1: replace h1 text with the extracted title (may differ if frontmatter
