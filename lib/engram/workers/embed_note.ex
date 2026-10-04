@@ -53,6 +53,7 @@ defmodule Engram.Workers.EmbedNote do
   alias Engram.UsageMeters
   alias Engram.Vaults.Vault
   alias Engram.Workers.BackgroundPriority
+  alias Engram.Workers.EmbedNote.CrashGuard
 
   require Logger
 
@@ -179,15 +180,41 @@ defmodule Engram.Workers.EmbedNote do
             # old behaviour) left the note with no BM25 index either, so it
             # vanished from keyword search too. The meter is charged inside
             # the pass, by the reservation (see `reserve_embed_tokens/2`).
-            case run_embed(note, user, old_path_hmac_b64) do
-              :ok ->
-                :ok
+            case CrashGuard.check(note, job) do
+              :run ->
+                case guarded_embed(note, user, old_path_hmac_b64) do
+                  :ok ->
+                    :ok
+
+                  other ->
+                    _ = maybe_mark_poison(note, other, job)
+                    other
+                end
 
               other ->
-                _ = maybe_mark_poison(note, other, job)
                 other
             end
         end
+    end
+  end
+
+  # The dead-man stamp brackets the embed: written before, cleared however the
+  # attempt returns, raise and exit included. Only a killed node leaves it.
+  defp guarded_embed(note, user, old_path_hmac_b64) do
+    :ok = CrashGuard.stamp(note)
+
+    try do
+      result = run_embed(note, user, old_path_hmac_b64)
+      :ok = CrashGuard.clear(note, result)
+      result
+    rescue
+      e ->
+        _ = CrashGuard.clear(note, :error)
+        reraise e, __STACKTRACE__
+    catch
+      :exit, reason ->
+        _ = CrashGuard.clear(note, :error)
+        exit(reason)
     end
   end
 
@@ -508,6 +535,15 @@ defmodule Engram.Workers.EmbedNote do
     # re-run it every tick.
     set =
       cond do
+        # Nothing to index: the content's dense leg is complete with zero
+        # vectors (Indexing reports `dense? = true` only on that branch).
+        chunk_count == 0 and dense? ->
+          [
+            dense_indexed_hash: note.content_hash,
+            embed_retry_after: nil,
+            embed_budget_parked: nil
+          ]
+
         chunk_count == 0 ->
           [dense_indexed_hash: nil, embed_retry_after: nil, embed_budget_parked: nil]
 

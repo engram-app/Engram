@@ -1,6 +1,6 @@
 # Context Doc: The `engram_maintenance` role (maintenance pool credential)
 
-_Last verified: 2026-09-25_
+_Last verified: 2026-10-03_
 
 ## Status
 
@@ -80,15 +80,14 @@ pool fails to connect, which is loud.
 
 ## Why both ECS tiers keep `MAINTENANCE_DATABASE_URL`
 
-Every `Repo.maintenance()` caller is an Oban job, so the web tier never uses
-the pool. It still gets the variable. `Engram.Repo.TenancyGuard` runs on web
-too, and without the variable it logs a `category=boot` ERROR ("RLS is
+The web tier uses the pool too: the Paddle webhook (`WebhookController.paddle`)
+discovers the subscription owner via `Repo.maintenance()`
+(`Billing.get_subscription_by_paddle_id/1`). `Engram.Repo.TenancyGuard` also
+runs on web, and without the variable it logs a `category=boot` ERROR ("RLS is
 ENFORCED for this connection, but no maintenance pool is configured") and
-emits `tenancy_misconfigured` on every web boot. The prod boot alert no longer
-excludes that line. Also, with `oban_worker_enabled = false` the single web
-task runs every queue. Worker-only needs a backend change first (a
-role-aware TenancyGuard). The cost of keeping it is one idle connection per
-web task (`MAINTENANCE_POOL_SIZE=1`).
+emits `tenancy_misconfigured` on every web boot. With
+`oban_worker_enabled = false` the single web task also runs every queue. The
+cost is one idle connection per web task (`MAINTENANCE_POOL_SIZE=1`).
 
 ## Schema lint waiver
 
@@ -116,7 +115,8 @@ Tables that join the tenant set in parallel PRs must also get
 
 - `account_exports`: Engram#1759 merged first, so #1774 includes it in its
   migration (12 tables).
-- `subscriptions`: Engram#1771 / #1758, still open.
+- `subscriptions`: access routed for an enforced policy (#1771), but RLS is
+  not enabled yet (#1758 open). Its RLS migration must add `maintenance_all`.
 
 The coverage test above fails on that second branch until it does.
 

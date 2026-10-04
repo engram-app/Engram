@@ -266,8 +266,12 @@ defmodule Engram.Observability.PyroscopeTest do
       spinner = spawn(Fixtures, :spin, [])
       on_exit(fn -> Process.exit(spinner, :kill) end)
 
-      {:ok, pid} = Pyroscope.start_link([])
-      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid, :normal, 1_000) end)
+      # Under the test supervisor, not start_link + on_exit(GenServer.stop):
+      # the link to the test process killed the sampler with :shutdown while
+      # the on_exit stop was in flight, and GenServer.stop raised on that
+      # reason (flaked ~1 in 200, CI run 37167497743). ExUnit stops supervised
+      # children itself, in order, before on_exit runs.
+      start_supervised!({Pyroscope, []})
 
       assert_receive {:pyroscope_push, query, headers, body}, 2_000
 
@@ -309,8 +313,12 @@ defmodule Engram.Observability.PyroscopeTest do
         push_interval_ms: 60_000
       )
 
-      {:ok, pid} = Pyroscope.start_link([])
-      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid, :normal, 1_000) end)
+      # Under the test supervisor, not start_link + on_exit(GenServer.stop):
+      # the link to the test process killed the sampler with :shutdown while
+      # the on_exit stop was in flight, and GenServer.stop raised on that
+      # reason (flaked ~1 in 200, CI run 37167497743). ExUnit stops supervised
+      # children itself, in order, before on_exit runs.
+      start_supervised!({Pyroscope, []})
 
       assert_receive {[:engram, :pyroscope, :sample], ^ref, measurements, _meta}, 1_000
       assert is_float(measurements.duration_ms) and measurements.duration_ms >= 0.0

@@ -11,11 +11,15 @@
 # keyed by path via upsert_note/3. Re-running updates in place instead of
 # duplicating.
 #
-# Usage (against the local Supabase audit DB):
+# Usage (against any throwaway Postgres):
 #
 #   DATABASE_URL="postgres://postgres:postgres@127.0.0.1:54322/postgres" \
 #   KEY_PROVIDER=local ENCRYPTION_MASTER_KEY="$(openssl rand -base64 32)" \
 #   mix run priv/repo/dev_seeds.exs
+#
+# Pin ONE ENCRYPTION_MASTER_KEY across seed and boot: a different key fails the
+# boot canary (`:invalid_wrapping`). On a throwaway DB,
+# `DELETE FROM system_canaries` resets it.
 #
 # Tunables (env vars):
 #   SEED_USERS           number of users          (default 10)

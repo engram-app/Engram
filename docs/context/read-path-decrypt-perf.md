@@ -1,22 +1,6 @@
-Title: Read-path decrypt performance — parallel decrypt economics, test-DB PG18 requirement, manifest indexing
+# Read-path decrypt performance: parallel decrypt economics, manifest indexing
 
-_Last verified: 2026-06-12 (discovered during PR #530, `perf/read-path-decrypt-batching`)_
-
-## Local test DB now requires PostgreSQL 18 on port 5433
-
-Since the PG18 + UUIDv7 PK rework (PR #524, see `pg18-uuidv7-prod-crashloop-2026-06-11.md`), `mix test` against the default `localhost:5432` (the old `backend-postgres-1` container) fails massively.
-
-| Symptom | Cause |
-|---------|-------|
-| ~1631 test failures: `Postgrex expected an integer ... got <<16-byte uuid binary>>` | Stale bigint-PK schema in the old 5432 DB; schemas now declare `Ecto.UUID` PKs |
-| Migrations fail: `unrecognized configuration parameter "transaction_timeout"` | `transaction_timeout` is PG17+; the 5432 container is older |
-
-Fix:
-
-```bash
-export DATABASE_URL=postgres://engram:engram@localhost:5433/engram_test  # engram-dev-postgres, postgres:18.4
-MIX_ENV=test mix ecto.drop && MIX_ENV=test mix ecto.create && MIX_ENV=test mix ecto.migrate
-```
+_Last verified: 2026-10-03 (first measured in PR #530)_
 
 ## Parallel decrypt economics (benchmarked, 10 schedulers)
 
@@ -39,16 +23,11 @@ The partial unique index `(user_id, vault_id, path_hmac) WHERE deleted_at IS NUL
 Registered in PromEx, flows to Grafana:
 
 - `engram.crypto.dek_cache.count` — tagged by outcome (hit/miss)
-- `engram.crypto.decrypt_batch.duration_us` + `.count` — tagged `kind` (`:notes` | `:manifest_notes` | `:manifest_attachments`)
+- `engram.crypto.decrypt_batch.duration_us` + `.count`, tagged `kind` (`:notes`, `:attachments`, `:vault_tree_notes`, `:manifest_notes`, `:manifest_attachments`)
 
 Check these before adding more read-path optimization.
-
-## Gotchas
-
-- **Worktree deps can still be stale.** The `.githooks/post-checkout` hook hardlinks `deps/_build/node_modules` from the main checkout, but if the main checkout's lockfiles are stale vs `origin/main` you still need `mix deps.get` / `bun install` in the worktree. Hit both this session: `uuidv7` hex dep missing, `@headless-tree/*` node modules missing.
 
 ## References
 
 - PR #530 (`perf/read-path-decrypt-batching`)
-- `docs/context/pg18-uuidv7-prod-crashloop-2026-06-11.md` — why the schema is wreck-and-recreate
 - `docs/context/encryption-operations.md` — DEK/crypto invariants (T3.x)

@@ -18,6 +18,15 @@ defmodule EngramWeb.McpTransportTest do
       assert get_resp_header(conn, "allow") == ["POST"]
     end
 
+    # A client probing for a stream we do not offer is a normal protocol step,
+    # not a client error: every MCP client that connects sends one, so at
+    # :warning it fills the warn stream with the happy path (prod 2026-10-03,
+    # one onboarding session = 5 warnings).
+    test "GET and DELETE 405s are marked expected so RequestLogger logs :info", %{conn: conn} do
+      assert get(conn, "/api/mcp").assigns[:expected_client_status] == true
+      assert delete(conn, "/api/mcp").assigns[:expected_client_status] == true
+    end
+
     # Regression. The two tests above pass with a bare test conn, which sends no
     # Accept header — so they never exercised the header a REAL client sends.
     # A Streamable-HTTP client opens the server→client stream with

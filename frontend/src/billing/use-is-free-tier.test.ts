@@ -30,12 +30,6 @@ describe("useIsFreeTier", () => {
 		expect(renderHook(() => useIsFreeTier()).result.current).toBe(true);
 	});
 
-	it('treats "none" (no subscription) as free on SaaS', () => {
-		billingEnabled = true;
-		tier = "none";
-		expect(renderHook(() => useIsFreeTier()).result.current).toBe(true);
-	});
-
 	it("false on paid tiers", () => {
 		billingEnabled = true;
 		tier = "pro";

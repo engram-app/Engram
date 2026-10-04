@@ -1,6 +1,6 @@
 # Context Doc: `crdt_create` is the web app's rename, so it must claim
 
-_Last verified: 2026-08-17 (Engram #1400, fixed on the #1399 branch)_
+_Last verified: 2026-10-03 (Engram #1400)_
 
 ## Status
 Fixed. `genesis_crdt_note/5` now claims before the row transaction.
@@ -12,7 +12,7 @@ move path**, and that is not obvious from either side of the wire:
 
 - `frontend/src/api/queries.ts` — `useRenameNote` calls `crdtCreateNote(id, new_path)`,
   commented *"Replaces POST /notes/rename"*.
-- `frontend/src/viewer/folder-tree.tsx:147` — *"A CRDT move = crdt_create per id
+- `frontend/src/viewer/folder-tree.tsx`: *"A CRDT move = crdt_create per id
   at its NEW path"*.
 
 Server side it lands in `Notes.genesis_crdt_note/5` → `genesis_relocate_live/6`
@@ -37,8 +37,8 @@ write, not a display artifact.
 `identity.ex` already named this exact failure: *"a rename that moves and a claim
 that does not gets REVERTED by the next projection run."* `claim_rename/5` was
 built to prevent it on the REST path. The CRDT leg simply never got the same
-treatment, and stayed invisible because **no shipped client wrote the index** —
-until Engram-obsidian#362.
+treatment, and stayed invisible because **no shipped client wrote the index**
+until Engram-obsidian#362 (now shipped).
 
 ## The fix, and why it is deliberately narrow
 

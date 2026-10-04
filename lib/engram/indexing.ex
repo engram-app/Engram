@@ -83,7 +83,7 @@ defmodule Engram.Indexing do
     user = user || Engram.Accounts.get_user_with_subscription!(note.user_id)
 
     case prepare_index(note, vault, user, opts) do
-      {:ok, {:no_chunks, link_rows}} ->
+      {:ok, {reason, link_rows}} when reason in [:no_chunks, :over_cap] ->
         case Crypto.get_dek(user) do
           {:ok, _dek} ->
             # `:no_chunks` means this note must end up with ZERO index
@@ -98,9 +98,16 @@ defmodule Engram.Indexing do
             # let the caller stamp `embed_hash` and never revisit the note, so
             # the points it failed to remove would stay searchable forever.
             # Returning the error costs one Oban retry.
+            #
+            # The 4th element says whether the dense leg is complete. A note
+            # with nothing to index (empty, or only base64 blobs) has all of
+            # the dense vectors it ever will, so `true`: leaving it `false`
+            # keeps `dense_indexed_hash` nil and ReconcileEmbeddings re-selects
+            # it for paid users every tick. Over the cap it is `false`, so the
+            # note is backfilled when the cap is raised.
             with :ok <- purge_stale_index(note) do
               :ok = Engram.Links.replace_links(user, vault, note.id, link_rows)
-              {:ok, 0, 0, false}
+              {:ok, 0, 0, reason == :no_chunks}
             end
 
           {:error, :no_dek} = err ->
@@ -125,6 +132,8 @@ defmodule Engram.Indexing do
   slow Voyage AI HTTP call run outside any Postgres connection.
 
   Returns:
+    * `{:ok, {:over_cap, link_rows}}` — outside the user's indexed-note cap;
+      same handling as `:no_chunks`, but the dense leg stays incomplete
     * `{:ok, {:no_chunks, link_rows}}` — note has no parseable chunks; caller
       must still persist `link_rows` (a note emptied to "" must clear its
       stale outgoing edges, same as any other re-index)
@@ -186,7 +195,7 @@ defmodule Engram.Indexing do
         # Outside the user's indexed-note cap: persist link rows (the graph is
         # not search and is not capped) but write no chunks and no Qdrant
         # points.
-        {:ok, {:no_chunks, link_rows}}
+        {:ok, {:over_cap, link_rows}}
       end
     end
   end
@@ -309,11 +318,16 @@ defmodule Engram.Indexing do
 
   # Bounded upsert bodies: thousands of 1024-dim float vectors as one JSON PUT
   # is tens of MB; Qdrant handles batches fine but the single request does not.
+  # 64, not 256: JSON-encoding a batch is this process's heap peak (each float
+  # becomes a list cell plus a formatted binary), and at 256 it measured ~54 MB
+  # on its own. 64 keeps it ~4x lower for a few more round trips per big note.
+  @upsert_batch 64
+
   defp upsert_points_batched(points) do
     points
-    |> Enum.chunk_every(256)
+    |> Enum.chunk_every(@upsert_batch)
     |> Enum.reduce_while(:ok, fn batch, :ok ->
-      case Qdrant.upsert_points(collection(), batch) do
+      case Qdrant.upsert_points(collection(), Enum.map(batch, &unpack_point/1)) do
         :ok -> {:cont, :ok}
         other -> {:halt, other}
       end
@@ -761,12 +775,36 @@ defmodule Engram.Indexing do
   defp maybe_embed(false, texts), do: {:ok, Enum.map(texts, fn _ -> nil end)}
   defp maybe_embed(true, texts), do: embed_for_indexing(texts)
 
+  # A dense vector is held as packed float32 between the embed call and the
+  # Qdrant upsert, not as the embedder's float list. As a list each element
+  # costs a cons cell plus a boxed float (~32 bytes on the process heap); packed
+  # it is 4 bytes in an off-heap binary. The whole note's vectors live until
+  # commit, so for a 2,000-chunk note that is ~65 MB of heap versus ~8 MB
+  # off-heap (prod worker OOM, 2026-10-03). Lossless: Voyage's floats ARE
+  # float32. Unpacked one upsert batch at a time in `upsert_points_batched/1`.
+  defp pack_vector(vector), do: for(x <- vector, into: <<>>, do: <<x::float-32-little>>)
+
+  # Straight from the packed binary to the JSON array text, as a pre-encoded
+  # fragment. Unpacking to a float list and letting Jason walk it was the heap
+  # peak of indexing (~26 MB per 64-point batch): a list cell, a boxed float
+  # and a formatted binary per element, all live until the request was sent.
+  defp unpack_point(%{vector: %{"dense" => dense} = named} = point) when is_binary(dense) do
+    %{point | vector: %{named | "dense" => Jason.Fragment.new(dense_json(dense))}}
+  end
+
+  defp unpack_point(point), do: point
+
+  defp dense_json(packed) do
+    floats = for <<x::float-32-little <- packed>>, do: :erlang.float_to_binary(x, [:short])
+    IO.iodata_to_binary(["[", Enum.intersperse(floats, ","), "]"])
+  end
+
   defp embed_for_indexing(texts) do
     texts
     |> batch_texts()
     |> Enum.reduce_while({:ok, []}, fn batch, {:ok, acc} ->
       case do_embed_batch(batch) do
-        {:ok, vectors} -> {:cont, {:ok, [vectors | acc]}}
+        {:ok, vectors} -> {:cont, {:ok, [Enum.map(vectors, &pack_vector/1) | acc]}}
         other -> {:halt, other}
       end
     end)

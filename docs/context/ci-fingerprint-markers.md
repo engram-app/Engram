@@ -75,8 +75,11 @@ fresh build, with a **lockfile-scoped** restore-key prefix for fallback.
 Also verified and rejected: normalizing source mtimes in the consumers.
 `prebuild-mix` has such a step and it is **vestigial** — on Elixir 1.17,
 touching every source to `now` recompiles 0 files, because the compiler
-compares content digests and only uses mtime to pick what to re-hash. Adding
-it (plus the `fetch-depth: 0` it needs) is pure cost.
+compares content digests and only uses mtime to pick what to re-hash
+(re-measured 2026-10-03 on 1.17.3). Adding it (plus the `fetch-depth: 0` it
+needs) is pure cost. The real `prebuild-mix` recompile cause was the absolute
+project root in the manifest; see
+[ci-mix-compile-cache-runner-path.md](ci-mix-compile-cache-runner-path.md).
 
 ## main is not special any more
 

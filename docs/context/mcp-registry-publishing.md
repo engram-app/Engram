@@ -1,12 +1,11 @@
 # Context Doc: Official MCP Registry Publishing
 
-_Last verified: 2026-09-25_
+_Last verified: 2026-10-03_
 
 ## Status
-Live. `io.github.engram-app/engram` 0.32.0 published 2026-09-25 and active. Every
-`release-v*` tag re-publishes automatically via `.github/workflows/publish-mcp-registry.yml`.
-A version is immutable once published: a `title`/`description` change in `server.json` only
-reaches the registry with the NEXT release tag (0.32.0 and 0.33.0 carry the pre-#1757 copy).
+Live as `io.github.engram-app/engram`. Every `release-v*` tag re-publishes automatically via
+`.github/workflows/publish-mcp-registry.yml`. A version is immutable once published: a
+`title`/`description` change in `server.json` only reaches the registry with the NEXT release tag.
 
 ## What This Is
 How Engram gets listed in the official MCP registry at `registry.modelcontextprotocol.io`,
@@ -64,10 +63,8 @@ the release's `registry_<ver>_checksums.txt`.
 
 ## Gotchas
 - **`version` is bumped by release-please**, via the `json` extra-file entry in
-  `release-please-config.json` (`$.version`). It was hand-synced until 0.28.0 and drifted
-  immediately — the 0.29.0 release PR did not touch it, so the manifest would have
-  advertised a version two releases stale. The registry rejects re-publishing an existing
-  version, so this only matters at publish time, but the drift is silent until then.
+  `release-please-config.json` (`$.version`). Do not hand-edit it; the registry rejects
+  re-publishing an existing version, and drift is silent until publish time.
 - The only `_meta` key the registry preserves is
   `io.modelcontextprotocol.registry/publisher-provided` (4KB limit). Every other `_meta` key
   is silently dropped.

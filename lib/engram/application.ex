@@ -27,6 +27,7 @@ defmodule Engram.Application do
     EngramWeb.RequestExceptionLogger.attach()
     Engram.Telemetry.ObanDiscardHandler.attach()
     Engram.Telemetry.Heartbeat.log_boot_notice()
+    Engram.Workers.EmbedNote.CrashGuard.init()
 
     if Engram.Observability.Otel.enabled?(), do: Engram.Observability.Otel.attach_handlers()
 

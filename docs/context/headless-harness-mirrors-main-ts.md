@@ -1,10 +1,6 @@
 # Context Doc: the headless tier must mirror main.ts's CRDT lifecycle
 
-_Last verified: 2026-07-26_
-
-## Status
-Fixed (commit `6a7c3a23`, PR #1120). The headless tier went from 3 deterministic
-failures back to green.
+_Last verified: 2026-10-03_
 
 ## What this is
 
@@ -15,13 +11,11 @@ backend, with no Obsidian. To do that it hand-rolls the wiring that
 **standing contract**: any lifecycle call added to main.ts's CRDT wiring has to be
 added here too, or the tier silently tests a differently-wired stack.
 
-## The failure it caused
+## Example: the missing `setConnected` edges (#1120)
 
-The persistent-doc rewrite (plugin #331) added a `setConnected` lifecycle to the
-provider registry. main.ts calls it on three edges; the harness picked up none of
-them. The registry's `connected` therefore stayed `false` for the entire run.
-
-That matters because the send path gates on it:
+The plugin rebuild (#331) added a `setConnected` lifecycle to the provider
+registry. The harness picked up none of its edges, so `connected` stayed
+`false` for the whole run. The send path gates on it:
 
 ```ts
 // note-provider.ts
@@ -32,11 +26,8 @@ private broadcast(frame: string): void {
 }
 ```
 
-`ProviderRegistry.flushHeldState` is gated on the same flag, so the create-ack
-flush never fired either.
-
-**The receive path does not consult that flag.** That produced a genuinely
-misleading shape:
+`ProviderRegistry.flushHeldState` gates on the same flag; the receive path
+does not. Result:
 
 ```
 [headless] PASS  handshake: A+B join + complete catch-up  (134ms)
@@ -52,11 +43,15 @@ timeout, read it as "nothing was ever sent", not "the wrong thing was sent".
 
 ## The three edges
 
-| Event | Call | main.ts |
-|---|---|---|
-| `onCrdtJoined` | `manager.setConnected(true)` | 2052 |
-| `onCrdtJoinError` | `manager.setConnected(false)` | 2087 |
-| `onStatusChange(false)` | `manager.setConnected(false)` | 1859 |
+| Event | Call |
+|---|---|
+| `onCrdtJoined` | `crdtManager.setConnected(true)` |
+| `onCrdtJoinError` | `crdtManager.setConnected(false)`, `indexRoom.setConnected(false)` |
+| `onStatusChange(false)` | `crdtManager.setConnected(false)`, `indexRoom.setConnected(false)` |
+
+The harness mirrors the `crdtManager` calls but not `indexRoom` (it has no
+index room). Harmless while the index-room wire ships OFF; add it when that
+wire turns on.
 
 The offline edge matters for the reconnect scenarios: `goOffline()` only drops the
 channel, so without it the registry still believes it can send.
@@ -66,7 +61,10 @@ channel, so without it the registry still believes it can send.
 - **This was harness-only.** The shipped plugin routes through main.ts, which has
   always made these calls. A red headless tier here did NOT mean a broken product
   — but it did mean the tier was not testing the product's real wiring.
-- The tier is the *deterministic* gate (see `testing-architecture-migration.md`).
-  A 3/3 failure in it is never a flake; do not rerun it hoping for green.
-- When adding CRDT lifecycle wiring to main.ts, grep `e2e/headless/run.ts` for the
-  nearest `// main.ts:NNNN` anchor and add the mirror in the same commit.
+- The tier is deterministic (event barriers, no wall clock), though still
+  report-only while it bakes (see `testing-architecture-migration.md`). A 3/3
+  failure in it is never a flake; do not rerun it hoping for green.
+- When adding CRDT lifecycle wiring to main.ts, add the mirror to
+  `e2e/headless/run.ts` in the same commit. Find the spot by handler name
+  (`onCrdtJoined`, `onStatusChange`, ...), not by the `// main.ts:NNNN`
+  anchors: those line numbers have drifted (e.g. `main.ts:2052` is now ~2861).

@@ -10,6 +10,7 @@ interface Props {
 	instanceFor?: (itemId: string) => ItemInstance<LoaderItem> | undefined;
 	activeId?: string | null;
 	menuOpenId?: string | null;
+	multiSelect?: boolean;
 	onContextMenu?: (itemId: string, x: number, y: number) => void;
 	onLongPress?: (itemId: string) => void;
 }
@@ -20,6 +21,7 @@ export function TreeRowVirtualized({
 	instanceFor,
 	activeId,
 	menuOpenId,
+	multiSelect,
 	onContextMenu,
 	onLongPress,
 }: Props) {
@@ -48,6 +50,7 @@ export function TreeRowVirtualized({
 				instance={instance}
 				activeId={activeId}
 				menuOpenId={menuOpenId}
+				multiSelect={multiSelect}
 				onContextMenu={onContextMenu}
 				onLongPress={onLongPress}
 			/>

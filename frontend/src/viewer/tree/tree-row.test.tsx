@@ -224,6 +224,87 @@ describe("TreeRow", () => {
 		expect(screen.getByRole("link")).toHaveAttribute("aria-selected", "true");
 	});
 
+	// Rows are real <a href>s, so a modifier-click would also run the browser's
+	// own default (ctrl → new tab, shift → new window) on top of HT's selection.
+	describe("modifier-click selects instead of opening", () => {
+		it.each([
+			["shift", { shiftKey: true }],
+			["ctrl", { ctrlKey: true }],
+			["meta", { metaKey: true }],
+		])("%s-click runs HT's click and suppresses the link default", (_name, mods) => {
+			const onClick = vi.fn();
+			const instance = mockInstance({ data: noteItem, props: { onClick } });
+			render(
+				<MemoryRouter>
+					<TreeRow instance={instance} />
+				</MemoryRouter>,
+			);
+			const notCancelled = fireEvent.click(screen.getByRole("link"), mods);
+			expect(onClick).toHaveBeenCalledTimes(1);
+			expect(notCancelled).toBe(false);
+		});
+
+		it("same for an attachment row", () => {
+			const instance = mockInstance({ data: attachmentItem, props: { onClick: vi.fn() } });
+			render(
+				<MemoryRouter>
+					<TreeRow instance={instance} />
+				</MemoryRouter>,
+			);
+			expect(fireEvent.click(screen.getByRole("link"), { shiftKey: true })).toBe(false);
+		});
+
+		it("a plain click still runs HT's click", () => {
+			const onClick = vi.fn();
+			const instance = mockInstance({ data: noteItem, props: { onClick } });
+			render(
+				<MemoryRouter>
+					<TreeRow instance={instance} />
+				</MemoryRouter>,
+			);
+			fireEvent.click(screen.getByRole("link"));
+			expect(onClick).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	describe("multi-selection highlight", () => {
+		// Its own token, not the hover `accent`: in the light theme accent is a
+		// near-white on white, and a selected range was hard to see.
+		const selectedFill = /(?:^|\s)bg-tree-multi-selected(?:\s|$)/u;
+
+		it("fills selected rows while a multi-selection is active", () => {
+			const instance = mockInstance({ data: noteItem, isSelected: true });
+			render(
+				<MemoryRouter>
+					<TreeRow instance={instance} multiSelect />
+				</MemoryRouter>,
+			);
+			expect(screen.getByRole("link").className).toMatch(selectedFill);
+		});
+
+		// HT selects whatever was clicked last, so a lone selection is just
+		// "the row you clicked" and must not look different from any other row.
+		it("does not fill a lone selection", () => {
+			const instance = mockInstance({ data: noteItem, isSelected: true });
+			render(
+				<MemoryRouter>
+					<TreeRow instance={instance} />
+				</MemoryRouter>,
+			);
+			expect(screen.getByRole("link").className).not.toMatch(selectedFill);
+		});
+
+		it("does not fill unselected rows during a multi-selection", () => {
+			const instance = mockInstance({ data: folderItem, isSelected: false });
+			render(
+				<MemoryRouter>
+					<TreeRow instance={instance} multiSelect />
+				</MemoryRouter>,
+			);
+			expect(screen.getByRole("treeitem").className).not.toMatch(selectedFill);
+		});
+	});
+
 	it("aria-selected reflects HT selection state on folder button", () => {
 		const instance = mockInstance({ data: folderItem, isSelected: true });
 		render(

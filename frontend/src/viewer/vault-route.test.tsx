@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getActiveVaultId, setActiveVaultId } from "../api/active-vault";
@@ -13,16 +13,15 @@ const vaults = [
 
 let mockVaults: unknown[] | undefined = vaults;
 let mockPending = false;
+let mockError = false;
+const refetch = vi.fn();
 
 vi.mock("../api/queries", () => ({
-	useVaults: () => ({ data: mockVaults, isPending: mockPending }),
+	useVaults: () => ({ data: mockVaults, isPending: mockPending, isError: mockError, refetch }),
 }));
 
-// NotFoundPage (rendered on the 404 path) pulls in ThemeToggle, which needs a
-// ThemeProvider we are not wiring up here. Same mock as src/not-found.test.tsx.
-vi.mock("../theme/theme-toggle", () => ({
-	default: () => <button type="button">theme</button>,
-}));
+const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
+vi.mock("sonner", () => ({ toast: { error: toastError } }));
 
 function LocationProbe() {
 	const loc = useLocation();
@@ -38,16 +37,22 @@ function VaultProbe() {
 beforeEach(() => {
 	mockVaults = vaults;
 	mockPending = false;
+	mockError = false;
+	refetch.mockClear();
 	setActiveVaultId(null);
+	toastError.mockClear();
 });
 
 describe("VaultRoute", () => {
 	function renderRoute(entry: string) {
 		return render(
 			<MemoryRouter initialEntries={[entry]}>
+				<LocationProbe />
 				<Routes>
+					<Route path="/" element={<VaultRedirect />} />
 					<Route path="/v/:slug" element={<VaultRoute />}>
 						<Route index element={<VaultProbe />} />
+						<Route path=":itemId" element={<VaultProbe />} />
 					</Route>
 				</Routes>
 			</MemoryRouter>,
@@ -69,10 +74,36 @@ describe("VaultRoute", () => {
 		expect(child).toHaveTextContent("id-a");
 	});
 
-	it("404s on an unknown slug", () => {
+	// VaultRoute renders inside the app shell, so a full-page 404 here showed
+	// up nested in the content pane next to the previous vault's sidebar. An
+	// unknown slug is almost always a typo or a renamed vault: say so, and land
+	// on the vault `/` would pick, the same way a missing note lands on its
+	// vault root.
+	it("sends an unknown slug to the preferred vault and says why", async () => {
+		setActiveVaultId("id-a");
 		renderRoute("/v/nope");
-		expect(screen.queryByTestId("child")).toBeNull();
-		expect(screen.getByText(/not found/i)).toBeInTheDocument();
+		await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/v/work"));
+		expect(toastError).toHaveBeenCalledTimes(1);
+		expect(toastError.mock.calls[0]?.[0]).toMatch(/nope/u);
+		expect(screen.queryByText(/not found/i)).toBeNull();
+	});
+
+	it("does the same for an item URL under an unknown slug", async () => {
+		renderRoute("/v/nope/n-1");
+		await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/v/personal"));
+		expect(toastError).toHaveBeenCalledTimes(1);
+	});
+
+	// A failed list is not an unknown slug. Treating it as one told the user
+	// their vault didn't exist and replaced the URL, losing the deep link.
+	it("keeps the URL and offers a retry when the vault list fails to load", async () => {
+		mockVaults = undefined;
+		mockError = true;
+		renderRoute("/v/work/n-1");
+		expect(screen.getByTestId("loc")).toHaveTextContent("/v/work/n-1");
+		expect(toastError).not.toHaveBeenCalled();
+		screen.getByRole("button", { name: /try again/i }).click();
+		expect(refetch).toHaveBeenCalled();
 	});
 
 	it("waits rather than 404ing while the vault list is loading", () => {
@@ -123,6 +154,19 @@ describe("VaultRedirect", () => {
 });
 
 describe("LegacyNoteRedirect", () => {
+	it("renders the empty state, not a 404, when there are no vaults", () => {
+		mockVaults = [];
+		render(
+			<MemoryRouter initialEntries={["/note/n-1"]}>
+				<Routes>
+					<Route path="/note/:id" element={<LegacyNoteRedirect />} />
+				</Routes>
+			</MemoryRouter>,
+		);
+		expect(screen.getByText(/no vaults/i)).toBeInTheDocument();
+		expect(screen.queryByText(/not found/i)).toBeNull();
+	});
+
 	it("rewrites /note/:id to /v/:slug/:id using the hinted vault", async () => {
 		setActiveVaultId("id-a");
 		render(

@@ -96,7 +96,7 @@ and passed green through every leak above. What found them:
   Do not use `capture_log`: it renders the *dev* text formatter, whose `metadata:`
   allowlist omits keys prod emits, so a leak in `:error` metadata is invisible to it
   and fully visible in production. Do not apply `RedactFilter` inside the test either
-  — it is installed at boot in every env (`application.ex:138`), so calling it again
+ , it is installed at boot in every env (`application.ex:327`), so calling it again
   masks bugs that only show on first application.
 - **Assert in BOTH directions, and COUNT.** A `refute`-only test passes just as
   happily when the filter has blanked every line — which is exactly what the catch arm

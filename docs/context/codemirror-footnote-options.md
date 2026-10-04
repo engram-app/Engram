@@ -1,6 +1,6 @@
 # Footnotes in the CM6 editor: build vs adopt
 
-_Researched 2026-09-02. Verified against the versions this repo actually pins._
+_Researched 2026-09-02. Last verified: 2026-10-03 (`@lezer/markdown` 1.7.2, `@atomic-editor/editor` 0.6.2)._
 
 **Trigger:** you want `[^1]` to render as a superscript in the web editor, or you
 are about to add ANY markdown syntax the live-preview editor doesn't know.
@@ -53,7 +53,7 @@ decoration has to cooperate with.
 
 1. Local: a `Footnote` MarkdownConfig passed through the `extensions` array we
    ALREADY use in `live-preview.ts` (`markdown({ extensions: [highlightMarkdown,
-   calloutMarker] })`), plus a decoration plugin mirroring
+   calloutMarker, noParagraphFold] })`), plus a decoration plugin mirroring
    `editor/callout-decoration.ts`. That combination — custom grammar node +
    sibling decoration — is a pattern this repo has already proven twice
    (callouts, KaTeX). Roughly 40 lines of grammar (adapt the MIT reference) and
@@ -72,8 +72,7 @@ the diff. Name-collide deliberately or watch for it on upgrade.
 
 ## Is it worth building?
 
-Open question, and the honest answer is probably "not yet". The only footnote in
-the product today is the one in the seeded welcome note, deliberately parked at
-the very bottom. Nothing else generates footnotes, and no user has asked. The
-cheap alternative is to drop that one footnote and revisit when a real note
-needs one. The reference-panel blurb already tells users it is reading-view only.
+Probably not yet. Nothing in the product generates footnotes and no user has
+asked. The seeded welcome note deliberately uses none
+(`lib/engram/vaults/welcome_note.ex`), and the reference-panel blurb tells
+users footnotes are reading-view only. Revisit when a real note needs one.

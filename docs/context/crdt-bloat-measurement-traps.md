@@ -1,13 +1,18 @@
 # Context Doc: Measuring CRDT doc bloat — the traps in the numbers
 
-_Last verified: 2026-09-18_
+_Last verified: 2026-10-03_
 
 ## Status
 
 Working. Telemetry shipped for #1706 (`checkpoint_doc` histograms +
-`state_sweep` gauges). The flatten-gate rework it feeds, **#1707, is not done** —
-these numbers exist so that gate is tuned against measurement rather than
-against a guess.
+`state_sweep` gauges). Prod answered the question on 2026-10-03: 34.5 MB of
+state against 34.2 MB of content (ratio 1.0097), p99 1.57, zero notes over 5x.
+The flatten-gate rework (#1707) is closed as not worth doing; these gauges are
+the tripwire.
+
+Reopen when any of these holds on the engram-crdt dashboard:
+`notes_over_threshold` non-zero and sustained, `bloat_ratio_p99` above ~3, or
+`state_bytes_total` above 1.5x `content_bytes_total`.
 
 ## What This Is
 
@@ -62,8 +67,8 @@ e2e churn: notes with about two edits. Tombstone accumulation needs edit
 history, so staging **structurally cannot show the bloat the epic is about**.
 Its totals: 38.06 MB of state against 37.35 MB of content, ratio 1.019.
 
-Do **not** read that as "#1707 is unnecessary". The correct conclusion is that
-staging cannot answer the question and prod must.
+Do not read staging as an answer either way. Prod is the only oracle (see
+Status).
 
 ## Trap 3 — you never need a DEK to size an encrypted column
 
@@ -94,8 +99,10 @@ Prod, 7 days:
 sum(increase(engram_prom_ex_crdt_room_start_total{job="prometheus.scrape.engram_app"}[7d])) by (source)
 ```
 
-`source="handshake"` **2,726** vs `source="edit"` **17** — about 390 rooms/day.
-At that rate a p99 over the live histogram needs weeks before it means anything.
+A 7-day window ending in the 2026-09-14 room storm read `source="handshake"`
+**2,726** vs `source="edit"` **17**. That was the storm, not steady state; the
+fleet baseline is 8-142 room starts/day. Either way a p99 over the live
+histogram needs weeks of samples before it means anything.
 
 That bias is the entire reason `CrdtBloatSweep` exists as the unbiased
 counterpart: one pass over every stored note, `last_value` gauges (the
@@ -105,8 +112,11 @@ re-bucketing them would only lose precision).
 ### Grafana datasource gotcha
 
 The Prometheus datasource **uid** is `grafanacloud-prom`; its **name** is
-`grafanacloud-calmeucalyptus520-prom`. Dashboards reference it by *name*. Query
-it by uid.
+`grafanacloud-calmeucalyptus520-prom`. Both survived the 2026-09-26 move to
+self-hosted Grafana. Dashboards reference it by *name*. Query it by uid.
+
+Query the sweep gauges over a 14d window: a 1h step over a 6h cadence aliases
+to no data.
 
 ## Cron placement
 
@@ -165,6 +175,8 @@ the top of every hour by design, and have since long before this test.
   for that reason. The guard used to live in `perform/1`, which left the
   advertised hand-invocation route bypassing it: one `iex` call on a misconfigured
   SaaS node writes `notes=0, ratio=0` into gauges that never expire.
+- The sweep gauges are `last_value` per ECS task, and two tasks hold readings
+  from different runs. Aggregate with `max`, never `sum`.
 - A **frozen** sweep is invisible on the value panels: `last_value` never
   expires, so a job that has been failing for a week serves its last reading and
   `absent()` cannot see it, because the series is still there.
@@ -180,7 +192,7 @@ the top of every hour by design, and have since long before this test.
 
 ## References
 
-- Issues: #1706 (this telemetry), #1707 (the flatten-gate rework it feeds),
+- Issues: #1706 (this telemetry), #1707 (flatten-gate rework, closed),
   #609 (history + trash epic — `state_bytes_total` vs `content_bytes_total` is
   its reclaimable-storage estimate)
 - `docs/context/crdt-room-lifetime-and-drain.md` — where `room_start{source}`

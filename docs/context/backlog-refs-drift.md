@@ -1,6 +1,6 @@
 # Context Doc: Backlog drift from `Refs #N`
 
-_Last verified: 2026-08-08_
+_Last verified: 2026-10-03_
 
 ## Status
 
@@ -18,7 +18,7 @@ This is a side effect of a convention that is otherwise correct, so it will keep
 
 The pathology compounds when the fix documents itself **in the source**:
 
-- **#902** — the version CAS shipped in #907. `crdt_checkpoint.ex:377` is literally commented `# #902 fence`. The code named the issue; nobody told the issue.
+- **#902**: the version CAS shipped in #907. `crdt_checkpoint.ex` is literally commented `# #902 fence`. The code named the issue; nobody told the issue.
 - **#648** — accumulated FIVE merged PRs (#1240, #1266, #1270, #1280, #1304) across two weeks. Every one said `Refs`.
 - **#1067 / #1017** — both fixed by #1133, whose in-file comment block narrates the exact incident from #1067 in detail.
 
@@ -93,6 +93,5 @@ Compare that deletion date against the ticket's "last seen" date. If they match,
 
 ## References
 
-- 2026-08-08 sweep: closed #648, #687, #689, #534, #799, #713, #554, #760, #685, #558, #1067, #1017, #902
 - `AGENTS.md` — the `Refs` vs `Closes` convention and the `phase/*` migration labels
 - `../engram-workspace/docs/context/worktree-hygiene.md` — squash-merge makes `--merged` lie

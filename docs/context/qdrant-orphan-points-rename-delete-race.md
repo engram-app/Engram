@@ -16,28 +16,12 @@ in DB but NOT in Qdrant (missing vectors): 0
 ## Why it happened
 
 Every delete path filtered Qdrant on the note's **current** `path_hmac`. A
-rename changes that value while the points still carry the old one:
-
-1. Note indexed at path A → every point's payload has `path_hmac = A`.
-2. Rename A→B. `notes.path_hmac` becomes B. `RepathNoteIndex` is enqueued with
-   `old_path_hmac = A`, scheduled 3s out; `EmbedNote` debounces 30s, clamped to
-   300s. For that whole window the points are tagged A and the row says B.
-3. Delete lands inside the window. `delete_note_index_job/2` builds args from
-   `note.path_hmac` — **B**. The Qdrant delete filters on B, matches nothing.
-   The chunk rows are then dropped, which succeeds.
-4. `RepathNoteIndex` (and the `EmbedNote` fallback) call
-   `Notes.fetch_note_for_worker/1`, which returns
-   `{:discard, "note … is soft-deleted"}`. Neither ever touches Qdrant again.
-
-The A-tagged points are now unreachable: nothing names them and no future
-filter can match them.
-
-**Nothing collected them.** `OrphanSweep` reaps at *user* granularity — it
-groups points by payload `user_id` and deletes those absent from `users`. For a
-live user, note-level strays were invisible to every cleanup path in the system.
-
-Corroborating signal in prod: `EmbedNote` jobs discarded with
-`"note … is soft-deleted"` — the same race seen from the indexing side.
+rename changes that value while the points still carry the old one until
+`RepathNoteIndex` / `EmbedNote` run. A delete inside that window filtered on
+the new hmac, matched nothing, then dropped the chunk rows. The repath and
+embed jobs discard soft-deleted notes, so nothing touched those points again.
+`OrphanSweep` only reaped whole departed `user_id`s, so a live user's strays
+were invisible to every cleanup path.
 
 ## The fix
 

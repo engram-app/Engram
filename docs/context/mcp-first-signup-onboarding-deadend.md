@@ -1,19 +1,12 @@
 # An MCP-first signup completes OAuth, then 403s `onboarding_required` forever
 
-_Last verified: 2026-09-25_
+_Last verified: 2026-10-03_
 
 ## Status
 
-**Fixed** by engram-app/Engram#1670 (open, not yet merged as of 2026-09-16). Two prod
-accounts were confirmed dead-ended before the fix, both abandoned; neither has been
-contacted. Related: [[onboarding-gate-is-http-only]], [[mcp-oauth]],
+Fixed by engram-app/Engram#1670 (consent page) and the `/link` follow-up below.
+Related: [[onboarding-gate-is-http-only]], [[mcp-oauth]],
 [[connections-client-identity]], [[mcp-bypasses-path-shaped-plugs]].
-
-The fix has five parts: an actionable `resume_url` in the 403 body; a JSON-RPC
-envelope so MCP clients can actually read that body; a consent-page detour through
-the wizard that parks and then resumes the authorization; the tool question
-pre-answered from the connecting client; and a `lifecycle` log line plus a Loki rule
-(engram-infra#1184) so a recurrence is visible instead of silent for five hours.
 
 ## What this is
 
@@ -28,28 +21,11 @@ This is not the channel-gate gap ([[onboarding-gate-is-http-only]], where the ga
 failed to run). Here the gate runs, correctly, and there is simply no way for the user
 to satisfy it from where they are standing.
 
-## The prod case (2026-09-15)
+## Query signature
 
-User `dgonzalez.integraenergia@gmail.com`, id `01a0a550-4d17-795b-88ea-92d5e4d8e62a`,
-Clerk `user_3JMne9wsT1Pxy6hHMpo3FCQAbyr`. All times UTC.
-
-| Time | What happened |
-|---|---|
-| 13:44:42 | DCR registers client `052a941b-6db6-4ee5-b7d8-b5df6ab6e7dc`, name **"Google Antigravity"**, redirect `https://antigravity.google/oauth-callback` |
-| 13:44:58 | `users` row created — **the signup happened inside the OAuth grant flow** |
-| 13:45:18 | Grant succeeds: 2 `oauth_refresh_tokens`, scope `mcp`, expiring 2026-12-14 |
-| 13:45:18 | The client's first 4 MCP tool calls all `POST 403`, verdict `onboarding_required`, `missing: ["profile","subscription","terms","vault"]` |
-| 13:49:55 → 19:25:32 | 12 more DCR registrations named `antigravity-client`, interleaved with 41 `auth rejected reason=no_auth` 401s. No further refresh tokens ever issued. User gave up. |
-
-Final DB state for that user: **0** vaults, notes, chunks, attachments,
-`crdt_update_log`, api_keys, client_logs, `user_agreements`, `onboarding_actions`,
-subscriptions. `plan_id` NULL, `free_tier_accepted_at` NULL, `onboarding_profile` `{}`.
-Account not deleted, not suspended. A paying-intent user who produced zero rows.
-
-Same shape, earlier: `aortizsm@gmail.com` (2026-09-11) — 0 agreements, 0 vaults,
-0 notes. Contrast a healthy user (`sabio@web.de`): 2 agreements, 1 vault, 100 notes.
-**"0 agreements + 0 vaults + a live refresh token" is the query signature of this
-class.**
+Seen in prod in Sept 2026 (an Antigravity signup, and one earlier). The account
+had a live refresh token and zero rows everywhere else. **"0 agreements + 0
+vaults + a live refresh token" is the query signature of this class.**
 
 ## Why
 
@@ -156,12 +132,10 @@ the user to `/link?code=...`.
 **Rule:** any new route added outside `OnboardingGate` needs the same bounce, or it
 recreates this bug.
 
-## How the audit was run
+## How to audit
 
-Read-only bastion, per `engram-infra/docs/context/prod-db-readonly-access.md` (memory
-note `project_prod_db_readonly_bastion`): bastion `i-04243b8cd5dec622e`, port-forward
-to `localhost:25432`, psql via
-`docker run --rm -i --network host postgres:18-alpine`.
+Use the read-only bastion (engram-infra `docs/context/prod-db-readonly-access.md`)
+and query one tenant at a time (see the RLS gotcha above).
 
 ## References
 

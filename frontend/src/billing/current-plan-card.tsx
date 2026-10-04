@@ -1,20 +1,18 @@
 import { Sparkles } from "lucide-react";
-import type { ReactNode } from "react";
+import { Children, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import type { BillingStatus, IndexStatus } from "../api/queries";
 import { unsearchableNotesNotice } from "./plan-cards";
 
 const TIER_LABELS: Record<BillingStatus["tier"], string> = {
 	free: "Free",
-	none: "No Plan",
-	trial: "Free Trial",
 	starter: "Starter",
 	pro: "Pro",
 };
 
-// Paid + trial tiers get the flashier pill — gradient, ring, sparkle.
-// Free/none stay muted; promoting an absent plan would mis-signal.
-const FLASHY_TIERS: BillingStatus["tier"][] = ["starter", "pro", "trial"];
+// Paid tiers get the flashier pill — gradient, ring, sparkle.
+// Free stays muted.
+const FLASHY_TIERS: BillingStatus["tier"][] = ["starter", "pro"];
 
 export default function CurrentPlanCard({
 	billing,
@@ -74,7 +72,12 @@ export default function CurrentPlanCard({
 				</dl>
 			) : null}
 
-			{Boolean(children) && <div className="border-border border-t pt-4">{children}</div>}
+			{/* toArray drops null/false/undefined. `Boolean(children)` was true for
+			    an array of all-`false` conditionals, which drew the divider over
+			    nothing on the Free plan. */}
+			{Children.toArray(children).length > 0 && (
+				<div className="border-border border-t pt-4">{children}</div>
+			)}
 		</section>
 	);
 }

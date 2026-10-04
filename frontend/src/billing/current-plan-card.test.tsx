@@ -41,6 +41,33 @@ describe("CurrentPlanCard", () => {
 		expect(screen.queryByText(/searchable/iu)).not.toBeInTheDocument();
 	});
 
+	// The billing page passes its action rows as conditional children, and on
+	// Free every one of them is `false`. That array is truthy, so the divider
+	// above them rendered with nothing underneath.
+	describe("action divider", () => {
+		it("is absent when every child renders nothing", () => {
+			const { container } = render(
+				<CurrentPlanCard billing={status({ tier: "free", subscription: null })}>
+					{false}
+					{null}
+				</CurrentPlanCard>,
+			);
+			expect(container.querySelector(".border-t")).toBeNull();
+		});
+
+		it("separates real actions from the plan details", () => {
+			const { container } = render(
+				<CurrentPlanCard billing={status()}>
+					{false}
+					<button type="button">Change plan</button>
+				</CurrentPlanCard>,
+			);
+			expect(container.querySelector(".border-t")).toContainElement(
+				screen.getByRole("button", { name: "Change plan" }),
+			);
+		});
+	});
+
 	it("shows the tier label and active status", () => {
 		render(<CurrentPlanCard billing={status()} />);
 		expect(screen.getByText("Starter")).toBeInTheDocument();
@@ -74,7 +101,7 @@ describe("CurrentPlanCard", () => {
 		render(
 			<CurrentPlanCard
 				billing={status({
-					tier: "trial",
+					tier: "pro",
 					trial_days_remaining: 5,
 					subscription: {
 						status: "trialing",

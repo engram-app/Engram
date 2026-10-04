@@ -7,7 +7,6 @@ import { type BillingStatus, useCancelSubscription } from "../api/queries";
 const TIER_LABELS: Partial<Record<BillingStatus["tier"], string>> = {
 	starter: "Starter",
 	pro: "Pro",
-	trial: "Trial",
 };
 
 interface CancelPanelProps {

@@ -1,6 +1,6 @@
 # Context Doc: OpenAI (ChatGPT) Plugin Directory Submission
 
-_Last verified: 2026-10-01_
+_Last verified: 2026-10-03_
 
 ## Status
 Working. Submitted for review; domain verification and reviewer login both pass.
@@ -45,7 +45,7 @@ for i in $(seq 1 10); do curl -s --max-time 5 https://mcp.engram.page/.well-know
 ```
 
 ### Review package requirements
-- Exactly 5 positive and 3 negative test cases. The dashboard imports them read-only from `plugin.json` `review.test_cases`; to change them, edit the ZIP and re-upload.
+- Exactly 5 positive and 3 negative test cases. The dashboard imports them read-only from `plugin.json` `extensions["com.openai"].review.test_cases`; to change them, edit the ZIP and re-upload.
 - `demo_recording_url` (current: https://youtu.be/-25120oVXF0).
 - Four HTTPS listing URLs: website, support, privacy, terms. `engram.page/support` was added in engram-marketing PR #208.
 - Reviewer credentials go in the dashboard "Review details" form, never in the ZIP (`test_credentials` in the ZIP is rejected).
@@ -104,5 +104,4 @@ Never decrypt the key to stdout.
 - engram-infra `main/envs/prod/ecs.tf`, PR #1297
 - engram-marketing PR #208 (support page)
 - engram-workspace `docs/context/messaging.md` (listing copy)
-- engram-workspace `reports/Clerk reviewer login without codes.md` (full Clerk research, untracked)
 - Issue #1816 (skills follow-up)

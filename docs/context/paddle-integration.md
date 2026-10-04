@@ -1,13 +1,13 @@
 # Paddle integration
 
-_Last verified: 2026-07-08_
+_Last verified: 2026-10-03_
 
 How Engram talks to Paddle Billing. Owner: billing / monetization. Status: shipped end-to-end (PR #132; Stripe removed entirely). Billing is live, `RequireOnboarding` gates the vault pipeline, and the Paddle.js overlay is wired.
 
 ## Why Paddle
 
 - **Merchant of Record.** Paddle collects + remits VAT, GST, and US sales tax on our behalf. No tax-engine, no per-jurisdiction registration, no compliance audits. For a global SaaS this is the single biggest reason to choose Paddle over Stripe.
-- **Affiliate-friendly.** Paddle has native integrations with Rewardful, FirstPromoter, Tapfiliate, and Impact. Affiliate referral IDs ride along on the checkout via `custom_data` and surface on every subscription webhook — we persist them on `subscriptions.custom_data` so revenue attribution is queryable.
+- **Affiliate-friendly.** Paddle has native integrations with Rewardful, FirstPromoter, Tapfiliate, and Impact. Referral IDs can ride along on the checkout via `custom_data`, which we persist on `subscriptions.custom_data`. The app does not send any affiliate keys yet.
 - **Frontend-first overlay.** Paddle.js exposes `Paddle.Checkout.open()` which opens an inline overlay (no page redirect). The backend never creates a checkout session — it only configures the frontend and reacts to webhooks.
 
 ## Architecture
@@ -30,6 +30,7 @@ Paddle webhooks → POST /webhooks/paddle
        └─ subscription.canceled          → set status "canceled"
        └─ transaction.payment_failed     → report a stalled checkout (#1737)
        └─ transaction.updated            → report a stalled checkout (#1737)
+       └─ transaction.completed          → log paddle_transaction_completed
        └─ anything else                  → {:ok, :ignored} + a debug line
 ```
 
@@ -37,7 +38,7 @@ Paddle webhooks → POST /webhooks/paddle
 
 | Module | Purpose |
 |--------|---------|
-| `Engram.Paddle.Client` (`lib/engram/paddle/client.ex`) | Behaviour declaring `create_customer_portal_session/1`. `impl/0` reads `:paddle_client` config so tests can swap in Mox. |
+| `Engram.Paddle.Client` (`lib/engram/paddle/client.ex`) | Behaviour for every Paddle API call (portal sessions, subscriptions, transactions, invoices, cancel, plan-change preview/update, `list_subscriptions/1`). `impl/0` reads `:paddle_client` config so tests can swap in Mox. |
 | `Engram.Paddle.Client.HTTP` (`lib/engram/paddle/client/http.ex`) | Default Req-based impl. Base URL switches on `:paddle_env` (`production` → api.paddle.com, else sandbox-api.paddle.com). |
 | `Engram.Billing` (`lib/engram/billing.ex`) | `upsert_from_paddle_event/1`, `create_portal_session/1`, `tier/1`, `active?/1`, `trial_days_remaining/1`. |
 | `EngramWeb.WebhookController.paddle/2` | Signature verify + dispatch to `upsert_from_paddle_event/1`. |
@@ -61,15 +62,11 @@ When the frontend opens `Paddle.Checkout.open()`, it MUST include at least `user
 Paddle.Checkout.open({
   items: [{ priceId: cfg.price_ids.starter.monthly, quantity: 1 }],
   customer: { email: cfg.customer_email },
-  customData: {
-    ...cfg.custom_data,          // { user_id: 42 }
-    affiliate_ref: 'rf_abc',     // from cookie / query param
-    utm_source: 'twitter',
-    utm_campaign: 'launch'
-  },
-  settings: { successUrl: 'https://engram.app/billing?status=success' }
+  customData: cfg.custom_data,   // { user_id: ... }; extra attribution keys would go here
 });
 ```
+
+The live call is in `frontend/src/billing/billing-page.tsx`.
 
 Whatever the overlay sends becomes `data.custom_data` on every subscription webhook for that subscription. The backend persists the full map on `subscriptions.custom_data` (JSONB), keyed off the initial `subscription.created` event. Subsequent updates leave `custom_data` untouched so the original attribution survives plan changes.
 
@@ -85,13 +82,16 @@ Whatever the overlay sends becomes `data.custom_data` on every subscription webh
 | `subscription.past_due` | Same as activated; status becomes `"past_due"`. | Card declined, retry in progress. `past_due` is in `@entitled_statuses`, so `tier/1` still reports the paid tier during the grace window. |
 | `subscription.canceled` | Status becomes `"canceled"`. | End of life. `canceled` is NOT entitled, so `tier/1` drops back to `:free`. (`active?/1` is suspension-only — `is_nil(suspended_at)` — and is unaffected by subscription status.) |
 | `transaction.payment_failed` / `transaction.updated` | `{:ok, :checkout_stalled}` when the transaction's NEWEST payment attempt is `error` or `action_required`, else `{:ok, :ignored}`. Writes no row. | #1737. Logs `checkout_payment_stalled` (or `checkout_payment_action_required`) with transaction id, customer id, method and error code, and increments `engram.paddle.checkout.stalled` tagged `reason` + `method`. **Four traps:** `payments` is cumulative, so judge the newest attempt only or the count scales with retries; the counter measures stall REPORTS, not distinct checkouts, because Paddle re-emits `transaction.updated` as a dead transaction moves on; `action_required` is a 3DS challenge in progress and every healthy EU card payment produces one, so alert on it relative to `transaction.completed` rather than per event; dunning is skipped on `origin == "subscription_recurring"` because it already arrives as `subscription.past_due` — do NOT key that on `subscription_id`, which would also drop `subscription_payment_method_change` and `subscription_charge`, both of which are live checkouts. |
+| `transaction.completed` | Logs `paddle_transaction_completed` with transaction and customer id, returns `{:ok, :ignored}`. | The other half of the stalled-3DS alert (engram-infra #1157): it fires on a `checkout_payment_action_required` transaction id that never reaches this line. |
 | anything else | `{:ok, :ignored}` + a `paddle_webhook_unhandled_event` debug line | Invoices, payment methods, adjustments, etc. — out of scope for the subscription row. The debug line exists so the next gap is greppable; #1737 was invisible for four months because this branch was silent. |
 
-`tier` is derived from `data.items[0].price.id` matched against the four price-ID config keys (`:paddle_starter_monthly_price_id`, `:paddle_starter_annual_price_id`, `:paddle_pro_monthly_price_id`, `:paddle_pro_annual_price_id`) via `Engram.Billing.tier_from_subscription/1`. Anything unrecognized returns `{:error, :unknown_price_id}` — the upserter then leaves the existing tier UNCHANGED and captures a Sentry message (`billing.ex:446/512/589`). It does NOT fall back to `"starter"`.
+`tier` is derived from `data.items[0].price.id` matched against the four price-ID config keys (`:paddle_starter_monthly_price_id`, `:paddle_starter_annual_price_id`, `:paddle_pro_monthly_price_id`, `:paddle_pro_annual_price_id`) via `Engram.Billing.tier_from_subscription/1`. Anything unrecognized returns `{:error, :unknown_price_id}`: the upserter leaves the existing tier UNCHANGED, logs `paddle_unknown_price_id` and captures a Sentry message ("Unknown Paddle price_id, tier unchanged"). It does NOT fall back to `"starter"`. Tier comes only from the price ID, never from `custom_data`.
 
 ## Trial
 
-The 7-day card-on-file trial is configured on the Paddle **price**, not in our code. Paddle creates the subscription with `status: "trialing"` and emits `subscription.activated` when it converts. Engram simply mirrors `data.status` onto the row. `Engram.Billing.trial_days_remaining/1` computes from `current_period_end` minus `utc_now/0`.
+The 7-day card-on-file trial is configured on the Paddle **price**, not in our code: every v3 price has `trial_period: { interval: day, frequency: 7, requires_payment_method: true }` (`ops/paddle/catalog.yml`). Checkout charges $0, the subscription starts `trialing` (entitled), and Paddle emits `subscription.activated` when it converts. Engram mirrors `data.status` onto the row. `Engram.Billing.trial_days_remaining/1` computes from `current_period_end` minus `utc_now/0`.
+
+**No plan change during a trial.** Paddle refuses any items change on a trialing subscription: tier swaps fail with `subscription_trialing_items_update_invalid_options`, cadence swaps with `subscription_new_items_not_valid`. The plan-change panel shows a trial notice instead of a picker (`frontend/src/billing/plan-change-panel.tsx`).
 
 ## Sandbox dev
 
@@ -123,13 +123,13 @@ For end-to-end frontend testing point Paddle.js at the sandbox by passing `envir
 - `test/engram_web/controllers/webhook_controller_test.exs` — full signature flow including replay protection.
 - `test/engram_web/controllers/billing_controller_test.exs` — `/api/billing/config` payload shape.
 
-## Monitoring (added 2026-05-31, #244)
+## Monitoring (#244)
 
 Four observability layers on the webhook + a daily reconciliation. Each is independent — losing one still gives signal from the other three.
 
-1. **Structured logs.** `Logger.metadata(category: :paddle_webhook, event_type:, event_id:)` is stamped on every webhook in `EngramWeb.WebhookController.paddle/2`. Entry + success log at `:info`; the swallowed-`{:error, _}` path (where we still 200 so Paddle stops retrying) logs at `:error` so Sentry's LoggerHandler captures it.
+1. **Structured logs.** `EngramWeb.WebhookController.paddle/2` sets `Logger.metadata(event_type:, event_id:)`; each line stamps `category: :billing` via `Metadata.with_category`. A handled webhook logs `paddle_webhook_received` then `paddle_webhook_ok` at `:info`. A redelivered `event_id` short-circuits as `paddle_webhook_duplicate` (`Engram.Webhooks.Idempotency`). The swallowed-`{:error, _}` path (where we still 200 so Paddle stops retrying) logs at `:error` so Sentry's LoggerHandler captures it.
 
-2. **`:telemetry` span.** `:telemetry.span/3` wraps `Billing.upsert_from_paddle_event/1` and emits `[:engram, :paddle, :webhook, :start | :stop | :exception]` with `event_type`, `event_id`, and (on `:stop`) `result: :ok | :error`. Declared in `EngramWeb.Telemetry.metrics/0` so a future PromEx attach picks them up automatically.
+2. **`:telemetry` span.** `:telemetry.span/3` wraps `Billing.upsert_from_paddle_event/1` and emits `[:engram, :paddle, :webhook, :start | :stop | :exception]` with `event_type`, `event_id`, and (on `:stop`) `result: :ok | :error`. Declared in `EngramWeb.Telemetry.metrics/0`.
 
 3. **Sentry capture.** DSN comes from `SENTRY_DSN`; unset disables (self-host + dev + test stay no-op). `Engram.Sentry.Scrubber` is wired as `:before_send` — strips `Sentry.Interfaces.Request.data` and recursively redacts any `extra`-map key matching email/phone/address/card/iban/pan/ssn. Smoke-test the pipeline on staging after deploy:
 
@@ -166,6 +166,8 @@ Four observability layers on the webhook + a daily reconciliation. Each is indep
 
    In a release shell (`bin/engram rpc`), Mix isn't available — inline the call: `Engram.Billing.Reconciliation.run(7)`.
 
+   **Paddle list pagination: stop on `has_more`, never `next`.** `meta.pagination.next` is always present, even on the last page (it is a resume bookmark). `list_subscriptions/1` stops when `has_more != true` (`lib/engram/paddle/client/http.ex`); stopping on `next == nil` looped the reconcile worker into `pagination_loop` (PR #723). Any Paddle list mock must include `has_more` and keep a non-nil `next` on the final page, or the test passes on code that loops in prod.
+
 ### Drift response runbook
 
 When you see `paddle_reconciliation_drift` in Sentry or the logs:
@@ -187,12 +189,7 @@ If a replay doesn't clear the drift, the upserter itself is failing — pull its
 
 Both Sentry (`SENTRY_DSN` unset) and reconciliation (`:billing_enabled` false) no-op cleanly on self-host.
 
-### Follow-up (engram-infra)
-
-PromEx + Prometheus + alert rules are tracked separately on the engram-infra repo. When Prometheus exists, attaching PromEx will pick up the metric declarations in `EngramWeb.Telemetry` automatically.
-
 ## What this doc deliberately does not cover
 
-- Frontend wiring of Paddle.js (marketing site + app). Owned by the frontend rewrite.
 - Affiliate-platform-specific integration (Rewardful etc.). Configured in their dashboards, not in our code.
 - Annual prices ($70/yr Starter, $140/yr Pro). Wired via the `*_annual_price_id` config keys; surfaced under `price_ids.{starter,pro}.annual` in `GET /api/billing/config`.

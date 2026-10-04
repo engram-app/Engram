@@ -1,6 +1,6 @@
 # Context Doc: Testing Strategy
 
-_Last verified: 2026-06-12_
+_Last verified: 2026-10-03_
 
 ## Status
 Working — ExUnit tests cover business logic and HTTP contract via ConnCase. E2E tests verify real Obsidian sync workflows against Docker stack.
@@ -18,7 +18,9 @@ Testing philosophy, test layers, tooling, and CI pipeline for the Engram Elixir/
 |-------|----------|---------|---------------|--------------|
 | **Unit/ConnCase tests** | `test/` | `mix test` | Business logic, HTTP contract, auth, RLS, plugs | Postgres (Ecto.Sandbox) |
 | **E2E tests** | `e2e/tests/` | `python3 -m pytest e2e/tests/ -v` | Real Obsidian sync: push/pull, Channels, conflicts, multi-user | CI stack + Obsidian |
-| **E2E helper unit tests** | `e2e/unit_tests/` | `python3 -m pytest e2e/unit_tests/ -v` | SQL injection prevention in cleanup helpers | None |
+| **E2E harness unit tests** | `e2e/unit/` | `cd e2e/unit && python3 -m pytest -v` | Harness helpers (cleanup SQL safety, timeout budgets, probes) | None |
+| **Headless protocol** | `e2e/headless/` | `headless-protocol` CI job | Real plugin SyncEngine vs real backend over WS, no Obsidian | Backend stack |
+| **Plugin sim tier** | plugin repo `tests/sim/` | `bun test tests/sim/` (plugin) | Seeded deterministic CRDT convergence | None |
 
 ## Elixir Testing Stack
 
@@ -32,33 +34,28 @@ Testing philosophy, test layers, tooling, and CI pipeline for the Engram Elixir/
 
 Key advantage: `async: true` runs tests in parallel with per-test DB transactions. No cleanup needed.
 
-## Running the suite against a throwaway DB (two non-obvious prerequisites)
+## Running locally
 
-If you spin up a fresh Postgres just to run `mix test` (e.g. an isolated audit/CI-repro container), two things bite in order:
+See `docs/context/local-backend-testing.md` (`scripts/test-local.sh`). A fresh
+DB needs Postgres 18+ (`uuidv7()`); plain `mix test` runs
+`engram.prepare_database` via the `test` alias. Hand-rolling
+`mix do ecto.create, ecto.migrate, test` skips it and dies on the baseline's
+`GRANT ... TO engram_app`.
 
-1. **Postgres must be 18+.** The baseline `structure.sql` uses `uuidv7()` (PK default) and `SET transaction_timeout` — both PG17-and-earlier fail (`function uuidv7() does not exist` / `unrecognized configuration parameter`). Use `postgres:18.4` (the version CI and the compose files pin). This is the test-side mirror of the prod cutover in [[pg18-uuidv7-prod-crashloop-2026-06-11]].
-2. **The `engram_app` role must exist before migrate.** The baseline dump ends with `GRANT ... TO engram_app`; with no role you get `role "engram_app" does not exist`. `mix engram.prepare_database` creates it (+ default privileges).
+## RLS Testing
 
-The `test` mix alias already chains this correctly:
-`["ecto.create --quiet", "engram.prepare_database", "ecto.migrate --quiet", "test"]` — so **plain `mix test` against a fresh PG18 DB just works**. The trap is hand-rolling `mix do ecto.create, ecto.migrate, test`, which skips `prepare_database` and dies on the GRANT. Point a throwaway DB at it with `DATABASE_URL=postgres://engram:engram@host:port/engram_test mix test` (config/test.exs honors `DATABASE_URL`).
-
-## RLS Testing (Critical)
-
-Every test must verify tenant isolation:
-- Query as User A with User B's tenant context → must return zero rows
-- Insert as User A, attempt read as User B → must fail
-- `FORCE ROW LEVEL SECURITY` means even the table owner can't bypass policies
-
-See `docs/context/database-schema-rls.md` for the RLS spike test example.
+Naive isolation tests prove nothing: the suite connects as a superuser, which
+bypasses RLS. See `docs/context/rls-enforcement-testing-traps.md` before
+writing a tenant-scoping test.
 
 ## CI Pipeline
 
 All tests run in GitHub Actions (`.github/workflows/verify.yml`):
 
-1. **Unit tests** — `mix test` + `python3 -m pytest e2e/unit_tests/ -v` (E2E helpers)
-2. **E2E tests** — starts CI stack + headless Obsidian, runs full sync scenarios
+1. **Unit tests**, `mix test`. The stack-free `e2e/unit` harness tests run as a step of the `e2e-clerk` job
+2. **E2E tests**, CI stack + headless Obsidian, full sync scenarios. Report-only on PRs; see `docs/context/testing-architecture-migration.md` and `docs/context/ci-pipeline-gating.md`
 
-**Code quality checks:** `mix format --check-formatted` and `mix credo --strict` (both fatal in the `lint` job). Dialyzer also runs in CI. See CLAUDE.md "Quality Tooling" for the full fatal-lint set.
+**Code quality checks:** `mix format --check-formatted` and `mix credo --strict` (both fatal in the `lint` job). Dialyzer is not in CI; run it locally before pushing. See AGENTS.md "Quality Tooling" for the full fatal-lint set.
 
 ## References
 - ExUnit tests: `test/`

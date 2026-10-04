@@ -311,4 +311,110 @@ defmodule Engram.Parsers.MarkdownTest do
       end
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Non-semantic blobs (prod worker OOM, 2026-10-03)
+  # ---------------------------------------------------------------------------
+
+  describe "base64 blobs" do
+    # An imported note inlined three images as `data:` URIs: 2.1 MB of base64,
+    # ~1,000 of its 1,385 chunks. Each was embedded and keyword-indexed as if it
+    # were prose. The stored note keeps its bytes; only what gets indexed
+    # drops the blob.
+    defp b64(bytes), do: Base.encode64(:crypto.strong_rand_bytes(div(bytes * 3, 4)))
+    defp long_run?(text), do: Regex.match?(~r/[A-Za-z0-9+\/=_-]{100,}/, text)
+
+    test "a data URI image indexes as the prose around it" do
+      content =
+        "# Trip\n\nIntro paragraph about the trip.\n\n![photo](data:image/png;base64," <>
+          b64(200_000) <> ")\n\nClosing paragraph."
+
+      chunks = Markdown.parse(content, "Trip.md")
+      texts = Enum.map(chunks, & &1.text)
+
+      refute Enum.any?(texts, &long_run?/1)
+      assert Enum.any?(texts, &String.contains?(&1, "Intro paragraph about the trip."))
+      assert Enum.any?(texts, &String.contains?(&1, "Closing paragraph."))
+      assert length(chunks) <= 3
+    end
+
+    test "context_text drops the blob along with text" do
+      content = "# N\n\n" <> b64(10_000) <> " tail words here"
+      chunks = Markdown.parse(content, "N.md")
+
+      assert Enum.any?(chunks, &String.contains?(&1.text, "tail words here"))
+
+      for chunk <- chunks do
+        refute long_run?(chunk.context_text)
+        assert String.ends_with?(chunk.context_text, chunk.text)
+      end
+    end
+
+    test "a long URL path with mixed case and digits is kept whole" do
+      url =
+        "https://github.com/engram-app/Engram/blob/0f3e4fa0c1b2d3e4f5a6b7c8d9e0f1a2b3c4d5e6/" <>
+          "lib/engram_web/controllers/api/notes_controller.ex#L10"
+
+      [chunk] = Markdown.parse("# Links\n\nSee " <> url <> " for the handler.", "Links.md")
+      assert chunk.text =~ url
+    end
+
+    test "no fragment of a blob survives at a split boundary" do
+      # "intro " + blob is cut into 2,048-byte pieces; sized so the blob's last
+      # 44 characters land alone at the start of the final piece.
+      blob = binary_part(b64(60_000), 0, 2_048 * 24 + 44)
+      content = "# N\n\nintro " <> blob <> " outro words here"
+
+      texts = Markdown.parse(content, "N.md") |> Enum.map(& &1.text)
+
+      refute Enum.any?(texts, &String.contains?(&1, binary_part(blob, byte_size(blob) - 30, 30)))
+      assert Enum.any?(texts, &String.contains?(&1, "outro words here"))
+    end
+
+    test "stripping a 2 MB image stays within a 40 MB heap" do
+      # Deciding a run is encoded once counted letters with Regex.scan, a list
+      # entry per match: ~760k for this image, +446 MB in the end-to-end repro.
+      content = "# Pic\n\nbefore ![x](data:image/png;base64," <> b64(2_000_000) <> ") after"
+
+      task =
+        Task.async(fn ->
+          Process.flag(:max_heap_size, %{
+            size: div(40 * 1_048_576, 8),
+            kill: true,
+            error_logger: false
+          })
+
+          Markdown.parse(content, "Pic.md")
+        end)
+
+      Process.flag(:trap_exit, true)
+      assert {:ok, chunks} = Task.yield(task, 60_000) || Task.shutdown(task)
+      assert Enum.any?(chunks, &String.contains?(&1.text, "after"))
+    end
+
+    test "a long run of one letter is not mistaken for a blob" do
+      run = String.duplicate("a", 300)
+      [chunk] = Markdown.parse("# N\n\n" <> run, "N.md")
+      assert chunk.text =~ run
+    end
+
+    test "a chunk that was nothing but a blob is dropped and positions stay contiguous" do
+      content = "# A\n\nfirst\n\n## B\n\n" <> b64(5_000) <> "\n\n## C\n\nthird"
+      chunks = Markdown.parse(content, "A.md")
+
+      assert Enum.map(chunks, & &1.position) == Enum.to_list(0..(length(chunks) - 1))
+      assert Enum.map(chunks, & &1.text) |> Enum.any?(&String.contains?(&1, "third"))
+      refute Enum.any?(chunks, &long_run?(&1.text))
+    end
+
+    test "urls, hashes and identifiers are left alone" do
+      content =
+        "# Refs\n\nSee https://example.com/a/very/long/path?query=value&other=thing#frag " <>
+          "sha256 " <> String.duplicate("ab12", 16) <> " and SomeVeryLongIdentifierName."
+
+      [chunk] = Markdown.parse(content, "Refs.md")
+      assert chunk.text =~ "https://example.com/a/very/long/path?query=value&other=thing#frag"
+      assert chunk.text =~ String.duplicate("ab12", 16)
+    end
+  end
 end

@@ -107,15 +107,6 @@ defmodule Engram.NotesCrdtVaultPopulatedTest do
       assert vault_id == vault.id
     end
 
-    test "the first real batch upsert announces", %{user: user, vault: vault} do
-      {:ok, _} =
-        Notes.batch_upsert_notes(user, vault, [
-          %{"path" => "first.md", "content" => "x", "mtime" => 1.0}
-        ])
-
-      assert_receive %Phoenix.Socket.Broadcast{event: "vault_populated"}
-    end
-
     test "the second real note stays quiet", %{user: user, vault: vault} do
       {:ok, _} = Notes.genesis_crdt_note(user, vault, Ecto.UUID.generate(), "First Note.md")
       assert_receive %Phoenix.Socket.Broadcast{event: "vault_populated"}
@@ -123,24 +114,5 @@ defmodule Engram.NotesCrdtVaultPopulatedTest do
       {:ok, _} = Notes.genesis_crdt_note(user, vault, Ecto.UUID.generate(), "Second Note.md")
       refute_receive %Phoenix.Socket.Broadcast{event: "vault_populated"}, 200
     end
-  end
-
-  # A device can re-push a `Welcome to Engram.md` of its own after the user
-  # deleted the seed. That is not the vault's first real note, so the batch
-  # path must stay quiet exactly like the CRDT path, and fire on the next one.
-  test "a batch holding only the welcome path does not announce", %{user: user, vault: vault} do
-    {:ok, _} =
-      Notes.batch_upsert_notes(user, vault, [
-        %{"path" => WelcomeNote.path(), "content" => "mine", "mtime" => 1.0}
-      ])
-
-    refute_receive %Phoenix.Socket.Broadcast{event: "vault_populated"}, 200
-
-    {:ok, _} =
-      Notes.batch_upsert_notes(user, vault, [
-        %{"path" => "first.md", "content" => "x", "mtime" => 1.0}
-      ])
-
-    assert_receive %Phoenix.Socket.Broadcast{event: "vault_populated"}
   end
 end

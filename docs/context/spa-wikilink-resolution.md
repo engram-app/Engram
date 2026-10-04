@@ -22,7 +22,7 @@ path or bare title. Bridging happens in three pieces, all in `frontend/src`:
    Obsidian's behavior.
 3. **Two producers, one helper** — Reading mode (`note-view.tsx`
    remark-wiki-link config) and the CodeMirror editor (`note-page.tsx`
-   `resolveWikiLink` → Atomic `wikiLinks`) both emit via `wikiHref`. Keep
+   `resolveWikiLink`, passed to `livePreviewExtensions`) both emit via `wikiHref`. Keep
    them in lockstep.
 
 ## Traps
@@ -36,9 +36,13 @@ path or bare title. Bridging happens in three pieces, all in `frontend/src`:
   don't assume a slug exists where NoteView mounts.
 - Reading-mode internal anchors go through react-router `Link` (the `a`
   component override in note-view.tsx); editor-mode click-to-open goes through
-  `getAppRouter().navigate` (live-preview.ts onOpen). A plain `<a>` /
-  `window.location.assign` full-page-reloads the SPA — both paths did exactly
-  that once; don't regress it.
+  the `openWikiLink` / `openMarkdownLink` callbacks NotePage passes into
+  `livePreviewExtensions`, built on its `useNavigate`. A plain `<a>` /
+  `window.location.assign` full-page-reloads the SPA; both paths did exactly
+  that once.
+- Do NOT import `getAppRouter` in the editor modules: they live in the lazy
+  editor chunk, and in dev an HMR-stamped duplicate of `router.tsx` (`?t=`)
+  is a fresh, never-installed instance, so every click threw.
 - **There is no `/v/:slug/wiki/*` route.** It existed until 2026-09-02 and
   rendered a `"X" doesn't exist yet.` interstitial with a Create button. It is
   deleted in the React router, the Phoenix router, and

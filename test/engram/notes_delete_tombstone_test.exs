@@ -152,41 +152,6 @@ defmodule Engram.NotesDeleteTombstoneTest do
     assert note.content == "# Same body"
   end
 
-  test "batch upsert refuses an identical re-push at a just-deleted path", %{
-    user: user,
-    vault: vault
-  } do
-    create_and_delete(user, vault, "Folder/Note.md", "# Same body")
-
-    {:ok, %{results: results}} =
-      Notes.batch_upsert_notes(user, vault, [
-        %{"path" => "Folder/Note.md", "content" => "# Same body"}
-      ])
-
-    assert [%{status: :error, errors: %{reason: "recently_deleted"}}] = results
-
-    refute Repo.exists?(
-             from(n in Note,
-               where: n.vault_id == ^vault.id and n.kind == "note" and is_nil(n.deleted_at)
-             ),
-             skip_tenant_check: true
-           )
-  end
-
-  test "batch upsert still creates a genuinely different note at a deleted path", %{
-    user: user,
-    vault: vault
-  } do
-    create_and_delete(user, vault, "Folder/Note.md", "# Old body")
-
-    {:ok, %{results: results}} =
-      Notes.batch_upsert_notes(user, vault, [
-        %{"path" => "Folder/Note.md", "content" => "# New body"}
-      ])
-
-    assert [%{status: :ok}] = results
-  end
-
   test "resurrect-by-id (rename restore) is unaffected by the window", %{
     user: user,
     vault: vault

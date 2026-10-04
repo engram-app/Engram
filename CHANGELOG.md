@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.40.0](https://github.com/engram-app/Engram/compare/0.39.0...0.40.0) (2026-10-04)
+
+
+### Features
+
+* **web:** multi-select notes in the file tree ([#1829](https://github.com/engram-app/Engram/issues/1829)) ([39d329b](https://github.com/engram-app/Engram/commit/39d329bb538a5a2ee2c07036c25f2091fb37da45))
+
+
+### Bug Fixes
+
+* Clerk 404 on delete, chunk heading schema, LRU test flake, MMR dot ([#1823](https://github.com/engram-app/Engram/issues/1823)) ([a87c4c6](https://github.com/engram-app/Engram/commit/a87c4c67cd7cd2f6a9e6e12e9663a8bf66b2f48e))
+* **mcp:** log stream-probe 405 at info, not warning ([#1832](https://github.com/engram-app/Engram/issues/1832)) ([6700919](https://github.com/engram-app/Engram/commit/67009194af6b782d716e7d8c85f5f6773de73d01))
+* **mcp:** no other assistants in the ChatGPT listing; add demo video ([#1825](https://github.com/engram-app/Engram/issues/1825)) ([84aa6da](https://github.com/engram-app/Engram/commit/84aa6da5194c73f9e713ea45578762219cf733ca))
+* stop worker OOM crash-loop on notes with inline base64 images ([#1835](https://github.com/engram-app/Engram/issues/1835)) ([fab4a7d](https://github.com/engram-app/Engram/commit/fab4a7d45a1c929fdff848228151a154bc06c3e5))
+
 ## [0.39.0](https://github.com/engram-app/Engram/compare/0.38.1...0.39.0) (2026-10-01)
 
 

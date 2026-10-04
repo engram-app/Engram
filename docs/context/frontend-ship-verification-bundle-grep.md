@@ -1,6 +1,6 @@
 # Verifying a frontend change actually shipped — grep every chunk, not the entry bundle
 
-_Last verified: 2026-09-16_
+_Last verified: 2026-10-03_
 
 ## Symptom
 
@@ -58,7 +58,7 @@ tracks the last release tag, not the running bytes. **`build_sha` is the field t
 on `80ec292d` (the merge commit) and prod on `426ad302` — which is what actually answered
 "did my merge ship?".
 
-See `docs/context/prod-release-verification-gotchas.md` for the rest of that family.
+See `docs/context/deploy-prod.md` for the rest of that family.
 
 ## Related trap: a main merge cannot move prod frontend traffic
 
@@ -91,5 +91,4 @@ is not a prod deploy.
 - `.github/workflows/verify.yml` — `deploy-frontend` job (upload only)
 - `.github/workflows/frontend-promote.yml` — the only traffic-shifting deploy
 - `lib/engram_web/controllers/health_controller.ex` — `version` vs `build_sha`
-- `docs/context/prod-release-verification-gotchas.md`
-- `docs/context/frontend-backend-deploy-skew-cors.md`
+- `docs/context/deploy-prod.md`

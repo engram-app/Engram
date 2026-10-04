@@ -47,9 +47,18 @@ defmodule Engram.Links.Parser do
   # `My (file` and wrote THAT as a note_links target — a garbage edge, not a
   # skip. The two alternation branches are disjoint on their first character
   # (`[^()]` vs `\(`), so there is no ambiguity to backtrack through.
+  #
+  # Every quantifier is POSSESSIVE (`++`, `*+`), and that is load-bearing.
+  # Even with nothing to backtrack through, PCRE still records a backtrack
+  # frame per iteration of a plain `(?:[^()]|...)*`, and the old form ran
+  # one iteration PER CHARACTER of the destination: ~0.8 KB of memory per
+  # char. An imported note with `![](data:image/png;base64,...)` images (a
+  # 1 MB destination) cost ~800 MB and 5-6 s and OOM-killed the prod worker
+  # on 2026-10-03. `[^()]++` eats a whole run in one iteration, and the
+  # possessive outer group keeps no frames: same matches, 14 ms, ~0 MB.
   # ponytail: one level only. Deeper nesting needs a real balanced scan;
   # CommonMark itself only guarantees balance, not depth.
-  @md_link_re ~r/(!?)\[([^\]\[]*)\]\(((?:[^()]|\([^()]*\))*)\)/u
+  @md_link_re ~r/(!?)\[([^\]\[]*+)\]\(((?:[^()]++|\([^()]*+\))*+)\)/u
 
   # Anything with a scheme (`https:`, `mailto:`), protocol-relative (`//cdn`),
   # or a bare same-page anchor is not a vault link.

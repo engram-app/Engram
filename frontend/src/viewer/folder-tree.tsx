@@ -32,7 +32,7 @@ import { TreeRowVirtualized } from "./tree/tree-row-virtualized";
 import { parseItemId, ROOT_ID } from "./tree/types";
 import { useEngramTree } from "./tree/use-engram-tree";
 import { ActionDrawer } from "./tree-actions/action-drawer";
-import { type ActionId, actionsFor } from "./tree-actions/action-list";
+import { type ActionId, actionsFor, selectionActions } from "./tree-actions/action-list";
 import { ContextMenu } from "./tree-actions/context-menu";
 import { DeleteConfirm } from "./tree-actions/delete-confirm";
 import { nextCopyName } from "./tree-actions/duplicate";
@@ -56,7 +56,14 @@ type DialogState =
 	| { kind: "none" }
 	| { kind: "delete"; nodes: DeleteRow[]; itemIds: string[] }
 	| { kind: "move"; nodes: MoveRow[]; itemIds: string[] }
-	| { kind: "context"; itemId: string; position: { x: number; y: number } }
+	// `selection` is set when the right-clicked row was part of a multi-selection:
+	// the menu then acts on every selected row instead of `itemId` alone.
+	| {
+			kind: "context";
+			itemId: string;
+			position: { x: number; y: number };
+			selection?: string[];
+	  }
 	| { kind: "drawer"; itemId: string };
 
 export default function FolderTree() {
@@ -416,8 +423,80 @@ export default function FolderTree() {
 		setDialog({ kind: "move", nodes, itemIds });
 	}
 
+	// Path of a row the tree still holds, or undefined once it is gone.
+	function livePath(itemId: string): string | undefined {
+		const p = parseItemId(itemId);
+		if (p.kind === "note") {
+			return lookupNote(p.id)?.path;
+		}
+		if (p.kind === "folder") {
+			return allFolders.find((f) => f.id === p.id)?.name;
+		}
+		if (p.kind === "attachment") {
+			return attachments.some((a) => a.path === p.path) ? p.path : undefined;
+		}
+		return undefined;
+	}
+
+	// What a bulk action should act on. Two things HT's raw selection gets wrong:
+	// - it keeps ids after their rows are gone (deleted on another device, or
+	//   inside a folder deleted from the single-row menu), and sending one to
+	//   the server fails the whole batch;
+	// - a range from a folder down past its own notes holds both, and acting on
+	//   both pulled the notes out of the folder they were moving with, or
+	//   deleted them twice. The folder already carries them.
+	function actionableSelection(ids: string[]): string[] {
+		const rows = ids.flatMap((id) => {
+			const path = livePath(id);
+			return path === undefined ? [] : [{ id, path }];
+		});
+		const folderPaths = rows.filter((r) => parseItemId(r.id).kind === "folder").map((r) => r.path);
+		return rows
+			.filter((r) => !folderPaths.some((f) => r.path.startsWith(`${f}/`)))
+			.map((r) => r.id);
+	}
+
+	// Raw ids decide whether a right-click landed INSIDE the selection; the
+	// actionable ones are what the menu acts on and counts. Only a real
+	// multi-selection counts: HT selects whatever was clicked last, so one id is
+	// just "the row you clicked".
+	const rawSelectedIds = tree.getSelectedItems().map((i) => i.getId());
+	const selectedIds = actionableSelection(rawSelectedIds);
+	const multiSelect = rawSelectedIds.length > 1;
+
 	function handleContextMenu(itemId: string, x: number, y: number) {
-		setDialog({ kind: "context", itemId, position: { x, y } });
+		// Obsidian's rule: right-clicking OUTSIDE the selection acts on that row
+		// alone, so a bulk action can never hit rows the user isn't pointing at.
+		const selection =
+			selectedIds.length > 1 && rawSelectedIds.includes(itemId) ? selectedIds : undefined;
+		setDialog({ kind: "context", itemId, position: { x, y }, selection });
+	}
+
+	function copyWikilinks(itemIds: string[]) {
+		const links = itemIds.flatMap((id) => {
+			const p = parseItemId(id);
+			const note = p.kind === "note" ? lookupNote(p.id) : undefined;
+			// Wikilinks resolve by filename in Obsidian, never by H1 title.
+			return note ? [`[[${noteName(note.path) || note.path}]]`] : [];
+		});
+		if (links.length === 0) {
+			return;
+		}
+		copyToClipboard(links.join("\n")).then((ok) =>
+			ok
+				? toast.success(links.length === 1 ? "Copied wikilink" : `Copied ${links.length} wikilinks`)
+				: toast.error("Copy failed"),
+		);
+	}
+
+	function handleSelectionPick(actionId: ActionId, itemIds: string[]) {
+		if (actionId === "delete") {
+			openDelete(itemIds);
+		} else if (actionId === "move") {
+			openMove(itemIds);
+		} else if (actionId === "copy-wikilink") {
+			copyWikilinks(itemIds);
+		}
 	}
 
 	function handleLongPress(itemId: string) {
@@ -482,22 +561,9 @@ export default function FolderTree() {
 				);
 				break;
 			}
-			case "copy-wikilink": {
-				const p = parseItemId(itemId);
-				if (p.kind !== "note") {
-					break;
-				}
-				const note = lookupNote(p.id);
-				if (!note) {
-					break;
-				}
-				// Wikilinks resolve by filename in Obsidian, never by H1 title.
-				const label = noteName(note.path) || note.path;
-				copyToClipboard(`[[${label}]]`).then((ok) =>
-					ok ? toast.success("Copied wikilink") : toast.error("Copy failed"),
-				);
+			case "copy-wikilink":
+				copyWikilinks([itemId]);
 				break;
-			}
 			default:
 				break;
 		}
@@ -654,6 +720,7 @@ export default function FolderTree() {
 							items={items}
 							activeId={selectedNoteId}
 							menuOpenId={menuOpenId}
+							multiSelect={multiSelect}
 							onContextMenu={handleContextMenu}
 							onLongPress={handleLongPress}
 						/>
@@ -680,9 +747,17 @@ export default function FolderTree() {
 			)}
 			{dialog.kind === "context" && (
 				<ContextMenu
-					actions={actionsFor({ kind: kindOf(dialog.itemId) })}
+					actions={
+						dialog.selection
+							? selectionActions(dialog.selection.map(kindOf).filter((k) => k !== "root"))
+							: actionsFor({ kind: kindOf(dialog.itemId) })
+					}
 					position={dialog.position}
-					onPick={(actionId) => handleActionPick(actionId, dialog.itemId)}
+					onPick={(actionId) =>
+						dialog.selection
+							? handleSelectionPick(actionId, dialog.selection)
+							: handleActionPick(actionId, dialog.itemId)
+					}
 					// The action itself may open another dialog (delete/move) that
 					// shares this same state slot. Only clear it if it's still the
 					// context menu, so we do not stomp on a freshly opened dialog.

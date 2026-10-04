@@ -1,9 +1,9 @@
 # Context Doc: Phoenix Channel Event Contract
 
-_Last verified: 2026-06-12 (sync protocol rev — dual-field broadcasts, notes.batch digest)_
+_Last verified: 2026-10-03_
 
 ## Status
-Working — shipped. Updated for the 2026-06-12 sync protocol rev.
+Working, shipped.
 
 ## What This Is
 Complete specification for the Phoenix Channel-based real-time sync protocol between the Obsidian plugin / web SPA and the Engram server.
@@ -20,8 +20,9 @@ WebSocket connect: wss://api.engram.page/socket/websocket?token=<api_key|jwt>
 
 ## Client → Server Events
 
-None. All writes ride the `crdt:` channel (`crdt_msg`, `crdt_create`,
-`crdt_delete`, `crdt_catchup_since`). A brand-new note's body rides
+None. All writes ride the `crdt:` channel (`crdt_msg`, `crdt_index_msg`,
+`crdt_create`, `crdt_doc_state`, `crdt_doc_update`, `crdt_delete`,
+`crdt_catchup_since`, `crdt_release`). A brand-new note's body rides
 `crdt_create`'s optional `b64` genesis frame; the separate `crdt_create_batch`
 frame was removed once the plugin retired it and the web app was the only
 caller left, always sending a single entry. The legacy inbound
@@ -34,26 +35,24 @@ channel never crashes on unknown frames, same posture as #862's stub).
 
 | Event | Payload | When | Purpose |
 |-------|---------|------|---------|
-| `note_changed` (upsert) | `{event_type: "upsert", id, path, vault_id, content, content_hash, title, folder, tags, mtime, updated_at, version}` | After a single-note upsert by ANY device | Real-time sync notification |
+| `note_changed` (upsert) | `{event_type: "upsert", id, path, vault_id, content?, content_hash, title, folder, tags, mtime, updated_at, version}` | After a single-note upsert by ANY device | Real-time sync notification |
 | `note_changed` (delete) | `{event_type: "delete", path, vault_id}` | After a delete/rename-away | Tombstone notification |
-| `notes.batch` (upsert digest) | `{op: "upsert", vault_id, notes: [{event_type, id, path, title, folder, tags, mtime, version, updated_at, content_hash}]}` | ONE per `POST /api/notes/batch` call (replaces N `note_changed` events) | Bulk-push digest — metadata-only, never carries content |
+| `note_changed` (attachment) | attachment upsert/delete payloads (`attachments.ex`) | After an attachment write | Same topic as notes |
 | `notes.batch` (delete/move) | `{op: "delete"\|"move", ids, target_folder_id?}` | After batch delete / batch move | Batch-op notification |
 | `vault_created` | `{vault_id, ...}` (topic `user:{user_id}`) | A vault is created (`Engram.Vaults.broadcast_vault_created/2`) | FTUX listener — onboarding waits for this alongside `vault_populated` |
 | `vault_populated` | `{vault_id}` (topic `user:{user_id}`) | First note lands in an empty vault | FTUX listener |
 | `presence_state` / `presence_diff` | Phoenix Presence shapes | Join / device change | Connected-device tracking |
 
-## content_hash + the dual-field transition
+## content_hash and `content`
 
 `content_hash` is the server-side HMAC of the note content (keyed per-user —
 **clients can never compute it locally**; they store the last seen value per
 path and compare opaquely).
 
-**Dual-field transition (one release):** `note_changed` upsert payloads carry
-BOTH `content` and `content_hash` as of the 2026-06-12 protocol rev. `content`
-is dropped the release after the plugin min-version floor covers the hash-only
-handler. Self-host backends and plugins update on independent cadences — do
-NOT drop `content` early. The `notes.batch` upsert digest is new in this rev
-and was hash-only from day one.
+`note_changed` upserts carry `content` unless the row was meta-projected (e.g.
+the folder-rename cascade), in which case the key is omitted, never `""`: an
+empty string next to the real hash materialized 0-byte files (e2e test_34).
+Clients must handle the hash-only shape.
 
 Client behavior: compare the broadcast's `content_hash` to the stored
 per-path serverHash → equal means no-op; differing means apply inline
@@ -61,16 +60,20 @@ per-path serverHash → equal means no-op; differing means apply inline
 
 ## Echo Suppression
 
-HTTP-originated pushes (REST single + batch) cannot identify a socket and use
-plain `broadcast`; the plugin's pushing/recently-pushed sets plus the hash
-compare make the echo a no-op. The 5-second echo cooldown remains as a safety
-net. (Channel-originated `push_note` and its `broadcast_from/4` echo exclusion
-died with the inbound ops — CRDT writes converge via Yjs merge, which is
-idempotent under echo by construction.)
+REST-originated writes have no socket pid for `broadcast_from` exclusion. The
+plugin sends `X-Device-Id` on every REST call (`EngramWeb.OriginDevice`, #970),
+and the server stamps it as `device_id` into `note_changed` delete events so the
+originating device drops its own delete echo. Upsert echoes are absorbed by the
+hash compare above. CRDT writes converge via Yjs merge, which is
+idempotent under echo by construction.
+
+Broadcasts from inside a multi-leg transaction (the folder cascade) go through
+`Engram.Sync.Broadcast.deferred/1`, which buffers and flushes only on commit, so
+a rollback never leaks phantom events.
 
 ## References
 - Sync Channel: `lib/engram_web/channels/sync_channel.ex`
-- Broadcast construction: `lib/engram/notes.ex` (`broadcast_change/6`, `batch_upsert_side_effects/3`)
+- Broadcast construction: `lib/engram/notes.ex` (`broadcast_change/6`), `lib/engram/sync/broadcast.ex`
 - SPA handlers: `frontend/src/api/channel.ts` (`handleNoteChanged`, `handleNotesBatch`)
 - Plugin handlers: `Engram-obsidian/src/channel.ts` + `src/sync.ts` (`handleStreamEvent`)
 - REST counterpart: workspace `docs/api-contract.md`

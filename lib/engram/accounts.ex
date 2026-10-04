@@ -797,43 +797,9 @@ defmodule Engram.Accounts do
   This previously read with `skip_tenant_check: true`, and the docstring
   claimed that "bypasses RLS". It does not: that option only silences the
   application-level `prepare_query/3` tripwire and sets no Postgres session
-  state. See docs/context/skip-tenant-check-audit.md.
-
-  Whether this was live in PROD is unresolved, and the evidence conflicts. Do
-  not repeat either answer as settled.
-
-  Prod connects as `engram_admin`, the RDS master (`engram-infra` assembles
-  `DATABASE_URL` from `aws_db_instance.main.username`).
-
-  Points at NOT enforced, historically: `Engram.Workers.OrphanSweep` refuses
-  with `{:error, :tenancy_unsafe}` when `Repo.maintenance() == Repo` and
-  `TenancyGuard.enforced?()`. Prod set no `MAINTENANCE_DATABASE_URL` then, so
-  the first half held, and prod logged `orphan_sweep complete` rather than
-  refusing — but that was on images predating the guard, so it is evidence
-  about the old code path, not about the role. Prod has since set it, to the
-  same RDS master (engram-infra#1243), so the premise no longer holds.
-
-  Points at ENFORCED, earlier: `Engram.Onboarding.record_action/2` records
-  `engram_admin` as "verified rolbypassrls=false" against a real incident
-  (#1354) where the INSERT raised on prod, and
-  `docs/context/migrations-force-rls-data-dml.md` records a migration caught
-  no-opping for the same reason in a dated audit. Those are incident records,
-  not guesses, so they are not simply wrong.
-
-  The reconciliation that fitted both was that BYPASSRLS had been granted to
-  `engram_admin` out of band. **That is now disproved.** `0.29.0` shipped
-  `Engram.Repo.TenancyGuard`, which asks that exact question from inside the
-  app's own pool at boot, and prod answered `:enforced` on every task on
-  2026-09-23 — so `engram_admin` is neither `rolsuper` nor `rolbypassrls`, and
-  nothing was granted out of band.
-
-  What that leaves is stranger, not simpler: a role with no bypass attributes
-  that #1649 nonetheless watched return all 3,602 `notes` rows with a tenant
-  set. The attribute answer and the observed answer disagree, and the mechanism
-  is still unidentified. `TenancyGuard.observed_enforcement/0` now probes
-  visibility directly and reports that divergence when it sees it.
-
-  Staging and self-host connect as `engram_app` and were definitely affected.
+  state. See docs/context/database-schema-rls.md ("skip_tenant_check,
+  cross_tenant/1, maintenance()"). Prod enforces RLS since 2026-09-25
+  (engram-infra#1243).
 
   The enqueue runs INSIDE the tenant transaction, and a failed insert raises.
   Both matter, because `Oban.insert/1` returns `{:error, changeset}` rather
