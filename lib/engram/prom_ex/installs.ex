@@ -21,6 +21,8 @@ defmodule Engram.PromEx.Installs do
   alias Engram.Repo
   alias Engram.Telemetry.InstallPing
 
+  require Logger
+
   @event [:engram, :installs, :seen]
   @window_days 30
 
@@ -51,10 +53,31 @@ defmodule Engram.PromEx.Installs do
   @spec execute_install_metrics() :: :ok
   def execute_install_metrics do
     if Application.get_env(:engram, :billing_enabled, false) do
-      emit_counts(recent_counts())
+      case safe_recent_counts() do
+        {:ok, counts} -> emit_counts(counts)
+        :skip -> :ok
+      end
     else
       :ok
     end
+  end
+
+  # Only the DB read is guarded, so a bug in `emit_counts/1` still surfaces.
+  #
+  # telemetry_poller PERMANENTLY removes a measurement that raises. The first
+  # poll runs at boot before Engram.Repo is up (prod: "could not lookup Ecto repo
+  # Engram.Repo"), and that one raise used to kill the gauge until the next
+  # restart. Skip this tick and let the next poll retry. Only the exception
+  # module is logged: connection errors can carry secrets.
+  #
+  # Known gap, unconfirmed: this catches raises, not `exit`s. If `Repo.all` can
+  # exit at boot (a dead pool supervisor), add a `catch :exit, _` clause.
+  defp safe_recent_counts do
+    {:ok, recent_counts()}
+  rescue
+    e ->
+      Logger.warning("installs gauge poll skipped: #{inspect(e.__struct__)}")
+      :skip
   end
 
   defp emit_counts(counts) do
