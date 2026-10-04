@@ -54,24 +54,42 @@ defmodule Engram.IndexingKeywordContextTest do
     {:ok, user} = Crypto.ensure_user_dek(insert(:user))
     vault = insert(:vault, user: user)
 
-    # No H1: the title and folder exist only in the path.
-    {:ok, note} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "Ops/Kubernetes Upgrade.md",
-        "content" => "Drain each node before bumping the control plane.",
-        "mtime" => 1.0
-      })
+    # No H1: the title and folder exist only in the path. Two sections of
+    # different lengths, so per-chunk values cannot line up by accident.
+    note =
+      note!(user, vault, "Ops/Kubernetes Upgrade.md", """
+      Drain each node before bumping the control plane.
 
-    {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
+      ## Rollback
+
+      Restore the etcd snapshot first, then restart every kubelet in the pool one at a time.
+      """)
 
     %{user: user, vault: vault, note: note}
   end
 
-  test "a full index encodes folder and title into the keyword leg", %{note: note, vault: vault} do
-    {:ok, _} = Indexing.prepare_index(note, vault)
+  defp note!(user, vault, path, content) do
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => path, "content" => content, "mtime" => 1.0})
 
-    assert_received {:encoded_texts, [_ | _] = texts}
+    {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
+    note
+  end
+
+  test "a full index encodes folder, title and heading into the keyword leg", ctx do
+    {:ok, _} = Indexing.prepare_index(ctx.note, ctx.vault)
+
+    assert_received {:encoded_texts, [_, _] = texts}
     assert Enum.all?(texts, &(&1 =~ "Kubernetes Upgrade" and &1 =~ "Ops"))
+    assert Enum.any?(texts, &(&1 =~ "Rollback" and &1 =~ "etcd"))
+  end
+
+  test "a note in the vault root still carries its title", ctx do
+    note = note!(ctx.user, ctx.vault, "Kubernetes Upgrade.md", "Drain each node first.")
+    {:ok, _} = Indexing.prepare_index(note, ctx.vault)
+
+    assert_received {:encoded_texts, [text]}
+    assert text =~ "Kubernetes Upgrade"
   end
 
   test "a sparse-only re-index encodes folder and title too", ctx do
@@ -93,7 +111,8 @@ defmodule Engram.IndexingKeywordContextTest do
     %{note: note, vault: vault, user: user} = ctx
     {:ok, _} = Indexing.index_note(note, vault, user)
     indexed = token_counts(note)
-    assert indexed != [] and Enum.all?(indexed, &(&1 > 1))
+    assert [short, long] = indexed
+    assert short > 1 and long > short
 
     # A row written by the old text-only encoding.
     {:ok, _} =

@@ -54,6 +54,23 @@ defmodule Engram.Workers.ReindexKeywordTest do
     assert Repo.reload!(chunk, skip_tenant_check: true).context_hmac == <<1, 2, 3>>
   end
 
+  # A resparse re-encodes against the cached avgdl. Left in place, a stale
+  # average from before the pass normalizes every note it touches (#1615).
+  test "sparse mode drops the vault's cached avgdl" do
+    {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
+    vault = insert(:vault, user: user)
+    Engram.KeywordIndex.Stats.Cache.put(vault.id, 123.0)
+
+    assert :ok =
+             perform_job(ReindexKeyword, %{
+               "user_id" => user.id,
+               "vault_id" => to_string(vault.id),
+               "mode" => "sparse"
+             })
+
+    assert Engram.KeywordIndex.Stats.Cache.get(vault.id) == :miss
+  end
+
   # Unique per (vault, mode): a pending full re-embed must not swallow a
   # sparse request (or the reverse), and a refused duplicate must say so
   # rather than report success.
