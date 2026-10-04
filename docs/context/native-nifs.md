@@ -222,12 +222,13 @@ adding callers.
   Unicode tables disagree with current Unicode on ~39k codepoints. The Elixir
   tokenizer classified characters with them, and OTP 28 (PCRE2) would have
   changed tokens silently on upgrade. The Rust tokenizer uses current Unicode,
-  pinned by `Cargo.lock`. A tokenizer change needs
-  `ReindexKeyword.enqueue(user_id, vault_id, :sparse)`: a keyword-only
-  re-index with no Voyage spend. Run it only once the WORKER tier is on the
-  new release (`count by (role) (up{job="prometheus.scrape.engram_app"})`):
-  an old worker reads a `:sparse` job as a full, Voyage-billed re-embed, and
-  has no `ResparseNote` module at all.
+  pinned by `Cargo.lock`. A tokenizer change bumps `Engram.KeywordIndex`
+  `@version`; `ReconcileEmbeddings` then rebuilds every note's keyword
+  vectors in place, no Voyage spend and no operator step
+  (`docs/context/index-version-self-heal.md`). `ReindexKeyword :sparse` is
+  still there for a forced re-run; if you use it, wait until the WORKER tier
+  is on the new release (`count by (role) (up{job="prometheus.scrape.engram_app"})`):
+  an older worker reads a `:sparse` job as a full, Voyage-billed re-embed.
 - **`str::to_lowercase` applies Greek final sigma; `String.downcase` does
   not.** Lowercase per char (`flat_map(char::to_lowercase)`).
 - **Stemmers come from a crate, not our repo:** `snowball_stemmers_rs`
