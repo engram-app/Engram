@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { useCreateVault, type Vault } from "@/api/queries";
 import { Button } from "@/components/ui/button";
 import { useAutofocus } from "@/hooks/use-autofocus";
+import { useT } from "@/i18n/locale-provider";
 
 const inputClass =
 	"mt-1 block w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring";
@@ -20,10 +21,11 @@ interface Props {
 export function VaultCreateForm({
 	onCreated,
 	onCancel,
-	submitLabel = "Create",
+	submitLabel,
 	autoFocus = false,
 	showCancel = false,
 }: Props) {
+	const { t } = useT();
 	const create = useCreateVault();
 	const [name, setName] = useState("");
 	// Stable across retries of ONE create intent so a double submit or a retry
@@ -42,7 +44,7 @@ export function VaultCreateForm({
 			{ name: next, client_id: clientId },
 			{
 				onSuccess: (vault) => {
-					toast.success("Vault created");
+					toast.success(t("Vault created"));
 					setName("");
 					setClientId(crypto.randomUUID());
 					onCreated?.(vault);
@@ -54,7 +56,7 @@ export function VaultCreateForm({
 					if (err instanceof Error && err.name === "LimitExceededError") {
 						return;
 					}
-					toast.error("Could not create vault");
+					toast.error(t("Could not create vault"));
 				},
 			},
 		);
@@ -63,11 +65,11 @@ export function VaultCreateForm({
 	return (
 		<form className="flex flex-col" onSubmit={submit}>
 			<label className="block font-medium text-foreground text-sm">
-				Vault name
+				{t("Vault name")}
 				<input
 					ref={nameRef}
 					className={inputClass}
-					aria-label="Vault name"
+					aria-label={t("Vault name")}
 					value={name}
 					onChange={(e) => setName(e.target.value)}
 					disabled={create.isPending}
@@ -75,11 +77,11 @@ export function VaultCreateForm({
 			</label>
 			<div className="mt-3 flex gap-2">
 				<Button type="submit" size="sm" disabled={create.isPending || !name.trim()}>
-					{create.isPending ? "Creating…" : `${submitLabel}`}
+					{create.isPending ? t("Creating…") : (submitLabel ?? t("Create"))}
 				</Button>
 				{Boolean(showCancel) && (
 					<Button type="button" variant="ghost" size="sm" onClick={onCancel}>
-						Cancel
+						{t("Cancel")}
 					</Button>
 				)}
 			</div>

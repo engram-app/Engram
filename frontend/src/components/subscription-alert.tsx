@@ -1,6 +1,7 @@
 import { AlertCircle, Info, TriangleAlert, X } from "lucide-react";
 import type * as React from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { useT } from "@/i18n/locale-provider";
 import type { SubscriptionAlertData } from "@/lib/paddle-types";
 import { type AlertVariant, deriveSubscriptionAlert } from "@/lib/subscription-alert-utils";
 import { cn } from "@/lib/utils";
@@ -29,6 +30,7 @@ export interface SubscriptionAlertProps {
 }
 
 export function SubscriptionAlert({ subscription, onDismiss, className }: SubscriptionAlertProps) {
+	const { t } = useT();
 	const alert = deriveSubscriptionAlert(subscription);
 
 	if (!alert) {
@@ -62,7 +64,7 @@ export function SubscriptionAlert({ subscription, onDismiss, className }: Subscr
 					<button
 						type="button"
 						onClick={onDismiss}
-						aria-label="Dismiss alert"
+						aria-label={t("Dismiss alert")}
 						className="shrink-0 rounded-sm opacity-60 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
 					>
 						<X className="size-4" />

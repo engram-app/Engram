@@ -5,6 +5,7 @@ import type * as React from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useT } from "@/i18n/locale-provider";
 import { formatDate, formatMoney } from "@/lib/paddle-format";
 import { getPaymentMethodDisplay } from "@/lib/paddle-payment-method-display";
 import type { NextPaymentData, PaymentMethodData } from "@/lib/paddle-types";
@@ -89,6 +90,7 @@ export function SubscriptionPaymentCard({
 	updatePaymentMethodUrl,
 	className,
 }: SubscriptionPaymentCardProps) {
+	const { t } = useT();
 	const isLoading =
 		nextPayment === undefined &&
 		paymentMethod === undefined &&
@@ -109,17 +111,19 @@ export function SubscriptionPaymentCard({
 
 	const expiryLabel =
 		paymentMethod?.expiryMonth !== undefined && paymentMethod?.expiryYear !== undefined
-			? `Expires ${String(paymentMethod.expiryMonth).padStart(2, "0")}/${String(paymentMethod.expiryYear).slice(-2)}`
+			? t("Expires {date}", {
+					date: `${String(paymentMethod.expiryMonth).padStart(2, "0")}/${String(paymentMethod.expiryYear).slice(-2)}`,
+				})
 			: undefined;
 
 	return (
 		<Card className={cn("gap-4", className)}>
 			<CardHeader>
-				<CardTitle className="font-semibold text-base">Payment</CardTitle>
+				<CardTitle className="font-semibold text-base">{t("Payment")}</CardTitle>
 			</CardHeader>
 
 			<CardContent className="flex flex-col gap-4">
-				<PaymentInfoRow icon={Calendar} label="Next payment">
+				<PaymentInfoRow icon={Calendar} label={t("Next payment")}>
 					{nextPayment ? (
 						<>
 							<div className="font-semibold">
@@ -128,7 +132,9 @@ export function SubscriptionPaymentCard({
 							<div className="text-muted-foreground text-sm">{formatDate(nextPayment.date)}</div>
 						</>
 					) : (
-						<div className="font-medium text-muted-foreground text-sm">No upcoming payment</div>
+						<div className="font-medium text-muted-foreground text-sm">
+							{t("No upcoming payment")}
+						</div>
 					)}
 				</PaymentInfoRow>
 
@@ -136,7 +142,7 @@ export function SubscriptionPaymentCard({
 					<>
 						<Separator />
 						<div className="flex items-center justify-between gap-4">
-							<PaymentInfoRow icon={PaymentMethodIcon} label="Payment method">
+							<PaymentInfoRow icon={PaymentMethodIcon} label={t("Payment method")}>
 								<div className="truncate font-medium text-sm">{displayLabel}</div>
 								{Boolean(expiryLabel) && (
 									<div className="text-muted-foreground text-xs">{expiryLabel}</div>
@@ -150,7 +156,7 @@ export function SubscriptionPaymentCard({
 									rel="noopener noreferrer"
 									className="flex shrink-0 items-center gap-1 font-medium text-primary text-sm hover:underline"
 								>
-									Update
+									{t("Update")}
 									<ExternalLink className="size-3" />
 								</a>
 							)}
@@ -169,7 +175,7 @@ export function SubscriptionPaymentCard({
 							className="flex items-center gap-1 font-medium text-primary text-sm hover:underline"
 						>
 							<CreditCard className="size-4" />
-							Update payment method
+							{t("Update payment method")}
 							<ExternalLink className="ml-0.5 size-3" />
 						</a>
 					</>
