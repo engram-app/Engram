@@ -1,6 +1,7 @@
 import { AppearanceSection } from "./account/appearance-section";
 import { DangerZoneSectionLocal } from "./account/danger-zone-section-local";
 import { EmailReadonlySection } from "./account/email-readonly-section";
+import { LanguageSection } from "./account/language-section";
 import { PasswordSectionLocal } from "./account/password-section-local";
 import { ProfileSectionLocal } from "./account/profile-section-local";
 
@@ -15,6 +16,7 @@ export default function AccountPageLocal() {
 			</header>
 			<ProfileSectionLocal />
 			<AppearanceSection />
+			<LanguageSection />
 			<EmailReadonlySection />
 			<PasswordSectionLocal />
 			<DangerZoneSectionLocal />

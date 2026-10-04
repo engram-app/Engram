@@ -31,6 +31,14 @@ beforeEach(() => {
 });
 
 describe("ProfileSectionLocal", () => {
+	it("puts the input and Save button in one wrapping flex row", () => {
+		wrap(<ProfileSectionLocal />);
+		const form = screen.getByLabelText(/display name/iu).closest("form");
+		expect(form).toContainElement(screen.getByRole("button", { name: "Save" }));
+		expect(form?.className).toContain("flex-wrap");
+		expect(form?.className).toContain("items-end");
+	});
+
 	it("shows current display_name and submits new value", async () => {
 		updateMutate.mockResolvedValueOnce({ user: { display_name: "Sam" } });
 		wrap(<ProfileSectionLocal />);

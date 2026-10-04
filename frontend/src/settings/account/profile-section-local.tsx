@@ -35,8 +35,11 @@ export function ProfileSectionLocal() {
 
 	return (
 		<SettingsSectionCard title="Profile" description="How your name appears in the app.">
-			<form onSubmit={onSubmit} className="space-y-3">
-				<label className="block font-medium text-foreground text-sm" htmlFor="display-name">
+			<form onSubmit={onSubmit} className="flex flex-wrap items-end gap-3">
+				<label
+					className="block min-w-48 flex-1 font-medium text-foreground text-sm"
+					htmlFor="display-name"
+				>
 					Display name
 					<input
 						id="display-name"

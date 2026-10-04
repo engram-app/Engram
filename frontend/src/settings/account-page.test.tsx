@@ -25,6 +25,7 @@ describe("AccountPage", () => {
 		expect(screen.getByRole("heading", { name: "Account", level: 1 })).toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: "Profile photo" })).toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: "Appearance" })).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: "Language" })).toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: "Password" })).toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: /danger zone/iu })).toBeInTheDocument();
 	});

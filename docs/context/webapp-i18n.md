@@ -16,7 +16,7 @@ All under `frontend/src/i18n/`:
 - `locale/<code>.ts`: ten catalogs (no `en`).
 - `keys.test.ts`: the drift guard.
 
-Proof surface: the Language `<select>` in Settings > Account > Appearance (shown in dev builds only until slice 4 ships translations; `import.meta.env.DEV` gate), and the 404 page (`not-found.tsx`).
+Proof surface: the Language `<select>` in its own card, Settings > Account > Language (`language-section.tsx`, rendered after Appearance; a shadcn `Select`; shown in dev builds only until slice 4 ships translations; `import.meta.env.DEV` gate), and the 404 page (`not-found.tsx`).
 
 ## The model: English is the key
 
