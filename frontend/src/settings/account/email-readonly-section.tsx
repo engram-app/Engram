@@ -23,8 +23,10 @@ export function EmailReadonlySection() {
 	}
 
 	return (
-		<SettingsSectionCard title={t("Email")}
-			description={t("To change your email, contact your admin.")}>
+		<SettingsSectionCard
+			title={t("Email")}
+			description={t("To change your email, contact your admin.")}
+		>
 			<div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2">
 				<span className="truncate font-mono text-sm">{email}</span>
 				<Button

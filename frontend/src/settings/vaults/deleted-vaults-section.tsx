@@ -10,9 +10,11 @@ import {
 	type Vault,
 } from "@/api/queries";
 import { Button } from "@/components/ui/button";
+import { useT } from "@/i18n/locale-provider";
 import { SettingsSectionCard } from "@/settings/account/section-card";
 
 function DeletedRow({ vault }: { vault: Vault }) {
+	const { t } = useT();
 	const { data: active } = useVaults();
 	const { data: billing } = useBillingConfig();
 	const restore = useRestoreVault();
@@ -47,30 +49,36 @@ function DeletedRow({ vault }: { vault: Vault }) {
 						disabled={overCap || restore.isPending}
 						title={
 							overCap
-								? "Restoring would exceed your vault limit. Upgrade or delete another vault first."
+								? t(
+										"Restoring would exceed your vault limit. Upgrade or delete another vault first.",
+									)
 								: undefined
 						}
 						onClick={() =>
 							restore.mutate(vault.id, {
-								onSuccess: () => toast.success("Vault restored"),
-								onError: () => toast.error("Could not restore (vault limit reached?)"),
+								onSuccess: () => toast.success(t("Vault restored")),
+								onError: () => toast.error(t("Could not restore (vault limit reached?)")),
 							})
 						}
 					>
 						<RotateCcw />
-						Restore
+						{t("Restore")}
 					</Button>
 					<Button
 						variant="destructive"
 						size="icon-sm"
-						title={`Permanently delete ${vault.name}`}
-						aria-label={`Permanently delete ${vault.name}`}
+						title={t("Permanently delete {name}", { name: vault.name })}
+						aria-label={t("Permanently delete {name}", { name: vault.name })}
 						disabled={purge.isPending}
 						onClick={() => {
-							if (window.confirm(`Permanently delete "${vault.name}"? This cannot be undone.`)) {
+							if (
+								window.confirm(
+									t('Permanently delete "{name}"? This cannot be undone.', { name: vault.name }),
+								)
+							) {
 								purge.mutate(vault.id, {
-									onSuccess: () => toast.success("Vault permanently deleted"),
-									onError: () => toast.error("Could not delete"),
+									onSuccess: () => toast.success(t("Vault permanently deleted")),
+									onError: () => toast.error(t("Could not delete")),
 								});
 							}
 						}}
@@ -84,6 +92,7 @@ function DeletedRow({ vault }: { vault: Vault }) {
 }
 
 export function DeletedVaultsSection() {
+	const { t } = useT();
 	const { data: deleted } = useDeletedVaults();
 	if (!deleted || deleted.length === 0) {
 		return null;
@@ -91,17 +100,19 @@ export function DeletedVaultsSection() {
 
 	return (
 		<SettingsSectionCard
-			title="Recently deleted"
-			description="Deleted vaults are kept for 30 days. Restore them, or remove them permanently."
+			title={t("Recently deleted")}
+			description={t(
+				"Deleted vaults are kept for 30 days. Restore them, or remove them permanently.",
+			)}
 		>
 			<table className="w-full text-sm">
 				<thead>
 					<tr className="border-border border-b text-left text-muted-foreground text-xs">
-						<th className="py-2 font-medium">Name</th>
-						<th className="py-2 text-right font-medium">Files</th>
-						<th className="py-2 text-right font-medium">Attachments</th>
-						<th className="py-2 font-medium">Purges</th>
-						<th className="py-2" aria-label="Actions" />
+						<th className="py-2 font-medium">{t("Name")}</th>
+						<th className="py-2 text-right font-medium">{t("Files")}</th>
+						<th className="py-2 text-right font-medium">{t("Attachments")}</th>
+						<th className="py-2 font-medium">{t("Purges")}</th>
+						<th className="py-2" aria-label={t("Actions")} />
 					</tr>
 				</thead>
 				<tbody className="divide-y divide-border">

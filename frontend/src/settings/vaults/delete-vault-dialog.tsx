@@ -11,6 +11,8 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { useT } from "@/i18n/locale-provider";
+import { Trans } from "@/i18n/trans";
 
 const inputClass =
 	"mt-1 block w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring";
@@ -24,6 +26,7 @@ export function DeleteVaultDialog({
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 }) {
+	const { t, tn } = useT();
 	const del = useDeleteVault();
 	const [phrase, setPhrase] = useState("");
 
@@ -33,10 +36,10 @@ export function DeleteVaultDialog({
 	function confirmDelete() {
 		del.mutate(vault.id, {
 			onSuccess: () => {
-				toast.success("Vault moved to trash");
+				toast.success(t("Vault moved to trash"));
 				onOpenChange(false);
 			},
-			onError: () => toast.error("Delete failed"),
+			onError: () => toast.error(t("Delete failed")),
 		});
 	}
 
@@ -54,22 +57,36 @@ export function DeleteVaultDialog({
 		>
 			<DialogContent>
 				<DialogHeader>
-					<DialogTitle>Delete "{vault.name}"?</DialogTitle>
+					<DialogTitle>{t('Delete "{name}"?', { name: vault.name })}</DialogTitle>
 					<DialogDescription>
-						This vault holds {noteCount} {noteCount === 1 ? "note" : "notes"} and {attachmentCount}{" "}
-						{attachmentCount === 1 ? "attachment" : "attachments"}.
+						{t("This vault holds {notes} and {attachments}.", {
+							notes: tn({ one: "{count} note", other: "{count} notes" }, noteCount),
+							attachments: tn(
+								{ one: "{count} attachment", other: "{count} attachments" },
+								attachmentCount,
+							),
+						})}
 					</DialogDescription>
 				</DialogHeader>
 
 				<ul className="space-y-2 text-muted-foreground text-sm">
 					<li>
-						It moves to trash and is{" "}
-						<strong className="text-foreground">recoverable for 30 days</strong>, then permanently
-						deleted.
+						<Trans
+							text="It moves to trash and is {recoverable}, then permanently deleted."
+							slots={{
+								recoverable: (
+									<strong className="text-foreground">{t("recoverable for 30 days")}</strong>
+								),
+							}}
+						/>
 					</li>
 					<li>
-						This only deletes the copy stored on Engram. Files already{" "}
-						<strong className="text-foreground">synced to your devices</strong> stay where they are.
+						<Trans
+							text="This only deletes the copy stored on Engram. Files already {synced} stay where they are."
+							slots={{
+								synced: <strong className="text-foreground">{t("synced to your devices")}</strong>,
+							}}
+						/>
 					</li>
 				</ul>
 
@@ -80,7 +97,7 @@ export function DeleteVaultDialog({
 					}}
 				>
 					<label className="block text-foreground text-sm">
-						Type "{vault.name}" to confirm
+						{t('Type "{name}" to confirm', { name: vault.name })}
 						<input
 							autoFocus
 							className={inputClass}
@@ -90,7 +107,7 @@ export function DeleteVaultDialog({
 					</label>
 					<DialogFooter className="mt-4">
 						<Button type="button" variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
-							Cancel
+							{t("Cancel")}
 						</Button>
 						<Button
 							type="submit"
@@ -99,7 +116,7 @@ export function DeleteVaultDialog({
 							disabled={phrase !== vault.name || del.isPending}
 						>
 							<Trash2 />
-							Delete vault
+							{t("Delete vault")}
 						</Button>
 					</DialogFooter>
 				</form>

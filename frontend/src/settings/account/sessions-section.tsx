@@ -39,8 +39,10 @@ export function SessionsSection() {
 	}
 
 	return (
-		<SettingsSectionCard title={t("Active sessions")}
-			description={t("Devices signed in to your account.")}>
+		<SettingsSectionCard
+			title={t("Active sessions")}
+			description={t("Devices signed in to your account.")}
+		>
 			<ul className="space-y-2">
 				{list.map((s) => {
 					const a = s.latestActivity;
