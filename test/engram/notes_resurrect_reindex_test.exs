@@ -68,8 +68,7 @@ defmodule Engram.NotesResurrectReindexTest do
     vault: vault
   } do
     bypass = Bypass.open()
-    Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
-    on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
+    Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
 
     Bypass.stub(bypass, :any, :any, fn conn ->
       conn
