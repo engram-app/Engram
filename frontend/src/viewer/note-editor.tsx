@@ -2,6 +2,7 @@ import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { defaultKeymap } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { search, searchKeymap } from "@codemirror/search";
 import { Compartment, EditorState, Prec } from "@codemirror/state";
 import { oneDarkTheme } from "@codemirror/theme-one-dark";
 import { drawSelection, EditorView, keymap } from "@codemirror/view";
@@ -149,6 +150,11 @@ export function buildEditorState(
 				{ closeBrackets: { brackets: ["(", "[", "{", "'", '"', "`"] } },
 			]),
 			keymap.of(defaultKeymap),
+			// Ctrl/Cmd+F find (the panel has a replace field), F3 next. Base (not the mode
+			// compartment) so both Raw and Rendered get it; without it Ctrl+F fell
+			// through to the browser page-search.
+			search({ top: true }),
+			keymap.of(searchKeymap),
 			// Tab/Shift-Tab indent-dedent (Obsidian parity). Base, not the mode
 			// compartment, so it works in both rendered and raw mode.
 			indentKeymap,

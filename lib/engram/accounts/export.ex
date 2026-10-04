@@ -142,7 +142,8 @@ defmodule Engram.Accounts.Export do
 
   # ── Rate limiting ────────────────────────────────────────────────
   #
-  # Two mutually exclusive caps are configured in LimitKeys:
+  # Two caps are configured in LimitKeys (mutually exclusive by plan default,
+  # but an operator override can set both):
   #   - account_exports_lifetime   (free: 1, paid: nil)
   #   - account_export_rate_per_24h (free: nil, paid: 1)
   #
@@ -158,18 +159,33 @@ defmodule Engram.Accounts.Export do
   # from acting as a ceiling: `count >= "5"` is a valid Elixir comparison that
   # silently answers false, which looked fine only by accident of term ordering.
   defp rate_limit_check(%User{} = user) do
-    cond do
-      is_integer(lifetime_cap = Billing.cap(user, :account_exports_lifetime)) ->
-        if count_exports(user, used_lifetime_q(user)) >= lifetime_cap,
+    # Each cap guards independently: an operator override can set both on one
+    # user, and a first-match `cond` would silently skip the 24h cap.
+    with :ok <- check_lifetime_cap(user) do
+      check_24h_cap(user)
+    end
+  end
+
+  defp check_lifetime_cap(user) do
+    case Billing.cap(user, :account_exports_lifetime) do
+      cap when is_integer(cap) ->
+        if count_exports(user, used_lifetime_q(user)) >= cap,
           do: {:error, :lifetime_exceeded},
           else: :ok
 
-      is_integer(per_24h_cap = Billing.cap(user, :account_export_rate_per_24h)) ->
-        if count_exports(user, recent_24h_q(user)) >= per_24h_cap,
+      _ ->
+        :ok
+    end
+  end
+
+  defp check_24h_cap(user) do
+    case Billing.cap(user, :account_export_rate_per_24h) do
+      cap when is_integer(cap) ->
+        if count_exports(user, recent_24h_q(user)) >= cap,
           do: {:error, :rate_exceeded},
           else: :ok
 
-      true ->
+      _ ->
         :ok
     end
   end

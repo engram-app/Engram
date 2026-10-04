@@ -84,6 +84,31 @@ defmodule Engram.Accounts.ExportTest do
       assert {:error, :rate_exceeded} = Export.request(user)
     end
 
+    test "both caps set by overrides: the per-24h cap is still enforced (#481 M1)" do
+      # `rate_limit_check/1` used a `cond`, so a user carrying BOTH an
+      # `account_exports_lifetime` and an `account_export_rate_per_24h` override
+      # only ever hit the lifetime branch; the 24h cap was silently skipped.
+      user = insert(:user)
+      recent = DateTime.utc_now() |> DateTime.add(-1800, :second)
+      _recent = insert_export!(user, :ready, inserted_at: recent)
+
+      for {key, v} <- [{"account_exports_lifetime", 10}, {"account_export_rate_per_24h", 1}] do
+        Repo.insert!(
+          %Engram.Billing.UserLimitOverride{
+            id: Ecto.UUID.generate(),
+            user_id: user.id,
+            key: key,
+            value: %{"v" => v},
+            reason: "test",
+            set_by: "test"
+          },
+          skip_tenant_check: true
+        )
+      end
+
+      assert {:error, :rate_exceeded} = Export.request(user)
+    end
+
     test "size estimate over cap -> :too_large" do
       user = insert(:user)
       vault = insert(:vault, user: user)

@@ -1,4 +1,5 @@
 import { historyField } from "@codemirror/commands";
+import { searchPanelOpen } from "@codemirror/search";
 import { EditorView, runScopeHandlers } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import { Awareness } from "y-protocols/awareness";
@@ -175,6 +176,45 @@ describe("CRDT undo behaviour (EditorView + yCollab)", () => {
 			p.parentNode?.removeChild(p);
 		}
 		parents.length = 0;
+	});
+
+	// #176: without a search keymap, Ctrl/Cmd+F fell through to the browser's
+	// page search. (CM6 has no Ctrl+H binding; replace is a field in the panel.)
+	it("Ctrl+F opens the in-editor search panel, including the replace field", () => {
+		const doc = new Y.Doc();
+		const parent = document.createElement("div");
+		document.body.appendChild(parent);
+		parents.push(parent);
+		const view = new EditorView({
+			state: buildEditorState(
+				doc.getText("content"),
+				new Awareness(doc),
+				false,
+				"rendered",
+				resolveWikiLink,
+				openWikiLink,
+				wikiCompletionPaths,
+				openMarkdownLink,
+			),
+			parent,
+		});
+		views.push(view);
+
+		const handled = runScopeHandlers(
+			view,
+			new KeyboardEvent("keydown", {
+				key: "f",
+				code: "KeyF",
+				ctrlKey: true,
+				bubbles: true,
+				cancelable: true,
+			}),
+			"editor",
+		);
+
+		expect(handled).toBe(true);
+		expect(searchPanelOpen(view.state)).toBe(true);
+		expect(view.dom.querySelector("input[name=replace]")).not.toBeNull();
 	});
 
 	// RED with buggy code: Ctrl+Z fires native history undo which reverts the
