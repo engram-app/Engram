@@ -778,7 +778,7 @@ defmodule Engram.Indexing do
   # float32. Unpacked one upsert batch at a time in `upsert_points_batched/1`.
   # An embedder may already return packed float32 (Voyage does, for indexing).
   defp pack_vector(packed) when is_binary(packed), do: packed
-  defp pack_vector(vector), do: for(x <- vector, into: <<>>, do: <<x::float-32-little>>)
+  defp pack_vector(vector), do: Engram.Native.pack_f32(vector)
 
   # Straight from the packed binary to the JSON array text, as a pre-encoded
   # fragment. Unpacking to a float list and letting Jason walk it was the heap
@@ -788,29 +788,16 @@ defmodule Engram.Indexing do
     %{point | vector: Map.new(named, fn {name, v} -> {name, vector_json(v)} end)}
   end
 
-  defp vector_json(dense) when is_binary(dense), do: Jason.Fragment.new(dense_json(dense))
+  # Formatted in Rust (`Engram.Native.dense_json/1`): no per-float term at all,
+  # and each value printed as its shortest f32 decimal, half the text of the
+  # widened-f64 form for the same stored f32.
+  defp vector_json(dense) when is_binary(dense),
+    do: Jason.Fragment.new(Engram.Native.dense_json(dense))
 
   # Packed sparse (`KeywordIndex.packed_sparse`), written straight to JSON for
   # the same reason as the dense leg.
-  defp vector_json(%{indices: indices, values: values}) when is_binary(indices) do
-    ids = for <<d::unsigned-little-32 <- indices>>, do: Integer.to_string(d)
-    ws = for <<w::float-little-64 <- values>>, do: :erlang.float_to_binary(w, [:short])
-
-    Jason.Fragment.new(
-      IO.iodata_to_binary([
-        ~s({"indices":[),
-        Enum.intersperse(ids, ","),
-        ~s(],"values":[),
-        Enum.intersperse(ws, ","),
-        "]}"
-      ])
-    )
-  end
-
-  defp dense_json(packed) do
-    floats = for <<x::float-32-little <- packed>>, do: :erlang.float_to_binary(x, [:short])
-    IO.iodata_to_binary(["[", Enum.intersperse(floats, ","), "]"])
-  end
+  defp vector_json(%{indices: indices, values: values}) when is_binary(indices),
+    do: Jason.Fragment.new(Engram.Native.sparse_json(indices, values))
 
   defp embed_for_indexing(texts) do
     texts

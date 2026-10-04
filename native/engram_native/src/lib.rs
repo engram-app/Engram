@@ -5,6 +5,7 @@ mod links;
 mod memory;
 mod meta;
 mod mmr;
+mod vectors;
 mod tokenizer;
 
 // Not under `cargo test`: enif_alloc only exists inside a running BEAM.
@@ -221,6 +222,41 @@ fn mmr_select_nif(vectors: Vec<Term>, scores: Vec<Term>, limit: usize, d: f64) -
     }
     let picked = mmr::select(vectors, &scores, limit, d);
     Ok((picked, memory::peak_since(base)))
+}
+
+fn finish<'a>(env: Env<'a>, out: Option<Vec<u8>>, base: isize) -> NifResult<(Binary<'a>, usize)> {
+    let out = out.ok_or(Error::BadArg)?;
+    let bin = to_binary(env, &out);
+    drop(out);
+    Ok((bin, memory::peak_since(base)))
+}
+
+// The three below run on the CALLING scheduler: one vector per call (1024
+// float32s, or one chunk's sparse dims), tens of microseconds. Queueing them
+// behind a keyword encode on prod's single dirty scheduler would cost more.
+
+/// Numbers (floats or integers) -> packed float32 LE.
+#[rustler::nif]
+fn pack_f32_nif<'a>(env: Env<'a>, values: Term<'a>) -> NifResult<(Binary<'a>, usize)> {
+    let base = memory::begin();
+    let floats = vector(values)?.ok_or(Error::BadArg)?;
+    let out = vectors::pack_f32(&floats);
+    drop(floats);
+    finish(env, out, base)
+}
+
+/// Packed float32 LE -> JSON array text.
+#[rustler::nif]
+fn dense_json_nif<'a>(env: Env<'a>, packed: Binary<'a>) -> NifResult<(Binary<'a>, usize)> {
+    let base = memory::begin();
+    finish(env, vectors::dense_json(packed.as_slice()), base)
+}
+
+/// Packed sparse -> `{"indices":[..],"values":[..]}` text.
+#[rustler::nif]
+fn sparse_json_nif<'a>(env: Env<'a>, indices: Binary<'a>, values: Binary<'a>) -> NifResult<(Binary<'a>, usize)> {
+    let base = memory::begin();
+    finish(env, vectors::sparse_json(indices.as_slice(), values.as_slice()), base)
 }
 
 rustler::init!("Elixir.Engram.Native");

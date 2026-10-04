@@ -74,6 +74,15 @@ defmodule Engram.Native do
   def mmr_select_nif(_vectors, _scores, _limit, _diversity),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  @doc false
+  def pack_f32_nif(_values), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc false
+  def dense_json_nif(_packed), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc false
+  def sparse_json_nif(_indices, _values), do: :erlang.nif_error(:nif_not_loaded)
+
   @doc "Live bytes held by this library's Rust heap, process-wide."
   def live_bytes, do: :erlang.nif_error(:nif_not_loaded)
 
@@ -99,6 +108,30 @@ defmodule Engram.Native do
 
     call(:mmr_select, length(scores) * (width + 1) * 8, %{dirty: true}, fn ->
       mmr_select_nif(vectors, scores, limit, diversity / 1)
+    end)
+  end
+
+  @doc """
+  A float (or integer) list as packed float32 LE. Raises `ArgumentError` on
+  a value outside f32 range. Emits `[:engram, :nif, :call, :stop]`.
+  """
+  def pack_f32(values) when is_list(values),
+    do: call(:pack_f32, length(values) * 8, %{dirty: false}, fn -> pack_f32_nif(values) end)
+
+  @doc """
+  Packed float32 LE as JSON array text, each value its shortest f32 decimal.
+  Raises `ArgumentError` on a ragged binary or a NaN/infinity.
+  """
+  def dense_json(packed) when is_binary(packed),
+    do: call(:dense_json, packed, %{dirty: false}, fn -> dense_json_nif(packed) end)
+
+  @doc """
+  Packed sparse (u32 LE indices, f64 LE values) as `{"indices":[..],"values":[..]}`
+  text. Raises `ArgumentError` on ragged or mismatched binaries.
+  """
+  def sparse_json(indices, values) when is_binary(indices) and is_binary(values) do
+    call(:sparse_json, [indices, values], %{dirty: false}, fn ->
+      sparse_json_nif(indices, values)
     end)
   end
 

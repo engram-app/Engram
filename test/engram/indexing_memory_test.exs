@@ -110,7 +110,9 @@ defmodule Engram.IndexingMemoryTest do
 
     assert {:ok, _} = Indexing.index_note(note, vault, user)
     assert_receive {:upsert, %{"points" => [%{"vector" => %{"dense" => dense}} | _]}}
-    assert dense == vec
+    # Compared as the f32 Qdrant stores: the JSON carries each value's
+    # shortest f32 decimal, which reads back as a different f64 (#1798).
+    assert as_f32(dense) == as_f32(vec)
   end
 
   # Sparse vectors used to be the heap: two list cells and a boxed float per
@@ -185,6 +187,10 @@ defmodule Engram.IndexingMemoryTest do
 
     assert {:ok, _} = Indexing.index_note(note, vault, user)
     assert_receive {:upsert, %{"points" => [%{"vector" => %{"dense" => dense}} | _]}}
-    assert dense == vec
+    # Compared as the f32 Qdrant stores: the JSON carries each value's
+    # shortest f32 decimal, which reads back as a different f64 (#1798).
+    assert as_f32(dense) == as_f32(vec)
   end
+
+  defp as_f32(floats), do: for(x <- floats, into: <<>>, do: <<x::float-32-little>>)
 end

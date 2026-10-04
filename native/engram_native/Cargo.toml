@@ -16,6 +16,7 @@ unicode-segmentation = "1"
 regex = "1"
 snowball_stemmers_rs = "1.0.1"
 pulldown-cmark = { version = "0.13", default-features = false }
+ryu = "1"
 
 [profile.release]
 lto = true
