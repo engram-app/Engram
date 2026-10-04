@@ -19,9 +19,13 @@ function PopoverContent({
 	className,
 	align = "center",
 	sideOffset = 4,
+	arrow = true,
 	children,
 	...props
-}: React.ComponentProps<typeof PopoverPrimitive.Content>) {
+}: React.ComponentProps<typeof PopoverPrimitive.Content> & {
+	/** The pointer toward the trigger. Off for menu-like panels that sit flush to it. */
+	arrow?: boolean;
+}) {
 	return (
 		<PopoverPrimitive.Portal>
 			<PopoverPrimitive.Content
@@ -38,7 +42,7 @@ function PopoverContent({
 				{...props}
 			>
 				{children}
-				<PopoverPrimitive.Arrow className="fill-popover stroke-border" />
+				{arrow ? <PopoverPrimitive.Arrow className="fill-popover stroke-border" /> : null}
 			</PopoverPrimitive.Content>
 		</PopoverPrimitive.Portal>
 	);

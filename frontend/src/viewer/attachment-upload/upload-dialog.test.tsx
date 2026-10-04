@@ -112,3 +112,16 @@ describe("AttachmentUploadDialog", () => {
 		await waitFor(() => expect(screen.getByText(/upgrade to upload/iu)).toBeInTheDocument());
 	});
 });
+
+describe("AttachmentUploadDialog focus", () => {
+	it("focuses the folder search box on open", () => {
+		render(
+			<AttachmentUploadDialog
+				initialFiles={[file("a.txt")]}
+				folders={[{ name: "docs" }]}
+				onClose={() => {}}
+			/>,
+		);
+		expect(screen.getByRole("combobox", { name: "Search folders" })).toHaveFocus();
+	});
+});

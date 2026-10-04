@@ -27,7 +27,11 @@ export default function RightToolPanel({ onCollapse }: { onCollapse: () => void 
 			<header className="flex shrink-0 items-center gap-1 border-border border-b p-1">
 				{/* Plain container, not <nav>: role="tablist" is a widget role, and
 				    layering it over landmark semantics is what a11y linters flag. */}
-				<div role="tablist" aria-label="Sidebar tools" className="flex min-w-0 flex-1 gap-1">
+				<div
+					role="tablist"
+					aria-label="Sidebar tools"
+					className="flex min-w-0 flex-1 gap-1 overflow-hidden"
+				>
 					{available.map((tool) => (
 						<button
 							key={tool.id}
@@ -50,6 +54,7 @@ export default function RightToolPanel({ onCollapse }: { onCollapse: () => void 
 				<Button
 					variant="ghost"
 					size="icon-sm"
+					className="shrink-0"
 					onClick={onCollapse}
 					aria-label="Collapse panel"
 					title="Collapse panel"

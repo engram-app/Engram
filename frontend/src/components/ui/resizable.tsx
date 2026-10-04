@@ -11,6 +11,8 @@ function ResizablePanelGroup({
 		<ResizablePrimitive.Group
 			data-slot="resizable-panel-group"
 			className={cn("size-full", className)}
+			// The invisible grab band around each 1px separator, in px.
+			resizeTargetMinimumSize={{ coarse: 24, fine: 10 }}
 			{...props}
 		/>
 	);
@@ -26,12 +28,18 @@ function ResizableHandle({
 		<ResizablePrimitive.Separator
 			data-slot="resizable-handle"
 			className={cn(
-				// 2px hairline; a transparent `before` overlay widens the grab zone
-				// without changing layout or the visible width.
-				"relative w-0.5 cursor-col-resize bg-border transition-colors hover:bg-primary/40 focus-visible:bg-primary/60 focus-visible:outline-hidden active:bg-primary",
-				"before:absolute before:inset-y-0 before:left-1/2 before:w-3 before:-translate-x-1/2 before:content-['']",
-				"aria-[orientation=horizontal]:h-0.5 aria-[orientation=horizontal]:w-full aria-[orientation=horizontal]:cursor-row-resize",
-				"aria-[orientation=horizontal]:before:inset-x-0 aria-[orientation=horizontal]:before:inset-y-auto aria-[orientation=horizontal]:before:top-1/2 aria-[orientation=horizontal]:before:h-3 aria-[orientation=horizontal]:before:w-full aria-[orientation=horizontal]:before:-translate-x-0 aria-[orientation=horizontal]:before:-translate-y-1/2",
+				// The separator IS the border: a hairline drawn as a real `border`, which
+				// the browser snaps to one device pixel like every other border (a
+				// background-filled 1 CSS px box paints as two on a 1.33x display), so
+				// panels need no thick edge of their own to be grabbable. The grab zone is the Group's invisible
+				// resizeTargetMinimumSize band around it, and `after` is the bar that
+				// reveals itself over that band, driven by the library's own
+				// `data-separator` state so the reveal always matches what a drag would hit.
+				"relative z-10 w-px border-border border-l focus-visible:outline-hidden",
+				"after:pointer-events-none after:absolute after:inset-y-0 after:left-1/2 after:w-1 after:-translate-x-1/2 after:rounded-full after:bg-primary/50 after:opacity-0 after:transition-opacity after:content-['']",
+				"data-[separator=active]:after:bg-primary data-[separator=active]:after:opacity-100 data-[separator=focus]:after:opacity-100 data-[separator=hover]:after:opacity-100 data-[separator=hover]:after:delay-100",
+				"aria-[orientation=horizontal]:h-px aria-[orientation=horizontal]:w-full aria-[orientation=horizontal]:border-t aria-[orientation=horizontal]:border-l-0",
+				"aria-[orientation=horizontal]:after:inset-x-0 aria-[orientation=horizontal]:after:inset-y-auto aria-[orientation=horizontal]:after:top-1/2 aria-[orientation=horizontal]:after:h-1 aria-[orientation=horizontal]:after:w-full aria-[orientation=horizontal]:after:-translate-x-0 aria-[orientation=horizontal]:after:-translate-y-1/2",
 				className,
 			)}
 			{...props}

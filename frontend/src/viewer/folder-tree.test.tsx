@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AttachmentSummary, Folder } from "../api/queries";
@@ -18,6 +18,10 @@ vi.mock("sonner", () => ({
 
 const { copyMock } = vi.hoisted(() => ({ copyMock: vi.fn(() => Promise.resolve(true)) }));
 vi.mock("../lib/clipboard", () => ({ copyToClipboard: copyMock }));
+const uploadFilesMock = vi.fn<(files: File[], folder: string) => Promise<void>>(() =>
+	Promise.resolve(),
+);
+vi.mock("./attachment-upload/provider", () => ({ useFileDropUpload: () => uploadFilesMock }));
 
 // The tree loader loads a folder's note list from the vault tree on a cache
 // miss. Nothing here seeds that tree, so without this the miss path reaches the
@@ -820,5 +824,48 @@ describe("FolderTree (HT)", () => {
 			"aria-expanded",
 			"false",
 		);
+	});
+});
+
+// OS files dropped on empty tree space upload to the vault root, no dialog. (Folder
+// and note rows aim at their own folder: see tree-row.test.)
+describe("FolderTree file drops on the container", () => {
+	// The DOM test env drops `relatedTarget` from a DragEvent init, so set it directly.
+	const dragLeave = (el: Element, relatedTarget: Element | null) => {
+		const ev = createEvent.dragLeave(el);
+		Object.defineProperty(ev, "relatedTarget", { value: relatedTarget });
+		fireEvent(el, ev);
+	};
+
+	const fileDrag = () => ({
+		dataTransfer: { types: ["Files"], files: [new File(["x"], "p.png")], dropEffect: "none" },
+	});
+
+	it("a file dropped on empty space uploads to the vault root", async () => {
+		uploadFilesMock.mockClear();
+		renderTree();
+		const tree = await screen.findByTestId("folder-tree-root");
+		fireEvent.drop(tree, fileDrag());
+		expect(uploadFilesMock).toHaveBeenCalledWith([expect.any(File)], "");
+	});
+
+	it("outlines the root while a file hovers, and clears when it really leaves", async () => {
+		renderTree();
+		const tree = await screen.findByTestId("folder-tree-root");
+		fireEvent.dragOver(tree, fileDrag());
+		expect(tree.className).toContain("ring-1");
+		// Moving onto a child is not leaving.
+		dragLeave(tree, tree.firstElementChild);
+		expect(tree.className).toContain("ring-1");
+		dragLeave(tree, null);
+		expect(tree.className).not.toContain("ring-1");
+	});
+
+	it("does not treat a non-file drag as an upload", async () => {
+		uploadFilesMock.mockClear();
+		renderTree();
+		const tree = await screen.findByTestId("folder-tree-root");
+		fireEvent.drop(tree, { dataTransfer: { types: ["text/plain"], files: [] } });
+		expect(uploadFilesMock).not.toHaveBeenCalled();
 	});
 });

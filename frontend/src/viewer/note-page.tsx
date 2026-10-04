@@ -1,13 +1,21 @@
 import type { EditorView } from "@codemirror/view";
 import { BookOpen, Pencil } from "lucide-react";
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	type MouseEvent as ReactMouseEvent,
+	Suspense,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { isNotFound } from "../api/client";
+import { isInvalidId, isNotFound } from "../api/client";
 import type { Note } from "../api/queries";
 import {
 	useBatchMoveNotes,
@@ -36,6 +44,8 @@ import { noteName } from "../lib/note-name";
 import { rlog } from "../observability/remote-log";
 import { vaultRootHref } from "../routes";
 import BacklinksPanel from "./backlinks-panel";
+import { DocumentHeader } from "./document-header";
+import { DocumentSurface } from "./document-surface";
 import { useActiveEditor } from "./editor/active-editor-context";
 import { KeyboardBar } from "./editor/keyboard-bar";
 import { RawFrontmatterEditor } from "./editor/raw-frontmatter-editor";
@@ -43,6 +53,7 @@ import { InlineTitle } from "./inline-title";
 import LoadingPane from "./loading-pane";
 import { NoteEditor } from "./note-chunks";
 import { NoteMenu } from "./note-menu";
+import NoteNotFoundPane from "./note-not-found-pane";
 import NoteToc from "./note-toc";
 import NoteView from "./note-view";
 import { PropertiesWidget } from "./properties-widget";
@@ -170,6 +181,7 @@ export default function NotePage() {
 	const renameNote = useRenameNote();
 	const [syncStatus, setSyncStatus] = useState<CrdtSyncStatus>(getCrdtSyncStatus);
 	const editorViewRef = useRef<EditorView | null>(null);
+	const pageRef = useRef<HTMLDivElement>(null);
 	// Same lookup NoteView builds for its remark-wiki-link hrefTemplate — a
 	// resolved link routes straight to the note id instead of through the
 	// lazy /v/:slug/wiki/* resolver.
@@ -481,6 +493,9 @@ export default function NotePage() {
 		// it takes.
 		return null;
 	}
+	if (isInvalidId(error)) {
+		return <NoteNotFoundPane />;
+	}
 	if (error) {
 		// The ROUTED note failed for a reason other than "it's gone" — never
 		// paper over that with the held pair.
@@ -621,8 +636,28 @@ export default function NotePage() {
 		}
 	};
 
+	// The page is only as tall as its content, so on a sparse note most of the
+	// white document is empty background that never reached the editor. A press
+	// on that background (the scroll viewport, or the wrapper's own padding --
+	// never a child, never the scrollbar) puts the caret at the end of the note,
+	// like Obsidian.
+	const focusEditorFromEmptyPage = (e: ReactMouseEvent) => {
+		const page = pageRef.current;
+		const view = editorViewRef.current;
+		const { target } = e;
+		if (!(page && view) || mode === "reading" || !(target instanceof Element)) {
+			return;
+		}
+		if (target !== page && !target.contains(page)) {
+			return;
+		}
+		e.preventDefault();
+		view.focus();
+		view.dispatch({ selection: { anchor: view.state.doc.length }, scrollIntoView: true });
+	};
+
 	return (
-		<section className="mx-auto flex size-full min-h-0 min-w-0 max-w-[840px] flex-col overflow-hidden border-border border-x bg-card text-card-foreground md:-my-6 md:h-[calc(100%+3rem)]">
+		<DocumentSurface>
 			{syncStatus === "error" && (
 				<p role="status" className="shrink-0 bg-destructive/10 px-4 py-1 text-destructive text-xs">
 					Not syncing - reconnecting...
@@ -637,12 +672,11 @@ export default function NotePage() {
 			{/* The big title moved into the document so it scrolls away, but the
 			    path stays pinned here — it is the only rename affordance still
 			    reachable once you have scrolled the title out of view. */}
-			<div className="flex shrink-0 items-center gap-2 border-border border-b px-4 py-2">
-				<p className="flex min-w-0 flex-1 items-baseline gap-1 text-sm" title={titlePath}>
-					{Boolean(note.folder) && (
-						<span className="min-w-0 shrink truncate text-muted-foreground">{note.folder}/</span>
-					)}
-					{renamingAt === "header" ? (
+			<DocumentHeader
+				folder={note.folder}
+				title={titlePath}
+				name={
+					renamingAt === "header" ? (
 						<RenameInput
 							initial={name}
 							kind="file"
@@ -666,24 +700,28 @@ export default function NotePage() {
 						>
 							{name}
 						</button>
-					)}
-				</p>
-				<Button
-					variant="ghost"
-					size="icon"
-					// The icon shows the mode you are IN — book while reading, pencil
-					// while editing — so the name has to stay put and let aria-pressed
-					// carry the state. A name that flipped to the next action would
-					// tell a screen reader the opposite of what the icon shows.
-					aria-label="Reading view"
-					aria-pressed={mode === "reading"}
-					title="Reading view"
-					onClick={toggleReading}
-				>
-					{mode === "reading" ? <BookOpen className="size-4" /> : <Pencil className="size-4" />}
-				</Button>
-				<NoteMenu mode={mode} title={name} onPick={handleAction} />
-			</div>
+					)
+				}
+				actions={
+					<>
+						<Button
+							variant="ghost"
+							size="icon"
+							// The icon shows the mode you are IN — book while reading, pencil
+							// while editing — so the name has to stay put and let aria-pressed
+							// carry the state. A name that flipped to the next action would
+							// tell a screen reader the opposite of what the icon shows.
+							aria-label="Reading view"
+							aria-pressed={mode === "reading"}
+							title="Reading view"
+							onClick={toggleReading}
+						>
+							{mode === "reading" ? <BookOpen className="size-4" /> : <Pencil className="size-4" />}
+						</Button>
+						<NoteMenu mode={mode} title={name} onPick={handleAction} />
+					</>
+				}
+			/>
 
 			{/* EditorToolbar is still NOT mounted — see editor/toolbar.tsx. The
 			    mobile case that comment anticipated is KeyboardBar below, which
@@ -692,8 +730,13 @@ export default function NotePage() {
 			    the keyboard is down. */}
 			{mode !== "reading" && <KeyboardBar getView={() => editorViewRef.current} />}
 
-			<ScrollArea className="min-h-0 flex-1">
-				<div className="w-full pb-5">
+			<ScrollArea
+				// The empty page below the text focuses the editor on press (see
+				// focusEditorFromEmptyPage), so it gets the text cursor to say so.
+				className={mode === "reading" ? "min-h-0 flex-1" : "min-h-0 flex-1 cursor-text"}
+				onMouseDown={focusEditorFromEmptyPage}
+			>
+				<div ref={pageRef} className="w-full pb-5">
 					<InlineTitle
 						name={name}
 						renaming={renamingAt === "title"}
@@ -788,6 +831,6 @@ export default function NotePage() {
 					onCancel={() => setDialog(null)}
 				/>
 			) : null}
-		</section>
+		</DocumentSurface>
 	);
 }

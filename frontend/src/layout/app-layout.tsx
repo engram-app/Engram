@@ -10,7 +10,7 @@ import { ActiveEditorProvider } from "../viewer/editor/active-editor-context";
 import { preloadNoteChunks } from "../viewer/note-chunks";
 import AppSidebarPanel, { Rail } from "./app-sidebar";
 import MobileLayout from "./mobile-layout";
-import { RailViewProvider } from "./rail-view-context";
+import { RailViewProvider, useRailView } from "./rail-view-context";
 import RightToolPanel from "./right-tool-panel";
 import { RightToolsProvider, useRightTools } from "./right-tools-context";
 
@@ -18,7 +18,9 @@ const LAYOUT_PANEL_IDS = ["sidebar", "main", "right-sidebar"];
 
 function DesktopLayout() {
 	const rightRef = usePanelRef();
+	const leftRef = usePanelRef();
 	const { resolvedId, setActive } = useRightTools();
+	const { sidebarOpen, setSidebarOpen } = useRailView();
 	const { defaultLayout, onLayoutChanged } = useDefaultLayout({
 		id: "engram:app-layout-v2",
 		panelIds: LAYOUT_PANEL_IDS,
@@ -36,6 +38,18 @@ function DesktopLayout() {
 			rightRef.current?.expand();
 		}
 	}, [resolvedId]);
+
+	// Same shape as the right panel: the open flag is the state, this applies it,
+	// and onResize (below) feeds a drag-collapse back into it. The flag is
+	// persisted, so a collapsed sidebar stays collapsed across reloads.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: leftRef.current exposes imperative panel handles, not reactive values; the effect intentionally keys on sidebarOpen alone.
+	useEffect(() => {
+		if (!sidebarOpen) {
+			leftRef.current?.collapse();
+		} else if (leftRef.current?.isCollapsed()) {
+			leftRef.current?.expand();
+		}
+	}, [sidebarOpen]);
 
 	return (
 		<section className="flex h-screen bg-background text-foreground">
@@ -55,7 +69,13 @@ function DesktopLayout() {
 					// this floor is measured, not a taste call.
 					minSize="201px"
 					maxSize="480px"
-					className="border-border border-r bg-card"
+					panelRef={leftRef}
+					collapsible
+					collapsedSize="0%"
+					// Dragging the panel shut (or open) is the same gesture as the
+					// collapse button and the rail icon, so it updates the flag.
+					onResize={(size) => setSidebarOpen(size.asPercentage > 0)}
+					className="bg-card"
 				>
 					<AppSidebarPanel />
 				</ResizablePanel>
@@ -81,7 +101,11 @@ function DesktopLayout() {
 					id="right-sidebar"
 					panelRef={rightRef}
 					defaultSize="22%"
-					minSize="12%"
+					// Floor = what the header needs: three tabs + the collapse button
+					// + gaps/padding (~250px). A % floor shrank below that on narrower
+					// windows and the tab strip painted over the button. Dragging
+					// below it collapses the panel instead. Raise it if a tab is added.
+					minSize="256px"
 					maxSize="40%"
 					collapsible
 					collapsedSize="0%"
@@ -92,7 +116,7 @@ function DesktopLayout() {
 							setActive(null);
 						}
 					}}
-					className="border-border border-l bg-card"
+					className="bg-card"
 				>
 					<RightToolPanel onCollapse={() => setActive(null)} />
 				</ResizablePanel>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router";
 import { toast } from "sonner";
 import {
@@ -27,6 +27,10 @@ import { uuid7 } from "../crdt/uuid7";
 import { useFolderTreeState } from "../layout/folder-tree-context";
 import { copyToClipboard } from "../lib/clipboard";
 import { noteName } from "../lib/note-name";
+import { listContainer } from "../lib/ui-classes";
+import { useFileDropUpload } from "./attachment-upload/provider";
+import { FileDropTargetContext, folderRegion } from "./tree/file-drop-region";
+import { TREE_ROW_HEIGHT, TREE_SLOT_HEIGHT } from "./tree/row-metrics";
 import { isSyntheticFolderId, syntheticFolderPath } from "./tree/synthesize-folders";
 import { TreeRowVirtualized } from "./tree/tree-row-virtualized";
 import { parseItemId, ROOT_ID } from "./tree/types";
@@ -237,15 +241,52 @@ export default function FolderTree() {
 	} = containerProps;
 
 	const [rootDragOver, setRootDragOver] = useState(false);
+	// OS files: a file can only land in a FOLDER, so any row aims at its folder and
+	// the tree outlines that folder and everything under it. Empty space aims at
+	// the vault root. Rows handle their own drops (see tree-row's useRowFileDrop).
+	const uploadFiles = useFileDropUpload();
+	const [fileFolder, setFileFolder] = useState<string | null>(null);
+	const isFileDrag = (e: React.DragEvent) =>
+		Boolean(uploadFiles) && e.dataTransfer.types.includes("Files");
 	const onContainerDragOver = (e: React.DragEvent) => {
+		if (isFileDrag(e)) {
+			e.preventDefault();
+			e.dataTransfer.dropEffect = "copy";
+			setFileFolder("");
+			return;
+		}
 		containerDrag.onDragOver?.(e);
 		setRootDragOver(true);
 	};
-	const onContainerDragLeave = () => setRootDragOver(false);
+	const onContainerDragLeave = (e: React.DragEvent) => {
+		setRootDragOver(false);
+		// Leaving for a child is not leaving: only a real exit clears the outline.
+		if (!(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget))) {
+			setFileFolder(null);
+		}
+	};
 	const onContainerDrop = (e: React.DragEvent) => {
 		setRootDragOver(false);
+		if (isFileDrag(e)) {
+			e.preventDefault();
+			setFileFolder(null);
+			uploadFiles?.(Array.from(e.dataTransfer.files), "").catch(() => undefined);
+			return;
+		}
 		containerDrag.onDrop?.(e);
 	};
+	const fileDropTarget = useMemo(
+		() => ({ folder: fileFolder, setFolder: setFileFolder }),
+		[fileFolder],
+	);
+	// The outlined block: the target folder's row through its last descendant.
+	const fileRegion =
+		fileFolder === null
+			? null
+			: folderRegion(
+					items.map((i) => i.getItemData().item),
+					fileFolder,
+				);
 
 	// Auto-expand the chain leading to the active note so users can see
 	// where they are after navigation. Mirrors the old recursive
@@ -699,33 +740,50 @@ export default function FolderTree() {
 				onDragLeave={onContainerDragLeave}
 				onDrop={onContainerDrop}
 				data-testid="folder-tree-root"
+				data-file-drop
 				// px-2 insets the rows from the sidebar edges — rows are w-full, so
 				// without it the hover/selection chip runs edge to edge.
-				className={`relative min-h-0 flex-1 overflow-auto p-2 text-base ${
-					rootDragOver ? "bg-primary/10 ring-1 ring-ring ring-inset" : ""
+				className={`relative min-h-0 flex-1 overflow-auto ${listContainer} ${
+					rootDragOver || fileFolder === "" ? "bg-primary/10 ring-1 ring-ring ring-inset" : ""
 				}`}
 			>
 				{/* minHeight ensures blank, droppable space below the rows even for a
             short tree, so there's always a place to drop "to root". */}
-				<div
-					style={{ height: virtualizer.getTotalSize(), minHeight: "100%", position: "relative" }}
-				>
-					{isEmpty ? (
-						<p className="px-1 py-0.5 text-muted-foreground text-xs">No notes yet.</p>
-					) : null}
-					{virtualizer.getVirtualItems().map((v) => (
-						<TreeRowVirtualized
-							key={items[v.index]?.getId() ?? v.index}
-							virtualItem={v}
-							items={items}
-							activeId={selectedNoteId}
-							menuOpenId={menuOpenId}
-							multiSelect={multiSelect}
-							onContextMenu={handleContextMenu}
-							onLongPress={handleLongPress}
-						/>
-					))}
-				</div>
+				<FileDropTargetContext.Provider value={fileDropTarget}>
+					<div
+						style={{ height: virtualizer.getTotalSize(), minHeight: "100%", position: "relative" }}
+					>
+						{isEmpty ? (
+							<p className="px-1 py-0.5 text-muted-foreground text-xs">No notes yet.</p>
+						) : null}
+						{/* One outline around the folder a dragged file would land in: its row
+					    through its last descendant. Rows are fixed-height slots, so the
+					    box is plain arithmetic. */}
+						{fileRegion ? (
+							<div
+								aria-hidden
+								data-testid="file-drop-region"
+								className="pointer-events-none absolute inset-x-0 rounded bg-primary/10 ring-1 ring-ring"
+								style={{
+									top: fileRegion.start * TREE_SLOT_HEIGHT,
+									height: (fileRegion.end - fileRegion.start) * TREE_SLOT_HEIGHT + TREE_ROW_HEIGHT,
+								}}
+							/>
+						) : null}
+						{virtualizer.getVirtualItems().map((v) => (
+							<TreeRowVirtualized
+								key={items[v.index]?.getId() ?? v.index}
+								virtualItem={v}
+								items={items}
+								activeId={selectedNoteId}
+								menuOpenId={menuOpenId}
+								multiSelect={multiSelect}
+								onContextMenu={handleContextMenu}
+								onLongPress={handleLongPress}
+							/>
+						))}
+					</div>
+				</FileDropTargetContext.Provider>
 			</nav>
 
 			{dialog.kind === "delete" && (

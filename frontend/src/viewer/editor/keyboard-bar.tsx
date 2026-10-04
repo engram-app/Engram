@@ -1,5 +1,4 @@
 import { startCompletion } from "@codemirror/autocomplete";
-import { indentLess, indentMore } from "@codemirror/commands";
 import type { EditorView } from "@codemirror/view";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -24,7 +23,9 @@ import { yUndoManagerKeymap } from "y-codemirror.next";
 import { Button } from "@/components/ui/button";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import {
+	indentSelection,
 	insertLink,
+	outdentSelection,
 	setHeading,
 	toggleCheckbox,
 	toggleCode,
@@ -113,14 +114,14 @@ const COMMAND_GROUPS: ReadonlyArray<
 			label: "Outdent",
 			Icon: IndentDecrease,
 			act: (v) => {
-				indentLess(v);
+				outdentSelection(v);
 			},
 		},
 		{
 			label: "Indent",
 			Icon: IndentIncrease,
 			act: (v) => {
-				indentMore(v);
+				indentSelection(v);
 			},
 		},
 	],

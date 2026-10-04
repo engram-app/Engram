@@ -1,12 +1,17 @@
 import type { ItemInstance } from "@headless-tree/core";
 import { ChevronRight, File, FileText, Image } from "lucide-react";
 import type React from "react";
+import { useContext, useEffect, useRef } from "react";
 import { Link } from "react-router";
 import { useActiveVaultSlug } from "../../api/vault-slug";
 import { noteName } from "../../lib/note-name";
+import { listRowClass } from "../../lib/ui-classes";
 import { noteHref } from "../../routes";
+import { useFileDropUpload } from "../attachment-upload/provider";
 import { RenameInput } from "../tree-actions/rename-input";
 import { useLongPress } from "../tree-actions/use-long-press";
+import { setDraggedItem } from "../vault-item-drag";
+import { dropFolderFor, FileDropTargetContext } from "./file-drop-region";
 import type { LoaderItem } from "./loader";
 import { TREE_ROW_HEIGHT } from "./row-metrics";
 import type { TreeItem } from "./types";
@@ -43,15 +48,9 @@ function rowClass(
 		// w-full so the folder <button> stretches like the note <a> (form controls
 		// shrink to content by default) — gives both the same full-width hover hit.
 		// relative anchors the absolutely-positioned indent guides.
-		"relative flex w-full items-center gap-1 rounded pl-1 pr-3 text-left",
-		// A solid neutral chip, not a tint of the cyan primary — a tinted
-		// highlight reads as "blue on blue" against this palette. Hover owns
-		// `accent`, so the two states stay clearly distinct.
-		active
-			? "bg-tree-selected font-medium text-tree-selected-foreground"
-			: multiSelect && instance.isSelected()
-				? "bg-tree-multi-selected text-foreground"
-				: "text-foreground hover:bg-accent hover:text-accent-foreground",
+		// Shared with the vault picker (lib/ui-classes); the tree adds its own left
+		// padding, which it also overrides per depth.
+		`${listRowClass({ selected: active, multiSelected: multiSelect && instance.isSelected() })} pl-1`,
 		dragOver ? "bg-primary/15 ring-1 ring-ring ring-inset" : "",
 		// Inset so the outline can't bleed into the 1px gutter and collide with the
 		// neighbouring row. `muted-foreground` rather than `border`, which is too
@@ -78,6 +77,8 @@ function noteLabel(item: Extract<TreeItem, { kind: "note" }>): string {
 // so stacked rows form continuous lines down a folder's children without
 // tracking where the folder ends.
 const INDENT_STEP = 12;
+// How long a dragged file must hover a collapsed folder before it opens.
+const FOLDER_HOVER_EXPAND_MS = 600;
 
 // A level-L guide should sit on the CENTRE of that ancestor's chevron, which
 // measures at `L * INDENT_STEP + INDENT_STEP` from the row's left edge. `left`
@@ -138,6 +139,68 @@ function linkClick(htProps: Record<string, unknown>) {
 	};
 }
 
+type DragHandler = (e: React.DragEvent) => void;
+
+const isFileDrag = (e: React.DragEvent) => e.dataTransfer.types.includes("Files");
+
+// OS files dragged over ANY row aim at that row's folder (see file-drop-region):
+// the tree outlines the folder and a drop uploads into it, no dialog. Hovering a
+// collapsed folder for a moment opens it so you can aim at a subfolder. Anything
+// that is not a file drag goes to headless-tree's own handler, which is what moves
+// notes and folders around inside the tree.
+function useRowFileDrop(instance: ItemInstance<LoaderItem>) {
+	const uploadFiles = useFileDropUpload();
+	const { setFolder } = useContext(FileDropTargetContext);
+	const expandTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+	useEffect(() => () => clearTimeout(expandTimer.current), []);
+	if (!uploadFiles) {
+		return {};
+	}
+	const ht: { onDragOver?: DragHandler; onDragLeave?: DragHandler; onDrop?: DragHandler } =
+		instance.getProps();
+	const { item } = instance.getItemData();
+	const folder = dropFolderFor(item);
+	return {
+		onDragOver(e: React.DragEvent) {
+			if (!isFileDrag(e)) {
+				ht.onDragOver?.(e);
+				return;
+			}
+			e.preventDefault();
+			e.stopPropagation();
+			e.dataTransfer.dropEffect = "copy";
+			setFolder(folder);
+			if (item.kind === "folder" && !instance.isExpanded() && expandTimer.current === undefined) {
+				expandTimer.current = setTimeout(() => instance.expand(), FOLDER_HOVER_EXPAND_MS);
+			}
+		},
+		onDragLeave(e: React.DragEvent) {
+			if (!isFileDrag(e)) {
+				ht.onDragLeave?.(e);
+				return;
+			}
+			// Moving between the row's own icon, label and chevron is not leaving it.
+			if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) {
+				return;
+			}
+			clearTimeout(expandTimer.current);
+			expandTimer.current = undefined;
+		},
+		onDrop(e: React.DragEvent) {
+			if (!isFileDrag(e)) {
+				ht.onDrop?.(e);
+				return;
+			}
+			e.preventDefault();
+			e.stopPropagation();
+			clearTimeout(expandTimer.current);
+			expandTimer.current = undefined;
+			setFolder(null);
+			uploadFiles(Array.from(e.dataTransfer.files), folder).catch(() => undefined);
+		},
+	};
+}
+
 export function TreeRow({
 	instance,
 	activeId,
@@ -152,6 +215,8 @@ export function TreeRow({
 		onLongPress: () => onLongPress?.(itemId),
 	});
 	const longPressProps = onLongPress ? longPressHandlers : undefined;
+
+	const fileDrop = useRowFileDrop(instance);
 	const contextMenuHandler = onContextMenu
 		? (e: React.MouseEvent) => {
 				e.preventDefault();
@@ -221,6 +286,7 @@ export function TreeRow({
 				onContextMenu={contextMenuHandler}
 				aria-expanded={instance.isExpanded()}
 				aria-selected={instance.isSelected()}
+				{...fileDrop}
 				className={rowClass(instance, active, menuOpen, multiSelect)}
 				style={{ paddingLeft: `${folderPad}px`, height: TREE_ROW_HEIGHT }}
 			>
@@ -246,11 +312,18 @@ export function TreeRow({
 		// still resolving. The HT itemId stays path-keyed (internal tree
 		// machinery).
 		const attachmentProps = instance.getProps();
+		const handleAttachmentDragStart = (e: React.DragEvent) => {
+			attachmentProps.onDragStart?.(e);
+			// Lets the editor turn a drop into an ![[embed]]; ignored by the tree.
+			setDraggedItem(e.dataTransfer, { kind: "attachment", path: item.path });
+		};
 		return (
 			<Link
 				to={noteHref(slug, item.id)}
 				{...attachmentProps}
 				onClick={linkClick(attachmentProps)}
+				onDragStart={handleAttachmentDragStart}
+				{...fileDrop}
 				{...longPressProps}
 				onContextMenu={contextMenuHandler}
 				aria-selected={instance.isSelected()}
@@ -289,6 +362,8 @@ export function TreeRow({
 		e.dataTransfer.clearData("text/uri-list");
 		e.dataTransfer.clearData("text/plain");
 		e.dataTransfer.clearData("text/html");
+		// Lets the editor turn a drop into a [[wikilink]]; ignored by the tree.
+		setDraggedItem(e.dataTransfer, { kind: "note", path: item.path });
 	};
 
 	return (
@@ -299,6 +374,7 @@ export function TreeRow({
 			{...longPressProps}
 			onContextMenu={contextMenuHandler}
 			onDragStart={handleNoteDragStart}
+			{...fileDrop}
 			aria-selected={instance.isSelected()}
 			aria-current={active ? "page" : undefined}
 			className={rowClass(instance, active, menuOpen, multiSelect)}

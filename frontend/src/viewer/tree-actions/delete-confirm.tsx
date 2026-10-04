@@ -1,3 +1,12 @@
+import { Button } from "@/components/ui/button";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogTitle,
+} from "@/components/ui/dialog";
+
 type Node = { kind: "file"; path: string } | { kind: "folder"; path: string; childCount: number };
 
 interface Props {
@@ -20,31 +29,20 @@ function buildMessage(nodes: Node[]): string {
 }
 
 export function DeleteConfirm({ nodes, onConfirm, onCancel }: Props) {
-	const message = buildMessage(nodes);
-
 	return (
-		<dialog
-			open
-			className="fixed inset-0 z-50 m-auto rounded-lg border border-border bg-popover p-4 text-popover-foreground shadow-xl"
-		>
-			<p className="mb-4 text-sm">{message}</p>
-			<p className="mb-4 text-muted-foreground text-xs">This cannot be undone.</p>
-			<div className="flex justify-end gap-2">
-				<button
-					type="button"
-					onClick={onCancel}
-					className="rounded border border-border px-3 py-1 text-sm hover:bg-accent hover:text-accent-foreground"
-				>
-					Cancel
-				</button>
-				<button
-					type="button"
-					onClick={onConfirm}
-					className="rounded bg-destructive px-3 py-1 text-background text-sm hover:bg-destructive/90"
-				>
-					Delete
-				</button>
-			</div>
-		</dialog>
+		<Dialog open onOpenChange={(open) => !open && onCancel()}>
+			<DialogContent showCloseButton={false}>
+				<DialogTitle className="text-sm">{buildMessage(nodes)}</DialogTitle>
+				<DialogDescription className="text-xs">This cannot be undone.</DialogDescription>
+				<DialogFooter>
+					<Button variant="outline" size="sm" onClick={onCancel}>
+						Cancel
+					</Button>
+					<Button variant="destructive" size="sm" onClick={onConfirm}>
+						Delete
+					</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
 	);
 }

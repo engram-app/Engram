@@ -40,16 +40,27 @@ vi.mock("./note-view", () => ({
 // live-mode editor path doesn't crash the test environment. The button stands
 // in for typing `---` on the first line, and records what the page answered —
 // the real gesture is covered in editor/frontmatter-shortcut.test.ts.
-const { shortcutAnswer } = vi.hoisted(() => ({ shortcutAnswer: vi.fn() }));
+const { shortcutAnswer, fakeView } = vi.hoisted(() => ({
+	shortcutAnswer: vi.fn(),
+	// Stands in for the CodeMirror view the real editor hands up via onView.
+	fakeView: { focus: vi.fn(), dispatch: vi.fn(), state: { doc: { length: 42 } } },
+}));
 vi.mock("./note-editor", () => ({
 	default: ({
 		ytext,
 		onFrontmatterShortcut,
+		onView,
 	}: {
 		ytext: { toString: () => string };
 		onFrontmatterShortcut?: () => boolean;
+		onView?: (v: unknown) => void;
 	}) => (
-		<div data-testid="note-editor">
+		<div
+			data-testid="note-editor"
+			ref={() => {
+				onView?.(fakeView);
+			}}
+		>
 			{/* The document this editable surface is actually bound to. The whole
 			    invariant is that it can never belong to a different note than the
 			    chrome above it, so the tests need to see it. */}
@@ -211,6 +222,22 @@ describe("NotePage (CRDT)", () => {
 			await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/", { replace: true }));
 		});
 
+		// A malformed id in the URL (typo, truncated link) gets a 400 "invalid id".
+		// Nothing was deleted, so no redirect: say the note isn't there and offer
+		// nothing else.
+		it("shows a 'Note not found' pane for a malformed id, with no redirect", async () => {
+			useNoteMock.mockReturnValue({
+				data: undefined,
+				isLoading: false,
+				error: new ApiError(400, "invalid id"),
+			});
+			renderPage();
+			await screen.findByRole("heading", { name: "Note not found" });
+			expect(screen.queryByText(/Failed to load note/)).not.toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: /back to vault/i })).not.toBeInTheDocument();
+			expect(navigateMock).not.toHaveBeenCalled();
+		});
+
 		it("still shows the error screen for a non-404 failure", async () => {
 			useNoteMock.mockReturnValue({
 				data: undefined,
@@ -220,6 +247,47 @@ describe("NotePage (CRDT)", () => {
 			renderPage();
 			await screen.findByText(/Failed to load note: server exploded/);
 			expect(navigateMock).not.toHaveBeenCalled();
+		});
+	});
+
+	// The document area is only as tall as its content, so on a sparse note most
+	// of the white page was dead: a click below the text landed on the scroll
+	// viewport and never reached the editor. Clicking the empty part of the page
+	// has to put the caret at the end of the note, like Obsidian.
+	describe("clicking the empty page below the text", () => {
+		const viewport = () => {
+			const el = document.querySelector('[data-slot="scroll-area-viewport"]');
+			if (!el) {
+				throw new Error("no scroll viewport");
+			}
+			return el;
+		};
+
+		beforeEach(() => {
+			fakeView.focus.mockClear();
+			fakeView.dispatch.mockClear();
+		});
+
+		it("focuses the editor and moves the caret to the end", async () => {
+			renderPage();
+			await screen.findByTestId("note-editor");
+			fireEvent.mouseDown(viewport());
+			expect(fakeView.focus).toHaveBeenCalled();
+			expect(fakeView.dispatch).toHaveBeenCalledWith(
+				expect.objectContaining({ selection: { anchor: 42 } }),
+			);
+		});
+
+		it("shows the text cursor over the empty page so it reads as clickable", async () => {
+			renderPage();
+			await screen.findByTestId("note-editor");
+			expect(document.querySelector('[data-slot="scroll-area"]')).toHaveClass("cursor-text");
+		});
+
+		it("leaves clicks inside the editor to the editor", async () => {
+			renderPage();
+			fireEvent.mouseDown(await screen.findByTestId("note-editor"));
+			expect(fakeView.dispatch).not.toHaveBeenCalled();
 		});
 	});
 

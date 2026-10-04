@@ -11,6 +11,7 @@ import { useNavigate } from "react-router";
 import { toast } from "sonner";
 import { collideBump } from "@/lib/collide-bump";
 import { noteName } from "@/lib/note-name";
+import { encodePathSegments } from "@/lib/path";
 import { randomUuid } from "@/lib/random-uuid";
 import { uuid7 } from "../crdt/uuid7";
 import { noteHref } from "../routes";
@@ -44,13 +45,6 @@ import {
 	renameNotes,
 	upsertNote,
 } from "./vault-tree-patch";
-
-// Encode each path segment but preserve slashes so Phoenix's splat
-// routes match. encodeURIComponent on a full path produces %2F, which
-// Plug.Static rejects with 400 InvalidPathError before the router runs.
-function encodePathSegments(path: string): string {
-	return path.split("/").map(encodeURIComponent).join("/");
-}
 
 // Hoisted so React Query treats the select identity as stable; otherwise an
 // inline arrow re-runs every render and returns a fresh array, breaking

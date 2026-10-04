@@ -22,6 +22,7 @@ vi.mock("../auth/use-auth-adapter", () => ({
 // provider so the sidebar renders without an AttachmentUploadProvider wrapper.
 vi.mock("../viewer/attachment-upload/provider", () => ({
 	useAttachmentUpload: () => ({ openUpload: vi.fn() }),
+	useFileDropUpload: () => null,
 }));
 vi.mock("../api/queries", async () => {
 	const actual = await vi.importActual<typeof import("../api/queries")>("../api/queries");
@@ -77,6 +78,37 @@ describe("AppSidebar", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Search" }));
 		expect(screen.getByRole("heading", { name: "Search", level: 2 })).toBeInTheDocument();
 		expect(screen.queryByRole("heading", { name: "Files", level: 2 })).toBeNull();
+	});
+});
+
+describe("AppSidebar — collapse button", () => {
+	beforeEach(() => window.localStorage.clear());
+
+	it("the Files header has a collapse button that closes the sidebar", () => {
+		renderSidebar();
+		fireEvent.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+		expect(window.localStorage.getItem("engram:sidebar-open")).toBe("false");
+	});
+
+	// A collapsed panel is clipped to nothing, not unmounted: without `inert` its
+	// buttons stay tabbable and the search box keeps focus in the invisible panel.
+	it("makes the collapsed panel inert so nothing in it can take focus", () => {
+		const { container } = renderSidebar();
+		expect(container.querySelector("[inert]")).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+		const inert = container.querySelector("[inert]");
+		expect(inert).not.toBeNull();
+		expect(inert).toContainElement(screen.getByRole("heading", { name: "Files", level: 2 }));
+		// The rail is NOT inside it: its icons are how the sidebar comes back.
+		expect(inert).not.toContainElement(screen.getByRole("button", { name: "Files" }));
+	});
+
+	it("the Search header has one too, next to its own close button", () => {
+		renderSidebar();
+		fireEvent.click(screen.getByRole("button", { name: "Search" }));
+		expect(screen.getByRole("button", { name: "Close search" })).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+		expect(window.localStorage.getItem("engram:sidebar-open")).toBe("false");
 	});
 });
 

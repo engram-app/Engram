@@ -1,6 +1,6 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { livePreviewExtensions } from "./live-preview";
 
 const MD = "# Heading\n\n**bold** and *italic* and [[Wiki Link]]\n";
@@ -87,5 +87,38 @@ describe("livePreviewExtensions", () => {
 		view.dispatch({ selection: { anchor: 12 } });
 		expect(headerLineText()).not.toBe("Title");
 		expect(headerLineText()).toContain("note");
+	});
+});
+
+describe("image embeds", () => {
+	test("![[pic.png]] shows the image only, not a wikilink widget for the name", async () => {
+		const doc = "![[pic.png]]\n\n[[Other]]\n\ntail";
+		view = new EditorView({
+			state: EditorState.create({
+				doc,
+				selection: { anchor: doc.length },
+				extensions: livePreviewExtensions({
+					resolveWikiLink: (n) => `/w/wiki/${n}`,
+					openWikiLink: () => {},
+					wikiCompletionPaths: () => [],
+					openMarkdownLink: () => false,
+					attachments: {
+						resolve: (t) => (t === "pic.png" ? "pic.png" : null),
+						load: () => Promise.resolve("blob:x"),
+					},
+				}),
+			}),
+			parent: document.body,
+		});
+		// Positive control: the ordinary wikilink does get its widget (async resolve).
+		await vi.waitFor(() => {
+			const names = [...view.dom.querySelectorAll(".cm-atomic-wiki-link")].map(
+				(e) => e.textContent,
+			);
+			expect(names).toContain("Other");
+		});
+		expect(view.dom.querySelector(".cm-attachment-embed")).not.toBeNull();
+		const names = [...view.dom.querySelectorAll(".cm-atomic-wiki-link")].map((e) => e.textContent);
+		expect(names).not.toContain("pic.png");
 	});
 });

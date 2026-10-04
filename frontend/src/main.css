@@ -123,9 +123,9 @@
 	--color-input: var(--input);
 	--color-border: var(--border);
 	--color-destructive: var(--destructive);
-	--color-tree-selected: var(--tree-selected);
-	--color-tree-selected-foreground: var(--tree-selected-foreground);
-	--color-tree-multi-selected: var(--tree-multi-selected);
+	--color-row-selected: var(--row-selected);
+	--color-row-selected-foreground: var(--row-selected-foreground);
+	--color-row-multi-selected: var(--row-multi-selected);
 	--color-accent-foreground: var(--accent-foreground);
 	--color-accent: var(--accent);
 	--color-muted-foreground: var(--muted-foreground);
@@ -186,11 +186,11 @@
 	   `accent` (near-white here), so the two can't be confused. */
 	/* The open note. A soft grey chip, not the near-black it used to be, which
 	   read as too heavy against the light sidebar. */
-	--tree-selected: oklch(89.00% 0.004 286.32);
-	--tree-selected-foreground: oklch(21.03% 0.0059 285.89);
+	--row-selected: oklch(89.00% 0.004 286.32);
+	--row-selected-foreground: oklch(21.03% 0.0059 285.89);
 	/* Rows in a multi-selection. Between hover (accent, 96.7%) and the open-note
 	   chip, so all three states read apart. */
-	--tree-multi-selected: oklch(94.00% 0.004 286.32);
+	--row-multi-selected: oklch(94.00% 0.004 286.32);
 	--border: oklch(91.97% 0.004 286.32);
 	--input: oklch(91.97% 0.004 286.32);
 	--ring: oklch(60.89% 0.1109 221.72);
@@ -238,9 +238,9 @@
 	/* Still a dark neutral, but lifted well clear of both the background
 	   (18.76%) and the hover `accent` (28.58%) so selection stays legible as a
 	   distinct third step rather than a slightly-darker smudge. */
-	--tree-selected: oklch(38.00% 0.004 286.11);
-	--tree-selected-foreground: oklch(97.00% 0.005 334);
-	--tree-multi-selected: oklch(32.00% 0.004 286.11);
+	--row-selected: oklch(38.00% 0.004 286.11);
+	--row-selected-foreground: oklch(97.00% 0.005 334);
+	--row-multi-selected: oklch(32.00% 0.004 286.11);
 	--border: oklch(39.39% 0.0182 207.04);
 	--input: oklch(39.39% 0.0182 207.04);
 	--ring: oklch(87.00% 0.1481 202.88);

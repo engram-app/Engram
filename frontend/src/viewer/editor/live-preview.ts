@@ -21,12 +21,17 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { type Extension, Prec } from "@codemirror/state";
 import { tags } from "@lezer/highlight";
+import { attachmentEmbeds, isImageEmbedTarget } from "./attachment-embed";
+import { bareBulletAsText } from "./bare-bullet";
 import { blockquoteDepthPlugin } from "./blockquote-depth";
 import { calloutDecoration } from "./callout-decoration";
 import { calloutMarker } from "./callout-marker";
+import { completionPopup, NATIVE_POPUP_CLASS } from "./completion-popup";
 import { noParagraphFold } from "./heading-fold";
+import { indentedCodeLines } from "./indented-code";
 import { katexDecoration } from "./katex-decoration";
 import { linkOpenHandler } from "./link-open";
+import { listRails } from "./list-rails";
 import { mermaidDecoration, mermaidKeymap } from "./mermaid-decoration";
 import { mdLinkCompletionSource, wikiCompletionSource } from "./wiki-completion";
 
@@ -70,6 +75,12 @@ export interface LivePreviewOpts {
 	/** Markdown-link click-to-open. Returns true if the href resolved to a note
 	 *  and was navigated in-app; false sends it to a new tab. See link-open.ts. */
 	openMarkdownLink: (href: string) => boolean;
+	/** Image-embed support (`![[pic.png]]`): resolves a target to its vault path and
+	 *  fetches the bytes. Omit to leave embeds as plain text. */
+	attachments?: {
+		resolve: (target: string) => string | null;
+		load: (path: string) => Promise<string>;
+	};
 }
 
 /**
@@ -96,7 +107,7 @@ export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 			codeLanguages: ATOMIC_CODE_LANGUAGES,
 			// calloutMarker must come before Link in the inline parser list, which
 			// it declares itself; order here is irrelevant.
-			extensions: [highlightMarkdown, calloutMarker, noParagraphFold],
+			extensions: [highlightMarkdown, calloutMarker, noParagraphFold, bareBulletAsText],
 		}),
 		// See syntaxOverrides above — two tags, both overriding atomicMarkdownSyntax.
 		Prec.highest(syntaxHighlighting(syntaxOverrides)),
@@ -108,6 +119,9 @@ export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 		atomicEditorTheme,
 		tables({}),
 		imageBlocks(),
+		// Prec.high so the embed's replace wins over the wikilink widget that would
+		// otherwise claim the `[[...]]` inside `![[...]]`.
+		...(opts.attachments ? [Prec.high(attachmentEmbeds(opts.attachments))] : []),
 		inlinePreview({}),
 		// Must come after inlinePreview so it can out-precede its icon-scoped
 		// click handler — see link-open.ts.
@@ -119,6 +133,10 @@ export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 			// `label` stays the raw wikilink text.
 			resolve: (target) => Promise.resolve({ target: opts.resolveWikiLink(target), label: target }),
 			onOpen: (target) => opts.openWikiLink(target),
+			// An image embed (`![[pic.png]]`) is drawn by attachmentEmbeds; without
+			// this the wikilink widget ALSO renders the file name beside the image.
+			shouldResolve: (target) =>
+				!(opts.attachments && isImageEmbedTarget(opts.attachments, target)),
 		}),
 		// Prec.highest is load-bearing, not tidiness. A callout's header line is
 		// replaced wholesale by our icon+title widget, and inlinePreview emits its
@@ -138,6 +156,8 @@ export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 		// without this the block is reachable only by clicking.
 		mermaidKeymap,
 		blockquoteDepthPlugin,
+		indentedCodeLines,
+		listRails,
 		// override replaces (not adds to) CM6's built-in keyword/language-server
 		// sources -- markdown has none of those, so this is the only source in
 		// play. defaultKeymap wires Tab/Enter/Escape/arrow-navigation of the
@@ -148,6 +168,9 @@ export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 				mdLinkCompletionSource(opts.wikiCompletionPaths),
 			],
 			defaultKeymap: true,
+			// Our own popup (completion-popup.tsx) replaces the built-in one.
+			tooltipClass: () => NATIVE_POPUP_CLASS,
 		}),
+		completionPopup,
 	];
 }

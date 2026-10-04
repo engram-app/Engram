@@ -1,3 +1,5 @@
+import { encodePathSegments } from "../../lib/path";
+
 export type TreeItem =
 	| { kind: "folder"; id: string; path: string; name: string; count: number }
 	| { kind: "note"; id: string; path: string; title: string; ext: string | null }
@@ -11,8 +13,7 @@ export function formatItemId(
 	input: { kind: "folder" | "note"; id: string } | { kind: "attachment"; path: string },
 ): ItemId {
 	if (input.kind === "attachment") {
-		const encoded = input.path.split("/").map(encodeURIComponent).join("/");
-		return `a:${encoded}`;
+		return `a:${encodePathSegments(input.path)}`;
 	}
 	return `${input.kind === "folder" ? "f" : "n"}:${input.id}`;
 }
