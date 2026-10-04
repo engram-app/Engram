@@ -875,8 +875,8 @@ defmodule Engram.Indexing do
   # the second chunk silently adopts the first one's point.
   defp plan_chunks(note, chunks, content_key, dense?) do
     chunks =
-      Enum.map(chunks, fn chunk ->
-        Map.put(chunk, :context_hmac, fingerprint(content_key, chunk.context_text, dense?))
+      Enum.zip_with(chunks, fingerprints(content_key, chunks, dense?), fn chunk, hmac ->
+        Map.put(chunk, :context_hmac, hmac)
       end)
 
     # Tenant-scoped: unscoped this read is filtered to [], so reuse never
@@ -929,13 +929,20 @@ defmodule Engram.Indexing do
   # stamped the note densely indexed with nothing behind the stamp, and a
   # sparse-only pass kept vectors it had decided not to pay for. The model is in it for
   # the same reason, since another model's vector is not reusable either.
-  defp fingerprint(content_key, context_text, true) do
-    Crypto.hmac_content_hash(content_key, "dense:#{effective_embed_model()}\n" <> context_text)
+  #
+  # One NIF call for the whole note (`Engram.Native.hmac_hex_many/3`): the same
+  # hex HMAC as `Crypto.hmac_content_hash/2` over `prefix <> context_text`,
+  # without building each prefixed copy or hex-encoding in Elixir.
+  defp fingerprints(content_key, chunks, dense?) do
+    Engram.Native.hmac_hex_many(
+      content_key,
+      fingerprint_prefix(dense?),
+      Enum.map(chunks, & &1.context_text)
+    )
   end
 
-  defp fingerprint(content_key, context_text, false) do
-    Crypto.hmac_content_hash(content_key, "sparse\n" <> context_text)
-  end
+  defp fingerprint_prefix(true), do: "dense:#{effective_embed_model()}\n"
+  defp fingerprint_prefix(false), do: "sparse\n"
 
   defp embed_texts(plan), do: for({:embed, chunk} <- plan.entries, do: chunk.context_text)
 
@@ -1032,11 +1039,15 @@ defmodule Engram.Indexing do
 
     by_hmac = Enum.group_by(rows, &elem(&1, 0), &elem(&1, 1))
 
-    {matched, _left} =
-      Enum.flat_map_reduce(chunks, by_hmac, fn chunk, acc ->
-        dense = fingerprint(content_key, chunk.context_text, true)
-        sparse = fingerprint(content_key, chunk.context_text, false)
+    keyed =
+      Enum.zip([
+        chunks,
+        fingerprints(content_key, chunks, true),
+        fingerprints(content_key, chunks, false)
+      ])
 
+    {matched, _left} =
+      Enum.flat_map_reduce(keyed, by_hmac, fn {chunk, dense, sparse}, acc ->
         case {Map.get(acc, dense), Map.get(acc, sparse)} do
           {[id | rest], _} -> {[{chunk, id}], Map.put(acc, dense, rest)}
           {_, [id | rest]} -> {[{chunk, id}], Map.put(acc, sparse, rest)}

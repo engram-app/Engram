@@ -83,6 +83,12 @@ defmodule Engram.Native do
   @doc false
   def sparse_json_nif(_indices, _values), do: :erlang.nif_error(:nif_not_loaded)
 
+  @doc false
+  def hmac_hex_many_nif(_key, _prefix, _texts), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc false
+  def hmac_hex_many_dirty_nif(_key, _prefix, _texts), do: :erlang.nif_error(:nif_not_loaded)
+
   @doc "Live bytes held by this library's Rust heap, process-wide."
   def live_bytes, do: :erlang.nif_error(:nif_not_loaded)
 
@@ -133,6 +139,25 @@ defmodule Engram.Native do
     call(:sparse_json, [indices, values], %{dirty: false}, fn ->
       sparse_json_nif(indices, values)
     end)
+  end
+
+  @doc """
+  Lowercase hex HMAC-SHA256 of `prefix <> text` for each text: the batch form
+  of `Engram.Crypto.hmac_content_hash/2`. Up to 16 KB of input runs on the
+  calling scheduler; more goes dirty, so a small note never queues behind a
+  keyword encode on prod's single dirty scheduler.
+  """
+  def hmac_hex_many(key, prefix, texts)
+      when byte_size(key) == 32 and is_binary(prefix) and is_list(texts) do
+    bytes = :erlang.iolist_size(texts) + length(texts) * byte_size(prefix)
+
+    if bytes <= @inline_max do
+      call(:hmac_hex_many, bytes, %{dirty: false}, fn -> hmac_hex_many_nif(key, prefix, texts) end)
+    else
+      call(:hmac_hex_many, bytes, %{dirty: true}, fn ->
+        hmac_hex_many_dirty_nif(key, prefix, texts)
+      end)
+    end
   end
 
   # Every NIF entry point goes through here: one event shape for all of them,

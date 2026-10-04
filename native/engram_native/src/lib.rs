@@ -259,4 +259,38 @@ fn sparse_json_nif<'a>(env: Env<'a>, indices: Binary<'a>, values: Binary<'a>) ->
     finish(env, vectors::sparse_json(indices.as_slice(), values.as_slice()), base)
 }
 
+/// Lowercase hex HMAC-SHA256 of `prefix <> text` for each text, one key
+/// setup for the whole batch. Matches `Crypto.hmac_content_hash/2`.
+fn hmac_hex_many<'a>(env: Env<'a>, key: Binary<'a>, prefix: Binary<'a>, texts: Vec<Binary<'a>>) -> NifResult<(Vec<Binary<'a>>, usize)> {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let base = memory::begin();
+    let keyed = Hmac::<Sha256>::new_from_slice(key.as_slice()).map_err(|_| Error::BadArg)?;
+    let out = texts
+        .iter()
+        .map(|t| {
+            let mut mac = keyed.clone();
+            mac.update(prefix.as_slice());
+            mac.update(t.as_slice());
+            let digest = mac.finalize().into_bytes();
+            let mut hex = NewBinary::new(env, 64);
+            for (i, b) in digest.iter().enumerate() {
+                hex.as_mut_slice()[2 * i] = HEX[(b >> 4) as usize];
+                hex.as_mut_slice()[2 * i + 1] = HEX[(b & 15) as usize];
+            }
+            hex.into()
+        })
+        .collect();
+    Ok((out, memory::peak_since(base)))
+}
+
+#[rustler::nif]
+fn hmac_hex_many_nif<'a>(env: Env<'a>, key: Binary<'a>, prefix: Binary<'a>, texts: Vec<Binary<'a>>) -> NifResult<(Vec<Binary<'a>>, usize)> {
+    hmac_hex_many(env, key, prefix, texts)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn hmac_hex_many_dirty_nif<'a>(env: Env<'a>, key: Binary<'a>, prefix: Binary<'a>, texts: Vec<Binary<'a>>) -> NifResult<(Vec<Binary<'a>>, usize)> {
+    hmac_hex_many(env, key, prefix, texts)
+}
+
 rustler::init!("Elixir.Engram.Native");
