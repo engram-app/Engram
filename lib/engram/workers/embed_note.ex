@@ -2,8 +2,11 @@ defmodule Engram.Workers.EmbedNote do
   @moduledoc """
   Oban worker: embeds a note and upserts to Qdrant.
 
-  Debounce: 5-second scheduled_at delay, replaced on re-insert so rapid edits
-  trigger only one Voyage API call.
+  Debounce: 30-second trailing settle (`:embed_settle_seconds`) with a 300s
+  max-wait ceiling, so rapid edits trigger only one Voyage API call. See
+  `new_debounced/3`.
+
+  Does not write `note_links`; `ExtractNoteLinks` owns those.
 
   Dedup: unique per note_id across all `:incomplete` states (which includes
   `executing` and `retryable`, not just available/scheduled), 60-second window.

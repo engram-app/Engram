@@ -127,7 +127,7 @@ defmodule Engram.Indexing.CommitIndexRlsTest do
     {:ok, prepared} = Indexing.prepare_index(note, vault, user)
 
     # Guard against a vacuous run. `prepare_index/3` returns
-    # `{:ok, {:no_chunks, link_rows}}` for an empty or over-cap note, and
+    # `{:ok, :no_chunks}` for an empty or over-cap note, and
     # `commit_index/1` is never reached on that branch — so without this the
     # test could "pass" having committed nothing.
     assert %{chunk_rows: [_ | _]} = prepared
@@ -203,15 +203,14 @@ defmodule Engram.Indexing.CommitIndexRlsTest do
     # above green while the later writes remain unscoped in prod. Each write on
     # the path therefore needs its own direct test, which is what this one is.
     test "replace_links/4 refuses to write note_links without a tenant of its own",
-         %{bypass: bypass, note: note, vault: vault, user: user} do
-      stub_qdrant(bypass)
-      prepared = prepare!(note, vault, user)
+         %{note: note, vault: vault, user: user} do
+      links = Engram.Links.Parser.extract(note.content)
 
-      assert [_ | _] = prepared.links,
+      assert [_ | _] = links,
              "fixture produced no link rows, so insert_all would be a no-op and prove nothing"
 
       case as_prod_role(fn ->
-             Engram.Links.replace_links(user, vault, note.id, prepared.links)
+             Engram.Links.replace_links(user, vault, note.id, links)
            end) do
         {:returned, :ok} ->
           :ok
@@ -250,9 +249,8 @@ defmodule Engram.Indexing.CommitIndexRlsTest do
     # FILTERED rather than rejected, so unscoped it reports `{0, nil}`, returns
     # `:ok`, and the old edges survive — which is exactly what this asserts.
     test "replace_links/4 scopes its DELETE without help from the prefetch",
-         %{bypass: bypass, note: note, vault: vault, user: user} do
-      stub_qdrant(bypass)
-      prepared = prepare!(note, vault, user)
+         %{note: note, vault: vault, user: user} do
+      links = Engram.Links.Parser.extract(note.content)
 
       edge_count = fn ->
         Repo.aggregate(
@@ -264,7 +262,7 @@ defmodule Engram.Indexing.CommitIndexRlsTest do
       end
 
       # Seed as the superuser, so the delete below has something to remove.
-      :ok = Engram.Links.replace_links(user, vault, note.id, prepared.links)
+      :ok = Engram.Links.replace_links(user, vault, note.id, links)
 
       assert edge_count.() > 0,
              "fixture seeded no edges, so the delete below would be a no-op and prove nothing"

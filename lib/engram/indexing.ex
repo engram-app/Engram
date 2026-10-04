@@ -83,7 +83,7 @@ defmodule Engram.Indexing do
     user = user || Engram.Accounts.get_user_with_subscription!(note.user_id)
 
     case prepare_index(note, vault, user, opts) do
-      {:ok, {reason, link_rows}} when reason in [:no_chunks, :over_cap] ->
+      {:ok, reason} when reason in [:no_chunks, :over_cap] ->
         case Crypto.get_dek(user) do
           {:ok, _dek} ->
             # `:no_chunks` means this note must end up with ZERO index
@@ -99,16 +99,17 @@ defmodule Engram.Indexing do
             # the points it failed to remove would stay searchable forever.
             # Returning the error costs one Oban retry.
             #
+            # No `note_links` write here or in commit_index/1: ExtractNoteLinks
+            # owns them (see its moduledoc), reading the authoritative CRDT
+            # content rather than this facade.
+            #
             # The 4th element says whether the dense leg is complete. A note
             # with nothing to index (empty, or only base64 blobs) has all of
             # the dense vectors it ever will, so `true`: leaving it `false`
             # keeps `dense_indexed_hash` nil and ReconcileEmbeddings re-selects
             # it for paid users every tick. Over the cap it is `false`, so the
             # note is backfilled when the cap is raised.
-            with :ok <- purge_stale_index(note) do
-              :ok = Engram.Links.replace_links(user, vault, note.id, link_rows)
-              {:ok, 0, 0, reason == :no_chunks}
-            end
+            with :ok <- purge_stale_index(note), do: {:ok, 0, 0, reason == :no_chunks}
 
           {:error, :no_dek} = err ->
             emit_no_dek_telemetry(note)
@@ -132,16 +133,14 @@ defmodule Engram.Indexing do
   slow Voyage AI HTTP call run outside any Postgres connection.
 
   Returns:
-    * `{:ok, {:over_cap, link_rows}}` — outside the user's indexed-note cap;
-      same handling as `:no_chunks`, but the dense leg stays incomplete
-    * `{:ok, {:no_chunks, link_rows}}` — note has no parseable chunks; caller
-      must still persist `link_rows` (a note emptied to "" must clear its
-      stale outgoing edges, same as any other re-index)
+    * `{:ok, :over_cap}` — outside the user's indexed-note cap; same handling
+      as `:no_chunks`, but the dense leg stays incomplete
+    * `{:ok, :no_chunks}` — note has no parseable chunks; caller must still
+      purge the previous index
     * `{:ok, prepared}` — ready to hand to `commit_index/1`
     * `{:error, reason}` — embed failed, encryption failed, etc.
   """
-  def prepare_index(note, %Engram.Vaults.Vault{} = vault, user \\ nil, opts \\ []) do
-    link_rows = Engram.Links.Parser.extract(note.content || "")
+  def prepare_index(note, %Engram.Vaults.Vault{} = _vault, user \\ nil, opts \\ []) do
     chunks = Markdown.parse(note.content || "", note.path)
 
     # An empty note needs no identity at all, so that branch stays ahead of the
@@ -149,7 +148,7 @@ defmodule Engram.Indexing do
     # want the same `%User{}`, and resolving it once here is what keeps this
     # path at one `users` query per note. See #1502.
     if chunks == [] do
-      {:ok, {:no_chunks, link_rows}}
+      {:ok, :no_chunks}
     else
       user = user || Engram.Accounts.get_user_with_subscription!(note.user_id)
 
@@ -177,7 +176,7 @@ defmodule Engram.Indexing do
              :ok <- ensure_one_vector_per_text(vectors, texts, note),
              avgdl = Engram.KeywordIndex.Stats.avgdl(note.user_id, note.vault_id),
              {:ok, prepared} <-
-               build_prepared(note, user, vault, plan, vectors, filter_key, avgdl, link_rows) do
+               build_prepared(note, user, plan, vectors, filter_key, avgdl) do
           # What the embedder was actually sent (#1618): reused chunks and
           # sparse-only passes cost nothing, so the meter must not bill them.
           embedded_bytes = if dense?, do: text_bytes(texts), else: 0
@@ -192,10 +191,10 @@ defmodule Engram.Indexing do
             other
         end
       else
-        # Outside the user's indexed-note cap: persist link rows (the graph is
-        # not search and is not capped) but write no chunks and no Qdrant
-        # points.
-        {:ok, {:over_cap, link_rows}}
+        # Outside the user's indexed-note cap: no chunks and no Qdrant points.
+        # The link graph is not search and is not capped; ExtractNoteLinks
+        # writes it regardless.
+        {:ok, :over_cap}
       end
     end
   end
@@ -244,8 +243,8 @@ defmodule Engram.Indexing do
   being reused, rewrites the chunk rows, and deletes the points nothing names
   any more.
 
-  Tenant context is handled internally: the chunk rewrite below and
-  `Links.replace_links/4` each open their own `Repo.with_tenant/2`, so this is
+  Tenant context is handled internally: the chunk rewrite below opens its own
+  `Repo.with_tenant/2`, so this is
   safe to call with or without an enclosing tenant (`with_tenant/2` is
   re-entrant for the same tenant, so a scoped caller pays nothing).
 
@@ -259,11 +258,8 @@ defmodule Engram.Indexing do
   """
   def commit_index(%{
         note: note,
-        user: user,
-        vault: vault,
         chunk_rows: chunk_rows,
         qdrant_points: qdrant_points,
-        links: link_rows,
         reused_point_ids: reused_point_ids,
         stale_point_ids: stale_point_ids,
         note_payload: note_payload
@@ -307,8 +303,6 @@ defmodule Engram.Indexing do
           Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id), skip_tenant_check: true)
           Repo.insert_all(Chunk, chunk_rows, skip_tenant_check: true)
         end)
-
-      :ok = Engram.Links.replace_links(user, vault, note.id, link_rows)
 
       drop_stale_points(reused_point_ids, stale_point_ids, note)
 
@@ -977,7 +971,7 @@ defmodule Engram.Indexing do
   # Encrypt-first: build payloads + encrypt in memory BEFORE any mutation.
   # If any chunk's encryption fails, no Postgres row or Qdrant point is touched
   # and prior state survives for the next Oban retry.
-  defp build_prepared(note, user, vault, plan, vectors, filter_key, avgdl, link_rows) do
+  defp build_prepared(note, user, plan, vectors, filter_key, avgdl) do
     now = DateTime.utc_now(:second)
 
     # Language is a property of the NOTE, not of each chunk. Detecting per chunk
@@ -1029,8 +1023,6 @@ defmodule Engram.Indexing do
       {:ok,
        %{
          note: note,
-         user: user,
-         vault: vault,
          chunk_rows: Enum.map(built, & &1.row),
          qdrant_points: for(%{point: p} <- built, p != nil, do: p),
          # Straight from the plan, not re-derived from `built`. Two independent
@@ -1039,8 +1031,7 @@ defmodule Engram.Indexing do
          # is either a stray or a row pointing at nothing.
          reused_point_ids: plan.reused_point_ids,
          stale_point_ids: plan.stale_point_ids,
-         note_payload: note_payload,
-         links: link_rows
+         note_payload: note_payload
        }}
     end
   end
