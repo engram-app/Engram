@@ -860,17 +860,7 @@ jobs:
   # A failure is NOT necessarily our bug — read it as "a vendor changed
   # something and one of us has to move". Discord fires via alert-cron-failure
   # (this job is in its `needs`); the offending FIELD is in the issue the last
-  # step opens, because the alert can only name the job.      - name: Rust toolchain (native/ NIFs)
-        # rustup into the runner user's home, once per VM; the version comes
-        # from native/engram_native/rust-toolchain.toml on first cargo run.
-        run: |
-          if ! command -v rustup >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/rustup" ]; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-              | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
-          fi
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-
-
+  # step opens, because the alert can only name the job.
   vendor-conformance:
     if: |
       github.event.schedule == '40 7 * * *'
@@ -957,6 +947,21 @@ jobs:
           PG_PORT=$(docker port "$PG_CONTAINER" 5432/tcp | head -1 | cut -d: -f2)
           echo "pg_port=$PG_PORT" >> "$GITHUB_OUTPUT"
           echo "Postgres on port $PG_PORT (container: $PG_CONTAINER)"
+
+      - name: Rust toolchain (native/ NIFs)
+        # rustup into the runner user's home, once per VM, at the version
+        # native/engram_native/rust-toolchain.toml pins. Under flock: the
+        # runners on one VM share ~/.rustup, and rustup is not safe to run
+        # concurrently.
+        run: |
+          mkdir -p "$HOME/.cargo"
+          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/engram_native/rust-toolchain.toml)
+          flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
+            [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --no-self-update
+          ' "$RUST_VERSION"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Fetch deps
         run: mix deps.get --only test

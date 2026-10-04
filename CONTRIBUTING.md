@@ -57,6 +57,9 @@ without Docker — i.e. you're hacking on the app itself.
 ### Prerequisites
 
 - Elixir 1.15+ and Erlang/OTP 27+
+- Rust via [rustup](https://rustup.rs): `mix compile` builds the in-house NIF
+  in `native/engram_native`, and rustup installs the toolchain version pinned
+  in its `rust-toolchain.toml` on first build
 - PostgreSQL 18+ (the schema baseline uses `uuidv7`; older majors won't boot)
 - [Qdrant](https://qdrant.tech) running locally or Qdrant Cloud
 - [Ollama](https://ollama.com) (optional — only if running embeddings locally;

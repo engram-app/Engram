@@ -3,10 +3,41 @@
 The keyword encoder (tokenize + Snowball stem + HMAC + BM25) was the first
 port, on 2026-10-04. This doc is the standard every later NIF follows.
 
-## When a NIF is worth it
+## Default to Rust for CPU-bound pure work
 
-Only for pure CPU work over binaries, after a profile shows it hot. The Oban
-flow is mostly I/O (Voyage, Qdrant, Postgres), where Rust buys nothing.
+**Policy: when code is CPU-bound and pure, write it (or port it) as a function
+in `native/engram_native`. Do not reach for it as a last resort.** Elixir does
+the orchestration: jobs, I/O, processes, retries, tenancy. Rust does the
+loops over bytes. The first port ran 15-43x faster with a native peak in
+single-digit MB, where the Elixir version needed tens to hundreds of MB of
+heap. That gap is typical for text processing, not a fluke.
+
+Port it when ALL of these hold:
+
+1. **Pure:** binaries/numbers in, binaries/numbers out. No DB, no network,
+   no process state, no callbacks into Elixir.
+2. **CPU-bound:** it scans or transforms bytes (parse, tokenize, hash, regex,
+   normalize, encode, diff). A profile or a timing shows it in milliseconds
+   or more per call, or it builds large term structures on the heap.
+3. **Testable against the old code:** there is an Elixir version (or a spec)
+   to diff against before it is deleted.
+
+Do NOT port: anything that waits on I/O (Voyage, Qdrant, Postgres, S3: Rust
+buys nothing there), code under a few microseconds per call (the NIF call
+costs about that), or code that needs to call back into the BEAM.
+
+### Next candidates (measured or observed, highest value first)
+
+| Code | Why | Evidence |
+|---|---|---|
+| `Engram.Parsers.Markdown.parse/2` (chunker, blob strip, frontmatter) | regex-heavy, runs on every embed | fuzz 2026-10-03: huge frontmatter ~39 s CPU/MB; many tiny headings ~8 s and +329 MB per MB |
+| `Engram.Links.Parser.extract/1` | regex scan of the whole note on every edit | caused the 2026-10-03 OOM (PCRE backtrack frames) before the possessive fix |
+| `Indexing` packing/JSON of vectors (`dense_json`, `vector_json`) | per-float formatting over 1024-dim vectors | hot during upsert of large notes |
+| Content fingerprints (`Crypto.hmac_content_hash` over `context_text`) | one HMAC per chunk, plus string building | cheap per call; port together with the chunker, not alone |
+
+Port the chunker and link parser as ONE pass over the note (both read the
+same bytes), behind their existing module APIs, the way the keyword encoder
+kept `Tokenizer`/`QdrantSparse`.
 
 Measured on the keyword encoder (dev box, minimum of 5 interleaved runs):
 
@@ -59,9 +90,13 @@ following closes part of it:
 ## Scheduling
 
 `schedule = "DirtyCpu"` on everything whose input size the caller controls.
-Dirty schedulers equal normal ones in number by default and cannot be
-preempted, so keep concurrent callers (the Oban queue limit) below
-`:erlang.system_info(:dirty_cpu_schedulers)`.
+Dirty CPU schedulers cannot be preempted and default to one per normal
+scheduler. **Prod tasks run ONE** (`task_cpu_units = 512` → `BEAM_SCHEDULERS=1`,
+`+SDcpu 1:1`, engram-infra `main/envs/prod/ecs.tf`, `rel/env.sh.eex`), shared
+with lingua and mdex_native. Calls queue behind each other there, which is
+fine while each is short (the keyword encode is ~0.25 s per MB). If a NIF ever
+runs for seconds per call in prod, chunk the input or raise `+SDcpu` before
+adding callers.
 
 ## Build
 
@@ -73,6 +108,13 @@ preempted, so keep concurrent callers (the Oban queue limit) below
   that pipeline is for Hex packages.
 - Build for baseline x86-64. Never `-C target-cpu=native`: CI runners and
   Fargate are different CPUs.
+- CI change detection (`ci/fingerprint/groups.sh`) hashes `native/` with the
+  Elixir source, and the `_build` caches carry `priv/native` (the built
+  `.so`). Without the latter a host job restores a manifest that says the
+  crate is compiled and loads a missing or stale library.
+- Adding a NIF function: add it to the Rust `#[rustler::nif]` list AND the
+  stub in `Engram.Native`, route it through `call/3` so it emits telemetry,
+  and give it a peak-bound and a leak test.
 
 ## Gotchas found on the way
 
@@ -82,7 +124,10 @@ preempted, so keep concurrent callers (the Oban queue limit) below
   changed tokens silently on upgrade. The Rust tokenizer uses current Unicode,
   pinned by `Cargo.lock`. A tokenizer change needs
   `ReindexKeyword.enqueue(user_id, vault_id, :sparse)`: a keyword-only
-  re-index with no Voyage spend.
+  re-index with no Voyage spend. Run it only once the WORKER tier is on the
+  new release (`count by (role) (up{job="prometheus.scrape.engram_app"})`):
+  an old worker reads a `:sparse` job as a full, Voyage-billed re-embed, and
+  has no `ResparseNote` module at all.
 - **`str::to_lowercase` applies Greek final sigma; `String.downcase` does
   not.** Lowercase per char (`flat_map(char::to_lowercase)`).
 - **Stemmers:** generated with the Snowball compiler (`regen.sh`) from the

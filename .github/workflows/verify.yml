@@ -840,7 +840,9 @@ jobs:
         id: cache-build-dev
         uses: runs-on/cache@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         with:
-          path: _build/dev
+          path: |
+            _build/dev
+            priv/native
           restore-keys: ${{ steps.keys.outputs.build-dev-restore }}
           # The restore prefix is LOCKFILE-SCOPED (see "Compute cache keys"), so
           # it can only fall back to an older commit's build of the same deps —
@@ -859,7 +861,9 @@ jobs:
         id: cache-build-test
         uses: runs-on/cache@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         with:
-          path: _build/test
+          path: |
+            _build/test
+            priv/native
           # Lockfile-scoped restore prefix — see the _build/dev cache above for
           # why the scoping (not the absence of restore-keys) is what keeps a
           # cross-lockfile _build from crashing protocol consolidation.
@@ -2471,19 +2475,26 @@ jobs:
       - name: Restore _build/test cache
         uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         with:
-          path: _build/test
+          path: |
+            _build/test
+            priv/native
           key: ${{ needs.prebuild-mix.outputs.build-test-key }}
           restore-keys: |
             ${{ needs.prebuild-mix.outputs.build-test-restore }}
 
       - name: Rust toolchain (native/ NIFs)
-        # rustup into the runner user's home, once per VM; the version comes
-        # from native/engram_native/rust-toolchain.toml on first cargo run.
+        # rustup into the runner user's home, once per VM, at the version
+        # native/engram_native/rust-toolchain.toml pins. Under flock: the
+        # runners on one VM share ~/.rustup, and rustup is not safe to run
+        # concurrently.
         run: |
-          if ! command -v rustup >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/rustup" ]; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+          mkdir -p "$HOME/.cargo"
+          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/engram_native/rust-toolchain.toml)
+          flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
+            [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
-          fi
+            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --no-self-update
+          ' "$RUST_VERSION"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Fetch deps (if missing or lockfile changed)
@@ -2810,19 +2821,26 @@ jobs:
       - name: Restore _build/dev cache
         uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         with:
-          path: _build/dev
+          path: |
+            _build/dev
+            priv/native
           key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
           restore-keys: |
             ${{ needs.prebuild-mix.outputs.build-dev-restore }}
 
       - name: Rust toolchain (native/ NIFs)
-        # rustup into the runner user's home, once per VM; the version comes
-        # from native/engram_native/rust-toolchain.toml on first cargo run.
+        # rustup into the runner user's home, once per VM, at the version
+        # native/engram_native/rust-toolchain.toml pins. Under flock: the
+        # runners on one VM share ~/.rustup, and rustup is not safe to run
+        # concurrently.
         run: |
-          if ! command -v rustup >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/rustup" ]; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+          mkdir -p "$HOME/.cargo"
+          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/engram_native/rust-toolchain.toml)
+          flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
+            [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
-          fi
+            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --no-self-update
+          ' "$RUST_VERSION"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Fetch deps (if missing or lockfile changed)
@@ -3553,19 +3571,26 @@ jobs:
         if: steps.gate.outputs.proceed == 'true'
         uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         with:
-          path: _build/dev
+          path: |
+            _build/dev
+            priv/native
           key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
           restore-keys: |
             ${{ needs.prebuild-mix.outputs.build-dev-restore }}
 
       - name: Rust toolchain (native/ NIFs)
-        # rustup into the runner user's home, once per VM; the version comes
-        # from native/engram_native/rust-toolchain.toml on first cargo run.
+        # rustup into the runner user's home, once per VM, at the version
+        # native/engram_native/rust-toolchain.toml pins. Under flock: the
+        # runners on one VM share ~/.rustup, and rustup is not safe to run
+        # concurrently.
         run: |
-          if ! command -v rustup >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/rustup" ]; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+          mkdir -p "$HOME/.cargo"
+          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/engram_native/rust-toolchain.toml)
+          flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
+            [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
-          fi
+            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --no-self-update
+          ' "$RUST_VERSION"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Install deps
@@ -4109,7 +4134,9 @@ jobs:
       - name: Restore _build/dev cache
         uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         with:
-          path: _build/dev
+          path: |
+            _build/dev
+            priv/native
           key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
           restore-keys: |
             ${{ needs.prebuild-mix.outputs.build-dev-restore }}
@@ -4175,13 +4202,18 @@ jobs:
           echo "Postgres on port $PG_PORT"
 
       - name: Rust toolchain (native/ NIFs)
-        # rustup into the runner user's home, once per VM; the version comes
-        # from native/engram_native/rust-toolchain.toml on first cargo run.
+        # rustup into the runner user's home, once per VM, at the version
+        # native/engram_native/rust-toolchain.toml pins. Under flock: the
+        # runners on one VM share ~/.rustup, and rustup is not safe to run
+        # concurrently.
         run: |
-          if ! command -v rustup >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/rustup" ]; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+          mkdir -p "$HOME/.cargo"
+          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/engram_native/rust-toolchain.toml)
+          flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
+            [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
-          fi
+            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --no-self-update
+          ' "$RUST_VERSION"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Fetch deps (if missing or lockfile changed)
