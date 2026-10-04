@@ -9,6 +9,7 @@ import {
 } from "@codemirror/view";
 import { nextMermaidId, renderMermaid } from "../mermaid-render";
 import { selectionTouches } from "./decoration-utils";
+import { translator } from "./translator";
 import "./mermaid.css";
 
 /**
@@ -48,7 +49,10 @@ class MermaidWidget extends WidgetType {
 				// source visible so it can be fixed. Mermaid rejects on any syntax
 				// slip, which is a normal state while typing.
 				el.classList.add("cm-mermaid-error");
-				el.textContent = `Mermaid error: ${err instanceof Error ? err.message : String(err)}`;
+				const t = view.state.facet(translator);
+				el.textContent = t("Mermaid error: {error}", {
+					error: err instanceof Error ? err.message : String(err),
+				});
 				measure();
 			});
 		return el;

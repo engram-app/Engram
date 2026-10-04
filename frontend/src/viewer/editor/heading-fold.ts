@@ -2,6 +2,7 @@ import { codeFolding, foldGutter, foldKeymap, foldNodeProp } from "@codemirror/l
 import type { Extension } from "@codemirror/state";
 import { type EditorView, keymap, ViewPlugin } from "@codemirror/view";
 import type { MarkdownConfig } from "@lezer/markdown";
+import { englishTranslate, type Translate } from "./translator";
 
 /**
  * Obsidian-style collapsible headings.
@@ -23,14 +24,14 @@ import type { MarkdownConfig } from "@lezer/markdown";
  */
 
 /** Chevron matching the tree's disclosure triangles, rotated when open. */
-function chevron(open: boolean): HTMLElement {
+function chevron(open: boolean, t: Translate): HTMLElement {
 	const span = document.createElement("span");
 	span.className = `cm-fold-chevron${open ? " cm-fold-chevron-open" : ""}`;
 	// Inline SVG rather than a text glyph: "⌄" and "›" render at wildly
 	// different weights across the fonts this editor runs in.
 	span.innerHTML =
 		'<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>';
-	span.setAttribute("aria-label", open ? "Collapse section" : "Expand section");
+	span.setAttribute("aria-label", open ? t("Collapse section") : t("Expand section"));
 	return span;
 }
 
@@ -88,22 +89,28 @@ const foldHoverSync = ViewPlugin.fromClass(
 	},
 );
 
-export const headingFold: Extension = [
-	codeFolding({
-		placeholderDOM(_view, onclick) {
-			const el = document.createElement("span");
-			el.className = "cm-foldPlaceholder";
-			el.textContent = "…";
-			el.title = "Expand section";
-			el.setAttribute("aria-label", "Expand section");
-			el.onclick = onclick;
-			return el;
-		},
-	}),
-	foldGutter({ markerDOM: chevron }),
-	foldHoverSync,
-	keymap.of(foldKeymap),
-];
+// Takes the translate function because the gutter marker is built without a
+// view to read it from. The default export below is the English one.
+export function headingFoldWith(t: Translate): Extension {
+	return [
+		codeFolding({
+			placeholderDOM(_view, onclick) {
+				const el = document.createElement("span");
+				el.className = "cm-foldPlaceholder";
+				el.textContent = "…";
+				el.title = t("Expand section");
+				el.setAttribute("aria-label", t("Expand section"));
+				el.onclick = onclick;
+				return el;
+			},
+		}),
+		foldGutter({ markerDOM: (open) => chevron(open, t) }),
+		foldHoverSync,
+		keymap.of(foldKeymap),
+	];
+}
+
+export const headingFold: Extension = headingFoldWith(englishTranslate);
 
 /**
  * Stops PARAGRAPHS being foldable.

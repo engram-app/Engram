@@ -12,17 +12,19 @@ import { createRoot } from "react-dom/client";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { LIST_ROW_GAP, listRowClass } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
+import { translator } from "./translator";
 
 const LIST_ID = "engram-completion-list";
 const optionId = (i: number): string => `engram-completion-opt-${i}`;
 
 interface ListProps {
+	label: string;
 	completions: readonly Completion[];
 	selected: number;
 	onPick: (index: number) => void;
 }
 
-function CompletionList({ completions, selected, onPick }: ListProps) {
+function CompletionList({ label, completions, selected, onPick }: ListProps) {
 	return (
 		<div className="engram-completion min-w-72 max-w-md overflow-hidden rounded-lg border border-border bg-popover text-base text-popover-foreground shadow-md">
 			{/* py-2 is OUTSIDE the scrolling viewport on purpose: padding inside it scrolls
@@ -31,7 +33,7 @@ function CompletionList({ completions, selected, onPick }: ListProps) {
 				<div
 					id={LIST_ID}
 					role="listbox"
-					aria-label="Link suggestions"
+					aria-label={label}
 					// Sides only: the 8px above and below is the ScrollArea's own py-2, which stays put
 					// while the rows scroll (a p-2 here would double it at the top of the list).
 					className="flex flex-col px-2"
@@ -88,9 +90,11 @@ function open(state: EditorState): boolean {
 function createPopup(view: EditorView): TooltipView {
 	const dom = document.createElement("div");
 	const root = createRoot(dom);
+	const t = view.state.facet(translator);
 	const render = (state: EditorState) => {
 		root.render(
 			<CompletionList
+				label={t("Link suggestions")}
 				completions={currentCompletions(state)}
 				selected={selectedCompletionIndex(state) ?? 0}
 				onPick={(index) => {
