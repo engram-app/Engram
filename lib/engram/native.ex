@@ -89,6 +89,12 @@ defmodule Engram.Native do
   @doc false
   def hmac_hex_many_dirty_nif(_key, _prefix, _texts), do: :erlang.nif_error(:nif_not_loaded)
 
+  @doc false
+  def json_decode_nif(_text), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc false
+  def json_decode_dirty_nif(_text), do: :erlang.nif_error(:nif_not_loaded)
+
   @doc "Live bytes held by this library's Rust heap, process-wide."
   def live_bytes, do: :erlang.nif_error(:nif_not_loaded)
 
@@ -158,6 +164,23 @@ defmodule Engram.Native do
         hmac_hex_many_dirty_nif(key, prefix, texts)
       end)
     end
+  end
+
+  @doc """
+  `Jason.decode/1`'s result, in Rust: string keys, the first of a repeated
+  key wins, integers stay integers, floats correctly rounded. Malformed text
+  (or nesting past 128 levels) is `{:error, :invalid_json}`. Up to 16 KB runs
+  on the calling scheduler.
+  """
+  def json_decode(text) when is_binary(text) do
+    term =
+      if byte_size(text) <= @inline_max,
+        do: call(:json_decode, text, %{dirty: false}, fn -> json_decode_nif(text) end),
+        else: call(:json_decode, text, %{dirty: true}, fn -> json_decode_dirty_nif(text) end)
+
+    {:ok, term}
+  rescue
+    ArgumentError -> {:error, :invalid_json}
   end
 
   # Every NIF entry point goes through here: one event shape for all of them,

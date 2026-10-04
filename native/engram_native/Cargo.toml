@@ -17,6 +17,8 @@ regex = "1"
 snowball_stemmers_rs = "1.0.1"
 pulldown-cmark = { version = "0.13", default-features = false }
 ryu = "1"
+serde = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] }
 
 [profile.release]
 lto = true

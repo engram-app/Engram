@@ -3,6 +3,7 @@
 //! `:erlang.memory(:binary)`). See docs/context for the memory standard.
 mod links;
 mod memory;
+mod json;
 mod meta;
 mod mmr;
 mod vectors;
@@ -291,6 +292,22 @@ fn hmac_hex_many_nif<'a>(env: Env<'a>, key: Binary<'a>, prefix: Binary<'a>, text
 #[rustler::nif(schedule = "DirtyCpu")]
 fn hmac_hex_many_dirty_nif<'a>(env: Env<'a>, key: Binary<'a>, prefix: Binary<'a>, texts: Vec<Binary<'a>>) -> NifResult<(Vec<Binary<'a>>, usize)> {
     hmac_hex_many(env, key, prefix, texts)
+}
+
+fn json_decode<'a>(env: Env<'a>, text: Binary<'a>) -> NifResult<(Term<'a>, usize)> {
+    let base = memory::begin();
+    let term = json::decode(env, text.as_slice()).map_err(|_| Error::BadArg)?;
+    Ok((term, memory::peak_since(base)))
+}
+
+#[rustler::nif]
+fn json_decode_nif<'a>(env: Env<'a>, text: Binary<'a>) -> NifResult<(Term<'a>, usize)> {
+    json_decode(env, text)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn json_decode_dirty_nif<'a>(env: Env<'a>, text: Binary<'a>) -> NifResult<(Term<'a>, usize)> {
+    json_decode(env, text)
 }
 
 rustler::init!("Elixir.Engram.Native");
