@@ -21,6 +21,8 @@ import {
 	useIndexStatus,
 	useMe,
 } from "../api/queries";
+import { useT } from "../i18n/locale-provider";
+import { paddleLocale } from "../i18n/vendor-locales";
 import BillingHistoryTable from "./billing-history-table";
 import CancelPanel from "./cancel-panel";
 import CurrentPlanCard from "./current-plan-card";
@@ -222,6 +224,9 @@ export default function BillingPage({
 	const { data: detail } = useBillingSubscriptionDetail(hasSubscription);
 	const { data: history } = useBillingHistory(hasSubscription);
 	const qc = useQueryClient();
+	// Per-checkout, NOT in the init effect: that effect rebuilds the Paddle
+	// instance, which strands an open checkout (see the theme note there).
+	const checkoutLocale = paddleLocale(useT().renderedLocale);
 	const { data: indexStatus } = useIndexStatus();
 	const [paddle, setPaddle] = useState<Paddle>();
 	// Ref mirror of `paddle` so the eventCallback (captured pre-instance) can
@@ -473,6 +478,8 @@ export default function BillingPage({
 			// doesn't clash with the branded fields. Fixed, not tied to the app's
 			// live theme — a dynamic value here tore down/rebuilt the Paddle
 			// instance on every app theme toggle, stranding an open checkout.
+			// `locale: "en"` is only the default; each Checkout.open passes the
+			// rendered app locale (checkoutLocale) in its own settings.
 			checkout: {
 				settings: isInline
 					? {
@@ -552,10 +559,11 @@ export default function BillingPage({
 					],
 					customer: { email: config.customer_email },
 					customData: config.custom_data,
+					settings: { locale: checkoutLocale },
 				});
 			});
 		},
-		[paddle, config, cadence, isInline],
+		[paddle, config, cadence, isInline, checkoutLocale],
 	);
 
 	// Dev stub success: satisfy the backend onboarding gate via the free-tier
@@ -634,7 +642,7 @@ export default function BillingPage({
 			const { transaction_id } = await api.get<{ transaction_id: string }>(
 				"/billing/payment-update-transaction",
 			);
-			paddle.Checkout.open({ transactionId: transaction_id });
+			paddle.Checkout.open({ transactionId: transaction_id, settings: { locale: checkoutLocale } });
 		} catch {
 			toast.error("Could not start the payment update. Please try again.");
 		} finally {
