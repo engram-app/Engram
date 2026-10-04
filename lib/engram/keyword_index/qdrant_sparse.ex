@@ -18,6 +18,8 @@ defmodule Engram.KeywordIndex.QdrantSparse do
   alias Engram.KeywordIndex.Bm25
   alias Engram.KeywordIndex.Tokenizer
 
+  @memo_max 20_000
+
   @doc "HMAC(filter_key, token) → unsigned u32 sparse dimension index."
   @spec dim(binary(), String.t()) :: non_neg_integer()
   def dim(filter_key, token) do
@@ -31,13 +33,22 @@ defmodule Engram.KeywordIndex.QdrantSparse do
 
   def encode_query(query, filter_key), do: encode_query(query, filter_key, nil)
 
-  def encode_document(text, filter_key, avgdl, language),
-    do: hd(encode_documents([text], filter_key, avgdl, language))
+  # Single-text convenience, unpacked to plain lists.
+  def encode_document(text, filter_key, avgdl, language) do
+    [{packed, doc_len}] = encode_documents([text], filter_key, avgdl, language)
+    {unpack(packed), doc_len}
+  end
 
   # One token -> dim memo for the whole batch (a note's chunks). The HMAC per
   # (chunk, distinct token) was ~25% of encoding CPU, and a note repeats most
   # of its vocabulary across chunks. The memo lives only for this call, so it
-  # is bounded by one note's distinct words and never outlives the key.
+  # never outlives the key.
+  #
+  # ponytail: capped at @memo_max entries, then it stops growing. Prose runs
+  # ~12k distinct words per MB, so ordinary notes memo everything. A note of
+  # near-unique words (hashes, logs, generated ids) would otherwise grow it
+  # without bound: 600k entries needed a 160 MB heap where the unmemoized
+  # encoder needs 10 MB. Past the cap new words pay the HMAC, as before.
   @impl Engram.KeywordIndex
   def encode_documents(texts, filter_key, avgdl, language) do
     {encoded, _dims} =
@@ -66,13 +77,43 @@ defmodule Engram.KeywordIndex.QdrantSparse do
         {Map.update(acc, d, w, &(&1 + w)), dims}
       end)
 
-    {{to_sparse(by_dim), doc_len}, dims}
+    {{pack(by_dim), doc_len}, dims}
+  end
+
+  # u32 indices and f64 values, little-endian. As lists a term cost two cons
+  # cells plus a boxed float (~48 B) on the process heap, and indexing holds a
+  # whole note's vectors until commit: 28 MB for a 4.8 MB wide-vocabulary
+  # note. Packed it is 12 B per term, off-heap. f64 keeps the values exact,
+  # so what reaches Qdrant is unchanged.
+  #
+  # Packed from `Map.to_list/1`, not by iterating the map: past 32 keys a map
+  # iterates in a different order than `to_list` returns, and the stored
+  # order must not change.
+  defp pack(by_dim) do
+    pairs = Map.to_list(by_dim)
+
+    %{
+      indices: for({d, _} <- pairs, into: <<>>, do: <<d::unsigned-little-32>>),
+      values: for({_, w} <- pairs, into: <<>>, do: <<w::float-little-64>>)
+    }
+  end
+
+  @doc "Packed sparse vector (see `encode_documents/4`) back to plain lists."
+  @spec unpack(Engram.KeywordIndex.packed_sparse()) :: Engram.KeywordIndex.sparse()
+  def unpack(%{indices: indices, values: values}) do
+    %{
+      indices: for(<<d::unsigned-little-32 <- indices>>, do: d),
+      values: for(<<w::float-little-64 <- values>>, do: w)
+    }
   end
 
   defp memo_dim(dims, filter_key, token) do
     case dims do
       %{^token => d} ->
         {d, dims}
+
+      _ when map_size(dims) >= @memo_max ->
+        {dim(filter_key, token), dims}
 
       _ ->
         d = dim(filter_key, token)

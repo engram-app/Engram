@@ -60,7 +60,7 @@ defmodule Engram.IndexingKeywordTest do
 
     {:ok, prepared} = Indexing.prepare_index(note, vault)
     [point | _] = prepared.qdrant_points
-    %{"keyword" => %{indices: indices}} = point.vector
+    %{indices: indices} = QdrantSparse.unpack(point.vector["keyword"])
 
     {:ok, key} = Crypto.dek_filter_key(user)
 
@@ -103,7 +103,7 @@ defmodule Engram.IndexingKeywordTest do
 
     {:ok, prepared} = Indexing.prepare_index(note, vault)
     [point | _] = prepared.qdrant_points
-    %{"keyword" => %{indices: indices}} = point.vector
+    %{indices: indices} = QdrantSparse.unpack(point.vector["keyword"])
 
     {:ok, key} = Crypto.dek_filter_key(user)
 
@@ -144,10 +144,11 @@ defmodule Engram.IndexingKeywordTest do
     {:ok, prepared} = Indexing.prepare_index(note, vault)
     [point | _] = prepared.qdrant_points
 
-    assert %{"dense" => dense, "keyword" => %{indices: indices, values: values}} = point.vector
-    # Held packed (float32) until the Qdrant upsert unpacks it per batch — see
+    assert %{"dense" => dense, "keyword" => packed} = point.vector
+    # Both held packed until the Qdrant upsert writes them out per batch — see
     # Indexing.pack_vector/1. Three dims in, three float32s here.
     assert byte_size(dense) == 3 * 4
+    %{indices: indices, values: values} = QdrantSparse.unpack(packed)
     assert length(indices) == length(values)
     assert indices != []
 

@@ -784,11 +784,28 @@ defmodule Engram.Indexing do
   # fragment. Unpacking to a float list and letting Jason walk it was the heap
   # peak of indexing (~26 MB per 64-point batch): a list cell, a boxed float
   # and a formatted binary per element, all live until the request was sent.
-  defp unpack_point(%{vector: %{"dense" => dense} = named} = point) when is_binary(dense) do
-    %{point | vector: %{named | "dense" => Jason.Fragment.new(dense_json(dense))}}
+  defp unpack_point(%{vector: named} = point) do
+    %{point | vector: Map.new(named, fn {name, v} -> {name, vector_json(v)} end)}
   end
 
-  defp unpack_point(point), do: point
+  defp vector_json(dense) when is_binary(dense), do: Jason.Fragment.new(dense_json(dense))
+
+  # Packed sparse (`KeywordIndex.packed_sparse`), written straight to JSON for
+  # the same reason as the dense leg.
+  defp vector_json(%{indices: indices, values: values}) when is_binary(indices) do
+    ids = for <<d::unsigned-little-32 <- indices>>, do: Integer.to_string(d)
+    ws = for <<w::float-little-64 <- values>>, do: :erlang.float_to_binary(w, [:short])
+
+    Jason.Fragment.new(
+      IO.iodata_to_binary([
+        ~s({"indices":[),
+        Enum.intersperse(ids, ","),
+        ~s(],"values":[),
+        Enum.intersperse(ws, ","),
+        "]}"
+      ])
+    )
+  end
 
   defp dense_json(packed) do
     floats = for <<x::float-32-little <- packed>>, do: :erlang.float_to_binary(x, [:short])

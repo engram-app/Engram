@@ -36,7 +36,7 @@ defmodule Engram.KeywordIndex.QdrantSparseTest do
     assert by_dim[QdrantSparse.dim(key, "alpha")] > by_dim[QdrantSparse.dim(key, "beta")]
   end
 
-  # The batch form shares one token -> dim memo across a note's chunks, so a
+  # The batch form returns PACKED vectors and shares one token -> dim memo across a note's chunks, so a
   # word repeated in every chunk is HMAC'd once instead of once per chunk. It
   # must be exactly the per-chunk encoding: the stored index cannot drift, or
   # every unchanged note would need re-indexing.
@@ -46,12 +46,19 @@ defmodule Engram.KeywordIndex.QdrantSparseTest do
       "",
       "Ferritin ferritin İstanbul ﬁle naïve 東京 run",
       "running fast again — and again",
-      String.duplicate("alpha beta gamma ", 50)
+      String.duplicate("alpha beta gamma ", 50),
+      # Over 32 distinct terms: a larger map iterates in hash order, not key
+      # order, so this is the case that pins the index ORDER, not just the set.
+      Enum.map_join(1..120, " ", &"term#{&1} word#{rem(&1, 7)}")
     ]
 
     for lang <- [nil, :en] do
       expected = Enum.map(texts, &reference_encode(&1, key, 7.5, lang))
-      assert QdrantSparse.encode_documents(texts, key, 7.5, lang) == expected
+      batch = QdrantSparse.encode_documents(texts, key, 7.5, lang)
+
+      # Packed (u32 indices, f64 values) so a note's vectors sit off-heap.
+      assert Enum.all?(batch, fn {p, _} -> is_binary(p.indices) and is_binary(p.values) end)
+      assert Enum.map(batch, fn {p, len} -> {QdrantSparse.unpack(p), len} end) == expected
       assert Enum.map(texts, &QdrantSparse.encode_document(&1, key, 7.5, lang)) == expected
     end
   end

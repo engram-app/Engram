@@ -11,6 +11,9 @@ defmodule Engram.KeywordIndex do
 
   @type sparse :: %{indices: [non_neg_integer()], values: [float()]}
 
+  @typedoc "`sparse` packed: u32 little-endian indices, f64 little-endian values."
+  @type packed_sparse :: %{indices: binary(), values: binary()}
+
   @doc """
   Encode a note's chunks into BM25-weighted sparse vectors, one per text, in
   order. Batched so an impl can share per-note work across chunks.
@@ -24,7 +27,7 @@ defmodule Engram.KeywordIndex do
               filter_key :: binary(),
               avgdl :: float(),
               language :: atom() | nil
-            ) :: [{sparse(), doc_len :: non_neg_integer()}]
+            ) :: [{packed_sparse(), doc_len :: non_neg_integer()}]
 
   @doc "Encode a query string into a sparse query vector (unit values)."
   @callback encode_query(query :: String.t(), filter_key :: binary(), language :: atom() | nil) ::
