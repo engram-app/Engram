@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.41.1](https://github.com/engram-app/Engram/compare/0.41.0...0.41.1) (2026-10-04)
+
+
+### Bug Fixes
+
+* **search:** evict avgdl before a sparse reindex ([7e5beba](https://github.com/engram-app/Engram/commit/7e5beba649e097e11eebaed817b6ad355c97a1c3))
+* **search:** index title, headings and folder for keywords ([7e5beba](https://github.com/engram-app/Engram/commit/7e5beba649e097e11eebaed817b6ad355c97a1c3))
+
+
+### Performance Improvements
+
+* **indexing:** batch chunk fingerprints in one NIF call ([7e5beba](https://github.com/engram-app/Engram/commit/7e5beba649e097e11eebaed817b6ad355c97a1c3))
+* **indexing:** pack and JSON-encode vectors in Rust ([7e5beba](https://github.com/engram-app/Engram/commit/7e5beba649e097e11eebaed817b6ad355c97a1c3))
+* **search:** decode Qdrant query responses in Rust ([7e5beba](https://github.com/engram-app/Engram/commit/7e5beba649e097e11eebaed817b6ad355c97a1c3))
+* **search:** run the MMR rerank in a Rust NIF ([7e5beba](https://github.com/engram-app/Engram/commit/7e5beba649e097e11eebaed817b6ad355c97a1c3))
+
 ## [0.41.0](https://github.com/engram-app/Engram/compare/0.40.0...0.41.0) (2026-10-04)
 
 
