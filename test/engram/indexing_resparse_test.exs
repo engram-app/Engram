@@ -3,6 +3,7 @@ defmodule Engram.IndexingResparseTest do
   # (Qdrant update-vectors), with no embedder call and no point churn. This is
   # how existing vectors move to a new tokenizer without a Voyage bill.
   use Engram.DataCase, async: false
+  use Oban.Testing, repo: Engram.Repo
 
   import Mox
 
@@ -66,7 +67,7 @@ defmodule Engram.IndexingResparseTest do
     %{user: user, note: note, upserted: upserted} = ctx
     expect(Engram.MockEmbedder, :embed_texts, 0, fn _ -> flunk("embedded") end)
 
-    assert {:ok, count} = Indexing.resparse_note(note, user)
+    assert {:ok, count, 0} = Indexing.resparse_note(note, user)
     assert count == length(upserted)
 
     assert_receive {:qdrant, "PUT", path, body}
@@ -98,19 +99,51 @@ defmodule Engram.IndexingResparseTest do
 
     {:ok, fresh} = Crypto.maybe_decrypt_note_fields(fresh, user)
 
-    assert {:ok, 0} = Indexing.resparse_note(fresh, user)
+    assert {:ok, 0, 0} = Indexing.resparse_note(fresh, user)
     refute_received {:qdrant, "PUT", _, _}
+  end
+
+  # A row with no fingerprint (written before context_hmac existed, or one
+  # whose reuse marker was cleared) can never be matched, so its keyword
+  # vector would silently stay on the old tokenizer. It must be reported.
+  test "counts stored points it cannot match", ctx do
+    %{user: user, note: note, upserted: upserted} = ctx
+    clear_one_fingerprint(note)
+
+    assert {:ok, count, 1} = Indexing.resparse_note(note, user)
+    assert count == length(upserted) - 1
+  end
+
+  test "the job falls back to a full rebuild when points stay unmatched", ctx do
+    %{user: user, note: note} = ctx
+    clear_one_fingerprint(note)
+
+    assert :ok =
+             perform_job(Engram.Workers.ResparseNote, %{note_id: note.id, user_id: user.id})
+
+    assert_enqueued(worker: Engram.Workers.EmbedNote, args: %{"note_id" => note.id})
+
+    reloaded = Repo.get!(Notes.Note, note.id, skip_tenant_check: true)
+    assert is_nil(reloaded.embed_hash)
+  end
+
+  defp clear_one_fingerprint(note) do
+    {:ok, _} =
+      Repo.with_tenant(note.user_id, fn ->
+        [id | _] =
+          Repo.all(from(c in Engram.Notes.Chunk, where: c.note_id == ^note.id, select: c.id))
+
+        Repo.update_all(from(c in Engram.Notes.Chunk, where: c.id == ^id),
+          set: [context_hmac: nil]
+        )
+      end)
   end
 
   test "the ResparseNote job runs the re-index for its note", ctx do
     %{user: user, note: note} = ctx
 
     assert :ok =
-             Oban.Testing.perform_job(
-               Engram.Workers.ResparseNote,
-               %{note_id: note.id, user_id: user.id},
-               repo: Engram.Repo
-             )
+             perform_job(Engram.Workers.ResparseNote, %{note_id: note.id, user_id: user.id})
 
     assert_receive {:qdrant, "PUT", path, _body}
     assert String.ends_with?(path, "/points/vectors")
@@ -127,7 +160,7 @@ defmodule Engram.IndexingResparseTest do
       | content: String.replace(note.content, "Deploying daily.", "Shipping weekly.")
     }
 
-    assert {:ok, count} = Indexing.resparse_note(edited, user)
-    assert count > 0 and count < length(upserted)
+    assert {:ok, count, unmatched} = Indexing.resparse_note(edited, user)
+    assert count > 0 and count + unmatched == length(upserted)
   end
 end

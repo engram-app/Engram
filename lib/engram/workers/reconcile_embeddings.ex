@@ -28,7 +28,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Vaults.Vault
-  alias Engram.Workers.EmbedNote
+  alias Engram.Workers.{EmbedNote, ExtractNoteLinks}
 
   require Logger
 
@@ -231,6 +231,15 @@ defmodule Engram.Workers.ReconcileEmbeddings do
               priority: EmbedNote.backfill_priority()
             )
           )
+        )
+
+        # Backstop for the link graph. ExtractNoteLinks is the only note_links
+        # writer and is enqueued beside EmbedNote after the write commits, so
+        # a note whose embed enqueue was lost most likely lost its link
+        # extraction too. Indexing used to cover this by rewriting links on
+        # every embed; that duplicate parse is gone, so this sweep re-extracts.
+        Oban.insert_all(
+          Enum.map(fresh, &ExtractNoteLinks.new_debounced(&1, Map.fetch!(user_by_note, &1)))
         )
       else
         # A zero-row sweep MUST log. Without this, "nothing is stale" and "the

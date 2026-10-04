@@ -968,10 +968,13 @@ defmodule Engram.Indexing do
 
   A chunk is rewritten only if it still matches a stored point by
   fingerprint (dense, or sparse-only for points that never had a dense
-  vector), i.e. the same match chunk reuse makes. A chunk edited since the
-  last index has no point to fix; the next normal embed replaces it.
+  vector), i.e. the same match chunk reuse makes.
 
-  Returns `{:ok, points_updated}`.
+  Returns `{:ok, points_updated, points_unmatched}`. An unmatched point kept
+  its old keyword vector: a row with no fingerprint (written before
+  `context_hmac` existed, or a cleared reuse marker), or a chunk edited since
+  the last index. The caller must not report that as done; `ResparseNote`
+  rebuilds such a note in full.
   """
   def resparse_note(note, user) do
     chunks = Markdown.parse(note.content || "", note.path)
@@ -979,10 +982,10 @@ defmodule Engram.Indexing do
     with {:ok, content_key} <- Crypto.dek_content_hash_key(user),
          {:ok, filter_key} <- Crypto.dek_filter_key(user) do
       case match_stored_points(note, chunks, content_key) do
-        [] ->
-          {:ok, 0}
+        {[], unmatched} ->
+          {:ok, 0, unmatched}
 
-        matched ->
+        {matched, unmatched} ->
           avgdl = Engram.KeywordIndex.Stats.avgdl(note.user_id, note.vault_id)
 
           sparse =
@@ -998,7 +1001,7 @@ defmodule Engram.Indexing do
               %{id: point_id, vector: %{"keyword" => vector}}
             end)
 
-          with :ok <- update_vectors_batched(points), do: {:ok, length(points)}
+          with :ok <- update_vectors_batched(points), do: {:ok, length(points), unmatched}
       end
     end
   end
@@ -1026,7 +1029,7 @@ defmodule Engram.Indexing do
         end
       end)
 
-    matched
+    {matched, length(rows) - length(matched)}
   end
 
   defp update_vectors_batched(points) do

@@ -26,7 +26,9 @@ defmodule Engram.Workers.ReindexKeyword do
   use Oban.Worker,
     queue: :embed,
     max_attempts: 3,
-    unique: [period: 3600, keys: [:vault_id], states: :incomplete]
+    # `:mode` in the key: a pending full re-embed must not swallow a sparse
+    # request, or the reverse. Legacy jobs without `mode` key as nil.
+    unique: [period: 3600, keys: [:vault_id, :mode], states: :incomplete]
 
   import Ecto.Query
 
@@ -56,6 +58,9 @@ defmodule Engram.Workers.ReindexKeyword do
     args = %{user_id: to_string(user_id), vault_id: to_string(vault_id), mode: to_string(mode)}
 
     case args |> new() |> Oban.insert() do
+      # A duplicate comes back as {:ok, job} with conflict? set; reporting it
+      # as success would claim a re-index that is not going to happen twice.
+      {:ok, %Oban.Job{conflict?: true}} -> {:error, :already_queued}
       {:ok, _job} -> :ok
       {:error, reason} -> {:error, reason}
     end

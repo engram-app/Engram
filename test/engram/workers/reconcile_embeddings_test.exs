@@ -27,6 +27,23 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
     end
 
+    # ExtractNoteLinks is the only note_links writer, and its enqueue sits next
+    # to EmbedNote's after the write commits. A note this sweep finds is one
+    # whose embed enqueue was lost, so its link extraction was most likely
+    # lost with it. Re-extracting here is the backstop the embed pipeline used
+    # to provide by rewriting links itself.
+    test "re-extracts links for every note it re-embeds" do
+      user = insert(:user)
+      note = note_for(user, content_hash: "new_hash", embed_hash: "old_hash")
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+
+      assert_enqueued(
+        worker: Engram.Workers.ExtractNoteLinks,
+        args: %{"note_id" => note.id, "user_id" => user.id}
+      )
+    end
+
     test "ignores a stale chunker_version — the cron must never start a mass re-embed" do
       # #1620 added `notes.chunker_version` and taught EmbedNote to rebuild a
       # note whose stamp is out of date. This cron was deliberately NOT taught

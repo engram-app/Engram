@@ -119,4 +119,54 @@ defmodule Engram.KeywordIndex.QdrantSparseTest do
     assert QdrantSparse.encode_query("running", key, nil) ==
              QdrantSparse.encode_query("running", key)
   end
+
+  describe "input bounds (each pins a dirty CPU scheduler otherwise)" do
+    # Some generated Snowball stemmers are quadratic in word length: a 200 KB
+    # "word" in a search query took 4 s on a non-preemptible scheduler.
+    # A token that long is never a real word, so it is indexed raw.
+    test "tokens over 64 bytes are not stemmed" do
+      long = String.duplicate("running", 10)
+      assert Engram.KeywordIndex.Tokenizer.tokens(long, :en) == [long]
+      assert Engram.KeywordIndex.Tokenizer.tokens("running", :en) == ["running", "run"]
+    end
+
+    test "a query's keyword leg reads at most its first 4096 characters", %{key_a: key} do
+      head = Enum.map_join(1..1_000, " ", &"w#{&1}")
+      big = String.slice(head <> " " <> String.duplicate("tail ", 20_000), 0, 100_000)
+
+      assert QdrantSparse.encode_query(big, key, :en) ==
+               QdrantSparse.encode_query(String.slice(big, 0, 4096), key, :en)
+    end
+
+    test "a note is encoded at most 256 chunks per NIF call", %{key_a: key} do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+      texts = for i <- 1..300, do: "chunk #{i} text"
+
+      assert length(QdrantSparse.encode_documents(texts, key, 7.5, nil)) == 300
+
+      # The handler hears every process's NIF calls (this file is async), so
+      # match THIS call's batches by their exact input sizes.
+      first = :erlang.iolist_size(Enum.take(texts, 256))
+      rest = :erlang.iolist_size(Enum.drop(texts, 256))
+      assert_receive {[:engram, :nif, :call, :stop], ^ref, %{input_bytes: ^first}, _}
+      assert_receive {[:engram, :nif, :call, :stop], ^ref, %{input_bytes: ^rest}, _}
+    end
+
+    # The old Elixir BM25 raised on avgdl <= 0; the NIF would return all-zero
+    # weights, silently killing the keyword leg for the note.
+    test "a non-positive avgdl is refused, not encoded to zeros", %{key_a: key} do
+      assert_raise FunctionClauseError, fn ->
+        QdrantSparse.encode_documents(["a b"], key, 0.0, nil)
+      end
+    end
+
+    # An empty key makes every dim a dictionary-reversible hash of the token.
+    test "a filter key that is not 32 bytes is refused" do
+      assert_raise FunctionClauseError, fn ->
+        QdrantSparse.encode_documents(["a"], <<>>, 1.0, nil)
+      end
+
+      assert_raise FunctionClauseError, fn -> QdrantSparse.encode_query("a", <<1, 2>>, nil) end
+    end
+  end
 end

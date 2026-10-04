@@ -54,6 +54,20 @@ defmodule Engram.Workers.ReindexKeywordTest do
     assert Repo.reload!(chunk, skip_tenant_check: true).context_hmac == <<1, 2, 3>>
   end
 
+  # Unique per (vault, mode): a pending full re-embed must not swallow a
+  # sparse request (or the reverse), and a refused duplicate must say so
+  # rather than report success.
+  test "a sparse request is not swallowed by a pending full one, and duplicates are refused" do
+    {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
+    vault = insert(:vault, user: user)
+
+    assert :ok = ReindexKeyword.enqueue(user.id, vault.id)
+    assert :ok = ReindexKeyword.enqueue(user.id, vault.id, :sparse)
+    assert {:error, :already_queued} = ReindexKeyword.enqueue(user.id, vault.id, :sparse)
+
+    assert length(all_enqueued(worker: ReindexKeyword)) == 2
+  end
+
   test "perform/1 re-enqueues all vault notes through EmbedNote" do
     {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
     vault = insert(:vault, user: user)

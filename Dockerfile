@@ -70,14 +70,16 @@ FROM ${BUILDER_IMAGE} AS builder
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update -y && apt-get install -y build-essential git curl ca-certificates
+    apt-get update -y && apt-get install -y build-essential git
 
 # Rust for the in-house NIFs (native/), BUILDER STAGE ONLY: the release ships
-# the compiled .so and the runner image has no Rust. Version pinned to
-# native/engram_native/rust-toolchain.toml (keep the two in sync).
+# the compiled .so and the runner image has no Rust. Copied from the official
+# image pinned by DIGEST (same bookworm base, so the same glibc) rather than
+# piping an installer into a shell. Version matches
+# native/engram_native/rust-toolchain.toml; keep the two in sync.
+COPY --from=rust:1.94.1-slim-bookworm@sha256:cf9dd0ec73e75f827fe59123fff9dc65af1a1c8363c3c31ee8d7f8ad0b6a5fb2 /usr/local/rustup /usr/local/rustup
+COPY --from=rust:1.94.1-slim-bookworm@sha256:cf9dd0ec73e75f827fe59123fff9dc65af1a1c8363c3c31ee8d7f8ad0b6a5fb2 /usr/local/cargo /usr/local/cargo
 ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:$PATH
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-    | sh -s -- -y --no-modify-path --profile minimal --default-toolchain 1.94.1
 
 WORKDIR /app
 

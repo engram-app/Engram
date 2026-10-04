@@ -102,8 +102,12 @@ pub fn stem(token: &str, lang: &str) -> String {
     }
 }
 
+// Some generated Snowball stemmers are quadratic in word length (a 200 KB
+// "word" took 4 s), and a token this long is never a real word. Index it raw.
+const MAX_STEM_BYTES: usize = 64;
+
 fn emit(token: String, lang: Option<&str>, out: &mut Vec<String>) {
-    if let Some(l) = lang {
+    if let Some(l) = lang.filter(|_| token.len() <= MAX_STEM_BYTES) {
         let s = stem(&token, l);
         out.push(token);
         if s != *out.last().unwrap() {

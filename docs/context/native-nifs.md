@@ -79,6 +79,15 @@ following closes part of it:
 
 - **Peak bound** (the `max_heap_size` analogue): pathological inputs (one
   huge token, many chunks) and `assert peak <= k * input_bytes + slack`.
+  Peak per input byte depends on the input's shape (one huge CJK word
+  measured ~30x), so the real bound is on the INPUT: bound what each call
+  receives (below).
+- **Bound every input at the Elixir wrapper.** The keyword encoder takes at
+  most 256 chunks (each at most 2 KB) per call and reads at most 4,096
+  characters of a query, and does not stem tokens over 64 bytes (some
+  generated Snowball stemmers are quadratic in word length: a 200 KB "word"
+  took 4 s). Guards that the Elixir code had (key length, `avgdl > 0`) stay
+  in the wrapper: a NIF returns garbage where Elixir raised.
 - **Leak:** warm up once (lazy statics are permanent), then 300 calls and
   `assert live_bytes() - before == 0`.
 - **Behaviour parity:** when porting, capture golden output from the Elixir

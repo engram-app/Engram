@@ -110,6 +110,8 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/vaults/",
     "lib/engram/vector/",
     "lib/engram/keyword_index.ex",
+    # Rust NIF wrappers: note text and search queries pass through them.
+    "lib/engram/native.ex",
     "lib/engram/embedder.ex",
     "lib/engram/embedders/",
     # Fourth widening, from the deny-list work below: `reranker.ex` sees search

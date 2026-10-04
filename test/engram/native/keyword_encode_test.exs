@@ -32,7 +32,10 @@ defmodule Engram.Native.KeywordEncodeTest do
   end
 
   describe "memory standard" do
-    test "native peak stays within 4x the input, even for one huge token" do
+    # Peak per byte is input-shape dependent (measured up to ~30x for one huge
+    # CJK word), so callers bound the INPUT: chunks are at most 2 KB, a call
+    # takes at most 256 of them, and queries are capped at 4096 characters.
+    test "native peak stays bounded for a 2 MB token and for 2,000 chunks" do
       for texts <- [
             [String.duplicate("a", 2_000_000)],
             for(i <- 1..2_000, do: "chunk #{i} " <> String.duplicate("word#{i} ", 100))

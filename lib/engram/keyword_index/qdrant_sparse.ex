@@ -39,20 +39,42 @@ defmodule Engram.KeywordIndex.QdrantSparse do
     {unpack(packed), doc_len}
   end
 
-  # The whole note in one NIF call (dirty CPU scheduler). Vectors come back
-  # PACKED (u32 LE indices ascending, f64 LE values) so a note's worth sits
-  # off-heap; see `Engram.Native` for the memory accounting.
+  # Bounded NIF calls. Each call runs on a dirty CPU scheduler, which cannot
+  # be preempted and is shared with lingua and mdex (prod has ONE). 256
+  # chunks of at most 2 KB keeps a call well under a second; the token -> dim
+  # memo just restarts per batch.
+  @docs_per_call 256
+  # A query's keyword leg reads this many characters. Search input is
+  # otherwise bounded only by the request body limit, and NIF memory and
+  # time scale with it.
+  @query_chars 4096
+
+  # Vectors come back PACKED (u32 LE indices ascending, f64 LE values) so a
+  # note's worth sits off-heap; see `Engram.Native` for the memory accounting.
+  #
+  # Guards: a non-32-byte key would make dims a reversible hash of the token,
+  # and avgdl <= 0 would silently zero every weight. Both raised before the
+  # encoder moved to Rust, and still do.
   @impl Engram.KeywordIndex
-  def encode_documents(texts, filter_key, avgdl, language) do
-    for {indices, values, doc_len} <-
-          Engram.Native.encode_documents(texts, filter_key, avgdl / 1, Tokenizer.lang(language)),
-        do: {%{indices: indices, values: values}, doc_len}
+  def encode_documents(texts, filter_key, avgdl, language)
+      when byte_size(filter_key) == 32 and is_number(avgdl) and avgdl > 0 do
+    lang = Tokenizer.lang(language)
+
+    texts
+    |> Enum.chunk_every(@docs_per_call)
+    |> Enum.flat_map(fn batch ->
+      for {indices, values, doc_len} <-
+            Engram.Native.encode_documents(batch, filter_key, avgdl / 1, lang),
+          do: {%{indices: indices, values: values}, doc_len}
+    end)
   end
 
   @impl Engram.KeywordIndex
-  def encode_query(query, filter_key, language) do
+  def encode_query(query, filter_key, language) when byte_size(filter_key) == 32 do
     {indices, values} =
-      Engram.Native.encode_query_nif(query, filter_key, Tokenizer.lang(language))
+      query
+      |> String.slice(0, @query_chars)
+      |> Engram.Native.encode_query_nif(filter_key, Tokenizer.lang(language))
 
     %{indices: indices, values: values}
   end

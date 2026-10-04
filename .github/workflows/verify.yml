@@ -763,12 +763,13 @@ jobs:
           FROM ${MIX_BUILDER_IMAGE}
           ARG HEX_MIRROR=""
           ENV HEX_MIRROR=\${HEX_MIRROR}
-          RUN apt-get update -y && apt-get install -y --no-install-recommends build-essential git curl ca-certificates \
+          RUN apt-get update -y && apt-get install -y --no-install-recommends build-essential git \
               && rm -rf /var/lib/apt/lists/*
-          # Rust for native/ (in-house NIFs); same pin as the release Dockerfile.
+          # Rust for native/ (in-house NIFs): same digest-pinned image as the
+          # release Dockerfile's builder stage.
+          COPY --from=rust:1.94.1-slim-bookworm@sha256:cf9dd0ec73e75f827fe59123fff9dc65af1a1c8363c3c31ee8d7f8ad0b6a5fb2 /usr/local/rustup /usr/local/rustup
+          COPY --from=rust:1.94.1-slim-bookworm@sha256:cf9dd0ec73e75f827fe59123fff9dc65af1a1c8363c3c31ee8d7f8ad0b6a5fb2 /usr/local/cargo /usr/local/cargo
           ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:\$PATH
-          RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-              | sh -s -- -y --no-modify-path --profile minimal --default-toolchain 1.94.1
           RUN mix local.hex --force && mix local.rebar --force
           EOF
 
@@ -3579,6 +3580,7 @@ jobs:
             ${{ needs.prebuild-mix.outputs.build-dev-restore }}
 
       - name: Rust toolchain (native/ NIFs)
+        if: steps.gate.outputs.proceed == 'true'
         # rustup into the runner user's home, once per VM, at the version
         # native/engram_native/rust-toolchain.toml pins. Under flock: the
         # runners on one VM share ~/.rustup, and rustup is not safe to run
