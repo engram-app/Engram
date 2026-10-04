@@ -33,6 +33,20 @@ defmodule Engram.KeywordIndex do
   @callback encode_query(query :: String.t(), filter_key :: binary(), language :: atom() | nil) ::
               sparse()
 
+  # Bump when a change alters the keyword vectors stored for UNCHANGED notes:
+  # the tokenizer or stemmer, the BM25 weighting, or which text is encoded.
+  # `ReconcileEmbeddings` then rebuilds every stale note's keyword vectors in
+  # place (`ResparseNote`: no embedder call). Do not bump for a change with
+  # identical output. A change that moves chunk boundaries is a
+  # `Markdown.chunker_version/0` bump instead.
+  #
+  # NULL (pre-stamp) is stale. 2: the `context_text` prefix (#1615).
+  @version 2
+
+  @doc "Version of the keyword encoding in this build, stamped on `notes.keyword_version`."
+  @spec version() :: pos_integer()
+  def version, do: @version
+
   @doc "The configured keyword-index adapter."
   @spec module() :: module()
   def module, do: Application.get_env(:engram, :keyword_index, Engram.KeywordIndex.QdrantSparse)

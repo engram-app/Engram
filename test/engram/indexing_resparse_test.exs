@@ -127,6 +127,46 @@ defmodule Engram.IndexingResparseTest do
     assert is_nil(reloaded.embed_hash)
   end
 
+  test "the job stamps the current keyword version on success", ctx do
+    %{user: user, note: note} = ctx
+
+    Repo.update_all(from(n in Notes.Note, where: n.id == ^note.id), [set: [keyword_version: nil]],
+      skip_tenant_check: true
+    )
+
+    assert :ok = perform_job(Engram.Workers.ResparseNote, %{note_id: note.id, user_id: user.id})
+
+    assert Repo.get!(Notes.Note, note.id, skip_tenant_check: true).keyword_version ==
+             Engram.KeywordIndex.version()
+  end
+
+  # The fallback re-embeds. With the embed budget spent, that pass would run
+  # sparse-only and DELETE the note's dense points: an automatic keyword fix
+  # must never cost a user their semantic search. Park it instead.
+  test "an unmatched note over its embed budget is parked, not rebuilt", ctx do
+    %{user: user, note: note} = ctx
+    clear_one_fingerprint(note)
+    Engram.UsageMeters.add_embed_tokens(user.id, 20_000_000)
+    before = Repo.get!(Notes.Note, note.id, skip_tenant_check: true)
+
+    embeds = fn ->
+      length(all_enqueued(worker: Engram.Workers.EmbedNote, args: %{"note_id" => note.id}))
+    end
+
+    queued = embeds.()
+
+    assert :ok = perform_job(Engram.Workers.ResparseNote, %{note_id: note.id, user_id: user.id})
+
+    # No rebuild enqueued (the fixture's own upsert already queued one).
+    assert embeds.() == queued
+    reloaded = Repo.get!(Notes.Note, note.id, skip_tenant_check: true)
+    # Index markers untouched (a rebuild would have cleared them).
+    assert {reloaded.embed_hash, reloaded.dense_indexed_hash} ==
+             {before.embed_hash, before.dense_indexed_hash}
+
+    assert reloaded.embed_budget_parked == true
+  end
+
   defp clear_one_fingerprint(note) do
     {:ok, _} =
       Repo.with_tenant(note.user_id, fn ->

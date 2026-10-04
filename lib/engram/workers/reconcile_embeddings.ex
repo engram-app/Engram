@@ -25,10 +25,12 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   import Ecto.Query
 
   alias Engram.Backfill.TenantScan
+  alias Engram.KeywordIndex
+  alias Engram.Logger.Metadata
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Vaults.Vault
-  alias Engram.Workers.{EmbedNote, ExtractNoteLinks}
+  alias Engram.Workers.{EmbedNote, ExtractNoteLinks, ResparseNote}
 
   require Logger
 
@@ -216,7 +218,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         # unreadable in exactly the backlog incident this guard exists for.
         Logger.debug(
           "reconcile_embeddings: queueing stale notes",
-          Engram.Logger.Metadata.with_category(:debug, :search,
+          Metadata.with_category(:debug, :search,
             total_count: length(fresh),
             eligible_count: length(note_ids),
             already_queued_count: length(note_ids) - length(fresh)
@@ -249,11 +251,103 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         # unscoped UPDATE this function used to run.
         Logger.debug(
           "reconcile_embeddings: no stale notes",
-          Engram.Logger.Metadata.with_category(:debug, :search, total_count: 0)
+          Metadata.with_category(:debug, :search, total_count: 0)
         )
       end
 
+    :ok = sweep_keyword_stale(now, paid)
+  end
+
+  # Notes indexed at their current content whose keyword vectors predate
+  # `KeywordIndex.version/0`: a keyword-encoding change (tokenizer, stemmer,
+  # what text is encoded) reaches them here with no operator step, on SaaS and
+  # every self-host install. They go to ResparseNote, which rewrites only the
+  # sparse vectors and never calls the embedder. NOT to EmbedNote: most of
+  # these notes also carry a stale `chunker_version`, and EmbedNote would
+  # answer that with a full re-embed (see the chunker test in this module's
+  # suite).
+  #
+  # Content-stale notes are left to the sweep above: EmbedNote's full pass
+  # stamps the keyword version itself. Same cooldown rule as above, so a note
+  # ResparseNote parked over a spent budget is not re-selected every tick.
+  #
+  # ponytail: `keyword_version` is unindexed, so this scans each tenant's live
+  # notes every tick. Fine at thousands of notes per tenant; add a partial
+  # index on (user_id) WHERE keyword_version IS DISTINCT FROM <current> if a
+  # tenant reaches hundreds of thousands.
+  defp sweep_keyword_stale(now, paid) do
+    version = KeywordIndex.version()
+    Process.put(:reconcile_keyword_budget, @batch_size)
+
+    rows =
+      TenantScan.flat_map_users(fn _user_id ->
+        case Process.get(:reconcile_keyword_budget, 0) do
+          remaining when remaining <= 0 ->
+            []
+
+          remaining ->
+            found =
+              from(n in Note, as: :note)
+              |> join(:inner, [n], v in Vault, on: v.id == n.vault_id and is_nil(v.deleted_at))
+              |> where([n], n.kind == "note" and is_nil(n.deleted_at))
+              |> where([n], n.embed_hash == n.content_hash)
+              |> where([n], is_nil(n.keyword_version) or n.keyword_version != ^version)
+              |> where(
+                [n],
+                is_nil(n.embed_retry_after) or n.embed_retry_after <= ^now or
+                  (n.embed_budget_parked == true and exists(paid))
+              )
+              |> order_by([n], asc: n.updated_at)
+              |> limit(^remaining)
+              |> select([n], {n.id, n.user_id})
+              |> Repo.all()
+
+            Process.put(:reconcile_keyword_budget, remaining - length(found))
+            found
+        end
+      end)
+
+    fresh = reject_pending_resparse(rows)
+
+    Logger.debug(
+      "reconcile_embeddings: queueing keyword-stale notes",
+      Metadata.with_category(:debug, :search,
+        total_count: length(fresh),
+        eligible_count: length(rows)
+      )
+    )
+
+    _ =
+      Oban.insert_all(
+        Enum.map(fresh, fn {note_id, user_id} ->
+          ResparseNote.new(%{note_id: to_string(note_id), user_id: user_id},
+            priority: EmbedNote.backfill_priority()
+          )
+        end)
+      )
+
     :ok
+  end
+
+  # insert_all ignores `unique`, so without this every tick would stack one
+  # more job per note while the queue is behind (the ratchet EmbedNote's
+  # `reject_already_queued/2` exists for).
+  defp reject_pending_resparse([]), do: []
+
+  defp reject_pending_resparse(rows) do
+    wanted = Enum.map(rows, fn {id, _} -> to_string(id) end)
+
+    pending =
+      from(j in Oban.Job,
+        where: j.worker == "Engram.Workers.ResparseNote",
+        where: j.state in ["available", "scheduled", "executing", "retryable"],
+        where: fragment("? ->> 'note_id'", j.args) in ^wanted,
+        select: fragment("? ->> 'note_id'", j.args)
+      )
+      |> Repo.all()
+      |> MapSet.new()
+
+    Enum.reject(rows, fn {id, _} -> MapSet.member?(pending, to_string(id)) end)
   end
 
   # #897 — preemptive cooldown window stamped on every enqueued note (see

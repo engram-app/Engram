@@ -262,7 +262,10 @@ defmodule Engram.Workers.EmbedNote do
 
   # Cheap pre-check for the dense backfill of an already-indexed note: with
   # nothing left there is no point rebuilding it just to be refused.
-  defp embed_budget_left?(user) do
+  @doc false
+  # Public for ResparseNote's fallback: a rebuild over a spent budget would run
+  # sparse-only and delete the note's dense points.
+  def embed_budget_left?(user) do
     case Billing.effective_limit(user, :lifetime_embed_token_cap) do
       cap when is_integer(cap) and cap >= 0 -> UsageMeters.lifetime_embed_tokens(user.id) < cap
       cap when is_nil(cap) or cap == :unlimited or is_integer(cap) -> true
@@ -301,7 +304,8 @@ defmodule Engram.Workers.EmbedNote do
     do: DateTime.add(DateTime.utc_now(), @budget_park_seconds, :second)
 
   # Tenant-scoped for the same filtered-UPDATE reason as `maybe_mark_poison/3`.
-  defp park_over_budget(%Note{} = note) do
+  @doc false
+  def park_over_budget(%Note{} = note) do
     {:ok, _} =
       Repo.with_tenant(note.user_id, fn ->
         Repo.update_all(from(n in Note, where: n.id == ^note.id),
@@ -565,7 +569,13 @@ defmodule Engram.Workers.EmbedNote do
           ]
       end
 
-    set = [embed_hash: note.content_hash, chunker_version: @chunker_version] ++ set
+    # A full pass encodes the current keyword version too, so it stamps both.
+    set =
+      [
+        embed_hash: note.content_hash,
+        chunker_version: @chunker_version,
+        keyword_version: Engram.KeywordIndex.version()
+      ] ++ set
 
     # Tenant-scoped: same filtered-UPDATE class as `maybe_mark_poison/3`.
     # Unscoped this stamps NOTHING, so the note re-embeds on every sweep and

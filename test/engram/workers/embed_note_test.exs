@@ -164,6 +164,20 @@ defmodule Engram.Workers.EmbedNoteTest do
                Markdown.chunker_version()
     end
 
+    test "stamps the current keyword version on success", %{bypass: bypass, note: note} do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts ->
+        {:ok, Enum.map(texts, fn _ -> List.duplicate(0.1, 3) end)}
+      end)
+
+      stub_qdrant(bypass)
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      assert Repo.get!(Note, note.id, skip_tenant_check: true).keyword_version ==
+               Engram.KeywordIndex.version()
+    end
+
     test "backfills dense vectors for a Free note inside the cap", %{
       bypass: bypass,
       note: note

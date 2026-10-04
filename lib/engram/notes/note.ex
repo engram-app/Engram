@@ -44,6 +44,7 @@ defmodule Engram.Notes.Note do
     # eligible for a rebuild. Unrelated to `:version` above, which is the
     # sync/conflict counter.
     field :chunker_version, :integer
+    field :keyword_version, :integer
     # Poison-loop guard: when a note exhausts its EmbedNote attempts, the worker
     # stamps a cooldown timestamp here. ReconcileEmbeddings skips notes whose
     # cooldown hasn't elapsed, so a permanently-failing note re-bills Voyage at

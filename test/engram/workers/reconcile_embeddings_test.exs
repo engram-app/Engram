@@ -2,8 +2,10 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
+  alias Engram.KeywordIndex
   alias Engram.Notes.Note
-  alias Engram.Workers.{EmbedNote, ReconcileEmbeddings}
+  alias Engram.Parsers.Markdown
+  alias Engram.Workers.{EmbedNote, ReconcileEmbeddings, ResparseNote}
 
   describe "perform/1" do
     test "queues jobs for notes with nil embed_hash" do
@@ -68,6 +70,50 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       assert :ok = perform_job(ReconcileEmbeddings, %{})
 
       refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+      # Its keyword stamp is stale too (NULL), and that DOES self-heal, through
+      # the keyword-only path that never calls the embedder.
+      assert_enqueued(worker: ResparseNote, args: %{"note_id" => note.id})
+    end
+
+    # A keyword-encoding change must reach existing notes with no operator
+    # step, on SaaS and self-host alike (#1615 needed a hand-run
+    # `ReindexKeyword :sparse`). The sweep sends keyword-stale notes to
+    # ResparseNote, which rebuilds only the sparse vectors: no Voyage spend.
+    test "rebuilds keyword vectors for a note whose keyword_version is stale" do
+      user = insert(:user)
+      note = current_note(user, keyword_version: nil)
+      older = current_note(user, keyword_version: KeywordIndex.version() - 1)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+
+      for n <- [note, older] do
+        assert_enqueued(worker: ResparseNote, args: %{"note_id" => n.id, "user_id" => user.id})
+        refute_enqueued(worker: EmbedNote, args: %{"note_id" => n.id})
+      end
+    end
+
+    test "the keyword sweep skips current notes, content-stale notes and deleted ones" do
+      user = insert(:user)
+      current = current_note(user, keyword_version: KeywordIndex.version())
+      # Content changed: EmbedNote's full pass stamps the keyword version itself.
+      edited = current_note(user, keyword_version: nil, embed_hash: "old")
+      deleted = current_note(user, keyword_version: nil, deleted_at: DateTime.utc_now())
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+
+      for n <- [current, edited, deleted] do
+        refute_enqueued(worker: ResparseNote, args: %{"note_id" => n.id})
+      end
+    end
+
+    test "the keyword sweep does not stack a second job on a pending one" do
+      user = insert(:user)
+      note = current_note(user, keyword_version: nil)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+
+      assert [_one] = all_enqueued(worker: ResparseNote, args: %{"note_id" => note.id})
     end
 
     test "backfills dense vectors for every entitled status, past_due included" do
@@ -267,7 +313,9 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       assert length(jobs) == 500
     end
 
-    test "runs a single notes query regardless of vault count" do
+    # One notes query per SWEEP per tenant (the embed sweep and the keyword
+    # sweep), never one per vault.
+    test "runs one notes query per sweep regardless of vault count" do
       user = insert(:user)
 
       for i <- 1..3 do
@@ -300,7 +348,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       end
 
       queries = collect_queries()
-      assert Enum.count(queries, &(&1 == "notes")) == 1
+      assert Enum.count(queries, &(&1 == "notes")) == 2
       refute Enum.any?(queries, &(&1 == "vaults"))
     end
 
@@ -403,6 +451,23 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
   # tests red and every `refute_enqueued` test in this file VACUOUS.
   #
   # So always give the note a vault owned by the same user.
+  # Indexed at its current content, by the current chunker, with dense vectors:
+  # nothing for the embed sweep to do.
+  defp current_note(user, attrs) do
+    note_for(
+      user,
+      Keyword.merge(
+        [
+          content_hash: "abc123",
+          embed_hash: "abc123",
+          dense_indexed_hash: "abc123",
+          chunker_version: Markdown.chunker_version()
+        ],
+        attrs
+      )
+    )
+  end
+
   defp note_for(user, attrs) do
     insert(:note, Keyword.merge([user: user, vault: insert(:vault, user: user)], attrs))
   end
