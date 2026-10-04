@@ -9,9 +9,14 @@ defmodule Engram.Workers.ExtractNoteLinks do
   the Voyage budget gate — so a rename inside that window found no referrer
   edge and fell back to the +60s sweep. This job runs the cheap half only
   (regex parse + HMAC resolve + delete/insert; NO embedding, NO Qdrant) within
-  ~#{2}s of content landing server-side. The embed pipeline is untouched and
-  still re-runs `replace_links` later — that duplicate is idempotent, and
-  `replace_links`' per-note advisory lock serializes the two writers.
+  ~#{2}s of content landing server-side.
+
+  This job is the ONLY writer of a note's own outgoing edges. The indexing
+  pass used to re-parse and re-write them on every embed, which doubled the
+  parse cost and read the stale facade (see `extract/1`), so it could undo
+  a rewrite's repair. With no second writer there is no backstop either,
+  hence the generous `max_attempts`: a run that exhausts them leaves the
+  edges stale until the note's next edit.
 
   Leading-edge debounce: `new_debounced/1` schedules ~2s out and dedups per
   note over `[:available, :scheduled]` ONLY. The job reads CURRENT content at
@@ -41,7 +46,7 @@ defmodule Engram.Workers.ExtractNoteLinks do
   """
   use Oban.Worker,
     queue: :indexing,
-    max_attempts: 3
+    max_attempts: 10
 
   import Ecto.Query
 

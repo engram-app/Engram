@@ -15,10 +15,12 @@ defmodule Engram.KeywordIndex.QdrantSparse do
   @behaviour Engram.KeywordIndex
 
   alias Engram.Crypto
-  alias Engram.KeywordIndex.Bm25
   alias Engram.KeywordIndex.Tokenizer
 
-  @doc "HMAC(filter_key, token) → unsigned u32 sparse dimension index."
+  @doc """
+  HMAC(filter_key, token) → unsigned u32 sparse dimension index. The NIF
+  computes the same thing; this is the reference the tests hold it to.
+  """
   @spec dim(binary(), String.t()) :: non_neg_integer()
   def dim(filter_key, token) do
     <<u32::unsigned-integer-size(32), _rest::binary>> = Crypto.hmac_field(filter_key, token)
@@ -31,41 +33,58 @@ defmodule Engram.KeywordIndex.QdrantSparse do
 
   def encode_query(query, filter_key), do: encode_query(query, filter_key, nil)
 
-  @impl Engram.KeywordIndex
+  # Single-text convenience, unpacked to plain lists.
   def encode_document(text, filter_key, avgdl, language) do
-    # `doc_len` is derived here rather than passed in: the caller could only
-    # get it by tokenizing the same text a second time, and it must be the RAW
-    # count (stems are recall dimensions, not document length). Keeping the
-    # derivation next to the tokens that produced it also keeps every
-    # plaintext-touching step inside this module + Tokenizer — the future TEE
-    # enclave boundary.
-    {tokens, doc_len} = Tokenizer.tokens_with_len(text, language)
+    [{packed, doc_len}] = encode_documents([text], filter_key, avgdl, language)
+    {unpack(packed), doc_len}
+  end
 
-    sparse =
-      tokens
-      |> Enum.frequencies()
-      |> Enum.reduce(%{}, fn {token, tf}, acc ->
-        d = dim(filter_key, token)
-        w = Bm25.tf_weight(tf, doc_len, avgdl)
-        # On a u32 collision, sum the colliding terms' weights.
-        Map.update(acc, d, w, &(&1 + w))
-      end)
-      |> to_sparse()
+  # Bounded NIF calls. Each call runs on a dirty CPU scheduler, which cannot
+  # be preempted and is shared with lingua and mdex (prod has ONE). 256
+  # chunks of at most 2 KB keeps a call well under a second; the token -> dim
+  # memo just restarts per batch.
+  @docs_per_call 256
+  # A query's keyword leg reads this many characters. Search input is
+  # otherwise bounded only by the request body limit, and NIF memory and
+  # time scale with it.
+  @query_chars 4096
 
-    {sparse, doc_len}
+  # Vectors come back PACKED (u32 LE indices ascending, f64 LE values) so a
+  # note's worth sits off-heap; see `Engram.Native` for the memory accounting.
+  #
+  # Guards: a non-32-byte key would make dims a reversible hash of the token,
+  # and avgdl <= 0 would silently zero every weight. Both raised before the
+  # encoder moved to Rust, and still do.
+  @impl Engram.KeywordIndex
+  def encode_documents(texts, filter_key, avgdl, language)
+      when byte_size(filter_key) == 32 and is_number(avgdl) and avgdl > 0 do
+    lang = Tokenizer.lang(language)
+
+    texts
+    |> Enum.chunk_every(@docs_per_call)
+    |> Enum.flat_map(fn batch ->
+      for {indices, values, doc_len} <-
+            Engram.Native.encode_documents(batch, filter_key, avgdl / 1, lang),
+          do: {%{indices: indices, values: values}, doc_len}
+    end)
   end
 
   @impl Engram.KeywordIndex
-  def encode_query(query, filter_key, language) do
-    query
-    |> Tokenizer.tokens(language)
-    |> Enum.uniq()
-    |> Enum.reduce(%{}, fn token, acc -> Map.put(acc, dim(filter_key, token), 1.0) end)
-    |> to_sparse()
+  def encode_query(query, filter_key, language) when byte_size(filter_key) == 32 do
+    {indices, values} =
+      query
+      |> String.slice(0, @query_chars)
+      |> Engram.Native.encode_query_nif(filter_key, Tokenizer.lang(language))
+
+    %{indices: indices, values: values}
   end
 
-  defp to_sparse(by_dim) do
-    {indices, values} = by_dim |> Map.to_list() |> Enum.unzip()
-    %{indices: indices, values: values}
+  @doc "Packed sparse vector (see `encode_documents/4`) back to plain lists."
+  @spec unpack(Engram.KeywordIndex.packed_sparse()) :: Engram.KeywordIndex.sparse()
+  def unpack(%{indices: indices, values: values}) do
+    %{
+      indices: for(<<d::unsigned-little-32 <- indices>>, do: d),
+      values: for(<<w::float-little-64 <- values>>, do: w)
+    }
   end
 end

@@ -182,14 +182,15 @@ defmodule Engram.MixProject do
       # contents in memory.
       {:zstream, "~> 0.6"},
 
-      # Keyword search — English (and future) stemming (pure Elixir, Snowball)
-      {:text_stemmer, "~> 0.1.0"},
-
       # Per-chunk language detection (lingua Rust NIF — precompiled, no build-time Rust).
       # lingua pins rustler_precompiled ~> 0.8.4 conservatively; mjml pins ~> 0.9.0.
       # The override forces 0.9.x which lingua compiles and runs against fine.
       {:lingua, "~> 0.3.0"},
       {:rustler_precompiled, "~> 0.9.0", override: true},
+
+      # In-house NIFs (native/engram_native): CPU hot paths ported to Rust.
+      # Compiled from source, so the release builder needs a Rust toolchain.
+      {:rustler, "~> 0.37", runtime: false},
 
       # CommonMark parser for MCP section boundaries (Engram.MCP.Sections):
       # comrak as a precompiled Rust NIF. mdex_native directly, not the `mdex`

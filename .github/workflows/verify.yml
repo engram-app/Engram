@@ -765,6 +765,11 @@ jobs:
           ENV HEX_MIRROR=\${HEX_MIRROR}
           RUN apt-get update -y && apt-get install -y --no-install-recommends build-essential git \
               && rm -rf /var/lib/apt/lists/*
+          # Rust for native/ (in-house NIFs): same digest-pinned image as the
+          # release Dockerfile's builder stage.
+          COPY --from=rust:1.94.1-slim-bookworm@sha256:cf9dd0ec73e75f827fe59123fff9dc65af1a1c8363c3c31ee8d7f8ad0b6a5fb2 /usr/local/rustup /usr/local/rustup
+          COPY --from=rust:1.94.1-slim-bookworm@sha256:cf9dd0ec73e75f827fe59123fff9dc65af1a1c8363c3c31ee8d7f8ad0b6a5fb2 /usr/local/cargo /usr/local/cargo
+          ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:\$PATH
           RUN mix local.hex --force && mix local.rebar --force
           EOF
 
@@ -836,7 +841,9 @@ jobs:
         id: cache-build-dev
         uses: runs-on/cache@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         with:
-          path: _build/dev
+          path: |
+            _build/dev
+            priv/native
           restore-keys: ${{ steps.keys.outputs.build-dev-restore }}
           # The restore prefix is LOCKFILE-SCOPED (see "Compute cache keys"), so
           # it can only fall back to an older commit's build of the same deps —
@@ -855,7 +862,9 @@ jobs:
         id: cache-build-test
         uses: runs-on/cache@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         with:
-          path: _build/test
+          path: |
+            _build/test
+            priv/native
           # Lockfile-scoped restore prefix — see the _build/dev cache above for
           # why the scoping (not the absence of restore-keys) is what keeps a
           # cross-lockfile _build from crashing protocol consolidation.
@@ -2467,10 +2476,27 @@ jobs:
       - name: Restore _build/test cache
         uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         with:
-          path: _build/test
+          path: |
+            _build/test
+            priv/native
           key: ${{ needs.prebuild-mix.outputs.build-test-key }}
           restore-keys: |
             ${{ needs.prebuild-mix.outputs.build-test-restore }}
+
+      - name: Rust toolchain (native/ NIFs)
+        # rustup into the runner user's home, once per VM, at the version
+        # native/engram_native/rust-toolchain.toml pins. Under flock: the
+        # runners on one VM share ~/.rustup, and rustup is not safe to run
+        # concurrently.
+        run: |
+          mkdir -p "$HOME/.cargo"
+          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/engram_native/rust-toolchain.toml)
+          flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
+            [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --no-self-update
+          ' "$RUST_VERSION"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Fetch deps (if missing or lockfile changed)
         # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`
@@ -2796,10 +2822,27 @@ jobs:
       - name: Restore _build/dev cache
         uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         with:
-          path: _build/dev
+          path: |
+            _build/dev
+            priv/native
           key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
           restore-keys: |
             ${{ needs.prebuild-mix.outputs.build-dev-restore }}
+
+      - name: Rust toolchain (native/ NIFs)
+        # rustup into the runner user's home, once per VM, at the version
+        # native/engram_native/rust-toolchain.toml pins. Under flock: the
+        # runners on one VM share ~/.rustup, and rustup is not safe to run
+        # concurrently.
+        run: |
+          mkdir -p "$HOME/.cargo"
+          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/engram_native/rust-toolchain.toml)
+          flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
+            [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --no-self-update
+          ' "$RUST_VERSION"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Fetch deps (if missing or lockfile changed)
         # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`
@@ -3529,10 +3572,28 @@ jobs:
         if: steps.gate.outputs.proceed == 'true'
         uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         with:
-          path: _build/dev
+          path: |
+            _build/dev
+            priv/native
           key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
           restore-keys: |
             ${{ needs.prebuild-mix.outputs.build-dev-restore }}
+
+      - name: Rust toolchain (native/ NIFs)
+        if: steps.gate.outputs.proceed == 'true'
+        # rustup into the runner user's home, once per VM, at the version
+        # native/engram_native/rust-toolchain.toml pins. Under flock: the
+        # runners on one VM share ~/.rustup, and rustup is not safe to run
+        # concurrently.
+        run: |
+          mkdir -p "$HOME/.cargo"
+          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/engram_native/rust-toolchain.toml)
+          flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
+            [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --no-self-update
+          ' "$RUST_VERSION"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Install deps
         if: steps.gate.outputs.proceed == 'true' && steps.cache-deps.outputs.cache-hit != 'true'
@@ -4075,7 +4136,9 @@ jobs:
       - name: Restore _build/dev cache
         uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         with:
-          path: _build/dev
+          path: |
+            _build/dev
+            priv/native
           key: ${{ needs.prebuild-mix.outputs.build-dev-key }}
           restore-keys: |
             ${{ needs.prebuild-mix.outputs.build-dev-restore }}
@@ -4139,6 +4202,21 @@ jobs:
           PG_PORT=$(docker port "$PG_CONTAINER" 5432/tcp | head -1 | cut -d: -f2)
           echo "pg_port=$PG_PORT" >> "$GITHUB_OUTPUT"
           echo "Postgres on port $PG_PORT"
+
+      - name: Rust toolchain (native/ NIFs)
+        # rustup into the runner user's home, once per VM, at the version
+        # native/engram_native/rust-toolchain.toml pins. Under flock: the
+        # runners on one VM share ~/.rustup, and rustup is not safe to run
+        # concurrently.
+        run: |
+          mkdir -p "$HOME/.cargo"
+          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/engram_native/rust-toolchain.toml)
+          flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
+            [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --no-self-update
+          ' "$RUST_VERSION"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Fetch deps (if missing or lockfile changed)
         # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`

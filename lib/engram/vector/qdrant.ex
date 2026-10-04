@@ -369,6 +369,24 @@ defmodule Engram.Vector.Qdrant do
   end
 
   @doc """
+  Replace the given named vectors on existing points; vectors not named and
+  the payload are untouched. `points` are `%{id, vector: %{name => v}}`.
+  """
+  def update_vectors(col \\ nil, points) do
+    col = col || collection()
+    serialized = Enum.map(points, fn p -> %{id: p.id, vector: p.vector} end)
+    opts = [json: %{points: serialized}] ++ req_opts()
+
+    instrument(:update_vectors, fn ->
+      case Req.put("#{base_url()}/collections/#{col}/points/vectors", opts) do
+        {:ok, %{status: 200}} -> :ok
+        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
+  end
+
+  @doc """
   Patch (overwrite-or-add) the given payload keys on the listed point ids.
   Vectors are untouched — this is the cost-free path for re-shaping payloads
   without re-running the embedder. Empty `point_ids` is a no-op.

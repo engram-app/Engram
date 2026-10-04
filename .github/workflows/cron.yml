@@ -948,6 +948,21 @@ jobs:
           echo "pg_port=$PG_PORT" >> "$GITHUB_OUTPUT"
           echo "Postgres on port $PG_PORT (container: $PG_CONTAINER)"
 
+      - name: Rust toolchain (native/ NIFs)
+        # rustup into the runner user's home, once per VM, at the version
+        # native/engram_native/rust-toolchain.toml pins. Under flock: the
+        # runners on one VM share ~/.rustup, and rustup is not safe to run
+        # concurrently.
+        run: |
+          mkdir -p "$HOME/.cargo"
+          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/engram_native/rust-toolchain.toml)
+          flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
+            [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --no-self-update
+          ' "$RUST_VERSION"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
       - name: Fetch deps
         run: mix deps.get --only test
 

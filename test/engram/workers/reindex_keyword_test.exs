@@ -5,7 +5,7 @@ defmodule Engram.Workers.ReindexKeywordTest do
   alias Engram.Notes.Chunk
   alias Engram.Notes.Note
   alias Engram.Repo
-  alias Engram.Workers.{EmbedNote, ReindexKeyword}
+  alias Engram.Workers.{EmbedNote, ReindexKeyword, ResparseNote}
 
   defp insert_chunk!(note, hmac) do
     Repo.insert!(
@@ -29,6 +29,43 @@ defmodule Engram.Workers.ReindexKeywordTest do
 
     assert :ok = ReindexKeyword.enqueue(user.id, vault.id)
     assert_enqueued(worker: ReindexKeyword, args: %{"vault_id" => vault.id})
+  end
+
+  # Sparse mode: rebuild keyword vectors in place (a tokenizer change), so
+  # NO re-embed: nothing cleared, no EmbedNote, one ResparseNote per note.
+  test "sparse mode enqueues ResparseNote per note and clears nothing" do
+    {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
+    vault = insert(:vault, user: user)
+    note = insert(:note, user: user, vault: vault)
+    chunk = insert_chunk!(note, <<1, 2, 3>>)
+
+    assert :ok = ReindexKeyword.enqueue(user.id, vault.id, :sparse)
+    assert_enqueued(worker: ReindexKeyword, args: %{"vault_id" => vault.id, "mode" => "sparse"})
+
+    assert :ok =
+             perform_job(ReindexKeyword, %{
+               "user_id" => user.id,
+               "vault_id" => to_string(vault.id),
+               "mode" => "sparse"
+             })
+
+    assert_enqueued(worker: ResparseNote, args: %{"note_id" => note.id, "user_id" => user.id})
+    refute_enqueued(worker: EmbedNote)
+    assert Repo.reload!(chunk, skip_tenant_check: true).context_hmac == <<1, 2, 3>>
+  end
+
+  # Unique per (vault, mode): a pending full re-embed must not swallow a
+  # sparse request (or the reverse), and a refused duplicate must say so
+  # rather than report success.
+  test "a sparse request is not swallowed by a pending full one, and duplicates are refused" do
+    {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
+    vault = insert(:vault, user: user)
+
+    assert :ok = ReindexKeyword.enqueue(user.id, vault.id)
+    assert :ok = ReindexKeyword.enqueue(user.id, vault.id, :sparse)
+    assert {:error, :already_queued} = ReindexKeyword.enqueue(user.id, vault.id, :sparse)
+
+    assert length(all_enqueued(worker: ReindexKeyword)) == 2
   end
 
   test "perform/1 re-enqueues all vault notes through EmbedNote" do

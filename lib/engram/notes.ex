@@ -154,7 +154,11 @@ defmodule Engram.Notes do
   is soft-deleted maps to `:deleted` so the caller can drop the hit (#1608).
   """
   @spec display_fields_by_qdrant_points(Engram.Accounts.User.t(), [String.t()]) ::
-          %{String.t() => %{source_path: String.t() | nil, tags: [String.t()]} | :deleted}
+          %{
+            String.t() =>
+              %{source_path: String.t() | nil, title: String.t() | nil, tags: [String.t()]}
+              | :deleted
+          }
   def display_fields_by_qdrant_points(_user, []), do: %{}
 
   def display_fields_by_qdrant_points(user, qdrant_ids) when is_list(qdrant_ids) do
@@ -183,7 +187,11 @@ defmodule Engram.Notes do
         Map.put(acc, to_string(qid), :deleted)
 
       {{:ok, note}, qid}, acc ->
-        Map.put(acc, to_string(qid), %{source_path: note.path, tags: note.tags || []})
+        Map.put(acc, to_string(qid), %{
+          source_path: note.path,
+          title: note.title,
+          tags: note.tags || []
+        })
 
       {{:error, _}, _qid}, acc ->
         acc

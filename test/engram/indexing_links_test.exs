@@ -1,11 +1,13 @@
 defmodule Engram.IndexingLinksTest do
   use Engram.DataCase, async: false
+  use Oban.Testing, repo: Engram.Repo
 
   import Mox
 
   alias Engram.Indexing
   alias Engram.Links.NoteLink
   alias Engram.Notes
+  alias Engram.Workers.ExtractNoteLinks
 
   setup :verify_on_exit!
 
@@ -34,35 +36,11 @@ defmodule Engram.IndexingLinksTest do
     end)
   end
 
-  test "index_note persists extracted links", %{bypass: bypass, user: user, vault: vault} do
-    {:ok, target} =
-      Notes.upsert_note(user, vault, %{"path" => "B.md", "content" => "# B", "mtime" => 1_000.0})
-
-    {:ok, source} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "Source.md",
-        "content" => "[[B]]",
-        "mtime" => 1_000.0
-      })
-
-    expect_embed_and_upsert(bypass)
-
-    assert {:ok, _count} = Indexing.index_note(source, vault)
-
-    links =
-      Repo.all(from(l in NoteLink, where: l.source_note_id == ^source.id),
-        skip_tenant_check: true
-      )
-
-    assert [link] = links
-    assert link.target_note_id == target.id
-  end
-
-  test "emptying a note clears its links via the no_chunks path", %{
-    bypass: bypass,
-    user: user,
-    vault: vault
-  } do
+  # `note_links` belong to ExtractNoteLinks alone. Indexing used to re-parse
+  # and rewrite them on every embed, from the FACADE content, which both
+  # doubled the parse cost and could clobber the edges a Rewriter repair had
+  # just written from the authoritative CRDT content.
+  test "index_note does not write note_links", %{bypass: bypass, user: user, vault: vault} do
     {:ok, _target} =
       Notes.upsert_note(user, vault, %{"path" => "B.md", "content" => "# B", "mtime" => 1_000.0})
 
@@ -77,25 +55,34 @@ defmodule Engram.IndexingLinksTest do
 
     assert {:ok, _count} = Indexing.index_note(source, vault)
 
+    assert [] =
+             Repo.all(from(l in NoteLink, where: l.source_note_id == ^source.id),
+               skip_tenant_check: true
+             )
+  end
+
+  test "the no_chunks path leaves existing note_links alone", %{user: user, vault: vault} do
+    {:ok, _target} =
+      Notes.upsert_note(user, vault, %{"path" => "B.md", "content" => "# B", "mtime" => 1_000.0})
+
+    {:ok, source} =
+      Notes.upsert_note(user, vault, %{
+        "path" => "Source.md",
+        "content" => "[[B]]",
+        "mtime" => 1_000.0
+      })
+
+    :ok = perform_job(ExtractNoteLinks, %{note_id: source.id, user_id: user.id})
+
     assert [_link] =
              Repo.all(from(l in NoteLink, where: l.source_note_id == ^source.id),
                skip_tenant_check: true
              )
 
-    {:ok, emptied} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "Source.md",
-        "content" => "",
-        "mtime" => 2_000.0
-      })
+    # Never indexed, so no chunk rows: no Qdrant call at all.
+    assert {:ok, 0} = Indexing.index_note(%{source | content: ""}, vault)
 
-    # no_chunks: no EMBED call (nothing to embed), but this note has chunk rows
-    # from the index above, so purge_stale_index/1 does issue a Qdrant
-    # points/delete — emptying a note must remove its stale index, not just
-    # decline to add to it.
-    assert {:ok, 0} = Indexing.index_note(emptied, vault)
-
-    assert [] =
+    assert [_link] =
              Repo.all(from(l in NoteLink, where: l.source_note_id == ^source.id),
                skip_tenant_check: true
              )

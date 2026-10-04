@@ -194,6 +194,62 @@ defmodule Engram.SearchTest do
       assert result.tags == ["labs"]
     end
 
+    # A rename only repaths the points' HMACs (`Indexing.repath_points/2`), so
+    # a title derived from the filename stayed frozen in the payload and search
+    # showed the OLD name. The title now comes from the note row, like the path.
+    test "title comes from the note row, not the (possibly stale) payload",
+         %{bypass: bypass, user: user, vault: vault} do
+      note = insert_note_with_chunk(user, vault, "Health/new-name.md", "Ferritin levels.")
+
+      {:ok, enc} =
+        Engram.Crypto.encrypt_qdrant_payload(
+          %{text: "Ferritin levels.", title: "old-name", heading_path: ""},
+          user,
+          "engram_notes",
+          note.point_id
+        )
+
+      expect_one_point(bypass, note.point_id, user, vault, %{
+        "text" => enc.text,
+        "title" => enc.title,
+        "heading_path" => enc.heading_path,
+        "text_nonce" => enc.text_nonce,
+        "title_nonce" => enc.title_nonce,
+        "heading_path_nonce" => enc.heading_path_nonce,
+        "aad_version" => enc.aad_version
+      })
+
+      assert {:ok, [result]} = Search.search(user, vault, "iron")
+      assert result.title == "new-name"
+    end
+
+    # Expand step for dropping the per-point title: a point written without one
+    # must still decrypt and answer, not vanish as :decrypt_failed.
+    test "a point with no title in its payload still answers",
+         %{bypass: bypass, user: user, vault: vault} do
+      note = insert_note_with_chunk(user, vault, "Health/iron.md", "# Iron\n\nFerritin.")
+
+      {:ok, enc} =
+        Engram.Crypto.encrypt_qdrant_payload(
+          %{text: "Ferritin.", title: nil, heading_path: "Iron"},
+          user,
+          "engram_notes",
+          note.point_id
+        )
+
+      expect_one_point(bypass, note.point_id, user, vault, %{
+        "text" => enc.text,
+        "heading_path" => enc.heading_path,
+        "text_nonce" => enc.text_nonce,
+        "heading_path_nonce" => enc.heading_path_nonce,
+        "aad_version" => enc.aad_version
+      })
+
+      assert {:ok, [result]} = Search.search(user, vault, "iron")
+      assert result.title == "Iron"
+      assert result.text == "Ferritin."
+    end
+
     # #1608: rehydration joined notes with no deleted_at filter, and a hit it
     # could not fill in was kept anyway, so a deleted note's surviving points
     # kept answering searches.
@@ -1335,5 +1391,58 @@ defmodule Engram.SearchTest do
       assert Search.clamp_limit(-5) == 1
       assert Search.clamp_limit(7) == 7
     end
+  end
+
+  defp insert_note_with_chunk(user, vault, path, content) do
+    Engram.MockEmbedder
+    |> expect(:embed_texts, fn _texts, _opts -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+    {:ok, note} =
+      Engram.Notes.upsert_note(user, vault, %{
+        "path" => path,
+        "content" => content,
+        "mtime" => 1_000.0
+      })
+
+    point_id = Ecto.UUID.generate()
+
+    {:ok, _} =
+      Engram.Repo.with_tenant(user.id, fn ->
+        %Chunk{}
+        |> Chunk.changeset(%{
+          note_id: note.id,
+          user_id: user.id,
+          vault_id: vault.id,
+          position: 0,
+          char_start: 0,
+          char_end: 10,
+          qdrant_point_id: point_id
+        })
+        |> Engram.Repo.insert!()
+      end)
+
+    %{id: note.id, point_id: point_id}
+  end
+
+  defp expect_one_point(bypass, point_id, user, vault, payload) do
+    body = %{
+      "result" => [
+        %{
+          "id" => point_id,
+          "score" => 0.9,
+          "payload" =>
+            Map.merge(payload, %{
+              "user_id" => to_string(user.id),
+              "vault_id" => to_string(vault.id)
+            })
+        }
+      ]
+    }
+
+    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, Jason.encode!(body))
+    end)
   end
 end
