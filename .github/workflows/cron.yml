@@ -803,10 +803,9 @@ jobs:
       # the outside — every existing client keeps working on its issued token
       # and only NEW connections fail, so nothing else surfaces it.
       #
-      # Guarded on the secret being present so this is a no-op until the webhook
-      # consolidation lands (one `announce` + one `alert` channel, replacing the
-      # per-repo DISCORD_RELEASES_/DISCORD_DEPLOY_ sprawl). Same
-      # `env.WEBHOOK != ''` idiom deploy-prod.yml already uses.
+      # Posts to the org-level `alert` channel (DISCORD_ALERTS_WEBHOOK_URL).
+      # Guarded on the secret being present so a repo without it skips quietly.
+      # Same `env.WEBHOOK != ''` idiom deploy-prod.yml already uses.
       #
       # Fires for BOTH targets: staging red blocks the next release, prod red is
       # user-facing. The host is in the message so severity is obvious at a
@@ -814,7 +813,7 @@ jobs:
       - name: Alert Discord (conformance regression)
         if: failure() && steps.conformance.outputs.rc == '1' && env.WEBHOOK != ''
         env:
-          WEBHOOK: ${{ secrets.DISCORD_ALERT_WEBHOOK_URL }}
+          WEBHOOK: ${{ secrets.DISCORD_ALERTS_WEBHOOK_URL }}
           TARGET: ${{ github.event.inputs.target-url || matrix.target }}
           LABEL: ${{ matrix.label }}
           DEPLOYED_SHA: ${{ steps.deployed.outputs.sha }}

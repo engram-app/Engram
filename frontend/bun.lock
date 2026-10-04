@@ -23,6 +23,7 @@
         "@codemirror/lang-xml": "^6.1.0",
         "@codemirror/lang-yaml": "^6.1.0",
         "@codemirror/legacy-modes": "^6.5.4",
+        "@codemirror/search": "^6.7.1",
         "@codemirror/state": "^6.7.5",
         "@codemirror/view": "^6.43.12",
         "@fontsource-variable/geist": "^5.2.9",
