@@ -23,6 +23,12 @@ static WORD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[\p{L}\p{N}\p{M}_]+
 
 pub type Stemmer = fn(&mut SnowballEnv) -> bool;
 
+pub const LANGUAGES: &[&str] = &[
+    "ar", "ca", "cs", "da", "de", "el", "en", "en_lovins", "en_porter", "eo", "es", "et", "eu",
+    "fa", "fi", "fr", "ga", "hi", "hu", "hy", "id", "it", "lt", "ne", "nl", "nl_porter", "no",
+    "pl", "pt", "ro", "ru", "sr", "sv", "ta", "tr", "yi",
+];
+
 pub fn stemmer(lang: &str) -> Option<Stemmer> {
     Some(match lang {
         "ar" => alg::arabic_stemmer::stem,

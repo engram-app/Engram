@@ -36,11 +36,10 @@ defmodule Engram.KeywordIndex.QdrantSparseTest do
     assert by_dim[QdrantSparse.dim(key, "alpha")] > by_dim[QdrantSparse.dim(key, "beta")]
   end
 
-  # The batch form returns PACKED vectors and shares one token -> dim memo across a note's chunks, so a
-  # word repeated in every chunk is HMAC'd once instead of once per chunk. It
-  # must be exactly the per-chunk encoding: the stored index cannot drift, or
-  # every unchanged note would need re-indexing.
-  test "encode_documents is exactly encode_document per text", %{key_a: key} do
+  # The batch form returns PACKED vectors and shares a token -> dim memo
+  # across a note's chunks. It must equal the per-chunk encoding, and the
+  # Elixir HMAC + BM25 math, exactly.
+  test "encode_documents is exactly the reference encoding per text", %{key_a: key} do
     texts = [
       "Running fast, running far.",
       "",
@@ -53,17 +52,26 @@ defmodule Engram.KeywordIndex.QdrantSparseTest do
     ]
 
     for lang <- [nil, :en] do
-      expected = Enum.map(texts, &reference_encode(&1, key, 7.5, lang))
+      expected = Enum.map(texts, &canonical(reference_encode(&1, key, 7.5, lang)))
       batch = QdrantSparse.encode_documents(texts, key, 7.5, lang)
 
       # Packed (u32 indices, f64 values) so a note's vectors sit off-heap.
       assert Enum.all?(batch, fn {p, _} -> is_binary(p.indices) and is_binary(p.values) end)
-      assert Enum.map(batch, fn {p, len} -> {QdrantSparse.unpack(p), len} end) == expected
-      assert Enum.map(texts, &QdrantSparse.encode_document(&1, key, 7.5, lang)) == expected
+
+      assert Enum.map(batch, fn {p, len} -> canonical({QdrantSparse.unpack(p), len}) end) ==
+               expected
+
+      assert Enum.map(texts, &canonical(QdrantSparse.encode_document(&1, key, 7.5, lang))) ==
+               expected
     end
   end
 
-  # The pre-memo encoder, verbatim: one HMAC and one full BM25 weight per
+  # Qdrant sorts a sparse vector's indices on upsert, so ORDER is not part of
+  # the contract; the dim -> value map and doc_len are.
+  defp canonical({%{indices: i, values: v}, len}), do: {Map.new(Enum.zip(i, v)), len}
+
+  # The pre-NIF Elixir encoder math, verbatim (HMAC + BM25 in Elixir over the
+  # shared tokenizer), holding the Rust HMAC and BM25 to it: one HMAC and one full BM25 weight per
   # (chunk, distinct token). The bar the optimized code must match exactly.
   defp reference_encode(text, key, avgdl, lang) do
     {tokens, doc_len} = Engram.KeywordIndex.Tokenizer.tokens_with_len(text, lang)

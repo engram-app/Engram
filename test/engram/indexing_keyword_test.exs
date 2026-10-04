@@ -108,9 +108,10 @@ defmodule Engram.IndexingKeywordTest do
     {:ok, key} = Crypto.dek_filter_key(user)
 
     # Tokenizer normalises to NFKC + downcase before stemming, so the stem
-    # input is "änderungen" → Text.Stemmer.stem("änderungen", :de) == "ander".
+    # input is "änderungen" → German Snowball stem "ander".
     # This dim must be present only when detect_language returned :de.
-    german_stem = Text.Stemmer.stem("änderungen", :de)
+    german_stem = List.last(Engram.KeywordIndex.Tokenizer.tokens("änderungen", :de))
+    assert german_stem == "ander"
 
     assert QdrantSparse.dim(key, german_stem) in indices,
            "Expected German stem #{inspect(german_stem)} in sparse indices; " <>
@@ -118,7 +119,7 @@ defmodule Engram.IndexingKeywordTest do
 
     # The English stemmer would produce "änderung" (or leave it unstemmed).
     # Verify the German path was taken, not the English one.
-    english_stem = Text.Stemmer.stem("änderungen", :en)
+    english_stem = List.last(Engram.KeywordIndex.Tokenizer.tokens("änderungen", :en))
 
     assert german_stem != english_stem,
            "German and English stems are identical — test is vacuous"

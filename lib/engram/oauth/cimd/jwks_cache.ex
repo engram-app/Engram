@@ -25,8 +25,8 @@ defmodule Engram.OAuth.Cimd.JwksCache do
   assertion in between. `refresh/1` has its own rate-limit bucket so a caller
   presenting unknown kids cannot turn that self-heal into an outbound hammer.
 
-  Public keys only — published to the world by definition — so unlike
-  `StemCache` this needs neither `:protected` nor `:sensitive`.
+  Public keys only — published to the world by definition — so this needs
+  neither `:protected` nor `:sensitive`.
 
   Node-local and TTL-only: no cross-node eviction. A stale key set is
   self-correcting (the vendor's old key still verifies its own assertions) and

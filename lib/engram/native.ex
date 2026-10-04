@@ -23,6 +23,9 @@ defmodule Engram.Native do
   @doc "Keyword query vector: `{indices, values}`, distinct dims, values 1.0."
   def encode_query_nif(_query, _filter_key, _language), do: :erlang.nif_error(:nif_not_loaded)
 
+  @doc "Language codes (strings) with a Snowball stemmer."
+  def stem_languages, do: :erlang.nif_error(:nif_not_loaded)
+
   @doc "The keyword tokenizer: `{tokens, raw_len}`."
   def tokens_with_len(_text, _language), do: :erlang.nif_error(:nif_not_loaded)
 

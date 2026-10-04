@@ -49,7 +49,6 @@ defmodule Engram.Application do
         Engram.Crypto.DekCache,
         Engram.UsageMeters.ActivityCache,
         Engram.KeywordIndex.Stats.Cache,
-        Engram.KeywordIndex.StemCache,
         # Published signing keys for CIMD clients that authenticate with
         # private_key_jwt. Without it the token path refetches per request and
         # the fetch limiter becomes a hard ceiling on token exchanges per

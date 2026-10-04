@@ -56,7 +56,7 @@ defmodule Engram.KeywordIndex.LangDetect do
   # 20x+ for a coarse stemmer choice that a paragraph already settles.
   @sample_chars 2_000
 
-  # lingua language atom → text_stemmer ISO 639-1 atom.
+  # lingua language atom → Snowball stemmer code (`Tokenizer.stem_languages/0`).
   # Only languages where both libraries overlap; unmapped atoms return nil → raw-only.
   @lang_map %{
     english: :en,

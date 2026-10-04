@@ -106,6 +106,12 @@ fn encode_query_nif(query: &str, key: Binary, lang: Option<String>) -> (Vec<u32>
     (dims, values)
 }
 
+/// Language codes with a Snowball stemmer.
+#[rustler::nif]
+fn stem_languages() -> Vec<&'static str> {
+    tokenizer::LANGUAGES.to_vec()
+}
+
 /// Live bytes held by this library's Rust heap, process-wide.
 #[rustler::nif]
 fn live_bytes() -> isize {
