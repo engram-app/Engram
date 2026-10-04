@@ -54,6 +54,15 @@ Catalog entry: `"{count} files": { one: "…", other: "…" }` (add `few`/`many`
 
 It scans source for `t("…")`, `tn({… other: "…"})` and `<Trans text="…">`, then fails on: an **orphan** key (in a catalog, not used in source), a **placeholder mismatch** (dropped or invented `{name}`), and a **cross-locale gap** (key present in one catalog, absent in another). The placeholder check covers `{placeholder}` tokens only; `<Trans>` slots use the same `{slot}` syntax, so they are covered. Used keys with no catalog entries at all are fine, which is why stubs stay green.
 
+## Clerk and Paddle follow the rendered locale
+
+Both follow `renderedLocale` from `useT()` (the selected locale only once its app catalog has keys, else `"en"`; the same value `<html lang>` uses), NOT the raw `locale`. Otherwise a ja browser would get Japanese sign-in and checkout over an all-English app until slice 4.
+
+- **Mapping:** `src/i18n/vendor-locales.ts`. Paddle codes equal ours except `zh-CN` -> `zh-Hans`.
+- **Clerk:** `<ClerkProvider localization>` in `clerk-auth-provider.tsx`. Catalogs come from `@clerk/localizations` as one lazy chunk per language (literal dynamic imports; a variable specifier would not bundle). English, loading and a failed load all leave `localization` undefined (Clerk's English), failures go to `captureError`. `@clerk/react` pushes a changed `localization` prop into the mounted instance, so no remount. Clerk marks localization experimental. `@clerk/localizations` is pinned to 4.17.0: newer minors require `@clerk/shared` >= 4.34, but this repo overrides `@clerk/shared` to the 4.33 that `@clerk/react` uses.
+- **Paddle:** the locale goes in `settings` of each `paddle.Checkout.open(...)`, NOT in the `initializePaddle` effect. That effect rebuilds the Paddle instance and strands an open checkout (same reason the theme is fixed). The init `locale: "en"` stays only as a default.
+- **Not covered:** the hosted Clerk Account Portal, and everything Paddle hosts (customer portal, receipts, invoices, emails).
+
 ## Biome
 
 `biome.json` turns `useFilenamingConvention` off for `src/i18n/locale/*.ts` because codes like `pt-BR.ts` and `zh-CN.ts` are not kebab-case. Biome also enforces `useExportsLast` and a no-unsafe-type-assertion rule here; narrow with `isMember` (`lib/is-member.ts`) instead of `as`.
