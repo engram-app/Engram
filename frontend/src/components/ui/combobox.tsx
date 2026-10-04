@@ -10,6 +10,7 @@ import {
 	InputGroupButton,
 	InputGroupInput,
 } from "@/components/ui/input-group";
+import { useT } from "@/i18n/locale-provider";
 import { cn } from "@/lib/utils";
 
 const Combobox = ComboboxPrimitive.Root;
@@ -32,6 +33,7 @@ function ComboboxTrigger({ className, children, ...props }: ComboboxPrimitive.Tr
 }
 
 function ComboboxClear({ className, ...props }: ComboboxPrimitive.Clear.Props) {
+	const { t } = useT();
 	return (
 		<ComboboxPrimitive.Clear
 			data-slot="combobox-clear"
@@ -40,7 +42,7 @@ function ComboboxClear({ className, ...props }: ComboboxPrimitive.Clear.Props) {
 			// Upstream's only child is an aria-hidden <svg>, which leaves the button
 			// with no accessible name at all (axe button-name / WCAG 4.1.2). Before
 			// the spread so a caller can still pass something more specific.
-			aria-label="Clear"
+			aria-label={t("Clear")}
 			{...props}
 		>
 			<XIcon className="pointer-events-none" />
