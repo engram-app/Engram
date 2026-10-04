@@ -26,6 +26,7 @@ on:
     - cron: '0 3 * * 6'     # dependency-submission    (Sat 03:00 UTC)
     - cron: '40 5 * * *'    # mcp-conformance          (daily 05:40 UTC)
     - cron: '40 7 * * *'    # vendor-conformance       (daily 07:40 UTC)
+    - cron: '20 8 * * *'    # native-deep              (daily 08:20 UTC)
   workflow_dispatch:
     inputs:
       task:
@@ -42,6 +43,7 @@ on:
           - dependency-submission
           - mcp-conformance
           - vendor-conformance
+          - native-deep
       force:
         description: '(obsidian-update only) Force re-download even if version matches'
         type: boolean
@@ -958,7 +960,7 @@ jobs:
           flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
             [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
-            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --no-self-update
+            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --component rustfmt --component clippy --no-self-update
           ' "$RUST_VERSION"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
@@ -1129,6 +1131,63 @@ jobs:
   # any of them failed, and name the failures in the message. A given cron
   # expression only runs a subset (the rest skip), and `contains` ignores
   # skipped, so this stays quiet unless something genuinely broke.
+  # ── Deep checks on the in-house Rust NIFs (native/engram_native) that are
+  # too slow or too noisy for every PR:
+  #   * the segmented-parse fuzz at 2M cases on 3 seeds (PR CI runs 20k). It
+  #     asserts the segmented pulldown-cmark parse == a whole-document parse;
+  #     at depth it found the table-row and lone-CR cut bugs.
+  #   * `cargo audit` against the RustSec advisory DB. Nightly, not per-PR: a
+  #     newly published advisory would otherwise red every unrelated PR.
+  # Fails into alert-cron-failure like the rest.
+  native-deep:
+    if: |
+      github.event.schedule == '20 8 * * *'
+      || github.event.inputs.task == 'native-deep'
+    runs-on: [self-hosted, linux, x64, isolated]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Rust toolchain (native/ NIFs)
+        # Same install as verify.yml unit-tests: rustup in the runner home,
+        # once per VM, at the pinned version, under flock.
+        run: |
+          mkdir -p "$HOME/.cargo"
+          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/engram_native/rust-toolchain.toml)
+          flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
+            [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --component rustfmt --component clippy --no-self-update
+          ' "$RUST_VERSION"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Segmented-parse fuzz, 2M cases x 3 seeds
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/engram-native-deep
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          ENGRAM_FUZZ_CASES: "2000000"
+        working-directory: native/engram_native
+        run: |
+          for seed in 1 2 3; do
+            ENGRAM_FUZZ_SEED=$seed cargo test --release --locked segmented
+          done
+
+      - name: cargo audit (RustSec)
+        # The pinned release binary, checksummed: building cargo-audit from
+        # source takes 10+ minutes.
+        working-directory: native/engram_native
+        run: |
+          v=0.22.2
+          f="cargo-audit-x86_64-unknown-linux-musl-v$v.tgz"
+          curl --proto "=https" --tlsv1.2 -sSfL -o "$RUNNER_TEMP/$f" \
+            "https://github.com/rustsec/rustsec/releases/download/cargo-audit%2Fv$v/$f"
+          echo "7fb9497f8594b389e5fce5ef9b92db08432996895b2e0c5a0167a69ed445c428  $RUNNER_TEMP/$f" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$f" -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/cargo-audit-x86_64-unknown-linux-musl-v$v/cargo-audit" audit --deny warnings
+
   alert-cron-failure:
     if: always() && contains(needs.*.result, 'failure')
     needs:
@@ -1141,6 +1200,7 @@ jobs:
       - dependency-submission
       - mcp-conformance
       - vendor-conformance
+      - native-deep
     runs-on: [self-hosted, linux, x64, isolated, light]
     steps:
       - name: Notify cron failure (alerts)

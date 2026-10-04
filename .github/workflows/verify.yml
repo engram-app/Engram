@@ -2494,23 +2494,28 @@ jobs:
           flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
             [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
-            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --no-self-update
+            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --component rustfmt --component clippy --no-self-update
           ' "$RUST_VERSION"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
-      - name: Rust unit tests (native/ NIFs)
-        # The Rust-only tests: the segmented-parse fuzz (segmented ==
-        # whole-document), the pulldown-cmark panic guard, linear-time
-        # bounds. mix test only loads the NIF, so without this step they ran
-        # nowhere, and Dependabot auto-merges grouped cargo bumps.
+      - name: Rust lint + unit tests (native/ NIFs)
+        # rustfmt and clippy (-D warnings) gate first, then the Rust-only
+        # tests: the segmented-parse fuzz (segmented == whole-document, 20k
+        # cases; cron.yml native-deep runs 2M x 3 seeds), the pulldown-cmark
+        # panic guard, linear-time bounds. mix test only loads the NIF, so
+        # without this step they ran nowhere, and Dependabot auto-merges
+        # grouped cargo bumps.
         # Release for the timing asserts, without LTO (that is for the
         # shipped .so). The target dir persists per VM; cargo locks it.
         env:
           CARGO_PROFILE_RELEASE_LTO: "false"
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+        working-directory: native/engram_native
         run: |
-          CARGO_TARGET_DIR="$HOME/.cache/engram-native-target" \
-            cargo test --release --locked --manifest-path native/engram_native/Cargo.toml
+          export CARGO_TARGET_DIR="$HOME/.cache/engram-native-target"
+          cargo fmt --check
+          cargo clippy --release --locked --all-targets -- -D warnings
+          cargo test --release --locked
 
       - name: Fetch deps (if missing or lockfile changed)
         # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`
@@ -2854,7 +2859,7 @@ jobs:
           flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
             [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
-            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --no-self-update
+            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --component rustfmt --component clippy --no-self-update
           ' "$RUST_VERSION"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
@@ -3605,7 +3610,7 @@ jobs:
           flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
             [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
-            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --no-self-update
+            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --component rustfmt --component clippy --no-self-update
           ' "$RUST_VERSION"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
@@ -4228,7 +4233,7 @@ jobs:
           flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
             [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
-            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --no-self-update
+            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --component rustfmt --component clippy --no-self-update
           ' "$RUST_VERSION"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
