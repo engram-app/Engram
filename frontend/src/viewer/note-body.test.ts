@@ -21,6 +21,19 @@ describe("noteBody", () => {
 		expect(body).toContain("pwned");
 	});
 
+	// gray-matter hid these; a Windows editor writes the BOM.
+	test("strips frontmatter after a BOM", () => {
+		expect(noteBody("\uFEFF---\ntitle: a\n---\nbody")).toBe("body");
+	});
+
+	test("strips frontmatter whose fences carry trailing spaces", () => {
+		expect(noteBody("--- \ntitle: a\n---  \nbody")).toBe("body");
+	});
+
+	test("strips an empty frontmatter with no final newline", () => {
+		expect(noteBody("---\n---")).toBe("");
+	});
+
 	test("a note without frontmatter passes through", () => {
 		expect(noteBody("plain")).toBe("plain");
 	});

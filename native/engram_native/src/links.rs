@@ -26,7 +26,7 @@ pub type Raw = (usize, u8, usize, usize, usize, usize);
 
 fn frontmatter_len(s: &str) -> usize {
     static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r"(?s)\A---\s*\n.*?\n---\s*\n").unwrap());
+    let re = RE.get_or_init(|| Regex::new(r"(?s)\A---[\s\x{180E}]*\n.*?\n---[\s\x{180E}]*\n").unwrap());
     re.find(s).map_or(0, |m| m.end())
 }
 
@@ -85,19 +85,33 @@ fn may_have_code(s: &str) -> bool {
 /// Pushes code ranges, offset by `base`. False if a fenced or raw-HTML block
 /// runs to the end of `s`, i.e. may still be open.
 fn segment_code_ranges(s: &str, base: usize, out: &mut Vec<(usize, usize)>) -> bool {
-    let mut closed = true;
-    for (event, r) in Parser::new_ext(s, Options::ENABLE_TABLES).into_offset_iter() {
-        match event {
-            Event::Code(_) => out.push((r.start + base, r.end + base)),
-            Event::Start(Tag::CodeBlock(kind)) => {
-                out.push((r.start + base, r.end + base));
-                closed &= !(matches!(kind, CodeBlockKind::Fenced(_)) && r.end == s.len());
+    // pulldown-cmark 0.13.4 panics on some valid input (an unwrap in
+    // parse.rs, e.g. "> - [x]: /u\n    \r"). Rustler would turn that into an
+    // exception and the note could not be saved or indexed. Losing one
+    // segment's code ranges is the lesser harm: its links and tags count.
+    let mut ranges = Vec::new();
+    let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut closed = true;
+        for (event, r) in Parser::new_ext(s, Options::ENABLE_TABLES).into_offset_iter() {
+            match event {
+                Event::Code(_) => ranges.push((r.start + base, r.end + base)),
+                Event::Start(Tag::CodeBlock(kind)) => {
+                    ranges.push((r.start + base, r.end + base));
+                    closed &= !(matches!(kind, CodeBlockKind::Fenced(_)) && r.end == s.len());
+                }
+                Event::Start(Tag::HtmlBlock) => closed &= r.end < s.len(),
+                _ => {}
             }
-            Event::Start(Tag::HtmlBlock) => closed &= r.end < s.len(),
-            _ => {}
         }
+        closed
+    }));
+    match parsed {
+        Ok(closed) => {
+            out.append(&mut ranges);
+            closed
+        }
+        Err(_) => true,
     }
-    closed
 }
 
 /// Start of the first line at or after `from` that a cut may precede: one
@@ -123,6 +137,10 @@ fn next_cut(s: &str, from: usize) -> Option<usize> {
 }
 
 fn starts_block(line: &[u8]) -> bool {
+    // Under a table header, `- | -` is the delimiter row, not a list item.
+    if line.contains(&b'|') {
+        return false;
+    }
     let hashes = line.iter().take_while(|&&c| c == b'#').count();
     let ticks = line.iter().take_while(|&&c| c == b'`').count();
     // An empty item cannot interrupt a paragraph; a backtick in a ``` info
@@ -348,20 +366,18 @@ fn scrub(b: Vec<u8>) -> (String, bool) {
 }
 
 /// `~r/\A(?:[a-z][a-z0-9+.\-]*:|\/\/)/i`: a scheme or protocol-relative URL.
-/// PCRE's caseless UTF mode folds U+212A (Kelvin) to k and U+017F (long s)
-/// to s, so those count as letters.
+/// That regex had no `u` flag, so its letters are ASCII only.
 fn external(t: &str) -> bool {
-    let letter = |c: char| c.is_ascii_alphabetic() || c == '\u{212A}' || c == '\u{17F}';
-    let mut chars = t.chars();
+    let b = t.as_bytes();
     if t.starts_with("//") {
         return true;
     }
-    if !chars.next().is_some_and(letter) {
+    if !b.first().is_some_and(u8::is_ascii_alphabetic) {
         return false;
     }
-    chars
-        .find(|&c| !(letter(c) || c.is_ascii_digit() || matches!(c, '+' | '.' | '-')))
-        .is_some_and(|c| c == ':')
+    b.iter()
+        .find(|&&c| !(c.is_ascii_alphanumeric() || matches!(c, b'+' | b'.' | b'-')))
+        .is_some_and(|&c| c == b':')
 }
 
 /// Wiki matches then markdown matches, each in document order, minus any
@@ -414,7 +430,7 @@ mod tests {
         let pieces = [
             "```", "~~~", "````", "\n", "\n\n", "    ", "  ", "- ", "1. ", "> ", "`", "``", "[[a]]", "[l](b.md)",
             "<!--", "-->", "<pre>", "</pre>", "<?", "?>", "<!X", ">", "<![CDATA[", "]]>", "text", "\t", "***",
-            "---", "| a |", "|---|", "*", "_", "\r", " ", "# ", "#", "+ ", "* ", "##", "1. x\n2. y", "foo\n",
+            "---", "| a |", "|---|", "- | -", "a | b", "* | *", "*", "_", "\r", " ", "# ", "#", "+ ", "* ", "##", "1. x\n2. y", "foo\n",
         ];
         let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
         let mut next = || {
@@ -433,6 +449,37 @@ mod tests {
                 assert!(ranges.is_empty(), "may_have_code missed {doc:?}");
             }
         }
+    }
+
+    // pulldown-cmark 0.13 panics on this (an unwrap in parse.rs). The note
+    // must still parse: its code ranges are dropped, never the whole call.
+    #[test]
+    fn a_pulldown_panic_does_not_fail_the_parse() {
+        assert_eq!(matches("> - [x]: /u\n    \r [[a]]"), matches("> - [x]: /u\n    \r [[a]]"));
+        assert_eq!(matches("#t\n\n> - [x]: /u\n    \r").len(), 0);
+        assert_eq!(matches("[[z]]\n\n> - [x]: /u\n    \r").len(), 1);
+    }
+
+    // `- | -` under a table header is the delimiter row, not a list item:
+    // a cut there turned the next row's cells into one code span.
+    #[test]
+    fn no_cut_inside_a_table() {
+        let doc = "a | b\n- | -\n`c | [[d]]`\n";
+        assert_eq!(matches_segmented(doc, 1), matches_segmented(doc, usize::MAX));
+        assert_eq!(matches_segmented(doc, 1).len(), 1);
+    }
+
+    // The old regex ran without `u`: ASCII letters only.
+    #[test]
+    fn only_ascii_schemes_are_external() {
+        assert!(external("https:x") && external("//cdn"));
+        assert!(!external("\u{17F}:x.md") && !external("\u{212A}a:y.md"));
+    }
+
+    // The old frontmatter regex had `u`, where PCRE's `\s` includes U+180E.
+    #[test]
+    fn frontmatter_whitespace_includes_u180e() {
+        assert_eq!(matches("---\u{180E}\n[[a]]\n---\n"), vec![]);
     }
 
     #[test]

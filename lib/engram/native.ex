@@ -31,7 +31,8 @@ defmodule Engram.Native do
   def tokens_with_len(_text, _language), do: :erlang.nif_error(:nif_not_loaded)
 
   # The note parsers run on the calling scheduler up to this size (well
-  # under 1 ms), and on a dirty CPU scheduler above it. Prod has ONE dirty
+  # under 1 ms on real notes; 2.8 ms worst seen, on adversarial backtick
+  # runs), and on a dirty CPU scheduler above it. Prod has ONE dirty
   # CPU scheduler, and a write must not queue behind a long keyword encode.
   @inline_max 16_384
 

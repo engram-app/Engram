@@ -249,6 +249,34 @@ describe("NoteView attachment embeds", () => {
 		expect(screen.getByTestId("attachment-img")).toHaveTextContent("pic.png");
 	});
 
+	// Emphasis, strikethrough, math and GFM autolinks parse BEFORE any tree
+	// plugin runs, so an embed path containing their markers must be claimed
+	// as one token by the parser, not reassembled from text nodes afterwards.
+	it.each([
+		["_draft_.png"],
+		["assets/_v2_/x.png"],
+		["~~old~~.png"],
+		["$x$.png"],
+		["www.example.com.png"],
+	])("renders an embed whose path holds inline syntax: %s", (path) => {
+		mockTier = "pro";
+		renderNote(`![[${path}]]\n`);
+		expect(screen.getByTestId("attachment-img")).toHaveTextContent(path);
+	});
+
+	it("renders an embed whose alias holds emphasis", () => {
+		mockTier = "pro";
+		renderNote("![[a.png|alt *b*]]\n");
+		expect(screen.getByTestId("attachment-img")).toHaveTextContent("a.png");
+	});
+
+	it("leaves an embed inside inline code as literal text", () => {
+		mockTier = "pro";
+		renderNote("use `![[x.png]]` here\n");
+		expect(screen.queryByTestId("attachment-img")).toBeNull();
+		expect(document.querySelector("code")?.textContent).toBe("![[x.png]]");
+	});
+
 	it("a plain wikilink is not an embed", () => {
 		mockTier = "pro";
 		renderNote("See [[Other note]] here\n");

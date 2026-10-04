@@ -50,9 +50,11 @@ pub fn title(s: &str) -> Option<String> {
     let mut pos = 0;
     while let Some(c) = heading_re.captures_at(body, pos) {
         let start = c.get(0)?.start();
-        match code.iter().find(|&&(s, e)| s <= start && start < e) {
-            Some(&(_, end)) => pos = end,
-            None => return Some(c[1].trim().to_string()),
+        // The first range ending after `start`; matches only move forward.
+        let i = code.partition_point(|&(_, end)| end <= start);
+        match code.get(i) {
+            Some(&(s, end)) if s <= start => pos = end,
+            _ => return Some(c[1].trim().to_string()),
         }
     }
     None
@@ -179,3 +181,16 @@ fn non_string_scalar(item: &str) -> bool {
         .is_match(item)
 }
 
+
+#[cfg(test)]
+mod tests {
+    // Skipping a heading inside code must not rescan the code ranges from
+    // the start: 480 KB of code-fenced `# x` lines took 1.3 s.
+    #[test]
+    fn title_is_linear_past_many_code_headings() {
+        let s = "```\n# x\n```\n".repeat(40_000) + "# Real\n";
+        let t = std::time::Instant::now();
+        assert_eq!(super::title(&s).as_deref(), Some("Real"));
+        assert!(t.elapsed().as_millis() < 300, "{:?}", t.elapsed());
+    }
+}

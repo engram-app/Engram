@@ -145,5 +145,14 @@ defmodule Engram.Storage.MimeWhitelist do
   """
   @spec detect_mime(String.t() | nil) :: String.t()
   def detect_mime(nil), do: "application/octet-stream"
-  def detect_mime(path) when is_binary(path), do: MIME.from_path(path)
+
+  def detect_mime(path) when is_binary(path) do
+    case MIME.from_path(path) do
+      # mime 2.x says text/javascript, which the text/ prefix would admit.
+      # The table this replaced said application/javascript and refused it;
+      # swapping in the library must not change what uploads are allowed.
+      "text/javascript" -> "application/javascript"
+      mime -> mime
+    end
+  end
 end

@@ -251,6 +251,17 @@ defmodule Engram.Storage.MimeWhitelistTest do
       end
     end
 
+    # mime 2.x names .js text/javascript, which the text/ prefix would admit,
+    # including through the Free tier's text-only rule. The hand table said
+    # application/javascript and refused it; a library swap must not quietly
+    # change what uploads are allowed.
+    test "a .js file without a claimed type is still refused" do
+      for file <- ["a.js", "a.MJS"] do
+        assert {:error, {:mime_not_allowed, _}} =
+                 MimeWhitelist.check(MimeWhitelist.detect_mime(file), file)
+      end
+    end
+
     test "unknown extensions and nil are octet-stream, which is refused" do
       assert MimeWhitelist.detect_mime("a.unknownext") == "application/octet-stream"
       assert MimeWhitelist.detect_mime(nil) == "application/octet-stream"

@@ -125,7 +125,8 @@ fn tokens_with_len(text: &str, lang: Option<String>) -> (Vec<String>, usize) {
 }
 
 // The note parsers come in two schedules. A note up to `Engram.Native`'s
-// @inline_max (16 KB) parses in well under a millisecond and runs on the
+// @inline_max (16 KB) parses in well under a millisecond (adversarial input,
+// growing backtick runs, measured 2.8 ms for title plus tags) and runs on the
 // calling scheduler: no hop, and no queueing behind a long keyword encode
 // on prod's single dirty CPU scheduler. Bigger notes go dirty.
 
