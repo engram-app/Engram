@@ -1,4 +1,9 @@
-import { CheckoutEventNames, initializePaddle, type Paddle } from "@paddle/paddle-js";
+import {
+	CheckoutEventNames,
+	type CheckoutSettings,
+	initializePaddle,
+	type Paddle,
+} from "@paddle/paddle-js";
 import { useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -46,6 +51,35 @@ import { useSubscriptionActivatedEvents } from "./use-subscription-activated-eve
 const COOLDOWN_MS = 15_000;
 
 const INLINE_FRAME_TARGET = "paddle-checkout";
+
+// Paddle's branded-inline-checkout dashboard config (Paddle > Checkout
+// > Branded inline checkout) is a single static color set with no
+// light/dark variant, tuned for light. `theme: "light"` matches it so
+// the unbranded chrome (page background behind fields, default text)
+// doesn't clash with the branded fields. Fixed, not tied to the app's
+// live theme — a dynamic value here tore down/rebuilt the Paddle
+// instance on every app theme toggle, stranding an open checkout.
+// Stable inputs only (isInline): the init effect depends on this shape, and
+// the locale is layered on at call time. Each Checkout.open gets the FULL
+// object, because Paddle.js's merge of partial per-open settings over the
+// init defaults is undocumented and this is the payments path.
+function checkoutSettings(isInline: boolean): CheckoutSettings {
+	return isInline
+		? {
+				displayMode: "inline",
+				frameTarget: INLINE_FRAME_TARGET,
+				frameInitialHeight: 450,
+				// No fixed min-height: Paddle auto-resizes the iframe to fit its
+				// content, and a hard floor overrode the downward resize — so the
+				// short post-payment success screen was stranded in a tall 450px
+				// box. frameInitialHeight covers the initial paint before Paddle
+				// reports the real height. (min-width matches Paddle's own sample.)
+				frameStyle: "width:100%; min-width:312px; background:transparent; border:none;",
+				theme: "light",
+				variant: "one-page",
+			}
+		: { displayMode: "overlay", theme: "light", variant: "one-page" };
+}
 
 // Dev-only: Paddle's checkout iframe can't embed on a non-default-port
 // localhost origin (its frame-ancestors only allows the bare host at :80/:443),
@@ -471,38 +505,9 @@ export default function BillingPage({
 						break;
 				}
 			},
-			// Paddle's branded-inline-checkout dashboard config (Paddle > Checkout
-			// > Branded inline checkout) is a single static color set with no
-			// light/dark variant, tuned for light. `theme: "light"` matches it so
-			// the unbranded chrome (page background behind fields, default text)
-			// doesn't clash with the branded fields. Fixed, not tied to the app's
-			// live theme — a dynamic value here tore down/rebuilt the Paddle
-			// instance on every app theme toggle, stranding an open checkout.
-			// `locale: "en"` is only the default; each Checkout.open passes the
-			// rendered app locale (checkoutLocale) in its own settings.
-			checkout: {
-				settings: isInline
-					? {
-							displayMode: "inline",
-							frameTarget: INLINE_FRAME_TARGET,
-							frameInitialHeight: 450,
-							// No fixed min-height: Paddle auto-resizes the iframe to fit its
-							// content, and a hard floor overrode the downward resize — so the
-							// short post-payment success screen was stranded in a tall 450px
-							// box. frameInitialHeight covers the initial paint before Paddle
-							// reports the real height. (min-width matches Paddle's own sample.)
-							frameStyle: "width:100%; min-width:312px; background:transparent; border:none;",
-							theme: "light",
-							variant: "one-page",
-							locale: "en",
-						}
-					: {
-							displayMode: "overlay",
-							theme: "light",
-							variant: "one-page",
-							locale: "en",
-						},
-			},
+			// `locale: "en"` is only the default; every Checkout.open passes the full
+			// settings again with the rendered app locale (see checkoutSettings).
+			checkout: { settings: { ...checkoutSettings(isInline), locale: "en" } },
 		}).then((instance) => {
 			if (cancelled) {
 				return;
@@ -559,7 +564,7 @@ export default function BillingPage({
 					],
 					customer: { email: config.customer_email },
 					customData: config.custom_data,
-					settings: { locale: checkoutLocale },
+					settings: { ...checkoutSettings(isInline), locale: checkoutLocale },
 				});
 			});
 		},
@@ -642,7 +647,10 @@ export default function BillingPage({
 			const { transaction_id } = await api.get<{ transaction_id: string }>(
 				"/billing/payment-update-transaction",
 			);
-			paddle.Checkout.open({ transactionId: transaction_id, settings: { locale: checkoutLocale } });
+			paddle.Checkout.open({
+				transactionId: transaction_id,
+				settings: { ...checkoutSettings(isInline), locale: checkoutLocale },
+			});
 		} catch {
 			toast.error("Could not start the payment update. Please try again.");
 		} finally {

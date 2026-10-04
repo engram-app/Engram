@@ -116,6 +116,16 @@ function renderBilling(inline: boolean) {
 }
 
 // Desktop grid and mobile accordion both render a Start button.
+const INLINE_SETTINGS = {
+	displayMode: "inline",
+	frameTarget: "paddle-checkout",
+	frameInitialHeight: 450,
+	frameStyle: "width:100%; min-width:312px; background:transparent; border:none;",
+	theme: "light",
+	variant: "one-page",
+};
+const OVERLAY_SETTINGS = { displayMode: "overlay", theme: "light", variant: "one-page" };
+
 function startButton(): HTMLElement {
 	const [first] = screen.getAllByRole("button", { name: "Start free trial" });
 	if (!first) {
@@ -132,7 +142,7 @@ describe("BillingPage locale", () => {
 		initializePaddleMock.mockReset();
 	});
 
-	it("passes the mapped rendered locale to a new checkout (inline)", async () => {
+	it("passes the full inline settings and the mapped locale to a new checkout", async () => {
 		mockBillingApi({ subscribed: false });
 		const open = vi.fn();
 		initializePaddleMock.mockImplementation(async () => ({ Checkout: { open, close: vi.fn() } }));
@@ -144,10 +154,10 @@ describe("BillingPage locale", () => {
 			await Promise.resolve();
 		});
 		await waitFor(() => expect(open).toHaveBeenCalledTimes(1));
-		expect(open.mock.calls[0]?.[0].settings).toEqual({ locale: "zh-Hans" });
+		expect(open.mock.calls[0]?.[0].settings).toEqual({ ...INLINE_SETTINGS, locale: "zh-Hans" });
 	});
 
-	it("passes the mapped rendered locale to the payment-method update checkout", async () => {
+	it("passes the mapped rendered locale with the full settings to the payment-method update checkout", async () => {
 		mockBillingApi({ subscribed: true });
 		const open = vi.fn();
 		initializePaddleMock.mockImplementation(async () => ({ Checkout: { open, close: vi.fn() } }));
@@ -161,7 +171,7 @@ describe("BillingPage locale", () => {
 		await waitFor(() => expect(open).toHaveBeenCalledTimes(1));
 		expect(open.mock.calls[0]?.[0]).toEqual({
 			transactionId: "txn_1",
-			settings: { locale: "zh-Hans" },
+			settings: { ...OVERLAY_SETTINGS, locale: "zh-Hans" },
 		});
 	});
 
@@ -180,7 +190,7 @@ describe("BillingPage locale", () => {
 			await Promise.resolve();
 		});
 		await waitFor(() => expect(open).toHaveBeenCalledTimes(1));
-		expect(open.mock.calls[0]?.[0].settings).toEqual({ locale: "de" });
+		expect(open.mock.calls[0]?.[0].settings).toEqual({ ...OVERLAY_SETTINGS, locale: "de" });
 		expect(initializePaddleMock).toHaveBeenCalledTimes(1);
 	});
 });
