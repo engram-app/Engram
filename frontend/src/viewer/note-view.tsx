@@ -12,6 +12,7 @@ import remarkWikiLink from "remark-wiki-link";
 import type { PluggableList } from "unified";
 // hljs + KaTeX styles ride this lazy chunk, not the eager main stylesheet.
 import "./markdown.css";
+import { useT } from "@/i18n/locale-provider";
 import { useIsFreeTier } from "../billing/use-is-free-tier";
 import { AttachmentFallback } from "./attachment-fallback";
 import AttachmentImg from "./attachment-img";
@@ -89,6 +90,7 @@ const TEXT_EMBED = /\.(?:md|canvas)$/iu;
 // no internal memoization, so an unmemoized NoteView re-ran the full
 // remark/rehype pipeline (gfm + KaTeX + highlight) per keystroke.
 function NoteView({ content, tags, links, manifestNotes, onCreateWikiTarget }: NoteViewProps) {
+	const { t } = useT();
 	const isFreeTier = useIsFreeTier();
 	const { slug } = useParams();
 	const wikiMap = useMemo(() => buildWikiMap(links), [links]);
@@ -146,7 +148,7 @@ function NoteView({ content, tags, links, manifestNotes, onCreateWikiTarget }: N
 									<a
 										href={href}
 										className="cursor-pointer text-muted-foreground underline decoration-dashed underline-offset-2"
-										title={`Create "${stripMd(newPage)}"`}
+										title={t('Create "{page}"', { page: stripMd(newPage) })}
 										onClick={(e) => {
 											e.preventDefault();
 											onCreateWikiTarget?.(newPage);
