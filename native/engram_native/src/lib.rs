@@ -1,7 +1,9 @@
 //! In-house NIFs. Each is a pure function over binaries, runs on a dirty CPU
 //! scheduler, and returns BEAM binaries (so its OUTPUT is visible to
 //! `:erlang.memory(:binary)`). See docs/context for the memory standard.
+mod links;
 mod memory;
+mod meta;
 mod tokenizer;
 
 // Not under `cargo test`: enif_alloc only exists inside a running BEAM.
@@ -10,7 +12,7 @@ mod tokenizer;
 static ALLOCATOR: memory::Counting = memory::Counting;
 
 use hmac::{Hmac, Mac};
-use rustler::{Binary, Env, NewBinary};
+use rustler::{Binary, Encoder, Env, NewBinary, Term};
 use sha2::Sha256;
 use std::collections::HashMap;
 
@@ -120,6 +122,72 @@ fn live_bytes() -> isize {
 #[rustler::nif(schedule = "DirtyCpu")]
 fn tokens_with_len(text: &str, lang: Option<String>) -> (Vec<String>, usize) {
     tokenizer::tokens_with_len(text, lang.as_deref())
+}
+
+// The note parsers come in two schedules. A note up to `Engram.Native`'s
+// @inline_max (16 KB) parses in well under a millisecond (adversarial input,
+// growing backtick runs, measured 2.8 ms for title plus tags) and runs on the
+// calling scheduler: no hop, and no queueing behind a long keyword encode
+// on prod's single dirty CPU scheduler. Bigger notes go dirty.
+
+/// `Links.Parser.extract/1`: `{[{position, kind, target_start, target_len,
+/// target, alias, anchor}], scrub_count}`, and the call's native peak. Each
+/// link is encoded as a term the moment it is built, so the output never
+/// exists as a Rust copy. Linear in the note; no size bound, notes of any
+/// size must index.
+fn link_extract<'a>(env: Env<'a>, content: &str) -> ((Vec<Term<'a>>, usize), usize) {
+    let base = memory::begin();
+    let mut terms = Vec::new();
+    let scrubs = links::extract(content, |(pos, kind, ts, tl, target, alias, anchor)| {
+        terms.push((pos, kind, ts, tl, target.as_ref(), alias, anchor.as_deref()).encode(env));
+    });
+    let peak = memory::peak_since(base);
+    ((terms, scrubs), peak)
+}
+
+/// `Helpers.extract_title/2` without the file-name fallback, and the peak.
+fn note_title(content: &str) -> (Option<String>, usize) {
+    let base = memory::begin();
+    let out = meta::title(content);
+    (out, memory::peak_since(base))
+}
+
+/// `Helpers.extract_tags/1`, and the peak.
+fn note_tags<'a>(env: Env<'a>, content: &str) -> (Vec<Term<'a>>, usize) {
+    let base = memory::begin();
+    let mut out = Vec::new();
+    meta::tags(content, |t| out.push(t.encode(env)));
+    (out, memory::peak_since(base))
+}
+
+#[rustler::nif]
+fn link_extract_nif<'a>(env: Env<'a>, content: &str) -> ((Vec<Term<'a>>, usize), usize) {
+    link_extract(env, content)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn link_extract_dirty_nif<'a>(env: Env<'a>, content: &str) -> ((Vec<Term<'a>>, usize), usize) {
+    link_extract(env, content)
+}
+
+#[rustler::nif]
+fn note_title_nif(content: &str) -> (Option<String>, usize) {
+    note_title(content)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn note_title_dirty_nif(content: &str) -> (Option<String>, usize) {
+    note_title(content)
+}
+
+#[rustler::nif]
+fn note_tags_nif<'a>(env: Env<'a>, content: &str) -> (Vec<Term<'a>>, usize) {
+    note_tags(env, content)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn note_tags_dirty_nif<'a>(env: Env<'a>, content: &str) -> (Vec<Term<'a>>, usize) {
+    note_tags(env, content)
 }
 
 rustler::init!("Elixir.Engram.Native");

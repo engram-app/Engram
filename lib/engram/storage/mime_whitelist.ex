@@ -137,37 +137,22 @@ defmodule Engram.Storage.MimeWhitelist do
   end
 
   @doc """
-  Detects MIME type from filename extension. Mirrors the lookup table
-  previously private to `Engram.Attachments`. Returns
-  `application/octet-stream` for unknown extensions — which then fails
-  `check/2` by design (forces client to send an explicit, allowlisted
-  `mime_type` for non-standard files).
+  Detects MIME type from the filename extension, via the `mime` library
+  (Plug's own table) plus the audio types registered in `config :mime`.
+  Returns `application/octet-stream` for unknown extensions, which then
+  fails `check/2` by design: the client must send an explicit, allowlisted
+  `mime_type` for anything non-standard.
   """
   @spec detect_mime(String.t() | nil) :: String.t()
   def detect_mime(nil), do: "application/octet-stream"
 
   def detect_mime(path) when is_binary(path) do
-    case path |> Path.extname() |> String.downcase() do
-      ".png" -> "image/png"
-      ".jpg" -> "image/jpeg"
-      ".jpeg" -> "image/jpeg"
-      ".gif" -> "image/gif"
-      ".webp" -> "image/webp"
-      ".svg" -> "image/svg+xml"
-      ".pdf" -> "application/pdf"
-      ".mp3" -> "audio/mpeg"
-      ".mp4" -> "video/mp4"
-      ".wav" -> "audio/wav"
-      ".txt" -> "text/plain"
-      ".md" -> "text/markdown"
-      ".json" -> "application/json"
-      ".css" -> "text/css"
-      ".js" -> "application/javascript"
-      ".html" -> "text/html"
-      ".zip" -> "application/zip"
-      ".tar" -> "application/x-tar"
-      ".gz" -> "application/gzip"
-      _ -> "application/octet-stream"
+    case MIME.from_path(path) do
+      # mime 2.x says text/javascript, which the text/ prefix would admit.
+      # The table this replaced said application/javascript and refused it;
+      # swapping in the library must not change what uploads are allowed.
+      "text/javascript" -> "application/javascript"
+      mime -> mime
     end
   end
 end

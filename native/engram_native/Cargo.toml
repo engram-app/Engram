@@ -15,6 +15,7 @@ unicode-normalization = "0.1"
 unicode-segmentation = "1"
 regex = "1"
 snowball_stemmers_rs = "1.0.1"
+pulldown-cmark = { version = "0.13", default-features = false }
 
 [profile.release]
 lto = true

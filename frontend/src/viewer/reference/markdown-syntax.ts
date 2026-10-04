@@ -10,7 +10,7 @@ import { defaultConfig } from "@portaljs/remark-callouts";
 //   remark-wiki-link ..... [[Page]] and [[Page|alias]]
 //   rehype-highlight ..... fenced code with a language tag
 //   MermaidBlock ......... ```mermaid fences
-//   gray-matter .......... --- frontmatter --- (surfaced as note properties)
+//   splitFrontmatter ..... --- frontmatter --- (surfaced as note properties)
 //
 // Deliberately ABSENT because we do not render them: raw inline HTML (no
 // rehype-raw), ==highlight==, and comments (%% %%). Listing syntax that
@@ -383,7 +383,7 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		// spacing and demonstrates another.
 		//
 		// The surrounding prose is also load-bearing for a second reason: NoteView
-		// runs gray-matter, which swallows a leading "---" as a frontmatter
+		// strips frontmatter, which swallows a leading "---" as a frontmatter
 		// delimiter and previews an empty box.
 		demo: "Text above the divider\n\n---\nText below the divider",
 		// No blurb. The blank-line rule used to be spelled out here; the template's

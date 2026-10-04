@@ -1,5 +1,5 @@
-import matter from "gray-matter";
 import { describe, expect, test } from "vitest";
+import { noteBody } from "../note-body";
 import { filterSyntax, groupByCategory, previewSource, SYNTAX_ENTRIES } from "./markdown-syntax";
 
 describe("markdown-syntax catalogue", () => {
@@ -55,13 +55,13 @@ describe("markdown-syntax catalogue", () => {
 	});
 
 	test("no previewed entry is silently emptied by frontmatter parsing", () => {
-		// NoteView runs gray-matter before rendering, and it swallows a LEADING
+		// NoteView strips frontmatter before rendering, and that swallows a LEADING
 		// "---" as a frontmatter delimiter — so a bare horizontal rule previewed
 		// as an empty box. Any entry whose preview parses to nothing is claiming
 		// to demonstrate something while showing nothing.
 		for (const entry of SYNTAX_ENTRIES) {
 			if (entry.renderable !== false) {
-				expect(matter(previewSource(entry)).content.trim(), entry.id).not.toBe("");
+				expect(noteBody(previewSource(entry)).trim(), entry.id).not.toBe("");
 			}
 		}
 	});

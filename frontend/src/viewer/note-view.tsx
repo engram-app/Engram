@@ -1,5 +1,4 @@
 import remarkCallouts from "@portaljs/remark-callouts";
-import matter from "gray-matter";
 import { type CSSProperties, memo, useMemo } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import { Link, useParams } from "react-router";
@@ -17,6 +16,7 @@ import { useIsFreeTier } from "../billing/use-is-free-tier";
 import { AttachmentFallback } from "./attachment-fallback";
 import AttachmentImg from "./attachment-img";
 import MermaidBlock from "./mermaid-block";
+import { ATTACHMENT_SCHEME, noteBody, remarkEmbeds } from "./note-body";
 import {
 	buildWikiMap,
 	type ManifestNote,
@@ -47,17 +47,6 @@ interface NoteViewProps {
 	onCreateWikiTarget?: (page: string) => void;
 }
 
-// Sentinel marks images rewritten from Obsidian `![[X]]` embed syntax. The
-// img component reads it and fetches via the authenticated attachments API.
-const ATTACHMENT_SCHEME = "engram-attachment:";
-
-function rewriteEmbeds(raw: string): string {
-	return raw.replace(/!\[\[(?<inner>[^\]]+)\]\]/gu, (_match, inner: string) => {
-		const [path, alias] = inner.split("|").map((s) => s.trim());
-		return `![${alias ?? path}](${ATTACHMENT_SCHEME}${path})`;
-	});
-}
-
 // Slug-parameterized: a resolved wikilink gets the note's `/v/:slug/:id` route
 // and an unresolved one gets a WIKI_CREATE_SCHEME sentinel (see wiki-link.ts).
 // pageResolver is identity — the default would mangle names (`My Note` →
@@ -78,6 +67,7 @@ const remarkPluginsFor = (
 			aliasDivider: "|",
 		},
 	],
+	remarkEmbeds,
 ];
 
 const rehypePlugins: PluggableList = [
@@ -109,13 +99,7 @@ function NoteView({ content, tags, links, manifestNotes, onCreateWikiTarget }: N
 		() => remarkPluginsFor(slug, wikiMap, manifestNotes),
 		[slug, wikiMap, manifestNotes],
 	);
-	const body = useMemo(() => {
-		try {
-			return rewriteEmbeds(matter(content).content);
-		} catch {
-			return rewriteEmbeds(content);
-		}
-	}, [content]);
+	const body = useMemo(() => noteBody(content), [content]);
 
 	return (
 		<article className="w-full">

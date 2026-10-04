@@ -34,7 +34,7 @@ Engram is a single Elixir/Phoenix OTP application — search, MCP server, note s
 | Presence | `lib/engram_web/presence.ex` | Connected device tracking |
 | Notes Context | `lib/engram/notes.ex` | Note CRUD, folder ops (Ecto) |
 | Indexing | `lib/engram/indexing.ex` | parse → contextualize → embed → upsert pipeline |
-| Parser | `lib/engram/parsers/markdown.ex` | Heading-aware chunking via Earmark AST |
+| Parser | `lib/engram/parsers/markdown.ex` | Heading-aware chunking (line/regex section splitter) |
 | Qdrant Client | `lib/engram/vector/qdrant.ex` | Thin HTTP wrapper (~150 LOC, Req) |
 | Embedders | `lib/engram/embedders/` | Voyage AI (SaaS) + Ollama (self-hosted) |
 | Search | `lib/engram/search.ex` | Vector search, optional reranking |
@@ -66,7 +66,7 @@ Engram is a single Elixir/Phoenix OTP application — search, MCP server, note s
 Obsidian plugin → WebSocket → Channel "sync:{user_id}" → Presence tracks device
 
 SYNC (immediate): Channel handler → Postgres upsert → PubSub broadcast → other devices
-INDEXING (async):  Oban worker → Earmark parse → contextualize → Voyage embed → Qdrant upsert
+INDEXING (async):  Oban worker → markdown parse → contextualize → Voyage embed → Qdrant upsert
 SEARCH:            MCP/REST → Voyage embed query → Qdrant similarity → top N results
 ```
 
@@ -263,7 +263,7 @@ Design spec: Engram vault, `50 Engineering/_Superpowers Specs/` (logging taxonom
 |-------|------|--------|
 | 1: Scaffold | Phoenix app, Ecto schemas, RLS migrations, auth, health, Oban | shipped |
 | 2: Notes CRUD | Upsert/read/delete/rename/changes, path sanitization | shipped |
-| 3: Indexing | Earmark parser, Voyage embedder, Qdrant client, pipeline | shipped |
+| 3: Indexing | Markdown parser, Voyage embedder, Qdrant client, pipeline | shipped |
 | 4: Search | Vector search, folder/tag filter | shipped |
 | 5: Real-time | Phoenix Channel sync, Presence | shipped |
 | 6: Attachments | AWS S3 via ExAws | shipped |

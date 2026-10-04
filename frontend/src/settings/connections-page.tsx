@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { useAutofocus } from "@/hooks/use-autofocus";
 import { copyToClipboard } from "@/lib/clipboard";
+import { formatDate } from "@/lib/format-date";
 import { SettingsSectionCard } from "@/settings/account/section-card";
 import { ApiError } from "../api/client";
 import {
@@ -663,14 +664,6 @@ function ModalShell({
 			</section>
 		</div>
 	);
-}
-
-function formatDate(iso: string): string {
-	return new Date(iso).toLocaleDateString(undefined, {
-		year: "numeric",
-		month: "short",
-		day: "numeric",
-	});
 }
 
 export default function ConnectionsPage() {

@@ -226,6 +226,64 @@ describe("NoteView attachment gating", () => {
 	});
 });
 
+// Embeds are rewritten on the parsed markdown tree, not by a regex over the
+// raw text: the regex also rewrote examples inside code blocks, and paths
+// with spaces or parentheses broke out of the generated markdown link.
+describe("NoteView attachment embeds", () => {
+	it("leaves an embed inside a code block as literal text", () => {
+		mockTier = "pro";
+		renderNote("```\n![[image.png]]\n```\n");
+		expect(screen.queryByTestId("attachment-img")).toBeNull();
+		expect(document.querySelector("code")?.textContent).toContain("![[image.png]]");
+	});
+
+	it("keeps a path with spaces and parentheses whole", () => {
+		mockTier = "pro";
+		renderNote("![[My Photo (1).png]]\n");
+		expect(screen.getByTestId("attachment-img")).toHaveTextContent("My Photo (1).png");
+	});
+
+	it("uses the alias as alt text and the target as the path", () => {
+		mockTier = "pro";
+		renderNote("![[pic.png|A caption]]\n");
+		expect(screen.getByTestId("attachment-img")).toHaveTextContent("pic.png");
+	});
+
+	// Emphasis, strikethrough, math and GFM autolinks parse BEFORE any tree
+	// plugin runs, so an embed path containing their markers must be claimed
+	// as one token by the parser, not reassembled from text nodes afterwards.
+	it.each([
+		["_draft_.png"],
+		["assets/_v2_/x.png"],
+		["~~old~~.png"],
+		["$x$.png"],
+		["www.example.com.png"],
+	])("renders an embed whose path holds inline syntax: %s", (path) => {
+		mockTier = "pro";
+		renderNote(`![[${path}]]\n`);
+		expect(screen.getByTestId("attachment-img")).toHaveTextContent(path);
+	});
+
+	it("renders an embed whose alias holds emphasis", () => {
+		mockTier = "pro";
+		renderNote("![[a.png|alt *b*]]\n");
+		expect(screen.getByTestId("attachment-img")).toHaveTextContent("a.png");
+	});
+
+	it("leaves an embed inside inline code as literal text", () => {
+		mockTier = "pro";
+		renderNote("use `![[x.png]]` here\n");
+		expect(screen.queryByTestId("attachment-img")).toBeNull();
+		expect(document.querySelector("code")?.textContent).toBe("![[x.png]]");
+	});
+
+	it("a plain wikilink is not an embed", () => {
+		mockTier = "pro";
+		renderNote("See [[Other note]] here\n");
+		expect(screen.queryByTestId("attachment-img")).toBeNull();
+	});
+});
+
 describe("NoteView callout colour republish", () => {
 	// The editor side of this contract is pinned in callout-decoration.test.ts;
 	// the reading side was pinned by nothing. Both panes have to hand CSS the

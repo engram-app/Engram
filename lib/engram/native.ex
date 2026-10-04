@@ -8,7 +8,8 @@ defmodule Engram.Native do
     * Rust allocates through `enif_alloc`, so the BEAM's own accounting
       (`:erlang.memory(:system)`, recon_alloc) includes it.
     * Every NIF call reports its native PEAK bytes, emitted as
-      `[:engram, :nif, :call, :stop]` by `call/3`.
+      `[:engram, :nif, :call, :stop]` by `call/4`, with `nif` and `dirty`
+      (whether it ran on a dirty scheduler) as metadata.
     * `live_bytes/0` is this library's live Rust heap, for leak tests.
     * `memory_snapshot/0` sets OS RSS against what the BEAM can see. The gap
       (`unaccounted`) is native memory nothing else reports: a third-party
@@ -29,6 +30,46 @@ defmodule Engram.Native do
   @doc "The keyword tokenizer: `{tokens, raw_len}`."
   def tokens_with_len(_text, _language), do: :erlang.nif_error(:nif_not_loaded)
 
+  # The note parsers run on the calling scheduler up to this size (well
+  # under 1 ms on real notes; 2.8 ms worst seen, on adversarial backtick
+  # runs), and on a dirty CPU scheduler above it. Prod has ONE dirty
+  # CPU scheduler, and a write must not queue behind a long keyword encode.
+  @inline_max 16_384
+
+  @doc false
+  def link_extract_nif(_content), do: :erlang.nif_error(:nif_not_loaded)
+  @doc false
+  def link_extract_dirty_nif(_content), do: :erlang.nif_error(:nif_not_loaded)
+  @doc false
+  def note_title_nif(_content), do: :erlang.nif_error(:nif_not_loaded)
+  @doc false
+  def note_title_dirty_nif(_content), do: :erlang.nif_error(:nif_not_loaded)
+  @doc false
+  def note_tags_nif(_content), do: :erlang.nif_error(:nif_not_loaded)
+  @doc false
+  def note_tags_dirty_nif(_content), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
+  Links for `Engram.Links.Parser`: `{[{position, kind, target_start,
+  target_len, target, alias, anchor}], scrub_count}`, in position order.
+  `content` must be valid UTF-8.
+  """
+  def link_extract(content),
+    do: parse(:link_extract, content, &link_extract_nif/1, &link_extract_dirty_nif/1)
+
+  @doc "Frontmatter `title:`, else the first H1 outside code, else nil. Valid UTF-8 only."
+  def note_title(content),
+    do: parse(:note_title, content, &note_title_nif/1, &note_title_dirty_nif/1)
+
+  @doc "Frontmatter tags then inline `#tags`, deduplicated. Valid UTF-8 only."
+  def note_tags(content), do: parse(:note_tags, content, &note_tags_nif/1, &note_tags_dirty_nif/1)
+
+  defp parse(name, content, inline, _dirty) when byte_size(content) <= @inline_max,
+    do: call(name, content, %{dirty: false}, fn -> inline.(content) end)
+
+  defp parse(name, content, _inline, dirty),
+    do: call(name, content, %{dirty: true}, fn -> dirty.(content) end)
+
   @doc "Live bytes held by this library's Rust heap, process-wide."
   def live_bytes, do: :erlang.nif_error(:nif_not_loaded)
 
@@ -37,14 +78,14 @@ defmodule Engram.Native do
   ascending. Emits `[:engram, :nif, :call, :stop]`.
   """
   def encode_documents(texts, filter_key, avgdl, language) do
-    call(:keyword_encode, texts, fn ->
+    call(:keyword_encode, texts, %{dirty: true}, fn ->
       encode_documents_nif(texts, filter_key, avgdl, language)
     end)
   end
 
   # Every NIF entry point goes through here: one event shape for all of them,
   # so a dashboard or alert written for one covers the next.
-  defp call(name, input, fun) do
+  defp call(name, input, meta, fun) do
     t0 = System.monotonic_time()
     {result, peak} = fun.()
 
@@ -55,7 +96,7 @@ defmodule Engram.Native do
         native_peak_bytes: peak,
         input_bytes: :erlang.iolist_size(input)
       },
-      %{nif: name}
+      Map.put(meta, :nif, name)
     )
 
     result
