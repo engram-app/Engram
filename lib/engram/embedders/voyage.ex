@@ -116,6 +116,7 @@ defmodule Engram.Embedders.Voyage do
         input_type: input_type(purpose)
       }
       |> maybe_put_output_dimension()
+      |> maybe_put_packed_encoding(purpose)
 
     result =
       Req.post(
@@ -128,7 +129,7 @@ defmodule Engram.Embedders.Voyage do
 
     case result do
       {:ok, %{status: 200, body: %{"data" => data} = body}} ->
-        vectors = Enum.map(data, & &1["embedding"])
+        vectors = Enum.map(data, &decode_embedding(&1["embedding"]))
         emit_token_telemetry(body, Keyword.get(opts, :purpose, :index))
         {:ok, vectors}
 
@@ -139,6 +140,18 @@ defmodule Engram.Embedders.Voyage do
         {:error, reason}
     end
   end
+
+  # Indexing asks for base64: each vector arrives as packed little-endian
+  # float32 (a NumPy float32 buffer), ~3x smaller than JSON numbers and with no
+  # float parsing. Engram.Indexing holds vectors packed until the Qdrant upsert
+  # anyway. Search keeps float lists, which go straight into the Qdrant query.
+  defp maybe_put_packed_encoding(body, :query), do: body
+  defp maybe_put_packed_encoding(body, _purpose), do: Map.put(body, :encoding_format, "base64")
+
+  # A list still decodes as a list: a proxy or stub that ignores
+  # `encoding_format` keeps working, and Indexing packs lists itself.
+  defp decode_embedding(b64) when is_binary(b64), do: Base.decode64!(b64)
+  defp decode_embedding(list) when is_list(list), do: list
 
   defp input_type(:query), do: "query"
   defp input_type(_purpose), do: "document"
