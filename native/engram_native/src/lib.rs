@@ -2,7 +2,6 @@
 //! scheduler, and returns BEAM binaries (so its OUTPUT is visible to
 //! `:erlang.memory(:binary)`). See docs/context for the memory standard.
 mod memory;
-mod snowball;
 mod tokenizer;
 
 // Not under `cargo test`: enif_alloc only exists inside a running BEAM.
