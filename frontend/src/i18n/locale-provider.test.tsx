@@ -165,7 +165,7 @@ describe("LocaleProvider", () => {
 			expect(rendered()).toBe("en");
 		});
 
-		it("is en while loading, for an empty catalog, and after a failed load", async () => {
+		it("is en while loading and for an empty catalog", async () => {
 			window.localStorage.setItem("engram:locale", "de");
 			const load = vi.fn(async () => ({ default: {} }));
 			mount({ de: load });

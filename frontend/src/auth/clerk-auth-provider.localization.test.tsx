@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Locale } from "../i18n/locales";
@@ -94,7 +94,7 @@ describe("ClerkAuthProvider localization", () => {
 		hoisted.loaders.fr = load;
 		mount("fr");
 		await vi.waitFor(() => expect(load).toHaveBeenCalled());
-		await Promise.resolve();
+		await act(async () => {});
 		expect(hoisted.captureError).not.toHaveBeenCalled();
 		expect(lastLocalization()).toBeUndefined();
 	});
@@ -118,10 +118,22 @@ describe("ClerkAuthProvider localization", () => {
 			</ClerkAuthProvider>,
 		);
 		await vi.waitFor(() => expect(lastLocalization()).toBe(GERMAN));
-		release();
-		await gate;
-		await Promise.resolve();
+		await act(async () => release());
 		expect(lastLocalization()).toBe(GERMAN);
+	});
+
+	it("never shows the previous language while the next one is still loading", async () => {
+		hoisted.loaders.fr = async () => FRENCH;
+		hoisted.loaders.de = () => new Promise(() => undefined);
+		const view = mount("fr");
+		await vi.waitFor(() => expect(lastLocalization()).toBe(FRENCH));
+		hoisted.locale = "de";
+		view.rerender(
+			<ClerkAuthProvider>
+				<p>child</p>
+			</ClerkAuthProvider>,
+		);
+		expect(lastLocalization()).toBeUndefined();
 	});
 
 	it("goes back to undefined when the locale returns to English", async () => {

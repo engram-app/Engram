@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { LOCALES } from "./locales";
-import { clerkLocalizationLoaders, paddleLocale } from "./vendor-locales";
+import { clerkLocalizationLoaders, localizationLoader, paddleLocale } from "./vendor-locales";
 
 // Paddle.Checkout.open settings.locale values, from the Paddle.js docs.
 const PADDLE_SUPPORTED = [
@@ -49,5 +49,19 @@ describe("clerkLocalizationLoaders", () => {
 		expect(load).toBeDefined();
 		const catalog = await load?.();
 		expect(Object.keys(catalog ?? {}).length).toBeGreaterThan(0);
+	});
+});
+
+describe("localizationLoader", () => {
+	// vite:preloadError's preventDefault() makes the dynamic import resolve undefined.
+	it("resolves undefined, without throwing, when the import resolves nothing", async () => {
+		const load = localizationLoader(() => Promise.resolve(undefined), "deDE");
+		await expect(load()).resolves.toBeUndefined();
+	});
+
+	it("reads the named export from a real module", async () => {
+		const catalog = { locale: "de-DE" };
+		const load = localizationLoader(() => Promise.resolve({ deDE: catalog }), "deDE");
+		await expect(load()).resolves.toBe(catalog);
 	});
 });
