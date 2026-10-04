@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/locale-provider";
 import { AppearanceSection } from "./appearance-section";
 
@@ -13,6 +13,11 @@ describe("AppearanceSection", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		theme = "system";
+	});
+
+	afterEach(() => {
+		vi.unstubAllEnvs();
+		window.localStorage.clear();
 	});
 
 	it("marks the active theme as pressed", () => {
@@ -43,5 +48,15 @@ describe("AppearanceSection", () => {
 		fireEvent.change(select, { target: { value: "ja" } });
 		expect(window.localStorage.getItem("engram:locale")).toBe("ja");
 		expect(select).toHaveValue("ja");
+	});
+
+	it("hides the language switcher outside dev builds", () => {
+		vi.stubEnv("DEV", false);
+		render(
+			<LocaleProvider loaders={{}}>
+				<AppearanceSection />
+			</LocaleProvider>,
+		);
+		expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
 	});
 });

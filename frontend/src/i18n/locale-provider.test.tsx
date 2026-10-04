@@ -117,4 +117,42 @@ describe("LocaleProvider", () => {
 		await act(async () => release());
 		expect(screen.getByText("Bonjour Todd")).toBeInTheDocument();
 	});
+
+	it("sets <html lang> only once a non-empty catalog is rendered", async () => {
+		window.localStorage.setItem("engram:locale", "de");
+		mount({ de });
+		expect(document.documentElement.lang).toBe("en");
+		await screen.findByText("Hallo Todd");
+		expect(document.documentElement.lang).toBe("de");
+	});
+
+	it("keeps <html lang> en when the loaded catalog is empty", async () => {
+		window.localStorage.setItem("engram:locale", "de");
+		const load = vi.fn(async () => ({ default: {} }));
+		mount({ de: load });
+		await vi.waitFor(() => expect(load).toHaveBeenCalled());
+		await act(async () => undefined);
+		expect(document.documentElement.lang).toBe("en");
+	});
+
+	it("keeps <html lang> en when the catalog fails to load", async () => {
+		window.localStorage.setItem("engram:locale", "de");
+		mount({
+			de: async () => {
+				throw new Error("chunk 404");
+			},
+		});
+		await vi.waitFor(() => expect(captureError).toHaveBeenCalled());
+		expect(document.documentElement.lang).toBe("en");
+	});
+
+	it("stays English without reporting when the loader resolves undefined", async () => {
+		window.localStorage.setItem("engram:locale", "de");
+		const load = vi.fn(() => Promise.resolve(undefined));
+		mount({ de: load });
+		await vi.waitFor(() => expect(load).toHaveBeenCalled());
+		await act(async () => undefined);
+		expect(captureError).not.toHaveBeenCalled();
+		expect(screen.getByText("Hello Todd")).toBeInTheDocument();
+	});
 });

@@ -11,12 +11,12 @@ Slice 1 (foundation) shipped. No shell/feature strings are wrapped yet and every
 All under `frontend/src/i18n/`:
 
 - `locales.ts`: `LOCALES` (11 codes), `LOCALE_NAMES` (each in its own language), `matchLocale`/`resolveLocale` (browser tags to a supported locale; `zh-TW/HK/MO/Hant` map to `zh-TW`, other `zh` to `zh-CN`, `pt` to `pt-BR`).
-- `locale-provider.tsx`: `LocaleProvider` and `useT()` returning `{ locale, setLocale, t, tn }`. Mounted in `main.tsx` directly inside `ThemeProvider`. Sets `<html lang>`, lazy-loads the catalog chunk via `import.meta.glob`, reports a failed load to Sentry and keeps English.
+- `locale-provider.tsx`: `LocaleProvider` and `useT()` returning `{ locale, setLocale, t, tn }`. Mounted in `main.tsx` directly inside `ThemeProvider`. Sets `<html lang>` to the locale only once a non-empty catalog is rendered (empty stubs and failed loads stay `en`), lazy-loads the catalog chunk via `import.meta.glob`, reports a failed load to Sentry and keeps English.
 - `translate.ts`, `trans.tsx` (`<Trans text slots>` for sentences around React children), `storage.ts` (`engram:locale` in localStorage).
 - `locale/<code>.ts`: ten catalogs (no `en`).
 - `keys.test.ts`: the drift guard.
 
-Proof surface: the Language `<select>` in Settings > Account > Appearance, and the 404 page (`not-found.tsx`).
+Proof surface: the Language `<select>` in Settings > Account > Appearance (shown in dev builds only until slice 4 ships translations; `import.meta.env.DEV` gate), and the 404 page (`not-found.tsx`).
 
 ## The model: English is the key
 
@@ -28,12 +28,12 @@ Proof surface: the Language `<select>` in Settings > Account > Appearance, and t
 
 ## Why no URL prefix (`/de/...`)
 
-The SPA is behind auth and has no SEO surface; the locale is a per-device preference like theme. A prefix would touch every route, link and the OAuth/device-flow redirects for no benefit. Precedence: stored pick, then `navigator.languages`, then `en`.
+The SPA is behind auth and has no SEO surface; the locale is a per-device preference like theme. A prefix would touch every route and link for no benefit. Precedence: stored pick, then `navigator.languages`, then `en`.
 
 ## Rules
 
 - **Call `useT()` only inside components/hooks.** No module-scope `t()` (it would freeze English at import time and ignore the locale). For module-level constants, store the English string and call `t(constant)` at render. Note `keys.test.ts` only sees string literals inside `t("...")`, so a constant needs its literal wrapped somewhere `t("...")` appears, or it will not be tracked.
-- Keep the English literal on one line inside `t(...)`; the scanner is regex-based.
+- Keep the English literal on one line inside `t(...)`; the scanner is regex-based. It matches `<Trans text="...">` only with a plain double-quoted literal, not `text={"..."}` or template literals.
 
 ## Add a string
 
@@ -52,7 +52,7 @@ Catalog entry: `"{count} files": { one: "…", other: "…" }` (add `few`/`many`
 
 ## How `keys.test.ts` guards drift
 
-It scans source for `t("…")`, `tn({… other: "…"})` and `<Trans text="…">`, then fails on: an **orphan** key (in a catalog, not used in source), a **placeholder mismatch** (dropped or invented `{name}`), and a **cross-locale gap** (key present in one catalog, absent in another). Used keys with no catalog entries at all are fine, which is why stubs stay green.
+It scans source for `t("…")`, `tn({… other: "…"})` and `<Trans text="…">`, then fails on: an **orphan** key (in a catalog, not used in source), a **placeholder mismatch** (dropped or invented `{name}`), and a **cross-locale gap** (key present in one catalog, absent in another). The placeholder check covers `{placeholder}` tokens only; `<Trans>` slots use the same `{slot}` syntax, so they are covered. Used keys with no catalog entries at all are fine, which is why stubs stay green.
 
 ## Biome
 

@@ -37,24 +37,27 @@ export function AppearanceSection() {
 					</Button>
 				))}
 			</fieldset>
-			<label className="mt-4 block text-sm">
-				<span className="font-medium text-foreground">{t("Language")}</span>
-				<select
-					className={cn(fieldInput, "mt-1 block")}
-					value={locale}
-					onChange={(event) => {
-						if (isMember(LOCALES, event.target.value)) {
-							setLocale(event.target.value);
-						}
-					}}
-				>
-					{LOCALES.map((code) => (
-						<option key={code} value={code}>
-							{LOCALE_NAMES[code]}
-						</option>
-					))}
-				</select>
-			</label>
+			{/* Dev-only until slice 4 ships translations (a picker that changes nothing looks broken); slice 4 removes this gate. */}
+			{import.meta.env.DEV ? (
+				<label className="mt-4 block text-sm">
+					<span className="font-medium text-foreground">{t("Language")}</span>
+					<select
+						className={cn(fieldInput, "mt-1 block")}
+						value={locale}
+						onChange={(event) => {
+							if (isMember(LOCALES, event.target.value)) {
+								setLocale(event.target.value);
+							}
+						}}
+					>
+						{LOCALES.map((code) => (
+							<option key={code} value={code} lang={code}>
+								{LOCALE_NAMES[code]}
+							</option>
+						))}
+					</select>
+				</label>
+			) : null}
 		</SettingsSectionCard>
 	);
 }

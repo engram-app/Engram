@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "./i18n/locale-provider";
 import NotFoundPage from "./not-found";
 
@@ -9,6 +9,10 @@ vi.mock("./theme/theme-toggle", () => ({
 }));
 
 describe("NotFoundPage", () => {
+	afterEach(() => {
+		window.localStorage.clear();
+	});
+
 	it("shows the 404 flair, heading, and a link home", () => {
 		render(
 			<MemoryRouter>
@@ -34,6 +38,5 @@ describe("NotFoundPage", () => {
 		expect(
 			await screen.findByRole("heading", { name: "Seite nicht gefunden" }),
 		).toBeInTheDocument();
-		window.localStorage.clear();
 	});
 });

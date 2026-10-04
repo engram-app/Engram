@@ -12,7 +12,8 @@ import { LOCALES, type Locale, resolveLocale } from "./locales";
 import { getStoredLocale, setStoredLocale } from "./storage";
 import { type Catalog, type PluralForms, translate, translatePlural, type Vars } from "./translate";
 
-type CatalogLoaders = Partial<Record<Locale, () => Promise<{ default: Catalog }>>>;
+type CatalogLoaders = Partial<Record<Locale, () => Promise<{ default: Catalog } | undefined>>>;
+// ^ undefined: vite:preloadError's preventDefault() makes the preload resolve nothing.
 
 // Vite splits each catalog into its own lazy chunk; `en` has no file.
 const globbed = import.meta.glob<{ default: Catalog }>("./locale/*.ts");
@@ -61,7 +62,6 @@ export function LocaleProvider({
 	const catalog = loaded?.locale === locale ? loaded.catalog : NO_CATALOG;
 
 	useEffect(() => {
-		document.documentElement.lang = locale;
 		const load = loaders[locale];
 		if (!load) {
 			return;
@@ -69,7 +69,7 @@ export function LocaleProvider({
 		let current = true;
 		load()
 			.then((mod) => {
-				if (current) {
+				if (current && mod) {
 					setLoaded({ locale, catalog: mod.default });
 				}
 			})
@@ -81,6 +81,12 @@ export function LocaleProvider({
 			current = false;
 		};
 	}, [locale, loaders]);
+
+	// lang follows what is rendered: empty stubs and failed loads are English.
+	const translated = Object.keys(catalog).length > 0;
+	useEffect(() => {
+		document.documentElement.lang = translated ? locale : "en";
+	}, [locale, translated]);
 
 	const setLocale = useCallback((next: Locale) => {
 		setStoredLocale(next);
