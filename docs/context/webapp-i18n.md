@@ -32,8 +32,18 @@ The SPA is behind auth and has no SEO surface; the locale is a per-device prefer
 
 ## Rules
 
-- **Call `useT()` only inside components/hooks.** No module-scope `t()` (it would freeze English at import time and ignore the locale). For module-level constants, store the English string and call `t(constant)` at render. Note `keys.test.ts` only sees string literals inside `t("...")`, so a constant needs its literal wrapped somewhere `t("...")` appears, or it will not be tracked.
-- Keep the English literal on one line inside `t(...)`; the scanner is regex-based. It matches `<Trans text="...">` only with a plain double-quoted literal, not `text={"..."}` or template literals.
+- **Call `useT()` only inside components/hooks.** No module-scope `t()` (it would freeze English at import time and ignore the locale). For module-level constants use `msg()` (see Marking strings).
+
+## Marking strings
+
+The scanner (`src/i18n/keys-scan.ts`, shared by `keys.test.ts` and `i18n:missing`) is regex-based, so a key must be a **literal double-quoted string on the call site**:
+
+- `t("Save changes")`, `t("Hello {name}", { name })`: component code, via `useT()`.
+- `tn({ one: "{count} file", other: "{count} files" }, n, { count: n })`: counted strings. The key is the `other` form; `one` is shown to translators. The object may span lines.
+- `<Trans text="Type {w}" slots={{...}} />`: a sentence around React children. Plain `text="..."` only, not `text={"..."}`.
+- `msg("Settings")` (`src/i18n/msg.ts`): returns the string unchanged and marks it as a key. Use it for labels in module-scope constants, then render with `t(item.label)`.
+
+Not allowed (the scanner cannot see them, so the string is never tracked or translated): template literals, concatenation (`"a" + b`), `t(variable)` on an unmarked variable, single-quoted or `{"..."}`-wrapped literals. Keep escapes JSON-valid (`\"`).
 
 ## Add a string
 
@@ -50,9 +60,19 @@ tn({ one: "{count} file", other: "{count} files" }, n, { count: n })
 
 Catalog entry: `"{count} files": { one: "…", other: "…" }` (add `few`/`many` etc. where the language needs them).
 
+## i18n:missing (for translators)
+
+`cd frontend && bun run i18n:missing` scans `src/**/*.{ts,tsx}` (not tests or `src/i18n/locale/`) with the same scanner and compares against each `locale/*.ts` catalog. It is a report, always exit 0.
+
+- `bun run i18n:missing`: JSON `{ locales, total, missing: { <code>: [{ key, plural? }] } }`.
+- `bun run i18n:missing --locale de`: only that locale's missing entries, as a JSON array.
+- `bun run i18n:missing --count`: `code: missingCount` per locale.
+
+Translate each `key` (keep every `{placeholder}` identical). For an entry with `plural`, the catalog value is an object keyed by `Intl.PluralRules` categories (`one`, `other`, plus `few`/`many` where the language needs them); `plural.one` shows the singular source. Add the same keys to all ten catalogs (`keys.test.ts` fails on cross-locale gaps); `--count` all zero means done.
+
 ## How `keys.test.ts` guards drift
 
-It scans source for `t("…")`, `tn({… other: "…"})` and `<Trans text="…">`, then fails on: an **orphan** key (in a catalog, not used in source), a **placeholder mismatch** (dropped or invented `{name}`), and a **cross-locale gap** (key present in one catalog, absent in another). The placeholder check covers `{placeholder}` tokens only; `<Trans>` slots use the same `{slot}` syntax, so they are covered. Used keys with no catalog entries at all are fine, which is why stubs stay green.
+It scans source for `t`, `msg`, `tn` (`other`) and `<Trans text>` keys, then fails on: an **orphan** key (in a catalog, not used in source), a **placeholder mismatch** (dropped or invented `{name}`), and a **cross-locale gap** (key present in one catalog, absent in another). The placeholder check covers `{placeholder}` tokens only; `<Trans>` slots use the same `{slot}` syntax, so they are covered. Used keys with no catalog entries at all are fine, which is why stubs stay green.
 
 ## Clerk and Paddle follow the rendered locale
 
