@@ -4,6 +4,7 @@
 mod links;
 mod memory;
 mod meta;
+mod mmr;
 mod tokenizer;
 
 // Not under `cargo test`: enif_alloc only exists inside a running BEAM.
@@ -12,7 +13,7 @@ mod tokenizer;
 static ALLOCATOR: memory::Counting = memory::Counting;
 
 use hmac::{Hmac, Mac};
-use rustler::{Binary, Encoder, Env, NewBinary, Term};
+use rustler::{Binary, Encoder, Env, Error, ListIterator, NewBinary, NifResult, Term};
 use sha2::Sha256;
 use std::collections::HashMap;
 
@@ -188,6 +189,38 @@ fn note_tags_nif<'a>(env: Env<'a>, content: &str) -> (Vec<Term<'a>>, usize) {
 #[rustler::nif(schedule = "DirtyCpu")]
 fn note_tags_dirty_nif<'a>(env: Env<'a>, content: &str) -> (Vec<Term<'a>>, usize) {
     note_tags(env, content)
+}
+
+// A JSON number decodes to an integer when it has no fraction (`0`, `1`).
+fn number(t: Term) -> NifResult<f64> {
+    t.decode::<f64>().or_else(|_| t.decode::<i64>().map(|i| i as f64))
+}
+
+fn vector(t: Term) -> NifResult<Option<Vec<f64>>> {
+    if t.is_atom() {
+        // `nil`: no vector, similarity 0.0.
+        return Ok(None);
+    }
+    let items: ListIterator = t.decode().map_err(|_| Error::BadArg)?;
+    let mut out = Vec::with_capacity(t.list_length().unwrap_or(0));
+    for item in items {
+        out.push(number(item)?);
+    }
+    Ok(Some(out))
+}
+
+/// MMR picks: indices into the pool, in pick order. `vectors` entries are a
+/// float list or `nil`. Dirty: a pool is ~200 x 1024 floats.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn mmr_select_nif(vectors: Vec<Term>, scores: Vec<Term>, limit: usize, d: f64) -> NifResult<(Vec<usize>, usize)> {
+    let base = memory::begin();
+    let vectors = vectors.into_iter().map(vector).collect::<NifResult<Vec<_>>>()?;
+    let scores = scores.into_iter().map(number).collect::<NifResult<Vec<_>>>()?;
+    if vectors.len() != scores.len() {
+        return Err(Error::BadArg);
+    }
+    let picked = mmr::select(vectors, &scores, limit, d);
+    Ok((picked, memory::peak_since(base)))
 }
 
 rustler::init!("Elixir.Engram.Native");

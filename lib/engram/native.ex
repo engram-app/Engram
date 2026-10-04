@@ -70,6 +70,10 @@ defmodule Engram.Native do
   defp parse(name, content, _inline, dirty),
     do: call(name, content, %{dirty: true}, fn -> dirty.(content) end)
 
+  @doc false
+  def mmr_select_nif(_vectors, _scores, _limit, _diversity),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   @doc "Live bytes held by this library's Rust heap, process-wide."
   def live_bytes, do: :erlang.nif_error(:nif_not_loaded)
 
@@ -83,8 +87,25 @@ defmodule Engram.Native do
     end)
   end
 
+  @doc """
+  MMR picks over a candidate pool: indices into it, in pick order. `vectors`
+  holds a float list or `nil` per candidate. Emits `[:engram, :nif, :call, :stop]`.
+  """
+  def mmr_select(vectors, scores, limit, diversity) do
+    # input_bytes: the f64s the NIF holds, from one vector's width. Summing
+    # every list's length would walk the whole pool in Elixir, the cost this
+    # NIF exists to remove.
+    width = Enum.find_value(vectors, 0, &(&1 && length(&1)))
+
+    call(:mmr_select, length(scores) * (width + 1) * 8, %{dirty: true}, fn ->
+      mmr_select_nif(vectors, scores, limit, diversity / 1)
+    end)
+  end
+
   # Every NIF entry point goes through here: one event shape for all of them,
   # so a dashboard or alert written for one covers the next.
+  # `input` is the binary/iolist the NIF reads, or its byte count when it
+  # reads terms (a float list has no iolist size).
   defp call(name, input, meta, fun) do
     t0 = System.monotonic_time()
     {result, peak} = fun.()
@@ -94,7 +115,7 @@ defmodule Engram.Native do
       %{
         duration: System.monotonic_time() - t0,
         native_peak_bytes: peak,
-        input_bytes: :erlang.iolist_size(input)
+        input_bytes: if(is_integer(input), do: input, else: :erlang.iolist_size(input))
       },
       Map.put(meta, :nif, name)
     )
