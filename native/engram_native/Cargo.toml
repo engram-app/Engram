@@ -1,0 +1,20 @@
+[package]
+name = "engram_native"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "engram_native"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rustler = "0.37"
+hmac = "0.12"
+sha2 = "0.10"
+unicode-normalization = "0.1"
+unicode-segmentation = "1"
+regex = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1

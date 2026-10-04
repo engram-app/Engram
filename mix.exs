@@ -191,6 +191,10 @@ defmodule Engram.MixProject do
       {:lingua, "~> 0.3.0"},
       {:rustler_precompiled, "~> 0.9.0", override: true},
 
+      # In-house NIFs (native/engram_native): CPU hot paths ported to Rust.
+      # Compiled from source, so the release builder needs a Rust toolchain.
+      {:rustler, "~> 0.37", runtime: false},
+
       # CommonMark parser for MCP section boundaries (Engram.MCP.Sections):
       # comrak as a precompiled Rust NIF. mdex_native directly, not the `mdex`
       # wrapper: Sections reads the native AST, and mdex's Elixir-side struct
