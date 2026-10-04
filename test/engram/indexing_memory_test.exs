@@ -6,9 +6,10 @@ defmodule Engram.IndexingMemoryTest do
   # `max_heap_size`, so a regression kills the process instead of passing quietly.
   #
   # The cap is checked during GC, when the heap being grown and the one being
-  # collected coexist, so it reads ~3x the live set. Measured on this note:
-  # float-list vectors are killed even at 200 MB; packed vectors with 64-point
-  # upsert batches pass at 80 MB. 100 leaves headroom without hiding a revert.
+  # collected coexist, so it reads well above the live set. Measured on this
+  # note (3 runs each): float-list vectors are killed even at 200 MB; packed
+  # vectors unpacked to float lists per upsert batch are killed at 35 MB;
+  # packed vectors sent as pre-encoded JSON fragments pass at 30 and 35 MB.
   use Engram.DataCase, async: false
 
   import Mox
@@ -74,7 +75,7 @@ defmodule Engram.IndexingMemoryTest do
     Task.yield(task, :timer.minutes(5)) || Task.shutdown(task)
   end
 
-  test "indexing a 2,000-chunk note stays under a 100 MB heap", %{user: user, vault: vault} do
+  test "indexing a 2,000-chunk note stays under a 35 MB heap", %{user: user, vault: vault} do
     stub(Engram.MockEmbedder, :embed_texts, fn texts ->
       {:ok, Enum.map(texts, fn _ -> random_vector() end)}
     end)
@@ -82,7 +83,7 @@ defmodule Engram.IndexingMemoryTest do
     note = big_prose_note(user, vault) |> decrypted(user)
 
     Process.flag(:trap_exit, true)
-    result = run_with_heap_cap(100 * 1_048_576, fn -> Indexing.index_note(note, vault, user) end)
+    result = run_with_heap_cap(35 * 1_048_576, fn -> Indexing.index_note(note, vault, user) end)
 
     assert {:ok, {:ok, count}} = result
     assert count >= 2_000

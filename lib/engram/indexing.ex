@@ -775,11 +775,20 @@ defmodule Engram.Indexing do
   # float32. Unpacked one upsert batch at a time in `upsert_points_batched/1`.
   defp pack_vector(vector), do: for(x <- vector, into: <<>>, do: <<x::float-32-little>>)
 
+  # Straight from the packed binary to the JSON array text, as a pre-encoded
+  # fragment. Unpacking to a float list and letting Jason walk it was the heap
+  # peak of indexing (~26 MB per 64-point batch): a list cell, a boxed float
+  # and a formatted binary per element, all live until the request was sent.
   defp unpack_point(%{vector: %{"dense" => dense} = named} = point) when is_binary(dense) do
-    %{point | vector: %{named | "dense" => for(<<x::float-32-little <- dense>>, do: x)}}
+    %{point | vector: %{named | "dense" => Jason.Fragment.new(dense_json(dense))}}
   end
 
   defp unpack_point(point), do: point
+
+  defp dense_json(packed) do
+    floats = for <<x::float-32-little <- packed>>, do: :erlang.float_to_binary(x, [:short])
+    IO.iodata_to_binary(["[", Enum.intersperse(floats, ","), "]"])
+  end
 
   defp embed_for_indexing(texts) do
     texts
