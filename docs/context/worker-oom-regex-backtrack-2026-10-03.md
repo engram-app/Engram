@@ -43,17 +43,29 @@ URI inside `![](...)` became millions of backtrack frames.
   Jason was then the heap peak (~26 MB per 64-point batch). The array text is
   now encoded straight from the float32 binary and passed as a
   `Jason.Fragment`. Heap-cap test at 35 MB: old killed 3/3, new passes 3/3.
-- **Base64 blob filter.** Runs of 100+ base64-alphabet chars mixing
-  upper/lower/digits (plus optional `data:` prefix) are stripped from chunk
-  text. `chunker_version` bumped to 2.
-- **Crash-loop guard in `EmbedNote`.** An OOM kill never returns, so
+- **Base64 blob filter.** Runs of 100+ base64-alphabet chars with at least
+  20% upper case, 20% lower case and 5% digits (plus an optional `data:`
+  prefix) are stripped from whole section text before the size split.
+  The ratio test is what keeps URLs and file paths: `/`, `-` and `_` are in
+  the base64 class, so a GitHub permalink is one long run too. A note left
+  with nothing to index is stamped dense-complete, or ReconcileEmbeddings
+  re-selects it for paid users every tick. `chunker_version` bumped to 2.
+- **Crash-loop guard, `EmbedNote.CrashGuard`.** An OOM kill never returns, so
   `maybe_mark_poison` never fires. Oban Lifeline (Oban 2.24 Basic engine
   `rescue_jobs`) re-queues orphans WITHOUT recording an error, and
-  `ReconcileEmbeddings` (#897 fixed short backoff) keeps enqueuing. The guard
-  counts hard deaths = attempts started minus errors recorded across the
-  note's `EmbedNote` rows in 24h (excluding fresh executing and completed).
-  At >= 2 it stamps a 6h poison cooldown, logs `embed_crash_quarantined`, and
-  returns `{:cancel, :repeated_node_death}`.
+  `ReconcileEmbeddings` (#897 fixed short backoff) keeps enqueuing. A first
+  version counted "attempts minus errors" across `oban_jobs` rows; review
+  showed it skipped the current job's own deaths, blamed every job sharing the
+  dying node, had a 15-minute blind spot and seq-scanned `oban_jobs`. The
+  shipped design is a dead-man stamp on the note row
+  (`embed_started_{at,by,hash}`, `embed_crashes`): written before embedding,
+  cleared however the attempt returns. A stamp from a runner that is gone
+  (node not connected, an earlier VM incarnation of this node, or older than
+  15 min) is one death for THAT note. 1st death: re-run alone in the
+  `embed_isolated` queue (concurrency 1), so a collateral note succeeds and
+  resets. 2nd death: quarantine 6h, doubling per death (cap 7d), cancel the
+  note's other pending jobs, log `embed_crash_quarantined`. An edit (new
+  `content_hash`) forgives the count.
 
 End-to-end local repro (real `EmbedNote.perform`, real Qdrant, out-of-BEAM
 Voyage stub), note A peak RSS delta:
