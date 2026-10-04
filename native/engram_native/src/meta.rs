@@ -189,8 +189,16 @@ mod tests {
     #[test]
     fn title_is_linear_past_many_code_headings() {
         let s = "```\n# x\n```\n".repeat(40_000) + "# Real\n";
-        let t = std::time::Instant::now();
-        assert_eq!(super::title(&s).as_deref(), Some("Real"));
-        assert!(t.elapsed().as_millis() < 300, "{:?}", t.elapsed());
+        // Min of 3: cargo runs tests on parallel threads, so one sample can
+        // eat a load spike (~90 ms typical; the quadratic bug was 1.3 s).
+        let best = (0..3)
+            .map(|_| {
+                let t = std::time::Instant::now();
+                assert_eq!(super::title(&s).as_deref(), Some("Real"));
+                t.elapsed()
+            })
+            .min()
+            .unwrap();
+        assert!(best.as_millis() < 300, "{best:?}");
     }
 }
