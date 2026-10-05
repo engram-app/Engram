@@ -12,10 +12,6 @@ import { SettingsSectionCard } from "./section-card";
 
 export function LanguageSection() {
 	const { t, locale, setLocale } = useT();
-	// Dev-only until slice 4 ships translations (a picker that changes nothing looks broken); slice 4 removes this gate.
-	if (!import.meta.env.DEV) {
-		return null;
-	}
 	return (
 		<SettingsSectionCard
 			title={t("Language")}

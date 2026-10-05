@@ -4,19 +4,21 @@ _Last verified: 2026-10-04_
 
 ## Status
 
-Slice 1 (foundation) shipped. No shell/feature strings are wrapped yet and every non-English catalog is an empty stub, so every locale renders English today.
+Foundation and all ten translated catalogs shipped, and the language switcher is always visible (the temporary `import.meta.env.DEV` gate is gone).
+
+**Translations are LLM-generated and have not been reviewed by native speakers.** Glossary references (UI nouns such as "vault", "note", "sync") were taken from the Obsidian plugin's locale files and the marketing site's locale files, so terminology matches those surfaces. Expect tone and terminology slips, especially in `ja`, `ko`, `zh-*`, `ru`; do not market a language as supported without review.
 
 ## What exists
 
 All under `frontend/src/i18n/`:
 
-- `locales.ts`: `LOCALES` (11 codes), `LOCALE_NAMES` (each in its own language), `matchLocale`/`resolveLocale` (browser tags to a supported locale; `zh-TW/HK/MO/Hant` map to `zh-TW`, other `zh` to `zh-CN`, `pt` to `pt-BR`).
-- `locale-provider.tsx`: `LocaleProvider` and `useT()` returning `{ locale, setLocale, t, tn }`. Mounted in `main.tsx` directly inside `ThemeProvider`. Sets `<html lang>` to the locale only once a non-empty catalog is rendered (empty stubs and failed loads stay `en`), lazy-loads the catalog chunk via `import.meta.glob`, reports a failed load to Sentry and keeps English.
+- `locales.ts`: `LOCALES` (11 codes, `en` plus ten translated), `LOCALE_NAMES` (each in its own language), `matchLocale`/`resolveLocale` (browser tags to a supported locale; `zh-TW/HK/MO/Hant` map to `zh-TW`, other `zh` to `zh-CN`, `pt` to `pt-BR`).
+- `locale-provider.tsx`: `LocaleProvider` and `useT()` returning `{ locale, setLocale, t, tn }`. Mounted in `main.tsx` directly inside `ThemeProvider`. Sets `<html lang>` to `renderedLocale` (the locale once its catalog has keys; all ten now do; failed loads stay `en`), lazy-loads the catalog chunk via `import.meta.glob`, reports a failed load to Sentry and keeps English.
 - `translate.ts`, `trans.tsx` (`<Trans text slots>` for sentences around React children), `storage.ts` (`engram:locale` in localStorage).
 - `locale/<code>.ts`: ten catalogs (no `en`).
 - `keys.test.ts`: the drift guard.
 
-Proof surface: the Language `<select>` in its own card, Settings > Account > Language (`language-section.tsx`, rendered after Appearance; a shadcn `Select`; shown in dev builds only until slice 4 ships translations; `import.meta.env.DEV` gate), and the 404 page (`not-found.tsx`).
+Proof surface: the Language `<select>` in its own card, Settings > Account > Language (`language-section.tsx`, rendered after Appearance; a shadcn `Select`; always visible), and the 404 page (`not-found.tsx`).
 
 ## The model: English is the key
 
@@ -47,8 +49,18 @@ Not allowed (the scanner cannot see them, so the string is never tracked or tran
 
 ## Add a string
 
-1. Wrap it: `t("Save changes")`, or `t("Hello {name}", { name })`.
-2. Add the entry to each `locale/*.ts` catalog (the test requires all-or-none, see below).
+1. Wrap it: `t("Save changes")`, `tn(...)` for counts, `<Trans text>` around React children, or `msg(...)` in module-scope constants (see Marking strings).
+2. Run `cd frontend && bun run i18n:missing -- --count` to see what each locale lacks.
+3. Translate every locale (all ten `locale/*.ts`), keeping `{placeholders}` identical.
+4. `bunx vitest run src/i18n` : `keys.test.ts` fails on cross-locale gaps (parity), orphans and placeholder mismatches. `--count` all zero means done.
+
+## Add a locale
+
+1. Add `src/i18n/locale/<code>.ts` (full catalog; the Biome filename override covers `pt-BR.ts`-style names).
+2. Add the code to `LOCALES` and its native name to `LOCALE_NAMES` in `src/i18n/locales.ts` (plus any `matchLocale` mapping for browser tags).
+3. Add the Clerk and Paddle mappings in `src/i18n/vendor-locales.ts`.
+4. Biome: `biome.json` already disables `useFilenamingConvention` for `src/i18n/locale/*.ts`; a new code needs no change unless the glob is narrowed.
+5. Run `i18n:missing -- --count` and the vitest suite; the parity test requires the new file to hold every key.
 
 ## Add a plural
 
@@ -72,11 +84,11 @@ Translate each `key` (keep every `{placeholder}` identical). For an entry with `
 
 ## How `keys.test.ts` guards drift
 
-It scans source for `t`, `msg`, `tn` (`other`) and `<Trans text>` keys, then fails on: an **orphan** key (in a catalog, not used in source), a **placeholder mismatch** (dropped or invented `{name}`), and a **cross-locale gap** (key present in one catalog, absent in another). The placeholder check covers `{placeholder}` tokens only; `<Trans>` slots use the same `{slot}` syntax, so they are covered. Used keys with no catalog entries at all are fine, which is why stubs stay green.
+It scans source for `t`, `msg`, `tn` (`other`) and `<Trans text>` keys, then fails on: an **orphan** key (in a catalog, not used in source), a **placeholder mismatch** (dropped or invented `{name}`), and a **cross-locale gap** (key present in one catalog, absent in another). The placeholder check covers `{placeholder}` tokens only; `<Trans>` slots use the same `{slot}` syntax, so they are covered. Used keys with no catalog entries at all are tolerated by the guard, but every locale now carries every key (`i18n:missing --count` is all zero).
 
 ## Clerk and Paddle follow the rendered locale
 
-Both follow `renderedLocale` from `useT()` (the selected locale only once its app catalog has keys, else `"en"`; the same value `<html lang>` uses), NOT the raw `locale`. Otherwise a ja browser would get Japanese sign-in and checkout over an all-English app until slice 4.
+Both follow `renderedLocale` from `useT()` (the selected locale once its app catalog has keys, else `"en"`; the same value `<html lang>` uses), NOT the raw `locale`. This keeps Clerk and Paddle from going foreign over an English app if a catalog is empty or fails to load. All ten catalogs have keys now.
 
 - **Mapping:** `src/i18n/vendor-locales.ts`. Paddle codes equal ours except `zh-CN` -> `zh-Hans`.
 - **Clerk:** `<ClerkProvider localization>` in `clerk-auth-provider.tsx`. Catalogs come from `@clerk/localizations` as one lazy chunk per language (literal dynamic imports; a variable specifier would not bundle). English, loading and a failed load all leave `localization` undefined (Clerk's English), failures go to `captureError`. `@clerk/react` pushes a changed `localization` prop into the mounted instance, so no remount. Clerk marks localization experimental. `@clerk/localizations` is pinned to 4.17.0: newer minors require `@clerk/shared` >= 4.34, but this repo overrides `@clerk/shared` to the 4.33 that `@clerk/react` uses.
@@ -88,12 +100,7 @@ Both follow `renderedLocale` from `useT()` (the selected locale only once its ap
 
 `biome.json` turns `useFilenamingConvention` off for `src/i18n/locale/*.ts` because codes like `pt-BR.ts` and `zh-CN.ts` are not kebab-case. Biome also enforces `useExportsLast` and a no-unsafe-type-assertion rule here; narrow with `isMember` (`lib/is-member.ts`) instead of `as`.
 
-## Still owed
+## Done and still owed
 
-- **Slice 2:** wrap the app shell (nav, settings, onboarding, auth screens, toasts, errors).
-- **Slice 3:** notes, editor, search.
-- **Slice 4:** actually translate the ten catalogs.
-
-## Risk: translations will be machine-made
-
-Slice 4 translations will be LLM-generated with no native-speaker review. Expect tone and terminology slips (UI nouns like "vault", "note", "sync"), especially in `ja`, `ko`, `zh-*`, `ru`. Do not market a language as supported without review, and consider a "beta" label on the switcher until then.
+- Slices 1-4 shipped: foundation, app shell, notes/editor/search, ten translated catalogs, switcher visible.
+- Owed: native-speaker review of the catalogs, and consider a "beta" label on the switcher until then.

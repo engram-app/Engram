@@ -32,6 +32,8 @@ export default defineConfig({
 		trace: "on-first-retry",
 		screenshot: "only-on-failure",
 		...devices["Desktop Chrome"],
+		// The app follows navigator.languages; pin English so specs do not depend on the dev machine's locale.
+		locale: "en-US",
 	},
 
 	projects: [

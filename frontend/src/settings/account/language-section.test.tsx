@@ -21,7 +21,6 @@ describe("LanguageSection", () => {
 	});
 
 	afterEach(() => {
-		vi.unstubAllEnvs();
 		window.localStorage.clear();
 	});
 
@@ -52,11 +51,10 @@ describe("LanguageSection", () => {
 		expect(screen.getByRole("combobox", { name: /language/iu })).toHaveTextContent("日本語");
 	});
 
-	it("renders nothing outside dev builds", () => {
-		vi.stubEnv("DEV", false);
-		const { container } = mount();
-		expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
-		expect(screen.queryByRole("heading", { name: "Language" })).not.toBeInTheDocument();
-		expect(container).toBeEmptyDOMElement();
+	it("always renders the card and the Select, with no env gate", () => {
+		mount();
+		expect(screen.getByRole("heading", { name: "Language" })).toBeInTheDocument();
+		expect(screen.getByText("Choose the language Engram uses on this device.")).toBeInTheDocument();
+		expect(screen.getByRole("combobox", { name: /language/iu })).toBeInTheDocument();
 	});
 });
