@@ -28,6 +28,18 @@ that marks rows for later processing.
 `ReconcileEmbeddings.kick/0` is the event hook for anything that marks notes
 for re-indexing: it queues a sweep now, deduplicated while one is pending.
 
+## Cross-tenant sweeps
+
+A sweep over every tenant runs on `Repo.maintenance()` where one is
+configured (prod): one pass, no tenant, the maintenance role's policies see
+every row. Without it (self-host, tests) it falls back to
+`Engram.Backfill.TenantScan`, one transaction per user. Never one
+cross-tenant statement on the app pool: FORCE RLS filters it to zero rows and
+it reports success. `ReconcileEmbeddings.scan/1` is the shape to copy; prove a
+new one with a maintenance-pool test like
+`reconcile_embeddings_maintenance_test.exs` (the app pool as `engram_app`,
+assert no tenant-table query reaches it).
+
 ## Cron rules
 
 - **No two entries share a minute of the day.** They share the 2-slot

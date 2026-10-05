@@ -93,7 +93,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     #    unmetered maintenance at backfill priority.
     version_stale = version_stale_dynamic()
 
-    sweep_tenant = fn remaining ->
+    sweep_tenant = fn repo, remaining ->
       eligible =
         from(n in Note, as: :note)
         |> join(:inner, [n], v in Vault, on: v.id == n.vault_id and is_nil(v.deleted_at))
@@ -192,25 +192,13 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         # Clears the budget-park flag with it: the #897 backoff must hold for
         # this note even for a paying user, or a crash mid-embed re-selects it
         # every tick.
-        |> Repo.update_all(set: [embed_retry_after: backoff_until, embed_budget_parked: nil])
+        |> repo.update_all(set: [embed_retry_after: backoff_until, embed_budget_parked: nil])
 
       rows
     end
 
-    # Per-tenant, NOT one cross-tenant statement. `notes` carries FORCE ROW
-    # LEVEL SECURITY, so with no `app.current_tenant` that UPDATE is FILTERED
-    # to zero rows and still reports success: the sweep stamps nothing and
-    # enqueues nothing on a database full of stale notes, with a green Oban
-    # job. That is the #1349 trap — see `Engram.Backfill.TenantScan`, whose
-    # moduledoc describes this exact failure. Inside each tenant's context
-    # `eligible` needs no `user_id` filter, because RLS scopes it.
-    #
-    # Each page is stamped and enqueued in the tenant's transaction, so a
-    # note is never stamped without its job.
     counts =
-      TenantScan.flat_map_users(fn _user_id ->
-        sweep_pages(fn -> sweep_tenant.(@page) end, &enqueue_page/1)
-      end)
+      scan(fn repo -> sweep_pages(fn -> sweep_tenant.(repo, @page) end, &enqueue_page/1) end)
 
     eligible = Enum.sum(Enum.map(counts, &elem(&1, 0)))
     queued = Enum.sum(Enum.map(counts, &elem(&1, 1)))
@@ -229,6 +217,26 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     )
 
     :ok = sweep_keyword_stale(now, paid)
+  end
+
+  # Runs `sweep.(repo)` over every tenant: once on the maintenance pool
+  # (which sees every tenant) where one is configured, as prod does; else
+  # once per user inside that user's tenant.
+  #
+  # Never one cross-tenant statement on the app pool. `notes` carries FORCE
+  # ROW LEVEL SECURITY, so with no `app.current_tenant` that UPDATE is
+  # FILTERED to zero rows and still reports success: the sweep stamps nothing
+  # and enqueues nothing on a database full of stale notes, with a green Oban
+  # job. That is the #1349 trap — see `Engram.Backfill.TenantScan`. Inside
+  # each tenant's context `eligible` needs no `user_id` filter: RLS scopes it.
+  # On the per-user path each page is stamped and enqueued in the tenant's
+  # transaction; on the maintenance path the stamp commits first, and a lost
+  # enqueue costs that note one cooldown window.
+  defp scan(sweep) do
+    case Repo.maintenance() do
+      Repo -> TenantScan.flat_map_users(fn _user_id -> sweep.(Repo) end)
+      maintenance -> sweep.(maintenance)
+    end
   end
 
   # Runs `page` until it returns less than a full page, handing each page to
@@ -367,7 +375,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     version = KeywordIndex.version()
     backoff_until = DateTime.add(now, reconcile_backoff_seconds(), :second)
 
-    page = fn ->
+    page = fn repo ->
       eligible =
         from(n in Note, as: :note)
         |> join(:inner, [n], v in Vault, on: v.id == n.vault_id and is_nil(v.deleted_at))
@@ -394,12 +402,12 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       {_count, found} =
         from(n in Note, where: n.kind == "note" and n.id in subquery(eligible))
         |> select([n], {n.id, n.user_id})
-        |> Repo.update_all(set: [embed_retry_after: backoff_until])
+        |> repo.update_all(set: [embed_retry_after: backoff_until])
 
       found
     end
 
-    counts = TenantScan.flat_map_users(fn _user_id -> sweep_pages(page, &enqueue_refresh/1) end)
+    counts = scan(fn repo -> sweep_pages(fn -> page.(repo) end, &enqueue_refresh/1) end)
 
     Logger.info(
       "reconcile_embeddings: swept keyword-stale notes",
