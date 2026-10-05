@@ -360,8 +360,8 @@ defmodule Engram.Workers.EmbedNote do
   # re-embed on its next pass; keep the long cooldown only for failures that
   # won't fix themselves on retry (4xx / unembeddable content / unknown).
   # NOTE: the transient default (300s) is a floor, not the real recovery time —
-  # ReconcileEmbeddings only sweeps every ~15 min, so a parked note re-embeds on
-  # the first sweep after the cooldown lapses. Dropping it below ~900s buys
+  # ReconcileEmbeddings sweeps every 5 min, so a parked note re-embeds on the
+  # first sweep after the cooldown lapses. Dropping it below ~300s buys
   # nothing; raise it only to back off harder on a sustained outage.
   defp poison_cooldown_seconds(reason) do
     if transient_embed_error?(reason) do
@@ -382,7 +382,7 @@ defmodule Engram.Workers.EmbedNote do
   defp transient_embed_error?(_), do: false
 
   # Final-attempt failure: park the note for a cooldown so ReconcileEmbeddings
-  # stops re-enqueuing (and re-billing) it every 15 minutes. Only fires on the
+  # stops re-enqueuing (and re-billing) it every 5 minutes. Only fires on the
   # terminal Oban attempt and only for {:error, _} — snooze/cancel/discard are
   # not embed failures. Like stamp_embed_hash, an optimistic content_hash guard
   # avoids parking content that was edited mid-flight — but a nil content_hash
@@ -425,7 +425,7 @@ defmodule Engram.Workers.EmbedNote do
     # Tenant-scoped: `notes` carries FORCE ROW LEVEL SECURITY, and an UPDATE is
     # FILTERED by the policy's USING clause rather than rejected — it reports 0
     # rows with no error. Unscoped, the note is never parked, so
-    # ReconcileEmbeddings re-enqueues this exact failing note every 15 minutes
+    # ReconcileEmbeddings re-enqueues this exact failing note every 5 minutes
     # and re-pays Voyage each time. `note.user_id` is in scope.
     {:ok, {count, _}} =
       Repo.with_tenant(note.user_id, fn ->

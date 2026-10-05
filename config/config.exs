@@ -150,7 +150,9 @@ config :engram, Oban,
     Oban.Plugins.Lifeline,
     {Oban.Plugins.Cron,
      crontab: [
-       {"*/15 * * * *", Engram.Workers.ReconcileEmbeddings},
+       # Every 5 min, off the :00/:15/:30/:45 marks the hourly and nightly jobs
+       # use. A backstop: work is also queued the moment it is due (`kick/0`).
+       {"2-59/5 * * * *", Engram.Workers.ReconcileEmbeddings},
        {"0 * * * *", Engram.Workers.CleanupDeviceAuthWorker},
        {"0 2 * * *", Engram.Billing.Workers.PaddleReconcile},
        {"0 3 * * *", Engram.Billing.Workers.OverrideExpirySweep},
@@ -194,8 +196,7 @@ config :engram, Oban,
        # samples.
        #
        # :10 past the hour: deliberately NOT on the hour or a quarter-hour,
-       # which CleanupDeviceAuthWorker (`0 * * * *`) and ReconcileEmbeddings
-       # (`*/15`) own. 00:10 is clear of the nightly chain above, and 06:10 puts
+       # which CleanupDeviceAuthWorker (`0 * * * *`) owns. 00:10 is clear of the nightly chain above, and 06:10 puts
        # the first post-chain reading after it rather than during it.
        #
        # Every 6h rather than daily because it writes `last_value` gauges, which

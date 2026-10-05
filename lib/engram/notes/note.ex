@@ -49,7 +49,7 @@ defmodule Engram.Notes.Note do
     # Poison-loop guard: when a note exhausts its EmbedNote attempts, the worker
     # stamps a cooldown timestamp here. ReconcileEmbeddings skips notes whose
     # cooldown hasn't elapsed, so a permanently-failing note re-bills Voyage at
-    # most once per cooldown window instead of every 15-minute cron tick. Cleared
+    # most once per cooldown window instead of every 5-minute cron tick. Cleared
     # on the next successful embed. Only gates the cron — direct user-action
     # enqueues (upsert/rename) always run.
     field :embed_retry_after, :utc_datetime_usec

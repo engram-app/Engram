@@ -56,8 +56,8 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
     # #1620 deliberately kept this cron off chunker_version ("never start a
     # mass re-embed"). Reversed 2026-10-04: every index version must reach
     # existing notes automatically (self-hosters run no backfills), and a
-    # version-driven re-embed is unmetered maintenance. The 500-per-tick cap
-    # is what bounds the rate. A full rebuild covers keywords too, so the
+    # version-driven re-embed is unmetered maintenance at backfill priority;
+    # the embed queue's concurrency bounds the rate. A full rebuild covers keywords too, so the
     # keyword sweep leaves these notes alone.
     test "re-embeds a note whose chunker_version is stale" do
       user = insert(:user)
@@ -216,6 +216,18 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
     end
 
+    # A dense-only backfill leaves the content, and so the links, as they
+    # are: re-extracting them is a wasted job per note.
+    test "a dense-only backfill does not re-extract links" do
+      user = insert(:user)
+      note = note_for(user, content_hash: "abc123", embed_hash: "abc123", dense_indexed_hash: nil)
+      insert_chunk!(note)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+      refute_enqueued(worker: Engram.Workers.ExtractNoteLinks, args: %{"note_id" => note.id})
+    end
+
     test "does not select a Free user's note outside the cap (no chunk rows)" do
       # An over-cap note is stamped with embed_hash and no chunks. Selecting it
       # would re-run EmbedNote on it every tick forever, since the cap makes
@@ -349,15 +361,15 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       refute_enqueued(worker: EmbedNote, args: %{"note_id" => marker.id})
     end
 
-    test "caps the batch globally at 500 across all vaults" do
-      # One query over the partial index with a global cap — the old shape
-      # loaded EVERY vault then ran one query per vault every 15 minutes
-      # (O(total vaults) queries at scale).
+    # No per-tick cap: the embed queue's concurrency and priority are the
+    # throttle. A cap of 500 per 15 min held a 4,200-note rebuild to ~2 h
+    # while each batch drained in ~2 min.
+    test "queues every stale note in one tick, paging past 1,000" do
       user = insert(:user)
       vault_a = insert(:vault, user: user)
       vault_b = insert(:vault, user: user)
 
-      for {vault, label, count} <- [{vault_a, "a", 300}, {vault_b, "b", 205}],
+      for {vault, label, count} <- [{vault_a, "a", 700}, {vault_b, "b", 505}],
           i <- 1..count do
         Engram.Fixtures.insert_note!(user, vault,
           path: "batch-#{label}/note-#{i}.md",
@@ -367,8 +379,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       end
 
       assert :ok = perform_job(ReconcileEmbeddings, %{})
-      jobs = all_enqueued(worker: EmbedNote)
-      assert length(jobs) == 500
+      assert length(all_enqueued(worker: EmbedNote)) == 1_205
     end
 
     # One notes query per SWEEP per tenant (the embed sweep and the keyword
