@@ -174,6 +174,42 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       refute_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
     end
 
+    # A paying user's budget-parked note passes the cooldown filter, so the
+    # stamp must clear the park or every page returns it again.
+    test "the keyword sweep's stamp clears a budget park" do
+      user = insert(:user)
+      insert(:subscription, user: user, tier: "pro", status: "active")
+
+      note =
+        current_note(user,
+          keyword_version: nil,
+          embed_budget_parked: true,
+          embed_retry_after: DateTime.add(DateTime.utc_now(), 3600)
+        )
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      refute Repo.get!(Note, note.id, skip_tenant_check: true).embed_budget_parked
+    end
+
+    # At or below `now` the stamp would not drop a note from the next page,
+    # and the page loop would never end.
+    test "a backoff configured at zero still stamps past the cron interval" do
+      prior = Application.get_env(:engram, :embed_reconcile_backoff_seconds)
+      Application.put_env(:engram, :embed_reconcile_backoff_seconds, 0)
+
+      on_exit(fn ->
+        if prior,
+          do: Application.put_env(:engram, :embed_reconcile_backoff_seconds, prior),
+          else: Application.delete_env(:engram, :embed_reconcile_backoff_seconds)
+      end)
+
+      note = note_for(insert(:user), embed_hash: nil)
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+
+      stamped = Repo.get!(Note, note.id, skip_tenant_check: true).embed_retry_after
+      assert DateTime.diff(stamped, DateTime.utc_now()) > 300
+    end
+
     test "backfills dense vectors for every entitled status, past_due included" do
       # The subscription join is a SQL proxy for the real 4-layer entitlement
       # resolver. A hand-rolled subset that dropped `past_due` stranded the
@@ -378,8 +414,31 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
         )
       end
 
-      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      test_pid = self()
+      handler = {__MODULE__, make_ref()}
+
+      :telemetry.attach(
+        handler,
+        [:engram, :repo, :query],
+        fn _e, _m, %{query: sql}, _c ->
+          if self() == test_pid and sql =~ "set_config('app.current_tenant', $1",
+            do: send(test_pid, :tenant_txn)
+        end,
+        nil
+      )
+
+      try do
+        assert :ok = perform_job(ReconcileEmbeddings, %{})
+      after
+        :telemetry.detach(handler)
+      end
+
       assert length(all_enqueued(worker: EmbedNote)) == 1_205
+
+      # One tenant transaction PER PAGE (embed sweep: 2 pages, keyword sweep:
+      # 1), not one per user: a transaction holding a whole backlog runs past
+      # the 15 s checkout deadline, rolls back, and stalls every later user.
+      assert count_messages(:tenant_txn) == 3
     end
 
     # One notes query per SWEEP per tenant (the embed sweep and the keyword
@@ -584,6 +643,23 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       {:query, src} -> collect_queries([src | acc])
     after
       0 -> Enum.reverse(acc)
+    end
+  end
+
+  # Two sweeps at once stamp the same rows and, on the maintenance pool,
+  # queue them twice. A kick while one runs is absorbed.
+  test "a kick while a sweep is executing does not start a second one" do
+    {:ok, job} = Oban.insert(ReconcileEmbeddings.new(%{}))
+    Repo.update_all(from(j in Oban.Job, where: j.id == ^job.id), set: [state: "executing"])
+
+    assert {:ok, %Oban.Job{conflict?: true}} = ReconcileEmbeddings.kick()
+  end
+
+  defp count_messages(msg, n \\ 0) do
+    receive do
+      ^msg -> count_messages(msg, n + 1)
+    after
+      0 -> n
     end
   end
 end

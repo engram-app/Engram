@@ -6,7 +6,7 @@ defmodule Engram.Workers.VaultDeletedEmail do
   blocked on mail delivery.
   """
 
-  use Oban.Worker, queue: :events, max_attempts: 3
+  use Oban.Worker, queue: :maintenance, max_attempts: 3
 
   alias Engram.Accounts.User
   alias Engram.Crypto

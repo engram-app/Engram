@@ -59,6 +59,9 @@ assert no tenant-table query reaches it).
 - An explicit `timeout/1`.
 - A queue chosen on purpose: `maintenance` is cron backstops only, `events`
   is small follow-ups a user's action triggers (ObanQueueConfigTest).
+- A NEW queue ships empty one release before any worker moves onto it.
+  Moved in the same release, a rollback to a build without the queue strands
+  every job queued on it.
 - Idempotent, and stated as such in the moduledoc.
 - One `:info` summary line per run.
 

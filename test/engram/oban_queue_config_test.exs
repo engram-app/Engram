@@ -27,8 +27,19 @@ defmodule Engram.ObanQueueConfigTest do
 
   # `maintenance` holds the cron backstops, and only them. A user-triggered
   # follow-up (a vault-deleted email, a Paddle cancel, an index-cap sweep)
-  # used to share its 2 slots, so it could wait behind a 15-minute
-  # OrphanSweep. Those run on `events`.
+  # shares its 2 slots and can wait behind a 15-minute OrphanSweep; those
+  # belong on `events`.
+  #
+  # Expand/contract: `events` ships one release before the workers move onto
+  # it. Moved in the same release, a rollback to a build with no `events`
+  # queue strands their jobs, a Paddle cancel among them. Move these, then
+  # empty this list, in the release after `events` first ships.
+  @moving_to_events [
+    Engram.Workers.IndexCapMaintenance,
+    Engram.Workers.PaddleCancelSubscription,
+    Engram.Workers.VaultDeletedEmail
+  ]
+
   test "maintenance runs exactly the cron workers" do
     crons =
       :engram
@@ -49,7 +60,8 @@ defmodule Engram.ObanQueueConfigTest do
     assert MapSet.difference(crons, on_maintenance) |> MapSet.to_list() == [],
            "cron workers off the maintenance queue"
 
-    assert MapSet.difference(on_maintenance, crons) |> MapSet.to_list() == [],
+    assert on_maintenance |> MapSet.difference(crons) |> MapSet.to_list() |> Enum.sort() ==
+             Enum.sort(@moving_to_events),
            "non-cron workers on the maintenance queue: move them to :events"
   end
 

@@ -24,9 +24,14 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   use Oban.Worker,
     queue: :maintenance,
     max_attempts: 1,
-    # Pending runs only: a kick while a sweep is executing queues one more,
-    # so notes marked after that sweep's query are not left for the cron.
-    unique: [period: 300, states: [:available, :scheduled]]
+    # One sweep at a time. Two at once stamp the same rows (the stamp's
+    # subquery is not re-checked under a row lock) and, on the maintenance
+    # pool where the stamp commits before the enqueue, queue them twice. A
+    # kick during a sweep is dropped: the running sweep pages until nothing is
+    # left, and the 5-min cron catches anything marked after its last page.
+    # Period = the 15-min timeout, so a job a killed node left `executing`
+    # stops blocking once it could no longer be running.
+    unique: [period: 900, states: [:available, :scheduled, :executing]]
 
   import Ecto.Query
 
@@ -197,8 +202,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       rows
     end
 
-    counts =
-      scan(fn repo -> sweep_pages(fn -> sweep_tenant.(repo, @page) end, &enqueue_page/1) end)
+    counts = scan(&sweep_tenant.(&1, @page), &enqueue_page/1)
 
     eligible = Enum.sum(Enum.map(counts, &elem(&1, 0)))
     queued = Enum.sum(Enum.map(counts, &elem(&1, 1)))
@@ -232,22 +236,37 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # On the per-user path each page is stamped and enqueued in the tenant's
   # transaction; on the maintenance path the stamp commits first, and a lost
   # enqueue costs that note one cooldown window.
-  defp scan(sweep) do
+  defp scan(page, handle) do
     case Repo.maintenance() do
-      Repo -> TenantScan.flat_map_users(fn _user_id -> sweep.(Repo) end)
-      maintenance -> sweep.(maintenance)
+      Repo ->
+        # One transaction PER PAGE, inside the user's tenant: stamp and
+        # enqueue stay atomic, and no transaction holds a whole backlog. One
+        # per user ran past the 15 s checkout deadline on a large backlog,
+        # rolled back, and stalled every user after it on every tick.
+        Enum.flat_map(TenantScan.user_ids(), fn user_id ->
+          sweep_pages(fn ->
+            {:ok, counts} =
+              Repo.with_tenant(user_id, fn -> page_counts(page.(Repo), handle) end)
+
+            counts
+          end)
+        end)
+
+      maintenance ->
+        sweep_pages(fn -> page_counts(page.(maintenance), handle) end)
     end
   end
 
-  # Runs `page` until it returns less than a full page, handing each page to
-  # `handle`. Returns [{eligible, queued}] per page.
-  defp sweep_pages(page, handle) do
-    rows = page.()
-    counts = {length(rows), handle.(rows)}
+  defp page_counts(rows, handle), do: {length(rows), handle.(rows)}
 
-    if length(rows) < @page,
+  # Runs `page` (which returns {rows_found, jobs_queued}) until a page comes
+  # back short. Returns the counts of every page.
+  defp sweep_pages(page) do
+    {found, _queued} = counts = page.()
+
+    if found < @page,
       do: [counts],
-      else: [counts | sweep_pages(page, handle)]
+      else: [counts | sweep_pages(page)]
   end
 
   # A version rebuild (content current, older chunker or embed model) goes to
@@ -402,12 +421,15 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       {_count, found} =
         from(n in Note, where: n.kind == "note" and n.id in subquery(eligible))
         |> select([n], {n.id, n.user_id})
-        |> repo.update_all(set: [embed_retry_after: backoff_until])
+        # Clears the budget-park flag too, as the embed sweep's stamp does: a
+        # parked note of a paying user stays eligible through the cooldown
+        # filter otherwise, and every page would return it again.
+        |> repo.update_all(set: [embed_retry_after: backoff_until, embed_budget_parked: nil])
 
       found
     end
 
-    counts = scan(fn repo -> sweep_pages(fn -> page.(repo) end, &enqueue_refresh/1) end)
+    counts = scan(page, &enqueue_refresh/1)
 
     Logger.info(
       "reconcile_embeddings: swept keyword-stale notes",
@@ -453,7 +475,10 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # is unaffected: its EmbedNote clears the stamp on success, typically within
   # seconds. Env-driven via `EMBED_RECONCILE_BACKOFF_SECONDS` (runtime.exs);
   # default 30 min.
+  # Floored at 6 min, past the cron interval: at or below `now` the stamp no
+  # longer removes a note from the next page's query, and the page loop
+  # never ends.
   defp reconcile_backoff_seconds do
-    Application.get_env(:engram, :embed_reconcile_backoff_seconds, 1_800)
+    max(Application.get_env(:engram, :embed_reconcile_backoff_seconds, 1_800), 360)
   end
 end

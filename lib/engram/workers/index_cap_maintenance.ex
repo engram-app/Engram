@@ -22,7 +22,7 @@ defmodule Engram.Workers.IndexCapMaintenance do
   """
 
   use Oban.Worker,
-    queue: :events,
+    queue: :maintenance,
     max_attempts: 3,
     unique: [keys: [:user_id, :kind], period: 120, states: :incomplete]
 

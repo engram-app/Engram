@@ -104,7 +104,9 @@ config :engram, Oban,
     # Cron backstops, and only them (ObanQueueConfigTest).
     maintenance: 2,
     # Small follow-ups a user's action triggers (vault-deleted email, Paddle
-    # cancel, index-cap sweep): never behind a long backstop.
+    # cancel, index-cap sweep): never behind a long backstop. Ships empty one
+    # release ahead of its workers, so a rollback strands nothing
+    # (ObanQueueConfigTest @moving_to_events).
     events: 2,
     crypto_backfill: 1,
     export: 1,
