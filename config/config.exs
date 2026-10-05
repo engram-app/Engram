@@ -101,7 +101,11 @@ config :engram, Oban,
     # A note whose embed killed the node once re-runs here ALONE, so a second
     # death is its own and not a neighbour's (EmbedNote.CrashGuard).
     embed_isolated: 1,
+    # Cron backstops, and only them (ObanQueueConfigTest).
     maintenance: 2,
+    # Small follow-ups a user's action triggers (vault-deleted email, Paddle
+    # cancel, index-cap sweep): never behind a long backstop.
+    events: 2,
     crypto_backfill: 1,
     export: 1,
     cleanup: 1,
@@ -141,8 +145,7 @@ config :engram, Oban,
     # engram-infra (main/envs/prod/ecs.tf) and nothing there points back here,
     # so a copy in this repo would silently go stale — the same cross-file rot
     # that made the original 10 a leftover rather than a decision.
-    crdt_checkpoint: 3,
-    default: 1
+    crdt_checkpoint: 3
   ],
   plugins: [
     {Oban.Plugins.Pruner, max_age: 7 * 24 * 3600},

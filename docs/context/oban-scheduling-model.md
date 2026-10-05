@@ -45,7 +45,8 @@ for re-indexing: it queues a sweep now, deduplicated while one is pending.
   that `Oban.insert_all` ignores `unique`: dedupe by hand, as
   `EmbedNote.reject_already_queued/2` does.
 - An explicit `timeout/1`.
-- A queue chosen on purpose. `maintenance` is shared by every backstop.
+- A queue chosen on purpose: `maintenance` is cron backstops only, `events`
+  is small follow-ups a user's action triggers (ObanQueueConfigTest).
 - Idempotent, and stated as such in the moduledoc.
 - One `:info` summary line per run.
 

@@ -11,7 +11,7 @@ defmodule Engram.Workers.BackfillVaultSlugHmac do
   mid-DEK-rotation are skipped and picked up next run.
   Removed with the contract release that drops `vaults.slug`.
   """
-  use Oban.Worker, queue: :crypto_backfill, max_attempts: 3, unique: [period: 3600]
+  use Oban.Worker, queue: :maintenance, max_attempts: 3, unique: [period: 3600]
 
   import Ecto.Query
 

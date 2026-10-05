@@ -25,6 +25,34 @@ defmodule Engram.ObanQueueConfigTest do
              end)
   end
 
+  # `maintenance` holds the cron backstops, and only them. A user-triggered
+  # follow-up (a vault-deleted email, a Paddle cancel, an index-cap sweep)
+  # used to share its 2 slots, so it could wait behind a 15-minute
+  # OrphanSweep. Those run on `events`.
+  test "maintenance runs exactly the cron workers" do
+    crons =
+      :engram
+      |> Application.get_env(Oban)
+      |> Keyword.fetch!(:plugins)
+      |> Enum.find_value(fn
+        {Oban.Plugins.Cron, opts} -> Keyword.fetch!(opts, :crontab)
+        _ -> nil
+      end)
+      |> MapSet.new(fn {_expr, worker} -> worker end)
+
+    on_maintenance =
+      for mod <- Engram.Test.ObanWorkers.all(),
+          worker_queue(mod) == :maintenance,
+          into: MapSet.new(),
+          do: mod
+
+    assert MapSet.difference(crons, on_maintenance) |> MapSet.to_list() == [],
+           "cron workers off the maintenance queue"
+
+    assert MapSet.difference(on_maintenance, crons) |> MapSet.to_list() == [],
+           "non-cron workers on the maintenance queue: move them to :events"
+  end
+
   # Tripwire against unbounded embed concurrency. The 2026-07-03 OOM crash-loop
   # was NOT caused by embed concurrency itself — it was the Lingua language
   # detector loading ~945 MB of full-accuracy models off-heap during indexing

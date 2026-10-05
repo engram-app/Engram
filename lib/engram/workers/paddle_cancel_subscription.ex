@@ -26,7 +26,7 @@ defmodule Engram.Workers.PaddleCancelSubscription do
   deduping into one cancellation.
   """
 
-  use Oban.Worker, queue: :maintenance, max_attempts: 3
+  use Oban.Worker, queue: :events, max_attempts: 3
 
   alias Engram.Logger.Metadata
   alias Engram.Telemetry
