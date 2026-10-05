@@ -73,7 +73,9 @@ function DeletedRow({ vault }: { vault: Vault }) {
 						onClick={() => {
 							if (
 								window.confirm(
-									t('Permanently delete "{name}"? This cannot be undone.', { name: vault.name }),
+									t("Permanently delete \u0022{name}\u0022? This cannot be undone.", {
+										name: vault.name,
+									}),
 								)
 							) {
 								purge.mutate(vault.id, {

@@ -615,7 +615,7 @@ function SearchPanel({
 				) : null}
 				{deferred && results && results.length === 0 && !isLoading && (
 					<p className="px-3 py-2 text-muted-foreground text-xs">
-						{t('No results for "{term}"', { term: deferred })}
+						{t("No results for \u0022{term}\u0022", { term: deferred })}
 					</p>
 				)}
 				{unsearchable && deferred && !isLoading ? (

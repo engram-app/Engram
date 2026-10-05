@@ -48,7 +48,7 @@ export function DangerZoneSection() {
 				}}
 			>
 				<label className="block font-medium text-foreground text-sm">
-					{t('Type "{phrase}" to confirm', { phrase: CONFIRM })}
+					{t("Type \u0022{phrase}\u0022 to confirm", { phrase: CONFIRM })}
 					<input
 						className={inputClass}
 						value={phrase}

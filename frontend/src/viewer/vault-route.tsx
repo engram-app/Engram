@@ -19,7 +19,7 @@ function UnknownVault({ slug }: { slug: string }) {
 	const { t } = useT();
 	useEffect(() => {
 		// Fixed id: StrictMode runs this twice in dev, and sonner dedupes by id.
-		toast.error(t('No vault named "{slug}".', { slug }), { id: `unknown-vault:${slug}` });
+		toast.error(t("No vault named \u0022{slug}\u0022.", { slug }), { id: `unknown-vault:${slug}` });
 	}, [slug, t]);
 	return <Navigate to={ROUTES.HOME} replace />;
 }

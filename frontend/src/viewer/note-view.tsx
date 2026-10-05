@@ -148,7 +148,7 @@ function NoteView({ content, tags, links, manifestNotes, onCreateWikiTarget }: N
 									<a
 										href={href}
 										className="cursor-pointer text-muted-foreground underline decoration-dashed underline-offset-2"
-										title={t('Create "{page}"', { page: stripMd(newPage) })}
+										title={t("Create \u0022{page}\u0022", { page: stripMd(newPage) })}
 										onClick={(e) => {
 											e.preventDefault();
 											onCreateWikiTarget?.(newPage);

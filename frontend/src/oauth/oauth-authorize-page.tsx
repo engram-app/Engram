@@ -641,7 +641,7 @@ export default function OAuthAuthorizePage() {
 								})}
 								{showFilter && needle && shown.length === 0 && (
 									<p className="p-3 text-muted-foreground text-sm">
-										{t('No vaults match "{filter}".', { filter })}
+										{t("No vaults match \u0022{filter}\u0022.", { filter })}
 									</p>
 								)}
 							</VaultRows>

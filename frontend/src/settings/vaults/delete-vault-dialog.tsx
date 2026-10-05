@@ -57,7 +57,7 @@ export function DeleteVaultDialog({
 		>
 			<DialogContent>
 				<DialogHeader>
-					<DialogTitle>{t('Delete "{name}"?', { name: vault.name })}</DialogTitle>
+					<DialogTitle>{t("Delete \u0022{name}\u0022?", { name: vault.name })}</DialogTitle>
 					<DialogDescription>
 						{t("This vault holds {notes} and {attachments}.", {
 							notes: tn({ one: "{count} note", other: "{count} notes" }, noteCount),
@@ -97,7 +97,7 @@ export function DeleteVaultDialog({
 					}}
 				>
 					<label className="block text-foreground text-sm">
-						{t('Type "{name}" to confirm', { name: vault.name })}
+						{t("Type \u0022{name}\u0022 to confirm", { name: vault.name })}
 						<input
 							autoFocus
 							className={inputClass}

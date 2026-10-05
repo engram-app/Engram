@@ -625,7 +625,7 @@ function ConfirmRevokeModal({
 		>
 			<DialogContent>
 				<DialogHeader>
-					<DialogTitle>{t('Revoke "{name}"?', { name })}</DialogTitle>
+					<DialogTitle>{t("Revoke \u0022{name}\u0022?", { name })}</DialogTitle>
 					<DialogDescription>{description}</DialogDescription>
 				</DialogHeader>
 				{Boolean(error) && (

@@ -80,7 +80,7 @@ function PropertyKeyInput({
 			// a value snapping back is easy to miss, and the user walks away
 			// believing the rename landed.
 			if (next !== "") {
-				toast.error(t('A property named "{name}" already exists', { name: next }));
+				toast.error(t("A property named \u0022{name}\u0022 already exists", { name: next }));
 			}
 			setDraft(name);
 		}
@@ -258,7 +258,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 			return "empty";
 		}
 		if (!addKey(doc, newKey, newType)) {
-			toast.error(t('A property named "{name}" already exists', { name: key }));
+			toast.error(t("A property named \u0022{name}\u0022 already exists", { name: key }));
 			return "duplicate";
 		}
 		if (newValue !== "") {

@@ -36,10 +36,10 @@ const ACTION_ICONS: Record<ActionId, LucideIcon> = {
 };
 
 const FILE_ACTIONS: readonly Action[] = [
-	{ id: "rename", label: "Rename" },
-	{ id: "move", label: "Move to…" },
-	{ id: "duplicate", label: "Duplicate" },
-	{ id: "copy-wikilink", label: "Copy wikilink" },
+	{ id: "rename", label: msg("Rename") },
+	{ id: "move", label: msg("Move to…") },
+	{ id: "duplicate", label: msg("Duplicate") },
+	{ id: "copy-wikilink", label: msg("Copy wikilink") },
 	{ id: "delete", label: msg("Delete"), destructive: true },
 ];
 
@@ -47,17 +47,17 @@ const FILE_ACTIONS: readonly Action[] = [
 // in here". These target the right-clicked folder, not the toolbar's active
 // one, so the labels say "here" rather than reading as global actions.
 const FOLDER_ACTIONS: readonly Action[] = [
-	{ id: "new-note", label: "New note here" },
-	{ id: "new-folder", label: "New subfolder" },
-	{ id: "rename", label: "Rename" },
-	{ id: "move", label: "Move to…" },
+	{ id: "new-note", label: msg("New note here") },
+	{ id: "new-folder", label: msg("New subfolder") },
+	{ id: "rename", label: msg("Rename") },
+	{ id: "move", label: msg("Move to…") },
 	{ id: "delete", label: msg("Delete"), destructive: true },
 ];
 
 // Attachments are binary blobs — no duplicate/copy-wikilink.
 const ATTACHMENT_ACTIONS: readonly Action[] = [
-	{ id: "rename", label: "Rename" },
-	{ id: "move", label: "Move to…" },
+	{ id: "rename", label: msg("Rename") },
+	{ id: "move", label: msg("Move to…") },
 	{ id: "delete", label: msg("Delete"), destructive: true },
 ];
 
@@ -65,8 +65,8 @@ const ATTACHMENT_ACTIONS: readonly Action[] = [
 // — the root isn't a folder you can address — so it's creation only, and the
 // labels drop the "here" since there's no folder being pointed at.
 const ROOT_ACTIONS: readonly Action[] = [
-	{ id: "new-note", label: "New note" },
-	{ id: "new-folder", label: "New folder" },
+	{ id: "new-note", label: msg("New note") },
+	{ id: "new-folder", label: msg("New folder") },
 ];
 
 type Translator = Pick<ReturnType<typeof useT>, "t" | "tn">;
@@ -163,11 +163,11 @@ export function noteMenuActions(mode: ViewMode): readonly Action[] {
 		{ id: "view-rendered", label: msg("Edit"), active: mode === "rendered" },
 		{ id: "view-raw", label: msg("Raw"), active: mode === "raw" },
 		{ id: "view-reading", label: msg("Reading"), active: mode === "reading" },
-		{ id: "rename", label: "Rename" },
-		{ id: "move", label: "Move to…" },
-		{ id: "duplicate", label: "Duplicate" },
-		{ id: "copy-wikilink", label: "Copy wikilink" },
-		{ id: "add-property", label: "Add property" },
+		{ id: "rename", label: msg("Rename") },
+		{ id: "move", label: msg("Move to…") },
+		{ id: "duplicate", label: msg("Duplicate") },
+		{ id: "copy-wikilink", label: msg("Copy wikilink") },
+		{ id: "add-property", label: msg("Add property") },
 		{ id: "delete", label: msg("Delete"), destructive: true },
 	];
 }
