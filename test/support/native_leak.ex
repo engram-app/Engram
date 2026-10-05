@@ -2,18 +2,25 @@ defmodule Engram.NativeLeak do
   @moduledoc false
   import ExUnit.Assertions
 
-  # Lazy statics (compiled regexes) and the regex crate's per-thread match
-  # caches live as long as the library. They are bounded, but each is
-  # allocated the first time a call lands on a scheduler thread, and a test
-  # process migrates between threads: the leak counter then read up to
-  # ~670 KB on a run that leaked nothing. So warm every thread with
-  # concurrent calls first; growth over `calls` more calls is then a leak.
+  # The regex crate keeps match caches in a pool: an owner slot plus 8
+  # stacks picked by thread id. A cache is created, and kept for the life of
+  # the library, the first time a call on a thread finds its stack empty. A
+  # test process migrates between scheduler threads, so a cold one read as a
+  # ~48 KB "leak" mid-measurement. Concurrent warm-up is not enough: tasks
+  # bunched onto 2 of 10 schedulers, and contended pops hand out throwaway
+  # caches. So warm each scheduler in turn, one process pinned to it
+  # (`spawn_opt` `{:scheduler, id}`), then assert `calls` more calls leave
+  # the counter unchanged.
   def assert_no_leak(fun, calls \\ 300) do
-    n = System.schedulers_online() * 8
+    for id <- 1..System.schedulers_online() do
+      warm = fn ->
+        fun.()
+        fun.()
+      end
 
-    1..n
-    |> Task.async_stream(fn _ -> fun.() end, max_concurrency: n, ordered: false)
-    |> Stream.run()
+      {pid, ref} = :erlang.spawn_opt(warm, [:monitor, {:scheduler, id}])
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 5_000
+    end
 
     before = Engram.Native.live_bytes()
     for _ <- 1..calls, do: fun.()

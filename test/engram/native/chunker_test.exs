@@ -4,6 +4,28 @@ defmodule Engram.Native.ChunkerTest do
 
   alias Engram.Parsers.Markdown
 
+  # Pins the chunker's output (809 notes, 2,654 chunks: code, setext, quotes,
+  # tables, blobs, long sections). A change here re-chunks notes nobody
+  # edits only if @chunker_version is bumped too (#1620): bump it, then rerun
+  # test/support/fixtures/chunker_golden.gen.exs.
+  @golden_path "test/support/fixtures/chunker_golden.json.gz"
+  @external_resource @golden_path
+  @golden @golden_path |> File.read!() |> :zlib.gunzip() |> Jason.decode!(keys: :atoms)
+
+  test "output matches the golden set for this chunker_version" do
+    for %{input: input, path: path, chunks: expected} <- @golden do
+      expected =
+        Enum.map(expected, fn c ->
+          c
+          |> Map.drop([:ctx, :emb])
+          |> Map.merge(%{context_text: c.ctx <> c.text, embed_text: c.emb <> c.text})
+        end)
+
+      assert Markdown.parse(input, path) == expected,
+             "chunker output changed for #{inspect(path)}: bump @chunker_version and regenerate"
+    end
+  end
+
   test "chunker_version is 3: the boundary fixes below re-chunk the notes they touch" do
     assert Markdown.chunker_version() == 3
   end
@@ -44,14 +66,19 @@ defmodule Engram.Native.ChunkerTest do
     end
 
     test "blank and markup-only sub-chunks are dropped" do
-      content = "intro words\n\n" <> String.duplicate(" ", 5000) <> "\n\nouttro words"
-      assert content |> Markdown.parse("x.md") |> Enum.all?(&(&1.text =~ ~r/[\p{L}\p{N}]/u))
+      # 6 KB of table rule rows: split into pieces with no letter or digit.
+      content = "intro words\n\n" <> String.duplicate("| - | - |\n", 600) <> "\nouttro words"
+      chunks = Markdown.parse(content, "x.md")
+      assert Enum.all?(chunks, &(&1.text =~ ~r/[\p{L}\p{N}]/u))
+      assert Enum.any?(chunks, &(&1.text =~ "intro words"))
+      assert Enum.any?(chunks, &(&1.text =~ "outtro words"))
     end
 
     test "setext headings split sections" do
       content = "Title\n=====\n\nintro\n\nSection\n-------\n\nbody"
       paths = content |> Markdown.parse("Doc.md") |> Enum.map(& &1.heading_path)
-      assert paths == ["Doc", "Doc > Section"]
+      # "Title" is not the note's title ("Doc"), so it stays in the path.
+      assert paths == ["Doc > Title", "Doc > Title > Section"]
     end
 
     test "a closing # sequence is not part of the heading" do
@@ -84,7 +111,8 @@ defmodule Engram.Native.ChunkerTest do
               Base.encode64(:crypto.strong_rand_bytes(1_500_000)) <> ")"
           ] do
         {_chunks, peak} = Engram.Native.chunk_dirty_nif(content, "f", "T")
-        assert peak <= 10 * byte_size(content), "#{peak} for #{binary_part(content, 0, 20)}"
+        # Measured 0.5-1.8x; 3x catches a regression the 10x standard would not.
+        assert peak <= 3 * byte_size(content), "#{peak} for #{binary_part(content, 0, 20)}"
       end
     end
 
@@ -111,20 +139,32 @@ defmodule Engram.Native.ChunkerTest do
       assert Enum.all?(chunks, &String.starts_with?(&1.text, "Paragraph "))
     end
 
-    test "an edit in a huge section changes only nearby chunks" do
-      paras = Enum.map(1..300, &para/1)
-      before = paras |> Enum.join("\n\n") |> Markdown.parse("x.md") |> MapSet.new(& &1.text)
+    # #1594: cuts depend only on nearby text. Greedy packing (v2) re-chunked
+    # 15-40 chunks per edit and 25-86 per deleted paragraph on these shapes.
+    test "an edit or a deleted paragraph re-chunks only its neighbourhood" do
+      :rand.seed(:exsss, {1, 2, 3})
 
-      edited =
-        paras
-        |> List.update_at(150, &("inserted words here " <> &1))
-        |> Enum.join("\n\n")
-        |> Markdown.parse("x.md")
-        |> MapSet.new(& &1.text)
+      word = fn ->
+        for(_ <- 1..(3 + :rand.uniform(6)), into: "", do: <<?a + :rand.uniform(26) - 1>>)
+      end
 
-      changed = MapSet.size(MapSet.difference(edited, before))
-      assert MapSet.size(before) > 30
-      assert changed <= 3
+      paras =
+        for _ <- 1..300, do: Enum.map_join(1..(10 + :rand.uniform(110)), " ", fn _ -> word.() end)
+
+      texts = fn ps ->
+        ps |> Enum.join("\n\n") |> Markdown.parse("x.md") |> MapSet.new(& &1.text)
+      end
+
+      before = texts.(paras)
+      changed = fn ps -> MapSet.size(MapSet.difference(texts.(ps), before)) end
+      at = Enum.take_random(5..290, 10)
+
+      edits = Enum.map(at, fn i -> changed.(List.update_at(paras, i, &("new words " <> &1))) end)
+      deletes = Enum.map(at, fn i -> changed.(List.delete_at(paras, i)) end)
+
+      assert MapSet.size(before) > 50
+      assert Enum.sum(edits) <= 25, inspect(edits)
+      assert Enum.sum(deletes) <= 25, inspect(deletes)
     end
   end
 

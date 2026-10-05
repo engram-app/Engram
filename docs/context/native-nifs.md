@@ -38,15 +38,21 @@ Measured on the chunker (`chunk`, `frontmatter_split`, 2026-10-04,
 
 | Input | Elixir | Rust | Native peak |
 |---|---|---|---|
-| 243 docs, 3.1 MB | 743 ms | 328 ms | 0.4 MB max |
-| 1 MB prose | 273 ms | 51 ms | 1.1 MB |
-| 680 KB code-heavy | 3,009 ms, 40,001 chunks | 238 ms, 333 chunks | 1.2 MB |
-| 2 MB data-URI image | 66 ms | 105 ms | 3.0 MB |
+| 243 docs, 3.1 MB | 743 ms | 365 ms | 0.4 MB max |
+| 1 MB prose | 273 ms | 63 ms | 1.1 MB |
+| 680 KB code-heavy | 3,009 ms, 40,001 chunks | 231 ms, 333 chunks | 1.2 MB |
+| 2 MB data-URI image | 66 ms | 127 ms | 2.0 MB |
 
 The v2 port first matched the Elixir chunker byte for byte (2,008-note golden
 set), then v3 changed boundaries under one `@chunker_version` bump. v3 cuts an
-oversized section at content-defined anchors: one paragraph edit to a 1 MB
-note re-embeds 1.1 chunks on average, against 27.9 under greedy packing.
+oversized section after a unit whose hash is the maximum within 1 KB either
+side, so a cut depends only on nearby text. On 400-paragraph notes, an edit
+re-embeds 1.25-1.8 chunks and a deleted paragraph 1.4-1.9, against 15-40 and
+25-86 under greedy packing (whose every later boundary shifts). A first try
+with hash anchors plus a minimum chunk size kept edits local but not
+deletions: the minimum made each cut depend on where the chunk began.
+`chunker_golden.json.gz` pins v3 output; regenerate it only with a version
+bump.
 
 Measured on the search and upsert NIFs (2026-10-04, dev box, min of 5-7,
 identical output to the Elixir they replaced):
@@ -243,7 +249,10 @@ adding callers.
   just before that block when a cut may go there, else retried at double
   length: doubling alone grew to the whole note when candidate cuts kept
   landing inside fences (`# x` lines in code), and the heading pass peaked at
-  7x a code-heavy note. The chunker reuses this pass (`links::segmented`). A fuzz test asserts
+  7x a code-heavy note. The chunker reuses this pass (`links::segmented`).
+  Text with no safe cut at all (a million `-` lines, setext runs, one long
+  paragraph of `#tags`) is cut at a line anyway once 128 KB have no safe cut:
+  pulldown-cmark's tree reached 72x such a note when parsed whole. A fuzz test asserts
   segmented == whole-document on generated markdown; run it at 2M cases
   after touching the cut rules.
 - **Dense vector JSON prints the shortest f32, not the widened f64.** Qdrant

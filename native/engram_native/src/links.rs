@@ -58,32 +58,49 @@ fn excluded(s: &str, segment: usize) -> Vec<(usize, usize)> {
 /// ranges offset by `base`, parsed in segments (see `excluded`).
 pub fn code_ranges(body: &str, base: usize, segment: usize, out: &mut Vec<(usize, usize)>) {
     if may_have_code(body) {
-        segmented(body, segment, out, |s, at, ranges| {
-            segment_code_ranges(s, base + at, ranges)
-        });
+        segmented(
+            body,
+            segment,
+            |s, at, ranges| segment_code_ranges(s, base + at, ranges),
+            |mut ranges| out.append(&mut ranges),
+        );
     }
 }
 
+/// A segment with no safe cut within this many bytes is cut at a line
+/// anyway. pulldown-cmark's tree reaches 72x its input on some text (a
+/// million `-` lines, setext runs, a long paragraph of `#tags`), and with
+/// no safe cut that tree spanned the whole note.
+/// ponytail: a forced cut can misread the one block it splits (a heading,
+/// a code span); only text with no safe cut for 64 KB pays that.
+const FORCE: usize = 128 * 1024;
+
 /// Runs `visit(segment, offset, items)` over `body` in segments (see
-/// `excluded`). `visit` returns the start of a block that may still be open
-/// at the segment's end, if any; its items are then dropped and the segment
+/// `excluded`) and hands each accepted segment's items to `accept`, in
+/// order. `visit` returns the start of a block that may still be open at the
+/// segment's end, if any; its items are then dropped and the segment
 /// retried, ending before that block when a cut may go there (one parse of
 /// the bytes before it), else at twice the longest length tried.
 pub fn segmented<T>(
     body: &str,
     segment: usize,
-    out: &mut Vec<T>,
     mut visit: impl FnMut(&str, usize, &mut Vec<T>) -> Option<usize>,
+    mut accept: impl FnMut(Vec<T>),
 ) {
     let mut start = 0;
     let mut want = segment;
     let mut longest = 0;
     while start < body.len() {
-        let cut = next_cut(body, start.saturating_add(want));
-        let end = cut.unwrap_or(body.len());
+        let base = want.max(FORCE / 2);
+        let reach = base.saturating_mul(2);
+        let (end, final_cut) = match next_cut(body, start.saturating_add(want)) {
+            Some(c) if c - start <= reach => (c, false),
+            None if body.len() - start <= reach => (body.len(), true),
+            _ => (forced_cut(body, start + base), true),
+        };
         let mut items = Vec::new();
         match visit(&body[start..end], start, &mut items) {
-            Some(open) if cut.is_some() => {
+            Some(open) if !final_cut => {
                 let before = open > 0
                     && end - start > longest
                     && next_cut(body, start + open) == Some(start + open);
@@ -91,12 +108,24 @@ pub fn segmented<T>(
                 want = if before { open } else { 2 * longest };
             }
             _ => {
-                out.append(&mut items);
+                accept(items);
                 start = end;
                 want = segment;
                 longest = 0;
             }
         }
+    }
+}
+
+/// The next line start within FORCE / 2 of `at`, else a char boundary at it.
+fn forced_cut(body: &str, at: usize) -> usize {
+    let at = (0..=at)
+        .rev()
+        .find(|&i| body.is_char_boundary(i))
+        .unwrap_or(0);
+    match body[at..].find('\n') {
+        Some(i) if i < FORCE / 2 => at + i + 1,
+        _ => at,
     }
 }
 
@@ -558,6 +587,7 @@ mod tests {
             "\n---\n",
             "  ---",
             "Title\n===\n",
+            "[x]: /u",
         ];
         // CI runs 20k cases; the nightly (cron.yml) runs 2M per seed. Run it
         // deep after touching the cut rules or bumping pulldown-cmark:
