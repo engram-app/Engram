@@ -5,10 +5,6 @@ defmodule Engram.Notes.Frontmatter do
   strings and maps so they are trivially testable and reusable.
   """
 
-  @fence "---"
-  @fence_line_pattern ~r/\n---[ \t]*\r?\n/
-  @fence_eof_pattern ~r/\n---[ \t]*\r?$/
-
   # A column-0 `key:` line. Same shape top_level_key_order/2 keys on.
   @top_key_pattern ~r/^([^\s:][^:]*):/
 
@@ -18,46 +14,19 @@ defmodule Engram.Notes.Frontmatter do
   well-formed leading frontmatter (must start at byte 0 and have a closing fence).
   """
   @spec split(String.t()) :: {String.t() | nil, String.t()}
+  # The fence scan runs in Rust (native/engram_native/src/frontmatter.rs),
+  # shared with the chunker. It returns offsets so the body stays a
+  # sub-binary of `plaintext`: a large note is not copied. It scans bytes, so
+  # invalid UTF-8 comes back byte for byte, as with the regexes it replaced.
   def split(plaintext) when is_binary(plaintext) do
-    case strip_open_fence(plaintext) do
-      nil -> {nil, plaintext}
-      rest -> after_open_fence(rest, plaintext)
-    end
-  end
-
-  # BOTH line endings, on the OPENING fence. `@fence_line_pattern` and
-  # `@fence_eof_pattern` have always tolerated `\r` on the CLOSING fence, so a
-  # CRLF note used to be half-supported: it matched nothing here and fell
-  # through as "no frontmatter". Every note written by Obsidian on Windows is
-  # CRLF, and a caller that asks "does the frontmatter declare `title`?" got
-  # `nil` and duplicated the field it was trying to suppress.
-  defp strip_open_fence(@fence <> <<?\r, ?\n, rest::binary>>), do: rest
-  defp strip_open_fence(@fence <> <<?\n, rest::binary>>), do: rest
-  defp strip_open_fence(_plaintext), do: nil
-
-  defp after_open_fence(rest, original) do
-    case strip_open_fence(rest) do
-      # Empty frontmatter: --- immediately followed by ---
-      body when is_binary(body) ->
-        {"", body}
-
+    case Engram.Native.frontmatter_split(plaintext) do
       nil ->
-        # Closing fence preceded by a newline (optional trailing whitespace/CR)
-        case Regex.split(@fence_line_pattern, rest, parts: 2) do
-          [block, body] ->
-            {block <> "\n", body}
+        {nil, plaintext}
 
-          # No closing fence with trailing newline; try fence at EOF
-          [_only] ->
-            split_trailing(rest, original)
-        end
-    end
-  end
-
-  defp split_trailing(rest, original) do
-    case Regex.split(@fence_eof_pattern, rest, parts: 2) do
-      [block, ""] -> {block <> "\n", ""}
-      _ -> {nil, original}
+      {block_start, block_end, body_start, add_newline} ->
+        block = binary_part(plaintext, block_start, block_end - block_start)
+        block = if add_newline, do: block <> "\n", else: block
+        {block, binary_part(plaintext, body_start, byte_size(plaintext) - body_start)}
     end
   end
 

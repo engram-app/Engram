@@ -74,10 +74,7 @@ defmodule Engram.Native.JsonDecodeTest do
 
     test "repeated calls leak nothing" do
       doc = ~s({"a":[1,2.5,"x",{"b":null}]})
-      Native.json_decode_nif(doc)
-      before = Native.live_bytes()
-      for _ <- 1..300, do: Native.json_decode_nif(doc)
-      assert Native.live_bytes() - before == 0
+      Engram.NativeLeak.assert_no_leak(fn -> Native.json_decode_nif(doc) end)
     end
 
     test "every call emits [:engram, :nif, :call, :stop]" do

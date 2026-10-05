@@ -61,6 +61,29 @@ defmodule Engram.IndexingTest do
       assert length(chunks) == chunk_count
     end
 
+    # #1621: the folder is a filter key, not meaning. Kept out of the dense
+    # input so it does not pull vectors toward a folder name.
+    test "embeds the folder-free embed_text", %{bypass: bypass, note: note, vault: vault} do
+      test_pid = self()
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts ->
+        send(test_pid, {:embedded, texts})
+        {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+      end)
+
+      Bypass.expect(bypass, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": true}))
+      end)
+
+      assert {:ok, _} = Indexing.index_note(note, vault)
+      assert_received {:embedded, texts}
+      assert "Iron Panel\n\n# Iron Panel\n\nFerritin levels." in texts
+      refute Enum.any?(texts, &String.contains?(&1, "Health"))
+    end
+
     # `chunks.heading_path` was a plaintext copy of "Title > H1 > H2", written
     # next to an encrypted copy in the Qdrant payload. Nothing reads the
     # Postgres column, so it is no longer written (privacy audit 2026-09-26).

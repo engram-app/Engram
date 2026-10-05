@@ -1,6 +1,8 @@
 //! In-house NIFs. Each is a pure function over binaries, runs on a dirty CPU
 //! scheduler, and returns BEAM binaries (so its OUTPUT is visible to
 //! `:erlang.memory(:binary)`). See docs/context for the memory standard.
+mod chunker;
+mod frontmatter;
 mod json;
 mod links;
 mod memory;
@@ -355,6 +357,54 @@ fn json_decode_nif<'a>(env: Env<'a>, text: Binary<'a>) -> NifResult<(Term<'a>, u
 #[rustler::nif(schedule = "DirtyCpu")]
 fn json_decode_dirty_nif<'a>(env: Env<'a>, text: Binary<'a>) -> NifResult<(Term<'a>, usize)> {
     json_decode(env, text)
+}
+
+/// `Engram.Parsers.Markdown.parse/2`'s chunks (positions are assigned in
+/// Elixir), and the call's native peak.
+fn chunk_terms<'a>(
+    env: Env<'a>,
+    content: &str,
+    folder: &str,
+    title: &str,
+) -> (Vec<Term<'a>>, usize) {
+    let base = memory::begin();
+    let mut out = Vec::new();
+    chunker::each_chunk(content, folder, title, |c| out.push(c.encode(env)));
+    (out, memory::peak_since(base))
+}
+
+#[rustler::nif]
+fn chunk_nif<'a>(env: Env<'a>, content: &str, folder: &str, title: &str) -> (Vec<Term<'a>>, usize) {
+    chunk_terms(env, content, folder, title)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn chunk_dirty_nif<'a>(
+    env: Env<'a>,
+    content: &str,
+    folder: &str,
+    title: &str,
+) -> (Vec<Term<'a>>, usize) {
+    chunk_terms(env, content, folder, title)
+}
+
+/// `Frontmatter.split/1` as offsets: nil, or {block_start, block_end,
+/// body_start, add_newline}, with the native peak. Takes raw bytes: invalid
+/// UTF-8 splits as the Elixir regexes did.
+fn frontmatter_split_peak(content: &[u8]) -> (frontmatter::Split, usize) {
+    let base = memory::begin();
+    let split = frontmatter::split(content);
+    (split, memory::peak_since(base))
+}
+
+#[rustler::nif]
+fn frontmatter_split_nif(content: rustler::Binary) -> (frontmatter::Split, usize) {
+    frontmatter_split_peak(content.as_slice())
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn frontmatter_split_dirty_nif(content: rustler::Binary) -> (frontmatter::Split, usize) {
+    frontmatter_split_peak(content.as_slice())
 }
 
 rustler::init!("Elixir.Engram.Native");

@@ -47,11 +47,10 @@ defmodule Engram.Native.KeywordEncodeTest do
 
     test "repeated calls leak nothing" do
       texts = for i <- 1..20, do: "note #{i} running fast and far"
-      # Warm-up: lazily compiled regexes live for the life of the library.
-      Engram.Native.encode_documents_nif(texts, @key, 300.0, "en")
-      before = Engram.Native.live_bytes()
-      for _ <- 1..300, do: Engram.Native.encode_documents_nif(texts, @key, 300.0, "en")
-      assert Engram.Native.live_bytes() - before == 0
+
+      Engram.NativeLeak.assert_no_leak(fn ->
+        Engram.Native.encode_documents_nif(texts, @key, 300.0, "en")
+      end)
     end
 
     test "every call emits [:engram, :nif, :call, :stop]" do

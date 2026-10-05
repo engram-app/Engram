@@ -30,16 +30,29 @@ costs about that), or code that needs to call back into the BEAM.
 
 | Code | Why | Evidence |
 |---|---|---|
-| `Engram.Parsers.Markdown.parse/2` (chunker, blob strip, frontmatter) | regex-heavy, runs on every embed | fuzz 2026-10-03: huge frontmatter ~39 s CPU/MB; many tiny headings ~8 s and +329 MB per MB |
+| `Engram.Notes.Frontmatter` YAML codec (`parse`, `parse_for_ingest`, `emit`) | YamlElixir ~2.6 ms per write, on every CRDT ingest | `Frontmatter.split/1` is already native; the codec is the rest |
 
-Once the chunker is native, return each chunk's fingerprint from the same
-pass (`hmac_hex_many` already does the HMAC; the chunker would skip the
-`context_text` round trip through Elixir).
+Measured on the chunker (`chunk`, `frontmatter_split`, 2026-10-04,
+`Markdown.parse/2` end to end, best of 3; "Elixir" is chunker v2 on `main`,
+"Rust" is chunker v3):
 
-Port the chunker behind its existing module API, the way the keyword encoder
-kept `Tokenizer`/`QdrantSparse` and the link scanner kept `Links.Parser`. It
-can reuse `links.rs`'s segmented pulldown-cmark pass for code ranges. It
-bumps `@chunker_version`, which re-embeds every note: ship it alone.
+| Input | Elixir | Rust | Native peak |
+|---|---|---|---|
+| 243 docs, 3.1 MB | 743 ms | 365 ms | 0.4 MB max |
+| 1 MB prose | 273 ms | 63 ms | 1.1 MB |
+| 680 KB code-heavy | 3,009 ms, 40,001 chunks | 231 ms, 333 chunks | 1.2 MB |
+| 2 MB data-URI image | 66 ms | 127 ms | 2.0 MB |
+
+The v2 port first matched the Elixir chunker byte for byte (2,008-note golden
+set), then v3 changed boundaries under one `@chunker_version` bump. v3 cuts an
+oversized section after a unit whose hash is the maximum within 1 KB either
+side, so a cut depends only on nearby text. On 400-paragraph notes, an edit
+re-embeds 1.25-1.8 chunks and a deleted paragraph 1.4-1.9, against 15-40 and
+25-86 under greedy packing (whose every later boundary shifts). A first try
+with hash anchors plus a minimum chunk size kept edits local but not
+deletions: the minimum made each cut depend on where the chunk began.
+`chunker_golden.json.gz` pins v3 output; regenerate it only with a version
+bump.
 
 Measured on the search and upsert NIFs (2026-10-04, dev box, min of 5-7,
 identical output to the Elixir they replaced):
@@ -130,8 +143,12 @@ following closes part of it:
   generated Snowball stemmers are quadratic in word length: a 200 KB "word"
   took 4 s). Guards that the Elixir code had (key length, `avgdl > 0`) stay
   in the wrapper: a NIF returns garbage where Elixir raised.
-- **Leak:** warm up once (lazy statics are permanent), then 300 calls and
-  `assert live_bytes() - before == 0`.
+- **Leak:** `Engram.NativeLeak.assert_no_leak(fun)`. A single warm-up call
+  is not enough: the regex crate keeps a match cache per scheduler thread,
+  allocated the first time a call lands on that thread, and a test process
+  migrates between threads. That read as a ~670 KB "leak" on runs that leaked
+  nothing. The helper warms every thread with concurrent calls, then asserts
+  300 more calls leave `live_bytes()` unchanged.
 - **Behaviour parity:** when porting, capture golden output from the Elixir
   code BEFORE deleting it, and keep its behaviour tests running against the
   NIF. The keyword port kept `tokenizer_test.exs` and `qdrant_sparse_test.exs`
@@ -228,7 +245,14 @@ adding callers.
   (after a blank line, or a list item, fence or ATX heading). pulldown-cmark
   then rejects a cut if a fenced or raw-HTML block runs to the segment's end,
   since a hand-written tracker for those cannot match it (it ends lines at a
-  lone `\r` in one scanner and not in another). A fuzz test asserts
+  lone `\r` in one scanner and not in another). A rejected segment is re-cut
+  just before that block when a cut may go there, else retried at double
+  length: doubling alone grew to the whole note when candidate cuts kept
+  landing inside fences (`# x` lines in code), and the heading pass peaked at
+  7x a code-heavy note. The chunker reuses this pass (`links::segmented`).
+  Text with no safe cut at all (a million `-` lines, setext runs, one long
+  paragraph of `#tags`) is cut at a line anyway once 128 KB have no safe cut:
+  pulldown-cmark's tree reached 72x such a note when parsed whole. A fuzz test asserts
   segmented == whole-document on generated markdown; run it at 2M cases
   after touching the cut rules.
 - **Dense vector JSON prints the shortest f32, not the widened f64.** Qdrant

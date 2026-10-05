@@ -52,16 +52,11 @@ defmodule Engram.Native.NoteMetaTest do
 
     test "repeated calls leak nothing" do
       content = "---\ntitle: T\ntags: [a]\n---\n# H\n#x `y`"
-      Engram.Native.note_tags_nif(content)
-      Engram.Native.note_title_nif(content)
-      before = Engram.Native.live_bytes()
 
-      for _ <- 1..300 do
+      Engram.NativeLeak.assert_no_leak(fn ->
         Engram.Native.note_tags_nif(content)
         Engram.Native.note_title_nif(content)
-      end
-
-      assert Engram.Native.live_bytes() - before == 0
+      end)
     end
 
     test "a note up to 16 KB parses on the calling scheduler, a bigger one dirty" do

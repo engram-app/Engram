@@ -858,9 +858,9 @@ defmodule Engram.Indexing do
 
   # Decides, per chunk, whether it can keep the point it already has (#1592).
   #
-  # The fingerprint is over `context_text` — the exact string the embedder is
-  # given ("folder > title > heading\n\ntext") — NOT the bare chunk text. That
-  # distinction is the whole correctness argument: an equal `context_text`
+  # The fingerprint is over `context_text` ("folder > title > heading\n\ntext",
+  # the keyword input) and `embed_text` (the dense input), NOT the bare chunk
+  # text. That distinction is the whole correctness argument: an equal pair
   # means the dense vector, the sparse vector, `token_count`, and all three
   # encrypted payload fields (`text`, `title`, `heading_path`, all of which are
   # inside it) are reusable verbatim. Hashing the bare text instead would
@@ -937,14 +937,25 @@ defmodule Engram.Indexing do
     Engram.Native.hmac_hex_many(
       content_key,
       fingerprint_prefix(dense?),
-      Enum.map(chunks, & &1.context_text)
+      Enum.map(chunks, &fingerprint_input/1)
     )
   end
 
-  defp fingerprint_prefix(true), do: "dense:#{effective_embed_model()}\n"
+  # Both inputs: `context_text` (keyword vector, payload) and `embed_text`
+  # (dense vector). They are capped separately, so past 512 bytes of
+  # "folder > title" a title change can leave `context_text` equal while
+  # `embed_text` moves. Length-prefixed so the pair cannot be confused.
+  defp fingerprint_input(chunk),
+    do: "#{byte_size(chunk.context_text)}:" <> chunk.context_text <> chunk.embed_text
+
+  # `/embed_text`: the dense input dropped the folder in chunker v3 (#1621),
+  # so a vector fingerprinted before then came from another string.
+  defp fingerprint_prefix(true), do: "dense:#{effective_embed_model()}/embed_text\n"
   defp fingerprint_prefix(false), do: "sparse\n"
 
-  defp embed_texts(plan), do: for({:embed, chunk} <- plan.entries, do: chunk.context_text)
+  # `embed_text`, not `context_text`: no folder, which is a filter key, not
+  # meaning (#1621). The reuse fingerprint covers both (`fingerprint_input/1`).
+  defp embed_texts(plan), do: for({:embed, chunk} <- plan.entries, do: chunk.embed_text)
 
   defp note_language(chunks) do
     chunks

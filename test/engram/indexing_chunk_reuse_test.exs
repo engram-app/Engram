@@ -287,6 +287,61 @@ defmodule Engram.IndexingChunkReuseTest do
     end
   end
 
+  # #1621: dense vectors were built from `context_text` (with the folder)
+  # until chunker v3 switched them to `embed_text`. A point fingerprinted
+  # under the old format holds the old input's vector, so it is not reused.
+  describe "rows fingerprinted before embed_text" do
+    test "re-embed every chunk", ctx do
+      note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
+      stub_embedder(self())
+      assert {:ok, count} = Indexing.index_note(note, ctx.vault)
+      _ = embedded_texts()
+
+      {:ok, key} =
+        ctx.user |> Repo.reload!(skip_tenant_check: true) |> Engram.Crypto.dek_content_hash_key()
+
+      model =
+        Application.get_env(:engram, :doc_embed_model) ||
+          Application.get_env(:engram, :embed_model)
+
+      chunks = Engram.Parsers.Markdown.parse(note.content, note.path)
+
+      old =
+        Engram.Native.hmac_hex_many(key, "dense:#{model}\n", Enum.map(chunks, & &1.context_text))
+
+      for {chunk, hmac} <- Enum.zip(chunks, old) do
+        Repo.update_all(
+          from(c in Chunk, where: c.note_id == ^note.id and c.position == ^chunk.position),
+          [set: [context_hmac: hmac]],
+          skip_tenant_check: true
+        )
+      end
+
+      reset(ctx.recorder)
+      assert {:ok, ^count} = Indexing.index_note(note, ctx.vault)
+      assert length(embedded_texts()) == count
+    end
+  end
+
+  # The two prefixes are capped separately, so past 512 bytes of
+  # "folder > title" a title change can leave context_text equal while
+  # embed_text moves. Reuse must still see the change.
+  describe "a long folder path" do
+    test "a title change re-embeds even when context_text is capped equal", ctx do
+      folder = Enum.map_join(1..8, "/", &String.duplicate("dir#{&1}", 20))
+      path = folder <> "/n.md"
+      note = put_raw(ctx.user, ctx.vault, path, "---\ntitle: Alpha\n---\nbody text here")
+      stub_embedder(self())
+      assert {:ok, _} = Indexing.index_note(note, ctx.vault)
+      _ = embedded_texts()
+
+      renamed = put_raw(ctx.user, ctx.vault, path, "---\ntitle: Beta\n---\nbody text here")
+      reset(ctx.recorder)
+      assert {:ok, _} = Indexing.index_note(renamed, ctx.vault)
+      assert "Beta\n\nbody text here" in embedded_texts()
+    end
+  end
+
   describe "duplicate chunks" do
     test "two identical sections get two distinct points", ctx do
       body = "# Iron Panel\n\n## A\n\nsame text here\n\n## B\n\nsame text here\n"
