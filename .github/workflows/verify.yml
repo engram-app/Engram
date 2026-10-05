@@ -1163,24 +1163,23 @@ jobs:
         env:
           DISPLAY_BASE: ${{ steps.display.outputs.base }}
         run: |
-          get_free_port() {
-            python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()"
+          # All ports in ONE process, every socket held open until all are
+          # picked, so they are distinct. One bind+close per port let the
+          # kernel hand the same port out twice in a step: the backend and
+          # Obsidian B's CDP port both got 38115 (#1859 e2e-clerk, 57 errors).
+          alloc_ports() {
+            python3 -c "import socket,sys; ss=[socket.socket() for _ in range(int(sys.argv[1]))]; [s.bind(('',0)) for s in ss]; print(' '.join(str(s.getsockname()[1]) for s in ss))" "$1"
           }
-          ENGRAM_PORT=$(get_free_port)
-          PG_PORT=$(get_free_port)
           # CDP ports: 3 Obsidian instances × 2 xdist workers = 6 ports total.
           # Per-worker env vars (E2E_CDP_PORT_A_W{0,1} etc) are consumed by
           # e2e/conftest.py so dynamic (non-contiguous) allocation is safe.
-          CDP_PORT_A_W0=$(get_free_port)
-          CDP_PORT_B_W0=$(get_free_port)
-          CDP_PORT_C_W0=$(get_free_port)
-          CDP_PORT_A_W1=$(get_free_port)
-          CDP_PORT_B_W1=$(get_free_port)
-          CDP_PORT_C_W1=$(get_free_port)
+          read -r ENGRAM_PORT PG_PORT \
+            CDP_PORT_A_W0 CDP_PORT_B_W0 CDP_PORT_C_W0 \
+            CDP_PORT_A_W1 CDP_PORT_B_W1 CDP_PORT_C_W1 <<< "$(alloc_ports 8)"
           # DISPLAY_BASE comes from the earlier "Compute display range" step so
           # pre-cleanup and tear-down can scope Xvfb kills consistently.
 
-          # Validate all ports are non-empty (get_free_port can fail silently)
+          # Validate all ports are non-empty (alloc_ports can fail silently)
           for var in ENGRAM_PORT PG_PORT \
                      CDP_PORT_A_W0 CDP_PORT_B_W0 CDP_PORT_C_W0 \
                      CDP_PORT_A_W1 CDP_PORT_B_W1 CDP_PORT_C_W1; do
@@ -1782,24 +1781,23 @@ jobs:
         env:
           DISPLAY_BASE: ${{ steps.display.outputs.base }}
         run: |
-          get_free_port() {
-            python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()"
+          # All ports in ONE process, every socket held open until all are
+          # picked, so they are distinct. One bind+close per port let the
+          # kernel hand the same port out twice in a step: the backend and
+          # Obsidian B's CDP port both got 38115 (#1859 e2e-clerk, 57 errors).
+          alloc_ports() {
+            python3 -c "import socket,sys; ss=[socket.socket() for _ in range(int(sys.argv[1]))]; [s.bind(('',0)) for s in ss]; print(' '.join(str(s.getsockname()[1]) for s in ss))" "$1"
           }
-          ENGRAM_PORT=$(get_free_port)
-          PG_PORT=$(get_free_port)
           # CDP ports: 3 Obsidian instances × 2 xdist workers = 6 ports total.
           # Per-worker env vars (E2E_CDP_PORT_A_W{0,1} etc) are consumed by
           # e2e/conftest.py so dynamic (non-contiguous) allocation is safe.
-          CDP_PORT_A_W0=$(get_free_port)
-          CDP_PORT_B_W0=$(get_free_port)
-          CDP_PORT_C_W0=$(get_free_port)
-          CDP_PORT_A_W1=$(get_free_port)
-          CDP_PORT_B_W1=$(get_free_port)
-          CDP_PORT_C_W1=$(get_free_port)
+          read -r ENGRAM_PORT PG_PORT \
+            CDP_PORT_A_W0 CDP_PORT_B_W0 CDP_PORT_C_W0 \
+            CDP_PORT_A_W1 CDP_PORT_B_W1 CDP_PORT_C_W1 <<< "$(alloc_ports 8)"
           # DISPLAY_BASE comes from the earlier "Compute display range" step so
           # pre-cleanup and tear-down can scope Xvfb kills consistently.
 
-          # Validate all ports are non-empty (get_free_port can fail silently)
+          # Validate all ports are non-empty (alloc_ports can fail silently)
           for var in ENGRAM_PORT PG_PORT \
                      CDP_PORT_A_W0 CDP_PORT_B_W0 CDP_PORT_C_W0 \
                      CDP_PORT_A_W1 CDP_PORT_B_W1 CDP_PORT_C_W1; do
@@ -2255,8 +2253,14 @@ jobs:
       - name: Allocate dynamic ports
         id: ports
         run: |
-          get_free_port() { python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()"; }
-          ENGRAM_PORT=$(get_free_port); PG_PORT=$(get_free_port)
+          # All ports in ONE process, every socket held open until all are
+          # picked, so they are distinct. One bind+close per port let the
+          # kernel hand the same port out twice in a step: the backend and
+          # Obsidian B's CDP port both got 38115 (#1859 e2e-clerk, 57 errors).
+          alloc_ports() {
+            python3 -c "import socket,sys; ss=[socket.socket() for _ in range(int(sys.argv[1]))]; [s.bind(('',0)) for s in ss]; print(' '.join(str(s.getsockname()[1]) for s in ss))" "$1"
+          }
+          read -r ENGRAM_PORT PG_PORT <<< "$(alloc_ports 2)"
           for v in ENGRAM_PORT PG_PORT; do
             [ -z "${!v}" ] && { echo "::error::Port allocation failed for $v"; exit 1; }
           done
@@ -2699,9 +2703,16 @@ jobs:
           # Host-port publish is parallel-unsafe on the shared runner VM; pick
           # free ports per run. (The round-trip uses `compose exec`, not the
           # host port, but the compose file still publishes one.)
-          get_free_port() { python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()"; }
-          echo "engram_port=$(get_free_port)" >> "$GITHUB_OUTPUT"
-          echo "pg_port=$(get_free_port)" >> "$GITHUB_OUTPUT"
+          # All ports in ONE process, every socket held open until all are
+          # picked, so they are distinct. One bind+close per port let the
+          # kernel hand the same port out twice in a step: the backend and
+          # Obsidian B's CDP port both got 38115 (#1859 e2e-clerk, 57 errors).
+          alloc_ports() {
+            python3 -c "import socket,sys; ss=[socket.socket() for _ in range(int(sys.argv[1]))]; [s.bind(('',0)) for s in ss]; print(' '.join(str(s.getsockname()[1]) for s in ss))" "$1"
+          }
+          read -r ENGRAM_PORT PG_PORT <<< "$(alloc_ports 2)"
+          echo "engram_port=$ENGRAM_PORT" >> "$GITHUB_OUTPUT"
+          echo "pg_port=$PG_PORT" >> "$GITHUB_OUTPUT"
 
       - name: Boot minified stack (bytea storage, no MinIO)
         env:
@@ -4165,13 +4176,15 @@ jobs:
       - name: Allocate dynamic ports
         id: ports
         run: |
-          get_free_port() {
-            python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()"
+          # All ports in ONE process, every socket held open until all are
+          # picked, so they are distinct. One bind+close per port let the
+          # kernel hand the same port out twice in a step: the backend and
+          # Obsidian B's CDP port both got 38115 (#1859 e2e-clerk, 57 errors).
+          alloc_ports() {
+            python3 -c "import socket,sys; ss=[socket.socket() for _ in range(int(sys.argv[1]))]; [s.bind(('',0)) for s in ss]; print(' '.join(str(s.getsockname()[1]) for s in ss))" "$1"
           }
-          PW_LOCAL_BACKEND_PORT=$(get_free_port)
-          PW_LOCAL_VITE_PORT=$(get_free_port)
-          PW_CLERK_BACKEND_PORT=$(get_free_port)
-          PW_CLERK_VITE_PORT=$(get_free_port)
+          read -r PW_LOCAL_BACKEND_PORT PW_LOCAL_VITE_PORT \
+            PW_CLERK_BACKEND_PORT PW_CLERK_VITE_PORT <<< "$(alloc_ports 4)"
 
           for var in PW_LOCAL_BACKEND_PORT PW_LOCAL_VITE_PORT PW_CLERK_BACKEND_PORT PW_CLERK_VITE_PORT; do
             if [ -z "${!var}" ]; then
