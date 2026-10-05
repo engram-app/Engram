@@ -77,6 +77,9 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/workers/checkpoint_note.ex",
     "lib/engram/workers/project_vault_index.ex",
     "lib/engram/workers/embed_note.ex",
+    # Note ids from job args only, and silent today; in scope so a log line
+    # added later is still scanned.
+    "lib/engram/jobs.ex",
     "lib/engram/workers/delete_note_index.ex",
     "lib/engram/workers/repath_note_index.ex",
     "lib/engram/workers/reindex_keyword.ex",
