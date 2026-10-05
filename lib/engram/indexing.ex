@@ -941,10 +941,15 @@ defmodule Engram.Indexing do
     )
   end
 
-  defp fingerprint_prefix(true), do: "dense:#{effective_embed_model()}\n"
+  # `/embed_text`: the dense input dropped the folder in chunker v3 (#1621),
+  # so a vector fingerprinted before then came from another string.
+  defp fingerprint_prefix(true), do: "dense:#{effective_embed_model()}/embed_text\n"
   defp fingerprint_prefix(false), do: "sparse\n"
 
-  defp embed_texts(plan), do: for({:embed, chunk} <- plan.entries, do: chunk.context_text)
+  # `embed_text`, not `context_text`: no folder, which is a filter key, not
+  # meaning (#1621). Reuse still keys on `context_text`, a superset, so an
+  # equal fingerprint still means an equal dense input.
+  defp embed_texts(plan), do: for({:embed, chunk} <- plan.entries, do: chunk.embed_text)
 
   defp note_language(chunks) do
     chunks

@@ -201,7 +201,8 @@ defmodule Engram.Parsers.MarkdownTest do
 
       [body | _] = chunks
       assert body.text == "Hello world this is the body."
-      assert %{text: "title: T\n"} = List.last(chunks)
+      # v3 normalises whitespace, so the block loses its trailing newline.
+      assert %{text: "title: T"} = List.last(chunks)
     end
 
     test "a closing fence at EOF is indexed once, as the frontmatter chunk" do

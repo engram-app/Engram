@@ -368,10 +368,8 @@ fn chunk_terms<'a>(
     title: &str,
 ) -> (Vec<Term<'a>>, usize) {
     let base = memory::begin();
-    let out = chunker::chunk(content, folder, title)
-        .into_iter()
-        .map(|c| c.encode(env))
-        .collect();
+    let mut out = Vec::new();
+    chunker::each_chunk(content, folder, title, |c| out.push(c.encode(env)));
     (out, memory::peak_since(base))
 }
 

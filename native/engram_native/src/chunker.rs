@@ -1,7 +1,13 @@
-//! `Engram.Parsers.Markdown.parse/2` in Rust: the frontmatter split, heading
-//! sections, base64 blob stripping, word and hard splits, and the size caps.
-//! The Elixir side keeps CRLF normalisation, the folder and the title, and
-//! assigns positions.
+//! `Engram.Parsers.Markdown.parse/2` in Rust (chunker version 3): the
+//! frontmatter split, heading sections, base64 blob stripping, splitting and
+//! the size caps. The Elixir side keeps CRLF normalisation, the folder and
+//! the title, and assigns positions.
+//!
+//! Headings come from pulldown-cmark, so a `# comment` inside code is not a
+//! heading and setext headings count. Only top-level headings split: one
+//! inside a list item or block quote is part of that block.
+use crate::links::{segmented, SEGMENT};
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use regex::Regex;
 use std::sync::OnceLock;
 
@@ -16,130 +22,210 @@ macro_rules! re {
 pub const MAX_CHUNK: usize = 2048;
 /// The breadcrumb before the text, `folder > title > h1 > h2`.
 const MAX_PREFIX: usize = 512;
+/// An oversized section is cut where a unit's hash says so (see `anchor`),
+/// never before MIN_CHUNK bytes. A cut depends on the unit's own text, not
+/// on where the previous chunk began, so an edit re-chunks only its
+/// neighbourhood and the rest of the note keeps its embeddings (#1594).
+const MIN_CHUNK: usize = 1536;
+/// Odds a unit anchors: its length over this (tuned: 20 edits on a 1 MB
+/// note re-embed 1.1 chunks each, at +14% chunks over greedy packing).
+const ANCHOR_SPAN: u64 = 512;
 
-/// One chunk: (text, context_text, heading_path, char_start, char_end).
-pub type Chunk = (String, String, String, usize, usize);
+/// One chunk: (text, context_text, embed_text, heading_path, char_start,
+/// char_end). context_text carries the folder for keyword search (#1615);
+/// embed_text drops it, so moving a note does not re-embed it (#1621).
+pub type Chunk = (String, String, String, String, usize, usize);
 
-struct Section<'a> {
-    /// (level, heading text)
-    stack: Vec<(usize, &'a str)>,
+struct Heading {
+    level: usize,
     start: usize,
     end: usize,
+    text: String,
 }
 
 /// Chunks of a note: body sections, then one chunk carrying the raw
 /// frontmatter block (keyword search reads its keys). `content` is
 /// LF-normalised.
+#[cfg(test)]
 pub fn chunk(content: &str, folder: &str, title: &str) -> Vec<Chunk> {
-    let (block, body) = crate::frontmatter::parts(content);
-    let block = block.as_deref();
     let mut out = Vec::new();
-    if !body.trim().is_empty() {
-        for s in sections(body) {
-            let text = strip_blobs(&body[s.start..s.end]);
-            let text = text.trim();
-            if markup_only(text) {
-                continue;
-            }
-            let heading_path = heading_path(title, &s.stack);
-            let prefix = context_prefix(folder, &heading_path);
-            let subs = if text.len() > MAX_CHUNK {
-                split_text(text, MAX_CHUNK)
-            } else {
-                vec![text.to_string()]
-            };
-            for sub in subs {
-                let context_text = format!("{prefix}\n\n{sub}");
-                out.push((sub, context_text, heading_path.clone(), s.start, s.end));
+    each_chunk(content, folder, title, |c| out.push(c));
+    out
+}
+
+/// `chunk`, handing each chunk to `emit` as it is made, so a huge note's
+/// chunks are never all held in Rust at once.
+pub fn each_chunk(content: &str, folder: &str, title: &str, mut emit: impl FnMut(Chunk)) {
+    let (block, body) = crate::frontmatter::parts(content);
+    let headings = headings(body);
+    // The first H1 is the note's title: its place in the path is the title.
+    let title_h1 = headings.iter().position(|h| h.level == 1);
+    let mut stack: Vec<(usize, &str, bool)> = Vec::new();
+    let mut start = 0;
+    let mut head: Option<&Heading> = None;
+    for (i, next) in headings.iter().map(Some).chain([None]).enumerate() {
+        let end = next.map_or(body.len(), |h| h.start);
+        let head_end = head.map_or(start, |h| h.end.min(end));
+        let rest = strip_blobs(&body[head_end..end]);
+        if !markup_only(&rest) {
+            let text = normalize(&body[start..head_end], &rest);
+            let path = heading_path(title, &stack);
+            for t in split(&text) {
+                emit(make(folder, &path, &path, t, start, end));
             }
         }
+        if let Some(h) = next {
+            stack.retain(|&(l, _, _)| l < h.level);
+            stack.push((h.level, &h.text, Some(i) == title_h1));
+            start = h.start;
+        }
+        head = next;
     }
     if let Some(block) = block.filter(|b| !b.is_empty()) {
-        let text = strip_blobs(block).into_owned();
-        let prefix = context_prefix(folder, &format!("{title} > frontmatter"));
-        out.push((
-            text.clone(),
-            format!("{prefix}\n\n{text}"),
-            "frontmatter".into(),
-            0,
-            0,
-        ));
-    }
-    out.into_iter().flat_map(enforce_size_cap).collect()
-}
-
-/// `^(#{1,6})\s+(.+)$` on one line, `\s` ASCII as in the byte-mode regex.
-fn atx(line: &str) -> Option<(usize, &str)> {
-    let c = re!(r"\A(#{1,6})[\t\n\x0B\x0C\r ]+(.+)\z").captures(line)?;
-    Some((c.get(1)?.len(), c.get(2)?.as_str()))
-}
-
-fn sections(body: &str) -> Vec<Section<'_>> {
-    let mut done = Vec::new();
-    let mut cur = Section {
-        stack: Vec::new(),
-        start: 0,
-        end: 0,
-    };
-    let mut pos = 0;
-    for line in body.split('\n') {
-        if let Some((level, text)) = atx(line) {
-            let mut stack: Vec<_> = cur
-                .stack
-                .iter()
-                .copied()
-                .filter(|&(l, _)| l < level)
-                .collect();
-            stack.push((level, text));
-            let next = Section {
-                stack,
-                start: pos,
-                end: 0,
-            };
-            let prev = std::mem::replace(&mut cur, next);
-            // A section is kept only if it holds non-blank text.
-            if pos > 0 && !body[prev.start..pos - 1].trim().is_empty() {
-                done.push(Section {
-                    end: pos - 1,
-                    ..prev
-                });
-            }
+        let text = normalize("", &strip_blobs(&block));
+        let path = format!("{title} > frontmatter");
+        for t in hard_split(&text, MAX_CHUNK)
+            .into_iter()
+            .filter(|t| !t.is_empty())
+        {
+            emit(make(folder, &path, "frontmatter", t, 0, 0));
         }
-        pos += line.len() + 1;
     }
-    if !body[cur.start..].trim().is_empty() {
-        done.push(Section {
-            end: body.len(),
-            ..cur
-        });
-    }
-    done
 }
 
-fn heading_path(title: &str, stack: &[(usize, &str)]) -> String {
-    let rest = match stack.first() {
-        Some(&(1, _)) => &stack[1..],
-        _ => stack,
+fn make(folder: &str, path: &str, heading_path: &str, text: &str, s: usize, e: usize) -> Chunk {
+    let emb = cap(path);
+    let ctx = if folder.is_empty() {
+        emb.to_string()
+    } else {
+        cap(&format!("{folder} > {path}")).to_string()
     };
+    (
+        text.to_string(),
+        format!("{ctx}\n\n{text}"),
+        format!("{emb}\n\n{text}"),
+        heading_path.to_string(),
+        s,
+        e,
+    )
+}
+
+/// Voyage rejects an oversized input with a permanent 400, so every prefix
+/// is bounded; texts are bounded by `split`.
+fn cap(prefix: &str) -> &str {
+    hard_split(prefix, MAX_PREFIX)[0]
+}
+
+/// Top-level headings, in order. Parsed in segments, as `links` does, so
+/// pulldown-cmark's tree stays small on a huge note.
+fn headings(body: &str) -> Vec<Heading> {
+    let mut out = Vec::new();
+    if !may_have_heading(body) {
+        return out;
+    }
+    segmented(body, SEGMENT, &mut out, |s, at, hs| {
+        // pulldown-cmark 0.13.4 panics on some valid input (see links).
+        // ponytail: a panicking segment loses its headings, not the note;
+        // its text still chunks under the previous heading.
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| segment_headings(s, at, hs)))
+            .unwrap_or(None)
+    });
+    out
+}
+
+/// ATX needs a `#`, setext an underline line of `=` or `-`. Without either
+/// pulldown-cmark finds no heading, and a blob-only note skips the parse.
+fn may_have_heading(s: &str) -> bool {
+    s.contains('#')
+        || s.lines()
+            .any(|l| matches!(l.trim_start().as_bytes().first(), Some(b'=' | b'-')))
+}
+
+/// The start of a fenced or raw-HTML block running to the end of `s`, if any.
+fn segment_headings(s: &str, at: usize, out: &mut Vec<Heading>) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut open = None;
+    for (event, r) in Parser::new_ext(s, Options::ENABLE_TABLES).into_offset_iter() {
+        match event {
+            Event::Start(Tag::BlockQuote(_) | Tag::List(_) | Tag::Item) => depth += 1,
+            Event::End(TagEnd::BlockQuote(_) | TagEnd::List(_) | TagEnd::Item) => depth -= 1,
+            Event::Start(Tag::Heading { level, .. }) if depth == 0 => out.push(Heading {
+                level: level as usize,
+                start: at + r.start,
+                end: at + r.end,
+                text: heading_text(&s[r]),
+            }),
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(_)) | Tag::HtmlBlock)
+                if r.end == s.len() =>
+            {
+                open = open.or(Some(r.start));
+            }
+            _ => {}
+        }
+    }
+    open
+}
+
+/// The heading's source text: ATX without its `#` runs, setext without its
+/// underline (lines joined by a space).
+fn heading_text(src: &str) -> String {
+    let src = src.trim_end();
+    let first = src.trim_start();
+    let hashes = first.bytes().take_while(|&c| c == b'#').count();
+    if (1..=6).contains(&hashes) && !src.contains('\n') {
+        let t = first[hashes..].trim();
+        // A closing sequence counts only after a space, or as the whole text.
+        let closing = t.trim_end_matches('#');
+        let t = if closing.is_empty() || closing.ends_with([' ', '\t']) {
+            closing.trim_end()
+        } else {
+            t
+        };
+        return t.to_string();
+    }
+    let lines: Vec<&str> = src.lines().collect();
+    let body = &lines[..lines.len().saturating_sub(1)];
+    body.iter().map(|l| l.trim()).collect::<Vec<_>>().join(" ")
+}
+
+fn heading_path(title: &str, stack: &[(usize, &str, bool)]) -> String {
     let mut path = title.to_string();
-    for (_, h) in rest {
-        path.push_str(" > ");
-        path.push_str(h);
+    for &(_, h, is_title) in stack {
+        if !is_title {
+            path.push_str(" > ");
+            path.push_str(h);
+        }
     }
     path
 }
 
-fn context_prefix(folder: &str, heading_path: &str) -> String {
-    if folder.is_empty() {
-        heading_path.to_string()
-    } else {
-        format!("{folder} > {heading_path}")
-    }
-}
-
-/// A section with no letter or digit carried only a blob and its markup.
+/// No letter or digit: blank, a heading alone, or a blob and its markup.
 fn markup_only(text: &str) -> bool {
     !re!(r"[\p{L}\p{N}]").is_match(text)
+}
+
+/// Trailing spaces cut from each line, blank-line runs cut to one, the
+/// whole trimmed: whitespace edits do not change what is embedded.
+fn normalize(head: &str, rest: &str) -> String {
+    let mut out = String::with_capacity(head.len() + rest.len());
+    let mut blank = 0;
+    // A heading's source ends at its line break, so the two never share a line.
+    for line in head.split('\n').chain(rest.split('\n')) {
+        let line = line.trim_end();
+        if line.is_empty() {
+            blank += 1;
+            continue;
+        }
+        if !out.is_empty() {
+            out.push_str(if blank > 0 { "\n\n" } else { "\n" });
+        }
+        blank = 0;
+        out.push_str(line);
+    }
+    out.truncate(out.trim_end().len());
+    let lead = out.len() - out.trim_start().len();
+    out.drain(..lead);
+    out
 }
 
 /// Base64 runs (data URIs, Excalidraw, encrypted blocks) are removed from the
@@ -175,35 +261,87 @@ fn encoded(run: &str) -> bool {
     u as f64 >= len * 0.2 && l as f64 >= len * 0.2 && d as f64 >= len * 0.05
 }
 
-/// Greedy word packing. A word that alone overflows is cut with the text
-/// before it, so no runt is stranded.
-fn split_text(text: &str, max: usize) -> Vec<String> {
-    let mut done: Vec<String> = Vec::new();
-    let mut acc = String::new();
-    for word in text.split(' ') {
-        let candidate = if acc.is_empty() {
-            word.to_string()
-        } else {
-            format!("{acc} {word}")
-        };
-        if candidate.len() <= max {
-            acc = candidate;
-        } else if word.len() > max {
-            let mut pieces = hard_split(&candidate, max);
-            acc = pieces.pop().unwrap_or_default();
-            done.extend(pieces);
-        } else {
-            done.push(std::mem::replace(&mut acc, word.to_string()));
+/// Chunks of at most MAX_CHUNK bytes, each a run of whole units (see
+/// `units`), cut at anchors. Chunks with no letter or digit are dropped.
+fn split(text: &str) -> Vec<&str> {
+    if text.len() <= MAX_CHUNK {
+        return vec![text];
+    }
+    let mut out = Vec::new();
+    let (mut from, mut to) = (0, 0);
+    units(text, 0, 0, &mut |s, e| {
+        if e - from > MAX_CHUNK && to > from {
+            if to - from >= MIN_CHUNK {
+                out.push(&text[from..to]);
+                from = s;
+            } else {
+                // A runt (a heading before a long run) rides with the unit,
+                // cut at its last word break that fits.
+                let cut = floor_boundary(text, from + MAX_CHUNK);
+                let cut = text[s..cut].rfind([' ', '\n']).map_or(cut, |i| s + i + 1);
+                out.push(&text[from..cut]);
+                from = cut;
+            }
+        }
+        to = e;
+        if to - from >= MIN_CHUNK && anchor(&text[s..e]) {
+            out.push(&text[from..to]);
+            from = e;
+        }
+    });
+    if to > from {
+        out.push(&text[from..to]);
+    }
+    out.retain(|t| !markup_only(t));
+    out.iter_mut().for_each(|t| *t = t.trim());
+    out
+}
+
+const SEPARATORS: [&str; 4] = ["\n\n", "\n", ". ", " "];
+
+/// Hands `unit(start, end)` contiguous ranges of at most MAX_CHUNK bytes
+/// covering `text`, in order: paragraphs, else lines, sentences, words, then
+/// char-boundary cuts. Each unit keeps its trailing separator.
+fn units(text: &str, base: usize, level: usize, unit: &mut impl FnMut(usize, usize)) {
+    if text.len() <= MAX_CHUNK {
+        return unit(base, base + text.len());
+    }
+    let mut at = base;
+    match SEPARATORS.get(level) {
+        Some(sep) => {
+            for part in text.split_inclusive(*sep) {
+                units(part, at, level + 1, unit);
+                at += part.len();
+            }
+        }
+        None => {
+            for piece in hard_split(text, MAX_CHUNK) {
+                unit(at, at + piece.len());
+                at += piece.len();
+            }
         }
     }
-    if !acc.is_empty() {
-        done.push(acc);
+}
+
+/// Content-defined cut: FNV-1a of the unit, with odds proportional to its
+/// length (a 512-byte paragraph always anchors, a short line rarely).
+fn anchor(unit: &str) -> bool {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in unit.trim().as_bytes() {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
     }
-    done
+    h % ANCHOR_SPAN < unit.len() as u64
+}
+
+fn floor_boundary(text: &str, mut i: usize) -> usize {
+    while !text.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
 }
 
 /// Pieces of at most `max` bytes, cut at char boundaries.
-fn hard_split(text: &str, max: usize) -> Vec<String> {
+fn hard_split(text: &str, max: usize) -> Vec<&str> {
     let mut out = Vec::new();
     let mut rest = text;
     while rest.len() > max {
@@ -214,32 +352,53 @@ fn hard_split(text: &str, max: usize) -> Vec<String> {
         if cut == 0 {
             cut = rest.char_indices().nth(1).map_or(rest.len(), |(i, _)| i);
         }
-        out.push(rest[..cut].to_string());
+        out.push(&rest[..cut]);
         rest = &rest[cut..];
     }
-    out.push(rest.to_string());
+    out.push(rest);
     out
 }
 
-/// Voyage rejects an oversized input with a permanent 400, so EVERY chunk's
-/// context_text is bounded here: text to MAX_CHUNK, prefix to MAX_PREFIX.
-fn enforce_size_cap(c: Chunk) -> Vec<Chunk> {
-    let (text, ctx, hp, s, e) = c;
-    if text.len() <= MAX_CHUNK && ctx.len() - text.len() <= MAX_PREFIX {
-        return vec![(text, ctx, hp, s, e)];
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn paths(content: &str) -> Vec<String> {
+        chunk(content, "", "T").into_iter().map(|c| c.3).collect()
     }
-    let prefix = if ctx.ends_with(&text) {
-        &ctx[..ctx.len() - text.len()]
-    } else {
-        ""
-    };
-    let prefix = if prefix.len() <= MAX_PREFIX {
-        prefix.to_string()
-    } else {
-        hard_split(prefix, MAX_PREFIX).swap_remove(0) + "\n\n"
-    };
-    hard_split(&text, MAX_CHUNK)
-        .into_iter()
-        .map(|t| (t.clone(), format!("{prefix}{t}"), hp.clone(), s, e))
-        .collect()
+
+    #[test]
+    fn code_is_not_a_heading() {
+        assert_eq!(paths("# T\n\n```\n# x\n```\n\n## N\n\nm"), ["T", "T > N"]);
+    }
+
+    #[test]
+    fn heading_inside_a_quote_does_not_split() {
+        assert_eq!(paths("a\n\n> # q\n> body"), ["T"]);
+    }
+
+    #[test]
+    fn every_chunk_is_bounded() {
+        let long = "x".repeat(10_000) + " " + &"é".repeat(5_000);
+        for c in chunk(
+            &format!("# {}\n\n{long}", "h".repeat(900)),
+            &"f".repeat(900),
+            "T",
+        ) {
+            assert!(c.0.len() <= MAX_CHUNK);
+            assert!(c.1.len() <= MAX_CHUNK + MAX_PREFIX + 2);
+            assert!(c.2.len() <= MAX_CHUNK + MAX_PREFIX + 2);
+        }
+    }
+
+    #[test]
+    fn setext_without_a_hash_is_found() {
+        assert_eq!(paths("a\n\nS\n  ---\n\nb"), ["T", "T > S"]);
+    }
+
+    #[test]
+    fn empty_body_and_blank_note() {
+        assert!(chunk("", "", "T").is_empty());
+        assert!(chunk("   \n\n", "", "T").is_empty());
+    }
 }

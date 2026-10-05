@@ -57,21 +57,45 @@ fn excluded(s: &str, segment: usize) -> Vec<(usize, usize)> {
 /// Every code span and code block in `body` as sorted (start, end) byte
 /// ranges offset by `base`, parsed in segments (see `excluded`).
 pub fn code_ranges(body: &str, base: usize, segment: usize, out: &mut Vec<(usize, usize)>) {
-    if !may_have_code(body) {
-        return;
+    if may_have_code(body) {
+        segmented(body, segment, out, |s, at, ranges| {
+            segment_code_ranges(s, base + at, ranges)
+        });
     }
+}
+
+/// Runs `visit(segment, offset, items)` over `body` in segments (see
+/// `excluded`). `visit` returns the start of a block that may still be open
+/// at the segment's end, if any; its items are then dropped and the segment
+/// retried, ending before that block when a cut may go there (one parse of
+/// the bytes before it), else at twice the longest length tried.
+pub fn segmented<T>(
+    body: &str,
+    segment: usize,
+    out: &mut Vec<T>,
+    mut visit: impl FnMut(&str, usize, &mut Vec<T>) -> Option<usize>,
+) {
     let mut start = 0;
     let mut want = segment;
+    let mut longest = 0;
     while start < body.len() {
         let cut = next_cut(body, start.saturating_add(want));
         let end = cut.unwrap_or(body.len());
-        let mut ranges = Vec::new();
-        if segment_code_ranges(&body[start..end], base + start, &mut ranges) || cut.is_none() {
-            out.append(&mut ranges);
-            start = end;
-            want = segment;
-        } else {
-            want = 2 * (end - start);
+        let mut items = Vec::new();
+        match visit(&body[start..end], start, &mut items) {
+            Some(open) if cut.is_some() => {
+                let before = open > 0
+                    && end - start > longest
+                    && next_cut(body, start + open) == Some(start + open);
+                longest = longest.max(end - start);
+                want = if before { open } else { 2 * longest };
+            }
+            _ => {
+                out.append(&mut items);
+                start = end;
+                want = segment;
+                longest = 0;
+            }
         }
     }
 }
@@ -83,35 +107,37 @@ fn may_have_code(s: &str) -> bool {
     s.contains(['`', '\t']) || s.contains("~~~") || s.contains("    ")
 }
 
-/// Pushes code ranges, offset by `base`. False if a fenced or raw-HTML block
-/// runs to the end of `s`, i.e. may still be open.
-fn segment_code_ranges(s: &str, base: usize, out: &mut Vec<(usize, usize)>) -> bool {
+/// Pushes code ranges, offset by `base`. Returns the start of a fenced or
+/// raw-HTML block that runs to the end of `s`, i.e. may still be open.
+fn segment_code_ranges(s: &str, base: usize, out: &mut Vec<(usize, usize)>) -> Option<usize> {
     // pulldown-cmark 0.13.4 panics on some valid input (an unwrap in
     // parse.rs, e.g. "> - [x]: /u\n    \r"). Rustler would turn that into an
     // exception and the note could not be saved or indexed. Losing one
     // segment's code ranges is the lesser harm: its links and tags count.
     let mut ranges = Vec::new();
     let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut closed = true;
+        let mut open = None;
         for (event, r) in Parser::new_ext(s, Options::ENABLE_TABLES).into_offset_iter() {
             match event {
                 Event::Code(_) => ranges.push((r.start + base, r.end + base)),
                 Event::Start(Tag::CodeBlock(kind)) => {
                     ranges.push((r.start + base, r.end + base));
-                    closed &= !(matches!(kind, CodeBlockKind::Fenced(_)) && r.end == s.len());
+                    if matches!(kind, CodeBlockKind::Fenced(_)) && r.end == s.len() {
+                        open = open.or(Some(r.start));
+                    }
                 }
-                Event::Start(Tag::HtmlBlock) => closed &= r.end < s.len(),
+                Event::Start(Tag::HtmlBlock) if r.end == s.len() => open = open.or(Some(r.start)),
                 _ => {}
             }
         }
-        closed
+        open
     }));
     match parsed {
-        Ok(closed) => {
+        Ok(open) => {
             out.append(&mut ranges);
-            closed
+            open
         }
-        Err(_) => true,
+        Err(_) => None,
     }
 }
 

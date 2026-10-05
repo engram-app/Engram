@@ -3,7 +3,8 @@ defmodule Engram.Parsers.Markdown do
   Heading-aware markdown chunker.
 
   Splits content at heading boundaries, builds folder-aware context prefixes,
-  and sub-chunks large sections at word boundaries (~512 tokens / 2048 chars).
+  and splits large sections at content-defined paragraph, line, sentence or
+  word boundaries (~512 tokens / 2048 bytes).
   The chunking runs in Rust: native/engram_native/src/chunker.rs.
   """
 
@@ -16,7 +17,10 @@ defmodule Engram.Parsers.Markdown do
   # pass over the corpus.
   #
   # 2 — base64 blobs are stripped from section text (`strip_blobs/1`).
-  @chunker_version 2
+  # 3 — CommonMark headings (none inside code; setext counts), only the first
+  #     H1 is the title, heading-only and blank chunks dropped, whitespace
+  #     normalised, content-anchored splits (#1594), `embed_text` (#1621).
+  @chunker_version 3
 
   @doc """
   Version of the chunking algorithm in this build (#1620).
@@ -36,7 +40,9 @@ defmodule Engram.Parsers.Markdown do
   Returns a list of chunk maps:
   - `:position`     — sequential index (0-based)
   - `:text`         — raw chunk text (no context prefix)
-  - `:context_text` — "folder > title > heading\\n\\ntext" for embedding
+  - `:context_text` — "folder > title > heading\\n\\ntext" for keyword search
+  - `:embed_text`   — "title > heading\\n\\ntext" for dense embedding: no
+                      folder, so moving a note keeps its vectors (#1621)
   - `:heading_path` — e.g. "Title > H1 > H2"
   - `:char_start`   — byte offset in post-frontmatter body
   - `:char_end`     — byte offset end
@@ -57,11 +63,13 @@ defmodule Engram.Parsers.Markdown do
 
     content
     |> Engram.Native.chunk(folder, title)
-    |> Enum.with_index(fn {text, context_text, heading_path, char_start, char_end}, position ->
+    |> Enum.with_index(fn {text, context_text, embed_text, heading_path, char_start, char_end},
+                          position ->
       %{
         position: position,
         text: text,
         context_text: context_text,
+        embed_text: embed_text,
         heading_path: heading_path,
         char_start: char_start,
         char_end: char_end
