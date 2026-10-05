@@ -3,6 +3,8 @@ import { Waypoints } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { useT } from "@/i18n/locale-provider";
+import { msg } from "@/i18n/msg";
 import { track } from "../analytics/track";
 import { type OnboardingStatus, useConnections, useOnboardingStatus } from "../api/queries";
 import { useIsFreeTier } from "../billing/use-is-free-tier";
@@ -58,25 +60,26 @@ const DOC_URLS: Record<string, string> = {
 const DOC_FALLBACK = "https://engram.page/docs/integrations/";
 
 const TOOL_LABELS: Record<string, string> = {
-	claude: "Connect Claude Desktop",
-	cursor: "Connect Cursor",
-	devin: "Connect Devin",
-	claude_code: "Connect Claude Code",
-	chatgpt: "Connect ChatGPT",
-	grok: "Connect Grok",
-	mistral: "Connect Mistral",
-	open_webui: "Connect Open WebUI",
-	lobechat: "Connect LobeChat",
-	windsurf: "Connect Devin Desktop (Windsurf)",
-	cline: "Connect Cline",
-	continue: "Connect Continue",
-	opencode: "Connect OpenCode",
-	github_copilot: "Connect GitHub Copilot",
-	antigravity: "Connect Antigravity",
-	other_mcp: "Connect another MCP client",
+	claude: msg("Connect Claude Desktop"),
+	cursor: msg("Connect Cursor"),
+	devin: msg("Connect Devin"),
+	claude_code: msg("Connect Claude Code"),
+	chatgpt: msg("Connect ChatGPT"),
+	grok: msg("Connect Grok"),
+	mistral: msg("Connect Mistral"),
+	open_webui: msg("Connect Open WebUI"),
+	lobechat: msg("Connect LobeChat"),
+	windsurf: msg("Connect Devin Desktop (Windsurf)"),
+	cline: msg("Connect Cline"),
+	continue: msg("Connect Continue"),
+	opencode: msg("Connect OpenCode"),
+	github_copilot: msg("Connect GitHub Copilot"),
+	antigravity: msg("Connect Antigravity"),
+	other_mcp: msg("Connect another MCP client"),
 };
 
 function ChecklistWidget() {
+	const { t } = useT();
 	// Same query app-layout and note-menu use, so this flips at exactly the
 	// moment the app switches to MobileLayout.
 	const isDesktop = useMediaQuery("(min-width: 768px)");
@@ -125,7 +128,7 @@ function ChecklistWidget() {
 		});
 	}
 
-	const tools = (profile?.tools ?? []).filter((t) => t !== "web_only");
+	const tools = (profile?.tools ?? []).filter((slug) => slug !== "web_only");
 	const isDismissed = (key: string) => dismissed.has(key);
 	const hasObsidianConnection = (connections.data ?? []).some((c) => c.kind === "obsidian");
 	// A tool row auto-completes once a live MCP connection resolves to its slug
@@ -140,31 +143,36 @@ function ChecklistWidget() {
 	// resolves to it, so slug-matching left it permanently unstickable. It's
 	// satisfied by any live MCP grant not already claimed by another row the
 	// user picked (an unrecognized client has slug null and always counts).
-	const otherSelected = new Set(tools.filter((t) => t !== "other_mcp"));
+	const otherSelected = new Set(tools.filter((slug) => slug !== "other_mcp"));
 	const hasUnclaimedMcp = (connections.data ?? []).some(
 		(c) => c.kind === "mcp" && !(c.slug && otherSelected.has(c.slug)),
 	);
 
+	function toolLabel(slug: string): string {
+		const known = TOOL_LABELS[slug];
+		return known ? t(known) : t("Connect {tool}", { tool: slug });
+	}
+
 	const items: Item[] = [
 		{
 			key: "vault",
-			label: "Create your first vault",
+			label: t("Create your first vault"),
 			done: ob.has("first_vault_created"),
 		},
 		{
 			key: "join_discord",
-			label: "Join our Discord",
+			label: t("Join our Discord"),
 			done: false,
 			dismissed: isDismissed("join_discord"),
 			docUrl: DISCORD_INVITE_URL,
-			actionLabel: "Join",
+			actionLabel: t("Join"),
 			dismissible: true,
 		},
 		...(profile?.uses_obsidian
 			? [
 					{
 						key: "install_obsidian_plugin",
-						label: "Install the Obsidian plugin",
+						label: t("Install the Obsidian plugin"),
 						done: hasObsidianConnection,
 						dismissed: isDismissed("install_obsidian_plugin"),
 						docUrl: DOC_URLS.install_obsidian_plugin,
@@ -175,7 +183,7 @@ function ChecklistWidget() {
 		...tools.map(
 			(slug): Item => ({
 				key: slug,
-				label: TOOL_LABELS[slug] ?? `Connect ${slug}`,
+				label: toolLabel(slug),
 				done: slug === "other_mcp" ? hasUnclaimedMcp : connectedSlugs.has(slug),
 				dismissed: isDismissed(slug),
 				docUrl: DOC_URLS[slug] ?? DOC_FALLBACK,
@@ -206,19 +214,19 @@ function ChecklistWidget() {
 			<Button
 				type="button"
 				size="lg"
-				aria-label="Open setup checklist"
+				aria-label={t("Open setup checklist")}
 				className="fixed right-4 bottom-4 z-40 h-12 animate-surface-attention-pulse gap-2 overflow-hidden rounded-full px-5 text-base shadow-xl ring-1 ring-primary/30 [&_svg:not([class*='size-'])]:size-5"
 				onClick={() => setCollapsed(false)}
 			>
 				<Waypoints aria-hidden />
-				<span className="relative">Finish setup</span>
+				<span className="relative">{t("Finish setup")}</span>
 				<Shimmer gradient="from-transparent via-white/40 to-transparent" />
 			</Button>
 		) : (
 			<Button
 				type="button"
 				size="icon"
-				aria-label={`Open setup checklist, ${remaining} remaining`}
+				aria-label={t("Open setup checklist, {remaining} remaining", { remaining })}
 				// Rides above the editor toolbar when the keyboard is up. The var is
 				// published by KeyboardBar and defaults to 0px, so this is exactly
 				// bottom-4 everywhere else.
@@ -249,9 +257,9 @@ function ChecklistWidget() {
 			<Sheet open onOpenChange={(next) => setCollapsed(!next)}>
 				<SheetContent side="bottom" className="max-h-[80vh] gap-0 p-0">
 					<SheetHeader className="border-border border-b">
-						<SheetTitle className="text-base">Finish setup</SheetTitle>
+						<SheetTitle className="text-base">{t("Finish setup")}</SheetTitle>
 						<SheetDescription className="sr-only">
-							Steps left to finish setting up Engram
+							{t("Steps left to finish setting up Engram")}
 						</SheetDescription>
 					</SheetHeader>
 					{body}
@@ -262,17 +270,17 @@ function ChecklistWidget() {
 
 	return (
 		<section
-			aria-label="Onboarding checklist"
+			aria-label={t("Onboarding checklist")}
 			// max-h + flex column so a long tool list scrolls inside the panel
 			// rather than running off the bottom of the viewport.
 			className="fixed right-4 bottom-4 z-40 flex max-h-[70vh] w-96 flex-col overflow-hidden rounded-xl border border-border bg-background shadow-xl ring-1 ring-primary/10"
 		>
 			<header className="relative flex flex-row items-center justify-between overflow-hidden border-border border-b px-4 py-3">
 				<Shimmer />
-				<h2 className="relative font-semibold text-base tracking-tight">Finish setup</h2>
+				<h2 className="relative font-semibold text-base tracking-tight">{t("Finish setup")}</h2>
 				<button
 					type="button"
-					aria-label="Dismiss checklist"
+					aria-label={t("Dismiss checklist")}
 					className="relative rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
 					onClick={() => setCollapsed(true)}
 				>
@@ -299,6 +307,7 @@ interface BodyProps {
  * derived in ChecklistWidget.
  */
 function ChecklistBody({ visible, total, completed, pct, isFreeTier, onDismiss }: BodyProps) {
+	const { t } = useT();
 	return (
 		<>
 			{total > 0 && (
@@ -310,7 +319,7 @@ function ChecklistBody({ visible, total, completed, pct, isFreeTier, onDismiss }
 						/>
 					</div>
 					<p className="mt-1.5 text-muted-foreground text-xs">
-						{completed} of {total} done
+						{t("{completed} of {total} done", { completed, total })}
 					</p>
 				</div>
 			)}
@@ -342,14 +351,14 @@ function ChecklistBody({ visible, total, completed, pct, isFreeTier, onDismiss }
 												track("checklist_action", { item: i.key, action: "guide_opened" })
 											}
 										>
-											{i.actionLabel ?? "Setup guide"} ↗
+											{i.actionLabel ?? t("Setup guide")} ↗
 										</a>
 									</Button>
 								) : null}
 								{Boolean(i.dismissible) && (
 									<button
 										type="button"
-										aria-label={`Dismiss ${i.label}`}
+										aria-label={t("Dismiss {label}", { label: i.label })}
 										className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
 										onClick={() => {
 											track("checklist_action", { item: i.key, action: "dismissed" });
@@ -366,13 +375,13 @@ function ChecklistBody({ visible, total, completed, pct, isFreeTier, onDismiss }
 			</ul>
 			{isFreeTier ? (
 				<p className="shrink-0 border-border border-t px-4 py-3 text-muted-foreground text-xs">
-					You're on Free, 1 connection.{" "}
+					{t("You're on Free, 1 connection.")}{" "}
 					<Link
 						to="/onboard/billing"
 						onClick={() => track("upgrade_link_clicked", { source: "checklist" })}
 						className="font-medium text-foreground underline underline-offset-4"
 					>
-						Upgrade
+						{t("Upgrade")}
 					</Link>
 				</p>
 			) : null}

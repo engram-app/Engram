@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useT } from "@/i18n/locale-provider";
 import AuthPanel from "@/layout/auth-panel";
 import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
 import { track } from "../analytics/track";
@@ -27,6 +28,7 @@ function tryLoadVersion(doc: "terms" | "privacy", version: string | undefined): 
 }
 
 export default function AgreementPage() {
+	const { t } = useT();
 	const [agreed, setAgreed] = useState(false);
 	const navigate = useNavigate();
 	const { data } = useOnboardingStatus();
@@ -64,7 +66,7 @@ export default function AgreementPage() {
 
 	return (
 		<AuthPanel className="flex flex-col gap-4">
-			<h1 className={heading}>Review the Terms</h1>
+			<h1 className={heading}>{t("Review the Terms")}</h1>
 			<p className="text-muted-foreground text-sm">
 				Please read the full agreement below before continuing. Our{" "}
 				<a
@@ -80,11 +82,12 @@ export default function AgreementPage() {
 			{unavailable ? (
 				<div role="alert" className={destructiveAlert}>
 					<p className="font-medium text-foreground">
-						The current agreement isn’t available right now.
+						{t("The current agreement isn’t available right now.")}
 					</p>
 					<p className="mt-1 text-muted-foreground">
-						We can’t display the latest terms at the moment, so signup is paused rather than asking
-						you to agree to something you can’t read. Please try again shortly.
+						{t(
+							"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.",
+						)}
 					</p>
 				</div>
 			) : (
@@ -112,7 +115,7 @@ export default function AgreementPage() {
 						disabled={!agreed || isPending || !ready}
 						className="w-full rounded-lg bg-primary px-4 py-2 font-medium text-primary-foreground text-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
 					>
-						{isPending ? "Saving…" : "Continue"}
+						{isPending ? t("Saving…") : t("Continue")}
 					</button>
 				</>
 			)}

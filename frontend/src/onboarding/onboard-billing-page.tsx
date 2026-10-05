@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { Navigate, useNavigate } from "react-router";
 import { toast } from "sonner";
+import { useT } from "@/i18n/locale-provider";
 import { cn } from "@/lib/utils";
 import { api } from "../api/client";
 import { type OnboardingStatus, useBillingStatus, useOnboardingStatus } from "../api/queries";
@@ -11,6 +12,7 @@ import LoadingScreen from "../layout/loading-screen";
 import { onboardingNext } from "./onboarding-next";
 
 export default function OnboardBillingPage() {
+	const { t } = useT();
 	const navigate = useNavigate();
 	const qc = useQueryClient();
 	const { data: onboarding } = useOnboardingStatus();
@@ -40,11 +42,11 @@ export default function OnboardBillingPage() {
 			const next = onboardingNext(status);
 			navigate(next, { replace: true });
 		} catch {
-			toast.error("Could not continue. Please try again.");
+			toast.error(t("Could not continue. Please try again."));
 		} finally {
 			setFreeLoading(false);
 		}
-	}, [navigate, qc]);
+	}, [navigate, qc, t]);
 
 	// Cached/fetched status already past billing (e.g. user advanced in another
 	// tab, or returned to /onboard/billing after subscribing) — bounce forward
@@ -88,10 +90,10 @@ export default function OnboardBillingPage() {
 				{!checkoutActive && (
 					<header className="mb-4 text-center sm:mb-8">
 						<h1 className="font-extrabold text-2xl text-foreground tracking-tight sm:text-4xl">
-							Choose your plan
+							{t("Choose your plan")}
 						</h1>
 						<p className="mx-auto mt-1.5 max-w-md text-balance text-muted-foreground text-sm sm:mt-3 sm:text-base">
-							7-day free trial on paid plans. Card required, no charge until it ends.
+							{t("7-day free trial on paid plans. Card required, no charge until it ends.")}
 						</p>
 					</header>
 				)}
@@ -115,10 +117,10 @@ export default function OnboardBillingPage() {
 							disabled={freeLoading}
 							className="font-medium text-muted-foreground text-sm underline underline-offset-4 hover:text-foreground disabled:opacity-50"
 						>
-							Continue with Free →
+							{t("Continue with Free →")}
 						</button>
 						<p className="mt-2 text-muted-foreground text-xs">
-							{FREE_TIER.summary} · upgrade anytime
+							{t("{summary} · upgrade anytime", { summary: t(FREE_TIER.summary) })}
 						</p>
 					</section>
 				)}

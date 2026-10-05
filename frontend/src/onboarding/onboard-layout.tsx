@@ -1,5 +1,7 @@
 import { useEffect } from "react";
 import { Navigate, Outlet, useLocation } from "react-router";
+import { useT } from "@/i18n/locale-provider";
+import { Trans } from "@/i18n/trans";
 import { track } from "../analytics/track";
 import { type OnboardingStep, useOnboardingStatus } from "../api/queries";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
@@ -20,6 +22,7 @@ function stepFromPath(pathname: string): OnboardingStep | null {
 }
 
 export default function OnboardLayout() {
+	const { t } = useT();
 	const { logout } = useAuthAdapter();
 	const { pathname } = useLocation();
 	const { data, isLoading } = useOnboardingStatus();
@@ -65,7 +68,7 @@ export default function OnboardLayout() {
 
 	const index = current ? data.steps.indexOf(current) : -1;
 	const total = data.steps.length;
-	const counter = index >= 0 ? `Step ${index + 1} of ${total}` : null;
+	const counter = index >= 0 ? t("Step {step} of {total}", { step: index + 1, total }) : null;
 
 	// Someone pulled in here mid-OAuth is not doing a normal signup, and a
 	// wizard that says nothing about it reads like the connection silently
@@ -91,7 +94,7 @@ export default function OnboardLayout() {
 
 	return (
 		<AuthShell
-			navLabel="Onboarding"
+			navLabel={t("Onboarding")}
 			actions={
 				<>
 					{counter ? <p className="text-muted-foreground text-sm">{counter}</p> : null}
@@ -100,7 +103,7 @@ export default function OnboardLayout() {
 						onClick={() => logout()}
 						className="text-muted-foreground text-sm transition hover:text-foreground"
 					>
-						Sign out
+						{t("Sign out")}
 					</button>
 				</>
 			}
@@ -111,11 +114,16 @@ export default function OnboardLayout() {
 					className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-muted/40 p-3 text-sm"
 				>
 					<p className="text-muted-foreground">
-						Finish setting up to connect{" "}
-						<span className="font-medium text-foreground">
-							{pending.clientName ?? "the app that sent you here"}
-						</span>
-						.
+						<Trans
+							text="Finish setting up to connect {app}."
+							slots={{
+								app: (
+									<span className="font-medium text-foreground">
+										{pending.clientName ?? t("the app that sent you here")}
+									</span>
+								),
+							}}
+						/>
 					</p>
 					{/* Rendered only when the refusal can actually be delivered.
 					    A button that silently no-ops reads as a broken app. */}
@@ -125,7 +133,7 @@ export default function OnboardLayout() {
 							onClick={cancelPending}
 							className="text-muted-foreground underline underline-offset-4 transition hover:text-foreground"
 						>
-							Cancel connection
+							{t("Cancel connection")}
 						</button>
 					) : null}
 				</aside>

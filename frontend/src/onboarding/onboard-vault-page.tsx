@@ -3,6 +3,8 @@ import { FilePlus2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Navigate, useNavigate } from "react-router";
 import { useAutofocus } from "@/hooks/use-autofocus";
+import { useT } from "@/i18n/locale-provider";
+import { Trans } from "@/i18n/trans";
 import AuthPanel from "@/layout/auth-panel";
 import { heading } from "@/lib/ui-classes";
 import { track } from "../analytics/track";
@@ -40,6 +42,7 @@ function VaultStep({
 	createVault,
 	navigate,
 }: VaultStepProps) {
+	const { t } = useT();
 	// Mid-flow refresh: if uses_obsidian was already POSTed in a prior visit,
 	// pre-select that side so the user sees the inline panel for the branch
 	// they picked instead of an empty source toggle.
@@ -105,7 +108,7 @@ function VaultStep({
 
 	async function commitFresh(name: string) {
 		await setProfile.mutateAsync({ uses_obsidian: false });
-		const trimmed = name.trim() || "My Vault";
+		const trimmed = name.trim() || t("My Vault");
 		const vault = await createVault.mutateAsync({
 			name: trimmed,
 			client_id: vaultClientId,
@@ -129,7 +132,9 @@ function VaultStep({
 			isCommitting={setProfile.isPending || createVault.isPending}
 			pickError={
 				setProfile.isError && !obsidianCommitted
-					? "Could not save your choice. Try clicking again — if it keeps failing, refresh the page."
+					? t(
+							"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.",
+						)
 					: null
 			}
 			onCommitObsidian={commitObsidian}
@@ -159,13 +164,15 @@ function SourceScreen({
 	onCommitObsidian,
 	onCommitFresh,
 }: SourceScreenProps) {
+	const { t } = useT();
 	return (
 		<AuthPanel className="flex flex-col gap-5">
 			<header className="flex flex-col gap-2">
-				<h1 className={heading}>Let's get your notes in.</h1>
+				<h1 className={heading}>{t("Let's get your notes in.")}</h1>
 				<p className="text-muted-foreground text-sm">
-					If you have an Obsidian vault, we'll pull it in on the first connect. If not, we'll spin
-					up a new vault for you.
+					{t(
+						"If you have an Obsidian vault, we'll pull it in on the first connect. If not, we'll spin up a new vault for you.",
+					)}
 				</p>
 			</header>
 
@@ -178,15 +185,17 @@ function SourceScreen({
 							dangerouslySetInnerHTML={{ __html: obsidianMark }}
 						/>
 					}
-					title="I already use Obsidian"
-					body="Install our plugin and your existing notes sync over on the first connect."
+					title={t("I already use Obsidian")}
+					body={t("Install our plugin and your existing notes sync over on the first connect.")}
 					selected={source === "obsidian"}
 					onClick={() => onPickSource("obsidian")}
 				/>
 				<SourceCard
 					icon={<FilePlus2 aria-hidden className="size-6 shrink-0 text-foreground" />}
-					title="I'm starting fresh"
-					body="We'll create your first vault right now. You can rename it or add more later from settings."
+					title={t("I'm starting fresh")}
+					body={t(
+						"We'll create your first vault right now. You can rename it or add more later from settings.",
+					)}
 					selected={source === "fresh"}
 					onClick={() => onPickSource("fresh")}
 				/>
@@ -252,6 +261,7 @@ interface ObsidianInlinePanelProps {
 }
 
 function ObsidianInlinePanel({ userId, isCommitting, onCommit }: ObsidianInlinePanelProps) {
+	const { t } = useT();
 	const config = useConfig();
 	const { vaultCreated, vaultPopulated, vaultId } = useVaultReadyEvents({
 		userId,
@@ -276,27 +286,37 @@ function ObsidianInlinePanel({ userId, isCommitting, onCommit }: ObsidianInlineP
 	return (
 		<div className="flex flex-col gap-4 rounded-xl border border-border bg-muted/30 p-4 sm:p-5">
 			<h2 className="font-semibold text-foreground text-lg">
-				Install the Engram Vault Sync plugin
+				{t("Install the Engram Vault Sync plugin")}
 			</h2>
 			<ol className="flex list-decimal flex-col gap-3 pl-5 text-base text-foreground">
 				<li>
 					<div className="flex flex-col gap-1">
 						<span>
-							In Obsidian: <strong>Settings → Community plugins → Browse</strong>, search{" "}
-							<em>Engram Vault Sync</em>, then install and enable it.
+							<Trans
+								text="In Obsidian: {path}, search {plugin}, then install and enable it."
+								slots={{
+									path: <strong>{t("Settings → Community plugins → Browse")}</strong>,
+									plugin: <em>Engram Vault Sync</em>,
+								}}
+							/>
 						</span>
 						<span className="text-muted-foreground text-sm">
-							Or open the{" "}
-							<a
-								href="https://community.obsidian.md/plugins/engram-vault-sync"
-								target="_blank"
-								rel="noreferrer noopener"
-								onClick={() => track("plugin_listing_opened")}
-								className="font-medium text-primary underline-offset-2 hover:underline"
-							>
-								plugin listing
-							</a>{" "}
-							in your browser first.
+							<Trans
+								text="Or open the {listing} in your browser first."
+								slots={{
+									listing: (
+										<a
+											href="https://community.obsidian.md/plugins/engram-vault-sync"
+											target="_blank"
+											rel="noreferrer noopener"
+											onClick={() => track("plugin_listing_opened")}
+											className="font-medium text-primary underline-offset-2 hover:underline"
+										>
+											{t("plugin listing")}
+										</a>
+									),
+								}}
+							/>
 						</span>
 					</div>
 				</li>
@@ -304,23 +324,34 @@ function ObsidianInlinePanel({ userId, isCommitting, onCommit }: ObsidianInlineP
 					<li>
 						<div className="flex flex-col gap-1">
 							<span>
-								Open the plugin's <strong>🖥️ Self-hosted</strong> tab, enter your Engram server URL,
-								and click <strong>Sign in</strong>.
+								<Trans
+									text="Open the plugin's {tab} tab, enter your Engram server URL, and click {action}."
+									slots={{
+										tab: <strong>{t("🖥️ Self-hosted")}</strong>,
+										action: <strong>{t("Sign in")}</strong>,
+									}}
+								/>
 							</span>
 							<span className="text-muted-foreground text-sm">
-								Use the same URL you used to reach this page.
+								{t("Use the same URL you used to reach this page.")}
 							</span>
 						</div>
 					</li>
 				) : (
 					<li>
-						Open the plugin's <strong>☁️ Cloud</strong> tab, click <strong>Sign in</strong>, and
-						authenticate with your Engram account.
+						<Trans
+							text="Open the plugin's {tab} tab, click {action}, and authenticate with your Engram account."
+							slots={{
+								tab: <strong>{t("☁️ Cloud")}</strong>,
+								action: <strong>{t("Sign in")}</strong>,
+							}}
+						/>
 					</li>
 				)}
 				<li>
-					Pick a vault to sync. The plugin creates a matching Engram vault and pushes your existing
-					files.
+					{t(
+						"Pick a vault to sync. The plugin creates a matching Engram vault and pushes your existing files.",
+					)}
 				</li>
 			</ol>
 			<StatusRow stage={stage} />
@@ -329,10 +360,11 @@ function ObsidianInlinePanel({ userId, isCommitting, onCommit }: ObsidianInlineP
 }
 
 function StatusRow({ stage }: { stage: "waiting" | "detected" | "syncing" }) {
+	const { t } = useT();
 	const labels: Record<typeof stage, string> = {
-		waiting: "Waiting for the plugin to sign in…",
-		detected: "Vault detected. Waiting for your first sync…",
-		syncing: "Syncing your notes, almost there…",
+		waiting: t("Waiting for the plugin to sign in…"),
+		detected: t("Vault detected. Waiting for your first sync…"),
+		syncing: t("Syncing your notes, almost there…"),
 	};
 	return <SyncStatusPill message={labels[stage]} />;
 }
@@ -345,7 +377,8 @@ interface FreshInlinePanelProps {
 }
 
 function FreshInlinePanel({ isCommitting, onCommit }: FreshInlinePanelProps) {
-	const [name, setName] = useState("My Vault");
+	const { t } = useT();
+	const [name, setName] = useState(() => t("My Vault"));
 	const [error, setError] = useState<string | null>(null);
 	const nameRef = useAutofocus<HTMLInputElement>();
 
@@ -354,7 +387,7 @@ function FreshInlinePanel({ isCommitting, onCommit }: FreshInlinePanelProps) {
 		try {
 			await onCommit(name);
 		} catch (err) {
-			setError(err instanceof Error ? err.message : "Could not create vault");
+			setError(err instanceof Error ? err.message : t("Could not create vault"));
 		}
 	}
 
@@ -362,13 +395,14 @@ function FreshInlinePanel({ isCommitting, onCommit }: FreshInlinePanelProps) {
 
 	return (
 		<div className="flex flex-col gap-4 rounded-xl border border-border bg-muted/30 p-4 sm:p-5">
-			<h2 className="font-semibold text-base text-foreground">Name your first vault</h2>
+			<h2 className="font-semibold text-base text-foreground">{t("Name your first vault")}</h2>
 			<p className="text-muted-foreground text-sm">
-				A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't
-				empty when you arrive.
+				{t(
+					"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.",
+				)}
 			</p>
 			<label className="flex flex-col gap-2 text-sm">
-				<span className="font-medium text-foreground">Vault name</span>
+				<span className="font-medium text-foreground">{t("Vault name")}</span>
 				<input
 					ref={nameRef}
 					type="text"
@@ -389,7 +423,7 @@ function FreshInlinePanel({ isCommitting, onCommit }: FreshInlinePanelProps) {
 				disabled={disabled}
 				className="rounded-lg bg-primary px-4 py-2 font-medium text-primary-foreground text-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
 			>
-				{isCommitting ? "Creating…" : "Create vault & continue"}
+				{isCommitting ? t("Creating…") : t("Create vault & continue")}
 			</button>
 		</div>
 	);
