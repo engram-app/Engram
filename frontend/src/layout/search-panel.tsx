@@ -236,7 +236,7 @@ function SearchPanel({
 	// A capped user's un-indexed notes are simply absent from results. Without
 	// this the only signal is an empty result list, which reads as "search is
 	// broken" rather than "this note is not indexed yet".
-	const unsearchable = indexStatus ? unsearchableNotesNotice(indexStatus) : null;
+	const unsearchable = indexStatus ? unsearchableNotesNotice(indexStatus, tn) : null;
 	const [recent, setRecent] = useState<string[]>(() => readRecent());
 
 	const inputRef = useRef<HTMLInputElement>(null);

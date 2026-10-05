@@ -10,6 +10,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import type { Translate } from "@/lib/translator";
 import { ctaFilled, ctaOutline } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import type { CheckoutMethod } from "../analytics/events";
@@ -132,14 +133,14 @@ function paymentMethodFrom(data: unknown): string | undefined {
 	return typeof type === "string" ? type : undefined;
 }
 
-async function downloadInvoice(transactionId: string) {
+async function downloadInvoice(transactionId: string, t: Translate) {
 	try {
 		const { url } = await api.get<{ url: string }>(
 			`/billing/transactions/${transactionId}/invoice`,
 		);
 		window.open(url, "_blank", "noopener");
 	} catch {
-		toast.error("Could not fetch that invoice. Please try again.");
+		toast.error(t("Could not fetch that invoice. Please try again."));
 	}
 }
 
@@ -168,17 +169,18 @@ function SlowActivationBanner({
 	transactionId: string | null;
 	onRefresh: () => void;
 }) {
+	const { t } = useT();
 	return (
 		<div role="alert" className="rounded-lg border border-border bg-muted/50 p-4 text-sm">
 			<p className="font-medium text-foreground">
-				Payment received. We're finishing your activation in the background.
+				{t("Payment received. We're finishing your activation in the background.")}
 			</p>
 			<p className="mt-1 text-muted-foreground">
-				This usually takes seconds. Refresh in a moment, or contact support if it persists.
+				{t("This usually takes seconds. Refresh in a moment, or contact support if it persists.")}
 			</p>
 			<div className="mt-3 flex flex-wrap gap-2">
 				<Button size="sm" onClick={onRefresh}>
-					Refresh
+					{t("Refresh")}
 				</Button>
 				<Button
 					size="sm"
@@ -191,11 +193,13 @@ function SlowActivationBanner({
 						window.location.href = `mailto:support@engram.page?subject=${subject}&body=${body}`;
 					}}
 				>
-					Contact support
+					{t("Contact support")}
 				</Button>
 			</div>
 			{transactionId ? (
-				<p className="mt-3 text-muted-foreground text-xs">Reference: {transactionId}</p>
+				<p className="mt-3 text-muted-foreground text-xs">
+					{t("Reference: {id}", { id: transactionId })}
+				</p>
 			) : null}
 		</div>
 	);
@@ -205,8 +209,9 @@ function SlowActivationBanner({
 // not jump when billing status + Paddle init resolve. Shape: optional
 // heading, cadence toggle row, two cards in the same grid as the real cards.
 function BillingPageSkeleton({ hideHeading }: { hideHeading: boolean }) {
+	const { t } = useT();
 	return (
-		<article className="space-y-6" aria-busy="true" aria-label="Loading billing">
+		<article className="space-y-6" aria-busy="true" aria-label={t("Loading billing")}>
 			{!hideHeading && (
 				<header className="space-y-2">
 					<Skeleton className="h-6 w-32" />
@@ -260,7 +265,12 @@ export default function BillingPage({
 	const qc = useQueryClient();
 	// Per-checkout, NOT in the init effect: that effect rebuilds the Paddle
 	// instance, which strands an open checkout (see the theme note there).
-	const checkoutLocale = paddleLocale(useT().renderedLocale);
+	const { t, renderedLocale } = useT();
+	const checkoutLocale = paddleLocale(renderedLocale);
+	// Ref mirror: the Paddle init effect must not re-run (and strand an open
+	// checkout) when the UI language changes, so its eventCallback reads t here.
+	const tRef = useRef(t);
+	tRef.current = t;
 	const { data: indexStatus } = useIndexStatus();
 	const [paddle, setPaddle] = useState<Paddle>();
 	// Ref mirror of `paddle` so the eventCallback (captured pre-instance) can
@@ -326,12 +336,12 @@ export default function BillingPage({
 		if (completedAt === null) {
 			return;
 		}
-		const t = setTimeout(() => {
+		const timer = setTimeout(() => {
 			paddleRef.current?.Checkout.close();
 			setSlow(true);
 			setCheckingOut(false);
 		}, COOLDOWN_MS);
-		return () => clearTimeout(t);
+		return () => clearTimeout(timer);
 	}, [completedAt]);
 
 	// Push handler — Paddle webhook flipped the subscription server-side and
@@ -498,7 +508,7 @@ export default function BillingPage({
 						setCheckingOut(false);
 						setCompletedAt(null);
 						setSlow(false);
-						toast.error("Something went wrong with checkout. Please try again.");
+						toast.error(tRef.current("Something went wrong with checkout. Please try again."));
 						break;
 					}
 					default:
@@ -631,7 +641,7 @@ export default function BillingPage({
 			const { url } = await api.get<{ url: string }>(path);
 			window.location.href = url;
 		} catch {
-			toast.error("Could not open the billing portal. Please try again.");
+			toast.error(t("Could not open the billing portal. Please try again."));
 			setPortalLoading(false);
 		}
 	}
@@ -652,7 +662,7 @@ export default function BillingPage({
 				settings: { ...checkoutSettings(isInline), locale: checkoutLocale },
 			});
 		} catch {
-			toast.error("Could not start the payment update. Please try again.");
+			toast.error(t("Could not start the payment update. Please try again."));
 		} finally {
 			setPortalLoading(false);
 		}
@@ -662,8 +672,10 @@ export default function BillingPage({
 		<article className="space-y-6">
 			{!hideHeading && (
 				<header>
-					<h1 className="font-semibold text-foreground text-xl">Billing</h1>
-					<p className="mt-1 text-muted-foreground text-sm">Manage your plan and payment method.</p>
+					<h1 className="font-semibold text-foreground text-xl">{t("Billing")}</h1>
+					<p className="mt-1 text-muted-foreground text-sm">
+						{t("Manage your plan and payment method.")}
+					</p>
 				</header>
 			)}
 
@@ -671,7 +683,7 @@ export default function BillingPage({
 				<CurrentPlanCard billing={billing} indexStatus={indexStatus}>
 					{billing.subscription && panel === null && (
 						<div className="flex flex-wrap justify-end gap-3">
-							<Button onClick={() => setPanel("change")}>Change plan</Button>
+							<Button onClick={() => setPanel("change")}>{t("Change plan")}</Button>
 							{/* Hide Cancel when (a) the subscription is already canceled,
                   OR (b) a scheduled cancel is in flight — Paddle keeps
                   status='active' until the effective date, so without the
@@ -681,7 +693,7 @@ export default function BillingPage({
 							{billing.subscription.status !== "canceled" &&
 								detail?.scheduled_change?.action !== "cancel" && (
 									<Button variant="destructive" onClick={() => setPanel("cancel")}>
-										Cancel subscription
+										{t("Cancel subscription")}
 									</Button>
 								)}
 						</div>
@@ -722,7 +734,7 @@ export default function BillingPage({
 							className="flex flex-col items-center justify-center gap-3 py-16 text-center"
 						>
 							<Loader2 className="size-6 animate-spin text-primary" aria-hidden="true" />
-							<p className="text-muted-foreground text-sm">Setting up your account…</p>
+							<p className="text-muted-foreground text-sm">{t("Setting up your account…")}</p>
 						</section>
 					) : slow ? (
 						<SlowActivationBanner
@@ -743,7 +755,7 @@ export default function BillingPage({
 								// onboard-billing-page.tsx) regardless of app theme.
 								className="text-gray-700 text-sm underline-offset-4 hover:text-gray-900 hover:underline"
 							>
-								← Choose a different plan
+								{t("← Choose a different plan")}
 							</button>
 							{DEV_FAKE_CHECKOUT ? (
 								// Fixed light colors throughout, not theme tokens: this stub
@@ -791,9 +803,9 @@ export default function BillingPage({
 						<>
 							{!hideHeading && (
 								<>
-									<h2 className="font-semibold text-foreground text-lg">Choose a Plan</h2>
+									<h2 className="font-semibold text-foreground text-lg">{t("Choose a Plan")}</h2>
 									<p className="text-muted-foreground text-sm">
-										Both plans include a 7-day free trial.
+										{t("Both plans include a 7-day free trial.")}
 									</p>
 								</>
 							)}
@@ -828,11 +840,11 @@ export default function BillingPage({
 							<ul className="flex flex-col gap-2 sm:hidden">
 								<PlanAccordionRow
 									name={PLAN_CATALOG.pro.name}
-									price={formatPlanPrice(PLAN_CATALOG.pro, cadence)}
-									summary="Unlimited vaults · 50 GB · cross-vault search + API"
+									price={formatPlanPrice(PLAN_CATALOG.pro, cadence, t)}
+									summary={t("Unlimited vaults · 50 GB · cross-vault search + API")}
 									features={PLAN_CATALOG.pro.features}
-									ctaLabel="Choose Pro"
-									ctaNote="7-day free trial · cancel anytime"
+									ctaLabel={t("Choose Pro")}
+									ctaNote={t("7-day free trial · cancel anytime")}
 									onClick={() => handleStartCheckout("pro")}
 									disabled={!checkoutReady}
 									recommended
@@ -841,11 +853,11 @@ export default function BillingPage({
 								/>
 								<PlanAccordionRow
 									name={PLAN_CATALOG.starter.name}
-									price={formatPlanPrice(PLAN_CATALOG.starter, cadence)}
-									summary="10 vaults · 10 GB · unlimited AI"
+									price={formatPlanPrice(PLAN_CATALOG.starter, cadence, t)}
+									summary={t("10 vaults · 10 GB · unlimited AI")}
 									features={PLAN_CATALOG.starter.features}
-									ctaLabel="Choose Starter"
-									ctaNote="7-day free trial · cancel anytime"
+									ctaLabel={t("Choose Starter")}
+									ctaNote={t("7-day free trial · cancel anytime")}
 									onClick={() => handleStartCheckout("starter")}
 									disabled={!checkoutReady}
 									open={openTier === "starter"}
@@ -855,9 +867,9 @@ export default function BillingPage({
 									<PlanAccordionRow
 										name={FREE_TIER.name}
 										price={FREE_TIER.price}
-										summary={FREE_TIER.summary}
+										summary={t(FREE_TIER.summary)}
 										features={[...FREE_TIER.features]}
-										ctaLabel="Choose Free"
+										ctaLabel={t("Choose Free")}
 										onClick={freeOption.onContinue}
 										disabled={freeOption.loading}
 										quietCta
@@ -881,7 +893,7 @@ export default function BillingPage({
 					/>
 					<BillingHistoryTable
 						transactions={history?.transactions ?? []}
-						onDownload={downloadInvoice}
+						onDownload={(id) => downloadInvoice(id, t)}
 					/>
 					{/* Escape hatch: if the inline panels above fail (Paddle UI bug,
               network blip, an action we don't yet support inline) the user
@@ -896,11 +908,12 @@ export default function BillingPage({
 							disabled={portalLoading}
 						>
 							{Boolean(portalLoading) && <Loader2 aria-hidden className="size-4 animate-spin" />}
-							{portalLoading ? "Opening Paddle…" : "Open Paddle billing portal"}
+							{portalLoading ? t("Opening Paddle…") : t("Open Paddle billing portal")}
 						</Button>
 						<p className="text-muted-foreground text-xs">
-							Paddle is our payment processor. Use this if the controls above don't cover what you
-							need.
+							{t(
+								"Paddle is our payment processor. Use this if the controls above don't cover what you need.",
+							)}
 						</p>
 					</div>
 				</>

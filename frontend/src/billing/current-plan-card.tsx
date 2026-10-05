@@ -1,13 +1,16 @@
 import { Sparkles } from "lucide-react";
 import { Children, type ReactNode } from "react";
+import { useT } from "@/i18n/locale-provider";
+import { msg } from "@/i18n/msg";
 import { cn } from "@/lib/utils";
 import type { BillingStatus, IndexStatus } from "../api/queries";
+import { statusLabel } from "./format";
 import { unsearchableNotesNotice } from "./plan-cards";
 
 const TIER_LABELS: Record<BillingStatus["tier"], string> = {
-	free: "Free",
-	starter: "Starter",
-	pro: "Pro",
+	free: msg("Free"),
+	starter: msg("Starter"),
+	pro: msg("Pro"),
 };
 
 // Paid tiers get the flashier pill — gradient, ring, sparkle.
@@ -23,7 +26,8 @@ export default function CurrentPlanCard({
 	indexStatus?: IndexStatus;
 	children?: ReactNode;
 }) {
-	const unsearchable = indexStatus ? unsearchableNotesNotice(indexStatus) : null;
+	const { t, tn } = useT();
+	const unsearchable = indexStatus ? unsearchableNotesNotice(indexStatus, tn) : null;
 	const sub = billing.subscription;
 	const canceled = sub?.status === "canceled";
 	const trialing = sub?.status === "trialing";
@@ -32,12 +36,12 @@ export default function CurrentPlanCard({
 		: null;
 	// A canceled subscription keeps access until the period ends, so the same
 	// date means "renews" while live and "access ends" once cancellation is set.
-	const periodLabel = canceled ? "Access ends on" : "Renews on";
+	const periodLabel = canceled ? t("Access ends on") : t("Renews on");
 
 	return (
 		<section className="space-y-4 rounded-lg border border-border bg-card p-6">
 			<header className="flex items-center justify-between">
-				<h2 className="font-semibold text-foreground text-lg">Current Plan</h2>
+				<h2 className="font-semibold text-foreground text-lg">{t("Current Plan")}</h2>
 				<span
 					className={cn(
 						"inline-flex items-center gap-1.5 rounded-full px-3 py-1 font-semibold text-sm",
@@ -47,13 +51,19 @@ export default function CurrentPlanCard({
 					)}
 				>
 					{FLASHY_TIERS.includes(billing.tier) && <Sparkles aria-hidden className="size-3.5" />}
-					{TIER_LABELS[billing.tier]}
+					{t(TIER_LABELS[billing.tier])}
 				</span>
 			</header>
 
 			{trialing && billing.trial_days_remaining > 0 && (
 				<p className="text-muted-foreground text-sm">
-					{billing.trial_days_remaining} days remaining in your free trial.
+					{tn(
+						{
+							one: "{count} day remaining in your free trial.",
+							other: "{count} days remaining in your free trial.",
+						},
+						billing.trial_days_remaining,
+					)}
 				</p>
 			)}
 
@@ -61,8 +71,8 @@ export default function CurrentPlanCard({
 
 			{sub ? (
 				<dl className="grid grid-cols-2 gap-4 text-sm">
-					<dt className="text-muted-foreground">Status</dt>
-					<dd className="font-medium capitalize">{sub.status.replace("_", " ")}</dd>
+					<dt className="text-muted-foreground">{t("Status")}</dt>
+					<dd className="font-medium capitalize">{statusLabel(sub.status, t)}</dd>
 					{Boolean(periodEnd) && (
 						<>
 							<dt className="text-muted-foreground">{periodLabel}</dt>

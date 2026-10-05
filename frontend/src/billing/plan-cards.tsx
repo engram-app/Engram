@@ -1,4 +1,7 @@
 import { ChevronDown } from "lucide-react";
+import { useT } from "@/i18n/locale-provider";
+import { msg } from "@/i18n/msg";
+import type { Tn, Translate } from "@/lib/translator";
 import { ctaFilled, ctaOutline } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import type { BillingCadence, IndexStatus } from "../api/queries";
@@ -6,6 +9,7 @@ import type { BillingCadence, IndexStatus } from "../api/queries";
 // Feature checklist shared by the full card and the accordion row. `className`
 // merges extra layout (e.g. `flex-1` on the full card).
 function FeatureList({ features, className }: { features: string[]; className?: string }) {
+	const { t } = useT();
 	return (
 		<ul className={cn("space-y-1 text-muted-foreground text-sm", className)}>
 			{features.map((f) => (
@@ -13,7 +17,7 @@ function FeatureList({ features, className }: { features: string[]; className?: 
 					<span className="text-primary" aria-hidden="true">
 						&#10003;
 					</span>
-					{f}
+					{t(f)}
 				</li>
 			))}
 		</ul>
@@ -55,15 +59,18 @@ export interface PlanCardCatalog {
 export function formatPlanPrice(
 	catalog: Pick<PlanCardCatalog, "monthlyPrice" | "annualPrice">,
 	cadence: BillingCadence,
+	t: Translate,
 ): string {
-	return cadence === "monthly" ? `$${catalog.monthlyPrice}/mo` : `$${catalog.annualPrice}/yr`;
+	return cadence === "monthly"
+		? t("{price}/mo", { price: `$${catalog.monthlyPrice}` })
+		: t("{price}/yr", { price: `$${catalog.annualPrice}` });
 }
 
 // Free tier display copy. Not a PlanTier (no Paddle price / checkout), but
 // centralized here alongside the paid catalog so the onboarding accordion and
 // the desktop free-link can't drift.
 export const FREE_TIER = {
-	name: "Free",
+	name: msg("Free"),
 	price: "$0",
 	// "10k notes" was `notes_cap`, which never binds. The limit that actually
 	// binds on Free is `indexed_notes_cap: 2_000`, and per the v3.1 positioning
@@ -71,8 +78,13 @@ export const FREE_TIER = {
 	// Do not say "2,000 most recent": `IndexCap` orders `asc: created_at`, so
 	// the indexed set is the OLDEST 2,000 and it is the user's newest notes
 	// that fall outside.
-	summary: "2,000 notes searchable · 1 vault · 1 GB attachments",
-	features: ["2,000 notes searchable", "1 vault", "1 GB attachments", "2 devices"],
+	summary: msg("2,000 notes searchable · 1 vault · 1 GB attachments"),
+	features: [
+		msg("2,000 notes searchable"),
+		msg("1 vault"),
+		msg("1 GB attachments"),
+		msg("2 devices"),
+	],
 } as const;
 
 // The one "N notes are not searchable" line, shared by search and billing so
@@ -81,12 +93,20 @@ export const FREE_TIER = {
 // say so, never "your most recent notes are searchable". Uncapped tiers report
 // 0/0, so `hidden <= 0` covers them too. No tier name in the copy: a paid user
 // with a lowered `indexed_notes_cap` override is capped too.
-export function unsearchableNotesNotice({ indexed, total }: IndexStatus): string | null {
+export function unsearchableNotesNotice({ indexed, total }: IndexStatus, tn: Tn): string | null {
 	const hidden = total - indexed;
 	if (hidden <= 0) {
 		return null;
 	}
-	return `${hidden.toLocaleString()} of your notes ${hidden === 1 ? "isn't" : "aren't"} searchable. Only your oldest ${indexed.toLocaleString()} are indexed, so your newest notes won't show up in search.`;
+	return tn(
+		{
+			one: "{hidden} of your notes isn't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",
+			other:
+				"{hidden} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",
+		},
+		hidden,
+		{ hidden: hidden.toLocaleString(), indexed: indexed.toLocaleString() },
+	);
 }
 
 // Single catalog source-of-truth: both onboarding (trial signup) and the
@@ -97,13 +117,18 @@ export const PLAN_TIERS: readonly PlanTier[] = ["starter", "pro"];
 
 export const PLAN_CATALOG: Record<PlanTier, PlanCardCatalog> = {
 	starter: {
-		name: "Starter",
+		name: msg("Starter"),
 		monthlyPrice: 7,
 		annualPrice: 70,
-		features: ["10 vaults", "Unlimited devices", "10 GB attachments", "Unlimited AI searches"],
+		features: [
+			msg("10 vaults"),
+			msg("Unlimited devices"),
+			msg("10 GB attachments"),
+			msg("Unlimited AI searches"),
+		],
 	},
 	pro: {
-		name: "Pro",
+		name: msg("Pro"),
 		monthlyPrice: 14,
 		annualPrice: 140,
 		// Lead with what is actually Pro-ONLY. Unlimited devices and unlimited
@@ -113,7 +138,12 @@ export const PLAN_CATALOG: Record<PlanTier, PlanCardCatalog> = {
 		// keys that are genuinely pro-true in `LimitKeys`. Reranking is also
 		// pro-only but ships with RERANKER_BACKEND unset, so it stays off this
 		// list until the backend is actually deployed.
-		features: ["Unlimited vaults", "50 GB attachments", "Cross-vault search", "API access"],
+		features: [
+			msg("Unlimited vaults"),
+			msg("50 GB attachments"),
+			msg("Cross-vault search"),
+			msg("API access"),
+		],
 	},
 };
 
@@ -124,8 +154,9 @@ export function CadenceToggle({
 	cadence: BillingCadence;
 	onChange: (next: BillingCadence) => void;
 }) {
+	const { t } = useT();
 	return (
-		<div role="radiogroup" aria-label="Billing cadence" className="flex justify-center">
+		<div role="radiogroup" aria-label={t("Billing cadence")} className="flex justify-center">
 			<div className="inline-flex rounded-full border border-border bg-muted p-1 text-sm">
 				<label
 					className={cn(
@@ -143,7 +174,7 @@ export function CadenceToggle({
 						onChange={() => onChange("monthly")}
 						className="sr-only"
 					/>
-					Monthly
+					{t("Monthly")}
 				</label>
 				<label
 					className={cn(
@@ -161,14 +192,14 @@ export function CadenceToggle({
 						onChange={() => onChange("annual")}
 						className="sr-only"
 					/>
-					Annual{" "}
+					{t("Annual")}{" "}
 					<span
 						className={cn(
 							"ml-1 text-xs",
 							cadence === "annual" ? "text-primary-foreground/90" : "text-primary",
 						)}
 					>
-						save 17%
+						{t("save 17%")}
 					</span>
 				</label>
 			</div>
@@ -188,14 +219,15 @@ export function PlanCard({
 	recommended = false,
 	selected = false,
 	current = false,
-	ctaLabel = "Start free trial",
+	ctaLabel,
 	ctaSubLabel,
 }: PlanCardProps) {
-	const price = formatPlanPrice({ monthlyPrice, annualPrice }, cadence);
+	const { t } = useT();
+	const price = formatPlanPrice({ monthlyPrice, annualPrice }, cadence, t);
 	const subPrice =
 		cadence === "annual"
-			? `$${(annualPrice / 12).toFixed(2)}/mo billed yearly`
-			: `$${monthlyPrice * 12}/yr billed monthly`;
+			? t("{price}/mo billed yearly", { price: `$${(annualPrice / 12).toFixed(2)}` })
+			: t("{price}/yr billed monthly", { price: `$${monthlyPrice * 12}` });
 
 	// Effective state precedence — current beats selected beats recommended.
 	// Avoids the "everything is highlighted" failure mode if a parent passes
@@ -209,7 +241,7 @@ export function PlanCard({
 				: "idle";
 
 	const badgeText =
-		state === "current" ? "Your plan" : state === "recommended" ? "Most popular" : null;
+		state === "current" ? t("Your plan") : state === "recommended" ? t("Most popular") : null;
 
 	return (
 		<li
@@ -229,7 +261,7 @@ export function PlanCard({
 					{badgeText}
 				</span>
 			)}
-			<h3 className="font-semibold text-lg">{name}</h3>
+			<h3 className="font-semibold text-lg">{t(name)}</h3>
 			<p className="font-bold text-2xl">{price}</p>
 			<p className="-mt-3 text-muted-foreground text-xs">{subPrice}</p>
 			<FeatureList features={features} className="flex-1" />
@@ -240,11 +272,11 @@ export function PlanCard({
 					// visually reads as confirmation, not as a denied action.
 					<div
 						role="status"
-						aria-label="Your current plan"
+						aria-label={t("Your current plan")}
 						className="flex w-full items-center justify-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-4 py-2 font-medium text-primary text-sm"
 					>
 						<span aria-hidden="true">&#10003;</span>
-						<span>You're on this plan</span>
+						<span>{t("You're on this plan")}</span>
 					</div>
 				) : (
 					<>
@@ -260,7 +292,7 @@ export function PlanCard({
 								state === "recommended" || state === "selected" ? ctaFilled : ctaOutline,
 							)}
 						>
-							{ctaLabel}
+							{ctaLabel ?? t("Start free trial")}
 						</button>
 						{Boolean(selected && ctaSubLabel) && (
 							<p className="text-center text-muted-foreground text-xs">{ctaSubLabel}</p>
@@ -305,6 +337,7 @@ export function PlanAccordionRow({
 	recommended?: boolean;
 	quietCta?: boolean;
 }) {
+	const { t } = useT();
 	return (
 		<li
 			className={cn(
@@ -322,10 +355,10 @@ export function PlanAccordionRow({
 			>
 				<span className="flex min-w-0 flex-col gap-1">
 					<span className="flex flex-wrap items-center gap-x-2 font-semibold text-foreground text-sm">
-						<span>{name}</span>
+						<span>{t(name)}</span>
 						{Boolean(recommended) && (
 							<span className="inline-flex items-center rounded-full bg-primary px-2 pt-[4px] pb-[2px] font-semibold text-[10px] text-primary-foreground uppercase leading-none tracking-wide">
-								Popular
+								{t("Popular")}
 							</span>
 						)}
 						<span className="font-normal text-muted-foreground">· {price}</span>
