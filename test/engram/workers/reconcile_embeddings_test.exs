@@ -7,6 +7,13 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
   alias Engram.Parsers.Markdown
   alias Engram.Workers.{EmbedNote, ReconcileEmbeddings, RefreshKeywordVectors}
 
+  # The test embedder declares no model, which turns model tracking off; name
+  # one so the embed-model sweep is exercised (and current_note/2 stamps it).
+  setup do
+    Application.put_env(:engram, :embed_model, "test-embed-model")
+    on_exit(fn -> Application.delete_env(:engram, :embed_model) end)
+  end
+
   describe "perform/1" do
     test "queues jobs for notes with nil embed_hash" do
       user = insert(:user)
@@ -46,33 +53,35 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       )
     end
 
-    test "ignores a stale chunker_version — the cron must never start a mass re-embed" do
-      # #1620 added `notes.chunker_version` and taught EmbedNote to rebuild a
-      # note whose stamp is out of date. This cron was deliberately NOT taught
-      # the same thing: every already-indexed note in prod carries NULL, so
-      # selecting on it here would re-embed the entire corpus of every paying
-      # user on the next 15-minute tick, unprompted, the moment the migration
-      # lands. The backfill is operator-driven per vault instead.
-      #
-      # This is the assertion that protects that property — without it, adding
-      # one `or` to the eligibility query is a silent five-figure Voyage bill.
+    # #1620 deliberately kept this cron off chunker_version ("never start a
+    # mass re-embed"). Reversed 2026-10-04: every index version must reach
+    # existing notes automatically (self-hosters run no backfills), and a
+    # version-driven re-embed is unmetered maintenance. The 500-per-tick cap
+    # is what bounds the rate. A full rebuild covers keywords too, so the
+    # keyword sweep leaves these notes alone.
+    test "re-embeds a note whose chunker_version is stale" do
       user = insert(:user)
       insert(:subscription, user: user, tier: "pro", status: "active")
-
-      note =
-        note_for(user,
-          content_hash: "abc123",
-          embed_hash: "abc123",
-          dense_indexed_hash: "abc123",
-          chunker_version: nil
-        )
+      note = current_note(user, chunker_version: nil, keyword_version: nil)
 
       assert :ok = perform_job(ReconcileEmbeddings, %{})
 
-      refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
-      # Its keyword stamp is stale too (NULL), and that DOES self-heal, through
-      # the keyword-only path that never calls the embedder.
-      assert_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
+      assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+      refute_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
+    end
+
+    # A model switch (a self-hoster changing Ollama models) leaves old-model
+    # vectors that search cannot compare with new queries.
+    test "re-embeds a note whose dense vectors came from another embed model" do
+      user = insert(:user)
+      note = current_note(user, embed_model: "some-retired-model")
+      unknown = current_note(user, embed_model: nil)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+
+      for n <- [note, unknown] do
+        assert_enqueued(worker: EmbedNote, args: %{"note_id" => n.id})
+      end
     end
 
     # A keyword-encoding change must reach existing notes with no operator
@@ -501,15 +510,28 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
           content_hash: "abc123",
           embed_hash: "abc123",
           dense_indexed_hash: "abc123",
-          chunker_version: Markdown.chunker_version()
+          chunker_version: Markdown.chunker_version(),
+          embed_model: "test-embed-model",
+          keyword_version: KeywordIndex.version()
         ],
         attrs
       )
     )
   end
 
+  # Current version stamps by default, so a test about cooldowns, caps or
+  # entitlement is not swept by the version predicates instead. Pass
+  # `chunker_version: nil` (etc.) to test those.
   defp note_for(user, attrs) do
-    insert(:note, Keyword.merge([user: user, vault: insert(:vault, user: user)], attrs))
+    defaults = [
+      user: user,
+      vault: insert(:vault, user: user),
+      chunker_version: Markdown.chunker_version(),
+      keyword_version: KeywordIndex.version(),
+      embed_model: "test-embed-model"
+    ]
+
+    insert(:note, Keyword.merge(defaults, attrs))
   end
 
   defp insert_chunk!(note) do

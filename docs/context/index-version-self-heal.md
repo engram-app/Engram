@@ -17,7 +17,16 @@ worker that brings them current.
 | Change | Bump | Stamp | Sweep sends to | Cost |
 |---|---|---|---|---|
 | Keyword encoding: tokenizer, stemmer, BM25 weighting, WHICH text is encoded | `Engram.KeywordIndex` `@version` | `notes.keyword_version` | `RefreshKeywordVectors` (sparse vectors rewritten in place) | no embedder call |
-| Chunk boundaries or chunk text | `Engram.Parsers.Markdown` `@chunker_version` | `notes.chunker_version` | NOT YET SWEPT (see below) | full re-embed |
+| Chunk boundaries or chunk text | `Engram.Parsers.Markdown` `@chunker_version` | `notes.chunker_version` | `EmbedNote` (full rebuild) | re-embed, unmetered |
+| Embed model (`DOC_EMBED_MODEL` / `EMBED_MODEL` / the embedder's default) | nothing: config | `notes.embed_model` (dense notes only) | `EmbedNote` (full rebuild) | re-embed, unmetered |
+
+**Version rebuilds are unmetered (decided 2026-10-04).** A rebuild of unchanged
+content is our maintenance, not the user's usage: it never counts against an
+embed cap, even a spent one, and its spend is reported only as
+`engram_prom_ex_indexing_maintenance_embed_tokens_total`. A note that HAS
+dense vectors keeps them; a sparse-only note stays on the normal budget, so a
+bump never grants dense vectors a cap refused. A note needing a full rebuild
+skips the keyword sweep (the rebuild stamps both).
 
 NULL means "built before the stamp existed", which is stale. Neither column is
 backfilled by its migration: NULL is the evidence of which notes need work.
@@ -47,15 +56,12 @@ Qdrant point 404s `update_vectors`) is retried once per window, not every tick.
    also carry a stale `chunker_version` (2026-10-05), and `EmbedNote` answers
    that with a full re-embed.
 
-## Open: the chunker sweep
+## Cost of a bump
 
-`chunker_version` is stamped (#1620) but the sweep does not select on it: as of
-2026-10-05, turning it on re-embeds ~96% of prod (4,041 of 4,195 notes, ~20M
-tokens upper bound), including 2,475 notes of Free users, whose lifetime embed
-cap would be charged for our maintenance. Pending decision: version-driven
-re-embeds (content unchanged) bypass the user's meter. Until then a chunker
-bump still reaches only edited notes, and the keyword sweep's unmatched
-points (old chunk boundaries) keep their old keyword vectors.
+Every note re-embeds once, at 500 per 15-minute tick (about 48k notes a day).
+At the 2026-10-04 corpus (4,195 live notes, 96% on an older chunker) that is
+about 20M Voyage tokens at most, roughly $2.40, over about two hours. Settle
+chunking before it is expensive: bundle boundary changes into one bump.
 
 ## Rollout notes
 

@@ -86,7 +86,9 @@ defmodule Engram.Workers.RefreshKeywordVectors do
     {:ok, _} =
       Repo.with_tenant(note.user_id, fn ->
         Repo.update_all(
-          from(n in Note, where: n.id == ^note.id and n.content_hash == ^note.content_hash),
+          from(n in Note,
+            where: n.kind == "note" and n.id == ^note.id and n.content_hash == ^note.content_hash
+          ),
           set: [keyword_version: KeywordIndex.version()]
         )
       end)

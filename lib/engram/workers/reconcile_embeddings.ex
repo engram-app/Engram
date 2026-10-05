@@ -25,9 +25,11 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   import Ecto.Query
 
   alias Engram.Backfill.TenantScan
+  alias Engram.Indexing
   alias Engram.KeywordIndex
   alias Engram.Logger.Metadata
   alias Engram.Notes.Note
+  alias Engram.Parsers.Markdown
   alias Engram.Repo
   alias Engram.Vaults.Vault
   alias Engram.Workers.{EmbedNote, ExtractNoteLinks, RefreshKeywordVectors}
@@ -69,6 +71,13 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         select: 1
       )
 
+    # 3. indexed at its current content by an older chunker, or with dense
+    #    vectors from another embed model. #1620 kept this cron off
+    #    chunker_version ("never start a mass re-embed"); reversed 2026-10-04:
+    #    every index version reaches existing notes automatically, as
+    #    unmetered maintenance (EmbedNote), bounded by @batch_size per tick.
+    version_stale = version_stale_dynamic()
+
     sweep_tenant = fn remaining ->
       eligible =
         from(n in Note, as: :note)
@@ -104,16 +113,19 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         # A note whose embed budget is spent is kept out by the cooldown filter
         # below: EmbedNote parks it with a future `embed_retry_after`.
         |> where(
-          [n],
-          is_nil(n.embed_hash) or n.embed_hash != n.content_hash or
-            (is_nil(n.dense_indexed_hash) and
-               (exists(
-                  from(c in Engram.Notes.Chunk,
-                    where: c.note_id == parent_as(:note).id,
-                    select: 1
-                  )
-                ) or
-                  exists(paid)))
+          ^dynamic(
+            [n],
+            is_nil(n.embed_hash) or n.embed_hash != n.content_hash or
+              ^version_stale or
+              (is_nil(n.dense_indexed_hash) and
+                 (exists(
+                    from(c in Engram.Notes.Chunk,
+                      where: c.note_id == parent_as(:note).id,
+                      select: 1
+                    )
+                  ) or
+                    exists(paid)))
+          )
         )
         # Poison-loop guard: a note that exhausts its EmbedNote attempts gets an
         # embed_retry_after cooldown stamp. Skip it until the cooldown elapses so a
@@ -258,6 +270,25 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     :ok = sweep_keyword_stale(now, paid)
   end
 
+  defp version_stale_dynamic do
+    chunker = Markdown.chunker_version()
+    chunker_stale = dynamic([n], is_nil(n.chunker_version) or n.chunker_version != ^chunker)
+
+    case Indexing.embed_model() do
+      # The build cannot name its model: model tracking is off.
+      nil ->
+        chunker_stale
+
+      model ->
+        dynamic(
+          [n],
+          ^chunker_stale or
+            (n.dense_indexed_hash == n.content_hash and
+               (is_nil(n.embed_model) or n.embed_model != ^model))
+        )
+    end
+  end
+
   # Notes indexed at their current content whose keyword vectors predate
   # `KeywordIndex.version/0`: a keyword-encoding change (tokenizer, stemmer,
   # what text is encoded) reaches them here with no operator step, on SaaS and
@@ -292,6 +323,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
               |> where([n], n.kind == "note" and is_nil(n.deleted_at))
               |> where([n], n.embed_hash == n.content_hash)
               |> where([n], is_nil(n.keyword_version) or n.keyword_version != ^version)
+              # A version-stale note gets a full rebuild above, which stamps
+              # the keyword version itself.
+              |> where(^dynamic([n], not (^version_stale_dynamic())))
               |> where(
                 [n],
                 is_nil(n.embed_retry_after) or n.embed_retry_after <= ^now or

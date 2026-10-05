@@ -14,6 +14,9 @@ defmodule Engram.Embedders.Ollama do
   @default_url "http://localhost:11434"
   @default_model "nomic-embed-text"
 
+  @doc "The model used when `EMBED_MODEL` is unset (`Engram.Indexing.embed_model/0`)."
+  def default_model, do: @default_model
+
   @doc """
   Default Req options per embed purpose. Mirrors `Engram.Embedders.Voyage`.
 

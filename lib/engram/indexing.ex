@@ -663,6 +663,23 @@ defmodule Engram.Indexing do
   # silently mixes two models' embedding spaces (#1606).
   defp effective_embed_model, do: doc_embed_model() || Application.get_env(:engram, :embed_model)
 
+  @doc """
+  The model this build embeds documents with, stamped on `notes.embed_model`
+  by every dense pass. A note stamped with anything else is re-embedded by
+  `ReconcileEmbeddings`.
+  """
+  #
+  # Falls back to the embedder's own default, which is what it sends when
+  # `EMBED_MODEL` is unset (the common self-host case), so a switch between
+  # defaults is still a model change. nil only for an embedder with no
+  # declared default (the test mock); model tracking is then off.
+  @spec embed_model() :: String.t() | nil
+  def embed_model do
+    effective_embed_model() ||
+      if Code.ensure_loaded?(embedder()) and function_exported?(embedder(), :default_model, 0),
+        do: embedder().default_model()
+  end
+
   # Voyage caps a request two ways: 1,000 texts AND 120,000 tokens summed over
   # them. Blowing either is a 400 no retry can fix, so the job churns through
   # ReconcileEmbeddings forever.

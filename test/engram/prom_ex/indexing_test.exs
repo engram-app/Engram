@@ -59,4 +59,18 @@ defmodule Engram.PromEx.IndexingTest do
     # Cardinality contract: only the bounded :reason — never note/user/vault ids.
     assert metric.tags == [:reason]
   end
+
+  # Version rebuilds are never charged to a user's cap, so this sum is the only
+  # record of that spend. It must read the event EmbedNote emits.
+  test "event_metrics/1 sums maintenance embed tokens from EmbedNote's event" do
+    built = Indexing.event_metrics(otp_app: :engram)
+
+    assert [metric] =
+             Enum.filter(built.metrics, &(&1.event_name == [:engram, :embed, :maintenance]))
+
+    assert match?(%Telemetry.Metrics.Sum{}, metric)
+    assert metric.name == [:engram, :prom_ex, :indexing, :maintenance_embed_tokens, :total]
+    assert metric.measurement == :tokens
+    assert metric.tags == []
+  end
 end
