@@ -2,8 +2,8 @@ import { type FormEvent, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import { getApiBase, joinApiUrl } from "@/api/base";
 import { stashCredential, takeCredential } from "@/auth/credential-handoff";
-
 import { Button } from "@/components/ui/button";
+import { useT } from "@/i18n/locale-provider";
 import AuthPanel from "@/layout/auth-panel";
 import AuthShell from "@/layout/auth-shell";
 import { destructiveAlert, fieldInput, heading } from "@/lib/ui-classes";
@@ -17,6 +17,7 @@ import { ROUTES } from "@/routes";
 const RESET_PATH = ROUTES.RESET_PASSWORD;
 
 export default function ResetPasswordPage() {
+	const { t } = useT();
 	const [params] = useSearchParams();
 	const location = useLocation();
 	const navigate = useNavigate();
@@ -72,12 +73,12 @@ export default function ResetPasswordPage() {
 		setError("");
 
 		if (!token) {
-			setError("This reset link is missing its token.");
+			setError(t("This reset link is missing its token."));
 			return;
 		}
 
 		if (password !== confirm) {
-			setError("Passwords do not match");
+			setError(t("Passwords do not match"));
 			return;
 		}
 
@@ -98,39 +99,41 @@ export default function ResetPasswordPage() {
 				// 422 invalid_token is the common case — keep the copy non-leaky.
 				setError(
 					body.error === "invalid_token"
-						? "This reset link is invalid or expired."
-						: (body.error ?? "Could not reset password"),
+						? t("This reset link is invalid or expired.")
+						: (body.error ?? t("Could not reset password")),
 				);
 			}
 		} catch {
-			setError("Could not reach the server");
+			setError(t("Could not reach the server"));
 		} finally {
 			setLoading(false);
 		}
 	}
 
 	return (
-		<AuthShell navLabel="Reset password">
+		<AuthShell navLabel={t("Reset password")}>
 			<AuthPanel>
 				{done ? (
 					<section className="space-y-3 text-center">
-						<h1 className={heading}>Password updated</h1>
+						<h1 className={heading}>{t("Password updated")}</h1>
 						<p className="text-muted-foreground text-sm">
-							You can sign in with your new password now. Any old sessions have been signed out.
+							{t(
+								"You can sign in with your new password now. Any old sessions have been signed out.",
+							)}
 						</p>
 						<Link
 							to={ROUTES.SIGN_IN}
 							className="inline-block rounded-md bg-primary px-4 py-2 font-medium text-primary-foreground text-sm hover:bg-primary/90"
 						>
-							Sign in
+							{t("Sign in")}
 						</Link>
 					</section>
 				) : (
 					<form onSubmit={submit} className="space-y-4">
 						<div className="text-center">
-							<h1 className={heading}>Set a new password</h1>
+							<h1 className={heading}>{t("Set a new password")}</h1>
 							<p className="mt-1 text-muted-foreground text-sm">
-								Choose something at least 8 characters long.
+								{t("Choose something at least 8 characters long.")}
 							</p>
 						</div>
 
@@ -141,7 +144,7 @@ export default function ResetPasswordPage() {
 						)}
 
 						<label className="block">
-							<span className="font-medium text-foreground text-sm">New password</span>
+							<span className="font-medium text-foreground text-sm">{t("New password")}</span>
 							<input
 								type="password"
 								required
@@ -153,7 +156,7 @@ export default function ResetPasswordPage() {
 						</label>
 
 						<label className="block">
-							<span className="font-medium text-foreground text-sm">Confirm password</span>
+							<span className="font-medium text-foreground text-sm">{t("Confirm password")}</span>
 							<input
 								type="password"
 								required
@@ -164,7 +167,7 @@ export default function ResetPasswordPage() {
 						</label>
 
 						<Button type="submit" disabled={loading} className="w-full">
-							{loading ? "Updating…" : "Set password"}
+							{loading ? t("Updating…") : t("Set password")}
 						</Button>
 					</form>
 				)}

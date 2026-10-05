@@ -2,12 +2,14 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
+import { useT } from "@/i18n/locale-provider";
 import { copyToClipboard } from "@/lib/clipboard";
 import { adminApi, type Invite } from "./api";
 
 const INVITES_KEY = ["admin", "invites"] as const;
 
 export default function InvitesTab() {
+	const { t } = useT();
 	const qc = useQueryClient();
 	const [label, setLabel] = useState("");
 	const [maxUses, setMaxUses] = useState(1);
@@ -41,10 +43,10 @@ export default function InvitesTab() {
 			});
 			setLastUrl(res.url);
 			setLabel("");
-			toast.success("Invite created — copy the link before leaving this page.");
+			toast.success(t("Invite created — copy the link before leaving this page."));
 			await refresh();
 		} catch (err) {
-			const msg = err instanceof ApiError ? err.message : "Create failed";
+			const msg = err instanceof ApiError ? err.message : t("Create failed");
 			toast.error(msg);
 		} finally {
 			setCreating(false);
@@ -54,10 +56,10 @@ export default function InvitesTab() {
 	async function revoke(id: string) {
 		try {
 			await adminApi.revokeInvite(id);
-			toast.success("Invite revoked");
+			toast.success(t("Invite revoked"));
 			await refresh();
 		} catch (err) {
-			const msg = err instanceof ApiError ? err.message : "Revoke failed";
+			const msg = err instanceof ApiError ? err.message : t("Revoke failed");
 			toast.error(msg);
 		}
 	}
@@ -66,9 +68,9 @@ export default function InvitesTab() {
 		// Invites are the one flow an admin runs from a fresh self-host box, which
 		// is exactly where navigator.clipboard is missing (non-secure origin).
 		if (await copyToClipboard(url)) {
-			toast.success("Copied to clipboard");
+			toast.success(t("Copied to clipboard"));
 		} else {
-			toast.error("Could not copy");
+			toast.error(t("Could not copy"));
 		}
 	}
 
@@ -77,18 +79,20 @@ export default function InvitesTab() {
 			<form onSubmit={create} className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto_auto_auto]">
 				<label className="text-sm">
 					<span className="mb-1 block font-medium text-muted-foreground text-xs">
-						Label (optional)
+						{t("Label (optional)")}
 					</span>
 					<input
 						type="text"
-						placeholder="e.g. Mom"
+						placeholder={t("e.g. Mom")}
 						value={label}
 						onChange={(e) => setLabel(e.target.value)}
 						className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
 					/>
 				</label>
 				<label className="text-sm">
-					<span className="mb-1 block font-medium text-muted-foreground text-xs">Max uses</span>
+					<span className="mb-1 block font-medium text-muted-foreground text-xs">
+						{t("Max uses")}
+					</span>
 					<input
 						type="number"
 						min={1}
@@ -99,7 +103,7 @@ export default function InvitesTab() {
 				</label>
 				<label className="text-sm">
 					<span className="mb-1 block font-medium text-muted-foreground text-xs">
-						Expires (days)
+						{t("Expires (days)")}
 					</span>
 					<input
 						type="number"
@@ -114,7 +118,7 @@ export default function InvitesTab() {
 					disabled={creating}
 					className="self-end rounded-md bg-primary px-4 py-2 font-medium text-primary-foreground text-sm hover:bg-primary/90 disabled:opacity-60"
 				>
-					Create invite
+					{t("Create invite")}
 				</button>
 			</form>
 
@@ -124,7 +128,7 @@ export default function InvitesTab() {
 					role="status"
 				>
 					<p className="mb-2 font-medium text-foreground">
-						Share this link (shown once — not stored):
+						{t("Share this link (shown once — not stored):")}
 					</p>
 					<div className="flex items-center gap-2">
 						<code className="flex-1 overflow-x-auto rounded bg-background px-2 py-1 text-xs">
@@ -135,36 +139,36 @@ export default function InvitesTab() {
 							onClick={() => copy(lastUrl)}
 							className="rounded-md border border-border bg-background px-3 py-1 font-medium text-xs hover:bg-accent"
 						>
-							Copy
+							{t("Copy")}
 						</button>
 						<button
 							type="button"
 							onClick={() => setLastUrl(null)}
 							className="rounded-md border border-border bg-background px-3 py-1 font-medium text-xs hover:bg-accent"
 						>
-							Done
+							{t("Done")}
 						</button>
 					</div>
 				</aside>
 			) : null}
 
 			{loading ? (
-				<p className="text-muted-foreground text-sm">Loading invites…</p>
+				<p className="text-muted-foreground text-sm">{t("Loading invites…")}</p>
 			) : invitesQuery.error ? (
 				<p role="alert" className="text-destructive text-sm">
 					{invitesQuery.error instanceof ApiError
 						? invitesQuery.error.message
-						: "Failed to load invites"}
+						: t("Failed to load invites")}
 				</p>
 			) : invites.length === 0 ? (
-				<p className="text-muted-foreground text-sm">No active invites.</p>
+				<p className="text-muted-foreground text-sm">{t("No active invites.")}</p>
 			) : (
 				<table className="w-full text-sm">
 					<thead className="text-left text-muted-foreground text-xs">
 						<tr>
-							<th className="py-2 pr-2 font-medium">Label</th>
-							<th className="py-2 pr-2 font-medium">Uses</th>
-							<th className="py-2 pr-2 font-medium">Expires</th>
+							<th className="py-2 pr-2 font-medium">{t("Label")}</th>
+							<th className="py-2 pr-2 font-medium">{t("Uses")}</th>
+							<th className="py-2 pr-2 font-medium">{t("Expires")}</th>
 							<th />
 						</tr>
 					</thead>
@@ -176,7 +180,7 @@ export default function InvitesTab() {
 									{i.use_count}/{i.max_uses}
 								</td>
 								<td className="py-2 pr-2">
-									{i.expires_at ? new Date(i.expires_at).toLocaleDateString() : "never"}
+									{i.expires_at ? new Date(i.expires_at).toLocaleDateString() : t("never")}
 								</td>
 								<td className="py-2 text-right">
 									<button
@@ -184,7 +188,7 @@ export default function InvitesTab() {
 										onClick={() => revoke(i.id)}
 										className="rounded-md border border-border bg-background px-3 py-1 font-medium text-xs hover:bg-destructive/10 hover:text-destructive"
 									>
-										Revoke
+										{t("Revoke")}
 									</button>
 								</td>
 							</tr>

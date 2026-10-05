@@ -1,27 +1,30 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
+import { useT } from "@/i18n/locale-provider";
+import { msg } from "@/i18n/msg";
 import { adminApi, type RegistrationMode } from "./api";
 
 const MODES: { value: RegistrationMode; label: string; hint: string }[] = [
 	{
 		value: "invite_only",
-		label: "Invite only",
-		hint: "New accounts need an invite link.",
+		label: msg("Invite only"),
+		hint: msg("New accounts need an invite link."),
 	},
 	{
 		value: "open",
-		label: "Open",
-		hint: "Anyone can create an account. Use with care.",
+		label: msg("Open"),
+		hint: msg("Anyone can create an account. Use with care."),
 	},
 	{
 		value: "closed",
-		label: "Closed",
-		hint: "No new accounts, even with a link.",
+		label: msg("Closed"),
+		hint: msg("No new accounts, even with a link."),
 	},
 ];
 
 export default function RegistrationTab() {
+	const { t } = useT();
 	const [mode, setMode] = useState<RegistrationMode | null>(null);
 	const [saving, setSaving] = useState(false);
 
@@ -30,10 +33,10 @@ export default function RegistrationTab() {
 			.getRegistration()
 			.then((r) => setMode(r.registration_mode))
 			.catch((e: unknown) => {
-				const msg = e instanceof ApiError ? e.message : "Failed to load setting";
-				toast.error(msg);
+				const message = e instanceof ApiError ? e.message : t("Failed to load setting");
+				toast.error(message);
 			});
-	}, []);
+	}, [t]);
 
 	async function choose(next: RegistrationMode) {
 		if (next === mode || saving) {
@@ -43,22 +46,24 @@ export default function RegistrationTab() {
 		try {
 			await adminApi.setRegistration(next);
 			setMode(next);
-			toast.success(`Registration mode: ${next}`);
+			toast.success(t("Registration mode: {mode}", { mode: next }));
 		} catch (e) {
-			const msg = e instanceof ApiError ? e.message : "Save failed";
-			toast.error(msg);
+			const message = e instanceof ApiError ? e.message : t("Save failed");
+			toast.error(message);
 		} finally {
 			setSaving(false);
 		}
 	}
 
 	if (!mode) {
-		return <p className="text-muted-foreground text-sm">Loading…</p>;
+		return <p className="text-muted-foreground text-sm">{t("Loading…")}</p>;
 	}
 
 	return (
 		<fieldset disabled={saving} className="space-y-2">
-			<legend className="mb-2 font-medium text-foreground text-sm">Who can create accounts</legend>
+			<legend className="mb-2 font-medium text-foreground text-sm">
+				{t("Who can create accounts")}
+			</legend>
 			{MODES.map((m) => (
 				<label
 					key={m.value}
@@ -73,8 +78,8 @@ export default function RegistrationTab() {
 						className="mt-1"
 					/>
 					<span className="flex-1">
-						<strong className="block font-medium text-foreground text-sm">{m.label}</strong>
-						<span className="text-muted-foreground text-xs">{m.hint}</span>
+						<strong className="block font-medium text-foreground text-sm">{t(m.label)}</strong>
+						<span className="text-muted-foreground text-xs">{t(m.hint)}</span>
 					</span>
 				</label>
 			))}
