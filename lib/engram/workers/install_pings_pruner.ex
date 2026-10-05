@@ -16,10 +16,10 @@ defmodule Engram.Workers.InstallPingsPruner do
   import Ecto.Query
   alias Engram.Repo
 
+  require Logger
+
   @retention_days 35
   @batch 5_000
-
-  require Logger
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(15)

@@ -15,9 +15,9 @@ defmodule Engram.Workers.ClientLogsPruner do
   import Ecto.Query
   alias Engram.Repo
 
-  @batch 5_000
-
   require Logger
+
+  @batch 5_000
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(15)
