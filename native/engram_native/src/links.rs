@@ -26,7 +26,8 @@ pub type Raw = (usize, u8, usize, usize, usize, usize);
 
 fn frontmatter_len(s: &str) -> usize {
     static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r"(?s)\A---[\s\x{180E}]*\n.*?\n---[\s\x{180E}]*\n").unwrap());
+    let re =
+        RE.get_or_init(|| Regex::new(r"(?s)\A---[\s\x{180E}]*\n.*?\n---[\s\x{180E}]*\n").unwrap());
     re.find(s).map_or(0, |m| m.end())
 }
 
@@ -125,7 +126,10 @@ fn next_cut(s: &str, from: usize) -> Option<usize> {
     };
     let mut prev_blank = false;
     while pos < b.len() {
-        let eol = b[pos..].iter().position(|&c| c == b'\n').map_or(b.len(), |i| pos + i + 1);
+        let eol = b[pos..]
+            .iter()
+            .position(|&c| c == b'\n')
+            .map_or(b.len(), |i| pos + i + 1);
         let line = &b[pos..eol];
         if pos > 0 && (prev_blank && !line[0].is_ascii_whitespace() || starts_block(line)) {
             return Some(pos);
@@ -230,7 +234,15 @@ fn scan(s: &[u8], out: &mut Vec<Raw>, markdown: bool) {
 /// target_len, target, alias, anchor). `target` is decoded for markdown
 /// links; the raw target is `binary_part(content, target_start, target_len)`.
 /// Strings borrow from the note unless decoding changed them.
-pub type Link<'a> = (usize, u8, usize, usize, Cow<'a, str>, Option<&'a str>, Option<Cow<'a, str>>);
+pub type Link<'a> = (
+    usize,
+    u8,
+    usize,
+    usize,
+    Cow<'a, str>,
+    Option<&'a str>,
+    Option<Cow<'a, str>>,
+);
 
 /// Links in position order, one per position, handed to `emit` one at a
 /// time (the caller builds BEAM terms, so no Rust copy of the output
@@ -249,7 +261,11 @@ pub fn extract<'a>(s: &'a str, mut emit: impl FnMut(Link<'a>)) -> usize {
         if last == Some(m.0) {
             continue;
         }
-        let link = if m.1 < 2 { wiki_link(s, m) } else { markdown_link(s, m, &mut scrubs) };
+        let link = if m.1 < 2 {
+            wiki_link(s, m)
+        } else {
+            markdown_link(s, m, &mut scrubs)
+        };
         if let Some(link) = link {
             last = Some(m.0);
             emit(link);
@@ -275,10 +291,22 @@ fn wiki_link(s: &str, (pos, kind, inner_start, inner_len, _, _): Raw) -> Option<
     };
     let target = clean(target_raw)?;
     let lead = target_raw.len() - target_raw.trim_start().len();
-    Some((pos, kind, inner_start + lead, target.len(), Cow::Borrowed(target), alias, anchor))
+    Some((
+        pos,
+        kind,
+        inner_start + lead,
+        target.len(),
+        Cow::Borrowed(target),
+        alias,
+        anchor,
+    ))
 }
 
-fn markdown_link<'a>(s: &'a str, (pos, kind, label_start, label_len, dest_start, dest_len): Raw, scrubs: &mut usize) -> Option<Link<'a>> {
+fn markdown_link<'a>(
+    s: &'a str,
+    (pos, kind, label_start, label_len, dest_start, dest_len): Raw,
+    scrubs: &mut usize,
+) -> Option<Link<'a>> {
     let b = s.as_bytes();
     let dest = &s[dest_start..dest_start + dest_len];
     // Trim, then the CommonMark destination: `<...>`, or up to whitespace.
@@ -289,7 +317,10 @@ fn markdown_link<'a>(s: &'a str, (pos, kind, label_start, label_len, dest_start,
             start += 1;
             len = i;
         }
-    } else if let Some(i) = b[start..start + len].iter().position(|c| b" \t\n\r".contains(c)) {
+    } else if let Some(i) = b[start..start + len]
+        .iter()
+        .position(|c| b" \t\n\r".contains(c))
+    {
         len = i;
     }
     let mut anchor = None;
@@ -308,7 +339,15 @@ fn markdown_link<'a>(s: &'a str, (pos, kind, label_start, label_len, dest_start,
     }
     let (target, scrubbed) = decode(raw);
     *scrubs += scrubbed as usize;
-    Some((pos, kind, start, len, target, clean(&s[label_start..label_start + label_len]), anchor))
+    Some((
+        pos,
+        kind,
+        start,
+        len,
+        target,
+        clean(&s[label_start..label_start + label_len]),
+        anchor,
+    ))
 }
 
 /// Percent-decode then scrub; borrowed when there is no `%` to decode.
@@ -327,7 +366,11 @@ fn uri_decode(b: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
-        match (b[i], b.get(i + 1).copied().and_then(hex), b.get(i + 2).copied().and_then(hex)) {
+        match (
+            b[i],
+            b.get(i + 1).copied().and_then(hex),
+            b.get(i + 2).copied().and_then(hex),
+        ) {
             (b'%', Some(h), Some(l)) => {
                 out.push(h << 4 | l);
                 i += 3;
@@ -401,7 +444,10 @@ mod tests {
 
     #[test]
     fn wiki_and_embed() {
-        assert_eq!(matches("a ![[x|y]] [[z]]"), vec![(2, 1, 5, 3, 0, 0), (11, 0, 13, 1, 0, 0)]);
+        assert_eq!(
+            matches("a ![[x|y]] [[z]]"),
+            vec![(2, 1, 5, 3, 0, 0), (11, 0, 13, 1, 0, 0)]
+        );
     }
 
     #[test]
@@ -413,13 +459,23 @@ mod tests {
 
     #[test]
     fn code_is_excluded() {
-        assert_eq!(matches("````\n[[a]]\n````\n``x [[b]] y``\n\n    [[c]]\n"), vec![]);
-        assert_eq!(matches("```\n[[a]]"), vec![], "an unclosed fence runs to the end");
+        assert_eq!(
+            matches("````\n[[a]]\n````\n``x [[b]] y``\n\n    [[c]]\n"),
+            vec![]
+        );
+        assert_eq!(
+            matches("```\n[[a]]"),
+            vec![],
+            "an unclosed fence runs to the end"
+        );
     }
 
     #[test]
     fn frontmatter_is_excluded_and_does_not_open_a_fence() {
-        assert_eq!(matches("---\nx: ```\n---\n[[a]]"), vec![(15, 0, 17, 1, 0, 0)]);
+        assert_eq!(
+            matches("---\nx: ```\n---\n[[a]]"),
+            vec![(15, 0, 17, 1, 0, 0)]
+        );
     }
 
     // Segmenting must never change a result. Cut as often as possible
@@ -428,21 +484,75 @@ mod tests {
     #[test]
     fn segmented_equals_whole_document() {
         let pieces = [
-            "```", "~~~", "````", "\n", "\n\n", "    ", "  ", "- ", "1. ", "> ", "`", "``", "[[a]]", "[l](b.md)",
-            "<!--", "-->", "<pre>", "</pre>", "<?", "?>", "<!X", ">", "<![CDATA[", "]]>", "text", "\t", "***",
-            "---", "| a |", "|---|", "- | -", "a | b", "* | *", "*", "_", "\r", " ", "# ", "#", "+ ", "* ", "##", "1. x\n2. y", "foo\n",
+            "```",
+            "~~~",
+            "````",
+            "\n",
+            "\n\n",
+            "    ",
+            "  ",
+            "- ",
+            "1. ",
+            "> ",
+            "`",
+            "``",
+            "[[a]]",
+            "[l](b.md)",
+            "<!--",
+            "-->",
+            "<pre>",
+            "</pre>",
+            "<?",
+            "?>",
+            "<!X",
+            ">",
+            "<![CDATA[",
+            "]]>",
+            "text",
+            "\t",
+            "***",
+            "---",
+            "| a |",
+            "|---|",
+            "- | -",
+            "a | b",
+            "* | *",
+            "*",
+            "_",
+            "\r",
+            " ",
+            "# ",
+            "#",
+            "+ ",
+            "* ",
+            "##",
+            "1. x\n2. y",
+            "foo\n",
         ];
-        let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+        // CI runs 20k cases; the nightly (cron.yml) runs 2M per seed. Run it
+        // deep after touching the cut rules or bumping pulldown-cmark:
+        // ENGRAM_FUZZ_CASES=2000000 ENGRAM_FUZZ_SEED=7 cargo test --release segmented
+        let env = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<u64>().ok());
+        let cases = env("ENGRAM_FUZZ_CASES").unwrap_or(20_000);
+        let mut seed: u64 = env("ENGRAM_FUZZ_SEED").map_or(0x9E37_79B9_7F4A_7C15, |s| {
+            s.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1
+        });
         let mut next = || {
             seed ^= seed << 13;
             seed ^= seed >> 7;
             seed ^= seed << 17;
             seed
         };
-        for _ in 0..20_000 {
+        for _ in 0..cases {
             let n = 1 + (next() % 40) as usize;
-            let doc: String = (0..n).map(|_| pieces[(next() % pieces.len() as u64) as usize]).collect();
-            assert_eq!(matches_segmented(&doc, 1), matches_segmented(&doc, usize::MAX), "{doc:?}");
+            let doc: String = (0..n)
+                .map(|_| pieces[(next() % pieces.len() as u64) as usize])
+                .collect();
+            assert_eq!(
+                matches_segmented(&doc, 1),
+                matches_segmented(&doc, usize::MAX),
+                "{doc:?}"
+            );
             if !may_have_code(&doc) {
                 let mut ranges = Vec::new();
                 segment_code_ranges(&doc, 0, &mut ranges);
@@ -455,7 +565,10 @@ mod tests {
     // must still parse: its code ranges are dropped, never the whole call.
     #[test]
     fn a_pulldown_panic_does_not_fail_the_parse() {
-        assert_eq!(matches("> - [x]: /u\n    \r [[a]]"), matches("> - [x]: /u\n    \r [[a]]"));
+        assert_eq!(
+            matches("> - [x]: /u\n    \r [[a]]"),
+            matches("> - [x]: /u\n    \r [[a]]")
+        );
         assert_eq!(matches("#t\n\n> - [x]: /u\n    \r").len(), 0);
         assert_eq!(matches("[[z]]\n\n> - [x]: /u\n    \r").len(), 1);
     }
@@ -465,7 +578,10 @@ mod tests {
     #[test]
     fn no_cut_inside_a_table() {
         let doc = "a | b\n- | -\n`c | [[d]]`\n";
-        assert_eq!(matches_segmented(doc, 1), matches_segmented(doc, usize::MAX));
+        assert_eq!(
+            matches_segmented(doc, 1),
+            matches_segmented(doc, usize::MAX)
+        );
         assert_eq!(matches_segmented(doc, 1).len(), 1);
     }
 
@@ -485,7 +601,9 @@ mod tests {
     #[test]
     fn linear_on_bracket_runs() {
         let s = "[".repeat(1_000_000) + &"(".repeat(1_000_000);
-        // Min of 3, so a parallel test's load spike cannot fail it (~30 ms typical).
+        // Min of 3, so a parallel test's load spike cannot fail it (~30 ms
+        // typical). A quadratic scan of 2 MB is minutes: the wide limit only
+        // trips on that, never on a slow runner.
         let best = (0..3)
             .map(|_| {
                 let t = std::time::Instant::now();
@@ -494,6 +612,6 @@ mod tests {
             })
             .min()
             .unwrap();
-        assert!(best.as_millis() < 500, "{best:?}");
+        assert!(best.as_secs() < 5, "{best:?}");
     }
 }

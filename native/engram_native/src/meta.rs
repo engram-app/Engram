@@ -87,7 +87,11 @@ pub fn tags(s: &str, mut emit: impl FnMut(&str)) {
         Cow::Owned(out)
     };
     let mut seen = HashSet::new();
-    for t in fm_tags.iter().map(String::as_str).chain(inline_tags(&stripped)) {
+    for t in fm_tags
+        .iter()
+        .map(String::as_str)
+        .chain(inline_tags(&stripped))
+    {
         if seen.insert(t) {
             emit(t);
         }
@@ -107,7 +111,12 @@ pub fn tags(s: &str, mut emit: impl FnMut(&str)) {
 fn inline_tags(s: &str) -> impl Iterator<Item = &str> {
     re!(r"#[\p{L}\p{N}_][\p{L}\p{N}_/-]*")
         .find_iter(s)
-        .filter(|m| s[..m.start()].chars().next_back().is_none_or(|c| c.is_whitespace() || c == '\u{180E}'))
+        .filter(|m| {
+            s[..m.start()]
+                .chars()
+                .next_back()
+                .is_none_or(|c| c.is_whitespace() || c == '\u{180E}')
+        })
         .map(|m| m.as_str()[1..].trim_end_matches(['/', '-']))
         .filter(|t| !t.is_empty() && !t.bytes().all(|b| b.is_ascii_digit() || b"/_-".contains(&b)))
 }
@@ -135,8 +144,13 @@ fn frontmatter_tags(fm: &str) -> Vec<String> {
     if v == "[]" {
         return Vec::new();
     }
-    let list = v.strip_prefix('[').map_or(v, |rest| rest.trim_end_matches(']'));
-    list.split(',').map(tag_item).filter(|t| !t.is_empty()).collect()
+    let list = v
+        .strip_prefix('[')
+        .map_or(v, |rest| rest.trim_end_matches(']'));
+    list.split(',')
+        .map(tag_item)
+        .filter(|t| !t.is_empty())
+        .collect()
 }
 
 /// One tag, or "" for a scalar YAML would not read as a string: `tags: true`
@@ -181,16 +195,17 @@ fn non_string_scalar(item: &str) -> bool {
         .is_match(item)
 }
 
-
 #[cfg(test)]
 mod tests {
     // Skipping a heading inside code must not rescan the code ranges from
     // the start: 480 KB of code-fenced `# x` lines took 1.3 s.
     #[test]
     fn title_is_linear_past_many_code_headings() {
-        let s = "```\n# x\n```\n".repeat(40_000) + "# Real\n";
-        // Min of 3: cargo runs tests on parallel threads, so one sample can
-        // eat a load spike (~90 ms typical; the quadratic bug was 1.3 s).
+        // 1.9 MB: the quadratic bug takes ~20 s here, linear well under
+        // 300 ms, so the 3 s limit only trips on the quadratic. Min of 3:
+        // cargo runs tests on parallel threads, so one sample can eat a load
+        // spike.
+        let s = "```\n# x\n```\n".repeat(160_000) + "# Real\n";
         let best = (0..3)
             .map(|_| {
                 let t = std::time::Instant::now();
@@ -199,6 +214,6 @@ mod tests {
             })
             .min()
             .unwrap();
-        assert!(best.as_millis() < 300, "{best:?}");
+        assert!(best.as_secs() < 3, "{best:?}");
     }
 }

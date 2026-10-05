@@ -104,7 +104,7 @@ following closes part of it:
    on one OS thread, so a thread-local live/peak pair, reset on entry, is
    that call's native high-water mark. Exact only if the NIF spawns no
    threads: **ours must not** (no rayon).
-3. **One telemetry shape for every NIF.** `Engram.Native.call/3` emits
+3. **One telemetry shape for every NIF.** `Engram.Native.call/4` emits
    `[:engram, :nif, :call, :stop]` with `duration`, `native_peak_bytes`,
    `input_bytes`, metadata `%{nif: atom}`. `Engram.PromEx.Native` exports it.
 4. **Watch what nobody attributes.** `[:engram, :vm, :native_memory]` (polled
@@ -137,6 +137,24 @@ following closes part of it:
   NIF. The keyword port kept `tokenizer_test.exs` and `qdrant_sparse_test.exs`
   unchanged and added a 490-case golden set
   (`test/support/fixtures/keyword_tokens_golden.json`).
+- **Rust-only tests** live in the crate (`cargo test`): the segmented-parse
+  fuzz, panic guards, linear-time bounds. Time limits must only catch a
+  complexity blowup (size the input so quadratic is >10x the limit and
+  linear is <1/10 of it), never a slow runner. The counting allocator wraps
+  the system allocator under `cargo test`, so memory tracking is tested too.
+
+### Where each check runs
+
+| Check | When | Blocks |
+|---|---|---|
+| `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test` (fuzz at 20k) | `unit-tests` job, every PR touching `native/` or Elixir source | merge (`unit-tests` is a required check) |
+| Elixir NIF tests: golden sets, peak, leak, telemetry | `unit-tests`, same | merge |
+| Fuzz at 2M cases x 3 seeds, `cargo audit` (RustSec) | nightly `native-deep` in `cron.yml`, or dispatch `task=native-deep` | nothing; alerts Discord on failure |
+| Dependabot cargo updates | Wednesdays; patch+minor grouped and auto-merged once green | via the above |
+
+`cargo audit` is nightly, not per-PR, so a newly published advisory does not
+red unrelated PRs. Run the deep fuzz locally after touching the cut rules or
+bumping pulldown-cmark: `ENGRAM_FUZZ_CASES=2000000 ENGRAM_FUZZ_SEED=7 cargo test --release segmented`.
 
 ## Scheduling
 
@@ -170,8 +188,16 @@ adding callers.
   `.so`). Without the latter a host job restores a manifest that says the
   crate is compiled and loads a missing or stale library.
 - Adding a NIF function: add it to the Rust `#[rustler::nif]` list AND the
-  stub in `Engram.Native`, route it through `call/3` so it emits telemetry,
+  stub in `Engram.Native`, route it through `call/4` so it emits telemetry,
   and give it a peak-bound and a leak test.
+- rustler: the crate and the hex package move together (0.38 both). The hex
+  dep carries `override: true` because lingua pins an optional
+  `rustler ~> 0.37.1` it only uses to force-build; lingua loads its
+  precompiled NIF.
+- rustfmt/clippy come from the CI rustup install (`--component`), not
+  `rust-toolchain.toml`: the release Dockerfile copies the official image's
+  minimal toolchain, and listing components there would make the image build
+  download them.
 
 ## Gotchas found on the way
 
