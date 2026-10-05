@@ -1,7 +1,9 @@
 //! `Engram.Notes.Frontmatter.split/1`: where a note's leading YAML block
 //! ends. Byte offsets, not strings, so the Elixir side slices sub-binaries
-//! instead of copying a large body.
-use regex::Regex;
+//! instead of copying a large body. Scans bytes, as the Elixir regexes did:
+//! invalid UTF-8 splits exactly as before, and every fence is ASCII, so on
+//! valid text each offset is a char boundary.
+use regex::bytes::Regex;
 use std::sync::OnceLock;
 
 /// (block_start, block_end, body_start, add_newline). The block is
@@ -10,17 +12,17 @@ use std::sync::OnceLock;
 pub type Split = Option<(usize, usize, usize, bool)>;
 
 /// The opening fence only at byte 0, with either line ending.
-fn open_fence(s: &str) -> Option<usize> {
-    if s.starts_with("---\r\n") {
+fn open_fence(s: &[u8]) -> Option<usize> {
+    if s.starts_with(b"---\r\n") {
         Some(5)
-    } else if s.starts_with("---\n") {
+    } else if s.starts_with(b"---\n") {
         Some(4)
     } else {
         None
     }
 }
 
-pub fn split(s: &str) -> Split {
+pub fn split(s: &[u8]) -> Split {
     static LINE: OnceLock<Regex> = OnceLock::new();
     static EOF: OnceLock<Regex> = OnceLock::new();
     let start = open_fence(s)?;
@@ -41,7 +43,7 @@ pub fn split(s: &str) -> Split {
 
 /// The block (with its trailing newline) and the body, as strings.
 pub fn parts(s: &str) -> (Option<String>, &str) {
-    match split(s) {
+    match split(s.as_bytes()) {
         None => (None, s),
         Some((bs, be, body, nl)) => {
             let mut block = s[bs..be].to_string();

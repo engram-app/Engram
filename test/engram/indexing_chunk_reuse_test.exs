@@ -323,6 +323,25 @@ defmodule Engram.IndexingChunkReuseTest do
     end
   end
 
+  # The two prefixes are capped separately, so past 512 bytes of
+  # "folder > title" a title change can leave context_text equal while
+  # embed_text moves. Reuse must still see the change.
+  describe "a long folder path" do
+    test "a title change re-embeds even when context_text is capped equal", ctx do
+      folder = Enum.map_join(1..8, "/", &String.duplicate("dir#{&1}", 20))
+      path = folder <> "/n.md"
+      note = put_raw(ctx.user, ctx.vault, path, "---\ntitle: Alpha\n---\nbody text here")
+      stub_embedder(self())
+      assert {:ok, _} = Indexing.index_note(note, ctx.vault)
+      _ = embedded_texts()
+
+      renamed = put_raw(ctx.user, ctx.vault, path, "---\ntitle: Beta\n---\nbody text here")
+      reset(ctx.recorder)
+      assert {:ok, _} = Indexing.index_note(renamed, ctx.vault)
+      assert "Beta\n\nbody text here" in embedded_texts()
+    end
+  end
+
   describe "duplicate chunks" do
     test "two identical sections get two distinct points", ctx do
       body = "# Iron Panel\n\n## A\n\nsame text here\n\n## B\n\nsame text here\n"

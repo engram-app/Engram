@@ -36,6 +36,13 @@ defmodule Engram.Native.ChunkerTest do
       assert [%{text: "## Sub\n\nbody text", heading_path: "My Note > Sub"}] = chunks
     end
 
+    test "a note of only headings still yields a chunk, so search can find it" do
+      assert [%{text: "# Project Phoenix"}] = Markdown.parse("# Project Phoenix\n", "p.md")
+
+      assert [%{text: "# 2026-10-04\n\n## Tasks\n\n## Notes", heading_path: "2026-10-04"}] =
+               Markdown.parse("# 2026-10-04\n\n## Tasks\n\n## Notes\n", "d.md")
+    end
+
     test "blank and markup-only sub-chunks are dropped" do
       content = "intro words\n\n" <> String.duplicate(" ", 5000) <> "\n\nouttro words"
       assert content |> Markdown.parse("x.md") |> Enum.all?(&(&1.text =~ ~r/[\p{L}\p{N}]/u))

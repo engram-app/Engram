@@ -389,11 +389,22 @@ fn chunk_dirty_nif<'a>(
 }
 
 /// `Frontmatter.split/1` as offsets: nil, or {block_start, block_end,
-/// body_start, add_newline}. A linear fence scan on the calling scheduler,
-/// like the Elixir regex split it replaced.
+/// body_start, add_newline}, with the native peak. Takes raw bytes: invalid
+/// UTF-8 splits as the Elixir regexes did.
+fn frontmatter_split_peak(content: &[u8]) -> (frontmatter::Split, usize) {
+    let base = memory::begin();
+    let split = frontmatter::split(content);
+    (split, memory::peak_since(base))
+}
+
 #[rustler::nif]
-fn frontmatter_split_nif(content: &str) -> frontmatter::Split {
-    frontmatter::split(content)
+fn frontmatter_split_nif(content: rustler::Binary) -> (frontmatter::Split, usize) {
+    frontmatter_split_peak(content.as_slice())
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn frontmatter_split_dirty_nif(content: rustler::Binary) -> (frontmatter::Split, usize) {
+    frontmatter_split_peak(content.as_slice())
 }
 
 rustler::init!("Elixir.Engram.Native");

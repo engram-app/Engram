@@ -16,19 +16,17 @@ defmodule Engram.Notes.Frontmatter do
   @spec split(String.t()) :: {String.t() | nil, String.t()}
   # The fence scan runs in Rust (native/engram_native/src/frontmatter.rs),
   # shared with the chunker. It returns offsets so the body stays a
-  # sub-binary of `plaintext`: a large note is not copied. Invalid UTF-8 is
-  # scrubbed first because the NIF takes only valid text.
+  # sub-binary of `plaintext`: a large note is not copied. It scans bytes, so
+  # invalid UTF-8 comes back byte for byte, as with the regexes it replaced.
   def split(plaintext) when is_binary(plaintext) do
-    text = Engram.Notes.Helpers.scrub_utf8(plaintext)
-
-    case Engram.Native.frontmatter_split(text) do
+    case Engram.Native.frontmatter_split(plaintext) do
       nil ->
         {nil, plaintext}
 
       {block_start, block_end, body_start, add_newline} ->
-        block = binary_part(text, block_start, block_end - block_start)
+        block = binary_part(plaintext, block_start, block_end - block_start)
         block = if add_newline, do: block <> "\n", else: block
-        {block, binary_part(text, body_start, byte_size(text) - body_start)}
+        {block, binary_part(plaintext, body_start, byte_size(plaintext) - body_start)}
     end
   end
 

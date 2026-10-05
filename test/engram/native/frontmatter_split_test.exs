@@ -22,6 +22,17 @@ defmodule Engram.Native.FrontmatterSplitTest do
     assert :binary.referenced_byte_size(body) == byte_size(content)
   end
 
+  test "invalid UTF-8 comes back byte for byte, as the regex split did" do
+    content = "---\na: \xff\n---\nbody \xfe"
+    assert Frontmatter.split(content) == {"a: \xff\n", "body \xfe"}
+  end
+
+  test "a large note splits on a dirty scheduler" do
+    ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+    Frontmatter.split("---\n" <> String.duplicate("\n-- x", 10_000))
+    assert_receive {_, ^ref, _, %{nif: :frontmatter_split, dirty: true}}
+  end
+
   test "split emits [:engram, :nif, :call, :stop]" do
     ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
     Frontmatter.split("---\na: 1\n---\nb")

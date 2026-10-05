@@ -42,7 +42,7 @@ defmodule Engram.Parsers.Markdown do
   - `:text`         — raw chunk text (no context prefix)
   - `:context_text` — "folder > title > heading\\n\\ntext" for keyword search
   - `:embed_text`   — "title > heading\\n\\ntext" for dense embedding: no
-                      folder, so moving a note keeps its vectors (#1621)
+                      folder, which is a filter key, not meaning (#1621)
   - `:heading_path` — e.g. "Title > H1 > H2"
   - `:char_start`   — byte offset in post-frontmatter body
   - `:char_end`     — byte offset end

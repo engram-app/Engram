@@ -33,7 +33,7 @@ const ANCHOR_SPAN: u64 = 512;
 
 /// One chunk: (text, context_text, embed_text, heading_path, char_start,
 /// char_end). context_text carries the folder for keyword search (#1615);
-/// embed_text drops it, so moving a note does not re-embed it (#1621).
+/// embed_text, the dense input, drops it (#1621).
 pub type Chunk = (String, String, String, String, usize, usize);
 
 struct Heading {
@@ -63,6 +63,7 @@ pub fn each_chunk(content: &str, folder: &str, title: &str, mut emit: impl FnMut
     let mut stack: Vec<(usize, &str, bool)> = Vec::new();
     let mut start = 0;
     let mut head: Option<&Heading> = None;
+    let mut emitted = false;
     for (i, next) in headings.iter().map(Some).chain([None]).enumerate() {
         let end = next.map_or(body.len(), |h| h.start);
         let head_end = head.map_or(start, |h| h.end.min(end));
@@ -72,6 +73,7 @@ pub fn each_chunk(content: &str, folder: &str, title: &str, mut emit: impl FnMut
             let path = heading_path(title, &stack);
             for t in split(&text) {
                 emit(make(folder, &path, &path, t, start, end));
+                emitted = true;
             }
         }
         if let Some(h) = next {
@@ -80,6 +82,16 @@ pub fn each_chunk(content: &str, folder: &str, title: &str, mut emit: impl FnMut
             start = h.start;
         }
         head = next;
+    }
+    // Every section was a bare heading (a stub, a daily-note template): keep
+    // the headings as one chunk, or search could not find the note at all.
+    if !emitted {
+        let rest = strip_blobs(body);
+        if !markup_only(&rest) {
+            for t in split(&normalize("", &rest)) {
+                emit(make(folder, title, title, t, 0, body.len()));
+            }
+        }
     }
     if let Some(block) = block.filter(|b| !b.is_empty()) {
         let text = normalize("", &strip_blobs(&block));
