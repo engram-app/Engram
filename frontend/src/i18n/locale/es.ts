@@ -715,7 +715,7 @@ export default {
 		many: "Quedan {count} de días de tu prueba.",
 		other: "Quedan {count} días de tu prueba.",
 	},
-	"Free tier: 1 connection. {upgrade}": "Plan Gratuito: 1 conexión; {upgrade}",
+	"Free tier: 1 connection. {upgrade}": "Plan Gratuito: 1 conexión. {upgrade}",
 	"Collapse sidebar": "Contraer barra lateral",
 	"No vaults": "Sin bóvedas",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -1250,7 +1250,7 @@ export default {
 	"CommonMark in 10 minutes": "CommonMark en 10 minutos",
 	"Obsidian's flavour": "La variante de Obsidian",
 	"That is why your notes are plain {md} files rather than a database row. The source stays readable on its own, and any editor, script or version control can read it, with or without Engram.":
-		"Por eso tus notas son archivos {md} de texto sin formato y no una fila de una base de datos. El origen sigue siendo legible por sí solo, y cualquier editor, script o control de versiones puede leerlo, con o sin Engram.",
+		"Por eso tus notas son archivos {md} de texto sin formato y no una fila de una base de datos. El texto fuente sigue siendo legible por sí solo, y cualquier editor, script o control de versiones puede leerlo, con o sin Engram.",
 	Callouts: "Callouts",
 	"Every heading becomes a line in the Outline panel, which is generated from these. Step down one level at a time; jumping ## to #### leaves a gap in it. By convention # is the note title, which your filename already gives you, so most notes start at ##.":
 		"Cada encabezado se convierte en una línea del panel Esquema, que se genera a partir de ellos. Baja un nivel cada vez; saltar de ## a #### deja un hueco en él. Por convención, # es el título de la nota, que ya te da el nombre del archivo, así que la mayoría de las notas empiezan en ##.",

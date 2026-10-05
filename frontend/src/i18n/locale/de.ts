@@ -137,7 +137,7 @@ export default {
 	"Delete account": "Konto löschen",
 	"Delete your account?": "Dein Konto löschen?",
 	"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.":
-		"Dein Nutzer wird dabei weich gelöscht. Du kannst dich danach nicht mehr anmelden. Ein Admin kann deine Vault-Daten später endgültig entfernen.",
+		"Dein Nutzer wird dabei als gelöscht markiert. Du kannst dich danach nicht mehr anmelden. Ein Admin kann deine Vault-Daten später endgültig entfernen.",
 	Password: "Passwort",
 	"I understand this is irreversible": "Mir ist klar, dass sich das nicht rückgängig machen lässt",
 	Delete: "Löschen",
@@ -783,7 +783,7 @@ export default {
 	"We index each note's {type} separately, so adding one to your notes can improve your searches. Filter to a type here to look only at notes of that kind.":
 		"Wir indexieren den {type} jeder Notiz separat, daher kann es deine Suchen verbessern, wenn du ihn zu deinen Notizen hinzufügst. Filtere hier nach einem Typ, um nur Notizen dieser Art zu sehen.",
 	"It is also the one field required by the {okf}, the open standard Engram follows — so filling it in keeps your notes portable to anything else that reads OKF.":
-		"Er ist außerdem das einzige Feld, das der {okf}, der offene Standard, dem Engram folgt, verlangt. Wenn du ihn ausfüllst, bleiben deine Notizen also mit allem kompatibel, das OKF liest.",
+		"Er ist außerdem das einzige Feld, das vom {okf} verlangt wird, dem offenen Standard, dem Engram folgt. Wenn du ihn ausfüllst, bleiben deine Notizen also mit allem kompatibel, das OKF liest.",
 	"{count} results": { one: "{count} Ergebnis", other: "{count} Ergebnisse" },
 	"Sidebar views": "Seitenleistenansichten",
 	"User menu": "Benutzermenü",
@@ -1282,7 +1282,7 @@ export default {
 	"Code Block": "Codeblock",
 	"Highlighted Code Block": "Codeblock mit Hervorhebung",
 	"Many languages are supported. Name the type straight after the opening fence. It is usually the file extension: ts for TypeScript, js for JavaScript.":
-		"Viele Sprachen werden unterstützt. Nenne den Typ direkt nach dem öffnenden Zaun. Meist ist es die Dateiendung: ts für TypeScript, js für JavaScript.",
+		"Viele Sprachen werden unterstützt. Nenne den Typ direkt nach den öffnenden Backticks. Meist ist es die Dateiendung: ts für TypeScript, js für JavaScript.",
 	"Mermaid Diagram": "Mermaid-Diagramm",
 	"Flowchart, sequence, class and state diagrams.":
 		"Flussdiagramme, Sequenz-, Klassen- und Zustandsdiagramme.",

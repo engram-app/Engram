@@ -1275,7 +1275,7 @@ export default {
 	Edit: "編集",
 	Raw: "Raw",
 	Reading: "閲覧",
-	"Move {count} items to…": { other: "{count} 件を移動先…" },
+	"Move {count} items to…": { other: "{count} 件を移動…" },
 	"Copy {count} wikilinks": { other: "{count} 件のウィキリンクをコピー" },
 	"Delete {count} items": { other: "{count} 件を削除" },
 	"Delete?": "削除しますか?",

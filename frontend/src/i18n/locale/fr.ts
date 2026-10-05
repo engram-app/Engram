@@ -133,7 +133,7 @@ export default {
 	"Delete account": "Supprimer le compte",
 	"Delete your account?": "Supprimer ton compte ?",
 	"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.":
-		"Cela supprime ton utilisateur de façon logique. Tu ne pourras plus te reconnecter. Un administrateur pourra purger les données de ton coffre plus tard.",
+		"Cela effectue une suppression logique de ton utilisateur. Tu ne pourras plus te reconnecter. Un administrateur pourra purger les données de ton coffre plus tard.",
 	Password: "Mot de passe",
 	"I understand this is irreversible": "Je comprends que c'est irréversible",
 	Delete: "Supprimer",

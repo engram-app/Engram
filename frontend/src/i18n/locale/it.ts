@@ -651,7 +651,7 @@ export default {
 		"Il tuo archivio è collegato. Obsidian aspetta che tu avvii la prima sincronizzazione.",
 	"Waiting for your first sync…": "In attesa della prima sincronizzazione…",
 	"We'll open your vault here the moment it lands.":
-		"Aprirà qui il tuo archivio non appena arriva.",
+		"Apriremo qui il tuo archivio non appena arriva.",
 	"Your notes will appear here as they sync. You can come back any time.":
 		"Le tue note compariranno qui man mano che si sincronizzano. Puoi tornare in qualsiasi momento.",
 	"Continue to web app": "Continua nell'app web",
@@ -964,7 +964,7 @@ export default {
 	"Couldn't save your answers, please try again.": "Impossibile salvare le tue risposte, riprova.",
 	"Why {tool} can't be connected": "Perché non è possibile collegare {tool}",
 	"Free tier, pick 1 to start. {upgrade} anytime for unlimited connections.":
-		"Piano Gratuito: sceglinene 1 per iniziare. {upgrade} quando vuoi per avere connessioni illimitate.",
+		"Piano Gratuito: scegline 1 per iniziare. Quando vuoi, {upgrade} per avere connessioni illimitate.",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"Elenco non esaustivo: scegli {client} se il tuo non è presente.",
 	"My Vault": "Il mio archivio",
@@ -1312,7 +1312,7 @@ export default {
 	"Code Block": "Blocco di codice",
 	"Highlighted Code Block": "Blocco di codice evidenziato",
 	"Many languages are supported. Name the type straight after the opening fence. It is usually the file extension: ts for TypeScript, js for JavaScript.":
-		"Sono supportati molti linguaggi. Scrivi il tipo subito dopo la recinzione di apertura. Di solito è l'estensione del file: ts per TypeScript, js per JavaScript.",
+		"Sono supportati molti linguaggi. Scrivi il tipo subito dopo il delimitatore di apertura. Di solito è l'estensione del file: ts per TypeScript, js per JavaScript.",
 	"Mermaid Diagram": "Diagramma Mermaid",
 	"Flowchart, sequence, class and state diagrams.":
 		"Diagrammi di flusso, di sequenza, di classi e di stato.",

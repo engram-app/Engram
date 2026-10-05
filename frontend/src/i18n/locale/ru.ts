@@ -399,7 +399,7 @@ export default {
 	"Upgrade to upload larger files.": "Перейдите на платный план, чтобы загружать файлы побольше.",
 	"Device sync limit reached": "Достигнут предел синхронизации устройств",
 	"Your Free plan syncs files between 1 device at a time. Disconnect the device you're not using to switch, or upgrade to sync more devices.":
-		"На плане Free файлы синхронизируются только между одним устройством за раз. Отключите неиспользуемое устройство, чтобы переключиться, или перейдите на платный план, чтобы синхронизировать больше устройств.",
+		"На плане Free файлы синхронизируются только с одним устройством за раз. Отключите неиспользуемое устройство, чтобы переключиться, или перейдите на платный план, чтобы синхронизировать больше устройств.",
 	"Device swap cooldown active": "Смена устройства пока заблокирована",
 	"Wait before swapping devices, or upgrade.":
 		"Подождите перед сменой устройства или перейдите на платный план.",
@@ -682,7 +682,7 @@ export default {
 	"You recently swapped devices. Your Free plan allows 1 swap every 24 hours — you can swap again in {hours}h. {upgrade} to connect as many devices as you like.":
 		"Вы недавно меняли устройство. План Free допускает одну смену раз в 24 часа, поменять снова можно через {hours} ч. {upgrade}, чтобы подключать сколько угодно устройств.",
 	"Heads up — your Free plan syncs files between 1 device at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
-		"Обратите внимание: на плане Free файлы синхронизируются только между одним устройством за раз. Привязка этого устройства отключит {device}, и оно перестанет получать изменения. {upgrade}, чтобы оставить оба подключёнными.",
+		"Обратите внимание: на плане Free файлы синхронизируются только с одним устройством за раз. Привязка этого устройства отключит {device}, и оно перестанет получать изменения. {upgrade}, чтобы оставить оба подключёнными.",
 	"Your Free plan includes 1 vault — link into the existing one above, or {upgrade} to create more.":
 		"План Free включает 1 хранилище. Привяжите существующее выше. Чтобы создать больше, можно {upgrade}.",
 	"Sync into your existing vault · {count} notes": {
@@ -901,7 +901,7 @@ export default {
 	"this app": "это приложение",
 	"previous connection": "предыдущее подключение",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
-		"Устройство «{name}» отключено, но авторизовать новое подключение не удалось. Повторите запрос из {client}: сейчас нет активных подключений такого типа.",
+		"Подключение «{name}» отключено, но авторизовать новое подключение не удалось. Повторите запрос из {client}: сейчас нет активных подключений такого типа.",
 	"This app is requesting access to your Engram.":
 		"Это приложение запрашивает доступ к вашему Engram.",
 	"Signed in as {email}.": "Вы вошли как {email}.",

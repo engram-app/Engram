@@ -1116,7 +1116,7 @@ export default {
 	"Toggle checkbox": "切換核取方塊",
 	Outdent: "減少縮排",
 	Indent: "增加縮排",
-	"Wiki link": "Wiki 連結",
+	"Wiki link": "Wikilink",
 	Link: "連結",
 	"Mermaid error: {error}": "Mermaid 錯誤：{error}",
 	"Frontmatter (raw YAML)": "Frontmatter（原始 YAML）",

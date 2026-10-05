@@ -652,7 +652,7 @@ export default {
 	"Upload attachment": "上传附件",
 	"Upload an attachment": "上传附件",
 	Sort: "排序",
-	"Collapse all folders": "全部折叠文件夹",
+	"Collapse all folders": "折叠所有文件夹",
 	"File name": "文件名",
 	"A to Z": "A 到 Z",
 	"Z to A": "Z 到 A",
@@ -713,7 +713,7 @@ export default {
 	"Custom…": "自定义…",
 	Updated: "更新时间",
 	"We index each note's {type} separately, so adding one to your notes can improve your searches. Filter to a type here to look only at notes of that kind.":
-		"我们会分别为每条笔记的{type}建立索引，因此为笔记添加该字段可以改善搜索效果。在此按类型筛选，即可只查看该类型的笔记。",
+		"我们会分别为每条笔记的 {type} 字段建立索引，因此为笔记添加它可以改善搜索效果。在此按类型筛选，即可只查看该类型的笔记。",
 	"It is also the one field required by the {okf}, the open standard Engram follows — so filling it in keeps your notes portable to anything else that reads OKF.":
 		"它也是 {okf} 唯一要求的字段，该开放标准正是 Engram 所遵循的标准。填写它，可让你的笔记能够迁移到任何其他支持 OKF 的工具。",
 	"{count} results": { other: "{count} 条结果" },
