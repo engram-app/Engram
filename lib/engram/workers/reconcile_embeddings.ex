@@ -428,25 +428,15 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   end
 
   # insert_all ignores `unique`, so without this every tick would stack one
-  # more job per note while the queue is behind (the ratchet EmbedNote's
-  # `reject_already_queued/2` exists for).
-  defp reject_pending([], _worker), do: []
-
+  # more job per note while the queue is behind (the ratchet).
   defp reject_pending(rows, worker) do
-    wanted = Enum.map(rows, fn {id, _} -> to_string(id) end)
-    worker_name = inspect(worker)
-
-    pending =
-      from(j in Oban.Job,
-        where: j.worker == ^worker_name,
-        where: j.state in ["available", "scheduled", "executing", "retryable"],
-        where: fragment("? ->> 'note_id'", j.args) in ^wanted,
-        select: fragment("? ->> 'note_id'", j.args)
-      )
-      |> Repo.all()
+    fresh =
+      rows
+      |> Enum.map(&elem(&1, 0))
+      |> then(&Engram.Jobs.reject_pending(worker, &1))
       |> MapSet.new()
 
-    Enum.reject(rows, fn {id, _} -> MapSet.member?(pending, to_string(id)) end)
+    Enum.filter(rows, &MapSet.member?(fresh, elem(&1, 0)))
   end
 
   # #897 — preemptive cooldown window stamped on every enqueued note (see

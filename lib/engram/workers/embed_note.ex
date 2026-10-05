@@ -695,24 +695,6 @@ defmodule Engram.Workers.EmbedNote do
     )
   end
 
-  # Deliberately NOT Oban's full :incomplete set — `executing` is excluded.
-  # A running job may already have read the previous content, so a fresh edit
-  # genuinely needs its own job; suppressing on `executing` would leave that
-  # edit unsearchable until ReconcileEmbeddings swept it (~45 min). Jobs in
-  # these three states have not started and will read whatever the row holds
-  # when they run, so a second job for the same note is pure waste.
-  #
-  # Subset of the predicate on oban_jobs_embed_note_note_id_index, which is
-  # what keeps this index-backed rather than a scan of the embed backlog
-  # (guarded by embed_note_burst_index_test.exs).
-  @pending_states ~w(scheduled available retryable)
-
-  # Ids per lookup query. 50 is the measured cliff: at/below it Postgres plans
-  # an index scan on the expression index; above it the row estimate blows up
-  # and it reverts to a Seq Scan of the whole backlog. See
-  # reject_already_queued/1 and embed_note_bulk_dedup_test.exs.
-  @lookup_chunk 50
-
   @doc """
   Drop note ids that already have an in-flight `EmbedNote` job.
 
@@ -729,16 +711,10 @@ defmodule Engram.Workers.EmbedNote do
   in dev on 2026-08-25: 61,536 pending jobs for 4,266 notes, one note queued
   184 times across five days, which then kept the backlog from ever draining.
 
-  Chunked at `@lookup_chunk` ids per query, which is a plan decision, not
-  taste. Postgres estimates `args->>'note_id' = ANY($1)` badly for a large
-  array: measured on a 40k-row `oban_jobs`, arrays of 25-50 planned as a Bitmap
-  Heap Scan on `oban_jobs_embed_note_note_id_index` (0.4-2.8 ms), while 100+
-  flipped to a Seq Scan (23-31 ms). The seq scan is O(backlog) — it degrades
-  precisely as the backlog grows, i.e. exactly when this guard is load-bearing.
-  Ten small index probes beat one scan that gets worse over time.
-
-  Still far cheaper than the per-note `existing_burst_start/1` SELECT that
-  `clamp: false` exists to avoid: `@batch_size` notes cost 10 queries, not 500.
+  The lookup is `Engram.Jobs.reject_pending/3`, shared by every bulk
+  enqueue site: chunked, index-backed, one query per 50 ids. Still far cheaper
+  than the per-note `existing_burst_start/1` SELECT that `clamp: false` exists
+  to avoid.
 
   Suppressing a more urgent enqueue would invert `priority_for/1`, which is the
   whole fairness mechanism: during an import every note holds a pending
@@ -752,56 +728,15 @@ defmodule Engram.Workers.EmbedNote do
 
   Not a uniqueness guarantee: two bulk callers racing between this read and
   their inserts can still produce two jobs, and an `executing` job never
-  suppresses (see `@pending_states`). Both are bounded and self-correcting —
+  suppresses: a running job may already have read the previous content, so a
+  fresh edit genuinely needs its own job. Both are bounded and self-correcting —
   the extra job is a no-op once `embed_hash` is stamped — which is the whole
   difference between a duplicate and a ratchet.
   """
   @spec reject_already_queued([Ecto.UUID.t()], non_neg_integer()) :: [Ecto.UUID.t()]
-  def reject_already_queued(note_ids, new_priority \\ 0)
-
-  def reject_already_queued([], _new_priority), do: []
-
-  def reject_already_queued(note_ids, new_priority) do
-    queued =
-      note_ids
-      |> Enum.map(&to_string/1)
-      |> Enum.chunk_every(@lookup_chunk)
-      |> Enum.flat_map(&promote_and_list(&1, new_priority))
-      |> MapSet.new()
-
-    Enum.reject(note_ids, &MapSet.member?(queued, to_string(&1)))
-  end
-
-  # Read priorities with the ids so the UPDATE only runs when something is
-  # actually ranked worse than the incoming job. The common case — nothing
-  # pending, or pending at an equal-or-better priority — stays one query per
-  # chunk; the promotion write is the exception, not the toll.
-  defp promote_and_list(wanted, new_priority) do
-    rows =
-      pending_for(wanted)
-      |> select([j], {fragment("? ->> 'note_id'", j.args), j.priority})
-      |> Repo.all()
-
-    case for({id, priority} <- rows, priority > new_priority, do: id) do
-      [] ->
-        :ok
-
-      outranked ->
-        pending_for(outranked)
-        |> where([j], j.priority > ^new_priority)
-        |> Repo.update_all(set: [priority: new_priority])
-    end
-
-    Enum.map(rows, &elem(&1, 0))
-  end
-
-  defp pending_for(wanted) do
-    from(j in Oban.Job,
-      where: j.worker == "Engram.Workers.EmbedNote",
-      where: j.state in @pending_states,
-      where: fragment("? ->> 'note_id'", j.args) in ^wanted
-    )
-  end
+  def reject_already_queued(note_ids, new_priority \\ 0),
+    do:
+      Engram.Jobs.reject_pending(__MODULE__, note_ids, executing: false, promote_to: new_priority)
 
   @backfill_priority 9
 
