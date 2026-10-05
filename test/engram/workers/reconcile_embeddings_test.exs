@@ -5,7 +5,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
   alias Engram.KeywordIndex
   alias Engram.Notes.Note
   alias Engram.Parsers.Markdown
-  alias Engram.Workers.{EmbedNote, ReconcileEmbeddings, ResparseNote}
+  alias Engram.Workers.{EmbedNote, ReconcileEmbeddings, RefreshKeywordVectors}
 
   describe "perform/1" do
     test "queues jobs for notes with nil embed_hash" do
@@ -72,13 +72,13 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
       # Its keyword stamp is stale too (NULL), and that DOES self-heal, through
       # the keyword-only path that never calls the embedder.
-      assert_enqueued(worker: ResparseNote, args: %{"note_id" => note.id})
+      assert_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
     end
 
     # A keyword-encoding change must reach existing notes with no operator
     # step, on SaaS and self-host alike (#1615 needed a hand-run
     # `ReindexKeyword :sparse`). The sweep sends keyword-stale notes to
-    # ResparseNote, which rebuilds only the sparse vectors: no Voyage spend.
+    # RefreshKeywordVectors, which rebuilds only the sparse vectors: no Voyage spend.
     test "rebuilds keyword vectors for a note whose keyword_version is stale" do
       user = insert(:user)
       note = current_note(user, keyword_version: nil)
@@ -87,9 +87,27 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       assert :ok = perform_job(ReconcileEmbeddings, %{})
 
       for n <- [note, older] do
-        assert_enqueued(worker: ResparseNote, args: %{"note_id" => n.id, "user_id" => user.id})
+        assert_enqueued(
+          worker: RefreshKeywordVectors,
+          args: %{"note_id" => n.id, "user_id" => user.id}
+        )
+
         refute_enqueued(worker: EmbedNote, args: %{"note_id" => n.id})
       end
+    end
+
+    # Nodes on the previous release share the embed queue mid-deploy, and
+    # their ResparseNote re-embedded unmatched notes. The sweep must enqueue a
+    # worker name they do not have, so they fail the job instead of billing.
+    test "the keyword sweep enqueues a worker the previous release does not have" do
+      user = insert(:user)
+      current_note(user, keyword_version: nil)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+
+      workers = all_enqueued() |> Enum.map(& &1.worker) |> Enum.uniq()
+      assert "Engram.Workers.RefreshKeywordVectors" in workers
+      refute "Engram.Workers.ResparseNote" in workers
     end
 
     test "the keyword sweep skips current notes, content-stale notes and deleted ones" do
@@ -102,7 +120,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       assert :ok = perform_job(ReconcileEmbeddings, %{})
 
       for n <- [current, edited, deleted] do
-        refute_enqueued(worker: ResparseNote, args: %{"note_id" => n.id})
+        refute_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => n.id})
       end
     end
 
@@ -113,7 +131,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       assert :ok = perform_job(ReconcileEmbeddings, %{})
       assert :ok = perform_job(ReconcileEmbeddings, %{})
 
-      assert [_one] = all_enqueued(worker: ResparseNote, args: %{"note_id" => note.id})
+      assert [_one] = all_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
     end
 
     # A note whose resparse keeps failing (a Qdrant 404 on a lost point) must
@@ -129,7 +147,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       # The job is gone (discarded after its attempts), not pending.
       Repo.delete_all(Oban.Job)
       assert :ok = perform_job(ReconcileEmbeddings, %{})
-      refute_enqueued(worker: ResparseNote, args: %{"note_id" => note.id})
+      refute_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
     end
 
     test "backfills dense vectors for every entitled status, past_due included" do

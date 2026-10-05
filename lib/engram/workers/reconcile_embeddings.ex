@@ -30,7 +30,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Vaults.Vault
-  alias Engram.Workers.{EmbedNote, ExtractNoteLinks, ResparseNote}
+  alias Engram.Workers.{EmbedNote, ExtractNoteLinks, RefreshKeywordVectors}
 
   require Logger
 
@@ -261,7 +261,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # Notes indexed at their current content whose keyword vectors predate
   # `KeywordIndex.version/0`: a keyword-encoding change (tokenizer, stemmer,
   # what text is encoded) reaches them here with no operator step, on SaaS and
-  # every self-host install. They go to ResparseNote, which rewrites only the
+  # every self-host install. They go to RefreshKeywordVectors, which rewrites only the
   # sparse vectors and never calls the embedder. NOT to EmbedNote: most of
   # these notes also carry a stale `chunker_version`, and EmbedNote would
   # answer that with a full re-embed (see the chunker test in this module's
@@ -329,7 +329,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     _ =
       Oban.insert_all(
         Enum.map(fresh, fn {note_id, user_id} ->
-          ResparseNote.new(%{note_id: to_string(note_id), user_id: user_id},
+          RefreshKeywordVectors.new(%{note_id: to_string(note_id), user_id: user_id},
             priority: EmbedNote.backfill_priority()
           )
         end)
@@ -348,7 +348,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
     pending =
       from(j in Oban.Job,
-        where: j.worker == "Engram.Workers.ResparseNote",
+        where: j.worker == "Engram.Workers.RefreshKeywordVectors",
         where: j.state in ["available", "scheduled", "executing", "retryable"],
         where: fragment("? ->> 'note_id'", j.args) in ^wanted,
         select: fragment("? ->> 'note_id'", j.args)

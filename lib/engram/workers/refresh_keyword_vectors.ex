@@ -1,4 +1,4 @@
-defmodule Engram.Workers.ResparseNote do
+defmodule Engram.Workers.RefreshKeywordVectors do
   @moduledoc """
   Oban worker: rebuild one note's keyword (sparse) vectors in place via
   `Indexing.resparse_note/2`. No embedder call and no Voyage spend. Enqueued
@@ -11,6 +11,11 @@ defmodule Engram.Workers.ResparseNote do
   `keyword_version` is behind `Engram.KeywordIndex.version/0`, so a keyword
   encoding change heals itself with no operator step. Success stamps the
   version.
+
+  Named apart from its predecessor `ResparseNote` on purpose: during a rolling
+  deploy, nodes on the previous release share the `embed` queue, and their
+  `ResparseNote` still re-embedded unmatched notes. A worker name they do not
+  have makes them fail the job harmlessly instead of billing Voyage.
 
   It never re-embeds. Points it cannot match (legacy rows with no
   fingerprint, v1 chunks whose blobs v2 strips) belong to notes with a stale
@@ -30,6 +35,7 @@ defmodule Engram.Workers.ResparseNote do
   alias Engram.KeywordIndex
   alias Engram.Logger.Metadata
   alias Engram.Notes.Note
+  alias Engram.Parsers.Markdown
   alias Engram.Repo
   alias Engram.Workers.BackgroundPriority
 
@@ -47,8 +53,24 @@ defmodule Engram.Workers.ResparseNote do
          user = Engram.Accounts.get_user!(note.user_id),
          {:ok, note} <- Crypto.maybe_decrypt_note_fields(note, user),
          {:ok, _updated, unmatched} <- Indexing.resparse_note(note, user) do
-      if unmatched > 0, do: log_unmatched(note, unmatched)
-      stamp_keyword_version(note)
+      cond do
+        unmatched == 0 ->
+          stamp_keyword_version(note)
+
+        note.chunker_version != Markdown.chunker_version() ->
+          log_unmatched(note, unmatched)
+          stamp_keyword_version(note)
+
+        # Unmatched on a CURRENT chunker: nothing else will rebuild these
+        # points (a DEK rotation clears every context_hmac without touching
+        # content or chunker). Stay unstamped and say so; the sweep retries
+        # once per cooldown window, which costs no embedder call.
+        true ->
+          Logger.warning(
+            "resparse cannot match points on a current-chunker note",
+            Metadata.with_category(:warning, :oban, note_id: note.id, count: unmatched)
+          )
+      end
     else
       {:discard, _} = discard -> discard
       {:error, :rotation_in_progress} -> {:snooze, 60}
@@ -72,9 +94,9 @@ defmodule Engram.Workers.ResparseNote do
     :ok
   end
 
-  # Never a re-embed from here. A point resparse cannot match is a legacy row
-  # (no fingerprint) or a v1 chunk holding a base64 blob v2 strips, and either
-  # way the note's `chunker_version` is stale, so the chunker rebuild owns it.
+  # Never a re-embed from here. On a stale-chunker note, a point resparse
+  # cannot match is a legacy row (no fingerprint) or a v1 chunk holding a
+  # base64 blob v2 strips, and the chunker rebuild owns it.
   # Re-embedding here turned the automatic keyword sweep into a corpus-wide
   # Voyage bill and, over a spent Free budget, a sparse-only pass that drops
   # the note's dense points. The note is still stamped: its matched points are

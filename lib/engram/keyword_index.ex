@@ -36,7 +36,7 @@ defmodule Engram.KeywordIndex do
   # Bump when a change alters the keyword vectors stored for UNCHANGED notes:
   # the tokenizer or stemmer, the BM25 weighting, or which text is encoded.
   # `ReconcileEmbeddings` then rebuilds every stale note's keyword vectors in
-  # place (`ResparseNote`: no embedder call). Do not bump for a change with
+  # place (`RefreshKeywordVectors`: no embedder call). Do not bump for a change with
   # identical output. A change that moves chunk boundaries is a
   # `Markdown.chunker_version/0` bump instead.
   #

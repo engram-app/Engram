@@ -103,12 +103,23 @@ defmodule Engram.IndexingResparseTest do
     refute_received {:qdrant, "PUT", _, _}
   end
 
-  # A row with no fingerprint (written before context_hmac existed, or one
-  # whose reuse marker was cleared) can never be matched, so its keyword
-  # vector would silently stay on the old tokenizer. It must be reported.
-  test "counts stored points it cannot match", ctx do
+  # A row with no fingerprint (written before context_hmac existed, or
+  # cleared by a DEK rotation) still names the chunk it holds by position and
+  # offsets. Resparse rewrites only the keyword vector, from the current text,
+  # so that is enough: these heal with no re-embed.
+  test "matches a row with no fingerprint by its position and offsets", ctx do
     %{user: user, note: note, upserted: upserted} = ctx
     clear_one_fingerprint(note)
+
+    assert {:ok, count, 0} = Indexing.resparse_note(note, user)
+    assert count == length(upserted)
+  end
+
+  # A row matching nothing (a boundary the current chunker no longer
+  # produces) keeps its old keyword vector, so it must be reported.
+  test "counts stored points it cannot match", ctx do
+    %{user: user, note: note, upserted: upserted} = ctx
+    orphan_one_row(note)
 
     assert {:ok, count, 1} = Indexing.resparse_note(note, user)
     assert count == length(upserted) - 1
@@ -121,7 +132,7 @@ defmodule Engram.IndexingResparseTest do
   # a spent Free budget it dropped the note's dense vectors.
   test "unmatched points never trigger a re-embed; the note is still stamped", ctx do
     %{user: user, note: note} = ctx
-    clear_one_fingerprint(note)
+    orphan_one_row(note)
     before = Repo.get!(Notes.Note, note.id, skip_tenant_check: true)
 
     embeds = fn ->
@@ -130,7 +141,11 @@ defmodule Engram.IndexingResparseTest do
 
     queued = embeds.()
 
-    assert :ok = perform_job(Engram.Workers.ResparseNote, %{note_id: note.id, user_id: user.id})
+    assert :ok =
+             perform_job(Engram.Workers.RefreshKeywordVectors, %{
+               note_id: note.id,
+               user_id: user.id
+             })
 
     # No rebuild enqueued (the fixture's own upsert already queued one), and
     # the index markers a rebuild would clear are untouched.
@@ -141,6 +156,28 @@ defmodule Engram.IndexingResparseTest do
              {before.embed_hash, before.dense_indexed_hash}
 
     assert reloaded.keyword_version == Engram.KeywordIndex.version()
+  end
+
+  # On a CURRENT chunker no rebuild is coming for a point that matches
+  # nothing, so stamping would hide it for good; staying unstamped keeps it in
+  # the sweep and logged.
+  test "unmatched points on a current-chunker note leave it unstamped", ctx do
+    %{user: user, note: note} = ctx
+    orphan_one_row(note)
+
+    Repo.update_all(
+      from(n in Notes.Note, where: n.id == ^note.id),
+      [set: [chunker_version: Engram.Parsers.Markdown.chunker_version(), keyword_version: nil]],
+      skip_tenant_check: true
+    )
+
+    assert :ok =
+             perform_job(Engram.Workers.RefreshKeywordVectors, %{
+               note_id: note.id,
+               user_id: user.id
+             })
+
+    assert is_nil(Repo.get!(Notes.Note, note.id, skip_tenant_check: true).keyword_version)
   end
 
   # Rows written between #1595 (context_hmac) and #1606 (pass-type prefix)
@@ -170,10 +207,27 @@ defmodule Engram.IndexingResparseTest do
       skip_tenant_check: true
     )
 
-    assert :ok = perform_job(Engram.Workers.ResparseNote, %{note_id: note.id, user_id: user.id})
+    assert :ok =
+             perform_job(Engram.Workers.RefreshKeywordVectors, %{
+               note_id: note.id,
+               user_id: user.id
+             })
 
     assert Repo.get!(Notes.Note, note.id, skip_tenant_check: true).keyword_version ==
              Engram.KeywordIndex.version()
+  end
+
+  # No fingerprint AND offsets no current chunk has: unmatchable.
+  defp orphan_one_row(note) do
+    {:ok, _} =
+      Repo.with_tenant(note.user_id, fn ->
+        [id | _] =
+          Repo.all(from(c in Engram.Notes.Chunk, where: c.note_id == ^note.id, select: c.id))
+
+        Repo.update_all(from(c in Engram.Notes.Chunk, where: c.id == ^id),
+          set: [context_hmac: nil, char_start: 999_000, char_end: 999_999]
+        )
+      end)
   end
 
   defp clear_one_fingerprint(note) do
@@ -188,11 +242,14 @@ defmodule Engram.IndexingResparseTest do
       end)
   end
 
-  test "the ResparseNote job runs the re-index for its note", ctx do
+  test "the RefreshKeywordVectors job runs the re-index for its note", ctx do
     %{user: user, note: note} = ctx
 
     assert :ok =
-             perform_job(Engram.Workers.ResparseNote, %{note_id: note.id, user_id: user.id})
+             perform_job(Engram.Workers.RefreshKeywordVectors, %{
+               note_id: note.id,
+               user_id: user.id
+             })
 
     assert_receive {:qdrant, "PUT", path, _body}
     assert String.ends_with?(path, "/points/vectors")

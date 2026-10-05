@@ -11,7 +11,7 @@ defmodule Engram.Repo.Migrations.AddKeywordVersionToNotesExpand do
   `ReindexKeyword :sparse` by hand per vault, on SaaS and on every self-host
   install. `ReconcileEmbeddings` now selects notes whose stamp is behind
   `Engram.KeywordIndex.version/0` and rebuilds just their keyword vectors
-  (`ResparseNote`): no embedder call, no Voyage spend.
+  (`RefreshKeywordVectors`): no embedder call, no Voyage spend.
 
   Not backfilled, like `chunker_version` (#1620): NULL means "built before this
   stamp", which is exactly the set that needs the rebuild. No tenant-table DML,

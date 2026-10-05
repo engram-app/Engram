@@ -973,14 +973,14 @@ defmodule Engram.Indexing do
 
   A chunk is rewritten only if it still matches a stored point by
   fingerprint (dense, sparse-only for points that never had a dense vector,
-  or the legacy unprefixed form written before #1606).
+  or the legacy unprefixed form written before #1606), or, for a row with no
+  fingerprint, by position and offsets.
 
   Returns `{:ok, points_updated, points_unmatched}`. An unmatched point kept
-  its old keyword vector: a row with no fingerprint (written before
-  `context_hmac` existed, or a cleared reuse marker), a v1 chunk whose blob
-  v2 strips, or a chunk edited since the last index. The first two carry a
-  stale `chunker_version`, so the chunker rebuild owns them; an edited note
-  is EmbedNote's.
+  its old keyword vector: a boundary the current chunker no longer produces
+  (a v1 chunk whose blob v2 strips), or a chunk edited since the last index.
+  The first carries a stale `chunker_version`, so the chunker rebuild owns
+  it; an edited note is EmbedNote's.
   """
   def resparse_note(note, user) do
     chunks = Markdown.parse(note.content || "", note.path)
@@ -1060,11 +1060,22 @@ defmodule Engram.Indexing do
       Repo.with_tenant(note.user_id, fn ->
         Chunk
         |> where([c], c.note_id == ^note.id and not is_nil(c.qdrant_point_id))
-        |> select([c], {c.context_hmac, c.qdrant_point_id})
+        |> select(
+          [c],
+          {c.context_hmac, c.qdrant_point_id, {c.position, c.char_start, c.char_end}}
+        )
         |> Repo.all()
       end)
 
-    by_hmac = Enum.group_by(rows, &elem(&1, 0), &elem(&1, 1))
+    by_hmac =
+      for({hmac, id, _} <- rows, hmac != nil, do: {hmac, id})
+      |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+
+    # A row with NO fingerprint (written before context_hmac existed, or
+    # cleared by a DEK rotation) still names the chunk it holds by position
+    # and offsets. Only those rows match this way: a row WITH a fingerprint
+    # that no candidate equals holds other text.
+    by_offsets = Map.new(for {nil, id, offsets} <- rows, do: {offsets, id})
 
     # Third candidate: rows written between #1595 (context_hmac) and #1606
     # (the pass-type prefix) hold an UNPREFIXED hmac of context_text. Reuse
@@ -1080,14 +1091,20 @@ defmodule Engram.Indexing do
       ])
 
     {matched, _left} =
-      Enum.flat_map_reduce(keyed, by_hmac, fn {chunk, dense, sparse, legacy}, acc ->
-        case Enum.find([dense, sparse, legacy], &match?([_ | _], Map.get(acc, &1))) do
+      Enum.flat_map_reduce(keyed, {by_hmac, by_offsets}, fn {chunk, dense, sparse, legacy},
+                                                            {hmacs, offsets} = acc ->
+        offset_key = {chunk.position, chunk.char_start, chunk.char_end}
+
+        case Enum.find([dense, sparse, legacy], &match?([_ | _], Map.get(hmacs, &1))) do
           nil ->
-            {[], acc}
+            case Map.pop(offsets, offset_key) do
+              {nil, _} -> {[], acc}
+              {id, rest} -> {[{chunk, id}], {hmacs, rest}}
+            end
 
           hmac ->
-            [id | rest] = Map.fetch!(acc, hmac)
-            {[{chunk, id}], Map.put(acc, hmac, rest)}
+            [id | rest] = Map.fetch!(hmacs, hmac)
+            {[{chunk, id}], {Map.put(hmacs, hmac, rest), offsets}}
         end
       end)
 
