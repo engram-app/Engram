@@ -57,6 +57,24 @@ defmodule Engram.Native do
   def link_extract(content),
     do: parse(:link_extract, content, &link_extract_nif/1, &link_extract_dirty_nif/1)
 
+  @doc false
+  def chunk_nif(_body, _block, _folder, _title), do: :erlang.nif_error(:nif_not_loaded)
+  @doc false
+  def chunk_dirty_nif(_body, _block, _folder, _title), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
+  Chunks for `Engram.Parsers.Markdown.parse/2`: `[{text, context_text,
+  heading_path, char_start, char_end}]`, before positions. Valid UTF-8 only.
+  """
+  def chunk(body, block, folder, title) do
+    input = [body, block || ""]
+
+    if byte_size(body) <= @inline_max,
+      do: call(:chunk, input, %{dirty: false}, fn -> chunk_nif(body, block, folder, title) end),
+      else:
+        call(:chunk, input, %{dirty: true}, fn -> chunk_dirty_nif(body, block, folder, title) end)
+  end
+
   @doc "Frontmatter `title:`, else the first H1 outside code, else nil. Valid UTF-8 only."
   def note_title(content),
     do: parse(:note_title, content, &note_title_nif/1, &note_title_dirty_nif/1)

@@ -1,6 +1,7 @@
 //! In-house NIFs. Each is a pure function over binaries, runs on a dirty CPU
 //! scheduler, and returns BEAM binaries (so its OUTPUT is visible to
 //! `:erlang.memory(:binary)`). See docs/context for the memory standard.
+mod chunker;
 mod json;
 mod links;
 mod memory;
@@ -355,6 +356,45 @@ fn json_decode_nif<'a>(env: Env<'a>, text: Binary<'a>) -> NifResult<(Term<'a>, u
 #[rustler::nif(schedule = "DirtyCpu")]
 fn json_decode_dirty_nif<'a>(env: Env<'a>, text: Binary<'a>) -> NifResult<(Term<'a>, usize)> {
     json_decode(env, text)
+}
+
+/// `Engram.Parsers.Markdown.parse/2`'s chunks (positions are assigned in
+/// Elixir), and the call's native peak.
+fn chunk_terms<'a>(
+    env: Env<'a>,
+    body: &str,
+    block: Option<&str>,
+    folder: &str,
+    title: &str,
+) -> (Vec<Term<'a>>, usize) {
+    let base = memory::begin();
+    let out = chunker::chunk(body, block, folder, title)
+        .into_iter()
+        .map(|c| c.encode(env))
+        .collect();
+    (out, memory::peak_since(base))
+}
+
+#[rustler::nif]
+fn chunk_nif<'a>(
+    env: Env<'a>,
+    body: &str,
+    block: Option<&str>,
+    folder: &str,
+    title: &str,
+) -> (Vec<Term<'a>>, usize) {
+    chunk_terms(env, body, block, folder, title)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn chunk_dirty_nif<'a>(
+    env: Env<'a>,
+    body: &str,
+    block: Option<&str>,
+    folder: &str,
+    title: &str,
+) -> (Vec<Term<'a>>, usize) {
+    chunk_terms(env, body, block, folder, title)
 }
 
 rustler::init!("Elixir.Engram.Native");
