@@ -917,9 +917,11 @@ jobs:
           # regardless of which runner this lands on, keeping Mix's
           # absolute-project-root check (embedded in the compile manifest)
           # satisfied across runs on different runners.
+          # $3 (optional): extra `docker run` args, e.g. a mount.
           run_mix() {
             docker run --rm \
               -v "$PWD:/app" -w /app \
+              ${3:-} \
               -e MIX_ENV="$1" \
               -e HEX_MIRROR="${HEX_MIRROR:-}" \
               engram-mix-builder:ci \
@@ -941,7 +943,14 @@ jobs:
           fi
           run_mix dev  "mix compile --warnings-as-errors --no-deps-check" >/tmp/compile-dev.log 2>&1 &
           pid_dev=$!
-          run_mix test "mix compile --warnings-as-errors --no-deps-check" >/tmp/compile-test.log 2>&1 &
+          # Both envs build the NIF and copy it into priv/native/, and rustler
+          # deletes the destination before copying. Sharing one priv/, the
+          # copies raced on a cold _build: :test saw the file missing, took
+          # rustler's forced-rebuild path, and that path passes `--cfg` to
+          # `cargo rustc`, which cargo rejects. :test gets its own copy of
+          # priv/ (4 MB); :dev's .so in the real priv/ is what gets cached.
+          rm -rf "$RUNNER_TEMP/priv-test" && cp -a priv "$RUNNER_TEMP/priv-test"
+          run_mix test "mix compile --warnings-as-errors --no-deps-check" "-v $RUNNER_TEMP/priv-test:/app/priv" >/tmp/compile-test.log 2>&1 &
           pid_test=$!
           # Capture exit codes WITHOUT aborting under `set -e`. A bare
           # `wait "$pid"; rc=$?` lets a failing wait trip `set -e` and kill the
