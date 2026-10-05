@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.42.0](https://github.com/engram-app/Engram/compare/0.41.1...0.42.0) (2026-10-05)
+
+
+### Features
+
+* **chunker:** v3 boundaries with content-anchored splits and folder-free dense embeds ([4fc771c](https://github.com/engram-app/Engram/commit/4fc771cd58e5f12b60f1236d9aff7ce054a4622c))
+* **search:** heal stale keyword vectors without an operator ([98126e7](https://github.com/engram-app/Engram/commit/98126e710c312b180f37e73a75eb0af106b7a332))
+* **search:** rebuild chunker- and model-stale notes automatically ([98126e7](https://github.com/engram-app/Engram/commit/98126e710c312b180f37e73a75eb0af106b7a332))
+
+
+### Bug Fixes
+
+* **deps:** bump mint to 1.11.0 for four advisories ([#1861](https://github.com/engram-app/Engram/issues/1861)) ([7a7678d](https://github.com/engram-app/Engram/commit/7a7678d71c464ad6b4ff6e8427d428dad5592d90))
+* **native:** segmented parse re-cuts before an open fence instead of doubling ([4fc771c](https://github.com/engram-app/Engram/commit/4fc771cd58e5f12b60f1236d9aff7ce054a4622c))
+
+
+### Performance Improvements
+
+* **chunker:** port the chunker and frontmatter split to Rust ([4fc771c](https://github.com/engram-app/Engram/commit/4fc771cd58e5f12b60f1236d9aff7ce054a4622c))
+
 ## [0.41.1](https://github.com/engram-app/Engram/compare/0.41.0...0.41.1) (2026-10-04)
 
 
