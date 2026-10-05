@@ -31,7 +31,7 @@ export interface SubscriptionAlertProps {
 
 export function SubscriptionAlert({ subscription, onDismiss, className }: SubscriptionAlertProps) {
 	const { t } = useT();
-	const alert = deriveSubscriptionAlert(subscription);
+	const alert = deriveSubscriptionAlert(subscription, t);
 
 	if (!alert) {
 		return null;

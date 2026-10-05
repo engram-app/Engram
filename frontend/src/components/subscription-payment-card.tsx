@@ -102,7 +102,7 @@ export function SubscriptionPaymentCard({
 
 	const displayLabel = paymentMethod
 		? (paymentMethod.label ??
-			getPaymentMethodDisplay(paymentMethod.type, paymentMethod.cardBrand, paymentMethod.last4))
+			getPaymentMethodDisplay(t, paymentMethod.type, paymentMethod.cardBrand, paymentMethod.last4))
 		: undefined;
 
 	const PaymentMethodIcon = paymentMethod

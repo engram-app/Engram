@@ -1,25 +1,33 @@
+import { msg } from "@/i18n/msg";
+import type { Translate } from "@/lib/translator";
+
+// Payment-method names that are brands stay as-is; the generic ones are marked
+// for translation and live in GENERIC_METHOD_LABELS.
 const PAYMENT_METHOD_LABELS: Record<string, string> = {
 	alipay: "Alipay",
 	apple_pay: "Apple Pay",
 	bancontact: "Bancontact",
 	blik: "BLIK",
-	card: "Card",
 	google_pay: "Google Pay",
 	ideal: "iDEAL",
 	kakao_pay: "Kakao Pay",
-	south_korea_local_card: "Korea local card",
 	mb_way: "MB WAY",
 	naver_pay: "Naver Pay",
-	offline: "Offline",
 	payco: "PAYCO",
 	paypal: "PayPal",
 	pix: "Pix",
 	samsung_pay: "Samsung Pay",
-	unknown: "Payment method",
 	upi: "UPI",
 	wechat_pay: "WeChat Pay",
-	wire_transfer: "Wire transfer",
-	korea_local: "Korean payment methods",
+};
+
+const GENERIC_METHOD_LABELS: Record<string, string> = {
+	card: msg("Card"),
+	south_korea_local_card: msg("Korea local card"),
+	offline: msg("Offline"),
+	unknown: msg("Payment method"),
+	wire_transfer: msg("Wire transfer"),
+	korea_local: msg("Korean payment methods"),
 };
 
 const CARD_BRAND_LABELS: Record<string, string> = {
@@ -31,9 +39,15 @@ const CARD_BRAND_LABELS: Record<string, string> = {
 	maestro: "Maestro",
 	mastercard: "Mastercard",
 	union_pay: "UnionPay",
-	unknown: "Card",
 	visa: "Visa",
 };
+
+function cardBrandLabel(cardBrand: string, t: Translate): string {
+	if (cardBrand === "unknown") {
+		return t("Card");
+	}
+	return CARD_BRAND_LABELS[cardBrand] ?? formatUnknownType(cardBrand);
+}
 
 function formatUnknownType(type: string): string {
 	return type
@@ -94,22 +108,22 @@ export type PaddleCardType =
  * @returns Human-readable payment method label
  *
  * @example
- * getPaymentMethodDisplay("card", "visa", "4242")    // "Visa ending 4242"
- * getPaymentMethodDisplay("card", "mastercard")       // "Mastercard"
- * getPaymentMethodDisplay("card")                     // "Card"
- * getPaymentMethodDisplay("paypal")                   // "PayPal"
- * getPaymentMethodDisplay("apple_pay")                // "Apple Pay"
+ * getPaymentMethodDisplay(t, "card", "visa", "4242")    // "Visa ending 4242"
+ * getPaymentMethodDisplay(t, "card", "mastercard")       // "Mastercard"
+ * getPaymentMethodDisplay(t, "card")                     // "Card"
+ * getPaymentMethodDisplay(t, "paypal")                   // "PayPal"
+ * getPaymentMethodDisplay(t, "apple_pay")                // "Apple Pay"
  */
 export function getPaymentMethodDisplay(
+	t: Translate,
 	type: PaddlePaymentMethodType,
 	cardBrand?: PaddleCardType,
 	last4?: string,
 ): string {
 	if (type === "card") {
-		const brand = cardBrand
-			? (CARD_BRAND_LABELS[cardBrand] ?? formatUnknownType(cardBrand))
-			: "Card";
-		return last4 ? `${brand} ending ${last4}` : brand;
+		const brand = cardBrand ? cardBrandLabel(cardBrand, t) : t("Card");
+		return last4 ? t("{brand} ending {last4}", { brand, last4 }) : brand;
 	}
-	return PAYMENT_METHOD_LABELS[type] ?? formatUnknownType(type);
+	const generic = GENERIC_METHOD_LABELS[type];
+	return generic ? t(generic) : (PAYMENT_METHOD_LABELS[type] ?? formatUnknownType(type));
 }

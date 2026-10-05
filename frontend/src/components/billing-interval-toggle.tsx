@@ -1,6 +1,7 @@
 "use client";
 
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useT } from "@/i18n/locale-provider";
 import { formatIntervalLabel } from "@/lib/paddle-format";
 import { cn } from "@/lib/utils";
 
@@ -17,12 +18,13 @@ export function BillingIntervalToggle({
 	onValueChange,
 	className,
 }: BillingIntervalToggleProps) {
+	const { t } = useT();
 	return (
 		<Tabs value={value} onValueChange={onValueChange} className={cn("w-full", className)}>
 			<TabsList className="mx-auto flex w-fit">
 				{intervals.map((interval) => (
 					<TabsTrigger key={interval} value={interval}>
-						{formatIntervalLabel(interval)}
+						{formatIntervalLabel(interval, t)}
 					</TabsTrigger>
 				))}
 			</TabsList>

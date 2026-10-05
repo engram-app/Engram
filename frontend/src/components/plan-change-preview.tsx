@@ -87,7 +87,7 @@ export function PlanChangePreview({
 	prorationBillingMode,
 	className,
 }: PlanChangePreviewProps) {
-	const { t } = useT();
+	const { t, tn } = useT();
 	if (!preview) {
 		return <PlanChangePreviewSkeleton className={className} />;
 	}
@@ -111,7 +111,7 @@ export function PlanChangePreview({
 	const changeType = isCharge ? "upgrade" : isCredit ? "downgrade" : "change";
 
 	const prorationLabel = prorationBillingMode
-		? formatProrationMode(prorationBillingMode)
+		? formatProrationMode(prorationBillingMode, t)
 		: undefined;
 
 	const isImmediate =
@@ -158,16 +158,24 @@ export function PlanChangePreview({
 					: t("Amount due now");
 
 	const currentIntervalLabel =
-		formatBillingCycle({
-			interval: currentPlan.interval,
-			frequency: currentPlan.billingFrequency ?? 1,
-		}) ?? currentPlan.interval;
+		formatBillingCycle(
+			{
+				interval: currentPlan.interval,
+				frequency: currentPlan.billingFrequency ?? 1,
+			},
+			t,
+			tn,
+		) ?? currentPlan.interval;
 
 	const newIntervalLabel =
-		formatBillingCycle({
-			interval: newPlan.interval,
-			frequency: newPlan.billingFrequency ?? 1,
-		}) ?? newPlan.interval;
+		formatBillingCycle(
+			{
+				interval: newPlan.interval,
+				frequency: newPlan.billingFrequency ?? 1,
+			},
+			t,
+			tn,
+		) ?? newPlan.interval;
 
 	return (
 		<Card className={cn("gap-4", className)}>

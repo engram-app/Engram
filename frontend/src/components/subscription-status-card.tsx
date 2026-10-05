@@ -233,7 +233,7 @@ export function SubscriptionStatusCard({
 	onManageSubscription,
 	className,
 }: SubscriptionStatusCardProps) {
-	const { t } = useT();
+	const { t, tn } = useT();
 	if (!subscription) {
 		return <SubscriptionStatusCardSkeleton className={className} />;
 	}
@@ -268,7 +268,7 @@ export function SubscriptionStatusCard({
 		titleOverride ?? (isSingleItem ? primaryItem?.productName : undefined) ?? t("Subscription");
 
 	const billingIntervalLabel =
-		formatBillingCycle({ interval, frequency: billingFrequency ?? 1 }) ?? interval;
+		formatBillingCycle({ interval, frequency: billingFrequency ?? 1 }, t, tn) ?? interval;
 
 	const scheduledChangeNote = effectiveScheduledChange
 		? effectiveScheduledChange.action === "cancel"
