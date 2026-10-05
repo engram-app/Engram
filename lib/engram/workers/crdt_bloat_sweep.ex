@@ -1,6 +1,6 @@
 defmodule Engram.Workers.CrdtBloatSweep do
   @moduledoc """
-  Whole-population measurement of CRDT doc bloat (#1706), every 6 hours.
+  Whole-population measurement of CRDT doc bloat (#1706), hourly.
 
   `Engram.Notes.CrdtCheckpoint` emits a per-checkpoint bloat sample, but that
   stream is biased in two ways that make it the wrong thing to size the database
@@ -13,10 +13,9 @@ defmodule Engram.Workers.CrdtBloatSweep do
   This sweep answers the question the checkpoint stream cannot: across EVERY
   stored note, how far does `crdt_state` run ahead of the content it encodes.
 
-  Every 6 hours rather than daily because it publishes `last_value` gauges,
-  which live only on the node that ran the job: a task replacement clears them,
-  and on a daily cadence that is up to 24h of "No data". See the staleness
-  contract in `Engram.PromEx.Crdt`.
+  Hourly because it publishes `last_value` gauges, which live only on the node
+  that ran the job: a task replacement clears them, leaving "No data" until the
+  next run. See the staleness contract in `Engram.PromEx.Crdt`.
 
   ## It never decrypts anything
 
@@ -250,7 +249,7 @@ defmodule Engram.Workers.CrdtBloatSweep do
 
   # `enforced?/0` answers a live query and reports `true` when it cannot tell, so
   # a transient DB blip refuses this slot rather than sweeping blind. That is the
-  # safe direction — a lost reading self-heals in 6h, a fabricated zero does not
+  # safe direction — a lost reading self-heals in 1h, a fabricated zero does not
   # — but it means the refusal message must not assert RLS *is* enforced.
   defp tenancy_unsafe? do
     Repo.maintenance() == Repo and Engram.Repo.TenancyGuard.enforced?()

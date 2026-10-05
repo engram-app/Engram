@@ -101,7 +101,6 @@ config :engram, Oban,
     # A note whose embed killed the node once re-runs here ALONE, so a second
     # death is its own and not a neighbour's (EmbedNote.CrashGuard).
     embed_isolated: 1,
-    reindex: 1,
     maintenance: 2,
     crypto_backfill: 1,
     export: 1,
@@ -148,68 +147,55 @@ config :engram, Oban,
   plugins: [
     {Oban.Plugins.Pruner, max_age: 7 * 24 * 3600},
     Oban.Plugins.Lifeline,
-    {Oban.Plugins.Cron,
-     crontab: [
-       # Every 5 min, off the :00/:15/:30/:45 marks the hourly and nightly jobs
-       # use. A backstop: work is also queued the moment it is due (`kick/0`).
-       {"2-59/5 * * * *", Engram.Workers.ReconcileEmbeddings},
-       {"0 * * * *", Engram.Workers.CleanupDeviceAuthWorker},
-       {"0 2 * * *", Engram.Billing.Workers.PaddleReconcile},
-       {"0 3 * * *", Engram.Billing.Workers.OverrideExpirySweep},
-       {"30 3 * * *", Engram.Workers.InactivityCleanup},
-       {"0 4 * * *", Engram.Workers.OriginAbuseSweep},
-       # Daily self-host install census; no-op on SaaS and unless opted in.
-       {"17 5 * * *", Engram.Workers.TelemetryHeartbeat},
-       # Daily retention sweep for the census collector table (unbounded otherwise).
-       {"30 4 * * *", Engram.Workers.InstallPingsPruner},
-       # Daily client_logs retention sweep (Engram#792 — the log sink was
-       # unbounded at ~98% of the DB).
-       {"15 4 * * *", Engram.Workers.ClientLogsPruner},
-       # Daily expired idempotency_keys sweep (#862) — expired rows read as
-       # :miss already; this reclaims the encrypted response-body storage.
-       {"45 4 * * *", Engram.Workers.IdempotencyPrune},
-       # Daily expired-export sweep (#859) — deletes S3 archive blobs past
-       # the 7-day download window and flips rows to :expired.
-       {"20 5 * * *", Engram.Workers.ExportExpirySweep},
-       # Cross-store reconciliation, 05:00 UTC daily, off-peak. Was weekly when
-       # it only reaped orphans — capacity waste, not wrong answers. It now also
-       # carries the Postgres->Qdrant direction (#1576), which IS correctness: a
-       # note whose points are gone is silently unsearchable and self-heals via
-       # nothing. A week of that is not an acceptable detection window.
-       #
-       # Affordable daily because a pass is O(collection) and the collection is
-       # small. Revisit around 1M points, where a full walk starts costing real
-       # minutes — that is when the walk wants a resumable cursor rather than a
-       # lower frequency.
-       {"0 5 * * *", Engram.Workers.OrphanSweep},
-       # Daily CIMD document refresh (#1642). `Cimd.ensure_client/1` is only
-       # reached from the authorize path, so `cimd_fetched_at` measured time
-       # since a user last clicked Connect rather than vendor reachability — and
-       # a client on a 90-day refresh token could hold a document read months
-       # ago. Since that row carries the permitted auth-method set, a vendor
-       # TIGHTENING its document could not land the change until someone
-       # re-authorized. 05:40 keeps it clear of OrphanSweep at 05:00.
-       {"40 5 * * *", Engram.Workers.CimdRefresh},
-       # Whole-population CRDT doc bloat measurement (#1706). One aggregate
-       # query over `notes` column lengths — no decrypt, no row walk — and the
-       # only unbiased view of the distribution the checkpoint histogram
-       # samples.
-       #
-       # :10 past the hour: deliberately NOT on the hour or a quarter-hour,
-       # which CleanupDeviceAuthWorker (`0 * * * *`) owns. 00:10 is clear of the nightly chain above, and 06:10 puts
-       # the first post-chain reading after it rather than during it.
-       #
-       # Every 6h rather than daily because it writes `last_value` gauges, which
-       # only exist on the node that ran the job: an ECS task replacement clears
-       # them, and on a daily cadence that is up to 24h of "No data" on every
-       # panel after each deploy. Four cheap aggregates a day buys a 6h worst
-       # case. See the staleness contract in `Engram.PromEx.Crdt`.
-       {"10 */6 * * *", Engram.Workers.CrdtBloatSweep},
-       # Clears plaintext vaults.slug after making slug_hmac / slug_suffixed
-       # describe the derived slug; idempotent (only rows still holding a
-       # slug). Remove with the contract release that drops vaults.slug.
-       {"25 4 * * *", Engram.Workers.BackfillVaultSlugHmac}
-     ]}
+    {
+      Oban.Plugins.Cron,
+      # Backstops and time-based work. Work with a trigger (an edit, a version
+      # bump, a plan change) is queued when it happens; these catch what that
+      # missed. No two entries share a minute (ObanCronTest): they share the
+      # 2-slot maintenance queue and one database.
+      #
+      # Minutes: reconcile owns every :x2/:x7, device-auth :04/:19/:34/:49,
+      # hourly jobs sit on :x3/:x8 or :10, dailies on :00/:16/:25/:30/:40.
+      crontab: [
+        # Every 5 min. Work is also queued the moment it is due (`kick/0`).
+        {"2-59/5 * * * *", Engram.Workers.ReconcileEmbeddings},
+        # Expired device-flow and OAuth codes/tokens. Cheap DELETEs; every 15
+        # min keeps the tables small.
+        {"4-59/15 * * * *", Engram.Workers.CleanupDeviceAuthWorker},
+        # Whole-population CRDT doc bloat gauges (#1706): one aggregate query.
+        # Hourly because `last_value` gauges only exist on the node that ran
+        # the job, so a deploy leaves every panel empty until the next run.
+        # See the staleness contract in `Engram.PromEx.Crdt`.
+        {"10 * * * *", Engram.Workers.CrdtBloatSweep},
+        # An expired override keeps granting its limit until swept: hourly.
+        {"13 * * * *", Engram.Billing.Workers.OverrideExpirySweep},
+        # Retention prunes (client_logs Engram#792, idempotency keys #862,
+        # census pings): hourly, so each run deletes an hour's worth.
+        {"23 * * * *", Engram.Workers.ClientLogsPruner},
+        {"28 * * * *", Engram.Workers.InstallPingsPruner},
+        {"38 * * * *", Engram.Workers.IdempotencyPrune},
+        # Export archives past the 7-day download window (#859).
+        {"53 * * * *", Engram.Workers.ExportExpirySweep},
+        # Paddle drift check. Daily: drift logs at :error to Sentry, and a
+        # repair is manual, so more runs would only repeat the alert.
+        {"0 2 * * *", Engram.Billing.Workers.PaddleReconcile},
+        {"30 3 * * *", Engram.Workers.InactivityCleanup},
+        # Fair-use over 3 consecutive DAYS: a daily question.
+        {"0 4 * * *", Engram.Workers.OriginAbuseSweep},
+        # Clears plaintext vaults.slug after making slug_hmac / slug_suffixed
+        # describe the derived slug; idempotent (only rows still holding a
+        # slug). Remove with the contract release that drops vaults.slug.
+        {"25 4 * * *", Engram.Workers.BackfillVaultSlugHmac},
+        # Cross-store reconciliation (#1576): a note whose points are gone is
+        # unsearchable until this finds it. Daily because a pass is
+        # O(collection); revisit around 1M points with a resumable cursor.
+        {"0 5 * * *", Engram.Workers.OrphanSweep},
+        # Daily self-host install census; no-op on SaaS and unless opted in.
+        {"16 5 * * *", Engram.Workers.TelemetryHeartbeat},
+        # CIMD document refresh (#1642): documents carry a 24 h TTL.
+        {"40 5 * * *", Engram.Workers.CimdRefresh}
+      ]
+    }
   ]
 
 # Configure Elixir's Logger.

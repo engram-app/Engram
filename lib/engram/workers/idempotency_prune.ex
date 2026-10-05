@@ -1,6 +1,6 @@
 defmodule Engram.Workers.IdempotencyPrune do
   @moduledoc """
-  Daily sweep of expired idempotency_keys rows (#862). Expired rows already
+  Hourly sweep of expired idempotency_keys rows (#862). Expired rows already
   read as :miss; this reclaims the storage (each row caches a full encrypted
   batch response body).
   """

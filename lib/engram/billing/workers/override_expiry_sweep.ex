@@ -1,6 +1,6 @@
 defmodule Engram.Billing.Workers.OverrideExpirySweep do
   @moduledoc """
-  Daily Oban cron worker that deletes expired `user_limit_overrides` rows.
+  Hourly Oban cron worker that deletes expired `user_limit_overrides` rows.
   Emits `[:engram, :billing, :overrides, :expired]` telemetry with the
   number of rows deleted.
   """

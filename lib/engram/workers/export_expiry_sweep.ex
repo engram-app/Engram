@@ -1,6 +1,6 @@
 defmodule Engram.Workers.ExportExpirySweep do
   @moduledoc """
-  Daily sweep of expired account exports (#859, "Task 15" in AccountExport).
+  Hourly sweep of expired account exports (#859, "Task 15" in AccountExport).
 
   An export archive is a complete copy of a user's personal data; the
   download window is 7 days (`expires_at` stamped by AccountExport). Rows

@@ -1,6 +1,6 @@
 defmodule Engram.Workers.InstallPingsPruner do
   @moduledoc """
-  Daily retention sweep for `install_pings` (the self-host census collector).
+  Hourly retention sweep for `install_pings` (the self-host census collector).
 
   The collector is public and keyed by a client-supplied install id, so the
   table has no natural bound. Rows not seen for 35 days are deleted in bounded
@@ -19,6 +19,8 @@ defmodule Engram.Workers.InstallPingsPruner do
   @retention_days 35
   @batch 5_000
 
+  require Logger
+
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(15)
 
@@ -26,7 +28,9 @@ defmodule Engram.Workers.InstallPingsPruner do
   def perform(%Oban.Job{}) do
     # DateTime to match the physical `timestamptz` column.
     cutoff = DateTime.utc_now() |> DateTime.add(-@retention_days * 24 * 3600, :second)
-    {:ok, prune(cutoff, 0)}
+    n = prune(cutoff, 0)
+    if n > 0, do: Logger.info("install_pings_pruner deleted=#{n}")
+    {:ok, n}
   end
 
   defp prune(cutoff, acc) do
