@@ -43,10 +43,7 @@ defmodule Engram.Native.HmacHexManyTest do
 
     test "repeated calls leak nothing" do
       texts = for i <- 1..20, do: "chunk #{i}"
-      Native.hmac_hex_many_nif(@key, "p", texts)
-      before = Native.live_bytes()
-      for _ <- 1..300, do: Native.hmac_hex_many_nif(@key, "p", texts)
-      assert Native.live_bytes() - before == 0
+      Engram.NativeLeak.assert_no_leak(fn -> Native.hmac_hex_many_nif(@key, "p", texts) end)
     end
 
     test "every call emits [:engram, :nif, :call, :stop]" do

@@ -554,6 +554,10 @@ mod tests {
             "##",
             "1. x\n2. y",
             "foo\n",
+            "===",
+            "\n---\n",
+            "  ---",
+            "Title\n===\n",
         ];
         // CI runs 20k cases; the nightly (cron.yml) runs 2M per seed. Run it
         // deep after touching the cut rules or bumping pulldown-cmark:
@@ -578,6 +582,14 @@ mod tests {
                 matches_segmented(&doc, 1),
                 matches_segmented(&doc, usize::MAX),
                 "{doc:?}"
+            );
+            // The chunker's heading pass rides the same segmenter.
+            let (cut, passes) = crate::chunker::heading_spans(&doc, 1);
+            let (whole, _) = crate::chunker::heading_spans(&doc, usize::MAX);
+            assert_eq!(cut, whole, "headings {doc:?}");
+            assert!(
+                passes || whole.is_empty(),
+                "may_have_heading missed {doc:?}"
             );
             if !may_have_code(&doc) {
                 let mut ranges = Vec::new();

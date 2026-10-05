@@ -67,10 +67,9 @@ defmodule Engram.Native.LinkExtractTest do
     end
 
     test "repeated calls leak nothing" do
-      Engram.Native.link_extract_nif("---\na: 1\n---\n[[x]]")
-      before = Engram.Native.live_bytes()
-      for _ <- 1..300, do: Engram.Native.link_extract_nif("---\na: 1\n---\n[[x]] `y`")
-      assert Engram.Native.live_bytes() - before == 0
+      Engram.NativeLeak.assert_no_leak(fn ->
+        Engram.Native.link_extract_nif("---\na: 1\n---\n[[x]] `y`")
+      end)
     end
 
     test "extract emits [:engram, :nif, :call, :stop]" do

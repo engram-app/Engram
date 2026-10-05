@@ -83,10 +83,7 @@ defmodule Engram.Native.ChunkerTest do
 
     test "repeated calls leak nothing" do
       args = ["---\ntags: [a]\n---\n# A\n\ntext `c`\n\n## B\n\nmore", "f", "T"]
-      apply(Engram.Native, :chunk_nif, args)
-      before = Engram.Native.live_bytes()
-      for _ <- 1..300, do: apply(Engram.Native, :chunk_nif, args)
-      assert Engram.Native.live_bytes() - before == 0
+      Engram.NativeLeak.assert_no_leak(fn -> apply(Engram.Native, :chunk_nif, args) end)
     end
 
     test "parse emits [:engram, :nif, :call, :stop]" do

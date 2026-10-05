@@ -21,10 +21,10 @@ defmodule Engram.Native.MmrSelectTest do
 
     test "repeated calls leak nothing" do
       {vectors, scores} = pool(20, 64)
-      Engram.Native.mmr_select_nif(vectors, scores, 5, 0.3)
-      before = Engram.Native.live_bytes()
-      for _ <- 1..300, do: Engram.Native.mmr_select_nif(vectors, scores, 5, 0.3)
-      assert Engram.Native.live_bytes() - before == 0
+
+      Engram.NativeLeak.assert_no_leak(fn ->
+        Engram.Native.mmr_select_nif(vectors, scores, 5, 0.3)
+      end)
     end
 
     test "every call emits [:engram, :nif, :call, :stop]" do

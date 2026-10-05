@@ -129,10 +129,7 @@ defmodule Engram.Native.VectorJsonTest do
         Native.sparse_json_nif(elem(sparse, 0), elem(sparse, 1))
       end
 
-      run.()
-      before = Native.live_bytes()
-      for _ <- 1..300, do: run.()
-      assert Native.live_bytes() - before == 0
+      Engram.NativeLeak.assert_no_leak(run)
     end
 
     test "every call emits [:engram, :nif, :call, :stop]" do

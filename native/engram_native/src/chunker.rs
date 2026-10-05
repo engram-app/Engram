@@ -119,11 +119,16 @@ fn cap(prefix: &str) -> &str {
 /// Top-level headings, in order. Parsed in segments, as `links` does, so
 /// pulldown-cmark's tree stays small on a huge note.
 fn headings(body: &str) -> Vec<Heading> {
-    let mut out = Vec::new();
-    if !may_have_heading(body) {
-        return out;
+    if may_have_heading(body) {
+        headings_in(body, SEGMENT)
+    } else {
+        Vec::new()
     }
-    segmented(body, SEGMENT, &mut out, |s, at, hs| {
+}
+
+fn headings_in(body: &str, segment: usize) -> Vec<Heading> {
+    let mut out = Vec::new();
+    segmented(body, segment, &mut out, |s, at, hs| {
         // pulldown-cmark 0.13.4 panics on some valid input (see links).
         // ponytail: a panicking segment loses its headings, not the note;
         // its text still chunks under the previous heading.
@@ -137,7 +142,8 @@ fn headings(body: &str) -> Vec<Heading> {
 /// pulldown-cmark finds no heading, and a blob-only note skips the parse.
 fn may_have_heading(s: &str) -> bool {
     s.contains('#')
-        || s.lines()
+        // pulldown-cmark also ends a line at a lone \r.
+        || s.split(['\n', '\r'])
             .any(|l| matches!(l.trim_start().as_bytes().first(), Some(b'=' | b'-')))
 }
 
@@ -357,6 +363,17 @@ fn hard_split(text: &str, max: usize) -> Vec<&str> {
     }
     out.push(rest);
     out
+}
+
+/// For the segmented-parse fuzz in `links`: (level, start, end, text) per
+/// heading at `segment`, and whether the prefilter let `body` through.
+#[cfg(test)]
+pub fn heading_spans(body: &str, segment: usize) -> (Vec<(usize, usize, usize, String)>, bool) {
+    let spans = headings_in(body, segment)
+        .into_iter()
+        .map(|h| (h.level, h.start, h.end, h.text))
+        .collect();
+    (spans, may_have_heading(body))
 }
 
 #[cfg(test)]
