@@ -241,22 +241,29 @@ defmodule Engram.Workers.EmbedNote do
 
   # A version rebuild (chunker or embed model bump, content unchanged) is our
   # maintenance: never refused, never charged to the user. Its spend is ours,
-  # reported as `[:engram, :embed, :maintenance]` (tokens sent, counted at the
-  # reservation, so a failed embed is still counted: an over-, never an
-  # under-report).
+  # reported as `[:engram, :embed, :maintenance]`: + at the reservation, - on
+  # release.
   defp budget_opts(_user, true) do
     [
       reserve_tokens: fn tokens ->
         :telemetry.execute([:engram, :embed, :maintenance], %{tokens: tokens}, %{})
         true
       end,
-      release_tokens: fn _tokens -> :ok end
+      # A failed or 429-snoozed embed gives its reservation back, so the
+      # sum counts what was actually sent.
+      release_tokens: fn tokens ->
+        :telemetry.execute([:engram, :embed, :maintenance], %{tokens: -tokens}, %{})
+      end
     ]
   end
 
-  # Indexed by an older chunker, or dense vectors from another embed model.
-  # Model tracking is off when the build cannot name its model (nil).
-  defp version_stale?(%Note{} = note) do
+  @doc """
+  True when an indexed note is behind this build: an older chunker, or dense
+  vectors from another embed model. The single definition both `perform/1`
+  and `ReconcileEmbeddings` route on. Model tracking is off when the build
+  cannot name its model (nil).
+  """
+  def version_stale?(%Note{} = note) do
     note.chunker_version != @chunker_version or model_stale?(note, Indexing.embed_model())
   end
 

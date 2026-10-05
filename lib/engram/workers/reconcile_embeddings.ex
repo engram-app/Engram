@@ -32,7 +32,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   alias Engram.Parsers.Markdown
   alias Engram.Repo
   alias Engram.Vaults.Vault
-  alias Engram.Workers.{EmbedNote, ExtractNoteLinks, RefreshKeywordVectors}
+  alias Engram.Workers.{EmbedNote, ExtractNoteLinks, RebuildStaleNote, RefreshKeywordVectors}
 
   require Logger
 
@@ -164,7 +164,16 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       # changed. Also satisfies NotesScopeLintTest (kind filter on the from/Note).
       {_count, rows} =
         from(n in Note, where: n.kind == "note" and n.id in subquery(eligible))
-        |> select([n], {n.id, n.user_id})
+        # The columns `EmbedNote.version_stale?/1` reads, to route each note.
+        |> select([n], %{
+          id: n.id,
+          user_id: n.user_id,
+          embed_hash: n.embed_hash,
+          content_hash: n.content_hash,
+          dense_indexed_hash: n.dense_indexed_hash,
+          chunker_version: n.chunker_version,
+          embed_model: n.embed_model
+        })
         # Clears the budget-park flag with it: the #897 backoff must hold for
         # this note even for a paying user, or a crash mid-embed re-selects it
         # every tick.
@@ -202,8 +211,14 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         end
       end)
 
-    note_ids = Enum.map(note_rows, &elem(&1, 0))
-    user_by_note = Map.new(note_rows)
+    # A version rebuild (content current, older chunker or embed model) goes
+    # to RebuildStaleNote, a worker the previous release lacks, so a rolling
+    # deploy's old nodes cannot run it metered. Everything else is EmbedNote's.
+    {rebuild_rows, embed_rows} = Enum.split_with(note_rows, &version_rebuild?/1)
+    :ok = enqueue_rebuilds(rebuild_rows)
+
+    note_ids = Enum.map(embed_rows, & &1.id)
+    user_by_note = Map.new(embed_rows, &{&1.id, &1.user_id})
 
     _ =
       if note_ids != [] do
@@ -270,6 +285,36 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     :ok = sweep_keyword_stale(now, paid)
   end
 
+  defp version_rebuild?(%{embed_hash: hash, content_hash: hash} = row) when hash != nil,
+    do: EmbedNote.version_stale?(struct(Note, row))
+
+  defp version_rebuild?(_row), do: false
+
+  defp enqueue_rebuilds([]), do: :ok
+
+  defp enqueue_rebuilds(rows) do
+    fresh = reject_pending(Enum.map(rows, &{&1.id, &1.user_id}), RebuildStaleNote)
+
+    Logger.debug(
+      "reconcile_embeddings: queueing version rebuilds",
+      Metadata.with_category(:debug, :search,
+        total_count: length(fresh),
+        eligible_count: length(rows)
+      )
+    )
+
+    _ =
+      Oban.insert_all(
+        Enum.map(fresh, fn {note_id, user_id} ->
+          RebuildStaleNote.new(%{note_id: to_string(note_id), user_id: user_id},
+            priority: EmbedNote.backfill_priority()
+          )
+        end)
+      )
+
+    :ok
+  end
+
   defp version_stale_dynamic do
     chunker = Markdown.chunker_version()
     chunker_stale = dynamic([n], is_nil(n.chunker_version) or n.chunker_version != ^chunker)
@@ -280,10 +325,14 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         chunker_stale
 
       model ->
+        # `not is_nil` first: on a sparse-only note `dense = content` is NULL,
+        # and the keyword sweep negates this predicate, where NOT (NULL)
+        # silently drops the row. Every term here must be TRUE or FALSE.
         dynamic(
           [n],
           ^chunker_stale or
-            (n.dense_indexed_hash == n.content_hash and
+            (not is_nil(n.dense_indexed_hash) and not is_nil(n.content_hash) and
+               n.dense_indexed_hash == n.content_hash and
                (is_nil(n.embed_model) or n.embed_model != ^model))
         )
     end
@@ -350,7 +399,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         end
       end)
 
-    fresh = reject_pending_resparse(rows)
+    fresh = reject_pending(rows, RefreshKeywordVectors)
 
     Logger.debug(
       "reconcile_embeddings: queueing keyword-stale notes",
@@ -375,14 +424,15 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # insert_all ignores `unique`, so without this every tick would stack one
   # more job per note while the queue is behind (the ratchet EmbedNote's
   # `reject_already_queued/2` exists for).
-  defp reject_pending_resparse([]), do: []
+  defp reject_pending([], _worker), do: []
 
-  defp reject_pending_resparse(rows) do
+  defp reject_pending(rows, worker) do
     wanted = Enum.map(rows, fn {id, _} -> to_string(id) end)
+    worker_name = inspect(worker)
 
     pending =
       from(j in Oban.Job,
-        where: j.worker == "Engram.Workers.RefreshKeywordVectors",
+        where: j.worker == ^worker_name,
         where: j.state in ["available", "scheduled", "executing", "retryable"],
         where: fragment("? ->> 'note_id'", j.args) in ^wanted,
         select: fragment("? ->> 'note_id'", j.args)

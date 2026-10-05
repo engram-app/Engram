@@ -17,8 +17,8 @@ worker that brings them current.
 | Change | Bump | Stamp | Sweep sends to | Cost |
 |---|---|---|---|---|
 | Keyword encoding: tokenizer, stemmer, BM25 weighting, WHICH text is encoded | `Engram.KeywordIndex` `@version` | `notes.keyword_version` | `RefreshKeywordVectors` (sparse vectors rewritten in place) | no embedder call |
-| Chunk boundaries or chunk text | `Engram.Parsers.Markdown` `@chunker_version` | `notes.chunker_version` | `EmbedNote` (full rebuild) | re-embed, unmetered |
-| Embed model (`DOC_EMBED_MODEL` / `EMBED_MODEL` / the embedder's default) | nothing: config | `notes.embed_model` (dense notes only) | `EmbedNote` (full rebuild) | re-embed, unmetered |
+| Chunk boundaries or chunk text | `Engram.Parsers.Markdown` `@chunker_version` | `notes.chunker_version` | `RebuildStaleNote` (EmbedNote's maintenance path) | re-embed, unmetered |
+| Embed model (`DOC_EMBED_MODEL` / `EMBED_MODEL` / the embedder's default) | nothing: config | `notes.embed_model` (dense notes only) | `RebuildStaleNote` | re-embed, unmetered |
 
 **Version rebuilds are unmetered (decided 2026-10-04).** A rebuild of unchanged
 content is our maintenance, not the user's usage: it never counts against an
@@ -69,9 +69,15 @@ chunking before it is expensive: bundle boundary changes into one bump.
   deploy overlaps old and new tasks on one `embed` queue. A job a new node
   enqueues can run on an old node. That is why the sweep's worker is
   `RefreshKeywordVectors`, a name the previous release lacks: its
-  `ResparseNote` re-embedded unmatched notes. Apply the same rule to any new
-  sweep: if the previous release would do something expensive with the job,
-  give the job a worker that release does not have.
+  `ResparseNote` re-embedded unmatched notes. Version rebuilds go through
+  `RebuildStaleNote` for the same reason: the previous release's `EmbedNote`
+  rebuilt stale-chunker notes METERED, and a spent Free cap would have dropped
+  their dense vectors for good. Apply the rule to any new sweep: if the
+  previous release would do something expensive with the job, give the job a
+  worker that release does not have.
+- The reuse fingerprint and the model stamp name the same model
+  (`Indexing.embed_model/0`, which falls back to the embedder's default). A
+  fingerprint naming no model would reuse old-model vectors under a new stamp.
 - One pass, not two. `RefreshKeywordVectors` rewrites `chunks.token_count`, so
   the vault's avgdl moves during the sweep, and notes refreshed early are
   normalized against an average built mostly from old lengths. For #1615 that

@@ -5,7 +5,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
   alias Engram.KeywordIndex
   alias Engram.Notes.Note
   alias Engram.Parsers.Markdown
-  alias Engram.Workers.{EmbedNote, ReconcileEmbeddings, RefreshKeywordVectors}
+  alias Engram.Workers.{EmbedNote, RebuildStaleNote, ReconcileEmbeddings, RefreshKeywordVectors}
 
   # The test embedder declares no model, which turns model tracking off; name
   # one so the embed-model sweep is exercised (and current_note/2 stamps it).
@@ -66,7 +66,10 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
 
       assert :ok = perform_job(ReconcileEmbeddings, %{})
 
-      assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+      # RebuildStaleNote, not EmbedNote: a worker the previous release lacks,
+      # so a rolling deploy's old nodes cannot run the rebuild metered.
+      assert_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
+      refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
       refute_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
     end
 
@@ -80,7 +83,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       assert :ok = perform_job(ReconcileEmbeddings, %{})
 
       for n <- [note, unknown] do
-        assert_enqueued(worker: EmbedNote, args: %{"note_id" => n.id})
+        assert_enqueued(worker: RebuildStaleNote, args: %{"note_id" => n.id})
       end
     end
 
@@ -117,6 +120,18 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       workers = all_enqueued() |> Enum.map(& &1.worker) |> Enum.uniq()
       assert "Engram.Workers.RefreshKeywordVectors" in workers
       refute "Engram.Workers.ResparseNote" in workers
+    end
+
+    # SQL three-valued logic: on a sparse-only note `dense_indexed_hash =
+    # content_hash` is NULL, and NOT (NULL) excludes the row. The keyword sweep
+    # must still reach it.
+    test "the keyword sweep reaches a sparse-only note" do
+      user = insert(:user)
+      note = current_note(user, keyword_version: nil, dense_indexed_hash: nil, embed_model: nil)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+
+      assert_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
     end
 
     test "the keyword sweep skips current notes, content-stale notes and deleted ones" do

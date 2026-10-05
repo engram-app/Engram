@@ -162,6 +162,51 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert tokens > 0
     end
 
+    # The worker the sweep enqueues is EmbedNote's maintenance path under a
+    # name the previous release lacks.
+    test "RebuildStaleNote runs the same unmetered rebuild", %{bypass: bypass, note: note} do
+      Engram.UsageMeters.add_embed_tokens(note.user_id, 20_000_000)
+      used = Engram.UsageMeters.lifetime_embed_tokens(note.user_id)
+
+      from(n in Note, where: n.id == ^note.id)
+      |> Repo.update_all(
+        [
+          set: [
+            embed_hash: note.content_hash,
+            dense_indexed_hash: note.content_hash,
+            chunker_version: nil
+          ]
+        ],
+        skip_tenant_check: true
+      )
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts -> {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)} end)
+
+      stub_qdrant(bypass)
+
+      assert :ok =
+               perform_job(Engram.Workers.RebuildStaleNote, %{
+                 note_id: note.id,
+                 user_id: note.user_id
+               })
+
+      reloaded = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert reloaded.chunker_version == Markdown.chunker_version()
+      assert reloaded.dense_indexed_hash == note.content_hash
+      assert Engram.UsageMeters.lifetime_embed_tokens(note.user_id) == used
+    end
+
+    # With EMBED_MODEL unset the embedder sends its own default; the stamp
+    # (and the reuse fingerprint) must name it, or a change between defaults
+    # on a self-host install would reuse old-model vectors.
+    test "embed_model/0 falls back to the embedder's own default" do
+      Application.put_env(:engram, :embedder, Engram.Embedders.Ollama)
+      on_exit(fn -> Application.put_env(:engram, :embedder, Engram.MockEmbedder) end)
+
+      assert Engram.Indexing.embed_model() == Engram.Embedders.Ollama.default_model()
+    end
+
     test "an embed model change rebuilds the note and stamps the new model", %{
       bypass: bypass,
       note: note

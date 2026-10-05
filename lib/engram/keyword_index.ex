@@ -44,7 +44,8 @@ defmodule Engram.KeywordIndex do
   @version 2
 
   @doc "Version of the keyword encoding in this build, stamped on `notes.keyword_version`."
-  @spec version() :: pos_integer()
+  # No @spec, like `Markdown.chunker_version/0`: the body is a literal, so
+  # dialyzer rejects any wider contract as a supertype.
   def version, do: @version
 
   @doc "The configured keyword-index adapter."

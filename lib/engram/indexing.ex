@@ -967,7 +967,11 @@ defmodule Engram.Indexing do
 
   # `/embed_text`: the dense input dropped the folder in chunker v3 (#1621),
   # so a vector fingerprinted before then came from another string.
-  defp fingerprint_prefix(true), do: "dense:#{effective_embed_model()}/embed_text\n"
+  # `embed_model/0`, not the configured value alone: with EMBED_MODEL unset the
+  # embedder sends its own default, and a reuse fingerprint that names no
+  # model would reuse old-model vectors after a default change, under a new
+  # model stamp. (Prod sets DOC_EMBED_MODEL, so its model part is unchanged.)
+  defp fingerprint_prefix(true), do: "dense:#{embed_model()}/embed_text\n"
   defp fingerprint_prefix(false), do: "sparse\n"
 
   # `embed_text`, not `context_text`: no folder, which is a filter key, not
