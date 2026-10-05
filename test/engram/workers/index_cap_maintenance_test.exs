@@ -68,6 +68,18 @@ defmodule Engram.Workers.IndexCapMaintenanceTest do
   end
 
   describe "perform/1" do
+    # The sweeps only null hashes; ReconcileEmbeddings does the re-indexing.
+    # Queued now, not on its next tick.
+    test "both sweeps queue a reconcile run" do
+      user = insert(:user)
+
+      for kind <- ["evict_over_cap", "backfill_slots"] do
+        Repo.delete_all(Oban.Job)
+        assert :ok = perform_job(IndexCapMaintenance, %{user_id: user.id, kind: kind})
+        assert_enqueued(worker: Engram.Workers.ReconcileEmbeddings)
+      end
+    end
+
     test "evict_over_cap re-opens the user's notes past the cap" do
       user = insert(:user)
       vault = insert(:vault, user: user)

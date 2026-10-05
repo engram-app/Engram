@@ -72,6 +72,7 @@ defmodule Engram.Application do
         Engram.Auth.SignupRejections,
         rate_limiter_child(),
         {Oban, Application.fetch_env!(:engram, Oban)},
+        boot_sweep_child(Application.fetch_env!(:engram, Oban)),
         clerk_strategy_child(),
         # Bounds concurrent inline unbind checkpoints (self-healing via monitors);
         # must start before any CRDT room can terminate and call unbind/3.
@@ -372,6 +373,16 @@ defmodule Engram.Application do
           ]
         }
       })
+  end
+
+  @doc """
+  A one-off reconcile sweep at boot, on a node that runs queues. A deploy is
+  when index versions change, so their rebuild starts then instead of on the
+  next cron tick. nil on a web node (`queues: false`) and under Oban testing.
+  """
+  def boot_sweep_child(oban) do
+    if oban[:queues] != false and is_nil(oban[:testing]),
+      do: {Task, &Engram.Workers.ReconcileEmbeddings.kick/0}
   end
 
   defp clerk_strategy_child do

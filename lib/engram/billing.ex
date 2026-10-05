@@ -680,6 +680,8 @@ defmodule Engram.Billing do
         case result do
           {:ok, sub} ->
             broadcast_subscription_activated(user_id, sub)
+            # A new plan can lift the index cap: the backfill starts now.
+            _ = Engram.Workers.ReconcileEmbeddings.kick()
             {:ok, sub}
 
           err ->
@@ -802,6 +804,8 @@ defmodule Engram.Billing do
             # listener re-fetches /onboarding/status to decide what to do,
             # so plan changes and trial→active flips both push downstream UI.
             broadcast_subscription_activated(updated.user_id, updated)
+            # An upgrade can lift the index cap: the backfill starts now.
+            _ = Engram.Workers.ReconcileEmbeddings.kick()
 
             # Realtime sync (and other tier-gated features) are evaluated at
             # channel-join, so an open SyncChannel keeps streaming after a

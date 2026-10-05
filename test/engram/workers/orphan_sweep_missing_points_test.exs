@@ -106,6 +106,8 @@ defmodule Engram.Workers.OrphanSweepMissingPointsTest do
     reloaded = reload(note)
     assert is_nil(reloaded.embed_hash)
     assert is_nil(reloaded.dense_indexed_hash)
+    # Re-indexing starts now, not on reconcile's next tick.
+    assert_enqueued(worker: Engram.Workers.ReconcileEmbeddings)
   end
 
   # #1607: chunk reuse (#1595) matches on `context_hmac`. Leaving it set made
@@ -160,6 +162,7 @@ defmodule Engram.Workers.OrphanSweepMissingPointsTest do
     assert :ok = perform_job(OrphanSweep, %{})
 
     assert reload(note).embed_hash == "cafe"
+    refute_enqueued(worker: Engram.Workers.ReconcileEmbeddings)
   end
 
   test "aborts without flagging anything when nearly every point looks missing", %{
