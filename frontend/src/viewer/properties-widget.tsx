@@ -158,7 +158,10 @@ function PropertiesHelp() {
 					<div key={key} className="flex gap-2">
 						<dt className="w-24 shrink-0 font-mono text-foreground">{key}</dt>
 						<dd className="flex-1 text-muted-foreground">
-							{t("{what} Wants {expectsLabel}.", { what, expectsLabel })}
+							{t("{what} Wants {expectsLabel}.", {
+								what: t(what),
+								expectsLabel: t(expectsLabel),
+							})}
 							{aliases.length > 0 ? (
 								<span className="block opacity-80">
 									{t("also accepts {aliases}", {

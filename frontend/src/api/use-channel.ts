@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useT } from "@/i18n/locale-provider";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
 import { installCrdtResyncTriggers } from "../crdt/session";
 import { useActiveVaultId } from "./active-vault";
@@ -14,6 +15,7 @@ import { queryClient } from "./query-client";
 
 export function useChannel() {
 	const { getToken } = useAuthAdapter();
+	const { t } = useT();
 	const { data: user } = useMe();
 	const vaultId = useActiveVaultId();
 
@@ -27,6 +29,11 @@ export function useChannel() {
 	useEffect(() => {
 		getTokenRef.current = getToken;
 	}, [getToken]);
+	// Same for the translator: a locale switch must not rebuild the socket.
+	const tRef = useRef(t);
+	useEffect(() => {
+		tRef.current = t;
+	}, [t]);
 
 	// Key the socket effect on the primitive id, not the whole `user` object: a
 	// new `user` identity on every `useMe` refetch would needlessly tear the
@@ -46,6 +53,7 @@ export function useChannel() {
 			vaultId,
 			getToken: () => getTokenRef.current(),
 			queryClient,
+			t: (en, vars) => tRef.current(en, vars),
 		});
 
 		// CRDT catch-up on tab focus/visibility: a backgrounded tab can miss live
