@@ -1,6 +1,9 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { Button } from "@/components/ui/button";
+import { useT } from "@/i18n/locale-provider";
+import { Trans } from "@/i18n/trans";
+import type { Translate } from "@/lib/translator";
 import { destructiveAlert, fieldInput, heading } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { ROUTES } from "../routes";
@@ -10,12 +13,18 @@ import { authUrlWithReturnTo } from "./sign-in-redirect";
 import { useAuthAdapter } from "./use-auth-adapter";
 import { type BootstrapState, useBootstrap } from "./use-bootstrap";
 
-function loginErrorMessage(code: string): string {
+// `code` is an API error code or one of the English fallbacks thrown by the
+// auth provider; anything unrecognized (a server-written message) shows as-is.
+function loginErrorMessage(code: string, t: Translate): string {
 	switch (code) {
 		case "account_suspended":
-			return "This account is suspended. Contact an admin to restore access.";
+			return t("This account is suspended. Contact an admin to restore access.");
 		case "invalid_credentials":
-			return "Incorrect email or password.";
+			return t("Incorrect email or password.");
+		case "Login failed":
+			return t("Login failed");
+		case "Login not available for this auth provider":
+			return t("Login not available for this auth provider");
 		default:
 			return code;
 	}
@@ -26,6 +35,7 @@ function loginErrorMessage(code: string): string {
 // avoids the default→correct copy flash on first paint. `null` means
 // Clerk / 404 / network error: fall back to the open-mode link.
 function SignUpFooter({ bootstrap, returnTo }: { bootstrap: BootstrapState; returnTo: string }) {
+	const { t } = useT();
 	if (bootstrap === undefined) {
 		return (
 			<p aria-hidden className="invisible text-center text-sm">
@@ -37,31 +47,38 @@ function SignUpFooter({ bootstrap, returnTo }: { bootstrap: BootstrapState; retu
 	if (mode === "invite_only") {
 		return (
 			<p className="text-center text-muted-foreground text-sm">
-				Sign-ups require an invite link. Contact your admin to request one.
+				{t("Sign-ups require an invite link. Contact your admin to request one.")}
 			</p>
 		);
 	}
 	if (mode === "closed") {
 		return (
 			<p className="text-center text-muted-foreground text-sm">
-				Sign-ups are closed on this instance.
+				{t("Sign-ups are closed on this instance.")}
 			</p>
 		);
 	}
 	return (
 		<p className="text-center text-muted-foreground text-sm">
-			Don't have an account?{" "}
-			<Link
-				to={authUrlWithReturnTo(ROUTES.SIGN_UP, returnTo)}
-				className="font-medium text-primary hover:underline"
-			>
-				Sign up
-			</Link>
+			<Trans
+				text="Don't have an account? {signup}"
+				slots={{
+					signup: (
+						<Link
+							to={authUrlWithReturnTo(ROUTES.SIGN_UP, returnTo)}
+							className="font-medium text-primary hover:underline"
+						>
+							{t("Sign up")}
+						</Link>
+					),
+				}}
+			/>
 		</p>
 	);
 }
 
 export default function LocalSignIn() {
+	const { t } = useT();
 	const { login, isSignedIn } = useAuthAdapter();
 	const navigate = useNavigate();
 	const [searchParams] = useSearchParams();
@@ -104,7 +121,7 @@ export default function LocalSignIn() {
 			await login(email, password);
 		} catch (err) {
 			const raw = err instanceof Error ? err.message : "Login failed";
-			setError(loginErrorMessage(raw));
+			setError(loginErrorMessage(raw, t));
 		} finally {
 			setLoading(false);
 		}
@@ -118,7 +135,7 @@ export default function LocalSignIn() {
 			>
 				<div className="flex flex-col items-center gap-2 text-center">
 					<img src="/engram-mark.svg" alt="Engram" className="size-12" />
-					<h1 className={heading}>Sign in to Engram</h1>
+					<h1 className={heading}>{t("Sign in to Engram")}</h1>
 				</div>
 
 				{Boolean(error) && (
@@ -128,7 +145,7 @@ export default function LocalSignIn() {
 				)}
 
 				<label className="block">
-					<span className="font-medium text-foreground text-sm">Email</span>
+					<span className="font-medium text-foreground text-sm">{t("Email")}</span>
 					<input
 						type="email"
 						required
@@ -139,7 +156,7 @@ export default function LocalSignIn() {
 				</label>
 
 				<label className="block">
-					<span className="font-medium text-foreground text-sm">Password</span>
+					<span className="font-medium text-foreground text-sm">{t("Password")}</span>
 					<input
 						type="password"
 						required
@@ -150,7 +167,7 @@ export default function LocalSignIn() {
 				</label>
 
 				<Button type="submit" disabled={loading} className="w-full">
-					{loading ? "Signing in…" : "Sign in"}
+					{loading ? t("Signing in…") : t("Sign in")}
 				</Button>
 
 				<SignUpFooter bootstrap={bootstrap} returnTo={returnTo} />

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useT } from "@/i18n/locale-provider";
 import { destructiveAlert } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { fetchSignupRejection, takePendingSignupUser } from "./signup-rejection";
@@ -7,6 +8,7 @@ import { fetchSignupRejection, takePendingSignupUser } from "./signup-rejection"
 // multi-account block. Self-contained: renders nothing unless a recent pending
 // sign-up resolves to a known rejection reason.
 export default function SignupRejectionNotice() {
+	const { t } = useT();
 	const [rejected, setRejected] = useState(false);
 
 	useEffect(() => {
@@ -31,10 +33,13 @@ export default function SignupRejectionNotice() {
 
 	return (
 		<div role="alert" className={cn(destructiveAlert, "mb-4 w-full max-w-sm")}>
-			<p className="font-medium text-foreground">An account with this email already exists</p>
+			<p className="font-medium text-foreground">
+				{t("An account with this email already exists")}
+			</p>
 			<p className="mt-1 text-muted-foreground">
-				We couldn’t create a new account because one already exists for this email (or an alias of
-				it). Please sign in below instead.
+				{t(
+					"We couldn’t create a new account because one already exists for this email (or an alias of it). Please sign in below instead.",
+				)}
 			</p>
 		</div>
 	);

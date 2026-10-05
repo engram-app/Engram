@@ -13,6 +13,9 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useT } from "@/i18n/locale-provider";
+import { Trans } from "@/i18n/trans";
+import type { Tn } from "@/lib/translator";
 import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { MCP_CLIENTS } from "../analytics/events";
@@ -101,10 +104,13 @@ function buildCancelUrl(redirectUri: string, state: string): string {
 	return `${redirectUri}${sep}error=access_denied&state=${encodeURIComponent(state)}`;
 }
 
-function countLabel(notes?: number, files?: number): string {
-	const parts = [`${(notes ?? 0).toLocaleString()} notes`];
+function countLabel(tn: Tn, notes?: number, files?: number): string {
+	const noteCount = notes ?? 0;
+	const parts = [
+		tn({ one: "{n} note", other: "{n} notes" }, noteCount, { n: noteCount.toLocaleString() }),
+	];
 	if (files) {
-		parts.push(`${files.toLocaleString()} files`);
+		parts.push(tn({ one: "{n} file", other: "{n} files" }, files, { n: files.toLocaleString() }));
 	}
 	return parts.join(" · ");
 }
@@ -116,6 +122,7 @@ function VaultRows({ scroll, children }: { scroll: boolean; children: React.Reac
 }
 
 export default function OAuthAuthorizePage() {
+	const { t, tn } = useT();
 	const [searchParams] = useSearchParams();
 	const { values, resource, missing } = readParams(searchParams);
 
@@ -297,9 +304,9 @@ export default function OAuthAuthorizePage() {
 		return (
 			<AuthShell>
 				<AuthPanel className="flex flex-col gap-3">
-					<h1 className={heading}>Invalid authorization request</h1>
+					<h1 className={heading}>{t("Invalid authorization request")}</h1>
 					<div role="alert" className={destructiveAlert}>
-						<p className="font-medium text-foreground">Missing required OAuth parameters:</p>
+						<p className="font-medium text-foreground">{t("Missing required OAuth parameters:")}</p>
 						<ul className="mt-2 list-inside list-disc text-muted-foreground">
 							{missing.map((m) => (
 								<li key={m}>
@@ -309,7 +316,7 @@ export default function OAuthAuthorizePage() {
 						</ul>
 					</div>
 					<p className="text-muted-foreground text-sm">
-						This page should be opened via an OAuth client redirect, not directly.
+						{t("This page should be opened via an OAuth client redirect, not directly.")}
 					</p>
 				</AuthPanel>
 			</AuthShell>
@@ -320,10 +327,10 @@ export default function OAuthAuthorizePage() {
 		return (
 			<AuthShell>
 				<AuthPanel className="flex flex-col gap-3">
-					<h1 className={heading}>Unknown OAuth client</h1>
+					<h1 className={heading}>{t("Unknown OAuth client")}</h1>
 					<div role="alert" className={destructiveAlert}>
 						<p className="text-muted-foreground">
-							The client requesting access is not registered with Engram.
+							{t("The client requesting access is not registered with Engram.")}
 						</p>
 					</div>
 				</AuthPanel>
@@ -338,7 +345,7 @@ export default function OAuthAuthorizePage() {
 		return (
 			<AuthShell>
 				<AuthPanel className="flex flex-col gap-3">
-					<h1 className={heading}>Finish setting up Engram</h1>
+					<h1 className={heading}>{t("Finish setting up Engram")}</h1>
 					{/* States the PURPOSE without promising an automatic return.
 					    The stash is a no-op when storage is disabled or full, and
 					    the previous copy ("you'll come straight back here")
@@ -347,8 +354,16 @@ export default function OAuthAuthorizePage() {
 					    The wizard banner names the client and offers the cancel,
 					    so under-promising here costs nothing. */}
 					<p className="text-muted-foreground text-sm">
-						Taking you to setup so you can finish connecting{" "}
-						<span className="text-primary">{clientQuery.data?.client_name ?? "this app"}</span>.
+						<Trans
+							text="Taking you to setup so you can finish connecting {app}."
+							slots={{
+								app: (
+									<span className="text-primary">
+										{clientQuery.data?.client_name ?? t("this app")}
+									</span>
+								),
+							}}
+						/>
 					</p>
 				</AuthPanel>
 			</AuthShell>
@@ -406,7 +421,7 @@ export default function OAuthAuthorizePage() {
 			if (isSwap && existingPeer) {
 				const existingId = oauthConnectionId(existingPeer);
 				if (existingId) {
-					swappedFromName = existingPeer.name ?? "previous connection";
+					swappedFromName = existingPeer.name ?? t("previous connection");
 					const path =
 						existingPeer.kind === "obsidian"
 							? `/connections/device/${existingId}`
@@ -427,8 +442,10 @@ export default function OAuthAuthorizePage() {
 				// Disconnect succeeded but consent did not — user is now at 0
 				// connections instead of 1. Make that visible.
 				setSubmitError(
-					`Disconnected '${swappedFromName}' but authorizing the new connection failed. ` +
-						`Re-run the request from ${clientName} — no connections of this kind are currently active.`,
+					t(
+						"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.",
+						{ name: swappedFromName, client: clientName },
+					),
 				);
 				if (isMcp) {
 					track("mcp_connect_failed", { client: mcpClient, reason: "unknown" });
@@ -446,7 +463,7 @@ export default function OAuthAuthorizePage() {
 				setSubmitting(false);
 				return;
 			}
-			const message = e instanceof Error ? e.message : "Authorization failed";
+			const message = e instanceof Error ? e.message : t("Authorization failed");
 			setSubmitError(message);
 			if (isMcp) {
 				track("mcp_connect_failed", { client: mcpClient, reason: "unknown" });
@@ -459,7 +476,7 @@ export default function OAuthAuthorizePage() {
 		window.location.assign(buildCancelUrl(values.redirect_uri, values.state));
 	};
 
-	const clientName = clientQuery.data?.client_name ?? "this app";
+	const clientName = clientQuery.data?.client_name ?? t("this app");
 	const isLoadingShell =
 		clientQuery.isLoading ||
 		vaultsQuery.isLoading ||
@@ -471,16 +488,19 @@ export default function OAuthAuthorizePage() {
 			<AuthPanel className="flex flex-col gap-4">
 				<header className="flex flex-col gap-1">
 					<h1 className={heading}>
-						Authorize <span className="text-primary">{clientName}</span>
+						<Trans
+							text="Authorize {client}"
+							slots={{ client: <span className="text-primary">{clientName}</span> }}
+						/>
 					</h1>
 					<p className="text-muted-foreground text-sm">
-						This app is requesting access to your Engram.
-						{meQuery.data ? ` Signed in as ${meQuery.data.email}.` : ""}
+						{t("This app is requesting access to your Engram.")}
+						{meQuery.data ? ` ${t("Signed in as {email}.", { email: meQuery.data.email })}` : ""}
 					</p>
 				</header>
 
 				{isLoadingShell ? (
-					<p className="text-muted-foreground text-sm">Loading…</p>
+					<p className="text-muted-foreground text-sm">{t("Loading…")}</p>
 				) : (
 					<>
 						{capCheck.atCap && existingPeer ? (
@@ -488,27 +508,37 @@ export default function OAuthAuthorizePage() {
 								role="status"
 								className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-foreground text-sm"
 							>
-								Heads up — your Free plan allows 1 active{" "}
-								{clientKind === "obsidian" ? "device" : "external connection"}. Approving will
-								disconnect <strong>{existingPeer.name ?? "your existing connection"}</strong>, which
-								will stop having access.{" "}
-								<a
-									className="underline underline-offset-4"
-									href={`${location.search}${settingsHash("billing")}`}
-									onClick={(e) => {
-										e.preventDefault();
-										navigate(settingsTo("billing", location.search));
+								<Trans
+									text="Heads up — your Free plan allows 1 active {kind}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected."
+									slots={{
+										kind: clientKind === "obsidian" ? t("device") : t("external connection"),
+										name: <strong>{existingPeer.name ?? t("your existing connection")}</strong>,
+										upgrade: (
+											<a
+												className="underline underline-offset-4"
+												href={`${location.search}${settingsHash("billing")}`}
+												onClick={(e) => {
+													e.preventDefault();
+													navigate(settingsTo("billing", location.search));
+												}}
+											>
+												{t("Upgrade")}
+											</a>
+										),
 									}}
-								>
-									Upgrade
-								</a>{" "}
-								to keep both connected.
+								/>
 							</div>
 						) : null}
 						<label className="flex flex-col gap-1.5">
 							<span className="font-medium text-foreground text-sm">
-								Name this connection{" "}
-								<span className="font-normal text-muted-foreground">(optional)</span>
+								<Trans
+									text="Name this connection {optional}"
+									slots={{
+										optional: (
+											<span className="font-normal text-muted-foreground">{t("(optional)")}</span>
+										),
+									}}
+								/>
 							</span>
 							<input
 								type="text"
@@ -528,7 +558,7 @@ export default function OAuthAuthorizePage() {
 							    reach the threshold. */}
 							<div className="mb-1 flex items-center justify-between gap-2">
 								<legend className="font-medium text-foreground text-sm">
-									Which vaults can {clientName} access?
+									{t("Which vaults can {client} access?", { client: clientName })}
 								</legend>
 								{showFilter && !searching && (
 									<button
@@ -540,7 +570,7 @@ export default function OAuthAuthorizePage() {
 											// instead, which is a different and worse thing.
 											requestAnimationFrame(() => searchRef.current?.focus());
 										}}
-										aria-label="Search vaults"
+										aria-label={t("Search vaults")}
 										className="rounded p-1 text-muted-foreground hover:text-foreground"
 									>
 										<Search className="size-4" />
@@ -555,8 +585,8 @@ export default function OAuthAuthorizePage() {
 										value={filter}
 										onChange={(e) => setFilter(e.target.value)}
 										onBlur={() => filter === "" && setSearching(false)}
-										placeholder="Search vaults"
-										aria-label="Search vaults"
+										placeholder={t("Search vaults")}
+										aria-label={t("Search vaults")}
 										className="rounded-lg border border-border bg-background p-2 text-sm"
 									/>
 									{/* Filtering hides rows, it never changes the selection —
@@ -564,8 +594,11 @@ export default function OAuthAuthorizePage() {
 									    what is still checked off-screen. */}
 									<p aria-live="polite" className="text-muted-foreground text-xs">
 										{selected === null
-											? "All vaults selected"
-											: `${selected.size} of ${live?.length ?? 0} selected`}
+											? t("All vaults selected")
+											: t("{count} of {total} selected", {
+													count: selected.size,
+													total: live?.length ?? 0,
+												})}
 									</p>
 								</>
 							) : null}
@@ -597,17 +630,19 @@ export default function OAuthAuthorizePage() {
 											<span className="flex min-w-0 flex-1 items-baseline gap-2">
 												<span className="font-medium text-foreground text-sm">{v.name}</span>
 												{v.is_default ? (
-													<span className="text-muted-foreground text-xs">default</span>
+													<span className="text-muted-foreground text-xs">{t("default")}</span>
 												) : null}
 											</span>
 											<span className="shrink-0 text-muted-foreground text-xs">
-												{countLabel(v.note_count, v.attachment_count)}
+												{countLabel(tn, v.note_count, v.attachment_count)}
 											</span>
 										</label>
 									);
 								})}
 								{showFilter && needle && shown.length === 0 && (
-									<p className="p-3 text-muted-foreground text-sm">No vaults match "{filter}".</p>
+									<p className="p-3 text-muted-foreground text-sm">
+										{t('No vaults match "{filter}".', { filter })}
+									</p>
 								)}
 							</VaultRows>
 							<hr className="my-2 border-border" />
@@ -620,9 +655,9 @@ export default function OAuthAuthorizePage() {
 									className="accent-primary"
 								/>
 								<span className="font-medium text-foreground text-sm">
-									All vaults
+									{t("All vaults")}
 									<span className="ml-2 font-normal text-muted-foreground text-xs">
-										including any you create later
+										{t("including any you create later")}
 									</span>
 								</span>
 							</label>
@@ -642,7 +677,7 @@ export default function OAuthAuthorizePage() {
 								disabled={submitting}
 								className="flex-1"
 							>
-								Cancel
+								{t("Cancel")}
 							</Button>
 							<Button
 								type="button"
@@ -650,7 +685,7 @@ export default function OAuthAuthorizePage() {
 								disabled={submitting || (selected !== null && selected.size === 0)}
 								className="flex-1"
 							>
-								{submitting ? "Approving…" : "Approve"}
+								{submitting ? t("Approving…") : t("Approve")}
 							</Button>
 						</div>
 					</>
@@ -660,14 +695,19 @@ export default function OAuthAuthorizePage() {
 					<DialogContent className="sm:max-w-md">
 						<DialogHeader>
 							<DialogTitle>
-								Disconnect {existingPeer?.name ?? "your existing connection"}?
+								{t("Disconnect {name}?", {
+									name: existingPeer?.name ?? t("your existing connection"),
+								})}
 							</DialogTitle>
 							<DialogDescription>
-								Your Free plan allows 1 active{" "}
-								{clientKind === "obsidian" ? "device" : "external connection"}. Connecting{" "}
-								<strong>{clientName}</strong> will disconnect{" "}
-								<strong>{existingPeer?.name ?? "your existing connection"}</strong>, which will stop
-								having access to your Engram.
+								<Trans
+									text="Your Free plan allows 1 active {kind}. Connecting {client} will disconnect {name}, which will stop having access to your Engram."
+									slots={{
+										kind: clientKind === "obsidian" ? t("device") : t("external connection"),
+										client: <strong>{clientName}</strong>,
+										name: <strong>{existingPeer?.name ?? t("your existing connection")}</strong>,
+									}}
+								/>
 							</DialogDescription>
 						</DialogHeader>
 						<DialogFooter className="sm:flex-col sm:justify-stretch sm:gap-2">
@@ -685,7 +725,9 @@ export default function OAuthAuthorizePage() {
 								disabled={submitting || (selected !== null && selected.size === 0)}
 								className="w-full"
 							>
-								{submitting ? "Connecting…" : `Disconnect & connect ${clientName}`}
+								{submitting
+									? t("Connecting…")
+									: t("Disconnect & connect {client}", { client: clientName })}
 							</Button>
 							<Button
 								type="button"
@@ -697,7 +739,7 @@ export default function OAuthAuthorizePage() {
 								disabled={submitting}
 								className="w-full"
 							>
-								Upgrade instead
+								{t("Upgrade instead")}
 							</Button>
 						</DialogFooter>
 					</DialogContent>
