@@ -34,13 +34,13 @@ defmodule Engram.Native.ChunkerTest do
             "![i](data:image/png;base64," <>
               Base.encode64(:crypto.strong_rand_bytes(1_500_000)) <> ")"
           ] do
-        {_chunks, peak} = Engram.Native.chunk_dirty_nif(content, nil, "f", "T")
+        {_chunks, peak} = Engram.Native.chunk_dirty_nif(content, "f", "T")
         assert peak <= 10 * byte_size(content), "#{peak} for #{binary_part(content, 0, 20)}"
       end
     end
 
     test "repeated calls leak nothing" do
-      args = ["# A\n\ntext `c`\n\n## B\n\nmore", "tags: [a]", "f", "T"]
+      args = ["---\ntags: [a]\n---\n# A\n\ntext `c`\n\n## B\n\nmore", "f", "T"]
       apply(Engram.Native, :chunk_nif, args)
       before = Engram.Native.live_bytes()
       for _ <- 1..300, do: apply(Engram.Native, :chunk_nif, args)

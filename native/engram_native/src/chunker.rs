@@ -1,7 +1,7 @@
-//! `Engram.Parsers.Markdown.parse/2` in Rust: heading sections, base64 blob
-//! stripping, word and hard splits, and the size caps. The Elixir side keeps
-//! CRLF normalisation, the folder, the title and the frontmatter split (that
-//! codec is shared with sync) and assigns positions.
+//! `Engram.Parsers.Markdown.parse/2` in Rust: the frontmatter split, heading
+//! sections, base64 blob stripping, word and hard splits, and the size caps.
+//! The Elixir side keeps CRLF normalisation, the folder and the title, and
+//! assigns positions.
 use regex::Regex;
 use std::sync::OnceLock;
 
@@ -27,9 +27,12 @@ struct Section<'a> {
     end: usize,
 }
 
-/// Chunks of a note. `body` is the post-frontmatter text, `block` the raw
-/// frontmatter (None or empty: no frontmatter chunk).
-pub fn chunk(body: &str, block: Option<&str>, folder: &str, title: &str) -> Vec<Chunk> {
+/// Chunks of a note: body sections, then one chunk carrying the raw
+/// frontmatter block (keyword search reads its keys). `content` is
+/// LF-normalised.
+pub fn chunk(content: &str, folder: &str, title: &str) -> Vec<Chunk> {
+    let (block, body) = crate::frontmatter::parts(content);
+    let block = block.as_deref();
     let mut out = Vec::new();
     if !body.trim().is_empty() {
         for s in sections(body) {

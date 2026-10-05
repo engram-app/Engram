@@ -2,6 +2,7 @@
 //! scheduler, and returns BEAM binaries (so its OUTPUT is visible to
 //! `:erlang.memory(:binary)`). See docs/context for the memory standard.
 mod chunker;
+mod frontmatter;
 mod json;
 mod links;
 mod memory;
@@ -362,13 +363,12 @@ fn json_decode_dirty_nif<'a>(env: Env<'a>, text: Binary<'a>) -> NifResult<(Term<
 /// Elixir), and the call's native peak.
 fn chunk_terms<'a>(
     env: Env<'a>,
-    body: &str,
-    block: Option<&str>,
+    content: &str,
     folder: &str,
     title: &str,
 ) -> (Vec<Term<'a>>, usize) {
     let base = memory::begin();
-    let out = chunker::chunk(body, block, folder, title)
+    let out = chunker::chunk(content, folder, title)
         .into_iter()
         .map(|c| c.encode(env))
         .collect();
@@ -376,25 +376,26 @@ fn chunk_terms<'a>(
 }
 
 #[rustler::nif]
-fn chunk_nif<'a>(
-    env: Env<'a>,
-    body: &str,
-    block: Option<&str>,
-    folder: &str,
-    title: &str,
-) -> (Vec<Term<'a>>, usize) {
-    chunk_terms(env, body, block, folder, title)
+fn chunk_nif<'a>(env: Env<'a>, content: &str, folder: &str, title: &str) -> (Vec<Term<'a>>, usize) {
+    chunk_terms(env, content, folder, title)
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn chunk_dirty_nif<'a>(
     env: Env<'a>,
-    body: &str,
-    block: Option<&str>,
+    content: &str,
     folder: &str,
     title: &str,
 ) -> (Vec<Term<'a>>, usize) {
-    chunk_terms(env, body, block, folder, title)
+    chunk_terms(env, content, folder, title)
+}
+
+/// `Frontmatter.split/1` as offsets: nil, or {block_start, block_end,
+/// body_start, add_newline}. A linear fence scan on the calling scheduler,
+/// like the Elixir regex split it replaced.
+#[rustler::nif]
+fn frontmatter_split_nif(content: &str) -> frontmatter::Split {
+    frontmatter::split(content)
 }
 
 rustler::init!("Elixir.Engram.Native");

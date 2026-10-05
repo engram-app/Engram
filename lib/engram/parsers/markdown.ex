@@ -54,13 +54,9 @@ defmodule Engram.Parsers.Markdown do
     content = content |> Helpers.scrub_utf8() |> String.replace("\r\n", "\n")
     folder = extract_folder(path)
     title = Helpers.extract_title(content, path)
-    # The same split the frontmatter chunk and sync use, so the body and the
-    # block always agree on where the block ends.
-    {block, body} = Engram.Notes.Frontmatter.split(content)
-    block = if is_binary(block) and block != "", do: block
 
-    body
-    |> Engram.Native.chunk(block, folder, title)
+    content
+    |> Engram.Native.chunk(folder, title)
     |> Enum.with_index(fn {text, context_text, heading_path, char_start, char_end}, position ->
       %{
         position: position,

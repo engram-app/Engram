@@ -58,22 +58,36 @@ defmodule Engram.Native do
     do: parse(:link_extract, content, &link_extract_nif/1, &link_extract_dirty_nif/1)
 
   @doc false
-  def chunk_nif(_body, _block, _folder, _title), do: :erlang.nif_error(:nif_not_loaded)
+  def chunk_nif(_content, _folder, _title), do: :erlang.nif_error(:nif_not_loaded)
   @doc false
-  def chunk_dirty_nif(_body, _block, _folder, _title), do: :erlang.nif_error(:nif_not_loaded)
+  def chunk_dirty_nif(_content, _folder, _title), do: :erlang.nif_error(:nif_not_loaded)
+  @doc false
+  def frontmatter_split_nif(_content), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
   Chunks for `Engram.Parsers.Markdown.parse/2`: `[{text, context_text,
-  heading_path, char_start, char_end}]`, before positions. Valid UTF-8 only.
+  heading_path, char_start, char_end}]`, before positions. Splits
+  frontmatter itself. Valid UTF-8 only.
   """
-  def chunk(body, block, folder, title) do
-    input = [body, block || ""]
+  def chunk(content, folder, title),
+    do:
+      parse(
+        :chunk,
+        content,
+        &chunk_nif(&1, folder, title),
+        &chunk_dirty_nif(&1, folder, title)
+      )
 
-    if byte_size(body) <= @inline_max,
-      do: call(:chunk, input, %{dirty: false}, fn -> chunk_nif(body, block, folder, title) end),
-      else:
-        call(:chunk, input, %{dirty: true}, fn -> chunk_dirty_nif(body, block, folder, title) end)
-  end
+  @doc """
+  Frontmatter fence offsets for `Engram.Notes.Frontmatter.split/1`:
+  `{block_start, block_end, body_start, add_newline}` or nil. Linear scan
+  with no allocation, so it always runs inline. Valid UTF-8 only.
+  """
+  def frontmatter_split(content),
+    do:
+      call(:frontmatter_split, content, %{dirty: false}, fn ->
+        {frontmatter_split_nif(content), 0}
+      end)
 
   @doc "Frontmatter `title:`, else the first H1 outside code, else nil. Valid UTF-8 only."
   def note_title(content),
