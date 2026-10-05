@@ -663,6 +663,23 @@ defmodule Engram.Indexing do
   # silently mixes two models' embedding spaces (#1606).
   defp effective_embed_model, do: doc_embed_model() || Application.get_env(:engram, :embed_model)
 
+  @doc """
+  The model this build embeds documents with, stamped on `notes.embed_model`
+  by every dense pass. A note stamped with anything else is re-embedded by
+  `ReconcileEmbeddings`.
+  """
+  #
+  # Falls back to the embedder's own default, which is what it sends when
+  # `EMBED_MODEL` is unset (the common self-host case), so a switch between
+  # defaults is still a model change. nil only for an embedder with no
+  # declared default (the test mock); model tracking is then off.
+  @spec embed_model() :: String.t() | nil
+  def embed_model do
+    effective_embed_model() ||
+      if Code.ensure_loaded?(embedder()) and function_exported?(embedder(), :default_model, 0),
+        do: embedder().default_model()
+  end
+
   # Voyage caps a request two ways: 1,000 texts AND 120,000 tokens summed over
   # them. Blowing either is a 400 no retry can fix, so the job churns through
   # ReconcileEmbeddings forever.
@@ -950,7 +967,11 @@ defmodule Engram.Indexing do
 
   # `/embed_text`: the dense input dropped the folder in chunker v3 (#1621),
   # so a vector fingerprinted before then came from another string.
-  defp fingerprint_prefix(true), do: "dense:#{effective_embed_model()}/embed_text\n"
+  # `embed_model/0`, not the configured value alone: with EMBED_MODEL unset the
+  # embedder sends its own default, and a reuse fingerprint that names no
+  # model would reuse old-model vectors after a default change, under a new
+  # model stamp. (Prod sets DOC_EMBED_MODEL, so its model part is unchanged.)
+  defp fingerprint_prefix(true), do: "dense:#{embed_model()}/embed_text\n"
   defp fingerprint_prefix(false), do: "sparse\n"
 
   # `embed_text`, not `context_text`: no folder, which is a filter key, not
@@ -972,14 +993,15 @@ defmodule Engram.Indexing do
   keyword vectors follow a tokenizer change without a Voyage bill.
 
   A chunk is rewritten only if it still matches a stored point by
-  fingerprint (dense, or sparse-only for points that never had a dense
-  vector), i.e. the same match chunk reuse makes.
+  fingerprint (dense, sparse-only for points that never had a dense vector,
+  or the legacy unprefixed form written before #1606), or, for a row with no
+  fingerprint, by position and offsets.
 
   Returns `{:ok, points_updated, points_unmatched}`. An unmatched point kept
-  its old keyword vector: a row with no fingerprint (written before
-  `context_hmac` existed, or a cleared reuse marker), or a chunk edited since
-  the last index. The caller must not report that as done; `ResparseNote`
-  rebuilds such a note in full.
+  its old keyword vector: a boundary the current chunker no longer produces
+  (a v1 chunk whose blob v2 strips), or a chunk edited since the last index.
+  The first carries a stale `chunker_version`, so the chunker rebuild owns
+  it; an edited note is EmbedNote's.
   """
   def resparse_note(note, user) do
     chunks = Markdown.parse(note.content || "", note.path)
@@ -1059,25 +1081,51 @@ defmodule Engram.Indexing do
       Repo.with_tenant(note.user_id, fn ->
         Chunk
         |> where([c], c.note_id == ^note.id and not is_nil(c.qdrant_point_id))
-        |> select([c], {c.context_hmac, c.qdrant_point_id})
+        |> select(
+          [c],
+          {c.context_hmac, c.qdrant_point_id, {c.position, c.char_start, c.char_end}}
+        )
         |> Repo.all()
       end)
 
-    by_hmac = Enum.group_by(rows, &elem(&1, 0), &elem(&1, 1))
+    by_hmac =
+      for({hmac, id, _} <- rows, hmac != nil, do: {hmac, id})
+      |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
 
+    # A row with NO fingerprint (written before context_hmac existed, or
+    # cleared by a DEK rotation) still names the chunk it holds by position
+    # and offsets. Only those rows match this way: a row WITH a fingerprint
+    # that no candidate equals holds other text.
+    by_offsets = Map.new(for {nil, id, offsets} <- rows, do: {offsets, id})
+
+    # Third candidate: rows written between #1595 (context_hmac) and #1606
+    # (the pass-type prefix) hold an UNPREFIXED hmac of context_text. Reuse
+    # must not accept them (they say nothing about which vectors the point
+    # holds), but this rewrites only the keyword vector, so the text match is
+    # all it needs.
     keyed =
       Enum.zip([
         chunks,
         fingerprints(content_key, chunks, true),
-        fingerprints(content_key, chunks, false)
+        fingerprints(content_key, chunks, false),
+        Engram.Native.hmac_hex_many(content_key, "", Enum.map(chunks, & &1.context_text))
       ])
 
     {matched, _left} =
-      Enum.flat_map_reduce(keyed, by_hmac, fn {chunk, dense, sparse}, acc ->
-        case {Map.get(acc, dense), Map.get(acc, sparse)} do
-          {[id | rest], _} -> {[{chunk, id}], Map.put(acc, dense, rest)}
-          {_, [id | rest]} -> {[{chunk, id}], Map.put(acc, sparse, rest)}
-          _ -> {[], acc}
+      Enum.flat_map_reduce(keyed, {by_hmac, by_offsets}, fn {chunk, dense, sparse, legacy},
+                                                            {hmacs, offsets} = acc ->
+        offset_key = {chunk.position, chunk.char_start, chunk.char_end}
+
+        case Enum.find([dense, sparse, legacy], &match?([_ | _], Map.get(hmacs, &1))) do
+          nil ->
+            case Map.pop(offsets, offset_key) do
+              {nil, _} -> {[], acc}
+              {id, rest} -> {[{chunk, id}], {hmacs, rest}}
+            end
+
+          hmac ->
+            [id | rest] = Map.fetch!(hmacs, hmac)
+            {[{chunk, id}], {Map.put(hmacs, hmac, rest), offsets}}
         end
       end)
 

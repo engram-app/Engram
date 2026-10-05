@@ -57,6 +57,7 @@ Engram is a single Elixir/Phoenix OTP application — search, MCP server, note s
 - **Behaviour-based adapters** — `Engram.Embedder` behaviour for Voyage/Ollama
 - **Async indexing, sync note storage**: note upsert returns immediately; embedding queued via Oban (30s settle debounce, 5m ceiling, dedup). See `docs/context/async-indexing-pipeline.md`
 - **Rust NIFs** (`native/engram_native`, rustler, dirty CPU): the keyword encoder (tokenize + Snowball + HMAC + BM25), 15-43x faster than the Elixir it replaced. **Default to a Rust NIF for CPU-bound pure work** (parsing, tokenizing, hashing, regex, encoding over binaries); keep Elixir for orchestration and I/O. Every NIF follows the memory standard (BEAM allocator, per-call native peak, `[:engram, :nif, :call, :stop]`, unaccounted-RSS poll). Rules, test patterns and the next candidates (markdown chunker, link parser): `docs/context/native-nifs.md`
+- **Index changes heal themselves** — a change to chunking or keyword encoding must reach existing notes with NO operator step (self-hosters never run one). Bump `Engram.KeywordIndex` `@version` (keyword-only, free) or `@chunker_version`; `ReconcileEmbeddings` sweeps stale stamps. See `docs/context/index-version-self-heal.md`
 - **Hybrid chunk storage** — Postgres `chunks` = source of truth for boundaries; Qdrant = vectors + contextualized text
 - **Folder-aware context** — folder path + heading hierarchy prepended to chunk text before embedding
 
@@ -470,6 +471,7 @@ identically.
 Grouped index into `docs/context/`. Each entry is a trigger → doc; read the doc itself for full detail.
 
 **Architecture & Decisions**
+- Changing chunking, tokenizing or what the keyword leg encodes (version stamps, the reconcile sweep, why "run X per vault after deploy" is a defect) → `docs/context/index-version-self-heal.md`
 - Elixir decision audit, library deps, infra checklist (partially superseded — read inline corrections) → `docs/context/elixir-architecture-decisions.md`
 - RLS policy set (12 tenant tables, `api_keys_discovery`, `maintenance_all`), DB roles, `with_tenant`/`cross_tenant`/`maintenance()`/`skip_tenant_check` semantics → `docs/context/database-schema-rls.md`
 - Adding a tenant table (needs its own `maintenance_all`), the `MAINTENANCE_DATABASE_URL` credential, why it is not BYPASSRLS → `docs/context/maintenance-db-role.md`

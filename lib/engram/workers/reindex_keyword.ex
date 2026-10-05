@@ -37,7 +37,7 @@ defmodule Engram.Workers.ReindexKeyword do
   alias Engram.Logger.Metadata
   alias Engram.Notes.Note
   alias Engram.Repo
-  alias Engram.Workers.{EmbedNote, ResparseNote}
+  alias Engram.Workers.{EmbedNote, RefreshKeywordVectors}
 
   require Logger
 
@@ -48,7 +48,7 @@ defmodule Engram.Workers.ReindexKeyword do
   # `mode`:
   #   * `:full` (default): re-embed every note. Re-normalizes BM25 against the
   #     current avgdl and backfills notes missing a keyword leg. Bills Voyage.
-  #   * `:sparse`: rebuild keyword vectors in place (`ResparseNote`), dense
+  #   * `:sparse`: rebuild keyword vectors in place (`RefreshKeywordVectors`), dense
   #     vectors untouched, zero Voyage spend. For a TOKENIZER change.
   @spec enqueue(Ecto.UUID.t(), Ecto.UUID.t(), :full | :sparse) :: :ok | {:error, term()}
   @impl Oban.Worker
@@ -88,7 +88,7 @@ defmodule Engram.Workers.ReindexKeyword do
     # first resparse refills the per-node cache (10-minute TTL) from mostly OLD
     # lengths, and when the encoded string changed length (#1615 added the
     # context prefix) notes done early are normalized against that. Run a
-    # second `:sparse` pass once the first has DRAINED: `ResparseNote` is
+    # second `:sparse` pass once the first has DRAINED: `RefreshKeywordVectors` is
     # unique on available/scheduled, so one enqueued earlier is deduplicated
     # against first-pass jobs still waiting.
     :ok = Stats.evict(vault_id)
@@ -96,7 +96,7 @@ defmodule Engram.Workers.ReindexKeyword do
     Repo.with_tenant!(user_id, fn ->
       jobs =
         for id <- live_note_ids(vault_id) do
-          ResparseNote.new(%{note_id: to_string(id), user_id: user_id},
+          RefreshKeywordVectors.new(%{note_id: to_string(id), user_id: user_id},
             priority: EmbedNote.backfill_priority()
           )
         end

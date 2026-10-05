@@ -110,7 +110,10 @@ defmodule Engram.Workers.EmbedNoteTest do
           set: [
             embed_hash: note.content_hash,
             dense_indexed_hash: note.content_hash,
-            chunker_version: Markdown.chunker_version()
+            chunker_version: Markdown.chunker_version(),
+            # The embed model is part of it too: another model's vectors are
+            # rebuilt.
+            embed_model: Engram.Indexing.embed_model()
           ]
         ],
         skip_tenant_check: true
@@ -118,6 +121,121 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       # No mock expectations — if it tried to embed, Mox would fail
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+    end
+
+    # A version bump (chunker or embed model) on unchanged content is OUR
+    # maintenance, not the user's usage: it never counts against their embed
+    # cap, even when the cap is spent, and it keeps the note's dense vectors.
+    test "a version rebuild of a note with dense vectors is unmetered", %{
+      bypass: bypass,
+      note: note
+    } do
+      Engram.UsageMeters.add_embed_tokens(note.user_id, 20_000_000)
+      used = Engram.UsageMeters.lifetime_embed_tokens(note.user_id)
+
+      from(n in Note, where: n.id == ^note.id)
+      |> Repo.update_all(
+        [
+          set: [
+            embed_hash: note.content_hash,
+            dense_indexed_hash: note.content_hash,
+            chunker_version: nil
+          ]
+        ],
+        skip_tenant_check: true
+      )
+
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :embed, :maintenance]])
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts -> {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)} end)
+
+      stub_qdrant(bypass)
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      reloaded = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert reloaded.dense_indexed_hash == note.content_hash
+      assert reloaded.chunker_version == Markdown.chunker_version()
+      assert Engram.UsageMeters.lifetime_embed_tokens(note.user_id) == used
+      assert_received {[:engram, :embed, :maintenance], ^ref, %{tokens: tokens}, _}
+      assert tokens > 0
+    end
+
+    # The worker the sweep enqueues is EmbedNote's maintenance path under a
+    # name the previous release lacks.
+    test "RebuildStaleNote runs the same unmetered rebuild", %{bypass: bypass, note: note} do
+      Engram.UsageMeters.add_embed_tokens(note.user_id, 20_000_000)
+      used = Engram.UsageMeters.lifetime_embed_tokens(note.user_id)
+
+      from(n in Note, where: n.id == ^note.id)
+      |> Repo.update_all(
+        [
+          set: [
+            embed_hash: note.content_hash,
+            dense_indexed_hash: note.content_hash,
+            chunker_version: nil
+          ]
+        ],
+        skip_tenant_check: true
+      )
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts -> {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)} end)
+
+      stub_qdrant(bypass)
+
+      assert :ok =
+               perform_job(Engram.Workers.RebuildStaleNote, %{
+                 note_id: note.id,
+                 user_id: note.user_id
+               })
+
+      reloaded = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert reloaded.chunker_version == Markdown.chunker_version()
+      assert reloaded.dense_indexed_hash == note.content_hash
+      assert Engram.UsageMeters.lifetime_embed_tokens(note.user_id) == used
+    end
+
+    # With EMBED_MODEL unset the embedder sends its own default; the stamp
+    # (and the reuse fingerprint) must name it, or a change between defaults
+    # on a self-host install would reuse old-model vectors.
+    test "embed_model/0 falls back to the embedder's own default" do
+      Application.put_env(:engram, :embedder, Engram.Embedders.Ollama)
+      on_exit(fn -> Application.put_env(:engram, :embedder, Engram.MockEmbedder) end)
+
+      assert Engram.Indexing.embed_model() == Engram.Embedders.Ollama.default_model()
+    end
+
+    test "an embed model change rebuilds the note and stamps the new model", %{
+      bypass: bypass,
+      note: note
+    } do
+      Application.put_env(:engram, :embed_model, "test-embed-model")
+      on_exit(fn -> Application.delete_env(:engram, :embed_model) end)
+
+      from(n in Note, where: n.id == ^note.id)
+      |> Repo.update_all(
+        [
+          set: [
+            embed_hash: note.content_hash,
+            dense_indexed_hash: note.content_hash,
+            chunker_version: Markdown.chunker_version(),
+            embed_model: "some-retired-model"
+          ]
+        ],
+        skip_tenant_check: true
+      )
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts -> {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)} end)
+
+      stub_qdrant(bypass)
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      assert Repo.get!(Note, note.id, skip_tenant_check: true).embed_model ==
+               Engram.Indexing.embed_model()
     end
 
     # #1620 — chunker fixes never reached an already-indexed note. Both hashes
@@ -162,6 +280,20 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       assert Repo.get!(Note, note.id, skip_tenant_check: true).chunker_version ==
                Markdown.chunker_version()
+    end
+
+    test "stamps the current keyword version on success", %{bypass: bypass, note: note} do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts ->
+        {:ok, Enum.map(texts, fn _ -> List.duplicate(0.1, 3) end)}
+      end)
+
+      stub_qdrant(bypass)
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      assert Repo.get!(Note, note.id, skip_tenant_check: true).keyword_version ==
+               Engram.KeywordIndex.version()
     end
 
     test "backfills dense vectors for a Free note inside the cap", %{

@@ -5,7 +5,7 @@ defmodule Engram.Workers.ReindexKeywordTest do
   alias Engram.Notes.Chunk
   alias Engram.Notes.Note
   alias Engram.Repo
-  alias Engram.Workers.{EmbedNote, ReindexKeyword, ResparseNote}
+  alias Engram.Workers.{EmbedNote, RefreshKeywordVectors, ReindexKeyword}
 
   defp insert_chunk!(note, hmac) do
     Repo.insert!(
@@ -32,8 +32,8 @@ defmodule Engram.Workers.ReindexKeywordTest do
   end
 
   # Sparse mode: rebuild keyword vectors in place (a tokenizer change), so
-  # NO re-embed: nothing cleared, no EmbedNote, one ResparseNote per note.
-  test "sparse mode enqueues ResparseNote per note and clears nothing" do
+  # NO re-embed: nothing cleared, no EmbedNote, one RefreshKeywordVectors per note.
+  test "sparse mode enqueues RefreshKeywordVectors per note and clears nothing" do
     {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
     vault = insert(:vault, user: user)
     note = insert(:note, user: user, vault: vault)
@@ -49,7 +49,11 @@ defmodule Engram.Workers.ReindexKeywordTest do
                "mode" => "sparse"
              })
 
-    assert_enqueued(worker: ResparseNote, args: %{"note_id" => note.id, "user_id" => user.id})
+    assert_enqueued(
+      worker: RefreshKeywordVectors,
+      args: %{"note_id" => note.id, "user_id" => user.id}
+    )
+
     refute_enqueued(worker: EmbedNote)
     assert Repo.reload!(chunk, skip_tenant_check: true).context_hmac == <<1, 2, 3>>
   end

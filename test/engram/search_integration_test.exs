@@ -70,8 +70,10 @@ defmodule Engram.SearchIntegrationTest do
     assert {:ok, chunk_count} = Engram.Indexing.index_note(decrypted, vault)
     assert chunk_count > 0, "the note must produce chunks, or nothing below is exercised"
 
-    {:ok, info} = Engram.Vector.Qdrant.collection_info(col)
-    assert info["points_count"] >= 1
+    # `upsert_points` does not pass `?wait=true`: Qdrant acknowledges and
+    # applies the write asynchronously, so a count read straight after can
+    # still be 0. Poll, bounded.
+    assert await_points(col) >= 1
 
     # Not a hardcoded port: CI runs Qdrant on an ephemeral one (see
     # test_helper.exs), so read the same URL the client uses.
@@ -96,5 +98,18 @@ defmodule Engram.SearchIntegrationTest do
       assert is_binary(r.text)
       refute Map.has_key?(r, :text_nonce)
     end)
+  end
+
+  defp await_points(col, tries \\ 50) do
+    {:ok, info} = Engram.Vector.Qdrant.collection_info(col)
+
+    case info["points_count"] do
+      n when n >= 1 or tries == 0 ->
+        n
+
+      _ ->
+        Process.sleep(100)
+        await_points(col, tries - 1)
+    end
   end
 end

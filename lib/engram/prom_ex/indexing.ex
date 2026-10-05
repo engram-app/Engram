@@ -31,6 +31,11 @@ defmodule Engram.PromEx.Indexing do
       `OrphanSweep`'s weekly point pass reaps it, so a sustained non-zero rate
       is a correctness signal, not a performance one. Expected flat zero.
 
+    * `engram_prom_ex_indexing_maintenance_embed_tokens_total` — embed tokens
+      sent by version rebuilds (a chunker or embed-model bump on unchanged
+      content). That spend is ours, never charged to a user's embed cap, so
+      this is the only place it is counted. Untagged.
+
   Cardinality contract: only `:outcome`/`:reason` (closed enums). NEVER add
   note_id, user_id, or vault_id.
   """
@@ -40,6 +45,7 @@ defmodule Engram.PromEx.Indexing do
   @repath_stop_event [:engram, :indexing, :repath, :stop]
   @link_rewrite_failed_event [:engram, :links, :rewrite, :failed]
   @stale_points_leaked_event [:engram, :indexing, :stale_points_leaked]
+  @maintenance_embed_event [:engram, :embed, :maintenance]
 
   @impl true
   def event_metrics(opts) do
@@ -80,6 +86,14 @@ defmodule Engram.PromEx.Indexing do
             "Qdrant points a re-index could not delete once its chunk rows stopped " <>
               "naming them (#1592) — deleted content still searchable until OrphanSweep " <>
               "reaps it. Untagged by design; per-note detail is in the log line."
+        ),
+        sum(
+          metric_prefix ++ [:maintenance_embed_tokens, :total],
+          event_name: @maintenance_embed_event,
+          measurement: :tokens,
+          description:
+            "Embed tokens sent by version rebuilds (chunker or embed-model bump, content " <>
+              "unchanged): our maintenance spend, never charged to a user's embed cap."
         )
       ]
     )

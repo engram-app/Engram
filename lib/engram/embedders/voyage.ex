@@ -38,6 +38,9 @@ defmodule Engram.Embedders.Voyage do
   @default_url "https://api.voyageai.com"
   @default_model "voyage-4-large"
 
+  @doc "The model used when `EMBED_MODEL` is unset (`Engram.Indexing.embed_model/0`)."
+  def default_model, do: @default_model
+
   @impl true
   def model_info do
     %{
