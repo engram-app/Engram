@@ -12,12 +12,10 @@ defmodule Engram.Workers.ResparseNote do
   encoding change heals itself with no operator step. Success stamps the
   version.
 
-  A note with points that cannot be matched (no fingerprint, or edited since
-  its last index) would keep stale keyword vectors forever: `embed_hash`
-  still equals `content_hash`, so nothing else revisits it. Those notes are
-  flagged and re-embedded in full instead. That bills the embedder, but only
-  for legacy rows, and never over a spent embed budget: that pass would run
-  sparse-only and delete the note's dense points, so the note is parked.
+  It never re-embeds. Points it cannot match (legacy rows with no
+  fingerprint, v1 chunks whose blobs v2 strips) belong to notes with a stale
+  `chunker_version`, which the chunker rebuild owns; see
+  `docs/context/index-version-self-heal.md`.
   """
   use Oban.Worker,
     queue: :embed,
@@ -33,7 +31,7 @@ defmodule Engram.Workers.ResparseNote do
   alias Engram.Logger.Metadata
   alias Engram.Notes.Note
   alias Engram.Repo
-  alias Engram.Workers.{BackgroundPriority, EmbedNote}
+  alias Engram.Workers.BackgroundPriority
 
   require Logger
 
@@ -46,15 +44,11 @@ defmodule Engram.Workers.ResparseNote do
 
     with {:ok, note} <- Engram.Notes.fetch_note_for_worker_job(args),
          :ok <- RotationGate.check(note.user_id),
-         # With the subscription: the fallback's budget check reads the plan.
-         user = Engram.Accounts.get_user_with_subscription!(note.user_id),
+         user = Engram.Accounts.get_user!(note.user_id),
          {:ok, note} <- Crypto.maybe_decrypt_note_fields(note, user),
          {:ok, _updated, unmatched} <- Indexing.resparse_note(note, user) do
-      cond do
-        unmatched == 0 -> stamp_keyword_version(note)
-        EmbedNote.embed_budget_left?(user) -> rebuild(note, unmatched)
-        true -> EmbedNote.park_over_budget(note)
-      end
+      if unmatched > 0, do: log_unmatched(note, unmatched)
+      stamp_keyword_version(note)
     else
       {:discard, _} = discard -> discard
       {:error, :rotation_in_progress} -> {:snooze, 60}
@@ -78,19 +72,17 @@ defmodule Engram.Workers.ResparseNote do
     :ok
   end
 
-  defp rebuild(note, unmatched) do
-    Logger.warning(
-      "resparse fell back to a full rebuild",
-      Metadata.with_category(:warning, :oban, note_id: note.id, count: unmatched)
+  # Never a re-embed from here. A point resparse cannot match is a legacy row
+  # (no fingerprint) or a v1 chunk holding a base64 blob v2 strips, and either
+  # way the note's `chunker_version` is stale, so the chunker rebuild owns it.
+  # Re-embedding here turned the automatic keyword sweep into a corpus-wide
+  # Voyage bill and, over a spent Free budget, a sparse-only pass that drops
+  # the note's dense points. The note is still stamped: its matched points are
+  # current, and re-selecting it every tick would change nothing.
+  defp log_unmatched(note, unmatched) do
+    Logger.info(
+      "resparse left unmatched points for the chunker rebuild",
+      Metadata.with_category(:info, :oban, note_id: note.id, count: unmatched)
     )
-
-    Repo.with_tenant!(note.user_id, fn -> Indexing.flag_notes_for_rebuild([note.id]) end)
-
-    {:ok, _} =
-      Oban.insert(
-        EmbedNote.new_debounced(note.id, note.user_id, priority: EmbedNote.backfill_priority())
-      )
-
-    :ok
   end
 end

@@ -262,10 +262,7 @@ defmodule Engram.Workers.EmbedNote do
 
   # Cheap pre-check for the dense backfill of an already-indexed note: with
   # nothing left there is no point rebuilding it just to be refused.
-  @doc false
-  # Public for ResparseNote's fallback: a rebuild over a spent budget would run
-  # sparse-only and delete the note's dense points.
-  def embed_budget_left?(user) do
+  defp embed_budget_left?(user) do
     case Billing.effective_limit(user, :lifetime_embed_token_cap) do
       cap when is_integer(cap) and cap >= 0 -> UsageMeters.lifetime_embed_tokens(user.id) < cap
       cap when is_nil(cap) or cap == :unlimited or is_integer(cap) -> true
@@ -304,8 +301,7 @@ defmodule Engram.Workers.EmbedNote do
     do: DateTime.add(DateTime.utc_now(), @budget_park_seconds, :second)
 
   # Tenant-scoped for the same filtered-UPDATE reason as `maybe_mark_poison/3`.
-  @doc false
-  def park_over_budget(%Note{} = note) do
+  defp park_over_budget(%Note{} = note) do
     {:ok, _} =
       Repo.with_tenant(note.user_id, fn ->
         Repo.update_all(from(n in Note, where: n.id == ^note.id),

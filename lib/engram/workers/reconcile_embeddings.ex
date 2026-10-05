@@ -268,8 +268,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # suite).
   #
   # Content-stale notes are left to the sweep above: EmbedNote's full pass
-  # stamps the keyword version itself. Same cooldown rule as above, so a note
-  # ResparseNote parked over a spent budget is not re-selected every tick.
+  # stamps the keyword version itself. Same cooldown filter and stamp as above.
   #
   # ponytail: `keyword_version` is unindexed, so this scans each tenant's live
   # notes every tick. Fine at thousands of notes per tenant; add a partial
@@ -277,6 +276,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # tenant reaches hundreds of thousands.
   defp sweep_keyword_stale(now, paid) do
     version = KeywordIndex.version()
+    backoff_until = DateTime.add(now, reconcile_backoff_seconds(), :second)
     Process.put(:reconcile_keyword_budget, @batch_size)
 
     rows =
@@ -286,7 +286,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
             []
 
           remaining ->
-            found =
+            eligible =
               from(n in Note, as: :note)
               |> join(:inner, [n], v in Vault, on: v.id == n.vault_id and is_nil(v.deleted_at))
               |> where([n], n.kind == "note" and is_nil(n.deleted_at))
@@ -299,8 +299,17 @@ defmodule Engram.Workers.ReconcileEmbeddings do
               )
               |> order_by([n], asc: n.updated_at)
               |> limit(^remaining)
+              |> select([n], n.id)
+
+            # Select-and-stamp in one statement, as the embed sweep does
+            # (#897): a note whose resparse keeps failing (a lost Qdrant point
+            # 404s `update_vectors`) skips the cooldown window instead of
+            # re-entering every tick once its job is discarded. Success stamps
+            # `keyword_version`, so a healthy note never comes back.
+            {_count, found} =
+              from(n in Note, where: n.kind == "note" and n.id in subquery(eligible))
               |> select([n], {n.id, n.user_id})
-              |> Repo.all()
+              |> Repo.update_all(set: [embed_retry_after: backoff_until])
 
             Process.put(:reconcile_keyword_budget, remaining - length(found))
             found

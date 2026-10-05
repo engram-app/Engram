@@ -114,17 +114,53 @@ defmodule Engram.IndexingResparseTest do
     assert count == length(upserted) - 1
   end
 
-  test "the job falls back to a full rebuild when points stay unmatched", ctx do
+  # Every note with an unmatchable point also carries a stale chunker_version
+  # (legacy rows predate the fingerprint, or v1 chunks hold base64 blobs v2
+  # strips), so the chunker rebuild owns it. A resparse that re-embedded here
+  # turned an automatic keyword sweep into a corpus-wide Voyage bill, and over
+  # a spent Free budget it dropped the note's dense vectors.
+  test "unmatched points never trigger a re-embed; the note is still stamped", ctx do
     %{user: user, note: note} = ctx
     clear_one_fingerprint(note)
+    before = Repo.get!(Notes.Note, note.id, skip_tenant_check: true)
 
-    assert :ok =
-             perform_job(Engram.Workers.ResparseNote, %{note_id: note.id, user_id: user.id})
+    embeds = fn ->
+      length(all_enqueued(worker: Engram.Workers.EmbedNote, args: %{"note_id" => note.id}))
+    end
 
-    assert_enqueued(worker: Engram.Workers.EmbedNote, args: %{"note_id" => note.id})
+    queued = embeds.()
 
+    assert :ok = perform_job(Engram.Workers.ResparseNote, %{note_id: note.id, user_id: user.id})
+
+    # No rebuild enqueued (the fixture's own upsert already queued one), and
+    # the index markers a rebuild would clear are untouched.
+    assert embeds.() == queued
     reloaded = Repo.get!(Notes.Note, note.id, skip_tenant_check: true)
-    assert is_nil(reloaded.embed_hash)
+
+    assert {reloaded.embed_hash, reloaded.dense_indexed_hash} ==
+             {before.embed_hash, before.dense_indexed_hash}
+
+    assert reloaded.keyword_version == Engram.KeywordIndex.version()
+  end
+
+  # Rows written between #1595 (context_hmac) and #1606 (pass-type prefix)
+  # hold an UNPREFIXED hmac of context_text. Resparse rewrites only keyword
+  # vectors, so matching them by text alone is safe.
+  test "matches a point stored under the legacy unprefixed fingerprint", ctx do
+    %{user: user, note: note, upserted: upserted} = ctx
+    {:ok, key} = Crypto.dek_content_hash_key(user)
+    [first | _] = Engram.Parsers.Markdown.parse(note.content, note.path)
+
+    {:ok, _} =
+      Repo.with_tenant(note.user_id, fn ->
+        Repo.update_all(
+          from(c in Engram.Notes.Chunk, where: c.note_id == ^note.id and c.position == 0),
+          set: [context_hmac: Crypto.hmac_content_hash(key, first.context_text)]
+        )
+      end)
+
+    assert {:ok, count, 0} = Indexing.resparse_note(note, user)
+    assert count == length(upserted)
   end
 
   test "the job stamps the current keyword version on success", ctx do
@@ -138,33 +174,6 @@ defmodule Engram.IndexingResparseTest do
 
     assert Repo.get!(Notes.Note, note.id, skip_tenant_check: true).keyword_version ==
              Engram.KeywordIndex.version()
-  end
-
-  # The fallback re-embeds. With the embed budget spent, that pass would run
-  # sparse-only and DELETE the note's dense points: an automatic keyword fix
-  # must never cost a user their semantic search. Park it instead.
-  test "an unmatched note over its embed budget is parked, not rebuilt", ctx do
-    %{user: user, note: note} = ctx
-    clear_one_fingerprint(note)
-    Engram.UsageMeters.add_embed_tokens(user.id, 20_000_000)
-    before = Repo.get!(Notes.Note, note.id, skip_tenant_check: true)
-
-    embeds = fn ->
-      length(all_enqueued(worker: Engram.Workers.EmbedNote, args: %{"note_id" => note.id}))
-    end
-
-    queued = embeds.()
-
-    assert :ok = perform_job(Engram.Workers.ResparseNote, %{note_id: note.id, user_id: user.id})
-
-    # No rebuild enqueued (the fixture's own upsert already queued one).
-    assert embeds.() == queued
-    reloaded = Repo.get!(Notes.Note, note.id, skip_tenant_check: true)
-    # Index markers untouched (a rebuild would have cleared them).
-    assert {reloaded.embed_hash, reloaded.dense_indexed_hash} ==
-             {before.embed_hash, before.dense_indexed_hash}
-
-    assert reloaded.embed_budget_parked == true
   end
 
   defp clear_one_fingerprint(note) do

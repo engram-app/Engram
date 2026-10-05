@@ -116,6 +116,22 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       assert [_one] = all_enqueued(worker: ResparseNote, args: %{"note_id" => note.id})
     end
 
+    # A note whose resparse keeps failing (a Qdrant 404 on a lost point) must
+    # not be re-selected every tick once its job is discarded: same #897
+    # cooldown as the embed sweep, stamped at selection.
+    test "the keyword sweep stamps a cooldown, so a failing note is not re-swept" do
+      user = insert(:user)
+      note = current_note(user, keyword_version: nil)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert Repo.get!(Note, note.id, skip_tenant_check: true).embed_retry_after
+
+      # The job is gone (discarded after its attempts), not pending.
+      Repo.delete_all(Oban.Job)
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      refute_enqueued(worker: ResparseNote, args: %{"note_id" => note.id})
+    end
+
     test "backfills dense vectors for every entitled status, past_due included" do
       # The subscription join is a SQL proxy for the real 4-layer entitlement
       # resolver. A hand-rolled subset that dropped `past_due` stranded the
@@ -413,7 +429,13 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
     test "does not stamp notes it did not enqueue" do
       user = insert(:user)
       # up-to-date note — not enqueued, so it must not be collaterally cooled.
-      fresh = note_for(user, content_hash: "abc123", embed_hash: "abc123")
+      # Current keyword stamp too, or the keyword sweep rightly picks it up.
+      fresh =
+        note_for(user,
+          content_hash: "abc123",
+          embed_hash: "abc123",
+          keyword_version: KeywordIndex.version()
+        )
 
       assert :ok = perform_job(ReconcileEmbeddings, %{})
       refute_enqueued(worker: EmbedNote, args: %{"note_id" => fresh.id})

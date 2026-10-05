@@ -972,14 +972,15 @@ defmodule Engram.Indexing do
   keyword vectors follow a tokenizer change without a Voyage bill.
 
   A chunk is rewritten only if it still matches a stored point by
-  fingerprint (dense, or sparse-only for points that never had a dense
-  vector), i.e. the same match chunk reuse makes.
+  fingerprint (dense, sparse-only for points that never had a dense vector,
+  or the legacy unprefixed form written before #1606).
 
   Returns `{:ok, points_updated, points_unmatched}`. An unmatched point kept
   its old keyword vector: a row with no fingerprint (written before
-  `context_hmac` existed, or a cleared reuse marker), or a chunk edited since
-  the last index. The caller must not report that as done; `ResparseNote`
-  rebuilds such a note in full.
+  `context_hmac` existed, or a cleared reuse marker), a v1 chunk whose blob
+  v2 strips, or a chunk edited since the last index. The first two carry a
+  stale `chunker_version`, so the chunker rebuild owns them; an edited note
+  is EmbedNote's.
   """
   def resparse_note(note, user) do
     chunks = Markdown.parse(note.content || "", note.path)
@@ -1065,19 +1066,28 @@ defmodule Engram.Indexing do
 
     by_hmac = Enum.group_by(rows, &elem(&1, 0), &elem(&1, 1))
 
+    # Third candidate: rows written between #1595 (context_hmac) and #1606
+    # (the pass-type prefix) hold an UNPREFIXED hmac of context_text. Reuse
+    # must not accept them (they say nothing about which vectors the point
+    # holds), but this rewrites only the keyword vector, so the text match is
+    # all it needs.
     keyed =
       Enum.zip([
         chunks,
         fingerprints(content_key, chunks, true),
-        fingerprints(content_key, chunks, false)
+        fingerprints(content_key, chunks, false),
+        Engram.Native.hmac_hex_many(content_key, "", Enum.map(chunks, & &1.context_text))
       ])
 
     {matched, _left} =
-      Enum.flat_map_reduce(keyed, by_hmac, fn {chunk, dense, sparse}, acc ->
-        case {Map.get(acc, dense), Map.get(acc, sparse)} do
-          {[id | rest], _} -> {[{chunk, id}], Map.put(acc, dense, rest)}
-          {_, [id | rest]} -> {[{chunk, id}], Map.put(acc, sparse, rest)}
-          _ -> {[], acc}
+      Enum.flat_map_reduce(keyed, by_hmac, fn {chunk, dense, sparse, legacy}, acc ->
+        case Enum.find([dense, sparse, legacy], &match?([_ | _], Map.get(acc, &1))) do
+          nil ->
+            {[], acc}
+
+          hmac ->
+            [id | rest] = Map.fetch!(acc, hmac)
+            {[{chunk, id}], Map.put(acc, hmac, rest)}
         end
       end)
 

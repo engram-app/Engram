@@ -22,11 +22,18 @@ worker that brings them current.
 NULL means "built before the stamp existed", which is stale. Neither column is
 backfilled by its migration: NULL is the evidence of which notes need work.
 
-Every full index (`EmbedNote`) stamps both versions. `ResparseNote` stamps
-`keyword_version` when every point matched. A note it cannot fully match
-(legacy rows with no `context_hmac`) falls back to a full rebuild, unless the
-user's embed budget is spent: that pass would run sparse-only and DELETE the
-note's dense points, so the note is parked instead (`embed_budget_parked`).
+Every full index (`EmbedNote`) stamps both versions. `ResparseNote` rewrites
+the keyword vector of every point it can match (dense, sparse or the legacy
+unprefixed fingerprint) and stamps `keyword_version`. It NEVER re-embeds: a
+point it cannot match is a legacy row with no fingerprint or a v1 chunk whose
+base64 blob v2 strips, and both sit on notes with a stale `chunker_version`,
+which the chunker rebuild owns. (An earlier draft re-embedded them; review
+found that would have been a near-corpus Voyage bill, and over a spent Free
+budget a sparse-only pass that deletes dense points.)
+
+The keyword sweep stamps the same #897 cooldown (`embed_retry_after`) at
+selection as the embed sweep, so a note whose resparse keeps failing (a lost
+Qdrant point 404s `update_vectors`) is retried once per window, not every tick.
 
 ## When you change indexing, ask
 
@@ -46,7 +53,8 @@ note's dense points, so the note is parked instead (`embed_budget_parked`).
 tokens upper bound), including 2,475 notes of Free users, whose lifetime embed
 cap would be charged for our maintenance. Pending decision: version-driven
 re-embeds (content unchanged) bypass the user's meter. Until then a chunker
-bump still reaches only edited notes.
+bump still reaches only edited notes, and the keyword sweep's unmatched
+points (legacy rows) keep their old keyword vectors.
 
 ## Rollout notes
 
