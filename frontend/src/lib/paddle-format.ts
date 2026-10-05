@@ -76,16 +76,28 @@ export function formatBillingCycle(
 /**
  * Formats a trial period for display.
  * @param trialPeriod - The trial period to format
+ * @param tn - Plural translator from `useT()`
  * @returns Formatted string like "7 days" or "1 month"
  *
  * @example
- * formatTrialPeriod({ frequency: 7, interval: "day" }) // "7 days"
- * formatTrialPeriod({ frequency: 1, interval: "month" }) // "1 month"
+ * formatTrialPeriod({ frequency: 7, interval: "day" }, tn) // "7 days"
+ * formatTrialPeriod({ frequency: 1, interval: "month" }, tn) // "1 month"
  */
-export function formatTrialPeriod(trialPeriod: TimePeriodLike): string {
-	const interval = trialPeriod.frequency === 1 ? trialPeriod.interval : `${trialPeriod.interval}s`;
-
-	return `${trialPeriod.frequency} ${interval}`;
+export function formatTrialPeriod(trialPeriod: TimePeriodLike, tn: Tn): string {
+	const { frequency, interval } = trialPeriod;
+	switch (interval) {
+		case "day":
+			return tn({ one: "{count} day", other: "{count} days" }, frequency);
+		case "week":
+			return tn({ one: "{count} week", other: "{count} weeks" }, frequency);
+		case "month":
+			return tn({ one: "{count} month", other: "{count} months" }, frequency);
+		case "year":
+			return tn({ one: "{count} year", other: "{count} years" }, frequency);
+		default:
+			// Unknown Paddle interval: show the raw value rather than guess a translation.
+			return `${frequency} ${frequency === 1 ? interval : `${interval}s`}`;
+	}
 }
 
 /**
