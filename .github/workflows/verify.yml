@@ -3786,6 +3786,22 @@ jobs:
           git worktree prune
           git worktree add "$PREV_DIR" "${{ steps.prev.outputs.tag }}"
 
+      # Both the previous release and this branch compile `Engram.Native`, a
+      # rustler crate: without cargo the compile dies on `:enoent` and every
+      # phase/expand PR fails here. The toolchain step above only runs on the
+      # phase/contract path. Same flock'd per-VM rustup as unit-tests.
+      - name: Rust toolchain for N-1 compat (native/ NIFs)
+        if: steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
+        run: |
+          mkdir -p "$HOME/.cargo"
+          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/engram_native/rust-toolchain.toml)
+          flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
+            [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --no-self-update
+          ' "$RUST_VERSION"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
       - name: Start ephemeral postgres
         if: steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         id: pg
