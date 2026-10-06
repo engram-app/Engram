@@ -423,7 +423,8 @@ command for us. Every change must hold under that:
 3. **Backfills live in migrations, not app runtime.** A backfill done by app
    code in release N+1 never runs for someone who skips N+1. Put it in the
    migration, or make it a self-healing reconcile the app runs on its own
-   (version stamp + reconcile, see the index self-heal pattern).
+   (version stamp + reconcile, see the index self-heal pattern). The
+   completion ledger for this: `docs/context/data-migrations-ledger.md`.
 4. **Contract migrations assert their precondition.** Before dropping or
    tightening, check the thing it depends on actually happened (no NULLs
    left, no rows in the old shape) and raise if not. Fail loud on boot,

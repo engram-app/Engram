@@ -37,7 +37,7 @@
 ### Task 1: Ledger table and `Engram.DataMigrations`
 
 **Files:**
-- Create: `priv/repo/migrations/20261006170000_create_data_migrations_expand.exs`
+- Create: `priv/repo/migrations/20261006190000_create_data_migrations_expand.exs`
 - Create: `lib/engram/data_migrations/entry.ex`
 - Create: `lib/engram/data_migrations.ex`
 - Test: `test/engram/data_migrations_test.exs`
@@ -285,7 +285,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add priv/repo/migrations/20261006170000_create_data_migrations_expand.exs lib/engram/data_migrations.ex lib/engram/data_migrations/entry.ex test/engram/data_migrations_test.exs
+git add priv/repo/migrations/20261006190000_create_data_migrations_expand.exs lib/engram/data_migrations.ex lib/engram/data_migrations/entry.ex test/engram/data_migrations_test.exs
 git commit -m "feat(data-migrations): completion ledger table and API"
 ```
 
@@ -1186,7 +1186,7 @@ Prod audit (read-only, 4,338 live notes): legacy MD5 hashes 0, missing basename_
 
 ### Task 10: Flag stuck migrations for review
 
-- Migration `20261006170000_create_data_migrations_expand.exs` has not shipped: edit it in place to add `opened_at timestamptz` and `alerted_at timestamptz`. Update `Entry`.
+- Migration `20261006190000_create_data_migrations_expand.exs` has not shipped: edit it in place to add `opened_at timestamptz` and `alerted_at timestamptz`. Update `Entry`.
 - `DataMigrations`: `note_open(name, version)` upserts the row with `completed_at` nil when a pass returns `:more` or `:error`; it sets `opened_at = now()` on insert or when the stored version is lower (a reopen), and leaves `opened_at` alone otherwise.
 - Runner: after a `:more`/`:error` pass, if `now - opened_at > @stuck_after` (7 days) and (`alerted_at` nil or older than 24 h), log at `:error` "data migration stuck" with name, version, opened_at (Sentry picks up `:error`), then set `alerted_at`. One alert per migration per day.
 - Tests: an open migration younger than 7 days logs nothing; older logs once and not again within 24 h; a version bump resets `opened_at`; `mark_done` leaves the row closed.
