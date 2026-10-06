@@ -270,7 +270,7 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
   # still-`executing` row — reproduced here with `Oban.drain_queue/1`, which
   # goes through the real fetch_jobs path (state -> "executing" before
   # `perform/1` runs), same technique as
-  # BackfillNoteLinksTest."survives multiple same-scope batches under real
+  # the removed note-links backfill test."survives multiple same-scope batches under real
   # Oban dispatch (no unique collision)".
   #
   # Proof this test catches the regression: temporarily restoring

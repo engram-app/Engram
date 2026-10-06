@@ -95,15 +95,6 @@ defmodule Engram.VaultsTest do
       assert {:error, :not_found} = Vaults.get_vault_by_ref(user, "old-name")
     end
 
-    test "a rename keeps its bare URL through the next reconcile", %{user: user} do
-      {:ok, vault, _} = Vaults.register_vault(user, "Old Name", Ecto.UUID.generate())
-      {:ok, _} = Vaults.update_vault(user, vault.id, %{name: "New Name"})
-
-      assert {:ok, 0} = Vaults.backfill_slug_hmacs(user.id)
-      assert {:ok, %{id: id}} = Vaults.get_vault_by_ref(user, "new-name")
-      assert id == vault.id
-    end
-
     test "a row with no slug and no slug_hmac can still be deleted", %{user: user} do
       {:ok, vault, _} = Vaults.register_vault(user, "Work", Ecto.UUID.generate())
 

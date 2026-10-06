@@ -62,7 +62,7 @@ defmodule Engram.Workers.RewriteNoteLinks do
   # No `unique`: a cursor worker re-enqueues its own successor mid-run,
   # which collides with `:incomplete` uniqueness (the running job counts as
   # an in-flight match) and would silently drop the successor, killing the
-  # loop after one batch — see Engram.Workers.BackfillNoteLinks. Idempotence
+  # loop after one batch — see git history for the removed note-links backfill. Idempotence
   # comes from the rewrite itself: already-rewritten occurrences plan no
   # edits, so a duplicate job converges as a no-op pass.
   use Oban.Worker, queue: :indexing, max_attempts: 3

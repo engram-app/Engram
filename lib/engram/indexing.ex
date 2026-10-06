@@ -472,7 +472,7 @@ defmodule Engram.Indexing do
   The `repo` argument exists because the two callers need opposite pools, and
   getting it wrong is silent in the dangerous direction.
 
-    * `ReindexKeyword` calls this INSIDE `Repo.with_tenant!/2`, so it must stay
+    * Tenant-scoped callers (a worker already inside `Repo.with_tenant!/2`) must stay
       on `Engram.Repo` — the tenant scope is the point there.
     * `OrphanSweep` calls it with note_ids spanning every tenant by
       construction, so no `with_tenant` is possible. It must pass

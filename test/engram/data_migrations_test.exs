@@ -64,19 +64,18 @@ defmodule Engram.DataMigrationsTest do
 
   describe "jobs_in_flight?/1" do
     test "sees an available job of that worker only" do
-      refute DataMigrations.jobs_in_flight?(Engram.Workers.BackfillNoteLinks)
+      refute DataMigrations.jobs_in_flight?(Engram.Workers.BackfillCrdtHead)
 
       %{
         "user_id" => Ecto.UUID.generate(),
         "vault_id" => Ecto.UUID.generate(),
-        "cursor" => "",
-        "scope" => "note_hmacs"
+        "cursor" => ""
       }
-      |> Engram.Workers.BackfillNoteLinks.new()
+      |> Engram.Workers.BackfillCrdtHead.new()
       |> Oban.insert!()
 
-      assert DataMigrations.jobs_in_flight?(Engram.Workers.BackfillNoteLinks)
-      refute DataMigrations.jobs_in_flight?(Engram.Workers.BackfillContentHashHmac)
+      assert DataMigrations.jobs_in_flight?(Engram.Workers.BackfillCrdtHead)
+      refute DataMigrations.jobs_in_flight?(Engram.Workers.BackfillCrdtState)
     end
   end
 end

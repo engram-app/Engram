@@ -82,7 +82,6 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/jobs.ex",
     "lib/engram/workers/delete_note_index.ex",
     "lib/engram/workers/repath_note_index.ex",
-    "lib/engram/workers/reindex_keyword.ex",
     "lib/engram_web/controllers/search_controller.ex",
     "lib/engram_web/controllers/notes_controller.ex",
     # Second widening, from a deliberate audit of the 311 files the list did

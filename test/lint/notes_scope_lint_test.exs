@@ -28,10 +28,6 @@ defmodule Engram.NotesScopeLintTest do
     # ciphertext. Restricting to `kind == "note"` would skip markers and leave
     # them wrapped under the old DEK, breaking rotation correctness.
     "engram/crypto/user_dek_rotation.ex",
-    # Content-hash HMAC backfill is gated by `not is_nil(content_hash)`, which
-    # already excludes markers (no content) implicitly; the worker treats the
-    # row purely as a cryptographic blob.
-    "engram/workers/backfill_content_hash_hmac.ex",
     # `stamp_embed_hash` is a point-update by primary key on a Note already
     # selected upstream by the embed pipeline (which excludes markers via
     # notes_only/0); the query itself is kind-agnostic by design.

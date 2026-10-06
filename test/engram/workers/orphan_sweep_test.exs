@@ -199,6 +199,6 @@ defmodule Engram.Workers.OrphanSweepTest do
 
     assert source =~ "Indexing.flag_notes_for_rebuild(note_ids, maintenance_repo())",
            "the flag write must be routed to the maintenance pool explicitly — " <>
-             "its default is Repo, which is correct only for ReindexKeyword"
+             "its default is Repo, which is correct only for tenant-scoped callers"
   end
 end

@@ -132,7 +132,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
 
     # A keyword-encoding change must reach existing notes with no operator
     # step, on SaaS and self-host alike (#1615 needed a hand-run
-    # `ReindexKeyword :sparse`). The sweep sends keyword-stale notes to
+    # reindex task). The sweep sends keyword-stale notes to
     # RefreshKeywordVectors, which rebuilds only the sparse vectors: no Voyage spend.
     test "rebuilds keyword vectors for a note whose keyword_version is stale" do
       user = insert(:user)

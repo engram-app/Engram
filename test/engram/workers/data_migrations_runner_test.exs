@@ -81,10 +81,6 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
     assert :ok = perform_job(DataMigrationsRunner, %{})
   end
 
-  test "the DEK-fetching slug migration runs last" do
-    assert List.last(DataMigrationsRunner.migrations()) == Engram.DataMigrations.VaultSlugHmac
-  end
-
   test "every registered module implements the behaviour" do
     for mod <- DataMigrationsRunner.migrations() do
       Code.ensure_loaded!(mod)

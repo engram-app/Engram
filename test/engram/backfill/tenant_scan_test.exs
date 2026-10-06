@@ -20,9 +20,7 @@ defmodule Engram.Backfill.TenantScanTest do
   import Engram.Fixtures
 
   alias Engram.Backfill.TenantScan
-  alias Engram.ContentHash
   alias Engram.Crypto
-  alias Engram.Links
   alias Engram.Notes.Note
   alias Engram.Onboarding
   alias Engram.Repo
@@ -92,9 +90,6 @@ defmodule Engram.Backfill.TenantScanTest do
   # #1349 deleted — so reverting to raw SQL now fails there. Between the two
   # lints and this test, both routes are closed; neither closes both.
   for {label, mod, fun} <- [
-        {"content hash", ContentHash.Backfill, :enqueue_all},
-        {"note links", Links.Backfill, :enqueue_all},
-        {"note links (missing only)", Links.Backfill, :enqueue_missing},
         {"onboarding", Onboarding.Backfill, :first_vault_created}
       ] do
     test "#{label} backfill discovery never reads a tenant table cross-tenant", %{

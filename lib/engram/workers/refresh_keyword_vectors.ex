@@ -2,7 +2,7 @@ defmodule Engram.Workers.RefreshKeywordVectors do
   @moduledoc """
   Oban worker: rebuild one note's keyword (sparse) vectors in place via
   `Indexing.resparse_note/2`. No embedder call and no Voyage spend. Enqueued
-  per note by `ReindexKeyword` in `:sparse` mode after a tokenizer change.
+  per note by `ReconcileEmbeddings` after a tokenizer change.
 
   Reads the same decrypted `notes.content` facade the embed pipeline indexed
   from, so its chunks fingerprint-match the stored points.

@@ -12,14 +12,7 @@ defmodule Engram.Workers.DataMigrationsRunner do
   require Logger
 
   # Register every Engram.DataMigration here.
-  # The DEK-fetching VaultSlugHmac runs last, so a failure in it reaches
-  # nothing after it.
-  @migrations [
-    Engram.DataMigrations.IndexVersions,
-    Engram.DataMigrations.ContentHashHmac,
-    Engram.DataMigrations.NoteLinkHmacs,
-    Engram.DataMigrations.VaultSlugHmac
-  ]
+  @migrations [Engram.DataMigrations.IndexVersions]
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(30)

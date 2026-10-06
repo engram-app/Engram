@@ -82,7 +82,7 @@ defmodule Engram.Workers.BackfillCrdtHead do
     cursor = args["cursor"] || @start_cursor
 
     # Gate DEK-touching work during a per-user rotation window (parity with
-    # BackfillContentHashHmac): backfill_head -> load_doc decrypts crdt_state,
+    # the other DEK-touching workers): backfill_head -> load_doc decrypts crdt_state,
     # which can transiently fail mid-rotation. crdt_head itself is rotation-
     # invariant (a hash of plaintext clock counts), so this is quiet-during-
     # rotation, not a correctness gate.
