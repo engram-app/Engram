@@ -93,6 +93,7 @@ describe("hiddenCalls (self-check)", () => {
 		expect(hiddenCalls(`translateRef.current("Oops")`)).toHaveLength(1);
 		expect(hiddenCalls(`ctx.tn({ one: "a", other: "b" }, n)`)).toHaveLength(1);
 		expect(hiddenCalls(`ctx.msg("Oops")`)).toHaveLength(1);
+		expect(hiddenCalls(`setError(tLater("Oops"))`)).toHaveLength(1);
 	});
 	it("ignores plain calls and ref forwarding", () => {
 		expect(hiddenCalls(`t("Oops") tn({ other: "b" }, n) tRef.current(en, vars) x.t(key)`)).toEqual(

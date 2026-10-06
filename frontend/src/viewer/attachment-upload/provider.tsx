@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useAttachments, useFolders, useUploadAttachment } from "@/api/queries";
-import { useT } from "@/i18n/locale-provider";
+import { useStableT } from "@/i18n/locale-provider";
 import { AttachmentUploadDialog } from "./upload-dialog";
 import { uploadFilesTo } from "./upload-files";
 
@@ -40,7 +40,7 @@ export function useFileDropUpload(): UploadApi["uploadFiles"] | null {
 }
 
 export function AttachmentUploadProvider({ children }: { children: React.ReactNode }) {
-	const { t, tn } = useT();
+	const { t, tn } = useStableT();
 	const [files, setFiles] = useState<File[] | null>(null); // null = dialog closed
 	const [pendingFolder, setPendingFolder] = useState(""); // default dest for the next dialog
 	const pickerRef = useRef<HTMLInputElement>(null);

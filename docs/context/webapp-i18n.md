@@ -36,6 +36,9 @@ The SPA is behind auth and has no SEO surface; the locale is a per-device prefer
 
 - **Call `useT()` only inside components/hooks.** No module-scope `t()` (it would freeze English at import time and ignore the locale). For module-level constants use `msg()` (see Marking strings).
 
+- **`t`/`tn` change identity** whenever a catalog loads or the language switches. Never leave them in the dependency array of an effect, callback or memo that must NOT re-run then: a refetch effect would fire again and a late response could overwrite a setting the user just flipped. Use `useStableT()` (`locale-provider.tsx`): same `{ t, tn }`, identities fixed, always calling the latest translator. Only inside handlers, promise handlers, `.catch`, toasts and such effects, never while rendering (its ref catches up in a layout effect, after the render that switched language). Memoized RENDER output (a labels array, a filtered list of translated rows) keeps `t` as a dependency so it updates on a language switch.
+- The scanner cannot see a call through an alias, so write it `const { t: tLater } = useStableT()` and `tLater(msg("..."))`: `msg()` marks the key. `keys.test.ts` fails on a literal passed to `tRef.current(`, `x.t(`, or a `tName(` alias.
+
 ## Marking strings
 
 The scanner (`src/i18n/keys-scan.ts`, shared by `keys.test.ts` and `i18n:missing`) is regex-based, so a key must be a **literal double-quoted string on the call site**:

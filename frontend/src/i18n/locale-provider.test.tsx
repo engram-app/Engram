@@ -1,6 +1,7 @@
 import { act, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type CatalogLoaders, LocaleProvider, useT } from "./locale-provider";
+import { type CatalogLoaders, LocaleProvider, useStableT, useT } from "./locale-provider";
 
 const captureError = vi.fn();
 vi.mock("../sentry", () => ({ captureError: (...args: unknown[]) => captureError(...args) }));
@@ -192,5 +193,53 @@ describe("LocaleProvider", () => {
 			await screen.findByText("Hallo Todd");
 			expect(rendered()).toBe("de");
 		});
+	});
+});
+
+describe("useStableT", () => {
+	beforeEach(() => {
+		window.localStorage.clear();
+		window.localStorage.setItem("engram:locale", "de");
+	});
+
+	it("keeps t and tn identities across a catalog load and a locale switch, but follows the output", async () => {
+		const seen: { t: unknown; tn: unknown }[] = [];
+		function Stable() {
+			const stable = useStableT();
+			const { t, setLocale } = useT();
+			const [later, setLater] = useState("");
+			seen.push({ t: stable.t, tn: stable.tn });
+			return (
+				<>
+					<p>{t("Hello {name}", { name: "Todd" })}</p>
+					<button type="button" onClick={() => setLocale("fr")}>
+						french
+					</button>
+					<button type="button" onClick={() => setLater(stable.t("Hello {name}", { name: "Ann" }))}>
+						later
+					</button>
+					<output aria-label="later">{later}</output>
+				</>
+			);
+		}
+		render(
+			<LocaleProvider
+				loaders={{
+					de,
+					fr: async () => ({ default: { "Hello {name}": "Bonjour {name}" } }),
+				}}
+			>
+				<Stable />
+			</LocaleProvider>,
+		);
+		expect(screen.getByText("Hello Todd")).toBeInTheDocument();
+		expect(await screen.findByText("Hallo Todd")).toBeInTheDocument();
+		await act(async () => screen.getByRole("button", { name: "french" }).click());
+		expect(await screen.findByText("Bonjour Todd")).toBeInTheDocument();
+		await act(async () => screen.getByRole("button", { name: "later" }).click());
+		expect(screen.getByLabelText("later")).toHaveTextContent("Bonjour Ann");
+		expect(seen.length).toBeGreaterThan(2);
+		expect(new Set(seen.map((s) => s.t)).size).toBe(1);
+		expect(new Set(seen.map((s) => s.tn)).size).toBe(1);
 	});
 });

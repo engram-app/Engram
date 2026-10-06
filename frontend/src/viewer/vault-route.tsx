@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { Navigate, Outlet, useParams } from "react-router";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { useT } from "@/i18n/locale-provider";
+import { useStableT, useT } from "@/i18n/locale-provider";
 import { setActiveVaultId, useActiveVaultId } from "../api/active-vault";
 import { useVaults } from "../api/queries";
 import { vaultBySlug } from "../api/vault-slug";
@@ -16,7 +16,8 @@ import LoadingPane from "./loading-pane";
 // picks the vault to land on — the same way a missing note lands on its vault
 // root.
 function UnknownVault({ slug }: { slug: string }) {
-	const { t } = useT();
+	// Stable: the toast fires once per slug, not again when the language changes.
+	const { t } = useStableT();
 	useEffect(() => {
 		// Fixed id: StrictMode runs this twice in dev, and sonner dedupes by id.
 		toast.error(t("No vault named \u0022{slug}\u0022.", { slug }), { id: `unknown-vault:${slug}` });

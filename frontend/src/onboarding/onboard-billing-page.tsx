@@ -2,7 +2,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { Navigate, useNavigate } from "react-router";
 import { toast } from "sonner";
-import { useT } from "@/i18n/locale-provider";
+import { useStableT, useT } from "@/i18n/locale-provider";
+import { msg } from "@/i18n/msg";
 import { cn } from "@/lib/utils";
 import { api } from "../api/client";
 import { type OnboardingStatus, useBillingStatus, useOnboardingStatus } from "../api/queries";
@@ -13,6 +14,8 @@ import { onboardingNext } from "./onboarding-next";
 
 export default function OnboardBillingPage() {
 	const { t } = useT();
+	// Stable: handleContinueFree is a dependency of effects that must not re-run on a language change.
+	const { t: tLater } = useStableT();
 	const navigate = useNavigate();
 	const qc = useQueryClient();
 	const { data: onboarding } = useOnboardingStatus();
@@ -42,11 +45,11 @@ export default function OnboardBillingPage() {
 			const next = onboardingNext(status);
 			navigate(next, { replace: true });
 		} catch {
-			toast.error(t("Could not continue. Please try again."));
+			toast.error(tLater(msg("Could not continue. Please try again.")));
 		} finally {
 			setFreeLoading(false);
 		}
-	}, [navigate, qc, t]);
+	}, [navigate, qc, tLater]);
 
 	// Cached/fetched status already past billing (e.g. user advanced in another
 	// tab, or returned to /onboard/billing after subscribing) — bounce forward

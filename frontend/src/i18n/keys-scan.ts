@@ -58,7 +58,8 @@ function usedKeys(sources: readonly string[]): Set<string> {
 
 // Translator calls the key scanner cannot see: made through a ref's current value or
 // another object's member, with a literal first argument. Such a key is in no catalog.
-const HIDDEN_CALL = /(?:\b(?:t|translate)Ref\.current|\w\.(?:t|tn|msg))\(\s*["{]/gu;
+// The same goes for an aliased translator named like `tLater` (`t` plus a capital).
+const HIDDEN_CALL = /(?:\b(?:t|translate)Ref\.current|\w\.(?:t|tn|msg)|\bt[A-Z]\w*)\(\s*["{]/gu;
 
 function hiddenCalls(source: string): string[] {
 	return [...source.matchAll(HIDDEN_CALL)].map((m) => m[0]);

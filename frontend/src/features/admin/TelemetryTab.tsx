@@ -1,12 +1,15 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
-import { useT } from "@/i18n/locale-provider";
+import { useStableT, useT } from "@/i18n/locale-provider";
+import { msg } from "@/i18n/msg";
 import { Trans } from "@/i18n/trans";
 import { adminApi, type TelemetryState } from "./api";
 
 export default function TelemetryTab() {
 	const { t } = useT();
+	// Stable: the load effect must run once, not again when the language changes.
+	const { t: tLater } = useStableT();
 	const [state, setState] = useState<TelemetryState | null>(null);
 	const [saving, setSaving] = useState(false);
 
@@ -15,9 +18,9 @@ export default function TelemetryTab() {
 			.getTelemetry()
 			.then(setState)
 			.catch((e: unknown) => {
-				toast.error(e instanceof ApiError ? e.message : t("Failed to load setting"));
+				toast.error(e instanceof ApiError ? e.message : tLater(msg("Failed to load setting")));
 			});
-	}, [t]);
+	}, [tLater]);
 
 	async function answer(enabled: boolean) {
 		if (saving) {

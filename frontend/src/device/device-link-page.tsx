@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
 import { useAutofocus } from "@/hooks/use-autofocus";
-import { useT } from "@/i18n/locale-provider";
+import { useStableT, useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import { Trans } from "@/i18n/trans";
 import type { Tn, Translate } from "@/lib/translator";
@@ -71,6 +71,9 @@ function readCodeFromQuery(search: string): string {
 
 function DeviceLinkPage() {
 	const { t, tn } = useT();
+	// Stable: handleVerifyCode feeds the auto-verify effect, which must not re-run (a second
+	// verify call) when the language changes.
+	const { t: tLater } = useStableT();
 	const { isSignedIn } = useAuthAdapter();
 	const navigate = useNavigate();
 	const location = useLocation();
@@ -139,7 +142,7 @@ function DeviceLinkPage() {
 	const handleVerifyCode = useCallback(async () => {
 		const formatted = userCode.toUpperCase().replace(/[^A-Z2-9]/gu, "");
 		if (formatted.length !== 8) {
-			setError(t("Code must be 8 characters (e.g., ENGR-7X4K)"));
+			setError(tLater(msg("Code must be 8 characters (e.g., ENGR-7X4K)")));
 			// Unreachable from "verifying" today (readCodeFromQuery only seeds a
 			// 9-char code, and the form can't be typed into behind the spinner),
 			// but every exit from this function has to restore a step the user
@@ -171,7 +174,9 @@ function DeviceLinkPage() {
 			// other value as "ZZZZ-ZZZZ".
 			setUserCode(formattedCode);
 			if (data.user_code_valid === false) {
-				setError(t("This code is invalid or has expired. Please try again from Obsidian."));
+				setError(
+					tLater(msg("This code is invalid or has expired. Please try again from Obsidian.")),
+				);
 				setStep("enter-code");
 				return;
 			}
@@ -202,12 +207,12 @@ function DeviceLinkPage() {
 			);
 			setStep("pick-vault");
 		} catch {
-			setError(t("Failed to load vaults. Please try again."));
+			setError(tLater(msg("Failed to load vaults. Please try again.")));
 			setStep("enter-code");
 		} finally {
 			setLoading(false);
 		}
-	}, [userCode, vaultsCap, t]);
+	}, [userCode, vaultsCap, tLater]);
 
 	// The plugin already knows the code, so a complete link URL means the only
 	// step left is choosing a vault — run the verify for them and land there.

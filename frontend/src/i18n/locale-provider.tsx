@@ -6,6 +6,7 @@ import {
 	useEffect,
 	useLayoutEffect,
 	useMemo,
+	useRef,
 	useState,
 } from "react";
 import { captureError } from "../sentry";
@@ -52,7 +53,7 @@ const NO_CATALOG: Catalog = {};
 
 const LocaleContext = createContext<LocaleContextValue>(ENGLISH);
 
-export function LocaleProvider({
+function LocaleProvider({
 	children,
 	loaders = defaultLoaders,
 }: {
@@ -112,8 +113,30 @@ export function LocaleProvider({
 	return <LocaleContext.Provider value={value}>{children}</LocaleContext.Provider>;
 }
 
-export function useT(): LocaleContextValue {
+function useT(): LocaleContextValue {
 	return useContext(LocaleContext);
 }
 
+// `t`/`tn` with identities that never change, always calling the LATEST translator.
+// Use these in effect/callback dependencies and handlers: the plain `t` changes
+// whenever a catalog loads or the language switches, which would re-run the effect
+// (a refetch that can overwrite a just-changed setting). Do NOT call them while
+// rendering: the ref catches up in a layout effect, after the render that
+// switched language. Anything rendered stays on useT() (and keeps `t` in its deps).
+function useStableT(): Pick<LocaleContextValue, "t" | "tn"> {
+	const { t, tn } = useT();
+	const latest = useRef({ t, tn });
+	useLayoutEffect(() => {
+		latest.current = { t, tn };
+	}, [t, tn]);
+	return useMemo(
+		() => ({
+			t: (en, vars) => latest.current.t(en, vars),
+			tn: (en, count, vars) => latest.current.tn(en, count, vars),
+		}),
+		[],
+	);
+}
+
 export type { CatalogLoaders };
+export { LocaleProvider, useStableT, useT };

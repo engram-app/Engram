@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
-import { useT } from "@/i18n/locale-provider";
+import { useStableT, useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import { adminApi, type RegistrationMode } from "./api";
 
@@ -25,6 +25,8 @@ const MODES: { value: RegistrationMode; label: string; hint: string }[] = [
 
 export default function RegistrationTab() {
 	const { t } = useT();
+	// Stable: the load effect must run once, not again when the language changes.
+	const { t: tLater } = useStableT();
 	const [mode, setMode] = useState<RegistrationMode | null>(null);
 	const [saving, setSaving] = useState(false);
 
@@ -33,10 +35,10 @@ export default function RegistrationTab() {
 			.getRegistration()
 			.then((r) => setMode(r.registration_mode))
 			.catch((e: unknown) => {
-				const message = e instanceof ApiError ? e.message : t("Failed to load setting");
+				const message = e instanceof ApiError ? e.message : tLater(msg("Failed to load setting"));
 				toast.error(message);
 			});
-	}, [t]);
+	}, [tLater]);
 
 	async function choose(next: RegistrationMode) {
 		if (next === mode || saving) {
