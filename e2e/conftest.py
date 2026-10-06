@@ -644,6 +644,13 @@ def fresh_instance_pair(resumed_user, resumed_client_id, resumed_api):
     stay off the suite's shared accumulator vault — see the block comment
     above and Engram#977/#945.
     """
+    if os.environ.get("E2E_DISPLAY_BASE") and not os.environ.get("E2E_DISPLAY_BASE_RESUMED"):
+        # The :150 default sits inside another CI job's display window, and
+        # ObsidianInstance's Xvfb pre-flight `pkill -9` kills whatever owns it.
+        pytest.fail(
+            "E2E_DISPLAY_BASE is set (CI) but E2E_DISPLAY_BASE_RESUMED is not: "
+            "the default :150/:149 would kill a concurrent job's Xvfb"
+        )
     inst_a = ObsidianInstance(
         name="ResumedA",
         vault_path=Path(f"{VAULT_PREFIX}-resumed-a"),

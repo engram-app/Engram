@@ -1079,6 +1079,13 @@ jobs:
           MIN=$((BASE - 5))
           MAX=$BASE
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          # The resumed-device pair (test_82) takes :BASE-3/:BASE-4, inside this
+          # window (A/B/C use :BASE..:BASE-2 under -n 1). Unset, conftest falls
+          # back to :150/:149 — inside e2e-crdt's :145..:150 window whenever
+          # run_number % 15 == 0, and its Xvfb pre-flight pkill took down
+          # e2e-crdt's A and B mid-suite (run 37534181735).
+          # ponytail: fits -n 1 only; -n 2 already fills the 6-display window.
+          echo "resumed_base=$((BASE - 3))" >> "$GITHUB_OUTPUT"
           echo "min=$MIN" >> "$GITHUB_OUTPUT"
           echo "max=$MAX" >> "$GITHUB_OUTPUT"
           echo "Display range owned by this run: :$MIN..:$MAX"
@@ -1496,6 +1503,7 @@ jobs:
           E2E_CDP_PORT_B_W1: ${{ steps.ports.outputs.cdp_port_b_w1 }}
           E2E_CDP_PORT_C_W1: ${{ steps.ports.outputs.cdp_port_c_w1 }}
           E2E_DISPLAY_BASE: ${{ steps.ports.outputs.display_base }}
+          E2E_DISPLAY_BASE_RESUMED: ${{ steps.display.outputs.resumed_base }}
 
       # Note: the backend/e2e commit status for plugin PRs is posted by the
       # dedicated `report-e2e-to-plugin` job (needs all e2e suites, always runs
