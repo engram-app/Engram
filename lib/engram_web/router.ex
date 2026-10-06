@@ -68,15 +68,15 @@ defmodule EngramWeb.Router do
     plug EngramWeb.Plugs.RequireApiWriteEnabled
   end
 
-  # First-party session only. `RequireAdmin` checks WHO the user is, not HOW
-  # they authenticated, so without `RequireSession` any API key or OAuth grant
-  # an admin issued inherits the admin plane, including password-reset tokens
-  # for every user. `OAuthScopeEnforce` sets the `oauth_scope` assign that
+  # First-party browser session only. `RequireAdmin` checks WHO the user is,
+  # not HOW they authenticated, so without `RequireSession` any API key, OAuth
+  # grant or plugin token an admin issued inherits the admin plane, including
+  # password-reset tokens for every user. `OAuthScopeEnforce` sets the assigns
   # `RequireSession` keys on.
   pipeline :require_admin do
     plug EngramWeb.Plugs.RequireAdmin
     plug EngramWeb.Plugs.OAuthScopeEnforce
-    plug EngramWeb.Plugs.RequireSession
+    plug EngramWeb.Plugs.RequireSession, reject_device: true
   end
 
   # Internal scrape pipeline for the PromEx /metrics endpoint. Fails closed

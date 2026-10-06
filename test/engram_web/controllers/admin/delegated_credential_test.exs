@@ -29,6 +29,9 @@ defmodule EngramWeb.Admin.DelegatedCredentialTest do
 
   defp oauth_token(admin), do: Engram.Accounts.generate_jwt(admin, %{"scope" => "mcp"})
 
+  # Shape of a plugin's device-flow access token (pinned in device_flow_test).
+  defp device_token(admin), do: Engram.Accounts.generate_jwt(admin, %{"cred" => "device"})
+
   test "an admin's API key cannot mint a password reset for another user", %{
     conn: conn,
     admin: admin,
@@ -49,6 +52,19 @@ defmodule EngramWeb.Admin.DelegatedCredentialTest do
       conn |> bearer(oauth_token(admin)) |> post(~p"/api/admin/users/#{victim.id}/password-reset")
 
     assert %{"error" => "oauth_grant_not_allowed"} = json_response(conn, 403)
+  end
+
+  test "an admin's plugin (device-flow) token cannot mint a password reset", %{
+    conn: conn,
+    admin: admin,
+    victim: victim
+  } do
+    conn =
+      conn
+      |> bearer(device_token(admin))
+      |> post(~p"/api/admin/users/#{victim.id}/password-reset")
+
+    assert %{"error" => "device_token_not_allowed"} = json_response(conn, 403)
   end
 
   test "an admin's API key cannot promote a user", %{conn: conn, admin: admin, victim: victim} do

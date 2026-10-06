@@ -269,12 +269,16 @@ defmodule Engram.Auth.DeviceFlow do
 
   # ── Private ─────────────────────────────────────────────────────
 
+  # Marks the access token as a plugin (delegated) credential, so
+  # `EngramWeb.Plugs.RequireSession` can keep it off the admin plane.
+  @device_claims %{"cred" => "device"}
+
   defp consume_and_issue_tokens(auth) do
     auth
     |> Ecto.Changeset.change(%{status: "consumed"})
     |> Repo.update!(skip_tenant_check: true)
 
-    access_token = Accounts.generate_jwt(auth.user)
+    access_token = Accounts.generate_jwt(auth.user, @device_claims)
     {raw_refresh, _hash} = create_refresh_token(auth.user_id, auth.vault_id)
 
     {:ok,
@@ -291,7 +295,7 @@ defmodule Engram.Auth.DeviceFlow do
   # new access token. Inherits the old token's owner, so a token can only ever
   # mint tokens for its own user/vault.
   defp issue_child(old_token) do
-    access_token = Accounts.generate_jwt(old_token.user)
+    access_token = Accounts.generate_jwt(old_token.user, @device_claims)
 
     {raw_refresh, _hash} =
       create_refresh_token(old_token.user_id, old_token.vault_id, old_token.family_id)

@@ -21,18 +21,24 @@ defmodule EngramWeb.Plugs.RequireSession do
   lock every self-host user out of their own settings page. Neither carries a
   `scope` claim; only `Engram.OAuth.issue_access_token/3` sets one.
 
-  The two rejections carry distinct error codes so they stay separable in logs
+  Device-flow (plugin) tokens pass by default: they are first-party and
+  `/connections` accepts them deliberately. The admin plane opts in with
+  `reject_device: true`, because a plugin token sits on disk in the vault's
+  `data.json` and refreshes for 90 days; it must not mint password resets.
+
+  The rejections carry distinct error codes so they stay separable in logs
   and in the client.
   """
 
   import Plug.Conn
 
-  def init(opts), do: opts
+  def init(opts), do: Keyword.get(opts, :reject_device, false)
 
-  def call(conn, _opts) do
+  def call(conn, reject_device?) do
     cond do
       conn.assigns[:current_api_key] -> reject(conn, "api_key_not_allowed")
       conn.assigns[:oauth_scope] -> reject(conn, "oauth_grant_not_allowed")
+      reject_device? and conn.assigns[:device_token] -> reject(conn, "device_token_not_allowed")
       true -> conn
     end
   end
