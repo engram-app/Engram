@@ -179,18 +179,12 @@ defmodule Engram.MixProject do
       # contents in memory.
       {:zstream, "~> 0.6"},
 
-      # Per-chunk language detection (lingua Rust NIF — precompiled, no build-time Rust).
-      # lingua pins rustler_precompiled ~> 0.8.4 conservatively; mjml pins ~> 0.9.0.
-      # The override forces 0.9.x which lingua compiles and runs against fine.
-      {:lingua, "~> 0.3.0"},
-      {:rustler_precompiled, "~> 0.9.0", override: true},
+      # Language detection is lingua-rs inside native/engram_native (no hex dep).
 
       # In-house NIFs (native/engram_native): CPU hot paths ported to Rust.
       # Compiled from source, so the release builder needs a Rust toolchain.
-      # Matches the crate's rustler version (Cargo.toml). `override`: lingua
-      # pins an optional `rustler ~> 0.37.1`, which it only needs to force-
-      # build; it loads its precompiled NIF, so ours may move ahead of it.
-      {:rustler, "~> 0.38", runtime: false, override: true},
+      # Matches the crate's rustler version (Cargo.toml).
+      {:rustler, "~> 0.38", runtime: false},
 
       # CommonMark parser for MCP section boundaries (Engram.MCP.Sections):
       # comrak as a precompiled Rust NIF. mdex_native directly, not the `mdex`

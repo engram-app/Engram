@@ -7,15 +7,17 @@ defmodule Engram.KeywordIndex.LangDetect do
   elsewhere). Detections below the confidence floor also return `nil`, which
   causes the caller to fall back to raw (unstemmed) token indexing.
 
-  Uses the `Lingua` NIF (precompiled Rust, no build-time Rust required).
-  The rustler_precompiled version is overridden to 0.9.x in mix.exs so it
-  coexists with the mjml NIF under the same resolved version.
+  Uses lingua-rs 1.7.2 inside `Engram.Native` (`lang_detect`), the same
+  crate and models the `lingua` hex package wrapped, but with ONE detector
+  built for the node's lifetime. The hex NIF built a new detector per call.
 
   ## Memory dial: `low_accuracy_mode`
 
   lingua-rs loads its n-gram language models into a **process-global** cache
   inside the Rust NIF (loaded lazily on first use, then resident for the node's
-  lifetime — a single shared load, NOT per call / per process / per note).
+  lifetime: a single shared load, NOT per call / per process / per note).
+  Since the move into `Engram.Native` they are allocated through `enif_alloc`,
+  so `:erlang.memory(:system)` counts them.
 
   The footprint depends on which models load:
 
@@ -25,11 +27,10 @@ defmodule Engram.KeywordIndex.LangDetect do
   | `low_accuracy_mode: true` | **trigram only** | **~55 MB** |
 
   The load is **one-time and flat**: measured 2026-08-18 by sampling RSS around
-  `Lingua.detect/2`, the first call adds ~55 MB and 400 further calls add
-  nothing (RSS even drifts down). It is invisible to `:erlang.memory/1` — the
-  models live in the NIF, off the BEAM heap — so a BEAM-memory graph alone
-  cannot see it, and it is NOT a source of memory *growth* under load. See
-  `warmup/0`, which is called at boot so the first indexed note doesn't pay it.
+  the hex package's `Lingua.detect/2`, the first call adds ~55 MB and 400
+  further calls add nothing (RSS even drifts down). It is NOT a source of
+  memory *growth* under load. See `warmup/0`, which is called at boot so the
+  first indexed note doesn't pay it.
 
   > The `~135 MB` previously documented here was never reproducible; the
   > measurement above supersedes it.
@@ -39,21 +40,21 @@ defmodule Engram.KeywordIndex.LangDetect do
   node whenever indexing ran (see #891/#892). We run **`low_accuracy_mode: true`**:
   ~17x smaller, and coarse language ID is all we need here (we only route to a
   *stemmer*, gated at `@floor` confidence with a raw-index fallback). To trade
-  memory back for accuracy, flip the dial below to `false` — but budget ~945 MB
+  memory back for accuracy, drop `.with_low_accuracy_mode()` in
+  `native/engram_native/src/lang_detect.rs`, but budget ~945 MB
   of resident NIF memory per node and size the task accordingly.
   """
 
   # Confidence floor — below this we trust raw-only indexing more.
   @floor 0.40
 
-  # Only the first @sample_chars of the text are classified. The NIF rebuilds
-  # its detector on every call, so cost is a fixed ~6.5ms floor plus a term
-  # proportional to text length. Measured (low_accuracy_mode, all Latin script):
+  # Only the first @sample_chars of the text are classified: cost grows with
+  # text length, and an unbounded note would pay 20x+ for a coarse stemmer
+  # choice that a paragraph already settles. Measured with the old hex NIF:
   #
   #     500 chars 7.1ms | 2K 6.5ms | 10K 16.5ms | 50K 50.5ms | 200K 148.2ms
   #
-  # i.e. nothing is gained by sampling under 2K, and an unbounded note would pay
-  # 20x+ for a coarse stemmer choice that a paragraph already settles.
+  # The sample also bounds what each NIF call receives (docs/context/native-nifs.md).
   @sample_chars 2_000
 
   # lingua language atom → Snowball stemmer code (`Engram.Native.stem_languages/0`).
@@ -100,10 +101,10 @@ defmodule Engram.KeywordIndex.LangDetect do
   this, the first note indexed after a deploy eats that load on a `DirtyCpu`
   scheduler while a user waits.
 
-  Deliberately goes through `detect/1` rather than `Lingua.init/0`: that NIF
-  preloads **all** languages at full n-gram accuracy (~945 MB), which is the
-  footprint that OOM-looped the 1 GB task in #891/#892. Routing through
-  `detect/1` loads exactly the set `classify/1` uses and nothing more.
+  Deliberately goes through `detect/1` rather than preloading: lingua's
+  preload reads full n-gram accuracy (~945 MB), the footprint that OOM-looped
+  the 1 GB task in #891/#892. Routing through `detect/1` loads exactly the
+  trigram set `classify/1` uses and nothing more.
   """
   @spec warmup() :: :ok
   def warmup do
@@ -113,28 +114,13 @@ defmodule Engram.KeywordIndex.LangDetect do
 
   # ---
 
+  # THE memory dial (low accuracy mode, trigram models only) lives in
+  # native/engram_native/src/lang_detect.rs. See the moduledoc table.
   defp classify(text) do
-    result =
-      Lingua.detect(text,
-        builder_option: :all_languages_with_latin_script,
-        # THE memory dial. true => trigram-only models (~55 MB resident) instead
-        # of the full uni..five-gram set (~945 MB). See the moduledoc table — this
-        # is what keeps the node under its memory limit while indexing. Flip to
-        # false only if you also raise the task memory by ~945 MB/node.
-        low_accuracy_mode: true,
-        compute_language_confidence_values: true,
-        preload_language_models: false
-      )
-
-    case result do
-      {:ok, [{lang_atom, confidence} | _]} when confidence >= @floor ->
-        Map.get(@lang_map, lang_atom)
-
-      _ ->
-        nil
+    case Engram.Native.lang_detect(text) do
+      {lang_atom, confidence} when confidence >= @floor -> Map.get(@lang_map, lang_atom)
+      _ -> nil
     end
-  rescue
-    _ -> nil
   end
 
   defp latin?(text), do: Regex.match?(~r/\p{Latin}/u, text)

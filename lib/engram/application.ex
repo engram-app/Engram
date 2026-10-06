@@ -46,16 +46,15 @@ defmodule Engram.Application do
     end
   end
 
-  # Pull the Lingua n-gram models into the NIF's process-global cache at boot.
+  # Pull the lingua n-gram models into the NIF's process-global cache at boot.
   # They are loaded lazily on first detection and then shared by every caller on
   # the node, so without this the first note indexed after a deploy pays a ~55 MB
   # load on a DirtyCpu scheduler while a user waits on their sync.
   #
   # Runs async and unlinked on purpose: the load depends on nothing in the
   # supervision tree, and doing it inline would hold start/2 — and therefore the
-  # Endpoint and the ECS health check — behind pure CPU work. LangDetect.classify/1
-  # rescues internally, so a failure degrades to raw-token indexing, never a
-  # crashed boot.
+  # Endpoint and the ECS health check — behind pure CPU work. A crash in the
+  # unlinked task only loses the warmup: the first detection loads the models.
   defp maybe_warm_lang_models do
     # The spawned pid is deliberately dropped: nothing waits on the warmup and
     # nothing supervises it (see above), so there is no handle worth keeping.

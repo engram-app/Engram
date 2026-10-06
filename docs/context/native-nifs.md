@@ -97,6 +97,20 @@ fixed cost of a NIF call plus telemetry). 1 MB notes: 0.6-1 s down to
 60-230 ms, native peak 2-5 MB. Rules ported as rules, not a YAML crate
 (see `meta.rs` for why), pinned by an 8,012-case golden set.
 
+Language ID (`lang_detect`, 2026-10-06) replaced the `lingua` hex package
+with the same crate (lingua-rs 1.7.2, models 1.2.0, pinned and kept out of
+Dependabot) and ONE detector per node. It was NOT a speed win: building the
+detector costs ~0.1 ms and the rest is trigram scoring. 2K-char sample, min
+of 5, interleaved in one process: 5.0-5.3 ms both before and after; a short
+query 0.5-1.1 ms -> 0.36-0.8 ms. Resident models are the same ~50 MB, now
+allocated through `enif_alloc` (`:erlang.memory(:system)` +46 MB) instead of
+`unaccounted`. Only the 49 Latin-script languages plus chinese and japanese
+are compiled (those two switch on rules a Latin-only detector still runs):
+`engram_native.so` 3.9 MB -> 66 MB, clean `cargo build --release` 41 s ->
+114 s, against the 97 MB precompiled `.so` the hex package downloaded.
+Golden set: `lang_detect_golden.json` (635 texts, captured from the hex
+package).
+
 Each link is encoded as a BEAM term as soon as it is built, borrowing from
 the note where it can, so the output never exists as a Rust copy. Only the
 scrub REPORT stays in Elixir (`Helpers.report_scrub/1`): Rust counts the
@@ -185,7 +199,7 @@ Telemetry metadata carries `dirty: true | false`.
 Dirty CPU schedulers cannot be preempted and default to one per normal
 scheduler. **Prod tasks run ONE** (`task_cpu_units = 512` → `BEAM_SCHEDULERS=1`,
 `+SDcpu 1:1`, engram-infra `main/envs/prod/ecs.tf`, `rel/env.sh.eex`), shared
-with lingua and mdex_native. Calls queue behind each other there, which is
+with mdex_native. Calls queue behind each other there, which is
 fine while each is short (the keyword encode is ~0.25 s per MB). If a NIF ever
 runs for seconds per call in prod, chunk the input or raise `+SDcpu` before
 adding callers.
@@ -207,10 +221,7 @@ adding callers.
 - Adding a NIF function: add it to the Rust `#[rustler::nif]` list AND the
   stub in `Engram.Native`, route it through `call/4` so it emits telemetry,
   and give it a peak-bound and a leak test.
-- rustler: the crate and the hex package move together (0.38 both). The hex
-  dep carries `override: true` because lingua pins an optional
-  `rustler ~> 0.37.1` it only uses to force-build; lingua loads its
-  precompiled NIF.
+- rustler: the crate and the hex package move together (0.38 both).
 - rustfmt/clippy come from the CI rustup install (`--component`), not
   `rust-toolchain.toml`: the release Dockerfile copies the official image's
   minimal toolchain, and listing components there would make the image build

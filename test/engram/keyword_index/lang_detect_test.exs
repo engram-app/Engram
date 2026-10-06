@@ -3,12 +3,6 @@ defmodule Engram.KeywordIndex.LangDetectTest do
 
   alias Engram.KeywordIndex.LangDetect
 
-  # lingua lazy-loads language models on first call; ensure the app (and NIF) is running.
-  setup_all do
-    Application.ensure_all_started(:lingua)
-    :ok
-  end
-
   test "detects German on a real sentence" do
     assert LangDetect.detect("die Bereitstellung wurde getestet") == :de
   end

@@ -216,7 +216,7 @@ config :engram, :limits_enforced, true
 # Legal seeder skipped at boot in tests — SeederTest seeds per-case.
 config :engram, :seed_legal_on_boot, false
 
-# The Lingua models are ~55 MB and load lazily on first use anyway; warming them
+# The lingua models are ~55 MB and load lazily on first use anyway; warming them
 # on every `mix test` boot buys nothing and slows the suite. The lang_detect
 # tests exercise the real NIF and trigger the load themselves.
 config :engram, :warm_lang_models, false

@@ -19,6 +19,64 @@ pulldown-cmark = { version = "0.13", default-features = false }
 ryu = "1"
 serde = "1"
 serde_json = { version = "1", features = ["float_roundtrip"] }
+# Pinned to the version the `lingua` hex package shipped (1.7.2), so results
+# match it exactly. Only the Latin-script languages LangDetect builds from,
+# plus chinese and japanese: their features switch on Han/kana rules that
+# run even in a Latin-only detector (detect_language_with_rules), so leaving
+# them out would change results. Their models are linked but never loaded.
+lingua = { version = "=1.7.2", default-features = false, features = [
+    "afrikaans",
+    "albanian",
+    "azerbaijani",
+    "basque",
+    "bokmal",
+    "bosnian",
+    "catalan",
+    "croatian",
+    "czech",
+    "danish",
+    "dutch",
+    "english",
+    "esperanto",
+    "estonian",
+    "finnish",
+    "french",
+    "ganda",
+    "german",
+    "hungarian",
+    "icelandic",
+    "indonesian",
+    "irish",
+    "italian",
+    "latin",
+    "latvian",
+    "lithuanian",
+    "malay",
+    "maori",
+    "nynorsk",
+    "polish",
+    "portuguese",
+    "romanian",
+    "shona",
+    "slovak",
+    "slovene",
+    "somali",
+    "sotho",
+    "spanish",
+    "swahili",
+    "swedish",
+    "tagalog",
+    "tsonga",
+    "tswana",
+    "turkish",
+    "vietnamese",
+    "welsh",
+    "xhosa",
+    "yoruba",
+    "zulu",
+    "chinese",
+    "japanese",
+] }
 
 [profile.release]
 lto = true

@@ -1183,10 +1183,9 @@ defmodule Engram.Indexing do
     now = DateTime.utc_now(:second)
 
     # Language is a property of the NOTE, not of each chunk. Detecting per chunk
-    # meant one full Lingua detector build per chunk (the NIF rebuilds the
-    # detector on every call — deps/lingua/native/lingua_nif/src/lib.rs), i.e.
-    # 8-38x the work for a normal note, and it was the single largest on-CPU
-    # frame in prod during a bulk vault upload.
+    # meant one detection per chunk (and, with the old hex NIF, one detector
+    # build per chunk), i.e. 8-38x the work for a normal note, and it was the
+    # single largest on-CPU frame in prod during a bulk vault upload.
     #
     # Detecting once over the note body is also *more* accurate: lingua is far
     # more confident on a paragraph than on a one-line heading chunk. The

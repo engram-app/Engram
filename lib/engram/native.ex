@@ -13,7 +13,7 @@ defmodule Engram.Native do
     * `live_bytes/0` is this library's live Rust heap, for leak tests.
     * `memory_snapshot/0` sets OS RSS against what the BEAM can see. The gap
       (`unaccounted`) is native memory nothing else reports: a third-party
-      NIF on its own allocator (y_ex, lingua) shows up only there.
+      NIF on its own allocator (y_ex) shows up only there.
   """
   use Rustler, otp_app: :engram, crate: "engram_native"
 
@@ -106,6 +106,18 @@ defmodule Engram.Native do
 
   defp parse(name, content, _inline, dirty),
     do: call(name, content, %{dirty: true}, fn -> dirty.(content) end)
+
+  @doc false
+  def lang_detect_nif(_text), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
+  Best Latin-script language for `text` as `{language_atom, confidence}`
+  (lingua's lowercase names, e.g. `:english`). Always dirty: ~2K chars of
+  trigram scoring, and the first call loads ~55 MB of models. Callers bound
+  the input (`LangDetect` samples 2,000 chars). Valid UTF-8 only.
+  """
+  def lang_detect(text) when is_binary(text),
+    do: call(:lang_detect, text, %{dirty: true}, fn -> lang_detect_nif(text) end)
 
   @doc false
   def mmr_select_nif(_vectors, _scores, _limit, _diversity),

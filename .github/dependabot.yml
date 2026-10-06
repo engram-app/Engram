@@ -55,6 +55,11 @@ updates:
       semver-major-days: 14
       semver-minor-days: 7
       semver-patch-days: 3
+    # lingua and its model crates are pinned to what the `lingua` hex
+    # package shipped (1.7.2 / models 1.2.0); a bump can move language IDs,
+    # so it is done by hand with a regenerated lang_detect golden set.
+    ignore:
+      - dependency-name: "lingua*"
     groups:
       cargo-minor:
         applies-to: version-updates

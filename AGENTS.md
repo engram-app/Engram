@@ -513,7 +513,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Qdrant payload indexes missing or rejected under strict mode (`ensure_collection/2` reconciles them on every boot) → `docs/context/qdrant-payload-indexes-strict-mode.md`
 - An edit re-embeds far more chunks than it changed, or you are about to change how `split_text/2` packs chunks (boundaries cascade to the end of the heading section; paragraph-granularity looks like a free fix and is not) → `docs/context/chunk-boundary-stability.md`
 - Measuring chunk reuse (repeated synthetic paragraphs + `MapSet` gives a wrong answer — match with multiplicity) → `docs/context/chunk-boundary-stability.md`
-- Lingua NIF memory — `low_accuracy_mode` dial, the #891 OOM crash-loop → `docs/context/lingua-language-detection-memory.md`
+- lingua language-detection memory — `low_accuracy_mode` dial, the #891 OOM crash-loop → `docs/context/lingua-language-detection-memory.md`
 
 **Billing & Pricing**
 - Paddle MoR integration, webhook signature, event lifecycle, `custom_data`, affiliate flow, list pagination (stop on `has_more`, never `next`) → `docs/context/paddle-integration.md`
@@ -595,7 +595,6 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Local dev loop, hot reload, IEx tricks → `docs/context/dev-iteration-loop.md`
 - Local Qdrant dies mid-upsert with `Req.TransportError: socket closed` while `docker inspect` still says healthy (SIGILL, not OOM — this host has no AVX2; read `RestartCount`, not `oom`) → `docs/context/local-qdrant-sigill-no-avx2.md`
 - PG18/UUIDv7 prod crash-loop root cause — in-place engine bump vs specced taint+recreate; `verify_schema_baseline/0` guard → `docs/context/pg18-uuidv7-prod-crashloop-2026-06-11.md`
-- `mjml` vs `lingua` rustler_precompiled version conflict — pin override → `docs/context/rustler-precompiled-nif-conflict.md`
 - Worktree compile fails on a dep module "not available" (`expo_po_parser`, `Hammer`); `mix deps.compile X` without `--force` silently no-ops; hardlinked `deps/` can omit yecc/leex-generated beams → `docs/context/worktree-deps-artifact-staleness.md`
 - `git push` from a worktree hangs or is rejected at the pre-push gates, `mix` reports `erts-14`/OTP 26, or `:opentelemetry` fails with `missing_module,opentelemetry_sup` (bare push runs the gates on the system OTP; always `mise exec -- git push`) → `docs/context/worktree-push-otp-mismatch-rebar-dep.md`
 - ExAws KMS traps (key-first args, manual base64, scope creds to `:ex_aws, :kms` or S3 auth silently breaks), plus the Tier-4 / Phase F provider-routing roadmap → `docs/context/aws-kms-provider-integration.md`

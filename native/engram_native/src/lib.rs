@@ -4,6 +4,7 @@
 mod chunker;
 mod frontmatter;
 mod json;
+mod lang_detect;
 mod links;
 mod memory;
 mod meta;
@@ -405,6 +406,18 @@ fn frontmatter_split_nif(content: rustler::Binary) -> (frontmatter::Split, usize
 #[rustler::nif(schedule = "DirtyCpu")]
 fn frontmatter_split_dirty_nif(content: rustler::Binary) -> (frontmatter::Split, usize) {
     frontmatter_split_peak(content.as_slice())
+}
+
+/// `LangDetect`'s top language (the hex package's atom) and its confidence,
+/// and the peak. Dirty: ~2K chars of trigram scoring, and the first call
+/// loads the models.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn lang_detect_nif(env: Env, text: &str) -> NifResult<((rustler::Atom, f64), usize)> {
+    let base = memory::begin();
+    let (language, confidence) = lang_detect::top(text);
+    // One of the 49 Latin-script language names: a fixed atom set.
+    let atom = rustler::Atom::from_str(env, &lang_detect::name(language))?;
+    Ok(((atom, confidence), memory::peak_since(base)))
 }
 
 rustler::init!("Elixir.Engram.Native");
