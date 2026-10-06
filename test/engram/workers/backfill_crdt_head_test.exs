@@ -2,6 +2,8 @@ defmodule Engram.Workers.BackfillCrdtHeadTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
+  import Ecto.Query
+
   alias Engram.Notes
   alias Engram.Notes.CrdtTransport
   alias Engram.Workers.BackfillCrdtHead
@@ -92,6 +94,49 @@ defmodule Engram.Workers.BackfillCrdtHeadTest do
         worker: BackfillCrdtHead,
         args: %{"user_id" => user.id, "vault_id" => vault.id, "cursor" => a.id}
       )
+    end
+
+    # One note whose state will not decrypt must not raise out of the batch:
+    # that strands every later note behind a retrying job, and the in-flight
+    # guard in WarmCrdtHeads then stops all re-warming.
+    test "an unreadable note is skipped and later notes still get heads", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, bad} =
+        Notes.upsert_note(user, vault, %{path: "B/bad.md", content: "# X", mtime: 1_000.0},
+          actor: "api"
+        )
+
+      {:ok, good} =
+        Notes.upsert_note(user, vault, %{path: "B/good.md", content: "# Y", mtime: 1_000.0},
+          actor: "api"
+        )
+
+      {:ok, _} =
+        Engram.Repo.with_tenant(user.id, fn ->
+          Engram.Repo.update_all(
+            from(n in Engram.Notes.Note, where: n.id == ^bad.id),
+            set: [
+              crdt_state_ciphertext: :crypto.strong_rand_bytes(48),
+              crdt_state_nonce: :crypto.strong_rand_bytes(12)
+            ]
+          )
+        end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert :ok =
+                   perform_job(BackfillCrdtHead, %{
+                     "user_id" => user.id,
+                     "vault_id" => vault.id,
+                     "cursor" => "00000000-0000-0000-0000-000000000000"
+                   })
+        end)
+
+      assert log =~ bad.id
+      {:ok, good1} = Notes.get_note_by_id(user, vault, good.id)
+      refute is_nil(good1.crdt_head)
     end
 
     test "snoozes while a per-user DEK rotation is in progress", %{user: user, vault: vault} do

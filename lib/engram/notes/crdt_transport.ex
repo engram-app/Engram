@@ -299,7 +299,8 @@ defmodule Engram.Notes.CrdtTransport do
   NULL — no-op-invalidates; without the CAS this self-heal could clobber that
   NULL with a now-stale head (silent missed cold-sync). If the tail advanced, we
   leave the column NULL and the next poll re-heals. Returns `{:error, :not_found}`
-  if the note was deleted between selection and rebuild.
+  if the note was deleted between selection and rebuild, and logs and returns
+  any other load error (`{:error, :unreadable}`) without raising.
 
   No @spec: the `BackfillCrdtHead` worker calls this with concrete
   `%User{}`/`%Vault{}`, so a hand-written `map()/map()` contract is a supertype
@@ -317,6 +318,17 @@ defmodule Engram.Notes.CrdtTransport do
 
       {:error, :not_found} ->
         {:error, :not_found}
+
+      # A note whose state will not decrypt or apply. Raising would strand every
+      # later note in the backfill batch behind a retrying job; leave its head
+      # NULL and let the batch move on.
+      {:error, reason} ->
+        Logger.warning(
+          "crdt_head backfill skipped note_id=#{note_id} reason=#{Metadata.safe_reason(reason)}",
+          Metadata.with_category(:warning, :sync, note_id: note_id)
+        )
+
+        {:error, reason}
     end
   end
 
