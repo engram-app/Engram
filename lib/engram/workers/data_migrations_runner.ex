@@ -2,7 +2,7 @@ defmodule Engram.Workers.DataMigrationsRunner do
   @moduledoc """
   Hourly cron: one pass of every registered `Engram.DataMigration` whose
   ledger row is not done (`Engram.DataMigrations`). Each runs isolated: one
-  raising does not stop the rest.
+  raising, exiting or throwing does not stop the rest.
   """
   use Oban.Worker, queue: :maintenance, max_attempts: 3, unique: [period: 3000]
 
@@ -52,15 +52,22 @@ defmodule Engram.Workers.DataMigrationsRunner do
       end
     end
   rescue
-    e ->
-      Logger.warning(
-        "data migration pass failed",
-        Metadata.with_category(:warning, :oban,
-          migration: inspect(mod),
-          reason: Metadata.safe_reason(e)
-        )
-      )
+    e -> failed(mod, e)
+  catch
+    # An exit (a call or checkout timeout) or a throw must not abort the
+    # migrations after this one either.
+    _kind, reason -> failed(mod, reason)
+  end
 
-      :error
+  defp failed(mod, reason) do
+    Logger.warning(
+      "data migration pass failed",
+      Metadata.with_category(:warning, :oban,
+        migration: inspect(mod),
+        reason: Metadata.safe_reason(reason)
+      )
+    )
+
+    :error
   end
 end

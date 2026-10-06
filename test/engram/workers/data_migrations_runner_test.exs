@@ -26,6 +26,13 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
     def run_pass, do: raise("boom")
   end
 
+  defmodule Exiting do
+    @behaviour Engram.DataMigration
+    def name, do: "test_exiting"
+    def version, do: 1
+    def run_pass, do: exit(:timeout)
+  end
+
   defmodule Counting do
     @behaviour Engram.DataMigration
     def name, do: "test_counting"
@@ -61,6 +68,13 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
   test "a raising migration is contained and stays open" do
     assert DataMigrationsRunner.run(Exploding) == :error
     refute DataMigrations.done?("test_exploding", 1)
+  end
+
+  # A GenServer.call / Repo checkout timeout exits rather than raises; it
+  # must not abort the migrations after it in the pass.
+  test "an exiting migration is contained and stays open" do
+    assert DataMigrationsRunner.run(Exiting) == :error
+    refute DataMigrations.done?("test_exiting", 1)
   end
 
   test "perform runs every registered migration" do
