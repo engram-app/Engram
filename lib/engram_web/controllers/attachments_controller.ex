@@ -160,9 +160,11 @@ defmodule EngramWeb.AttachmentsController do
   defp raw_read_limit(user) do
     ceiling = EngramWeb.Endpoint.max_body_bytes()
 
-    # Negative and non-integer limits mean unlimited, as in
-    # Attachments.validate_size/2.
-    case Billing.effective_limit(user, :max_file_bytes) do
+    # cap/2 decodes the unlimited sentinel to nil. It fails open on a corrupt
+    # row, which is safe here: this only bounds the read, and
+    # Attachments.validate_size/2 still gates the bytes. Any other negative is
+    # unlimited too, as in validate_size/2.
+    case Billing.cap(user, :max_file_bytes) do
       n when is_integer(n) and n >= 0 and n < ceiling -> {n, :plan}
       _ -> {ceiling, :ceiling}
     end
