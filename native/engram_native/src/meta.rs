@@ -34,18 +34,57 @@ fn frontmatter(s: &str) -> Option<(&str, usize)> {
 /// caller falls back to the file name.
 pub fn title(s: &str) -> Option<String> {
     let fm = frontmatter(s);
-    if let Some((fm, _)) = fm {
-        let title_re = re!(&format!(r"(?m)^title:{ASCII_WS}*(.+)$"));
-        if let Some(c) = title_re.captures(fm) {
-            return Some(c[1].trim().to_string());
-        }
+    if let Some(t) = fm.and_then(|(fm, _)| fm_title(fm)) {
+        return Some(t);
     }
-    let body = &s[fm.map_or(0, |f| f.1)..];
+    let body = body_of(s, fm);
+    heading_title(body, &code_of(body))
+}
+
+/// Frontmatter tags, then inline `#tags` outside code, first occurrence
+/// kept, handed to `emit` one at a time (the caller builds BEAM terms, so
+/// inline tags are never copied into Rust strings).
+pub fn tags(s: &str, emit: impl FnMut(&str)) {
+    let fm = frontmatter(s);
+    let body = body_of(s, fm);
+    emit_tags(fm, body, &code_of(body), emit);
+}
+
+/// `title` and `tags` in one pass: the frontmatter match and the code
+/// ranges (the costly part) are computed once for both.
+pub fn title_and_tags(s: &str, emit: impl FnMut(&str)) -> Option<String> {
+    let fm = frontmatter(s);
+    let body = body_of(s, fm);
+    let code = code_of(body);
+    let title = fm
+        .and_then(|(fm, _)| fm_title(fm))
+        .or_else(|| heading_title(body, &code));
+    emit_tags(fm, body, &code, emit);
+    title
+}
+
+fn body_of<'a>(s: &'a str, fm: Option<(&str, usize)>) -> &'a str {
+    &s[fm.map_or(0, |f| f.1)..]
+}
+
+/// CommonMark code ranges of the body; none needed without a `#`.
+fn code_of(body: &str) -> Vec<(usize, usize)> {
+    let mut code = Vec::new();
+    if body.contains('#') {
+        code_ranges(body, 0, SEGMENT, &mut code);
+    }
+    code
+}
+
+fn fm_title(fm: &str) -> Option<String> {
+    let title_re = re!(&format!(r"(?m)^title:{ASCII_WS}*(.+)$"));
+    title_re.captures(fm).map(|c| c[1].trim().to_string())
+}
+
+fn heading_title(body: &str, code: &[(usize, usize)]) -> Option<String> {
     if !body.contains('#') {
         return None;
     }
-    let mut code = Vec::new();
-    code_ranges(body, 0, SEGMENT, &mut code);
     let heading_re = re!(&format!(r"(?m)^#{ASCII_WS}+(.+)$"));
     let mut pos = 0;
     while let Some(c) = heading_re.captures_at(body, pos) {
@@ -60,17 +99,13 @@ pub fn title(s: &str) -> Option<String> {
     None
 }
 
-/// Frontmatter tags, then inline `#tags` outside code, first occurrence
-/// kept, handed to `emit` one at a time (the caller builds BEAM terms, so
-/// inline tags are never copied into Rust strings).
-pub fn tags(s: &str, mut emit: impl FnMut(&str)) {
-    let fm = frontmatter(s);
+fn emit_tags(
+    fm: Option<(&str, usize)>,
+    body: &str,
+    code: &[(usize, usize)],
+    mut emit: impl FnMut(&str),
+) {
     let fm_tags = fm.map(|(fm, _)| frontmatter_tags(fm)).unwrap_or_default();
-    let body = &s[fm.map_or(0, |f| f.1)..];
-    let mut code = Vec::new();
-    if body.contains('#') {
-        code_ranges(body, 0, SEGMENT, &mut code);
-    }
     // A code range reads as one space, so a word before it cannot fuse onto
     // a `#tag` after it.
     let stripped: Cow<str> = if code.is_empty() {
@@ -78,7 +113,7 @@ pub fn tags(s: &str, mut emit: impl FnMut(&str)) {
     } else {
         let mut out = String::with_capacity(body.len());
         let mut at = 0;
-        for &(start, end) in &code {
+        for &(start, end) in code {
             out.push_str(&body[at..start]);
             out.push(' ');
             at = end;

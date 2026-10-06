@@ -112,6 +112,21 @@ fixed cost of a NIF call plus telemetry). 1 MB notes: 0.6-1 s down to
 60-230 ms, native peak 2-5 MB. Rules ported as rules, not a YAML crate
 (see `meta.rs` for why), pinned by an 8,012-case golden set.
 
+`note_meta` (2026-10-06) returns both from one call, sharing the frontmatter
+match and the CommonMark code ranges. Use it (`Helpers.extract_title_and_tags/2`)
+wherever both are needed for the same text (REST upsert, CRDT merge,
+checkpoint). Two calls -> one, min of 5 on a loaded box: 52 B 14 -> 10 us,
+5 KB with an H1 title 152 -> 108 us, 5 KB with a frontmatter title
+125 -> 99 us, 105 KB 3.6 -> 2.1-2.5 ms.
+
+Language ID is NOT a candidate (measured 2026-10-06, #1877). The `lingua` hex
+package already wraps lingua-rs; the ~6.5 ms per call is trigram scoring, and
+building the detector costs ~0.1 ms. A port to `engram_native` (lingua-rs
+1.7.2, one detector per node) ran 5.0-5.3 ms per 2K-char sample both before
+and after, grew `engram_native.so` from 3.9 MB to 66 MB and the clean
+release build from 41 s to 114 s. Dropped; the commit is on branch
+`perf/sync-audit-lingua` if the memory-accounting win ever matters.
+
 Each link is encoded as a BEAM term as soon as it is built, borrowing from
 the note where it can, so the output never exists as a Rust copy. Only the
 scrub REPORT stays in Elixir (`Helpers.report_scrub/1`): Rust counts the
@@ -192,7 +207,7 @@ bumping pulldown-cmark: `ENGRAM_FUZZ_CASES=2000000 ENGRAM_FUZZ_SEED=7 cargo test
 
 `schedule = "DirtyCpu"` on everything whose input size the caller controls,
 EXCEPT small inputs on a hot path. The note parsers (`link_extract`,
-`note_title`, `note_tags`) export a normal and a `_dirty_nif` variant, and
+`note_title`, `note_tags`, `note_meta`) export a normal and a `_dirty_nif` variant, and
 `Engram.Native` picks by size: up to 16 KB (`@inline_max`, well under 1 ms)
 runs on the calling scheduler. A note write must not queue behind a long
 keyword encode on the one dirty scheduler, and the hop alone cost ~20 us.

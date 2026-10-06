@@ -48,6 +48,10 @@ defmodule Engram.Native do
   def note_tags_nif(_content), do: :erlang.nif_error(:nif_not_loaded)
   @doc false
   def note_tags_dirty_nif(_content), do: :erlang.nif_error(:nif_not_loaded)
+  @doc false
+  def note_meta_nif(_content), do: :erlang.nif_error(:nif_not_loaded)
+  @doc false
+  def note_meta_dirty_nif(_content), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
   Links for `Engram.Links.Parser`: `{[{position, kind, target_start,
@@ -100,6 +104,12 @@ defmodule Engram.Native do
 
   @doc "Frontmatter tags then inline `#tags`, deduplicated. Valid UTF-8 only."
   def note_tags(content), do: parse(:note_tags, content, &note_tags_nif/1, &note_tags_dirty_nif/1)
+
+  @doc """
+  `{note_title(content), note_tags(content)}` in one call: the code ranges
+  both need are parsed once. Valid UTF-8 only.
+  """
+  def note_meta(content), do: parse(:note_meta, content, &note_meta_nif/1, &note_meta_dirty_nif/1)
 
   @doc false
   def text_diff_nif(_current, _incoming), do: :erlang.nif_error(:nif_not_loaded)

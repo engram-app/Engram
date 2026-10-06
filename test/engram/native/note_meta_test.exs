@@ -16,6 +16,25 @@ defmodule Engram.Native.NoteMetaTest do
     for %{input: input, title: title, tags: tags} <- @golden do
       assert Helpers.extract_title(input, "dir/File Name.md") == title, inspect(input)
       assert Helpers.extract_tags(input) == tags, inspect(input)
+      assert Helpers.extract_title_and_tags(input, "dir/File Name.md") == {title, tags}
+    end
+  end
+
+  test "extract_title_and_tags/2 equals the two separate calls" do
+    for content <- [
+          "",
+          "# Only a heading",
+          "no title, #tag",
+          "```\n# not a title #nottag\n```\n# Real #yes\n",
+          "---\ntitle: FM\ntags: [a, b]\n---\n# H\n#a #c `#d`",
+          "---\ntags: x\n---\n" <> String.duplicate("`code` #t ", 3_000),
+          "# 東京 😀 #タグ #emoji😀",
+          "#ok \xFF # T\xFF",
+          String.duplicate("- item #tag `c`\n", 2_000)
+        ] do
+      assert Helpers.extract_title_and_tags(content, "a/N.md") ==
+               {Helpers.extract_title(content, "a/N.md"), Helpers.extract_tags(content)},
+             inspect(content)
     end
   end
 
@@ -47,6 +66,8 @@ defmodule Engram.Native.NoteMetaTest do
         assert peak <= 10 * byte_size(content), "#{peak} for #{binary_part(content, 0, 20)}"
         {_title, peak} = Engram.Native.note_title_dirty_nif(content)
         assert peak <= 10 * byte_size(content)
+        {_meta, peak} = Engram.Native.note_meta_dirty_nif(content)
+        assert peak <= 10 * byte_size(content)
       end
     end
 
@@ -56,6 +77,7 @@ defmodule Engram.Native.NoteMetaTest do
       Engram.NativeLeak.assert_no_leak(fn ->
         Engram.Native.note_tags_nif(content)
         Engram.Native.note_title_nif(content)
+        Engram.Native.note_meta_nif(content)
       end)
     end
 
@@ -65,6 +87,10 @@ defmodule Engram.Native.NoteMetaTest do
       assert_receive {_, ^ref, _, %{nif: :note_tags, dirty: false}}
       Helpers.extract_tags(String.duplicate("a", 16_385))
       assert_receive {_, ^ref, _, %{nif: :note_tags, dirty: true}}
+      Helpers.extract_title_and_tags(String.duplicate("a", 16_384), "x.md")
+      assert_receive {_, ^ref, _, %{nif: :note_meta, dirty: false}}
+      Helpers.extract_title_and_tags(String.duplicate("a", 16_385), "x.md")
+      assert_receive {_, ^ref, _, %{nif: :note_meta, dirty: true}}
     end
 
     test "title and tags emit [:engram, :nif, :call, :stop]" do
