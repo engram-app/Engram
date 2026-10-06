@@ -235,11 +235,19 @@ bumping pulldown-cmark: `ENGRAM_FUZZ_CASES=2000000 ENGRAM_FUZZ_SEED=7 cargo test
 ## Scheduling
 
 `schedule = "DirtyCpu"` on everything whose input size the caller controls,
-EXCEPT small inputs on a hot path. The note parsers (`link_extract`,
-`note_title`, `note_meta`) export a normal and a `_dirty_nif` variant, and
-`Engram.Native` picks by size: up to 16 KB (`@inline_max`, well under 1 ms)
-runs on the calling scheduler. A note write must not queue behind a long
+EXCEPT small inputs on a hot path. Nine NIFs export a normal and a
+`_dirty_nif` variant: `link_extract`, `note_title`, `note_meta`, `chunk`,
+`frontmatter_split`, `frontmatter_parse`, `text_diff`, `hmac_hex_many`,
+`json_decode`. Up to 16 KB of input (`@inline_max`, well under 1 ms) runs
+on the calling scheduler. A note write must not queue behind a long
 keyword encode on the one dirty scheduler, and the hop alone cost ~20 us.
+
+One rule, one place each side. Rust: declare the pair with
+`sized_nif!(f, f_nif, f_dirty_nif, ...)` in `lib.rs`, never by hand. Elixir:
+add `{name, inline_nif, dirty_nif, arity}` to `@sized` in `Engram.Native`
+(it generates the stubs) and call `sized(name, input, args)`; `input` is
+what `call/4` measures (a binary, iolist or byte count). Never write the
+`> @inline_max` check yourself.
 Telemetry metadata carries `dirty: true | false`.
 Dirty CPU schedulers cannot be preempted and default to one per normal
 scheduler. **Prod tasks run ONE** (`task_cpu_units = 512` → `BEAM_SCHEDULERS=1`,
