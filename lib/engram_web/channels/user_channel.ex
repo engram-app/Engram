@@ -35,7 +35,7 @@ defmodule EngramWeb.UserChannel do
   # backend can be older than the plugin talking to it. Add a key when a new
   # wire shape ships; drop it with its compat shim
   # (docs/context/plugin-compat-shims.md).
-  @features %{raw_attachment_upload: true}
+  @features %{raw_attachment_upload: true, raw_attachment_download: true}
 
   @impl true
   def join("user:" <> user_id_str, _params, socket) do

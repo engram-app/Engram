@@ -543,7 +543,9 @@ defmodule EngramWeb.AttachmentsController do
     summary: "Get an attachment",
     tags: ["Attachments"],
     description:
-      "Returns metadata + base64 content by default. Pass `?raw=1` to stream the raw bytes instead.",
+      "Returns metadata + base64 content by default. Pass `?raw=1` to stream the raw bytes " <>
+        "instead; the metadata then rides in `x-engram-content-hash`, `x-engram-mime-type`, " <>
+        "`x-engram-mtime` and `x-engram-updated-at` response headers.",
     parameters: [
       path: [in: :path, type: :string, required: true, description: "Attachment path"],
       raw: [
@@ -587,8 +589,10 @@ defmodule EngramWeb.AttachmentsController do
           |> put_resp_content_type(att.mime_type || "application/octet-stream")
           |> put_resp_header("content-disposition", ~s(#{disposition}; filename="#{filename}"))
           |> maybe_skip_compression(att.mime_type)
+          |> put_metadata_headers(att)
           |> send_resp(200, att.content)
         else
+          # compat(plugin): raw_attachment_download - remove when plugin floor includes Engram-obsidian#555 (#1877)
           json(conn, %{
             id: att.id,
             path: att.path,
@@ -781,6 +785,25 @@ defmodule EngramWeb.AttachmentsController do
   # or the limit key to drift between endpoints that mean the same thing.
   defp attachments_disabled(conn) do
     EngramWeb.LimitResponse.halt(conn, "attachments_disabled", :attachments_enabled, false, nil)
+  end
+
+  # The JSON body's metadata for a `?raw=1` download, so a client can take the
+  # bytes without the base64 envelope (`features.raw_attachment_download`).
+  # Values encode exactly as the JSON body does (mtime via Jason, so `1.0`
+  # stays `1.0`). `x-engram-updated-at` is always present: a client that does
+  # not see it is talking to a backend older than these headers. The raw
+  # path's security headers (nosniff, CSP, content-disposition) are untouched.
+  defp put_metadata_headers(conn, att) do
+    [
+      {"x-engram-content-hash", att.content_hash},
+      {"x-engram-mime-type", att.mime_type},
+      {"x-engram-mtime", att.mtime && Jason.encode!(att.mtime)},
+      {"x-engram-updated-at", att.updated_at && DateTime.to_iso8601(att.updated_at)}
+    ]
+    |> Enum.reduce(conn, fn
+      {_name, nil}, conn -> conn
+      {name, value}, conn -> put_resp_header(conn, name, value)
+    end)
   end
 
   defp serialize_metadata(att) do

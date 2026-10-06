@@ -2942,7 +2942,7 @@
       },
       "get": {
         "callbacks": {},
-        "description": "Returns metadata + base64 content by default. Pass `?raw=1` to stream the raw bytes instead.",
+        "description": "Returns metadata + base64 content by default. Pass `?raw=1` to stream the raw bytes instead; the metadata then rides in `x-engram-content-hash`, `x-engram-mime-type`, `x-engram-mtime` and `x-engram-updated-at` response headers.",
         "operationId": "attachments-show",
         "parameters": [
           {

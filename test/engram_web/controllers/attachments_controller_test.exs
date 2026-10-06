@@ -792,6 +792,60 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert get_resp_header(resp, "content-disposition") == [~s(inline; filename="p.png")]
     end
 
+    # The plugin downloads raw when the join reply advertises
+    # raw_attachment_download, so the raw response must carry the metadata the
+    # JSON body did, with the SAME values, and keep every security header.
+    test "carries the JSON body's metadata in x-engram-* headers",
+         %{conn: conn, user: user, vault: vault} do
+      bytes = :crypto.strong_rand_bytes(4096) <> <<0, 255>>
+
+      conn
+      |> put_req_header("content-type", "application/octet-stream")
+      |> post("/api/attachments?path=d/r%C3%A9.png&mtime=1709234567.125", bytes)
+      |> json_response(200)
+
+      json = json_response(get(conn, "/api/attachments/d/r%C3%A9.png"), 200)
+      {:ok, att} = Attachments.get_attachment(user, vault, "d/ré.png")
+      assert is_binary(att.content_hash)
+
+      resp = get(conn, "/api/attachments/d/r%C3%A9.png?raw=1")
+
+      assert resp.status == 200
+      assert resp.resp_body == bytes
+      assert resp.resp_body == Base.decode64!(json["content_base64"])
+      assert get_resp_header(resp, "x-engram-content-hash") == [json["content_hash"]]
+      assert get_resp_header(resp, "x-engram-mime-type") == [json["mime_type"]]
+      assert get_resp_header(resp, "x-engram-updated-at") == [json["updated_at"]]
+      [mtime] = get_resp_header(resp, "x-engram-mtime")
+      assert Jason.decode!(mtime) == json["mtime"]
+
+      # Security headers of the raw path are untouched.
+      assert get_resp_header(resp, "x-content-type-options") == ["nosniff"]
+      assert [csp] = get_resp_header(resp, "content-security-policy")
+      assert csp =~ "default-src 'none'"
+      assert get_resp_header(resp, "content-disposition") == [~s(inline; filename="ré.png")]
+    end
+
+    test "omits x-engram-mtime when the attachment has none", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      conn
+      |> put_req_header("content-type", "application/octet-stream")
+      |> post("/api/attachments?path=n.png", "x")
+      |> json_response(200)
+
+      {:ok, att} = Attachments.get_attachment(user, vault, "n.png")
+      resp = get(conn, "/api/attachments/n.png?raw=1")
+
+      if is_nil(att.mtime),
+        do: assert(get_resp_header(resp, "x-engram-mtime") == []),
+        else: assert(get_resp_header(resp, "x-engram-mtime") == [Jason.encode!(att.mtime)])
+
+      assert [_] = get_resp_header(resp, "x-engram-updated-at")
+    end
+
     test "marks an already-compressed body no-transform so Bandit skips gzip",
          %{conn: conn} do
       # The pure predicate is covered in AttachmentCompressionTest; this is the

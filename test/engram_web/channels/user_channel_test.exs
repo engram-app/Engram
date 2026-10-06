@@ -39,13 +39,13 @@ defmodule EngramWeb.UserChannelTest do
 
     # The plugin may be newer than a self-hosted backend, so it uploads raw
     # attachment bytes only when the server says it can take them.
-    test "advertises raw attachment upload in the join reply" do
+    test "advertises raw attachment upload and download in the join reply" do
       user = insert(:user)
       {:ok, socket} = connect_as(user)
 
       {:ok, reply, _socket} = subscribe_and_join(socket, "user:#{user.id}", %{})
 
-      assert reply.features == %{raw_attachment_upload: true}
+      assert reply.features == %{raw_attachment_upload: true, raw_attachment_download: true}
     end
 
     test "rejects joining another user's topic", %{other_user: other_user} do

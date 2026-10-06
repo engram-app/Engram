@@ -40,3 +40,4 @@ client still calls is not dead yet.
 | Capability | Shim location | Plugin version that no longer needs it | Also used by | Issue |
 |---|---|---|---|---|
 | `raw_attachment_upload` | `AttachmentsController.do_upload_gated/4` JSON branch; `Attachments.attachment_bytes/1` base64 clause | Engram-obsidian#555 (replace with its release version once shipped) | Web SPA (`frontend/src/viewer/attachment-upload/`, `useUploadAttachment`) and e2e helpers (`e2e/helpers/api.py`) still send base64 JSON; switch them first | #1877 |
+| `raw_attachment_download` | `AttachmentsController.show/2` JSON (`content_base64`) branch | Engram-obsidian#555 (replace with its release version once shipped) | e2e helpers (`e2e/helpers/api.py` `get_attachment`, used by `test_19_write_isolation`, `test_73_free_attachment_402`) read the JSON body; switch them to `?raw=1` first. The web SPA already downloads with `?raw=1` | #1877 |
