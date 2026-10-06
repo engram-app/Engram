@@ -649,9 +649,10 @@ defmodule Engram.Accounts do
     # Cost: one transaction and two extra round trips per API-key request.
     {:ok, lookup} =
       Repo.transaction(fn ->
-        Repo.query!("SELECT set_config('role', 'engram_key_lookup', true)", [],
-          source: "api_key_lookup_enter"
-        )
+        _ =
+          Repo.query!("SELECT set_config('role', 'engram_key_lookup', true)", [],
+            source: "api_key_lookup_enter"
+          )
 
         key =
           Repo.cross_tenant(fn ->
@@ -660,7 +661,10 @@ defmodule Engram.Accounts do
 
         # SET LOCAL survives a savepoint release, so reset inside (see
         # `Repo.run_with_tenant/2`).
-        Repo.query!("SELECT set_config('role', 'none', true)", [], source: "api_key_lookup_exit")
+        _ =
+          Repo.query!("SELECT set_config('role', 'none', true)", [],
+            source: "api_key_lookup_exit"
+          )
 
         key && Repo.cross_tenant(fn -> Repo.preload(key, :user) end)
       end)
