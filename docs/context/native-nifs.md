@@ -30,7 +30,7 @@ costs about that), or code that needs to call back into the BEAM.
 
 | Code | Why | Evidence |
 |---|---|---|
-| `Engram.Notes.Frontmatter.emit/3` (Ymlr) | ~65 us per 10-key block, ~500 us at 50 keys; every projection of a note | parse is native (below); emit must match Ymlr byte for byte or `content_hash` shifts |
+| `Engram.Notes.Frontmatter.emit/3` (Ymlr) | Ported and NOT shipped (2026-10-06, #1877): byte-identical on 200k pairs but only 2-3x (10 keys 32 -> 14 us), and any drift shifts `content_hash` and re-embeds notes. Code on branch `perf/sync-audit-yaml` (`6959fd4b`) | revisit only if emit shows up in a profile |
 
 Measured on the chunker (`chunk`, `frontmatter_split`, 2026-10-04,
 `Markdown.parse/2` end to end, best of 3; "Elixir" is chunker v2 on `main`,
