@@ -74,4 +74,21 @@ defmodule Engram.Notes.OkfFieldsTest do
     assert OkfFields.normalize_type("Playbook") == "playbook"
     assert OkfFields.normalize_type("ＮＯＴＥ") == "note"
   end
+
+  describe "from_parse/1" do
+    test "matches extract/1 on the parse of the same block" do
+      content = "---\ntype: Playbook\ndescription: d\nmodified: 2026-01-01\n---\nbody\n"
+      {block, _} = Engram.Notes.Frontmatter.split(content)
+
+      assert OkfFields.from_parse(Engram.Notes.Frontmatter.parse(block)) ==
+               OkfFields.extract(content)
+
+      assert OkfFields.extract(content).type == "Playbook"
+    end
+
+    test "no frontmatter (nil) and invalid YAML (:error) give all-nil" do
+      assert OkfFields.from_parse(nil) == @empty
+      assert OkfFields.from_parse(:error) == @empty
+    end
+  end
 end
