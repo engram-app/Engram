@@ -77,6 +77,14 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
     refute DataMigrations.done?("test_exiting", 1)
   end
 
+  # The boot run (@reboot) and the hourly run must not overlap.
+  test "a second enqueue within the unique period is deduplicated" do
+    {:ok, first} = Oban.insert(DataMigrationsRunner.new(%{}))
+    {:ok, second} = Oban.insert(DataMigrationsRunner.new(%{}))
+    assert second.conflict?
+    assert second.id == first.id
+  end
+
   test "perform runs every registered migration" do
     assert :ok = perform_job(DataMigrationsRunner, %{})
   end

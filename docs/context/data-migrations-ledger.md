@@ -7,8 +7,10 @@ _Last verified: 2026-10-06_
 A data migration that must reach existing rows is an `Engram.DataMigration`
 module registered in `Engram.Workers.DataMigrationsRunner` `@migrations`. It is
 never an operator command and never a one-off rpc (see "Upgrades require zero
-operator action" in `AGENTS.md`). The runner is an hourly cron (minute 33, on
-the `:maintenance` queue). Each pass runs one bounded slice of work for every
+operator action" in `AGENTS.md`). The runner runs at boot (Oban Cron
+`@reboot`) and hourly (minute 33), on the `:maintenance` queue. A boot within
+the hour of a run is deduplicated by the worker's `unique` period: intended,
+the two never overlap. Each pass runs one bounded slice of work for every
 migration whose ledger row is not done. One migration raising does not stop the
 others.
 

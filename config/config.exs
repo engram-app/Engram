@@ -183,6 +183,9 @@ config :engram, Oban,
         {"28 * * * *", Engram.Workers.InstallPingsPruner},
         # Self-healing data migrations (#1872): one pass of each one whose
         # ledger row is not done; a pass that finds no work closes it.
+        # Also at boot, so an upgrade heals without waiting up to an hour. A boot
+        # within the hour of a run is deduped by the worker's `unique` (intended).
+        {"@reboot", Engram.Workers.DataMigrationsRunner},
         {"33 * * * *", Engram.Workers.DataMigrationsRunner},
         {"38 * * * *", Engram.Workers.IdempotencyPrune},
         # Note-version outbox copies whose FinalizeRevision job was lost
