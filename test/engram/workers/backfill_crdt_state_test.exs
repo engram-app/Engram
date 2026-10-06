@@ -6,7 +6,8 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
   alias Engram.Crypto.Envelope
-  alias Engram.Notes.{CrdtBridge, CrdtPersistence, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtPersistence, CrdtUpdateLog, Note}
+  alias Engram.Vaults.Vault
   alias Engram.Workers.BackfillCrdtState
 
   setup do
@@ -83,6 +84,38 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
     note
   end
 
+  # An un-checkpointed tail: a Yjs update in crdt_update_log that the note's
+  # (NULL) snapshot does not cover yet. Bind replays it onto an empty doc.
+  defp seed_tail!(user, vault, note_id, text) do
+    {:ok, doc} = CrdtBridge.doc_from_state(nil)
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), text)
+    {:ok, update} = Yex.encode_state_as_update(doc)
+    {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(update, user, note_id)
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        %CrdtUpdateLog{}
+        |> CrdtUpdateLog.changeset(%{
+          note_id: note_id,
+          user_id: user.id,
+          vault_id: vault.id,
+          update_ciphertext: ct,
+          update_nonce: nonce
+        })
+        |> Repo.insert!()
+      end)
+
+    :ok
+  end
+
+  defp soft_delete_vault!(vault) do
+    Repo.update_all(
+      from(v in Vault, where: v.id == ^vault.id),
+      [set: [deleted_at: DateTime.utc_now(:second)]],
+      skip_tenant_check: true
+    )
+  end
+
   defp reload(user, note_id) do
     {:ok, note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note_id) end)
     note
@@ -153,22 +186,70 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
     assert after_run.crdt_state_nonce == before.crdt_state_nonce
   end
 
-  test "enqueue_all/0 enqueues only for pairs that still have a NULL-state note", ctx do
+  # Seeding from content here would create a second Yjs lineage on top of the
+  # tail's: bind would replay the tail onto the seeded doc and union the two.
+  test "a NULL-state note with an un-checkpointed tail is not seeded", ctx do
+    %{user: user, vault: vault} = ctx
+    note = legacy_note(user, vault, "tailed.md", "BODY")
+    :ok = seed_tail!(user, vault, note.id, "BODY")
+
+    assert :ok =
+             perform_job(BackfillCrdtState, %{
+               "user_id" => user.id,
+               "vault_id" => vault.id,
+               "cursor" => "00000000-0000-0000-0000-000000000000"
+             })
+
+    assert %Note{crdt_state_ciphertext: nil} = reload(user, note.id)
+  end
+
+  test "enqueue_missing/0 enqueues only for pairs that still have a seedable note", ctx do
     %{user: user, vault: vault} = ctx
     _ = legacy_note(user, vault, "legacy.md", "BODY")
 
-    assert BackfillCrdtState.enqueue_all() == 1
+    assert BackfillCrdtState.enqueue_missing() == 1
 
     assert_enqueued(worker: BackfillCrdtState, args: %{"user_id" => user.id})
   end
 
-  test "enqueue_all/0 enqueues nothing when every note already has state", ctx do
+  test "enqueue_missing/0 enqueues nothing when every note already has state", ctx do
     %{user: user, vault: vault} = ctx
 
     {:ok, _} =
       Notes.upsert_note(user, vault, %{"path" => "fresh.md", "content" => "seeded"}, actor: "api")
 
-    assert BackfillCrdtState.enqueue_all() == 0
+    assert BackfillCrdtState.enqueue_missing() == 0
+  end
+
+  test "enqueue_missing/0 skips a pair whose only NULL-state note has a tail", ctx do
+    %{user: user, vault: vault} = ctx
+    note = legacy_note(user, vault, "tailed.md", "BODY")
+    :ok = seed_tail!(user, vault, note.id, "BODY")
+
+    assert BackfillCrdtState.enqueue_missing() == 0
+    refute_enqueued(worker: BackfillCrdtState)
+  end
+
+  test "enqueue_missing/0 skips a soft-deleted vault (the worker discards it)", ctx do
+    %{user: user, vault: vault} = ctx
+    _ = legacy_note(user, vault, "legacy.md", "BODY")
+    soft_delete_vault!(vault)
+
+    assert BackfillCrdtState.enqueue_missing() == 0
+  end
+
+  test "enqueue_missing/0 skips a deleted note", ctx do
+    %{user: user, vault: vault} = ctx
+    note = legacy_note(user, vault, "gone.md", "BODY")
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(from(n in Note, where: n.id == ^note.id),
+          set: [deleted_at: DateTime.utc_now(:second)]
+        )
+      end)
+
+    assert BackfillCrdtState.enqueue_missing() == 0
   end
 
   test "re-enqueues itself when a full batch means more remain", ctx do

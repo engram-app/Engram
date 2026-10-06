@@ -37,6 +37,12 @@ defmodule Engram.Workers.BackfillCrdtState do
   mid-run (a concurrent write, a room checkpoint) is never overwritten. That
   matters — re-seeding a live note would discard its CRDT history.
 
+  A NULL-state note with rows in `crdt_update_log` is never seeded (selected
+  nor written). Its real state is that un-checkpointed tail, which bind replays
+  onto an empty doc; a snapshot seeded from content would be a second,
+  unrelated Yjs lineage that bind unions with the tail. Tail replay serves
+  those notes, and the next checkpoint writes their state.
+
   Legacy rows are migrated, not skipped (#1341). `Crypto.encrypt_crdt_state/3`
   binds the AAD to the row id unconditionally while `decrypt_crdt_state/2` picks
   its AAD from the row's `dek_version`, so seeding a `dek_version = 1` row writes
@@ -45,9 +51,8 @@ defmodule Engram.Workers.BackfillCrdtState do
   opens blank, which is the very failure above. So the row is rebound in place
   via `AadRebind.rebind_note/2` and then seeded, in one tenant transaction.
 
-  Enqueue post-deploy via release rpc (no Mix in the release — plain function):
-
-      docker exec engram-saas /app/bin/engram rpc 'Engram.Workers.BackfillCrdtState.enqueue_all()'
+  Driven by the `Engram.DataMigrations.CrdtStateSeed` data migration
+  (`enqueue_missing/0`), never by hand.
   """
 
   # No `unique`: a cursor worker re-enqueues its own successor mid-run, which
@@ -64,9 +69,10 @@ defmodule Engram.Workers.BackfillCrdtState do
   alias Engram.Crypto.AadRebind
   alias Engram.Crypto.RotationGate
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtBridge, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtUpdateLog, Note}
   alias Engram.Repo
   alias Engram.Vaults
+  alias Engram.Vaults.Vault
 
   require Logger
 
@@ -85,18 +91,23 @@ defmodule Engram.Workers.BackfillCrdtState do
   defp batch_size,
     do: Application.get_env(:engram, :crdt_state_backfill_batch_size, @default_batch_size)
 
-  @doc "Enqueue one job per (user, vault) that still has a NULL-crdt_state note. Returns the count."
-  @spec enqueue_all() :: non_neg_integer()
-  def enqueue_all do
+  @doc """
+  Enqueue one job per (user, vault) in a live vault holding a seedable note
+  (`seedable/0`; the worker discards a deleted vault's jobs). Returns the
+  count; zero means nothing the worker could seed is left.
+  """
+  @spec enqueue_missing() :: non_neg_integer()
+  def enqueue_missing do
     # Per-user inside each tenant's RLS context. A single cross-tenant read
     # with `skip_tenant_check: true` returns zero rows on prod under FORCE ROW
     # LEVEL SECURITY and enqueues nothing while reporting success (#1349).
     pairs =
       TenantScan.flat_map_users(fn user_id ->
-        from(n in Note,
-          where: n.kind == "note" and is_nil(n.crdt_state_ciphertext) and is_nil(n.deleted_at),
+        from(n in seedable(),
+          join: v in Vault,
+          on: v.id == n.vault_id and is_nil(v.deleted_at),
           where: n.user_id == ^user_id,
-          group_by: n.vault_id,
+          distinct: true,
           select: n.vault_id
         )
         |> Repo.all()
@@ -110,6 +121,16 @@ defmodule Engram.Workers.BackfillCrdtState do
     end)
 
     length(pairs)
+  end
+
+  @doc "Notes this worker seeds: live, NULL state, and no un-checkpointed tail."
+  def seedable do
+    from(n in Note,
+      as: :note,
+      where: n.kind == "note" and is_nil(n.crdt_state_ciphertext) and is_nil(n.deleted_at),
+      where:
+        not exists(from(l in CrdtUpdateLog, where: l.note_id == parent_as(:note).id, select: 1))
+    )
   end
 
   @impl Oban.Worker
@@ -144,10 +165,8 @@ defmodule Engram.Workers.BackfillCrdtState do
 
     {:ok, ids} =
       Repo.with_tenant(user.id, fn ->
-        from(n in Note,
-          where:
-            n.vault_id == ^vault.id and n.kind == "note" and n.id > ^cursor and
-              is_nil(n.crdt_state_ciphertext) and is_nil(n.deleted_at),
+        from(n in seedable(),
+          where: n.vault_id == ^vault.id and n.id > ^cursor,
           order_by: [asc: n.id],
           select: n.id,
           limit: ^limit
@@ -250,13 +269,12 @@ defmodule Engram.Workers.BackfillCrdtState do
          {:ok, note} <- Crypto.maybe_decrypt_note_fields(raw_note, user),
          {:ok, %{state: state}} <- CrdtBridge.merge_plaintext(nil, note.content || ""),
          {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(state, user, note_id) do
-      # Re-assert is_nil in the UPDATE: the read above and this write are not
-      # atomic, so a note that gained state in between must still be left alone.
-      # Representation only — content/content_hash/version/seq are untouched.
+      # Re-assert `seedable/0` in the UPDATE: the read above and this write are
+      # not atomic, so a note that gained state or a tail in between must still
+      # be left alone. Representation only: content/content_hash/version/seq
+      # are untouched.
       Repo.update_all(
-        from(n in Note,
-          where: n.id == ^note_id and n.kind == "note" and is_nil(n.crdt_state_ciphertext)
-        ),
+        from(n in seedable(), where: n.id == ^note_id),
         set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
       )
 
