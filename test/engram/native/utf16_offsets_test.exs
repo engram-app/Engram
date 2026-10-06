@@ -5,15 +5,21 @@ defmodule Engram.Native.Utf16OffsetsTest do
 
   alias Engram.Native
 
-  # The per-edit conversion the rewriter used before (#1877), as the oracle.
+  # Oracle: one codepoint walk recording the UTF-16 count at every boundary.
+  # (The old per-edit `:unicode` conversion was O(offsets x text) and made this
+  # property time out under load; this stays independent of the NIF.)
   defp reference(text, offsets) do
-    for at <- offsets do
+    {table, _, _} =
       text
-      |> binary_part(0, at)
-      |> :unicode.characters_to_binary(:utf8, {:utf16, :big})
-      |> byte_size()
-      |> div(2)
-    end
+      |> String.codepoints()
+      |> Enum.reduce({%{0 => 0}, 0, 0}, fn cp, {acc, bytes, units} ->
+        <<c::utf8>> = cp
+        bytes = bytes + byte_size(cp)
+        units = units + if(c >= 0x10000, do: 2, else: 1)
+        {Map.put(acc, bytes, units), bytes, units}
+      end)
+
+    Enum.map(offsets, &Map.fetch!(table, &1))
   end
 
   @units ["a", " ", "\n", "é", "€", "📝", "🚀", <<0x301::utf8>>, "[[x]]"]
@@ -31,8 +37,8 @@ defmodule Engram.Native.Utf16OffsetsTest do
             picks <- StreamData.list_of(StreamData.integer(0..1_000)),
             max_runs: 2_000
           ) do
-      bs = boundaries(t)
-      offsets = picks |> Enum.map(&Enum.at(bs, rem(&1, length(bs)))) |> Enum.sort()
+      bs = t |> boundaries() |> List.to_tuple()
+      offsets = picks |> Enum.map(&elem(bs, rem(&1, tuple_size(bs)))) |> Enum.sort()
       assert Native.utf16_offsets(t, offsets) == reference(t, offsets)
     end
   end
