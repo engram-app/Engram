@@ -538,6 +538,23 @@ describe("DeviceLinkPage", () => {
 			);
 		});
 
+		it("prefers the name the plugin suggested over the browser guess", async () => {
+			vi.spyOn(window.navigator, "userAgent", "get").mockReturnValue(
+				"Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130",
+			);
+			get.mockResolvedValue({
+				vaults: [{ id: 7, name: "Personal", note_count: 3 }],
+				suggested_device_name: "todd-laptop",
+			});
+			post.mockResolvedValue({ ok: true, vault_id: 7 });
+			renderPage();
+			fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), {
+				target: { value: "ENGR7X4K" },
+			});
+			fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+			expect(await screen.findByLabelText(/name this connection/iu)).toHaveValue("todd-laptop");
+		});
+
 		it("omits the label when the user clears it", async () => {
 			await reachPicker([{ id: 7, name: "Personal", note_count: 3 }]);
 			fireEvent.change(screen.getByLabelText(/name this connection/iu), { target: { value: "" } });

@@ -36,6 +36,20 @@ defmodule EngramWeb.DeviceAuthControllerTest do
       assert resp["interval"] == 5
     end
 
+    test "persists the optional device_name hint", %{conn: conn} do
+      conn =
+        post(conn, "/api/auth/device", %{client_id: "test_client", device_name: "todd-laptop"})
+
+      resp = json_response(conn, 200)
+
+      auth =
+        Repo.get_by!(Engram.Auth.DeviceAuthorization, [device_code: resp["device_code"]],
+          skip_tenant_check: true
+        )
+
+      assert auth.device_name == "todd-laptop"
+    end
+
     test "persists optional vault_name on the authorization row", %{conn: conn} do
       reader = insert(:user)
 

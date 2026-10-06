@@ -14,6 +14,9 @@ defmodule Engram.Repo.Migrations.AddLabelToDeviceFlowExpand do
   def change do
     alter table(:device_authorizations) do
       add :label, :text
+      # Name the plugin suggests for itself at flow start (hostname, platform),
+      # shown on /link as the default label. Lives as long as the pending row.
+      add :device_name, :text
     end
 
     alter table(:device_refresh_tokens) do

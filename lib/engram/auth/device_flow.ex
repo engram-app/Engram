@@ -24,7 +24,7 @@ defmodule Engram.Auth.DeviceFlow do
   # Characters excluding ambiguous: 0, O, 1, I, L
   @user_code_chars ~c"ABCDEFGHJKMNPQRSTUVWXYZ2345679"
 
-  def start_device_flow(client_id, vault_name \\ nil) do
+  def start_device_flow(client_id, vault_name \\ nil, device_name \\ nil) do
     device_code = Base.encode16(:crypto.strong_rand_bytes(@device_code_bytes), case: :lower)
     user_code = generate_user_code()
 
@@ -40,7 +40,8 @@ defmodule Engram.Auth.DeviceFlow do
       client_id: client_id,
       status: "pending",
       expires_at: expires_at,
-      vault_name: vault_name
+      vault_name: vault_name,
+      device_name: normalize_device_name(device_name)
     })
     |> Repo.insert(skip_tenant_check: true)
   end
@@ -92,6 +93,30 @@ defmodule Engram.Auth.DeviceFlow do
 
       _ ->
         :error
+    end
+  end
+
+  @doc """
+  The device name the plugin suggested at start, for the user who claimed the
+  code via `view_pending_code/2`. `nil` for anyone else.
+  """
+  @spec pending_device_name(String.t(), String.t()) :: String.t() | nil
+  def pending_device_name(user_code, user_id) when is_binary(user_id) do
+    Repo.one(
+      from(da in DeviceAuthorization,
+        where: da.user_code == ^user_code and da.viewer_user_id == ^user_id,
+        select: da.device_name
+      ),
+      skip_tenant_check: true
+    )
+  end
+
+  # The start endpoint is unauthenticated and the name is only a hint, so a bad
+  # one (over-long, wrong type) is dropped rather than failing the link.
+  defp normalize_device_name(name) do
+    case Engram.OAuth.resolve_label(name) do
+      {:ok, name} -> name
+      :error -> nil
     end
   end
 

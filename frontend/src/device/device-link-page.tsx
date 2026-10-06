@@ -165,6 +165,7 @@ function DeviceLinkPage() {
 				vaults: Vault[];
 				suggested_vault_name?: string | null;
 				user_code_valid?: boolean;
+				suggested_device_name?: string | null;
 			}>(`/vaults?user_code=${encodeURIComponent(formattedCode)}`);
 			// This endpoint answers 200 with the caller's vault list whether or not
 			// the code is real — `user_code_valid` is the only validity signal, and
@@ -184,8 +185,9 @@ function DeviceLinkPage() {
 				return;
 			}
 			setVaults(data.vaults ?? []);
-			// Assumes the browser is on the device being linked; editable when not.
-			setLabel((await guessDeviceLabel()) ?? "");
+			// The plugin's own name wins. Without one, guess from this browser,
+			// which assumes it is on the device being linked; editable when not.
+			setLabel(data.suggested_device_name?.trim() || (await guessDeviceLabel()) || "");
 			const suggested = data.suggested_vault_name?.trim() || "";
 			setSuggestedName(suggested);
 			// Default selection:

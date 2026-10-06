@@ -99,6 +99,27 @@ defmodule Engram.Auth.DeviceFlowTest do
     end
   end
 
+  describe "device name hint" do
+    test "is stored trimmed and shown only to the claiming viewer" do
+      viewer = insert(:user)
+      other = insert(:user)
+      {:ok, auth} = DeviceFlow.start_device_flow("c", nil, "  todd-laptop ")
+      assert auth.device_name == "todd-laptop"
+
+      assert DeviceFlow.pending_device_name(auth.user_code, other.id) == nil
+      {:ok, _} = DeviceFlow.view_pending_code(auth.user_code, viewer.id)
+      assert DeviceFlow.pending_device_name(auth.user_code, viewer.id) == "todd-laptop"
+      assert DeviceFlow.pending_device_name(auth.user_code, other.id) == nil
+    end
+
+    test "an over-long or blank name is dropped, never fails the link" do
+      assert {:ok, long} = DeviceFlow.start_device_flow("c", nil, String.duplicate("a", 121))
+      assert long.device_name == nil
+      assert {:ok, blank} = DeviceFlow.start_device_flow("c", nil, "   ")
+      assert blank.device_name == nil
+    end
+  end
+
   describe "authorize_device/3" do
     test "authorizes a pending device with user and vault" do
       user = insert(:user)
