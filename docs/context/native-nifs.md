@@ -71,6 +71,21 @@ one call per note, no prefixed copy per chunk, hex in Rust. A per-chunk NIF
 would have lost to the NIF call overhead. Batch small pure calls; do not
 port them one-for-one.
 
+Measured on the CRDT text diff (`text_diff`, 2026-10-06,
+`CrdtBridge.diff_into_text/2` end to end including the Yex edit, min of 5;
+#1873). The Elixir version walked codepoint lists; the NIF compares bytes,
+backs off to a codepoint boundary, and allocates nothing (peak 0). The
+insert comes back as a byte range so Elixir slices it with `binary_part`:
+
+| Input | Elixir | Rust |
+|---|---|---|
+| 5 KB prose, mid edit | 3.9 ms | 0.05 ms |
+| 100 KB prose, mid edit | 60 ms | 0.8 ms |
+| 1 MB prose, mid edit | 1,256 ms | 8 ms |
+| 1 MB prose, append | 980 ms | 9 ms |
+| 1 MB emoji, mid edit | 672 ms | 12 ms |
+| 1 MB full replace | 2,044 ms | 13 ms |
+
 Measured on the keyword encoder (dev box, minimum of 5 interleaved runs):
 
 | Input | Elixir | Rust | Native peak |

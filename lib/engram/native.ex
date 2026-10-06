@@ -101,6 +101,27 @@ defmodule Engram.Native do
   @doc "Frontmatter tags then inline `#tags`, deduplicated. Valid UTF-8 only."
   def note_tags(content), do: parse(:note_tags, content, &note_tags_nif/1, &note_tags_dirty_nif/1)
 
+  @doc false
+  def text_diff_nif(_current, _incoming), do: :erlang.nif_error(:nif_not_loaded)
+  @doc false
+  def text_diff_dirty_nif(_current, _incoming), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
+  The single-span diff for `CrdtBridge.diff_into_text/2`: `{prefix_u16,
+  delete_u16, insert_start, insert_len}`. The first two are UTF-16 units into
+  `current`; the insert is a byte range of `incoming`, for `binary_part/3`.
+  Valid UTF-8 only.
+  """
+  def text_diff(current, incoming) do
+    dirty = byte_size(current) + byte_size(incoming) > @inline_max
+
+    call(:text_diff, [current, incoming], %{dirty: dirty}, fn ->
+      if dirty,
+        do: text_diff_dirty_nif(current, incoming),
+        else: text_diff_nif(current, incoming)
+    end)
+  end
+
   defp parse(name, content, inline, _dirty) when byte_size(content) <= @inline_max,
     do: call(name, content, %{dirty: false}, fn -> inline.(content) end)
 

@@ -13,6 +13,7 @@ defmodule Engram.Notes.CrdtBridge do
   (spec §12a contract 4). NEVER use the `y_ex` default (`:bytes`).
   """
 
+  alias Engram.Native
   alias Engram.Notes.CrdtTransport
   alias Engram.Notes.Frontmatter
 
@@ -206,42 +207,20 @@ defmodule Engram.Notes.CrdtBridge do
 
   Offsets are **UTF-16 code units** (the doc is `offset_kind: :utf16`), so an
   astral codepoint (emoji, U+10000+) contributes 2 to every index and the diff
-  never slices through a surrogate pair. The diff is computed over codepoint
-  lists for correctness, then each span's length is converted to UTF-16 units
-  before calling `Yex.Text.insert/delete`.
+  never slices through a surrogate pair. The span comes from
+  `Engram.Native.text_diff/2`.
   """
   @spec diff_into_text(Yex.Text.t(), String.t()) :: :ok
   def diff_into_text(%Yex.Text{} = text, incoming) when is_binary(incoming) do
     current = Yex.Text.to_string(text)
 
-    if current == incoming do
-      :ok
-    else
-      cur = String.codepoints(current)
-      inc = String.codepoints(incoming)
-
-      prefix = common_prefix_len(cur, inc, 0)
-
-      cur_rest = Enum.drop(cur, prefix)
-      inc_rest = Enum.drop(inc, prefix)
-
-      suffix =
-        common_prefix_len(Enum.reverse(cur_rest), Enum.reverse(inc_rest), 0)
-        |> min(length(cur_rest))
-        |> min(length(inc_rest))
-
-      deleted_cps = Enum.take(cur_rest, length(cur_rest) - suffix)
-      inserted_cps = Enum.take(inc_rest, length(inc_rest) - suffix)
-
-      # Convert codepoint spans to UTF-16 code-unit offsets/lengths.
-      prefix_u16 = utf16_units(Enum.take(cur, prefix))
-      delete_u16 = utf16_units(deleted_cps)
-      insert_str = Enum.join(inserted_cps)
-
+    if current != incoming do
+      {prefix_u16, delete_u16, start, len} = Native.text_diff(current, incoming)
       if delete_u16 > 0, do: Yex.Text.delete(text, prefix_u16, delete_u16)
-      if insert_str != "", do: Yex.Text.insert(text, prefix_u16, insert_str)
-      :ok
+      if len > 0, do: Yex.Text.insert(text, prefix_u16, binary_part(incoming, start, len))
     end
+
+    :ok
   end
 
   @doc """
@@ -409,16 +388,5 @@ defmodule Engram.Notes.CrdtBridge do
       {:ok, state} -> {:ok, %{doc: fresh, state: state}}
       {:error, reason} -> {:error, reason}
     end
-  end
-
-  defp common_prefix_len([h | t1], [h | t2], acc), do: common_prefix_len(t1, t2, acc + 1)
-  defp common_prefix_len(_, _, acc), do: acc
-
-  # UTF-16 code-unit count for a list of codepoints (BMP = 1, astral = 2).
-  defp utf16_units(codepoints) do
-    Enum.reduce(codepoints, 0, fn cp, acc ->
-      <<code::utf8>> = cp
-      acc + if code >= 0x10000, do: 2, else: 1
-    end)
   end
 end
