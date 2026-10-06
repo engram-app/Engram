@@ -26,7 +26,7 @@ defmodule Engram.Workers.EmbedNote do
   that involves no chunker change, so it never makes a note look stale here,
   and chunk reuse would keep the old weights even if it did. A genuine rebuild
   clears both the reuse markers and these hashes first
-  (`Indexing.flag_notes_for_rebuild/1`, #1477).
+  (`Indexing.flag_notes_for_rebuild/2`, #1477).
   """
 
   use Oban.Worker,

@@ -36,7 +36,7 @@ defmodule Engram.IndexingFlagRebuildTest do
       )
 
     assert 1 ==
-             Repo.with_tenant!(user.id, fn -> Indexing.flag_notes_for_rebuild([note.id]) end)
+             Repo.with_tenant!(user.id, fn -> Indexing.flag_notes_for_rebuild([note.id], Repo) end)
 
     assert is_nil(Repo.get!(Chunk, chunk.id, skip_tenant_check: true).context_hmac)
 
