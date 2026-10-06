@@ -1,0 +1,86 @@
+defmodule Engram.DataMigrations do
+  @moduledoc """
+  Completion ledger for self-healing data migrations. See
+  `docs/context/data-migrations-ledger.md`.
+
+  A migration is done for `version` when its row holds that version or a
+  higher one (a rollback to older code must not redo newer work) and
+  `completed_at` is set. Bumping the version in code reopens it.
+
+  The ledger only saves work: every reader must still handle rows in any
+  older format, so a row an old node writes after `mark_done/2` is readable
+  and the next version bump picks it up.
+  """
+  import Ecto.Query
+
+  alias Engram.Backfill.TenantScan
+  alias Engram.DataMigrations.Entry
+  alias Engram.Repo
+
+  @in_flight ~w(available scheduled executing retryable)
+
+  @spec done?(String.t(), pos_integer()) :: boolean()
+  def done?(name, version) do
+    # Only `true` is cached: a migration never goes from done back to
+    # not-done without a code change, and a code change restarts the node.
+    case :persistent_term.get({__MODULE__, name, version}, false) do
+      true ->
+        true
+
+      false ->
+        done =
+          Repo.exists?(
+            from(e in Entry,
+              where: e.name == ^name and e.version >= ^version and not is_nil(e.completed_at)
+            )
+          )
+
+        if done, do: :persistent_term.put({__MODULE__, name, version}, true)
+        done
+    end
+  end
+
+  @spec mark_done(String.t(), pos_integer()) :: :ok
+  def mark_done(name, version) do
+    now = DateTime.utc_now()
+
+    Repo.insert!(
+      %Entry{name: name, version: version, completed_at: now},
+      on_conflict: [set: [version: version, completed_at: now, updated_at: now]],
+      conflict_target: :name
+    )
+
+    :ok
+  end
+
+  @doc """
+  True if `query_for.(repo)` returns a row in any tenant. Uses the
+  maintenance repo when enabled (one query), else one query per user inside
+  that user's RLS context. Never trusts a cross-tenant read on the app pool,
+  which FORCE RLS turns into zero rows (#1349).
+  """
+  @spec any_row?((module() -> Ecto.Queryable.t())) :: boolean()
+  def any_row?(query_for) do
+    case Repo.maintenance() do
+      Repo ->
+        TenantScan.flat_map_users(fn _user_id -> [Repo.exists?(query_for.(Repo))] end)
+        |> Enum.any?()
+
+      maintenance ->
+        maintenance.exists?(query_for.(maintenance))
+    end
+  end
+
+  @doc "True while any job of `worker` is queued or running."
+  @spec jobs_in_flight?(module()) :: boolean()
+  def jobs_in_flight?(worker) do
+    name = worker |> Atom.to_string() |> String.replace_prefix("Elixir.", "")
+    Repo.exists?(from(j in Oban.Job, where: j.worker == ^name and j.state in @in_flight))
+  end
+
+  @doc false
+  def reset_cache do
+    for {{__MODULE__, _, _} = key, _} <- :persistent_term.get(), do: :persistent_term.erase(key)
+    :ok
+  end
+end
