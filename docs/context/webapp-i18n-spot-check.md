@@ -88,7 +88,7 @@ None of them judge translation quality: a string passes if it differs from the E
 
 | Decision | Detail |
 |---|---|
-| "Engram docs" | Translated in all but es/pt-BR: de and also fr, it, ko, zh-CN (Documentation Engram, Documentazione di Engram, Engram 문서, Engram 文档), left English in es, pt-BR (their plugin/marketing references do not translate "docs"). Decide whether it should be uniform. |
+| "Engram docs" | Translated in de (Engram-Doku), fr, it, ja, ko, ru, zh-CN, zh-TW (their marketing references translate "Docs"); left English in es and pt-BR (their references do not). Decide whether it should be uniform. |
 | Callout and markdown keywords | Callout type ids (`[!tip]`), fold markers, frontmatter keys, fence languages, mermaid ids and LaTeX stay English; callout titles in the gallery stay English; the renderer's omitted-title fallback is English too. |
 | Binding consent text | The Terms/agreement text and privacy-notice lines on the agreement step are English on purpose (legal text; the Terms body is server-provided). |
 | Plan names | "Free" is translated (de Kostenlos, es/it/pt-BR Gratuito, fr Gratuit, ja 無料, zh-CN 免费版, zh-TW 免費); ru keeps Pro/Starter/Free as tier names; zh-CN translates Starter/Pro (入门版/专业版); zh-TW keeps Starter/Pro. Check plan cards and "your {plan} plan" sentences. |
