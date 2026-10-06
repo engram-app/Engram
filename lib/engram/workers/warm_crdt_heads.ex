@@ -15,6 +15,11 @@ defmodule Engram.Workers.WarmCrdtHeads do
   alias Engram.DataMigrations
   alias Engram.Workers.BackfillCrdtHead
 
+  # One discovery scan per user plus inserts; the rebuilds run in the
+  # BackfillCrdtHead jobs it enqueues. Finite per #1496.
+  @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(10)
+
   @impl Oban.Worker
   def perform(_job) do
     # BackfillCrdtHead has no `unique`: enqueueing while a chain runs would
