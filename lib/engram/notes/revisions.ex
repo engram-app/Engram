@@ -5,8 +5,8 @@ defmodule Engram.Notes.Revisions do
   `record_write/4` runs inside a content write's own transaction, right after
   that write's fenced UPDATE succeeded, and decides whether the save starts a
   new version. A new version starts when a different actor writes, when more
-  than the session gap has passed since the note's last edit, or on the note's
-  first save after history shipped.
+  than the session gap has passed since the open version's last write, or on
+  the note's first save after history shipped.
 
   When it does, the version being closed gets a copy of the note's OLD content
   ciphertext (the outbox). Nothing is decrypted, and nothing touches storage:
@@ -111,8 +111,8 @@ defmodule Engram.Notes.Revisions do
   defp do_record_write(existing, actor, now) do
     case open_version(existing.id) do
       %Revision{actor: ^actor} = open ->
-        if within_gap?(existing.updated_at, now),
-          do: :ok,
+        if within_gap?(open.updated_at, now),
+          do: touch(open, now),
           else: close_and_open(open, existing, actor, now)
 
       %Revision{} = open ->
@@ -123,22 +123,49 @@ defmodule Engram.Notes.Revisions do
     end
   end
 
+  # The session gap runs from the open version's own last write, not from
+  # notes.updated_at, which renames and folder moves bump too. So each
+  # coalesced write restarts it.
+  defp touch(open, now) do
+    query = from(r in Revision, where: r.id == ^open.id and is_nil(r.closed_at))
+
+    case Repo.update_all(query, [set: [updated_at: now]], @savepoint) do
+      {1, _} -> :ok
+      {0, _} -> refused(open.note_id)
+    end
+  end
+
   # No open version. Either the note has no history at all (first save after
-  # history shipped: keep a baseline of the text being replaced), or a later
-  # issue left history without an open row (#1711 restore, #1712 prune). In
-  # the second case still keep the text being replaced rather than lose it.
+  # history shipped), or a later issue left history without an open row (#1711
+  # restore, #1712 prune). Either way keep the text being replaced as a
+  # baseline: its author is unknown, so it is not credited to this writer.
   defp first_or_orphaned(existing, actor, now) do
     copy_result =
-      cond do
-        not has_content?(existing) -> :ok
-        any_history?(existing.id) -> insert_closed_copy(existing, "edit", actor, now)
-        true -> insert_closed_copy(existing, "baseline", "baseline", now)
-      end
+      if has_content?(existing),
+        do: insert_baseline(existing, now),
+        else: :ok
 
     with :ok <- copy_result, do: insert_open(existing, actor, now)
   end
 
+  # No text to keep: drop the open version rather than close it with neither
+  # a pending copy nor a blob, the same rule the baseline follows.
   defp close_and_open(open, existing, actor, now) do
+    if has_content?(existing),
+      do: close_with_copy(open, existing, actor, now),
+      else: replace_open(open, existing, actor, now)
+  end
+
+  defp replace_open(open, existing, actor, now) do
+    query = from(r in Revision, where: r.id == ^open.id and is_nil(r.closed_at))
+
+    case Repo.delete_all(query, @savepoint) do
+      {1, _} -> insert_open(existing, actor, now)
+      {0, _} -> refused(existing.id)
+    end
+  end
+
+  defp close_with_copy(open, existing, actor, now) do
     query = from(r in Revision, where: r.id == ^open.id and is_nil(r.closed_at))
     set = [closed_at: now, updated_at: now] ++ Map.to_list(copy_of(existing))
 
@@ -158,16 +185,18 @@ defmodule Engram.Notes.Revisions do
       session_started_at: now
     }
     |> Revision.open_changeset()
+    # The session gap is measured from here (see touch/2).
+    |> Ecto.Changeset.put_change(:updated_at, now)
     |> insert(existing.id)
   end
 
-  defp insert_closed_copy(existing, origin, actor, now) do
+  defp insert_baseline(existing, now) do
     %{
       note_id: existing.id,
       user_id: existing.user_id,
       vault_id: existing.vault_id,
-      actor: actor,
-      origin: origin,
+      actor: "baseline",
+      origin: "baseline",
       session_started_at: existing.updated_at || now,
       closed_at: now
     }
@@ -197,10 +226,6 @@ defmodule Engram.Notes.Revisions do
       from(r in Revision, where: r.note_id == ^note_id and is_nil(r.closed_at)),
       @savepoint
     )
-  end
-
-  defp any_history?(note_id) do
-    Repo.exists?(from(r in Revision, where: r.note_id == ^note_id), @savepoint)
   end
 
   # The outbox copy: the note's own ciphertext, still bound to the notes AAD of

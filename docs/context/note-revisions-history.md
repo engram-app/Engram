@@ -8,6 +8,12 @@ rotation of history (#1713), or any code that writes `notes.content`.
 - A version is one editing session by one actor. It closes when a different
   actor writes, after 10 idle minutes (`HISTORY_SESSION_GAP_MINUTES`), or on
   the note's first save after history shipped (that save keeps a `baseline`).
+- The gap runs from the open version's own `updated_at`, which each coalesced
+  write bumps. Not `notes.updated_at`: renames and folder moves bump that.
+- Text with no known author (first save, or history left without an open
+  version) is kept as a `baseline`, never credited to the writer replacing it.
+  Empty text is never kept: an open version over an empty note is dropped,
+  not closed.
 - Actors: `sync` (your editor, plugin and CRDT clients, all one actor), `mcp`,
   `api:<key_id>`, `link_rewrite`, `maintenance`.
 - The open version (`closed_at IS NULL`) has no stored text: it IS the note.

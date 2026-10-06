@@ -125,13 +125,15 @@ defmodule Engram.Notes.RevisionsTest do
     assert revisions(u, existing.id) == []
   end
 
-  test "history with no open version keeps the replaced text as an edit copy", %{
+  test "history with no open version keeps the replaced text as a baseline", %{
     user: u,
     vault: v
   } do
     existing = create(u, v, "orphan.md", "first")
-    :ok = record(u, existing, "sync", DateTime.utc_now())
+    {:ok, _} = Notes.upsert_note(u, v, %{"path" => "orphan.md", "content" => "second"})
+    before_write = raw(u, existing.id)
 
+    # Orphan the history: close the open version without keeping its text.
     tenant(u, fn ->
       Repo.update_all(
         from(r in Revision, where: r.note_id == ^existing.id and is_nil(r.closed_at)),
@@ -139,15 +141,52 @@ defmodule Engram.Notes.RevisionsTest do
       )
     end)
 
-    {:ok, _} = Notes.upsert_note(u, v, %{"path" => "orphan.md", "content" => "second"})
-    before_write = raw(u, existing.id)
-
-    assert :ok = record(u, before_write, "sync", DateTime.utc_now())
+    assert :ok = record(u, before_write, "mcp", DateTime.utc_now())
 
     revs = revisions(u, existing.id)
-    copy = Enum.find(revs, &(&1.origin == "edit" and &1.closed_at && text_of(u, &1) == "second"))
-    assert copy
-    assert %Revision{actor: "sync"} = open(revs)
+    copy = Enum.find(revs, &(&1.closed_at && text_of(u, &1) == "second"))
+    # Not credited to the writer that replaced it: nobody knows who wrote it.
+    assert %Revision{origin: "baseline", actor: "baseline"} = copy
+    assert %Revision{actor: "mcp"} = open(revs)
+  end
+
+  test "a rename between two edits does not extend the session", %{user: u, vault: v} do
+    existing = create(u, v, "moved.md", "one")
+    t0 = existing.updated_at
+    :ok = record(u, %{existing | updated_at: t0}, "sync", t0)
+    first_open = open(revisions(u, existing.id))
+
+    # A rename 14 minutes in bumps notes.updated_at without a content write.
+    renamed = %{existing | updated_at: DateTime.add(t0, 14 * 60, :second)}
+    :ok = record(u, renamed, "sync", DateTime.add(t0, 15 * 60, :second))
+
+    assert open(revisions(u, existing.id)).id != first_open.id
+  end
+
+  test "each coalesced write restarts the session gap", %{user: u, vault: v} do
+    existing = create(u, v, "typing.md", "one")
+    t0 = existing.updated_at
+    :ok = record(u, %{existing | updated_at: t0}, "sync", t0)
+    first_open = open(revisions(u, existing.id))
+
+    :ok = record(u, %{existing | updated_at: t0}, "sync", DateTime.add(t0, 9 * 60, :second))
+    :ok = record(u, %{existing | updated_at: t0}, "sync", DateTime.add(t0, 18 * 60, :second))
+
+    assert open(revisions(u, existing.id)).id == first_open.id
+  end
+
+  test "closing over a note with no text leaves no empty closed version",
+       %{user: u, vault: v} do
+    existing = create(u, v, "blank.md", "text")
+    :ok = record(u, existing, "sync", DateTime.utc_now())
+    count = length(revisions(u, existing.id))
+
+    :ok = record(u, %{existing | content_ciphertext: nil}, "mcp", DateTime.utc_now())
+
+    revs = revisions(u, existing.id)
+    assert length(revs) == count
+    assert Enum.all?(revs, &(is_nil(&1.closed_at) or is_binary(&1.pending_ciphertext)))
+    assert %Revision{actor: "mcp"} = open(revs)
   end
 
   test "decrypt_pending with no pending copy is :nothing_pending", %{user: u} do
