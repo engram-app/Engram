@@ -20,7 +20,7 @@ defmodule Engram.Workers.FinalizeRevision do
   re-reading under it, makes the second run see the copy already cleared.
 
   The lock is held across the storage PUT, which keeps a tenant transaction
-  open for the length of one upload. That is acceptable on the `maintenance`
+  open for the length of one upload. That is acceptable on the `events`
   queue (worker nodes only, concurrency 2).
 
   ## A copy that can never decrypt
@@ -31,7 +31,7 @@ defmodule Engram.Workers.FinalizeRevision do
   error (a storage PUT, a DEK fetch) is transient: the job still attempts every
   other version, then returns the first such error so Oban retries.
   """
-  use Oban.Worker, queue: :maintenance, max_attempts: 10
+  use Oban.Worker, queue: :events, max_attempts: 10
 
   import Ecto.Query
 
@@ -56,7 +56,7 @@ defmodule Engram.Workers.FinalizeRevision do
     )
   end
 
-  # Finite so a hung storage PUT cannot pin a maintenance slot forever (#1496).
+  # Finite so a hung storage PUT cannot pin an events slot forever (#1496).
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(10)
 
