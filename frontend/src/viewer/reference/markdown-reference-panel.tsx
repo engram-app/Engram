@@ -12,9 +12,12 @@ import { insertSnippet } from "../editor/format-commands";
 import NoteView from "../note-view";
 import {
 	CATEGORY_INTROS,
+	entrySyntax,
 	filterSyntax,
 	groupByCategory,
 	previewSource,
+	resolveSample,
+	type Sample,
 	type SyntaxEntry,
 } from "./markdown-syntax";
 
@@ -205,9 +208,10 @@ function TemplateSource({ syntax }: { syntax: string }) {
 
 /** A rendered example. See PREVIEW for why links here are inert. */
 function Preview({ entry, className = "" }: { entry: SyntaxEntry; className?: string }) {
+	const { t } = useT();
 	return (
 		<span className={`${PREVIEW} ${className}`}>
-			<NoteView content={previewSource(entry)} tags={[]} />
+			<NoteView content={previewSource(entry, t)} tags={[]} />
 		</span>
 	);
 }
@@ -223,7 +227,7 @@ function InsertButton({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boo
 			onClick={() => {
 				const view = getView();
 				if (view) {
-					insertSnippet(view, entry.syntax, { block: entry.block });
+					insertSnippet(view, entrySyntax(entry, t), { block: entry.block });
 				}
 			}}
 			aria-label={t("Insert {label}", { label: t(entry.label) })}
@@ -343,7 +347,7 @@ function TemplateRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: bool
 							showsResult ? "min-w-min shrink" : "min-w-0 flex-1"
 						}`}
 					>
-						{entry.syntax}
+						{entrySyntax(entry, t)}
 					</code>
 					{previewable ? (
 						<>
@@ -386,13 +390,14 @@ function TemplateRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: bool
  * "\n": inside a <pre> they break the line just the same, and it keeps each line
  * addressable for styling.
  */
-function ContextLines({ lines }: { lines?: readonly string[] }) {
+function ContextLines({ lines }: { lines?: readonly Sample[] }) {
 	const { t } = useT();
 	// Keyed by INDEX, not by text: these are fixed, ordered lines that never
 	// reorder, and two blanks (or two identical lines) in one prelude would
 	// otherwise collide on the same key.
-	return lines?.map((line, i) =>
-		line === "" ? (
+	return lines?.map((sample, i) => {
+		const line = resolveSample(sample, t);
+		return line === "" ? (
 			// The rule the divider teaches is about a line with nothing on it.
 			// Rendering that blank line as a visible ghost shows the shape; prose
 			// could only assert it.
@@ -405,8 +410,8 @@ function ContextLines({ lines }: { lines?: readonly string[] }) {
 			<span key={i} className="block text-foreground">
 				{line}
 			</span>
-		),
-	);
+		);
+	});
 }
 
 /**
@@ -450,7 +455,7 @@ function BlockRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean
 					{/* The payload specifically — the context lines around it are not
 					    inserted, which is why the title sits here, not on the block. */}
 					<span title={t("Inserted at the cursor")} className="block text-foreground">
-						<TemplateSource syntax={entry.syntax} />
+						<TemplateSource syntax={entrySyntax(entry, t)} />
 					</span>
 					<ContextLines lines={entry.templatePostlude} />
 				</pre>
@@ -579,7 +584,7 @@ export default function MarkdownReferencePanel() {
 											<section className="border-border border-b bg-muted/30 px-3 py-2.5">
 												{intro.syntax ? (
 													<pre className="whitespace-pre-wrap break-words font-mono font-semibold text-foreground text-xs">
-														{intro.syntax}
+														{resolveSample(intro.syntax, t)}
 													</pre>
 												) : null}
 												<p className="text-muted-foreground text-xs">{t(intro.note)}</p>
