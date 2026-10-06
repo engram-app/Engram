@@ -9,9 +9,9 @@ defmodule EngramWeb.CrdtCreateQueryBudgetTest do
   alias Engram.{Crypto, Repo, TenantQueryCounter, Vaults}
   alias Engram.Notes.CrdtBridge
 
-  @max_statements 77
+  @max_statements 75
   @max_tenant_txns 10
-  @max_subscription_reads 4
+  @max_subscription_reads 2
 
   defp frame_for_content(content) do
     doc = CrdtBridge.new_doc()

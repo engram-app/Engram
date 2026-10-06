@@ -894,6 +894,9 @@ defmodule Engram.Notes do
 
     with {:ok, canonical_id} <- Ecto.UUID.cast(id),
          {:ok, user} <- Crypto.ensure_user_dek(user),
+         # One subscription read for the whole create, not one per limit check
+         # (history gate + notes cap resolved the tier three times, #1877).
+         user = Billing.with_subscription(user),
          {:ok, path} <- validate_path(path),
          sanitized_path = PathSanitizer.sanitize(path),
          folder = Helpers.extract_folder(sanitized_path),

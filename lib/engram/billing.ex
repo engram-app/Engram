@@ -429,6 +429,20 @@ defmodule Engram.Billing do
     end)
   end
 
+  @doc """
+  `user` with its subscription loaded, so every `tier/1` read one request makes
+  (a create resolves several limits) hits memory instead of a tenant
+  transaction each. Per-request only: the struct goes stale on a plan change,
+  so never keep it on a socket or in a cache.
+
+  A no-op when limits are not enforced (self-host): `effective_limit/2` never
+  resolves a tier there, so loading one would ADD a read.
+  """
+  @spec with_subscription(Engram.Accounts.User.t()) :: Engram.Accounts.User.t()
+  def with_subscription(%Engram.Accounts.User{} = user) do
+    if enforced?(), do: %{user | subscription: get_subscription(user)}, else: user
+  end
+
   @doc "Returns remaining trial days from the Paddle subscription, or 0."
   def trial_days_remaining(user) do
     case get_subscription(user) do

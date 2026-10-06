@@ -101,6 +101,30 @@ defmodule Engram.BillingTest do
     end
   end
 
+  describe "with_subscription/1" do
+    test "loads the row once so later tier reads skip the DB" do
+      user = insert(:user)
+      insert(:subscription, user: user, tier: "pro", status: "active")
+
+      loaded = Billing.with_subscription(user)
+      assert %Subscription{tier: "pro"} = loaded.subscription
+      assert Billing.tier(loaded) == :pro
+    end
+
+    test "loads nil for a user without a subscription (still memoized)" do
+      assert %{subscription: nil} = Billing.with_subscription(insert(:user))
+    end
+
+    test "leaves the user untouched when limits are not enforced" do
+      prev = Application.get_env(:engram, :limits_enforced, true)
+      Application.put_env(:engram, :limits_enforced, false)
+      on_exit(fn -> Application.put_env(:engram, :limits_enforced, prev) end)
+
+      user = insert(:user)
+      assert Billing.with_subscription(user) == user
+    end
+  end
+
   describe "tier/1" do
     test "returns :starter when user has active starter subscription" do
       user = build(:user) |> with_subscription(tier: "starter", status: "active")
