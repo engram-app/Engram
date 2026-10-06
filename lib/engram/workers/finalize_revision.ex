@@ -25,8 +25,8 @@ defmodule Engram.Workers.FinalizeRevision do
 
   ## A copy that can never decrypt
 
-  `{:error, :decrypt_failed}` is permanent: retrying cannot change the bytes.
-  Such a row gets `finalize_failed_at` and is skipped from then on, by this job
+  `:decrypt_failed`, `:no_dek` and `:unrecognised_blob` are permanent:
+  retrying cannot change the bytes or conjure a DEK. Such a row gets `finalize_failed_at` and is skipped from then on, by this job
   and by the sweep, so it cannot block the note's later versions. Any other
   error (a storage PUT, a DEK fetch) is transient: the job still attempts every
   other version, then returns the first such error so Oban retries.
@@ -97,7 +97,7 @@ defmodule Engram.Workers.FinalizeRevision do
 
         case Repo.get(Revision, revision_id) do
           %Revision{pending_ciphertext: ct, finalize_failed_at: nil} = rev when is_binary(ct) ->
-            rev |> upload(user) |> park_if_undecryptable(rev)
+            rev |> upload(user) |> park_if_permanent(rev)
 
           _done_parked_or_gone ->
             :ok
@@ -115,27 +115,38 @@ defmodule Engram.Workers.FinalizeRevision do
       key = Storage.revision_key(rev.user_id, rev.vault_id, rev.note_id, rev.id)
 
       with :ok <- Storage.adapter().put(key, ct, content_type: "application/octet-stream") do
-        {1, _} =
-          Repo.update_all(from(r in Revision, where: r.id == ^rev.id),
-            set: [
-              storage_key: key,
-              blob_nonce: nonce,
-              char_count: String.length(text),
-              dek_version: Crypto.row_version_aad_bound(),
-              pending_ciphertext: nil,
-              pending_nonce: nil,
-              pending_dek_version: nil,
-              updated_at: DateTime.utc_now()
-            ]
-          )
+        Repo.update_all(from(r in Revision, where: r.id == ^rev.id),
+          set: [
+            storage_key: key,
+            blob_nonce: nonce,
+            char_count: String.length(text),
+            dek_version: Crypto.row_version_aad_bound(),
+            pending_ciphertext: nil,
+            pending_nonce: nil,
+            pending_dek_version: nil,
+            updated_at: DateTime.utc_now()
+          ]
+        )
+        |> case do
+          {1, _} ->
+            :ok
 
-        :ok
+          # The row went (its note deleted, cascading) while the PUT ran. Remove
+          # the blob it would have pointed at; nothing is left to finalize.
+          {0, _} ->
+            _ = Storage.adapter().delete(key)
+            :ok
+        end
       end
     end
   end
 
+  # Errors retrying cannot change: the bytes will not decrypt, or the user has
+  # no usable DEK at all. A KMS unwrap failure stays transient.
+  @permanent [:decrypt_failed, :no_dek, :unrecognised_blob]
+
   # Still under the advisory lock taken in finalize_one/2.
-  defp park_if_undecryptable({:error, :decrypt_failed} = reason, rev) do
+  defp park_if_permanent({:error, reason}, rev) when reason in @permanent do
     now = DateTime.utc_now()
 
     {1, _} =
@@ -144,7 +155,7 @@ defmodule Engram.Workers.FinalizeRevision do
       )
 
     Logger.error(
-      "finalize_revision parked an undecryptable copy note_id=#{rev.note_id} " <>
+      "finalize_revision parked a copy that cannot finalize note_id=#{rev.note_id} " <>
         "revision_id=#{rev.id} err=#{Metadata.safe_reason(reason)}",
       Metadata.with_category(:error, :oban, note_id: rev.note_id)
     )
@@ -152,5 +163,5 @@ defmodule Engram.Workers.FinalizeRevision do
     :ok
   end
 
-  defp park_if_undecryptable(result, _rev), do: result
+  defp park_if_permanent(result, _rev), do: result
 end

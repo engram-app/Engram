@@ -7,6 +7,28 @@ defmodule Engram.Workers.FinalizeRevisionTest.FailingStorage do
   end
 end
 
+defmodule Engram.Workers.FinalizeRevisionTest.VanishingStorage do
+  @moduledoc false
+  # The real adapter, except that the revision row disappears during the PUT,
+  # the way a note delete cascading mid-upload would remove it.
+  import Ecto.Query
+
+  def put(key, binary, opts) do
+    id = Path.basename(key)
+    Engram.Repo.delete_all(from(r in Engram.Notes.Revision, where: r.id == ^id))
+    real().put(key, binary, opts)
+  end
+
+  def delete(key) do
+    send(self(), {:deleted, key})
+    real().delete(key)
+  end
+
+  def get(key), do: real().get(key)
+
+  defp real, do: Process.get(:real_storage)
+end
+
 defmodule Engram.Workers.FinalizeRevisionTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
@@ -170,5 +192,32 @@ defmodule Engram.Workers.FinalizeRevisionTest do
     rev = reload(u, b.id)
     assert rev.pending_ciphertext
     assert rev.finalize_failed_at == nil
+  end
+
+  test "a revision gone by the time the upload lands leaves no blob behind",
+       %{user: u, note: n, baseline: b} do
+    previous = Application.get_env(:engram, :storage)
+    Process.put(:real_storage, Storage.adapter())
+    Application.put_env(:engram, :storage, __MODULE__.VanishingStorage)
+    on_exit(fn -> Application.put_env(:engram, :storage, previous) end)
+
+    assert :ok = perform_job(FinalizeRevision, %{note_id: n.id, user_id: u.id})
+
+    key = Storage.revision_key(u.id, b.vault_id, n.id, b.id)
+    assert_received {:deleted, ^key}
+    assert {:error, :not_found} = Process.get(:real_storage).get(key)
+  end
+
+  test "a user with no DEK parks the copy instead of retrying forever",
+       %{user: u, note: n, baseline: b} do
+    Repo.update_all(from(x in Engram.Accounts.User, where: x.id == ^u.id),
+      set: [encrypted_dek: nil]
+    )
+
+    assert :ok = perform_job(FinalizeRevision, %{note_id: n.id, user_id: u.id})
+
+    parked = reload(u, b.id)
+    assert parked.finalize_failed_at
+    assert parked.pending_ciphertext
   end
 end

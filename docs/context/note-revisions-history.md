@@ -56,7 +56,9 @@ backstop is `Engram.Workers.FinalizeRevisionSweep` (`35 * * * *`).
   also skips finalize when the pre-write row had no text. The sweep enqueues
   `FinalizeRevision.job/2` regardless, so copies written before a switch-off
   still reach storage.
-- **A copy that can never decrypt is parked, not retried.** It gets
+- **A copy that can never finalize is parked, not retried** (it will not
+  decrypt, or the user has no usable DEK; a KMS unwrap failure stays
+  transient). It gets
   `finalize_failed_at` and is skipped by the job and the sweep from then on,
   so it cannot block the note's later versions. Find them with
   `finalize_failed_at IS NOT NULL`; the error log line names the revision id.
