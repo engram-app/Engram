@@ -7,11 +7,13 @@ defmodule Engram.ObanQueueConfigTest do
   # compile/CI time instead of via a Grafana backlog days later.
   use ExUnit.Case, async: true
 
+  alias Engram.Test.ObanWorkers
+
   test "every Oban worker's queue is registered in the Oban queues config" do
     configured = MapSet.new(configured_queues())
 
     offenders =
-      for mod <- Engram.Test.ObanWorkers.all(),
+      for mod <- ObanWorkers.all(),
           queue = worker_queue(mod),
           queue not in configured,
           do: {mod, queue}
@@ -41,10 +43,10 @@ defmodule Engram.ObanQueueConfigTest do
   ]
 
   test "maintenance runs exactly the cron workers" do
-    crons = MapSet.new(Engram.Test.ObanWorkers.crontab(), fn {_expr, worker} -> worker end)
+    crons = MapSet.new(ObanWorkers.crontab(), fn {_expr, worker} -> worker end)
 
     on_maintenance =
-      for mod <- Engram.Test.ObanWorkers.all(),
+      for mod <- ObanWorkers.all(),
           worker_queue(mod) == :maintenance,
           into: MapSet.new(),
           do: mod
@@ -61,7 +63,7 @@ defmodule Engram.ObanQueueConfigTest do
   # slot and delay a DEK or master-key rotation queued behind them.
   test "crypto_backfill runs only the key-rotation workers" do
     on_crypto =
-      for mod <- Engram.Test.ObanWorkers.all(), worker_queue(mod) == :crypto_backfill, do: mod
+      for mod <- ObanWorkers.all(), worker_queue(mod) == :crypto_backfill, do: mod
 
     assert Enum.sort(on_crypto) ==
              Enum.sort([
