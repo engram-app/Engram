@@ -41,7 +41,7 @@ defmodule Engram.Workers.FinalizeRevisionRaceTest do
     {:ok, existing} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
 
     {:ok, :ok} =
-      Repo.with_tenant(user.id, fn -> Revisions.record_write(existing, user, "sync") end)
+      Repo.with_tenant(user.id, fn -> Revisions.record_write(existing, "sync", true) end)
 
     rev_id =
       Repo.one!(

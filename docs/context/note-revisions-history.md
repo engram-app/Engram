@@ -38,14 +38,18 @@ backstop is `Engram.Workers.FinalizeRevisionSweep` (`35 * * * *`).
   `ContentCommit.after_commit/3` for the checkpoint and both upsert branches
   (the `:moved` one included), and, for the CRDT relocate/resurrect legs of
   `genesis_crdt_note/5`, from `finalize_moved_revision/2` after the
-  transaction (enqueue only, no embed or link extraction). Each is gated on a
-  changed content hash. Missing `record_write/4` means no history for that
+  transaction (enqueue only, no embed or link extraction). Each is gated on
+  `Revisions.finalize?/3`: recording was on, the write was an update, and the
+  content hash changed. Missing `record_write/4` means no history for that
   writer; missing the enqueue leaves the copy to the hourly sweep (10 to 70
   minutes).
-- **`FinalizeRevision.new_for_note/2` returns `:skip` while recording is
-  off.** `Enqueue.enqueue/2` drops it. The sweep
-  uses `FinalizeRevision.job/2`, which ignores the switch, so copies written
-  before a switch-off still reach storage.
+- **Evaluate `Revisions.recording?/1` BEFORE the write transaction** and pass
+  the boolean to `record_write/4` and `finalize?/3`. Inside the transaction the
+  billing lookup would run under the vault row lock `Vaults.next_seq!` takes.
+  A CRDT-created row holds the hash of empty text, not nil, so the checkpoint
+  also skips finalize when the pre-write row had no text. The sweep enqueues
+  `FinalizeRevision.job/2` regardless, so copies written before a switch-off
+  still reach storage.
 - **A copy that can never decrypt is parked, not retried.** It gets
   `finalize_failed_at` and is skipped by the job and the sweep from then on,
   so it cannot block the note's later versions. Find them with

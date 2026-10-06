@@ -29,18 +29,42 @@ defmodule Engram.Notes.ContentCommitTest do
 
   test "after_commit enqueues embed, links and finalize" do
     note_id = Ecto.UUID.generate()
-    :ok = ContentCommit.after_commit(note_id, Ecto.UUID.generate(), embed_priority: 0)
+
+    :ok =
+      ContentCommit.after_commit(note_id, Ecto.UUID.generate(),
+        embed_priority: 0,
+        finalize?: true
+      )
+
     assert_all_enqueued(note_id)
   end
 
+  # The create enqueues embed and links too, so drop them: the update alone
+  # must be what the assertions see.
+  defp drop_jobs, do: Repo.delete_all(Oban.Job)
+
   test "an upsert that changes content runs it", %{user: u, vault: v} do
     {:ok, note} = Notes.upsert_note(u, v, %{"path" => "u.md", "content" => "one"})
+    drop_jobs()
     {:ok, _} = Notes.upsert_note(u, v, %{"path" => "u.md", "content" => "two"})
     assert_all_enqueued(note.id)
   end
 
+  test "a create enqueues no finalize", %{user: u, vault: v} do
+    {:ok, note} = Notes.upsert_note(u, v, %{"path" => "new.md", "content" => "one"})
+    refute_enqueued(worker: FinalizeRevision, args: %{note_id: note.id})
+  end
+
+  test "an update by a user without history enqueues no finalize", %{user: u, vault: v} do
+    insert(:user_limit_override, user: u, key: "history_enabled", value: %{"v" => false})
+    {:ok, note} = Notes.upsert_note(u, v, %{"path" => "nh.md", "content" => "one"})
+    {:ok, _} = Notes.upsert_note(u, v, %{"path" => "nh.md", "content" => "two"})
+    refute_enqueued(worker: FinalizeRevision, args: %{note_id: note.id})
+  end
+
   test "a content-changing checkpoint runs it", %{user: u, vault: v} do
     {:ok, note} = Notes.upsert_note(u, v, %{"path" => "c.md", "content" => "before"})
+    drop_jobs()
     {:ok, raw} = Repo.with_tenant(u.id, fn -> Repo.get!(Note, note.id) end)
     {:ok, state} = Crypto.decrypt_crdt_state(raw, u)
     {:ok, doc} = CrdtBridge.doc_from_state(state)
@@ -49,5 +73,18 @@ defmodule Engram.Notes.ContentCommitTest do
     :ok = CrdtCheckpoint.checkpoint(u.id, v.id, note.id, doc)
 
     assert_enqueued(worker: FinalizeRevision, args: %{note_id: note.id})
+  end
+
+  test "the first checkpoint of a CRDT-created note enqueues no finalize",
+       %{user: u, vault: v} do
+    id = UUIDv7.generate()
+    {:ok, _} = Notes.genesis_crdt_note(u, v, id, "g.md")
+    doc = Yex.Doc.new()
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "first")
+
+    :ok = CrdtCheckpoint.checkpoint(u.id, v.id, id, doc)
+
+    assert_enqueued(worker: EmbedNote, args: %{note_id: id})
+    refute_enqueued(worker: FinalizeRevision, args: %{note_id: id})
   end
 end

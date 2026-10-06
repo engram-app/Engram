@@ -22,7 +22,10 @@ defmodule Engram.Notes.RevisionsTest do
   defp raw(user, id), do: tenant(user, fn -> Repo.get!(Note, id) end)
 
   defp record(user, existing, actor, now),
-    do: tenant(user, fn -> Revisions.record_write(existing, user, actor, now) end)
+    do:
+      tenant(user, fn ->
+        Revisions.record_write(existing, actor, Revisions.recording?(user), now)
+      end)
 
   defp revisions(user, note_id),
     do: tenant(user, fn -> Repo.all(from(r in Revision, where: r.note_id == ^note_id)) end)
@@ -160,7 +163,7 @@ defmodule Engram.Notes.RevisionsTest do
 
     {:ok, {result, count}} =
       Repo.with_tenant(u.id, fn ->
-        result = Revisions.record_write(orphan, u, "sync", DateTime.utc_now())
+        result = Revisions.record_write(orphan, "sync", true, DateTime.utc_now())
         {result, Repo.one(from(n in Note, select: count(n.id)))}
       end)
 
@@ -168,40 +171,19 @@ defmodule Engram.Notes.RevisionsTest do
     assert count >= 1
   end
 
-  describe "the billing lookup is contained" do
-    test "a failed statement inside contain/1 leaves the transaction usable", %{user: u} do
-      result =
-        tenant(u, fn ->
-          assert_raise Postgrex.Error, fn ->
-            Revisions.contain(fn -> Repo.query!("SELECT 1 / 0") end)
-          end
+  # The lookup runs before the write's transaction now, so containing it means
+  # answering false instead of raising into the caller's save.
+  test "a failed billing lookup answers false instead of raising", %{user: u} do
+    Engram.Billing.OverrideCache.evict(u.id)
 
-          Repo.query!("SELECT 1").rows
-        end)
+    # Not a UUID: the override query fails to cast before reaching the DB.
+    refute Revisions.recording?(%{u | id: "not-a-uuid"})
+  end
 
-      assert result == [[1]]
-    end
-
-    test "contain/1 returns the function's value", %{user: u} do
-      assert tenant(u, fn -> Revisions.contain(fn -> :value end) end) == :value
-    end
-
-    test "a billing DB error fails the history step, not the caller's transaction",
-         %{user: u, vault: v} do
-      existing = create(u, v, "billing.md", "text")
-      Engram.Billing.OverrideCache.evict(u.id)
-
-      result =
-        tenant(u, fn ->
-          # Nothing resolves under this search_path, so the override lookup
-          # inside Billing.granted?/2 fails with undefined_table.
-          Repo.query!("SET LOCAL search_path TO history_no_such_schema")
-          history = Revisions.record_write(existing, u, "sync")
-          Repo.query!("SET LOCAL search_path TO public")
-          {history, Repo.query!("SELECT count(*) FROM notes").num_rows}
-        end)
-
-      assert result == {:error, 1}
-    end
+  test "finalize? only for a recorded update that changed content" do
+    assert Revisions.finalize?(true, "old", "new")
+    refute Revisions.finalize?(true, nil, "new")
+    refute Revisions.finalize?(true, "same", "same")
+    refute Revisions.finalize?(false, "old", "new")
   end
 end

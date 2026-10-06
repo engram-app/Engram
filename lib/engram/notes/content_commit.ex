@@ -6,6 +6,10 @@ defmodule Engram.Notes.ContentCommit do
   content branches of `Notes.upsert_note/4`) after the write's transaction
   commits, only when the content hash actually changed.
 
+  `:finalize?` is required: `Engram.Notes.Revisions.finalize?/3` for the
+  write, so a create or a write history did not record enqueues no
+  `FinalizeRevision`.
+
   Site-specific work stays at the site: the checkpoint's announce, upsert's
   broadcast and link rebind.
   """
@@ -25,7 +29,9 @@ defmodule Engram.Notes.ContentCommit do
     _ = Enqueue.enqueue(ExtractNoteLinks.new_debounced(note_id, user_id), "extract_note_links")
 
     # #1710: move any version copy this write's transaction left behind.
-    _ = Enqueue.enqueue(FinalizeRevision.new_for_note(note_id, user_id), "finalize_revision")
+    _ =
+      if Keyword.fetch!(opts, :finalize?),
+        do: Enqueue.enqueue(FinalizeRevision.job(note_id, user_id), "finalize_revision")
 
     :ok
   end

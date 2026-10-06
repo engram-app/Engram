@@ -22,17 +22,24 @@ defmodule Engram.Notes.Revisions do
   happened. After a successful UPDATE the note row is locked until commit, so
   concurrent saves to one note serialize behind it, history step included.
 
+  ## Recording is decided before the transaction
+
+  Each caller evaluates `recording?/1` (the global switch AND the tier key)
+  BEFORE opening its write transaction and passes the boolean in. The billing
+  lookup then never runs under the vault row lock `Vaults.next_seq!` takes, and
+  the same answer gates the post-commit finalize enqueue (`finalize?/3`).
+
   ## History never fails a save
 
   Every statement runs with `mode: :savepoint`, so a failure rolls back only
-  itself and leaves the caller's transaction usable. The billing lookup, whose
-  statements Billing issues itself, runs under `contain/1` for the same reason. The function-level rescue
-  is total (every exception, not just database errors): a cast error, a bad
-  AAD argument or a billing lookup failure must not fail the caller's save any
-  more than a constraint violation may. It logs at error level with a
-  redacted reason and returns `:error`. That is a deliberate isolation
-  boundary, not a silent swallow: losing one history entry is the right trade
-  against losing the user's write, and the log line says so on its own key.
+  itself and leaves the caller's transaction usable. The function-level rescue
+  is total (every exception, not just database errors): a cast error or a bad
+  AAD argument must not fail the caller's save any more than a constraint
+  violation may. It logs at error level with a redacted reason and returns
+  `:error`. That is a deliberate isolation boundary, not a silent swallow:
+  losing one history entry is the right trade against losing the user's write,
+  and the log line says so on its own key. `recording?/1` holds the same line
+  for the billing lookup: a failure there logs and records nothing.
   """
   import Ecto.Query
 
@@ -48,56 +55,48 @@ defmodule Engram.Notes.Revisions do
 
   @savepoint [mode: :savepoint]
 
-  @doc "True when history is recorded for `user`: the global switch AND the tier key."
+  @doc """
+  True when history is recorded for `user`: the global switch AND the tier key.
+  Call it before the write's transaction. A failed billing lookup logs and
+  answers false, so it never fails the save it gates.
+  """
   @spec recording?(User.t()) :: boolean()
   def recording?(%User{} = user) do
     Application.get_env(:engram, :history_recording, false) and
-      contain(fn -> Billing.granted?(user, :history_enabled) end)
+      Billing.granted?(user, :history_enabled)
+  rescue
+    e ->
+      Logger.error(
+        "history recording? lookup failed user_id=#{user.id} err=#{Metadata.safe_reason(e)} " <>
+          "at=#{Metadata.format_location(__STACKTRACE__)}",
+        Metadata.with_category(:error, :sync, user_id: user.id)
+      )
+
+      false
   end
 
   @doc """
-  Run `fun` under its own SAVEPOINT when inside a transaction, and roll back to
-  it if `fun` raises, then re-raise.
-
-  `Billing.granted?/2` reads the DB on a cache miss, inside the caller's write
-  transaction. A failed statement there would leave that transaction aborted
-  and fail the user's save even though `record_write/4` rescues the exception.
-  The per-statement `mode: :savepoint` option cannot reach queries Billing
-  issues itself, and a nested `Repo.transaction/2` takes no savepoint
-  (DBConnection runs it inline in the outer transaction), so this issues the
-  savepoint statements directly.
+  Whether a committed write should enqueue `FinalizeRevision`: history was
+  recording for it, it UPDATED an existing note (a create has no old text to
+  copy), and the content changed.
   """
-  @spec contain((-> result)) :: result when result: term()
-  def contain(fun) when is_function(fun, 0) do
-    if Repo.in_transaction?() do
-      _ = Repo.query!("SAVEPOINT history_contain")
-
-      try do
-        fun.()
-      rescue
-        e ->
-          _ = Repo.query!("ROLLBACK TO SAVEPOINT history_contain")
-          _ = Repo.query!("RELEASE SAVEPOINT history_contain")
-          reraise e, __STACKTRACE__
-      else
-        result ->
-          _ = Repo.query!("RELEASE SAVEPOINT history_contain")
-          result
-      end
-    else
-      fun.()
-    end
-  end
+  @spec finalize?(boolean(), String.t() | nil, String.t() | nil) :: boolean()
+  def finalize?(recording, prev_hash, new_hash),
+    do: recording and is_binary(prev_hash) and prev_hash != new_hash
 
   @doc """
   Record a content write. Call inside the write's transaction, AFTER its fenced
   UPDATE succeeded. `existing` is the PRE-write row: its `content_ciphertext`
-  is the text being replaced.
+  is the text being replaced. `recording` is `recording?/1`, evaluated before
+  the transaction opened.
   """
-  @spec record_write(Note.t(), User.t(), String.t(), DateTime.t()) :: :ok | :skipped | :error
-  def record_write(%Note{} = existing, %User{} = user, actor, now \\ DateTime.utc_now())
-      when is_binary(actor) do
-    if recording?(user), do: do_record_write(existing, actor, now), else: :skipped
+  @spec record_write(Note.t(), String.t(), boolean(), DateTime.t()) :: :ok | :skipped | :error
+  def record_write(existing, actor, recording, now \\ DateTime.utc_now())
+
+  def record_write(%Note{}, actor, false, _now) when is_binary(actor), do: :skipped
+
+  def record_write(%Note{} = existing, actor, true, now) when is_binary(actor) do
+    do_record_write(existing, actor, now)
   rescue
     e ->
       Logger.error(

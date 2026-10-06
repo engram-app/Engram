@@ -197,6 +197,11 @@ defmodule Engram.Notes.CrdtCheckpoint do
           end
       end
 
+    # #1710: decided once, before the transaction (see Revisions moduledoc), so
+    # the billing lookup never runs under the vault row lock next_seq! takes.
+    recording = Revisions.recording?(user)
+    opts = Keyword.put(opts, :recording, recording)
+
     # Phase 0 monotonicity (identity-as-CRDT): never materialize the live doc's
     # state directly. Encode it ONCE (read-only — the room's doc is never
     # mutated from here), then fold the row's STORED state into a scratch doc
@@ -253,9 +258,17 @@ defmodule Engram.Notes.CrdtCheckpoint do
                 # so a first sync's whole flood is ranked here or nowhere — and
                 # reading `note` again after the commit would both cost a query
                 # and see the wrong (post-write) row.
+                #
+                # #1710: the finalize decision rides out the same way. A
+                # CRDT-created row holds the hash of empty text, not nil, so its
+                # first checkpoint is the create and has no old text to finalize.
                 case result do
                   {prev_hash, new_hash, path} ->
-                    {prev_hash, new_hash, path, EmbedNote.priority_for(note)}
+                    finalize? =
+                      note.content not in [nil, ""] and
+                        Revisions.finalize?(recording, prev_hash, new_hash)
+
+                    {prev_hash, new_hash, path, EmbedNote.priority_for(note), finalize?}
 
                   other ->
                     other
@@ -264,10 +277,14 @@ defmodule Engram.Notes.CrdtCheckpoint do
           end)
 
         case outcome do
-          {prev_hash, new_hash, path, embed_priority} ->
+          {prev_hash, new_hash, path, embed_priority, finalize?} ->
             _ =
               if prev_hash != new_hash do
-                :ok = ContentCommit.after_commit(note_id, user_id, embed_priority: embed_priority)
+                :ok =
+                  ContentCommit.after_commit(note_id, user_id,
+                    embed_priority: embed_priority,
+                    finalize?: finalize?
+                  )
 
                 # Deliver-out gap: a web-editor edit lands ONLY via this checkpoint,
                 # which (unlike REST/MCP writes) never announced. A client not
@@ -562,7 +579,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
             # happened. `note` is the PRE-write row, so its content_ciphertext
             # is exactly the text this checkpoint replaced. Every edit that
             # reaches a checkpoint is the user's own CRDT clients: actor "sync".
-            _ = Revisions.record_write(note, user, "sync")
+            _ = Revisions.record_write(note, "sync", Keyword.fetch!(opts, :recording))
 
             {prev, content_hash, note.path}
 

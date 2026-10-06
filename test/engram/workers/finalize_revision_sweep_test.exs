@@ -17,7 +17,7 @@ defmodule Engram.Workers.FinalizeRevisionSweepTest do
     {:ok, existing} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
 
     {:ok, :ok} =
-      Repo.with_tenant(user.id, fn -> Revisions.record_write(existing, user, "sync") end)
+      Repo.with_tenant(user.id, fn -> Revisions.record_write(existing, "sync", true) end)
 
     # The write's own after_commit already enqueued a job; drop it so the tests
     # observe only what the sweep enqueues (a lost job is what the sweep is for).

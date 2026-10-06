@@ -28,7 +28,7 @@ defmodule Engram.Workers.FinalizeRevisionTest do
     {:ok, existing} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
 
     {:ok, :ok} =
-      Repo.with_tenant(user.id, fn -> Revisions.record_write(existing, user, "sync") end)
+      Repo.with_tenant(user.id, fn -> Revisions.record_write(existing, "sync", true) end)
 
     {:ok, baseline} =
       Repo.with_tenant(user.id, fn ->
@@ -90,11 +90,11 @@ defmodule Engram.Workers.FinalizeRevisionTest do
              })
   end
 
-  test "new_for_note is unique per note while waiting" do
+  test "job is unique per note while waiting" do
     note_id = Ecto.UUID.generate()
     user_id = Ecto.UUID.generate()
-    {:ok, _} = Oban.insert(FinalizeRevision.new_for_note(note_id, user_id))
-    {:ok, _} = Oban.insert(FinalizeRevision.new_for_note(note_id, user_id))
+    {:ok, _} = Oban.insert(FinalizeRevision.job(note_id, user_id))
+    {:ok, _} = Oban.insert(FinalizeRevision.job(note_id, user_id))
 
     assert length(all_enqueued(worker: FinalizeRevision, args: %{note_id: note_id})) == 1
   end
