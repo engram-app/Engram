@@ -45,8 +45,9 @@ as A, INSERT owned by A: INSERT 0 1   <- control; without it a role that rejects
 SET ROLE engram_admin / DISABLE RLS / CREATE POLICY: denied
 ```
 
-`api_keys` returns rows with no tenant set by design (`api_keys_discovery`,
-see `rls-cutover-breaks-api-key-auth.md`).
+`api_keys` returned rows with no tenant set by design (`api_keys_discovery`,
+see `rls-cutover-breaks-api-key-auth.md`). Since #1867 the policy is scoped
+`TO engram_key_lookup`, so plain `engram_app` reads 0 there too.
 
 ## What the 2026-09-25 measurement settled
 

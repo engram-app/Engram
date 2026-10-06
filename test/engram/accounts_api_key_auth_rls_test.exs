@@ -126,8 +126,40 @@ defmodule Engram.AccountsApiKeyAuthRlsTest do
              "a scoped connection read another user's api_keys: the discovery " <>
                "policy is too permissive (USING (true) rather than tenant-unset)"
 
-      # Contrast: with no tenant, the discovery policy is what makes auth work.
-      assert {:returned, 1} = as_prod_role(count)
+      # Contrast: with no tenant, plain engram_app still sees nothing (#1867);
+      # only the dedicated lookup role, which `validate_api_key/1` assumes, does.
+      assert {:returned, 0} = as_prod_role(count)
+
+      assert {:returned, 1} =
+               as_prod_role(fn ->
+                 Repo.query!("SET LOCAL ROLE engram_key_lookup")
+                 count.()
+               end)
+    end
+
+    # #1867. `api_keys_discovery` used to apply to every role, so ANY unscoped
+    # query as engram_app (here a join from users) returned every user's key
+    # hashes. Scoped `TO engram_key_lookup`, which engram_app holds without
+    # INHERIT, plain engram_app with no tenant sees zero rows.
+    test "an unscoped join from users to api_keys sees no keys", %{user: user} do
+      other = insert(:user)
+      {:ok, _raw, _key} = Accounts.create_api_key(other, "other user's key")
+
+      # Precondition: the superuser sees both keys, so 0 below is not vacuous.
+      assert %{rows: [[2]]} =
+               Repo.query!(
+                 "SELECT count(*) FROM users u JOIN api_keys k ON k.user_id = u.id " <>
+                   "WHERE u.id = ANY($1)",
+                 [[Ecto.UUID.dump!(user.id), Ecto.UUID.dump!(other.id)]]
+               )
+
+      assert {:returned, %{rows: []}} =
+               as_prod_role(fn ->
+                 Repo.query!(
+                   "SELECT u.email, k.name, k.key_hash, k.user_id " <>
+                     "FROM users u JOIN api_keys k ON k.user_id = u.id"
+                 )
+               end)
     end
   end
 

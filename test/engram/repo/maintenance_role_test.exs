@@ -86,8 +86,7 @@ defmodule Engram.Repo.MaintenanceRoleTest do
 
     {:ok, {seen, updated}} =
       as_role("engram_maintenance", fn ->
-        {Map.new(@tenant_tables, &{&1, count(&1)}),
-         Map.new(@tenant_tables, &{&1, self_update(&1)})}
+        {Map.new(readable, &{&1, count(&1)}), Map.new(@tenant_tables, &{&1, self_update(&1)})}
       end)
 
     assert seen == expected
@@ -97,10 +96,11 @@ defmodule Engram.Repo.MaintenanceRoleTest do
   test "CONTROL: engram_app with no tenant set still sees and updates nothing" do
     seed_foreign_tenant()
 
-    # api_keys and subscriptions are excluded: `api_keys_discovery` and
-    # `subscriptions_discovery` deliberately widen SELECT when no tenant is set
-    # (see 20260918120000, 20261006180000). Their UPDATE is still filtered.
-    readable = @tenant_tables -- ["api_keys", "subscriptions"]
+    # subscriptions is excluded: `subscriptions_discovery` deliberately widens
+    # SELECT when no tenant is set (see 20261006180000). Its UPDATE is still
+    # filtered. api_keys is included: `api_keys_discovery` is scoped TO
+    # engram_key_lookup (#1867), so it no longer widens engram_app's reads.
+    readable = @tenant_tables -- ["subscriptions"]
 
     {:ok, {seen, updated}} =
       as_role("engram_app", fn ->
