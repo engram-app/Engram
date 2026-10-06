@@ -2,6 +2,7 @@ import { Sparkles } from "lucide-react";
 import { Children, type ReactNode } from "react";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
+import { intlLocale } from "@/lib/intl-locale";
 import { cn } from "@/lib/utils";
 import type { BillingStatus, IndexStatus } from "../api/queries";
 import { statusLabel } from "./format";
@@ -26,13 +27,16 @@ export default function CurrentPlanCard({
 	indexStatus?: IndexStatus;
 	children?: ReactNode;
 }) {
-	const { t, tn } = useT();
-	const unsearchable = indexStatus ? unsearchableNotesNotice(indexStatus, tn) : null;
+	const { t, tn, renderedLocale } = useT();
+	const localeTag = intlLocale(renderedLocale);
+	const unsearchable = indexStatus
+		? unsearchableNotesNotice(indexStatus, tn, renderedLocale)
+		: null;
 	const sub = billing.subscription;
 	const canceled = sub?.status === "canceled";
 	const trialing = sub?.status === "trialing";
 	const periodEnd = sub?.current_period_end
-		? new Date(sub.current_period_end).toLocaleDateString()
+		? new Date(sub.current_period_end).toLocaleDateString(localeTag)
 		: null;
 	// A canceled subscription keeps access until the period ends, so the same
 	// date means "renews" while live and "access ends" once cancellation is set.

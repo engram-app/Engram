@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useT } from "@/i18n/locale-provider";
+import { intlLocale } from "@/lib/intl-locale";
 import { formatDate, formatMoney } from "@/lib/paddle-format";
 import { getPaymentMethodDisplay } from "@/lib/paddle-payment-method-display";
 import type { NextPaymentData, PaymentMethodData } from "@/lib/paddle-types";
@@ -90,7 +91,8 @@ export function SubscriptionPaymentCard({
 	updatePaymentMethodUrl,
 	className,
 }: SubscriptionPaymentCardProps) {
-	const { t } = useT();
+	const { t, renderedLocale } = useT();
+	const localeTag = intlLocale(renderedLocale, "en-US");
 	const isLoading =
 		nextPayment === undefined &&
 		paymentMethod === undefined &&
@@ -127,9 +129,11 @@ export function SubscriptionPaymentCard({
 					{nextPayment ? (
 						<>
 							<div className="font-semibold">
-								{formatMoney(nextPayment.amount, nextPayment.currency)}
+								{formatMoney(nextPayment.amount, nextPayment.currency, localeTag)}
 							</div>
-							<div className="text-muted-foreground text-sm">{formatDate(nextPayment.date)}</div>
+							<div className="text-muted-foreground text-sm">
+								{formatDate(nextPayment.date, localeTag)}
+							</div>
 						</>
 					) : (
 						<div className="font-medium text-muted-foreground text-sm">

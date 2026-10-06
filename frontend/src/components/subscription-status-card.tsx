@@ -20,6 +20,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
+import { intlLocale } from "@/lib/intl-locale";
 import { formatBillingCycle, formatDate, formatMoney } from "@/lib/paddle-format";
 import type { SubscriptionStatusData } from "@/lib/paddle-types";
 import { cn } from "@/lib/utils";
@@ -233,7 +234,8 @@ export function SubscriptionStatusCard({
 	onManageSubscription,
 	className,
 }: SubscriptionStatusCardProps) {
-	const { t, tn } = useT();
+	const { t, tn, renderedLocale } = useT();
+	const localeTag = intlLocale(renderedLocale, "en-US");
 	if (!subscription) {
 		return <SubscriptionStatusCardSkeleton className={className} />;
 	}
@@ -272,11 +274,17 @@ export function SubscriptionStatusCard({
 
 	const scheduledChangeNote = effectiveScheduledChange
 		? effectiveScheduledChange.action === "cancel"
-			? t("Cancels on {date}", { date: formatDate(effectiveScheduledChange.effectiveAt) })
+			? t("Cancels on {date}", {
+					date: formatDate(effectiveScheduledChange.effectiveAt, localeTag),
+				})
 			: effectiveScheduledChange.action === "pause"
-				? t("Pauses on {date}", { date: formatDate(effectiveScheduledChange.effectiveAt) })
+				? t("Pauses on {date}", {
+						date: formatDate(effectiveScheduledChange.effectiveAt, localeTag),
+					})
 				: effectiveScheduledChange.action === "resume"
-					? t("Resumes on {date}", { date: formatDate(effectiveScheduledChange.effectiveAt) })
+					? t("Resumes on {date}", {
+							date: formatDate(effectiveScheduledChange.effectiveAt, localeTag),
+						})
 					: undefined
 		: undefined;
 
@@ -358,13 +366,13 @@ export function SubscriptionStatusCard({
 									<p className="truncate font-medium text-sm">{item.productName}</p>
 									{item.quantity > 1 && item.unitPrice !== undefined && (
 										<p className="text-muted-foreground text-sm">
-											{item.quantity} &times; {formatMoney(item.unitPrice, currency)}
+											{item.quantity} &times; {formatMoney(item.unitPrice, currency, localeTag)}
 										</p>
 									)}
 								</div>
 							</div>
 							<p className="shrink-0 font-medium text-sm tabular-nums">
-								{formatMoney(item.lineTotal, currency)}
+								{formatMoney(item.lineTotal, currency, localeTag)}
 							</p>
 						</div>
 					))}
@@ -384,12 +392,13 @@ export function SubscriptionStatusCard({
 								)}
 								{discount.endsAt ? (
 									<span className="text-muted-foreground text-xs">
-										{t("until {date}", { date: formatDate(discount.endsAt) })}
+										{t("until {date}", { date: formatDate(discount.endsAt, localeTag) })}
 									</span>
 								) : null}
 							</span>
 							<span className="text-sm tabular-nums">
-								{discount.description ?? `\u2212${formatMoney(discount.savingsAmount, currency)}`}
+								{discount.description ??
+									`\u2212${formatMoney(discount.savingsAmount, currency, localeTag)}`}
 							</span>
 						</div>
 					) : null}
@@ -397,7 +406,7 @@ export function SubscriptionStatusCard({
 					<div className="flex items-center justify-between font-medium">
 						<span className="text-sm">{t("Total")}</span>
 						<span className="text-sm tabular-nums">
-							{formatMoney(totalAmount, currency)}
+							{formatMoney(totalAmount, currency, localeTag)}
 							<span className="font-normal text-muted-foreground"> / {billingIntervalLabel}</span>
 						</span>
 					</div>
@@ -409,7 +418,7 @@ export function SubscriptionStatusCard({
 					{nextBilledAt && nextBillingLabel ? (
 						<div className="flex items-center gap-1.5">
 							<CalendarIcon className="size-3.5" />
-							<span>{t(nextBillingLabel, { date: formatDate(nextBilledAt) })}</span>
+							<span>{t(nextBillingLabel, { date: formatDate(nextBilledAt, localeTag) })}</span>
 						</div>
 					) : null}
 					{collectionMode && !effectiveScheduledChange && status !== "past_due" && (
@@ -429,7 +438,7 @@ export function SubscriptionStatusCard({
 					)}
 					{canceledAt ? (
 						<div className="flex items-center gap-1.5">
-							<span>{t("Canceled {date}", { date: formatDate(canceledAt) })}</span>
+							<span>{t("Canceled {date}", { date: formatDate(canceledAt, localeTag) })}</span>
 						</div>
 					) : null}
 				</div>

@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
+import { intlLocale } from "@/lib/intl-locale";
 import type { BillingTransaction } from "../api/queries";
 import { formatMoney, statusLabel } from "./format";
 
@@ -12,7 +13,8 @@ export default function BillingHistoryTable({
 	onDownload: (id: string) => void;
 	downloadingId?: string | null;
 }) {
-	const { t } = useT();
+	const { t, renderedLocale } = useT();
+	const localeTag = intlLocale(renderedLocale);
 	return (
 		<section className="space-y-4 rounded-lg border border-border bg-card p-6">
 			<h2 className="font-semibold text-foreground text-lg">{t("Billing history")}</h2>
@@ -33,9 +35,9 @@ export default function BillingHistoryTable({
 						{transactions.map((txn) => (
 							<tr key={txn.id} className="border-border border-t">
 								<td className="py-2">
-									{txn.billed_at ? new Date(txn.billed_at).toLocaleDateString() : "—"}
+									{txn.billed_at ? new Date(txn.billed_at).toLocaleDateString(localeTag) : "—"}
 								</td>
-								<td className="py-2">{formatMoney(txn.amount, txn.currency) ?? "—"}</td>
+								<td className="py-2">{formatMoney(txn.amount, txn.currency, localeTag) ?? "—"}</td>
 								<td className="py-2 capitalize">{statusLabel(txn.status, t)}</td>
 								<td className="py-2 text-right">
 									<Button

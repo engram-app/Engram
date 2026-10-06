@@ -4,6 +4,7 @@ import { Fragment, useCallback, useState } from "react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import { useT } from "@/i18n/locale-provider";
+import { intlLocale } from "@/lib/intl-locale";
 import { cn } from "@/lib/utils";
 import { type AdminUser, adminApi } from "./api";
 
@@ -58,7 +59,8 @@ export default function MembersTab({
 	// the Members card — above it, where it's visually separated.
 	onResetIssued: (url: string) => void;
 }) {
-	const { t } = useT();
+	const { t, renderedLocale } = useT();
+	const localeTag = intlLocale(renderedLocale);
 	const qc = useQueryClient();
 	const [pendingDelete, setPendingDelete] = useState<string | null>(null);
 	// One open at a time keeps the table calm. null = all collapsed.
@@ -240,7 +242,7 @@ export default function MembersTab({
 											)}
 										</td>
 										<td className="py-3 pr-2">
-											{u.last_active ? new Date(u.last_active).toLocaleDateString() : "—"}
+											{u.last_active ? new Date(u.last_active).toLocaleDateString(localeTag) : "—"}
 										</td>
 										<td className="py-3 pr-4 pl-2 text-right">
 											<ChevronRight

@@ -15,6 +15,7 @@ import { useT } from "@/i18n/locale-provider";
 import type { Vars } from "@/i18n/translate";
 import { copyToClipboard } from "@/lib/clipboard";
 import { formatDate } from "@/lib/format-date";
+import { intlLocale } from "@/lib/intl-locale";
 import { SettingsSectionCard } from "@/settings/account/section-card";
 import { ApiError } from "../api/client";
 import {
@@ -95,7 +96,8 @@ function ConnectionCard({
 	connection: Connection;
 	onRevoke: () => void;
 }) {
-	const { t } = useT();
+	const { t, renderedLocale } = useT();
+
 	return (
 		<article className="group flex items-start rounded-lg border border-border bg-card">
 			{/* <details> wraps the summary + expanded dl. The Revoke button is a
@@ -172,13 +174,17 @@ function ConnectionCard({
 					{connection.connected_at ? (
 						<>
 							<dt>{t("Connected:")}</dt>
-							<dd>{new Date(connection.connected_at).toLocaleString()}</dd>
+							<dd>
+								{new Date(connection.connected_at).toLocaleString(intlLocale(renderedLocale))}
+							</dd>
 						</>
 					) : null}
 					{connection.last_used_at ? (
 						<>
 							<dt>{t("Last active:")}</dt>
-							<dd>{new Date(connection.last_used_at).toLocaleString()}</dd>
+							<dd>
+								{new Date(connection.last_used_at).toLocaleString(intlLocale(renderedLocale))}
+							</dd>
 						</>
 					) : null}
 					{Boolean(connection.scope) && (
@@ -296,7 +302,8 @@ function PatSection({
 	canCreate: boolean;
 	onRevoke: (pat: Connection) => void;
 }) {
-	const { t } = useT();
+	const { t, renderedLocale } = useT();
+
 	const [showCreate, setShowCreate] = useState(false);
 	const [newKey, setNewKey] = useState<{ key: string; id: string; name: string } | null>(null);
 	const location = useLocation();
@@ -357,10 +364,14 @@ function PatSection({
 											engram_••••••
 										</td>
 										<td className="px-4 py-3 text-muted-foreground">
-											{p.connected_at ? formatDate(p.connected_at) : "—"}
+											{p.connected_at
+												? formatDate(p.connected_at, intlLocale(renderedLocale))
+												: "—"}
 										</td>
 										<td className="px-4 py-3 text-muted-foreground">
-											{p.last_used_at ? formatDate(p.last_used_at) : "—"}
+											{p.last_used_at
+												? formatDate(p.last_used_at, intlLocale(renderedLocale))
+												: "—"}
 										</td>
 										<td className="px-4 py-3 text-right">
 											<button

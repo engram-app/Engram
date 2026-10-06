@@ -7,6 +7,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
+import { intlLocale } from "@/lib/intl-locale";
 import { formatDate, formatMoney } from "@/lib/paddle-format";
 import type { PlanChangeBreakdownData, PlanChangeTransactionSectionData } from "@/lib/paddle-types";
 import { cn } from "@/lib/utils";
@@ -31,7 +32,8 @@ function TransactionSection({
 	collectionMode?: "automatic" | "manual";
 	currency: string;
 }) {
-	const { t } = useT();
+	const { t, renderedLocale } = useT();
+	const localeTag = intlLocale(renderedLocale, "en-US");
 	const title = t(SECTION_TITLES[kind][collectionMode]);
 
 	const description =
@@ -41,7 +43,7 @@ function TransactionSection({
 				: t("This amount will be charged immediately")
 			: kind === "next"
 				? section.billingDate
-					? t("Charged on {date}", { date: formatDate(section.billingDate) })
+					? t("Charged on {date}", { date: formatDate(section.billingDate, localeTag) })
 					: undefined
 				: t("Recurring amount after this change");
 
@@ -62,7 +64,7 @@ function TransactionSection({
 							<span className="truncate font-medium">{item.productName}</span>
 							<span className="text-muted-foreground text-xs">
 								{item.quantity > 1 && `${item.quantity} \u00d7 `}
-								{formatMoney(item.unitPrice, currency)}
+								{formatMoney(item.unitPrice, currency, localeTag)}
 								{Boolean(item.isProrated) && (
 									<Badge variant="secondary" className="ml-1 px-1 py-0 text-[10px]">
 										{t("Prorated")}
@@ -73,7 +75,9 @@ function TransactionSection({
 								<span className="text-muted-foreground text-xs">{item.prorationPeriod}</span>
 							)}
 						</div>
-						<span className="shrink-0 tabular-nums">{formatMoney(item.total, currency)}</span>
+						<span className="shrink-0 tabular-nums">
+							{formatMoney(item.total, currency, localeTag)}
+						</span>
 					</div>
 				))}
 			</div>
@@ -83,25 +87,27 @@ function TransactionSection({
 			<dl className="flex flex-col gap-1.5 text-sm">
 				<div className="flex justify-between gap-4">
 					<dt className="text-muted-foreground">{t("Subtotal")}</dt>
-					<dd className="tabular-nums">{formatMoney(section.totals.subtotal, currency)}</dd>
+					<dd className="tabular-nums">
+						{formatMoney(section.totals.subtotal, currency, localeTag)}
+					</dd>
 				</div>
 				{section.totals.discount !== undefined && (
 					<div className="flex justify-between gap-4">
 						<dt className="text-success-foreground">{t("Discount")}</dt>
 						<dd className="text-success-foreground tabular-nums">
-							−{formatMoney(section.totals.discount, currency)}
+							−{formatMoney(section.totals.discount, currency, localeTag)}
 						</dd>
 					</div>
 				)}
 				<div className="flex justify-between gap-4">
 					<dt className="text-muted-foreground">{t("Tax")}</dt>
-					<dd className="tabular-nums">{formatMoney(section.totals.tax, currency)}</dd>
+					<dd className="tabular-nums">{formatMoney(section.totals.tax, currency, localeTag)}</dd>
 				</div>
 				{section.totals.credit !== undefined && (
 					<div className="flex justify-between gap-4">
 						<dt className="text-success-foreground">{t("Credit applied")}</dt>
 						<dd className="text-success-foreground tabular-nums">
-							−{formatMoney(section.totals.credit, currency)}
+							−{formatMoney(section.totals.credit, currency, localeTag)}
 						</dd>
 					</div>
 				)}
@@ -109,13 +115,13 @@ function TransactionSection({
 					<div className="flex justify-between gap-4">
 						<dt className="text-success-foreground">{t("Credit to balance")}</dt>
 						<dd className="text-success-foreground tabular-nums">
-							{formatMoney(section.totals.creditToBalance, currency)}
+							{formatMoney(section.totals.creditToBalance, currency, localeTag)}
 						</dd>
 					</div>
 				)}
 				<div className="flex justify-between gap-4 border-t pt-1.5 font-medium">
 					<dt>{t("Total")}</dt>
-					<dd className="tabular-nums">{formatMoney(section.totals.total, currency)}</dd>
+					<dd className="tabular-nums">{formatMoney(section.totals.total, currency, localeTag)}</dd>
 				</div>
 			</dl>
 		</div>
@@ -235,7 +241,8 @@ export function PlanChangeBreakdown({
 	collectionMode,
 	className,
 }: PlanChangeBreakdownProps) {
-	const { t } = useT();
+	const { t, renderedLocale } = useT();
+	const localeTag = intlLocale(renderedLocale, "en-US");
 	if (!breakdown) {
 		return <PlanChangeBreakdownSkeleton className={className} />;
 	}
@@ -286,8 +293,8 @@ export function PlanChangeBreakdown({
 						className={cn("font-bold text-lg tabular-nums", isCredit && "text-success-foreground")}
 					>
 						{isCredit
-							? `−${formatMoney(result.amount, currency)}`
-							: formatMoney(result.amount, currency)}
+							? `−${formatMoney(result.amount, currency, localeTag)}`
+							: formatMoney(result.amount, currency, localeTag)}
 					</span>
 				</div>
 
@@ -299,7 +306,7 @@ export function PlanChangeBreakdown({
 								<div className="flex items-center justify-between gap-4">
 									<span className="text-muted-foreground">{t("Credit from current plan")}</span>
 									<span className="text-success-foreground tabular-nums">
-										−{formatMoney(summaryBreakdown.credit, currency)}
+										−{formatMoney(summaryBreakdown.credit, currency, localeTag)}
 									</span>
 								</div>
 							)}
@@ -307,7 +314,7 @@ export function PlanChangeBreakdown({
 								<div className="flex items-center justify-between gap-4">
 									<span className="text-muted-foreground">{t("Charge for new plan")}</span>
 									<span className="tabular-nums">
-										{formatMoney(summaryBreakdown.charge, currency)}
+										{formatMoney(summaryBreakdown.charge, currency, localeTag)}
 									</span>
 								</div>
 							)}

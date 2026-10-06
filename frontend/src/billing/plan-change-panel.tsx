@@ -3,7 +3,9 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
+import type { Locale } from "@/i18n/locales";
 import { Trans } from "@/i18n/trans";
+import { intlLocale } from "@/lib/intl-locale";
 import type { Translate } from "@/lib/translator";
 import {
 	type BillingCadence,
@@ -51,7 +53,8 @@ function deriveCurrentCadence(detail: SubscriptionDetail | undefined): BillingCa
 }
 
 function PlanChangePicker({ billing, onClose }: { billing: BillingStatus; onClose: () => void }) {
-	const { t } = useT();
+	const { t, renderedLocale } = useT();
+
 	const { data: config } = useBillingConfig();
 	const { data: detail } = useBillingSubscriptionDetail(Boolean(billing.subscription));
 	const currentTier = deriveCurrentTier(billing);
@@ -147,7 +150,7 @@ function PlanChangePicker({ billing, onClose }: { billing: BillingStatus; onClos
 								isSelected && preview.isFetching
 									? t("Loading proration…")
 									: isSelected && preview.data
-										? formatProration(preview.data, t)
+										? formatProration(preview.data, t, renderedLocale)
 										: isSelected && preview.isError
 											? t(
 													"Could not load proration. You can still confirm — final charge applies on confirm.",
@@ -197,14 +200,15 @@ function TrialNotice({
 	onClose: () => void;
 	onSwitchToCancel: () => void;
 }) {
-	const { t } = useT();
+	const { t, renderedLocale } = useT();
+	const localeTag = intlLocale(renderedLocale);
 	const { data: detail } = useBillingSubscriptionDetail(Boolean(billing.subscription));
 	const alreadyCanceled = detail?.scheduled_change?.action === "cancel";
 	const cancelAt = detail?.scheduled_change?.effective_at
-		? new Date(detail.scheduled_change.effective_at).toLocaleDateString()
+		? new Date(detail.scheduled_change.effective_at).toLocaleDateString(localeTag)
 		: null;
 	const renewsAt = billing.subscription?.current_period_end
-		? new Date(billing.subscription.current_period_end).toLocaleDateString()
+		? new Date(billing.subscription.current_period_end).toLocaleDateString(localeTag)
 		: null;
 
 	if (alreadyCanceled) {
@@ -285,8 +289,9 @@ function formatProration(
 		next_billed_at: string;
 	},
 	t: Translate,
+	locale: Locale,
 ): string {
-	const renewal = new Date(data.next_billed_at).toLocaleDateString();
+	const renewal = new Date(data.next_billed_at).toLocaleDateString(intlLocale(locale));
 	const newTotal = formatCents(data.new_total);
 	// Exact-cadence flips (e.g. monthly→monthly mid-cycle of the same
 	// tier) come back as 0 — "Credited $0.00 today" reads as a billing

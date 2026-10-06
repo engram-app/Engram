@@ -4,12 +4,14 @@ import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import { useT } from "@/i18n/locale-provider";
 import { copyToClipboard } from "@/lib/clipboard";
+import { intlLocale } from "@/lib/intl-locale";
 import { adminApi, type Invite } from "./api";
 
 const INVITES_KEY = ["admin", "invites"] as const;
 
 export default function InvitesTab() {
-	const { t } = useT();
+	const { t, renderedLocale } = useT();
+	const localeTag = intlLocale(renderedLocale);
 	const qc = useQueryClient();
 	const [label, setLabel] = useState("");
 	const [maxUses, setMaxUses] = useState(1);
@@ -180,7 +182,7 @@ export default function InvitesTab() {
 									{i.use_count}/{i.max_uses}
 								</td>
 								<td className="py-2 pr-2">
-									{i.expires_at ? new Date(i.expires_at).toLocaleDateString() : t("never")}
+									{i.expires_at ? new Date(i.expires_at).toLocaleDateString(localeTag) : t("never")}
 								</td>
 								<td className="py-2 text-right">
 									<button

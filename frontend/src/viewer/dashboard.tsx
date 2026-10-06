@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { Link, Navigate, useSearchParams } from "react-router";
 import { useT } from "@/i18n/locale-provider";
 import { formatDate } from "@/lib/format-date";
+import { intlLocale } from "@/lib/intl-locale";
 import { type NoteSummary, useFolderNotes, useSyncManifest, useVaults } from "../api/queries";
 import { useActiveVaultSlug } from "../api/vault-slug";
 import { EmptyVaultState } from "../layout/empty-vault-state";
@@ -16,7 +17,8 @@ interface NoteRowProps {
 }
 
 function NoteRow({ note }: NoteRowProps) {
-	const { t } = useT();
+	const { t, renderedLocale } = useT();
+
 	const slug = useActiveVaultSlug();
 	return (
 		<article className="border-gray-100 border-b py-3 last:border-0 dark:border-gray-800">
@@ -39,7 +41,9 @@ function NoteRow({ note }: NoteRowProps) {
 						))}
 					</ul>
 				)}
-				<time dateTime={note.updated_at}>{formatDate(note.updated_at)}</time>
+				<time dateTime={note.updated_at}>
+					{formatDate(note.updated_at, intlLocale(renderedLocale))}
+				</time>
 			</footer>
 		</article>
 	);

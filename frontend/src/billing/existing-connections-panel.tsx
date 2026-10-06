@@ -2,9 +2,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Plug } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
-
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
+import { intlLocale } from "@/lib/intl-locale";
 
 import { api } from "../api/client";
 import { type Connection, useConnections } from "../api/queries";
@@ -27,7 +27,8 @@ export function ExistingConnectionsPanel({
 	kind: "mcp" | "obsidian";
 	onChanged: () => void;
 }) {
-	const { t } = useT();
+	const { t, renderedLocale } = useT();
+	const localeTag = intlLocale(renderedLocale);
 	const { data: connections, isLoading } = useConnections();
 	const qc = useQueryClient();
 	const [busyId, setBusyId] = useState<string | null>(null);
@@ -86,7 +87,9 @@ export function ExistingConnectionsPanel({
 									{c.name ?? t("(unnamed)")}
 									{c.connected_at ? (
 										<span className="ml-2 text-muted-foreground text-xs">
-											{t("since {date}", { date: new Date(c.connected_at).toLocaleDateString() })}
+											{t("since {date}", {
+												date: new Date(c.connected_at).toLocaleDateString(localeTag),
+											})}
 										</span>
 									) : null}
 								</span>

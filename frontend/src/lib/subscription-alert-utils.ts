@@ -1,3 +1,5 @@
+import type { Locale } from "@/i18n/locales";
+import { intlLocale } from "@/lib/intl-locale";
 import { formatDate } from "@/lib/paddle-format";
 import type { SubscriptionAlertData } from "@/lib/paddle-types";
 import type { Translate } from "@/lib/translator";
@@ -60,6 +62,7 @@ export type DerivedAlert = {
  *
  * @param data - Subscription alert data
  * @param t - Translator from `useT()`
+ * @param locale - `renderedLocale` from `useT()`, so dates read in the app language
  * @returns Alert descriptor with `reason` + translated `message`, or null
  *
  * @example
@@ -69,10 +72,12 @@ export type DerivedAlert = {
 export function deriveSubscriptionAlert(
 	data: SubscriptionAlertData | undefined,
 	t: Translate,
+	locale: Locale = "en",
 ): DerivedAlert {
 	if (!data) {
 		return null;
 	}
+	const dateTag = intlLocale(locale, "en-US");
 
 	const { status, canceledAt, scheduledChange, trialEndsAt, updatePaymentMethodUrl } = data;
 
@@ -95,7 +100,7 @@ export function deriveSubscriptionAlert(
 			reason: "canceled",
 			variant: "destructive",
 			message: canceledAt
-				? t("This subscription was canceled on {date}.", { date: formatDate(canceledAt) })
+				? t("This subscription was canceled on {date}.", { date: formatDate(canceledAt, dateTag) })
 				: t("This subscription has been canceled."),
 		};
 	}
@@ -106,7 +111,7 @@ export function deriveSubscriptionAlert(
 			reason: "scheduled_cancel",
 			variant: "warning",
 			message: t("This subscription is scheduled to cancel on {date}.", {
-				date: formatDate(scheduledChange.effectiveAt),
+				date: formatDate(scheduledChange.effectiveAt, dateTag),
 			}),
 		};
 	}
@@ -115,11 +120,11 @@ export function deriveSubscriptionAlert(
 	if (scheduledChange?.action === "pause") {
 		const message = scheduledChange.resumeAt
 			? t("This subscription will pause on {date} and resume on {resumeDate}.", {
-					date: formatDate(scheduledChange.effectiveAt),
-					resumeDate: formatDate(scheduledChange.resumeAt),
+					date: formatDate(scheduledChange.effectiveAt, dateTag),
+					resumeDate: formatDate(scheduledChange.resumeAt, dateTag),
 				})
 			: t("This subscription will pause on {date}.", {
-					date: formatDate(scheduledChange.effectiveAt),
+					date: formatDate(scheduledChange.effectiveAt, dateTag),
 				});
 		return { reason: "scheduled_pause", variant: "warning", message };
 	}
@@ -130,7 +135,7 @@ export function deriveSubscriptionAlert(
 			reason: "paused_resuming",
 			variant: "info",
 			message: t("This subscription is paused. It will resume on {date}.", {
-				date: formatDate(scheduledChange.effectiveAt),
+				date: formatDate(scheduledChange.effectiveAt, dateTag),
 			}),
 		};
 	}
@@ -149,7 +154,7 @@ export function deriveSubscriptionAlert(
 		return {
 			reason: "trialing",
 			variant: "info",
-			message: t("Your trial ends on {date}.", { date: formatDate(trialEndsAt) }),
+			message: t("Your trial ends on {date}.", { date: formatDate(trialEndsAt, dateTag) }),
 		};
 	}
 

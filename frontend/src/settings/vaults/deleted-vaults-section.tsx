@@ -11,10 +11,12 @@ import {
 } from "@/api/queries";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
+import { intlLocale } from "@/lib/intl-locale";
 import { SettingsSectionCard } from "@/settings/account/section-card";
 
 function DeletedRow({ vault }: { vault: Vault }) {
-	const { t } = useT();
+	const { t, renderedLocale } = useT();
+	const localeTag = intlLocale(renderedLocale);
 	const { data: active } = useVaults();
 	const { data: billing } = useBillingConfig();
 	const restore = useRestoreVault();
@@ -23,7 +25,7 @@ function DeletedRow({ vault }: { vault: Vault }) {
 	const cap = billing?.vaults_cap ?? Number.POSITIVE_INFINITY;
 	const activeCount = active?.length ?? 0;
 	const overCap = activeCount >= cap;
-	const purgeDate = vault.purge_at ? new Date(vault.purge_at).toLocaleDateString() : "—";
+	const purgeDate = vault.purge_at ? new Date(vault.purge_at).toLocaleDateString(localeTag) : "—";
 
 	const [searchParams] = useSearchParams();
 	const highlighted = searchParams.get("highlight") === String(vault.id);

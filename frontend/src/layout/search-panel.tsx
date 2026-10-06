@@ -185,7 +185,7 @@ function SearchPanel({
 	hideHeader?: boolean;
 	onNavigate?: () => void;
 }) {
-	const { t, tn } = useT();
+	const { t, tn, renderedLocale } = useT();
 	const { setView } = useRailView();
 	const location = useLocation();
 	const { data: folders } = useFolders();
@@ -236,7 +236,9 @@ function SearchPanel({
 	// A capped user's un-indexed notes are simply absent from results. Without
 	// this the only signal is an empty result list, which reads as "search is
 	// broken" rather than "this note is not indexed yet".
-	const unsearchable = indexStatus ? unsearchableNotesNotice(indexStatus, tn) : null;
+	const unsearchable = indexStatus
+		? unsearchableNotesNotice(indexStatus, tn, renderedLocale)
+		: null;
 	const [recent, setRecent] = useState<string[]>(() => readRecent());
 
 	const inputRef = useRef<HTMLInputElement>(null);

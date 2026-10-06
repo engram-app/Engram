@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
+import { intlLocale } from "@/lib/intl-locale";
 import { type SubscriptionDetail, useReverseCancel } from "../api/queries";
 
 const ACTION_LABELS: Record<string, string> = {
@@ -43,13 +44,14 @@ export default function PendingChangeBanner({
 }: {
 	scheduledChange: SubscriptionDetail["scheduled_change"];
 }) {
-	const { t } = useT();
+	const { t, renderedLocale } = useT();
+	const localeTag = intlLocale(renderedLocale);
 	if (!scheduledChange) {
 		return null;
 	}
 
 	const label = ACTION_LABELS[scheduledChange.action];
-	const date = new Date(scheduledChange.effective_at).toLocaleDateString();
+	const date = new Date(scheduledChange.effective_at).toLocaleDateString(localeTag);
 
 	return (
 		<aside

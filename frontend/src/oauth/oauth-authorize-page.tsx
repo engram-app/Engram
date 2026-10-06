@@ -14,7 +14,9 @@ import {
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useT } from "@/i18n/locale-provider";
+import type { Locale } from "@/i18n/locales";
 import { Trans } from "@/i18n/trans";
+import { intlLocale } from "@/lib/intl-locale";
 import type { Tn } from "@/lib/translator";
 import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
@@ -104,13 +106,16 @@ function buildCancelUrl(redirectUri: string, state: string): string {
 	return `${redirectUri}${sep}error=access_denied&state=${encodeURIComponent(state)}`;
 }
 
-function countLabel(tn: Tn, notes?: number, files?: number): string {
+function countLabel(tn: Tn, locale: Locale, notes?: number, files?: number): string {
+	const tag = intlLocale(locale);
 	const noteCount = notes ?? 0;
 	const parts = [
-		tn({ one: "{n} note", other: "{n} notes" }, noteCount, { n: noteCount.toLocaleString() }),
+		tn({ one: "{n} note", other: "{n} notes" }, noteCount, { n: noteCount.toLocaleString(tag) }),
 	];
 	if (files) {
-		parts.push(tn({ one: "{n} file", other: "{n} files" }, files, { n: files.toLocaleString() }));
+		parts.push(
+			tn({ one: "{n} file", other: "{n} files" }, files, { n: files.toLocaleString(tag) }),
+		);
 	}
 	return parts.join(" · ");
 }
@@ -122,7 +127,7 @@ function VaultRows({ scroll, children }: { scroll: boolean; children: React.Reac
 }
 
 export default function OAuthAuthorizePage() {
-	const { t, tn } = useT();
+	const { t, tn, renderedLocale } = useT();
 	const [searchParams] = useSearchParams();
 	const { values, resource, missing } = readParams(searchParams);
 
@@ -634,7 +639,7 @@ export default function OAuthAuthorizePage() {
 												) : null}
 											</span>
 											<span className="shrink-0 text-muted-foreground text-xs">
-												{countLabel(tn, v.note_count, v.attachment_count)}
+												{countLabel(tn, renderedLocale, v.note_count, v.attachment_count)}
 											</span>
 										</label>
 									);

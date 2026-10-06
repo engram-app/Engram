@@ -1,6 +1,8 @@
 import { ChevronDown } from "lucide-react";
 import { useT } from "@/i18n/locale-provider";
+import type { Locale } from "@/i18n/locales";
 import { msg } from "@/i18n/msg";
+import { intlLocale } from "@/lib/intl-locale";
 import type { Tn, Translate } from "@/lib/translator";
 import { ctaFilled, ctaOutline } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
@@ -93,7 +95,11 @@ export const FREE_TIER = {
 // say so, never "your most recent notes are searchable". Uncapped tiers report
 // 0/0, so `hidden <= 0` covers them too. No tier name in the copy: a paid user
 // with a lowered `indexed_notes_cap` override is capped too.
-export function unsearchableNotesNotice({ indexed, total }: IndexStatus, tn: Tn): string | null {
+export function unsearchableNotesNotice(
+	{ indexed, total }: IndexStatus,
+	tn: Tn,
+	locale: Locale = "en",
+): string | null {
 	const hidden = total - indexed;
 	if (hidden <= 0) {
 		return null;
@@ -105,7 +111,10 @@ export function unsearchableNotesNotice({ indexed, total }: IndexStatus, tn: Tn)
 				"{hidden} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",
 		},
 		hidden,
-		{ hidden: hidden.toLocaleString(), indexed: indexed.toLocaleString() },
+		{
+			hidden: hidden.toLocaleString(intlLocale(locale)),
+			indexed: indexed.toLocaleString(intlLocale(locale)),
+		},
 	);
 }
 

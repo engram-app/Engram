@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useT } from "@/i18n/locale-provider";
+import { intlLocale } from "@/lib/intl-locale";
 import {
 	formatBillingCycle,
 	formatDate,
@@ -87,7 +88,8 @@ export function PlanChangePreview({
 	prorationBillingMode,
 	className,
 }: PlanChangePreviewProps) {
-	const { t, tn } = useT();
+	const { t, tn, renderedLocale } = useT();
+	const localeTag = intlLocale(renderedLocale, "en-US");
 	if (!preview) {
 		return <PlanChangePreviewSkeleton className={className} />;
 	}
@@ -122,12 +124,12 @@ export function PlanChangePreview({
 			if (isImmediate) {
 				return t("Immediately");
 			}
-			return costImpact.nextBillDate ? formatDate(costImpact.nextBillDate) : undefined;
+			return costImpact.nextBillDate ? formatDate(costImpact.nextBillDate, localeTag) : undefined;
 		}
 		if (costImpact.immediateAmount !== undefined) {
 			return t("Immediately");
 		}
-		return costImpact.nextBillDate ? formatDate(costImpact.nextBillDate) : undefined;
+		return costImpact.nextBillDate ? formatDate(costImpact.nextBillDate, localeTag) : undefined;
 	}
 	const effectiveDate = resolveEffectiveDate();
 
@@ -138,7 +140,7 @@ export function PlanChangePreview({
 		if (scheduledChange.action === "resume") {
 			return;
 		}
-		const date = formatDate(scheduledChange.effectiveAt);
+		const date = formatDate(scheduledChange.effectiveAt, localeTag);
 		return scheduledChange.action === "cancel"
 			? t("Cancellation scheduled for {date}. Billing options may be restricted.", { date })
 			: t("Pause scheduled for {date}. Billing options may be restricted.", { date });
@@ -197,7 +199,7 @@ export function PlanChangePreview({
 						<div className="mb-1 text-muted-foreground text-xs">{t("Current plan")}</div>
 						<div className="truncate font-medium text-sm">{currentPlan.productName}</div>
 						<div className="text-muted-foreground text-sm">
-							{formatMoney(currentPlan.price, currency)}
+							{formatMoney(currentPlan.price, currency, localeTag)}
 							<span className="text-xs"> / {currentIntervalLabel}</span>
 						</div>
 					</div>
@@ -210,7 +212,7 @@ export function PlanChangePreview({
 						<div className="mb-1 text-muted-foreground text-xs">{t("New plan")}</div>
 						<div className="truncate font-medium text-sm">{newPlan.productName}</div>
 						<div className="text-muted-foreground text-sm">
-							{formatMoney(newPlan.price, currency)}
+							{formatMoney(newPlan.price, currency, localeTag)}
 							<span className="text-xs"> / {newIntervalLabel}</span>
 						</div>
 					</div>
@@ -259,7 +261,7 @@ export function PlanChangePreview({
 								<span className="text-success-foreground">{discount.description}</span>
 								{discount.endsAt ? (
 									<span className="block text-muted-foreground text-xs">
-										{t("until {date}", { date: formatDate(discount.endsAt) })}
+										{t("until {date}", { date: formatDate(discount.endsAt, localeTag) })}
 									</span>
 								) : null}
 							</span>
@@ -273,14 +275,14 @@ export function PlanChangePreview({
 					<div className="flex items-center justify-between text-sm">
 						<span className="text-muted-foreground">{t("Current")}</span>
 						<span>
-							{formatMoney(currentPlan.price, currency)}
+							{formatMoney(currentPlan.price, currency, localeTag)}
 							<span className="text-muted-foreground text-xs"> / {currentIntervalLabel}</span>
 						</span>
 					</div>
 					<div className="flex items-center justify-between text-sm">
 						<span className="text-muted-foreground">{t("New")}</span>
 						<span>
-							{formatMoney(newPlan.price, currency)}
+							{formatMoney(newPlan.price, currency, localeTag)}
 							<span className="text-muted-foreground text-xs"> / {newIntervalLabel}</span>
 						</span>
 					</div>
@@ -294,13 +296,13 @@ export function PlanChangePreview({
 							{costImpact.credit !== undefined && (
 								<div className="flex items-center justify-between text-sm text-success-foreground">
 									<span>{t("Credit")}</span>
-									<span>−{formatMoney(costImpact.credit, currency)}</span>
+									<span>−{formatMoney(costImpact.credit, currency, localeTag)}</span>
 								</div>
 							)}
 							{costImpact.charge !== undefined && (
 								<div className="flex items-center justify-between text-sm">
 									<span className="text-muted-foreground">{t("Charge")}</span>
-									<span>{formatMoney(costImpact.charge, currency)}</span>
+									<span>{formatMoney(costImpact.charge, currency, localeTag)}</span>
 								</div>
 							)}
 							<div
@@ -312,7 +314,7 @@ export function PlanChangePreview({
 								<span>{totalLabel}</span>
 								<span className={cn(isCredit && "text-success-foreground")}>
 									{isCredit ? "−" : ""}
-									{formatMoney(costImpact.resultAmount, currency)}
+									{formatMoney(costImpact.resultAmount, currency, localeTag)}
 								</span>
 							</div>
 						</div>

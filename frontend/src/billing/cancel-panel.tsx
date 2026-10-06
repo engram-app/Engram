@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import { Trans } from "@/i18n/trans";
+import { intlLocale } from "@/lib/intl-locale";
 import type { SubscriptionDetail } from "../api/queries";
 import { type BillingStatus, useCancelSubscription } from "../api/queries";
 
@@ -19,14 +20,15 @@ interface CancelPanelProps {
 }
 
 export default function CancelPanel({ detail, tier, onClose }: CancelPanelProps) {
-	const { t } = useT();
+	const { t, renderedLocale } = useT();
+	const localeTag = intlLocale(renderedLocale);
 	const cancel = useCancelSubscription();
 
 	// next_billed_at is the natural cancel-effective date when canceling
 	// at-period-end. Falls back to a generic line if the backend has not yet
 	// populated it (newly-subscribed user mid-webhook-sync).
 	const effective = detail.next_billed_at
-		? new Date(detail.next_billed_at).toLocaleDateString()
+		? new Date(detail.next_billed_at).toLocaleDateString(localeTag)
 		: null;
 
 	// Use the user's actual tier label in copy instead of hardcoding 'Pro' —
