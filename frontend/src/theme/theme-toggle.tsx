@@ -17,6 +17,14 @@ const OPTIONS: ReadonlyArray<{ value: ThemeChoice; label: string; Icon: typeof S
 	{ value: "system", label: msg("System"), Icon: Monitor },
 ];
 
+// Whole-sentence keys so each language orders the words itself (and English stays
+// "Theme: system", lowercase, exactly as before the app was translated).
+const THEME_LABELS: Record<ThemeChoice, string> = {
+	light: msg("Theme: light"),
+	dark: msg("Theme: dark"),
+	system: msg("Theme: system"),
+};
+
 function ActiveIcon({ choice }: { choice: ThemeChoice }) {
 	if (choice === "light") {
 		return <Sun />;
@@ -30,8 +38,7 @@ function ActiveIcon({ choice }: { choice: ThemeChoice }) {
 export default function ThemeToggle() {
 	const { theme, setTheme } = useTheme();
 	const { t } = useT();
-	const current = OPTIONS.find((o) => o.value === theme);
-	const themeLabel = t("Theme: {theme}", { theme: current ? t(current.label) : theme });
+	const themeLabel = t(THEME_LABELS[theme]);
 
 	return (
 		<DropdownMenu>

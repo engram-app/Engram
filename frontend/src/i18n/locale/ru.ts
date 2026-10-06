@@ -1038,7 +1038,6 @@ export default {
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Пользуйтесь Engram в веб-приложении. Подключить инструмент можно позже в настройках.",
 	'Revoke "{name}"?': "Отозвать «{name}»?",
-	"Theme: {theme}": "Тема: {theme}",
 	"Upgrade to view attachments": "Перейдите на платный план, чтобы просматривать вложения",
 	"Missing attachment: {path}": "Вложение отсутствует: {path}",
 	"Couldn't load {path} (temporarily unavailable)":
@@ -1404,4 +1403,7 @@ export default {
 	"Rename folder": "Переименовать папку",
 	"Something went wrong with checkout. Please try again.":
 		"При оплате что-то пошло не так. Попробуйте снова.",
+	"Theme: light": "Тема: Светлая",
+	"Theme: dark": "Тема: Тёмная",
+	"Theme: system": "Тема: Системная",
 } satisfies Catalog;

@@ -960,7 +960,6 @@ export default {
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Web アプリで Engram を使います。ツールは後から設定で接続できます。",
 	'Revoke "{name}"?': "「{name}」を取り消しますか?",
-	"Theme: {theme}": "テーマ: {theme}",
 	"Upgrade to view attachments": "アップグレードして添付ファイルを表示",
 	"Missing attachment: {path}": "添付ファイルが見つかりません: {path}",
 	"Couldn't load {path} (temporarily unavailable)":
@@ -1287,4 +1286,7 @@ export default {
 	"Rename folder": "フォルダ名を変更",
 	"Something went wrong with checkout. Please try again.":
 		"お支払い処理でエラーが発生しました。もう一度お試しください。",
+	"Theme: light": "テーマ: ライト",
+	"Theme: dark": "テーマ: ダーク",
+	"Theme: system": "テーマ: システム",
 } satisfies Catalog;

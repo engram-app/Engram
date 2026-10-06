@@ -909,7 +909,6 @@ export default {
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"在网页应用中使用 Engram。你可以稍后在“设置”中连接工具。",
 	'Revoke "{name}"?': "撤销“{name}”？",
-	"Theme: {theme}": "主题：{theme}",
 	"Upgrade to view attachments": "升级即可查看附件",
 	"Missing attachment: {path}": "缺少附件：{path}",
 	"Couldn't load {path} (temporarily unavailable)": "无法加载 {path}（暂时不可用）",
@@ -1225,4 +1224,7 @@ export default {
 	"Rename folder": "重命名文件夹",
 	Immediately: "立即",
 	"Something went wrong with checkout. Please try again.": "结算时出现问题，请重试。",
+	"Theme: light": "主题：浅色",
+	"Theme: dark": "主题：深色",
+	"Theme: system": "主题：跟随系统",
 } satisfies Catalog;

@@ -997,7 +997,6 @@ export default {
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Usa Engram en la aplicación web. Puedes conectar una herramienta más tarde desde Ajustes.",
 	'Revoke "{name}"?': "¿Revocar «{name}»?",
-	"Theme: {theme}": "Tema: {theme}",
 	"Upgrade to view attachments": "Mejora tu plan para ver los adjuntos",
 	"Missing attachment: {path}": "Falta el adjunto: {path}",
 	"Couldn't load {path} (temporarily unavailable)":
@@ -1357,4 +1356,7 @@ export default {
 	"Attachment storage full": "Almacenamiento de adjuntos lleno",
 	"Something went wrong with checkout. Please try again.":
 		"Algo salió mal con el pago. Inténtalo de nuevo.",
+	"Theme: light": "Tema: Claro",
+	"Theme: dark": "Tema: Oscuro",
+	"Theme: system": "Tema: Sistema",
 } satisfies Catalog;

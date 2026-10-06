@@ -1011,7 +1011,6 @@ export default {
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Utilise Engram dans l'application web. Tu pourras connecter un outil plus tard depuis les Paramètres.",
 	'Revoke "{name}"?': "Révoquer « {name} » ?",
-	"Theme: {theme}": "Thème : {theme}",
 	"Upgrade to view attachments": "Passe à une offre supérieure pour voir les pièces jointes",
 	"Missing attachment: {path}": "Pièce jointe manquante : {path}",
 	"Couldn't load {path} (temporarily unavailable)":
@@ -1370,4 +1369,7 @@ export default {
 	"Rename folder": "Renommer le dossier",
 	"Something went wrong with checkout. Please try again.":
 		"Une erreur est survenue lors du paiement. Réessaie.",
+	"Theme: light": "Thème : Clair",
+	"Theme: dark": "Thème : Sombre",
+	"Theme: system": "Thème : Système",
 } satisfies Catalog;

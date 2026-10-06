@@ -995,7 +995,6 @@ export default {
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Use o Engram no app web. Você pode conectar uma ferramenta depois, em Configurações.",
 	'Revoke "{name}"?': 'Revogar "{name}"?',
-	"Theme: {theme}": "Tema: {theme}",
 	"Upgrade to view attachments": "Melhore seu plano para ver anexos",
 	"Missing attachment: {path}": "Anexo ausente: {path}",
 	"Couldn't load {path} (temporarily unavailable)":
@@ -1353,4 +1352,7 @@ export default {
 	"Rename folder": "Renomear pasta",
 	"Something went wrong with checkout. Please try again.":
 		"Algo deu errado com o pagamento. Tente de novo.",
+	"Theme: light": "Tema: Claro",
+	"Theme: dark": "Tema: Escuro",
+	"Theme: system": "Tema: Sistema",
 } satisfies Catalog;

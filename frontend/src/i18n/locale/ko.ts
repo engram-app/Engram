@@ -939,7 +939,6 @@ export default {
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"웹 앱에서 Engram을 사용하세요. 도구는 나중에 설정에서 연결할 수 있습니다.",
 	'Revoke "{name}"?': '"{name}" 접근을 해제하시겠습니까?',
-	"Theme: {theme}": "테마: {theme}",
 	"Upgrade to view attachments": "첨부 파일을 보려면 업그레이드하세요",
 	"Missing attachment: {path}": "첨부 파일을 찾을 수 없음: {path}",
 	"Couldn't load {path} (temporarily unavailable)":
@@ -1266,4 +1265,7 @@ export default {
 	"Rename folder": "폴더 이름 변경",
 	"Something went wrong with checkout. Please try again.":
 		"결제 중 문제가 발생했습니다. 다시 시도하세요.",
+	"Theme: light": "테마: 라이트",
+	"Theme: dark": "테마: 다크",
+	"Theme: system": "테마: 시스템",
 } satisfies Catalog;
