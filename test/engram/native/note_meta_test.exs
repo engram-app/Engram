@@ -15,12 +15,13 @@ defmodule Engram.Native.NoteMetaTest do
   test "reproduces the Elixir title and tag rules on the golden set" do
     for %{input: input, title: title, tags: tags} <- @golden do
       assert Helpers.extract_title(input, "dir/File Name.md") == title, inspect(input)
-      assert Helpers.extract_tags(input) == tags, inspect(input)
-      assert Helpers.extract_title_and_tags(input, "dir/File Name.md") == {title, tags}
+
+      assert Helpers.extract_title_and_tags(input, "dir/File Name.md") == {title, tags},
+             inspect(input)
     end
   end
 
-  test "extract_title_and_tags/2 equals the two separate calls" do
+  test "extract_title_and_tags/2 titles equal extract_title/2" do
     for content <- [
           "",
           "# Only a heading",
@@ -32,14 +33,14 @@ defmodule Engram.Native.NoteMetaTest do
           "#ok \xFF # T\xFF",
           String.duplicate("- item #tag `c`\n", 2_000)
         ] do
-      assert Helpers.extract_title_and_tags(content, "a/N.md") ==
-               {Helpers.extract_title(content, "a/N.md"), Helpers.extract_tags(content)},
+      assert elem(Helpers.extract_title_and_tags(content, "a/N.md"), 0) ==
+               Helpers.extract_title(content, "a/N.md"),
              inspect(content)
     end
   end
 
   test "invalid UTF-8 is scrubbed, not crashed on" do
-    assert Helpers.extract_tags("#ok \xFF #fine") == ["ok", "fine"]
+    assert tags("#ok \xFF #fine") == ["ok", "fine"]
     assert Helpers.extract_title("# T\xFF", "a/N.md") == "T�"
   end
 
@@ -51,7 +52,7 @@ defmodule Engram.Native.NoteMetaTest do
 
     test "tags inside longer fences, indented code and multi-backtick spans are skipped" do
       content = "````\n#a\n````\n``x #b y``\n\n    #c\n\n#d\n"
-      assert Helpers.extract_tags(content) == ["d"]
+      assert tags(content) == ["d"]
     end
   end
 
@@ -93,9 +94,11 @@ defmodule Engram.Native.NoteMetaTest do
     test "title and tags emit [:engram, :nif, :call, :stop]" do
       ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
       Helpers.extract_title("# a", "x.md")
-      Helpers.extract_tags("#a")
+      Helpers.extract_title_and_tags("#a", "x.md")
       assert_receive {[:engram, :nif, :call, :stop], ^ref, _, %{nif: :note_title}}
       assert_receive {[:engram, :nif, :call, :stop], ^ref, _, %{nif: :note_meta}}
     end
   end
+
+  defp tags(content), do: content |> Helpers.extract_title_and_tags("n.md") |> elem(1)
 end

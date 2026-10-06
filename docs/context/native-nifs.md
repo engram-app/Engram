@@ -190,7 +190,8 @@ checkpoint). Two calls -> one, min of 5 on a loaded box: 52 B 14 -> 10 us,
 Telemetry consequence: write paths now emit `nif="note_meta"`, so the
 `note_title` series only carries the remaining single-purpose callers
 (rename re-title, markdown parser), and `note_tags` is gone (its only
-caller, the test-facing `Helpers.extract_tags/1`, now reads `note_meta`).
+caller, the test-only `Helpers.extract_tags/1`, is deleted; tests read
+`extract_title_and_tags/2`).
 A panel or alert filtered on those names undercounts writes; filter on
 `note_meta`. None existed
 in this repo or engram-infra when it changed (grepped 2026-10-06).
