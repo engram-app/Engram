@@ -508,6 +508,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 
 **Indexing & Search**
 - Oban indexing pipeline — dedup/debounce, retry, re-indexing → `docs/context/async-indexing-pipeline.md`
+- Adding an Oban worker or cron, or code that marks rows for later processing (queue it when due; the queue throttles, crons are backstops; no two crons share a minute) → `docs/context/oban-scheduling-model.md`
 - Stranded Qdrant points after a rename → delete race → `docs/context/qdrant-orphan-points-rename-delete-race.md`
 - Qdrant payload indexes missing or rejected under strict mode (`ensure_collection/2` reconciles them on every boot) → `docs/context/qdrant-payload-indexes-strict-mode.md`
 - An edit re-embeds far more chunks than it changed, or you are about to change how `split_text/2` packs chunks (boundaries cascade to the end of the heading section; paragraph-granularity looks like a free fix and is not) → `docs/context/chunk-boundary-stability.md`

@@ -56,8 +56,8 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
     # #1620 deliberately kept this cron off chunker_version ("never start a
     # mass re-embed"). Reversed 2026-10-04: every index version must reach
     # existing notes automatically (self-hosters run no backfills), and a
-    # version-driven re-embed is unmetered maintenance. The 500-per-tick cap
-    # is what bounds the rate. A full rebuild covers keywords too, so the
+    # version-driven re-embed is unmetered maintenance at backfill priority;
+    # the embed queue's concurrency bounds the rate. A full rebuild covers keywords too, so the
     # keyword sweep leaves these notes alone.
     test "re-embeds a note whose chunker_version is stale" do
       user = insert(:user)
@@ -174,6 +174,42 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       refute_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
     end
 
+    # A paying user's budget-parked note passes the cooldown filter, so the
+    # stamp must clear the park or every page returns it again.
+    test "the keyword sweep's stamp clears a budget park" do
+      user = insert(:user)
+      insert(:subscription, user: user, tier: "pro", status: "active")
+
+      note =
+        current_note(user,
+          keyword_version: nil,
+          embed_budget_parked: true,
+          embed_retry_after: DateTime.add(DateTime.utc_now(), 3600)
+        )
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      refute Repo.get!(Note, note.id, skip_tenant_check: true).embed_budget_parked
+    end
+
+    # At or below `now` the stamp would not drop a note from the next page,
+    # and the page loop would never end.
+    test "a backoff configured at zero still stamps past the cron interval" do
+      prior = Application.get_env(:engram, :embed_reconcile_backoff_seconds)
+      Application.put_env(:engram, :embed_reconcile_backoff_seconds, 0)
+
+      on_exit(fn ->
+        if prior,
+          do: Application.put_env(:engram, :embed_reconcile_backoff_seconds, prior),
+          else: Application.delete_env(:engram, :embed_reconcile_backoff_seconds)
+      end)
+
+      note = note_for(insert(:user), embed_hash: nil)
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+
+      stamped = Repo.get!(Note, note.id, skip_tenant_check: true).embed_retry_after
+      assert DateTime.diff(stamped, DateTime.utc_now()) > 300
+    end
+
     test "backfills dense vectors for every entitled status, past_due included" do
       # The subscription join is a SQL proxy for the real 4-layer entitlement
       # resolver. A hand-rolled subset that dropped `past_due` stranded the
@@ -214,6 +250,18 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
 
       assert :ok = perform_job(ReconcileEmbeddings, %{})
       assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+    end
+
+    # A dense-only backfill leaves the content, and so the links, as they
+    # are: re-extracting them is a wasted job per note.
+    test "a dense-only backfill does not re-extract links" do
+      user = insert(:user)
+      note = note_for(user, content_hash: "abc123", embed_hash: "abc123", dense_indexed_hash: nil)
+      insert_chunk!(note)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+      refute_enqueued(worker: Engram.Workers.ExtractNoteLinks, args: %{"note_id" => note.id})
     end
 
     test "does not select a Free user's note outside the cap (no chunk rows)" do
@@ -349,15 +397,15 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       refute_enqueued(worker: EmbedNote, args: %{"note_id" => marker.id})
     end
 
-    test "caps the batch globally at 500 across all vaults" do
-      # One query over the partial index with a global cap — the old shape
-      # loaded EVERY vault then ran one query per vault every 15 minutes
-      # (O(total vaults) queries at scale).
+    # No per-tick cap: the embed queue's concurrency and priority are the
+    # throttle. A cap of 500 per 15 min held a 4,200-note rebuild to ~2 h
+    # while each batch drained in ~2 min.
+    test "queues every stale note in one tick, paging past 1,000" do
       user = insert(:user)
       vault_a = insert(:vault, user: user)
       vault_b = insert(:vault, user: user)
 
-      for {vault, label, count} <- [{vault_a, "a", 300}, {vault_b, "b", 205}],
+      for {vault, label, count} <- [{vault_a, "a", 700}, {vault_b, "b", 505}],
           i <- 1..count do
         Engram.Fixtures.insert_note!(user, vault,
           path: "batch-#{label}/note-#{i}.md",
@@ -366,9 +414,29 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
         )
       end
 
-      assert :ok = perform_job(ReconcileEmbeddings, %{})
-      jobs = all_enqueued(worker: EmbedNote)
-      assert length(jobs) == 500
+      txns = count_tenant_txns(fn -> assert :ok = perform_job(ReconcileEmbeddings, %{}) end)
+
+      assert length(all_enqueued(worker: EmbedNote)) == 1_205
+
+      # One tenant transaction PER PAGE (embed sweep: 2 pages, keyword sweep:
+      # 1), not one per user: a transaction holding a whole backlog runs past
+      # the 15 s checkout deadline, rolls back, and stalls every later user.
+      assert txns == 3
+    end
+
+    # The keyword sweep pages to the end too, never "the first page".
+    test "the keyword sweep queues every stale note, page by page" do
+      user = insert(:user)
+      for _ <- 1..5, do: current_note(user, keyword_version: nil)
+
+      txns =
+        count_tenant_txns(fn ->
+          assert :ok = perform_job(ReconcileEmbeddings, %{"page" => 2})
+        end)
+
+      assert length(all_enqueued(worker: RefreshKeywordVectors)) == 5
+      # Embed sweep: one empty page. Keyword sweep: 2, 2, then 1.
+      assert txns == 4
     end
 
     # One notes query per SWEEP per tenant (the embed sweep and the keyword
@@ -573,6 +641,47 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       {:query, src} -> collect_queries([src | acc])
     after
       0 -> Enum.reverse(acc)
+    end
+  end
+
+  # Two sweeps at once stamp the same rows and, on the maintenance pool,
+  # queue them twice. A kick while one runs is absorbed.
+  test "a kick while a sweep is executing does not start a second one" do
+    {:ok, job} = Oban.insert(ReconcileEmbeddings.new(%{}))
+    Repo.update_all(from(j in Oban.Job, where: j.id == ^job.id), set: [state: "executing"])
+
+    assert {:ok, %Oban.Job{conflict?: true}} = ReconcileEmbeddings.kick()
+  end
+
+  # Tenant transactions the sweep opens: one per page on the per-user path.
+  defp count_tenant_txns(fun) do
+    test_pid = self()
+    handler = {__MODULE__, make_ref()}
+
+    :telemetry.attach(
+      handler,
+      [:engram, :repo, :query],
+      fn _e, _m, %{query: sql}, _c ->
+        if self() == test_pid and sql =~ "set_config('app.current_tenant', $1",
+          do: send(test_pid, :tenant_txn)
+      end,
+      nil
+    )
+
+    try do
+      fun.()
+    after
+      :telemetry.detach(handler)
+    end
+
+    count_messages(:tenant_txn)
+  end
+
+  defp count_messages(msg, n \\ 0) do
+    receive do
+      ^msg -> count_messages(msg, n + 1)
+    after
+      0 -> n
     end
   end
 end

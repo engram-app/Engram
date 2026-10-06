@@ -5,6 +5,7 @@ defmodule Engram.BillingTest do
   # perturb. (PlanCache's equivalent tests live in Engram.Billing.PlanCacheTest,
   # non-async for the same reason.)
   use Engram.DataCase, async: false
+  use Oban.Testing, repo: Engram.Repo
 
   import Mox
 
@@ -705,6 +706,8 @@ defmodule Engram.BillingTest do
       assert sub.tier == "starter"
       assert sub.status == "trialing"
       assert sub.custom_data == %{"user_id" => user.id, "affiliate_ref" => "ref_abc"}
+      # A new plan can lift the index cap: the backfill starts now.
+      assert_enqueued(worker: Engram.Workers.ReconcileEmbeddings)
     end
 
     test "retried subscription.created preserves original custom_data (affiliate attribution)" do
@@ -791,6 +794,9 @@ defmodule Engram.BillingTest do
 
       assert {:ok, %Subscription{status: "past_due", tier: "pro"}} =
                Billing.upsert_from_paddle_event(event)
+
+      # An upgrade can lift the index cap: the backfill starts now.
+      assert_enqueued(worker: Engram.Workers.ReconcileEmbeddings)
     end
 
     test "subscription.canceled marks the row canceled" do

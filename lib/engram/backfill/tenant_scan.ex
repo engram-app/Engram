@@ -84,9 +84,12 @@ defmodule Engram.Backfill.TenantScan do
     |> Enum.concat()
   end
 
-  # No tenant context needed: `users` is not a tenant table, so no RLS policy
-  # applies and no `prepare_query/3` guard fires.
-  defp user_ids do
+  @doc """
+  Every user id. No tenant context needed: `users` is not a tenant table, so
+  no RLS policy applies and no `prepare_query/3` guard fires.
+  """
+  @spec user_ids() :: [Ecto.UUID.t()]
+  def user_ids do
     from(u in User, select: u.id) |> Repo.all()
   end
 end

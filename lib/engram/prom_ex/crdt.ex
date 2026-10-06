@@ -286,9 +286,9 @@ defmodule Engram.PromEx.Crdt do
         #     forever. Aggregate with `max by (instance)` or pick one instance —
         #     NEVER `sum`, which double-counts the byte totals.
         #
-        # The sweep runs every 6 hours rather than daily mostly for this: an
-        # ECS task replacement clears the table, and on a daily cadence that is
-        # up to 24h of "No data" on every panel after each deploy.
+        # The sweep runs hourly mostly for this: an ECS task replacement
+        # clears the table, so a deploy leaves every panel at "No data" until
+        # the next run.
         #
         # Assumes the default `PromEx.Storage.Core` reporter. Under
         # `PromEx.Storage.Peep` a MISSING measurement key records 1.0 rather
@@ -308,7 +308,7 @@ defmodule Engram.PromEx.Crdt do
           description:
             "Unix seconds at which the last sweep on this instance completed. " <>
               "`time() - this` is the only way to tell a frozen gauge from a current one; " <>
-              "expect it under ~6h (the cron period) plus a scrape interval."
+              "expect it under ~1h (the cron period) plus a scrape interval."
         ),
         last_value(
           metric_prefix ++ [:state_sweep, :notes],

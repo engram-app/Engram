@@ -3,7 +3,7 @@ defmodule Engram.Workers.TelemetryHeartbeat do
   Daily self-host census ping. Fire-and-forget: a failed send is dropped and
   tomorrow's run tries again, so an air-gapped install never errors or retries.
   """
-  use Oban.Worker, queue: :default, max_attempts: 1
+  use Oban.Worker, queue: :maintenance, max_attempts: 1
 
   alias Engram.Telemetry.Heartbeat
 

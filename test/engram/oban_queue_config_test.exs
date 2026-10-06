@@ -25,6 +25,46 @@ defmodule Engram.ObanQueueConfigTest do
              end)
   end
 
+  # `maintenance` holds the cron backstops, and only them. A user-triggered
+  # follow-up (a vault-deleted email, a Paddle cancel, an index-cap sweep)
+  # shares its 2 slots and can wait behind a 15-minute OrphanSweep; those
+  # belong on `events`.
+  #
+  # Expand/contract: `events` ships one release before the workers move onto
+  # it. Moved in the same release, a rollback to a build with no `events`
+  # queue strands their jobs, a Paddle cancel among them. Move these, then
+  # empty this list, in the release after `events` first ships.
+  @moving_to_events [
+    Engram.Workers.IndexCapMaintenance,
+    Engram.Workers.PaddleCancelSubscription,
+    Engram.Workers.VaultDeletedEmail
+  ]
+
+  test "maintenance runs exactly the cron workers" do
+    crons =
+      :engram
+      |> Application.get_env(Oban)
+      |> Keyword.fetch!(:plugins)
+      |> Enum.find_value(fn
+        {Oban.Plugins.Cron, opts} -> Keyword.fetch!(opts, :crontab)
+        _ -> nil
+      end)
+      |> MapSet.new(fn {_expr, worker} -> worker end)
+
+    on_maintenance =
+      for mod <- Engram.Test.ObanWorkers.all(),
+          worker_queue(mod) == :maintenance,
+          into: MapSet.new(),
+          do: mod
+
+    assert MapSet.difference(crons, on_maintenance) |> MapSet.to_list() == [],
+           "cron workers off the maintenance queue"
+
+    assert on_maintenance |> MapSet.difference(crons) |> MapSet.to_list() |> Enum.sort() ==
+             Enum.sort(@moving_to_events),
+           "non-cron workers on the maintenance queue: move them to :events"
+  end
+
   # Tripwire against unbounded embed concurrency. The 2026-07-03 OOM crash-loop
   # was NOT caused by embed concurrency itself — it was the Lingua language
   # detector loading ~945 MB of full-accuracy models off-heap during indexing

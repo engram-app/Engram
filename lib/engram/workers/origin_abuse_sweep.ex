@@ -9,7 +9,7 @@ defmodule Engram.Workers.OriginAbuseSweep do
   Runs at 04:00 UTC daily (after §C InactivityCleanup at 03:30 UTC).
   """
 
-  use Oban.Worker, queue: :default, max_attempts: 3
+  use Oban.Worker, queue: :maintenance, max_attempts: 3
 
   alias Engram.Abuse.OriginStats
   alias Engram.Logger.Metadata

@@ -1,14 +1,9 @@
 defmodule Engram.ObanCronTest do
   @moduledoc """
-  The nightly maintenance chain shares one `maintenance` queue (concurrency 2)
-  and one database. Two sweeps landing on the same minute contend for both, and
-  the symptom — a slow night, a timeout in whichever worker lost — points at the
-  worker rather than at the schedule that caused it.
-
-  This does NOT assert global non-overlap: `ReconcileEmbeddings` (`*/15`) and
-  `CleanupDeviceAuthWorker` (`0 * * * *`) deliberately share the top of every
-  hour and have since long before this test. It asserts the weaker, true thing —
-  that each DAILY worker owns its minute outright.
+  The crons share the `maintenance` queue (concurrency 2) and one database.
+  Two landing on the same minute contend for both, and the symptom — a slow
+  run, a timeout in whichever worker lost — points at the worker rather than at
+  the schedule that caused it. So no two entries share any minute of the day.
   """
   use ExUnit.Case, async: true
 
@@ -65,28 +60,16 @@ defmodule Engram.ObanCronTest do
            "daily workers scheduled on the same minute: #{inspect(collisions)}"
   end
 
-  test "the CRDT bloat sweep does not collide with any other entry" do
-    entry = Enum.find(crontab(), fn {_, worker} -> worker == Engram.Workers.CrdtBloatSweep end)
+  test "no two entries share any minute of the day" do
+    collisions =
+      for {expr_a, worker_a} <- crontab(),
+          {expr_b, worker_b} <- crontab(),
+          worker_a < worker_b,
+          shared = MapSet.intersection(slots(expr_a), slots(expr_b)),
+          MapSet.size(shared) > 0,
+          do: {worker_a, worker_b, shared |> Enum.min() |> then(&{div(&1, 60), rem(&1, 60)})}
 
-    assert entry,
-           "CrdtBloatSweep is not scheduled — this test guards its slot, so removing " <>
-             "the entry should be a deliberate edit here too"
-
-    {sweep_expr, _} = entry
-
-    sweep = slots(sweep_expr)
-
-    # `slots/1` already expands a sub-hourly entry across all 24 hours, so this
-    # catches `*/15` and `0 * * * *` on the same footing as the daily jobs —
-    # which matters, because the sweep is itself sub-hourly (`10 */6 * * *`).
-    others =
-      crontab()
-      |> Enum.reject(fn {_, worker} -> worker == Engram.Workers.CrdtBloatSweep end)
-      |> Enum.flat_map(fn {expr, worker} ->
-        for slot <- slots(expr), MapSet.member?(sweep, slot), do: {slot, worker}
-      end)
-
-    assert others == [],
-           "CrdtBloatSweep (#{sweep_expr}) shares its minute with: #{inspect(others)}"
+    assert collisions == [],
+           "crons sharing a minute (first {hour, minute}): #{inspect(collisions)}"
   end
 end

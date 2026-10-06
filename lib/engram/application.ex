@@ -31,76 +31,7 @@ defmodule Engram.Application do
 
     if Engram.Observability.Otel.enabled?(), do: Engram.Observability.Otel.attach_handlers()
 
-    children =
-      [
-        EngramWeb.Telemetry,
-        Engram.PromEx,
-        Engram.Repo,
-        maintenance_repo_child(),
-        boot_canary_guard(),
-        tenancy_guard(),
-        {DNSCluster, query: Application.get_env(:engram, :dns_cluster_query) || :ignore},
-        {Phoenix.PubSub, name: Engram.PubSub},
-        # Subscribes to CacheSync in init, so it must start after PubSub. (Local
-        # eviction is synchronous in invalidate_all/0; this subscriber only
-        # matters for evictions broadcast by already-clustered peer nodes.)
-        Engram.Legal.VersionCache.Invalidator,
-        EngramWeb.Presence,
-        Engram.Crypto.DekCache,
-        Engram.UsageMeters.ActivityCache,
-        Engram.KeywordIndex.Stats.Cache,
-        # Published signing keys for CIMD clients that authenticate with
-        # private_key_jwt. Without it the token path refetches per request and
-        # the fetch limiter becomes a hard ceiling on token exchanges per
-        # vendor. No cache_sync/LISTEN deps, so ordering here is loose.
-        Engram.OAuth.Cimd.JwksCache,
-        Engram.Onboarding.TermsCache,
-        # Subscribe to CacheSync in init → must start after PubSub.
-        Engram.Onboarding.GateCache,
-        # Bounds concurrent catch-up page builds. Absent, merged_changes_page
-        # degrades open rather than failing, so ordering here is not critical.
-        Engram.Sync.PageGate,
-        # Dedicated LISTEN/NOTIFY connection — OverrideCache LISTENs on it
-        # so raw-SQL override writes (trigger → pg_notify) evict caches on
-        # every node. Must start before OverrideCache.
-        pg_notifications_child(),
-        Engram.Billing.OverrideCache,
-        # Resolved-entitlement cache (tier + full LimitKeys matrix), keyed by
-        # user. Also LISTENs on user_limit_overrides_changed, so it must start
-        # after pg_notifications_child like OverrideCache.
-        Engram.Billing.EntitlementCache,
-        Engram.Auth.SignupRejections,
-        rate_limiter_child(),
-        {Oban, Application.fetch_env!(:engram, Oban)},
-        clerk_strategy_child(),
-        # Bounds concurrent inline unbind checkpoints (self-healing via monitors);
-        # must start before any CRDT room can terminate and call unbind/3.
-        Engram.Notes.CheckpointGate,
-        # Owns the resident-room ETS table (#1152). Must start before any CRDT
-        # room, since a drain-enabled room's timer touches it on init.
-        Engram.Notes.CrdtRoomLru,
-        Engram.Notes.FanoutPacer,
-        # One DynamicSupervisor owns all live CRDT doc rooms. Rooms are
-        # cluster-wide singletons via :global; this supervisor is the local
-        # owner when a room is started on this node (see CrdtRegistry).
-        {DynamicSupervisor, name: Engram.Notes.CrdtDocSupervisor, strategy: :one_for_one},
-        # Short-lived tasks that must NOT be owned by the process that asked for
-        # them. `crdt_doc_update` (#1493) is the reason it exists: a room is
-        # bound to whichever process observes it, so applying a room-free write
-        # from the channel would pin that room to the socket — exactly the
-        # residency this frame removes. Running it here gives the room an
-        # observer that dies immediately, and `async_nolink` keeps a crashing
-        # apply from taking the channel (and its other rooms) with it.
-        {Task.Supervisor, name: Engram.TaskSupervisor},
-        # Bounds concurrent MCP markdown parses (dirty-CPU NIF). Its tasks run
-        # under Engram.TaskSupervisor, so it starts after it.
-        Engram.MCP.ParseGate,
-        # Pyroscope continuous CPU profiler. Returns nil when GRAFANA_PYROSCOPE_URL
-        # is unset (dev, test, self-host), and Enum.reject below filters it out.
-        pyroscope_child(),
-        EngramWeb.Endpoint
-      ]
-      |> Enum.reject(&is_nil/1)
+    children = children(Application.fetch_env!(:engram, Oban))
 
     opts = [strategy: :one_for_one, name: Engram.Supervisor]
 
@@ -372,6 +303,92 @@ defmodule Engram.Application do
           ]
         }
       })
+  end
+
+  @doc false
+  # The supervision tree, as a function of the Oban config so a test can
+  # see what a queue-running node starts.
+  def children(oban) do
+    [
+      EngramWeb.Telemetry,
+      Engram.PromEx,
+      Engram.Repo,
+      maintenance_repo_child(),
+      boot_canary_guard(),
+      tenancy_guard(),
+      {DNSCluster, query: Application.get_env(:engram, :dns_cluster_query) || :ignore},
+      {Phoenix.PubSub, name: Engram.PubSub},
+      # Subscribes to CacheSync in init, so it must start after PubSub. (Local
+      # eviction is synchronous in invalidate_all/0; this subscriber only
+      # matters for evictions broadcast by already-clustered peer nodes.)
+      Engram.Legal.VersionCache.Invalidator,
+      EngramWeb.Presence,
+      Engram.Crypto.DekCache,
+      Engram.UsageMeters.ActivityCache,
+      Engram.KeywordIndex.Stats.Cache,
+      # Published signing keys for CIMD clients that authenticate with
+      # private_key_jwt. Without it the token path refetches per request and
+      # the fetch limiter becomes a hard ceiling on token exchanges per
+      # vendor. No cache_sync/LISTEN deps, so ordering here is loose.
+      Engram.OAuth.Cimd.JwksCache,
+      Engram.Onboarding.TermsCache,
+      # Subscribe to CacheSync in init → must start after PubSub.
+      Engram.Onboarding.GateCache,
+      # Bounds concurrent catch-up page builds. Absent, merged_changes_page
+      # degrades open rather than failing, so ordering here is not critical.
+      Engram.Sync.PageGate,
+      # Dedicated LISTEN/NOTIFY connection — OverrideCache LISTENs on it
+      # so raw-SQL override writes (trigger → pg_notify) evict caches on
+      # every node. Must start before OverrideCache.
+      pg_notifications_child(),
+      Engram.Billing.OverrideCache,
+      # Resolved-entitlement cache (tier + full LimitKeys matrix), keyed by
+      # user. Also LISTENs on user_limit_overrides_changed, so it must start
+      # after pg_notifications_child like OverrideCache.
+      Engram.Billing.EntitlementCache,
+      Engram.Auth.SignupRejections,
+      rate_limiter_child(),
+      {Oban, oban},
+      boot_sweep_child(oban),
+      clerk_strategy_child(),
+      # Bounds concurrent inline unbind checkpoints (self-healing via monitors);
+      # must start before any CRDT room can terminate and call unbind/3.
+      Engram.Notes.CheckpointGate,
+      # Owns the resident-room ETS table (#1152). Must start before any CRDT
+      # room, since a drain-enabled room's timer touches it on init.
+      Engram.Notes.CrdtRoomLru,
+      Engram.Notes.FanoutPacer,
+      # One DynamicSupervisor owns all live CRDT doc rooms. Rooms are
+      # cluster-wide singletons via :global; this supervisor is the local
+      # owner when a room is started on this node (see CrdtRegistry).
+      {DynamicSupervisor, name: Engram.Notes.CrdtDocSupervisor, strategy: :one_for_one},
+      # Short-lived tasks that must NOT be owned by the process that asked for
+      # them. `crdt_doc_update` (#1493) is the reason it exists: a room is
+      # bound to whichever process observes it, so applying a room-free write
+      # from the channel would pin that room to the socket — exactly the
+      # residency this frame removes. Running it here gives the room an
+      # observer that dies immediately, and `async_nolink` keeps a crashing
+      # apply from taking the channel (and its other rooms) with it.
+      {Task.Supervisor, name: Engram.TaskSupervisor},
+      # Bounds concurrent MCP markdown parses (dirty-CPU NIF). Its tasks run
+      # under Engram.TaskSupervisor, so it starts after it.
+      Engram.MCP.ParseGate,
+      # Pyroscope continuous CPU profiler. Returns nil when GRAFANA_PYROSCOPE_URL
+      # is unset (dev, test, self-host), and Enum.reject below filters it out.
+      pyroscope_child(),
+      EngramWeb.Endpoint
+    ]
+    |> Enum.reject(&is_nil/1)
+  end
+
+  @doc """
+  A one-off reconcile sweep at boot, on a node that runs queues. A deploy is
+  when index versions change, so their rebuild starts then instead of on the
+  next cron tick. nil on a web node (`queues: false`) and under Oban testing.
+  """
+  def boot_sweep_child(oban) do
+    if oban[:queues] != false and is_nil(oban[:testing]),
+      do: {Task, &Engram.Workers.ReconcileEmbeddings.kick/0}
   end
 
   defp clerk_strategy_child do

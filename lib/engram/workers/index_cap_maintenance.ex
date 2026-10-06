@@ -27,6 +27,7 @@ defmodule Engram.Workers.IndexCapMaintenance do
     unique: [keys: [:user_id, :kind], period: 120, states: :incomplete]
 
   alias Engram.Indexing.IndexCap
+  alias Engram.Workers.ReconcileEmbeddings
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(10)
@@ -53,10 +54,17 @@ defmodule Engram.Workers.IndexCapMaintenance do
   # trigger; a job enqueued before deploy runs as the over-cap sweep.
   def perform(%Oban.Job{args: %{"user_id" => user_id, "kind" => kind}})
       when kind in ["evict_over_cap", "revoke_dense"] do
-    IndexCap.evict_over_cap(user_id)
+    user_id |> IndexCap.evict_over_cap() |> then_reconcile()
   end
 
   def perform(%Oban.Job{args: %{"user_id" => user_id, "kind" => "backfill_slots"}}) do
-    IndexCap.backfill_freed_slots(user_id)
+    user_id |> IndexCap.backfill_freed_slots() |> then_reconcile()
+  end
+
+  # Both sweeps only null hashes; ReconcileEmbeddings re-indexes. Queue it
+  # now rather than leave the notes for its next tick.
+  defp then_reconcile(result) do
+    _ = ReconcileEmbeddings.kick()
+    result
   end
 end

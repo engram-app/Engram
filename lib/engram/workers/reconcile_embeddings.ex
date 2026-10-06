@@ -2,8 +2,10 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   @moduledoc """
   Oban cron worker: finds notes with stale or missing embeddings and re-queues them.
 
-  Runs every 15 minutes via Oban.Plugins.Cron. Catches any notes that fell through
-  the cracks — failed jobs, discarded jobs, config errors, crashes mid-embed.
+  Runs every 5 minutes via Oban.Plugins.Cron, at boot on a queue-running node,
+  and whenever something marks notes for re-indexing (`kick/0`). Catches any
+  notes that fell through the cracks — failed jobs, discarded jobs, config
+  errors, crashes mid-embed — and every index-version rebuild.
 
   A note needs embedding when:
   - embed_hash IS NULL (never embedded)
@@ -13,14 +15,23 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     EmbedNote: a note that exhausts its attempts is parked for a cooldown window
     so it can't re-bill Voyage every tick)
 
-  Uses the partial index idx_notes_embed_pending for fast lookups.
-  Batches to avoid flooding the embed queue.
+  Uses the partial index idx_notes_embed_pending for fast lookups. Every stale
+  note is queued in one tick, a page at a time; nothing caps a tick. The embed
+  queue's concurrency and priority are the throttle: backfill runs at
+  priority 9, behind every live edit, and Voyage 429s snooze.
   """
 
   use Oban.Worker,
     queue: :maintenance,
     max_attempts: 1,
-    unique: [period: 300, states: :incomplete]
+    # One sweep at a time. Two at once stamp the same rows (the stamp's
+    # subquery is not re-checked under a row lock) and, on the maintenance
+    # pool where the stamp commits before the enqueue, queue them twice. A
+    # kick during a sweep is dropped: the running sweep pages until nothing is
+    # left, and the 5-min cron catches anything marked after its last page.
+    # Period = the 15-min timeout, so a job a killed node left `executing`
+    # stops blocking once it could no longer be running.
+    unique: [period: 900, states: [:available, :scheduled, :executing]]
 
   import Ecto.Query
 
@@ -36,7 +47,17 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
   require Logger
 
-  @batch_size 500
+  # Notes stamped and enqueued per statement. Each page drops out of the next
+  # page's query (the stamp), so a loop of pages walks the whole backlog.
+  # Tests pass a smaller `"page"` arg to exercise the loop.
+  @page 1_000
+
+  @doc """
+  Queues a sweep now. Called where notes are marked for re-indexing (index
+  cap changes, orphan repair, plan upgrades) and at boot, so that work starts
+  immediately instead of on the next cron tick. Deduplicated while pending.
+  """
+  def kick, do: Oban.insert(new(%{}))
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(15)
@@ -45,21 +66,18 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # enqueues `EmbedNote` jobs — it never decrypts or re-encrypts any payload.
   # The enqueued EmbedNote workers are individually gated via `RotationGate`.
   @impl Oban.Worker
-  def perform(%Oban.Job{}) do
-    # One query PER TENANT, under a global cap. It cannot be a single
-    # cross-tenant statement: `notes` is FORCE RLS, so without a tenant the
-    # select-and-stamp below is filtered to zero rows and this whole worker
-    # becomes a silent no-op (see the scan comment further down).
-    #
-    # Still not per-VAULT, which is what this used to be: that ran one
-    # stale-notes query per vault per tick, O(total vaults). Per-vault fairness
-    # isn't needed — EmbedNote is uniq-deduped and the oldest-first order
-    # drains any backlog across ticks.
+  def perform(%Oban.Job{args: args}) do
+    page_size = Map.get(args, "page", @page)
+
+    # Pages through every tenant's stale notes: one pass on the maintenance
+    # pool, or one transaction per page per tenant without it (see scan/3).
+    # Never per VAULT, which is what this used to be: one stale-notes query
+    # per vault per tick, O(total vaults).
     now = DateTime.utc_now()
     backoff_until = DateTime.add(now, reconcile_backoff_seconds(), :second)
 
-    # Eligible stale notes, oldest-first, capped — kept as a subquery so the
-    # whole select-and-stamp is ONE statement (see the UPDATE below).
+    # One page of eligible stale notes, oldest-first, kept as a subquery so
+    # the whole select-and-stamp is ONE statement (see the UPDATE below).
     # The SQL proxy for "uncapped and unmetered": a paid, entitled
     # subscription. See the comments on its two uses below.
     paid =
@@ -75,10 +93,10 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     #    vectors from another embed model. #1620 kept this cron off
     #    chunker_version ("never start a mass re-embed"); reversed 2026-10-04:
     #    every index version reaches existing notes automatically, as
-    #    unmetered maintenance (EmbedNote), bounded by @batch_size per tick.
+    #    unmetered maintenance at backfill priority.
     version_stale = version_stale_dynamic()
 
-    sweep_tenant = fn remaining ->
+    sweep_tenant = fn repo, remaining ->
       eligible =
         from(n in Note, as: :note)
         |> join(:inner, [n], v in Vault, on: v.id == n.vault_id and is_nil(v.deleted_at))
@@ -150,14 +168,14 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       # #897 — crash-independent backoff, done ATOMICALLY. EmbedNote's poison
       # cooldown only fires on a GRACEFUL terminal `{:error, _}` (maybe_mark_poison);
       # an OOM/node kill kills the BEAM mid-embed, so the cooldown is never stamped
-      # and this worker would re-enqueue the same poison note every 15 min →
+      # and this worker would re-enqueue the same poison note every tick →
       # self-sustaining crash loop (the 2026-07-03 incident). So instead of a
       # read-only SELECT we UPDATE the eligible notes' embed_retry_after to a short
       # future cooldown and RETURN their ids in one statement — no select→stamp
       # race, and still a single `notes` query regardless of vault count. A
       # successful EmbedNote clears the stamp back to NULL; a graceful terminal
       # failure extends it to the full poison cooldown. The window MUST outlast the
-      # 15-min cron interval so a crash-poison note skips at least one tick.
+      # 5-min cron interval so a crash-poison note skips at least one tick.
       # `kind == "note"` is redundant with the subquery (which already filters it)
       # but kept explicit so this bulk UPDATE is self-evidently note-scoped — a
       # folder marker can never get an embed cooldown stamped even if the subquery
@@ -177,112 +195,136 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         # Clears the budget-park flag with it: the #897 backoff must hold for
         # this note even for a paying user, or a crash mid-embed re-selects it
         # every tick.
-        |> Repo.update_all(set: [embed_retry_after: backoff_until, embed_budget_parked: nil])
+        |> repo.update_all(set: [embed_retry_after: backoff_until, embed_budget_parked: nil])
 
       rows
     end
 
-    # Per-tenant, NOT one cross-tenant statement. `notes` carries FORCE ROW
-    # LEVEL SECURITY, so with no `app.current_tenant` that UPDATE is FILTERED
-    # to zero rows and still reports success: the sweep stamps nothing and
-    # enqueues nothing on a database full of stale notes, every 15 minutes,
-    # with a green Oban job. That is the #1349 trap — see
-    # `Engram.Backfill.TenantScan`, whose moduledoc describes this exact
-    # failure. Inside each tenant's context `eligible` needs no `user_id`
-    # filter, because RLS scopes it.
-    #
-    # `@batch_size` stays a GLOBAL cap. `flat_map_users/1` threads no
-    # accumulator, so the remaining budget rides the process dictionary: the
-    # scan is a sequential reduce in this process, which makes that safe, and
-    # without it the cap would silently become per-user (on a 10k-user
-    # instance, 10k * @batch_size notes enqueued per tick).
-    Process.put(:reconcile_budget, @batch_size)
+    counts = scan(&sweep_tenant.(&1, page_size), page_size, &enqueue_page/1)
 
-    note_rows =
-      TenantScan.flat_map_users(fn _user_id ->
-        case Process.get(:reconcile_budget, 0) do
-          remaining when remaining <= 0 ->
-            []
+    eligible = Enum.sum(Enum.map(counts, &elem(&1, 0)))
+    queued = Enum.sum(Enum.map(counts, &elem(&1, 1)))
 
-          remaining ->
-            rows = sweep_tenant.(remaining)
-            Process.put(:reconcile_budget, remaining - length(rows))
-            rows
-        end
-      end)
+    # A zero-row sweep logs too. Without it, "nothing is stale" and "the
+    # statement was filtered to zero rows by RLS" share one observable —
+    # silence plus a green job — and that ambiguity is exactly what hid the
+    # unscoped UPDATE this function used to run. `:info`: prod logs at info.
+    Logger.info(
+      "reconcile_embeddings: swept",
+      Metadata.with_category(:info, :search,
+        eligible_count: eligible,
+        total_count: queued,
+        already_queued_count: eligible - queued
+      )
+    )
 
-    # A version rebuild (content current, older chunker or embed model) goes
-    # to RebuildStaleNote, a worker the previous release lacks, so a rolling
-    # deploy's old nodes cannot run it metered. Everything else is EmbedNote's.
-    {rebuild_rows, embed_rows} = Enum.split_with(note_rows, &version_rebuild?/1)
-    :ok = enqueue_rebuilds(rebuild_rows)
+    :ok = sweep_keyword_stale(now, paid, page_size)
+  end
 
-    note_ids = Enum.map(embed_rows, & &1.id)
+  # Runs `sweep.(repo)` over every tenant: once on the maintenance pool
+  # (which sees every tenant) where one is configured, as prod does; else
+  # once per user inside that user's tenant.
+  #
+  # Never one cross-tenant statement on the app pool. `notes` carries FORCE
+  # ROW LEVEL SECURITY, so with no `app.current_tenant` that UPDATE is
+  # FILTERED to zero rows and still reports success: the sweep stamps nothing
+  # and enqueues nothing on a database full of stale notes, with a green Oban
+  # job. That is the #1349 trap — see `Engram.Backfill.TenantScan`. Inside
+  # each tenant's context `eligible` needs no `user_id` filter: RLS scopes it.
+  # On the per-user path each page is stamped and enqueued in the tenant's
+  # transaction; on the maintenance path the stamp commits first, and a lost
+  # enqueue costs that note one cooldown window.
+  defp scan(page, page_size, handle) do
+    case Repo.maintenance() do
+      Repo ->
+        # One transaction PER PAGE, inside the user's tenant: stamp and
+        # enqueue stay atomic, and no transaction holds a whole backlog. One
+        # per user ran past the 15 s checkout deadline on a large backlog,
+        # rolled back, and stalled every user after it on every tick.
+        Enum.flat_map(TenantScan.user_ids(), fn user_id ->
+          sweep_pages(page_size, fn ->
+            {:ok, counts} =
+              Repo.with_tenant(user_id, fn -> page_counts(page.(Repo), handle) end)
+
+            counts
+          end)
+        end)
+
+      maintenance ->
+        sweep_pages(page_size, fn -> page_counts(page.(maintenance), handle) end)
+    end
+  end
+
+  defp page_counts(rows, handle), do: {length(rows), handle.(rows)}
+
+  # Runs `page` (which returns {rows_found, jobs_queued}) until a page comes
+  # back short. Returns the counts of every page.
+  defp sweep_pages(page_size, page) do
+    {found, _queued} = counts = page.()
+
+    if found < page_size,
+      do: [counts],
+      else: [counts | sweep_pages(page_size, page)]
+  end
+
+  # A version rebuild (content current, older chunker or embed model) goes to
+  # RebuildStaleNote, a worker the previous release lacks, so a rolling
+  # deploy's old nodes cannot run it metered. Everything else is EmbedNote's.
+  # Returns how many jobs were queued.
+  defp enqueue_page([]), do: 0
+
+  defp enqueue_page(rows) do
+    {rebuild_rows, embed_rows} = Enum.split_with(rows, &version_rebuild?/1)
+    rebuilt = enqueue_rebuilds(rebuild_rows)
     user_by_note = Map.new(embed_rows, &{&1.id, &1.user_id})
 
+    # clamp: false — insert_all ignores unique/replace, so the settle ceiling
+    # is moot; skip the per-note burst-start SELECT.
+    #
+    # reject_already_queued/2 is what keeps this worker from being a ratchet.
+    # The eligibility query filters on content/cooldown and NOT on "is a job
+    # already pending" — insert_all disables `unique`. So a note whose job was
+    # stuck collected one more job per backoff window: 61,536 jobs for 4,266
+    # notes in dev on 2026-08-25, which is what kept the queue from draining.
+    #
+    # Backfill priority unconditionally: everything this worker finds is
+    # catch-up with no user waiting on it, so none of it may outrank a live
+    # edit.
+    fresh =
+      embed_rows
+      |> Enum.map(& &1.id)
+      |> EmbedNote.reject_already_queued(EmbedNote.backfill_priority())
+
     _ =
-      if note_ids != [] do
-        # clamp: false — insert_all ignores unique/replace, so the settle
-        # ceiling is moot; skip the per-note burst-start SELECT (one per stale
-        # note, up to @batch_size, every tick).
-        #
-        # reject_already_queued/2 is what keeps this worker from being a
-        # ratchet. The eligibility query above filters on content/cooldown and
-        # NOT on "is a job already pending" — it used to assume `unique` covered
-        # that, which insert_all disables. So a note whose job was stuck
-        # collected one more job per backoff window: 61,536 jobs for 4,266 notes
-        # in dev on 2026-08-25, which is what kept the queue from draining.
-        #
-        # Backfill priority unconditionally: everything this worker finds is by
-        # definition catch-up — a note that fell through, a crash retry, or the
-        # tail of a bulk import. None of it has a user waiting on it, so none of
-        # it may outrank a live edit.
-        fresh = EmbedNote.reject_already_queued(note_ids, EmbedNote.backfill_priority())
-
-        # Report BOTH numbers. `eligible` is what the stale-note query matched;
-        # `total_count` is what was actually enqueued. Logging only the former
-        # would claim a full batch on every tick while suppressing all of it —
-        # unreadable in exactly the backlog incident this guard exists for.
-        Logger.debug(
-          "reconcile_embeddings: queueing stale notes",
-          Metadata.with_category(:debug, :search,
-            total_count: length(fresh),
-            eligible_count: length(note_ids),
-            already_queued_count: length(note_ids) - length(fresh)
+      Oban.insert_all(
+        Enum.map(
+          fresh,
+          &EmbedNote.new_debounced(&1, Map.fetch!(user_by_note, &1),
+            clamp: false,
+            priority: EmbedNote.backfill_priority()
           )
         )
+      )
 
-        _ =
-          Oban.insert_all(
-            Enum.map(
-              fresh,
-              &EmbedNote.new_debounced(&1, Map.fetch!(user_by_note, &1),
-                clamp: false,
-                priority: EmbedNote.backfill_priority()
-              )
-            )
-          )
+    # Backstop for the link graph. ExtractNoteLinks is the only note_links
+    # writer and is enqueued beside EmbedNote after the write commits, so a
+    # note whose embed enqueue was lost most likely lost its link extraction
+    # too. Only for notes whose CONTENT changed: a dense-only backfill or a
+    # version rebuild leaves the links as they are.
+    queued = MapSet.new(fresh)
 
-        # Backstop for the link graph. ExtractNoteLinks is the only note_links
-        # writer and is enqueued beside EmbedNote after the write commits, so
-        # a note whose embed enqueue was lost most likely lost its link
-        # extraction too. Indexing used to cover this by rewriting links on
-        # every embed; that duplicate parse is gone, so this sweep re-extracts.
-        Oban.insert_all(
-          Enum.map(fresh, &ExtractNoteLinks.new_debounced(&1, Map.fetch!(user_by_note, &1)))
-        )
-      else
-        # A zero-row sweep MUST log. Without this, "nothing is stale" and "the
-        # statement was filtered to zero rows by RLS" share one observable —
-        # silence plus a green job — and that ambiguity is exactly what hid the
-        # unscoped UPDATE this function used to run.
-        Logger.debug(
-          "reconcile_embeddings: no stale notes",
-          Metadata.with_category(:debug, :search, total_count: 0)
-        )
-      end
+    relink =
+      for r <- embed_rows,
+          MapSet.member?(queued, r.id),
+          r.embed_hash != r.content_hash,
+          do: r.id
 
-    :ok = sweep_keyword_stale(now, paid)
+    _ =
+      Oban.insert_all(
+        Enum.map(relink, &ExtractNoteLinks.new_debounced(&1, Map.fetch!(user_by_note, &1)))
+      )
+
+    rebuilt + length(fresh)
   end
 
   defp version_rebuild?(%{embed_hash: hash, content_hash: hash} = row) when hash != nil,
@@ -290,18 +332,10 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
   defp version_rebuild?(_row), do: false
 
-  defp enqueue_rebuilds([]), do: :ok
+  defp enqueue_rebuilds([]), do: 0
 
   defp enqueue_rebuilds(rows) do
     fresh = reject_pending(Enum.map(rows, &{&1.id, &1.user_id}), RebuildStaleNote)
-
-    Logger.debug(
-      "reconcile_embeddings: queueing version rebuilds",
-      Metadata.with_category(:debug, :search,
-        total_count: length(fresh),
-        eligible_count: length(rows)
-      )
-    )
 
     _ =
       Oban.insert_all(
@@ -312,7 +346,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         end)
       )
 
-    :ok
+    length(fresh)
   end
 
   defp version_stale_dynamic do
@@ -354,60 +388,60 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # notes every tick. Fine at thousands of notes per tenant; add a partial
   # index on (user_id) WHERE keyword_version IS DISTINCT FROM <current> if a
   # tenant reaches hundreds of thousands.
-  defp sweep_keyword_stale(now, paid) do
+  defp sweep_keyword_stale(now, paid, page_size) do
     version = KeywordIndex.version()
     backoff_until = DateTime.add(now, reconcile_backoff_seconds(), :second)
-    Process.put(:reconcile_keyword_budget, @batch_size)
 
-    rows =
-      TenantScan.flat_map_users(fn _user_id ->
-        case Process.get(:reconcile_keyword_budget, 0) do
-          remaining when remaining <= 0 ->
-            []
+    page = fn repo ->
+      eligible =
+        from(n in Note, as: :note)
+        |> join(:inner, [n], v in Vault, on: v.id == n.vault_id and is_nil(v.deleted_at))
+        |> where([n], n.kind == "note" and is_nil(n.deleted_at))
+        |> where([n], n.embed_hash == n.content_hash)
+        |> where([n], is_nil(n.keyword_version) or n.keyword_version != ^version)
+        # A version-stale note gets a full rebuild above, which stamps the
+        # keyword version itself.
+        |> where(^dynamic([n], not (^version_stale_dynamic())))
+        |> where(
+          [n],
+          is_nil(n.embed_retry_after) or n.embed_retry_after <= ^now or
+            (n.embed_budget_parked == true and exists(paid))
+        )
+        |> order_by([n], asc: n.updated_at)
+        |> limit(^page_size)
+        |> select([n], n.id)
 
-          remaining ->
-            eligible =
-              from(n in Note, as: :note)
-              |> join(:inner, [n], v in Vault, on: v.id == n.vault_id and is_nil(v.deleted_at))
-              |> where([n], n.kind == "note" and is_nil(n.deleted_at))
-              |> where([n], n.embed_hash == n.content_hash)
-              |> where([n], is_nil(n.keyword_version) or n.keyword_version != ^version)
-              # A version-stale note gets a full rebuild above, which stamps
-              # the keyword version itself.
-              |> where(^dynamic([n], not (^version_stale_dynamic())))
-              |> where(
-                [n],
-                is_nil(n.embed_retry_after) or n.embed_retry_after <= ^now or
-                  (n.embed_budget_parked == true and exists(paid))
-              )
-              |> order_by([n], asc: n.updated_at)
-              |> limit(^remaining)
-              |> select([n], n.id)
+      # Select-and-stamp in one statement, as the embed sweep does (#897): a
+      # note whose resparse keeps failing (a lost Qdrant point 404s
+      # `update_vectors`) skips the cooldown window instead of re-entering
+      # every tick once its job is discarded. Success stamps
+      # `keyword_version`, so a healthy note never comes back.
+      {_count, found} =
+        from(n in Note, where: n.kind == "note" and n.id in subquery(eligible))
+        |> select([n], {n.id, n.user_id})
+        # Clears the budget-park flag too, as the embed sweep's stamp does: a
+        # parked note of a paying user stays eligible through the cooldown
+        # filter otherwise, and every page would return it again.
+        |> repo.update_all(set: [embed_retry_after: backoff_until, embed_budget_parked: nil])
 
-            # Select-and-stamp in one statement, as the embed sweep does
-            # (#897): a note whose resparse keeps failing (a lost Qdrant point
-            # 404s `update_vectors`) skips the cooldown window instead of
-            # re-entering every tick once its job is discarded. Success stamps
-            # `keyword_version`, so a healthy note never comes back.
-            {_count, found} =
-              from(n in Note, where: n.kind == "note" and n.id in subquery(eligible))
-              |> select([n], {n.id, n.user_id})
-              |> Repo.update_all(set: [embed_retry_after: backoff_until])
+      found
+    end
 
-            Process.put(:reconcile_keyword_budget, remaining - length(found))
-            found
-        end
-      end)
+    counts = scan(page, page_size, &enqueue_refresh/1)
 
-    fresh = reject_pending(rows, RefreshKeywordVectors)
-
-    Logger.debug(
-      "reconcile_embeddings: queueing keyword-stale notes",
-      Metadata.with_category(:debug, :search,
-        total_count: length(fresh),
-        eligible_count: length(rows)
+    Logger.info(
+      "reconcile_embeddings: swept keyword-stale notes",
+      Metadata.with_category(:info, :search,
+        eligible_count: Enum.sum(Enum.map(counts, &elem(&1, 0))),
+        total_count: Enum.sum(Enum.map(counts, &elem(&1, 1)))
       )
     )
+
+    :ok
+  end
+
+  defp enqueue_refresh(rows) do
+    fresh = reject_pending(rows, RefreshKeywordVectors)
 
     _ =
       Oban.insert_all(
@@ -418,38 +452,31 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         end)
       )
 
-    :ok
+    length(fresh)
   end
 
   # insert_all ignores `unique`, so without this every tick would stack one
-  # more job per note while the queue is behind (the ratchet EmbedNote's
-  # `reject_already_queued/2` exists for).
-  defp reject_pending([], _worker), do: []
-
+  # more job per note while the queue is behind (the ratchet).
   defp reject_pending(rows, worker) do
-    wanted = Enum.map(rows, fn {id, _} -> to_string(id) end)
-    worker_name = inspect(worker)
-
-    pending =
-      from(j in Oban.Job,
-        where: j.worker == ^worker_name,
-        where: j.state in ["available", "scheduled", "executing", "retryable"],
-        where: fragment("? ->> 'note_id'", j.args) in ^wanted,
-        select: fragment("? ->> 'note_id'", j.args)
-      )
-      |> Repo.all()
+    fresh =
+      rows
+      |> Enum.map(&elem(&1, 0))
+      |> then(&Engram.Jobs.reject_pending(worker, &1))
       |> MapSet.new()
 
-    Enum.reject(rows, fn {id, _} -> MapSet.member?(pending, to_string(id)) end)
+    Enum.filter(rows, &MapSet.member?(fresh, elem(&1, 0)))
   end
 
   # #897 — preemptive cooldown window stamped on every enqueued note (see
-  # perform/1). MUST exceed the 15-minute cron interval so a crash-poison note
+  # perform/1). MUST exceed the 5-minute cron interval so a crash-poison note
   # skips at least one tick rather than re-enqueuing immediately. A healthy note
   # is unaffected: its EmbedNote clears the stamp on success, typically within
   # seconds. Env-driven via `EMBED_RECONCILE_BACKOFF_SECONDS` (runtime.exs);
   # default 30 min.
+  # Floored at 6 min, past the cron interval: at or below `now` the stamp no
+  # longer removes a note from the next page's query, and the page loop
+  # never ends.
   defp reconcile_backoff_seconds do
-    Application.get_env(:engram, :embed_reconcile_backoff_seconds, 1_800)
+    max(Application.get_env(:engram, :embed_reconcile_backoff_seconds, 1_800), 360)
   end
 end

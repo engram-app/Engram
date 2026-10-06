@@ -34,7 +34,7 @@ note write (REST / MCP / CRDT checkpoint)
 - No custom `backoff/1`: Oban's default exponential backoff, `max_attempts: 5`.
 - Voyage 429: the worker returns `{:snooze, n}` (default 60s, `EMBED_429_SNOOZE_SECONDS`), which does not burn an attempt. Optional client-side caps `VOYAGE_RPM` / `VOYAGE_QUERY_RPM` fail fast with a synthetic 429 (`config/runtime.exs`).
 - There is no Oban Pro and no Oban rate limiter. Concurrency limits are the backpressure.
-- Recovery: the `ReconcileEmbeddings` cron (every 15 min) re-enqueues notes on the `idx_notes_embed_pending` partial index (`embed_hash IS NULL OR embed_hash <> content_hash`). That covers exhausted jobs and notes that never got a job.
+- Recovery: the `ReconcileEmbeddings` cron (every 5 min, plus `kick/0` where notes are marked stale) re-enqueues notes on the `idx_notes_embed_pending` partial index (`embed_hash IS NULL OR embed_hash <> content_hash`). That covers exhausted jobs and notes that never got a job.
 - Crash safety: `Oban.Plugins.Lifeline` rescues jobs stuck in `executing` (default 60 min). `shutdown_grace_period` (45s) exists so a deploy does not strand an in-flight embed for that hour.
 
 ## Re-indexing

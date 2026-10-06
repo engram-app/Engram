@@ -528,6 +528,8 @@ defmodule Engram.Workers.OrphanSweep do
     # be FILTERED to zero rows on the app pool — clearing nothing while this
     # logs a count of 0 and reads as a successful repair. #1746.
     count = Indexing.flag_notes_for_rebuild(note_ids, maintenance_repo())
+    # Re-indexing starts now, not on reconcile's next tick.
+    _ = Engram.Workers.ReconcileEmbeddings.kick()
 
     Logger.warning(
       "orphan_sweep flagged notes for re-index: Qdrant is missing their points",
