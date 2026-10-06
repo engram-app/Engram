@@ -92,3 +92,16 @@ chunking before it is expensive: bundle boundary changes into one bump.
 - Watch it: `RefreshKeywordVectors` jobs in the `embed` queue at backfill priority; the
   `reconcile_embeddings: queueing keyword-stale notes` debug line carries
   `eligible_count` / `total_count`.
+
+## The completion ledger stops the version scans
+
+Once `Engram.DataMigrations.IndexVersions` is done, `ReconcileEmbeddings` drops
+the version term and skips the keyword scan. Bumping the chunker, keyword or
+model version renames the migration (its name carries all three), which reopens
+both scans. No operator step is involved; see
+`docs/context/data-migrations-ledger.md`.
+
+**Rolling-deploy window.** An old-release node can still stamp the previous
+chunker or keyword version on a note after the new release marked the new name
+done. That note is not re-swept until the next version bump. The window is
+narrow because a full rebuild outlasts a node drain.
