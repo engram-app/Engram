@@ -525,7 +525,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
             note.folder,
             tags
           )
-          |> Notes.inject_okf_fields_pub(user, note_id, text)
+          |> Notes.inject_frontmatter_fields_pub(user, note_id, text)
           |> Map.put(:crdt_state_ciphertext, ct)
           |> Map.put(:crdt_state_nonce, nonce)
           |> Map.put(:content_hash, content_hash)

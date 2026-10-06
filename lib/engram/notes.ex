@@ -6098,12 +6098,6 @@ defmodule Engram.Notes do
     Map.merge(attrs, Map.new(phase_b_keyword_for(user, note_id, path, folder, tags)))
   end
 
-  # OKF v0.1 fields. Sets ALL columns on every write: nil when the key is
-  # absent, so removing frontmatter clears previously stored values.
-  defp inject_okf_fields(attrs, user, note_id, content) do
-    put_okf_fields(attrs, user, note_id, OkfFields.extract(content))
-  end
-
   # OKF fields AND parse_status from ONE parse of the persisted content. Both
   # read the same frontmatter block; YamlElixir is ~1.5 ms per 10-key block,
   # so parsing it twice per write was a measurable share of a REST write (#1877).
@@ -6116,6 +6110,8 @@ defmodule Engram.Notes do
     |> put_parse_status(block, parsed)
   end
 
+  # OKF v0.1 fields. Sets ALL columns on every write: nil when the key is
+  # absent, so removing frontmatter clears previously stored values.
   defp put_okf_fields(attrs, user, note_id, okf) do
     {:ok, dek} = Crypto.get_dek(user)
     {:ok, filter_key} = Crypto.dek_filter_key(user)
@@ -6165,15 +6161,15 @@ defmodule Engram.Notes do
   end
 
   @doc false
-  # Public delegate so `CrdtCheckpoint` can re-run OKF v0.1 frontmatter
-  # extraction on every changed-text checkpoint, the same way it re-runs
-  # Phase B. Without this, a live-editor frontmatter edit persists content
-  # while type_ciphertext/type_hmac/fm_timestamp/fm_created keep stale
-  # values. The `defp` counterpart cannot be called across module
-  # boundaries; this thin wrapper exposes it without promoting it to an
+  # Public delegate so `CrdtCheckpoint` re-runs frontmatter derivation (OKF
+  # v0.1 fields AND parse_status/parse_reason, from one parse) on every
+  # changed-text checkpoint, the same way it re-runs Phase B. A frontmatter
+  # edit made in the live editor must refresh type_hmac/fm_timestamp AND clear
+  # a stale 'degraded' status. The `defp` counterpart cannot be called across
+  # module boundaries; this thin wrapper exposes it without promoting it to an
   # official public API.
-  def inject_okf_fields_pub(attrs, user, note_id, content) do
-    inject_okf_fields(attrs, user, note_id, content)
+  def inject_frontmatter_fields_pub(attrs, user, note_id, content) do
+    inject_frontmatter_fields(attrs, user, note_id, content)
   end
 
   # Frontmatter-resilience (Task 5): stamp parse_status/parse_reason from the
