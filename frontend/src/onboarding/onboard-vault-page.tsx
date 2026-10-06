@@ -34,6 +34,10 @@ interface VaultStepProps {
 	navigate: ReturnType<typeof useNavigate>;
 }
 
+// The default vault NAME is data saved on the server, not UI text: never translated.
+// (Only the input placeholder is, via t.)
+const DEFAULT_VAULT_NAME = "My Vault";
+
 function VaultStep({
 	profileSaved,
 	savedUsesObsidian,
@@ -108,7 +112,7 @@ function VaultStep({
 
 	async function commitFresh(name: string) {
 		await setProfile.mutateAsync({ uses_obsidian: false });
-		const trimmed = name.trim() || t("My Vault");
+		const trimmed = name.trim() || DEFAULT_VAULT_NAME;
 		const vault = await createVault.mutateAsync({
 			name: trimmed,
 			client_id: vaultClientId,
@@ -378,7 +382,7 @@ interface FreshInlinePanelProps {
 
 function FreshInlinePanel({ isCommitting, onCommit }: FreshInlinePanelProps) {
 	const { t } = useT();
-	const [name, setName] = useState(() => t("My Vault"));
+	const [name, setName] = useState(DEFAULT_VAULT_NAME);
 	const [error, setError] = useState<string | null>(null);
 	const nameRef = useAutofocus<HTMLInputElement>();
 
@@ -409,6 +413,7 @@ function FreshInlinePanel({ isCommitting, onCommit }: FreshInlinePanelProps) {
 					value={name}
 					onChange={(e) => setName(e.target.value)}
 					maxLength={100}
+					placeholder={t("My Vault")}
 					className="rounded-lg border border-border bg-background px-3 py-2 text-base text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/30"
 				/>
 			</label>
