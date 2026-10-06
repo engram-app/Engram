@@ -30,74 +30,57 @@ defmodule Engram.Native do
   @doc "The keyword tokenizer: `{tokens, raw_len}`."
   def tokens_with_len(_text, _language), do: :erlang.nif_error(:nif_not_loaded)
 
-  # The note parsers run on the calling scheduler up to this size (well
+  # These run on the calling scheduler up to this many input bytes (well
   # under 1 ms on real notes; 2.8 ms worst seen, on adversarial backtick
   # runs), and on a dirty CPU scheduler above it. Prod has ONE dirty
   # CPU scheduler, and a write must not queue behind a long keyword encode.
   @inline_max 16_384
 
-  @doc false
-  def link_extract_nif(_content), do: :erlang.nif_error(:nif_not_loaded)
-  @doc false
-  def link_extract_dirty_nif(_content), do: :erlang.nif_error(:nif_not_loaded)
-  @doc false
-  def note_title_nif(_content), do: :erlang.nif_error(:nif_not_loaded)
-  @doc false
-  def note_title_dirty_nif(_content), do: :erlang.nif_error(:nif_not_loaded)
-  @doc false
-  def note_meta_nif(_content), do: :erlang.nif_error(:nif_not_loaded)
-  @doc false
-  def note_meta_dirty_nif(_content), do: :erlang.nif_error(:nif_not_loaded)
+  # Every NIF with an inline and a dirty variant: `{name, inline_nif,
+  # dirty_nif, arity}`. Rust exports both; `sized/3` picks one by size.
+  # Spelled out (not built from `name`) so a grep for either NIF lands here.
+  @sized [
+    {:link_extract, :link_extract_nif, :link_extract_dirty_nif, 1},
+    {:note_title, :note_title_nif, :note_title_dirty_nif, 1},
+    {:note_meta, :note_meta_nif, :note_meta_dirty_nif, 1},
+    {:chunk, :chunk_nif, :chunk_dirty_nif, 3},
+    {:frontmatter_split, :frontmatter_split_nif, :frontmatter_split_dirty_nif, 1},
+    {:frontmatter_parse, :frontmatter_parse_nif, :frontmatter_parse_dirty_nif, 1},
+    {:text_diff, :text_diff_nif, :text_diff_dirty_nif, 2},
+    {:hmac_hex_many, :hmac_hex_many_nif, :hmac_hex_many_dirty_nif, 3},
+    {:json_decode, :json_decode_nif, :json_decode_dirty_nif, 1}
+  ]
+
+  for {name, inline_nif, dirty_nif, arity} <- @sized do
+    for nif <- [inline_nif, dirty_nif] do
+      @doc false
+      def unquote(nif)(unquote_splicing(List.duplicate(Macro.var(:_, nil), arity))),
+        do: :erlang.nif_error(:nif_not_loaded)
+    end
+
+    defp nifs(unquote(name)), do: {unquote(inline_nif), unquote(dirty_nif)}
+  end
 
   @doc """
   Links for `Engram.Links.Parser`: `{[{position, kind, target_start,
   target_len, target, alias, anchor}], scrub_count}`, in position order.
   `content` must be valid UTF-8.
   """
-  def link_extract(content),
-    do: parse(:link_extract, content, &link_extract_nif/1, &link_extract_dirty_nif/1)
-
-  @doc false
-  def chunk_nif(_content, _folder, _title), do: :erlang.nif_error(:nif_not_loaded)
-  @doc false
-  def chunk_dirty_nif(_content, _folder, _title), do: :erlang.nif_error(:nif_not_loaded)
-  @doc false
-  def frontmatter_split_nif(_content), do: :erlang.nif_error(:nif_not_loaded)
-  @doc false
-  def frontmatter_split_dirty_nif(_content), do: :erlang.nif_error(:nif_not_loaded)
+  def link_extract(content), do: sized(:link_extract, content, [content])
 
   @doc """
   Chunks for `Engram.Parsers.Markdown.parse/2`: `[{text, context_text,
   heading_path, char_start, char_end}]`, before positions. Splits
   frontmatter itself. Valid UTF-8 only.
   """
-  def chunk(content, folder, title),
-    do:
-      parse(
-        :chunk,
-        content,
-        &chunk_nif(&1, folder, title),
-        &chunk_dirty_nif(&1, folder, title)
-      )
+  def chunk(content, folder, title), do: sized(:chunk, content, [content, folder, title])
 
   @doc """
   Frontmatter fence offsets for `Engram.Notes.Frontmatter.split/1`:
   `{block_start, block_end, body_start, add_newline}` or nil. Any binary:
   the scan is over bytes.
   """
-  def frontmatter_split(content),
-    do:
-      parse(
-        :frontmatter_split,
-        content,
-        &frontmatter_split_nif/1,
-        &frontmatter_split_dirty_nif/1
-      )
-
-  @doc false
-  def frontmatter_parse_nif(_block), do: :erlang.nif_error(:nif_not_loaded)
-  @doc false
-  def frontmatter_parse_dirty_nif(_block), do: :erlang.nif_error(:nif_not_loaded)
+  def frontmatter_split(content), do: sized(:frontmatter_split, content, [content])
 
   @doc """
   The common shape of a frontmatter YAML block, parsed natively:
@@ -105,30 +88,17 @@ defmodule Engram.Native do
   YAML the native rules do not cover (the caller then runs YamlElixir).
   Valid UTF-8 only.
   """
-  def frontmatter_parse(block),
-    do:
-      parse(
-        :frontmatter_parse,
-        block,
-        &frontmatter_parse_nif/1,
-        &frontmatter_parse_dirty_nif/1
-      )
+  def frontmatter_parse(block), do: sized(:frontmatter_parse, block, [block])
 
   @doc "Frontmatter `title:`, else the first H1 outside code, else nil. Valid UTF-8 only."
-  def note_title(content),
-    do: parse(:note_title, content, &note_title_nif/1, &note_title_dirty_nif/1)
+  def note_title(content), do: sized(:note_title, content, [content])
 
   @doc """
   `{note_title(content), tags}` in one call, tags being frontmatter tags then
   inline `#tags`, deduplicated: the code ranges both need are parsed once.
   Valid UTF-8 only.
   """
-  def note_meta(content), do: parse(:note_meta, content, &note_meta_nif/1, &note_meta_dirty_nif/1)
-
-  @doc false
-  def text_diff_nif(_current, _incoming), do: :erlang.nif_error(:nif_not_loaded)
-  @doc false
-  def text_diff_dirty_nif(_current, _incoming), do: :erlang.nif_error(:nif_not_loaded)
+  def note_meta(content), do: sized(:note_meta, content, [content])
 
   @doc """
   The single-span diff for `CrdtBridge.diff_into_text/2`: `{prefix_u16,
@@ -136,21 +106,18 @@ defmodule Engram.Native do
   `current`; the insert is a byte range of `incoming`, for `binary_part/3`.
   Valid UTF-8 only.
   """
-  def text_diff(current, incoming) do
-    dirty = byte_size(current) + byte_size(incoming) > @inline_max
+  def text_diff(current, incoming),
+    do: sized(:text_diff, [current, incoming], [current, incoming])
 
-    call(:text_diff, [current, incoming], %{dirty: dirty}, fn ->
-      if dirty,
-        do: text_diff_dirty_nif(current, incoming),
-        else: text_diff_nif(current, incoming)
-    end)
+  # `input` as for `call/4`; up to @inline_max bytes of it runs `<name>_nif`
+  # on the calling scheduler, more runs `<name>_dirty_nif`.
+  defp sized(name, input, args) do
+    bytes = if is_integer(input), do: input, else: :erlang.iolist_size(input)
+    dirty = bytes > @inline_max
+    {inline_nif, dirty_nif} = nifs(name)
+    nif = if dirty, do: dirty_nif, else: inline_nif
+    call(name, bytes, %{dirty: dirty}, fn -> apply(__MODULE__, nif, args) end)
   end
-
-  defp parse(name, content, inline, _dirty) when byte_size(content) <= @inline_max,
-    do: call(name, content, %{dirty: false}, fn -> inline.(content) end)
-
-  defp parse(name, content, _inline, dirty),
-    do: call(name, content, %{dirty: true}, fn -> dirty.(content) end)
 
   @doc false
   def mmr_select_nif(_vectors, _scores, _limit, _diversity),
@@ -164,18 +131,6 @@ defmodule Engram.Native do
 
   @doc false
   def sparse_json_nif(_indices, _values), do: :erlang.nif_error(:nif_not_loaded)
-
-  @doc false
-  def hmac_hex_many_nif(_key, _prefix, _texts), do: :erlang.nif_error(:nif_not_loaded)
-
-  @doc false
-  def hmac_hex_many_dirty_nif(_key, _prefix, _texts), do: :erlang.nif_error(:nif_not_loaded)
-
-  @doc false
-  def json_decode_nif(_text), do: :erlang.nif_error(:nif_not_loaded)
-
-  @doc false
-  def json_decode_dirty_nif(_text), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc "Live bytes held by this library's Rust heap, process-wide."
   def live_bytes, do: :erlang.nif_error(:nif_not_loaded)
@@ -238,14 +193,7 @@ defmodule Engram.Native do
   def hmac_hex_many(key, prefix, texts)
       when byte_size(key) == 32 and is_binary(prefix) and is_list(texts) do
     bytes = :erlang.iolist_size(texts) + length(texts) * byte_size(prefix)
-
-    if bytes <= @inline_max do
-      call(:hmac_hex_many, bytes, %{dirty: false}, fn -> hmac_hex_many_nif(key, prefix, texts) end)
-    else
-      call(:hmac_hex_many, bytes, %{dirty: true}, fn ->
-        hmac_hex_many_dirty_nif(key, prefix, texts)
-      end)
-    end
+    sized(:hmac_hex_many, bytes, [key, prefix, texts])
   end
 
   @doc """
@@ -256,12 +204,7 @@ defmodule Engram.Native do
   on the calling scheduler.
   """
   def json_decode(text) when is_binary(text) do
-    term =
-      if byte_size(text) <= @inline_max,
-        do: call(:json_decode, text, %{dirty: false}, fn -> json_decode_nif(text) end),
-        else: call(:json_decode, text, %{dirty: true}, fn -> json_decode_dirty_nif(text) end)
-
-    {:ok, term}
+    {:ok, sized(:json_decode, text, [text])}
   rescue
     ArgumentError -> {:error, :invalid_json}
   end
