@@ -8,6 +8,7 @@ mod links;
 mod memory;
 mod meta;
 mod mmr;
+mod text_diff;
 mod tokenizer;
 mod vectors;
 
@@ -405,6 +406,23 @@ fn frontmatter_split_nif(content: rustler::Binary) -> (frontmatter::Split, usize
 #[rustler::nif(schedule = "DirtyCpu")]
 fn frontmatter_split_dirty_nif(content: rustler::Binary) -> (frontmatter::Split, usize) {
     frontmatter_split_peak(content.as_slice())
+}
+
+/// `CrdtBridge.diff_into_text/2`'s span, and the peak (zero: no allocation).
+fn text_diff(current: &str, incoming: &str) -> ((usize, usize, usize, usize), usize) {
+    let base = memory::begin();
+    let out = text_diff::diff(current, incoming);
+    (out, memory::peak_since(base))
+}
+
+#[rustler::nif]
+fn text_diff_nif(current: &str, incoming: &str) -> ((usize, usize, usize, usize), usize) {
+    text_diff(current, incoming)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn text_diff_dirty_nif(current: &str, incoming: &str) -> ((usize, usize, usize, usize), usize) {
+    text_diff(current, incoming)
 }
 
 rustler::init!("Elixir.Engram.Native");

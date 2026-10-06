@@ -15,6 +15,13 @@ defmodule Engram.Notes.CrdtBridgeTest do
     assert text == "the quick red fox jumps"
   end
 
+  test "utf16_len counts UTF-16 code units, the doc's offset unit" do
+    assert CrdtBridge.utf16_len("") == 0
+    assert CrdtBridge.utf16_len("abc") == 3
+    assert CrdtBridge.utf16_len("é€") == 2
+    assert CrdtBridge.utf16_len("📝") == 2
+  end
+
   test "diff_into_text does NOT full-replace (unchanged prefix item survives)" do
     {:ok, doc} = CrdtBridge.doc_from_state(nil)
     t = Yex.Doc.get_text(doc, CrdtBridge.text_name())
