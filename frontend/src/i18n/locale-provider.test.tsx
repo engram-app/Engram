@@ -20,6 +20,9 @@ function Probe() {
 			<button type="button" onClick={() => setLocale("fr")}>
 				french
 			</button>
+			<button type="button" onClick={() => setLocale("de")}>
+				german
+			</button>
 		</>
 	);
 }
@@ -156,6 +159,122 @@ describe("LocaleProvider", () => {
 		await act(async () => undefined);
 		expect(captureError).not.toHaveBeenCalled();
 		expect(screen.getByText("Hello Todd")).toBeInTheDocument();
+	});
+
+	describe("switching between loaded languages", () => {
+		const fr = async () => ({ default: { "Hello {name}": "Bonjour {name}" } });
+		const gated = () => {
+			let release: () => void = () => undefined;
+			const gate = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			return { gate, release: () => release() };
+		};
+
+		it("keeps German and lang=de until French resolves, then flips both together", async () => {
+			window.localStorage.setItem("engram:locale", "de");
+			const slow = gated();
+			mount({
+				de,
+				fr: async () => {
+					await slow.gate;
+					return fr();
+				},
+			});
+			await screen.findByText("Hallo Todd");
+			await act(async () => screen.getByRole("button", { name: "french" }).click());
+			expect(screen.getByText("Hallo Todd")).toBeInTheDocument();
+			expect(document.documentElement.lang).toBe("de");
+			expect(screen.getByLabelText("rendered")).toHaveTextContent("de");
+			await act(async () => slow.release());
+			expect(await screen.findByText("Bonjour Todd")).toBeInTheDocument();
+			expect(document.documentElement.lang).toBe("fr");
+			expect(screen.getByLabelText("rendered")).toHaveTextContent("fr");
+		});
+
+		it("never passes through en while switching", async () => {
+			window.localStorage.setItem("engram:locale", "de");
+			const langs: string[] = [];
+			mount({ de, fr });
+			await screen.findByText("Hallo Todd");
+			const observer = new MutationObserver(() => langs.push(document.documentElement.lang));
+			observer.observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] });
+			await act(async () => screen.getByRole("button", { name: "french" }).click());
+			await screen.findByText("Bonjour Todd");
+			observer.disconnect();
+			expect(langs).toEqual(["fr"]);
+		});
+
+		it("stays German and reports when French fails to load, without retrying", async () => {
+			window.localStorage.setItem("engram:locale", "de");
+			const boom = new Error("chunk 404");
+			const load = vi.fn(async () => {
+				throw boom;
+			});
+			mount({ de, fr: load });
+			await screen.findByText("Hallo Todd");
+			await act(async () => screen.getByRole("button", { name: "french" }).click());
+			await vi.waitFor(() => expect(captureError).toHaveBeenCalledWith(boom));
+			expect(screen.getByText("Hallo Todd")).toBeInTheDocument();
+			expect(document.documentElement.lang).toBe("de");
+			expect(screen.getByLabelText("rendered")).toHaveTextContent("de");
+			expect(load).toHaveBeenCalledTimes(1);
+			expect(captureError).toHaveBeenCalledTimes(1);
+		});
+
+		it("stays German when French resolves undefined", async () => {
+			window.localStorage.setItem("engram:locale", "de");
+			mount({ de, fr: () => Promise.resolve(undefined) });
+			await screen.findByText("Hallo Todd");
+			await act(async () => screen.getByRole("button", { name: "french" }).click());
+			expect(screen.getByText("Hallo Todd")).toBeInTheDocument();
+			expect(captureError).not.toHaveBeenCalled();
+		});
+
+		it("switches to English immediately, with no loader to wait for", async () => {
+			window.localStorage.setItem("engram:locale", "de");
+			mount({ de });
+			await screen.findByText("Hallo Todd");
+			await act(async () => screen.getByRole("button", { name: "english" }).click());
+			expect(screen.getByText("Hello Todd")).toBeInTheDocument();
+			expect(document.documentElement.lang).toBe("en");
+			expect(screen.getByLabelText("rendered")).toHaveTextContent("en");
+		});
+
+		it("shows English, not the old language, when going en -> French", async () => {
+			window.localStorage.setItem("engram:locale", "de");
+			const slow = gated();
+			mount({
+				de,
+				fr: async () => {
+					await slow.gate;
+					return fr();
+				},
+			});
+			await screen.findByText("Hallo Todd");
+			await act(async () => screen.getByRole("button", { name: "english" }).click());
+			await act(async () => screen.getByRole("button", { name: "french" }).click());
+			expect(screen.getByText("Hello Todd")).toBeInTheDocument();
+			await act(async () => slow.release());
+			expect(await screen.findByText("Bonjour Todd")).toBeInTheDocument();
+		});
+
+		it("lets a stale load for a language the user left lose", async () => {
+			window.localStorage.setItem("engram:locale", "fr");
+			const slow = gated();
+			mount({
+				fr: async () => {
+					await slow.gate;
+					return fr();
+				},
+				de,
+			});
+			await act(async () => screen.getByRole("button", { name: "german" }).click());
+			expect(await screen.findByText("Hallo Todd")).toBeInTheDocument();
+			await act(async () => slow.release());
+			expect(screen.getByText("Hallo Todd")).toBeInTheDocument();
+			expect(document.documentElement.lang).toBe("de");
+		});
 	});
 
 	describe("renderedLocale", () => {

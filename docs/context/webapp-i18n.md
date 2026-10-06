@@ -13,7 +13,7 @@ Foundation and all ten translated catalogs shipped, and the language switcher is
 All under `frontend/src/i18n/`:
 
 - `locales.ts`: `LOCALES` (11 codes, `en` plus ten translated), `LOCALE_NAMES` (each in its own language), `matchLocale`/`resolveLocale` (browser tags to a supported locale; `zh-TW/HK/MO/Hant` map to `zh-TW`, other `zh` to `zh-CN`, `pt` to `pt-BR`).
-- `locale-provider.tsx`: `LocaleProvider` and `useT()` returning `{ locale, setLocale, t, tn }`. Mounted in `main.tsx` as the outermost element, above `RootErrorBoundary` and the top-level `Suspense`, so `ErrorFallback` and `LoadingScreen` translate too (`main.locale-wiring.test.ts` guards it). Sets `<html lang>` to `renderedLocale` (the locale once its catalog has keys; all ten now do; failed loads stay `en`), lazy-loads the catalog chunk via `import.meta.glob`, reports a failed load to Sentry and keeps English.
+- `locale-provider.tsx`: `LocaleProvider` and `useT()` returning `{ locale, setLocale, t, tn }`. Mounted in `main.tsx` as the outermost element, above `RootErrorBoundary` and the top-level `Suspense`, so `ErrorFallback` and `LoadingScreen` translate too (`main.locale-wiring.test.ts` guards it). Sets `<html lang>` to `renderedLocale` (the locale of the catalog actually on screen). The LAST SUCCESSFULLY LOADED catalog stays rendered until a newly selected language's chunk resolves, then swaps atomically, so a switch never drops to English in between; a failed, `undefined` or empty load keeps the previous catalog and is reported to Sentry (the picker then shows the selected `locale` over the old `renderedLocale`). Selecting `en` (no loader) switches at once. Chunks load lazily via `import.meta.glob`.
 - `translate.ts`, `trans.tsx` (`<Trans text slots>` for sentences around React children), `storage.ts` (`engram:locale` in localStorage).
 - `locale/<code>.ts`: ten catalogs (no `en`).
 - `keys.test.ts`: the drift guard.
@@ -91,7 +91,7 @@ It scans source for `t`, `msg`, `tn` (`other`) and `<Trans text>` keys, then fai
 
 ## Clerk and Paddle follow the rendered locale
 
-Both follow `renderedLocale` from `useT()` (the selected locale once its app catalog has keys, else `"en"`; the same value `<html lang>` uses), NOT the raw `locale`. This keeps Clerk and Paddle from going foreign over an English app if a catalog is empty or fails to load. All ten catalogs have keys now.
+Both follow `renderedLocale` from `useT()` (the locale of the catalog on screen, `"en"` before any loads; the same value `<html lang>` uses), NOT the raw `locale`. This keeps Clerk and Paddle in step with the app text, never flickering through English on a switch and never going foreign over an app whose catalog failed to load.
 
 - **Mapping:** `src/i18n/vendor-locales.ts`. Paddle codes equal ours except `zh-CN` -> `zh-Hans`.
 - **Clerk:** `<ClerkProvider localization>` in `clerk-auth-provider.tsx`. Catalogs come from `@clerk/localizations` as one lazy chunk per language (literal dynamic imports; a variable specifier would not bundle). English, loading and a failed load all leave `localization` undefined (Clerk's English), failures go to `captureError`. `@clerk/react` pushes a changed `localization` prop into the mounted instance, so no remount. Clerk marks localization experimental. `@clerk/localizations` is pinned to 4.17.0: newer minors require `@clerk/shared` >= 4.34, but this repo overrides `@clerk/shared` to the 4.33 that `@clerk/react` uses.

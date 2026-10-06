@@ -31,7 +31,8 @@ type PluralEn = PluralForms & { other: string };
 
 interface LocaleContextValue {
 	locale: Locale;
-	// What is actually on screen: `locale` once its catalog has keys, else "en".
+	// What is actually on screen: the locale of the catalog being shown (lags `locale`
+	// while a new one loads; "en" before any loads).
 	// Third parties (Clerk, Paddle) follow this, not the selected `locale`.
 	renderedLocale: Locale;
 	setLocale: (next: Locale) => void;
@@ -63,9 +64,10 @@ function LocaleProvider({
 	const [locale, setLocaleState] = useState<Locale>(
 		() => getStoredLocale() ?? resolveLocale(navigator.languages),
 	);
-	// Tagged with its locale so a catalog for a locale we left is never shown.
+	// The last catalog that loaded, tagged with its locale. It stays on screen while
+	// a newly selected language loads, so a switch never drops to English in between.
 	const [loaded, setLoaded] = useState<{ locale: Locale; catalog: Catalog }>();
-	const catalog = loaded?.locale === locale ? loaded.catalog : NO_CATALOG;
+	const catalog = loaded?.catalog ?? NO_CATALOG;
 
 	useEffect(() => {
 		const load = loaders[locale];
@@ -75,12 +77,13 @@ function LocaleProvider({
 		let current = true;
 		load()
 			.then((mod) => {
-				if (current && mod) {
+				// An empty catalog is a stub, not a language: keep what is shown.
+				if (current && mod && Object.keys(mod.default).length > 0) {
 					setLoaded({ locale, catalog: mod.default });
 				}
 			})
 			.catch(async (error: unknown) => {
-				// Stale deploy or offline: keep the English fallback, but report it.
+				// Stale deploy or offline: keep the catalog on screen, but report it.
 				await captureError(error);
 			});
 		return () => {
@@ -88,17 +91,25 @@ function LocaleProvider({
 		};
 	}, [locale, loaders]);
 
-	// What is rendered: empty stubs and failed loads are English.
-	const renderedLocale = Object.keys(catalog).length > 0 ? locale : "en";
+	// The language of the catalog on screen, which lags `locale` until its load lands.
+	const renderedLocale = loaded?.locale ?? "en";
 	// Layout effect: lang must change in the same commit as the text it describes.
 	useLayoutEffect(() => {
 		document.documentElement.lang = renderedLocale;
 	}, [renderedLocale]);
 
-	const setLocale = useCallback((next: Locale) => {
-		setStoredLocale(next);
-		setLocaleState(next);
-	}, []);
+	const setLocale = useCallback(
+		(next: Locale) => {
+			setStoredLocale(next);
+			setLocaleState(next);
+			// No loader (English): switch at once, and forget the old catalog so a later
+			// switch to another language does not show it while that one loads.
+			if (!loaders[next]) {
+				setLoaded(undefined);
+			}
+		},
+		[loaders],
+	);
 
 	const value = useMemo<LocaleContextValue>(
 		() => ({
@@ -106,7 +117,7 @@ function LocaleProvider({
 			renderedLocale,
 			setLocale,
 			t: (en, vars) => translate(catalog, en, vars),
-			tn: (en, count, vars) => translatePlural(catalog, locale, en, count, vars),
+			tn: (en, count, vars) => translatePlural(catalog, renderedLocale, en, count, vars),
 		}),
 		[locale, renderedLocale, setLocale, catalog],
 	);
