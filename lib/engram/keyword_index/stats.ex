@@ -2,8 +2,9 @@ defmodule Engram.KeywordIndex.Stats do
   @moduledoc """
   Per-vault `avgdl` (average chunk token length) for BM25 length normalization
   (#595). Computed from `chunks.token_count` — always reflects current vault
-  state, no counter bookkeeping. Used at index time; the #605 re-normalize
-  worker recomputes weights when a vault's avgdl drifts.
+  state, no counter bookkeeping. Used at index time only: a note's stored
+  sparse weights re-normalize to a drifted avgdl on that note's next re-encode,
+  and nothing re-normalizes the rest.
 
   Falls back to `@default_avgdl` for an empty/new vault. 100.0 is a
   markdown-realistic bootstrap (typical chunk is 50-150 tokens); the original
@@ -42,10 +43,6 @@ defmodule Engram.KeywordIndex.Stats do
         value
     end
   end
-
-  @doc "Drops the cached avgdl for a vault (e.g. before a bulk re-normalize)."
-  @spec evict(Ecto.UUID.t()) :: :ok
-  defdelegate evict(vault_id), to: Cache
 
   # Scoped HERE rather than around `avgdl/2` so a cache hit still costs no
   # transaction — this runs only on a miss. `chunks` carries FORCE ROW LEVEL

@@ -38,8 +38,8 @@ note write (REST / MCP / CRDT checkpoint)
 - Crash safety: `Oban.Plugins.Lifeline` rescues jobs stuck in `executing` (default 60 min). `shutdown_grace_period` (45s) exists so a deploy does not strand an in-flight embed for that hour.
 
 ## Re-indexing
-A change to the embedding model, context format or chunk boundaries needs a re-embed. There is no automatic corpus-wide reindex:
-- Bump `@chunker_version` in `markdown.ex` when chunk boundaries change. `EmbedNote` then refuses to hash-skip notes stamped with an older version, and the `IndexVersions` data migration plus `ReconcileEmbeddings` re-embed them (`docs/context/data-migrations-ledger.md`). The per-vault operator worker `ReindexKeyword` was deleted.
+Every index change heals automatically. To force a re-embed for a context-format change, bump `@chunker_version`:
+- Bump `@chunker_version` in `markdown.ex` when chunk boundaries or the embedded context format change. `EmbedNote` then refuses to hash-skip notes stamped with an older version, and the `IndexVersions` data migration plus `ReconcileEmbeddings` re-embed them (`docs/context/data-migrations-ledger.md`). The per-vault operator worker `ReindexKeyword` was deleted.
 
 ## References
 - Oban config: `config/config.exs`
