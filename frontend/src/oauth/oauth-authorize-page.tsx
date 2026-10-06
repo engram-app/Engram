@@ -12,6 +12,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useT } from "@/i18n/locale-provider";
 import type { Locale } from "@/i18n/locales";
@@ -545,13 +546,12 @@ export default function OAuthAuthorizePage() {
 									}}
 								/>
 							</span>
-							<input
+							<Input
 								type="text"
 								maxLength={120}
 								value={label}
 								onChange={(e) => setLabel(e.target.value)}
 								placeholder={clientName}
-								className="rounded-lg border border-border bg-background p-2.5 text-sm"
 							/>
 						</label>
 
@@ -584,7 +584,7 @@ export default function OAuthAuthorizePage() {
 							</div>
 							{searching ? (
 								<>
-									<input
+									<Input
 										ref={searchRef}
 										type="search"
 										value={filter}
@@ -592,7 +592,6 @@ export default function OAuthAuthorizePage() {
 										onBlur={() => filter === "" && setSearching(false)}
 										placeholder={t("Search vaults")}
 										aria-label={t("Search vaults")}
-										className="rounded-lg border border-border bg-background p-2 text-sm"
 									/>
 									{/* Filtering hides rows, it never changes the selection —
 									    so with a needle typed the count is the only way to see

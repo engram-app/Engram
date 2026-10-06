@@ -3,12 +3,10 @@ import { isReverificationCancelledError } from "@clerk/react/errors";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n/locale-provider";
 import { clerkErrorMessage } from "./clerk-errors";
 import { SettingsSectionCard } from "./section-card";
-
-const inputClass =
-	"mt-1 block w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring";
 
 // Clerk can't rename an email address, so "change my primary email" is really:
 // add (or reuse) the new address → verify it → set it primary → delete the old
@@ -154,8 +152,8 @@ export function EmailSection() {
 				>
 					<label className="block font-medium text-foreground text-sm">
 						{t("Verification code")}
-						<input
-							className={inputClass}
+						<Input
+							className="mt-1 block"
 							value={code}
 							onChange={(ev) => setCode(ev.target.value)}
 						/>
@@ -177,8 +175,8 @@ export function EmailSection() {
 				>
 					<label className="block flex-1 font-medium text-foreground text-sm">
 						{t("New email")}
-						<input
-							className={inputClass}
+						<Input
+							className="mt-1 block"
 							type="email"
 							value={newEmail}
 							onChange={(ev) => setNewEmail(ev.target.value)}

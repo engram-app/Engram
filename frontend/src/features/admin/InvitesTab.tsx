@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
+import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n/locale-provider";
 import { copyToClipboard } from "@/lib/clipboard";
 import { intlLocale } from "@/lib/intl-locale";
@@ -83,36 +84,36 @@ export default function InvitesTab() {
 					<span className="mb-1 block font-medium text-muted-foreground text-xs">
 						{t("Label (optional)")}
 					</span>
-					<input
+					<Input
 						type="text"
 						placeholder={t("e.g. Mom")}
 						value={label}
 						onChange={(e) => setLabel(e.target.value)}
-						className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+						className="w-full"
 					/>
 				</label>
 				<label className="text-sm">
 					<span className="mb-1 block font-medium text-muted-foreground text-xs">
 						{t("Max uses")}
 					</span>
-					<input
+					<Input
 						type="number"
 						min={1}
 						value={maxUses}
 						onChange={(e) => setMaxUses(Math.max(1, Number(e.target.value)))}
-						className="w-20 rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+						className="w-20"
 					/>
 				</label>
 				<label className="text-sm">
 					<span className="mb-1 block font-medium text-muted-foreground text-xs">
 						{t("Expires (days)")}
 					</span>
-					<input
+					<Input
 						type="number"
 						min={0}
 						value={days}
 						onChange={(e) => setDays(Math.max(0, Number(e.target.value)))}
-						className="w-24 rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+						className="w-24"
 					/>
 				</label>
 				<button

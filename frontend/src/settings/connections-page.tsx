@@ -10,6 +10,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { useAutofocus } from "@/hooks/use-autofocus";
 import { useT } from "@/i18n/locale-provider";
 import type { Translate } from "@/i18n/translate";
@@ -437,13 +438,13 @@ function CreatePatModal({
 			<form onSubmit={submit} className="space-y-4">
 				<label className="block">
 					<span className="font-medium text-foreground text-sm">{t("Name")}</span>
-					<input
+					<Input
 						ref={nameRef}
 						value={name}
 						onChange={(e) => setName(e.target.value)}
 						placeholder={t("e.g. ci-bot")}
 						maxLength={64}
-						className="mt-1 block w-full rounded-md border border-input bg-card px-3 py-2 text-foreground text-sm focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
+						className="mt-1 block"
 					/>
 					<span className="mt-1 block text-muted-foreground text-xs">
 						{t("Helps you identify the key later, pick something memorable.")}
@@ -514,13 +515,13 @@ function RevealKeyModal({
 				</p>
 
 				<div className="flex items-stretch gap-2">
-					<input
+					<Input
 						ref={keyFieldRef}
 						readOnly
 						value={createdKey.key}
 						onFocus={selectAll}
 						onClick={selectAll}
-						className="min-w-0 flex-1 rounded-md border border-input bg-muted px-3 py-2 font-mono text-foreground text-sm focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
+						className="flex-1 bg-muted font-mono"
 						aria-label={t("API key")}
 					/>
 					<button
@@ -770,7 +771,7 @@ export default function ConnectionsPage() {
 					{t("Manage what's connected to your Engram account.")}
 				</p>
 				{searching ? (
-					<input
+					<Input
 						ref={searchRef}
 						type="search"
 						value={filter}
@@ -778,7 +779,7 @@ export default function ConnectionsPage() {
 						onBlur={() => filter === "" && setSearching(false)}
 						placeholder={t("Search connections")}
 						aria-label={t("Search connections")}
-						className="mt-3 w-full rounded-lg border border-border bg-background p-2 text-sm"
+						className="mt-3"
 					/>
 				) : null}
 				<nav aria-label={t("Connection documentation")} className="mt-4 grid gap-2 sm:grid-cols-2">

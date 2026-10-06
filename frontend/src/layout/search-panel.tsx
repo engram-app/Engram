@@ -12,6 +12,7 @@ import {
 	ComboboxItem,
 	ComboboxList,
 } from "@/components/ui/combobox";
+import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useT } from "@/i18n/locale-provider";
@@ -169,9 +170,6 @@ function FieldHelp({ question, children }: { question: string; children: ReactNo
 /** Chip chrome for the visually-hidden radios above. */
 const chipClasses =
 	"inline-block rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground transition-colors peer-checked:border-primary/40 peer-checked:bg-primary/15 peer-checked:text-primary peer-focus-visible:ring-2 peer-focus-visible:ring-ring hover:bg-accent";
-
-const filterInputClasses =
-	"rounded-md border border-border bg-background px-2 py-1 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring";
 
 /**
  * `hideHeader` is for the mobile drawer, which supplies its own titled header
@@ -567,22 +565,20 @@ function SearchPanel({
 								<div className="grid grid-cols-2 gap-2">
 									<label className="flex flex-col gap-1 text-muted-foreground text-xs">
 										{t("From")}
-										<input
+										<Input
 											type="date"
 											// CONTROLLED. Uncontrolled, these kept their text after a
 											// reset and showed a filter that was no longer applied.
 											value={customFrom}
 											onChange={(e) => setCustomFrom(e.target.value)}
-											className={filterInputClasses}
 										/>
 									</label>
 									<label className="flex flex-col gap-1 text-muted-foreground text-xs">
 										{t("To")}
-										<input
+										<Input
 											type="date"
 											value={customTo}
 											onChange={(e) => setCustomTo(e.target.value)}
-											className={filterInputClasses}
 										/>
 									</label>
 								</div>

@@ -3,10 +3,11 @@ import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import { getApiBase, joinApiUrl } from "@/api/base";
 import { stashCredential, takeCredential } from "@/auth/credential-handoff";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n/locale-provider";
 import AuthPanel from "@/layout/auth-panel";
 import AuthShell from "@/layout/auth-shell";
-import { destructiveAlert, fieldInput, heading } from "@/lib/ui-classes";
+import { destructiveAlert, heading } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { ROUTES } from "@/routes";
 
@@ -145,24 +146,24 @@ export default function ResetPasswordPage() {
 
 						<label className="block">
 							<span className="font-medium text-foreground text-sm">{t("New password")}</span>
-							<input
+							<Input
 								type="password"
 								required
 								minLength={8}
 								value={password}
 								onChange={(e) => setPassword(e.target.value)}
-								className={cn("mt-1 block", fieldInput)}
+								className="mt-1 block"
 							/>
 						</label>
 
 						<label className="block">
 							<span className="font-medium text-foreground text-sm">{t("Confirm password")}</span>
-							<input
+							<Input
 								type="password"
 								required
 								value={confirm}
 								onChange={(e) => setConfirm(e.target.value)}
-								className={cn("mt-1 block", fieldInput)}
+								className="mt-1 block"
 							/>
 						</label>
 

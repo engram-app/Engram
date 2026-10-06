@@ -2,14 +2,12 @@ import { useState } from "react";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n/locale-provider";
 import { api } from "../../api/client";
 import { useAuthAdapter } from "../../auth/use-auth-adapter";
 import { ROUTES } from "../../routes";
 import { SettingsSectionCard } from "./section-card";
-
-const inputClass =
-	"mt-1 block w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring";
 
 export function PasswordSectionLocal() {
 	const { t } = useT();
@@ -56,8 +54,8 @@ export function PasswordSectionLocal() {
 			<form onSubmit={onSubmit} className="space-y-3">
 				<label className="block font-medium text-foreground text-sm">
 					{t("Current password")}
-					<input
-						className={inputClass}
+					<Input
+						className="mt-1 block"
 						type="password"
 						autoComplete="current-password"
 						value={oldPw}
@@ -67,8 +65,8 @@ export function PasswordSectionLocal() {
 				</label>
 				<label className="block font-medium text-foreground text-sm">
 					{t("New password")}
-					<input
-						className={inputClass}
+					<Input
+						className="mt-1 block"
 						type="password"
 						autoComplete="new-password"
 						value={newPw}
@@ -78,8 +76,8 @@ export function PasswordSectionLocal() {
 				</label>
 				<label className="block font-medium text-foreground text-sm">
 					{t("Confirm new password")}
-					<input
-						className={inputClass}
+					<Input
+						className="mt-1 block"
 						type="password"
 						autoComplete="new-password"
 						value={confirmPw}

@@ -13,14 +13,12 @@ import {
 	DialogTitle,
 	DialogTrigger,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n/locale-provider";
 import { useDeleteSelf } from "../../api/queries";
 import { useAuthAdapter } from "../../auth/use-auth-adapter";
 import { ROUTES } from "../../routes";
 import { SettingsSectionCard } from "./section-card";
-
-const inputClass =
-	"mt-1 block w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring";
 
 export function DangerZoneSectionLocal() {
 	const { t } = useT();
@@ -94,8 +92,8 @@ export function DangerZoneSectionLocal() {
 					<fieldset className="space-y-3">
 						<label className="block font-medium text-foreground text-sm">
 							{t("Password")}
-							<input
-								className={inputClass}
+							<Input
+								className="mt-1 block"
 								type="password"
 								autoComplete="current-password"
 								value={password}

@@ -3,6 +3,7 @@ import { ArrowRight, ChevronRight, Plus } from "lucide-react";
 import { type ReactNode, useId, useMemo, useState } from "react";
 import { HelpTip } from "@/components/help-tip";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
@@ -525,13 +526,13 @@ export default function MarkdownReferencePanel() {
 				<label className="sr-only" htmlFor={searchId}>
 					{t("Search markdown syntax")}
 				</label>
-				<input
+				<Input
 					id={searchId}
 					type="search"
 					value={query}
 					onChange={(e) => setQuery(e.target.value)}
 					placeholder={t("Search syntax…")}
-					className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+					className="flex-1"
 				/>
 				<HelpTip label={t("About markdown")}>
 					<Overview />

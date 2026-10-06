@@ -7,7 +7,7 @@ import { useStableT, useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import { Trans } from "@/i18n/trans";
 import type { Tn, Translate } from "@/i18n/translate";
-import { destructiveAlert, fieldInput, heading, selectableRow } from "@/lib/ui-classes";
+import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { track } from "../analytics/track";
 import { setActiveVaultId } from "../api/active-vault";
@@ -527,7 +527,7 @@ function DeviceLinkPage() {
 							onChange={(e) => setUserCode(e.target.value.toUpperCase())}
 							placeholder="XXXX-XXXX"
 							maxLength={9}
-							className={cn(fieldInput, "text-center font-mono text-2xl tracking-widest")}
+							className="h-auto py-2 text-center font-mono text-2xl tracking-widest md:text-2xl"
 							onKeyDown={(e) => e.key === "Enter" && handleVerifyCode()}
 						/>
 						<Button type="button" onClick={handleVerifyCode} disabled={loading} className="w-full">
@@ -841,7 +841,7 @@ function VaultPickerFieldset({
 							onFocus={() => onSelect("custom")}
 							placeholder={t("choose a new name")}
 							maxLength={100}
-							className={fieldInput}
+							className="w-full"
 						/>
 					</span>
 				</label>

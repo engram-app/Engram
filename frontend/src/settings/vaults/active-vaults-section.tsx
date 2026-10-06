@@ -4,15 +4,13 @@ import { Link, useLocation } from "react-router";
 import { toast } from "sonner";
 import { useBillingStatus, useUpdateVault, useVaults, type Vault } from "@/api/queries";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { VaultCreateForm } from "@/components/vault-create-form";
 import { useAutofocus } from "@/hooks/use-autofocus";
 import { useT } from "@/i18n/locale-provider";
 import { SettingsSectionCard } from "@/settings/account/section-card";
 import { settingsTo } from "../settings-hash";
 import { DeleteVaultDialog } from "./delete-vault-dialog";
-
-const inputClass =
-	"block w-full rounded-md border border-input bg-card px-2 py-1 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring";
 
 function VaultRow({ vault, onDelete }: { vault: Vault; onDelete: () => void }) {
 	const { t } = useT();
@@ -36,9 +34,9 @@ function VaultRow({ vault, onDelete }: { vault: Vault; onDelete: () => void }) {
 		<tr>
 			<td className="py-3">
 				{renaming ? (
-					<input
+					<Input
 						ref={nameRef}
-						className={inputClass}
+						className="block"
 						value={name}
 						aria-label={t("Rename {name}", { name: vault.name })}
 						onChange={(e) => setName(e.target.value)}

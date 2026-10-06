@@ -2,11 +2,9 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { useCreateVault, type Vault } from "@/api/queries";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { useAutofocus } from "@/hooks/use-autofocus";
 import { useT } from "@/i18n/locale-provider";
-
-const inputClass =
-	"mt-1 block w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring";
 
 interface Props {
 	// The whole vault, not just the id — callers that navigate on create need
@@ -66,9 +64,9 @@ export function VaultCreateForm({
 		<form className="flex flex-col" onSubmit={submit}>
 			<label className="block font-medium text-foreground text-sm">
 				{t("Vault name")}
-				<input
+				<Input
 					ref={nameRef}
-					className={inputClass}
+					className="mt-1 block"
 					aria-label={t("Vault name")}
 					value={name}
 					onChange={(e) => setName(e.target.value)}

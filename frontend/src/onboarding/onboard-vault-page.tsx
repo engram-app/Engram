@@ -2,6 +2,7 @@ import obsidianMark from "@lobehub/icons-static-svg/icons/obsidian-color.svg?raw
 import { FilePlus2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Navigate, useNavigate } from "react-router";
+import { Input } from "@/components/ui/input";
 import { useAutofocus } from "@/hooks/use-autofocus";
 import { useT } from "@/i18n/locale-provider";
 import { Trans } from "@/i18n/trans";
@@ -407,14 +408,13 @@ function FreshInlinePanel({ isCommitting, onCommit }: FreshInlinePanelProps) {
 			</p>
 			<label className="flex flex-col gap-2 text-sm">
 				<span className="font-medium text-foreground">{t("Vault name")}</span>
-				<input
+				<Input
 					ref={nameRef}
 					type="text"
 					value={name}
 					onChange={(e) => setName(e.target.value)}
 					maxLength={100}
 					placeholder={t("My Vault")}
-					className="rounded-lg border border-border bg-background px-3 py-2 text-base text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/30"
 				/>
 			</label>
 			{error ? (

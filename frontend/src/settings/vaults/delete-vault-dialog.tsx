@@ -11,11 +11,9 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n/locale-provider";
 import { Trans } from "@/i18n/trans";
-
-const inputClass =
-	"mt-1 block w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring";
 
 export function DeleteVaultDialog({
 	vault,
@@ -98,9 +96,9 @@ export function DeleteVaultDialog({
 				>
 					<label className="block text-foreground text-sm">
 						{t("Type \u0022{name}\u0022 to confirm", { name: vault.name })}
-						<input
+						<Input
 							autoFocus
-							className={inputClass}
+							className="mt-1 block"
 							value={phrase}
 							onChange={(e) => setPhrase(e.target.value)}
 						/>

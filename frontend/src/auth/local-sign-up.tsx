@@ -1,10 +1,11 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n/locale-provider";
 import { Trans } from "@/i18n/trans";
 import type { Translate } from "@/i18n/translate";
-import { destructiveAlert, fieldInput, heading } from "@/lib/ui-classes";
+import { destructiveAlert, heading } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { getApiBase, joinApiUrl } from "../api/base";
 import { ROUTES } from "../routes";
@@ -247,35 +248,35 @@ export default function LocalSignUp() {
 
 				<label className="block">
 					<span className="font-medium text-foreground text-sm">{t("Email")}</span>
-					<input
+					<Input
 						type="email"
 						required
 						value={email}
 						onChange={(e) => setEmail(e.target.value)}
-						className={cn("mt-1 block", fieldInput)}
+						className="mt-1 block"
 					/>
 				</label>
 
 				<label className="block">
 					<span className="font-medium text-foreground text-sm">{t("Password")}</span>
-					<input
+					<Input
 						type="password"
 						required
 						minLength={8}
 						value={password}
 						onChange={(e) => setPassword(e.target.value)}
-						className={cn("mt-1 block", fieldInput)}
+						className="mt-1 block"
 					/>
 				</label>
 
 				<label className="block">
 					<span className="font-medium text-foreground text-sm">{t("Confirm password")}</span>
-					<input
+					<Input
 						type="password"
 						required
 						value={confirm}
 						onChange={(e) => setConfirm(e.target.value)}
-						className={cn("mt-1 block", fieldInput)}
+						className="mt-1 block"
 					/>
 				</label>
 

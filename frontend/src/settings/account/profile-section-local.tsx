@@ -1,12 +1,10 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n/locale-provider";
 import { useMe, useUpdateProfile } from "../../api/queries";
 import { SettingsSectionCard } from "./section-card";
-
-const inputClass =
-	"mt-1 block w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring";
 
 export function ProfileSectionLocal() {
 	const { t } = useT();
@@ -43,9 +41,9 @@ export function ProfileSectionLocal() {
 					htmlFor="display-name"
 				>
 					{t("Display name")}
-					<input
+					<Input
 						id="display-name"
-						className={inputClass}
+						className="mt-1 block"
 						value={value}
 						maxLength={80}
 						onChange={(e) => setValue(e.target.value)}
