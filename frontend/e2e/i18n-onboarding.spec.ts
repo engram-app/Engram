@@ -1,9 +1,11 @@
 import { expect, test } from "@playwright/test";
 import { deleteAccount, PASS } from "./support/api";
-import { BROWSER_LOCALES, checkStep, translationOf } from "./support/i18n-leaks";
+import { BROWSER_LOCALES, checkStep } from "./support/i18n-leaks";
+import { walkOnboarding } from "./support/i18n-onboarding";
 
-// Self-host first run in each locale: sign-up, tools, vault (both source cards, then
-// "starting fresh"), the dashboard it lands on, and Settings > Account. Every step
+// Self-host first run in each locale: sign-up, then the wizard (support/i18n-onboarding.ts:
+// tools, vault with both source cards, then "starting fresh"), the dashboard it lands
+// on, and Settings > Account. Every step
 // asserts `<html lang>`, fails on untranslated wrapped strings, reports suspected
 // unwrapped English (non-Latin locales) and attaches a full-page screenshot.
 //
@@ -27,7 +29,6 @@ for (const { tag, code } of BROWSER_LOCALES) {
 		test("every step is translated", async ({ page }, testInfo) => {
 			// Registration + wizard + dashboard: well past the 30s default under load.
 			test.setTimeout(120_000);
-			const t = (key: string) => translationOf(code, key);
 			email = `i18n-e2e-${Date.now()}-${code.toLowerCase()}@test.com`;
 
 			await page.goto("/sign-up/");
@@ -40,42 +41,9 @@ for (const { tag, code } of BROWSER_LOCALES) {
 			await page.locator("form button[type='submit']").click();
 
 			await expect(page).toHaveURL(/\/onboard\/tools/u, { timeout: 15_000 });
-			await expect(
-				page.getByRole("heading", { name: t("Which AI tools do you use?") }),
-			).toBeVisible();
-			await checkStep(page, testInfo, code, "tools");
-
-			// The opt-out is the last checkbox, after both tool columns.
-			await page.getByRole("checkbox").last().check();
-			await checkStep(page, testInfo, code, "tools-none-selected");
-			await page.getByRole("button", { name: t("Continue"), exact: true }).click();
-
-			await expect(page).toHaveURL(/\/onboard\/vault/u, { timeout: 15_000 });
-			await expect(
-				page.getByRole("heading", { name: t("Let's get your notes in.") }),
-			).toBeVisible();
-			await checkStep(page, testInfo, code, "vault");
-
-			await page.getByRole("button", { name: t("I already use Obsidian") }).click();
-			await expect(
-				page.getByRole("heading", { name: t("Install the Engram Vault Sync plugin") }),
-			).toBeVisible();
-			await checkStep(page, testInfo, code, "vault-obsidian");
-
-			await page.getByRole("button", { name: t("I'm starting fresh") }).click();
-			await expect(page.getByRole("heading", { name: t("Name your first vault") })).toBeVisible();
-			await checkStep(page, testInfo, code, "vault-fresh");
-
-			await page.getByRole("button", { name: t("Create vault & continue") }).click();
-			await expect(page.getByRole("navigation", { name: t("App navigation") })).toBeVisible({
-				timeout: 20_000,
-			});
-			expect(new URL(page.url()).pathname.startsWith("/onboard")).toBe(false);
-			await checkStep(page, testInfo, code, "dashboard");
-
-			await page.goto("/#settings/account");
-			await expect(page.getByRole("combobox", { name: t("Language") })).toBeVisible();
-			await checkStep(page, testInfo, code, "settings-account");
+			// Self-host chain starts at tools (agreement and billing auto-pass).
+			await expect(page).toHaveURL(/\/onboard\/tools/u, { timeout: 15_000 });
+			await walkOnboarding(page, testInfo, code);
 		});
 	});
 }
