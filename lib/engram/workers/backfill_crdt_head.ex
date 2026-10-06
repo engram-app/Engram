@@ -24,7 +24,7 @@ defmodule Engram.Workers.BackfillCrdtHead do
   # filter already makes the work idempotent, so a duplicate enqueue_all just
   # does converging, harmless re-scans. The hourly `WarmCrdtHeads` cron skips
   # its enqueue while any job of this worker is in flight.
-  use Oban.Worker, queue: :crypto_backfill, max_attempts: 5
+  use Oban.Worker, queue: :crdt_backfill, max_attempts: 5
 
   import Ecto.Query
 
@@ -40,7 +40,7 @@ defmodule Engram.Workers.BackfillCrdtHead do
   @start_cursor "00000000-0000-0000-0000-000000000000"
 
   # 60 min, the Lifeline `rescue_after` ceiling. This walks every row it
-  # owns, and none of the long queues (crypto_backfill/export/cleanup) is
+  # owns, and none of the long queues (crdt_backfill/export/cleanup) is
   # user-facing — a slot held here costs nothing, while a kill mid-rotation
   # costs a lot. Finite is the point, not tight. See #1496.
   @impl Oban.Worker

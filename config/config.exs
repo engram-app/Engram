@@ -109,7 +109,11 @@ config :engram, Oban,
     # release ahead of its workers, so a rollback strands nothing
     # (ObanQueueConfigTest @moving_to_events).
     events: 2,
+    # Key rotation only (DEK, master key, provider migration).
     crypto_backfill: 1,
+    # Hourly CRDT representation backfills (BackfillCrdtState, BackfillCrdtHead),
+    # off crypto_backfill so they never hold a rotation's slot.
+    crdt_backfill: 1,
     export: 1,
     cleanup: 1,
     indexing: 2,

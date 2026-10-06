@@ -65,6 +65,24 @@ defmodule Engram.ObanQueueConfigTest do
            "non-cron workers on the maintenance queue: move them to :events"
   end
 
+  # The CRDT backfills run hourly; on crypto_backfill they would hold its single
+  # slot and delay a DEK or master-key rotation queued behind them.
+  test "crypto_backfill runs only the key-rotation workers" do
+    on_crypto =
+      for mod <- Engram.Test.ObanWorkers.all(), worker_queue(mod) == :crypto_backfill, do: mod
+
+    assert Enum.sort(on_crypto) ==
+             Enum.sort([
+               Engram.Workers.MigrateUserProvider,
+               Engram.Workers.RotateUserDek,
+               Engram.Workers.RotateUserMasterKey
+             ])
+
+    assert worker_queue(Engram.Workers.BackfillCrdtHead) == :crdt_backfill
+    assert worker_queue(Engram.Workers.BackfillCrdtState) == :crdt_backfill
+    assert configured_queue_limit(:crdt_backfill) == 1
+  end
+
   # Tripwire against unbounded embed concurrency. The 2026-07-03 OOM crash-loop
   # was NOT caused by embed concurrency itself — it was the Lingua language
   # detector loading ~945 MB of full-accuracy models off-heap during indexing
@@ -108,7 +126,7 @@ defmodule Engram.ObanQueueConfigTest do
   end
 
   # The whole point of the runtime override is that it raises ONE queue without
-  # dropping the other eight. Config deep-merges nested keyword lists, but that
+  # dropping the other nine. Config deep-merges nested keyword lists, but that
   # is a language guarantee this config leans on hard enough to pin down: get it
   # wrong and the worker silently boots with crdt_checkpoint as its ONLY queue,
   # and embeds stop for everyone.

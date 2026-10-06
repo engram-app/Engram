@@ -66,7 +66,7 @@ touches `done?` must not be `async: true`, because the cache is node-global.
 
 | Name | Covers |
 |---|---|
-| `CrdtStateSeed` | Residue of the 2026-07-06 cutover that NULLed every `crdt_state`: each pass enqueues `BackfillCrdtState` for live-vault pairs holding a seedable note (kind note, not deleted, NULL state, no `crdt_update_log` rows) via `BackfillCrdtState.enqueue_missing/0`. A NULL-state note WITH a tail is excluded from both the enqueue and the done check, and the worker never seeds it: its real state is the un-checkpointed tail, and a snapshot seeded from content would be a second Yjs lineage that bind unions with it. Tail replay serves those notes. A selected note whose content never decrypts is a stuck row: it keeps the migration open until fixed. After each seed the worker evicts any resident room for the note (`CrdtRegistry.terminate_room/1`, no checkpoint), because a room bound before the seed holds an empty doc whose next edit would start a second lineage. Eviction is `:global`, so the worker seeds only when every room is reachable (`Cluster.Readiness.rooms_reachable?/1`): a single node always, a multi-node fleet (role or cluster query set) only with a connected peer. Partitioned, it writes nothing and the migration stays open. |
+| `CrdtStateSeed` | Residue of the 2026-07-06 cutover that NULLed every `crdt_state`: each pass enqueues `BackfillCrdtState` for live-vault pairs holding a seedable note (kind note, not deleted, NULL state, no `crdt_update_log` rows) via `BackfillCrdtState.enqueue_missing/0`. A NULL-state note WITH a tail is excluded from both the enqueue and the done check, and the worker never seeds it: its real state is the un-checkpointed tail, and a snapshot seeded from content would be a second Yjs lineage that bind unions with it. Tail replay serves those notes. A selected note whose content never decrypts is a stuck row: it keeps the migration open until fixed. After each seed the worker evicts any resident room for the note (`CrdtRegistry.terminate_room/1`, no checkpoint), because a room bound before the seed holds an empty doc whose next edit would start a second lineage. Eviction is `:global`, so before EACH seed the worker checks every room is reachable (`Cluster.Readiness.rooms_reachable?/1`, after `:global.sync/0`): a single node always; a multi-node fleet only when its connected peers cover every `DNS_CLUSTER_QUERY` A record except its own IP (with a role but no query, any peer). The first miss ends the batch with no further writes and no successor job; the migration stays open and the next pass starts over. If a tail row exists right after a kill, it logs `possible second lineage` (warning, with `note_id`). Restoring a soft-deleted vault enqueues `BackfillCrdtState` for it, since this migration may have closed while the vault was excluded. The worker runs on the `:crdt_backfill` queue (concurrency 1). |
 | `IndexVersions` | Every content-current note stamped with the current chunker, keyword and embed model versions. `ReconcileEmbeddings` does the rebuild. Once done it drops the version term and skips the keyword scan, except for one hour a day (04:00-04:59 UTC) that re-verifies: a rollback then roll-forward or a restored soft-deleted vault puts stale notes back without reopening it. See `index-version-self-heal.md`. |
 
 ## Pruned (2026-10-06)
@@ -112,6 +112,10 @@ Work that is never "done" is a cron worker, not a data migration.
   `crdt_head` (`CrdtPersistence.update_v1/4`, plus a trigger on `crdt_state`
   writes, so `CrdtStateSeed` seeding also NULLs it), and only
   `BackfillCrdtHead` re-warms it, so there is never a final "done".
+  `BackfillCrdtHead` runs on `:crdt_backfill` (concurrency 1), off
+  `:crypto_backfill`, so an hourly re-warm never holds a key rotation's slot.
+  A note whose state will not decrypt is logged and skipped; its head stays
+  NULL and the batch moves on.
 
 ## Next user
 
