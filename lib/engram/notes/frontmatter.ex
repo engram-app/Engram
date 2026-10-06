@@ -40,8 +40,9 @@ defmodule Engram.Notes.Frontmatter do
   Returns `:error` only when the block is not YAML-map-shaped at all (whole
   block failure), never for a single bad key.
   """
-  @spec parse(String.t()) ::
-          {:ok, [String.t()], %{String.t() => String.t()}, [map()]} | :error
+  @type parse_result :: {:ok, [String.t()], %{String.t() => String.t()}, [map()]} | :error
+
+  @spec parse(String.t()) :: parse_result()
   def parse(""), do: {:ok, [], %{}, []}
 
   def parse(block) when is_binary(block) do

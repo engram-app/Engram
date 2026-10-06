@@ -759,8 +759,7 @@ defmodule Engram.Notes do
          {:ok, encrypted} <- Crypto.encrypt_note_fields(merged_attrs, user, note_id) do
       phase_b =
         inject_phase_b_fields(encrypted, user, note_id, sanitized_path, folder, crdt.tags)
-        |> inject_okf_fields(user, note_id, crdt.merged_text)
-        |> put_parse_status(crdt.merged_text)
+        |> inject_frontmatter_fields(user, note_id, crdt.merged_text)
         |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
         |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
 
@@ -1758,8 +1757,7 @@ defmodule Engram.Notes do
             folder,
             crdt.tags
           )
-          |> inject_okf_fields(user, prior.id, crdt.merged_text)
-          |> put_parse_status(crdt.merged_text)
+          |> inject_frontmatter_fields(user, prior.id, crdt.merged_text)
           |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
           |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
 
@@ -1987,8 +1985,7 @@ defmodule Engram.Notes do
             folder,
             crdt.tags
           )
-          |> inject_okf_fields(user, existing.id, crdt.merged_text)
-          |> put_parse_status(crdt.merged_text)
+          |> inject_frontmatter_fields(user, existing.id, crdt.merged_text)
           |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
           |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
 
@@ -6025,7 +6022,22 @@ defmodule Engram.Notes do
   # OKF v0.1 fields. Sets ALL columns on every write: nil when the key is
   # absent, so removing frontmatter clears previously stored values.
   defp inject_okf_fields(attrs, user, note_id, content) do
-    okf = OkfFields.extract(content)
+    put_okf_fields(attrs, user, note_id, OkfFields.extract(content))
+  end
+
+  # OKF fields AND parse_status from ONE parse of the persisted content. Both
+  # read the same frontmatter block; YamlElixir is ~1.5 ms per 10-key block,
+  # so parsing it twice per write was a measurable share of a REST write (#1877).
+  defp inject_frontmatter_fields(attrs, user, note_id, content) do
+    {block, _body} = Frontmatter.split(content)
+    parsed = block && Frontmatter.parse(block)
+
+    attrs
+    |> put_okf_fields(user, note_id, OkfFields.from_parse(parsed))
+    |> put_parse_status(block, parsed)
+  end
+
+  defp put_okf_fields(attrs, user, note_id, okf) do
     {:ok, dek} = Crypto.get_dek(user)
     {:ok, filter_key} = Crypto.dek_filter_key(user)
 
@@ -6086,38 +6098,31 @@ defmodule Engram.Notes do
   end
 
   # Frontmatter-resilience (Task 5): stamp parse_status/parse_reason from the
-  # note's ACTUAL persisted content (the CRDT-merged text, same input
-  # inject_okf_fields/4 uses at every call site), not the raw incoming push.
-  # A clean re-write of a previously degraded note must reset both fields —
-  # every call site re-derives from scratch rather than patching prior state,
-  # so a fix silently self-heals on the next ingest.
-  # ponytail: re-runs Frontmatter.split + parse on `content` that
-  # inject_okf_fields/4 -> OkfFields.extract already parsed. Deliberately NOT
-  # threaded: the block is tiny (microsecond parse) and threading would couple
-  # OKF extraction to parse-status by changing extract/1's return contract and
-  # this pipe's shape. Thread it only if this ever shows up on a profile.
-  defp put_parse_status(attrs, content) do
-    case Frontmatter.split(content) do
-      {nil, _body} ->
+  # note's ACTUAL persisted content (the CRDT-merged text, same input the OKF
+  # fields use at every call site), not the raw incoming push. A clean
+  # re-write of a previously degraded note must reset both fields: every call
+  # site re-derives from scratch rather than patching prior state, so a fix
+  # silently self-heals on the next ingest. `block`/`parsed` come from
+  # inject_frontmatter_fields/4 (nil block = no frontmatter).
+  defp put_parse_status(attrs, nil, _parsed),
+    do: Map.merge(attrs, %{parse_status: "ok", parse_reason: nil})
+
+  defp put_parse_status(attrs, block, parsed) do
+    case parsed do
+      {:ok, _order, _values, []} ->
         Map.merge(attrs, %{parse_status: "ok", parse_reason: nil})
 
-      {block, _body} ->
-        case Frontmatter.parse(block) do
-          {:ok, _order, _values, []} ->
-            Map.merge(attrs, %{parse_status: "ok", parse_reason: nil})
+      {:ok, _order, _values, degraded} ->
+        Map.merge(attrs, %{
+          parse_status: "degraded",
+          parse_reason: Frontmatter.reason_for(degraded)
+        })
 
-          {:ok, _order, _values, degraded} ->
-            Map.merge(attrs, %{
-              parse_status: "degraded",
-              parse_reason: Frontmatter.reason_for(degraded)
-            })
-
-          :error ->
-            Map.merge(attrs, %{
-              parse_status: "degraded",
-              parse_reason: Frontmatter.invalid_yaml_reason(block)
-            })
-        end
+      :error ->
+        Map.merge(attrs, %{
+          parse_status: "degraded",
+          parse_reason: Frontmatter.invalid_yaml_reason(block)
+        })
     end
   end
 
