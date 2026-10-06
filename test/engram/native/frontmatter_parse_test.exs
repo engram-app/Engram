@@ -397,11 +397,10 @@ defmodule Engram.Native.FrontmatterParseTest do
     end
 
     test "a block up to 16 KB parses on the calling scheduler, a bigger one dirty" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
-      Frontmatter.parse("a: " <> String.duplicate("x", 16_000) <> "\n")
-      assert_receive {_, ^ref, _, %{nif: :frontmatter_parse, dirty: false}}
-      Frontmatter.parse("a: " <> String.duplicate("x", 17_000) <> "\n")
-      assert_receive {_, ^ref, _, %{nif: :frontmatter_parse, dirty: true}}
+      Engram.NativeScheduled.assert_scheduled(
+        :frontmatter_parse,
+        &Frontmatter.parse("a: " <> String.duplicate("x", &1 - 4) <> "\n")
+      )
     end
   end
 end

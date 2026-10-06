@@ -96,4 +96,11 @@ defmodule Engram.Native.TextDiffTest do
       end)
     end
   end
+
+  test "16 KB runs on the calling scheduler, a byte more dirty" do
+    Engram.NativeScheduled.assert_scheduled(
+      :text_diff,
+      &Native.text_diff(String.duplicate("a", &1 - 1), "b")
+    )
+  end
 end

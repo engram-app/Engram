@@ -80,4 +80,11 @@ defmodule Engram.Native.LinkExtractTest do
                       %{nif: :link_extract}}
     end
   end
+
+  test "16 KB runs on the calling scheduler, a byte more dirty" do
+    Engram.NativeScheduled.assert_scheduled(
+      :link_extract,
+      &Engram.Native.link_extract(String.duplicate("a", &1))
+    )
+  end
 end

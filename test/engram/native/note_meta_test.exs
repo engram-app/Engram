@@ -79,11 +79,15 @@ defmodule Engram.Native.NoteMetaTest do
     end
 
     test "a note up to 16 KB parses on the calling scheduler, a bigger one dirty" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
-      Helpers.extract_title_and_tags(String.duplicate("a", 16_384), "x.md")
-      assert_receive {_, ^ref, _, %{nif: :note_meta, dirty: false}}
-      Helpers.extract_title_and_tags(String.duplicate("a", 16_385), "x.md")
-      assert_receive {_, ^ref, _, %{nif: :note_meta, dirty: true}}
+      Engram.NativeScheduled.assert_scheduled(
+        :note_meta,
+        &Helpers.extract_title_and_tags(String.duplicate("a", &1), "x.md")
+      )
+
+      Engram.NativeScheduled.assert_scheduled(
+        :note_title,
+        &Helpers.extract_title(String.duplicate("a", &1), "x.md")
+      )
     end
 
     test "title and tags emit [:engram, :nif, :call, :stop]" do
