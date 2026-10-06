@@ -95,7 +95,7 @@ defmodule EngramWeb.AttachmentsController do
 
   defp do_upload_gated(conn, user, params, path) do
     vault = conn.assigns.current_vault
-    explicit_mime = params["mime_type"] || params[:mime_type]
+    explicit_mime = params["mime_type"]
     effective_mime = explicit_mime || MimeWhitelist.detect_mime(path)
 
     # Free's text-only attachment gate sits AHEAD of the generic
