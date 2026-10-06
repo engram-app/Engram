@@ -69,20 +69,30 @@ defmodule Engram.Workers.DataMigrationsRunner do
       failed(mod, reason)
   end
 
-  # Open longer than @stuck_after_s: one :error log (Sentry) per migration per
-  # 24 h so a human reviews it. Never lets a ledger failure break the pass.
+  # Open longer than @stuck_after_s: once per migration per 24 h, a Sentry
+  # message (capture_log_messages is off, so a Logger.error alone never reaches
+  # Sentry) plus an :error log for Loki, so a human reviews it. Never lets a
+  # ledger failure break the pass.
   defp flag_if_stuck(name, version) do
     entry = DataMigrations.note_open(name, version)
     now = DateTime.utc_now()
 
     if DateTime.diff(now, entry.opened_at) > @stuck_after_s and
          (is_nil(entry.alerted_at) or DateTime.diff(now, entry.alerted_at) > @realert_after_s) do
+      opened_at = DateTime.to_iso8601(entry.opened_at)
+      message = "data migration stuck: #{name} v#{version} open since #{opened_at}"
+
+      _ =
+        Sentry.capture_message(message,
+          extra: %{migration: name, version: version, opened_at: opened_at}
+        )
+
       Logger.error(
-        "data migration stuck: #{name} v#{version} open since #{DateTime.to_iso8601(entry.opened_at)}",
+        message,
         Metadata.with_category(:error, :oban,
           migration: name,
           version: version,
-          opened_at: DateTime.to_iso8601(entry.opened_at)
+          opened_at: opened_at
         )
       )
 

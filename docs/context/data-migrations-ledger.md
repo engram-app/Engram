@@ -86,8 +86,17 @@ A pass that returns `:more` (or fails, `:error`) calls
 `DataMigrations.note_open/2`, which stamps `opened_at` on the ledger row the
 first time that version is seen unfinished. A version bump or a reopen resets
 `opened_at` and `alerted_at`. If a migration is still open more than 7 days
-after `opened_at`, the runner logs `data migration stuck` at `:error` (Sentry
-picks it up), at most once per migration per 24 h (`alerted_at`).
+after `opened_at`, the runner reports `data migration stuck`, at most once per
+migration per 24 h (`alerted_at`): a `Sentry.capture_message/2` (migration,
+version and `opened_at` in `extra`) plus an `:error` log line for Loki. The
+explicit capture is required: `capture_log_messages` is off, so a
+`Logger.error` alone never reaches Sentry.
+
+`opened_at` measures one version's age only. The stored version never drops:
+`note_open/2` keeps the higher one and `mark_done/2` is a no-op on a row at a
+higher version, so during a rolling deploy an old node neither resets the
+clock nor closes the newer version's work. A failure before a pass runs (the
+`done?/2` read, `name/0`, `version/0`) leaves the ledger untouched.
 
 Review: find the rows the migration's done predicate still matches (its
 `any_row?` query), then fix them or explain why they can never be done, and

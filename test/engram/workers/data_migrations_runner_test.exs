@@ -133,6 +133,22 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
       refute again =~ "data migration stuck"
     end
 
+    # capture_log_messages is off, so the Logger.error alone never reaches
+    # Sentry; the stuck alert captures a message explicitly.
+    test "a stuck migration is reported to Sentry" do
+      Sentry.Test.setup_sentry()
+      DataMigrationsRunner.run(Unfinished)
+      age("test_unfinished", days_ago(8))
+
+      capture_log([level: :error], fn -> DataMigrationsRunner.run(Unfinished) end)
+
+      assert [event] = Sentry.Test.pop_sentry_reports()
+      assert event.message.formatted =~ "data migration stuck"
+      assert event.extra.migration == "test_unfinished"
+      assert event.extra.version == 1
+      assert is_binary(event.extra.opened_at)
+    end
+
     test "alerts again once the last alert is over 24h old" do
       DataMigrationsRunner.run(Unfinished)
       age("test_unfinished", days_ago(8), days_ago(2))
