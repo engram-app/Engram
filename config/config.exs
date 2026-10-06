@@ -161,7 +161,8 @@ config :engram, Oban,
       # 2-slot maintenance queue and one database.
       #
       # Minutes: reconcile owns every :x2/:x7, device-auth :04/:19/:34/:49,
-      # hourly jobs sit on :x3/:x8 or :10, dailies on :00/:16/:25/:30/:40.
+      # hourly jobs sit on :x3/:x8 or :10 (data-migrations runner :33),
+      # dailies on :00/:16/:25/:30/:40.
       crontab: [
         # Every 5 min. Work is also queued the moment it is due (`kick/0`).
         {"2-59/5 * * * *", Engram.Workers.ReconcileEmbeddings},
@@ -179,6 +180,9 @@ config :engram, Oban,
         # census pings): hourly, so each run deletes an hour's worth.
         {"23 * * * *", Engram.Workers.ClientLogsPruner},
         {"28 * * * *", Engram.Workers.InstallPingsPruner},
+        # Self-healing data migrations (#1872): one pass of each one whose
+        # ledger row is not done; a pass that finds no work closes it.
+        {"33 * * * *", Engram.Workers.DataMigrationsRunner},
         {"38 * * * *", Engram.Workers.IdempotencyPrune},
         # Note-version outbox copies whose FinalizeRevision job was lost
         # between commit and enqueue (#1710).
