@@ -21,7 +21,7 @@ defmodule Engram.Release.PreflightAppRoleTest do
 
   test "applied_versions/1 reads schema_migrations as engram_app" do
     assert {:ok, versions} = as_app_role(fn -> Preflight.applied_versions(Repo) end)
-    assert 20_261_006_120_000 in versions
+    assert 20_261_006_135_000 in versions
   end
 
   # CONTROL: proves the role drop engaged and the hazard is real. If this ever
