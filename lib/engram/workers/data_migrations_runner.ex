@@ -4,7 +4,13 @@ defmodule Engram.Workers.DataMigrationsRunner do
   ledger row is not done (`Engram.DataMigrations`). Each runs isolated: one
   raising, exiting or throwing does not stop the rest.
   """
-  use Oban.Worker, queue: :maintenance, max_attempts: 3, unique: [period: 3000]
+  # `states: :incomplete`: two runs never overlap, but a finished run does not
+  # swallow the next one. The default (:successful) would dedupe the @reboot run
+  # against an hourly run that COMPLETED within the period.
+  use Oban.Worker,
+    queue: :maintenance,
+    max_attempts: 3,
+    unique: [period: 3000, states: :incomplete]
 
   alias Engram.DataMigrations
   alias Engram.Logger.Metadata

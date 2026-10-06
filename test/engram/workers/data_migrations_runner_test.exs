@@ -2,6 +2,8 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
+  import Ecto.Query
+
   alias Engram.DataMigrations
   alias Engram.Workers.DataMigrationsRunner
 
@@ -104,7 +106,6 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
 
   describe "stuck migrations" do
     import ExUnit.CaptureLog
-    import Ecto.Query
 
     alias Engram.DataMigrations.Entry
 
@@ -181,6 +182,20 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
     {:ok, second} = Oban.insert(DataMigrationsRunner.new(%{}))
     assert second.conflict?
     assert second.id == first.id
+  end
+
+  # The boot run (@reboot) must not be swallowed by an hourly run that
+  # already COMPLETED: only an incomplete run blocks a new one.
+  test "a completed run does not deduplicate the next enqueue" do
+    {:ok, first} = Oban.insert(DataMigrationsRunner.new(%{}))
+
+    Repo.update_all(from(j in Oban.Job, where: j.id == ^first.id),
+      set: [state: "completed", completed_at: DateTime.utc_now()]
+    )
+
+    {:ok, second} = Oban.insert(DataMigrationsRunner.new(%{}))
+    refute second.conflict?
+    assert second.id != first.id
   end
 
   test "perform runs every registered migration" do
