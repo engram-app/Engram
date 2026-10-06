@@ -141,6 +141,38 @@ fn tokens_with_len(text: &str, lang: Option<String>) -> (Vec<String>, usize) {
 // calling scheduler: no hop, and no queueing behind a long keyword encode
 // on prod's single dirty CPU scheduler. Bigger notes go dirty.
 
+/// `sized_nif!(f, f_nif, f_dirty_nif, (params) [arg names] -> Ret)` exports
+/// `f_nif` (calling scheduler) and `f_dirty_nif` (dirty CPU), both calling
+/// `f`; `Engram.Native.sized/3` picks one by input size. Names are spelled
+/// out (macro_rules cannot build an identifier). Params and the return type
+/// pass as raw tokens (a `$x:ty` reaches `#[rustler::nif]` as an opaque
+/// group it rejects), and `env` is written here, not passed in: rustler
+/// binds it by name, so it must share the attribute's hygiene.
+macro_rules! sized_nif {
+    ($imp:ident, $inline:ident, $dirty:ident, <$lt:lifetime>(env, $($params:tt)*) [$($arg:ident),*] -> $($ret:tt)+) => {
+        #[rustler::nif]
+        fn $inline<$lt>(env: Env<$lt>, $($params)*) -> $($ret)+ {
+            $imp(env, $($arg),*)
+        }
+
+        #[rustler::nif(schedule = "DirtyCpu")]
+        fn $dirty<$lt>(env: Env<$lt>, $($params)*) -> $($ret)+ {
+            $imp(env, $($arg),*)
+        }
+    };
+    ($imp:ident, $inline:ident, $dirty:ident, $params:tt [$($arg:ident),*] -> $($ret:tt)+) => {
+        #[rustler::nif]
+        fn $inline $params -> $($ret)+ {
+            $imp($($arg),*)
+        }
+
+        #[rustler::nif(schedule = "DirtyCpu")]
+        fn $dirty $params -> $($ret)+ {
+            $imp($($arg),*)
+        }
+    };
+}
+
 /// `Links.Parser.extract/1`: `{[{position, kind, target_start, target_len,
 /// target, alias, anchor}], scrub_count}`, and the call's native peak. Each
 /// link is encoded as a term the moment it is built, so the output never
@@ -156,10 +188,14 @@ fn link_extract<'a>(env: Env<'a>, content: &str) -> ((Vec<Term<'a>>, usize), usi
     })
 }
 
+sized_nif!(link_extract, link_extract_nif, link_extract_dirty_nif, <'a>(env, content: &str) [content] -> ((Vec<Term<'a>>, usize), usize));
+
 /// `Helpers.extract_title/2` without the file-name fallback, and the peak.
 fn note_title(content: &str) -> (Option<String>, usize) {
     memory::measured(|| meta::title(content))
 }
+
+sized_nif!(note_title, note_title_nif, note_title_dirty_nif, (content: &str) [content] -> (Option<String>, usize));
 
 /// `Helpers.extract_title_and_tags/2` without the file-name fallback, and
 /// the peak.
@@ -171,38 +207,7 @@ fn note_meta<'a>(env: Env<'a>, content: &str) -> ((Option<String>, Vec<Term<'a>>
     })
 }
 
-#[rustler::nif]
-fn note_meta_nif<'a>(env: Env<'a>, content: &str) -> ((Option<String>, Vec<Term<'a>>), usize) {
-    note_meta(env, content)
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn note_meta_dirty_nif<'a>(
-    env: Env<'a>,
-    content: &str,
-) -> ((Option<String>, Vec<Term<'a>>), usize) {
-    note_meta(env, content)
-}
-
-#[rustler::nif]
-fn link_extract_nif<'a>(env: Env<'a>, content: &str) -> ((Vec<Term<'a>>, usize), usize) {
-    link_extract(env, content)
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn link_extract_dirty_nif<'a>(env: Env<'a>, content: &str) -> ((Vec<Term<'a>>, usize), usize) {
-    link_extract(env, content)
-}
-
-#[rustler::nif]
-fn note_title_nif(content: &str) -> (Option<String>, usize) {
-    note_title(content)
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn note_title_dirty_nif(content: &str) -> (Option<String>, usize) {
-    note_title(content)
-}
+sized_nif!(note_meta, note_meta_nif, note_meta_dirty_nif, <'a>(env, content: &str) [content] -> ((Option<String>, Vec<Term<'a>>), usize));
 
 // A JSON number decodes to an integer when it has no fraction (`0`, `1`).
 fn number(t: Term) -> NifResult<f64> {
@@ -329,49 +334,18 @@ fn hmac_hex_many<'a>(
     Ok((out?, peak))
 }
 
-#[rustler::nif]
-fn hmac_hex_many_nif<'a>(
-    env: Env<'a>,
-    key: Binary<'a>,
-    prefix: Binary<'a>,
-    texts: Vec<Binary<'a>>,
-) -> NifResult<(Vec<Binary<'a>>, usize)> {
-    hmac_hex_many(env, key, prefix, texts)
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn hmac_hex_many_dirty_nif<'a>(
-    env: Env<'a>,
-    key: Binary<'a>,
-    prefix: Binary<'a>,
-    texts: Vec<Binary<'a>>,
-) -> NifResult<(Vec<Binary<'a>>, usize)> {
-    hmac_hex_many(env, key, prefix, texts)
-}
+sized_nif!(hmac_hex_many, hmac_hex_many_nif, hmac_hex_many_dirty_nif, <'a>(env, key: Binary<'a>, prefix: Binary<'a>, texts: Vec<Binary<'a>>) [key, prefix, texts] -> NifResult<(Vec<Binary<'a>>, usize)>);
 
 fn json_decode<'a>(env: Env<'a>, text: Binary<'a>) -> NifResult<(Term<'a>, usize)> {
     let (term, peak) = memory::measured(|| json::decode(env, text.as_slice()));
     Ok((term.map_err(|_| Error::BadArg)?, peak))
 }
 
-#[rustler::nif]
-fn json_decode_nif<'a>(env: Env<'a>, text: Binary<'a>) -> NifResult<(Term<'a>, usize)> {
-    json_decode(env, text)
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn json_decode_dirty_nif<'a>(env: Env<'a>, text: Binary<'a>) -> NifResult<(Term<'a>, usize)> {
-    json_decode(env, text)
-}
+sized_nif!(json_decode, json_decode_nif, json_decode_dirty_nif, <'a>(env, text: Binary<'a>) [text] -> NifResult<(Term<'a>, usize)>);
 
 /// `Engram.Parsers.Markdown.parse/2`'s chunks (positions are assigned in
 /// Elixir), and the call's native peak.
-fn chunk_terms<'a>(
-    env: Env<'a>,
-    content: &str,
-    folder: &str,
-    title: &str,
-) -> (Vec<Term<'a>>, usize) {
+fn chunk<'a>(env: Env<'a>, content: &str, folder: &str, title: &str) -> (Vec<Term<'a>>, usize) {
     memory::measured(|| {
         let mut out = Vec::new();
         chunker::each_chunk(content, folder, title, |c| out.push(c.encode(env)));
@@ -379,37 +353,16 @@ fn chunk_terms<'a>(
     })
 }
 
-#[rustler::nif]
-fn chunk_nif<'a>(env: Env<'a>, content: &str, folder: &str, title: &str) -> (Vec<Term<'a>>, usize) {
-    chunk_terms(env, content, folder, title)
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn chunk_dirty_nif<'a>(
-    env: Env<'a>,
-    content: &str,
-    folder: &str,
-    title: &str,
-) -> (Vec<Term<'a>>, usize) {
-    chunk_terms(env, content, folder, title)
-}
+sized_nif!(chunk, chunk_nif, chunk_dirty_nif, <'a>(env, content: &str, folder: &str, title: &str) [content, folder, title] -> (Vec<Term<'a>>, usize));
 
 /// `Frontmatter.split/1` as offsets: nil, or {block_start, block_end,
 /// body_start, add_newline}, with the native peak. Takes raw bytes: invalid
 /// UTF-8 splits as the Elixir regexes did.
-fn frontmatter_split_peak(content: &[u8]) -> (frontmatter::Split, usize) {
-    memory::measured(|| frontmatter::split(content))
+fn frontmatter_split(content: Binary) -> (frontmatter::Split, usize) {
+    memory::measured(|| frontmatter::split(content.as_slice()))
 }
 
-#[rustler::nif]
-fn frontmatter_split_nif(content: rustler::Binary) -> (frontmatter::Split, usize) {
-    frontmatter_split_peak(content.as_slice())
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn frontmatter_split_dirty_nif(content: rustler::Binary) -> (frontmatter::Split, usize) {
-    frontmatter_split_peak(content.as_slice())
-}
+sized_nif!(frontmatter_split, frontmatter_split_nif, frontmatter_split_dirty_nif, (content: Binary) [content] -> (frontmatter::Split, usize));
 
 /// `Frontmatter.parse/1`'s common case: `[{key, json}]` in source order, or
 /// nil (YamlElixir decides), with the native peak.
@@ -417,29 +370,13 @@ fn frontmatter_parse(block: &str) -> (Option<Vec<(String, String)>>, usize) {
     memory::measured(|| yaml::parse(block))
 }
 
-#[rustler::nif]
-fn frontmatter_parse_nif(block: &str) -> (Option<Vec<(String, String)>>, usize) {
-    frontmatter_parse(block)
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn frontmatter_parse_dirty_nif(block: &str) -> (Option<Vec<(String, String)>>, usize) {
-    frontmatter_parse(block)
-}
+sized_nif!(frontmatter_parse, frontmatter_parse_nif, frontmatter_parse_dirty_nif, (block: &str) [block] -> (Option<Vec<(String, String)>>, usize));
 
 /// `CrdtBridge.diff_into_text/2`'s span, and the peak (zero: no allocation).
 fn text_diff(current: &str, incoming: &str) -> ((usize, usize, usize, usize), usize) {
     memory::measured(|| text_diff::diff(current, incoming))
 }
 
-#[rustler::nif]
-fn text_diff_nif(current: &str, incoming: &str) -> ((usize, usize, usize, usize), usize) {
-    text_diff(current, incoming)
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn text_diff_dirty_nif(current: &str, incoming: &str) -> ((usize, usize, usize, usize), usize) {
-    text_diff(current, incoming)
-}
+sized_nif!(text_diff, text_diff_nif, text_diff_dirty_nif, (current: &str, incoming: &str) [current, incoming] -> ((usize, usize, usize, usize), usize));
 
 rustler::init!("Elixir.Engram.Native");
