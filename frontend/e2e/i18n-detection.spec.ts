@@ -92,7 +92,8 @@ test.describe("language picker", () => {
 		await page.getByLabel("Email").fill(email);
 		await page.getByLabel("Password", { exact: true }).fill(PASS);
 		await page.getByRole("button", { name: "Sign in" }).click();
-		await expect(page).toHaveURL(/\/$|\/v\//u, { timeout: 15_000 });
+		// `/\/$/` would also match /sign-in/, so wait for the page to leave it.
+		await expect(page).not.toHaveURL(/\/sign-in/u, { timeout: 15_000 });
 		await expectLanguage(page, "en");
 
 		await page.goto("/#settings/account");
