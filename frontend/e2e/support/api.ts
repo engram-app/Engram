@@ -144,3 +144,41 @@ export async function signInForNote(
 
 	await expect(page).toHaveURL(noteUrlRe(noteId), { timeout: 10_000 });
 }
+
+/**
+ * Delete a throwaway user and everything it owns (DELETE /api/me cascades). The
+ * DB-agnostic cleanup: db-cleanup.ts only reaches a localhost DATABASE_URL and its
+ * single DELETE aborts on notes' FK, so specs that create vaults delete their own
+ * user instead. Never throws; a refusal (e.g. the instance's only admin) is
+ * logged so a stranded user is visible.
+ */
+export async function deleteAccount(
+	baseURL: string,
+	email: string,
+	password = PASS,
+): Promise<void> {
+	try {
+		const login = await fetch(`${baseURL}/api/auth/login`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ email, password }),
+		});
+		if (!login.ok) {
+			console.warn(`deleteAccount: login ${email} failed: ${login.status}`);
+			return;
+		}
+		const { access_token } = (await login.json()) as { access_token: string };
+		const res = await fetch(`${baseURL}/api/me`, {
+			method: "DELETE",
+			headers: { "Content-Type": "application/json", Authorization: `Bearer ${access_token}` },
+			body: JSON.stringify({ password }),
+		});
+		if (!res.ok) {
+			console.warn(
+				`deleteAccount: DELETE /api/me ${email} failed: ${res.status} ${await res.text()}`,
+			);
+		}
+	} catch (err) {
+		console.warn(`deleteAccount: ${email} errored: ${String(err)}`);
+	}
+}

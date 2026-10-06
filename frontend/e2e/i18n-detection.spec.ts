@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 import { LOCALE_NAMES } from "../src/i18n/locales";
-import { createVault, PASS, registerAndLogin } from "./support/api";
+import { createVault, deleteAccount, PASS, registerAndLogin } from "./support/api";
 import { BROWSER_LOCALES, translationOf } from "./support/i18n-leaks";
 
 // Language selection in a real browser: stored pick, then navigator.languages, then
@@ -70,11 +70,21 @@ test.describe("stored pick beats the browser", () => {
 });
 
 test.describe("language picker", () => {
+	let pickerEmail: string | null = null;
+
+	test.afterEach(async ({ baseURL }) => {
+		if (pickerEmail) {
+			await deleteAccount(baseURL ?? "", pickerEmail);
+			pickerEmail = null;
+		}
+	});
+
 	test("[registers user] Settings > Account switches live and the pick survives a reload", async ({
 		page,
 		baseURL,
 	}) => {
 		const email = `i18n-e2e-${Date.now()}-picker@test.com`;
+		pickerEmail = email;
 		const token = await registerAndLogin(baseURL ?? "", email);
 		await createVault(baseURL ?? "", token, "I18n Picker Vault");
 
