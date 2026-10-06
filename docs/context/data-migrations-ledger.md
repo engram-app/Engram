@@ -22,6 +22,10 @@ others.
   row the backfill can never fix keeps the migration open. The cost is one
   cheap pass per hour. That is by design: a closed ledger must not hide an
   unfixed row.
+- The done predicate and the enqueue set must both match the worker's own
+  skip conditions (vault liveness, decrypt failures). A row the worker
+  discards (a soft-deleted vault) must not keep it open; a pair with no work
+  must not be enqueued.
 - Readers handle every older format. The ledger only saves work, it is not a
   correctness gate.
 
@@ -56,10 +60,10 @@ touches `done?` must not be `async: true`, because the cache is node-global.
 
 | Name | Covers |
 |---|---|
-| `IndexVersions` | Every content-current note stamped with the current chunker, keyword and embed model versions. `ReconcileEmbeddings` does the rebuild. Once done it drops the version term and skips the keyword scan. |
+| `IndexVersions` | Every content-current note stamped with the current chunker, keyword and embed model versions. `ReconcileEmbeddings` does the rebuild. Once done it drops the version term and skips the keyword scan, except on one tick a day (04:02 UTC) that re-verifies: a rollback then roll-forward or a restored soft-deleted vault puts stale notes back without reopening it. See `index-version-self-heal.md`. |
 | `VaultSlugHmac` | Clears plaintext `vaults.slug` after `slug_hmac` / `slug_suffixed` are set. Removed with the contract release that drops the column. |
 | `ContentHashHmac` | Legacy 32-char MD5 `content_hash` to HMAC-SHA256, via the `BackfillContentHashHmac` chain. |
-| `NoteLinkHmacs` | Rows predating link extraction (#591): NULL `basename_hmac`, no `note_links` edges, via the `BackfillNoteLinks` chain. Done covers a missing `basename_hmac` only. The chain's final links scope has no needs-work predicate, so a discarded last links job is not detected. |
+| `NoteLinkHmacs` | Rows predating link extraction (#591): NULL `basename_hmac`, no `note_links` edges, via the `BackfillNoteLinks` chain, enqueued only for live-vault pairs with a gap. Done covers a missing `basename_hmac` only. The chain's final links scope has no needs-work predicate, so a discarded last links job is not detected. |
 
 ## Not on the ledger, and why
 
