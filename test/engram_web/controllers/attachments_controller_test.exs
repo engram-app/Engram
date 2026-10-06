@@ -383,6 +383,136 @@ defmodule EngramWeb.AttachmentsControllerTest do
   end
 
   # ---------------------------------------------------------------------------
+  # POST /attachments with a raw application/octet-stream body (#1877)
+  # ---------------------------------------------------------------------------
+
+  describe "POST /attachments (raw octet-stream body)" do
+    defp raw_post(conn, query, body) do
+      conn
+      |> put_req_header("content-type", "application/octet-stream")
+      |> post("/api/attachments?" <> URI.encode_query(query), body)
+    end
+
+    test "uploads raw bytes with metadata in the query string", %{conn: conn} do
+      bytes = :crypto.strong_rand_bytes(4096)
+
+      conn1 = raw_post(conn, %{path: "photos/raw.png", mtime: "1709234567.5"}, bytes)
+
+      assert %{"attachment" => att} = json_response(conn1, 200)
+      assert att["path"] == "photos/raw.png"
+      assert att["mime_type"] == "image/png"
+      assert att["size_bytes"] == 4096
+
+      body = conn |> get("/api/attachments/photos/raw.png") |> json_response(200)
+      assert Base.decode64!(body["content_base64"]) == bytes
+      assert body["mtime"] == 1_709_234_567.5
+    end
+
+    test "stores exactly what the base64 JSON path stores", %{conn: conn} do
+      json_att =
+        conn
+        |> post("/api/attachments", %{
+          path: "a.png",
+          content_base64: @sample_base64,
+          mtime: 1.0
+        })
+        |> json_response(200)
+
+      raw_att =
+        conn
+        |> raw_post(%{path: "b.png", mtime: "1.0"}, @sample_content)
+        |> json_response(200)
+
+      assert raw_att["attachment"]["content_hash"] == json_att["attachment"]["content_hash"]
+      assert raw_att["attachment"]["size_bytes"] == json_att["attachment"]["size_bytes"]
+    end
+
+    test "honours an explicit mime_type", %{conn: conn} do
+      conn = raw_post(conn, %{path: "doc.bin.pdf", mime_type: "application/pdf"}, "%PDF-1.4")
+      assert json_response(conn, 200)["attachment"]["mime_type"] == "application/pdf"
+    end
+
+    test "round-trips a unicode / emoji path", %{conn: conn} do
+      path = "写真/café 😀.png"
+      conn1 = raw_post(conn, %{path: path, mtime: "1.0"}, @sample_content)
+      assert json_response(conn1, 200)["attachment"]["path"] == path
+    end
+
+    test "sanitizes the path exactly like the JSON path", %{conn: conn} do
+      conn1 = raw_post(conn, %{path: "../../etc/evil.png", mtime: "1.0"}, @sample_content)
+
+      assert json_response(conn1, 200)["attachment"]["path"] ==
+               Engram.Notes.PathSanitizer.sanitize("../../etc/evil.png")
+    end
+
+    test "accepts an empty body as a zero-byte file", %{conn: conn} do
+      conn = raw_post(conn, %{path: "empty.png", mtime: "1.0"}, "")
+      assert json_response(conn, 200)["attachment"]["size_bytes"] == 0
+    end
+
+    test "422 when path is missing", %{conn: conn} do
+      conn = raw_post(conn, %{mtime: "1.0"}, @sample_content)
+      assert json_response(conn, 422)["error"] == "path is required"
+    end
+
+    test "415 for a disallowed extension", %{conn: conn} do
+      conn = raw_post(conn, %{path: "evil.exe", mtime: "1.0"}, "MZ")
+      # .exe detects as application/octet-stream, which the MIME list refuses first.
+      assert json_response(conn, 415)["error"] == "mime_not_allowed"
+    end
+
+    test "402 attachment_must_be_text when an override revokes the surface", %{
+      conn: conn,
+      user: user
+    } do
+      insert(:user_limit_override,
+        user: user,
+        key: "attachments_all_types",
+        value: %{"v" => false},
+        reason: "revoke for test",
+        set_by: "test"
+      )
+
+      conn = raw_post(conn, %{path: "blocked.png", mtime: "1.0"}, @sample_content)
+      assert json_response(conn, 402)["reason"] == "attachment_must_be_text"
+    end
+
+    test "a body exactly at max_file_bytes is accepted", %{conn: conn, user: user} do
+      insert(:user_limit_override, user: user, key: "max_file_bytes", value: %{"v" => 1024})
+
+      conn = raw_post(conn, %{path: "edge.png", mtime: "1.0"}, :binary.copy("a", 1024))
+      assert json_response(conn, 200)["attachment"]["size_bytes"] == 1024
+    end
+
+    test "402 file_too_large one byte over max_file_bytes", %{conn: conn, user: user} do
+      insert(:user_limit_override, user: user, key: "max_file_bytes", value: %{"v" => 1024})
+
+      conn = raw_post(conn, %{path: "big.png", mtime: "1.0"}, :binary.copy("a", 1025))
+
+      body = json_response(conn, 402)
+      assert body["reason"] == "file_too_large"
+      assert body["limit_key"] == "max_file_bytes"
+      assert body["limit"] == 1024
+    end
+
+    test "413 past the request body ceiling, same as the JSON parser", %{conn: conn} do
+      # Pro's per-file cap is far above the body ceiling, so the ceiling binds.
+      too_big = :binary.copy("a", EngramWeb.Endpoint.max_body_bytes() + 1)
+      conn = raw_post(conn, %{path: "huge.png", mtime: "1.0"}, too_big)
+      assert json_response(conn, 413)["error"] == "request_too_large"
+    end
+
+    test "returns 401 without auth", %{conn: conn} do
+      conn =
+        conn
+        |> delete_req_header("authorization")
+        |> raw_post(%{path: "nope.png"}, @sample_content)
+
+      assert json_response(conn, 401)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # GET /attachments/*path — Download
   # ---------------------------------------------------------------------------
 

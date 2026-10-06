@@ -31,6 +31,12 @@ defmodule EngramWeb.UserChannel do
   # feed.
   intercept ["vault_created", "vault_populated"]
 
+  # Server features the plugin checks before using them, because a self-hosted
+  # backend can be older than the plugin talking to it. Add a key when a new
+  # wire shape ships; drop it with its compat shim
+  # (docs/context/plugin-compat-shims.md).
+  @features %{raw_attachment_upload: true}
+
   @impl true
   def join("user:" <> user_id_str, _params, socket) do
     user = socket.assigns.current_user
@@ -42,7 +48,7 @@ defmodule EngramWeb.UserChannel do
       # `vault_populated` before onboarding is complete. Deletion has no such
       # exemption on the HTTP side and gets none here. (#1435)
       case ChannelGate.check_not_deleted(user) do
-        :ok -> {:ok, %{plan: Engram.Billing.plan_state(user)}, socket}
+        :ok -> {:ok, %{plan: Engram.Billing.plan_state(user), features: @features}, socket}
         {:error, payload} -> {:error, payload}
       end
     else

@@ -11,20 +11,52 @@ defmodule EngramWeb.AttachmentsController do
 
   operation(:upload,
     operation_id: "attachments-upload",
-    summary: "Upload an attachment (base64 JSON)",
+    summary: "Upload an attachment",
     description:
-      "Uploads an attachment supplied as base64 JSON to the vault's storage backend. Attachments " <>
-        "are a paid-tier feature (402 on Free, which is also limited to text MIME types), the MIME " <>
-        "type and extension must pass the whitelist (415), the file must be within the per-plan size " <>
-        "and total-quota limits (402), and a storage backend failure returns 502.",
+      "Uploads an attachment to the vault's storage backend. Send the raw bytes as " <>
+        "`application/octet-stream` with `path`, `mtime` and optional `mime_type` in the query " <>
+        "string, or (legacy) base64 JSON. Attachments are a paid-tier feature (402 on Free, which " <>
+        "is also limited to text MIME types), the MIME type and extension must pass the whitelist " <>
+        "(415), the file must be within the per-plan size and total-quota limits (402), a raw body " <>
+        "over the request ceiling returns 413, and a storage backend failure returns 502.",
     tags: ["Attachments"],
-    request_body:
-      {"Attachment bytes", "application/json", Schemas.UploadAttachmentRequest, required: true},
+    parameters: [
+      path: [
+        in: :query,
+        type: :string,
+        required: false,
+        description: "Vault-relative path. Required for an octet-stream body."
+      ],
+      mtime: [
+        in: :query,
+        type: :number,
+        required: false,
+        description: "File mtime in seconds (octet-stream body)."
+      ],
+      mime_type: [
+        in: :query,
+        type: :string,
+        required: false,
+        description: "MIME override; detected from the extension when absent (octet-stream body)."
+      ]
+    ],
+    request_body: %OpenApiSpex.RequestBody{
+      description: "Attachment bytes",
+      required: true,
+      content: %{
+        "application/octet-stream" => %OpenApiSpex.MediaType{
+          schema: %OpenApiSpex.Schema{type: :string, format: :binary}
+        },
+        "application/json" => %OpenApiSpex.MediaType{schema: Schemas.UploadAttachmentRequest}
+      }
+    },
     responses: [
       ok: {"Uploaded", "application/json", Schemas.AttachmentResponse},
       bad_request: {"Invalid base64", "application/json", Schemas.MessageError},
       payment_required:
         {"Attachments require a paid plan / quota", "application/json", Schemas.LimitError},
+      request_entity_too_large:
+        {"Raw body over the request ceiling", "application/json", Schemas.MessageError},
       unsupported_media_type:
         {"MIME or extension not allowed", "application/json", Schemas.MimeRejected},
       unprocessable_entity: {"Missing/invalid content", "application/json", Schemas.MessageError},
@@ -49,8 +81,17 @@ defmodule EngramWeb.AttachmentsController do
   end
 
   defp do_upload_gated(conn, user, params) do
+    case params["path"] do
+      path when is_binary(path) and path != "" ->
+        do_upload_gated(conn, user, params, path)
+
+      _ ->
+        conn |> put_status(422) |> json(%{error: "path is required"})
+    end
+  end
+
+  defp do_upload_gated(conn, user, params, path) do
     vault = conn.assigns.current_vault
-    path = params["path"] || params[:path]
     explicit_mime = params["mime_type"] || params[:mime_type]
     effective_mime = explicit_mime || MimeWhitelist.detect_mime(path)
 
@@ -79,8 +120,51 @@ defmodule EngramWeb.AttachmentsController do
           |> json(%{error: "extension_not_allowed", extension: ext})
 
         :ok ->
-          do_upload(conn, user, vault, params)
+          if raw_body?(conn),
+            do: upload_raw(conn, user, vault, params),
+            # compat(plugin): raw_attachment_upload - remove when plugin floor >= next (#1877)
+            else: do_upload(conn, user, vault, params)
       end
+    end
+  end
+
+  defp raw_body?(conn) do
+    case get_req_header(conn, "content-type") do
+      [type | _] -> String.starts_with?(String.downcase(type), "application/octet-stream")
+      [] -> false
+    end
+  end
+
+  # Plug.Parsers passes octet-stream through unread, so the body is read here,
+  # after every gate, and never past the smaller of the plan's per-file cap
+  # and the endpoint's body ceiling. Hitting that bound returns `:more`, which
+  # is the rejection: nothing beyond it is buffered.
+  defp upload_raw(conn, user, vault, params) do
+    {limit, bound_by} = raw_read_limit(user)
+
+    case read_body(conn, length: limit, read_length: 1_048_576) do
+      {:ok, body, conn} ->
+        do_upload(conn, user, vault, Map.put(params, :content, body))
+
+      {:more, _partial, conn} when bound_by == :plan ->
+        EngramWeb.LimitResponse.halt(conn, "file_too_large", :max_file_bytes, limit, nil)
+
+      {:more, _partial, conn} ->
+        conn |> put_status(413) |> json(%{error: "request_too_large"})
+
+      {:error, _reason} ->
+        conn |> put_status(400) |> json(%{error: "could not read request body"})
+    end
+  end
+
+  defp raw_read_limit(user) do
+    ceiling = EngramWeb.Endpoint.max_body_bytes()
+
+    # Negative and non-integer limits mean unlimited, as in
+    # Attachments.validate_size/2.
+    case Billing.effective_limit(user, :max_file_bytes) do
+      n when is_integer(n) and n >= 0 and n < ceiling -> {n, :plan}
+      _ -> {ceiling, :ceiling}
     end
   end
 

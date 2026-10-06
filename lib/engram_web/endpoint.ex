@@ -130,12 +130,20 @@ defmodule EngramWeb.Endpoint do
   # it with a structured equivalent that routes the path through metadata.
   plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint], log: false
 
+  # Request body ceiling. `pass: ["*/*"]` leaves `application/octet-stream`
+  # unread, so the raw attachment upload reads its own body and applies this
+  # same ceiling via `max_body_bytes/0` (#1877).
+  @max_body_bytes 11_000_000
+
+  @doc "Largest request body any route will read, parsed or raw."
+  def max_body_bytes, do: @max_body_bytes
+
   plug Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
     body_reader: {EngramWeb.Plugs.CacheRawBody, :read_body, []},
     json_decoder: Phoenix.json_library(),
-    length: 11_000_000
+    length: @max_body_bytes
 
   # Sentry context: attaches conn metadata (request_id, method, route,
   # status) to any exception reported by PlugCapture above. Placed after
