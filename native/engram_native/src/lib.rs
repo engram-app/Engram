@@ -171,6 +171,28 @@ fn note_tags<'a>(env: Env<'a>, content: &str) -> (Vec<Term<'a>>, usize) {
     (out, memory::peak_since(base))
 }
 
+/// `Helpers.extract_title_and_tags/2` without the file-name fallback, and
+/// the peak.
+fn note_meta<'a>(env: Env<'a>, content: &str) -> ((Option<String>, Vec<Term<'a>>), usize) {
+    let base = memory::begin();
+    let mut tags = Vec::new();
+    let title = meta::title_and_tags(content, |t| tags.push(t.encode(env)));
+    ((title, tags), memory::peak_since(base))
+}
+
+#[rustler::nif]
+fn note_meta_nif<'a>(env: Env<'a>, content: &str) -> ((Option<String>, Vec<Term<'a>>), usize) {
+    note_meta(env, content)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn note_meta_dirty_nif<'a>(
+    env: Env<'a>,
+    content: &str,
+) -> ((Option<String>, Vec<Term<'a>>), usize) {
+    note_meta(env, content)
+}
+
 #[rustler::nif]
 fn link_extract_nif<'a>(env: Env<'a>, content: &str) -> ((Vec<Term<'a>>, usize), usize) {
     link_extract(env, content)

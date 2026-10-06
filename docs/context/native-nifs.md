@@ -97,6 +97,13 @@ fixed cost of a NIF call plus telemetry). 1 MB notes: 0.6-1 s down to
 60-230 ms, native peak 2-5 MB. Rules ported as rules, not a YAML crate
 (see `meta.rs` for why), pinned by an 8,012-case golden set.
 
+`note_meta` (2026-10-06) returns both from one call, sharing the frontmatter
+match and the CommonMark code ranges. Use it (`Helpers.extract_title_and_tags/2`)
+wherever both are needed for the same text (REST upsert, CRDT merge,
+checkpoint). Two calls -> one, min of 5 on a loaded box: 52 B 14 -> 10 us,
+5 KB with an H1 title 152 -> 108 us, 5 KB with a frontmatter title
+125 -> 99 us, 105 KB 3.6 -> 2.1-2.5 ms.
+
 Language ID (`lang_detect`, 2026-10-06) replaced the `lingua` hex package
 with the same crate (lingua-rs 1.7.2, models 1.2.0, pinned and kept out of
 Dependabot) and ONE detector per node. It was NOT a speed win: building the
@@ -191,7 +198,7 @@ bumping pulldown-cmark: `ENGRAM_FUZZ_CASES=2000000 ENGRAM_FUZZ_SEED=7 cargo test
 
 `schedule = "DirtyCpu"` on everything whose input size the caller controls,
 EXCEPT small inputs on a hot path. The note parsers (`link_extract`,
-`note_title`, `note_tags`) export a normal and a `_dirty_nif` variant, and
+`note_title`, `note_tags`, `note_meta`) export a normal and a `_dirty_nif` variant, and
 `Engram.Native` picks by size: up to 16 KB (`@inline_max`, well under 1 ms)
 runs on the calling scheduler. A note write must not queue behind a long
 keyword encode on the one dirty scheduler, and the hop alone cost ~20 us.

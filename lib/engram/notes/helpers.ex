@@ -162,6 +162,16 @@ defmodule Engram.Notes.Helpers do
   end
 
   @doc """
+  `{extract_title(content, path), extract_tags(content)}` in one NIF call,
+  for callers that need both of the same content.
+  """
+  @spec extract_title_and_tags(String.t(), String.t()) :: {String.t() | nil, [String.t()]}
+  def extract_title_and_tags(content, path) do
+    {title, tags} = Engram.Native.note_meta(scrub_utf8(content))
+    {title || filename_without_extension(path), tags}
+  end
+
+  @doc """
   Extracts the folder path (dirname) from a note path.
   Returns "" for root-level notes.
   """

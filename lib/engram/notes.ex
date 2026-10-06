@@ -417,9 +417,8 @@ defmodule Engram.Notes do
          {:ok, path} <- validate_path(path),
          {:ok, hash} <- content_hash(user, content) do
       sanitized_path = PathSanitizer.sanitize(path)
-      title = Helpers.extract_title(content, sanitized_path)
+      {title, tags} = Helpers.extract_title_and_tags(content, sanitized_path)
       folder = Helpers.extract_folder(sanitized_path)
-      tags = Helpers.extract_tags(content)
       now = DateTime.utc_now()
 
       base_attrs = %{
@@ -748,11 +747,18 @@ defmodule Engram.Notes do
          remint? \\ true
        ) do
     with {:ok, crdt} <-
-           maybe_merge_crdt(nil, base_attrs.content, user, note_id, base_attrs.vault_id),
+           maybe_merge_crdt(
+             nil,
+             base_attrs.content,
+             user,
+             note_id,
+             base_attrs.vault_id,
+             sanitized_path
+           ),
          merged_attrs = %{
            base_attrs
            | content: crdt.merged_text,
-             title: Helpers.extract_title(crdt.merged_text, sanitized_path),
+             title: crdt.title,
              tags: crdt.tags,
              content_hash: crdt.content_hash
          },
@@ -1737,13 +1743,18 @@ defmodule Engram.Notes do
     was_tombstoned = not is_nil(prior.deleted_at)
 
     with {:ok, crdt} <-
-           maybe_merge_crdt(prior, base_attrs.content, user, prior.id, prior.vault_id) do
-      merged_title = Helpers.extract_title(crdt.merged_text, sanitized_path)
-
+           maybe_merge_crdt(
+             prior,
+             base_attrs.content,
+             user,
+             prior.id,
+             prior.vault_id,
+             sanitized_path
+           ) do
       merged_attrs = %{
         base_attrs
         | content: crdt.merged_text,
-          title: merged_title,
+          title: crdt.title,
           tags: crdt.tags,
           content_hash: crdt.content_hash
       }
@@ -1966,13 +1977,18 @@ defmodule Engram.Notes do
       end
 
     with {:ok, crdt} <-
-           maybe_merge_crdt(existing, base_attrs.content, user, existing.id, existing.vault_id) do
-      merged_title = Helpers.extract_title(crdt.merged_text, sanitized_path)
-
+           maybe_merge_crdt(
+             existing,
+             base_attrs.content,
+             user,
+             existing.id,
+             existing.vault_id,
+             sanitized_path
+           ) do
       merged_attrs = %{
         base_attrs
         | content: crdt.merged_text,
-          title: merged_title,
+          title: crdt.title,
           tags: crdt.tags,
           content_hash: crdt.content_hash
       }
@@ -2091,9 +2107,10 @@ defmodule Engram.Notes do
   # tail keystrokes from the doc and deliver_out would push those deletions to
   # open editors — the stale-snapshot window bug.
   #
-  # Returns the merged text so callers compute content_hash + tags from the
-  # MERGED result — the public-API contract is "server merges, never clobbers."
-  defp maybe_merge_crdt(existing, incoming_content, user, note_id, vault_id) do
+  # Returns the merged text, with its content_hash, title (`path` is the
+  # fallback) and tags, all from the MERGED result — the public-API contract
+  # is "server merges, never clobbers."
+  defp maybe_merge_crdt(existing, incoming_content, user, note_id, vault_id, path) do
     prior_state =
       case existing do
         %Note{} = note ->
@@ -2179,13 +2196,16 @@ defmodule Engram.Notes do
     with {:ok, %{state: new_state, text: merged_text}} <- merge_result,
          {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(new_state, user, note_id),
          {:ok, key} <- Crypto.dek_content_hash_key(user) do
+      {title, tags} = Helpers.extract_title_and_tags(merged_text, path)
+
       {:ok,
        %{
          crdt_state_ciphertext: ct,
          crdt_state_nonce: nonce,
          merged_text: merged_text,
          content_hash: Crypto.hmac_content_hash(key, merged_text),
-         tags: Helpers.extract_tags(merged_text)
+         title: title,
+         tags: tags
        }}
     end
   catch
