@@ -28,18 +28,32 @@ defmodule EngramWeb.Plugs.RequireSession do
 
   The rejections carry distinct error codes so they stay separable in logs
   and in the client.
+
+  ## Options
+
+    * `allow_api_key: true` — let API keys through and reject only OAuth
+      grants. For routes where a first-party API key is a legitimate caller
+      but a third-party app never is (onboarding consent writes).
+    * `reject_device: true` — also reject plugin device-flow tokens (admin plane).
   """
 
   import Plug.Conn
 
-  def init(opts), do: Keyword.get(opts, :reject_device, false)
+  def init(opts), do: opts
 
-  def call(conn, reject_device?) do
+  def call(conn, opts) do
     cond do
-      conn.assigns[:current_api_key] -> reject(conn, "api_key_not_allowed")
-      conn.assigns[:oauth_scope] -> reject(conn, "oauth_grant_not_allowed")
-      reject_device? and conn.assigns[:device_token] -> reject(conn, "device_token_not_allowed")
-      true -> conn
+      conn.assigns[:current_api_key] && !Keyword.get(opts, :allow_api_key, false) ->
+        reject(conn, "api_key_not_allowed")
+
+      conn.assigns[:oauth_scope] ->
+        reject(conn, "oauth_grant_not_allowed")
+
+      Keyword.get(opts, :reject_device, false) && conn.assigns[:device_token] ->
+        reject(conn, "device_token_not_allowed")
+
+      true ->
+        conn
     end
   end
 

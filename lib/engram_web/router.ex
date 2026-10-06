@@ -68,6 +68,12 @@ defmodule EngramWeb.Router do
     plug EngramWeb.Plugs.RequireApiWriteEnabled
   end
 
+  # RequireSession that still admits API keys: rejects third-party OAuth grants
+  # only. A named pipeline because `pipe_through` cannot pass plug options.
+  pipeline :require_session_allow_api_key do
+    plug EngramWeb.Plugs.RequireSession, allow_api_key: true
+  end
+
   # First-party browser session only. `RequireAdmin` checks WHO the user is,
   # not HOW they authenticated, so without `RequireSession` any API key, OAuth
   # grant or plugin token an admin issued inherits the admin plane, including
@@ -421,6 +427,14 @@ defmodule EngramWeb.Router do
       post "/billing/reverse-cancel", BillingController, :reverse_cancel
       post "/billing/plan-change/confirm", BillingController, :plan_change_confirm
 
+      # Billing PII reads. Subscription detail, transaction history and invoices
+      # carry the user's name, address and payment history; a grant to read and
+      # write notes is not consent to that. Verified callers: the SPA only. The
+      # plugin reads `/billing/usage` (open pipeline below).
+      get "/billing/subscription", BillingController, :subscription_detail
+      get "/billing/transactions", BillingController, :transactions
+      get "/billing/transactions/:id/invoice", BillingController, :transaction_invoice
+
       # Consent MINTS an authorization code for whatever `client_id` and
       # `vault_ids` the caller passes, and ownership is checked against the USER
       # rather than the calling credential. `/oauth/register` is public DCR, so
@@ -447,17 +461,15 @@ defmodule EngramWeb.Router do
     # above. Irreversible destruction is session-only; see the note there.
 
     # Billing READS. Paddle checkout opens client-side via paddle.js, so the
-    # backend only exposes status, the public client config, and subscription
-    # history. Everything that CHANGES what the user pays — or mints a
-    # Paddle-hosted capability — sits in the RequireSession block above.
+    # backend only exposes status, usage and the public client config here.
+    # Subscription detail, transactions and invoices carry PII (name, address,
+    # payment history), and everything that CHANGES what the user pays — or
+    # mints a Paddle-hosted capability — sits in the RequireSession block above.
     # `plan-change/preview` is a POST but changes nothing and mints nothing:
     # it prices a hypothetical swap, so it stays a read.
     get "/billing/status", BillingController, :status
     get "/billing/usage", BillingController, :usage
     get "/billing/config", BillingController, :config
-    get "/billing/subscription", BillingController, :subscription_detail
-    get "/billing/transactions", BillingController, :transactions
-    get "/billing/transactions/:id/invoice", BillingController, :transaction_invoice
     post "/billing/plan-change/preview", BillingController, :plan_change_preview
   end
 
@@ -498,12 +510,21 @@ defmodule EngramWeb.Router do
     # RequireOnboarding (the plug is only on the vault-scoped pipeline)
     # so the wizard can actually function before completion.
     get "/onboarding/status", OnboardingController, :status
-    post "/onboarding/accept-terms", OnboardingController, :accept_terms
-    # Free-tier acceptance — Continue with Free CTA in /onboard/billing.
-    # Sets `free_tier_accepted_at` (idempotent) and returns updated status.
-    post "/onboarding/accept_free_tier", OnboardingController, :accept_free_tier
-    # FTUX questionnaire — PATCH (frontend api client has no PUT helper).
-    patch "/onboarding/profile", OnboardingController, :set_profile
+
+    # Consent writes. Accepting the ToS / Free tier is a binding act by the
+    # human, and the current ToS version + hash are public, so a third-party
+    # OAuth grant must never record it. API keys stay allowed: Free users
+    # onboard with one (see the scope comment above).
+    scope "/" do
+      pipe_through :require_session_allow_api_key
+      post "/onboarding/accept-terms", OnboardingController, :accept_terms
+      # Free-tier acceptance — Continue with Free CTA in /onboard/billing.
+      # Sets `free_tier_accepted_at` (idempotent) and returns updated status.
+      post "/onboarding/accept_free_tier", OnboardingController, :accept_free_tier
+      # FTUX questionnaire — PATCH (frontend api client has no PUT helper).
+      patch "/onboarding/profile", OnboardingController, :set_profile
+    end
+
     post "/onboarding/actions", OnboardingController, :record
 
     # Client trace beacon ingest. Must work before onboarding completes (the
