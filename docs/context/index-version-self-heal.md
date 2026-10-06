@@ -110,8 +110,10 @@ version-stale notes back after the migration closed, and none renames it:
 - a rolling deploy, where an old-release node stamps an old version after a
   new node marked the new name done.
 
-So `ReconcileEmbeddings` still runs the version term and the keyword sweep on
-one tick a day: the 04:02 UTC cron tick (any job scheduled 04:00 <= t < 04:05
-UTC). It is a pure function of the job's `scheduled_at`, with no extra cron
-entry and no state. A stale note is healed within a day; the cost is one
-unindexed keyword scan per day.
+So `ReconcileEmbeddings` still runs the version term and the keyword sweep
+for one hour a day: every tick scheduled 04:00 <= t < 05:00 UTC (twelve
+`2-59/5` ticks). A whole hour rather than one tick because the unique window
+can dedupe any single tick, and a skipped tick must not skip the day. It is a
+pure function of the job's `scheduled_at`, with no extra cron entry and no
+state. A stale note is healed within a day; the cost is twelve unindexed
+keyword scans per day.

@@ -96,7 +96,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     # Once IndexVersions is done no content-current note is on an old
     # version: skip the version term and the keyword scan (an unindexed
     # per-tenant scan every 5 min). A version bump renames the migration,
-    # which reopens both. Except on the daily re-verify tick: a rollback then
+    # which reopens both. Except in the daily re-verify hour: a rollback then
     # roll-forward, or a restored soft-deleted vault, puts version-stale notes
     # back after the migration closed, and nothing would reopen it.
     versions_done = IndexVersions.done?() and not daily_reverify?(scheduled_at)
@@ -227,10 +227,12 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     if versions_done, do: :ok, else: sweep_keyword_stale(now, paid, page_size)
   end
 
-  # The one tick a day (cron "2-59/5": 04:02 UTC) that re-checks index
-  # versions after IndexVersions is done. A pure function of the job's time:
-  # no extra cron entry, no state. A kick landing in the window counts too.
-  defp daily_reverify?(%DateTime{hour: 4, minute: minute}) when minute < 5, do: true
+  # The hour a day (04:00-04:59 UTC, twelve "2-59/5" ticks) that re-checks
+  # index versions after IndexVersions is done. A whole hour, not one tick: the
+  # unique window can dedupe any single tick, and a skipped tick must not skip
+  # the day. A pure function of the job's time: no extra cron entry, no state.
+  # A kick landing in the hour counts too.
+  defp daily_reverify?(%DateTime{hour: 4}), do: true
   defp daily_reverify?(_scheduled_at), do: false
 
   # Runs `sweep.(repo)` over every tenant: once on the maintenance pool
