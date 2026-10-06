@@ -13,8 +13,15 @@
 //!
 //! Output: `(key, value as JSON)` in source order, the JSON exactly as
 //! `Jason.encode/1` prints the YamlElixir term.
+//!
+//! `emit_key` is the other direction, `Frontmatter.emit/3`'s per-key Ymlr
+//! render, ported rule for rule from Ymlr 5.1 (`Ymlr.Encode`): same
+//! contract, None (render in Elixir) where unsure. Its output must match
+//! Ymlr byte for byte, since `content_hash` is taken over it.
 use regex::Regex;
+use serde::de::{Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use std::collections::HashSet;
+use std::fmt;
 use std::sync::OnceLock;
 
 /// The block's keys and JSON values in source order, or None: ask YamlElixir.
@@ -336,6 +343,371 @@ fn json_string(s: &str) -> String {
     out
 }
 
+/// A decoded Y.Map value, as `Jason.decode/1` would give it, restricted to
+/// what `emit_key` renders: no floats, objects with unique keys.
+enum Json {
+    Null,
+    Bool(bool),
+    Int(i128),
+    Str(String),
+    List(Vec<Json>),
+    // Keys in Erlang term order (bytewise), as Ymlr enumerates a small map.
+    Object(Vec<(String, Json)>),
+    // Anything emit_key declines: floats, repeated keys.
+    Unsure,
+}
+
+impl<'de> Deserialize<'de> for Json {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Json, D::Error> {
+        d.deserialize_any(JsonVisitor)
+    }
+}
+
+struct JsonVisitor;
+
+impl<'de> Visitor<'de> for JsonVisitor {
+    type Value = Json;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("any JSON value")
+    }
+    fn visit_unit<E>(self) -> Result<Json, E> {
+        Ok(Json::Null)
+    }
+    fn visit_bool<E>(self, b: bool) -> Result<Json, E> {
+        Ok(Json::Bool(b))
+    }
+    fn visit_i64<E>(self, i: i64) -> Result<Json, E> {
+        Ok(Json::Int(i.into()))
+    }
+    fn visit_u64<E>(self, u: u64) -> Result<Json, E> {
+        Ok(Json::Int(u.into()))
+    }
+    fn visit_f64<E>(self, _: f64) -> Result<Json, E> {
+        Ok(Json::Unsure)
+    }
+    fn visit_str<E>(self, s: &str) -> Result<Json, E> {
+        Ok(Json::Str(s.to_string()))
+    }
+    fn visit_string<E>(self, s: String) -> Result<Json, E> {
+        Ok(Json::Str(s))
+    }
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Json, A::Error> {
+        let mut items = Vec::new();
+        while let Some(item) = seq.next_element()? {
+            items.push(item);
+        }
+        Ok(Json::List(items))
+    }
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Json, A::Error> {
+        let mut pairs: Vec<(String, Json)> = Vec::new();
+        while let Some(key) = map.next_key::<String>()? {
+            pairs.push((key, map.next_value()?));
+        }
+        pairs.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+        // A repeated key, or a map past 32 keys (the BEAM then iterates in
+        // hash order, which Ymlr follows), is left to Elixir.
+        if pairs.windows(2).any(|w| w[0].0 == w[1].0) || pairs.len() > 32 {
+            return Ok(Json::Unsure);
+        }
+        Ok(Json::Object(pairs))
+    }
+}
+
+/// `Frontmatter.emit_key/2` for a key whose stored value is `value`:
+/// `Ymlr.document!(%{key => Jason.decode!(value)})` minus its `---\n`.
+/// None: not JSON, or a shape these rules do not render; Elixir then does.
+pub fn emit_key(key: &str, value: &str) -> Option<String> {
+    let json: Json = serde_json::from_str(value).ok()?;
+    let mut out = String::with_capacity(key.len() + value.len() + 8);
+    map_entry(&mut out, key, &json, 0)?;
+    out.push('\n');
+    Some(out)
+}
+
+fn indent(out: &mut String, level: usize) {
+    out.push('\n');
+    for _ in 0..level {
+        out.push_str("  ");
+    }
+}
+
+/// `Ymlr.Encode.map/3`'s entry for (key, value) in a map at `level`.
+fn map_entry(out: &mut String, key: &str, v: &Json, level: usize) -> Option<()> {
+    string(out, key, None)?;
+    out.push(':');
+    match v {
+        Json::Null => {}
+        Json::List(items) if items.is_empty() => out.push_str(" []"),
+        Json::Object(pairs) if pairs.is_empty() => out.push_str(" {}"),
+        Json::Object(_) | Json::List(_) => {
+            indent(out, level);
+            out.push_str("  ");
+            value(out, v, level + 1)?;
+        }
+        _ => {
+            out.push(' ');
+            value(out, v, level + 1)?;
+        }
+    }
+    Some(())
+}
+
+/// `Ymlr.Encoder.encode/3`.
+fn value(out: &mut String, v: &Json, level: usize) -> Option<()> {
+    match v {
+        Json::Null | Json::Unsure => return None,
+        Json::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Json::Int(i) => out.push_str(&i.to_string()),
+        Json::Str(s) => string(out, s, Some(level))?,
+        Json::List(items) if items.is_empty() => out.push_str("[]"),
+        Json::Object(pairs) if pairs.is_empty() => out.push_str("{}"),
+        Json::List(items) => {
+            for (n, item) in items.iter().enumerate() {
+                if n > 0 {
+                    indent(out, level);
+                }
+                match item {
+                    Json::Null => out.push('-'),
+                    Json::Str(s) if s.is_empty() => out.push_str("- \"\""),
+                    item => {
+                        out.push_str("- ");
+                        value(out, item, level + 1)?;
+                    }
+                }
+            }
+        }
+        Json::Object(pairs) => {
+            for (n, (k, item)) in pairs.iter().enumerate() {
+                if n > 0 {
+                    indent(out, level);
+                }
+                map_entry(out, k, item, level)?;
+            }
+        }
+    }
+    Some(())
+}
+
+const EXACT_SINGLE: &[&str] = &[
+    "", "~", "?", "-", "null", "Null", "NULL", "y", "Y", "n", "N", "yes", "Yes", "YES", "no", "No",
+    "NO", "true", "True", "TRUE", "false", "False", "FALSE", "on", "On", "ON", "off", "Off", "OFF",
+];
+
+const START_SINGLE: &[&str] = &[
+    " ", "\t", "!", "&", "*", "{", "}", "[", "]", ",", "#", "|", ">", "@", "`", "\"", "- ", ": ",
+    ":{", "%", "? ", "0b", "0o", "0x", ".inf", ".Inf", ".INF", "+.inf", "+.Inf", "+.INF", "-.inf",
+    "-.Inf", "-.INF", ".nan", ".Nan", ".NAN",
+];
+
+#[derive(Clone, Copy, PartialEq)]
+enum Quote {
+    Plain,
+    MaybeDouble,
+    Single,
+    Double,
+    Multiline,
+}
+
+fn printable(c: char) -> bool {
+    matches!(c, ' '..='~' | '\t' | '\n' | '\u{85}' | '\u{A0}'..='\u{FFFD}' | '\u{10000}'..)
+}
+
+/// The escape letter for chars Ymlr writes as `\x` inside double quotes.
+fn escape_letter(c: char) -> Option<char> {
+    Some(match c {
+        '\u{7}' => 'a',
+        '\u{8}' => 'b',
+        '\u{1B}' => 'e',
+        '\u{C}' => 'f',
+        '\r' => 'r',
+        '\u{B}' => 'v',
+        '\0' => '0',
+        '\u{A0}' => '_',
+        '\u{85}' => 'N',
+        '\u{2028}' => 'L',
+        '\u{2029}' => 'P',
+        '"' => '"',
+        '\\' => '\\',
+        _ => return None,
+    })
+}
+
+fn forces_double(c: char) -> bool {
+    !printable(c) || (escape_letter(c).is_some() && c != '"' && c != '\\')
+}
+
+/// `Ymlr.Encode`'s `numeric?/1`: `Float.parse(s)` consumes all of `s`,
+/// i.e. `[-+]?\d+(\.\d+)?([eE][-+]?\d+)?`. None where Erlang's float range
+/// decides: Float.parse/1 fails on overflow, and up to 300 chars, or 200 with
+/// an exponent of at most 99, stays well inside it. Hand-written: a regex
+/// with captures cost ~1 us per string here.
+fn numeric(s: &str) -> Option<bool> {
+    let b = s.as_bytes();
+    let digits = |mut i: usize| {
+        let start = i;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        (i > start).then_some(i)
+    };
+    let mut i = usize::from(matches!(b.first(), Some(b'-' | b'+')));
+    let Some(mut j) = digits(i) else {
+        return Some(false);
+    };
+    if b.get(j) == Some(&b'.') {
+        match digits(j + 1) {
+            Some(k) => j = k,
+            None => return Some(false),
+        }
+    }
+    if j == b.len() {
+        return (s.len() <= 300).then_some(true);
+    }
+    if !matches!(b[j], b'e' | b'E') {
+        return Some(false);
+    }
+    i = j + 1 + usize::from(matches!(b.get(j + 1), Some(b'-' | b'+')));
+    match digits(i) {
+        Some(k) if k == b.len() => {
+            let exp = s[i..].trim_start_matches('0').len();
+            (s.len() <= 200 && exp <= 2).then_some(true)
+        }
+        _ => Some(false),
+    }
+}
+
+/// `Ymlr.Encode.encode_binary/2`. `level` None: a map key.
+fn string(out: &mut String, s: &str, level: Option<usize>) -> Option<()> {
+    if s.len() <= 5 && EXACT_SINGLE.contains(&s) {
+        out.push('\'');
+        out.push_str(s);
+        out.push('\'');
+        return Some(());
+    }
+    if s == "\n" {
+        out.push_str("\"\\n\"");
+        return Some(());
+    }
+    let special_start = s
+        .bytes()
+        .next()
+        .is_some_and(|c| b" \t!&*{}[],#|>@`\"-:%?0.+".contains(&c));
+    let prefix = || START_SINGLE.iter().find(|p| s.starts_with(**p));
+    let kind = if let Some(rest) = s.strip_prefix('\'') {
+        scan(rest, Quote::Double)
+    } else if let Some(p) = special_start.then(prefix).flatten() {
+        scan(&s[p.len()..], Quote::Single)
+    } else if numeric(s)? {
+        Quote::Single
+    } else {
+        scan(s, Quote::Plain)
+    };
+    match kind {
+        Quote::Plain | Quote::MaybeDouble => out.push_str(s),
+        Quote::Single => {
+            out.push('\'');
+            out.push_str(s);
+            out.push('\'');
+        }
+        Quote::Double => {
+            out.push('"');
+            for c in s.chars() {
+                match escape_letter(c) {
+                    Some(e) => {
+                        out.push('\\');
+                        out.push(e);
+                    }
+                    None if !printable(c) => {
+                        let n = c as u32;
+                        out.push_str(&if n <= 0xFF {
+                            format!("\\x{n:02X}")
+                        } else if n <= 0xFFFF {
+                            format!("\\u{n:04X}")
+                        } else {
+                            format!("\\U{n:06X}")
+                        });
+                    }
+                    None => out.push(c),
+                }
+            }
+            out.push('"');
+        }
+        Quote::Multiline => {
+            // A multi-line map key is `inspect/1`d: leave it to Elixir.
+            let level = level?.max(1);
+            out.push_str(if s.ends_with("\n\n") {
+                "|+"
+            } else if s.ends_with('\n') {
+                "|"
+            } else {
+                "|-"
+            });
+            for line in s.strip_suffix('\n').unwrap_or(s).split('\n') {
+                if line.is_empty() {
+                    out.push('\n');
+                } else {
+                    indent(out, level);
+                    out.push_str(line);
+                }
+            }
+        }
+    }
+    Some(())
+}
+
+/// `do_string_encoding_type/2`: scan `s` from state `q`. Bytewise: every
+/// char that steers the state is ASCII except the non-printable and
+/// escape-letter ones, which only ever force double quotes.
+fn scan(s: &str, mut q: Quote) -> Quote {
+    let b = s.as_bytes();
+    let quoted_by = |q: Quote| match q {
+        Quote::Double | Quote::MaybeDouble => Quote::Double,
+        _ => Quote::Single,
+    };
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c >= 0x80 {
+            let ch = s[i..].chars().next().unwrap_or(' ');
+            if forces_double(ch) {
+                q = Quote::Double;
+            }
+            i += ch.len_utf8();
+            continue;
+        }
+        match c {
+            b'\n' => return Quote::Multiline,
+            b'\t' => {}
+            0..=0x1F | 0x7F => q = Quote::Double,
+            b'\'' => {
+                q = if q == Quote::Plain {
+                    Quote::MaybeDouble
+                } else {
+                    Quote::Double
+                }
+            }
+            b' ' if b.get(i + 1) == Some(&b'#') => {
+                q = quoted_by(q);
+                i += 2;
+                continue;
+            }
+            b':' if b.get(i + 1) == Some(&b' ') => {
+                q = quoted_by(q);
+                i += 2;
+                continue;
+            }
+            b' ' | b':' if i + 1 == b.len() => return quoted_by(q),
+            _ => {}
+        }
+        if c == b'\t' && i + 1 == b.len() {
+            return quoted_by(q);
+        }
+        i += 1;
+    }
+    q
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse;
@@ -382,6 +754,36 @@ mod tests {
         ] {
             assert_eq!(parse(b), None, "{b:?}");
         }
+    }
+
+    #[test]
+    fn emit_matches_ymlr_on_known_cases() {
+        use super::emit_key;
+        let cases = [
+            ("title", "\"My note: a test\"", "title: 'My note: a test'\n"),
+            ("tags", "[\"a\",null,\"\"]", "tags:\n  - a\n  -\n  - \"\"\n"),
+            ("n", "null", "'n':\n"),
+            ("k", "null", "k:\n"),
+            ("e", "[]", "e: []\n"),
+            ("b", "\"yes\"", "b: 'yes'\n"),
+            ("s", "\"it's\"", "s: it's\n"),
+            ("q", "\"it's: x\"", "q: \"it's: x\"\n"),
+            ("m", "\"a\\nb\\n\"", "m: |\n  a\n  b\n"),
+            (
+                "o",
+                "{\"b\":1,\"a\":[true]}",
+                "o:\n  a:\n    - true\n  b: 1\n",
+            ),
+            ("x", "\"5\"", "x: '5'\n"),
+            ("c", "\"a\\u0001\"", "c: \"a\\x01\"\n"),
+        ];
+        for (k, v, want) in cases {
+            assert_eq!(emit_key(k, v).as_deref(), Some(want), "{k}: {v}");
+        }
+        for v in ["1.5", "not json", "{\"a\":1,\"a\":2}"] {
+            assert_eq!(emit_key("k", v), None, "{v}");
+        }
+        assert_eq!(emit_key("a\nb", "1"), None);
     }
 
     #[test]

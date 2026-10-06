@@ -114,6 +114,27 @@ defmodule Engram.Native do
         &frontmatter_parse_dirty_nif/1
       )
 
+  @doc false
+  def frontmatter_emit_nif(_pairs), do: :erlang.nif_error(:nif_not_loaded)
+  @doc false
+  def frontmatter_emit_dirty_nif(_pairs), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
+  Ymlr's render of each `{key, json_value}` as a one-key YAML document
+  (no `---`), or nil where the native rules decline and Elixir must render
+  it, including for invalid UTF-8.
+  """
+  def frontmatter_emit(pairs) when is_list(pairs) do
+    bytes = Enum.reduce(pairs, 0, fn {k, v}, acc -> acc + byte_size(k) + byte_size(v) end)
+
+    if bytes <= @inline_max,
+      do: call(:frontmatter_emit, bytes, %{dirty: false}, fn -> frontmatter_emit_nif(pairs) end),
+      else:
+        call(:frontmatter_emit, bytes, %{dirty: true}, fn ->
+          frontmatter_emit_dirty_nif(pairs)
+        end)
+  end
+
   @doc "Frontmatter `title:`, else the first H1 outside code, else nil. Valid UTF-8 only."
   def note_title(content),
     do: parse(:note_title, content, &note_title_nif/1, &note_title_dirty_nif/1)

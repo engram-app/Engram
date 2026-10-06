@@ -30,7 +30,7 @@ costs about that), or code that needs to call back into the BEAM.
 
 | Code | Why | Evidence |
 |---|---|---|
-| `Engram.Notes.Frontmatter.emit/3` (Ymlr) | ~65 us per 10-key block, ~500 us at 50 keys; every projection of a note | parse is native (below); emit must match Ymlr byte for byte or `content_hash` shifts |
+| (none open) | | |
 
 Measured on the chunker (`chunk`, `frontmatter_split`, 2026-10-04,
 `Markdown.parse/2` end to end, best of 3; "Elixir" is chunker v2 on `main`,
@@ -110,6 +110,28 @@ pinning a golden file: `ENGRAM_FM_CASES=100000 mix test
 test/engram/native/frontmatter_parse_test.exs` after touching the rules. A
 REST write also parsed the merged block twice (OKF fields, parse_status);
 it is parsed once now.
+
+Frontmatter emit (`frontmatter_emit`, same day, `Frontmatter.emit/2` end to
+end, min of 5 x 15 interleaved runs; "Ymlr" is the old per-key render, kept
+as the fallback):
+
+| Block | Ymlr | Rust |
+|---|---|---|
+| 3 keys | 8 us | 5 us |
+| 10 keys | 32 us | 14 us |
+| 50 keys | 178 us | 64 us |
+
+Only 2-3x: Ymlr is a few us per key already, and half of what is left is
+the NIF call and Elixir glue. One call per note (all keys batched). Ported
+rule for rule from `Ymlr.Encode` 5.1; nil (Ymlr renders) for floats, non-JSON
+or invalid UTF-8 values, multi-line keys (Ymlr `inspect/1`s them), repeated
+JSON keys, and nested maps past 32 keys (the BEAM iterates those in hash
+order, which Ymlr follows). Byte-identical on 200,000 generated key/value
+pairs (`frontmatter_emit_test.exs`, Ymlr as the live oracle); a removed
+quoting rule fails it. Two traps from the port: a regex with captures cost
+~1 us per string (hand-written now), and per-pair `String.valid?` in the
+Elixir glue cost more than the Rust render (the NIF checks UTF-8 instead).
+Bump `ymlr` only with this test green: the port pins 5.1's rules.
 
 Title and tags (`note_title`, `note_tags`, same day): a typical 5 KB note
 with frontmatter, 230 inline tags and code spans went from 3.55 ms to

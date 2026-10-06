@@ -356,23 +356,57 @@ defmodule Engram.Notes.Frontmatter do
 
   def emit(order, values, raws)
       when is_list(order) and is_map(values) and is_map(raws) do
-    order
-    |> Enum.filter(fn k -> Map.has_key?(raws, k) or Map.has_key?(values, k) end)
-    |> Enum.map_join("", fn key ->
-      case Map.fetch(raws, key) do
-        # A degraded key is re-rendered from its verbatim out-of-band source
-        # span (never via Ymlr, which would canonicalize/lose it).
-        {:ok, raw} -> ensure_trailing_newline(raw)
-        :error -> emit_key(key, values[key])
+    parts =
+      for key <- order, Map.has_key?(raws, key) or Map.has_key?(values, key) do
+        case Map.fetch(raws, key) do
+          # A degraded key is re-rendered from its verbatim out-of-band source
+          # span (never via Ymlr, which would canonicalize/lose it).
+          {:ok, raw} -> ensure_trailing_newline(raw)
+          :error -> {key, values[key]}
+        end
       end
-    end)
+
+    parts
+    |> render_keys()
+    |> IO.iodata_to_binary()
     |> ensure_trailing_newline()
   end
+
+  # Ymlr's render, ported to Rust (native/engram_native/src/yaml.rs), one
+  # call per note for every key with a binary value. A key the NIF declines
+  # (a float, a non-JSON value, invalid UTF-8, a multi-line key, a nested
+  # map past 32 keys) comes back nil and goes through Ymlr. Byte-identical to
+  # Ymlr by construction and by test (frontmatter_emit_test.exs):
+  # content_hash is taken over this text.
+  defp render_keys(parts) do
+    native_in = Enum.filter(parts, &native_renderable?/1)
+    fill(parts, if(native_in == [], do: [], else: Engram.Native.frontmatter_emit(native_in)))
+  end
+
+  # Invalid UTF-8 is declined inside the NIF (nil), so binaries suffice here.
+  defp native_renderable?({k, v}), do: is_binary(k) and is_binary(v)
+
+  defp native_renderable?(_raw), do: false
+
+  defp fill([], []), do: []
+
+  defp fill([{k, v} = part | rest], native) do
+    if native_renderable?(part) do
+      [yaml | native_rest] = native
+      [yaml || emit_key(k, v) | fill(rest, native_rest)]
+    else
+      [emit_key(k, v) | fill(rest, native)]
+    end
+  end
+
+  defp fill([raw | rest], native), do: [raw | fill(rest, native)]
 
   # A good key is decoded then emitted as canonical YAML. Raw passthrough is
   # handled out of band in emit/3 (the `raws` map), so a normal value here is
   # NEVER mistaken for a marker: this path only ever sees real values.
-  defp emit_key(key, value) do
+  # This Ymlr path is the reference for the native render, and its fallback.
+  @doc false
+  def emit_key(key, value) do
     decoded = decode_value(value)
 
     try do

@@ -426,4 +426,30 @@ fn frontmatter_parse_dirty_nif(block: &str) -> (Option<Vec<(String, String)>>, u
     frontmatter_parse(block)
 }
 
+/// `Frontmatter.emit/3`'s per-key Ymlr render for each `{key, value}`:
+/// the YAML text, or nil where Elixir must render it (also for invalid
+/// UTF-8). One call per note, not per key.
+fn frontmatter_emit(pairs: Vec<(Binary, Binary)>) -> (Vec<Option<String>>, usize) {
+    let base = memory::begin();
+    let out = pairs
+        .iter()
+        .map(|(k, v)| {
+            let k = std::str::from_utf8(k.as_slice()).ok()?;
+            let v = std::str::from_utf8(v.as_slice()).ok()?;
+            yaml::emit_key(k, v)
+        })
+        .collect();
+    (out, memory::peak_since(base))
+}
+
+#[rustler::nif]
+fn frontmatter_emit_nif(pairs: Vec<(Binary, Binary)>) -> (Vec<Option<String>>, usize) {
+    frontmatter_emit(pairs)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn frontmatter_emit_dirty_nif(pairs: Vec<(Binary, Binary)>) -> (Vec<Option<String>>, usize) {
+    frontmatter_emit(pairs)
+}
+
 rustler::init!("Elixir.Engram.Native");
