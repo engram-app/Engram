@@ -50,10 +50,4 @@ defmodule Engram.Notes.ContentCommitTest do
 
     assert_enqueued(worker: FinalizeRevision, args: %{note_id: note.id})
   end
-
-  test "batch_upsert_notes enqueues finalize for changed notes", %{user: u, vault: v} do
-    {:ok, note} = Notes.upsert_note(u, v, %{"path" => "b.md", "content" => "one"})
-    Notes.batch_upsert_notes(u, v, [%{"path" => "b.md", "content" => "two"}])
-    assert_enqueued(worker: FinalizeRevision, args: %{note_id: note.id})
-  end
 end

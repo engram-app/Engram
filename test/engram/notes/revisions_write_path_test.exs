@@ -99,12 +99,6 @@ defmodule Engram.Notes.RevisionsWritePathTest do
       assert length(revisions(u, note.id)) == count
     end
 
-    test "batch updates record as import", %{user: u, vault: v} do
-      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "bulk.md", "content" => "v1"})
-      Notes.batch_upsert_notes(u, v, [%{"path" => "bulk.md", "content" => "v2"}])
-      assert %Revision{actor: "import", origin: "import"} = open(revisions(u, note.id))
-    end
-
     test "a content-changing id-keyed move records with the caller's actor",
          %{user: u, vault: v} do
       id = UUIDv7.generate()
@@ -182,14 +176,6 @@ defmodule Engram.Notes.RevisionsWritePathTest do
     end
   end
 
-  describe "finalize jobs" do
-    test "a batch update enqueues one while recording is on", %{user: u, vault: v} do
-      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "on.md", "content" => "v1"})
-      Notes.batch_upsert_notes(u, v, [%{"path" => "on.md", "content" => "v2"}])
-      assert_enqueued(worker: FinalizeRevision, args: %{note_id: note.id})
-    end
-  end
-
   describe "recording off" do
     setup do
       previous = Application.get_env(:engram, :history_recording)
@@ -201,12 +187,6 @@ defmodule Engram.Notes.RevisionsWritePathTest do
       {:ok, note} = Notes.upsert_note(u, v, %{"path" => "off.md", "content" => "v1"})
       {:ok, _} = Notes.upsert_note(u, v, %{"path" => "off.md", "content" => "v2"})
       refute_enqueued(worker: FinalizeRevision, args: %{note_id: note.id})
-    end
-
-    test "a batch write enqueues no finalize job", %{user: u, vault: v} do
-      Notes.batch_upsert_notes(u, v, [%{"path" => "boff.md", "content" => "v1"}])
-      Notes.batch_upsert_notes(u, v, [%{"path" => "boff.md", "content" => "v2"}])
-      refute_enqueued(worker: FinalizeRevision)
     end
   end
 end

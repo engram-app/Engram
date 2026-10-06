@@ -229,7 +229,6 @@ defmodule Engram.Notes.Revisions do
   defp session_gap_seconds,
     do: Application.get_env(:engram, :history_session_gap_minutes, 10) * 60
 
-  defp origin_for("import"), do: "import"
   defp origin_for("restore"), do: "restore"
   defp origin_for(_actor), do: "edit"
 

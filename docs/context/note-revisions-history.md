@@ -9,8 +9,7 @@ rotation of history (#1713), or any code that writes `notes.content`.
   actor writes, after 10 idle minutes (`HISTORY_SESSION_GAP_MINUTES`), or on
   the note's first save after history shipped (that save keeps a `baseline`).
 - Actors: `sync` (your editor, plugin and CRDT clients, all one actor), `mcp`,
-  `api:<key_id>`, `import` (batch writes, origin `import`), `link_rewrite`,
-  `maintenance`.
+  `api:<key_id>`, `link_rewrite`, `maintenance`.
 - The open version (`closed_at IS NULL`) has no stored text: it IS the note.
 
 ## The outbox
@@ -37,15 +36,14 @@ backstop is `Engram.Workers.FinalizeRevisionSweep` (`35 * * * *`).
   changed; actor `sync` for the CRDT-socket relocate/resurrect callers, else
   the upsert opts). The finalize enqueue comes from
   `ContentCommit.after_commit/3` for the checkpoint and both upsert branches
-  (the `:moved` one included), from the bulk `Oban.insert_all` in
-  `batch_upsert_side_effects`, and, for the CRDT relocate/resurrect legs of
+  (the `:moved` one included), and, for the CRDT relocate/resurrect legs of
   `genesis_crdt_note/5`, from `finalize_moved_revision/2` after the
   transaction (enqueue only, no embed or link extraction). Each is gated on a
   changed content hash. Missing `record_write/4` means no history for that
   writer; missing the enqueue leaves the copy to the hourly sweep (10 to 70
   minutes).
 - **`FinalizeRevision.new_for_note/2` returns `:skip` while recording is
-  off.** `Enqueue.enqueue/2` drops it, the batch path filters it. The sweep
+  off.** `Enqueue.enqueue/2` drops it. The sweep
   uses `FinalizeRevision.job/2`, which ignores the switch, so copies written
   before a switch-off still reach storage.
 - **A copy that can never decrypt is parked, not retried.** It gets

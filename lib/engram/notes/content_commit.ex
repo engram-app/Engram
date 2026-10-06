@@ -4,8 +4,7 @@ defmodule Engram.Notes.ContentCommit do
 
   Called by the single-note write sites (the CRDT checkpoint, and both
   content branches of `Notes.upsert_note/4`) after the write's transaction
-  commits, only when the content hash actually changed. The batch path keeps
-  its own bulk `Oban.insert_all` version for throughput.
+  commits, only when the content hash actually changed.
 
   Site-specific work stays at the site: the checkpoint's announce, upsert's
   broadcast and link rebind.

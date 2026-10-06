@@ -13,7 +13,7 @@ defmodule Engram.Workers.FinalizeRevision do
 
   ## Why the advisory lock
 
-  `Oban.insert_all` (the batch path, the hourly sweep) bypasses `unique`, so
+  `Oban.insert_all` (the hourly sweep) bypasses `unique`, so
   two runs can race on one version. Each would PUT under the same key with its
   own nonce, and only one nonce would reach the row, leaving the stored blob
   undecryptable. Taking `Repo.advisory_lock!/1` on the revision id, then
@@ -46,7 +46,7 @@ defmodule Engram.Workers.FinalizeRevision do
   Finalize a note's pending copies a few seconds after the write, collapsing
   bursts. `:skip` while history recording is off: no write leaves a copy then,
   and a no-op job per save would crowd the 2-slot `maintenance` queue.
-  `Engram.Notes.Enqueue.enqueue/2` and the batch path both drop `:skip`.
+  `Engram.Notes.Enqueue.enqueue/2` drops `:skip`.
   """
   @spec new_for_note(String.t(), String.t()) :: Oban.Job.changeset() | :skip
   def new_for_note(note_id, user_id) when is_binary(note_id) and is_binary(user_id) do

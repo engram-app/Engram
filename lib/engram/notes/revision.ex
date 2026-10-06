@@ -13,7 +13,7 @@ defmodule Engram.Notes.Revision do
   use Engram.Schema
   import Ecto.Changeset
 
-  @origins ~w(edit baseline restore import)
+  @origins ~w(edit baseline restore)
 
   @type t :: %__MODULE__{}
 
