@@ -115,7 +115,7 @@ Tables that join the tenant set in parallel PRs must also get
 
 - `account_exports`: Engram#1759 merged first, so #1774 includes it in its
   migration (12 tables).
-- `subscriptions`: #1758 part 2 adds it in `20261003120000_enable_subscriptions_rls_expand.exs`, together with `subscriptions_discovery` (Paddle webhook lookup on the app pool).
+- `subscriptions`: #1758 part 2 adds it in `20261006130000_enable_subscriptions_rls_expand.exs`, together with `subscriptions_discovery` (Paddle webhook lookup on the app pool).
 
 The coverage test above fails on that second branch until it does.
 

@@ -99,7 +99,7 @@ defmodule Engram.Repo.MaintenanceRoleTest do
 
     # api_keys and subscriptions are excluded: `api_keys_discovery` and
     # `subscriptions_discovery` deliberately widen SELECT when no tenant is set
-    # (see 20260918120000, 20261003120000). Their UPDATE is still filtered.
+    # (see 20260918120000, 20261006130000). Their UPDATE is still filtered.
     readable = @tenant_tables -- ["api_keys", "subscriptions"]
 
     {:ok, {seen, updated}} =
