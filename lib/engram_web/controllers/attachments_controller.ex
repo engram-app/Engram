@@ -79,7 +79,7 @@ defmodule EngramWeb.AttachmentsController do
         do_upload_gated(conn, user, params)
 
       {:error, :feature_not_available} ->
-        attachments_disabled(conn)
+        conn |> settle_unread() |> attachments_disabled()
     end
   end
 
@@ -89,7 +89,7 @@ defmodule EngramWeb.AttachmentsController do
         do_upload_gated(conn, user, params, path)
 
       _ ->
-        conn |> put_status(422) |> json(%{error: "path is required"})
+        conn |> settle_unread() |> put_status(422) |> json(%{error: "path is required"})
     end
   end
 
@@ -104,7 +104,7 @@ defmodule EngramWeb.AttachmentsController do
     # this branch entirely.
     if text_only?(user) and not text_mime?(effective_mime) do
       EngramWeb.LimitResponse.halt(
-        conn,
+        settle_unread(conn),
         "attachment_must_be_text",
         :attachments_text_only,
         true,
@@ -114,11 +114,13 @@ defmodule EngramWeb.AttachmentsController do
       case MimeWhitelist.check(effective_mime, path) do
         {:error, {:mime_not_allowed, mime}} ->
           conn
+          |> settle_unread()
           |> put_status(415)
           |> json(%{error: "mime_not_allowed", mime_type: mime})
 
         {:error, {:extension_not_allowed, ext}} ->
           conn
+          |> settle_unread()
           |> put_status(415)
           |> json(%{error: "extension_not_allowed", extension: ext})
 
@@ -129,6 +131,41 @@ defmodule EngramWeb.AttachmentsController do
             else: do_upload(conn, user, vault, params)
       end
     end
+  end
+
+  # A refusal sent while a raw body is still unread can reach the client as a
+  # connection reset on a bare Bandit (self-host, no buffering proxy): Bandit
+  # drains at most its default 8 MB after responding and closes on more. So
+  # every pre-read refusal drains first, bounded by the body ceiling, and past
+  # it closes instead. This cannot be a before_send hook: Plug.Conn.send_resp/1
+  # hands the adapter the PRE-callback state, so a read there is lost and
+  # Bandit would re-read a stale socket state. On the JSON path Plug.Parsers
+  # already consumed the body and this is a no-op read.
+  defp settle_unread(conn) do
+    ceiling = EngramWeb.Endpoint.max_body_bytes()
+
+    case declared_length(conn) do
+      n when is_integer(n) and n > ceiling -> close_after(conn)
+      _ -> drain(conn, ceiling)
+    end
+  end
+
+  defp drain(conn, budget) when budget < 0, do: close_after(conn)
+
+  defp drain(conn, budget) do
+    case read_body(conn, length: 1_048_576, read_length: 1_048_576) do
+      {:ok, _discard, conn} -> conn
+      {:more, discard, conn} -> drain(conn, budget - byte_size(discard))
+      {:error, _reason} -> close_after(conn)
+    end
+  end
+
+  # `connection` is an HTTP/1-only header (RFC 9113 8.2.2); HTTP/2 refusals
+  # end the stream, not the connection.
+  defp close_after(conn) do
+    if get_http_protocol(conn) == :"HTTP/2",
+      do: conn,
+      else: put_resp_header(conn, "connection", "close")
   end
 
   defp raw_body?(conn) do
@@ -150,10 +187,13 @@ defmodule EngramWeb.AttachmentsController do
       read_raw(conn, user, vault, Map.put(params, "mtime", mtime), limit, bound_by)
     else
       :invalid_mtime ->
-        conn |> put_status(422) |> json(%{error: "mtime must be a finite number"})
+        conn
+        |> settle_unread()
+        |> put_status(422)
+        |> json(%{error: "mtime must be a finite number"})
 
       :too_large ->
-        too_large(conn, limit, bound_by)
+        conn |> settle_unread() |> too_large(limit, bound_by)
     end
   end
 
@@ -166,16 +206,19 @@ defmodule EngramWeb.AttachmentsController do
   defp read_raw(conn, user, vault, params, limit, bound_by) do
     case read_body(conn, length: limit + 1, read_length: 1_048_576) do
       {_, body, conn} when byte_size(body) > limit ->
-        too_large(conn, limit, bound_by)
+        conn |> settle_unread() |> too_large(limit, bound_by)
 
       {:ok, body, conn} ->
         do_upload(conn, user, vault, Map.put(params, :content, body))
 
       {:more, _partial, conn} ->
-        conn |> put_status(408) |> json(%{error: "request body timed out"})
+        conn |> close_after() |> put_status(408) |> json(%{error: "request body timed out"})
 
       {:error, _reason} ->
-        conn |> put_status(400) |> json(%{error: "could not read request body"})
+        conn
+        |> close_after()
+        |> put_status(400)
+        |> json(%{error: "could not read request body"})
     end
   end
 

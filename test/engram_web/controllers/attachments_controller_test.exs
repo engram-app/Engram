@@ -526,6 +526,7 @@ defmodule EngramWeb.AttachmentsControllerTest do
         |> raw_post(%{path: "lie.png", mtime: "1.0"}, "small")
 
       assert json_response(conn, 413)["error"] == "request_too_large"
+      assert get_resp_header(conn, "connection") == ["close"]
     end
 
     for bad <- ["NaN", "1,5", "", "inf", "1e400"] do
@@ -543,6 +544,29 @@ defmodule EngramWeb.AttachmentsControllerTest do
 
       body = conn |> get("/api/attachments/nomtime.png") |> json_response(200)
       assert body["mtime"] == nil
+    end
+
+    test "an early refusal drains the unread body first", %{conn: conn} do
+      conn = raw_post(conn, %{path: "evil.exe", mtime: "1.0"}, :binary.copy("a", 4096))
+
+      assert json_response(conn, 415)
+      {Plug.Adapters.Test.Conn, state} = conn.adapter
+      assert state.req_body == ""
+      assert get_resp_header(conn, "connection") == []
+    end
+
+    test "an early refusal past the ceiling closes instead of draining", %{conn: conn} do
+      declared = Integer.to_string(EngramWeb.Endpoint.max_body_bytes() + 1)
+
+      conn =
+        conn
+        |> put_req_header("content-length", declared)
+        |> raw_post(%{path: "evil.exe", mtime: "1.0"}, "MZ")
+
+      assert json_response(conn, 415)
+      {Plug.Adapters.Test.Conn, state} = conn.adapter
+      assert state.req_body == "MZ"
+      assert get_resp_header(conn, "connection") == ["close"]
     end
 
     test "returns 401 without auth", %{conn: conn} do
