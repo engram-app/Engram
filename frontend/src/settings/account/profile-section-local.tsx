@@ -50,7 +50,7 @@ export function ProfileSectionLocal() {
 						placeholder={t("Leave blank to use your email")}
 					/>
 				</label>
-				<Button type="submit" size="sm" disabled={!dirty || update.isPending}>
+				<Button type="submit" className="shrink-0" disabled={!dirty || update.isPending}>
 					{update.isPending ? t("Saving…") : t("Save")}
 				</Button>
 			</form>
