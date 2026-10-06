@@ -1,4 +1,4 @@
-import { Facet } from "@codemirror/state";
+import { Compartment, Facet } from "@codemirror/state";
 import { englishT, type Translate } from "@/i18n/translate";
 
 // CodeMirror widgets, tooltips and gutter markers are built outside React, so
@@ -10,4 +10,8 @@ const translator = Facet.define<Translate, Translate>({
 	combine: (values) => values[0] ?? englishT,
 });
 
-export { translator };
+// The host swaps the facet value through this on a language change, so widgets
+// re-render without recreating the view.
+const translatorCompartment = new Compartment();
+
+export { translator, translatorCompartment };

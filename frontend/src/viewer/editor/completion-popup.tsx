@@ -90,8 +90,9 @@ function open(state: EditorState): boolean {
 function createPopup(view: EditorView): TooltipView {
 	const dom = document.createElement("div");
 	const root = createRoot(dom);
-	const t = view.state.facet(translator);
 	const render = (state: EditorState) => {
+		// Read per render, so a language switch repaints the open popup.
+		const t = state.facet(translator);
 		root.render(
 			<CompletionList
 				label={t("Link suggestions")}

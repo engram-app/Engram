@@ -7,6 +7,7 @@ import {
 	keymap,
 	WidgetType,
 } from "@codemirror/view";
+import type { Translate } from "@/i18n/translate";
 import { nextMermaidId, renderMermaid } from "../mermaid-render";
 import { selectionTouches } from "./decoration-utils";
 import { translator } from "./translator";
@@ -20,6 +21,7 @@ class MermaidWidget extends WidgetType {
 	constructor(
 		private readonly code: string,
 		private readonly dark: boolean,
+		private readonly t: Translate,
 	) {
 		super();
 	}
@@ -28,7 +30,7 @@ class MermaidWidget extends WidgetType {
 	// CSS, so a theme flip has to produce a NEW widget or the diagram keeps the
 	// old colours. buildMermaid reads the theme, which is what makes this differ.
 	eq(other: MermaidWidget) {
-		return other.code === this.code && other.dark === this.dark;
+		return other.code === this.code && other.dark === this.dark && other.t === this.t;
 	}
 
 	toDOM(view: EditorView) {
@@ -49,7 +51,7 @@ class MermaidWidget extends WidgetType {
 				// source visible so it can be fixed. Mermaid rejects on any syntax
 				// slip, which is a normal state while typing.
 				el.classList.add("cm-mermaid-error");
-				const t = view.state.facet(translator);
+				const { t } = this;
 				el.textContent = t("Mermaid error: {error}", {
 					error: err instanceof Error ? err.message : String(err),
 				});
@@ -188,7 +190,7 @@ function buildMermaid(state: EditorState): DecorationSet {
 		}
 		ranges.push(
 			Decoration.replace({
-				widget: new MermaidWidget(fence.code, dark),
+				widget: new MermaidWidget(fence.code, dark, state.facet(translator)),
 				block: true,
 			}).range(fence.from, fence.to),
 		);
@@ -283,7 +285,11 @@ export const mermaidKeymap = Prec.highest(
 export const mermaidDecoration = StateField.define<DecorationSet>({
 	create: (state) => buildMermaid(state),
 	update(value, tr) {
-		if (tr.docChanged || tr.selection) {
+		if (
+			tr.docChanged ||
+			tr.selection ||
+			tr.startState.facet(translator) !== tr.state.facet(translator)
+		) {
 			return buildMermaid(tr.state);
 		}
 		return value;

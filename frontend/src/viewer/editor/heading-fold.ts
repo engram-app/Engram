@@ -1,8 +1,9 @@
 import { codeFolding, foldGutter, foldKeymap, foldNodeProp } from "@codemirror/language";
 import type { Extension } from "@codemirror/state";
-import { type EditorView, keymap, ViewPlugin } from "@codemirror/view";
+import { type EditorView, keymap, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import type { MarkdownConfig } from "@lezer/markdown";
 import type { Translate } from "@/i18n/translate";
+import { translator } from "./translator";
 
 /**
  * Obsidian-style collapsible headings.
@@ -89,6 +90,36 @@ const foldHoverSync = ViewPlugin.fromClass(
 	},
 );
 
+/**
+ * foldGutter builds markers and codeFolding builds placeholders once, with the
+ * translator of the moment. When the translator changes, relabel the ones on
+ * screen in place (attributes only; the gutter still owns the elements).
+ */
+const foldLabelSync = ViewPlugin.fromClass(
+	class {
+		constructor(private readonly view: EditorView) {}
+
+		update(u: ViewUpdate) {
+			if (u.startState.facet(translator) === u.state.facet(translator)) {
+				return;
+			}
+			const t = u.state.facet(translator);
+			for (const el of this.view.dom.querySelectorAll(".cm-fold-chevron")) {
+				el.setAttribute(
+					"aria-label",
+					el.classList.contains("cm-fold-chevron-open")
+						? t("Collapse section")
+						: t("Expand section"),
+				);
+			}
+			for (const el of this.view.dom.querySelectorAll(".cm-foldPlaceholder")) {
+				el.setAttribute("title", t("Expand section"));
+				el.setAttribute("aria-label", t("Expand section"));
+			}
+		}
+	},
+);
+
 // Takes the translate function because the gutter marker is built without a
 // view to read it from. The default export below is the English one.
 export function headingFoldWith(t: Translate): Extension {
@@ -106,6 +137,7 @@ export function headingFoldWith(t: Translate): Extension {
 		}),
 		foldGutter({ markerDOM: (open) => chevron(open, t) }),
 		foldHoverSync,
+		foldLabelSync,
 		keymap.of(foldKeymap),
 	];
 }
