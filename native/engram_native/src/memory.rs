@@ -66,16 +66,13 @@ unsafe impl GlobalAlloc for Counting {
     // its own, so size buffers with `with_capacity`.
 }
 
-/// Start measuring a call on this thread; returns the baseline.
-pub fn begin() -> isize {
+/// `f`'s result and the peak bytes this thread allocated while it ran,
+/// above what it held live when `f` started.
+pub fn measured<T>(f: impl FnOnce() -> T) -> (T, usize) {
     let base = T_LIVE.with(|l| l.get());
     T_PEAK.with(|p| p.set(base));
-    base
-}
-
-/// Peak bytes allocated above `base` since `begin`.
-pub fn peak_since(base: isize) -> usize {
-    T_PEAK.with(|p| (p.get() - base).max(0) as usize)
+    let out = f();
+    (out, T_PEAK.with(|p| (p.get() - base).max(0) as usize))
 }
 
 pub fn live_bytes() -> isize {
@@ -88,10 +85,9 @@ mod tests {
 
     #[test]
     fn peak_counts_this_threads_allocations_and_live_returns_to_base() {
-        let base = begin();
-        let v: Vec<u8> = Vec::with_capacity(1 << 20);
-        drop(v);
-        assert!(peak_since(base) >= 1 << 20);
+        let base = T_LIVE.with(|l| l.get());
+        let ((), peak) = measured(|| drop(Vec::<u8>::with_capacity(1 << 20)));
+        assert!(peak >= 1 << 20);
         // Other test threads allocate concurrently; only this thread's
         // counter is exact.
         assert_eq!(T_LIVE.with(|l| l.get()), base);

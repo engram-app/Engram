@@ -92,18 +92,17 @@ fn encode_documents_nif<'a>(
     avgdl: f64,
     lang: Option<String>,
 ) -> (Vec<(Binary<'a>, Binary<'a>, usize)>, usize) {
-    let base = memory::begin();
-    let mut memo = HashMap::new();
-    let out = texts
-        .iter()
-        .map(|t| {
-            let text = String::from_utf8_lossy(t.as_slice());
-            let (i, v, n) = encode(&text, key.as_slice(), avgdl, lang.as_deref(), &mut memo);
-            (to_binary(env, &i), to_binary(env, &v), n)
-        })
-        .collect();
-    drop(memo);
-    (out, memory::peak_since(base))
+    memory::measured(|| {
+        let mut memo = HashMap::new();
+        texts
+            .iter()
+            .map(|t| {
+                let text = String::from_utf8_lossy(t.as_slice());
+                let (i, v, n) = encode(&text, key.as_slice(), avgdl, lang.as_deref(), &mut memo);
+                (to_binary(env, &i), to_binary(env, &v), n)
+            })
+            .collect()
+    })
 }
 
 /// Query vector: distinct tokens, value 1.0 each (Qdrant applies IDF).
@@ -148,29 +147,28 @@ fn tokens_with_len(text: &str, lang: Option<String>) -> (Vec<String>, usize) {
 /// exists as a Rust copy. Linear in the note; no size bound, notes of any
 /// size must index.
 fn link_extract<'a>(env: Env<'a>, content: &str) -> ((Vec<Term<'a>>, usize), usize) {
-    let base = memory::begin();
-    let mut terms = Vec::new();
-    let scrubs = links::extract(content, |(pos, kind, ts, tl, target, alias, anchor)| {
-        terms.push((pos, kind, ts, tl, target.as_ref(), alias, anchor.as_deref()).encode(env));
-    });
-    let peak = memory::peak_since(base);
-    ((terms, scrubs), peak)
+    memory::measured(|| {
+        let mut terms = Vec::new();
+        let scrubs = links::extract(content, |(pos, kind, ts, tl, target, alias, anchor)| {
+            terms.push((pos, kind, ts, tl, target.as_ref(), alias, anchor.as_deref()).encode(env));
+        });
+        (terms, scrubs)
+    })
 }
 
 /// `Helpers.extract_title/2` without the file-name fallback, and the peak.
 fn note_title(content: &str) -> (Option<String>, usize) {
-    let base = memory::begin();
-    let out = meta::title(content);
-    (out, memory::peak_since(base))
+    memory::measured(|| meta::title(content))
 }
 
 /// `Helpers.extract_title_and_tags/2` without the file-name fallback, and
 /// the peak.
 fn note_meta<'a>(env: Env<'a>, content: &str) -> ((Option<String>, Vec<Term<'a>>), usize) {
-    let base = memory::begin();
-    let mut tags = Vec::new();
-    let title = meta::title_and_tags(content, |t| tags.push(t.encode(env)));
-    ((title, tags), memory::peak_since(base))
+    memory::measured(|| {
+        let mut tags = Vec::new();
+        let title = meta::title_and_tags(content, |t| tags.push(t.encode(env)));
+        (title, tags)
+    })
 }
 
 #[rustler::nif]
@@ -241,27 +239,29 @@ fn mmr_select_nif(
     limit: usize,
     d: f64,
 ) -> NifResult<(Vec<usize>, usize)> {
-    let base = memory::begin();
-    let vectors = vectors
-        .into_iter()
-        .map(vector)
-        .collect::<NifResult<Vec<_>>>()?;
-    let scores = scores
-        .into_iter()
-        .map(number)
-        .collect::<NifResult<Vec<_>>>()?;
-    if vectors.len() != scores.len() {
-        return Err(Error::BadArg);
-    }
-    let picked = mmr::select(vectors, &scores, limit, d);
-    Ok((picked, memory::peak_since(base)))
+    let (picked, peak) = memory::measured(|| {
+        let vectors = vectors
+            .into_iter()
+            .map(vector)
+            .collect::<NifResult<Vec<_>>>()?;
+        let scores = scores
+            .into_iter()
+            .map(number)
+            .collect::<NifResult<Vec<_>>>()?;
+        if vectors.len() != scores.len() {
+            return Err(Error::BadArg);
+        }
+        Ok(mmr::select(vectors, &scores, limit, d))
+    });
+    Ok((picked?, peak))
 }
 
-fn finish<'a>(env: Env<'a>, out: Option<Vec<u8>>, base: isize) -> NifResult<(Binary<'a>, usize)> {
-    let out = out.ok_or(Error::BadArg)?;
-    let bin = to_binary(env, &out);
-    drop(out);
-    Ok((bin, memory::peak_since(base)))
+/// A measured `Option<Vec<u8>>` (None = bad input) as a binary and the peak.
+fn finish<'a>(
+    env: Env<'a>,
+    (out, peak): (NifResult<Option<Vec<u8>>>, usize),
+) -> NifResult<(Binary<'a>, usize)> {
+    Ok((to_binary(env, &out?.ok_or(Error::BadArg)?), peak))
 }
 
 // The three below run on the CALLING scheduler: one vector per call (1024
@@ -271,18 +271,19 @@ fn finish<'a>(env: Env<'a>, out: Option<Vec<u8>>, base: isize) -> NifResult<(Bin
 /// Numbers (floats or integers) -> packed float32 LE.
 #[rustler::nif]
 fn pack_f32_nif<'a>(env: Env<'a>, values: Term<'a>) -> NifResult<(Binary<'a>, usize)> {
-    let base = memory::begin();
-    let floats = vector(values)?.ok_or(Error::BadArg)?;
-    let out = vectors::pack_f32(&floats);
-    drop(floats);
-    finish(env, out, base)
+    finish(
+        env,
+        memory::measured(|| Ok(vectors::pack_f32(&vector(values)?.ok_or(Error::BadArg)?))),
+    )
 }
 
 /// Packed float32 LE -> JSON array text.
 #[rustler::nif]
 fn dense_json_nif<'a>(env: Env<'a>, packed: Binary<'a>) -> NifResult<(Binary<'a>, usize)> {
-    let base = memory::begin();
-    finish(env, vectors::dense_json(packed.as_slice()), base)
+    finish(
+        env,
+        memory::measured(|| Ok(vectors::dense_json(packed.as_slice()))),
+    )
 }
 
 /// Packed sparse -> `{"indices":[..],"values":[..]}` text.
@@ -292,11 +293,9 @@ fn sparse_json_nif<'a>(
     indices: Binary<'a>,
     values: Binary<'a>,
 ) -> NifResult<(Binary<'a>, usize)> {
-    let base = memory::begin();
     finish(
         env,
-        vectors::sparse_json(indices.as_slice(), values.as_slice()),
-        base,
+        memory::measured(|| Ok(vectors::sparse_json(indices.as_slice(), values.as_slice()))),
     )
 }
 
@@ -309,24 +308,25 @@ fn hmac_hex_many<'a>(
     texts: Vec<Binary<'a>>,
 ) -> NifResult<(Vec<Binary<'a>>, usize)> {
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    let base = memory::begin();
-    let keyed = Hmac::<Sha256>::new_from_slice(key.as_slice()).map_err(|_| Error::BadArg)?;
-    let out = texts
-        .iter()
-        .map(|t| {
-            let mut mac = keyed.clone();
-            mac.update(prefix.as_slice());
-            mac.update(t.as_slice());
-            let digest = mac.finalize().into_bytes();
-            let mut hex = NewBinary::new(env, 64);
-            for (i, b) in digest.iter().enumerate() {
-                hex.as_mut_slice()[2 * i] = HEX[(b >> 4) as usize];
-                hex.as_mut_slice()[2 * i + 1] = HEX[(b & 15) as usize];
-            }
-            hex.into()
-        })
-        .collect();
-    Ok((out, memory::peak_since(base)))
+    let (out, peak) = memory::measured(|| -> NifResult<Vec<Binary<'a>>> {
+        let keyed = Hmac::<Sha256>::new_from_slice(key.as_slice()).map_err(|_| Error::BadArg)?;
+        Ok(texts
+            .iter()
+            .map(|t| {
+                let mut mac = keyed.clone();
+                mac.update(prefix.as_slice());
+                mac.update(t.as_slice());
+                let digest = mac.finalize().into_bytes();
+                let mut hex = NewBinary::new(env, 64);
+                for (i, b) in digest.iter().enumerate() {
+                    hex.as_mut_slice()[2 * i] = HEX[(b >> 4) as usize];
+                    hex.as_mut_slice()[2 * i + 1] = HEX[(b & 15) as usize];
+                }
+                hex.into()
+            })
+            .collect())
+    });
+    Ok((out?, peak))
 }
 
 #[rustler::nif]
@@ -350,9 +350,8 @@ fn hmac_hex_many_dirty_nif<'a>(
 }
 
 fn json_decode<'a>(env: Env<'a>, text: Binary<'a>) -> NifResult<(Term<'a>, usize)> {
-    let base = memory::begin();
-    let term = json::decode(env, text.as_slice()).map_err(|_| Error::BadArg)?;
-    Ok((term, memory::peak_since(base)))
+    let (term, peak) = memory::measured(|| json::decode(env, text.as_slice()));
+    Ok((term.map_err(|_| Error::BadArg)?, peak))
 }
 
 #[rustler::nif]
@@ -373,10 +372,11 @@ fn chunk_terms<'a>(
     folder: &str,
     title: &str,
 ) -> (Vec<Term<'a>>, usize) {
-    let base = memory::begin();
-    let mut out = Vec::new();
-    chunker::each_chunk(content, folder, title, |c| out.push(c.encode(env)));
-    (out, memory::peak_since(base))
+    memory::measured(|| {
+        let mut out = Vec::new();
+        chunker::each_chunk(content, folder, title, |c| out.push(c.encode(env)));
+        out
+    })
 }
 
 #[rustler::nif]
@@ -398,9 +398,7 @@ fn chunk_dirty_nif<'a>(
 /// body_start, add_newline}, with the native peak. Takes raw bytes: invalid
 /// UTF-8 splits as the Elixir regexes did.
 fn frontmatter_split_peak(content: &[u8]) -> (frontmatter::Split, usize) {
-    let base = memory::begin();
-    let split = frontmatter::split(content);
-    (split, memory::peak_since(base))
+    memory::measured(|| frontmatter::split(content))
 }
 
 #[rustler::nif]
@@ -416,9 +414,7 @@ fn frontmatter_split_dirty_nif(content: rustler::Binary) -> (frontmatter::Split,
 /// `Frontmatter.parse/1`'s common case: `[{key, json}]` in source order, or
 /// nil (YamlElixir decides), with the native peak.
 fn frontmatter_parse(block: &str) -> (Option<Vec<(String, String)>>, usize) {
-    let base = memory::begin();
-    let out = yaml::parse(block);
-    (out, memory::peak_since(base))
+    memory::measured(|| yaml::parse(block))
 }
 
 #[rustler::nif]
@@ -433,9 +429,7 @@ fn frontmatter_parse_dirty_nif(block: &str) -> (Option<Vec<(String, String)>>, u
 
 /// `CrdtBridge.diff_into_text/2`'s span, and the peak (zero: no allocation).
 fn text_diff(current: &str, incoming: &str) -> ((usize, usize, usize, usize), usize) {
-    let base = memory::begin();
-    let out = text_diff::diff(current, incoming);
-    (out, memory::peak_since(base))
+    memory::measured(|| text_diff::diff(current, incoming))
 }
 
 #[rustler::nif]
