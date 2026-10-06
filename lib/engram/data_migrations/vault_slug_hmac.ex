@@ -1,17 +1,15 @@
-defmodule Engram.Workers.BackfillVaultSlugHmac do
+defmodule Engram.DataMigrations.VaultSlugHmac do
   @moduledoc """
   Clears the plaintext `vaults.slug`, first making `slug_hmac` /
-  `slug_suffixed` describe the derived slug; see
-  `Vaults.backfill_slug_hmacs/1`.
+  `slug_suffixed` describe the derived slug; see `Vaults.backfill_slug_hmacs/1`.
 
   The HMAC needs each user's DEK-derived filter key, so it cannot run in the
-  migration. Daily cron: the first run after this release clears every row;
-  later runs only find rows an older release wrote during a rolling deploy or
-  after a rollback. Users with nothing to clear derive no key. Users
-  mid-DEK-rotation are skipped and picked up next run.
-  Removed with the contract release that drops `vaults.slug`.
+  migration. Done when a pass clears nothing for every user. Users with
+  nothing to clear derive no key. A user mid-DEK-rotation or a failed user
+  keeps it open for the next pass. Removed with the contract release that
+  drops `vaults.slug`.
   """
-  use Oban.Worker, queue: :maintenance, max_attempts: 3, unique: [period: 3600]
+  @behaviour Engram.DataMigration
 
   import Ecto.Query
 
@@ -22,24 +20,28 @@ defmodule Engram.Workers.BackfillVaultSlugHmac do
 
   require Logger
 
-  @impl Oban.Worker
-  def timeout(_job), do: :timer.minutes(60)
+  @impl true
+  def name, do: "vault_slug_hmac"
 
-  @impl Oban.Worker
-  def perform(_job) do
+  @impl true
+  def version, do: 1
+
+  @impl true
+  def run_pass do
     # `users` is not RLS-scoped; the per-user vault work runs under with_tenant.
     Repo.all(from(u in User, where: is_nil(u.deleted_at), order_by: u.id, select: u.id))
-    |> Enum.each(&backfill_user/1)
+    |> Enum.map(&backfill_user/1)
+    |> Enum.all?(&(&1 == :clean))
+    |> if(do: :done, else: :more)
   end
 
   # Each user runs in its own transaction; one user's failure (a returned
   # error such as a KMS outage or missing DEK, or a raise such as a unique
   # violation on a hand-edited slug) is logged and must not starve the rest.
-  # Mid-rotation is expected and silent: the user is picked up next run.
   defp backfill_user(user_id) do
     case Vaults.backfill_slug_hmacs(user_id) do
       {:ok, 0} ->
-        :ok
+        :clean
 
       {:ok, count} ->
         Logger.info(
@@ -47,8 +49,10 @@ defmodule Engram.Workers.BackfillVaultSlugHmac do
           Metadata.with_category(:info, :crypto, user_id: user_id, reconciled: count)
         )
 
+        :changed
+
       {:error, :rotation_in_progress} ->
-        :ok
+        :skipped
 
       {:error, reason} ->
         log_failure(user_id, reason)
@@ -65,5 +69,7 @@ defmodule Engram.Workers.BackfillVaultSlugHmac do
         reason: Metadata.safe_reason(reason)
       )
     )
+
+    :failed
   end
 end

@@ -1,13 +1,12 @@
-defmodule Engram.Workers.BackfillVaultSlugHmacTest do
+defmodule Engram.DataMigrations.VaultSlugHmacTest do
   use Engram.DataCase, async: false
-  use Oban.Testing, repo: Engram.Repo
 
   import Ecto.Query
 
   alias Engram.Crypto
+  alias Engram.DataMigrations.VaultSlugHmac
   alias Engram.Vaults
   alias Engram.Vaults.Vault
-  alias Engram.Workers.BackfillVaultSlugHmac
 
   defp raw(vault_id),
     do: Repo.one!(from(v in Vault, where: v.id == ^vault_id), skip_tenant_check: true)
@@ -41,7 +40,7 @@ defmodule Engram.Workers.BackfillVaultSlugHmacTest do
       {:ok, vault, _} = Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
       set_raw(vault.id, slug: "notes")
 
-      assert :ok = perform_job(BackfillVaultSlugHmac, %{})
+      assert VaultSlugHmac.run_pass() == :more
 
       row = raw(vault.id)
       assert row.slug == nil
@@ -56,7 +55,7 @@ defmodule Engram.Workers.BackfillVaultSlugHmacTest do
       {:ok, second, _} = Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
       set_raw(second.id, slug: "notes-#{id6(second)}")
 
-      assert :ok = perform_job(BackfillVaultSlugHmac, %{})
+      assert VaultSlugHmac.run_pass() == :more
 
       assert raw(second.id).slug == nil
       assert raw(second.id).slug_suffixed
@@ -71,7 +70,7 @@ defmodule Engram.Workers.BackfillVaultSlugHmacTest do
       {:ok, _} = Vaults.update_vault(user, vault.id, %{name: "New Name"})
       set_raw(vault.id, slug: "old-name")
 
-      assert :ok = perform_job(BackfillVaultSlugHmac, %{})
+      assert VaultSlugHmac.run_pass() == :more
 
       assert raw(vault.id).slug == nil
       refute raw(vault.id).slug_suffixed
@@ -85,7 +84,7 @@ defmodule Engram.Workers.BackfillVaultSlugHmacTest do
       {:ok, _} = Vaults.delete_vault(user, a.id)
       set_raw(b.id, slug: "notes-#{id6(b)}")
 
-      assert :ok = perform_job(BackfillVaultSlugHmac, %{})
+      assert VaultSlugHmac.run_pass() == :more
 
       assert raw(b.id).slug_suffixed
       assert {:ok, _} = Vaults.restore_vault(user, a.id)
@@ -98,7 +97,7 @@ defmodule Engram.Workers.BackfillVaultSlugHmacTest do
       {:ok, vault, _} = Vaults.register_vault(user, "Job", Ecto.UUID.generate())
       set_raw(vault.id, slug: "job", slug_hmac: hmac(user, "work"))
 
-      assert :ok = perform_job(BackfillVaultSlugHmac, %{})
+      assert VaultSlugHmac.run_pass() == :more
 
       assert raw(vault.id).slug_hmac == hmac(user, "job")
       assert resolves?(user, "job", vault.id)
@@ -109,7 +108,7 @@ defmodule Engram.Workers.BackfillVaultSlugHmacTest do
       {:ok, vault, _} = Vaults.register_vault(user, "My Vault", Ecto.UUID.generate())
       set_raw(vault.id, slug: "my_vault", slug_hmac: nil)
 
-      assert :ok = perform_job(BackfillVaultSlugHmac, %{})
+      assert VaultSlugHmac.run_pass() == :more
 
       assert raw(vault.id).slug_suffixed
       assert resolves?(user, "my-vault-#{id6(vault)}", vault.id)
@@ -131,7 +130,7 @@ defmodule Engram.Workers.BackfillVaultSlugHmacTest do
     {:ok, user} = Crypto.ensure_user_dek(insert(:user))
     vault = insert(:vault, user: user, slug: "unreadable")
 
-    log = ExUnit.CaptureLog.capture_log(fn -> perform_job(BackfillVaultSlugHmac, %{}) end)
+    log = ExUnit.CaptureLog.capture_log(fn -> VaultSlugHmac.run_pass() end)
 
     assert log =~ "vault slug not reconcilable"
     assert raw(vault.id).slug == "unreadable"
@@ -153,7 +152,7 @@ defmodule Engram.Workers.BackfillVaultSlugHmacTest do
       set: [dek_rotation_locked_at: nil]
     )
 
-    assert :ok = perform_job(BackfillVaultSlugHmac, %{})
+    assert VaultSlugHmac.run_pass() == :more
     assert raw(vault.id).slug == nil
   end
 
@@ -173,7 +172,7 @@ defmodule Engram.Workers.BackfillVaultSlugHmacTest do
       set: [encrypted_dek: nil]
     )
 
-    log = ExUnit.CaptureLog.capture_log(fn -> perform_job(BackfillVaultSlugHmac, %{}) end)
+    log = ExUnit.CaptureLog.capture_log(fn -> VaultSlugHmac.run_pass() end)
 
     assert log =~ "vault slug reconcile failed"
     assert raw(vault.id).slug == "work"
@@ -191,18 +190,36 @@ defmodule Engram.Workers.BackfillVaultSlugHmacTest do
     {:ok, vault, _} = Vaults.register_vault(healthy, "Work", Ecto.UUID.generate())
     set_raw(vault.id, slug: "work")
 
-    log = ExUnit.CaptureLog.capture_log(fn -> perform_job(BackfillVaultSlugHmac, %{}) end)
+    log = ExUnit.CaptureLog.capture_log(fn -> VaultSlugHmac.run_pass() end)
 
     assert log =~ "vault slug reconcile failed"
     assert raw(a.id).slug == "legacy", "the broken user's transaction rolled back"
     assert raw(vault.id).slug == nil
   end
 
-  test "is scheduled by the Oban cron" do
-    {Oban.Plugins.Cron, opts} =
-      Application.fetch_env!(:engram, Oban)[:plugins]
-      |> Enum.find(&match?({Oban.Plugins.Cron, _}, &1))
+  describe "completion" do
+    test "a pass that clears rows is :more, the next one is :done" do
+      user = insert(:user)
+      {:ok, vault, _} = Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
+      set_raw(vault.id, slug: "notes")
 
-    assert Enum.any?(opts[:crontab], &match?({_, BackfillVaultSlugHmac}, &1))
+      assert VaultSlugHmac.run_pass() == :more
+      assert VaultSlugHmac.run_pass() == :done
+    end
+
+    test "a user mid-rotation keeps it open" do
+      user = insert(:user)
+      {:ok, vault, _} = Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
+      set_raw(vault.id, slug: "notes")
+      lock_rotation(user)
+
+      assert VaultSlugHmac.run_pass() == :more
+    end
+  end
+
+  defp lock_rotation(user) do
+    Repo.update_all(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+      set: [dek_rotation_locked_at: DateTime.utc_now()]
+    )
   end
 end

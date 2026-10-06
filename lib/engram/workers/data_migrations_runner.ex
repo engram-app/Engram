@@ -11,8 +11,8 @@ defmodule Engram.Workers.DataMigrationsRunner do
 
   require Logger
 
-  # Task 3-5 append their modules here.
-  @migrations []
+  # Register every Engram.DataMigration here.
+  @migrations [Engram.DataMigrations.VaultSlugHmac]
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(30)

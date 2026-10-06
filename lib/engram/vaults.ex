@@ -894,7 +894,7 @@ defmodule Engram.Vaults do
   (`derive_slug/2`). Only rows still holding a plaintext slug are touched:
   legacy rows, and rows an older release writes during a rolling deploy or
   after a rollback. Returns the number of rows cleared. Called by
-  `Engram.Workers.BackfillVaultSlugHmac`.
+  `Engram.DataMigrations.VaultSlugHmac`.
 
   The current `slug_hmac` decides the form: if it already matches the bare
   or the id-suffixed slug, that form is kept, so a plaintext slug left stale

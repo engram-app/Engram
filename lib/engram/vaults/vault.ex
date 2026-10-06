@@ -12,8 +12,9 @@ defmodule Engram.Vaults.Vault do
     field :description, :string, redact: true
     # Never written with a value: the slug is derived from the decrypted name
     # (`Vaults.derive_slug/2`, set by maybe_decrypt_vault_fields/2) and looked
-    # up via slug_hmac. Writes set it to NULL, and BackfillVaultSlugHmac clears
-    # any plaintext an older release left. The contract release drops it.
+    # up via slug_hmac. Writes set it to NULL, and
+    # `Engram.DataMigrations.VaultSlugHmac` clears any plaintext an older
+    # release left. The contract release drops it.
     field :slug, :string, redact: true
     # Keyed HMAC of the slug (per-user filter key, like name_hmac): lookup and
     # uniqueness for /v/:slug without the plaintext. `slug_suffixed` records

@@ -195,10 +195,6 @@ config :engram, Oban,
         {"30 3 * * *", Engram.Workers.InactivityCleanup},
         # Fair-use over 3 consecutive DAYS: a daily question.
         {"0 4 * * *", Engram.Workers.OriginAbuseSweep},
-        # Clears plaintext vaults.slug after making slug_hmac / slug_suffixed
-        # describe the derived slug; idempotent (only rows still holding a
-        # slug). Remove with the contract release that drops vaults.slug.
-        {"25 4 * * *", Engram.Workers.BackfillVaultSlugHmac},
         # Cross-store reconciliation (#1576): a note whose points are gone is
         # unsearchable until this finds it. Daily because a pass is
         # O(collection); revisit around 1M points with a resumable cursor.
