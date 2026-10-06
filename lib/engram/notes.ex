@@ -40,7 +40,6 @@ defmodule Engram.Notes do
   alias Engram.Workers.{
     DeleteNoteIndex,
     EmbedNote,
-    ExtractNoteLinks,
     FinalizeRevision,
     RebindNoteLinks,
     ReleaseIndexEntries,
