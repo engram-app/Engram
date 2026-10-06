@@ -4262,6 +4262,16 @@
             },
             "description": "Vault cap reached"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "Vault outside the credential's scope, or creation by a vault-restricted credential"
+          },
           "422": {
             "content": {
               "application/json": {

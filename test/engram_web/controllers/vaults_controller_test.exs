@@ -193,7 +193,10 @@ defmodule EngramWeb.VaultsControllerTest do
     test "under a scoped grant lists only the granted vault", %{conn: conn} do
       user = insert(:user)
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-      granted = insert(:vault, user: user, slug: "granted", is_default: true)
+
+      granted =
+        insert(:vault, user: user, slug: "granted", is_default: true, client_id: "granted-cid")
+
       _hidden = insert(:vault, user: user, slug: "hidden")
 
       user = ensure_external_id(user)
@@ -321,7 +324,10 @@ defmodule EngramWeb.VaultsControllerTest do
     test "under a scoped grant lists only the granted deleted vault", %{conn: conn} do
       user = insert(:user)
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-      granted = insert(:vault, user: user, slug: "granted", is_default: true)
+
+      granted =
+        insert(:vault, user: user, slug: "granted", is_default: true, client_id: "granted-cid")
+
       hidden = insert(:vault, user: user, slug: "hidden")
       {:ok, _} = Vaults.delete_vault(user, granted.id)
       {:ok, _} = Vaults.delete_vault(user, hidden.id)
@@ -584,8 +590,11 @@ defmodule EngramWeb.VaultsControllerTest do
       user = insert(:user)
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
-      granted = insert(:vault, user: user, slug: "granted", is_default: true)
-      outside = insert(:vault, user: user, slug: "outside")
+
+      granted =
+        insert(:vault, user: user, slug: "granted", is_default: true, client_id: "granted-cid")
+
+      outside = insert(:vault, user: user, slug: "outside", client_id: "outside-cid")
 
       user = ensure_external_id(user)
 
@@ -718,6 +727,53 @@ defmodule EngramWeb.VaultsControllerTest do
       conn = delete(bearer(unscoped), ~p"/api/vaults/#{outside.id}")
 
       assert %{"deleted" => true} = json_response(conn, 200)
+    end
+
+    # #1869: register is keyed by client_id, not vault id, so the id-based
+    # `with_scoped_vault` check never ran. A scoped grant that knew another
+    # vault's client_id got its id, decrypted name and counts back.
+    test "a scoped grant cannot REGISTER into a vault outside its scope", %{
+      scoped: scoped,
+      outside: outside
+    } do
+      conn =
+        post(bearer(scoped), ~p"/api/vaults/register", %{
+          name: "x",
+          client_id: outside.client_id
+        })
+
+      assert %{"error" => "Not authorized for this vault"} = json_response(conn, 403)
+    end
+
+    test "a scoped grant CAN register-fetch a vault inside its scope", %{
+      scoped: scoped,
+      granted: granted
+    } do
+      conn =
+        post(bearer(scoped), ~p"/api/vaults/register", %{
+          name: "x",
+          client_id: granted.client_id
+        })
+
+      assert %{"id" => id, "status" => "existing"} = json_response(conn, 200)
+      assert id == granted.id
+    end
+
+    test "a scoped grant cannot CREATE a vault via register", %{scoped: scoped, user: user} do
+      # A vault it creates is outside its own scope, so it could never use it;
+      # creating one only burns the user's vaults_cap.
+      conn =
+        post(bearer(scoped), ~p"/api/vaults/register", %{name: "new", client_id: "scoped-new"})
+
+      assert %{"error" => "Not authorized for this vault"} = json_response(conn, 403)
+      assert length(Vaults.list_vaults(user)) == 2
+    end
+
+    test "an UNRESTRICTED grant can still create via register", %{unscoped: unscoped} do
+      conn =
+        post(bearer(unscoped), ~p"/api/vaults/register", %{name: "new", client_id: "all-new"})
+
+      assert %{"status" => "created"} = json_response(conn, 201)
     end
   end
 end
