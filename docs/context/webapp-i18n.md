@@ -103,6 +103,42 @@ Both follow `renderedLocale` from `useT()` (the locale of the catalog on screen,
 
 `biome.json` turns `useFilenamingConvention` off for `src/i18n/locale/*.ts` because codes like `pt-BR.ts` and `zh-CN.ts` are not kebab-case. Biome also enforces `useExportsLast` and a no-unsafe-type-assertion rule here; narrow with `isMember` (`lib/is-member.ts`) instead of `as`.
 
+## Validation (browser level)
+
+Playwright specs in `frontend/e2e/` prove that language selection and catalog coverage work in a real browser. They do NOT prove translation quality (an LLM-generated string passes as long as it differs from the English key).
+
+| Spec (project) | What it checks |
+|---|---|
+| `i18n-detection.spec.ts` (`local`) | Each of the ten browser locales (`de-DE` ... `zh-TW`) lands on the right `<html lang>` and shows the catalog's own "Sign in to Engram" heading. Fallbacks: `en-GB` -> `en`, `zh-HK` -> `zh-TW`, `pt-PT` -> `pt-BR`, unsupported `nl-NL` -> `en`. A stored `engram:locale=ja` beats a `de-DE` browser; an unknown stored value is ignored. The Settings > Account picker switches `<html lang>` and text without a reload and the pick survives one (this test registers a user, tagged `[registers user]`). |
+| `i18n-onboarding.spec.ts` (`local`, self-host) | Per locale: sign-up, tools, tools with the opt-out ticked, vault, vault > Obsidian panel, vault > starting fresh, dashboard, Settings > Account. |
+| `i18n-onboarding-clerk.spec.ts` (`clerk`, SaaS) | Same walk, plus agreement and billing, with Clerk's `.cl-rootBox` excluded from the scan; the Clerk sign-up screen's title must equal `@clerk/localizations`' string for the locale. Needs `E2E_CLERK_SECRET_KEY`, skipped without it. |
+
+At every onboarding step (`support/i18n-leaks.ts` `checkStep`): `<html lang>` equals the locale; **leaks** (a visible string, or `placeholder`/`aria-label`/`title`/`alt`, exactly equal to an English key that the locale's catalog really translates; `{placeholder}` keys match as wildcards) FAIL the test; **suspects** (non-Latin locales only: a visible all-ASCII string of more than 3 words once brand names, URLs, e-mails and numbers are removed, i.e. probably unwrapped English) are only reported. Leaks are soft assertions, so one bad step does not hide the rest. Brand and technical tokens (Engram, Obsidian, MCP, API, Paddle, Clerk) never count.
+
+Pure matching logic is in `e2e/support/i18n-leaks-core.ts`, unit-tested by `src/lib/i18n-leaks-core.test.ts` (Vitest ignores `e2e/`).
+
+### Run
+
+```bash
+cd frontend
+bunx playwright test --project=local e2e/i18n-detection.spec.ts e2e/i18n-onboarding.spec.ts
+# no user is created by the detection spec alone:
+bunx playwright test --project=local e2e/i18n-detection.spec.ts --grep-invert "registers user"
+```
+
+The registering specs create `i18n-e2e-<ts>-<locale>@test.com` users and delete each one afterwards through `DELETE /api/me` (`deleteAccount` in `support/api.ts`; it cascades notes, which `db-cleanup.ts`'s single `DELETE` cannot, because of the notes FK). **Run them only against a disposable database** (CI's per-run Postgres, or `make saas-dev`, which recreates its DB). `make dev-selfhost` talks to the persistent FastRaid Postgres shared with the deployed self-host, whose sign-up also needs an invite; do not point them at it. `db-cleanup.ts` additionally sweeps the `i18n-e2e-%` pattern when `DATABASE_URL` is a localhost URL.
+
+### Read the output
+
+- Screenshots: attached to each test as `<locale>-<step>` (e.g. `ja-vault-fresh`), in the HTML report (`bunx playwright show-report`) or under `test-results/<test>/`. Look for English text, clipped strings, and layout broken by long German or Russian words.
+- `<locale>-<step>-findings` (JSON attachment): `{ leaks, suspects }` for that step.
+- Suspects also appear as test annotations (`i18n-suspects <locale>-<step>`). A suspect is a prompt to look, not a failure: legal text (Terms of Service) and server-provided strings are legitimately English.
+- A failing leak names the key: find it with `grep -rn '"<key>"' src --include=*.tsx`, then fix the catalog (the string is wrapped but that locale's entry is missing or equal to English).
+
+### Local box notes
+
+Headless Chromium may be missing for the pinned Playwright build; see `headless-chromium-no-raf-playwright.md` (xvfb headed fallback). The pinned build number in `node_modules` can differ from the browsers in `~/.cache/ms-playwright`; a throwaway config that sets `use.launchOptions.executablePath` to an installed build works without touching the repo config.
+
 ## Done and still owed
 
 - Slices 1-4 shipped: foundation, app shell, notes/editor/search, ten translated catalogs, switcher visible.
