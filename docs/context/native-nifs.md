@@ -140,6 +140,12 @@ checkpoint). Two calls -> one, min of 5 on a loaded box: 52 B 14 -> 10 us,
 5 KB with an H1 title 152 -> 108 us, 5 KB with a frontmatter title
 125 -> 99 us, 105 KB 3.6 -> 2.1-2.5 ms.
 
+Telemetry consequence: write paths now emit `nif="note_meta"`, so the
+`note_title`/`note_tags` series only carry the remaining single-purpose
+callers (rename re-title, markdown parser). A panel or alert filtered on
+those two names undercounts writes; filter on `note_meta` too. None existed
+in this repo or engram-infra when it changed (grepped 2026-10-06).
+
 Language ID is NOT a candidate (measured 2026-10-06, #1877). The `lingua` hex
 package already wraps lingua-rs; the ~6.5 ms per call is trigram scoring, and
 building the detector costs ~0.1 ms. A port to `engram_native` (lingua-rs
