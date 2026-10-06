@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useT } from "@/i18n/locale-provider";
-import type { Vars } from "@/i18n/translate";
+import type { Translate } from "@/i18n/translate";
 import { fileToBase64 } from "./file-to-base64";
 import { FolderPicker } from "./folder-picker";
 
@@ -44,7 +44,7 @@ function isApiError(err: unknown): err is ApiError {
 	return err instanceof ApiError || (err instanceof Error && err.name === "ApiError");
 }
 
-function messageFor(err: unknown, t: (en: string, vars?: Vars) => string): string {
+function messageFor(err: unknown, t: Translate): string {
 	if (isLimitExceededError(err)) {
 		switch (err.reason) {
 			case "attachments_disabled":

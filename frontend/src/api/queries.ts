@@ -10,11 +10,11 @@ import { useCallback, useMemo } from "react";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
 import { useT } from "@/i18n/locale-provider";
+import type { Translate } from "@/i18n/translate";
 import { collideBump } from "@/lib/collide-bump";
 import { noteName } from "@/lib/note-name";
 import { encodePathSegments } from "@/lib/path";
 import { randomUuid } from "@/lib/random-uuid";
-import type { Translate } from "@/lib/translator";
 import { uuid7 } from "../crdt/uuid7";
 import { noteHref } from "../routes";
 import {

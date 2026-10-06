@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import type { Tn, Translate } from "@/i18n/translate";
 import { translate, translatePlural } from "@/i18n/translate";
-import type { Tn, Translate } from "@/lib/translator";
 import { intlLocale } from "./intl-locale";
 import {
 	formatBillingCycle,

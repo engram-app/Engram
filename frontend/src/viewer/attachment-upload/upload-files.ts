@@ -1,6 +1,6 @@
 import { toast } from "sonner";
 import { LimitExceededError } from "@/api/client";
-import { translate, type Vars } from "@/i18n/translate";
+import { englishT, type Translate } from "@/i18n/translate";
 import { uniqueAttachmentName } from "../attachment-blob";
 import { fileToBase64 } from "./file-to-base64";
 
@@ -49,9 +49,9 @@ export async function uploadFilesTo(opts: {
 	files: File[];
 	folder: string;
 	/** The caller's translate function (`useT()`); English when omitted. */
-	t?: (en: string, vars?: Vars) => string;
+	t?: Translate;
 }): Promise<string[]> {
-	const t = opts.t ?? ((en: string, vars?: Vars) => translate({}, en, vars));
+	const t = opts.t ?? englishT;
 	const taken = [...opts.existing, ...reservedPaths(Date.now())];
 	const done: string[] = [];
 	for (const file of opts.files) {

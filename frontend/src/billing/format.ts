@@ -1,5 +1,5 @@
 import { msg } from "@/i18n/msg";
-import type { Translate } from "@/lib/translator";
+import type { Translate } from "@/i18n/translate";
 
 // Subscription and transaction statuses arrive as snake_case enum values. Known
 // ones get a translated lowercase label (CSS capitalizes it on screen); an

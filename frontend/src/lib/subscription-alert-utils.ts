@@ -1,8 +1,8 @@
 import type { Locale } from "@/i18n/locales";
+import type { Translate } from "@/i18n/translate";
 import { intlLocale } from "@/lib/intl-locale";
 import { formatDate } from "@/lib/paddle-format";
 import type { SubscriptionAlertData } from "@/lib/paddle-types";
-import type { Translate } from "@/lib/translator";
 
 // ---
 // Mapping utility — Paddle API → SubscriptionAlertData display contract

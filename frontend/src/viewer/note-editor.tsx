@@ -11,6 +11,7 @@ import { yCollab, yUndoManagerKeymap } from "y-codemirror.next";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
 import { useT } from "@/i18n/locale-provider";
+import { englishT, type Translate } from "@/i18n/translate";
 import { useAttachments, useUploadAttachment } from "../api/queries";
 import { useTheme } from "../theme/theme-provider";
 import { loadAttachmentUrl, resolveAttachmentTarget } from "./attachment-blob";
@@ -21,7 +22,7 @@ import { frontmatterShortcut } from "./editor/frontmatter-shortcut";
 import { headingFoldWith, noParagraphFold } from "./editor/heading-fold";
 import { itemDrop } from "./editor/item-drop";
 import { livePreviewExtensions } from "./editor/live-preview";
-import { englishTranslate, type Translate, translator } from "./editor/translator";
+import { translator } from "./editor/translator";
 import { type DraggedVaultItem, linkTextFor } from "./vault-item-drag";
 
 // height:auto + overflow:visible hand scrolling to the page's ScrollArea, so
@@ -134,7 +135,7 @@ export function buildEditorState(
 	onFrontmatterShortcut?: () => boolean,
 	resolveAttachment?: (target: string) => string | null,
 	drop?: Parameters<typeof itemDrop>[0],
-	translateText: Translate = englishTranslate,
+	translateText: Translate = englishT,
 ): EditorState {
 	return EditorState.create({
 		doc: ytext.toString(),

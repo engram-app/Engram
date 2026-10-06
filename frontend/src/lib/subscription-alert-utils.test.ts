@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import type { Translate } from "@/i18n/translate";
 import { translate } from "@/i18n/translate";
-import type { Translate } from "@/lib/translator";
 import { deriveSubscriptionAlert } from "./subscription-alert-utils";
 
 const t: Translate = (en, vars) => translate({}, en, vars);

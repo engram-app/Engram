@@ -6,7 +6,7 @@ import { useAutofocus } from "@/hooks/use-autofocus";
 import { useStableT, useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import { Trans } from "@/i18n/trans";
-import type { Tn, Translate } from "@/lib/translator";
+import type { Tn, Translate } from "@/i18n/translate";
 import { destructiveAlert, fieldInput, heading, selectableRow } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { track } from "../analytics/track";

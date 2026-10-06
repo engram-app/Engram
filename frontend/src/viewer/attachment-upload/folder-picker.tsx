@@ -2,7 +2,7 @@ import { useId, useState } from "react";
 import { SearchField } from "@/components/search-field";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useT } from "@/i18n/locale-provider";
-import type { Vars } from "@/i18n/translate";
+import type { Translate } from "@/i18n/translate";
 import {
 	LIST_ROW_GAP,
 	LIST_ROW_HEIGHT,
@@ -25,8 +25,7 @@ interface Props {
 	className?: string;
 }
 
-const label = (name: string, t: (en: string, vars?: Vars) => string): string =>
-	name === "" ? t("/ (root)") : name;
+const label = (name: string, t: Translate): string => (name === "" ? t("/ (root)") : name);
 
 // Search box + scrollable list of folders, same row look as the file tree.
 // Arrow keys on the search box or the list move the selection.

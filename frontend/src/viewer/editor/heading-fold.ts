@@ -2,7 +2,7 @@ import { codeFolding, foldGutter, foldKeymap, foldNodeProp } from "@codemirror/l
 import type { Extension } from "@codemirror/state";
 import { type EditorView, keymap, ViewPlugin } from "@codemirror/view";
 import type { MarkdownConfig } from "@lezer/markdown";
-import { englishTranslate, type Translate } from "./translator";
+import type { Translate } from "@/i18n/translate";
 
 /**
  * Obsidian-style collapsible headings.
@@ -109,8 +109,6 @@ export function headingFoldWith(t: Translate): Extension {
 		keymap.of(foldKeymap),
 	];
 }
-
-export const headingFold: Extension = headingFoldWith(englishTranslate);
 
 /**
  * Stops PARAGRAPHS being foldable.

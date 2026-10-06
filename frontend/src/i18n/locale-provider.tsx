@@ -12,7 +12,15 @@ import {
 import { captureError } from "../sentry";
 import { LOCALES, type Locale, resolveLocale } from "./locales";
 import { getStoredLocale, setStoredLocale } from "./storage";
-import { type Catalog, type PluralForms, translate, translatePlural, type Vars } from "./translate";
+import {
+	type Catalog,
+	englishT,
+	englishTn,
+	type Tn,
+	type Translate,
+	translate,
+	translatePlural,
+} from "./translate";
 
 type CatalogLoaders = Partial<Record<Locale, () => Promise<{ default: Catalog } | undefined>>>;
 // ^ undefined: vite:preloadError's preventDefault() makes the preload resolve nothing.
@@ -27,8 +35,6 @@ for (const locale of LOCALES) {
 	}
 }
 
-type PluralEn = PluralForms & { other: string };
-
 interface LocaleContextValue {
 	locale: Locale;
 	// What is actually on screen: the locale of the catalog being shown (lags `locale`
@@ -36,8 +42,8 @@ interface LocaleContextValue {
 	// Third parties (Clerk, Paddle) follow this, not the selected `locale`.
 	renderedLocale: Locale;
 	setLocale: (next: Locale) => void;
-	t: (en: string, vars?: Vars) => string;
-	tn: (en: PluralEn, count: number, vars?: Vars) => string;
+	t: Translate;
+	tn: Tn;
 }
 
 // Un-wrapped trees (and the tests that predate i18n) get English, not a throw:
@@ -46,8 +52,8 @@ const ENGLISH: LocaleContextValue = {
 	locale: "en",
 	renderedLocale: "en",
 	setLocale: () => undefined,
-	t: (en, vars) => translate({}, en, vars),
-	tn: (en, count, vars) => translatePlural({}, "en", en, count, vars),
+	t: englishT,
+	tn: englishTn,
 };
 
 const NO_CATALOG: Catalog = {};

@@ -1,5 +1,7 @@
 import type { Locale } from "./locales";
 
+type PluralEn = PluralForms & { other: string };
+
 const PLACEHOLDER = /\{(?<name>\w+)\}/gu;
 
 export type PluralForms = Partial<Record<Intl.LDMLPluralRule, string>>;
@@ -34,3 +36,11 @@ export function translatePlural(
 	const category = new Intl.PluralRules(translated ? locale : "en").select(count);
 	return interpolate(forms[category] ?? forms.other ?? en.other, { ...vars, count });
 }
+// The shapes of `t` / `tn` from useT(), for helpers that cannot call the hook and
+// take the translator as a parameter.
+export type Translate = (en: string, vars?: Vars) => string;
+export type Tn = (en: PluralEn, count: number, vars?: Vars) => string;
+
+// The English identity translators: no catalog, so every key reads as itself.
+export const englishT: Translate = (en, vars) => translate({}, en, vars);
+export const englishTn: Tn = (en, count, vars) => translatePlural({}, "en", en, count, vars);

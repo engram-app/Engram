@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
 import { Trans } from "@/i18n/trans";
-import type { Translate } from "@/lib/translator";
+import type { Translate } from "@/i18n/translate";
 import { destructiveAlert, fieldInput, heading } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { getApiBase, joinApiUrl } from "../api/base";

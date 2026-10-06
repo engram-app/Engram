@@ -1,9 +1,5 @@
 import { Facet } from "@codemirror/state";
-import { translate, type Vars } from "@/i18n/translate";
-
-type Translate = (en: string, vars?: Vars) => string;
-
-const englishTranslate: Translate = (en, vars) => translate({}, en, vars);
+import { englishT, type Translate } from "@/i18n/translate";
 
 // CodeMirror widgets, tooltips and gutter markers are built outside React, so
 // they cannot call the hook. The editor host adds the active translate function
@@ -11,7 +7,7 @@ const englishTranslate: Translate = (en, vars) => translate({}, en, vars);
 // against. Without a provider the value is English, which is also what the
 // editor unit tests see.
 const translator = Facet.define<Translate, Translate>({
-	combine: (values) => values[0] ?? englishTranslate,
+	combine: (values) => values[0] ?? englishT,
 });
 
-export { englishTranslate, type Translate, translator };
+export { translator };

@@ -5,8 +5,8 @@ import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
 import type { Locale } from "@/i18n/locales";
 import { Trans } from "@/i18n/trans";
+import type { Translate } from "@/i18n/translate";
 import { intlLocale } from "@/lib/intl-locale";
-import type { Translate } from "@/lib/translator";
 import {
 	type BillingCadence,
 	type BillingStatus,

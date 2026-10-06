@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { useAutofocus } from "@/hooks/use-autofocus";
 import { useT } from "@/i18n/locale-provider";
-import type { Vars } from "@/i18n/translate";
+import type { Translate } from "@/i18n/translate";
 import { copyToClipboard } from "@/lib/clipboard";
 import { formatDate } from "@/lib/format-date";
 import { intlLocale } from "@/lib/intl-locale";
@@ -73,7 +73,7 @@ const SEARCH_THRESHOLD = 8;
 
 // `null` means every vault, NOT none — shared with the API-key table so the
 // two cannot describe the same restriction differently.
-function vaultLabel(connection: Connection, t: (en: string, vars?: Vars) => string): string {
+function vaultLabel(connection: Connection, t: Translate): string {
 	return connection.vault_ids === null
 		? t("All vaults")
 		: connection.vault_ids

@@ -1,3 +1,4 @@
+import type { Translate } from "@/i18n/translate";
 import { parseAmount } from "@/lib/paddle-format";
 import type {
 	PlanChangeBreakdownData,
@@ -5,7 +6,6 @@ import type {
 	PlanChangeTransactionSectionData,
 	PlanChangeTransactionTotalsData,
 } from "@/lib/paddle-types";
-import type { Translate } from "@/lib/translator";
 
 // ---
 // Input shapes — matching Paddle Node SDK / API response structures.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import type { Tn } from "@/i18n/translate";
 import { translatePlural } from "@/i18n/translate";
-import type { Tn } from "@/lib/translator";
 import { unsearchableNotesNotice } from "./plan-cards";
 
 const tn: Tn = (en, count, vars) => translatePlural({}, "en", en, count, vars);

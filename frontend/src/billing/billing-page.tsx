@@ -10,7 +10,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { Translate } from "@/lib/translator";
+import type { Translate } from "@/i18n/translate";
 import { ctaFilled, ctaOutline } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import type { CheckoutMethod } from "../analytics/events";

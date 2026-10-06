@@ -1,8 +1,8 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { type Channel, Socket } from "phoenix";
 import { toast } from "sonner";
-import { translate } from "@/i18n/translate";
-import type { Translate } from "@/lib/translator";
+
+import { englishT, type Translate } from "@/i18n/translate";
 import { buildGenesisFrame } from "../crdt/genesis";
 import { CrdtOpQueueController } from "../crdt/op-queue-controller";
 import { createIndexedDbPersister } from "../crdt/op-queue-persist";
@@ -440,7 +440,7 @@ export async function connectChannel({
 	vaultId,
 	getToken,
 	queryClient,
-	t = (en, vars) => translate({}, en, vars),
+	t = englishT,
 }: ConnectOptions) {
 	disconnectChannel();
 	const gen = connectGeneration;

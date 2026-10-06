@@ -1,5 +1,5 @@
 import { msg } from "@/i18n/msg";
-import type { Translate } from "@/lib/translator";
+import type { Translate } from "@/i18n/translate";
 
 // Payment-method names that are brands stay as-is; the generic ones are marked
 // for translation and live in GENERIC_METHOD_LABELS.

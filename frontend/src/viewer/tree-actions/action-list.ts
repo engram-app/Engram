@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import type { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
-import { translate, translatePlural } from "@/i18n/translate";
+import { englishT, englishTn } from "@/i18n/translate";
 
 // Keyed by id rather than carried on each Action — the three lists below repeat
 // the same ids, so one map keeps a single icon per action instead of three.
@@ -70,10 +70,7 @@ const ROOT_ACTIONS: readonly Action[] = [
 ];
 
 type Translator = Pick<ReturnType<typeof useT>, "t" | "tn">;
-const ENGLISH: Translator = {
-	t: (en, vars) => translate({}, en, vars),
-	tn: (en, count, vars) => translatePlural({}, "en", en, count, vars),
-};
+const ENGLISH: Translator = { t: englishT, tn: englishTn };
 
 export type ActionId =
 	| "new-note"
