@@ -121,13 +121,20 @@ defmodule Engram.Workers.BackfillCrdtState do
         |> Enum.map(&{user_id, &1})
       end)
 
-    Enum.each(pairs, fn {user_id, vault_id} ->
-      %{"user_id" => user_id, "vault_id" => vault_id, "cursor" => @start_cursor}
-      |> __MODULE__.new()
-      |> Oban.insert()
-    end)
+    Enum.each(pairs, fn {user_id, vault_id} -> {:ok, _} = enqueue_vault(user_id, vault_id) end)
 
     length(pairs)
+  end
+
+  @doc """
+  Enqueue a seed chain for one vault. Cheap when nothing in it is seedable:
+  one empty batch select.
+  """
+  @spec enqueue_vault(Ecto.UUID.t(), Ecto.UUID.t()) :: {:ok, Oban.Job.t()} | {:error, term()}
+  def enqueue_vault(user_id, vault_id) do
+    %{"user_id" => user_id, "vault_id" => vault_id, "cursor" => @start_cursor}
+    |> __MODULE__.new()
+    |> Oban.insert()
   end
 
   @doc "Notes this worker seeds: live, NULL state, and no un-checkpointed tail."

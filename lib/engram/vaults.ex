@@ -801,6 +801,10 @@ defmodule Engram.Vaults do
               |> case do
                 {:ok, v} ->
                   emit_vault_count(user.id, :restored)
+                  # crdt_state_seed skips deleted vaults, so it may have
+                  # closed while this one sat in the trash. Same transaction:
+                  # a rolled-back restore enqueues nothing.
+                  {:ok, _} = Engram.Workers.BackfillCrdtState.enqueue_vault(user.id, v.id)
                   {:ok, decrypt_vault_if_needed(v, user)}
 
                 other ->

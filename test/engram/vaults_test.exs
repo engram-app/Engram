@@ -574,6 +574,30 @@ defmodule Engram.VaultsTest do
       assert Vaults.list_deleted_vaults(user) == []
     end
 
+    # crdt_state_seed may have closed while the vault sat in the trash (it skips
+    # deleted vaults), so the restore itself queues the seed for that vault.
+    test "enqueues the CRDT state seed for the restored vault", %{user: user} do
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
+      {:ok, v, _} = Vaults.register_vault(user, "Seeded", Ecto.UUID.generate())
+      {:ok, _} = Vaults.delete_vault(user, v.id)
+
+      assert {:ok, _} = Vaults.restore_vault(user, v.id)
+
+      assert_enqueued(
+        worker: Engram.Workers.BackfillCrdtState,
+        args: %{"user_id" => user.id, "vault_id" => v.id}
+      )
+    end
+
+    test "a blocked restore enqueues no seed", %{user: user} do
+      {:ok, first, _} = Vaults.register_vault(user, "First", Ecto.UUID.generate())
+      {:ok, _} = Vaults.delete_vault(user, first.id)
+      {:ok, _replacement, _} = Vaults.register_vault(user, "Replacement", Ecto.UUID.generate())
+
+      assert {:error, {:limit_reached, 1, 1}} = Vaults.restore_vault(user, first.id)
+      refute_enqueued(worker: Engram.Workers.BackfillCrdtState)
+    end
+
     test "blocks restore when it would exceed the vault cap", %{user: user} do
       # Cap of 1: create one, delete it, create a replacement, then try to restore.
       {:ok, first, _} = Vaults.register_vault(user, "First", Ecto.UUID.generate())
