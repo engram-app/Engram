@@ -94,6 +94,7 @@ defmodule Engram.Backfill.TenantScanTest do
   for {label, mod, fun} <- [
         {"content hash", ContentHash.Backfill, :enqueue_all},
         {"note links", Links.Backfill, :enqueue_all},
+        {"note links (missing only)", Links.Backfill, :enqueue_missing},
         {"onboarding", Onboarding.Backfill, :first_vault_created}
       ] do
     test "#{label} backfill discovery never reads a tenant table cross-tenant", %{

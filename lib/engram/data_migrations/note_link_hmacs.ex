@@ -1,19 +1,21 @@
 defmodule Engram.DataMigrations.NoteLinkHmacs do
   @moduledoc """
   Rows predating link extraction (#591) have a NULL `basename_hmac` and no
-  `note_links` edges. Each pass enqueues the `BackfillNoteLinks` chain, unless
-  one is still running. Done when no note or attachment in any tenant lacks a
-  `basename_hmac`, using the worker's own `note_hmacs` / `attachment_hmacs`
-  predicates (deleted rows included, as the worker processes them).
+  `note_links` edges. Each pass enqueues the `BackfillNoteLinks` chain for
+  every (user, vault) with such a row (`Links.Backfill.enqueue_missing/0`),
+  unless a chain is still running. Done when that finds no pair: the filter
+  the worker's `note_hmacs` / `attachment_hmacs` scopes use, in a live vault
+  (the worker discards a deleted vault's jobs). Deleted rows count, as the
+  worker stamps them. A row whose path never decrypts keeps it open, at the
+  cost of one vault's chain per hour.
+
+  Done tracks the hmacs only: a final `links`-scope job discarded after its
+  retries can close this with that vault's edges unbuilt.
   """
   @behaviour Engram.DataMigration
 
-  import Ecto.Query
-
-  alias Engram.Attachments.Attachment
   alias Engram.DataMigrations
   alias Engram.Links.Backfill
-  alias Engram.Notes.Note
   alias Engram.Workers.BackfillNoteLinks
 
   @impl true
@@ -24,31 +26,12 @@ defmodule Engram.DataMigrations.NoteLinkHmacs do
 
   @impl true
   def run_pass do
+    # The worker has no `unique`: enqueueing while a chain runs would
+    # duplicate it.
     cond do
-      DataMigrations.jobs_in_flight?(BackfillNoteLinks) ->
-        :more
-
-      missing_hmacs?() ->
-        Backfill.enqueue_all()
-        :more
-
-      true ->
-        :done
+      DataMigrations.jobs_in_flight?(BackfillNoteLinks) -> :more
+      Backfill.enqueue_missing() == 0 -> :done
+      true -> :more
     end
-  end
-
-  defp missing_hmacs? do
-    DataMigrations.any_row?(fn _repo ->
-      from(n in Note,
-        where: n.kind == "note" and is_nil(n.basename_hmac) and not is_nil(n.path_ciphertext),
-        select: 1
-      )
-    end) or
-      DataMigrations.any_row?(fn _repo ->
-        from(a in Attachment,
-          where: is_nil(a.basename_hmac) and not is_nil(a.path_ciphertext),
-          select: 1
-        )
-      end)
   end
 end
