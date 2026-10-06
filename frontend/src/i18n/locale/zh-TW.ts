@@ -1226,4 +1226,5 @@ export default {
 	"Delete {path}/ and {count} items?": { other: "要刪除 {path}/ 及其中的 {count} 個項目嗎？" },
 	"Rename file": "重新命名檔案",
 	"Rename folder": "重新命名資料夾",
+	"Something went wrong with checkout. Please try again.": "結帳時發生問題，請再試一次。",
 } satisfies Catalog;

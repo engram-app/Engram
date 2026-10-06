@@ -1402,4 +1402,6 @@ export default {
 	},
 	"Rename file": "Переименовать файл",
 	"Rename folder": "Переименовать папку",
+	"Something went wrong with checkout. Please try again.":
+		"При оплате что-то пошло не так. Попробуйте снова.",
 } satisfies Catalog;

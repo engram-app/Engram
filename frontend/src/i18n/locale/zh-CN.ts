@@ -1224,4 +1224,5 @@ export default {
 	"Rename file": "重命名文件",
 	"Rename folder": "重命名文件夹",
 	Immediately: "立即",
+	"Something went wrong with checkout. Please try again.": "结算时出现问题，请重试。",
 } satisfies Catalog;

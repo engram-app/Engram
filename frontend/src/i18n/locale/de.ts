@@ -1323,4 +1323,6 @@ export default {
 	},
 	"Rename file": "Datei umbenennen",
 	"Rename folder": "Ordner umbenennen",
+	"Something went wrong with checkout. Please try again.":
+		"Beim Bezahlvorgang ist etwas schiefgelaufen. Bitte versuch es erneut.",
 } satisfies Catalog;

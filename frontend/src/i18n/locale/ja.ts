@@ -1285,4 +1285,6 @@ export default {
 	"Delete {path}/ and {count} items?": { other: "{path}/ と {count} 件を削除しますか?" },
 	"Rename file": "ファイル名を変更",
 	"Rename folder": "フォルダ名を変更",
+	"Something went wrong with checkout. Please try again.":
+		"お支払い処理でエラーが発生しました。もう一度お試しください。",
 } satisfies Catalog;

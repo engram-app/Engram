@@ -1351,4 +1351,6 @@ export default {
 	},
 	"Rename file": "Renomear arquivo",
 	"Rename folder": "Renomear pasta",
+	"Something went wrong with checkout. Please try again.":
+		"Algo deu errado com o pagamento. Tente de novo.",
 } satisfies Catalog;

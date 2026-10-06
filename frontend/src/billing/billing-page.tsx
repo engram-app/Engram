@@ -28,6 +28,7 @@ import {
 	useMe,
 } from "../api/queries";
 import { useT } from "../i18n/locale-provider";
+import { msg } from "../i18n/msg";
 import { paddleLocale } from "../i18n/vendor-locales";
 import BillingHistoryTable from "./billing-history-table";
 import CancelPanel from "./cancel-panel";
@@ -508,7 +509,8 @@ export default function BillingPage({
 						setCheckingOut(false);
 						setCompletedAt(null);
 						setSlow(false);
-						toast.error(tRef.current("Something went wrong with checkout. Please try again."));
+						// msg() marks the key for the scanner, which cannot see a call through tRef.
+						toast.error(tRef.current(msg("Something went wrong with checkout. Please try again.")));
 						break;
 					}
 					default:

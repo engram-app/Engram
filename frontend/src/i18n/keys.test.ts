@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findProblems, usedEntries, usedKeys } from "./keys-scan";
+import { findProblems, hiddenCalls, usedEntries, usedKeys } from "./keys-scan";
 import type { Catalog } from "./translate";
 
 describe("findProblems (self-check)", () => {
@@ -87,6 +87,20 @@ describe("usedEntries (self-check)", () => {
 	});
 });
 
+describe("hiddenCalls (self-check)", () => {
+	it("flags ref and member calls with a literal argument", () => {
+		expect(hiddenCalls(`toast(tRef.current("Oops"))`)).toHaveLength(1);
+		expect(hiddenCalls(`translateRef.current("Oops")`)).toHaveLength(1);
+		expect(hiddenCalls(`ctx.tn({ one: "a", other: "b" }, n)`)).toHaveLength(1);
+		expect(hiddenCalls(`ctx.msg("Oops")`)).toHaveLength(1);
+	});
+	it("ignores plain calls and ref forwarding", () => {
+		expect(hiddenCalls(`t("Oops") tn({ other: "b" }, n) tRef.current(en, vars) x.t(key)`)).toEqual(
+			[],
+		);
+	});
+});
+
 describe("repo catalogs", () => {
 	const sources = Object.values(
 		import.meta.glob<string>(["../**/*.{ts,tsx}", "!../**/*.test.*", "!../i18n/locale/**"], {
@@ -105,6 +119,9 @@ describe("repo catalogs", () => {
 		expect(Object.keys(catalogs).sort()).toEqual(
 			["de", "es", "fr", "it", "ja", "ko", "pt-BR", "ru", "zh-CN", "zh-TW"].sort(),
 		);
+	});
+	it("has no translator call the scanner cannot see", () => {
+		expect(sources.flatMap(hiddenCalls)).toEqual([]);
 	});
 	it("has no orphan keys, dropped placeholders, or cross-locale gaps", () => {
 		expect(findProblems(usedKeys(sources), catalogs)).toEqual([]);

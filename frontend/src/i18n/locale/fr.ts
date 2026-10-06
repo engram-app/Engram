@@ -1368,4 +1368,6 @@ export default {
 	},
 	"Rename file": "Renommer le fichier",
 	"Rename folder": "Renommer le dossier",
+	"Something went wrong with checkout. Please try again.":
+		"Une erreur est survenue lors du paiement. Réessaie.",
 } satisfies Catalog;

@@ -1264,4 +1264,6 @@ export default {
 	},
 	"Rename file": "파일 이름 변경",
 	"Rename folder": "폴더 이름 변경",
+	"Something went wrong with checkout. Please try again.":
+		"결제 중 문제가 발생했습니다. 다시 시도하세요.",
 } satisfies Catalog;

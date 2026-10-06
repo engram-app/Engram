@@ -1355,4 +1355,6 @@ export default {
 	"Rename file": "Cambiar nombre del archivo",
 	"Rename folder": "Cambiar nombre de la carpeta",
 	"Attachment storage full": "Almacenamiento de adjuntos lleno",
+	"Something went wrong with checkout. Please try again.":
+		"Algo salió mal con el pago. Inténtalo de nuevo.",
 } satisfies Catalog;

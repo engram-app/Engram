@@ -56,6 +56,14 @@ function usedKeys(sources: readonly string[]): Set<string> {
 	return new Set(usedEntries(sources).map((e) => e.key));
 }
 
+// Translator calls the key scanner cannot see: made through a ref's current value or
+// another object's member, with a literal first argument. Such a key is in no catalog.
+const HIDDEN_CALL = /(?:\b(?:t|translate)Ref\.current|\w\.(?:t|tn|msg))\(\s*["{]/gu;
+
+function hiddenCalls(source: string): string[] {
+	return [...source.matchAll(HIDDEN_CALL)].map((m) => m[0]);
+}
+
 function findProblems(used: Set<string>, catalogs: Record<string, Catalog>): string[] {
 	const problems: string[] = [];
 	const everyKey = new Set(Object.values(catalogs).flatMap((c) => Object.keys(c)));
@@ -85,4 +93,4 @@ function findProblems(used: Set<string>, catalogs: Record<string, Catalog>): str
 }
 
 export type { Entry };
-export { findProblems, usedEntries, usedKeys };
+export { findProblems, hiddenCalls, usedEntries, usedKeys };

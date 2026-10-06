@@ -1367,4 +1367,6 @@ export default {
 	},
 	"Rename file": "Rinomina file",
 	"Rename folder": "Rinomina cartella",
+	"Something went wrong with checkout. Please try again.":
+		"Qualcosa è andato storto con il pagamento. Riprova.",
 } satisfies Catalog;
