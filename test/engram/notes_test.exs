@@ -92,6 +92,38 @@ defmodule Engram.NotesTest do
   # ---------------------------------------------------------------------------
 
   describe "upsert_note/3" do
+    # Title and tags come from the CRDT-merged text (maybe_merge_crdt). A REST
+    # write must not also derive them from the pre-merge content.
+    test "a REST insert and update each run note_meta once", %{user: user, vault: vault} do
+      test_pid = self()
+      handler = "note-meta-count-#{System.unique_integer()}"
+
+      :telemetry.attach(
+        handler,
+        [:engram, :nif, :call, :stop],
+        fn _event, _measurements, %{nif: nif}, _ ->
+          if self() == test_pid and nif == :note_meta, do: send(test_pid, :note_meta)
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Meta.md", "content" => "# A #x"},
+          actor: "api"
+        )
+
+      assert count_messages(:note_meta) == 1
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Meta.md", "content" => "# B #y"},
+          actor: "api"
+        )
+
+      assert count_messages(:note_meta) == 1
+    end
+
     # Phase 0 (identity-as-CRDT): the documented-but-missing stale-base gate.
     # The three-way CRDT merge diffs incoming FULL content against the stored
     # snapshot — a stale client's push whose diff says "these paragraphs don't
@@ -2611,6 +2643,14 @@ defmodule Engram.NotesTest do
 
       reloaded = Engram.Repo.get!(Engram.Notes.Note, note.id, skip_tenant_check: true)
       assert reloaded.embed_hash == note.content_hash
+    end
+  end
+
+  defp count_messages(msg, acc \\ 0) do
+    receive do
+      ^msg -> count_messages(msg, acc + 1)
+    after
+      0 -> acc
     end
   end
 end

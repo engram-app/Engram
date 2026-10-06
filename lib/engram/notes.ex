@@ -426,7 +426,6 @@ defmodule Engram.Notes do
          {:ok, path} <- validate_path(path),
          {:ok, hash} <- content_hash(user, content) do
       sanitized_path = PathSanitizer.sanitize(path)
-      {title, tags} = Helpers.extract_title_and_tags(content, sanitized_path)
       folder = Helpers.extract_folder(sanitized_path)
       now = DateTime.utc_now()
       # #1710: decided once, before the transaction (see Revisions moduledoc).
@@ -441,8 +440,11 @@ defmodule Engram.Notes do
         # coexist with a folder marker at the same path string.
         kind: "note",
         content: content,
-        title: title,
-        tags: tags,
+        # Every write path replaces these with crdt.title/crdt.tags, derived
+        # from the CRDT-merged text. The keys stay because those paths use
+        # `%{base_attrs | ...}`, which requires them to exist.
+        title: nil,
+        tags: nil,
         content_hash: hash,
         mtime: mtime,
         user_id: user.id,
@@ -464,7 +466,6 @@ defmodule Engram.Notes do
               user: user,
               path: sanitized_path,
               folder: folder,
-              tags: tags,
               opts: opts
             },
             1
@@ -623,7 +624,7 @@ defmodule Engram.Notes do
     end
   end
 
-  defp insert_new_note(base_attrs, user, sanitized_path, folder, _tags, client_id, lookup_query) do
+  defp insert_new_note(base_attrs, user, sanitized_path, folder, client_id, lookup_query) do
     # Pricing v2 §G — server-side notes_cap enforcement. Free tier defaults
     # to 10k notes; Starter to 50k; Pro unlimited. Resolver returns nil for
     # the unlimited case, in which check_limit is a no-op. The current count is
@@ -1679,7 +1680,6 @@ defmodule Engram.Notes do
          user: user,
          path: sanitized_path,
          folder: folder,
-         tags: tags,
          query: lookup_query,
          opts: opts
        }) do
@@ -1723,7 +1723,7 @@ defmodule Engram.Notes do
         end
 
       nil ->
-        insert_new_note(base_attrs, user, sanitized_path, folder, tags, client_id, lookup_query)
+        insert_new_note(base_attrs, user, sanitized_path, folder, client_id, lookup_query)
     end
   end
 
@@ -1878,7 +1878,7 @@ defmodule Engram.Notes do
   # CRDT (Yjs) is the only content-sync path: merge_plaintext in do_update_note
   # IS the conflict resolution. A stale client_version never 409s — the diverging
   # write is merged convergently into crdt_state (no legacy conflict-copy flow).
-  defp do_update_note(existing, base_attrs, user, sanitized_path, folder, _tags, opts) do
+  defp do_update_note(existing, base_attrs, user, sanitized_path, folder, opts) do
     base_hash = Keyword.get(opts, :base_hash)
 
     cond do
@@ -1958,7 +1958,7 @@ defmodule Engram.Notes do
           # environment that does not set it, which is all of them outside
           # `test/support/checkpoint_interleave.ex`.
           interleave_hook(:after_note_read)
-          do_update_note(existing, w.base, w.user, w.path, w.folder, w.tags, w.opts)
+          do_update_note(existing, w.base, w.user, w.path, w.folder, w.opts)
       end
 
     case result do
