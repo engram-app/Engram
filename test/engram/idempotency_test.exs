@@ -18,14 +18,24 @@ defmodule Engram.IdempotencyTest do
     %{user: user, other: other}
   end
 
+  @scope %{
+    vault_id: "00000000-0000-7000-8000-00000000000a",
+    route: "POST /api/notes/batch-delete"
+  }
+
   defp key, do: Ecto.UUID.generate()
 
   test "remember/lookup round-trips through Postgres", %{user: user} do
     k = key()
-    :ok = Idempotency.remember(user, k, %{status: 200, body: %{"results" => [%{"ok" => true}]}})
+
+    :ok =
+      Idempotency.remember(user, k, @scope, %{
+        status: 200,
+        body: %{"results" => [%{"ok" => true}]}
+      })
 
     assert {:ok, %{status: 200, body: %{"results" => [%{"ok" => true}]}}} =
-             Idempotency.lookup(user, k)
+             Idempotency.lookup(user, k, @scope)
   end
 
   test "lookup is user-scoped — another user cannot replay the key", %{
@@ -33,24 +43,26 @@ defmodule Engram.IdempotencyTest do
     other: other
   } do
     k = key()
-    :ok = Idempotency.remember(user, k, %{status: 200, body: %{"secret" => true}})
+    :ok = Idempotency.remember(user, k, @scope, %{status: 200, body: %{"secret" => true}})
 
-    assert :miss = Idempotency.lookup(other, k)
+    assert :miss = Idempotency.lookup(other, k, @scope)
   end
 
   test "unknown key misses", %{user: user} do
-    assert :miss = Idempotency.lookup(user, key())
+    assert :miss = Idempotency.lookup(user, key(), @scope)
   end
 
   test "expired entries miss", %{user: user} do
     k = key()
-    :ok = Idempotency.remember(user, k, %{status: 200, body: %{}}, ttl_ms: -1_000)
-    assert :miss = Idempotency.lookup(user, k)
+    :ok = Idempotency.remember(user, k, @scope, %{status: 200, body: %{}}, ttl_ms: -1_000)
+    assert :miss = Idempotency.lookup(user, k, @scope)
   end
 
   test "response body is ciphertext at rest", %{user: user} do
     k = key()
-    :ok = Idempotency.remember(user, k, %{status: 200, body: %{"path" => "Secret/plans.md"}})
+
+    :ok =
+      Idempotency.remember(user, k, @scope, %{status: 200, body: %{"path" => "Secret/plans.md"}})
 
     {:ok, key_bin} = Ecto.UUID.dump(k)
 
@@ -61,15 +73,15 @@ defmodule Engram.IdempotencyTest do
       )
 
     refute ciphertext =~ "Secret/plans.md"
-    assert {:ok, %{body: %{"path" => "Secret/plans.md"}}} = Idempotency.lookup(user, k)
+    assert {:ok, %{body: %{"path" => "Secret/plans.md"}}} = Idempotency.lookup(user, k, @scope)
   end
 
   test "duplicate remember keeps the first response", %{user: user} do
     k = key()
-    :ok = Idempotency.remember(user, k, %{status: 200, body: %{"attempt" => 1}})
-    :ok = Idempotency.remember(user, k, %{status: 200, body: %{"attempt" => 2}})
+    :ok = Idempotency.remember(user, k, @scope, %{status: 200, body: %{"attempt" => 1}})
+    :ok = Idempotency.remember(user, k, @scope, %{status: 200, body: %{"attempt" => 2}})
 
-    assert {:ok, %{body: %{"attempt" => 1}}} = Idempotency.lookup(user, k)
+    assert {:ok, %{body: %{"attempt" => 1}}} = Idempotency.lookup(user, k, @scope)
   end
 
   test "prune_expired/0 deletes expired rows across users, keeps live ones", %{
@@ -79,11 +91,40 @@ defmodule Engram.IdempotencyTest do
     dead_a = key()
     dead_b = key()
     alive = key()
-    :ok = Idempotency.remember(user, dead_a, %{status: 200, body: %{}}, ttl_ms: -1_000)
-    :ok = Idempotency.remember(other, dead_b, %{status: 200, body: %{}}, ttl_ms: -1_000)
-    :ok = Idempotency.remember(user, alive, %{status: 200, body: %{}})
+    :ok = Idempotency.remember(user, dead_a, @scope, %{status: 200, body: %{}}, ttl_ms: -1_000)
+    :ok = Idempotency.remember(other, dead_b, @scope, %{status: 200, body: %{}}, ttl_ms: -1_000)
+    :ok = Idempotency.remember(user, alive, @scope, %{status: 200, body: %{}})
 
     assert {:ok, 2} = Idempotency.prune_expired()
-    assert {:ok, _} = Idempotency.lookup(user, alive)
+    assert {:ok, _} = Idempotency.lookup(user, alive, @scope)
+  end
+
+  # #1869: the key alone matched, so a credential scoped to vault B could
+  # replay vault A's cached batch response (plaintext note paths).
+  test "lookup is vault-scoped — another vault cannot replay the key", %{user: user} do
+    k = key()
+    :ok = Idempotency.remember(user, k, @scope, %{status: 200, body: %{"secret" => true}})
+
+    other_vault = %{@scope | vault_id: Ecto.UUID.generate()}
+    assert :miss = Idempotency.lookup(user, k, other_vault)
+  end
+
+  test "lookup is route-scoped — another endpoint cannot replay the key", %{user: user} do
+    k = key()
+    :ok = Idempotency.remember(user, k, @scope, %{status: 200, body: %{}})
+
+    assert :miss = Idempotency.lookup(user, k, %{@scope | route: "POST /api/folders/batch-move"})
+  end
+
+  test "legacy rows with no vault recorded miss", %{user: user} do
+    k = key()
+    :ok = Idempotency.remember(user, k, @scope, %{status: 200, body: %{}})
+    {:ok, key_bin} = Ecto.UUID.dump(k)
+
+    Repo.query!("UPDATE idempotency_keys SET vault_id = NULL, route = NULL WHERE key = $1", [
+      key_bin
+    ])
+
+    assert :miss = Idempotency.lookup(user, k, @scope)
   end
 end

@@ -224,11 +224,7 @@ defmodule EngramWeb.AttachmentsController do
       {:ok, %{moved: n}} ->
         body = %{moved: n}
 
-        Engram.Idempotency.remember(
-          conn.assigns.current_user,
-          conn.assigns.idempotency_key,
-          %{status: 200, body: body}
-        )
+        EngramWeb.Plugs.IdempotencyKey.remember(conn, %{status: 200, body: body})
 
         json(conn, body)
 
@@ -279,7 +275,7 @@ defmodule EngramWeb.AttachmentsController do
       {:ok, %{deleted: n}} ->
         body = %{deleted: n}
 
-        Engram.Idempotency.remember(conn.assigns.current_user, conn.assigns.idempotency_key, %{
+        EngramWeb.Plugs.IdempotencyKey.remember(conn, %{
           status: 200,
           body: body
         })

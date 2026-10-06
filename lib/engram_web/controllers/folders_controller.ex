@@ -342,11 +342,7 @@ defmodule EngramWeb.FoldersController do
         with {:ok, %{notes: n, attachments: a}} <- Folders.batch_delete(user, vault, ids) do
           body = %{deleted: n, deleted_attachments: a}
 
-          Engram.Idempotency.remember(
-            conn.assigns.current_user,
-            conn.assigns.idempotency_key,
-            %{status: 200, body: body}
-          )
+          EngramWeb.Plugs.IdempotencyKey.remember(conn, %{status: 200, body: body})
 
           BatchOps.broadcast_batch(user, vault, "folders.batch", %{op: "delete", ids: ids})
           json(conn, body)
@@ -419,7 +415,7 @@ defmodule EngramWeb.FoldersController do
       {:ok, %{notes: n, attachments: a}} ->
         body = %{moved: n, moved_attachments: a}
 
-        Engram.Idempotency.remember(conn.assigns.current_user, conn.assigns.idempotency_key, %{
+        EngramWeb.Plugs.IdempotencyKey.remember(conn, %{
           status: 200,
           body: body
         })

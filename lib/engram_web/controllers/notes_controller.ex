@@ -508,11 +508,7 @@ defmodule EngramWeb.NotesController do
         with {:ok, %{deleted: n}} <- Notes.batch_delete_notes(user, vault, ids) do
           body = %{deleted: n}
 
-          Engram.Idempotency.remember(
-            conn.assigns.current_user,
-            conn.assigns.idempotency_key,
-            %{status: 200, body: body}
-          )
+          EngramWeb.Plugs.IdempotencyKey.remember(conn, %{status: 200, body: body})
 
           BatchOps.broadcast_batch(user, vault, "notes.batch", %{op: "delete", ids: ids})
           json(conn, body)
@@ -604,7 +600,7 @@ defmodule EngramWeb.NotesController do
     with {:ok, %{moved: n}} <- result do
       body = %{moved: n}
 
-      Engram.Idempotency.remember(conn.assigns.current_user, conn.assigns.idempotency_key, %{
+      EngramWeb.Plugs.IdempotencyKey.remember(conn, %{
         status: 200,
         body: body
       })
