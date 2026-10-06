@@ -51,7 +51,7 @@ export default function ErrorFallback({ error, eventId, reported = false }: Erro
 							{t("Oops")}
 						</p>
 						<h1 className={heading}>{t("Something went wrong")}</h1>
-						<p className="max-w-md text-muted-foreground text-sm">
+						<p className="text-muted-foreground text-sm">
 							{reported ? (
 								<Trans
 									text="An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}."
@@ -86,7 +86,7 @@ export default function ErrorFallback({ error, eventId, reported = false }: Erro
 						</div>
 
 						{import.meta.env.DEV ? (
-							<details className="mt-4 w-full max-w-md rounded-lg border border-destructive/50 bg-destructive/5 p-4 text-left text-sm">
+							<details className="mt-4 w-full rounded-lg border border-destructive/50 bg-destructive/5 p-4 text-left text-sm">
 								<summary className="cursor-pointer font-medium">Error detail (dev only)</summary>
 								<pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words text-xs">
 									{message}
