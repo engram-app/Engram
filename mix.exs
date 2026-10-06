@@ -192,15 +192,6 @@ defmodule Engram.MixProject do
       # build; it loads its precompiled NIF, so ours may move ahead of it.
       {:rustler, "~> 0.38", runtime: false, override: true},
 
-      # CommonMark parser for MCP section boundaries (Engram.MCP.Sections):
-      # comrak as a precompiled Rust NIF. mdex_native directly, not the `mdex`
-      # wrapper: Sections reads the native AST, and mdex's Elixir-side struct
-      # conversion was ~4x the parse itself on dense markup.
-      # 0.x can ship AST shape changes in patch releases, and Sections
-      # pattern-matches that AST: the shape-contract test in
-      # test/engram/mcp/sections_test.exs is the guard for any bump.
-      {:mdex_native, "~> 0.2.9"},
-
       # Test
       {:ex_machina, "~> 2.8", only: :test},
       {:mox, "~> 1.1", only: :test},

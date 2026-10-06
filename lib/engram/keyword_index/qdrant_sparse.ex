@@ -40,7 +40,7 @@ defmodule Engram.KeywordIndex.QdrantSparse do
   end
 
   # Bounded NIF calls. Each call runs on a dirty CPU scheduler, which cannot
-  # be preempted and is shared with lingua and mdex (prod has ONE). 256
+  # be preempted and is shared with lingua and md_outline (prod has ONE). 256
   # chunks of at most 2 KB keeps a call well under a second; the token -> dim
   # memo just restarts per batch.
   @docs_per_call 256
