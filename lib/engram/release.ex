@@ -142,6 +142,37 @@ defmodule Engram.Release do
     """
   ]
 
+  # The role `Accounts.validate_api_key/1` switches to for its tenant-less
+  # key_hash lookup (#1867). The #1867 contract migration scopes
+  # `api_keys_discovery` TO it, so plain engram_app with no tenant sees zero
+  # api_keys rows; only a transaction that explicitly
+  # `SET LOCAL ROLE engram_key_lookup` gets the discovery read.
+  #
+  # NOLOGIN, no attributes, SELECT on api_keys only. That grant lives in
+  # migration 20261006160000, because on a fresh database this runs before
+  # api_keys exists. engram_app is granted membership WITH INHERIT FALSE (it
+  # is NOINHERIT anyway; the grant says so explicitly): it may SET the role but
+  # is never subject to its policies or privileges otherwise. A superuser (dev,
+  # CI, single-credential self-host) may SET any role. On RDS the CREATEROLE
+  # master that creates this role gets ADMIN on it (PG16+), which is what lets
+  # it issue the GRANT.
+  #
+  # Migrations that reference it also create it if missing, for the same
+  # n1-compat reason as engram_maintenance.
+  @engram_key_lookup_sql [
+    """
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'engram_key_lookup') THEN
+        CREATE ROLE engram_key_lookup NOLOGIN;
+      END IF;
+    END
+    $$;
+    """,
+    "GRANT USAGE ON SCHEMA public TO engram_key_lookup;",
+    "GRANT engram_key_lookup TO engram_app WITH INHERIT FALSE, SET TRUE;"
+  ]
+
   @doc """
   Idempotent cluster bootstrap. Run BEFORE `migrate/0`.
 
@@ -332,6 +363,8 @@ defmodule Engram.Release do
     repo.query!(@create_engram_maintenance_role_sql, [])
     set_engram_maintenance_password(repo)
     Enum.each(@engram_maintenance_grants_sql, &repo.query!(&1, []))
+
+    Enum.each(@engram_key_lookup_sql, &repo.query!(&1, []))
     :ok
   end
 

@@ -641,9 +641,28 @@ defmodule Engram.Accounts do
 
     # Tenant DISCOVERY, not a tenant bypass: the user_id is what this lookup
     # returns, so there is nothing to scope by until it has already succeeded.
-    lookup =
-      Repo.cross_tenant(fn ->
-        Repo.one(from(k in ApiKey, where: k.key_hash == ^key_hash, preload: :user))
+    #
+    # `api_keys_discovery` (the no-tenant read policy) is scoped TO
+    # `engram_key_lookup` by the #1867 contract migration, after which plain
+    # engram_app sees no keys without a tenant. The key_hash read alone runs as that role; the role is reset
+    # before the user preload so the lookup role needs SELECT on api_keys only.
+    # Cost: one transaction and two extra round trips per API-key request.
+    {:ok, lookup} =
+      Repo.transaction(fn ->
+        Repo.query!("SELECT set_config('role', 'engram_key_lookup', true)", [],
+          source: "api_key_lookup_enter"
+        )
+
+        key =
+          Repo.cross_tenant(fn ->
+            Repo.one(from(k in ApiKey, where: k.key_hash == ^key_hash))
+          end)
+
+        # SET LOCAL survives a savepoint release, so reset inside (see
+        # `Repo.run_with_tenant/2`).
+        Repo.query!("SELECT set_config('role', 'none', true)", [], source: "api_key_lookup_exit")
+
+        key && Repo.cross_tenant(fn -> Repo.preload(key, :user) end)
       end)
 
     case lookup do
