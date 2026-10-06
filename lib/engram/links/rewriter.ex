@@ -423,20 +423,14 @@ defmodule Engram.Links.Rewriter do
       edits
       |> Enum.sort_by(& &1.rel_start, :desc)
       |> Enum.each(fn e ->
-        off = utf16_len(binary_part(body, 0, e.rel_start))
-        len = utf16_len(binary_part(body, e.rel_start, e.len))
+        off = CrdtBridge.utf16_len(binary_part(body, 0, e.rel_start))
+        len = CrdtBridge.utf16_len(binary_part(body, e.rel_start, e.len))
         Yex.Text.delete(text, off, len)
         Yex.Text.insert(text, off, e.new)
       end)
     end)
 
     :ok
-  end
-
-  # The doc is offset_kind: :utf16 (CrdtBridge.new_doc/0) — Yex.Text
-  # indices are UTF-16 code units, not bytes.
-  defp utf16_len(s) do
-    s |> :unicode.characters_to_binary(:utf8, {:utf16, :big}) |> byte_size() |> div(2)
   end
 
   defp persist(user, vault, note, doc, delta, head_at_load, rt) do
