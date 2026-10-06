@@ -1073,19 +1073,21 @@ jobs:
         run: |
           # Display range is deterministic per GITHUB_RUN_NUMBER so two parallel
           # runs with different run_numbers (modulo 15) get non-overlapping
-          # 6-display windows. Pre-cleanup and tear-down both need this range
-          # so they can scope Xvfb kills to displays this run actually owns.
-          BASE=$(( (GITHUB_RUN_NUMBER % 15) * 6 + 50 ))
-          MIN=$((BASE - 5))
+          # 10-display windows (:50..:199; e2e-crdt owns :245..:334). Pre-cleanup
+          # and tear-down both need this range so they can scope Xvfb kills to
+          # displays this run actually owns.
+          # Layout, up to 2 xdist workers (the ports step allocates for 2):
+          #   :BASE..:BASE-5    A/B/C, 3 per worker
+          #   :BASE-6..:BASE-9  resumed pair (test_82), 2 per worker
+          # Unset, conftest's resumed default :150/:149 would land in another
+          # job's window, and its Xvfb pre-flight pkill took down e2e-crdt's A
+          # and B mid-suite (run 37534181735). conftest asserts the two groups
+          # are disjoint for the actual worker count.
+          BASE=$(( (GITHUB_RUN_NUMBER % 15) * 10 + 59 ))
+          MIN=$((BASE - 9))
           MAX=$BASE
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
-          # The resumed-device pair (test_82) takes :BASE-3/:BASE-4, inside this
-          # window (A/B/C use :BASE..:BASE-2 under -n 1). Unset, conftest falls
-          # back to :150/:149 — inside e2e-crdt's :145..:150 window whenever
-          # run_number % 15 == 0, and its Xvfb pre-flight pkill took down
-          # e2e-crdt's A and B mid-suite (run 37534181735).
-          # ponytail: fits -n 1 only; -n 2 already fills the 6-display window.
-          echo "resumed_base=$((BASE - 3))" >> "$GITHUB_OUTPUT"
+          echo "resumed_base=$((BASE - 6))" >> "$GITHUB_OUTPUT"
           echo "min=$MIN" >> "$GITHUB_OUTPUT"
           echo "max=$MAX" >> "$GITHUB_OUTPUT"
           echo "Display range owned by this run: :$MIN..:$MAX"
@@ -1699,9 +1701,10 @@ jobs:
         run: |
           # Display range is deterministic per GITHUB_RUN_NUMBER so two parallel
           # runs with different run_numbers (modulo 15) get non-overlapping
-          # 6-display windows. Pre-cleanup and tear-down both need this range
-          # so they can scope Xvfb kills to displays this run actually owns.
-          BASE=$(( (GITHUB_RUN_NUMBER % 15) * 6 + 150 ))
+          # 6-display windows (:245..:334, clear of e2e-clerk's :50..:199).
+          # Pre-cleanup and tear-down both need this range so they can scope
+          # Xvfb kills to displays this run actually owns.
+          BASE=$(( (GITHUB_RUN_NUMBER % 15) * 6 + 250 ))
           MIN=$((BASE - 5))
           MAX=$BASE
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
