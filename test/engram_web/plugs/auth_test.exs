@@ -295,6 +295,29 @@ defmodule EngramWeb.Plugs.AuthTest do
     end
 
     @tag capture_log: true
+    test "401s a Clerk JWT whose email belongs to a user bound to another Clerk id" do
+      user = insert(:user, email: "victim@test.com")
+
+      user
+      |> Ecto.Changeset.change(%{external_id: "clerk_victim"})
+      |> Engram.Repo.update!(skip_tenant_check: true)
+
+      token =
+        "clerk_other_instance"
+        |> Engram.ClerkHelpers.clerk_claims(email: "victim@test.com")
+        |> Engram.ClerkHelpers.sign_clerk_jwt()
+
+      conn =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> Auth.call([])
+
+      assert conn.status == 401
+      assert conn.halted
+      assert Engram.Repo.reload!(user, skip_tenant_check: true).external_id == "clerk_victim"
+    end
+
+    @tag capture_log: true
     test "rejects invalid Clerk JWT" do
       # Sign with wrong key
       other_jwk = JOSE.JWK.generate_key({:rsa, 2048})
