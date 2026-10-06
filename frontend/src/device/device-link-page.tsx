@@ -2,6 +2,13 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
+import {
+	countLabel,
+	useVaultSearch,
+	VaultRows,
+	VaultSearchField,
+	VaultSearchToggle,
+} from "@/components/vault-list";
 import { useAutofocus } from "@/hooks/use-autofocus";
 import { destructiveAlert, fieldInput, heading, selectableRow } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
@@ -27,11 +34,14 @@ import { SyncStatusPill } from "../onboarding/sync-status-pill";
 import { useVaultReadyEvents } from "../onboarding/use-vault-ready-events";
 import { ROUTES } from "../routes";
 import { settingsHash, settingsTo } from "../settings/settings-hash";
+import { guessDeviceLabel, parseUserAgentOs } from "./guess-device-label";
 
 interface Vault {
 	id: string;
 	name: string;
 	note_count: number;
+	attachment_count?: number;
+	is_default?: boolean;
 	/** Has a note other than the seeded welcome note, i.e. `vault_populated`
 	 *  has already fired. Absent from backends that predate it. */
 	populated?: boolean;
@@ -106,6 +116,9 @@ function DeviceLinkPage() {
 	const [selection, setSelection] = useState<string>("matched");
 	const [suggestedName, setSuggestedName] = useState("");
 	const [customName, setCustomName] = useState("");
+	// Seeded with a guess from the plugin's User-Agent once the code verifies;
+	// the user can edit or clear it, and a blank label is not sent.
+	const [label, setLabel] = useState("");
 	const [linkedVaultId, setLinkedVaultId] = useState<string | null>(null);
 	// Whether the success step has a first-sync milestone to wait for. False when
 	// linking into a vault that already has notes — see handleAuthorize.
@@ -152,6 +165,7 @@ function DeviceLinkPage() {
 				vaults: Vault[];
 				suggested_vault_name?: string | null;
 				user_code_valid?: boolean;
+				device_user_agent?: string | null;
 			}>(`/vaults?user_code=${encodeURIComponent(formattedCode)}`);
 			// This endpoint answers 200 with the caller's vault list whether or not
 			// the code is real — `user_code_valid` is the only validity signal, and
@@ -171,6 +185,9 @@ function DeviceLinkPage() {
 				return;
 			}
 			setVaults(data.vaults ?? []);
+			// The plugin's own User-Agent, not this browser's: the browser may be on a
+			// different machine from the Obsidian being linked.
+			setLabel(guessDeviceLabel(data.device_user_agent) ?? "");
 			const suggested = data.suggested_vault_name?.trim() || "";
 			setSuggestedName(suggested);
 			// Default selection:
@@ -362,9 +379,14 @@ function DeviceLinkPage() {
 				}
 			}
 
-			const body = createNew
-				? { user_code: userCode, vault_id: "new", vault_name: effectiveNewName }
-				: { user_code: userCode, vault_id: selection };
+			const trimmedLabel = label.trim();
+			const body = {
+				user_code: userCode,
+				...(createNew
+					? { vault_id: "new", vault_name: effectiveNewName }
+					: { vault_id: selection }),
+				...(trimmedLabel && { label: trimmedLabel }),
+			};
 
 			try {
 				const { vault_id } = await api.post<{ ok: boolean; vault_id: string }>(
@@ -517,6 +539,21 @@ function DeviceLinkPage() {
 						<p className="text-muted-foreground text-sm">
 							Pick an existing one, or create a new vault for these notes.
 						</p>
+
+						<label className="flex flex-col gap-1.5">
+							<span className="font-medium text-foreground text-sm">
+								Name this connection{" "}
+								<span className="font-normal text-muted-foreground">(optional)</span>
+							</span>
+							<input
+								type="text"
+								maxLength={120}
+								value={label}
+								onChange={(e) => setLabel(e.target.value)}
+								placeholder="Obsidian Vault Sync"
+								className={fieldInput}
+							/>
+						</label>
 
 						<VaultPickerFieldset
 							vaults={vaults}
@@ -688,6 +725,38 @@ interface VaultPickerFieldsetProps {
 	atVaultCap: boolean;
 }
 
+function VaultRadio({
+	vault,
+	active,
+	onSelect,
+	hint,
+}: {
+	vault: Vault;
+	active: boolean;
+	onSelect: (next: string) => void;
+	hint?: string;
+}) {
+	return (
+		<label className={selectableRow(active)}>
+			<input
+				type="radio"
+				name="vault-target"
+				checked={active}
+				onChange={() => onSelect(vault.id)}
+				className="accent-primary"
+			/>
+			<span className="flex min-w-0 flex-1 items-baseline gap-2">
+				<span className="font-medium text-foreground text-sm">{vault.name}</span>
+				{vault.is_default ? <span className="text-muted-foreground text-xs">default</span> : null}
+				{hint ? <span className="text-muted-foreground text-xs">{hint}</span> : null}
+			</span>
+			<span className="shrink-0 text-muted-foreground text-xs">
+				{countLabel(vault.note_count, vault.attachment_count)}
+			</span>
+		</label>
+	);
+}
+
 // Stacked-radio picker for the /link consent page. Three row variants:
 //   1. Existing vault whose name matches the plugin's suggestion (top, if any)
 //      — selecting it links into that vault, no creation.
@@ -709,25 +778,24 @@ function VaultPickerFieldset({
 	const otherVaults = matchedExisting ? vaults.filter((v) => v.id !== matchedExisting.id) : vaults;
 	const isMatched = selection === "matched";
 	const isCustom = selection === "custom";
+	const search = useVaultSearch(otherVaults);
 
 	return (
 		<fieldset className="flex flex-col gap-2">
+			<div className="mb-1 flex items-center justify-between gap-2">
+				<legend className="font-medium text-foreground text-sm">
+					Where should these notes sync?
+				</legend>
+				<VaultSearchToggle search={search} />
+			</div>
+			<VaultSearchField search={search} />
 			{matchedExisting ? (
-				<label className={selectableRow(selection === matchedExisting.id)}>
-					<input
-						type="radio"
-						name="vault-target"
-						checked={selection === matchedExisting.id}
-						onChange={() => onSelect(matchedExisting.id)}
-						className="accent-primary"
-					/>
-					<span className="flex flex-col">
-						<span className="font-medium text-foreground text-sm">{matchedExisting.name}</span>
-						<span className="text-muted-foreground text-xs">
-							Sync into your existing vault &middot; {matchedExisting.note_count} notes
-						</span>
-					</span>
-				</label>
+				<VaultRadio
+					vault={matchedExisting}
+					active={selection === matchedExisting.id}
+					onSelect={onSelect}
+					hint="matches your Obsidian vault"
+				/>
 			) : (
 				suggestedName &&
 				!atVaultCap && (
@@ -749,26 +817,17 @@ function VaultPickerFieldset({
 				)
 			)}
 
-			{otherVaults.map((v) => {
-				const active = selection === v.id;
-				return (
-					<label key={v.id} className={selectableRow(active)}>
-						<input
-							type="radio"
-							name="vault-target"
-							checked={active}
-							onChange={() => onSelect(v.id)}
-							className="accent-primary"
-						/>
-						<span className="flex flex-col">
-							<span className="font-medium text-foreground text-sm">{v.name}</span>
-							<span className="text-muted-foreground text-xs">
-								Sync into this existing vault &middot; {v.note_count} notes
-							</span>
-						</span>
-					</label>
-				);
-			})}
+			{/* The new-vault rows below stay outside the scroll box: they are the
+			    choice the list is an alternative to and must not need scrolling
+			    to reach. */}
+			<VaultRows scroll={search.showFilter}>
+				{search.shown.map((v) => (
+					<VaultRadio key={v.id} vault={v} active={selection === v.id} onSelect={onSelect} />
+				))}
+				{search.showFilter && search.needle && search.shown.length === 0 && (
+					<p className="p-3 text-muted-foreground text-sm">No vaults match "{search.filter}".</p>
+				)}
+			</VaultRows>
 
 			{!atVaultCap && (
 				<label className={selectableRow(isCustom)}>
@@ -830,28 +889,6 @@ function describeObsidianDevice(c: Connection): string {
 		return c.name ?? "your previous device";
 	}
 	return parts.join(" ");
-}
-
-function parseUserAgentOs(ua: string | null): string | null {
-	if (!ua) {
-		return null;
-	}
-	if (/iphone|ipad|ipod/iu.test(ua)) {
-		return "iOS";
-	}
-	if (/android/iu.test(ua)) {
-		return "Android";
-	}
-	if (/mac os|macintosh/iu.test(ua)) {
-		return "macOS";
-	}
-	if (/windows/iu.test(ua)) {
-		return "Windows";
-	}
-	if (/linux/iu.test(ua)) {
-		return "Linux";
-	}
-	return null;
 }
 
 function relativeTime(iso: string | null): string | null {

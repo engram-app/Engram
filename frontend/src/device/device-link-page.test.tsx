@@ -495,6 +495,88 @@ describe("DeviceLinkPage", () => {
 		expect(await screen.findByText(/your vault is linked/iu)).toBeInTheDocument();
 	});
 
+	async function reachPicker(vaults: unknown[]) {
+		get.mockResolvedValue({ vaults });
+		post.mockResolvedValue({ ok: true, vault_id: 7 });
+		renderPage();
+		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ENGR7X4K" } });
+		fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+		await screen.findByRole("button", { name: /^sync$/iu });
+	}
+
+	describe("vault picker", () => {
+		it("sends the connection name the user typed", async () => {
+			await reachPicker([{ id: 7, name: "Personal", note_count: 3 }]);
+			fireEvent.click(screen.getByRole("radio", { name: /personal/iu }));
+			fireEvent.change(screen.getByLabelText(/name this connection/iu), {
+				target: { value: "  Work laptop " },
+			});
+			fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
+			await waitFor(() =>
+				expect(post).toHaveBeenCalledWith(
+					"/auth/device/authorize",
+					expect.objectContaining({ vault_id: 7, label: "Work laptop" }),
+				),
+			);
+		});
+
+		it("suggests a label from the plugin's user agent", async () => {
+			get.mockResolvedValue({
+				vaults: [{ id: 7, name: "Personal", note_count: 3 }],
+				device_user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) obsidian/1.8.9",
+			});
+			post.mockResolvedValue({ ok: true, vault_id: 7 });
+			renderPage();
+			fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), {
+				target: { value: "ENGR7X4K" },
+			});
+			fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+			const input = await screen.findByLabelText(/name this connection/iu);
+			expect(input).toHaveValue("Windows PC");
+			fireEvent.click(screen.getByRole("radio", { name: /personal/iu }));
+			fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
+			await waitFor(() =>
+				expect(post).toHaveBeenCalledWith(
+					"/auth/device/authorize",
+					expect.objectContaining({ label: "Windows PC" }),
+				),
+			);
+		});
+
+		it("omits the label when left blank", async () => {
+			await reachPicker([{ id: 7, name: "Personal", note_count: 3 }]);
+			fireEvent.click(screen.getByRole("radio", { name: /personal/iu }));
+			fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
+			await waitFor(() => expect(post).toHaveBeenCalled());
+			expect(post.mock.calls[0]?.[1]).not.toHaveProperty("label");
+		});
+
+		it("shows note and file counts and the default tag", async () => {
+			await reachPicker([
+				{ id: 7, name: "Personal", note_count: 1200, attachment_count: 4, is_default: true },
+			]);
+			expect(screen.getByText("1,200 notes · 4 files")).toBeInTheDocument();
+			expect(screen.getByText("default")).toBeInTheDocument();
+		});
+
+		it("offers search only for long vault lists", async () => {
+			await reachPicker([{ id: 1, name: "One", note_count: 0 }]);
+			expect(screen.queryByRole("button", { name: /search vaults/iu })).toBeNull();
+		});
+
+		it("filters a long vault list by name", async () => {
+			await reachPicker(
+				Array.from({ length: 9 }, (_, i) => ({ id: i + 1, name: `Vault ${i + 1}`, note_count: 0 })),
+			);
+			fireEvent.click(screen.getByRole("button", { name: /search vaults/iu }));
+			fireEvent.change(screen.getByRole("searchbox", { name: /search vaults/iu }), {
+				target: { value: "vault 9" },
+			});
+			expect(screen.getByRole("radio", { name: /vault 9/iu })).toBeInTheDocument();
+			expect(screen.queryByRole("radio", { name: /vault 1\b/iu })).toBeNull();
+		});
+	});
+
 	// This is the actual device-link (plugin-connect) flow — the brief's
 	// "onboarding-shell.tsx" file name for this event doesn't match a real
 	// step-prop'd component in this codebase; this page's Sync click is the
