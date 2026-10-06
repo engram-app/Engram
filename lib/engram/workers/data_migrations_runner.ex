@@ -13,6 +13,7 @@ defmodule Engram.Workers.DataMigrationsRunner do
 
   # Register every Engram.DataMigration here.
   @migrations [
+    Engram.DataMigrations.IndexVersions,
     Engram.DataMigrations.VaultSlugHmac,
     Engram.DataMigrations.ContentHashHmac,
     Engram.DataMigrations.NoteLinkHmacs

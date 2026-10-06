@@ -10,6 +10,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
   # The test embedder declares no model, which turns model tracking off; name
   # one so the embed-model sweep is exercised (and current_note/2 stamps it).
   setup do
+    Engram.DataMigrations.reset_cache()
     Application.put_env(:engram, :embed_model, "test-embed-model")
     on_exit(fn -> Application.delete_env(:engram, :embed_model) end)
   end
@@ -69,6 +70,21 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       # RebuildStaleNote, not EmbedNote: a worker the previous release lacks,
       # so a rolling deploy's old nodes cannot run the rebuild metered.
       assert_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
+      refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+      refute_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
+    end
+
+    # Once IndexVersions is done, no content-current note is on an old
+    # version, so the sweep stops looking for them.
+    test "once IndexVersions is done, a version-stale note is not swept" do
+      user = insert(:user)
+      insert(:subscription, user: user, tier: "pro", status: "active")
+      note = current_note(user, chunker_version: nil, keyword_version: nil)
+      :ok = Engram.DataMigrations.mark_done(Engram.DataMigrations.IndexVersions.name(), 1)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+
+      refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
       refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
       refute_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
     end

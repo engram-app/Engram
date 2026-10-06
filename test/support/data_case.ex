@@ -59,6 +59,11 @@ defmodule Engram.DataCase do
     # connection to an unrelated room anyway).
     unless tags[:async] do
       on_exit(&stop_crdt_rooms/0)
+      # `DataMigrations.done?/2` caches `true` in :persistent_term, which
+      # outlives the sandbox rollback that removes its ledger row. Without
+      # this, one test marking IndexVersions done (the runner's perform does,
+      # on an empty DB) turns off the version sweeps in every later test.
+      Engram.DataMigrations.reset_cache()
     end
   end
 
