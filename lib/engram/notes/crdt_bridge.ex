@@ -235,9 +235,18 @@ defmodule Engram.Notes.CrdtBridge do
   Ingest full note plaintext into the doc's frontmatter Y.Map + order Y.Array and
   body Y.Text. Only changed map keys are written. Malformed frontmatter falls
   back to treating the entire text as body.
+
+  Raises `ArgumentError` on invalid UTF-8 before any mutation. Checked up
+  front because the frontmatter map is written before the body diff, which
+  would otherwise raise with the map half-applied. `String.valid?/1` costs
+  about 6 ms on a 1.2 MB note (min of 5), small next to the ingest itself.
   """
   @spec ingest_plaintext(Yex.Doc.t(), String.t()) :: :ok
   def ingest_plaintext(%Yex.Doc{} = doc, plaintext) when is_binary(plaintext) do
+    if not String.valid?(plaintext) do
+      raise ArgumentError, "ingest_plaintext: plaintext is not valid UTF-8"
+    end
+
     {fm_block, body} = Frontmatter.split(plaintext)
 
     {order, values, raws, body} =
