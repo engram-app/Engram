@@ -12,7 +12,11 @@ defmodule Engram.Workers.DataMigrationsRunner do
   require Logger
 
   # Register every Engram.DataMigration here.
-  @migrations [Engram.DataMigrations.VaultSlugHmac]
+  @migrations [
+    Engram.DataMigrations.VaultSlugHmac,
+    Engram.DataMigrations.ContentHashHmac,
+    Engram.DataMigrations.NoteLinkHmacs
+  ]
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(30)
