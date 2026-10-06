@@ -161,7 +161,8 @@ config :engram, Oban,
       # 2-slot maintenance queue and one database.
       #
       # Minutes: reconcile owns every :x2/:x7, device-auth :04/:19/:34/:49,
-      # hourly jobs sit on :x3/:x8 or :10 (data-migrations runner :33),
+      # hourly jobs sit on :x3/:x8 or :10 (data-migrations runner :33,
+      # CRDT head re-warm :48),
       # dailies on :00/:16/:25/:30/:40.
       crontab: [
         # Every 5 min. Work is also queued the moment it is due (`kick/0`).
@@ -187,6 +188,9 @@ config :engram, Oban,
         # Note-version outbox copies whose FinalizeRevision job was lost
         # between commit and enqueue (#1710).
         {"43 * * * *", Engram.Workers.FinalizeRevisionSweep},
+        # Every CRDT persist NULLs crdt_head; this re-warms them (a continuing
+        # self-heal, never done; see docs/context/data-migrations-ledger.md).
+        {"48 * * * *", Engram.Workers.WarmCrdtHeads},
         # Export archives past the 7-day download window (#859).
         {"53 * * * *", Engram.Workers.ExportExpirySweep},
         # Paddle drift check. Daily: drift logs at :error to Sentry, and a

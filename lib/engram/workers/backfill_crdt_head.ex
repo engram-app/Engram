@@ -14,16 +14,16 @@ defmodule Engram.Workers.BackfillCrdtHead do
   `update_v1` or a prior batch), so a retry or a second `enqueue_all/0` never
   re-rebuilds a note.
 
-  Enqueue post-deploy via release rpc (no Mix in the release — plain function):
-
-      docker exec engram-saas /app/bin/engram rpc 'Engram.Workers.BackfillCrdtHead.enqueue_all()'
+  Enqueued hourly by `Engram.Workers.WarmCrdtHeads` (and after a DEK rotation),
+  never by hand.
   """
 
   # No `unique`: a cursor worker re-enqueues its own successor mid-run, which
   # collides with `:incomplete` uniqueness (the running job counts) and would
   # drop the successor, killing the loop after one batch. The `is_nil(crdt_head)`
   # filter already makes the work idempotent, so a duplicate enqueue_all just
-  # does converging, harmless re-scans — acceptable for a one-time backfill.
+  # does converging, harmless re-scans. The hourly `WarmCrdtHeads` cron skips
+  # its enqueue while any job of this worker is in flight.
   use Oban.Worker, queue: :crypto_backfill, max_attempts: 5
 
   import Ecto.Query
@@ -34,6 +34,7 @@ defmodule Engram.Workers.BackfillCrdtHead do
   alias Engram.Notes.{CrdtTransport, Note}
   alias Engram.Repo
   alias Engram.Vaults
+  alias Engram.Vaults.Vault
 
   @default_batch_size 100
   @start_cursor "00000000-0000-0000-0000-000000000000"
@@ -50,7 +51,11 @@ defmodule Engram.Workers.BackfillCrdtHead do
   defp batch_size,
     do: Application.get_env(:engram, :crdt_head_backfill_batch_size, @default_batch_size)
 
-  @doc "Enqueue one job per (user, vault) that still has a NULL-crdt_head note. Returns the count."
+  @doc """
+  Enqueue one job per (user, vault) in a live vault that still has a
+  NULL-crdt_head note (the worker discards a deleted vault's jobs). Returns
+  the count. Run hourly by `Engram.Workers.WarmCrdtHeads`.
+  """
   @spec enqueue_all() :: non_neg_integer()
   def enqueue_all do
     # Per-user inside each tenant's RLS context. A single cross-tenant read
@@ -59,6 +64,8 @@ defmodule Engram.Workers.BackfillCrdtHead do
     pairs =
       TenantScan.flat_map_users(fn user_id ->
         from(n in Note,
+          join: v in Vault,
+          on: v.id == n.vault_id and is_nil(v.deleted_at),
           where: n.kind == "note" and is_nil(n.crdt_head) and is_nil(n.deleted_at),
           where: n.user_id == ^user_id,
           group_by: n.vault_id,
