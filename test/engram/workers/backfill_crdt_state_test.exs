@@ -6,7 +6,7 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
   alias Engram.Crypto.Envelope
-  alias Engram.Notes.{CrdtBridge, CrdtPersistence, CrdtUpdateLog, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtPersistence, CrdtRegistry, CrdtUpdateLog, Note}
   alias Engram.Vaults.Vault
   alias Engram.Workers.BackfillCrdtState
 
@@ -201,6 +201,49 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
              })
 
     assert %Note{crdt_state_ciphertext: nil} = reload(user, note.id)
+  end
+
+  # A tail that commits between the batch select and the seed UPDATE: the
+  # UPDATE itself must refuse, not only the select.
+  test "the seed write refuses a note that gained a tail after selection", ctx do
+    %{user: user, vault: vault} = ctx
+    note = legacy_note(user, vault, "late-tail.md", "BODY")
+    :ok = seed_tail!(user, vault, note.id, "BODY")
+
+    {:ok, count} =
+      Repo.with_tenant(user.id, fn ->
+        BackfillCrdtState.write_seed(note.id, <<1, 2, 3>>, <<4, 5, 6>>)
+      end)
+
+    assert count == 0
+    assert %Note{crdt_state_ciphertext: nil} = reload(user, note.id)
+  end
+
+  # A room bound on the NULL-state note before the seed holds an EMPTY doc. Left
+  # resident, its first edit lands a tail on that empty lineage on top of the
+  # seeded snapshot, and the next bind unions two lineages.
+  test "evicts a resident room for a note it seeds", ctx do
+    %{user: user, vault: vault} = ctx
+    note = legacy_note(user, vault, "open.md", "IMPORTANT BODY")
+
+    {:ok, room} = CrdtRegistry.ensure_started(user.id, vault.id, note.id)
+    on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
+    ref = Process.monitor(room)
+
+    assert :ok =
+             perform_job(BackfillCrdtState, %{
+               "user_id" => user.id,
+               "vault_id" => vault.id,
+               "cursor" => "00000000-0000-0000-0000-000000000000"
+             })
+
+    assert_receive {:DOWN, ^ref, :process, ^room, _}, 1_000
+    assert CrdtRegistry.lookup(note.id) == nil
+
+    # The next room binds the seeded state, not an empty doc.
+    {:ok, fresh} = CrdtRegistry.ensure_started(user.id, vault.id, note.id)
+
+    assert CrdtBridge.text_of(Yex.Sync.SharedDoc.get_doc(fresh)) == "IMPORTANT BODY"
   end
 
   test "enqueue_missing/0 enqueues only for pairs that still have a seedable note", ctx do

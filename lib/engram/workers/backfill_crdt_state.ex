@@ -69,7 +69,7 @@ defmodule Engram.Workers.BackfillCrdtState do
   alias Engram.Crypto.AadRebind
   alias Engram.Crypto.RotationGate
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtBridge, CrdtUpdateLog, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtUpdateLog, Note}
   alias Engram.Repo
   alias Engram.Vaults
   alias Engram.Vaults.Vault
@@ -124,6 +124,7 @@ defmodule Engram.Workers.BackfillCrdtState do
   end
 
   @doc "Notes this worker seeds: live, NULL state, and no un-checkpointed tail."
+  @spec seedable() :: Ecto.Query.t()
   def seedable do
     from(n in Note,
       as: :note,
@@ -193,7 +194,7 @@ defmodule Engram.Workers.BackfillCrdtState do
   # rejection) must not fail the batch and strand every note after it. Log and
   # move on — the note keeps its NULL state and is picked up by a later run.
   defp seed_note(user, note_id) do
-    {:ok, _} =
+    {:ok, result} =
       Repo.with_tenant(user.id, fn ->
         case Repo.get(Note, note_id) do
           %Note{crdt_state_ciphertext: nil} = raw_note ->
@@ -207,6 +208,15 @@ defmodule Engram.Workers.BackfillCrdtState do
             :ok
         end
       end)
+
+    # After COMMIT, so a replacement room binds the seeded row. A room bound
+    # before the seed holds an EMPTY doc (the row had no state and no tail);
+    # left resident, its first edit would append a tail on that empty lineage
+    # on top of the seeded snapshot, and the next bind unions the two.
+    # terminate_room/1 brutal-kills, skipping the unbind checkpoint, so the
+    # empty doc is never written back. Same write-then-evict shape as
+    # `EngramWeb.CrdtChannel`'s genesis seed (#1409).
+    _ = if result == :seeded, do: CrdtRegistry.terminate_room(note_id)
 
     :ok
   end
@@ -264,21 +274,32 @@ defmodule Engram.Workers.BackfillCrdtState do
     end
   end
 
-  defp do_seed(user, note_id, raw_note) do
-    with {:ok, raw_note} <- migrate_legacy_row(user, raw_note),
-         {:ok, note} <- Crypto.maybe_decrypt_note_fields(raw_note, user),
-         {:ok, %{state: state}} <- CrdtBridge.merge_plaintext(nil, note.content || ""),
-         {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(state, user, note_id) do
-      # Re-assert `seedable/0` in the UPDATE: the read above and this write are
-      # not atomic, so a note that gained state or a tail in between must still
-      # be left alone. Representation only: content/content_hash/version/seq
-      # are untouched.
+  # Re-asserts `seedable/0` in the UPDATE: the read in seed_note/2 and this
+  # write are not atomic, so a note that gained state or a tail in between is
+  # left alone. Representation only: content/content_hash/version/seq are
+  # untouched. Returns the row count. Caller must be inside the note owner's
+  # `Repo.with_tenant/2`. Public only as a test seam for that fence.
+  @doc false
+  @spec write_seed(Ecto.UUID.t(), binary(), binary()) :: non_neg_integer()
+  def write_seed(note_id, ct, nonce) do
+    {count, _} =
       Repo.update_all(
         from(n in seedable(), where: n.id == ^note_id),
         set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
       )
 
-      :ok
+    count
+  end
+
+  defp do_seed(user, note_id, raw_note) do
+    with {:ok, raw_note} <- migrate_legacy_row(user, raw_note),
+         {:ok, note} <- Crypto.maybe_decrypt_note_fields(raw_note, user),
+         {:ok, %{state: state}} <- CrdtBridge.merge_plaintext(nil, note.content || ""),
+         {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(state, user, note_id) do
+      case write_seed(note_id, ct, nonce) do
+        1 -> :seeded
+        0 -> :ok
+      end
     else
       err ->
         Logger.warning(

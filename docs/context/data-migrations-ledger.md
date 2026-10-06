@@ -18,14 +18,18 @@ others.
 - `run_pass/0` returns `:done` only when it found no work. Errors, users
   skipped mid DEK rotation and jobs still in flight are `:more`.
 - `:done` means no row the backfill would process still needs work, checked
-  against exactly those rows (the same scan and predicate the worker uses). A
-  row the backfill can never fix keeps the migration open. The cost is one
-  cheap pass per hour. That is by design: a closed ledger must not hide an
-  unfixed row.
-- The done predicate and the enqueue set must both match the worker's own
-  skip conditions (vault liveness, decrypt failures). A row the worker
-  discards (a soft-deleted vault) must not keep it open; a pair with no work
-  must not be enqueued.
+  against exactly those rows (the same scan and predicate the worker uses).
+- Two kinds of unfixed row, treated oppositely:
+  - Rows the worker can never SELECT (deleted notes, soft-deleted vaults, for
+    `CrdtStateSeed` notes backed by a `crdt_update_log` tail) are not its work.
+    They are excluded from both the done predicate and the enqueue set, or the
+    migration could never close and would enqueue no-op jobs every hour.
+  - Rows the worker selects but FAILS on (content that never decrypts, a codec
+    rejection) keep the migration open. That is by design: a closed ledger must
+    not hide an unfixed row. The cost is one cheap pass (and one vault's job)
+    per hour, and the stuck-migration alert surfaces it.
+- So the done predicate and the enqueue set both use the worker's own selection
+  predicate, never a looser one; a pair with no selectable row is not enqueued.
 - Readers handle every older format. The ledger only saves work, it is not a
   correctness gate.
 
@@ -60,7 +64,7 @@ touches `done?` must not be `async: true`, because the cache is node-global.
 
 | Name | Covers |
 |---|---|
-| `CrdtStateSeed` | Residue of the 2026-07-06 cutover that NULLed every `crdt_state`: each pass enqueues `BackfillCrdtState` for live-vault pairs holding a seedable note (kind note, not deleted, NULL state, no `crdt_update_log` rows) via `BackfillCrdtState.enqueue_missing/0`. A NULL-state note WITH a tail is excluded from both the enqueue and the done check, and the worker never seeds it: its real state is the un-checkpointed tail, and a snapshot seeded from content would be a second Yjs lineage that bind unions with it. Tail replay serves those notes. A note whose content never decrypts keeps it open. |
+| `CrdtStateSeed` | Residue of the 2026-07-06 cutover that NULLed every `crdt_state`: each pass enqueues `BackfillCrdtState` for live-vault pairs holding a seedable note (kind note, not deleted, NULL state, no `crdt_update_log` rows) via `BackfillCrdtState.enqueue_missing/0`. A NULL-state note WITH a tail is excluded from both the enqueue and the done check, and the worker never seeds it: its real state is the un-checkpointed tail, and a snapshot seeded from content would be a second Yjs lineage that bind unions with it. Tail replay serves those notes. A selected note whose content never decrypts is a stuck row: it keeps the migration open until fixed. After each seed the worker evicts any resident room for the note (`CrdtRegistry.terminate_room/1`, no checkpoint), because a room bound before the seed holds an empty doc whose next edit would start a second lineage. |
 | `IndexVersions` | Every content-current note stamped with the current chunker, keyword and embed model versions. `ReconcileEmbeddings` does the rebuild. Once done it drops the version term and skips the keyword scan, except on one tick a day (04:02 UTC) that re-verifies: a rollback then roll-forward or a restored soft-deleted vault puts stale notes back without reopening it. See `index-version-self-heal.md`. |
 
 ## Pruned (2026-10-06)
