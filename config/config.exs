@@ -101,7 +101,8 @@ config :engram, Oban,
     # A note whose embed killed the node once re-runs here ALONE, so a second
     # death is its own and not a neighbour's (EmbedNote.CrashGuard).
     embed_isolated: 1,
-    # Cron backstops, and only them (ObanQueueConfigTest).
+    # Cron backstops. Three event workers still run here until the next
+    # release moves them to :events (ObanQueueConfigTest @moving_to_events).
     maintenance: 2,
     # Small follow-ups a user's action triggers (vault-deleted email, Paddle
     # cancel, index-cap sweep): never behind a long backstop. Ships empty one

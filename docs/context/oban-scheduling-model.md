@@ -8,7 +8,9 @@ that marks rows for later processing.
 ## The model
 
 1. **Queue work when it becomes due.** Insert the job in the same transaction as
-   the change that makes it due (an edit, a delete, a plan change). A site that
+   the change that makes it due, or right after it commits (an edit, a delete,
+   a plan change). After commit is fine for an idempotent sweep: a lost
+   insert is caught by the cron backstop. A site that
    only nulls a hash and waits for a cron is the anti-pattern: until 0.43,
    index-cap changes, orphan repair and plan upgrades waited up to 15 minutes,
    and then a capped batch.
@@ -22,8 +24,10 @@ that marks rows for later processing.
    or a keyset cursor), never "the first N".
 4. **A version bump starts with the deploy.** A queue-running node queues one
    reconcile sweep at boot (`Engram.Application.boot_sweep_child/1`).
-5. **Every run says what it did.** One `:info` line with counts. Prod logs at
-   `:info`, so a `:debug` "MUST log" line never reaches prod.
+5. **Every run says what it did.** One `:info` line with counts, zeros
+   included: a silent run cannot be told apart from a statement RLS filtered
+   to zero rows. Prod logs at `:info`, so a `:debug` "MUST log" line never
+   reaches prod.
 
 `ReconcileEmbeddings.kick/0` is the event hook for anything that marks notes
 for re-indexing: it queues a sweep now, deduplicated while one is pending.
@@ -35,7 +39,7 @@ configured (prod): one pass, no tenant, the maintenance role's policies see
 every row. Without it (self-host, tests) it falls back to
 `Engram.Backfill.TenantScan`, one transaction per user. Never one
 cross-tenant statement on the app pool: FORCE RLS filters it to zero rows and
-it reports success. `ReconcileEmbeddings.scan/1` is the shape to copy; prove a
+it reports success. `ReconcileEmbeddings.scan/3` is the shape to copy; prove a
 new one with a maintenance-pool test like
 `reconcile_embeddings_maintenance_test.exs` (the app pool as `engram_app`,
 assert no tenant-table query reaches it).
@@ -54,11 +58,13 @@ assert no tenant-table query reaches it).
 
 - `max_attempts` set on purpose (Oban's default is 20).
 - `unique` for anything a cron or a burst of events can enqueue twice. Note
-  that `Oban.insert_all` ignores `unique`: dedupe by hand, as
-  `EmbedNote.reject_already_queued/2` does.
+  that `Oban.insert_all` ignores `unique`: dedupe with
+  `Engram.Jobs.reject_pending/3`.
 - An explicit `timeout/1`.
-- A queue chosen on purpose: `maintenance` is cron backstops only, `events`
-  is small follow-ups a user's action triggers (ObanQueueConfigTest).
+- A queue chosen on purpose: `maintenance` is cron backstops, `events` is
+  small follow-ups a user's action triggers (ObanQueueConfigTest). Until the
+  release after 0.43, three event workers still run on `maintenance`
+  (`@moving_to_events`).
 - A NEW queue ships empty one release before any worker moves onto it.
   Moved in the same release, a rollback to a build without the queue strands
   every job queued on it.

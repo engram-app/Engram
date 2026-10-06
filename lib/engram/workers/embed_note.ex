@@ -655,7 +655,7 @@ defmodule Engram.Workers.EmbedNote do
   (batch upsert, reconcile sweep). `insert_all` ignores `unique`/`replace`, so
   the ceiling is meaningless there — `clamp: false` skips the per-note
   `existing_burst_start` SELECT that would otherwise run once per note for
-  nothing (a 500-note reconcile tick = 500 wasted queries).
+  nothing (a 1,000-note reconcile page = 1,000 wasted queries).
   """
   # `user_id` REQUIRED and positional — see the note on
   # `Engram.Workers.ExtractNoteLinks.new_debounced/2`.

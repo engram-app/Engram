@@ -69,20 +69,15 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   def perform(%Oban.Job{args: args}) do
     page_size = Map.get(args, "page", @page)
 
-    # One query PER TENANT, under a global cap. It cannot be a single
-    # cross-tenant statement: `notes` is FORCE RLS, so without a tenant the
-    # select-and-stamp below is filtered to zero rows and this whole worker
-    # becomes a silent no-op (see the scan comment further down).
-    #
-    # Still not per-VAULT, which is what this used to be: that ran one
-    # stale-notes query per vault per tick, O(total vaults). Per-vault fairness
-    # isn't needed — EmbedNote is uniq-deduped and the oldest-first order
-    # drains any backlog across ticks.
+    # Pages through every tenant's stale notes: one pass on the maintenance
+    # pool, or one transaction per page per tenant without it (see scan/3).
+    # Never per VAULT, which is what this used to be: one stale-notes query
+    # per vault per tick, O(total vaults).
     now = DateTime.utc_now()
     backoff_until = DateTime.add(now, reconcile_backoff_seconds(), :second)
 
-    # Eligible stale notes, oldest-first, capped — kept as a subquery so the
-    # whole select-and-stamp is ONE statement (see the UPDATE below).
+    # One page of eligible stale notes, oldest-first, kept as a subquery so
+    # the whole select-and-stamp is ONE statement (see the UPDATE below).
     # The SQL proxy for "uncapped and unmetered": a paid, entitled
     # subscription. See the comments on its two uses below.
     paid =

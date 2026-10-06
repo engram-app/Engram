@@ -72,11 +72,11 @@ This is acceptable **only because vectors are derived data** — Postgres is gro
    ```
 
    Same shape the billing downgrade path uses (`Engram.Billing` → `IndexCap.evict_over_cap/1`, which nulls both hashes for the notes past the Free cap), so this is a proven mechanism, not a new one.
-3. **Wait.** `Engram.Workers.ReconcileEmbeddings` runs on the `*/15 * * * *` Oban cron and enqueues at most `@batch_size = 500` `EmbedNote` jobs per tick.
+3. **Wait, or kick.** `Engram.Workers.ReconcileEmbeddings` runs every 5 minutes (`2-59/5`) and queues every stale note in one sweep, no per-tick cap. `ReconcileEmbeddings.kick()` from a remote console starts a sweep now.
 
-**RTO for a full rebuild ≈ 1 hour** at current volume: ~1,574 live notes ÷ 500 per tick × 15 min ≈ 4 ticks. Search is degraded (keyword-only) for that window; note reads and writes are unaffected throughout. To go faster, invoke `ReconcileEmbeddings.perform/1` in a loop from a remote console — the per-tick cap is the binding constraint, not embed throughput. A full rebuild re-bills Voyage for the whole corpus; budget for it before starting.
+**RTO for a full rebuild ≈ the embed queue's drain time**, not a cron cadence: the sweep queues the whole corpus at once, and `embed` concurrency at backfill priority sets the rate. Measured on the 0.42.0 rebuild: a 500-note batch drained in ~2 min, so ~1,574 live notes is roughly 6-10 min plus Voyage 429 snoozes. Search is degraded (keyword-only) for that window; note reads and writes are unaffected throughout. A full rebuild re-bills Voyage for the whole corpus; budget for it before starting.
 
-> The batch is **notes per tick, not chunks**. An earlier revision of this doc read the Qdrant point count (76,352, taken before an unrelated purge of 8 test vaults) as a note count and put the RTO at 38 hours. Measured 2026-09-05: ~10,400 chunk rows over ~1,574 live notes, about 7 chunks per note. Re-derive from `select count(*) from notes where kind = 'note' and deleted_at is null` rather than from the collection size.
+> Count **notes, not chunks**. An earlier revision of this doc read the Qdrant point count (76,352, taken before an unrelated purge of 8 test vaults) as a note count and put the RTO at 38 hours. Measured 2026-09-05: ~10,400 chunk rows over ~1,574 live notes, about 7 chunks per note. Re-derive from `select count(*) from notes where kind = 'note' and deleted_at is null` rather than from the collection size.
 
 **This whole procedure is for TOTAL collection loss only.** For partial divergence — the far likelier case, and what a Postgres restore produces — do not null every hash. `Engram.Workers.OrphanSweep` reconciles both directions against Qdrant's real point ids on its 05:00 UTC daily tick and flags only the notes that actually lost their points (#1576). Enqueue it on demand instead of waiting.
 

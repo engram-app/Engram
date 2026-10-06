@@ -26,7 +26,7 @@ Code:
 
 - `lib/engram/notes/crdt_bloat.ex` — the eligibility floor
 - `lib/engram/notes/crdt_checkpoint.ex` — per-checkpoint (biased) sample
-- `lib/engram/workers/crdt_bloat_sweep.ex` — whole-population sweep, every 6h
+- `lib/engram/workers/crdt_bloat_sweep.ex` — whole-population sweep, hourly
 - `lib/engram/prom_ex/crdt.ex` — both sets of metrics
 - `test/engram/oban_cron_test.exs`, `test/engram/workers/crdt_bloat_sweep_test.exs`
 
@@ -115,39 +115,26 @@ The Prometheus datasource **uid** is `grafanacloud-prom`; its **name** is
 `grafanacloud-calmeucalyptus520-prom`. Both survived the 2026-09-26 move to
 self-hosted Grafana. Dashboards reference it by *name*. Query it by uid.
 
-Query the sweep gauges over a 14d window: a 1h step over a 6h cadence aliases
-to no data.
+Query the sweep gauges over a 14d window: use a step of at least 1h (the cadence)
+or the panel aliases to gaps.
 
 ## Cron placement
 
-`10 */6 * * *` — 00:10, 06:10, 12:10, 18:10 UTC (`config/config.exs`).
+`10 * * * *`: hourly, at :10 (`config/config.exs`).
 
-**Not daily, and the cadence is not about freshness of the data.** These are
-`last_value` gauges, which live only on the node that ran the job. An ECS task
-replacement clears them, and on a daily cadence that is up to 24h of "No data"
-on every panel after each deploy. Four cheap aggregates a day buys a 6h worst
-case. The query is ~23ms on staging and extrapolates to ~4-5s at 1M notes — a
+**The cadence is not about freshness of the data.** These are `last_value`
+gauges, which live only on the node that ran the job. An ECS task replacement
+clears them, so the cadence is the worst-case "No data" gap after a deploy:
+1h. The query is ~23ms on staging and extrapolates to ~4-5s at 1M notes, a
 seq scan of the heap only, never the TOAST side table, because `octet_length`
 reads the raw datum size off the pointer without detoasting.
 
-:10 past the hour is deliberate: `0 * * * *` (`CleanupDeviceAuthWorker`) owns
-the hour and `*/15` (`ReconcileEmbeddings`) owns the quarter-hours.
-
-`Engram.ObanCronTest` pins two things:
-
-1. No two **daily** workers share a minute. They share one `maintenance` queue
-   (concurrency 2) and one database; a collision shows up as a slow night or a
-   timeout in whichever worker lost, pointing at the worker instead of at the
-   schedule.
-2. `CrdtBloatSweep` collides with **nothing at all**, including sub-hourly
-   entries. `slots/1` expands every expression to its full set of
-   minutes-of-day — a sub-hourly entry expands across all 24 hours — so one set
-   intersection covers both cases. (An earlier version claimed to compare
-   sub-hourly entries on minute-of-hour; it never did, and the branch that
-   supposedly did it was a verified no-op.)
-
-Global non-overlap is deliberately **not** asserted — those two already share
-the top of every hour by design, and have since long before this test.
+`Engram.ObanCronTest` asserts that no two cron entries share a minute of the
+day. `slots/1` expands every expression to its full set of minutes-of-day, so
+a sub-hourly entry expands across all 24 hours and one set intersection
+covers every pair. All entries share the 2-slot `maintenance` queue and one
+database; a collision shows up as a timeout in whichever worker lost, pointing
+at the worker instead of at the schedule.
 
 ## Gotchas
 

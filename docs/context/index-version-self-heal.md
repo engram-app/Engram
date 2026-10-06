@@ -10,8 +10,8 @@ run it, and in SaaS prod the exec path needs the dormant break-glass user.
 ## The mechanism
 
 Each kind of index change has a version constant in code and a stamp per note.
-`Engram.Workers.ReconcileEmbeddings` (cron, every 15 min, 500 notes per sweep
-per tick) selects notes whose stamp is behind and sends them to the cheapest
+`Engram.Workers.ReconcileEmbeddings` (cron every 5 min, at boot, and on
+`kick/0`; no per-sweep cap) selects notes whose stamp is behind and sends them to the cheapest
 worker that brings them current.
 
 | Change | Bump | Stamp | Sweep sends to | Cost |
@@ -58,9 +58,12 @@ Qdrant point 404s `update_vectors`) is retried once per window, not every tick.
 
 ## Cost of a bump
 
-Every note re-embeds once, at 500 per 15-minute tick (about 48k notes a day).
-At the 2026-10-04 corpus (4,195 live notes, 96% on an older chunker) that is
-about 20M Voyage tokens at most, roughly $2.40, over about two hours. Settle
+Every note re-embeds once. The first sweep after the deploy queues all of
+them, and the embed queue's concurrency sets the rate. At the 2026-10-04
+corpus (4,195 live notes, 96% on an older chunker) that is about 20M Voyage
+tokens at most, roughly $2.40. The 0.42.0 rebuild took about two hours under
+the old 500-per-15-min cap; uncapped, expect the queue's drain time (a
+500-note batch drained in ~2 min). Settle
 chunking before it is expensive: bundle boundary changes into one bump.
 
 ## Rollout notes
