@@ -596,7 +596,10 @@ defmodule EngramWeb.AttachmentsController do
             size_bytes: att.size_bytes,
             mtime: att.mtime,
             content_hash: att.content_hash,
-            content_base64: Base.encode64(att.content),
+            # Pre-quoted fragment: the base64 alphabet needs no JSON escaping,
+            # so this skips Jason's escape scan over a multi-MB string. Same
+            # bytes on the wire (pinned by a byte-identity test).
+            content_base64: Jason.Fragment.new([?", Base.encode64(att.content), ?"]),
             created_at: att.created_at,
             updated_at: att.updated_at
           })

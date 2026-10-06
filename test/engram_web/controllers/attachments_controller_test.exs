@@ -600,6 +600,46 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert body["size_bytes"] == byte_size(@sample_content)
     end
 
+    # content_base64 is emitted as a pre-quoted Jason.Fragment so Jason does not
+    # escape-scan a multi-MB string. The wire bytes must not change: compare
+    # against the plain-string encoding of the same map, byte for byte.
+    test "JSON body is byte-identical to the plain-string encoding",
+         %{conn: conn, user: user, vault: vault} do
+      bytes = :crypto.strong_rand_bytes(70_000) <> <<0, 255, ?", ?\\, ?/>>
+
+      conn
+      |> put_req_header("content-type", "application/octet-stream")
+      |> post("/api/attachments?path=bin/r.png&mtime=12.5", bytes)
+      |> json_response(200)
+
+      {:ok, att} = Attachments.get_attachment(user, vault, "bin/r.png")
+
+      expected =
+        Jason.encode!(%{
+          id: att.id,
+          path: att.path,
+          mime_type: att.mime_type,
+          size_bytes: att.size_bytes,
+          mtime: att.mtime,
+          content_hash: att.content_hash,
+          content_base64: Base.encode64(bytes),
+          created_at: att.created_at,
+          updated_at: att.updated_at
+        })
+
+      resp = get(conn, "/api/attachments/bin/r.png")
+      assert resp.status == 200
+      assert resp.resp_body == expected
+      assert Base.decode64!(json_response(resp, 200)["content_base64"]) == bytes
+    end
+
+    test "JSON body for an empty attachment carries an empty content_base64",
+         %{conn: conn} do
+      post(conn, "/api/attachments", %{path: "e.txt", content_base64: "", mtime: 1.0})
+      body = json_response(get(conn, "/api/attachments/e.txt"), 200)
+      assert body["content_base64"] == ""
+    end
+
     test "returns 404 for nonexistent attachment", %{conn: conn} do
       conn = get(conn, "/api/attachments/nope/missing.png")
       assert json_response(conn, 404)
