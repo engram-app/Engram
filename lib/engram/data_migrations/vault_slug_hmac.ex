@@ -4,9 +4,9 @@ defmodule Engram.DataMigrations.VaultSlugHmac do
   `slug_suffixed` describe the derived slug; see `Vaults.backfill_slug_hmacs/1`.
 
   The HMAC needs each user's DEK-derived filter key, so it cannot run in the
-  migration. Done when a pass clears nothing for every user. Users with
-  nothing to clear derive no key. A user mid-DEK-rotation or a failed user
-  keeps it open for the next pass. Removed with the contract release that
+  migration. Done when, after a pass, no vault of a live user still holds a
+  plaintext slug. A user mid-DEK-rotation, a failed user, or an undecryptable
+  row keeps it open (the latter is logged each pass). Removed with the contract release that
   drops `vaults.slug`.
   """
   @behaviour Engram.DataMigration
@@ -14,6 +14,7 @@ defmodule Engram.DataMigrations.VaultSlugHmac do
   import Ecto.Query
 
   alias Engram.Accounts.User
+  alias Engram.DataMigrations
   alias Engram.Logger.Metadata
   alias Engram.Repo
   alias Engram.Vaults
@@ -30,9 +31,20 @@ defmodule Engram.DataMigrations.VaultSlugHmac do
   def run_pass do
     # `users` is not RLS-scoped; the per-user vault work runs under with_tenant.
     Repo.all(from(u in User, where: is_nil(u.deleted_at), order_by: u.id, select: u.id))
-    |> Enum.map(&backfill_user/1)
-    |> Enum.all?(&(&1 == :clean))
-    |> if(do: :done, else: :more)
+    |> Enum.each(&backfill_user/1)
+
+    # Soft-deleted users are never visited above, so exclude them here too or
+    # the migration could never close.
+    if DataMigrations.any_row?(fn _repo ->
+         from(v in Engram.Vaults.Vault,
+           join: u in User,
+           on: u.id == v.user_id and is_nil(u.deleted_at),
+           where: not is_nil(v.slug),
+           select: 1
+         )
+       end),
+       do: :more,
+       else: :done
   end
 
   # Each user runs in its own transaction; one user's failure (a returned
@@ -41,7 +53,7 @@ defmodule Engram.DataMigrations.VaultSlugHmac do
   defp backfill_user(user_id) do
     case Vaults.backfill_slug_hmacs(user_id) do
       {:ok, 0} ->
-        :clean
+        :ok
 
       {:ok, count} ->
         Logger.info(
@@ -49,10 +61,10 @@ defmodule Engram.DataMigrations.VaultSlugHmac do
           Metadata.with_category(:info, :crypto, user_id: user_id, reconciled: count)
         )
 
-        :changed
+        :ok
 
       {:error, :rotation_in_progress} ->
-        :skipped
+        :ok
 
       {:error, reason} ->
         log_failure(user_id, reason)
@@ -70,6 +82,6 @@ defmodule Engram.DataMigrations.VaultSlugHmac do
       )
     )
 
-    :failed
+    :ok
   end
 end

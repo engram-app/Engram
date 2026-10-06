@@ -40,7 +40,7 @@ defmodule Engram.DataMigrations.VaultSlugHmacTest do
       {:ok, vault, _} = Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
       set_raw(vault.id, slug: "notes")
 
-      assert VaultSlugHmac.run_pass() == :more
+      assert VaultSlugHmac.run_pass() == :done
 
       row = raw(vault.id)
       assert row.slug == nil
@@ -55,7 +55,7 @@ defmodule Engram.DataMigrations.VaultSlugHmacTest do
       {:ok, second, _} = Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
       set_raw(second.id, slug: "notes-#{id6(second)}")
 
-      assert VaultSlugHmac.run_pass() == :more
+      assert VaultSlugHmac.run_pass() == :done
 
       assert raw(second.id).slug == nil
       assert raw(second.id).slug_suffixed
@@ -70,7 +70,7 @@ defmodule Engram.DataMigrations.VaultSlugHmacTest do
       {:ok, _} = Vaults.update_vault(user, vault.id, %{name: "New Name"})
       set_raw(vault.id, slug: "old-name")
 
-      assert VaultSlugHmac.run_pass() == :more
+      assert VaultSlugHmac.run_pass() == :done
 
       assert raw(vault.id).slug == nil
       refute raw(vault.id).slug_suffixed
@@ -84,7 +84,7 @@ defmodule Engram.DataMigrations.VaultSlugHmacTest do
       {:ok, _} = Vaults.delete_vault(user, a.id)
       set_raw(b.id, slug: "notes-#{id6(b)}")
 
-      assert VaultSlugHmac.run_pass() == :more
+      assert VaultSlugHmac.run_pass() == :done
 
       assert raw(b.id).slug_suffixed
       assert {:ok, _} = Vaults.restore_vault(user, a.id)
@@ -97,7 +97,7 @@ defmodule Engram.DataMigrations.VaultSlugHmacTest do
       {:ok, vault, _} = Vaults.register_vault(user, "Job", Ecto.UUID.generate())
       set_raw(vault.id, slug: "job", slug_hmac: hmac(user, "work"))
 
-      assert VaultSlugHmac.run_pass() == :more
+      assert VaultSlugHmac.run_pass() == :done
 
       assert raw(vault.id).slug_hmac == hmac(user, "job")
       assert resolves?(user, "job", vault.id)
@@ -108,7 +108,7 @@ defmodule Engram.DataMigrations.VaultSlugHmacTest do
       {:ok, vault, _} = Vaults.register_vault(user, "My Vault", Ecto.UUID.generate())
       set_raw(vault.id, slug: "my_vault", slug_hmac: nil)
 
-      assert VaultSlugHmac.run_pass() == :more
+      assert VaultSlugHmac.run_pass() == :done
 
       assert raw(vault.id).slug_suffixed
       assert resolves?(user, "my-vault-#{id6(vault)}", vault.id)
@@ -130,8 +130,9 @@ defmodule Engram.DataMigrations.VaultSlugHmacTest do
     {:ok, user} = Crypto.ensure_user_dek(insert(:user))
     vault = insert(:vault, user: user, slug: "unreadable")
 
-    log = ExUnit.CaptureLog.capture_log(fn -> VaultSlugHmac.run_pass() end)
+    {result, log} = ExUnit.CaptureLog.with_log(fn -> VaultSlugHmac.run_pass() end)
 
+    assert result == :more
     assert log =~ "vault slug not reconcilable"
     assert raw(vault.id).slug == "unreadable"
   end
@@ -152,7 +153,7 @@ defmodule Engram.DataMigrations.VaultSlugHmacTest do
       set: [dek_rotation_locked_at: nil]
     )
 
-    assert VaultSlugHmac.run_pass() == :more
+    assert VaultSlugHmac.run_pass() == :done
     assert raw(vault.id).slug == nil
   end
 
@@ -172,8 +173,9 @@ defmodule Engram.DataMigrations.VaultSlugHmacTest do
       set: [encrypted_dek: nil]
     )
 
-    log = ExUnit.CaptureLog.capture_log(fn -> VaultSlugHmac.run_pass() end)
+    {result, log} = ExUnit.CaptureLog.with_log(fn -> VaultSlugHmac.run_pass() end)
 
+    assert result == :more
     assert log =~ "vault slug reconcile failed"
     assert raw(vault.id).slug == "work"
   end
@@ -190,20 +192,21 @@ defmodule Engram.DataMigrations.VaultSlugHmacTest do
     {:ok, vault, _} = Vaults.register_vault(healthy, "Work", Ecto.UUID.generate())
     set_raw(vault.id, slug: "work")
 
-    log = ExUnit.CaptureLog.capture_log(fn -> VaultSlugHmac.run_pass() end)
+    {result, log} = ExUnit.CaptureLog.with_log(fn -> VaultSlugHmac.run_pass() end)
 
+    assert result == :more
     assert log =~ "vault slug reconcile failed"
     assert raw(a.id).slug == "legacy", "the broken user's transaction rolled back"
     assert raw(vault.id).slug == nil
   end
 
   describe "completion" do
-    test "a pass that clears rows is :more, the next one is :done" do
+    test "a pass that clears every row is :done, and so is the next" do
       user = insert(:user)
       {:ok, vault, _} = Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
       set_raw(vault.id, slug: "notes")
 
-      assert VaultSlugHmac.run_pass() == :more
+      assert VaultSlugHmac.run_pass() == :done
       assert VaultSlugHmac.run_pass() == :done
     end
 
@@ -215,6 +218,18 @@ defmodule Engram.DataMigrations.VaultSlugHmacTest do
 
       assert VaultSlugHmac.run_pass() == :more
     end
+  end
+
+  test "a soft-deleted user's plaintext slug does not hold the migration open" do
+    user = insert(:user)
+    {:ok, vault, _} = Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
+    set_raw(vault.id, slug: "notes")
+
+    Repo.update_all(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+      set: [deleted_at: DateTime.utc_now()]
+    )
+
+    assert VaultSlugHmac.run_pass() == :done
   end
 
   defp lock_rotation(user) do
