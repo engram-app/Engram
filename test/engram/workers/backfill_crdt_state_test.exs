@@ -327,6 +327,28 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
     assert CrdtBridge.text_of(Yex.Sync.SharedDoc.get_doc(fresh)) == "IMPORTANT BODY"
   end
 
+  # A room can flush a tail on its empty lineage in the gap between the seed
+  # commit and the kill. That duplicate is not preventable here, so it must at
+  # least be visible.
+  test "warns of a possible second lineage when a tail exists after the kill", ctx do
+    %{user: user, vault: vault} = ctx
+    note = legacy_note(user, vault, "raced.md", "BODY")
+
+    refute ExUnit.CaptureLog.capture_log(fn ->
+             BackfillCrdtState.warn_if_second_lineage(user.id, note.id)
+           end) =~ "possible second lineage"
+
+    :ok = seed_tail!(user, vault, note.id, "TYPED")
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        BackfillCrdtState.warn_if_second_lineage(user.id, note.id)
+      end)
+
+    assert log =~ "possible second lineage"
+    assert log =~ note.id
+  end
+
   test "enqueue_missing/0 enqueues only for pairs that still have a seedable note", ctx do
     %{user: user, vault: vault} = ctx
     _ = legacy_note(user, vault, "legacy.md", "BODY")

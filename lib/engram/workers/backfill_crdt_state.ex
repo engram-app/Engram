@@ -255,7 +255,32 @@ defmodule Engram.Workers.BackfillCrdtState do
     # terminate_room/1 brutal-kills, skipping the unbind checkpoint, so the
     # empty doc is never written back. Same write-then-evict shape as
     # `EngramWeb.CrdtChannel`'s genesis seed (#1409).
-    _ = if result == :seeded, do: CrdtRegistry.terminate_room(note_id)
+    if result == :seeded do
+      _ = CrdtRegistry.terminate_room(note_id)
+      warn_if_second_lineage(user.id, note_id)
+    end
+
+    :ok
+  end
+
+  # The kill is not atomic with the seed commit: a room can flush a tail on its
+  # empty lineage in between, and the next bind unions it with the seed. Not
+  # preventable here, so make the duplicate detectable. Public only as a test
+  # seam: the race is not reproducible deterministically.
+  @doc false
+  @spec warn_if_second_lineage(Ecto.UUID.t(), Ecto.UUID.t()) :: :ok
+  def warn_if_second_lineage(user_id, note_id) do
+    {:ok, tail?} =
+      Repo.with_tenant(user_id, fn ->
+        Repo.exists?(from(l in CrdtUpdateLog, where: l.note_id == ^note_id))
+      end)
+
+    if tail? do
+      Logger.warning(
+        "crdt_state backfill: possible second lineage, tail written around the seed note_id=#{note_id}",
+        Metadata.with_category(:warning, :sync, note_id: note_id)
+      )
+    end
 
     :ok
   end
