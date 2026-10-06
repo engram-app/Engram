@@ -78,6 +78,9 @@ defmodule Engram.Repo.Migrations.CreateNoteRevisionsExpand do
     create index(:note_revisions, [:user_id])
     # The vault FK cascades too: CleanupVault hard-deletes vaults.
     create index(:note_revisions, [:vault_id])
+    # Self-FK (nilify on delete): pruning a revision (#1712) looks up rows that
+    # were restored from it. Partial, since almost every row is NULL here.
+    create index(:note_revisions, [:restored_from_id], where: "restored_from_id IS NOT NULL")
 
     execute(
       "ALTER TABLE note_revisions ENABLE ROW LEVEL SECURITY",
