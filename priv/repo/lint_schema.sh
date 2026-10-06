@@ -37,6 +37,13 @@ IGNORE='^(unused_index)$'
 # per request by unique index, so the cost is noise.
 # See docs/context/rls-cutover-breaks-api-key-auth.md.
 #
+# multiple_permissive_policies on public.subscriptions: `subscriptions_discovery`
+# is the same deliberate second permissive SELECT policy, for the Paddle
+# webhook, which holds only `paddle_subscription_id` and so cannot set a tenant
+# before the lookup. It matches only when NO tenant is set, and widens SELECT
+# only (INSERT/UPDATE/DELETE still hit `tenant_isolation_subscriptions`). One
+# webhook-rate read by unique index, so the evaluation cost is noise.
+#
 # multiple_permissive_policies for role engram_maintenance, pairing
 # `maintenance_all` with a table's `tenant_isolation_*`: deliberate. RDS cannot
 # grant BYPASSRLS to a custom role, so the maintenance pool's cross-tenant
@@ -46,7 +53,7 @@ IGNORE='^(unused_index)$'
 # evaluation, and its `true` predicate short-circuits the OR. Matched on the
 # role AND the exact two-policy set, so a third permissive policy on any
 # table still fires. See docs/context/maintenance-db-role.md.
-WAIVERS='multiple_permissive_policies.*public\.api_keys|multiple_permissive_policies.*role [^ ]*engram_maintenance[^ ]* .*\{maintenance_all,tenant_isolation_[a-z_]+\}'
+WAIVERS='multiple_permissive_policies.*public\.(api_keys|subscriptions)|multiple_permissive_policies.*role [^ ]*engram_maintenance[^ ]* .*\{maintenance_all,tenant_isolation_[a-z_]+\}'
 
 # `|| true`: grep exits 1 when it filters every line, which is a pass, not an
 # error. Without it `set -e` would abort here on a clean schema.

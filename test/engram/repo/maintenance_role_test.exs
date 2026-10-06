@@ -97,9 +97,10 @@ defmodule Engram.Repo.MaintenanceRoleTest do
   test "CONTROL: engram_app with no tenant set still sees and updates nothing" do
     seed_foreign_tenant()
 
-    # api_keys is excluded: `api_keys_discovery` deliberately widens SELECT when
-    # no tenant is set (see 20260918120000). Its UPDATE is still filtered.
-    readable = @tenant_tables -- ["api_keys"]
+    # api_keys and subscriptions are excluded: `api_keys_discovery` and
+    # `subscriptions_discovery` deliberately widen SELECT when no tenant is set
+    # (see 20260918120000, 20261006180000). Their UPDATE is still filtered.
+    readable = @tenant_tables -- ["api_keys", "subscriptions"]
 
     {:ok, {seen, updated}} =
       as_role("engram_app", fn ->

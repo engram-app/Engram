@@ -997,21 +997,14 @@ defmodule Engram.Billing do
 
   # Webhook-side DISCOVERY: Paddle's subscription id is the only key we have
   # here, and the owner is what the read finds, so there is no tenant to scope
-  # by. It therefore runs on the maintenance pool, which RLS does not filter;
-  # the caller then writes under `with_tenant(sub.user_id)` (#1758).
-  #
-  # `cross_tenant/1` only silences the app-level tripwire for the fallback
-  # case where `maintenance()` is `Repo` (self-host). It is NOT a scope: with
-  # the `subscriptions` policy enforced and a maintenance pool that cannot read
-  # across tenants, this read returns nil and every renewal/cancellation
-  # reports `:subscription_not_found`. Prod and staging do configure the pool
-  # (engram-infra#1243, #1248), so the policy migration waits only on
-  # verifying that pool reads `subscriptions` under the policy.
+  # by. It runs on the app pool with no tenant set, which the
+  # `subscriptions_discovery` SELECT policy answers (same shape as
+  # `api_keys_discovery`). `cross_tenant/1` only silences the app-level
+  # tripwire; the policy is what admits the read. The caller then writes under
+  # `with_tenant(sub.user_id)`, where INSERT/UPDATE/DELETE stay tenant-scoped.
   defp get_subscription_by_paddle_id(subscription_id) do
     Repo.cross_tenant(fn ->
-      Repo.maintenance().one(
-        from(s in Subscription, where: s.paddle_subscription_id == ^subscription_id)
-      )
+      Repo.one(from(s in Subscription, where: s.paddle_subscription_id == ^subscription_id))
     end)
   end
 

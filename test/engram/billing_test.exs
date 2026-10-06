@@ -1332,7 +1332,7 @@ defmodule Engram.BillingTest do
     test "get_subscription/1 reuses a preloaded :subscription assoc without querying" do
       user = insert(:user)
       insert(:subscription, user: user, tier: "pro", status: "active")
-      user = Repo.preload(user, :subscription)
+      user = Repo.preload(user, :subscription, skip_tenant_check: true)
 
       {result, queries} = with_subscription_query_count(fn -> Billing.get_subscription(user) end)
 
@@ -1341,7 +1341,7 @@ defmodule Engram.BillingTest do
     end
 
     test "get_subscription/1 returns nil from a preloaded-but-empty assoc without querying" do
-      user = insert(:user) |> Repo.preload(:subscription)
+      user = insert(:user) |> Repo.preload(:subscription, skip_tenant_check: true)
 
       {result, queries} = with_subscription_query_count(fn -> Billing.get_subscription(user) end)
 
@@ -1352,7 +1352,7 @@ defmodule Engram.BillingTest do
     test "tier/1 reuses a preloaded subscription (zero extra queries)" do
       user = insert(:user)
       insert(:subscription, user: user, tier: "pro", status: "active")
-      user = Repo.preload(user, :subscription)
+      user = Repo.preload(user, :subscription, skip_tenant_check: true)
 
       {_, queries} =
         with_subscription_query_count(fn ->

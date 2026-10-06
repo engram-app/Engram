@@ -4,8 +4,8 @@ defmodule Engram.Repo.Maintenance do
 
   `Engram.Repo` connects as a role that RLS applies to (`engram_app` where the
   two-login split is deployed) and every query through it must name a tenant.
-  A handful of jobs cannot: orphan reapers, expiry sweeps, and credential
-  lookups where the user_id is the thing being *discovered*. Under RLS those
+  A handful of jobs cannot: orphan reapers, expiry sweeps, and reconciliation
+  sweeps that span users. Under RLS those
   queries do not fail — `SELECT` returns zero rows and `UPDATE`/`DELETE` report
   0 affected with no error — so a sweep that has been silently no-opping for
   weeks looks exactly like a sweep with nothing to do.
@@ -21,11 +21,16 @@ defmodule Engram.Repo.Maintenance do
       for is what declares cross-tenant intent — a choice that shows up in a
       diff, unlike a keyword buried at the end of a long query.
 
-    * **Separate credential, never the request path.** The URL comes from
+    * **Separate credential, Oban workers only.** The URL comes from
       `MAINTENANCE_DATABASE_URL` alone. Nothing in a web request may use this
-      module — a rule currently held by review alone. There is no lint
-      enforcing it yet, and this docstring previously claimed one existed,
-      which is worse than claiming nothing.
+      module; it is for Oban workers (reapers, sweeps, reconciliation). A rule
+      held by review alone: there is no lint enforcing it yet.
+
+      Lookups where the user_id is the thing being *discovered* (API-key
+      auth, the Paddle webhook) are NOT maintenance work. They run on the app
+      pool with no tenant set and are admitted by a narrow `FOR SELECT`
+      `*_discovery` policy (`api_keys_discovery`, `subscriptions_discovery`)
+      that only matches when no tenant is set.
 
   ## Which credential
 

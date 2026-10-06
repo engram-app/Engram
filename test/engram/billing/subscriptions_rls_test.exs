@@ -1,13 +1,9 @@
 defmodule Engram.Billing.SubscriptionsRlsTest do
   @moduledoc """
-  Pins every KNOWN-USER `subscriptions` access against an enforced tenant
-  policy, ahead of that policy existing (#1758 Part 2).
-
-  `subscriptions` has no RLS yet. The policy migration ships separately, after
-  a staging rehearsal, so this file applies the policy the migration will add
-  INSIDE the sandbox transaction: Postgres DDL is transactional, so the
-  `ENABLE`/`FORCE`/`CREATE POLICY` below roll back with the test and never
-  reach another file.
+  Pins every `subscriptions` access against the enforced policies (#1758
+  Part 2): `tenant_isolation_subscriptions` plus the `subscriptions_discovery`
+  SELECT policy that lets the Paddle webhook find a row by
+  `paddle_subscription_id` with no tenant set.
 
   What each test guards is the silent half of trap 1 in
   `docs/context/rls-enforcement-testing-traps.md`: an unscoped read of
@@ -15,9 +11,8 @@ defmodule Engram.Billing.SubscriptionsRlsTest do
   to `:free`, `RequireOnboarding` locks them out, and account deletion skips
   the Paddle cancel and keeps billing a deleted customer.
 
-  The discovery paths (webhooks keyed by `paddle_subscription_id`, the
-  reconciliation sweep) need the maintenance pool, which a sandbox-scoped
-  policy cannot exercise; see `SubscriptionsMaintenanceTest`.
+  The reconciliation sweep is an Oban worker on the maintenance pool; see
+  `SubscriptionsMaintenanceTest`.
   """
   use Engram.DataCase, async: false
 
@@ -32,8 +27,6 @@ defmodule Engram.Billing.SubscriptionsRlsTest do
   setup :verify_on_exit!
 
   setup do
-    enforce_subscriptions_policy!()
-
     prev_billing = Application.get_env(:engram, :billing_enabled)
     Application.put_env(:engram, :billing_enabled, true)
     on_exit(fn -> Application.put_env(:engram, :billing_enabled, prev_billing) end)
@@ -53,22 +46,16 @@ defmodule Engram.Billing.SubscriptionsRlsTest do
     %{user: Accounts.get_user!(user.id), sub: sub}
   end
 
-  # The policy the #1758 migration will add, mirroring the other tenant tables.
-  defp enforce_subscriptions_policy! do
-    Repo.query!("ALTER TABLE subscriptions ENABLE ROW LEVEL SECURITY")
-    Repo.query!("ALTER TABLE subscriptions FORCE ROW LEVEL SECURITY")
+  # No-tenant is NOT the control any more: `subscriptions_discovery` deliberately
+  # lets that state read. The control is a DIFFERENT tenant seeing zero rows.
+  test "control: the dropped role under another tenant cannot see the subscription", %{sub: sub} do
+    other = insert(:user)
 
-    Repo.query!("""
-    CREATE POLICY tenant_isolation_subscriptions ON subscriptions
-      USING (user_id::text = (SELECT current_setting('app.current_tenant', true)))
-      WITH CHECK (user_id::text = (SELECT current_setting('app.current_tenant', true)))
-    """)
-  end
-
-  test "control: the dropped role cannot see the subscription", %{sub: sub} do
     outcome =
       as_prod_role(fn ->
-        Repo.one(from(s in Subscription, where: s.id == ^sub.id, select: count(s.id)))
+        Repo.with_tenant!(other.id, fn ->
+          Repo.one(from(s in Subscription, where: s.id == ^sub.id, select: count(s.id)))
+        end)
       end)
 
     assert outcome == {:returned, 0},
@@ -179,6 +166,99 @@ defmodule Engram.Billing.SubscriptionsRlsTest do
                end)
 
       assert Keyword.has_key?(errors, :paddle_subscription_id)
+    end
+  end
+
+  describe "webhook discovery (no tenant set)" do
+    defp event(type, sub, status, price_id) do
+      %{
+        "event_type" => type,
+        "data" => %{
+          "id" => sub.paddle_subscription_id,
+          "status" => status,
+          "customer_id" => sub.paddle_customer_id,
+          "items" => [%{"price" => %{"id" => price_id}}],
+          "current_billing_period" => %{"ends_at" => "2026-12-01T00:00:00Z"}
+        }
+      }
+    end
+
+    test "subscription.updated finds the row by paddle id on the app pool", %{sub: sub} do
+      # Committing harness: the write is the point, and the discovery read +
+      # tenant-scoped update never raise. Read back on the same connection.
+      assert {:ok, %Subscription{status: "past_due", tier: "pro"}} =
+               as_prod_role_committing(fn ->
+                 Billing.upsert_from_paddle_event(
+                   event("subscription.updated", sub, "past_due", "pri_pro_monthly_test")
+                 )
+               end)
+
+      assert %Subscription{status: "past_due"} =
+               Repo.get!(Subscription, sub.id, skip_tenant_check: true)
+    end
+
+    test "subscription.canceled persists, it is not a silent not_found no-op", %{sub: sub} do
+      assert {:ok, %Subscription{status: "canceled"}} =
+               as_prod_role_committing(fn ->
+                 Billing.upsert_from_paddle_event(
+                   event("subscription.canceled", sub, "canceled", "pri_starter_monthly_test")
+                 )
+               end)
+
+      assert %Subscription{status: "canceled"} =
+               Repo.get!(Subscription, sub.id, skip_tenant_check: true)
+    end
+
+    test "discovery still works after a COMPLETED tenant block earlier in the same transaction",
+         %{user: user, sub: sub} do
+      # Sandbox leak-forward trap (traps doc, trap 2): an earlier with_tenant
+      # must neither leave its tenant behind nor break the no-tenant read.
+      assert {:returned, {:ok, %Subscription{status: "past_due"}}} =
+               as_prod_role(fn ->
+                 _ = Billing.get_subscription(user)
+
+                 Billing.upsert_from_paddle_event(
+                   event("subscription.updated", sub, "past_due", "pri_pro_monthly_test")
+                 )
+               end)
+    end
+
+    test "CONTROL: with another tenant set, a foreign INSERT raises 42501", %{user: user} do
+      other = insert(:user)
+
+      assert {:raised, %Postgrex.Error{postgres: %{code: :insufficient_privilege}}} =
+               as_prod_role(fn ->
+                 Repo.with_tenant!(other.id, fn ->
+                   Repo.insert!(
+                     %Subscription{user_id: user.id, tier: "pro", status: "active"},
+                     skip_tenant_check: true
+                   )
+                 end)
+               end)
+    end
+
+    test "unscoped UPDATE and DELETE report 0 rows (discovery widens SELECT only)", %{sub: sub} do
+      # Committing harness: filtered writes never raise, and the persisted
+      # effect (row still "active", still present) is the assertion.
+      assert {{0, nil}, {0, nil}} =
+               as_prod_role_committing(fn ->
+                 q = from(s in Subscription, where: s.id == ^sub.id)
+
+                 {Repo.update_all(q, [set: [status: "canceled"]], skip_tenant_check: true),
+                  Repo.delete_all(q, skip_tenant_check: true)}
+               end)
+
+      assert %Subscription{status: "active"} =
+               Repo.get!(Subscription, sub.id, skip_tenant_check: true)
+    end
+
+    test "unscoped INSERT raises 42501", %{user: user} do
+      assert {:raised, %Postgrex.Error{postgres: %{code: :insufficient_privilege}}} =
+               as_prod_role(fn ->
+                 Repo.insert!(%Subscription{user_id: user.id, tier: "pro", status: "active"},
+                   skip_tenant_check: true
+                 )
+               end)
     end
   end
 end
