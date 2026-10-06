@@ -1022,8 +1022,8 @@ defmodule Engram.Notes do
   # #1710: a relocate/resurrect that changed content (uncheckpointed CRDT tail
   # folded in by move_note) may have closed a version. Enqueue its finalize
   # here, after the transaction committed, the same post-commit position as
-  # ContentCommit.after_commit/3. The flag is Revisions.finalize?/3. Strips it so the clauses above see the
-  # plain 3-tuple.
+  # ContentCommit.after_commit/3. The flag is Revisions.finalize?/3; strip it
+  # so the clauses above see the plain 3-tuple.
   defp finalize_moved_revision({:ok, {:ok, note, tag, finalize?}}, user) do
     _ =
       if finalize?,
