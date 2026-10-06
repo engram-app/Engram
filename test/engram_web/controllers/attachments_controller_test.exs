@@ -538,6 +538,25 @@ defmodule EngramWeb.AttachmentsControllerTest do
       end
     end
 
+    test "422 for a non-string mime_type, raw or JSON", %{conn: conn} do
+      conn1 =
+        conn
+        |> put_req_header("content-type", "application/octet-stream")
+        |> post("/api/attachments?path=m.png&mime_type[]=image/png", @sample_content)
+
+      assert json_response(conn1, 422)["error"] == "mime_type must be a string"
+
+      conn2 =
+        post(conn, "/api/attachments", %{
+          path: "m.png",
+          content_base64: @sample_base64,
+          mime_type: %{"a" => "b"}
+        })
+
+      assert json_response(conn2, 422)["error"] == "mime_type must be a string"
+      assert conn |> get("/api/attachments/m.png") |> json_response(404)
+    end
+
     test "an absent mtime stores nil, as on the JSON path", %{conn: conn} do
       conn1 = raw_post(conn, %{path: "nomtime.png"}, @sample_content)
       assert json_response(conn1, 200)

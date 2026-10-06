@@ -20,7 +20,7 @@ defmodule EngramWeb.AttachmentsController do
         "is also limited to text MIME types), the MIME type and extension must pass the whitelist " <>
         "(415), the file must be within the per-plan size and total-quota limits (402), a raw body " <>
         "over the request ceiling returns 413, a raw body that stalls returns 408, a non-numeric " <>
-        "`mtime` returns 422, and a storage backend failure returns 502.",
+        "`mtime` or `mime_type` returns 422, and a storage backend failure returns 502.",
     tags: ["Attachments"],
     parameters: [
       path: [
@@ -80,13 +80,16 @@ defmodule EngramWeb.AttachmentsController do
         do_upload_gated(conn, user, params)
 
       {:error, :feature_not_available} ->
-        conn |> attachments_disabled()
+        attachments_disabled(conn)
     end
   end
 
   defp do_upload_gated(conn, user, params) do
-    case params["path"] do
-      path when is_binary(path) and path != "" ->
+    case params do
+      %{"mime_type" => mime} when mime != nil and not is_binary(mime) ->
+        conn |> put_status(422) |> json(%{error: "mime_type must be a string"})
+
+      %{"path" => path} when is_binary(path) and path != "" ->
         do_upload_gated(conn, user, params, path)
 
       _ ->
