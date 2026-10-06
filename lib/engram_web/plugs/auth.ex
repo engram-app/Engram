@@ -20,10 +20,13 @@ defmodule EngramWeb.Plugs.Auth do
 
   def init(opts), do: opts
 
+  # Every branch loads the subscription once (Billing.with_subscription/1) so
+  # the downstream billing gates (RequireOnboarding, RequireApiRpsBudget,
+  # RequireApiWriteEnabled) reuse it instead of each re-querying.
   def call(conn, _opts) do
     case authenticate(conn) do
       {:ok, user} ->
-        assign(conn, :current_user, with_billing_assoc(user))
+        assign(conn, :current_user, Engram.Billing.with_subscription(user))
 
       {:ok, user, :internal_jwt} ->
         # Device-flow / OAuth / MCP access tokens. Downstream cap plugs use
@@ -31,12 +34,12 @@ defmodule EngramWeb.Plugs.Auth do
         # gating the web SPA (which authes with a Clerk JWT and gets no
         # marker — falls into the bare 2-tuple branch above).
         conn
-        |> assign(:current_user, with_billing_assoc(user))
+        |> assign(:current_user, Engram.Billing.with_subscription(user))
         |> assign(:current_auth_method, :internal_jwt)
 
       {:ok, user, api_key} ->
         conn
-        |> assign(:current_user, with_billing_assoc(user))
+        |> assign(:current_user, Engram.Billing.with_subscription(user))
         |> assign(:current_api_key, api_key)
 
       {:error, reason} ->
@@ -59,22 +62,6 @@ defmodule EngramWeb.Plugs.Auth do
     case get_req_header(conn, "authorization") do
       ["Bearer " <> token] -> Engram.Auth.TokenResolver.resolve(token)
       _ -> {:error, :no_auth}
-    end
-  end
-
-  # Load the subscription once here so the downstream billing gates
-  # (RequireOnboarding, RequireApiRpsBudget, RequireApiWriteEnabled) reuse the
-  # preloaded assoc instead of each re-querying. Skipped in self-host mode,
-  # where no billing gate runs and the extra read would be pure waste.
-  #
-  # Under the user's own tenant (#1758): unscoped, an enforced `subscriptions`
-  # policy returns no row, every paying user resolves `:free`, and
-  # RequireOnboarding locks them out.
-  defp with_billing_assoc(user) do
-    if Application.get_env(:engram, :billing_enabled, false) do
-      Engram.Repo.with_tenant!(user.id, fn -> Engram.Repo.preload(user, :subscription) end)
-    else
-      user
     end
   end
 
