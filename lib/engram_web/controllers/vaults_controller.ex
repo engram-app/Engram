@@ -73,10 +73,6 @@ defmodule EngramWeb.VaultsController do
           payload
           |> Map.put(:suggested_vault_name, suggested)
           |> Map.put(:user_code_valid, valid)
-          |> Map.put(
-            :device_user_agent,
-            (valid && DeviceFlow.pending_user_agent(code, user.id)) || nil
-          )
 
         _ ->
           payload

@@ -14,9 +14,6 @@ defmodule Engram.Repo.Migrations.AddLabelToDeviceFlowExpand do
   def change do
     alter table(:device_authorizations) do
       add :label, :text
-      # The plugin's User-Agent at device-flow start, so /link can suggest a
-      # label ("Windows PC"). Lives only as long as the 5-minute pending row.
-      add :user_agent, :text
     end
 
     alter table(:device_refresh_tokens) do

@@ -165,7 +165,6 @@ function DeviceLinkPage() {
 				vaults: Vault[];
 				suggested_vault_name?: string | null;
 				user_code_valid?: boolean;
-				device_user_agent?: string | null;
 			}>(`/vaults?user_code=${encodeURIComponent(formattedCode)}`);
 			// This endpoint answers 200 with the caller's vault list whether or not
 			// the code is real — `user_code_valid` is the only validity signal, and
@@ -185,9 +184,8 @@ function DeviceLinkPage() {
 				return;
 			}
 			setVaults(data.vaults ?? []);
-			// The plugin's own User-Agent, not this browser's: the browser may be on a
-			// different machine from the Obsidian being linked.
-			setLabel(guessDeviceLabel(data.device_user_agent) ?? "");
+			// Assumes the browser is on the device being linked; editable when not.
+			setLabel((await guessDeviceLabel()) ?? "");
 			const suggested = data.suggested_vault_name?.trim() || "";
 			setSuggestedName(suggested);
 			// Default selection:

@@ -24,11 +24,7 @@ defmodule Engram.Auth.DeviceFlow do
   # Characters excluding ambiguous: 0, O, 1, I, L
   @user_code_chars ~c"ABCDEFGHJKMNPQRSTUVWXYZ2345679"
 
-  # Bound the stored header: it is attacker-controlled (the start endpoint is
-  # unauthenticated) and is returned to the user who claims the code.
-  @max_user_agent_bytes 512
-
-  def start_device_flow(client_id, vault_name \\ nil, user_agent \\ nil) do
+  def start_device_flow(client_id, vault_name \\ nil) do
     device_code = Base.encode16(:crypto.strong_rand_bytes(@device_code_bytes), case: :lower)
     user_code = generate_user_code()
 
@@ -44,8 +40,7 @@ defmodule Engram.Auth.DeviceFlow do
       client_id: client_id,
       status: "pending",
       expires_at: expires_at,
-      vault_name: vault_name,
-      user_agent: truncate_user_agent(user_agent)
+      vault_name: vault_name
     })
     |> Repo.insert(skip_tenant_check: true)
   end
@@ -99,26 +94,6 @@ defmodule Engram.Auth.DeviceFlow do
         :error
     end
   end
-
-  @doc """
-  The User-Agent the plugin sent at start, for the user who claimed the code
-  via `view_pending_code/2`. `nil` for anyone else.
-  """
-  @spec pending_user_agent(String.t(), String.t()) :: String.t() | nil
-  def pending_user_agent(user_code, user_id) when is_binary(user_id) do
-    Repo.one(
-      from(da in DeviceAuthorization,
-        where: da.user_code == ^user_code and da.viewer_user_id == ^user_id,
-        select: da.user_agent
-      ),
-      skip_tenant_check: true
-    )
-  end
-
-  defp truncate_user_agent(ua) when is_binary(ua),
-    do: binary_part(ua, 0, min(byte_size(ua), @max_user_agent_bytes))
-
-  defp truncate_user_agent(_), do: nil
 
   @doc """
   True when `device_code` names a real authorization that is still pending

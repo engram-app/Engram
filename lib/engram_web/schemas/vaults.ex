@@ -65,14 +65,6 @@ defmodule EngramWeb.Schemas.VaultsResponse do
           "Present only when a `user_code` query param is supplied (device-link flow). " <>
             "May be null for a perfectly valid code — check `user_code_valid`, not this."
       },
-      device_user_agent: %Schema{
-        type: :string,
-        nullable: true,
-        description:
-          "Present only when a `user_code` query param is supplied. The User-Agent the plugin " <>
-            "sent when it started the link, for suggesting a connection name. Null when the " <>
-            "code is invalid or the plugin sent none."
-      },
       user_code_valid: %Schema{
         type: :boolean,
         description:

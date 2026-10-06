@@ -36,22 +36,6 @@ defmodule EngramWeb.DeviceAuthControllerTest do
       assert resp["interval"] == 5
     end
 
-    test "records the plugin's User-Agent on the authorization row", %{conn: conn} do
-      conn =
-        conn
-        |> put_req_header("user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) Mobile")
-        |> post("/api/auth/device", %{client_id: "test_client"})
-
-      resp = json_response(conn, 200)
-
-      auth =
-        Repo.get_by!(Engram.Auth.DeviceAuthorization, [device_code: resp["device_code"]],
-          skip_tenant_check: true
-        )
-
-      assert auth.user_agent =~ "iPhone"
-    end
-
     test "persists optional vault_name on the authorization row", %{conn: conn} do
       reader = insert(:user)
 

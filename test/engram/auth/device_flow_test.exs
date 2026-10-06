@@ -99,20 +99,6 @@ defmodule Engram.Auth.DeviceFlowTest do
     end
   end
 
-  describe "device user agent" do
-    test "is stored at start, truncated, and shown only to the claiming viewer" do
-      viewer = insert(:user)
-      other = insert(:user)
-      {:ok, auth} = DeviceFlow.start_device_flow("c", nil, String.duplicate("u", 600))
-      assert byte_size(auth.user_agent) == 512
-
-      assert DeviceFlow.pending_user_agent(auth.user_code, other.id) == nil
-      {:ok, _} = DeviceFlow.view_pending_code(auth.user_code, viewer.id)
-      assert DeviceFlow.pending_user_agent(auth.user_code, viewer.id) == auth.user_agent
-      assert DeviceFlow.pending_user_agent(auth.user_code, other.id) == nil
-    end
-  end
-
   describe "authorize_device/3" do
     test "authorizes a pending device with user and vault" do
       user = insert(:user)

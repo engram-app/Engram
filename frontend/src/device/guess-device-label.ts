@@ -1,4 +1,57 @@
-function osOf(ua: string | null | undefined): string | null {
+// Client Hints (Chromium only). `model` is only populated on Android; desktop
+// Chromium gives a platform but no model; Safari and Firefox expose neither.
+interface UserAgentData {
+	platform?: string;
+	mobile?: boolean;
+	getHighEntropyValues?: (hints: string[]) => Promise<{ model?: string }>;
+}
+
+interface BrowserInfo {
+	userAgent: string;
+	maxTouchPoints?: number;
+	userAgentData?: UserAgentData;
+}
+
+// Android WebView and Chrome reduce the model to a bare "K" (UA reduction),
+// so a one-letter token is not a model name.
+const ANDROID_MODEL = /Android[^;)]*;\s*(?<model>[^;)]+?)(?:\s+Build\/[^;)]*)?[;)]/iu;
+
+function isModelName(model: string | undefined): model is string {
+	return Boolean(model) && (model?.length ?? 0) > 1 && !/^(?:wv|mobile)$/iu.test(model ?? "");
+}
+
+// A suggested connection name for the device this browser is on. iOS never
+// reports a model, so an iPhone is just "iPhone"; only Android sometimes does.
+export async function guessDeviceLabel(nav: BrowserInfo = navigator): Promise<string | null> {
+	const ua = nav.userAgent;
+	if (/ipad/iu.test(ua)) {
+		return "iPad";
+	}
+	if (/iphone|ipod/iu.test(ua)) {
+		return "iPhone";
+	}
+	if (/android/iu.test(ua)) {
+		const hinted = await nav.userAgentData?.getHighEntropyValues?.(["model"]).catch(() => null);
+		const model = hinted?.model?.trim() || ANDROID_MODEL.exec(ua)?.groups?.model?.trim();
+		return isModelName(model) ? model : "Android device";
+	}
+	if (/mac os|macintosh/iu.test(ua)) {
+		// iPadOS Safari reports a Mac user agent; only touch support gives it away.
+		return (nav.maxTouchPoints ?? 0) > 1 ? "iPad" : "Mac";
+	}
+	if (/windows/iu.test(ua)) {
+		return "Windows PC";
+	}
+	if (/cros/iu.test(ua)) {
+		return "Chromebook";
+	}
+	if (/linux/iu.test(ua)) {
+		return "Linux PC";
+	}
+	return null;
+}
+
+export function parseUserAgentOs(ua: string | null | undefined): string | null {
 	if (!ua) {
 		return null;
 	}
@@ -19,37 +72,3 @@ function osOf(ua: string | null | undefined): string | null {
 	}
 	return null;
 }
-
-// Android WebView and Chrome reduce the model to a bare "K" (UA reduction),
-// so a one-letter token is not a model name.
-const ANDROID_MODEL = /Android[^;)]*;\s*(?<model>[^;)]+?)(?:\s+Build\/[^;)]*)?[;)]/iu;
-
-// A suggested connection name from the plugin's User-Agent. iOS never reports
-// the model, so an iPhone is just "iPhone"; only Android sometimes does.
-export function guessDeviceLabel(ua: string | null | undefined): string | null {
-	if (!ua) {
-		return null;
-	}
-	if (/ipad/iu.test(ua)) {
-		return "iPad";
-	}
-	if (/iphone|ipod/iu.test(ua)) {
-		return "iPhone";
-	}
-	if (/android/iu.test(ua)) {
-		const model = ANDROID_MODEL.exec(ua)?.groups?.model?.trim();
-		return model && model.length > 1 && !/^(?:wv|mobile)$/iu.test(model) ? model : "Android device";
-	}
-	switch (osOf(ua)) {
-		case "macOS":
-			return "Mac";
-		case "Windows":
-			return "Windows PC";
-		case "Linux":
-			return "Linux PC";
-		default:
-			return null;
-	}
-}
-
-export { osOf as parseUserAgentOs };

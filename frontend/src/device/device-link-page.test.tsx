@@ -137,6 +137,7 @@ function renderPage(entry = "/link") {
 }
 
 afterEach(() => {
+	vi.restoreAllMocks();
 	vi.clearAllMocks();
 	// A handoff is per-tab and survives a render; without this a stash from one
 	// test would be consumed by the next.
@@ -520,18 +521,12 @@ describe("DeviceLinkPage", () => {
 			);
 		});
 
-		it("suggests a label from the plugin's user agent", async () => {
-			get.mockResolvedValue({
-				vaults: [{ id: 7, name: "Personal", note_count: 3 }],
-				device_user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) obsidian/1.8.9",
-			});
-			post.mockResolvedValue({ ok: true, vault_id: 7 });
-			renderPage();
-			fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), {
-				target: { value: "ENGR7X4K" },
-			});
-			fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
-			const input = await screen.findByLabelText(/name this connection/iu);
+		it("suggests a label for the device this browser is on", async () => {
+			vi.spyOn(window.navigator, "userAgent", "get").mockReturnValue(
+				"Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130",
+			);
+			await reachPicker([{ id: 7, name: "Personal", note_count: 3 }]);
+			const input = screen.getByLabelText(/name this connection/iu);
 			expect(input).toHaveValue("Windows PC");
 			fireEvent.click(screen.getByRole("radio", { name: /personal/iu }));
 			fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
@@ -543,8 +538,9 @@ describe("DeviceLinkPage", () => {
 			);
 		});
 
-		it("omits the label when left blank", async () => {
+		it("omits the label when the user clears it", async () => {
 			await reachPicker([{ id: 7, name: "Personal", note_count: 3 }]);
+			fireEvent.change(screen.getByLabelText(/name this connection/iu), { target: { value: "" } });
 			fireEvent.click(screen.getByRole("radio", { name: /personal/iu }));
 			fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
 			await waitFor(() => expect(post).toHaveBeenCalled());
