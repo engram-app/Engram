@@ -70,4 +70,20 @@ defmodule Engram.DataMigrations.IndexVersionsTest do
     set!(note, chunker_version: 0, deleted_at: DateTime.utc_now(:second))
     assert IndexVersions.run_pass() == :done
   end
+
+  # Restoring the vault is healed by ReconcileEmbeddings' daily re-verify,
+  # not by holding this open.
+  test "a stale note in a soft-deleted vault does not keep it open", %{user: u, vault: v} do
+    note = insert(:note, user: u, vault: v)
+    current!(note)
+    set!(note, chunker_version: 0)
+
+    Repo.update_all(
+      from(x in Engram.Vaults.Vault, where: x.id == ^v.id),
+      [set: [deleted_at: DateTime.utc_now(:second)]],
+      skip_tenant_check: true
+    )
+
+    assert IndexVersions.run_pass() == :done
+  end
 end

@@ -75,18 +75,43 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
     end
 
     # Once IndexVersions is done, no content-current note is on an old
-    # version, so the sweep stops looking for them.
+    # version, so the sweep stops looking for them, except on one tick a day.
     test "once IndexVersions is done, a version-stale note is not swept" do
       user = insert(:user)
       insert(:subscription, user: user, tier: "pro", status: "active")
       note = current_note(user, chunker_version: nil, keyword_version: nil)
       :ok = Engram.DataMigrations.mark_done(Engram.DataMigrations.IndexVersions.name(), 1)
 
-      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick(~T[03:57:00]))
 
       refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
       refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
       refute_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
+    end
+
+    # A rollback then roll-forward, or a restored soft-deleted vault, leaves
+    # version-stale notes after the migration closed. The daily tick heals them.
+    test "once IndexVersions is done, the daily tick still sweeps a version-stale note" do
+      user = insert(:user)
+      insert(:subscription, user: user, tier: "pro", status: "active")
+      note = current_note(user, chunker_version: nil, keyword_version: nil)
+      :ok = Engram.DataMigrations.mark_done(Engram.DataMigrations.IndexVersions.name(), 1)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick(~T[04:02:00]))
+
+      assert_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
+    end
+
+    test "once IndexVersions is done, the keyword sweep runs only on the daily tick" do
+      user = insert(:user)
+      note = current_note(user, keyword_version: nil)
+      :ok = Engram.DataMigrations.mark_done(Engram.DataMigrations.IndexVersions.name(), 1)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick(~T[04:07:00]))
+      refute_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick(~T[04:02:00]))
+      assert_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
     end
 
     # A model switch (a self-hoster changing Ollama models) leaves old-model
@@ -700,4 +725,6 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       0 -> n
     end
   end
+
+  defp tick(time), do: DateTime.new!(Date.utc_today(), time)
 end

@@ -101,7 +101,17 @@ model version renames the migration (its name carries all three), which reopens
 both scans. No operator step is involved; see
 `docs/context/data-migrations-ledger.md`.
 
-**Rolling-deploy window.** An old-release node can still stamp the previous
-chunker or keyword version on a note after the new release marked the new name
-done. That note is not re-swept until the next version bump. The window is
-narrow because a full rebuild outlasts a node drain.
+**Daily re-verify.** Done does not stay true by itself. Three things put
+version-stale notes back after the migration closed, and none renames it:
+
+- a rollback then roll-forward (the old release re-stamps old versions, then
+  the new name is already done);
+- restoring a soft-deleted vault (its notes were excluded while deleted);
+- a rolling deploy, where an old-release node stamps an old version after a
+  new node marked the new name done.
+
+So `ReconcileEmbeddings` still runs the version term and the keyword sweep on
+one tick a day: the 04:02 UTC cron tick (any job scheduled 04:00 <= t < 04:05
+UTC). It is a pure function of the job's `scheduled_at`, with no extra cron
+entry and no state. A stale note is healed within a day; the cost is one
+unindexed keyword scan per day.

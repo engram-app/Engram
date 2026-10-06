@@ -64,7 +64,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # enqueues `EmbedNote` jobs — it never decrypts or re-encrypts any payload.
   # The enqueued EmbedNote workers are individually gated via `RotationGate`.
   @impl Oban.Worker
-  def perform(%Oban.Job{args: args}) do
+  def perform(%Oban.Job{args: args, scheduled_at: scheduled_at}) do
     page_size = Map.get(args, "page", @page)
 
     # Pages through every tenant's stale notes: one pass on the maintenance
@@ -96,8 +96,10 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     # Once IndexVersions is done no content-current note is on an old
     # version: skip the version term and the keyword scan (an unindexed
     # per-tenant scan every 5 min). A version bump renames the migration,
-    # which reopens both.
-    versions_done = IndexVersions.done?()
+    # which reopens both. Except on the daily re-verify tick: a rollback then
+    # roll-forward, or a restored soft-deleted vault, puts version-stale notes
+    # back after the migration closed, and nothing would reopen it.
+    versions_done = IndexVersions.done?() and not daily_reverify?(scheduled_at)
     version_stale = if versions_done, do: dynamic(false), else: IndexVersions.stale_dynamic()
 
     sweep_tenant = fn repo, remaining ->
@@ -224,6 +226,12 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
     if versions_done, do: :ok, else: sweep_keyword_stale(now, paid, page_size)
   end
+
+  # The one tick a day (cron "2-59/5": 04:02 UTC) that re-checks index
+  # versions after IndexVersions is done. A pure function of the job's time:
+  # no extra cron entry, no state. A kick landing in the window counts too.
+  defp daily_reverify?(%DateTime{hour: 4, minute: minute}) when minute < 5, do: true
+  defp daily_reverify?(_scheduled_at), do: false
 
   # Runs `sweep.(repo)` over every tenant: once on the maintenance pool
   # (which sees every tenant) where one is configured, as prod does; else
