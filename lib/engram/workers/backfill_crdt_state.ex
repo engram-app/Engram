@@ -52,10 +52,10 @@ defmodule Engram.Workers.BackfillCrdtState do
   via `AadRebind.rebind_note/2` and then seeded, in one tenant transaction.
 
   After each seed the note's resident room, if any, is evicted so the next
-  bind loads the seeded state. Eviction goes through `:global`, so a job on a
-  multi-node fleet with no connected peers seeds nothing
-  (`Engram.Cluster.Readiness.rooms_reachable?/1`) and leaves the rows for the
-  next pass.
+  bind loads the seeded state. Eviction goes through `:global`, so before each
+  seed the job checks it is connected to every node that can host a room
+  (`Engram.Cluster.Readiness.rooms_reachable?/1`). The first miss ends the
+  batch: the rest of its rows are left for the next pass.
 
   Driven by the `Engram.DataMigrations.CrdtStateSeed` data migration
   (`enqueue_missing/0`), never by hand.
@@ -151,29 +151,31 @@ defmodule Engram.Workers.BackfillCrdtState do
     case RotationGate.check(user_id) do
       {:error, :rotation_in_progress} -> {:snooze, 60}
       {:error, :user_not_found} -> {:discard, :user_deleted}
-      :ok -> run_if_rooms_reachable(user_id, vault_id, cursor)
+      :ok -> run(user_id, vault_id, cursor)
     end
   end
 
   # Every seed evicts the note's resident room (seed_note/2), through `:global`.
   # In a split fleet this job runs on the worker and rooms live on web nodes;
   # partitioned, `terminate_room/1` finds nothing, and an open EMPTY room would
-  # survive the seed and start a second lineage on its next edit. So write
-  # nothing and leave the rows: `CrdtStateSeed` stays open and re-enqueues on
-  # its next pass. A single node hosts its own rooms and always proceeds.
-  defp run_if_rooms_reachable(user_id, vault_id, cursor) do
+  # survive the seed and start a second lineage on its next edit. So this is
+  # checked before EVERY seed, and the first miss ends the batch: nothing more
+  # is written and no successor is enqueued. `CrdtStateSeed` stays open and
+  # re-enqueues from the start on its next pass. A single node hosts its own
+  # rooms and always proceeds.
+  defp rooms_reachable?(vault_id) do
     # Test seam only, like HealthController's :cluster_readiness_opts.
     opts = Application.get_env(:engram, :crdt_room_reach_opts, [])
 
     if Readiness.rooms_reachable?(opts) do
-      run(user_id, vault_id, cursor)
+      true
     else
       Logger.warning(
-        "crdt_state backfill skipped vault: no connected peers, CRDT rooms unreachable",
+        "crdt_state backfill stopped: CRDT rooms not reachable on every node",
         Metadata.with_category(:warning, :sync, vault_id: vault_id)
       )
 
-      :ok
+      false
     end
   end
 
@@ -204,13 +206,21 @@ defmodule Engram.Workers.BackfillCrdtState do
         |> Repo.all()
       end)
 
-    Enum.each(ids, fn id -> seed_note(user, id) end)
+    finished =
+      Enum.reduce_while(ids, true, fn id, true ->
+        if rooms_reachable?(vault.id) do
+          :ok = seed_note(user, id)
+          {:cont, true}
+        else
+          {:halt, false}
+        end
+      end)
 
     # A full batch means more remain — re-enqueue the next cursor. Bind the whole
     # `if` (it yields the insert result or nil) so its value isn't a discarded
     # non-trivial return (:unmatched_returns).
     _ =
-      if length(ids) == limit do
+      if finished and length(ids) == limit do
         %{"user_id" => user.id, "vault_id" => vault.id, "cursor" => List.last(ids)}
         |> __MODULE__.new()
         |> Oban.insert()

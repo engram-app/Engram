@@ -203,52 +203,85 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
     assert %Note{crdt_state_ciphertext: nil} = reload(user, note.id)
   end
 
+  # A clustered worker whose discovery shows two web nodes (and itself).
+  defp put_reach(peers_fun) do
+    Application.put_env(:engram, :crdt_room_reach_opts,
+      role: :worker,
+      query: "engram.local",
+      sync: fn -> :ok end,
+      self_ip: "10.0.0.9",
+      resolver: fn _ -> ["10.0.0.2", "10.0.0.3", "10.0.0.9"] end,
+      peers: peers_fun
+    )
+
+    on_exit(fn -> Application.delete_env(:engram, :crdt_room_reach_opts) end)
+  end
+
+  @full_fleet [:"engram@10.0.0.2", :"engram@10.0.0.3"]
+
+  defp perform_vault(user, vault) do
+    perform_job(BackfillCrdtState, %{
+      "user_id" => user.id,
+      "vault_id" => vault.id,
+      "cursor" => "00000000-0000-0000-0000-000000000000"
+    })
+  end
+
   # In prod this runs on the worker node and rooms live on web nodes, reached
   # through :global. Partitioned, terminate_room/1 sees no room, so an open
   # empty room would survive the seed. Leave the rows for the next pass.
   test "does not seed when the node cannot reach other nodes' rooms", ctx do
     %{user: user, vault: vault} = ctx
     note = legacy_note(user, vault, "partitioned.md", "BODY")
+    put_reach(fn -> [] end)
 
-    Application.put_env(:engram, :crdt_room_reach_opts,
-      role: :worker,
-      query: "engram.local",
-      peers: fn -> [] end
-    )
-
-    on_exit(fn -> Application.delete_env(:engram, :crdt_room_reach_opts) end)
-
-    assert :ok =
-             perform_job(BackfillCrdtState, %{
-               "user_id" => user.id,
-               "vault_id" => vault.id,
-               "cursor" => "00000000-0000-0000-0000-000000000000"
-             })
+    assert :ok = perform_vault(user, vault)
 
     assert %Note{crdt_state_ciphertext: nil} = reload(user, note.id)
     refute_enqueued(worker: BackfillCrdtState)
   end
 
-  test "seeds on a clustered worker that has a peer", ctx do
+  test "does not seed when connected to only part of the fleet", ctx do
+    %{user: user, vault: vault} = ctx
+    note = legacy_note(user, vault, "partial.md", "BODY")
+    put_reach(fn -> [:"engram@10.0.0.2"] end)
+
+    assert :ok = perform_vault(user, vault)
+
+    assert %Note{crdt_state_ciphertext: nil} = reload(user, note.id)
+  end
+
+  test "seeds on a clustered worker connected to every discovered node", ctx do
     %{user: user, vault: vault} = ctx
     note = legacy_note(user, vault, "joined.md", "BODY")
+    put_reach(fn -> @full_fleet end)
 
-    Application.put_env(:engram, :crdt_room_reach_opts,
-      role: :worker,
-      query: "engram.local",
-      peers: fn -> [:"engram@10.0.0.2"] end
-    )
-
-    on_exit(fn -> Application.delete_env(:engram, :crdt_room_reach_opts) end)
-
-    assert :ok =
-             perform_job(BackfillCrdtState, %{
-               "user_id" => user.id,
-               "vault_id" => vault.id,
-               "cursor" => "00000000-0000-0000-0000-000000000000"
-             })
+    assert :ok = perform_vault(user, vault)
 
     refute is_nil(reload(user, note.id).crdt_state_ciphertext)
+  end
+
+  # The cluster can split mid-batch. Each seed re-checks; once rooms are out of
+  # reach the rest of the batch is left untouched, and no successor job is
+  # enqueued past them (the next CrdtStateSeed pass starts over).
+  test "stops seeding the batch once rooms become unreachable mid-batch", ctx do
+    %{user: user, vault: vault} = ctx
+    notes = for i <- 1..3, do: legacy_note(user, vault, "flip-#{i}.md", "BODY #{i}")
+    Application.put_env(:engram, :crdt_state_backfill_batch_size, 3)
+    on_exit(fn -> Application.delete_env(:engram, :crdt_state_backfill_batch_size) end)
+
+    {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+    put_reach(fn ->
+      if Agent.get_and_update(calls, &{&1, &1 + 1}) == 0, do: @full_fleet, else: []
+    end)
+
+    assert :ok = perform_vault(user, vault)
+
+    [first | rest] = Enum.sort_by(notes, & &1.id)
+    refute is_nil(reload(user, first.id).crdt_state_ciphertext)
+    for n <- rest, do: assert(%Note{crdt_state_ciphertext: nil} = reload(user, n.id))
+    refute_enqueued(worker: BackfillCrdtState)
   end
 
   # A tail that commits between the batch select and the seed UPDATE: the
