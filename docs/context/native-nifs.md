@@ -86,6 +86,35 @@ insert comes back as a byte range so Elixir slices it with `binary_part`:
 | 1 MB emoji, mid edit | 672 ms | 12 ms |
 | 1 MB full replace | 2,044 ms | 13 ms |
 
+Measured on the MCP section outline (`md_outline`, 2026-10-06,
+`Sections.find/4` end to end through ParseGate, min of 5-20 interleaved,
+loaded box; notes with headings, lists, fences, callouts, `%%` and `$$`, so both
+parses run; #1877). Before, `Sections.scan/1` had mdex_native build comrak's
+whole AST as BEAM terms and walked it in Elixir. Now Rust parses with the
+same comrak (pinned `=0.55.0`, same options) and returns only the headings,
+explained lines and safe ranges. "Heap" is the parse task's peak; the old
+native peak was there too but invisible (mdex_native allocates with malloc):
+
+| Input | Before: time / heap | After: time / heap / native peak |
+|---|---|---|
+| 5 KB | 2.6 ms / 301 KB | 2.8 ms / 13 KB / 140 KB |
+| 100 KB | 47 ms / 5.7 MB | 19 ms / 257 KB / 4.0 MB |
+| 1 MB | 746 ms / 49.8 MB | 264 ms / 2.6 MB / 34 MB |
+
+At 5 KB the gate's task and the dirty hop dominate, so only the heap
+shrinks (the inline variant, since dropped, ran it in 1.2 ms).
+
+comrak itself is the floor: dense markup (1 MB of `# h` lines, a tight
+list, a setext run) takes 1-2.5 s either way, and its arena keeps every node
+with its raw content, ~100-250x the note (252x on a tight list). That is
+why ParseGate still bounds concurrent parses, and why the first tree is
+dropped before the `%%`/`$$` re-parse (it halved a mixed note's peak).
+Segmenting the parse like `links::segmented` is the upgrade path if a big
+note's peak matters. Parity: a 103,000-note live differential against the
+old scan, then `md_outline_golden.json.gz` (2,508 notes). The only
+divergence was an old bug: two `$$` pairs sharing a CRLF line shifted every
+later line number by one.
+
 Measured on the keyword encoder (dev box, minimum of 5 interleaved runs):
 
 | Input | Elixir | Rust | Native peak |
@@ -238,7 +267,9 @@ bumping pulldown-cmark: `ENGRAM_FUZZ_CASES=2000000 ENGRAM_FUZZ_SEED=7 cargo test
 EXCEPT small inputs on a hot path. Nine NIFs export a normal and a
 `_dirty_nif` variant: `link_extract`, `note_title`, `note_meta`, `chunk`,
 `frontmatter_split`, `frontmatter_parse`, `text_diff`, `hmac_hex_many`,
-`json_decode`. Up to 16 KB of input (`@inline_max`, well under 1 ms) runs
+`json_decode`. `md_outline` does not: comrak takes ~10 ms on 16 KB of
+dense markup (tight list, `# h` lines; 0.1 ms on prose), so it is always
+dirty. Up to 16 KB of input (`@inline_max`, well under 1 ms) runs
 on the calling scheduler. A note write must not queue behind a long
 keyword encode on the one dirty scheduler, and the hop alone cost ~20 us.
 
@@ -252,7 +283,7 @@ Telemetry metadata carries `dirty: true | false`.
 Dirty CPU schedulers cannot be preempted and default to one per normal
 scheduler. **Prod tasks run ONE** (`task_cpu_units = 512` → `BEAM_SCHEDULERS=1`,
 `+SDcpu 1:1`, engram-infra `main/envs/prod/ecs.tf`, `rel/env.sh.eex`), shared
-with lingua and mdex_native. Calls queue behind each other there, which is
+with lingua. Calls queue behind each other there, which is
 fine while each is short (the keyword encode is ~0.25 s per MB). If a NIF ever
 runs for seconds per call in prod, chunk the input or raise `+SDcpu` before
 adding callers.

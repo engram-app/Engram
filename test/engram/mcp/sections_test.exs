@@ -855,4 +855,14 @@ defmodule Engram.MCP.SectionsTest do
     content = "## A\ntext $$a$$\n---\n## B\n"
     assert lt(content) == [{0, "A"}, {1, "text $$a$$"}, {3, "B"}]
   end
+
+  # Two math pairs sharing a line (`$$ ... $$` on the middle one) blank
+  # overlapping line ranges. The Elixir masker assumed disjoint ranges and
+  # re-inserted the shared line, whose "\r" then counted as an extra line:
+  # B was reported one line late, so a section read of A included "# B".
+  test "math pairs sharing a CRLF line keep line numbers" do
+    content = "# A\n\n$$\nx $$ y $$\r\nz\n$$\n\n# B\nbody\n"
+    assert lt(content) == [{0, "A"}, {7, "B"}]
+    assert {:ok, %{stop: 7, hidden_heading_at: nil}} = Sections.find(content, "A", 1)
+  end
 end

@@ -3,9 +3,11 @@ defmodule Engram.MCP.ParseGate do
   Bounds how many markdown parses (`Engram.MCP.Sections`) run at once on this
   node, instead of capping note size.
 
-  A comrak parse is a dirty-CPU NIF: linear, but pathological markup can take
-  seconds per MB, and a dirty NIF cannot be interrupted. Unbounded, a few
-  outline calls over big notes could occupy every dirty CPU scheduler.
+  The parse is `Engram.Native.md_outline/1` (comrak), on a dirty CPU
+  scheduler above 16 KB. It is linear, but dense markup still takes ~1-2 s
+  per MB, a dirty NIF cannot be interrupted, and comrak's tree peaks at
+  ~100-250x the note in native memory. Unbounded, a few outline calls over
+  big notes could occupy every dirty CPU scheduler and stack those peaks.
 
   `run/2` does the work in a task under `Engram.TaskSupervisor`. The TASK holds
   the slot (the gate monitors it), so the slot is released only when the parse
@@ -69,9 +71,11 @@ defmodule Engram.MCP.ParseGate do
   end
 
   @doc """
-  Slots for a node with `dirty` dirty CPU schedulers: all but one, so a
-  parse storm always leaves one for other dirty NIFs, and never fewer than
-  one (prod runs 0.5 vCPU with `+SDcpu 1:1`, see rel/env.sh.eex).
+  Slots for a node with `dirty` dirty CPU schedulers: all but one, never
+  fewer than one. With several, a parse storm leaves one for other dirty
+  NIFs. Prod runs ONE (0.5 vCPU, `+SDcpu 1:1`, see rel/env.sh.eex), so
+  there a parse does share it: the single slot only means other dirty NIFs
+  queue behind at most one parse, and one comrak tree is resident at a time.
   """
   @spec default_limit(pos_integer()) :: pos_integer()
   def default_limit(dirty) when is_integer(dirty), do: max(1, dirty - 1)

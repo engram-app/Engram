@@ -8,6 +8,7 @@ mod links;
 mod memory;
 mod meta;
 mod mmr;
+mod outline;
 mod text_diff;
 mod tokenizer;
 mod vectors;
@@ -378,5 +379,16 @@ fn text_diff(current: &str, incoming: &str) -> ((usize, usize, usize, usize), us
 }
 
 sized_nif!(text_diff, text_diff_nif, text_diff_dirty_nif, (current: &str, incoming: &str) [current, incoming] -> ((usize, usize, usize, usize), usize));
+
+/// `Engram.MCP.Sections`' view of a note: `{headings, explained_lines,
+/// safe_ranges}` (see outline.rs), and the peak. Raises on a sourcepos
+/// outside the text, as the Elixir version did. Always dirty: comrak takes
+/// ~10 ms on 16 KB of dense markup (a tight list, `# h` lines), far past
+/// what may run on a normal scheduler, and MCP calls do not feel the hop.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn md_outline_nif(content: &str) -> NifResult<(outline::Outline, usize)> {
+    let (o, peak) = memory::measured(|| outline::outline(content));
+    Ok((o.ok_or(Error::BadArg)?, peak))
+}
 
 rustler::init!("Elixir.Engram.Native");

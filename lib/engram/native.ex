@@ -54,7 +54,8 @@ defmodule Engram.Native do
     mmr_select_nif: 4,
     pack_f32_nif: 1,
     dense_json_nif: 1,
-    sparse_json_nif: 2
+    sparse_json_nif: 2,
+    md_outline_nif: 1
   ]
 
   # Stubs Rustler replaces on load.
@@ -114,6 +115,16 @@ defmodule Engram.Native do
   """
   def text_diff(current, incoming),
     do: sized(:text_diff, [current, incoming], [current, incoming])
+
+  @doc """
+  What `Engram.MCP.Sections` reads from a CommonMark parse (comrak):
+  `{[{line, level, setext, plain_text, raw | nil, span}], explained_lines,
+  safe_line_ranges}`, lines 0-indexed. Text and raw come untrimmed. Valid
+  UTF-8 only. Always on a dirty scheduler: 16 KB of dense markup takes
+  ~10 ms in comrak.
+  """
+  def md_outline(text) when is_binary(text),
+    do: call(:md_outline, text, %{dirty: true}, fn -> md_outline_nif(text) end)
 
   # `input` as for `call/4`; up to @inline_max bytes of it runs `<name>_nif`
   # on the calling scheduler, more runs `<name>_dirty_nif`.
