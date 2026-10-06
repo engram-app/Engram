@@ -1141,3 +1141,53 @@ Expected: all clean. If sobelow reports fingerprints moved by line shifts, regen
 git add docs/context/data-migrations-ledger.md AGENTS.md docs/context/index-version-self-heal.md
 git commit -m "docs: the data-migrations ledger standard"
 ```
+
+---
+
+## Round 2 (2026-10-06, after review): prune, cover every backfill, startup run, stuck flags
+
+Prod audit (read-only, 4,338 live notes): legacy MD5 hashes 0, missing basename_hmac 0, plaintext vault slugs 0, version-stale 0; NULL `crdt_state_ciphertext` 8; NULL `crdt_head` 1,095. Assumption from here on: no self-hosters exist today, so finished one-time backfills are deleted, not ported. After this PR, assume self-hosters exist.
+
+### Task 7: Delete the finished backfills
+
+**Delete** (code, tests, mix tasks, docs references, runner registration):
+- `Engram.DataMigrations.ContentHashHmac`, `Engram.Workers.BackfillContentHashHmac`, `Engram.ContentHash.Backfill`, `lib/mix/tasks/engram.content_hash_hmac.ex`.
+- `Engram.DataMigrations.NoteLinkHmacs`, `Engram.Workers.BackfillNoteLinks`, `Engram.Links.Backfill`, `lib/mix/tasks/engram.backfill_note_links.ex`.
+- `Engram.DataMigrations.VaultSlugHmac`, `Vaults.backfill_slug_hmacs/1` and its private helpers, their tests. The `vaults.slug` column itself stays (its contract-phase drop is separate).
+- `Engram.Workers.ReindexKeyword` and its tests. Keep `RefreshKeywordVectors` (ReconcileEmbeddings uses it).
+
+**Rules:**
+- Grep every reference first (`lib test config .github docs AGENTS.md`); `.github/workflows/verify.yml` names `ContentHash.Backfill` and `Links.Backfill`: read why and update it.
+- Update comments that point at deleted modules; never edit `priv/repo/migrations`.
+- Do NOT remove read-side compatibility code (e.g. code that still accepts a 32-char MD5 hash, or reads `vaults.slug`). List such places in the report instead; a later contract PR removes them.
+- If a deleted module's test file also covers behaviour that still exists elsewhere, move those cases, don't drop them.
+- `@migrations` becomes `[Engram.DataMigrations.IndexVersions]` (Task 8 adds more). Update the order test.
+- Docs: `data-migrations-ledger.md` and `AGENTS.md` lose the deleted entries; add a short "Pruned" note listing them with the prod audit date, so nobody re-adds them.
+
+**Tests:** full `test/engram/` subtree that referenced the deleted modules still passes; `mix compile --warnings-as-errors` clean.
+
+### Task 8: Put the remaining CRDT backfills on the system
+
+**CRDT state (repair, done-able):** register `Engram.DataMigrations.CrdtStateSeed` (`"crdt_state_seed"`, 1) that drives the existing `Engram.Workers.BackfillCrdtState`.
+- First read the worker and the warning at `lib/engram/crypto/user_dek_rotation.ex` ~140 and `lib/engram/crypto/aad_rebind.ex` ~220: seeding a lineage from content is wrong for a note whose real state is an un-checkpointed tail in `crdt_update_log`. The worker must only seed notes with NO tail rows. If it does not already guarantee that, add the guard in the worker's per-batch predicate (TDD: a NULL-state note WITH a tail row is not seeded).
+- `run_pass/0`: `jobs_in_flight?(BackfillCrdtState)` -> `:more`; else enqueue only pairs that have a seedable note (NULL state, kind note, not deleted, live vault, no tail rows), `:done` when there are none. Reuse/adapt `BackfillCrdtState.enqueue_all/0` into a targeted function, same pattern as round 1's ContentHash targeting.
+- Notes with NULL state AND a tail are not this migration's work (tail replay serves them); they are excluded from the done predicate.
+
+**CRDT head (continuing self-heal, never done):** heads go NULL on every edit and only `BackfillCrdtHead` re-warms them (no schedule today; 25% NULL in prod).
+- Add a cron worker `Engram.Workers.WarmCrdtHeads` on `:maintenance`, hourly at a free minute (check `oban_cron_test.exs` and the Minutes comment; :x3/:x8 pattern), which calls `BackfillCrdtHead.enqueue_all/0` unless `DataMigrations.jobs_in_flight?(Engram.Workers.BackfillCrdtHead)`.
+- It is not a DataMigration (it never finishes); document it in `data-migrations-ledger.md` under "continuing self-heals" so the distinction is explicit.
+- Tests: enqueues when a NULL-head note exists; no-op while jobs in flight; no-op with no NULL heads.
+
+### Task 9: Run the runner at startup
+
+- Add `{"@reboot", Engram.Workers.DataMigrationsRunner}` to the crontab (Oban Cron supports `@reboot`). Check `test/engram/oban_cron_test.exs` parses it; if its minute-slot logic chokes on `@reboot`, teach it to skip `@reboot` entries (they hold no minute), with a test.
+- The hourly entry stays. `unique: [period: 3000]` on the runner already prevents a boot run and the hourly run from overlapping; confirm a boot within the hour of a run is deduplicated, and say in the doc that this is intended.
+- Docs: ledger doc "When it runs" = at boot and hourly.
+
+### Task 10: Flag stuck migrations for review
+
+- Migration `20261006170000_create_data_migrations_expand.exs` has not shipped: edit it in place to add `opened_at timestamptz` and `alerted_at timestamptz`. Update `Entry`.
+- `DataMigrations`: `note_open(name, version)` upserts the row with `completed_at` nil when a pass returns `:more` or `:error`; it sets `opened_at = now()` on insert or when the stored version is lower (a reopen), and leaves `opened_at` alone otherwise.
+- Runner: after a `:more`/`:error` pass, if `now - opened_at > @stuck_after` (7 days) and (`alerted_at` nil or older than 24 h), log at `:error` "data migration stuck" with name, version, opened_at (Sentry picks up `:error`), then set `alerted_at`. One alert per migration per day.
+- Tests: an open migration younger than 7 days logs nothing; older logs once and not again within 24 h; a version bump resets `opened_at`; `mark_done` leaves the row closed.
+- Docs: "Stuck migrations" section: what triggers the alert, where it shows (Sentry), and the review steps (find the rows the migration's done predicate still matches, fix or explain them).
