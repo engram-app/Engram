@@ -3,6 +3,32 @@ defmodule Engram.Cluster.ReadinessTest do
 
   alias Engram.Cluster.Readiness
 
+  describe "rooms_reachable?/1 (can this node see every CRDT room?)" do
+    test "a single node (no role, no cluster query) hosts its own rooms" do
+      assert Readiness.rooms_reachable?(role: nil, query: nil, peers: fn -> [] end)
+    end
+
+    test "a worker with no peers cannot see the web nodes' rooms" do
+      refute Readiness.rooms_reachable?(role: :worker, query: "q", peers: fn -> [] end)
+    end
+
+    test "a declared role without a cluster query is still a split fleet" do
+      refute Readiness.rooms_reachable?(role: :worker, query: nil, peers: fn -> [] end)
+    end
+
+    test "a clustered node with no peers cannot see the other nodes' rooms" do
+      refute Readiness.rooms_reachable?(role: nil, query: "q", peers: fn -> [] end)
+    end
+
+    test "any connected peer makes the rooms reachable" do
+      assert Readiness.rooms_reachable?(
+               role: :worker,
+               query: "q",
+               peers: fn -> [:"engram@10.0.0.2"] end
+             )
+    end
+  end
+
   describe "decide/1 (pure gate decision)" do
     test "ready when any peer is connected" do
       assert :ready =

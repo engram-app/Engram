@@ -51,6 +51,12 @@ defmodule Engram.Workers.BackfillCrdtState do
   opens blank, which is the very failure above. So the row is rebound in place
   via `AadRebind.rebind_note/2` and then seeded, in one tenant transaction.
 
+  After each seed the note's resident room, if any, is evicted so the next
+  bind loads the seeded state. Eviction goes through `:global`, so a job on a
+  multi-node fleet with no connected peers seeds nothing
+  (`Engram.Cluster.Readiness.rooms_reachable?/1`) and leaves the rows for the
+  next pass.
+
   Driven by the `Engram.DataMigrations.CrdtStateSeed` data migration
   (`enqueue_missing/0`), never by hand.
   """
@@ -65,6 +71,7 @@ defmodule Engram.Workers.BackfillCrdtState do
 
   alias Engram.Accounts
   alias Engram.Backfill.TenantScan
+  alias Engram.Cluster.Readiness
   alias Engram.Crypto
   alias Engram.Crypto.AadRebind
   alias Engram.Crypto.RotationGate
@@ -144,7 +151,29 @@ defmodule Engram.Workers.BackfillCrdtState do
     case RotationGate.check(user_id) do
       {:error, :rotation_in_progress} -> {:snooze, 60}
       {:error, :user_not_found} -> {:discard, :user_deleted}
-      :ok -> run(user_id, vault_id, cursor)
+      :ok -> run_if_rooms_reachable(user_id, vault_id, cursor)
+    end
+  end
+
+  # Every seed evicts the note's resident room (seed_note/2), through `:global`.
+  # In a split fleet this job runs on the worker and rooms live on web nodes;
+  # partitioned, `terminate_room/1` finds nothing, and an open EMPTY room would
+  # survive the seed and start a second lineage on its next edit. So write
+  # nothing and leave the rows: `CrdtStateSeed` stays open and re-enqueues on
+  # its next pass. A single node hosts its own rooms and always proceeds.
+  defp run_if_rooms_reachable(user_id, vault_id, cursor) do
+    # Test seam only, like HealthController's :cluster_readiness_opts.
+    opts = Application.get_env(:engram, :crdt_room_reach_opts, [])
+
+    if Readiness.rooms_reachable?(opts) do
+      run(user_id, vault_id, cursor)
+    else
+      Logger.warning(
+        "crdt_state backfill skipped vault: no connected peers, CRDT rooms unreachable",
+        Metadata.with_category(:warning, :sync, vault_id: vault_id)
+      )
+
+      :ok
     end
   end
 

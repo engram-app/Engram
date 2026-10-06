@@ -72,6 +72,29 @@ defmodule Engram.Cluster.Readiness do
     end
   end
 
+  @doc """
+  Can this node reach every CRDT room in the fleet? Rooms are `:global`
+  (`Engram.Notes.CrdtRegistry`), so a node sees another node's rooms only
+  while connected to it.
+
+  A single node (no `ENGRAM_NODE_ROLE`, no `DNS_CLUSTER_QUERY`: self-host,
+  dev, test) hosts every room itself: `true`. Any multi-node shape (a role
+  declared, or a cluster query) needs at least one connected peer. Stricter
+  than `check/1`: `{:ready, :alone}` fails open on a discovery outage, which
+  is right for a deploy gate and wrong for a writer that must evict rooms.
+
+  Collaborators injectable via `opts` for tests: `:role`, `:query`, `:peers`.
+  """
+  @spec rooms_reachable?(keyword()) :: boolean()
+  def rooms_reachable?(opts \\ []) do
+    role = Keyword.get(opts, :role, Application.get_env(:engram, :node_role))
+    query = Keyword.get(opts, :query, Application.get_env(:engram, :dns_cluster_query))
+
+    if is_nil(role) and not is_binary(query),
+      do: true,
+      else: Keyword.get(opts, :peers, &Node.list/0).() != []
+  end
+
   @doc "Pure gate decision — see the moduledoc for the state semantics."
   @spec decide(%{
           peers: [node()],

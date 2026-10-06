@@ -203,6 +203,54 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
     assert %Note{crdt_state_ciphertext: nil} = reload(user, note.id)
   end
 
+  # In prod this runs on the worker node and rooms live on web nodes, reached
+  # through :global. Partitioned, terminate_room/1 sees no room, so an open
+  # empty room would survive the seed. Leave the rows for the next pass.
+  test "does not seed when the node cannot reach other nodes' rooms", ctx do
+    %{user: user, vault: vault} = ctx
+    note = legacy_note(user, vault, "partitioned.md", "BODY")
+
+    Application.put_env(:engram, :crdt_room_reach_opts,
+      role: :worker,
+      query: "engram.local",
+      peers: fn -> [] end
+    )
+
+    on_exit(fn -> Application.delete_env(:engram, :crdt_room_reach_opts) end)
+
+    assert :ok =
+             perform_job(BackfillCrdtState, %{
+               "user_id" => user.id,
+               "vault_id" => vault.id,
+               "cursor" => "00000000-0000-0000-0000-000000000000"
+             })
+
+    assert %Note{crdt_state_ciphertext: nil} = reload(user, note.id)
+    refute_enqueued(worker: BackfillCrdtState)
+  end
+
+  test "seeds on a clustered worker that has a peer", ctx do
+    %{user: user, vault: vault} = ctx
+    note = legacy_note(user, vault, "joined.md", "BODY")
+
+    Application.put_env(:engram, :crdt_room_reach_opts,
+      role: :worker,
+      query: "engram.local",
+      peers: fn -> [:"engram@10.0.0.2"] end
+    )
+
+    on_exit(fn -> Application.delete_env(:engram, :crdt_room_reach_opts) end)
+
+    assert :ok =
+             perform_job(BackfillCrdtState, %{
+               "user_id" => user.id,
+               "vault_id" => vault.id,
+               "cursor" => "00000000-0000-0000-0000-000000000000"
+             })
+
+    refute is_nil(reload(user, note.id).crdt_state_ciphertext)
+  end
+
   # A tail that commits between the batch select and the seed UPDATE: the
   # UPDATE itself must refuse, not only the select.
   test "the seed write refuses a note that gained a tail after selection", ctx do
