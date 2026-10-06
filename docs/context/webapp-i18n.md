@@ -13,7 +13,7 @@ Foundation and all ten translated catalogs shipped, and the language switcher is
 All under `frontend/src/i18n/`:
 
 - `locales.ts`: `LOCALES` (11 codes, `en` plus ten translated), `LOCALE_NAMES` (each in its own language), `matchLocale`/`resolveLocale` (browser tags to a supported locale; `zh-TW/HK/MO/Hant` map to `zh-TW`, other `zh` to `zh-CN`, `pt` to `pt-BR`).
-- `locale-provider.tsx`: `LocaleProvider` and `useT()` returning `{ locale, setLocale, t, tn }`. Mounted in `main.tsx` directly inside `ThemeProvider`. Sets `<html lang>` to `renderedLocale` (the locale once its catalog has keys; all ten now do; failed loads stay `en`), lazy-loads the catalog chunk via `import.meta.glob`, reports a failed load to Sentry and keeps English.
+- `locale-provider.tsx`: `LocaleProvider` and `useT()` returning `{ locale, setLocale, t, tn }`. Mounted in `main.tsx` as the outermost element, above `RootErrorBoundary` and the top-level `Suspense`, so `ErrorFallback` and `LoadingScreen` translate too (`main.locale-wiring.test.ts` guards it). Sets `<html lang>` to `renderedLocale` (the locale once its catalog has keys; all ten now do; failed loads stay `en`), lazy-loads the catalog chunk via `import.meta.glob`, reports a failed load to Sentry and keeps English.
 - `translate.ts`, `trans.tsx` (`<Trans text slots>` for sentences around React children), `storage.ts` (`engram:locale` in localStorage).
 - `locale/<code>.ts`: ten catalogs (no `en`).
 - `keys.test.ts`: the drift guard.

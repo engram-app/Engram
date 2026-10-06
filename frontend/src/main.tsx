@@ -107,22 +107,20 @@ function AppShell({ config }: { config: EngramConfig }) {
 	return (
 		<ConfigProvider config={config}>
 			<ThemeProvider>
-				<LocaleProvider>
-					<Suspense fallback={<LoadingScreen />}>
-						<AuthProvider>
-							<QueryClientProvider client={queryClient}>
-								<RouterProvider router={router} />
-								{/* Own boundary — a suspending Toaster must not trip the outer
-								    fallback and blank the app to LoadingScreen. */}
-								<OptionalBoundary>
-									<Suspense fallback={null}>
-										<Toaster richColors closeButton />
-									</Suspense>
-								</OptionalBoundary>
-							</QueryClientProvider>
-						</AuthProvider>
-					</Suspense>
-				</LocaleProvider>
+				<Suspense fallback={<LoadingScreen />}>
+					<AuthProvider>
+						<QueryClientProvider client={queryClient}>
+							<RouterProvider router={router} />
+							{/* Own boundary — a suspending Toaster must not trip the outer
+							    fallback and blank the app to LoadingScreen. */}
+							<OptionalBoundary>
+								<Suspense fallback={null}>
+									<Toaster richColors closeButton />
+								</Suspense>
+							</OptionalBoundary>
+						</QueryClientProvider>
+					</AuthProvider>
+				</Suspense>
 			</ThemeProvider>
 		</ConfigProvider>
 	);
@@ -182,12 +180,16 @@ class RootErrorBoundary extends Component<{ children: ReactNode }, RootErrorBoun
 	}
 }
 
+// LocaleProvider is outermost so ErrorFallback and the top-level LoadingScreen
+// translate too. It needs nothing mounted below it (only captureError).
 createRoot(document.getElementById("root")!).render(
-	<RootErrorBoundary>
-		<StrictMode>
-			<Suspense fallback={<LoadingScreen />}>
-				<BootstrapGate />
-			</Suspense>
-		</StrictMode>
-	</RootErrorBoundary>,
+	<LocaleProvider>
+		<RootErrorBoundary>
+			<StrictMode>
+				<Suspense fallback={<LoadingScreen />}>
+					<BootstrapGate />
+				</Suspense>
+			</StrictMode>
+		</RootErrorBoundary>
+	</LocaleProvider>,
 );
