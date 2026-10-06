@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n/locale-provider";
 import { copyToClipboard } from "@/lib/clipboard";
@@ -116,13 +117,9 @@ export default function InvitesTab() {
 						className="w-24"
 					/>
 				</label>
-				<button
-					type="submit"
-					disabled={creating}
-					className="self-end rounded-md bg-primary px-4 py-2 font-medium text-primary-foreground text-sm hover:bg-primary/90 disabled:opacity-60"
-				>
+				<Button type="submit" disabled={creating} className="self-end">
 					{t("Create invite")}
-				</button>
+				</Button>
 			</form>
 
 			{lastUrl ? (
@@ -137,20 +134,12 @@ export default function InvitesTab() {
 						<code className="flex-1 overflow-x-auto rounded bg-background px-2 py-1 text-xs">
 							{lastUrl}
 						</code>
-						<button
-							type="button"
-							onClick={() => copy(lastUrl)}
-							className="rounded-md border border-border bg-background px-3 py-1 font-medium text-xs hover:bg-accent"
-						>
+						<Button type="button" variant="outline" size="sm" onClick={() => copy(lastUrl)}>
 							{t("Copy")}
-						</button>
-						<button
-							type="button"
-							onClick={() => setLastUrl(null)}
-							className="rounded-md border border-border bg-background px-3 py-1 font-medium text-xs hover:bg-accent"
-						>
+						</Button>
+						<Button type="button" variant="outline" size="sm" onClick={() => setLastUrl(null)}>
 							{t("Done")}
-						</button>
+						</Button>
 					</div>
 				</aside>
 			) : null}
@@ -186,13 +175,14 @@ export default function InvitesTab() {
 									{i.expires_at ? new Date(i.expires_at).toLocaleDateString(localeTag) : t("never")}
 								</td>
 								<td className="py-2 text-right">
-									<button
+									<Button
 										type="button"
+										variant="destructive"
+										size="sm"
 										onClick={() => revoke(i.id)}
-										className="rounded-md border border-border bg-background px-3 py-1 font-medium text-xs hover:bg-destructive/10 hover:text-destructive"
 									>
 										{t("Revoke")}
-									</button>
+									</Button>
 								</td>
 							</tr>
 						))}

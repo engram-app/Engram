@@ -2,6 +2,7 @@
 
 import { Calendar, CreditCard, ExternalLink } from "lucide-react";
 import type * as React from "react";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -154,15 +155,12 @@ export function SubscriptionPaymentCard({
 							</PaymentInfoRow>
 
 							{Boolean(updatePaymentMethodUrl) && (
-								<a
-									href={updatePaymentMethodUrl}
-									target="_blank"
-									rel="noopener noreferrer"
-									className="flex shrink-0 items-center gap-1 font-medium text-primary text-sm hover:underline"
-								>
-									{t("Update")}
-									<ExternalLink className="size-3" />
-								</a>
+								<Button asChild variant="outline" size="sm" className="shrink-0">
+									<a href={updatePaymentMethodUrl} target="_blank" rel="noopener noreferrer">
+										{t("Update")}
+										<ExternalLink data-icon="inline-end" />
+									</a>
+								</Button>
 							)}
 						</div>
 					</>
@@ -172,16 +170,13 @@ export function SubscriptionPaymentCard({
 				{!displayLabel && updatePaymentMethodUrl && (
 					<>
 						<Separator />
-						<a
-							href={updatePaymentMethodUrl}
-							target="_blank"
-							rel="noopener noreferrer"
-							className="flex items-center gap-1 font-medium text-primary text-sm hover:underline"
-						>
-							<CreditCard className="size-4" />
-							{t("Update payment method")}
-							<ExternalLink className="ml-0.5 size-3" />
-						</a>
+						<Button asChild variant="outline" size="sm" className="self-start">
+							<a href={updatePaymentMethodUrl} target="_blank" rel="noopener noreferrer">
+								<CreditCard data-icon="inline-start" />
+								{t("Update payment method")}
+								<ExternalLink data-icon="inline-end" />
+							</a>
+						</Button>
 					</>
 				)}
 			</CardContent>

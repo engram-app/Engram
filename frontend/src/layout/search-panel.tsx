@@ -332,8 +332,10 @@ function SearchPanel({
 						}}
 						onKeyDown={onInputKeyDown}
 					/>
-					<button
+					<Button
 						type="button"
+						variant="outline"
+						size="icon"
 						// Icon-only, so the count has to reach a screen reader through the
 						// label — aria-label overrides the badge text for the accessible
 						// name, it does not append to it.
@@ -343,13 +345,9 @@ function SearchPanel({
 						aria-expanded={filtersOpen}
 						title={t("Filters")}
 						onClick={() => setFiltersOpen((open) => !open)}
-						className={`relative shrink-0 rounded-md border p-1.5 transition-colors hover:bg-accent ${
-							activeCount > 0 || filtersOpen
-								? "border-primary/40 bg-primary/10 text-primary"
-								: "border-border text-muted-foreground hover:text-foreground"
-						}`}
+						className="relative"
 					>
-						<SlidersHorizontal className="size-4" />
+						<SlidersHorizontal />
 						{/* The count is what keeps a COLLAPSED panel honest: without it a
 						    filter left on silently narrows every later search. */}
 						{activeCount > 0 ? (
@@ -357,7 +355,7 @@ function SearchPanel({
 								{activeCount}
 							</span>
 						) : null}
-					</button>
+					</Button>
 				</div>
 				{filtersOpen ? (
 					<div className="mt-2 space-y-3">
@@ -588,13 +586,9 @@ function SearchPanel({
 						    badge says a filter is on, and this is where you come to change
 						    one anyway. */}
 						{activeCount > 0 ? (
-							<button
-								type="button"
-								onClick={clearFilters}
-								className="rounded-md px-1.5 py-1 text-muted-foreground text-xs hover:bg-accent hover:text-foreground"
-							>
+							<Button type="button" variant="ghost" size="sm" onClick={clearFilters}>
 								{t("Clear filters")}
-							</button>
+							</Button>
 						) : null}
 					</div>
 				) : null}

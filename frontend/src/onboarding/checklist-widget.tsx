@@ -215,7 +215,7 @@ function ChecklistWidget() {
 				type="button"
 				size="lg"
 				aria-label={t("Open setup checklist")}
-				className="fixed right-4 bottom-4 z-40 h-12 animate-surface-attention-pulse gap-2 overflow-hidden rounded-full px-5 text-base shadow-xl ring-1 ring-primary/30 [&_svg:not([class*='size-'])]:size-5"
+				className="fixed right-4 bottom-4 z-40 animate-surface-attention-pulse gap-2 overflow-hidden shadow-xl"
 				onClick={() => setCollapsed(false)}
 			>
 				<Waypoints aria-hidden />
@@ -225,12 +225,12 @@ function ChecklistWidget() {
 		) : (
 			<Button
 				type="button"
-				size="icon"
+				size="icon-lg"
 				aria-label={t("Open setup checklist, {remaining} remaining", { remaining })}
 				// Rides above the editor toolbar when the keyboard is up. The var is
 				// published by KeyboardBar and defaults to 0px, so this is exactly
 				// bottom-4 everywhere else.
-				className="fixed right-4 bottom-[calc(var(--editor-toolbar-offset,0px)+var(--spacing)*4)] z-40 size-11 rounded-full shadow-xl ring-1 ring-primary/30"
+				className="fixed right-4 bottom-[calc(var(--editor-toolbar-offset,0px)+var(--spacing)*4)] z-40 shadow-xl"
 				onClick={() => setCollapsed(false)}
 			>
 				<Waypoints aria-hidden />
@@ -278,14 +278,16 @@ function ChecklistWidget() {
 			<header className="relative flex flex-row items-center justify-between overflow-hidden border-border border-b px-4 py-3">
 				<Shimmer />
 				<h2 className="relative font-semibold text-base tracking-tight">{t("Finish setup")}</h2>
-				<button
+				<Button
 					type="button"
+					variant="ghost"
+					size="icon-sm"
 					aria-label={t("Dismiss checklist")}
-					className="relative rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+					className="relative"
 					onClick={() => setCollapsed(true)}
 				>
 					×
-				</button>
+				</Button>
 			</header>
 			{body}
 		</section>
@@ -356,17 +358,18 @@ function ChecklistBody({ visible, total, completed, pct, isFreeTier, onDismiss }
 									</Button>
 								) : null}
 								{Boolean(i.dismissible) && (
-									<button
+									<Button
 										type="button"
+										variant="ghost"
+										size="icon-sm"
 										aria-label={t("Dismiss {label}", { label: i.label })}
-										className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
 										onClick={() => {
 											track("checklist_action", { item: i.key, action: "dismissed" });
 											onDismiss(i.key);
 										}}
 									>
 										×
-									</button>
+									</Button>
 								)}
 							</span>
 						)}

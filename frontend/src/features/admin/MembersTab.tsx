@@ -3,15 +3,14 @@ import { ChevronRight, Loader2 } from "lucide-react";
 import { Fragment, useCallback, useState } from "react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
+import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
 import { intlLocale } from "@/lib/intl-locale";
 import { cn } from "@/lib/utils";
 import { type AdminUser, adminApi } from "./api";
 
-// Stable button surface for the row's actions: instant active feedback
-// (active:scale-[0.97]), an inline spinner while the request is in flight,
-// and a destructive red-outline variant. Same width whether busy or not so
-// the layout doesn't shift mid-click.
+// A row action: a small Button with an inline spinner while the request is in
+// flight. `destructive` swaps the outline look for the destructive variant.
 function ActionButton({
 	onClick,
 	disabled,
@@ -28,23 +27,17 @@ function ActionButton({
 	children: React.ReactNode;
 }) {
 	return (
-		<button
+		<Button
 			type="button"
+			variant={variant === "destructive" ? "destructive" : "outline"}
+			size="sm"
 			onClick={onClick}
 			disabled={disabled}
 			title={title}
-			className={cn(
-				"inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-3 py-1.5 font-medium text-xs",
-				"transition-[transform,background-color,opacity] active:scale-[0.97]",
-				"disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100",
-				variant === "destructive"
-					? "border-destructive/40 bg-background text-destructive hover:bg-destructive/10 disabled:border-border disabled:text-muted-foreground disabled:hover:bg-background"
-					: "border-border bg-background hover:bg-accent disabled:hover:bg-background",
-			)}
 		>
-			{Boolean(busy) && <Loader2 aria-hidden className="size-3 animate-spin" />}
+			{Boolean(busy) && <Loader2 data-icon="inline-start" aria-hidden className="animate-spin" />}
 			{children}
-		</button>
+		</Button>
 	);
 }
 
@@ -264,20 +257,22 @@ export default function MembersTab({
 															{t("Delete {email} + their vault data?", { email: u.email })}
 														</span>
 														<div className="flex items-center gap-2">
-															<button
+															<Button
 																type="button"
+																variant="outline"
+																size="sm"
 																onClick={() => setPendingDelete(null)}
-																className="rounded-md border border-border bg-background px-3 py-1.5 font-medium text-xs hover:bg-accent"
 															>
 																{t("Cancel")}
-															</button>
-															<button
+															</Button>
+															<Button
 																type="button"
+																variant="destructive"
+																size="sm"
 																onClick={() => remove(u)}
-																className="rounded-md bg-destructive px-3 py-1.5 font-semibold text-white text-xs shadow-sm hover:bg-destructive/90"
 															>
 																{t("Confirm delete")}
-															</button>
+															</Button>
 														</div>
 													</div>
 												) : (

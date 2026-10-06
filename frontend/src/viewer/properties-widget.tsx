@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type * as Y from "yjs";
 import { HelpTip } from "@/components/help-tip";
+import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useT } from "@/i18n/locale-provider";
 import { Trans } from "@/i18n/trans";
@@ -461,14 +462,16 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 								{/* Remove only. Reordering was two permanent buttons per row for
 							    something you do once in a while; `moveKey` is still there
 							    for a right-click menu, which is where Obsidian keeps it. */}
-								<button
+								<Button
 									type="button"
+									variant="ghost"
+									size="icon-sm"
 									aria-label={t("Remove {key}", { key: row.key })}
 									onClick={() => removeKey(doc, row.key)}
-									className="mr-1 flex size-7 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus:opacity-100 group-hover:opacity-100"
+									className="mr-1 opacity-0 focus:opacity-100 group-hover:opacity-100"
 								>
-									<X aria-hidden="true" className="size-3.5" />
-								</button>
+									<X aria-hidden="true" />
+								</Button>
 							</div>
 						);
 					})}
@@ -568,17 +571,17 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 					) : null}
 				</dl>
 
-				<button
+				<Button
 					type="button"
+					variant="ghost"
+					size="sm"
 					aria-label={t("Add property")}
-					// Obsidian's .metadata-add-button: 6px inline-start, 0.5em above,
-					// at the label's font size.
-					className="mt-2 flex items-center gap-1 pl-1.5 text-muted-foreground text-sm hover:text-foreground"
+					className="mt-2"
 					onClick={() => setAdding(true)}
 				>
-					<Plus aria-hidden="true" className="size-3.5" />
+					<Plus data-icon="inline-start" aria-hidden="true" />
 					{t("Add property")}
-				</button>
+				</Button>
 			</details>
 		</section>
 	);

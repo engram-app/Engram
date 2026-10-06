@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router";
 import { HelpTip } from "@/components/help-tip";
+import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useT } from "@/i18n/locale-provider";
 import { Trans } from "@/i18n/trans";
@@ -145,14 +146,9 @@ function ToolsForm({ initialTools, isPending, hasError, isFree, onSubmit }: Tool
 				</p>
 			) : null}
 			<div className="flex items-center justify-end">
-				<button
-					type="button"
-					onClick={submit}
-					disabled={!canContinue}
-					className="rounded-lg bg-primary px-6 py-2 font-medium text-primary-foreground text-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-				>
+				<Button type="button" onClick={submit} disabled={!canContinue}>
 					{isPending ? t("Saving…") : t("Continue")}
-				</button>
+				</Button>
 			</div>
 		</AuthPanel>
 	);

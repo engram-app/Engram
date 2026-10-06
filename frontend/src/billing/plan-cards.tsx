@@ -1,10 +1,10 @@
 import { ChevronDown } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
 import type { Locale } from "@/i18n/locales";
 import { msg } from "@/i18n/msg";
 import type { Tn, Translate } from "@/i18n/translate";
 import { intlLocale } from "@/lib/intl-locale";
-import { ctaFilled, ctaOutline } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import type { BillingCadence, IndexStatus } from "../api/queries";
 
@@ -289,20 +289,18 @@ export function PlanCard({
 					</div>
 				) : (
 					<>
-						<button
+						<Button
 							type="button"
 							onClick={() => onAction(tier)}
 							disabled={disabled}
-							className={cn(
-								"w-full rounded-lg px-4 py-2 font-medium text-sm transition disabled:cursor-not-allowed disabled:opacity-50",
-								// recommended (onboarding's Pro) and selected (change-plan's
-								// chosen target) get filled-primary CTA so the actionable
-								// card has weight. idle stays a clean outline.
-								state === "recommended" || state === "selected" ? ctaFilled : ctaOutline,
-							)}
+							// recommended (onboarding's Pro) and selected (change-plan's
+							// chosen target) get the filled-primary CTA so the actionable
+							// card has weight. idle stays a clean outline.
+							variant={state === "recommended" || state === "selected" ? "default" : "outline"}
+							className="w-full"
 						>
 							{ctaLabel ?? t("Start free trial")}
-						</button>
+						</Button>
 						{Boolean(selected && ctaSubLabel) && (
 							<p className="text-center text-muted-foreground text-xs">{ctaSubLabel}</p>
 						)}
@@ -394,21 +392,19 @@ export function PlanAccordionRow({
 				<div className="overflow-hidden">
 					<div className="px-4 pb-4">
 						<FeatureList features={features} />
-						<button
+						<Button
 							type="button"
 							onClick={onClick}
 							disabled={disabled}
 							tabIndex={open ? 0 : -1}
-							className={cn(
-								"mt-3 w-full rounded-lg px-4 py-2 font-medium text-sm transition disabled:cursor-not-allowed disabled:opacity-50",
-								// Paid tiers get the strong filled CTA; Free is intentionally
-								// quieter (outline) so it doesn't pull weight from the revenue
-								// tiers.
-								quietCta ? ctaOutline : ctaFilled,
-							)}
+							// Paid tiers get the strong filled CTA; Free is intentionally
+							// quieter (outline) so it doesn't pull weight from the revenue
+							// tiers.
+							variant={quietCta ? "outline" : "default"}
+							className="mt-3 w-full"
 						>
 							{ctaLabel}
-						</button>
+						</Button>
 						{Boolean(ctaNote) && (
 							<p className="mt-1.5 text-center text-muted-foreground text-xs">{ctaNote}</p>
 						)}

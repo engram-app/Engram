@@ -122,12 +122,9 @@ export default function ResetPasswordPage() {
 								"You can sign in with your new password now. Any old sessions have been signed out.",
 							)}
 						</p>
-						<Link
-							to={ROUTES.SIGN_IN}
-							className="inline-block rounded-md bg-primary px-4 py-2 font-medium text-primary-foreground text-sm hover:bg-primary/90"
-						>
-							{t("Sign in")}
-						</Link>
+						<Button asChild>
+							<Link to={ROUTES.SIGN_IN}>{t("Sign in")}</Link>
+						</Button>
 					</section>
 				) : (
 					<form onSubmit={submit} className="space-y-4">

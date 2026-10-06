@@ -566,8 +566,10 @@ export default function OAuthAuthorizePage() {
 									{t("Which vaults can {client} access?", { client: clientName })}
 								</legend>
 								{showFilter && !searching && (
-									<button
+									<Button
 										type="button"
+										variant="ghost"
+										size="icon-sm"
 										onClick={() => {
 											setSearching(true);
 											// Focus follows the click that opened the field. An
@@ -576,10 +578,9 @@ export default function OAuthAuthorizePage() {
 											requestAnimationFrame(() => searchRef.current?.focus());
 										}}
 										aria-label={t("Search vaults")}
-										className="rounded p-1 text-muted-foreground hover:text-foreground"
 									>
-										<Search className="size-4" />
-									</button>
+										<Search />
+									</Button>
 								)}
 							</div>
 							{searching ? (

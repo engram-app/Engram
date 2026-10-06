@@ -265,13 +265,15 @@ function ConnectionCard({
 					)}
 				</dl>
 			</details>
-			<button
+			<Button
 				type="button"
+				variant="destructive"
+				size="sm"
 				onClick={onRevoke}
-				className="shrink-0 self-center p-3 text-destructive text-sm hover:text-destructive/80"
+				className="shrink-0 self-center"
 			>
 				{t("Revoke")}
-			</button>
+			</Button>
 		</article>
 	);
 }
@@ -323,12 +325,9 @@ function PatSection({
 					<p className="text-muted-foreground text-sm">
 						{t("Upgrade to Pro to create API keys for scripting and external integrations.")}
 					</p>
-					<Link
-						to={settingsTo("billing", location.search)}
-						className="shrink-0 rounded-md bg-primary px-3 py-1.5 font-medium text-primary-foreground text-sm hover:bg-primary/90"
-					>
-						{t("Upgrade")}
-					</Link>
+					<Button asChild className="shrink-0">
+						<Link to={settingsTo("billing", location.search)}>{t("Upgrade")}</Link>
+					</Button>
 				</aside>
 			)}
 
@@ -375,13 +374,14 @@ function PatSection({
 												: "—"}
 										</td>
 										<td className="px-4 py-3 text-right">
-											<button
+											<Button
 												type="button"
+												variant="destructive"
+												size="sm"
 												onClick={() => onRevoke(p)}
-												className="text-destructive text-sm hover:text-destructive/80"
 											>
 												{t("Revoke")}
-											</button>
+											</Button>
 										</td>
 									</tr>
 								))}
@@ -460,20 +460,12 @@ function CreatePatModal({
 				)}
 
 				<footer className="flex justify-end gap-2 pt-2">
-					<button
-						type="button"
-						onClick={onClose}
-						className="rounded-md px-4 py-2 text-foreground text-sm hover:bg-accent"
-					>
+					<Button type="button" variant="outline" onClick={onClose}>
 						{t("Cancel")}
-					</button>
-					<button
-						type="submit"
-						disabled={create.isPending || name.trim().length === 0}
-						className="rounded-md bg-primary px-4 py-2 font-medium text-primary-foreground text-sm hover:bg-primary/90 disabled:opacity-50"
-					>
+					</Button>
+					<Button type="submit" disabled={create.isPending || name.trim().length === 0}>
 						{create.isPending ? t("Generating…") : t("Generate Key")}
-					</button>
+					</Button>
 				</footer>
 			</form>
 		</ModalShell>
@@ -524,17 +516,12 @@ function RevealKeyModal({
 						className="flex-1 bg-muted font-mono"
 						aria-label={t("API key")}
 					/>
-					<button
-						type="button"
-						onClick={copy}
-						aria-label={t("Copy API key")}
-						className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-primary bg-primary px-3 py-2 font-medium text-primary-foreground text-sm shadow-sm transition-colors hover:bg-primary/90 active:scale-[0.98]"
-					>
+					<Button type="button" onClick={copy} aria-label={t("Copy API key")}>
 						<CopyIcon copied={copyState === "copied"} />
 						<span className="min-w-12 text-left">
 							{copyState === "copied" ? t("Copied") : t("Copy")}
 						</span>
-					</button>
+					</Button>
 				</div>
 
 				{copyState === "error" && (
@@ -544,13 +531,9 @@ function RevealKeyModal({
 				)}
 
 				<footer className="flex justify-end pt-2">
-					<button
-						type="button"
-						onClick={onClose}
-						className="rounded-md border border-input bg-card px-4 py-2 font-medium text-foreground text-sm shadow-sm hover:bg-accent"
-					>
+					<Button type="button" variant="outline" onClick={onClose}>
 						{t("Done")}
-					</button>
+					</Button>
 				</footer>
 			</div>
 		</ModalShell>
@@ -752,8 +735,10 @@ export default function ConnectionsPage() {
 				<div className="flex items-start justify-between gap-2">
 					<h1 className="font-semibold text-foreground text-xl">{t("Connections")}</h1>
 					{showSearch && !searching && (
-						<button
+						<Button
 							type="button"
+							variant="ghost"
+							size="icon-sm"
 							onClick={() => {
 								setSearching(true);
 								// Focus follows the click that opened the field, rather than
@@ -761,10 +746,9 @@ export default function ConnectionsPage() {
 								requestAnimationFrame(() => searchRef.current?.focus());
 							}}
 							aria-label={t("Search connections")}
-							className="rounded p-1 text-muted-foreground hover:text-foreground"
 						>
-							<Search className="size-4" />
-						</button>
+							<Search />
+						</Button>
 					)}
 				</div>
 				<p className="mt-1 text-muted-foreground text-sm">

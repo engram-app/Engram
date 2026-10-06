@@ -17,12 +17,6 @@ export const heading = "text-2xl font-bold tracking-tight text-foreground sm:tex
 export const destructiveAlert =
 	"rounded-lg border border-destructive/50 bg-destructive/5 p-4 text-sm";
 
-// Call-to-action button color pairs. `ctaFilled` is the strong primary action;
-// `ctaOutline` is the quieter secondary. Both are color/interaction only — pair
-// with layout classes (rounded/px/py/text) at the call site via cn().
-export const ctaFilled = "bg-primary text-primary-foreground hover:bg-primary/90";
-export const ctaOutline = "border border-input bg-transparent text-foreground hover:bg-accent";
-
 // Selectable bordered row (radio / checkbox card) with active highlight.
 // `compact` tightens padding for dense lists (e.g. the onboarding tool picker);
 // the default keeps roomy padding for standalone rows (e.g. an agree checkbox).

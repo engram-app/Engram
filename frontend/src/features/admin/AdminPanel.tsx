@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { useMe } from "@/api/queries";
+import { Button } from "@/components/ui/button";
 import { useConfig } from "@/config-context";
 import { useT } from "@/i18n/locale-provider";
 import { copyToClipboard } from "@/lib/clipboard";
@@ -80,20 +81,12 @@ export default function AdminPanel() {
 							<code className="flex-1 overflow-x-auto rounded bg-background px-2 py-1.5 text-xs">
 								{resetUrl}
 							</code>
-							<button
-								type="button"
-								onClick={copyResetUrl}
-								className="shrink-0 rounded-md border border-border bg-background px-3 py-1.5 font-medium text-xs hover:bg-accent"
-							>
+							<Button type="button" variant="outline" size="sm" onClick={copyResetUrl}>
 								{t("Copy")}
-							</button>
-							<button
-								type="button"
-								onClick={() => setResetUrl(null)}
-								className="shrink-0 rounded-md border border-border bg-background px-3 py-1.5 font-medium text-xs hover:bg-accent"
-							>
+							</Button>
+							<Button type="button" variant="outline" size="sm" onClick={() => setResetUrl(null)}>
 								{t("Done")}
-							</button>
+							</Button>
 						</div>
 					</aside>
 				)}

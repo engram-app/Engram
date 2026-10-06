@@ -149,12 +149,9 @@ export function ActiveVaultsSection() {
 							{ plan: planLabel },
 						)}
 					</p>
-					<Link
-						to={settingsTo("billing", location.search)}
-						className="shrink-0 rounded-md bg-primary px-3 py-1.5 font-medium text-primary-foreground text-sm hover:bg-primary/90"
-					>
-						{t("Upgrade")}
-					</Link>
+					<Button asChild className="shrink-0">
+						<Link to={settingsTo("billing", location.search)}>{t("Upgrade")}</Link>
+					</Button>
 				</aside>
 			)}
 			{createOpen && !atCap && (

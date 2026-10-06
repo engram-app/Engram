@@ -2,6 +2,7 @@ import obsidianMark from "@lobehub/icons-static-svg/icons/obsidian-color.svg?raw
 import { FilePlus2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Navigate, useNavigate } from "react-router";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAutofocus } from "@/hooks/use-autofocus";
 import { useT } from "@/i18n/locale-provider";
@@ -422,14 +423,9 @@ function FreshInlinePanel({ isCommitting, onCommit }: FreshInlinePanelProps) {
 					{error}
 				</p>
 			) : null}
-			<button
-				type="button"
-				onClick={submit}
-				disabled={disabled}
-				className="rounded-lg bg-primary px-4 py-2 font-medium text-primary-foreground text-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-			>
+			<Button type="button" onClick={submit} disabled={disabled}>
 				{isCommitting ? t("Creating…") : t("Create vault & continue")}
-			</button>
+			</Button>
 		</div>
 	);
 }

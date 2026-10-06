@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { Navigate, Outlet, useLocation } from "react-router";
+import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
 import { Trans } from "@/i18n/trans";
 import { track } from "../analytics/track";
@@ -98,13 +99,9 @@ export default function OnboardLayout() {
 			actions={
 				<>
 					{counter ? <p className="text-muted-foreground text-sm">{counter}</p> : null}
-					<button
-						type="button"
-						onClick={() => logout()}
-						className="text-muted-foreground text-sm transition hover:text-foreground"
-					>
+					<Button type="button" variant="ghost" size="sm" onClick={() => logout()}>
 						{t("Sign out")}
-					</button>
+					</Button>
 				</>
 			}
 		>
@@ -128,13 +125,9 @@ export default function OnboardLayout() {
 					{/* Rendered only when the refusal can actually be delivered.
 					    A button that silently no-ops reads as a broken app. */}
 					{cancelUrl ? (
-						<button
-							type="button"
-							onClick={cancelPending}
-							className="text-muted-foreground underline underline-offset-4 transition hover:text-foreground"
-						>
+						<Button type="button" variant="outline" size="sm" onClick={cancelPending}>
 							{t("Cancel connection")}
-						</button>
+						</Button>
 					) : null}
 				</aside>
 			) : null}

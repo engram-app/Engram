@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { Navigate, useNavigate } from "react-router";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
 import { useStableT, useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import { cn } from "@/lib/utils";
@@ -114,14 +115,14 @@ export default function OnboardBillingPage() {
             doesn't sit stuck below the payment form. */}
 				{!checkoutActive && (
 					<section className="mt-12 hidden border-border border-t pt-8 text-center sm:block">
-						<button
+						<Button
 							type="button"
+							variant="ghost"
 							onClick={handleContinueFree}
 							disabled={freeLoading}
-							className="font-medium text-muted-foreground text-sm underline underline-offset-4 hover:text-foreground disabled:opacity-50"
 						>
 							{t("Continue with Free →")}
-						</button>
+						</Button>
 						<p className="mt-2 text-muted-foreground text-xs">
 							{t("{summary} · upgrade anytime", { summary: t(FREE_TIER.summary) })}
 						</p>

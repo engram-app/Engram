@@ -11,8 +11,6 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Translate } from "@/i18n/translate";
-import { ctaFilled, ctaOutline } from "@/lib/ui-classes";
-import { cn } from "@/lib/utils";
 import type { CheckoutMethod } from "../analytics/events";
 import { track } from "../analytics/track";
 import { api } from "../api/client";
@@ -774,10 +772,7 @@ export default function BillingPage({
 										<button
 											type="button"
 											onClick={handleDevCheckoutSuccess}
-											className={cn(
-												"rounded-lg px-4 py-2 font-medium text-sm transition",
-												ctaFilled,
-											)}
+											className="rounded-lg bg-gray-900 px-4 py-2 font-medium text-sm text-white hover:bg-gray-700"
 										>
 											Simulate successful payment
 										</button>
@@ -787,11 +782,7 @@ export default function BillingPage({
 												setCheckingOut(false);
 												toast.error("Payment did not go through. Please try again.");
 											}}
-											className={cn(
-												"rounded-lg px-4 py-2 font-medium text-sm transition",
-												ctaOutline,
-												"border-gray-300 text-gray-900 hover:bg-gray-100",
-											)}
+											className="rounded-lg border border-gray-300 px-4 py-2 font-medium text-gray-900 text-sm hover:bg-gray-100"
 										>
 											Simulate failure
 										</button>

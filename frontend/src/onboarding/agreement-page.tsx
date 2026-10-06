@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
+import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useT } from "@/i18n/locale-provider";
@@ -109,14 +110,14 @@ export default function AgreementPage() {
 							I have read and agree to the agreement shown above and the privacy notice
 						</span>
 					</label>
-					<button
+					<Button
 						type="button"
 						onClick={submit}
 						disabled={!agreed || isPending || !ready}
-						className="w-full rounded-lg bg-primary px-4 py-2 font-medium text-primary-foreground text-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+						className="w-full"
 					>
 						{isPending ? t("Saving…") : t("Continue")}
-					</button>
+					</Button>
 				</>
 			)}
 		</AuthPanel>
