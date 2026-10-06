@@ -200,15 +200,21 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
 
   test "perform runs every registered migration" do
     assert :ok = perform_job(DataMigrationsRunner, %{})
+
+    # Every pass leaves a ledger row: mark_done/2 on :done, note_open/2 on :more.
+    rows = Repo.all(from(e in Engram.DataMigrations.Entry, select: e.name))
+
+    for mod <- DataMigrationsRunner.migrations() do
+      assert mod.name() in rows, "#{inspect(mod)} did not run (no ledger row)"
+    end
   end
 
   test "every registered module implements the behaviour" do
     for mod <- DataMigrationsRunner.migrations() do
       Code.ensure_loaded!(mod)
 
-      for {fun, 0} <- [name: 0, version: 0, run_pass: 0] do
-        assert function_exported?(mod, fun, 0), "#{inspect(mod)} lacks #{fun}/0"
-      end
+      assert Engram.DataMigration in (mod.module_info(:attributes)[:behaviour] || []),
+             "#{inspect(mod)} lacks @behaviour Engram.DataMigration"
     end
   end
 end
