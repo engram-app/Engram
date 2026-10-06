@@ -502,6 +502,49 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert json_response(conn, 413)["error"] == "request_too_large"
     end
 
+    test "a declared content-length over max_file_bytes is refused before reading", %{
+      conn: conn,
+      user: user
+    } do
+      insert(:user_limit_override, user: user, key: "max_file_bytes", value: %{"v" => 1024})
+
+      conn =
+        conn
+        |> put_req_header("content-length", "1025")
+        |> raw_post(%{path: "lie.png", mtime: "1.0"}, "small")
+
+      assert json_response(conn, 402)["reason"] == "file_too_large"
+      assert json_response(conn, 402)["limit"] == 1024
+    end
+
+    test "a declared content-length over the body ceiling is 413 before reading", %{conn: conn} do
+      declared = Integer.to_string(EngramWeb.Endpoint.max_body_bytes() + 1)
+
+      conn =
+        conn
+        |> put_req_header("content-length", declared)
+        |> raw_post(%{path: "lie.png", mtime: "1.0"}, "small")
+
+      assert json_response(conn, 413)["error"] == "request_too_large"
+    end
+
+    for bad <- ["NaN", "1,5", "", "inf", "1e400"] do
+      test "422 for mtime #{inspect(bad)} and nothing is stored", %{conn: conn} do
+        conn1 = raw_post(conn, %{path: "m.png", mtime: unquote(bad)}, @sample_content)
+        assert json_response(conn1, 422)["error"] == "mtime must be a finite number"
+
+        assert conn |> get("/api/attachments/m.png") |> json_response(404)
+      end
+    end
+
+    test "an absent mtime stores nil, as on the JSON path", %{conn: conn} do
+      conn1 = raw_post(conn, %{path: "nomtime.png"}, @sample_content)
+      assert json_response(conn1, 200)
+
+      body = conn |> get("/api/attachments/nomtime.png") |> json_response(200)
+      assert body["mtime"] == nil
+    end
+
     test "returns 401 without auth", %{conn: conn} do
       conn =
         conn

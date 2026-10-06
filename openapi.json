@@ -4428,7 +4428,7 @@
       },
       "post": {
         "callbacks": {},
-        "description": "Uploads an attachment to the vault's storage backend. Send the raw bytes as `application/octet-stream` with `path`, `mtime` and optional `mime_type` in the query string, or (legacy) base64 JSON. Attachments are a paid-tier feature (402 on Free, which is also limited to text MIME types), the MIME type and extension must pass the whitelist (415), the file must be within the per-plan size and total-quota limits (402), a raw body over the request ceiling returns 413, and a storage backend failure returns 502.",
+        "description": "Uploads an attachment to the vault's storage backend. Send the raw bytes as `application/octet-stream` with `path`, `mtime` and optional `mime_type` in the query string, or (legacy) base64 JSON. Attachments are a paid-tier feature (402 on Free, which is also limited to text MIME types), the MIME type and extension must pass the whitelist (415), the file must be within the per-plan size and total-quota limits (402), a raw body over the request ceiling returns 413, a raw body that stalls returns 408, a non-numeric `mtime` returns 422, and a storage backend failure returns 502.",
         "operationId": "attachments-upload",
         "parameters": [
           {
@@ -4514,6 +4514,16 @@
               }
             },
             "description": "Attachments require a paid plan / quota"
+          },
+          "408": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "Raw body stalled before it finished"
           },
           "413": {
             "content": {

@@ -18,7 +18,8 @@ defmodule EngramWeb.AttachmentsController do
         "string, or (legacy) base64 JSON. Attachments are a paid-tier feature (402 on Free, which " <>
         "is also limited to text MIME types), the MIME type and extension must pass the whitelist " <>
         "(415), the file must be within the per-plan size and total-quota limits (402), a raw body " <>
-        "over the request ceiling returns 413, and a storage backend failure returns 502.",
+        "over the request ceiling returns 413, a raw body that stalls returns 408, a non-numeric " <>
+        "`mtime` returns 422, and a storage backend failure returns 502.",
     tags: ["Attachments"],
     parameters: [
       path: [
@@ -55,6 +56,8 @@ defmodule EngramWeb.AttachmentsController do
       bad_request: {"Invalid base64", "application/json", Schemas.MessageError},
       payment_required:
         {"Attachments require a paid plan / quota", "application/json", Schemas.LimitError},
+      request_timeout:
+        {"Raw body stalled before it finished", "application/json", Schemas.MessageError},
       request_entity_too_large:
         {"Raw body over the request ceiling", "application/json", Schemas.MessageError},
       unsupported_media_type:
@@ -137,25 +140,83 @@ defmodule EngramWeb.AttachmentsController do
 
   # Plug.Parsers passes octet-stream through unread, so the body is read here,
   # after every gate, and never past the smaller of the plan's per-file cap
-  # and the endpoint's body ceiling. Hitting that bound returns `:more`, which
-  # is the rejection: nothing beyond it is buffered.
+  # and the endpoint's body ceiling. A declared content-length over that bound
+  # is refused without reading at all.
   defp upload_raw(conn, user, vault, params) do
     {limit, bound_by} = raw_read_limit(user)
 
-    case read_body(conn, length: limit, read_length: 1_048_576) do
+    with {:ok, mtime} <- parse_mtime(params["mtime"]),
+         :ok <- check_declared_length(conn, limit) do
+      read_raw(conn, user, vault, Map.put(params, "mtime", mtime), limit, bound_by)
+    else
+      :invalid_mtime ->
+        conn |> put_status(422) |> json(%{error: "mtime must be a finite number"})
+
+      :too_large ->
+        too_large(conn, limit, bound_by)
+    end
+  end
+
+  # Reads limit + 1 so "more than limit" is decided by size, not by the tag.
+  # Bandit returns `:more` when it hits `length` even if the body ended there
+  # (HTTP/1 chunked: deps/bandit/lib/bandit/http1/socket.ex:270, bandit
+  # 1.12.5), and HTTP/2 also returns `:more` on a read timeout with whatever
+  # arrived (deps/bandit/lib/bandit/http2/stream.ex:283). So `:more` with at
+  # most `limit` bytes is a stalled client, not an oversized file.
+  defp read_raw(conn, user, vault, params, limit, bound_by) do
+    case read_body(conn, length: limit + 1, read_length: 1_048_576) do
+      {_, body, conn} when byte_size(body) > limit ->
+        too_large(conn, limit, bound_by)
+
       {:ok, body, conn} ->
         do_upload(conn, user, vault, Map.put(params, :content, body))
 
-      {:more, _partial, conn} when bound_by == :plan ->
-        EngramWeb.LimitResponse.halt(conn, "file_too_large", :max_file_bytes, limit, nil)
-
       {:more, _partial, conn} ->
-        conn |> put_status(413) |> json(%{error: "request_too_large"})
+        conn |> put_status(408) |> json(%{error: "request body timed out"})
 
       {:error, _reason} ->
         conn |> put_status(400) |> json(%{error: "could not read request body"})
     end
   end
+
+  defp too_large(conn, limit, :plan),
+    do: EngramWeb.LimitResponse.halt(conn, "file_too_large", :max_file_bytes, limit, nil)
+
+  defp too_large(conn, _limit, :ceiling),
+    do: conn |> put_status(413) |> json(%{error: "request_too_large"})
+
+  defp check_declared_length(conn, limit) do
+    case declared_length(conn) do
+      n when is_integer(n) and n > limit -> :too_large
+      _ -> :ok
+    end
+  end
+
+  # Bandit rejects a malformed content-length before the plug runs, so an
+  # unparseable header only reaches here from tests; treat it as undeclared.
+  defp declared_length(conn) do
+    with [value | _] <- get_req_header(conn, "content-length"),
+         {n, ""} <- Integer.parse(value) do
+      n
+    else
+      _ -> nil
+    end
+  end
+
+  # Same contract as the JSON path: a number or absent (stored as nil).
+  # Query values are strings, so parse here, before any storage PUT, rather
+  # than let the changeset reject it after the blob is already written.
+  # Float.parse/1 refuses NaN, inf and overflow (1e400).
+  defp parse_mtime(nil), do: {:ok, nil}
+
+  defp parse_mtime(value) when is_binary(value) do
+    case Float.parse(value) do
+      {mtime, ""} -> {:ok, mtime}
+      _ -> :invalid_mtime
+    end
+  end
+
+  defp parse_mtime(_), do: :invalid_mtime
 
   defp raw_read_limit(user) do
     ceiling = EngramWeb.Endpoint.max_body_bytes()
