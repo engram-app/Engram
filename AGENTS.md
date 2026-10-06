@@ -570,7 +570,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 
 **Frontend / SPA**
 - Frontend SPA map — bootstrap chain, runtime router, api/sync/realtime layer, viewer/editor (start here for web-app work) → `docs/context/frontend-architecture.md`
-- Form controls: the one control height (`--spacing-control`), `<Input>` vs raw `<input>`, compact button sizes → `docs/context/form-controls.md`
+- Form controls and buttons: the one control height (`--spacing-control`), `<Input>` vs raw `<input>`, button role -> variant/size, the `<Button>` className rule → `docs/context/form-controls.md`
 - Wikilink (`[[...]]`) → note resolution in the SPA viewer → `docs/context/spa-wikilink-resolution.md`
 - Footnotes in the CM6 editor: build vs adopt → `docs/context/codemirror-footnote-options.md`
 - Matching Obsidian's real Properties panel CSS/geometry → `docs/context/obsidian-properties-parity.md`
