@@ -30,7 +30,7 @@ costs about that), or code that needs to call back into the BEAM.
 
 | Code | Why | Evidence |
 |---|---|---|
-| `Engram.Notes.Frontmatter` YAML codec (`parse`, `parse_for_ingest`, `emit`) | YamlElixir ~2.6 ms per write, on every CRDT ingest | `Frontmatter.split/1` is already native; the codec is the rest |
+| `Engram.Notes.Frontmatter.emit/3` (Ymlr) | ~65 us per 10-key block, ~500 us at 50 keys; every projection of a note | parse is native (below); emit must match Ymlr byte for byte or `content_hash` shifts |
 
 Measured on the chunker (`chunk`, `frontmatter_split`, 2026-10-04,
 `Markdown.parse/2` end to end, best of 3; "Elixir" is chunker v2 on `main`,
@@ -104,6 +104,27 @@ end to end, minimum of 5, loaded dev box):
 | 1 MB tight list | 20,107 ms | 115 ms | 12 MB / 3 MB |
 | 1 MB prose, 50k links | 1,064 ms | 121 ms | 26 MB / 18 MB |
 | 2.7 MB data-URI image | 387 ms | 49 ms | n/a / 4 MB |
+
+Frontmatter parse (`frontmatter_parse`, 2026-10-06, `Frontmatter.parse/1`
+end to end, min of 5, loaded dev box; "YamlElixir" is the old path, kept as
+the fallback):
+
+| Block | YamlElixir | Rust |
+|---|---|---|
+| 3 keys, 96 B | 885 us | 8 us |
+| 10 keys, 262 B | 1,133 us | 25 us |
+| 50 keys, 1.4 KB | 2,660 us | 126 us |
+
+Rules, not a YAML parser (`yaml.rs`): it answers only for the common shape
+(column-0 keys; one-line plain or quoted scalars, flow lists of them, block
+lists of them; comments) and returns nil for anything else, which then goes
+to YamlElixir. Floats decline too (Erlang's float printing is not
+reproduced), as do hex/octal ints and a bare `+`/`-` (yamerl reads those as
+0). YamlElixir stays the definition, and the test diffs both live instead of
+pinning a golden file: `ENGRAM_FM_CASES=100000 mix test
+test/engram/native/frontmatter_parse_test.exs` after touching the rules. A
+REST write also parsed the merged block twice (OKF fields, parse_status);
+it is parsed once now.
 
 Title and tags (`note_title`, `note_tags`, same day): a typical 5 KB note
 with frontmatter, 230 inline tags and code spans went from 3.55 ms to
@@ -295,6 +316,13 @@ adding callers.
   past 128 levels; Jason has no limit (Qdrant never nests that deep).
 - **Run cargo tests with `--release`** (as CI does): the linearity tests in
   `links.rs`/`meta.rs` time themselves and fail in a debug build.
+- **YamlElixir renames every `<<` key to a fresh `"<<N"`** (its merge-key
+  handling), so it disagrees with itself run to run on such a block. A
+  differential test must keep `<<` out of its generator.
+- **A sensitive process cannot be call-counted.** `Crypto` sets
+  `Process.flag(:sensitive, true)`, and from then on `:erlang.trace_pattern`
+  `call_count` silently reads 0 for that process. A "this write parses N
+  times" test does not work through a write path; count by reading the code.
 - **This dev box cannot run Qdrant.** Its Xeon E5-2650 v2 lacks AVX2, and
   Qdrant 1.17 dies with SIGILL (exit 132) on collection create. Qdrant
   integration tests run in CI only.

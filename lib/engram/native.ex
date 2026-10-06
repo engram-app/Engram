@@ -98,6 +98,26 @@ defmodule Engram.Native do
         &frontmatter_split_dirty_nif/1
       )
 
+  @doc false
+  def frontmatter_parse_nif(_block), do: :erlang.nif_error(:nif_not_loaded)
+  @doc false
+  def frontmatter_parse_dirty_nif(_block), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
+  The common shape of a frontmatter YAML block, parsed natively:
+  `[{key, json_value}]` in source order, or nil when the block uses any
+  YAML the native rules do not cover (the caller then runs YamlElixir).
+  Valid UTF-8 only.
+  """
+  def frontmatter_parse(block),
+    do:
+      parse(
+        :frontmatter_parse,
+        block,
+        &frontmatter_parse_nif/1,
+        &frontmatter_parse_dirty_nif/1
+      )
+
   @doc "Frontmatter `title:`, else the first H1 outside code, else nil. Valid UTF-8 only."
   def note_title(content),
     do: parse(:note_title, content, &note_title_nif/1, &note_title_dirty_nif/1)
