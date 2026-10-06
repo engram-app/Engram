@@ -270,7 +270,7 @@ defmodule Engram.Auth.DeviceFlow do
   # ── Private ─────────────────────────────────────────────────────
 
   # Marks the access token as a plugin (delegated) credential, so
-  # `EngramWeb.Plugs.RequireSession` can keep it off the admin plane.
+  # `EngramWeb.Plugs.RequireSession` keeps it off session-only routes.
   @device_claims %{"cred" => "device"}
 
   defp consume_and_issue_tokens(auth) do

@@ -69,7 +69,8 @@ defmodule EngramWeb.Router do
   end
 
   # RequireSession that still admits API keys: rejects third-party OAuth grants
-  # only. A named pipeline because `pipe_through` cannot pass plug options.
+  # and plugin device tokens. A named pipeline because `pipe_through` cannot
+  # pass plug options.
   pipeline :require_session_allow_api_key do
     plug EngramWeb.Plugs.RequireSession, allow_api_key: true
   end
@@ -82,7 +83,7 @@ defmodule EngramWeb.Router do
   pipeline :require_admin do
     plug EngramWeb.Plugs.RequireAdmin
     plug EngramWeb.Plugs.OAuthScopeEnforce
-    plug EngramWeb.Plugs.RequireSession, reject_device: true
+    plug EngramWeb.Plugs.RequireSession
   end
 
   # Internal scrape pipeline for the PromEx /metrics endpoint. Fails closed

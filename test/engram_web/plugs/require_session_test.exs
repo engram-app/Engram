@@ -106,17 +106,38 @@ defmodule EngramWeb.Plugs.RequireSessionTest do
 
       assert %{"key" => _} = json_response(conn, 200)
     end
+  end
 
-    test "a device-flow token is a session, not a grant", %{conn: conn, user: user} do
-      # The Obsidian plugin's own token. DeviceFlow mints it via
-      # `Accounts.generate_jwt(user)` with NO extras, so it carries no `scope`
-      # claim and must not be caught by the OAuth branch.
-      conn =
-        conn
-        |> oauth_authed(user, %{})
-        |> get("/api/connections")
+  # Least privilege for the Obsidian plugin. Its device-flow token sits on disk
+  # in the vault's plugin data and refreshes for 90 days; the plugin only syncs
+  # notes. A copied token must not mint a permanent API key, read invoices,
+  # accept the ToS, approve device logins, or manage connections.
+  describe "the plugin's device token is kept off session-only routes" do
+    # Shape of `DeviceFlow`'s access token (pinned in device_flow_test).
+    defp device_authed(conn, user), do: oauth_authed(conn, user, %{"cred" => "device"})
 
-      assert is_list(json_response(conn, 200))
+    for {verb, path} <- [
+          {:post, "/api/api-keys"},
+          {:get, "/api/connections"},
+          {:post, "/api/auth/device/authorize"},
+          {:post, "/api/onboarding/accept-terms"},
+          {:get, "/api/billing/transactions"}
+        ] do
+      test "#{verb} #{path} rejects it", %{conn: conn, user: user} do
+        conn = conn |> device_authed(user) |> request(unquote(verb), unquote(path))
+        assert %{"error" => "device_token_not_allowed"} = json_response(conn, 403)
+      end
+    end
+
+    test "nothing is minted on the rejected POST /api-keys", %{conn: conn, user: user} do
+      _ = conn |> device_authed(user) |> post("/api/api-keys", %{name: "escalated"})
+      assert Engram.Repo.all(Engram.Accounts.ApiKey, skip_tenant_check: true) == []
+    end
+
+    # Over-block guard: the routes the plugin actually uses.
+    test "it still reaches GET /api/me", %{conn: conn, user: user} do
+      conn = conn |> device_authed(user) |> get("/api/me")
+      assert json_response(conn, 200)
     end
   end
 
@@ -219,10 +240,10 @@ defmodule EngramWeb.Plugs.RequireSessionTest do
       end
     end
 
-    test "the plugin's device token still reaches them", %{conn: base, user: user} do
+    test "the plugin's device token cannot reach them", %{conn: base, user: user} do
       for path <- @billing_pii do
-        conn = base |> oauth_authed(user, %{}) |> get(path)
-        refute conn.status == 403, path
+        conn = base |> oauth_authed(user, %{"cred" => "device"}) |> get(path)
+        assert %{"error" => "device_token_not_allowed"} = json_response(conn, 403), path
       end
     end
   end
