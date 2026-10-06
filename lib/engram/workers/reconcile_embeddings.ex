@@ -49,6 +49,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
   # Notes stamped and enqueued per statement. Each page drops out of the next
   # page's query (the stamp), so a loop of pages walks the whole backlog.
+  # Tests pass a smaller `"page"` arg to exercise the loop.
   @page 1_000
 
   @doc """
@@ -65,7 +66,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # enqueues `EmbedNote` jobs — it never decrypts or re-encrypts any payload.
   # The enqueued EmbedNote workers are individually gated via `RotationGate`.
   @impl Oban.Worker
-  def perform(%Oban.Job{}) do
+  def perform(%Oban.Job{args: args}) do
+    page_size = Map.get(args, "page", @page)
+
     # One query PER TENANT, under a global cap. It cannot be a single
     # cross-tenant statement: `notes` is FORCE RLS, so without a tenant the
     # select-and-stamp below is filtered to zero rows and this whole worker
@@ -202,7 +205,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       rows
     end
 
-    counts = scan(&sweep_tenant.(&1, @page), &enqueue_page/1)
+    counts = scan(&sweep_tenant.(&1, page_size), page_size, &enqueue_page/1)
 
     eligible = Enum.sum(Enum.map(counts, &elem(&1, 0)))
     queued = Enum.sum(Enum.map(counts, &elem(&1, 1)))
@@ -220,7 +223,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       )
     )
 
-    :ok = sweep_keyword_stale(now, paid)
+    :ok = sweep_keyword_stale(now, paid, page_size)
   end
 
   # Runs `sweep.(repo)` over every tenant: once on the maintenance pool
@@ -236,7 +239,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # On the per-user path each page is stamped and enqueued in the tenant's
   # transaction; on the maintenance path the stamp commits first, and a lost
   # enqueue costs that note one cooldown window.
-  defp scan(page, handle) do
+  defp scan(page, page_size, handle) do
     case Repo.maintenance() do
       Repo ->
         # One transaction PER PAGE, inside the user's tenant: stamp and
@@ -244,7 +247,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         # per user ran past the 15 s checkout deadline on a large backlog,
         # rolled back, and stalled every user after it on every tick.
         Enum.flat_map(TenantScan.user_ids(), fn user_id ->
-          sweep_pages(fn ->
+          sweep_pages(page_size, fn ->
             {:ok, counts} =
               Repo.with_tenant(user_id, fn -> page_counts(page.(Repo), handle) end)
 
@@ -253,7 +256,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         end)
 
       maintenance ->
-        sweep_pages(fn -> page_counts(page.(maintenance), handle) end)
+        sweep_pages(page_size, fn -> page_counts(page.(maintenance), handle) end)
     end
   end
 
@@ -261,12 +264,12 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
   # Runs `page` (which returns {rows_found, jobs_queued}) until a page comes
   # back short. Returns the counts of every page.
-  defp sweep_pages(page) do
+  defp sweep_pages(page_size, page) do
     {found, _queued} = counts = page.()
 
-    if found < @page,
+    if found < page_size,
       do: [counts],
-      else: [counts | sweep_pages(page)]
+      else: [counts | sweep_pages(page_size, page)]
   end
 
   # A version rebuild (content current, older chunker or embed model) goes to
@@ -390,7 +393,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # notes every tick. Fine at thousands of notes per tenant; add a partial
   # index on (user_id) WHERE keyword_version IS DISTINCT FROM <current> if a
   # tenant reaches hundreds of thousands.
-  defp sweep_keyword_stale(now, paid) do
+  defp sweep_keyword_stale(now, paid, page_size) do
     version = KeywordIndex.version()
     backoff_until = DateTime.add(now, reconcile_backoff_seconds(), :second)
 
@@ -410,7 +413,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
             (n.embed_budget_parked == true and exists(paid))
         )
         |> order_by([n], asc: n.updated_at)
-        |> limit(@page)
+        |> limit(^page_size)
         |> select([n], n.id)
 
       # Select-and-stamp in one statement, as the embed sweep does (#897): a
@@ -429,7 +432,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       found
     end
 
-    counts = scan(page, &enqueue_refresh/1)
+    counts = scan(page, page_size, &enqueue_refresh/1)
 
     Logger.info(
       "reconcile_embeddings: swept keyword-stale notes",

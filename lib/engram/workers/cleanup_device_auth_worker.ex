@@ -24,8 +24,7 @@ defmodule Engram.Workers.CleanupDeviceAuthWorker do
     {device, _} = DeviceFlow.cleanup_expired()
     {oauth, _} = OAuth.cleanup_expired()
 
-    if device + oauth > 0,
-      do: Logger.info("cleanup_device_auth device_rows=#{device} oauth_rows=#{oauth}")
+    Logger.info("cleanup_device_auth device_rows=#{device} oauth_rows=#{oauth}")
 
     :ok
   end

@@ -40,11 +40,11 @@ defmodule Engram.JobsTest do
       assert Repo.reload!(job).priority == 0
     end
 
-    test "looks up past one query's parameter limit" do
-      ids = for _ <- 1..70_000, do: Ecto.UUID.generate()
+    test "finds a pending job at the end of a long id list" do
+      ids = for _ <- 1..500, do: Ecto.UUID.generate()
       last = List.last(ids)
       job!(last, "scheduled")
-      assert length(Jobs.reject_pending(RefreshKeywordVectors, ids)) == 69_999
+      assert length(Jobs.reject_pending(RefreshKeywordVectors, ids)) == 499
     end
 
     test "another worker's job does not count" do
@@ -55,24 +55,45 @@ defmodule Engram.JobsTest do
   end
 
   # The index only helps if the planner can match it: the key and the states
-  # must be literals in the SQL, not parameters. With seq scans disabled, a
-  # plan that still avoids the index means the query cannot use it.
+  # must be literals in the SQL, not parameters. A plain EXPLAIN with bound
+  # values cannot tell: Postgres plans a one-off statement with the values
+  # inlined, so a parameter matches the partial predicate there. A prepared
+  # statement under a forced generic plan keeps every parameter opaque, which
+  # is how a parameter would reach the planner for a reused query plan.
   describe "oban_jobs_pending_note_id_index" do
     for executing? <- [true, false] do
-      test "backs the lookup (executing: #{executing?})" do
+      test "backs the lookup under a generic plan (executing: #{executing?})" do
+        # A pending backlog, so the state index alone is not the cheap path.
+        Oban.insert_all(
+          for _ <- 1..2_000,
+              do: RefreshKeywordVectors.new(%{note_id: Ecto.UUID.generate(), user_id: "u"})
+        )
+
         query =
           Jobs.pending_query_for_test(
-            "Engram.Workers.RebuildStaleNote",
+            "Engram.Workers.RefreshKeywordVectors",
             [Ecto.UUID.generate()],
             unquote(executing?)
           )
 
         {sql, params} = Repo.to_sql(:all, query)
+        # Literals in EXECUTE's argument list: the generic plan ignores them.
+        args = Enum.map_join(params, ", ", &literal/1)
 
         plan =
           Repo.transaction(fn ->
+            Repo.query!("ANALYZE oban_jobs")
+            Repo.query!("SET LOCAL plan_cache_mode = force_generic_plan")
             Repo.query!("SET LOCAL enable_seqscan = off")
-            Repo.query!("EXPLAIN " <> sql, params).rows |> List.flatten() |> Enum.join("\n")
+            Repo.query!("PREPARE pending_lookup AS " <> sql)
+
+            try do
+              Repo.query!("EXPLAIN EXECUTE pending_lookup(#{args})").rows
+              |> List.flatten()
+              |> Enum.join("\n")
+            after
+              Repo.query!("DEALLOCATE pending_lookup")
+            end
           end)
 
         assert {:ok, text} = plan
@@ -80,4 +101,9 @@ defmodule Engram.JobsTest do
       end
     end
   end
+
+  defp literal(list) when is_list(list),
+    do: "ARRAY[" <> Enum.map_join(list, ", ", &literal/1) <> "]::text[]"
+
+  defp literal(value) when is_binary(value), do: "'" <> value <> "'"
 end

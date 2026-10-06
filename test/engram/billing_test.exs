@@ -794,6 +794,9 @@ defmodule Engram.BillingTest do
 
       assert {:ok, %Subscription{status: "past_due", tier: "pro"}} =
                Billing.upsert_from_paddle_event(event)
+
+      # An upgrade can lift the index cap: the backfill starts now.
+      assert_enqueued(worker: Engram.Workers.ReconcileEmbeddings)
     end
 
     test "subscription.canceled marks the row canceled" do

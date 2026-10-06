@@ -414,31 +414,29 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
         )
       end
 
-      test_pid = self()
-      handler = {__MODULE__, make_ref()}
-
-      :telemetry.attach(
-        handler,
-        [:engram, :repo, :query],
-        fn _e, _m, %{query: sql}, _c ->
-          if self() == test_pid and sql =~ "set_config('app.current_tenant', $1",
-            do: send(test_pid, :tenant_txn)
-        end,
-        nil
-      )
-
-      try do
-        assert :ok = perform_job(ReconcileEmbeddings, %{})
-      after
-        :telemetry.detach(handler)
-      end
+      txns = count_tenant_txns(fn -> assert :ok = perform_job(ReconcileEmbeddings, %{}) end)
 
       assert length(all_enqueued(worker: EmbedNote)) == 1_205
 
       # One tenant transaction PER PAGE (embed sweep: 2 pages, keyword sweep:
       # 1), not one per user: a transaction holding a whole backlog runs past
       # the 15 s checkout deadline, rolls back, and stalls every later user.
-      assert count_messages(:tenant_txn) == 3
+      assert txns == 3
+    end
+
+    # The keyword sweep pages to the end too, never "the first page".
+    test "the keyword sweep queues every stale note, page by page" do
+      user = insert(:user)
+      for _ <- 1..5, do: current_note(user, keyword_version: nil)
+
+      txns =
+        count_tenant_txns(fn ->
+          assert :ok = perform_job(ReconcileEmbeddings, %{"page" => 2})
+        end)
+
+      assert length(all_enqueued(worker: RefreshKeywordVectors)) == 5
+      # Embed sweep: one empty page. Keyword sweep: 2, 2, then 1.
+      assert txns == 4
     end
 
     # One notes query per SWEEP per tenant (the embed sweep and the keyword
@@ -653,6 +651,30 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
     Repo.update_all(from(j in Oban.Job, where: j.id == ^job.id), set: [state: "executing"])
 
     assert {:ok, %Oban.Job{conflict?: true}} = ReconcileEmbeddings.kick()
+  end
+
+  # Tenant transactions the sweep opens: one per page on the per-user path.
+  defp count_tenant_txns(fun) do
+    test_pid = self()
+    handler = {__MODULE__, make_ref()}
+
+    :telemetry.attach(
+      handler,
+      [:engram, :repo, :query],
+      fn _e, _m, %{query: sql}, _c ->
+        if self() == test_pid and sql =~ "set_config('app.current_tenant', $1",
+          do: send(test_pid, :tenant_txn)
+      end,
+      nil
+    )
+
+    try do
+      fun.()
+    after
+      :telemetry.detach(handler)
+    end
+
+    count_messages(:tenant_txn)
   end
 
   defp count_messages(msg, n \\ 0) do
