@@ -1,7 +1,8 @@
 defmodule Engram.Native do
   @moduledoc """
-  In-house Rust NIFs (native/engram_native). Each function is pure, runs on a
-  dirty CPU scheduler, and takes and returns binaries.
+  In-house Rust NIFs (native/engram_native). Each function is pure; which
+  scheduler it runs on is set per NIF (see `@sized` and the Scheduling
+  section of docs/context/native-nifs.md).
 
   Memory standard (see `native/engram_native/src/memory.rs`):
 
@@ -16,10 +17,6 @@ defmodule Engram.Native do
       NIF on its own allocator (y_ex, lingua) shows up only there.
   """
   use Rustler, otp_app: :engram, crate: "engram_native"
-
-  @doc false
-  def encode_documents_nif(_texts, _filter_key, _avgdl, _language),
-    do: :erlang.nif_error(:nif_not_loaded)
 
   @doc "Keyword query vector: `{indices, values}`, distinct dims, values 1.0."
   def encode_query_nif(_query, _filter_key, _language), do: :erlang.nif_error(:nif_not_loaded)
@@ -51,15 +48,24 @@ defmodule Engram.Native do
     {:json_decode, :json_decode_nif, :json_decode_dirty_nif, 1}
   ]
 
-  for {name, inline_nif, dirty_nif, arity} <- @sized do
-    for nif <- [inline_nif, dirty_nif] do
-      @doc false
-      def unquote(nif)(unquote_splicing(List.duplicate(Macro.var(:_, nil), arity))),
-        do: :erlang.nif_error(:nif_not_loaded)
-    end
+  # NIFs reached only through a wrapper below that fixes their schedule.
+  @single [
+    encode_documents_nif: 4,
+    mmr_select_nif: 4,
+    pack_f32_nif: 1,
+    dense_json_nif: 1,
+    sparse_json_nif: 2
+  ]
 
-    defp nifs(unquote(name)), do: {unquote(inline_nif), unquote(dirty_nif)}
+  # Stubs Rustler replaces on load.
+  for {nif, arity} <- @single ++ Enum.flat_map(@sized, fn {_, i, d, a} -> [{i, a}, {d, a}] end) do
+    @doc false
+    def unquote(nif)(unquote_splicing(List.duplicate(Macro.var(:_, nil), arity))),
+      do: :erlang.nif_error(:nif_not_loaded)
   end
+
+  for {name, inline_nif, dirty_nif, _arity} <- @sized,
+      do: defp(nifs(unquote(name)), do: {unquote(inline_nif), unquote(dirty_nif)})
 
   @doc """
   Links for `Engram.Links.Parser`: `{[{position, kind, target_start,
@@ -118,19 +124,6 @@ defmodule Engram.Native do
     nif = if dirty, do: dirty_nif, else: inline_nif
     call(name, bytes, %{dirty: dirty}, fn -> apply(__MODULE__, nif, args) end)
   end
-
-  @doc false
-  def mmr_select_nif(_vectors, _scores, _limit, _diversity),
-    do: :erlang.nif_error(:nif_not_loaded)
-
-  @doc false
-  def pack_f32_nif(_values), do: :erlang.nif_error(:nif_not_loaded)
-
-  @doc false
-  def dense_json_nif(_packed), do: :erlang.nif_error(:nif_not_loaded)
-
-  @doc false
-  def sparse_json_nif(_indices, _values), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc "Live bytes held by this library's Rust heap, process-wide."
   def live_bytes, do: :erlang.nif_error(:nif_not_loaded)
