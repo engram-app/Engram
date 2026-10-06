@@ -41,6 +41,15 @@ defmodule Engram.Indexing.UnpackPointTest do
     assert Jason.encode!(Indexing.unpack_point(p).payload) == Jason.encode!(p.payload)
   end
 
+  test "a value that is not base64 is JSON-escaped, never spliced raw" do
+    for bad <- [~s(a"b), "a\\b", "line\nbreak", <<0>>, "tab\there", <<0x7F>>, "日本"] do
+      p = put_in(point(), [:payload, :text], bad)
+      json = Jason.encode!(Indexing.unpack_point(p).payload)
+      assert json == Jason.encode!(p.payload), inspect(bad)
+      assert Jason.decode!(json)["text"] == bad
+    end
+  end
+
   test "points without a payload (update_vectors) are left payload-free" do
     p = Map.delete(point(), :payload)
     refute Map.has_key?(Indexing.unpack_point(p), :payload)

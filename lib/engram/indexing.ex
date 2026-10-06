@@ -822,13 +822,35 @@ defmodule Engram.Indexing do
     :heading_path_nonce
   ]
 
+  # A value holding a byte JSON must escape is not the base64
+  # `encrypt_qdrant_payload/4` promises, so it goes through Jason rather than
+  # being spliced raw into the request body. The `:binary.match` scan keeps
+  # about 40% of the fragment gain (2,000 chunks, min of 7, three runs:
+  # Jason 33-34 ms, guarded 25-27 ms, unguarded 10-11 ms); the rest is the
+  # price of not trusting the caller. Compiling the pattern costs ~70 us,
+  # more than a scan, so it is compiled once per node.
   defp base64_fragments(payload) do
+    escape = json_escape_pattern()
+
     Enum.reduce(@base64_payload_keys, payload, fn key, acc ->
       case acc do
-        %{^key => b64} when is_binary(b64) -> %{acc | key => Jason.Fragment.new([?", b64, ?"])}
-        _ -> acc
+        %{^key => b64} when is_binary(b64) ->
+          if :binary.match(b64, escape) == :nomatch,
+            do: %{acc | key => Jason.Fragment.new([?", b64, ?"])},
+            else: acc
+
+        _ ->
+          acc
       end
     end)
+  end
+
+  defp json_escape_pattern do
+    with nil <- :persistent_term.get(__MODULE__.JsonEscape, nil) do
+      pattern = :binary.compile_pattern([~s("), "\\" | Enum.map(0..31, &<<&1>>)])
+      :persistent_term.put(__MODULE__.JsonEscape, pattern)
+      pattern
+    end
   end
 
   # Formatted in Rust (`Engram.Native.dense_json/1`): no per-float term at all,
