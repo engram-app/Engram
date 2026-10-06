@@ -670,8 +670,8 @@ defmodule Engram.Links.RewriterTest do
       {:ok, renamed} =
         Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"}, actor: "api")
 
-      # 😀 (U+1F600) is one codepoint but TWO UTF-16 code units. If utf16_len/1
-      # were swapped for a codepoint count (String.length/1), the computed
+      # 😀 (U+1F600) is one codepoint but TWO UTF-16 code units. If the
+      # offsets (Native.utf16_offsets/2) counted codepoints instead, the
       # offset into the doc's Y.Text would land one unit short and corrupt
       # the rewrite instead of landing exactly on "Old".
       content = "😀 see [[Old]]"

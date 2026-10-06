@@ -224,14 +224,6 @@ defmodule Engram.Notes.CrdtBridge do
   end
 
   @doc """
-  Length of `s` in UTF-16 code units: the unit of every `Yex.Text` offset,
-  since docs are `offset_kind: :utf16`.
-  """
-  @spec utf16_len(String.t()) :: non_neg_integer()
-  def utf16_len(s),
-    do: s |> :unicode.characters_to_binary(:utf8, {:utf16, :big}) |> byte_size() |> div(2)
-
-  @doc """
   Ingest full note plaintext into the doc's frontmatter Y.Map + order Y.Array and
   body Y.Text. Only changed map keys are written. Malformed frontmatter falls
   back to treating the entire text as body.
