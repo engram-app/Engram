@@ -10,6 +10,7 @@ mod meta;
 mod mmr;
 mod tokenizer;
 mod vectors;
+mod yaml;
 
 // Under `cargo test` it counts over the system allocator (see memory.rs).
 #[global_allocator]
@@ -405,6 +406,24 @@ fn frontmatter_split_nif(content: rustler::Binary) -> (frontmatter::Split, usize
 #[rustler::nif(schedule = "DirtyCpu")]
 fn frontmatter_split_dirty_nif(content: rustler::Binary) -> (frontmatter::Split, usize) {
     frontmatter_split_peak(content.as_slice())
+}
+
+/// `Frontmatter.parse/1`'s common case: `[{key, json}]` in source order, or
+/// nil (YamlElixir decides), with the native peak.
+fn frontmatter_parse(block: &str) -> (Option<Vec<(String, String)>>, usize) {
+    let base = memory::begin();
+    let out = yaml::parse(block);
+    (out, memory::peak_since(base))
+}
+
+#[rustler::nif]
+fn frontmatter_parse_nif(block: &str) -> (Option<Vec<(String, String)>>, usize) {
+    frontmatter_parse(block)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn frontmatter_parse_dirty_nif(block: &str) -> (Option<Vec<(String, String)>>, usize) {
+    frontmatter_parse(block)
 }
 
 rustler::init!("Elixir.Engram.Native");
