@@ -1,7 +1,14 @@
 defmodule Engram.Notes.OkfFieldsTest do
   use ExUnit.Case, async: true
 
+  alias Engram.Notes.Frontmatter
   alias Engram.Notes.OkfFields
+
+  # The write path's own sequence (`Notes.inject_frontmatter_fields/4`).
+  defp extract(content) do
+    {block, _body} = Frontmatter.split(content)
+    OkfFields.from_parse(block && Frontmatter.parse(block))
+  end
 
   @empty %{type: nil, description: nil, resource: nil, fm_timestamp: nil, fm_created: nil}
 
@@ -17,7 +24,7 @@ defmodule Engram.Notes.OkfFieldsTest do
     body
     """
 
-    assert OkfFields.extract(content) == %{
+    assert extract(content) == %{
              type: "Playbook",
              description: "Steps to triage a freshness alert.",
              resource: "https://example.com/dash",
@@ -27,15 +34,15 @@ defmodule Engram.Notes.OkfFieldsTest do
   end
 
   test "returns all-nil for content without frontmatter" do
-    assert OkfFields.extract("just a body\n") == @empty
+    assert extract("just a body\n") == @empty
   end
 
   test "returns all-nil for malformed YAML" do
-    assert OkfFields.extract("---\n: : :\n---\nbody\n") == @empty
+    assert extract("---\n: : :\n---\nbody\n") == @empty
   end
 
   test "timestamp alias priority: timestamp > modified > updated" do
-    ts = fn block -> OkfFields.extract("---\n#{block}---\nx\n").fm_timestamp end
+    ts = fn block -> extract("---\n#{block}---\nx\n").fm_timestamp end
 
     assert ts.("timestamp: 2026-01-01\nmodified: 2026-02-02\nupdated: 2026-03-03\n") ==
              ~U[2026-01-01 00:00:00Z]
@@ -45,20 +52,20 @@ defmodule Engram.Notes.OkfFieldsTest do
   end
 
   test "created alias priority: created > date" do
-    cr = fn block -> OkfFields.extract("---\n#{block}---\nx\n").fm_created end
+    cr = fn block -> extract("---\n#{block}---\nx\n").fm_created end
     assert cr.("created: 2026-01-05\ndate: 2026-01-06\n") == ~U[2026-01-05 00:00:00Z]
     assert cr.("date: 2026-01-06\n") == ~U[2026-01-06 00:00:00Z]
   end
 
   test "bare date parses as UTC midnight; invalid date is nil" do
-    assert OkfFields.extract("---\ntimestamp: 2026-06-12\n---\nx\n").fm_timestamp ==
+    assert extract("---\ntimestamp: 2026-06-12\n---\nx\n").fm_timestamp ==
              ~U[2026-06-12 00:00:00Z]
 
-    assert OkfFields.extract("---\ntimestamp: not-a-date\n---\nx\n").fm_timestamp == nil
+    assert extract("---\ntimestamp: not-a-date\n---\nx\n").fm_timestamp == nil
   end
 
   test "non-string type/description/resource values are nil" do
-    assert OkfFields.extract("---\ntype: 42\ndescription: [a, b]\nresource: true\n---\nx\n") ==
+    assert extract("---\ntype: 42\ndescription: [a, b]\nresource: true\n---\nx\n") ==
              @empty
   end
 
@@ -67,7 +74,7 @@ defmodule Engram.Notes.OkfFieldsTest do
     # (nested non-binary key) no longer forces the whole block to @empty.
     # The good `created` key still populates fm_created.
     content = "---\ncreated: 2026-01-05\nbadkey: {[a, b]: 1}\n---\nbody\n"
-    assert OkfFields.extract(content).fm_created == ~U[2026-01-05 00:00:00Z]
+    assert extract(content).fm_created == ~U[2026-01-05 00:00:00Z]
   end
 
   test "normalize_type is NFKC + lowercase" do
@@ -81,9 +88,9 @@ defmodule Engram.Notes.OkfFieldsTest do
       {block, _} = Engram.Notes.Frontmatter.split(content)
 
       assert OkfFields.from_parse(Engram.Notes.Frontmatter.parse(block)) ==
-               OkfFields.extract(content)
+               extract(content)
 
-      assert OkfFields.extract(content).type == "Playbook"
+      assert extract(content).type == "Playbook"
     end
 
     test "no frontmatter (nil) and invalid YAML (:error) give all-nil" do

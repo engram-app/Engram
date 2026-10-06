@@ -24,14 +24,6 @@ defmodule Engram.Notes.OkfFields do
 
   @empty %{type: nil, description: nil, resource: nil, fm_timestamp: nil, fm_created: nil}
 
-  @spec extract(String.t()) :: t()
-  def extract(content) when is_binary(content) do
-    case Frontmatter.split(content) do
-      {block, _body} when is_binary(block) -> from_parse(Frontmatter.parse(block))
-      _ -> @empty
-    end
-  end
-
   @doc """
   OKF fields from an already-computed `Frontmatter.parse/1` result, so a
   caller that also needs the parse for something else (parse_status) parses
