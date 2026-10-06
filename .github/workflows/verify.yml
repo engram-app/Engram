@@ -2795,6 +2795,10 @@ jobs:
               %{pending: [_ | _]} =
                 Engram.Release.Preflight.report(Engram.Repo, applied_versions: [])
               :ok = Engram.Release.Preflight.run()
+              # The data-migrations ledger works inside the release: on the
+              # empty CI database every registered pass finds no work.
+              :done = Engram.DataMigrations.IndexVersions.run_pass()
+              :done = Engram.DataMigrations.CrdtStateSeed.run_pass()
               IO.puts("RELEASE_ENTRYPOINTS_OK")
             ')
           echo "$OUT"
