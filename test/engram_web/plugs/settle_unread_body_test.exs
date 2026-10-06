@@ -6,6 +6,8 @@ defmodule EngramWeb.Plugs.SettleUnreadBodyTest do
   """
   use EngramWeb.ConnCase, async: false
 
+  alias EngramWeb.Plugs.SettleUnreadBody
+
   setup do
     on_exit(fn -> Application.put_env(:engram, :pre_auth_rate_limit_override, nil) end)
     EngramWeb.RateLimiter.reset_buckets!()
@@ -48,5 +50,19 @@ defmodule EngramWeb.Plugs.SettleUnreadBodyTest do
     assert json_response(conn, 401)
     assert unread(conn) == "MZ"
     assert get_resp_header(conn, "connection") == ["close"]
+  end
+
+  # Bandit HTTP/2 answers each 15 s read timeout with `{:more, "", conn}`
+  # (bandit http2/stream.ex:283), so the byte budget never shrinks. Zero
+  # progress must end the drain, or a silent client holds it forever.
+  defmodule StalledAdapter do
+    def read_req_body(%{reads: n}, _opts) when n > 3, do: raise("drained a stalled body")
+    def read_req_body(%{reads: n} = state, _opts), do: {:more, "", %{state | reads: n + 1}}
+  end
+
+  test "settle/1 stops on a zero-progress read" do
+    conn = %Plug.Conn{state: :sent, adapter: {StalledAdapter, %{reads: 0}}}
+
+    assert %Plug.Conn{adapter: {StalledAdapter, %{reads: 1}}} = SettleUnreadBody.settle(conn)
   end
 end

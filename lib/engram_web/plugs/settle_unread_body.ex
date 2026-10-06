@@ -75,6 +75,10 @@ defmodule EngramWeb.Plugs.SettleUnreadBody do
 
   defp drain(conn, budget) do
     case read_body(conn, length: @read, read_length: @read) do
+      # Zero progress is a stalled client: Bandit HTTP/2 returns this on every
+      # 15 s read timeout (bandit http2/stream.ex:283), so the budget would
+      # never shrink. Stop; Bandit ends the stream / closes the socket.
+      {:more, "", conn} -> conn
       {:more, discard, conn} -> drain(conn, budget - byte_size(discard))
       {:ok, _discard, conn} -> conn
       {:error, _reason} -> conn
