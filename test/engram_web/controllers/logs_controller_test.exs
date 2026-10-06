@@ -206,6 +206,55 @@ defmodule EngramWeb.LogsControllerTest do
       assert hd(instance_a_rows)["message"] == "Event: note_changed path=n1"
     end
 
+    test "a credential for vault A cannot see vault B's log lines", %{conn: conn, user: user} do
+      vault_a = insert(:vault, user: user)
+      vault_b = insert(:vault, user: user)
+
+      for {vault, msg} <- [{vault_a, "from-a"}, {vault_b, "from-b"}] do
+        conn
+        |> put_req_header("x-vault-id", to_string(vault.id))
+        |> post("/api/logs", %{logs: [%{level: "info", category: "iso", message: msg}]})
+        |> json_response(200)
+      end
+
+      token =
+        user
+        |> ensure_external_id()
+        |> Engram.Accounts.generate_jwt(%{"scope" => "mcp", "vault_ids" => [vault_a.id]})
+
+      grant_conn =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> put_req_header("x-vault-id", to_string(vault_a.id))
+
+      messages =
+        grant_conn
+        |> get("/api/logs", %{category: "iso"})
+        |> json_response(200)
+        |> Map.fetch!("logs")
+        |> Enum.map(& &1["message"])
+
+      # Control: vault A's own line comes back; vault B's never does.
+      assert messages == ["from-a"]
+    end
+
+    test "an unrestricted key only reads the vault it addresses", %{conn: conn, user: user} do
+      vault_b = insert(:vault, user: user)
+
+      conn
+      |> put_req_header("x-vault-id", to_string(vault_b.id))
+      |> post("/api/logs", %{logs: [%{level: "info", category: "iso", message: "from-b"}]})
+
+      assert conn |> get("/api/logs", %{category: "iso"}) |> json_response(200) == %{"logs" => []}
+
+      assert [%{"message" => "from-b"}] =
+               conn
+               |> put_req_header("x-vault-id", to_string(vault_b.id))
+               |> get("/api/logs", %{category: "iso"})
+               |> json_response(200)
+               |> Map.fetch!("logs")
+    end
+
     test "multi-tenant isolation — user B cannot see user A's logs", %{conn: _conn} do
       user_b = insert(:user)
       insert(:vault, user: user_b, is_default: true)

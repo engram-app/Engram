@@ -21,19 +21,40 @@ defmodule EngramWeb.Plugs.RequireSession do
   lock every self-host user out of their own settings page. Neither carries a
   `scope` claim; only `Engram.OAuth.issue_access_token/3` sets one.
 
-  The two rejections carry distinct error codes so they stay separable in logs
+  Device-flow (plugin) tokens are rejected too, for least privilege. The
+  plugin only syncs notes, but its token sits on disk in the vault's plugin
+  data and refreshes for 90 days. A copied token must not mint a permanent API
+  key, read invoices, accept the ToS, approve device logins, or reach the admin
+  plane. `DeviceFlow` stamps these tokens `cred: "device"`; `OAuthScopeEnforce`
+  surfaces that as `:device_token`.
+
+  The rejections carry distinct error codes so they stay separable in logs
   and in the client.
+
+  ## Options
+
+    * `allow_api_key: true` — let API keys through and reject only OAuth
+      grants. For routes where a first-party API key is a legitimate caller
+      but a third-party app never is (onboarding consent writes).
   """
 
   import Plug.Conn
 
   def init(opts), do: opts
 
-  def call(conn, _opts) do
+  def call(conn, opts) do
     cond do
-      conn.assigns[:current_api_key] -> reject(conn, "api_key_not_allowed")
-      conn.assigns[:oauth_scope] -> reject(conn, "oauth_grant_not_allowed")
-      true -> conn
+      conn.assigns[:current_api_key] && !Keyword.get(opts, :allow_api_key, false) ->
+        reject(conn, "api_key_not_allowed")
+
+      conn.assigns[:oauth_scope] ->
+        reject(conn, "oauth_grant_not_allowed")
+
+      conn.assigns[:device_token] ->
+        reject(conn, "device_token_not_allowed")
+
+      true ->
+        conn
     end
   end
 

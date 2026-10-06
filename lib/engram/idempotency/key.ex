@@ -4,6 +4,8 @@ defmodule Engram.Idempotency.Key do
 
   schema "idempotency_keys" do
     field :key, Ecto.UUID
+    field :vault_id, Ecto.UUID
+    field :route, :string
     field :status, :integer
     field :response_ciphertext, :binary
     field :response_nonce, :binary

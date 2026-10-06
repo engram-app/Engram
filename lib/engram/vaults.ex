@@ -147,6 +147,10 @@ defmodule Engram.Vaults do
   `:client_id`, `:slug`, `:user_id` and `:is_default` are computed here and
   cannot be overridden.
 
+  `opts`: `create?: false` resolves an existing vault only and returns
+  `{:error, :create_forbidden}` instead of inserting one (#1869 — a
+  vault-restricted credential may fetch, never create).
+
   Returns:
     {:ok, vault, :created}   — new vault was inserted
     {:ok, vault, :existing}  — matched an existing vault
@@ -154,12 +158,12 @@ defmodule Engram.Vaults do
     {:error, {:vault_limit_reached, limit, current}}
     {:error, changeset}
   """
-  def register_vault(user, name, client_id, extra_attrs \\ %{})
+  def register_vault(user, name, client_id, extra_attrs \\ %{}, opts \\ [])
 
-  def register_vault(_user, _name, client_id, _extra_attrs) when not is_binary(client_id),
+  def register_vault(_user, _name, client_id, _extra_attrs, _opts) when not is_binary(client_id),
     do: {:error, :invalid_client_id}
 
-  def register_vault(user, name, client_id, extra_attrs) do
+  def register_vault(user, name, client_id, extra_attrs, opts) do
     # A blank client_id cannot serve as this function's idempotency key, and
     # fails in the worst direction: `Vault.changeset/2` casts `:client_id`, so
     # Ecto's default `:empty_values` drops "" and the row stores NULL — which
@@ -170,11 +174,11 @@ defmodule Engram.Vaults do
     if String.trim(client_id) == "" do
       {:error, :invalid_client_id}
     else
-      do_register_vault(user, name, client_id, atomize_keys(extra_attrs))
+      do_register_vault(user, name, client_id, atomize_keys(extra_attrs), opts)
     end
   end
 
-  defp do_register_vault(user, name, client_id, extra_attrs) do
+  defp do_register_vault(user, name, client_id, extra_attrs, opts) do
     # Ensure user has a DEK before Phase B injection
     with {:ok, user} <- Engram.Crypto.ensure_user_dek(user) do
       Repo.with_tenant(user.id, fn ->
@@ -183,7 +187,9 @@ defmodule Engram.Vaults do
             {:ok, decrypt_vault_if_needed(vault, user), :existing}
 
           nil ->
-            insert_vault(user, name, client_id, extra_attrs)
+            if Keyword.get(opts, :create?, true),
+              do: insert_vault(user, name, client_id, extra_attrs),
+              else: {:error, :create_forbidden}
         end
       end)
       |> unwrap_register_transaction()

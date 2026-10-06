@@ -32,7 +32,8 @@ defmodule EngramWeb.BillingControllerTest do
   # rejects the API key the default setup uses (and any OAuth grant) — changing
   # what the user pays is not something a delegated credential may do. Those
   # describes re-auth as a first-party session: same user, legitimate
-  # credential. Read-only billing keeps the API key.
+  # credential. So do the PII reads (subscription detail, transactions,
+  # invoice). Other read-only billing keeps the API key.
   setup %{conn: conn, user: user} = ctx do
     if ctx[:session_auth] do
       user = ensure_external_id(user)
@@ -158,6 +159,8 @@ defmodule EngramWeb.BillingControllerTest do
   end
 
   describe "GET /api/billing/subscription" do
+    @describetag :session_auth
+
     test "returns normalized detail for a subscribed user", %{conn: conn, user: user} do
       insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
 
@@ -191,6 +194,8 @@ defmodule EngramWeb.BillingControllerTest do
   end
 
   describe "GET /api/billing/transactions" do
+    @describetag :session_auth
+
     test "returns history and the latest card", %{conn: conn, user: user} do
       insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
 
@@ -234,6 +239,8 @@ defmodule EngramWeb.BillingControllerTest do
   end
 
   describe "GET /api/billing/transactions/:id/invoice" do
+    @describetag :session_auth
+
     test "returns the invoice URL for the user's own transaction", %{conn: conn, user: user} do
       insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
 

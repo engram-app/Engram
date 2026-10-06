@@ -130,4 +130,24 @@ defmodule Engram.AccountsApiKeyAuthRlsTest do
       assert {:returned, 1} = as_prod_role(count)
     end
   end
+
+  describe "the engram_key_lookup role" do
+    test "holds no login, bypass or admin attributes" do
+      assert %{rows: [[false, false, false, false, false]]} =
+               Repo.query!("""
+               SELECT rolsuper, rolbypassrls, rolcreaterole, rolcreatedb, rolcanlogin
+               FROM pg_roles WHERE rolname = 'engram_key_lookup'
+               """)
+    end
+
+    # SET (so validate_api_key can switch to it) but NOT INHERIT: an inherited
+    # membership would put engram_app under the policy on every query.
+    test "engram_app may SET it but does not inherit it" do
+      assert %{rows: [[true, false]]} =
+               Repo.query!("""
+               SELECT pg_has_role('engram_app', 'engram_key_lookup', 'SET'),
+                      pg_has_role('engram_app', 'engram_key_lookup', 'USAGE')
+               """)
+    end
+  end
 end

@@ -1,4 +1,4 @@
-Config.CSP: Missing Content-Security-Policy,lib/engram_web/router.ex:186,4EA2434
+Config.CSP: Missing Content-Security-Policy,lib/engram_web/router.ex:200,214FBA
 Config.CSWH: Cross-Site Websocket Hijacking,lib/engram_web/endpoint.ex:9,68D560D
 Config.CSWH: Cross-Site Websocket Hijacking,lib/engram_web/endpoint.ex:30,6F8AC00
 Config.CSWH: Cross-Site Websocket Hijacking,lib/engram_web/endpoint.ex:45,6EA19F5
@@ -10,9 +10,9 @@ Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/notes.ex:4537,2806102
 SQL.Query: SQL injection,lib/engram/attachments.ex:1074,41475BB
 SQL.Query: SQL injection,lib/engram/notes.ex:6266,282825C
 Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram/legal/seeder.ex:84,12C6307
-Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram/release/preflight.ex:114,30D4B80
+Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram/release/preflight.ex:128,2B03108
 Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram_web/controllers/spa_controller.ex:44,6BED2D7
 Traversal.FileModule: Directory Traversal in `File.read`,lib/engram/spa_integrity.ex:43,5D1BE94
-XSS.ContentType: XSS in `put_resp_content_type`,lib/engram_web/controllers/attachments_controller.ex:401,32F1ABC
-XSS.SendResp: XSS in `send_resp`,lib/engram_web/controllers/attachments_controller.ex:404,567B25D
+XSS.ContentType: XSS in `put_resp_content_type`,lib/engram_web/controllers/attachments_controller.ex:397,1D21880
+XSS.SendResp: XSS in `send_resp`,lib/engram_web/controllers/attachments_controller.ex:400,1D52B52
 XSS.SendResp: XSS in `send_resp`,lib/engram_web/controllers/spa_controller.ex:7,589845D

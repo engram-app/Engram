@@ -106,17 +106,38 @@ defmodule EngramWeb.Plugs.RequireSessionTest do
 
       assert %{"key" => _} = json_response(conn, 200)
     end
+  end
 
-    test "a device-flow token is a session, not a grant", %{conn: conn, user: user} do
-      # The Obsidian plugin's own token. DeviceFlow mints it via
-      # `Accounts.generate_jwt(user)` with NO extras, so it carries no `scope`
-      # claim and must not be caught by the OAuth branch.
-      conn =
-        conn
-        |> oauth_authed(user, %{})
-        |> get("/api/connections")
+  # Least privilege for the Obsidian plugin. Its device-flow token sits on disk
+  # in the vault's plugin data and refreshes for 90 days; the plugin only syncs
+  # notes. A copied token must not mint a permanent API key, read invoices,
+  # accept the ToS, approve device logins, or manage connections.
+  describe "the plugin's device token is kept off session-only routes" do
+    # Shape of `DeviceFlow`'s access token (pinned in device_flow_test).
+    defp device_authed(conn, user), do: oauth_authed(conn, user, %{"cred" => "device"})
 
-      assert is_list(json_response(conn, 200))
+    for {verb, path} <- [
+          {:post, "/api/api-keys"},
+          {:get, "/api/connections"},
+          {:post, "/api/auth/device/authorize"},
+          {:post, "/api/onboarding/accept-terms"},
+          {:get, "/api/billing/transactions"}
+        ] do
+      test "#{verb} #{path} rejects it", %{conn: conn, user: user} do
+        conn = conn |> device_authed(user) |> request(unquote(verb), unquote(path))
+        assert %{"error" => "device_token_not_allowed"} = json_response(conn, 403)
+      end
+    end
+
+    test "nothing is minted on the rejected POST /api-keys", %{conn: conn, user: user} do
+      _ = conn |> device_authed(user) |> post("/api/api-keys", %{name: "escalated"})
+      assert Engram.Repo.all(Engram.Accounts.ApiKey, skip_tenant_check: true) == []
+    end
+
+    # Over-block guard: the routes the plugin actually uses.
+    test "it still reaches GET /api/me", %{conn: conn, user: user} do
+      conn = conn |> device_authed(user) |> get("/api/me")
+      assert json_response(conn, 200)
     end
   end
 
@@ -183,6 +204,101 @@ defmodule EngramWeb.Plugs.RequireSessionTest do
         |> get("/api/billing/status")
 
       assert json_response(conn, 200)["tier"]
+    end
+  end
+
+  describe "billing PII reads are session-only" do
+    # Subscription detail, transaction history and invoices carry the user's
+    # name, address and payment history. A notes grant is not consent to that.
+    @billing_pii [
+      "/api/billing/subscription",
+      "/api/billing/transactions",
+      "/api/billing/transactions/txn_1/invoice"
+    ]
+
+    test "no billing PII read is reachable by a grant", %{conn: base, user: user} do
+      for path <- @billing_pii do
+        conn = base |> oauth_authed(user, %{"scope" => "mcp"}) |> get(path)
+        assert %{"error" => "oauth_grant_not_allowed"} = json_response(conn, 403), path
+      end
+    end
+
+    test "no billing PII read is reachable by an api key", %{conn: base, user: user} do
+      grant_api_write!(user)
+      {:ok, raw_key, _} = Engram.Accounts.create_api_key(user, "billing-pii")
+
+      for path <- @billing_pii do
+        conn = base |> put_req_header("authorization", "Bearer #{raw_key}") |> get(path)
+        assert %{"error" => "api_key_not_allowed"} = json_response(conn, 403), path
+      end
+    end
+
+    test "a first-party session still reaches every billing PII read", %{conn: base, user: user} do
+      for path <- @billing_pii do
+        conn = base |> session_authed(user) |> get(path)
+        refute conn.status == 403, "#{path} — RequireSession blocked a real session"
+      end
+    end
+
+    test "the plugin's device token cannot reach them", %{conn: base, user: user} do
+      for path <- @billing_pii do
+        conn = base |> oauth_authed(user, %{"cred" => "device"}) |> get(path)
+        assert %{"error" => "device_token_not_allowed"} = json_response(conn, 403), path
+      end
+    end
+  end
+
+  describe "onboarding consent writes reject OAuth grants" do
+    # Accepting the ToS is a binding legal act by the human. The current
+    # version and hash are public, so without this an MCP app that hits the
+    # re-acceptance 403 could record consent on the user's behalf.
+    @consent_writes [
+      {:post, "/api/onboarding/accept-terms"},
+      {:post, "/api/onboarding/accept_free_tier"},
+      {:patch, "/api/onboarding/profile"}
+    ]
+
+    defp onboarding_request(conn, :post, path), do: post(conn, path, %{})
+    defp onboarding_request(conn, :patch, path), do: patch(conn, path, %{"tools" => ["claude"]})
+
+    test "no consent write is reachable by a grant", %{conn: base, user: user, vault: vault} do
+      for {verb, path} <- @consent_writes,
+          extras <- [%{"scope" => "mcp"}, %{"scope" => "mcp", "vault_ids" => [vault.id]}] do
+        conn = base |> oauth_authed(user, extras) |> onboarding_request(verb, path)
+
+        assert %{"error" => "oauth_grant_not_allowed"} = json_response(conn, 403),
+               "#{verb} #{path}"
+      end
+
+      user = Engram.Repo.get!(Engram.Accounts.User, user.id, skip_tenant_check: true)
+      assert is_nil(user.free_tier_accepted_at)
+    end
+
+    # Deliberate: Free users onboard with an API key (see the router comment on
+    # the onboarding scope). Over-block guard for that path.
+    test "an api key still reaches every consent write", %{conn: base, user: user} do
+      {:ok, raw_key, _} = Engram.Accounts.create_api_key(user, "onboarding-key")
+
+      for {verb, path} <- @consent_writes do
+        conn =
+          base
+          |> put_req_header("authorization", "Bearer #{raw_key}")
+          |> onboarding_request(verb, path)
+
+        refute conn.status == 403, "#{verb} #{path}"
+      end
+    end
+
+    test "a first-party session still reaches every consent write", %{conn: base, user: user} do
+      for {verb, path} <- @consent_writes do
+        conn = base |> session_authed(user) |> onboarding_request(verb, path)
+        refute conn.status == 403, "#{verb} #{path}"
+      end
+    end
+
+    test "onboarding status stays reachable by a grant", %{conn: conn, user: user} do
+      conn = conn |> oauth_authed(user, %{"scope" => "mcp"}) |> get("/api/onboarding/status")
+      assert json_response(conn, 200)
     end
   end
 

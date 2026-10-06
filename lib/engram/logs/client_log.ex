@@ -31,6 +31,8 @@ defmodule Engram.Logs.ClientLog do
     field :forced, :boolean, default: false
 
     belongs_to :user, Engram.Accounts.User
+    # NULL on rows ingested before #1866; those are never listed.
+    belongs_to :vault, Engram.Vaults.Vault
 
     timestamps(type: :utc_datetime, inserted_at: :created_at, updated_at: false)
   end

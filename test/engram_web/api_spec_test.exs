@@ -196,14 +196,16 @@ defmodule EngramWeb.ApiSpecTest do
       refute spec.paths["/api/vaults"].post
     end
 
-    test "POST /api/vaults/register documents request + 200/201/400/402/422", %{spec: spec} do
+    test "POST /api/vaults/register documents request + 200/201/400/402/403/422", %{spec: spec} do
       op = spec.paths["/api/vaults/register"].post
       assert op.tags == ["Vaults"]
       assert op.requestBody
       # 422 joins the set with the blank-name fix: a name that is present but
       # blank clears the is_nil guard and fails the changeset, which the
-      # controller now surfaces instead of falling out of the case.
-      assert Enum.sort(Map.keys(op.responses)) == [200, 201, 400, 402, 422]
+      # controller now surfaces instead of falling out of the case. 403 joins
+      # with #1869: a vault-restricted credential can neither read back an
+      # out-of-scope vault nor create one.
+      assert Enum.sort(Map.keys(op.responses)) == [200, 201, 400, 402, 403, 422]
     end
 
     test "GET /api/vaults/{id} documents id path param + 404", %{spec: spec} do

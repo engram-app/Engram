@@ -16,6 +16,11 @@ defmodule Engram.Idempotency do
   safe — identical-content upserts short-circuit (#860), so a replayed
   batch converges on the same result.
 
+  Rows are also scoped to the vault and route that produced them (#1869):
+  `lookup/3` matches `(user_id, key, vault_id, route)`, so a credential
+  restricted to vault B cannot replay vault A's cached response. A row with
+  no vault recorded (written before the columns existed) never matches.
+
   Expiry: rows past `expires_at` (default TTL 24h) read as `:miss`
   immediately and are deleted by the daily `IdempotencyPrune` worker.
   """
@@ -31,8 +36,11 @@ defmodule Engram.Idempotency do
 
   @default_ttl_ms 24 * 60 * 60 * 1000
 
-  @spec remember(map(), Ecto.UUID.t(), %{status: integer(), body: term()}, keyword()) :: :ok
-  def remember(user, key, %{status: status, body: body}, opts \\ []) do
+  @type scope :: %{vault_id: Ecto.UUID.t(), route: String.t()}
+
+  @spec remember(map(), Ecto.UUID.t(), scope, %{status: integer(), body: term()}, keyword()) ::
+          :ok
+  def remember(user, key, scope, %{status: status, body: body}, opts \\ []) do
     ttl_ms = Keyword.get(opts, :ttl_ms, @default_ttl_ms)
     expires_at = DateTime.add(DateTime.utc_now(), ttl_ms, :millisecond)
 
@@ -49,6 +57,8 @@ defmodule Engram.Idempotency do
                   id: Ecto.UUID.generate(),
                   user_id: user.id,
                   key: key,
+                  vault_id: scope.vault_id,
+                  route: scope.route,
                   status: status,
                   response_ciphertext: ciphertext,
                   response_nonce: nonce,
@@ -71,15 +81,17 @@ defmodule Engram.Idempotency do
     end
   end
 
-  @spec lookup(map(), Ecto.UUID.t()) :: {:ok, %{status: integer(), body: term()}} | :miss
-  def lookup(user, key) do
+  @spec lookup(map(), Ecto.UUID.t(), scope) :: {:ok, %{status: integer(), body: term()}} | :miss
+  def lookup(user, key, scope) do
     now = DateTime.utc_now()
 
     {:ok, row} =
       Repo.with_tenant(user.id, fn ->
         Repo.one(
           from(k in Key,
-            where: k.user_id == ^user.id and k.key == ^key and k.expires_at > ^now
+            where:
+              k.user_id == ^user.id and k.key == ^key and k.expires_at > ^now and
+                k.vault_id == ^scope.vault_id and k.route == ^scope.route
           )
         )
       end)

@@ -89,6 +89,21 @@ defmodule Engram.AccountsTest do
       assert linked.external_id == "clerk_user_link"
     end
 
+    test "refuses to relink a user that already has a different external_id" do
+      user = insert(:user, email: "owned@test.com")
+
+      user
+      |> Ecto.Changeset.change(%{external_id: "clerk_original"})
+      |> Engram.Repo.update!(skip_tenant_check: true)
+
+      assert {:error, :external_id_conflict} =
+               Accounts.find_or_create_by_external_id("clerk_attacker", %{
+                 email: "owned@test.com"
+               })
+
+      assert Engram.Repo.reload!(user, skip_tenant_check: true).external_id == "clerk_original"
+    end
+
     test "creates new user when no external_id or email match" do
       assert {:ok, created} =
                Accounts.find_or_create_by_external_id("clerk_user_new", %{
@@ -134,6 +149,31 @@ defmodule Engram.AccountsTest do
       assert found.id == user.id
       # external_id lookup takes precedence — email is NOT updated
       assert found.email == "old@test.com"
+    end
+  end
+
+  describe "verify_password/2 — email case" do
+    test "matches a lowercase-stored email regardless of input case" do
+      {:ok, _} = Accounts.create_user_with_password("mixed@test.com", "longpassword1")
+      assert {:ok, _} = Accounts.verify_password("  MiXeD@Test.COM ", "longpassword1")
+    end
+
+    test "matches a mixed-case-stored email (Clerk-synced rows keep provider case)" do
+      user = insert(:user, email: "Upper.Case@Test.com")
+
+      user
+      |> Ecto.Changeset.change(%{password_hash: Bcrypt.hash_pwd_salt("longpassword1")})
+      |> Engram.Repo.update!(skip_tenant_check: true)
+
+      assert {:ok, found} = Accounts.verify_password("upper.case@test.com", "longpassword1")
+      assert found.id == user.id
+    end
+
+    test "does not match a gmail dot/plus alias of the stored email" do
+      {:ok, _} = Accounts.create_user_with_password("me.foo@gmail.com", "longpassword1")
+
+      assert {:error, :invalid_credentials} =
+               Accounts.verify_password("mefoo+x@gmail.com", "longpassword1")
     end
   end
 

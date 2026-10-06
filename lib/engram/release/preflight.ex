@@ -40,8 +40,22 @@ defmodule Engram.Release.Preflight do
     repo = Engram.Repo
 
     repo
-    |> report(applied_versions: Ecto.Migrator.migrated_versions(repo))
+    |> report(applied_versions: applied_versions(repo))
     |> print()
+  end
+
+  @doc """
+  Applied migration versions, read with a plain SELECT.
+
+  Not `Ecto.Migrator.migrated_versions/1`: it runs `CREATE TABLE IF NOT EXISTS`
+  and takes a `SHARE UPDATE EXCLUSIVE` lock, and `engram_app` (what
+  `Engram.Repo` connects as over `rpc`) holds neither CREATE on `public` nor
+  write privilege on `schema_migrations`.
+  """
+  @spec applied_versions(Ecto.Repo.t()) :: [integer()]
+  def applied_versions(repo) do
+    %{rows: rows} = repo.query!("SELECT version FROM schema_migrations", [], log: false)
+    Enum.map(rows, fn [v] -> v end)
   end
 
   @doc """

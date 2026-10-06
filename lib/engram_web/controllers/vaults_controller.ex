@@ -292,6 +292,9 @@ defmodule EngramWeb.VaultsController do
       ok: {"Existing vault", "application/json", Schemas.RegisterVaultResponse},
       created: {"Newly created vault", "application/json", Schemas.RegisterVaultResponse},
       bad_request: {"name and client_id are required", "application/json", Schemas.MessageError},
+      forbidden:
+        {"Vault outside the credential's scope, or creation by a vault-restricted credential",
+         "application/json", Schemas.MessageError},
       payment_required: {"Vault cap reached", "application/json", Schemas.LimitError},
       unprocessable_entity: {"Validation error", "application/json", Schemas.Error}
     ]
@@ -309,7 +312,12 @@ defmodule EngramWeb.VaultsController do
       |> put_status(400)
       |> json(%{error: "name and client_id are required"})
     else
-      case Vaults.register_vault(user, name, client_id) do
+      # #1869: a vault-restricted credential may only resolve a vault inside
+      # its scope, and may not create one (it could never reach it anyway).
+      # Both refusals are the same 403, so register is not an existence oracle.
+      scope = Engram.Permissions.vault_scope(conn)
+
+      case Vaults.register_vault(user, name, client_id, %{}, create?: scope == :all) do
         {:ok, vault, :created} ->
           # A brand-new user gets their DEK inside the seed below, but `user`
           # predates it. Without the DEK the counts cannot recognise the welcome
@@ -330,11 +338,18 @@ defmodule EngramWeb.VaultsController do
           )
 
         {:ok, vault, :existing} ->
-          json(
-            conn,
-            vault_json(vault, Vaults.content_counts(user, vault.id))
-            |> Map.put(:status, "existing")
-          )
+          if Engram.Permissions.allows?(scope, vault) do
+            json(
+              conn,
+              vault_json(vault, Vaults.content_counts(user, vault.id))
+              |> Map.put(:status, "existing")
+            )
+          else
+            forbidden(conn)
+          end
+
+        {:error, :create_forbidden} ->
+          forbidden(conn)
 
         {:error, {:vault_limit_reached, limit, current}} ->
           # Free-tier launch §4.5 — standardized 402 shape via LimitResponse.
@@ -413,14 +428,18 @@ defmodule EngramWeb.VaultsController do
          :ok <- Engram.Permissions.check(Engram.Permissions.vault_scope(conn), %{id: vault_id}) do
       fun.(vault_id)
     else
-      # Same 403 shape VaultPlug uses, so a client sees one consistent error
-      # for "outside your grant" no matter which surface refused.
       :forbidden ->
-        conn |> put_status(:forbidden) |> json(%{error: "Not authorized for this vault"})
+        forbidden(conn)
 
       :error ->
         not_found(conn)
     end
+  end
+
+  # Same 403 shape VaultPlug uses, so a client sees one consistent error for
+  # "outside your grant" no matter which surface refused.
+  defp forbidden(conn) do
+    conn |> put_status(:forbidden) |> json(%{error: "Not authorized for this vault"})
   end
 
   defp not_found(conn) do

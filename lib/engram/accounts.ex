@@ -92,6 +92,14 @@ defmodule Engram.Accounts do
   Finds a user by external ID (Clerk sub), or links/creates one.
 
   Priority: external_id match > email match (link external_id) > create new user.
+
+  The email match only claims a row with no `external_id` yet (a local/legacy
+  account). A row already bound to a DIFFERENT Clerk id is never relinked:
+  that would hand the account to whoever presents a token with the same
+  email (#1868). Returns `{:error, :external_id_conflict}` instead.
+
+  Consequence: a Clerk instance swap mints new ids for every user, so existing
+  rows need an explicit `external_id` migration; sign-in will not relink them.
   """
   def find_or_create_by_external_id(external_id, attrs, retries \\ 1)
 
@@ -102,10 +110,23 @@ defmodule Engram.Accounts do
 
       nil ->
         case Repo.one(from(u in User, where: u.email == ^email), skip_tenant_check: true) do
-          %User{} = user ->
+          %User{external_id: nil} = user ->
             user
             |> Ecto.Changeset.change(%{external_id: external_id})
             |> Repo.update(skip_tenant_check: true)
+
+          %User{} = user ->
+            require Logger
+
+            Logger.warning(
+              "Clerk external_id conflict: email already bound to another Clerk user; refusing relink",
+              Metadata.with_category(:warning, :auth,
+                user_id: user.id,
+                clerk_user_id: external_id
+              )
+            )
+
+            {:error, :external_id_conflict}
 
           nil ->
             %User{}
@@ -343,9 +364,14 @@ defmodule Engram.Accounts do
   end
 
   def verify_password(email, password) do
-    normalized_email = email |> String.trim() |> String.downcase()
+    # Case-insensitive on `email` (backed by `users_email_lower_index`), NOT
+    # `normalized_email`: that column collapses gmail dots/plus tags for dup
+    # detection, so matching on it would accept aliases as login identifiers.
+    login_email = email |> String.trim() |> String.downcase()
 
-    case Repo.one(from(u in User, where: u.email == ^normalized_email), skip_tenant_check: true) do
+    case Repo.one(from(u in User, where: fragment("lower(?)", u.email) == ^login_email),
+           skip_tenant_check: true
+         ) do
       %User{password_hash: hash} = user when is_binary(hash) ->
         # Spec §10: block suspended/deleted at the login chokepoint. Check after
         # password verification so timing matches the wrong-password path.
@@ -615,9 +641,32 @@ defmodule Engram.Accounts do
 
     # Tenant DISCOVERY, not a tenant bypass: the user_id is what this lookup
     # returns, so there is nothing to scope by until it has already succeeded.
-    lookup =
-      Repo.cross_tenant(fn ->
-        Repo.one(from(k in ApiKey, where: k.key_hash == ^key_hash, preload: :user))
+    #
+    # `api_keys_discovery` (the no-tenant read policy) is scoped TO
+    # `engram_key_lookup` by the #1867 contract migration, after which plain
+    # engram_app sees no keys without a tenant. The key_hash read alone runs as that role; the role is reset
+    # before the user preload so the lookup role needs SELECT on api_keys only.
+    # Cost: one transaction and two extra round trips per API-key request.
+    {:ok, lookup} =
+      Repo.transaction(fn ->
+        _ =
+          Repo.query!("SELECT set_config('role', 'engram_key_lookup', true)", [],
+            source: "api_key_lookup_enter"
+          )
+
+        key =
+          Repo.cross_tenant(fn ->
+            Repo.one(from(k in ApiKey, where: k.key_hash == ^key_hash))
+          end)
+
+        # SET LOCAL survives a savepoint release, so reset inside (see
+        # `Repo.run_with_tenant/2`).
+        _ =
+          Repo.query!("SELECT set_config('role', 'none', true)", [],
+            source: "api_key_lookup_exit"
+          )
+
+        key && Repo.cross_tenant(fn -> Repo.preload(key, :user) end)
       end)
 
     case lookup do

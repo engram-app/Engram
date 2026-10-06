@@ -200,6 +200,23 @@ defmodule Engram.Auth.DeviceFlowTest do
     end
   end
 
+  describe "device access tokens are marked as delegated" do
+    # `RequireSession` keys on this claim to keep a plugin token off the
+    # credential-management and admin planes. Both mint sites must set it.
+    test "exchange and refresh both issue cred=device" do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      {:ok, auth} = DeviceFlow.start_device_flow("client_1")
+      {:ok, _} = DeviceFlow.authorize_device(auth.user_code, user, vault.id)
+      {:ok, initial} = DeviceFlow.exchange_device_code(auth.device_code)
+      {:ok, refreshed} = DeviceFlow.refresh_access_token(initial.refresh_token)
+
+      for token <- [initial.access_token, refreshed.access_token] do
+        assert {:ok, %{"cred" => "device"}} = Engram.Token.verify_and_validate(token)
+      end
+    end
+  end
+
   describe "refresh_access_token/1" do
     test "returns new token pair and rotates refresh token" do
       user = insert(:user)

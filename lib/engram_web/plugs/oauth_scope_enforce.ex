@@ -10,8 +10,9 @@ defmodule EngramWeb.Plugs.OAuthScopeEnforce do
   hit.
 
   Sets `conn.assigns.oauth_scope_vault_ids` (a list of vault id strings, or
-  nil for an unrestricted grant) and `conn.assigns.oauth_scope` (string or
-  nil). Never halts — absence of OAuth claims is the normal case for
+  nil for an unrestricted grant), `conn.assigns.oauth_scope` (string or
+  nil), and `conn.assigns.device_token` (true for a plugin device-flow
+  token, read by `RequireSession`). Never halts — absence of OAuth claims is the normal case for
   API-key / Clerk JWT auth, and means unrestricted.
 
   The claim shapes are normalized by `Engram.Permissions.scope_ids_from_claims/1`,
@@ -27,6 +28,7 @@ defmodule EngramWeb.Plugs.OAuthScopeEnforce do
       conn
       |> assign(:oauth_scope_vault_ids, Engram.Permissions.scope_ids_from_claims(claims))
       |> assign(:oauth_scope, claims["scope"])
+      |> assign(:device_token, claims["cred"] == "device")
     else
       _ -> conn
     end

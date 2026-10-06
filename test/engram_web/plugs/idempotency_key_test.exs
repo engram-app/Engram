@@ -11,7 +11,15 @@ defmodule EngramWeb.Plugs.IdempotencyKeyTest do
     %{user: user}
   end
 
-  defp conn_for(user), do: build_conn() |> Plug.Conn.assign(:current_user, user)
+  @vault_id "00000000-0000-7000-8000-00000000000a"
+  @route "POST /api/notes/batch-delete"
+  @scope %{vault_id: @vault_id, route: @route}
+
+  defp conn_for(user, vault_id \\ @vault_id) do
+    build_conn(:post, "/api/notes/batch-delete")
+    |> Plug.Conn.assign(:current_user, user)
+    |> Plug.Conn.assign(:current_vault, %Engram.Vaults.Vault{id: vault_id})
+  end
 
   test "missing header → 400", %{user: user} do
     conn = conn_for(user) |> IdempotencyKey.call(IdempotencyKey.init([]))
@@ -42,7 +50,7 @@ defmodule EngramWeb.Plugs.IdempotencyKeyTest do
 
   test "replay returns cached response and halts", %{user: user} do
     key = Ecto.UUID.generate()
-    Engram.Idempotency.remember(user, key, %{status: 200, body: %{cached: true}})
+    Engram.Idempotency.remember(user, key, @scope, %{status: 200, body: %{cached: true}})
 
     conn =
       conn_for(user)
@@ -55,7 +63,7 @@ defmodule EngramWeb.Plugs.IdempotencyKeyTest do
 
   test "another user's key does not replay — batch would re-execute", %{user: user} do
     key = Ecto.UUID.generate()
-    Engram.Idempotency.remember(user, key, %{status: 200, body: %{cached: true}})
+    Engram.Idempotency.remember(user, key, @scope, %{status: 200, body: %{cached: true}})
 
     other = insert(:user)
     {:ok, other} = Engram.Crypto.ensure_user_dek(other)
@@ -67,6 +75,19 @@ defmodule EngramWeb.Plugs.IdempotencyKeyTest do
 
     refute conn.halted
     assert conn.assigns.idempotency_key == key
+  end
+
+  # #1869: a credential scoped to vault B must not replay vault A's response.
+  test "the same key from another vault does not replay", %{user: user} do
+    key = Ecto.UUID.generate()
+    Engram.Idempotency.remember(user, key, @scope, %{status: 200, body: %{cached: true}})
+
+    conn =
+      conn_for(user, Ecto.UUID.generate())
+      |> put_req_header("x-idempotency-key", key)
+      |> IdempotencyKey.call(IdempotencyKey.init([]))
+
+    refute conn.halted
   end
 
   defp json_body(conn), do: conn.resp_body |> Jason.decode!()

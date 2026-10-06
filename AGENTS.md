@@ -404,6 +404,33 @@ The phase labels exist for SaaS; self-hosters get downtime for free and
 don't need to think about phases. The same source-side gates protect them
 because the unsafe SQL never enters the migration files they pull.
 
+### Upgrades require zero operator action
+
+A self-hoster upgrades by pulling a new image and restarting. Nothing else.
+They skip releases, they do not read changelogs, and they will not run a
+command for us. Every change must hold under that:
+
+1. **No manual steps, ever.** No "run this mix task / rpc / SQL after
+   upgrading", no env var that must be set for the upgrade to work, no
+   required ordering of upgrades. If a change needs work done, the release
+   does it on boot.
+2. **Skip-release safe.** Any migration must be correct when applied in ONE
+   batch together with every migration after it, starting from any older
+   release. Expand/contract spread across releases protects the SaaS rolling
+   deploy, but a self-hoster jumping N -> N+2 runs both halves back to back
+   with no release in between.
+3. **Backfills live in migrations, not app runtime.** A backfill done by app
+   code in release N+1 never runs for someone who skips N+1. Put it in the
+   migration, or make it a self-healing reconcile the app runs on its own
+   (version stamp + reconcile, see the index self-heal pattern).
+4. **Contract migrations assert their precondition.** Before dropping or
+   tightening, check the thing it depends on actually happened (no NULLs
+   left, no rows in the old shape) and raise if not. Fail loud on boot,
+   never lose data quietly.
+5. **New roles, grants and policies are created idempotently on boot**
+   (`Engram.Release.prepare_database/0`) or by a role-guarded migration, so
+   an upgrade from any release converges without operator help.
+
 ## Self-host preflight
 
 Operators can preview what the next upgrade will do via:

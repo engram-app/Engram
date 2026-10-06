@@ -24,10 +24,24 @@ defmodule EngramWeb.Plugs.IdempotencyKey do
     end
   end
 
+  @doc """
+  Caches this request's response under the key and scope `call/2` assigned.
+  The batch actions call this on success.
+  """
+  def remember(conn, response) do
+    Idempotency.remember(
+      conn.assigns.current_user,
+      conn.assigns.idempotency_key,
+      scope(conn),
+      response
+    )
+  end
+
   defp maybe_replay(conn, key) do
-    # User-scoped: the key namespace is per authenticated user (Auth runs
-    # before this plug), so one tenant can never replay another's response.
-    case Idempotency.lookup(conn.assigns.current_user, key) do
+    # Scoped to user, vault and route (#1869): VaultPlug has already checked
+    # current_vault against the credential, so a credential restricted to
+    # vault B can never replay a response cached for vault A.
+    case Idempotency.lookup(conn.assigns.current_user, key, scope(conn)) do
       {:ok, %{status: status, body: body}} ->
         Halt.json(conn, status, body)
 
@@ -35,6 +49,9 @@ defmodule EngramWeb.Plugs.IdempotencyKey do
         assign(conn, :idempotency_key, key)
     end
   end
+
+  defp scope(conn),
+    do: %{vault_id: conn.assigns.current_vault.id, route: "#{conn.method} #{conn.request_path}"}
 
   defp reject(conn, code) do
     Halt.json(conn, 400, %{error: code})
