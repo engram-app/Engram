@@ -1,7 +1,8 @@
-defmodule Engram.Repo.Migrations.RevokeAppWritesSchemaMigrationsContract do
+defmodule Engram.Repo.Migrations.RevokeAppWritesSchemaMigrationsExpand do
   use Ecto.Migration
 
-  # phase/contract — `engram_app` must not write `schema_migrations`.
+  # phase/expand — `engram_app` must not write `schema_migrations`. Forward-
+  # compatible: no release of the app writes it as `engram_app`.
   #
   # The table inherits the migrator's default ACL (SELECT/INSERT/UPDATE/DELETE
   # to `engram_app`, `Engram.Release`), but only the migrator ever writes it.
