@@ -33,6 +33,14 @@ const WORD = /[A-Za-z]+/gu;
 // More than this many words of plain ASCII in a non-Latin locale is suspect.
 const SUSPECT_MAX_WORDS = 3;
 
+// Visible English that is not a missed translation. "My Vault" is the name the vault
+// step stores for the new vault (DEFAULT_VAULT_NAME in onboard-vault-page.tsx, a
+// persisted user-data value), shown verbatim in the sidebar; the catalog entry only
+// translates the input's placeholder. The binding consent text on the agreement step
+// is English by design too, but it is not a key, so only findSuspectStrings sees it
+// (SaaS flow, where that step exists).
+const INTENTIONAL_ENGLISH: ReadonlySet<string> = new Set(["My Vault"]);
+
 const NON_LATIN_LOCALES = ["ja", "ko", "ru", "zh-CN", "zh-TW"] as const;
 
 function escapeRegex(text: string): string {
@@ -97,7 +105,7 @@ export function findKeyLeaks(strings: readonly string[], matchers: readonly KeyM
 	const patterned = matchers.filter((m) => m.pattern !== null);
 	const leaks: Leak[] = [];
 	for (const text of strings) {
-		if (isAllowed(text)) {
+		if (isAllowed(text) || INTENTIONAL_ENGLISH.has(text)) {
 			continue;
 		}
 		const hit = exact.get(text) ?? patterned.find((m) => m.pattern?.test(text))?.key;

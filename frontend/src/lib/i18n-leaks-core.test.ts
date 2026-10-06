@@ -46,6 +46,10 @@ describe("findKeyLeaks", () => {
 		expect(findKeyLeaks(["anything at all"], matchers)).toEqual([]);
 	});
 
+	it("does not flag the stored default vault name", () => {
+		expect(findKeyLeaks(["My Vault"], buildMatchers(["My Vault"]))).toEqual([]);
+	});
+
 	it("never flags allow-listed tokens", () => {
 		const m = buildMatchers(["Engram", "MCP"]);
 		expect(findKeyLeaks(["Engram", "MCP", "a@b.co", "https://x.io/p", "2026-10-06"], m)).toEqual(
