@@ -118,26 +118,55 @@ defmodule Engram.Notes.CrdtDeliver do
   def fanout_idle(user_id, vault_id, note_id) do
     _ =
       with {:ok, state, seq} when is_binary(state) <- load_merged_state(user_id, note_id) do
-        head =
-          case CrdtBridge.doc_from_state(state) do
-            {:ok, doc} -> CrdtTransport.head_marker(doc)
-            _ -> nil
-          end
-
-        Engram.Notes.FanoutPacer.emit(
-          "sync:#{user_id}:#{vault_id}",
-          "note_yjs_update",
-          %{
-            "note_id" => note_id,
-            "b64" => Base.encode64(state),
-            "head" => head,
-            "seq" => seq
-          },
-          note_id
-        )
+        emit_idle(user_id, vault_id, note_id, state, seq)
       end
 
     :ok
+  end
+
+  @doc """
+  `fanout_idle/3` for a caller that already holds the committed row and the
+  user from its own post-commit read-back (the detached genesis seed), so
+  neither is read a second time. Same payload, same skips, never raises.
+  """
+  @spec fanout_idle_row(Accounts.User.t(), String.t(), Note.t()) :: :ok
+  def fanout_idle_row(user, vault_id, %Note{id: note_id, seq: seq} = note) do
+    # A socket's user can predate its first-write DEK; ensure_user_dek/1 is
+    # free when the struct already carries one.
+    _ =
+      with {:ok, user} <- Crypto.ensure_user_dek(user),
+           {:ok, state, _seq} when is_binary(state) <- merged_state_of(note, user) do
+        emit_idle(user.id, vault_id, note_id, state, seq)
+      else
+        {:ok, nil, _seq} -> :ok
+        {:error, reason} -> log_state_load_failure(note_id, reason)
+      end
+
+    :ok
+  rescue
+    err -> log_state_load_failure(note_id, Metadata.safe_reason(err))
+  catch
+    kind, reason -> log_state_load_failure(note_id, "#{kind}: #{Metadata.safe_reason(reason)}")
+  end
+
+  defp emit_idle(user_id, vault_id, note_id, state, seq) do
+    head =
+      case CrdtBridge.doc_from_state(state) do
+        {:ok, doc} -> CrdtTransport.head_marker(doc)
+        _ -> nil
+      end
+
+    Engram.Notes.FanoutPacer.emit(
+      "sync:#{user_id}:#{vault_id}",
+      "note_yjs_update",
+      %{
+        "note_id" => note_id,
+        "b64" => Base.encode64(state),
+        "head" => head,
+        "seq" => seq
+      },
+      note_id
+    )
   end
 
   @doc """
@@ -328,18 +357,8 @@ defmodule Engram.Notes.CrdtDeliver do
     result =
       Repo.with_tenant(user_id, fn ->
         case Repo.get(Note, note_id) do
-          nil ->
-            {:error, :missing_row}
-
-          %Note{crdt_state_ciphertext: nil, seq: seq} ->
-            {:ok, nil, seq}
-
-          %Note{seq: seq} = note ->
-            case Crypto.decrypt_crdt_state(note, user) do
-              {:ok, state} when is_binary(state) -> {:ok, state, seq}
-              {:ok, nil} -> {:ok, nil, seq}
-              {:error, reason} -> {:error, reason}
-            end
+          nil -> {:error, :missing_row}
+          %Note{} = note -> merged_state_of(note, user)
         end
       end)
 
@@ -368,6 +387,16 @@ defmodule Engram.Notes.CrdtDeliver do
     kind, reason ->
       log_state_load_failure(note_id, "#{kind}: #{Metadata.safe_reason(reason)}")
       {:error, :caught}
+  end
+
+  defp merged_state_of(%Note{crdt_state_ciphertext: nil, seq: seq}, _user), do: {:ok, nil, seq}
+
+  defp merged_state_of(%Note{seq: seq} = note, user) do
+    case Crypto.decrypt_crdt_state(note, user) do
+      {:ok, state} when is_binary(state) -> {:ok, state, seq}
+      {:ok, nil} -> {:ok, nil, seq}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   # Two shapes reach here: a pre-filtered binary from the rescue/catch arms,

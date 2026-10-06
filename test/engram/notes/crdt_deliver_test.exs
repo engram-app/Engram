@@ -160,6 +160,53 @@ defmodule Engram.Notes.CrdtDeliverTest do
     end
   end
 
+  describe "fanout_idle_row/3 — caller already holds the row" do
+    test "emits the row's committed state and seq, like fanout_idle/3",
+         %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "row.md", "content" => "body"}, actor: "api")
+
+      {:ok, row} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+      {:ok, state} = Engram.Crypto.decrypt_crdt_state(row, user)
+      assert is_binary(state)
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      assert :ok = CrdtDeliver.fanout_idle_row(user, vault.id, row)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "note_yjs_update",
+                       payload: %{"note_id" => note_id, "b64" => b64, "seq" => seq}
+                     },
+                     1000
+
+      assert {note_id, seq} == {row.id, row.seq}
+      assert Base.decode64!(b64) == state
+    end
+
+    test "a state-less row skips quietly", %{user: user, vault: vault} do
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      row = %Note{id: Ecto.UUID.generate(), seq: 1, crdt_state_ciphertext: nil}
+
+      assert :ok = CrdtDeliver.fanout_idle_row(user, vault.id, row)
+      refute_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 200
+    end
+
+    test "an undecryptable row logs and skips, never raises", %{user: user, vault: vault} do
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      row = %Note{
+        id: Ecto.UUID.generate(),
+        seq: 1,
+        crdt_state_ciphertext: :crypto.strong_rand_bytes(48),
+        crdt_state_nonce: :crypto.strong_rand_bytes(12)
+      }
+
+      log = capture_log(fn -> assert :ok = CrdtDeliver.fanout_idle_row(user, vault.id, row) end)
+      assert log =~ "crdt deliver state load failed"
+      refute_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 200
+    end
+  end
+
   describe "announce_ready/4 — discovery-only (checkpoint path)" do
     test "announces crdt_doc_ready for a .md note without touching any room",
          %{user: user, vault: vault} do

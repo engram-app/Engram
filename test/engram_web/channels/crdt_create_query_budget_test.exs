@@ -9,8 +9,8 @@ defmodule EngramWeb.CrdtCreateQueryBudgetTest do
   alias Engram.{Crypto, Repo, TenantQueryCounter, Vaults}
   alias Engram.Notes.CrdtBridge
 
-  @max_statements 75
-  @max_tenant_txns 10
+  @max_statements 69
+  @max_tenant_txns 9
   @max_subscription_reads 2
 
   defp frame_for_content(content) do
