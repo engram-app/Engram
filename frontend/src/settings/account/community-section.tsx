@@ -13,7 +13,7 @@ export function CommunitySection() {
 			title={t("Community")}
 			description={t("Get help, report issues, and talk to other Engram users.")}
 		>
-			<Button asChild variant="outline" size="sm" className="gap-2">
+			<Button asChild variant="outline">
 				<a href={DISCORD_INVITE_URL} target="_blank" rel="noopener noreferrer">
 					<DiscordIcon />
 					{t("Join our Discord")}

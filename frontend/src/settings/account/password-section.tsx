@@ -71,7 +71,7 @@ export function PasswordSection() {
 				<p className="mt-1 text-muted-foreground text-xs">
 					{t("Changing your password signs you out of all other sessions.")}
 				</p>
-				<Button className="mt-4" type="submit">
+				<Button className="mt-4" type="submit" variant="outline">
 					{hasPassword ? t("Update password") : t("Set password")}
 				</Button>
 			</form>

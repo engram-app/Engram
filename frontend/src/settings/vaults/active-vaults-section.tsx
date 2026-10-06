@@ -126,7 +126,10 @@ export function ActiveVaultsSection() {
 			description={t("Rename, set a default, or delete your vaults.")}
 			headerAction={
 				atCap ? undefined : (
-					<Button onClick={() => setCreateOpen((o) => !o)}>
+					<Button
+						variant={createOpen ? "outline" : "default"}
+						onClick={() => setCreateOpen((o) => !o)}
+					>
 						{createOpen ? t("Cancel") : t("New vault")}
 					</Button>
 				)

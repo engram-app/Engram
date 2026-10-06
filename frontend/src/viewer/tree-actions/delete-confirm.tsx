@@ -41,10 +41,10 @@ export function DeleteConfirm({ nodes, onConfirm, onCancel }: Props) {
 				<DialogTitle className="text-sm">{buildMessage(nodes, { t, tn })}</DialogTitle>
 				<DialogDescription className="text-xs">{t("This cannot be undone.")}</DialogDescription>
 				<DialogFooter>
-					<Button variant="outline" size="sm" onClick={onCancel}>
+					<Button variant="outline" onClick={onCancel}>
 						{t("Cancel")}
 					</Button>
-					<Button variant="destructive" size="sm" onClick={onConfirm}>
+					<Button variant="destructive" onClick={onConfirm}>
 						{t("Delete")}
 					</Button>
 				</DialogFooter>

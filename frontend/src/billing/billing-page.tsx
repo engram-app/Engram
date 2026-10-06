@@ -900,7 +900,9 @@ export default function BillingPage({
 							onClick={() => openPortal()}
 							disabled={portalLoading}
 						>
-							{Boolean(portalLoading) && <Loader2 aria-hidden className="size-4 animate-spin" />}
+							{Boolean(portalLoading) && (
+								<Loader2 data-icon="inline-start" aria-hidden className="animate-spin" />
+							)}
 							{portalLoading ? t("Opening Paddle…") : t("Open Paddle billing portal")}
 						</Button>
 						<p className="text-muted-foreground text-xs">

@@ -696,7 +696,7 @@ function SuccessStep({
 			    whatever machine the BROWSER is on, which is why the escape hatch
 			    beside it is always present. */}
 			<footer className="flex justify-end gap-2 pt-2">
-				<Button type="button" variant="ghost" onClick={onForward} className="text-sm">
+				<Button type="button" variant="outline" onClick={onForward}>
 					{t("Continue to web app")}
 				</Button>
 				{obsidianVaultName ? (

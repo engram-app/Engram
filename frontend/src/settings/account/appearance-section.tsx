@@ -28,12 +28,10 @@ export function AppearanceSection() {
 							key={value}
 							type="button"
 							variant={theme === value ? "default" : "outline"}
-							size="sm"
-							className="gap-2"
 							aria-pressed={theme === value}
 							onClick={() => setTheme(value)}
 						>
-							<Icon className="size-4" />
+							<Icon data-icon="inline-start" />
 							{t(label)}
 						</Button>
 					))}

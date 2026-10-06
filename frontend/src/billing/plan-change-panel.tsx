@@ -167,10 +167,12 @@ function PlanChangePicker({ billing, onClose }: { billing: BillingStatus; onClos
 					onClick={onConfirm}
 					disabled={!(selectedTier && targetPriceId) || preview.isFetching || confirm.isPending}
 				>
-					{Boolean(confirm.isPending) && <Loader2 aria-hidden className="size-4 animate-spin" />}
+					{Boolean(confirm.isPending) && (
+						<Loader2 data-icon="inline-start" aria-hidden className="animate-spin" />
+					)}
 					{confirm.isPending ? t("Applying…") : t("Confirm change")}
 				</Button>
-				<Button variant="ghost" onClick={onClose} disabled={confirm.isPending}>
+				<Button variant="outline" onClick={onClose} disabled={confirm.isPending}>
 					{t("Cancel")}
 				</Button>
 			</div>
@@ -274,7 +276,7 @@ function TrialNotice({
 				<Button variant="destructive" onClick={onSwitchToCancel}>
 					{t("Cancel free trial")}
 				</Button>
-				<Button variant="ghost" onClick={onClose}>
+				<Button variant="outline" onClick={onClose}>
 					{t("Close")}
 				</Button>
 			</div>

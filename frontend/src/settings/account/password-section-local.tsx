@@ -86,7 +86,7 @@ export function PasswordSectionLocal() {
 					/>
 				</label>
 				{Boolean(error) && <p className="text-destructive text-sm">{error}</p>}
-				<Button type="submit" size="sm" disabled={submitting}>
+				<Button type="submit" variant="outline" disabled={submitting}>
 					{submitting ? t("Changing…") : t("Change password")}
 				</Button>
 			</form>

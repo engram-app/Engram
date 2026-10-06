@@ -104,16 +104,15 @@ export function DeleteVaultDialog({
 						/>
 					</label>
 					<DialogFooter className="mt-4">
-						<Button type="button" variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
+						<Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
 							{t("Cancel")}
 						</Button>
 						<Button
 							type="submit"
 							variant="destructive"
-							size="sm"
 							disabled={phrase !== vault.name || del.isPending}
 						>
-							<Trash2 />
+							<Trash2 data-icon="inline-start" />
 							{t("Delete vault")}
 						</Button>
 					</DialogFooter>

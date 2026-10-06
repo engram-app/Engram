@@ -54,12 +54,7 @@ export function ProfileSection() {
 						onChange={onImage}
 						className="sr-only"
 					/>
-					<Button
-						type="button"
-						variant="outline"
-						size="sm"
-						onClick={() => fileInputRef.current?.click()}
-					>
+					<Button type="button" variant="outline" onClick={() => fileInputRef.current?.click()}>
 						{t("Change photo")}
 					</Button>
 					<p className="mt-1 text-muted-foreground text-xs">{t("JPG, PNG or GIF.")}</p>

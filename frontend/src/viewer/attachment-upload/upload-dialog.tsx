@@ -186,15 +186,13 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 							e.target.value = "";
 						}}
 					/>
-					<Button variant="ghost" size="sm" onClick={() => addRef.current?.click()} disabled={busy}>
+					<Button variant="outline" onClick={() => addRef.current?.click()} disabled={busy}>
 						{t("Upload more")}
 					</Button>
 					{allDone ? (
-						<Button size="sm" onClick={onClose}>
-							{t("Done")}
-						</Button>
+						<Button onClick={onClose}>{t("Done")}</Button>
 					) : (
-						<Button size="sm" onClick={commit} disabled={busy || rows.length === 0}>
+						<Button onClick={commit} disabled={busy || rows.length === 0}>
 							{t("Upload")}
 						</Button>
 					)}

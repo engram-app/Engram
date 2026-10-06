@@ -76,7 +76,7 @@ export function DangerZoneSectionLocal() {
 				}}
 			>
 				<DialogTrigger asChild>
-					<Button type="button" variant="destructive" size="sm">
+					<Button type="button" variant="destructive">
 						{t("Delete account")}
 					</Button>
 				</DialogTrigger>
@@ -112,14 +112,13 @@ export function DangerZoneSectionLocal() {
 					</fieldset>
 					<DialogFooter>
 						<DialogClose asChild>
-							<Button type="button" variant="outline" size="sm">
+							<Button type="button" variant="outline">
 								{t("Cancel")}
 							</Button>
 						</DialogClose>
 						<Button
 							type="button"
 							variant="destructive"
-							size="sm"
 							disabled={!confirmed || password.length === 0 || deleter.isPending}
 							onClick={onDelete}
 						>

@@ -149,13 +149,7 @@ export function ConnectedAccountsSection({ providers }: { providers: OAuthStrate
 					{available.map((p) => {
 						const { name, icon } = meta(p);
 						return (
-							<Button
-								key={p}
-								variant="outline"
-								size="sm"
-								className="gap-2"
-								onClick={() => connect(p)}
-							>
+							<Button key={p} variant="outline" onClick={() => connect(p)}>
 								{icon}
 								{t("Connect {name}", { name })}
 							</Button>

@@ -20,7 +20,6 @@ import { useAttachmentUpload } from "../viewer/attachment-upload/provider";
 import { type SortKey, useFolderTreeState } from "./folder-tree-context";
 
 const ICON = "size-5";
-const BUTTON = "size-10";
 
 interface SortSection {
 	label: string;
@@ -78,7 +77,6 @@ export default function FolderActions() {
 							variant="ghost"
 							size="icon"
 							aria-label={t("New note")}
-							className={BUTTON}
 							onClick={() => createNote.mutate({ folder: "", id: uuid7() })}
 							disabled={createNote.isPending}
 						>
@@ -94,7 +92,6 @@ export default function FolderActions() {
 							variant="ghost"
 							size="icon"
 							aria-label={t("New folder")}
-							className={BUTTON}
 							// Straight into rename mode so the placeholder name is never kept by
 							// accident — the tree owns the rename UI, so ask it via context.
 							onClick={() =>
@@ -117,7 +114,6 @@ export default function FolderActions() {
 							variant="ghost"
 							size="icon"
 							aria-label={t("Upload attachment")}
-							className={BUTTON}
 							onClick={() => openUpload(undefined, "")}
 						>
 							<Upload className={ICON} />
@@ -130,7 +126,7 @@ export default function FolderActions() {
 						<TooltipTrigger asChild>
 							{/* Both triggers compose onto the one Button via asChild. */}
 							<DropdownMenuTrigger asChild>
-								<Button variant="ghost" size="icon" aria-label={t("Sort")} className={BUTTON}>
+								<Button variant="ghost" size="icon" aria-label={t("Sort")}>
 									<ArrowUpDown className={ICON} />
 								</Button>
 							</DropdownMenuTrigger>
@@ -173,7 +169,6 @@ export default function FolderActions() {
 							size="icon"
 							aria-label={t("Collapse all folders")}
 							onClick={collapseAll}
-							className={BUTTON}
 						>
 							<FoldVertical className={ICON} />
 						</Button>

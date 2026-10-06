@@ -152,7 +152,7 @@ export default function SettingsDialog({ section }: { section: SettingsSectionKe
 							size="icon-sm"
 							aria-label={t("Close settings")}
 							title={t("Close settings")}
-							className="absolute top-2 right-2 z-30 text-muted-foreground hover:text-foreground"
+							className="absolute top-2 right-2 z-30"
 						>
 							<X className="size-4" />
 						</Button>
@@ -161,12 +161,7 @@ export default function SettingsDialog({ section }: { section: SettingsSectionKe
 					<div className="flex items-center gap-2 border-border border-b px-3 py-1.5 md:hidden">
 						<Sheet open={navOpen} onOpenChange={setNavOpen}>
 							<SheetTrigger asChild>
-								<Button
-									variant="ghost"
-									size="icon"
-									aria-label={t("Open settings sections")}
-									className="size-9"
-								>
+								<Button variant="ghost" size="icon" aria-label={t("Open settings sections")}>
 									<Menu className="size-5" />
 								</Button>
 							</SheetTrigger>

@@ -31,13 +31,13 @@ export function EmailReadonlySection() {
 				<span className="truncate font-mono text-sm">{email}</span>
 				<Button
 					type="button"
-					variant="ghost"
+					variant="outline"
 					size="sm"
 					aria-label={t("Copy email")}
 					onClick={copy}
-					className="gap-1"
 				>
-					<Copy className="size-4" /> {t("Copy")}
+					<Copy data-icon="inline-start" />
+					{t("Copy")}
 				</Button>
 			</div>
 		</SettingsSectionCard>

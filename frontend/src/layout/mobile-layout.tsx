@@ -67,7 +67,7 @@ export default function MobileLayout() {
 				<section className="flex items-center gap-1">
 					<Sheet open={leftOpen} onOpenChange={setLeftOpen}>
 						<SheetTrigger asChild>
-							<Button variant="ghost" size="icon" aria-label={t("Open files")} className="size-11">
+							<Button variant="ghost" size="icon-lg" aria-label={t("Open files")}>
 								<Menu />
 							</Button>
 						</SheetTrigger>
@@ -126,9 +126,8 @@ export default function MobileLayout() {
 						<SheetTrigger asChild>
 							<Button
 								variant="ghost"
-								size="icon"
+								size="icon-lg"
 								aria-label={t("Open tools")}
-								className="size-11"
 								onClick={openRight}
 							>
 								<PanelRightOpen />

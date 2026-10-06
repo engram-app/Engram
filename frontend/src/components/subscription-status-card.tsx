@@ -445,22 +445,14 @@ export function SubscriptionStatusCard({
 
 				{Boolean(hasActions) && (
 					<div className="flex flex-wrap gap-2 pt-1">
-						{Boolean(showChangePlan) && (
-							<Button onClick={onChangePlan} size="sm">
-								{t("Change plan")}
-							</Button>
-						)}
+						{Boolean(showChangePlan) && <Button onClick={onChangePlan}>{t("Change plan")}</Button>}
 						{Boolean(showUpdatePayment) && (
-							<Button
-								variant={isPastDue ? "default" : "outline"}
-								size="sm"
-								onClick={onUpdatePaymentMethod}
-							>
+							<Button variant={isPastDue ? "default" : "outline"} onClick={onUpdatePaymentMethod}>
 								{t("Update payment method")}
 							</Button>
 						)}
 						{showManage && (
-							<Button variant="outline" size="sm" onClick={onManageSubscription}>
+							<Button variant="outline" onClick={onManageSubscription}>
 								{t("Manage")}
 							</Button>
 						)}
