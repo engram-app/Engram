@@ -39,6 +39,30 @@ defmodule Engram.DataMigrationsTest do
       assert row.alerted_at == nil
     end
 
+    # Mixed-version fleet during a rolling deploy: an old node's pass must not
+    # lower the version, or the new node's next note_open sees a "bump" and
+    # resets the stuck clock every hour.
+    test "an older version neither lowers the version nor resets opened_at" do
+      DataMigrations.note_open("m", 2)
+      old = ~U[2026-01-01 00:00:00.000000Z]
+      Repo.update_all(from(e in Entry), set: [opened_at: old])
+
+      DataMigrations.note_open("m", 1)
+      assert %{version: 2, opened_at: ^old} = entry("m")
+
+      DataMigrations.note_open("m", 2)
+      assert entry("m").opened_at == old
+    end
+
+    # An old node finishing ITS version must not close the newer version's work.
+    test "mark_done with an older version leaves a newer open row open" do
+      DataMigrations.note_open("m", 2)
+      :ok = DataMigrations.mark_done("m", 1)
+
+      assert %{version: 2, completed_at: nil} = entry("m")
+      refute DataMigrations.done?("m", 2)
+    end
+
     test "mark_done leaves the row closed" do
       DataMigrations.note_open("m", 1)
       :ok = DataMigrations.mark_done("m", 1)

@@ -40,15 +40,28 @@ defmodule Engram.DataMigrations do
     end
   end
 
+  @doc """
+  Marks `name` done at `version`. A no-op on a row already at a higher
+  version: during a rolling deploy an old node finishing its older version
+  must neither lower the version nor close the newer version's work.
+  """
   @spec mark_done(String.t(), pos_integer()) :: :ok
   def mark_done(name, version) do
     now = DateTime.utc_now()
 
-    Repo.insert!(
-      %Entry{name: name, version: version, completed_at: now},
-      on_conflict: [set: [version: version, completed_at: now, updated_at: now]],
-      conflict_target: :name
-    )
+    # insert_all, not insert!: a conflict the WHERE filters out updates no row,
+    # which insert! reports as a stale entry.
+    {_, _} =
+      Repo.insert_all(
+        Entry,
+        [%{name: name, version: version, completed_at: now, inserted_at: now, updated_at: now}],
+        on_conflict:
+          from(e in Entry,
+            where: e.version <= ^version,
+            update: [set: [version: ^version, completed_at: ^now, updated_at: ^now]]
+          ),
+        conflict_target: :name
+      )
 
     :ok
   end
@@ -57,7 +70,10 @@ defmodule Engram.DataMigrations do
   Records that a pass left `name` unfinished and returns the row. `opened_at`
   is set on insert and whenever the work (re)opens (a higher version, or a
   row that was closed); otherwise it keeps the original first-seen time, so
-  age since `opened_at` measures how long it has been stuck.
+  age since `opened_at` measures how long it has been stuck. The stored
+  version only ever rises: an old node in a mixed-version fleet must not
+  lower it, or the new node's next call would read a bump and reset the
+  clock.
   """
   @spec note_open(String.t(), pos_integer()) :: struct()
   def note_open(name, version) do
@@ -86,7 +102,7 @@ defmodule Engram.DataMigrations do
                 e.opened_at,
                 e.alerted_at
               ),
-            version: ^version,
+            version: fragment("GREATEST(?, ?)", e.version, ^version),
             completed_at: nil,
             updated_at: ^now
           ]

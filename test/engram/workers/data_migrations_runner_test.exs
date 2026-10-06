@@ -44,6 +44,22 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
     end
   end
 
+  # version/0 fails on its first call in a process (a transient failure before
+  # the pass, like a done?/2 DB read timing out) and works after that.
+  defmodule FlakyBeforePass do
+    @behaviour Engram.DataMigration
+    def name, do: "test_flaky_before_pass"
+
+    def version do
+      if Process.put(:flaky_called, true), do: 1, else: raise("transient")
+    end
+
+    def run_pass do
+      send(self(), :ran)
+      :more
+    end
+  end
+
   setup do
     DataMigrations.reset_cache()
     :ok
@@ -75,6 +91,15 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
   test "an exiting migration is contained and stays open" do
     assert DataMigrationsRunner.run(Exiting) == :error
     refute DataMigrations.done?("test_exiting", 1)
+  end
+
+  test "a failure before the pass never reopens a done row" do
+    :ok = DataMigrations.mark_done("test_flaky_before_pass", 1)
+    DataMigrations.reset_cache()
+
+    assert DataMigrationsRunner.run(FlakyBeforePass) == :error
+    refute_received :ran
+    assert DataMigrations.done?("test_flaky_before_pass", 1)
   end
 
   describe "stuck migrations" do
