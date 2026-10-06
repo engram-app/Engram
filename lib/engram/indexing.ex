@@ -798,8 +798,37 @@ defmodule Engram.Indexing do
   # fragment. Unpacking to a float list and letting Jason walk it was the heap
   # peak of indexing (~26 MB per 64-point batch): a list cell, a boxed float
   # and a formatted binary per element, all live until the request was sent.
-  defp unpack_point(%{vector: named} = point) do
-    %{point | vector: Map.new(named, fn {name, v} -> {name, vector_json(v)} end)}
+  #
+  # The encrypted payload fields are base64 (`Crypto.encrypt_qdrant_payload/4`),
+  # whose alphabet never needs a JSON escape, so they go out as fragments too:
+  # Jason's escape scan over them cost ~35-45 ms per 2,000 chunks (#1877).
+  # Byte-identical output; `test/engram/indexing/unpack_point_test.exs` pins it.
+  @doc false
+  def unpack_point(%{vector: named} = point) do
+    point = %{point | vector: Map.new(named, fn {name, v} -> {name, vector_json(v)} end)}
+
+    case point do
+      %{payload: payload} -> %{point | payload: base64_fragments(payload)}
+      _ -> point
+    end
+  end
+
+  @base64_payload_keys [
+    :text,
+    :text_nonce,
+    :title,
+    :title_nonce,
+    :heading_path,
+    :heading_path_nonce
+  ]
+
+  defp base64_fragments(payload) do
+    Enum.reduce(@base64_payload_keys, payload, fn key, acc ->
+      case acc do
+        %{^key => b64} when is_binary(b64) -> %{acc | key => Jason.Fragment.new([?", b64, ?"])}
+        _ -> acc
+      end
+    end)
   end
 
   # Formatted in Rust (`Engram.Native.dense_json/1`): no per-float term at all,
