@@ -26,11 +26,16 @@ defmodule Engram.NotesDisplayFieldsMetaTest do
     vault: vault
   } do
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "Health/iron.md",
-        "content" => "---\ntags: [labs]\n---\n# Iron\n\nFerritin levels.",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Health/iron.md",
+          "content" => "---\ntags: [labs]\n---\n# Iron\n\nFerritin levels.",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
     point_id = Ecto.UUID.generate()
 

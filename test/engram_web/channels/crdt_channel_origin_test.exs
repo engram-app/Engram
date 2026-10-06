@@ -17,7 +17,10 @@ defmodule EngramWeb.CrdtChannelOriginTest do
     user = insert(:user)
     {:ok, user} = Crypto.ensure_user_dek(user)
     {:ok, vault, _} = Vaults.register_vault(user, "CrdtOriginTest", Ecto.UUID.generate())
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"})
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"}, actor: "api")
+
     %{user: user, vault: vault, note: note}
   end
 

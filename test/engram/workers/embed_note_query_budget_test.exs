@@ -45,11 +45,16 @@ defmodule Engram.Workers.EmbedNoteQueryBudgetTest do
     vault = insert(:vault, user: user)
 
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "Perf/Budget.md",
-        "content" => "---\ntags: [perf]\n---\n# Budget\n\nOne user read per job.",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Perf/Budget.md",
+          "content" => "---\ntags: [perf]\n---\n# Budget\n\nOne user read per job.",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
     stub(Engram.MockEmbedder, :embed_texts, fn texts ->
       {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}

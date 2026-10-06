@@ -165,7 +165,7 @@ defmodule Engram.Vaults.WelcomeNote do
     # so without it the seed itself satisfies the 0->1 probe behind the
     # `vault_populated` event and forwards the onboarding and /link waiting
     # screens before the user's real first sync has pushed anything.
-    case Notes.upsert_note(user, vault, attrs, announce_vault_populated: false) do
+    case Notes.upsert_note(user, vault, attrs, announce_vault_populated: false, actor: "system") do
       {:ok, _note} ->
         :ok
 

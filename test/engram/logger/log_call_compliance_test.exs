@@ -165,6 +165,9 @@ defmodule Engram.Logger.LogCallComplianceTest do
   # has to be put in scope or written down here with a reason. That turns an
   # omission into a decision.
   @out_of_scope [
+    # Pure function from conn assigns to an actor string ("api:<key id>" or
+    # "sync"). No Logger call, never touches content, path, title or a query.
+    "lib/engram_web/write_actor.ex",
     # Counts rows and compares created_at/id. Selects only count(n.id) — never
     # content, path, title or a query — and has no Logger call at all. Listed as
     # the specific file, not `lib/engram/indexing/`, so a future sibling module

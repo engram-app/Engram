@@ -46,7 +46,9 @@ defmodule EngramWeb.FoldersControllerTest do
       {:ok, marker} = Engram.Notes.create_folder_marker(user, vault, "Projects")
 
       {:ok, _} =
-        Engram.Notes.upsert_note(user, vault, %{path: "Projects/a.md", content: "# A"})
+        Engram.Notes.upsert_note(user, vault, %{path: "Projects/a.md", content: "# A"},
+          actor: "api"
+        )
 
       body = conn |> get(~p"/api/folders/by-id/#{marker.id}/notes") |> json_response(200)
 
@@ -77,10 +79,15 @@ defmodule EngramWeb.FoldersControllerTest do
       {:ok, marker} = Engram.Notes.create_folder_marker(other_user, other_vault, "Theirs")
 
       {:ok, _} =
-        Engram.Notes.upsert_note(other_user, other_vault, %{
-          path: "Theirs/secret.md",
-          content: "# Secret"
-        })
+        Engram.Notes.upsert_note(
+          other_user,
+          other_vault,
+          %{
+            path: "Theirs/secret.md",
+            content: "# Secret"
+          },
+          actor: "api"
+        )
 
       conn |> get(~p"/api/folders/by-id/#{marker.id}/notes") |> json_response(404)
     end
@@ -104,10 +111,15 @@ defmodule EngramWeb.FoldersControllerTest do
       {:ok, marker} = Engram.Notes.create_folder_marker(user, other_vault, "OtherVault")
 
       {:ok, _} =
-        Engram.Notes.upsert_note(user, other_vault, %{
-          path: "OtherVault/a.md",
-          content: "# A"
-        })
+        Engram.Notes.upsert_note(
+          user,
+          other_vault,
+          %{
+            path: "OtherVault/a.md",
+            content: "# A"
+          },
+          actor: "api"
+        )
 
       conn |> get(~p"/api/folders/by-id/#{marker.id}/notes") |> json_response(404)
     end

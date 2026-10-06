@@ -160,7 +160,8 @@ defmodule Engram.Notes.Utf8Backfill do
                "content" => Helpers.scrub_utf8(decrypted.content || "", :backfill),
                "mtime" => decrypted.mtime
              },
-             force: true
+             force: true,
+             actor: "maintenance"
            ) do
       bump(acc, :fixed)
     else

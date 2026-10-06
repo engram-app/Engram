@@ -63,11 +63,16 @@ defmodule Engram.RepoTenantRoundtripsTest do
       vault_a = insert(:vault, user: user_a)
 
       {:ok, _} =
-        Engram.Notes.upsert_note(user_a, vault_a, %{
-          "path" => "nested.md",
-          "content" => "x",
-          "mtime" => 1_000.0
-        })
+        Engram.Notes.upsert_note(
+          user_a,
+          vault_a,
+          %{
+            "path" => "nested.md",
+            "content" => "x",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       {:ok, {:ok, notes}} =
         Repo.with_tenant(user_a.id, fn ->

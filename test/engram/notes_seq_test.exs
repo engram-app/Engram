@@ -34,8 +34,12 @@ defmodule Engram.NotesSeqTest do
   end
 
   test "upsert_note stamps a monotonic seq on insert", %{user: user, vault: vault} do
-    {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "A"})
-    {:ok, n2} = Notes.upsert_note(user, vault, %{"path" => "b.md", "content" => "B"})
+    {:ok, n1} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "A"}, actor: "api")
+
+    {:ok, n2} =
+      Notes.upsert_note(user, vault, %{"path" => "b.md", "content" => "B"}, actor: "api")
+
     s1 = note_seq(user, vault, n1.id)
     s2 = note_seq(user, vault, n2.id)
     assert is_integer(s1) and is_integer(s2)
@@ -43,15 +47,20 @@ defmodule Engram.NotesSeqTest do
   end
 
   test "upsert_note advances seq on update", %{user: user, vault: vault} do
-    {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "A"})
+    {:ok, n1} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "A"}, actor: "api")
+
     s_insert = note_seq(user, vault, n1.id)
-    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "A2"})
+
+    {:ok, _} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "A2"}, actor: "api")
+
     s_update = note_seq(user, vault, n1.id)
     assert s_update > s_insert
   end
 
   test "delete_note stamps a new seq on the soft-deleted row", %{user: user, vault: vault} do
-    {:ok, n} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "A"})
+    {:ok, n} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "A"}, actor: "api")
     s_before = note_seq(user, vault, n.id)
 
     :ok = Notes.delete_note(user, vault, "a.md")
@@ -66,7 +75,7 @@ defmodule Engram.NotesSeqTest do
   end
 
   test "rename_note stamps a new seq on the renamed row", %{user: user, vault: vault} do
-    {:ok, n} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "A"})
+    {:ok, n} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "A"}, actor: "api")
     s_before = note_seq(user, vault, n.id)
 
     {:ok, _} = Notes.rename_note(user, vault, "a.md", "b.md")
@@ -76,7 +85,9 @@ defmodule Engram.NotesSeqTest do
 
   test "rename_folder stamps one shared new seq on renamed rows + tombstones",
        %{user: user, vault: vault} do
-    {:ok, n} = Notes.upsert_note(user, vault, %{"path" => "f/a.md", "content" => "A"})
+    {:ok, n} =
+      Notes.upsert_note(user, vault, %{"path" => "f/a.md", "content" => "A"}, actor: "api")
+
     s_before = max_seq(user, vault)
 
     {:ok, count} = Notes.rename_folder(user, vault, "f", "g")
@@ -114,8 +125,12 @@ defmodule Engram.NotesSeqTest do
   # interleaving test. The structural guarantee lives in the code + its comment.
   test "rename_folder makes renamed rows + tombstones visible together at one seq",
        %{user: user, vault: vault} do
-    {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "f/a.md", "content" => "A"})
-    {:ok, n2} = Notes.upsert_note(user, vault, %{"path" => "f/sub/b.md", "content" => "B"})
+    {:ok, n1} =
+      Notes.upsert_note(user, vault, %{"path" => "f/a.md", "content" => "A"}, actor: "api")
+
+    {:ok, n2} =
+      Notes.upsert_note(user, vault, %{"path" => "f/sub/b.md", "content" => "B"}, actor: "api")
+
     s_before = max_seq(user, vault)
 
     {:ok, count} = Notes.rename_folder(user, vault, "f", "g")
@@ -149,7 +164,9 @@ defmodule Engram.NotesSeqTest do
 
   test "delete_folder stamps a new seq on the cascade-deleted rows",
        %{user: user, vault: vault} do
-    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "f/a.md", "content" => "A"})
+    {:ok, _} =
+      Notes.upsert_note(user, vault, %{"path" => "f/a.md", "content" => "A"}, actor: "api")
+
     s_before = max_seq(user, vault)
 
     {:ok, %{deleted: deleted}} = Notes.delete_folder(user, vault, "f")

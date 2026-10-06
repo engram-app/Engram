@@ -14,14 +14,21 @@ defmodule Engram.MCP.HandlersPartialReadTest do
       "---\ntags: [a]\n# not a heading\n---\n# T\n\n## Todo\n\na\n\n#{@bt}\n## fake\n#{@bt}\n\n### Sub\n\ns\n\n## Done\n\nx\n"
 
     {:ok, _} =
-      Notes.upsert_note(user, vault, %{"path" => "P.md", "content" => content, "mtime" => 1.0})
+      Notes.upsert_note(user, vault, %{"path" => "P.md", "content" => content, "mtime" => 1.0},
+        actor: "api"
+      )
 
     {:ok, _} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "Q.md",
-        "content" => "plain text",
-        "mtime" => 1.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Q.md",
+          "content" => "plain text",
+          "mtime" => 1.0
+        },
+        actor: "api"
+      )
 
     %{user: user, vault: vault}
   end
@@ -55,7 +62,9 @@ defmodule Engram.MCP.HandlersPartialReadTest do
     content = Enum.map_join(headings, "\n\n", &"## #{&1}") <> "\n"
 
     {:ok, _} =
-      Notes.upsert_note(u, v, %{"path" => "Many.md", "content" => content, "mtime" => 1.0})
+      Notes.upsert_note(u, v, %{"path" => "Many.md", "content" => content, "mtime" => 1.0},
+        actor: "api"
+      )
 
     assert {:error, msg} = get(u, v, %{"paths" => ["Many.md"], "section" => "Nope"})
     assert msg =~ "and 10 more"
@@ -66,7 +75,9 @@ defmodule Engram.MCP.HandlersPartialReadTest do
     content2 = "## #{long}\n\nbody\n"
 
     {:ok, _} =
-      Notes.upsert_note(u, v, %{"path" => "Long.md", "content" => content2, "mtime" => 1.0})
+      Notes.upsert_note(u, v, %{"path" => "Long.md", "content" => content2, "mtime" => 1.0},
+        actor: "api"
+      )
 
     assert {:error, msg2} = get(u, v, %{"paths" => ["Long.md"], "section" => "Nope"})
     assert msg2 =~ "#{String.duplicate("x", 100)}..."
@@ -141,11 +152,16 @@ defmodule Engram.MCP.HandlersPartialReadTest do
   test "section and outline work on notes over 1 MB", %{user: u, vault: v} do
     for path <- ["O1.md", "O2.md", "O3.md"] do
       {:ok, _} =
-        Notes.upsert_note(u, v, %{
-          "path" => path,
-          "content" => big_note("H", 1_100_000),
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          u,
+          v,
+          %{
+            "path" => path,
+            "content" => big_note("H", 1_100_000),
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
     end
 
     assert {:ok, _, %{"notes" => [%{"content" => "## H\nword" <> _}]}} =
@@ -161,11 +177,16 @@ defmodule Engram.MCP.HandlersPartialReadTest do
   test "a section name that only renders like several headings is a fixable error",
        %{user: u, vault: v} do
     {:ok, _} =
-      Notes.upsert_note(u, v, %{
-        "path" => "Amb.md",
-        "content" => "## **A**\nx\n## *A*\ny\n",
-        "mtime" => 1.0
-      })
+      Notes.upsert_note(
+        u,
+        v,
+        %{
+          "path" => "Amb.md",
+          "content" => "## **A**\nx\n## *A*\ny\n",
+          "mtime" => 1.0
+        },
+        actor: "api"
+      )
 
     assert {:error, "Heading 'A' matches several headings; pass the exact heading text"} =
              get(u, v, %{"paths" => ["Amb.md"], "section" => "A"})
@@ -205,7 +226,10 @@ defmodule Engram.MCP.HandlersPartialReadTest do
     paths = for i <- 1..4, do: "D#{i}.md"
 
     for p <- paths do
-      {:ok, _} = Notes.upsert_note(u, v, %{"path" => p, "content" => "## H\n", "mtime" => 1.0})
+      {:ok, _} =
+        Notes.upsert_note(u, v, %{"path" => p, "content" => "## H\n", "mtime" => 1.0},
+          actor: "api"
+        )
     end
 
     assert {:ok, text, %{"notes" => notes}} = get(u, v, %{"paths" => paths, "outline" => true})

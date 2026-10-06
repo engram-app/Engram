@@ -19,7 +19,9 @@ defmodule Engram.NotesDeleteTombstoneTest do
   end
 
   defp create_and_delete(user, vault, path, content) do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => path, "content" => content})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => path, "content" => content}, actor: "api")
+
     :ok = Notes.delete_note(user, vault, path)
     note
   end
@@ -42,10 +44,15 @@ defmodule Engram.NotesDeleteTombstoneTest do
     # The resurrecting push carries no client id (plugin dropped the id-map on
     # the delete broadcast) and identical content.
     assert {:error, :recently_deleted} =
-             Notes.upsert_note(user, vault, %{
-               "path" => "Folder/Note.md",
-               "content" => "# Same body"
-             })
+             Notes.upsert_note(
+               user,
+               vault,
+               %{
+                 "path" => "Folder/Note.md",
+                 "content" => "# Same body"
+               },
+               actor: "api"
+             )
 
     # Nothing live at that path — the refusal left no row behind.
     refute Repo.exists?(
@@ -67,11 +74,16 @@ defmodule Engram.NotesDeleteTombstoneTest do
     note = create_and_delete(user, vault, "ZombieTest/z.md", "# original")
 
     assert {:error, :recently_deleted} =
-             Notes.upsert_note(user, vault, %{
-               "id" => note.id,
-               "path" => "ZombieTest/z.md",
-               "content" => "# original with unsynced local edits"
-             })
+             Notes.upsert_note(
+               user,
+               vault,
+               %{
+                 "id" => note.id,
+                 "path" => "ZombieTest/z.md",
+                 "content" => "# original with unsynced local edits"
+               },
+               actor: "api"
+             )
 
     refute Repo.exists?(
              from(n in Note, where: n.id == ^note.id and is_nil(n.deleted_at)),
@@ -92,11 +104,16 @@ defmodule Engram.NotesDeleteTombstoneTest do
     create_and_delete(user, vault, "F/n.md", "# original")
 
     assert {:ok, note} =
-             Notes.upsert_note(user, vault, %{
-               "id" => Notes.mint_id(),
-               "path" => "F/n.md",
-               "content" => "# original with unsynced edits"
-             })
+             Notes.upsert_note(
+               user,
+               vault,
+               %{
+                 "id" => Notes.mint_id(),
+                 "path" => "F/n.md",
+                 "content" => "# original with unsynced edits"
+               },
+               actor: "api"
+             )
 
     assert Repo.exists?(
              from(n in Note, where: n.id == ^note.id and is_nil(n.deleted_at)),
@@ -112,11 +129,16 @@ defmodule Engram.NotesDeleteTombstoneTest do
     # Past the delete-wins window, the same-id same-path re-push is a legitimate
     # restore — resurrect it, don't refuse.
     assert {:ok, restored} =
-             Notes.upsert_note(user, vault, %{
-               "id" => note.id,
-               "path" => "ZombieTest/z.md",
-               "content" => "# restored"
-             })
+             Notes.upsert_note(
+               user,
+               vault,
+               %{
+                 "id" => note.id,
+                 "path" => "ZombieTest/z.md",
+                 "content" => "# restored"
+               },
+               actor: "api"
+             )
 
     assert restored.id == note.id
   end
@@ -128,10 +150,15 @@ defmodule Engram.NotesDeleteTombstoneTest do
     create_and_delete(user, vault, "Folder/Note.md", "# Old body")
 
     assert {:ok, note} =
-             Notes.upsert_note(user, vault, %{
-               "path" => "Folder/Note.md",
-               "content" => "# Brand new body"
-             })
+             Notes.upsert_note(
+               user,
+               vault,
+               %{
+                 "path" => "Folder/Note.md",
+                 "content" => "# Brand new body"
+               },
+               actor: "api"
+             )
 
     assert note.content == "# Brand new body"
   end
@@ -144,10 +171,15 @@ defmodule Engram.NotesDeleteTombstoneTest do
     backdate_delete(deleted.id, 120)
 
     assert {:ok, note} =
-             Notes.upsert_note(user, vault, %{
-               "path" => "Folder/Note.md",
-               "content" => "# Same body"
-             })
+             Notes.upsert_note(
+               user,
+               vault,
+               %{
+                 "path" => "Folder/Note.md",
+                 "content" => "# Same body"
+               },
+               actor: "api"
+             )
 
     assert note.content == "# Same body"
   end
@@ -157,18 +189,23 @@ defmodule Engram.NotesDeleteTombstoneTest do
     vault: vault
   } do
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{"path" => "A.md", "content" => "# Body"})
+      Notes.upsert_note(user, vault, %{"path" => "A.md", "content" => "# Body"}, actor: "api")
 
     :ok = Notes.delete_note(user, vault, "A.md")
 
     # Same client id, new path — the rename/resurrect path keyed on a stable id
     # must still restore the row even within the window.
     assert {:ok, moved} =
-             Notes.upsert_note(user, vault, %{
-               "id" => note.id,
-               "path" => "B.md",
-               "content" => "# Body"
-             })
+             Notes.upsert_note(
+               user,
+               vault,
+               %{
+                 "id" => note.id,
+                 "path" => "B.md",
+                 "content" => "# Body"
+               },
+               actor: "api"
+             )
 
     assert moved.id == note.id
     assert moved.path == "B.md"

@@ -16,6 +16,7 @@ defmodule Engram.Notes do
 
   alias Engram.Notes.{
     Chunk,
+    ContentCommit,
     CrdtBridge,
     CrdtDeliver,
     CrdtPersistence,
@@ -26,7 +27,8 @@ defmodule Engram.Notes do
     Identity,
     Note,
     OkfFields,
-    PathSanitizer
+    PathSanitizer,
+    Revisions
   }
 
   alias Engram.Observability.PostHog
@@ -38,7 +40,7 @@ defmodule Engram.Notes do
   alias Engram.Workers.{
     DeleteNoteIndex,
     EmbedNote,
-    ExtractNoteLinks,
+    FinalizeRevision,
     RebindNoteLinks,
     ReleaseIndexEntries,
     RewriteNoteLinks
@@ -387,6 +389,10 @@ defmodule Engram.Notes do
 
   Options:
 
+    * `actor:` (required) the history actor (#1710): `"sync"`, `"mcp"`,
+      `"api:<key_id>"`, `"link_rewrite"`, `"maintenance"` or `"system"`. No
+      default, so a new caller cannot silently file its edits under another
+      writer's version.
     * `announce_vault_populated: false` — suppress the `vault_populated`
       broadcast for a write the SERVER originated. See the call site; the
       welcome-note seed is the only caller that passes it.
@@ -401,7 +407,10 @@ defmodule Engram.Notes do
           | {:error, :version_conflict, Note.t()}
           | {:error, {:notes_cap_reached, non_neg_integer(), non_neg_integer()}}
           | {:error, atom()}
-  def upsert_note(user, vault, attrs, opts \\ []) do
+  def upsert_note(user, vault, attrs, opts) do
+    unless is_binary(Keyword.fetch!(opts, :actor)),
+      do: raise(ArgumentError, "upsert_note/4 :actor must be a string")
+
     path = attrs["path"] || attrs[:path]
     # Scrub invalid UTF-8 before it is hashed/encrypted/stored: content is kept
     # as `bytea` ciphertext (no Postgres UTF-8 guard), and stray bytes later
@@ -421,6 +430,9 @@ defmodule Engram.Notes do
       folder = Helpers.extract_folder(sanitized_path)
       tags = Helpers.extract_tags(content)
       now = DateTime.utc_now()
+      # #1710: decided once, before the transaction (see Revisions moduledoc).
+      recording = Revisions.recording?(user)
+      opts = Keyword.put(opts, :recording, recording)
 
       base_attrs = %{
         # Belt-and-suspenders: schema default is "note", but stamping it
@@ -464,20 +476,11 @@ defmodule Engram.Notes do
         {:ok, {:ok, {prev_hash, note, _merged_text, _content_hash}}} ->
           _ =
             if prev_hash != note.content_hash do
-              _ =
-                Enqueue.enqueue(
-                  EmbedNote.new_debounced(note.id, user.id,
-                    priority: EmbedNote.priority_for(note)
-                  ),
-                  "embed_note"
+              :ok =
+                ContentCommit.after_commit(note.id, user.id,
+                  embed_priority: EmbedNote.priority_for(note),
+                  finalize?: Revisions.finalize?(recording, prev_hash, note.content_hash)
                 )
-
-              # #648 lever 1 — cheap edge extraction must not ride the embed
-              # debounce (30s) or the embed budget gate; ~2s leading edge.
-              Enqueue.enqueue(
-                ExtractNoteLinks.new_debounced(note.id, user.id),
-                "extract_note_links"
-              )
             end
 
           note = decrypt_or_raise!(note, user)
@@ -544,20 +547,11 @@ defmodule Engram.Notes do
           # new-path upsert until they next pull.
           _ =
             if prev_hash != note.content_hash do
-              _ =
-                Enqueue.enqueue(
-                  EmbedNote.new_debounced(note.id, user.id,
-                    priority: EmbedNote.priority_for(note)
-                  ),
-                  "embed_note"
+              :ok =
+                ContentCommit.after_commit(note.id, user.id,
+                  embed_priority: EmbedNote.priority_for(note),
+                  finalize?: Revisions.finalize?(recording, prev_hash, note.content_hash)
                 )
-
-              # #648 lever 1 — cheap edge extraction must not ride the embed
-              # debounce (30s) or the embed budget gate; ~2s leading edge.
-              Enqueue.enqueue(
-                ExtractNoteLinks.new_debounced(note.id, user.id),
-                "extract_note_links"
-              )
             end
 
           note = decrypt_or_raise!(note, user)
@@ -903,6 +897,9 @@ defmodule Engram.Notes do
          # completed rename, which is exactly what this leg used to do.
          {:ok, claimed?} <-
            claim_crdt_relocate(user, vault, canonical_id, sanitized_path, opts) do
+      # #1710: decided once, before the transaction (see Revisions moduledoc).
+      recording = Revisions.recording?(user)
+
       # Repo.with_tenant wraps the fn return in {:ok, _} (transaction).
       # Unwrap once so the public contract matches the @spec above.
       case Repo.with_tenant(user.id, fn ->
@@ -925,14 +922,22 @@ defmodule Engram.Notes do
                      # removes the #970 delete-wins window from renames entirely.
                      # A target path OCCUPIED by a DIFFERENT live note stays a
                      # genuine conflict (the pre-E2 behavior).
-                     genesis_relocate_live(live, user, vault, sanitized_path, folder, origin)
+                     genesis_relocate_live(
+                       live,
+                       user,
+                       vault,
+                       sanitized_path,
+                       folder,
+                       origin,
+                       recording
+                     )
 
                    {:error, _} = err ->
                      err
                  end
 
                {:tombstone, %Note{} = prior} ->
-                 genesis_resurrect(prior, user, vault, sanitized_path, folder, origin)
+                 genesis_resurrect(prior, user, vault, sanitized_path, folder, origin, recording)
 
                :taken ->
                  # The id is already spoken for by a row of theirs that this
@@ -955,7 +960,8 @@ defmodule Engram.Notes do
                :none ->
                  genesis_adopt_or_insert(user, vault, canonical_id, sanitized_path, folder)
              end
-           end) do
+           end)
+           |> finalize_moved_revision(user) do
         # Only genesis_resurrect/genesis_insert_bare tag their success with
         # :announce (a REAL create/resurrect). The idempotent same-path and
         # adopt-existing-live-note branches change nothing, so they return a
@@ -1012,6 +1018,21 @@ defmodule Engram.Notes do
       {:error, _} = err -> err
     end
   end
+
+  # #1710: a relocate/resurrect that changed content (uncheckpointed CRDT tail
+  # folded in by move_note) may have closed a version. Enqueue its finalize
+  # here, after the transaction committed, the same post-commit position as
+  # ContentCommit.after_commit/3. The flag is Revisions.finalize?/3; strip it
+  # so the clauses above see the plain 3-tuple.
+  defp finalize_moved_revision({:ok, {:ok, note, tag, finalize?}}, user) do
+    _ =
+      if finalize?,
+        do: Enqueue.enqueue(FinalizeRevision.job(note.id, user.id), "finalize_revision")
+
+    {:ok, {:ok, note, tag}}
+  end
+
+  defp finalize_moved_revision(result, _user), do: result
 
   # The web app renames and moves EVERY note through `crdt_create`: `queries.ts`
   # `useRenameNote` calls `crdtCreateNote(id, new_path)` under the comment
@@ -1278,7 +1299,7 @@ defmodule Engram.Notes do
     (client_type || @untagged_crdt_client_type) != "obsidian"
   end
 
-  defp genesis_relocate_live(live, user, vault, sanitized_path, folder, origin) do
+  defp genesis_relocate_live(live, user, vault, sanitized_path, folder, origin, recording) do
     with {:ok, query} <- note_by_path_query(user, vault, sanitized_path) do
       case Repo.one(query) do
         nil ->
@@ -1292,8 +1313,8 @@ defmodule Engram.Notes do
             mtime: decrypted.mtime
           }
 
-          case move_note(decrypted, base_attrs, user, sanitized_path, folder) do
-            {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
+          case move_note(decrypted, base_attrs, user, sanitized_path, folder, "sync", recording) do
+            {:ok, {:moved, prev_hash, updated, _merged_text, content_hash}} ->
               case Crypto.maybe_decrypt_note_fields(updated, user) do
                 {:ok, moved} ->
                   Logger.info(
@@ -1348,7 +1369,8 @@ defmodule Engram.Notes do
                   # Carry the OLD path so the post-commit handler can fan an
                   # old-path delete to peers (a web receiver has no local mirror
                   # to drop the note from its old folder otherwise).
-                  {:ok, moved, {:announce_moved, decrypted.path}}
+                  {:ok, moved, {:announce_moved, decrypted.path},
+                   Revisions.finalize?(recording, prev_hash, content_hash)}
 
                 {:error, reason} ->
                   log_resurrect_decrypt_failure(reason, user, updated)
@@ -1425,10 +1447,10 @@ defmodule Engram.Notes do
     end
   end
 
-  defp genesis_resurrect(prior, user, vault, sanitized_path, folder, origin) do
+  defp genesis_resurrect(prior, user, vault, sanitized_path, folder, origin, recording) do
     case Crypto.maybe_decrypt_note_fields(prior, user) do
       {:ok, prior} ->
-        genesis_resurrect_decrypted(prior, user, vault, sanitized_path, folder, origin)
+        genesis_resurrect_decrypted(prior, user, vault, sanitized_path, folder, origin, recording)
 
       {:error, reason} ->
         log_resurrect_decrypt_failure(reason, user, prior)
@@ -1436,7 +1458,7 @@ defmodule Engram.Notes do
     end
   end
 
-  defp genesis_resurrect_decrypted(prior, user, vault, sanitized_path, folder, origin) do
+  defp genesis_resurrect_decrypted(prior, user, vault, sanitized_path, folder, origin, recording) do
     # FIX 1 — delete-wins (#970): a tombstone re-created at its OWN path within
     # the delete window is a stale device un-deleting a note another device
     # deleted. Mirror the REST upsert_pathless guard EXACTLY — refuse so the
@@ -1458,8 +1480,8 @@ defmodule Engram.Notes do
         mtime: prior.mtime
       }
 
-      case move_note(prior, base_attrs, user, sanitized_path, folder) do
-        {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
+      case move_note(prior, base_attrs, user, sanitized_path, folder, "sync", recording) do
+        {:ok, {:moved, prev_hash, updated, _merged_text, content_hash}} ->
           case Crypto.maybe_decrypt_note_fields(updated, user) do
             {:ok, decrypted} ->
               # #591 — treat a resurrect like a create: the note is live again
@@ -1489,7 +1511,7 @@ defmodule Engram.Notes do
               # A rename-restore carries the OLD (tombstone) path so peers clear
               # it; a same-path resurrect just announces.
               tag = if renamed?, do: {:announce_moved, prior.path}, else: :announce
-              {:ok, decrypted, tag}
+              {:ok, decrypted, tag, Revisions.finalize?(recording, prev_hash, content_hash)}
 
             {:error, reason} ->
               log_resurrect_decrypt_failure(reason, user, updated)
@@ -1642,16 +1664,19 @@ defmodule Engram.Notes do
   # No live note exists at this path. Route by the client-supplied note_id.
   # Must run inside the caller's `Repo.with_tenant` block (does tenant-scoped
   # reads/writes).
-  defp upsert_pathless(
-         client_id,
-         vault,
-         base_attrs,
-         user,
-         sanitized_path,
-         folder,
-         tags,
-         lookup_query
-       ) do
+  defp upsert_pathless(%{
+         client_id: client_id,
+         vault: vault,
+         base: base_attrs,
+         user: user,
+         path: sanitized_path,
+         folder: folder,
+         tags: tags,
+         query: lookup_query,
+         opts: opts
+       }) do
+    actor = Keyword.fetch!(opts, :actor)
+
     case existing_by_client_id(client_id, vault) do
       %Note{deleted_at: nil} = live ->
         # Live id-collision: this note_id already names a LIVE note at a
@@ -1678,7 +1703,15 @@ defmodule Engram.Notes do
         if recent_same_path_tombstone?(prior, sanitized_path, user) do
           {:error, :recently_deleted}
         else
-          move_note(prior, base_attrs, user, sanitized_path, folder)
+          move_note(
+            prior,
+            base_attrs,
+            user,
+            sanitized_path,
+            folder,
+            actor,
+            Keyword.fetch!(opts, :recording)
+          )
         end
 
       nil ->
@@ -1733,7 +1766,7 @@ defmodule Engram.Notes do
   # constraint, so a rare race (another live note grabbed the target path
   # between the lookup and this update) surfaces as `{:error, changeset}`
   # instead of raising and aborting the tenant transaction.
-  defp move_note(prior, base_attrs, user, sanitized_path, folder) do
+  defp move_note(prior, base_attrs, user, sanitized_path, folder, actor, recording) do
     was_tombstoned = not is_nil(prior.deleted_at)
 
     with {:ok, crdt} <-
@@ -1786,6 +1819,13 @@ defmodule Engram.Notes do
               if was_tombstoned do
                 :ok = UsageMeters.inc_notes_count(user.id, 1)
               end
+
+            # #1710. AFTER the fenced write, same transaction: a lost fence
+            # returns :stale_snapshot below and must record nothing. `prior` is
+            # the PRE-write row. The hash check keeps a pure rename out of history.
+            _ =
+              if prior.content_hash != crdt.content_hash,
+                do: Revisions.record_write(prior, actor, recording)
 
             # Tagged `:moved` (not the plain 4-tuple do_rewrite_note returns) so
             # the caller broadcasts unconditionally: a rename keeps the same
@@ -1845,7 +1885,9 @@ defmodule Engram.Notes do
 
       true ->
         do_rewrite_note(existing, base_attrs, user, sanitized_path, folder,
-          db_mode: Keyword.get(opts, :db_mode)
+          db_mode: Keyword.get(opts, :db_mode),
+          actor: Keyword.fetch!(opts, :actor),
+          recording: Keyword.fetch!(opts, :recording)
         )
     end
   end
@@ -1896,7 +1938,7 @@ defmodule Engram.Notes do
     result =
       case Repo.one(w.query) do
         nil ->
-          upsert_pathless(w.client_id, w.vault, w.base, w.user, w.path, w.folder, w.tags, w.query)
+          upsert_pathless(w)
 
         existing ->
           # Test-only seam: parks here, between the row read and the write, so a
@@ -2017,6 +2059,20 @@ defmodule Engram.Notes do
           # so callers can include the stored hash in broadcast digests without
           # re-deriving it.
           {:ok, updated} ->
+            # #1710. AFTER the fenced write, in the same transaction:
+            # `lookup_and_write` retries a lost fence INSIDE this transaction,
+            # so a history step placed before the write would commit a version
+            # for the losing attempt. `existing` is the PRE-write row. The
+            # hash check keeps a write that rewrote no text out of history.
+            _ =
+              if existing.content_hash != crdt.content_hash,
+                do:
+                  Revisions.record_write(
+                    existing,
+                    Keyword.fetch!(opts, :actor),
+                    Keyword.fetch!(opts, :recording)
+                  )
+
             {:ok, {existing.content_hash, updated, crdt.merged_text, crdt.content_hash}}
 
           {:error, changeset} ->

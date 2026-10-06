@@ -17,11 +17,16 @@ defmodule Engram.MCP.HandlersCreateNoteNoOverwriteTest do
   test "refuses a path that already holds a note, leaving it untouched",
        %{user: user, vault: vault} do
     {:ok, _} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "Projects/Meeting Notes.md",
-        "content" => "# Meeting Notes\n\nwritten by the user",
-        "mtime" => 1.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Projects/Meeting Notes.md",
+          "content" => "# Meeting Notes\n\nwritten by the user",
+          "mtime" => 1.0
+        },
+        actor: "api"
+      )
 
     assert {:error, msg} =
              Handlers.handle("create_note", user, vault, %{
@@ -40,11 +45,16 @@ defmodule Engram.MCP.HandlersCreateNoteNoOverwriteTest do
 
   test "matches the stored path after sanitization", %{user: user, vault: vault} do
     {:ok, stored} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "Projects/What?.md",
-        "content" => "# What?\n\noriginal",
-        "mtime" => 1.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Projects/What?.md",
+          "content" => "# What?\n\noriginal",
+          "mtime" => 1.0
+        },
+        actor: "api"
+      )
 
     assert {:error, _} =
              Handlers.handle("create_note", user, vault, %{

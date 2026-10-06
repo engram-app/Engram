@@ -764,11 +764,16 @@ defmodule Engram.VaultsTest do
       {:ok, vault, _} = Vaults.register_vault(user, "Rooms", Ecto.UUID.generate())
 
       {:ok, note} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "path" => "r.md",
-          "content" => "x",
-          "mtime" => 1.0
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "r.md",
+            "content" => "x",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       {:ok, room} =
         Yex.Sync.SharedDoc.start_link(

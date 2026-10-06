@@ -24,7 +24,8 @@ defmodule Engram.NotesOkfWriteTest do
   end
 
   test "upsert persists OKF columns and virtuals round-trip", %{user: user, vault: vault} do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "a/x.md", "content" => @content})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "a/x.md", "content" => @content}, actor: "api")
 
     {:ok, raw} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
     assert raw.fm_timestamp == ~U[2026-05-28 14:30:00Z]
@@ -41,7 +42,9 @@ defmodule Engram.NotesOkfWriteTest do
   end
 
   test "type_hmac uses the normalized value", %{user: user, vault: vault} do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "b/y.md", "content" => @content})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "b/y.md", "content" => @content}, actor: "api")
+
     {:ok, raw} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
 
     {:ok, filter_key} = Crypto.dek_filter_key(user)
@@ -49,8 +52,13 @@ defmodule Engram.NotesOkfWriteTest do
   end
 
   test "removing frontmatter on edit nulls the OKF columns", %{user: user, vault: vault} do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "c/z.md", "content" => @content})
-    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "c/z.md", "content" => "plain body\n"})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "c/z.md", "content" => @content}, actor: "api")
+
+    {:ok, _} =
+      Notes.upsert_note(user, vault, %{"path" => "c/z.md", "content" => "plain body\n"},
+        actor: "api"
+      )
 
     {:ok, raw} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
     assert is_nil(raw.fm_timestamp)

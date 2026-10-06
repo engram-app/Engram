@@ -39,7 +39,9 @@ defmodule Engram.Notes.CrdtTransportTest do
     test "full state (since=nil) reconstructs the note text on a fresh client doc",
          %{user: user, vault: vault} do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{path: "T/A.md", content: "# A\n\nhello", mtime: 1_000.0})
+        Notes.upsert_note(user, vault, %{path: "T/A.md", content: "# A\n\nhello", mtime: 1_000.0},
+          actor: "api"
+        )
 
       assert {:ok, %{update: update, head: head}} =
                CrdtTransport.read_delta(user, vault, note.id, nil)
@@ -57,7 +59,9 @@ defmodule Engram.Notes.CrdtTransportTest do
     test "delta (since=client SV) carries only the change after the client's state",
          %{user: user, vault: vault} do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{path: "T/B.md", content: "# B\n\none", mtime: 1_000.0})
+        Notes.upsert_note(user, vault, %{path: "T/B.md", content: "# B\n\none", mtime: 1_000.0},
+          actor: "api"
+        )
 
       # Client catches up to the current server state, records its SV, THEN the
       # server advances. The delta since that SV must reproduce the new text.
@@ -67,11 +71,16 @@ defmodule Engram.Notes.CrdtTransportTest do
       client_sv = Yex.encode_state_vector!(client)
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          path: "T/B.md",
-          content: "# B\n\none two",
-          mtime: 2_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            path: "T/B.md",
+            content: "# B\n\none two",
+            mtime: 2_000.0
+          },
+          actor: "api"
+        )
 
       assert {:ok, %{update: delta}} = CrdtTransport.read_delta(user, vault, note.id, client_sv)
       assert :ok = Yex.apply_update(client, delta)
@@ -86,7 +95,9 @@ defmodule Engram.Notes.CrdtTransportTest do
     test "valid-base64 but non-state-vector since bytes → {:error, :bad_since}, never raises",
          %{user: user, vault: vault} do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{path: "T/BadSV.md", content: "# X", mtime: 1_000.0})
+        Notes.upsert_note(user, vault, %{path: "T/BadSV.md", content: "# X", mtime: 1_000.0},
+          actor: "api"
+        )
 
       # A short truncated-varint pattern: the NIF itself rejects it with
       # {:error, {:encoding_exception, _}} (confirmed empirically), no crash.
@@ -97,7 +108,9 @@ defmodule Engram.Notes.CrdtTransportTest do
     test "state vector claiming an implausible entry count → {:error, :bad_since}, never crashes",
          %{user: user, vault: vault} do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{path: "T/BadSV2.md", content: "# Y", mtime: 1_000.0})
+        Notes.upsert_note(user, vault, %{path: "T/BadSV2.md", content: "# Y", mtime: 1_000.0},
+          actor: "api"
+        )
 
       # DELIBERATELY NOT random bytes: <<128, 128, 128, 128, 15>> decodes as a
       # state vector claiming ~2^31 client entries in 5 bytes. Handed directly
@@ -117,7 +130,9 @@ defmodule Engram.Notes.CrdtTransportTest do
   describe "apply_update/4" do
     test "a client update merges losslessly and advances the head", %{user: user, vault: vault} do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{path: "T/C.md", content: "# C\n\nseed", mtime: 1_000.0})
+        Notes.upsert_note(user, vault, %{path: "T/C.md", content: "# C\n\nseed", mtime: 1_000.0},
+          actor: "api"
+        )
 
       on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
 
@@ -143,7 +158,9 @@ defmodule Engram.Notes.CrdtTransportTest do
 
     test "garbage bytes → {:error, :invalid_update}", %{user: user, vault: vault} do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{path: "T/D.md", content: "# D", mtime: 1_000.0})
+        Notes.upsert_note(user, vault, %{path: "T/D.md", content: "# D", mtime: 1_000.0},
+          actor: "api"
+        )
 
       on_exit(fn -> Engram.Notes.CrdtRegistry.terminate_room(note.id) end)
 
@@ -159,7 +176,9 @@ defmodule Engram.Notes.CrdtTransportTest do
     test "apply_update observes so the room reaps when the caller exits (no immortal-room leak)",
          %{user: user, vault: vault} do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{path: "T/Leak.md", content: "# Leak", mtime: 1_000.0})
+        Notes.upsert_note(user, vault, %{path: "T/Leak.md", content: "# Leak", mtime: 1_000.0},
+          actor: "api"
+        )
 
       on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
 
@@ -196,7 +215,9 @@ defmodule Engram.Notes.CrdtTransportTest do
     test "a room edit invalidates a warmed crdt_head; backfill_head re-warms to the new head",
          %{user: user, vault: vault} do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{path: "MH/A.md", content: "# A\n\nseed", mtime: 1_000.0})
+        Notes.upsert_note(user, vault, %{path: "MH/A.md", content: "# A\n\nseed", mtime: 1_000.0},
+          actor: "api"
+        )
 
       on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
 
@@ -227,7 +248,9 @@ defmodule Engram.Notes.CrdtTransportTest do
     test "a REST edit invalidates the head so backfill_head reflects the new state",
          %{user: user, vault: vault} do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{path: "MH/D.md", content: "# D\n\none", mtime: 1_000.0})
+        Notes.upsert_note(user, vault, %{path: "MH/D.md", content: "# D\n\none", mtime: 1_000.0},
+          actor: "api"
+        )
 
       {:ok, h0} = CrdtTransport.backfill_head(user, vault, note.id)
       assert is_binary(h0)
@@ -235,11 +258,16 @@ defmodule Engram.Notes.CrdtTransportTest do
       # A REST update rewrites crdt_state via maybe_merge_crdt; the trigger
       # nulls crdt_head so a stale head cannot survive the content change.
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          path: "MH/D.md",
-          content: "# D\n\none two",
-          mtime: 2_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            path: "MH/D.md",
+            content: "# D\n\none two",
+            mtime: 2_000.0
+          },
+          actor: "api"
+        )
 
       {:ok, mid} = Notes.get_note_by_id(user, vault, note.id)
       assert is_nil(mid.crdt_head), "trigger must invalidate crdt_head on a crdt_state change"
@@ -251,7 +279,9 @@ defmodule Engram.Notes.CrdtTransportTest do
     test "backfill_head computes, persists, and returns a head matching read_delta",
          %{user: user, vault: vault} do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{path: "MH/E.md", content: "# E", mtime: 1_000.0})
+        Notes.upsert_note(user, vault, %{path: "MH/E.md", content: "# E", mtime: 1_000.0},
+          actor: "api"
+        )
 
       assert {:ok, head} = CrdtTransport.backfill_head(user, vault, note.id)
       {:ok, %{head: rd_head}} = CrdtTransport.read_delta(user, vault, note.id, nil)
@@ -269,11 +299,16 @@ defmodule Engram.Notes.CrdtTransportTest do
     test "store_head_if_unchanged persists when the tail watermark still matches (CAS accept)",
          %{user: user, vault: vault} do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          path: "MH/CAS1.md",
-          content: "# C\n\nseed",
-          mtime: 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            path: "MH/CAS1.md",
+            content: "# C\n\nseed",
+            mtime: 1_000.0
+          },
+          actor: "api"
+        )
 
       # Advance the tail so the watermark is a real row, then store against it.
       append_tail_row(user, vault, note.id)
@@ -287,11 +322,16 @@ defmodule Engram.Notes.CrdtTransportTest do
     test "store_head_if_unchanged does NOT persist when the tail advanced under it (CAS reject)",
          %{user: user, vault: vault} do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          path: "MH/CAS2.md",
-          content: "# C\n\none",
-          mtime: 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            path: "MH/CAS2.md",
+            content: "# C\n\none",
+            mtime: 1_000.0
+          },
+          actor: "api"
+        )
 
       append_tail_row(user, vault, note.id)
       stale_wm = CrdtTransport.tail_watermark(user, note.id)
@@ -311,7 +351,9 @@ defmodule Engram.Notes.CrdtTransportTest do
     test "any crdt_state_ciphertext write invalidates a warmed crdt_head (invalidation trigger)",
          %{user: user, vault: vault} do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{path: "MH/TRG.md", content: "# T", mtime: 1_000.0})
+        Notes.upsert_note(user, vault, %{path: "MH/TRG.md", content: "# T", mtime: 1_000.0},
+          actor: "api"
+        )
 
       _ = CrdtTransport.backfill_head(user, vault, note.id)
       {:ok, warmed} = Notes.get_note_by_id(user, vault, note.id)
@@ -337,7 +379,9 @@ defmodule Engram.Notes.CrdtTransportTest do
     test "a crdt_head-only write does NOT fire the invalidation trigger (column-scoped)",
          %{user: user, vault: vault} do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{path: "MH/COL.md", content: "# C", mtime: 1_000.0})
+        Notes.upsert_note(user, vault, %{path: "MH/COL.md", content: "# C", mtime: 1_000.0},
+          actor: "api"
+        )
 
       _ = CrdtTransport.backfill_head(user, vault, note.id)
       {:ok, warmed} = Notes.get_note_by_id(user, vault, note.id)

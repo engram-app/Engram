@@ -70,7 +70,9 @@ defmodule Engram.IndexingKeywordContextTest do
 
   defp note!(user, vault, path, content) do
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{"path" => path, "content" => content, "mtime" => 1.0})
+      Notes.upsert_note(user, vault, %{"path" => path, "content" => content, "mtime" => 1.0},
+        actor: "api"
+      )
 
     {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
     note

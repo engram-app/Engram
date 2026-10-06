@@ -13,7 +13,9 @@ defmodule Engram.MCP.HandlersRecentTest do
     vault = insert(:vault, user: user)
 
     {:ok, _} =
-      Notes.upsert_note(user, vault, %{"path" => "r.md", "content" => "# R\n\nx", "mtime" => 1.0})
+      Notes.upsert_note(user, vault, %{"path" => "r.md", "content" => "# R\n\nx", "mtime" => 1.0},
+        actor: "api"
+      )
 
     # Review Focus 3: the embedder must never be called on this path.
     expect(Engram.MockEmbedder, :embed_texts, 0, fn _texts, _opts -> flunk("must not embed") end)
@@ -45,7 +47,11 @@ defmodule Engram.MCP.HandlersRecentTest do
   test "cross-vault listing merges newest first and labels vaults", %{user: u, vault: v} do
     other = insert(:vault, user: u, name: "Other")
     Process.sleep(2)
-    {:ok, _} = Notes.upsert_note(u, other, %{"path" => "o.md", "content" => "o", "mtime" => 2.0})
+
+    {:ok, _} =
+      Notes.upsert_note(u, other, %{"path" => "o.md", "content" => "o", "mtime" => 2.0},
+        actor: "api"
+      )
 
     assert {:ok, _, %{"results" => [first, second]}} =
              Handlers.handle("search_notes", u, {:cross_vault, [v, other]}, %{"limit" => 5})
@@ -74,7 +80,11 @@ defmodule Engram.MCP.HandlersRecentTest do
 
   test "cross-vault: limit 0 or negative floors to 1 instead of crashing", %{user: u, vault: v} do
     other = insert(:vault, user: u)
-    {:ok, _} = Notes.upsert_note(u, other, %{"path" => "o.md", "content" => "o", "mtime" => 2.0})
+
+    {:ok, _} =
+      Notes.upsert_note(u, other, %{"path" => "o.md", "content" => "o", "mtime" => 2.0},
+        actor: "api"
+      )
 
     assert {:ok, _, %{"results" => [_]}} =
              Handlers.handle("search_notes", u, {:cross_vault, [v, other]}, %{"limit" => 0})

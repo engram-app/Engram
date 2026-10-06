@@ -20,7 +20,8 @@ defmodule Engram.NotesDeleteClearsEmbedHashTest do
   end
 
   defp embedded_note(user, vault, path) do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => path, "content" => "# body"})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => path, "content" => "# body"}, actor: "api")
 
     from(n in Note, where: n.id == ^note.id)
     |> Repo.update_all([set: [embed_hash: "stamped", dense_indexed_hash: "stamped"]],

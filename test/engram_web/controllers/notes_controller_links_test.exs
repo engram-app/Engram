@@ -13,14 +13,21 @@ defmodule EngramWeb.NotesControllerLinksTest do
   describe "GET /api/notes/by-id/:id — links" do
     test "returns resolved links after extraction", %{conn: conn, user: user, vault: vault} do
       {:ok, target} =
-        Engram.Notes.upsert_note(user, vault, %{path: "B.md", content: "# B", mtime: 1_000.0})
+        Engram.Notes.upsert_note(user, vault, %{path: "B.md", content: "# B", mtime: 1_000.0},
+          actor: "api"
+        )
 
       {:ok, source} =
-        Engram.Notes.upsert_note(user, vault, %{
-          path: "Source.md",
-          content: "[[B]]",
-          mtime: 1_000.0
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            path: "Source.md",
+            content: "[[B]]",
+            mtime: 1_000.0
+          },
+          actor: "api"
+        )
 
       :ok = perform_job(ExtractNoteLinks, %{note_id: source.id, user_id: user.id})
 
@@ -41,14 +48,21 @@ defmodule EngramWeb.NotesControllerLinksTest do
       vault: vault
     } do
       {:ok, target} =
-        Engram.Notes.upsert_note(user, vault, %{path: "B.md", content: "# B", mtime: 1_000.0})
+        Engram.Notes.upsert_note(user, vault, %{path: "B.md", content: "# B", mtime: 1_000.0},
+          actor: "api"
+        )
 
       {:ok, source} =
-        Engram.Notes.upsert_note(user, vault, %{
-          path: "Source.md",
-          content: "[[B]]",
-          mtime: 1_000.0
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            path: "Source.md",
+            content: "[[B]]",
+            mtime: 1_000.0
+          },
+          actor: "api"
+        )
 
       :ok = perform_job(ExtractNoteLinks, %{note_id: source.id, user_id: user.id})
 
@@ -66,7 +80,9 @@ defmodule EngramWeb.NotesControllerLinksTest do
       other_vault = insert(:vault, user: other_user, is_default: true)
 
       {:ok, other_note} =
-        Engram.Notes.upsert_note(other_user, other_vault, %{path: "a.md", content: "# A"})
+        Engram.Notes.upsert_note(other_user, other_vault, %{path: "a.md", content: "# A"},
+          actor: "api"
+        )
 
       conn = get(conn, ~p"/api/notes/by-id/#{other_note.id}/backlinks")
       assert json_response(conn, 404) == %{"error" => "not found"}

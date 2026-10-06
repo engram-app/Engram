@@ -32,7 +32,10 @@ defmodule Engram.NotesSeqFeedByteBudgetTest do
 
   test "a page stops at the byte budget and reports has_more", %{user: user, vault: vault} do
     for i <- 1..5 do
-      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "n#{i}.md", "content" => big(40)})
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "n#{i}.md", "content" => big(40)},
+          actor: "api"
+        )
     end
 
     # Budget fits 2 notes, not 5. Row limit is deliberately generous so only the
@@ -50,7 +53,10 @@ defmodule Engram.NotesSeqFeedByteBudgetTest do
     vault: vault
   } do
     for i <- 1..5 do
-      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "n#{i}.md", "content" => big(40)})
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "n#{i}.md", "content" => big(40)},
+          actor: "api"
+        )
     end
 
     # Walk the whole feed in byte-capped pages, exactly as walkOpLog does.
@@ -80,8 +86,11 @@ defmodule Engram.NotesSeqFeedByteBudgetTest do
     user: user,
     vault: vault
   } do
-    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "huge.md", "content" => big(200)})
-    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "after.md", "content" => "small"})
+    {:ok, _} =
+      Notes.upsert_note(user, vault, %{"path" => "huge.md", "content" => big(200)}, actor: "api")
+
+    {:ok, _} =
+      Notes.upsert_note(user, vault, %{"path" => "after.md", "content" => "small"}, actor: "api")
 
     {:ok, %{changes: page}} =
       Notes.list_changes_by_seq(user, vault, 0, limit: 500, max_bytes: 10 * 1024)
@@ -93,7 +102,10 @@ defmodule Engram.NotesSeqFeedByteBudgetTest do
 
   test "a page under the budget is untouched", %{user: user, vault: vault} do
     for i <- 1..3 do
-      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "n#{i}.md", "content" => "small"})
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "n#{i}.md", "content" => "small"},
+          actor: "api"
+        )
     end
 
     {:ok, %{changes: page, has_more: has_more}} =
@@ -108,7 +120,10 @@ defmodule Engram.NotesSeqFeedByteBudgetTest do
     vault: vault
   } do
     for i <- 1..5 do
-      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "n#{i}.md", "content" => big(40)})
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "n#{i}.md", "content" => big(40)},
+          actor: "api"
+        )
     end
 
     %{page: page, has_more: has_more} =
@@ -124,7 +139,10 @@ defmodule Engram.NotesSeqFeedByteBudgetTest do
   } do
     # Notes take the low seqs, attachments the high ones.
     for i <- 1..5 do
-      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "n#{i}.md", "content" => big(40)})
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "n#{i}.md", "content" => big(40)},
+          actor: "api"
+        )
     end
 
     for i <- 1..3 do
@@ -166,7 +184,10 @@ defmodule Engram.NotesSeqFeedByteBudgetTest do
     # scores the page at ~0 bytes and waves through rows that inflate afterwards.
     # Whatever the facade said, the page that LEAVES must respect the budget.
     for i <- 1..5 do
-      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "r#{i}.md", "content" => big(40)})
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "r#{i}.md", "content" => big(40)},
+          actor: "api"
+        )
     end
 
     {:ok, %{changes: page, has_more: has_more, next: next}} =

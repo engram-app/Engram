@@ -13,18 +13,28 @@ defmodule EngramWeb.McpOAuthScopeTest do
     vault_b = insert(:vault, user: user, slug: "vault-b")
 
     {:ok, _} =
-      Engram.Notes.upsert_note(user, vault_a, %{
-        "path" => "a.md",
-        "content" => "in vault A",
-        "mtime" => 1.0
-      })
+      Engram.Notes.upsert_note(
+        user,
+        vault_a,
+        %{
+          "path" => "a.md",
+          "content" => "in vault A",
+          "mtime" => 1.0
+        },
+        actor: "api"
+      )
 
     {:ok, _} =
-      Engram.Notes.upsert_note(user, vault_b, %{
-        "path" => "b.md",
-        "content" => "in vault B",
-        "mtime" => 1.0
-      })
+      Engram.Notes.upsert_note(
+        user,
+        vault_b,
+        %{
+          "path" => "b.md",
+          "content" => "in vault B",
+          "mtime" => 1.0
+        },
+        actor: "api"
+      )
 
     %{conn: conn, user: user, vault_a: vault_a, vault_b: vault_b}
   end

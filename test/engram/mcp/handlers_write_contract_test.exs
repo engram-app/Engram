@@ -25,7 +25,9 @@ defmodule Engram.MCP.HandlersWriteContractTest do
   end
 
   defp note!(user, vault, path, content) do
-    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => path, "content" => content})
+    {:ok, _} =
+      Notes.upsert_note(user, vault, %{"path" => path, "content" => content}, actor: "api")
+
     :ok
   end
 

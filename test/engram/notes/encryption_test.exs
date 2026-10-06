@@ -17,11 +17,16 @@ defmodule Engram.Notes.EncryptionTest do
       vault = insert(:vault, user: user)
 
       {:ok, _note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "journal/today.md",
-          "content" => "dear diary, I feel seen",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "journal/today.md",
+            "content" => "dear diary, I feel seen",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       # Public read path decrypts and returns plaintext
       {:ok, note} = Notes.get_note(user, vault, "journal/today.md")
@@ -46,12 +51,17 @@ defmodule Engram.Notes.EncryptionTest do
       vault = insert(:vault, user: user)
 
       {:ok, note} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "path" => "return/test.md",
-          "content" => "plain text returned",
-          "mtime" => 1_000.0,
-          "version" => 1
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "return/test.md",
+            "content" => "plain text returned",
+            "mtime" => 1_000.0,
+            "version" => 1
+          },
+          actor: "api"
+        )
 
       # The returned struct must contain plaintext, not ciphertext
       assert note.content == "plain text returned"
@@ -64,11 +74,16 @@ defmodule Engram.Notes.EncryptionTest do
       vault = insert(:vault, user: user)
 
       {:ok, _} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "path" => "rename/before.md",
-          "content" => "# Before\n\nsome content here",
-          "mtime" => 1_000.0
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "rename/before.md",
+            "content" => "# Before\n\nsome content here",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       {:ok, renamed} =
         Engram.Notes.rename_note(user, vault, "rename/before.md", "rename/after.md")
@@ -86,12 +101,17 @@ defmodule Engram.Notes.EncryptionTest do
       original_content = "# The Real Title\n\nbody text here"
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "before/note.md",
-          "content" => original_content,
-          "mtime" => 1_000.0,
-          "version" => 1
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "before/note.md",
+            "content" => original_content,
+            "mtime" => 1_000.0,
+            "version" => 1
+          },
+          actor: "api"
+        )
 
       {:ok, renamed} = Notes.rename_note(user, vault, "before/note.md", "after/note.md")
 
@@ -110,12 +130,17 @@ defmodule Engram.Notes.EncryptionTest do
       vault = insert(:vault, user: user)
 
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "broken/note.md",
-          "content" => "will be unreadable",
-          "mtime" => 1_000.0,
-          "version" => 1
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "broken/note.md",
+            "content" => "will be unreadable",
+            "mtime" => 1_000.0,
+            "version" => 1
+          },
+          actor: "api"
+        )
 
       # Corrupt the ciphertext in the DB so Envelope.decrypt returns an error
       raw = Engram.Fixtures.raw_note_by_path!(user, "broken/note.md")

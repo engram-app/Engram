@@ -67,11 +67,16 @@ defmodule Engram.NotesFolderMarkerTest do
     test "does not touch real notes under the same folder path",
          %{user: user, vault: vault} do
       {:ok, _note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Real/note.md",
-          "content" => "body",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Real/note.md",
+            "content" => "body",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       {:ok, _marker} = Notes.create_folder_marker(user, vault, "Real")
       {:ok, :deleted} = Notes.delete_folder_marker(user, vault, "Real")

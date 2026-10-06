@@ -40,14 +40,18 @@ defmodule Engram.LinksLifecycleTest do
 
   test "creating the target binds existing danglers", %{user: user, vault: vault} do
     {:ok, source} =
-      Notes.upsert_note(user, vault, %{"path" => "Source1.md", "content" => "See [[Later]]."})
+      Notes.upsert_note(user, vault, %{"path" => "Source1.md", "content" => "See [[Later]]."},
+        actor: "api"
+      )
 
     extract_links!(user, source.id)
 
     assert only_link(user, source.id).dangling
 
     {:ok, target} =
-      Notes.upsert_note(user, vault, %{"path" => "x/Later.md", "content" => "# Later"})
+      Notes.upsert_note(user, vault, %{"path" => "x/Later.md", "content" => "# Later"},
+        actor: "api"
+      )
 
     drain_indexing!()
 
@@ -61,12 +65,16 @@ defmodule Engram.LinksLifecycleTest do
     vault: vault
   } do
     {:ok, source} =
-      Notes.upsert_note(user, vault, %{"path" => "Source2.md", "content" => "See [[Fresh]]."})
+      Notes.upsert_note(user, vault, %{"path" => "Source2.md", "content" => "See [[Fresh]]."},
+        actor: "api"
+      )
 
     extract_links!(user, source.id)
     assert only_link(user, source.id).dangling
 
-    {:ok, old_note} = Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# Old"})
+    {:ok, old_note} =
+      Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# Old"}, actor: "api")
+
     drain_indexing!()
     assert only_link(user, source.id).dangling
 
@@ -83,13 +91,16 @@ defmodule Engram.LinksLifecycleTest do
          user: user,
          vault: vault
        } do
-    {:ok, a_short} = Notes.upsert_note(user, vault, %{"path" => "A.md", "content" => "# A short"})
+    {:ok, a_short} =
+      Notes.upsert_note(user, vault, %{"path" => "A.md", "content" => "# A short"}, actor: "api")
 
     {:ok, _a_long} =
-      Notes.upsert_note(user, vault, %{"path" => "b/A.md", "content" => "# A long"})
+      Notes.upsert_note(user, vault, %{"path" => "b/A.md", "content" => "# A long"}, actor: "api")
 
     {:ok, source} =
-      Notes.upsert_note(user, vault, %{"path" => "Source3.md", "content" => "See [[A]]."})
+      Notes.upsert_note(user, vault, %{"path" => "Source3.md", "content" => "See [[A]]."},
+        actor: "api"
+      )
 
     extract_links!(user, source.id)
     assert only_link(user, source.id).target_note_id == a_short.id
@@ -116,13 +127,20 @@ defmodule Engram.LinksLifecycleTest do
     vault: vault
   } do
     {:ok, target} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "Target4.md",
-        "content" => "See [[Nowhere]]."
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Target4.md",
+          "content" => "See [[Nowhere]]."
+        },
+        actor: "api"
+      )
 
     {:ok, source} =
-      Notes.upsert_note(user, vault, %{"path" => "Source4.md", "content" => "See [[Target4]]."})
+      Notes.upsert_note(user, vault, %{"path" => "Source4.md", "content" => "See [[Target4]]."},
+        actor: "api"
+      )
 
     extract_links!(user, target.id)
     extract_links!(user, source.id)
@@ -146,10 +164,15 @@ defmodule Engram.LinksLifecycleTest do
 
   test "CRDT genesis create binds existing danglers", %{user: user, vault: vault} do
     {:ok, source} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "CrdtSource1.md",
-        "content" => "See [[CrdtLater]]."
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "CrdtSource1.md",
+          "content" => "See [[CrdtLater]]."
+        },
+        actor: "api"
+      )
 
     extract_links!(user, source.id)
     assert only_link(user, source.id).dangling
@@ -166,10 +189,14 @@ defmodule Engram.LinksLifecycleTest do
   test "CRDT relocate (rename-as-move, same id) re-resolves edges that pointed at the old name",
        %{user: user, vault: vault} do
     {:ok, a_short} =
-      Notes.upsert_note(user, vault, %{"path" => "CrdtA.md", "content" => "# A short"})
+      Notes.upsert_note(user, vault, %{"path" => "CrdtA.md", "content" => "# A short"},
+        actor: "api"
+      )
 
     {:ok, a_long} =
-      Notes.upsert_note(user, vault, %{"path" => "b/CrdtA.md", "content" => "# A long"})
+      Notes.upsert_note(user, vault, %{"path" => "b/CrdtA.md", "content" => "# A long"},
+        actor: "api"
+      )
 
     # Drain the two create-branch rebinds now — otherwise they'd sit queued
     # and get swept up by the LATER drain_indexing! below, masking whether
@@ -177,7 +204,9 @@ defmodule Engram.LinksLifecycleTest do
     drain_indexing!()
 
     {:ok, source} =
-      Notes.upsert_note(user, vault, %{"path" => "CrdtSource3.md", "content" => "See [[CrdtA]]."})
+      Notes.upsert_note(user, vault, %{"path" => "CrdtSource3.md", "content" => "See [[CrdtA]]."},
+        actor: "api"
+      )
 
     extract_links!(user, source.id)
     assert only_link(user, source.id).target_note_id == a_short.id
@@ -207,8 +236,11 @@ defmodule Engram.LinksLifecycleTest do
     user: user,
     vault: vault
   } do
-    {:ok, short} = Notes.upsert_note(user, vault, %{"path" => "Dup.md", "content" => "# short"})
-    {:ok, long} = Notes.upsert_note(user, vault, %{"path" => "b/Dup.md", "content" => "# long"})
+    {:ok, short} =
+      Notes.upsert_note(user, vault, %{"path" => "Dup.md", "content" => "# short"}, actor: "api")
+
+    {:ok, long} =
+      Notes.upsert_note(user, vault, %{"path" => "b/Dup.md", "content" => "# long"}, actor: "api")
 
     # Drain the two create-branch rebinds now — otherwise they'd sit queued
     # and get swept up by the LATER drain_indexing! below, masking whether
@@ -216,7 +248,9 @@ defmodule Engram.LinksLifecycleTest do
     drain_indexing!()
 
     {:ok, source} =
-      Notes.upsert_note(user, vault, %{"path" => "Source5.md", "content" => "See [[Dup]]."})
+      Notes.upsert_note(user, vault, %{"path" => "Source5.md", "content" => "See [[Dup]]."},
+        actor: "api"
+      )
 
     extract_links!(user, source.id)
     assert only_link(user, source.id).target_note_id == short.id
@@ -248,10 +282,15 @@ defmodule Engram.LinksLifecycleTest do
     vault: vault
   } do
     {:ok, source} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "Source6.md",
-        "content" => "![[photo.png]]"
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Source6.md",
+          "content" => "![[photo.png]]"
+        },
+        actor: "api"
+      )
 
     extract_links!(user, source.id)
     assert only_link(user, source.id).dangling
@@ -271,7 +310,9 @@ defmodule Engram.LinksLifecycleTest do
     att = upload!(user, vault, "Movable.png")
 
     {:ok, source} =
-      Notes.upsert_note(user, vault, %{"path" => "Source7.md", "content" => "![[Movable.png]]"})
+      Notes.upsert_note(user, vault, %{"path" => "Source7.md", "content" => "![[Movable.png]]"},
+        actor: "api"
+      )
 
     extract_links!(user, source.id)
     refute only_link(user, source.id).dangling
@@ -298,7 +339,9 @@ defmodule Engram.LinksLifecycleTest do
     _att = upload!(user, vault, "Stays.png")
 
     {:ok, source} =
-      Notes.upsert_note(user, vault, %{"path" => "Source9.md", "content" => "![[Fresh.png]]"})
+      Notes.upsert_note(user, vault, %{"path" => "Source9.md", "content" => "![[Fresh.png]]"},
+        actor: "api"
+      )
 
     extract_links!(user, source.id)
     assert only_link(user, source.id).dangling
@@ -318,7 +361,9 @@ defmodule Engram.LinksLifecycleTest do
     att = upload!(user, vault, "Gone.png")
 
     {:ok, source} =
-      Notes.upsert_note(user, vault, %{"path" => "Source8.md", "content" => "![[Gone.png]]"})
+      Notes.upsert_note(user, vault, %{"path" => "Source8.md", "content" => "![[Gone.png]]"},
+        actor: "api"
+      )
 
     extract_links!(user, source.id)
     link = only_link(user, source.id)
@@ -339,7 +384,12 @@ defmodule Engram.LinksLifecycleTest do
     att = upload!(user, vault, "GoneBatch.png")
 
     {:ok, source} =
-      Notes.upsert_note(user, vault, %{"path" => "Source10.md", "content" => "![[GoneBatch.png]]"})
+      Notes.upsert_note(
+        user,
+        vault,
+        %{"path" => "Source10.md", "content" => "![[GoneBatch.png]]"},
+        actor: "api"
+      )
 
     extract_links!(user, source.id)
     link = only_link(user, source.id)
@@ -366,10 +416,14 @@ defmodule Engram.LinksLifecycleTest do
     att_b = upload!(user, vault, "BatchB.png")
 
     {:ok, source_a} =
-      Notes.upsert_note(user, vault, %{"path" => "SourceA.md", "content" => "![[BatchA.png]]"})
+      Notes.upsert_note(user, vault, %{"path" => "SourceA.md", "content" => "![[BatchA.png]]"},
+        actor: "api"
+      )
 
     {:ok, source_b} =
-      Notes.upsert_note(user, vault, %{"path" => "SourceB.md", "content" => "![[BatchB.png]]"})
+      Notes.upsert_note(user, vault, %{"path" => "SourceB.md", "content" => "![[BatchB.png]]"},
+        actor: "api"
+      )
 
     extract_links!(user, source_a.id)
     extract_links!(user, source_b.id)

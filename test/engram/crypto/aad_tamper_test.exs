@@ -22,8 +22,11 @@ defmodule Engram.Crypto.AadTamperTest do
 
   test "cross-row swap fails: copy A's content_ciphertext into B's slot",
        %{user: user, vault: vault} do
-    {:ok, note_a} = Notes.upsert_note(user, vault, %{path: "a.md", content: "secret-A"})
-    {:ok, note_b} = Notes.upsert_note(user, vault, %{path: "b.md", content: "secret-B"})
+    {:ok, note_a} =
+      Notes.upsert_note(user, vault, %{path: "a.md", content: "secret-A"}, actor: "api")
+
+    {:ok, note_b} =
+      Notes.upsert_note(user, vault, %{path: "b.md", content: "secret-B"}, actor: "api")
 
     # Pull both rows fresh — `upsert_note` returns the decrypted struct,
     # but we want the raw ciphertext columns from disk.
@@ -41,7 +44,8 @@ defmodule Engram.Crypto.AadTamperTest do
 
   test "within-row column swap fails: content_ciphertext into title slot",
        %{user: user, vault: vault} do
-    {:ok, note} = Notes.upsert_note(user, vault, %{path: "swap.md", content: "secret-content"})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{path: "swap.md", content: "secret-content"}, actor: "api")
 
     raw = Repo.get!(Engram.Notes.Note, note.id, skip_tenant_check: true)
 
@@ -60,8 +64,11 @@ defmodule Engram.Crypto.AadTamperTest do
     {:ok, user_b} = Crypto.ensure_user_dek(user_b)
     {:ok, vault_b, _} = Engram.Vaults.register_vault(user_b, "B Vault", Ecto.UUID.generate())
 
-    {:ok, note_a} = Notes.upsert_note(user_a, vault_a, %{path: "a.md", content: "user-a-secret"})
-    {:ok, note_b} = Notes.upsert_note(user_b, vault_b, %{path: "b.md", content: "user-b-secret"})
+    {:ok, note_a} =
+      Notes.upsert_note(user_a, vault_a, %{path: "a.md", content: "user-a-secret"}, actor: "api")
+
+    {:ok, note_b} =
+      Notes.upsert_note(user_b, vault_b, %{path: "b.md", content: "user-b-secret"}, actor: "api")
 
     raw_a = Repo.get!(Engram.Notes.Note, note_a.id, skip_tenant_check: true)
     raw_b = Repo.get!(Engram.Notes.Note, note_b.id, skip_tenant_check: true)
@@ -96,7 +103,9 @@ defmodule Engram.Crypto.AadTamperTest do
   end
 
   test "Envelope.decrypt fails without AAD on AAD-bound ciphertext", %{user: user, vault: vault} do
-    {:ok, note} = Notes.upsert_note(user, vault, %{path: "no-aad.md", content: "needs-aad"})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{path: "no-aad.md", content: "needs-aad"}, actor: "api")
+
     raw = Repo.get!(Engram.Notes.Note, note.id, skip_tenant_check: true)
     {:ok, dek} = Crypto.get_dek(user)
 
@@ -134,8 +143,11 @@ defmodule Engram.Crypto.AadTamperTest do
 
     test "swapping ciphertext between rotated rows still fails decrypt",
          %{user: user, vault: vault} do
-      {:ok, note_a} = Notes.upsert_note(user, vault, %{path: "rot-a.md", content: "rotated-A"})
-      {:ok, note_b} = Notes.upsert_note(user, vault, %{path: "rot-b.md", content: "rotated-B"})
+      {:ok, note_a} =
+        Notes.upsert_note(user, vault, %{path: "rot-a.md", content: "rotated-A"}, actor: "api")
+
+      {:ok, note_b} =
+        Notes.upsert_note(user, vault, %{path: "rot-b.md", content: "rotated-B"}, actor: "api")
 
       # Rotate the user's DEK — all rows are re-encrypted under the new DEK
       # but their AAD strings ("notes:content:<id>") remain bound to row id.

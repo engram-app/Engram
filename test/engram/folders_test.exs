@@ -67,7 +67,9 @@ defmodule Engram.FoldersTest do
     user: user,
     vault: vault
   } do
-    {:ok, _note} = Notes.upsert_note(user, vault, %{"path" => "Docs/n.md", "content" => "hi"})
+    {:ok, _note} =
+      Notes.upsert_note(user, vault, %{"path" => "Docs/n.md", "content" => "hi"}, actor: "api")
+
     put_att(user, vault, "Docs/a.png")
 
     assert {:ok, %{notes: 1, attachments: 1}} = Folders.rename(user, vault, "Docs", "Archive")
@@ -196,7 +198,9 @@ defmodule Engram.FoldersTest do
       # leg conflicts: Archive/a.png is already occupied. Pre-Bug-3 the notes
       # commit stuck while attachments didn't → permanent split state. The fix
       # makes the coordinator atomic: a conflict rolls the note move back too.
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Docs/n.md", "content" => "hi"})
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/n.md", "content" => "hi"}, actor: "api")
+
       put_att(user, vault, "Docs/a.png")
       put_att(user, vault, "Archive/a.png")
 
@@ -216,7 +220,10 @@ defmodule Engram.FoldersTest do
       # pre-occupied destination. Atomic coordinator must roll the note move back.
       {:ok, src} = Notes.create_folder_marker(user, vault, "Docs")
       {:ok, _dst} = Notes.create_folder_marker(user, vault, "Archive")
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Docs/n.md", "content" => "hi"})
+
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/n.md", "content" => "hi"}, actor: "api")
+
       put_att(user, vault, "Docs/a.png")
       # Pre-occupy the attachment move destination (Archive/Docs/a.png).
       put_att(user, vault, "Archive/Docs/a.png")
@@ -263,7 +270,9 @@ defmodule Engram.FoldersTest do
       # the attachment destination is occupied → outer transaction rolls back.
       # Pre-fix, the notes-leg per-note delete/upsert broadcasts fired as the
       # inner txn released (BEFORE the outer rollback) → phantom events.
-      {:ok, _note} = Notes.upsert_note(user, vault, %{"path" => "Docs/n.md", "content" => "hi"})
+      {:ok, _note} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/n.md", "content" => "hi"}, actor: "api")
+
       put_att(user, vault, "Docs/a.png")
       put_att(user, vault, "Archive/a.png")
 
@@ -279,7 +288,9 @@ defmodule Engram.FoldersTest do
       user: user,
       vault: vault
     } do
-      {:ok, _note} = Notes.upsert_note(user, vault, %{"path" => "Docs/n.md", "content" => "hi"})
+      {:ok, _note} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/n.md", "content" => "hi"}, actor: "api")
+
       put_att(user, vault, "Docs/a.png")
 
       topic = "sync:#{user.id}:#{vault.id}"
@@ -333,7 +344,9 @@ defmodule Engram.FoldersTest do
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
 
       {:ok, _} =
         Attachments.upsert_attachment(user, vault, %{
@@ -354,7 +367,9 @@ defmodule Engram.FoldersTest do
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
 
       # The emptiness guard is the only thing standing between a non-recursive
       # delete and a full folder, and it is built from two counters that both
@@ -380,7 +395,9 @@ defmodule Engram.FoldersTest do
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
 
       stale = %{user | encrypted_dek: nil}
 
@@ -429,10 +446,14 @@ defmodule Engram.FoldersTest do
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "Docs/b.md", "content" => "y", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "Docs/b.md", "content" => "y", "mtime" => 1.0},
+          actor: "api"
+        )
 
       {:ok, matches} = Notes.scan_folders(user, vault, ["Docs"])
       assert Enum.count(matches, &(&1.kind == "note")) == 2
@@ -457,7 +478,9 @@ defmodule Engram.FoldersTest do
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
 
       {:ok, matches} = Notes.scan_folders(user, vault, ["Docs"])
       {:ok, _} = Notes.rename_note(user, vault, "Docs/a.md", "Archive/a.md")
@@ -471,7 +494,9 @@ defmodule Engram.FoldersTest do
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
 
       {:ok, matches} = Notes.scan_folders(user, vault, ["Docs"])
       {:ok, _} = Notes.rename_note(user, vault, "Docs/a.md", "Archive/a.md")
@@ -490,7 +515,9 @@ defmodule Engram.FoldersTest do
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
 
       {:ok, matches} = Notes.scan_folders(user, vault, ["Docs"])
 
@@ -512,16 +539,23 @@ defmodule Engram.FoldersTest do
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
 
       {:ok, matches} = Notes.scan_folders(user, vault, ["Docs"])
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Docs/a.md",
-          "content" => "edited",
-          "mtime" => 2.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Docs/a.md",
+            "content" => "edited",
+            "mtime" => 2.0
+          },
+          actor: "api"
+        )
 
       {:ok, %{deleted: _}} = Notes.delete_scanned(user, vault, matches)
 
@@ -558,14 +592,21 @@ defmodule Engram.FoldersTest do
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Docs/Sub/b.md",
-          "content" => "y",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Docs/Sub/b.md",
+            "content" => "y",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       {:ok, _} =
         Attachments.upsert_attachment(user, vault, %{
@@ -593,7 +634,9 @@ defmodule Engram.FoldersTest do
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
 
       assert {:error, {:not_empty, %{notes: 1, attachments: 0}}} =
                Folders.delete(user, vault, "Docs/")

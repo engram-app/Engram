@@ -34,7 +34,13 @@ defmodule Engram.TenantEnumerationLintTest do
 
   # Files allowed to enumerate tenants with the guard skipped. Each entry needs
   # a comment explaining why RLS cannot filter it.
-  @allowlist []
+  @allowlist [
+    # Cross-tenant maintenance read of stranded note_revisions outbox copies,
+    # like OrphanSweep. Runs through Repo.maintenance() (no RLS) and refuses to
+    # run when RLS is enforced with no maintenance pool, so it cannot silently
+    # no-op. A per-user TenantScan would cost one transaction per user per hour.
+    "engram/workers/finalize_revision_sweep.ex"
+  ]
 
   # The schema list used to be hardcoded here, and the moduledoc below argues
   # at length that a hand-written list of MODULES is what let two #1349

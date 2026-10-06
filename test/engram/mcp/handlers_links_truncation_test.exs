@@ -8,13 +8,16 @@ defmodule Engram.MCP.HandlersLinksTruncationTest do
   setup do
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
     vault = insert(:vault, user: user)
-    {:ok, target} = Notes.upsert_note(user, vault, %{"path" => "Target.md", "mtime" => 1.0})
+
+    {:ok, target} =
+      Notes.upsert_note(user, vault, %{"path" => "Target.md", "mtime" => 1.0}, actor: "api")
+
     %{user: user, vault: vault, target: target}
   end
 
   defp link_to_target(user, vault, source_path, edge_count) do
     {:ok, source} =
-      Notes.upsert_note(user, vault, %{"path" => source_path, "mtime" => 1.0})
+      Notes.upsert_note(user, vault, %{"path" => source_path, "mtime" => 1.0}, actor: "api")
 
     edges =
       for n <- 0..(edge_count - 1) do

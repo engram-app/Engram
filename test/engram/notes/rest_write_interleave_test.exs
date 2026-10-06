@@ -67,7 +67,8 @@ defmodule Engram.Notes.RestWriteInterleaveTest do
   # from joining them — an interleave test that silently stops running is worse
   # than no interleave test, which is the exact history #1335 records.
   test "a checkpoint that commits mid-write is not clobbered", %{user: user, vault: vault} do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "race.md", "content" => "BODY"})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "race.md", "content" => "BODY"}, actor: "api")
 
     # The live room's doc, carrying an edit that exists ONLY there and in the
     # tail log — never yet materialized into notes.content.
@@ -79,7 +80,10 @@ defmodule Engram.Notes.RestWriteInterleaveTest do
     writer =
       Task.async(fn ->
         CheckpointInterleave.checkout_real!()
-        Notes.upsert_note(user, vault, %{"path" => "race.md", "content" => "BODY REST"})
+
+        Notes.upsert_note(user, vault, %{"path" => "race.md", "content" => "BODY REST"},
+          actor: "api"
+        )
       end)
 
     # Blocks until the writer is parked between its row read and its write. If

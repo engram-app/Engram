@@ -48,11 +48,16 @@ defmodule EngramWeb.McpToolAliasesTest do
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
     {:ok, _} =
-      Engram.Notes.upsert_note(user, vault, %{
-        "path" => "A.md",
-        "content" => "# A\n\nhi",
-        "mtime" => 1.0
-      })
+      Engram.Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "A.md",
+          "content" => "# A\n\nhi",
+          "mtime" => 1.0
+        },
+        actor: "api"
+      )
 
     ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :mcp, :tool, :stop]])
 
@@ -99,11 +104,16 @@ defmodule EngramWeb.McpToolAliasesTest do
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
     {:ok, _} =
-      Engram.Notes.upsert_note(user, vault, %{
-        "path" => "Health/A.md",
-        "content" => "# A\n\nhi",
-        "mtime" => 1.0
-      })
+      Engram.Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Health/A.md",
+          "content" => "# A\n\nhi",
+          "mtime" => 1.0
+        },
+        actor: "api"
+      )
 
     resp =
       conn
@@ -120,11 +130,16 @@ defmodule EngramWeb.McpToolAliasesTest do
     original = "# P\n\nhello world"
 
     {:ok, _} =
-      Engram.Notes.upsert_note(user, vault, %{
-        "path" => "P.md",
-        "content" => original,
-        "mtime" => 1.0
-      })
+      Engram.Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "P.md",
+          "content" => original,
+          "mtime" => 1.0
+        },
+        actor: "api"
+      )
 
     args = %{"path" => "P.md", "find" => "hello", "replace" => "hi"}
 
@@ -135,11 +150,16 @@ defmodule EngramWeb.McpToolAliasesTest do
     direct = direct_structured("patch_note", user, vault, args)
 
     {:ok, _} =
-      Engram.Notes.upsert_note(user, vault, %{
-        "path" => "P.md",
-        "content" => original,
-        "mtime" => 2.0
-      })
+      Engram.Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "P.md",
+          "content" => original,
+          "mtime" => 2.0
+        },
+        actor: "api"
+      )
 
     resp =
       conn
@@ -155,11 +175,16 @@ defmodule EngramWeb.McpToolAliasesTest do
     original = "# P\n\n## Notes\n\nold text\n\n## Next\n\nkeep"
 
     {:ok, _} =
-      Engram.Notes.upsert_note(user, vault, %{
-        "path" => "P.md",
-        "content" => original,
-        "mtime" => 1.0
-      })
+      Engram.Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "P.md",
+          "content" => original,
+          "mtime" => 1.0
+        },
+        actor: "api"
+      )
 
     args = %{"path" => "P.md", "heading" => "Notes", "content" => "new text"}
 
@@ -169,11 +194,16 @@ defmodule EngramWeb.McpToolAliasesTest do
     direct = direct_structured("update_section", user, vault, args)
 
     {:ok, _} =
-      Engram.Notes.upsert_note(user, vault, %{
-        "path" => "P.md",
-        "content" => original,
-        "mtime" => 2.0
-      })
+      Engram.Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "P.md",
+          "content" => original,
+          "mtime" => 2.0
+        },
+        actor: "api"
+      )
 
     resp =
       conn

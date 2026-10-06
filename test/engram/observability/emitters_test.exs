@@ -87,11 +87,16 @@ defmodule Engram.Observability.EmittersTest do
       expect_capture(bypass)
 
       assert {:ok, _note} =
-               Notes.upsert_note(user, vault, %{
-                 "path" => "Hello.md",
-                 "content" => "# Hello",
-                 "mtime" => 1_000.0
-               })
+               Notes.upsert_note(
+                 user,
+                 vault,
+                 %{
+                   "path" => "Hello.md",
+                   "content" => "# Hello",
+                   "mtime" => 1_000.0
+                 },
+                 actor: "api"
+               )
 
       assert_receive {:posthog_body, body}, 1_500
       assert body["event"] == "note_created"
@@ -109,11 +114,16 @@ defmodule Engram.Observability.EmittersTest do
       expect_capture(bypass)
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Hello.md",
-          "content" => "# v1",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Hello.md",
+            "content" => "# v1",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       assert_receive {:posthog_body, body}, 1_500
       assert body["event"] == "note_created"
@@ -122,11 +132,16 @@ defmodule Engram.Observability.EmittersTest do
       # If the emitter mis-fires we'd see a second POST → Bypass.expect_once
       # raises "expected 1 request, got 2" on test exit.
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Hello.md",
-          "content" => "# v2",
-          "mtime" => 2_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Hello.md",
+            "content" => "# v2",
+            "mtime" => 2_000.0
+          },
+          actor: "api"
+        )
 
       # Give any errant fire-and-forget Task a beat to reach Bypass.
       refute_receive {:posthog_body, _}, 200

@@ -63,11 +63,16 @@ defmodule Engram.IndexingLanguageTest do
     vault: vault
   } do
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "mixed.md",
-        "content" => @mixed_content,
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "mixed.md",
+          "content" => @mixed_content,
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
     {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
 
@@ -126,11 +131,16 @@ defmodule Engram.IndexingLanguageTest do
     vault: vault
   } do
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "frontmatter.md",
-        "content" => @frontmatter_content,
-        "mtime" => 2_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "frontmatter.md",
+          "content" => @frontmatter_content,
+          "mtime" => 2_000.0
+        },
+        actor: "api"
+      )
 
     {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
 

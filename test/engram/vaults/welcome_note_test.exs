@@ -53,11 +53,16 @@ defmodule Engram.Vaults.WelcomeNoteTest do
       # for it either. Pin the seed's own note count instead — the guarantee is
       # that seeding does not CONSUME the event.
       {:ok, _} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "path" => "Real.md",
-          "content" => "from a device",
-          "mtime" => 1.0
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Real.md",
+            "content" => "from a device",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       assert {:ok, _} = Engram.Notes.get_note(user, vault, "Real.md")
     end

@@ -12,11 +12,16 @@ defmodule EngramWeb.FoldersExplicitTest do
       {:ok, _} = Engram.Notes.create_folder_marker(user, vault, "Explicit")
 
       {:ok, _} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "path" => "Derived/a.md",
-          "content" => "a",
-          "mtime" => 1.0
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Derived/a.md",
+            "content" => "a",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       conn = get(conn, ~p"/api/folders/explicit")
       body = json_response(conn, 200)

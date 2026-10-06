@@ -34,7 +34,9 @@ defmodule Engram.IndexingResparseTest do
     content = "# Plan\n\nRunning containers in production.\n\n## Notes\n\nDeploying daily."
 
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{"path" => "plan.md", "content" => content, "mtime" => 1.0})
+      Notes.upsert_note(user, vault, %{"path" => "plan.md", "content" => content, "mtime" => 1.0},
+        actor: "api"
+      )
 
     {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
 
@@ -91,11 +93,16 @@ defmodule Engram.IndexingResparseTest do
 
   test "a note with no chunk rows updates nothing", %{user: user, vault: vault} do
     {:ok, fresh} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "new.md",
-        "content" => "fresh text",
-        "mtime" => 1.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "new.md",
+          "content" => "fresh text",
+          "mtime" => 1.0
+        },
+        actor: "api"
+      )
 
     {:ok, fresh} = Crypto.maybe_decrypt_note_fields(fresh, user)
 

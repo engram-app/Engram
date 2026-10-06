@@ -20,7 +20,9 @@ defmodule Engram.Notes.FanoutPacerWiringTest do
     EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{"path" => "w.md", "content" => "# W", "mtime" => 1.0})
+      Notes.upsert_note(user, vault, %{"path" => "w.md", "content" => "# W", "mtime" => 1.0},
+        actor: "api"
+      )
 
     assert_receive(
       %Phoenix.Socket.Broadcast{

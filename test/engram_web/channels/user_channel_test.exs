@@ -74,11 +74,16 @@ defmodule EngramWeb.UserChannelTest do
       {:ok, vault, _} = Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
 
       {:ok, _note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Welcome.md",
-          "content" => "# Hi",
-          "mtime" => 1_700_000_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Welcome.md",
+            "content" => "# Hi",
+            "mtime" => 1_700_000_000.0
+          },
+          actor: "api"
+        )
 
       assert_broadcast "vault_populated", %{vault_id: vault_id}
       assert vault_id == vault.id
@@ -88,20 +93,30 @@ defmodule EngramWeb.UserChannelTest do
       {:ok, vault, _} = Vaults.register_vault(user, "Notes", Ecto.UUID.generate())
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "First.md",
-          "content" => "1",
-          "mtime" => 1_700_000_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "First.md",
+            "content" => "1",
+            "mtime" => 1_700_000_000.0
+          },
+          actor: "api"
+        )
 
       assert_broadcast "vault_populated", %{}
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Second.md",
-          "content" => "2",
-          "mtime" => 1_700_000_001.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Second.md",
+            "content" => "2",
+            "mtime" => 1_700_000_001.0
+          },
+          actor: "api"
+        )
 
       refute_broadcast "vault_populated", %{}, 200
     end
@@ -118,22 +133,32 @@ defmodule EngramWeb.UserChannelTest do
       {:ok, vault_a, _} = Vaults.register_vault(user, "A", Ecto.UUID.generate())
 
       {:ok, _} =
-        Notes.upsert_note(user, vault_a, %{
-          "path" => "Existing.md",
-          "content" => "old",
-          "mtime" => 1_700_000_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault_a,
+          %{
+            "path" => "Existing.md",
+            "content" => "old",
+            "mtime" => 1_700_000_000.0
+          },
+          actor: "api"
+        )
 
       assert_broadcast "vault_populated", %{}
 
       {:ok, vault_b, _} = Vaults.register_vault(user, "B", Ecto.UUID.generate())
 
       {:ok, _} =
-        Notes.upsert_note(user, vault_b, %{
-          "path" => "Fresh.md",
-          "content" => "new",
-          "mtime" => 1_700_000_001.0
-        })
+        Notes.upsert_note(
+          user,
+          vault_b,
+          %{
+            "path" => "Fresh.md",
+            "content" => "new",
+            "mtime" => 1_700_000_001.0
+          },
+          actor: "api"
+        )
 
       assert_broadcast "vault_populated", %{vault_id: vault_b_id}
       assert vault_b_id == vault_b.id

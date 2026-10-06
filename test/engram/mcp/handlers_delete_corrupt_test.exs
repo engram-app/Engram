@@ -24,7 +24,8 @@ defmodule Engram.MCP.HandlersDeleteCorruptTest do
     user: user,
     vault: vault
   } do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "hi"})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "hi"}, actor: "api")
 
     # Corrupt the ciphertext in place — the row stays live and findable by
     # path, but any decrypt of it raises.

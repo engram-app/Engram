@@ -534,7 +534,9 @@ defmodule Engram.Links.Rewriter do
         with {:ok, %{path: path}} when is_binary(path) <-
                Crypto.maybe_decrypt_note_fields(note, user),
              {:ok, _updated} <-
-               Notes.upsert_note(user, vault, %{"path" => path, "content" => new_text}) do
+               Notes.upsert_note(user, vault, %{"path" => path, "content" => new_text},
+                 actor: "link_rewrite"
+               ) do
           :ok = Links.replace_links(user, vault, note.id, Parser.extract(new_text))
           {:ok, :rewritten}
         else

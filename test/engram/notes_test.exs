@@ -38,11 +38,16 @@ defmodule Engram.NotesTest do
       log =
         capture_log(fn ->
           {:ok, note} =
-            Notes.upsert_note(user, vault, %{
-              "path" => "Test/Dirty?.md",
-              "content" => "# Dirty",
-              "mtime" => 1_000.0
-            })
+            Notes.upsert_note(
+              user,
+              vault,
+              %{
+                "path" => "Test/Dirty?.md",
+                "content" => "# Dirty",
+                "mtime" => 1_000.0
+              },
+              actor: "api"
+            )
 
           assert note.path == "Test/Dirty.md"
         end)
@@ -56,11 +61,16 @@ defmodule Engram.NotesTest do
       log =
         capture_log(fn ->
           {:ok, _} =
-            Notes.upsert_note(user, vault, %{
-              "path" => "Test/Clean.md",
-              "content" => "# Clean",
-              "mtime" => 1_000.0
-            })
+            Notes.upsert_note(
+              user,
+              vault,
+              %{
+                "path" => "Test/Clean.md",
+                "content" => "# Clean",
+                "mtime" => 1_000.0
+              },
+              actor: "api"
+            )
         end)
 
       # `capture_log/1` captures the whole VM, not this process, and this module
@@ -92,26 +102,38 @@ defmodule Engram.NotesTest do
     test "base_hash mismatch returns version_conflict instead of merging a stale write",
          %{user: user, vault: vault} do
       {:ok, v1} =
-        Notes.upsert_note(user, vault, %{"path" => "cas.md", "content" => "one", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "cas.md", "content" => "one", "mtime" => 1.0},
+          actor: "api"
+        )
 
       stale_base = v1.content_hash
 
       # The row moves (someone else's write).
       {:ok, v2} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "cas.md",
-          "content" => "one\ntwo",
-          "mtime" => 2.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "cas.md",
+            "content" => "one\ntwo",
+            "mtime" => 2.0
+          },
+          actor: "api"
+        )
 
       # A write declaring the OLD base must be refused with the server note.
       assert {:error, :version_conflict, server_note} =
-               Notes.upsert_note(user, vault, %{
-                 "path" => "cas.md",
-                 "content" => "one\nstale rewrite",
-                 "mtime" => 3.0,
-                 "base_hash" => stale_base
-               })
+               Notes.upsert_note(
+                 user,
+                 vault,
+                 %{
+                   "path" => "cas.md",
+                   "content" => "one\nstale rewrite",
+                   "mtime" => 3.0,
+                   "base_hash" => stale_base
+                 },
+                 actor: "api"
+               )
 
       assert server_note.id == v2.id
 
@@ -122,15 +144,22 @@ defmodule Engram.NotesTest do
 
     test "base_hash matching the current row proceeds normally", %{user: user, vault: vault} do
       {:ok, v1} =
-        Notes.upsert_note(user, vault, %{"path" => "cas2.md", "content" => "one", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "cas2.md", "content" => "one", "mtime" => 1.0},
+          actor: "api"
+        )
 
       assert {:ok, updated} =
-               Notes.upsert_note(user, vault, %{
-                 "path" => "cas2.md",
-                 "content" => "one\ntwo",
-                 "mtime" => 2.0,
-                 "base_hash" => v1.content_hash
-               })
+               Notes.upsert_note(
+                 user,
+                 vault,
+                 %{
+                   "path" => "cas2.md",
+                   "content" => "one\ntwo",
+                   "mtime" => 2.0,
+                   "base_hash" => v1.content_hash
+                 },
+                 actor: "api"
+               )
 
       assert updated.content == "one\ntwo"
     end
@@ -140,30 +169,47 @@ defmodule Engram.NotesTest do
       vault: vault
     } do
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "cas3.md", "content" => "one", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "cas3.md", "content" => "one", "mtime" => 1.0},
+          actor: "api"
+        )
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "cas3.md",
-          "content" => "one\ntwo",
-          "mtime" => 2.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "cas3.md",
+            "content" => "one\ntwo",
+            "mtime" => 2.0
+          },
+          actor: "api"
+        )
 
       assert {:ok, _} =
-               Notes.upsert_note(user, vault, %{
-                 "path" => "cas3.md",
-                 "content" => "one\nthree",
-                 "mtime" => 3.0
-               })
+               Notes.upsert_note(
+                 user,
+                 vault,
+                 %{
+                   "path" => "cas3.md",
+                   "content" => "one\nthree",
+                   "mtime" => 3.0
+                 },
+                 actor: "api"
+               )
     end
 
     test "creates a new note", %{user: user, vault: vault} do
       assert {:ok, note} =
-               Notes.upsert_note(user, vault, %{
-                 "path" => "Test/Hello.md",
-                 "content" => "# Hello\nWorld",
-                 "mtime" => 1_709_234_567.0
-               })
+               Notes.upsert_note(
+                 user,
+                 vault,
+                 %{
+                   "path" => "Test/Hello.md",
+                   "content" => "# Hello\nWorld",
+                   "mtime" => 1_709_234_567.0
+                 },
+                 actor: "api"
+               )
 
       assert note.path == "Test/Hello.md"
       assert note.title == "Hello"
@@ -179,11 +225,16 @@ defmodule Engram.NotesTest do
       bad = "# Title\n\nPRs #71" <> <<0xE2>> <> "#85"
 
       assert {:ok, note} =
-               Notes.upsert_note(user, vault, %{
-                 "path" => "Test/BadBytes.md",
-                 "content" => bad,
-                 "mtime" => 1_000.0
-               })
+               Notes.upsert_note(
+                 user,
+                 vault,
+                 %{
+                   "path" => "Test/BadBytes.md",
+                   "content" => bad,
+                   "mtime" => 1_000.0
+                 },
+                 actor: "api"
+               )
 
       assert String.valid?(note.content)
       assert {:ok, _} = Jason.encode(%{content: note.content})
@@ -204,11 +255,16 @@ defmodule Engram.NotesTest do
       on_exit(fn -> :telemetry.detach(handler) end)
 
       assert {:ok, _} =
-               Notes.upsert_note(user, vault, %{
-                 "path" => "Test/BadBytes2.md",
-                 "content" => "# T\n\nx" <> <<0xE2>> <> "y",
-                 "mtime" => 1_000.0
-               })
+               Notes.upsert_note(
+                 user,
+                 vault,
+                 %{
+                   "path" => "Test/BadBytes2.md",
+                   "content" => "# T\n\nx" <> <<0xE2>> <> "y",
+                   "mtime" => 1_000.0
+                 },
+                 actor: "api"
+               )
 
       assert_receive {:scrub, %{count: 1}, %{boundary: :write}}
     end
@@ -219,11 +275,16 @@ defmodule Engram.NotesTest do
       # byte-sliced `628`+0xE2 tag that persisted as invalid UTF-8 — the prod
       # source of corrupt tags. Assert the STORED tags are valid at rest.
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Test/EnDashTag.md",
-          "content" => "x #628" <> <<0xE2, 0x80, 0x93>> <> " y",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Test/EnDashTag.md",
+            "content" => "x #628" <> <<0xE2, 0x80, 0x93>> <> " y",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       {:ok, raw} =
         Engram.Repo.with_tenant(user.id, fn -> Engram.Repo.get!(Engram.Notes.Note, note.id) end)
@@ -240,11 +301,16 @@ defmodule Engram.NotesTest do
       bad = "# Title\n\nbroadcast" <> <<0xE2>> <> "payload"
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Test/Broadcast.md",
-          "content" => bad,
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Test/Broadcast.md",
+            "content" => bad,
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       assert_receive %Phoenix.Socket.Broadcast{event: "note_changed", payload: payload}
 
@@ -267,11 +333,16 @@ defmodule Engram.NotesTest do
       # scrub, NOT the upsert write scrub the other #738 test covers. Build a clean
       # note, then overwrite its content ciphertext in place with invalid bytes.
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Test/Rename Me.md",
-          "content" => "# Title\n\nclean placeholder",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Test/Rename Me.md",
+            "content" => "# Title\n\nclean placeholder",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       bad = "# Title\n\nrenamed" <> <<0xE2>> <> "payload"
 
@@ -308,11 +379,16 @@ defmodule Engram.NotesTest do
       content = "# Hash Format Probe\nbody"
 
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Test/HashFormat.md",
-          "content" => content,
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Test/HashFormat.md",
+            "content" => content,
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       assert String.length(note.content_hash) == 64
       assert note.content_hash =~ ~r/^[0-9a-f]{64}$/
@@ -326,8 +402,8 @@ defmodule Engram.NotesTest do
       content = "shared content body"
       attrs = %{"path" => "x.md", "content" => content, "mtime" => 1.0}
 
-      {:ok, n1} = Notes.upsert_note(user, vault, attrs)
-      {:ok, n2} = Notes.upsert_note(other_user, other_vault, attrs)
+      {:ok, n1} = Notes.upsert_note(user, vault, attrs, actor: "api")
+      {:ok, n2} = Notes.upsert_note(other_user, other_vault, attrs, actor: "api")
 
       refute n1.content_hash == n2.content_hash
     end
@@ -337,36 +413,56 @@ defmodule Engram.NotesTest do
       content = "deterministic body"
 
       {:ok, n1} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "a.md",
-          "content" => content,
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "a.md",
+            "content" => content,
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       {:ok, n2} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "b.md",
-          "content" => content,
-          "mtime" => 2.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "b.md",
+            "content" => content,
+            "mtime" => 2.0
+          },
+          actor: "api"
+        )
 
       assert n1.content_hash == n2.content_hash
     end
 
     test "upserts existing note, increments version", %{user: user, vault: vault} do
       {:ok, v1} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Test/File.md",
-          "content" => "# Original",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Test/File.md",
+            "content" => "# Original",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       {:ok, v2} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Test/File.md",
-          "content" => "# Updated",
-          "mtime" => 2_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Test/File.md",
+            "content" => "# Updated",
+            "mtime" => 2_000.0
+          },
+          actor: "api"
+        )
 
       assert v2.id == v1.id
       assert v2.version == 2
@@ -375,22 +471,32 @@ defmodule Engram.NotesTest do
 
     test "extracts tags from frontmatter", %{user: user, vault: vault} do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Test/Tagged.md",
-          "content" => "---\ntags: [health, omega]\n---\n# Tagged\nBody",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Test/Tagged.md",
+            "content" => "---\ntags: [health, omega]\n---\n# Tagged\nBody",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       assert note.tags == ["health", "omega"]
     end
 
     test "sanitizes path before storing", %{user: user, vault: vault} do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Test/Why do I resist?.md",
-          "content" => "# Why",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Test/Why do I resist?.md",
+            "content" => "# Why",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       assert note.path == "Test/Why do I resist.md"
     end
@@ -399,11 +505,16 @@ defmodule Engram.NotesTest do
       content = "# Hello\nWorld"
 
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Test/A.md",
-          "content" => content,
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Test/A.md",
+            "content" => content,
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       {:ok, key} = Engram.Crypto.dek_content_hash_key(user)
       expected = Engram.Crypto.hmac_content_hash(key, content)
@@ -412,22 +523,32 @@ defmodule Engram.NotesTest do
 
     test "handles empty content", %{user: user, vault: vault} do
       assert {:ok, note} =
-               Notes.upsert_note(user, vault, %{
-                 "path" => "Test/Empty.md",
-                 "content" => "",
-                 "mtime" => 1_000.0
-               })
+               Notes.upsert_note(
+                 user,
+                 vault,
+                 %{
+                   "path" => "Test/Empty.md",
+                   "content" => "",
+                   "mtime" => 1_000.0
+                 },
+                 actor: "api"
+               )
 
       assert note.path == "Test/Empty.md"
     end
 
     test "coerces nil content to empty string", %{user: user, vault: vault} do
       assert {:ok, note} =
-               Notes.upsert_note(user, vault, %{
-                 "path" => "Test/NilContent.md",
-                 "content" => nil,
-                 "mtime" => 1_000.0
-               })
+               Notes.upsert_note(
+                 user,
+                 vault,
+                 %{
+                   "path" => "Test/NilContent.md",
+                   "content" => nil,
+                   "mtime" => 1_000.0
+                 },
+                 actor: "api"
+               )
 
       assert note.content == ""
       assert is_binary(note.content_hash)
@@ -435,10 +556,15 @@ defmodule Engram.NotesTest do
 
     test "coerces missing content key to empty string", %{user: user, vault: vault} do
       assert {:ok, note} =
-               Notes.upsert_note(user, vault, %{
-                 "path" => "Test/NoContent.md",
-                 "mtime" => 1_000.0
-               })
+               Notes.upsert_note(
+                 user,
+                 vault,
+                 %{
+                   "path" => "Test/NoContent.md",
+                   "mtime" => 1_000.0
+                 },
+                 actor: "api"
+               )
 
       assert note.content == ""
       assert is_binary(note.content_hash)
@@ -449,7 +575,9 @@ defmodule Engram.NotesTest do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
 
       assert {:error, changeset} =
-               Notes.upsert_note(user, vault, %{"content" => "# Hello", "mtime" => 1_000.0})
+               Notes.upsert_note(user, vault, %{"content" => "# Hello", "mtime" => 1_000.0},
+                 actor: "api"
+               )
 
       assert errors_on(changeset).path
     end
@@ -459,11 +587,16 @@ defmodule Engram.NotesTest do
       {:ok, _marker} = Notes.create_folder_marker(user, vault, "Both")
 
       assert {:ok, note} =
-               Notes.upsert_note(user, vault, %{
-                 "path" => "Both",
-                 "content" => "I am extensionless",
-                 "mtime" => 1.0
-               })
+               Notes.upsert_note(
+                 user,
+                 vault,
+                 %{
+                   "path" => "Both",
+                   "content" => "I am extensionless",
+                   "mtime" => 1.0
+                 },
+                 actor: "api"
+               )
 
       assert note.kind == "note"
       assert note.path == "Both"
@@ -480,11 +613,16 @@ defmodule Engram.NotesTest do
   describe "upsert_note/3 — parse_status stamping" do
     test "a clean note is stamped parse_status ok with no reason", %{user: user, vault: vault} do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Clean.md",
-          "content" => "---\ntags: [a]\n---\nx\n",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Clean.md",
+            "content" => "---\ntags: [a]\n---\nx\n",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       assert note.parse_status == "ok"
       assert note.parse_reason == nil
@@ -492,11 +630,16 @@ defmodule Engram.NotesTest do
 
     test "a note with no frontmatter at all is parse_status ok", %{user: user, vault: vault} do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "NoFrontmatter.md",
-          "content" => "just a body\n",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "NoFrontmatter.md",
+            "content" => "just a body\n",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       assert note.parse_status == "ok"
       assert note.parse_reason == nil
@@ -505,11 +648,16 @@ defmodule Engram.NotesTest do
     test "a whole-block malformed frontmatter (date:YYYY-MM-DD, no space) stores frontmatter_invalid_yaml",
          %{user: user, vault: vault} do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "InvalidYaml.md",
-          "content" => "---\ndate:YYYY-MM-DD\n---\nx\n",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "InvalidYaml.md",
+            "content" => "---\ndate:YYYY-MM-DD\n---\nx\n",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       assert note.parse_status == "degraded"
       assert note.parse_reason["code"] == "frontmatter_invalid_yaml"
@@ -519,11 +667,16 @@ defmodule Engram.NotesTest do
     test "a single unparseable key (non-binary map key) stores frontmatter_unparseable_key with the key's detail",
          %{user: user, vault: vault} do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "UnparseableKey.md",
-          "content" => "---\ndate: {[a, b]: 1}\n---\nx\n",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "UnparseableKey.md",
+            "content" => "---\ndate: {[a, b]: 1}\n---\nx\n",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       assert note.parse_status == "degraded"
       assert note.parse_reason["code"] == "frontmatter_unparseable_key"
@@ -536,11 +689,16 @@ defmodule Engram.NotesTest do
     test "a marker-colliding but encodable value stays parse_status ok (not a Task 3 passthrough concern)",
          %{user: user, vault: vault} do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Colliding.md",
-          "content" => "---\ndate:\n  __engram_raw__: x\n  y: 1\n---\nbody\n",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Colliding.md",
+            "content" => "---\ndate:\n  __engram_raw__: x\n  y: 1\n---\nbody\n",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       assert note.parse_status == "ok"
       assert note.parse_reason == nil
@@ -549,20 +707,30 @@ defmodule Engram.NotesTest do
     test "rewriting a degraded note with clean frontmatter resets parse_status to ok",
          %{user: user, vault: vault} do
       {:ok, degraded} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Fixable.md",
-          "content" => "---\ndate:YYYY-MM-DD\n---\nx\n",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Fixable.md",
+            "content" => "---\ndate:YYYY-MM-DD\n---\nx\n",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       assert degraded.parse_status == "degraded"
 
       {:ok, fixed} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Fixable.md",
-          "content" => "---\ntitle: Fixed\n---\nx\n",
-          "mtime" => 2.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Fixable.md",
+            "content" => "---\ntitle: Fixed\n---\nx\n",
+            "mtime" => 2.0
+          },
+          actor: "api"
+        )
 
       assert fixed.parse_status == "ok"
       assert fixed.parse_reason == nil
@@ -580,11 +748,16 @@ defmodule Engram.NotesTest do
   describe "get_note/3" do
     test "returns note for correct user", %{user: user, vault: vault} do
       {:ok, created} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Test/Readable.md",
-          "content" => "# Readable",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Test/Readable.md",
+            "content" => "# Readable",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       assert {:ok, found} = Notes.get_note(user, vault, "Test/Readable.md")
       assert found.id == created.id
@@ -596,21 +769,31 @@ defmodule Engram.NotesTest do
       other_user: other_user,
       other_vault: other_vault
     } do
-      Notes.upsert_note(user, vault, %{
-        "path" => "Test/Private.md",
-        "content" => "# Private",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Test/Private.md",
+          "content" => "# Private",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       assert {:error, :not_found} = Notes.get_note(other_user, other_vault, "Test/Private.md")
     end
 
     test "returns not_found for deleted note", %{user: user, vault: vault} do
-      Notes.upsert_note(user, vault, %{
-        "path" => "Test/ToDelete.md",
-        "content" => "# Delete me",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Test/ToDelete.md",
+          "content" => "# Delete me",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       Notes.delete_note(user, vault, "Test/ToDelete.md")
 
@@ -633,11 +816,16 @@ defmodule Engram.NotesTest do
   describe "get_note_by_id/3" do
     test "returns the note for the owner", %{user: user, vault: vault} do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "a.md",
-          "content" => "# A",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "a.md",
+            "content" => "# A",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       assert {:ok, fetched} = Notes.get_note_by_id(user, vault, note.id)
       assert fetched.id == note.id
@@ -656,11 +844,16 @@ defmodule Engram.NotesTest do
       other_vault: other_vault
     } do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "a.md",
-          "content" => "# A",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "a.md",
+            "content" => "# A",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       assert {:error, :not_found} = Notes.get_note_by_id(other_user, other_vault, note.id)
     end
@@ -672,11 +865,16 @@ defmodule Engram.NotesTest do
 
   describe "delete_note/3" do
     test "soft-deletes a note", %{user: user, vault: vault} do
-      Notes.upsert_note(user, vault, %{
-        "path" => "Test/Bye.md",
-        "content" => "# Bye",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Test/Bye.md",
+          "content" => "# Bye",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       assert :ok = Notes.delete_note(user, vault, "Test/Bye.md")
       assert {:error, :not_found} = Notes.get_note(user, vault, "Test/Bye.md")
@@ -692,11 +890,16 @@ defmodule Engram.NotesTest do
       other_user: other_user,
       other_vault: other_vault
     } do
-      Notes.upsert_note(user, vault, %{
-        "path" => "Test/Shared Path.md",
-        "content" => "# User A note",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Test/Shared Path.md",
+          "content" => "# User A note",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       assert :ok = Notes.delete_note(other_user, other_vault, "Test/Shared Path.md")
       # User A's note should still exist
@@ -711,11 +914,16 @@ defmodule Engram.NotesTest do
   describe "delete_note_by_id/3" do
     test "deletes the note and is not found afterward", %{user: user, vault: vault} do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "a.md",
-          "content" => "# A",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "a.md",
+            "content" => "# A",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       assert :ok = Notes.delete_note_by_id(user, vault, note.id)
       assert {:error, :not_found} = Notes.get_note_by_id(user, vault, note.id)
@@ -732,11 +940,16 @@ defmodule Engram.NotesTest do
       other_vault: other_vault
     } do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "a.md",
-          "content" => "# A",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "a.md",
+            "content" => "# A",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       assert {:error, :not_found} = Notes.delete_note_by_id(other_user, other_vault, note.id)
       # Original still accessible to owner
@@ -750,17 +963,27 @@ defmodule Engram.NotesTest do
 
   describe "list_tags/2" do
     test "returns unique tags across user's notes", %{user: user, vault: vault} do
-      Notes.upsert_note(user, vault, %{
-        "path" => "A.md",
-        "content" => "---\ntags: [health, fitness]\n---",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "A.md",
+          "content" => "---\ntags: [health, fitness]\n---",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
-      Notes.upsert_note(user, vault, %{
-        "path" => "B.md",
-        "content" => "---\ntags: [health, nutrition]\n---",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "B.md",
+          "content" => "---\ntags: [health, nutrition]\n---",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       {:ok, tags} = Notes.list_tags(user, vault)
       assert "health" in tags
@@ -776,11 +999,16 @@ defmodule Engram.NotesTest do
       other_user: other_user,
       other_vault: other_vault
     } do
-      Notes.upsert_note(other_user, other_vault, %{
-        "path" => "A.md",
-        "content" => "---\ntags: [secret]\n---",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        other_user,
+        other_vault,
+        %{
+          "path" => "A.md",
+          "content" => "---\ntags: [secret]\n---",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       {:ok, tags} = Notes.list_tags(user, vault)
       refute "secret" in tags
@@ -793,30 +1021,50 @@ defmodule Engram.NotesTest do
 
   describe "list_types/2" do
     test "returns unique OKF types across user's notes", %{user: user, vault: vault} do
-      Notes.upsert_note(user, vault, %{
-        "path" => "A.md",
-        "content" => "---\ntype: playbook\n---",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "A.md",
+          "content" => "---\ntype: playbook\n---",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
-      Notes.upsert_note(user, vault, %{
-        "path" => "B.md",
-        "content" => "---\ntype: playbook\n---",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "B.md",
+          "content" => "---\ntype: playbook\n---",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
-      Notes.upsert_note(user, vault, %{
-        "path" => "C.md",
-        "content" => "---\ntype: meeting\n---",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "C.md",
+          "content" => "---\ntype: meeting\n---",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       # No frontmatter at all — must not contribute an entry.
-      Notes.upsert_note(user, vault, %{
-        "path" => "D.md",
-        "content" => "plain body",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "D.md",
+          "content" => "plain body",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       assert {:ok, ["meeting", "playbook"]} = Notes.list_types(user, vault)
     end
@@ -824,17 +1072,27 @@ defmodule Engram.NotesTest do
     test "collapses case variants the way the filter does", %{user: user, vault: vault} do
       # type_hmac normalises before hashing, so `Playbook` and `playbook` are
       # ONE filter bucket. Suggestions must not offer them as two choices.
-      Notes.upsert_note(user, vault, %{
-        "path" => "A.md",
-        "content" => "---\ntype: Playbook\n---",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "A.md",
+          "content" => "---\ntype: Playbook\n---",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
-      Notes.upsert_note(user, vault, %{
-        "path" => "B.md",
-        "content" => "---\ntype: playbook\n---",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "B.md",
+          "content" => "---\ntype: playbook\n---",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       assert {:ok, ["playbook"]} = Notes.list_types(user, vault)
     end
@@ -845,11 +1103,16 @@ defmodule Engram.NotesTest do
       other_user: other_user,
       other_vault: other_vault
     } do
-      Notes.upsert_note(other_user, other_vault, %{
-        "path" => "A.md",
-        "content" => "---\ntype: secret\n---",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        other_user,
+        other_vault,
+        %{
+          "path" => "A.md",
+          "content" => "---\ntype: secret\n---",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       {:ok, types} = Notes.list_types(user, vault)
       refute "secret" in types
@@ -862,23 +1125,38 @@ defmodule Engram.NotesTest do
 
   describe "list_folders/2" do
     test "returns unique folders for user", %{user: user, vault: vault} do
-      Notes.upsert_note(user, vault, %{
-        "path" => "Folder A/Note.md",
-        "content" => "x",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Folder A/Note.md",
+          "content" => "x",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
-      Notes.upsert_note(user, vault, %{
-        "path" => "Folder B/Note.md",
-        "content" => "x",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Folder B/Note.md",
+          "content" => "x",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
-      Notes.upsert_note(user, vault, %{
-        "path" => "Folder A/Other.md",
-        "content" => "x",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Folder A/Other.md",
+          "content" => "x",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       {:ok, folders} = Notes.list_folders(user, vault)
       assert "Folder A" in folders
@@ -887,7 +1165,9 @@ defmodule Engram.NotesTest do
     end
 
     test "excludes empty folder (root-level notes)", %{user: user, vault: vault} do
-      Notes.upsert_note(user, vault, %{"path" => "Root.md", "content" => "x", "mtime" => 1_000.0})
+      Notes.upsert_note(user, vault, %{"path" => "Root.md", "content" => "x", "mtime" => 1_000.0},
+        actor: "api"
+      )
 
       {:ok, folders} = Notes.list_folders(user, vault)
       refute "" in folders
@@ -899,11 +1179,16 @@ defmodule Engram.NotesTest do
       other_user: other_user,
       other_vault: other_vault
     } do
-      Notes.upsert_note(other_user, other_vault, %{
-        "path" => "Private Folder/Note.md",
-        "content" => "x",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        other_user,
+        other_vault,
+        %{
+          "path" => "Private Folder/Note.md",
+          "content" => "x",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       {:ok, folders} = Notes.list_folders(user, vault)
       refute "Private Folder" in folders
@@ -912,10 +1197,15 @@ defmodule Engram.NotesTest do
     test "list_notes_in_folder filters by folder_hmac",
          %{user: user, vault: vault} do
       {:ok, created} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Real/Note.md",
-          "content" => "x"
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Real/Note.md",
+            "content" => "x"
+          },
+          actor: "api"
+        )
 
       assert {:ok, [note]} = Notes.list_notes_in_folder(user, vault, "Real")
       assert note.id == created.id
@@ -924,11 +1214,16 @@ defmodule Engram.NotesTest do
 
     test "list_folders groups by folder_hmac and decrypts ciphertext",
          %{user: user, vault: vault} do
-      Notes.upsert_note(user, vault, %{
-        "path" => "Real/Note.md",
-        "content" => "x",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Real/Note.md",
+          "content" => "x",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       {:ok, folders} = Notes.list_folders(user, vault)
       assert "Real" in folders
@@ -941,11 +1236,16 @@ defmodule Engram.NotesTest do
 
   describe "rename_note/4" do
     test "renames note to new path", %{user: user, vault: vault} do
-      Notes.upsert_note(user, vault, %{
-        "path" => "Test/Original.md",
-        "content" => "# Original",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Test/Original.md",
+          "content" => "# Original",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       assert {:ok, renamed} =
                Notes.rename_note(user, vault, "Test/Original.md", "Test/Renamed.md")
@@ -955,22 +1255,32 @@ defmodule Engram.NotesTest do
     end
 
     test "updates folder when path moves to different folder", %{user: user, vault: vault} do
-      Notes.upsert_note(user, vault, %{
-        "path" => "Old Folder/Note.md",
-        "content" => "# Note",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Old Folder/Note.md",
+          "content" => "# Note",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       {:ok, renamed} = Notes.rename_note(user, vault, "Old Folder/Note.md", "New Folder/Note.md")
       assert renamed.folder == "New Folder"
     end
 
     test "sanitizes new path", %{user: user, vault: vault} do
-      Notes.upsert_note(user, vault, %{
-        "path" => "Test/Clean.md",
-        "content" => "# Clean",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Test/Clean.md",
+          "content" => "# Clean",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       {:ok, renamed} = Notes.rename_note(user, vault, "Test/Clean.md", "Test/Dirty?.md")
       assert renamed.path == "Test/Dirty.md"
@@ -987,11 +1297,16 @@ defmodule Engram.NotesTest do
       other_user: other_user,
       other_vault: other_vault
     } do
-      Notes.upsert_note(user, vault, %{
-        "path" => "Test/Mine.md",
-        "content" => "# Mine",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Test/Mine.md",
+          "content" => "# Mine",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       assert {:error, :not_found} =
                Notes.rename_note(other_user, other_vault, "Test/Mine.md", "Test/Stolen.md")
@@ -999,18 +1314,28 @@ defmodule Engram.NotesTest do
 
     test "returns {:error, :conflict} when target path exists", %{user: user, vault: vault} do
       {:ok, _a} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "a.md",
-          "content" => "# A",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "a.md",
+            "content" => "# A",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       {:ok, _b} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "b.md",
-          "content" => "# B",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "b.md",
+            "content" => "# B",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       assert {:error, :conflict} = Notes.rename_note(user, vault, "a.md", "b.md")
 
@@ -1025,17 +1350,27 @@ defmodule Engram.NotesTest do
 
   describe "list_tags_with_counts/2" do
     test "returns tags with correct counts", %{user: user, vault: vault} do
-      Notes.upsert_note(user, vault, %{
-        "path" => "A.md",
-        "content" => "---\ntags: [health, fitness]\n---",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "A.md",
+          "content" => "---\ntags: [health, fitness]\n---",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
-      Notes.upsert_note(user, vault, %{
-        "path" => "B.md",
-        "content" => "---\ntags: [health, nutrition]\n---",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "B.md",
+          "content" => "---\ntags: [health, nutrition]\n---",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       {:ok, tags} = Notes.list_tags_with_counts(user, vault)
       health = Enum.find(tags, &(&1.name == "health"))
@@ -1053,11 +1388,16 @@ defmodule Engram.NotesTest do
     end
 
     test "excludes soft-deleted notes", %{user: user, vault: vault} do
-      Notes.upsert_note(user, vault, %{
-        "path" => "Deleted.md",
-        "content" => "---\ntags: [ghost]\n---",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Deleted.md",
+          "content" => "---\ntags: [ghost]\n---",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       Notes.delete_note(user, vault, "Deleted.md")
 
@@ -1071,11 +1411,16 @@ defmodule Engram.NotesTest do
       other_user: other_user,
       other_vault: other_vault
     } do
-      Notes.upsert_note(other_user, other_vault, %{
-        "path" => "Secret.md",
-        "content" => "---\ntags: [secret]\n---",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        other_user,
+        other_vault,
+        %{
+          "path" => "Secret.md",
+          "content" => "---\ntags: [secret]\n---",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       {:ok, tags} = Notes.list_tags_with_counts(user, vault)
       refute Enum.any?(tags, &(&1.name == "secret"))
@@ -1088,23 +1433,38 @@ defmodule Engram.NotesTest do
 
   describe "list_folders_with_counts/2" do
     test "returns folders with correct counts", %{user: user, vault: vault} do
-      Notes.upsert_note(user, vault, %{
-        "path" => "Health/Note1.md",
-        "content" => "x",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Health/Note1.md",
+          "content" => "x",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
-      Notes.upsert_note(user, vault, %{
-        "path" => "Health/Note2.md",
-        "content" => "y",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Health/Note2.md",
+          "content" => "y",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
-      Notes.upsert_note(user, vault, %{
-        "path" => "Work/Note1.md",
-        "content" => "z",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Work/Note1.md",
+          "content" => "z",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       {:ok, folders} = Notes.list_folders_with_counts(user, vault)
       health = Enum.find(folders, &(&1.folder == "Health"))
@@ -1115,13 +1475,20 @@ defmodule Engram.NotesTest do
     end
 
     test "includes root folder count", %{user: user, vault: vault} do
-      Notes.upsert_note(user, vault, %{"path" => "Root.md", "content" => "x", "mtime" => 1_000.0})
+      Notes.upsert_note(user, vault, %{"path" => "Root.md", "content" => "x", "mtime" => 1_000.0},
+        actor: "api"
+      )
 
-      Notes.upsert_note(user, vault, %{
-        "path" => "Health/Note.md",
-        "content" => "y",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Health/Note.md",
+          "content" => "y",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       {:ok, folders} = Notes.list_folders_with_counts(user, vault)
       # Root notes have folder = nil or ""
@@ -1137,17 +1504,27 @@ defmodule Engram.NotesTest do
 
     test "groups by folder_hmac and decrypts ciphertext",
          %{user: user, vault: vault} do
-      Notes.upsert_note(user, vault, %{
-        "path" => "Health/A.md",
-        "content" => "x",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Health/A.md",
+          "content" => "x",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
-      Notes.upsert_note(user, vault, %{
-        "path" => "Health/B.md",
-        "content" => "y",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Health/B.md",
+          "content" => "y",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       {:ok, folders} = Notes.list_folders_with_counts(user, vault)
       health = Enum.find(folders, &(&1.folder == "Health"))
@@ -1156,11 +1533,16 @@ defmodule Engram.NotesTest do
     end
 
     test "excludes soft-deleted notes", %{user: user, vault: vault} do
-      Notes.upsert_note(user, vault, %{
-        "path" => "Ghost/Note.md",
-        "content" => "x",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Ghost/Note.md",
+          "content" => "x",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       Notes.delete_note(user, vault, "Ghost/Note.md")
 
@@ -1198,11 +1580,16 @@ defmodule Engram.NotesTest do
 
     test "flat folder with 3 notes", %{user: user, vault: vault} do
       for i <- 1..3 do
-        Notes.upsert_note(user, vault, %{
-          "path" => "Todos/Task#{i}.md",
-          "content" => "t#{i}",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Todos/Task#{i}.md",
+            "content" => "t#{i}",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
       end
 
       assert_counts_match(user, vault, ["Todos"])
@@ -1210,24 +1597,43 @@ defmodule Engram.NotesTest do
 
     test "nested folders: parent with direct notes + subfolder with notes",
          %{user: user, vault: vault} do
-      Notes.upsert_note(user, vault, %{"path" => "Todos/A.md", "content" => "a", "mtime" => 1.0})
-      Notes.upsert_note(user, vault, %{"path" => "Todos/B.md", "content" => "b", "mtime" => 1.0})
+      Notes.upsert_note(user, vault, %{"path" => "Todos/A.md", "content" => "a", "mtime" => 1.0},
+        actor: "api"
+      )
 
-      Notes.upsert_note(user, vault, %{
-        "path" => "Todos/Sub/C.md",
-        "content" => "c",
-        "mtime" => 1.0
-      })
+      Notes.upsert_note(user, vault, %{"path" => "Todos/B.md", "content" => "b", "mtime" => 1.0},
+        actor: "api"
+      )
+
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Todos/Sub/C.md",
+          "content" => "c",
+          "mtime" => 1.0
+        },
+        actor: "api"
+      )
 
       assert_counts_match(user, vault, ["Todos", "Todos/Sub"])
     end
 
     test "mixed: root notes + marker folder + populated folder",
          %{user: user, vault: vault} do
-      Notes.upsert_note(user, vault, %{"path" => "Root.md", "content" => "r", "mtime" => 1.0})
+      Notes.upsert_note(user, vault, %{"path" => "Root.md", "content" => "r", "mtime" => 1.0},
+        actor: "api"
+      )
+
       {:ok, _} = Notes.create_folder_marker(user, vault, "Empty")
-      Notes.upsert_note(user, vault, %{"path" => "Work/X.md", "content" => "x", "mtime" => 1.0})
-      Notes.upsert_note(user, vault, %{"path" => "Work/Y.md", "content" => "y", "mtime" => 1.0})
+
+      Notes.upsert_note(user, vault, %{"path" => "Work/X.md", "content" => "x", "mtime" => 1.0},
+        actor: "api"
+      )
+
+      Notes.upsert_note(user, vault, %{"path" => "Work/Y.md", "content" => "y", "mtime" => 1.0},
+        actor: "api"
+      )
 
       assert_counts_match(user, vault, ["", "Empty", "Work"])
     end
@@ -1249,18 +1655,28 @@ defmodule Engram.NotesTest do
       {:ok, _} = Notes.create_folder_marker(user, vault, "Mixed")
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Mixed/a.md",
-          "content" => "a",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Mixed/a.md",
+            "content" => "a",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Mixed/b.md",
-          "content" => "b",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Mixed/b.md",
+            "content" => "b",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       {:ok, folders} = Notes.list_folders_with_counts(user, vault)
       mixed = Enum.filter(folders, &(&1.folder == "Mixed"))
@@ -1275,23 +1691,38 @@ defmodule Engram.NotesTest do
 
   describe "list_notes_in_folder/3" do
     test "returns notes in a specific folder", %{user: user, vault: vault} do
-      Notes.upsert_note(user, vault, %{
-        "path" => "Health/Note1.md",
-        "content" => "# A",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Health/Note1.md",
+          "content" => "# A",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
-      Notes.upsert_note(user, vault, %{
-        "path" => "Health/Note2.md",
-        "content" => "# B",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Health/Note2.md",
+          "content" => "# B",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
-      Notes.upsert_note(user, vault, %{
-        "path" => "Work/Note1.md",
-        "content" => "# C",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Work/Note1.md",
+          "content" => "# C",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       {:ok, notes} = Notes.list_notes_in_folder(user, vault, "Health")
       assert length(notes) == 2
@@ -1307,11 +1738,16 @@ defmodule Engram.NotesTest do
       # Every caller (folders controller note_summary, MCP list_folder, tree
       # loaders) serializes metadata only — content stays projected out so
       # folder browsing never pays content I/O + decrypt.
-      Notes.upsert_note(user, vault, %{
-        "path" => "Health/Sparse.md",
-        "content" => "# never needed here",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Health/Sparse.md",
+          "content" => "# never needed here",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       {:ok, [note]} = Notes.list_notes_in_folder(user, vault, "Health")
       assert note.title == "never needed here"
@@ -1321,17 +1757,27 @@ defmodule Engram.NotesTest do
     end
 
     test "returns root-level notes with empty string", %{user: user, vault: vault} do
-      Notes.upsert_note(user, vault, %{
-        "path" => "Root.md",
-        "content" => "# Root",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Root.md",
+          "content" => "# Root",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
-      Notes.upsert_note(user, vault, %{
-        "path" => "Health/Note.md",
-        "content" => "# Health",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Health/Note.md",
+          "content" => "# Health",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       {:ok, notes} = Notes.list_notes_in_folder(user, vault, "")
       assert length(notes) == 1
@@ -1344,11 +1790,16 @@ defmodule Engram.NotesTest do
     end
 
     test "excludes soft-deleted notes", %{user: user, vault: vault} do
-      Notes.upsert_note(user, vault, %{
-        "path" => "Health/Deleted.md",
-        "content" => "x",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Health/Deleted.md",
+          "content" => "x",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       Notes.delete_note(user, vault, "Health/Deleted.md")
 
@@ -1362,11 +1813,16 @@ defmodule Engram.NotesTest do
       other_user: other_user,
       other_vault: other_vault
     } do
-      Notes.upsert_note(other_user, other_vault, %{
-        "path" => "Health/Secret.md",
-        "content" => "x",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        other_user,
+        other_vault,
+        %{
+          "path" => "Health/Secret.md",
+          "content" => "x",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       {:ok, notes} = Notes.list_notes_in_folder(user, vault, "Health")
       assert notes == []
@@ -1387,10 +1843,15 @@ defmodule Engram.NotesTest do
 
     test "populates path_hmac, path_ciphertext, path_nonce", %{user: user, vault: vault} do
       {:ok, note} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "path" => "projects/q3/secret.md",
-          "content" => "hello"
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "projects/q3/secret.md",
+            "content" => "hello"
+          },
+          actor: "api"
+        )
 
       {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
       expected_hmac = Engram.Crypto.hmac_field(filter_key, "projects/q3/secret.md")
@@ -1402,10 +1863,15 @@ defmodule Engram.NotesTest do
 
     test "populates folder_hmac, folder_ciphertext, folder_nonce", %{user: user, vault: vault} do
       {:ok, note} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "path" => "projects/q3/secret.md",
-          "content" => "hello"
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "projects/q3/secret.md",
+            "content" => "hello"
+          },
+          actor: "api"
+        )
 
       {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
       expected_hmac = Engram.Crypto.hmac_field(filter_key, "projects/q3")
@@ -1417,10 +1883,15 @@ defmodule Engram.NotesTest do
 
     test "populates one tags_hmac entry per tag", %{user: user, vault: vault} do
       {:ok, note} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "path" => "x.md",
-          "content" => "---\ntags: [legal, client-acme]\n---\ny"
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "x.md",
+            "content" => "---\ntags: [legal, client-acme]\n---\ny"
+          },
+          actor: "api"
+        )
 
       {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
 
@@ -1433,16 +1904,23 @@ defmodule Engram.NotesTest do
     end
 
     test "tags_hmac is empty array when no tags", %{user: user, vault: vault} do
-      {:ok, note} = Engram.Notes.upsert_note(user, vault, %{"path" => "x.md", "content" => "y"})
+      {:ok, note} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "x.md", "content" => "y"}, actor: "api")
+
       assert note.tags_hmac == []
     end
 
     test "still writes plaintext path/folder/tags (dual-write)", %{user: user, vault: vault} do
       {:ok, note} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "path" => "a/b/c.md",
-          "content" => "---\ntags: [t1]\n---\ny"
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "a/b/c.md",
+            "content" => "---\ntags: [t1]\n---\ny"
+          },
+          actor: "api"
+        )
 
       assert note.path == "a/b/c.md"
       assert note.folder == "a/b"
@@ -1461,10 +1939,15 @@ defmodule Engram.NotesTest do
       vault = insert(:vault, user: raw_user)
 
       assert {:ok, note} =
-               Engram.Notes.upsert_note(raw_user, vault, %{
-                 "path" => "secure/file.md",
-                 "content" => "hello"
-               })
+               Engram.Notes.upsert_note(
+                 raw_user,
+                 vault,
+                 %{
+                   "path" => "secure/file.md",
+                   "content" => "hello"
+                 },
+                 actor: "api"
+               )
 
       assert is_binary(note.path_hmac),
              "path_hmac must be set — Phase B must not silently skip for no-DEK user"
@@ -1480,17 +1963,27 @@ defmodule Engram.NotesTest do
 
   describe "rename_folder/4" do
     test "renames folder for all notes in it", %{user: user, vault: vault} do
-      Notes.upsert_note(user, vault, %{
-        "path" => "Old/Note1.md",
-        "content" => "# A",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Old/Note1.md",
+          "content" => "# A",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
-      Notes.upsert_note(user, vault, %{
-        "path" => "Old/Note2.md",
-        "content" => "# B",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Old/Note2.md",
+          "content" => "# B",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       assert {:ok, 2} = Notes.rename_folder(user, vault, "Old", "New")
 
@@ -1505,17 +1998,27 @@ defmodule Engram.NotesTest do
     end
 
     test "renames subfolder notes too", %{user: user, vault: vault} do
-      Notes.upsert_note(user, vault, %{
-        "path" => "Parent/Child/Note.md",
-        "content" => "# Deep",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Parent/Child/Note.md",
+          "content" => "# Deep",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
-      Notes.upsert_note(user, vault, %{
-        "path" => "Parent/Note.md",
-        "content" => "# Shallow",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Parent/Note.md",
+          "content" => "# Shallow",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       assert {:ok, 2} = Notes.rename_folder(user, vault, "Parent", "Renamed")
 
@@ -1534,11 +2037,16 @@ defmodule Engram.NotesTest do
       other_user: other_user,
       other_vault: other_vault
     } do
-      Notes.upsert_note(other_user, other_vault, %{
-        "path" => "Shared/Note.md",
-        "content" => "# Other",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        other_user,
+        other_vault,
+        %{
+          "path" => "Shared/Note.md",
+          "content" => "# Other",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       assert {:ok, 0} = Notes.rename_folder(user, vault, "Shared", "Renamed")
 
@@ -1549,18 +2057,28 @@ defmodule Engram.NotesTest do
     test "returns {:error, :conflict} when target folder has notes",
          %{user: user, vault: vault} do
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "src/a.md",
-          "content" => "# A",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "src/a.md",
+            "content" => "# A",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "dst/b.md",
-          "content" => "# B",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "dst/b.md",
+            "content" => "# B",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       assert {:error, :conflict} = Notes.rename_folder(user, vault, "src", "dst")
 
@@ -1572,11 +2090,16 @@ defmodule Engram.NotesTest do
     test "returns {:error, :conflict} when target folder marker exists",
          %{user: user, vault: vault} do
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "src/a.md",
-          "content" => "# A",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "src/a.md",
+            "content" => "# A",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       {:ok, _} = Notes.create_folder_marker(user, vault, "dst")
 
@@ -1606,21 +2129,31 @@ defmodule Engram.NotesTest do
          %{user: user, vault: vault} do
       # src has a nested file
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "src/sub/x.md",
-          "content" => "# X (src)",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "src/sub/x.md",
+            "content" => "# X (src)",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       # dst is EMPTY at the immediate level (no dst/* row), so
       # folder_target_exists?/3 returns false and the rename proceeds...
       # but dst/sub/x.md already exists, so the cascade collides.
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "dst/sub/x.md",
-          "content" => "# X (dst)",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "dst/sub/x.md",
+            "content" => "# X (dst)",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       assert {:error, :conflict} = Notes.rename_folder(user, vault, "src", "dst")
 
@@ -1631,18 +2164,28 @@ defmodule Engram.NotesTest do
     test "cascades to all children including nested subfolders",
          %{user: user, vault: vault} do
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "src/a.md",
-          "content" => "# A",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "src/a.md",
+            "content" => "# A",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "src/sub/b.md",
-          "content" => "# B",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "src/sub/b.md",
+            "content" => "# B",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       assert {:ok, 2} = Notes.rename_folder(user, vault, "src", "dst")
       assert {:ok, %{path: "dst/a.md"}} = Notes.get_note(user, vault, "dst/a.md")
@@ -1654,11 +2197,16 @@ defmodule Engram.NotesTest do
     test "same-folder rename is a no-op (returns {:ok, _})",
          %{user: user, vault: vault} do
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "same/a.md",
-          "content" => "# A",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "same/a.md",
+            "content" => "# A",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       assert {:ok, _} = Notes.rename_folder(user, vault, "same", "same")
       assert {:ok, %{path: "same/a.md"}} = Notes.get_note(user, vault, "same/a.md")
@@ -1667,11 +2215,16 @@ defmodule Engram.NotesTest do
     test "recomputes path_hmac and folder_hmac for the new path/folder",
          %{user: user, vault: vault} do
       {:ok, before} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Old/Note.md",
-          "content" => "# Old",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Old/Note.md",
+            "content" => "# Old",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       {:ok, 1} = Notes.rename_folder(user, vault, "Old", "New")
 
@@ -1693,11 +2246,16 @@ defmodule Engram.NotesTest do
       {:ok, _} = Notes.create_folder_marker(user, vault, "Old")
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Old/a.md",
-          "content" => "a",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Old/a.md",
+            "content" => "a",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       {:ok, _count} = Notes.rename_folder(user, vault, "Old", "New")
 
@@ -1727,11 +2285,16 @@ defmodule Engram.NotesTest do
     test "recomputes path_hmac and folder_hmac for the new path/folder",
          %{user: user, vault: vault} do
       {:ok, before} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Folder/Old.md",
-          "content" => "# Old",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Folder/Old.md",
+            "content" => "# Old",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       {:ok, _} = Notes.rename_note(user, vault, "Folder/Old.md", "Folder/New.md")
 
@@ -1751,11 +2314,16 @@ defmodule Engram.NotesTest do
       {:ok, _} = Notes.create_folder_marker(user, vault, "Mixed")
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Mixed/a.md",
-          "content" => "a",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Mixed/a.md",
+            "content" => "a",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       {:ok, notes} = Notes.list_notes_in_folder(user, vault, "Mixed")
       assert length(notes) == 1
@@ -1768,25 +2336,40 @@ defmodule Engram.NotesTest do
       {:ok, marker} = Notes.create_folder_marker(user, vault, "Projects")
 
       {:ok, _n1} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Projects/a.md",
-          "content" => "a",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Projects/a.md",
+            "content" => "a",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       {:ok, _n2} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Projects/b.md",
-          "content" => "b",
-          "mtime" => 2.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Projects/b.md",
+            "content" => "b",
+            "mtime" => 2.0
+          },
+          actor: "api"
+        )
 
       {:ok, _other} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Archive/c.md",
-          "content" => "c",
-          "mtime" => 3.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Archive/c.md",
+            "content" => "c",
+            "mtime" => 3.0
+          },
+          actor: "api"
+        )
 
       {:ok, notes} = Notes.list_folder_notes_by_id(user, vault, marker.id)
       paths = Enum.map(notes, & &1.path) |> Enum.sort()
@@ -1816,11 +2399,16 @@ defmodule Engram.NotesTest do
       {:ok, _child_marker} = Notes.create_folder_marker(user, vault, "Projects/Sub")
 
       {:ok, _note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Projects/a.md",
-          "content" => "a",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Projects/a.md",
+            "content" => "a",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       {:ok, notes} = Notes.list_folder_notes_by_id(user, vault, marker.id)
       assert Enum.map(notes, & &1.path) == ["Projects/a.md"]
@@ -1845,11 +2433,16 @@ defmodule Engram.NotesTest do
       {:ok, _marker} = Notes.create_folder_marker(user, vault, "Doomed")
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Doomed/a.md",
-          "content" => "a",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Doomed/a.md",
+            "content" => "a",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       assert {:ok, %{deleted: 2}} = Notes.delete_folder(user, vault, "Doomed")
 
@@ -1865,11 +2458,16 @@ defmodule Engram.NotesTest do
       {:ok, _} = Notes.create_folder_marker(user, vault, "a/b")
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "a/b/c.md",
-          "content" => "c",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "a/b/c.md",
+            "content" => "c",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       assert {:ok, %{deleted: 3}} = Notes.delete_folder(user, vault, "a")
 
@@ -1887,11 +2485,16 @@ defmodule Engram.NotesTest do
       {:ok, _} = Notes.create_folder_marker(user, vault, "Projects")
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Projects/keep.md",
-          "content" => "keep",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Projects/keep.md",
+            "content" => "keep",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       assert {:ok, %{deleted: 1}} = Notes.delete_folder(user, vault, "Proj")
 
@@ -1919,11 +2522,16 @@ defmodule Engram.NotesTest do
       other_vault: other_vault
     } do
       {:ok, _} =
-        Notes.upsert_note(other_user, other_vault, %{
-          "path" => "Shared/keep.md",
-          "content" => "keep",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          other_user,
+          other_vault,
+          %{
+            "path" => "Shared/keep.md",
+            "content" => "keep",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       assert {:ok, %{deleted: 0}} = Notes.delete_folder(user, vault, "Shared")
 
@@ -1939,11 +2547,16 @@ defmodule Engram.NotesTest do
       {:ok, _} = Notes.create_folder_marker(user, vault, "Watched")
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Watched/a.md",
-          "content" => "a",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Watched/a.md",
+            "content" => "a",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       # Drain the upsert broadcast emitted by upsert_note/3.
       assert_receive %Phoenix.Socket.Broadcast{event: "note_changed"}

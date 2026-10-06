@@ -163,11 +163,16 @@ defmodule EngramWeb.VaultsControllerTest do
       assert %{"note_count" => 1, "populated" => false} = row.()
 
       {:ok, _} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "path" => "real.md",
-          "content" => "x",
-          "mtime" => 1.0
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "real.md",
+            "content" => "x",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       assert %{"note_count" => 2, "populated" => true} = row.()
     end

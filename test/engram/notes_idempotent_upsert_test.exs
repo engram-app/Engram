@@ -22,8 +22,11 @@ defmodule Engram.NotesIdempotentUpsertTest do
     user: user,
     vault: vault
   } do
-    {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# Same"})
-    {:ok, n2} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# Same"})
+    {:ok, n1} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# Same"}, actor: "api")
+
+    {:ok, n2} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# Same"}, actor: "api")
 
     assert n2.id == n1.id
     assert n2.version == n1.version
@@ -35,11 +38,13 @@ defmodule Engram.NotesIdempotentUpsertTest do
     user: user,
     vault: vault
   } do
-    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# Same"})
+    {:ok, _} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# Same"}, actor: "api")
 
     EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
-    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# Same"})
+    {:ok, _} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# Same"}, actor: "api")
 
     refute_receive %Phoenix.Socket.Broadcast{event: "note_changed"}, 100
   end
@@ -48,11 +53,13 @@ defmodule Engram.NotesIdempotentUpsertTest do
     user: user,
     vault: vault
   } do
-    {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# One"})
+    {:ok, n1} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# One"}, actor: "api")
 
     EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
-    {:ok, n2} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# Two"})
+    {:ok, n2} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# Two"}, actor: "api")
 
     assert n2.version == n1.version + 1
     assert n2.seq > n1.seq
@@ -61,7 +68,9 @@ defmodule Engram.NotesIdempotentUpsertTest do
 
   test "re-push after a delete is refused within the delete-wins window (delete not silently undone)",
        %{user: user, vault: vault} do
-    {:ok, _n1} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# Same"})
+    {:ok, _n1} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# Same"}, actor: "api")
+
     :ok = Notes.delete_note(user, vault, "a.md")
 
     # Delete-wins (Todd's chosen policy): a pathless re-push at a just-deleted
@@ -70,6 +79,8 @@ defmodule Engram.NotesIdempotentUpsertTest do
     # Post-window restore + the re-minted-id boundary live in
     # Engram.NotesDeleteTombstoneTest.
     assert {:error, :recently_deleted} =
-             Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# Same"})
+             Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# Same"},
+               actor: "api"
+             )
   end
 end

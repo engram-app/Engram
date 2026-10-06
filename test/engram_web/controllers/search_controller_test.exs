@@ -92,11 +92,16 @@ defmodule EngramWeb.SearchControllerTest do
       # controller's path→id lookup to resolve. Qdrant chunks for orphan
       # paths fall back to id: nil — covered separately below.
       {:ok, note} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "path" => "Health/Iron Panel.md",
-          "content" => "# Iron Panel\n\nFerritin levels.",
-          "mtime" => 1_000.0
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Health/Iron Panel.md",
+            "content" => "# Iron Panel\n\nFerritin levels.",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       {:ok, enc} =
         Engram.Crypto.encrypt_qdrant_payload(

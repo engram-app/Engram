@@ -44,7 +44,9 @@ defmodule Engram.Notes.CrdtCheckpointRotationFenceTest do
     %{user: user, vault: vault} = ctx
 
     {:ok, note} =
-      Engram.Notes.upsert_note(user, vault, %{"path" => "fence/a.md", "content" => "body"})
+      Engram.Notes.upsert_note(user, vault, %{"path" => "fence/a.md", "content" => "body"},
+        actor: "api"
+      )
 
     before = reload(user, note.id)
 
@@ -74,7 +76,9 @@ defmodule Engram.Notes.CrdtCheckpointRotationFenceTest do
     %{user: user, vault: vault} = ctx
 
     {:ok, note} =
-      Engram.Notes.upsert_note(user, vault, %{"path" => "fence/d.md", "content" => "body"})
+      Engram.Notes.upsert_note(user, vault, %{"path" => "fence/d.md", "content" => "body"},
+        actor: "api"
+      )
 
     before = reload(user, note.id)
 
@@ -99,10 +103,15 @@ defmodule Engram.Notes.CrdtCheckpointRotationFenceTest do
     %{user: user, vault: vault} = ctx
 
     {:ok, note} =
-      Engram.Notes.upsert_note(user, vault, %{
-        "path" => "fence/e.md",
-        "content" => "THE WHOLE BODY"
-      })
+      Engram.Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "fence/e.md",
+          "content" => "THE WHOLE BODY"
+        },
+        actor: "api"
+      )
 
     # A delta sitting ON TOP of the snapshot — the shape a live edit leaves.
     seed_tail!(user, vault, note.id, "fragment")

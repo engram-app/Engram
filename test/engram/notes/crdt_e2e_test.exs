@@ -34,7 +34,10 @@ defmodule Engram.Notes.CrdtE2ETest do
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Crypto.ensure_user_dek(user)
     {:ok, vault, _} = Vaults.register_vault(user, "CrdtE2E", Ecto.UUID.generate())
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "e2e.md", "content" => "base"})
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "e2e.md", "content" => "base"}, actor: "api")
+
     doc_id = note.id
     topic = "crdt:#{user.id}:#{vault.id}"
 
@@ -88,11 +91,16 @@ defmodule Engram.Notes.CrdtE2ETest do
 
     # ── Step 3: REST writer pushes a diverging plaintext body ─────────────────
     {:ok, _} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "e2e.md",
-        "content" => "base + REST",
-        "version" => note.version
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "e2e.md",
+          "content" => "base + REST",
+          "version" => note.version
+        },
+        actor: "api"
+      )
 
     # ── Step 4: REST façade reflects the REST write ───────────────────────────
     # The REST read path (get_note) decrypts from the notes row, which was just

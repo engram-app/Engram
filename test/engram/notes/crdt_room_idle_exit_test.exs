@@ -69,7 +69,9 @@ defmodule Engram.Notes.CrdtRoomIdleExitTest do
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Crypto.ensure_user_dek(user)
     {:ok, vault, _} = Vaults.register_vault(user, "IdleExitTest", Ecto.UUID.generate())
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "before"})
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "before"}, actor: "api")
 
     %{user: user, vault: vault, note: note}
   end

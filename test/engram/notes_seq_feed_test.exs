@@ -14,8 +14,11 @@ defmodule Engram.NotesSeqFeedTest do
     user: user,
     vault: vault
   } do
-    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "A"})
-    {:ok, _b} = Notes.upsert_note(user, vault, %{"path" => "b.md", "content" => "B"})
+    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "A"}, actor: "api")
+
+    {:ok, _b} =
+      Notes.upsert_note(user, vault, %{"path" => "b.md", "content" => "B"}, actor: "api")
+
     # tombstone, new seq
     :ok = Notes.delete_note(user, vault, "a.md")
 
@@ -36,7 +39,7 @@ defmodule Engram.NotesSeqFeedTest do
     user: user,
     vault: vault
   } do
-    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "A"})
+    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "A"}, actor: "api")
     {:ok, _} = Notes.rename_note(user, vault, "a.md", "b.md")
 
     {:ok, %{changes: all}} = Notes.list_changes_by_seq(user, vault, 0)
@@ -45,13 +48,18 @@ defmodule Engram.NotesSeqFeedTest do
   end
 
   test "rename tombstone does not block re-create at the old path", %{user: user, vault: vault} do
-    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "A"})
+    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "A"}, actor: "api")
     {:ok, _} = Notes.rename_note(user, vault, "a.md", "b.md")
-    assert {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "A2"})
+
+    assert {:ok, _} =
+             Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "A2"}, actor: "api")
   end
 
   test "paginates with limit + has_more", %{user: user, vault: vault} do
-    for i <- 1..3, do: Notes.upsert_note(user, vault, %{"path" => "n#{i}.md", "content" => "x"})
+    for i <- 1..3,
+        do:
+          Notes.upsert_note(user, vault, %{"path" => "n#{i}.md", "content" => "x"}, actor: "api")
+
     {:ok, p1} = Notes.list_changes_by_seq(user, vault, 0, limit: 2)
     assert length(p1.changes) == 2 and p1.has_more
     {c, i} = p1.next
@@ -69,7 +77,7 @@ defmodule Engram.NotesSeqFeedTest do
   # endpoint, never the cursor feed.
   test "folder-marker rows are excluded from the seq feed", %{user: user, vault: vault} do
     {:ok, _marker} = Notes.create_folder_marker(user, vault, "Empty")
-    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "A"})
+    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "A"}, actor: "api")
 
     {:ok, %{changes: all}} = Notes.list_changes_by_seq(user, vault, 0)
     assert Enum.map(all, & &1.path) == ["a.md"]
@@ -80,7 +88,10 @@ defmodule Engram.NotesSeqFeedTest do
     vault: vault
   } do
     {:ok, _marker} = Notes.create_folder_marker(user, vault, "Old")
-    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "Old/c.md", "content" => "C"})
+
+    {:ok, _} =
+      Notes.upsert_note(user, vault, %{"path" => "Old/c.md", "content" => "C"}, actor: "api")
+
     assert {:ok, 2} = Notes.rename_folder(user, vault, "Old", "New")
 
     {:ok, %{changes: all}} = Notes.list_changes_by_seq(user, vault, 0)

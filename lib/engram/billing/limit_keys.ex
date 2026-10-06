@@ -42,6 +42,14 @@ defmodule Engram.Billing.LimitKeys do
       defaults: %{free: 1_073_741_824, starter: 10_737_418_240, pro: 53_687_091_200}
     },
     attachments_enabled: %{type: :boolean, defaults: %{free: true, starter: true, pro: true}},
+    # Note version history (#1710). Grant-shaped (true = the user gets it),
+    # per the polarity rule this file's tests pin. Every tier has history, so
+    # this is a kill switch per tier or per user, gated in
+    # Engram.Notes.Revisions.recording?/1. The retention keys
+    # (history_max_versions, history_retention_days) land with their
+    # enforcement in #1712: a catalog row without a gate is the dead-entry
+    # pattern limit_keys_test.exs refuses.
+    history_enabled: %{type: :boolean, defaults: %{free: true, starter: true, pro: true}},
     # Every tier gets the full MimeWhitelist surface (images, audio, video,
     # PDFs, office docs). Free used to be text/* only, which made
     # `attachment_bytes_cap` unreachable — 10k notes of markdown is ~50 MB

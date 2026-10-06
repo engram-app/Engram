@@ -21,7 +21,9 @@ defmodule Engram.Notes.CrdtMergePathTest do
 
   test "first write seeds crdt_state and content_hash matches merged text", ctx do
     %{user: user, vault: vault} = ctx
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "hello"})
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "hello"}, actor: "api")
 
     raw = load_raw(user, note.id)
     refute is_nil(raw.crdt_state_ciphertext)
@@ -40,7 +42,11 @@ defmodule Engram.Notes.CrdtMergePathTest do
 
   test "STALE-version write MERGES instead of 409ing — CRDT is the conflict resolution", ctx do
     %{user: user, vault: vault} = ctx
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "shared base"})
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "shared base"},
+        actor: "api"
+      )
 
     # Simulate a server-applied edit that bumps the row version out-of-band,
     # leaving the REST writer's `version` stale. The server edit is stored as
@@ -70,11 +76,16 @@ defmodule Engram.Notes.CrdtMergePathTest do
     # plaintext overwrites as a minimal edit); the CRDT history retains the
     # server's prior operation for future Yjs clients to merge with apply_update.
     {:ok, note2} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "a.md",
-        "content" => "shared base + CLIENT",
-        "version" => note.version
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "a.md",
+          "content" => "shared base + CLIENT",
+          "version" => note.version
+        },
+        actor: "api"
+      )
 
     # The note was updated (no 409) and the client content is reflected.
     assert note2.content == "shared base + CLIENT"
@@ -87,16 +98,27 @@ defmodule Engram.Notes.CrdtMergePathTest do
 
   test "a versionless write also merges (REST/MCP plaintext façade path)", ctx do
     %{user: user, vault: vault} = ctx
-    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "alpha"})
-    {:ok, note2} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "alpha beta"})
+
+    {:ok, _} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "alpha"}, actor: "api")
+
+    {:ok, note2} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "alpha beta"}, actor: "api")
+
     assert note2.content == "alpha beta"
   end
 
   test "merge write bumps seq", ctx do
     %{user: user, vault: vault} = ctx
-    {:ok, _n1} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "v1"})
+
+    {:ok, _n1} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "v1"}, actor: "api")
+
     seq1 = Vaults.current_seq(user.id, vault.id)
-    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "v2"})
+
+    {:ok, _} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "v2"}, actor: "api")
+
     seq2 = Vaults.current_seq(user.id, vault.id)
     assert seq2 > seq1
   end
@@ -104,7 +126,9 @@ defmodule Engram.Notes.CrdtMergePathTest do
   test "decrypt round-trip: crdt_state written with row_version_aad_bound decrypts correctly",
        ctx do
     %{user: user, vault: vault} = ctx
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "rt.md", "content" => "roundtrip"})
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "rt.md", "content" => "roundtrip"}, actor: "api")
 
     raw = load_raw(user, note.id)
 
@@ -124,11 +148,15 @@ defmodule Engram.Notes.CrdtMergePathTest do
 
     # Seed a note with "version one"
     {:ok, note1} =
-      Notes.upsert_note(user, vault, %{"path" => "hash.md", "content" => "version one"})
+      Notes.upsert_note(user, vault, %{"path" => "hash.md", "content" => "version one"},
+        actor: "api"
+      )
 
     # Second write with the same base — verify content_hash is from merged result
     {:ok, note2} =
-      Notes.upsert_note(user, vault, %{"path" => "hash.md", "content" => "version two"})
+      Notes.upsert_note(user, vault, %{"path" => "hash.md", "content" => "version two"},
+        actor: "api"
+      )
 
     {:ok, key} = Crypto.dek_content_hash_key(user)
     expected_hash = Crypto.hmac_content_hash(key, note2.content)
@@ -140,7 +168,11 @@ defmodule Engram.Notes.CrdtMergePathTest do
 
   test "REST write merges against snapshot + tail, not the stale snapshot alone", ctx do
     %{user: user, vault: vault} = ctx
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "t.md", "content" => "shared base"})
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "t.md", "content" => "shared base"},
+        actor: "api"
+      )
 
     # Simulate live typing since the last checkpoint: a real Yjs update row in
     # the tail-log that appends " + LIVE" (build it from the note's snapshot doc,
@@ -150,7 +182,9 @@ defmodule Engram.Notes.CrdtMergePathTest do
 
     # REST writer read "shared base" (pre-live-typing) and appends its own edit.
     {:ok, updated} =
-      Notes.upsert_note(user, vault, %{"path" => "t.md", "content" => "shared base + REST"})
+      Notes.upsert_note(user, vault, %{"path" => "t.md", "content" => "shared base + REST"},
+        actor: "api"
+      )
 
     assert updated.content =~ "LIVE", "tail-log live edits must survive a REST merge"
     assert updated.content =~ "REST"
@@ -161,7 +195,9 @@ defmodule Engram.Notes.CrdtMergePathTest do
 
     # Create a note so we have a valid note_id, vault_id, etc.
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{"path" => "nil-snap.md", "content" => "placeholder"})
+      Notes.upsert_note(user, vault, %{"path" => "nil-snap.md", "content" => "placeholder"},
+        actor: "api"
+      )
 
     # NULL out the crdt_state columns to simulate a pre-CRDT note (bind/3's seed
     # path: no snapshot + a tail update seeded from an empty doc).
@@ -206,7 +242,12 @@ defmodule Engram.Notes.CrdtMergePathTest do
 
     # REST writer arrives with the same base text (before the LIVE edit).
     {:ok, updated} =
-      Notes.upsert_note(user, vault, %{"path" => "nil-snap.md", "content" => "shared base + REST"})
+      Notes.upsert_note(
+        user,
+        vault,
+        %{"path" => "nil-snap.md", "content" => "shared base + REST"},
+        actor: "api"
+      )
 
     # "shared base" must appear exactly once — not doubled ("shared base + RESTshared base + LIVE")
     assert length(String.split(updated.content, "shared base")) == 2,
@@ -221,7 +262,9 @@ defmodule Engram.Notes.CrdtMergePathTest do
     %{user: user, vault: vault} = ctx
 
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{"path" => "empty-snap-dup.md", "content" => "placeholder"})
+      Notes.upsert_note(user, vault, %{"path" => "empty-snap-dup.md", "content" => "placeholder"},
+        actor: "api"
+      )
 
     # Set crdt_state to an encrypted EMPTY-doc snapshot (the genesis shape) —
     # NOT nil. Pre-fix, maybe_merge_crdt took the three-way leg with an empty
@@ -268,10 +311,15 @@ defmodule Engram.Notes.CrdtMergePathTest do
     end)
 
     {:ok, updated} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "empty-snap-dup.md",
-        "content" => "shared base + REST"
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "empty-snap-dup.md",
+          "content" => "shared base + REST"
+        },
+        actor: "api"
+      )
 
     assert length(String.split(updated.content, "shared base")) == 2,
            "body was duplicated: #{inspect(updated.content)}"
@@ -341,7 +389,11 @@ defmodule Engram.Notes.CrdtMergePathTest do
   # snapshot alone (what `bind/3` had at the time), and the row lands after.
   test "a tail row the checkpointed doc never folded is not pruned", ctx do
     %{user: user, vault: vault} = ctx
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "unfolded.md", "content" => "BODY"})
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "unfolded.md", "content" => "BODY"},
+        actor: "api"
+      )
 
     # The room's in-memory doc, as of its bind: snapshot only.
     raw = load_raw(user, note.id)
@@ -392,7 +444,9 @@ defmodule Engram.Notes.CrdtMergePathTest do
   test "a tail row stamped with another vault is not folded into this vault's doc", ctx do
     %{user: user, vault: vault} = ctx
     {:ok, other_vault, _} = Vaults.register_vault(user, "OtherVault", Ecto.UUID.generate())
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "scoped.md", "content" => "MINE"})
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "scoped.md", "content" => "MINE"}, actor: "api")
 
     {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state("foreign_update", user, note.id)
     foreign_id = Ecto.UUID.generate()

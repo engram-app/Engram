@@ -6,7 +6,7 @@ defmodule EngramWeb.FoldersControllerBatchTest do
   describe "POST /api/folders/batch-delete" do
     test "atomic cascading delete + idempotency replay", %{conn: conn, user: user, vault: vault} do
       {:ok, marker} = Engram.Notes.create_folder_marker(user, vault, "Projects")
-      {:ok, child} = Engram.Notes.upsert_note(user, vault, %{path: "Projects/a.md"})
+      {:ok, child} = Engram.Notes.upsert_note(user, vault, %{path: "Projects/a.md"}, actor: "api")
       key = Ecto.UUID.generate()
 
       body =
@@ -49,7 +49,7 @@ defmodule EngramWeb.FoldersControllerBatchTest do
 
     test "404 on missing id rolls back all", %{conn: conn, user: user, vault: vault} do
       {:ok, marker} = Engram.Notes.create_folder_marker(user, vault, "X")
-      {:ok, _child} = Engram.Notes.upsert_note(user, vault, %{path: "X/a.md"})
+      {:ok, _child} = Engram.Notes.upsert_note(user, vault, %{path: "X/a.md"}, actor: "api")
       missing_id = Ecto.UUID.generate()
 
       body =
@@ -67,7 +67,7 @@ defmodule EngramWeb.FoldersControllerBatchTest do
     test "atomic move + idempotency replay", %{conn: conn, user: user, vault: vault} do
       {:ok, src} = Engram.Notes.create_folder_marker(user, vault, "Projects")
       {:ok, dst} = Engram.Notes.create_folder_marker(user, vault, "Archive")
-      {:ok, child} = Engram.Notes.upsert_note(user, vault, %{path: "Projects/a.md"})
+      {:ok, child} = Engram.Notes.upsert_note(user, vault, %{path: "Projects/a.md"}, actor: "api")
 
       body =
         conn
@@ -138,7 +138,7 @@ defmodule EngramWeb.FoldersControllerBatchTest do
     } do
       {:ok, _parent} = Engram.Notes.create_folder_marker(user, vault, "a")
       {:ok, child} = Engram.Notes.create_folder_marker(user, vault, "a/b")
-      {:ok, note} = Engram.Notes.upsert_note(user, vault, %{path: "a/b/x.md"})
+      {:ok, note} = Engram.Notes.upsert_note(user, vault, %{path: "a/b/x.md"}, actor: "api")
 
       body =
         conn

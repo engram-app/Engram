@@ -92,11 +92,16 @@ defmodule EngramWeb.NotesControllerTest do
       other_vault = insert(:vault, user: other_user, is_default: true)
 
       {:ok, other_note} =
-        Engram.Notes.upsert_note(other_user, other_vault, %{
-          path: "Test/Other.md",
-          content: "# Other user's note",
-          mtime: 1_000.0
-        })
+        Engram.Notes.upsert_note(
+          other_user,
+          other_vault,
+          %{
+            path: "Test/Other.md",
+            content: "# Other user's note",
+            mtime: 1_000.0
+          },
+          actor: "api"
+        )
 
       # Attacker (the authed conn's user) tries to adopt another tenant's note
       # PK at a brand-new path in their own vault. The PK unique index makes
@@ -334,11 +339,16 @@ defmodule EngramWeb.NotesControllerTest do
 
     test "GET /api/notes/:path includes numeric id", %{conn: conn, user: user, vault: vault} do
       {:ok, note} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "path" => "id-check.md",
-          "content" => "# A",
-          "mtime" => 1_000.0
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "id-check.md",
+            "content" => "# A",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       conn = get(conn, "/api/notes/id-check.md")
       body = json_response(conn, 200)
@@ -357,11 +367,16 @@ defmodule EngramWeb.NotesControllerTest do
       vault: vault
     } do
       {:ok, _note} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "path" => "Clean.md",
-          "content" => "---\ntags: [a]\n---\nx\n",
-          "mtime" => 1.0
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Clean.md",
+            "content" => "---\ntags: [a]\n---\nx\n",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       conn = get(conn, "/api/notes/Clean.md")
       body = json_response(conn, 200)
@@ -375,11 +390,16 @@ defmodule EngramWeb.NotesControllerTest do
       vault: vault
     } do
       {:ok, _note} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "path" => "Degraded.md",
-          "content" => "---\ndate:YYYY-MM-DD\n---\nx\n",
-          "mtime" => 1.0
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Degraded.md",
+            "content" => "---\ndate:YYYY-MM-DD\n---\nx\n",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       conn = get(conn, "/api/notes/Degraded.md")
       body = json_response(conn, 200)
@@ -413,7 +433,9 @@ defmodule EngramWeb.NotesControllerTest do
 
   describe "GET /api/notes/by-id/:id" do
     test "returns the note for the owner", %{conn: conn, user: user, vault: vault} do
-      {:ok, note} = Engram.Notes.upsert_note(user, vault, %{path: "a.md", content: "# A"})
+      {:ok, note} =
+        Engram.Notes.upsert_note(user, vault, %{path: "a.md", content: "# A"}, actor: "api")
+
       conn = get(conn, ~p"/api/notes/by-id/#{note.id}")
       body = json_response(conn, 200)
       assert body["id"] == note.id
@@ -433,7 +455,9 @@ defmodule EngramWeb.NotesControllerTest do
 
   describe "DELETE /api/notes/by-id/:id" do
     test "deletes the note", %{conn: conn, user: user, vault: vault} do
-      {:ok, note} = Engram.Notes.upsert_note(user, vault, %{path: "a.md", content: "# A"})
+      {:ok, note} =
+        Engram.Notes.upsert_note(user, vault, %{path: "a.md", content: "# A"}, actor: "api")
+
       conn = delete(conn, ~p"/api/notes/by-id/#{note.id}")
       assert json_response(conn, 200) == %{"deleted" => true}
       assert {:error, :not_found} = Engram.Notes.get_note_by_id(user, vault, note.id)

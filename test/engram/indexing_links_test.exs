@@ -42,14 +42,21 @@ defmodule Engram.IndexingLinksTest do
   # just written from the authoritative CRDT content.
   test "index_note does not write note_links", %{bypass: bypass, user: user, vault: vault} do
     {:ok, _target} =
-      Notes.upsert_note(user, vault, %{"path" => "B.md", "content" => "# B", "mtime" => 1_000.0})
+      Notes.upsert_note(user, vault, %{"path" => "B.md", "content" => "# B", "mtime" => 1_000.0},
+        actor: "api"
+      )
 
     {:ok, source} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "Source.md",
-        "content" => "[[B]]",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Source.md",
+          "content" => "[[B]]",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
     expect_embed_and_upsert(bypass)
 
@@ -63,14 +70,21 @@ defmodule Engram.IndexingLinksTest do
 
   test "the no_chunks path leaves existing note_links alone", %{user: user, vault: vault} do
     {:ok, _target} =
-      Notes.upsert_note(user, vault, %{"path" => "B.md", "content" => "# B", "mtime" => 1_000.0})
+      Notes.upsert_note(user, vault, %{"path" => "B.md", "content" => "# B", "mtime" => 1_000.0},
+        actor: "api"
+      )
 
     {:ok, source} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "Source.md",
-        "content" => "[[B]]",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Source.md",
+          "content" => "[[B]]",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
     :ok = perform_job(ExtractNoteLinks, %{note_id: source.id, user_id: user.id})
 

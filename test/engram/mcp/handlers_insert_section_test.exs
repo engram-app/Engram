@@ -11,7 +11,9 @@ defmodule Engram.MCP.HandlersInsertSectionTest do
     vault = insert(:vault, user: user)
 
     {:ok, _} =
-      Notes.upsert_note(user, vault, %{"path" => "N.md", "content" => @content, "mtime" => 1.0})
+      Notes.upsert_note(user, vault, %{"path" => "N.md", "content" => @content, "mtime" => 1.0},
+        actor: "api"
+      )
 
     %{user: user, vault: vault}
   end
@@ -154,7 +156,9 @@ defmodule Engram.MCP.HandlersInsertSectionTest do
     content = "## A\n```\n```js\n```\n## B\nkeep\n"
 
     {:ok, _} =
-      Notes.upsert_note(u, v, %{"path" => "Fence2.md", "content" => content, "mtime" => 3.0})
+      Notes.upsert_note(u, v, %{"path" => "Fence2.md", "content" => content, "mtime" => 3.0},
+        actor: "api"
+      )
 
     assert {:ok, _, _} =
              Handlers.handle("edit_note", u, v, %{

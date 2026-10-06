@@ -52,7 +52,7 @@ defmodule Engram.Notes.NoteUpsertRaceTest do
         fn _ ->
           # Allow the spawned task to use the parent's sandbox connection.
           Ecto.Adapters.SQL.Sandbox.allow(Repo, parent, self())
-          Notes.upsert_note(user, vault, attrs)
+          Notes.upsert_note(user, vault, attrs, actor: "api")
         end,
         max_concurrency: 4,
         ordered: false,
@@ -89,8 +89,8 @@ defmodule Engram.Notes.NoteUpsertRaceTest do
   test "sequential upsert of the same path is idempotent (no error)",
        %{user: user, vault: vault} do
     attrs = %{"path" => "Seq.md", "content" => "# Seq", "mtime" => 1_700_000_000.0}
-    assert {:ok, %Note{} = n1} = Notes.upsert_note(user, vault, attrs)
-    assert {:ok, %Note{} = n2} = Notes.upsert_note(user, vault, attrs)
+    assert {:ok, %Note{} = n1} = Notes.upsert_note(user, vault, attrs, actor: "api")
+    assert {:ok, %Note{} = n2} = Notes.upsert_note(user, vault, attrs, actor: "api")
     assert n1.id == n2.id
   end
 end

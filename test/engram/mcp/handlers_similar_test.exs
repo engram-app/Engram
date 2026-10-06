@@ -26,11 +26,16 @@ defmodule Engram.MCP.HandlersSimilarTest do
 
   defp note_with_points(user, vault, path, n, embedded?) do
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{
-        "path" => path,
-        "content" => "# #{path}\n\nbody",
-        "mtime" => 1.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => path,
+          "content" => "# #{path}\n\nbody",
+          "mtime" => 1.0
+        },
+        actor: "api"
+      )
 
     ids =
       for pos <- 0..(n - 1)//1 do

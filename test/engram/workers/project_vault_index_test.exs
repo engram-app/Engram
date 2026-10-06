@@ -38,7 +38,9 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
   end
 
   defp note(ctx, path) do
-    {:ok, note} = Notes.upsert_note(ctx.user, ctx.vault, %{"path" => path, "content" => "x"})
+    {:ok, note} =
+      Notes.upsert_note(ctx.user, ctx.vault, %{"path" => path, "content" => "x"}, actor: "api")
+
     note
   end
 
@@ -560,11 +562,16 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
       # The overdue create finally lands, reusing the same id the release job
       # already targets.
       {:ok, _late_arrival} =
-        Notes.upsert_note(ctx.user, ctx.vault, %{
-          "id" => stale_id,
-          "path" => "ghost.md",
-          "content" => "finally here"
-        })
+        Notes.upsert_note(
+          ctx.user,
+          ctx.vault,
+          %{
+            "id" => stale_id,
+            "path" => "ghost.md",
+            "content" => "finally here"
+          },
+          actor: "api"
+        )
 
       :ok = drain_releases()
 

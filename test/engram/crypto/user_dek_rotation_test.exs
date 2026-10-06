@@ -646,7 +646,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
     test "rotation rewraps crdt_state so a synced note still opens", %{user: user, vault: vault} do
       {:ok, note} =
-        Engram.Notes.upsert_note(user, vault, %{"path" => "rot/synced.md", "content" => "body"})
+        Engram.Notes.upsert_note(user, vault, %{"path" => "rot/synced.md", "content" => "body"},
+          actor: "api"
+        )
 
       # Stand in for a checkpoint: a real Yjs state blob, encrypted the only way
       # Crypto.encrypt_crdt_state/3 knows how (AAD always bound to the row id).
@@ -690,7 +692,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
       vault: vault
     } do
       {:ok, note} =
-        Engram.Notes.upsert_note(user, vault, %{"path" => "rot/tail.md", "content" => "body"})
+        Engram.Notes.upsert_note(user, vault, %{"path" => "rot/tail.md", "content" => "body"},
+          actor: "api"
+        )
 
       # An edit that has NOT been checkpointed yet lives only in the tail log,
       # encrypted with the same DEK and the same note-bound AAD as the snapshot.
@@ -733,7 +737,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
       vault: vault
     } do
       {:ok, note} =
-        Engram.Notes.upsert_note(user, vault, %{"path" => "rot/junk.md", "content" => "body"})
+        Engram.Notes.upsert_note(user, vault, %{"path" => "rot/junk.md", "content" => "body"},
+          actor: "api"
+        )
 
       # A snapshot that decrypts under NEITHER dek — the shape a rotation that
       # died mid-sweep, or #1336, leaves behind.
@@ -775,7 +781,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
       vault: vault
     } do
       {:ok, _note} =
-        Engram.Notes.upsert_note(user, vault, %{"path" => "rot/head.md", "content" => "body"})
+        Engram.Notes.upsert_note(user, vault, %{"path" => "rot/head.md", "content" => "body"},
+          actor: "api"
+        )
 
       # sweep_notes writes crdt_state, which trips notes_crdt_head_invalidate and
       # NULLs every head. That damage is committed by the FIRST phase, so the
@@ -843,7 +851,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
       content = "---\ntype: Playbook\ndescription: d\nresource: r\n---\nbody\n"
 
       {:ok, note} =
-        Engram.Notes.upsert_note(user, vault, %{"path" => "rot/okf.md", "content" => content})
+        Engram.Notes.upsert_note(user, vault, %{"path" => "rot/okf.md", "content" => content},
+          actor: "api"
+        )
 
       assert :ok = UserDekRotation.rotate_user(user.id)
 
@@ -1051,11 +1061,16 @@ defmodule Engram.Crypto.UserDekRotationTest do
       vault: vault
     } do
       {:ok, _note} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "path" => "regression/alpha.md",
-          "content" => "regression alpha content",
-          "mtime" => 1000.0
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "regression/alpha.md",
+            "content" => "regression alpha content",
+            "mtime" => 1000.0
+          },
+          actor: "api"
+        )
 
       # Confirm the row was created at dek_version=2 (the production hardcode).
       {:ok, filter_key} = Crypto.dek_filter_key(user)

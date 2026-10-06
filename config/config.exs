@@ -180,6 +180,9 @@ config :engram, Oban,
         {"23 * * * *", Engram.Workers.ClientLogsPruner},
         {"28 * * * *", Engram.Workers.InstallPingsPruner},
         {"38 * * * *", Engram.Workers.IdempotencyPrune},
+        # Note-version outbox copies whose FinalizeRevision job was lost
+        # between commit and enqueue (#1710).
+        {"43 * * * *", Engram.Workers.FinalizeRevisionSweep},
         # Export archives past the 7-day download window (#859).
         {"53 * * * *", Engram.Workers.ExportExpirySweep},
         # Paddle drift check. Daily: drift logs at :error to Sentry, and a
@@ -433,10 +436,18 @@ config :engram, Engram.MCP.ParseGate,
   max_waiting: 16,
   deadline_ms: 20_000
 
-# Import environment specific config. This must remain at the bottom
-# of this file so it overrides the configuration defined above.
 # Self-host install census ping: prod builds only, so a dev `mix phx.server` or a
 # source run never pings the real collector and pollutes the install count.
 config :engram, :census_ping, config_env() == :prod
 
+# Note version history (#1710). On in dev and test. Prod reads
+# HISTORY_RECORDING in runtime.exs and stays OFF until #1713 (DEK rotation
+# covers note_revisions) and #1715 (the orphan sweep walks revisions/) ship:
+# before #1713 a key rotation would make stored versions undecryptable, and
+# before #1715 a deleted account's blobs would stay in storage.
+config :engram, :history_recording, true
+config :engram, :history_session_gap_minutes, 10
+
+# Import environment specific config. This must remain at the bottom
+# of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"

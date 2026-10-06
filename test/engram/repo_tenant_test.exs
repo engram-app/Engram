@@ -14,11 +14,16 @@ defmodule Engram.RepoTenantTest do
       vault_a = insert(:vault, user: user_a)
 
       {:ok, _} =
-        Engram.Notes.upsert_note(user_a, vault_a, %{
-          "path" => "secret.md",
-          "content" => "private",
-          "mtime" => 1_000.0
-        })
+        Engram.Notes.upsert_note(
+          user_a,
+          vault_a,
+          %{
+            "path" => "secret.md",
+            "content" => "private",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       # User B sees nothing
       {:ok, notes} =

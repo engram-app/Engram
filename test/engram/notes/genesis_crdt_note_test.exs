@@ -30,7 +30,11 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     user: user,
     vault: vault
   } do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/a.md", "content" => "hello"})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "Notes/a.md", "content" => "hello"},
+        actor: "api"
+      )
+
     assert {:ok, got} = Notes.genesis_crdt_note(user, vault, note.id, "Notes/a.md")
     assert got.id == note.id
     # content preserved
@@ -41,7 +45,11 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     user: user,
     vault: vault
   } do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/b.md", "content" => "world"})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "Notes/b.md", "content" => "world"},
+        actor: "api"
+      )
+
     other = Ecto.UUID.generate()
     # Tagged :adopted rather than a plain {:ok, _}: the caller's content frame was
     # NOT applied to this row, and the batch create leg has to be able to say so
@@ -59,7 +67,8 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     user: user,
     vault: vault
   } do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/c.md", "content" => "keep"})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "Notes/c.md", "content" => "keep"}, actor: "api")
 
     assert {:ok, moved} = Notes.genesis_crdt_note(user, vault, note.id, "Notes/elsewhere.md")
 
@@ -76,7 +85,9 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     vault: vault
   } do
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{"path" => "Notes/live-from.md", "content" => "MOVE"})
+      Notes.upsert_note(user, vault, %{"path" => "Notes/live-from.md", "content" => "MOVE"},
+        actor: "api"
+      )
 
     EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
@@ -95,10 +106,15 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
          user: user,
          vault: vault
        } do
-    {:ok, a} = Notes.upsert_note(user, vault, %{"path" => "Notes/occ-a.md", "content" => "keep"})
+    {:ok, a} =
+      Notes.upsert_note(user, vault, %{"path" => "Notes/occ-a.md", "content" => "keep"},
+        actor: "api"
+      )
 
     {:ok, _b} =
-      Notes.upsert_note(user, vault, %{"path" => "Notes/occ-b.md", "content" => "other"})
+      Notes.upsert_note(user, vault, %{"path" => "Notes/occ-b.md", "content" => "other"},
+        actor: "api"
+      )
 
     assert {:error, :id_conflict, live} =
              Notes.genesis_crdt_note(user, vault, a.id, "Notes/occ-b.md")
@@ -119,7 +135,9 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     # upsert_pathless guard). The note stays tombstoned. A legitimate restore is
     # a rename (different path) — see the "keeps content" test below.
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{"path" => "Notes/gone.md", "content" => "IMPORTANT"})
+      Notes.upsert_note(user, vault, %{"path" => "Notes/gone.md", "content" => "IMPORTANT"},
+        actor: "api"
+      )
 
     :ok = Notes.delete_note_by_id(user, vault, note.id)
     refute Notes.note_in_vault?(user, vault.id, note.id)
@@ -131,7 +149,11 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
   end
 
   test "resurrecting to a different path re-paths but keeps content", %{user: user, vault: vault} do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/old.md", "content" => "BODY"})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "Notes/old.md", "content" => "BODY"},
+        actor: "api"
+      )
+
     :ok = Notes.delete_note_by_id(user, vault, note.id)
 
     assert {:ok, back} = Notes.genesis_crdt_note(user, vault, note.id, "Notes/renamed.md")
@@ -152,9 +174,11 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     # even though live count goes to 2 > 1.
     insert(:user_limit_override, user: user, key: "notes_cap", value: %{"v" => 1})
 
-    {:ok, a} = Notes.upsert_note(user, vault, %{"path" => "A.md", "content" => "a"})
+    {:ok, a} = Notes.upsert_note(user, vault, %{"path" => "A.md", "content" => "a"}, actor: "api")
     :ok = Notes.delete_note_by_id(user, vault, a.id)
-    {:ok, _b} = Notes.upsert_note(user, vault, %{"path" => "B.md", "content" => "b"})
+
+    {:ok, _b} =
+      Notes.upsert_note(user, vault, %{"path" => "B.md", "content" => "b"}, actor: "api")
 
     assert {:ok, note} = Notes.genesis_crdt_note(user, vault, a.id, "A-renamed.md")
     assert note.id == a.id
@@ -167,7 +191,9 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     vault: vault
   } do
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{"path" => "Notes/from.md", "content" => "MOVE"})
+      Notes.upsert_note(user, vault, %{"path" => "Notes/from.md", "content" => "MOVE"},
+        actor: "api"
+      )
 
     :ok = Notes.delete_note_by_id(user, vault, note.id)
 
@@ -194,7 +220,9 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     # undecryptable tombstone replies create_failed to the client instead of
     # raising out through the channel and dropping the socket.
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{"path" => "Notes/corrupt.md", "content" => "SECRET"})
+      Notes.upsert_note(user, vault, %{"path" => "Notes/corrupt.md", "content" => "SECRET"},
+        actor: "api"
+      )
 
     :ok = Notes.delete_note_by_id(user, vault, note.id)
 
@@ -240,7 +268,9 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     {:ok, other, _} = Vaults.register_vault(user, "GenesisTestB", Ecto.UUID.generate())
 
     {:ok, in_a} =
-      Notes.upsert_note(user, vault, %{"path" => "Notes/copied.md", "content" => "vault A"})
+      Notes.upsert_note(user, vault, %{"path" => "Notes/copied.md", "content" => "vault A"},
+        actor: "api"
+      )
 
     # The vault-copy scenario the user hit: switch the plugin to a fresh vault
     # and push notes still carrying the ORIGINAL vault's ids. classify_by_id is
@@ -266,9 +296,12 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     # consumed by a row that never lands. remint_own_id still backstops the REST
     # leg; this pins that the socket leg no longer needs it.
     {:ok, other, _} = Vaults.register_vault(user, "GenesisSeqB", Ecto.UUID.generate())
-    {:ok, foreign} = Notes.upsert_note(user, other, %{"path" => "Notes/f.md", "content" => "x"})
 
-    {:ok, base} = Notes.upsert_note(user, vault, %{"path" => "Notes/base.md", "content" => "b"})
+    {:ok, foreign} =
+      Notes.upsert_note(user, other, %{"path" => "Notes/f.md", "content" => "x"}, actor: "api")
+
+    {:ok, base} =
+      Notes.upsert_note(user, vault, %{"path" => "Notes/base.md", "content" => "b"}, actor: "api")
 
     assert {:ok, created} = Notes.genesis_crdt_note(user, vault, foreign.id, "Notes/remint.md")
 

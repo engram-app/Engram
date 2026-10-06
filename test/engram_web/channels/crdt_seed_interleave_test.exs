@@ -120,10 +120,15 @@ defmodule EngramWeb.CrdtSeedInterleaveTest do
     # transaction open. This is the write the checkpoint must not clobber, and
     # the thing the sandbox made impossible.
     {:ok, _} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "Notes/aborted.md",
-        "content" => "the concurrent body that won the fence"
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Notes/aborted.md",
+          "content" => "the concurrent body that won the fence"
+        },
+        actor: "api"
+      )
 
     CheckpointInterleave.release(:after_row_read, parked)
 

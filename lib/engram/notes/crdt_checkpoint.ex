@@ -21,8 +21,19 @@ defmodule Engram.Notes.CrdtCheckpoint do
   alias Engram.{Accounts, Crypto, Notes, Repo, Vaults}
   alias Engram.Crypto.RotationGate
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtBloat, CrdtBridge, CrdtDeliver, CrdtUpdateLog, Enqueue, Helpers, Note}
-  alias Engram.Workers.{EmbedNote, ExtractNoteLinks}
+
+  alias Engram.Notes.{
+    ContentCommit,
+    CrdtBloat,
+    CrdtBridge,
+    CrdtDeliver,
+    CrdtUpdateLog,
+    Helpers,
+    Note,
+    Revisions
+  }
+
+  alias Engram.Workers.EmbedNote
 
   require Logger
 
@@ -186,6 +197,11 @@ defmodule Engram.Notes.CrdtCheckpoint do
           end
       end
 
+    # #1710: decided once, before the transaction (see Revisions moduledoc), so
+    # the billing lookup never runs under the vault row lock next_seq! takes.
+    recording = Revisions.recording?(user)
+    opts = Keyword.put(opts, :recording, recording)
+
     # Phase 0 monotonicity (identity-as-CRDT): never materialize the live doc's
     # state directly. Encode it ONCE (read-only — the room's doc is never
     # mutated from here), then fold the row's STORED state into a scratch doc
@@ -242,9 +258,17 @@ defmodule Engram.Notes.CrdtCheckpoint do
                 # so a first sync's whole flood is ranked here or nowhere — and
                 # reading `note` again after the commit would both cost a query
                 # and see the wrong (post-write) row.
+                #
+                # #1710: the finalize decision rides out the same way. A
+                # CRDT-created row holds the hash of empty text, not nil, so its
+                # first checkpoint is the create and has no old text to finalize.
                 case result do
                   {prev_hash, new_hash, path} ->
-                    {prev_hash, new_hash, path, EmbedNote.priority_for(note)}
+                    finalize? =
+                      note.content not in [nil, ""] and
+                        Revisions.finalize?(recording, prev_hash, new_hash)
+
+                    {prev_hash, new_hash, path, EmbedNote.priority_for(note), finalize?}
 
                   other ->
                     other
@@ -253,22 +277,13 @@ defmodule Engram.Notes.CrdtCheckpoint do
           end)
 
         case outcome do
-          {prev_hash, new_hash, path, embed_priority} ->
+          {prev_hash, new_hash, path, embed_priority, finalize?} ->
             _ =
               if prev_hash != new_hash do
-                _ =
-                  Enqueue.enqueue(
-                    EmbedNote.new_debounced(note_id, user_id, priority: embed_priority),
-                    "embed_note"
-                  )
-
-                # #648 lever 1 — see ExtractNoteLinks moduledoc. Covers the
-                # whole CRDT surface (genesis included: content only ever
-                # lands in notes.content through this checkpoint).
-                _ =
-                  Enqueue.enqueue(
-                    ExtractNoteLinks.new_debounced(note_id, user_id),
-                    "extract_note_links"
+                :ok =
+                  ContentCommit.after_commit(note_id, user_id,
+                    embed_priority: embed_priority,
+                    finalize?: finalize?
                   )
 
                 # Deliver-out gap: a web-editor edit lands ONLY via this checkpoint,
@@ -557,6 +572,15 @@ defmodule Engram.Notes.CrdtCheckpoint do
         case Repo.update_all(fenced_query, set: set) do
           {1, _} ->
             prune_tail(note_id, vault_id, prune)
+
+            # #1710. AFTER the fenced write, in the same transaction: the {0, _}
+            # arm below commits the transaction too, so a history step placed
+            # before the write would record a version for a save that never
+            # happened. `note` is the PRE-write row, so its content_ciphertext
+            # is exactly the text this checkpoint replaced. Every edit that
+            # reaches a checkpoint is the user's own CRDT clients: actor "sync".
+            _ = Revisions.record_write(note, "sync", Keyword.fetch!(opts, :recording))
+
             {prev, content_hash, note.path}
 
           {0, _} ->
