@@ -12,11 +12,13 @@ defmodule Engram.Workers.DataMigrationsRunner do
   require Logger
 
   # Register every Engram.DataMigration here.
+  # The DEK-fetching VaultSlugHmac runs last, so a failure in it reaches
+  # nothing after it.
   @migrations [
     Engram.DataMigrations.IndexVersions,
-    Engram.DataMigrations.VaultSlugHmac,
     Engram.DataMigrations.ContentHashHmac,
-    Engram.DataMigrations.NoteLinkHmacs
+    Engram.DataMigrations.NoteLinkHmacs,
+    Engram.DataMigrations.VaultSlugHmac
   ]
 
   @impl Oban.Worker
