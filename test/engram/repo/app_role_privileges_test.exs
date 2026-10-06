@@ -7,6 +7,10 @@ defmodule Engram.Repo.AppRolePrivilegesTest do
   A blanket `GRANT` in a later migration would silently hand the app
   credential the power to rewrite every user's limits or corrupt the boot
   canary; this fails loudly instead.
+
+  `schema_migrations` is written only by the migrator. An app credential that
+  can delete a version row makes the next deploy re-run that migration as the
+  migrator; one that can insert a version makes a migration silently skip.
   """
   use Engram.DataCase, async: true
 
@@ -22,7 +26,10 @@ defmodule Engram.Repo.AppRolePrivilegesTest do
         {"plans", "UPDATE"},
         {"plans", "DELETE"},
         {"system_canaries", "UPDATE"},
-        {"system_canaries", "DELETE"}
+        {"system_canaries", "DELETE"},
+        {"schema_migrations", "INSERT"},
+        {"schema_migrations", "UPDATE"},
+        {"schema_migrations", "DELETE"}
       ] do
     test "engram_app lacks #{priv} on #{table}" do
       refute privilege?(unquote(table), unquote(priv))
@@ -34,7 +41,8 @@ defmodule Engram.Repo.AppRolePrivilegesTest do
   for {table, priv} <- [
         {"plans", "SELECT"},
         {"system_canaries", "SELECT"},
-        {"system_canaries", "INSERT"}
+        {"system_canaries", "INSERT"},
+        {"schema_migrations", "SELECT"}
       ] do
     test "engram_app keeps #{priv} on #{table}" do
       assert privilege?(unquote(table), unquote(priv))
