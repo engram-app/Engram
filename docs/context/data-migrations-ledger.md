@@ -60,6 +60,7 @@ touches `done?` must not be `async: true`, because the cache is node-global.
 
 | Name | Covers |
 |---|---|
+| `CrdtStateSeed` | Residue of the 2026-07-06 cutover that NULLed every `crdt_state`: each pass enqueues `BackfillCrdtState` for live-vault pairs holding a seedable note (kind note, not deleted, NULL state, no `crdt_update_log` rows) via `BackfillCrdtState.enqueue_missing/0`. A NULL-state note WITH a tail is excluded from both the enqueue and the done check, and the worker never seeds it: its real state is the un-checkpointed tail, and a snapshot seeded from content would be a second Yjs lineage that bind unions with it. Tail replay serves those notes. A note whose content never decrypts keeps it open. |
 | `IndexVersions` | Every content-current note stamped with the current chunker, keyword and embed model versions. `ReconcileEmbeddings` does the rebuild. Once done it drops the version term and skips the keyword scan, except on one tick a day (04:02 UTC) that re-verifies: a rollback then roll-forward or a restored soft-deleted vault puts stale notes back without reopening it. See `index-version-self-heal.md`. |
 
 ## Pruned (2026-10-06)
@@ -73,12 +74,16 @@ deleted, not ported; do not re-add them: `ContentHashHmac`
 Read-side compatibility (32-char hash handling, `vaults.slug` reads) stays until
 the contract release. Recover the code from git history if a restore ever needs it.
 
-## Not on the ledger, and why
+## Continuing self-heals
 
-- `BackfillCrdtHead`: a continuing self-heal. Any `crdt_state` write NULLs
-  `crdt_head`, so there is never a final "done".
-- `BackfillCrdtState`: a repair tool that must not run unsupervised
-  (`user_dek_rotation.ex` ~140).
+Work that is never "done" is a cron worker, not a data migration.
+
+- `WarmCrdtHeads` (hourly, minute 48, `:maintenance`): calls
+  `BackfillCrdtHead.enqueue_all/0` (live-vault pairs with a NULL `crdt_head`)
+  unless a `BackfillCrdtHead` job is in flight. Every CRDT persist NULLs
+  `crdt_head` (`CrdtPersistence.update_v1/4`, plus a trigger on `crdt_state`
+  writes, so `CrdtStateSeed` seeding also NULLs it), and only
+  `BackfillCrdtHead` re-warms it, so there is never a final "done".
 
 ## Next user
 
