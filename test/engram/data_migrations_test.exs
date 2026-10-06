@@ -112,12 +112,12 @@ defmodule Engram.DataMigrationsTest do
     test "finds a row owned by any tenant" do
       user = insert(:user)
       insert(:note, user: user)
-      assert DataMigrations.any_row?(fn _repo -> from(n in Note, select: 1) end)
+      assert DataMigrations.any_row?(from(n in Note, select: 1))
     end
 
     test "is false on an empty set" do
       insert(:user)
-      refute DataMigrations.any_row?(fn _repo -> from(n in Note, select: 1) end)
+      refute DataMigrations.any_row?(from(n in Note, select: 1))
     end
   end
 

@@ -40,7 +40,6 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   alias Engram.Logger.Metadata
   alias Engram.Notes.Note
   alias Engram.Repo
-  alias Engram.Vaults.Vault
   alias Engram.Workers.{EmbedNote, ExtractNoteLinks, RebuildStaleNote, RefreshKeywordVectors}
 
   require Logger
@@ -104,10 +103,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
     sweep_tenant = fn repo, remaining ->
       eligible =
-        from(n in Note, as: :note)
-        |> join(:inner, [n], v in Vault, on: v.id == n.vault_id and is_nil(v.deleted_at))
-        |> where([n], n.kind == "note")
-        |> where([n], is_nil(n.deleted_at))
+        IndexVersions.live_notes()
         # Two ways a note is stale:
         #   1. content changed since it was indexed (or was never indexed)
         #   2. it is indexed but has NO dense vectors, and a dense pass could
@@ -384,10 +380,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
     page = fn repo ->
       eligible =
-        from(n in Note, as: :note)
-        |> join(:inner, [n], v in Vault, on: v.id == n.vault_id and is_nil(v.deleted_at))
-        |> where([n], n.kind == "note" and is_nil(n.deleted_at))
-        |> where([n], n.embed_hash == n.content_hash)
+        IndexVersions.content_current_notes()
         |> where(^IndexVersions.keyword_stale_dynamic())
         # A version-stale note gets a full rebuild above, which stamps the
         # keyword version itself.

@@ -37,16 +37,30 @@ defmodule Engram.DataMigrations.IndexVersions do
   @impl true
   def run_pass do
     stale =
-      DataMigrations.any_row?(fn _repo ->
-        from(n in Note, as: :note)
-        |> join(:inner, [n], v in Vault, on: v.id == n.vault_id and is_nil(v.deleted_at))
-        |> where([n], n.kind == "note" and is_nil(n.deleted_at))
-        |> where([n], not is_nil(n.embed_hash) and n.embed_hash == n.content_hash)
-        |> where(^dynamic([n], ^stale_dynamic() or ^keyword_stale_dynamic()))
-        |> select(1)
-      end)
+      content_current_notes()
+      |> where(^dynamic([n], ^stale_dynamic() or ^keyword_stale_dynamic()))
+      |> select(1)
+      |> DataMigrations.any_row?()
 
     if stale, do: :more, else: :done
+  end
+
+  @doc """
+  Notes the index sweeps consider: kind note, not deleted, in a live vault.
+  Bound `as: :note`. Shared with `ReconcileEmbeddings` so the done check and
+  the sweeps can never disagree on which notes count.
+  """
+  @spec live_notes() :: Ecto.Query.t()
+  def live_notes do
+    from(n in Note, as: :note)
+    |> join(:inner, [n], v in Vault, on: v.id == n.vault_id and is_nil(v.deleted_at))
+    |> where([n], n.kind == "note" and is_nil(n.deleted_at))
+  end
+
+  @doc "`live_notes/0` already indexed at their current content."
+  @spec content_current_notes() :: Ecto.Query.t()
+  def content_current_notes do
+    where(live_notes(), [n], n.embed_hash == n.content_hash)
   end
 
   @doc "Notes on an older chunker, or with dense vectors from another embed model."

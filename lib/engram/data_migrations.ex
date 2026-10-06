@@ -125,20 +125,22 @@ defmodule Engram.DataMigrations do
   end
 
   @doc """
-  True if `query_for.(repo)` returns a row in any tenant. Uses the
-  maintenance repo when enabled (one query), else one query per user inside
-  that user's RLS context. Never trusts a cross-tenant read on the app pool,
-  which FORCE RLS turns into zero rows (#1349).
+  True if `queryable` returns a row in any tenant. Uses the maintenance repo
+  when enabled (one query), else one query per user inside that user's RLS
+  context, stopping at the first user with a row. Never trusts a cross-tenant
+  read on the app pool, which FORCE RLS turns into zero rows (#1349).
   """
-  @spec any_row?((module() -> Ecto.Queryable.t())) :: boolean()
-  def any_row?(query_for) do
+  @spec any_row?(Ecto.Queryable.t()) :: boolean()
+  def any_row?(queryable) do
     case Repo.maintenance() do
       Repo ->
-        TenantScan.flat_map_users(fn _user_id -> [Repo.exists?(query_for.(Repo))] end)
-        |> Enum.any?()
+        Enum.any?(TenantScan.user_ids(), fn user_id ->
+          {:ok, found} = Repo.with_tenant(user_id, fn -> Repo.exists?(queryable) end)
+          found
+        end)
 
       maintenance ->
-        maintenance.exists?(query_for.(maintenance))
+        maintenance.exists?(queryable)
     end
   end
 
