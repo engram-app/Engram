@@ -24,7 +24,11 @@ defmodule Engram.Auth.DeviceFlow do
   # Characters excluding ambiguous: 0, O, 1, I, L
   @user_code_chars ~c"ABCDEFGHJKMNPQRSTUVWXYZ2345679"
 
-  def start_device_flow(client_id, vault_name \\ nil) do
+  # Bound the stored header: it is attacker-controlled (the start endpoint is
+  # unauthenticated) and is returned to the user who claims the code.
+  @max_user_agent_bytes 512
+
+  def start_device_flow(client_id, vault_name \\ nil, user_agent \\ nil) do
     device_code = Base.encode16(:crypto.strong_rand_bytes(@device_code_bytes), case: :lower)
     user_code = generate_user_code()
 
@@ -40,7 +44,8 @@ defmodule Engram.Auth.DeviceFlow do
       client_id: client_id,
       status: "pending",
       expires_at: expires_at,
-      vault_name: vault_name
+      vault_name: vault_name,
+      user_agent: truncate_user_agent(user_agent)
     })
     |> Repo.insert(skip_tenant_check: true)
   end
@@ -96,6 +101,26 @@ defmodule Engram.Auth.DeviceFlow do
   end
 
   @doc """
+  The User-Agent the plugin sent at start, for the user who claimed the code
+  via `view_pending_code/2`. `nil` for anyone else.
+  """
+  @spec pending_user_agent(String.t(), String.t()) :: String.t() | nil
+  def pending_user_agent(user_code, user_id) when is_binary(user_id) do
+    Repo.one(
+      from(da in DeviceAuthorization,
+        where: da.user_code == ^user_code and da.viewer_user_id == ^user_id,
+        select: da.user_agent
+      ),
+      skip_tenant_check: true
+    )
+  end
+
+  defp truncate_user_agent(ua) when is_binary(ua),
+    do: binary_part(ua, 0, min(byte_size(ua), @max_user_agent_bytes))
+
+  defp truncate_user_agent(_), do: nil
+
+  @doc """
   True when `device_code` names a real authorization that is still pending
   and unexpired. Gate for `EngramWeb.DeviceChannel` joins — without it the
   `device:*` topic space would be an unauthenticated fan-out surface anyone
@@ -142,7 +167,14 @@ defmodule Engram.Auth.DeviceFlow do
     end
   end
 
-  def authorize_device(user_code, user, vault_id) do
+  def authorize_device(user_code, user, vault_id, label \\ nil) do
+    case Engram.OAuth.resolve_label(label) do
+      {:ok, label} -> do_authorize_device(user_code, user, vault_id, label)
+      :error -> {:error, :invalid_label}
+    end
+  end
+
+  defp do_authorize_device(user_code, user, vault_id, label) do
     now = DateTime.utc_now()
 
     query =
@@ -175,7 +207,8 @@ defmodule Engram.Auth.DeviceFlow do
             |> DeviceAuthorization.authorize_changeset(%{
               user_id: user.id,
               vault_id: vault_id,
-              status: "authorized"
+              status: "authorized",
+              label: label
             })
             |> Repo.update(skip_tenant_check: true)
         end
@@ -279,7 +312,7 @@ defmodule Engram.Auth.DeviceFlow do
     |> Repo.update!(skip_tenant_check: true)
 
     access_token = Accounts.generate_jwt(auth.user, @device_claims)
-    {raw_refresh, _hash} = create_refresh_token(auth.user_id, auth.vault_id)
+    {raw_refresh, _hash} = create_refresh_token(auth.user_id, auth.vault_id, nil, auth.label)
 
     {:ok,
      %{
@@ -298,7 +331,12 @@ defmodule Engram.Auth.DeviceFlow do
     access_token = Accounts.generate_jwt(old_token.user, @device_claims)
 
     {raw_refresh, _hash} =
-      create_refresh_token(old_token.user_id, old_token.vault_id, old_token.family_id)
+      create_refresh_token(
+        old_token.user_id,
+        old_token.vault_id,
+        old_token.family_id,
+        old_token.label
+      )
 
     {:ok,
      %{
@@ -328,7 +366,7 @@ defmodule Engram.Auth.DeviceFlow do
 
   # A nil family_id starts a new family (fresh login); rotation passes the old
   # token's family_id to keep the lineage together.
-  defp create_refresh_token(user_id, vault_id, family_id \\ nil) do
+  defp create_refresh_token(user_id, vault_id, family_id, label) do
     raw =
       @refresh_token_prefix <>
         Base.url_encode64(:crypto.strong_rand_bytes(@refresh_token_bytes), padding: false)
@@ -346,6 +384,7 @@ defmodule Engram.Auth.DeviceFlow do
       family_id: family_id || Ecto.UUID.generate(),
       user_id: user_id,
       vault_id: vault_id,
+      label: label,
       expires_at: expires_at
     })
     |> Repo.insert!(skip_tenant_check: true)

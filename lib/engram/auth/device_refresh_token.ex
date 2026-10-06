@@ -8,6 +8,7 @@ defmodule Engram.Auth.DeviceRefreshToken do
     field :family_id, Ecto.UUID
     field :expires_at, :utc_datetime
     field :revoked_at, :utc_datetime
+    field :label, :string
 
     belongs_to :user, Engram.Accounts.User
     belongs_to :vault, Engram.Vaults.Vault
@@ -17,7 +18,7 @@ defmodule Engram.Auth.DeviceRefreshToken do
 
   def changeset(token, attrs) do
     token
-    |> cast(attrs, [:token_hash, :family_id, :user_id, :vault_id, :expires_at])
+    |> cast(attrs, [:token_hash, :family_id, :user_id, :vault_id, :expires_at, :label])
     |> validate_required([:token_hash, :family_id, :user_id, :vault_id, :expires_at])
     |> unique_constraint(:token_hash)
     |> foreign_key_constraint(:user_id)

@@ -36,6 +36,22 @@ defmodule EngramWeb.DeviceAuthControllerTest do
       assert resp["interval"] == 5
     end
 
+    test "records the plugin's User-Agent on the authorization row", %{conn: conn} do
+      conn =
+        conn
+        |> put_req_header("user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) Mobile")
+        |> post("/api/auth/device", %{client_id: "test_client"})
+
+      resp = json_response(conn, 200)
+
+      auth =
+        Repo.get_by!(Engram.Auth.DeviceAuthorization, [device_code: resp["device_code"]],
+          skip_tenant_check: true
+        )
+
+      assert auth.user_agent =~ "iPhone"
+    end
+
     test "persists optional vault_name on the authorization row", %{conn: conn} do
       reader = insert(:user)
 
@@ -74,6 +90,35 @@ defmodule EngramWeb.DeviceAuthControllerTest do
         post(conn, "/api/auth/device/authorize", %{user_code: auth.user_code, vault_id: vault.id})
 
       assert %{"ok" => true} = json_response(conn, 200)
+    end
+
+    test "stores the label and rejects an over-long one with 422", %{
+      authed_conn: conn,
+      user: user
+    } do
+      vault = insert(:vault, user: user)
+      {:ok, auth} = DeviceFlow.start_device_flow("client_1")
+
+      bad =
+        post(conn, "/api/auth/device/authorize", %{
+          user_code: auth.user_code,
+          vault_id: vault.id,
+          label: String.duplicate("a", 121)
+        })
+
+      assert %{"error" => "invalid_label"} = json_response(bad, 422)
+
+      ok =
+        post(conn, "/api/auth/device/authorize", %{
+          user_code: auth.user_code,
+          vault_id: vault.id,
+          label: "Work laptop"
+        })
+
+      assert %{"ok" => true} = json_response(ok, 200)
+
+      assert Repo.get!(Engram.Auth.DeviceAuthorization, auth.id, skip_tenant_check: true).label ==
+               "Work laptop"
     end
 
     # The plugin's live path hangs off this broadcast. Asserting it HERE and

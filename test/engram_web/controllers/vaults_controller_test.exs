@@ -73,6 +73,15 @@ defmodule EngramWeb.VaultsControllerTest do
       assert body["user_code_valid"] == true
     end
 
+    test "returns the device's user agent so /link can suggest a connection name",
+         %{conn: conn} do
+      {:ok, auth} =
+        DeviceFlow.start_device_flow("client_test", nil, "Mozilla/5.0 (Windows NT 10.0)")
+
+      body = conn |> get("/api/vaults?user_code=#{auth.user_code}") |> json_response(200)
+      assert body["device_user_agent"] == "Mozilla/5.0 (Windows NT 10.0)"
+    end
+
     # A pending code with no hint is still a code the user can link with, so
     # it must report valid. /link keys its reject on `user_code_valid`, not on
     # a missing name — conflating the two is the bug this field exists to stop.
