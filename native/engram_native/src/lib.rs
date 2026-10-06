@@ -380,6 +380,15 @@ fn text_diff(current: &str, incoming: &str) -> ((usize, usize, usize, usize), us
 
 sized_nif!(text_diff, text_diff_nif, text_diff_dirty_nif, (current: &str, incoming: &str) [current, incoming] -> ((usize, usize, usize, usize), usize));
 
+/// `Rewriter.apply_edits!/3`'s UTF-16 offsets: one per byte offset (sorted,
+/// each on a char boundary), in one pass, and the peak. Raises otherwise.
+fn utf16_offsets(text: &str, at: Vec<usize>) -> NifResult<(Vec<usize>, usize)> {
+    let (out, peak) = memory::measured(|| text_diff::utf16_offsets(text, &at));
+    Ok((out.ok_or(Error::BadArg)?, peak))
+}
+
+sized_nif!(utf16_offsets, utf16_offsets_nif, utf16_offsets_dirty_nif, (text: &str, at: Vec<usize>) [text, at] -> NifResult<(Vec<usize>, usize)>);
+
 /// `Engram.MCP.Sections`' view of a note: `{headings, explained_lines,
 /// safe_ranges}` (see outline.rs), and the peak. Raises on a sourcepos
 /// outside the text, as the Elixir version did. Always dirty: comrak takes

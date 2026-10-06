@@ -53,6 +53,7 @@ defmodule Engram.Links.Rewriter do
   alias Engram.Links
   alias Engram.Links.Parser
   alias Engram.Logger.Metadata
+  alias Engram.Native
   alias Engram.Notes
 
   alias Engram.Notes.{
@@ -120,13 +121,15 @@ defmodule Engram.Links.Rewriter do
   @doc false
   @spec splice(String.t(), [map()]) :: String.t()
   def splice(text, edits) do
-    edits
-    |> Enum.sort_by(& &1.rel_start, :desc)
-    |> Enum.reduce(text, fn e, acc ->
-      binary_part(acc, 0, e.rel_start) <>
-        e.new <>
-        binary_part(acc, e.rel_start + e.len, byte_size(acc) - e.rel_start - e.len)
-    end)
+    # One pass as iodata: copying the whole note per edit was O(edits x size).
+    {parts, pos} =
+      edits
+      |> Enum.sort_by(& &1.rel_start)
+      |> Enum.reduce({[], 0}, fn e, {acc, pos} ->
+        {[e.new, binary_part(text, pos, e.rel_start - pos) | acc], e.rel_start + e.len}
+      end)
+
+    IO.iodata_to_binary(Enum.reverse(parts, [binary_part(text, pos, byte_size(text) - pos)]))
   end
 
   # build_target/5 prefetches the candidate sets once per job batch (a large
@@ -419,13 +422,21 @@ defmodule Engram.Links.Rewriter do
   def apply_edits!(doc, body, edits) do
     text = Yex.Doc.get_text(doc, CrdtBridge.text_name())
 
+    edits = Enum.sort_by(edits, & &1.rel_start)
+
+    # Every edit's start and end in UTF-16 units, from one pass over the
+    # body (was a conversion of the whole prefix per edit). Applied last to
+    # first, so an edit never moves the offsets of the ones still to come.
+    spans =
+      body
+      |> Native.utf16_offsets(Enum.flat_map(edits, &[&1.rel_start, &1.rel_start + &1.len]))
+      |> Enum.chunk_every(2)
+      |> Enum.zip(edits)
+      |> Enum.reverse()
+
     Yex.Doc.transaction(doc, "link_rewrite", fn ->
-      edits
-      |> Enum.sort_by(& &1.rel_start, :desc)
-      |> Enum.each(fn e ->
-        off = CrdtBridge.utf16_len(binary_part(body, 0, e.rel_start))
-        len = CrdtBridge.utf16_len(binary_part(body, e.rel_start, e.len))
-        Yex.Text.delete(text, off, len)
+      Enum.each(spans, fn {[off, stop], e} ->
+        Yex.Text.delete(text, off, stop - off)
         Yex.Text.insert(text, off, e.new)
       end)
     end)

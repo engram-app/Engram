@@ -115,6 +115,24 @@ old scan, then `md_outline_golden.json.gz` (2,508 notes). The only
 divergence was an old bug: two `$$` pairs sharing a CRLF line shifted every
 later line number by one.
 
+`utf16_offsets` (2026-10-06, #1877) batches the link rewriter's CRDT
+offsets: every edit's start and end in UTF-16 units from one pass over the
+body, reusing `text_diff`'s unit count. Before, each edit converted the
+whole prefix with `:unicode` (~44 ms per MB). `Rewriter.apply_edits!/3` on
+a ~1 MB emoji-heavy note, Yex edits included, min of 3-5, loaded box:
+
+| Edits | Before | After |
+|---|---|---|
+| 10 | 856 ms | 67 ms |
+| 100 | 7,799 ms | 239 ms |
+| 1,000 | 82,783 ms | 2,861 ms |
+
+What remains is Yex itself (each utf16-offset edit walks the text). Heap
+peaks were already small (0.9-1.6 MB before, 8-416 KB after); the NIF's
+native peak is its output list. The legacy `splice/2` copied the whole
+note per edit (12-127 ms, ~23 MB of sampled binary garbage at 100+ edits);
+it is one iodata pass now (0.5-2.4 ms). No NIF there: stdlib was enough.
+
 Measured on the keyword encoder (dev box, minimum of 5 interleaved runs):
 
 | Input | Elixir | Rust | Native peak |
@@ -264,10 +282,10 @@ bumping pulldown-cmark: `ENGRAM_FUZZ_CASES=2000000 ENGRAM_FUZZ_SEED=7 cargo test
 ## Scheduling
 
 `schedule = "DirtyCpu"` on everything whose input size the caller controls,
-EXCEPT small inputs on a hot path. Nine NIFs export a normal and a
+EXCEPT small inputs on a hot path. Ten NIFs export a normal and a
 `_dirty_nif` variant: `link_extract`, `note_title`, `note_meta`, `chunk`,
-`frontmatter_split`, `frontmatter_parse`, `text_diff`, `hmac_hex_many`,
-`json_decode`. `md_outline` does not: comrak takes ~10 ms on 16 KB of
+`frontmatter_split`, `frontmatter_parse`, `text_diff`, `utf16_offsets`,
+`hmac_hex_many`, `json_decode`. `md_outline` does not: comrak takes ~10 ms on 16 KB of
 dense markup (tight list, `# h` lines; 0.1 ms on prose), so it is always
 dirty. Up to 16 KB of input (`@inline_max`, well under 1 ms) runs
 on the calling scheduler. A note write must not queue behind a long

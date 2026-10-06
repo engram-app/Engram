@@ -44,6 +44,7 @@ defmodule Engram.Native do
     {:frontmatter_split, :frontmatter_split_nif, :frontmatter_split_dirty_nif, 1},
     {:frontmatter_parse, :frontmatter_parse_nif, :frontmatter_parse_dirty_nif, 1},
     {:text_diff, :text_diff_nif, :text_diff_dirty_nif, 2},
+    {:utf16_offsets, :utf16_offsets_nif, :utf16_offsets_dirty_nif, 2},
     {:hmac_hex_many, :hmac_hex_many_nif, :hmac_hex_many_dirty_nif, 3},
     {:json_decode, :json_decode_nif, :json_decode_dirty_nif, 1}
   ]
@@ -125,6 +126,15 @@ defmodule Engram.Native do
   """
   def md_outline(text) when is_binary(text),
     do: call(:md_outline, text, %{dirty: true}, fn -> md_outline_nif(text) end)
+
+  @doc """
+  The UTF-16 offset (the unit of every `Yex.Text` offset) of each byte
+  offset in `offsets` into `text`, in one pass. `offsets` must be sorted
+  and on codepoint boundaries; anything else raises `ArgumentError`.
+  Valid UTF-8 only.
+  """
+  def utf16_offsets(text, offsets) when is_binary(text) and is_list(offsets),
+    do: sized(:utf16_offsets, text, [text, offsets])
 
   # `input` as for `call/4`; up to @inline_max bytes of it runs `<name>_nif`
   # on the calling scheduler, more runs `<name>_dirty_nif`.
