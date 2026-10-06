@@ -41,15 +41,7 @@ defmodule Engram.ObanQueueConfigTest do
   ]
 
   test "maintenance runs exactly the cron workers" do
-    crons =
-      :engram
-      |> Application.get_env(Oban)
-      |> Keyword.fetch!(:plugins)
-      |> Enum.find_value(fn
-        {Oban.Plugins.Cron, opts} -> Keyword.fetch!(opts, :crontab)
-        _ -> nil
-      end)
-      |> MapSet.new(fn {_expr, worker} -> worker end)
+    crons = MapSet.new(Engram.Test.ObanWorkers.crontab(), fn {_expr, worker} -> worker end)
 
     on_maintenance =
       for mod <- Engram.Test.ObanWorkers.all(),

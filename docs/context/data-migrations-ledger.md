@@ -80,8 +80,9 @@ deleted, not ported; do not re-add them: `ContentHashHmac`
 (`BackfillContentHashHmac`, `ContentHash.Backfill`), `NoteLinkHmacs`
 (`BackfillNoteLinks`, `Links.Backfill`), `VaultSlugHmac`
 (`Vaults.backfill_slug_hmacs/1`), and the operator worker `ReindexKeyword`.
-Read-side compatibility (32-char hash handling, `vaults.slug` reads) stays until
-the contract release. Recover the code from git history if a restore ever needs it.
+There is no 32-char hash compatibility code: a legacy MD5 `content_hash` simply
+never matches a fresh HMAC, so such a note reads as content-stale and re-embeds.
+`vaults.slug` reads stay until the contract release. Recover the code from git history if a restore ever needs it.
 
 ## Stuck migrations
 

@@ -9,15 +9,7 @@ defmodule Engram.ObanCronTest do
 
   alias Oban.Cron.Expression
 
-  defp crontab do
-    :engram
-    |> Application.get_env(Oban)
-    |> Keyword.fetch!(:plugins)
-    |> Enum.find_value(fn
-      {Oban.Plugins.Cron, opts} -> Keyword.fetch!(opts, :crontab)
-      _ -> nil
-    end)
-  end
+  defp crontab, do: Engram.Test.ObanWorkers.crontab()
 
   # `@reboot` entries hold no minute-of-day, so the slot logic skips them.
   defp timed, do: Enum.reject(crontab(), fn {expr, _} -> expr == "@reboot" end)

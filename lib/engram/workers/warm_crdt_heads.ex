@@ -18,12 +18,9 @@ defmodule Engram.Workers.WarmCrdtHeads do
   @impl Oban.Worker
   def perform(_job) do
     # BackfillCrdtHead has no `unique`: enqueueing while a chain runs would
-    # duplicate it.
-    # perform/1 must return :ok; the enqueue count is discarded.
+    # duplicate it. The enqueue count is discarded.
     _ =
-      if DataMigrations.jobs_in_flight?(BackfillCrdtHead),
-        do: :ok,
-        else: BackfillCrdtHead.enqueue_all()
+      unless DataMigrations.jobs_in_flight?(BackfillCrdtHead), do: BackfillCrdtHead.enqueue_all()
 
     :ok
   end

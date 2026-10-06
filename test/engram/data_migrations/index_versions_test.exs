@@ -39,6 +39,17 @@ defmodule Engram.DataMigrations.IndexVersionsTest do
     assert IndexVersions.name() =~ "keyword=#{KeywordIndex.version()}"
   end
 
+  test "the name carries the embed model, and \"none\" when there is none" do
+    Application.put_env(:engram, :embed_model, "model-x")
+    on_exit(fn -> Application.delete_env(:engram, :embed_model) end)
+    assert IndexVersions.name() =~ ~r/,model=model-x$/
+
+    # The test embedder declares no default model, so tracking is off.
+    Application.delete_env(:engram, :embed_model)
+    assert Indexing.embed_model() == nil
+    assert IndexVersions.name() =~ ~r/,model=none$/
+  end
+
   test "every note current: done", %{user: u, vault: v} do
     current!(insert(:note, user: u, vault: v))
     assert IndexVersions.run_pass() == :done
