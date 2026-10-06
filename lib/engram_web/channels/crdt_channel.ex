@@ -1157,7 +1157,7 @@ defmodule EngramWeb.CrdtChannel do
       #
       # Fed the row the read-back just loaded: re-reading it (and the user)
       # inside fanout_idle/3 cost a tenant transaction per create (#1877).
-      CrdtDeliver.fanout_idle_row(user, vault.id, row)
+      CrdtDeliver.fanout_idle(user, vault.id, row)
     end
 
     # #476: the caller needs to know WHICH kind of "not stored" this was, because

@@ -110,44 +110,26 @@ defmodule Engram.Notes.CrdtDeliver do
   # and suppresses client-side by applying with REMOTE_ORIGIN (no re-broadcast)
   # — and a Yjs re-apply of state it already holds is a no-op.
   @doc """
-  Broadcast `note_id`'s committed Yjs state on the vault's `sync:` topic so
+  Broadcast a note's committed Yjs state on the vault's `sync:` topic so
   devices with no open room for it converge room-free. Paced by `FanoutPacer`.
   Best-effort: a state-less row or a load failure skips silently. Returns `:ok`.
+
+  Takes ids, or a caller's already-loaded `%User{}` and `%Note{}` (the detached
+  genesis seed holds both from its post-commit read-back) so neither is read
+  a second time.
   """
-  @spec fanout_idle(String.t(), String.t(), String.t()) :: :ok
-  def fanout_idle(user_id, vault_id, note_id) do
+  @spec fanout_idle(String.t() | Accounts.User.t(), String.t(), String.t() | Note.t()) :: :ok
+  def fanout_idle(user, vault_id, note) do
     _ =
-      with {:ok, state, seq} when is_binary(state) <- load_merged_state(user_id, note_id) do
-        emit_idle(user_id, vault_id, note_id, state, seq)
+      with {:ok, state, seq} when is_binary(state) <- load_merged_state(user, note) do
+        emit_idle(id_of(user), vault_id, id_of(note), state, seq)
       end
 
     :ok
   end
 
-  @doc """
-  `fanout_idle/3` for a caller that already holds the committed row and the
-  user from its own post-commit read-back (the detached genesis seed), so
-  neither is read a second time. Same payload, same skips, never raises.
-  """
-  @spec fanout_idle_row(Accounts.User.t(), String.t(), Note.t()) :: :ok
-  def fanout_idle_row(user, vault_id, %Note{id: note_id, seq: seq} = note) do
-    # A socket's user can predate its first-write DEK; ensure_user_dek/1 is
-    # free when the struct already carries one.
-    _ =
-      with {:ok, user} <- Crypto.ensure_user_dek(user),
-           {:ok, state, _seq} when is_binary(state) <- merged_state_of(note, user) do
-        emit_idle(user.id, vault_id, note_id, state, seq)
-      else
-        {:ok, nil, _seq} -> :ok
-        {:error, reason} -> log_state_load_failure(note_id, reason)
-      end
-
-    :ok
-  rescue
-    err -> log_state_load_failure(note_id, Metadata.safe_reason(err))
-  catch
-    kind, reason -> log_state_load_failure(note_id, "#{kind}: #{Metadata.safe_reason(reason)}")
-  end
+  defp id_of(%{id: id}), do: id
+  defp id_of(id) when is_binary(id), do: id
 
   defp emit_idle(user_id, vault_id, note_id, state, seq) do
     head =
@@ -351,7 +333,36 @@ defmodule Engram.Notes.CrdtDeliver do
   #                        plaintext re-encode. No seq: the fan-out is
   #                        skipped entirely in this case (see fanout_idle).
   # Never raises/exits/throws (delivery must not fail the write).
-  defp load_merged_state(user_id, note_id) do
+  defp load_merged_state(user, note) do
+    case read_merged_state(user, note) do
+      {:ok, _state_or_nil, _seq} = ok ->
+        ok
+
+      {:error, reason} = error ->
+        log_state_load_failure(id_of(note), reason)
+        error
+    end
+  rescue
+    err ->
+      # `:reason` is NOT scrubbed by RedactFilter — its own moduledoc calls that
+      # out and tells call sites that might log an error struct there to use a
+      # different key. This loads CRDT state, so the term that blew up can be a
+      # Yjs doc or note content.
+      log_state_load_failure(id_of(note), Metadata.safe_reason(err))
+      {:error, :raised}
+  catch
+    kind, reason ->
+      log_state_load_failure(id_of(note), "#{kind}: #{Metadata.safe_reason(reason)}")
+      {:error, :caught}
+  end
+
+  # A socket's user can predate its first-write DEK; ensure_user_dek/1 is free
+  # when the struct already carries one.
+  defp read_merged_state(%Accounts.User{} = user, %Note{} = note) do
+    with {:ok, user} <- Crypto.ensure_user_dek(user), do: merged_state_of(note, user)
+  end
+
+  defp read_merged_state(user_id, note_id) do
     user = Accounts.get_user!(user_id)
 
     result =
@@ -364,29 +375,9 @@ defmodule Engram.Notes.CrdtDeliver do
 
     # with_tenant wraps the fun's return in {:ok, _} (Ecto transaction).
     case result do
-      {:ok, {:ok, state_or_nil, seq}} ->
-        {:ok, state_or_nil, seq}
-
-      {:ok, {:error, reason}} ->
-        log_state_load_failure(note_id, reason)
-        {:error, reason}
-
-      {:error, reason} ->
-        log_state_load_failure(note_id, {:tenant_txn, reason})
-        {:error, reason}
+      {:ok, inner} -> inner
+      {:error, reason} -> {:error, {:tenant_txn, reason}}
     end
-  rescue
-    err ->
-      # `:reason` is NOT scrubbed by RedactFilter — its own moduledoc calls that
-      # out and tells call sites that might log an error struct there to use a
-      # different key. This loads CRDT state, so the term that blew up can be a
-      # Yjs doc or note content.
-      log_state_load_failure(note_id, Metadata.safe_reason(err))
-      {:error, :raised}
-  catch
-    kind, reason ->
-      log_state_load_failure(note_id, "#{kind}: #{Metadata.safe_reason(reason)}")
-      {:error, :caught}
   end
 
   defp merged_state_of(%Note{crdt_state_ciphertext: nil, seq: seq}, _user), do: {:ok, nil, seq}
