@@ -57,10 +57,14 @@ defmodule Engram.Logs do
   @doc """
   Insert a batch of log entries for a user.
   Returns {:ok, count} with the number of entries inserted.
-  """
-  def insert_logs(_user, []), do: {:ok, 0}
 
-  def insert_logs(user, entries) when is_list(entries) do
+  `vault_id` stamps the vault the request addressed, so `list_logs/2` can keep
+  a credential scoped to one vault out of another vault's lines.
+  """
+  def insert_logs(user, entries, vault_id \\ nil)
+  def insert_logs(_user, [], _vault_id), do: {:ok, 0}
+
+  def insert_logs(user, entries, vault_id) when is_list(entries) do
     now = DateTime.utc_now(:second)
 
     {kept, dropped} = take_bounded(entries)
@@ -82,6 +86,7 @@ defmodule Engram.Logs do
       Enum.map(bounded, fn e ->
         %{
           user_id: user.id,
+          vault_id: vault_id,
           ts: e.ts,
           level: e.level,
           category: e.category,
@@ -164,6 +169,9 @@ defmodule Engram.Logs do
   @doc """
   Query logs for a user. Supports filtering by level, category, since timestamp.
   Returns newest first, up to `limit` entries.
+
+  `:vault_id` restricts to one vault's lines. The HTTP read always passes it;
+  NULL-vault (pre-#1866) rows never match.
   """
   def list_logs(user, opts \\ []) do
     level = Keyword.get(opts, :level)
@@ -177,6 +185,12 @@ defmodule Engram.Logs do
         order_by: [desc: l.ts],
         limit: ^limit
       )
+
+    query =
+      case Keyword.fetch(opts, :vault_id) do
+        {:ok, vault_id} -> where(query, [l], l.vault_id == ^vault_id)
+        :error -> query
+      end
 
     query = if level, do: where(query, [l], l.level == ^level), else: query
     query = if category, do: where(query, [l], l.category == ^category), else: query

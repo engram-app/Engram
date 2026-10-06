@@ -16,7 +16,7 @@ defmodule EngramWeb.LogsController do
 
   def ingest(conn, %{"logs" => logs}) when is_list(logs) do
     user = conn.assigns.current_user
-    {:ok, count} = Logs.insert_logs(user, logs)
+    {:ok, count} = Logs.insert_logs(user, logs, conn.assigns.current_vault.id)
     json(conn, %{ok: true, count: count})
   end
 
@@ -39,8 +39,10 @@ defmodule EngramWeb.LogsController do
   def index(conn, params) do
     user = conn.assigns.current_user
 
+    # Scoped to the addressed vault, not just the user: a credential restricted
+    # to vault A must not read vault B's lines (#1866).
     opts =
-      []
+      [vault_id: conn.assigns.current_vault.id]
       |> maybe_add(:level, params["level"])
       |> maybe_add(:category, params["category"])
       |> maybe_add_since(params["since"])
