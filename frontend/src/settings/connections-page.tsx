@@ -268,9 +268,8 @@ function ConnectionCard({
 			<Button
 				type="button"
 				variant="destructive"
-				size="sm"
 				onClick={onRevoke}
-				className="shrink-0 self-center"
+				className="mr-3 shrink-0 self-center"
 			>
 				{t("Revoke")}
 			</Button>
@@ -374,12 +373,7 @@ function PatSection({
 												: "—"}
 										</td>
 										<td className="px-4 py-3 text-right">
-											<Button
-												type="button"
-												variant="destructive"
-												size="sm"
-												onClick={() => onRevoke(p)}
-											>
+											<Button type="button" variant="destructive" onClick={() => onRevoke(p)}>
 												{t("Revoke")}
 											</Button>
 										</td>

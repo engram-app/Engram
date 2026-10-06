@@ -175,12 +175,7 @@ export default function InvitesTab() {
 									{i.expires_at ? new Date(i.expires_at).toLocaleDateString(localeTag) : t("never")}
 								</td>
 								<td className="py-2 text-right">
-									<Button
-										type="button"
-										variant="destructive"
-										size="sm"
-										onClick={() => revoke(i.id)}
-									>
+									<Button type="button" variant="destructive" onClick={() => revoke(i.id)}>
 										{t("Revoke")}
 									</Button>
 								</td>

@@ -64,7 +64,6 @@ export function SessionsSection() {
 							{!isCurrent && (
 								<Button
 									variant="destructive"
-									size="sm"
 									aria-label={t("Revoke {name}", { name })}
 									onClick={() => revoke(s)}
 								>
