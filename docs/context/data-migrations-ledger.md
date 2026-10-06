@@ -61,9 +61,17 @@ touches `done?` must not be `async: true`, because the cache is node-global.
 | Name | Covers |
 |---|---|
 | `IndexVersions` | Every content-current note stamped with the current chunker, keyword and embed model versions. `ReconcileEmbeddings` does the rebuild. Once done it drops the version term and skips the keyword scan, except on one tick a day (04:02 UTC) that re-verifies: a rollback then roll-forward or a restored soft-deleted vault puts stale notes back without reopening it. See `index-version-self-heal.md`. |
-| `VaultSlugHmac` | Clears plaintext `vaults.slug` after `slug_hmac` / `slug_suffixed` are set. Removed with the contract release that drops the column. |
-| `ContentHashHmac` | Legacy 32-char MD5 `content_hash` to HMAC-SHA256, via the `BackfillContentHashHmac` chain. |
-| `NoteLinkHmacs` | Rows predating link extraction (#591): NULL `basename_hmac`, no `note_links` edges, via the `BackfillNoteLinks` chain, enqueued only for live-vault pairs with a gap. Done covers a missing `basename_hmac` only. The chain's final links scope has no needs-work predicate, so a discarded last links job is not detected. |
+
+## Pruned (2026-10-06)
+
+Prod audit (4,338 live notes): legacy MD5 hashes 0, missing `basename_hmac` 0,
+plaintext vault slugs 0, version-stale 0. These finished one-time backfills were
+deleted, not ported; do not re-add them: `ContentHashHmac`
+(`BackfillContentHashHmac`, `ContentHash.Backfill`), `NoteLinkHmacs`
+(`BackfillNoteLinks`, `Links.Backfill`), `VaultSlugHmac`
+(`Vaults.backfill_slug_hmacs/1`), and the operator worker `ReindexKeyword`.
+Read-side compatibility (32-char hash handling, `vaults.slug` reads) stays until
+the contract release. Recover the code from git history if a restore ever needs it.
 
 ## Not on the ledger, and why
 
@@ -71,8 +79,6 @@ touches `done?` must not be `async: true`, because the cache is node-global.
   `crdt_head`, so there is never a final "done".
 - `BackfillCrdtState`: a repair tool that must not run unsupervised
   (`user_dek_rotation.ex` ~140).
-- `ReindexKeyword`: an operator tool. `IndexVersions` covers keyword-version
-  changes.
 
 ## Next user
 

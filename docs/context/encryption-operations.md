@@ -223,7 +223,7 @@ If `dek_version` did not advance OR `dek_rotation_locked_at` is still set, rotat
 
 DEK rotation has NO clean rollback once `users.encrypted_dek` is flipped (final phase of the orchestrator). Pre-flip rollback: re-acquire the lock, manually clear `attachments.dek_version_pending` and revert any partially-rotated rows from a backup. Post-flip rollback: not supported. Restore from a database snapshot taken before the rotation if absolutely required.
 
-The lock-during-rotation contract, `RotationLockCheck` plug for REST routes plus `RotationGate` checks in the channel gate (`EngramWeb.ChannelGate`), CRDT persistence and Oban writers (`BackfillContentHashHmac`, `BackfillCrdtHead`), blocks all per-user write paths during the rotation window. Reads are also gated to avoid the brief sweep-progress window where rotated rows would decrypt-fail under the still-cached old DEK. The post-flip risks are operator error in the rotation command itself (catastrophic but defended by pre-flight checks above) and any new writer that accesses the user's DEK without going through the gate.
+The lock-during-rotation contract, `RotationLockCheck` plug for REST routes plus `RotationGate` checks in the channel gate (`EngramWeb.ChannelGate`), CRDT persistence and Oban writers (`BackfillCrdtHead`), blocks all per-user write paths during the rotation window. Reads are also gated to avoid the brief sweep-progress window where rotated rows would decrypt-fail under the still-cached old DEK. The post-flip risks are operator error in the rotation command itself (catastrophic but defended by pre-flight checks above) and any new writer that accesses the user's DEK without going through the gate.
 
 ### Half-state recovery (after a mid-attachment crash)
 
@@ -258,41 +258,11 @@ If S3 versioning is not available or the restore fails, the data is lost — the
 
 ---
 
-## Content-hash MD5 → HMAC backfill (Phase A)
+## Content-hash MD5 to HMAC backfill (removed)
 
-`content_hash` moved from plain MD5 to a per-user HKDF-derived HMAC-SHA256 on
-2026-05-06. Rows written before that carry a 32-char MD5; everything the app
-recomputes today is 64-char HMAC, so a stale row never matches and sync/dedup
-sees it as perpetually changed.
-
-**When you need this:** a restore from a pre-2026-05-06 backup, or a self-host
-instance upgrading across that change. Prod does not need it — the
-`DROP SCHEMA public CASCADE` wipe on 2026-06-11 post-dates the HMAC path by
-five weeks, so every current row was already written with an HMAC hash.
-
-### Enqueue
-
-    /app/bin/engram rpc 'Engram.ContentHash.Backfill.enqueue_all()'
-
-(Prod: run it through `aws ecs execute-command` as in the DEK rotation section above.)
-
-Returns `%{notes: N, attachments: M}` — the number of `BackfillContentHashHmac`
-jobs enqueued per scope, one per (user, vault) pair that still holds a legacy
-MD5. Each scope is enqueued atomically (`Oban.insert_all/1`), and the pair
-counts are logged before the insert, so a failure still tells you what was
-outstanding.
-
-**It must be `rpc`, not a Mix task.** `Mix` is not part of the release (see
-`releases/0` in `mix.exs`), so `Mix.Tasks.Engram.ContentHashHmac.run([])` raises
-`UndefinedFunctionError` in a container. The Mix task is a dev-only wrapper.
-This was #1311.
-
-### Verify
-
-Idempotent — the scan and the worker both filter on `length(content_hash) = 32`,
-so a re-run after a partial pass is a no-op. Completion is `enqueue_all()`
-returning `%{notes: 0, attachments: 0}`.
-
-Watch the `:crypto_backfill` queue for discarded jobs; the worker self-re-enqueues
-per batch until each vault is exhausted, and it snoozes 60s while a per-user DEK
-rotation holds the `RotationGate`.
+`content_hash` moved from MD5 to a per-user HMAC-SHA256 on 2026-05-06. The
+one-time backfill (`Engram.ContentHash.Backfill`, `BackfillContentHashHmac`,
+the `engram.content_hash_hmac` Mix task) was deleted after the 2026-10-06 prod
+audit found zero legacy 32-char hashes. Read paths still treat a 32-char hash
+as stale. A restore from a pre-2026-05-06 backup would need the backfill back
+from git history (`git log --diff-filter=D -- lib/engram/content_hash/backfill.ex`).

@@ -39,11 +39,10 @@ note write (REST / MCP / CRDT checkpoint)
 
 ## Re-indexing
 A change to the embedding model, context format or chunk boundaries needs a re-embed. There is no automatic corpus-wide reindex:
-- Bump `@chunker_version` in `markdown.ex` when chunk boundaries change. `EmbedNote` then refuses to hash-skip notes stamped with an older version, but nothing selects them on its own.
-- An operator drives the backfill per vault with `Engram.Workers.ReindexKeyword`. It clears the hashes and reuse markers unconditionally, so every run is a full re-embed of that vault.
+- Bump `@chunker_version` in `markdown.ex` when chunk boundaries change. `EmbedNote` then refuses to hash-skip notes stamped with an older version, and the `IndexVersions` data migration plus `ReconcileEmbeddings` re-embed them (`docs/context/data-migrations-ledger.md`). The per-vault operator worker `ReindexKeyword` was deleted.
 
 ## References
 - Oban config: `config/config.exs`
-- `lib/engram/workers/embed_note.ex`, `lib/engram/workers/reconcile_embeddings.ex`, `lib/engram/workers/reindex_keyword.ex`
+- `lib/engram/workers/embed_note.ex`, `lib/engram/workers/reconcile_embeddings.ex`
 - `lib/engram/indexing.ex` (`plan_chunks/4`, `@embed_batch_size`)
 - Chunk boundaries and rejected chunking strategies: `docs/context/chunk-boundary-stability.md`

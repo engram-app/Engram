@@ -107,8 +107,8 @@ not on everything packed before it, the packing resyncs within a chunk or two
 of any edit. This is the rsync/restic content-defined-chunking property.
 Roughly 30 lines in `split_text/2`. Any boundary change must also bump
 `@chunker_version` (`markdown.ex`), or `EmbedNote` keeps hash-skipping notes
-chunked the old way (#1620). The backfill is operator-driven per vault via
-`ReindexKeyword`.
+chunked the old way (#1620). The `IndexVersions` data migration re-embeds the
+stale notes.
 
 `k=8, min=512` is the measured sweet spot: median 2, worst 9, zero cascades,
 +40% chunks.

@@ -240,10 +240,9 @@ adding callers.
   pinned by `Cargo.lock`. A tokenizer change bumps `Engram.KeywordIndex`
   `@version`; `ReconcileEmbeddings` then rebuilds every note's keyword
   vectors in place, no Voyage spend and no operator step
-  (`docs/context/index-version-self-heal.md`). `ReindexKeyword :sparse` is
-  still there for a forced re-run; if you use it, wait until the WORKER tier
-  is on the new release (`count by (role) (up{job="prometheus.scrape.engram_app"})`):
-  an older worker reads a `:sparse` job as a full, Voyage-billed re-embed.
+  (`docs/context/index-version-self-heal.md`). Before bumping, wait until the WORKER tier
+  is on the new release (`count by (role) (up{job="prometheus.scrape.engram_app"})`)
+  so an older worker does not apply the old encoding.
 - **`str::to_lowercase` applies Greek final sigma; `String.downcase` does
   not.** Lowercase per char (`flat_map(char::to_lowercase)`).
 - **Stemmers come from a crate, not our repo:** `snowball_stemmers_rs`

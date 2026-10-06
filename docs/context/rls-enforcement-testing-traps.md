@@ -293,7 +293,7 @@ bodies stay untouched, so the diff stays reviewable — no re-indentation noise
 across hundreds of lines, and a reviewer can see at a glance that the body did
 not change. `with_tenant/2` is re-entrant for the same tenant, so private
 helpers need no wrapping of their own and a caller that already holds the tenant
-(e.g. `BackfillNoteLinks`) pays nothing.
+(e.g. `RewriteNoteLinks`) pays nothing.
 
 Note the `{:ok, result} = ...; result` unwrap: `with_tenant/2` returns
 `{:ok, value}`. Funs passed to it must return **bare** values, not `{:ok, _}` —
