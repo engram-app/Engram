@@ -15,7 +15,7 @@ export default function NotFoundPage() {
 					404
 				</p>
 				<h1 className={heading}>{t("Page not found")}</h1>
-				<p className="max-w-md text-muted-foreground text-sm">
+				<p className="text-muted-foreground text-sm">
 					{t(
 						"We couldn't find what you're looking for. The link may be broken or the page may have moved.",
 					)}
