@@ -127,7 +127,7 @@ defmodule EngramWeb.AttachmentsController do
         :ok ->
           if raw_body?(conn),
             do: upload_raw(conn, user, vault, params),
-            # compat(plugin): raw_attachment_upload - remove when plugin floor >= next (#1877)
+            # compat(plugin): raw_attachment_upload - remove when plugin floor includes Engram-obsidian#555 (#1877)
             else: do_upload(conn, user, vault, params)
       end
     end

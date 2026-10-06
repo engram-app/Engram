@@ -1518,7 +1518,7 @@ defmodule Engram.Attachments do
   # Only the controller's raw-body branch sets it, after a bounded read.
   defp attachment_bytes(%{content: bytes}) when is_binary(bytes), do: {:ok, bytes}
 
-  # compat(plugin): raw_attachment_upload - remove when plugin floor >= next (#1877)
+  # compat(plugin): raw_attachment_upload - remove when plugin floor includes Engram-obsidian#555 (#1877)
   # The base64 JSON upload from plugins that predate raw bodies. Costs ~140 ms
   # decode + ~75 ms JSON parse per 10 MB on a normal scheduler.
   defp attachment_bytes(attrs),

@@ -10,6 +10,18 @@ feature the plugin opts into). Every shim carries one greppable marker:
 # compat(plugin): <capability> - remove when plugin floor >= <version> (#issue)
 ```
 
+A shim written before its plugin change has shipped cannot name a version
+yet, so it names the plugin PR instead:
+
+```
+# compat(plugin): <capability> - remove when plugin floor includes Engram-obsidian#<pr> (#issue)
+```
+
+Once that PR ships in a plugin release (release-please cuts the version),
+replace `includes Engram-obsidian#<pr>` with `>= <version>` in every marker
+and in the table below. Never write `>= next`: a word cannot be compared
+against a floor, and nobody comes back to fill it in.
+
 Find them all with `grep -rn 'compat(plugin)' lib/`. The plugin's mirror
 image, a fallback for backends older than the plugin (self-hosters upgrade
 late), is marked `// compat(server): ...` in the plugin repo.
@@ -27,4 +39,4 @@ client still calls is not dead yet.
 
 | Capability | Shim location | Plugin version that no longer needs it | Also used by | Issue |
 |---|---|---|---|---|
-| `raw_attachment_upload` | `AttachmentsController.do_upload_gated/4` JSON branch; `Attachments.attachment_bytes/1` base64 clause | next release (fill in after release-please) | Web SPA (`frontend/src/viewer/attachment-upload/`, `useUploadAttachment`) and e2e helpers (`e2e/helpers/api.py`) still send base64 JSON; switch them first | #1877 |
+| `raw_attachment_upload` | `AttachmentsController.do_upload_gated/4` JSON branch; `Attachments.attachment_bytes/1` base64 clause | Engram-obsidian#555 (replace with its release version once shipped) | Web SPA (`frontend/src/viewer/attachment-upload/`, `useUploadAttachment`) and e2e helpers (`e2e/helpers/api.py`) still send base64 JSON; switch them first | #1877 |
