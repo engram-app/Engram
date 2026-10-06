@@ -33,11 +33,16 @@ defmodule Engram.IndexingIdentityResolutionTest do
     vault = insert(:vault, user: user)
 
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "Perf/Identity.md",
-        "content" => "---\ntags: [perf]\n---\n# Identity\n\nResolve once, not four times.",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Perf/Identity.md",
+          "content" => "---\ntags: [perf]\n---\n# Identity\n\nResolve once, not four times.",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
     %{bypass: bypass, user: user, vault: vault, note: note}
   end

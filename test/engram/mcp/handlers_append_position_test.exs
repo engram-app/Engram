@@ -13,7 +13,10 @@ defmodule Engram.MCP.HandlersAppendPositionTest do
 
   defp put!(u, v, path, content),
     do:
-      {:ok, _} = Notes.upsert_note(u, v, %{"path" => path, "content" => content, "mtime" => 1.0})
+      {:ok, _} =
+        Notes.upsert_note(u, v, %{"path" => path, "content" => content, "mtime" => 1.0},
+          actor: "api"
+        )
 
   defp body(u, v, path) do
     {:ok, note} = Notes.get_note(u, v, path)

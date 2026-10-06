@@ -27,10 +27,15 @@ defmodule Engram.NotesFolderRenameCryptoTest do
     vault: vault
   } do
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "Old/a.md",
-        "content" => "---\ntags: [keep]\n---\n# Heading\n\nbody"
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Old/a.md",
+          "content" => "---\ntags: [keep]\n---\n# Heading\n\nbody"
+        },
+        actor: "api"
+      )
 
     before = Engram.Fixtures.raw_note_row!(user, note.id)
     assert before.dek_version == Engram.Crypto.row_version_aad_bound()
@@ -118,13 +123,19 @@ defmodule Engram.NotesFolderRenameCryptoTest do
     {:ok, _sub} = Notes.create_folder_marker(user, vault, "Old/Sub")
 
     {:ok, n1} =
-      Notes.upsert_note(user, vault, %{"path" => "Old/a.md", "content" => "# A\nbody-a"})
+      Notes.upsert_note(user, vault, %{"path" => "Old/a.md", "content" => "# A\nbody-a"},
+        actor: "api"
+      )
 
     {:ok, n2} =
-      Notes.upsert_note(user, vault, %{"path" => "Old/b.md", "content" => "# B\nbody-b"})
+      Notes.upsert_note(user, vault, %{"path" => "Old/b.md", "content" => "# B\nbody-b"},
+        actor: "api"
+      )
 
     {:ok, n3} =
-      Notes.upsert_note(user, vault, %{"path" => "Old/Sub/c.md", "content" => "# C\nbody-c"})
+      Notes.upsert_note(user, vault, %{"path" => "Old/Sub/c.md", "content" => "# C\nbody-c"},
+        actor: "api"
+      )
 
     # Legacy v1 row (empty AAD) — same fabrication as the test above.
     {:ok, dek} = Engram.Crypto.get_dek(user)

@@ -10,11 +10,16 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     vault = insert(:vault, user: user)
 
     {:ok, _} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "N.md",
-        "content" => "# N\n\n## Todo\n\na\na\n\n## Done\n\nx\n",
-        "mtime" => 1.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "N.md",
+          "content" => "# N\n\n## Todo\n\na\na\n\n## Done\n\nx\n",
+          "mtime" => 1.0
+        },
+        actor: "api"
+      )
 
     %{user: user, vault: vault}
   end
@@ -84,7 +89,11 @@ defmodule Engram.MCP.HandlersEditNoteTest do
   test "replace_section is not fooled by a # line inside a code fence", %{user: u, vault: v} do
     bt = String.duplicate("`", 3)
     content = "## Todo\n\n#{bt}\n## fake\n#{bt}\nold\n\n## Done\n\nx\n"
-    {:ok, _} = Notes.upsert_note(u, v, %{"path" => "F.md", "content" => content, "mtime" => 2.0})
+
+    {:ok, _} =
+      Notes.upsert_note(u, v, %{"path" => "F.md", "content" => content, "mtime" => 2.0},
+        actor: "api"
+      )
 
     assert {:ok, _, _} =
              Handlers.handle("edit_note", u, v, %{
@@ -375,7 +384,9 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     content = "## A\n```\n```js\n```\n## B\nkeep\n"
 
     {:ok, _} =
-      Notes.upsert_note(u, v, %{"path" => "Fence2.md", "content" => content, "mtime" => 3.0})
+      Notes.upsert_note(u, v, %{"path" => "Fence2.md", "content" => content, "mtime" => 3.0},
+        actor: "api"
+      )
 
     assert {:ok, _, _} =
              Handlers.handle("edit_note", u, v, %{
@@ -396,7 +407,9 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     content = "## A\r\nold\r\n## B\r\nkeep\r\n"
 
     {:ok, _} =
-      Notes.upsert_note(u, v, %{"path" => "Crlf.md", "content" => content, "mtime" => 4.0})
+      Notes.upsert_note(u, v, %{"path" => "Crlf.md", "content" => content, "mtime" => 4.0},
+        actor: "api"
+      )
 
     assert {:ok, _, _} =
              Handlers.handle("edit_note", u, v, %{
@@ -417,7 +430,9 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     content = "Title\n=====\n\nold\n\nNext\n====\n\nz\n"
 
     {:ok, _} =
-      Notes.upsert_note(u, v, %{"path" => "Setext.md", "content" => content, "mtime" => 5.0})
+      Notes.upsert_note(u, v, %{"path" => "Setext.md", "content" => content, "mtime" => 5.0},
+        actor: "api"
+      )
 
     assert {:ok, _, _} =
              Handlers.handle("edit_note", u, v, %{
@@ -441,7 +456,9 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     content = "## A\n- item\n---\n## B\nb\n"
 
     {:ok, _} =
-      Notes.upsert_note(u, v, %{"path" => "List.md", "content" => content, "mtime" => 6.0})
+      Notes.upsert_note(u, v, %{"path" => "List.md", "content" => content, "mtime" => 6.0},
+        actor: "api"
+      )
 
     assert {:ok, _, _} =
              Handlers.handle("edit_note", u, v, %{
@@ -465,7 +482,9 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     content = "## A\r\nold"
 
     {:ok, _} =
-      Notes.upsert_note(u, v, %{"path" => "CrlfEof.md", "content" => content, "mtime" => 7.0})
+      Notes.upsert_note(u, v, %{"path" => "CrlfEof.md", "content" => content, "mtime" => 7.0},
+        actor: "api"
+      )
 
     assert {:ok, _, _} =
              Handlers.handle("edit_note", u, v, %{
@@ -489,7 +508,9 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     content = "## A\nUse `%%` to hide text in Obsidian.\n\n## B\nkeep me\n"
 
     {:ok, _} =
-      Notes.upsert_note(u, v, %{"path" => "CodeSpan.md", "content" => content, "mtime" => 8.0})
+      Notes.upsert_note(u, v, %{"path" => "CodeSpan.md", "content" => content, "mtime" => 8.0},
+        actor: "api"
+      )
 
     assert {:ok, _, _} =
              Handlers.handle("edit_note", u, v, %{
@@ -512,7 +533,9 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     content = "## A\n%%\nunclosed\n\n## B\nkeep\n"
 
     {:ok, _} =
-      Notes.upsert_note(u, v, %{"path" => "Unclosed.md", "content" => content, "mtime" => 9.0})
+      Notes.upsert_note(u, v, %{"path" => "Unclosed.md", "content" => content, "mtime" => 9.0},
+        actor: "api"
+      )
 
     assert {:error, msg} =
              Handlers.handle("edit_note", u, v, %{
@@ -534,7 +557,9 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     content = "## A\n%%\nunclosed\n\n## B\nkeep\n"
 
     {:ok, _} =
-      Notes.upsert_note(u, v, %{"path" => "Unclosed2.md", "content" => content, "mtime" => 10.0})
+      Notes.upsert_note(u, v, %{"path" => "Unclosed2.md", "content" => content, "mtime" => 10.0},
+        actor: "api"
+      )
 
     assert {:error, msg} =
              Handlers.handle("edit_note", u, v, %{
@@ -559,11 +584,16 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     vault: v
   } do
     {:ok, _} =
-      Notes.upsert_note(u, v, %{
-        "path" => "Last.md",
-        "content" => "## A\r\nold\r\n",
-        "mtime" => 11.0
-      })
+      Notes.upsert_note(
+        u,
+        v,
+        %{
+          "path" => "Last.md",
+          "content" => "## A\r\nold\r\n",
+          "mtime" => 11.0
+        },
+        actor: "api"
+      )
 
     assert {:ok, _, _} =
              Handlers.handle("edit_note", u, v, %{
@@ -582,11 +612,16 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     vault: v
   } do
     {:ok, _} =
-      Notes.upsert_note(u, v, %{
-        "path" => "LastLf.md",
-        "content" => "## A\nold\n",
-        "mtime" => 12.0
-      })
+      Notes.upsert_note(
+        u,
+        v,
+        %{
+          "path" => "LastLf.md",
+          "content" => "## A\nold\n",
+          "mtime" => 12.0
+        },
+        actor: "api"
+      )
 
     assert {:ok, _, _} =
              Handlers.handle("edit_note", u, v, %{
@@ -608,7 +643,9 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     content = "## A\n1. step\n   #{fence}bash\n   run\n#{fence}\n## B\nimportant\n"
 
     {:ok, _} =
-      Notes.upsert_note(u, v, %{"path" => "Fence.md", "content" => content, "mtime" => 13.0})
+      Notes.upsert_note(u, v, %{"path" => "Fence.md", "content" => content, "mtime" => 13.0},
+        actor: "api"
+      )
 
     assert {:error, msg} =
              Handlers.handle("edit_note", u, v, %{
@@ -630,7 +667,9 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     content = "## A\n#{fence}\n## B\nimportant\n"
 
     {:ok, _} =
-      Notes.upsert_note(u, v, %{"path" => "Fence2.md", "content" => content, "mtime" => 14.0})
+      Notes.upsert_note(u, v, %{"path" => "Fence2.md", "content" => content, "mtime" => 14.0},
+        actor: "api"
+      )
 
     assert {:error, msg} =
              Handlers.handle("edit_note", u, v, %{
@@ -656,7 +695,9 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     content = "## A\nbody\n<!--\na `-->` b\n## B\nimportant\n<!-- c -->\n"
 
     {:ok, _} =
-      Notes.upsert_note(u, v, %{"path" => "C1.md", "content" => content, "mtime" => 15.0})
+      Notes.upsert_note(u, v, %{"path" => "C1.md", "content" => content, "mtime" => 15.0},
+        actor: "api"
+      )
 
     assert {:ok, _, _} =
              Handlers.handle("edit_note", u, v, %{
@@ -678,7 +719,11 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     do: Handlers.handle("edit_note", u, v, Map.put(args, "path", path))
 
   defp put!(u, v, path, content) do
-    {:ok, _} = Notes.upsert_note(u, v, %{"path" => path, "content" => content, "mtime" => 20.0})
+    {:ok, _} =
+      Notes.upsert_note(u, v, %{"path" => path, "content" => content, "mtime" => 20.0},
+        actor: "api"
+      )
+
     content
   end
 

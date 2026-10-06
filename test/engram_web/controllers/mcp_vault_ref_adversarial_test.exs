@@ -30,11 +30,16 @@ defmodule EngramWeb.McpVaultRefAdversarialTest do
     {:ok, vault_b, _} = Engram.Vaults.register_vault(user, "Second Vault", Ecto.UUID.generate())
 
     {:ok, _} =
-      Engram.Notes.upsert_note(user, vault_b, %{
-        "path" => "b.md",
-        "content" => "SECRET-IN-VAULT-B",
-        "mtime" => 1.0
-      })
+      Engram.Notes.upsert_note(
+        user,
+        vault_b,
+        %{
+          "path" => "b.md",
+          "content" => "SECRET-IN-VAULT-B",
+          "mtime" => 1.0
+        },
+        actor: "api"
+      )
 
     {:ok, api_key, key_row} = Engram.Accounts.create_api_key(user, "test-key")
     grant_api_write!(user)
@@ -60,11 +65,16 @@ defmodule EngramWeb.McpVaultRefAdversarialTest do
       {:ok, vv, _} = Engram.Vaults.register_vault(victim, "Victim Vault", Ecto.UUID.generate())
 
       {:ok, _} =
-        Engram.Notes.upsert_note(victim, vv, %{
-          "path" => "v.md",
-          "content" => "VICTIM-PLAINTEXT",
-          "mtime" => 1.0
-        })
+        Engram.Notes.upsert_note(
+          victim,
+          vv,
+          %{
+            "path" => "v.md",
+            "content" => "VICTIM-PLAINTEXT",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       for ref <- ["Victim Vault", "victim-vault", to_string(vv.id)] do
         conn = call_tool(conn, "get_note", %{"source_path" => "v.md", "vault_id" => ref})
@@ -128,11 +138,16 @@ defmodule EngramWeb.McpVaultRefAdversarialTest do
       v = named_vault!(user, uuidish)
 
       {:ok, _} =
-        Engram.Notes.upsert_note(user, v, %{
-          "path" => "u.md",
-          "content" => "IN-UUIDISH-VAULT",
-          "mtime" => 1.0
-        })
+        Engram.Notes.upsert_note(
+          user,
+          v,
+          %{
+            "path" => "u.md",
+            "content" => "IN-UUIDISH-VAULT",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       assert tool_text(
                call_tool(conn, "get_note", %{"source_path" => "u.md", "vault_id" => uuidish})

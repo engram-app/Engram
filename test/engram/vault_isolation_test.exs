@@ -31,11 +31,16 @@ defmodule Engram.VaultIsolationTest do
       vault_b: vault_b
     } do
       {:ok, _} =
-        Notes.upsert_note(user, vault_a, %{
-          "path" => "test.md",
-          "content" => "# Only in A",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault_a,
+          %{
+            "path" => "test.md",
+            "content" => "# Only in A",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       assert {:error, :not_found} = Notes.get_note(user, vault_b, "test.md")
     end
@@ -46,11 +51,16 @@ defmodule Engram.VaultIsolationTest do
       vault_b: vault_b
     } do
       {:ok, _} =
-        Notes.upsert_note(user, vault_b, %{
-          "path" => "test.md",
-          "content" => "# Only in B",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault_b,
+          %{
+            "path" => "test.md",
+            "content" => "# Only in B",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       assert {:error, :not_found} = Notes.get_note(user, vault_a, "test.md")
     end
@@ -67,18 +77,28 @@ defmodule Engram.VaultIsolationTest do
       vault_b: vault_b
     } do
       {:ok, _} =
-        Notes.upsert_note(user, vault_a, %{
-          "path" => "readme.md",
-          "content" => "Personal",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault_a,
+          %{
+            "path" => "readme.md",
+            "content" => "Personal",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       {:ok, _} =
-        Notes.upsert_note(user, vault_b, %{
-          "path" => "readme.md",
-          "content" => "Work",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault_b,
+          %{
+            "path" => "readme.md",
+            "content" => "Work",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       {:ok, note_a} = Notes.get_note(user, vault_a, "readme.md")
       {:ok, note_b} = Notes.get_note(user, vault_b, "readme.md")
@@ -100,18 +120,28 @@ defmodule Engram.VaultIsolationTest do
       vault_b: vault_b
     } do
       {:ok, _} =
-        Notes.upsert_note(user, vault_a, %{
-          "path" => "vault-a-note.md",
-          "content" => "# A",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault_a,
+          %{
+            "path" => "vault-a-note.md",
+            "content" => "# A",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       {:ok, _} =
-        Notes.upsert_note(user, vault_b, %{
-          "path" => "vault-b-note.md",
-          "content" => "# B",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault_b,
+          %{
+            "path" => "vault-b-note.md",
+            "content" => "# B",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       {:ok, %{changes: changes_a}} = Notes.list_changes_by_seq(user, vault_a, 0)
       paths_a = Enum.map(changes_a, & &1.path)
@@ -126,18 +156,28 @@ defmodule Engram.VaultIsolationTest do
       vault_b: vault_b
     } do
       {:ok, _} =
-        Notes.upsert_note(user, vault_a, %{
-          "path" => "vault-a-note.md",
-          "content" => "# A",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault_a,
+          %{
+            "path" => "vault-a-note.md",
+            "content" => "# A",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       {:ok, _} =
-        Notes.upsert_note(user, vault_b, %{
-          "path" => "vault-b-note.md",
-          "content" => "# B",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault_b,
+          %{
+            "path" => "vault-b-note.md",
+            "content" => "# B",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       {:ok, %{changes: changes_b}} = Notes.list_changes_by_seq(user, vault_b, 0)
       paths_b = Enum.map(changes_b, & &1.path)
@@ -157,17 +197,27 @@ defmodule Engram.VaultIsolationTest do
       vault_a: vault_a,
       vault_b: vault_b
     } do
-      Notes.upsert_note(user, vault_a, %{
-        "path" => "a.md",
-        "content" => "---\ntags: [personal]\n---",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault_a,
+        %{
+          "path" => "a.md",
+          "content" => "---\ntags: [personal]\n---",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
-      Notes.upsert_note(user, vault_b, %{
-        "path" => "b.md",
-        "content" => "---\ntags: [work]\n---",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault_b,
+        %{
+          "path" => "b.md",
+          "content" => "---\ntags: [work]\n---",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       {:ok, tags_a} = Notes.list_tags(user, vault_a)
       {:ok, tags_b} = Notes.list_tags(user, vault_b)
@@ -190,17 +240,27 @@ defmodule Engram.VaultIsolationTest do
       vault_a: vault_a,
       vault_b: vault_b
     } do
-      Notes.upsert_note(user, vault_a, %{
-        "path" => "journal/entry.md",
-        "content" => "# Entry",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault_a,
+        %{
+          "path" => "journal/entry.md",
+          "content" => "# Entry",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
-      Notes.upsert_note(user, vault_b, %{
-        "path" => "projects/spec.md",
-        "content" => "# Spec",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault_b,
+        %{
+          "path" => "projects/spec.md",
+          "content" => "# Spec",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       {:ok, folders_a} = Notes.list_folders(user, vault_a)
       {:ok, folders_b} = Notes.list_folders(user, vault_b)
@@ -223,17 +283,27 @@ defmodule Engram.VaultIsolationTest do
       vault_a: vault_a,
       vault_b: vault_b
     } do
-      Notes.upsert_note(user, vault_a, %{
-        "path" => "shared/note-from-a.md",
-        "content" => "# A",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault_a,
+        %{
+          "path" => "shared/note-from-a.md",
+          "content" => "# A",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
-      Notes.upsert_note(user, vault_b, %{
-        "path" => "shared/note-from-b.md",
-        "content" => "# B",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault_b,
+        %{
+          "path" => "shared/note-from-b.md",
+          "content" => "# B",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       {:ok, notes_a} = Notes.list_notes_in_folder(user, vault_a, "shared")
       {:ok, notes_b} = Notes.list_notes_in_folder(user, vault_b, "shared")
@@ -256,17 +326,27 @@ defmodule Engram.VaultIsolationTest do
       vault_a: vault_a,
       vault_b: vault_b
     } do
-      Notes.upsert_note(user, vault_a, %{
-        "path" => "shared.md",
-        "content" => "# In A",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault_a,
+        %{
+          "path" => "shared.md",
+          "content" => "# In A",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
-      Notes.upsert_note(user, vault_b, %{
-        "path" => "shared.md",
-        "content" => "# In B",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault_b,
+        %{
+          "path" => "shared.md",
+          "content" => "# In B",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       :ok = Notes.delete_note(user, vault_a, "shared.md")
 
@@ -286,17 +366,27 @@ defmodule Engram.VaultIsolationTest do
       vault_a: vault_a,
       vault_b: vault_b
     } do
-      Notes.upsert_note(user, vault_a, %{
-        "path" => "original.md",
-        "content" => "# A",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault_a,
+        %{
+          "path" => "original.md",
+          "content" => "# A",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
-      Notes.upsert_note(user, vault_b, %{
-        "path" => "original.md",
-        "content" => "# B",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault_b,
+        %{
+          "path" => "original.md",
+          "content" => "# B",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       {:ok, _} = Notes.rename_note(user, vault_a, "original.md", "renamed.md")
 

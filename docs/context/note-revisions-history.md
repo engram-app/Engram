@@ -15,7 +15,8 @@ rotation of history (#1713), or any code that writes `notes.content`.
   Empty text is never kept: an open version over an empty note is dropped,
   not closed.
 - Actors: `sync` (your editor, plugin and CRDT clients, all one actor), `mcp`,
-  `api:<key_id>`, `link_rewrite`, `maintenance`.
+  `api:<key_id>`, `link_rewrite`, `maintenance`, `system` (the welcome-note
+  seed). `upsert_note/4` requires `actor:`; there is no default.
 - The open version (`closed_at IS NULL`) has no stored text: it IS the note.
 
 ## The outbox
@@ -37,7 +38,7 @@ backstop is `Engram.Workers.FinalizeRevisionSweep` (`35 * * * *`).
 - **A new content-write path must call `Revisions.record_write/4` inside its
   transaction, and enqueue `FinalizeRevision` after commit.** Three
   `record_write/4` sites today: `CrdtCheckpoint.checkpoint_write/6` (actor
-  `sync`), `Notes.do_rewrite_note/6` (actor from opts, default `api`), and
+  `sync`), `Notes.do_rewrite_note/6` (actor from the required upsert opt), and
   `Notes.move_note` (id-keyed move/resurrect, only when the content hash
   changed; actor `sync` for the CRDT-socket relocate/resurrect callers, else
   the upsert opts). The finalize enqueue comes from

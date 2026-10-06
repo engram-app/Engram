@@ -427,7 +427,9 @@ defmodule Engram.Links.RewriterTest do
   describe "pre-rename candidate memoization (#1240 review)" do
     test "plan_edits runs ZERO candidate queries — build_target prefetched them once per walk",
          %{user: user, vault: vault} do
-      {:ok, renamed} = Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"})
+      {:ok, renamed} =
+        Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"}, actor: "api")
+
       {:ok, target} = Rewriter.build_target(user, vault, :note, renamed.id, "Old.md")
 
       # build_target carries the prefetched sets: the synthetic pre-rename
@@ -466,12 +468,15 @@ defmodule Engram.Links.RewriterTest do
       user: user,
       vault: vault
     } do
-      {:ok, renamed} = Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"})
+      {:ok, renamed} =
+        Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"}, actor: "api")
 
       content = "See [[Old]] and ![[Old|x]]."
 
       {:ok, source} =
-        Notes.upsert_note(user, vault, %{"path" => "Source.md", "content" => content})
+        Notes.upsert_note(user, vault, %{"path" => "Source.md", "content" => content},
+          actor: "api"
+        )
 
       :ok = Links.replace_links(user, vault, source.id, Parser.extract(content))
 
@@ -488,8 +493,12 @@ defmodule Engram.Links.RewriterTest do
     end
 
     test "second run is a no-op (idempotent)", %{user: user, vault: vault} do
-      {:ok, renamed} = Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"})
-      {:ok, source} = Notes.upsert_note(user, vault, %{"path" => "S.md", "content" => "[[Old]]"})
+      {:ok, renamed} =
+        Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"}, actor: "api")
+
+      {:ok, source} =
+        Notes.upsert_note(user, vault, %{"path" => "S.md", "content" => "[[Old]]"}, actor: "api")
+
       :ok = Links.replace_links(user, vault, source.id, Parser.extract("[[Old]]"))
 
       {:ok, target} = Rewriter.build_target(user, vault, :note, renamed.id, "Old.md")
@@ -498,7 +507,9 @@ defmodule Engram.Links.RewriterTest do
     end
 
     test "missing / deleted source note is skipped", %{user: user, vault: vault} do
-      {:ok, renamed} = Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"})
+      {:ok, renamed} =
+        Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"}, actor: "api")
+
       {:ok, target} = Rewriter.build_target(user, vault, :note, renamed.id, "Old.md")
 
       assert {:ok, :skipped} =
@@ -509,10 +520,13 @@ defmodule Engram.Links.RewriterTest do
       user: user,
       vault: vault
     } do
-      {:ok, renamed} = Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"})
+      {:ok, renamed} =
+        Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"}, actor: "api")
 
       {:ok, source} =
-        Notes.upsert_note(user, vault, %{"path" => "R.md", "content" => "keep [[Old]]"})
+        Notes.upsert_note(user, vault, %{"path" => "R.md", "content" => "keep [[Old]]"},
+          actor: "api"
+        )
 
       :ok = Links.replace_links(user, vault, source.id, Parser.extract("keep [[Old]]"))
       {:ok, target} = Rewriter.build_target(user, vault, :note, renamed.id, "Old.md")
@@ -564,8 +578,12 @@ defmodule Engram.Links.RewriterTest do
       user: user,
       vault: vault
     } do
-      {:ok, renamed} = Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"})
-      {:ok, source} = Notes.upsert_note(user, vault, %{"path" => "R2.md", "content" => "[[Old]]"})
+      {:ok, renamed} =
+        Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"}, actor: "api")
+
+      {:ok, source} =
+        Notes.upsert_note(user, vault, %{"path" => "R2.md", "content" => "[[Old]]"}, actor: "api")
+
       :ok = Links.replace_links(user, vault, source.id, Parser.extract("[[Old]]"))
       {:ok, target} = Rewriter.build_target(user, vault, :note, renamed.id, "Old.md")
 
@@ -593,7 +611,9 @@ defmodule Engram.Links.RewriterTest do
     end
 
     test "legacy row (no CRDT state) rewrites through upsert_note", %{user: user, vault: vault} do
-      {:ok, renamed} = Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"})
+      {:ok, renamed} =
+        Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"}, actor: "api")
+
       # A fixture-inserted note has content but NO crdt_state and NO tail.
       legacy = Engram.Fixtures.insert_note!(user, vault, %{path: "L.md", content: "see [[Old]]"})
       :ok = Links.replace_links(user, vault, legacy.id, Parser.extract("see [[Old]]"))
@@ -609,10 +629,14 @@ defmodule Engram.Links.RewriterTest do
   describe "build_target/5" do
     test "derives new_path and collision from the live row", %{user: user, vault: vault} do
       {:ok, renamed} =
-        Notes.upsert_note(user, vault, %{"path" => "sub/Fresh.md", "content" => "x"})
+        Notes.upsert_note(user, vault, %{"path" => "sub/Fresh.md", "content" => "x"},
+          actor: "api"
+        )
 
       {:ok, _dup} =
-        Notes.upsert_note(user, vault, %{"path" => "other/Fresh.md", "content" => "y"})
+        Notes.upsert_note(user, vault, %{"path" => "other/Fresh.md", "content" => "y"},
+          actor: "api"
+        )
 
       assert {:ok, target} = Rewriter.build_target(user, vault, :note, renamed.id, "Old.md")
       assert target.new_path == "sub/Fresh.md"
@@ -643,7 +667,8 @@ defmodule Engram.Links.RewriterTest do
       user: user,
       vault: vault
     } do
-      {:ok, renamed} = Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"})
+      {:ok, renamed} =
+        Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"}, actor: "api")
 
       # 😀 (U+1F600) is one codepoint but TWO UTF-16 code units. If utf16_len/1
       # were swapped for a codepoint count (String.length/1), the computed
@@ -652,7 +677,9 @@ defmodule Engram.Links.RewriterTest do
       content = "😀 see [[Old]]"
 
       {:ok, source} =
-        Notes.upsert_note(user, vault, %{"path" => "Emoji.md", "content" => content})
+        Notes.upsert_note(user, vault, %{"path" => "Emoji.md", "content" => content},
+          actor: "api"
+        )
 
       :ok = Links.replace_links(user, vault, source.id, Parser.extract(content))
 
@@ -669,10 +696,13 @@ defmodule Engram.Links.RewriterTest do
       user: user,
       vault: vault
     } do
-      {:ok, renamed} = Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"})
+      {:ok, renamed} =
+        Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"}, actor: "api")
 
       {:ok, source} =
-        Notes.upsert_note(user, vault, %{"path" => "Room.md", "content" => "[[Old]]"})
+        Notes.upsert_note(user, vault, %{"path" => "Room.md", "content" => "[[Old]]"},
+          actor: "api"
+        )
 
       :ok = Links.replace_links(user, vault, source.id, Parser.extract("[[Old]]"))
       {:ok, target} = Rewriter.build_target(user, vault, :note, renamed.id, "Old.md")
@@ -698,10 +728,13 @@ defmodule Engram.Links.RewriterTest do
 
     test "a room that dies between lookup and the update call falls through to the roomless path",
          %{user: user, vault: vault} do
-      {:ok, renamed} = Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"})
+      {:ok, renamed} =
+        Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"}, actor: "api")
 
       {:ok, source} =
-        Notes.upsert_note(user, vault, %{"path" => "Gone.md", "content" => "[[Old]]"})
+        Notes.upsert_note(user, vault, %{"path" => "Gone.md", "content" => "[[Old]]"},
+          actor: "api"
+        )
 
       :ok = Links.replace_links(user, vault, source.id, Parser.extract("[[Old]]"))
       {:ok, target} = Rewriter.build_target(user, vault, :note, renamed.id, "Old.md")
@@ -734,11 +767,16 @@ defmodule Engram.Links.RewriterTest do
       user: user,
       vault: vault
     } do
-      {:ok, renamed} = Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"})
-      {:ok, s1} = Notes.upsert_note(user, vault, %{"path" => "S1.md", "content" => "[[Old]]"})
+      {:ok, renamed} =
+        Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"}, actor: "api")
+
+      {:ok, s1} =
+        Notes.upsert_note(user, vault, %{"path" => "S1.md", "content" => "[[Old]]"}, actor: "api")
 
       {:ok, s2} =
-        Notes.upsert_note(user, vault, %{"path" => "S2.md", "content" => "see [[Old]] too"})
+        Notes.upsert_note(user, vault, %{"path" => "S2.md", "content" => "see [[Old]] too"},
+          actor: "api"
+        )
 
       :ok = Links.replace_links(user, vault, s1.id, Parser.extract("[[Old]]"))
       :ok = Links.replace_links(user, vault, s2.id, Parser.extract("see [[Old]] too"))
@@ -760,7 +798,9 @@ defmodule Engram.Links.RewriterTest do
       attachment = Engram.Fixtures.insert_attachment!(user, vault, %{path: "img/new.png"})
 
       {:ok, source} =
-        Notes.upsert_note(user, vault, %{"path" => "A.md", "content" => "![[old.png]]"})
+        Notes.upsert_note(user, vault, %{"path" => "A.md", "content" => "![[old.png]]"},
+          actor: "api"
+        )
 
       :ok = Links.replace_links(user, vault, source.id, Parser.extract("![[old.png]]"))
 

@@ -50,7 +50,10 @@ defmodule Engram.Notes.FeedInterleaveTest do
   test "a checkpoint committing mid-page does not make the feed serve an empty body", ctx do
     %{user: user, vault: vault} = ctx
 
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "feed.md", "content" => "TAIL BODY"})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "feed.md", "content" => "TAIL BODY"},
+        actor: "api"
+      )
 
     # Put the note in the never-checkpointed shape: the whole body in the tail,
     # no snapshot, blank facade. That is what a CRDT-genesis note looks like

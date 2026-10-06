@@ -110,22 +110,32 @@ defmodule Engram.IndexingChunkReuseTest do
 
   defp put_note(user, vault, body, tags \\ "[health]") do
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{
-        "path" => @path,
-        "content" => content(body, tags),
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => @path,
+          "content" => content(body, tags),
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
     note
   end
 
   defp put_raw(user, vault, path, content) do
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{
-        "path" => path,
-        "content" => content,
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => path,
+          "content" => content,
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
     note
   end
@@ -347,11 +357,16 @@ defmodule Engram.IndexingChunkReuseTest do
       body = "# Iron Panel\n\n## A\n\nsame text here\n\n## B\n\nsame text here\n"
 
       {:ok, note} =
-        Notes.upsert_note(ctx.user, ctx.vault, %{
-          "path" => "Health/Dupes.md",
-          "content" => body,
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          ctx.user,
+          ctx.vault,
+          %{
+            "path" => "Health/Dupes.md",
+            "content" => body,
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       stub_embedder(self())
 

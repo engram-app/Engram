@@ -68,7 +68,9 @@ defmodule Engram.Notes.CrdtHeadPropertyTest do
     check all(cmds <- list_of(member_of(@commands), max_length: 12), max_runs: @max_runs) do
       # Fresh note per iteration so runs don't accumulate state.
       path = "n#{System.unique_integer([:positive])}.md"
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => path, "content" => "base"})
+
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => path, "content" => "base"}, actor: "api")
 
       acc = %{
         user: user,

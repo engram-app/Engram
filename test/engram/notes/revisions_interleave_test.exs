@@ -34,7 +34,8 @@ defmodule Engram.Notes.RevisionsInterleaveTest do
 
   test "a write that loses its fence and retries records one clean chain",
        %{user: user, vault: vault} do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "race.md", "content" => "BODY"})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "race.md", "content" => "BODY"}, actor: "api")
 
     {:ok, raw} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
     {:ok, state} = Crypto.decrypt_crdt_state(raw, user)

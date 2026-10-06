@@ -33,7 +33,9 @@ defmodule EngramWeb.CrdtChannelDrainTest do
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Crypto.ensure_user_dek(user)
     {:ok, vault, _} = Vaults.register_vault(user, "CrdtChannelDrainTest", Ecto.UUID.generate())
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "base"})
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "base"}, actor: "api")
 
     {:ok, _, socket} =
       subscribe_and_join(
@@ -300,7 +302,7 @@ defmodule EngramWeb.CrdtChannelDrainTest do
     %{socket: socket, user: user, vault: vault} = ctx
 
     {:ok, canvas} =
-      Notes.upsert_note(user, vault, %{"path" => "board.canvas", "content" => "{}"})
+      Notes.upsert_note(user, vault, %{"path" => "board.canvas", "content" => "{}"}, actor: "api")
 
     {client, room} = open_room(socket, canvas)
     assert_broadcast "crdt_doc_ready", %{"doc_id" => _}
@@ -645,7 +647,7 @@ defmodule EngramWeb.CrdtChannelDrainTest do
 
     for n <- 1..5 do
       {:ok, extra} =
-        Notes.upsert_note(user, vault, %{"path" => "n#{n}.md", "content" => "x"})
+        Notes.upsert_note(user, vault, %{"path" => "n#{n}.md", "content" => "x"}, actor: "api")
 
       push_step1(socket, extra, CrdtBridge.new_doc())
     end

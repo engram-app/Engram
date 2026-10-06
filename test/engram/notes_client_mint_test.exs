@@ -13,11 +13,16 @@ defmodule Engram.NotesClientMintTest do
     client_minted = UUIDv7.generate()
 
     {:ok, note} =
-      Engram.Notes.upsert_note(user, vault, %{
-        "id" => client_minted,
-        "path" => "/client-mint.md",
-        "content" => "hello"
-      })
+      Engram.Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "id" => client_minted,
+          "path" => "/client-mint.md",
+          "content" => "hello"
+        },
+        actor: "api"
+      )
 
     assert note.id == client_minted
   end
@@ -27,11 +32,16 @@ defmodule Engram.NotesClientMintTest do
     vault = insert(:vault, user: user)
 
     {:ok, note} =
-      Engram.Notes.upsert_note(user, vault, %{
-        "id" => "not-a-uuid",
-        "path" => "/server-mint.md",
-        "content" => "hello"
-      })
+      Engram.Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "id" => "not-a-uuid",
+          "path" => "/server-mint.md",
+          "content" => "hello"
+        },
+        actor: "api"
+      )
 
     assert {:ok, _} = Ecto.UUID.cast(note.id)
     refute note.id == "not-a-uuid"
@@ -42,10 +52,15 @@ defmodule Engram.NotesClientMintTest do
     vault = insert(:vault, user: user)
 
     {:ok, note} =
-      Engram.Notes.upsert_note(user, vault, %{
-        "path" => "/no-client-id.md",
-        "content" => "hello"
-      })
+      Engram.Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "/no-client-id.md",
+          "content" => "hello"
+        },
+        actor: "api"
+      )
 
     assert is_binary(note.id)
     assert {:ok, _} = Ecto.UUID.cast(note.id)
@@ -70,11 +85,16 @@ defmodule Engram.NotesClientMintTest do
       id = UUIDv7.generate()
 
       {:ok, note} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "id" => id,
-          "path" => "A.md",
-          "content" => "# Hi\nbody"
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "id" => id,
+            "path" => "A.md",
+            "content" => "# Hi\nbody"
+          },
+          actor: "api"
+        )
 
       assert note.id == id
 
@@ -82,11 +102,16 @@ defmodule Engram.NotesClientMintTest do
       assert Engram.UsageMeters.notes_count(user.id) == 0
 
       {:ok, moved} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "id" => id,
-          "path" => "B.md",
-          "content" => "# Hi\nbody"
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "id" => id,
+            "path" => "B.md",
+            "content" => "# Hi\nbody"
+          },
+          actor: "api"
+        )
 
       assert moved.id == id
       assert moved.path == "B.md"
@@ -120,20 +145,30 @@ defmodule Engram.NotesClientMintTest do
       id = UUIDv7.generate()
 
       {:ok, _a} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "id" => id,
-          "path" => "A.md",
-          "content" => "AAA original body"
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "id" => id,
+            "path" => "A.md",
+            "content" => "AAA original body"
+          },
+          actor: "api"
+        )
 
       # A different note at a different path reuses A's live note_id.
       {result, log} =
         with_log(fn ->
-          Engram.Notes.upsert_note(user, vault, %{
-            "id" => id,
-            "path" => "B.md",
-            "content" => "BBB different body"
-          })
+          Engram.Notes.upsert_note(
+            user,
+            vault,
+            %{
+              "id" => id,
+              "path" => "B.md",
+              "content" => "BBB different body"
+            },
+            actor: "api"
+          )
         end)
 
       # The rejection is logged loudly under a greppable key (Loki monitoring).
@@ -158,11 +193,16 @@ defmodule Engram.NotesClientMintTest do
       id = UUIDv7.generate()
 
       {:ok, note} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "id" => id,
-          "path" => "C.md",
-          "content" => "hello"
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "id" => id,
+            "path" => "C.md",
+            "content" => "hello"
+          },
+          actor: "api"
+        )
 
       assert note.id == id
       assert Engram.UsageMeters.notes_count(user.id) == 1
@@ -190,7 +230,9 @@ defmodule Engram.NotesClientMintTest do
 
       # Pre-existing note: created before id-keying, so the SERVER minted its id.
       {:ok, server_note} =
-        Engram.Notes.upsert_note(user, vault, %{"path" => "note.md", "content" => "v1"})
+        Engram.Notes.upsert_note(user, vault, %{"path" => "note.md", "content" => "v1"},
+          actor: "api"
+        )
 
       server_id = server_note.id
 
@@ -200,11 +242,16 @@ defmodule Engram.NotesClientMintTest do
       client_id = UUIDv7.generate()
 
       {:ok, updated} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "id" => client_id,
-          "path" => "note.md",
-          "content" => "v2"
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "id" => client_id,
+            "path" => "note.md",
+            "content" => "v2"
+          },
+          actor: "api"
+        )
 
       assert updated.id == server_id
       refute updated.id == client_id
@@ -228,22 +275,32 @@ defmodule Engram.NotesClientMintTest do
       shared_id = UUIDv7.generate()
 
       {:ok, in_a} =
-        Engram.Notes.upsert_note(user, vault_a, %{
-          "id" => shared_id,
-          "path" => "copied.md",
-          "content" => "vault A"
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault_a,
+          %{
+            "id" => shared_id,
+            "path" => "copied.md",
+            "content" => "vault A"
+          },
+          actor: "api"
+        )
 
       assert in_a.id == shared_id
 
       log =
         capture_log(fn ->
           {:ok, in_b} =
-            Engram.Notes.upsert_note(user, vault_b, %{
-              "id" => shared_id,
-              "path" => "copied.md",
-              "content" => "vault B"
-            })
+            Engram.Notes.upsert_note(
+              user,
+              vault_b,
+              %{
+                "id" => shared_id,
+                "path" => "copied.md",
+                "content" => "vault B"
+              },
+              actor: "api"
+            )
 
           # Landed, under a server-minted id rather than the colliding one.
           refute in_b.id == shared_id

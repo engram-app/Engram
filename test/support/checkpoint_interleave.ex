@@ -55,7 +55,7 @@ defmodule Engram.CheckpointInterleave do
 
       # Commits on a DIFFERENT real connection while the checkpoint holds its
       # transaction open. This is the write the checkpoint must not clobber.
-      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "p.md", ...})
+      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "p.md", ...}, actor: "api")
 
       CheckpointInterleave.release(:after_row_read, parked)
       Task.await(task)

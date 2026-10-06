@@ -131,11 +131,16 @@ defmodule Engram.SearchTest do
       # A real note carries the canonical path/tags; the Qdrant payload no
       # longer does (#590). The chunk row maps the point id back to the note.
       {:ok, note} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "path" => "Health/iron.md",
-          "content" => "---\ntags: [labs]\n---\n# Iron\n\nFerritin levels.",
-          "mtime" => 1_000.0
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Health/iron.md",
+            "content" => "---\ntags: [labs]\n---\n# Iron\n\nFerritin levels.",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       point_id = Ecto.UUID.generate()
 
@@ -259,11 +264,16 @@ defmodule Engram.SearchTest do
       |> expect(:embed_texts, fn _texts, _opts -> {:ok, [List.duplicate(0.1, 3)]} end)
 
       {:ok, note} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "path" => "Health/gone.md",
-          "content" => "# Gone\n\nFerritin levels.",
-          "mtime" => 1_000.0
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Health/gone.md",
+            "content" => "# Gone\n\nFerritin levels.",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       point_id = Ecto.UUID.generate()
 
@@ -335,11 +345,16 @@ defmodule Engram.SearchTest do
       [live_a, deleted, live_c] =
         for name <- ~w(alpha beta gamma) do
           {:ok, note} =
-            Engram.Notes.upsert_note(user, vault, %{
-              "path" => "Health/#{name}.md",
-              "content" => "# #{name}\n\nFerritin levels.",
-              "mtime" => 1_000.0
-            })
+            Engram.Notes.upsert_note(
+              user,
+              vault,
+              %{
+                "path" => "Health/#{name}.md",
+                "content" => "# #{name}\n\nFerritin levels.",
+                "mtime" => 1_000.0
+              },
+              actor: "api"
+            )
 
           point_id = Ecto.UUID.generate()
 
@@ -943,11 +958,16 @@ defmodule Engram.SearchTest do
       {:ok, _marker} = Engram.Notes.create_folder_marker(user, vault, "Findable")
 
       {:ok, _note} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "path" => "Findable/Real.md",
-          "content" => "Findable target body",
-          "mtime" => 1.0
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Findable/Real.md",
+            "content" => "Findable target body",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
@@ -1398,11 +1418,16 @@ defmodule Engram.SearchTest do
     |> expect(:embed_texts, fn _texts, _opts -> {:ok, [List.duplicate(0.1, 3)]} end)
 
     {:ok, note} =
-      Engram.Notes.upsert_note(user, vault, %{
-        "path" => path,
-        "content" => content,
-        "mtime" => 1_000.0
-      })
+      Engram.Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => path,
+          "content" => content,
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
     point_id = Ecto.UUID.generate()
 

@@ -19,11 +19,16 @@ defmodule Engram.NotesBroadcastTest do
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "a.md",
-          "content" => "# A",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "a.md",
+            "content" => "# A",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "note_changed",
@@ -44,7 +49,8 @@ defmodule Engram.NotesBroadcastTest do
           user,
           vault,
           %{"path" => "b.md", "content" => "# B", "mtime" => 1.0},
-          broadcast_from: self()
+          broadcast_from: self(),
+          actor: "api"
         )
 
       refute_receive %Phoenix.Socket.Broadcast{event: "note_changed"}, 100
@@ -60,11 +66,16 @@ defmodule Engram.NotesBroadcastTest do
 
       Tracer.with_span "req" do
         {:ok, _} =
-          Notes.upsert_note(user, vault, %{
-            "path" => "c.md",
-            "content" => "# C",
-            "mtime" => 1.0
-          })
+          Notes.upsert_note(
+            user,
+            vault,
+            %{
+              "path" => "c.md",
+              "content" => "# C",
+              "mtime" => 1.0
+            },
+            actor: "api"
+          )
       end
 
       assert_receive %Phoenix.Socket.Broadcast{event: "note_changed", payload: payload}
@@ -75,7 +86,9 @@ defmodule Engram.NotesBroadcastTest do
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "d.md", "content" => "# D", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "d.md", "content" => "# D", "mtime" => 1.0},
+          actor: "api"
+        )
 
       assert_receive %Phoenix.Socket.Broadcast{event: "note_changed", payload: payload}
       assert payload.traceparent == nil
@@ -86,22 +99,32 @@ defmodule Engram.NotesBroadcastTest do
     test "two upserts to the same path with different content each broadcast a note_changed upsert",
          %{user: user, vault: vault} do
       {:ok, _base} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "canvas.canvas",
-          "content" => "base",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "canvas.canvas",
+            "content" => "base",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
       # Fire the second upsert immediately after the first — no artificial
       # delay — to mirror the e2e repro's back-to-back rapid writes.
       {:ok, modified} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "canvas.canvas",
-          "content" => "modified",
-          "mtime" => 1.001
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "canvas.canvas",
+            "content" => "modified",
+            "mtime" => 1.001
+          },
+          actor: "api"
+        )
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "note_changed",
@@ -118,11 +141,16 @@ defmodule Engram.NotesBroadcastTest do
       vault: vault
     } do
       {:ok, child} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Old/Child.md",
-          "content" => "# Child",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Old/Child.md",
+            "content" => "# Child",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
@@ -152,11 +180,16 @@ defmodule Engram.NotesBroadcastTest do
       vault: vault
     } do
       {:ok, _child} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Old/Child.md",
-          "content" => "# Child",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Old/Child.md",
+            "content" => "# Child",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
@@ -181,11 +214,16 @@ defmodule Engram.NotesBroadcastTest do
       vault: vault
     } do
       {:ok, child} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Old/Child.md",
-          "content" => "# Child",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Old/Child.md",
+            "content" => "# Child",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
@@ -211,11 +249,16 @@ defmodule Engram.NotesBroadcastTest do
       vault: vault
     } do
       {:ok, child} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Old/Child.md",
-          "content" => "# Child",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Old/Child.md",
+            "content" => "# Child",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
@@ -241,11 +284,16 @@ defmodule Engram.NotesBroadcastTest do
       vault: vault
     } do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Old.md",
-          "content" => "# Old",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Old.md",
+            "content" => "# Old",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
@@ -268,11 +316,16 @@ defmodule Engram.NotesBroadcastTest do
       vault: vault
     } do
       {:ok, _note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Old.md",
-          "content" => "# Old",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Old.md",
+            "content" => "# Old",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
@@ -310,11 +363,16 @@ defmodule Engram.NotesBroadcastTest do
       id = Ecto.UUID.generate()
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "A.md",
-          "content" => "# Rename\nbody",
-          "id" => id
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "A.md",
+            "content" => "# Rename\nbody",
+            "id" => id
+          },
+          actor: "api"
+        )
 
       :ok = Notes.delete_note(user, vault, "A.md")
 
@@ -325,11 +383,16 @@ defmodule Engram.NotesBroadcastTest do
       # hash-equal guard would suppress this — stranding peers with the delete
       # of A.md but never an upsert of B.md.
       {:ok, moved} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "B.md",
-          "content" => "# Rename\nbody",
-          "id" => id
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "B.md",
+            "content" => "# Rename\nbody",
+            "id" => id
+          },
+          actor: "api"
+        )
 
       assert moved.id == id
       assert moved.path == "B.md"
@@ -384,7 +447,9 @@ defmodule Engram.NotesBroadcastTest do
       vault: vault
     } do
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "del.md", "content" => "# D", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "del.md", "content" => "# D", "mtime" => 1.0},
+          actor: "api"
+        )
 
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
       device_id = Ecto.UUID.generate()
@@ -404,7 +469,9 @@ defmodule Engram.NotesBroadcastTest do
       vault: vault
     } do
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "del2.md", "content" => "# D", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "del2.md", "content" => "# D", "mtime" => 1.0},
+          actor: "api"
+        )
 
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
@@ -428,11 +495,16 @@ defmodule Engram.NotesBroadcastTest do
   describe "note_changed delete broadcast carries the folder" do
     test "a note inside a folder reports that folder", %{user: user, vault: vault} do
       {:ok, _note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Notes/Sub/a.md",
-          "content" => "# A",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Notes/Sub/a.md",
+            "content" => "# A",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
       assert :ok = Notes.delete_note(user, vault, "Notes/Sub/a.md")
@@ -448,7 +520,9 @@ defmodule Engram.NotesBroadcastTest do
 
     test "a root-level note reports the empty folder, not nil", %{user: user, vault: vault} do
       {:ok, _note} =
-        Notes.upsert_note(user, vault, %{"path" => "top.md", "content" => "# T", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "top.md", "content" => "# T", "mtime" => 1.0},
+          actor: "api"
+        )
 
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
       assert :ok = Notes.delete_note(user, vault, "top.md")

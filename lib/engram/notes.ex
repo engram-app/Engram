@@ -389,6 +389,10 @@ defmodule Engram.Notes do
 
   Options:
 
+    * `actor:` (required) the history actor (#1710): `"sync"`, `"mcp"`,
+      `"api:<key_id>"`, `"link_rewrite"`, `"maintenance"` or `"system"`. No
+      default, so a new caller cannot silently file its edits under another
+      writer's version.
     * `announce_vault_populated: false` — suppress the `vault_populated`
       broadcast for a write the SERVER originated. See the call site; the
       welcome-note seed is the only caller that passes it.
@@ -403,7 +407,10 @@ defmodule Engram.Notes do
           | {:error, :version_conflict, Note.t()}
           | {:error, {:notes_cap_reached, non_neg_integer(), non_neg_integer()}}
           | {:error, atom()}
-  def upsert_note(user, vault, attrs, opts \\ []) do
+  def upsert_note(user, vault, attrs, opts) do
+    unless is_binary(Keyword.fetch!(opts, :actor)),
+      do: raise(ArgumentError, "upsert_note/4 :actor must be a string")
+
     path = attrs["path"] || attrs[:path]
     # Scrub invalid UTF-8 before it is hashed/encrypted/stored: content is kept
     # as `bytea` ciphertext (no Postgres UTF-8 guard), and stray bytes later
@@ -1668,7 +1675,7 @@ defmodule Engram.Notes do
          query: lookup_query,
          opts: opts
        }) do
-    actor = Keyword.get(opts, :actor, "api")
+    actor = Keyword.fetch!(opts, :actor)
 
     case existing_by_client_id(client_id, vault) do
       %Note{deleted_at: nil} = live ->
@@ -1879,7 +1886,7 @@ defmodule Engram.Notes do
       true ->
         do_rewrite_note(existing, base_attrs, user, sanitized_path, folder,
           db_mode: Keyword.get(opts, :db_mode),
-          actor: Keyword.get(opts, :actor, "api"),
+          actor: Keyword.fetch!(opts, :actor),
           recording: Keyword.fetch!(opts, :recording)
         )
     end
@@ -2062,7 +2069,7 @@ defmodule Engram.Notes do
                 do:
                   Revisions.record_write(
                     existing,
-                    Keyword.get(opts, :actor, "api"),
+                    Keyword.fetch!(opts, :actor),
                     Keyword.fetch!(opts, :recording)
                   )
 

@@ -16,24 +16,39 @@ defmodule EngramWeb.McpControllerTest do
     authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
 
     # Seed some notes for read tool tests
-    Engram.Notes.upsert_note(user, vault, %{
-      "path" => "Health/Supplements.md",
-      "content" =>
-        "---\ntags: [health, supplements]\n---\n# Supplements\n\n## Shopping List\n\n- Omega 3\n- Vitamin D\n\n## Notes\n\nTake with food.",
-      "mtime" => 1_000.0
-    })
+    Engram.Notes.upsert_note(
+      user,
+      vault,
+      %{
+        "path" => "Health/Supplements.md",
+        "content" =>
+          "---\ntags: [health, supplements]\n---\n# Supplements\n\n## Shopping List\n\n- Omega 3\n- Vitamin D\n\n## Notes\n\nTake with food.",
+        "mtime" => 1_000.0
+      },
+      actor: "api"
+    )
 
-    Engram.Notes.upsert_note(user, vault, %{
-      "path" => "Health/Exercise.md",
-      "content" => "---\ntags: [health, fitness]\n---\n# Exercise\n\nDaily routine.",
-      "mtime" => 1_000.0
-    })
+    Engram.Notes.upsert_note(
+      user,
+      vault,
+      %{
+        "path" => "Health/Exercise.md",
+        "content" => "---\ntags: [health, fitness]\n---\n# Exercise\n\nDaily routine.",
+        "mtime" => 1_000.0
+      },
+      actor: "api"
+    )
 
-    Engram.Notes.upsert_note(user, vault, %{
-      "path" => "Work/Project.md",
-      "content" => "---\ntags: [work]\n---\n# Project\n\nProject notes.",
-      "mtime" => 1_000.0
-    })
+    Engram.Notes.upsert_note(
+      user,
+      vault,
+      %{
+        "path" => "Work/Project.md",
+        "content" => "---\ntags: [work]\n---\n# Project\n\nProject notes.",
+        "mtime" => 1_000.0
+      },
+      actor: "api"
+    )
 
     %{conn: authed, user: user}
   end
@@ -464,18 +479,28 @@ defmodule EngramWeb.McpControllerTest do
       grant_api_write!(user)
 
       # A note that lives ONLY in the default vault.
-      Engram.Notes.upsert_note(user, default, %{
-        "path" => "Health/Supplements.md",
-        "content" => "# Supplements\n\nOmega 3.",
-        "mtime" => 1_000.0
-      })
+      Engram.Notes.upsert_note(
+        user,
+        default,
+        %{
+          "path" => "Health/Supplements.md",
+          "content" => "# Supplements\n\nOmega 3.",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       # A note that lives ONLY in vault_b, in a folder the default vault lacks.
-      Engram.Notes.upsert_note(user, vault_b, %{
-        "path" => "Journal/Checkup.md",
-        "content" => "# Checkup\n\nBlood pressure noted.",
-        "mtime" => 1_000.0
-      })
+      Engram.Notes.upsert_note(
+        user,
+        vault_b,
+        %{
+          "path" => "Journal/Checkup.md",
+          "content" => "# Checkup\n\nBlood pressure noted.",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       authed = build_conn() |> put_req_header("authorization", "Bearer #{api_key}")
       %{conn: authed, user: user, vault_b: vault_b, default: default}
@@ -783,7 +808,8 @@ defmodule EngramWeb.McpControllerTest do
           "path" => "Test/Dupes.md",
           "content" => "foo bar foo baz foo",
           "mtime" => 1_000.0
-        }
+        },
+        actor: "api"
       )
 
       conn =
@@ -827,7 +853,8 @@ defmodule EngramWeb.McpControllerTest do
           "path" => "Test/DupesFloat.md",
           "content" => "foo bar foo baz foo",
           "mtime" => 1_000.0
-        }
+        },
+        actor: "api"
       )
 
       conn =
@@ -1099,11 +1126,16 @@ defmodule EngramWeb.McpControllerTest do
         |> put_req_header("authorization", "Bearer #{api_key}")
 
       # Seed a note in vault_b to prove the tool can't read it
-      Engram.Notes.upsert_note(user, vault_b, %{
-        "path" => "Secret/Note.md",
-        "content" => "# Secret",
-        "mtime" => 1_000.0
-      })
+      Engram.Notes.upsert_note(
+        user,
+        vault_b,
+        %{
+          "path" => "Secret/Note.md",
+          "content" => "# Secret",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
       %{conn: authed, user: user, vault_a: vault_a, vault_b: vault_b}
     end

@@ -88,16 +88,21 @@ defmodule Engram.Indexing.CommitIndexRlsTest do
     vault = insert(:vault, user: user)
 
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "Rls/CommitIndex.md",
-        # The wikilink is required, not decorative: `replace_links/4` calls
-        # `insert_all` with the extracted rows, and `insert_all(_, [])` is a
-        # no-op that can never violate a policy. Without a link the
-        # `replace_links/4` test below would pass vacuously.
-        "content" =>
-          "# Commit Index\n\nBody text that yields at least one chunk.\n\nSee [[Other Note]].",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Rls/CommitIndex.md",
+          # The wikilink is required, not decorative: `replace_links/4` calls
+          # `insert_all` with the extracted rows, and `insert_all(_, [])` is a
+          # no-op that can never violate a policy. Without a link the
+          # `replace_links/4` test below would pass vacuously.
+          "content" =>
+            "# Commit Index\n\nBody text that yields at least one chunk.\n\nSee [[Other Note]].",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
     # Reload. `insert(:user)` has no `encrypted_dek`; the first write through
     # `Notes.upsert_note/3` creates one. Passing the stale pre-DEK struct into

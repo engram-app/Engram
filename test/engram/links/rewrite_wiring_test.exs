@@ -30,7 +30,9 @@ defmodule Engram.Links.RewriteWiringTest do
     user: user,
     vault: vault
   } do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"}, actor: "api")
+
     {:ok, _} = Notes.rename_note(user, vault, "Old.md", "Fresh.md")
 
     assert [job] = all_enqueued(worker: RewriteNoteLinks)
@@ -42,7 +44,9 @@ defmodule Engram.Links.RewriteWiringTest do
   end
 
   test "no-op rename (same path) enqueues nothing", %{user: user, vault: vault} do
-    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "Same.md", "content" => "x"})
+    {:ok, _} =
+      Notes.upsert_note(user, vault, %{"path" => "Same.md", "content" => "x"}, actor: "api")
+
     {:ok, _} = Notes.rename_note(user, vault, "Same.md", "Same.md")
 
     assert all_enqueued(worker: RewriteNoteLinks) == []
@@ -61,7 +65,8 @@ defmodule Engram.Links.RewriteWiringTest do
     user: user,
     vault: vault
   } do
-    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "McpOld.md", "content" => "x"})
+    {:ok, _} =
+      Notes.upsert_note(user, vault, %{"path" => "McpOld.md", "content" => "x"}, actor: "api")
 
     {:ok, _msg, _} =
       Handlers.handle("rename_note", user, vault, %{
@@ -101,7 +106,9 @@ defmodule Engram.Links.RewriteWiringTest do
 
   describe "CRDT-origin gate (Phase 2, #648)" do
     setup %{user: user, vault: vault} do
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"})
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"}, actor: "api")
+
       %{note: note}
     end
 
@@ -199,9 +206,16 @@ defmodule Engram.Links.RewriteWiringTest do
       user: user,
       vault: vault
     } do
-      {:ok, a} = Notes.upsert_note(user, vault, %{"path" => "docs/One.md", "content" => "1"})
-      {:ok, b} = Notes.upsert_note(user, vault, %{"path" => "docs/sub/One.md", "content" => "1b"})
-      {:ok, c} = Notes.upsert_note(user, vault, %{"path" => "docs/Two.md", "content" => "2"})
+      {:ok, a} =
+        Notes.upsert_note(user, vault, %{"path" => "docs/One.md", "content" => "1"}, actor: "api")
+
+      {:ok, b} =
+        Notes.upsert_note(user, vault, %{"path" => "docs/sub/One.md", "content" => "1b"},
+          actor: "api"
+        )
+
+      {:ok, c} =
+        Notes.upsert_note(user, vault, %{"path" => "docs/Two.md", "content" => "2"}, actor: "api")
 
       # upsert_note-on-CREATE enqueues its own RebindNoteLinks jobs — count
       # the rename's delta, not absolutes.
@@ -231,14 +245,18 @@ defmodule Engram.Links.RewriteWiringTest do
       user: user,
       vault: vault
     } do
-      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "keep/N.md", "content" => "n"})
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "keep/N.md", "content" => "n"}, actor: "api")
+
       {:ok, _} = Notes.rename_folder(user, vault, "keep", "keep")
 
       assert all_enqueued(worker: RewriteNoteLinks) == []
     end
 
     test "batch folder move fans out through the same seam", %{user: user, vault: vault} do
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "src/A.md", "content" => "a"})
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "src/A.md", "content" => "a"}, actor: "api")
+
       {:ok, marker} = Notes.create_folder_marker(user, vault, "src")
 
       {:ok, %{moved: 1}} =
@@ -252,7 +270,8 @@ defmodule Engram.Links.RewriteWiringTest do
       user: user,
       vault: vault
     } do
-      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "m/N.md", "content" => "n"})
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "m/N.md", "content" => "n"}, actor: "api")
 
       {:ok, _msg, _} =
         Handlers.handle("rename_folder", user, vault, %{
@@ -267,7 +286,8 @@ defmodule Engram.Links.RewriteWiringTest do
       user: user,
       vault: vault
     } do
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "bm/N.md", "content" => "n"})
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "bm/N.md", "content" => "n"}, actor: "api")
 
       {:ok, %{moved: 1}} = Notes.batch_move_notes(user, vault, [note.id], {:path, "moved"})
 
@@ -280,7 +300,9 @@ defmodule Engram.Links.RewriteWiringTest do
       vault: vault
     } do
       _att = Engram.Fixtures.insert_attachment!(user, vault, %{path: "media/img.png"})
-      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "media/N.md", "content" => "n"})
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "media/N.md", "content" => "n"}, actor: "api")
 
       {:ok, %{notes: 1, attachments: 1}} = Folders.rename(user, vault, "media", "assets")
 

@@ -22,18 +22,28 @@ defmodule Engram.Notes.MaterializationTest do
     vault: vault
   } do
     {:ok, _} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "a/b/c.md",
-        "content" => "c",
-        "mtime" => 1.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "a/b/c.md",
+          "content" => "c",
+          "mtime" => 1.0
+        },
+        actor: "api"
+      )
 
     {:ok, _} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "x/y.md",
-        "content" => "y",
-        "mtime" => 2.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "x/y.md",
+          "content" => "y",
+          "mtime" => 2.0
+        },
+        actor: "api"
+      )
 
     # "a/b/c.md" implies folders "a" and "a/b". "x/y.md" implies "x". = 3 inserts.
     assert {:ok, %{inserted: 3, existing: 0}} = Materialization.run(user, vault)
@@ -45,11 +55,16 @@ defmodule Engram.Notes.MaterializationTest do
 
   test "idempotent re-run reports existing, inserts nothing", %{user: user, vault: vault} do
     {:ok, _} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "a/b/c.md",
-        "content" => "c",
-        "mtime" => 1.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "a/b/c.md",
+          "content" => "c",
+          "mtime" => 1.0
+        },
+        actor: "api"
+      )
 
     {:ok, %{inserted: 2, existing: 0}} = Materialization.run(user, vault)
     assert {:ok, %{inserted: 0, existing: 2}} = Materialization.run(user, vault)
@@ -57,11 +72,16 @@ defmodule Engram.Notes.MaterializationTest do
 
   test "preserves HMAC binding on inserted markers", %{user: user, vault: vault} do
     {:ok, _} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "Projects/notes.md",
-        "content" => "x",
-        "mtime" => 1.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Projects/notes.md",
+          "content" => "x",
+          "mtime" => 1.0
+        },
+        actor: "api"
+      )
 
     {:ok, _} = Materialization.run(user, vault)
     [marker] = Notes.list_folder_markers(user, vault)
@@ -74,11 +94,16 @@ defmodule Engram.Notes.MaterializationTest do
     vault: vault
   } do
     {:ok, _} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "Projects/notes.md",
-        "content" => "x",
-        "mtime" => 1.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Projects/notes.md",
+          "content" => "x",
+          "mtime" => 1.0
+        },
+        actor: "api"
+      )
 
     # First run materializes the "Projects" marker.
     {:ok, %{inserted: 1, existing: 0}} = Materialization.run(user, vault)

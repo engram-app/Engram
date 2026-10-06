@@ -21,7 +21,10 @@ defmodule EngramWeb.CrdtChannelTest do
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Crypto.ensure_user_dek(user)
     {:ok, vault, _} = Vaults.register_vault(user, "CrdtChannelTest", Ecto.UUID.generate())
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "base"})
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "base"}, actor: "api")
+
     other_user = insert(:user)
     {:ok, other_user} = Crypto.ensure_user_dek(other_user)
 
@@ -110,7 +113,9 @@ defmodule EngramWeb.CrdtChannelTest do
       note: note
     } do
       {:ok, _other} =
-        Notes.upsert_note(user, vault, %{"path" => "Notes/occupied.md", "content" => "x"})
+        Notes.upsert_note(user, vault, %{"path" => "Notes/occupied.md", "content" => "x"},
+          actor: "api"
+        )
 
       ref = push(socket, "crdt_create", %{"doc_id" => note.id, "path" => "Notes/occupied.md"})
       assert_reply ref, :error, %{reason: "id_conflict", doc_id: got}
@@ -137,7 +142,9 @@ defmodule EngramWeb.CrdtChannelTest do
       vault: vault
     } do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{"path" => "Notes/dw.md", "content" => "keep"})
+        Notes.upsert_note(user, vault, %{"path" => "Notes/dw.md", "content" => "keep"},
+          actor: "api"
+        )
 
       :ok = Notes.delete_note_by_id(user, vault, note.id)
 
@@ -437,7 +444,9 @@ defmodule EngramWeb.CrdtChannelTest do
       # Sanity that the probe is wired: a real room start DOES fire it, so the
       # refute above is an observation, not a broken handler.
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{"path" => "Notes/probe.md", "content" => "x"})
+        Notes.upsert_note(user, vault, %{"path" => "Notes/probe.md", "content" => "x"},
+          actor: "api"
+        )
 
       {:ok, _room} = CrdtRegistry.ensure_started(user.id, vault.id, note.id)
       on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
@@ -468,7 +477,9 @@ defmodule EngramWeb.CrdtChannelTest do
       # a DIFFERENT body writes nothing, so broadcasting would push state no
       # writer here produced.
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{"path" => "Notes/taken.md", "content" => "base"})
+        Notes.upsert_note(user, vault, %{"path" => "Notes/taken.md", "content" => "base"},
+          actor: "api"
+        )
 
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
@@ -796,10 +807,15 @@ defmodule EngramWeb.CrdtChannelTest do
 
       # The concurrent write the decline exists to protect.
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Notes/declined.md",
-          "content" => "a DIFFERENT body that must not be clobbered"
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Notes/declined.md",
+            "content" => "a DIFFERENT body that must not be clobbered"
+          },
+          actor: "api"
+        )
 
       CheckpointInterleave.release(:genesis_seed_before_write, parked)
 
@@ -833,10 +849,15 @@ defmodule EngramWeb.CrdtChannelTest do
       # `genesis: "absent"` with `row_content: "base body"`, which makes the
       # client push a second copy into what it believes is an empty doc.
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Notes/holds-a-body.md",
-          "content" => "a body that must not be doubled"
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Notes/holds-a-body.md",
+            "content" => "a body that must not be doubled"
+          },
+          actor: "api"
+        )
 
       # Bodyless create against that live id + same path = the idempotent retry.
       ref =
@@ -899,10 +920,15 @@ defmodule EngramWeb.CrdtChannelTest do
       # Driven by making the pre-write seam RAISE rather than park, which is the
       # cheapest way to reach the rescue without a fake.
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Notes/raised.md",
-          "content" => "a body a transient fault must not endanger"
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Notes/raised.md",
+            "content" => "a body a transient fault must not endanger"
+          },
+          actor: "api"
+        )
 
       prev = Application.get_env(:engram, :checkpoint_interleave_hook)
 
@@ -951,10 +977,15 @@ defmodule EngramWeb.CrdtChannelTest do
       # that already carries another note's, unioning the two under YATA. The
       # client's ADOPT path transfers ours deliberately instead.
       {:ok, existing} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Notes/adopted.md",
-          "content" => "the note that already owns this path"
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Notes/adopted.md",
+            "content" => "the note that already owns this path"
+          },
+          actor: "api"
+        )
 
       ref =
         push(socket, "crdt_create", %{
@@ -1064,7 +1095,12 @@ defmodule EngramWeb.CrdtChannelTest do
         Vaults.register_vault(user, "CrdtChannelTestB", Ecto.UUID.generate())
 
       {:ok, foreign} =
-        Notes.upsert_note(user, other_vault, %{"path" => "Copied.md", "content" => "vault B body"})
+        Notes.upsert_note(
+          user,
+          other_vault,
+          %{"path" => "Copied.md", "content" => "vault B body"},
+          actor: "api"
+        )
 
       {new_id, log} =
         with_log(fn ->
@@ -1097,7 +1133,11 @@ defmodule EngramWeb.CrdtChannelTest do
       user: user,
       vault: vault
     } do
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/del.md", "content" => "x"})
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/del.md", "content" => "x"},
+          actor: "api"
+        )
+
       ref = push(socket, "crdt_delete", %{"doc_id" => note.id})
       assert_reply ref, :ok, %{doc_id: _}
       refute Notes.note_in_vault?(user, vault.id, note.id)
@@ -1126,7 +1166,10 @@ defmodule EngramWeb.CrdtChannelTest do
 
       Sandbox.allow(Repo, self(), device_socket.channel_pid)
 
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/dev.md", "content" => "x"})
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/dev.md", "content" => "x"},
+          actor: "api"
+        )
 
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
@@ -1153,7 +1196,9 @@ defmodule EngramWeb.CrdtChannelTest do
       vault: vault
     } do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{"path" => "Notes/cold.md", "content" => "cold body"})
+        Notes.upsert_note(user, vault, %{"path" => "Notes/cold.md", "content" => "cold body"},
+          actor: "api"
+        )
 
       refute CrdtRegistry.lookup(note.id), "precondition: no room before the read"
 
@@ -1197,7 +1242,9 @@ defmodule EngramWeb.CrdtChannelTest do
       # uncached rebuild (DB read, AES decrypt, apply, tail replay, encode) on
       # the channel process, once per cold note during a bulk sync.
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{"path" => "Notes/billed.md", "content" => "b"})
+        Notes.upsert_note(user, vault, %{"path" => "Notes/billed.md", "content" => "b"},
+          actor: "api"
+        )
 
       # Shrink the handshake bucket to 1 and prove the SECOND read is refused —
       # which can only happen if the first one consumed the budget.
@@ -1222,10 +1269,15 @@ defmodule EngramWeb.CrdtChannelTest do
       other_vault = Fixtures.insert_vault!(other, "Other")
 
       {:ok, note} =
-        Notes.upsert_note(other, other_vault, %{
-          "path" => "Notes/theirs.md",
-          "content" => "secret"
-        })
+        Notes.upsert_note(
+          other,
+          other_vault,
+          %{
+            "path" => "Notes/theirs.md",
+            "content" => "secret"
+          },
+          actor: "api"
+        )
 
       ref = push(socket, "crdt_doc_state", %{"doc_id" => note.id})
       assert_reply ref, :error, %{reason: "note_not_found"}
@@ -1248,10 +1300,14 @@ defmodule EngramWeb.CrdtChannelTest do
       # So the assertion that matters is not the error shape, it is that a
       # SECOND frame still works afterwards.
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{"path" => "Notes/poison.md", "content" => "body"})
+        Notes.upsert_note(user, vault, %{"path" => "Notes/poison.md", "content" => "body"},
+          actor: "api"
+        )
 
       {:ok, healthy} =
-        Notes.upsert_note(user, vault, %{"path" => "Notes/healthy.md", "content" => "fine"})
+        Notes.upsert_note(user, vault, %{"path" => "Notes/healthy.md", "content" => "fine"},
+          actor: "api"
+        )
 
       # Corrupt the persisted snapshot: ciphertext that cannot decrypt.
       Repo.with_tenant(user.id, fn ->
@@ -1282,7 +1338,9 @@ defmodule EngramWeb.CrdtChannelTest do
       vault: vault
     } do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{"path" => "Notes/idle.md", "content" => "base"})
+        Notes.upsert_note(user, vault, %{"path" => "Notes/idle.md", "content" => "base"},
+          actor: "api"
+        )
 
       refute CrdtRegistry.lookup(note.id), "precondition: no room before the write"
 
@@ -1383,10 +1441,15 @@ defmodule EngramWeb.CrdtChannelTest do
       other_vault = Fixtures.insert_vault!(other, "Other")
 
       {:ok, note} =
-        Notes.upsert_note(other, other_vault, %{
-          "path" => "Notes/theirs.md",
-          "content" => "theirs"
-        })
+        Notes.upsert_note(
+          other,
+          other_vault,
+          %{
+            "path" => "Notes/theirs.md",
+            "content" => "theirs"
+          },
+          actor: "api"
+        )
 
       ref =
         push(socket, "crdt_doc_update", %{
@@ -1496,7 +1559,9 @@ defmodule EngramWeb.CrdtChannelTest do
       # would let a 1.4k-note flush starve the user's real typing — the
       # 2026-07-07 cross-file-overwrite incident shape.
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{"path" => "Notes/billed-write.md", "content" => "b"})
+        Notes.upsert_note(user, vault, %{"path" => "Notes/billed-write.md", "content" => "b"},
+          actor: "api"
+        )
 
       Application.put_env(:engram, :crdt_hs_rate_limit_override, 1)
 
@@ -1526,8 +1591,15 @@ defmodule EngramWeb.CrdtChannelTest do
       user: user,
       vault: vault
     } do
-      {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "Notes/a.md", "content" => "aaa"})
-      {:ok, n2} = Notes.upsert_note(user, vault, %{"path" => "Notes/b.md", "content" => "bbb"})
+      {:ok, n1} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/a.md", "content" => "aaa"},
+          actor: "api"
+        )
+
+      {:ok, n2} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/b.md", "content" => "bbb"},
+          actor: "api"
+        )
 
       ref = push(socket, "crdt_catchup_since", %{"cursor_seq" => 0})
       assert_reply ref, :ok, %{changes: changes, has_more: has_more, next_seq: _next}
@@ -1550,7 +1622,11 @@ defmodule EngramWeb.CrdtChannelTest do
       user: user,
       vault: vault
     } do
-      {:ok, n} = Notes.upsert_note(user, vault, %{"path" => "Notes/del.md", "content" => "x"})
+      {:ok, n} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/del.md", "content" => "x"},
+          actor: "api"
+        )
+
       :ok = Notes.delete_note(user, vault, "Notes/del.md")
 
       ref = push(socket, "crdt_catchup_since", %{"cursor_seq" => 0})
@@ -1561,8 +1637,11 @@ defmodule EngramWeb.CrdtChannelTest do
     end
 
     test "only returns changes with seq > cursor", %{socket: socket, user: user, vault: vault} do
-      {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "Notes/c1.md", "content" => "1"})
-      {:ok, n2} = Notes.upsert_note(user, vault, %{"path" => "Notes/c2.md", "content" => "2"})
+      {:ok, n1} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/c1.md", "content" => "1"}, actor: "api")
+
+      {:ok, n2} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/c2.md", "content" => "2"}, actor: "api")
 
       # Cursor at n1's seq → n1 excluded, n2 included.
       ref = push(socket, "crdt_catchup_since", %{"cursor_seq" => n1.seq})
@@ -1588,7 +1667,9 @@ defmodule EngramWeb.CrdtChannelTest do
       vault: vault
     } do
       {:ok, n} =
-        Notes.upsert_note(user, vault, %{"path" => "Notes/n.md", "content" => "note-body"})
+        Notes.upsert_note(user, vault, %{"path" => "Notes/n.md", "content" => "note-body"},
+          actor: "api"
+        )
 
       {:ok, att} =
         Attachments.upsert_attachment(user, vault, %{
@@ -1617,8 +1698,11 @@ defmodule EngramWeb.CrdtChannelTest do
       user: user,
       vault: vault
     } do
-      {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "Notes/g1.md", "content" => "1"})
-      {:ok, n2} = Notes.upsert_note(user, vault, %{"path" => "Notes/g2.md", "content" => "2"})
+      {:ok, n1} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/g1.md", "content" => "1"}, actor: "api")
+
+      {:ok, n2} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/g2.md", "content" => "2"}, actor: "api")
 
       # Garbage cursor_id must not reject or 500 — it's a pagination refinement,
       # so it falls back to the seq-only cursor (seq > n1.seq → n2 only).
@@ -1888,7 +1972,9 @@ defmodule EngramWeb.CrdtChannelTest do
       CrdtRegistry.terminate_room(created_id)
 
       {:ok, _} =
-        Engram.Notes.upsert_note(user, vault, %{"path" => "Notes/g.md", "content" => "late body"})
+        Engram.Notes.upsert_note(user, vault, %{"path" => "Notes/g.md", "content" => "late body"},
+          actor: "api"
+        )
 
       client = CrdtBridge.new_doc()
       {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(client)
@@ -1918,10 +2004,15 @@ defmodule EngramWeb.CrdtChannelTest do
       CrdtRegistry.terminate_room(created_id)
 
       {:ok, _} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "path" => "Notes/diverged.md",
-          "content" => "late body"
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Notes/diverged.md",
+            "content" => "late body"
+          },
+          actor: "api"
+        )
 
       # Hand-wipe the state columns back to the EMPTY genesis snapshot, leaving
       # crdt_state empty while notes.content holds the body.
@@ -2238,7 +2329,9 @@ defmodule EngramWeb.CrdtChannelTest do
       #    converged AND the delivery having reached the update-log tail, the
       #    exact preconditions of the e2e failure window.
       v2 = "# Stale Check\nIteration 2"
-      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => v2})
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => v2}, actor: "api")
 
       wait_until(fn ->
         CrdtBridge.text_of(SharedDoc.get_doc(room_pid)) == v2 and
@@ -2248,7 +2341,9 @@ defmodule EngramWeb.CrdtChannelTest do
       # 3. The next REST write replays the tail. It must come through verbatim —
       #    not doubled/interleaved with the delivered ops ("Iteration 22" / "23").
       v3 = "# Stale Check\nIteration 3"
-      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => v3})
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => v3}, actor: "api")
 
       {:ok, stored} = Notes.get_note(user, vault, "p.md")
       assert stored.content == v3
@@ -2815,7 +2910,9 @@ defmodule EngramWeb.CrdtChannelTest do
       on_exit(fn -> Application.delete_env(:engram, :max_rooms_per_socket) end)
       on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
 
-      {:ok, note2} = Notes.upsert_note(user, vault, %{"path" => "p2.md", "content" => "base2"})
+      {:ok, note2} =
+        Notes.upsert_note(user, vault, %{"path" => "p2.md", "content" => "base2"}, actor: "api")
+
       on_exit(fn -> CrdtRegistry.terminate_room(note2.id) end)
 
       step1_b64 = fn ->
@@ -2948,7 +3045,10 @@ defmodule EngramWeb.CrdtChannelTest do
       user: user,
       vault: vault
     } do
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/a.md", "content" => "base"})
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/a.md", "content" => "base"},
+          actor: "api"
+        )
 
       for prefix <- ["ONE-", "TWO-"] do
         frame = client_sync_update(socket, note.id, prefix)
@@ -2972,7 +3072,10 @@ defmodule EngramWeb.CrdtChannelTest do
       user: user,
       vault: vault
     } do
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Notes/b.md", "content" => "base"})
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/b.md", "content" => "base"},
+          actor: "api"
+        )
 
       {:ok, _, joined} =
         user_socket(user)

@@ -14,7 +14,10 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Crypto.ensure_user_dek(user)
     {:ok, vault, _} = Vaults.register_vault(user, "CrdtCheckpointTest", Ecto.UUID.generate())
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "before"})
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "before"}, actor: "api")
+
     %{user: user, vault: vault, note: note}
   end
 
@@ -313,7 +316,9 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     canvas_json = ~s({"nodes":[{"id":"n1","type":"text","text":"hi"}],"edges":[]})
 
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{"path" => "board.canvas", "content" => canvas_json})
+      Notes.upsert_note(user, vault, %{"path" => "board.canvas", "content" => canvas_json},
+        actor: "api"
+      )
 
     # Drop the REST-era crdt_state so the checkpoint folds only the live canvas doc.
     {:ok, _} =
@@ -375,7 +380,10 @@ defmodule Engram.Notes.CrdtCheckpointTest do
 
     # A concurrent REST write commits NEW content and bumps the row version —
     # this is the deliver_out gap: it landed after the doc snapshot was taken.
-    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "committed after"})
+    {:ok, _} =
+      Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "committed after"},
+        actor: "api"
+      )
 
     # The debounced checkpoint now fires with the stale doc. Fenced on the
     # captured version, it must ABORT rather than overwrite the newer row.
@@ -414,7 +422,9 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     # REST/MCP write commits new merged content + state, bumping the version —
     # BEFORE the checkpoint captures anything, so no fence can catch this.
     {:ok, _} =
-      Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "before APPEND"})
+      Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "before APPEND"},
+        actor: "api"
+      )
 
     # Room exits (unbind path: no captured_version, so no version CAS). Without
     # the union this writes "before EDIT" over "before APPEND" — content AND
@@ -672,7 +682,9 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     %{user: user, vault: vault} = ctx
 
     {:ok, note2} =
-      Notes.upsert_note(user, vault, %{"path" => "folder/deep/note.md", "content" => "init"})
+      Notes.upsert_note(user, vault, %{"path" => "folder/deep/note.md", "content" => "init"},
+        actor: "api"
+      )
 
     {:ok, raw_note2} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note2.id) end)
     {:ok, raw_state2} = Crypto.decrypt_crdt_state(raw_note2, user)
@@ -938,7 +950,9 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     %{user: user, vault: vault} = ctx
 
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{"path" => "okf/change.md", "content" => @okf_content})
+      Notes.upsert_note(user, vault, %{"path" => "okf/change.md", "content" => @okf_content},
+        actor: "api"
+      )
 
     {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
@@ -1011,7 +1025,9 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     %{user: user, vault: vault} = ctx
 
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{"path" => "okf/remove.md", "content" => @okf_content})
+      Notes.upsert_note(user, vault, %{"path" => "okf/remove.md", "content" => @okf_content},
+        actor: "api"
+      )
 
     {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
@@ -1108,7 +1124,9 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     #
     # The structural (.canvas) path is already protected; markdown was not.
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{"path" => "legacy.md", "content" => "IMPORTANT"})
+      Notes.upsert_note(user, vault, %{"path" => "legacy.md", "content" => "IMPORTANT"},
+        actor: "api"
+      )
 
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->

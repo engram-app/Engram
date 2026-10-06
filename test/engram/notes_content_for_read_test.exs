@@ -96,7 +96,9 @@ defmodule Engram.NotesContentForReadTest do
     %{user: user, vault: vault} = ctx
 
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{"path" => "genesis.md", "content" => "TAIL ONLY"})
+      Notes.upsert_note(user, vault, %{"path" => "genesis.md", "content" => "TAIL ONLY"},
+        actor: "api"
+      )
 
     # Move the whole body into the tail and drop the snapshot + facade, which is
     # the state between a genesis insert and its first checkpoint.
@@ -136,7 +138,10 @@ defmodule Engram.NotesContentForReadTest do
   # made both devices create a 0-byte file and push back the hash of "".
   test "the seq change feed serves the doc body, not an empty facade", ctx do
     %{user: user, vault: vault} = ctx
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "d.md", "content" => "FEED BODY"})
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "d.md", "content" => "FEED BODY"}, actor: "api")
+
     :ok = blank_facade!(user, note.id)
     :ok = append_tail!(user, vault, note.id)
 
@@ -157,7 +162,9 @@ defmodule Engram.NotesContentForReadTest do
   # server-side scheme fixes that — the content changes between the two calls.
   test "content_hash stays the facade's so the feed and manifest agree", ctx do
     %{user: user, vault: vault} = ctx
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "e.md", "content" => "HASH ME"})
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "e.md", "content" => "HASH ME"}, actor: "api")
 
     {:ok, before} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
     :ok = append_tail!(user, vault, note.id)
@@ -174,7 +181,9 @@ defmodule Engram.NotesContentForReadTest do
   # one a checkpoint just moved. That cost is real and bounded to empty notes.
   test "a checkpointed note with a body is served verbatim", ctx do
     %{user: user, vault: vault} = ctx
-    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "f.md", "content" => "KEPT"})
+
+    {:ok, _} =
+      Notes.upsert_note(user, vault, %{"path" => "f.md", "content" => "KEPT"}, actor: "api")
 
     {:ok, %{changes: changes}} = Notes.list_changes_by_seq(user, vault, 0)
     change = Enum.find(changes, &(&1.path == "f.md"))
@@ -187,7 +196,10 @@ defmodule Engram.NotesContentForReadTest do
   # select crdt_state, so it must never resolve the authority.
   test "fields: :meta carries no content and resolves nothing", ctx do
     %{user: user, vault: vault} = ctx
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "g.md", "content" => "BODY"})
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "g.md", "content" => "BODY"}, actor: "api")
+
     :ok = blank_facade!(user, note.id)
     :ok = append_tail!(user, vault, note.id)
 
@@ -203,7 +215,10 @@ defmodule Engram.NotesContentForReadTest do
   # facade is the last good checkpoint — stale, but real.
   test "an unreadable CRDT snapshot degrades to the facade instead of failing the page", ctx do
     %{user: user, vault: vault} = ctx
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "h.md", "content" => "LAST GOOD"})
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "h.md", "content" => "LAST GOOD"}, actor: "api")
+
     :ok = append_tail!(user, vault, note.id)
 
     # Corrupt the snapshot only: AES-GCM auth fails, the row's other columns
@@ -235,7 +250,9 @@ defmodule Engram.NotesContentForReadTest do
     %{user: user, vault: vault} = ctx
 
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{"path" => "board.canvas", "content" => ~s({"nodes":[]})})
+      Notes.upsert_note(user, vault, %{"path" => "board.canvas", "content" => ~s({"nodes":[]})},
+        actor: "api"
+      )
 
     :ok = append_tail!(user, vault, note.id)
 
@@ -251,7 +268,9 @@ defmodule Engram.NotesContentForReadTest do
   # resurrected body on a `deleted: true` row.
   test "a tombstone is not resolved and ships no resurrected body", ctx do
     %{user: user, vault: vault} = ctx
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "gone.md", "content" => "BODY"})
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "gone.md", "content" => "BODY"}, actor: "api")
 
     # Blank the facade FIRST, so a rebuild would visibly resurrect "BODY" from
     # the snapshot. If the tombstone were resolved, content would come back.
@@ -271,7 +290,9 @@ defmodule Engram.NotesContentForReadTest do
   # to distrust an empty row, so the backstop has to live here.
   test "an empty projection over a non-empty facade serves the facade", ctx do
     %{user: user, vault: vault} = ctx
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "guard.md", "content" => "REAL"})
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "guard.md", "content" => "REAL"}, actor: "api")
 
     # A snapshot that projects "" while the facade still holds the body: the
     # shape a genesis-empty doc takes if its ops never made it into the state.
@@ -300,7 +321,11 @@ defmodule Engram.NotesContentForReadTest do
   # the most recent edits missing, and the client would write it to disk.
   test "a partial tail replay degrades to the facade", ctx do
     %{user: user, vault: vault} = ctx
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "partial.md", "content" => "INTACT"})
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "partial.md", "content" => "INTACT"},
+        actor: "api"
+      )
 
     # One good tail row, one that will not decrypt (wrong AAD) — replay applies
     # 1 of 2, so the projection is missing ops.
@@ -343,10 +368,15 @@ defmodule Engram.NotesContentForReadTest do
     notes =
       for i <- 1..count do
         {:ok, note} =
-          Notes.upsert_note(user, vault, %{
-            "path" => "chunk/#{i}.md",
-            "content" => "BODY #{i}"
-          })
+          Notes.upsert_note(
+            user,
+            vault,
+            %{
+              "path" => "chunk/#{i}.md",
+              "content" => "BODY #{i}"
+            },
+            actor: "api"
+          )
 
         :ok = blank_facade!(user, note.id)
         :ok = append_tail!(user, vault, note.id)

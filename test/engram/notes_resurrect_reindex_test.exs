@@ -28,7 +28,8 @@ defmodule Engram.NotesResurrectReindexTest do
   # A note the embed pipeline has finished with: embed_hash stamped to the
   # current content_hash, and no jobs left in the queue.
   defp embedded_note(user, vault, path) do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => path, "content" => "# body"})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => path, "content" => "# body"}, actor: "api")
 
     from(n in Note, where: n.id == ^note.id, update: [set: [embed_hash: n.content_hash]])
     |> Repo.update_all([], skip_tenant_check: true)
@@ -45,7 +46,12 @@ defmodule Engram.NotesResurrectReindexTest do
     :ok = Notes.delete_note(user, vault, "Old.md")
 
     {:ok, _} =
-      Notes.upsert_note(user, vault, %{"id" => note.id, "path" => "New.md", "content" => "# body"})
+      Notes.upsert_note(
+        user,
+        vault,
+        %{"id" => note.id, "path" => "New.md", "content" => "# body"},
+        actor: "api"
+      )
 
     assert :ok = perform_job(ReconcileEmbeddings, %{})
     assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
@@ -81,7 +87,9 @@ defmodule Engram.NotesResurrectReindexTest do
     end)
 
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# Hello\n\nWorld."})
+      Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# Hello\n\nWorld."},
+        actor: "api"
+      )
 
     assert :ok = perform_job(EmbedNote, %{note_id: note.id})
     assert chunk_count(note) > 0

@@ -44,26 +44,28 @@ defmodule Engram.Notes.ContentCommitTest do
   defp drop_jobs, do: Repo.delete_all(Oban.Job)
 
   test "an upsert that changes content runs it", %{user: u, vault: v} do
-    {:ok, note} = Notes.upsert_note(u, v, %{"path" => "u.md", "content" => "one"})
+    {:ok, note} = Notes.upsert_note(u, v, %{"path" => "u.md", "content" => "one"}, actor: "api")
     drop_jobs()
-    {:ok, _} = Notes.upsert_note(u, v, %{"path" => "u.md", "content" => "two"})
+    {:ok, _} = Notes.upsert_note(u, v, %{"path" => "u.md", "content" => "two"}, actor: "api")
     assert_all_enqueued(note.id)
   end
 
   test "a create enqueues no finalize", %{user: u, vault: v} do
-    {:ok, note} = Notes.upsert_note(u, v, %{"path" => "new.md", "content" => "one"})
+    {:ok, note} = Notes.upsert_note(u, v, %{"path" => "new.md", "content" => "one"}, actor: "api")
     refute_enqueued(worker: FinalizeRevision, args: %{note_id: note.id})
   end
 
   test "an update by a user without history enqueues no finalize", %{user: u, vault: v} do
     insert(:user_limit_override, user: u, key: "history_enabled", value: %{"v" => false})
-    {:ok, note} = Notes.upsert_note(u, v, %{"path" => "nh.md", "content" => "one"})
-    {:ok, _} = Notes.upsert_note(u, v, %{"path" => "nh.md", "content" => "two"})
+    {:ok, note} = Notes.upsert_note(u, v, %{"path" => "nh.md", "content" => "one"}, actor: "api")
+    {:ok, _} = Notes.upsert_note(u, v, %{"path" => "nh.md", "content" => "two"}, actor: "api")
     refute_enqueued(worker: FinalizeRevision, args: %{note_id: note.id})
   end
 
   test "a content-changing checkpoint runs it", %{user: u, vault: v} do
-    {:ok, note} = Notes.upsert_note(u, v, %{"path" => "c.md", "content" => "before"})
+    {:ok, note} =
+      Notes.upsert_note(u, v, %{"path" => "c.md", "content" => "before"}, actor: "api")
+
     drop_jobs()
     {:ok, raw} = Repo.with_tenant(u.id, fn -> Repo.get!(Note, note.id) end)
     {:ok, state} = Crypto.decrypt_crdt_state(raw, u)

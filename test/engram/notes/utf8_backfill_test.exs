@@ -22,11 +22,16 @@ defmodule Engram.Notes.Utf8BackfillTest do
   # its content ciphertext in place with bytes that are invalid UTF-8 at rest.
   defp corrupt_note!(user, vault, path) do
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{
-        "path" => path,
-        "content" => "# Title\n\nclean placeholder",
-        "mtime" => 1.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => path,
+          "content" => "# Title\n\nclean placeholder",
+          "mtime" => 1.0
+        },
+        actor: "api"
+      )
 
     bad = "# Title\n\nlead" <> <<0xE2>> <> "byte"
     {:ok, enc} = Crypto.encrypt_note_fields(%{content: bad, title: "Title"}, user, note.id)
@@ -105,11 +110,16 @@ defmodule Engram.Notes.Utf8BackfillTest do
     # mimic the 5 prod rows. Before the regex fix, re-deriving reproduced the
     # corruption and the backfill could never reach corrupt:0.
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "Test/EnDash.md",
-        "content" => "x #628" <> <<0xE2, 0x80, 0x93>> <> " y",
-        "mtime" => 1.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Test/EnDash.md",
+          "content" => "x #628" <> <<0xE2, 0x80, 0x93>> <> " y",
+          "mtime" => 1.0
+        },
+        actor: "api"
+      )
 
     {:ok, dek} = Crypto.get_dek(user)
 
@@ -133,11 +143,16 @@ defmodule Engram.Notes.Utf8BackfillTest do
 
   test "leaves valid rows untouched (no false positives)", %{user: user, vault: vault} do
     {:ok, _} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "Test/Clean.md",
-        "content" => "# Clean\n\nall good — 日本語",
-        "mtime" => 1.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Test/Clean.md",
+          "content" => "# Clean\n\nall good — 日本語",
+          "mtime" => 1.0
+        },
+        actor: "api"
+      )
 
     result = Utf8Backfill.scan(fix: true)
 

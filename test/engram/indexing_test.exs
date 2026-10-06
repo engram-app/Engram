@@ -19,11 +19,16 @@ defmodule Engram.IndexingTest do
     vault = insert(:vault, user: user)
 
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "Health/Iron Panel.md",
-        "content" => "---\ntags: [health]\n---\n# Iron Panel\n\nFerritin levels.",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "Health/Iron Panel.md",
+          "content" => "---\ntags: [health]\n---\n# Iron Panel\n\nFerritin levels.",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
     %{bypass: bypass, user: user, vault: vault, note: note}
   end
@@ -178,11 +183,16 @@ defmodule Engram.IndexingTest do
       # that retries can never fix — the job then churns through
       # ReconcileEmbeddings forever, burning RPM budget.
       {:ok, big_note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Big/Sections.md",
-          "content" => big_sectioned_content(300),
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Big/Sections.md",
+            "content" => big_sectioned_content(300),
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       test_pid = self()
 
@@ -226,11 +236,16 @@ defmodule Engram.IndexingTest do
       # holds for any content. The earlier 200,000 assumed 2 bytes/token and
       # prod shipped batches at 1.39 — see the constant's comment.
       {:ok, dense_note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Big/Dense.md",
-          "content" => "# Dense\n\n" <> String.duplicate("A", 300_000),
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Big/Dense.md",
+            "content" => "# Dense\n\n" <> String.duplicate("A", 300_000),
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       test_pid = self()
 
@@ -281,14 +296,19 @@ defmodule Engram.IndexingTest do
       # chunks each carrying a 202KB `context_text` behind a correctly-capped
       # 2048-byte `text`. This asserts the cap covers the prefix too.
       {:ok, heading_note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Big/Heading.md",
-          "content" =>
-            "# " <>
-              String.duplicate("A", 200_000) <>
-              "\n\nshort body.\n\n## Sub\n\nanother short body.\n",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Big/Heading.md",
+            "content" =>
+              "# " <>
+                String.duplicate("A", 200_000) <>
+                "\n\nshort body.\n\n## Sub\n\nanother short body.\n",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       test_pid = self()
 
@@ -329,11 +349,16 @@ defmodule Engram.IndexingTest do
       # 5k chunks × 1024-dim float vectors as one JSON body is tens of MB
       # per upsert — split the PUT into bounded batches.
       {:ok, big_note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Big/Upserts.md",
-          "content" => big_sectioned_content(300),
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Big/Upserts.md",
+            "content" => big_sectioned_content(300),
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       Engram.MockEmbedder
       |> stub(:embed_texts, fn texts ->
@@ -370,11 +395,16 @@ defmodule Engram.IndexingTest do
       # the user (to persist/clear links via Engram.Links.replace_links), so
       # note.user_id must resolve to a real row.
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Test/Empty.md",
-          "content" => "",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Test/Empty.md",
+            "content" => "",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       assert {:ok, 0} = Indexing.index_note(note, vault)
     end
@@ -391,11 +421,16 @@ defmodule Engram.IndexingTest do
       vault = insert(:vault, user: user)
 
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "secret/note.md",
-          "content" => "# Secret\n\nClassified body.",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "secret/note.md",
+            "content" => "# Secret\n\nClassified body.",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       # Re-decrypt since upsert_note encrypted the note content (Phase 3 behaviour).
       {:ok, note} = Engram.Crypto.maybe_decrypt_note_fields(note, user)
@@ -445,11 +480,16 @@ defmodule Engram.IndexingTest do
       vault = insert(:vault, user: user)
 
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "PrivateFolder/diary-secret.md",
-          "content" => "---\ntags: [confidential, privatetag]\n---\n# Diary\n\nBody.",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "PrivateFolder/diary-secret.md",
+            "content" => "---\ntags: [confidential, privatetag]\n---\n# Diary\n\nBody.",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       Engram.MockEmbedder
       |> expect(:embed_texts, fn texts ->
@@ -499,11 +539,16 @@ defmodule Engram.IndexingTest do
       vault = insert(:vault, user: user)
 
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Health/iron.md",
-          "content" => "---\ntags: [labs, ferritin]\n---\n# Iron",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Health/iron.md",
+            "content" => "---\ntags: [labs, ferritin]\n---\n# Iron",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       Engram.MockEmbedder
       |> expect(:embed_texts, fn texts ->
@@ -553,11 +598,16 @@ defmodule Engram.IndexingTest do
       vault = insert(:vault, user: user)
 
       {:ok, note} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "path" => "no-dek/note.md",
-          "content" => "body",
-          "mtime" => 1_000.0
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "no-dek/note.md",
+            "content" => "body",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       # Reload user — upsert_note auto-provisioned the DEK via
       # maybe_encrypt_note_fields, but our local user struct is stale.
@@ -616,11 +666,16 @@ defmodule Engram.IndexingTest do
       vault = insert(:vault, user: user)
 
       {:ok, note} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "path" => "atomic/note.md",
-          "content" => "# Title\n\nFirst body.",
-          "mtime" => 1_000.0
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "atomic/note.md",
+            "content" => "# Title\n\nFirst body.",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       {:ok, plaintext_note} = Engram.Crypto.maybe_decrypt_note_fields(note, user)
 
@@ -691,11 +746,16 @@ defmodule Engram.IndexingTest do
       vault = insert(:vault, user: user)
 
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "ghosts/note.md",
-          "content" => "# Ghosts\n\nBody.",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "ghosts/note.md",
+            "content" => "# Ghosts\n\nBody.",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       {:ok, decrypted} = Engram.Crypto.maybe_decrypt_note_fields(note, user)
 

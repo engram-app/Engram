@@ -160,7 +160,8 @@ defmodule Engram.LinksTest do
 
     test "replace_links called twice for the same note converges to the last parse",
          %{user: user, vault: vault} do
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "S.md", "content" => "x"})
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "S.md", "content" => "x"}, actor: "api")
 
       :ok = Links.replace_links(user, vault, note.id, Parser.extract("a [[One]] b [[Two]]"))
       :ok = Links.replace_links(user, vault, note.id, Parser.extract("a [[Three]]"))
@@ -532,11 +533,16 @@ defmodule Engram.LinksTest do
   describe "basename_hmac stamped by production write paths" do
     test "upsert_note stamps basename_hmac", %{user: user, vault: vault} do
       {:ok, _} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "path" => "Deep/Cased NAME.md",
-          "content" => "x",
-          "mtime" => 1_000.0
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Deep/Cased NAME.md",
+            "content" => "x",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
       expected = Engram.Crypto.hmac_field(filter_key, "cased name")
@@ -547,11 +553,16 @@ defmodule Engram.LinksTest do
 
     test "rename_note recomputes basename_hmac for the new path", %{user: user, vault: vault} do
       {:ok, _} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "path" => "Old/Name.md",
-          "content" => "x",
-          "mtime" => 1_000.0
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Old/Name.md",
+            "content" => "x",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       {:ok, _} = Engram.Notes.rename_note(user, vault, "Old/Name.md", "New/Renamed.md")
 

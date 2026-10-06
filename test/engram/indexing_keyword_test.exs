@@ -19,11 +19,16 @@ defmodule Engram.IndexingKeywordTest do
     vault = insert(:vault, user: user)
 
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "n.md",
-        "content" => "alpha beta gamma",
-        "mtime" => 1_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "n.md",
+          "content" => "alpha beta gamma",
+          "mtime" => 1_000.0
+        },
+        actor: "api"
+      )
 
     {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
 
@@ -39,11 +44,16 @@ defmodule Engram.IndexingKeywordTest do
     chunk_text = "deploying containers"
 
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "stem_test.md",
-        "content" => chunk_text,
-        "mtime" => 2_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "stem_test.md",
+          "content" => chunk_text,
+          "mtime" => 2_000.0
+        },
+        actor: "api"
+      )
 
     {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
 
@@ -84,11 +94,16 @@ defmodule Engram.IndexingKeywordTest do
     chunk_text = "Die Änderungen wurden erfolgreich getestet und hochgeladen"
 
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "german_test.md",
-        "content" => chunk_text,
-        "mtime" => 3_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "german_test.md",
+          "content" => chunk_text,
+          "mtime" => 3_000.0
+        },
+        actor: "api"
+      )
 
     {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
 

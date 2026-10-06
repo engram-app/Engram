@@ -27,18 +27,28 @@ defmodule EngramWeb.McpVaultRefTest do
     {:ok, vault_b, _} = Engram.Vaults.register_vault(user, "Second Vault", Ecto.UUID.generate())
 
     {:ok, _} =
-      Engram.Notes.upsert_note(user, vault_a, %{
-        "path" => "a.md",
-        "content" => "in vault A",
-        "mtime" => 1.0
-      })
+      Engram.Notes.upsert_note(
+        user,
+        vault_a,
+        %{
+          "path" => "a.md",
+          "content" => "in vault A",
+          "mtime" => 1.0
+        },
+        actor: "api"
+      )
 
     {:ok, _} =
-      Engram.Notes.upsert_note(user, vault_b, %{
-        "path" => "b.md",
-        "content" => "in vault B",
-        "mtime" => 1.0
-      })
+      Engram.Notes.upsert_note(
+        user,
+        vault_b,
+        %{
+          "path" => "b.md",
+          "content" => "in vault B",
+          "mtime" => 1.0
+        },
+        actor: "api"
+      )
 
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
     grant_api_write!(user)

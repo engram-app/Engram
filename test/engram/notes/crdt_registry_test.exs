@@ -10,7 +10,10 @@ defmodule Engram.Notes.CrdtRegistryTest do
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
     {:ok, vault, _} = Vaults.register_vault(user, "CrdtRegistryTest", Ecto.UUID.generate())
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "r.md", "content" => "base"})
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "r.md", "content" => "base"}, actor: "api")
+
     %{user: user, vault: vault, note: note}
   end
 
@@ -25,8 +28,8 @@ defmodule Engram.Notes.CrdtRegistryTest do
 
   test "distinct notes get distinct rooms", ctx do
     %{user: u, vault: v} = ctx
-    {:ok, note1} = Notes.upsert_note(u, v, %{"path" => "r1.md", "content" => "a"})
-    {:ok, note2} = Notes.upsert_note(u, v, %{"path" => "r2.md", "content" => "b"})
+    {:ok, note1} = Notes.upsert_note(u, v, %{"path" => "r1.md", "content" => "a"}, actor: "api")
+    {:ok, note2} = Notes.upsert_note(u, v, %{"path" => "r2.md", "content" => "b"}, actor: "api")
     {:ok, p1} = CrdtRegistry.ensure_started(u.id, v.id, note1.id)
     Sandbox.allow(Engram.Repo, self(), p1)
     {:ok, p2} = CrdtRegistry.ensure_started(u.id, v.id, note2.id)
@@ -91,7 +94,9 @@ defmodule Engram.Notes.CrdtRegistryTest do
     %{user: u, vault: v} = ctx
     # Use a note with empty content so the doc starts blank — this isolates the
     # UTF-16 offset check from any pre-seeded content.
-    {:ok, empty_note} = Notes.upsert_note(u, v, %{"path" => "utf16.md", "content" => ""})
+    {:ok, empty_note} =
+      Notes.upsert_note(u, v, %{"path" => "utf16.md", "content" => ""}, actor: "api")
+
     {:ok, pid} = CrdtRegistry.ensure_started(u.id, v.id, empty_note.id)
     Sandbox.allow(Engram.Repo, self(), pid)
     doc = Yex.Sync.SharedDoc.get_doc(pid)

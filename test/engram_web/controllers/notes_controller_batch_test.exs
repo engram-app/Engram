@@ -5,8 +5,8 @@ defmodule EngramWeb.NotesControllerBatchTest do
 
   describe "POST /api/notes/batch-delete" do
     test "atomic delete + idempotency replay", %{conn: conn, user: user, vault: vault} do
-      {:ok, n1} = Engram.Notes.upsert_note(user, vault, %{path: "a.md"})
-      {:ok, n2} = Engram.Notes.upsert_note(user, vault, %{path: "b.md"})
+      {:ok, n1} = Engram.Notes.upsert_note(user, vault, %{path: "a.md"}, actor: "api")
+      {:ok, n2} = Engram.Notes.upsert_note(user, vault, %{path: "b.md"}, actor: "api")
       key = Ecto.UUID.generate()
 
       body =
@@ -27,12 +27,12 @@ defmodule EngramWeb.NotesControllerBatchTest do
     end
 
     test "missing idempotency key → 400", %{conn: conn, user: user, vault: vault} do
-      {:ok, n} = Engram.Notes.upsert_note(user, vault, %{path: "x.md"})
+      {:ok, n} = Engram.Notes.upsert_note(user, vault, %{path: "x.md"}, actor: "api")
       conn |> post(~p"/api/notes/batch-delete", %{ids: [n.id]}) |> json_response(400)
     end
 
     test "404 in batch rolls back all", %{conn: conn, user: user, vault: vault} do
-      {:ok, n1} = Engram.Notes.upsert_note(user, vault, %{path: "a.md"})
+      {:ok, n1} = Engram.Notes.upsert_note(user, vault, %{path: "a.md"}, actor: "api")
       missing_id = Ecto.UUID.generate()
 
       body =
@@ -50,8 +50,8 @@ defmodule EngramWeb.NotesControllerBatchTest do
   describe "POST /api/notes/batch-move" do
     test "atomic move + idempotency replay", %{conn: conn, user: user, vault: vault} do
       {:ok, target} = Engram.Notes.create_folder_marker(user, vault, "Archive")
-      {:ok, n1} = Engram.Notes.upsert_note(user, vault, %{path: "a.md"})
-      {:ok, n2} = Engram.Notes.upsert_note(user, vault, %{path: "b.md"})
+      {:ok, n1} = Engram.Notes.upsert_note(user, vault, %{path: "a.md"}, actor: "api")
+      {:ok, n2} = Engram.Notes.upsert_note(user, vault, %{path: "b.md"}, actor: "api")
 
       body =
         conn
@@ -64,8 +64,10 @@ defmodule EngramWeb.NotesControllerBatchTest do
 
     test "409 on collision", %{conn: conn, user: user, vault: vault} do
       {:ok, target} = Engram.Notes.create_folder_marker(user, vault, "Archive")
-      {:ok, n1} = Engram.Notes.upsert_note(user, vault, %{path: "a.md"})
-      {:ok, _conflict} = Engram.Notes.upsert_note(user, vault, %{path: "Archive/a.md"})
+      {:ok, n1} = Engram.Notes.upsert_note(user, vault, %{path: "a.md"}, actor: "api")
+
+      {:ok, _conflict} =
+        Engram.Notes.upsert_note(user, vault, %{path: "Archive/a.md"}, actor: "api")
 
       body =
         conn
@@ -83,7 +85,7 @@ defmodule EngramWeb.NotesControllerBatchTest do
       vault: vault
     } do
       {:ok, _marker} = Engram.Notes.create_folder_marker(user, vault, "Archive")
-      {:ok, n1} = Engram.Notes.upsert_note(user, vault, %{path: "Archive/a.md"})
+      {:ok, n1} = Engram.Notes.upsert_note(user, vault, %{path: "Archive/a.md"}, actor: "api")
 
       body =
         conn
@@ -101,7 +103,7 @@ defmodule EngramWeb.NotesControllerBatchTest do
       user: user,
       vault: vault
     } do
-      {:ok, n1} = Engram.Notes.upsert_note(user, vault, %{path: "a.md"})
+      {:ok, n1} = Engram.Notes.upsert_note(user, vault, %{path: "a.md"}, actor: "api")
 
       body =
         conn

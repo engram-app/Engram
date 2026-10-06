@@ -56,10 +56,12 @@ defmodule Engram.Workers.WorkerTenantArgsRlsTest do
     vault = insert(:vault, user: user)
 
     {:ok, target} =
-      Notes.upsert_note(user, vault, %{"path" => "Target.md", "content" => "# t"})
+      Notes.upsert_note(user, vault, %{"path" => "Target.md", "content" => "# t"}, actor: "api")
 
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{"path" => "Source.md", "content" => "see [[Target]]"})
+      Notes.upsert_note(user, vault, %{"path" => "Source.md", "content" => "see [[Target]]"},
+        actor: "api"
+      )
 
     # Derived OUTSIDE the prod-role scope deliberately. Key derivation reads the
     # user row and warms the DEK cache; doing it inside the dropped role would

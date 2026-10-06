@@ -30,11 +30,16 @@ defmodule Engram.MCP.HandlersGetNoteUtf8Test do
   # content ciphertext in place with bytes that are invalid UTF-8 at rest.
   defp corrupt_note!(user, vault, path, bad) do
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{
-        "path" => path,
-        "content" => "# Title\n\nclean placeholder",
-        "mtime" => 1.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => path,
+          "content" => "# Title\n\nclean placeholder",
+          "mtime" => 1.0
+        },
+        actor: "api"
+      )
 
     {:ok, enc} = Crypto.encrypt_note_fields(%{content: bad, title: "Title"}, user, note.id)
 

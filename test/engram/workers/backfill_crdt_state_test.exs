@@ -19,7 +19,8 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
 
   # Reproduces the post-2026-07-06 row shape: content present, CRDT state wiped.
   defp legacy_note(user, vault, path, content) do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => path, "content" => content})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => path, "content" => content}, actor: "api")
 
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
@@ -131,7 +132,9 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
     %{user: user, vault: vault} = ctx
 
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{"path" => "fresh.md", "content" => "already seeded"})
+      Notes.upsert_note(user, vault, %{"path" => "fresh.md", "content" => "already seeded"},
+        actor: "api"
+      )
 
     before = reload(user, note.id)
     refute is_nil(before.crdt_state_ciphertext)
@@ -161,7 +164,9 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
 
   test "enqueue_all/0 enqueues nothing when every note already has state", ctx do
     %{user: user, vault: vault} = ctx
-    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "fresh.md", "content" => "seeded"})
+
+    {:ok, _} =
+      Notes.upsert_note(user, vault, %{"path" => "fresh.md", "content" => "seeded"}, actor: "api")
 
     assert BackfillCrdtState.enqueue_all() == 0
   end

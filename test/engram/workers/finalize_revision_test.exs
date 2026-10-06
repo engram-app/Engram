@@ -46,7 +46,9 @@ defmodule Engram.Workers.FinalizeRevisionTest do
     {:ok, user} = Crypto.ensure_user_dek(user)
     {:ok, vault, _} = Vaults.register_vault(user, "Finalize", Ecto.UUID.generate())
 
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "f.md", "content" => "keep me"})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "f.md", "content" => "keep me"}, actor: "api")
+
     {:ok, existing} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
 
     {:ok, :ok} =

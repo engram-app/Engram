@@ -16,8 +16,15 @@ defmodule Engram.Workers.BackfillCrdtHeadTest do
 
   describe "perform/1" do
     test "populates a NULL crdt_head to match the authoritative read", %{user: user, vault: vault} do
-      {:ok, a} = Notes.upsert_note(user, vault, %{path: "B/A.md", content: "# A", mtime: 1_000.0})
-      {:ok, b} = Notes.upsert_note(user, vault, %{path: "B/B.md", content: "# B", mtime: 1_000.0})
+      {:ok, a} =
+        Notes.upsert_note(user, vault, %{path: "B/A.md", content: "# A", mtime: 1_000.0},
+          actor: "api"
+        )
+
+      {:ok, b} =
+        Notes.upsert_note(user, vault, %{path: "B/B.md", content: "# B", mtime: 1_000.0},
+          actor: "api"
+        )
 
       {:ok, a0} = Notes.get_note_by_id(user, vault, a.id)
       assert is_nil(a0.crdt_head), "a freshly-inserted note starts NULL"
@@ -40,7 +47,10 @@ defmodule Engram.Workers.BackfillCrdtHeadTest do
 
     test "enqueue_all enqueues one job per (user, vault) with a NULL-head note",
          %{user: user, vault: vault} do
-      {:ok, _} = Notes.upsert_note(user, vault, %{path: "B/C.md", content: "# C", mtime: 1_000.0})
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{path: "B/C.md", content: "# C", mtime: 1_000.0},
+          actor: "api"
+        )
 
       assert BackfillCrdtHead.enqueue_all() >= 1
 
@@ -60,10 +70,15 @@ defmodule Engram.Workers.BackfillCrdtHeadTest do
 
       # uuidv7 ids are time-ordered, so `a` (created first) has the smaller id and
       # is the sole member of the first (limit-1) batch.
-      {:ok, a} = Notes.upsert_note(user, vault, %{path: "B/a.md", content: "# A", mtime: 1_000.0})
+      {:ok, a} =
+        Notes.upsert_note(user, vault, %{path: "B/a.md", content: "# A", mtime: 1_000.0},
+          actor: "api"
+        )
 
       {:ok, _b} =
-        Notes.upsert_note(user, vault, %{path: "B/b.md", content: "# B", mtime: 1_000.0})
+        Notes.upsert_note(user, vault, %{path: "B/b.md", content: "# B", mtime: 1_000.0},
+          actor: "api"
+        )
 
       assert :ok =
                perform_job(BackfillCrdtHead, %{
@@ -114,7 +129,10 @@ defmodule Engram.Workers.BackfillCrdtHeadTest do
       user: user,
       vault: vault
     } do
-      {:ok, _} = Notes.upsert_note(user, vault, %{path: "B/x.md", content: "# X", mtime: 1_000.0})
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{path: "B/x.md", content: "# X", mtime: 1_000.0},
+          actor: "api"
+        )
 
       other = insert(:user)
       insert(:user_limit_override, user: other, key: "vaults_cap", value: %{"v" => -1})
@@ -124,7 +142,9 @@ defmodule Engram.Workers.BackfillCrdtHeadTest do
         Engram.Vaults.register_vault(other, "OtherVault", Ecto.UUID.generate())
 
       {:ok, _} =
-        Notes.upsert_note(other, other_vault, %{path: "B/y.md", content: "# Y", mtime: 1.0})
+        Notes.upsert_note(other, other_vault, %{path: "B/y.md", content: "# Y", mtime: 1.0},
+          actor: "api"
+        )
 
       assert BackfillCrdtHead.enqueue_all() == 2
 

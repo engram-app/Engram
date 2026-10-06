@@ -39,7 +39,7 @@ defmodule Engram.KeywordIndex.StatsCacheTest do
 
   test "second read is served from cache, not recomputed", %{user: user, vault: vault} do
     {:ok, note} =
-      Engram.Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# A"})
+      Engram.Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# A"}, actor: "api")
 
     insert_chunk!(user, vault, note, 0, 100)
     insert_chunk!(user, vault, note, 1, 200)
@@ -53,7 +53,7 @@ defmodule Engram.KeywordIndex.StatsCacheTest do
 
   test "evict/1 forces a recompute", %{user: user, vault: vault} do
     {:ok, note} =
-      Engram.Notes.upsert_note(user, vault, %{"path" => "b.md", "content" => "# B"})
+      Engram.Notes.upsert_note(user, vault, %{"path" => "b.md", "content" => "# B"}, actor: "api")
 
     insert_chunk!(user, vault, note, 0, 100)
     assert Stats.avgdl(user.id, vault.id) == 100.0

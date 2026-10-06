@@ -38,7 +38,8 @@ defmodule Engram.Notes.RevisionsWritePathTest do
 
   describe "checkpoint" do
     test "a content change records a baseline and opens a sync version", %{user: u, vault: v} do
-      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "cp.md", "content" => "before"})
+      {:ok, note} =
+        Notes.upsert_note(u, v, %{"path" => "cp.md", "content" => "before"}, actor: "api")
 
       checkpoint_text(u, v, note.id, "after")
 
@@ -48,7 +49,9 @@ defmodule Engram.Notes.RevisionsWritePathTest do
     end
 
     test "a compaction (unchanged text) records nothing new", %{user: u, vault: v} do
-      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "cp2.md", "content" => "before"})
+      {:ok, note} =
+        Notes.upsert_note(u, v, %{"path" => "cp2.md", "content" => "before"}, actor: "api")
+
       checkpoint_text(u, v, note.id, "after")
       count = length(revisions(u, note.id))
 
@@ -60,7 +63,7 @@ defmodule Engram.Notes.RevisionsWritePathTest do
 
   describe "upsert_note" do
     test "an update records with the caller's actor", %{user: u, vault: v} do
-      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "up.md", "content" => "v1"})
+      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "up.md", "content" => "v1"}, actor: "api")
 
       {:ok, _} = Notes.upsert_note(u, v, %{"path" => "up.md", "content" => "v2"}, actor: "mcp")
 
@@ -69,15 +72,21 @@ defmodule Engram.Notes.RevisionsWritePathTest do
       assert %Revision{actor: "mcp"} = open(revs)
     end
 
-    test "no actor means \"api\"", %{user: u, vault: v} do
-      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "api.md", "content" => "v1"})
-      {:ok, _} = Notes.upsert_note(u, v, %{"path" => "api.md", "content" => "v2"})
-      assert %Revision{actor: "api"} = open(revisions(u, note.id))
+    test "the actor is required: no write is filed under a default", %{user: u, vault: v} do
+      assert_raise KeyError, fn ->
+        Notes.upsert_note(u, v, %{"path" => "none.md", "content" => "v1"}, [])
+      end
+
+      assert_raise ArgumentError, fn ->
+        Notes.upsert_note(u, v, %{"path" => "none.md", "content" => "v1"}, actor: nil)
+      end
     end
 
     test "you typing, then an MCP write: your version holds exactly your text",
          %{user: u, vault: v} do
-      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "split.md", "content" => "start"})
+      {:ok, note} =
+        Notes.upsert_note(u, v, %{"path" => "split.md", "content" => "start"}, actor: "api")
+
       checkpoint_text(u, v, note.id, "you typed this")
       yours = open(revisions(u, note.id))
 
@@ -90,7 +99,9 @@ defmodule Engram.Notes.RevisionsWritePathTest do
     end
 
     test "an idempotent re-push records nothing", %{user: u, vault: v} do
-      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "same.md", "content" => "v1"})
+      {:ok, note} =
+        Notes.upsert_note(u, v, %{"path" => "same.md", "content" => "v1"}, actor: "api")
+
       {:ok, _} = Notes.upsert_note(u, v, %{"path" => "same.md", "content" => "v2"}, actor: "mcp")
       count = length(revisions(u, note.id))
 
@@ -102,7 +113,10 @@ defmodule Engram.Notes.RevisionsWritePathTest do
     test "a content-changing id-keyed move records with the caller's actor",
          %{user: u, vault: v} do
       id = UUIDv7.generate()
-      {:ok, _} = Notes.upsert_note(u, v, %{"id" => id, "path" => "A.md", "content" => "v1"})
+
+      {:ok, _} =
+        Notes.upsert_note(u, v, %{"id" => id, "path" => "A.md", "content" => "v1"}, actor: "api")
+
       :ok = Notes.delete_note(u, v, "A.md")
 
       {:ok, moved} =
@@ -114,7 +128,10 @@ defmodule Engram.Notes.RevisionsWritePathTest do
 
     test "a pure id-keyed rename records nothing", %{user: u, vault: v} do
       id = UUIDv7.generate()
-      {:ok, _} = Notes.upsert_note(u, v, %{"id" => id, "path" => "A.md", "content" => "v1"})
+
+      {:ok, _} =
+        Notes.upsert_note(u, v, %{"id" => id, "path" => "A.md", "content" => "v1"}, actor: "api")
+
       :ok = Notes.delete_note(u, v, "A.md")
       count = length(revisions(u, id))
 
@@ -143,7 +160,9 @@ defmodule Engram.Notes.RevisionsWritePathTest do
 
   describe "CRDT relocate" do
     test "a content-changing relocate enqueues its finalize", %{user: u, vault: v} do
-      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "r1.md", "content" => "before"})
+      {:ok, note} =
+        Notes.upsert_note(u, v, %{"path" => "r1.md", "content" => "before"}, actor: "api")
+
       :ok = tail_edit(u, v, note.id, "after")
       drop_finalize_jobs()
 
@@ -156,7 +175,9 @@ defmodule Engram.Notes.RevisionsWritePathTest do
     end
 
     test "a pure relocate enqueues none", %{user: u, vault: v} do
-      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "p1.md", "content" => "same"})
+      {:ok, note} =
+        Notes.upsert_note(u, v, %{"path" => "p1.md", "content" => "same"}, actor: "api")
+
       drop_finalize_jobs()
 
       {:ok, _} = Notes.genesis_crdt_note(u, v, note.id, "p2.md")
@@ -165,7 +186,9 @@ defmodule Engram.Notes.RevisionsWritePathTest do
     end
 
     test "a content-changing resurrect enqueues its finalize", %{user: u, vault: v} do
-      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "z1.md", "content" => "before"})
+      {:ok, note} =
+        Notes.upsert_note(u, v, %{"path" => "z1.md", "content" => "before"}, actor: "api")
+
       :ok = tail_edit(u, v, note.id, "after")
       :ok = Notes.delete_note(u, v, "z1.md")
       drop_finalize_jobs()
@@ -184,8 +207,10 @@ defmodule Engram.Notes.RevisionsWritePathTest do
     end
 
     test "an upsert enqueues no finalize job", %{user: u, vault: v} do
-      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "off.md", "content" => "v1"})
-      {:ok, _} = Notes.upsert_note(u, v, %{"path" => "off.md", "content" => "v2"})
+      {:ok, note} =
+        Notes.upsert_note(u, v, %{"path" => "off.md", "content" => "v1"}, actor: "api")
+
+      {:ok, _} = Notes.upsert_note(u, v, %{"path" => "off.md", "content" => "v2"}, actor: "api")
       refute_enqueued(worker: FinalizeRevision, args: %{note_id: note.id})
     end
   end

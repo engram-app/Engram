@@ -21,8 +21,8 @@ defmodule Engram.NotesBatchTest do
 
   describe "batch_delete_notes/3" do
     test "soft-deletes all listed notes in one transaction", %{user: user, vault: vault} do
-      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "a.md"})
-      {:ok, n2} = Notes.upsert_note(user, vault, %{path: "b.md"})
+      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "a.md"}, actor: "api")
+      {:ok, n2} = Notes.upsert_note(user, vault, %{path: "b.md"}, actor: "api")
 
       assert {:ok, %{deleted: 2}} = Notes.batch_delete_notes(user, vault, [n1.id, n2.id])
       assert {:error, :not_found} = Notes.get_note_by_id(user, vault, n1.id)
@@ -35,8 +35,10 @@ defmodule Engram.NotesBatchTest do
       other_user: other_user,
       other_vault: other_vault
     } do
-      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "a.md"})
-      {:ok, foreign_note} = Notes.upsert_note(other_user, other_vault, %{path: "f.md"})
+      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "a.md"}, actor: "api")
+
+      {:ok, foreign_note} =
+        Notes.upsert_note(other_user, other_vault, %{path: "f.md"}, actor: "api")
 
       assert {:error, {:not_found, foreign_id}} =
                Notes.batch_delete_notes(user, vault, [n1.id, foreign_note.id])
@@ -61,8 +63,8 @@ defmodule Engram.NotesBatchTest do
       vault: vault
     } do
       {:ok, target_marker} = Notes.create_folder_marker(user, vault, "Archive")
-      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "a.md"})
-      {:ok, n2} = Notes.upsert_note(user, vault, %{path: "b.md"})
+      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "a.md"}, actor: "api")
+      {:ok, n2} = Notes.upsert_note(user, vault, %{path: "b.md"}, actor: "api")
 
       assert {:ok, %{moved: 2}} =
                Notes.batch_move_notes(user, vault, [n1.id, n2.id], target_marker.id)
@@ -76,8 +78,8 @@ defmodule Engram.NotesBatchTest do
 
     test "rolls back on path collision", %{user: user, vault: vault} do
       {:ok, target_marker} = Notes.create_folder_marker(user, vault, "Archive")
-      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "a.md"})
-      {:ok, _conflict} = Notes.upsert_note(user, vault, %{path: "Archive/a.md"})
+      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "a.md"}, actor: "api")
+      {:ok, _conflict} = Notes.upsert_note(user, vault, %{path: "Archive/a.md"}, actor: "api")
 
       assert {:error, {:conflict, conflict_id}} =
                Notes.batch_move_notes(user, vault, [n1.id], target_marker.id)
@@ -96,8 +98,10 @@ defmodule Engram.NotesBatchTest do
       other_vault: other_vault
     } do
       {:ok, target_marker} = Notes.create_folder_marker(user, vault, "Archive")
-      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "a.md"})
-      {:ok, foreign_note} = Notes.upsert_note(other_user, other_vault, %{path: "f.md"})
+      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "a.md"}, actor: "api")
+
+      {:ok, foreign_note} =
+        Notes.upsert_note(other_user, other_vault, %{path: "f.md"}, actor: "api")
 
       assert {:error, {:not_found, foreign_id}} =
                Notes.batch_move_notes(user, vault, [n1.id, foreign_note.id], target_marker.id)
@@ -114,7 +118,7 @@ defmodule Engram.NotesBatchTest do
     end
 
     test "rolls back when target folder marker is missing", %{user: user, vault: vault} do
-      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "a.md"})
+      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "a.md"}, actor: "api")
       missing_id = Ecto.UUID.generate()
 
       assert {:error, {:not_found, ^missing_id}} =
@@ -134,7 +138,7 @@ defmodule Engram.NotesBatchTest do
       vault: vault
     } do
       {:ok, _marker} = Notes.create_folder_marker(user, vault, "Archive")
-      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "Archive/a.md"})
+      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "Archive/a.md"}, actor: "api")
 
       assert {:ok, %{moved: 1}} = Notes.batch_move_notes(user, vault, [n1.id], "root")
 
@@ -144,7 +148,7 @@ defmodule Engram.NotesBatchTest do
     end
 
     test "moving a root note to root is a no-op move (still ok)", %{user: user, vault: vault} do
-      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "a.md"})
+      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "a.md"}, actor: "api")
       assert {:ok, %{moved: 1}} = Notes.batch_move_notes(user, vault, [n1.id], "root")
       {:ok, moved} = Notes.get_note_by_id(user, vault, n1.id)
       assert moved.path == "a.md"
@@ -154,8 +158,8 @@ defmodule Engram.NotesBatchTest do
       user: user,
       vault: vault
     } do
-      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "a.md"})
-      {:ok, n2} = Notes.upsert_note(user, vault, %{path: "b.md"})
+      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "a.md"}, actor: "api")
+      {:ok, n2} = Notes.upsert_note(user, vault, %{path: "b.md"}, actor: "api")
 
       # No create_folder_marker — "Derived/Sub" exists only as a path. Notes
       # should still move into it (derived folders need no marker).
@@ -169,7 +173,7 @@ defmodule Engram.NotesBatchTest do
 
     test "path target \"\" moves a note to the vault root", %{user: user, vault: vault} do
       {:ok, _m} = Notes.create_folder_marker(user, vault, "Archive")
-      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "Archive/a.md"})
+      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "Archive/a.md"}, actor: "api")
 
       assert {:ok, %{moved: 1}} = Notes.batch_move_notes(user, vault, [n1.id], {:path, ""})
 
@@ -183,8 +187,8 @@ defmodule Engram.NotesBatchTest do
       other_user: other_user,
       other_vault: other_vault
     } do
-      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "a.md"})
-      {:ok, foreign} = Notes.upsert_note(other_user, other_vault, %{path: "f.md"})
+      {:ok, n1} = Notes.upsert_note(user, vault, %{path: "a.md"}, actor: "api")
+      {:ok, foreign} = Notes.upsert_note(other_user, other_vault, %{path: "f.md"}, actor: "api")
 
       assert {:error, {:not_found, id}} =
                Notes.batch_move_notes(user, vault, [n1.id, foreign.id], {:path, "Derived"})
@@ -202,8 +206,8 @@ defmodule Engram.NotesBatchTest do
       {:ok, m1} = Notes.create_folder_marker(user, vault, "A")
       {:ok, m2} = Notes.create_folder_marker(user, vault, "B")
 
-      {:ok, _} = Notes.upsert_note(user, vault, %{path: "A/a.md"})
-      {:ok, _} = Notes.upsert_note(user, vault, %{path: "B/b.md"})
+      {:ok, _} = Notes.upsert_note(user, vault, %{path: "A/a.md"}, actor: "api")
+      {:ok, _} = Notes.upsert_note(user, vault, %{path: "B/b.md"}, actor: "api")
 
       # 2 markers + 2 child notes = 4 rows total.
       assert {:ok, %{deleted: 4}} =
@@ -220,7 +224,7 @@ defmodule Engram.NotesBatchTest do
       other_vault: other_vault
     } do
       {:ok, m1} = Notes.create_folder_marker(user, vault, "Keep")
-      {:ok, _} = Notes.upsert_note(user, vault, %{path: "Keep/a.md"})
+      {:ok, _} = Notes.upsert_note(user, vault, %{path: "Keep/a.md"}, actor: "api")
 
       {:ok, foreign_marker} =
         Notes.create_folder_marker(other_user, other_vault, "Foreign")
@@ -264,9 +268,9 @@ defmodule Engram.NotesBatchTest do
       {:ok, m1} = Notes.create_folder_marker(user, vault, "F1")
       {:ok, m2} = Notes.create_folder_marker(user, vault, "F2")
       {:ok, m3} = Notes.create_folder_marker(user, vault, "F3")
-      {:ok, _} = Notes.upsert_note(user, vault, %{path: "F1/a.md"})
-      {:ok, _} = Notes.upsert_note(user, vault, %{path: "F2/b.md"})
-      {:ok, _} = Notes.upsert_note(user, vault, %{path: "F3/c.md"})
+      {:ok, _} = Notes.upsert_note(user, vault, %{path: "F1/a.md"}, actor: "api")
+      {:ok, _} = Notes.upsert_note(user, vault, %{path: "F2/b.md"}, actor: "api")
+      {:ok, _} = Notes.upsert_note(user, vault, %{path: "F3/c.md"}, actor: "api")
 
       {result, queries} =
         with_notes_query_count(fn ->
@@ -289,7 +293,7 @@ defmodule Engram.NotesBatchTest do
       {:ok, m1} = Notes.create_folder_marker(user, vault, "A")
       {:ok, m2} = Notes.create_folder_marker(user, vault, "B")
 
-      {:ok, _} = Notes.upsert_note(user, vault, %{path: "A/a.md"})
+      {:ok, _} = Notes.upsert_note(user, vault, %{path: "A/a.md"}, actor: "api")
 
       assert {:ok, %{moved: 2}} =
                Notes.batch_move_folders(user, vault, [m1.id, m2.id], target_marker.id)
@@ -310,7 +314,7 @@ defmodule Engram.NotesBatchTest do
       vault: vault
     } do
       {:ok, m1} = Notes.create_folder_marker(user, vault, "A")
-      {:ok, _} = Notes.upsert_note(user, vault, %{path: "A/a.md"})
+      {:ok, _} = Notes.upsert_note(user, vault, %{path: "A/a.md"}, actor: "api")
 
       # "Derived" has no marker — the folder still moves into it by path.
       assert {:ok, %{moved: 1}} =
@@ -325,7 +329,7 @@ defmodule Engram.NotesBatchTest do
       {:ok, _conflict} = Notes.create_folder_marker(user, vault, "Parent/A")
 
       {:ok, m1} = Notes.create_folder_marker(user, vault, "A")
-      {:ok, _} = Notes.upsert_note(user, vault, %{path: "A/a.md"})
+      {:ok, _} = Notes.upsert_note(user, vault, %{path: "A/a.md"}, actor: "api")
 
       assert {:error, {:conflict, mid}} =
                Notes.batch_move_folders(user, vault, [m1.id], target_marker.id)
@@ -344,7 +348,7 @@ defmodule Engram.NotesBatchTest do
     } do
       {:ok, target_marker} = Notes.create_folder_marker(user, vault, "Parent")
       {:ok, m1} = Notes.create_folder_marker(user, vault, "A")
-      {:ok, _} = Notes.upsert_note(user, vault, %{path: "A/a.md"})
+      {:ok, _} = Notes.upsert_note(user, vault, %{path: "A/a.md"}, actor: "api")
 
       {:ok, foreign_marker} =
         Notes.create_folder_marker(other_user, other_vault, "Foreign")
@@ -367,7 +371,7 @@ defmodule Engram.NotesBatchTest do
     test "a cycle in a later marker moves nothing", %{user: user, vault: vault} do
       {:ok, target} = Notes.create_folder_marker(user, vault, "Parent")
       {:ok, m1} = Notes.create_folder_marker(user, vault, "A")
-      {:ok, _} = Notes.upsert_note(user, vault, %{path: "A/a.md"})
+      {:ok, _} = Notes.upsert_note(user, vault, %{path: "A/a.md"}, actor: "api")
 
       # Moving "Parent" into "Parent" is the cycle; it sits AFTER a marker that
       # would otherwise move successfully.
@@ -382,7 +386,7 @@ defmodule Engram.NotesBatchTest do
 
     test "rolls back when target folder marker is missing", %{user: user, vault: vault} do
       {:ok, m1} = Notes.create_folder_marker(user, vault, "A")
-      {:ok, _} = Notes.upsert_note(user, vault, %{path: "A/a.md"})
+      {:ok, _} = Notes.upsert_note(user, vault, %{path: "A/a.md"}, actor: "api")
       missing_id = Ecto.UUID.generate()
 
       assert {:error, {:not_found, ^missing_id}} =
@@ -402,7 +406,7 @@ defmodule Engram.NotesBatchTest do
     } do
       {:ok, _parent} = Notes.create_folder_marker(user, vault, "A")
       {:ok, child} = Notes.create_folder_marker(user, vault, "A/B")
-      {:ok, note} = Notes.upsert_note(user, vault, %{path: "A/B/x.md"})
+      {:ok, note} = Notes.upsert_note(user, vault, %{path: "A/B/x.md"}, actor: "api")
 
       assert {:ok, %{moved: 1}} = Notes.batch_move_folders(user, vault, [child.id], "root")
 
@@ -431,8 +435,8 @@ defmodule Engram.NotesBatchTest do
       {:ok, _target} = Notes.create_folder_marker(user, vault, "Parent")
       {:ok, a} = Notes.create_folder_marker(user, vault, "A")
       {:ok, ab} = Notes.create_folder_marker(user, vault, "A/B")
-      {:ok, na} = Notes.upsert_note(user, vault, %{path: "A/a.md"})
-      {:ok, nb} = Notes.upsert_note(user, vault, %{path: "A/B/b.md"})
+      {:ok, na} = Notes.upsert_note(user, vault, %{path: "A/a.md"}, actor: "api")
+      {:ok, nb} = Notes.upsert_note(user, vault, %{path: "A/B/b.md"}, actor: "api")
 
       assert {:ok, %{moved: 2, pairs: pairs}} =
                Notes.batch_move_folders(user, vault, [a.id, ab.id], {:path, "Parent"})
@@ -457,9 +461,9 @@ defmodule Engram.NotesBatchTest do
       {:ok, m1} = Notes.create_folder_marker(user, vault, "F1")
       {:ok, m2} = Notes.create_folder_marker(user, vault, "F2")
       {:ok, m3} = Notes.create_folder_marker(user, vault, "F3")
-      {:ok, _} = Notes.upsert_note(user, vault, %{path: "F1/a.md"})
-      {:ok, _} = Notes.upsert_note(user, vault, %{path: "F2/b.md"})
-      {:ok, _} = Notes.upsert_note(user, vault, %{path: "F3/c.md"})
+      {:ok, _} = Notes.upsert_note(user, vault, %{path: "F1/a.md"}, actor: "api")
+      {:ok, _} = Notes.upsert_note(user, vault, %{path: "F2/b.md"}, actor: "api")
+      {:ok, _} = Notes.upsert_note(user, vault, %{path: "F3/c.md"}, actor: "api")
 
       {result, scans} =
         with_vault_scan_count(fn ->
@@ -543,9 +547,14 @@ defmodule Engram.NotesBatchSetBasedTest do
     user: user,
     vault: vault
   } do
-    {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# A"})
-    {:ok, n2} = Notes.upsert_note(user, vault, %{"path" => "b.md", "content" => "# B"})
-    {:ok, n3} = Notes.upsert_note(user, vault, %{"path" => "c.md", "content" => "# C"})
+    {:ok, n1} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# A"}, actor: "api")
+
+    {:ok, n2} =
+      Notes.upsert_note(user, vault, %{"path" => "b.md", "content" => "# B"}, actor: "api")
+
+    {:ok, n3} =
+      Notes.upsert_note(user, vault, %{"path" => "c.md", "content" => "# C"}, actor: "api")
 
     assert {:ok, %{deleted: 3}} = Notes.batch_delete_notes(user, vault, [n1.id, n2.id, n3.id])
 
@@ -555,7 +564,8 @@ defmodule Engram.NotesBatchSetBasedTest do
   end
 
   test "failed batch delete emits NO delete broadcasts", %{user: user, vault: vault} do
-    {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# A"})
+    {:ok, n1} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# A"}, actor: "api")
 
     EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
@@ -572,8 +582,11 @@ defmodule Engram.NotesBatchSetBasedTest do
     user: user,
     vault: vault
   } do
-    {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# A"})
-    {:ok, n2} = Notes.upsert_note(user, vault, %{"path" => "b.md", "content" => "# B"})
+    {:ok, n1} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# A"}, actor: "api")
+
+    {:ok, n2} =
+      Notes.upsert_note(user, vault, %{"path" => "b.md", "content" => "# B"}, actor: "api")
 
     EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
@@ -589,8 +602,12 @@ defmodule Engram.NotesBatchSetBasedTest do
     user: user,
     vault: vault
   } do
-    {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# A"})
-    {:ok, n2} = Notes.upsert_note(user, vault, %{"path" => "b.md", "content" => "# B"})
+    {:ok, n1} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# A"}, actor: "api")
+
+    {:ok, n2} =
+      Notes.upsert_note(user, vault, %{"path" => "b.md", "content" => "# B"}, actor: "api")
+
     before = Engram.UsageMeters.notes_count(user.id)
 
     assert {:ok, %{deleted: 2}} = Notes.batch_delete_notes(user, vault, [n1.id, n2.id])

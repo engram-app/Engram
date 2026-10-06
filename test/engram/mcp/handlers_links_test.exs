@@ -17,7 +17,9 @@ defmodule Engram.MCP.HandlersLinksTest do
     saved =
       for {path, content} <- notes do
         {:ok, note} =
-          Notes.upsert_note(user, vault, %{"path" => path, "content" => content, "mtime" => 1.0})
+          Notes.upsert_note(user, vault, %{"path" => path, "content" => content, "mtime" => 1.0},
+            actor: "api"
+          )
 
         {note, content}
       end

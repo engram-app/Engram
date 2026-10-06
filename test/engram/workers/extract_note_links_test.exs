@@ -15,10 +15,13 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
   end
 
   test "extracts edges from current note content", %{user: user, vault: vault} do
-    {:ok, target} = Notes.upsert_note(user, vault, %{"path" => "Target.md", "content" => "# t"})
+    {:ok, target} =
+      Notes.upsert_note(user, vault, %{"path" => "Target.md", "content" => "# t"}, actor: "api")
 
     {:ok, note} =
-      Notes.upsert_note(user, vault, %{"path" => "S.md", "content" => "see [[Target]]"})
+      Notes.upsert_note(user, vault, %{"path" => "S.md", "content" => "see [[Target]]"},
+        actor: "api"
+      )
 
     assert :ok = perform_job(ExtractNoteLinks, %{note_id: note.id})
 
@@ -30,11 +33,13 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
 
   test "a note emptied to \"\" clears its stale edges (:no_chunks class)",
        %{user: user, vault: vault} do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "S.md", "content" => "see [[X]]"})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "S.md", "content" => "see [[X]]"}, actor: "api")
+
     assert :ok = perform_job(ExtractNoteLinks, %{note_id: note.id})
     assert [_] = Links.links_for_note(user, note.id)
 
-    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "S.md", "content" => ""})
+    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "S.md", "content" => ""}, actor: "api")
     assert :ok = perform_job(ExtractNoteLinks, %{note_id: note.id})
     assert [] == Links.links_for_note(user, note.id)
   end
@@ -44,13 +49,16 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
   end
 
   test "soft-deleted note discards", %{user: user, vault: vault} do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "D.md", "content" => "x [[Y]]"})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "D.md", "content" => "x [[Y]]"}, actor: "api")
+
     :ok = Notes.delete_note(user, vault, "D.md")
     assert {:discard, _} = perform_job(ExtractNoteLinks, %{note_id: note.id})
   end
 
   test "new_debounced dedups per note over available/scheduled", %{user: user, vault: vault} do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "S.md", "content" => "a"})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "S.md", "content" => "a"}, actor: "api")
 
     {:ok, _} = Oban.insert(ExtractNoteLinks.new_debounced(note.id, user.id))
     {:ok, _} = Oban.insert(ExtractNoteLinks.new_debounced(note.id, user.id))
@@ -64,20 +72,26 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
   describe "wiring" do
     test "REST upsert enqueues extraction on content change, not on no-op",
          %{user: user, vault: vault} do
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "W.md", "content" => "v1"})
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "W.md", "content" => "v1"}, actor: "api")
+
       assert [%{args: %{"note_id" => id}}] = all_enqueued(worker: ExtractNoteLinks)
       assert id == note.id
 
       Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.ExtractNoteLinks"))
 
       # Idempotent re-push of identical content: no version/seq persisted → no job.
-      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "W.md", "content" => "v1"})
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "W.md", "content" => "v1"}, actor: "api")
+
       assert [] == all_enqueued(worker: ExtractNoteLinks)
     end
 
     test "CRDT checkpoint content change enqueues extraction",
          %{user: user, vault: vault} do
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "C.md", "content" => "old"})
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "C.md", "content" => "old"}, actor: "api")
+
       Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.ExtractNoteLinks"))
 
       {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
@@ -98,18 +112,25 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
 
     test "REST moved leg (rename resurrect) enqueues extraction on content change, not on same content",
          %{user: user, vault: vault} do
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "M1.md", "content" => "before"})
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "M1.md", "content" => "before"}, actor: "api")
+
       :ok = Notes.delete_note(user, vault, "M1.md")
       Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.ExtractNoteLinks"))
 
       # Id-keyed rename resurrect (upsert_pathless -> move_note) with DIFFERENT
       # content: hash changes, job enqueued.
       assert {:ok, moved} =
-               Notes.upsert_note(user, vault, %{
-                 "id" => note.id,
-                 "path" => "M2.md",
-                 "content" => "after"
-               })
+               Notes.upsert_note(
+                 user,
+                 vault,
+                 %{
+                   "id" => note.id,
+                   "path" => "M2.md",
+                   "content" => "after"
+                 },
+                 actor: "api"
+               )
 
       assert [%{args: %{"note_id" => id}}] = all_enqueued(worker: ExtractNoteLinks)
       assert id == moved.id
@@ -121,11 +142,16 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
       # Same rename resurrect shape, but SAME content as the tombstoned note:
       # merge produces an identical hash, no job.
       assert {:ok, _} =
-               Notes.upsert_note(user, vault, %{
-                 "id" => note.id,
-                 "path" => "M3.md",
-                 "content" => "after"
-               })
+               Notes.upsert_note(
+                 user,
+                 vault,
+                 %{
+                   "id" => note.id,
+                   "path" => "M3.md",
+                   "content" => "after"
+                 },
+                 actor: "api"
+               )
 
       assert [] == all_enqueued(worker: ExtractNoteLinks)
     end
@@ -140,7 +166,9 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
 
     test "late dangling edge re-enqueues the rename's rewrite as an immediate sweep",
          %{user: user, vault: vault} do
-      {:ok, _note} = Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"})
+      {:ok, _note} =
+        Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"}, actor: "api")
+
       {:ok, renamed} = Notes.rename_note(user, vault, "Old.md", "Fresh.md")
       # The rename's own chain "already ran": leave its job ROW (the repair
       # evidence) but no pending sweep, simulating rename+60s having passed.
@@ -156,7 +184,9 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
 
       # Offline device's note arrives NOW, still referencing the old name.
       {:ok, late} =
-        Notes.upsert_note(user, vault, %{"path" => "Late.md", "content" => "see [[Old]]"})
+        Notes.upsert_note(user, vault, %{"path" => "Late.md", "content" => "see [[Old]]"},
+          actor: "api"
+        )
 
       assert :ok = perform_job(ExtractNoteLinks, %{note_id: late.id})
 
@@ -171,7 +201,9 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
 
     test "repair converges: performing the repair rewrites the source and a re-extract enqueues nothing (loop-breaker)",
          %{user: user, vault: vault} do
-      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"})
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"}, actor: "api")
+
       {:ok, _renamed} = Notes.rename_note(user, vault, "Old.md", "Fresh.md")
       [rename_job] = all_enqueued(worker: RewriteNoteLinks)
       clear_jobs!("Engram.Workers.RewriteNoteLinks")
@@ -183,7 +215,9 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
       )
 
       {:ok, late} =
-        Notes.upsert_note(user, vault, %{"path" => "Late.md", "content" => "see [[Old]]"})
+        Notes.upsert_note(user, vault, %{"path" => "Late.md", "content" => "see [[Old]]"},
+          actor: "api"
+        )
 
       assert :ok = perform_job(ExtractNoteLinks, %{note_id: late.id})
       [repair] = all_enqueued(worker: RewriteNoteLinks)
@@ -201,13 +235,17 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
 
     test "repair dedups against the rename's still-pending sweep",
          %{user: user, vault: vault} do
-      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"})
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"}, actor: "api")
+
       {:ok, _} = Notes.rename_note(user, vault, "Old.md", "Fresh.md")
       # Keep the rename's enqueued job AS the pending work (scheduled/available).
       assert [_pending] = all_enqueued(worker: RewriteNoteLinks)
 
       {:ok, late} =
-        Notes.upsert_note(user, vault, %{"path" => "Late.md", "content" => "see [[Old]]"})
+        Notes.upsert_note(user, vault, %{"path" => "Late.md", "content" => "see [[Old]]"},
+          actor: "api"
+        )
 
       assert :ok = perform_job(ExtractNoteLinks, %{note_id: late.id})
 
@@ -219,7 +257,9 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
     test "dangling edge with NO recent rename enqueues nothing",
          %{user: user, vault: vault} do
       {:ok, late} =
-        Notes.upsert_note(user, vault, %{"path" => "L.md", "content" => "see [[NeverExisted]]"})
+        Notes.upsert_note(user, vault, %{"path" => "L.md", "content" => "see [[NeverExisted]]"},
+          actor: "api"
+        )
 
       assert :ok = perform_job(ExtractNoteLinks, %{note_id: late.id})
       assert [] == all_enqueued(worker: RewriteNoteLinks)
@@ -227,7 +267,9 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
 
     test "rename evidence OLDER than the 10-minute repair window is not repaired",
          %{user: user, vault: vault} do
-      {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"})
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"}, actor: "api")
+
       {:ok, _renamed} = Notes.rename_note(user, vault, "Old.md", "Fresh.md")
       [rename_job] = all_enqueued(worker: RewriteNoteLinks)
       clear_jobs!("Engram.Workers.RewriteNoteLinks")
@@ -247,7 +289,9 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
       )
 
       {:ok, late} =
-        Notes.upsert_note(user, vault, %{"path" => "Late.md", "content" => "see [[Old]]"})
+        Notes.upsert_note(user, vault, %{"path" => "Late.md", "content" => "see [[Old]]"},
+          actor: "api"
+        )
 
       assert :ok = perform_job(ExtractNoteLinks, %{note_id: late.id})
       assert [] == all_enqueued(worker: RewriteNoteLinks)
@@ -255,7 +299,9 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
 
     test "CRDT-origin rename (ciphertext args, no tombstone) is repairable — args ride verbatim",
          %{user: user, vault: vault} do
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"})
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"}, actor: "api")
+
       {:ok, _} = Notes.genesis_crdt_note(user, vault, note.id, "Fresh.md", origin: "web")
       [crdt_job] = all_enqueued(worker: RewriteNoteLinks)
       assert Map.has_key?(crdt_job.args, "old_path_ciphertext")
@@ -266,7 +312,9 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
       )
 
       {:ok, late} =
-        Notes.upsert_note(user, vault, %{"path" => "Late.md", "content" => "see [[Old]]"})
+        Notes.upsert_note(user, vault, %{"path" => "Late.md", "content" => "see [[Old]]"},
+          actor: "api"
+        )
 
       assert :ok = perform_job(ExtractNoteLinks, %{note_id: late.id})
 

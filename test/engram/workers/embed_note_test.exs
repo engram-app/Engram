@@ -592,11 +592,16 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       # upsert_note encrypts content on the way in
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "secure/secret.md",
-          "content" => "# Secret\n\nClassified content.",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "secure/secret.md",
+            "content" => "# Secret\n\nClassified content.",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       # Embedder should receive non-empty texts (plaintext chunks, not "")
       Engram.MockEmbedder
@@ -847,11 +852,16 @@ defmodule Engram.Workers.EmbedNoteTest do
   describe "job scheduling" do
     test "Notes.upsert_note enqueues EmbedNote job", %{user: user, vault: vault} do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Test/Scheduled.md",
-          "content" => "# Scheduled",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Test/Scheduled.md",
+            "content" => "# Scheduled",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       # Oban is in :manual mode globally — jobs stay in 'scheduled' state for assertion
       assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
@@ -859,22 +869,32 @@ defmodule Engram.Workers.EmbedNoteTest do
 
     test "upsert with unchanged content does not enqueue embed job", %{user: user, vault: vault} do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Test/NoChange.md",
-          "content" => "# Same content",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Test/NoChange.md",
+            "content" => "# Same content",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       # First upsert triggers embed
       assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
 
       # Re-upsert with same content — should not enqueue another
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Test/NoChange.md",
-          "content" => "# Same content",
-          "mtime" => 2_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Test/NoChange.md",
+            "content" => "# Same content",
+            "mtime" => 2_000.0
+          },
+          actor: "api"
+        )
 
       # Still only one job
       jobs = all_enqueued(worker: EmbedNote)
@@ -894,11 +914,16 @@ defmodule Engram.Workers.EmbedNoteTest do
       end)
 
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Test/Gone.md",
-          "content" => "# Gone",
-          "mtime" => 1_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Test/Gone.md",
+            "content" => "# Gone",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
 
       Notes.delete_note(user, vault, note.path)
       # Allow the background Task to complete before checking job count
@@ -954,7 +979,8 @@ defmodule Engram.Workers.EmbedNoteTest do
             "path" => note.path,
             "content" => "# Hello\n\nDifferent words entirely.",
             "mtime" => 2_000.0
-          }
+          },
+          actor: "api"
         )
 
       # No second MockEmbedder expectation: the edit must not reach Voyage.
@@ -1070,11 +1096,17 @@ defmodule Engram.Workers.EmbedNoteTest do
       _ = drain_embedded()
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "Test/Long.md",
-          "content" => "# Long\n\n" <> String.replace(body, "word3 ", "edited3 ", global: false),
-          "mtime" => 2_000.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Test/Long.md",
+            "content" =>
+              "# Long\n\n" <> String.replace(body, "word3 ", "edited3 ", global: false),
+            "mtime" => 2_000.0
+          },
+          actor: "api"
+        )
 
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 

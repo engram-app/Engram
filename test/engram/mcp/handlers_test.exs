@@ -30,7 +30,9 @@ defmodule Engram.MCP.HandlersTest do
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "r.md", "content" => "base", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "r.md", "content" => "base", "mtime" => 1.0},
+          actor: "api"
+        )
 
       raced = :counters.new(1, [])
 
@@ -42,11 +44,16 @@ defmodule Engram.MCP.HandlersTest do
             :counters.add(raced, 1, 1)
 
             {:ok, _} =
-              Notes.upsert_note(user, vault, %{
-                "path" => "r.md",
-                "content" => "base\nconcurrent",
-                "mtime" => 2.0
-              })
+              Notes.upsert_note(
+                user,
+                vault,
+                %{
+                  "path" => "r.md",
+                  "content" => "base\nconcurrent",
+                  "mtime" => 2.0
+                },
+                actor: "api"
+              )
           end
 
           content <> "\nappended"
@@ -63,7 +70,9 @@ defmodule Engram.MCP.HandlersTest do
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "g.md", "content" => "base", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "g.md", "content" => "base", "mtime" => 1.0},
+          actor: "api"
+        )
 
       tick = :counters.new(1, [])
 
@@ -75,11 +84,16 @@ defmodule Engram.MCP.HandlersTest do
                  :counters.add(tick, 1, 1)
 
                  {:ok, _} =
-                   Notes.upsert_note(user, vault, %{
-                     "path" => "g.md",
-                     "content" => "base\nconcurrent#{n}",
-                     "mtime" => 2.0 + n
-                   })
+                   Notes.upsert_note(
+                     user,
+                     vault,
+                     %{
+                       "path" => "g.md",
+                       "content" => "base\nconcurrent#{n}",
+                       "mtime" => 2.0 + n
+                     },
+                     actor: "api"
+                   )
 
                  content <> "\nappended"
                end)
@@ -97,11 +111,16 @@ defmodule Engram.MCP.HandlersTest do
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "refuse.md",
-          "content" => "base",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "refuse.md",
+            "content" => "base",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       assert {:error, "nope"} =
                Handlers.rmw_upsert(user, vault, "refuse.md", fn _content -> {:error, "nope"} end)
@@ -117,11 +136,16 @@ defmodule Engram.MCP.HandlersTest do
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "toctou.md",
-          "content" => "safe",
-          "mtime" => 1.0
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "toctou.md",
+            "content" => "safe",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       raced = :counters.new(1, [])
 
@@ -134,11 +158,16 @@ defmodule Engram.MCP.HandlersTest do
             # us the safe "safe" content) and its write, moving the row to
             # "unsafe". This forces a version_conflict retry.
             {:ok, _} =
-              Notes.upsert_note(user, vault, %{
-                "path" => "toctou.md",
-                "content" => "unsafe",
-                "mtime" => 2.0
-              })
+              Notes.upsert_note(
+                user,
+                vault,
+                %{
+                  "path" => "toctou.md",
+                  "content" => "unsafe",
+                  "mtime" => 2.0
+                },
+                actor: "api"
+              )
 
             content <> "\nappended"
           else
@@ -257,10 +286,14 @@ defmodule Engram.MCP.HandlersTest do
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "A.md", "content" => "alpha", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "A.md", "content" => "alpha", "mtime" => 1.0},
+          actor: "api"
+        )
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "B.md", "content" => "beta", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "B.md", "content" => "beta", "mtime" => 1.0},
+          actor: "api"
+        )
 
       assert {:ok, body, _} =
                Handlers.handle("get_notes", user, vault, %{"paths" => ["A.md", "B.md"]})
@@ -273,7 +306,9 @@ defmodule Engram.MCP.HandlersTest do
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "A.md", "content" => "alpha", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "A.md", "content" => "alpha", "mtime" => 1.0},
+          actor: "api"
+        )
 
       assert {:ok, body, _} =
                Handlers.handle("get_notes", user, vault, %{"paths" => ["A.md", "gone.md"]})
@@ -314,7 +349,9 @@ defmodule Engram.MCP.HandlersTest do
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
 
       # A refusal to act, not a completed delete (#1660). Reporting it as
       # success told the caller the folder was gone, so it never re-issued
@@ -328,7 +365,9 @@ defmodule Engram.MCP.HandlersTest do
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
 
       assert {:ok, msg, _} =
                Handlers.handle("delete_folder", user, vault, %{
@@ -354,7 +393,9 @@ defmodule Engram.MCP.HandlersTest do
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
 
       {:ok, _} =
         Attachments.upsert_attachment(user, vault, %{
@@ -409,7 +450,9 @@ defmodule Engram.MCP.HandlersTest do
       for p <- ["A/a.md", "A/B/b.md", "A/B/C/c.md", "Z/z.md"],
           do:
             {:ok, _} =
-              Notes.upsert_note(user, vault, %{"path" => p, "content" => "x", "mtime" => 1.0})
+              Notes.upsert_note(user, vault, %{"path" => p, "content" => "x", "mtime" => 1.0},
+                actor: "api"
+              )
 
       {:ok, _, direct} = Handlers.handle("list_folder", user, vault, %{"folder" => "A"})
       assert Enum.map(direct["folders"], & &1["folder"]) == ["A/B"]
@@ -427,7 +470,9 @@ defmodule Engram.MCP.HandlersTest do
       for p <- ["A/a.md", "A/B/b.md", "Z/z.md"],
           do:
             {:ok, _} =
-              Notes.upsert_note(user, vault, %{"path" => p, "content" => "x", "mtime" => 1.0})
+              Notes.upsert_note(user, vault, %{"path" => p, "content" => "x", "mtime" => 1.0},
+                actor: "api"
+              )
 
       {:ok, _, root} = Handlers.handle("list_folder", user, vault, %{"folder" => ""})
       assert Enum.map(root["folders"], & &1["folder"]) |> Enum.sort() == ["A", "Z"]
@@ -437,7 +482,9 @@ defmodule Engram.MCP.HandlersTest do
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "Leaf/a.md", "content" => "x", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "Leaf/a.md", "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
 
       {:ok, _, structured} = Handlers.handle("list_folder", user, vault, %{"folder" => "Leaf"})
       assert structured["folders"] == []
@@ -450,7 +497,9 @@ defmodule Engram.MCP.HandlersTest do
       for p <- ["A/a.md", "Z/z.md"],
           do:
             {:ok, _} =
-              Notes.upsert_note(user, vault, %{"path" => p, "content" => "x", "mtime" => 1.0})
+              Notes.upsert_note(user, vault, %{"path" => p, "content" => "x", "mtime" => 1.0},
+                actor: "api"
+              )
 
       {:ok, body, structured} = Handlers.handle("list_folder", user, vault, %{"folder" => ""})
 
@@ -477,7 +526,9 @@ defmodule Engram.MCP.HandlersTest do
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
       {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "P/Q/x.md", "content" => "x", "mtime" => 1.0})
+        Notes.upsert_note(user, vault, %{"path" => "P/Q/x.md", "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
 
       {:ok, _, root} = Handlers.handle("list_folder", user, vault, %{"folder" => ""})
       assert root["folders"] == [%{"folder" => "P", "count" => 0}]
@@ -503,7 +554,9 @@ defmodule Engram.MCP.HandlersTest do
       for p <- ["A/a.md", "AB/b.md"],
           do:
             {:ok, _} =
-              Notes.upsert_note(user, vault, %{"path" => p, "content" => "x", "mtime" => 1.0})
+              Notes.upsert_note(user, vault, %{"path" => p, "content" => "x", "mtime" => 1.0},
+                actor: "api"
+              )
 
       {:ok, _, direct} = Handlers.handle("list_folder", user, vault, %{"folder" => "A"})
       assert direct["folders"] == []

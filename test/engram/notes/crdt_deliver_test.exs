@@ -61,10 +61,15 @@ defmodule Engram.Notes.CrdtDeliverTest do
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "fan.md",
-          "content" => "# Fan\n\nfanout body"
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "fan.md",
+            "content" => "# Fan\n\nfanout body"
+          },
+          actor: "api"
+        )
 
       # note_changed fires first (maps + confirms the id on the client); the
       # fan-out note_yjs_update follows on the SAME topic (ordered), carrying the
@@ -103,7 +108,8 @@ defmodule Engram.Notes.CrdtDeliverTest do
       # state; the `with {:ok, state} when is_binary(state)` guard skips the
       # broadcast (nothing to fan out), and the announce still lets enrolled
       # clients re-pull. Locks the "never crash / graceful skip" fallback.
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "leg.md", "content" => "x"})
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "leg.md", "content" => "x"}, actor: "api")
 
       {:ok, _} =
         Repo.with_tenant(user.id, fn ->
@@ -127,7 +133,8 @@ defmodule Engram.Notes.CrdtDeliverTest do
       # doc_from_state cannot parse (a shouldn't-happen state). fanout_idle must
       # not raise the caller — it broadcasts the state with head: nil, and the
       # client, unable to advance its watermark, re-pulls via coldReceive.
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "g.md", "content" => "x"})
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "g.md", "content" => "x"}, actor: "api")
 
       {:ok, {ct, nonce}} = Engram.Crypto.encrypt_crdt_state("not a yjs update", user, note.id)
 
@@ -183,7 +190,9 @@ defmodule Engram.Notes.CrdtDeliverTest do
     # rooms bind FROM the snapshot, so a plaintext-seeded bare room would put
     # the same text on a second lineage and double on the state apply).
     test "pushes a yjs frame to a live room's observers", %{user: user, vault: vault} do
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "n.md", "content" => "base"})
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "n.md", "content" => "base"}, actor: "api")
+
       room = start_bare_room(note.id, "")
       SharedDoc.observe(room)
 
@@ -207,10 +216,15 @@ defmodule Engram.Notes.CrdtDeliverTest do
     test "delivering a frontmatter change updates the live room's Y.Map, not just the body",
          %{user: user, vault: vault} do
       {:ok, note} =
-        Notes.upsert_note(user, vault, %{
-          "path" => "n.md",
-          "content" => "---\ntitle: Hi\n---\nnew body\n"
-        })
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "n.md",
+            "content" => "---\ntitle: Hi\n---\nnew body\n"
+          },
+          actor: "api"
+        )
 
       room = start_bare_room(note.id, "")
 
@@ -230,7 +244,9 @@ defmodule Engram.Notes.CrdtDeliverTest do
 
     test "re-delivery of already-applied state is a no-op (still announces)",
          %{user: user, vault: vault} do
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "n.md", "content" => "same"})
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "n.md", "content" => "same"}, actor: "api")
+
       room = start_bare_room(note.id, "")
       SharedDoc.observe(room)
       EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
@@ -257,7 +273,9 @@ defmodule Engram.Notes.CrdtDeliverTest do
       # a concurrent edit resolved to keep-both instead of a clean merge (e2e
       # test_concurrent_edits_both_survive). The double-delivery for a device that
       # has both is an idempotent Yjs re-apply.
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "r.md", "content" => "body"})
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "r.md", "content" => "body"}, actor: "api")
+
       _room = start_bare_room(note.id, "")
 
       # Subscribe AFTER upsert so only this direct deliver_out (with a live room)
@@ -282,11 +300,16 @@ defmodule Engram.Notes.CrdtDeliverTest do
       EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
 
       {:ok, note} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "path" => "w.md",
-          "content" => "hi",
-          "mtime" => 1.0
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "w.md",
+            "content" => "hi",
+            "mtime" => 1.0
+          },
+          actor: "api"
+        )
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "crdt_doc_ready",
@@ -324,7 +347,9 @@ defmodule Engram.Notes.CrdtDeliverTest do
       # The bare room is start_link'ed to this test process; the quarantine
       # kill would propagate over the link, so trap exits.
       Process.flag(:trap_exit, true)
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "s.md", "content" => "orig"})
+
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "s.md", "content" => "orig"}, actor: "api")
 
       # Corrupt the stored CRDT state so decrypt fails (ciphertext mismatch).
       {:ok, _} =
@@ -361,7 +386,10 @@ defmodule Engram.Notes.CrdtDeliverTest do
       # message from an earlier call can never match — the next deliver for
       # the same note must NOT consume it and kill a healthy room.
       Process.flag(:trap_exit, true)
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "h.md", "content" => "orig"})
+
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "h.md", "content" => "orig"}, actor: "api")
+
       room = start_bare_room(note.id, "")
       ref = Process.monitor(room)
 
@@ -378,7 +406,9 @@ defmodule Engram.Notes.CrdtDeliverTest do
     test "apply_update failure QUARANTINES the room (killed) — no stale cache survives",
          %{user: user, vault: vault} do
       Process.flag(:trap_exit, true)
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "s2.md", "content" => "orig"})
+
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "s2.md", "content" => "orig"}, actor: "api")
 
       # Store VALIDLY-ENCRYPTED garbage: decrypt succeeds, Yex.apply_update fails.
       {:ok, {ct, nonce}} = Engram.Crypto.encrypt_crdt_state("not a yjs update", user, note.id)
@@ -403,7 +433,8 @@ defmodule Engram.Notes.CrdtDeliverTest do
 
     test "a row without CRDT state falls back to plaintext ingest (legacy row)",
          %{user: user, vault: vault} do
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "l.md", "content" => "orig"})
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "l.md", "content" => "orig"}, actor: "api")
 
       {:ok, _} =
         Repo.with_tenant(user.id, fn ->
@@ -428,7 +459,10 @@ defmodule Engram.Notes.CrdtDeliverTest do
       # room has no persisted CRDT state yet ({:ok, nil}); ingesting "" would
       # diff its body to empty. The cascade only re-paths, so the body must
       # survive. deliver_out must skip the plaintext push (announce still fires).
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "f.md", "content" => "child body"})
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "f.md", "content" => "child body"},
+          actor: "api"
+        )
 
       {:ok, _} =
         Repo.with_tenant(user.id, fn ->

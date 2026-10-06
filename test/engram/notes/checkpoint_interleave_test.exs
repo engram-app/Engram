@@ -47,7 +47,8 @@ defmodule Engram.Notes.CheckpointInterleaveTest do
   end
 
   test "a REST write that commits mid-checkpoint is not clobbered", %{user: user, vault: vault} do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "cp.md", "content" => "BODY"})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "cp.md", "content" => "BODY"}, actor: "api")
 
     # The state a real room binds from. Hydrating the live doc from THIS is what
     # makes the checkpoint's union idempotent — a doc built fresh with the same
@@ -78,7 +79,8 @@ defmodule Engram.Notes.CheckpointInterleaveTest do
 
     # The competing write, on a different real connection, while the checkpoint
     # holds its read.
-    {:ok, _} = Notes.upsert_note(user, vault, %{"path" => "cp.md", "content" => "BODY REST"})
+    {:ok, _} =
+      Notes.upsert_note(user, vault, %{"path" => "cp.md", "content" => "BODY REST"}, actor: "api")
 
     CheckpointInterleave.release(:after_row_read, parked)
 
@@ -113,7 +115,8 @@ defmodule Engram.Notes.CheckpointInterleaveTest do
   test "the fence catches a writer that changes crdt_state WITHOUT bumping seq", ctx do
     %{user: user, vault: vault} = ctx
 
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "cp2.md", "content" => "BODY"})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "cp2.md", "content" => "BODY"}, actor: "api")
 
     seed = Repo.one!(from(n in Note, where: n.id == ^note.id), skip_tenant_check: true)
     {:ok, seed_state} = Crypto.decrypt_crdt_state(seed, user)

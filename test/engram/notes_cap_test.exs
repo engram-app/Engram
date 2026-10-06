@@ -18,7 +18,9 @@ defmodule Engram.NotesCapTest do
   end
 
   defp upsert(user, vault, path, content \\ "# Note\nbody") do
-    Notes.upsert_note(user, vault, %{"path" => path, "content" => content, "mtime" => 1_000.0})
+    Notes.upsert_note(user, vault, %{"path" => path, "content" => content, "mtime" => 1_000.0},
+      actor: "api"
+    )
   end
 
   test "starts at zero for a fresh user", %{user: user} do

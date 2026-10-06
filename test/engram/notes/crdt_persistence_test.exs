@@ -12,7 +12,10 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Crypto.ensure_user_dek(user)
     {:ok, vault, _} = Vaults.register_vault(user, "CrdtPersist", Ecto.UUID.generate())
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "base"})
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "base"}, actor: "api")
+
     %{user: user, vault: vault, note: note}
   end
 
@@ -140,7 +143,9 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     # authoritative" bug in this codebase, so the seed is gone: the doc is the
     # only authority and `notes.content` is a derived projection.
     {:ok, note2} =
-      Notes.upsert_note(user, vault, %{"path" => "seed.md", "content" => "hello world"})
+      Notes.upsert_note(user, vault, %{"path" => "seed.md", "content" => "hello world"},
+        actor: "api"
+      )
 
     # Force the legacy shape the seed existed for: plaintext present, CRDT state
     # absent. `upsert_note` no longer produces this state (see the test below),
@@ -168,7 +173,9 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     # never CRDT-edited the note still receives the body over the handshake —
     # without the server ever writing into a bound room.
     {:ok, note2} =
-      Notes.upsert_note(user, vault, %{"path" => "written.md", "content" => "hello world"})
+      Notes.upsert_note(user, vault, %{"path" => "written.md", "content" => "hello world"},
+        actor: "api"
+      )
 
     st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
     doc = CrdtBridge.new_doc()
@@ -185,7 +192,9 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     # note's CRDT history. Seeding from notes.content here would duplicate text
     # (content + tail). The tail-log is authoritative — content must NOT be added.
     {:ok, note2} =
-      Notes.upsert_note(user, vault, %{"path" => "tail.md", "content" => "PLAINTEXT"})
+      Notes.upsert_note(user, vault, %{"path" => "tail.md", "content" => "PLAINTEXT"},
+        actor: "api"
+      )
 
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
@@ -213,7 +222,9 @@ defmodule Engram.Notes.CrdtPersistenceTest do
 
   test "bind/3 does not seed when content is empty (fresh, blank note)", ctx do
     %{user: user, vault: vault} = ctx
-    {:ok, note2} = Notes.upsert_note(user, vault, %{"path" => "blank.md", "content" => ""})
+
+    {:ok, note2} =
+      Notes.upsert_note(user, vault, %{"path" => "blank.md", "content" => ""}, actor: "api")
 
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
@@ -240,7 +251,9 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     canvas_json = ~s({"nodes":[{"id":"n1","type":"text","text":"hi"}],"edges":[]})
 
     {:ok, note2} =
-      Notes.upsert_note(user, vault, %{"path" => "board.canvas", "content" => canvas_json})
+      Notes.upsert_note(user, vault, %{"path" => "board.canvas", "content" => canvas_json},
+        actor: "api"
+      )
 
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
@@ -268,7 +281,9 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     # INTO the CRDT state (see "a plaintext write leaves the body in the note's
     # persisted CRDT state").
     {:ok, note2} =
-      Notes.upsert_note(user, vault, %{"path" => "empty-snap.md", "content" => "real body"})
+      Notes.upsert_note(user, vault, %{"path" => "empty-snap.md", "content" => "real body"},
+        actor: "api"
+      )
 
     {:ok, empty_state} = Yex.encode_state_as_update(CrdtBridge.new_doc())
     {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(empty_state, user, note2.id)
@@ -291,7 +306,11 @@ defmodule Engram.Notes.CrdtPersistenceTest do
   test "bind/3 does NOT seed when the snapshot projects empty AND content is empty (bare genesis row)",
        ctx do
     %{user: user, vault: vault} = ctx
-    {:ok, note2} = Notes.upsert_note(user, vault, %{"path" => "bare-genesis.md", "content" => ""})
+
+    {:ok, note2} =
+      Notes.upsert_note(user, vault, %{"path" => "bare-genesis.md", "content" => ""},
+        actor: "api"
+      )
 
     {:ok, empty_state} = Yex.encode_state_as_update(CrdtBridge.new_doc())
     {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(empty_state, user, note2.id)
@@ -318,7 +337,9 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     # applied != [] — the clear is CRDT history, not a missing seed. Content
     # must NOT resurrect.
     {:ok, note2} =
-      Notes.upsert_note(user, vault, %{"path" => "cleared.md", "content" => "STALE"})
+      Notes.upsert_note(user, vault, %{"path" => "cleared.md", "content" => "STALE"},
+        actor: "api"
+      )
 
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
@@ -350,10 +371,15 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     # BODY is empty — the seed discriminator must be body-emptiness, or this
     # shape keeps serving a bodyless STEP2 while the row holds the body.
     {:ok, note2} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "fm-only.md",
-        "content" => "---\ntitle: x\n---\nreal body"
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "fm-only.md",
+          "content" => "---\ntitle: x\n---\nreal body"
+        },
+        actor: "api"
+      )
 
     {:ok, %{state: fm_only}} = CrdtBridge.merge_plaintext(nil, "---\ntitle: x\n---\n")
     {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(fm_only, user, note2.id)
@@ -665,7 +691,9 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     content = "---\ntitle: Hi\n---\nbody\n"
 
     {:ok, note2} =
-      Notes.upsert_note(user, vault, %{"path" => "fm_seed.md", "content" => content})
+      Notes.upsert_note(user, vault, %{"path" => "fm_seed.md", "content" => content},
+        actor: "api"
+      )
 
     st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
     doc = CrdtBridge.new_doc()

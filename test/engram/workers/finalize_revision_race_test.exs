@@ -37,7 +37,9 @@ defmodule Engram.Workers.FinalizeRevisionRaceTest do
   end
 
   test "two concurrent finalizes leave a blob that decrypts", %{user: user, vault: vault} do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "r.md", "content" => "race me"})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "r.md", "content" => "race me"}, actor: "api")
+
     {:ok, existing} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
 
     {:ok, :ok} =

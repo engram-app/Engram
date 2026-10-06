@@ -33,7 +33,9 @@ defmodule Engram.Notes.IdentityTest do
   end
 
   defp note(ctx, path) do
-    {:ok, note} = Notes.upsert_note(ctx.user, ctx.vault, %{"path" => path, "content" => "x"})
+    {:ok, note} =
+      Notes.upsert_note(ctx.user, ctx.vault, %{"path" => path, "content" => "x"}, actor: "api")
+
     note
   end
 

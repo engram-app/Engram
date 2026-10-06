@@ -18,7 +18,9 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
   defp seed_rename!(user, vault) do
     # Real rename so the OLD-path tombstone exists (the worker recovers
     # old_path from it): create at Old.md, rename to Fresh.md.
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"}, actor: "api")
+
     {:ok, renamed} = Notes.rename_note(user, vault, "Old.md", "Fresh.md")
 
     # rename_note's own wiring (Task 6, #648/#1231) fire-and-forget enqueues
@@ -35,7 +37,9 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
   end
 
   defp seed_source!(user, vault, path, content) do
-    {:ok, source} = Notes.upsert_note(user, vault, %{"path" => path, "content" => content})
+    {:ok, source} =
+      Notes.upsert_note(user, vault, %{"path" => path, "content" => content}, actor: "api")
+
     :ok = Links.replace_links(user, vault, source.id, Parser.extract(content))
     source
   end
@@ -100,7 +104,9 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
       vault: vault
     } do
       {:ok, guide} =
-        Notes.upsert_note(user, vault, %{"path" => "docs/Guide.md", "content" => "# g"})
+        Notes.upsert_note(user, vault, %{"path" => "docs/Guide.md", "content" => "# g"},
+          actor: "api"
+        )
 
       # Source OUTSIDE the folder: one qualified + one bare occurrence.
       refs = seed_source!(user, vault, "Refs.md", "see [[docs/Guide]] and [[Guide]]")
@@ -160,7 +166,9 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
          %{user: user, vault: vault} do
       # CRDT-relocate style target so the round trip also proves the
       # ciphertext args survive into the sweep job, not just the hmacs.
-      {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"})
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"}, actor: "api")
+
       _source = seed_source!(user, vault, "S.md", "see [[Old]]")
       {:ok, _moved} = Notes.genesis_crdt_note(user, vault, note.id, "Fresh.md")
       Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.RewriteNoteLinks"))
@@ -219,7 +227,9 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
       # Simulate the pre-index state: the referring note exists, but its
       # note_links edge has not been written yet (async indexing lag).
       {:ok, source} =
-        Notes.upsert_note(user, vault, %{"path" => "Late.md", "content" => "see [[Old]]"})
+        Notes.upsert_note(user, vault, %{"path" => "Late.md", "content" => "see [[Old]]"},
+          actor: "api"
+        )
 
       args = args_for(user, vault, renamed)
       assert :ok = perform_job(RewriteNoteLinks, args)
@@ -352,7 +362,8 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
   end
 
   test "missing tombstone discards without raising", %{user: user, vault: vault} do
-    {:ok, renamed} = Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "x"})
+    {:ok, renamed} =
+      Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "x"}, actor: "api")
 
     args =
       args_for(user, vault, renamed)
@@ -386,7 +397,9 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
        %{user: user, vault: vault} do
     # Relocate via the CRDT genesis path, NOT rename_note — proves the
     # no-tombstone premise instead of assuming it.
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"}, actor: "api")
+
     source = seed_source!(user, vault, "S.md", "see [[Old]]")
     {:ok, _moved} = Notes.genesis_crdt_note(user, vault, note.id, "Fresh.md")
 
@@ -409,8 +422,10 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
 
   test "AAD binds the ciphertext to the target id — foreign ciphertext discards",
        %{user: user, vault: vault} do
-    {:ok, a} = Notes.upsert_note(user, vault, %{"path" => "A-old.md", "content" => "a"})
-    {:ok, b} = Notes.upsert_note(user, vault, %{"path" => "B.md", "content" => "b"})
+    {:ok, a} =
+      Notes.upsert_note(user, vault, %{"path" => "A-old.md", "content" => "a"}, actor: "api")
+
+    {:ok, b} = Notes.upsert_note(user, vault, %{"path" => "B.md", "content" => "b"}, actor: "api")
     {:ok, _} = Notes.genesis_crdt_note(user, vault, a.id, "A-new.md")
 
     # Ciphertext minted for target A, replayed onto a job for target B.
@@ -423,7 +438,9 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
   end
 
   test "garbage ciphertext args discard without raising", %{user: user, vault: vault} do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "G-old.md", "content" => "g"})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "G-old.md", "content" => "g"}, actor: "api")
+
     {:ok, _} = Notes.genesis_crdt_note(user, vault, note.id, "G-new.md")
 
     args =
@@ -441,7 +458,9 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
   # with mismatched AAD and never notice.
   test "web-origin relocate job round-trips: enqueue args alone recover the old path",
        %{user: user, vault: vault} do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "Rt-old.md", "content" => "# t"})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "Rt-old.md", "content" => "# t"}, actor: "api")
+
     source = seed_source!(user, vault, "RtSource.md", "see [[Rt-old]]")
     {:ok, _} = Notes.genesis_crdt_note(user, vault, note.id, "Rt-new.md", origin: "web")
 

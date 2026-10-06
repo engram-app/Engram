@@ -70,11 +70,16 @@ defmodule Engram.Adv1760Test do
     UsageMeters.add_embed_tokens(user.id, 20_000_000 - first - div(first, 2))
 
     {:ok, _} =
-      Notes.upsert_note(user, vault, %{
-        "path" => "N.md",
-        "content" => "# N\n\n" <> String.replace(body, "word3 ", "edited3 ", global: false),
-        "mtime" => 2_000.0
-      })
+      Notes.upsert_note(
+        user,
+        vault,
+        %{
+          "path" => "N.md",
+          "content" => "# N\n\n" <> String.replace(body, "word3 ", "edited3 ", global: false),
+          "mtime" => 2_000.0
+        },
+        actor: "api"
+      )
 
     assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 

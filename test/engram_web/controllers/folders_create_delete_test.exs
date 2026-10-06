@@ -114,7 +114,7 @@ defmodule EngramWeb.FoldersCreateDeleteTest do
       user: user,
       vault: vault
     } do
-      {:ok, child} = Engram.Notes.upsert_note(user, vault, %{path: "Derived/a.md"})
+      {:ok, child} = Engram.Notes.upsert_note(user, vault, %{path: "Derived/a.md"}, actor: "api")
 
       assert response(delete(conn, ~p"/api/folders/Derived?recursive=true"), 204)
       assert {:error, :not_found} = Engram.Notes.get_note_by_id(user, vault, child.id)
@@ -125,7 +125,7 @@ defmodule EngramWeb.FoldersCreateDeleteTest do
       user: user,
       vault: vault
     } do
-      {:ok, _} = Engram.Notes.upsert_note(user, vault, %{path: "Derived/a.md"})
+      {:ok, _} = Engram.Notes.upsert_note(user, vault, %{path: "Derived/a.md"}, actor: "api")
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
       delete(conn, ~p"/api/folders/Derived?recursive=true")
@@ -141,7 +141,7 @@ defmodule EngramWeb.FoldersCreateDeleteTest do
       user: user,
       vault: vault
     } do
-      {:ok, child} = Engram.Notes.upsert_note(user, vault, %{path: "Derived/a.md"})
+      {:ok, child} = Engram.Notes.upsert_note(user, vault, %{path: "Derived/a.md"}, actor: "api")
 
       assert response(delete(conn, ~p"/api/folders/Derived?recursive=1"), 204)
       assert {:error, :not_found} = Engram.Notes.get_note_by_id(user, vault, child.id)
@@ -152,7 +152,7 @@ defmodule EngramWeb.FoldersCreateDeleteTest do
       user: user,
       vault: vault
     } do
-      {:ok, child} = Engram.Notes.upsert_note(user, vault, %{path: "Derived/a.md"})
+      {:ok, child} = Engram.Notes.upsert_note(user, vault, %{path: "Derived/a.md"}, actor: "api")
 
       assert response(delete(conn, ~p"/api/folders/Derived"), 204)
       assert {:ok, _} = Engram.Notes.get_note_by_id(user, vault, child.id)

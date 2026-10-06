@@ -26,8 +26,12 @@ defmodule Engram.Links.RewriterRoundtripTest do
     ```
     """
 
-    {:ok, old} = Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# target"})
-    {:ok, source} = Notes.upsert_note(user, vault, %{"path" => "Src.md", "content" => content})
+    {:ok, old} =
+      Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# target"}, actor: "api")
+
+    {:ok, source} =
+      Notes.upsert_note(user, vault, %{"path" => "Src.md", "content" => content}, actor: "api")
+
     :ok = Links.replace_links(user, vault, source.id, Parser.extract(content))
 
     edges_before = Links.links_for_note(user, source.id)
@@ -69,9 +73,15 @@ defmodule Engram.Links.RewriterRoundtripTest do
     ```
     """
 
-    {:ok, old} = Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# target"})
-    {:ok, _other} = Notes.upsert_note(user, vault, %{"path" => "Other.md", "content" => "# o"})
-    {:ok, source} = Notes.upsert_note(user, vault, %{"path" => "Src.md", "content" => content})
+    {:ok, old} =
+      Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# target"}, actor: "api")
+
+    {:ok, _other} =
+      Notes.upsert_note(user, vault, %{"path" => "Other.md", "content" => "# o"}, actor: "api")
+
+    {:ok, source} =
+      Notes.upsert_note(user, vault, %{"path" => "Src.md", "content" => content}, actor: "api")
+
     :ok = Links.replace_links(user, vault, source.id, Parser.extract(content))
 
     edges_before = Links.links_for_note(user, source.id)
@@ -128,7 +138,9 @@ defmodule Engram.Links.RewriterRoundtripTest do
     user: user,
     vault: vault
   } do
-    {:ok, renamed} = Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"})
+    {:ok, renamed} =
+      Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"}, actor: "api")
+
     base_text = "alpha [[Old]] omega"
 
     {:ok, %{state: base_state}} = CrdtBridge.merge_plaintext(nil, base_text)
@@ -179,12 +191,15 @@ defmodule Engram.Links.RewriterRoundtripTest do
   # the target span itself.
   test "a concurrent client edit landing inside the rewritten span still converges via a fresh replan",
        %{user: user, vault: vault} do
-    {:ok, renamed} = Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"})
+    {:ok, renamed} =
+      Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"}, actor: "api")
 
     content = "keep [[Old]] here"
 
     {:ok, source} =
-      Notes.upsert_note(user, vault, %{"path" => "Overlap.md", "content" => content})
+      Notes.upsert_note(user, vault, %{"path" => "Overlap.md", "content" => content},
+        actor: "api"
+      )
 
     :ok = Links.replace_links(user, vault, source.id, Parser.extract(content))
     {:ok, target} = Rewriter.build_target(user, vault, :note, renamed.id, "Old.md")

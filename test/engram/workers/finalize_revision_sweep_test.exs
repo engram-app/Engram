@@ -13,7 +13,10 @@ defmodule Engram.Workers.FinalizeRevisionSweepTest do
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Crypto.ensure_user_dek(user)
     {:ok, vault, _} = Vaults.register_vault(user, "Sweep", Ecto.UUID.generate())
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "s.md", "content" => "stranded"})
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "s.md", "content" => "stranded"}, actor: "api")
+
     {:ok, existing} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
 
     {:ok, :ok} =

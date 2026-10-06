@@ -15,7 +15,9 @@ defmodule Engram.Notes.RevisionsTest do
   end
 
   defp create(user, vault, path, content) do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => path, "content" => content})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => path, "content" => content}, actor: "api")
+
     raw(user, note.id)
   end
 
@@ -130,7 +132,10 @@ defmodule Engram.Notes.RevisionsTest do
     vault: v
   } do
     existing = create(u, v, "orphan.md", "first")
-    {:ok, _} = Notes.upsert_note(u, v, %{"path" => "orphan.md", "content" => "second"})
+
+    {:ok, _} =
+      Notes.upsert_note(u, v, %{"path" => "orphan.md", "content" => "second"}, actor: "api")
+
     before_write = raw(u, existing.id)
 
     # Orphan the history: close the open version without keeping its text.

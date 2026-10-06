@@ -42,10 +42,15 @@ defmodule EngramWeb.McpListingsStructuredOutputTest do
 
     test "populated branch", %{user: user, vault: vault} do
       {:ok, _} =
-        Engram.Notes.upsert_note(user, vault, %{
-          "path" => "a.md",
-          "content" => "---\ntags: [alpha]\n---\n\nbody"
-        })
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "a.md",
+            "content" => "---\ntags: [alpha]\n---\n\nbody"
+          },
+          actor: "api"
+        )
 
       assert {:ok, _text, %{"tags" => tags}} = Handlers.handle("list_tags", user, vault, %{})
       assert is_list(tags)
@@ -60,7 +65,10 @@ defmodule EngramWeb.McpListingsStructuredOutputTest do
     end
 
     test "populated branch", %{user: user, vault: vault} do
-      {:ok, _} = Engram.Notes.upsert_note(user, vault, %{"path" => "Deep/a.md", "content" => "x"})
+      {:ok, _} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "Deep/a.md", "content" => "x"},
+          actor: "api"
+        )
 
       assert {:ok, _text, %{"folders" => folders}} =
                Handlers.handle("list_folders", user, vault, %{})
@@ -79,7 +87,10 @@ defmodule EngramWeb.McpListingsStructuredOutputTest do
     end
 
     test "populated branch", %{user: user, vault: vault} do
-      {:ok, _} = Engram.Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "hi"})
+      {:ok, _} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "hi"},
+          actor: "api"
+        )
 
       assert {:ok, _text, structured} = Handlers.handle("list_folder", user, vault, %{})
       assert [%{"path" => "a.md"} | _] = structured["notes"]

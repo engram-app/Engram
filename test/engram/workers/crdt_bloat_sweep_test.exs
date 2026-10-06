@@ -25,7 +25,8 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
   end
 
   defp seeded_note(user, vault, path, content) do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => path, "content" => content})
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => path, "content" => content}, actor: "api")
 
     # upsert_note alone may leave crdt_state unset; a checkpoint is what writes
     # the column this sweep measures.
@@ -172,7 +173,9 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
 
     # upsert_note without a checkpoint leaves crdt_state unset on this row.
     stateless = String.duplicate("never checkpointed ", 8)
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => "bare.md", "content" => stateless})
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "bare.md", "content" => stateless}, actor: "api")
 
     {:ok, {1, _}} =
       Repo.with_tenant(user.id, fn ->
