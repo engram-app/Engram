@@ -8,6 +8,8 @@
 //!
 //! Lines are 0-indexed and counted by `\n` only. Traversal is iterative
 //! (`descendants`), so deep nesting cannot overflow a scheduler stack.
+use std::borrow::Cow;
+
 use comrak::nodes::{AstNode, NodeValue};
 use comrak::{parse_document, Arena, Options};
 
@@ -38,15 +40,7 @@ fn options() -> Options<'static> {
 /// `None` only if a sourcepos points outside the text (never seen; the
 /// Elixir version raised there too).
 pub fn outline(input: &str) -> Option<Outline> {
-    // CommonMark also ends a line at a lone "\r"; callers count lines by
-    // "\n" only, so a lone "\r" becomes a space (same byte offsets).
-    let mut bytes = input.as_bytes().to_vec();
-    for i in 0..bytes.len() {
-        if bytes[i] == b'\r' && bytes.get(i + 1) != Some(&b'\n') {
-            bytes[i] = b' ';
-        }
-    }
-    let text = String::from_utf8(bytes).ok()?;
+    let text = lone_cr_as_space(input);
     let starts: Vec<usize> = std::iter::once(0)
         .chain(text.match_indices('\n').map(|(i, _)| i + 1))
         .collect();
@@ -64,6 +58,29 @@ pub fn outline(input: &str) -> Option<Outline> {
     };
     let arena = Arena::new();
     collect(parse_document(&arena, &masked, &opts), &text, &starts, math)
+}
+
+// CommonMark also ends a line at a lone "\r"; callers count lines by "\n"
+// only, so a lone "\r" becomes a space (same byte offsets). Borrows when
+// there is none (the common case); otherwise copies once, str slice by str
+// slice, so nothing is re-validated as UTF-8.
+fn lone_cr_as_space(input: &str) -> Cow<'_, str> {
+    let b = input.as_bytes();
+    // match_indices on a char searches with memchr.
+    if !input
+        .match_indices('\r')
+        .any(|(i, _)| b.get(i + 1) != Some(&b'\n'))
+    {
+        return Cow::Borrowed(input);
+    }
+    let mut out = String::with_capacity(input.len());
+    let mut pieces = input.split('\r');
+    out.push_str(pieces.next().unwrap_or_default());
+    for piece in pieces {
+        out.push(if piece.starts_with('\n') { '\r' } else { ' ' });
+        out.push_str(piece);
+    }
+    Cow::Owned(out)
 }
 
 // The outline of the final tree. `safe` starts as the masked math ranges.
@@ -251,6 +268,27 @@ fn mask_obsidian<'a>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn lone_cr_borrows_unless_a_lone_cr_exists() {
+        use std::borrow::Cow;
+        for s in ["", "a\r\nb\r\n", "no cr", "\u{e9}\r\n\u{1f600}"] {
+            assert!(
+                matches!(super::lone_cr_as_space(s), Cow::Borrowed(b) if b == s),
+                "{s:?}"
+            );
+        }
+        for (s, want) in [
+            ("\r", " "),
+            ("a\rb", "a b"),
+            ("\r\r\n", " \r\n"),
+            ("x\r\ny\r", "x\r\ny "),
+            ("\u{e9}\r\u{1f600}\r\r", "\u{e9} \u{1f600}  "),
+        ] {
+            let got = super::lone_cr_as_space(s);
+            assert!(matches!(got, Cow::Owned(_)), "{s:?}");
+            assert_eq!(got, want, "{s:?}");
+        }
+    }
     use super::outline;
 
     #[test]
