@@ -2,6 +2,8 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
+  alias Engram.DataMigrations
+  alias Engram.DataMigrations.IndexVersions
   alias Engram.KeywordIndex
   alias Engram.Notes.Note
   alias Engram.Parsers.Markdown
@@ -10,7 +12,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
   # The test embedder declares no model, which turns model tracking off; name
   # one so the embed-model sweep is exercised (and current_note/2 stamps it).
   setup do
-    Engram.DataMigrations.reset_cache()
+    DataMigrations.reset_cache()
     Application.put_env(:engram, :embed_model, "test-embed-model")
     on_exit(fn -> Application.delete_env(:engram, :embed_model) end)
   end
@@ -80,7 +82,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       user = insert(:user)
       insert(:subscription, user: user, tier: "pro", status: "active")
       note = current_note(user, chunker_version: nil, keyword_version: nil)
-      :ok = Engram.DataMigrations.mark_done(Engram.DataMigrations.IndexVersions.name(), 1)
+      :ok = DataMigrations.mark_done(IndexVersions.name(), 1)
 
       assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick(~T[03:57:00]))
 
@@ -95,7 +97,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       user = insert(:user)
       insert(:subscription, user: user, tier: "pro", status: "active")
       note = current_note(user, chunker_version: nil, keyword_version: nil)
-      :ok = Engram.DataMigrations.mark_done(Engram.DataMigrations.IndexVersions.name(), 1)
+      :ok = DataMigrations.mark_done(IndexVersions.name(), 1)
 
       assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick(~T[04:02:00]))
 
@@ -105,7 +107,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
     test "once IndexVersions is done, the keyword sweep runs only on the daily tick" do
       user = insert(:user)
       note = current_note(user, keyword_version: nil)
-      :ok = Engram.DataMigrations.mark_done(Engram.DataMigrations.IndexVersions.name(), 1)
+      :ok = DataMigrations.mark_done(IndexVersions.name(), 1)
 
       assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick(~T[04:07:00]))
       refute_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
