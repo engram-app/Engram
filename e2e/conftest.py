@@ -660,6 +660,11 @@ def fresh_instance_pair(resumed_user, resumed_client_id, resumed_api):
             "E2E_DISPLAY_BASE is set (CI) but E2E_DISPLAY_BASE_RESUMED is not: "
             "the default :150/:149 would kill a concurrent job's Xvfb"
         )
+    resumed_ports = [f"E2E_CDP_PORT_RESUMED_{x}_W{_WORKER}" for x in "AB"]
+    if os.environ.get("E2E_DISPLAY_BASE") and not all(map(os.environ.get, resumed_ports)):
+        # The 9350/9351 defaults are not reserved: a CI-allocated port or a
+        # concurrent run can already hold them.
+        pytest.fail(f"E2E_DISPLAY_BASE is set (CI) but {resumed_ports} are not all set")
     workers = int(os.environ.get("PYTEST_XDIST_WORKER_COUNT") or "1")
     if overlap := _display_overlap(workers):
         # Xvfb's pre-flight pkill would take down a session A/B/C instance.

@@ -1188,19 +1188,24 @@ jobs:
           alloc_ports() {
             python3 -c "import socket,sys; ss=[socket.socket() for _ in range(int(sys.argv[1]))]; [s.bind(('',0)) for s in ss]; print(' '.join(str(s.getsockname()[1]) for s in ss))" "$1"
           }
-          # CDP ports: 3 Obsidian instances × 2 xdist workers = 6 ports total.
-          # Per-worker env vars (E2E_CDP_PORT_A_W{0,1} etc) are consumed by
-          # e2e/conftest.py so dynamic (non-contiguous) allocation is safe.
+          # CDP ports: 3 Obsidian instances × 2 xdist workers = 6 ports, plus
+          # the resumed pair (test_82) × 2 workers = 4. Per-worker env vars
+          # (E2E_CDP_PORT_A_W{0,1}, E2E_CDP_PORT_RESUMED_A_W{0,1}, ...) are
+          # consumed by e2e/conftest.py so dynamic allocation is safe.
           read -r ENGRAM_PORT PG_PORT \
             CDP_PORT_A_W0 CDP_PORT_B_W0 CDP_PORT_C_W0 \
-            CDP_PORT_A_W1 CDP_PORT_B_W1 CDP_PORT_C_W1 <<< "$(alloc_ports 8)"
+            CDP_PORT_A_W1 CDP_PORT_B_W1 CDP_PORT_C_W1 \
+            CDP_PORT_RESUMED_A_W0 CDP_PORT_RESUMED_B_W0 \
+            CDP_PORT_RESUMED_A_W1 CDP_PORT_RESUMED_B_W1 <<< "$(alloc_ports 12)"
           # DISPLAY_BASE comes from the earlier "Compute display range" step so
           # pre-cleanup and tear-down can scope Xvfb kills consistently.
 
           # Validate all ports are non-empty (alloc_ports can fail silently)
           for var in ENGRAM_PORT PG_PORT \
                      CDP_PORT_A_W0 CDP_PORT_B_W0 CDP_PORT_C_W0 \
-                     CDP_PORT_A_W1 CDP_PORT_B_W1 CDP_PORT_C_W1; do
+                     CDP_PORT_A_W1 CDP_PORT_B_W1 CDP_PORT_C_W1 \
+                     CDP_PORT_RESUMED_A_W0 CDP_PORT_RESUMED_B_W0 \
+                     CDP_PORT_RESUMED_A_W1 CDP_PORT_RESUMED_B_W1; do
             if [ -z "${!var}" ]; then
               echo "::error::Port allocation failed for $var"
               exit 1
@@ -1216,6 +1221,10 @@ jobs:
             echo "cdp_port_a_w1=$CDP_PORT_A_W1"
             echo "cdp_port_b_w1=$CDP_PORT_B_W1"
             echo "cdp_port_c_w1=$CDP_PORT_C_W1"
+            echo "cdp_port_resumed_a_w0=$CDP_PORT_RESUMED_A_W0"
+            echo "cdp_port_resumed_b_w0=$CDP_PORT_RESUMED_B_W0"
+            echo "cdp_port_resumed_a_w1=$CDP_PORT_RESUMED_A_W1"
+            echo "cdp_port_resumed_b_w1=$CDP_PORT_RESUMED_B_W1"
             echo "display_base=$DISPLAY_BASE"
           } >> "$GITHUB_OUTPUT"
           echo "Ports: engram=$ENGRAM_PORT pg=$PG_PORT"
@@ -1506,6 +1515,10 @@ jobs:
           E2E_CDP_PORT_C_W1: ${{ steps.ports.outputs.cdp_port_c_w1 }}
           E2E_DISPLAY_BASE: ${{ steps.ports.outputs.display_base }}
           E2E_DISPLAY_BASE_RESUMED: ${{ steps.display.outputs.resumed_base }}
+          E2E_CDP_PORT_RESUMED_A_W0: ${{ steps.ports.outputs.cdp_port_resumed_a_w0 }}
+          E2E_CDP_PORT_RESUMED_B_W0: ${{ steps.ports.outputs.cdp_port_resumed_b_w0 }}
+          E2E_CDP_PORT_RESUMED_A_W1: ${{ steps.ports.outputs.cdp_port_resumed_a_w1 }}
+          E2E_CDP_PORT_RESUMED_B_W1: ${{ steps.ports.outputs.cdp_port_resumed_b_w1 }}
 
       # Note: the backend/e2e commit status for plugin PRs is posted by the
       # dedicated `report-e2e-to-plugin` job (needs all e2e suites, always runs
