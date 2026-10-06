@@ -90,7 +90,11 @@ defmodule Engram.Backfill.TenantScanTest do
   # #1349 deleted — so reverting to raw SQL now fails there. Between the two
   # lints and this test, both routes are closed; neither closes both.
   for {label, mod, fun} <- [
-        {"onboarding", Onboarding.Backfill, :first_vault_created}
+        {"onboarding", Onboarding.Backfill, :first_vault_created},
+        {"crdt_state seed", Engram.Workers.BackfillCrdtState, :enqueue_missing},
+        {"crdt_head warm", Engram.Workers.BackfillCrdtHead, :enqueue_all},
+        # Its discovery is DataMigrations.any_row?/1.
+        {"index versions", Engram.DataMigrations.IndexVersions, :run_pass}
       ] do
     test "#{label} backfill discovery never reads a tenant table cross-tenant", %{
       user: user,
