@@ -54,6 +54,61 @@ defmodule Engram.DataMigrations do
   end
 
   @doc """
+  Records that a pass left `name` unfinished and returns the row. `opened_at`
+  is set on insert and whenever the work (re)opens (a higher version, or a
+  row that was closed); otherwise it keeps the original first-seen time, so
+  age since `opened_at` measures how long it has been stuck.
+  """
+  @spec note_open(String.t(), pos_integer()) :: struct()
+  def note_open(name, version) do
+    now = DateTime.utc_now()
+
+    update =
+      from(e in Entry,
+        update: [
+          set: [
+            opened_at:
+              fragment(
+                "CASE WHEN ? < ? OR ? IS NOT NULL OR ? IS NULL THEN ? ELSE ? END",
+                e.version,
+                ^version,
+                e.completed_at,
+                e.opened_at,
+                ^now,
+                e.opened_at
+              ),
+            alerted_at:
+              fragment(
+                "CASE WHEN ? < ? OR ? IS NOT NULL OR ? IS NULL THEN NULL ELSE ? END",
+                e.version,
+                ^version,
+                e.completed_at,
+                e.opened_at,
+                e.alerted_at
+              ),
+            version: ^version,
+            completed_at: nil,
+            updated_at: ^now
+          ]
+        ]
+      )
+
+    Repo.insert!(
+      %Entry{name: name, version: version, opened_at: now},
+      on_conflict: update,
+      conflict_target: :name,
+      returning: true
+    )
+  end
+
+  @spec mark_alerted(String.t()) :: :ok
+  def mark_alerted(name) do
+    now = DateTime.utc_now()
+    Repo.update_all(from(e in Entry, where: e.name == ^name), set: [alerted_at: now])
+    :ok
+  end
+
+  @doc """
   True if `query_for.(repo)` returns a row in any tenant. Uses the
   maintenance repo when enabled (one query), else one query per user inside
   that user's RLS context. Never trusts a cross-tenant read on the app pool,

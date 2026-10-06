@@ -10,6 +10,10 @@ defmodule Engram.Repo.Migrations.CreateDataMigrationsExpand do
       add :name, :text, primary_key: true
       add :version, :bigint, null: false
       add :completed_at, :timestamptz
+      # opened_at: when the current version first came up unfinished; alerted_at:
+      # last stuck alert (one per 24 h). Both reset by a version bump.
+      add :opened_at, :timestamptz
+      add :alerted_at, :timestamptz
       add :inserted_at, :timestamptz, null: false
       add :updated_at, :timestamptz, null: false
     end

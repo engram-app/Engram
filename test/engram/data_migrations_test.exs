@@ -12,6 +12,41 @@ defmodule Engram.DataMigrationsTest do
     :ok
   end
 
+  describe "note_open/2" do
+    alias Engram.DataMigrations.Entry
+
+    defp entry(name), do: Repo.get!(Entry, name)
+
+    test "opens a row and stamps opened_at once" do
+      first = DataMigrations.note_open("m", 1)
+      assert first.completed_at == nil
+      assert %DateTime{} = first.opened_at
+
+      Repo.update_all(from(e in Entry), set: [opened_at: ~U[2026-01-01 00:00:00.000000Z]])
+      DataMigrations.note_open("m", 1)
+      assert entry("m").opened_at == ~U[2026-01-01 00:00:00.000000Z]
+    end
+
+    test "a version bump resets opened_at and alerted_at" do
+      DataMigrations.note_open("m", 1)
+      old = ~U[2026-01-01 00:00:00.000000Z]
+      Repo.update_all(from(e in Entry), set: [opened_at: old, alerted_at: old])
+
+      DataMigrations.note_open("m", 2)
+      row = entry("m")
+      assert row.version == 2
+      assert DateTime.compare(row.opened_at, old) == :gt
+      assert row.alerted_at == nil
+    end
+
+    test "mark_done leaves the row closed" do
+      DataMigrations.note_open("m", 1)
+      :ok = DataMigrations.mark_done("m", 1)
+      assert entry("m").completed_at
+      assert DataMigrations.done?("m", 1)
+    end
+  end
+
   describe "done?/2 and mark_done/2" do
     test "an unknown migration is not done" do
       refute DataMigrations.done?("never_seen", 1)

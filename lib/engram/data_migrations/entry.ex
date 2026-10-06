@@ -6,6 +6,8 @@ defmodule Engram.DataMigrations.Entry do
   schema "data_migrations" do
     field :version, :integer
     field :completed_at, :utc_datetime_usec
+    field :opened_at, :utc_datetime_usec
+    field :alerted_at, :utc_datetime_usec
     timestamps(type: :utc_datetime_usec)
   end
 end

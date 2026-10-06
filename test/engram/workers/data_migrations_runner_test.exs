@@ -77,6 +77,63 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
     refute DataMigrations.done?("test_exiting", 1)
   end
 
+  describe "stuck migrations" do
+    import ExUnit.CaptureLog
+    import Ecto.Query
+
+    alias Engram.DataMigrations.Entry
+
+    defp age(name, opened_at, alerted_at \\ nil) do
+      Repo.update_all(from(e in Entry, where: e.name == ^name),
+        set: [opened_at: opened_at, alerted_at: alerted_at]
+      )
+    end
+
+    defp days_ago(n), do: DateTime.add(DateTime.utc_now(), -n * 86_400)
+
+    test "an open migration younger than 7 days logs nothing" do
+      log = capture_log([level: :error], fn -> DataMigrationsRunner.run(Unfinished) end)
+      refute log =~ "data migration stuck"
+    end
+
+    test "an older one logs once and not again within 24h" do
+      DataMigrationsRunner.run(Unfinished)
+      age("test_unfinished", days_ago(8))
+
+      log = capture_log([level: :error], fn -> DataMigrationsRunner.run(Unfinished) end)
+      assert log =~ "data migration stuck"
+      assert log =~ "test_unfinished"
+
+      again = capture_log([level: :error], fn -> DataMigrationsRunner.run(Unfinished) end)
+      refute again =~ "data migration stuck"
+    end
+
+    test "alerts again once the last alert is over 24h old" do
+      DataMigrationsRunner.run(Unfinished)
+      age("test_unfinished", days_ago(8), days_ago(2))
+
+      log = capture_log([level: :error], fn -> DataMigrationsRunner.run(Unfinished) end)
+      assert log =~ "data migration stuck"
+    end
+
+    test "an :error pass also counts as open" do
+      DataMigrationsRunner.run(Exploding)
+      age("test_exploding", days_ago(8))
+
+      log = capture_log([level: :error], fn -> DataMigrationsRunner.run(Exploding) end)
+      assert log =~ "data migration stuck"
+    end
+
+    test "a finished migration never alerts" do
+      DataMigrationsRunner.run(Unfinished)
+      age("test_unfinished", days_ago(8))
+      :ok = DataMigrations.mark_done("test_unfinished", 1)
+
+      log = capture_log([level: :error], fn -> DataMigrationsRunner.run(Unfinished) end)
+      refute log =~ "data migration stuck"
+    end
+  end
+
   # The boot run (@reboot) and the hourly run must not overlap.
   test "a second enqueue within the unique period is deduplicated" do
     {:ok, first} = Oban.insert(DataMigrationsRunner.new(%{}))

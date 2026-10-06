@@ -80,6 +80,19 @@ deleted, not ported; do not re-add them: `ContentHashHmac`
 Read-side compatibility (32-char hash handling, `vaults.slug` reads) stays until
 the contract release. Recover the code from git history if a restore ever needs it.
 
+## Stuck migrations
+
+A pass that returns `:more` (or fails, `:error`) calls
+`DataMigrations.note_open/2`, which stamps `opened_at` on the ledger row the
+first time that version is seen unfinished. A version bump or a reopen resets
+`opened_at` and `alerted_at`. If a migration is still open more than 7 days
+after `opened_at`, the runner logs `data migration stuck` at `:error` (Sentry
+picks it up), at most once per migration per 24 h (`alerted_at`).
+
+Review: find the rows the migration's done predicate still matches (its
+`any_row?` query), then fix them or explain why they can never be done, and
+adjust the migration so the predicate stops matching them.
+
 ## Continuing self-heals
 
 Work that is never "done" is a cron worker, not a data migration.
