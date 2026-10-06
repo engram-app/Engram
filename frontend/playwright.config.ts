@@ -40,14 +40,15 @@ export default defineConfig({
 		{
 			name: "local",
 			testMatch:
-				/\/(?:local-auth|dark-mode|mobile|note-live-update|note-properties|tree-ops-sync|wiki-nav)\.spec\.ts$/u,
+				/\/(?:local-auth|dark-mode|mobile|note-live-update|note-properties|tree-ops-sync|wiki-nav|i18n-detection|i18n-onboarding)\.spec\.ts$/u,
 			use: {
 				baseURL: `http://localhost:${LOCAL_VITE_PORT}`,
 			},
 		},
 		{
 			name: "clerk",
-			testMatch: /\/(?:clerk-auth|onboarding-ftux|oauth-consent-onboarding)\.spec\.ts$/u,
+			testMatch:
+				/\/(?:clerk-auth|onboarding-ftux|oauth-consent-onboarding|i18n-onboarding-clerk)\.spec\.ts$/u,
 			use: {
 				baseURL: `http://localhost:${CLERK_VITE_PORT}`,
 			},
