@@ -252,6 +252,7 @@ export function PlanCard({
 	const badgeText =
 		state === "current" ? t("Your plan") : state === "recommended" ? t("Most popular") : null;
 
+	const filled = state === "recommended" || state === "selected";
 	return (
 		<li
 			className={cn(
@@ -296,7 +297,7 @@ export function PlanCard({
 							// recommended (onboarding's Pro) and selected (change-plan's
 							// chosen target) get the filled-primary CTA so the actionable
 							// card has weight. idle stays a clean outline.
-							variant={state === "recommended" || state === "selected" ? "default" : "outline"}
+							variant={filled ? "default" : "outline"}
 							className="w-full"
 						>
 							{ctaLabel ?? t("Start free trial")}

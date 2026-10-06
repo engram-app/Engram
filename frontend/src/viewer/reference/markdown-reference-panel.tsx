@@ -243,7 +243,7 @@ function InsertButton({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boo
 			//
 			// Revealed on hover/focus so a long list isn't a wall of buttons, but
 			// never hidden from keyboards or touch (where hover does not exist).
-			className="h-auto w-9 shrink-0 self-stretch rounded-none opacity-0 transition-opacity focus-visible:opacity-100 disabled:opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
+			className="h-auto w-9 shrink-0 self-stretch opacity-0 transition-opacity focus-visible:opacity-100 disabled:opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
 		>
 			<Plus className="size-4" />
 		</Button>
