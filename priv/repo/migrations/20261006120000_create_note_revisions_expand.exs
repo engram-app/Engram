@@ -1,8 +1,16 @@
-# priv/repo/migrations/20261003120000_create_note_revisions_expand.exs
+# priv/repo/migrations/20261006120000_create_note_revisions_expand.exs
 defmodule Engram.Repo.Migrations.CreateNoteRevisionsExpand do
   use Ecto.Migration
 
   # squawk-ignore-file
+  #
+  # squawk run on this file (v2.54.0) reports only two rules, both moot for a
+  # table created empty in this same migration: require-concurrent-index-creation
+  # (no rows, no writers to block) and prefer-bigint-over-int (dek_version,
+  # pending_dek_version, char_count). lint_migrations.sh has no per-rule
+  # per-file exclusion, so this follows note_links and vault_index_states. No
+  # SET lock_timeout either: .squawk.toml excludes require-timeout-settings and
+  # no migration here sets one.
   #
   # phase/expand: new table, no backfill. Note version history (#1710, epic #609).
   #
@@ -68,6 +76,8 @@ defmodule Engram.Repo.Migrations.CreateNoteRevisionsExpand do
 
     # RLS predicate, and the on_delete cascades scan it.
     create index(:note_revisions, [:user_id])
+    # The vault FK cascades too: CleanupVault hard-deletes vaults.
+    create index(:note_revisions, [:vault_id])
 
     execute(
       "ALTER TABLE note_revisions ENABLE ROW LEVEL SECURITY",

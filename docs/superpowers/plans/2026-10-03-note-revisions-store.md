@@ -37,7 +37,7 @@
 ## File Map
 
 Create:
-- `priv/repo/migrations/20261003120000_create_note_revisions_expand.exs`: the table, indexes, RLS
+- `priv/repo/migrations/20261006120000_create_note_revisions_expand.exs`: the table, indexes, RLS
 - `lib/engram/notes/revision.ex`: schema and changesets
 - `lib/engram/notes/revisions.ex`: `record_write/4`, `decrypt_pending/2`, `recording?/1`
 - `lib/engram/notes/content_commit.ex`: `after_commit/3`, the single post-commit hook for single-note content writes
@@ -63,7 +63,7 @@ Modify:
 ### Task 1: The `note_revisions` table, schema and RLS
 
 **Files:**
-- Create: `priv/repo/migrations/20261003120000_create_note_revisions_expand.exs`
+- Create: `priv/repo/migrations/20261006120000_create_note_revisions_expand.exs`
 - Create: `lib/engram/notes/revision.ex`
 - Modify: `lib/engram/repo.ex` (the `@tenant_tables` line, currently line 16)
 - Test: `test/engram/notes/revision_schema_test.exs`
@@ -159,7 +159,7 @@ Expected: compile error, `Engram.Notes.Revision.__struct__/1 is undefined`.
 - [ ] **Step 3: Write the migration**
 
 ```elixir
-# priv/repo/migrations/20261003120000_create_note_revisions_expand.exs
+# priv/repo/migrations/20261006120000_create_note_revisions_expand.exs
 defmodule Engram.Repo.Migrations.CreateNoteRevisionsExpand do
   use Ecto.Migration
 
@@ -339,7 +339,7 @@ Expected: all PASS. If `rls_policy_form_test` fails, diff the policy text agains
 - [ ] **Step 7: Commit**
 
 ```bash
-git add priv/repo/migrations/20261003120000_create_note_revisions_expand.exs lib/engram/notes/revision.ex lib/engram/repo.ex test/engram/notes/revision_schema_test.exs
+git add priv/repo/migrations/20261006120000_create_note_revisions_expand.exs lib/engram/notes/revision.ex lib/engram/repo.ex test/engram/notes/revision_schema_test.exs
 git commit -m "feat(history): add the note_revisions table"
 ```
 
