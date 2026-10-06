@@ -126,7 +126,7 @@ test/engram/native/frontmatter_parse_test.exs` after touching the rules. A
 REST write also parsed the merged block twice (OKF fields, parse_status);
 it is parsed once now.
 
-Title and tags (`note_title`, `note_tags`, same day): a typical 5 KB note
+Title and tags (`note_title` and a since-deleted `note_tags`, same day): a typical 5 KB note
 with frontmatter, 230 inline tags and code spans went from 3.55 ms to
 0.34 ms per write (tags 3.5 ms to 0.3 ms; title alone ~10 us to ~47 us, the
 fixed cost of a NIF call plus telemetry). 1 MB notes: 0.6-1 s down to
@@ -141,9 +141,11 @@ checkpoint). Two calls -> one, min of 5 on a loaded box: 52 B 14 -> 10 us,
 125 -> 99 us, 105 KB 3.6 -> 2.1-2.5 ms.
 
 Telemetry consequence: write paths now emit `nif="note_meta"`, so the
-`note_title`/`note_tags` series only carry the remaining single-purpose
-callers (rename re-title, markdown parser). A panel or alert filtered on
-those two names undercounts writes; filter on `note_meta` too. None existed
+`note_title` series only carries the remaining single-purpose callers
+(rename re-title, markdown parser), and `note_tags` is gone (its only
+caller, the test-facing `Helpers.extract_tags/1`, now reads `note_meta`).
+A panel or alert filtered on those names undercounts writes; filter on
+`note_meta`. None existed
 in this repo or engram-infra when it changed (grepped 2026-10-06).
 
 Language ID is NOT a candidate (measured 2026-10-06, #1877). The `lingua` hex
@@ -234,7 +236,7 @@ bumping pulldown-cmark: `ENGRAM_FUZZ_CASES=2000000 ENGRAM_FUZZ_SEED=7 cargo test
 
 `schedule = "DirtyCpu"` on everything whose input size the caller controls,
 EXCEPT small inputs on a hot path. The note parsers (`link_extract`,
-`note_title`, `note_tags`, `note_meta`) export a normal and a `_dirty_nif` variant, and
+`note_title`, `note_meta`) export a normal and a `_dirty_nif` variant, and
 `Engram.Native` picks by size: up to 16 KB (`@inline_max`, well under 1 ms)
 runs on the calling scheduler. A note write must not queue behind a long
 keyword encode on the one dirty scheduler, and the hop alone cost ~20 us.

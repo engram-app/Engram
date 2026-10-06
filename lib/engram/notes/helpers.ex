@@ -158,7 +158,7 @@ defmodule Engram.Notes.Helpers do
   """
   @spec extract_tags(String.t()) :: [String.t()]
   def extract_tags(content) do
-    Engram.Native.note_tags(scrub_utf8(content))
+    elem(Engram.Native.note_meta(scrub_utf8(content)), 1)
   end
 
   @doc """

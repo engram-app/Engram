@@ -45,10 +45,6 @@ defmodule Engram.Native do
   @doc false
   def note_title_dirty_nif(_content), do: :erlang.nif_error(:nif_not_loaded)
   @doc false
-  def note_tags_nif(_content), do: :erlang.nif_error(:nif_not_loaded)
-  @doc false
-  def note_tags_dirty_nif(_content), do: :erlang.nif_error(:nif_not_loaded)
-  @doc false
   def note_meta_nif(_content), do: :erlang.nif_error(:nif_not_loaded)
   @doc false
   def note_meta_dirty_nif(_content), do: :erlang.nif_error(:nif_not_loaded)
@@ -122,12 +118,10 @@ defmodule Engram.Native do
   def note_title(content),
     do: parse(:note_title, content, &note_title_nif/1, &note_title_dirty_nif/1)
 
-  @doc "Frontmatter tags then inline `#tags`, deduplicated. Valid UTF-8 only."
-  def note_tags(content), do: parse(:note_tags, content, &note_tags_nif/1, &note_tags_dirty_nif/1)
-
   @doc """
-  `{note_title(content), note_tags(content)}` in one call: the code ranges
-  both need are parsed once. Valid UTF-8 only.
+  `{note_title(content), tags}` in one call, tags being frontmatter tags then
+  inline `#tags`, deduplicated: the code ranges both need are parsed once.
+  Valid UTF-8 only.
   """
   def note_meta(content), do: parse(:note_meta, content, &note_meta_nif/1, &note_meta_dirty_nif/1)
 

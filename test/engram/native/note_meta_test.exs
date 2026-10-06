@@ -62,10 +62,8 @@ defmodule Engram.Native.NoteMetaTest do
             String.duplicate("- item with #tag and `code`\n", 33_000),
             "---\ntags: [a, b]\n---\n" <> String.duplicate("Prose #topic here.\n\n", 50_000)
           ] do
-        {_tags, peak} = Engram.Native.note_tags_dirty_nif(content)
-        assert peak <= 10 * byte_size(content), "#{peak} for #{binary_part(content, 0, 20)}"
         {_title, peak} = Engram.Native.note_title_dirty_nif(content)
-        assert peak <= 10 * byte_size(content)
+        assert peak <= 10 * byte_size(content), "#{peak} for #{binary_part(content, 0, 20)}"
         {_meta, peak} = Engram.Native.note_meta_dirty_nif(content)
         assert peak <= 10 * byte_size(content)
       end
@@ -75,7 +73,6 @@ defmodule Engram.Native.NoteMetaTest do
       content = "---\ntitle: T\ntags: [a]\n---\n# H\n#x `y`"
 
       Engram.NativeLeak.assert_no_leak(fn ->
-        Engram.Native.note_tags_nif(content)
         Engram.Native.note_title_nif(content)
         Engram.Native.note_meta_nif(content)
       end)
@@ -83,10 +80,6 @@ defmodule Engram.Native.NoteMetaTest do
 
     test "a note up to 16 KB parses on the calling scheduler, a bigger one dirty" do
       ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
-      Helpers.extract_tags(String.duplicate("a", 16_384))
-      assert_receive {_, ^ref, _, %{nif: :note_tags, dirty: false}}
-      Helpers.extract_tags(String.duplicate("a", 16_385))
-      assert_receive {_, ^ref, _, %{nif: :note_tags, dirty: true}}
       Helpers.extract_title_and_tags(String.duplicate("a", 16_384), "x.md")
       assert_receive {_, ^ref, _, %{nif: :note_meta, dirty: false}}
       Helpers.extract_title_and_tags(String.duplicate("a", 16_385), "x.md")
@@ -98,7 +91,7 @@ defmodule Engram.Native.NoteMetaTest do
       Helpers.extract_title("# a", "x.md")
       Helpers.extract_tags("#a")
       assert_receive {[:engram, :nif, :call, :stop], ^ref, _, %{nif: :note_title}}
-      assert_receive {[:engram, :nif, :call, :stop], ^ref, _, %{nif: :note_tags}}
+      assert_receive {[:engram, :nif, :call, :stop], ^ref, _, %{nif: :note_meta}}
     end
   end
 end

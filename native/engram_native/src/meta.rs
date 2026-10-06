@@ -41,17 +41,11 @@ pub fn title(s: &str) -> Option<String> {
     heading_title(body, &code_of(body))
 }
 
-/// Frontmatter tags, then inline `#tags` outside code, first occurrence
-/// kept, handed to `emit` one at a time (the caller builds BEAM terms, so
-/// inline tags are never copied into Rust strings).
-pub fn tags(s: &str, emit: impl FnMut(&str)) {
-    let fm = frontmatter(s);
-    let body = body_of(s, fm);
-    emit_tags(fm, body, &code_of(body), emit);
-}
-
-/// `title` and `tags` in one pass: the frontmatter match and the code
-/// ranges (the costly part) are computed once for both.
+/// `title`, plus frontmatter tags then inline `#tags` outside code (first
+/// occurrence kept), handed to `emit` one at a time (the caller builds BEAM
+/// terms, so inline tags are never copied into Rust strings). The
+/// frontmatter match and the code ranges (the costly part) are computed
+/// once for both.
 pub fn title_and_tags(s: &str, emit: impl FnMut(&str)) -> Option<String> {
     let fm = frontmatter(s);
     let body = body_of(s, fm);

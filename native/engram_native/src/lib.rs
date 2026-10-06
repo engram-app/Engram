@@ -164,14 +164,6 @@ fn note_title(content: &str) -> (Option<String>, usize) {
     (out, memory::peak_since(base))
 }
 
-/// `Helpers.extract_tags/1`, and the peak.
-fn note_tags<'a>(env: Env<'a>, content: &str) -> (Vec<Term<'a>>, usize) {
-    let base = memory::begin();
-    let mut out = Vec::new();
-    meta::tags(content, |t| out.push(t.encode(env)));
-    (out, memory::peak_since(base))
-}
-
 /// `Helpers.extract_title_and_tags/2` without the file-name fallback, and
 /// the peak.
 fn note_meta<'a>(env: Env<'a>, content: &str) -> ((Option<String>, Vec<Term<'a>>), usize) {
@@ -212,16 +204,6 @@ fn note_title_nif(content: &str) -> (Option<String>, usize) {
 #[rustler::nif(schedule = "DirtyCpu")]
 fn note_title_dirty_nif(content: &str) -> (Option<String>, usize) {
     note_title(content)
-}
-
-#[rustler::nif]
-fn note_tags_nif<'a>(env: Env<'a>, content: &str) -> (Vec<Term<'a>>, usize) {
-    note_tags(env, content)
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn note_tags_dirty_nif<'a>(env: Env<'a>, content: &str) -> (Vec<Term<'a>>, usize) {
-    note_tags(env, content)
 }
 
 // A JSON number decodes to an integer when it has no fraction (`0`, `1`).
