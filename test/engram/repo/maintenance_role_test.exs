@@ -86,7 +86,8 @@ defmodule Engram.Repo.MaintenanceRoleTest do
 
     {:ok, {seen, updated}} =
       as_role("engram_maintenance", fn ->
-        {Map.new(readable, &{&1, count(&1)}), Map.new(@tenant_tables, &{&1, self_update(&1)})}
+        {Map.new(@tenant_tables, &{&1, count(&1)}),
+         Map.new(@tenant_tables, &{&1, self_update(&1)})}
       end)
 
     assert seen == expected
