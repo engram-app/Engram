@@ -469,14 +469,14 @@ defmodule Engram.Indexing do
 
   Returns the number of `notes` rows updated.
 
-  The `repo` argument exists because the two callers need opposite pools, and
+  The `repo` argument exists because the pool must match the caller, and
   getting it wrong is silent in the dangerous direction.
 
-    * Tenant-scoped callers (a worker already inside `Repo.with_tenant!/2`) must stay
-      on `Engram.Repo` — the tenant scope is the point there.
-    * `OrphanSweep` calls it with note_ids spanning every tenant by
-      construction, so no `with_tenant` is possible. It must pass
-      `Repo.maintenance()`.
+    * A caller inside `Repo.with_tenant!/2` (tests today) uses the default
+      `Engram.Repo`: the tenant scope is the point there.
+    * `OrphanSweep`, the only production caller, passes note_ids spanning
+      every tenant by construction, so no `with_tenant` is possible. It must
+      pass `Repo.maintenance()`.
 
   Both writes below are `update_all` against tables carrying FORCE ROW LEVEL
   SECURITY. An `update_all` the policy filters does not raise: it reports
