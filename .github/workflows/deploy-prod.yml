@@ -601,19 +601,24 @@ jobs:
             echo "CHANGELOG_EOF"
           } >> "$GITHUB_OUTPUT"
 
-      # GITHUB_TOKEN cannot create this Release for some target commits: the
-      # Releases API then accepts only `contents=write,workflows=write`
-      # (X-Accepted-Github-Permissions), and a workflow token never holds
-      # `workflows`. release-v0.43.0 hit it (403 "Resource not accessible by
+      # GITHUB_TOKEN cannot create this Release for some target commits:
+      # X-Accepted-Github-Permissions lists `contents=write` and
+      # `contents=write,workflows=write`, GitHub refuses `contents=write` alone
+      # for such a commit, and a workflow token never holds `workflows`. release-v0.43.0 hit it (403 "Resource not accessible by
       # integration"); a probe got 403 with GITHUB_TOKEN and 201 with this App
       # token on the same commit. The App already creates release-please's
       # Releases and tags.
+      # Scoped to this repo (no owner/repositories) and to the two
+      # permissions the Releases API accepts here; verified 201 on 0.43.0's
+      # commit with exactly these.
       - name: Generate Engram App installation token
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ vars.GH_APP_CLIENT_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-workflows: write
 
       - name: Create GitHub Release
         env:

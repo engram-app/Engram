@@ -153,13 +153,14 @@ A green `deploy-prod.yml` means an engram-infra PR was opened. A green `terrafor
 ## `create-release-notes` 403 "Resource not accessible by integration"
 
 `GITHUB_TOKEN` with `contents: write` is not always enough to create a
-Release. For some target commits the Releases API accepts only
-`contents=write,workflows=write` (read it in the `X-Accepted-Github-Permissions`
-response header via `gh api -i`), and a workflow token can never hold
+Release. The `X-Accepted-Github-Permissions` response header (`gh api -i`)
+lists `contents=write; contents=write,workflows=write`, and for some target
+commits GitHub refuses `contents=write` alone. A workflow token can never hold
 `workflows`. release-v0.43.0 hit this on 2026-10-07: same token, command and
 settings as 0.42.0, yet 403 on its release commit and 201 on 0.42.0's. Which
 commits trip it is GitHub's call; do not guess from the range. The job creates
-the Release with the Engram App installation token (#1894). If it recurs, one
+the Release with the Engram App installation token, scoped to this repo and to
+`contents` + `workflows` write (#1894). If it recurs, one
 probe shows the accepted permissions:
 `gh api -i -X POST repos/<repo>/releases -f tag_name=probe -f target_commitish=<sha> -F draft=true`
 (then delete the draft).
