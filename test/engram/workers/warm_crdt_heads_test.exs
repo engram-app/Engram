@@ -18,15 +18,29 @@ defmodule Engram.Workers.WarmCrdtHeadsTest do
     %{user: user, vault: vault}
   end
 
+  # Two runs never overlap, but a run that already completed must not swallow
+  # the next hourly one.
+  test "an incomplete run deduplicates the next enqueue" do
+    {:ok, first} = Oban.insert(WarmCrdtHeads.new(%{}))
+    {:ok, second} = Oban.insert(WarmCrdtHeads.new(%{}))
+    assert second.conflict?
+    assert second.id == first.id
+  end
+
+  test "a completed run does not deduplicate the next enqueue" do
+    {:ok, first} = Oban.insert(WarmCrdtHeads.new(%{}))
+
+    Repo.update_all(from(j in Oban.Job, where: j.id == ^first.id),
+      set: [state: "completed", completed_at: DateTime.utc_now()]
+    )
+
+    {:ok, second} = Oban.insert(WarmCrdtHeads.new(%{}))
+    refute second.conflict?
+    assert second.id != first.id
+  end
+
   test "is an hourly cron on the maintenance queue" do
-    crontab =
-      :engram
-      |> Application.get_env(Oban)
-      |> Keyword.fetch!(:plugins)
-      |> Enum.find_value(fn
-        {Oban.Plugins.Cron, opts} -> Keyword.fetch!(opts, :crontab)
-        _ -> nil
-      end)
+    crontab = Engram.Test.ObanWorkers.crontab()
 
     assert {"48 * * * *", WarmCrdtHeads} in crontab
     assert WarmCrdtHeads.__opts__()[:queue] == :maintenance

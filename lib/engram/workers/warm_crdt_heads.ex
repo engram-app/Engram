@@ -10,7 +10,12 @@ defmodule Engram.Workers.WarmCrdtHeads do
   every edit, so there is never a final "done". See
   `docs/context/data-migrations-ledger.md`.
   """
-  use Oban.Worker, queue: :maintenance, max_attempts: 3, unique: [period: 3000]
+  # `states: :incomplete`, as DataMigrationsRunner: two runs never overlap, but
+  # a completed run does not swallow the next hourly one.
+  use Oban.Worker,
+    queue: :maintenance,
+    max_attempts: 3,
+    unique: [period: 3000, states: :incomplete]
 
   alias Engram.DataMigrations
   alias Engram.Workers.BackfillCrdtHead
