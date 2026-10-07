@@ -52,4 +52,45 @@ defmodule Engram.Search.CollapseToNotesTest do
     reps = Search.collapse_to_notes(chunks)
     assert Enum.map(reps, & &1.source_path) == ["a.md"]
   end
+
+  describe "[:engram, :search, :hit_dropped] telemetry" do
+    setup do
+      ref = make_ref()
+      test_pid = self()
+      handler = "hit-dropped-#{inspect(ref)}"
+
+      :telemetry.attach(
+        handler,
+        [:engram, :search, :hit_dropped],
+        fn _event, measurements, metadata, _ -> send(test_pid, {ref, measurements, metadata}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+      %{ref: ref}
+    end
+
+    test "one event with the count of hits that had no chunk row", %{ref: ref} do
+      chunks = [
+        chunk("a.md", "v1", 0.9, [1.0, 0.0]),
+        chunk(nil, "v1", 0.95, [1.0, 0.0]),
+        chunk(nil, "v2", 0.4, [0.0, 1.0])
+      ]
+
+      Search.collapse_to_notes(chunks)
+
+      assert_received {^ref, %{count: 2}, %{reason: :no_chunk_row}}
+      refute_received {^ref, _, _}
+    end
+
+    test "no event when every hit rehydrated", %{ref: ref} do
+      Search.collapse_to_notes([chunk("a.md", "v1", 0.9, [1.0, 0.0])])
+      refute_received {^ref, _, _}
+    end
+
+    test "no event for an empty pool", %{ref: ref} do
+      assert Search.collapse_to_notes([]) == []
+      refute_received {^ref, _, _}
+    end
+  end
 end

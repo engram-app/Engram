@@ -21,6 +21,8 @@ defmodule Engram.PromEx.Search do
     * `engram_prom_ex_search_results_returned` — distribution on the
       `result_count` measurement so the cardinality of returned results
       is observable.
+    * `engram_prom_ex_search_hits_dropped_total`: sum of `count` from
+      `[:engram, :search, :hit_dropped]`, tag `[:reason]`.
 
   Cardinality contract: only the booleans/atoms above. NEVER add
   user_id, vault_id, or the query string.
@@ -30,6 +32,7 @@ defmodule Engram.PromEx.Search do
 
   @stop_event [:engram, :search, :request, :stop]
   @degraded_event [:engram, :search, :degraded]
+  @hit_dropped_event [:engram, :search, :hit_dropped]
 
   @impl true
   def event_metrics(opts) do
@@ -76,6 +79,16 @@ defmodule Engram.PromEx.Search do
           event_name: @degraded_event,
           description: "Searches that degraded to a single leg (embed failure).",
           tags: [:leg, :reason]
+        ),
+        # Grouped-search hits dropped because their chunk row was not there
+        # (Qdrant upsert lands before the rows commit). Should stay near zero;
+        # a sustained rate means results are silently going missing.
+        sum(
+          metric_prefix ++ [:hits_dropped, :total],
+          event_name: @hit_dropped_event,
+          measurement: :count,
+          description: "Search hits dropped at rehydrate (no chunk row).",
+          tags: [:reason]
         )
       ]
     )
