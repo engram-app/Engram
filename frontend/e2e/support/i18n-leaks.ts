@@ -83,6 +83,10 @@ function matchersFor(locale: string): KeyMatcher[] {
 	return built;
 }
 
+// Product names that are also a catalog key (the "Continue" coding tool vs the Continue
+// button). They are meant to stay as written, so they are not leaks.
+const BRAND_NAMES = new Set(["Continue"]);
+
 // Every visible leaf text node plus the placeholder / aria-label / title / alt
 // values of visible elements, whitespace-normalized and de-duplicated.
 export async function collectVisibleText(
@@ -133,7 +137,8 @@ export async function findLeaks(
 	locale: string,
 	options: VisibleTextOptions = {},
 ): Promise<Leak[]> {
-	return findKeyLeaks(await collectVisibleText(page, options), matchersFor(locale));
+	const leaks = findKeyLeaks(await collectVisibleText(page, options), matchersFor(locale));
+	return leaks.filter((leak) => !BRAND_NAMES.has(leak.key));
 }
 
 // Plain-ASCII sentences visible in a non-Latin locale: unwrapped English. Empty for
