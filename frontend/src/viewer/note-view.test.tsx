@@ -352,3 +352,19 @@ describe("NoteView link targets", () => {
 		expect(ref).not.toHaveAttribute("target");
 	});
 });
+
+describe("NoteView: dollar signs", () => {
+	it("two prices in bold stay two bold runs, not a math span that eats the markers", () => {
+		const { container } = renderNote(
+			"You ended at **$175k base at Gala**. Your floor is **$150k base** (confirmed).\n",
+		);
+		const strong = Array.from(container.querySelectorAll("strong")).map((e) => e.textContent);
+		expect(strong).toEqual(["$175k base at Gala", "$150k base"]);
+		expect(container.querySelector(".katex")).toBeNull();
+	});
+
+	it("real inline math still renders", () => {
+		const { container } = renderNote("energy is $E=mc^2$ here\n");
+		expect(container.querySelector(".katex")).not.toBeNull();
+	});
+});

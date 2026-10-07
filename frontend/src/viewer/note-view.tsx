@@ -14,6 +14,7 @@ import type { PluggableList } from "unified";
 import "./markdown.css";
 import { useT } from "@/i18n/locale-provider";
 import { useIsFreeTier } from "../billing/use-is-free-tier";
+import { escapeNonMathDollars } from "../lib/math-delimiters";
 import { AttachmentFallback } from "./attachment-fallback";
 import AttachmentImg from "./attachment-img";
 import MermaidBlock from "./mermaid-block";
@@ -101,7 +102,10 @@ function NoteView({ content, tags, links, manifestNotes, onCreateWikiTarget }: N
 		() => remarkPluginsFor(slug, wikiMap, manifestNotes),
 		[slug, wikiMap, manifestNotes],
 	);
-	const body = useMemo(() => noteBody(content), [content]);
+	// remark-math treats any two `$` on a line as math, which turns two prices
+	// into a span that swallows the bold/italic markers between them. Escape the
+	// dollars that are not math first (same rules as the editor).
+	const body = useMemo(() => escapeNonMathDollars(noteBody(content)), [content]);
 
 	return (
 		<article className="w-full">
