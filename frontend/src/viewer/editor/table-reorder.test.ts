@@ -188,3 +188,38 @@ describe("while dragging", () => {
 		expect(view.state.doc.toString()).toBe(before);
 	});
 });
+
+describe("handle visibility while dragging", () => {
+	const wrap = () => view.dom.querySelector(".cm-atomic-table");
+
+	test("the dragged handle and the table are marked until the drop", () => {
+		mount();
+		const handle = colHandles()[0] as HTMLElement;
+		expect(handle.classList.contains("cm-atomic-table-handle-dragging")).toBe(false);
+		ptr(handle, "pointerdown");
+		expect(handle.classList.contains("cm-atomic-table-handle-dragging")).toBe(true);
+		expect(wrap()?.classList.contains("cm-atomic-table-dragging")).toBe(true);
+		ptr(src(2), "pointermove");
+		expect(handle.classList.contains("cm-atomic-table-handle-dragging")).toBe(true);
+		ptr(src(2), "pointerup", { buttons: 0 });
+		expect(view.dom.querySelector(".cm-atomic-table-handle-dragging")).toBeNull();
+		expect(wrap()?.classList.contains("cm-atomic-table-dragging")).toBe(false);
+	});
+
+	test("a drag that ends with the button already up clears the marks", () => {
+		mount();
+		ptr(rowHandles()[0] as HTMLElement, "pointerdown");
+		ptr(src(4), "pointermove", { buttons: 0 });
+		expect(view.dom.querySelector(".cm-atomic-table-handle-dragging")).toBeNull();
+		expect(wrap()?.classList.contains("cm-atomic-table-dragging")).toBe(false);
+	});
+
+	test("the mark stays on the dragged handle even when the pointer leaves the table", () => {
+		mount();
+		const handle = rowHandles()[0] as HTMLElement;
+		ptr(handle, "pointerdown");
+		ptr(document.body, "pointermove");
+		expect(handle.classList.contains("cm-atomic-table-handle-dragging")).toBe(true);
+		ptr(document.body, "pointerup", { buttons: 0 });
+	});
+});

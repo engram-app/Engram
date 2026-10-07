@@ -37,8 +37,11 @@ index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-be1b91b2c5913cde b/.bun-tag-be1b91b2c5913cde
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-bfcc84bf3b1ffc3d b/.bun-tag-bfcc84bf3b1ffc3d
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/styles/inline-preview.css b/dist/styles/inline-preview.css
-index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..e435f12a65f5cd7c933addfb5fd86cde6a866358 100644
+index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..da1c60233a6f27a1fb8d6815ce12d601b8e9770b 100644
 --- a/dist/styles/inline-preview.css
 +++ b/dist/styles/inline-preview.css
 @@ -464,8 +464,10 @@
@@ -74,7 +77,7 @@ index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..e435f12a65f5cd7c933addfb5fd86cde
  .cm-atomic-table-cell-source .cm-atomic-link-wrap.active > .cm-atomic-mark {
    display: inline;
    color: var(--atomic-editor-fg-faint, #666);
-@@ -828,3 +834,180 @@
+@@ -828,3 +834,207 @@
  .cm-atomic-readonly .cm-atomic-table-cell-source {
    cursor: default;
  }
@@ -202,21 +205,48 @@ index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..e435f12a65f5cd7c933addfb5fd86cde
 +  cursor: grab;
 +  touch-action: none;
 +  border-radius: 0.25rem;
-+  color: var(--atomic-editor-accent, #7c5cff);
-+  background-color: color-mix(in srgb, var(--atomic-editor-accent, #7c5cff) 12%, transparent 88%);
-+  /* Grip dots, drawn so the handle carries no text (cell textContent stays clean). */
-+  background-image: radial-gradient(currentColor 1px, transparent 1.6px);
-+  background-size: 5px 5px;
-+  background-position: center;
++  background-color: color-mix(in srgb, var(--atomic-editor-fg-faint, #767676) 22%, transparent 78%);
 +  transition: opacity 120ms ease;
 +}
 +
-+.cm-atomic-table-handle:hover {
++/* Visible only while the pointer is on the handle itself, or for the whole
++ * drag (the pointer leaves the strip as soon as you move). */
++.cm-atomic-table-handle:hover,
++.cm-atomic-table-handle-dragging {
 +  opacity: 1;
 +}
 +
-+.cm-atomic-table-handle:active {
++.cm-atomic-table-handle-dragging {
 +  cursor: grabbing;
++  background-color: color-mix(in srgb, var(--atomic-editor-fg-faint, #767676) 38%, transparent 62%);
++}
++
++/* Six-dot grip icon, centred: 3 x 2 dots on a column handle, 2 x 3 on a row
++ * handle. A pseudo-element, so the handle carries no text. */
++.cm-atomic-table-handle::after {
++  content: "";
++  position: absolute;
++  top: 50%;
++  left: 50%;
++  transform: translate(-50%, -50%);
++  background: radial-gradient(circle, var(--atomic-editor-fg-muted, #6e6e6e) 1px, transparent 1.4px) 0 0 / 4px 4px;
++}
++
++.cm-atomic-table-handle-col::after {
++  width: 12px;
++  height: 8px;
++}
++
++.cm-atomic-table-handle-row::after {
++  width: 8px;
++  height: 12px;
++}
++
++.cm-atomic-table-dragging,
++.cm-atomic-table-dragging * {
++  cursor: grabbing;
++  -webkit-user-select: none;
++  user-select: none;
 +}
 +
 +.cm-atomic-table-handle-col {
@@ -288,7 +318,7 @@ index ff02d57548388e468f73695f3bd45ec58be38160..d2f2a04758594f7b202cda3897ac7321
  export declare function tables(config?: TablesConfig): Extension;
  export {};
 diff --git a/dist/table-widget.js b/dist/table-widget.js
-index aee407c4aaa2eea5a46c0fa28831dcc80985c783..7cd9816f57759f40b2fe85ac52ab7792653f79ef 100644
+index aee407c4aaa2eea5a46c0fa28831dcc80985c783..65ecda84713353102b3e07d028be2da25f252751 100644
 --- a/dist/table-widget.js
 +++ b/dist/table-widget.js
 @@ -42,9 +42,22 @@ export function splitRowCells(line) {
@@ -425,7 +455,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..7cd9816f57759f40b2fe85ac52ab7792
  ];
  function isMarkWrap(el) {
      for (const c of MARK_WRAP_CLASSES)
-@@ -528,6 +592,652 @@ function placeCaretAtEnd(el) {
+@@ -528,6 +592,658 @@ function placeCaretAtEnd(el) {
  function getAllCells(wrap) {
      return Array.from(wrap.querySelectorAll('th, td'));
  }
@@ -1047,7 +1077,13 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..7cd9816f57759f40b2fe85ac52ab7792
 +    if (from < 0)
 +        return;
 +    let to = from;
++    // Keep the handle visible for the whole drag, wherever the pointer is
++    // (its hover state only exists while the pointer is over it).
++    handle.classList.add('cm-atomic-table-handle-dragging');
++    wrap.classList.add('cm-atomic-table-dragging');
 +    const end = (commit) => {
++        handle.classList.remove('cm-atomic-table-handle-dragging');
++        wrap.classList.remove('cm-atomic-table-dragging');
 +        document.removeEventListener('pointermove', onMove, true);
 +        document.removeEventListener('pointerup', onUp, true);
 +        document.removeEventListener('pointercancel', onCancel, true);
@@ -1078,7 +1114,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..7cd9816f57759f40b2fe85ac52ab7792
  // ---- widget ---------------------------------------------------------
  class TableWidget extends WidgetType {
      constructor(model, readOnly) {
-@@ -561,18 +1271,33 @@ class TableWidget extends WidgetType {
+@@ -561,18 +1277,33 @@ class TableWidget extends WidgetType {
              return false;
          if (other.model.rows.length !== this.model.rows.length)
              return false;
@@ -1116,7 +1152,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..7cd9816f57759f40b2fe85ac52ab7792
          thead.appendChild(headerRow);
          table.appendChild(thead);
          const tbody = document.createElement('tbody');
-@@ -580,11 +1305,16 @@ class TableWidget extends WidgetType {
+@@ -580,11 +1311,16 @@ class TableWidget extends WidgetType {
          for (const row of this.model.rows) {
              const tr = document.createElement('tr');
              for (let c = 0; c < colCount; c++) {
@@ -1134,7 +1170,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..7cd9816f57759f40b2fe85ac52ab7792
          return wrap;
      }
      // All cell interactions are handled by the listeners we attach in
-@@ -629,17 +1359,37 @@ function makeCell(tag, text, view) {
+@@ -629,17 +1365,37 @@ function makeCell(tag, text, view) {
      // opened. We open on `click` (a proper popup-activation gesture, so
      // `window.open` isn't blocked) and block the caret on `pointerdown`.
      //
@@ -1177,7 +1213,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..7cd9816f57759f40b2fe85ac52ab7792
      source.addEventListener('pointerdown', (event) => {
          if (event.button !== 0)
              return;
-@@ -678,7 +1428,12 @@ function attachCellEditing(view, cell, source) {
+@@ -678,7 +1434,12 @@ function attachCellEditing(view, cell, source) {
          // textContent (not innerText) so `display: none` delimiters inside
          // mark wraps are still captured — otherwise a cell containing
          // `**bold**` would serialize to just `bold` on every keystroke.
@@ -1191,7 +1227,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..7cd9816f57759f40b2fe85ac52ab7792
          cell.dataset.raw = raw;
          const offset = getCaretCharOffset(source);
          renderCellSourceDecorated(source);
-@@ -711,6 +1466,18 @@ function attachCellEditing(view, cell, source) {
+@@ -711,6 +1472,18 @@ function attachCellEditing(view, cell, source) {
      // and strip markup here, and `escapeCell` neutralizes any literal `|`
      // on serialize.
      source.addEventListener('paste', (event) => {
@@ -1210,7 +1246,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..7cd9816f57759f40b2fe85ac52ab7792
          event.preventDefault();
          const text = (event.clipboardData?.getData('text/plain') ?? '')
              .replace(/\s+/g, ' ')
-@@ -737,6 +1504,15 @@ function attachCellEditing(view, cell, source) {
+@@ -737,6 +1510,15 @@ function attachCellEditing(view, cell, source) {
      // hides all delimiters.
      source.addEventListener('blur', () => clearActiveMarksInSource(source));
      source.addEventListener('keydown', (event) => {
@@ -1226,7 +1262,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..7cd9816f57759f40b2fe85ac52ab7792
          // Enter mirrors Tab — advance to the next cell (appending a row past
          // the last one) instead of inserting a line break a single-line cell
          // can't represent. Shift reverses direction for both.
-@@ -804,6 +1580,41 @@ function dispatchModel(view, wrap, nextModel) {
+@@ -804,6 +1586,41 @@ function dispatchModel(view, wrap, nextModel) {
          changes: { from: range.from, to: range.to, insert: next },
      });
  }
@@ -1268,7 +1304,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..7cd9816f57759f40b2fe85ac52ab7792
  function openCellMenu(view, cell, x, y) {
      const wrap = cell.closest('.cm-atomic-table');
      if (!wrap)
-@@ -833,6 +1644,17 @@ function openCellMenu(view, cell, x, y) {
+@@ -833,6 +1650,17 @@ function openCellMenu(view, cell, x, y) {
                  dispatchModel(view, wrap, m);
              },
          });
@@ -1286,7 +1322,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..7cd9816f57759f40b2fe85ac52ab7792
          items.push({
              label: 'Delete row',
              action: () => {
-@@ -849,6 +1671,7 @@ function openCellMenu(view, cell, x, y) {
+@@ -849,6 +1677,7 @@ function openCellMenu(view, cell, x, y) {
          action: () => {
              const m = readModelFromDom(wrap);
              m.header.splice(col, 0, '');
@@ -1294,7 +1330,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..7cd9816f57759f40b2fe85ac52ab7792
              for (const r of m.rows)
                  r.splice(col, 0, '');
              dispatchModel(view, wrap, m);
-@@ -859,6 +1682,7 @@ function openCellMenu(view, cell, x, y) {
+@@ -859,6 +1688,7 @@ function openCellMenu(view, cell, x, y) {
          action: () => {
              const m = readModelFromDom(wrap);
              m.header.splice(col + 1, 0, '');
@@ -1302,7 +1338,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..7cd9816f57759f40b2fe85ac52ab7792
              for (const r of m.rows)
                  r.splice(col + 1, 0, '');
              dispatchModel(view, wrap, m);
-@@ -874,11 +1698,32 @@ function openCellMenu(view, cell, x, y) {
+@@ -874,11 +1704,32 @@ function openCellMenu(view, cell, x, y) {
              if (m.header.length <= 1 || col < 0)
                  return;
              m.header.splice(col, 1);
@@ -1335,7 +1371,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..7cd9816f57759f40b2fe85ac52ab7792
      let dismissed = false;
      const dismiss = () => {
          if (dismissed)
-@@ -908,6 +1753,7 @@ function openCellMenu(view, cell, x, y) {
+@@ -908,6 +1759,7 @@ function openCellMenu(view, cell, x, y) {
          btn.type = 'button';
          btn.className = 'cm-atomic-table-menu-item';
          btn.textContent = item.label;
@@ -1343,7 +1379,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..7cd9816f57759f40b2fe85ac52ab7792
          btn.addEventListener('click', () => {
              item.action();
              dismiss();
-@@ -1191,13 +2037,21 @@ const defaultLinkOpener = (url) => {
+@@ -1191,13 +2043,21 @@ const defaultLinkOpener = (url) => {
  export const tableLinkClickFacet = Facet.define({
      combine: (values) => values[0] ?? defaultLinkOpener,
  });
