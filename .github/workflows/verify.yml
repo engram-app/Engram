@@ -3214,14 +3214,6 @@ jobs:
         # about. Cheap to run here, expensive to discover later.
         run: bash test/scripts/discord_release_notes_test.sh
 
-      - name: SCHEMA-IMPACT notes self-check
-        # Guards scripts/generate_schema_impact_notes.sh (phase/* filtering +
-        # BASE..HEAD range scoping). Its only callers are release-please.yml
-        # and deploy-prod.yml, so a regression is invisible until a release
-        # page either omits a real migration warning or invents one (this
-        # script previously had zero CI coverage at all).
-        run: bash test/scripts/generate_schema_impact_notes_test.sh
-
       - name: BEAM scheduler clamp self-check
         # Guards rel/env.sh's scheduler sizing. It ran in prod for an unknown
         # period doing NOTHING: written for cgroup quotas, but Fargate enforces
@@ -3485,25 +3477,17 @@ jobs:
 
   migration-gates:
     name: migration gates
-    # The three phase/* migration gates folded into ONE job (they share the
-    # branch-push trigger, the open-PR label lookups, and the prebuild-mix
-    # caches), in step order:
-    #   1. phase-label-required — a PR that touches migrations must carry
-    #      exactly one phase/* label. This is what enforces the two-deploy
-    #      fence (expand in release N, contract in release N+1, never both
-    #      in the same image). Labels: phase/expand (additive),
-    #      phase/migrate-data (backfills), phase/contract (drops — gated by
-    #      step 2), phase/single-shot (accept downtime; use sparingly).
-    #   2. contract-phase-references — on phase/contract PRs, extract what
-    #      the new migrations DROP and prove no lib/ code still references
-    #      the dropped columns/tables.
-    #   3. n1-compat — on phase/expand PRs, prove the new migrations apply
-    #      cleanly on top of the previous release-v* tag's schema.
-    # Deliberately NOT marker-skipped (the old skip-n1-compat wiring is
-    # dropped): every gate's outcome depends on the open PR's labels —
-    # runtime state outside any content hash — so a marker seeded from an
-    # early-exit green could silently skip the real check later. Cheap when
-    # nothing fires (~20s); ~3min on a labeled expand PR.
+    # The migration gates folded into ONE job (they share the branch-push
+    # trigger and the prebuild-mix caches), in step order. None needs a PR
+    # label: each fires on what the migration files actually do.
+    #   1. contract-references - when a new migration drops, removes or
+    #      renames something, extract what it DROPS and prove no lib/ code
+    #      still references the dropped columns/tables.
+    #   2. n1-compat - when migrations change, prove they apply cleanly on
+    #      top of the previous release-v* tag's schema, with no operator step.
+    # Deliberately NOT marker-skipped: a marker seeded from an early-exit green
+    # could silently skip the real check later. Cheap when nothing fires
+    # (~20s); ~3min on a PR that touches migrations.
     # Enforced by the `ci` aggregate — the three standalone predecessor
     # jobs' results were never actually checked anywhere.
     if: github.event_name == 'push' && github.ref != 'refs/heads/main'
@@ -3544,7 +3528,7 @@ jobs:
           # `--depth=1` left main shallow, so `origin/main...HEAD` couldn't
           # resolve a merge-base and `git diff` fell back to the empty tree —
           # making EVERY file (incl. all existing migrations) look added, so
-          # the label was demanded on non-migration PRs. Compute the base
+          # the gates ran on non-migration PRs. Compute the base
           # explicitly and fail loud if it can't, rather than guessing. (#718)
           git fetch -q origin main
           base=$(git merge-base FETCH_HEAD HEAD)
@@ -3556,64 +3540,36 @@ jobs:
             "$base" HEAD -- 'priv/repo/migrations/*.exs')
           if [ -z "$changed" ]; then
             echo "touches=false" >> "$GITHUB_OUTPUT"
-            echo "No migration changes on this branch — phase label not required."
+            echo "No migration changes on this branch - migration gates skipped."
           else
             echo "touches=true" >> "$GITHUB_OUTPUT"
             echo "Migrations changed on this branch:"
             printf '  %s\n' $changed
+            # Does any changed migration drop, remove or rename? Only then is
+            # the (compile-heavy) reference check worth running.
+            if grep -lE '\b(remove|remove_if_exists|drop|drop_if_exists|rename)\b' $changed >/dev/null 2>&1; then
+              echo "drops=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "drops=false" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
-      - name: Require exactly one phase/* label
-        if: steps.detect.outputs.touches == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-        run: |
-          pr_number=$(gh pr list --head "${GITHUB_REF_NAME}" --state open --json number --jq '.[0].number' 2>/dev/null || true)
-          if [ -z "$pr_number" ]; then
-            echo "::error::Migration changes pushed but no open PR found for branch ${GITHUB_REF_NAME}."
-            echo "::error::Open a PR with the appropriate phase/* label (expand, migrate-data, contract, single-shot)"
-            echo "::error::before pushing migration changes. See AGENTS.md § Migration phases — the rule."
-            exit 1
-          fi
-          phase_labels=$(gh api "repos/$REPO/issues/$pr_number/labels" \
-            --jq '.[].name | select(startswith("phase/"))')
-          count=$(printf '%s\n' "$phase_labels" | grep -c . || true)
-          if [ "$count" -ne 1 ]; then
-            echo "::error::Migration PR must carry exactly ONE phase/* label."
-            echo "::error::Found $count phase/* labels on PR #$pr_number."
-            echo "::error::Valid labels: phase/expand, phase/migrate-data, phase/contract, phase/single-shot"
-            echo "::error::See AGENTS.md § Migration phases — the rule for guidance."
-            exit 1
-          fi
-          echo "OK — PR #$pr_number carries phase label: $phase_labels"
-
-      # ── contract-phase-references ── on phase/contract PRs only: extract
-      # the columns and tables dropped by each new migration and verify NO
-      # lib/ code still references them. Code that uses a column must be
-      # removed in an earlier release before the column itself is dropped.
-      # backend-cache-hit guard preserved from the standalone job.
-      - name: Check phase/contract label on open PR
+      # ── contract-references ── when a new migration drops, removes or renames
+      # something: extract the columns and tables it drops and verify NO lib/
+      # code still references them. Code that uses a column must be removed
+      # in an earlier release before the column itself is dropped, or the
+      # previous release (still running mid-deploy) breaks on the missing
+      # column. backend-cache-hit guard preserved from the standalone job.
+      - name: Decide whether the drop-reference check applies
         id: gate
         if: needs.fingerprint.outputs.backend-cache-hit != 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
         run: |
-          pr_number=$(gh pr list --head "${GITHUB_REF_NAME}" --state open --json number --jq '.[0].number' 2>/dev/null || true)
-          if [ -z "$pr_number" ]; then
-            echo "proceed=false" >> "$GITHUB_OUTPUT"
-            echo "No open PR for branch ${GITHUB_REF_NAME} — skipping contract-phase-references."
-            exit 0
-          fi
-          labels=$(gh api "repos/$REPO/issues/$pr_number/labels" --jq '.[].name')
-          if echo "$labels" | grep -qx 'phase/contract'; then
+          if [ "${{ steps.detect.outputs.drops }}" = "true" ]; then
             echo "proceed=true" >> "$GITHUB_OUTPUT"
-            echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
-            echo "phase/contract label present on PR #$pr_number — running grep gate."
+            echo "A migration here drops, removes or renames - running the grep gate."
           else
             echo "proceed=false" >> "$GITHUB_OUTPUT"
-            echo "phase/contract label NOT present — skipping grep gate."
+            echo "No drops, removes or renames in the changed migrations - skipping the grep gate."
           fi
 
       # Restore prebuild-mix caches. Same pattern as the `lint` job: deps +
@@ -3674,7 +3630,7 @@ jobs:
           BASE_REF="origin/main" \
             bash priv/repo/list_new_migrations.sh > /tmp/new-migrations.txt
           if [ ! -s /tmp/new-migrations.txt ]; then
-            echo "::error::phase/contract label set but no migrations newer than base ref"
+            echo "::error::migration drops detected but no migrations newer than base ref"
             exit 1
           fi
           echo "New migrations on this PR:"
@@ -3689,10 +3645,10 @@ jobs:
             mix engram.migration_drops "priv/repo/migrations/$f" >> /tmp/drops.txt
           done < /tmp/new-migrations.txt
           if [ ! -s /tmp/drops.txt ]; then
-            echo "::notice::phase/contract label set but no extractable drops found in new migrations."
+            echo "::notice::No extractable drops found in the new migrations."
             echo "::notice::Possible reasons:"
             echo "::notice::  - Every drop in this PR is bypassed via # safety_assured: (legitimate; auditor trusts justification)"
-            echo "::notice::  - The PR was mis-labeled as phase/contract (recommend removing the label)"
+            echo "::notice::  - The match was a rename or remove that drops nothing"
             echo "::notice::Reviewer: confirm intent on this PR before merging."
             exit 0
           fi
@@ -3748,41 +3704,32 @@ jobs:
           done < /tmp/drops.txt
 
           if [ "$fail" -eq 1 ]; then
-            echo "::error::Contract-phase migration cannot land while lib/ still uses the dropped identifiers."
-            echo "::error::Ship an expand+code-change PR first that stops using these names, then come back for the drop."
-            echo "::error::See AGENTS.md § Expand/contract — the workflow for guidance."
+            echo "::error::A migration cannot drop identifiers while lib/ still uses them: the previous release is still running mid-deploy."
+            echo "::error::Ship a PR that stops using these names first, then come back for the drop."
+            echo "::error::See AGENTS.md section Database changes."
             exit 1
           fi
           echo "OK — no surviving lib/ references to dropped identifiers."
 
-      # ── n1-compat ── on phase/expand PRs only: prove the new migrations
+      # ── n1-compat ── when migrations change: prove the new migrations
       # cleanly apply on top of the previous release-v* tag's schema. This
-      # catches malformed expand-phase migrations (NOT NULL without default,
+      # catches malformed migrations (NOT NULL without default,
       # incompatible type changes, etc.) that Squawk's per-statement scan can
       # miss in the catalog-level view. Applies migrations only, doesn't run
-      # the prev release's full mix test (brittle across versions) — the
-      # "migrate applies cleanly" check is the load-bearing invariant.
+      # the prev release's full mix test (brittle across versions) - the
+      # "migrate applies cleanly" check is the load-bearing invariant, and it
+      # is what backs the rule that an upgrade needs no operator step.
       # MIX_ENV=test is set per-step below (NOT job-level: the contract
       # steps above compile via the _build/dev cache).
-      - name: Check phase/expand label on open PR
+      - name: Decide whether N-1 compat applies
         id: n1-gate
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
         run: |
-          pr_number=$(gh pr list --head "${GITHUB_REF_NAME}" --state open --json number --jq '.[0].number' 2>/dev/null || true)
-          if [ -z "$pr_number" ]; then
-            echo "proceed=false" >> "$GITHUB_OUTPUT"
-            echo "No open PR for branch ${GITHUB_REF_NAME} — skipping n1-compat."
-            exit 0
-          fi
-          labels=$(gh api "repos/$REPO/issues/$pr_number/labels" --jq '.[].name')
-          if echo "$labels" | grep -qx 'phase/expand'; then
+          if [ "${{ steps.detect.outputs.touches }}" = "true" ]; then
             echo "proceed=true" >> "$GITHUB_OUTPUT"
-            echo "phase/expand label present on PR #$pr_number — running N-1 compat."
+            echo "Migrations changed - running N-1 compat."
           else
             echo "proceed=false" >> "$GITHUB_OUTPUT"
-            echo "phase/expand label NOT present — skipping N-1 compat."
+            echo "No migration changes - skipping N-1 compat."
           fi
 
       - name: Resolve previous release tag
@@ -3812,8 +3759,8 @@ jobs:
 
       # Both the previous release and this branch compile `Engram.Native`, a
       # rustler crate: without cargo the compile dies on `:enoent` and every
-      # phase/expand PR fails here. The toolchain step above only runs on the
-      # phase/contract path. Same flock'd per-VM rustup as unit-tests.
+      # migration PR fails here. The toolchain step above only runs when the
+      # drop-reference check does. Same flock'd per-VM rustup as unit-tests.
       - name: Rust toolchain for N-1 compat (native/ NIFs)
         if: steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         run: |
@@ -3935,7 +3882,7 @@ jobs:
           done <<<"$new_files_output"
 
           # Now migrate prev with the new files in its tree. If this
-          # fails, the expand-phase migration is incompatible with the
+          # fails, the migration is incompatible with the
           # previously-deployed schema.
           cd "$PREV_DIR"
           mix ecto.migrate
@@ -4797,7 +4744,7 @@ jobs:
   record-job-markers:
     if: always() && github.event_name != 'schedule' && needs.fingerprint.outputs.e2e-target-suite == ''
     # migration-gates is intentionally EXCLUDED: it has several early `exit 0` success
-    # paths (no open PR, no phase/expand label, no new migrations) that return
+    # paths (no migration changes) that return
     # green WITHOUT running the migration rollforward. Recording a marker off
     # those would let a later identical-content PR skip the real check. It is a
     # cheap branch-only job, so it simply always runs (never marker-skipped).

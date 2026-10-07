@@ -2,7 +2,7 @@ defmodule Mix.Tasks.Engram.MigrationDrops do
   @shortdoc "Extracts dropped columns and tables from an Ecto migration file"
   @moduledoc """
   AST-walks one or more Ecto migration files and prints the columns and
-  tables they drop. Used by the `contract-phase-references` CI gate to
+  tables they drop. Used by the `migration-gates` CI job to
   decide what to grep `lib/` for.
 
   ## Usage

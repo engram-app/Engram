@@ -45,9 +45,8 @@ jobs:
       # Ungated: on a Release-PR MERGE push steps.rp.outputs.pr is EMPTY (the
       # `pr` output only fires when release-please opens/updates a PR, not on
       # merge), but the release_created-gated delete+push step below must
-      # still be able to run on that merge push. Both that step and the
-      # SCHEMA-IMPACT step need the repo + full tag history, so checkout
-      # happens once here, ungated.
+      # still be able to run on that merge push. That step needs the repo +
+      # full tag history, so checkout happens once here, ungated.
       #
       # token MUST be the App token, not the default GITHUB_TOKEN: pushes
       # authored by the default token never trigger other workflows (GitHub's
@@ -58,32 +57,6 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
-
-      - name: Prepend deterministic SCHEMA-IMPACT to the Release PR body
-        if: steps.rp.outputs.pr != ''
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          # PR is the release-please PR object JSON — its fields (title/body)
-          # come from commit messages, so it's untrusted. Pass via env, never
-          # interpolate `${{ }}` directly into `run:` (script-injection risk).
-          RP_PR: ${{ steps.rp.outputs.pr }}
-        run: |
-          set -euo pipefail
-          # No AI. Just surface the machine-generated migration-impact block so
-          # self-hosters see it; the human writes the narrative notes in the PR / CHANGELOG.
-          PR=$(jq -r '.number' <<<"$RP_PR")
-          BASE=$(git tag -l 'release-v*' --sort=-v:refname | head -1)
-          [ -n "$BASE" ] || BASE=$(git rev-list --max-parents=0 HEAD | head -1)
-          # No `|| true` here: the script's own `::error::` + exit 1 on a
-          # gh/git failure is meant to fail CI loud (see its header
-          # comment) rather than silently fall through to "no schema
-          # impact" — that would be the exact failure mode the script
-          # exists to prevent. deploy-prod.yml's caller doesn't swallow it
-          # either; this one shouldn't diverge.
-          IMPACT=$(bash scripts/generate_schema_impact_notes.sh "$BASE" HEAD)
-          [ -n "$IMPACT" ] || { echo "no schema impact"; exit 0; }
-          CUR=$(gh pr view "$PR" --json body -q .body)
-          gh pr edit "$PR" --body "$(printf '%s\n\n%s' "$IMPACT" "$CUR")"
 
       - name: Delete redundant Release + push release-v* (on release-please cut)
         if: steps.rp.outputs.release_created == 'true'
