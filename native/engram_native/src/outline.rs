@@ -1,5 +1,6 @@
 //! What `Engram.MCP.Sections` needs from a CommonMark parse of a note, and
-//! nothing else: its document-level headings, the lines the parse explains
+//! nothing else, in one call from the note as stored: its document-level
+//! headings, finished (trimmed text and raw source), the lines the parse explains
 //! (heading lines at any depth, thematic breaks), and the line ranges where a
 //! heading-shaped line may sit hidden (closed fences, closed HTML comments,
 //! masked `$$` math). The rules are the ones `Sections.scan/1` applied to
@@ -9,6 +10,7 @@
 //! Lines are 0-indexed and counted by `\n` only. Traversal is iterative
 //! (`descendants`), so deep nesting cannot overflow a scheduler stack.
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -17,17 +19,39 @@ use comrak::{parse_document, Arena, Options, ResolvedReference};
 
 use crate::links::{segmented, SEGMENT};
 
-/// `(line, level, setext, plain_text, raw, span)`. `plain_text` is the
-/// rendered inline text, untrimmed; `raw` is the source from the heading's
-/// start to its last inline node's end (None when it has no inline content).
-/// Elixir trims both: its notion of whitespace is the definition.
-pub type Heading = (usize, u8, bool, String, Option<String>, usize);
+/// `(line, level, text, raw, span)`: `text` is the rendered inline text
+/// (`**A**` -> "A"), `raw` the inline source as written; see `finish`.
+pub type Heading = (usize, u8, String, String, usize);
 
 /// `(headings, explained lines, safe line ranges)`, sorted.
 pub type Outline = (Vec<Heading>, Vec<usize>, Vec<(usize, usize)>);
 
+/// A heading as parsed: `(line, level, setext, plain_text, raw, span)`,
+/// `plain_text` untrimmed, `raw` the source from the heading's start to its
+/// last inline node's end (None when it has no inline content).
+type Parsed = (usize, u8, bool, String, Option<String>, usize);
+type ParsedOutline = (Vec<Parsed>, Vec<usize>, Vec<(usize, usize)>);
+
 // `to` of a range that runs to end of input (Elixir's `:infinity`).
 const OPEN: usize = usize::MAX;
+
+/// Most headings + explained lines + safe ranges one outline may return. The
+/// parse is bounded per segment, but the result grows with the note: 10 MB
+/// of `#` lines is 5M headings, ~400 MB here and more again as BEAM terms.
+/// Real notes have hundreds; past this the note is refused (`TooComplex`)
+/// and parsing stops. At the cap the result is ~10 MB.
+pub const MAX_ITEMS: usize = 100_000;
+
+/// Code spans/blocks the `%%`/`$$` pass may collect (24 bytes each).
+const MAX_CODE: usize = 1_000_000;
+
+#[derive(Debug, PartialEq)]
+pub enum Refused {
+    /// More than `MAX_ITEMS` (or `MAX_CODE`).
+    TooComplex,
+    /// A sourcepos outside the text (never seen).
+    BadSourcepos,
+}
 
 // GFM tables (so a delimiter row is never a setext underline) and
 // strikethrough (heading text), matching what Obsidian renders. Raw HTML
@@ -41,10 +65,43 @@ fn options<'c>() -> Options<'c> {
     o
 }
 
-/// `None` only if a sourcepos points outside the text (never seen; the
-/// Elixir version raised there too).
-pub fn outline(input: &str) -> Option<Outline> {
-    outline_segmented(input, SEGMENT)
+pub fn outline(input: &str) -> Result<Outline, Refused> {
+    let note = input.strip_prefix('\u{feff}').unwrap_or(input);
+    let (hs, explained, safe) = outline_segmented(&blank_frontmatter(note), SEGMENT)?;
+    Ok((hs.into_iter().map(finish).collect(), explained, safe))
+}
+
+// The frontmatter block (`Frontmatter.split/1`'s rule, the one Engram uses
+// everywhere) as as many empty lines, so line numbers do not move.
+fn blank_frontmatter(s: &str) -> Cow<'_, str> {
+    match crate::frontmatter::split(s.as_bytes()) {
+        None => Cow::Borrowed(s),
+        Some((_, _, body, _)) => {
+            let blank = "\n".repeat(s[..body].matches('\n').count());
+            Cow::Owned(blank + &s[body..])
+        }
+    }
+}
+
+// Trimmed as `String.trim/1` trims (both are Unicode White_Space). `raw`
+// drops an ATX heading's `#`s; a multi-line setext heading's lines are
+// trimmed and joined with a space, as its rendered text is.
+fn finish((line, level, setext, text, raw, span): Parsed) -> Heading {
+    let raw = raw.map_or_else(String::new, |r| {
+        let r = r.trim_start();
+        let r = if setext {
+            r
+        } else {
+            r.get(usize::from(level)..).unwrap_or("")
+        };
+        r.split('\n')
+            .map(str::trim)
+            .collect::<Vec<_>>()
+            .join(" ")
+            .trim()
+            .to_string()
+    });
+    (line, level, text.trim().to_string(), raw, span)
 }
 
 /// The outline, parsed in segments of about `segment` bytes cut where
@@ -53,11 +110,15 @@ pub fn outline(input: &str) -> Option<Outline> {
 /// the result (fuzzed below) with two document-wide inputs computed first:
 /// the `%%`/`$$` masking, and which reference labels the note defines (a
 /// `[x]` in a heading renders as a link when `[x]: /u` is anywhere).
-fn outline_segmented(input: &str, segment: usize) -> Option<Outline> {
+fn outline_segmented(input: &str, segment: usize) -> Result<ParsedOutline, Refused> {
     let text = lone_cr_as_space(input);
-    let starts = line_starts(&text);
+    if text.len() > u32::MAX as usize {
+        return Err(Refused::TooComplex);
+    }
+    let starts = Lines::new(&text);
     let opts = options();
 
+    let stop = Cell::new(false);
     let (masked, math) = if text.contains("%%") || text.contains("$$") {
         let mut code = Vec::new();
         each_segment(
@@ -65,9 +126,16 @@ fn outline_segmented(input: &str, segment: usize) -> Option<Outline> {
             &starts,
             &opts,
             segment,
+            &stop,
             |doc, seg, out| code_ranges(doc, seg, &starts, out),
-            |mut r| code.append(&mut r),
+            |mut r| {
+                code.append(&mut r);
+                stop.set(code.len() > MAX_CODE);
+            },
         );
+        if stop.get() {
+            return Err(Refused::TooComplex);
+        }
         match mask_obsidian(&text, &starts, &code) {
             Some((m, math)) => (Cow::Owned(m), math),
             None => (Cow::Borrowed(&*text), Vec::new()),
@@ -89,12 +157,13 @@ fn outline_segmented(input: &str, segment: usize) -> Option<Outline> {
     }));
 
     let (mut headings, mut explained, mut safe) = (Vec::new(), Vec::new(), math);
-    let mut failed = false;
+    let mut bad = false;
     each_segment(
         &masked,
         &starts,
         &opts,
         segment,
+        &stop,
         |doc, seg, out| {
             out.push(collect(doc, seg, &text));
         },
@@ -106,24 +175,53 @@ fn outline_segmented(input: &str, segment: usize) -> Option<Outline> {
                         explained.extend(e);
                         safe.extend(s);
                     }
-                    None => failed = true,
+                    None => bad = true,
                 }
             }
+            stop.set(bad || headings.len() + explained.len() + safe.len() > MAX_ITEMS);
         },
     );
-    if failed {
-        return None;
+    if bad {
+        return Err(Refused::BadSourcepos);
+    }
+    if stop.get() {
+        return Err(Refused::TooComplex);
     }
     explained.sort_unstable();
     explained.dedup();
     safe.sort_unstable();
-    Some((headings, explained, safe))
+    Ok((headings, explained, safe))
 }
 
-fn line_starts(s: &str) -> Vec<usize> {
-    std::iter::once(0)
-        .chain(s.match_indices('\n').map(|(i, _)| i + 1))
-        .collect()
+/// Line start offsets as u32 (input is refused past 4 GB), sized up front:
+/// 4 bytes a line, so a note of blank lines costs 4x its size, never the
+/// 16x+ of a doubling Vec<usize>.
+struct Lines(Vec<u32>);
+
+impl Lines {
+    fn new(s: &str) -> Self {
+        let mut v = Vec::with_capacity(s.matches('\n').count() + 1);
+        v.push(0);
+        v.extend(s.match_indices('\n').map(|(i, _)| (i + 1) as u32));
+        Lines(v)
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn get(&self, i: usize) -> Option<usize> {
+        self.0.get(i).map(|&x| x as usize)
+    }
+
+    fn at(&self, i: usize) -> usize {
+        self.0[i] as usize
+    }
+
+    /// 0-indexed line containing byte `off`.
+    fn line_of(&self, off: usize) -> usize {
+        self.0.partition_point(|&x| x as usize <= off) - 1
+    }
 }
 
 /// Where a segment sits in the whole text. comrak's sourcepos is 1-based
@@ -131,7 +229,7 @@ fn line_starts(s: &str) -> Vec<usize> {
 struct Seg {
     at: usize,
     first_line: usize,
-    starts: Vec<usize>,
+    starts: Lines,
 }
 
 impl Seg {
@@ -154,11 +252,13 @@ impl Seg {
 /// Parses `text` in segments (see `links::segmented`) and runs `visit` on
 /// each segment's tree; a segment whose last block may still be open is
 /// re-parsed longer, and only accepted segments' items reach `accept`.
+/// Once `stop` is set, the rest is skipped unparsed.
 fn each_segment<T>(
     text: &str,
-    starts: &[usize],
+    starts: &Lines,
     opts: &Options,
     segment: usize,
+    stop: &Cell<bool>,
     mut visit: impl for<'a> FnMut(&'a AstNode<'a>, &Seg, &mut Vec<T>),
     accept: impl FnMut(Vec<T>),
 ) {
@@ -166,10 +266,14 @@ fn each_segment<T>(
         text,
         segment,
         |s, at, out| {
+            // Refused: skip the remaining segments without parsing them.
+            if stop.get() {
+                return None;
+            }
             let seg = Seg {
                 at,
-                first_line: starts.partition_point(|&x| x <= at) - 1,
-                starts: line_starts(s),
+                first_line: starts.line_of(at),
+                starts: Lines::new(s),
             };
             let arena = Arena::new();
             let doc = parse_document(&arena, s, opts);
@@ -182,7 +286,7 @@ fn each_segment<T>(
 
 /// Byte offset in `s` of the first fenced code or raw-HTML block that may
 /// continue past the end of `s` (`segmented`'s contract).
-fn open_block<'a>(doc: &'a AstNode<'a>, starts: &[usize], s: &str) -> Option<usize> {
+fn open_block<'a>(doc: &'a AstNode<'a>, starts: &Lines, s: &str) -> Option<usize> {
     // 1-based number of the last line with content.
     let last = starts.len() - usize::from(s.ends_with('\n'));
     doc.descendants().find_map(|n| {
@@ -206,7 +310,7 @@ fn open_block<'a>(doc: &'a AstNode<'a>, starts: &[usize], s: &str) -> Option<usi
             },
             _ => false,
         };
-        open.then(|| starts[d.sourcepos.start.line - 1])
+        open.then(|| starts.at(d.sourcepos.start.line - 1))
     })
 }
 
@@ -230,7 +334,7 @@ fn defined_labels(text: &str, segment: usize) -> HashSet<String> {
             let arena = Arena::new();
             let doc = parse_document(&arena, &full, &opts);
             out.extend(linked_probes(doc, cands.len()).map(|i| cands[i].clone()));
-            let fs = line_starts(&full);
+            let fs = Lines::new(&full);
             open_block(doc, &fs, &full).map(|o| o.saturating_sub(probe.len()))
         },
         |mut d| defined.append(&mut d),
@@ -323,12 +427,14 @@ fn lone_cr_as_space(input: &str) -> Cow<'_, str> {
 }
 
 // One segment's outline. Lines and offsets are in the whole text.
-fn collect<'a>(doc: &'a AstNode<'a>, seg: &Seg, text: &str) -> Option<Outline> {
+fn collect<'a>(doc: &'a AstNode<'a>, seg: &Seg, text: &str) -> Option<ParsedOutline> {
     let (mut explained, mut safe) = (Vec::new(), Vec::new());
     for n in doc.descendants() {
         let (l1, l2) = seg.lines(n);
         match &n.data.borrow().value {
-            NodeValue::Heading(_) => explained.extend([l1, l2]),
+            NodeValue::Heading(_) => {
+                explained.extend(if l1 == l2 { vec![l1] } else { vec![l1, l2] })
+            }
             NodeValue::ThematicBreak => explained.push(l1),
             NodeValue::CodeBlock(cb) if cb.fenced && cb.closed => safe.push((l1, l2)),
             NodeValue::HtmlBlock(h) if h.block_type == 2 && h.literal.contains("-->") => {
@@ -384,16 +490,12 @@ fn plain_text<'a>(h: &'a AstNode<'a>) -> String {
 fn code_ranges<'a>(
     doc: &'a AstNode<'a>,
     seg: &Seg,
-    starts: &[usize],
+    starts: &Lines,
     out: &mut Vec<(usize, usize, bool)>,
 ) {
     let block = |n: &'a AstNode<'a>, html| {
         let (l1, l2) = seg.lines(n);
-        (
-            starts[l1],
-            starts.get(l2 + 1).copied().unwrap_or(OPEN),
-            html,
-        )
+        (starts.at(l1), starts.get(l2 + 1).unwrap_or(OPEN), html)
     };
     for n in doc.descendants() {
         match &n.data.borrow().value {
@@ -460,7 +562,7 @@ fn blank(b: &mut [u8]) {
 // the read.
 fn mask_obsidian(
     text: &str,
-    starts: &[usize],
+    starts: &Lines,
     code: &[(usize, usize, bool)],
 ) -> Option<(String, Vec<(usize, usize)>)> {
     let pct: Vec<usize> = text.match_indices("%%").map(|(i, _)| i).collect();
@@ -488,7 +590,7 @@ fn mask_obsidian(
     if toks.len() % 2 == 1 {
         toks.clear();
     }
-    let line_of = |off: usize| starts.partition_point(|&s| s <= off) - 1;
+    let line_of = |off: usize| starts.line_of(off);
     let math: Vec<(usize, usize)> = toks
         .chunks(2)
         .map(|p| (line_of(p[0]), line_of(p[1])))
@@ -496,7 +598,7 @@ fn mask_obsidian(
         .collect();
     for &(l1, l2) in &math {
         let to = starts.get(l2 + 1).map_or(masked.len(), |s| s - 1);
-        blank(&mut masked[starts[l1]..to]);
+        blank(&mut masked[starts.at(l1)..to]);
     }
 
     if masked == text.as_bytes() {
@@ -535,12 +637,40 @@ mod tests {
     #[test]
     fn headings_and_ranges() {
         let (hs, explained, safe) = outline("# A\n\n```\n# x\n```\n\nB\n=\n\n---\n").unwrap();
-        let shape: Vec<_> = hs.iter().map(|h| (h.0, h.1, h.2)).collect();
-        assert_eq!(shape, vec![(0, 1, false), (6, 1, true)]);
-        assert_eq!(hs[0].3, "A");
-        assert_eq!(hs[0].4.as_deref(), Some("# A"));
+        let shape: Vec<_> = hs.iter().map(|h| (h.0, h.1, h.4)).collect();
+        assert_eq!(shape, vec![(0, 1, 1), (6, 1, 2)]);
+        assert_eq!((hs[0].2.as_str(), hs[0].3.as_str()), ("A", "A"));
         assert_eq!(explained, vec![0, 6, 7, 9]);
         assert_eq!(safe, vec![(2, 4)]);
+    }
+
+    #[test]
+    fn bom_frontmatter_and_trimming() {
+        let note = "\u{feff}---\na: 1\n---\n#  **B**\u{a0} #\n  x \r\n y\n===\n";
+        let (hs, explained, _) = outline(note).unwrap();
+        let got: Vec<_> = hs
+            .iter()
+            .map(|h| (h.0, h.2.as_str(), h.3.as_str()))
+            .collect();
+        assert_eq!(got, vec![(3, "B", "**B**"), (4, "x y", "x y")]);
+        assert_eq!(explained, vec![3, 4, 6]);
+    }
+
+    #[test]
+    fn too_many_items_is_refused_early() {
+        use super::{Refused, MAX_ITEMS};
+        let ok = "#\n".repeat(MAX_ITEMS / 2 - 1);
+        assert!(outline(&ok).is_ok());
+        let over = "#\n".repeat(MAX_ITEMS);
+        assert_eq!(outline(&over), Err(Refused::TooComplex));
+        assert_eq!(
+            outline(&format!("\n{}", "---\n\n".repeat(MAX_ITEMS + 1))),
+            Err(Refused::TooComplex)
+        );
+        assert_eq!(
+            outline(&"%% `a`\n".repeat(1_100_000)),
+            Err(Refused::TooComplex)
+        );
     }
 
     #[test]
@@ -556,7 +686,7 @@ mod tests {
         assert!(outline("").unwrap().0.is_empty());
         // No recursion over the tree: deep nesting cannot overflow a stack.
         let deep = format!("{}# x\n", "> ".repeat(50_000));
-        assert!(outline(&deep).is_some());
+        assert!(outline(&deep).is_ok());
     }
 
     #[test]

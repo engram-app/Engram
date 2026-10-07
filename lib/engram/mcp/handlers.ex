@@ -838,7 +838,7 @@ defmodule Engram.MCP.Handlers do
   defp section_error(_heading, :busy),
     do: "The server is busy parsing other notes; try again shortly"
 
-  defp section_error(_heading, :parse_timeout) do
+  defp section_error(_heading, reason) when reason in [:parse_timeout, :too_complex] do
     "This note is too complex to parse for section edits or outline; edit with replace_text " <>
       "or read it with get_notes without section/outline"
   end
