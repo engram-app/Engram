@@ -1,0 +1,18 @@
+diff --git a/dist/table-widget.js b/dist/table-widget.js
+index aee407c4aaa2eea5a46c0fa28831dcc80985c783..caa22d55ed818814571e1c18a502584fc6960319 100644
+--- a/dist/table-widget.js
++++ b/dist/table-widget.js
+@@ -678,7 +678,12 @@ function attachCellEditing(view, cell, source) {
+         // textContent (not innerText) so `display: none` delimiters inside
+         // mark wraps are still captured — otherwise a cell containing
+         // `**bold**` would serialize to just `bold` on every keystroke.
+-        const raw = (source.textContent ?? '').replace(/\s+/g, ' ').trim();
++        // One-for-one whitespace normalization (nbsp/newline/tab -> space) with NO
++        // trim or collapse: the DOM is rebuilt from `raw` below, and the caret
++        // offset taken from the live DOM must still index into it. Trimming ate
++        // a just-typed trailing space; `readModelFromDom` already trims on
++        // serialize, so the doc never sees it.
++        const raw = (source.textContent ?? '').replace(/\s/g, ' ');
+         cell.dataset.raw = raw;
+         const offset = getCaretCharOffset(source);
+         renderCellSourceDecorated(source);

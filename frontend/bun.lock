@@ -106,6 +106,9 @@
     "esbuild",
     "workerd",
   ],
+  "patchedDependencies": {
+    "@atomic-editor/editor@0.6.2": "patches/@atomic-editor%2Feditor@0.6.2.patch",
+  },
   "overrides": {
     "@clerk/shared": "^4.33.0",
     "@codemirror/state": "^6.7.5",
