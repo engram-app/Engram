@@ -7,6 +7,9 @@ index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-323e5d0b9178d9b1 b/.bun-tag-323e5d0b9178d9b1
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-4e1f2355cb30592c b/.bun-tag-4e1f2355cb30592c
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-58bb1950cd63cf85 b/.bun-tag-58bb1950cd63cf85
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
@@ -326,7 +329,7 @@ index ff02d57548388e468f73695f3bd45ec58be38160..d2f2a04758594f7b202cda3897ac7321
  export declare function tables(config?: TablesConfig): Extension;
  export {};
 diff --git a/dist/table-widget.js b/dist/table-widget.js
-index aee407c4aaa2eea5a46c0fa28831dcc80985c783..21f6126b49424b0e331e5e36e0e338e00e1eddc3 100644
+index aee407c4aaa2eea5a46c0fa28831dcc80985c783..0fd74e6e549ddcb09938435bbb12b0ca904b529f 100644
 --- a/dist/table-widget.js
 +++ b/dist/table-widget.js
 @@ -42,9 +42,22 @@ export function splitRowCells(line) {
@@ -463,7 +466,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..21f6126b49424b0e331e5e36e0e338e0
  ];
  function isMarkWrap(el) {
      for (const c of MARK_WRAP_CLASSES)
-@@ -528,6 +592,689 @@ function placeCaretAtEnd(el) {
+@@ -528,10 +592,730 @@ function placeCaretAtEnd(el) {
  function getAllCells(wrap) {
      return Array.from(wrap.querySelectorAll('th, td'));
  }
@@ -1150,10 +1153,51 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..21f6126b49424b0e331e5e36e0e338e0
 +    document.addEventListener('pointerup', onUp, true);
 +    document.addEventListener('pointercancel', onCancel, true);
 +}
++// ---- undo / redo ------------------------------------------------------
++// Key events inside the widget never reach the editor's keymap (`ignoreEvent`),
++// so Ctrl/Cmd+Z / Shift+Z / Y did nothing in or beside a table. Re-dispatch
++// them on the content DOM, where the host's undo keymap listens; swallow the
++// original only if something handled it.
++function attachUndoForwarding(wrap, view) {
++    wrap.addEventListener('keydown', (e) => {
++        if (!(e.ctrlKey || e.metaKey) || e.altKey || e.isComposing)
++            return;
++        const k = e.key.toLowerCase();
++        if (k !== 'z' && k !== 'y')
++            return;
++        if (view.state.facet(readOnlyFacet))
++            return;
++        const forwarded = new KeyboardEvent('keydown', {
++            key: e.key,
++            code: e.code,
++            keyCode: e.keyCode,
++            ctrlKey: e.ctrlKey,
++            metaKey: e.metaKey,
++            shiftKey: e.shiftKey,
++            bubbles: true,
++            cancelable: true,
++        });
++        view.contentDOM.dispatchEvent(forwarded);
++        if (forwarded.defaultPrevented) {
++            e.preventDefault();
++            e.stopPropagation();
++            view.focus();
++        }
++    });
++}
  // ---- widget ---------------------------------------------------------
++// CM6 calls `eq` in either direction (old.eq(new) when diffing decorations,
++// new.eq(old) when syncing the view) and, when it reuses the DOM, keeps the NEW
++// widget object. A construction counter tells the two apart.
++let widgetSeq = 0;
  class TableWidget extends WidgetType {
      constructor(model, readOnly) {
-@@ -561,18 +1308,33 @@ class TableWidget extends WidgetType {
+         super();
++        this.seq = widgetSeq++;
+         Object.defineProperty(this, "model", {
+             enumerable: true,
+             configurable: true,
+@@ -561,18 +1345,48 @@ class TableWidget extends WidgetType {
              return false;
          if (other.model.rows.length !== this.model.rows.length)
              return false;
@@ -1161,6 +1205,21 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..21f6126b49424b0e331e5e36e0e338e0
 +        // must rebuild the DOM (cells carry it as data-align).
 +        if (JSON.stringify(other.model.align) !== JSON.stringify(this.model.align))
 +            return false;
++        // Reuse the DOM only if it already shows the incoming content. Typing
++        // updates the DOM first and the document second, so a keystroke matches
++        // (the caret survives); an undo or a remote edit does not (rebuild, or
++        // the cells would keep showing stale text). Compared as serialized
++        // markdown so escaping and trimming are the same on both sides.
++        if (other === this)
++            return true;
++        const [older, newer] = this.seq < other.seq ? [this, other] : [other, this];
++        const dom = older.dom ?? newer.dom;
++        if (dom && serializeTable(readModelFromDom(dom)) !== serializeTable(newer.model))
++            return false;
++        // The newer widget is the one CM6 keeps when it reuses the DOM; hand it
++        // the DOM so the next comparison can still check it.
++        if (dom)
++            newer.dom = dom;
          return true;
      }
      toDOM(view) {
@@ -1191,7 +1250,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..21f6126b49424b0e331e5e36e0e338e0
          thead.appendChild(headerRow);
          table.appendChild(thead);
          const tbody = document.createElement('tbody');
-@@ -580,11 +1342,16 @@ class TableWidget extends WidgetType {
+@@ -580,11 +1394,18 @@ class TableWidget extends WidgetType {
          for (const row of this.model.rows) {
              const tr = document.createElement('tr');
              for (let c = 0; c < colCount; c++) {
@@ -1206,10 +1265,12 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..21f6126b49424b0e331e5e36e0e338e0
 +            syncHandles(view, wrap);
 +        }
 +        attachCellSelection(wrap, view);
++        attachUndoForwarding(wrap, view);
++        this.dom = wrap;
          return wrap;
      }
      // All cell interactions are handled by the listeners we attach in
-@@ -629,17 +1396,37 @@ function makeCell(tag, text, view) {
+@@ -629,17 +1450,37 @@ function makeCell(tag, text, view) {
      // opened. We open on `click` (a proper popup-activation gesture, so
      // `window.open` isn't blocked) and block the caret on `pointerdown`.
      //
@@ -1252,7 +1313,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..21f6126b49424b0e331e5e36e0e338e0
      source.addEventListener('pointerdown', (event) => {
          if (event.button !== 0)
              return;
-@@ -678,7 +1465,12 @@ function attachCellEditing(view, cell, source) {
+@@ -678,7 +1519,12 @@ function attachCellEditing(view, cell, source) {
          // textContent (not innerText) so `display: none` delimiters inside
          // mark wraps are still captured — otherwise a cell containing
          // `**bold**` would serialize to just `bold` on every keystroke.
@@ -1266,7 +1327,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..21f6126b49424b0e331e5e36e0e338e0
          cell.dataset.raw = raw;
          const offset = getCaretCharOffset(source);
          renderCellSourceDecorated(source);
-@@ -711,6 +1503,18 @@ function attachCellEditing(view, cell, source) {
+@@ -711,6 +1557,18 @@ function attachCellEditing(view, cell, source) {
      // and strip markup here, and `escapeCell` neutralizes any literal `|`
      // on serialize.
      source.addEventListener('paste', (event) => {
@@ -1285,7 +1346,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..21f6126b49424b0e331e5e36e0e338e0
          event.preventDefault();
          const text = (event.clipboardData?.getData('text/plain') ?? '')
              .replace(/\s+/g, ' ')
-@@ -737,6 +1541,15 @@ function attachCellEditing(view, cell, source) {
+@@ -737,6 +1595,15 @@ function attachCellEditing(view, cell, source) {
      // hides all delimiters.
      source.addEventListener('blur', () => clearActiveMarksInSource(source));
      source.addEventListener('keydown', (event) => {
@@ -1301,7 +1362,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..21f6126b49424b0e331e5e36e0e338e0
          // Enter mirrors Tab — advance to the next cell (appending a row past
          // the last one) instead of inserting a line break a single-line cell
          // can't represent. Shift reverses direction for both.
-@@ -804,6 +1617,41 @@ function dispatchModel(view, wrap, nextModel) {
+@@ -804,6 +1671,41 @@ function dispatchModel(view, wrap, nextModel) {
          changes: { from: range.from, to: range.to, insert: next },
      });
  }
@@ -1343,7 +1404,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..21f6126b49424b0e331e5e36e0e338e0
  function openCellMenu(view, cell, x, y) {
      const wrap = cell.closest('.cm-atomic-table');
      if (!wrap)
-@@ -833,6 +1681,17 @@ function openCellMenu(view, cell, x, y) {
+@@ -833,6 +1735,17 @@ function openCellMenu(view, cell, x, y) {
                  dispatchModel(view, wrap, m);
              },
          });
@@ -1361,7 +1422,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..21f6126b49424b0e331e5e36e0e338e0
          items.push({
              label: 'Delete row',
              action: () => {
-@@ -849,6 +1708,7 @@ function openCellMenu(view, cell, x, y) {
+@@ -849,6 +1762,7 @@ function openCellMenu(view, cell, x, y) {
          action: () => {
              const m = readModelFromDom(wrap);
              m.header.splice(col, 0, '');
@@ -1369,7 +1430,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..21f6126b49424b0e331e5e36e0e338e0
              for (const r of m.rows)
                  r.splice(col, 0, '');
              dispatchModel(view, wrap, m);
-@@ -859,6 +1719,7 @@ function openCellMenu(view, cell, x, y) {
+@@ -859,6 +1773,7 @@ function openCellMenu(view, cell, x, y) {
          action: () => {
              const m = readModelFromDom(wrap);
              m.header.splice(col + 1, 0, '');
@@ -1377,7 +1438,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..21f6126b49424b0e331e5e36e0e338e0
              for (const r of m.rows)
                  r.splice(col + 1, 0, '');
              dispatchModel(view, wrap, m);
-@@ -874,11 +1735,32 @@ function openCellMenu(view, cell, x, y) {
+@@ -874,11 +1789,32 @@ function openCellMenu(view, cell, x, y) {
              if (m.header.length <= 1 || col < 0)
                  return;
              m.header.splice(col, 1);
@@ -1410,7 +1471,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..21f6126b49424b0e331e5e36e0e338e0
      let dismissed = false;
      const dismiss = () => {
          if (dismissed)
-@@ -908,6 +1790,7 @@ function openCellMenu(view, cell, x, y) {
+@@ -908,6 +1844,7 @@ function openCellMenu(view, cell, x, y) {
          btn.type = 'button';
          btn.className = 'cm-atomic-table-menu-item';
          btn.textContent = item.label;
@@ -1418,7 +1479,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..21f6126b49424b0e331e5e36e0e338e0
          btn.addEventListener('click', () => {
              item.action();
              dismiss();
-@@ -1191,13 +2074,21 @@ const defaultLinkOpener = (url) => {
+@@ -1191,13 +2128,21 @@ const defaultLinkOpener = (url) => {
  export const tableLinkClickFacet = Facet.define({
      combine: (values) => values[0] ?? defaultLinkOpener,
  });
