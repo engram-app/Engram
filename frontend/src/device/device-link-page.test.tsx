@@ -578,6 +578,39 @@ describe("DeviceLinkPage", () => {
 			);
 		});
 
+		it("suggests and preselects the existing vault that matches the plugin's name", async () => {
+			get.mockResolvedValue({
+				vaults: [
+					{ id: 7, name: "Personal", note_count: 3 },
+					{ id: 8, name: "Health", note_count: 9 },
+				],
+				suggested_vault_name: "health",
+			});
+			post.mockResolvedValue({ ok: true, vault_id: 8 });
+			renderPage();
+			fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), {
+				target: { value: "ENGR7X4K" },
+			});
+			fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+			expect(await screen.findByText("Suggested")).toBeInTheDocument();
+			expect(screen.getByRole("radio", { name: /health/iu })).toBeChecked();
+			expect(screen.getByLabelText(/new vault name/iu)).toHaveValue("");
+			// Listed once: the suggestion is not repeated in the list below.
+			expect(screen.getAllByRole("radio", { name: /health/iu })).toHaveLength(1);
+			fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
+			await waitFor(() =>
+				expect(post).toHaveBeenCalledWith(
+					"/auth/device/authorize",
+					expect.objectContaining({ vault_id: 8 }),
+				),
+			);
+		});
+
+		it("shows no suggestion when the name matches nothing", async () => {
+			await reachPicker([{ id: 7, name: "Personal", note_count: 3 }]);
+			expect(screen.queryByText("Suggested")).toBeNull();
+		});
+
 		it("omits the label when the user clears it", async () => {
 			await reachPicker([{ id: 7, name: "Personal", note_count: 3 }]);
 			fireEvent.change(screen.getByLabelText(/name this connection/iu), { target: { value: "" } });

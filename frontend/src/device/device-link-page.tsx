@@ -35,6 +35,7 @@ import { useVaultReadyEvents } from "../onboarding/use-vault-ready-events";
 import { ROUTES } from "../routes";
 import { settingsHash, settingsTo } from "../settings/settings-hash";
 import { guessDeviceLabel, parseUserAgentOs } from "./guess-device-label";
+import { findMatchingVault } from "./match-vault";
 
 interface Vault {
 	id: string;
@@ -194,9 +195,7 @@ function DeviceLinkPage() {
 			// - existing vault with the same name → pre-select that vault (link, don't dup)
 			// - otherwise → 'custom' (create new), seeded with the suggested name
 			//   when there is one; with no hint the user types one
-			const existing = suggested
-				? (data.vaults ?? []).find((v) => v.name === suggested)
-				: undefined;
+			const existing = findMatchingVault(data.vaults ?? [], suggested);
 			// If the user is at the Free vault cap, default to the first existing
 			// vault (create-new rows are about to be disabled below).
 			const fallbackExisting =
@@ -761,37 +760,46 @@ function VaultPickerFieldset({
 	onCustomChange,
 	atVaultCap,
 }: VaultPickerFieldsetProps) {
-	const matchedExisting = suggestedName ? vaults.find((v) => v.name === suggestedName) : undefined;
+	const matchedExisting = findMatchingVault(vaults, suggestedName);
 	const otherVaults = matchedExisting ? vaults.filter((v) => v.id !== matchedExisting.id) : vaults;
 	const isCustom = selection === "custom";
 	const search = useVaultSearch(otherVaults);
-	const hasExisting = vaults.length > 0;
+	const hasOthers = otherVaults.length > 0;
 	const sectionTitle = "font-semibold text-base text-foreground";
 
 	return (
 		<fieldset className="flex flex-col gap-2">
-			{hasExisting && (
+			<legend className="sr-only">Where should these notes sync?</legend>
+			{matchedExisting ? (
 				<>
-					<div className="mb-1 flex items-center justify-between gap-2">
-						<legend className={sectionTitle}>
-							Sync with an existing vault
+					<p className={sectionTitle}>Suggested</p>
+					<VaultRadio
+						vault={matchedExisting}
+						active={selection === matchedExisting.id}
+						onSelect={onSelect}
+						hint="matches your Obsidian vault"
+					/>
+				</>
+			) : null}
+			{hasOthers ? (
+				<>
+					<div
+						className={cn(
+							"mb-1 flex items-center justify-between gap-2",
+							matchedExisting && "mt-4",
+						)}
+					>
+						<p className={sectionTitle}>
+							{matchedExisting ? "Or sync with a different vault" : "Sync with an existing vault"}
 							{search.showFilter ? (
 								<span className="ml-2 font-normal text-muted-foreground text-sm">
-									(choose from {vaults.length} vaults)
+									(choose from {otherVaults.length} vaults)
 								</span>
 							) : null}
-						</legend>
+						</p>
 						<VaultSearchToggle search={search} />
 					</div>
 					<VaultSearchField search={search} />
-					{matchedExisting ? (
-						<VaultRadio
-							vault={matchedExisting}
-							active={selection === matchedExisting.id}
-							onSelect={onSelect}
-							hint="matches your Obsidian vault"
-						/>
-					) : null}
 					<VaultRows scroll={search.showFilter}>
 						{search.shown.map((v) => (
 							<VaultRadio key={v.id} vault={v} active={selection === v.id} onSelect={onSelect} />
@@ -803,7 +811,7 @@ function VaultPickerFieldset({
 						)}
 					</VaultRows>
 				</>
-			)}
+			) : null}
 
 			{/* Creating is a different decision from linking, so it gets its own
 			    block: a rule and a title, and the custom name is a plain field
@@ -811,11 +819,9 @@ function VaultPickerFieldset({
 			    create would 402. */}
 			{!atVaultCap && (
 				<>
-					{hasExisting ? (
-						<p className={cn(sectionTitle, "mt-4")}>Or create a new vault</p>
-					) : (
-						<legend className={sectionTitle}>Create a new vault</legend>
-					)}
+					<p className={cn(sectionTitle, vaults.length > 0 && "mt-4")}>
+						{vaults.length > 0 ? "Or create a new vault" : "Create a new vault"}
+					</p>
 					<label className={selectableRow(isCustom)}>
 						<input
 							type="radio"
