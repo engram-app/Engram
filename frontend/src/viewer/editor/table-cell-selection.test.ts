@@ -216,3 +216,97 @@ describe("the selection outline", () => {
 		expect([...edge("top"), ...edge("right"), ...edge("bottom"), ...edge("left")]).toEqual([]);
 	});
 });
+
+describe("Backspace / Delete on a cell selection", () => {
+	const HEADER = "| a | b | c |\n| --- | --- | --- |\n";
+
+	function press(key: string) {
+		const wrap = view.dom.querySelector(".cm-atomic-table");
+		wrap?.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+	}
+
+	/** The table's markdown, without the trailing "after" paragraph. */
+	function table(): string {
+		return view.state.doc.toString().split("\n\nafter")[0] ?? "";
+	}
+
+	test("a fully selected row is removed", () => {
+		mount();
+		drag(3, 5);
+		press("Backspace");
+		expect(table()).toBe(`${HEADER}| 4 | 5 | 6 |`);
+	});
+
+	test("Delete removes it too", () => {
+		mount();
+		drag(3, 5);
+		press("Delete");
+		expect(table()).toBe(`${HEADER}| 4 | 5 | 6 |`);
+	});
+
+	test("several fully selected rows are removed together", () => {
+		mount();
+		drag(3, 8);
+		press("Backspace");
+		expect(table()).toBe(HEADER.trimEnd());
+	});
+
+	test("a fully selected column is removed", () => {
+		mount();
+		drag(1, 7);
+		press("Backspace");
+		expect(table()).toBe("| a | c |\n| --- | --- |\n| 1 | 3 |\n| 4 | 6 |");
+	});
+
+	test("several fully selected columns are removed together", () => {
+		mount();
+		drag(0, 7);
+		press("Backspace");
+		expect(table()).toBe("| c |\n| --- |\n| 3 |\n| 6 |");
+	});
+
+	test("a partial selection only clears the content", () => {
+		mount();
+		drag(3, 4);
+		press("Backspace");
+		expect(table()).toBe(`${HEADER}|  |  | 3 |\n| 4 | 5 | 6 |`);
+		expect(cells()[3]?.textContent).toBe("");
+		expect(cells()[4]?.textContent).toBe("");
+	});
+
+	test("the whole table selected clears the content and keeps the structure", () => {
+		mount();
+		drag(0, 8);
+		press("Backspace");
+		expect(table()).toBe("|  |  |  |\n| --- | --- | --- |\n|  |  |  |\n|  |  |  |");
+	});
+
+	test("a selection that includes the header clears it (it can't be removed) and drops the body rows", () => {
+		mount();
+		drag(0, 5);
+		press("Backspace");
+		expect(table()).toBe("|  |  |  |\n| --- | --- | --- |\n| 4 | 5 | 6 |");
+	});
+
+	test("the outline is gone once a row is removed", () => {
+		mount();
+		drag(3, 5);
+		press("Backspace");
+		expect(view.dom.querySelector(".cm-atomic-table-has-selection")).toBeNull();
+	});
+
+	test("with no selection it does nothing", () => {
+		mount();
+		const before = view.state.doc.toString();
+		press("Backspace");
+		expect(view.state.doc.toString()).toBe(before);
+	});
+
+	test("a read-only table is never edited", () => {
+		mount(true);
+		const before = view.state.doc.toString();
+		drag(3, 5);
+		press("Backspace");
+		expect(view.state.doc.toString()).toBe(before);
+	});
+});

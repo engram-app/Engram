@@ -1,6 +1,9 @@
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-104a5a9fe8c42ee2 b/.bun-tag-104a5a9fe8c42ee2
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-2fe67c9750ddd3e7 b/.bun-tag-2fe67c9750ddd3e7
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-91f638c52efbe856 b/.bun-tag-91f638c52efbe856
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
@@ -102,7 +105,7 @@ index ff02d57548388e468f73695f3bd45ec58be38160..d2f2a04758594f7b202cda3897ac7321
  export declare function tables(config?: TablesConfig): Extension;
  export {};
 diff --git a/dist/table-widget.js b/dist/table-widget.js
-index aee407c4aaa2eea5a46c0fa28831dcc80985c783..d487c8215fca36591cd3e58b1058ba93ddabbecf 100644
+index aee407c4aaa2eea5a46c0fa28831dcc80985c783..d5526b1b55602ead51719431d47a07d8ab693ba2 100644
 --- a/dist/table-widget.js
 +++ b/dist/table-widget.js
 @@ -172,6 +172,19 @@ function matchCellMarkAt(raw, from) {
@@ -168,7 +171,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..d487c8215fca36591cd3e58b1058ba93
  ];
  function isMarkWrap(el) {
      for (const c of MARK_WRAP_CLASSES)
-@@ -528,6 +570,232 @@ function placeCaretAtEnd(el) {
+@@ -528,6 +570,290 @@ function placeCaretAtEnd(el) {
  function getAllCells(wrap) {
      return Array.from(wrap.querySelectorAll('th, td'));
  }
@@ -319,7 +322,55 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..d487c8215fca36591cd3e58b1058ba93
 +    });
 +    wrap.classList.add(TABLE_HAS_SELECTION);
 +}
-+function attachCellSelection(wrap) {
++// Backspace / Delete on a cell selection. A box covering whole rows or whole
++// columns removes them (the table's structure); any other box just clears the
++// cell contents. The header row can't be removed, so a full-row box that
++// includes it clears the header and drops the body rows. A box covering the
++// whole table is both "full rows" and "full columns": it only clears.
++function deleteCellSelection(view, wrap) {
++    if (view.state.facet(readOnlyFacet))
++        return false;
++    const cells = getAllCells(wrap);
++    const cols = wrap.querySelectorAll('thead th').length || 1;
++    const selected = cells.filter((c) => c.classList.contains(CELL_SELECTED));
++    if (selected.length === 0)
++        return false;
++    const rows = selected.map((c) => Math.floor(cells.indexOf(c) / cols));
++    const cs = selected.map((c) => cells.indexOf(c) % cols);
++    const r0 = Math.min(...rows);
++    const r1 = Math.max(...rows);
++    const c0 = Math.min(...cs);
++    const c1 = Math.max(...cs);
++    const fullRows = c0 === 0 && c1 === cols - 1;
++    const fullCols = r0 === 0 && r1 === cells.length / cols - 1;
++    if (fullRows !== fullCols) {
++        const m = readModelFromDom(wrap);
++        if (fullCols) {
++            m.header.splice(c0, c1 - c0 + 1);
++            for (const r of m.rows)
++                r.splice(c0, c1 - c0 + 1);
++        }
++        else {
++            if (r0 === 0)
++                m.header = m.header.map(() => '');
++            const firstBody = Math.max(r0, 1);
++            m.rows.splice(firstBody - 1, r1 - firstBody + 1);
++        }
++        dispatchModel(view, wrap, m);
++        view.focus();
++        return true;
++    }
++    for (const cell of selected) {
++        cell.dataset.raw = '';
++        const source = getCellSource(cell);
++        if (source)
++            renderCellSourceDecorated(source);
++        refreshCellPreview(cell);
++    }
++    dispatchModelFromDom(view, selected[0]);
++    return true;
++}
++function attachCellSelection(wrap, view) {
 +    let anchor = null;
 +    let pressed = false; // primary button is down after a press inside the table
 +    let boxed = false; // the pointer has left the anchor cell: box mode
@@ -397,19 +448,29 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..d487c8215fca36591cd3e58b1058ba93
 +            e.preventDefault();
 +    });
 +    wrap.addEventListener('input', clear);
++    wrap.addEventListener('keydown', (e) => {
++        if (e.key !== 'Backspace' && e.key !== 'Delete')
++            return;
++        if (!wrap.classList.contains(TABLE_HAS_SELECTION))
++            return;
++        if (deleteCellSelection(view, wrap)) {
++            e.preventDefault();
++            e.stopPropagation();
++        }
++    });
 +}
  // ---- widget ---------------------------------------------------------
  class TableWidget extends WidgetType {
      constructor(model, readOnly) {
-@@ -585,6 +853,7 @@ class TableWidget extends WidgetType {
+@@ -585,6 +911,7 @@ class TableWidget extends WidgetType {
              tbody.appendChild(tr);
          }
          table.appendChild(tbody);
-+        attachCellSelection(wrap);
++        attachCellSelection(wrap, view);
          return wrap;
      }
      // All cell interactions are handled by the listeners we attach in
-@@ -629,17 +898,37 @@ function makeCell(tag, text, view) {
+@@ -629,17 +956,37 @@ function makeCell(tag, text, view) {
      // opened. We open on `click` (a proper popup-activation gesture, so
      // `window.open` isn't blocked) and block the caret on `pointerdown`.
      //
@@ -452,7 +513,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..d487c8215fca36591cd3e58b1058ba93
      source.addEventListener('pointerdown', (event) => {
          if (event.button !== 0)
              return;
-@@ -678,7 +967,12 @@ function attachCellEditing(view, cell, source) {
+@@ -678,7 +1025,12 @@ function attachCellEditing(view, cell, source) {
          // textContent (not innerText) so `display: none` delimiters inside
          // mark wraps are still captured — otherwise a cell containing
          // `**bold**` would serialize to just `bold` on every keystroke.
@@ -466,7 +527,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..d487c8215fca36591cd3e58b1058ba93
          cell.dataset.raw = raw;
          const offset = getCaretCharOffset(source);
          renderCellSourceDecorated(source);
-@@ -737,6 +1031,15 @@ function attachCellEditing(view, cell, source) {
+@@ -737,6 +1089,15 @@ function attachCellEditing(view, cell, source) {
      // hides all delimiters.
      source.addEventListener('blur', () => clearActiveMarksInSource(source));
      source.addEventListener('keydown', (event) => {
@@ -482,7 +543,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..d487c8215fca36591cd3e58b1058ba93
          // Enter mirrors Tab — advance to the next cell (appending a row past
          // the last one) instead of inserting a line break a single-line cell
          // can't represent. Shift reverses direction for both.
-@@ -1191,13 +1494,21 @@ const defaultLinkOpener = (url) => {
+@@ -1191,13 +1552,21 @@ const defaultLinkOpener = (url) => {
  export const tableLinkClickFacet = Facet.define({
      combine: (values) => values[0] ?? defaultLinkOpener,
  });
