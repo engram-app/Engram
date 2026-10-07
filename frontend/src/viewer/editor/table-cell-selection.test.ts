@@ -465,3 +465,170 @@ describe("copy / cut / paste on a cell selection", () => {
 		expect(view.state.doc.toString()).toBe(before);
 	});
 });
+
+describe("extending a selection", () => {
+	function shiftClick(i: number, init: MouseEventInit = {}) {
+		return ptr(src(i), "pointerdown", { shiftKey: true, ...init });
+	}
+
+	function arrow(key: string, init: KeyboardEventInit = {}) {
+		const wrap = view.dom.querySelector(".cm-atomic-table");
+		const ev = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init });
+		wrap?.dispatchEvent(ev);
+		return ev;
+	}
+
+	function caretIn(i: number) {
+		const cell = src(i);
+		const range = document.createRange();
+		range.selectNodeContents(cell);
+		range.collapse(false);
+		const sel = window.getSelection();
+		sel?.removeAllRanges();
+		sel?.addRange(range);
+	}
+
+	test("Shift-click extends the box from its anchor", () => {
+		mount();
+		drag(0, 4);
+		shiftClick(8);
+		expect(selected()).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+	});
+
+	test("Shift-click keeps the original anchor across several clicks", () => {
+		mount();
+		drag(0, 4);
+		shiftClick(8);
+		shiftClick(2);
+		expect(selected()).toEqual([0, 1, 2]);
+	});
+
+	test("Shift-click from a cell with the caret in it starts a box there", () => {
+		mount();
+		caretIn(4);
+		shiftClick(8);
+		expect(selected()).toEqual([4, 5, 7, 8]);
+	});
+
+	test("Shift-click with no selection and no caret in the table does nothing", () => {
+		mount();
+		window.getSelection()?.removeAllRanges();
+		shiftClick(8);
+		expect(selected()).toEqual([]);
+	});
+
+	test("Shift-click suppresses the native text range", () => {
+		mount();
+		drag(0, 4);
+		expect(shiftClick(8).defaultPrevented).toBe(true);
+	});
+
+	test("Shift-click works in a read-only table", () => {
+		mount(true);
+		drag(0, 4);
+		shiftClick(8);
+		expect(selected()).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+	});
+
+	test("Shift+Arrow moves the free corner one cell", () => {
+		mount();
+		drag(3, 4);
+		arrow("ArrowRight", { shiftKey: true });
+		expect(selected()).toEqual([3, 4, 5]);
+		arrow("ArrowDown", { shiftKey: true });
+		expect(selected()).toEqual([3, 4, 5, 6, 7, 8]);
+		arrow("ArrowLeft", { shiftKey: true });
+		expect(selected()).toEqual([3, 4, 6, 7]);
+		arrow("ArrowUp", { shiftKey: true });
+		expect(selected()).toEqual([3, 4]);
+	});
+
+	test("Shift+Arrow stops at the table edge", () => {
+		mount();
+		drag(1, 2);
+		arrow("ArrowRight", { shiftKey: true });
+		arrow("ArrowUp", { shiftKey: true });
+		expect(selected()).toEqual([1, 2]);
+	});
+
+	test("Ctrl+Shift+Arrow extends to the edge", () => {
+		mount();
+		drag(0, 1);
+		arrow("ArrowDown", { shiftKey: true, ctrlKey: true });
+		expect(selected()).toEqual([0, 1, 3, 4, 6, 7]);
+	});
+
+	test("Cmd+Shift+Arrow extends to the edge too", () => {
+		mount();
+		drag(0, 3);
+		arrow("ArrowRight", { shiftKey: true, metaKey: true });
+		expect(selected()).toEqual([0, 1, 2, 3, 4, 5]);
+	});
+
+	test("Shift+Arrow is consumed so the caret and page do not move", () => {
+		mount();
+		drag(3, 4);
+		expect(arrow("ArrowRight", { shiftKey: true }).defaultPrevented).toBe(true);
+	});
+
+	test("Shift+Arrow with no selection is left alone", () => {
+		mount();
+		expect(arrow("ArrowRight", { shiftKey: true }).defaultPrevented).toBe(false);
+		expect(selected()).toEqual([]);
+	});
+
+	test("Shift+Arrow works in a read-only table", () => {
+		mount(true);
+		drag(3, 4);
+		arrow("ArrowRight", { shiftKey: true });
+		expect(selected()).toEqual([3, 4, 5]);
+	});
+});
+
+describe("pasting a grid with the caret in a cell", () => {
+	const HEADER = "| a | b | c |\n| --- | --- | --- |\n";
+
+	function pasteInCell(i: number, text: string, html = "") {
+		const store: Record<string, string> = { "text/plain": text, "text/html": html };
+		const ev = new Event("paste", { bubbles: true, cancelable: true });
+		Object.defineProperty(ev, "clipboardData", {
+			value: { setData: () => {}, getData: (t: string) => store[t] ?? "" },
+		});
+		const cell = src(i);
+		const range = document.createRange();
+		range.selectNodeContents(cell);
+		range.collapse(false);
+		window.getSelection()?.removeAllRanges();
+		window.getSelection()?.addRange(range);
+		cell.dispatchEvent(ev);
+		return ev;
+	}
+
+	function table(): string {
+		return view.state.doc.toString().split("\n\nafter")[0] ?? "";
+	}
+
+	test("tab-separated text spreads across cells from the caret cell", () => {
+		mount();
+		pasteInCell(4, "x\ty\nz\tw");
+		expect(table()).toBe(`${HEADER}| 1 | x | y |\n| 4 | z | w |`);
+	});
+
+	test("a copied table column (HTML table, no tabs) pastes as rows", () => {
+		mount();
+		pasteInCell(3, "p\nq", "<table><tr><td>p</td></tr><tr><td>q</td></tr></table>");
+		expect(table()).toBe(`${HEADER}| p | 2 | 3 |\n| q | 5 | 6 |`);
+	});
+
+	test("plain multi-line text without tabs is still flattened into the one cell", () => {
+		mount();
+		pasteInCell(3, "hello\nworld");
+		expect(table()).toBe(`${HEADER}| 1hello world | 2 | 3 |\n| 4 | 5 | 6 |`);
+	});
+
+	test("a grid paste does not leave a stale box selection", () => {
+		mount();
+		pasteInCell(4, "x\ty\nz\tw");
+		expect(selected()).toEqual([]);
+	});
+});

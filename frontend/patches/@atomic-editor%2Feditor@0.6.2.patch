@@ -16,6 +16,9 @@ index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-b67033a3d87fcc61 b/.bun-tag-b67033a3d87fcc61
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-be1b91b2c5913cde b/.bun-tag-be1b91b2c5913cde
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/styles/inline-preview.css b/dist/styles/inline-preview.css
 index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..406f28d1a6410cecac9a1b6000a5285894c0afb9 100644
 --- a/dist/styles/inline-preview.css
@@ -108,7 +111,7 @@ index ff02d57548388e468f73695f3bd45ec58be38160..d2f2a04758594f7b202cda3897ac7321
  export declare function tables(config?: TablesConfig): Extension;
  export {};
 diff --git a/dist/table-widget.js b/dist/table-widget.js
-index aee407c4aaa2eea5a46c0fa28831dcc80985c783..ba476e31d101b362f570986bc17c38f1c1255d96 100644
+index aee407c4aaa2eea5a46c0fa28831dcc80985c783..3165468080f7d1569ab2097070ccd0a10de272f9 100644
 --- a/dist/table-widget.js
 +++ b/dist/table-widget.js
 @@ -172,6 +172,19 @@ function matchCellMarkAt(raw, from) {
@@ -174,7 +177,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..ba476e31d101b362f570986bc17c38f1
  ];
  function isMarkWrap(el) {
      for (const c of MARK_WRAP_CLASSES)
-@@ -528,6 +570,407 @@ function placeCaretAtEnd(el) {
+@@ -528,6 +570,486 @@ function placeCaretAtEnd(el) {
  function getAllCells(wrap) {
      return Array.from(wrap.querySelectorAll('th, td'));
  }
@@ -462,13 +465,53 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..ba476e31d101b362f570986bc17c38f1
 +        return;
 +    dispatchModelFromDom(view, first);
 +    const width = Math.max(...grid.map((line) => line.length));
-+    paintCellBox(wrap, cells[r0 * cols + c0], cells[(r0 + grid.length - 1) * cols + Math.min(cols - 1, c0 + width - 1)]);
++    // The pasted block's corners, so the caller can select it.
++    return {
++        a: cells[r0 * cols + c0],
++        b: cells[(r0 + grid.length - 1) * cols + Math.min(cols - 1, c0 + width - 1)],
++    };
++}
++// Paste a grid with the caret in a single cell (no box selected): same fill,
++// anchored at that cell. Returns nothing; the caret stays where it was.
++function pasteGridAtCell(view, cell, grid) {
++    const wrap = cell.closest('.cm-atomic-table');
++    if (!wrap)
++        return;
++    const cells = getAllCells(wrap);
++    const cols = wrap.querySelectorAll('thead th').length || 1;
++    const i = cells.indexOf(cell);
++    if (i < 0)
++        return;
++    const r = Math.floor(i / cols);
++    const c = i % cols;
++    pasteIntoCellSelection(view, wrap, { cells, cols, selected: [cell], r0: r, r1: r, c0: c, c1: c }, grid);
 +}
 +function attachCellSelection(wrap, view) {
 +    let anchor = null;
 +    let pressed = false; // primary button is down after a press inside the table
 +    let boxed = false; // the pointer has left the anchor cell: box mode
 +    let watching = false;
++    let selAnchor = null; // fixed corner of the current box
++    let selHead = null; // free corner: moved by Shift-click / Shift+Arrow
++    const show = (a, b) => {
++        selAnchor = a;
++        selHead = b;
++        paintCellBox(wrap, a, b);
++    };
++    // Drop the caret / native text selection and keep keyboard focus on the
++    // table so key handling (copy, clear, Shift+Arrow) has a target.
++    const enterSelection = () => {
++        document.getSelection()?.removeAllRanges();
++        wrap.tabIndex = -1;
++        wrap.focus({ preventScroll: true });
++        watch();
++    };
++    const caretCell = () => {
++        const a = document.getSelection()?.anchorNode;
++        const el = a && (a.nodeType === 1 ? a : a.parentElement);
++        const c = el?.closest('th, td');
++        return c && wrap.contains(c) ? c : null;
++    };
 +    const onDocDown = (e) => {
 +        if (!wrap.contains(e.target))
 +            clear();
@@ -485,6 +528,8 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..ba476e31d101b362f570986bc17c38f1
 +        document.addEventListener('keydown', onDocKey, true);
 +    };
 +    function clear() {
++        selAnchor = null;
++        selHead = null;
 +        clearCellSelection(wrap);
 +        if (!watching)
 +            return;
@@ -505,14 +550,9 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..ba476e31d101b362f570986bc17c38f1
 +                return;
 +            boxed = true;
 +            wrap.classList.add(TABLE_SELECTING);
-+            // Drop the caret / native text selection; keep keyboard focus on the
-+            // table so later key handling (copy, clear) has a target.
-+            document.getSelection()?.removeAllRanges();
-+            wrap.tabIndex = -1;
-+            wrap.focus({ preventScroll: true });
-+            watch();
++            enterSelection();
 +        }
-+        paintCellBox(wrap, anchor, cell);
++        show(anchor, cell);
 +    };
 +    function release() {
 +        pressed = false;
@@ -523,12 +563,27 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..ba476e31d101b362f570986bc17c38f1
 +        document.removeEventListener('pointerup', release, true);
 +        document.removeEventListener('pointercancel', release, true);
 +    }
++    // Shift-click: extend the box from its anchor, or start one from the cell
++    // holding the caret.
++    wrap.addEventListener('mousedown', (e) => {
++        if (e.shiftKey && (selAnchor || caretCell()))
++            e.preventDefault();
++    });
 +    wrap.addEventListener('pointerdown', (e) => {
-+        if (e.button !== 0 || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey)
++        if (e.button !== 0 || e.altKey || e.ctrlKey || e.metaKey)
 +            return;
 +        const cell = cellOf(e.target);
 +        if (!cell)
 +            return;
++        if (e.shiftKey) {
++            const base = selAnchor ?? caretCell();
++            if (!base)
++                return;
++            e.preventDefault();
++            enterSelection();
++            show(base, cell);
++            return;
++        }
 +        clear();
 +        anchor = cell;
 +        pressed = true;
@@ -566,9 +621,36 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..ba476e31d101b362f570986bc17c38f1
 +        if (!grid)
 +            return;
 +        e.preventDefault();
-+        pasteIntoCellSelection(view, wrap, info, grid);
++        const box = pasteIntoCellSelection(view, wrap, info, grid);
++        if (box)
++            show(box.a, box.b);
 +    });
 +    wrap.addEventListener('keydown', (e) => {
++        if (e.shiftKey && !e.altKey && e.key.startsWith('Arrow') && selAnchor && selHead) {
++            const cells = getAllCells(wrap);
++            const cols = wrap.querySelectorAll('thead th').length || 1;
++            const rowCount = cells.length / cols;
++            const hi = cells.indexOf(selHead);
++            if (hi < 0 || cells.indexOf(selAnchor) < 0)
++                return;
++            let r = Math.floor(hi / cols);
++            let c = hi % cols;
++            const far = e.ctrlKey || e.metaKey; // Ctrl/Cmd+Shift+Arrow: to the edge
++            if (e.key === 'ArrowLeft')
++                c = far ? 0 : Math.max(0, c - 1);
++            else if (e.key === 'ArrowRight')
++                c = far ? cols - 1 : Math.min(cols - 1, c + 1);
++            else if (e.key === 'ArrowUp')
++                r = far ? 0 : Math.max(0, r - 1);
++            else if (e.key === 'ArrowDown')
++                r = far ? rowCount - 1 : Math.min(rowCount - 1, r + 1);
++            else
++                return;
++            e.preventDefault();
++            e.stopPropagation();
++            show(selAnchor, cells[r * cols + c]);
++            return;
++        }
 +        if (e.key !== 'Backspace' && e.key !== 'Delete')
 +            return;
 +        if (!wrap.classList.contains(TABLE_HAS_SELECTION))
@@ -582,7 +664,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..ba476e31d101b362f570986bc17c38f1
  // ---- widget ---------------------------------------------------------
  class TableWidget extends WidgetType {
      constructor(model, readOnly) {
-@@ -585,6 +1028,7 @@ class TableWidget extends WidgetType {
+@@ -585,6 +1107,7 @@ class TableWidget extends WidgetType {
              tbody.appendChild(tr);
          }
          table.appendChild(tbody);
@@ -590,7 +672,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..ba476e31d101b362f570986bc17c38f1
          return wrap;
      }
      // All cell interactions are handled by the listeners we attach in
-@@ -629,17 +1073,37 @@ function makeCell(tag, text, view) {
+@@ -629,17 +1152,37 @@ function makeCell(tag, text, view) {
      // opened. We open on `click` (a proper popup-activation gesture, so
      // `window.open` isn't blocked) and block the caret on `pointerdown`.
      //
@@ -633,7 +715,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..ba476e31d101b362f570986bc17c38f1
      source.addEventListener('pointerdown', (event) => {
          if (event.button !== 0)
              return;
-@@ -678,7 +1142,12 @@ function attachCellEditing(view, cell, source) {
+@@ -678,7 +1221,12 @@ function attachCellEditing(view, cell, source) {
          // textContent (not innerText) so `display: none` delimiters inside
          // mark wraps are still captured — otherwise a cell containing
          // `**bold**` would serialize to just `bold` on every keystroke.
@@ -647,7 +729,26 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..ba476e31d101b362f570986bc17c38f1
          cell.dataset.raw = raw;
          const offset = getCaretCharOffset(source);
          renderCellSourceDecorated(source);
-@@ -737,6 +1206,15 @@ function attachCellEditing(view, cell, source) {
+@@ -711,6 +1259,18 @@ function attachCellEditing(view, cell, source) {
+     // and strip markup here, and `escapeCell` neutralizes any literal `|`
+     // on serialize.
+     source.addEventListener('paste', (event) => {
++        // Spreadsheet-style grid (tabs, or a copied HTML table): spread it across
++        // cells from this one instead of flattening it into a single cell.
++        const data = event.clipboardData;
++        if (data && (/\t/.test(data.getData('text/plain')) || /<table/i.test(data.getData('text/html')))) {
++            const grid = parseClipboardGrid(data.getData('text/plain'));
++            if (grid && (grid.length > 1 || grid[0].length > 1)) {
++                event.preventDefault();
++                event.stopPropagation();
++                pasteGridAtCell(view, cell, grid);
++                return;
++            }
++        }
+         event.preventDefault();
+         const text = (event.clipboardData?.getData('text/plain') ?? '')
+             .replace(/\s+/g, ' ')
+@@ -737,6 +1297,15 @@ function attachCellEditing(view, cell, source) {
      // hides all delimiters.
      source.addEventListener('blur', () => clearActiveMarksInSource(source));
      source.addEventListener('keydown', (event) => {
@@ -663,7 +764,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..ba476e31d101b362f570986bc17c38f1
          // Enter mirrors Tab — advance to the next cell (appending a row past
          // the last one) instead of inserting a line break a single-line cell
          // can't represent. Shift reverses direction for both.
-@@ -1191,13 +1669,21 @@ const defaultLinkOpener = (url) => {
+@@ -1191,13 +1760,21 @@ const defaultLinkOpener = (url) => {
  export const tableLinkClickFacet = Facet.define({
      combine: (values) => values[0] ?? defaultLinkOpener,
  });
