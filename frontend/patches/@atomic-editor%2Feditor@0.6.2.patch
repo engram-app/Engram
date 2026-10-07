@@ -4,6 +4,9 @@ index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-2fe67c9750ddd3e7 b/.bun-tag-2fe67c9750ddd3e7
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-58bb1950cd63cf85 b/.bun-tag-58bb1950cd63cf85
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-91f638c52efbe856 b/.bun-tag-91f638c52efbe856
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
@@ -20,7 +23,7 @@ diff --git a/node_modules/@atomic-editor/editor/.bun-tag-be1b91b2c5913cde b/.bun
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/styles/inline-preview.css b/dist/styles/inline-preview.css
-index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..406f28d1a6410cecac9a1b6000a5285894c0afb9 100644
+index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..60dbc4b7752073714ff5058c50c845cbeb8d9805 100644
 --- a/dist/styles/inline-preview.css
 +++ b/dist/styles/inline-preview.css
 @@ -523,6 +523,8 @@
@@ -32,7 +35,7 @@ index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..406f28d1a6410cecac9a1b6000a52858
  .cm-atomic-table-cell-source .cm-atomic-link-wrap.active > .cm-atomic-mark {
    display: inline;
    color: var(--atomic-editor-fg-faint, #666);
-@@ -828,3 +830,45 @@
+@@ -828,3 +830,96 @@
  .cm-atomic-readonly .cm-atomic-table-cell-source {
    cursor: default;
  }
@@ -78,6 +81,57 @@ index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..406f28d1a6410cecac9a1b6000a52858
 +.cm-atomic-table-has-selection:focus {
 +  outline: none;
 +}
++
++/* Add column / add row strips. `.cm-atomic-table-body` is the positioning box:
++ * it reserves a gutter (padding) past the table's right and bottom edges, and
++ * the strips live in that gutter, invisible until hovered. Padding, not margin,
++ * so CM6's height measurement stays honest (see .cm-atomic-table). */
++.cm-atomic-table-body {
++  position: relative;
++  width: max-content;
++  min-width: 100%;
++  box-sizing: border-box;
++  padding: 0 1.4rem 1.4rem 0;
++}
++
++.cm-atomic-table-add {
++  position: absolute;
++  display: flex;
++  align-items: center;
++  justify-content: center;
++  margin: 0;
++  padding: 0;
++  border: 1px dashed var(--atomic-editor-accent, #7c5cff);
++  border-radius: 0.3rem;
++  background: color-mix(in srgb, var(--atomic-editor-accent, #7c5cff) 8%, transparent 92%);
++  color: var(--atomic-editor-accent, #7c5cff);
++  font: inherit;
++  font-weight: 600;
++  line-height: 1;
++  cursor: pointer;
++  opacity: 0;
++  transition: opacity 120ms ease;
++}
++
++.cm-atomic-table-add:hover,
++.cm-atomic-table-add:focus-visible {
++  opacity: 1;
++  background: color-mix(in srgb, var(--atomic-editor-accent, #7c5cff) 16%, transparent 84%);
++}
++
++.cm-atomic-table-add-col {
++  top: 0;
++  right: 0;
++  bottom: 1.4rem;
++  width: 1.2rem;
++}
++
++.cm-atomic-table-add-row {
++  left: 0;
++  right: 1.4rem;
++  bottom: 0;
++  height: 1.2rem;
++}
 diff --git a/dist/table-widget.d.ts b/dist/table-widget.d.ts
 index ff02d57548388e468f73695f3bd45ec58be38160..d2f2a04758594f7b202cda3897ac7321021ad3c3 100644
 --- a/dist/table-widget.d.ts
@@ -111,7 +165,7 @@ index ff02d57548388e468f73695f3bd45ec58be38160..d2f2a04758594f7b202cda3897ac7321
  export declare function tables(config?: TablesConfig): Extension;
  export {};
 diff --git a/dist/table-widget.js b/dist/table-widget.js
-index aee407c4aaa2eea5a46c0fa28831dcc80985c783..3165468080f7d1569ab2097070ccd0a10de272f9 100644
+index aee407c4aaa2eea5a46c0fa28831dcc80985c783..9a98cca6d7bbd3a098accaddcbba2a52c8d48745 100644
 --- a/dist/table-widget.js
 +++ b/dist/table-widget.js
 @@ -172,6 +172,19 @@ function matchCellMarkAt(raw, from) {
@@ -177,7 +231,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..3165468080f7d1569ab2097070ccd0a1
  ];
  function isMarkWrap(el) {
      for (const c of MARK_WRAP_CLASSES)
-@@ -528,6 +570,486 @@ function placeCaretAtEnd(el) {
+@@ -528,6 +570,546 @@ function placeCaretAtEnd(el) {
  function getAllCells(wrap) {
      return Array.from(wrap.querySelectorAll('th, td'));
  }
@@ -661,18 +715,96 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..3165468080f7d1569ab2097070ccd0a1
 +        }
 +    });
 +}
++// ---- add column / add row strips ------------------------------------------
++// Hovering just past the table's right or bottom edge reveals an attached
++// strip (CSS fades it in); clicking it appends a column / row.
++function makeAddStrip(kind, view, wrap) {
++    const btn = document.createElement('button');
++    btn.type = 'button';
++    btn.className = `cm-atomic-table-add cm-atomic-table-add-${kind}`;
++    btn.setAttribute('aria-label', kind === 'row' ? 'Add row' : 'Add column');
++    btn.textContent = '+';
++    // Mouse affordance only: keyboard users get Tab-past-the-last-cell and the
++    // context menu, and a hidden-until-hover button is a confusing tab stop.
++    btn.tabIndex = -1;
++    btn.addEventListener('click', (e) => {
++        e.preventDefault();
++        e.stopPropagation();
++        if (kind === 'row')
++            appendRow(view, wrap);
++        else
++            appendColumn(view, wrap);
++    });
++    return btn;
++}
++function appendColumn(view, wrap) {
++    if (view.state.facet(readOnlyFacet))
++        return;
++    const range = findCurrentTableRange(view, wrap);
++    if (!range)
++        return;
++    const model = readModelFromDom(wrap);
++    model.header.push('');
++    for (const r of model.rows)
++        r.push('');
++    view.dispatch({ changes: { from: range.from, to: range.to, insert: serializeTable(model) } });
++    // The column count changed, so the widget is rebuilt and `wrap` is detached.
++    // Find the fresh one by position (double rAF, same as appendRow) and put the
++    // caret in the new header cell.
++    const { from } = range;
++    requestAnimationFrame(() => {
++        requestAnimationFrame(() => {
++            if (view.state.facet(readOnlyFacet))
++                return;
++            for (const el of view.dom.querySelectorAll('.cm-atomic-table')) {
++                try {
++                    if (view.posAtDOM(el) !== from)
++                        continue;
++                }
++                catch {
++                    continue; // posAtDOM throws on detached/transitional DOM
++                }
++                const headers = el.querySelectorAll('thead th');
++                const source = headers.length ? getCellSource(headers[headers.length - 1]) : null;
++                if (source) {
++                    source.focus();
++                    placeCaretAtEnd(source);
++                }
++                return;
++            }
++        });
++    });
++}
  // ---- widget ---------------------------------------------------------
  class TableWidget extends WidgetType {
      constructor(model, readOnly) {
-@@ -585,6 +1107,7 @@ class TableWidget extends WidgetType {
+@@ -566,8 +1148,13 @@ class TableWidget extends WidgetType {
+     toDOM(view) {
+         const wrap = document.createElement('div');
+         wrap.className = 'cm-atomic-table';
++        // `body` scrolls with the table and anchors the add-column / add-row
++        // strips at its right and bottom edges (see makeAddStrip).
++        const body = document.createElement('div');
++        body.className = 'cm-atomic-table-body';
+         const table = document.createElement('table');
+-        wrap.appendChild(table);
++        body.appendChild(table);
++        wrap.appendChild(body);
+         const thead = document.createElement('thead');
+         const headerRow = document.createElement('tr');
+         for (const text of this.model.header) {
+@@ -585,6 +1172,10 @@ class TableWidget extends WidgetType {
              tbody.appendChild(tr);
          }
          table.appendChild(tbody);
++        if (!this.readOnly) {
++            body.append(makeAddStrip('col', view, wrap), makeAddStrip('row', view, wrap));
++        }
 +        attachCellSelection(wrap, view);
          return wrap;
      }
      // All cell interactions are handled by the listeners we attach in
-@@ -629,17 +1152,37 @@ function makeCell(tag, text, view) {
+@@ -629,17 +1220,37 @@ function makeCell(tag, text, view) {
      // opened. We open on `click` (a proper popup-activation gesture, so
      // `window.open` isn't blocked) and block the caret on `pointerdown`.
      //
@@ -715,7 +847,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..3165468080f7d1569ab2097070ccd0a1
      source.addEventListener('pointerdown', (event) => {
          if (event.button !== 0)
              return;
-@@ -678,7 +1221,12 @@ function attachCellEditing(view, cell, source) {
+@@ -678,7 +1289,12 @@ function attachCellEditing(view, cell, source) {
          // textContent (not innerText) so `display: none` delimiters inside
          // mark wraps are still captured — otherwise a cell containing
          // `**bold**` would serialize to just `bold` on every keystroke.
@@ -729,7 +861,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..3165468080f7d1569ab2097070ccd0a1
          cell.dataset.raw = raw;
          const offset = getCaretCharOffset(source);
          renderCellSourceDecorated(source);
-@@ -711,6 +1259,18 @@ function attachCellEditing(view, cell, source) {
+@@ -711,6 +1327,18 @@ function attachCellEditing(view, cell, source) {
      // and strip markup here, and `escapeCell` neutralizes any literal `|`
      // on serialize.
      source.addEventListener('paste', (event) => {
@@ -748,7 +880,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..3165468080f7d1569ab2097070ccd0a1
          event.preventDefault();
          const text = (event.clipboardData?.getData('text/plain') ?? '')
              .replace(/\s+/g, ' ')
-@@ -737,6 +1297,15 @@ function attachCellEditing(view, cell, source) {
+@@ -737,6 +1365,15 @@ function attachCellEditing(view, cell, source) {
      // hides all delimiters.
      source.addEventListener('blur', () => clearActiveMarksInSource(source));
      source.addEventListener('keydown', (event) => {
@@ -764,7 +896,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..3165468080f7d1569ab2097070ccd0a1
          // Enter mirrors Tab — advance to the next cell (appending a row past
          // the last one) instead of inserting a line break a single-line cell
          // can't represent. Shift reverses direction for both.
-@@ -1191,13 +1760,21 @@ const defaultLinkOpener = (url) => {
+@@ -1191,13 +1828,21 @@ const defaultLinkOpener = (url) => {
  export const tableLinkClickFacet = Facet.define({
      combine: (values) => values[0] ?? defaultLinkOpener,
  });
