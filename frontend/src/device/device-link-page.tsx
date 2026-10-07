@@ -840,11 +840,6 @@ function VaultPickerFieldset({
 								maxLength={100}
 								className={fieldInput}
 							/>
-							{suggestedName && customName.trim() === suggestedName ? (
-								<span className="text-muted-foreground text-xs">
-									Matches your Obsidian vault name
-								</span>
-							) : null}
 						</span>
 					</label>
 				</>

@@ -567,7 +567,6 @@ describe("DeviceLinkPage", () => {
 			});
 			fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
 			expect(await screen.findByLabelText(/new vault name/iu)).toHaveValue("Brain Dump");
-			expect(screen.getByText(/matches your obsidian vault name/iu)).toBeInTheDocument();
 			fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
 			await waitFor(() =>
 				expect(post).toHaveBeenCalledWith(
