@@ -1669,7 +1669,9 @@ defmodule Engram.MCP.Handlers do
   end
 
   defp fm_has_key?(nil, _key), do: false
-  defp fm_has_key?(fm, key), do: Regex.match?(~r/^\s*#{key}\s*:/mi, fm)
+  # `[ \t]*`, not `\s*`: `\s` crosses newlines, so a miss backtracked from
+  # every line start (28 s on 200 KB of blank frontmatter lines).
+  defp fm_has_key?(fm, key), do: Regex.match?(~r/^[ \t]*#{key}[ \t]*:/mi, fm)
 
   # A level-1 ATX heading at the top of the body (frontmatter already split
   # off by the caller). `##`+ are subheadings, not the title.
