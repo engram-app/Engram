@@ -16,6 +16,9 @@ index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-91f638c52efbe856 b/.bun-tag-91f638c52efbe856
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-98993e5371c62686 b/.bun-tag-98993e5371c62686
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-9d67fe100061cfe b/.bun-tag-9d67fe100061cfe
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
@@ -29,7 +32,7 @@ diff --git a/node_modules/@atomic-editor/editor/.bun-tag-be1b91b2c5913cde b/.bun
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/styles/inline-preview.css b/dist/styles/inline-preview.css
-index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..930308f62e2fbcdb48bbfe4773735ed6615500fa 100644
+index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..8332fb02c014c3e1ab3bb2afcf68f5d3310b0d54 100644
 --- a/dist/styles/inline-preview.css
 +++ b/dist/styles/inline-preview.css
 @@ -464,8 +464,10 @@
@@ -65,7 +68,7 @@ index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..930308f62e2fbcdb48bbfe4773735ed6
  .cm-atomic-table-cell-source .cm-atomic-link-wrap.active > .cm-atomic-mark {
    display: inline;
    color: var(--atomic-editor-fg-faint, #666);
-@@ -828,3 +834,96 @@
+@@ -828,3 +834,112 @@
  .cm-atomic-readonly .cm-atomic-table-cell-source {
    cursor: default;
  }
@@ -162,6 +165,22 @@ index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..930308f62e2fbcdb48bbfe4773735ed6
 +  bottom: 0;
 +  height: 1.2rem;
 +}
++
++/* Column alignment from the separator row (`:--`, `:-:`, `--:`). */
++.cm-atomic-table th[data-align="left"],
++.cm-atomic-table td[data-align="left"] {
++  text-align: left;
++}
++
++.cm-atomic-table th[data-align="center"],
++.cm-atomic-table td[data-align="center"] {
++  text-align: center;
++}
++
++.cm-atomic-table th[data-align="right"],
++.cm-atomic-table td[data-align="right"] {
++  text-align: right;
++}
 diff --git a/dist/table-widget.d.ts b/dist/table-widget.d.ts
 index ff02d57548388e468f73695f3bd45ec58be38160..d2f2a04758594f7b202cda3897ac7321021ad3c3 100644
 --- a/dist/table-widget.d.ts
@@ -195,10 +214,81 @@ index ff02d57548388e468f73695f3bd45ec58be38160..d2f2a04758594f7b202cda3897ac7321
  export declare function tables(config?: TablesConfig): Extension;
  export {};
 diff --git a/dist/table-widget.js b/dist/table-widget.js
-index aee407c4aaa2eea5a46c0fa28831dcc80985c783..9a98cca6d7bbd3a098accaddcbba2a52c8d48745 100644
+index aee407c4aaa2eea5a46c0fa28831dcc80985c783..fac18002309a1f6b075eab7399540275e0cdeed5 100644
 --- a/dist/table-widget.js
 +++ b/dist/table-widget.js
-@@ -172,6 +172,19 @@ function matchCellMarkAt(raw, from) {
+@@ -42,9 +42,22 @@ export function splitRowCells(line) {
+     cells.push(buf.trim());
+     return cells;
+ }
++// Per-column alignment from the separator row: `:--` left, `:-:` center,
++// `--:` right, `---` none (null).
++function parseAlign(line, columnCount) {
++    const align = splitRowCells(line).map((c) => {
++        const l = c.startsWith(':');
++        const r = c.endsWith(':');
++        return l && r ? 'center' : r ? 'right' : l ? 'left' : null;
++    });
++    while (align.length < columnCount)
++        align.push(null);
++    return align.slice(0, columnCount);
++}
+ function parseTable(state, tableNode) {
+     const header = [];
+     const rows = [];
++    let delimiterLine = '';
+     const cursor = tableNode.cursor();
+     if (!cursor.firstChild())
+         return null;
+@@ -55,11 +68,15 @@ function parseTable(state, tableNode) {
+         else if (cursor.name === 'TableRow') {
+             rows.push(collectCells(state, cursor.node));
+         }
+-        // TableDelimiter (per-row `|` and whole-line `|---|---|`) is ignored.
++        else if (cursor.name === 'TableDelimiter') {
++            // Top-level delimiter = the `|---|:-:|` separator row (the per-row
++            // `|` delimiters are children of their rows, not visited here).
++            delimiterLine = state.doc.lineAt(cursor.from).text;
++        }
+     } while (cursor.nextSibling());
+     if (header.length === 0)
+         return null;
+-    return { header, rows };
++    return { header, rows, align: parseAlign(delimiterLine, header.length) };
+ }
+ // Escape cell content so it can't break the row's GFM structure: an
+ // unescaped `|` would split the cell into two columns, and a stray
+@@ -69,11 +86,14 @@ function parseTable(state, tableNode) {
+ function escapeCell(text) {
+     return text.replace(/\r?\n/g, ' ').replace(/(?<!\\)\|/g, '\\|');
+ }
++function alignSeparator(align) {
++    return align === 'center' ? ':---:' : align === 'right' ? '---:' : align === 'left' ? ':---' : '---';
++}
+ export function serializeTable(model) {
+     const columnCount = model.header.length;
+     const lines = [];
+     lines.push('| ' + model.header.map(escapeCell).join(' | ') + ' |');
+-    lines.push('| ' + model.header.map(() => '---').join(' | ') + ' |');
++    lines.push('| ' + model.header.map((_, i) => alignSeparator(model.align?.[i])).join(' | ') + ' |');
+     for (const row of model.rows) {
+         const padded = [];
+         for (let c = 0; c < columnCount; c++)
+@@ -83,9 +103,11 @@ export function serializeTable(model) {
+     return lines.join('\n');
+ }
+ function readModelFromDom(wrap) {
+-    const header = Array.from(wrap.querySelectorAll('thead th')).map(readCellSource);
++    const ths = Array.from(wrap.querySelectorAll('thead th'));
++    const header = ths.map(readCellSource);
++    const align = ths.map((th) => th.dataset.align || null);
+     const rows = Array.from(wrap.querySelectorAll('tbody tr')).map((tr) => Array.from(tr.querySelectorAll('td')).map(readCellSource));
+-    return { header, rows };
++    return { header, rows, align };
+ }
+ // A cell's raw markdown lives in `dataset.raw` — the source of truth
+ // that `readModelFromDom` reads when serializing the table back to
+@@ -172,6 +194,19 @@ function matchCellMarkAt(raw, from) {
              end: highlight.end,
          };
      }
@@ -218,7 +308,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..9a98cca6d7bbd3a098accaddcbba2a52
      // Link `[text](url)`. Reject empty text / url via `+` quantifiers.
      // `]` and `)` can't appear unescaped inside their respective fields.
      m = rest.match(/^\[([^\]\n]+)\]\(([^\s)"'\n]+)\)/);
-@@ -273,6 +286,33 @@ function renderCellToken(tok) {
+@@ -273,6 +308,33 @@ function renderCellToken(tok) {
          wrap.appendChild(makeCellMark('=='));
          return wrap;
      }
@@ -252,7 +342,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..9a98cca6d7bbd3a098accaddcbba2a52
      // Link. Shape mirrors the outer-editor markup: `.cm-atomic-link` on
      // the visible text (picks up link color + external-link icon via
      // `::after`), faint marks for `[`, `]`, `(`, URL, `)`, and highlight
-@@ -386,6 +426,8 @@ const MARK_WRAP_CLASSES = [
+@@ -386,6 +448,8 @@ const MARK_WRAP_CLASSES = [
      'cm-atomic-em-wrap',
      'cm-atomic-strike-wrap',
      'cm-atomic-link-wrap',
@@ -261,7 +351,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..9a98cca6d7bbd3a098accaddcbba2a52
  ];
  function isMarkWrap(el) {
      for (const c of MARK_WRAP_CLASSES)
-@@ -528,6 +570,546 @@ function placeCaretAtEnd(el) {
+@@ -528,6 +592,548 @@ function placeCaretAtEnd(el) {
  function getAllCells(wrap) {
      return Array.from(wrap.querySelectorAll('th, td'));
  }
@@ -464,6 +554,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..9a98cca6d7bbd3a098accaddcbba2a52
 +        const m = readModelFromDom(wrap);
 +        if (fullCols) {
 +            m.header.splice(c0, c1 - c0 + 1);
++            m.align.splice(c0, c1 - c0 + 1);
 +            for (const r of m.rows)
 +                r.splice(c0, c1 - c0 + 1);
 +        }
@@ -775,6 +866,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..9a98cca6d7bbd3a098accaddcbba2a52
 +        return;
 +    const model = readModelFromDom(wrap);
 +    model.header.push('');
++    model.align.push(null);
 +    for (const r of model.rows)
 +        r.push('');
 +    view.dispatch({ changes: { from: range.from, to: range.to, insert: serializeTable(model) } });
@@ -808,7 +900,16 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..9a98cca6d7bbd3a098accaddcbba2a52
  // ---- widget ---------------------------------------------------------
  class TableWidget extends WidgetType {
      constructor(model, readOnly) {
-@@ -566,8 +1148,13 @@ class TableWidget extends WidgetType {
+@@ -561,18 +1167,33 @@ class TableWidget extends WidgetType {
+             return false;
+         if (other.model.rows.length !== this.model.rows.length)
+             return false;
++        // Alignment lives in the separator row, not the cells, so a change there
++        // must rebuild the DOM (cells carry it as data-align).
++        if (JSON.stringify(other.model.align) !== JSON.stringify(this.model.align))
++            return false;
+         return true;
+     }
      toDOM(view) {
          const wrap = document.createElement('div');
          wrap.className = 'cm-atomic-table';
@@ -822,8 +923,28 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..9a98cca6d7bbd3a098accaddcbba2a52
 +        wrap.appendChild(body);
          const thead = document.createElement('thead');
          const headerRow = document.createElement('tr');
-         for (const text of this.model.header) {
-@@ -585,6 +1172,10 @@ class TableWidget extends WidgetType {
+-        for (const text of this.model.header) {
+-            headerRow.appendChild(makeCell('th', text, view));
+-        }
++        const align = this.model.align ?? [];
++        const aligned = (cell, c) => {
++            if (align[c])
++                cell.dataset.align = align[c];
++            return cell;
++        };
++        this.model.header.forEach((text, c) => {
++            headerRow.appendChild(aligned(makeCell('th', text, view), c));
++        });
+         thead.appendChild(headerRow);
+         table.appendChild(thead);
+         const tbody = document.createElement('tbody');
+@@ -580,11 +1201,15 @@ class TableWidget extends WidgetType {
+         for (const row of this.model.rows) {
+             const tr = document.createElement('tr');
+             for (let c = 0; c < colCount; c++) {
+-                tr.appendChild(makeCell('td', row[c] ?? '', view));
++                tr.appendChild(aligned(makeCell('td', row[c] ?? '', view), c));
+             }
              tbody.appendChild(tr);
          }
          table.appendChild(tbody);
@@ -834,7 +955,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..9a98cca6d7bbd3a098accaddcbba2a52
          return wrap;
      }
      // All cell interactions are handled by the listeners we attach in
-@@ -629,17 +1220,37 @@ function makeCell(tag, text, view) {
+@@ -629,17 +1254,37 @@ function makeCell(tag, text, view) {
      // opened. We open on `click` (a proper popup-activation gesture, so
      // `window.open` isn't blocked) and block the caret on `pointerdown`.
      //
@@ -877,7 +998,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..9a98cca6d7bbd3a098accaddcbba2a52
      source.addEventListener('pointerdown', (event) => {
          if (event.button !== 0)
              return;
-@@ -678,7 +1289,12 @@ function attachCellEditing(view, cell, source) {
+@@ -678,7 +1323,12 @@ function attachCellEditing(view, cell, source) {
          // textContent (not innerText) so `display: none` delimiters inside
          // mark wraps are still captured — otherwise a cell containing
          // `**bold**` would serialize to just `bold` on every keystroke.
@@ -891,7 +1012,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..9a98cca6d7bbd3a098accaddcbba2a52
          cell.dataset.raw = raw;
          const offset = getCaretCharOffset(source);
          renderCellSourceDecorated(source);
-@@ -711,6 +1327,18 @@ function attachCellEditing(view, cell, source) {
+@@ -711,6 +1361,18 @@ function attachCellEditing(view, cell, source) {
      // and strip markup here, and `escapeCell` neutralizes any literal `|`
      // on serialize.
      source.addEventListener('paste', (event) => {
@@ -910,7 +1031,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..9a98cca6d7bbd3a098accaddcbba2a52
          event.preventDefault();
          const text = (event.clipboardData?.getData('text/plain') ?? '')
              .replace(/\s+/g, ' ')
-@@ -737,6 +1365,15 @@ function attachCellEditing(view, cell, source) {
+@@ -737,6 +1399,15 @@ function attachCellEditing(view, cell, source) {
      // hides all delimiters.
      source.addEventListener('blur', () => clearActiveMarksInSource(source));
      source.addEventListener('keydown', (event) => {
@@ -926,7 +1047,31 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..9a98cca6d7bbd3a098accaddcbba2a52
          // Enter mirrors Tab — advance to the next cell (appending a row past
          // the last one) instead of inserting a line break a single-line cell
          // can't represent. Shift reverses direction for both.
-@@ -1191,13 +1828,21 @@ const defaultLinkOpener = (url) => {
+@@ -849,6 +1520,7 @@ function openCellMenu(view, cell, x, y) {
+         action: () => {
+             const m = readModelFromDom(wrap);
+             m.header.splice(col, 0, '');
++            m.align.splice(col, 0, null);
+             for (const r of m.rows)
+                 r.splice(col, 0, '');
+             dispatchModel(view, wrap, m);
+@@ -859,6 +1531,7 @@ function openCellMenu(view, cell, x, y) {
+         action: () => {
+             const m = readModelFromDom(wrap);
+             m.header.splice(col + 1, 0, '');
++            m.align.splice(col + 1, 0, null);
+             for (const r of m.rows)
+                 r.splice(col + 1, 0, '');
+             dispatchModel(view, wrap, m);
+@@ -874,6 +1547,7 @@ function openCellMenu(view, cell, x, y) {
+             if (m.header.length <= 1 || col < 0)
+                 return;
+             m.header.splice(col, 1);
++            m.align.splice(col, 1);
+             for (const r of m.rows)
+                 r.splice(col, 1);
+             dispatchModel(view, wrap, m);
+@@ -1191,13 +1865,21 @@ const defaultLinkOpener = (url) => {
  export const tableLinkClickFacet = Facet.define({
      combine: (values) => values[0] ?? defaultLinkOpener,
  });
