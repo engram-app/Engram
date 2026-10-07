@@ -7,7 +7,7 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
 		<main className="relative flex min-h-dvh items-center justify-center overflow-hidden bg-background text-foreground">
 			<AuthBackdrop />
 			<div className="absolute top-4 right-4 z-20">
-				<LanguageSelect className="w-36" />
+				<LanguageSelect iconOnly />
 			</div>
 			<div className="relative z-10 flex w-full items-center justify-center px-4 py-12">
 				{children}

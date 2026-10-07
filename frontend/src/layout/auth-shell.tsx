@@ -19,7 +19,7 @@ export default function AuthShell({ actions, navLabel, children }: AuthShellProp
 				</span>
 				<nav className="flex items-center gap-3" aria-label={navLabel}>
 					{actions}
-					<LanguageSelect className="w-36" />
+					<LanguageSelect iconOnly />
 					<ThemeToggle />
 				</nav>
 			</header>

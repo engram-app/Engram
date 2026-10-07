@@ -10,6 +10,6 @@ describe("AuthLayout", () => {
 			</AuthLayout>,
 		);
 		expect(screen.getByText("card")).toBeInTheDocument();
-		expect(screen.getByRole("combobox", { name: "Language" })).toBeInTheDocument();
+		expect(screen.getByRole("combobox", { name: "Language" })).not.toHaveTextContent("English");
 	});
 });
