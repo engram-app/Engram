@@ -143,6 +143,29 @@ defmodule Engram.Notes.FrontmatterTest do
     end
   end
 
+  # YamlElixir is ~20 ms/KB on blocks the native rules cannot read (a 300 KB
+  # nested block took 7 s), and parse runs on every save and checkpoint.
+  # Past the cap the block is not parsed: the note keeps it as text (the
+  # lossless whole-text-as-body path) and parse_status says why.
+  describe "the YamlElixir size cap" do
+    defp nested(n), do: Enum.map_join(1..n, "", &"k#{&1}:\n  a: [1, {b: 2}]\n  c: x\n")
+
+    test "a nested block past the cap is refused fast, with its own reason" do
+      block = nested(1_500)
+      assert byte_size(block) > 32 * 1024
+      {us, result} = :timer.tc(fn -> Frontmatter.parse(block) end)
+      assert result == :error
+      assert {us, :error} == {us, Frontmatter.parse_for_ingest(block)}
+      assert us < 200_000, "took #{div(us, 1000)} ms"
+      assert Frontmatter.invalid_yaml_reason(block)["code"] == "frontmatter_too_large"
+    end
+
+    test "a nested block under the cap still parses through YamlElixir" do
+      assert {:ok, ["k1", "k2"], %{"k1" => _, "k2" => _}, []} = Frontmatter.parse(nested(2))
+      assert Frontmatter.invalid_yaml_reason("a: : :\n")["code"] == "frontmatter_invalid_yaml"
+    end
+  end
+
   describe "invalid_yaml_reason/1" do
     test "redacts the block to a generic marker (never the raw block text)" do
       secret = "apikey: sk-super-secret-value"
