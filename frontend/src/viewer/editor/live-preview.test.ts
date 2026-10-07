@@ -122,7 +122,7 @@ describe("image embeds", () => {
 		expect(names).not.toContain("pic.png");
 	});
 
-	test("a wikilink inside a table cell opens through openWikiLink, resolved like any other", () => {
+	test("a wikilink inside a table cell opens through openWikiLink with the raw target", () => {
 		const openWikiLink = vi.fn();
 		view = new EditorView({
 			state: EditorState.create({
@@ -139,6 +139,6 @@ describe("image embeds", () => {
 		const link = view.dom.querySelector(".cm-atomic-table .cm-atomic-wiki-link");
 		expect(link).not.toBeNull();
 		link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
-		expect(openWikiLink).toHaveBeenCalledExactlyOnceWith("/w/wiki/Wiki Link");
+		expect(openWikiLink).toHaveBeenCalledExactlyOnceWith("Wiki Link");
 	});
 });

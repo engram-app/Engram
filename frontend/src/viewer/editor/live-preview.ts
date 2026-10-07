@@ -118,8 +118,10 @@ export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 		atomicMarkdownSyntax,
 		atomicEditorTheme,
 		// Table cells are a widget the `wikiLinks()` click handler never sees, so
-		// route their wikilink clicks through the same resolve → open path.
-		tables({ onWikiLinkClick: (target) => opts.openWikiLink(opts.resolveWikiLink(target)) }),
+		// route their wikilink clicks to openWikiLink. It takes the RAW target and
+		// resolves it itself (NotePage.openWikiLink); resolving here too would
+		// double-resolve and create a note named after the href.
+		tables({ onWikiLinkClick: (target) => opts.openWikiLink(target) }),
 		imageBlocks(),
 		// Prec.high so the embed's replace wins over the wikilink widget that would
 		// otherwise claim the `[[...]]` inside `![[...]]`.
