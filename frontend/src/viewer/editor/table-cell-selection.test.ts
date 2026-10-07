@@ -42,6 +42,13 @@ function selected(): number[] {
 	return cells().flatMap((c, i) => (c.classList.contains(SELECTED) ? [i] : []));
 }
 
+/** Indexes of cells carrying the outline edge `side` (top|right|bottom|left). */
+function edge(side: string): number[] {
+	return cells().flatMap((c, i) =>
+		c.classList.contains(`cm-atomic-table-cell-sel-${side}`) ? [i] : [],
+	);
+}
+
 function ptr(target: Element, type: string, init: MouseEventInit = {}) {
 	const Ctor = typeof PointerEvent === "undefined" ? MouseEvent : PointerEvent;
 	const ev = new Ctor(type, { bubbles: true, cancelable: true, button: 0, buttons: 1, ...init });
@@ -171,5 +178,41 @@ describe("clearing a cell selection", () => {
 		drag(0, 4);
 		drag(5, 8);
 		expect(selected()).toEqual([5, 8]);
+	});
+});
+
+describe("the selection outline", () => {
+	test("only the cells on the box boundary carry an edge", () => {
+		mount();
+		drag(1, 8); // cols 1-2, rows 0-2
+		expect(edge("top")).toEqual([1, 2]);
+		expect(edge("bottom")).toEqual([7, 8]);
+		expect(edge("left")).toEqual([1, 4, 7]);
+		expect(edge("right")).toEqual([2, 5, 8]);
+	});
+
+	test("an inner cell carries no edge", () => {
+		mount();
+		drag(0, 8); // the whole table; cell 4 is interior
+		const inner = cells()[4];
+		expect(inner?.classList.contains(SELECTED)).toBe(true);
+		for (const side of ["top", "right", "bottom", "left"]) {
+			expect(inner?.classList.contains(`cm-atomic-table-cell-sel-${side}`)).toBe(false);
+		}
+	});
+
+	test("shrinking the box drops the edges it left behind", () => {
+		mount();
+		drag(0, 8, 1); // out to the far corner, back to the next cell
+		expect(selected()).toEqual([0, 1]);
+		expect(edge("bottom")).toEqual([0, 1]);
+		expect(edge("right")).toEqual([1]);
+	});
+
+	test("clearing removes the edges", () => {
+		mount();
+		drag(0, 4);
+		document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+		expect([...edge("top"), ...edge("right"), ...edge("bottom"), ...edge("left")]).toEqual([]);
 	});
 });

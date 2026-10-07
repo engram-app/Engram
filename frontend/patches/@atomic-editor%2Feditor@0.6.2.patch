@@ -7,8 +7,11 @@ index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-9d67fe100061cfe b/.bun-tag-9d67fe100061cfe
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-aaf59be8206d5639 b/.bun-tag-aaf59be8206d5639
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/styles/inline-preview.css b/dist/styles/inline-preview.css
-index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..404cbb2ab7cf6cb48e6a3a52d1eab9fd015fb34a 100644
+index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..406f28d1a6410cecac9a1b6000a5285894c0afb9 100644
 --- a/dist/styles/inline-preview.css
 +++ b/dist/styles/inline-preview.css
 @@ -523,6 +523,8 @@
@@ -20,16 +23,38 @@ index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..404cbb2ab7cf6cb48e6a3a52d1eab9fd
  .cm-atomic-table-cell-source .cm-atomic-link-wrap.active > .cm-atomic-mark {
    display: inline;
    color: var(--atomic-editor-fg-faint, #666);
-@@ -828,3 +830,23 @@
+@@ -828,3 +830,45 @@
  .cm-atomic-readonly .cm-atomic-table-cell-source {
    cursor: default;
  }
 +
-+/* Drag-selected table cells (box mode). The cell rules are element-qualified so
-+ * they beat the th/td background above. */
++/* Drag-selected table cells (box mode): no fill, just an accent outline around
++ * the bounding box. Each boundary cell draws its outer edges as inset
++ * box-shadows, composed from per-side custom properties so a corner cell gets
++ * both. Inner cells carry no edge class and stay unpainted. */
 +.cm-atomic-table th.cm-atomic-table-cell-selected,
 +.cm-atomic-table td.cm-atomic-table-cell-selected {
-+  background: var(--atomic-editor-selection-bg, color-mix(in srgb, #7c3aed 28%, transparent 72%));
++  box-shadow:
++    var(--atomic-sel-top, 0 0 #0000),
++    var(--atomic-sel-right, 0 0 #0000),
++    var(--atomic-sel-bottom, 0 0 #0000),
++    var(--atomic-sel-left, 0 0 #0000);
++}
++
++.cm-atomic-table-cell-sel-top {
++  --atomic-sel-top: inset 0 2px 0 0 var(--atomic-editor-accent, #7c5cff);
++}
++
++.cm-atomic-table-cell-sel-right {
++  --atomic-sel-right: inset -2px 0 0 0 var(--atomic-editor-accent, #7c5cff);
++}
++
++.cm-atomic-table-cell-sel-bottom {
++  --atomic-sel-bottom: inset 0 -2px 0 0 var(--atomic-editor-accent, #7c5cff);
++}
++
++.cm-atomic-table-cell-sel-left {
++  --atomic-sel-left: inset 2px 0 0 0 var(--atomic-editor-accent, #7c5cff);
 +}
 +
 +.cm-atomic-table-cell-selected .cm-atomic-table-cell-source {
@@ -77,7 +102,7 @@ index ff02d57548388e468f73695f3bd45ec58be38160..d2f2a04758594f7b202cda3897ac7321
  export declare function tables(config?: TablesConfig): Extension;
  export {};
 diff --git a/dist/table-widget.js b/dist/table-widget.js
-index aee407c4aaa2eea5a46c0fa28831dcc80985c783..57a696153f65270d63460a66e2d9571df55531b9 100644
+index aee407c4aaa2eea5a46c0fa28831dcc80985c783..d487c8215fca36591cd3e58b1058ba93ddabbecf 100644
 --- a/dist/table-widget.js
 +++ b/dist/table-widget.js
 @@ -172,6 +172,19 @@ function matchCellMarkAt(raw, from) {
@@ -143,7 +168,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..57a696153f65270d63460a66e2d9571d
  ];
  function isMarkWrap(el) {
      for (const c of MARK_WRAP_CLASSES)
-@@ -528,6 +570,225 @@ function placeCaretAtEnd(el) {
+@@ -528,6 +570,232 @@ function placeCaretAtEnd(el) {
  function getAllCells(wrap) {
      return Array.from(wrap.querySelectorAll('th, td'));
  }
@@ -264,9 +289,11 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..57a696153f65270d63460a66e2d9571d
 +function cellOf(target) {
 +    return target instanceof Element ? target.closest('th, td') : null;
 +}
++// Edge classes mark the box boundary; CSS draws the outline from them.
++const CELL_EDGES = ['top', 'right', 'bottom', 'left'].map((side) => `cm-atomic-table-cell-sel-${side}`);
 +function clearCellSelection(wrap) {
 +    for (const c of wrap.querySelectorAll('.' + CELL_SELECTED))
-+        c.classList.remove(CELL_SELECTED);
++        c.classList.remove(CELL_SELECTED, ...CELL_EDGES);
 +    wrap.classList.remove(TABLE_HAS_SELECTION);
 +}
 +function paintCellBox(wrap, a, b) {
@@ -283,7 +310,12 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..57a696153f65270d63460a66e2d9571d
 +    cells.forEach((cell, i) => {
 +        const r = Math.floor(i / cols);
 +        const c = i % cols;
-+        cell.classList.toggle(CELL_SELECTED, r >= r0 && r <= r1 && c >= c0 && c <= c1);
++        const inside = r >= r0 && r <= r1 && c >= c0 && c <= c1;
++        cell.classList.toggle(CELL_SELECTED, inside);
++        cell.classList.toggle(CELL_EDGES[0], inside && r === r0);
++        cell.classList.toggle(CELL_EDGES[1], inside && c === c1);
++        cell.classList.toggle(CELL_EDGES[2], inside && r === r1);
++        cell.classList.toggle(CELL_EDGES[3], inside && c === c0);
 +    });
 +    wrap.classList.add(TABLE_HAS_SELECTION);
 +}
@@ -369,7 +401,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..57a696153f65270d63460a66e2d9571d
  // ---- widget ---------------------------------------------------------
  class TableWidget extends WidgetType {
      constructor(model, readOnly) {
-@@ -585,6 +846,7 @@ class TableWidget extends WidgetType {
+@@ -585,6 +853,7 @@ class TableWidget extends WidgetType {
              tbody.appendChild(tr);
          }
          table.appendChild(tbody);
@@ -377,7 +409,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..57a696153f65270d63460a66e2d9571d
          return wrap;
      }
      // All cell interactions are handled by the listeners we attach in
-@@ -629,17 +891,37 @@ function makeCell(tag, text, view) {
+@@ -629,17 +898,37 @@ function makeCell(tag, text, view) {
      // opened. We open on `click` (a proper popup-activation gesture, so
      // `window.open` isn't blocked) and block the caret on `pointerdown`.
      //
@@ -420,7 +452,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..57a696153f65270d63460a66e2d9571d
      source.addEventListener('pointerdown', (event) => {
          if (event.button !== 0)
              return;
-@@ -678,7 +960,12 @@ function attachCellEditing(view, cell, source) {
+@@ -678,7 +967,12 @@ function attachCellEditing(view, cell, source) {
          // textContent (not innerText) so `display: none` delimiters inside
          // mark wraps are still captured — otherwise a cell containing
          // `**bold**` would serialize to just `bold` on every keystroke.
@@ -434,7 +466,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..57a696153f65270d63460a66e2d9571d
          cell.dataset.raw = raw;
          const offset = getCaretCharOffset(source);
          renderCellSourceDecorated(source);
-@@ -737,6 +1024,15 @@ function attachCellEditing(view, cell, source) {
+@@ -737,6 +1031,15 @@ function attachCellEditing(view, cell, source) {
      // hides all delimiters.
      source.addEventListener('blur', () => clearActiveMarksInSource(source));
      source.addEventListener('keydown', (event) => {
@@ -450,7 +482,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..57a696153f65270d63460a66e2d9571d
          // Enter mirrors Tab — advance to the next cell (appending a row past
          // the last one) instead of inserting a line break a single-line cell
          // can't represent. Shift reverses direction for both.
-@@ -1191,13 +1487,21 @@ const defaultLinkOpener = (url) => {
+@@ -1191,13 +1494,21 @@ const defaultLinkOpener = (url) => {
  export const tableLinkClickFacet = Facet.define({
      combine: (values) => values[0] ?? defaultLinkOpener,
  });
