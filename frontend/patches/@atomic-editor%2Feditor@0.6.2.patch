@@ -10,6 +10,9 @@ index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-58bb1950cd63cf85 b/.bun-tag-58bb1950cd63cf85
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-8f76e15529f3ab8c b/.bun-tag-8f76e15529f3ab8c
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-91f638c52efbe856 b/.bun-tag-91f638c52efbe856
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
@@ -26,7 +29,7 @@ diff --git a/node_modules/@atomic-editor/editor/.bun-tag-be1b91b2c5913cde b/.bun
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/styles/inline-preview.css b/dist/styles/inline-preview.css
-index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..51902e156505073afd74c2a92a1b93c7aafde211 100644
+index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..930308f62e2fbcdb48bbfe4773735ed6615500fa 100644
 --- a/dist/styles/inline-preview.css
 +++ b/dist/styles/inline-preview.css
 @@ -464,8 +464,10 @@
@@ -42,7 +45,18 @@ index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..51902e156505073afd74c2a92a1b93c7
    font-family: var(--atomic-editor-font, system-ui, sans-serif);
  }
  
-@@ -523,6 +525,8 @@
+@@ -475,7 +477,9 @@
+   padding: 0.35em 0.6em;
+   text-align: left;
+   vertical-align: top;
+-  min-width: 2em;
++  /* Tables shrink-wrap their content, so an empty column (e.g. one just added)
++   * needs a usable width of its own. */
++  min-width: 6em;
+   min-height: 1.5em;
+ }
+ 
+@@ -523,6 +527,8 @@
  .cm-atomic-table-cell-source .cm-atomic-em-wrap.active > .cm-atomic-mark,
  .cm-atomic-table-cell-source .cm-atomic-strike-wrap.active > .cm-atomic-mark,
  .cm-atomic-table-cell-source .cm-atomic-highlight-wrap.active > .cm-atomic-mark,
@@ -51,7 +65,7 @@ index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..51902e156505073afd74c2a92a1b93c7
  .cm-atomic-table-cell-source .cm-atomic-link-wrap.active > .cm-atomic-mark {
    display: inline;
    color: var(--atomic-editor-fg-faint, #666);
-@@ -828,3 +832,96 @@
+@@ -828,3 +834,96 @@
  .cm-atomic-readonly .cm-atomic-table-cell-source {
    cursor: default;
  }
