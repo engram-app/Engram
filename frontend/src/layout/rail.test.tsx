@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
 import { MemoryRouter, useLocation } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -291,5 +291,64 @@ describe("Rail — collapsing the left sidebar", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Files" }));
 		expect(state()).toBe("files:open");
 		expect(screen.getByTestId("loc").textContent).not.toContain("settings");
+	});
+});
+
+// The rail's icon buttons used the browser's native `title` tooltip, which
+// ignores the app theme and looks nothing like the rest of the UI. They use the
+// shared Tooltip component instead.
+describe("Rail — tooltips", () => {
+	const tooltip = () => document.querySelector('[data-slot="tooltip-content"]');
+	const renderRail = () =>
+		render(
+			<Wrap>
+				<Rail />
+			</Wrap>,
+		);
+
+	it("no rail control carries a native title attribute", () => {
+		renderRail();
+		for (const name of ["Files", "Search", "Outline", "Backlinks", "Reference", "Settings"]) {
+			const el = screen.getByRole(name === "Settings" ? "link" : "button", { name });
+			expect(el, name).not.toHaveAttribute("title");
+		}
+	});
+
+	it("focusing a view button shows the themed tooltip with its label", async () => {
+		renderRail();
+		expect(tooltip()).toBeNull();
+		fireEvent.focus(screen.getByRole("button", { name: "Files" }));
+		await waitFor(() => expect(tooltip()).not.toBeNull());
+		expect(tooltip()).toHaveTextContent("Files");
+	});
+
+	it("the tooltip appears beside the rail (to the right), not over the content below", async () => {
+		renderRail();
+		fireEvent.focus(screen.getByRole("button", { name: "Search" }));
+		await waitFor(() => expect(tooltip()).not.toBeNull());
+		expect(tooltip()).toHaveAttribute("data-side", "right");
+	});
+
+	it("an available right-hand tool shows its label", async () => {
+		renderRail();
+		fireEvent.focus(screen.getByRole("button", { name: "Reference" }));
+		await waitFor(() => expect(tooltip()).toHaveTextContent("Reference"));
+	});
+
+	it("the settings link shows a tooltip too", async () => {
+		renderRail();
+		fireEvent.focus(screen.getByRole("link", { name: "Settings" }));
+		await waitFor(() => expect(tooltip()).toHaveTextContent("Settings"));
+	});
+
+	it("a disabled tool still explains itself: its tooltip says to open a note first", async () => {
+		renderRail();
+		const outline = screen.getByRole("button", { name: "Outline" });
+		expect(outline).toBeDisabled();
+		// A disabled button receives no pointer events, so the tooltip hangs off its wrapper.
+		const trigger = outline.closest('[data-slot="tooltip-trigger"]');
+		expect(trigger).not.toBeNull();
+		fireEvent.focus(trigger as Element);
+		await waitFor(() => expect(tooltip()).toHaveTextContent("Outline (open a note first)"));
 	});
 });
