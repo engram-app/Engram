@@ -5,7 +5,11 @@ import { LanguageSection } from "./language-section";
 
 function mount() {
 	return render(
-		<LocaleProvider loaders={{}}>
+		<LocaleProvider
+			loaders={{
+				ja: async () => ({ default: { "Choose the language Engram uses on this device.": "x" } }),
+			}}
+		>
 			<LanguageSection />
 		</LocaleProvider>,
 	);
@@ -48,7 +52,10 @@ describe("LanguageSection", () => {
 		expect(await screen.findByRole("option", { name: "English" })).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("option", { name: "日本語" }));
 		await vi.waitFor(() => expect(window.localStorage.getItem("engram:locale")).toBe("ja"));
-		expect(screen.getByRole("combobox", { name: /language/iu })).toHaveTextContent("日本語");
+		// The trigger shows the language on screen, so it follows once the catalog loads.
+		await vi.waitFor(() =>
+			expect(screen.getByRole("combobox", { name: /language/iu })).toHaveTextContent("日本語"),
+		);
 	});
 
 	it("always renders the card and the Select, with no env gate", () => {

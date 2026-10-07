@@ -163,6 +163,7 @@ interface ToolColumnProps {
 
 function ToolColumn({ title, options, selected, onToggle }: ToolColumnProps) {
 	const { t } = useT();
+	const toolLabel = (opt: ToolOption) => (opt.translate ? t(opt.label) : opt.label);
 	return (
 		<fieldset className="flex flex-col gap-2">
 			<legend className="mb-2 font-semibold text-muted-foreground text-xs uppercase tracking-wider">
@@ -186,13 +187,13 @@ function ToolColumn({ title, options, selected, onToggle }: ToolColumnProps) {
 							className="flex items-center gap-3 rounded-lg border border-border border-dashed p-2.5"
 						>
 							<span className="flex items-center gap-3 opacity-60">
-								<Checkbox checked={false} disabled aria-label={t(opt.label)} />
-								<ToolBadge slug={opt.slug} fallbackLabel={t(opt.label)} />
+								<Checkbox checked={false} disabled aria-label={toolLabel(opt)} />
+								<ToolBadge slug={opt.slug} fallbackLabel={toolLabel(opt)} />
 							</span>
 							{/* Full opacity: the affordance has to stay legible even though
 							    the row it explains is greyed out. */}
 							<HelpTip
-								label={t("Why {tool} can't be connected", { tool: t(opt.label) })}
+								label={t("Why {tool} can't be connected", { tool: toolLabel(opt) })}
 								className="ms-auto"
 							>
 								{t(opt.unavailable)}
@@ -203,9 +204,9 @@ function ToolColumn({ title, options, selected, onToggle }: ToolColumnProps) {
 							<Checkbox
 								checked={selected.has(opt.slug)}
 								onCheckedChange={() => onToggle(opt.slug)}
-								aria-label={t(opt.label)}
+								aria-label={toolLabel(opt)}
 							/>
-							<ToolBadge slug={opt.slug} fallbackLabel={t(opt.label)} />
+							<ToolBadge slug={opt.slug} fallbackLabel={toolLabel(opt)} />
 						</label>
 					),
 				)}

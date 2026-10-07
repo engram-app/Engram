@@ -20,10 +20,12 @@ interface LanguageSelectProps {
 }
 
 export function LanguageSelect({ className, iconOnly = false }: LanguageSelectProps) {
-	const { t, locale, setLocale } = useT();
+	const { t, renderedLocale, setLocale } = useT();
 	return (
 		<Select
-			value={locale}
+			// The language on screen, not the one requested: after a failed load the two
+			// differ, and re-picking the requested one must still count as a change.
+			value={renderedLocale}
 			onValueChange={(value) => {
 				if (isMember(LOCALES, value)) {
 					setLocale(value);

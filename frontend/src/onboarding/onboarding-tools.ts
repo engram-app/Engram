@@ -8,6 +8,8 @@ import { msg } from "@/i18n/msg";
 export interface ToolOption {
 	slug: string;
 	label: string;
+	/** Set on labels written with `msg()`. Brand names stay as written, even when one equals a catalog key. */
+	translate?: true;
 	hint?: string;
 	/**
 	 * Set when the tool cannot connect to Engram for a reason outside our
@@ -57,7 +59,7 @@ export const TOOL_CODING: ToolOption[] = [
 	{ slug: "antigravity", label: "Antigravity" },
 	// Lives with the named clients rather than in a group of its own: it answers
 	// the same question they do ("which client?"), just without naming one.
-	{ slug: "other_mcp", label: msg("Another MCP client") },
+	{ slug: "other_mcp", label: msg("Another MCP client"), translate: true },
 ];
 
 /**

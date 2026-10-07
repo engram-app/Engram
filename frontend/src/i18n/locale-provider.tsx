@@ -67,16 +67,21 @@ function LocaleProvider({
 	children: ReactNode;
 	loaders?: CatalogLoaders;
 }) {
-	const [locale, setLocaleState] = useState<Locale>(
-		() => getStoredLocale() ?? resolveLocale(navigator.languages),
-	);
+	// `nonce` changes on every pick, even of the language already chosen, so a
+	// catalog that failed to load gets another attempt instead of leaving the user stuck.
+	const [request, setRequest] = useState<{ locale: Locale; nonce: number }>(() => ({
+		locale: getStoredLocale() ?? resolveLocale(navigator.languages),
+		nonce: 0,
+	}));
+	const { locale } = request;
 	// The last catalog that loaded, tagged with its locale. It stays on screen while
 	// a newly selected language loads, so a switch never drops to English in between.
 	const [loaded, setLoaded] = useState<{ locale: Locale; catalog: Catalog }>();
 	const catalog = loaded?.catalog ?? NO_CATALOG;
 
 	useEffect(() => {
-		const load = loaders[locale];
+		const target = request.locale;
+		const load = loaders[target];
 		if (!load) {
 			return;
 		}
@@ -85,7 +90,7 @@ function LocaleProvider({
 			.then((mod) => {
 				// An empty catalog is a stub, not a language: keep what is shown.
 				if (current && mod && Object.keys(mod.default).length > 0) {
-					setLoaded({ locale, catalog: mod.default });
+					setLoaded({ locale: target, catalog: mod.default });
 				}
 			})
 			.catch(async (error: unknown) => {
@@ -95,7 +100,7 @@ function LocaleProvider({
 		return () => {
 			current = false;
 		};
-	}, [locale, loaders]);
+	}, [request, loaders]);
 
 	// The language of the catalog on screen, which lags `locale` until its load lands.
 	const renderedLocale = loaded?.locale ?? "en";
@@ -107,7 +112,7 @@ function LocaleProvider({
 	const setLocale = useCallback(
 		(next: Locale) => {
 			setStoredLocale(next);
-			setLocaleState(next);
+			setRequest((prev) => ({ locale: next, nonce: prev.nonce + 1 }));
 			// No loader (English): switch at once, and forget the old catalog so a later
 			// switch to another language does not show it while that one loads.
 			if (!loaders[next]) {
