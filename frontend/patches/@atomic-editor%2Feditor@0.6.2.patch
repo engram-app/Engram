@@ -25,6 +25,9 @@ index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-a1b391e05ee3b70a b/.bun-tag-a1b391e05ee3b70a
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-a39ca7365be6bc1c b/.bun-tag-a39ca7365be6bc1c
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-aaf59be8206d5639 b/.bun-tag-aaf59be8206d5639
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
@@ -35,7 +38,7 @@ diff --git a/node_modules/@atomic-editor/editor/.bun-tag-be1b91b2c5913cde b/.bun
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/styles/inline-preview.css b/dist/styles/inline-preview.css
-index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..0a97c4a33b79bb69e155e0a759df3ed3a2f28513 100644
+index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..e435f12a65f5cd7c933addfb5fd86cde6a866358 100644
 --- a/dist/styles/inline-preview.css
 +++ b/dist/styles/inline-preview.css
 @@ -464,8 +464,10 @@
@@ -71,7 +74,7 @@ index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..0a97c4a33b79bb69e155e0a759df3ed3
  .cm-atomic-table-cell-source .cm-atomic-link-wrap.active > .cm-atomic-mark {
    display: inline;
    color: var(--atomic-editor-fg-faint, #666);
-@@ -828,3 +834,174 @@
+@@ -828,3 +834,180 @@
  .cm-atomic-readonly .cm-atomic-table-cell-source {
    cursor: default;
  }
@@ -246,6 +249,12 @@ index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..0a97c4a33b79bb69e155e0a759df3ed3
 +.cm-atomic-table-drop-target[data-drop="row-after"] {
 +  box-shadow: inset 0 -3px 0 var(--atomic-editor-accent, #7c5cff);
 +}
++
++.cm-atomic-table-menu-item:disabled {
++  opacity: 0.4;
++  cursor: default;
++  background: transparent;
++}
 diff --git a/dist/table-widget.d.ts b/dist/table-widget.d.ts
 index ff02d57548388e468f73695f3bd45ec58be38160..d2f2a04758594f7b202cda3897ac7321021ad3c3 100644
 --- a/dist/table-widget.d.ts
@@ -279,7 +288,7 @@ index ff02d57548388e468f73695f3bd45ec58be38160..d2f2a04758594f7b202cda3897ac7321
  export declare function tables(config?: TablesConfig): Extension;
  export {};
 diff --git a/dist/table-widget.js b/dist/table-widget.js
-index aee407c4aaa2eea5a46c0fa28831dcc80985c783..9594437aab45df23184accaadee5ae12912945af 100644
+index aee407c4aaa2eea5a46c0fa28831dcc80985c783..7cd9816f57759f40b2fe85ac52ab7792653f79ef 100644
 --- a/dist/table-widget.js
 +++ b/dist/table-widget.js
 @@ -42,9 +42,22 @@ export function splitRowCells(line) {
@@ -1217,7 +1226,67 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..9594437aab45df23184accaadee5ae12
          // Enter mirrors Tab — advance to the next cell (appending a row past
          // the last one) instead of inserting a line break a single-line cell
          // can't represent. Shift reverses direction for both.
-@@ -849,6 +1625,7 @@ function openCellMenu(view, cell, x, y) {
+@@ -804,6 +1580,41 @@ function dispatchModel(view, wrap, nextModel) {
+         changes: { from: range.from, to: range.to, insert: next },
+     });
+ }
++// Sort the body rows by a column. Numbers compare by value ("2" < "10"), text
++// case-insensitively; empty cells go last in both directions. Stable.
++function sortTableByColumn(view, wrap, col, dir) {
++    const tbody = wrap.querySelector('tbody');
++    if (!tbody)
++        return;
++    const keyed = Array.from(tbody.querySelectorAll('tr')).map((tr, i) => ({
++        tr,
++        i,
++        text: readCellSource(tr.children[col] ?? tr),
++    }));
++    keyed.sort((a, b) => {
++        if (!a.text !== !b.text)
++            return a.text ? -1 : 1;
++        const cmp = a.text.localeCompare(b.text, undefined, { numeric: true, sensitivity: 'base' });
++        return (cmp * dir) || a.i - b.i;
++    });
++    tbody.append(...keyed.map((k) => k.tr));
++    syncHandles(view, wrap);
++    const any = wrap.querySelector('th, td');
++    if (any)
++        dispatchModelFromDom(view, any);
++}
++// Set one column's alignment (left / center / right) on its cells, then sync
++// the separator row in the document.
++function setColumnAlign(view, wrap, col, align) {
++    for (const tr of wrap.querySelectorAll('tr')) {
++        const cell = tr.children[col];
++        if (cell)
++            cell.dataset.align = align;
++    }
++    const any = wrap.querySelector('th, td');
++    if (any)
++        dispatchModelFromDom(view, any);
++}
+ function openCellMenu(view, cell, x, y) {
+     const wrap = cell.closest('.cm-atomic-table');
+     if (!wrap)
+@@ -833,6 +1644,17 @@ function openCellMenu(view, cell, x, y) {
+                 dispatchModel(view, wrap, m);
+             },
+         });
++        const rowCount = wrap.querySelectorAll('tbody tr').length;
++        items.push({
++            label: 'Move row up',
++            disabled: row <= 0,
++            action: () => moveTableLine(view, wrap, 'row', row, row - 1),
++        });
++        items.push({
++            label: 'Move row down',
++            disabled: row >= rowCount - 1,
++            action: () => moveTableLine(view, wrap, 'row', row, row + 1),
++        });
+         items.push({
+             label: 'Delete row',
+             action: () => {
+@@ -849,6 +1671,7 @@ function openCellMenu(view, cell, x, y) {
          action: () => {
              const m = readModelFromDom(wrap);
              m.header.splice(col, 0, '');
@@ -1225,7 +1294,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..9594437aab45df23184accaadee5ae12
              for (const r of m.rows)
                  r.splice(col, 0, '');
              dispatchModel(view, wrap, m);
-@@ -859,6 +1636,7 @@ function openCellMenu(view, cell, x, y) {
+@@ -859,6 +1682,7 @@ function openCellMenu(view, cell, x, y) {
          action: () => {
              const m = readModelFromDom(wrap);
              m.header.splice(col + 1, 0, '');
@@ -1233,7 +1302,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..9594437aab45df23184accaadee5ae12
              for (const r of m.rows)
                  r.splice(col + 1, 0, '');
              dispatchModel(view, wrap, m);
-@@ -874,6 +1652,7 @@ function openCellMenu(view, cell, x, y) {
+@@ -874,11 +1698,32 @@ function openCellMenu(view, cell, x, y) {
              if (m.header.length <= 1 || col < 0)
                  return;
              m.header.splice(col, 1);
@@ -1241,7 +1310,40 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..9594437aab45df23184accaadee5ae12
              for (const r of m.rows)
                  r.splice(col, 1);
              dispatchModel(view, wrap, m);
-@@ -1191,13 +1970,21 @@ const defaultLinkOpener = (url) => {
+         },
+     });
++    const colCount = wrap.querySelectorAll('thead th').length;
++    items.splice(items.findIndex((i) => i.label === 'Delete column'), 0, {
++        label: 'Move column left',
++        disabled: col <= 0,
++        action: () => moveTableLine(view, wrap, 'col', col, col - 1),
++    }, {
++        label: 'Move column right',
++        disabled: col >= colCount - 1,
++        action: () => moveTableLine(view, wrap, 'col', col, col + 1),
++    });
++    items.push('separator');
++    items.push({ label: 'Sort ascending', action: () => sortTableByColumn(view, wrap, col, 1) });
++    items.push({ label: 'Sort descending', action: () => sortTableByColumn(view, wrap, col, -1) });
++    items.push('separator');
++    for (const align of ['left', 'center', 'right']) {
++        items.push({
++            label: `Align ${align}`,
++            action: () => setColumnAlign(view, wrap, col, align),
++        });
++    }
+     let dismissed = false;
+     const dismiss = () => {
+         if (dismissed)
+@@ -908,6 +1753,7 @@ function openCellMenu(view, cell, x, y) {
+         btn.type = 'button';
+         btn.className = 'cm-atomic-table-menu-item';
+         btn.textContent = item.label;
++        btn.disabled = !!item.disabled;
+         btn.addEventListener('click', () => {
+             item.action();
+             dismiss();
+@@ -1191,13 +2037,21 @@ const defaultLinkOpener = (url) => {
  export const tableLinkClickFacet = Facet.define({
      combine: (values) => values[0] ?? defaultLinkOpener,
  });
