@@ -349,6 +349,18 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
     assert log =~ note.id
   end
 
+  # Runs after the seed committed, inside the batch loop: a failure here must
+  # not raise out and strand the rest of the vault. A non-UUID id forces the
+  # query to raise (Ecto.Query.CastError).
+  test "the second-lineage check never raises", ctx do
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert :ok = BackfillCrdtState.warn_if_second_lineage(ctx.user.id, "not-a-uuid")
+      end)
+
+    assert log =~ "second-lineage check failed"
+  end
+
   test "enqueue_missing/0 enqueues only for pairs that still have a seedable note", ctx do
     %{user: user, vault: vault} = ctx
     _ = legacy_note(user, vault, "legacy.md", "BODY")

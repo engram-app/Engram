@@ -272,7 +272,7 @@ defmodule Engram.Workers.BackfillCrdtState do
 
   # The kill is not atomic with the seed commit: a room can flush a tail on its
   # empty lineage in between, and the next bind unions it with the seed. Not
-  # preventable here, so make the duplicate detectable. Public only as a test
+  # preventable here, so make the duplicate detectable. Never raises. Public only as a test
   # seam: the race is not reproducible deterministically.
   @doc false
   @spec warn_if_second_lineage(Ecto.UUID.t(), Ecto.UUID.t()) :: :ok
@@ -288,6 +288,21 @@ defmodule Engram.Workers.BackfillCrdtState do
         Metadata.with_category(:warning, :sync, note_id: note_id)
       )
     end
+
+    :ok
+  rescue
+    # Never raises, like seed_note/2: it runs inside the batch loop, after the
+    # seed committed, and must not strand the notes after it.
+    e -> second_lineage_check_failed(note_id, e)
+  catch
+    _kind, reason -> second_lineage_check_failed(note_id, reason)
+  end
+
+  defp second_lineage_check_failed(note_id, reason) do
+    Logger.warning(
+      "crdt_state backfill: second-lineage check failed note_id=#{note_id} reason=#{Metadata.safe_reason(reason)}",
+      Metadata.with_category(:warning, :sync, note_id: note_id)
+    )
 
     :ok
   end
