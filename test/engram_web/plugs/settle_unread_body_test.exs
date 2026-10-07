@@ -69,16 +69,30 @@ defmodule EngramWeb.Plugs.SettleUnreadBodyTest do
     def call(conn, _opts), do: conn |> send_resp(401, "nope") |> halt()
   end
 
+  # Reports anything the plug raises: in the endpoint that exception would
+  # reach Phoenix and Sentry.PlugCapture.
+  defmodule Catcher do
+    def init(test), do: {test, SettleUnreadBody.init(RefuseRouter)}
+
+    def call(conn, {test, opts}) do
+      SettleUnreadBody.call(conn, opts)
+    rescue
+      e ->
+        send(test, {:raised, e})
+        reraise e, __STACKTRACE__
+    end
+  end
+
   describe "behind a real Bandit listener" do
     setup do
+      test = self()
+
       {:ok, pid} =
         start_supervised(
-          {Bandit,
-           plug: {SettleUnreadBody, RefuseRouter}, port: 0, ip: :loopback, startup_log: false}
+          {Bandit, plug: {Catcher, test}, port: 0, ip: :loopback, startup_log: false}
         )
 
       {:ok, {_ip, port}} = ThousandIsland.listener_info(pid)
-      test = self()
       id = "settle-#{inspect(make_ref())}"
 
       :telemetry.attach(
@@ -113,6 +127,17 @@ defmodule EngramWeb.Plugs.SettleUnreadBodyTest do
       :ok = :gen_tcp.send(sock, [post_head(1), "b"])
       assert status_line(sock) == "HTTP/1.1 401 Unauthorized"
       :gen_tcp.close(sock)
+    end
+
+    test "HTTP/1: a client that hangs up mid-drain raises nothing", %{port: port} do
+      {:ok, sock} = :gen_tcp.connect(~c"127.0.0.1", port, [:binary, active: false])
+
+      :ok = :gen_tcp.send(sock, [post_head(5_000_000), :binary.copy("a", 100_000)])
+      assert status_line(sock) == "HTTP/1.1 401 Unauthorized"
+      :gen_tcp.close(sock)
+
+      assert_receive {:bandit_stop, _error}, 5_000
+      refute_received {:raised, _}
     end
 
     # Bandit resets an unread HTTP/2 stream (RST_STREAM NO_ERROR) right after the

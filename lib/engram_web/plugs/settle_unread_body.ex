@@ -82,6 +82,14 @@ defmodule EngramWeb.Plugs.SettleUnreadBody do
     else
       conn
     end
+  rescue
+    # The response is already sent, so a client that hangs up or stalls during
+    # the drain is not a server bug: it is the same socket error Bandit's own
+    # post-response cleanup meets and handles quietly. Raising it here instead
+    # would surface it through Phoenix and Sentry.PlugCapture as a 500-class
+    # crash. Returning the conn hands the socket back to Bandit, which closes it
+    # as before. Nothing else is rescued.
+    _e in [Bandit.TransportError, Bandit.HTTPError] -> conn
   end
 
   def settle(conn, _drain_ms), do: conn
