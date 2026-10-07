@@ -173,10 +173,13 @@
    selection instead of the editor's. CodeMirror's base theme forces
    `highlight !important` on every focused element inside .cm-content (dark blue),
    so only an !important of higher specificity wins. This is the one place the
-   no-!important rule cannot hold. */
+   no-!important rule cannot hold. Keep the biome-ignore below: without it,
+   `biome check --write --unsafe` silently strips the !important and cell
+   selection goes back to dark blue. */
 .cm-editor .cm-content .cm-atomic-table-cell-source:focus::selection,
 .cm-editor .cm-content .cm-atomic-table-cell-source:focus ::selection {
-	background-color: var(--atomic-editor-selection-bg);
+	/* biome-ignore lint/complexity/noImportantStyles: must beat CodeMirror's own !important */
+	background-color: var(--atomic-editor-selection-bg) !important;
 }
 
 /* A link opens on click in edit mode (editor/link-open.ts), so it has to look

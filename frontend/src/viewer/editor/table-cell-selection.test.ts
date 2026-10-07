@@ -194,7 +194,7 @@ describe("the selection outline", () => {
 	test("an inner cell carries no edge", () => {
 		mount();
 		drag(0, 8); // the whole table; cell 4 is interior
-		const inner = cells()[4];
+		const [, , , , inner] = cells();
 		expect(inner?.classList.contains(SELECTED)).toBe(true);
 		for (const side of ["top", "right", "bottom", "left"]) {
 			expect(inner?.classList.contains(`cm-atomic-table-cell-sel-${side}`)).toBe(false);
