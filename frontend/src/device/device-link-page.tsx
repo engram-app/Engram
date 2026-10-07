@@ -579,7 +579,7 @@ function DeviceLinkPage() {
 						{arrivedWithCode && (
 							<p className="text-muted-foreground text-xs">
 								Syncing gives this device access to your notes. Continue only if you started this
-								link yourself, just now. If someone else sent you here, close this page.
+								link yourself. If someone else sent you here, close this page.
 							</p>
 						)}
 
