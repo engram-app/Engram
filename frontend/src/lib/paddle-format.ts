@@ -1,6 +1,6 @@
-import { formatDate as formatShortDate } from "./format-date";
 import { msg } from "@/i18n/msg";
 import type { Tn, Translate } from "@/i18n/translate";
+import { formatDate as formatShortDate } from "./format-date";
 
 // Structural alias — accepts both CheckoutEventsTimePeriod and TimePeriod
 interface TimePeriodLike {
