@@ -44,7 +44,9 @@ export function LanguageSelect({ className, iconOnly = false }: LanguageSelectPr
 			>
 				{iconOnly ? <LanguagesIcon /> : <SelectValue />}
 			</SelectTrigger>
-			<SelectContent>
+			{/* item-aligned positions the list over the selected value's text; an icon
+			    trigger has none, so the list lands off-screen. */}
+			<SelectContent position={iconOnly ? "popper" : "item-aligned"} align="end">
 				{LOCALES.map((code) => (
 					<SelectItem key={code} value={code} lang={code}>
 						{LOCALE_NAMES[code]}
