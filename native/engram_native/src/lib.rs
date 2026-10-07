@@ -174,22 +174,33 @@ macro_rules! sized_nif {
     };
 }
 
-/// `Links.Parser.extract/1`: `{[{position, kind, target_start, target_len,
-/// target, alias, anchor}], scrub_count}`, and the call's native peak. Each
-/// link is encoded as a term the moment it is built, so the output never
-/// exists as a Rust copy. Linear in the note; no size bound, notes of any
-/// size must index.
-fn link_extract<'a>(env: Env<'a>, content: &str) -> ((Vec<Term<'a>>, usize), usize) {
+/// `Links.Parser.extract/2`: `{[{position, kind, target_start, target_len,
+/// target, alias, anchor}], scrub_count, cut?}`, and the call's native peak.
+/// Each link is encoded as a term the moment it is built, so the output
+/// never exists as a Rust copy. Linear in the note. `limit` keeps the first
+/// N links (usize::MAX: all, for the rename rewrite, which needs every one);
+/// `cut?` says the limit dropped some.
+fn link_extract<'a>(
+    env: Env<'a>,
+    content: &str,
+    limit: usize,
+) -> ((Vec<Term<'a>>, usize, bool), usize) {
     memory::measured(|| {
         let mut terms = Vec::new();
-        let scrubs = links::extract(content, |(pos, kind, ts, tl, target, alias, anchor)| {
-            terms.push((pos, kind, ts, tl, target.as_ref(), alias, anchor.as_deref()).encode(env));
-        });
-        (terms, scrubs)
+        let (scrubs, cut) = links::extract(
+            content,
+            limit,
+            |(pos, kind, ts, tl, target, alias, anchor)| {
+                terms.push(
+                    (pos, kind, ts, tl, target.as_ref(), alias, anchor.as_deref()).encode(env),
+                );
+            },
+        );
+        (terms, scrubs, cut)
     })
 }
 
-sized_nif!(link_extract, link_extract_nif, link_extract_dirty_nif, <'a>(env, content: &str) [content] -> ((Vec<Term<'a>>, usize), usize));
+sized_nif!(link_extract, link_extract_nif, link_extract_dirty_nif, <'a>(env, content: &str, limit: usize) [content, limit] -> ((Vec<Term<'a>>, usize, bool), usize));
 
 /// `Helpers.extract_title/2` without the file-name fallback, and the peak.
 fn note_title(content: &str) -> (Option<String>, usize) {

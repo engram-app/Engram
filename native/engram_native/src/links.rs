@@ -304,7 +304,9 @@ pub type Link<'a> = (
 /// exists). Returns how many strings needed a UTF-8 scrub: a percent escape
 /// can decode to invalid bytes, and the caller reports those. The rules are
 /// `Links.Parser`'s, ported byte for byte and pinned by its golden set.
-pub fn extract<'a>(s: &'a str, mut emit: impl FnMut(Link<'a>)) -> usize {
+/// `limit` caps how many links are emitted (first by position); returns
+/// the scrub count and whether the cap cut any off.
+pub fn extract<'a>(s: &'a str, limit: usize, mut emit: impl FnMut(Link<'a>)) -> (usize, bool) {
     let mut raw = matches(s);
     // Stable, so a wiki link wins a tie, as the Elixir sort did; ties are
     // resolved after dropping matches with no target. `note_links` is unique
@@ -312,9 +314,13 @@ pub fn extract<'a>(s: &'a str, mut emit: impl FnMut(Link<'a>)) -> usize {
     raw.sort_by_key(|m| m.0);
     let mut scrubs = 0;
     let mut last = None;
+    let mut emitted = 0;
     for m in raw {
         if last == Some(m.0) {
             continue;
+        }
+        if emitted == limit {
+            return (scrubs, true);
         }
         let link = if m.1 < 2 {
             wiki_link(s, m)
@@ -323,10 +329,11 @@ pub fn extract<'a>(s: &'a str, mut emit: impl FnMut(Link<'a>)) -> usize {
         };
         if let Some(link) = link {
             last = Some(m.0);
+            emitted += 1;
             emit(link);
         }
     }
-    scrubs
+    (scrubs, false)
 }
 
 /// `String.trim/1` and `str::trim` agree: both use Unicode White_Space.
@@ -496,6 +503,21 @@ fn matches_segmented(s: &str, segment: usize) -> Vec<Raw> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extract_stops_at_the_limit_and_says_so() {
+        let note = "[[a]] [[b]] [[c]] [[d]]";
+        let run = |limit| {
+            let mut n = 0;
+            let (_, cut) = extract(note, limit, |_| n += 1);
+            (n, cut)
+        };
+        assert_eq!(run(usize::MAX), (4, false));
+        assert_eq!(run(4), (4, false));
+        assert_eq!(run(3), (3, true));
+        assert_eq!(run(0), (0, true));
+        assert_eq!(extract("no links", 0, |_| ()), (0, false));
+    }
 
     #[test]
     fn wiki_and_embed() {

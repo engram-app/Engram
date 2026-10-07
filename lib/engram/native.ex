@@ -37,7 +37,7 @@ defmodule Engram.Native do
   # dirty_nif, arity}`. Rust exports both; `sized/3` picks one by size.
   # Spelled out (not built from `name`) so a grep for either NIF lands here.
   @sized [
-    {:link_extract, :link_extract_nif, :link_extract_dirty_nif, 1},
+    {:link_extract, :link_extract_nif, :link_extract_dirty_nif, 2},
     {:note_title, :note_title_nif, :note_title_dirty_nif, 1},
     {:note_meta, :note_meta_nif, :note_meta_dirty_nif, 1},
     {:chunk, :chunk_nif, :chunk_dirty_nif, 3},
@@ -71,10 +71,11 @@ defmodule Engram.Native do
 
   @doc """
   Links for `Engram.Links.Parser`: `{[{position, kind, target_start,
-  target_len, target, alias, anchor}], scrub_count}`, in position order.
+  target_len, target, alias, anchor}], scrub_count, cut?}`, in position
+  order, the first `limit` of them (`cut?`: more were dropped).
   `content` must be valid UTF-8.
   """
-  def link_extract(content), do: sized(:link_extract, content, [content])
+  def link_extract(content, limit), do: sized(:link_extract, content, [content, limit])
 
   @doc """
   Chunks for `Engram.Parsers.Markdown.parse/2`: `[{text, context_text,

@@ -32,14 +32,38 @@ defmodule Engram.Links.Parser do
 
   # Matching, code/frontmatter exclusion and per-link cleaning (trim, `#`
   # and `|` splits, `<...>` destinations, percent-decoding, the external-URL
-  # check) all run in Rust: `Engram.Native.link_extract/1`, see
+  # check) all run in Rust: `Engram.Native.link_extract/2`, see
   # native/engram_native/src/links.rs. It returns links in position order,
   # one per position: `note_links` is unique on (source_note_id, position).
 
+  # The edges stored per note. One link costs ~250 B as BEAM terms and a
+  # row: 10 MB of `[[a]]` is 1.75M links and 713 MB. Real notes have
+  # hundreds; past this the first @max_links by position are kept and the
+  # overflow is counted (`[:engram, :links, :truncated]`), never an error:
+  # the note still saves, indexes and searches in full.
+  @max_links 20_000
+
+  @doc "Links of `content`, at most the first #{@max_links} by position."
   @spec extract(String.t()) :: [map()]
   def extract(content) when is_binary(content) do
+    {links, cut?} = extract(content, @max_links)
+    if cut?, do: :telemetry.execute([:engram, :links, :truncated], %{count: 1}, %{})
+    links
+  end
+
+  @doc """
+  Every link of `content`, uncapped. For the rename rewrite, which must
+  change each occurrence or leave it dangling; it does not store them.
+  """
+  @spec extract_all(String.t()) :: [map()]
+  def extract_all(content) when is_binary(content),
+    do: content |> extract(:infinity) |> elem(0)
+
+  defp extract(content, limit) do
     content = if String.valid?(content), do: content, else: Helpers.scrub_utf8(content, :write)
-    {links, scrubs} = Engram.Native.link_extract(content)
+    # usize::MAX for the NIF's "no limit".
+    limit = if limit == :infinity, do: 0xFFFF_FFFF_FFFF_FFFF, else: limit
+    {links, scrubs, cut?} = Engram.Native.link_extract(content, limit)
 
     # A percent escape can decode to invalid UTF-8 (`%FF`). Unscrubbed, that
     # target is encrypted, stored, then decrypted straight into a JSON
@@ -47,19 +71,19 @@ defmodule Engram.Links.Parser do
     # backlinks. Rust scrubs it; report each the way scrub_utf8/2 would.
     for _ <- 1..scrubs//1, do: Helpers.report_scrub(:write)
 
-    Enum.map(links, fn {position, kind, target_start, target_len, target, alias_, anchor} ->
-      %{
-        target: target,
-        target_raw: binary_part(content, target_start, target_len),
-        target_start: target_start,
-        target_len: target_len,
-        alias: alias_,
-        anchor: anchor,
-        # kind: 0 wiki, 1 wiki embed, 2 markdown, 3 markdown embed.
-        link_type: if(kind in [0, 2], do: "wikilink", else: "embed"),
-        form: if(kind < 2, do: :wiki, else: :markdown),
-        position: position
-      }
-    end)
+    {Enum.map(links, fn {position, kind, target_start, target_len, target, alias_, anchor} ->
+       %{
+         target: target,
+         target_raw: binary_part(content, target_start, target_len),
+         target_start: target_start,
+         target_len: target_len,
+         alias: alias_,
+         anchor: anchor,
+         # kind: 0 wiki, 1 wiki embed, 2 markdown, 3 markdown embed.
+         link_type: if(kind in [0, 2], do: "wikilink", else: "embed"),
+         form: if(kind < 2, do: :wiki, else: :markdown),
+         position: position
+       }
+     end), cut?}
   end
 end
