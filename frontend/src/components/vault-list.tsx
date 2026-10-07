@@ -43,10 +43,20 @@ export function countLabel(notes?: number, files?: number): string {
 	return parts.join(" · ");
 }
 
-// `pe-3` keeps the row borders clear of the overlaid scrollbar.
+// The scrollbar lives in a gutter that `-me-3` pulls out of the column and
+// `pe-3` hands back to the rows, so a scrolling list is exactly as wide as the
+// controls around it. `always` keeps the bar visible: a hover-only bar on a
+// list that fits whole rows gives no hint there is more below. 18rem shows four
+// and a half rows for the same reason, so the fifth is visibly cut off.
 export function VaultRows({ scroll, children }: { scroll: boolean; children: React.ReactNode }) {
 	const rows = <div className={cn("flex flex-col gap-2", scroll && "pe-3")}>{children}</div>;
-	return scroll ? <ScrollArea className="h-[19rem]">{rows}</ScrollArea> : rows;
+	return scroll ? (
+		<ScrollArea type="always" className="-me-3 h-[18rem]">
+			{rows}
+		</ScrollArea>
+	) : (
+		rows
+	);
 }
 
 // A picker with four vaults does not need a search box; one with forty is

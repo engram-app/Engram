@@ -773,7 +773,14 @@ function VaultPickerFieldset({
 			{hasExisting && (
 				<>
 					<div className="mb-1 flex items-center justify-between gap-2">
-						<legend className={sectionTitle}>Sync an existing vault</legend>
+						<legend className={sectionTitle}>
+							Sync an existing vault
+							{search.showFilter ? (
+								<span className="ml-2 font-normal text-muted-foreground text-sm">
+									(choose from {vaults.length} vaults)
+								</span>
+							) : null}
+						</legend>
 						<VaultSearchToggle search={search} />
 					</div>
 					<VaultSearchField search={search} />
@@ -804,9 +811,8 @@ function VaultPickerFieldset({
 			    create would 402. */}
 			{!atVaultCap && (
 				<>
-					{hasExisting && <hr className="my-2 border-border" />}
 					{hasExisting ? (
-						<p className={sectionTitle}>Or create a new vault</p>
+						<p className={cn(sectionTitle, "mt-4")}>Or create a new vault</p>
 					) : (
 						<legend className={sectionTitle}>Create a new vault</legend>
 					)}
