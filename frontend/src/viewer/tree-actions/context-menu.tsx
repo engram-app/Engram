@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { useT } from "@/i18n/locale-provider";
 import { ACTION_ICONS, type Action, type ActionId } from "./action-list";
 
 interface Props {
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export function ContextMenu({ actions, position, onPick, onClose }: Props) {
+	const { t } = useT();
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key === "Escape") {
@@ -58,7 +60,7 @@ export function ContextMenu({ actions, position, onPick, onClose }: Props) {
 					>
 						{/* aria-hidden so the menuitem's accessible name stays the label */}
 						<Icon aria-hidden="true" className="size-3.5 shrink-0" />
-						{a.label}
+						{t(a.label)}
 					</button>
 				);
 			})}

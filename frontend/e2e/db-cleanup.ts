@@ -5,6 +5,7 @@ const TEST_EMAIL_PATTERNS = [
 	"e2e-browser-%@test.com",
 	"e2e-theme-%@test.com",
 	"e2e-live-%@test.com",
+	"i18n-e2e-%@test.com",
 ];
 
 // Hosts safe to run DELETE against. Anything else aborts.

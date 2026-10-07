@@ -37,4 +37,40 @@ describe("SettingsSectionCard", () => {
 		);
 		expect(screen.getByRole("heading", { name: "Sessions" })).toBeInTheDocument();
 	});
+
+	it("renders a header action and lets the header wrap it below on narrow widths", () => {
+		render(
+			<SettingsSectionCard title="Appearance" headerAction={<button type="button">act</button>} />,
+		);
+		expect(screen.getByRole("button", { name: "act" })).toBeInTheDocument();
+		const header = screen.getByRole("heading", { name: "Appearance" }).closest("header");
+		expect(header?.className).toContain("flex-wrap");
+	});
+
+	it("renders without children and leaves no spacing below the header", () => {
+		render(<SettingsSectionCard title="Language" headerAction={<span>ctl</span>} />);
+		const header = screen.getByRole("heading", { name: "Language" }).closest("header");
+		expect(header?.className).not.toContain("mb-4");
+	});
+
+	it("keeps the header spacing when there is a body", () => {
+		render(
+			<SettingsSectionCard title="Profile">
+				<p>body</p>
+			</SettingsSectionCard>,
+		);
+		const header = screen.getByRole("heading", { name: "Profile" }).closest("header");
+		expect(header?.className).toContain("mb-4");
+	});
+
+	it("centers the action against the title block only when asked", () => {
+		render(<SettingsSectionCard title="A" headerAction={<span>x</span>} centerAction />);
+		render(<SettingsSectionCard title="B" headerAction={<span>y</span>} />);
+		expect(screen.getByRole("heading", { name: "A" }).closest("header")?.className).toContain(
+			"items-center",
+		);
+		expect(screen.getByRole("heading", { name: "B" }).closest("header")?.className).toContain(
+			"items-start",
+		);
+	});
 });

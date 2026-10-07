@@ -1,12 +1,16 @@
 import { ClerkProvider, useAuth, useClerk } from "@clerk/react";
 import { dark } from "@clerk/themes";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { setTokenGetter } from "../api/client";
 import { useMe } from "../api/queries";
 import { queryClient } from "../api/query-client";
 import { useConfig } from "../config-context";
+import { useT } from "../i18n/locale-provider";
+import type { Locale } from "../i18n/locales";
+import { type ClerkLocalization, clerkLocalizationLoaders } from "../i18n/vendor-locales";
 import { getAppRouter } from "../router";
 import { ROUTES } from "../routes";
+import { captureError } from "../sentry";
 import { useTheme } from "../theme/theme-provider";
 import { type AuthAdapter, AuthContext } from "./auth-context";
 import { rememberSignupUser } from "./signup-rejection";
@@ -92,6 +96,37 @@ function ClerkAdapterInner({ children }: { children: React.ReactNode }) {
 	return <AuthContext.Provider value={adapter}>{children}</AuthContext.Provider>;
 }
 
+// Clerk's components follow the rendered app locale. The catalog is a lazy
+// chunk per language, so English (undefined) shows until it lands, and stays on
+// a failed load. Tagged with its locale so a stale load is never applied.
+function useClerkLocalization(): ClerkLocalization | undefined {
+	const { renderedLocale } = useT();
+	const [loaded, setLoaded] = useState<{ locale: Locale; localization: ClerkLocalization }>();
+
+	useEffect(() => {
+		const load = clerkLocalizationLoaders[renderedLocale];
+		if (!load) {
+			return;
+		}
+		let current = true;
+		load()
+			.then((localization) => {
+				// undefined: vite:preloadError's preventDefault() resolves the preload to nothing.
+				if (current && localization) {
+					setLoaded({ locale: renderedLocale, localization });
+				}
+			})
+			.catch(async (error: unknown) => {
+				await captureError(error);
+			});
+		return () => {
+			current = false;
+		};
+	}, [renderedLocale]);
+
+	return loaded?.locale === renderedLocale ? loaded.localization : undefined;
+}
+
 // Clerk passes the post-auth redirect target as an ABSOLUTE URL when it crosses
 // (or might cross) origins — including the in-origin case after an OAuth
 // callback completes. React Router's `navigate("https://app.engram.page/")`
@@ -112,6 +147,7 @@ export default function ClerkAuthProvider({ children }: { children: React.ReactN
 	const { resolved } = useTheme();
 	const config = useConfig();
 	const clerkPubKey = config.clerkPublishableKey;
+	const localization = useClerkLocalization();
 
 	const appearance = useMemo(
 		() => ({
@@ -133,6 +169,7 @@ export default function ClerkAuthProvider({ children }: { children: React.ReactN
 		<ClerkProvider
 			publishableKey={clerkPubKey}
 			appearance={appearance}
+			localization={localization}
 			// clerk-telemetry.com is not in our connect-src, so every event is a
 			// pair of CSP violations in the console. Turning the collector off beats
 			// widening the policy for a third-party host we get nothing back from.

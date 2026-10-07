@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useT } from "@/i18n/locale-provider";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -48,6 +49,7 @@ export function RenameInput({
 	commitOnBlur,
 	className,
 }: Props) {
+	const { t } = useT();
 	const [value, setValue] = useState(initial);
 	const inputRef = useRef<HTMLInputElement>(null);
 	// Enter commits, and the blur that follows as focus moves away would commit
@@ -91,7 +93,7 @@ export function RenameInput({
 			<input
 				ref={inputRef}
 				data-testid="tree-rename-input"
-				aria-label={`Rename ${kind}`}
+				aria-label={kind === "file" ? t("Rename file") : t("Rename folder")}
 				type="text"
 				value={value}
 				onChange={(e) => {

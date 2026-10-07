@@ -7,6 +7,7 @@
       "dependencies": {
         "@atomic-editor/editor": "0.6.2",
         "@base-ui/react": "^1.8.0",
+        "@clerk/localizations": "4.17.0",
         "@clerk/react": "^6.15.1",
         "@clerk/themes": "^2.4.57",
         "@codemirror/autocomplete": "^6.20.3",
@@ -210,6 +211,8 @@
     "@chevrotain/utils": ["@chevrotain/utils@11.1.2", "", {}, "sha512-4mudFAQ6H+MqBTfqLmU7G1ZwRzCLfJEooL/fsF6rCX5eePMbGhoy5n4g+G4vlh2muDcsCTJtL+uKbOzWxs5LHA=="],
 
     "@clerk/backend": ["@clerk/backend@3.20.1", "", { "dependencies": { "@clerk/shared": "^4.36.0", "standardwebhooks": "^1.0.0", "tslib": "2.8.1" } }, "sha512-s07oW5yoFtnMbIzzjX61E+s8p278IBNlbPH2obEqNKNVLVb3SNR+UWERBiT1LgTp2LL3cdJmdNCvIaVTaGKMEA=="],
+
+    "@clerk/localizations": ["@clerk/localizations@4.17.0", "", { "dependencies": { "@clerk/shared": "^4.32.0" } }, "sha512-64CJg3ybsOyYf6XSYGeOMYJOq86W6yVYzHNtq8j3gdRUTU1oIKIZWuOUAr9Be/vneP6glK2OHPzxhIzNJyaaKw=="],
 
     "@clerk/react": ["@clerk/react@6.16.1", "", { "dependencies": { "@clerk/shared": "^4.33.0", "tslib": "2.8.1" }, "peerDependencies": { "react": "^18.0.0 || ~19.0.3 || ~19.1.4 || ~19.2.3 || ~19.3.0-0", "react-dom": "^18.0.0 || ~19.0.3 || ~19.1.4 || ~19.2.3 || ~19.3.0-0" } }, "sha512-fYNiouRyVaEAKz8PZwWx7Y/jLnX0OxSplELfc+8VezgU36Xjx79Qu8xnr0XLhF/zwAuj+Avguvz60JbeIiiJ0Q=="],
 

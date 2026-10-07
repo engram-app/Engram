@@ -2,8 +2,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Plug } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
-
 import { Button } from "@/components/ui/button";
+import { useT } from "@/i18n/locale-provider";
+import { intlLocale } from "@/lib/intl-locale";
 
 import { api } from "../api/client";
 import { type Connection, useConnections } from "../api/queries";
@@ -26,12 +27,14 @@ export function ExistingConnectionsPanel({
 	kind: "mcp" | "obsidian";
 	onChanged: () => void;
 }) {
+	const { t, renderedLocale } = useT();
+	const localeTag = intlLocale(renderedLocale);
 	const { data: connections, isLoading } = useConnections();
 	const qc = useQueryClient();
 	const [busyId, setBusyId] = useState<string | null>(null);
 
 	if (isLoading) {
-		return <p className="text-muted-foreground text-sm">Loading current connection…</p>;
+		return <p className="text-muted-foreground text-sm">{t("Loading current connection…")}</p>;
 	}
 
 	const existing = (connections ?? []).filter((c) => c.kind === kind);
@@ -49,10 +52,10 @@ export function ExistingConnectionsPanel({
 			const path = c.kind === "obsidian" ? `/connections/device/${id}` : `/connections/oauth/${id}`;
 			await api.del(path);
 			await qc.invalidateQueries({ queryKey: ["connections"] });
-			toast.success("Disconnected. Retry the new connection now.");
+			toast.success(t("Disconnected. Retry the new connection now."));
 			onChanged();
 		} catch {
-			toast.error("Couldn't disconnect. Try Settings → Connections.");
+			toast.error(t("Couldn't disconnect. Try Settings → Connections."));
 		} finally {
 			setBusyId(null);
 		}
@@ -60,7 +63,7 @@ export function ExistingConnectionsPanel({
 
 	return (
 		<div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
-			<p className="mb-2 font-medium text-foreground">Currently connected:</p>
+			<p className="mb-2 font-medium text-foreground">{t("Currently connected:")}</p>
 			<ul className="space-y-2">
 				{existing.map((c, i) => {
 					const id = connectionId(c);
@@ -81,10 +84,12 @@ export function ExistingConnectionsPanel({
 									</div>
 								)}
 								<span className="truncate text-foreground">
-									{c.name ?? "(unnamed)"}
+									{c.name ?? t("(unnamed)")}
 									{c.connected_at ? (
 										<span className="ml-2 text-muted-foreground text-xs">
-											since {new Date(c.connected_at).toLocaleDateString()}
+											{t("since {date}", {
+												date: new Date(c.connected_at).toLocaleDateString(localeTag),
+											})}
 										</span>
 									) : null}
 								</span>
@@ -97,7 +102,7 @@ export function ExistingConnectionsPanel({
 									disabled={busyId === id}
 									onClick={() => disconnect(c)}
 								>
-									{busyId === id ? "Disconnecting…" : "Disconnect"}
+									{busyId === id ? t("Disconnecting…") : t("Disconnect")}
 								</Button>
 							) : null}
 						</li>

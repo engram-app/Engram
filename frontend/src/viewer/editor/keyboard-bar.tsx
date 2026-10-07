@@ -22,6 +22,8 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { yUndoManagerKeymap } from "y-codemirror.next";
 import { Button } from "@/components/ui/button";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { useT } from "@/i18n/locale-provider";
+import { msg } from "@/i18n/msg";
 import {
 	indentSelection,
 	insertLink,
@@ -93,32 +95,32 @@ const COMMAND_GROUPS: ReadonlyArray<
 	ReadonlyArray<{ label: string; Icon: LucideIcon; act?: (view: EditorView) => void }>
 > = [
 	[
-		{ label: "Undo", Icon: Undo2, act: undoEdit },
-		{ label: "Redo", Icon: Redo2, act: redoEdit },
+		{ label: msg("Undo"), Icon: Undo2, act: undoEdit },
+		{ label: msg("Redo"), Icon: Redo2, act: redoEdit },
 	],
 	[
-		{ label: "Bold", Icon: Bold, act: (v) => toggleWrap(v, "**") },
-		{ label: "Italic", Icon: Italic, act: (v) => toggleWrap(v, "*") },
-		{ label: "Strikethrough", Icon: Strikethrough, act: (v) => toggleWrap(v, "~~") },
-		{ label: "Code", Icon: Code, act: toggleCode },
+		{ label: msg("Bold"), Icon: Bold, act: (v) => toggleWrap(v, "**") },
+		{ label: msg("Italic"), Icon: Italic, act: (v) => toggleWrap(v, "*") },
+		{ label: msg("Strikethrough"), Icon: Strikethrough, act: (v) => toggleWrap(v, "~~") },
+		{ label: msg("Code"), Icon: Code, act: toggleCode },
 	],
 	[
 		// No `act`: this is the one button that opens a panel — the level row —
 		// rather than editing the document.
-		{ label: "Heading", Icon: Heading },
-		{ label: "Quote", Icon: Quote, act: toggleQuote },
-		{ label: "Bullet list", Icon: List, act: (v) => toggleList(v, false) },
-		{ label: "Numbered list", Icon: ListOrdered, act: (v) => toggleList(v, true) },
-		{ label: "Toggle checkbox", Icon: SquareCheckBig, act: toggleCheckbox },
+		{ label: msg("Heading"), Icon: Heading },
+		{ label: msg("Quote"), Icon: Quote, act: toggleQuote },
+		{ label: msg("Bullet list"), Icon: List, act: (v) => toggleList(v, false) },
+		{ label: msg("Numbered list"), Icon: ListOrdered, act: (v) => toggleList(v, true) },
+		{ label: msg("Toggle checkbox"), Icon: SquareCheckBig, act: toggleCheckbox },
 		{
-			label: "Outdent",
+			label: msg("Outdent"),
 			Icon: IndentDecrease,
 			act: (v) => {
 				outdentSelection(v);
 			},
 		},
 		{
-			label: "Indent",
+			label: msg("Indent"),
 			Icon: IndentIncrease,
 			act: (v) => {
 				indentSelection(v);
@@ -128,8 +130,8 @@ const COMMAND_GROUPS: ReadonlyArray<
 	[
 		// Two link buttons on purpose: the wikilink one opens the note picker,
 		// the other is for an external URL you are about to paste.
-		{ label: "Wiki link", Icon: Brackets, act: insertWikiLink },
-		{ label: "Link", Icon: Link, act: insertLink },
+		{ label: msg("Wiki link"), Icon: Brackets, act: insertWikiLink },
+		{ label: msg("Link"), Icon: Link, act: insertLink },
 	],
 ];
 
@@ -158,6 +160,7 @@ const TOOLBAR_OFFSET_VAR = "--editor-toolbar-offset";
  * over the document with no keyboard under it is just lost height.
  */
 export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
+	const { t } = useT();
 	const isDesktop = useMediaQuery("(min-width: 768px)");
 	const focused = useEditorFocused();
 	const inset = useKeyboardInset();
@@ -232,7 +235,7 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 		<nav
 			ref={barRef}
 			role="toolbar"
-			aria-label="Editor actions"
+			aria-label={t("Editor actions")}
 			// Docked to the bottom of the layout viewport and lifted by the measured
 			// inset. Where only the visual viewport shrank (iOS, Chrome 108+) the
 			// inset is the keyboard height and this lifts clear of it; where the
@@ -266,7 +269,7 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 		>
 			{headingsOpen ? (
 				<section
-					aria-label="Heading level"
+					aria-label={t("Heading level")}
 					className="flex items-center justify-around border-border border-b px-2 py-1.5 [&>button]:size-11"
 				>
 					{HEADING_LEVELS.map((level) => (
@@ -274,7 +277,7 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 							key={level}
 							variant="ghost"
 							size="icon"
-							aria-label={`Heading ${level}`}
+							aria-label={t("Heading {level}", { level })}
 							onClick={run((v) => {
 								setHeading(v, level);
 								setHeadingsOpen(false);
@@ -294,7 +297,7 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 			    pointerdown preventDefault, which governs focus, not scrolling.
 			    Order is grouped by kind, since half the row is always off screen. */}
 			<section
-				aria-label="Editor commands"
+				aria-label={t("Editor commands")}
 				className="flex touch-pan-x items-center gap-2 overflow-x-auto px-2 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>button]:size-11 [&>button]:shrink-0"
 			>
 				{COMMAND_GROUPS.flat().map(({ label, Icon, act }) => (
@@ -302,7 +305,7 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 						key={label}
 						variant="ghost"
 						size="icon"
-						aria-label={label}
+						aria-label={t(label)}
 						// No `act` means the panel button; see COMMAND_GROUPS.
 						aria-expanded={act ? undefined : headingsOpen}
 						onClick={act ? run(act) : () => setHeadingsOpen((open) => !open)}

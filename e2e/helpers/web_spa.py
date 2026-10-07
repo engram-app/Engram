@@ -51,7 +51,11 @@ class WebSpaPeer:
         self._browser = await self._pw.chromium.launch(
             headless=not headed, args=["--no-sandbox", "--disable-gpu"]
         )
-        self._ctx = await self._browser.new_context(base_url=self.base_url)
+        # The SPA follows navigator.languages; pin English so assertions on UI text
+        # do not depend on the machine's locale.
+        self._ctx = await self._browser.new_context(
+            base_url=self.base_url, locale="en-US"
+        )
         self._page = await self._ctx.new_page()
 
     async def open_note(self, note_id: str, vault_id: str) -> None:
@@ -120,7 +124,9 @@ class WebSpaPeer:
     def property_value_locator(self, key: str):
         """The VALUE field of property `key`. `aria-label` is `"<key> value"`
         (property-fields.tsx), which is stable across the type variants."""
-        return self._page.get_by_test_id(f"property-row-{key}").get_by_label(f"{key} value")
+        return self._page.get_by_test_id(f"property-row-{key}").get_by_label(
+            f"{key} value"
+        )
 
     async def add_property(self, key: str, value: str) -> None:
         """Add a property through the real UI flow: Add property -> name ->

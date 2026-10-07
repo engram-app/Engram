@@ -2,7 +2,9 @@ import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { type EditorState, type Range, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, WidgetType } from "@codemirror/view";
 import type { SyntaxNode, Tree } from "@lezer/common";
+import type { Translate } from "@/i18n/translate";
 import { selectionTouches } from "./decoration-utils";
+import { translator } from "./translator";
 
 interface AttachmentEmbedOpts {
 	/** Embed target (`pic.png`, `img/pic.png`) to the attachment's vault path, or null. */
@@ -21,12 +23,18 @@ class EmbedWidget extends WidgetType {
 		private readonly alt: string,
 		private readonly width: number | null,
 		private readonly load: AttachmentEmbedOpts["load"],
+		private readonly t: Translate,
 	) {
 		super();
 	}
 
 	eq(other: EmbedWidget) {
-		return other.path === this.path && other.alt === this.alt && other.width === this.width;
+		return (
+			other.path === this.path &&
+			other.alt === this.alt &&
+			other.width === this.width &&
+			other.t === this.t
+		);
 	}
 
 	toDOM(view: EditorView) {
@@ -49,7 +57,8 @@ class EmbedWidget extends WidgetType {
 			})
 			.catch(() => {
 				wrap.classList.add("cm-attachment-embed-error");
-				wrap.textContent = `Couldn't load ${this.path}`;
+				const { t } = this;
+				wrap.textContent = t("Couldn't load {path}", { path: this.path });
 				view.requestMeasure();
 			});
 		return wrap;
@@ -110,6 +119,7 @@ function build(state: EditorState, opts: AttachmentEmbedOpts): DecorationSet {
 						width === null ? alias || target : target,
 						width,
 						opts.load,
+						state.facet(translator),
 					),
 				}).range(from, to),
 			);
@@ -134,7 +144,10 @@ export function attachmentEmbeds(opts: AttachmentEmbedOpts) {
 		StateField.define<DecorationSet>({
 			create: (state) => build(state, opts),
 			update: (deco, tr) =>
-				tr.docChanged || tr.selection || tr.effects.some((e) => e.is(refreshAttachmentEmbeds))
+				tr.docChanged ||
+				tr.selection ||
+				tr.startState.facet(translator) !== tr.state.facet(translator) ||
+				tr.effects.some((e) => e.is(refreshAttachmentEmbeds))
 					? build(tr.state, opts)
 					: deco,
 			provide: (f) => EditorView.decorations.from(f),

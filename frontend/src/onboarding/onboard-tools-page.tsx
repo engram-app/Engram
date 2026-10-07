@@ -1,7 +1,10 @@
 import { useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router";
 import { HelpTip } from "@/components/help-tip";
+import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useT } from "@/i18n/locale-provider";
+import { Trans } from "@/i18n/trans";
 import AuthPanel from "@/layout/auth-panel";
 import { heading, selectableRow } from "@/lib/ui-classes";
 import { track } from "../analytics/track";
@@ -21,6 +24,7 @@ interface ToolsFormProps {
 }
 
 function ToolsForm({ initialTools, isPending, hasError, isFree, onSubmit }: ToolsFormProps) {
+	const { t } = useT();
 	// Free tier is single-select, if the user arrives with multiple already
 	// saved, drop everything except the first so the UI invariant holds from
 	// the first render.
@@ -72,35 +76,40 @@ function ToolsForm({ initialTools, isPending, hasError, isFree, onSubmit }: Tool
 	return (
 		<AuthPanel className="flex flex-col gap-5">
 			<header className="flex flex-col gap-2">
-				<h1 className={heading}>Which AI tools do you use?</h1>
+				<h1 className={heading}>{t("Which AI tools do you use?")}</h1>
 				<p className="text-base text-foreground">
-					We'll tailor your setup around the tools you already work with.
+					{t("We'll tailor your setup around the tools you already work with.")}
 				</p>
 			</header>
 
 			{isFree ? (
 				<p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-muted-foreground text-sm">
-					Free tier, pick 1 to start.{" "}
-					<Link
-						to="/onboard/billing"
-						onClick={() => track("upgrade_link_clicked", { source: "tools_step" })}
-						className="font-medium text-foreground underline underline-offset-4"
-					>
-						Upgrade
-					</Link>{" "}
-					anytime for unlimited connections.
+					<Trans
+						text="Free tier, pick 1 to start. {upgrade} anytime for unlimited connections."
+						slots={{
+							upgrade: (
+								<Link
+									to="/onboard/billing"
+									onClick={() => track("upgrade_link_clicked", { source: "tools_step" })}
+									className="font-medium text-foreground underline underline-offset-4"
+								>
+									{t("Upgrade")}
+								</Link>
+							),
+						}}
+					/>
 				</p>
 			) : null}
 
 			<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
 				<ToolColumn
-					title="AI assistants"
+					title={t("AI assistants")}
 					options={TOOL_ASSISTANTS}
 					selected={tools}
 					onToggle={toggleTool}
 				/>
 				<ToolColumn
-					title="Coding tools"
+					title={t("Coding tools")}
 					options={TOOL_CODING}
 					selected={tools}
 					onToggle={toggleTool}
@@ -114,32 +123,32 @@ function ToolsForm({ initialTools, isPending, hasError, isFree, onSubmit }: Tool
 				<Checkbox
 					checked={tools.has(NO_AI_TOOL.slug)}
 					onCheckedChange={() => toggleNoAiTool()}
-					aria-label={NO_AI_TOOL.label}
+					aria-label={t(NO_AI_TOOL.label)}
 				/>
 				<span className="flex flex-col gap-0.5">
-					<span className="font-medium text-foreground text-sm">{NO_AI_TOOL.label}</span>
-					<span className="text-muted-foreground text-xs">{NO_AI_TOOL.hint}</span>
+					<span className="font-medium text-foreground text-sm">{t(NO_AI_TOOL.label)}</span>
+					<span className="text-muted-foreground text-xs">
+						{NO_AI_TOOL.hint ? t(NO_AI_TOOL.hint) : null}
+					</span>
 				</span>
 			</label>
 
 			<p className="text-muted-foreground text-sm">
-				Not a comprehensive list, pick <strong>Another MCP client</strong> if yours isn't here.
+				<Trans
+					text="Not a comprehensive list, pick {client} if yours isn't here."
+					slots={{ client: <strong>{t("Another MCP client")}</strong> }}
+				/>
 			</p>
 
 			{hasError ? (
 				<p role="alert" className="text-destructive text-sm">
-					Couldn't save your answers, please try again.
+					{t("Couldn't save your answers, please try again.")}
 				</p>
 			) : null}
 			<div className="flex items-center justify-end">
-				<button
-					type="button"
-					onClick={submit}
-					disabled={!canContinue}
-					className="rounded-lg bg-primary px-6 py-2 font-medium text-primary-foreground text-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-				>
-					{isPending ? "Saving…" : "Continue"}
-				</button>
+				<Button type="button" onClick={submit} disabled={!canContinue}>
+					{isPending ? t("Saving…") : t("Continue")}
+				</Button>
 			</div>
 		</AuthPanel>
 	);
@@ -153,6 +162,8 @@ interface ToolColumnProps {
 }
 
 function ToolColumn({ title, options, selected, onToggle }: ToolColumnProps) {
+	const { t } = useT();
+	const toolLabel = (opt: ToolOption) => (opt.translate ? t(opt.label) : opt.label);
 	return (
 		<fieldset className="flex flex-col gap-2">
 			<legend className="mb-2 font-semibold text-muted-foreground text-xs uppercase tracking-wider">
@@ -176,13 +187,16 @@ function ToolColumn({ title, options, selected, onToggle }: ToolColumnProps) {
 							className="flex items-center gap-3 rounded-lg border border-border border-dashed p-2.5"
 						>
 							<span className="flex items-center gap-3 opacity-60">
-								<Checkbox checked={false} disabled aria-label={opt.label} />
-								<ToolBadge slug={opt.slug} fallbackLabel={opt.label} />
+								<Checkbox checked={false} disabled aria-label={toolLabel(opt)} />
+								<ToolBadge slug={opt.slug} fallbackLabel={toolLabel(opt)} />
 							</span>
 							{/* Full opacity: the affordance has to stay legible even though
 							    the row it explains is greyed out. */}
-							<HelpTip label={`Why ${opt.label} can't be connected`} className="ms-auto">
-								{opt.unavailable}
+							<HelpTip
+								label={t("Why {tool} can't be connected", { tool: toolLabel(opt) })}
+								className="ms-auto"
+							>
+								{t(opt.unavailable)}
 							</HelpTip>
 						</div>
 					) : (
@@ -190,9 +204,9 @@ function ToolColumn({ title, options, selected, onToggle }: ToolColumnProps) {
 							<Checkbox
 								checked={selected.has(opt.slug)}
 								onCheckedChange={() => onToggle(opt.slug)}
-								aria-label={opt.label}
+								aria-label={toolLabel(opt)}
 							/>
-							<ToolBadge slug={opt.slug} fallbackLabel={opt.label} />
+							<ToolBadge slug={opt.slug} fallbackLabel={toolLabel(opt)} />
 						</label>
 					),
 				)}

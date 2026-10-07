@@ -67,7 +67,7 @@
 					"a11y": {
 						"noLabelWithoutControl": {
 							"level": "error",
-							"options": { "inputComponents": ["Checkbox"] }
+							"options": { "inputComponents": ["Checkbox", "Input"] }
 						}
 					},
 					"complexity": {
@@ -153,6 +153,10 @@
 		{
 			"includes": ["src/components/ui/input-group.tsx"],
 			"linter": { "rules": { "nursery": { "useTailwindShorthandClasses": "off" } } }
+		},
+		{
+			"includes": ["src/i18n/locale/*.ts"],
+			"linter": { "rules": { "style": { "useFilenamingConvention": "off" } } }
 		},
 		{
 			"includes": ["**/*.css"],

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
+import { useT } from "@/i18n/locale-provider";
 import LoadingPane from "./loading-pane";
 import PreviewColumn from "./preview-column";
 
@@ -21,6 +22,7 @@ const MAX_PAGE_WIDTH = 800;
 // centered max-w-[840px] card column with a ScrollArea — and stacks every page
 // in one scroll column over a muted gutter so the white pages stay distinct.
 export default function PdfView({ url, filename }: { url: string; filename: string }) {
+	const { t } = useT();
 	const containerRef = useRef<HTMLDivElement>(null);
 	const [numPages, setNumPages] = useState(0);
 	const [width, setWidth] = useState(0);
@@ -44,7 +46,11 @@ export default function PdfView({ url, filename }: { url: string; filename: stri
 					onLoadSuccess={({ numPages: loadedPages }) => setNumPages(loadedPages)}
 					className="flex flex-col items-center gap-4"
 					loading={<LoadingPane />}
-					error={<p className="p-2 text-destructive text-sm">Couldn&apos;t render {filename}.</p>}
+					error={
+						<p className="p-2 text-destructive text-sm">
+							{t("Couldn't render {filename}.", { filename })}
+						</p>
+					}
 				>
 					{Array.from({ length: numPages }, (_, i) => i + 1).map((pageNumber) => (
 						<Page

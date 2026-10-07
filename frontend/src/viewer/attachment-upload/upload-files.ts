@@ -1,5 +1,6 @@
 import { toast } from "sonner";
 import { LimitExceededError } from "@/api/client";
+import { englishT, type Translate } from "@/i18n/translate";
 import { uniqueAttachmentName } from "../attachment-blob";
 import { fileToBase64 } from "./file-to-base64";
 
@@ -47,7 +48,10 @@ export async function uploadFilesTo(opts: {
 	existing: { path: string }[];
 	files: File[];
 	folder: string;
+	/** The caller's translate function (`useT()`); English when omitted. */
+	t?: Translate;
 }): Promise<string[]> {
+	const t = opts.t ?? englishT;
 	const taken = [...opts.existing, ...reservedPaths(Date.now())];
 	const done: string[] = [];
 	for (const file of opts.files) {
@@ -70,7 +74,7 @@ export async function uploadFilesTo(opts: {
 			done.push(path);
 		} catch (err) {
 			if (!(err instanceof LimitExceededError)) {
-				toast.error(`Couldn't upload ${file.name}`);
+				toast.error(t("Couldn't upload {name}", { name: file.name }));
 			}
 		}
 	}

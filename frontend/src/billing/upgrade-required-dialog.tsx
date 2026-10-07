@@ -9,6 +9,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { useT } from "@/i18n/locale-provider";
 import { settingsTo } from "@/settings/settings-hash";
 
 import { ExistingConnectionsPanel } from "./existing-connections-panel";
@@ -37,6 +38,7 @@ export interface UpgradeRequiredDialogProps {
 }
 
 export function UpgradeRequiredDialog({ reason, open, onOpenChange }: UpgradeRequiredDialogProps) {
+	const { t } = useT();
 	const navigate = useNavigate();
 	const location = useLocation();
 	const { title, body } = copyFor(reason);
@@ -46,8 +48,8 @@ export function UpgradeRequiredDialog({ reason, open, onOpenChange }: UpgradeReq
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent>
 				<DialogHeader>
-					<DialogTitle>{title}</DialogTitle>
-					<DialogDescription>{body}</DialogDescription>
+					<DialogTitle>{t(title)}</DialogTitle>
+					<DialogDescription>{t(body)}</DialogDescription>
 				</DialogHeader>
 
 				{connKind ? (
@@ -61,7 +63,7 @@ export function UpgradeRequiredDialog({ reason, open, onOpenChange }: UpgradeReq
 							navigate(settingsTo("billing", location.search));
 						}}
 					>
-						Upgrade
+						{t("Upgrade")}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

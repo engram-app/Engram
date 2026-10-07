@@ -6,6 +6,8 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useT } from "@/i18n/locale-provider";
+import { msg } from "@/i18n/msg";
 import type { PropertyType } from "./property-types";
 
 const TYPES: PropertyType[] = ["text", "list", "number", "checkbox", "date", "datetime"];
@@ -13,6 +15,15 @@ const TYPES: PropertyType[] = ["text", "list", "number", "checkbox", "date", "da
 // Obsidian shows the property's type as the leading icon of the key cell, and
 // that icon IS the type picker. The old uppercase text label ate most of the
 // key column for something the icon says in 16px.
+const TYPE_LABELS: Record<PropertyType, string> = {
+	text: msg("text"),
+	list: msg("list"),
+	number: msg("number"),
+	checkbox: msg("checkbox"),
+	date: msg("date"),
+	datetime: msg("datetime"),
+};
+
 const TYPE_ICONS: Record<PropertyType, LucideIcon> = {
 	text: Text,
 	list: List,
@@ -35,6 +46,7 @@ export function PropertyTypeMenu({
 	 *  `onCloseAutoFocus`; focusing from `onSelect` is overwritten a tick later. */
 	focusAfterSelect?: () => HTMLInputElement | null;
 }) {
+	const { t } = useT();
 	const Icon = TYPE_ICONS[value];
 	// Only a SELECTION redirects focus. Escape and click-away are the user
 	// backing out, and there the trigger is the right place to land.
@@ -52,7 +64,7 @@ export function PropertyTypeMenu({
 				// Once the label became an icon the type was conveyed by pixels alone,
 				// so a screen reader could open the menu without ever being told what
 				// the property already is.
-				aria-label={`Property type: ${value}`}
+				aria-label={t("Property type: {type}", { type: t(TYPE_LABELS[value]) })}
 				// Obsidian's .metadata-property-icon: full row height, and a 4px
 				// leading gutter it fakes with a zero-width-space ::before.
 				className="ml-1 flex h-7 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
@@ -73,18 +85,18 @@ export function PropertyTypeMenu({
 					el.focus();
 				}}
 			>
-				{TYPES.map((t) => {
-					const ItemIcon = TYPE_ICONS[t];
+				{TYPES.map((type) => {
+					const ItemIcon = TYPE_ICONS[type];
 					return (
 						<DropdownMenuItem
-							key={t}
+							key={type}
 							onSelect={() => {
 								picked.current = true;
-								onChange(t);
+								onChange(type);
 							}}
 						>
 							<ItemIcon aria-hidden="true" className="size-4" />
-							{t}
+							{t(TYPE_LABELS[type])}
 						</DropdownMenuItem>
 					);
 				})}

@@ -1,5 +1,6 @@
 import { Search } from "lucide-react";
 import type { ComponentProps } from "react";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
 // The one search box: the Files/Search sidebar and the vault picker both render
@@ -9,11 +10,7 @@ export function SearchField({ className, ...props }: ComponentProps<"input">) {
 	return (
 		<label className={cn("relative block", className)}>
 			<Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-			<input
-				type="search"
-				className="w-full rounded-md border border-border bg-background py-1.5 pr-2 pl-7 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-				{...props}
-			/>
+			<Input type="search" className="pl-7" {...props} />
 		</label>
 	);
 }

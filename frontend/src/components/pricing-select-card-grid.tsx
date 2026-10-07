@@ -3,6 +3,7 @@ import { RadioGroup as RadioGroupPrimitive } from "radix-ui";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useT } from "@/i18n/locale-provider";
 import type { PriceData } from "@/lib/paddle-types";
 import { cn } from "@/lib/utils";
 
@@ -28,11 +29,12 @@ export function PricingSelectCardGrid({
 	badge,
 	badgePosition = "center",
 	isCurrent = false,
-	currentPlanLabel = "Current plan",
+	currentPlanLabel,
 	showInterval = true,
 	loading = false,
 	className,
 }: PricingSelectCardGridProps) {
+	const { t } = useT();
 	const { total, originalTotal, interval, trialPeriod } = priceData ?? {};
 
 	const showBadges = badge || isCurrent;
@@ -69,7 +71,9 @@ export function PricingSelectCardGrid({
 						{Boolean(badge) && (
 							<Badge className="bg-primary text-primary-foreground">{badge}</Badge>
 						)}
-						{Boolean(isCurrent) && <Badge variant="secondary">{currentPlanLabel}</Badge>}
+						{Boolean(isCurrent) && (
+							<Badge variant="secondary">{currentPlanLabel ?? t("Current plan")}</Badge>
+						)}
 					</div>
 				)}
 
@@ -83,10 +87,14 @@ export function PricingSelectCardGrid({
 					)}
 					<div className="mt-2 font-bold text-2xl">{total}</div>
 					{Boolean(showInterval && interval) && (
-						<div className="text-muted-foreground text-xs">per {interval}</div>
+						<div className="text-muted-foreground text-xs">
+							{t("per {interval}", { interval: interval ?? "" })}
+						</div>
 					)}
 					{Boolean(trialPeriod) && (
-						<div className="mt-1 text-muted-foreground text-xs">{trialPeriod} free trial</div>
+						<div className="mt-1 text-muted-foreground text-xs">
+							{t("{trialPeriod} free trial", { trialPeriod: trialPeriod ?? "" })}
+						</div>
 					)}
 				</CardHeader>
 

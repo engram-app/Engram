@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { useT } from "@/i18n/locale-provider";
 import { DiscordIcon } from "./discord-icon";
 import { SettingsSectionCard } from "./section-card";
 
@@ -6,15 +7,16 @@ import { SettingsSectionCard } from "./section-card";
 export const DISCORD_INVITE_URL = "https://discord.gg/NG9Vn9VcPS";
 
 export function CommunitySection() {
+	const { t } = useT();
 	return (
 		<SettingsSectionCard
-			title="Community"
-			description="Get help, report issues, and talk to other Engram users."
+			title={t("Community")}
+			description={t("Get help, report issues, and talk to other Engram users.")}
 		>
-			<Button asChild variant="outline" size="sm" className="gap-2">
+			<Button asChild variant="outline">
 				<a href={DISCORD_INVITE_URL} target="_blank" rel="noopener noreferrer">
 					<DiscordIcon />
-					Join our Discord
+					{t("Join our Discord")}
 				</a>
 			</Button>
 		</SettingsSectionCard>

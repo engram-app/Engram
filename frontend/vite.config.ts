@@ -174,6 +174,9 @@ export default defineConfig({
 	},
 	server: {
 		port: 5173,
+		// Dev-only: lets a cloudflared quick tunnel (https://<id>.trycloudflare.com)
+		// reach the dev server, e.g. to see Paddle's real checkout frame.
+		allowedHosts: [".trycloudflare.com"],
 		proxy: {
 			// changeOrigin rewrites the Host header to the target — required when
 			// VITE_API_TARGET points at a remote host routed by Host (e.g. Cloudflare);
@@ -196,6 +199,9 @@ export default defineConfig({
 			},
 			// OAuth API endpoints — Phoenix-served JSON. /oauth/consent is a SPA
 			// route (React renders consent UI) so we DON'T proxy that one.
+			// Paddle notification destination, so one tunnel to :5173 also carries
+			// webhooks to Phoenix.
+			"^/webhooks/": { target: apiTarget, changeOrigin: true },
 			"/oauth/register": { target: apiTarget, changeOrigin: true },
 			"/oauth/token": { target: apiTarget, changeOrigin: true },
 			"/oauth/revoke": { target: apiTarget, changeOrigin: true },

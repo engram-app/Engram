@@ -1,3 +1,4 @@
+import { useT } from "@/i18n/locale-provider";
 import { mapPreviewToBreakdownData } from "@/lib/plan-change-breakdown-utils";
 import { PlanChangeBreakdown, type PlanChangeBreakdownProps } from "./plan-change-breakdown";
 
@@ -28,6 +29,7 @@ export function PaddlePlanChangeBreakdown({
 	previewResponse,
 	...uiProps
 }: PaddlePlanChangeBreakdownProps) {
-	const breakdown = mapPreviewToBreakdownData(previewResponse);
+	const { t } = useT();
+	const breakdown = mapPreviewToBreakdownData(previewResponse, t);
 	return <PlanChangeBreakdown breakdown={breakdown} {...uiProps} />;
 }

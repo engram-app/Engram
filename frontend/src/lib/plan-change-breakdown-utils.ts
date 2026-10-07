@@ -1,3 +1,4 @@
+import type { Translate } from "@/i18n/translate";
 import { parseAmount } from "@/lib/paddle-format";
 import type {
 	PlanChangeBreakdownData,
@@ -83,7 +84,11 @@ interface BreakdownPreviewResponse {
 	recurringTransactionDetails?: RecurringTransactionDetails | null;
 }
 
-function mapLineItems(items: LineItem[], currencyCode: string): PlanChangeLineItemData[] {
+function mapLineItems(
+	items: LineItem[],
+	currencyCode: string,
+	t: Translate,
+): PlanChangeLineItemData[] {
 	return items.map((item) => {
 		const hasProration = item.proration !== undefined;
 		let prorationPeriod: string | undefined;
@@ -95,7 +100,10 @@ function mapLineItems(items: LineItem[], currencyCode: string): PlanChangeLineIt
 				const end = new Date(item.proration.billingPeriod.endsAt);
 				const totalDays = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
 				const proratedDays = Math.round(totalDays * rate);
-				prorationPeriod = `${proratedDays} of ${totalDays} days`;
+				prorationPeriod = t("{prorated} of {total} days", {
+					prorated: proratedDays,
+					total: totalDays,
+				});
 			}
 		}
 
@@ -138,6 +146,7 @@ function mapTotals(
  * Pass `collectionMode` directly to `<PlanChangeBreakdown>` as a prop.
  *
  * @param preview - Subscription update preview response
+ * @param t - Translator from `useT()`
  * @returns Mapped breakdown data for `<PlanChangeBreakdown />`
  *
  * @example
@@ -145,10 +154,11 @@ function mapTotals(
  *   items: [{ priceId: newPriceId, quantity: 1 }],
  *   prorationBillingMode: "prorated_immediately",
  * })
- * const data = mapPreviewToBreakdownData(preview)
+ * const data = mapPreviewToBreakdownData(preview, t)
  */
 export function mapPreviewToBreakdownData(
 	preview: BreakdownPreviewResponse,
+	t: Translate,
 ): PlanChangeBreakdownData {
 	const {
 		currencyCode,
@@ -179,7 +189,7 @@ export function mapPreviewToBreakdownData(
 	let immediateSectionData: PlanChangeTransactionSectionData | undefined;
 	if (immediateTransaction) {
 		immediateSectionData = {
-			lineItems: mapLineItems(immediateTransaction.details.lineItems, currencyCode),
+			lineItems: mapLineItems(immediateTransaction.details.lineItems, currencyCode, t),
 			totals: mapTotals(immediateTransaction.details.totals, currencyCode),
 		};
 	}
@@ -188,7 +198,7 @@ export function mapPreviewToBreakdownData(
 	if (nextTransaction) {
 		nextSectionData = {
 			billingDate: nextTransaction.billingPeriod?.startsAt ?? undefined,
-			lineItems: mapLineItems(nextTransaction.details.lineItems, currencyCode),
+			lineItems: mapLineItems(nextTransaction.details.lineItems, currencyCode, t),
 			totals: mapTotals(nextTransaction.details.totals, currencyCode),
 		};
 	}
@@ -196,7 +206,7 @@ export function mapPreviewToBreakdownData(
 	let recurringSectionData: PlanChangeTransactionSectionData | undefined;
 	if (recurringTransactionDetails) {
 		recurringSectionData = {
-			lineItems: mapLineItems(recurringTransactionDetails.lineItems, currencyCode),
+			lineItems: mapLineItems(recurringTransactionDetails.lineItems, currencyCode, t),
 			totals: mapTotals(recurringTransactionDetails.totals, currencyCode),
 		};
 	}

@@ -18,6 +18,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useT } from "@/i18n/locale-provider";
+import { msg } from "@/i18n/msg";
+import { intlLocale } from "@/lib/intl-locale";
 import { formatBillingCycle, formatDate, formatMoney } from "@/lib/paddle-format";
 import type { SubscriptionStatusData } from "@/lib/paddle-types";
 import { cn } from "@/lib/utils";
@@ -31,34 +34,36 @@ const STATUS_CONFIG: Record<
 	{ label: string; icon: React.ElementType; className: string }
 > = {
 	active: {
-		label: "Active",
+		label: msg("Active"),
 		icon: CheckCircle2,
 		className: "bg-success/15 text-success-foreground border-success/30",
 	},
 	trialing: {
-		label: "Trial",
+		label: msg("Trial"),
 		icon: Sparkles,
 		className: "bg-info/15 text-info-foreground border-info/30",
 	},
 	past_due: {
-		label: "Past due",
+		label: msg("Past due"),
 		icon: AlertCircle,
 		className: "bg-destructive/15 text-destructive border-destructive/30",
 	},
 	paused: {
-		label: "Paused",
+		label: msg("Paused"),
 		icon: PauseCircle,
 		className: "bg-warning/15 text-warning-foreground border-warning/30",
 	},
 	canceled: {
-		label: "Canceled",
+		label: msg("Canceled"),
 		icon: MinusCircle,
 		className: "bg-muted text-muted-foreground border-border",
 	},
 };
 
 function StatusBadge({ status }: { status: SubscriptionStatus }) {
-	const config = STATUS_CONFIG[status] ?? {
+	const { t } = useT();
+	const known = STATUS_CONFIG[status];
+	const config = known ?? {
 		label: status.replace(/_/gu, " ").replace(/\b\w/gu, (c) => c.toUpperCase()),
 		icon: AlertCircle,
 		className: "bg-muted text-muted-foreground border-border",
@@ -67,7 +72,7 @@ function StatusBadge({ status }: { status: SubscriptionStatus }) {
 	return (
 		<Badge variant="outline" className={cn("gap-1 font-medium", config.className)}>
 			<Icon className="size-3" />
-			{config.label}
+			{known ? t(known.label) : config.label}
 		</Badge>
 	);
 }
@@ -108,11 +113,11 @@ function getNextBillingLabel(
 	}
 	switch (status) {
 		case "trialing":
-			return "First billing";
+			return msg("First billing {date}");
 		case "past_due":
-			return "Payment due";
+			return msg("Payment due {date}");
 		case "active":
-			return "Next billing";
+			return msg("Next billing {date}");
 		default:
 			return;
 	}
@@ -229,6 +234,8 @@ export function SubscriptionStatusCard({
 	onManageSubscription,
 	className,
 }: SubscriptionStatusCardProps) {
+	const { t, tn, renderedLocale } = useT();
+	const localeTag = intlLocale(renderedLocale, "en-US");
 	if (!subscription) {
 		return <SubscriptionStatusCardSkeleton className={className} />;
 	}
@@ -260,18 +267,24 @@ export function SubscriptionStatusCard({
 	const hasActions = showChangePlan || showUpdatePayment || showManage;
 
 	const cardTitle =
-		titleOverride ?? (isSingleItem ? primaryItem?.productName : undefined) ?? "Subscription";
+		titleOverride ?? (isSingleItem ? primaryItem?.productName : undefined) ?? t("Subscription");
 
 	const billingIntervalLabel =
-		formatBillingCycle({ interval, frequency: billingFrequency ?? 1 }) ?? interval;
+		formatBillingCycle({ interval, frequency: billingFrequency ?? 1 }, t, tn) ?? interval;
 
 	const scheduledChangeNote = effectiveScheduledChange
 		? effectiveScheduledChange.action === "cancel"
-			? `Cancels on ${formatDate(effectiveScheduledChange.effectiveAt)}`
+			? t("Cancels on {date}", {
+					date: formatDate(effectiveScheduledChange.effectiveAt, localeTag),
+				})
 			: effectiveScheduledChange.action === "pause"
-				? `Pauses on ${formatDate(effectiveScheduledChange.effectiveAt)}`
+				? t("Pauses on {date}", {
+						date: formatDate(effectiveScheduledChange.effectiveAt, localeTag),
+					})
 				: effectiveScheduledChange.action === "resume"
-					? `Resumes on ${formatDate(effectiveScheduledChange.effectiveAt)}`
+					? t("Resumes on {date}", {
+							date: formatDate(effectiveScheduledChange.effectiveAt, localeTag),
+						})
 					: undefined
 		: undefined;
 
@@ -312,12 +325,14 @@ export function SubscriptionStatusCard({
 					<Alert variant="destructive">
 						<AlertCircle className="size-4" />
 						<AlertTitle>
-							{collectionMode === "manual" ? "Invoice overdue" : "Payment required"}
+							{collectionMode === "manual" ? t("Invoice overdue") : t("Payment required")}
 						</AlertTitle>
 						<AlertDescription>
 							{collectionMode === "manual"
-								? "Pay your outstanding invoice to avoid disruption."
-								: "Your subscription is past due. Update your payment method to avoid disruption."}
+								? t("Pay your outstanding invoice to avoid disruption.")
+								: t(
+										"Your subscription is past due. Update your payment method to avoid disruption.",
+									)}
 						</AlertDescription>
 					</Alert>
 				)}
@@ -325,7 +340,7 @@ export function SubscriptionStatusCard({
 				{Boolean(scheduledChangeNote) && (
 					<Alert>
 						<Clock className="size-4" />
-						<AlertTitle>Scheduled change</AlertTitle>
+						<AlertTitle>{t("Scheduled change")}</AlertTitle>
 						<AlertDescription>{scheduledChangeNote}</AlertDescription>
 					</Alert>
 				)}
@@ -351,13 +366,13 @@ export function SubscriptionStatusCard({
 									<p className="truncate font-medium text-sm">{item.productName}</p>
 									{item.quantity > 1 && item.unitPrice !== undefined && (
 										<p className="text-muted-foreground text-sm">
-											{item.quantity} &times; {formatMoney(item.unitPrice, currency)}
+											{item.quantity} &times; {formatMoney(item.unitPrice, currency, localeTag)}
 										</p>
 									)}
 								</div>
 							</div>
 							<p className="shrink-0 font-medium text-sm tabular-nums">
-								{formatMoney(item.lineTotal, currency)}
+								{formatMoney(item.lineTotal, currency, localeTag)}
 							</p>
 						</div>
 					))}
@@ -369,7 +384,7 @@ export function SubscriptionStatusCard({
 					{discount ? (
 						<div className="flex items-center justify-between text-success-foreground">
 							<span className="flex items-center gap-1.5 text-sm">
-								Discount
+								{t("Discount")}
 								{Boolean(discount.code) && (
 									<span className="rounded bg-success/10 px-1.5 py-0.5 text-xs">
 										{discount.code}
@@ -377,20 +392,21 @@ export function SubscriptionStatusCard({
 								)}
 								{discount.endsAt ? (
 									<span className="text-muted-foreground text-xs">
-										until {formatDate(discount.endsAt)}
+										{t("until {date}", { date: formatDate(discount.endsAt, localeTag) })}
 									</span>
 								) : null}
 							</span>
 							<span className="text-sm tabular-nums">
-								{discount.description ?? `\u2212${formatMoney(discount.savingsAmount, currency)}`}
+								{discount.description ??
+									`\u2212${formatMoney(discount.savingsAmount, currency, localeTag)}`}
 							</span>
 						</div>
 					) : null}
 
 					<div className="flex items-center justify-between font-medium">
-						<span className="text-sm">Total</span>
+						<span className="text-sm">{t("Total")}</span>
 						<span className="text-sm tabular-nums">
-							{formatMoney(totalAmount, currency)}
+							{formatMoney(totalAmount, currency, localeTag)}
 							<span className="font-normal text-muted-foreground"> / {billingIntervalLabel}</span>
 						</span>
 					</div>
@@ -402,9 +418,7 @@ export function SubscriptionStatusCard({
 					{nextBilledAt && nextBillingLabel ? (
 						<div className="flex items-center gap-1.5">
 							<CalendarIcon className="size-3.5" />
-							<span>
-								{nextBillingLabel} {formatDate(nextBilledAt)}
-							</span>
+							<span>{t(nextBillingLabel, { date: formatDate(nextBilledAt, localeTag) })}</span>
 						</div>
 					) : null}
 					{collectionMode && !effectiveScheduledChange && status !== "past_due" && (
@@ -412,42 +426,34 @@ export function SubscriptionStatusCard({
 							{collectionMode === "automatic" ? (
 								<>
 									<CreditCardIcon className="size-3.5" />
-									<span>Auto-renews</span>
+									<span>{t("Auto-renews")}</span>
 								</>
 							) : (
 								<>
 									<FileTextIcon className="size-3.5" />
-									<span>Invoiced</span>
+									<span>{t("Invoiced")}</span>
 								</>
 							)}
 						</div>
 					)}
 					{canceledAt ? (
 						<div className="flex items-center gap-1.5">
-							<span>Canceled {formatDate(canceledAt)}</span>
+							<span>{t("Canceled {date}", { date: formatDate(canceledAt, localeTag) })}</span>
 						</div>
 					) : null}
 				</div>
 
 				{Boolean(hasActions) && (
 					<div className="flex flex-wrap gap-2 pt-1">
-						{Boolean(showChangePlan) && (
-							<Button onClick={onChangePlan} size="sm">
-								Change plan
-							</Button>
-						)}
+						{Boolean(showChangePlan) && <Button onClick={onChangePlan}>{t("Change plan")}</Button>}
 						{Boolean(showUpdatePayment) && (
-							<Button
-								variant={isPastDue ? "default" : "outline"}
-								size="sm"
-								onClick={onUpdatePaymentMethod}
-							>
-								Update payment method
+							<Button variant={isPastDue ? "default" : "outline"} onClick={onUpdatePaymentMethod}>
+								{t("Update payment method")}
 							</Button>
 						)}
 						{showManage && (
-							<Button variant="outline" size="sm" onClick={onManageSubscription}>
-								Manage
+							<Button variant="outline" onClick={onManageSubscription}>
+								{t("Manage")}
 							</Button>
 						)}
 					</div>

@@ -1,3 +1,6 @@
+import type { Locale } from "@/i18n/locales";
+import type { Translate } from "@/i18n/translate";
+import { intlLocale } from "@/lib/intl-locale";
 import { formatDate } from "@/lib/paddle-format";
 import type { SubscriptionAlertData } from "@/lib/paddle-types";
 
@@ -26,14 +29,8 @@ export type AlertVariant = "destructive" | "warning" | "info";
 /**
  * Machine-readable reason identifier for the derived alert.
  *
- * Use this to key i18n translations, apply custom rendering logic, or
- * conditionally render additional UI without parsing the default English message.
- *
- * @example
- * const alert = deriveSubscriptionAlert(data)
- * if (alert) {
- *   const translated = t(`subscription.alert.${alert.reason}`, { date: ... })
- * }
+ * Use this to apply custom rendering logic or conditionally render additional
+ * UI without parsing the (translated) message.
  */
 export type AlertReason =
 	| "past_due" // P1: status === "past_due"
@@ -48,10 +45,10 @@ export type DerivedAlert = {
 	variant: AlertVariant;
 	/**
 	 * Machine-readable reason for this alert. Stable across versions — use to
-	 * key i18n translations or apply custom logic without parsing `message`.
+	 * apply custom logic without parsing `message`.
 	 */
 	reason: AlertReason;
-	/** Default English message. Sufficient for most consumers out of the box. */
+	/** Message already translated through the `t` passed to deriveSubscriptionAlert. */
 	message: string;
 	actionLabel?: string;
 	actionUrl?: string;
@@ -64,22 +61,23 @@ export type DerivedAlert = {
  * Returns `null` for healthy active subscriptions.
  *
  * @param data - Subscription alert data
- * @returns Alert descriptor with `reason` + default `message`, or null
+ * @param t - Translator from `useT()`
+ * @param locale - `renderedLocale` from `useT()`, so dates read in the app language
+ * @returns Alert descriptor with `reason` + translated `message`, or null
  *
  * @example
- * deriveSubscriptionAlert({ status: "past_due", updatePaymentMethodUrl: "https://..." })
+ * deriveSubscriptionAlert({ status: "past_due", updatePaymentMethodUrl: "https://..." }, t)
  * // { reason: "past_due", variant: "destructive", message: "Payment failed...", ... }
- *
- * @example i18n usage
- * const alert = deriveSubscriptionAlert(data)
- * if (alert) {
- *   const message = t(`subscription.alert.${alert.reason}`, { effectiveAt: data.scheduledChange?.effectiveAt })
- * }
  */
-export function deriveSubscriptionAlert(data: SubscriptionAlertData | undefined): DerivedAlert {
+export function deriveSubscriptionAlert(
+	data: SubscriptionAlertData | undefined,
+	t: Translate,
+	locale: Locale = "en",
+): DerivedAlert {
 	if (!data) {
 		return null;
 	}
+	const dateTag = intlLocale(locale, "en-US");
 
 	const { status, canceledAt, scheduledChange, trialEndsAt, updatePaymentMethodUrl } = data;
 
@@ -89,9 +87,9 @@ export function deriveSubscriptionAlert(data: SubscriptionAlertData | undefined)
 			reason: "past_due",
 			variant: "destructive",
 			message: updatePaymentMethodUrl
-				? "Payment failed. Please update your payment method to avoid losing access."
-				: "Payment failed. Please contact support to resolve your billing issue.",
-			actionLabel: updatePaymentMethodUrl ? "Update payment method" : undefined,
+				? t("Payment failed. Please update your payment method to avoid losing access.")
+				: t("Payment failed. Please contact support to resolve your billing issue."),
+			actionLabel: updatePaymentMethodUrl ? t("Update payment method") : undefined,
 			actionUrl: updatePaymentMethodUrl,
 		};
 	}
@@ -102,8 +100,8 @@ export function deriveSubscriptionAlert(data: SubscriptionAlertData | undefined)
 			reason: "canceled",
 			variant: "destructive",
 			message: canceledAt
-				? `This subscription was canceled on ${formatDate(canceledAt)}.`
-				: "This subscription has been canceled.",
+				? t("This subscription was canceled on {date}.", { date: formatDate(canceledAt, dateTag) })
+				: t("This subscription has been canceled."),
 		};
 	}
 
@@ -112,15 +110,22 @@ export function deriveSubscriptionAlert(data: SubscriptionAlertData | undefined)
 		return {
 			reason: "scheduled_cancel",
 			variant: "warning",
-			message: `This subscription is scheduled to cancel on ${formatDate(scheduledChange.effectiveAt)}.`,
+			message: t("This subscription is scheduled to cancel on {date}.", {
+				date: formatDate(scheduledChange.effectiveAt, dateTag),
+			}),
 		};
 	}
 
 	// Priority 4: scheduled_pause
 	if (scheduledChange?.action === "pause") {
 		const message = scheduledChange.resumeAt
-			? `This subscription will pause on ${formatDate(scheduledChange.effectiveAt)} and resume on ${formatDate(scheduledChange.resumeAt)}.`
-			: `This subscription will pause on ${formatDate(scheduledChange.effectiveAt)}.`;
+			? t("This subscription will pause on {date} and resume on {resumeDate}.", {
+					date: formatDate(scheduledChange.effectiveAt, dateTag),
+					resumeDate: formatDate(scheduledChange.resumeAt, dateTag),
+				})
+			: t("This subscription will pause on {date}.", {
+					date: formatDate(scheduledChange.effectiveAt, dateTag),
+				});
 		return { reason: "scheduled_pause", variant: "warning", message };
 	}
 
@@ -129,7 +134,9 @@ export function deriveSubscriptionAlert(data: SubscriptionAlertData | undefined)
 		return {
 			reason: "paused_resuming",
 			variant: "info",
-			message: `This subscription is paused. It will resume on ${formatDate(scheduledChange.effectiveAt)}.`,
+			message: t("This subscription is paused. It will resume on {date}.", {
+				date: formatDate(scheduledChange.effectiveAt, dateTag),
+			}),
 		};
 	}
 
@@ -138,7 +145,7 @@ export function deriveSubscriptionAlert(data: SubscriptionAlertData | undefined)
 		return {
 			reason: "paused",
 			variant: "info",
-			message: "This subscription is paused.",
+			message: t("This subscription is paused."),
 		};
 	}
 
@@ -147,7 +154,7 @@ export function deriveSubscriptionAlert(data: SubscriptionAlertData | undefined)
 		return {
 			reason: "trialing",
 			variant: "info",
-			message: `Your trial ends on ${formatDate(trialEndsAt)}.`,
+			message: t("Your trial ends on {date}.", { date: formatDate(trialEndsAt, dateTag) }),
 		};
 	}
 

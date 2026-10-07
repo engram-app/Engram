@@ -15,6 +15,7 @@ import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useT } from "@/i18n/locale-provider";
 import { isInvalidId, isNotFound } from "../api/client";
 import type { Note } from "../api/queries";
 import {
@@ -88,6 +89,7 @@ interface Displayed {
 }
 
 export default function NotePage() {
+	const { t } = useT();
 	const { itemId: idStr, slug } = useParams();
 	const validId = idStr && idStr.length > 0 ? idStr : null;
 
@@ -486,7 +488,7 @@ export default function NotePage() {
 	}, [noteGone, validId, navigate, slug]);
 
 	if (validId === null) {
-		return <p className="p-6 text-destructive">Invalid note id.</p>;
+		return <p className="p-6 text-destructive">{t("Invalid note id.")}</p>;
 	}
 	if (noteGone) {
 		// Redirecting (see the effect above) — nothing to show for the one tick
@@ -499,7 +501,11 @@ export default function NotePage() {
 	if (error) {
 		// The ROUTED note failed for a reason other than "it's gone" — never
 		// paper over that with the held pair.
-		return <p className="p-6 text-destructive">Failed to load note: {error.message}</p>;
+		return (
+			<p className="p-6 text-destructive">
+				{t("Failed to load note: {message}", { message: error.message })}
+			</p>
+		);
 	}
 	if (!shown) {
 		// Nothing has ever been committed: this is the cold first open, the one
@@ -508,7 +514,7 @@ export default function NotePage() {
 		return routedNote || isLoading ? (
 			<LoadingPane />
 		) : (
-			<p className="p-6 text-muted-foreground">Note not found</p>
+			<p className="p-6 text-muted-foreground">{t("Note not found")}</p>
 		);
 	}
 
@@ -581,7 +587,7 @@ export default function NotePage() {
 			chromeIsPlaceholder &&
 			(action === "rename" || action === "move" || action === "duplicate")
 		) {
-			toast.info("Still loading this note — try again in a moment");
+			toast.info(t("Still loading this note — try again in a moment"));
 			return;
 		}
 		switch (action) {
@@ -612,14 +618,14 @@ export default function NotePage() {
 				// here too put a second, vaguer toast on top of the useful one.
 				duplicateNote.mutate(
 					{ src_path: note.path, new_path },
-					{ onSuccess: () => toast.success("Duplicated") },
+					{ onSuccess: () => toast.success(t("Duplicated")) },
 				);
 				break;
 			}
 			case "copy-wikilink":
 				// Wikilinks resolve by filename in Obsidian, never by H1 title.
 				copyToClipboard(`[[${name || note.path}]]`).then((ok) =>
-					ok ? toast.success("Copied wikilink") : toast.error("Copy failed"),
+					ok ? toast.success(t("Copied wikilink")) : toast.error(t("Copy failed")),
 				);
 				break;
 			case "add-property":
@@ -660,13 +666,17 @@ export default function NotePage() {
 		<DocumentSurface>
 			{syncStatus === "error" && (
 				<p role="status" className="shrink-0 bg-destructive/10 px-4 py-1 text-destructive text-xs">
-					Not syncing - reconnecting...
+					{t("Not syncing - reconnecting...")}
 				</p>
 			)}
 			{stalled && stalledLong ? (
 				<p role="status" className="shrink-0 bg-muted px-4 py-1 text-muted-foreground text-xs">
-					Still opening {routedNote ? `“${noteName(routedNote.path)}”` : "that note"} — showing “
-					{name}” until it does.
+					{routedNote
+						? t("Still opening “{target}” — showing “{name}” until it does.", {
+								target: noteName(routedNote.path),
+								name,
+							})
+						: t("Still opening that note — showing “{name}” until it does.", { name })}
 				</p>
 			) : null}
 			{/* The big title moved into the document so it scrolls away, but the
@@ -695,7 +705,7 @@ export default function NotePage() {
 							// -mx-1 cancels the padding so the hover target is roomier than
 							// the text without nudging the name off the folder crumb.
 							className="-mx-1 min-w-0 truncate rounded px-1 font-medium hover:bg-accent"
-							title="Click to rename"
+							title={t("Click to rename")}
 							onClick={() => setRenaming({ id: note.id, at: "header" })}
 						>
 							{name}
@@ -711,9 +721,9 @@ export default function NotePage() {
 							// while editing — so the name has to stay put and let aria-pressed
 							// carry the state. A name that flipped to the next action would
 							// tell a screen reader the opposite of what the icon shows.
-							aria-label="Reading view"
+							aria-label={t("Reading view")}
 							aria-pressed={mode === "reading"}
-							title="Reading view"
+							title={t("Reading view")}
 							onClick={toggleReading}
 						>
 							{mode === "reading" ? <BookOpen className="size-4" /> : <Pencil className="size-4" />}
@@ -768,7 +778,9 @@ export default function NotePage() {
 							/>
 						</div>
 					) : (
-						<Suspense fallback={<p className="p-5 text-muted-foreground">Loading editor…</p>}>
+						<Suspense
+							fallback={<p className="p-5 text-muted-foreground">{t("Loading editor…")}</p>}
+						>
 							{handle ? (
 								<NoteEditor
 									ytext={handle.ytext}
@@ -794,7 +806,7 @@ export default function NotePage() {
 									}}
 								/>
 							) : (
-								<p className="p-5 text-muted-foreground">Connecting…</p>
+								<p className="p-5 text-muted-foreground">{t("Connecting…")}</p>
 							)}
 						</Suspense>
 					)}

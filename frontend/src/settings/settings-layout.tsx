@@ -12,6 +12,7 @@ import {
 	SheetTitle,
 	SheetTrigger,
 } from "@/components/ui/sheet";
+import { useT } from "@/i18n/locale-provider";
 import { useMe } from "../api/queries";
 import { useConfig } from "../config-context";
 import { buildSettingsSections, type SettingsSection } from "./sections";
@@ -57,6 +58,7 @@ function SettingsNavList({
 	current: SettingsSectionKey;
 	onNavigate?: () => void;
 }) {
+	const { t } = useT();
 	const location = useLocation();
 	return (
 		<ul className="space-y-1">
@@ -87,7 +89,7 @@ function SettingsNavList({
 							{/* Decorative: the adjacent label already names the section, so
 							announcing the glyph would just duplicate it for screen readers. */}
 							<Icon className="size-4 shrink-0" aria-hidden="true" />
-							{s.label}
+							{t(s.label)}
 						</Link>
 					</li>
 				);
@@ -101,6 +103,7 @@ function SettingsNavList({
 export { CLOSE_ANIMATION_MS };
 
 export default function SettingsDialog({ section }: { section: SettingsSectionKey }) {
+	const { t } = useT();
 	const config = useConfig();
 	const { data: me } = useMe();
 	const isAdmin = me?.role === "admin";
@@ -122,11 +125,11 @@ export default function SettingsDialog({ section }: { section: SettingsSectionKe
 		if (open) {
 			return;
 		}
-		const t = setTimeout(
+		const timer = setTimeout(
 			() => navigate({ pathname: location.pathname, search: location.search, hash: "" }),
 			CLOSE_ANIMATION_MS,
 		);
-		return () => clearTimeout(t);
+		return () => clearTimeout(timer);
 	}, [open, navigate, location.pathname, location.search]);
 
 	return (
@@ -142,14 +145,14 @@ export default function SettingsDialog({ section }: { section: SettingsSectionKe
 					// browser's collapsing chrome can't crop the bottom of the panel.
 					className="data-open:fade-in-0 data-closed:fade-out-0 md:data-open:zoom-in-95 md:data-closed:zoom-out-95 md:-translate-1/2 fixed inset-0 z-50 flex h-[100dvh] w-screen max-w-none flex-col overflow-hidden bg-card duration-200 data-closed:animate-out data-open:animate-in md:inset-auto md:top-1/2 md:left-1/2 md:h-[88vh] md:w-[min(96vw,1100px)] md:rounded-xl md:border md:border-border md:shadow-xl"
 				>
-					<DialogPrimitive.Title className="sr-only">Settings</DialogPrimitive.Title>
+					<DialogPrimitive.Title className="sr-only">{t("Settings")}</DialogPrimitive.Title>
 					<DialogPrimitive.Close asChild>
 						<Button
 							variant="ghost"
 							size="icon-sm"
-							aria-label="Close settings"
-							title="Close settings"
-							className="absolute top-2 right-2 z-30 text-muted-foreground hover:text-foreground"
+							aria-label={t("Close settings")}
+							title={t("Close settings")}
+							className="absolute top-2 right-2 z-30"
 						>
 							<X className="size-4" />
 						</Button>
@@ -158,21 +161,16 @@ export default function SettingsDialog({ section }: { section: SettingsSectionKe
 					<div className="flex items-center gap-2 border-border border-b px-3 py-1.5 md:hidden">
 						<Sheet open={navOpen} onOpenChange={setNavOpen}>
 							<SheetTrigger asChild>
-								<Button
-									variant="ghost"
-									size="icon"
-									aria-label="Open settings sections"
-									className="size-9"
-								>
+								<Button variant="ghost" size="icon" aria-label={t("Open settings sections")}>
 									<Menu className="size-5" />
 								</Button>
 							</SheetTrigger>
 							<SheetContent side="left" className="w-64 p-0">
 								<SheetTitle className="border-border border-b px-4 py-3 font-semibold text-sm">
-									Settings
+									{t("Settings")}
 								</SheetTitle>
-								<SheetDescription className="sr-only">Settings sections</SheetDescription>
-								<nav aria-label="Settings sections" className="p-3">
+								<SheetDescription className="sr-only">{t("Settings sections")}</SheetDescription>
+								<nav aria-label={t("Settings sections")} className="p-3">
 									<SettingsNavList
 										sections={sections}
 										current={current}
@@ -181,19 +179,19 @@ export default function SettingsDialog({ section }: { section: SettingsSectionKe
 								</nav>
 							</SheetContent>
 						</Sheet>
-						<span className="font-semibold text-foreground text-sm">Settings</span>
+						<span className="font-semibold text-foreground text-sm">{t("Settings")}</span>
 					</div>
 
 					<div className="flex min-h-0 flex-1 flex-col md:flex-row">
 						{/* Desktop: persistent side rail */}
 						<nav
-							aria-label="Settings sections"
+							aria-label={t("Settings sections")}
 							className="hidden h-full w-56 shrink-0 border-border border-r md:block"
 						>
 							<ScrollArea className="h-full">
 								<div className="p-4">
 									<h2 className="mb-3 px-3 font-semibold text-muted-foreground text-xs uppercase tracking-wide">
-										Settings
+										{t("Settings")}
 									</h2>
 									<SettingsNavList sections={sections} current={current} />
 								</div>
@@ -206,7 +204,7 @@ export default function SettingsDialog({ section }: { section: SettingsSectionKe
 						    SettingsSectionCard) so their content still gets exactly one
 						    layer of padding rather than two. */}
 							<div className="p-4 md:p-6">
-								<Suspense fallback={<p className="text-muted-foreground">Loading…</p>}>
+								<Suspense fallback={<p className="text-muted-foreground">{t("Loading…")}</p>}>
 									<SectionBody section={current} />
 								</Suspense>
 							</div>

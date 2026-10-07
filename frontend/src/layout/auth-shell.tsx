@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { LanguageSelect } from "../i18n/language-select";
 import ThemeToggle from "../theme/theme-toggle";
 import AuthBackdrop from "./auth-backdrop";
 
@@ -18,6 +19,7 @@ export default function AuthShell({ actions, navLabel, children }: AuthShellProp
 				</span>
 				<nav className="flex items-center gap-3" aria-label={navLabel}>
 					{actions}
+					<LanguageSelect iconOnly />
 					<ThemeToggle />
 				</nav>
 			</header>

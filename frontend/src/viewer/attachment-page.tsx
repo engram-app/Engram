@@ -2,6 +2,7 @@ import { Download } from "lucide-react";
 import { lazy, type ReactNode, Suspense, useEffect, useState } from "react";
 import { useParams } from "react-router";
 import { Button } from "@/components/ui/button";
+import { useT } from "@/i18n/locale-provider";
 import { encodePathSegments } from "@/lib/path";
 import { ApiError, api, isNotFound } from "../api/client";
 import { useAttachments } from "../api/queries";
@@ -20,6 +21,7 @@ const PdfView = lazy(() => import("./pdf-view"));
 // warm), then streams raw bytes (?raw=1) as a typed Blob so the browser renders
 // images / PDFs natively; unsupported types fall back to a download link.
 export default function AttachmentPage() {
+	const { t } = useT();
 	const { itemId: id } = useParams();
 	const { data: attachments, isLoading } = useAttachments();
 	const att = attachments?.find((a) => a.id === id);
@@ -84,7 +86,7 @@ export default function AttachmentPage() {
 	if (!att) {
 		return (
 			<DocumentSurface>
-				<p className="p-6 text-destructive text-sm">Attachment not found.</p>
+				<p className="p-6 text-destructive text-sm">{t("Attachment not found.")}</p>
 			</DocumentSurface>
 		);
 	}
@@ -94,8 +96,8 @@ export default function AttachmentPage() {
 		body = (
 			<p className="p-6 text-destructive text-sm">
 				{error === "missing"
-					? `${filename} no longer exists.`
-					: `Couldn't load ${filename} — it may be temporarily unavailable.`}
+					? t("{filename} no longer exists.", { filename })
+					: t("Couldn't load {filename} — it may be temporarily unavailable.", { filename })}
 			</p>
 		);
 	} else if (!url) {
@@ -123,7 +125,7 @@ export default function AttachmentPage() {
 	} else {
 		body = (
 			<p className="p-6 text-muted-foreground text-sm">
-				Preview not supported for {filename}. Use Download above to save it.
+				{t("Preview not supported for {filename}. Use Download above to save it.", { filename })}
 			</p>
 		);
 	}
@@ -144,14 +146,20 @@ export default function AttachmentPage() {
 							<a
 								href={url}
 								download={filename}
-								aria-label={`Download ${filename}`}
-								title="Download"
+								aria-label={t("Download {filename}", { filename })}
+								title={t("Download")}
 							>
 								<Download className="size-4" />
 							</a>
 						</Button>
 					) : (
-						<Button variant="ghost" size="icon" disabled aria-label="Download" title="Download">
+						<Button
+							variant="ghost"
+							size="icon"
+							disabled
+							aria-label={t("Download")}
+							title={t("Download")}
+						>
 							<Download className="size-4" />
 						</Button>
 					)

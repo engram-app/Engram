@@ -1,7 +1,11 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { Button } from "@/components/ui/button";
-import { destructiveAlert, fieldInput, heading } from "@/lib/ui-classes";
+import { Input } from "@/components/ui/input";
+import { useT } from "@/i18n/locale-provider";
+import { Trans } from "@/i18n/trans";
+import type { Translate } from "@/i18n/translate";
+import { destructiveAlert, heading } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { getApiBase, joinApiUrl } from "../api/base";
 import { ROUTES } from "../routes";
@@ -16,7 +20,21 @@ interface InvitePreview {
 	label?: string | null;
 }
 
+// `raw` is a server-written message or one of the English fallbacks thrown by
+// the auth provider; only the fallbacks are ours to translate.
+function registrationErrorMessage(raw: string, t: Translate): string {
+	switch (raw) {
+		case "Registration failed":
+			return t("Registration failed");
+		case "Registration not available for this auth provider":
+			return t("Registration not available for this auth provider");
+		default:
+			return raw;
+	}
+}
+
 export default function LocalSignUp() {
+	const { t } = useT();
 	const { register, isSignedIn } = useAuthAdapter();
 	const navigate = useNavigate();
 	const [searchParams] = useSearchParams();
@@ -62,7 +80,7 @@ export default function LocalSignUp() {
 		setError("");
 
 		if (password !== confirm) {
-			setError("Passwords do not match");
+			setError(t("Passwords do not match"));
 			return;
 		}
 
@@ -74,7 +92,9 @@ export default function LocalSignUp() {
 			}
 			await register(email, password, invite || undefined);
 		} catch (err) {
-			setError(err instanceof Error ? err.message : "Registration failed");
+			setError(
+				registrationErrorMessage(err instanceof Error ? err.message : "Registration failed", t),
+			);
 		} finally {
 			setLoading(false);
 		}
@@ -89,7 +109,7 @@ export default function LocalSignUp() {
 				<div
 					role="status"
 					aria-busy
-					aria-label="Loading"
+					aria-label={t("Loading")}
 					className="h-[420px] w-full max-w-sm rounded-2xl border border-border bg-card shadow-sm sm:p-8"
 				/>
 			</AuthLayout>
@@ -118,20 +138,24 @@ export default function LocalSignUp() {
 					<div className="flex flex-col items-center gap-2 text-center">
 						<img src="/engram-mark.svg" alt="Engram" className="size-12" />
 						<h1 className={heading}>
-							{gated === "closed" ? "Sign-ups are closed" : "Invite required"}
+							{gated === "closed" ? t("Sign-ups are closed") : t("Invite required")}
 						</h1>
 					</div>
 					<p className="text-center text-muted-foreground text-sm">
 						{gated === "closed"
-							? "This Engram instance is not accepting new accounts. Contact your admin if you think this is a mistake."
-							: "Sign-ups on this instance require an invite link. Contact your admin to request one — they can generate one from Settings → Administration."}
+							? t(
+									"This Engram instance is not accepting new accounts. Contact your admin if you think this is a mistake.",
+								)
+							: t(
+									"Sign-ups on this instance require an invite link. Contact your admin to request one — they can generate one from Settings → Administration.",
+								)}
 					</p>
 					<p className="text-center text-muted-foreground text-sm">
 						<Link
 							to={authUrlWithReturnTo(ROUTES.SIGN_IN, returnTo)}
 							className="font-medium text-primary hover:underline"
 						>
-							Back to sign in
+							{t("Back to sign in")}
 						</Link>
 					</p>
 				</section>
@@ -148,7 +172,7 @@ export default function LocalSignUp() {
 				<div className="flex flex-col items-center gap-2 text-center">
 					<img src="/engram-mark.svg" alt="Engram" className="size-12" />
 					<h1 className={heading}>
-						{bootstrap?.bootstrap_pending ? "Set up your instance" : "Create your account"}
+						{bootstrap?.bootstrap_pending ? t("Set up your instance") : t("Create your account")}
 					</h1>
 				</div>
 
@@ -158,11 +182,11 @@ export default function LocalSignUp() {
 							className="rounded-md border border-primary/40 bg-primary/5 px-3 py-2 text-foreground text-sm"
 							role="status"
 						>
-							<p className="font-medium">Welcome — you're setting up this instance.</p>
+							<p className="font-medium">{t("Welcome — you're setting up this instance.")}</p>
 							<p className="mt-1 text-muted-foreground">
-								This first account becomes the administrator. After signup, new accounts will need
-								an invite link. Manage members, invites, and registration mode under Settings →
-								Administration.
+								{t(
+									"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.",
+								)}
 							</p>
 						</aside>
 
@@ -170,24 +194,29 @@ export default function LocalSignUp() {
 							className="rounded-md border border-border bg-muted/30 px-3 py-2 text-muted-foreground text-xs"
 							role="note"
 						>
-							Engram self-host is in active development — your feedback shapes what ships next. File
-							issues at{" "}
-							<a
-								href="https://github.com/engram-app/Engram/issues"
-								target="_blank"
-								rel="noreferrer noopener"
-								className="font-medium text-primary hover:underline"
-							>
-								github.com/engram-app/Engram
-							</a>{" "}
-							or email{" "}
-							<a
-								href="mailto:support@engram.page"
-								className="font-medium text-primary hover:underline"
-							>
-								support@engram.page
-							</a>
-							.
+							<Trans
+								text="Engram self-host is in active development — your feedback shapes what ships next. File issues at {repo} or email {email}."
+								slots={{
+									repo: (
+										<a
+											href="https://github.com/engram-app/Engram/issues"
+											target="_blank"
+											rel="noreferrer noopener"
+											className="font-medium text-primary hover:underline"
+										>
+											github.com/engram-app/Engram
+										</a>
+									),
+									email: (
+										<a
+											href="mailto:support@engram.page"
+											className="font-medium text-primary hover:underline"
+										>
+											support@engram.page
+										</a>
+									),
+								}}
+							/>
 						</aside>
 					</>
 				)}
@@ -195,15 +224,18 @@ export default function LocalSignUp() {
 				{invite && invitePreview ? (
 					invitePreview.valid ? (
 						<p className="rounded-md border border-primary/40 bg-primary/5 px-3 py-2 text-foreground text-sm">
-							You've been invited{invitePreview.label ? ` (${invitePreview.label})` : ""} — finish
-							below to join.
+							{invitePreview.label
+								? t("You've been invited ({label}) — finish below to join.", {
+										label: invitePreview.label,
+									})
+								: t("You've been invited — finish below to join.")}
 						</p>
 					) : (
 						<p
 							role="alert"
 							className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-foreground text-sm"
 						>
-							This invite link is invalid, expired, or already used.
+							{t("This invite link is invalid, expired, or already used.")}
 						</p>
 					)
 				) : null}
@@ -215,51 +247,57 @@ export default function LocalSignUp() {
 				)}
 
 				<label className="block">
-					<span className="font-medium text-foreground text-sm">Email</span>
-					<input
+					<span className="font-medium text-foreground text-sm">{t("Email")}</span>
+					<Input
 						type="email"
 						required
 						value={email}
 						onChange={(e) => setEmail(e.target.value)}
-						className={cn("mt-1 block", fieldInput)}
+						className="mt-1 block"
 					/>
 				</label>
 
 				<label className="block">
-					<span className="font-medium text-foreground text-sm">Password</span>
-					<input
+					<span className="font-medium text-foreground text-sm">{t("Password")}</span>
+					<Input
 						type="password"
 						required
 						minLength={8}
 						value={password}
 						onChange={(e) => setPassword(e.target.value)}
-						className={cn("mt-1 block", fieldInput)}
+						className="mt-1 block"
 					/>
 				</label>
 
 				<label className="block">
-					<span className="font-medium text-foreground text-sm">Confirm password</span>
-					<input
+					<span className="font-medium text-foreground text-sm">{t("Confirm password")}</span>
+					<Input
 						type="password"
 						required
 						value={confirm}
 						onChange={(e) => setConfirm(e.target.value)}
-						className={cn("mt-1 block", fieldInput)}
+						className="mt-1 block"
 					/>
 				</label>
 
 				<Button type="submit" disabled={loading} className="w-full">
-					{loading ? "Creating account…" : "Create account"}
+					{loading ? t("Creating account…") : t("Create account")}
 				</Button>
 
 				<p className="text-center text-muted-foreground text-sm">
-					Already have an account?{" "}
-					<Link
-						to={authUrlWithReturnTo(ROUTES.SIGN_IN, returnTo)}
-						className="font-medium text-primary hover:underline"
-					>
-						Sign in
-					</Link>
+					<Trans
+						text="Already have an account? {signin}"
+						slots={{
+							signin: (
+								<Link
+									to={authUrlWithReturnTo(ROUTES.SIGN_IN, returnTo)}
+									className="font-medium text-primary hover:underline"
+								>
+									{t("Sign in")}
+								</Link>
+							),
+						}}
+					/>
 				</p>
 			</form>
 		</AuthLayout>

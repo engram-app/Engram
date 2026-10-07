@@ -1,6 +1,8 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { type Channel, Socket } from "phoenix";
 import { toast } from "sonner";
+
+import { englishT, type Translate } from "@/i18n/translate";
 import { buildGenesisFrame } from "../crdt/genesis";
 import { CrdtOpQueueController } from "../crdt/op-queue-controller";
 import { createIndexedDbPersister } from "../crdt/op-queue-persist";
@@ -119,6 +121,8 @@ interface ConnectOptions {
 	vaultId: string;
 	getToken: () => Promise<string | null>;
 	queryClient: QueryClient;
+	// The caller's `t` (useT) for the plan-limit toast; English when omitted.
+	t?: Translate;
 }
 
 type NoteChangedListener = (payload: NoteChangedPayload) => void;
@@ -431,7 +435,13 @@ export function handleFoldersBatch(
 	invalidateVaultTree(queryClient, vaultId);
 }
 
-export async function connectChannel({ userId, vaultId, getToken, queryClient }: ConnectOptions) {
+export async function connectChannel({
+	userId,
+	vaultId,
+	getToken,
+	queryClient,
+	t = englishT,
+}: ConnectOptions) {
 	disconnectChannel();
 	const gen = connectGeneration;
 
@@ -558,7 +568,7 @@ export async function connectChannel({ userId, vaultId, getToken, queryClient }:
 		},
 		onDropSurfaced: (op, reason) =>
 			rlog().warn("crdt", `crdt_${op.kind} dropped (${reason}) undelivered: ${op.docId}`),
-		onLimitSurfaced: () => toast.error("You've hit your note limit — upgrade to add more."),
+		onLimitSurfaced: () => toast.error(t("You've hit your note limit — upgrade to add more.")),
 		persister: createIndexedDbPersister(userId, vaultId),
 		mintId: () => uuid7(),
 	});
