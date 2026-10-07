@@ -774,7 +774,7 @@ function VaultPickerFieldset({
 				<>
 					<div className="mb-1 flex items-center justify-between gap-2">
 						<legend className={sectionTitle}>
-							Sync an existing vault
+							Sync with an existing vault
 							{search.showFilter ? (
 								<span className="ml-2 font-normal text-muted-foreground text-sm">
 									(choose from {vaults.length} vaults)
