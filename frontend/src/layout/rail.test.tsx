@@ -79,7 +79,10 @@ describe("Rail — right-sidebar tool group", () => {
 		);
 		expect(screen.getByRole("button", { name: "Reference" })).toBeEnabled();
 		// The outline has nothing to show until a page publishes one.
-		expect(screen.getByRole("button", { name: "Outline" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Outline" })).toHaveAttribute(
+			"aria-disabled",
+			"true",
+		);
 	});
 
 	it("enables the Outline tool once a page publishes one", () => {
@@ -353,14 +356,19 @@ describe("Rail — tooltips", () => {
 		await waitFor(() => expect(tooltip()).toHaveTextContent("Reference"));
 	});
 
-	it("a disabled tool still explains itself: its tooltip says to open a note first", async () => {
+	it("an unavailable tool stays focusable and explains itself: open a note first", async () => {
 		renderRail();
 		const outline = screen.getByRole("button", { name: "Outline" });
-		expect(outline).toBeDisabled();
-		// A disabled button receives no pointer events, so the tooltip hangs off its wrapper.
-		const trigger = outline.closest('[data-slot="tooltip-trigger"]');
-		expect(trigger).not.toBeNull();
-		fireEvent.focus(trigger as Element);
+		expect(outline).toHaveAttribute("aria-disabled", "true");
+		expect(outline).not.toBeDisabled();
+		fireEvent.focus(outline);
 		await waitFor(() => expect(tooltip()).toHaveTextContent("Outline (open a note first)"));
+	});
+
+	it("clicking an unavailable tool does nothing", () => {
+		renderRail();
+		const outline = screen.getByRole("button", { name: "Outline" });
+		fireEvent.click(outline);
+		expect(outline).toHaveAttribute("aria-pressed", "false");
 	});
 });

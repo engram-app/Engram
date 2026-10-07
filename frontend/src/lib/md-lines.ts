@@ -38,18 +38,14 @@ function scanLines(text: string): MdLine[] {
 		let code = false;
 		const f = FENCE.exec(content);
 		const marker = f?.groups?.marker;
+		const rest = f?.groups?.rest ?? "";
 		if (fence !== null) {
 			code = true;
 			// A closing fence: same character, at least as long, nothing after it.
-			if (
-				marker &&
-				marker[0] === fence[0] &&
-				marker.length >= fence.length &&
-				!f?.groups?.rest.trim()
-			) {
+			if (marker && marker[0] === fence[0] && marker.length >= fence.length && !rest.trim()) {
 				fence = null;
 			}
-		} else if (marker && !(marker[0] === "`" && f?.groups?.rest.includes("`"))) {
+		} else if (marker && !(marker[0] === "`" && rest.includes("`"))) {
 			code = true;
 			fence = marker;
 		} else if (!blank && INDENTED.test(content) && !inList && (prevBlank || prevCode)) {

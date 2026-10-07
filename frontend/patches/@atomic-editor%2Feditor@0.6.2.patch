@@ -58,6 +58,9 @@ index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-bfcc84bf3b1ffc3d b/.bun-tag-bfcc84bf3b1ffc3d
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-dd3a78e122bc9c02 b/.bun-tag-dd3a78e122bc9c02
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/styles/inline-preview.css b/dist/styles/inline-preview.css
 index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..7df2b278455bbc3f6cdd75755cc2bc3921adff2f 100644
 --- a/dist/styles/inline-preview.css
@@ -461,7 +464,7 @@ index ff02d57548388e468f73695f3bd45ec58be38160..88878ab850d89e7eae05772c1905fe2f
  export declare function tables(config?: TablesConfig): Extension;
  export {};
 diff --git a/dist/table-widget.js b/dist/table-widget.js
-index aee407c4aaa2eea5a46c0fa28831dcc80985c783..489a8b786d413004e6b13355b100d225e622203c 100644
+index aee407c4aaa2eea5a46c0fa28831dcc80985c783..3e483501c586b4bdbe6f51b128af75fa8095cf0c 100644
 --- a/dist/table-widget.js
 +++ b/dist/table-widget.js
 @@ -42,9 +42,22 @@ export function splitRowCells(line) {
@@ -621,7 +624,37 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..489a8b786d413004e6b13355b100d225
  ];
  function isMarkWrap(el) {
      for (const c of MARK_WRAP_CLASSES)
-@@ -528,10 +604,753 @@ function placeCaretAtEnd(el) {
+@@ -486,7 +562,29 @@ function refreshCellPreview(cell) {
+ // range. Walk the tree from there to find the enclosing Table node so
+ // our dispatch targets the current range (positions shift as the user
+ // types — we can't rely on the from/to captured at widget creation).
++// Teardowns for document-level listeners a table's DOM owns (box selection, a
++// handle drag, the context menu). `TableWidget.destroy` runs them when CM drops
++// the DOM, so none act on a detached table.
++const teardowns = new WeakMap();
++function onTeardown(wrap, fn) {
++    let set = teardowns.get(wrap);
++    if (!set)
++        teardowns.set(wrap, (set = new Set()));
++    set.add(fn);
++}
++function offTeardown(wrap, fn) {
++    teardowns.get(wrap)?.delete(fn);
++}
++// True when clipboard HTML holds a table of more than one cell. Pages and mail
++// clients wrap ordinary text in a one-cell table, which is not a grid.
++function isHtmlGrid(html) {
++    if (!/<table/i.test(html))
++        return false;
++    return new DOMParser().parseFromString(html, 'text/html').querySelectorAll('td, th').length > 1;
++}
+ function findCurrentTableRange(view, dom) {
++    if (!dom.isConnected)
++        return null;
+     const pos = view.posAtDOM(dom);
+     if (pos < 0)
+         return null;
+@@ -528,10 +626,768 @@ function placeCaretAtEnd(el) {
  function getAllCells(wrap) {
      return Array.from(wrap.querySelectorAll('th, td'));
  }
@@ -705,6 +738,11 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..489a8b786d413004e6b13355b100d225
 +        if (!sel.empty)
 +            return false;
 +        const line = state.doc.lineAt(sel.head);
++        // On a soft-wrapped line the arrow moves to the next visual row first;
++        // only the last row hands the caret to the table.
++        const next = view.moveVertically(sel, dir > 0).head;
++        if (next !== sel.head && next >= line.from && next <= line.to)
++            return false;
 +        const edge = dir > 0 ? line.to + 1 : line.from - 1;
 +        let hit = null;
 +        state.field(tableField, false)?.between(edge, edge, (from, to) => {
@@ -809,7 +847,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..489a8b786d413004e6b13355b100d225
 +function clearSelectedCells(view, info) {
 +    for (const cell of info.selected)
 +        setCellRaw(cell, '');
-+    dispatchModelFromDom(view, info.selected[0]);
++    dispatchModelFromDom(view, info.selected[0], 'table.edit');
 +}
 +function deleteCellSelection(view, wrap) {
 +    if (view.state.facet(readOnlyFacet))
@@ -874,7 +912,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..489a8b786d413004e6b13355b100d225
 +    if (grid.length === 1 && grid[0].length === 1 && info.selected.length > 1) {
 +        for (const cell of info.selected)
 +            setCellRaw(cell, grid[0][0]);
-+        dispatchModelFromDom(view, info.selected[0]);
++        dispatchModelFromDom(view, info.selected[0], 'table.edit');
 +        return;
 +    }
 +    const needRows = r0 + grid.length - cells.length / cols;
@@ -906,7 +944,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..489a8b786d413004e6b13355b100d225
 +    }));
 +    if (!first)
 +        return;
-+    dispatchModelFromDom(view, first);
++    dispatchModelFromDom(view, first, 'table.edit');
 +    const width = Math.max(...grid.map((line) => line.length));
 +    // The pasted block's corners, so the caller can select it.
 +    return {
@@ -963,6 +1001,10 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..489a8b786d413004e6b13355b100d225
 +        if (e.key === 'Escape')
 +            clear();
 +    };
++    onTeardown(wrap, () => {
++        clear();
++        release();
++    });
 +    const watch = () => {
 +        if (watching)
 +            return;
@@ -1137,7 +1179,10 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..489a8b786d413004e6b13355b100d225
 +    model.align.push(null);
 +    for (const r of model.rows)
 +        r.push('');
-+    view.dispatch({ changes: { from: range.from, to: range.to, insert: serializeTable(model) } });
++    view.dispatch({
++        changes: { from: range.from, to: range.to, insert: serializeTable(model) },
++        annotations: Transaction.userEvent.of('table.edit'),
++    });
 +    // The column count changed, so the widget is rebuilt and `wrap` is detached.
 +    // Find the fresh one by position (double rAF, same as appendRow) and put the
 +    // caret in the new header cell.
@@ -1257,7 +1302,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..489a8b786d413004e6b13355b100d225
 +    syncHandles(view, wrap);
 +    const any = wrap.querySelector('th, td');
 +    if (any)
-+        dispatchModelFromDom(view, any);
++        dispatchModelFromDom(view, any, 'table.edit');
 +}
 +function startHandleDrag(view, wrap, kind, handle, down) {
 +    const from = kind === 'col' ? cellColIndex(handle.parentElement) : rowAllIndex(handle.parentElement);
@@ -1301,6 +1346,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..489a8b786d413004e6b13355b100d225
 +    handle.classList.add('cm-atomic-table-handle-dragging');
 +    wrap.classList.add('cm-atomic-table-dragging');
 +    const end = (commit) => {
++        offTeardown(wrap, cancel);
 +        handle.classList.remove('cm-atomic-table-handle-dragging');
 +        wrap.classList.remove('cm-atomic-table-dragging');
 +        handle.style.transform = '';
@@ -1315,6 +1361,8 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..489a8b786d413004e6b13355b100d225
 +    };
 +    const onUp = () => end(true);
 +    const onCancel = () => end(false);
++    const cancel = onCancel;
++    onTeardown(wrap, cancel);
 +    const onMove = (e) => {
 +        if (!(e.buttons & 1)) {
 +            end(false);
@@ -1375,7 +1423,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..489a8b786d413004e6b13355b100d225
          Object.defineProperty(this, "model", {
              enumerable: true,
              configurable: true,
-@@ -561,18 +1380,48 @@ class TableWidget extends WidgetType {
+@@ -561,18 +1417,48 @@ class TableWidget extends WidgetType {
              return false;
          if (other.model.rows.length !== this.model.rows.length)
              return false;
@@ -1428,7 +1476,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..489a8b786d413004e6b13355b100d225
          thead.appendChild(headerRow);
          table.appendChild(thead);
          const tbody = document.createElement('tbody');
-@@ -580,11 +1429,18 @@ class TableWidget extends WidgetType {
+@@ -580,11 +1466,18 @@ class TableWidget extends WidgetType {
          for (const row of this.model.rows) {
              const tr = document.createElement('tr');
              for (let c = 0; c < colCount; c++) {
@@ -1448,7 +1496,20 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..489a8b786d413004e6b13355b100d225
          return wrap;
      }
      // All cell interactions are handled by the listeners we attach in
-@@ -629,17 +1485,37 @@ function makeCell(tag, text, view) {
+@@ -593,6 +1486,12 @@ class TableWidget extends WidgetType {
+     ignoreEvent() {
+         return true;
+     }
++    destroy(dom) {
++        const fns = teardowns.get(dom);
++        teardowns.delete(dom);
++        for (const fn of fns ?? [])
++            fn();
++    }
+ }
+ function makeCell(tag, text, view) {
+     const cell = document.createElement(tag);
+@@ -629,17 +1528,37 @@ function makeCell(tag, text, view) {
      // opened. We open on `click` (a proper popup-activation gesture, so
      // `window.open` isn't blocked) and block the caret on `pointerdown`.
      //
@@ -1491,7 +1552,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..489a8b786d413004e6b13355b100d225
      source.addEventListener('pointerdown', (event) => {
          if (event.button !== 0)
              return;
-@@ -678,7 +1554,12 @@ function attachCellEditing(view, cell, source) {
+@@ -678,7 +1597,12 @@ function attachCellEditing(view, cell, source) {
          // textContent (not innerText) so `display: none` delimiters inside
          // mark wraps are still captured — otherwise a cell containing
          // `**bold**` would serialize to just `bold` on every keystroke.
@@ -1505,14 +1566,16 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..489a8b786d413004e6b13355b100d225
          cell.dataset.raw = raw;
          const offset = getCaretCharOffset(source);
          renderCellSourceDecorated(source);
-@@ -711,6 +1592,18 @@ function attachCellEditing(view, cell, source) {
+@@ -711,6 +1635,20 @@ function attachCellEditing(view, cell, source) {
      // and strip markup here, and `escapeCell` neutralizes any literal `|`
      // on serialize.
      source.addEventListener('paste', (event) => {
-+        // Spreadsheet-style grid (tabs, or a copied HTML table): spread it across
-+        // cells from this one instead of flattening it into a single cell.
++        // Spreadsheet-style grid (tabs, or a copied HTML table of several cells):
++        // spread it across cells from this one instead of flattening it into a
++        // single cell. Web HTML that wraps its text in a one-cell <table> stays a
++        // plain paste.
 +        const data = event.clipboardData;
-+        if (data && (/\t/.test(data.getData('text/plain')) || /<table/i.test(data.getData('text/html')))) {
++        if (data && (/\t/.test(data.getData('text/plain')) || isHtmlGrid(data.getData('text/html')))) {
 +            const grid = parseClipboardGrid(data.getData('text/plain'));
 +            if (grid && (grid.length > 1 || grid[0].length > 1)) {
 +                event.preventDefault();
@@ -1524,7 +1587,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..489a8b786d413004e6b13355b100d225
          event.preventDefault();
          const text = (event.clipboardData?.getData('text/plain') ?? '')
              .replace(/\s+/g, ' ')
-@@ -737,6 +1630,15 @@ function attachCellEditing(view, cell, source) {
+@@ -737,6 +1675,15 @@ function attachCellEditing(view, cell, source) {
      // hides all delimiters.
      source.addEventListener('blur', () => clearActiveMarksInSource(source));
      source.addEventListener('keydown', (event) => {
@@ -1540,8 +1603,11 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..489a8b786d413004e6b13355b100d225
          // Enter mirrors Tab — advance to the next cell (appending a row past
          // the last one) instead of inserting a line break a single-line cell
          // can't represent. Shift reverses direction for both.
-@@ -804,80 +1706,185 @@ function dispatchModel(view, wrap, nextModel) {
+@@ -802,88 +1749,195 @@ function dispatchModel(view, wrap, nextModel) {
+     const next = serializeTable(nextModel);
+     view.dispatch({
          changes: { from: range.from, to: range.to, insert: next },
++        annotations: Transaction.userEvent.of('table.edit'),
      });
  }
 +// Sort the body rows by a column. Numbers compare by value ("2" < "10"), text
@@ -1565,7 +1631,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..489a8b786d413004e6b13355b100d225
 +    syncHandles(view, wrap);
 +    const any = wrap.querySelector('th, td');
 +    if (any)
-+        dispatchModelFromDom(view, any);
++        dispatchModelFromDom(view, any, 'table.edit');
 +}
 +// Set one column's alignment (left / center / right) on its cells, then sync
 +// the separator row in the document.
@@ -1577,7 +1643,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..489a8b786d413004e6b13355b100d225
 +    }
 +    const any = wrap.querySelector('th, td');
 +    if (any)
-+        dispatchModelFromDom(view, any);
++        dispatchModelFromDom(view, any, 'table.edit');
 +}
 +// 24x24 stroke icons (inner SVG markup) for the context menu.
 +const MENU_ICONS = {
@@ -1787,7 +1853,14 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..489a8b786d413004e6b13355b100d225
      });
      let dismissed = false;
      const dismiss = () => {
-@@ -893,26 +1900,116 @@ function openCellMenu(view, cell, x, y) {
+         if (dismissed)
+             return;
+         dismissed = true;
++        offTeardown(wrap, dismiss);
+         menu.remove();
+         document.removeEventListener('mousedown', onDocDown, true);
+         document.removeEventListener('keydown', onDocKey, true);
+@@ -893,26 +1947,121 @@ function openCellMenu(view, cell, x, y) {
              return;
          dismiss();
      };
@@ -1819,7 +1892,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..489a8b786d413004e6b13355b100d225
 +        if (r.right > window.innerWidth) {
 +            g.sub.style.left = 'auto';
 +            g.sub.style.right = '100%';
-+        }
+         }
 +    };
 +    const openGroupEl = () => groupEls.find((g) => !g.sub.hidden);
 +    const enabledItems = (list) => Array.from(list.querySelectorAll(':scope > .cm-atomic-table-menu-item:not(:disabled), :scope > .cm-atomic-table-menu-group > .cm-atomic-table-menu-item')).filter((el) => !el.disabled);
@@ -1846,6 +1919,9 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..489a8b786d413004e6b13355b100d225
 +        }
 +        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
 +            event.preventDefault();
++            // The capture listener runs first; without this the focused cell's own
++            // arrow handler then steals focus back from the menu.
++            event.stopPropagation();
 +            const step = event.key === 'ArrowDown' ? 1 : -1;
 +            if (inSub)
 +                move(enabledItems(open.sub), active, step);
@@ -1856,15 +1932,17 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..489a8b786d413004e6b13355b100d225
 +            const g = groupEls.find((x) => x.btn === active);
 +            if (g) {
 +                event.preventDefault();
++                event.stopPropagation();
 +                openGroup(g);
 +                enabledItems(g.sub)[0]?.focus();
 +            }
 +        }
 +        else if (event.key === 'ArrowLeft' && inSub) {
 +            event.preventDefault();
++            event.stopPropagation();
 +            closeGroup(open);
 +            open.btn.focus();
-         }
++        }
 +    };
 +    for (const group of groups) {
 +        const wrapEl = document.createElement('div');
@@ -1919,7 +1997,42 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..489a8b786d413004e6b13355b100d225
      }
      document.body.appendChild(menu);
      // Clip the menu inside the viewport if it overflows.
-@@ -1191,13 +2288,21 @@ const defaultLinkOpener = (url) => {
+@@ -931,8 +2080,9 @@ function openCellMenu(view, cell, x, y) {
+         document.addEventListener('mousedown', onDocDown, true);
+         document.addEventListener('keydown', onDocKey, true);
+     }, 0);
++    onTeardown(wrap, dismiss);
+ }
+-function dispatchModelFromDom(view, cell) {
++function dispatchModelFromDom(view, cell, userEvent = 'input.type') {
+     if (view.state.facet(readOnlyFacet))
+         return;
+     const wrap = cell.closest('.cm-atomic-table');
+@@ -948,10 +2098,11 @@ function dispatchModelFromDom(view, cell) {
+         return;
+     view.dispatch({
+         changes: { from: range.from, to: range.to, insert: next },
+-        // Tag as typing so CM6's history coalesces consecutive cell edits
+-        // into one undo group instead of one step per keystroke (each of
+-        // which rewrites the whole table range).
+-        annotations: Transaction.userEvent.of('input.type'),
++        // Typing is tagged `input.type` so CM6's history coalesces consecutive
++        // cell edits into one undo group instead of one step per keystroke (each
++        // of which rewrites the whole table range). Structural edits pass their
++        // own event so they never merge into a typing group.
++        annotations: Transaction.userEvent.of(userEvent),
+     });
+ }
+ function moveCellFocus(view, cell, dir) {
+@@ -995,6 +2146,7 @@ function appendRow(view, wrap) {
+     const next = serializeTable(model);
+     view.dispatch({
+         changes: { from: range.from, to: range.to, insert: next },
++        annotations: Transaction.userEvent.of('table.edit'),
+     });
+     // Adding a row changes the widget's row count, so `eq` returns
+     // false and CM6 rebuilds the widget DOM. The old `wrap` reference
+@@ -1191,13 +2343,21 @@ const defaultLinkOpener = (url) => {
  export const tableLinkClickFacet = Facet.define({
      combine: (values) => values[0] ?? defaultLinkOpener,
  });

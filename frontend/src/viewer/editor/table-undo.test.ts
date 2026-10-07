@@ -227,3 +227,14 @@ describe("focus returns to the editor after a table action, so undo keeps workin
 		expect(document.activeElement).toBe(view.contentDOM);
 	});
 });
+
+describe("structural edits are their own undo step", () => {
+	test("typing in a cell and then deleting a row undo separately", () => {
+		mount(withHistory());
+		typeIn(4, "x");
+		selectBox(3, 5);
+		key(wrap(), "Backspace");
+		key(wrap(), "z", { ctrlKey: true });
+		expect(table()).toContain("| 1 | 2x | 3 |");
+	});
+});

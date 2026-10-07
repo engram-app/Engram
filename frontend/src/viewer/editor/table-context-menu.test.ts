@@ -261,6 +261,16 @@ describe("grouped menu: Row / Column / Sort / Align sub-menus", () => {
 	const enter = (label: string) =>
 		groupButton(label)?.parentElement?.dispatchEvent(new MouseEvent("pointerenter"));
 
+	test("arrow keys move through the menu even while a cell has focus", async () => {
+		mount();
+		const source = cells()[4]?.querySelector<HTMLElement>(".cm-atomic-table-cell-source");
+		source?.focus();
+		openMenu(4);
+		await tick();
+		keydown("ArrowDown");
+		expect(menu()?.contains(document.activeElement)).toBe(true);
+	});
+
 	test("body and header cells both list Row, Column, Sort and Align", () => {
 		mount();
 		const labels = () => groups().map((g) => g.firstElementChild?.textContent);

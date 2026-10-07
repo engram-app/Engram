@@ -75,31 +75,25 @@ function ToolButton({ tool }: { tool: RightToolDescriptor }) {
 	const { resolvedId, toggleActive, isAvailable } = useRightTools();
 	const available = isAvailable(tool.id);
 	const active = resolvedId === tool.id;
-	const button = (
-		<button
-			type="button"
-			aria-label={t(tool.label)}
-			// aria-pressed, not aria-current: these toggle a panel open and shut,
-			// they do not mark the current location the way the view buttons do.
-			aria-pressed={active}
-			disabled={!available}
-			onClick={() => toggleActive(tool.id)}
-			className={`${railButtonClass(active)} disabled:pointer-events-none disabled:opacity-40`}
-		>
-			<tool.Icon className="size-5" />
-		</button>
-	);
-	if (available) {
-		return <RailTip label={t(tool.label)}>{button}</RailTip>;
-	}
-	// A disabled button receives no pointer events, so the tooltip hangs off a
-	// focusable wrapper and still tells you why it is unavailable.
+	const label = available
+		? t(tool.label)
+		: t("{label} (open a note first)", { label: t(tool.label) });
 	return (
-		<RailTip label={t("{label} (open a note first)", { label: t(tool.label) })}>
-			{/* biome-ignore lint/a11y/noNoninteractiveTabindex: a disabled button is unfocusable, so keyboard users reach the "why" tooltip through this wrapper */}
-			<span tabIndex={0} className="inline-flex rounded-md">
-				{button}
-			</span>
+		<RailTip label={label}>
+			<button
+				type="button"
+				aria-label={t(tool.label)}
+				// aria-pressed, not aria-current: these toggle a panel open and shut,
+				// they do not mark the current location the way the view buttons do.
+				aria-pressed={active}
+				// aria-disabled, not disabled: a disabled button takes neither focus nor
+				// pointer events, so its "open a note first" tooltip would never show.
+				aria-disabled={available ? undefined : true}
+				onClick={available ? () => toggleActive(tool.id) : undefined}
+				className={`${railButtonClass(active)} ${available ? "" : "opacity-40"}`}
+			>
+				<tool.Icon className="size-5" />
+			</button>
 		</RailTip>
 	);
 }

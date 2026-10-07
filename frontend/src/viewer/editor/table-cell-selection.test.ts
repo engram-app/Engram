@@ -639,3 +639,28 @@ describe("pasting a grid with the caret in a cell", () => {
 		expect(selected()).toEqual([]);
 	});
 });
+
+describe("pasting copied web HTML into one cell", () => {
+	test("a <table> in the HTML does not spread plain multi-line text over rows", () => {
+		const doc = "| a | b |\n| --- | --- |\n| 1 | 2 |\n\nafter\n";
+		const v = new EditorView({
+			state: EditorState.create({
+				doc,
+				extensions: [markdown({ base: markdownLanguage }), tables({})],
+			}),
+			parent: document.body,
+		});
+		const [, , source] = v.dom.querySelectorAll<HTMLElement>(".cm-atomic-table-cell-source");
+		const ev = new Event("paste", { bubbles: true, cancelable: true });
+		const data: Record<string, string> = {
+			"text/plain": "line one\nline two\nline three",
+			"text/html": "<table><tr><td>code</td></tr></table>",
+		};
+		Object.defineProperty(ev, "clipboardData", {
+			value: { getData: (t: string) => data[t] ?? "" },
+		});
+		source?.dispatchEvent(ev);
+		expect(v.state.doc.toString().split("\n\nafter")[0]?.split("\n")).toHaveLength(3);
+		v.destroy();
+	});
+});

@@ -1,8 +1,8 @@
 import { readOnlyExtension, tables } from "@atomic-editor/editor";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { EditorState } from "@codemirror/state";
+import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 // Vertical arrows used to skip a table: the block widget is atomic to the
 // outer editor, so ArrowDown/ArrowUp jumped over it, and inside a cell the
@@ -148,5 +148,26 @@ describe("arrowing inside a table", () => {
 		const cell = focusCell(1);
 		press(cell, "ArrowDown", { shiftKey: true });
 		expect(caretCellText()).toBe("b");
+	});
+});
+
+describe("a wrapped line next to the table", () => {
+	// A heading that soft-wraps: ArrowDown on its first visual row moves to its
+	// second row, it does not jump into the table.
+	const WRAPPED = "# a very long heading that wraps\n| a | b |\n| --- | --- |\n| one | two |\n";
+	const LINE_END = WRAPPED.indexOf("\n");
+
+	test("ArrowDown on a non-final visual row stays in the line", () => {
+		mount(WRAPPED, 2);
+		vi.spyOn(view, "moveVertically").mockReturnValue(EditorSelection.cursor(LINE_END - 3));
+		press(view.contentDOM, "ArrowDown");
+		expect(caretCellText()).toBeNull();
+	});
+
+	test("ArrowDown on the final visual row enters the table", () => {
+		mount(WRAPPED, LINE_END - 2);
+		vi.spyOn(view, "moveVertically").mockReturnValue(EditorSelection.cursor(LINE_END + 3));
+		press(view.contentDOM, "ArrowDown");
+		expect(caretCellText()).toBe("a");
 	});
 });
