@@ -52,6 +52,27 @@ defmodule EngramWeb.Plugs.SettleUnreadBodyTest do
     assert get_resp_header(conn, "connection") == ["close"]
   end
 
+  # Bandit's own cleanup reads up to 8 MB more after the plug returns, so a
+  # body with no declared length drains only the share that brings the two
+  # to the ceiling (11 MB - 8 MB) instead of 11 MB plus Bandit's 8 MB.
+  test "a body with no declared length drains only up to the ceiling minus Bandit's 8 MB",
+       %{conn: conn} do
+    conn = raw_post(conn, :binary.copy("a", 5_000_000))
+
+    assert conn.status == 401
+    assert byte_size(unread(conn)) == 2_000_000
+  end
+
+  test "a declared length within the ceiling drains in full", %{conn: conn} do
+    conn =
+      conn
+      |> put_req_header("content-length", "5000000")
+      |> raw_post(:binary.copy("a", 5_000_000))
+
+    assert conn.status == 401
+    assert unread(conn) == ""
+  end
+
   defmodule ProgressAdapter do
     def get_http_protocol(_state), do: :"HTTP/1.1"
     def read_req_body(%{reads: n} = state, _opts), do: {:more, "x", %{state | reads: n + 1}}

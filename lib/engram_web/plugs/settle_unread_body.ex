@@ -43,6 +43,10 @@ defmodule EngramWeb.Plugs.SettleUnreadBody do
   # between reads; a single 1 MB read is bounded only by Bandit's read timeout.
   @drain_ms 30_000
 
+  # Bandit's post-response cleanup reads up to this much more on its own
+  # (Bandit.HTTP1.Socket.ensure_completed/1, read_data default length).
+  @bandit_drain 8_000_000
+
   @impl true
   def init(router), do: {router, router.init([])}
 
@@ -78,7 +82,7 @@ defmodule EngramWeb.Plugs.SettleUnreadBody do
   def settle(%Plug.Conn{state: :sent} = conn, drain_ms) do
     if get_http_protocol(conn) in [:"HTTP/1.1", :"HTTP/1.0"] do
       deadline = System.monotonic_time(:millisecond) + drain_ms
-      drain(conn, EngramWeb.Endpoint.max_body_bytes(), deadline)
+      drain(conn, budget(conn), deadline)
     else
       conn
     end
@@ -104,10 +108,24 @@ defmodule EngramWeb.Plugs.SettleUnreadBody do
     end
   end
 
-  defp drain(conn, budget, _deadline) when budget < 0, do: conn
+  # A declared length is at most the ceiling (mark_oversized skips the rest),
+  # so it drains in full. With no declared length (chunked) the size is
+  # unknown: take only the share that, with Bandit's own cleanup after it,
+  # covers the ceiling. Draining the whole ceiling first left Bandit to read
+  # up to 8 MB more of a body that was over the ceiling anyway.
+  defp budget(conn) do
+    case get_req_header(conn, "content-length") do
+      [] -> EngramWeb.Endpoint.max_body_bytes() - @bandit_drain
+      _ -> EngramWeb.Endpoint.max_body_bytes()
+    end
+  end
+
+  defp drain(conn, budget, _deadline) when budget <= 0, do: conn
 
   defp drain(conn, budget, deadline) do
-    case read_body(conn, length: @read, read_length: @read) do
+    read = min(budget, @read)
+
+    case read_body(conn, length: read, read_length: read) do
       {:more, discard, conn} ->
         if System.monotonic_time(:millisecond) < deadline,
           do: drain(conn, budget - byte_size(discard), deadline),
