@@ -3,7 +3,6 @@ import type React from "react";
 import { useState } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAutofocus } from "@/hooks/use-autofocus";
-import { cn } from "@/lib/utils";
 
 // Above this many vaults the list gets a search box. Below it, the box is
 // pure clutter - every vault is already on screen.
@@ -11,7 +10,9 @@ const SEARCH_THRESHOLD = 8;
 
 type VaultSearch = ReturnType<typeof useVaultSearch>;
 
-// Focus follows the click that opened the field, so it focuses on mount.
+// Focus follows the click that opened the field, so it focuses on mount. That
+// holds only because this mounts when `searching` flips to true; render it
+// already open on load and it would steal focus.
 function SearchInput({ search, status }: { search: VaultSearch; status?: string }) {
 	const ref = useAutofocus<HTMLInputElement>();
 	return (
@@ -49,13 +50,14 @@ export function countLabel(notes?: number, files?: number): string {
 // list that fits whole rows gives no hint there is more below. 18rem shows four
 // and a half rows for the same reason, so the fifth is visibly cut off.
 export function VaultRows({ scroll, children }: { scroll: boolean; children: React.ReactNode }) {
-	const rows = <div className={cn("flex flex-col gap-2", scroll && "pe-3")}>{children}</div>;
+	// Unscrolled, the rows are direct children of the caller's flex column, so
+	// they need no wrapper of their own.
 	return scroll ? (
 		<ScrollArea type="always" className="-me-3 h-[18rem]">
-			{rows}
+			<div className="flex flex-col gap-2 pe-3">{children}</div>
 		</ScrollArea>
 	) : (
-		rows
+		children
 	);
 }
 

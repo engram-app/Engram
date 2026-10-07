@@ -103,20 +103,23 @@ defmodule Engram.Auth.DeviceFlowTest do
     test "is stored trimmed and shown only to the claiming viewer" do
       viewer = insert(:user)
       other = insert(:user)
-      {:ok, auth} = DeviceFlow.start_device_flow("c", nil, "  todd-laptop ")
+      {:ok, auth} = DeviceFlow.start_device_flow("c", "Vault", "  todd-laptop ")
       assert auth.device_name == "todd-laptop"
 
-      assert DeviceFlow.pending_device_name(auth.user_code, other.id) == nil
-      {:ok, _} = DeviceFlow.view_pending_code(auth.user_code, viewer.id)
-      assert DeviceFlow.pending_device_name(auth.user_code, viewer.id) == "todd-laptop"
-      assert DeviceFlow.pending_device_name(auth.user_code, other.id) == nil
+      assert {:ok, %{vault_name: "Vault", device_name: "todd-laptop"}} =
+               DeviceFlow.view_pending_hints(auth.user_code, viewer.id)
+
+      assert DeviceFlow.view_pending_hints(auth.user_code, other.id) == :error
     end
 
-    test "an over-long or blank name is dropped, never fails the link" do
-      assert {:ok, long} = DeviceFlow.start_device_flow("c", nil, String.duplicate("a", 121))
-      assert long.device_name == nil
-      assert {:ok, blank} = DeviceFlow.start_device_flow("c", nil, "   ")
-      assert blank.device_name == nil
+    test "a blank, over-long or oversized name is dropped, never fails the link" do
+      for bad <- ["   ", String.duplicate("a", 65), String.duplicate("a", 121)] do
+        assert {:ok, auth} = DeviceFlow.start_device_flow("c", nil, bad)
+        assert auth.device_name == nil
+      end
+
+      assert {:ok, ok} = DeviceFlow.start_device_flow("c", nil, String.duplicate("a", 64))
+      assert ok.device_name == String.duplicate("a", 64)
     end
   end
 

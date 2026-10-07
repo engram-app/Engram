@@ -69,6 +69,18 @@ defmodule Engram.Auth.DeviceFlow do
   # `user_id` is set later, at authorize time, and so is unsuitable as a
   # pre-authorize ownership check.
   def view_pending_code(user_code, user_id) when is_binary(user_id) do
+    with {:ok, %{vault_name: vault_name}} <- view_pending_hints(user_code, user_id) do
+      {:ok, vault_name}
+    end
+  end
+
+  @doc """
+  Like `view_pending_code/2`, but returns every hint the plugin sent at start
+  (`vault_name` and `device_name`) from the one read that claims the code.
+  """
+  @spec view_pending_hints(String.t(), String.t()) ::
+          {:ok, %{vault_name: String.t() | nil, device_name: String.t() | nil}} | :error
+  def view_pending_hints(user_code, user_id) when is_binary(user_id) do
     now = DateTime.utc_now()
 
     query =
@@ -86,7 +98,7 @@ defmodule Engram.Auth.DeviceFlow do
          Repo.one(
            from(da in DeviceAuthorization,
              where: da.user_code == ^user_code,
-             select: da.vault_name
+             select: %{vault_name: da.vault_name, device_name: da.device_name}
            ),
            skip_tenant_check: true
          )}
@@ -96,26 +108,16 @@ defmodule Engram.Auth.DeviceFlow do
     end
   end
 
-  @doc """
-  The device name the plugin suggested at start, for the user who claimed the
-  code via `view_pending_code/2`. `nil` for anyone else.
-  """
-  @spec pending_device_name(String.t(), String.t()) :: String.t() | nil
-  def pending_device_name(user_code, user_id) when is_binary(user_id) do
-    Repo.one(
-      from(da in DeviceAuthorization,
-        where: da.user_code == ^user_code and da.viewer_user_id == ^user_id,
-        select: da.device_name
-      ),
-      skip_tenant_check: true
-    )
-  end
-
   # The start endpoint is unauthenticated and the name is only a hint, so a bad
-  # one (over-long, wrong type) is dropped rather than failing the link.
+  # one (over-long, wrong type) is dropped rather than failing the link. Capped
+  # well under the 120-character label limit: it is shown pre-filled on a
+  # signed-in user's page, so a long one only helps an impersonator.
+  @max_device_name_chars 64
+
   defp normalize_device_name(name) do
     case Engram.OAuth.resolve_label(name) do
-      {:ok, name} -> name
+      {:ok, nil} -> nil
+      {:ok, name} -> if String.length(name) <= @max_device_name_chars, do: name
       :error -> nil
     end
   end

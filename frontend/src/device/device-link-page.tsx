@@ -785,7 +785,7 @@ function VaultPickerFieldset({
 			) : null}
 			{hasOthers ? (
 				<>
-					<div
+					<header
 						className={cn(
 							"mb-1 flex items-center justify-between gap-2",
 							matchedExisting && "mt-4",
@@ -800,7 +800,7 @@ function VaultPickerFieldset({
 							) : null}
 						</p>
 						<VaultSearchToggle search={search} />
-					</div>
+					</header>
 					<VaultSearchField search={search} />
 					<VaultRows scroll={search.showFilter}>
 						{search.shown.map((v) => (

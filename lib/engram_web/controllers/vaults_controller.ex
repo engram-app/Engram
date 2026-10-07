@@ -64,19 +64,16 @@ defmodule EngramWeb.VaultsController do
           # `user_code_valid` is the ONLY reliable validity signal here — a
           # real code may legitimately have no `suggested_vault_name`, so a
           # nil name says nothing about the code. /link rejects on this field.
-          {valid, suggested} =
-            case DeviceFlow.view_pending_code(code, user.id) do
-              {:ok, vault_name} -> {true, vault_name}
-              :error -> {false, nil}
+          {valid, suggested, device_name} =
+            case DeviceFlow.view_pending_hints(code, user.id) do
+              {:ok, hints} -> {true, hints.vault_name, hints.device_name}
+              :error -> {false, nil, nil}
             end
 
           payload
           |> Map.put(:suggested_vault_name, suggested)
           |> Map.put(:user_code_valid, valid)
-          |> Map.put(
-            :suggested_device_name,
-            if(valid, do: DeviceFlow.pending_device_name(code, user.id))
-          )
+          |> Map.put(:suggested_device_name, device_name)
 
         _ ->
           payload
