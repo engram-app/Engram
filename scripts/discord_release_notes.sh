@@ -8,10 +8,12 @@
 #   discord_release_notes.sh <product> <tag> <release-url> < notes.md
 #
 # Why this exists: the old announce steps posted `${NOTES:0:1600}` — a raw
-# prefix of the release body. For engram that body OPENS with the
-# SCHEMA-IMPACT block (self-host upgrade choreography + a 28-item PR list),
-# so the 1600-char window was consumed entirely by `docker compose down`
-# instructions and the actual Features/Bug Fixes never reached Discord.
+# prefix of the release body. Older engram bodies OPENED with a SCHEMA-IMPACT
+# block (self-host upgrade choreography + a 28-item PR list), so the 1600-char
+# window was consumed entirely by `docker compose down` instructions and the
+# actual Features/Bug Fixes never reached Discord. That block is no longer
+# generated (database changes need no operator step), but the section-based
+# selection below still keeps such an old body readable if one is re-announced.
 # Truncating a document that front-loads its least interesting section is
 # how you get an announcement nobody reads.
 #
@@ -19,7 +21,6 @@
 #   - selects bullets by SECTION rather than by byte offset, so the
 #     SCHEMA-IMPACT preamble drops out structurally (its headers aren't in
 #     the include list and its items are `- `, not release-please's `* `)
-#   - collapses schema impact to a single warning line
 #   - strips markdown link noise, keeping the bare `(#123)` ref
 #   - counts chores/docs/deps instead of listing them
 #   - drops internal SCOPES even inside user-facing sections: release-please
@@ -132,11 +133,6 @@ done <<< "$notes"
 # --- Assemble: fixed parts first, then fill the remaining budget -------
 head_block="**${PRODUCT} ${TAG}**"
 
-schema_line=""
-case "$notes" in
-  *SCHEMA-IMPACT*) schema_line=$'\n'"⚠️ Database schema changes — back up before upgrading." ;;
-esac
-
 footer=$'\n\n'"Full notes: ${URL}"
 
 # Reserve room for the worst-case "omitted" line so adding it later can
@@ -145,7 +141,7 @@ omitted_reserve=$'\n'"…and 999 more"
 
 body=""
 omitted=0
-budget=$(( MAX - ${#head_block} - ${#schema_line} - ${#footer} - ${#omitted_reserve} ))
+budget=$(( MAX - ${#head_block} - ${#footer} - ${#omitted_reserve} ))
 
 for label in "${order[@]}"; do
   group_open=1
@@ -172,7 +168,7 @@ tail_lines=""
 [ "$omitted" -gt 0 ] && tail_lines="${tail_lines}"$'\n'"…and ${omitted} more"
 [ "$other_count" -gt 0 ] && tail_lines="${tail_lines}"$'\n'"Plus ${other_count} internal changes (chores, docs, deps)."
 
-out="${head_block}${schema_line}${body}${tail_lines}${footer}"
+out="${head_block}${body}${tail_lines}${footer}"
 
 # Belt and braces: if a pathological bullet still overshot, cut to the cap
 # at a line boundary and re-attach the link so the reader can always escape

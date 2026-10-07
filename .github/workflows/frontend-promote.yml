@@ -141,10 +141,11 @@ jobs:
               ;;
           esac
           RELEASE_URL="https://github.com/engram-app/Engram/releases/tag/$TAG"
-          # Was `${NOTES:0:1600}` — a raw byte prefix. Our release body
-          # once opened with a long preamble, so that window was spent
-          # on it and the actual changes never made it into Discord. The formatter selects by section + scope
-          # and owns the 2000-char cap; see scripts/discord_release_notes.sh.
+          # Was `${NOTES:0:1600}`, a raw byte prefix: older release bodies
+          # opened with a long upgrade preamble, so that window was spent on it
+          # and the actual changes never made it into Discord. The formatter
+          # selects by section + scope and owns the 2000-char cap; see
+          # scripts/discord_release_notes.sh.
           # This job checks out `ref: env.SHA` — the commit being deployed —
           # so on a re-run of a release older than this script the file is
           # simply absent. Fall back to a bare announcement rather than

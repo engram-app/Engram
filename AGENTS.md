@@ -321,8 +321,10 @@ What that means in practice:
 3. **Dropping or renaming something code still reads breaks the previous
    release** while a deploy is rolling. Ship the code that stops using it
    first, then the migration that removes it. The `migration-gates` CI job
-   enforces this: it extracts what a new migration drops and fails if `lib/`
-   still references it.
+   enforces this: it extracts what a new migration drops or renames (up
+   direction only) and fails if `lib/` still references it. A raw-SQL
+   `DROP COLUMN|TABLE` in `execute/1` cannot be checked, so use Ecto's
+   `remove`/`drop`, or add a `# safety_assured: "reason"` comment.
 4. **A migration must apply on top of the previous release's schema.** The
    same job applies new migrations onto the last `release-v*` tag's schema.
 

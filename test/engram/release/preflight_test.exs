@@ -16,12 +16,11 @@ defmodule Engram.Release.PreflightTest do
     dir
   end
 
-  test "report/2 lists pending migrations with their phase tag and irreversibility flag" do
+  test "report/2 lists pending migrations with their irreversibility flag" do
     dir =
       tmp_migrations([
         {"20260101000000_add_col.exs",
          """
-         # phase: expand
          defmodule M do
            use Ecto.Migration
            def change, do: alter table(:users) do add(:tz, :string) end
@@ -29,7 +28,6 @@ defmodule Engram.Release.PreflightTest do
          """},
         {"20260202000000_drop_col.exs",
          """
-         # phase: contract
          # rollback-irreversible
          defmodule M do
            use Ecto.Migration
@@ -42,9 +40,7 @@ defmodule Engram.Release.PreflightTest do
     result = Preflight.report(FakeRepo, migrations_dir: dir, applied_versions: [])
 
     assert length(result.pending) == 2
-    assert Enum.at(result.pending, 0).phase == :expand
     assert Enum.at(result.pending, 0).irreversible == false
-    assert Enum.at(result.pending, 1).phase == :contract
     assert Enum.at(result.pending, 1).irreversible == true
   end
 
@@ -215,7 +211,7 @@ defmodule Engram.Release.PreflightTest do
       assert out =~ "12"
     end
 
-    test "lists each pending migration with phase, irreversibility and lock risk" do
+    test "lists each pending migration with irreversibility and lock risk" do
       out =
         capture_io(fn ->
           Preflight.print(%{
@@ -223,7 +219,6 @@ defmodule Engram.Release.PreflightTest do
               %{
                 version: "20260101000000",
                 name: "add_thing",
-                phase: :expand,
                 irreversible: false,
                 lock_risk: :low
               }
@@ -237,7 +232,6 @@ defmodule Engram.Release.PreflightTest do
       assert out =~ "PENDING MIGRATIONS (1)"
       assert out =~ "20260101000000"
       assert out =~ "add_thing"
-      assert out =~ "phase: expand"
       assert out =~ "irreversible: false"
       assert out =~ "lock_risk: low"
       assert out =~ "bin/engram eval 'x'"
@@ -251,7 +245,6 @@ defmodule Engram.Release.PreflightTest do
               %{
                 version: "20260101000000",
                 name: "add_thing",
-                phase: :expand,
                 irreversible: false,
                 lock_risk: :low
               }
@@ -293,7 +286,6 @@ defmodule Engram.Release.PreflightTest do
               %{
                 version: "20260101000000",
                 name: "drop_thing",
-                phase: :contract,
                 irreversible: true,
                 lock_risk: :high
               }

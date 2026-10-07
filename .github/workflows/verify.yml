@@ -3545,13 +3545,24 @@ jobs:
             echo "touches=true" >> "$GITHUB_OUTPUT"
             echo "Migrations changed on this branch:"
             printf '  %s\n' $changed
-            # Does any changed migration drop, remove or rename? Only then is
-            # the (compile-heavy) reference check worth running.
-            if grep -lE '\b(remove|remove_if_exists|drop|drop_if_exists|rename)\b' $changed >/dev/null 2>&1; then
-              echo "drops=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "drops=false" >> "$GITHUB_OUTPUT"
-            fi
+            # Does any NEW migration drop, remove or rename in its up direction?
+            # Only then is the (compile-heavy) reference check worth running.
+            # Mirrors what the extractor reads: added files only (the extractor
+            # takes its list from list_new_migrations.sh), with `def down`
+            # bodies cut out (an additive migration's reversal is not a drop),
+            # case-insensitive so a raw `DROP COLUMN` in execute/1 is seen, and
+            # a `*_drops.exs` name always counts.
+            added=$(git diff --name-only --diff-filter=A \
+              "$base" HEAD -- 'priv/repo/migrations/*.exs')
+            drops=false
+            for f in $added; do
+              case "$f" in *_drops.exs) drops=true ;; esac
+              if awk '/^  def down/ {skip=1} skip && /^  end/ {skip=0; next} !skip' "$f" |
+                  grep -qiE '\b(remove|remove_if_exists|drop|drop_if_exists|rename)\b'; then
+                drops=true
+              fi
+            done
+            echo "drops=$drops" >> "$GITHUB_OUTPUT"
           fi
 
       # ── contract-references ── when a new migration drops, removes or renames
@@ -3651,6 +3662,12 @@ jobs:
             echo "::notice::  - The match was a rename or remove that drops nothing"
             echo "::notice::Reviewer: confirm intent on this PR before merging."
             exit 0
+          fi
+          if grep -q '^rawsql ' /tmp/drops.txt; then
+            echo "::error::A migration drops a column or table with raw SQL in execute/1, which this gate cannot check against lib/:"
+            grep '^rawsql ' /tmp/drops.txt | sed 's/^/  /'
+            echo "::error::Use Ecto's remove/drop so the reference check can see it, or add a top-of-file '# safety_assured: \"reason\"' comment."
+            exit 1
           fi
           echo "Dropped identifiers this PR introduces:"
           sed 's/^/  /' /tmp/drops.txt
