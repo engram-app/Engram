@@ -555,6 +555,28 @@ describe("DeviceLinkPage", () => {
 			expect(await screen.findByLabelText(/name this connection/iu)).toHaveValue("todd-laptop");
 		});
 
+		it("seeds the new-vault name with the plugin's suggestion and creates it", async () => {
+			get.mockResolvedValue({
+				vaults: [{ id: 7, name: "Personal", note_count: 3 }],
+				suggested_vault_name: "Brain Dump",
+			});
+			post.mockResolvedValue({ ok: true, vault_id: 8 });
+			renderPage();
+			fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), {
+				target: { value: "ENGR7X4K" },
+			});
+			fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+			expect(await screen.findByLabelText(/new vault name/iu)).toHaveValue("Brain Dump");
+			expect(screen.getByText(/matches your obsidian vault name/iu)).toBeInTheDocument();
+			fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
+			await waitFor(() =>
+				expect(post).toHaveBeenCalledWith(
+					"/auth/device/authorize",
+					expect.objectContaining({ vault_id: "new", vault_name: "Brain Dump" }),
+				),
+			);
+		});
+
 		it("omits the label when the user clears it", async () => {
 			await reachPicker([{ id: 7, name: "Personal", note_count: 3 }]);
 			fireEvent.change(screen.getByLabelText(/name this connection/iu), { target: { value: "" } });

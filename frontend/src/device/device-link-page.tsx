@@ -110,10 +110,10 @@ function DeviceLinkPage() {
 	const codeRef = useAutofocus<HTMLInputElement>(step === "enter-code");
 	const [userCode, setUserCode] = useState(urlCode);
 	const [vaults, setVaults] = useState<Vault[]>([]);
-	// `selection` is the radio-row value: 'matched' (create new with the
-	// plugin-suggested name), 'custom' (create new with the input below), or
-	// the existing vault id as a string.
-	const [selection, setSelection] = useState<string>("matched");
+	// `selection` is the radio-row value: 'custom' (create new, named by the
+	// input, which starts out as the plugin-suggested name) or the existing
+	// vault id as a string.
+	const [selection, setSelection] = useState<string>("custom");
 	const [suggestedName, setSuggestedName] = useState("");
 	const [customName, setCustomName] = useState("");
 	// Seeded with a guess from the plugin's User-Agent once the code verifies;
@@ -192,8 +192,8 @@ function DeviceLinkPage() {
 			setSuggestedName(suggested);
 			// Default selection:
 			// - existing vault with the same name → pre-select that vault (link, don't dup)
-			// - suggested name with no existing match → 'matched' (create new with that name)
-			// - no hint at all → 'custom' (force user to type a name)
+			// - otherwise → 'custom' (create new), seeded with the suggested name
+			//   when there is one; with no hint the user types one
 			const existing = suggested
 				? (data.vaults ?? []).find((v) => v.name === suggested)
 				: undefined;
@@ -203,15 +203,8 @@ function DeviceLinkPage() {
 				(data.vaults ?? []).length >= (vaultsCap ?? Number.POSITIVE_INFINITY)
 					? (data.vaults?.[0] ?? null)
 					: null;
-			setSelection(
-				existing
-					? existing.id
-					: fallbackExisting
-						? fallbackExisting.id
-						: suggested
-							? "matched"
-							: "custom",
-			);
+			setSelection(existing ? existing.id : fallbackExisting ? fallbackExisting.id : "custom");
+			setCustomName(existing ? "" : suggested);
 			setStep("pick-vault");
 		} catch {
 			setError("Failed to load vaults. Please try again.");
@@ -350,10 +343,8 @@ function DeviceLinkPage() {
 		);
 	}
 
-	const isMatched = selection === "matched";
-	const isCustom = selection === "custom";
-	const createNew = isMatched || isCustom;
-	const effectiveNewName = isCustom ? customName.trim() : isMatched ? suggestedName : "";
+	const createNew = selection === "custom";
+	const effectiveNewName = createNew ? customName.trim() : "";
 
 	async function handleAuthorize() {
 		setLoading(true);
@@ -536,10 +527,6 @@ function DeviceLinkPage() {
 
 				{step === "pick-vault" && (
 					<div className="flex flex-col gap-3">
-						<p className="text-muted-foreground text-sm">
-							Pick an existing one, or create a new vault for these notes.
-						</p>
-
 						<label className="flex flex-col gap-2 rounded-lg border border-border bg-muted/40 p-4">
 							<span className="font-semibold text-base text-foreground">
 								Name this connection{" "}
@@ -760,14 +747,11 @@ function VaultRadio({
 	);
 }
 
-// Stacked-radio picker for the /link consent page. Three row variants:
-//   1. Existing vault whose name matches the plugin's suggestion (top, if any)
-//      — selecting it links into that vault, no creation.
-//   2. Each other existing vault — explicit link target.
-//   3. Custom-name row at the bottom with an inline input — focus or type
-//      to auto-select.
-// If no match-by-name exists and the plugin sent a suggestion, slot a
-// "create with matched name" row at the top instead.
+// Picker for the /link consent page, in two blocks:
+//   1. Existing vaults as radio rows (the one matching the plugin's suggested
+//      name first). Selecting one links into it, no creation.
+//   2. A plain name field that creates a new vault. It starts out as the
+//      plugin-suggested name; focusing or typing in it selects "create".
 function VaultPickerFieldset({
 	vaults,
 	suggestedName,
@@ -779,19 +763,17 @@ function VaultPickerFieldset({
 }: VaultPickerFieldsetProps) {
 	const matchedExisting = suggestedName ? vaults.find((v) => v.name === suggestedName) : undefined;
 	const otherVaults = matchedExisting ? vaults.filter((v) => v.id !== matchedExisting.id) : vaults;
-	const isMatched = selection === "matched";
 	const isCustom = selection === "custom";
 	const search = useVaultSearch(otherVaults);
 	const hasExisting = vaults.length > 0;
-	const suggestsNew = Boolean(suggestedName) && !matchedExisting;
-	const sectionTitle = "font-medium text-foreground text-sm";
+	const sectionTitle = "font-semibold text-base text-foreground";
 
 	return (
 		<fieldset className="flex flex-col gap-2">
 			{hasExisting && (
 				<>
 					<div className="mb-1 flex items-center justify-between gap-2">
-						<legend className={sectionTitle}>Sync into an existing vault</legend>
+						<legend className={sectionTitle}>Sync an existing vault</legend>
 						<VaultSearchToggle search={search} />
 					</div>
 					<VaultSearchField search={search} />
@@ -828,30 +810,7 @@ function VaultPickerFieldset({
 					) : (
 						<legend className={sectionTitle}>Create a new vault</legend>
 					)}
-					{suggestsNew ? (
-						<>
-							<label className={selectableRow(isMatched)}>
-								<input
-									type="radio"
-									name="vault-target"
-									checked={isMatched}
-									onChange={() => onSelect("matched")}
-									className="accent-primary"
-								/>
-								<span className="flex flex-col">
-									<span className="font-medium text-foreground text-sm">{suggestedName}</span>
-									<span className="text-muted-foreground text-xs">
-										Matches your Obsidian vault name
-									</span>
-								</span>
-							</label>
-							<hr className="my-2 border-border" />
-						</>
-					) : null}
 					<label className="flex flex-col gap-1.5">
-						<span className="text-muted-foreground text-xs">
-							{suggestsNew ? "Or pick a different name" : "Name"}
-						</span>
 						<input
 							type="text"
 							value={customName}
@@ -863,9 +822,15 @@ function VaultPickerFieldset({
 							}}
 							onFocus={() => onSelect("custom")}
 							placeholder="choose a new name"
+							aria-label="New vault name"
 							maxLength={100}
 							className={cn(fieldInput, isCustom && "border-primary")}
 						/>
+						{suggestedName && customName.trim() === suggestedName ? (
+							<span className="text-muted-foreground text-xs">
+								Matches your Obsidian vault name
+							</span>
+						) : null}
 					</label>
 				</>
 			)}
