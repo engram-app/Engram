@@ -87,7 +87,13 @@ function checkoutSettings(isInline: boolean): CheckoutSettings {
 // onboarding flow. `import.meta.env.DEV` is false in production builds, so this
 // path is compiled out and never ships. Excluded under `TEST` so unit tests
 // exercise the real inline-frame path (vitest sets DEV=true too).
-const DEV_FAKE_CHECKOUT = import.meta.env.DEV && !import.meta.env.TEST;
+//
+// Only on a loopback host: reached through an HTTPS tunnel (bare host on :443)
+// the real frame embeds fine, and the stub would hide the screen being tested.
+const DEV_FAKE_CHECKOUT =
+	import.meta.env.DEV &&
+	!import.meta.env.TEST &&
+	["localhost", "127.0.0.1"].includes(window.location.hostname);
 
 // Paddle's own CheckoutEventsPaymentMethodTypes ("apple-pay", "google-pay", …)
 // use hyphens; CHECKOUT_METHODS uses underscores to match every other enum
