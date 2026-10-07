@@ -64,10 +64,10 @@ function dragHandle(handle: HTMLElement | undefined, over: number) {
 }
 
 describe("reorder handles", () => {
-	test("each column and each body row gets one; the header row gets none", () => {
+	test("each column and each row, header included, gets one", () => {
 		mount();
 		expect(colHandles()).toHaveLength(3);
-		expect(rowHandles()).toHaveLength(2);
+		expect(rowHandles()).toHaveLength(3);
 		expect(colHandles().map((h) => h.getAttribute("aria-label"))).toEqual([
 			"Move column",
 			"Move column",
@@ -80,7 +80,7 @@ describe("reorder handles", () => {
 		mount();
 		expect(colHandles().every((h) => h.parentElement?.tagName === "TH")).toBe(true);
 		expect(rowHandles().map((h) => cells().indexOf(h.parentElement as HTMLElement))).toEqual([
-			3, 6,
+			0, 3, 6,
 		]);
 	});
 
@@ -128,7 +128,7 @@ describe("dragging a column handle", () => {
 		dragHandle(colHandles()[0], 2);
 		expect(colHandles()).toHaveLength(3);
 		expect(rowHandles().map((h) => cells().indexOf(h.parentElement as HTMLElement))).toEqual([
-			3, 6,
+			0, 3, 6,
 		]);
 	});
 });
@@ -136,27 +136,32 @@ describe("dragging a column handle", () => {
 describe("dragging a row handle", () => {
 	test("onto a row below moves the row there", () => {
 		mount();
-		dragHandle(rowHandles()[0], 6);
+		dragHandle(rowHandles()[1], 6);
 		expect(table()).toBe("| a | b | c |\n| --- | --- | --- |\n| 4 | 5 | 6 |\n| 1 | 2 | 3 |");
 	});
 
 	test("onto a row above moves the row there", () => {
 		mount();
-		dragHandle(rowHandles()[1], 3);
+		dragHandle(rowHandles()[2], 3);
 		expect(table()).toBe("| a | b | c |\n| --- | --- | --- |\n| 4 | 5 | 6 |\n| 1 | 2 | 3 |");
 	});
 
-	test("the header row is not a drop target", () => {
+	test("dropping a body row on the header row makes it the header", () => {
 		mount();
-		const before = view.state.doc.toString();
-		dragHandle(rowHandles()[0], 1); // a header cell
-		expect(view.state.doc.toString()).toBe(before);
+		dragHandle(rowHandles()[1], 1); // first body row onto a header cell
+		expect(table()).toBe("| 1 | 2 | 3 |\n| --- | --- | --- |\n| a | b | c |\n| 4 | 5 | 6 |");
+	});
+
+	test("the header row can be dragged down into the body", () => {
+		mount();
+		dragHandle(rowHandles()[0], 6); // header onto the last row
+		expect(table()).toBe("| 1 | 2 | 3 |\n| --- | --- | --- |\n| 4 | 5 | 6 |\n| a | b | c |");
 	});
 
 	test("dropping on its own row changes nothing", () => {
 		mount();
 		const before = view.state.doc.toString();
-		dragHandle(rowHandles()[0], 4);
+		dragHandle(rowHandles()[1], 4);
 		expect(view.state.doc.toString()).toBe(before);
 	});
 });
@@ -249,10 +254,10 @@ describe("the handle slides with the pointer", () => {
 			.querySelectorAll(".cm-atomic-table thead th")
 			.forEach((th, i) => at(th, rect(100 + i * 100, 100, 100, 40)));
 		view.dom
-			.querySelectorAll(".cm-atomic-table tbody tr")
-			.forEach((tr, i) => at(tr, rect(100, 140 + i * 40, 300, 40)));
+			.querySelectorAll(".cm-atomic-table tr")
+			.forEach((tr, i) => at(tr, rect(100, 100 + i * 40, 300, 40)));
 		colHandles().forEach((h, i) => at(h, rect(100 + i * 100, 86, 100, 11)));
-		rowHandles().forEach((h, i) => at(h, rect(86, 140 + i * 40, 11, 40)));
+		rowHandles().forEach((h, i) => at(h, rect(86, 100 + i * 40, 11, 40)));
 	}
 
 	test("a column handle follows the pointer horizontally, unsnapped", () => {
@@ -287,13 +292,13 @@ describe("the handle slides with the pointer", () => {
 		ptr(document.body, "pointerup", { buttons: 0 });
 	});
 
-	test("a row handle is clamped to the body rows (not the header)", () => {
+	test("a row handle is clamped to the table's rows", () => {
 		mount();
 		fakeLayout();
-		const handle = rowHandles()[0] as HTMLElement; // first body row, y 140..180; body ends at 220
+		const handle = rowHandles()[1] as HTMLElement; // first body row, y 140..180; table spans 100..220
 		ptr(handle, "pointerdown", { clientY: 160 });
 		ptr(document.body, "pointermove", { clientY: -5000 });
-		expect(handle.style.transform).toBe("translateY(0px)");
+		expect(handle.style.transform).toBe("translateY(-40px)");
 		ptr(document.body, "pointermove", { clientY: 5000 });
 		expect(handle.style.transform).toBe("translateY(40px)");
 		ptr(document.body, "pointerup", { buttons: 0 });
@@ -316,7 +321,7 @@ describe("the handle slides with the pointer", () => {
 	test("a row drops where the pointer is vertically", () => {
 		mount();
 		fakeLayout();
-		ptr(rowHandles()[0] as HTMLElement, "pointerdown", { clientY: 160 });
+		ptr(rowHandles()[1] as HTMLElement, "pointerdown", { clientY: 160 });
 		ptr(document.body, "pointermove", { clientX: 5, clientY: 205 }); // over the second body row
 		ptr(document.body, "pointerup", { buttons: 0 });
 		expect(table()).toBe("| a | b | c |\n| --- | --- | --- |\n| 4 | 5 | 6 |\n| 1 | 2 | 3 |");

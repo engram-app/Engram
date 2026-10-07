@@ -58,7 +58,7 @@ function choose(i: number, label: string) {
 }
 
 describe("menu contents", () => {
-	test("a header cell offers column actions, sorting and alignment but no row actions", () => {
+	test("a header cell offers every action, row actions included", () => {
 		mount();
 		openMenu(1);
 		for (const label of [
@@ -72,7 +72,8 @@ describe("menu contents", () => {
 		]) {
 			expect(item(label), label).toBeDefined();
 		}
-		expect(item("Move row up")).toBeUndefined();
+		expect(item("Move row up")).toBeDefined();
+		expect(item("Delete row")).toBeDefined();
 	});
 
 	test("a body cell also offers row moves", () => {
@@ -84,11 +85,17 @@ describe("menu contents", () => {
 
 	test("moves that can't happen are disabled", () => {
 		mount();
-		openMenu(3); // first body row, first column
+		openMenu(0); // the header row, first column: nothing above or to the left
 		expect(item("Move row up")?.disabled).toBe(true);
 		expect(item("Move row down")?.disabled).toBe(false);
 		expect(item("Move column left")?.disabled).toBe(true);
 		expect(item("Move column right")?.disabled).toBe(false);
+	});
+
+	test("the first body row can move up (into the header)", () => {
+		mount();
+		openMenu(3);
+		expect(item("Move row up")?.disabled).toBe(false);
 	});
 
 	test("the last row / column can't move further", () => {
@@ -254,22 +261,14 @@ describe("grouped menu: Row / Column / Sort / Align sub-menus", () => {
 	const enter = (label: string) =>
 		groupButton(label)?.parentElement?.dispatchEvent(new MouseEvent("pointerenter"));
 
-	test("a body cell lists Row, Column, Sort and Align; a header cell has no Row", () => {
+	test("body and header cells both list Row, Column, Sort and Align", () => {
 		mount();
+		const labels = () => groups().map((g) => g.firstElementChild?.textContent);
 		openMenu(4);
-		expect(groups().map((g) => g.firstElementChild?.textContent)).toEqual([
-			"Row",
-			"Column",
-			"Sort",
-			"Align",
-		]);
+		expect(labels()).toEqual(["Row", "Column", "Sort", "Align"]);
 		menu()?.remove();
 		openMenu(1);
-		expect(groups().map((g) => g.firstElementChild?.textContent)).toEqual([
-			"Column",
-			"Sort",
-			"Align",
-		]);
+		expect(labels()).toEqual(["Row", "Column", "Sort", "Align"]);
 	});
 
 	test("groups are collapsed menu buttons", () => {
@@ -337,7 +336,7 @@ describe("grouped menu: Row / Column / Sort / Align sub-menus", () => {
 
 	test("ArrowDown focuses the first group; ArrowRight opens it and focuses its first enabled item", async () => {
 		mount();
-		openMenu(3); // first body row: "Move row up" is disabled
+		openMenu(0); // header row: "Move row up" is disabled
 		await tick();
 		keydown("ArrowDown");
 		expect(document.activeElement).toBe(groupButton("Row"));
@@ -348,7 +347,7 @@ describe("grouped menu: Row / Column / Sort / Align sub-menus", () => {
 
 	test("arrow navigation skips disabled items; ArrowLeft returns to the group", async () => {
 		mount();
-		openMenu(3);
+		openMenu(0);
 		await tick();
 		keydown("ArrowDown");
 		keydown("ArrowRight");
@@ -358,5 +357,53 @@ describe("grouped menu: Row / Column / Sort / Align sub-menus", () => {
 		keydown("ArrowLeft");
 		expect(isOpen("Row")).toBe(false);
 		expect(document.activeElement).toBe(groupButton("Row"));
+	});
+});
+
+describe("the header row is not special: every action works on it", () => {
+	test("Insert row above the header makes a new empty header; the old one becomes a body row", () => {
+		mount();
+		choose(0, "Insert row above");
+		expect(table()).toBe(
+			"|  |  |  |\n| --- | --- | --- |\n| a | b | c |\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |",
+		);
+	});
+
+	test("Insert row below the header adds the first body row", () => {
+		mount();
+		choose(0, "Insert row below");
+		expect(table()).toBe(
+			"| a | b | c |\n| --- | --- | --- |\n|  |  |  |\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |",
+		);
+	});
+
+	test("Move row down on the header swaps it with the first body row", () => {
+		mount();
+		choose(0, "Move row down");
+		expect(table()).toBe("| 1 | 2 | 3 |\n| --- | --- | --- |\n| a | b | c |\n| 4 | 5 | 6 |");
+	});
+
+	test("Move row up on the first body row swaps it with the header", () => {
+		mount();
+		choose(3, "Move row up");
+		expect(table()).toBe("| 1 | 2 | 3 |\n| --- | --- | --- |\n| a | b | c |\n| 4 | 5 | 6 |");
+	});
+
+	test("Delete row on the header promotes the first body row", () => {
+		mount();
+		choose(0, "Delete row");
+		expect(table()).toBe("| 1 | 2 | 3 |\n| --- | --- | --- |\n| 4 | 5 | 6 |");
+	});
+
+	test("Delete row on a header with no body rows clears it instead (a table needs a header)", () => {
+		mount("| a | b |\n| --- | --- |\n\nafter\n");
+		choose(0, "Delete row");
+		expect(table()).toBe("|  |  |\n| --- | --- |");
+	});
+
+	test("column alignment stays with its column through header row moves", () => {
+		mount("| a | b |\n| :-- | --: |\n| 1 | 2 |\n\nafter\n");
+		choose(0, "Move row down");
+		expect(table()).toBe("| 1 | 2 |\n| :--- | ---: |\n| a | b |");
 	});
 });

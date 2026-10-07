@@ -281,11 +281,18 @@ describe("Backspace / Delete on a cell selection", () => {
 		expect(table()).toBe("|  |  |  |\n| --- | --- | --- |\n|  |  |  |\n|  |  |  |");
 	});
 
-	test("a selection that includes the header clears it (it can't be removed) and drops the body rows", () => {
+	test("a selection that includes the header removes it too; the next row becomes the header", () => {
 		mount();
 		drag(0, 5);
 		press("Backspace");
-		expect(table()).toBe("|  |  |  |\n| --- | --- | --- |\n| 4 | 5 | 6 |");
+		expect(table()).toBe("| 4 | 5 | 6 |\n| --- | --- | --- |");
+	});
+
+	test("selecting only the header row and deleting promotes the first body row", () => {
+		mount();
+		drag(0, 2);
+		press("Backspace");
+		expect(table()).toBe("| 1 | 2 | 3 |\n| --- | --- | --- |\n| 4 | 5 | 6 |");
 	});
 
 	test("the outline is gone once a row is removed", () => {

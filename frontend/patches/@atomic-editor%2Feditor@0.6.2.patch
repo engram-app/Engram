@@ -7,6 +7,9 @@ index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-323e5d0b9178d9b1 b/.bun-tag-323e5d0b9178d9b1
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-35424c37b135c596 b/.bun-tag-35424c37b135c596
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-4c3cc613907cb629 b/.bun-tag-4c3cc613907cb629
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
@@ -444,7 +447,7 @@ index ff02d57548388e468f73695f3bd45ec58be38160..d2f2a04758594f7b202cda3897ac7321
  export declare function tables(config?: TablesConfig): Extension;
  export {};
 diff --git a/dist/table-widget.js b/dist/table-widget.js
-index aee407c4aaa2eea5a46c0fa28831dcc80985c783..b103caef5dc6d0abb9e8ec1409f64d33ee3ed41e 100644
+index aee407c4aaa2eea5a46c0fa28831dcc80985c783..a21d4dc02dc9a88be78b3d338f36449b9900a1cc 100644
 --- a/dist/table-widget.js
 +++ b/dist/table-widget.js
 @@ -42,9 +42,22 @@ export function splitRowCells(line) {
@@ -581,7 +584,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..b103caef5dc6d0abb9e8ec1409f64d33
  ];
  function isMarkWrap(el) {
      for (const c of MARK_WRAP_CLASSES)
-@@ -528,10 +592,730 @@ function placeCaretAtEnd(el) {
+@@ -528,10 +592,751 @@ function placeCaretAtEnd(el) {
  function getAllCells(wrap) {
      return Array.from(wrap.querySelectorAll('th, td'));
  }
@@ -781,20 +784,18 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..b103caef5dc6d0abb9e8ec1409f64d33
 +    const fullRows = c0 === 0 && c1 === cols - 1;
 +    const fullCols = r0 === 0 && r1 === cells.length / cols - 1;
 +    if (fullRows !== fullCols) {
-+        const m = readModelFromDom(wrap);
 +        if (fullCols) {
++            const m = readModelFromDom(wrap);
 +            m.header.splice(c0, c1 - c0 + 1);
 +            m.align.splice(c0, c1 - c0 + 1);
 +            for (const r of m.rows)
 +                r.splice(c0, c1 - c0 + 1);
++            dispatchModel(view, wrap, m);
 +        }
 +        else {
-+            if (r0 === 0)
-+                m.header = m.header.map(() => '');
-+            const firstBody = Math.max(r0, 1);
-+            m.rows.splice(firstBody - 1, r1 - firstBody + 1);
++            // Header included: the next remaining row is promoted to header.
++            editRows(view, wrap, (list) => list.splice(r0, r1 - r0 + 1));
 +        }
-+        dispatchModel(view, wrap, m);
 +        view.focus();
 +        return true;
 +    }
@@ -1155,8 +1156,8 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..b103caef5dc6d0abb9e8ec1409f64d33
 +        return;
 +    for (const th of wrap.querySelectorAll('thead th'))
 +        th.append(makeHandle('col', view, wrap));
-+    for (const tr of wrap.querySelectorAll('tbody tr'))
-+        tr.querySelector('td')?.append(makeHandle('row', view, wrap));
++    for (const tr of wrap.querySelectorAll('tr'))
++        tr.querySelector('th, td')?.append(makeHandle('row', view, wrap));
 +}
 +function clearDropMarks(wrap) {
 +    for (const el of wrap.querySelectorAll('.cm-atomic-table-drop-target')) {
@@ -1169,13 +1170,34 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..b103caef5dc6d0abb9e8ec1409f64d33
 +    const side = to > from ? 'after' : 'before';
 +    const targets = kind === 'col'
 +        ? Array.from(wrap.querySelectorAll('tr')).map((tr) => tr.children[to])
-+        : Array.from(wrap.querySelectorAll('tbody tr')[to]?.children ?? []);
++        : Array.from(wrap.querySelectorAll('tr')[to]?.children ?? []);
 +    for (const el of targets) {
 +        if (!el)
 +            continue;
 +        el.classList.add('cm-atomic-table-drop-target');
 +        el.dataset.drop = `${kind}-${side}`;
 +    }
++}
++// Index of a cell's row among ALL rows, header first (the header is row 0).
++function rowAllIndex(cell) {
++    const tr = cell.closest('tr');
++    const wrap = cell.closest('.cm-atomic-table');
++    return tr && wrap ? Array.from(wrap.querySelectorAll('tr')).indexOf(tr) : -1;
++}
++// Edit the table's rows as one list, header first. The header is not special to
++// the user: any row can be inserted around, moved or removed, and whichever row
++// ends up first becomes the header, so the markdown stays valid (a GFM table
++// always has exactly one header row). The widget then rebuilds from the new
++// document because its DOM no longer matches it.
++function editRows(view, wrap, fn) {
++    const m = readModelFromDom(wrap);
++    const list = [m.header, ...m.rows];
++    fn(list);
++    if (list.length === 0)
++        return;
++    m.header = list[0];
++    m.rows = list.slice(1);
++    dispatchModel(view, wrap, m);
 +}
 +function moveTableLine(view, wrap, kind, from, to) {
 +    if (kind === 'col') {
@@ -1187,11 +1209,13 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..b103caef5dc6d0abb9e8ec1409f64d33
 +        }
 +    }
 +    else {
-+        const tbody = wrap.querySelector('tbody');
-+        const trs = Array.from(wrap.querySelectorAll('tbody tr'));
-+        if (!tbody || !trs[from] || !trs[to])
-+            return;
-+        tbody.insertBefore(trs[from], to > from ? trs[to].nextSibling : trs[to]);
++        editRows(view, wrap, (list) => {
++            if (!list[from] || !list[to])
++                return;
++            const [moved] = list.splice(from, 1);
++            list.splice(to, 0, moved);
++        });
++        return;
 +    }
 +    syncHandles(view, wrap);
 +    const any = wrap.querySelector('th, td');
@@ -1199,12 +1223,12 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..b103caef5dc6d0abb9e8ec1409f64d33
 +        dispatchModelFromDom(view, any);
 +}
 +function startHandleDrag(view, wrap, kind, handle, down) {
-+    const from = kind === 'col' ? cellColIndex(handle.parentElement) : cellRowIndex(handle.parentElement);
++    const from = kind === 'col' ? cellColIndex(handle.parentElement) : rowAllIndex(handle.parentElement);
 +    if (from < 0)
 +        return;
 +    let to = from;
 +    const horizontal = kind === 'col';
-+    const items = () => Array.from(wrap.querySelectorAll(horizontal ? 'thead th' : 'tbody tr'));
++    const items = () => Array.from(wrap.querySelectorAll(horizontal ? 'thead th' : 'tr'));
 +    // The handle slides along its rail (the table's extent on its axis) with the
 +    // pointer, unsnapped; the landing slot is marked separately.
 +    const startPointer = horizontal ? down.clientX : down.clientY;
@@ -1233,7 +1257,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..b103caef5dc6d0abb9e8ec1409f64d33
 +        const cell = cellOf(e.target);
 +        if (!cell || !wrap.contains(cell))
 +            return -1;
-+        return horizontal ? cellColIndex(cell) : cellRowIndex(cell);
++        return horizontal ? cellColIndex(cell) : rowAllIndex(cell);
 +    };
 +    // Keep the handle visible for the whole drag, wherever the pointer is
 +    // (its hover state only exists while the pointer is over it).
@@ -1260,7 +1284,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..b103caef5dc6d0abb9e8ec1409f64d33
 +        slide(e);
 +        const t = slotAt(e);
 +        if (t < 0)
-+            return; // the header row is not a row target
++            return;
 +        to = t;
 +        markDropTarget(wrap, kind, from, to);
 +    };
@@ -1312,7 +1336,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..b103caef5dc6d0abb9e8ec1409f64d33
          Object.defineProperty(this, "model", {
              enumerable: true,
              configurable: true,
-@@ -561,18 +1345,48 @@ class TableWidget extends WidgetType {
+@@ -561,18 +1366,48 @@ class TableWidget extends WidgetType {
              return false;
          if (other.model.rows.length !== this.model.rows.length)
              return false;
@@ -1365,7 +1389,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..b103caef5dc6d0abb9e8ec1409f64d33
          thead.appendChild(headerRow);
          table.appendChild(thead);
          const tbody = document.createElement('tbody');
-@@ -580,11 +1394,18 @@ class TableWidget extends WidgetType {
+@@ -580,11 +1415,18 @@ class TableWidget extends WidgetType {
          for (const row of this.model.rows) {
              const tr = document.createElement('tr');
              for (let c = 0; c < colCount; c++) {
@@ -1385,7 +1409,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..b103caef5dc6d0abb9e8ec1409f64d33
          return wrap;
      }
      // All cell interactions are handled by the listeners we attach in
-@@ -629,17 +1450,37 @@ function makeCell(tag, text, view) {
+@@ -629,17 +1471,37 @@ function makeCell(tag, text, view) {
      // opened. We open on `click` (a proper popup-activation gesture, so
      // `window.open` isn't blocked) and block the caret on `pointerdown`.
      //
@@ -1428,7 +1452,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..b103caef5dc6d0abb9e8ec1409f64d33
      source.addEventListener('pointerdown', (event) => {
          if (event.button !== 0)
              return;
-@@ -678,7 +1519,12 @@ function attachCellEditing(view, cell, source) {
+@@ -678,7 +1540,12 @@ function attachCellEditing(view, cell, source) {
          // textContent (not innerText) so `display: none` delimiters inside
          // mark wraps are still captured — otherwise a cell containing
          // `**bold**` would serialize to just `bold` on every keystroke.
@@ -1442,7 +1466,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..b103caef5dc6d0abb9e8ec1409f64d33
          cell.dataset.raw = raw;
          const offset = getCaretCharOffset(source);
          renderCellSourceDecorated(source);
-@@ -711,6 +1557,18 @@ function attachCellEditing(view, cell, source) {
+@@ -711,6 +1578,18 @@ function attachCellEditing(view, cell, source) {
      // and strip markup here, and `escapeCell` neutralizes any literal `|`
      // on serialize.
      source.addEventListener('paste', (event) => {
@@ -1461,7 +1485,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..b103caef5dc6d0abb9e8ec1409f64d33
          event.preventDefault();
          const text = (event.clipboardData?.getData('text/plain') ?? '')
              .replace(/\s+/g, ' ')
-@@ -737,6 +1595,15 @@ function attachCellEditing(view, cell, source) {
+@@ -737,6 +1616,15 @@ function attachCellEditing(view, cell, source) {
      // hides all delimiters.
      source.addEventListener('blur', () => clearActiveMarksInSource(source));
      source.addEventListener('keydown', (event) => {
@@ -1477,7 +1501,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..b103caef5dc6d0abb9e8ec1409f64d33
          // Enter mirrors Tab — advance to the next cell (appending a row past
          // the last one) instead of inserting a line break a single-line cell
          // can't represent. Shift reverses direction for both.
-@@ -804,6 +1671,70 @@ function dispatchModel(view, wrap, nextModel) {
+@@ -804,80 +1692,185 @@ function dispatchModel(view, wrap, nextModel) {
          changes: { from: range.from, to: range.to, insert: next },
      });
  }
@@ -1548,11 +1572,12 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..b103caef5dc6d0abb9e8ec1409f64d33
  function openCellMenu(view, cell, x, y) {
      const wrap = cell.closest('.cm-atomic-table');
      if (!wrap)
-@@ -811,73 +1742,123 @@ function openCellMenu(view, cell, x, y) {
-     const isHeader = cell.tagName === 'TH';
-     const row = cellRowIndex(cell);
+         return;
+-    const isHeader = cell.tagName === 'TH';
+-    const row = cellRowIndex(cell);
++    const row = rowAllIndex(cell); // header = 0
      const col = cellColIndex(cell);
-+    const rowCount = wrap.querySelectorAll('tbody tr').length;
++    const rowTotal = wrap.querySelectorAll('tr').length;
 +    const colCount = wrap.querySelectorAll('thead th').length;
      const menu = document.createElement('div');
      menu.className = 'cm-atomic-table-menu';
@@ -1560,6 +1585,13 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..b103caef5dc6d0abb9e8ec1409f64d33
      menu.style.left = `${x}px`;
      menu.style.top = `${y}px`;
 -    const items = [];
+-    if (!isHeader) {
+-        items.push({
+-            label: 'Insert row above',
+-            action: () => {
+-                const m = readModelFromDom(wrap);
+-                m.rows.splice(row, 0, m.header.map(() => ''));
+-                dispatchModel(view, wrap, m);
 +    const insertColumn = (at) => () => {
 +        const m = readModelFromDom(wrap);
 +        m.header.splice(at, 0, '');
@@ -1568,81 +1600,30 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..b103caef5dc6d0abb9e8ec1409f64d33
 +            r.splice(at, 0, '');
 +        dispatchModel(view, wrap, m);
 +    };
-+    // Row / Column / Sort / Align sub-menus, like Obsidian's. A header cell has
-+    // no Row group (the header row can't be inserted around, moved or deleted).
++    // Row / Column / Sort / Align sub-menus, like Obsidian's. Every action works
++    // on every row, the header included (see editRows).
++    const blankRow = (list) => list[0].map(() => '');
 +    const groups = [];
-     if (!isHeader) {
--        items.push({
--            label: 'Insert row above',
--            action: () => {
--                const m = readModelFromDom(wrap);
--                m.rows.splice(row, 0, m.header.map(() => ''));
--                dispatchModel(view, wrap, m);
--            },
-+        groups.push({
-+            label: 'Row',
-+            icon: 'rows',
-+            items: [
-+                {
-+                    label: 'Insert row above',
-+                    icon: 'insertAbove',
-+                    action: () => {
-+                        const m = readModelFromDom(wrap);
-+                        m.rows.splice(row, 0, m.header.map(() => ''));
-+                        dispatchModel(view, wrap, m);
-+                    },
-+                },
-+                {
-+                    label: 'Insert row below',
-+                    icon: 'insertBelow',
-+                    action: () => {
-+                        const m = readModelFromDom(wrap);
-+                        m.rows.splice(row + 1, 0, m.header.map(() => ''));
-+                        dispatchModel(view, wrap, m);
-+                    },
-+                },
-+                {
-+                    label: 'Move row up',
-+                    icon: 'up',
-+                    disabled: row <= 0,
-+                    action: () => moveTableLine(view, wrap, 'row', row, row - 1),
-+                },
-+                {
-+                    label: 'Move row down',
-+                    icon: 'down',
-+                    disabled: row >= rowCount - 1,
-+                    action: () => moveTableLine(view, wrap, 'row', row, row + 1),
-+                },
-+                {
-+                    label: 'Delete row',
-+                    icon: 'trash',
-+                    action: () => {
-+                        const m = readModelFromDom(wrap);
-+                        if (row >= 0 && row < m.rows.length)
-+                            m.rows.splice(row, 1);
-+                        dispatchModel(view, wrap, m);
-+                    },
-+                },
-+            ],
-         });
++    groups.push({
++        label: 'Row',
++        icon: 'rows',
++        items: [
++            {
++                label: 'Insert row above',
++                icon: 'insertAbove',
++                action: () => editRows(view, wrap, (list) => list.splice(row, 0, blankRow(list))),
+             },
+-        });
 -        items.push({
 -            label: 'Insert row below',
 -            action: () => {
 -                const m = readModelFromDom(wrap);
 -                m.rows.splice(row + 1, 0, m.header.map(() => ''));
 -                dispatchModel(view, wrap, m);
-+    }
-+    groups.push({
-+        label: 'Column',
-+        icon: 'columns',
-+        items: [
-+            { label: 'Insert column left', icon: 'insertLeft', action: insertColumn(col) },
-+            { label: 'Insert column right', icon: 'insertRight', action: insertColumn(col + 1) },
 +            {
-+                label: 'Move column left',
-+                icon: 'left',
-+                disabled: col <= 0,
-+                action: () => moveTableLine(view, wrap, 'col', col, col - 1),
++                label: 'Insert row below',
++                icon: 'insertBelow',
++                action: () => editRows(view, wrap, (list) => list.splice(row + 1, 0, blankRow(list))),
              },
 -        });
 -        items.push({
@@ -1653,10 +1634,10 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..b103caef5dc6d0abb9e8ec1409f64d33
 -                    m.rows.splice(row, 1);
 -                dispatchModel(view, wrap, m);
 +            {
-+                label: 'Move column right',
-+                icon: 'right',
-+                disabled: col >= colCount - 1,
-+                action: () => moveTableLine(view, wrap, 'col', col, col + 1),
++                label: 'Move row up',
++                icon: 'up',
++                disabled: row <= 0,
++                action: () => moveTableLine(view, wrap, 'row', row, row - 1),
              },
 -        });
 -        items.push('separator');
@@ -1680,7 +1661,25 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..b103caef5dc6d0abb9e8ec1409f64d33
 -                r.splice(col + 1, 0, '');
 -            dispatchModel(view, wrap, m);
 -        },
--    });
++            {
++                label: 'Move row down',
++                icon: 'down',
++                disabled: row >= rowTotal - 1,
++                action: () => moveTableLine(view, wrap, 'row', row, row + 1),
++            },
++            {
++                label: 'Delete row',
++                icon: 'trash',
++                action: () => editRows(view, wrap, (list) => {
++                    // A table needs a header: with only one row left, clear it.
++                    if (list.length <= 1)
++                        list[0] = blankRow(list);
++                    else
++                        list.splice(row, 1);
++                }),
++            },
++        ],
+     });
 -    items.push({
 -        label: 'Delete column',
 -        action: () => {
@@ -1695,6 +1694,24 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..b103caef5dc6d0abb9e8ec1409f64d33
 -                r.splice(col, 1);
 -            dispatchModel(view, wrap, m);
 -        },
++    groups.push({
++        label: 'Column',
++        icon: 'columns',
++        items: [
++            { label: 'Insert column left', icon: 'insertLeft', action: insertColumn(col) },
++            { label: 'Insert column right', icon: 'insertRight', action: insertColumn(col + 1) },
++            {
++                label: 'Move column left',
++                icon: 'left',
++                disabled: col <= 0,
++                action: () => moveTableLine(view, wrap, 'col', col, col - 1),
++            },
++            {
++                label: 'Move column right',
++                icon: 'right',
++                disabled: col >= colCount - 1,
++                action: () => moveTableLine(view, wrap, 'col', col, col + 1),
++            },
 +            {
 +                label: 'Delete column',
 +                icon: 'trash',
@@ -1731,7 +1748,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..b103caef5dc6d0abb9e8ec1409f64d33
      });
      let dismissed = false;
      const dismiss = () => {
-@@ -893,26 +1874,113 @@ function openCellMenu(view, cell, x, y) {
+@@ -893,26 +1886,113 @@ function openCellMenu(view, cell, x, y) {
              return;
          dismiss();
      };
@@ -1763,7 +1780,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..b103caef5dc6d0abb9e8ec1409f64d33
 +        if (r.right > window.innerWidth) {
 +            g.sub.style.left = 'auto';
 +            g.sub.style.right = '100%';
-         }
++        }
 +    };
 +    const openGroupEl = () => groupEls.find((g) => !g.sub.hidden);
 +    const enabledItems = (list) => Array.from(list.querySelectorAll(':scope > .cm-atomic-table-menu-item:not(:disabled), :scope > .cm-atomic-table-menu-group > .cm-atomic-table-menu-item')).filter((el) => !el.disabled);
@@ -1808,7 +1825,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..b103caef5dc6d0abb9e8ec1409f64d33
 +            event.preventDefault();
 +            closeGroup(open);
 +            open.btn.focus();
-+        }
+         }
 +    };
 +    for (const group of groups) {
 +        const wrapEl = document.createElement('div');
@@ -1860,7 +1877,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..b103caef5dc6d0abb9e8ec1409f64d33
      }
      document.body.appendChild(menu);
      // Clip the menu inside the viewport if it overflows.
-@@ -1191,13 +2259,21 @@ const defaultLinkOpener = (url) => {
+@@ -1191,13 +2271,21 @@ const defaultLinkOpener = (url) => {
  export const tableLinkClickFacet = Facet.define({
      combine: (values) => values[0] ?? defaultLinkOpener,
  });
