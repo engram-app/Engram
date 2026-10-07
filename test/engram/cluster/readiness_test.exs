@@ -45,6 +45,17 @@ defmodule Engram.Cluster.ReadinessTest do
              )
     end
 
+    # A healthy lookup always returns this node's own A record. Empty means
+    # NXDOMAIN or a timeout: the fleet is unknown, so fail closed.
+    test "a failed discovery lookup is not reachable, even with a peer" do
+      refute reach(
+               role: :worker,
+               query: "q",
+               resolver: fn _ -> [] end,
+               peers: fn -> [:"engram@10.0.0.2"] end
+             )
+    end
+
     test "syncs :global before deciding, so a just-joined peer's names are visible" do
       parent = self()
 

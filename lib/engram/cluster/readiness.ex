@@ -81,7 +81,9 @@ defmodule Engram.Cluster.Readiness do
   dev, test) hosts every room itself: `true`. Any multi-node shape needs at
   least one connected peer, and with a cluster query the connected peers must
   cover every A record it resolves (this node's own IP excluded): a node
-  joined to only part of the fleet cannot see the rest's rooms. Calls
+  joined to only part of the fleet cannot see the rest's rooms. An empty
+  resolution (NXDOMAIN, timeout) is `false`: a healthy lookup always returns
+  this node's own record, so empty means the fleet is unknown. Calls
   `:global.sync/0` first so a just-connected peer's registrations count.
   Stricter than `check/1`: `{:ready, :alone}` fails open on a discovery
   outage, which is right for a deploy gate and wrong for a writer that must
@@ -108,8 +110,18 @@ defmodule Engram.Cluster.Readiness do
 
   defp covers_discovered?(peers, query, opts) do
     resolver = Keyword.get(opts, :resolver, &resolve_a/1)
-    self_ip = Keyword.get_lazy(opts, :self_ip, &self_ip/0)
-    (resolver.(query) -- List.wrap(self_ip)) -- Enum.map(peers, &host/1) == []
+
+    # resolve_a/1 returns [] on NXDOMAIN or a timeout, and a healthy lookup
+    # always includes this node's own record. Empty = fleet unknown: fail
+    # closed, or any one peer would pass.
+    case resolver.(query) do
+      [] ->
+        false
+
+      ips ->
+        self_ip = Keyword.get_lazy(opts, :self_ip, &self_ip/0)
+        (ips -- List.wrap(self_ip)) -- Enum.map(peers, &host/1) == []
+    end
   end
 
   @doc "Pure gate decision — see the moduledoc for the state semantics."
