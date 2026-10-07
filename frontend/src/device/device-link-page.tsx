@@ -750,8 +750,8 @@ function VaultRadio({
 // Picker for the /link consent page, in two blocks:
 //   1. Existing vaults as radio rows (the one matching the plugin's suggested
 //      name first). Selecting one links into it, no creation.
-//   2. A plain name field that creates a new vault. It starts out as the
-//      plugin-suggested name; focusing or typing in it selects "create".
+//   2. A radio row holding a name field that creates a new vault. It starts
+//      out as the plugin-suggested name; focusing or typing in it selects it.
 function VaultPickerFieldset({
 	vaults,
 	suggestedName,
@@ -816,27 +816,36 @@ function VaultPickerFieldset({
 					) : (
 						<legend className={sectionTitle}>Create a new vault</legend>
 					)}
-					<label className="flex flex-col gap-1.5">
+					<label className={selectableRow(isCustom)}>
 						<input
-							type="text"
-							value={customName}
-							onChange={(e) => {
-								onCustomChange(e.target.value);
-								if (!isCustom) {
-									onSelect("custom");
-								}
-							}}
-							onFocus={() => onSelect("custom")}
-							placeholder="choose a new name"
-							aria-label="New vault name"
-							maxLength={100}
-							className={cn(fieldInput, isCustom && "border-primary")}
+							type="radio"
+							name="vault-target"
+							checked={isCustom}
+							onChange={() => onSelect("custom")}
+							className="accent-primary"
 						/>
-						{suggestedName && customName.trim() === suggestedName ? (
-							<span className="text-muted-foreground text-xs">
-								Matches your Obsidian vault name
-							</span>
-						) : null}
+						<span className="flex flex-1 flex-col gap-1.5">
+							<input
+								type="text"
+								value={customName}
+								onChange={(e) => {
+									onCustomChange(e.target.value);
+									if (!isCustom) {
+										onSelect("custom");
+									}
+								}}
+								onFocus={() => onSelect("custom")}
+								placeholder="choose a new name"
+								aria-label="New vault name"
+								maxLength={100}
+								className={fieldInput}
+							/>
+							{suggestedName && customName.trim() === suggestedName ? (
+								<span className="text-muted-foreground text-xs">
+									Matches your Obsidian vault name
+								</span>
+							) : null}
+						</span>
 					</label>
 				</>
 			)}
