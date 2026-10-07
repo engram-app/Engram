@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.43.0](https://github.com/engram-app/Engram/compare/0.42.0...0.43.0) (2026-10-07)
+
+
+### Features
+
+* **data-migrations:** completion ledger; self-healing backfills, pruned dead ones ([#1888](https://github.com/engram-app/Engram/issues/1888)) ([26f8f9e](https://github.com/engram-app/Engram/commit/26f8f9e1605689c8e53c36db88a1db46b6dfd45d))
+* **history:** note revisions store (outbox + finalize), off in prod ([#1876](https://github.com/engram-app/Engram/issues/1876)) ([3c27a2a](https://github.com/engram-app/Engram/commit/3c27a2a47eb9ef6ad445a13b83bea2f451d6d867))
+* **reconcile:** start re-indexing when it becomes due (cap changes, orphan repair, plan changes, deploys) ([dc02bde](https://github.com/engram-app/Engram/commit/dc02bdec4753600dc1f8fb9cc3834c41f5ea4900))
+
+
+### Bug Fixes
+
+* **billing:** RLS on subscriptions with webhook discovery policy ([#1834](https://github.com/engram-app/Engram/issues/1834)) ([9227a32](https://github.com/engram-app/Engram/commit/9227a324c96d6b5ff3735885e2947ed7a0302b1a))
+* **cron:** stagger every cron and run cleanup backstops hourly; expired overrides stop granting within an hour ([dc02bde](https://github.com/engram-app/Engram/commit/dc02bdec4753600dc1f8fb9cc3834c41f5ea4900))
+* **security:** admin plane, delegated creds, schema_migrations, key lookup ([#1879](https://github.com/engram-app/Engram/issues/1879)) ([8ea6f75](https://github.com/engram-app/Engram/commit/8ea6f75b80dd2f066318416dbd80ed5e03e2b92b))
+* **telemetry:** installs gauge survives a failed poll at boot ([#1857](https://github.com/engram-app/Engram/issues/1857)) ([00fb30e](https://github.com/engram-app/Engram/commit/00fb30e6c7a60d4dc1952170d45f934fa86534e5))
+
+
+### Performance Improvements
+
+* **crdt:** diff_into_text via a Rust NIF ([#1883](https://github.com/engram-app/Engram/issues/1883)) ([0c9bb04](https://github.com/engram-app/Engram/commit/0c9bb04c96c1c3d001cf8b84ccb8137fd253971c))
+* **reconcile:** queue every stale note per sweep, every 5 min, one cross-tenant pass ([dc02bde](https://github.com/engram-app/Engram/commit/dc02bdec4753600dc1f8fb9cc3834c41f5ea4900))
+
 ## [0.42.0](https://github.com/engram-app/Engram/compare/0.41.1...0.42.0) (2026-10-05)
 
 
