@@ -768,6 +768,14 @@ function VaultPickerFieldset({
 	const search = useVaultSearch(otherVaults);
 	const hasOthers = otherVaults.length > 0;
 	const sectionTitle = "font-semibold text-base text-foreground";
+	// Filtering hides rows without changing the selection, so say what is still
+	// chosen while the chosen row is out of sight.
+	const selectedVault = vaults.find((v) => v.id === selection);
+	const selectionStatus = selectedVault
+		? `Selected: ${selectedVault.name}`
+		: isCustom
+			? "Creating a new vault"
+			: undefined;
 	const nameInput = (
 		<input
 			type="text"
@@ -818,7 +826,7 @@ function VaultPickerFieldset({
 						</p>
 						<VaultSearchToggle search={search} />
 					</header>
-					<VaultSearchField search={search} />
+					<VaultSearchField search={search} status={search.needle ? selectionStatus : undefined} />
 					<VaultRows scroll={search.showFilter}>
 						{search.shown.map((v) => (
 							<VaultRadio key={v.id} vault={v} active={selection === v.id} onSelect={onSelect} />

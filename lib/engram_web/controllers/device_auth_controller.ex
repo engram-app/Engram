@@ -102,6 +102,13 @@ defmodule EngramWeb.DeviceAuthController do
     end
   end
 
+  # Anything that is neither "link into a vault" nor "create a vault" (a missing
+  # user_code or vault_id): the action used to have no clause for it, which
+  # Phoenix turned into a 400.
+  defp authorize_vault(conn, _params) do
+    conn |> put_status(400) |> json(%{error: "invalid_request"})
+  end
+
   defp do_authorize(conn, user_code, user, vault_id, label) do
     case DeviceFlow.authorize_device(user_code, user, vault_id, label) do
       {:ok, auth} ->

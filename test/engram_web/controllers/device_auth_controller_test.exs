@@ -90,6 +90,13 @@ defmodule EngramWeb.DeviceAuthControllerTest do
       assert %{"ok" => true} = json_response(conn, 200)
     end
 
+    test "a request missing user_code or vault_id is a 400, not a 500", %{authed_conn: conn} do
+      for params <- [%{vault_id: Ecto.UUID.generate()}, %{user_code: "AAAA-BBBB"}, %{label: "x"}] do
+        conn = post(conn, "/api/auth/device/authorize", params)
+        assert %{"error" => "invalid_request"} = json_response(conn, 400)
+      end
+    end
+
     test "stores the label and rejects an over-long one with 422", %{
       authed_conn: conn,
       user: user

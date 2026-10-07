@@ -606,6 +606,18 @@ describe("DeviceLinkPage", () => {
 			);
 		});
 
+		it("says what is still selected while a search hides it", async () => {
+			await reachPicker(
+				Array.from({ length: 9 }, (_, i) => ({ id: i + 1, name: `Vault ${i + 1}`, note_count: 0 })),
+			);
+			fireEvent.click(screen.getByRole("radio", { name: /vault 2\b/iu }));
+			fireEvent.click(screen.getByRole("button", { name: /search vaults/iu }));
+			fireEvent.change(screen.getByRole("searchbox", { name: /search vaults/iu }), {
+				target: { value: "zzz" },
+			});
+			expect(screen.getByText("Selected: Vault 2")).toBeInTheDocument();
+		});
+
 		it("shows no suggestion when the name matches nothing", async () => {
 			await reachPicker([{ id: 7, name: "Personal", note_count: 3 }]);
 			expect(screen.queryByText("Suggested")).toBeNull();

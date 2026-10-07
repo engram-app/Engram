@@ -92,19 +92,14 @@ defmodule Engram.Auth.DeviceFlow do
             (is_nil(da.viewer_user_id) or da.viewer_user_id == ^user_id)
       )
 
-    case Repo.update_all(query, [set: [viewer_user_id: user_id]], skip_tenant_check: true) do
-      {1, _} ->
-        {:ok,
-         Repo.one(
-           from(da in DeviceAuthorization,
-             where: da.user_code == ^user_code,
-             select: %{vault_name: da.vault_name, device_name: da.device_name}
-           ),
-           skip_tenant_check: true
-         )}
+    # One statement claims the code and returns its hints, so a row that
+    # expires or is cleaned up between a claim and a separate read cannot turn
+    # into `{:ok, nil}`.
+    claim = from(da in query, select: %{vault_name: da.vault_name, device_name: da.device_name})
 
-      _ ->
-        :error
+    case Repo.update_all(claim, [set: [viewer_user_id: user_id]], skip_tenant_check: true) do
+      {1, [hints]} -> {:ok, hints}
+      _ -> :error
     end
   end
 
