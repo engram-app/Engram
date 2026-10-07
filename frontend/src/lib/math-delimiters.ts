@@ -15,22 +15,26 @@ const INLINE_MATH = /(?<!\\)\$(?<inline>[^\s$](?:[^$\n]*[^\s$\\])?)\$(?!\d)/g;
 const FENCE = /^\s*(?:```|~~~)/u;
 // A `$`: a whole `$$…$$` span, a valid inline span, or a lone `$` (the case to escape).
 const DOLLAR = new RegExp(String.raw`\$\$[^$]*\$\$|${INLINE_MATH.source}|\$`, "g");
-const CODE_SPAN = /(`+[^`]*`+)/u;
+const CODE_SPAN = /(?<code>`+[^`]*`+)/u;
+
+/** Escape the lone `$` in a stretch of text that contains no code spans. */
+function escapeText(text: string): string {
+	let out = "";
+	let at = 0;
+	for (const m of text.matchAll(DOLLAR)) {
+		const index = m.index ?? 0;
+		out += text.slice(at, index);
+		out += m[0] === "$" && text[index - 1] !== "\\" ? "\\$" : m[0];
+		at = index + m[0].length;
+	}
+	return out + text.slice(at);
+}
 
 function escapeLine(line: string): string {
+	// Odd parts of the split are code spans, left alone.
 	return line
 		.split(CODE_SPAN)
-		.map((part, i) =>
-			// Odd parts are code spans, left alone.
-			i % 2 === 1
-				? part
-				: part.replace(DOLLAR, (...args: unknown[]) => {
-						// replace() args: match, <capture groups>, offset, string, <named groups>.
-						const [m] = args as [string];
-						const offset = args.at(-3) as number;
-						return m === "$" && part[offset - 1] !== "\\" ? "\\$" : m;
-					}),
-		)
+		.map((part, i) => (i % 2 === 1 ? part : escapeText(part)))
 		.join("");
 }
 

@@ -96,6 +96,7 @@ function ToolButton({ tool }: { tool: RightToolDescriptor }) {
 	// focusable wrapper and still tells you why it is unavailable.
 	return (
 		<RailTip label={t("{label} (open a note first)", { label: t(tool.label) })}>
+			{/* biome-ignore lint/a11y/noNoninteractiveTabindex: a disabled button is unfocusable, so keyboard users reach the "why" tooltip through this wrapper */}
 			<span tabIndex={0} className="inline-flex rounded-md">
 				{button}
 			</span>

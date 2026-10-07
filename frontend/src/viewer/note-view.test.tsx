@@ -368,3 +368,30 @@ describe("NoteView: dollar signs", () => {
 		expect(container.querySelector(".katex")).not.toBeNull();
 	});
 });
+
+describe("NoteView: comments", () => {
+	it("hides an inline %% comment", () => {
+		const { container } = renderNote("visible %%secret%% text\n");
+		expect(container.textContent).toContain("visible");
+		expect(container.textContent).not.toContain("secret");
+	});
+
+	it("hides a multi-line %% block", () => {
+		const { container } = renderNote("one\n\n%%\nhidden block\nstill hidden\n%%\n\ntwo\n");
+		expect(container.textContent).toContain("one");
+		expect(container.textContent).toContain("two");
+		expect(container.textContent).not.toContain("hidden");
+	});
+
+	it("hides an HTML comment", () => {
+		const { container } = renderNote("shown <!-- not shown --> shown\n");
+		expect(container.textContent).not.toContain("not shown");
+		expect(container.textContent).not.toContain("<!--");
+	});
+
+	it("keeps comment markers that are inside code", () => {
+		const { container } = renderNote("```\n%%kept%%\n```\n\nand `<!-- kept too -->`\n");
+		expect(container.textContent).toContain("%%kept%%");
+		expect(container.textContent).toContain("<!-- kept too -->");
+	});
+});

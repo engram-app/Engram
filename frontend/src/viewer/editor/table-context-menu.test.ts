@@ -218,7 +218,7 @@ describe("menu icons and semantics", () => {
 		mount();
 		openMenu(4);
 		const glyph = (label: string) => item(label)?.querySelector("svg")?.innerHTML;
-		const pairs: Array<[string, string]> = [
+		const pairs: [string, string][] = [
 			["Insert row above", "Insert row below"],
 			["Insert column left", "Insert column right"],
 			["Move row up", "Move row down"],

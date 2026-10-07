@@ -344,3 +344,9 @@
    Drawn per line from editor/list-rails.ts (inline background layers, one 1px
    rail under each ancestor's marker, plus the nested-list padding). Nothing to
    style here; `.cm-list-rails` marks the lines. */
+
+/* Comments (%%…%%, <!-- -->) stay visible while editing, just greyed — as in
+   Obsidian's editing view. The reading view hides them. */
+.cm-comment {
+	color: var(--atomic-editor-fg-faint);
+}

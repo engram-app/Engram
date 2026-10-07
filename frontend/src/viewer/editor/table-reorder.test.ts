@@ -250,14 +250,18 @@ describe("the handle slides with the pointer", () => {
 		};
 		const root = view.dom.querySelector(".cm-atomic-table");
 		at(root?.querySelector("table"), rect(100, 100, 300, 120));
-		view.dom
-			.querySelectorAll(".cm-atomic-table thead th")
-			.forEach((th, i) => at(th, rect(100 + i * 100, 100, 100, 40)));
-		view.dom
-			.querySelectorAll(".cm-atomic-table tr")
-			.forEach((tr, i) => at(tr, rect(100, 100 + i * 40, 300, 40)));
-		colHandles().forEach((h, i) => at(h, rect(100 + i * 100, 86, 100, 11)));
-		rowHandles().forEach((h, i) => at(h, rect(86, 100 + i * 40, 11, 40)));
+		view.dom.querySelectorAll(".cm-atomic-table thead th").forEach((th, i) => {
+			at(th, rect(100 + i * 100, 100, 100, 40));
+		});
+		view.dom.querySelectorAll(".cm-atomic-table tr").forEach((tr, i) => {
+			at(tr, rect(100, 100 + i * 40, 300, 40));
+		});
+		colHandles().forEach((h, i) => {
+			at(h, rect(100 + i * 100, 86, 100, 11));
+		});
+		rowHandles().forEach((h, i) => {
+			at(h, rect(86, 100 + i * 40, 11, 40));
+		});
 	}
 
 	test("a column handle follows the pointer horizontally, unsnapped", () => {

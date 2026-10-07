@@ -154,14 +154,14 @@ describe("undoing table edits", () => {
 describe("the widget keeps its DOM while you type, but refreshes on other changes", () => {
 	test("typing does not rebuild the table", () => {
 		mount();
-		const before = cells()[4];
+		const [, , , , before] = cells();
 		typeIn(4, "x");
 		expect(cells()[4]).toBe(before);
 	});
 
 	test("typing a pipe or a trailing space does not rebuild the table either", () => {
 		mount();
-		const before = cells()[4];
+		const [, , , , before] = cells();
 		typeIn(4, "|");
 		typeIn(4, " ");
 		expect(cells()[4]).toBe(before);

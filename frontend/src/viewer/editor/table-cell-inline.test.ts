@@ -162,3 +162,26 @@ describe("table cell markdown links", () => {
 		expect(onLinkClick).not.toHaveBeenCalled();
 	});
 });
+
+describe("table cell comments", () => {
+	test("a %% comment in a cell is greyed, and the cell still round-trips", () => {
+		const cell = mountCell("a %%note%% b");
+		expect(cell.querySelector(".cm-atomic-comment")?.textContent).toBe("%%note%%");
+		expect(cell.textContent).toBe("a %%note%% b");
+	});
+
+	test("an HTML comment in a cell is greyed", () => {
+		const cell = mountCell("a <!-- note --> b");
+		expect(cell.querySelector(".cm-atomic-comment")?.textContent).toBe("<!-- note -->");
+	});
+
+	test("comment text is not parsed as markdown", () => {
+		const cell = mountCell("%%**not bold**%%");
+		expect(cell.querySelector(".cm-atomic-strong")).toBeNull();
+	});
+
+	test("an unclosed %% stays literal", () => {
+		const cell = mountCell("a %% b");
+		expect(cell.querySelector(".cm-atomic-comment")).toBeNull();
+	});
+});
