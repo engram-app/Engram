@@ -46,7 +46,7 @@ Engram is a single Elixir/Phoenix OTP application — search, MCP server, note s
 | Billing | `lib/engram/billing/`, `lib/engram/paddle/` | Paddle webhook receiver, billing config endpoint, subscriptions |
 | Crypto | `lib/engram/crypto/`, `lib/engram/encryption/` | Per-user DEKs, AAD bind, master-key rotation, boot canary |
 | MCP OAuth | `lib/engram_web/oauth/` | OAuth 2.1 + Dynamic Client Registration for Claude Desktop Connectors |
-| Oban Workers | `lib/engram/workers/`, `lib/engram/billing/workers/` | EmbedNote, ReconcileEmbeddings, ReindexKeyword, DeleteNoteIndex, RotateUserDek, RotateUserMasterKey, BackfillContentHashHmac, AccountExport, InactivityCleanup, MigrateUserProvider, OrphanSweep, CleanupVault, VaultDeletedEmail, CleanupDeviceAuthWorker, OriginAbuseSweep, PaddleReconcile, OverrideExpirySweep |
+| Oban Workers | `lib/engram/workers/`, `lib/engram/billing/workers/` | EmbedNote, ReconcileEmbeddings, DataMigrationsRunner, WarmCrdtHeads, DeleteNoteIndex, RotateUserDek, RotateUserMasterKey, AccountExport, InactivityCleanup, MigrateUserProvider, OrphanSweep, CleanupVault, VaultDeletedEmail, CleanupDeviceAuthWorker, OriginAbuseSweep, PaddleReconcile, OverrideExpirySweep |
 
 ### Key Patterns
 
@@ -58,6 +58,7 @@ Engram is a single Elixir/Phoenix OTP application — search, MCP server, note s
 - **Async indexing, sync note storage**: note upsert returns immediately; embedding queued via Oban (30s settle debounce, 5m ceiling, dedup). See `docs/context/async-indexing-pipeline.md`
 - **Rust NIFs** (`native/engram_native`, rustler, dirty CPU): the keyword encoder (tokenize + Snowball + HMAC + BM25), 15-43x faster than the Elixir it replaced. **Default to a Rust NIF for CPU-bound pure work** (parsing, tokenizing, hashing, regex, encoding over binaries); keep Elixir for orchestration and I/O. Every NIF follows the memory standard (BEAM allocator, per-call native peak, `[:engram, :nif, :call, :stop]`, unaccounted-RSS poll). Rules, test patterns and the next candidates (markdown chunker, link parser): `docs/context/native-nifs.md`
 - **Index changes heal themselves** — a change to chunking or keyword encoding must reach existing notes with NO operator step (self-hosters never run one). Bump `Engram.KeywordIndex` `@version` (keyword-only, free) or `@chunker_version`; `ReconcileEmbeddings` sweeps stale stamps. See `docs/context/index-version-self-heal.md`
+- **Backfills that must reach existing rows** are `Engram.DataMigration` modules on the completion ledger; see `docs/context/data-migrations-ledger.md` (finished one-time backfills are deleted, not ported: see its "Pruned" section)
 - **Hybrid chunk storage** — Postgres `chunks` = source of truth for boundaries; Qdrant = vectors + contextualized text
 - **Folder-aware context** — folder path + heading hierarchy prepended to chunk text before embedding
 
@@ -422,7 +423,8 @@ command for us. Every change must hold under that:
 3. **Backfills live in migrations, not app runtime.** A backfill done by app
    code in release N+1 never runs for someone who skips N+1. Put it in the
    migration, or make it a self-healing reconcile the app runs on its own
-   (version stamp + reconcile, see the index self-heal pattern).
+   (version stamp + reconcile, see the index self-heal pattern). The
+   completion ledger for this: `docs/context/data-migrations-ledger.md`.
 4. **Contract migrations assert their precondition.** Before dropping or
    tightening, check the thing it depends on actually happened (no NULLs
    left, no rows in the old shape) and raise if not. Fail loud on boot,
@@ -499,6 +501,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 
 **Architecture & Decisions**
 - Changing chunking, tokenizing or what the keyword leg encodes (version stamps, the reconcile sweep, why "run X per vault after deploy" is a defect) → `docs/context/index-version-self-heal.md`
+- Adding a backfill that must reach existing rows (`Engram.DataMigration`, completion ledger, `any_row?`, `:done` semantics, why not an operator command) → `docs/context/data-migrations-ledger.md`
 - Elixir decision audit, library deps, infra checklist (partially superseded — read inline corrections) → `docs/context/elixir-architecture-decisions.md`
 - RLS policy set (12 tenant tables, `api_keys_discovery`, `maintenance_all`), DB roles, `with_tenant`/`cross_tenant`/`maintenance()`/`skip_tenant_check` semantics → `docs/context/database-schema-rls.md`
 - Adding a tenant table (needs its own `maintenance_all`), the `MAINTENANCE_DATABASE_URL` credential, why it is not BYPASSRLS → `docs/context/maintenance-db-role.md`
@@ -629,7 +632,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - ExAws KMS traps (key-first args, manual base64, scope creds to `:ex_aws, :kms` or S3 auth silently breaks), plus the Tier-4 / Phase F provider-routing roadmap → `docs/context/aws-kms-provider-integration.md`
 
 **Encryption**
-- Runbooks: per-user DEK rotation (T3.7) + half-state recovery, content-hash HMAC backfill, master-key rotation (staging/self-host only; prod is KMS) → `docs/context/encryption-operations.md`
+- Runbooks: per-user DEK rotation (T3.7) + half-state recovery, master-key rotation (staging/self-host only; prod is KMS) → `docs/context/encryption-operations.md`. The content-hash HMAC backfill was removed 2026-10-06 (prod at zero; see "Pruned" in `docs/context/data-migrations-ledger.md`)
 - Invalid UTF-8 at rest (bytea bypasses PG validation) → `Jason.encode` 500 at every JSON egress; fix + backfill task → `docs/context/invalid-utf8-at-rest-json-500.md`
 
 **Perf & Quality**

@@ -2,6 +2,8 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
+  alias Engram.DataMigrations
+  alias Engram.DataMigrations.IndexVersions
   alias Engram.KeywordIndex
   alias Engram.Notes.Note
   alias Engram.Parsers.Markdown
@@ -10,6 +12,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
   # The test embedder declares no model, which turns model tracking off; name
   # one so the embed-model sweep is exercised (and current_note/2 stamps it).
   setup do
+    DataMigrations.reset_cache()
     Application.put_env(:engram, :embed_model, "test-embed-model")
     on_exit(fn -> Application.delete_env(:engram, :embed_model) end)
   end
@@ -73,6 +76,60 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       refute_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
     end
 
+    # Once IndexVersions is done, no content-current note is on an old
+    # version, so the sweep stops looking for them, except on one tick a day.
+    test "once IndexVersions is done, a version-stale note is not swept" do
+      user = insert(:user)
+      insert(:subscription, user: user, tier: "pro", status: "active")
+      note = current_note(user, chunker_version: nil, keyword_version: nil)
+      :ok = DataMigrations.mark_done(IndexVersions.name(), 1)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick(~T[03:57:00]))
+
+      refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
+      refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+      refute_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
+    end
+
+    # A rollback then roll-forward, or a restored soft-deleted vault, leaves
+    # version-stale notes after the migration closed. The daily hour heals them.
+    test "once IndexVersions is done, the daily hour still sweeps a version-stale note" do
+      user = insert(:user)
+      insert(:subscription, user: user, tier: "pro", status: "active")
+      note = current_note(user, chunker_version: nil, keyword_version: nil)
+      :ok = DataMigrations.mark_done(IndexVersions.name(), 1)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick(~T[04:02:00]))
+
+      assert_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
+    end
+
+    test "once IndexVersions is done, the keyword sweep runs only in the daily hour" do
+      user = insert(:user)
+      note = current_note(user, keyword_version: nil)
+      :ok = DataMigrations.mark_done(IndexVersions.name(), 1)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick(~T[05:02:00]))
+      refute_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick(~T[03:57:00]))
+      refute_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick(~T[04:02:00]))
+      assert_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
+    end
+
+    # The unique window can dedupe the 04:02 tick (a kick or a slow previous
+    # run). Any later tick in the hour must still re-verify that day.
+    test "a deduped 04:02 tick does not skip the day: 04:57 re-verifies too" do
+      user = insert(:user)
+      note = current_note(user, keyword_version: nil)
+      :ok = DataMigrations.mark_done(IndexVersions.name(), 1)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick(~T[04:57:00]))
+      assert_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
+    end
+
     # A model switch (a self-hoster changing Ollama models) leaves old-model
     # vectors that search cannot compare with new queries.
     test "re-embeds a note whose dense vectors came from another embed model" do
@@ -89,7 +146,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
 
     # A keyword-encoding change must reach existing notes with no operator
     # step, on SaaS and self-host alike (#1615 needed a hand-run
-    # `ReindexKeyword :sparse`). The sweep sends keyword-stale notes to
+    # reindex task). The sweep sends keyword-stale notes to
     # RefreshKeywordVectors, which rebuilds only the sparse vectors: no Voyage spend.
     test "rebuilds keyword vectors for a note whose keyword_version is stale" do
       user = insert(:user)
@@ -684,4 +741,6 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       0 -> n
     end
   end
+
+  defp tick(time), do: DateTime.new!(Date.utc_today(), time)
 end

@@ -72,6 +72,58 @@ defmodule Engram.Cluster.Readiness do
     end
   end
 
+  @doc """
+  Can this node reach every CRDT room in the fleet? Rooms are `:global`
+  (`Engram.Notes.CrdtRegistry`), so a node sees another node's rooms only
+  while connected to it, and only once `:global` has synced their names.
+
+  A single node (no `ENGRAM_NODE_ROLE`, no `DNS_CLUSTER_QUERY`: self-host,
+  dev, test) hosts every room itself: `true`. Any multi-node shape needs at
+  least one connected peer, and with a cluster query the connected peers must
+  cover every A record it resolves (this node's own IP excluded): a node
+  joined to only part of the fleet cannot see the rest's rooms. An empty
+  resolution (NXDOMAIN, timeout) is `false`: a healthy lookup always returns
+  this node's own record, so empty means the fleet is unknown. Calls
+  `:global.sync/0` first so a just-connected peer's registrations count.
+  Stricter than `check/1`: `{:ready, :alone}` fails open on a discovery
+  outage, which is right for a deploy gate and wrong for a writer that must
+  evict rooms.
+
+  Collaborators injectable via `opts` for tests: `:role`, `:query`, `:peers`,
+  `:resolver`, `:self_ip`, `:sync`.
+  """
+  @spec rooms_reachable?(keyword()) :: boolean()
+  def rooms_reachable?(opts \\ []) do
+    role = Keyword.get(opts, :role, Application.get_env(:engram, :node_role))
+    query = Keyword.get(opts, :query, Application.get_env(:engram, :dns_cluster_query))
+
+    if is_nil(role) and not is_binary(query) do
+      true
+    else
+      _ = Keyword.get(opts, :sync, &:global.sync/0).()
+      peers = Keyword.get(opts, :peers, &Node.list/0).()
+      peers != [] and covers_discovered?(peers, query, opts)
+    end
+  end
+
+  defp covers_discovered?(_peers, query, _opts) when not is_binary(query), do: true
+
+  defp covers_discovered?(peers, query, opts) do
+    resolver = Keyword.get(opts, :resolver, &resolve_a/1)
+
+    # resolve_a/1 returns [] on NXDOMAIN or a timeout, and a healthy lookup
+    # always includes this node's own record. Empty = fleet unknown: fail
+    # closed, or any one peer would pass.
+    case resolver.(query) do
+      [] ->
+        false
+
+      ips ->
+        self_ip = Keyword.get_lazy(opts, :self_ip, &self_ip/0)
+        (ips -- List.wrap(self_ip)) -- Enum.map(peers, &host/1) == []
+    end
+  end
+
   @doc "Pure gate decision — see the moduledoc for the state semantics."
   @spec decide(%{
           peers: [node()],
@@ -145,8 +197,10 @@ defmodule Engram.Cluster.Readiness do
   # (:nonode@nohost — the env.sh RELEASE_NODE gate failed) yields "nohost",
   # which never matches a resolved IP, so all discovered nodes count as
   # others and the node correctly rides :waiting → :grace_expired.
-  defp self_ip do
-    case node() |> to_string() |> String.split("@") do
+  defp self_ip, do: host(node())
+
+  defp host(node) do
+    case node |> to_string() |> String.split("@") do
       [_name, host] -> host
       _ -> nil
     end

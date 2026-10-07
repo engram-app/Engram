@@ -9,15 +9,10 @@ defmodule Engram.ObanCronTest do
 
   alias Oban.Cron.Expression
 
-  defp crontab do
-    :engram
-    |> Application.get_env(Oban)
-    |> Keyword.fetch!(:plugins)
-    |> Enum.find_value(fn
-      {Oban.Plugins.Cron, opts} -> Keyword.fetch!(opts, :crontab)
-      _ -> nil
-    end)
-  end
+  defp crontab, do: Engram.Test.ObanWorkers.crontab()
+
+  # `@reboot` entries hold no minute-of-day, so the slot logic skips them.
+  defp timed, do: Enum.reject(crontab(), fn {expr, _} -> expr == "@reboot" end)
 
   # Every minute-of-day an expression can fire. `*/15` and `0 * * * *` expand to
   # all 24 hours here, which is what makes a plain set intersection the right
@@ -47,7 +42,7 @@ defmodule Engram.ObanCronTest do
   end
 
   test "no two daily workers share a minute" do
-    dailies = Enum.filter(crontab(), fn {expr, _} -> daily?(expr) end)
+    dailies = Enum.filter(timed(), fn {expr, _} -> daily?(expr) end)
 
     assert length(dailies) > 1, "expected several daily workers; the schedule shape changed"
 
@@ -62,8 +57,8 @@ defmodule Engram.ObanCronTest do
 
   test "no two entries share any minute of the day" do
     collisions =
-      for {expr_a, worker_a} <- crontab(),
-          {expr_b, worker_b} <- crontab(),
+      for {expr_a, worker_a} <- timed(),
+          {expr_b, worker_b} <- timed(),
           worker_a < worker_b,
           shared = MapSet.intersection(slots(expr_a), slots(expr_b)),
           MapSet.size(shared) > 0,
@@ -71,5 +66,9 @@ defmodule Engram.ObanCronTest do
 
     assert collisions == [],
            "crons sharing a minute (first {hour, minute}): #{inspect(collisions)}"
+  end
+
+  test "the data migrations runner also runs at boot" do
+    assert {"@reboot", Engram.Workers.DataMigrationsRunner} in crontab()
   end
 end

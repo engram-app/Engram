@@ -3,10 +3,10 @@ defmodule Engram.KeywordIndex.Stats.Cache do
   Per-node ETS cache for per-vault avgdl (#861). Every EmbedNote job needs
   the vault's average chunk token length for BM25 length normalization;
   recomputing `SELECT avg(token_count)` per job makes initial indexing of a
-  large vault O(N^2) in DB row visits. avgdl is a soft normalizer (the #605
-  re-normalize worker recomputes weights when a vault drifts), so a value up
-  to 10min stale is harmless — and per-node staleness is safe for the same
-  reason.
+  large vault O(N^2) in DB row visits. avgdl recomputes on a cache miss (10 min
+  TTL), and stored weights pick it up only on each note's next re-encode. It
+  is a soft normalizer, so a value up to 10min stale is harmless, and per-node
+  staleness is safe for the same reason.
   """
   use Engram.Cache.NodeLocalEts, table: :engram_avgdl_cache, ttl: :timer.minutes(10)
 

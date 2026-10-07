@@ -6,7 +6,8 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
   alias Engram.Crypto.Envelope
-  alias Engram.Notes.{CrdtBridge, CrdtPersistence, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtPersistence, CrdtRegistry, CrdtUpdateLog, Note}
+  alias Engram.Vaults.Vault
   alias Engram.Workers.BackfillCrdtState
 
   setup do
@@ -83,6 +84,38 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
     note
   end
 
+  # An un-checkpointed tail: a Yjs update in crdt_update_log that the note's
+  # (NULL) snapshot does not cover yet. Bind replays it onto an empty doc.
+  defp seed_tail!(user, vault, note_id, text) do
+    {:ok, doc} = CrdtBridge.doc_from_state(nil)
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), text)
+    {:ok, update} = Yex.encode_state_as_update(doc)
+    {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(update, user, note_id)
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        %CrdtUpdateLog{}
+        |> CrdtUpdateLog.changeset(%{
+          note_id: note_id,
+          user_id: user.id,
+          vault_id: vault.id,
+          update_ciphertext: ct,
+          update_nonce: nonce
+        })
+        |> Repo.insert!()
+      end)
+
+    :ok
+  end
+
+  defp soft_delete_vault!(vault) do
+    Repo.update_all(
+      from(v in Vault, where: v.id == ^vault.id),
+      [set: [deleted_at: DateTime.utc_now(:second)]],
+      skip_tenant_check: true
+    )
+  end
+
   defp reload(user, note_id) do
     {:ok, note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note_id) end)
     note
@@ -153,22 +186,228 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
     assert after_run.crdt_state_nonce == before.crdt_state_nonce
   end
 
-  test "enqueue_all/0 enqueues only for pairs that still have a NULL-state note", ctx do
+  # Seeding from content here would create a second Yjs lineage on top of the
+  # tail's: bind would replay the tail onto the seeded doc and union the two.
+  test "a NULL-state note with an un-checkpointed tail is not seeded", ctx do
+    %{user: user, vault: vault} = ctx
+    note = legacy_note(user, vault, "tailed.md", "BODY")
+    :ok = seed_tail!(user, vault, note.id, "BODY")
+
+    assert :ok =
+             perform_job(BackfillCrdtState, %{
+               "user_id" => user.id,
+               "vault_id" => vault.id,
+               "cursor" => "00000000-0000-0000-0000-000000000000"
+             })
+
+    assert %Note{crdt_state_ciphertext: nil} = reload(user, note.id)
+  end
+
+  # A clustered worker whose discovery shows two web nodes (and itself).
+  defp put_reach(peers_fun) do
+    Application.put_env(:engram, :crdt_room_reach_opts,
+      role: :worker,
+      query: "engram.local",
+      sync: fn -> :ok end,
+      self_ip: "10.0.0.9",
+      resolver: fn _ -> ["10.0.0.2", "10.0.0.3", "10.0.0.9"] end,
+      peers: peers_fun
+    )
+
+    on_exit(fn -> Application.delete_env(:engram, :crdt_room_reach_opts) end)
+  end
+
+  @full_fleet [:"engram@10.0.0.2", :"engram@10.0.0.3"]
+
+  defp perform_vault(user, vault) do
+    perform_job(BackfillCrdtState, %{
+      "user_id" => user.id,
+      "vault_id" => vault.id,
+      "cursor" => "00000000-0000-0000-0000-000000000000"
+    })
+  end
+
+  # In prod this runs on the worker node and rooms live on web nodes, reached
+  # through :global. Partitioned, terminate_room/1 sees no room, so an open
+  # empty room would survive the seed. Leave the rows for the next pass.
+  test "does not seed when the node cannot reach other nodes' rooms", ctx do
+    %{user: user, vault: vault} = ctx
+    note = legacy_note(user, vault, "partitioned.md", "BODY")
+    put_reach(fn -> [] end)
+
+    assert :ok = perform_vault(user, vault)
+
+    assert %Note{crdt_state_ciphertext: nil} = reload(user, note.id)
+    refute_enqueued(worker: BackfillCrdtState)
+  end
+
+  test "does not seed when connected to only part of the fleet", ctx do
+    %{user: user, vault: vault} = ctx
+    note = legacy_note(user, vault, "partial.md", "BODY")
+    put_reach(fn -> [:"engram@10.0.0.2"] end)
+
+    assert :ok = perform_vault(user, vault)
+
+    assert %Note{crdt_state_ciphertext: nil} = reload(user, note.id)
+  end
+
+  test "seeds on a clustered worker connected to every discovered node", ctx do
+    %{user: user, vault: vault} = ctx
+    note = legacy_note(user, vault, "joined.md", "BODY")
+    put_reach(fn -> @full_fleet end)
+
+    assert :ok = perform_vault(user, vault)
+
+    refute is_nil(reload(user, note.id).crdt_state_ciphertext)
+  end
+
+  # The cluster can split mid-batch. Each seed re-checks; once rooms are out of
+  # reach the rest of the batch is left untouched, and no successor job is
+  # enqueued past them (the next CrdtStateSeed pass starts over).
+  test "stops seeding the batch once rooms become unreachable mid-batch", ctx do
+    %{user: user, vault: vault} = ctx
+    notes = for i <- 1..3, do: legacy_note(user, vault, "flip-#{i}.md", "BODY #{i}")
+    Application.put_env(:engram, :crdt_state_backfill_batch_size, 3)
+    on_exit(fn -> Application.delete_env(:engram, :crdt_state_backfill_batch_size) end)
+
+    {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+    put_reach(fn ->
+      if Agent.get_and_update(calls, &{&1, &1 + 1}) == 0, do: @full_fleet, else: []
+    end)
+
+    assert :ok = perform_vault(user, vault)
+
+    [first | rest] = Enum.sort_by(notes, & &1.id)
+    refute is_nil(reload(user, first.id).crdt_state_ciphertext)
+    for n <- rest, do: assert(%Note{crdt_state_ciphertext: nil} = reload(user, n.id))
+    refute_enqueued(worker: BackfillCrdtState)
+  end
+
+  # A tail that commits between the batch select and the seed UPDATE: the
+  # UPDATE itself must refuse, not only the select.
+  test "the seed write refuses a note that gained a tail after selection", ctx do
+    %{user: user, vault: vault} = ctx
+    note = legacy_note(user, vault, "late-tail.md", "BODY")
+    :ok = seed_tail!(user, vault, note.id, "BODY")
+
+    {:ok, count} =
+      Repo.with_tenant(user.id, fn ->
+        BackfillCrdtState.write_seed(note.id, <<1, 2, 3>>, <<4, 5, 6>>)
+      end)
+
+    assert count == 0
+    assert %Note{crdt_state_ciphertext: nil} = reload(user, note.id)
+  end
+
+  # A room bound on the NULL-state note before the seed holds an EMPTY doc. Left
+  # resident, its first edit lands a tail on that empty lineage on top of the
+  # seeded snapshot, and the next bind unions two lineages.
+  test "evicts a resident room for a note it seeds", ctx do
+    %{user: user, vault: vault} = ctx
+    note = legacy_note(user, vault, "open.md", "IMPORTANT BODY")
+
+    {:ok, room} = CrdtRegistry.ensure_started(user.id, vault.id, note.id)
+    on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
+    ref = Process.monitor(room)
+
+    assert :ok =
+             perform_job(BackfillCrdtState, %{
+               "user_id" => user.id,
+               "vault_id" => vault.id,
+               "cursor" => "00000000-0000-0000-0000-000000000000"
+             })
+
+    assert_receive {:DOWN, ^ref, :process, ^room, _}, 1_000
+    assert CrdtRegistry.lookup(note.id) == nil
+
+    # The next room binds the seeded state, not an empty doc.
+    {:ok, fresh} = CrdtRegistry.ensure_started(user.id, vault.id, note.id)
+
+    assert CrdtBridge.text_of(Yex.Sync.SharedDoc.get_doc(fresh)) == "IMPORTANT BODY"
+  end
+
+  # A room can flush a tail on its empty lineage in the gap between the seed
+  # commit and the kill. That duplicate is not preventable here, so it must at
+  # least be visible.
+  test "warns of a possible second lineage when a tail exists after the kill", ctx do
+    %{user: user, vault: vault} = ctx
+    note = legacy_note(user, vault, "raced.md", "BODY")
+
+    refute ExUnit.CaptureLog.capture_log(fn ->
+             BackfillCrdtState.warn_if_second_lineage(user.id, note.id)
+           end) =~ "possible second lineage"
+
+    :ok = seed_tail!(user, vault, note.id, "TYPED")
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        BackfillCrdtState.warn_if_second_lineage(user.id, note.id)
+      end)
+
+    assert log =~ "possible second lineage"
+    assert log =~ note.id
+  end
+
+  # Runs after the seed committed, inside the batch loop: a failure here must
+  # not raise out and strand the rest of the vault. A non-UUID id forces the
+  # query to raise (Ecto.Query.CastError).
+  test "the second-lineage check never raises", ctx do
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert :ok = BackfillCrdtState.warn_if_second_lineage(ctx.user.id, "not-a-uuid")
+      end)
+
+    assert log =~ "second-lineage check failed"
+  end
+
+  test "enqueue_missing/0 enqueues only for pairs that still have a seedable note", ctx do
     %{user: user, vault: vault} = ctx
     _ = legacy_note(user, vault, "legacy.md", "BODY")
 
-    assert BackfillCrdtState.enqueue_all() == 1
+    assert BackfillCrdtState.enqueue_missing() == 1
 
     assert_enqueued(worker: BackfillCrdtState, args: %{"user_id" => user.id})
   end
 
-  test "enqueue_all/0 enqueues nothing when every note already has state", ctx do
+  test "enqueue_missing/0 enqueues nothing when every note already has state", ctx do
     %{user: user, vault: vault} = ctx
 
     {:ok, _} =
       Notes.upsert_note(user, vault, %{"path" => "fresh.md", "content" => "seeded"}, actor: "api")
 
-    assert BackfillCrdtState.enqueue_all() == 0
+    assert BackfillCrdtState.enqueue_missing() == 0
+  end
+
+  test "enqueue_missing/0 skips a pair whose only NULL-state note has a tail", ctx do
+    %{user: user, vault: vault} = ctx
+    note = legacy_note(user, vault, "tailed.md", "BODY")
+    :ok = seed_tail!(user, vault, note.id, "BODY")
+
+    assert BackfillCrdtState.enqueue_missing() == 0
+    refute_enqueued(worker: BackfillCrdtState)
+  end
+
+  test "enqueue_missing/0 skips a soft-deleted vault (the worker discards it)", ctx do
+    %{user: user, vault: vault} = ctx
+    _ = legacy_note(user, vault, "legacy.md", "BODY")
+    soft_delete_vault!(vault)
+
+    assert BackfillCrdtState.enqueue_missing() == 0
+  end
+
+  test "enqueue_missing/0 skips a deleted note", ctx do
+    %{user: user, vault: vault} = ctx
+    note = legacy_note(user, vault, "gone.md", "BODY")
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(from(n in Note, where: n.id == ^note.id),
+          set: [deleted_at: DateTime.utc_now(:second)]
+        )
+      end)
+
+    assert BackfillCrdtState.enqueue_missing() == 0
   end
 
   test "re-enqueues itself when a full batch means more remain", ctx do

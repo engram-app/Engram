@@ -36,7 +36,7 @@ defmodule Engram.Links do
   `with_tenant/2` is re-entrant for the same tenant, so the private helpers
   (`rebind_edge/6`, `decrypt_note_paths/3`, the candidate fetches) need no
   wrapping of their own, and a caller that already holds the tenant — e.g.
-  `BackfillNoteLinks` — pays nothing.
+  `RewriteNoteLinks` — pays nothing.
   """
 
   import Ecto.Query
@@ -136,7 +136,7 @@ defmodule Engram.Links do
     # caller's tenant only appears to work under the test sandbox, where
     # everything shares one outer transaction and the setting leaks forward.
     #
-    # Re-entrant for the same tenant, so `BackfillNoteLinks` (which already
+    # Re-entrant for the same tenant, so `RewriteNoteLinks` (which already
     # holds `with_tenant(user_id, ...)`) pays nothing.
     Repo.with_tenant(user.id, fn ->
       # Serialize concurrent extraction for one source note. Two writers
@@ -188,7 +188,7 @@ defmodule Engram.Links do
   # `attempt/6`'s `{:legacy, _}` branch, after `load_doc/2`'s block has
   # closed). Filtered, both reads return no candidates and every edge is
   # written DANGLING — silently, because the `insert_all` downstream IS scoped
-  # and succeeds. Re-entrant for the same tenant, so `BackfillNoteLinks`
+  # and succeeds. Re-entrant for the same tenant, so `RewriteNoteLinks`
   # (already inside `with_tenant`) pays nothing.
   #
   # The `[]` clause is load-bearing, not a micro-optimisation.

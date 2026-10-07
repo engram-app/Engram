@@ -143,8 +143,8 @@ defmodule Engram.SingleSiteRlsTest do
 
       # Per-node ETS cache with a TTL: a value cached by an earlier test would
       # make this assert nothing.
-      :ok = Stats.evict(vault.id)
-      on_exit(fn -> Stats.evict(vault.id) end)
+      :ok = Stats.Cache.evict(vault.id)
+      on_exit(fn -> Stats.Cache.evict(vault.id) end)
 
       %{note: note}
     end

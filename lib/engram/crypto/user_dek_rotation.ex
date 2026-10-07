@@ -137,11 +137,11 @@ defmodule Engram.Crypto.UserDekRotation do
   # (attachments/S3, Qdrant) failing after every head was cleared. The worker's
   # own RotationGate snoozes it until the lock clears, so enqueuing early is safe.
   #
-  # Only the head. `BackfillCrdtState` is deliberately NOT enqueued: its writes
-  # would re-fire the same trigger and re-NULL the heads this job just warmed,
-  # and seeding is not something a rotation should trigger unsupervised — a note
-  # whose real state is an un-checkpointed tail would get a second, unrelated
-  # Yjs lineage seeded from content on top of it.
+  # Only the head. A rotation does not trigger the state seed: the seed's
+  # writes re-fire the same trigger and re-NULL the heads this job just warmed.
+  # NULL-state notes are the `CrdtStateSeed` data migration's work, and notes
+  # with an un-checkpointed tail are excluded there by
+  # `BackfillCrdtState.seedable/0`.
   #
   # Best-effort: a failed enqueue must not fail the rotation.
   defp enqueue_crdt_head_rewarm(%User{id: user_id}) do

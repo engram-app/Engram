@@ -59,7 +59,7 @@ defmodule Engram.KeywordIndex.StatsCacheTest do
     assert Stats.avgdl(user.id, vault.id) == 100.0
 
     insert_chunk!(user, vault, note, 1, 300)
-    :ok = Stats.evict(vault.id)
+    :ok = Stats.Cache.evict(vault.id)
     assert Stats.avgdl(user.id, vault.id) == 200.0
   end
 

@@ -109,7 +109,11 @@ config :engram, Oban,
     # release ahead of its workers, so a rollback strands nothing
     # (ObanQueueConfigTest @moving_to_events).
     events: 2,
+    # Key rotation only (DEK, master key, provider migration).
     crypto_backfill: 1,
+    # Hourly CRDT representation backfills (BackfillCrdtState, BackfillCrdtHead),
+    # off crypto_backfill so they never hold a rotation's slot.
+    crdt_backfill: 1,
     export: 1,
     cleanup: 1,
     indexing: 2,
@@ -161,7 +165,9 @@ config :engram, Oban,
       # 2-slot maintenance queue and one database.
       #
       # Minutes: reconcile owns every :x2/:x7, device-auth :04/:19/:34/:49,
-      # hourly jobs sit on :x3/:x8 or :10, dailies on :00/:16/:25/:30/:40.
+      # hourly jobs sit on :x3/:x8 or :10 (data-migrations runner :33,
+      # CRDT head re-warm :48),
+      # dailies on :00/:16/:25/:30/:40.
       crontab: [
         # Every 5 min. Work is also queued the moment it is due (`kick/0`).
         {"2-59/5 * * * *", Engram.Workers.ReconcileEmbeddings},
@@ -179,10 +185,19 @@ config :engram, Oban,
         # census pings): hourly, so each run deletes an hour's worth.
         {"23 * * * *", Engram.Workers.ClientLogsPruner},
         {"28 * * * *", Engram.Workers.InstallPingsPruner},
+        # Self-healing data migrations (#1872): one pass of each one whose
+        # ledger row is not done; a pass that finds no work closes it.
+        # Also at boot, so an upgrade heals without waiting up to an hour. A boot
+        # within the hour of a run is deduped by the worker's `unique` (intended).
+        {"@reboot", Engram.Workers.DataMigrationsRunner},
+        {"33 * * * *", Engram.Workers.DataMigrationsRunner},
         {"38 * * * *", Engram.Workers.IdempotencyPrune},
         # Note-version outbox copies whose FinalizeRevision job was lost
         # between commit and enqueue (#1710).
         {"43 * * * *", Engram.Workers.FinalizeRevisionSweep},
+        # Every CRDT persist NULLs crdt_head; this re-warms them (a continuing
+        # self-heal, never done; see docs/context/data-migrations-ledger.md).
+        {"48 * * * *", Engram.Workers.WarmCrdtHeads},
         # Export archives past the 7-day download window (#859).
         {"53 * * * *", Engram.Workers.ExportExpirySweep},
         # Paddle drift check. Daily: drift logs at :error to Sentry, and a
@@ -191,10 +206,6 @@ config :engram, Oban,
         {"30 3 * * *", Engram.Workers.InactivityCleanup},
         # Fair-use over 3 consecutive DAYS: a daily question.
         {"0 4 * * *", Engram.Workers.OriginAbuseSweep},
-        # Clears plaintext vaults.slug after making slug_hmac / slug_suffixed
-        # describe the derived slug; idempotent (only rows still holding a
-        # slug). Remove with the contract release that drops vaults.slug.
-        {"25 4 * * *", Engram.Workers.BackfillVaultSlugHmac},
         # Cross-store reconciliation (#1576): a note whose points are gone is
         # unsearchable until this finds it. Daily because a pass is
         # O(collection); revisit around 1M points with a resumable cursor.

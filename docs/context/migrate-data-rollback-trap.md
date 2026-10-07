@@ -49,9 +49,8 @@ Also learned:
 
 ## Key code
 
-- `lib/engram/vaults.ex`: `derive_slug/2`, `put_slug`, `backfill_slug_hmacs/1`
+- `lib/engram/vaults.ex`: `derive_slug/2`, `put_slug`
 - `lib/engram/crypto.ex`: `maybe_decrypt_vault_fields/2`
-- `lib/engram/workers/backfill_vault_slug_hmac.ex`
 
 ## Verification recipe
 

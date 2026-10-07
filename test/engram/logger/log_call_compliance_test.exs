@@ -82,7 +82,6 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/jobs.ex",
     "lib/engram/workers/delete_note_index.ex",
     "lib/engram/workers/repath_note_index.ex",
-    "lib/engram/workers/reindex_keyword.ex",
     "lib/engram_web/controllers/search_controller.ex",
     "lib/engram_web/controllers/notes_controller.ex",
     # Second widening, from a deliberate audit of the 311 files the list did
@@ -126,11 +125,15 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/accounts/export/",
     "lib/engram_web/request_logger.ex",
     # Clean today, netted so they stay that way: the markdown parser IS note
-    # content, content-hash backfill reads it, and `logs/client_log.ex` is the
-    # schema for the plugin's own log lines.
+    # content, and `logs/client_log.ex` is the schema for the plugin's own log
+    # lines.
     "lib/engram/parsers/",
-    "lib/engram/content_hash/",
     "lib/engram/logs/",
+    # Data migrations select and count note rows (and a pass's failure reason
+    # is logged by the runner); netted so a log line added to one is scanned.
+    "lib/engram/data_migration.ex",
+    "lib/engram/data_migrations.ex",
+    "lib/engram/data_migrations/",
     # Has NO Logger call today, and is in scope anyway, because `filter/2` and
     # `allows?/2` receive whole vault structs and a vault carries `.name` —
     # user content. The two facts together are the reason: a module that holds

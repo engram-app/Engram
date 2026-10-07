@@ -3,6 +3,74 @@ defmodule Engram.Cluster.ReadinessTest do
 
   alias Engram.Cluster.Readiness
 
+  describe "rooms_reachable?/1 (can this node see every CRDT room?)" do
+    # Every collaborator stubbed: no :global.sync, no DNS.
+    defp reach(opts) do
+      [sync: fn -> :ok end, self_ip: "10.0.0.9", resolver: fn _ -> [] end]
+      |> Keyword.merge(opts)
+      |> Readiness.rooms_reachable?()
+    end
+
+    test "a single node (no role, no cluster query) hosts its own rooms" do
+      assert reach(role: nil, query: nil, peers: fn -> [] end)
+    end
+
+    test "a worker with no peers cannot see the web nodes' rooms" do
+      refute reach(role: :worker, query: "q", peers: fn -> [] end)
+    end
+
+    test "a declared role without a cluster query is still a split fleet" do
+      refute reach(role: :worker, query: nil, peers: fn -> [] end)
+    end
+
+    test "a clustered node with no peers cannot see the other nodes' rooms" do
+      refute reach(role: nil, query: "q", peers: fn -> [] end)
+    end
+
+    test "a peer connected to only some discovered nodes is not enough" do
+      refute reach(
+               role: :worker,
+               query: "q",
+               resolver: fn _ -> ["10.0.0.2", "10.0.0.3", "10.0.0.9"] end,
+               peers: fn -> [:"engram@10.0.0.2"] end
+             )
+    end
+
+    test "peers covering every discovered node except this one make rooms reachable" do
+      assert reach(
+               role: :worker,
+               query: "q",
+               resolver: fn _ -> ["10.0.0.2", "10.0.0.3", "10.0.0.9"] end,
+               peers: fn -> [:"engram@10.0.0.3", :"engram@10.0.0.2"] end
+             )
+    end
+
+    # A healthy lookup always returns this node's own A record. Empty means
+    # NXDOMAIN or a timeout: the fleet is unknown, so fail closed.
+    test "a failed discovery lookup is not reachable, even with a peer" do
+      refute reach(
+               role: :worker,
+               query: "q",
+               resolver: fn _ -> [] end,
+               peers: fn -> [:"engram@10.0.0.2"] end
+             )
+    end
+
+    test "syncs :global before deciding, so a just-joined peer's names are visible" do
+      parent = self()
+
+      assert reach(
+               role: :worker,
+               query: "q",
+               resolver: fn _ -> ["10.0.0.2"] end,
+               peers: fn -> [:"engram@10.0.0.2"] end,
+               sync: fn -> send(parent, :synced) end
+             )
+
+      assert_received :synced
+    end
+  end
+
   describe "decide/1 (pure gate decision)" do
     test "ready when any peer is connected" do
       assert :ready =

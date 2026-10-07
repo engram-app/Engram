@@ -7,11 +7,13 @@ defmodule Engram.ObanQueueConfigTest do
   # compile/CI time instead of via a Grafana backlog days later.
   use ExUnit.Case, async: true
 
+  alias Engram.Test.ObanWorkers
+
   test "every Oban worker's queue is registered in the Oban queues config" do
     configured = MapSet.new(configured_queues())
 
     offenders =
-      for mod <- Engram.Test.ObanWorkers.all(),
+      for mod <- ObanWorkers.all(),
           queue = worker_queue(mod),
           queue not in configured,
           do: {mod, queue}
@@ -41,18 +43,10 @@ defmodule Engram.ObanQueueConfigTest do
   ]
 
   test "maintenance runs exactly the cron workers" do
-    crons =
-      :engram
-      |> Application.get_env(Oban)
-      |> Keyword.fetch!(:plugins)
-      |> Enum.find_value(fn
-        {Oban.Plugins.Cron, opts} -> Keyword.fetch!(opts, :crontab)
-        _ -> nil
-      end)
-      |> MapSet.new(fn {_expr, worker} -> worker end)
+    crons = MapSet.new(ObanWorkers.crontab(), fn {_expr, worker} -> worker end)
 
     on_maintenance =
-      for mod <- Engram.Test.ObanWorkers.all(),
+      for mod <- ObanWorkers.all(),
           worker_queue(mod) == :maintenance,
           into: MapSet.new(),
           do: mod
@@ -63,6 +57,24 @@ defmodule Engram.ObanQueueConfigTest do
     assert on_maintenance |> MapSet.difference(crons) |> MapSet.to_list() |> Enum.sort() ==
              Enum.sort(@moving_to_events),
            "non-cron workers on the maintenance queue: move them to :events"
+  end
+
+  # The CRDT backfills run hourly; on crypto_backfill they would hold its single
+  # slot and delay a DEK or master-key rotation queued behind them.
+  test "crypto_backfill runs only the key-rotation workers" do
+    on_crypto =
+      for mod <- ObanWorkers.all(), worker_queue(mod) == :crypto_backfill, do: mod
+
+    assert Enum.sort(on_crypto) ==
+             Enum.sort([
+               Engram.Workers.MigrateUserProvider,
+               Engram.Workers.RotateUserDek,
+               Engram.Workers.RotateUserMasterKey
+             ])
+
+    assert worker_queue(Engram.Workers.BackfillCrdtHead) == :crdt_backfill
+    assert worker_queue(Engram.Workers.BackfillCrdtState) == :crdt_backfill
+    assert configured_queue_limit(:crdt_backfill) == 1
   end
 
   # Tripwire against unbounded embed concurrency. The 2026-07-03 OOM crash-loop
@@ -108,7 +120,7 @@ defmodule Engram.ObanQueueConfigTest do
   end
 
   # The whole point of the runtime override is that it raises ONE queue without
-  # dropping the other eight. Config deep-merges nested keyword lists, but that
+  # dropping the other nine. Config deep-merges nested keyword lists, but that
   # is a language guarantee this config leans on hard enough to pin down: get it
   # wrong and the worker silently boots with crdt_checkpoint as its ONLY queue,
   # and embeds stop for everyone.

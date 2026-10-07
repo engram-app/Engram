@@ -469,14 +469,11 @@ defmodule Engram.Indexing do
 
   Returns the number of `notes` rows updated.
 
-  The `repo` argument exists because the two callers need opposite pools, and
-  getting it wrong is silent in the dangerous direction.
-
-    * `ReindexKeyword` calls this INSIDE `Repo.with_tenant!/2`, so it must stay
-      on `Engram.Repo` — the tenant scope is the point there.
-    * `OrphanSweep` calls it with note_ids spanning every tenant by
-      construction, so no `with_tenant` is possible. It must pass
-      `Repo.maintenance()`.
+  `repo` is required, with no default, because the pool must match the caller
+  and getting it wrong is silent in the dangerous direction. `OrphanSweep`,
+  the only production caller, passes note_ids spanning every tenant by
+  construction, so no `with_tenant` is possible: it must pass
+  `Repo.maintenance()`.
 
   Both writes below are `update_all` against tables carrying FORCE ROW LEVEL
   SECURITY. An `update_all` the policy filters does not raise: it reports
@@ -485,7 +482,7 @@ defmodule Engram.Indexing do
   tripwire and sets no Postgres session state. See engram-app/Engram#1746.
   """
   @spec flag_notes_for_rebuild([Ecto.UUID.t()], module()) :: non_neg_integer()
-  def flag_notes_for_rebuild(note_ids, repo \\ Repo)
+  def flag_notes_for_rebuild(note_ids, repo)
 
   def flag_notes_for_rebuild([], _repo), do: 0
 

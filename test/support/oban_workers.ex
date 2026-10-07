@@ -29,6 +29,18 @@ defmodule Engram.Test.ObanWorkers do
     |> Enum.map(&Code.ensure_loaded!/1)
   end
 
+  @doc "The configured Oban Cron crontab, as `{expression, worker}` pairs."
+  @spec crontab() :: [{String.t(), module()}]
+  def crontab do
+    :engram
+    |> Application.get_env(Oban)
+    |> Keyword.fetch!(:plugins)
+    |> Enum.find_value(fn
+      {Oban.Plugins.Cron, opts} -> Keyword.fetch!(opts, :crontab)
+      _ -> nil
+    end)
+  end
+
   defp worker_module(path) do
     case :beam_lib.chunks(String.to_charlist(path), [:attributes]) do
       {:ok, {mod, attributes: attrs}} ->

@@ -194,7 +194,7 @@ defmodule Engram.CheckpointInterleave do
   "so cleanup could not mask the assertion". It masked the cleanup instead: 8
   users/vaults/notes accumulated across runs, and because several suites scan
   globally (`ReconcileEmbeddings` "caps the batch at 500 across all vaults",
-  `ReindexKeyword` "no-op when vault has no notes", the migration backfill
+  the removed vault reindex worker, the migration backfill
   tests), the leak surfaced as **27 unrelated failures** elsewhere in the suite.
   A cleanup that cannot be trusted is worse than one that fails loudly.
   """

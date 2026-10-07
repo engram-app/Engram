@@ -36,13 +36,10 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   import Ecto.Query
 
   alias Engram.Backfill.TenantScan
-  alias Engram.Indexing
-  alias Engram.KeywordIndex
+  alias Engram.DataMigrations.IndexVersions
   alias Engram.Logger.Metadata
   alias Engram.Notes.Note
-  alias Engram.Parsers.Markdown
   alias Engram.Repo
-  alias Engram.Vaults.Vault
   alias Engram.Workers.{EmbedNote, ExtractNoteLinks, RebuildStaleNote, RefreshKeywordVectors}
 
   require Logger
@@ -66,7 +63,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # enqueues `EmbedNote` jobs — it never decrypts or re-encrypts any payload.
   # The enqueued EmbedNote workers are individually gated via `RotationGate`.
   @impl Oban.Worker
-  def perform(%Oban.Job{args: args}) do
+  def perform(%Oban.Job{args: args, scheduled_at: scheduled_at}) do
     page_size = Map.get(args, "page", @page)
 
     # Pages through every tenant's stale notes: one pass on the maintenance
@@ -94,14 +91,19 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     #    chunker_version ("never start a mass re-embed"); reversed 2026-10-04:
     #    every index version reaches existing notes automatically, as
     #    unmetered maintenance at backfill priority.
-    version_stale = version_stale_dynamic()
+    #
+    # Once IndexVersions is done no content-current note is on an old
+    # version: skip the version term and the keyword scan (an unindexed
+    # per-tenant scan every 5 min). A version bump renames the migration,
+    # which reopens both. Except in the daily re-verify hour: a rollback then
+    # roll-forward, or a restored soft-deleted vault, puts version-stale notes
+    # back after the migration closed, and nothing would reopen it.
+    versions_done = IndexVersions.done?() and not daily_reverify?(scheduled_at)
+    version_stale = if versions_done, do: dynamic(false), else: IndexVersions.stale_dynamic()
 
     sweep_tenant = fn repo, remaining ->
       eligible =
-        from(n in Note, as: :note)
-        |> join(:inner, [n], v in Vault, on: v.id == n.vault_id and is_nil(v.deleted_at))
-        |> where([n], n.kind == "note")
-        |> where([n], is_nil(n.deleted_at))
+        IndexVersions.live_notes()
         # Two ways a note is stale:
         #   1. content changed since it was indexed (or was never indexed)
         #   2. it is indexed but has NO dense vectors, and a dense pass could
@@ -218,8 +220,16 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       )
     )
 
-    :ok = sweep_keyword_stale(now, paid, page_size)
+    if versions_done, do: :ok, else: sweep_keyword_stale(now, paid, page_size)
   end
+
+  # The hour a day (04:00-04:59 UTC, twelve "2-59/5" ticks) that re-checks
+  # index versions after IndexVersions is done. A whole hour, not one tick: the
+  # unique window can dedupe any single tick, and a skipped tick must not skip
+  # the day. A pure function of the job's time: no extra cron entry, no state.
+  # A kick landing in the hour counts too.
+  defp daily_reverify?(%DateTime{hour: 4}), do: true
+  defp daily_reverify?(_scheduled_at), do: false
 
   # Runs `sweep.(repo)` over every tenant: once on the maintenance pool
   # (which sees every tenant) where one is configured, as prod does; else
@@ -349,29 +359,6 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     length(fresh)
   end
 
-  defp version_stale_dynamic do
-    chunker = Markdown.chunker_version()
-    chunker_stale = dynamic([n], is_nil(n.chunker_version) or n.chunker_version != ^chunker)
-
-    case Indexing.embed_model() do
-      # The build cannot name its model: model tracking is off.
-      nil ->
-        chunker_stale
-
-      model ->
-        # `not is_nil` first: on a sparse-only note `dense = content` is NULL,
-        # and the keyword sweep negates this predicate, where NOT (NULL)
-        # silently drops the row. Every term here must be TRUE or FALSE.
-        dynamic(
-          [n],
-          ^chunker_stale or
-            (not is_nil(n.dense_indexed_hash) and not is_nil(n.content_hash) and
-               n.dense_indexed_hash == n.content_hash and
-               (is_nil(n.embed_model) or n.embed_model != ^model))
-        )
-    end
-  end
-
   # Notes indexed at their current content whose keyword vectors predate
   # `KeywordIndex.version/0`: a keyword-encoding change (tokenizer, stemmer,
   # what text is encoded) reaches them here with no operator step, on SaaS and
@@ -389,19 +376,15 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # index on (user_id) WHERE keyword_version IS DISTINCT FROM <current> if a
   # tenant reaches hundreds of thousands.
   defp sweep_keyword_stale(now, paid, page_size) do
-    version = KeywordIndex.version()
     backoff_until = DateTime.add(now, reconcile_backoff_seconds(), :second)
 
     page = fn repo ->
       eligible =
-        from(n in Note, as: :note)
-        |> join(:inner, [n], v in Vault, on: v.id == n.vault_id and is_nil(v.deleted_at))
-        |> where([n], n.kind == "note" and is_nil(n.deleted_at))
-        |> where([n], n.embed_hash == n.content_hash)
-        |> where([n], is_nil(n.keyword_version) or n.keyword_version != ^version)
+        IndexVersions.content_current_notes()
+        |> where(^IndexVersions.keyword_stale_dynamic())
         # A version-stale note gets a full rebuild above, which stamps the
         # keyword version itself.
-        |> where(^dynamic([n], not (^version_stale_dynamic())))
+        |> where(^dynamic([n], not (^IndexVersions.stale_dynamic())))
         |> where(
           [n],
           is_nil(n.embed_retry_after) or n.embed_retry_after <= ^now or

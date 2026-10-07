@@ -9,7 +9,6 @@ defmodule Engram.Onboarding.Backfill do
 
       docker exec engram-saas /app/bin/engram rpc 'Engram.Onboarding.Backfill.first_vault_created()'
 
-  Matches `Engram.Links.Backfill` and `Engram.ContentHash.Backfill`.
   """
 
   import Ecto.Query

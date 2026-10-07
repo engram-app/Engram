@@ -835,7 +835,7 @@ if config_env() == :prod do
           # the lane exists to absorb.
           #
           # Partial `queues:` overrides deep-merge into the base keyword list
-          # (Config merges nested keyword lists), so the other eight queues are
+          # (Config merges nested keyword lists), so the other nine queues are
           # untouched. ObanQueueConfigTest pins that behaviour — if it ever
           # became a wholesale replace, the worker would boot with
           # crdt_checkpoint as its only queue and embedding would stop.

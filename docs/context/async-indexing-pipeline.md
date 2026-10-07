@@ -38,12 +38,11 @@ note write (REST / MCP / CRDT checkpoint)
 - Crash safety: `Oban.Plugins.Lifeline` rescues jobs stuck in `executing` (default 60 min). `shutdown_grace_period` (45s) exists so a deploy does not strand an in-flight embed for that hour.
 
 ## Re-indexing
-A change to the embedding model, context format or chunk boundaries needs a re-embed. There is no automatic corpus-wide reindex:
-- Bump `@chunker_version` in `markdown.ex` when chunk boundaries change. `EmbedNote` then refuses to hash-skip notes stamped with an older version, but nothing selects them on its own.
-- An operator drives the backfill per vault with `Engram.Workers.ReindexKeyword`. It clears the hashes and reuse markers unconditionally, so every run is a full re-embed of that vault.
+Every index change heals automatically. To force a re-embed for a context-format change, bump `@chunker_version`:
+- Bump `@chunker_version` in `markdown.ex` when chunk boundaries or the embedded context format change. `EmbedNote` then refuses to hash-skip notes stamped with an older version, and the `IndexVersions` data migration plus `ReconcileEmbeddings` re-embed them (`docs/context/data-migrations-ledger.md`). The per-vault operator worker `ReindexKeyword` was deleted.
 
 ## References
 - Oban config: `config/config.exs`
-- `lib/engram/workers/embed_note.ex`, `lib/engram/workers/reconcile_embeddings.ex`, `lib/engram/workers/reindex_keyword.ex`
+- `lib/engram/workers/embed_note.ex`, `lib/engram/workers/reconcile_embeddings.ex`
 - `lib/engram/indexing.ex` (`plan_chunks/4`, `@embed_batch_size`)
 - Chunk boundaries and rejected chunking strategies: `docs/context/chunk-boundary-stability.md`

@@ -253,3 +253,7 @@ config :engram, :orphan_sweep_point_grace_seconds, 0
 # near the test that actually caused it. Off here so no marker is ever written.
 # `QdrantEnsureCollectionMemoTest` re-enables it for its own cases.
 config :engram, :ensure_collection_memo, false
+
+# Sentry.Test (setup_sentry/1, pop_sentry_reports/0) needs its registry,
+# which the SDK starts only in test mode. No DSN in test, so nothing is sent.
+config :sentry, test_mode: true

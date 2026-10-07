@@ -516,8 +516,8 @@ defmodule Engram.Workers.OrphanSweep do
 
   defp flag_notes_for_reindex(note_ids) do
     # The two UPDATEs, their ordering and their chunking live in
-    # `Indexing.flag_notes_for_rebuild/1` (#1477). This worker and
-    # `ReindexKeyword` carried drifted copies of the same code — same intent,
+    # `Indexing.flag_notes_for_rebuild/2` (#1477). This worker and
+    # a removed sibling worker carried drifted copies of the same code — same intent,
     # different batch sizes, and neither filtered out rows whose `context_hmac`
     # was already NULL. The reuse marker must be cleared BEFORE the note hashes
     # or a re-index "reuses" the very points Qdrant lost and stamps the note

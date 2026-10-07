@@ -26,8 +26,8 @@ defmodule Engram.Telemetry do
   `{:badkey, _, _}`). Neither satisfies the leading-atom guard above, so every
   such reason used to classify as `:other` — the arm whose whole promise is that
   the diagnostic detail rides the log line instead. Callers worked around it
-  privately (`Metadata.safe_exit_reason/1`, `BackfillContentHashHmac`, and a
-  third copy in `CrdtChannel`), which is the signal that the defect belonged
+  privately (`Metadata.safe_exit_reason/1` and a copy in `CrdtChannel`),
+  which is the signal that the defect belonged
   here. The two clauses below unwrap exactly ONE level and still let only an
   atom escape, so the security invariant is unchanged.
   """

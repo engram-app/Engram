@@ -1,7 +1,7 @@
 defmodule Engram.Workers.EmbedNoteBulkDedupTest do
   @moduledoc """
   `EmbedNote`'s `unique:` option is enforced by Oban's `insert/3` advisory lock.
-  Bulk callers (`ReconcileEmbeddings`, batch upsert, `ReindexKeyword`) enqueue
+  Bulk callers (`ReconcileEmbeddings`, batch upsert) enqueue
   with `Oban.insert_all/2`, and **the basic engine ignores `unique` there** —
   bulk unique is an Oban Pro (Smart Engine) feature.
 
