@@ -190,3 +190,173 @@ describe("alignment", () => {
 		]);
 	});
 });
+
+describe("menu icons and semantics", () => {
+	const items = () =>
+		Array.from(document.querySelectorAll<HTMLButtonElement>(".cm-atomic-table-menu-item"));
+
+	test("every item has an icon, and the label text is unchanged", () => {
+		mount();
+		openMenu(4);
+		expect(items().length).toBeGreaterThan(10);
+		for (const b of items()) {
+			const icon = b.querySelector(".cm-atomic-table-menu-icon");
+			expect(icon?.querySelector("svg"), b.textContent ?? "").not.toBeNull();
+			expect(icon?.getAttribute("aria-hidden")).toBe("true");
+			expect(icon?.textContent).toBe("");
+		}
+	});
+
+	test("the icons are distinguishable: opposite actions get different glyphs", () => {
+		mount();
+		openMenu(4);
+		const glyph = (label: string) => item(label)?.querySelector("svg")?.innerHTML;
+		const pairs: Array<[string, string]> = [
+			["Insert row above", "Insert row below"],
+			["Insert column left", "Insert column right"],
+			["Move row up", "Move row down"],
+			["Move column left", "Move column right"],
+			["Sort ascending", "Sort descending"],
+			["Align left", "Align right"],
+			["Align left", "Align center"],
+		];
+		for (const [a, b] of pairs) {
+			expect(glyph(a), `${a} / ${b}`).toBeTruthy();
+			expect(glyph(a), `${a} / ${b}`).not.toBe(glyph(b));
+		}
+		expect(glyph("Delete row")).toBe(glyph("Delete column"));
+	});
+
+	test("the menu is a menu: role=menu with role=menuitem buttons", () => {
+		mount();
+		openMenu(4);
+		expect(document.querySelector(".cm-atomic-table-menu")?.getAttribute("role")).toBe("menu");
+		expect(items().every((b) => b.getAttribute("role") === "menuitem")).toBe(true);
+	});
+});
+
+describe("grouped menu: Row / Column / Sort / Align sub-menus", () => {
+	const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+	const menu = () => document.querySelector(".cm-atomic-table-menu") as HTMLElement | null;
+	const groups = () =>
+		Array.from(document.querySelectorAll<HTMLElement>(".cm-atomic-table-menu-group"));
+	const groupButton = (label: string) =>
+		groups()
+			.map((g) => g.querySelector<HTMLButtonElement>(":scope > .cm-atomic-table-menu-item"))
+			.find((b) => b?.textContent === label);
+	const submenu = (label: string) =>
+		groupButton(label)?.parentElement?.querySelector<HTMLElement>(".cm-atomic-table-submenu");
+	const isOpen = (label: string) => submenu(label)?.hidden === false;
+	const keydown = (k: string) =>
+		(document.activeElement ?? document).dispatchEvent(
+			new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }),
+		);
+	const enter = (label: string) =>
+		groupButton(label)?.parentElement?.dispatchEvent(new MouseEvent("pointerenter"));
+
+	test("a body cell lists Row, Column, Sort and Align; a header cell has no Row", () => {
+		mount();
+		openMenu(4);
+		expect(groups().map((g) => g.firstElementChild?.textContent)).toEqual([
+			"Row",
+			"Column",
+			"Sort",
+			"Align",
+		]);
+		menu()?.remove();
+		openMenu(1);
+		expect(groups().map((g) => g.firstElementChild?.textContent)).toEqual([
+			"Column",
+			"Sort",
+			"Align",
+		]);
+	});
+
+	test("groups are collapsed menu buttons", () => {
+		mount();
+		openMenu(4);
+		for (const label of ["Row", "Column", "Sort", "Align"]) {
+			const b = groupButton(label);
+			expect(b?.getAttribute("aria-haspopup"), label).toBe("menu");
+			expect(b?.getAttribute("aria-expanded"), label).toBe("false");
+			expect(isOpen(label), label).toBe(false);
+		}
+	});
+
+	test("leaf actions live inside their group's sub-menu", () => {
+		mount();
+		openMenu(4);
+		const inside = (group: string, label: string) => submenu(group)?.contains(item(label) as Node);
+		expect(inside("Row", "Move row up")).toBe(true);
+		expect(inside("Row", "Delete row")).toBe(true);
+		expect(inside("Column", "Insert column left")).toBe(true);
+		expect(inside("Column", "Delete column")).toBe(true);
+		expect(inside("Sort", "Sort ascending")).toBe(true);
+		expect(inside("Align", "Align center")).toBe(true);
+	});
+
+	test("hovering a group opens its sub-menu and closes the others", () => {
+		mount();
+		openMenu(4);
+		enter("Row");
+		expect(isOpen("Row")).toBe(true);
+		expect(groupButton("Row")?.getAttribute("aria-expanded")).toBe("true");
+		enter("Column");
+		expect(isOpen("Column")).toBe(true);
+		expect(isOpen("Row")).toBe(false);
+	});
+
+	test("clicking a group toggles its sub-menu without closing the menu", () => {
+		mount();
+		openMenu(4);
+		groupButton("Sort")?.click();
+		expect(isOpen("Sort")).toBe(true);
+		expect(menu()).not.toBeNull();
+		groupButton("Sort")?.click();
+		expect(isOpen("Sort")).toBe(false);
+	});
+
+	test("choosing a leaf runs it and closes the whole menu", () => {
+		mount();
+		choose(3, "Move row down");
+		expect(menu()).toBeNull();
+		expect(table()).toBe("| a | b | c |\n| --- | --- | --- |\n| 4 | 5 | 6 |\n| 1 | 2 | 3 |");
+	});
+
+	test("Escape closes an open sub-menu first, then the menu", async () => {
+		mount();
+		openMenu(4);
+		await tick();
+		enter("Row");
+		keydown("Escape");
+		expect(isOpen("Row")).toBe(false);
+		expect(menu()).not.toBeNull();
+		keydown("Escape");
+		expect(menu()).toBeNull();
+	});
+
+	test("ArrowDown focuses the first group; ArrowRight opens it and focuses its first enabled item", async () => {
+		mount();
+		openMenu(3); // first body row: "Move row up" is disabled
+		await tick();
+		keydown("ArrowDown");
+		expect(document.activeElement).toBe(groupButton("Row"));
+		keydown("ArrowRight");
+		expect(isOpen("Row")).toBe(true);
+		expect(document.activeElement).toBe(item("Insert row above"));
+	});
+
+	test("arrow navigation skips disabled items; ArrowLeft returns to the group", async () => {
+		mount();
+		openMenu(3);
+		await tick();
+		keydown("ArrowDown");
+		keydown("ArrowRight");
+		keydown("ArrowDown"); // Insert row below
+		keydown("ArrowDown"); // skips the disabled "Move row up"
+		expect(document.activeElement).toBe(item("Move row down"));
+		keydown("ArrowLeft");
+		expect(isOpen("Row")).toBe(false);
+		expect(document.activeElement).toBe(groupButton("Row"));
+	});
+});
