@@ -1,7 +1,7 @@
 defmodule Engram.Repo.Migrations.AddLabelToDeviceFlowExpand do
   use Ecto.Migration
 
-  # phase/expand — two nullable text columns, no backfill, no index.
+  # phase/expand - two nullable text columns, no backfill, no index.
   #
   # The Obsidian link page now lets the user name the connection, as the OAuth
   # consent screen already does (`oauth_refresh_tokens.label`). The label is

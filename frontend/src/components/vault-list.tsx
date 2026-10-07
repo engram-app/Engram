@@ -6,7 +6,7 @@ import { useAutofocus } from "@/hooks/use-autofocus";
 import { cn } from "@/lib/utils";
 
 // Above this many vaults the list gets a search box. Below it, the box is
-// pure clutter — every vault is already on screen.
+// pure clutter - every vault is already on screen.
 const SEARCH_THRESHOLD = 8;
 
 type VaultSearch = ReturnType<typeof useVaultSearch>;
