@@ -1,6 +1,8 @@
 import { useMemo } from "react";
 import { Link, Navigate, useSearchParams } from "react-router";
+import { useT } from "@/i18n/locale-provider";
 import { formatDate } from "@/lib/format-date";
+import { intlLocale } from "@/lib/intl-locale";
 import { type NoteSummary, useFolderNotes, useSyncManifest, useVaults } from "../api/queries";
 import { useActiveVaultSlug } from "../api/vault-slug";
 import { EmptyVaultState } from "../layout/empty-vault-state";
@@ -15,6 +17,8 @@ interface NoteRowProps {
 }
 
 function NoteRow({ note }: NoteRowProps) {
+	const { t, renderedLocale } = useT();
+
 	const slug = useActiveVaultSlug();
 	return (
 		<article className="border-gray-100 border-b py-3 last:border-0 dark:border-gray-800">
@@ -26,7 +30,7 @@ function NoteRow({ note }: NoteRowProps) {
 			<footer className="mt-1 flex flex-wrap items-center gap-3 text-gray-500 text-xs dark:text-gray-400">
 				{Boolean(note.folder) && <span>{note.folder}</span>}
 				{note.tags.length > 0 && (
-					<ul className="flex gap-1" aria-label="Tags">
+					<ul className="flex gap-1" aria-label={t("Tags")}>
 						{note.tags.map((tag) => (
 							<li
 								key={tag}
@@ -37,27 +41,32 @@ function NoteRow({ note }: NoteRowProps) {
 						))}
 					</ul>
 				)}
-				<time dateTime={note.updated_at}>{formatDate(note.updated_at)}</time>
+				<time dateTime={note.updated_at}>
+					{formatDate(note.updated_at, intlLocale(renderedLocale))}
+				</time>
 			</footer>
 		</article>
 	);
 }
 
 function FolderNotes({ folder }: { folder: string }) {
+	const { t } = useT();
 	const { data: notes, isLoading, isError } = useFolderNotes(folder);
 
 	if (isLoading) {
-		return <p className="text-gray-500 text-sm dark:text-gray-400">Loading…</p>;
+		return <p className="text-gray-500 text-sm dark:text-gray-400">{t("Loading…")}</p>;
 	}
 	if (isError) {
-		return <p className="text-red-600 text-sm dark:text-red-400">Failed to load notes.</p>;
+		return <p className="text-red-600 text-sm dark:text-red-400">{t("Failed to load notes.")}</p>;
 	}
 	if (!notes || notes.length === 0) {
-		return <p className="text-gray-500 text-sm dark:text-gray-400">No notes in this folder.</p>;
+		return (
+			<p className="text-gray-500 text-sm dark:text-gray-400">{t("No notes in this folder.")}</p>
+		);
 	}
 
 	return (
-		<section aria-label={`Notes in ${folder}`}>
+		<section aria-label={t("Notes in {folder}", { folder })}>
 			<ul>
 				{notes.map((note) => (
 					<li key={note.path}>
@@ -70,6 +79,7 @@ function FolderNotes({ folder }: { folder: string }) {
 }
 
 export default function Dashboard() {
+	const { t } = useT();
 	const [searchParams] = useSearchParams();
 	const folder = searchParams.get("folder") ?? "";
 	const { data: vaults } = useVaults();
@@ -147,10 +157,10 @@ export default function Dashboard() {
 	// Empty document — the same pane shell NotePage renders, with nothing open.
 	return (
 		<section
-			aria-label="No note open"
+			aria-label={t("No note open")}
 			className="mx-auto flex size-full min-h-0 min-w-0 max-w-[840px] flex-col overflow-hidden border-border border-x bg-card text-card-foreground md:-my-6 md:h-[calc(100%+3rem)]"
 		>
-			<p className="m-auto text-muted-foreground text-sm">No note is open</p>
+			<p className="m-auto text-muted-foreground text-sm">{t("No note is open")}</p>
 		</section>
 	);
 }

@@ -3,6 +3,7 @@ import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
 import { Outlet } from "react-router";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { useT } from "@/i18n/locale-provider";
 import { useBillingStatus } from "../api/queries";
 import { useChannel } from "../api/use-channel";
 import { AttachmentUploadProvider } from "../viewer/attachment-upload/provider";
@@ -126,6 +127,7 @@ function DesktopLayout() {
 }
 
 function TrialBanner() {
+	const { tn } = useT();
 	const { data: billing } = useBillingStatus();
 	const days = billing?.trial_days_remaining ?? 0;
 	if (billing?.subscription?.status !== "trialing" || days <= 0 || days > 3) {
@@ -136,7 +138,10 @@ function TrialBanner() {
 			className="bg-amber-50 px-4 py-2 text-center text-amber-900 text-sm dark:bg-amber-950/40 dark:text-amber-100"
 			role="alert"
 		>
-			{days} days left in your trial.
+			{tn(
+				{ one: "{count} day left in your trial.", other: "{count} days left in your trial." },
+				days,
+			)}
 		</aside>
 	);
 }

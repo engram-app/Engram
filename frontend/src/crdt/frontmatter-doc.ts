@@ -1,4 +1,5 @@
 import type * as Y from "yjs";
+import { msg } from "../i18n/msg";
 import { coerceValue, type PropertyType } from "../viewer/property-types";
 import { emitFrontmatter } from "./frontmatter-codec";
 
@@ -54,8 +55,8 @@ export const OKF_FIELD_HELP: ReadonlyArray<{
 		key: "type",
 		aliases: [],
 		expects: ["text"],
-		expectsLabel: "text",
-		what: "What kind of note this is. Search can filter on it.",
+		expectsLabel: msg("text"),
+		what: msg("What kind of note this is. Search can filter on it."),
 	},
 	{
 		key: "tags",
@@ -63,36 +64,36 @@ export const OKF_FIELD_HELP: ReadonlyArray<{
 		// A bare `tags: work` is indexed too -- the scanner is a regex over the
 		// raw line, not a list parser -- so "text" belongs here.
 		expects: ["list", "text"],
-		expectsLabel: "a list, or one name",
-		what: "Topics. Browsable and searchable across the vault.",
+		expectsLabel: msg("a list, or one name"),
+		what: msg("Topics. Browsable and searchable across the vault."),
 	},
 	{
 		key: "description",
 		aliases: [],
 		expects: ["text"],
-		expectsLabel: "text",
-		what: "A one-line summary of the note.",
+		expectsLabel: msg("text"),
+		what: msg("A one-line summary of the note."),
 	},
 	{
 		key: "resource",
 		aliases: [],
 		expects: ["text"],
-		expectsLabel: "text",
-		what: "The thing the note is about \u2014 usually a URL.",
+		expectsLabel: msg("text"),
+		what: msg("The thing the note is about — usually a URL."),
 	},
 	{
 		key: "created",
 		aliases: ["date"],
 		expects: ["date", "datetime"],
-		expectsLabel: "a date (YYYY-MM-DD)",
-		what: "When the note came into being.",
+		expectsLabel: msg("a date (YYYY-MM-DD)"),
+		what: msg("When the note came into being."),
 	},
 	{
 		key: "timestamp",
 		aliases: ["modified", "updated"],
 		expects: ["date", "datetime"],
-		expectsLabel: "a date (YYYY-MM-DD)",
-		what: "When it last changed.",
+		expectsLabel: msg("a date (YYYY-MM-DD)"),
+		what: msg("When it last changed."),
 	},
 ];
 

@@ -13,12 +13,13 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { uuid7 } from "@/crdt/uuid7";
+import { useT } from "@/i18n/locale-provider";
+import { msg } from "@/i18n/msg";
 import { isMember } from "../lib/is-member";
 import { useAttachmentUpload } from "../viewer/attachment-upload/provider";
 import { type SortKey, useFolderTreeState } from "./folder-tree-context";
 
 const ICON = "size-5";
-const BUTTON = "size-10";
 
 interface SortSection {
 	label: string;
@@ -27,24 +28,24 @@ interface SortSection {
 
 const SORT_SECTIONS: readonly SortSection[] = [
 	{
-		label: "File name",
+		label: msg("File name"),
 		options: [
-			{ value: "name-asc", label: "A to Z" },
-			{ value: "name-desc", label: "Z to A" },
+			{ value: "name-asc", label: msg("A to Z") },
+			{ value: "name-desc", label: msg("Z to A") },
 		],
 	},
 	{
-		label: "Created time",
+		label: msg("Created time"),
 		options: [
-			{ value: "created-desc", label: "Newest first" },
-			{ value: "created-asc", label: "Oldest first" },
+			{ value: "created-desc", label: msg("Newest first") },
+			{ value: "created-asc", label: msg("Oldest first") },
 		],
 	},
 	{
-		label: "Modified time",
+		label: msg("Modified time"),
 		options: [
-			{ value: "modified-desc", label: "Newest first" },
-			{ value: "modified-asc", label: "Oldest first" },
+			{ value: "modified-desc", label: msg("Newest first") },
+			{ value: "modified-asc", label: msg("Oldest first") },
 		],
 	},
 ];
@@ -54,6 +55,7 @@ const SORT_SECTIONS: readonly SortSection[] = [
 const SORT_KEYS: readonly SortKey[] = SORT_SECTIONS.flatMap((s) => s.options.map((o) => o.value));
 
 export default function FolderActions() {
+	const { t } = useT();
 	const { collapseAll, sort, setSort, requestFolderRename } = useFolderTreeState();
 
 	const createNote = useCreateNote();
@@ -62,7 +64,7 @@ export default function FolderActions() {
 
 	return (
 		<section
-			aria-label="File actions"
+			aria-label={t("File actions")}
 			// No horizontal padding: justify-around already yields edge gaps that
 			// scale with the panel, so the spacing breathes as the sidebar widens
 			// and collapses to flush at the 200px floor instead of clipping.
@@ -74,15 +76,14 @@ export default function FolderActions() {
 						<Button
 							variant="ghost"
 							size="icon"
-							aria-label="New note"
-							className={BUTTON}
+							aria-label={t("New note")}
 							onClick={() => createNote.mutate({ folder: "", id: uuid7() })}
 							disabled={createNote.isPending}
 						>
 							<FilePlus className={ICON} />
 						</Button>
 					</TooltipTrigger>
-					<TooltipContent>Create note</TooltipContent>
+					<TooltipContent>{t("Create note")}</TooltipContent>
 				</Tooltip>
 
 				<Tooltip>
@@ -90,8 +91,7 @@ export default function FolderActions() {
 						<Button
 							variant="ghost"
 							size="icon"
-							aria-label="New folder"
-							className={BUTTON}
+							aria-label={t("New folder")}
 							// Straight into rename mode so the placeholder name is never kept by
 							// accident — the tree owns the rename UI, so ask it via context.
 							onClick={() =>
@@ -105,7 +105,7 @@ export default function FolderActions() {
 							<FolderPlus className={ICON} />
 						</Button>
 					</TooltipTrigger>
-					<TooltipContent>Create folder</TooltipContent>
+					<TooltipContent>{t("Create folder")}</TooltipContent>
 				</Tooltip>
 
 				<Tooltip>
@@ -113,26 +113,25 @@ export default function FolderActions() {
 						<Button
 							variant="ghost"
 							size="icon"
-							aria-label="Upload attachment"
-							className={BUTTON}
+							aria-label={t("Upload attachment")}
 							onClick={() => openUpload(undefined, "")}
 						>
 							<Upload className={ICON} />
 						</Button>
 					</TooltipTrigger>
-					<TooltipContent>Upload an attachment</TooltipContent>
+					<TooltipContent>{t("Upload an attachment")}</TooltipContent>
 				</Tooltip>
 				<DropdownMenu>
 					<Tooltip>
 						<TooltipTrigger asChild>
 							{/* Both triggers compose onto the one Button via asChild. */}
 							<DropdownMenuTrigger asChild>
-								<Button variant="ghost" size="icon" aria-label="Sort" className={BUTTON}>
+								<Button variant="ghost" size="icon" aria-label={t("Sort")}>
 									<ArrowUpDown className={ICON} />
 								</Button>
 							</DropdownMenuTrigger>
 						</TooltipTrigger>
-						<TooltipContent>Sort</TooltipContent>
+						<TooltipContent>{t("Sort")}</TooltipContent>
 					</Tooltip>
 					<DropdownMenuContent align="end" className="w-[min(95vw,20rem)]">
 						<DropdownMenuRadioGroup
@@ -150,11 +149,11 @@ export default function FolderActions() {
 								<Fragment key={section.label}>
 									{i > 0 && <DropdownMenuSeparator />}
 									<DropdownMenuLabel className="text-[10px] text-muted-foreground uppercase tracking-wide">
-										{section.label}
+										{t(section.label)}
 									</DropdownMenuLabel>
 									{section.options.map((opt) => (
 										<DropdownMenuRadioItem key={opt.value} value={opt.value}>
-											{opt.label}
+											{t(opt.label)}
 										</DropdownMenuRadioItem>
 									))}
 								</Fragment>
@@ -168,14 +167,13 @@ export default function FolderActions() {
 						<Button
 							variant="ghost"
 							size="icon"
-							aria-label="Collapse all folders"
+							aria-label={t("Collapse all folders")}
 							onClick={collapseAll}
-							className={BUTTON}
 						>
 							<FoldVertical className={ICON} />
 						</Button>
 					</TooltipTrigger>
-					<TooltipContent>Collapse all folders</TooltipContent>
+					<TooltipContent>{t("Collapse all folders")}</TooltipContent>
 				</Tooltip>
 			</TooltipProvider>
 		</section>

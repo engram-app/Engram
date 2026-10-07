@@ -1,12 +1,16 @@
-import { CheckoutEventNames, initializePaddle, type Paddle } from "@paddle/paddle-js";
+import {
+	CheckoutEventNames,
+	type CheckoutSettings,
+	initializePaddle,
+	type Paddle,
+} from "@paddle/paddle-js";
 import { useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ctaFilled, ctaOutline } from "@/lib/ui-classes";
-import { cn } from "@/lib/utils";
+import type { Translate } from "@/i18n/translate";
 import type { CheckoutMethod } from "../analytics/events";
 import { track } from "../analytics/track";
 import { api } from "../api/client";
@@ -21,6 +25,9 @@ import {
 	useIndexStatus,
 	useMe,
 } from "../api/queries";
+import { useT } from "../i18n/locale-provider";
+import { msg } from "../i18n/msg";
+import { paddleLocale } from "../i18n/vendor-locales";
 import BillingHistoryTable from "./billing-history-table";
 import CancelPanel from "./cancel-panel";
 import CurrentPlanCard from "./current-plan-card";
@@ -45,13 +52,48 @@ const COOLDOWN_MS = 15_000;
 
 const INLINE_FRAME_TARGET = "paddle-checkout";
 
+// Paddle's branded-inline-checkout dashboard config (Paddle > Checkout
+// > Branded inline checkout) is a single static color set with no
+// light/dark variant, tuned for light. `theme: "light"` matches it so
+// the unbranded chrome (page background behind fields, default text)
+// doesn't clash with the branded fields. Fixed, not tied to the app's
+// live theme — a dynamic value here tore down/rebuilt the Paddle
+// instance on every app theme toggle, stranding an open checkout.
+// Stable inputs only (isInline): the init effect depends on this shape, and
+// the locale is layered on at call time. Each Checkout.open gets the FULL
+// object, because Paddle.js's merge of partial per-open settings over the
+// init defaults is undocumented and this is the payments path.
+function checkoutSettings(isInline: boolean): CheckoutSettings {
+	return isInline
+		? {
+				displayMode: "inline",
+				frameTarget: INLINE_FRAME_TARGET,
+				frameInitialHeight: 450,
+				// No fixed min-height: Paddle auto-resizes the iframe to fit its
+				// content, and a hard floor overrode the downward resize — so the
+				// short post-payment success screen was stranded in a tall 450px
+				// box. frameInitialHeight covers the initial paint before Paddle
+				// reports the real height. (min-width matches Paddle's own sample.)
+				frameStyle: "width:100%; min-width:312px; background:transparent; border:none;",
+				theme: "light",
+				variant: "one-page",
+			}
+		: { displayMode: "overlay", theme: "light", variant: "one-page" };
+}
+
 // Dev-only: Paddle's checkout iframe can't embed on a non-default-port
 // localhost origin (its frame-ancestors only allows the bare host at :80/:443),
 // so `vite dev` swaps the real frame for a stub that lets you walk the whole
 // onboarding flow. `import.meta.env.DEV` is false in production builds, so this
 // path is compiled out and never ships. Excluded under `TEST` so unit tests
 // exercise the real inline-frame path (vitest sets DEV=true too).
-const DEV_FAKE_CHECKOUT = import.meta.env.DEV && !import.meta.env.TEST;
+//
+// Only on a loopback host: reached through an HTTPS tunnel (bare host on :443)
+// the real frame embeds fine, and the stub would hide the screen being tested.
+const DEV_FAKE_CHECKOUT =
+	import.meta.env.DEV &&
+	!import.meta.env.TEST &&
+	["localhost", "127.0.0.1"].includes(window.location.hostname);
 
 // Paddle's own CheckoutEventsPaymentMethodTypes ("apple-pay", "google-pay", …)
 // use hyphens; CHECKOUT_METHODS uses underscores to match every other enum
@@ -96,14 +138,14 @@ function paymentMethodFrom(data: unknown): string | undefined {
 	return typeof type === "string" ? type : undefined;
 }
 
-async function downloadInvoice(transactionId: string) {
+async function downloadInvoice(transactionId: string, t: Translate) {
 	try {
 		const { url } = await api.get<{ url: string }>(
 			`/billing/transactions/${transactionId}/invoice`,
 		);
 		window.open(url, "_blank", "noopener");
 	} catch {
-		toast.error("Could not fetch that invoice. Please try again.");
+		toast.error(t("Could not fetch that invoice. Please try again."));
 	}
 }
 
@@ -132,17 +174,18 @@ function SlowActivationBanner({
 	transactionId: string | null;
 	onRefresh: () => void;
 }) {
+	const { t } = useT();
 	return (
 		<div role="alert" className="rounded-lg border border-border bg-muted/50 p-4 text-sm">
 			<p className="font-medium text-foreground">
-				Payment received. We're finishing your activation in the background.
+				{t("Payment received. We're finishing your activation in the background.")}
 			</p>
 			<p className="mt-1 text-muted-foreground">
-				This usually takes seconds. Refresh in a moment, or contact support if it persists.
+				{t("This usually takes seconds. Refresh in a moment, or contact support if it persists.")}
 			</p>
 			<div className="mt-3 flex flex-wrap gap-2">
 				<Button size="sm" onClick={onRefresh}>
-					Refresh
+					{t("Refresh")}
 				</Button>
 				<Button
 					size="sm"
@@ -155,11 +198,13 @@ function SlowActivationBanner({
 						window.location.href = `mailto:support@engram.page?subject=${subject}&body=${body}`;
 					}}
 				>
-					Contact support
+					{t("Contact support")}
 				</Button>
 			</div>
 			{transactionId ? (
-				<p className="mt-3 text-muted-foreground text-xs">Reference: {transactionId}</p>
+				<p className="mt-3 text-muted-foreground text-xs">
+					{t("Reference: {id}", { id: transactionId })}
+				</p>
 			) : null}
 		</div>
 	);
@@ -169,8 +214,9 @@ function SlowActivationBanner({
 // not jump when billing status + Paddle init resolve. Shape: optional
 // heading, cadence toggle row, two cards in the same grid as the real cards.
 function BillingPageSkeleton({ hideHeading }: { hideHeading: boolean }) {
+	const { t } = useT();
 	return (
-		<article className="space-y-6" aria-busy="true" aria-label="Loading billing">
+		<article className="space-y-6" aria-busy="true" aria-label={t("Loading billing")}>
 			{!hideHeading && (
 				<header className="space-y-2">
 					<Skeleton className="h-6 w-32" />
@@ -222,6 +268,14 @@ export default function BillingPage({
 	const { data: detail } = useBillingSubscriptionDetail(hasSubscription);
 	const { data: history } = useBillingHistory(hasSubscription);
 	const qc = useQueryClient();
+	// Per-checkout, NOT in the init effect: that effect rebuilds the Paddle
+	// instance, which strands an open checkout (see the theme note there).
+	const { t, renderedLocale } = useT();
+	const checkoutLocale = paddleLocale(renderedLocale);
+	// Ref mirror: the Paddle init effect must not re-run (and strand an open
+	// checkout) when the UI language changes, so its eventCallback reads t here.
+	const tRef = useRef(t);
+	tRef.current = t;
 	const { data: indexStatus } = useIndexStatus();
 	const [paddle, setPaddle] = useState<Paddle>();
 	// Ref mirror of `paddle` so the eventCallback (captured pre-instance) can
@@ -287,12 +341,12 @@ export default function BillingPage({
 		if (completedAt === null) {
 			return;
 		}
-		const t = setTimeout(() => {
+		const timer = setTimeout(() => {
 			paddleRef.current?.Checkout.close();
 			setSlow(true);
 			setCheckingOut(false);
 		}, COOLDOWN_MS);
-		return () => clearTimeout(t);
+		return () => clearTimeout(timer);
 	}, [completedAt]);
 
 	// Push handler — Paddle webhook flipped the subscription server-side and
@@ -459,43 +513,17 @@ export default function BillingPage({
 						setCheckingOut(false);
 						setCompletedAt(null);
 						setSlow(false);
-						toast.error("Something went wrong with checkout. Please try again.");
+						// msg() marks the key for the scanner, which cannot see a call through tRef.
+						toast.error(tRef.current(msg("Something went wrong with checkout. Please try again.")));
 						break;
 					}
 					default:
 						break;
 				}
 			},
-			// Paddle's branded-inline-checkout dashboard config (Paddle > Checkout
-			// > Branded inline checkout) is a single static color set with no
-			// light/dark variant, tuned for light. `theme: "light"` matches it so
-			// the unbranded chrome (page background behind fields, default text)
-			// doesn't clash with the branded fields. Fixed, not tied to the app's
-			// live theme — a dynamic value here tore down/rebuilt the Paddle
-			// instance on every app theme toggle, stranding an open checkout.
-			checkout: {
-				settings: isInline
-					? {
-							displayMode: "inline",
-							frameTarget: INLINE_FRAME_TARGET,
-							frameInitialHeight: 450,
-							// No fixed min-height: Paddle auto-resizes the iframe to fit its
-							// content, and a hard floor overrode the downward resize — so the
-							// short post-payment success screen was stranded in a tall 450px
-							// box. frameInitialHeight covers the initial paint before Paddle
-							// reports the real height. (min-width matches Paddle's own sample.)
-							frameStyle: "width:100%; min-width:312px; background:transparent; border:none;",
-							theme: "light",
-							variant: "one-page",
-							locale: "en",
-						}
-					: {
-							displayMode: "overlay",
-							theme: "light",
-							variant: "one-page",
-							locale: "en",
-						},
-			},
+			// `locale: "en"` is only the default; every Checkout.open passes the full
+			// settings again with the rendered app locale (see checkoutSettings).
+			checkout: { settings: { ...checkoutSettings(isInline), locale: "en" } },
 		}).then((instance) => {
 			if (cancelled) {
 				return;
@@ -552,10 +580,11 @@ export default function BillingPage({
 					],
 					customer: { email: config.customer_email },
 					customData: config.custom_data,
+					settings: { ...checkoutSettings(isInline), locale: checkoutLocale },
 				});
 			});
 		},
-		[paddle, config, cadence, isInline],
+		[paddle, config, cadence, isInline, checkoutLocale],
 	);
 
 	// Dev stub success: satisfy the backend onboarding gate via the free-tier
@@ -618,7 +647,7 @@ export default function BillingPage({
 			const { url } = await api.get<{ url: string }>(path);
 			window.location.href = url;
 		} catch {
-			toast.error("Could not open the billing portal. Please try again.");
+			toast.error(t("Could not open the billing portal. Please try again."));
 			setPortalLoading(false);
 		}
 	}
@@ -634,9 +663,12 @@ export default function BillingPage({
 			const { transaction_id } = await api.get<{ transaction_id: string }>(
 				"/billing/payment-update-transaction",
 			);
-			paddle.Checkout.open({ transactionId: transaction_id });
+			paddle.Checkout.open({
+				transactionId: transaction_id,
+				settings: { ...checkoutSettings(isInline), locale: checkoutLocale },
+			});
 		} catch {
-			toast.error("Could not start the payment update. Please try again.");
+			toast.error(t("Could not start the payment update. Please try again."));
 		} finally {
 			setPortalLoading(false);
 		}
@@ -646,8 +678,10 @@ export default function BillingPage({
 		<article className="space-y-6">
 			{!hideHeading && (
 				<header>
-					<h1 className="font-semibold text-foreground text-xl">Billing</h1>
-					<p className="mt-1 text-muted-foreground text-sm">Manage your plan and payment method.</p>
+					<h1 className="font-semibold text-foreground text-xl">{t("Billing")}</h1>
+					<p className="mt-1 text-muted-foreground text-sm">
+						{t("Manage your plan and payment method.")}
+					</p>
 				</header>
 			)}
 
@@ -655,7 +689,7 @@ export default function BillingPage({
 				<CurrentPlanCard billing={billing} indexStatus={indexStatus}>
 					{billing.subscription && panel === null && (
 						<div className="flex flex-wrap justify-end gap-3">
-							<Button onClick={() => setPanel("change")}>Change plan</Button>
+							<Button onClick={() => setPanel("change")}>{t("Change plan")}</Button>
 							{/* Hide Cancel when (a) the subscription is already canceled,
                   OR (b) a scheduled cancel is in flight — Paddle keeps
                   status='active' until the effective date, so without the
@@ -665,7 +699,7 @@ export default function BillingPage({
 							{billing.subscription.status !== "canceled" &&
 								detail?.scheduled_change?.action !== "cancel" && (
 									<Button variant="destructive" onClick={() => setPanel("cancel")}>
-										Cancel subscription
+										{t("Cancel subscription")}
 									</Button>
 								)}
 						</div>
@@ -706,7 +740,7 @@ export default function BillingPage({
 							className="flex flex-col items-center justify-center gap-3 py-16 text-center"
 						>
 							<Loader2 className="size-6 animate-spin text-primary" aria-hidden="true" />
-							<p className="text-muted-foreground text-sm">Setting up your account…</p>
+							<p className="text-muted-foreground text-sm">{t("Setting up your account…")}</p>
 						</section>
 					) : slow ? (
 						<SlowActivationBanner
@@ -727,7 +761,7 @@ export default function BillingPage({
 								// onboard-billing-page.tsx) regardless of app theme.
 								className="text-gray-700 text-sm underline-offset-4 hover:text-gray-900 hover:underline"
 							>
-								← Choose a different plan
+								{t("← Choose a different plan")}
 							</button>
 							{DEV_FAKE_CHECKOUT ? (
 								// Fixed light colors throughout, not theme tokens: this stub
@@ -744,10 +778,7 @@ export default function BillingPage({
 										<button
 											type="button"
 											onClick={handleDevCheckoutSuccess}
-											className={cn(
-												"rounded-lg px-4 py-2 font-medium text-sm transition",
-												ctaFilled,
-											)}
+											className="rounded-lg bg-gray-900 px-4 py-2 font-medium text-sm text-white hover:bg-gray-700"
 										>
 											Simulate successful payment
 										</button>
@@ -757,11 +788,7 @@ export default function BillingPage({
 												setCheckingOut(false);
 												toast.error("Payment did not go through. Please try again.");
 											}}
-											className={cn(
-												"rounded-lg px-4 py-2 font-medium text-sm transition",
-												ctaOutline,
-												"border-gray-300 text-gray-900 hover:bg-gray-100",
-											)}
+											className="rounded-lg border border-gray-300 px-4 py-2 font-medium text-gray-900 text-sm hover:bg-gray-100"
 										>
 											Simulate failure
 										</button>
@@ -775,9 +802,9 @@ export default function BillingPage({
 						<>
 							{!hideHeading && (
 								<>
-									<h2 className="font-semibold text-foreground text-lg">Choose a Plan</h2>
+									<h2 className="font-semibold text-foreground text-lg">{t("Choose a Plan")}</h2>
 									<p className="text-muted-foreground text-sm">
-										Both plans include a 7-day free trial.
+										{t("Both plans include a 7-day free trial.")}
 									</p>
 								</>
 							)}
@@ -812,11 +839,11 @@ export default function BillingPage({
 							<ul className="flex flex-col gap-2 sm:hidden">
 								<PlanAccordionRow
 									name={PLAN_CATALOG.pro.name}
-									price={formatPlanPrice(PLAN_CATALOG.pro, cadence)}
-									summary="Unlimited vaults · 50 GB · cross-vault search + API"
+									price={formatPlanPrice(PLAN_CATALOG.pro, cadence, t)}
+									summary={t("Unlimited vaults · 50 GB · cross-vault search + API")}
 									features={PLAN_CATALOG.pro.features}
-									ctaLabel="Choose Pro"
-									ctaNote="7-day free trial · cancel anytime"
+									ctaLabel={t("Choose Pro")}
+									ctaNote={t("7-day free trial · cancel anytime")}
 									onClick={() => handleStartCheckout("pro")}
 									disabled={!checkoutReady}
 									recommended
@@ -825,11 +852,11 @@ export default function BillingPage({
 								/>
 								<PlanAccordionRow
 									name={PLAN_CATALOG.starter.name}
-									price={formatPlanPrice(PLAN_CATALOG.starter, cadence)}
-									summary="10 vaults · 10 GB · unlimited AI"
+									price={formatPlanPrice(PLAN_CATALOG.starter, cadence, t)}
+									summary={t("10 vaults · 10 GB · unlimited AI")}
 									features={PLAN_CATALOG.starter.features}
-									ctaLabel="Choose Starter"
-									ctaNote="7-day free trial · cancel anytime"
+									ctaLabel={t("Choose Starter")}
+									ctaNote={t("7-day free trial · cancel anytime")}
 									onClick={() => handleStartCheckout("starter")}
 									disabled={!checkoutReady}
 									open={openTier === "starter"}
@@ -839,9 +866,9 @@ export default function BillingPage({
 									<PlanAccordionRow
 										name={FREE_TIER.name}
 										price={FREE_TIER.price}
-										summary={FREE_TIER.summary}
+										summary={t(FREE_TIER.summary)}
 										features={[...FREE_TIER.features]}
-										ctaLabel="Choose Free"
+										ctaLabel={t("Choose Free")}
 										onClick={freeOption.onContinue}
 										disabled={freeOption.loading}
 										quietCta
@@ -865,7 +892,7 @@ export default function BillingPage({
 					/>
 					<BillingHistoryTable
 						transactions={history?.transactions ?? []}
-						onDownload={downloadInvoice}
+						onDownload={(id) => downloadInvoice(id, t)}
 					/>
 					{/* Escape hatch: if the inline panels above fail (Paddle UI bug,
               network blip, an action we don't yet support inline) the user
@@ -879,12 +906,15 @@ export default function BillingPage({
 							onClick={() => openPortal()}
 							disabled={portalLoading}
 						>
-							{Boolean(portalLoading) && <Loader2 aria-hidden className="size-4 animate-spin" />}
-							{portalLoading ? "Opening Paddle…" : "Open Paddle billing portal"}
+							{Boolean(portalLoading) && (
+								<Loader2 data-icon="inline-start" aria-hidden className="animate-spin" />
+							)}
+							{portalLoading ? t("Opening Paddle…") : t("Open Paddle billing portal")}
 						</Button>
 						<p className="text-muted-foreground text-xs">
-							Paddle is our payment processor. Use this if the controls above don't cover what you
-							need.
+							{t(
+								"Paddle is our payment processor. Use this if the controls above don't cover what you need.",
+							)}
 						</p>
 					</div>
 				</>

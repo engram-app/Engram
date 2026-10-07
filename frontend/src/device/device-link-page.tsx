@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
 	countLabel,
 	useVaultSearch,
@@ -10,7 +11,11 @@ import {
 	VaultSearchToggle,
 } from "@/components/vault-list";
 import { useAutofocus } from "@/hooks/use-autofocus";
-import { destructiveAlert, fieldInput, heading, selectableRow } from "@/lib/ui-classes";
+import { useStableT, useT } from "@/i18n/locale-provider";
+import { msg } from "@/i18n/msg";
+import { Trans } from "@/i18n/trans";
+import type { Tn, Translate } from "@/i18n/translate";
+import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { track } from "../analytics/track";
 import { setActiveVaultId } from "../api/active-vault";
@@ -54,12 +59,12 @@ type Step = "enter-code" | "verifying" | "pick-vault" | "success";
 // only special-cased pick-vault, so the success screen kept announcing "Link
 // Obsidian Vault" for a job that was already done.
 const STEP_TITLES: Record<Step, string> = {
-	"enter-code": "Link Obsidian Vault",
+	"enter-code": msg("Link Obsidian Vault"),
 	// Same job as enter-code, just without the form — keep the same title so
 	// the heading doesn't change under the user when the verify resolves.
-	verifying: "Link Obsidian Vault",
-	"pick-vault": "Choose a vault to sync",
-	success: "Finish in Obsidian",
+	verifying: msg("Link Obsidian Vault"),
+	"pick-vault": msg("Choose a vault to sync"),
+	success: msg("Finish in Obsidian"),
 };
 
 // RFC 8628 verification_uri_complete: the plugin sends the user to
@@ -77,6 +82,10 @@ function readCodeFromQuery(search: string): string {
 }
 
 function DeviceLinkPage() {
+	const { t, tn } = useT();
+	// Stable: handleVerifyCode feeds the auto-verify effect, which must not re-run (a second
+	// verify call) when the language changes.
+	const { t: tLater } = useStableT();
 	const { isSignedIn } = useAuthAdapter();
 	const navigate = useNavigate();
 	const location = useLocation();
@@ -148,7 +157,7 @@ function DeviceLinkPage() {
 	const handleVerifyCode = useCallback(async () => {
 		const formatted = userCode.toUpperCase().replace(/[^A-Z2-9]/gu, "");
 		if (formatted.length !== 8) {
-			setError("Code must be 8 characters (e.g., ENGR-7X4K)");
+			setError(tLater(msg("Code must be 8 characters (e.g., ENGR-7X4K)")));
 			// Unreachable from "verifying" today (readCodeFromQuery only seeds a
 			// 9-char code, and the form can't be typed into behind the spinner),
 			// but every exit from this function has to restore a step the user
@@ -181,7 +190,9 @@ function DeviceLinkPage() {
 			// other value as "ZZZZ-ZZZZ".
 			setUserCode(formattedCode);
 			if (data.user_code_valid === false) {
-				setError("This code is invalid or has expired. Please try again from Obsidian.");
+				setError(
+					tLater(msg("This code is invalid or has expired. Please try again from Obsidian.")),
+				);
 				setStep("enter-code");
 				return;
 			}
@@ -208,12 +219,12 @@ function DeviceLinkPage() {
 			setCustomName(existing ? "" : suggested);
 			setStep("pick-vault");
 		} catch {
-			setError("Failed to load vaults. Please try again.");
+			setError(tLater(msg("Failed to load vaults. Please try again.")));
 			setStep("enter-code");
 		} finally {
 			setLoading(false);
 		}
-	}, [userCode, vaultsCap]);
+	}, [userCode, vaultsCap, tLater]);
 
 	// The plugin already knows the code, so a complete link URL means the only
 	// step left is choosing a vault — run the verify for them and land there.
@@ -318,9 +329,9 @@ function DeviceLinkPage() {
 		return (
 			<AuthShell>
 				<AuthPanel className="flex flex-col gap-3">
-					<h1 className={heading}>Link Obsidian Vault</h1>
+					<h1 className={heading}>{t("Link Obsidian Vault")}</h1>
 					<p className="text-muted-foreground text-sm">
-						Please sign in to link your Obsidian vault.
+						{t("Please sign in to link your Obsidian vault.")}
 					</p>
 				</AuthPanel>
 			</AuthShell>
@@ -331,13 +342,18 @@ function DeviceLinkPage() {
 		return (
 			<AuthShell>
 				<AuthPanel className="flex flex-col gap-3">
-					<h1 className={heading}>Link Obsidian Vault</h1>
+					<h1 className={heading}>{t("Link Obsidian Vault")}</h1>
 					<p className="text-muted-foreground text-sm">
-						Your account setup is not finished yet.{" "}
-						<Link to="/onboard" className="underline underline-offset-4">
-							Finish setting up
-						</Link>
-						, then click Link in Obsidian again.
+						<Trans
+							text="Your account setup is not finished yet. {setup}, then click Link in Obsidian again."
+							slots={{
+								setup: (
+									<Link to="/onboard" className="underline underline-offset-4">
+										{t("Finish setting up")}
+									</Link>
+								),
+							}}
+						/>
 					</p>
 				</AuthPanel>
 			</AuthShell>
@@ -364,7 +380,7 @@ function DeviceLinkPage() {
 			if (capCheck.atCap && existingObsidian) {
 				const existingId = obsidianConnectionId(existingObsidian);
 				if (existingId) {
-					swappedFromName = existingObsidian.name ?? "previous device";
+					swappedFromName = existingObsidian.name ?? t("previous device");
 					await api.del(`/connections/device/${existingId}`);
 					await qc.invalidateQueries({ queryKey: ["connections"] });
 					await qc.invalidateQueries({ queryKey: ["billing", "status"] });
@@ -413,8 +429,10 @@ function DeviceLinkPage() {
 					// Disconnect succeeded but authorize did not — user is now at 0
 					// connections instead of 1. Make that visible.
 					setError(
-						`Disconnected '${swappedFromName}' but linking the new device failed. ` +
-							"Re-link from Obsidian — no devices are currently synced.",
+						t(
+							"Disconnected '{name}' but linking the new device failed. Re-link from Obsidian — no devices are currently synced.",
+							{ name: swappedFromName },
+						),
 					);
 					track("plugin_connect_failed", { reason: "unknown" });
 					return;
@@ -429,10 +447,10 @@ function DeviceLinkPage() {
 				track("plugin_connect_failed", { reason: "limit_exceeded" });
 				return;
 			}
-			const message = e instanceof Error ? e.message : "Authorization failed";
+			const message = e instanceof Error ? e.message : t("Authorization failed");
 			const notFound = message.includes("404") || message.includes("not found");
 			if (notFound) {
-				setError("This code is invalid or has expired. Please try again from Obsidian.");
+				setError(t("This code is invalid or has expired. Please try again from Obsidian."));
 			} else {
 				setError(message);
 			}
@@ -455,7 +473,7 @@ function DeviceLinkPage() {
 				)}
 			>
 				<h1 className="font-bold text-2xl text-foreground tracking-tight sm:text-3xl">
-					{STEP_TITLES[step]}
+					{t(STEP_TITLES[step])}
 				</h1>
 
 				{capCheck.swapCooldownHours !== null && step !== "success" ? (
@@ -467,46 +485,55 @@ function DeviceLinkPage() {
 						role="alert"
 						className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-foreground text-sm"
 					>
-						You recently swapped devices. Your Free plan allows 1 swap every 24 hours — you can swap
-						again in {capCheck.swapCooldownHours}h.{" "}
-						<a
-							className="underline underline-offset-4"
-							onClick={(e) => {
-								e.preventDefault();
-								navigate(settingsTo("billing", location.search));
+						<Trans
+							text="You recently swapped devices. Your Free plan allows 1 swap every 24 hours — you can swap again in {hours}h. {upgrade} to connect as many devices as you like."
+							slots={{
+								hours: capCheck.swapCooldownHours,
+								upgrade: (
+									<a
+										className="underline underline-offset-4"
+										onClick={(e) => {
+											e.preventDefault();
+											navigate(settingsTo("billing", location.search));
+										}}
+										href={`${location.search}${settingsHash("billing")}`}
+									>
+										{t("Upgrade")}
+									</a>
+								),
 							}}
-							href={`${location.search}${settingsHash("billing")}`}
-						>
-							Upgrade
-						</a>{" "}
-						to connect as many devices as you like.
+						/>
 					</div>
 				) : capCheck.atCap && existingObsidian && step !== "success" ? (
 					<div
 						role="status"
 						className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-foreground text-sm"
 					>
-						Heads up — your Free plan syncs files between 1 device at a time. Linking this device
-						will disconnect <strong>{describeObsidianDevice(existingObsidian)}</strong>, which will
-						stop receiving sync changes.{" "}
-						<a
-							className="underline underline-offset-4"
-							onClick={(e) => {
-								e.preventDefault();
-								navigate(settingsTo("billing", location.search));
+						<Trans
+							text="Heads up — your Free plan syncs files between 1 device at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected."
+							slots={{
+								device: <strong>{describeObsidianDevice(existingObsidian, t, tn)}</strong>,
+								upgrade: (
+									<a
+										className="underline underline-offset-4"
+										onClick={(e) => {
+											e.preventDefault();
+											navigate(settingsTo("billing", location.search));
+										}}
+										href={`${location.search}${settingsHash("billing")}`}
+									>
+										{t("Upgrade")}
+									</a>
+								),
 							}}
-							href={`${location.search}${settingsHash("billing")}`}
-						>
-							Upgrade
-						</a>{" "}
-						to keep both connected.
+						/>
 					</div>
 				) : null}
 
 				{step === "enter-code" && (
 					<div className="flex flex-col gap-3">
 						<p className="text-muted-foreground text-sm">
-							Enter the code shown in your Obsidian plugin:
+							{t("Enter the code shown in your Obsidian plugin:")}
 						</p>
 						<input
 							ref={codeRef}
@@ -515,34 +542,33 @@ function DeviceLinkPage() {
 							onChange={(e) => setUserCode(e.target.value.toUpperCase())}
 							placeholder="XXXX-XXXX"
 							maxLength={9}
-							className={cn(fieldInput, "text-center font-mono text-2xl tracking-widest")}
+							className="h-auto py-2 text-center font-mono text-2xl tracking-widest md:text-2xl"
 							onKeyDown={(e) => e.key === "Enter" && handleVerifyCode()}
 						/>
 						<Button type="button" onClick={handleVerifyCode} disabled={loading} className="w-full">
-							{loading ? "Verifying…" : "Verify"}
+							{loading ? t("Verifying…") : t("Verify")}
 						</Button>
 					</div>
 				)}
 
-				{step === "verifying" && <SyncStatusPill message="Checking your code…" />}
+				{step === "verifying" && <SyncStatusPill message={t("Checking your code…")} />}
 
 				{step === "pick-vault" && (
 					<div className="flex flex-col gap-3">
 						<label className="flex flex-col gap-2 rounded-lg border border-border bg-muted/40 p-4">
 							<span className="font-semibold text-base text-foreground">
-								Name this connection{" "}
-								<span className="font-normal text-muted-foreground text-sm">(optional)</span>
+								{t("Name this connection")}{" "}
+								<span className="font-normal text-muted-foreground text-sm">{t("(optional)")}</span>
 							</span>
 							<span className="text-muted-foreground text-xs">
-								Shown in your connections list so you can tell your devices apart.
+								{t("Shown in your connections list so you can tell your devices apart.")}
 							</span>
-							<input
+							<Input
 								type="text"
 								maxLength={120}
 								value={label}
 								onChange={(e) => setLabel(e.target.value)}
-								placeholder="Obsidian Vault Sync"
-								className={cn(fieldInput, "bg-background")}
+								placeholder={t("Obsidian Vault Sync")}
 							/>
 						</label>
 
@@ -557,18 +583,23 @@ function DeviceLinkPage() {
 						/>
 						{Boolean(atVaultCap) && (
 							<p className="text-muted-foreground text-xs">
-								Your Free plan includes 1 vault — link into the existing one above, or{" "}
-								<a
-									className="underline underline-offset-4"
-									href={`${location.search}${settingsHash("billing")}`}
-									onClick={(e) => {
-										e.preventDefault();
-										navigate(settingsTo("billing", location.search));
+								<Trans
+									text="Your Free plan includes 1 vault — link into the existing one above, or {upgrade} to create more."
+									slots={{
+										upgrade: (
+											<a
+												className="underline underline-offset-4"
+												href={`${location.search}${settingsHash("billing")}`}
+												onClick={(e) => {
+													e.preventDefault();
+													navigate(settingsTo("billing", location.search));
+												}}
+											>
+												{t("upgrade")}
+											</a>
+										),
 									}}
-								>
-									upgrade
-								</a>{" "}
-								to create more.
+								/>
 							</p>
 						)}
 
@@ -579,8 +610,9 @@ function DeviceLinkPage() {
 						    say so on the path that lost the speed bump. */}
 						{arrivedWithCode && (
 							<p className="text-muted-foreground text-xs">
-								Syncing gives this device access to your notes. Continue only if you started this
-								link yourself. If someone else sent you here, close this page.
+								{t(
+									"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.",
+								)}
 							</p>
 						)}
 
@@ -590,7 +622,7 @@ function DeviceLinkPage() {
 							disabled={loading || !canAuthorize || capCheck.swapCooldownHours !== null}
 							className="w-full"
 						>
-							{loading ? "Syncing…" : "Sync"}
+							{loading ? t("Syncing…") : t("Sync")}
 						</Button>
 					</div>
 				)}
@@ -633,6 +665,7 @@ function SuccessStep({
 	awaitFirstSync,
 	onForward,
 }: SuccessStepProps) {
+	const { t } = useT();
 	const { data: me } = useMe();
 	const { vaultPopulated, vaultId } = useVaultReadyEvents({
 		userId: me?.id ?? null,
@@ -660,7 +693,7 @@ function SuccessStep({
 			    is the one instruction on the screen, and at text-sm it read like
 			    fine print the user could skip. */}
 			<p className="text-base text-foreground">
-				Your vault is linked. Obsidian is waiting for you to start the first sync.
+				{t("Your vault is linked. Obsidian is waiting for you to start the first sync.")}
 			</p>
 
 			{/* Only an empty vault has a 0 -> 1 transition left, so only an empty
@@ -669,14 +702,14 @@ function SuccessStep({
 			    never going to happen. */}
 			{awaitFirstSync ? (
 				<>
-					<SyncStatusPill message="Waiting for your first sync…" />
+					<SyncStatusPill message={t("Waiting for your first sync…")} />
 					<p className="text-muted-foreground text-sm">
-						We'll open your vault here the moment it lands.
+						{t("We'll open your vault here the moment it lands.")}
 					</p>
 				</>
 			) : (
 				<p className="text-muted-foreground text-sm">
-					Your notes will appear here as they sync. You can come back any time.
+					{t("Your notes will appear here as they sync. You can come back any time.")}
 				</p>
 			)}
 
@@ -691,13 +724,13 @@ function SuccessStep({
 			    whatever machine the BROWSER is on, which is why the escape hatch
 			    beside it is always present. */}
 			<footer className="flex justify-end gap-2 pt-2">
-				<Button type="button" variant="ghost" onClick={onForward} className="text-sm">
-					Continue to web app
+				<Button type="button" variant="outline" onClick={onForward}>
+					{t("Continue to web app")}
 				</Button>
 				{obsidianVaultName ? (
 					<Button asChild>
 						<a href={`obsidian://open?vault=${encodeURIComponent(obsidianVaultName)}`}>
-							Open Obsidian
+							{t("Open Obsidian")}
 						</a>
 					</Button>
 				) : null}
@@ -727,6 +760,7 @@ function VaultRadio({
 	onSelect: (next: string) => void;
 	hint?: string;
 }) {
+	const { t, tn, renderedLocale } = useT();
 	return (
 		<label className={selectableRow(active)}>
 			<input
@@ -738,11 +772,13 @@ function VaultRadio({
 			/>
 			<span className="flex min-w-0 flex-1 items-baseline gap-2">
 				<span className="font-medium text-foreground text-sm">{vault.name}</span>
-				{vault.is_default ? <span className="text-muted-foreground text-xs">default</span> : null}
+				{vault.is_default ? (
+					<span className="text-muted-foreground text-xs">{t("default")}</span>
+				) : null}
 				{hint ? <span className="text-muted-foreground text-xs">{hint}</span> : null}
 			</span>
 			<span className="shrink-0 text-muted-foreground text-xs">
-				{countLabel(vault.note_count, vault.attachment_count)}
+				{countLabel(tn, renderedLocale, vault.note_count, vault.attachment_count)}
 			</span>
 		</label>
 	);
@@ -762,6 +798,7 @@ function VaultPickerFieldset({
 	onCustomChange,
 	atVaultCap,
 }: VaultPickerFieldsetProps) {
+	const { t } = useT();
 	const matchedExisting = findMatchingVault(vaults, suggestedName);
 	const otherVaults = matchedExisting ? vaults.filter((v) => v.id !== matchedExisting.id) : vaults;
 	const isCustom = selection === "custom";
@@ -772,12 +809,12 @@ function VaultPickerFieldset({
 	// chosen while the chosen row is out of sight.
 	const selectedVault = vaults.find((v) => v.id === selection);
 	const selectionStatus = selectedVault
-		? `Selected: ${selectedVault.name}`
+		? t("Selected: {name}", { name: selectedVault.name })
 		: isCustom
-			? "Creating a new vault"
+			? t("Creating a new vault")
 			: undefined;
 	const nameInput = (
-		<input
+		<Input
 			type="text"
 			value={customName}
 			onChange={(e) => {
@@ -787,24 +824,24 @@ function VaultPickerFieldset({
 				}
 			}}
 			onFocus={() => onSelect("custom")}
-			placeholder="choose a new name"
-			aria-label="New vault name"
+			placeholder={t("choose a new name")}
+			aria-label={t("New vault name")}
 			maxLength={100}
-			className={fieldInput}
+			className={cn(isCustom && "border-primary")}
 		/>
 	);
 
 	return (
 		<fieldset className="flex flex-col gap-2">
-			<legend className="sr-only">Where should these notes sync?</legend>
+			<legend className="sr-only">{t("Where should these notes sync?")}</legend>
 			{matchedExisting ? (
 				<>
-					<p className={sectionTitle}>Suggested</p>
+					<p className={sectionTitle}>{t("Suggested")}</p>
 					<VaultRadio
 						vault={matchedExisting}
 						active={selection === matchedExisting.id}
 						onSelect={onSelect}
-						hint="matches your Obsidian vault"
+						hint={t("matches your Obsidian vault")}
 					/>
 				</>
 			) : null}
@@ -817,10 +854,12 @@ function VaultPickerFieldset({
 						)}
 					>
 						<p className={sectionTitle}>
-							{matchedExisting ? "Or sync with a different vault" : "Sync with an existing vault"}
+							{matchedExisting
+								? t("Or sync with a different vault")
+								: t("Sync with an existing vault")}
 							{search.showFilter ? (
 								<span className="ml-2 font-normal text-muted-foreground text-sm">
-									(choose from {otherVaults.length} vaults)
+									{t("(choose from {count} vaults)", { count: otherVaults.length })}
 								</span>
 							) : null}
 						</p>
@@ -833,7 +872,7 @@ function VaultPickerFieldset({
 						))}
 						{search.showFilter && search.needle && search.shown.length === 0 && (
 							<p className="p-3 text-muted-foreground text-sm">
-								No vaults match "{search.filter}".
+								{t("No vaults match \u0022{filter}\u0022.", { filter: search.filter })}
 							</p>
 						)}
 					</VaultRows>
@@ -847,7 +886,7 @@ function VaultPickerFieldset({
 			{!atVaultCap && (
 				<>
 					<p className={cn(sectionTitle, vaults.length > 0 && "mt-4")}>
-						{vaults.length > 0 ? "Or create a new vault" : "Create your first vault"}
+						{vaults.length > 0 ? t("Or create a new vault") : t("Create your first vault")}
 					</p>
 					{vaults.length > 0 ? (
 						<label className={selectableRow(isCustom)}>
@@ -876,29 +915,43 @@ function VaultPickerFieldset({
 //   "the device syncing your 'Notes' vault on macOS (last active 2 days ago)"
 // Falls back to "your previous device" when nothing useful is available
 // (e.g., a freshly seeded test row with no UA / no vault name).
-function describeObsidianDevice(c: Connection): string {
-	const parts: string[] = [];
+function describeObsidianDevice(c: Connection, t: Translate, tn: Tn): string {
 	// A device family is always bound to exactly one vault, so the first entry
 	// is the whole story here.
-	const vaultName = c.vault_names?.[0];
-	if (vaultName) {
-		parts.push(`the device syncing your '${vaultName}' vault`);
-	}
+	const vault = c.vault_names?.[0];
 	const os = parseUserAgentOs(c.first_user_agent);
+	const since = relativeTime(c.last_used_at ?? c.connected_at, tn, t);
+	// One whole sentence fragment per combination, so a language can order the
+	// parts its own way instead of inheriting English's gluing.
+	if (vault && os && since) {
+		return t("the device syncing your '{vault}' vault on {os} (last active {since})", {
+			vault,
+			os,
+			since,
+		});
+	}
+	if (vault && os) {
+		return t("the device syncing your '{vault}' vault on {os}", { vault, os });
+	}
+	if (vault && since) {
+		return t("the device syncing your '{vault}' vault (last active {since})", { vault, since });
+	}
+	if (vault) {
+		return t("the device syncing your '{vault}' vault", { vault });
+	}
+	if (os && since) {
+		return t("on {os} (last active {since})", { os, since });
+	}
 	if (os) {
-		parts.push(`on ${os}`);
+		return t("on {os}", { os });
 	}
-	const since = relativeTime(c.last_used_at ?? c.connected_at);
 	if (since) {
-		parts.push(`(last active ${since})`);
+		return t("(last active {since})", { since });
 	}
-	if (parts.length === 0) {
-		return c.name ?? "your previous device";
-	}
-	return parts.join(" ");
+	return c.name ?? t("your previous device");
 }
 
-function relativeTime(iso: string | null): string | null {
+function relativeTime(iso: string | null, tn: Tn, t: Translate): string | null {
 	if (!iso) {
 		return null;
 	}
@@ -908,26 +961,26 @@ function relativeTime(iso: string | null): string | null {
 	}
 	const secs = Math.max(0, Math.floor((Date.now() - then) / 1000));
 	if (secs < 60) {
-		return "just now";
+		return t("just now");
 	}
 	const mins = Math.floor(secs / 60);
 	if (mins < 60) {
-		return `${mins} minute${mins === 1 ? "" : "s"} ago`;
+		return tn({ one: "{count} minute ago", other: "{count} minutes ago" }, mins);
 	}
 	const hours = Math.floor(mins / 60);
 	if (hours < 24) {
-		return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+		return tn({ one: "{count} hour ago", other: "{count} hours ago" }, hours);
 	}
 	const days = Math.floor(hours / 24);
 	if (days < 30) {
-		return `${days} day${days === 1 ? "" : "s"} ago`;
+		return tn({ one: "{count} day ago", other: "{count} days ago" }, days);
 	}
 	const months = Math.floor(days / 30);
 	if (months < 12) {
-		return `${months} month${months === 1 ? "" : "s"} ago`;
+		return tn({ one: "{count} month ago", other: "{count} months ago" }, months);
 	}
 	const years = Math.floor(months / 12);
-	return `${years} year${years === 1 ? "" : "s"} ago`;
+	return tn({ one: "{count} year ago", other: "{count} years ago" }, years);
 }
 
 export default DeviceLinkPage;

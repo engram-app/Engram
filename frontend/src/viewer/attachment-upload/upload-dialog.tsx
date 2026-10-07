@@ -4,6 +4,8 @@ import { useUploadAttachment } from "@/api/queries";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useT } from "@/i18n/locale-provider";
+import type { Translate } from "@/i18n/translate";
 import { fileToBase64 } from "./file-to-base64";
 import { FolderPicker } from "./folder-picker";
 
@@ -42,34 +44,35 @@ function isApiError(err: unknown): err is ApiError {
 	return err instanceof ApiError || (err instanceof Error && err.name === "ApiError");
 }
 
-function messageFor(err: unknown): string {
+function messageFor(err: unknown, t: Translate): string {
 	if (isLimitExceededError(err)) {
 		switch (err.reason) {
 			case "attachments_disabled":
-				return "Upgrade to upload attachments";
+				return t("Upgrade to upload attachments");
 			case "attachment_must_be_text":
-				return "Free tier: text files only";
+				return t("Free tier: text files only");
 			case "file_too_large":
-				return "File exceeds your plan's size limit";
+				return t("File exceeds your plan's size limit");
 			case "attachments_quota_exceeded":
-				return "Storage quota reached";
+				return t("Storage quota reached");
 			default:
-				return "Upgrade required";
+				return t("Upgrade required");
 		}
 	}
 	if (isApiError(err)) {
 		if (err.status === 415) {
-			return "This file type is not allowed";
+			return t("This file type is not allowed");
 		}
-		return err.message || "Upload failed";
+		return err.message || t("Upload failed");
 	}
-	return "Upload failed";
+	return t("Upload failed");
 }
 
 const patch = (rows: Row[], i: number, next: Partial<Row>): Row[] =>
 	rows.map((row, idx) => (idx === i ? { ...row, ...next } : row));
 
 export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, onClose }: Props) {
+	const { t } = useT();
 	const [rows, setRows] = useState<Row[]>(() =>
 		initialFiles.map((file): Row => ({ file, status: "pending" })),
 	);
@@ -99,7 +102,7 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 					});
 					setRows((r) => patch(r, i, { status: "done" }));
 				} catch (err) {
-					setRows((r) => patch(r, i, { status: "error", error: messageFor(err) }));
+					setRows((r) => patch(r, i, { status: "error", error: messageFor(err, t) }));
 				}
 			}
 		} finally {
@@ -125,15 +128,17 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 				className="flex h-[min(36rem,85vh)] max-w-xl flex-col gap-0 p-0 sm:max-w-xl"
 			>
 				<header className="flex items-center justify-between border-border border-b px-4 py-3">
-					<DialogTitle className="text-sm">Upload attachments</DialogTitle>
+					<DialogTitle className="text-sm">{t("Upload attachments")}</DialogTitle>
 					<Button variant="ghost" size="sm" onClick={onClose}>
-						Close
+						{t("Close")}
 					</Button>
 				</header>
 
 				{folders.length > 0 && (
 					<section className="flex min-h-0 flex-1 flex-col px-4 py-3">
-						<h3 className="mb-2 font-semibold text-base text-foreground">Destination folder</h3>
+						<h3 className="mb-2 font-semibold text-base text-foreground">
+							{t("Destination folder")}
+						</h3>
 						<FolderPicker
 							folders={folders.map((f) => f.name)}
 							value={folder}
@@ -155,11 +160,14 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 									{row.status === "error" ? (
 										<span className="text-destructive">{row.error}</span>
 									) : row.status === "uploading" ? (
-										"Uploading…"
+										t("Uploading…")
 									) : row.status === "done" ? (
-										"Done"
+										t("Done")
 									) : (
-										`${humanSize(row.file.size)} · ${row.file.type || "unknown"}`
+										t("{size} · {type}", {
+											size: humanSize(row.file.size),
+											type: row.file.type || t("unknown"),
+										})
 									)}
 								</span>
 							</li>
@@ -178,16 +186,14 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 							e.target.value = "";
 						}}
 					/>
-					<Button variant="ghost" size="sm" onClick={() => addRef.current?.click()} disabled={busy}>
-						Upload more
+					<Button variant="outline" onClick={() => addRef.current?.click()} disabled={busy}>
+						{t("Upload more")}
 					</Button>
 					{allDone ? (
-						<Button size="sm" onClick={onClose}>
-							Done
-						</Button>
+						<Button onClick={onClose}>{t("Done")}</Button>
 					) : (
-						<Button size="sm" onClick={commit} disabled={busy || rows.length === 0}>
-							Upload
+						<Button onClick={commit} disabled={busy || rows.length === 0}>
+							{t("Upload")}
 						</Button>
 					)}
 				</footer>

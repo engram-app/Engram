@@ -1,3 +1,5 @@
+import { msg } from "@/i18n/msg";
+
 // FTUX questionnaire tool catalog. Mirrors the backend `@valid_tools` list
 // in lib/engram/onboarding.ex, rename a slug here and the backend will
 // 422 on submit. The split between catalogs is UI-only; the wire shape is
@@ -6,6 +8,8 @@
 export interface ToolOption {
 	slug: string;
 	label: string;
+	/** Set on labels written with `msg()`. Brand names stay as written, even when one equals a catalog key. */
+	translate?: true;
 	hint?: string;
 	/**
 	 * Set when the tool cannot connect to Engram for a reason outside our
@@ -30,8 +34,9 @@ export const TOOL_ASSISTANTS: ToolOption[] = [
 	{
 		slug: "gemini",
 		label: "Gemini",
-		unavailable:
+		unavailable: msg(
 			"The Gemini app can't add custom MCP connectors. Antigravity, Google's Gemini-powered coding tool, can. Pick it under Coding tools.",
+		),
 	},
 ];
 
@@ -54,7 +59,7 @@ export const TOOL_CODING: ToolOption[] = [
 	{ slug: "antigravity", label: "Antigravity" },
 	// Lives with the named clients rather than in a group of its own: it answers
 	// the same question they do ("which client?"), just without naming one.
-	{ slug: "other_mcp", label: "Another MCP client" },
+	{ slug: "other_mcp", label: msg("Another MCP client"), translate: true },
 ];
 
 /**
@@ -82,6 +87,6 @@ export const TOOL_LABELS: Record<string, string> = Object.fromEntries(
  */
 export const NO_AI_TOOL: ToolOption = {
 	slug: "web_only",
-	label: "I'm not connecting an AI tool yet",
-	hint: "Use Engram in the web app. You can connect a tool later from Settings.",
+	label: msg("I'm not connecting an AI tool yet"),
+	hint: msg("Use Engram in the web app. You can connect a tool later from Settings."),
 };

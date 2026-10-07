@@ -1,8 +1,14 @@
 import { Search } from "lucide-react";
 import type React from "react";
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAutofocus } from "@/hooks/use-autofocus";
+import { useT } from "@/i18n/locale-provider";
+import type { Locale } from "@/i18n/locales";
+import type { Tn } from "@/i18n/translate";
+import { intlLocale } from "@/lib/intl-locale";
 
 // Above this many vaults the list gets a search box. Below it, the box is
 // pure clutter - every vault is already on screen.
@@ -14,18 +20,18 @@ type VaultSearch = ReturnType<typeof useVaultSearch>;
 // holds only because this mounts when `searching` flips to true; render it
 // already open on load and it would steal focus.
 function SearchInput({ search, status }: { search: VaultSearch; status?: string }) {
+	const { t } = useT();
 	const ref = useAutofocus<HTMLInputElement>();
 	return (
 		<>
-			<input
+			<Input
 				ref={ref}
 				type="search"
 				value={search.filter}
 				onChange={(e) => search.setFilter(e.target.value)}
 				onBlur={() => search.filter === "" && search.setSearching(false)}
-				placeholder="Search vaults"
-				aria-label="Search vaults"
-				className="rounded-lg border border-border bg-background p-2 text-sm"
+				placeholder={t("Search vaults")}
+				aria-label={t("Search vaults")}
 			/>
 			{status ? (
 				<p aria-live="polite" className="text-muted-foreground text-xs">
@@ -36,10 +42,16 @@ function SearchInput({ search, status }: { search: VaultSearch; status?: string 
 	);
 }
 
-export function countLabel(notes?: number, files?: number): string {
-	const parts = [`${(notes ?? 0).toLocaleString()} notes`];
+export function countLabel(tn: Tn, locale: Locale, notes?: number, files?: number): string {
+	const tag = intlLocale(locale);
+	const noteCount = notes ?? 0;
+	const parts = [
+		tn({ one: "{n} note", other: "{n} notes" }, noteCount, { n: noteCount.toLocaleString(tag) }),
+	];
 	if (files) {
-		parts.push(`${files.toLocaleString()} files`);
+		parts.push(
+			tn({ one: "{n} file", other: "{n} files" }, files, { n: files.toLocaleString(tag) }),
+		);
 	}
 	return parts.join(" · ");
 }
@@ -74,18 +86,20 @@ export function useVaultSearch<T extends { name: string }>(vaults: T[]) {
 }
 
 export function VaultSearchToggle({ search }: { search: VaultSearch }) {
+	const { t } = useT();
 	if (!search.showFilter || search.searching) {
 		return null;
 	}
 	return (
-		<button
+		<Button
 			type="button"
+			variant="ghost"
+			size="icon-sm"
 			onClick={() => search.setSearching(true)}
-			aria-label="Search vaults"
-			className="rounded p-1 text-muted-foreground hover:text-foreground"
+			aria-label={t("Search vaults")}
 		>
-			<Search className="size-4" />
-		</button>
+			<Search />
+		</Button>
 	);
 }
 

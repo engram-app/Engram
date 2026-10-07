@@ -113,4 +113,21 @@ describe("CurrentPlanCard", () => {
 		);
 		expect(screen.getByText(/5 days/iu)).toBeInTheDocument();
 	});
+
+	it("uses the singular for a single remaining trial day", () => {
+		render(
+			<CurrentPlanCard
+				billing={status({
+					tier: "pro",
+					trial_days_remaining: 1,
+					subscription: {
+						status: "trialing",
+						tier: "starter",
+						current_period_end: "2026-07-01T12:00:00Z",
+					},
+				})}
+			/>,
+		);
+		expect(screen.getByText("1 day remaining in your free trial.")).toBeInTheDocument();
+	});
 });

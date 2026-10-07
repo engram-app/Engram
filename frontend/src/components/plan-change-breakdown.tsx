@@ -5,6 +5,9 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useT } from "@/i18n/locale-provider";
+import { msg } from "@/i18n/msg";
+import { intlLocale } from "@/lib/intl-locale";
 import { formatDate, formatMoney } from "@/lib/paddle-format";
 import type { PlanChangeBreakdownData, PlanChangeTransactionSectionData } from "@/lib/paddle-types";
 import { cn } from "@/lib/utils";
@@ -13,9 +16,9 @@ const SECTION_TITLES: Record<
 	"immediate" | "next" | "recurring",
 	{ automatic: string; manual: string }
 > = {
-	immediate: { automatic: "Charged today", manual: "Invoice created" },
-	next: { automatic: "Next invoice", manual: "Next invoice" },
-	recurring: { automatic: "Ongoing billing", manual: "Ongoing billing" },
+	immediate: { automatic: msg("Charged today"), manual: msg("Invoice created") },
+	next: { automatic: msg("Next invoice"), manual: msg("Next invoice") },
+	recurring: { automatic: msg("Ongoing billing"), manual: msg("Ongoing billing") },
 };
 
 function TransactionSection({
@@ -29,18 +32,20 @@ function TransactionSection({
 	collectionMode?: "automatic" | "manual";
 	currency: string;
 }) {
-	const title = SECTION_TITLES[kind][collectionMode];
+	const { t, renderedLocale } = useT();
+	const localeTag = intlLocale(renderedLocale, "en-US");
+	const title = t(SECTION_TITLES[kind][collectionMode]);
 
 	const description =
 		kind === "immediate"
 			? collectionMode === "manual"
-				? "An invoice will be created for this amount"
-				: "This amount will be charged immediately"
+				? t("An invoice will be created for this amount")
+				: t("This amount will be charged immediately")
 			: kind === "next"
 				? section.billingDate
-					? `Charged on ${formatDate(section.billingDate)}`
+					? t("Charged on {date}", { date: formatDate(section.billingDate, localeTag) })
 					: undefined
-				: "Recurring amount after this change";
+				: t("Recurring amount after this change");
 
 	return (
 		<div className="flex flex-col gap-3">
@@ -59,10 +64,10 @@ function TransactionSection({
 							<span className="truncate font-medium">{item.productName}</span>
 							<span className="text-muted-foreground text-xs">
 								{item.quantity > 1 && `${item.quantity} \u00d7 `}
-								{formatMoney(item.unitPrice, currency)}
+								{formatMoney(item.unitPrice, currency, localeTag)}
 								{Boolean(item.isProrated) && (
 									<Badge variant="secondary" className="ml-1 px-1 py-0 text-[10px]">
-										Prorated
+										{t("Prorated")}
 									</Badge>
 								)}
 							</span>
@@ -70,7 +75,9 @@ function TransactionSection({
 								<span className="text-muted-foreground text-xs">{item.prorationPeriod}</span>
 							)}
 						</div>
-						<span className="shrink-0 tabular-nums">{formatMoney(item.total, currency)}</span>
+						<span className="shrink-0 tabular-nums">
+							{formatMoney(item.total, currency, localeTag)}
+						</span>
 					</div>
 				))}
 			</div>
@@ -79,40 +86,42 @@ function TransactionSection({
 
 			<dl className="flex flex-col gap-1.5 text-sm">
 				<div className="flex justify-between gap-4">
-					<dt className="text-muted-foreground">Subtotal</dt>
-					<dd className="tabular-nums">{formatMoney(section.totals.subtotal, currency)}</dd>
+					<dt className="text-muted-foreground">{t("Subtotal")}</dt>
+					<dd className="tabular-nums">
+						{formatMoney(section.totals.subtotal, currency, localeTag)}
+					</dd>
 				</div>
 				{section.totals.discount !== undefined && (
 					<div className="flex justify-between gap-4">
-						<dt className="text-success-foreground">Discount</dt>
+						<dt className="text-success-foreground">{t("Discount")}</dt>
 						<dd className="text-success-foreground tabular-nums">
-							−{formatMoney(section.totals.discount, currency)}
+							−{formatMoney(section.totals.discount, currency, localeTag)}
 						</dd>
 					</div>
 				)}
 				<div className="flex justify-between gap-4">
-					<dt className="text-muted-foreground">Tax</dt>
-					<dd className="tabular-nums">{formatMoney(section.totals.tax, currency)}</dd>
+					<dt className="text-muted-foreground">{t("Tax")}</dt>
+					<dd className="tabular-nums">{formatMoney(section.totals.tax, currency, localeTag)}</dd>
 				</div>
 				{section.totals.credit !== undefined && (
 					<div className="flex justify-between gap-4">
-						<dt className="text-success-foreground">Credit applied</dt>
+						<dt className="text-success-foreground">{t("Credit applied")}</dt>
 						<dd className="text-success-foreground tabular-nums">
-							−{formatMoney(section.totals.credit, currency)}
+							−{formatMoney(section.totals.credit, currency, localeTag)}
 						</dd>
 					</div>
 				)}
 				{section.totals.creditToBalance !== undefined && (
 					<div className="flex justify-between gap-4">
-						<dt className="text-success-foreground">Credit to balance</dt>
+						<dt className="text-success-foreground">{t("Credit to balance")}</dt>
 						<dd className="text-success-foreground tabular-nums">
-							{formatMoney(section.totals.creditToBalance, currency)}
+							{formatMoney(section.totals.creditToBalance, currency, localeTag)}
 						</dd>
 					</div>
 				)}
 				<div className="flex justify-between gap-4 border-t pt-1.5 font-medium">
-					<dt>Total</dt>
-					<dd className="tabular-nums">{formatMoney(section.totals.total, currency)}</dd>
+					<dt>{t("Total")}</dt>
+					<dd className="tabular-nums">{formatMoney(section.totals.total, currency, localeTag)}</dd>
 				</div>
 			</dl>
 		</div>
@@ -232,6 +241,8 @@ export function PlanChangeBreakdown({
 	collectionMode,
 	className,
 }: PlanChangeBreakdownProps) {
+	const { t, renderedLocale } = useT();
+	const localeTag = intlLocale(renderedLocale, "en-US");
 	if (!breakdown) {
 		return <PlanChangeBreakdownSkeleton className={className} />;
 	}
@@ -248,18 +259,18 @@ export function PlanChangeBreakdown({
 	const isNone = result.direction === "none";
 
 	const resultLabel = isNone
-		? "No charge"
+		? t("No charge")
 		: isCredit
-			? "Credit to account"
+			? t("Credit to account")
 			: immediateTransaction
-				? "Amount due"
-				: "Added to next bill";
+				? t("Amount due")
+				: t("Added to next bill");
 
 	return (
 		<Card className={cn("flex flex-col", className)}>
 			<CardHeader>
-				<CardTitle className="font-semibold text-base">Change summary</CardTitle>
-				<CardDescription>Review the financial impact of this change</CardDescription>
+				<CardTitle className="font-semibold text-base">{t("Change summary")}</CardTitle>
+				<CardDescription>{t("Review the financial impact of this change")}</CardDescription>
 			</CardHeader>
 			<CardContent className="flex flex-col gap-6">
 				<div
@@ -282,8 +293,8 @@ export function PlanChangeBreakdown({
 						className={cn("font-bold text-lg tabular-nums", isCredit && "text-success-foreground")}
 					>
 						{isCredit
-							? `−${formatMoney(result.amount, currency)}`
-							: formatMoney(result.amount, currency)}
+							? `−${formatMoney(result.amount, currency, localeTag)}`
+							: formatMoney(result.amount, currency, localeTag)}
 					</span>
 				</div>
 
@@ -293,17 +304,17 @@ export function PlanChangeBreakdown({
 						<div className="flex flex-col gap-2 text-sm">
 							{summaryBreakdown.credit !== undefined && (
 								<div className="flex items-center justify-between gap-4">
-									<span className="text-muted-foreground">Credit from current plan</span>
+									<span className="text-muted-foreground">{t("Credit from current plan")}</span>
 									<span className="text-success-foreground tabular-nums">
-										−{formatMoney(summaryBreakdown.credit, currency)}
+										−{formatMoney(summaryBreakdown.credit, currency, localeTag)}
 									</span>
 								</div>
 							)}
 							{summaryBreakdown.charge !== undefined && (
 								<div className="flex items-center justify-between gap-4">
-									<span className="text-muted-foreground">Charge for new plan</span>
+									<span className="text-muted-foreground">{t("Charge for new plan")}</span>
 									<span className="tabular-nums">
-										{formatMoney(summaryBreakdown.charge, currency)}
+										{formatMoney(summaryBreakdown.charge, currency, localeTag)}
 									</span>
 								</div>
 							)}

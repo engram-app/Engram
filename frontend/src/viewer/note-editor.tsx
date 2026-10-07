@@ -10,6 +10,8 @@ import { useCallback, useEffect, useRef } from "react";
 import { yCollab, yUndoManagerKeymap } from "y-codemirror.next";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
+import { useT } from "@/i18n/locale-provider";
+import { englishT, type Translate } from "@/i18n/translate";
 import { useAttachments, useUploadAttachment } from "../api/queries";
 import { useTheme } from "../theme/theme-provider";
 import { loadAttachmentUrl, resolveAttachmentTarget } from "./attachment-blob";
@@ -17,9 +19,10 @@ import { uploadFilesTo } from "./attachment-upload/upload-files";
 import { refreshAttachmentEmbeds } from "./editor/attachment-embed";
 import { indentKeymap } from "./editor/format-commands";
 import { frontmatterShortcut } from "./editor/frontmatter-shortcut";
-import { headingFold, noParagraphFold } from "./editor/heading-fold";
+import { headingFoldWith, noParagraphFold } from "./editor/heading-fold";
 import { itemDrop } from "./editor/item-drop";
 import { livePreviewExtensions } from "./editor/live-preview";
+import { translator, translatorCompartment } from "./editor/translator";
 import { type DraggedVaultItem, linkTextFor } from "./vault-item-drag";
 
 // height:auto + overflow:visible hand scrolling to the page's ScrollArea, so
@@ -132,6 +135,7 @@ export function buildEditorState(
 	onFrontmatterShortcut?: () => boolean,
 	resolveAttachment?: (target: string) => string | null,
 	drop?: Parameters<typeof itemDrop>[0],
+	translateText: Translate = englishT,
 ): EditorState {
 	return EditorState.create({
 		doc: ytext.toString(),
@@ -149,7 +153,9 @@ export function buildEditorState(
 			EditorView.lineWrapping,
 			// Base, not the mode compartment: the fold service comes from
 			// markdown() in BOTH modes, so Raw gets collapsible headings too.
-			headingFold,
+			headingFoldWith(translateText),
+			// Strings drawn by widgets and tooltips read this (editor/translator.ts).
+			translatorCompartment.of(translator.of(translateText)),
 			Prec.highest(keymap.of(yUndoManagerKeymap)),
 			// Obsidian/VS Code-style bracket behavior: typing ( [ { ' " ` inserts
 			// the closer, typing the closer over an auto-inserted one skips it,
@@ -224,6 +230,7 @@ export default function NoteEditor({
 	onFrontmatterShortcut,
 }: NoteEditorProps) {
 	const { resolved } = useTheme();
+	const { t, renderedLocale } = useT();
 	const { data: attachments } = useAttachments();
 	// Read through a ref: the extension is baked into the state at creation, and a
 	// new list must neither recreate the view nor reconfigure the decoration layer
@@ -235,6 +242,12 @@ export default function NoteEditor({
 		(target: string) => resolveAttachmentTarget(attachmentsRef.current ?? [], target),
 		[],
 	);
+	// Stable for the view's lifetime, but always calls the latest translator, so
+	// a language switch reaches widgets built afterwards without recreating the
+	// view (which would detach yCollab).
+	const tRef = useRef(t);
+	tRef.current = t;
+	const translateText = useRef<Translate>((en, vars) => tRef.current(en, vars)).current;
 	const upload = useUploadAttachment();
 	const uploadRef = useRef(upload.mutateAsync);
 	uploadRef.current = upload.mutateAsync;
@@ -249,6 +262,7 @@ export default function NoteEditor({
 				existing: attachmentsRef.current ?? [],
 				files,
 				folder: "",
+				t: translateText,
 			});
 			return paths.map((path) => `![[${path}]]`);
 		},
@@ -293,6 +307,7 @@ export default function NoteEditor({
 				() => Boolean(onShortcutRef.current?.()),
 				resolveAttachment,
 				drop,
+				translateText,
 			),
 			parent,
 		});
@@ -311,6 +326,18 @@ export default function NoteEditor({
 	useEffect(() => {
 		viewRef.current?.dispatch({ effects: refreshAttachmentEmbeds.of(null) });
 	}, [attachments]);
+
+	// A language switch: hand the editor a NEW translate function (the facet
+	// value's identity is what widgets compare), without recreating the view.
+	const seenLocale = useRef(renderedLocale);
+	useEffect(() => {
+		if (seenLocale.current === renderedLocale) {
+			return;
+		}
+		seenLocale.current = renderedLocale;
+		const next: Translate = (en, vars) => tRef.current(en, vars);
+		viewRef.current?.dispatch({ effects: translatorCompartment.reconfigure(translator.of(next)) });
+	}, [renderedLocale]);
 
 	// Swap the decoration layer live when mode changes — view stays, yCollab stays.
 	useEffect(() => {

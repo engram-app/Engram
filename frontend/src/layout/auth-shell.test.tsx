@@ -18,6 +18,26 @@ describe("AuthShell", () => {
 		expect(screen.getByText("panel body")).toBeInTheDocument();
 	});
 
+	it("renders a language picker in the top bar", () => {
+		render(
+			<AuthShell>
+				<p>body</p>
+			</AuthShell>,
+		);
+		expect(screen.getByRole("banner")).toContainElement(
+			screen.getByRole("combobox", { name: "Language" }),
+		);
+	});
+
+	it("shows the language picker as an icon, not the current language name", () => {
+		render(
+			<AuthShell>
+				<p>body</p>
+			</AuthShell>,
+		);
+		expect(screen.getByRole("combobox", { name: "Language" })).not.toHaveTextContent("English");
+	});
+
 	it("renders the actions slot when provided", () => {
 		render(
 			<AuthShell actions={<span>Step 1 of 2</span>}>

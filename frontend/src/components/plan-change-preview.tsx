@@ -6,6 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useT } from "@/i18n/locale-provider";
+import { intlLocale } from "@/lib/intl-locale";
 import {
 	formatBillingCycle,
 	formatDate,
@@ -86,6 +88,8 @@ export function PlanChangePreview({
 	prorationBillingMode,
 	className,
 }: PlanChangePreviewProps) {
+	const { t, tn, renderedLocale } = useT();
+	const localeTag = intlLocale(renderedLocale, "en-US");
 	if (!preview) {
 		return <PlanChangePreviewSkeleton className={className} />;
 	}
@@ -109,7 +113,7 @@ export function PlanChangePreview({
 	const changeType = isCharge ? "upgrade" : isCredit ? "downgrade" : "change";
 
 	const prorationLabel = prorationBillingMode
-		? formatProrationMode(prorationBillingMode)
+		? formatProrationMode(prorationBillingMode, t)
 		: undefined;
 
 	const isImmediate =
@@ -118,14 +122,14 @@ export function PlanChangePreview({
 	function resolveEffectiveDate(): string | undefined {
 		if (prorationBillingMode) {
 			if (isImmediate) {
-				return "Immediately";
+				return t("Immediately");
 			}
-			return costImpact.nextBillDate ? formatDate(costImpact.nextBillDate) : undefined;
+			return costImpact.nextBillDate ? formatDate(costImpact.nextBillDate, localeTag) : undefined;
 		}
 		if (costImpact.immediateAmount !== undefined) {
-			return "Immediately";
+			return t("Immediately");
 		}
-		return costImpact.nextBillDate ? formatDate(costImpact.nextBillDate) : undefined;
+		return costImpact.nextBillDate ? formatDate(costImpact.nextBillDate, localeTag) : undefined;
 	}
 	const effectiveDate = resolveEffectiveDate();
 
@@ -136,40 +140,50 @@ export function PlanChangePreview({
 		if (scheduledChange.action === "resume") {
 			return;
 		}
-		const actionLabel = scheduledChange.action === "cancel" ? "Cancellation" : "Pause";
-		return `${actionLabel} scheduled for ${formatDate(scheduledChange.effectiveAt)}. Billing options may be restricted.`;
+		const date = formatDate(scheduledChange.effectiveAt, localeTag);
+		return scheduledChange.action === "cancel"
+			? t("Cancellation scheduled for {date}. Billing options may be restricted.", { date })
+			: t("Pause scheduled for {date}. Billing options may be restricted.", { date });
 	}
 	const scheduledChangeMessage = resolveScheduledChangeMessage();
 
 	const hasBreakdownRows = costImpact.credit !== undefined || costImpact.charge !== undefined;
 
 	const totalLabel = isCredit
-		? "Credit to account"
+		? t("Credit to account")
 		: isNeutral
-			? "No charge"
+			? t("No charge")
 			: isManual
-				? "Invoice amount"
+				? t("Invoice amount")
 				: costImpact.immediateAmount === undefined
-					? "Amount at next billing"
-					: "Amount due now";
+					? t("Amount at next billing")
+					: t("Amount due now");
 
 	const currentIntervalLabel =
-		formatBillingCycle({
-			interval: currentPlan.interval,
-			frequency: currentPlan.billingFrequency ?? 1,
-		}) ?? currentPlan.interval;
+		formatBillingCycle(
+			{
+				interval: currentPlan.interval,
+				frequency: currentPlan.billingFrequency ?? 1,
+			},
+			t,
+			tn,
+		) ?? currentPlan.interval;
 
 	const newIntervalLabel =
-		formatBillingCycle({
-			interval: newPlan.interval,
-			frequency: newPlan.billingFrequency ?? 1,
-		}) ?? newPlan.interval;
+		formatBillingCycle(
+			{
+				interval: newPlan.interval,
+				frequency: newPlan.billingFrequency ?? 1,
+			},
+			t,
+			tn,
+		) ?? newPlan.interval;
 
 	return (
 		<Card className={cn("gap-4", className)}>
 			<CardHeader>
-				<CardTitle className="font-semibold text-base">Change summary</CardTitle>
-				<CardDescription>Review the overview of this change</CardDescription>
+				<CardTitle className="font-semibold text-base">{t("Change summary")}</CardTitle>
+				<CardDescription>{t("Review the overview of this change")}</CardDescription>
 			</CardHeader>
 
 			<CardContent className="space-y-4">
@@ -182,10 +196,10 @@ export function PlanChangePreview({
 
 				<div className="flex items-stretch gap-3">
 					<div className="min-w-0 flex-1 rounded-lg border bg-muted/40 p-3">
-						<div className="mb-1 text-muted-foreground text-xs">Current plan</div>
+						<div className="mb-1 text-muted-foreground text-xs">{t("Current plan")}</div>
 						<div className="truncate font-medium text-sm">{currentPlan.productName}</div>
 						<div className="text-muted-foreground text-sm">
-							{formatMoney(currentPlan.price, currency)}
+							{formatMoney(currentPlan.price, currency, localeTag)}
 							<span className="text-xs"> / {currentIntervalLabel}</span>
 						</div>
 					</div>
@@ -195,10 +209,10 @@ export function PlanChangePreview({
 					</div>
 
 					<div className="min-w-0 flex-1 rounded-lg border border-primary/20 bg-primary/5 p-3">
-						<div className="mb-1 text-muted-foreground text-xs">New plan</div>
+						<div className="mb-1 text-muted-foreground text-xs">{t("New plan")}</div>
 						<div className="truncate font-medium text-sm">{newPlan.productName}</div>
 						<div className="text-muted-foreground text-sm">
-							{formatMoney(newPlan.price, currency)}
+							{formatMoney(newPlan.price, currency, localeTag)}
 							<span className="text-xs"> / {newIntervalLabel}</span>
 						</div>
 					</div>
@@ -208,7 +222,7 @@ export function PlanChangePreview({
 
 				<div className="space-y-2">
 					<div className="flex items-center justify-between text-sm">
-						<span className="text-muted-foreground">Change type</span>
+						<span className="text-muted-foreground">{t("Change type")}</span>
 						<Badge
 							variant={
 								changeType === "upgrade"
@@ -219,35 +233,35 @@ export function PlanChangePreview({
 							}
 						>
 							{changeType === "upgrade"
-								? "Upgrade"
+								? t("Upgrade")
 								: changeType === "downgrade"
-									? "Downgrade"
-									: "Change"}
+									? t("Downgrade")
+									: t("Change")}
 						</Badge>
 					</div>
 
 					{Boolean(prorationLabel) && (
 						<div className="flex items-center justify-between text-sm">
-							<span className="text-muted-foreground">Billing</span>
+							<span className="text-muted-foreground">{t("Billing")}</span>
 							<span className="text-right">{prorationLabel}</span>
 						</div>
 					)}
 
 					{effectiveDate && (
 						<div className="flex items-center justify-between text-sm">
-							<span className="text-muted-foreground">Effective</span>
+							<span className="text-muted-foreground">{t("Effective")}</span>
 							<span>{effectiveDate}</span>
 						</div>
 					)}
 
 					{discount ? (
 						<div className="flex items-center justify-between text-sm">
-							<span className="text-muted-foreground">Discount</span>
+							<span className="text-muted-foreground">{t("Discount")}</span>
 							<span className="text-right">
 								<span className="text-success-foreground">{discount.description}</span>
 								{discount.endsAt ? (
 									<span className="block text-muted-foreground text-xs">
-										until {formatDate(discount.endsAt)}
+										{t("until {date}", { date: formatDate(discount.endsAt, localeTag) })}
 									</span>
 								) : null}
 							</span>
@@ -259,16 +273,16 @@ export function PlanChangePreview({
 
 				<div className="space-y-1.5">
 					<div className="flex items-center justify-between text-sm">
-						<span className="text-muted-foreground">Current</span>
+						<span className="text-muted-foreground">{t("Current")}</span>
 						<span>
-							{formatMoney(currentPlan.price, currency)}
+							{formatMoney(currentPlan.price, currency, localeTag)}
 							<span className="text-muted-foreground text-xs"> / {currentIntervalLabel}</span>
 						</span>
 					</div>
 					<div className="flex items-center justify-between text-sm">
-						<span className="text-muted-foreground">New</span>
+						<span className="text-muted-foreground">{t("New")}</span>
 						<span>
-							{formatMoney(newPlan.price, currency)}
+							{formatMoney(newPlan.price, currency, localeTag)}
 							<span className="text-muted-foreground text-xs"> / {newIntervalLabel}</span>
 						</span>
 					</div>
@@ -281,14 +295,14 @@ export function PlanChangePreview({
 						<div className="space-y-1.5">
 							{costImpact.credit !== undefined && (
 								<div className="flex items-center justify-between text-sm text-success-foreground">
-									<span>Credit</span>
-									<span>−{formatMoney(costImpact.credit, currency)}</span>
+									<span>{t("Credit")}</span>
+									<span>−{formatMoney(costImpact.credit, currency, localeTag)}</span>
 								</div>
 							)}
 							{costImpact.charge !== undefined && (
 								<div className="flex items-center justify-between text-sm">
-									<span className="text-muted-foreground">Charge</span>
-									<span>{formatMoney(costImpact.charge, currency)}</span>
+									<span className="text-muted-foreground">{t("Charge")}</span>
+									<span>{formatMoney(costImpact.charge, currency, localeTag)}</span>
 								</div>
 							)}
 							<div
@@ -300,7 +314,7 @@ export function PlanChangePreview({
 								<span>{totalLabel}</span>
 								<span className={cn(isCredit && "text-success-foreground")}>
 									{isCredit ? "−" : ""}
-									{formatMoney(costImpact.resultAmount, currency)}
+									{formatMoney(costImpact.resultAmount, currency, localeTag)}
 								</span>
 							</div>
 						</div>
@@ -310,12 +324,12 @@ export function PlanChangePreview({
 				{/* Contextual notes derived from subscription state */}
 				{Boolean(isTrialing && isNeutral) && (
 					<p className="text-muted-foreground text-xs">
-						No charges during your trial. Billing begins when your trial ends.
+						{t("No charges during your trial. Billing begins when your trial ends.")}
 					</p>
 				)}
 				{Boolean(isManual && isCharge) && (
 					<p className="text-muted-foreground text-xs">
-						An invoice will be created for this amount.
+						{t("An invoice will be created for this amount.")}
 					</p>
 				)}
 			</CardContent>

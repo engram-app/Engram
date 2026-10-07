@@ -1,61 +1,73 @@
+import { msg } from "@/i18n/msg";
+
 const TABLE: Record<LimitReason, LimitCopy> = {
 	notes_cap_exceeded: {
-		title: "You've hit your note limit",
-		body: "Upgrade to keep adding notes.",
+		title: msg("You've hit your note limit"),
+		body: msg("Upgrade to keep adding notes."),
 	},
 	vaults_cap_exceeded: {
-		title: "Free includes 1 vault",
-		body: "Upgrade for more vaults.",
+		title: msg("Free includes 1 vault"),
+		body: msg("Upgrade for more vaults."),
 	},
 	attachments_disabled: {
-		title: "Attachments are a Pro feature",
-		body: "Upgrade to sync images, PDFs, and other files.",
+		title: msg("Attachments are a Pro feature"),
+		body: msg("Upgrade to sync images, PDFs, and other files."),
 	},
 	attachments_quota_exceeded: {
-		title: "Attachment storage full",
-		body: "Upgrade for more storage.",
+		title: msg("Attachment storage full"),
+		body: msg("Upgrade for more storage."),
 	},
 	file_too_large: {
-		title: "File too large",
-		body: "Upgrade to upload larger files.",
+		title: msg("File too large"),
+		body: msg("Upgrade to upload larger files."),
 	},
 	concurrent_devices_exceeded: {
-		title: "Device sync limit reached",
-		body: "Your Free plan syncs files between 1 device at a time. Disconnect the device you're not using to switch, or upgrade to sync more devices.",
+		title: msg("Device sync limit reached"),
+		body: msg(
+			"Your Free plan syncs files between 1 device at a time. Disconnect the device you're not using to switch, or upgrade to sync more devices.",
+		),
 	},
 	device_swap_cooldown: {
-		title: "Device swap cooldown active",
-		body: "Wait before swapping devices, or upgrade.",
+		title: msg("Device swap cooldown active"),
+		body: msg("Wait before swapping devices, or upgrade."),
 	},
 	ai_searches_per_day_exceeded: {
-		title: "Daily AI search limit reached",
-		body: "Your Free plan includes 20 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.",
+		title: msg("Daily AI search limit reached"),
+		body: msg(
+			"Your Free plan includes 20 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.",
+		),
 	},
 	attachment_must_be_text: {
-		title: "Free plan: text attachments only",
-		body: "Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.",
+		title: msg("Free plan: text attachments only"),
+		body: msg(
+			"Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.",
+		),
 	},
 	mcp_connections_exceeded: {
-		title: "External connection limit reached",
-		body: "Your Free plan allows 1 active external connection. Disconnect it to use this one instead, or upgrade for unlimited connections.",
+		title: msg("External connection limit reached"),
+		body: msg(
+			"Your Free plan allows 1 active external connection. Disconnect it to use this one instead, or upgrade for unlimited connections.",
+		),
 	},
 	obsidian_connections_exceeded: {
-		title: "External connection limit reached",
-		body: "Your Free plan allows 1 active external connection. Disconnect it to use this one instead, or upgrade for unlimited connections.",
+		title: msg("External connection limit reached"),
+		body: msg(
+			"Your Free plan allows 1 active external connection. Disconnect it to use this one instead, or upgrade for unlimited connections.",
+		),
 	},
 	account_suspended: {
-		title: "Account suspended",
-		body: "Contact support to restore access.",
+		title: msg("Account suspended"),
+		body: msg("Contact support to restore access."),
 	},
 	no_tier: {
-		title: "Account setup incomplete",
-		body: "Please complete onboarding.",
+		title: msg("Account setup incomplete"),
+		body: msg("Please complete onboarding."),
 	},
 };
 
 const FALLBACK: LimitCopy = {
-	title: "Limit reached",
-	body: "Upgrade to continue.",
+	title: msg("Limit reached"),
+	body: msg("Upgrade to continue."),
 };
 
 type LimitReason =

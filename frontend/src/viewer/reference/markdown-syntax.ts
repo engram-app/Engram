@@ -1,4 +1,6 @@
 import { defaultConfig } from "@portaljs/remark-callouts";
+import { msg } from "@/i18n/msg";
+import { englishT, type Translate } from "@/i18n/translate";
 
 // The markdown surface Engram actually renders, as data.
 //
@@ -28,14 +30,37 @@ import { defaultConfig } from "@portaljs/remark-callouts";
 // than some unrelated third party — this is our reference, not a tour of the
 // ecosystem.
 
-interface SyntaxEntry {
+/**
+ * Sample prose is module-scope data but `t` exists only in components, so a
+ * sample is either a plain string (nothing to translate) or a function that
+ * composes the string from literal-keyed `t(...)` calls. Syntax characters stay
+ * outside the calls: only the prose a user would replace is translated.
+ */
+type Sample = string | ((t: Translate) => string);
+
+/** Resolve a sample with the reader's translator. */
+function resolveSample(value: Sample, t: Translate): string {
+	return typeof value === "function" ? value(t) : value;
+}
+
+// One word, one key: the same placeholder prose recurs across entries.
+const TITLE = msg("Title");
+const BODY = msg("Body.");
+const CELL = msg("Cell");
+const ABOVE_DIVIDER = msg("Text above the divider");
+const BELOW_DIVIDER = msg("Text below the divider");
+const WIKI_TARGET = msg("Deployment Runbook");
+const CALLOUT_FALLBACK = msg("Example text.");
+
+/** An entry as authored: `syntax` and `demo` may be translatable samples. */
+interface EntryDef {
 	id: string;
 	category: string;
 	label: string;
 	/** Inserted at the caret. A neutral template, not a worked example. */
-	syntax: string;
+	syntax: Sample;
 	/** Rendered in the preview. Defaults to `syntax`. Set it when realism teaches more. */
-	demo?: string;
+	demo?: Sample;
 	/**
 	 * Only set when it says something the label and preview cannot. A blurb that
 	 * restates the label ("Bold — strong emphasis") is noise and belongs nowhere.
@@ -85,8 +110,8 @@ interface SyntaxEntry {
 	 * step with these: the whole point is that the rendered specimen below is the
 	 * template above, so a mismatch teaches the wrong spacing.
 	 */
-	templatePrelude?: readonly string[];
-	templatePostlude?: readonly string[];
+	templatePrelude?: readonly Sample[];
+	templatePostlude?: readonly Sample[];
 	/**
 	 * A real outbound link for syntax that is a doorway to someone else's whole
 	 * language — Mermaid's diagram grammar, say. One row can show that the fence
@@ -100,25 +125,45 @@ interface SyntaxEntry {
 }
 
 /**
+ * An entry as consumed. `syntax` and `demo` are the ENGLISH strings, so
+ * non-React callers and the invariants in the tests keep working unchanged;
+ * `sample` keeps the translatable originals for `entrySyntax` / `previewSource`.
+ */
+type SyntaxEntry = Omit<EntryDef, "syntax" | "demo"> & {
+	syntax: string;
+	demo?: string;
+	sample: { syntax: Sample; demo?: Sample };
+};
+
+function build({ syntax, demo, ...rest }: EntryDef): SyntaxEntry {
+	return {
+		...rest,
+		syntax: resolveSample(syntax, englishT),
+		demo: demo === undefined ? undefined : resolveSample(demo, englishT),
+		sample: { syntax, demo },
+	};
+}
+
+/**
  * A line of body text that suits each type, so the gallery reads as thirteen
  * worked examples rather than thirteen repetitions of a word. Keyed by type; a
  * type the library adds later falls back to something neutral rather than
  * breaking the build.
  */
 const CALLOUT_BODIES: Record<string, string> = {
-	note: "Worth knowing, but not urgent.",
-	tip: "A better way to do the same thing.",
-	warning: "Check this before you continue.",
-	abstract: "The short version, up front.",
-	info: "Background you may want.",
-	todo: "Still outstanding.",
-	success: "That worked as intended.",
-	question: "Something worth asking.",
-	failure: "That did not work.",
-	danger: "This cannot be undone.",
-	bug: "A known problem, not yet fixed.",
-	example: "Here is one, concretely.",
-	quote: "Said better by someone else.",
+	note: msg("Worth knowing, but not urgent."),
+	tip: msg("A better way to do the same thing."),
+	warning: msg("Check this before you continue."),
+	abstract: msg("The short version, up front."),
+	info: msg("Background you may want."),
+	todo: msg("Still outstanding."),
+	success: msg("That worked as intended."),
+	question: msg("Something worth asking."),
+	failure: msg("That did not work."),
+	danger: msg("This cannot be undone."),
+	bug: msg("A known problem, not yet fixed."),
+	example: msg("Here is one, concretely."),
+	quote: msg("Said better by someone else."),
 };
 
 /**
@@ -132,23 +177,26 @@ const CALLOUT_BODIES: Record<string, string> = {
  * icon → colour IS the information. `hideTemplate` keeps the rows to just that
  * mapping, because the format is spelled out once above them (CATEGORY_INTROS).
  */
-const CALLOUT_GALLERY: readonly SyntaxEntry[] = Object.entries(defaultConfig.types)
+const CALLOUT_GALLERY: readonly EntryDef[] = Object.entries(defaultConfig.types)
 	.filter(([, value]) => typeof value === "object")
 	.map(([type]) => ({
 		id: `callout-${type}`,
-		category: "Callouts",
+		category: msg("Callouts"),
 		label: type,
-		syntax: `> [!${type}] Title\n> Body.`,
-		demo: `> [!${type}] ${type}\n> ${CALLOUT_BODIES[type] ?? "Example text."}`,
+		// The type identifier is the keyword the user types and the demo title is
+		// the name -> icon -> colour mapping, so both stay English.
+		syntax: (t: Translate) => `> [!${type}] ${t(TITLE)}\n> ${t(BODY)}`,
+		demo: (t: Translate) =>
+			`> [!${type}] ${type}\n> ${t(CALLOUT_BODIES[type] ?? CALLOUT_FALLBACK)}`,
 		block: true as const,
 		hideTemplate: true as const,
 		keywords: ["callout", "admonition", "aside", "banner"],
 	}));
 
 /** Shown once, prominently, above a category whose rows all share one format. */
-export const CATEGORY_INTROS: Record<
+const CATEGORY_INTROS: Record<
 	string,
-	{ syntax?: string; note: string; link?: { href: string; label: string } }
+	{ syntax?: Sample; note: string; link?: { href: string; label: string } }
 > = {
 	Headings: {
 		// Deliberately worded as convention, because that is what it is: WCAG
@@ -158,11 +206,13 @@ export const CATEGORY_INTROS: Record<
 		// was never implemented and was dropped from the spec in 2022. What remains
 		// true is that the SEQUENCE is what screen readers and our own Outline panel
 		// read, so a gap in it is a gap in the outline.
-		note: "Every heading becomes a line in the Outline panel, which is generated from these. Step down one level at a time; jumping ## to #### leaves a gap in it. By convention # is the note title, which your filename already gives you, so most notes start at ##.",
+		note: msg(
+			"Every heading becomes a line in the Outline panel, which is generated from these. Step down one level at a time; jumping ## to #### leaves a gap in it. By convention # is the note title, which your filename already gives you, so most notes start at ##.",
+		),
 	},
 	Callouts: {
-		syntax: "> [!type] Title\n> Body text.",
-		note: "Swap `type` for any name below. The title is optional.",
+		syntax: (t) => `> [!type] ${t(TITLE)}\n> ${t("Body text.")}`,
+		note: msg("Swap `type` for any name below. The title is optional."),
 	},
 	Math: {
 		// The one category whose syntax is a doorway to an entire other language.
@@ -170,10 +220,12 @@ export const CATEGORY_INTROS: Record<
 		// honest answer — a large subset of LaTeX, not all of it — is only useful
 		// alongside the list of what made the cut. Hence a real outbound link,
 		// unlike the Links section's examples, which deliberately point at us.
-		note: "Formulas are written in LaTeX and typeset by KaTeX. Single dollar signs keep one in the flow of a sentence; a pair on their own lines centres it as a block. KaTeX covers a large subset of LaTeX rather than all of it, so if a command renders as red source text, it is not supported.",
+		note: msg(
+			"Formulas are written in LaTeX and typeset by KaTeX. Single dollar signs keep one in the flow of a sentence; a pair on their own lines centres it as a block. KaTeX covers a large subset of LaTeX rather than all of it, so if a command renders as red source text, it is not supported.",
+		),
 		link: {
 			href: "https://ashki23.github.io/markdown-latex.html#latex",
-			label: "LaTeX syntax reference",
+			label: msg("LaTeX syntax reference"),
 		},
 	},
 };
@@ -184,46 +236,46 @@ export const CATEGORY_INTROS: Record<
  * across EVERY entry (chiefly the TRUTHFULNESS RULE above — that each one
  * round-trips through NoteView). Not dead, and not a second read path.
  */
-export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
+const ENTRY_DEFS: readonly EntryDef[] = [
 	// ── Text ────────────────────────────────────────────────────────────────
 	{
 		id: "bold",
-		category: "Text",
-		label: "Bold",
-		syntax: "**Bold text**",
+		category: msg("Text"),
+		label: msg("Bold"),
+		syntax: (t) => `**${t("Bold text")}**`,
 		keywords: ["strong", "emphasis"],
 		templateLed: true,
 	},
 	{
 		id: "italic",
-		category: "Text",
-		label: "Italic",
-		syntax: "*Italic text*",
+		category: msg("Text"),
+		label: msg("Italic"),
+		syntax: (t) => `*${t("Italic text")}*`,
 		keywords: ["emphasis", "em"],
 		templateLed: true,
 	},
 	{
 		id: "bold-italic",
-		category: "Text",
-		label: "Bold italic",
-		syntax: "***Bold italic text***",
+		category: msg("Text"),
+		label: msg("Bold italic"),
+		syntax: (t) => `***${t("Bold italic text")}***`,
 		keywords: ["strong", "emphasis"],
 		templateLed: true,
 	},
 	{
 		id: "strikethrough",
-		category: "Text",
-		label: "Strikethrough",
-		syntax: "~~Struck through~~",
+		category: msg("Text"),
+		label: msg("Strikethrough"),
+		syntax: (t) => `~~${t("Struck through")}~~`,
 		keywords: ["strike", "delete", "gfm"],
 		templateLed: true,
 	},
 	{
 		id: "inline-code",
-		category: "Text",
-		label: "Inline code",
-		syntax: "`inline code`",
-		blurb: "No formatting is applied inside.",
+		category: msg("Text"),
+		label: msg("Inline code"),
+		syntax: (t) => `\`${t("inline code")}\``,
+		blurb: msg("No formatting is applied inside."),
 		keywords: ["monospace", "backtick"],
 		templateLed: true,
 	},
@@ -237,16 +289,17 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		// the same characters, which is the whole lesson — you type two more
 		// characters than you see.
 		id: "escape",
-		category: "Text",
-		label: "Escape a mark",
-		syntax: "\\*not italic\\*",
-		blurb:
+		category: msg("Text"),
+		label: msg("Escape a mark"),
+		syntax: (t) => `\\*${t("not italic")}\\*`,
+		blurb: msg(
 			"A backslash makes the next punctuation mark literal, so it shows up instead of formatting. Works on any of them: \\* \\_ \\# \\` \\[ \\] and the rest.",
+		),
 		keywords: ["escape", "backslash", "literal", "verbatim", "asterisk", "underscore", "raw"],
 		templateLed: true,
 		link: {
 			href: "https://daringfireball.net/projects/markdown/syntax#backslash",
-			label: "Which characters can be escaped",
+			label: msg("Which characters can be escaped"),
 		},
 	},
 
@@ -256,93 +309,93 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 	// never do — and each level is separately insertable.
 	{
 		id: "heading-1",
-		category: "Headings",
-		label: "Heading 1",
-		syntax: "# Heading 1",
+		category: msg("Headings"),
+		label: msg("Heading 1"),
+		syntax: (t) => `# ${t("Heading 1")}`,
 		block: true,
 		keywords: ["title", "h1", "toc", "outline", "section"],
 		templateLed: true,
 	},
 	{
 		id: "heading-2",
-		category: "Headings",
-		label: "Heading 2",
-		syntax: "## Heading 2",
+		category: msg("Headings"),
+		label: msg("Heading 2"),
+		syntax: (t) => `## ${t("Heading 2")}`,
 		block: true,
 		keywords: ["title", "h2", "toc", "outline", "section"],
 		templateLed: true,
 	},
 	{
 		id: "heading-3",
-		category: "Headings",
-		label: "Heading 3",
-		syntax: "### Heading 3",
+		category: msg("Headings"),
+		label: msg("Heading 3"),
+		syntax: (t) => `### ${t("Heading 3")}`,
 		block: true,
 		keywords: ["title", "h3", "toc", "outline", "section"],
 		templateLed: true,
 	},
 	{
 		id: "heading-4",
-		category: "Headings",
-		label: "Heading 4",
-		syntax: "#### Heading 4",
+		category: msg("Headings"),
+		label: msg("Heading 4"),
+		syntax: (t) => `#### ${t("Heading 4")}`,
 		block: true,
 		keywords: ["title", "h4", "toc", "outline", "section"],
 		templateLed: true,
 	},
 	{
 		id: "heading-5",
-		category: "Headings",
-		label: "Heading 5",
-		syntax: "##### Heading 5",
+		category: msg("Headings"),
+		label: msg("Heading 5"),
+		syntax: (t) => `##### ${t("Heading 5")}`,
 		block: true,
 		keywords: ["title", "h5", "toc", "outline", "section"],
 		templateLed: true,
 	},
 	{
 		id: "heading-6",
-		category: "Headings",
-		label: "Heading 6",
-		syntax: "###### Heading 6",
+		category: msg("Headings"),
+		label: msg("Heading 6"),
+		syntax: (t) => `###### ${t("Heading 6")}`,
 		block: true,
 		keywords: ["title", "h6", "toc", "outline", "section"],
 		templateLed: true,
 	},
 	{
 		id: "bullet-list",
-		category: "Structure",
-		label: "Bullet list",
-		syntax: "- Bullet item",
+		category: msg("Structure"),
+		label: msg("Bullet list"),
+		syntax: (t) => `- ${t("Bullet item")}`,
 		block: true,
 		keywords: ["unordered", "ul"],
 		templateLed: true,
 	},
 	{
 		id: "numbered-list",
-		category: "Structure",
-		label: "Numbered list",
-		syntax: "1. Numbered item",
+		category: msg("Structure"),
+		label: msg("Numbered list"),
+		syntax: (t) => `1. ${t("Numbered item")}`,
 		block: true,
 		keywords: ["ordered", "ol"],
 		templateLed: true,
 	},
 	{
 		id: "task-list",
-		category: "Structure",
-		label: "Task list",
+		category: msg("Structure"),
+		label: msg("Task list"),
 		// Both states in the template, so the left column shows the ONE character
 		// that distinguishes them. `demo` would split what is inserted from what is
 		// rendered for no gain here — the template already reads as an example.
-		syntax: "- [ ] Unchecked item\n- [x] Checked item",
+		syntax: (t) => `- [ ] ${t("Unchecked item")}\n- [x] ${t("Checked item")}`,
 		block: true,
 		keywords: ["checkbox", "todo", "checklist", "gfm"],
 		templateLed: true,
 	},
 	{
 		id: "blockquote",
-		category: "Structure",
-		label: "Blockquote",
-		syntax: "> Quoted text",
+		category: msg("Structure"),
+		label: msg("Blockquote"),
+		syntax: (t) => `> ${t("Quoted text")}`,
 		block: true,
 		keywords: ["quote", "cite"],
 		templateLed: true,
@@ -352,32 +405,32 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 	// ladder at a glance, which is the thing a sentence has to describe badly.
 	{
 		id: "blockquote-nested",
-		category: "Structure",
-		label: "Nested quote",
-		syntax: ">> Nested once",
+		category: msg("Structure"),
+		label: msg("Nested quote"),
+		syntax: (t) => `>> ${t("Nested once")}`,
 		block: true,
 		keywords: ["quote", "cite", "nest", "nested", "depth"],
 		templateLed: true,
 	},
 	{
 		id: "blockquote-nested-twice",
-		category: "Structure",
-		label: "Twice-nested quote",
-		syntax: ">>> Nested twice",
+		category: msg("Structure"),
+		label: msg("Twice-nested quote"),
+		syntax: (t) => `>>> ${t("Nested twice")}`,
 		block: true,
 		keywords: ["quote", "cite", "nest", "nested", "depth"],
 		templateLed: true,
 	},
 	{
 		id: "rule",
-		category: "Structure",
+		category: msg("Structure"),
 		// "Section divider" over "Horizontal rule": the label has to say what the
 		// thing is FOR, because the rendered line alone tells you nothing. The
 		// technical names stay searchable via keywords.
-		label: "Section Divider",
+		label: msg("Section Divider"),
 		syntax: "---",
-		templatePrelude: ["Text above the divider", ""],
-		templatePostlude: ["Text below the divider"],
+		templatePrelude: [(t) => t(ABOVE_DIVIDER), ""],
+		templatePostlude: [(t) => t(BELOW_DIVIDER)],
 		// Character-for-character the template above: blank line before the dashes,
 		// none after. The specimen has to BE the template, or the row teaches one
 		// spacing and demonstrates another.
@@ -385,7 +438,7 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		// The surrounding prose is also load-bearing for a second reason: NoteView
 		// strips frontmatter, which swallows a leading "---" as a frontmatter
 		// delimiter and previews an empty box.
-		demo: "Text above the divider\n\n---\nText below the divider",
+		demo: (t) => `${t(ABOVE_DIVIDER)}\n\n---\n${t(BELOW_DIVIDER)}`,
 		// No blurb. The blank-line rule used to be spelled out here; the template's
 		// ghost line now SHOWS it, and the sentence beside it was saying the same
 		// thing a second time.
@@ -395,8 +448,8 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 	},
 	{
 		id: "table",
-		category: "Structure",
-		label: "Table",
+		category: msg("Structure"),
+		label: msg("Table"),
 		// No separate `demo` here, unlike the other block entries: a table's
 		// column widths, alignment and header shading only make sense next to the
 		// pipes that produced them, so the specimen has to BE the template. It is
@@ -404,25 +457,28 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 		// Self-describing, like the Text rows: each column is NAMED for the
 		// alignment its divider marker sets, so the specimen demonstrates all three
 		// markers instead of a sentence listing them.
-		syntax: "| Left | Center | Right |\n| :--- | :---: | ---: |\n| Cell | Cell | Cell |",
-		blurb:
+		syntax: (t) =>
+			`| ${t("Left")} | ${t("Center")} | ${t("Right")} |\n| :--- | :---: | ---: |\n| ${t(CELL)} | ${t(CELL)} | ${t(CELL)} |`,
+		blurb: msg(
 			"The divider row sets each column's alignment. Right-click a table in a note to insert or delete rows and columns.",
+		),
 		block: true,
 		keywords: ["grid", "columns", "gfm"],
 	},
 	{
 		id: "footnote",
-		category: "Structure",
-		label: "Footnote",
-		syntax: "Claim.[^1]\n\n[^1]: Source.",
-		demo: "Shipped on time.[^1]\n\n[^1]: For a generous value of on time.",
+		category: msg("Structure"),
+		label: msg("Footnote"),
+		syntax: (t) => `${t("Claim.")}[^1]\n\n[^1]: ${t("Source.")}`,
+		demo: (t) => `${t("Shipped on time.")}[^1]\n\n[^1]: ${t("For a generous value of on time.")}`,
 		// Reading view renders this via remark-gfm. The EDITOR does not:
 		// @atomic-editor/editor has no footnote support at all — no entry in its
 		// inline class map, no hide rule — so `[^1]` stays literal in Edit and Raw.
 		// It is the one syntax in this reference that previews but does not render
 		// where you are typing, so the blurb has to say so.
-		blurb:
+		blurb: msg(
 			"Numbered automatically, with a link back. Reading view only — the editor leaves [^1] as text.",
+		),
 		block: true,
 		keywords: ["citation", "reference", "gfm"],
 	},
@@ -430,51 +486,51 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 	// ── Links & embeds ──────────────────────────────────────────────────────
 	{
 		id: "wikilink",
-		category: "Links",
-		label: "Wikilink",
-		syntax: "[[Deployment Runbook]]",
+		category: msg("Links"),
+		label: msg("Wikilink"),
+		syntax: (t) => `[[${t(WIKI_TARGET)}]]`,
 		templateLed: true,
 		keywords: ["internal", "backlink", "obsidian", "link"],
 	},
 	{
 		id: "wikilink-alias",
-		category: "Links",
-		label: "Wikilink with alias",
+		category: msg("Links"),
+		label: msg("Wikilink with alias"),
 		// Same note as the row above, so the pair reads as one idea; the alias is a
 		// realistic shorthand rather than the word "alias".
-		syntax: "[[Deployment Runbook|the runbook]]",
-		blurb: "The pipe sets the display text.",
+		syntax: (t) => `[[${t(WIKI_TARGET)}|${t("the runbook")}]]`,
+		blurb: msg("The pipe sets the display text."),
 		templateLed: true,
 		keywords: ["internal", "pipe", "obsidian", "link"],
 	},
 	{
 		id: "link",
-		category: "Links",
-		label: "External link",
-		syntax: "[Engram docs](https://engram.page/docs)",
+		category: msg("Links"),
+		label: msg("External link"),
+		syntax: (t) => `[${t("Engram docs")}](https://engram.page/docs)`,
 		templateLed: true,
 		keywords: ["url", "href", "hyperlink", "external", "link"],
 	},
 	{
 		id: "image",
-		category: "Links",
-		label: "Image by URL",
+		category: msg("Links"),
+		label: msg("Image by URL"),
 		// The placeholder says what alt text is FOR. "alt" is jargon that teaches
 		// nobody, and this string is what lands in the note, so it should read as
 		// an instruction to replace.
 		// No blurb: the placeholder text explains itself, and "any image on the
 		// web" only restated the URL sitting right beside it.
-		syntax: "![text if it can't load](https://example.com/photo.png)",
+		syntax: (t) => `![${t("text if it can't load")}](https://example.com/photo.png)`,
 		renderable: false,
 		templateLed: true,
 		keywords: ["picture", "img", "photo", "link"],
 	},
 	{
 		id: "embed",
-		category: "Links",
-		label: "Embed attachment",
+		category: msg("Links"),
+		label: msg("Embed attachment"),
 		syntax: "![[diagram.png]]",
-		blurb: "A file from your vault.",
+		blurb: msg("A file from your vault."),
 		renderable: false,
 		templateLed: true,
 		keywords: ["attachment", "transclude", "obsidian", "pdf", "embed", "link"],
@@ -485,16 +541,17 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 	// ── Callouts: fold markers ────────────────────────────────────────────────────────────
 	{
 		id: "callout-foldable",
-		category: "Callouts",
-		label: "Foldable Callout",
-		syntax: "> [!tip]- Title\n> Body.",
+		category: msg("Callouts"),
+		label: msg("Foldable Callout"),
+		syntax: (t) => `> [!tip]- ${t(TITLE)}\n> ${t(BODY)}`,
 		// No demo, and not previewed: @portaljs/remark-callouts does not consume
 		// the fold marker, so remark parses the "- Title" that follows as a BULLET
 		// LIST and the title renders as `<ul><li>`. Showing that would teach the
 		// wrong thing. It does fold correctly in Obsidian, which is why the entry
 		// stays — but the blurb has to say where it works.
-		blurb:
+		blurb: msg(
 			"Obsidian only: - starts folded, + starts open. The web viewer shows the marker as a bullet.",
+		),
 		renderable: false,
 		block: true,
 		keywords: ["collapse", "fold", "details", "accordion"],
@@ -503,41 +560,42 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 	// ── Code ────────────────────────────────────────────────────────────────
 	{
 		id: "code-fence",
-		category: "Code",
-		label: "Code Block",
+		category: msg("Code"),
+		label: msg("Code Block"),
 		// The BARE fence was missing entirely — the section documented only the
 		// language-tagged form, so the base syntax everyone reaches for first was
 		// nowhere in the reference.
-		syntax: "```\nPlain code, no highlighting\n```",
+		syntax: (t) => `\`\`\`\n${t("Plain code, no highlighting")}\n\`\`\``,
 		block: true,
 		keywords: ["fence", "snippet", "backticks", "preformatted", "pre", "monospace"],
 	},
 	{
 		id: "code-fence-lang",
-		category: "Code",
-		label: "Highlighted Code Block",
+		category: msg("Code"),
+		label: msg("Highlighted Code Block"),
 		// Template and preview are the same string here, as with the table and the
 		// diagram: `code` above a rendered `const total = items.length;` left the
 		// reader matching one to the other for no gain.
 		syntax: "```ts\nconst total = items.length;\n```",
-		blurb:
+		blurb: msg(
 			"Many languages are supported. Name the type straight after the opening fence. It is usually the file extension: ts for TypeScript, js for JavaScript.",
+		),
 		block: true,
 		keywords: ["fence", "syntax", "highlight", "snippet", "language", "ts", "js", "elixir"],
 	},
 	{
 		id: "mermaid",
-		category: "Code",
-		label: "Mermaid Diagram",
+		category: msg("Code"),
+		label: msg("Mermaid Diagram"),
 		// No separate `demo`, for the same reason as the table: a diagram's shape
 		// is the whole lesson, and `A --> B` above a rendered Edit → Sync → Vault
 		// flow left the reader to guess which part of the source produced which
 		// box. The template IS the diagram you see.
 		syntax: "```mermaid\ngraph LR\n  Edit --> Sync --> Vault\n```",
-		blurb: "Flowchart, sequence, class and state diagrams.",
+		blurb: msg("Flowchart, sequence, class and state diagrams."),
 		link: {
 			href: "https://mermaid.ai/open-source/intro/syntax-reference.html",
-			label: "Mermaid syntax reference",
+			label: msg("Mermaid syntax reference"),
 		},
 		block: true,
 		keywords: ["diagram", "graph", "flowchart", "chart", "uml"],
@@ -546,8 +604,8 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 	// ── Math ────────────────────────────────────────────────────────────────
 	{
 		id: "math-inline",
-		category: "Math",
-		label: "Inline Math",
+		category: msg("Math"),
+		label: msg("Inline Math"),
 		syntax: "$E = mc^2$",
 		// Blurbs dropped from both Math rows: the category intro above them now
 		// carries the inline-vs-block distinction, and repeating "KaTeX" on each
@@ -557,8 +615,8 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 	},
 	{
 		id: "math-block",
-		category: "Math",
-		label: "Block Math",
+		category: msg("Math"),
+		label: msg("Block Math"),
 		syntax: "$$\n\\int_0^1 x^2 \\, dx = \\frac{1}{3}\n$$",
 		block: true,
 		keywords: ["katex", "latex", "tex", "equation", "display"],
@@ -567,28 +625,35 @@ export const SYNTAX_ENTRIES: readonly SyntaxEntry[] = [
 	// ── Properties ──────────────────────────────────────────────────────────
 	{
 		id: "frontmatter",
-		category: "Properties",
-		label: "Frontmatter",
-		syntax: "---\ntitle: My note\ntags: [idea, draft]\n---",
-		blurb: "Must be the very first thing in the note. Shows up as note properties.",
+		category: msg("Properties"),
+		label: msg("Frontmatter"),
+		syntax: (t) => `---\ntitle: ${t("My note")}\ntags: [${t("idea")}, ${t("draft")}]\n---`,
+		blurb: msg("Must be the very first thing in the note. Shows up as note properties."),
 		block: true,
 		renderable: false,
 		keywords: ["yaml", "metadata", "properties", "tags", "header"],
 	},
 	{
 		id: "tag",
-		category: "Properties",
-		label: "Tag",
-		syntax: "#topic",
-		blurb: "Also settable via the tags frontmatter key.",
+		category: msg("Properties"),
+		label: msg("Tag"),
+		syntax: (t) => `#${t("topic")}`,
+		blurb: msg("Also settable via the tags frontmatter key."),
 		keywords: ["hashtag", "label", "category"],
 		templateLed: true,
 	},
 ];
 
+const SYNTAX_ENTRIES: readonly SyntaxEntry[] = ENTRY_DEFS.map(build);
+
+/** What Insert drops at the caret, in the reader's language. */
+export function entrySyntax(entry: SyntaxEntry, t: Translate = englishT): string {
+	return resolveSample(entry.sample.syntax, t);
+}
+
 /** What the preview renders: the worked example if there is one, else the template. */
-export function previewSource(entry: SyntaxEntry): string {
-	return entry.demo ?? entry.syntax;
+export function previewSource(entry: SyntaxEntry, t: Translate = englishT): string {
+	return resolveSample(entry.sample.demo ?? entry.sample.syntax, t);
 }
 
 /**
@@ -597,7 +662,11 @@ export function previewSource(entry: SyntaxEntry): string {
  * "math block" therefore both find block math, which a single substring test
  * on a joined string would not do reliably.
  */
-export function filterSyntax(query: string): readonly SyntaxEntry[] {
+export function filterSyntax(
+	query: string,
+	// Also match the words the user is reading, not only the English source.
+	t: Translate = englishT,
+): readonly SyntaxEntry[] {
 	const terms = query.toLowerCase().split(/\s+/u).filter(Boolean);
 	if (terms.length === 0) {
 		return SYNTAX_ENTRIES;
@@ -608,6 +677,10 @@ export function filterSyntax(query: string): readonly SyntaxEntry[] {
 			entry.category,
 			entry.syntax,
 			entry.blurb ?? "",
+			t(entry.label),
+			t(entry.category),
+			entrySyntax(entry, t),
+			entry.blurb ? t(entry.blurb) : "",
 			...(entry.keywords ?? []),
 		]
 			.join(" ")
@@ -632,4 +705,5 @@ export function groupByCategory(
 	return [...groups];
 }
 
-export type { SyntaxEntry };
+export type { Sample, SyntaxEntry };
+export { CATEGORY_INTROS, resolveSample, SYNTAX_ENTRIES };

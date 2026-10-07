@@ -1,12 +1,15 @@
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { useT } from "@/i18n/locale-provider";
+import { msg } from "@/i18n/msg";
+import { intlLocale } from "@/lib/intl-locale";
 import { type SubscriptionDetail, useReverseCancel } from "../api/queries";
 
 const ACTION_LABELS: Record<string, string> = {
-	cancel: "Your plan cancels",
-	pause: "Your plan pauses",
-	resume: "Your plan resumes",
+	cancel: msg("Your plan cancels on {date}"),
+	pause: msg("Your plan pauses on {date}"),
+	resume: msg("Your plan resumes on {date}"),
 };
 
 // Hook isolated to its own component so the mutation state isn't allocated
@@ -14,14 +17,15 @@ const ACTION_LABELS: Record<string, string> = {
 // renders. Tiny gain alone — pattern matters when the parent is in the
 // always-mounted billing surface.
 function ReverseCancelButton() {
+	const { t } = useT();
 	const reverseCancel = useReverseCancel();
 
 	async function onReverse() {
 		try {
 			await reverseCancel.mutateAsync();
-			toast.success("Cancellation reversed. Your subscription will keep renewing.");
+			toast.success(t("Cancellation reversed. Your subscription will keep renewing."));
 		} catch {
-			toast.error("Could not reverse the cancellation. Please try again.");
+			toast.error(t("Could not reverse the cancellation. Please try again."));
 		}
 	}
 
@@ -30,7 +34,7 @@ function ReverseCancelButton() {
 			{Boolean(reverseCancel.isPending) && (
 				<Loader2 aria-hidden className="size-3.5 animate-spin" />
 			)}
-			{reverseCancel.isPending ? "Reversing…" : "Keep my subscription"}
+			{reverseCancel.isPending ? t("Reversing…") : t("Keep my subscription")}
 		</Button>
 	);
 }
@@ -40,12 +44,14 @@ export default function PendingChangeBanner({
 }: {
 	scheduledChange: SubscriptionDetail["scheduled_change"];
 }) {
+	const { t, renderedLocale } = useT();
+	const localeTag = intlLocale(renderedLocale);
 	if (!scheduledChange) {
 		return null;
 	}
 
-	const label = ACTION_LABELS[scheduledChange.action] ?? "Your plan changes";
-	const date = new Date(scheduledChange.effective_at).toLocaleDateString();
+	const label = ACTION_LABELS[scheduledChange.action];
+	const date = new Date(scheduledChange.effective_at).toLocaleDateString(localeTag);
 
 	return (
 		<aside
@@ -53,7 +59,7 @@ export default function PendingChangeBanner({
 			className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-secondary/50 p-4 text-sm"
 		>
 			<p className="font-medium text-foreground">
-				{label} on {date}
+				{label ? t(label, { date }) : t("Your plan changes on {date}", { date })}
 			</p>
 			{scheduledChange.action === "cancel" && <ReverseCancelButton />}
 		</aside>

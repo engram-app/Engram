@@ -2,6 +2,7 @@ import { PanelRightClose } from "lucide-react";
 import { lazy, type ReactNode, Suspense } from "react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useT } from "@/i18n/locale-provider";
 import { RIGHT_TOOLS, type RightToolId, useRightTools } from "./right-tools-context";
 
 // Lazy on purpose. The reference panel reaches insertSnippet, which pulls in
@@ -17,6 +18,7 @@ const STATIC_TOOLS: Partial<Record<RightToolId, () => ReactNode>> = {
 };
 
 export default function RightToolPanel({ onCollapse }: { onCollapse: () => void }) {
+	const { t } = useT();
 	const { resolvedId, setActive, isAvailable, slots } = useRightTools();
 	const available = RIGHT_TOOLS.filter((tool) => isAvailable(tool.id));
 
@@ -29,7 +31,7 @@ export default function RightToolPanel({ onCollapse }: { onCollapse: () => void 
 				    layering it over landmark semantics is what a11y linters flag. */}
 				<div
 					role="tablist"
-					aria-label="Sidebar tools"
+					aria-label={t("Sidebar tools")}
 					className="flex min-w-0 flex-1 gap-1 overflow-hidden"
 				>
 					{available.map((tool) => (
@@ -47,7 +49,7 @@ export default function RightToolPanel({ onCollapse }: { onCollapse: () => void 
 									: "text-muted-foreground hover:bg-primary/10 hover:text-primary"
 							}`}
 						>
-							{tool.label}
+							{t(tool.label)}
 						</button>
 					))}
 				</div>
@@ -56,8 +58,8 @@ export default function RightToolPanel({ onCollapse }: { onCollapse: () => void 
 					size="icon-sm"
 					className="shrink-0"
 					onClick={onCollapse}
-					aria-label="Collapse panel"
-					title="Collapse panel"
+					aria-label={t("Collapse panel")}
+					title={t("Collapse panel")}
 				>
 					<PanelRightClose />
 				</Button>
@@ -73,7 +75,7 @@ export default function RightToolPanel({ onCollapse }: { onCollapse: () => void 
 				className="min-h-0 flex-1 overflow-hidden"
 			>
 				{renderStatic ? (
-					<Suspense fallback={<p className="p-3 text-muted-foreground text-sm">Loading…</p>}>
+					<Suspense fallback={<p className="p-3 text-muted-foreground text-sm">{t("Loading…")}</p>}>
 						{renderStatic()}
 					</Suspense>
 				) : (

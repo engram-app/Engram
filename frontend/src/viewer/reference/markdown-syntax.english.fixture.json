@@ -1,0 +1,163 @@
+{
+	"bold": {
+		"syntax": "**Bold text**"
+	},
+	"italic": {
+		"syntax": "*Italic text*"
+	},
+	"bold-italic": {
+		"syntax": "***Bold italic text***"
+	},
+	"strikethrough": {
+		"syntax": "~~Struck through~~"
+	},
+	"inline-code": {
+		"syntax": "`inline code`"
+	},
+	"escape": {
+		"syntax": "\\*not italic\\*"
+	},
+	"heading-1": {
+		"syntax": "# Heading 1"
+	},
+	"heading-2": {
+		"syntax": "## Heading 2"
+	},
+	"heading-3": {
+		"syntax": "### Heading 3"
+	},
+	"heading-4": {
+		"syntax": "#### Heading 4"
+	},
+	"heading-5": {
+		"syntax": "##### Heading 5"
+	},
+	"heading-6": {
+		"syntax": "###### Heading 6"
+	},
+	"bullet-list": {
+		"syntax": "- Bullet item"
+	},
+	"numbered-list": {
+		"syntax": "1. Numbered item"
+	},
+	"task-list": {
+		"syntax": "- [ ] Unchecked item\n- [x] Checked item"
+	},
+	"blockquote": {
+		"syntax": "> Quoted text"
+	},
+	"blockquote-nested": {
+		"syntax": ">> Nested once"
+	},
+	"blockquote-nested-twice": {
+		"syntax": ">>> Nested twice"
+	},
+	"rule": {
+		"syntax": "---",
+		"demo": "Text above the divider\n\n---\nText below the divider",
+		"pre": ["Text above the divider", ""],
+		"post": ["Text below the divider"]
+	},
+	"table": {
+		"syntax": "| Left | Center | Right |\n| :--- | :---: | ---: |\n| Cell | Cell | Cell |"
+	},
+	"footnote": {
+		"syntax": "Claim.[^1]\n\n[^1]: Source.",
+		"demo": "Shipped on time.[^1]\n\n[^1]: For a generous value of on time."
+	},
+	"wikilink": {
+		"syntax": "[[Deployment Runbook]]"
+	},
+	"wikilink-alias": {
+		"syntax": "[[Deployment Runbook|the runbook]]"
+	},
+	"link": {
+		"syntax": "[Engram docs](https://engram.page/docs)"
+	},
+	"image": {
+		"syntax": "![text if it can't load](https://example.com/photo.png)"
+	},
+	"embed": {
+		"syntax": "![[diagram.png]]"
+	},
+	"callout-note": {
+		"syntax": "> [!note] Title\n> Body.",
+		"demo": "> [!note] note\n> Worth knowing, but not urgent."
+	},
+	"callout-tip": {
+		"syntax": "> [!tip] Title\n> Body.",
+		"demo": "> [!tip] tip\n> A better way to do the same thing."
+	},
+	"callout-warning": {
+		"syntax": "> [!warning] Title\n> Body.",
+		"demo": "> [!warning] warning\n> Check this before you continue."
+	},
+	"callout-abstract": {
+		"syntax": "> [!abstract] Title\n> Body.",
+		"demo": "> [!abstract] abstract\n> The short version, up front."
+	},
+	"callout-info": {
+		"syntax": "> [!info] Title\n> Body.",
+		"demo": "> [!info] info\n> Background you may want."
+	},
+	"callout-todo": {
+		"syntax": "> [!todo] Title\n> Body.",
+		"demo": "> [!todo] todo\n> Still outstanding."
+	},
+	"callout-success": {
+		"syntax": "> [!success] Title\n> Body.",
+		"demo": "> [!success] success\n> That worked as intended."
+	},
+	"callout-question": {
+		"syntax": "> [!question] Title\n> Body.",
+		"demo": "> [!question] question\n> Something worth asking."
+	},
+	"callout-failure": {
+		"syntax": "> [!failure] Title\n> Body.",
+		"demo": "> [!failure] failure\n> That did not work."
+	},
+	"callout-danger": {
+		"syntax": "> [!danger] Title\n> Body.",
+		"demo": "> [!danger] danger\n> This cannot be undone."
+	},
+	"callout-bug": {
+		"syntax": "> [!bug] Title\n> Body.",
+		"demo": "> [!bug] bug\n> A known problem, not yet fixed."
+	},
+	"callout-example": {
+		"syntax": "> [!example] Title\n> Body.",
+		"demo": "> [!example] example\n> Here is one, concretely."
+	},
+	"callout-quote": {
+		"syntax": "> [!quote] Title\n> Body.",
+		"demo": "> [!quote] quote\n> Said better by someone else."
+	},
+	"callout-foldable": {
+		"syntax": "> [!tip]- Title\n> Body."
+	},
+	"code-fence": {
+		"syntax": "```\nPlain code, no highlighting\n```"
+	},
+	"code-fence-lang": {
+		"syntax": "```ts\nconst total = items.length;\n```"
+	},
+	"mermaid": {
+		"syntax": "```mermaid\ngraph LR\n  Edit --> Sync --> Vault\n```"
+	},
+	"math-inline": {
+		"syntax": "$E = mc^2$"
+	},
+	"math-block": {
+		"syntax": "$$\n\\int_0^1 x^2 \\, dx = \\frac{1}{3}\n$$"
+	},
+	"frontmatter": {
+		"syntax": "---\ntitle: My note\ntags: [idea, draft]\n---"
+	},
+	"tag": {
+		"syntax": "#topic"
+	},
+	"__intro-callouts": {
+		"syntax": "> [!type] Title\n> Body text."
+	}
+}

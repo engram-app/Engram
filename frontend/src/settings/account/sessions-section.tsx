@@ -2,6 +2,7 @@ import { useSession, useSessionList } from "@clerk/react";
 import type { SessionResource, SessionWithActivitiesResource } from "@clerk/shared/types";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { useT } from "@/i18n/locale-provider";
 import { SettingsSectionCard } from "./section-card";
 
 function hasActivities(s: SessionResource): s is SessionResource & SessionWithActivitiesResource {
@@ -14,6 +15,7 @@ function hasActivities(s: SessionResource): s is SessionResource & SessionWithAc
 }
 
 export function SessionsSection() {
+	const { t } = useT();
 	const { isLoaded, sessions } = useSessionList();
 	const { session: active } = useSession();
 
@@ -30,18 +32,24 @@ export function SessionsSection() {
 	async function revoke(s: SessionWithActivitiesResource) {
 		try {
 			await s.revoke();
-			toast.success("Session revoked");
+			toast.success(t("Session revoked"));
 		} catch {
-			toast.error("Could not revoke");
+			toast.error(t("Could not revoke"));
 		}
 	}
 
 	return (
-		<SettingsSectionCard title="Active sessions" description="Devices signed in to your account.">
+		<SettingsSectionCard
+			title={t("Active sessions")}
+			description={t("Devices signed in to your account.")}
+		>
 			<ul className="space-y-2">
 				{list.map((s) => {
 					const a = s.latestActivity;
-					const name = `${a?.deviceType ?? "Device"} · ${a?.browserName ?? "Browser"}`;
+					const name = t("{device} · {browser}", {
+						device: a?.deviceType ?? t("Device"),
+						browser: a?.browserName ?? t("Browser"),
+					});
 					const isCurrent = s.id === active?.id;
 					return (
 						<li key={s.id} className="flex items-center justify-between gap-2 text-sm">
@@ -49,18 +57,17 @@ export function SessionsSection() {
 								{name}
 								{isCurrent && (
 									<span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs">
-										Current
+										{t("Current")}
 									</span>
 								)}
 							</span>
 							{!isCurrent && (
 								<Button
-									variant="ghost"
-									size="sm"
-									aria-label={`Revoke ${name}`}
+									variant="destructive"
+									aria-label={t("Revoke {name}", { name })}
 									onClick={() => revoke(s)}
 								>
-									Revoke
+									{t("Revoke")}
 								</Button>
 							)}
 						</li>

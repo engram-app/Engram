@@ -1,6 +1,7 @@
 import type { EditorView } from "@codemirror/view";
 import { Bold, Code, Heading, Italic, Link, List, Quote } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useT } from "@/i18n/locale-provider";
 import { toggleLinePrefix, toggleWrap } from "./format-commands";
 
 /**
@@ -11,6 +12,7 @@ import { toggleLinePrefix, toggleWrap } from "./format-commands";
  * decision, not a verdict on the feature.
  */
 export function EditorToolbar({ getView }: { getView: () => EditorView | null }) {
+	const { t } = useT();
 	const run = (fn: (v: EditorView) => void) => () => {
 		const v = getView();
 		if (v) {
@@ -21,12 +23,12 @@ export function EditorToolbar({ getView }: { getView: () => EditorView | null })
 		<div
 			className="flex items-center gap-1 border-b px-2 py-1"
 			role="toolbar"
-			aria-label="Formatting"
+			aria-label={t("Formatting")}
 		>
 			<Button
 				variant="ghost"
 				size="icon"
-				aria-label="Bold"
+				aria-label={t("Bold")}
 				onClick={run((v) => toggleWrap(v, "**"))}
 			>
 				<Bold className="size-4" />
@@ -34,7 +36,7 @@ export function EditorToolbar({ getView }: { getView: () => EditorView | null })
 			<Button
 				variant="ghost"
 				size="icon"
-				aria-label="Italic"
+				aria-label={t("Italic")}
 				onClick={run((v) => toggleWrap(v, "*"))}
 			>
 				<Italic className="size-4" />
@@ -42,7 +44,7 @@ export function EditorToolbar({ getView }: { getView: () => EditorView | null })
 			<Button
 				variant="ghost"
 				size="icon"
-				aria-label="Inline code"
+				aria-label={t("Inline code")}
 				onClick={run((v) => toggleWrap(v, "`"))}
 			>
 				<Code className="size-4" />
@@ -50,7 +52,7 @@ export function EditorToolbar({ getView }: { getView: () => EditorView | null })
 			<Button
 				variant="ghost"
 				size="icon"
-				aria-label="Heading"
+				aria-label={t("Heading")}
 				onClick={run((v) => toggleLinePrefix(v, "# "))}
 			>
 				<Heading className="size-4" />
@@ -58,7 +60,7 @@ export function EditorToolbar({ getView }: { getView: () => EditorView | null })
 			<Button
 				variant="ghost"
 				size="icon"
-				aria-label="Quote"
+				aria-label={t("Quote")}
 				onClick={run((v) => toggleLinePrefix(v, "> "))}
 			>
 				<Quote className="size-4" />
@@ -66,7 +68,7 @@ export function EditorToolbar({ getView }: { getView: () => EditorView | null })
 			<Button
 				variant="ghost"
 				size="icon"
-				aria-label="List"
+				aria-label={t("List")}
 				onClick={run((v) => toggleLinePrefix(v, "- "))}
 			>
 				<List className="size-4" />
@@ -74,7 +76,7 @@ export function EditorToolbar({ getView }: { getView: () => EditorView | null })
 			<Button
 				variant="ghost"
 				size="icon"
-				aria-label="Link"
+				aria-label={t("Link")}
 				onClick={run((v) => toggleWrap(v, "[", "](url)"))}
 			>
 				<Link className="size-4" />

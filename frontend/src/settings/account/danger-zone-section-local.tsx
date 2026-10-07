@@ -13,15 +13,15 @@ import {
 	DialogTitle,
 	DialogTrigger,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { useT } from "@/i18n/locale-provider";
 import { useDeleteSelf } from "../../api/queries";
 import { useAuthAdapter } from "../../auth/use-auth-adapter";
 import { ROUTES } from "../../routes";
 import { SettingsSectionCard } from "./section-card";
 
-const inputClass =
-	"mt-1 block w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring";
-
 export function DangerZoneSectionLocal() {
+	const { t } = useT();
 	const { logout } = useAuthAdapter();
 	const navigate = useNavigate();
 	const deleter = useDeleteSelf();
@@ -40,17 +40,19 @@ export function DangerZoneSectionLocal() {
 		setError(null);
 		try {
 			await deleter.mutateAsync({ password });
-			toast.success("Account deleted");
+			toast.success(t("Account deleted"));
 			await logout();
 			navigate(ROUTES.SIGN_IN);
 		} catch (err) {
-			const msg = err instanceof Error ? err.message : "Delete failed";
+			const msg = err instanceof Error ? err.message : t("Delete failed");
 			if (msg.includes("last_admin")) {
 				setError(
-					"You're the only admin on this instance. Promote another user to admin first, then try again.",
+					t(
+						"You're the only admin on this instance. Promote another user to admin first, then try again.",
+					),
 				);
 			} else if (msg.includes("invalid_password")) {
-				setError("Incorrect password.");
+				setError(t("Incorrect password."));
 			} else {
 				setError(msg);
 			}
@@ -59,8 +61,10 @@ export function DangerZoneSectionLocal() {
 
 	return (
 		<SettingsSectionCard
-			title="Danger zone"
-			description="Permanent actions. Deleting your account signs you out and blocks future sign-ins to this user."
+			title={t("Danger zone")}
+			description={t(
+				"Permanent actions. Deleting your account signs you out and blocks future sign-ins to this user.",
+			)}
 		>
 			<Dialog
 				open={open}
@@ -72,23 +76,24 @@ export function DangerZoneSectionLocal() {
 				}}
 			>
 				<DialogTrigger asChild>
-					<Button type="button" variant="destructive" size="sm">
-						Delete account
+					<Button type="button" variant="destructive">
+						{t("Delete account")}
 					</Button>
 				</DialogTrigger>
 				<DialogContent>
 					<DialogHeader>
-						<DialogTitle>Delete your account?</DialogTitle>
+						<DialogTitle>{t("Delete your account?")}</DialogTitle>
 						<DialogDescription>
-							This soft-deletes your user. You won&apos;t be able to sign back in. An admin can
-							purge your vault data later.
+							{t(
+								"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.",
+							)}
 						</DialogDescription>
 					</DialogHeader>
 					<fieldset className="space-y-3">
 						<label className="block font-medium text-foreground text-sm">
-							Password
-							<input
-								className={inputClass}
+							{t("Password")}
+							<Input
+								className="mt-1 block"
 								type="password"
 								autoComplete="current-password"
 								value={password}
@@ -99,26 +104,25 @@ export function DangerZoneSectionLocal() {
 							<Checkbox
 								checked={confirmed}
 								onCheckedChange={(v) => setConfirmed(v === true)}
-								aria-label="I understand this is irreversible"
+								aria-label={t("I understand this is irreversible")}
 							/>
-							I understand this is irreversible
+							{t("I understand this is irreversible")}
 						</label>
 						{Boolean(error) && <p className="text-destructive text-sm">{error}</p>}
 					</fieldset>
 					<DialogFooter>
 						<DialogClose asChild>
-							<Button type="button" variant="outline" size="sm">
-								Cancel
+							<Button type="button" variant="outline">
+								{t("Cancel")}
 							</Button>
 						</DialogClose>
 						<Button
 							type="button"
 							variant="destructive"
-							size="sm"
 							disabled={!confirmed || password.length === 0 || deleter.isPending}
 							onClick={onDelete}
 						>
-							Delete
+							{t("Delete")}
 						</Button>
 					</DialogFooter>
 				</DialogContent>

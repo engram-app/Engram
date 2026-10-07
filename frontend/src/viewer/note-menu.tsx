@@ -9,6 +9,7 @@ import {
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { useT } from "@/i18n/locale-provider";
 import { ActionDrawer } from "./tree-actions/action-drawer";
 import {
 	ACTION_ICONS,
@@ -30,6 +31,7 @@ interface Props {
  * surfaces in the app behave identically on touch.
  */
 export function NoteMenu({ mode, title, onPick }: Props) {
+	const { t } = useT();
 	const isDesktop = useMediaQuery("(min-width: 768px)");
 	const [drawerOpen, setDrawerOpen] = useState(false);
 	const actions = noteMenuActions(mode);
@@ -40,7 +42,7 @@ export function NoteMenu({ mode, title, onPick }: Props) {
 				<Button
 					variant="ghost"
 					size="icon"
-					aria-label="Note options"
+					aria-label={t("Note options")}
 					onClick={() => setDrawerOpen(true)}
 				>
 					<MoreVertical className="size-4" />
@@ -65,7 +67,7 @@ export function NoteMenu({ mode, title, onPick }: Props) {
 		// need to trap focus or lock scroll.
 		<DropdownMenu modal={false}>
 			<DropdownMenuTrigger asChild>
-				<Button variant="ghost" size="icon" aria-label="Note options">
+				<Button variant="ghost" size="icon" aria-label={t("Note options")}>
 					<MoreVertical className="size-4" />
 				</Button>
 			</DropdownMenuTrigger>
@@ -87,7 +89,7 @@ export function NoteMenu({ mode, title, onPick }: Props) {
 								onSelect={() => onPick(action.id)}
 							>
 								<Icon aria-hidden="true" className="size-4" />
-								{action.label}
+								{t(action.label)}
 							</DropdownMenuItem>
 						</Fragment>
 					);
