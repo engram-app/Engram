@@ -17,10 +17,10 @@ const SELECTED = "cm-atomic-table-cell-selected";
 let view: EditorView;
 afterEach(() => view?.destroy());
 
-function mount(readOnly = false): HTMLElement[] {
+function mount(readOnly = false, doc = DOC): HTMLElement[] {
 	view = new EditorView({
 		state: EditorState.create({
-			doc: DOC,
+			doc,
 			extensions: [
 				markdown({ base: markdownLanguage }),
 				tables({}),
@@ -307,6 +307,161 @@ describe("Backspace / Delete on a cell selection", () => {
 		const before = view.state.doc.toString();
 		drag(3, 5);
 		press("Backspace");
+		expect(view.state.doc.toString()).toBe(before);
+	});
+});
+
+describe("copy / cut / paste on a cell selection", () => {
+	const HEADER = "| a | b | c |\n| --- | --- | --- |\n";
+
+	/** Fire a clipboard event on the table with an in-memory clipboard. */
+	function clip(type: "copy" | "cut" | "paste", preload: Record<string, string> = {}) {
+		const store: Record<string, string> = { ...preload };
+		const ev = new Event(type, { bubbles: true, cancelable: true });
+		Object.defineProperty(ev, "clipboardData", {
+			value: {
+				setData: (t: string, v: string) => {
+					store[t] = v;
+				},
+				getData: (t: string) => store[t] ?? "",
+			},
+		});
+		view.dom.querySelector(".cm-atomic-table")?.dispatchEvent(ev);
+		return { ev, store };
+	}
+
+	const paste = (text: string) => clip("paste", { "text/plain": text });
+
+	/** The table's markdown, without the trailing "after" paragraph. */
+	function table(): string {
+		return view.state.doc.toString().split("\n\nafter")[0] ?? "";
+	}
+
+	test("copy puts the box on the clipboard as tab-separated text", () => {
+		mount();
+		drag(3, 8);
+		const { ev, store } = clip("copy");
+		expect(store["text/plain"]).toBe("1\t2\t3\n4\t5\t6");
+		expect(ev.defaultPrevented).toBe(true);
+	});
+
+	test("copy takes only the selected box", () => {
+		mount();
+		drag(1, 8);
+		expect(clip("copy").store["text/plain"]).toBe("b\tc\n2\t3\n5\t6");
+	});
+
+	test("copy also offers an HTML table, escaped", () => {
+		mount(false, "| a | b |\n| --- | --- |\n| x<y | 2 |\n");
+		drag(0, 3);
+		const html = clip("copy").store["text/html"] ?? "";
+		expect(html).toContain("<td>x&lt;y</td>");
+		expect(html).toContain("<td>2</td>");
+	});
+
+	test("copy with no selection is left to the browser", () => {
+		mount();
+		const { ev, store } = clip("copy");
+		expect(ev.defaultPrevented).toBe(false);
+		expect(store["text/plain"]).toBeUndefined();
+	});
+
+	test("copy works on a read-only table", () => {
+		mount(true);
+		drag(3, 5);
+		expect(clip("copy").store["text/plain"]).toBe("1\t2\t3");
+	});
+
+	test("cut copies, then clears the contents", () => {
+		mount();
+		drag(3, 4);
+		expect(clip("cut").store["text/plain"]).toBe("1\t2");
+		expect(table()).toBe(`${HEADER}|  |  | 3 |\n| 4 | 5 | 6 |`);
+	});
+
+	test("cut never removes a row, even a fully selected one", () => {
+		mount();
+		drag(3, 5);
+		clip("cut");
+		expect(table()).toBe(`${HEADER}|  |  |  |\n| 4 | 5 | 6 |`);
+	});
+
+	test("cut on a read-only table copies but does not edit", () => {
+		mount(true);
+		const before = view.state.doc.toString();
+		drag(3, 5);
+		expect(clip("cut").store["text/plain"]).toBe("1\t2\t3");
+		expect(view.state.doc.toString()).toBe(before);
+	});
+
+	test("paste fills the grid from the top-left of the selection", () => {
+		mount();
+		drag(4, 5);
+		paste("x\ty\nz\tw");
+		expect(table()).toBe(`${HEADER}| 1 | x | y |\n| 4 | z | w |`);
+	});
+
+	test("paste clips columns that would fall off the right edge", () => {
+		mount();
+		drag(4, 5);
+		paste("p\tq\tr");
+		expect(table()).toBe(`${HEADER}| 1 | p | q |\n| 4 | 5 | 6 |`);
+	});
+
+	test("paste grows the table by rows when the clipboard is taller", () => {
+		mount();
+		drag(6, 7);
+		paste("a\nb\nc");
+		expect(table()).toBe(`${HEADER}| 1 | 2 | 3 |\n| a | 5 | 6 |\n| b |  |  |\n| c |  |  |`);
+	});
+
+	test("a single pasted value fills every selected cell", () => {
+		mount();
+		drag(3, 8);
+		paste("X");
+		expect(table()).toBe(`${HEADER}| X | X | X |\n| X | X | X |`);
+	});
+
+	test("paste accepts CRLF and ignores one trailing newline", () => {
+		mount();
+		drag(3, 6);
+		paste("x\r\ny\r\n");
+		expect(table()).toBe(`${HEADER}| x | 2 | 3 |\n| y | 5 | 6 |`);
+	});
+
+	test("the pasted block becomes the selection", () => {
+		mount();
+		drag(4, 5);
+		paste("x\ty\nz\tw");
+		expect(selected()).toEqual([4, 5, 7, 8]);
+	});
+
+	test("a pasted pipe is escaped so it cannot split the cell", () => {
+		mount();
+		drag(3, 4);
+		paste("a|b\tc");
+		expect(table()).toContain("| a\\|b | c | 3 |");
+	});
+
+	test("paste with no selection is left to the browser", () => {
+		mount();
+		const { ev } = paste("x");
+		expect(ev.defaultPrevented).toBe(false);
+	});
+
+	test("paste into a read-only table does nothing", () => {
+		mount(true);
+		const before = view.state.doc.toString();
+		drag(3, 5);
+		paste("x");
+		expect(view.state.doc.toString()).toBe(before);
+	});
+
+	test("paste with an empty clipboard does nothing", () => {
+		mount();
+		const before = view.state.doc.toString();
+		drag(3, 5);
+		paste("");
 		expect(view.state.doc.toString()).toBe(before);
 	});
 });

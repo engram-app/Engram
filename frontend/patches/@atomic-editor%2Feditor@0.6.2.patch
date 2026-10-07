@@ -13,6 +13,9 @@ index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-aaf59be8206d5639 b/.bun-tag-aaf59be8206d5639
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-b67033a3d87fcc61 b/.bun-tag-b67033a3d87fcc61
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/styles/inline-preview.css b/dist/styles/inline-preview.css
 index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..406f28d1a6410cecac9a1b6000a5285894c0afb9 100644
 --- a/dist/styles/inline-preview.css
@@ -105,7 +108,7 @@ index ff02d57548388e468f73695f3bd45ec58be38160..d2f2a04758594f7b202cda3897ac7321
  export declare function tables(config?: TablesConfig): Extension;
  export {};
 diff --git a/dist/table-widget.js b/dist/table-widget.js
-index aee407c4aaa2eea5a46c0fa28831dcc80985c783..d5526b1b55602ead51719431d47a07d8ab693ba2 100644
+index aee407c4aaa2eea5a46c0fa28831dcc80985c783..ba476e31d101b362f570986bc17c38f1c1255d96 100644
 --- a/dist/table-widget.js
 +++ b/dist/table-widget.js
 @@ -172,6 +172,19 @@ function matchCellMarkAt(raw, from) {
@@ -171,7 +174,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..d5526b1b55602ead51719431d47a07d8
  ];
  function isMarkWrap(el) {
      for (const c of MARK_WRAP_CLASSES)
-@@ -528,6 +570,290 @@ function placeCaretAtEnd(el) {
+@@ -528,6 +570,407 @@ function placeCaretAtEnd(el) {
  function getAllCells(wrap) {
      return Array.from(wrap.querySelectorAll('th, td'));
  }
@@ -327,20 +330,47 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..d5526b1b55602ead51719431d47a07d8
 +// cell contents. The header row can't be removed, so a full-row box that
 +// includes it clears the header and drops the body rows. A box covering the
 +// whole table is both "full rows" and "full columns": it only clears.
-+function deleteCellSelection(view, wrap) {
-+    if (view.state.facet(readOnlyFacet))
-+        return false;
++function selectionInfo(wrap) {
 +    const cells = getAllCells(wrap);
 +    const cols = wrap.querySelectorAll('thead th').length || 1;
 +    const selected = cells.filter((c) => c.classList.contains(CELL_SELECTED));
 +    if (selected.length === 0)
++        return null;
++    const idx = selected.map((c) => cells.indexOf(c));
++    const rows = idx.map((i) => Math.floor(i / cols));
++    const cs = idx.map((i) => i % cols);
++    return {
++        cells,
++        cols,
++        selected,
++        r0: Math.min(...rows),
++        r1: Math.max(...rows),
++        c0: Math.min(...cs),
++        c1: Math.max(...cs),
++    };
++}
++// Write a cell's raw markdown and re-render its decorated DOM. The widget's
++// `eq` ignores content, so edits that keep the table's shape must touch the DOM
++// directly and then sync the document with `dispatchModelFromDom`.
++function setCellRaw(cell, text) {
++    cell.dataset.raw = text;
++    const source = getCellSource(cell);
++    if (source)
++        renderCellSourceDecorated(source);
++    refreshCellPreview(cell);
++}
++function clearSelectedCells(view, info) {
++    for (const cell of info.selected)
++        setCellRaw(cell, '');
++    dispatchModelFromDom(view, info.selected[0]);
++}
++function deleteCellSelection(view, wrap) {
++    if (view.state.facet(readOnlyFacet))
 +        return false;
-+    const rows = selected.map((c) => Math.floor(cells.indexOf(c) / cols));
-+    const cs = selected.map((c) => cells.indexOf(c) % cols);
-+    const r0 = Math.min(...rows);
-+    const r1 = Math.max(...rows);
-+    const c0 = Math.min(...cs);
-+    const c1 = Math.max(...cs);
++    const info = selectionInfo(wrap);
++    if (!info)
++        return false;
++    const { cells, cols, r0, r1, c0, c1 } = info;
 +    const fullRows = c0 === 0 && c1 === cols - 1;
 +    const fullCols = r0 === 0 && r1 === cells.length / cols - 1;
 +    if (fullRows !== fullCols) {
@@ -360,15 +390,79 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..d5526b1b55602ead51719431d47a07d8
 +        view.focus();
 +        return true;
 +    }
-+    for (const cell of selected) {
-+        cell.dataset.raw = '';
-+        const source = getCellSource(cell);
-+        if (source)
-+            renderCellSourceDecorated(source);
-+        refreshCellPreview(cell);
-+    }
-+    dispatchModelFromDom(view, selected[0]);
++    clearSelectedCells(view, info);
 +    return true;
++}
++// ---- copy / cut / paste on a cell selection ---------------------------
++// Copy and cut put the selected box on the clipboard as TSV (plus an HTML
++// table); cut then clears the contents. Paste fills a grid of TSV from the
++// box's top-left cell: columns past the right edge are clipped, extra rows
++// are appended. A single pasted value fills every selected cell.
++function cellText(cell) {
++    return readCellSource(cell).replace(/\\\|/g, '|');
++}
++function escapeHtml(text) {
++    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
++}
++function writeCellSelectionToClipboard(info, data) {
++    const rows = [];
++    for (let r = info.r0; r <= info.r1; r++) {
++        const row = [];
++        for (let c = info.c0; c <= info.c1; c++)
++            row.push(cellText(info.cells[r * info.cols + c]));
++        rows.push(row);
++    }
++    data.setData('text/plain', rows.map((row) => row.join('\t')).join('\n'));
++    data.setData('text/html', '<table><tbody>' +
++        rows.map((row) => '<tr>' + row.map((t) => `<td>${escapeHtml(t)}</td>`).join('') + '</tr>').join('') +
++        '</tbody></table>');
++}
++function parseClipboardGrid(text) {
++    const t = text.replace(/\r\n?/g, '\n').replace(/\n$/, '');
++    if (t === '')
++        return null;
++    return t.split('\n').map((line) => line.split('\t'));
++}
++function pasteIntoCellSelection(view, wrap, info, grid) {
++    const { cells, cols, r0, c0 } = info;
++    if (grid.length === 1 && grid[0].length === 1 && info.selected.length > 1) {
++        for (const cell of info.selected)
++            setCellRaw(cell, grid[0][0]);
++        dispatchModelFromDom(view, info.selected[0]);
++        return;
++    }
++    const needRows = r0 + grid.length - cells.length / cols;
++    if (needRows > 0) {
++        const m = readModelFromDom(wrap);
++        for (let k = 0; k < needRows; k++)
++            m.rows.push(m.header.map(() => ''));
++        grid.forEach((line, i) => line.forEach((v, j) => {
++            const tr = r0 + i;
++            const tc = c0 + j;
++            if (tc >= cols)
++                return;
++            if (tr === 0)
++                m.header[tc] = v;
++            else
++                m.rows[tr - 1][tc] = v;
++        }));
++        dispatchModel(view, wrap, m);
++        view.focus();
++        return;
++    }
++    let first = null;
++    grid.forEach((line, i) => line.forEach((v, j) => {
++        if (c0 + j >= cols)
++            return;
++        const cell = cells[(r0 + i) * cols + c0 + j];
++        setCellRaw(cell, v);
++        first ??= cell;
++    }));
++    if (!first)
++        return;
++    dispatchModelFromDom(view, first);
++    const width = Math.max(...grid.map((line) => line.length));
++    paintCellBox(wrap, cells[r0 * cols + c0], cells[(r0 + grid.length - 1) * cols + Math.min(cols - 1, c0 + width - 1)]);
 +}
 +function attachCellSelection(wrap, view) {
 +    let anchor = null;
@@ -448,6 +542,32 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..d5526b1b55602ead51719431d47a07d8
 +            e.preventDefault();
 +    });
 +    wrap.addEventListener('input', clear);
++    wrap.addEventListener('copy', (e) => {
++        const info = selectionInfo(wrap);
++        if (!info || !e.clipboardData)
++            return;
++        e.preventDefault();
++        writeCellSelectionToClipboard(info, e.clipboardData);
++    });
++    wrap.addEventListener('cut', (e) => {
++        const info = selectionInfo(wrap);
++        if (!info || !e.clipboardData)
++            return;
++        e.preventDefault();
++        writeCellSelectionToClipboard(info, e.clipboardData);
++        if (!view.state.facet(readOnlyFacet))
++            clearSelectedCells(view, info);
++    });
++    wrap.addEventListener('paste', (e) => {
++        const info = selectionInfo(wrap);
++        if (!info || !e.clipboardData || view.state.facet(readOnlyFacet))
++            return;
++        const grid = parseClipboardGrid(e.clipboardData.getData('text/plain'));
++        if (!grid)
++            return;
++        e.preventDefault();
++        pasteIntoCellSelection(view, wrap, info, grid);
++    });
 +    wrap.addEventListener('keydown', (e) => {
 +        if (e.key !== 'Backspace' && e.key !== 'Delete')
 +            return;
@@ -462,7 +582,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..d5526b1b55602ead51719431d47a07d8
  // ---- widget ---------------------------------------------------------
  class TableWidget extends WidgetType {
      constructor(model, readOnly) {
-@@ -585,6 +911,7 @@ class TableWidget extends WidgetType {
+@@ -585,6 +1028,7 @@ class TableWidget extends WidgetType {
              tbody.appendChild(tr);
          }
          table.appendChild(tbody);
@@ -470,7 +590,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..d5526b1b55602ead51719431d47a07d8
          return wrap;
      }
      // All cell interactions are handled by the listeners we attach in
-@@ -629,17 +956,37 @@ function makeCell(tag, text, view) {
+@@ -629,17 +1073,37 @@ function makeCell(tag, text, view) {
      // opened. We open on `click` (a proper popup-activation gesture, so
      // `window.open` isn't blocked) and block the caret on `pointerdown`.
      //
@@ -513,7 +633,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..d5526b1b55602ead51719431d47a07d8
      source.addEventListener('pointerdown', (event) => {
          if (event.button !== 0)
              return;
-@@ -678,7 +1025,12 @@ function attachCellEditing(view, cell, source) {
+@@ -678,7 +1142,12 @@ function attachCellEditing(view, cell, source) {
          // textContent (not innerText) so `display: none` delimiters inside
          // mark wraps are still captured — otherwise a cell containing
          // `**bold**` would serialize to just `bold` on every keystroke.
@@ -527,7 +647,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..d5526b1b55602ead51719431d47a07d8
          cell.dataset.raw = raw;
          const offset = getCaretCharOffset(source);
          renderCellSourceDecorated(source);
-@@ -737,6 +1089,15 @@ function attachCellEditing(view, cell, source) {
+@@ -737,6 +1206,15 @@ function attachCellEditing(view, cell, source) {
      // hides all delimiters.
      source.addEventListener('blur', () => clearActiveMarksInSource(source));
      source.addEventListener('keydown', (event) => {
@@ -543,7 +663,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..d5526b1b55602ead51719431d47a07d8
          // Enter mirrors Tab — advance to the next cell (appending a row past
          // the last one) instead of inserting a line break a single-line cell
          // can't represent. Shift reverses direction for both.
-@@ -1191,13 +1552,21 @@ const defaultLinkOpener = (url) => {
+@@ -1191,13 +1669,21 @@ const defaultLinkOpener = (url) => {
  export const tableLinkClickFacet = Facet.define({
      combine: (values) => values[0] ?? defaultLinkOpener,
  });
