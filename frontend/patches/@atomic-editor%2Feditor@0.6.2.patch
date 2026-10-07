@@ -1,8 +1,260 @@
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-9d67fe100061cfe b/.bun-tag-9d67fe100061cfe
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/dist/styles/inline-preview.css b/dist/styles/inline-preview.css
+index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..b73822a7e8494a38f1624a34ce8bcd3b6533f094 100644
+--- a/dist/styles/inline-preview.css
++++ b/dist/styles/inline-preview.css
+@@ -523,6 +523,8 @@
+ .cm-atomic-table-cell-source .cm-atomic-em-wrap.active > .cm-atomic-mark,
+ .cm-atomic-table-cell-source .cm-atomic-strike-wrap.active > .cm-atomic-mark,
+ .cm-atomic-table-cell-source .cm-atomic-highlight-wrap.active > .cm-atomic-mark,
++.cm-atomic-table-cell-source .cm-atomic-code-wrap.active > .cm-atomic-mark,
++.cm-atomic-table-cell-source .cm-atomic-wikilink-wrap.active > .cm-atomic-mark,
+ .cm-atomic-table-cell-source .cm-atomic-link-wrap.active > .cm-atomic-mark {
+   display: inline;
+   color: var(--atomic-editor-fg-faint, #666);
+diff --git a/dist/table-widget.d.ts b/dist/table-widget.d.ts
+index ff02d57548388e468f73695f3bd45ec58be38160..d2f2a04758594f7b202cda3897ac7321021ad3c3 100644
+--- a/dist/table-widget.d.ts
++++ b/dist/table-widget.d.ts
+@@ -22,6 +22,13 @@ type CellToken = {
+ } | {
+     type: 'highlight';
+     children: CellToken[];
++} | {
++    type: 'code';
++    text: string;
++} | {
++    type: 'wikilink';
++    rawTarget: string;
++    rawLabel: string | null;
+ } | {
+     type: 'link';
+     textChildren: CellToken[];
+@@ -35,7 +42,13 @@ export interface TablesConfig {
+      * '_blank', 'noopener,noreferrer')`.
+      */
+     onLinkClick?: (url: string) => void;
++    /**
++     * Called when the user clicks a `[[wikilink]]` rendered inside a table
++     * cell, with the raw (unresolved) target. Default: no-op.
++     */
++    onWikiLinkClick?: (target: string) => void;
+ }
++export declare const tableWikiLinkClickFacet: Facet<(target: string) => void, (target: string) => void>;
+ export declare const tableLinkClickFacet: Facet<(url: string) => void, (url: string) => void>;
+ export declare function tables(config?: TablesConfig): Extension;
+ export {};
 diff --git a/dist/table-widget.js b/dist/table-widget.js
-index aee407c4aaa2eea5a46c0fa28831dcc80985c783..caa22d55ed818814571e1c18a502584fc6960319 100644
+index aee407c4aaa2eea5a46c0fa28831dcc80985c783..bedc66588ac76f26926669afccc978c0eee165f1 100644
 --- a/dist/table-widget.js
 +++ b/dist/table-widget.js
-@@ -678,7 +678,12 @@ function attachCellEditing(view, cell, source) {
+@@ -172,6 +172,19 @@ function matchCellMarkAt(raw, from) {
+             end: highlight.end,
+         };
+     }
++    // Inline code. Opaque: nothing inside is parsed, so `**x**` stays literal.
++    m = rest.match(/^`([^`\n]+)`/);
++    if (m) {
++        return { token: { type: 'code', text: m[1] }, end: from + m[0].length };
++    }
++    // Wikilink `[[target]]` / `[[target|label]]`. Must precede the `[text](url)` rule.
++    m = rest.match(/^\[\[([^\]\n|\\]+?)(?:\\?\|([^\]\n]*))?\]\]/);
++    if (m && m[1].trim()) {
++        return {
++            token: { type: 'wikilink', rawTarget: m[1], rawLabel: m[2] ?? null },
++            end: from + m[0].length,
++        };
++    }
+     // Link `[text](url)`. Reject empty text / url via `+` quantifiers.
+     // `]` and `)` can't appear unescaped inside their respective fields.
+     m = rest.match(/^\[([^\]\n]+)\]\(([^\s)"'\n]+)\)/);
+@@ -273,6 +286,33 @@ function renderCellToken(tok) {
+         wrap.appendChild(makeCellMark('=='));
+         return wrap;
+     }
++    if (tok.type === 'code') {
++        const wrap = document.createElement('span');
++        wrap.className = 'cm-atomic-code-wrap';
++        wrap.appendChild(makeCellMark('`'));
++        const inner = document.createElement('span');
++        inner.className = 'cm-atomic-inline-code';
++        inner.textContent = tok.text;
++        wrap.appendChild(inner);
++        wrap.appendChild(makeCellMark('`'));
++        return wrap;
++    }
++    if (tok.type === 'wikilink') {
++        const wrap = document.createElement('span');
++        wrap.className = 'cm-atomic-wikilink-wrap';
++        wrap.appendChild(makeCellMark('[['));
++        if (tok.rawLabel != null) {
++            // Alias form: the target is syntax (revealed on caret entry), the label is the link.
++            wrap.appendChild(makeCellMark(`${tok.rawTarget}|`));
++        }
++        const link = document.createElement('span');
++        link.className = 'cm-atomic-wiki-link cm-atomic-wiki-link-resolved';
++        link.dataset.wikiLinkTarget = tok.rawTarget.trim();
++        link.textContent = tok.rawLabel ?? tok.rawTarget;
++        wrap.appendChild(link);
++        wrap.appendChild(makeCellMark(']]'));
++        return wrap;
++    }
+     // Link. Shape mirrors the outer-editor markup: `.cm-atomic-link` on
+     // the visible text (picks up link color + external-link icon via
+     // `::after`), faint marks for `[`, `]`, `(`, URL, `)`, and highlight
+@@ -386,6 +426,8 @@ const MARK_WRAP_CLASSES = [
+     'cm-atomic-em-wrap',
+     'cm-atomic-strike-wrap',
+     'cm-atomic-link-wrap',
++    'cm-atomic-code-wrap',
++    'cm-atomic-wikilink-wrap',
+ ];
+ function isMarkWrap(el) {
+     for (const c of MARK_WRAP_CLASSES)
+@@ -528,6 +570,112 @@ function placeCaretAtEnd(el) {
+ function getAllCells(wrap) {
+     return Array.from(wrap.querySelectorAll('th, td'));
+ }
++// ---- vertical arrow navigation ---------------------------------------
++// The table is an atomic block widget to the outer editor, so ArrowDown/Up
++// on the neighbouring line used to jump straight over it, and inside a cell
++// the arrows never left it. These helpers make the table a normal stop in
++// the vertical caret path. `dir` is -1 (up) or +1 (down).
++function placeCaretAtStart(el) {
++    const range = document.createRange();
++    range.selectNodeContents(el);
++    range.collapse(true);
++    const sel = window.getSelection();
++    if (!sel)
++        return;
++    sel.removeAllRanges();
++    sel.addRange(range);
++}
++// A wrapped cell has several visual lines; only the first/last one may hand
++// the caret to the neighbouring row. No layout (collapsed rect) => assume a
++// single line.
++function caretOnEdgeLine(source, dir) {
++    const sel = source.ownerDocument.defaultView?.getSelection();
++    if (!sel || sel.rangeCount === 0)
++        return true;
++    const range = sel.getRangeAt(0);
++    const caret = range.getClientRects()[0] ?? range.getBoundingClientRect();
++    if (!caret || !caret.height)
++        return true;
++    const box = source.getBoundingClientRect();
++    const slack = caret.height * 0.75;
++    return dir < 0 ? caret.top - box.top < slack : box.bottom - caret.bottom < slack;
++}
++// Arrow pressed inside a cell: move to the cell above/below in the same
++// column, or step out to the line above/below the table. Returns false when
++// the browser should handle the key (cell has more lines in that direction).
++function arrowFromCell(view, cell, dir) {
++    const wrap = cell.closest('.cm-atomic-table');
++    const source = getCellSource(cell);
++    if (!wrap || !source || !caretOnEdgeLine(source, dir))
++        return false;
++    const cells = getAllCells(wrap);
++    const idx = cells.indexOf(cell);
++    if (idx < 0)
++        return false;
++    const cols = wrap.querySelectorAll('thead th').length || 1;
++    const target = cells[idx + dir * cols];
++    if (target) {
++        const offset = getCaretCharOffset(source);
++        const next = getCellSource(target);
++        if (!next)
++            return false;
++        next.focus();
++        placeCaretAtStart(next);
++        if (offset != null)
++            setCaretCharOffset(next, offset);
++        updateActiveMarkForSource(next);
++        return true;
++    }
++    const range = findCurrentTableRange(view, wrap);
++    if (!range)
++        return false;
++    const docLen = view.state.doc.length;
++    // Table flush against the doc edge: nowhere to go, but swallow the key so
++    // the browser doesn't move the caret out of the contenteditable.
++    if (dir < 0 ? range.from === 0 : range.to >= docLen)
++        return true;
++    const pos = dir < 0 ? range.from - 1 : Math.min(range.to + 1, docLen);
++    view.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
++    view.focus();
++    return true;
++}
++// Arrow pressed in the document on the line directly above/below a table:
++// enter it (first cell going down, last row going up).
++function arrowIntoTable(dir) {
++    return (view) => {
++        const { state } = view;
++        if (state.facet(readOnlyFacet))
++            return false;
++        const sel = state.selection.main;
++        if (!sel.empty)
++            return false;
++        const line = state.doc.lineAt(sel.head);
++        const edge = dir > 0 ? line.to + 1 : line.from - 1;
++        let hit = null;
++        state.field(tableField, false)?.between(edge, edge, (from, to) => {
++            if (dir > 0 ? from === edge : to === edge)
++                hit = { from, to };
++        });
++        if (!hit)
++            return false;
++        const found = hit;
++        const wrap = Array.from(view.contentDOM.querySelectorAll('.cm-atomic-table')).find((w) => {
++            const pos = view.posAtDOM(w);
++            return pos >= found.from && pos <= found.to;
++        });
++        if (!wrap)
++            return false;
++        const cells = getAllCells(wrap);
++        const cols = wrap.querySelectorAll('thead th').length || 1;
++        const source = getCellSource(cells[dir > 0 ? 0 : cells.length - cols]);
++        if (!source)
++            return false;
++        source.focus();
++        placeCaretAtStart(source);
++        updateActiveMarkForSource(source);
++        return true;
++    };
++}
+ // ---- widget ---------------------------------------------------------
+ class TableWidget extends WidgetType {
+     constructor(model, readOnly) {
+@@ -640,6 +788,27 @@ function makeCell(tag, text, view) {
+         const selector = readOnly ? '.cm-atomic-link-wrap' : '.cm-atomic-link-icon';
+         return target.closest(selector);
+     };
++    // Wikilinks open on plain click, like the outer editor. The outer
++    // `wikiLinks()` click handler never sees these (the table widget sets
++    // `ignoreEvent() => true`), so route through `tableWikiLinkClickFacet`.
++    const wikiLinkFromEvent = (event) => {
++        const target = event.target;
++        return target instanceof Element ? target.closest('.cm-atomic-wiki-link') : null;
++    };
++    source.addEventListener('pointerdown', (event) => {
++        if (event.button === 0 && wikiLinkFromEvent(event))
++            event.preventDefault();
++    });
++    source.addEventListener('click', (event) => {
++        if (event.button !== 0 || event.shiftKey || event.altKey)
++            return;
++        const target = wikiLinkFromEvent(event)?.dataset.wikiLinkTarget;
++        if (!target)
++            return;
++        event.preventDefault();
++        event.stopPropagation();
++        view.state.facet(tableWikiLinkClickFacet)(target);
++    });
+     source.addEventListener('pointerdown', (event) => {
+         if (event.button !== 0)
+             return;
+@@ -678,7 +847,12 @@ function attachCellEditing(view, cell, source) {
          // textContent (not innerText) so `display: none` delimiters inside
          // mark wraps are still captured — otherwise a cell containing
          // `**bold**` would serialize to just `bold` on every keystroke.
@@ -16,3 +268,43 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..caa22d55ed818814571e1c18a502584f
          cell.dataset.raw = raw;
          const offset = getCaretCharOffset(source);
          renderCellSourceDecorated(source);
+@@ -737,6 +911,15 @@ function attachCellEditing(view, cell, source) {
+     // hides all delimiters.
+     source.addEventListener('blur', () => clearActiveMarksInSource(source));
+     source.addEventListener('keydown', (event) => {
++        if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') &&
++            !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey &&
++            !composing && !event.isComposing) {
++            if (arrowFromCell(view, cell, event.key === 'ArrowUp' ? -1 : 1)) {
++                event.preventDefault();
++                event.stopPropagation();
++            }
++            return;
++        }
+         // Enter mirrors Tab — advance to the next cell (appending a row past
+         // the last one) instead of inserting a line break a single-line cell
+         // can't represent. Shift reverses direction for both.
+@@ -1191,13 +1374,21 @@ const defaultLinkOpener = (url) => {
+ export const tableLinkClickFacet = Facet.define({
+     combine: (values) => values[0] ?? defaultLinkOpener,
+ });
++export const tableWikiLinkClickFacet = Facet.define({
++    combine: (values) => values[0] ?? (() => { }),
++});
+ export function tables(config = {}) {
+     return [
+         tableField,
+         treeProgressPlugin,
+         ...(config.onLinkClick ? [tableLinkClickFacet.of(config.onLinkClick)] : []),
++        ...(config.onWikiLinkClick ? [tableWikiLinkClickFacet.of(config.onWikiLinkClick)] : []),
+         // Prec.high so we run before the default Backspace binding.
+-        Prec.high(keymap.of([{ key: 'Backspace', run: backspaceAtTableBoundary }])),
++        Prec.high(keymap.of([
++            { key: 'Backspace', run: backspaceAtTableBoundary },
++            { key: 'ArrowDown', run: arrowIntoTable(1) },
++            { key: 'ArrowUp', run: arrowIntoTable(-1) },
++        ])),
+     ];
+ }
+ //# sourceMappingURL=table-widget.js.map
+\ No newline at end of file

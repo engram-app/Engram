@@ -117,7 +117,9 @@ export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 		// layout/surface colors, not per-token highlighting.
 		atomicMarkdownSyntax,
 		atomicEditorTheme,
-		tables({}),
+		// Table cells are a widget the `wikiLinks()` click handler never sees, so
+		// route their wikilink clicks through the same resolve → open path.
+		tables({ onWikiLinkClick: (target) => opts.openWikiLink(opts.resolveWikiLink(target)) }),
 		imageBlocks(),
 		// Prec.high so the embed's replace wins over the wikilink widget that would
 		// otherwise claim the `[[...]]` inside `![[...]]`.

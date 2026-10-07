@@ -121,4 +121,24 @@ describe("image embeds", () => {
 		const names = [...view.dom.querySelectorAll(".cm-atomic-wiki-link")].map((e) => e.textContent);
 		expect(names).not.toContain("pic.png");
 	});
+
+	test("a wikilink inside a table cell opens through openWikiLink, resolved like any other", () => {
+		const openWikiLink = vi.fn();
+		view = new EditorView({
+			state: EditorState.create({
+				doc: "| h |\n| --- |\n| see [[Wiki Link]] |\n",
+				extensions: livePreviewExtensions({
+					resolveWikiLink: (n) => `/w/wiki/${n}`,
+					openWikiLink,
+					wikiCompletionPaths: () => [],
+					openMarkdownLink: () => false,
+				}),
+			}),
+			parent: document.body,
+		});
+		const link = view.dom.querySelector(".cm-atomic-table .cm-atomic-wiki-link");
+		expect(link).not.toBeNull();
+		link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+		expect(openWikiLink).toHaveBeenCalledExactlyOnceWith("/w/wiki/Wiki Link");
+	});
 });
