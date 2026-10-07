@@ -42,7 +42,7 @@ App is at http://127.0.0.1:5173 through the SSH tunnel (see `local-browser-cdp-t
 
 - [ ] **Sign-in / first run:** heading, field labels, placeholders, validation errors, reset-password page, invite-required and invalid-invite states.
 - [ ] **Onboarding, self-host:** tools -> vault (Obsidian panel, "starting fresh" panel; the vault name field starts as the translated default; untouched, it is stored as English `My Vault`) -> dashboard.
-- [ ] **Onboarding, SaaS:** Clerk sign-up -> agreement (consent text English by design) -> billing (Continue with Free; Pro/Starter/Free names) -> tools -> vault -> dashboard.
+- [ ] **Onboarding, SaaS:** Clerk sign-up -> agreement (intro, privacy link and checkbox translated; the Terms body stays English) -> billing (Continue with Free; Pro/Starter/Free names) -> tools -> vault -> dashboard.
 - [ ] **Settings > Account:** profile, Appearance (theme label reads `Theme: light|dark|system` as whole sentences), Language, session/sign-out, account deletion wording.
 - [ ] **Settings > Vaults:** list, create, rename, delete, deleted-vaults (trash, "Purges" column, 30-day recovery sentence).
 - [ ] **Settings > Connections:** device vs external connection wording ("1 active {kind}" sentences), revoke/disconnect dialogs, free-tier limit text with the `{upgrade}` link.
@@ -90,7 +90,7 @@ None of them judge translation quality: a string passes if it differs from the E
 |---|---|
 | "Engram docs" | Translated in de (Engram-Doku), fr, it, ja, ko, ru, zh-CN, zh-TW (their marketing references translate "Docs"); left English in es and pt-BR (their references do not). Decide whether it should be uniform. |
 | Callout and markdown keywords | Callout type ids (`[!tip]`), fold markers, frontmatter keys, fence languages, mermaid ids and LaTeX stay English; callout titles in the gallery stay English; the renderer's omitted-title fallback is English too. |
-| Binding consent text | The Terms/agreement text and privacy-notice lines on the agreement step are English on purpose (legal text; the Terms body is server-provided). |
+| Binding consent text | Only the Terms body (server-provided, English) stays English. The agreement-step intro, privacy link and checkbox are translated. |
 | Plan names | "Free" is translated (de Kostenlos, es/it/pt-BR Gratuito, fr Gratuit, ja 無料, zh-CN 免费版, zh-TW 免費); ru keeps Pro/Starter/Free as tier names; zh-CN translates Starter/Pro (入门版/专业版); zh-TW keeps Starter/Pro. Check plan cards and "your {plan} plan" sentences. |
 | "Upgrade" as a `{upgrade}` link fragment | A lowercase verb link spliced into sentences ("Free tier: 1 connection. {upgrade}"). Each locale restructured around it; es/fr/it/pt-BR/ru/ja/ko/zh-* must be read rendered. German uses the noun "Upgrade" ("Mit einem Upgrade ..."). |
 | `{kind}` (device / external connection) | Genders differ per language, so de/es/fr/it/pt-BR reworded to avoid agreement ("1 conexión activa del tipo {kind}"); ru picked neuter forms; ko/ja/zh use particles/neutral nouns. |

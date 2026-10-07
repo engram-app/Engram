@@ -215,7 +215,7 @@ export default {
 	"Delete {name}": "Удалить {name}",
 	Pro: "Pro",
 	Starter: "Starter",
-	Free: "Free",
+	Free: "Бесплатный",
 	"Vaults ({used} / {cap})": "Хранилища ({used} / {cap})",
 	"Rename, set a default, or delete your vaults.":
 		"Переименуйте хранилища, задайте хранилище по умолчанию или удалите их.",
@@ -360,7 +360,7 @@ export default {
 	"Cancel at period end": "Отменить в конце периода",
 	"Keep my subscription": "Оставить подписку",
 	"You'll keep your {tier} plan until {date}, then drop to Free.":
-		"Вы сохраните план {tier} до {date}, затем перейдёте на Free.",
+		"Вы сохраните план {tier} до {date}, затем перейдёте на бесплатный план.",
 	"Access ends on": "Доступ закончится",
 	"Renews on": "Продление",
 	"Current Plan": "Текущий план",
@@ -399,19 +399,19 @@ export default {
 	"Upgrade to upload larger files.": "Перейдите на платный план, чтобы загружать файлы побольше.",
 	"Device sync limit reached": "Достигнут предел синхронизации устройств",
 	"Your Free plan syncs files between 1 device at a time. Disconnect the device you're not using to switch, or upgrade to sync more devices.":
-		"На плане Free файлы синхронизируются только с одним устройством за раз. Отключите неиспользуемое устройство, чтобы переключиться, или перейдите на платный план, чтобы синхронизировать больше устройств.",
+		"На бесплатном плане файлы синхронизируются только с одним устройством за раз. Отключите неиспользуемое устройство, чтобы переключиться, или перейдите на платный план, чтобы синхронизировать больше устройств.",
 	"Device swap cooldown active": "Смена устройства пока заблокирована",
 	"Wait before swapping devices, or upgrade.":
 		"Подождите перед сменой устройства или перейдите на платный план.",
 	"Daily AI search limit reached": "Достигнут дневной предел ИИ-поиска",
 	"Your Free plan includes 20 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.":
-		"План Free включает 20 ИИ-поисков в день на веб-приложение, плагин Obsidian и клиенты MCP вместе. На платном плане предела нет.",
-	"Free plan: text attachments only": "План Free: только текстовые вложения",
+		"Бесплатный план включает 20 ИИ-поисков в день на веб-приложение, плагин Obsidian и клиенты MCP вместе. На платном плане предела нет.",
+	"Free plan: text attachments only": "Бесплатный план: только текстовые вложения",
 	"Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.":
-		"На плане Free можно прикреплять текстовые файлы (.md, .txt, .csv, .html, код). Чтобы прикреплять изображения, аудио, видео, PDF и офисные документы, перейдите на платный план.",
+		"На бесплатном плане можно прикреплять текстовые файлы (.md, .txt, .csv, .html, код). Чтобы прикреплять изображения, аудио, видео, PDF и офисные документы, перейдите на платный план.",
 	"External connection limit reached": "Достигнут предел внешних подключений",
 	"Your Free plan allows 1 active external connection. Disconnect it to use this one instead, or upgrade for unlimited connections.":
-		"План Free допускает 1 активное внешнее подключение. Отключите его, чтобы использовать это, или перейдите на платный план, чтобы подключений было сколько угодно.",
+		"Бесплатный план допускает 1 активное внешнее подключение. Отключите его, чтобы использовать это, или перейдите на платный план, чтобы подключений было сколько угодно.",
 	"Account suspended": "Учётная запись заблокирована",
 	"Contact support to restore access.": "Обратитесь в поддержку, чтобы восстановить доступ.",
 	"Account setup incomplete": "Настройка учётной записи не завершена",
@@ -530,7 +530,7 @@ export default {
 		"7-дневный бесплатный пробный период · отмена в любой момент",
 	"10 vaults · 10 GB · unlimited AI": "10 хранилищ · 10 ГБ · неограниченный ИИ-поиск",
 	"Choose Starter": "Выбрать Starter",
-	"Choose Free": "Выбрать Free",
+	"Choose Free": "Выбрать бесплатный план",
 	"Opening Paddle…": "Открываем Paddle…",
 	"Open Paddle billing portal": "Открыть портал оплаты Paddle",
 	"Paddle is our payment processor. Use this if the controls above don't cover what you need.":
@@ -680,11 +680,11 @@ export default {
 	"Your account setup is not finished yet. {setup}, then click Link in Obsidian again.":
 		"Настройка вашей учётной записи ещё не завершена. {setup}, затем снова нажмите Link в Obsidian.",
 	"You recently swapped devices. Your Free plan allows 1 swap every 24 hours — you can swap again in {hours}h. {upgrade} to connect as many devices as you like.":
-		"Вы недавно меняли устройство. План Free допускает одну смену раз в 24 часа, поменять снова можно через {hours} ч. {upgrade}, чтобы подключать сколько угодно устройств.",
+		"Вы недавно меняли устройство. Бесплатный план допускает одну смену раз в 24 часа, поменять снова можно через {hours} ч. {upgrade}, чтобы подключать сколько угодно устройств.",
 	"Heads up — your Free plan syncs files between 1 device at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
-		"Обратите внимание: на плане Free файлы синхронизируются только с одним устройством за раз. Привязка этого устройства отключит {device}, и оно перестанет получать изменения. {upgrade}, чтобы оставить оба подключёнными.",
+		"Обратите внимание: на бесплатном плане файлы синхронизируются только с одним устройством за раз. Привязка этого устройства отключит {device}, и оно перестанет получать изменения. {upgrade}, чтобы оставить оба подключёнными.",
 	"Your Free plan includes 1 vault — link into the existing one above, or {upgrade} to create more.":
-		"План Free включает 1 хранилище. Привяжите существующее выше. Чтобы создать больше, можно {upgrade}.",
+		"Бесплатный план включает 1 хранилище. Привяжите существующее выше. Чтобы создать больше, можно {upgrade}.",
 	"Sync into your existing vault · {count} notes": {
 		one: "Синхронизировать в существующее хранилище · {count} заметка",
 		few: "Синхронизировать в существующее хранилище · {count} заметки",
@@ -733,7 +733,7 @@ export default {
 		many: "Осталось {count} дней пробного периода.",
 		other: "Осталось {count} дней пробного периода.",
 	},
-	"Free tier: 1 connection. {upgrade}": "План Free: 1 подключение. {upgrade}",
+	"Free tier: 1 connection. {upgrade}": "Бесплатный план: 1 подключение. {upgrade}",
 	"Collapse sidebar": "Свернуть боковую панель",
 	"No vaults": "Нет хранилищ",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -925,10 +925,10 @@ export default {
 		"Переходим к настройке, чтобы вы смогли завершить подключение {app}.",
 	"Authorize {client}": "Авторизовать {client}",
 	"Heads up — your Free plan allows 1 active {kind}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected.":
-		"Обратите внимание: на плане Free допускается 1 активное {kind}. Одобрение отключит {name}, и доступ будет закрыт. {upgrade}, чтобы оставить оба подключёнными.",
+		"Обратите внимание: на бесплатном плане допускается 1 активное {kind}. Одобрение отключит {name}, и доступ будет закрыт. {upgrade}, чтобы оставить оба подключёнными.",
 	"Name this connection {optional}": "Назовите это подключение {optional}",
 	"Your Free plan allows 1 active {kind}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
-		"План Free допускает 1 активное {kind}. Подключение {client} отключит {name}, и доступ к вашему Engram будет закрыт.",
+		"Бесплатный план допускает 1 активное {kind}. Подключение {client} отключит {name}, и доступ к вашему Engram будет закрыт.",
 	"{n} notes": {
 		one: "{n} заметка",
 		few: "{n} заметки",
@@ -954,7 +954,7 @@ export default {
 	"{completed} of {total} done": "Выполнено {completed} из {total}",
 	"Setup guide": "Руководство по настройке",
 	"Dismiss {label}": "Скрыть: {label}",
-	"You're on Free, 1 connection.": "У вас план Free: 1 подключение.",
+	"You're on Free, 1 connection.": "У вас бесплатный план: 1 подключение.",
 	"Connect Claude Desktop": "Подключить Claude Desktop",
 	"Connect Cursor": "Подключить Cursor",
 	"Connect Devin": "Подключить Devin",
@@ -977,7 +977,7 @@ export default {
 	"Choose your plan": "Выберите план",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"7 дней бесплатно на платных планах. Нужна карта, списаний до конца пробного периода нет.",
-	"Continue with Free →": "Продолжить с Free →",
+	"Continue with Free →": "Продолжить с бесплатным планом →",
 	"{summary} · upgrade anytime": "{summary} · перейти на платный план можно в любой момент",
 	"Step {step} of {total}": "Шаг {step} из {total}",
 	Onboarding: "Начало работы",
@@ -993,7 +993,7 @@ export default {
 	"Couldn't save your answers, please try again.": "Не удалось сохранить ответы. Попробуйте снова.",
 	"Why {tool} can't be connected": "Почему нельзя подключить {tool}",
 	"Free tier, pick 1 to start. {upgrade} anytime for unlimited connections.":
-		"План Free: выберите 1, чтобы начать. {upgrade} в любой момент, чтобы подключений было сколько угодно.",
+		"Бесплатный план: выберите 1, чтобы начать. {upgrade} в любой момент, чтобы подключений было сколько угодно.",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"Список неполный. Выберите {client}, если вашего инструмента здесь нет.",
 	"My Vault": "Моё хранилище",
@@ -1230,7 +1230,7 @@ export default {
 		other: "Загружено {count} файлов",
 	},
 	"Upgrade to upload attachments": "Перейдите на платный план, чтобы загружать вложения",
-	"Free tier: text files only": "План Free: только текстовые файлы",
+	"Free tier: text files only": "Бесплатный план: только текстовые файлы",
 	"File exceeds your plan's size limit": "Файл превышает предел размера для вашего плана",
 	"Storage quota reached": "Достигнут предел места для хранения",
 	"Upgrade required": "Нужен платный план",
@@ -1453,4 +1453,11 @@ export default {
 	"A known problem, not yet fixed.": "Известная проблема, пока не исправлена.",
 	"Here is one, concretely.": "Вот конкретный пример.",
 	"Said better by someone else.": "Лучше сказано кем-то другим.",
+	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
+		"Прочитайте соглашение полностью, прежде чем продолжить. Наше {privacy} (рассматривается при регистрации) описывает, как мы обрабатываем ваши данные.",
+	"privacy notice": "уведомление о конфиденциальности",
+	"I have read and agree to the Terms of Service and Privacy Policy":
+		"Я прочитал(а) Условия использования и Политику конфиденциальности и согласен(на)",
+	"I have read and agree to the agreement shown above and the privacy notice":
+		"Я прочитал(а) соглашение выше и уведомление о конфиденциальности и согласен(на)",
 } satisfies Catalog;

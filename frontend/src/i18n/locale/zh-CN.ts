@@ -1274,4 +1274,11 @@ export default {
 	"A known problem, not yet fixed.": "已知问题，尚未修复。",
 	"Here is one, concretely.": "具体来看一个例子。",
 	"Said better by someone else.": "别人说得更好。",
+	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
+		"继续之前请先阅读下方的完整协议。我们的{privacy}(注册时已查看)说明了我们如何处理你的数据。",
+	"privacy notice": "隐私声明",
+	"I have read and agree to the Terms of Service and Privacy Policy":
+		"我已阅读并同意服务条款和隐私政策",
+	"I have read and agree to the agreement shown above and the privacy notice":
+		"我已阅读并同意上方显示的协议和隐私声明",
 } satisfies Catalog;

@@ -209,7 +209,7 @@ export default {
 	"Delete {name}": "{name} 삭제",
 	Pro: "Pro",
 	Starter: "Starter",
-	Free: "Free",
+	Free: "무료",
 	"Vaults ({used} / {cap})": "보관함 ({used} / {cap})",
 	"Rename, set a default, or delete your vaults.":
 		"보관함 이름을 변경하거나, 기본 보관함을 지정하거나, 삭제하세요.",
@@ -332,16 +332,16 @@ export default {
 	"You'll keep paid access through the end of your current billing period.":
 		"현재 결제 기간이 끝날 때까지 유료 기능을 계속 사용할 수 있습니다.",
 	"Your notes stay. Sync still works for vaults within Free limits.":
-		"노트는 그대로 유지됩니다. Free 한도 이내의 보관함은 계속 동기화됩니다.",
+		"노트는 그대로 유지됩니다. 무료 요금제 한도 이내의 보관함은 계속 동기화됩니다.",
 	"Vaults or notes that exceed Free limits become read-only.":
-		"Free 한도를 초과하는 보관함이나 노트는 읽기 전용이 됩니다.",
+		"무료 요금제 한도를 초과하는 보관함이나 노트는 읽기 전용이 됩니다.",
 	"You can reverse this any time before the effective date.":
 		"적용일 전에는 언제든지 되돌릴 수 있습니다.",
 	"Canceling…": "취소하는 중…",
 	"Cancel at period end": "기간 종료 시 취소",
 	"Keep my subscription": "구독 유지",
 	"You'll keep your {tier} plan until {date}, then drop to Free.":
-		"{date}까지 {tier} 요금제를 유지하며, 이후 Free로 전환됩니다.",
+		"{date}까지 {tier} 요금제를 유지하며, 이후 무료 요금제로 전환됩니다.",
 	"Access ends on": "접근 종료일",
 	"Renews on": "갱신일",
 	"Current Plan": "현재 요금제",
@@ -365,7 +365,7 @@ export default {
 	draft: "초안",
 	"You've hit your note limit": "노트 수 상한에 도달했습니다",
 	"Upgrade to keep adding notes.": "업그레이드하면 노트를 계속 추가할 수 있습니다.",
-	"Free includes 1 vault": "Free에는 보관함 1개가 포함됩니다",
+	"Free includes 1 vault": "무료 요금제에는 보관함 1개가 포함됩니다",
 	"Upgrade for more vaults.": "업그레이드하면 보관함을 더 만들 수 있습니다.",
 	"Attachments are a Pro feature": "첨부 파일은 Pro 기능입니다",
 	"Upgrade to sync images, PDFs, and other files.":
@@ -376,18 +376,18 @@ export default {
 	"Upgrade to upload larger files.": "더 큰 파일을 업로드하려면 업그레이드하세요.",
 	"Device sync limit reached": "기기 동기화 한도에 도달했습니다",
 	"Your Free plan syncs files between 1 device at a time. Disconnect the device you're not using to switch, or upgrade to sync more devices.":
-		"Free 요금제에서는 한 번에 기기 1대만 파일을 동기화할 수 있습니다. 사용하지 않는 기기의 연결을 해제해 전환하거나, 업그레이드해서 더 많은 기기를 동기화하세요.",
+		"무료 요금제에서는 한 번에 기기 1대만 파일을 동기화할 수 있습니다. 사용하지 않는 기기의 연결을 해제해 전환하거나, 업그레이드해서 더 많은 기기를 동기화하세요.",
 	"Device swap cooldown active": "기기 교체 대기 시간이 적용 중입니다",
 	"Wait before swapping devices, or upgrade.": "기기를 교체하기 전에 기다리거나 업그레이드하세요.",
 	"Daily AI search limit reached": "일일 AI 검색 한도에 도달했습니다",
 	"Your Free plan includes 20 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.":
-		"Free 요금제에는 하루 AI 검색 20회가 포함되며, 웹 앱, Obsidian 플러그인, MCP 클라이언트에서 함께 사용합니다. 업그레이드하면 무제한입니다.",
-	"Free plan: text attachments only": "Free 요금제: 텍스트 첨부 파일만 가능",
+		"무료 요금제에는 하루 AI 검색 20회가 포함되며, 웹 앱, Obsidian 플러그인, MCP 클라이언트에서 함께 사용합니다. 업그레이드하면 무제한입니다.",
+	"Free plan: text attachments only": "무료 요금제: 텍스트 첨부 파일만 가능",
 	"Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.":
-		"Free 요금제에서는 텍스트 파일(.md, .txt, .csv, .html, 코드)만 첨부할 수 있습니다. 이미지, 오디오, 동영상, PDF, 오피스 문서를 첨부하려면 업그레이드하세요.",
+		"무료 요금제에서는 텍스트 파일(.md, .txt, .csv, .html, 코드)만 첨부할 수 있습니다. 이미지, 오디오, 동영상, PDF, 오피스 문서를 첨부하려면 업그레이드하세요.",
 	"External connection limit reached": "외부 연결 한도에 도달했습니다",
 	"Your Free plan allows 1 active external connection. Disconnect it to use this one instead, or upgrade for unlimited connections.":
-		"Free 요금제에서는 활성 외부 연결을 1개만 사용할 수 있습니다. 기존 연결을 해제하고 이 연결을 사용하거나, 업그레이드해서 무제한으로 연결하세요.",
+		"무료 요금제에서는 활성 외부 연결을 1개만 사용할 수 있습니다. 기존 연결을 해제하고 이 연결을 사용하거나, 업그레이드해서 무제한으로 연결하세요.",
 	"Account suspended": "계정이 정지되었습니다",
 	"Contact support to restore access.": "접근을 복구하려면 지원팀에 문의하세요.",
 	"Account setup incomplete": "계정 설정이 완료되지 않았습니다",
@@ -501,7 +501,7 @@ export default {
 	"7-day free trial · cancel anytime": "7일 무료 체험 · 언제든지 취소",
 	"10 vaults · 10 GB · unlimited AI": "보관함 10개 · 10 GB · AI 무제한",
 	"Choose Starter": "Starter 선택",
-	"Choose Free": "Free 선택",
+	"Choose Free": "무료 요금제 선택",
 	"Opening Paddle…": "Paddle을 여는 중…",
 	"Open Paddle billing portal": "Paddle 결제 포털 열기",
 	"Paddle is our payment processor. Use this if the controls above don't cover what you need.":
@@ -648,11 +648,11 @@ export default {
 	"Your account setup is not finished yet. {setup}, then click Link in Obsidian again.":
 		"계정 설정이 아직 끝나지 않았습니다. {setup}한 다음 Obsidian에서 연결을 다시 클릭하세요.",
 	"You recently swapped devices. Your Free plan allows 1 swap every 24 hours — you can swap again in {hours}h. {upgrade} to connect as many devices as you like.":
-		"최근에 기기를 교체했습니다. Free 요금제에서는 24시간에 1번만 교체할 수 있으며, {hours}시간 후에 다시 교체할 수 있습니다. {upgrade}하면 원하는 만큼 기기를 연결할 수 있습니다.",
+		"최근에 기기를 교체했습니다. 무료 요금제에서는 24시간에 1번만 교체할 수 있으며, {hours}시간 후에 다시 교체할 수 있습니다. {upgrade}하면 원하는 만큼 기기를 연결할 수 있습니다.",
 	"Heads up — your Free plan syncs files between 1 device at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
-		"참고하세요. Free 요금제에서는 한 번에 기기 1대만 파일을 동기화합니다. 이 기기를 연결하면 {device}의 연결이 해제되어 더 이상 동기화 변경을 받지 못합니다. {upgrade}하면 두 기기를 모두 연결해 둘 수 있습니다.",
+		"참고하세요. 무료 요금제에서는 한 번에 기기 1대만 파일을 동기화합니다. 이 기기를 연결하면 {device}의 연결이 해제되어 더 이상 동기화 변경을 받지 못합니다. {upgrade}하면 두 기기를 모두 연결해 둘 수 있습니다.",
 	"Your Free plan includes 1 vault — link into the existing one above, or {upgrade} to create more.":
-		"Free 요금제에는 보관함 1개가 포함됩니다. 위의 기존 보관함에 연결하거나, {upgrade}해서 더 만드세요.",
+		"무료 요금제에는 보관함 1개가 포함됩니다. 위의 기존 보관함에 연결하거나, {upgrade}해서 더 만드세요.",
 	"Sync into your existing vault · {count} notes": {
 		other: "기존 보관함에 동기화 · 노트 {count}개",
 	},
@@ -665,7 +665,7 @@ export default {
 	"{count} months ago": { other: "{count}개월 전" },
 	"{count} years ago": { other: "{count}년 전" },
 	"{count} days left in your trial.": { other: "체험 기간이 {count}일 남았습니다." },
-	"Free tier: 1 connection. {upgrade}": "Free 요금제: 연결 1개. {upgrade}",
+	"Free tier: 1 connection. {upgrade}": "무료 요금제: 연결 1개. {upgrade}",
 	"Collapse sidebar": "사이드바 접기",
 	"No vaults": "보관함 없음",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -832,10 +832,10 @@ export default {
 		"{app} 연결을 마칠 수 있도록 설정 화면으로 이동합니다.",
 	"Authorize {client}": "{client} 승인",
 	"Heads up — your Free plan allows 1 active {kind}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected.":
-		"참고하세요. Free 요금제에서는 활성 {kind}을(를) 1개만 사용할 수 있습니다. 승인하면 {name}의 연결이 해제되어 더 이상 접근할 수 없게 됩니다. {upgrade}하면 둘 다 연결해 둘 수 있습니다.",
+		"참고하세요. 무료 요금제에서는 활성 {kind}을(를) 1개만 사용할 수 있습니다. 승인하면 {name}의 연결이 해제되어 더 이상 접근할 수 없게 됩니다. {upgrade}하면 둘 다 연결해 둘 수 있습니다.",
 	"Name this connection {optional}": "이 연결의 이름 {optional}",
 	"Your Free plan allows 1 active {kind}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
-		"Free 요금제에서는 활성 {kind}을(를) 1개만 사용할 수 있습니다. {client}을(를) 연결하면 {name}의 연결이 해제되어 더 이상 내 Engram에 접근할 수 없게 됩니다.",
+		"무료 요금제에서는 활성 {kind}을(를) 1개만 사용할 수 있습니다. {client}을(를) 연결하면 {name}의 연결이 해제되어 더 이상 내 Engram에 접근할 수 없게 됩니다.",
 	"{n} notes": { other: "노트 {n}개" },
 	"{n} files": { other: "파일 {n}개" },
 	"Review the Terms": "약관 검토",
@@ -856,7 +856,7 @@ export default {
 	"{completed} of {total} done": "{total}개 중 {completed}개 완료",
 	"Setup guide": "설정 가이드",
 	"Dismiss {label}": "{label} 닫기",
-	"You're on Free, 1 connection.": "Free 요금제 사용 중이며 연결은 1개입니다.",
+	"You're on Free, 1 connection.": "무료 요금제 사용 중이며 연결은 1개입니다.",
 	"Connect Claude Desktop": "Claude Desktop 연결",
 	"Connect Cursor": "Cursor 연결",
 	"Connect Devin": "Devin 연결",
@@ -879,7 +879,7 @@ export default {
 	"Choose your plan": "요금제 선택",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"유료 요금제는 7일 무료 체험이 제공됩니다. 카드가 필요하며 체험이 끝나기 전에는 요금이 청구되지 않습니다.",
-	"Continue with Free →": "Free로 계속 →",
+	"Continue with Free →": "무료 요금제로 계속 →",
 	"{summary} · upgrade anytime": "{summary} · 언제든지 업그레이드",
 	"Step {step} of {total}": "{total}단계 중 {step}단계",
 	Onboarding: "온보딩",
@@ -895,7 +895,7 @@ export default {
 	"Couldn't save your answers, please try again.": "답변을 저장하지 못했습니다. 다시 시도하세요.",
 	"Why {tool} can't be connected": "{tool}을(를) 연결할 수 없는 이유",
 	"Free tier, pick 1 to start. {upgrade} anytime for unlimited connections.":
-		"Free 요금제에서는 시작할 도구를 1개 고르세요. 언제든지 {upgrade}하면 연결을 무제한으로 사용할 수 있습니다.",
+		"무료 요금제에서는 시작할 도구를 1개 고르세요. 언제든지 {upgrade}하면 연결을 무제한으로 사용할 수 있습니다.",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"전체 목록이 아닙니다. 사용하는 도구가 없으면 {client}을(를) 선택하세요.",
 	"My Vault": "내 보관함",
@@ -1117,7 +1117,7 @@ export default {
 	"Uploaded {count} files to {folder}": { other: "파일 {count}개를 {folder}에 업로드했습니다" },
 	"Uploaded {count} files": { other: "파일 {count}개를 업로드했습니다" },
 	"Upgrade to upload attachments": "첨부 파일을 업로드하려면 업그레이드하세요",
-	"Free tier: text files only": "Free 요금제: 텍스트 파일만 가능",
+	"Free tier: text files only": "무료 요금제: 텍스트 파일만 가능",
 	"File exceeds your plan's size limit": "파일이 요금제의 크기 한도를 초과합니다",
 	"Storage quota reached": "저장 용량 한도에 도달했습니다",
 	"Upgrade required": "업그레이드가 필요합니다",
@@ -1315,4 +1315,11 @@ export default {
 	"A known problem, not yet fixed.": "알려진 문제이며 아직 수정되지 않았습니다.",
 	"Here is one, concretely.": "구체적인 예시입니다.",
 	"Said better by someone else.": "다른 사람이 더 잘 표현한 말입니다.",
+	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
+		"계속하기 전에 아래 약관 전문을 읽어 주세요. {privacy}(가입 시 검토)에 데이터 처리 방식이 설명되어 있습니다.",
+	"privacy notice": "개인정보 처리 안내",
+	"I have read and agree to the Terms of Service and Privacy Policy":
+		"서비스 약관과 개인정보 처리방침을 읽었으며 이에 동의합니다",
+	"I have read and agree to the agreement shown above and the privacy notice":
+		"위에 표시된 약관과 개인정보 처리 안내를 읽었으며 이에 동의합니다",
 } satisfies Catalog;

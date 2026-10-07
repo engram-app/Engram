@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useT } from "@/i18n/locale-provider";
+import { Trans } from "@/i18n/trans";
 import AuthPanel from "@/layout/auth-panel";
 import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
 import { track } from "../analytics/track";
@@ -69,16 +70,21 @@ export default function AgreementPage() {
 		<AuthPanel className="flex flex-col gap-4">
 			<h1 className={heading}>{t("Review the Terms")}</h1>
 			<p className="text-muted-foreground text-sm">
-				Please read the full agreement below before continuing. Our{" "}
-				<a
-					href={PRIVACY_URL}
-					target="_blank"
-					rel="noreferrer noopener"
-					className="font-medium text-primary underline-offset-4 hover:underline"
-				>
-					privacy notice
-				</a>{" "}
-				(reviewed at signup) describes how we handle your data.
+				<Trans
+					text="Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data."
+					slots={{
+						privacy: (
+							<a
+								href={PRIVACY_URL}
+								target="_blank"
+								rel="noreferrer noopener"
+								className="font-medium text-primary underline-offset-4 hover:underline"
+							>
+								{t("privacy notice")}
+							</a>
+						),
+					}}
+				/>
 			</p>
 			{unavailable ? (
 				<div role="alert" className={destructiveAlert}>
@@ -104,10 +110,10 @@ export default function AgreementPage() {
 						<Checkbox
 							checked={agreed}
 							onCheckedChange={(v) => setAgreed(v === true)}
-							aria-label="I have read and agree to the Terms of Service and Privacy Policy"
+							aria-label={t("I have read and agree to the Terms of Service and Privacy Policy")}
 						/>
 						<span className="font-medium text-foreground text-sm">
-							I have read and agree to the agreement shown above and the privacy notice
+							{t("I have read and agree to the agreement shown above and the privacy notice")}
 						</span>
 					</label>
 					<Button

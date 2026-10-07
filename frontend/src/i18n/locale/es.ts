@@ -1406,4 +1406,11 @@ export default {
 	"A known problem, not yet fixed.": "Un problema conocido, aún sin corregir.",
 	"Here is one, concretely.": "Aquí tienes uno, en concreto.",
 	"Said better by someone else.": "Dicho mejor por otra persona.",
+	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
+		"Lee el acuerdo completo a continuación antes de continuar. Nuestro {privacy} (revisado al registrarte) describe cómo tratamos tus datos.",
+	"privacy notice": "aviso de privacidad",
+	"I have read and agree to the Terms of Service and Privacy Policy":
+		"He leído y acepto los Términos del servicio y la Política de privacidad",
+	"I have read and agree to the agreement shown above and the privacy notice":
+		"He leído y acepto el acuerdo mostrado arriba y el aviso de privacidad",
 } satisfies Catalog;

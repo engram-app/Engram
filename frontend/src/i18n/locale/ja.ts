@@ -339,16 +339,16 @@ export default {
 	"You'll keep paid access through the end of your current billing period.":
 		"現在の請求期間の終了まで、有料プランのアクセスは維持されます。",
 	"Your notes stay. Sync still works for vaults within Free limits.":
-		"ノートはそのまま残ります。Free の上限内の保管庫では、同期も引き続き使えます。",
+		"ノートはそのまま残ります。無料プランの上限内の保管庫では、同期も引き続き使えます。",
 	"Vaults or notes that exceed Free limits become read-only.":
-		"Free の上限を超える保管庫やノートは読み取り専用になります。",
+		"無料プランの上限を超える保管庫やノートは読み取り専用になります。",
 	"You can reverse this any time before the effective date.":
 		"有効日の前であれば、いつでも取り消せます。",
 	"Canceling…": "解約中…",
 	"Cancel at period end": "期間終了時に解約",
 	"Keep my subscription": "サブスクリプションを継続",
 	"You'll keep your {tier} plan until {date}, then drop to Free.":
-		"{date} まで {tier} プランをご利用いただけます。その後は Free に切り替わります。",
+		"{date} まで {tier} プランをご利用いただけます。その後は 無料プランに切り替わります。",
 	"Access ends on": "アクセス終了日",
 	"Renews on": "更新日",
 	"Current Plan": "現在のプラン",
@@ -374,7 +374,7 @@ export default {
 	draft: "下書き",
 	"You've hit your note limit": "ノート数の上限に達しました",
 	"Upgrade to keep adding notes.": "アップグレードするとノートを追加し続けられます。",
-	"Free includes 1 vault": "Free に含まれる保管庫は 1 つです",
+	"Free includes 1 vault": "無料プランに含まれる保管庫は 1 つです",
 	"Upgrade for more vaults.": "アップグレードすると保管庫を増やせます。",
 	"Attachments are a Pro feature": "添付ファイルは Pro の機能です",
 	"Upgrade to sync images, PDFs, and other files.":
@@ -386,19 +386,19 @@ export default {
 		"アップグレードするとより大きなファイルをアップロードできます。",
 	"Device sync limit reached": "デバイス同期の上限に達しました",
 	"Your Free plan syncs files between 1 device at a time. Disconnect the device you're not using to switch, or upgrade to sync more devices.":
-		"Free プランでは、同時に同期できるデバイスは 1 台です。切り替えるには、使っていないデバイスの接続を解除するか、アップグレードしてより多くのデバイスを同期してください。",
+		"無料プランでは、同時に同期できるデバイスは 1 台です。切り替えるには、使っていないデバイスの接続を解除するか、アップグレードしてより多くのデバイスを同期してください。",
 	"Device swap cooldown active": "デバイス切り替えのクールダウン中です",
 	"Wait before swapping devices, or upgrade.":
 		"デバイスを切り替えるには、しばらく待つかアップグレードしてください。",
 	"Daily AI search limit reached": "1 日の AI 検索の上限に達しました",
 	"Your Free plan includes 20 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.":
-		"Free プランでは、Web アプリ、Obsidian プラグイン、MCP クライアントを合わせて 1 日 20 回まで AI 検索を利用できます。アップグレードすると無制限になります。",
-	"Free plan: text attachments only": "Free プラン: 添付できるのはテキストのみ",
+		"無料プランでは、Web アプリ、Obsidian プラグイン、MCP クライアントを合わせて 1 日 20 回まで AI 検索を利用できます。アップグレードすると無制限になります。",
+	"Free plan: text attachments only": "無料プラン: 添付できるのはテキストのみ",
 	"Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.":
-		"Free プランで添付できるのはテキストファイル (.md、.txt、.csv、.html、コード) です。画像、音声、動画、PDF、Office ドキュメントを添付するにはアップグレードしてください。",
+		"無料プランで添付できるのはテキストファイル (.md、.txt、.csv、.html、コード) です。画像、音声、動画、PDF、Office ドキュメントを添付するにはアップグレードしてください。",
 	"External connection limit reached": "外部接続の上限に達しました",
 	"Your Free plan allows 1 active external connection. Disconnect it to use this one instead, or upgrade for unlimited connections.":
-		"Free プランで有効にできる外部接続は 1 つです。この接続を使うには既存の接続を解除するか、アップグレードして接続を無制限にしてください。",
+		"無料プランで有効にできる外部接続は 1 つです。この接続を使うには既存の接続を解除するか、アップグレードして接続を無制限にしてください。",
 	"Account suspended": "アカウントが停止されています",
 	"Contact support to restore access.": "アクセスを復元するにはサポートにお問い合わせください。",
 	"Account setup incomplete": "アカウントのセットアップが完了していません",
@@ -514,7 +514,7 @@ export default {
 	"7-day free trial · cancel anytime": "7 日間の無料トライアル · いつでも解約可能",
 	"10 vaults · 10 GB · unlimited AI": "保管庫 10 個 · 10 GB · AI 無制限",
 	"Choose Starter": "Starter を選ぶ",
-	"Choose Free": "Free を選ぶ",
+	"Choose Free": "無料プランを選ぶ",
 	"Opening Paddle…": "Paddle を開いています…",
 	"Open Paddle billing portal": "Paddle の請求ポータルを開く",
 	"Paddle is our payment processor. Use this if the controls above don't cover what you need.":
@@ -665,11 +665,11 @@ export default {
 	"Your account setup is not finished yet. {setup}, then click Link in Obsidian again.":
 		"アカウントのセットアップがまだ完了していません。{setup}してから、Obsidian でもう一度「連携」をクリックしてください。",
 	"You recently swapped devices. Your Free plan allows 1 swap every 24 hours — you can swap again in {hours}h. {upgrade} to connect as many devices as you like.":
-		"最近デバイスを切り替えました。Free プランでは切り替えは 24 時間に 1 回までです。あと {hours} 時間後に再度切り替えられます。{upgrade}すると、デバイスを好きなだけ接続できます。",
+		"最近デバイスを切り替えました。無料プランでは切り替えは 24 時間に 1 回までです。あと {hours} 時間後に再度切り替えられます。{upgrade}すると、デバイスを好きなだけ接続できます。",
 	"Heads up — your Free plan syncs files between 1 device at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
-		"ご注意ください。Free プランで同時に同期できるデバイスは 1 台です。このデバイスを連携すると {device} の接続が解除され、同期の変更を受け取れなくなります。両方を接続したままにするには{upgrade}してください。",
+		"ご注意ください。無料プランで同時に同期できるデバイスは 1 台です。このデバイスを連携すると {device} の接続が解除され、同期の変更を受け取れなくなります。両方を接続したままにするには{upgrade}してください。",
 	"Your Free plan includes 1 vault — link into the existing one above, or {upgrade} to create more.":
-		"Free プランに含まれる保管庫は 1 つです。上の既存の保管庫に連携するか、{upgrade}して保管庫を増やしてください。",
+		"無料プランに含まれる保管庫は 1 つです。上の既存の保管庫に連携するか、{upgrade}して保管庫を増やしてください。",
 	"Sync into your existing vault · {count} notes": {
 		other: "既存の保管庫に同期 · ノート {count} 件",
 	},
@@ -682,7 +682,7 @@ export default {
 	"{count} months ago": { other: "{count} か月前" },
 	"{count} years ago": { other: "{count} 年前" },
 	"{count} days left in your trial.": { other: "トライアルの残りは {count} 日です。" },
-	"Free tier: 1 connection. {upgrade}": "Free プラン: 接続は 1 つまで。{upgrade}",
+	"Free tier: 1 connection. {upgrade}": "無料プラン: 接続は 1 つまで。{upgrade}",
 	"Collapse sidebar": "サイドバーを折りたたむ",
 	"No vaults": "保管庫がありません",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -850,10 +850,10 @@ export default {
 		"{app} の接続を完了できるよう、セットアップに移動します。",
 	"Authorize {client}": "{client} を認可",
 	"Heads up — your Free plan allows 1 active {kind}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected.":
-		"ご注意ください。Free プランで有効にできる{kind}は 1 つです。承認すると {name} の接続が解除され、アクセスできなくなります。両方を接続したままにするには{upgrade}してください。",
+		"ご注意ください。無料プランで有効にできる{kind}は 1 つです。承認すると {name} の接続が解除され、アクセスできなくなります。両方を接続したままにするには{upgrade}してください。",
 	"Name this connection {optional}": "この接続に名前を付ける {optional}",
 	"Your Free plan allows 1 active {kind}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
-		"Free プランで有効にできる{kind}は 1 つです。{client} を接続すると {name} の接続が解除され、Engram にアクセスできなくなります。",
+		"無料プランで有効にできる{kind}は 1 つです。{client} を接続すると {name} の接続が解除され、Engram にアクセスできなくなります。",
 	"{n} notes": { other: "ノート {n} 件" },
 	"{n} files": { other: "ファイル {n} 件" },
 	"Review the Terms": "利用規約を確認",
@@ -875,7 +875,7 @@ export default {
 	"{completed} of {total} done": "{completed} / {total} 完了",
 	"Setup guide": "セットアップガイド",
 	"Dismiss {label}": "{label} を閉じる",
-	"You're on Free, 1 connection.": "Free プランをご利用中です (接続は 1 つ)。",
+	"You're on Free, 1 connection.": "無料プランをご利用中です (接続は 1 つ)。",
 	"Connect Claude Desktop": "Claude Desktop を接続",
 	"Connect Cursor": "Cursor を接続",
 	"Connect Devin": "Devin を接続",
@@ -898,7 +898,7 @@ export default {
 	"Choose your plan": "プランを選択",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"有料プランには 7 日間の無料トライアルが付きます。カードの登録が必要ですが、トライアル終了まで請求されません。",
-	"Continue with Free →": "Free で続ける →",
+	"Continue with Free →": "無料プランで続ける →",
 	"{summary} · upgrade anytime": "{summary} · いつでもアップグレード可能",
 	"Step {step} of {total}": "ステップ {step} / {total}",
 	Onboarding: "オンボーディング",
@@ -915,7 +915,7 @@ export default {
 		"回答を保存できませんでした。もう一度お試しください。",
 	"Why {tool} can't be connected": "{tool} を接続できない理由",
 	"Free tier, pick 1 to start. {upgrade} anytime for unlimited connections.":
-		"Free プランでは、最初に 1 つ選んでください。{upgrade}すると、接続が無制限になります。",
+		"無料プランでは、最初に 1 つ選んでください。{upgrade}すると、接続が無制限になります。",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"すべてを網羅した一覧ではありません。お使いのものがない場合は {client} を選んでください。",
 	"My Vault": "マイ保管庫",
@@ -1139,7 +1139,7 @@ export default {
 	},
 	"Uploaded {count} files": { other: "{count} 件のファイルをアップロードしました" },
 	"Upgrade to upload attachments": "アップグレードして添付ファイルをアップロード",
-	"Free tier: text files only": "Free プラン: テキストファイルのみ",
+	"Free tier: text files only": "無料プラン: テキストファイルのみ",
 	"File exceeds your plan's size limit": "ファイルがプランのサイズ上限を超えています",
 	"Storage quota reached": "ストレージの容量上限に達しました",
 	"Upgrade required": "アップグレードが必要です",
@@ -1336,4 +1336,11 @@ export default {
 	"A known problem, not yet fixed.": "既知の問題で、まだ修正されていません。",
 	"Here is one, concretely.": "具体的な例です。",
 	"Said better by someone else.": "他の人のほうが上手く言っています。",
+	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
+		"続行する前に、以下の規約全文をお読みください。{privacy}(登録時に確認)に、データの取り扱いについて記載しています。",
+	"privacy notice": "プライバシー通知",
+	"I have read and agree to the Terms of Service and Privacy Policy":
+		"利用規約とプライバシーポリシーを読み、同意します",
+	"I have read and agree to the agreement shown above and the privacy notice":
+		"上に表示された規約とプライバシー通知を読み、同意します",
 } satisfies Catalog;

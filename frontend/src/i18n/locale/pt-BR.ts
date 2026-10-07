@@ -1402,4 +1402,11 @@ export default {
 	"A known problem, not yet fixed.": "Um problema conhecido, ainda não corrigido.",
 	"Here is one, concretely.": "Aqui está um, na prática.",
 	"Said better by someone else.": "Dito melhor por outra pessoa.",
+	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
+		"Leia o contrato completo abaixo antes de continuar. Nosso {privacy} (revisado no cadastro) descreve como tratamos seus dados.",
+	"privacy notice": "aviso de privacidade",
+	"I have read and agree to the Terms of Service and Privacy Policy":
+		"Li e concordo com os Termos de Serviço e a Política de Privacidade",
+	"I have read and agree to the agreement shown above and the privacy notice":
+		"Li e concordo com o contrato mostrado acima e o aviso de privacidade",
 } satisfies Catalog;
