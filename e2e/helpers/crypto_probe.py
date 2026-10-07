@@ -163,6 +163,48 @@ def wait_for_qdrant_indexed(
     )
 
 
+def wait_for_chunks_committed(
+    vault_id: str, path_hmac_b64: str, path: str | None = None, timeout: float = 30.0
+) -> None:
+    """Poll Postgres until the note matching `path_hmac_b64` has chunk rows.
+
+    `wait_for_qdrant_indexed` is NOT enough before hitting `/api/search`:
+    `Indexing.commit_index/1` upserts Qdrant first and inserts the `chunks`
+    rows after, and the search read path rehydrates each hit from its chunk
+    row (by qdrant_point_id). A hit with no row yet carries no source_path and
+    is dropped by `collapse_to_notes`, so a search in that window misses the
+    note. Raises TimeoutError on timeout. `path` is for the error message only.
+    """
+    if not _UUID_RE.match(vault_id):
+        raise ValueError(f"Unsafe vault_id rejected: {vault_id!r}")
+    if not re.fullmatch(r"[A-Za-z0-9+/=]+", path_hmac_b64):
+        raise ValueError(f"Unsafe path_hmac rejected: {path_hmac_b64!r}")
+
+    sql = (
+        "SELECT count(*) FROM chunks c JOIN notes n ON n.id = c.note_id "
+        f"WHERE n.vault_id = '{vault_id}' "
+        f"AND n.path_hmac = decode('{path_hmac_b64}', 'base64');"
+    )
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        result = subprocess.run(
+            ["docker", "exec", "-i", CI_POSTGRES_CONTAINER,
+             "psql", "-U", "engram", "-d", "engram", "-tA", "-c", sql],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"wait_for_chunks_committed({vault_id}) failed: {result.stderr.strip()}"
+            )
+        if int(result.stdout.strip() or 0) > 0:
+            return
+        time.sleep(1)
+    raise TimeoutError(
+        f"chunk rows never committed for vault_id={vault_id} path={path!r} "
+        f"(path_hmac={path_hmac_b64}) within {timeout}s"
+    )
+
+
 def assert_attachment_ciphertext_at_rest(vault_id: str, path: str) -> None:
     """Phase B.4: stub. The plaintext-path lookup is gone. Test_19's
     assertion is currently skipped pending a release-rpc-based rebuild
