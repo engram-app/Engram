@@ -174,3 +174,56 @@ describe("the widget keeps its DOM while you type, but refreshes on other change
 		expect(src(3).textContent).toBe("ONE");
 	});
 });
+
+describe("focus returns to the editor after a table action, so undo keeps working", () => {
+	const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+	function chooseFromMenu(cellIndex: number, label: string) {
+		src(cellIndex).dispatchEvent(
+			new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 }),
+		);
+		const btn = Array.from(
+			document.querySelectorAll<HTMLButtonElement>(".cm-atomic-table-menu-item"),
+		).find((b) => b.textContent === label);
+		if (!btn) {
+			throw new Error(`no menu item ${label}`);
+		}
+		btn.focus();
+		btn.click();
+	}
+
+	test("after a menu action the editor has focus, and Ctrl+Z undoes it", async () => {
+		mount(withHistory());
+		chooseFromMenu(0, "Move row down"); // header row down
+		await tick();
+		expect(table().startsWith("| 1 | 2 | 3 |")).toBe(true);
+		expect(document.activeElement).toBe(view.contentDOM);
+		(document.activeElement ?? document.body).dispatchEvent(
+			new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true, cancelable: true }),
+		);
+		expect(table().startsWith("| a | b | c |")).toBe(true);
+	});
+
+	test("after dragging a row handle the editor has focus", async () => {
+		mount(withHistory());
+		const handle = view.dom.querySelectorAll<HTMLElement>(
+			".cm-atomic-table-handle-row",
+		)[1] as HTMLElement;
+		handle.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0, buttons: 1 }));
+		src(6).dispatchEvent(new MouseEvent("pointermove", { bubbles: true, buttons: 1 }));
+		src(6).dispatchEvent(new MouseEvent("pointerup", { bubbles: true, buttons: 0 }));
+		await tick();
+		expect(table()).toContain("| 4 | 5 | 6 |\n| 1 | 2 | 3 |");
+		expect(document.activeElement).toBe(view.contentDOM);
+	});
+
+	test("after dragging a column handle the editor has focus", async () => {
+		mount(withHistory());
+		const handle = view.dom.querySelector(".cm-atomic-table-handle-col") as HTMLElement;
+		handle.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0, buttons: 1 }));
+		src(2).dispatchEvent(new MouseEvent("pointermove", { bubbles: true, buttons: 1 }));
+		src(2).dispatchEvent(new MouseEvent("pointerup", { bubbles: true, buttons: 0 }));
+		await tick();
+		expect(document.activeElement).toBe(view.contentDOM);
+	});
+});

@@ -10,6 +10,9 @@ index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-35424c37b135c596 b/.bun-tag-35424c37b135c596
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-37638174b35efbde b/.bun-tag-37638174b35efbde
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-4c3cc613907cb629 b/.bun-tag-4c3cc613907cb629
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
@@ -447,7 +450,7 @@ index ff02d57548388e468f73695f3bd45ec58be38160..d2f2a04758594f7b202cda3897ac7321
  export declare function tables(config?: TablesConfig): Extension;
  export {};
 diff --git a/dist/table-widget.js b/dist/table-widget.js
-index aee407c4aaa2eea5a46c0fa28831dcc80985c783..a21d4dc02dc9a88be78b3d338f36449b9900a1cc 100644
+index aee407c4aaa2eea5a46c0fa28831dcc80985c783..9b7f83c837146d39db3270789464b02db209ab58 100644
 --- a/dist/table-widget.js
 +++ b/dist/table-widget.js
 @@ -42,9 +42,22 @@ export function splitRowCells(line) {
@@ -584,7 +587,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..a21d4dc02dc9a88be78b3d338f36449b
  ];
  function isMarkWrap(el) {
      for (const c of MARK_WRAP_CLASSES)
-@@ -528,10 +592,751 @@ function placeCaretAtEnd(el) {
+@@ -528,10 +592,753 @@ function placeCaretAtEnd(el) {
  function getAllCells(wrap) {
      return Array.from(wrap.querySelectorAll('th, td'));
  }
@@ -1271,8 +1274,10 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..a21d4dc02dc9a88be78b3d338f36449b
 +        document.removeEventListener('pointerup', onUp, true);
 +        document.removeEventListener('pointercancel', onCancel, true);
 +        clearDropMarks(wrap);
-+        if (commit && to !== from)
++        if (commit && to !== from) {
 +            moveTableLine(view, wrap, kind, from, to);
++            view.focus(); // so Ctrl+Z reaches the editor
++        }
 +    };
 +    const onUp = () => end(true);
 +    const onCancel = () => end(false);
@@ -1336,7 +1341,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..a21d4dc02dc9a88be78b3d338f36449b
          Object.defineProperty(this, "model", {
              enumerable: true,
              configurable: true,
-@@ -561,18 +1366,48 @@ class TableWidget extends WidgetType {
+@@ -561,18 +1368,48 @@ class TableWidget extends WidgetType {
              return false;
          if (other.model.rows.length !== this.model.rows.length)
              return false;
@@ -1389,7 +1394,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..a21d4dc02dc9a88be78b3d338f36449b
          thead.appendChild(headerRow);
          table.appendChild(thead);
          const tbody = document.createElement('tbody');
-@@ -580,11 +1415,18 @@ class TableWidget extends WidgetType {
+@@ -580,11 +1417,18 @@ class TableWidget extends WidgetType {
          for (const row of this.model.rows) {
              const tr = document.createElement('tr');
              for (let c = 0; c < colCount; c++) {
@@ -1409,7 +1414,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..a21d4dc02dc9a88be78b3d338f36449b
          return wrap;
      }
      // All cell interactions are handled by the listeners we attach in
-@@ -629,17 +1471,37 @@ function makeCell(tag, text, view) {
+@@ -629,17 +1473,37 @@ function makeCell(tag, text, view) {
      // opened. We open on `click` (a proper popup-activation gesture, so
      // `window.open` isn't blocked) and block the caret on `pointerdown`.
      //
@@ -1452,7 +1457,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..a21d4dc02dc9a88be78b3d338f36449b
      source.addEventListener('pointerdown', (event) => {
          if (event.button !== 0)
              return;
-@@ -678,7 +1540,12 @@ function attachCellEditing(view, cell, source) {
+@@ -678,7 +1542,12 @@ function attachCellEditing(view, cell, source) {
          // textContent (not innerText) so `display: none` delimiters inside
          // mark wraps are still captured — otherwise a cell containing
          // `**bold**` would serialize to just `bold` on every keystroke.
@@ -1466,7 +1471,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..a21d4dc02dc9a88be78b3d338f36449b
          cell.dataset.raw = raw;
          const offset = getCaretCharOffset(source);
          renderCellSourceDecorated(source);
-@@ -711,6 +1578,18 @@ function attachCellEditing(view, cell, source) {
+@@ -711,6 +1580,18 @@ function attachCellEditing(view, cell, source) {
      // and strip markup here, and `escapeCell` neutralizes any literal `|`
      // on serialize.
      source.addEventListener('paste', (event) => {
@@ -1485,7 +1490,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..a21d4dc02dc9a88be78b3d338f36449b
          event.preventDefault();
          const text = (event.clipboardData?.getData('text/plain') ?? '')
              .replace(/\s+/g, ' ')
-@@ -737,6 +1616,15 @@ function attachCellEditing(view, cell, source) {
+@@ -737,6 +1618,15 @@ function attachCellEditing(view, cell, source) {
      // hides all delimiters.
      source.addEventListener('blur', () => clearActiveMarksInSource(source));
      source.addEventListener('keydown', (event) => {
@@ -1501,7 +1506,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..a21d4dc02dc9a88be78b3d338f36449b
          // Enter mirrors Tab — advance to the next cell (appending a row past
          // the last one) instead of inserting a line break a single-line cell
          // can't represent. Shift reverses direction for both.
-@@ -804,80 +1692,185 @@ function dispatchModel(view, wrap, nextModel) {
+@@ -804,80 +1694,185 @@ function dispatchModel(view, wrap, nextModel) {
          changes: { from: range.from, to: range.to, insert: next },
      });
  }
@@ -1748,7 +1753,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..a21d4dc02dc9a88be78b3d338f36449b
      });
      let dismissed = false;
      const dismiss = () => {
-@@ -893,26 +1886,113 @@ function openCellMenu(view, cell, x, y) {
+@@ -893,26 +1888,116 @@ function openCellMenu(view, cell, x, y) {
              return;
          dismiss();
      };
@@ -1865,6 +1870,9 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..a21d4dc02dc9a88be78b3d338f36449b
 +            leaf.addEventListener('click', () => {
 +                item.action();
 +                dismiss();
++                // The menu button had focus and is now gone; without this, keys
++                // (Ctrl+Z!) would go to the page body, not the editor.
++                view.focus();
 +            });
 +            sub.appendChild(leaf);
 +        }
@@ -1877,7 +1885,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..a21d4dc02dc9a88be78b3d338f36449b
      }
      document.body.appendChild(menu);
      // Clip the menu inside the viewport if it overflows.
-@@ -1191,13 +2271,21 @@ const defaultLinkOpener = (url) => {
+@@ -1191,13 +2276,21 @@ const defaultLinkOpener = (url) => {
  export const tableLinkClickFacet = Facet.define({
      combine: (values) => values[0] ?? defaultLinkOpener,
  });
