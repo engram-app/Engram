@@ -54,31 +54,34 @@ pub fn chunk(content: &str, folder: &str, title: &str) -> Vec<Chunk> {
     out
 }
 
+/// Most chunks a body of `len` bytes may produce before its tiny sections
+/// coalesce: 2,000, or one per 512 bytes. Prose splits at >= WINDOW, so only
+/// a note of tiny sections passes it (10 MB of `# h\nx\n` was 1.7M chunks:
+/// 466 MB of terms and ~13k Voyage calls). Notes under it chunk exactly as
+/// before, so their embeddings do not move.
+fn budget(len: usize) -> usize {
+    2_000.max(len / RUNT)
+}
+
+/// 2,000 sections need at least this much body (`# h\nx\n` is 6 bytes):
+/// below it the count pass is skipped.
+const COUNT_FROM: usize = 16 * 1024;
+
 /// `chunk`, handing each chunk to `emit` as it is made, so a huge note's
 /// chunks are never all held in Rust at once. Headings stream in segment by
-/// segment, so they are not all held either.
+/// segment, so they are not all held either. A body that would pass
+/// `budget` is chunked again with its small sections coalesced.
 pub fn each_chunk(content: &str, folder: &str, title: &str, mut emit: impl FnMut(Chunk)) {
     let (block, body) = crate::frontmatter::parts(content);
-    let mut sections = Sections {
-        body,
-        folder,
-        title,
-        emit: &mut emit,
-        stack: Vec::new(),
-        start: 0,
-        head_end: 0,
-        emitted: false,
-        title_seen: false,
+    let coalesce = body.len() >= COUNT_FROM && {
+        let mut n = 0;
+        chunk_body(body, folder, title, false, &mut |_| n += 1);
+        n > budget(body.len())
     };
-    if may_have_heading(body) {
-        segmented(body, SEGMENT, segment_headings_guarded, |hs| {
-            hs.into_iter().for_each(|h| sections.heading(h))
-        });
-    }
-    sections.close(body.len());
+    let emitted = chunk_body(body, folder, title, coalesce, &mut emit);
     // Every section was a bare heading (a stub, a daily-note template): keep
     // the headings as one chunk, or search could not find the note at all.
-    if !sections.emitted {
+    if !emitted {
         let rest = strip_blobs(body);
         if !markup_only(&rest) {
             for t in split(&normalize("", &rest)) {
@@ -98,6 +101,37 @@ pub fn each_chunk(content: &str, folder: &str, title: &str, mut emit: impl FnMut
     }
 }
 
+/// The body's section chunks; true if any was emitted.
+fn chunk_body(
+    body: &str,
+    folder: &str,
+    title: &str,
+    coalesce: bool,
+    emit: &mut impl FnMut(Chunk),
+) -> bool {
+    let mut sections = Sections {
+        body,
+        folder,
+        title,
+        emit,
+        stack: Vec::new(),
+        start: 0,
+        head_end: 0,
+        emitted: false,
+        title_seen: false,
+        coalesce,
+        pending: None,
+    };
+    if may_have_heading(body) {
+        segmented(body, SEGMENT, segment_headings_guarded, |hs| {
+            hs.into_iter().for_each(|h| sections.heading(h))
+        });
+    }
+    sections.close(body.len());
+    sections.flush();
+    sections.emitted
+}
+
 /// The section being read and the headings above it.
 struct Sections<'a, 'e, F: FnMut(Chunk)> {
     body: &'a str,
@@ -110,6 +144,11 @@ struct Sections<'a, 'e, F: FnMut(Chunk)> {
     head_end: usize,
     emitted: bool,
     title_seen: bool,
+    /// Over budget: sections that fit in one chunk are joined into one
+    /// until it would pass MAX_CHUNK. (text, heading path of the first,
+    /// start, end).
+    coalesce: bool,
+    pending: Option<(String, String, usize, usize)>,
 }
 
 impl<F: FnMut(Chunk)> Sections<'_, '_, F> {
@@ -135,8 +174,33 @@ impl<F: FnMut(Chunk)> Sections<'_, '_, F> {
         }
         let text = normalize(&self.body[self.start..head_end], &rest);
         let path = cap(&heading_path(self.title, &self.stack)).to_string();
+        if self.coalesce && text.len() <= MAX_CHUNK {
+            self.pend(text, path, end);
+            return;
+        }
+        self.flush();
         for t in split(&text) {
             (self.emit)(make(self.folder, &path, &path, t, self.start, end));
+            self.emitted = true;
+        }
+    }
+
+    fn pend(&mut self, text: String, path: String, end: usize) {
+        if let Some((buf, _, _, to)) = &mut self.pending {
+            if buf.len() + 2 + text.len() <= MAX_CHUNK {
+                buf.push_str("\n\n");
+                buf.push_str(&text);
+                *to = end;
+                return;
+            }
+            self.flush();
+        }
+        self.pending = Some((text, path, self.start, end));
+    }
+
+    fn flush(&mut self) {
+        if let Some((text, path, from, to)) = self.pending.take() {
+            (self.emit)(make(self.folder, &path, &path, &text, from, to));
             self.emitted = true;
         }
     }
@@ -541,6 +605,32 @@ mod tests {
 
     fn paths(content: &str) -> Vec<String> {
         chunk(content, "", "T").into_iter().map(|c| c.3).collect()
+    }
+
+    // 10 MB of `# h\nx\n` was 1.7M chunks: 466 MB of terms and ~13k Voyage
+    // calls. Over budget, tiny sections coalesce into ~MAX_CHUNK chunks, so
+    // every byte is still indexed but the count follows the size.
+    #[test]
+    fn tiny_sections_coalesce_past_the_budget() {
+        let note = "# h\nx\n".repeat(200_000);
+        let cs = chunk(&note, "", "T");
+        let budget = super::budget(note.len());
+        assert!(cs.len() <= budget, "{} chunks, budget {budget}", cs.len());
+        assert!(cs.iter().all(|c| c.0.len() <= MAX_CHUNK));
+        // Nothing dropped: every section's text is in some chunk.
+        let xs: usize = cs.iter().map(|c| c.0.matches('x').count()).sum();
+        assert_eq!(xs, 200_000);
+        // Ranges stay in order and inside the body.
+        assert!(cs
+            .windows(2)
+            .all(|w| w[0].4 <= w[1].4 && w[1].5 <= note.len()));
+    }
+
+    #[test]
+    fn notes_under_the_budget_chunk_as_before() {
+        // A few hundred small sections: one chunk each, unchanged.
+        let note = "## s\n\nbody text\n\n".repeat(300);
+        assert_eq!(chunk(&note, "", "T").len(), 300);
     }
 
     #[test]
