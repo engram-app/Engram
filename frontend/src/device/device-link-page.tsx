@@ -578,8 +578,8 @@ function DeviceLinkPage() {
 						    say so on the path that lost the speed bump. */}
 						{arrivedWithCode && (
 							<p className="text-muted-foreground text-xs">
-								Continue only if you just started this link in Obsidian. The names above came from
-								the requesting device, so they don't prove who it is.
+								Syncing gives this device access to your notes. Continue only if you started this
+								link yourself, just now. If someone else sent you here, close this page.
 							</p>
 						)}
 

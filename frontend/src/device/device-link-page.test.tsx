@@ -385,7 +385,7 @@ describe("DeviceLinkPage", () => {
 		renderPage("/link?code=ENGR-7X4K");
 
 		expect(
-			await screen.findByText(/continue only if you just started this link in obsidian/iu),
+			await screen.findByText(/continue only if you started this link yourself/iu),
 		).toBeInTheDocument();
 	});
 
@@ -397,7 +397,9 @@ describe("DeviceLinkPage", () => {
 		fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
 
 		await screen.findByRole("radio", { name: /personal/iu });
-		expect(screen.queryByText(/continue only if you just started this link/iu)).not.toBeInTheDocument();
+		expect(
+			screen.queryByText(/continue only if you started this link yourself/iu),
+		).not.toBeInTheDocument();
 	});
 
 	it("does not auto-verify when no code was supplied", () => {
