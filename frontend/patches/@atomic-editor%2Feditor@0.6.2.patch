@@ -4,6 +4,9 @@ index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-2fe67c9750ddd3e7 b/.bun-tag-2fe67c9750ddd3e7
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-323e5d0b9178d9b1 b/.bun-tag-323e5d0b9178d9b1
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-58bb1950cd63cf85 b/.bun-tag-58bb1950cd63cf85
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
@@ -23,10 +26,23 @@ diff --git a/node_modules/@atomic-editor/editor/.bun-tag-be1b91b2c5913cde b/.bun
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/styles/inline-preview.css b/dist/styles/inline-preview.css
-index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..60dbc4b7752073714ff5058c50c845cbeb8d9805 100644
+index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..51902e156505073afd74c2a92a1b93c7aafde211 100644
 --- a/dist/styles/inline-preview.css
 +++ b/dist/styles/inline-preview.css
-@@ -523,6 +523,8 @@
+@@ -464,8 +464,10 @@
+ 
+ .cm-atomic-table table {
+   border-collapse: collapse;
+-  width: max-content;
+-  min-width: 100%;
++  /* Fit the content (like Obsidian) instead of stretching to the page; long
++   * text wraps once the table reaches the container's width. */
++  width: auto;
++  min-width: 0;
+   font-family: var(--atomic-editor-font, system-ui, sans-serif);
+ }
+ 
+@@ -523,6 +525,8 @@
  .cm-atomic-table-cell-source .cm-atomic-em-wrap.active > .cm-atomic-mark,
  .cm-atomic-table-cell-source .cm-atomic-strike-wrap.active > .cm-atomic-mark,
  .cm-atomic-table-cell-source .cm-atomic-highlight-wrap.active > .cm-atomic-mark,
@@ -35,7 +51,7 @@ index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..60dbc4b7752073714ff5058c50c845cb
  .cm-atomic-table-cell-source .cm-atomic-link-wrap.active > .cm-atomic-mark {
    display: inline;
    color: var(--atomic-editor-fg-faint, #666);
-@@ -828,3 +830,96 @@
+@@ -828,3 +832,96 @@
  .cm-atomic-readonly .cm-atomic-table-cell-source {
    cursor: default;
  }
@@ -88,8 +104,8 @@ index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..60dbc4b7752073714ff5058c50c845cb
 + * so CM6's height measurement stays honest (see .cm-atomic-table). */
 +.cm-atomic-table-body {
 +  position: relative;
-+  width: max-content;
-+  min-width: 100%;
++  width: fit-content;
++  max-width: 100%;
 +  box-sizing: border-box;
 +  padding: 0 1.4rem 1.4rem 0;
 +}
