@@ -1829,12 +1829,48 @@ defmodule Engram.MCP.Handlers do
     end
   end
 
+  # Content bytes one get_notes call may return across its notes (an
+  # outline returns no content, so it is never held to it). A client cannot
+  # use 200 MB in one reply either; the first note is always returned whole.
+  @get_notes_budget 4 * 1024 * 1024
+
+  @doc false
+  def get_notes_budget, do: @get_notes_budget
+
+  # {path, note} | {path, nil} | {path, :over_budget}, in order.
+  defp within_budget(fetched, true), do: fetched
+
+  defp within_budget(fetched, false) do
+    {kept, _spent} =
+      Enum.map_reduce(fetched, 0, fn
+        {path, %{} = note}, spent ->
+          size = byte_size(note.content || "")
+
+          if spent == 0 or spent + size <= @get_notes_budget,
+            do: {{path, note}, spent + size},
+            else: {{path, :over_budget}, spent}
+
+        other, spent ->
+          {other, spent}
+      end)
+
+    kept
+  end
+
   defp render_notes(user, fetched, outline?, links?, gate) do
     {texts, notes} =
       fetched
+      |> within_budget(outline?)
       |> Enum.map(fn
         {path, nil} ->
           {"Note not found: #{path}", %{"path" => path, "found" => false}}
+
+        {path, :over_budget} ->
+          msg =
+            "Not returned: this call's content budget (#{div(@get_notes_budget, 1_048_576)} MB) " <>
+              "is spent. Fetch #{path} in its own call."
+
+          {"#{path}: #{msg}", %{"path" => path, "found" => true, "error" => msg}}
 
         {_path, note} ->
           {text, payload} =
