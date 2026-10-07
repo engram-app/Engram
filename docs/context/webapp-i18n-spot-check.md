@@ -41,7 +41,7 @@ App is at http://127.0.0.1:5173 through the SSH tunnel (see `local-browser-cdp-t
 ### Checklist (walk in this order, once per locale)
 
 - [ ] **Sign-in / first run:** heading, field labels, placeholders, validation errors, reset-password page, invite-required and invalid-invite states.
-- [ ] **Onboarding, self-host:** tools -> vault (Obsidian panel, "starting fresh" panel; the vault name field starts as the English `My Vault` on purpose, only the placeholder is translated) -> dashboard.
+- [ ] **Onboarding, self-host:** tools -> vault (Obsidian panel, "starting fresh" panel; the vault name field starts as the translated default; untouched, it is stored as English `My Vault`) -> dashboard.
 - [ ] **Onboarding, SaaS:** Clerk sign-up -> agreement (consent text English by design) -> billing (Continue with Free; Pro/Starter/Free names) -> tools -> vault -> dashboard.
 - [ ] **Settings > Account:** profile, Appearance (theme label reads `Theme: light|dark|system` as whole sentences), Language, session/sign-out, account deletion wording.
 - [ ] **Settings > Vaults:** list, create, rename, delete, deleted-vaults (trash, "Purges" column, 30-day recovery sentence).
@@ -376,7 +376,7 @@ Each table: English key, current choice, why doubtful. Ordered by consequence (b
 - `index.html` `<title>` and the pre-React splash (before `LocaleProvider` mounts).
 - Markdown syntax keywords, callout type names, frontmatter keys, fence languages, math (section 2).
 - Dev-only strings.
-- The default vault name `My Vault` is persisted in English; only its placeholder is translated.
+- The default vault name `My Vault` is persisted in English; every vault display (switcher, vault settings, onboarding field) shows it translated via `displayVaultName`. Names elsewhere (connections list, device-link, API, plugin, MCP) stay English.
 - Plan prices in `billing/plan-change-panel.tsx` (`formatCents`, `formatPlanPrice`) are hardcoded USD `$` strings, not locale-formatted.
 
 **Formatting follows the app language, not the browser:** dates and money use `renderedLocale` through `intlLocale()`, so a German UI shows `6. Okt. 2026` even in an `en-US` browser.

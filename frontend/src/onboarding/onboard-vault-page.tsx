@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { useAutofocus } from "@/hooks/use-autofocus";
 import { useT } from "@/i18n/locale-provider";
 import { Trans } from "@/i18n/trans";
+import { DEFAULT_VAULT_NAME } from "@/i18n/vault-name";
 import AuthPanel from "@/layout/auth-panel";
 import { heading } from "@/lib/ui-classes";
 import { track } from "../analytics/track";
@@ -35,10 +36,6 @@ interface VaultStepProps {
 	createVault: ReturnType<typeof useCreateVault>;
 	navigate: ReturnType<typeof useNavigate>;
 }
-
-// The default vault NAME is data saved on the server, not UI text: never translated.
-// (Only the input placeholder is, via t.)
-const DEFAULT_VAULT_NAME = "My Vault";
 
 function VaultStep({
 	profileSaved,
@@ -384,14 +381,17 @@ interface FreshInlinePanelProps {
 
 function FreshInlinePanel({ isCommitting, onCommit }: FreshInlinePanelProps) {
 	const { t } = useT();
-	const [name, setName] = useState(DEFAULT_VAULT_NAME);
+	// null = untouched: show the default in the current language and store it
+	// in English, so a language switch mid-form still lands on the default.
+	const [typed, setTyped] = useState<string | null>(null);
+	const name = typed ?? t("My Vault");
 	const [error, setError] = useState<string | null>(null);
 	const nameRef = useAutofocus<HTMLInputElement>();
 
 	async function submit() {
 		setError(null);
 		try {
-			await onCommit(name);
+			await onCommit(typed ?? DEFAULT_VAULT_NAME);
 		} catch (err) {
 			setError(err instanceof Error ? err.message : t("Could not create vault"));
 		}
@@ -413,7 +413,7 @@ function FreshInlinePanel({ isCommitting, onCommit }: FreshInlinePanelProps) {
 					ref={nameRef}
 					type="text"
 					value={name}
-					onChange={(e) => setName(e.target.value)}
+					onChange={(e) => setTyped(e.target.value)}
 					maxLength={100}
 					placeholder={t("My Vault")}
 				/>

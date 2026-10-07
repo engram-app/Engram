@@ -14,6 +14,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { VaultCreateForm } from "@/components/vault-create-form";
 import { useT } from "@/i18n/locale-provider";
+import { displayVaultName } from "@/i18n/vault-name";
 import {
 	LIST_ROW_GAP,
 	LIST_ROW_HEIGHT,
@@ -113,7 +114,7 @@ function VaultSwitcher() {
 							{t("Vault")}
 						</span>
 						<span className="block truncate font-medium text-foreground text-sm">
-							{active.name}
+							{displayVaultName(active.name, t)}
 						</span>
 					</span>
 					<ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-aria-expanded/dropdown-trigger:rotate-180" />
@@ -173,7 +174,7 @@ function VaultSwitcher() {
 										}
 									}}
 								>
-									<span className="truncate">{v.name}</span>
+									<span className="truncate">{displayVaultName(v.name, t)}</span>
 									{v.id === active.id ? <Check className="size-4 shrink-0 text-primary" /> : null}
 								</div>
 							))}

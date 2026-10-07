@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { VaultCreateForm } from "@/components/vault-create-form";
 import { useAutofocus } from "@/hooks/use-autofocus";
 import { useT } from "@/i18n/locale-provider";
+import { displayVaultName } from "@/i18n/vault-name";
 import { SettingsSectionCard } from "@/settings/account/section-card";
 import { settingsTo } from "../settings-hash";
 import { DeleteVaultDialog } from "./delete-vault-dialog";
@@ -16,12 +17,13 @@ function VaultRow({ vault, onDelete }: { vault: Vault; onDelete: () => void }) {
 	const { t } = useT();
 	const update = useUpdateVault();
 	const [renaming, setRenaming] = useState(false);
-	const [name, setName] = useState(vault.name);
+	const label = displayVaultName(vault.name, t);
+	const [name, setName] = useState(label);
 	const nameRef = useAutofocus<HTMLInputElement>(renaming);
 
 	function saveName() {
 		const next = name.trim();
-		if (next && next !== vault.name) {
+		if (next && next !== label) {
 			update.mutate(
 				{ id: vault.id, name: next },
 				{ onError: () => toast.error(t("Rename failed")) },
@@ -38,14 +40,14 @@ function VaultRow({ vault, onDelete }: { vault: Vault; onDelete: () => void }) {
 						ref={nameRef}
 						className="block"
 						value={name}
-						aria-label={t("Rename {name}", { name: vault.name })}
+						aria-label={t("Rename {name}", { name: label })}
 						onChange={(e) => setName(e.target.value)}
 						onBlur={saveName}
 						onKeyDown={(e) => e.key === "Enter" && saveName()}
 					/>
 				) : (
 					<span className="flex items-center gap-2">
-						<span className="font-medium text-foreground">{vault.name}</span>
+						<span className="font-medium text-foreground">{label}</span>
 						{Boolean(vault.is_default) && (
 							<span className="rounded bg-muted px-2 py-0.5 text-muted-foreground text-xs">
 								{t("Default")}
@@ -66,8 +68,8 @@ function VaultRow({ vault, onDelete }: { vault: Vault; onDelete: () => void }) {
 						<Button
 							variant="ghost"
 							size="icon-sm"
-							title={t("Set {name} as default", { name: vault.name })}
-							aria-label={t("Set {name} as default", { name: vault.name })}
+							title={t("Set {name} as default", { name: label })}
+							aria-label={t("Set {name} as default", { name: label })}
 							onClick={() =>
 								update.mutate(
 									{ id: vault.id, is_default: true },
@@ -81,8 +83,8 @@ function VaultRow({ vault, onDelete }: { vault: Vault; onDelete: () => void }) {
 					<Button
 						variant="ghost"
 						size="icon-sm"
-						title={t("Rename {name}", { name: vault.name })}
-						aria-label={t("Rename {name}", { name: vault.name })}
+						title={t("Rename {name}", { name: label })}
+						aria-label={t("Rename {name}", { name: label })}
 						onClick={() => setRenaming(true)}
 					>
 						<Pencil />
@@ -90,8 +92,8 @@ function VaultRow({ vault, onDelete }: { vault: Vault; onDelete: () => void }) {
 					<Button
 						variant="destructive"
 						size="icon-sm"
-						title={t("Delete {name}", { name: vault.name })}
-						aria-label={t("Delete {name}", { name: vault.name })}
+						title={t("Delete {name}", { name: label })}
+						aria-label={t("Delete {name}", { name: label })}
 						onClick={onDelete}
 					>
 						<Trash2 />

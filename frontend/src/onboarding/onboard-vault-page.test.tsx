@@ -74,7 +74,7 @@ describe("OnboardVaultPage: step-completion tracking", () => {
 	});
 });
 
-describe("OnboardVaultPage: default vault name is data, not UI", () => {
+describe("OnboardVaultPage: default vault name is stored in English, shown translated", () => {
 	const german = {
 		de: async () => ({ default: { "My Vault": "Mein Tresor", "Vault name": "Tresorname" } }),
 	};
@@ -109,12 +109,25 @@ describe("OnboardVaultPage: default vault name is data, not UI", () => {
 		);
 	});
 
-	it("prefills the English literal and shows the translated placeholder", async () => {
+	it("saves a name the user typed over the default as typed", async () => {
+		renderGerman();
+		await waitFor(() => expect(document.documentElement.lang).toBe("de"));
+		fireEvent.click(screen.getByText(/starting fresh/iu));
+		fireEvent.change(await screen.findByRole("textbox"), { target: { value: "Arbeit" } });
+		fireEvent.click(screen.getByRole("button", { name: /& continue/iu }));
+		await waitFor(() =>
+			expect(createVaultMutateAsync).toHaveBeenCalledWith(
+				expect.objectContaining({ name: "Arbeit" }),
+			),
+		);
+	});
+
+	it("prefills the translated default and shows the translated placeholder", async () => {
 		renderGerman();
 		await waitFor(() => expect(document.documentElement.lang).toBe("de"));
 		fireEvent.click(screen.getByText(/starting fresh/iu));
 		const input = await screen.findByRole("textbox");
-		expect(input).toHaveValue("My Vault");
+		expect(input).toHaveValue("Mein Tresor");
 		expect(input).toHaveAttribute("placeholder", "Mein Tresor");
 	});
 });
