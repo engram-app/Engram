@@ -122,8 +122,31 @@ CI, 4M run locally) holds segmented == whole. Min of 5, 1 MB, native peak
 | dense inline | 427 ms / 249 MB | 175 ms / 15 MB |
 | mixed note (both parses) | 356 ms / 128 MB | 238 ms / 13 MB |
 
-What remains grows with the result (250,000 headings is the 37 MB) and a
-copy or two of the text. ParseGate still bounds concurrent parses.
+What remains grows with the result (250,000 headings is the 37 MB), so the
+result is capped: past 100,000 headings + explained lines + safe ranges
+(`outline.rs` `MAX_ITEMS`), or 1M code spans in the `%%`/`$$` pass, the NIF
+stops parsing and returns nil; Sections answers `{:error, :too_complex}`
+(counted as `section_parse_total{outcome="too_complex"}`) and the MCP tool
+says to use replace_text. Nothing else about the note is affected. At the
+cap the result is ~10 MB in Rust and ~8 MB as BEAM terms. Line offsets are
+a pre-sized `u32` table (a doubling `Vec<usize>` hit 201 MB on 10 MB of
+blank lines), and `next_cut` stops at the segment's reach (without it, a
+note with no safe cut rescanned the rest per segment: 10.8 s -> 2.2 s).
+Worst native peaks at the 10 MB note cap, after all of it:
+
+| 10 MB of | Time | Native peak |
+|---|---|---|
+| `%% \`a\`` lines (refused) | 1.8 s | 49 MB |
+| blank lines | 2.2 s | 40 MB |
+| `#` lines (refused) | 0.7 s | 33 MB |
+| tight list | 5.8 s | 25 MB |
+| dense inline | 6.3 s | 16 MB |
+
+Prod runs one ParseGate slot, so one of these at a time per node.
+The BOM, frontmatter blanking and heading trims moved into the same call
+(one NIF per outline): Elixir's share on 250,000 headings went from ~3.4 s
+of trims to ~0.5 s of map building. Rust's `str::trim` and `String.trim/1`
+are both Unicode White_Space (tested per code point).
 Parity: a 103,000-note live differential against the
 old scan, then `md_outline_golden.json.gz` (2,508 notes). The only
 divergence was an old bug: two `$$` pairs sharing a CRLF line shifted every

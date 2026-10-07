@@ -119,11 +119,12 @@ defmodule Engram.Native do
     do: sized(:text_diff, [current, incoming], [current, incoming])
 
   @doc """
-  What `Engram.MCP.Sections` reads from a CommonMark parse (comrak):
-  `{[{line, level, setext, plain_text, raw | nil, span}], explained_lines,
-  safe_line_ranges}`, lines 0-indexed. Text and raw come untrimmed. Valid
-  UTF-8 only. Always on a dirty scheduler: 16 KB of dense markup takes
-  ~10 ms in comrak.
+  What `Engram.MCP.Sections` reads from a CommonMark parse (comrak) of a
+  note as stored (BOM and frontmatter handled here): `{[{line, level, text,
+  raw, span}], explained_lines, safe_line_ranges}`, lines 0-indexed, text
+  and raw trimmed. nil when the note has more than 100,000 of them
+  (outline.rs MAX_ITEMS). Valid UTF-8 only. Always on a dirty scheduler:
+  16 KB of dense markup takes ~10 ms in comrak.
   """
   def md_outline(text) when is_binary(text),
     do: call(:md_outline, text, %{dirty: true}, fn -> md_outline_nif(text) end)

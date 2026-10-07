@@ -400,15 +400,21 @@ fn utf16_offsets(text: &str, at: Vec<usize>) -> NifResult<(Vec<usize>, usize)> {
 
 sized_nif!(utf16_offsets, utf16_offsets_nif, utf16_offsets_dirty_nif, (text: &str, at: Vec<usize>) [text, at] -> NifResult<(Vec<usize>, usize)>);
 
-/// `Engram.MCP.Sections`' view of a note: `{headings, explained_lines,
-/// safe_ranges}` (see outline.rs), and the peak. Raises on a sourcepos
-/// outside the text, as the Elixir version did. Always dirty: comrak takes
-/// ~10 ms on 16 KB of dense markup (a tight list, `# h` lines), far past
-/// what may run on a normal scheduler, and MCP calls do not feel the hop.
+/// `Engram.MCP.Sections`' view of a note, from the note as stored:
+/// `{headings, explained_lines, safe_ranges}` (see outline.rs), or nil when
+/// it has more than `outline::MAX_ITEMS` of them; and the peak. Raises on a
+/// sourcepos outside the text, as the Elixir version did. Always dirty:
+/// comrak takes ~10 ms on 16 KB of dense markup (a tight list, `# h` lines),
+/// far past what may run on a normal scheduler, and MCP calls do not feel
+/// the hop.
 #[rustler::nif(schedule = "DirtyCpu")]
-fn md_outline_nif(content: &str) -> NifResult<(outline::Outline, usize)> {
+fn md_outline_nif(content: &str) -> NifResult<(Option<outline::Outline>, usize)> {
     let (o, peak) = memory::measured(|| outline::outline(content));
-    Ok((o.ok_or(Error::BadArg)?, peak))
+    match o {
+        Ok(o) => Ok((Some(o), peak)),
+        Err(outline::Refused::TooComplex) => Ok((None, peak)),
+        Err(outline::Refused::BadSourcepos) => Err(Error::BadArg),
+    }
 }
 
 rustler::init!("Elixir.Engram.Native");

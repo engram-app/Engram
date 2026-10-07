@@ -94,7 +94,8 @@ pub fn segmented<T>(
     while start < body.len() {
         let base = want.max(FORCE / 2);
         let reach = base.saturating_mul(2);
-        let (end, final_cut) = match next_cut(body, start.saturating_add(want)) {
+        let limit = start.saturating_add(reach);
+        let (end, final_cut) = match next_cut(body, start.saturating_add(want), limit) {
             Some(c) if c - start <= reach => (c, false),
             None if body.len() - start <= reach => (body.len(), true),
             _ => (forced_cut(body, start + base), true),
@@ -104,7 +105,7 @@ pub fn segmented<T>(
             Some(open) if !final_cut => {
                 let before = open > 0
                     && end - start > longest
-                    && next_cut(body, start + open) == Some(start + open);
+                    && next_cut(body, start + open, start + open) == Some(start + open);
                 longest = longest.max(end - start);
                 want = if before { open } else { 2 * longest };
             }
@@ -171,17 +172,20 @@ fn segment_code_ranges(s: &str, base: usize, out: &mut Vec<(usize, usize)>) -> O
     }
 }
 
-/// Start of the first line at or after `from` that a cut may precede: one
-/// at column 0 that starts a list item, fence or ATX heading (each ends any
-/// open paragraph), or any column-0 line after a blank line.
-fn next_cut(s: &str, from: usize) -> Option<usize> {
+/// Start of the first line at or after `from`, and at or before `limit`,
+/// that a cut may precede: one at column 0 that starts a list item, fence or
+/// ATX heading (each ends any open paragraph), or any column-0 line after a
+/// blank line. `limit` keeps a note with no cut at all linear: without it,
+/// every forced segment rescanned the rest of the note (10 MB of blank
+/// lines took 10 s).
+fn next_cut(s: &str, from: usize, limit: usize) -> Option<usize> {
     let b = s.as_bytes();
     let mut pos = match from.checked_sub(1) {
         None => 0,
         Some(f) => f + b.get(f..)?.iter().position(|&c| c == b'\n')? + 1,
     };
     let mut prev_blank = false;
-    while pos < b.len() {
+    while pos < b.len() && pos <= limit {
         let eol = b[pos..]
             .iter()
             .position(|&c| c == b'\n')
