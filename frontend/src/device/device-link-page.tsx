@@ -540,10 +540,13 @@ function DeviceLinkPage() {
 							Pick an existing one, or create a new vault for these notes.
 						</p>
 
-						<label className="flex flex-col gap-1.5">
-							<span className="font-medium text-foreground text-sm">
+						<label className="flex flex-col gap-2 rounded-lg border border-border bg-muted/40 p-4">
+							<span className="font-semibold text-base text-foreground">
 								Name this connection{" "}
-								<span className="font-normal text-muted-foreground">(optional)</span>
+								<span className="font-normal text-muted-foreground text-sm">(optional)</span>
+							</span>
+							<span className="text-muted-foreground text-xs">
+								Shown in your connections list so you can tell your devices apart.
 							</span>
 							<input
 								type="text"
@@ -551,7 +554,7 @@ function DeviceLinkPage() {
 								value={label}
 								onChange={(e) => setLabel(e.target.value)}
 								placeholder="Obsidian Vault Sync"
-								className={fieldInput}
+								className={cn(fieldInput, "bg-background")}
 							/>
 						</label>
 
