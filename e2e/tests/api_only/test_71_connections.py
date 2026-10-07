@@ -573,7 +573,11 @@ async def test_free_tier_pat_minting_blocked(clerk_client):
 # ── Device-flow helpers ───────────────────────────────────────────────────────
 
 
-def device_start(client_id: str = "e2e-plugin", vault_name: str | None = None) -> dict:
+def device_start(
+    client_id: str = "e2e-plugin",
+    vault_name: str | None = None,
+    device_name: str | None = None,
+) -> dict:
     """POST /api/auth/device — initiate device flow. Returns JSON body.
 
     Optional vault_name is the plugin's local Obsidian vault name. It's stored
@@ -582,6 +586,8 @@ def device_start(client_id: str = "e2e-plugin", vault_name: str | None = None) -
     payload: dict = {"client_id": client_id}
     if vault_name is not None:
         payload["vault_name"] = vault_name
+    if device_name is not None:
+        payload["device_name"] = device_name
     resp = requests.post(
         f"{API_URL}/auth/device",
         json=payload,
@@ -591,13 +597,18 @@ def device_start(client_id: str = "e2e-plugin", vault_name: str | None = None) -
     return resp.json()
 
 
-def device_authorize(jwt_token: str, user_code: str, vault_id: str) -> requests.Response:
+def device_authorize(
+    jwt_token: str, user_code: str, vault_id: str, label: str | None = None
+) -> requests.Response:
     """POST /api/auth/device/authorize — confirm device from user side.
     Returns the raw Response so callers can check 402 cap responses.
     """
+    body: dict = {"user_code": user_code, "vault_id": vault_id}
+    if label is not None:
+        body["label"] = label
     return requests.post(
         f"{API_URL}/auth/device/authorize",
-        json={"user_code": user_code, "vault_id": vault_id},
+        json=body,
         headers={"Authorization": f"Bearer {jwt_token}"},
         timeout=10,
     )
@@ -804,6 +815,55 @@ async def test_device_flow_vault_name_hint_surfaces_on_link_page(clerk_client):
         )
         resp2.raise_for_status()
         assert resp2.json()["suggested_vault_name"] is None
+    finally:
+        clerk_client.delete_user(clerk_user_id)
+
+
+@pytest.mark.asyncio
+async def test_device_flow_label_and_device_name_round_trip(clerk_client):
+    """The plugin's device_name is offered back on /link, and the label the user
+    types there is trimmed, listed as the connection's name and kept across a
+    refresh-token rotation. SaaS lane: Clerk session JWT instead of local auth.
+    """
+    clerk_user_id, jwt, email = _make_clerk_user(clerk_client)
+    grant_test_plan(email)
+    try:
+        vault_id = create_vault(jwt, f"e2e-vault-{_ts()}")
+        start = device_start("e2e-obsidian-plugin", vault_name="Hint", device_name="todd-laptop")
+
+        hints = requests.get(
+            f"{API_URL}/vaults",
+            params={"user_code": start["user_code"]},
+            headers={"Authorization": f"Bearer {jwt}"},
+            timeout=10,
+        )
+        hints.raise_for_status()
+        assert hints.json()["suggested_device_name"] == "todd-laptop"
+
+        auth_resp = device_authorize(jwt, start["user_code"], vault_id, label="  Work laptop  ")
+        assert auth_resp.status_code == 200, auth_resp.text
+        tokens = device_token_poll(start["device_code"])
+
+        rows = [r for r in list_connections(jwt) if r["kind"] == "obsidian"]
+        assert len(rows) == 1
+        assert rows[0]["label"] == "Work laptop"
+        assert rows[0]["name"] == "Work laptop"
+
+        refreshed = requests.post(
+            f"{API_URL}/auth/token/refresh",
+            json={"refresh_token": tokens["refresh_token"]},
+            timeout=10,
+        )
+        assert refreshed.status_code == 200, refreshed.text
+        rows_after = [r for r in list_connections(jwt) if r["kind"] == "obsidian"]
+        assert len(rows_after) == 1
+        assert rows_after[0]["label"] == "Work laptop"
+
+        too_long = device_authorize(
+            jwt, device_start("e2e-obsidian-plugin")["user_code"], vault_id, label="a" * 121
+        )
+        assert too_long.status_code == 422
+        assert too_long.json()["error"] == "invalid_label"
     finally:
         clerk_client.delete_user(clerk_user_id)
 
