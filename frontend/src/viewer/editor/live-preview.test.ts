@@ -141,4 +141,44 @@ describe("image embeds", () => {
 		link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
 		expect(openWikiLink).toHaveBeenCalledExactlyOnceWith("Wiki Link");
 	});
+
+	describe("a markdown link inside a table cell", () => {
+		function mountLinkCell(openMarkdownLink: (href: string) => boolean) {
+			view = new EditorView({
+				state: EditorState.create({
+					doc: "| h |\n| --- |\n| [engram](https://engram.page) |\n",
+					extensions: livePreviewExtensions({
+						resolveWikiLink: (n) => n,
+						openWikiLink: () => {},
+						wikiCompletionPaths: () => [],
+						openMarkdownLink,
+					}),
+				}),
+				parent: document.body,
+			});
+			view.dom
+				.querySelector(".cm-atomic-table .cm-atomic-link")
+				?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+		}
+
+		test("opens in-app when it resolves to a note", () => {
+			const open = vi.spyOn(window, "open").mockImplementation(() => null);
+			const openMarkdownLink = vi.fn(() => true);
+			mountLinkCell(openMarkdownLink);
+			expect(openMarkdownLink).toHaveBeenCalledExactlyOnceWith("https://engram.page");
+			expect(open).not.toHaveBeenCalled();
+			open.mockRestore();
+		});
+
+		test("opens a new tab otherwise", () => {
+			const open = vi.spyOn(window, "open").mockImplementation(() => null);
+			mountLinkCell(() => false);
+			expect(open).toHaveBeenCalledExactlyOnceWith(
+				"https://engram.page",
+				"_blank",
+				"noopener,noreferrer",
+			);
+			open.mockRestore();
+		});
+	});
 });

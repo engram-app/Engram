@@ -132,3 +132,5 @@ export function linkOpenHandler(opts: LinkOpenOpts): Extension {
 		}),
 	);
 }
+
+export { openExternal };

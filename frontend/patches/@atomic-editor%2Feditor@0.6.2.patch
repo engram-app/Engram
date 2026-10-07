@@ -1,3 +1,6 @@
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-91f638c52efbe856 b/.bun-tag-91f638c52efbe856
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-9d67fe100061cfe b/.bun-tag-9d67fe100061cfe
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
@@ -47,7 +50,7 @@ index ff02d57548388e468f73695f3bd45ec58be38160..d2f2a04758594f7b202cda3897ac7321
  export declare function tables(config?: TablesConfig): Extension;
  export {};
 diff --git a/dist/table-widget.js b/dist/table-widget.js
-index aee407c4aaa2eea5a46c0fa28831dcc80985c783..bedc66588ac76f26926669afccc978c0eee165f1 100644
+index aee407c4aaa2eea5a46c0fa28831dcc80985c783..8a6867f24c51e1e092084196c730e2e8a5e50605 100644
 --- a/dist/table-widget.js
 +++ b/dist/table-widget.js
 @@ -172,6 +172,19 @@ function matchCellMarkAt(raw, from) {
@@ -226,8 +229,23 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..bedc66588ac76f26926669afccc978c0
  // ---- widget ---------------------------------------------------------
  class TableWidget extends WidgetType {
      constructor(model, readOnly) {
-@@ -640,6 +788,27 @@ function makeCell(tag, text, view) {
-         const selector = readOnly ? '.cm-atomic-link-wrap' : '.cm-atomic-link-icon';
+@@ -629,17 +777,37 @@ function makeCell(tag, text, view) {
+     // opened. We open on `click` (a proper popup-activation gesture, so
+     // `window.open` isn't blocked) and block the caret on `pointerdown`.
+     //
+-    // In read-only mode there's no editable link text to protect, so the
+-    // whole link (`.cm-atomic-link-wrap`) is the open target — matching
+-    // the outer editor. In edit mode the open stays scoped to the
+-    // trailing icon so the text itself remains clickable-to-edit.
++    // The whole link (`.cm-atomic-link-wrap`) is the open target in both
++    // modes, matching the outer editor (the host hides the icon, so an
++    // icon-only hit-zone would leave links unopenable while editing).
+     const openTargetFromEvent = (event) => {
+         const target = event.target;
+         if (!(target instanceof Element))
+             return null;
+-        const selector = readOnly ? '.cm-atomic-link-wrap' : '.cm-atomic-link-icon';
++        const selector = '.cm-atomic-link-wrap';
          return target.closest(selector);
      };
 +    // Wikilinks open on plain click, like the outer editor. The outer
@@ -254,7 +272,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..bedc66588ac76f26926669afccc978c0
      source.addEventListener('pointerdown', (event) => {
          if (event.button !== 0)
              return;
-@@ -678,7 +847,12 @@ function attachCellEditing(view, cell, source) {
+@@ -678,7 +846,12 @@ function attachCellEditing(view, cell, source) {
          // textContent (not innerText) so `display: none` delimiters inside
          // mark wraps are still captured — otherwise a cell containing
          // `**bold**` would serialize to just `bold` on every keystroke.
@@ -268,7 +286,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..bedc66588ac76f26926669afccc978c0
          cell.dataset.raw = raw;
          const offset = getCaretCharOffset(source);
          renderCellSourceDecorated(source);
-@@ -737,6 +911,15 @@ function attachCellEditing(view, cell, source) {
+@@ -737,6 +910,15 @@ function attachCellEditing(view, cell, source) {
      // hides all delimiters.
      source.addEventListener('blur', () => clearActiveMarksInSource(source));
      source.addEventListener('keydown', (event) => {
@@ -284,7 +302,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..bedc66588ac76f26926669afccc978c0
          // Enter mirrors Tab — advance to the next cell (appending a row past
          // the last one) instead of inserting a line break a single-line cell
          // can't represent. Shift reverses direction for both.
-@@ -1191,13 +1374,21 @@ const defaultLinkOpener = (url) => {
+@@ -1191,13 +1373,21 @@ const defaultLinkOpener = (url) => {
  export const tableLinkClickFacet = Facet.define({
      combine: (values) => values[0] ?? defaultLinkOpener,
  });

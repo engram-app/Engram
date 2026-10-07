@@ -162,6 +162,20 @@
 	content: none;
 }
 
+/* Table cells render the same icon as a real element (a pseudo-element can't
+   take a click), so the rule above misses it. The whole link opens on click
+   (patches/@atomic-editor), so the icon has no job. */
+.cm-atomic-link-icon {
+	display: none;
+}
+
+/* Table cells are their own contenteditable, so they paint the browser's native
+   selection (dark blue) instead of the editor's. Match the document's. */
+.cm-atomic-table-cell-source ::selection,
+.cm-atomic-table-cell-source::selection {
+	background-color: var(--atomic-editor-selection-bg);
+}
+
 /* A link opens on click in edit mode (editor/link-open.ts), so it has to look
    clickable. CodeMirror's content DOM is a text-caret surface by default, and
    an I-beam over the one thing that is NOT a text target reads as "nothing

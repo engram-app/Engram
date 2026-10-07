@@ -30,7 +30,7 @@ import { completionPopup, NATIVE_POPUP_CLASS } from "./completion-popup";
 import { noParagraphFold } from "./heading-fold";
 import { indentedCodeLines } from "./indented-code";
 import { katexDecoration } from "./katex-decoration";
-import { linkOpenHandler } from "./link-open";
+import { linkOpenHandler, openExternal } from "./link-open";
 import { listRails } from "./list-rails";
 import { mermaidDecoration, mermaidKeymap } from "./mermaid-decoration";
 import { mdLinkCompletionSource, wikiCompletionSource } from "./wiki-completion";
@@ -121,7 +121,16 @@ export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 		// route their wikilink clicks to openWikiLink. It takes the RAW target and
 		// resolves it itself (NotePage.openWikiLink); resolving here too would
 		// double-resolve and create a note named after the href.
-		tables({ onWikiLinkClick: (target) => opts.openWikiLink(target) }),
+		tables({
+			onWikiLinkClick: (target) => opts.openWikiLink(target),
+			// Same rule as linkOpenHandler below: in-app if it resolves to a note,
+			// otherwise a new tab (openExternal also filters unsafe schemes).
+			onLinkClick: (url) => {
+				if (!opts.openMarkdownLink(url)) {
+					openExternal(url);
+				}
+			},
+		}),
 		imageBlocks(),
 		// Prec.high so the embed's replace wins over the wikilink widget that would
 		// otherwise claim the `[[...]]` inside `![[...]]`.

@@ -13,7 +13,11 @@ afterEach(() => view?.destroy());
 
 function mountCell(
 	cellMarkdown: string,
-	opts: { readOnly?: boolean; onWikiLinkClick?: (t: string) => void } = {},
+	opts: {
+		readOnly?: boolean;
+		onWikiLinkClick?: (t: string) => void;
+		onLinkClick?: (url: string) => void;
+	} = {},
 ): HTMLElement {
 	const doc = `| h |\n| --- |\n| ${cellMarkdown} |\n`;
 	view = new EditorView({
@@ -21,7 +25,7 @@ function mountCell(
 			doc,
 			extensions: [
 				markdown({ base: markdownLanguage }),
-				tables({ onWikiLinkClick: opts.onWikiLinkClick }),
+				tables({ onWikiLinkClick: opts.onWikiLinkClick, onLinkClick: opts.onLinkClick }),
 				...(opts.readOnly ? [readOnlyExtension(true)] : []),
 			],
 		}),
@@ -120,5 +124,41 @@ describe("table cell wikilinks", () => {
 	test("the wikilink survives a round-trip through the markdown doc", () => {
 		mountCell("see [[Table Test\\|the table]]");
 		expect(view.state.doc.toString()).toContain("| see [[Table Test\\|the table]] |");
+	});
+});
+
+describe("table cell markdown links", () => {
+	const LINK = "[engram](https://engram.page) site";
+
+	test("clicking the link text opens it while editing, like the outer editor", () => {
+		const onLinkClick = vi.fn();
+		const cell = mountCell(LINK, { onLinkClick });
+		click(cell.querySelector(".cm-atomic-link") as Element);
+		expect(onLinkClick).toHaveBeenCalledExactlyOnceWith("https://engram.page");
+	});
+
+	test("clicking the link text opens it read-only", () => {
+		const onLinkClick = vi.fn();
+		const cell = mountCell(LINK, { readOnly: true, onLinkClick });
+		click(cell.querySelector(".cm-atomic-link") as Element);
+		expect(onLinkClick).toHaveBeenCalledExactlyOnceWith("https://engram.page");
+	});
+
+	test("clicking text outside the link does not open it", () => {
+		const onLinkClick = vi.fn();
+		const cell = mountCell(LINK, { onLinkClick });
+		click(cell);
+		expect(onLinkClick).not.toHaveBeenCalled();
+	});
+
+	test("a modified click is left alone", () => {
+		const onLinkClick = vi.fn();
+		const cell = mountCell(LINK, { onLinkClick });
+		cell
+			.querySelector(".cm-atomic-link")
+			?.dispatchEvent(
+				new MouseEvent("click", { bubbles: true, cancelable: true, button: 0, shiftKey: true }),
+			);
+		expect(onLinkClick).not.toHaveBeenCalled();
 	});
 });
