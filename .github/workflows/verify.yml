@@ -3557,8 +3557,13 @@ jobs:
             drops=false
             for f in $added; do
               case "$f" in *_drops.exs) drops=true ;; esac
+              # Comments are cut so prose ("drop the old index") does not
+              # trip it; dropping an index is not flagged (old code never
+              # reads an index). Checked against all 82 migrations at the time
+              # this was written: it flags exactly the two real drops.
               if awk '/^  def down/ {skip=1} skip && /^  end/ {skip=0; next} !skip' "$f" |
-                  grep -qiE '\b(remove|remove_if_exists|drop|drop_if_exists|rename)\b'; then
+                  sed 's/#.*$//' |
+                  grep -qiE '\b(remove|remove_if_exists|rename)\b|\b(drop|drop_if_exists)\b[ (]*table\b|\bdrop[[:space:]]+(column|table)\b'; then
                 drops=true
               fi
             done
