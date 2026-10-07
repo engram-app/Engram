@@ -22,6 +22,12 @@ defmodule EngramWeb.Plugs.SettleUnreadBody do
   A declared length past the ceiling is never drained: the response is marked
   `connection: close` (HTTP/1; illegal in HTTP/2, RFC 9113 8.2.2) before
   routing, so every refusal on it closes instead.
+
+  Only HTTP/1 is drained. Bandit HTTP/2 resets an unread stream with
+  RST_STREAM(NO_ERROR) right after the response, which is the correct outcome
+  and costs the client nothing (the connection stays up). Draining it instead
+  let a client trickling a byte every few seconds hold the stream for weeks,
+  since every read made progress and the 15 s read timeout never fired.
   """
 
   @behaviour Plug
@@ -29,6 +35,13 @@ defmodule EngramWeb.Plugs.SettleUnreadBody do
   import Plug.Conn
 
   @read 1_048_576
+
+  # Wall-clock cap on the drain. 30 s carries the 11 MB ceiling at ~3 Mbit/s,
+  # a slow but honest uplink. Past it Bandit's own cleanup (8 MB, 15 s per read)
+  # takes over exactly as it would without this plug, so a slow client can hold
+  # the connection at most 30 s longer than bare Bandit allows. The check runs
+  # between reads; a single 1 MB read is bounded only by Bandit's read timeout.
+  @drain_ms 30_000
 
   @impl true
   def init(router), do: {router, router.init([])}
@@ -53,13 +66,25 @@ defmodule EngramWeb.Plugs.SettleUnreadBody do
       else: put_resp_header(conn, "connection", "close")
   end
 
-  @doc "Drains an unread body once the response is sent."
-  def settle(%Plug.Conn{state: :sent, private: %{engram_skip_drain: true}} = conn), do: conn
+  @doc """
+  Drains an unread HTTP/1 body once the response is sent, for at most
+  `drain_ms` of wall-clock time.
+  """
+  def settle(conn, drain_ms \\ @drain_ms)
 
-  def settle(%Plug.Conn{state: :sent} = conn),
-    do: drain(conn, EngramWeb.Endpoint.max_body_bytes())
+  def settle(%Plug.Conn{state: :sent, private: %{engram_skip_drain: true}} = conn, _drain_ms),
+    do: conn
 
-  def settle(conn), do: conn
+  def settle(%Plug.Conn{state: :sent} = conn, drain_ms) do
+    if get_http_protocol(conn) in [:"HTTP/1.1", :"HTTP/1.0"] do
+      deadline = System.monotonic_time(:millisecond) + drain_ms
+      drain(conn, EngramWeb.Endpoint.max_body_bytes(), deadline)
+    else
+      conn
+    end
+  end
+
+  def settle(conn, _drain_ms), do: conn
 
   defp mark_oversized(conn) do
     with [value | _] <- get_req_header(conn, "content-length"),
@@ -71,17 +96,20 @@ defmodule EngramWeb.Plugs.SettleUnreadBody do
     end
   end
 
-  defp drain(conn, budget) when budget < 0, do: conn
+  defp drain(conn, budget, _deadline) when budget < 0, do: conn
 
-  defp drain(conn, budget) do
+  defp drain(conn, budget, deadline) do
     case read_body(conn, length: @read, read_length: @read) do
-      # Zero progress is a stalled client: Bandit HTTP/2 returns this on every
-      # 15 s read timeout (bandit http2/stream.ex:283), so the budget would
-      # never shrink. Stop; Bandit ends the stream / closes the socket.
-      {:more, "", conn} -> conn
-      {:more, discard, conn} -> drain(conn, budget - byte_size(discard))
-      {:ok, _discard, conn} -> conn
-      {:error, _reason} -> conn
+      {:more, discard, conn} ->
+        if System.monotonic_time(:millisecond) < deadline,
+          do: drain(conn, budget - byte_size(discard), deadline),
+          else: conn
+
+      {:ok, _discard, conn} ->
+        conn
+
+      {:error, _reason} ->
+        conn
     end
   end
 end

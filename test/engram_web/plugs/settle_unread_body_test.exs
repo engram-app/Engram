@@ -52,17 +52,80 @@ defmodule EngramWeb.Plugs.SettleUnreadBodyTest do
     assert get_resp_header(conn, "connection") == ["close"]
   end
 
-  # Bandit HTTP/2 answers each 15 s read timeout with `{:more, "", conn}`
-  # (bandit http2/stream.ex:283), so the byte budget never shrinks. Zero
-  # progress must end the drain, or a silent client holds it forever.
-  defmodule StalledAdapter do
-    def read_req_body(%{reads: n}, _opts) when n > 3, do: raise("drained a stalled body")
-    def read_req_body(%{reads: n} = state, _opts), do: {:more, "", %{state | reads: n + 1}}
+  defmodule ProgressAdapter do
+    def get_http_protocol(_state), do: :"HTTP/1.1"
+    def read_req_body(%{reads: n} = state, _opts), do: {:more, "x", %{state | reads: n + 1}}
   end
 
-  test "settle/1 stops on a zero-progress read" do
-    conn = %Plug.Conn{state: :sent, adapter: {StalledAdapter, %{reads: 0}}}
+  test "settle/2 stops at the wall-clock deadline even while bytes trickle in" do
+    conn = %Plug.Conn{state: :sent, adapter: {ProgressAdapter, %{reads: 0}}}
 
-    assert %Plug.Conn{adapter: {StalledAdapter, %{reads: 1}}} = SettleUnreadBody.settle(conn)
+    assert %Plug.Conn{adapter: {ProgressAdapter, %{reads: 1}}} = SettleUnreadBody.settle(conn, 0)
+  end
+
+  defmodule RefuseRouter do
+    import Plug.Conn
+    def init(opts), do: opts
+    def call(conn, _opts), do: conn |> send_resp(401, "nope") |> halt()
+  end
+
+  describe "behind a real Bandit listener" do
+    setup do
+      {:ok, pid} =
+        start_supervised(
+          {Bandit,
+           plug: {SettleUnreadBody, RefuseRouter}, port: 0, ip: :loopback, startup_log: false}
+        )
+
+      {:ok, {_ip, port}} = ThousandIsland.listener_info(pid)
+      test = self()
+      id = "settle-#{inspect(make_ref())}"
+
+      :telemetry.attach(
+        id,
+        [:bandit, :request, :stop],
+        fn _event, _measure, meta, _ -> send(test, {:bandit_stop, meta[:error]}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(id) end)
+      %{port: port}
+    end
+
+    defp post_head(length) do
+      "POST /x HTTP/1.1\r\nhost: a\r\ncontent-type: application/octet-stream\r\n" <>
+        "content-length: #{length}\r\n\r\n"
+    end
+
+    defp status_line(sock) do
+      {:ok, data} = :gen_tcp.recv(sock, 0, 5_000)
+      data |> String.split("\r\n") |> hd()
+    end
+
+    # Bandit alone drains 8 MB after the response; a 10 MB body is past that.
+    test "HTTP/1: a body past Bandit's own drain gets the 401 and keeps the socket", %{port: port} do
+      {:ok, sock} = :gen_tcp.connect(~c"127.0.0.1", port, [:binary, active: false])
+      body = :binary.copy("a", 10_000_000)
+
+      :ok = :gen_tcp.send(sock, [post_head(byte_size(body)), body])
+      assert status_line(sock) == "HTTP/1.1 401 Unauthorized"
+
+      :ok = :gen_tcp.send(sock, [post_head(1), "b"])
+      assert status_line(sock) == "HTTP/1.1 401 Unauthorized"
+      :gen_tcp.close(sock)
+    end
+
+    # Bandit resets an unread HTTP/2 stream (RST_STREAM NO_ERROR) right after the
+    # response. Draining it instead held the request open for each 15 s read
+    # timeout (or forever, for a client trickling a byte every few seconds).
+    test "HTTP/2: the request ends right after the 401, nothing is drained", %{port: port} do
+      {:ok, conn} = Mint.HTTP2.connect(:http, "127.0.0.1", port)
+
+      headers = [{"content-type", "application/octet-stream"}, {"content-length", "5000000"}]
+      {:ok, conn, ref} = Mint.HTTP2.request(conn, "POST", "/x", headers, :stream)
+      {:ok, _conn} = Mint.HTTP2.stream_request_body(conn, ref, :binary.copy("a", 16_000))
+
+      assert_receive {:bandit_stop, nil}, 2_000
+    end
   end
 end
