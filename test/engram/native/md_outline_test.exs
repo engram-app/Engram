@@ -43,18 +43,20 @@ defmodule Engram.Native.MdOutlineTest do
 
   describe "memory standard" do
     # comrak keeps every node (with its raw content) in an arena: ~100-250x
-    # the input, worst on a tight list (measured 252x at 1 MB). Bounded per
-    # call by the note; how many run at once is bounded by ParseGate.
-    test "native peak stays within 300x the input" do
+    # what it parses, worst on a tight list. The parse runs in ~64 KB
+    # segments, so the arena is bounded by a segment, not the note (#1885);
+    # what grows with the note is the result and a copy or two of the text.
+    test "native peak is a segment's arena plus a few times the input" do
       for d <- [
-            String.duplicate("- a\n", 25_000),
-            String.duplicate("*a* `b` [c](d) ", 7_000),
-            String.duplicate("# h\n", 25_000),
-            String.duplicate("> ", 50_000) <> "# x\n",
-            String.duplicate("%% a %% $$ b $$\n", 6_000)
+            String.duplicate("- a\n", 250_000),
+            String.duplicate("*a* `b` [c](d) ", 70_000),
+            String.duplicate("# h\n", 250_000),
+            String.duplicate("> ", 500_000) <> "# x\n",
+            String.duplicate("%% a %% $$ b $$\n", 60_000),
+            String.duplicate("[r]: /u\n\n# [r] [s]\n\n", 50_000)
           ] do
         {_, peak} = Native.md_outline_nif(d)
-        assert peak <= 300 * byte_size(d) + 1_000_000, "#{peak} for #{byte_size(d)} B"
+        assert peak <= 20 * byte_size(d) + 80_000_000, "#{peak} for #{byte_size(d)} B"
       end
     end
 

@@ -104,13 +104,27 @@ native peak was there too but invisible (mdex_native allocates with malloc):
 At 5 KB the gate's task and the dirty hop dominate, so only the heap
 shrinks (the inline variant, since dropped, ran it in 1.2 ms).
 
-comrak itself is the floor: dense markup (1 MB of `# h` lines, a tight
-list, a setext run) takes 1-2.5 s either way, and its arena keeps every node
-with its raw content, ~100-250x the note (252x on a tight list). That is
-why ParseGate still bounds concurrent parses, and why the first tree is
-dropped before the `%%`/`$$` re-parse (it halved a mixed note's peak).
-Segmenting the parse like `links::segmented` is the upgrade path if a big
-note's peak matters. Parity: a 103,000-note live differential against the
+comrak's arena keeps every node with its raw content, ~100-250x what it
+parses (252x on a tight list), so a whole-note parse of a 10 MB note could
+reach ~2.5 GB. Since #1885 the outline parses in `links::segmented`'s
+~64 KB segments, one tree alive at a time (`outline.rs`,
+`outline_segmented`). Two inputs are document-wide and computed first: the
+`%%`/`$$` masking (from a segmented code-range pass), and the set of
+reference labels the note defines (a `[x]` heading links when `[x]: /u` is
+anywhere), fed to comrak's broken-link callback. A fuzz test (20k cases in
+CI, 4M run locally) holds segmented == whole. Min of 5, 1 MB, native peak
+(2026-10-06; "whole" is the same code with one segment):
+
+| 1 MB of | Whole: time / peak | Segmented: time / peak |
+|---|---|---|
+| tight list `- a` | 458 ms / 253 MB | 295 ms / 18 MB |
+| `# h` lines | 934 ms / 163 MB | 677 ms / 37 MB |
+| dense inline | 427 ms / 249 MB | 175 ms / 15 MB |
+| mixed note (both parses) | 356 ms / 128 MB | 238 ms / 13 MB |
+
+What remains grows with the result (250,000 headings is the 37 MB) and a
+copy or two of the text. ParseGate still bounds concurrent parses.
+Parity: a 103,000-note live differential against the
 old scan, then `md_outline_golden.json.gz` (2,508 notes). The only
 divergence was an old bug: two `$$` pairs sharing a CRLF line shifted every
 later line number by one.
