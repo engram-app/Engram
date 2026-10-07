@@ -223,3 +223,112 @@ describe("handle visibility while dragging", () => {
 		ptr(document.body, "pointerup", { buttons: 0 });
 	});
 });
+
+describe("the handle slides with the pointer", () => {
+	/** happy-dom has no layout; give the table a 3 x 3 grid of 100 x 40 cells at (100, 100). */
+	function fakeLayout() {
+		const rect = (left: number, top: number, w: number, h: number) =>
+			({
+				left,
+				top,
+				right: left + w,
+				bottom: top + h,
+				width: w,
+				height: h,
+				x: left,
+				y: top,
+			}) as DOMRect;
+		const at = (el: Element | null | undefined, r: DOMRect) => {
+			if (el) {
+				el.getBoundingClientRect = () => r;
+			}
+		};
+		const root = view.dom.querySelector(".cm-atomic-table");
+		at(root?.querySelector("table"), rect(100, 100, 300, 120));
+		view.dom
+			.querySelectorAll(".cm-atomic-table thead th")
+			.forEach((th, i) => at(th, rect(100 + i * 100, 100, 100, 40)));
+		view.dom
+			.querySelectorAll(".cm-atomic-table tbody tr")
+			.forEach((tr, i) => at(tr, rect(100, 140 + i * 40, 300, 40)));
+		colHandles().forEach((h, i) => at(h, rect(100 + i * 100, 86, 100, 11)));
+		rowHandles().forEach((h, i) => at(h, rect(86, 140 + i * 40, 11, 40)));
+	}
+
+	test("a column handle follows the pointer horizontally, unsnapped", () => {
+		mount();
+		fakeLayout();
+		const handle = colHandles()[0] as HTMLElement;
+		ptr(handle, "pointerdown", { clientX: 150, clientY: 90 });
+		ptr(document.body, "pointermove", { clientX: 187, clientY: 400 }); // y is irrelevant on a column rail
+		expect(handle.style.transform).toBe("translateX(37px)");
+		ptr(document.body, "pointerup", { buttons: 0 });
+	});
+
+	test("a row handle follows the pointer vertically", () => {
+		mount();
+		fakeLayout();
+		const handle = rowHandles()[0] as HTMLElement;
+		ptr(handle, "pointerdown", { clientX: 90, clientY: 160 });
+		ptr(document.body, "pointermove", { clientX: 300, clientY: 173 });
+		expect(handle.style.transform).toBe("translateY(13px)");
+		ptr(document.body, "pointerup", { buttons: 0 });
+	});
+
+	test("it stays on its rail: clamped to the table's extent", () => {
+		mount();
+		fakeLayout();
+		const handle = colHandles()[0] as HTMLElement; // spans x 100..200, table ends at 400
+		ptr(handle, "pointerdown", { clientX: 150 });
+		ptr(document.body, "pointermove", { clientX: 5000 });
+		expect(handle.style.transform).toBe("translateX(200px)");
+		ptr(document.body, "pointermove", { clientX: -5000 });
+		expect(handle.style.transform).toBe("translateX(0px)");
+		ptr(document.body, "pointerup", { buttons: 0 });
+	});
+
+	test("a row handle is clamped to the body rows (not the header)", () => {
+		mount();
+		fakeLayout();
+		const handle = rowHandles()[0] as HTMLElement; // first body row, y 140..180; body ends at 220
+		ptr(handle, "pointerdown", { clientY: 160 });
+		ptr(document.body, "pointermove", { clientY: -5000 });
+		expect(handle.style.transform).toBe("translateY(0px)");
+		ptr(document.body, "pointermove", { clientY: 5000 });
+		expect(handle.style.transform).toBe("translateY(40px)");
+		ptr(document.body, "pointerup", { buttons: 0 });
+	});
+
+	test("the landing slot follows the pointer's position, even outside the table", () => {
+		mount();
+		fakeLayout();
+		ptr(colHandles()[0] as HTMLElement, "pointerdown", { clientX: 150 });
+		ptr(document.body, "pointermove", { clientX: 350, clientY: 20 }); // over column 2, above the table
+		const marked = Array.from(
+			view.dom.querySelectorAll<HTMLElement>(".cm-atomic-table-drop-target"),
+		);
+		expect(marked).toHaveLength(3);
+		expect(marked.every((c) => cells().indexOf(c) % 3 === 2)).toBe(true);
+		ptr(document.body, "pointerup", { buttons: 0 });
+		expect(table()).toBe("| b | c | a |\n| --- | --- | --- |\n| 2 | 3 | 1 |\n| 5 | 6 | 4 |");
+	});
+
+	test("a row drops where the pointer is vertically", () => {
+		mount();
+		fakeLayout();
+		ptr(rowHandles()[0] as HTMLElement, "pointerdown", { clientY: 160 });
+		ptr(document.body, "pointermove", { clientX: 5, clientY: 205 }); // over the second body row
+		ptr(document.body, "pointerup", { buttons: 0 });
+		expect(table()).toBe("| a | b | c |\n| --- | --- | --- |\n| 4 | 5 | 6 |\n| 1 | 2 | 3 |");
+	});
+
+	test("the offset is cleared when the drag ends", () => {
+		mount();
+		fakeLayout();
+		const handle = colHandles()[1] as HTMLElement;
+		ptr(handle, "pointerdown", { clientX: 250 });
+		ptr(document.body, "pointermove", { clientX: 260 });
+		ptr(document.body, "pointerup", { buttons: 0 });
+		expect(handle.style.transform).toBe("");
+	});
+});
