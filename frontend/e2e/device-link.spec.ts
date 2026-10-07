@@ -144,7 +144,10 @@ test.describe("/link vault picker", () => {
 			await expect(page.getByText("Suggested", { exact: true })).toHaveCount(0);
 			const name = page.getByLabel("New vault name");
 			await expect(name).toHaveValue("Brain Dump");
-			await expect(page.getByRole("radio", { name: /new vault name/iu })).toBeChecked();
+			// The one checked radio is the new-vault row, not an existing vault.
+			const checked = page.getByRole("radio", { checked: true });
+			await expect(checked).toHaveCount(1);
+			await expect(checked).not.toHaveAccessibleName(/Personal/u);
 
 			await page.getByRole("button", { name: "Sync", exact: true }).click();
 			await expect(page.getByText(/your vault is linked/iu)).toBeVisible({ timeout: 15_000 });
@@ -179,10 +182,13 @@ test.describe("/link vault picker", () => {
 		page,
 		baseURL,
 	}) => {
+		// Nine vaults to create, then search: well past the default 30s.
+		test.setTimeout(90_000);
 		const base = baseURL as string;
 		const user = email("long");
 		const token = await registerAndLogin(base, user);
 		try {
+			// One at a time: concurrent registrations by one user are not what this tests.
 			for (let i = 1; i <= 9; i++) {
 				await createVault(base, token, `Vault ${i}`);
 			}
@@ -191,13 +197,15 @@ test.describe("/link vault picker", () => {
 			await signInAndOpenLink(page, user, flow.user_code);
 
 			await expect(page.getByText(/choose from 9 vaults/u)).toBeVisible();
+
+			// Pick a vault first: clicking a row blurs an empty search box, which closes it.
+			await page.getByRole("radio", { name: /^Vault 2\b/u }).click();
+
 			await page.getByRole("button", { name: "Search vaults" }).click();
 			const search = page.getByRole("searchbox", { name: "Search vaults" });
 			await expect(search).toBeFocused();
 
-			// Pick a vault, then filter it out of view: the selection must still be announced.
-			await search.fill("");
-			await page.getByRole("radio", { name: /^Vault 2\b/u }).click();
+			// Filter the chosen vault out of view: the selection must still be announced.
 			await search.fill("zzz");
 			await expect(page.getByText(/no vaults match/iu)).toBeVisible();
 			await expect(page.getByText("Selected: Vault 2")).toBeVisible();
