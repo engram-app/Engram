@@ -82,4 +82,33 @@ describe("escapeNonMathDollars", () => {
 	test("text with no dollars is returned as is", () => {
 		expect(escapeNonMathDollars("plain **bold** text")).toBe("plain **bold** text");
 	});
+
+	test("keeps a $$ block inside a callout or blockquote", () => {
+		const md = "> [!info]\n> $$\n> E = mc^2\n> $$\n";
+		expect(escapeNonMathDollars(md)).toBe(md);
+	});
+
+	test("still escapes a price inside a blockquote", () => {
+		expect(escapeNonMathDollars("> costs $5 and $7")).toBe("> costs \\$5 and \\$7");
+	});
+
+	test("leaves code in a callout untouched", () => {
+		const md = "> ```bash\n> echo $HOME\n> ```\n";
+		expect(escapeNonMathDollars(md)).toBe(md);
+	});
+
+	test("leaves an indented code block untouched", () => {
+		const md = "para\n\n    echo $HOME\n\nafter";
+		expect(escapeNonMathDollars(md)).toBe(md);
+	});
+
+	test("a ~~~ line does not close a ``` fence, so later prices are still escaped", () => {
+		const md = "```\n~~~\n$a\n```\ncosts $5 and $7";
+		expect(escapeNonMathDollars(md)).toBe("```\n~~~\n$a\n```\ncosts \\$5 and \\$7");
+	});
+
+	test("leaves an autolink untouched", () => {
+		const md = "see <https://x.com/$a> now";
+		expect(escapeNonMathDollars(md)).toBe(md);
+	});
 });

@@ -9,13 +9,13 @@
 // Shared by the editor (viewer/editor/comment-decoration.ts greys them) and the
 // reading view (viewer/note-view.tsx strips them).
 
+import { scanLines } from "./md-lines";
+
 interface CommentRange {
 	from: number;
 	to: number;
 	kind: "percent" | "html";
 }
-
-const FENCE = /^ {0,3}(?<marker>`{3,}|~{3,})/u;
 
 /** End index (exclusive) of the inline-code span opened by `run` backticks at `from`, or -1. */
 function inlineCodeEnd(text: string, from: number, run: number, limit: number): number {
@@ -39,65 +39,34 @@ function inlineCodeEnd(text: string, from: number, run: number, limit: number): 
 function findComments(text: string): CommentRange[] {
 	const out: CommentRange[] = [];
 	const n = text.length;
-	let fence: string | null = null;
-	let i = 0;
-	while (i < n) {
-		const lineEnd = text.indexOf("\n", i);
-		const end = lineEnd < 0 ? n : lineEnd;
-		const atLineStart = i === 0 || text[i - 1] === "\n";
-		if (atLineStart) {
-			const f = FENCE.exec(text.slice(i, end));
-			const marker = f?.groups?.marker;
-			if (fence !== null) {
-				// A closing fence uses the same character, at least as long.
-				if (marker && marker[0] === fence[0] && marker.length >= fence.length) {
-					fence = null;
-				}
-				i = end + 1;
-				continue;
-			}
-			if (marker) {
-				fence = marker;
-				i = end + 1;
-				continue;
-			}
-		} else if (fence !== null) {
-			i = end + 1;
+	let resume = 0; // a multi-line comment swallows the lines it spans
+	for (const line of scanLines(text)) {
+		if (line.code || line.end <= resume) {
 			continue;
 		}
-		let j = i;
-		let jumped = false;
-		while (j < end) {
+		let j = Math.max(line.body, resume);
+		while (j < line.end) {
 			const ch = text[j];
 			if (ch === "`") {
 				let k = j;
 				while (text[k] === "`") {
 					k++;
 				}
-				const close = inlineCodeEnd(text, j, k - j, end);
+				const close = inlineCodeEnd(text, j, k - j, line.end);
 				j = close >= 0 ? close : k;
 				continue;
 			}
-			if (ch === "%" && text[j + 1] === "%") {
-				const close = text.indexOf("%%", j + 2);
-				const to = close < 0 ? n : close + 2;
-				out.push({ from: j, to, kind: "percent" });
-				i = to;
-				jumped = true;
-				break;
-			}
-			if (ch === "<" && text.startsWith("<!--", j)) {
-				const close = text.indexOf("-->", j + 4);
-				const to = close < 0 ? n : close + 3;
-				out.push({ from: j, to, kind: "html" });
-				i = to;
-				jumped = true;
-				break;
+			const percent = ch === "%" && text[j + 1] === "%";
+			if (percent || (ch === "<" && text.startsWith("<!--", j))) {
+				const closer = percent ? "%%" : "-->";
+				const close = text.indexOf(closer, j + (percent ? 2 : 4));
+				const to = close < 0 ? n : close + closer.length;
+				out.push({ from: j, to, kind: percent ? "percent" : "html" });
+				resume = to;
+				j = to;
+				continue;
 			}
 			j++;
-		}
-		if (!jumped) {
-			i = end + 1;
 		}
 	}
 	return out;

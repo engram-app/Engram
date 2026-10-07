@@ -9,13 +9,15 @@
 // Shared by the editor's math widget (viewer/editor/katex-decoration.ts) and the
 // reading view (viewer/note-view.tsx), so both agree on what is math.
 
+import { scanLines } from "./md-lines";
+
 /** An inline `$…$` span. The TeX is in the `inline` group. */
 const INLINE_MATH = /(?<!\\)\$(?<inline>[^\s$](?:[^$\n]*[^\s$\\])?)\$(?!\d)/g;
 
-const FENCE = /^\s*(?:```|~~~)/u;
 // A `$`: a whole `$$…$$` span, a valid inline span, or a lone `$` (the case to escape).
 const DOLLAR = new RegExp(String.raw`\$\$[^$]*\$\$|${INLINE_MATH.source}|\$`, "g");
-const CODE_SPAN = /(?<code>`+[^`]*`+)/u;
+// Left alone: a code span, or an autolink (a backslash would change its URL).
+const SKIP = /(?<skip>`+[^`]*`+|<[a-z][a-z0-9+.-]*:[^\s<>]*>)/iu;
 
 /** Escape the lone `$` in a stretch of text that contains no code spans. */
 function escapeText(text: string): string {
@@ -31,9 +33,9 @@ function escapeText(text: string): string {
 }
 
 function escapeLine(line: string): string {
-	// Odd parts of the split are code spans, left alone.
+	// Odd parts of the split are the SKIP matches.
 	return line
-		.split(CODE_SPAN)
+		.split(SKIP)
 		.map((part, i) => (i % 2 === 1 ? part : escapeText(part)))
 		.join("");
 }
@@ -47,29 +49,27 @@ function escapeNonMathDollars(markdown: string): string {
 	if (!markdown.includes("$")) {
 		return markdown;
 	}
-	let inFence = false;
 	let inDisplay = false;
-	return markdown
-		.split("\n")
-		.map((line) => {
-			if (FENCE.test(line)) {
-				inFence = !inFence;
-				return line;
+	const lines = scanLines(markdown);
+	return lines
+		.map((l) => {
+			const raw = markdown.slice(l.start, l.end);
+			if (l.code) {
+				return raw;
 			}
-			if (inFence) {
-				return line;
-			}
+			const prefix = raw.slice(0, l.body - l.start);
+			const line = raw.slice(prefix.length);
 			const trimmed = line.trim();
 			if (inDisplay) {
 				inDisplay = !trimmed.endsWith("$$");
-				return line;
+				return raw;
 			}
 			if (trimmed.startsWith("$$")) {
 				// `$$x$$` on one line is closed; a bare `$$` (or `$$ …`) opens a block.
 				inDisplay = !(trimmed.length > 3 && trimmed.endsWith("$$"));
-				return line;
+				return raw;
 			}
-			return escapeLine(line);
+			return prefix + escapeLine(line);
 		})
 		.join("\n");
 }

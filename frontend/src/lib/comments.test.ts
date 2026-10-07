@@ -85,4 +85,28 @@ describe("stripComments", () => {
 	test("an unclosed %% hides the rest", () => {
 		expect(stripComments("shown %%hidden\nhidden too")).toBe("shown ");
 	});
+
+	test("leaves a fence nested in a list item alone, however deep", () => {
+		const md = "- item\n    - nested\n        ```\n        %%timeit\n        ```\n\nafter";
+		expect(stripComments(md)).toBe(md);
+	});
+
+	test("leaves a fence inside a callout or blockquote alone", () => {
+		const md = '> [!note]\n> ```c\n> printf("%%d");\n> ```\n\nafter';
+		expect(stripComments(md)).toBe(md);
+	});
+
+	test("leaves an indented code block alone", () => {
+		const md = "para\n\n    %%not a comment\n\nafter";
+		expect(stripComments(md)).toBe(md);
+	});
+
+	test("a ~~~ line does not close a ``` fence", () => {
+		const md = "```\n~~~\n%%keep%%\n```\n";
+		expect(stripComments(md)).toBe(md);
+	});
+
+	test("an indented line after a list item is list content, not code", () => {
+		expect(stripComments("- item\n\n    text %%gone%% more")).toBe("- item\n\n    text  more");
+	});
 });
