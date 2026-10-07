@@ -779,68 +779,75 @@ function VaultPickerFieldset({
 	const isMatched = selection === "matched";
 	const isCustom = selection === "custom";
 	const search = useVaultSearch(otherVaults);
+	const hasExisting = vaults.length > 0;
+	const suggestsNew = Boolean(suggestedName) && !matchedExisting;
+	const sectionTitle = "font-medium text-foreground text-sm";
 
 	return (
 		<fieldset className="flex flex-col gap-2">
-			<div className="mb-1 flex items-center justify-between gap-2">
-				<legend className="font-medium text-foreground text-sm">
-					Where should these notes sync?
-				</legend>
-				<VaultSearchToggle search={search} />
-			</div>
-			<VaultSearchField search={search} />
-			{matchedExisting ? (
-				<VaultRadio
-					vault={matchedExisting}
-					active={selection === matchedExisting.id}
-					onSelect={onSelect}
-					hint="matches your Obsidian vault"
-				/>
-			) : (
-				suggestedName &&
-				!atVaultCap && (
-					<label className={selectableRow(isMatched)}>
-						<input
-							type="radio"
-							name="vault-target"
-							checked={isMatched}
-							onChange={() => onSelect("matched")}
-							className="accent-primary"
+			{hasExisting && (
+				<>
+					<div className="mb-1 flex items-center justify-between gap-2">
+						<legend className={sectionTitle}>Sync into an existing vault</legend>
+						<VaultSearchToggle search={search} />
+					</div>
+					<VaultSearchField search={search} />
+					{matchedExisting ? (
+						<VaultRadio
+							vault={matchedExisting}
+							active={selection === matchedExisting.id}
+							onSelect={onSelect}
+							hint="matches your Obsidian vault"
 						/>
-						<span className="flex flex-col">
-							<span className="font-medium text-foreground text-sm">{suggestedName}</span>
-							<span className="text-muted-foreground text-xs">
-								Makes a new vault matching your Obsidian vault name
-							</span>
-						</span>
-					</label>
-				)
+					) : null}
+					<VaultRows scroll={search.showFilter}>
+						{search.shown.map((v) => (
+							<VaultRadio key={v.id} vault={v} active={selection === v.id} onSelect={onSelect} />
+						))}
+						{search.showFilter && search.needle && search.shown.length === 0 && (
+							<p className="p-3 text-muted-foreground text-sm">
+								No vaults match "{search.filter}".
+							</p>
+						)}
+					</VaultRows>
+				</>
 			)}
 
-			{/* The new-vault rows below stay outside the scroll box: they are the
-			    choice the list is an alternative to and must not need scrolling
-			    to reach. */}
-			<VaultRows scroll={search.showFilter}>
-				{search.shown.map((v) => (
-					<VaultRadio key={v.id} vault={v} active={selection === v.id} onSelect={onSelect} />
-				))}
-				{search.showFilter && search.needle && search.shown.length === 0 && (
-					<p className="p-3 text-muted-foreground text-sm">No vaults match "{search.filter}".</p>
-				)}
-			</VaultRows>
-
+			{/* Creating is a different decision from linking, so it gets its own
+			    block: a rule and a title, and the custom name is a plain field
+			    rather than a third radio row. Hidden at the vault cap, where
+			    create would 402. */}
 			{!atVaultCap && (
-				<label className={selectableRow(isCustom)}>
-					<input
-						type="radio"
-						name="vault-target"
-						checked={isCustom}
-						onChange={() => onSelect("custom")}
-						className="accent-primary"
-					/>
-					<span className="flex flex-1 flex-col gap-2">
-						<span className="font-medium text-foreground text-sm">
-							Create a vault with a custom name
+				<>
+					{hasExisting && <hr className="my-2 border-border" />}
+					{hasExisting ? (
+						<p className={sectionTitle}>Or create a new vault</p>
+					) : (
+						<legend className={sectionTitle}>Create a new vault</legend>
+					)}
+					{suggestsNew ? (
+						<>
+							<label className={selectableRow(isMatched)}>
+								<input
+									type="radio"
+									name="vault-target"
+									checked={isMatched}
+									onChange={() => onSelect("matched")}
+									className="accent-primary"
+								/>
+								<span className="flex flex-col">
+									<span className="font-medium text-foreground text-sm">{suggestedName}</span>
+									<span className="text-muted-foreground text-xs">
+										Matches your Obsidian vault name
+									</span>
+								</span>
+							</label>
+							<hr className="my-2 border-border" />
+						</>
+					) : null}
+					<label className="flex flex-col gap-1.5">
+						<span className="text-muted-foreground text-xs">
+							{suggestsNew ? "Or pick a different name" : "Name"}
 						</span>
 						<input
 							type="text"
@@ -854,10 +861,10 @@ function VaultPickerFieldset({
 							onFocus={() => onSelect("custom")}
 							placeholder="choose a new name"
 							maxLength={100}
-							className={fieldInput}
+							className={cn(fieldInput, isCustom && "border-primary")}
 						/>
-					</span>
-				</label>
+					</label>
+				</>
 			)}
 		</fieldset>
 	);
