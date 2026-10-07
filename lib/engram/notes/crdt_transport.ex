@@ -14,6 +14,7 @@ defmodule Engram.Notes.CrdtTransport do
   import Bitwise
   import Ecto.Query
 
+  alias Engram.Notes.CrdtBridge
   alias Engram.{Crypto, Notes, Repo}
   alias Engram.Logger.Metadata
   alias Engram.Notes.{CrdtBridge, CrdtPersistence, CrdtRegistry, CrdtUpdateLog, Note}
@@ -154,7 +155,7 @@ defmodule Engram.Notes.CrdtTransport do
   """
   @spec apply_update(map(), map(), String.t(), binary(), atom()) ::
           {:ok, %{head: String.t()}}
-          | {:error, :not_found | :invalid_update | :room_unavailable}
+          | {:error, :not_found | :invalid_update | :note_too_large | :room_unavailable}
   def apply_update(user, vault, note_id, update, source \\ :unknown) do
     if Notes.note_in_vault?(user, vault.id, note_id) do
       # ensure_observed (not ensure_started): registers THIS process (the
@@ -170,6 +171,7 @@ defmodule Engram.Notes.CrdtTransport do
         {:ok, %{head: head}}
       else
         {:error, :invalid_update} -> {:error, :invalid_update}
+        {:error, :note_too_large} -> {:error, :note_too_large}
         # ensure_started failure, or a room that timed out / died mid-apply.
         {:error, _reason} -> {:error, :room_unavailable}
       end
@@ -187,7 +189,7 @@ defmodule Engram.Notes.CrdtTransport do
   # REPORTS failures instead of swallowing them — this is a write contract, not
   # best-effort delivery.
   @spec apply_in_room(pid(), String.t(), binary()) ::
-          {:ok, String.t()} | {:error, :invalid_update | :room_unavailable}
+          {:ok, String.t()} | {:error, :invalid_update | :note_too_large | :room_unavailable}
   defp apply_in_room(room, note_id, update) do
     parent = self()
     ref = make_ref()
@@ -257,9 +259,10 @@ defmodule Engram.Notes.CrdtTransport do
     # that actually needs bounding.
     SharedDoc.update_doc(room, fn doc ->
       result =
-        case Yex.apply_update(doc, update) do
-          :ok -> {:ok, head_marker(doc)}
-          {:error, _} -> {:error, :invalid_update}
+        cond do
+          not CrdtBridge.fits?(doc, byte_size(update)) -> {:error, :note_too_large}
+          Yex.apply_update(doc, update) == :ok -> {:ok, head_marker(doc)}
+          true -> {:error, :invalid_update}
         end
 
       send(parent, {ref, result})

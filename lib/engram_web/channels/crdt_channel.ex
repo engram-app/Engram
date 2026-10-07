@@ -251,6 +251,7 @@ defmodule EngramWeb.CrdtChannel do
          {:ok, frame} <- decode_frame(b64),
          :ok <- guard_frame(frame),
          {:ok, socket, %{room: room}} <- ensure_room(socket, doc_id, frame_class_b64(b64)),
+         :ok <- guard_size(room, frame),
          :ok <- relay_frame(room, frame) do
       if frame_class_b64(b64) == :edit, do: note_sync_activity(socket)
 
@@ -273,6 +274,10 @@ defmodule EngramWeb.CrdtChannel do
       {:error, :frame_too_large} ->
         log_dropped(socket, doc_id, :frame_too_large)
         {:reply, {:error, %{reason: "frame_too_large"}}, socket}
+
+      {:error, :note_too_large} ->
+        log_dropped(socket, doc_id, :note_too_large)
+        {:reply, {:error, %{reason: "note_too_large"}}, socket}
 
       {:error, :room_limit} ->
         # This socket hit the per-connection room cap (abuse backstop). Reply so
@@ -596,6 +601,12 @@ defmodule EngramWeb.CrdtChannel do
       # client can fall back to `crdt_msg` rather than retry into the same wall.
       {:error, :not_sync_update} ->
         {:reply, {:error, %{reason: "not_sync_update"}}, socket}
+
+      # Not "doc_update_failed": that sends the client to the room handshake,
+      # which the same cap refuses.
+      {:error, :note_too_large} ->
+        log_dropped(socket, doc_id, :note_too_large)
+        {:reply, {:error, %{reason: "note_too_large"}}, socket}
 
       # Same signal `crdt_msg` sends for an unknown id, so the client's existing
       # id-map reconcile (backend #955) fires on it unchanged. `doc_id` echoes
@@ -2032,6 +2043,21 @@ defmodule EngramWeb.CrdtChannel do
   # OOM-aborts the ENTIRE BEAM node, uncatchable — reuse the REST transport's
   # plausibility guard to reject it before it is applied (P0 #989). Non-step1
   # frames pass through unchanged.
+  # The note-size cap (CrdtBridge.fits?/2) for frames that carry content: a
+  # sync step 2 or an update. A step 1 (a state vector) or awareness frame
+  # adds no text. Asked of the room's doc before the relay, because the
+  # relay is a cast and the room applies what it receives.
+  defp guard_size(room, <<0, type, rest::binary>>) when type in [1, 2] do
+    if CrdtBridge.fits?(SharedDoc.get_doc(room), byte_size(rest)),
+      do: :ok,
+      else: {:error, :note_too_large}
+  catch
+    # A dead room: let relay_frame report it the way it always has.
+    :exit, _ -> :ok
+  end
+
+  defp guard_size(_room, _frame), do: :ok
+
   defp guard_frame(frame) do
     if CrdtTransport.safe_wire_frame?(frame), do: :ok, else: {:error, :implausible_state_vector}
   end
