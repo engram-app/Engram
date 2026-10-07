@@ -768,6 +768,23 @@ function VaultPickerFieldset({
 	const search = useVaultSearch(otherVaults);
 	const hasOthers = otherVaults.length > 0;
 	const sectionTitle = "font-semibold text-base text-foreground";
+	const nameInput = (
+		<input
+			type="text"
+			value={customName}
+			onChange={(e) => {
+				onCustomChange(e.target.value);
+				if (!isCustom) {
+					onSelect("custom");
+				}
+			}}
+			onFocus={() => onSelect("custom")}
+			placeholder="choose a new name"
+			aria-label="New vault name"
+			maxLength={100}
+			className={fieldInput}
+		/>
+	);
 
 	return (
 		<fieldset className="flex flex-col gap-2">
@@ -822,34 +839,23 @@ function VaultPickerFieldset({
 			{!atVaultCap && (
 				<>
 					<p className={cn(sectionTitle, vaults.length > 0 && "mt-4")}>
-						{vaults.length > 0 ? "Or create a new vault" : "Create a new vault"}
+						{vaults.length > 0 ? "Or create a new vault" : "Create your first vault"}
 					</p>
-					<label className={selectableRow(isCustom)}>
-						<input
-							type="radio"
-							name="vault-target"
-							checked={isCustom}
-							onChange={() => onSelect("custom")}
-							className="accent-primary"
-						/>
-						<span className="flex flex-1 flex-col gap-1.5">
+					{vaults.length > 0 ? (
+						<label className={selectableRow(isCustom)}>
 							<input
-								type="text"
-								value={customName}
-								onChange={(e) => {
-									onCustomChange(e.target.value);
-									if (!isCustom) {
-										onSelect("custom");
-									}
-								}}
-								onFocus={() => onSelect("custom")}
-								placeholder="choose a new name"
-								aria-label="New vault name"
-								maxLength={100}
-								className={fieldInput}
+								type="radio"
+								name="vault-target"
+								checked={isCustom}
+								onChange={() => onSelect("custom")}
+								className="accent-primary"
 							/>
-						</span>
-					</label>
+							<span className="flex flex-1 flex-col gap-1.5">{nameInput}</span>
+						</label>
+					) : (
+						// First vault: nothing to choose between, so no radio or card.
+						nameInput
+					)}
 				</>
 			)}
 		</fieldset>
