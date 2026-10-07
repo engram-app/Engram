@@ -36,7 +36,7 @@ defmodule EngramWeb.NotesController do
     content = params["content"] || params[:content] || ""
 
     if byte_size(content) > Notes.max_note_bytes() do
-      conn |> put_status(413) |> json(%{error: "note exceeds maximum size of 10MB"})
+      too_large(conn)
     else
       user = conn.assigns.current_user
       vault = conn.assigns.current_vault
@@ -77,6 +77,11 @@ defmodule EngramWeb.NotesController do
         # instead of dropping a note that is genuinely gone.
         {:error, :note_deleted} ->
           conn |> put_status(404) |> json(%{error: "not_found"})
+
+        # Under the byte check above, but invalid UTF-8 scrubbed to U+FFFD
+        # (3 bytes each) can grow past the cap inside upsert_note.
+        {:error, :too_large} ->
+          too_large(conn)
 
         {:error, reason} ->
           require Logger
@@ -165,6 +170,9 @@ defmodule EngramWeb.NotesController do
               {:error, :note_deleted} ->
                 conn |> put_status(404) |> json(%{error: "not_found"})
 
+              {:error, :too_large} ->
+                too_large(conn)
+
               {:error, changeset} ->
                 conn |> put_status(422) |> json(%{errors: format_errors(changeset)})
             end
@@ -228,6 +236,9 @@ defmodule EngramWeb.NotesController do
 
           {:error, :note_deleted} ->
             conn |> put_status(404) |> json(%{error: "not_found"})
+
+          {:error, :too_large} ->
+            too_large(conn)
 
           {:error, changeset} ->
             conn |> put_status(422) |> json(%{errors: format_errors(changeset)})
@@ -661,6 +672,9 @@ defmodule EngramWeb.NotesController do
   def put_content(map, nil), do: map
 
   defp format_errors(changeset), do: EngramWeb.format_errors(changeset)
+
+  defp too_large(conn),
+    do: conn |> put_status(413) |> json(%{error: "note exceeds maximum size of 10MB"})
 
   # Delegate to the bounded, total error classifier. The single is_atom clause
   # this replaced raised FunctionClauseError on the very %Ecto.Changeset{} /

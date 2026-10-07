@@ -215,6 +215,18 @@ defmodule EngramWeb.NotesControllerTest do
       assert note["content"] =~ "World!"
     end
 
+    # upsert_note refuses past max_note_bytes; append must answer that as a
+    # 413 like upsert does, not crash formatting it as a changeset.
+    test "an append past the note-size cap answers 413", %{conn: conn} do
+      big = String.duplicate("x", Engram.Notes.max_note_bytes() - 10)
+      post(conn, "/api/notes", %{path: "Test/Big.md", content: big, mtime: 1_000.0})
+
+      conn2 =
+        post(conn, "/api/notes/append", %{path: "Test/Big.md", text: String.duplicate("y", 100)})
+
+      assert json_response(conn2, 413)["error"] =~ "10MB"
+    end
+
     # Regression for #1159 (data loss). `notes.content` is the REST/search
     # FACADE, materialized from the CRDT doc at checkpoint. Since #1141 the
     # server no longer authors content, so between a doc write and its

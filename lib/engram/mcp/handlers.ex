@@ -10,6 +10,7 @@ defmodule Engram.MCP.Handlers do
 
   # #1710: every MCP note write is the "mcp" history actor. The
   # HandlersWriteActorTest counts that every upsert_note call passes this.
+  @too_large "note would exceed the maximum size of 10MB"
   @write_opts [actor: "mcp"]
 
   # -- Vault tools --
@@ -899,31 +900,61 @@ defmodule Engram.MCP.Handlers do
   defp do_patch_text(user, vault, path, find, replace, occurrence, expected, op) do
     with {:ok, note} <- Notes.get_note(user, vault, path),
          {:ok, current} <- Notes.authoritative_content(user, note) do
-      if String.contains?(current, find) do
-        {new_content, count} = do_replace(current, find, replace, occurrence)
+      hits = count_matches(current, find, 0, 0)
+      replaced = if occurrence == -1, do: hits, else: min(hits, 1)
+      grown = byte_size(current) + replaced * (byte_size(replace) - byte_size(find))
 
-        # `find` is present but the requested occurrence is past the last one,
-        # so do_replace/4 returns the content untouched. Rewriting the note
-        # with its own bytes and calling that success told the caller the patch
-        # landed. Same rule as the "Text not found" branch below.
-        cond do
-          count == 0 ->
-            {:error, "Occurrence #{occurrence} not found in #{path}"}
-
-          is_integer(expected) and expected != count ->
-            {:error,
-             "expected #{expected} replacement(s), found #{count} in #{path}; nothing was changed"}
-
-          true ->
-            patch_upsert(user, vault, path, note, new_content, count)
-        end
-      else
+      cond do
         # Nothing was replaced, so the patch did not happen. Was `:ok`.
-        {:error, "Text not found in #{path}"}
+        hits == 0 ->
+          {:error, "Text not found in #{path}"}
+
+        grown > Notes.max_note_bytes() ->
+          {:error, @too_large}
+
+        true ->
+          replace_and_write(
+            user,
+            vault,
+            path,
+            note,
+            current,
+            {find, replace, occurrence},
+            expected
+          )
       end
     else
       {:error, :not_found} -> {:error, "Note not found: #{path}"}
       {:error, reason} -> log_and_error(op, reason, "Could not read #{path}; retry")
+    end
+  end
+
+  # Non-overlapping, left to right (String.split/2's count), without building
+  # the parts: the size check runs before anything the size of the result.
+  defp count_matches(content, find, from, n) do
+    case :binary.match(content, find, scope: {from, byte_size(content) - from}) do
+      {at, len} -> count_matches(content, find, at + len, n + 1)
+      :nomatch -> n
+    end
+  end
+
+  defp replace_and_write(user, vault, path, note, current, {find, replace, occurrence}, expected) do
+    {new_content, count} = do_replace(current, find, replace, occurrence)
+
+    # `find` is present but the requested occurrence is past the last one,
+    # so do_replace/4 returns the content untouched. Rewriting the note with
+    # its own bytes and calling that success told the caller the patch
+    # landed. Same rule as the "Text not found" branch above.
+    cond do
+      count == 0 ->
+        {:error, "Occurrence #{occurrence} not found in #{path}"}
+
+      is_integer(expected) and expected != count ->
+        {:error,
+         "expected #{expected} replacement(s), found #{count} in #{path}; nothing was changed"}
+
+      true ->
+        patch_upsert(user, vault, path, note, new_content, count)
     end
   end
 
@@ -1444,10 +1475,8 @@ defmodule Engram.MCP.Handlers do
     end
   end
 
-  defp do_replace(content, find, replace, -1) do
-    count = content |> String.split(find) |> length() |> Kernel.-(1)
-    {String.replace(content, find, replace), count}
-  end
+  defp do_replace(content, find, replace, -1),
+    do: {String.replace(content, find, replace), count_matches(content, find, 0, 0)}
 
   defp do_replace(content, find, replace, occurrence) do
     parts = String.split(content, find)
@@ -1488,6 +1517,7 @@ defmodule Engram.MCP.Handlers do
       {:ok, _note} -> {:ok, msgs[:ok], structured}
       {:error, :version_conflict, _note} -> {:error, msgs[:conflict]}
       {:error, :note_deleted} -> {:error, msgs[:deleted] || msgs[:error]}
+      {:error, :too_large} -> {:error, @too_large}
       {:error, reason} when is_binary(reason) -> {:error, reason}
       {:error, _reason} -> {:error, msgs[:error]}
     end

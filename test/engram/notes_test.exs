@@ -92,6 +92,25 @@ defmodule Engram.NotesTest do
   # ---------------------------------------------------------------------------
 
   describe "upsert_note/3" do
+    # The one ceiling every writer shares (REST, MCP, link rewrite, sync).
+    test "refuses content past max_note_bytes and writes nothing", %{user: user, vault: vault} do
+      big = String.duplicate("a", Notes.max_note_bytes() + 1)
+
+      assert {:error, :too_large} =
+               Notes.upsert_note(user, vault, %{"path" => "Big.md", "content" => big},
+                 actor: "api"
+               )
+
+      assert {:error, :not_found} = Notes.get_note(user, vault, "Big.md")
+
+      at_cap = String.duplicate("a", Notes.max_note_bytes())
+
+      assert {:ok, _} =
+               Notes.upsert_note(user, vault, %{"path" => "Big.md", "content" => at_cap},
+                 actor: "api"
+               )
+    end
+
     # Title and tags come from the CRDT-merged text (maybe_merge_crdt). A REST
     # write must not also derive them from the pre-merge content.
     test "a REST insert and update each run note_meta once", %{user: user, vault: vault} do
