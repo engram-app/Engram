@@ -14,7 +14,11 @@ import time
 import pytest
 import requests
 
-from helpers.crypto_probe import latest_note_path_hmac, wait_for_qdrant_indexed
+from helpers.crypto_probe import (
+    latest_note_path_hmac,
+    wait_for_chunks_committed,
+    wait_for_qdrant_indexed,
+)
 
 ENGRAM_API_URL = os.environ.get("ENGRAM_API_URL", "http://localhost:8100/api")
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://10.0.20.201:6333")
@@ -184,6 +188,12 @@ class TestSearchAPI:
         # Wait for the note to be indexed. #590: match by path_hmac, not the
         # removed plaintext source_path.
         wait_for_qdrant_indexed(
+            seeded_note["vault_id"], seeded_note["path_hmac"], note_path, timeout=60
+        )
+        # Qdrant is upserted BEFORE the chunk rows commit, and /api/search
+        # rehydrates each hit from its chunk row (a hit with no row is
+        # dropped). Searching in that window misses the note.
+        wait_for_chunks_committed(
             seeded_note["vault_id"], seeded_note["path_hmac"], note_path, timeout=60
         )
 

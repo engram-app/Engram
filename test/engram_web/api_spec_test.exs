@@ -267,11 +267,16 @@ defmodule EngramWeb.ApiSpecTest do
       assert "Embedding" in names and "Logs" in names
     end
 
-    test "POST /api/attachments documents request + 200/400/402/415/422/502", %{spec: spec} do
+    test "POST /api/attachments documents raw + JSON bodies and 200/400/402/408/413/415/422/502",
+         %{spec: spec} do
       op = spec.paths["/api/attachments"].post
       assert op.tags == ["Attachments"]
-      assert op.requestBody
-      assert Enum.sort(Map.keys(op.responses)) == [200, 400, 402, 415, 422, 502]
+
+      assert Enum.sort(Map.keys(op.requestBody.content)) ==
+               ["application/json", "application/octet-stream"]
+
+      assert Enum.map(op.parameters, & &1.name) == [:path, :mtime, :mime_type]
+      assert Enum.sort(Map.keys(op.responses)) == [200, 400, 402, 408, 413, 415, 422, 502]
     end
 
     test "GET /api/attachments/*path documents raw query param + 404", %{spec: spec} do

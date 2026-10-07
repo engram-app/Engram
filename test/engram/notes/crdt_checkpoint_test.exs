@@ -1044,6 +1044,35 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     assert is_nil(fresh.fm_created)
   end
 
+  # A frontmatter fixed in Obsidian lands via the live room, so the checkpoint
+  # is the only write that sees the fix. It must re-derive parse_status from
+  # the same parse as the OKF fields, or the note stays 'degraded' forever.
+  test "checkpoint clears a degraded parse_status when a live edit fixes the frontmatter",
+       ctx do
+    %{user: user, vault: vault} = ctx
+
+    {:ok, note} =
+      Notes.upsert_note(
+        user,
+        vault,
+        %{"path" => "okf/degraded.md", "content" => "---\ndate:YYYY-MM-DD\n---\nx\n"},
+        actor: "api"
+      )
+
+    assert note.parse_status == "degraded"
+
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+
+    :ok = CrdtBridge.ingest_plaintext(doc, "---\ndate: 2026-01-01\n---\nx\n")
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    {:ok, fresh} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    assert fresh.parse_status == "ok"
+    assert is_nil(fresh.parse_reason)
+  end
+
   # ── Debounce timer: multiple fast activity signals reset the timer ─────────
 
   test "CrdtCheckpointTimer debounces — activity signals reset the settle timer", ctx do

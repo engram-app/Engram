@@ -25,7 +25,11 @@ import logging
 import os
 import time
 
-from helpers.crypto_probe import latest_note_path_hmac, wait_for_qdrant_indexed
+from helpers.crypto_probe import (
+    latest_note_path_hmac,
+    wait_for_chunks_committed,
+    wait_for_qdrant_indexed,
+)
 
 API_URL = os.environ.get("ENGRAM_API_URL") or "http://localhost:8100/api"
 
@@ -89,6 +93,9 @@ class TestFilteredSearchOnEncryptedVault:
         # 3. Wait for the embed worker to land all three in Qdrant
         for path, _, _ in note_specs:
             wait_for_qdrant_indexed(vault_id, path_hmacs[path], path, timeout=90)
+            # Search rehydrates hits from chunk rows, which commit AFTER the
+            # Qdrant upsert; a hit with no row yet is dropped.
+            wait_for_chunks_committed(vault_id, path_hmacs[path], path, timeout=90)
 
         # 3a. Sanity — confirm frontmatter parsing landed `target_tag` on the
         #     target note. Without this guard, a future regression in

@@ -26,7 +26,11 @@ import logging
 import os
 import time
 
-from helpers.crypto_probe import latest_note_path_hmac, wait_for_qdrant_indexed
+from helpers.crypto_probe import (
+    latest_note_path_hmac,
+    wait_for_chunks_committed,
+    wait_for_qdrant_indexed,
+)
 
 API_URL = os.environ.get("ENGRAM_API_URL") or "http://localhost:8100/api"
 
@@ -67,6 +71,9 @@ class TestRenameRepathSearch:
 
         old_path_hmac = latest_note_path_hmac(vault_id)
         wait_for_qdrant_indexed(vault_id, old_path_hmac, old_path, timeout=90)
+        # Search rehydrates hits from chunk rows, which commit AFTER the
+        # Qdrant upsert; a hit with no row yet is dropped.
+        wait_for_chunks_committed(vault_id, old_path_hmac, old_path, timeout=90)
 
         # 1a. Baseline: folder-scoped search finds it under the OLD folder.
         before = self._search(client, query, folder=src_folder, limit=10)

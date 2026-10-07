@@ -69,9 +69,17 @@ defmodule EngramWeb.Plugs.AuthTest do
     user: user,
     raw_key: raw_key
   } do
+    # Self-host turns BOTH flags off (config/runtime.exs: neither a Clerk
+    # provider nor a Paddle key). Either one alone still needs the row.
     prev_enabled = Application.get_env(:engram, :billing_enabled)
+    prev_enforced = Application.get_env(:engram, :limits_enforced)
     Application.put_env(:engram, :billing_enabled, false)
-    on_exit(fn -> Application.put_env(:engram, :billing_enabled, prev_enabled) end)
+    Application.put_env(:engram, :limits_enforced, false)
+
+    on_exit(fn ->
+      Application.put_env(:engram, :billing_enabled, prev_enabled)
+      Application.put_env(:engram, :limits_enforced, prev_enforced)
+    end)
 
     insert(:subscription, user: user, tier: "pro", status: "active")
 

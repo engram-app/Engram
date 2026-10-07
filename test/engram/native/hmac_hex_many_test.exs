@@ -52,4 +52,11 @@ defmodule Engram.Native.HmacHexManyTest do
       assert_received {_, ^ref, %{input_bytes: 5}, %{nif: :hmac_hex_many}}
     end
   end
+
+  test "16 KB runs on the calling scheduler, a byte more dirty" do
+    Engram.NativeScheduled.assert_scheduled(
+      :hmac_hex_many,
+      &Native.hmac_hex_many(@key, "p", [String.duplicate("a", &1 - 1)])
+    )
+  end
 end

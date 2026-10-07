@@ -27,10 +27,11 @@ defmodule Engram.Native.FrontmatterSplitTest do
     assert Frontmatter.split(content) == {"a: \xff\n", "body \xfe"}
   end
 
-  test "a large note splits on a dirty scheduler" do
-    ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
-    Frontmatter.split("---\n" <> String.duplicate("\n-- x", 10_000))
-    assert_receive {_, ^ref, _, %{nif: :frontmatter_split, dirty: true}}
+  test "16 KB splits on the calling scheduler, a byte more dirty" do
+    Engram.NativeScheduled.assert_scheduled(
+      :frontmatter_split,
+      &Frontmatter.split("---\n" <> String.duplicate("x", &1 - 4))
+    )
   end
 
   test "split emits [:engram, :nif, :call, :stop]" do

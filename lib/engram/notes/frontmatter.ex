@@ -40,11 +40,37 @@ defmodule Engram.Notes.Frontmatter do
   Returns `:error` only when the block is not YAML-map-shaped at all (whole
   block failure), never for a single bad key.
   """
-  @spec parse(String.t()) ::
-          {:ok, [String.t()], %{String.t() => String.t()}, [map()]} | :error
+  @type parse_result :: {:ok, [String.t()], %{String.t() => String.t()}, [map()]} | :error
+
+  @spec parse(String.t()) :: parse_result()
   def parse(""), do: {:ok, [], %{}, []}
 
   def parse(block) when is_binary(block) do
+    case native_parse(block) do
+      {order, values} -> {:ok, order, values, []}
+      nil -> parse_yaml(block)
+    end
+  end
+
+  # The common block shapes (scalars, flow and block lists of scalars,
+  # comments) parse in Rust: YamlElixir costs ~1.5 ms for 10 keys. Anything
+  # else, and any block the rules are unsure of, returns nil and goes to
+  # YamlElixir, which stays the definition: test/engram/native/
+  # frontmatter_parse_test.exs diffs the two. The native rules never produce
+  # a degraded key (every value they accept is JSON), so `degraded`/`raws`
+  # are empty on that path. Invalid UTF-8 cannot cross into Rust as a str.
+  defp native_parse(block) do
+    if String.valid?(block) do
+      case Engram.Native.frontmatter_parse(block) do
+        nil -> nil
+        pairs -> {Enum.map(pairs, &elem(&1, 0)), Map.new(pairs)}
+      end
+    end
+  end
+
+  # YamlElixir path: the reference semantics, and the fallback.
+  @doc false
+  def parse_yaml(block) when is_binary(block) do
     case YamlElixir.read_from_string(block) do
       {:ok, map} when is_map(map) ->
         order = top_level_key_order(block, map)
@@ -131,6 +157,14 @@ defmodule Engram.Notes.Frontmatter do
   def parse_for_ingest(""), do: {:ok, [], %{}, %{}}
 
   def parse_for_ingest(block) when is_binary(block) do
+    case native_parse(block) do
+      {order, values} -> {:ok, order, values, %{}}
+      nil -> parse_for_ingest_yaml(block)
+    end
+  end
+
+  @doc false
+  def parse_for_ingest_yaml(block) when is_binary(block) do
     case YamlElixir.read_from_string(block) do
       {:ok, map} when is_map(map) ->
         {values, bad_keys} = encode_values(map)

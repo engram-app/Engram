@@ -383,6 +383,222 @@ defmodule EngramWeb.AttachmentsControllerTest do
   end
 
   # ---------------------------------------------------------------------------
+  # POST /attachments with a raw application/octet-stream body (#1877)
+  # ---------------------------------------------------------------------------
+
+  describe "POST /attachments (raw octet-stream body)" do
+    defp raw_post(conn, query, body) do
+      conn
+      |> put_req_header("content-type", "application/octet-stream")
+      |> post("/api/attachments?" <> URI.encode_query(query), body)
+    end
+
+    test "uploads raw bytes with metadata in the query string", %{conn: conn} do
+      bytes = :crypto.strong_rand_bytes(4096)
+
+      conn1 = raw_post(conn, %{path: "photos/raw.png", mtime: "1709234567.5"}, bytes)
+
+      assert %{"attachment" => att} = json_response(conn1, 200)
+      assert att["path"] == "photos/raw.png"
+      assert att["mime_type"] == "image/png"
+      assert att["size_bytes"] == 4096
+
+      body = conn |> get("/api/attachments/photos/raw.png") |> json_response(200)
+      assert Base.decode64!(body["content_base64"]) == bytes
+      assert body["mtime"] == 1_709_234_567.5
+    end
+
+    test "stores exactly what the base64 JSON path stores", %{conn: conn} do
+      json_att =
+        conn
+        |> post("/api/attachments", %{
+          path: "a.png",
+          content_base64: @sample_base64,
+          mtime: 1.0
+        })
+        |> json_response(200)
+
+      raw_att =
+        conn
+        |> raw_post(%{path: "b.png", mtime: "1.0"}, @sample_content)
+        |> json_response(200)
+
+      assert raw_att["attachment"]["content_hash"] == json_att["attachment"]["content_hash"]
+      assert raw_att["attachment"]["size_bytes"] == json_att["attachment"]["size_bytes"]
+    end
+
+    test "honours an explicit mime_type", %{conn: conn} do
+      conn = raw_post(conn, %{path: "doc.bin.pdf", mime_type: "application/pdf"}, "%PDF-1.4")
+      assert json_response(conn, 200)["attachment"]["mime_type"] == "application/pdf"
+    end
+
+    test "round-trips a unicode / emoji path", %{conn: conn} do
+      path = "写真/café 😀.png"
+      conn1 = raw_post(conn, %{path: path, mtime: "1.0"}, @sample_content)
+      assert json_response(conn1, 200)["attachment"]["path"] == path
+    end
+
+    test "sanitizes the path exactly like the JSON path", %{conn: conn} do
+      conn1 = raw_post(conn, %{path: "../../etc/evil.png", mtime: "1.0"}, @sample_content)
+
+      assert json_response(conn1, 200)["attachment"]["path"] ==
+               Engram.Notes.PathSanitizer.sanitize("../../etc/evil.png")
+    end
+
+    test "accepts an empty body as a zero-byte file", %{conn: conn} do
+      conn = raw_post(conn, %{path: "empty.png", mtime: "1.0"}, "")
+      assert json_response(conn, 200)["attachment"]["size_bytes"] == 0
+    end
+
+    test "422 when path is missing", %{conn: conn} do
+      conn = raw_post(conn, %{mtime: "1.0"}, @sample_content)
+      assert json_response(conn, 422)["error"] == "path is required"
+    end
+
+    test "415 for a disallowed extension", %{conn: conn} do
+      conn = raw_post(conn, %{path: "evil.exe", mtime: "1.0"}, "MZ")
+      # .exe detects as application/octet-stream, which the MIME list refuses first.
+      assert json_response(conn, 415)["error"] == "mime_not_allowed"
+    end
+
+    test "402 attachment_must_be_text when an override revokes the surface", %{
+      conn: conn,
+      user: user
+    } do
+      insert(:user_limit_override,
+        user: user,
+        key: "attachments_all_types",
+        value: %{"v" => false},
+        reason: "revoke for test",
+        set_by: "test"
+      )
+
+      conn = raw_post(conn, %{path: "blocked.png", mtime: "1.0"}, @sample_content)
+      assert json_response(conn, 402)["reason"] == "attachment_must_be_text"
+    end
+
+    test "a body exactly at max_file_bytes is accepted", %{conn: conn, user: user} do
+      insert(:user_limit_override, user: user, key: "max_file_bytes", value: %{"v" => 1024})
+
+      conn = raw_post(conn, %{path: "edge.png", mtime: "1.0"}, :binary.copy("a", 1024))
+      assert json_response(conn, 200)["attachment"]["size_bytes"] == 1024
+    end
+
+    test "402 file_too_large one byte over max_file_bytes", %{conn: conn, user: user} do
+      insert(:user_limit_override, user: user, key: "max_file_bytes", value: %{"v" => 1024})
+
+      conn = raw_post(conn, %{path: "big.png", mtime: "1.0"}, :binary.copy("a", 1025))
+
+      body = json_response(conn, 402)
+      assert body["reason"] == "file_too_large"
+      assert body["limit_key"] == "max_file_bytes"
+      assert body["limit"] == 1024
+    end
+
+    test "413 past the request body ceiling, same as the JSON parser", %{conn: conn} do
+      # Pro's per-file cap is far above the body ceiling, so the ceiling binds.
+      too_big = :binary.copy("a", EngramWeb.Endpoint.max_body_bytes() + 1)
+      conn = raw_post(conn, %{path: "huge.png", mtime: "1.0"}, too_big)
+      assert json_response(conn, 413)["error"] == "request_too_large"
+    end
+
+    test "a declared content-length over max_file_bytes is refused before reading", %{
+      conn: conn,
+      user: user
+    } do
+      insert(:user_limit_override, user: user, key: "max_file_bytes", value: %{"v" => 1024})
+
+      conn =
+        conn
+        |> put_req_header("content-length", "1025")
+        |> raw_post(%{path: "lie.png", mtime: "1.0"}, "small")
+
+      assert json_response(conn, 402)["reason"] == "file_too_large"
+      assert json_response(conn, 402)["limit"] == 1024
+    end
+
+    test "a declared content-length over the body ceiling is 413 before reading", %{conn: conn} do
+      declared = Integer.to_string(EngramWeb.Endpoint.max_body_bytes() + 1)
+
+      conn =
+        conn
+        |> put_req_header("content-length", declared)
+        |> raw_post(%{path: "lie.png", mtime: "1.0"}, "small")
+
+      assert json_response(conn, 413)["error"] == "request_too_large"
+      assert get_resp_header(conn, "connection") == ["close"]
+    end
+
+    for bad <- ["NaN", "1,5", "", "inf", "1e400"] do
+      test "422 for mtime #{inspect(bad)} and nothing is stored", %{conn: conn} do
+        conn1 = raw_post(conn, %{path: "m.png", mtime: unquote(bad)}, @sample_content)
+        assert json_response(conn1, 422)["error"] == "mtime must be a finite number"
+
+        assert conn |> get("/api/attachments/m.png") |> json_response(404)
+      end
+    end
+
+    test "422 for a non-string mime_type, raw or JSON", %{conn: conn} do
+      conn1 =
+        conn
+        |> put_req_header("content-type", "application/octet-stream")
+        |> post("/api/attachments?path=m.png&mime_type[]=image/png", @sample_content)
+
+      assert json_response(conn1, 422)["error"] == "mime_type must be a string"
+
+      conn2 =
+        post(conn, "/api/attachments", %{
+          path: "m.png",
+          content_base64: @sample_base64,
+          mime_type: %{"a" => "b"}
+        })
+
+      assert json_response(conn2, 422)["error"] == "mime_type must be a string"
+      assert conn |> get("/api/attachments/m.png") |> json_response(404)
+    end
+
+    test "an absent mtime stores nil, as on the JSON path", %{conn: conn} do
+      conn1 = raw_post(conn, %{path: "nomtime.png"}, @sample_content)
+      assert json_response(conn1, 200)
+
+      body = conn |> get("/api/attachments/nomtime.png") |> json_response(200)
+      assert body["mtime"] == nil
+    end
+
+    test "an early refusal drains the unread body first", %{conn: conn} do
+      conn = raw_post(conn, %{path: "evil.exe", mtime: "1.0"}, :binary.copy("a", 4096))
+
+      assert json_response(conn, 415)
+      {Plug.Adapters.Test.Conn, state} = conn.adapter
+      assert state.req_body == ""
+      assert get_resp_header(conn, "connection") == []
+    end
+
+    test "an early refusal past the ceiling closes instead of draining", %{conn: conn} do
+      declared = Integer.to_string(EngramWeb.Endpoint.max_body_bytes() + 1)
+
+      conn =
+        conn
+        |> put_req_header("content-length", declared)
+        |> raw_post(%{path: "evil.exe", mtime: "1.0"}, "MZ")
+
+      assert json_response(conn, 415)
+      {Plug.Adapters.Test.Conn, state} = conn.adapter
+      assert state.req_body == "MZ"
+      assert get_resp_header(conn, "connection") == ["close"]
+    end
+
+    test "returns 401 without auth", %{conn: conn} do
+      conn =
+        conn
+        |> delete_req_header("authorization")
+        |> raw_post(%{path: "nope.png"}, @sample_content)
+
+      assert json_response(conn, 401)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # GET /attachments/*path — Download
   # ---------------------------------------------------------------------------
 
@@ -401,6 +617,46 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert body["content_base64"] == @sample_base64
       assert body["mime_type"] == "image/png"
       assert body["size_bytes"] == byte_size(@sample_content)
+    end
+
+    # content_base64 is emitted as a pre-quoted Jason.Fragment so Jason does not
+    # escape-scan a multi-MB string. The wire bytes must not change: compare
+    # against the plain-string encoding of the same map, byte for byte.
+    test "JSON body is byte-identical to the plain-string encoding",
+         %{conn: conn, user: user, vault: vault} do
+      bytes = :crypto.strong_rand_bytes(70_000) <> <<0, 255, ?", ?\\, ?/>>
+
+      conn
+      |> put_req_header("content-type", "application/octet-stream")
+      |> post("/api/attachments?path=bin/r.png&mtime=12.5", bytes)
+      |> json_response(200)
+
+      {:ok, att} = Attachments.get_attachment(user, vault, "bin/r.png")
+
+      expected =
+        Jason.encode!(%{
+          id: att.id,
+          path: att.path,
+          mime_type: att.mime_type,
+          size_bytes: att.size_bytes,
+          mtime: att.mtime,
+          content_hash: att.content_hash,
+          content_base64: Base.encode64(bytes),
+          created_at: att.created_at,
+          updated_at: att.updated_at
+        })
+
+      resp = get(conn, "/api/attachments/bin/r.png")
+      assert resp.status == 200
+      assert resp.resp_body == expected
+      assert Base.decode64!(json_response(resp, 200)["content_base64"]) == bytes
+    end
+
+    test "JSON body for an empty attachment carries an empty content_base64",
+         %{conn: conn} do
+      post(conn, "/api/attachments", %{path: "e.txt", content_base64: "", mtime: 1.0})
+      body = json_response(get(conn, "/api/attachments/e.txt"), 200)
+      assert body["content_base64"] == ""
     end
 
     test "returns 404 for nonexistent attachment", %{conn: conn} do
@@ -553,6 +809,60 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert response_content_type(resp, :png) =~ "image/png"
       assert resp.resp_body == "RAWBYTES"
       assert get_resp_header(resp, "content-disposition") == [~s(inline; filename="p.png")]
+    end
+
+    # The plugin downloads raw when the join reply advertises
+    # raw_attachment_download, so the raw response must carry the metadata the
+    # JSON body did, with the SAME values, and keep every security header.
+    test "carries the JSON body's metadata in x-engram-* headers",
+         %{conn: conn, user: user, vault: vault} do
+      bytes = :crypto.strong_rand_bytes(4096) <> <<0, 255>>
+
+      conn
+      |> put_req_header("content-type", "application/octet-stream")
+      |> post("/api/attachments?path=d/r%C3%A9.png&mtime=1709234567.125", bytes)
+      |> json_response(200)
+
+      json = json_response(get(conn, "/api/attachments/d/r%C3%A9.png"), 200)
+      {:ok, att} = Attachments.get_attachment(user, vault, "d/ré.png")
+      assert is_binary(att.content_hash)
+
+      resp = get(conn, "/api/attachments/d/r%C3%A9.png?raw=1")
+
+      assert resp.status == 200
+      assert resp.resp_body == bytes
+      assert resp.resp_body == Base.decode64!(json["content_base64"])
+      assert get_resp_header(resp, "x-engram-content-hash") == [json["content_hash"]]
+      assert get_resp_header(resp, "x-engram-mime-type") == [json["mime_type"]]
+      assert get_resp_header(resp, "x-engram-updated-at") == [json["updated_at"]]
+      [mtime] = get_resp_header(resp, "x-engram-mtime")
+      assert Jason.decode!(mtime) == json["mtime"]
+
+      # Security headers of the raw path are untouched.
+      assert get_resp_header(resp, "x-content-type-options") == ["nosniff"]
+      assert [csp] = get_resp_header(resp, "content-security-policy")
+      assert csp =~ "default-src 'none'"
+      assert get_resp_header(resp, "content-disposition") == [~s(inline; filename="ré.png")]
+    end
+
+    test "omits x-engram-mtime when the attachment has none", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      conn
+      |> put_req_header("content-type", "application/octet-stream")
+      |> post("/api/attachments?path=n.png", "x")
+      |> json_response(200)
+
+      {:ok, att} = Attachments.get_attachment(user, vault, "n.png")
+      resp = get(conn, "/api/attachments/n.png?raw=1")
+
+      if is_nil(att.mtime),
+        do: assert(get_resp_header(resp, "x-engram-mtime") == []),
+        else: assert(get_resp_header(resp, "x-engram-mtime") == [Jason.encode!(att.mtime)])
+
+      assert [_] = get_resp_header(resp, "x-engram-updated-at")
     end
 
     test "marks an already-compressed body no-transform so Bandit skips gzip",

@@ -1086,7 +1086,7 @@ defmodule EngramWeb.CrdtChannel do
     # load-bearing (#1409).
     genesis_text = CrdtBridge.text_of(doc)
 
-    {row_state, wrote?} =
+    {row_state, wrote?, row} =
       case fold_row_and_tail(user, vault, note_id, doc) do
         # Already exactly this body: an idempotent retry with nothing to write.
         # Report `:stored` — the client's file IS synced — and take no room.
@@ -1103,7 +1103,7 @@ defmodule EngramWeb.CrdtChannel do
         # The union is not the right question for "is the client synced": it is
         # what a WRITE would commit, and it is used for exactly that below.
         {:ok, ^genesis_text, _prune_ids} ->
-          {:stored, false}
+          {:stored, false, nil}
 
         {:ok, row_content, prune_ids} ->
           # The union is read AFTER the fold: with the stored snapshot and any
@@ -1122,7 +1122,7 @@ defmodule EngramWeb.CrdtChannel do
         # Could not READ the row (note gone, snapshot undecryptable, DEK/KMS
         # down). Not a decline — we learned nothing about what the row holds.
         :error ->
-          {:unreadable, false}
+          {:unreadable, false, nil}
       end
 
     # A CONFIRMED write, not merely an attempted one (#1409 M2). `wrote?` alone
@@ -1154,7 +1154,10 @@ defmodule EngramWeb.CrdtChannel do
       # 1,700-note import enqueues COLD and drains at a bounded rate instead of
       # emitting 1,700 unpaced broadcasts. Best-effort and post-commit — it
       # skips silently if the row carries no state (the checkpoint no-op'd).
-      CrdtDeliver.fanout_idle(user.id, vault.id, note_id)
+      #
+      # Fed the row the read-back just loaded: re-reading it (and the user)
+      # inside fanout_idle/3 cost a tenant transaction per create (#1877).
+      CrdtDeliver.fanout_idle(user, vault.id, row)
     end
 
     # #476: the caller needs to know WHICH kind of "not stored" this was, because
@@ -1340,10 +1343,11 @@ defmodule EngramWeb.CrdtChannel do
   # top), so a REST/MCP write landing in the remaining gap aborts our write
   # rather than doubling the body via `union_with_row_state` (#846).
   #
-  # Returns `{row_state, wrote?}`. `row_state` is the honest read-back the reply
-  # carries — `:stored | :empty | :occupied` — and `wrote?` says only that the
-  # write CLAUSE ran. seed_detached/4 needs both to tell a confirmed row change
-  # from a no-op — see its eviction gate.
+  # Returns `{row_state, wrote?, row}`. `row_state` is the honest read-back the
+  # reply carries — `:stored | :empty | :occupied` — and `wrote?` says only that
+  # the write CLAUSE ran. seed_detached/4 needs both to tell a confirmed row
+  # change from a no-op — see its eviction gate. `row` is the read-back itself
+  # (nil when nothing was read), which seed_detached/4 fans out.
   #
   # `row_state` was a BOOLEAN and that was the #476 hole (third wave). A write
   # can abort under `snapshot_fence/2` or the `captured_version` CAS, which
@@ -1383,14 +1387,15 @@ defmodule EngramWeb.CrdtChannel do
         prune_ids: prune_ids
       )
 
-    {row_state_after_write(user, vault, note_id, union_text), true}
+    {row_state, row} = row_state_after_write(user, vault, note_id, union_text)
+    {row_state, true, row}
   end
 
   # The row already carries a DIFFERENT body — a concurrent write landed between
   # genesis and here. Merging two lineages is exactly what a room is for; decline
   # and let the client's crdt_msg seed go through one.
   defp seed_against(_user, _vault, _note_id, _doc, _union_text, _row_content, _prune_ids),
-    do: {:occupied, false}
+    do: {:occupied, false, nil}
 
   # Same convention as CrdtCheckpoint.interleave_hook/1 and
   # Notes.interleave_hook/1 (SAME `:checkpoint_interleave_hook` app env key —
@@ -1457,9 +1462,10 @@ defmodule EngramWeb.CrdtChannel do
   # versus a permanently doubled note.
   defp row_state_after_write(user, vault, note_id, expected) do
     case Notes.get_note_by_id(user, vault, note_id) do
-      {:ok, %{content: ^expected}} -> :stored
-      {:ok, %{content: ""}} -> :empty
-      _ -> :occupied
+      {:ok, %{content: ^expected} = row} -> {:stored, row}
+      {:ok, %{content: ""} = row} -> {:empty, row}
+      {:ok, row} -> {:occupied, row}
+      _ -> {:occupied, nil}
     end
   end
 

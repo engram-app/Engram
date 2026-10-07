@@ -11,8 +11,12 @@ defmodule Engram.TenantQueryCounter do
   of sync with itself and silently stops asserting anything real.
   """
 
-  @doc "Runs `fun`, returns the list of query texts for which `matcher.(query)` is truthy."
-  def count_matching_queries(fun, matcher) do
+  @doc """
+  Runs `fun`, returns the list of query texts for which `matcher.(query)` is
+  truthy. Only queries issued by `from_pid` count (default: the caller), so a
+  test driving a channel passes the channel pid.
+  """
+  def count_matching_queries(fun, matcher, from_pid \\ self()) do
     test_pid = self()
     handler_id = {__MODULE__, make_ref()}
 
@@ -20,7 +24,7 @@ defmodule Engram.TenantQueryCounter do
       handler_id,
       [:engram, :repo, :query],
       fn _e, _m, %{query: q}, _c ->
-        if self() == test_pid and matcher.(q) do
+        if self() == from_pid and matcher.(q) do
           send(test_pid, {:matched_query, q})
         end
       end,

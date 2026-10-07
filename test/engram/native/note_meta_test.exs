@@ -15,12 +15,32 @@ defmodule Engram.Native.NoteMetaTest do
   test "reproduces the Elixir title and tag rules on the golden set" do
     for %{input: input, title: title, tags: tags} <- @golden do
       assert Helpers.extract_title(input, "dir/File Name.md") == title, inspect(input)
-      assert Helpers.extract_tags(input) == tags, inspect(input)
+
+      assert Helpers.extract_title_and_tags(input, "dir/File Name.md") == {title, tags},
+             inspect(input)
+    end
+  end
+
+  test "extract_title_and_tags/2 titles equal extract_title/2" do
+    for content <- [
+          "",
+          "# Only a heading",
+          "no title, #tag",
+          "```\n# not a title #nottag\n```\n# Real #yes\n",
+          "---\ntitle: FM\ntags: [a, b]\n---\n# H\n#a #c `#d`",
+          "---\ntags: x\n---\n" <> String.duplicate("`code` #t ", 3_000),
+          "# 東京 😀 #タグ #emoji😀",
+          "#ok \xFF # T\xFF",
+          String.duplicate("- item #tag `c`\n", 2_000)
+        ] do
+      assert elem(Helpers.extract_title_and_tags(content, "a/N.md"), 0) ==
+               Helpers.extract_title(content, "a/N.md"),
+             inspect(content)
     end
   end
 
   test "invalid UTF-8 is scrubbed, not crashed on" do
-    assert Helpers.extract_tags("#ok \xFF #fine") == ["ok", "fine"]
+    assert tags("#ok \xFF #fine") == ["ok", "fine"]
     assert Helpers.extract_title("# T\xFF", "a/N.md") == "T�"
   end
 
@@ -32,7 +52,7 @@ defmodule Engram.Native.NoteMetaTest do
 
     test "tags inside longer fences, indented code and multi-backtick spans are skipped" do
       content = "````\n#a\n````\n``x #b y``\n\n    #c\n\n#d\n"
-      assert Helpers.extract_tags(content) == ["d"]
+      assert tags(content) == ["d"]
     end
   end
 
@@ -43,9 +63,9 @@ defmodule Engram.Native.NoteMetaTest do
             String.duplicate("- item with #tag and `code`\n", 33_000),
             "---\ntags: [a, b]\n---\n" <> String.duplicate("Prose #topic here.\n\n", 50_000)
           ] do
-        {_tags, peak} = Engram.Native.note_tags_dirty_nif(content)
-        assert peak <= 10 * byte_size(content), "#{peak} for #{binary_part(content, 0, 20)}"
         {_title, peak} = Engram.Native.note_title_dirty_nif(content)
+        assert peak <= 10 * byte_size(content), "#{peak} for #{binary_part(content, 0, 20)}"
+        {_meta, peak} = Engram.Native.note_meta_dirty_nif(content)
         assert peak <= 10 * byte_size(content)
       end
     end
@@ -54,25 +74,31 @@ defmodule Engram.Native.NoteMetaTest do
       content = "---\ntitle: T\ntags: [a]\n---\n# H\n#x `y`"
 
       Engram.NativeLeak.assert_no_leak(fn ->
-        Engram.Native.note_tags_nif(content)
         Engram.Native.note_title_nif(content)
+        Engram.Native.note_meta_nif(content)
       end)
     end
 
     test "a note up to 16 KB parses on the calling scheduler, a bigger one dirty" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
-      Helpers.extract_tags(String.duplicate("a", 16_384))
-      assert_receive {_, ^ref, _, %{nif: :note_tags, dirty: false}}
-      Helpers.extract_tags(String.duplicate("a", 16_385))
-      assert_receive {_, ^ref, _, %{nif: :note_tags, dirty: true}}
+      Engram.NativeScheduled.assert_scheduled(
+        :note_meta,
+        &Helpers.extract_title_and_tags(String.duplicate("a", &1), "x.md")
+      )
+
+      Engram.NativeScheduled.assert_scheduled(
+        :note_title,
+        &Helpers.extract_title(String.duplicate("a", &1), "x.md")
+      )
     end
 
     test "title and tags emit [:engram, :nif, :call, :stop]" do
       ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
       Helpers.extract_title("# a", "x.md")
-      Helpers.extract_tags("#a")
+      Helpers.extract_title_and_tags("#a", "x.md")
       assert_receive {[:engram, :nif, :call, :stop], ^ref, _, %{nif: :note_title}}
-      assert_receive {[:engram, :nif, :call, :stop], ^ref, _, %{nif: :note_tags}}
+      assert_receive {[:engram, :nif, :call, :stop], ^ref, _, %{nif: :note_meta}}
     end
   end
+
+  defp tags(content), do: content |> Helpers.extract_title_and_tags("n.md") |> elem(1)
 end

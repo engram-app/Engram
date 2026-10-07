@@ -196,32 +196,40 @@ defmodule Engram.Workers.ExtractNoteLinks do
         )
       end)
 
-    Enum.each(dangling_hmacs, fn hmac ->
-      case recent_rename_job_args(user.id, vault.id, Base.encode64(hmac)) do
-        nil -> :ok
-        args -> enqueue_repair(args)
-      end
-    end)
+    dangling_hmacs
+    |> Enum.map(&Base.encode64/1)
+    |> recent_rename_job_args(user.id, vault.id)
+    |> Enum.each(&enqueue_repair/1)
 
     :ok
   end
 
-  # Newest rewrite-job row (ANY state — completed included) inside the window
-  # whose old_basename_hmac matches the dangler. oban_jobs is not a tenant
-  # table; user/vault are filtered as args. JSONB ->> precedent:
-  # EmbedNote.existing_burst_start/1.
-  defp recent_rename_job_args(user_id, vault_id, hmac_b64) do
+  # Per dangler hmac, the newest rewrite-job row (ANY state, completed
+  # included) inside the window whose old_basename_hmac matches. One query for
+  # all danglers (first sync makes most links dangling; this was one query
+  # each, #1877). oban_jobs is not a tenant table; user/vault are filtered as
+  # args. JSONB ->> precedent: EmbedNote.existing_burst_start/1. `= ANY` on
+  # the hmac expression still uses
+  # oban_jobs_rewrite_note_links_old_basename_hmac_index.
+  defp recent_rename_job_args([], _user_id, _vault_id), do: []
+
+  defp recent_rename_job_args(hmacs_b64, user_id, vault_id) do
     cutoff = DateTime.add(DateTime.utc_now(), -@repair_window_seconds, :second)
 
-    Repo.one(
+    Repo.all(
       from(j in Oban.Job,
         where: j.worker == "Engram.Workers.RewriteNoteLinks",
         where: j.inserted_at > ^cutoff,
-        where: fragment("? ->> 'old_basename_hmac' = ?", j.args, ^hmac_b64),
+        where:
+          fragment(
+            "? ->> 'old_basename_hmac' = ANY(?)",
+            j.args,
+            type(^hmacs_b64, {:array, :string})
+          ),
         where: fragment("? ->> 'user_id' = ?", j.args, ^to_string(user_id)),
         where: fragment("? ->> 'vault_id' = ?", j.args, ^to_string(vault_id)),
+        distinct: fragment("? ->> 'old_basename_hmac'", j.args),
         order_by: [desc: j.inserted_at],
-        limit: 1,
         select: j.args
       )
     )

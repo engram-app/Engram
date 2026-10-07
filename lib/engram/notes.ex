@@ -426,9 +426,7 @@ defmodule Engram.Notes do
          {:ok, path} <- validate_path(path),
          {:ok, hash} <- content_hash(user, content) do
       sanitized_path = PathSanitizer.sanitize(path)
-      title = Helpers.extract_title(content, sanitized_path)
       folder = Helpers.extract_folder(sanitized_path)
-      tags = Helpers.extract_tags(content)
       now = DateTime.utc_now()
       # #1710: decided once, before the transaction (see Revisions moduledoc).
       recording = Revisions.recording?(user)
@@ -442,8 +440,11 @@ defmodule Engram.Notes do
         # coexist with a folder marker at the same path string.
         kind: "note",
         content: content,
-        title: title,
-        tags: tags,
+        # Every write path replaces these with crdt.title/crdt.tags, derived
+        # from the CRDT-merged text. The keys stay because those paths use
+        # `%{base_attrs | ...}`, which requires them to exist.
+        title: nil,
+        tags: nil,
         content_hash: hash,
         mtime: mtime,
         user_id: user.id,
@@ -465,7 +466,6 @@ defmodule Engram.Notes do
               user: user,
               path: sanitized_path,
               folder: folder,
-              tags: tags,
               opts: opts
             },
             1
@@ -624,7 +624,7 @@ defmodule Engram.Notes do
     end
   end
 
-  defp insert_new_note(base_attrs, user, sanitized_path, folder, _tags, client_id, lookup_query) do
+  defp insert_new_note(base_attrs, user, sanitized_path, folder, client_id, lookup_query) do
     # Pricing v2 §G — server-side notes_cap enforcement. Free tier defaults
     # to 10k notes; Starter to 50k; Pro unlimited. Resolver returns nil for
     # the unlimited case, in which check_limit is a no-op. The current count is
@@ -742,19 +742,25 @@ defmodule Engram.Notes do
          remint? \\ true
        ) do
     with {:ok, crdt} <-
-           maybe_merge_crdt(nil, base_attrs.content, user, note_id, base_attrs.vault_id),
+           maybe_merge_crdt(
+             nil,
+             base_attrs.content,
+             user,
+             note_id,
+             base_attrs.vault_id,
+             sanitized_path
+           ),
          merged_attrs = %{
            base_attrs
            | content: crdt.merged_text,
-             title: Helpers.extract_title(crdt.merged_text, sanitized_path),
+             title: crdt.title,
              tags: crdt.tags,
              content_hash: crdt.content_hash
          },
          {:ok, encrypted} <- Crypto.encrypt_note_fields(merged_attrs, user, note_id) do
       phase_b =
         inject_phase_b_fields(encrypted, user, note_id, sanitized_path, folder, crdt.tags)
-        |> inject_okf_fields(user, note_id, crdt.merged_text)
-        |> put_parse_status(crdt.merged_text)
+        |> inject_frontmatter_fields(user, note_id, crdt.merged_text)
         |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
         |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
 
@@ -888,6 +894,9 @@ defmodule Engram.Notes do
 
     with {:ok, canonical_id} <- Ecto.UUID.cast(id),
          {:ok, user} <- Crypto.ensure_user_dek(user),
+         # One subscription read for the whole create, not one per limit check
+         # (history gate + notes cap resolved the tier three times, #1877).
+         user = Billing.with_subscription(user),
          {:ok, path} <- validate_path(path),
          sanitized_path = PathSanitizer.sanitize(path),
          folder = Helpers.extract_folder(sanitized_path),
@@ -1671,7 +1680,6 @@ defmodule Engram.Notes do
          user: user,
          path: sanitized_path,
          folder: folder,
-         tags: tags,
          query: lookup_query,
          opts: opts
        }) do
@@ -1715,7 +1723,7 @@ defmodule Engram.Notes do
         end
 
       nil ->
-        insert_new_note(base_attrs, user, sanitized_path, folder, tags, client_id, lookup_query)
+        insert_new_note(base_attrs, user, sanitized_path, folder, client_id, lookup_query)
     end
   end
 
@@ -1770,13 +1778,18 @@ defmodule Engram.Notes do
     was_tombstoned = not is_nil(prior.deleted_at)
 
     with {:ok, crdt} <-
-           maybe_merge_crdt(prior, base_attrs.content, user, prior.id, prior.vault_id) do
-      merged_title = Helpers.extract_title(crdt.merged_text, sanitized_path)
-
+           maybe_merge_crdt(
+             prior,
+             base_attrs.content,
+             user,
+             prior.id,
+             prior.vault_id,
+             sanitized_path
+           ) do
       merged_attrs = %{
         base_attrs
         | content: crdt.merged_text,
-          title: merged_title,
+          title: crdt.title,
           tags: crdt.tags,
           content_hash: crdt.content_hash
       }
@@ -1791,8 +1804,7 @@ defmodule Engram.Notes do
             folder,
             crdt.tags
           )
-          |> inject_okf_fields(user, prior.id, crdt.merged_text)
-          |> put_parse_status(crdt.merged_text)
+          |> inject_frontmatter_fields(user, prior.id, crdt.merged_text)
           |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
           |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
 
@@ -1866,7 +1878,7 @@ defmodule Engram.Notes do
   # CRDT (Yjs) is the only content-sync path: merge_plaintext in do_update_note
   # IS the conflict resolution. A stale client_version never 409s — the diverging
   # write is merged convergently into crdt_state (no legacy conflict-copy flow).
-  defp do_update_note(existing, base_attrs, user, sanitized_path, folder, _tags, opts) do
+  defp do_update_note(existing, base_attrs, user, sanitized_path, folder, opts) do
     base_hash = Keyword.get(opts, :base_hash)
 
     cond do
@@ -1946,7 +1958,7 @@ defmodule Engram.Notes do
           # environment that does not set it, which is all of them outside
           # `test/support/checkpoint_interleave.ex`.
           interleave_hook(:after_note_read)
-          do_update_note(existing, w.base, w.user, w.path, w.folder, w.tags, w.opts)
+          do_update_note(existing, w.base, w.user, w.path, w.folder, w.opts)
       end
 
     case result do
@@ -2008,13 +2020,18 @@ defmodule Engram.Notes do
       end
 
     with {:ok, crdt} <-
-           maybe_merge_crdt(existing, base_attrs.content, user, existing.id, existing.vault_id) do
-      merged_title = Helpers.extract_title(crdt.merged_text, sanitized_path)
-
+           maybe_merge_crdt(
+             existing,
+             base_attrs.content,
+             user,
+             existing.id,
+             existing.vault_id,
+             sanitized_path
+           ) do
       merged_attrs = %{
         base_attrs
         | content: crdt.merged_text,
-          title: merged_title,
+          title: crdt.title,
           tags: crdt.tags,
           content_hash: crdt.content_hash
       }
@@ -2029,8 +2046,7 @@ defmodule Engram.Notes do
             folder,
             crdt.tags
           )
-          |> inject_okf_fields(user, existing.id, crdt.merged_text)
-          |> put_parse_status(crdt.merged_text)
+          |> inject_frontmatter_fields(user, existing.id, crdt.merged_text)
           |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
           |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
 
@@ -2147,9 +2163,10 @@ defmodule Engram.Notes do
   # tail keystrokes from the doc and deliver_out would push those deletions to
   # open editors — the stale-snapshot window bug.
   #
-  # Returns the merged text so callers compute content_hash + tags from the
-  # MERGED result — the public-API contract is "server merges, never clobbers."
-  defp maybe_merge_crdt(existing, incoming_content, user, note_id, vault_id) do
+  # Returns the merged text, with its content_hash, title (`path` is the
+  # fallback) and tags, all from the MERGED result — the public-API contract
+  # is "server merges, never clobbers."
+  defp maybe_merge_crdt(existing, incoming_content, user, note_id, vault_id, path) do
     prior_state =
       case existing do
         %Note{} = note ->
@@ -2235,13 +2252,16 @@ defmodule Engram.Notes do
     with {:ok, %{state: new_state, text: merged_text}} <- merge_result,
          {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(new_state, user, note_id),
          {:ok, key} <- Crypto.dek_content_hash_key(user) do
+      {title, tags} = Helpers.extract_title_and_tags(merged_text, path)
+
       {:ok,
        %{
          crdt_state_ciphertext: ct,
          crdt_state_nonce: nonce,
          merged_text: merged_text,
          content_hash: Crypto.hmac_content_hash(key, merged_text),
-         tags: Helpers.extract_tags(merged_text)
+         title: title,
+         tags: tags
        }}
     end
   catch
@@ -6078,10 +6098,21 @@ defmodule Engram.Notes do
     Map.merge(attrs, Map.new(phase_b_keyword_for(user, note_id, path, folder, tags)))
   end
 
+  # OKF fields AND parse_status from ONE parse of the persisted content. Both
+  # read the same frontmatter block; YamlElixir is ~1.5 ms per 10-key block,
+  # so parsing it twice per write was a measurable share of a REST write (#1877).
+  defp inject_frontmatter_fields(attrs, user, note_id, content) do
+    {block, _body} = Frontmatter.split(content)
+    parsed = block && Frontmatter.parse(block)
+
+    attrs
+    |> put_okf_fields(user, note_id, OkfFields.from_parse(parsed))
+    |> put_parse_status(block, parsed)
+  end
+
   # OKF v0.1 fields. Sets ALL columns on every write: nil when the key is
   # absent, so removing frontmatter clears previously stored values.
-  defp inject_okf_fields(attrs, user, note_id, content) do
-    okf = OkfFields.extract(content)
+  defp put_okf_fields(attrs, user, note_id, okf) do
     {:ok, dek} = Crypto.get_dek(user)
     {:ok, filter_key} = Crypto.dek_filter_key(user)
 
@@ -6130,50 +6161,43 @@ defmodule Engram.Notes do
   end
 
   @doc false
-  # Public delegate so `CrdtCheckpoint` can re-run OKF v0.1 frontmatter
-  # extraction on every changed-text checkpoint, the same way it re-runs
-  # Phase B. Without this, a live-editor frontmatter edit persists content
-  # while type_ciphertext/type_hmac/fm_timestamp/fm_created keep stale
-  # values. The `defp` counterpart cannot be called across module
-  # boundaries; this thin wrapper exposes it without promoting it to an
+  # Public delegate so `CrdtCheckpoint` re-runs frontmatter derivation (OKF
+  # v0.1 fields AND parse_status/parse_reason, from one parse) on every
+  # changed-text checkpoint, the same way it re-runs Phase B. A frontmatter
+  # edit made in the live editor must refresh type_hmac/fm_timestamp AND clear
+  # a stale 'degraded' status. The `defp` counterpart cannot be called across
+  # module boundaries; this thin wrapper exposes it without promoting it to an
   # official public API.
-  def inject_okf_fields_pub(attrs, user, note_id, content) do
-    inject_okf_fields(attrs, user, note_id, content)
+  def inject_frontmatter_fields_pub(attrs, user, note_id, content) do
+    inject_frontmatter_fields(attrs, user, note_id, content)
   end
 
   # Frontmatter-resilience (Task 5): stamp parse_status/parse_reason from the
-  # note's ACTUAL persisted content (the CRDT-merged text, same input
-  # inject_okf_fields/4 uses at every call site), not the raw incoming push.
-  # A clean re-write of a previously degraded note must reset both fields —
-  # every call site re-derives from scratch rather than patching prior state,
-  # so a fix silently self-heals on the next ingest.
-  # ponytail: re-runs Frontmatter.split + parse on `content` that
-  # inject_okf_fields/4 -> OkfFields.extract already parsed. Deliberately NOT
-  # threaded: the block is tiny (microsecond parse) and threading would couple
-  # OKF extraction to parse-status by changing extract/1's return contract and
-  # this pipe's shape. Thread it only if this ever shows up on a profile.
-  defp put_parse_status(attrs, content) do
-    case Frontmatter.split(content) do
-      {nil, _body} ->
+  # note's ACTUAL persisted content (the CRDT-merged text, same input the OKF
+  # fields use at every call site), not the raw incoming push. A clean
+  # re-write of a previously degraded note must reset both fields: every call
+  # site re-derives from scratch rather than patching prior state, so a fix
+  # silently self-heals on the next ingest. `block`/`parsed` come from
+  # inject_frontmatter_fields/4 (nil block = no frontmatter).
+  defp put_parse_status(attrs, nil, _parsed),
+    do: Map.merge(attrs, %{parse_status: "ok", parse_reason: nil})
+
+  defp put_parse_status(attrs, block, parsed) do
+    case parsed do
+      {:ok, _order, _values, []} ->
         Map.merge(attrs, %{parse_status: "ok", parse_reason: nil})
 
-      {block, _body} ->
-        case Frontmatter.parse(block) do
-          {:ok, _order, _values, []} ->
-            Map.merge(attrs, %{parse_status: "ok", parse_reason: nil})
+      {:ok, _order, _values, degraded} ->
+        Map.merge(attrs, %{
+          parse_status: "degraded",
+          parse_reason: Frontmatter.reason_for(degraded)
+        })
 
-          {:ok, _order, _values, degraded} ->
-            Map.merge(attrs, %{
-              parse_status: "degraded",
-              parse_reason: Frontmatter.reason_for(degraded)
-            })
-
-          :error ->
-            Map.merge(attrs, %{
-              parse_status: "degraded",
-              parse_reason: Frontmatter.invalid_yaml_reason(block)
-            })
-        end
+      :error ->
+        Map.merge(attrs, %{
+          parse_status: "degraded",
+          parse_reason: Frontmatter.invalid_yaml_reason(block)
+        })
     end
   end
 

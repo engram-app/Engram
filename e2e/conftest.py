@@ -635,6 +635,15 @@ assert RESUMED_DISPLAY_BASE - 1 >= 1, (
 )
 
 
+def _display_overlap(workers: int) -> set[int]:
+    """Displays both an A/B/C instance and a resumed instance would use."""
+    base = int(os.environ.get("E2E_DISPLAY_BASE") or "99")
+    resumed = int(os.environ.get("E2E_DISPLAY_BASE_RESUMED") or "150")
+    abc = {base - w * _DISPLAY_STRIDE - i for w in range(workers) for i in range(INSTANCES_PER_WORKER)}
+    pair = {resumed - w * 2 - i for w in range(workers) for i in range(2)}
+    return abc & pair
+
+
 @pytest.fixture
 def fresh_instance_pair(resumed_user, resumed_client_id, resumed_api):
     """Dedicated A/B-shaped instance pair for tests that stop/restart a device.
@@ -644,6 +653,22 @@ def fresh_instance_pair(resumed_user, resumed_client_id, resumed_api):
     stay off the suite's shared accumulator vault — see the block comment
     above and Engram#977/#945.
     """
+    if os.environ.get("E2E_DISPLAY_BASE") and not os.environ.get("E2E_DISPLAY_BASE_RESUMED"):
+        # The :150 default sits inside another CI job's display window, and
+        # ObsidianInstance's Xvfb pre-flight `pkill -9` kills whatever owns it.
+        pytest.fail(
+            "E2E_DISPLAY_BASE is set (CI) but E2E_DISPLAY_BASE_RESUMED is not: "
+            "the default :150/:149 would kill a concurrent job's Xvfb"
+        )
+    resumed_ports = [f"E2E_CDP_PORT_RESUMED_{x}_W{_WORKER}" for x in "AB"]
+    if os.environ.get("E2E_DISPLAY_BASE") and not all(map(os.environ.get, resumed_ports)):
+        # The 9350/9351 defaults are not reserved: a CI-allocated port or a
+        # concurrent run can already hold them.
+        pytest.fail(f"E2E_DISPLAY_BASE is set (CI) but {resumed_ports} are not all set")
+    workers = int(os.environ.get("PYTEST_XDIST_WORKER_COUNT") or "1")
+    if overlap := _display_overlap(workers):
+        # Xvfb's pre-flight pkill would take down a session A/B/C instance.
+        pytest.fail(f"resumed pair displays {sorted(overlap)} overlap A/B/C ({workers} workers)")
     inst_a = ObsidianInstance(
         name="ResumedA",
         vault_path=Path(f"{VAULT_PREFIX}-resumed-a"),

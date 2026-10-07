@@ -110,34 +110,45 @@ defmodule Engram.Notes.CrdtDeliver do
   # and suppresses client-side by applying with REMOTE_ORIGIN (no re-broadcast)
   # — and a Yjs re-apply of state it already holds is a no-op.
   @doc """
-  Broadcast `note_id`'s committed Yjs state on the vault's `sync:` topic so
+  Broadcast a note's committed Yjs state on the vault's `sync:` topic so
   devices with no open room for it converge room-free. Paced by `FanoutPacer`.
   Best-effort: a state-less row or a load failure skips silently. Returns `:ok`.
-  """
-  @spec fanout_idle(String.t(), String.t(), String.t()) :: :ok
-  def fanout_idle(user_id, vault_id, note_id) do
-    _ =
-      with {:ok, state, seq} when is_binary(state) <- load_merged_state(user_id, note_id) do
-        head =
-          case CrdtBridge.doc_from_state(state) do
-            {:ok, doc} -> CrdtTransport.head_marker(doc)
-            _ -> nil
-          end
 
-        Engram.Notes.FanoutPacer.emit(
-          "sync:#{user_id}:#{vault_id}",
-          "note_yjs_update",
-          %{
-            "note_id" => note_id,
-            "b64" => Base.encode64(state),
-            "head" => head,
-            "seq" => seq
-          },
-          note_id
-        )
+  Takes ids, or a caller's already-loaded `%User{}` and `%Note{}` (the detached
+  genesis seed holds both from its post-commit read-back) so neither is read
+  a second time.
+  """
+  @spec fanout_idle(String.t() | Accounts.User.t(), String.t(), String.t() | Note.t()) :: :ok
+  def fanout_idle(user, vault_id, note) do
+    _ =
+      with {:ok, state, seq} when is_binary(state) <- load_merged_state(user, note) do
+        emit_idle(id_of(user), vault_id, id_of(note), state, seq)
       end
 
     :ok
+  end
+
+  defp id_of(%{id: id}), do: id
+  defp id_of(id) when is_binary(id), do: id
+
+  defp emit_idle(user_id, vault_id, note_id, state, seq) do
+    head =
+      case CrdtBridge.doc_from_state(state) do
+        {:ok, doc} -> CrdtTransport.head_marker(doc)
+        _ -> nil
+      end
+
+    Engram.Notes.FanoutPacer.emit(
+      "sync:#{user_id}:#{vault_id}",
+      "note_yjs_update",
+      %{
+        "note_id" => note_id,
+        "b64" => Base.encode64(state),
+        "head" => head,
+        "seq" => seq
+      },
+      note_id
+    )
   end
 
   @doc """
@@ -322,39 +333,14 @@ defmodule Engram.Notes.CrdtDeliver do
   #                        plaintext re-encode. No seq: the fan-out is
   #                        skipped entirely in this case (see fanout_idle).
   # Never raises/exits/throws (delivery must not fail the write).
-  defp load_merged_state(user_id, note_id) do
-    user = Accounts.get_user!(user_id)
+  defp load_merged_state(user, note) do
+    case read_merged_state(user, note) do
+      {:ok, _state_or_nil, _seq} = ok ->
+        ok
 
-    result =
-      Repo.with_tenant(user_id, fn ->
-        case Repo.get(Note, note_id) do
-          nil ->
-            {:error, :missing_row}
-
-          %Note{crdt_state_ciphertext: nil, seq: seq} ->
-            {:ok, nil, seq}
-
-          %Note{seq: seq} = note ->
-            case Crypto.decrypt_crdt_state(note, user) do
-              {:ok, state} when is_binary(state) -> {:ok, state, seq}
-              {:ok, nil} -> {:ok, nil, seq}
-              {:error, reason} -> {:error, reason}
-            end
-        end
-      end)
-
-    # with_tenant wraps the fun's return in {:ok, _} (Ecto transaction).
-    case result do
-      {:ok, {:ok, state_or_nil, seq}} ->
-        {:ok, state_or_nil, seq}
-
-      {:ok, {:error, reason}} ->
-        log_state_load_failure(note_id, reason)
-        {:error, reason}
-
-      {:error, reason} ->
-        log_state_load_failure(note_id, {:tenant_txn, reason})
-        {:error, reason}
+      {:error, reason} = error ->
+        log_state_load_failure(id_of(note), reason)
+        error
     end
   rescue
     err ->
@@ -362,12 +348,46 @@ defmodule Engram.Notes.CrdtDeliver do
       # out and tells call sites that might log an error struct there to use a
       # different key. This loads CRDT state, so the term that blew up can be a
       # Yjs doc or note content.
-      log_state_load_failure(note_id, Metadata.safe_reason(err))
+      log_state_load_failure(id_of(note), Metadata.safe_reason(err))
       {:error, :raised}
   catch
     kind, reason ->
-      log_state_load_failure(note_id, "#{kind}: #{Metadata.safe_reason(reason)}")
+      log_state_load_failure(id_of(note), "#{kind}: #{Metadata.safe_reason(reason)}")
       {:error, :caught}
+  end
+
+  # A socket's user can predate its first-write DEK; ensure_user_dek/1 is free
+  # when the struct already carries one.
+  defp read_merged_state(%Accounts.User{} = user, %Note{} = note) do
+    with {:ok, user} <- Crypto.ensure_user_dek(user), do: merged_state_of(note, user)
+  end
+
+  defp read_merged_state(user_id, note_id) do
+    user = Accounts.get_user!(user_id)
+
+    result =
+      Repo.with_tenant(user_id, fn ->
+        case Repo.get(Note, note_id) do
+          nil -> {:error, :missing_row}
+          %Note{} = note -> merged_state_of(note, user)
+        end
+      end)
+
+    # with_tenant wraps the fun's return in {:ok, _} (Ecto transaction).
+    case result do
+      {:ok, inner} -> inner
+      {:error, reason} -> {:error, {:tenant_txn, reason}}
+    end
+  end
+
+  defp merged_state_of(%Note{crdt_state_ciphertext: nil, seq: seq}, _user), do: {:ok, nil, seq}
+
+  defp merged_state_of(%Note{seq: seq} = note, user) do
+    case Crypto.decrypt_crdt_state(note, user) do
+      {:ok, state} when is_binary(state) -> {:ok, state, seq}
+      {:ok, nil} -> {:ok, nil, seq}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   # Two shapes reach here: a pre-filtered binary from the rescue/catch arms,

@@ -83,4 +83,11 @@ defmodule Engram.Native.JsonDecodeTest do
       assert_received {_, ^ref, %{input_bytes: 3}, %{nif: :json_decode}}
     end
   end
+
+  test "16 KB runs on the calling scheduler, a byte more dirty" do
+    Engram.NativeScheduled.assert_scheduled(
+      :json_decode,
+      &Native.json_decode(~s(") <> String.duplicate("a", &1 - 2) <> ~s("))
+    )
+  end
 end

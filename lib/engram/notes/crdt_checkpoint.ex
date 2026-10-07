@@ -369,11 +369,9 @@ defmodule Engram.Notes.CrdtCheckpoint do
          {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(state, user, note_id),
          {:ok, key} <- Crypto.dek_content_hash_key(user) do
       content_hash = Crypto.hmac_content_hash(key, text)
-      tags = Helpers.extract_tags(text)
 
       checkpoint_write(note, vault_id, note_id, prune, opts, %{
         text: text,
-        tags: tags,
         content_hash: content_hash,
         ct: ct,
         nonce: nonce,
@@ -480,7 +478,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # equal hashes mean "no content change committed" (compaction / stale abort),
   # which suppresses the caller's embed + announce.
   defp checkpoint_write(note, vault_id, note_id, prune, opts, m) do
-    %{text: text, tags: tags, content_hash: content_hash, ct: ct, nonce: nonce, user: user} = m
+    %{text: text, content_hash: content_hash, ct: ct, nonce: nonce, user: user} = m
     prev = note.content_hash
 
     cond do
@@ -511,8 +509,9 @@ defmodule Engram.Notes.CrdtCheckpoint do
         end
 
       true ->
-        # Re-derive title from the note's decrypted (sanitized-at-write) path.
-        title = Helpers.extract_title(text, note.path)
+        # Only a content change needs title and tags. The title falls back
+        # to the note's decrypted (sanitized-at-write) path.
+        {title, tags} = Helpers.extract_title_and_tags(text, note.path)
 
         merged = %{content: text, title: title, tags: tags, content_hash: content_hash}
         {:ok, encrypted} = Crypto.encrypt_note_fields(merged, user, note_id)
@@ -526,7 +525,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
             note.folder,
             tags
           )
-          |> Notes.inject_okf_fields_pub(user, note_id, text)
+          |> Notes.inject_frontmatter_fields_pub(user, note_id, text)
           |> Map.put(:crdt_state_ciphertext, ct)
           |> Map.put(:crdt_state_nonce, nonce)
           |> Map.put(:content_hash, content_hash)

@@ -124,7 +124,7 @@ defmodule Engram.Native.ChunkerTest do
     test "parse emits [:engram, :nif, :call, :stop]" do
       ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
       Markdown.parse("# a\n\nb", "x.md")
-      assert_receive {[:engram, :nif, :call, :stop], ^ref, _, %{nif: :chunk, dirty: false}}
+      assert_receive {[:engram, :nif, :call, :stop], ^ref, _, %{nif: :chunk}}
     end
   end
 
@@ -180,5 +180,12 @@ defmodule Engram.Native.ChunkerTest do
       b = Markdown.parse("# T\n\nbody", "B/T.md")
       assert Enum.map(a, & &1.embed_text) == Enum.map(b, & &1.embed_text)
     end
+  end
+
+  test "16 KB runs on the calling scheduler, a byte more dirty" do
+    Engram.NativeScheduled.assert_scheduled(
+      :chunk,
+      &Engram.Native.chunk(String.duplicate("a", &1), "f", "T")
+    )
   end
 end

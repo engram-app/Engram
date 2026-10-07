@@ -602,9 +602,7 @@ mod tests {
             fill("-\n"),
             fill("h\n=\n"),
         ] {
-            let base = crate::memory::begin();
-            each_chunk(&content, "f", "T", |_| {});
-            let peak = crate::memory::peak_since(base);
+            let ((), peak) = crate::memory::measured(|| each_chunk(&content, "f", "T", |_| {}));
             assert!(peak <= 10 * content.len(), "{peak} for {:?}", &content[..8]);
         }
     }

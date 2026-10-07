@@ -254,6 +254,58 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
       assert [_only] = all_enqueued(worker: RewriteNoteLinks)
     end
 
+    test "many danglers: one oban_jobs lookup, newest evidence per hmac wins",
+         %{user: user, vault: vault} do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "OldA.md", "content" => "# a"}, actor: "api")
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "OldB.md", "content" => "# b"}, actor: "api")
+
+      {:ok, a2} = Notes.rename_note(user, vault, "OldA.md", "FreshA.md")
+      {:ok, b2} = Notes.rename_note(user, vault, "OldB.md", "FreshB.md")
+      jobs = all_enqueued(worker: RewriteNoteLinks)
+      job_a = Enum.find(jobs, &(&1.args["target_id"] == a2.id))
+      clear_jobs!("Engram.Workers.RewriteNoteLinks")
+      Enum.each(jobs, &Oban.insert!(RewriteNoteLinks.new(&1.args)))
+
+      # An OLDER evidence row for OldA's hmac pointing elsewhere: must lose.
+      stale = Map.put(job_a.args, "target_id", Ecto.UUID.generate())
+      %{id: stale_id} = Oban.insert!(RewriteNoteLinks.new(stale))
+
+      Repo.update_all(
+        from(j in Oban.Job, where: j.worker == "Engram.Workers.RewriteNoteLinks"),
+        set: [state: "completed", completed_at: DateTime.utc_now()]
+      )
+
+      Repo.update_all(from(j in Oban.Job, where: j.id == ^stale_id),
+        set: [inserted_at: DateTime.add(DateTime.utc_now(), -100, :second)]
+      )
+
+      {:ok, late} =
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => "Late.md",
+            "content" => "[[OldA]] [[OldB]] [[Nope1]] [[Nope2]] [[Nope3]]"
+          },
+          actor: "api"
+        )
+
+      lookups =
+        Engram.TenantQueryCounter.count_matching_queries(
+          fn -> assert :ok = perform_job(ExtractNoteLinks, %{note_id: late.id}) end,
+          &(&1 =~ "oban_jobs" and &1 =~ "->> 'old_basename_hmac'")
+        )
+
+      assert length(lookups) == 1
+
+      repairs = all_enqueued(worker: RewriteNoteLinks)
+      assert Enum.sort(Enum.map(repairs, & &1.args["target_id"])) == Enum.sort([a2.id, b2.id])
+      assert Enum.all?(repairs, &(&1.args["sweep"] == true))
+    end
+
     test "dangling edge with NO recent rename enqueues nothing",
          %{user: user, vault: vault} do
       {:ok, late} =

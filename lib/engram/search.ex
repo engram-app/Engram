@@ -641,9 +641,25 @@ defmodule Engram.Search do
   # Collapse ranked chunks to one representative per {vault_id, source_path}.
   # The representative carries the highest-scoring chunk's score/vector/display
   # fields; match_count is the number of chunks for that note in the input.
+  #
+  # A chunk with no source_path is dropped: rehydrate found no chunk row for
+  # its point. Expected briefly after a write, because commit_index upserts
+  # Qdrant BEFORE inserting the rows (so a failure leaves reapable stray points,
+  # never a row naming a missing point). One event per search with the count,
+  # so a window that stops being brief shows up on a dashboard instead of as
+  # silently missing results.
   def collapse_to_notes(chunks) do
-    chunks
-    |> Enum.reject(&is_nil(Map.get(&1, :source_path)))
+    {orphans, live} = Enum.split_with(chunks, &is_nil(Map.get(&1, :source_path)))
+
+    if orphans != [] do
+      :telemetry.execute(
+        [:engram, :search, :hit_dropped],
+        %{count: length(orphans)},
+        %{reason: :no_chunk_row}
+      )
+    end
+
+    live
     |> Enum.group_by(&{Map.get(&1, :vault_id), Map.fetch!(&1, :source_path)})
     |> Enum.map(fn {{vault_id, path}, group} ->
       best = Enum.max_by(group, & &1.score)

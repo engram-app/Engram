@@ -26,7 +26,11 @@ from helpers.api import ApiClient
 from helpers.billing import grant_test_plan
 from helpers.clerk import ClerkClient
 from helpers.clerk_auth import provision_clerk_user
-from helpers.crypto_probe import latest_note_path_hmac, wait_for_qdrant_indexed
+from helpers.crypto_probe import (
+    latest_note_path_hmac,
+    wait_for_chunks_committed,
+    wait_for_qdrant_indexed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -268,8 +272,11 @@ def test_mcp_search_spans_all_vaults_by_default(vault_setup):
     vault_b_id = vault_setup["vault_b_id"]
 
     # Both seeded notes must be embedded before a semantic search can find them.
-    wait_for_qdrant_indexed(vault_a_id, latest_note_path_hmac(vault_a_id), timeout=90)
-    wait_for_qdrant_indexed(vault_b_id, latest_note_path_hmac(vault_b_id), timeout=90)
+    # Chunk rows commit AFTER the Qdrant upsert and search rehydrates from them.
+    for vid in (vault_a_id, vault_b_id):
+        path_hmac = latest_note_path_hmac(vid)
+        wait_for_qdrant_indexed(vid, path_hmac, timeout=90)
+        wait_for_chunks_committed(vid, path_hmac, timeout=90)
 
     resp, status = api.mcp_call("search_notes", {"query": "Secret"})
     assert status == 200

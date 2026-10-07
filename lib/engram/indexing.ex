@@ -798,8 +798,59 @@ defmodule Engram.Indexing do
   # fragment. Unpacking to a float list and letting Jason walk it was the heap
   # peak of indexing (~26 MB per 64-point batch): a list cell, a boxed float
   # and a formatted binary per element, all live until the request was sent.
-  defp unpack_point(%{vector: named} = point) do
-    %{point | vector: Map.new(named, fn {name, v} -> {name, vector_json(v)} end)}
+  #
+  # The encrypted payload fields are base64 (`Crypto.encrypt_qdrant_payload/4`),
+  # whose alphabet never needs a JSON escape, so they go out as fragments too:
+  # Jason's escape scan over them cost ~35-45 ms per 2,000 chunks (#1877).
+  # Byte-identical output; `test/engram/indexing/unpack_point_test.exs` pins it.
+  @doc false
+  def unpack_point(%{vector: named} = point) do
+    point = %{point | vector: Map.new(named, fn {name, v} -> {name, vector_json(v)} end)}
+
+    case point do
+      %{payload: payload} -> %{point | payload: base64_fragments(payload)}
+      _ -> point
+    end
+  end
+
+  @base64_payload_keys [
+    :text,
+    :text_nonce,
+    :title,
+    :title_nonce,
+    :heading_path,
+    :heading_path_nonce
+  ]
+
+  # A value holding a byte JSON must escape is not the base64
+  # `encrypt_qdrant_payload/4` promises, so it goes through Jason rather than
+  # being spliced raw into the request body. The `:binary.match` scan keeps
+  # about 40% of the fragment gain (2,000 chunks, min of 7, three runs:
+  # Jason 33-34 ms, guarded 25-27 ms, unguarded 10-11 ms); the rest is the
+  # price of not trusting the caller. Compiling the pattern costs ~70 us,
+  # more than a scan, so it is compiled once per node.
+  defp base64_fragments(payload) do
+    escape = json_escape_pattern()
+
+    Enum.reduce(@base64_payload_keys, payload, fn key, acc ->
+      case acc do
+        %{^key => b64} when is_binary(b64) ->
+          if :binary.match(b64, escape) == :nomatch,
+            do: %{acc | key => Jason.Fragment.new([?", b64, ?"])},
+            else: acc
+
+        _ ->
+          acc
+      end
+    end)
+  end
+
+  defp json_escape_pattern do
+    with nil <- :persistent_term.get(__MODULE__.JsonEscape, nil) do
+      pattern = :binary.compile_pattern([~s("), "\\" | Enum.map(0..31, &<<&1>>)])
+      :persistent_term.put(__MODULE__.JsonEscape, pattern)
+      pattern
+    end
   end
 
   # Formatted in Rust (`Engram.Native.dense_json/1`): no per-float term at all,

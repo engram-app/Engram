@@ -24,23 +24,25 @@ defmodule Engram.Notes.OkfFields do
 
   @empty %{type: nil, description: nil, resource: nil, fm_timestamp: nil, fm_created: nil}
 
-  @spec extract(String.t()) :: t()
-  def extract(content) when is_binary(content) do
-    with {block, _body} when is_binary(block) <- Frontmatter.split(content),
-         {:ok, _order, values, _degraded} <- Frontmatter.parse(block) do
-      decoded = decode_values(values)
+  @doc """
+  OKF fields from an already-computed `Frontmatter.parse/1` result, so a
+  caller that also needs the parse for something else (parse_status) parses
+  the block once. `nil` (no frontmatter) and `:error` give all-nil.
+  """
+  @spec from_parse(Frontmatter.parse_result() | nil) :: t()
+  def from_parse({:ok, _order, values, _degraded}) do
+    decoded = decode_values(values)
 
-      %{
-        type: string_field(decoded["type"]),
-        description: string_field(decoded["description"]),
-        resource: string_field(decoded["resource"]),
-        fm_timestamp: first_date(decoded, @timestamp_aliases),
-        fm_created: first_date(decoded, @created_aliases)
-      }
-    else
-      _ -> @empty
-    end
+    %{
+      type: string_field(decoded["type"]),
+      description: string_field(decoded["description"]),
+      resource: string_field(decoded["resource"]),
+      fm_timestamp: first_date(decoded, @timestamp_aliases),
+      fm_created: first_date(decoded, @created_aliases)
+    }
   end
+
+  def from_parse(_none_or_error), do: @empty
 
   @doc """
   Canonical form for the `type_hmac` blind index. Write path and search

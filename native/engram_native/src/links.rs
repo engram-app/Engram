@@ -480,7 +480,7 @@ fn external(t: &str) -> bool {
 
 /// Wiki matches then markdown matches, each in document order, minus any
 /// starting in frontmatter or code.
-pub fn matches(s: &str) -> Vec<Raw> {
+fn matches(s: &str) -> Vec<Raw> {
     matches_segmented(s, SEGMENT)
 }
 

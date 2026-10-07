@@ -778,6 +778,9 @@ defmodule Engram.Crypto do
       {title_ct, title_nonce} = Envelope.encrypt(Map.get(payload, :title) || "", dek, title_aad)
       {hp_ct, hp_nonce} = Envelope.encrypt(Map.get(payload, :heading_path) || "", dek, hp_aad)
 
+      # Base64 on purpose: `Indexing.unpack_point/1` splices these fields
+      # into the Qdrant request as unescaped JSON fragments (it falls back
+      # to Jason for any value that would need escaping).
       {:ok,
        payload
        |> Map.put(:text, Base.encode64(text_ct))

@@ -44,6 +44,17 @@ defmodule Engram.PromEx.SearchTest do
              "Must expose result count as its own distribution measurement"
     end
 
+    test "sums dropped hits from [:engram, :search, :hit_dropped]" do
+      metrics =
+        SearchPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+
+      assert Enum.any?(metrics, fn m ->
+               match?(%Telemetry.Metrics.Sum{}, m) and
+                 m.event_name == [:engram, :search, :hit_dropped] and m.measurement == :count and
+                 m.tags == [:reason]
+             end)
+    end
+
     test "no per-tenant tags" do
       metrics =
         SearchPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)

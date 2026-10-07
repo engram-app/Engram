@@ -775,32 +775,6 @@ defmodule Engram.MCP.SectionsTest do
              Sections.section("## A\n\n## B\n", "Nope")
   end
 
-  # Shape contract for the pinned mdex_native AST: a dependency bump that
-  # changes any struct, field or sourcepos convention Sections relies on must
-  # fail here, loudly, instead of silently mis-finding sections.
-  test "the mdex_native AST has the shape Sections relies on" do
-    md = "## é **B**\n\n#{@bt}\nx\n#{@bt}\n<!-- c -->\n\nS\n===\n\n`é%%` t\n\n#{@bt}\nopen\n"
-    %MDExNative.Comrak.Document{nodes: nodes} = MDExNative.Comrak.parse_document(md, [])
-
-    assert [
-             %MDExNative.Comrak.Heading{level: 2, setext: false, nodes: [_ | _]} = h,
-             %MDExNative.Comrak.CodeBlock{fenced: true, closed: true} = cb,
-             %MDExNative.Comrak.HtmlBlock{block_type: 2, literal: "<!-- c -->\n"},
-             %MDExNative.Comrak.Heading{level: 1, setext: true} = sh,
-             %MDExNative.Comrak.Paragraph{nodes: [%MDExNative.Comrak.Code{} = code | _]},
-             %MDExNative.Comrak.CodeBlock{fenced: true, closed: false}
-           ] = nodes
-
-    # Lines are 1-based; columns are 1-based BYTE offsets ("é" is 2 bytes).
-    # 11 bytes, 10 characters: columns count bytes.
-    assert %{start: {1, 1}, end: {1, 11}} = Map.from_struct(h.sourcepos)
-    assert [%MDExNative.Comrak.Text{sourcepos: %{start: {1, 4}}} | _] = h.nodes
-    assert %{start: {3, 1}, end: {5, 3}} = Map.from_struct(cb.sourcepos)
-    assert %{start: {8, 1}, end: {9, 3}} = Map.from_struct(sh.sourcepos)
-    # A code span's sourcepos includes its backticks.
-    assert %{start: {11, 1}, end: {11, 6}} = Map.from_struct(code.sourcepos)
-  end
-
   # --- Final review: linear hidden-heading check, math blocks ---
 
   # Was O(lines x closed fences) outside the gate: 20k blocks took ~5.6 s.
@@ -854,5 +828,15 @@ defmodule Engram.MCP.SectionsTest do
   test "inline $$math$$ on one line does not blank the line" do
     content = "## A\ntext $$a$$\n---\n## B\n"
     assert lt(content) == [{0, "A"}, {1, "text $$a$$"}, {3, "B"}]
+  end
+
+  # Two math pairs sharing a line (`$$ ... $$` on the middle one) blank
+  # overlapping line ranges. The Elixir masker assumed disjoint ranges and
+  # re-inserted the shared line, whose "\r" then counted as an extra line:
+  # B was reported one line late, so a section read of A included "# B".
+  test "math pairs sharing a CRLF line keep line numbers" do
+    content = "# A\n\n$$\nx $$ y $$\r\nz\n$$\n\n# B\nbody\n"
+    assert lt(content) == [{0, "A"}, {7, "B"}]
+    assert {:ok, %{stop: 7, hidden_heading_at: nil}} = Sections.find(content, "A", 1)
   end
 end

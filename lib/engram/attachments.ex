@@ -45,16 +45,16 @@ defmodule Engram.Attachments do
   end
 
   @doc """
-  Upserts an attachment. Decodes base64 content, detects MIME type, computes hash.
+  Upserts an attachment. Takes raw bytes under the atom key `:content`, or
+  base64 under `content_base64`. Detects MIME type, computes hash.
   Returns {:ok, attachment} or {:error, reason}.
   """
   def upsert_attachment(user, vault, attrs) do
     path = (attrs["path"] || attrs[:path]) |> PathSanitizer.sanitize()
-    content_b64 = attrs["content_base64"] || attrs[:content_base64]
     mtime = attrs["mtime"] || attrs[:mtime]
     explicit_mime = attrs["mime_type"] || attrs[:mime_type]
 
-    with {:ok, plaintext} <- decode_base64(content_b64),
+    with {:ok, plaintext} <- attachment_bytes(attrs),
          # Security boundary: enforced HERE, not (only) in the controller —
          # MCP tools, Oban jobs, and console callers must hit the same gate.
          :ok <- MimeWhitelist.check(explicit_mime || MimeWhitelist.detect_mime(path), path),
@@ -1512,6 +1512,17 @@ defmodule Engram.Attachments do
       {:error, _} -> {:error, :decrypt_failed}
     end
   end
+
+  # `:content` is an atom key on purpose: request params are string-keyed, so
+  # a client cannot smuggle it in through the JSON body or the query string.
+  # Only the controller's raw-body branch sets it, after a bounded read.
+  defp attachment_bytes(%{content: bytes}) when is_binary(bytes), do: {:ok, bytes}
+
+  # compat(plugin): raw_attachment_upload - remove when plugin floor includes Engram-obsidian#555 (#1877)
+  # The base64 JSON upload from plugins that predate raw bodies. Costs ~140 ms
+  # decode + ~75 ms JSON parse per 10 MB on a normal scheduler.
+  defp attachment_bytes(attrs),
+    do: decode_base64(attrs["content_base64"] || attrs[:content_base64])
 
   defp decode_base64(nil), do: {:error, :missing_content}
 

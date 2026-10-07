@@ -147,18 +147,19 @@ defmodule Engram.Notes.Helpers do
   end
 
   @doc """
-  Extracts tags from a note: YAML frontmatter tags merged with inline
-  `#tags` (incl. nested `#area/sub`) found in the body.
+  `{extract_title(content, path), tags}` in one NIF call. Tags are YAML
+  frontmatter tags merged with inline `#tags` (incl. nested `#area/sub`)
+  found in the body.
 
   Inline scanning skips code (CommonMark ranges), URL fragments, and heading
-  markers, and drops purely-numeric matches (`#42`) — none of which are
-  tags in Obsidian. Frontmatter tags come first; duplicates are removed.
-  Returns [] if none found. The rules run in Rust:
-  native/engram_native/src/meta.rs.
+  markers, and drops purely-numeric matches (`#42`), none of which are tags
+  in Obsidian. Frontmatter tags come first; duplicates are removed; [] if
+  none. The rules run in Rust: native/engram_native/src/meta.rs.
   """
-  @spec extract_tags(String.t()) :: [String.t()]
-  def extract_tags(content) do
-    Engram.Native.note_tags(scrub_utf8(content))
+  @spec extract_title_and_tags(String.t(), String.t()) :: {String.t() | nil, [String.t()]}
+  def extract_title_and_tags(content, path) do
+    {title, tags} = Engram.Native.note_meta(scrub_utf8(content))
+    {title || filename_without_extension(path), tags}
   end
 
   @doc """

@@ -551,6 +551,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - `tier` values contract (default `free`, gate on `!active`) → `docs/context/billing-tier-frontend-contract.md`
 - Attachment MIME/extension whitelist abuse defense (Pricing v2 §H) → `docs/context/attachment-mime-whitelist.md`
 - Self-host silently drops attachments, or you are renaming/adding a boolean plan-limit key (`true` must always mean GRANTED) → `docs/context/self-host-capability-polarity.md`
+- Changing a request shape an older plugin still sends, or raising the plugin version floor (mark the old path `compat(plugin)`, delete shims at the floor) → `docs/context/plugin-compat-shims.md`
 
 **Auth, OAuth & MCP**
 - Gating a Phoenix **channel** on onboarding/billing, or a paywalled account is syncing anyway (`RequireOnboarding` is a Plug and never runs on a socket; `user:` must stay UNGATED) → `docs/context/onboarding-gate-is-http-only.md`

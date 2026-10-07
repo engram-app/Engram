@@ -195,18 +195,18 @@ defmodule Engram.Notes.HelpersTest do
   end
 
   # ---------------------------------------------------------------------------
-  # extract_tags/1
+  # tags (extract_title_and_tags/2)
   # ---------------------------------------------------------------------------
 
-  describe "extract_tags/1" do
+  describe "extract_title_and_tags/2 tags" do
     test "list-style tags" do
       content = "---\ntags: [health, fitness]\n---\nBody"
-      assert Helpers.extract_tags(content) == ["health", "fitness"]
+      assert tags(content) == ["health", "fitness"]
     end
 
     test "comma-separated string tags" do
       content = "---\ntags: health, fitness\n---\nBody"
-      assert Helpers.extract_tags(content) == ["health", "fitness"]
+      assert tags(content) == ["health", "fitness"]
     end
 
     # `tags:` is scanned off the raw YAML, so a scalar YAML would not hand back
@@ -216,7 +216,7 @@ defmodule Engram.Notes.HelpersTest do
     test "a YAML boolean or null is not a tag" do
       for literal <- ~w(true True TRUE false False FALSE null Null NULL ~) do
         content = "---\ntags: #{literal}\n---\nBody"
-        assert Helpers.extract_tags(content) == [], "`tags: #{literal}` produced a tag"
+        assert tags(content) == [], "`tags: #{literal}` produced a tag"
       end
     end
 
@@ -226,7 +226,7 @@ defmodule Engram.Notes.HelpersTest do
     test "no numeric form survives as a tag" do
       for literal <- ~w(42 -5 007 3.5 +1 .5 1e5 0x10 0o17 .inf .nan) do
         content = "---\ntags: #{literal}\n---\nBody"
-        assert Helpers.extract_tags(content) == [], "`tags: #{literal}` produced a tag"
+        assert tags(content) == [], "`tags: #{literal}` produced a tag"
       end
     end
 
@@ -237,7 +237,7 @@ defmodule Engram.Notes.HelpersTest do
     test "scalars YAML reads as strings are kept" do
       for literal <- ~w(tRue nUll fAlse no on off yes v2 1_000 1/2 2024-01-02 3-5) do
         content = "---\ntags: #{literal}\n---\nBody"
-        assert Helpers.extract_tags(content) == [literal], "`tags: #{literal}` lost the tag"
+        assert tags(content) == [literal], "`tags: #{literal}` lost the tag"
       end
     end
 
@@ -262,26 +262,26 @@ defmodule Engram.Notes.HelpersTest do
         {:ok, %{"v" => parsed}} = YamlElixir.read_from_string("v: " <> literal)
         expected = if is_binary(parsed), do: [literal], else: []
 
-        assert Helpers.extract_tags("---\ntags: #{literal}\n---\nBody") == expected,
+        assert tags("---\ntags: #{literal}\n---\nBody") == expected,
                "`tags: #{literal}` disagrees with YAML, which parses it as #{inspect(parsed)}"
       end
     end
 
     test "a non-tag scalar is dropped from a list without taking the real tags with it" do
       content = "---\ntags: [work, true, health]\n---\nBody"
-      assert Helpers.extract_tags(content) == ["work", "health"]
-      assert Helpers.extract_tags("---\ntags: [work, 42, 3.5]\n---\nBody") == ["work"]
+      assert tags(content) == ["work", "health"]
+      assert tags("---\ntags: [work, 42, 3.5]\n---\nBody") == ["work"]
     end
 
     # The block path reaches tag_item/1 through a different call site than the
     # inline one, and the "every item rejected" case falls back to the inline
     # regex -- the subtlest interaction here, so pin it.
     test "block-style lists filter the same way" do
-      assert Helpers.extract_tags("---\ntags:\n  - true\n  - work\n---\nBody") == ["work"]
-      assert Helpers.extract_tags("---\ntags:\n  - true\n  - false\n---\nBody") == []
-      assert Helpers.extract_tags("---\ntags:\n  - true\nauthor: me\n---\nBody") == []
+      assert tags("---\ntags:\n  - true\n  - work\n---\nBody") == ["work"]
+      assert tags("---\ntags:\n  - true\n  - false\n---\nBody") == []
+      assert tags("---\ntags:\n  - true\nauthor: me\n---\nBody") == []
 
-      assert Helpers.extract_tags(~s(---\ntags:\n  - "true"\n  - work\n---\nBody)) == [
+      assert tags(~s(---\ntags:\n  - "true"\n  - work\n---\nBody)) == [
                "true",
                "work"
              ]
@@ -290,118 +290,118 @@ defmodule Engram.Notes.HelpersTest do
     # QUOTING is the user saying "I mean the string". Dropping it would be the
     # same silent-data-loss bug in the other direction.
     test "a quoted literal IS a tag" do
-      assert Helpers.extract_tags(~s(---\ntags: "true"\n---\nBody)) == ["true"]
-      assert Helpers.extract_tags("---\ntags: ['42', work]\n---\nBody") == ["42", "work"]
-      assert Helpers.extract_tags(~s(---\ntags: [ "true" ]\n---\nBody)) == ["true"]
+      assert tags(~s(---\ntags: "true"\n---\nBody)) == ["true"]
+      assert tags("---\ntags: ['42', work]\n---\nBody") == ["42", "work"]
+      assert tags(~s(---\ntags: [ "true" ]\n---\nBody)) == ["true"]
     end
 
     # Fails OPEN: a scalar the parser cannot read keeps its tag rather than
     # costing the user data on a guess.
     test "an unparseable item is kept, not dropped" do
-      assert Helpers.extract_tags("---\ntags: [work, -{[}]\n---\nBody") != []
+      assert tags("---\ntags: [work, -{[}]\n---\nBody") != []
     end
 
     test "block-style (multi-line) list tags" do
       content = "---\ntags:\n  - project\n  - work\n---\nBody"
-      assert Helpers.extract_tags(content) == ["project", "work"]
+      assert tags(content) == ["project", "work"]
     end
 
     test "block-style list tags with a leading blank line and inline tag" do
       content = "---\ntags:\n  - alpha\n  - beta\n---\nBody with #gamma"
-      assert Helpers.extract_tags(content) == ["alpha", "beta", "gamma"]
+      assert tags(content) == ["alpha", "beta", "gamma"]
     end
 
     test "single-item block list" do
       content = "---\ntags:\n  - solo\n---\nBody"
-      assert Helpers.extract_tags(content) == ["solo"]
+      assert tags(content) == ["solo"]
     end
 
     test "block list stops at the next frontmatter key" do
       content = "---\ntags:\n  - alpha\n  - beta\nauthor: me\n---\nBody"
-      assert Helpers.extract_tags(content) == ["alpha", "beta"]
+      assert tags(content) == ["alpha", "beta"]
     end
 
     test "block list preceded by other frontmatter keys" do
       content = "---\ntitle: T\ntags:\n  - alpha\n  - beta\naliases:\n  - x\n---\nBody"
-      assert Helpers.extract_tags(content) == ["alpha", "beta"]
+      assert tags(content) == ["alpha", "beta"]
     end
 
     test "quoted block-list items are unquoted" do
       content = "---\ntags:\n  - \"alpha\"\n  - 'beta'\n---\nBody"
-      assert Helpers.extract_tags(content) == ["alpha", "beta"]
+      assert tags(content) == ["alpha", "beta"]
     end
 
     test "quoted inline-list items are unquoted" do
       content = "---\ntags: [\"alpha\", 'beta']\n---\nBody"
-      assert Helpers.extract_tags(content) == ["alpha", "beta"]
+      assert tags(content) == ["alpha", "beta"]
     end
 
     test "CRLF frontmatter with a block list" do
       content = "---\r\ntags:\r\n  - alpha\r\n  - beta\r\n---\r\nBody"
-      assert Helpers.extract_tags(content) == ["alpha", "beta"]
+      assert tags(content) == ["alpha", "beta"]
     end
 
     test "no frontmatter returns empty list" do
-      assert Helpers.extract_tags("# No Tags\nBody") == []
+      assert tags("# No Tags\nBody") == []
     end
 
     test "empty tags list" do
       content = "---\ntags: []\n---\nBody"
-      assert Helpers.extract_tags(content) == []
+      assert tags(content) == []
     end
 
     test "empty content returns empty list" do
-      assert Helpers.extract_tags("") == []
+      assert tags("") == []
     end
 
     test "frontmatter without tags field" do
       content = "---\ntitle: Just a title\n---\nBody"
-      assert Helpers.extract_tags(content) == []
+      assert tags(content) == []
     end
 
     test "extracts an inline #tag from the body" do
-      assert Helpers.extract_tags("Some body with a #fitness tag") == ["fitness"]
+      assert tags("Some body with a #fitness tag") == ["fitness"]
     end
 
     test "extracts a nested inline #area/sub tag" do
-      assert Helpers.extract_tags("Work note #area/subarea here") == ["area/subarea"]
+      assert tags("Work note #area/subarea here") == ["area/subarea"]
     end
 
     test "merges frontmatter tags with inline tags, frontmatter first, deduped" do
       content = "---\ntags: [health]\n---\nBody #fitness and again #health"
-      assert Helpers.extract_tags(content) == ["health", "fitness"]
+      assert tags(content) == ["health", "fitness"]
     end
 
     test "skips #tags inside a fenced code block" do
       content = "Intro #real\n\n```\nnot a #tag here\n```\n\nOutro"
-      assert Helpers.extract_tags(content) == ["real"]
+      assert tags(content) == ["real"]
     end
 
     test "skips #tags inside an inline code span" do
       content = "Use `#notatag` in code but #realtag in prose"
-      assert Helpers.extract_tags(content) == ["realtag"]
+      assert tags(content) == ["realtag"]
     end
 
     test "skips the # fragment in a URL" do
       content = "See https://example.com/docs#section for details"
-      assert Helpers.extract_tags(content) == []
+      assert tags(content) == []
     end
 
     test "does not treat a word-attached hash as a tag" do
-      assert Helpers.extract_tags("issue C#sharp note") == []
+      assert tags("issue C#sharp note") == []
     end
 
     test "skips heading markers" do
       content = "# Heading One\n## Heading Two\nBody #onlytag"
-      assert Helpers.extract_tags(content) == ["onlytag"]
+      assert tags(content) == ["onlytag"]
     end
 
     test "rejects purely-numeric matches like #42" do
-      assert Helpers.extract_tags("Closes #42 and tags #bug") == ["bug"]
+      assert tags("Closes #42 and tags #bug") == ["bug"]
     end
 
     test "deduplicates repeated inline tags" do
-      assert Helpers.extract_tags("#dup once #dup twice") == ["dup"]
+      assert tags("#dup once #dup twice") == ["dup"]
     end
 
     test "never byte-slices a multibyte char after a #tag (#741 root cause)" do
@@ -412,14 +412,14 @@ defmodule Engram.Notes.HelpersTest do
       content = "note x #628" <> <<0xE2, 0x80, 0x93>> <> " y"
       assert String.valid?(content)
 
-      tags = Helpers.extract_tags(content)
+      tags = tags(content)
       assert Enum.all?(tags, &String.valid?/1)
       # 628 is purely numeric and the en-dash is not a tag char → no tag at all.
       assert tags == []
     end
 
     test "keeps a real multibyte inline tag intact" do
-      assert Helpers.extract_tags("a #café and #über b") == ["café", "über"]
+      assert tags("a #café and #über b") == ["café", "über"]
     end
   end
 
@@ -444,4 +444,6 @@ defmodule Engram.Notes.HelpersTest do
       assert Helpers.extract_folder("A/B/C/D/File.md") == "A/B/C/D"
     end
   end
+
+  defp tags(content), do: content |> Helpers.extract_title_and_tags("n.md") |> elem(1)
 end

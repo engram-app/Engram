@@ -101,6 +101,63 @@ defmodule Engram.BillingTest do
     end
   end
 
+  describe "with_subscription/1" do
+    test "loads the row once so later tier reads skip the DB" do
+      user = insert(:user)
+      insert(:subscription, user: user, tier: "pro", status: "active")
+
+      loaded = Billing.with_subscription(user)
+      assert %Subscription{tier: "pro"} = loaded.subscription
+      assert Billing.tier(loaded) == :pro
+    end
+
+    test "loads nil for a user without a subscription (still memoized)" do
+      assert %{subscription: nil} = Billing.with_subscription(insert(:user))
+    end
+
+    test "leaves the user untouched when neither billing nor limits apply (self-host)" do
+      put_flag(:limits_enforced, false)
+      put_flag(:billing_enabled, false)
+
+      user = insert(:user)
+      assert Billing.with_subscription(user) == user
+    end
+
+    # The onboarding gate reads tier/1 whenever billing is on, so the auth
+    # pipeline preloads even with limits switched off.
+    test "loads when billing is enabled even if limits are not enforced" do
+      put_flag(:limits_enforced, false)
+      put_flag(:billing_enabled, true)
+
+      user = insert(:user)
+      insert(:subscription, user: user, tier: "pro", status: "active")
+      assert %Subscription{tier: "pro"} = Billing.with_subscription(user).subscription
+    end
+
+    # A self-host operator can opt into limits (ENGRAM_LIMITS_ENFORCED=true)
+    # without billing; every limit check then resolves a tier.
+    test "loads when limits are enforced even if billing is disabled" do
+      put_flag(:limits_enforced, true)
+      put_flag(:billing_enabled, false)
+
+      user = insert(:user)
+      insert(:subscription, user: user, tier: "pro", status: "active")
+      assert %Subscription{tier: "pro"} = Billing.with_subscription(user).subscription
+    end
+
+    defp put_flag(key, value) do
+      prev = Application.fetch_env(:engram, key)
+      Application.put_env(:engram, key, value)
+
+      on_exit(fn ->
+        case prev do
+          {:ok, v} -> Application.put_env(:engram, key, v)
+          :error -> Application.delete_env(:engram, key)
+        end
+      end)
+    end
+  end
+
   describe "tier/1" do
     test "returns :starter when user has active starter subscription" do
       user = build(:user) |> with_subscription(tier: "starter", status: "active")
