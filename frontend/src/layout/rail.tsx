@@ -1,8 +1,8 @@
-import { FolderTree, Search, Settings } from "lucide-react";
-import { Link, NavLink, useLocation, useNavigate } from "react-router";
+import { FolderTree, Search } from "lucide-react";
+import { NavLink, useLocation, useNavigate } from "react-router";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useT } from "@/i18n/locale-provider";
-import { isSettingsHash, settingsTo } from "../settings/settings-hash";
+import { isSettingsHash } from "../settings/settings-hash";
 import { type RailView, useRailView } from "./rail-view-context";
 import { RIGHT_TOOLS, type RightToolDescriptor, useRightTools } from "./right-tools-context";
 import UserMenu from "./user-menu";
@@ -105,8 +105,6 @@ function ToolButton({ tool }: { tool: RightToolDescriptor }) {
 
 export default function Rail() {
 	const { t } = useT();
-	const location = useLocation();
-	const onSettings = isSettingsHash(location.hash);
 	return (
 		<nav
 			aria-label={t("App navigation")}
@@ -130,16 +128,7 @@ export default function Rail() {
 			))}
 
 			<div className="flex-1" />
-			<RailTip label={t("Settings")}>
-				<Link
-					to={settingsTo("account", location.search)}
-					aria-label={t("Settings")}
-					aria-current={onSettings ? "page" : undefined}
-					className={railButtonClass(onSettings)}
-				>
-					<Settings className="size-5" />
-				</Link>
-			</RailTip>
+			{/* Settings lives in the user menu, not as a second control here. */}
 			<UserMenu />
 		</nav>
 	);

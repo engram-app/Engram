@@ -147,7 +147,7 @@ describe("Rail — right-sidebar tool group", () => {
 });
 
 describe("Rail", () => {
-	it("renders brand, Files, Search, Settings, Account", () => {
+	it("renders brand, Files, Search and the user menu", () => {
 		render(
 			<Wrap>
 				<Rail />
@@ -156,11 +156,30 @@ describe("Rail", () => {
 		expect(screen.getByRole("link", { name: /home/iu })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Files" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Search" })).toBeInTheDocument();
-		expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute(
-			"href",
-			"/#settings/account",
-		);
 		expect(screen.getByRole("button", { name: "User menu" })).toBeInTheDocument();
+	});
+
+	// Settings lives in the user menu only, as in most products. A second entry
+	// point on the rail (a cog) was redundant.
+	it("has no Settings cog on the rail", () => {
+		render(
+			<Wrap>
+				<Rail />
+			</Wrap>,
+		);
+		expect(screen.queryByRole("link", { name: "Settings" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
+	});
+
+	it("Settings is reachable from the user menu", async () => {
+		render(
+			<Wrap>
+				<Rail />
+			</Wrap>,
+		);
+		fireEvent.keyDown(screen.getByRole("button", { name: "User menu" }), { key: "Enter" });
+		const item = await screen.findByRole("menuitem", { name: "Settings" });
+		expect(item).toHaveAttribute("href", "/#settings/account");
 	});
 
 	it("clicking Files / Search swaps the active view", () => {
@@ -308,9 +327,8 @@ describe("Rail — tooltips", () => {
 
 	it("no rail control carries a native title attribute", () => {
 		renderRail();
-		for (const name of ["Files", "Search", "Outline", "Backlinks", "Reference", "Settings"]) {
-			const el = screen.getByRole(name === "Settings" ? "link" : "button", { name });
-			expect(el, name).not.toHaveAttribute("title");
+		for (const name of ["Files", "Search", "Outline", "Backlinks", "Reference"]) {
+			expect(screen.getByRole("button", { name }), name).not.toHaveAttribute("title");
 		}
 	});
 
@@ -333,12 +351,6 @@ describe("Rail — tooltips", () => {
 		renderRail();
 		fireEvent.focus(screen.getByRole("button", { name: "Reference" }));
 		await waitFor(() => expect(tooltip()).toHaveTextContent("Reference"));
-	});
-
-	it("the settings link shows a tooltip too", async () => {
-		renderRail();
-		fireEvent.focus(screen.getByRole("link", { name: "Settings" }));
-		await waitFor(() => expect(tooltip()).toHaveTextContent("Settings"));
 	});
 
 	it("a disabled tool still explains itself: its tooltip says to open a note first", async () => {
