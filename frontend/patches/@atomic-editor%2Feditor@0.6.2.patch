@@ -1,3 +1,6 @@
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-104a5a9fe8c42ee2 b/.bun-tag-104a5a9fe8c42ee2
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-91f638c52efbe856 b/.bun-tag-91f638c52efbe856
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
@@ -5,7 +8,7 @@ diff --git a/node_modules/@atomic-editor/editor/.bun-tag-9d67fe100061cfe b/.bun-
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/styles/inline-preview.css b/dist/styles/inline-preview.css
-index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..b73822a7e8494a38f1624a34ce8bcd3b6533f094 100644
+index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..404cbb2ab7cf6cb48e6a3a52d1eab9fd015fb34a 100644
 --- a/dist/styles/inline-preview.css
 +++ b/dist/styles/inline-preview.css
 @@ -523,6 +523,8 @@
@@ -17,6 +20,30 @@ index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..b73822a7e8494a38f1624a34ce8bcd3b
  .cm-atomic-table-cell-source .cm-atomic-link-wrap.active > .cm-atomic-mark {
    display: inline;
    color: var(--atomic-editor-fg-faint, #666);
+@@ -828,3 +830,23 @@
+ .cm-atomic-readonly .cm-atomic-table-cell-source {
+   cursor: default;
+ }
++
++/* Drag-selected table cells (box mode). The cell rules are element-qualified so
++ * they beat the th/td background above. */
++.cm-atomic-table th.cm-atomic-table-cell-selected,
++.cm-atomic-table td.cm-atomic-table-cell-selected {
++  background: var(--atomic-editor-selection-bg, color-mix(in srgb, #7c3aed 28%, transparent 72%));
++}
++
++.cm-atomic-table-cell-selected .cm-atomic-table-cell-source {
++  caret-color: transparent;
++}
++
++.cm-atomic-table-selecting {
++  -webkit-user-select: none;
++  user-select: none;
++}
++
++.cm-atomic-table-has-selection:focus {
++  outline: none;
++}
 diff --git a/dist/table-widget.d.ts b/dist/table-widget.d.ts
 index ff02d57548388e468f73695f3bd45ec58be38160..d2f2a04758594f7b202cda3897ac7321021ad3c3 100644
 --- a/dist/table-widget.d.ts
@@ -50,7 +77,7 @@ index ff02d57548388e468f73695f3bd45ec58be38160..d2f2a04758594f7b202cda3897ac7321
  export declare function tables(config?: TablesConfig): Extension;
  export {};
 diff --git a/dist/table-widget.js b/dist/table-widget.js
-index aee407c4aaa2eea5a46c0fa28831dcc80985c783..8a6867f24c51e1e092084196c730e2e8a5e50605 100644
+index aee407c4aaa2eea5a46c0fa28831dcc80985c783..57a696153f65270d63460a66e2d9571df55531b9 100644
 --- a/dist/table-widget.js
 +++ b/dist/table-widget.js
 @@ -172,6 +172,19 @@ function matchCellMarkAt(raw, from) {
@@ -116,7 +143,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..8a6867f24c51e1e092084196c730e2e8
  ];
  function isMarkWrap(el) {
      for (const c of MARK_WRAP_CLASSES)
-@@ -528,6 +570,112 @@ function placeCaretAtEnd(el) {
+@@ -528,6 +570,225 @@ function placeCaretAtEnd(el) {
  function getAllCells(wrap) {
      return Array.from(wrap.querySelectorAll('th, td'));
  }
@@ -226,10 +253,131 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..8a6867f24c51e1e092084196c730e2e8
 +        return true;
 +    };
 +}
++// ---- drag cell selection ----------------------------------------------
++// Press in one cell and drag into another to select the rectangle of cells
++// between them ("box mode"). The selection is purely visual state on the DOM
++// (`.cm-atomic-table-cell-selected`); the document is untouched. Esc, a press
++// outside the table, a new press in it, or typing clears it. Works read-only.
++const CELL_SELECTED = 'cm-atomic-table-cell-selected';
++const TABLE_HAS_SELECTION = 'cm-atomic-table-has-selection';
++const TABLE_SELECTING = 'cm-atomic-table-selecting';
++function cellOf(target) {
++    return target instanceof Element ? target.closest('th, td') : null;
++}
++function clearCellSelection(wrap) {
++    for (const c of wrap.querySelectorAll('.' + CELL_SELECTED))
++        c.classList.remove(CELL_SELECTED);
++    wrap.classList.remove(TABLE_HAS_SELECTION);
++}
++function paintCellBox(wrap, a, b) {
++    const cells = getAllCells(wrap);
++    const cols = wrap.querySelectorAll('thead th').length || 1;
++    const ia = cells.indexOf(a);
++    const ib = cells.indexOf(b);
++    if (ia < 0 || ib < 0)
++        return;
++    const r0 = Math.min(Math.floor(ia / cols), Math.floor(ib / cols));
++    const r1 = Math.max(Math.floor(ia / cols), Math.floor(ib / cols));
++    const c0 = Math.min(ia % cols, ib % cols);
++    const c1 = Math.max(ia % cols, ib % cols);
++    cells.forEach((cell, i) => {
++        const r = Math.floor(i / cols);
++        const c = i % cols;
++        cell.classList.toggle(CELL_SELECTED, r >= r0 && r <= r1 && c >= c0 && c <= c1);
++    });
++    wrap.classList.add(TABLE_HAS_SELECTION);
++}
++function attachCellSelection(wrap) {
++    let anchor = null;
++    let pressed = false; // primary button is down after a press inside the table
++    let boxed = false; // the pointer has left the anchor cell: box mode
++    let watching = false;
++    const onDocDown = (e) => {
++        if (!wrap.contains(e.target))
++            clear();
++    };
++    const onDocKey = (e) => {
++        if (e.key === 'Escape')
++            clear();
++    };
++    const watch = () => {
++        if (watching)
++            return;
++        watching = true;
++        document.addEventListener('pointerdown', onDocDown, true);
++        document.addEventListener('keydown', onDocKey, true);
++    };
++    function clear() {
++        clearCellSelection(wrap);
++        if (!watching)
++            return;
++        watching = false;
++        document.removeEventListener('pointerdown', onDocDown, true);
++        document.removeEventListener('keydown', onDocKey, true);
++    }
++    const onMove = (e) => {
++        if (!(e.buttons & 1)) {
++            release();
++            return;
++        }
++        const cell = cellOf(e.target);
++        if (!cell || !wrap.contains(cell) || !anchor)
++            return;
++        if (!boxed) {
++            if (cell === anchor)
++                return;
++            boxed = true;
++            wrap.classList.add(TABLE_SELECTING);
++            // Drop the caret / native text selection; keep keyboard focus on the
++            // table so later key handling (copy, clear) has a target.
++            document.getSelection()?.removeAllRanges();
++            wrap.tabIndex = -1;
++            wrap.focus({ preventScroll: true });
++            watch();
++        }
++        paintCellBox(wrap, anchor, cell);
++    };
++    function release() {
++        pressed = false;
++        boxed = false;
++        anchor = null;
++        wrap.classList.remove(TABLE_SELECTING);
++        document.removeEventListener('pointermove', onMove, true);
++        document.removeEventListener('pointerup', release, true);
++        document.removeEventListener('pointercancel', release, true);
++    }
++    wrap.addEventListener('pointerdown', (e) => {
++        if (e.button !== 0 || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey)
++            return;
++        const cell = cellOf(e.target);
++        if (!cell)
++            return;
++        clear();
++        anchor = cell;
++        pressed = true;
++        boxed = false;
++        document.addEventListener('pointermove', onMove, true);
++        document.addEventListener('pointerup', release, true);
++        document.addEventListener('pointercancel', release, true);
++    });
++    wrap.addEventListener('selectstart', (e) => {
++        if (pressed && boxed)
++            e.preventDefault();
++    });
++    wrap.addEventListener('input', clear);
++}
  // ---- widget ---------------------------------------------------------
  class TableWidget extends WidgetType {
      constructor(model, readOnly) {
-@@ -629,17 +777,37 @@ function makeCell(tag, text, view) {
+@@ -585,6 +846,7 @@ class TableWidget extends WidgetType {
+             tbody.appendChild(tr);
+         }
+         table.appendChild(tbody);
++        attachCellSelection(wrap);
+         return wrap;
+     }
+     // All cell interactions are handled by the listeners we attach in
+@@ -629,17 +891,37 @@ function makeCell(tag, text, view) {
      // opened. We open on `click` (a proper popup-activation gesture, so
      // `window.open` isn't blocked) and block the caret on `pointerdown`.
      //
@@ -272,7 +420,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..8a6867f24c51e1e092084196c730e2e8
      source.addEventListener('pointerdown', (event) => {
          if (event.button !== 0)
              return;
-@@ -678,7 +846,12 @@ function attachCellEditing(view, cell, source) {
+@@ -678,7 +960,12 @@ function attachCellEditing(view, cell, source) {
          // textContent (not innerText) so `display: none` delimiters inside
          // mark wraps are still captured — otherwise a cell containing
          // `**bold**` would serialize to just `bold` on every keystroke.
@@ -286,7 +434,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..8a6867f24c51e1e092084196c730e2e8
          cell.dataset.raw = raw;
          const offset = getCaretCharOffset(source);
          renderCellSourceDecorated(source);
-@@ -737,6 +910,15 @@ function attachCellEditing(view, cell, source) {
+@@ -737,6 +1024,15 @@ function attachCellEditing(view, cell, source) {
      // hides all delimiters.
      source.addEventListener('blur', () => clearActiveMarksInSource(source));
      source.addEventListener('keydown', (event) => {
@@ -302,7 +450,7 @@ index aee407c4aaa2eea5a46c0fa28831dcc80985c783..8a6867f24c51e1e092084196c730e2e8
          // Enter mirrors Tab — advance to the next cell (appending a row past
          // the last one) instead of inserting a line break a single-line cell
          // can't represent. Shift reverses direction for both.
-@@ -1191,13 +1373,21 @@ const defaultLinkOpener = (url) => {
+@@ -1191,13 +1487,21 @@ const defaultLinkOpener = (url) => {
  export const tableLinkClickFacet = Facet.define({
      combine: (values) => values[0] ?? defaultLinkOpener,
  });

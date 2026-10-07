@@ -176,7 +176,7 @@
    no-!important rule cannot hold. */
 .cm-editor .cm-content .cm-atomic-table-cell-source:focus::selection,
 .cm-editor .cm-content .cm-atomic-table-cell-source:focus ::selection {
-	background-color: var(--atomic-editor-selection-bg) !important;
+	background-color: var(--atomic-editor-selection-bg);
 }
 
 /* A link opens on click in edit mode (editor/link-open.ts), so it has to look
