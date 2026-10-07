@@ -4,25 +4,30 @@ import { Link, useLocation } from "react-router";
 import { toast } from "sonner";
 import { useBillingStatus, useUpdateVault, useVaults, type Vault } from "@/api/queries";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { VaultCreateForm } from "@/components/vault-create-form";
 import { useAutofocus } from "@/hooks/use-autofocus";
+import { useT } from "@/i18n/locale-provider";
+import { displayVaultName } from "@/i18n/vault-name";
 import { SettingsSectionCard } from "@/settings/account/section-card";
 import { settingsTo } from "../settings-hash";
 import { DeleteVaultDialog } from "./delete-vault-dialog";
 
-const inputClass =
-	"block w-full rounded-md border border-input bg-card px-2 py-1 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring";
-
 function VaultRow({ vault, onDelete }: { vault: Vault; onDelete: () => void }) {
+	const { t } = useT();
 	const update = useUpdateVault();
 	const [renaming, setRenaming] = useState(false);
-	const [name, setName] = useState(vault.name);
+	const label = displayVaultName(vault.name, t);
+	const [name, setName] = useState(label);
 	const nameRef = useAutofocus<HTMLInputElement>(renaming);
 
 	function saveName() {
 		const next = name.trim();
-		if (next && next !== vault.name) {
-			update.mutate({ id: vault.id, name: next }, { onError: () => toast.error("Rename failed") });
+		if (next && next !== label) {
+			update.mutate(
+				{ id: vault.id, name: next },
+				{ onError: () => toast.error(t("Rename failed")) },
+			);
 		}
 		setRenaming(false);
 	}
@@ -31,21 +36,21 @@ function VaultRow({ vault, onDelete }: { vault: Vault; onDelete: () => void }) {
 		<tr>
 			<td className="py-3">
 				{renaming ? (
-					<input
+					<Input
 						ref={nameRef}
-						className={inputClass}
+						className="block"
 						value={name}
-						aria-label={`Rename ${vault.name}`}
+						aria-label={t("Rename {name}", { name: label })}
 						onChange={(e) => setName(e.target.value)}
 						onBlur={saveName}
 						onKeyDown={(e) => e.key === "Enter" && saveName()}
 					/>
 				) : (
 					<span className="flex items-center gap-2">
-						<span className="font-medium text-foreground">{vault.name}</span>
+						<span className="font-medium text-foreground">{label}</span>
 						{Boolean(vault.is_default) && (
 							<span className="rounded bg-muted px-2 py-0.5 text-muted-foreground text-xs">
-								Default
+								{t("Default")}
 							</span>
 						)}
 					</span>
@@ -63,12 +68,12 @@ function VaultRow({ vault, onDelete }: { vault: Vault; onDelete: () => void }) {
 						<Button
 							variant="ghost"
 							size="icon-sm"
-							title={`Set ${vault.name} as default`}
-							aria-label={`Set ${vault.name} as default`}
+							title={t("Set {name} as default", { name: label })}
+							aria-label={t("Set {name} as default", { name: label })}
 							onClick={() =>
 								update.mutate(
 									{ id: vault.id, is_default: true },
-									{ onError: () => toast.error("Could not set default") },
+									{ onError: () => toast.error(t("Could not set default")) },
 								)
 							}
 						>
@@ -78,8 +83,8 @@ function VaultRow({ vault, onDelete }: { vault: Vault; onDelete: () => void }) {
 					<Button
 						variant="ghost"
 						size="icon-sm"
-						title={`Rename ${vault.name}`}
-						aria-label={`Rename ${vault.name}`}
+						title={t("Rename {name}", { name: label })}
+						aria-label={t("Rename {name}", { name: label })}
 						onClick={() => setRenaming(true)}
 					>
 						<Pencil />
@@ -87,8 +92,8 @@ function VaultRow({ vault, onDelete }: { vault: Vault; onDelete: () => void }) {
 					<Button
 						variant="destructive"
 						size="icon-sm"
-						title={`Delete ${vault.name}`}
-						aria-label={`Delete ${vault.name}`}
+						title={t("Delete {name}", { name: label })}
+						aria-label={t("Delete {name}", { name: label })}
 						onClick={onDelete}
 					>
 						<Trash2 />
@@ -100,6 +105,7 @@ function VaultRow({ vault, onDelete }: { vault: Vault; onDelete: () => void }) {
 }
 
 export function ActiveVaultsSection() {
+	const { t, tn } = useT();
 	const { data: vaults, isLoading } = useVaults();
 	const { data: billing } = useBillingStatus();
 	const [deleteTarget, setDeleteTarget] = useState<Vault | null>(null);
@@ -110,17 +116,23 @@ export function ActiveVaultsSection() {
 	const vaultCount = vaults?.length ?? 0;
 	const atCap = typeof vaultsCap === "number" && vaultsCap > 0 && vaultCount >= vaultsCap;
 	const planLabel =
-		billing?.tier === "pro" ? "Pro" : billing?.tier === "starter" ? "Starter" : "Free";
-	const titleSuffix = vaultsCap === null ? "" : ` (${vaultCount} / ${vaultsCap})`;
+		billing?.tier === "pro" ? t("Pro") : billing?.tier === "starter" ? t("Starter") : t("Free");
+	const title =
+		vaultsCap === null
+			? t("Vaults")
+			: t("Vaults ({used} / {cap})", { used: vaultCount, cap: vaultsCap });
 
 	return (
 		<SettingsSectionCard
-			title={`Vaults${titleSuffix}`}
-			description="Rename, set a default, or delete your vaults."
+			title={title}
+			description={t("Rename, set a default, or delete your vaults.")}
 			headerAction={
 				atCap ? undefined : (
-					<Button onClick={() => setCreateOpen((o) => !o)}>
-						{createOpen ? "Cancel" : "New vault"}
+					<Button
+						variant={createOpen ? "outline" : "default"}
+						onClick={() => setCreateOpen((o) => !o)}
+					>
+						{createOpen ? t("Cancel") : t("New vault")}
 					</Button>
 				)
 			}
@@ -133,15 +145,18 @@ export function ActiveVaultsSection() {
 						    told a Starter user at their cap that Free allowed that many.
 						    An unlimited cap arrives as null, which `atCap` rejects via its
 						    `typeof === "number"` guard, so this never renders for Pro. */}
-						Your {planLabel} plan allows {vaultsCap} {vaultsCap === 1 ? "vault" : "vaults"}. Upgrade
-						for more vaults.
+						{tn(
+							{
+								one: "Your {plan} plan allows {count} vault. Upgrade for more vaults.",
+								other: "Your {plan} plan allows {count} vaults. Upgrade for more vaults.",
+							},
+							vaultsCap ?? 0,
+							{ plan: planLabel },
+						)}
 					</p>
-					<Link
-						to={settingsTo("billing", location.search)}
-						className="shrink-0 rounded-md bg-primary px-3 py-1.5 font-medium text-primary-foreground text-sm hover:bg-primary/90"
-					>
-						Upgrade
-					</Link>
+					<Button asChild className="shrink-0">
+						<Link to={settingsTo("billing", location.search)}>{t("Upgrade")}</Link>
+					</Button>
 				</aside>
 			)}
 			{createOpen && !atCap && (
@@ -154,14 +169,14 @@ export function ActiveVaultsSection() {
 					/>
 				</section>
 			)}
-			{Boolean(isLoading) && <p className="text-muted-foreground text-sm">Loading…</p>}
+			{Boolean(isLoading) && <p className="text-muted-foreground text-sm">{t("Loading…")}</p>}
 			<table className="w-full text-sm">
 				<thead>
 					<tr className="border-border border-b text-left text-muted-foreground text-xs">
-						<th className="py-2 font-medium">Name</th>
-						<th className="py-2 text-right font-medium">Files</th>
-						<th className="py-2 text-right font-medium">Attachments</th>
-						<th className="py-2" aria-label="Actions" />
+						<th className="py-2 font-medium">{t("Name")}</th>
+						<th className="py-2 text-right font-medium">{t("Files")}</th>
+						<th className="py-2 text-right font-medium">{t("Attachments")}</th>
+						<th className="py-2" aria-label={t("Actions")} />
 					</tr>
 				</thead>
 				<tbody className="divide-y divide-border">
@@ -171,7 +186,7 @@ export function ActiveVaultsSection() {
 					{!isLoading && (vaults ?? []).length === 0 && (
 						<tr>
 							<td colSpan={4} className="py-3 text-muted-foreground">
-								No vaults yet.
+								{t("No vaults yet.")}
 							</td>
 						</tr>
 					)}

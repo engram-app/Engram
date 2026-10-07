@@ -1,13 +1,13 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { useT } from "@/i18n/locale-provider";
 import { useMe, useUpdateProfile } from "../../api/queries";
 import { SettingsSectionCard } from "./section-card";
 
-const inputClass =
-	"mt-1 block w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring";
-
 export function ProfileSectionLocal() {
+	const { t } = useT();
 	const { data } = useMe();
 	const update = useUpdateProfile();
 	const current = data?.display_name ?? "";
@@ -27,28 +27,31 @@ export function ProfileSectionLocal() {
 		e.preventDefault();
 		try {
 			await update.mutateAsync({ display_name: value.trim() === "" ? null : value.trim() });
-			toast.success("Profile updated");
+			toast.success(t("Profile updated"));
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : "Could not update profile");
+			toast.error(err instanceof Error ? err.message : t("Could not update profile"));
 		}
 	}
 
 	return (
-		<SettingsSectionCard title="Profile" description="How your name appears in the app.">
-			<form onSubmit={onSubmit} className="space-y-3">
-				<label className="block font-medium text-foreground text-sm" htmlFor="display-name">
-					Display name
-					<input
+		<SettingsSectionCard title={t("Profile")} description={t("How your name appears in the app.")}>
+			<form onSubmit={onSubmit} className="flex flex-wrap items-end gap-3">
+				<label
+					className="block min-w-48 flex-1 font-medium text-foreground text-sm"
+					htmlFor="display-name"
+				>
+					{t("Display name")}
+					<Input
 						id="display-name"
-						className={inputClass}
+						className="mt-1 block"
 						value={value}
 						maxLength={80}
 						onChange={(e) => setValue(e.target.value)}
-						placeholder="Leave blank to use your email"
+						placeholder={t("Leave blank to use your email")}
 					/>
 				</label>
-				<Button type="submit" size="sm" disabled={!dirty || update.isPending}>
-					{update.isPending ? "Saving…" : "Save"}
+				<Button type="submit" className="shrink-0" disabled={!dirty || update.isPending}>
+					{update.isPending ? t("Saving…") : t("Save")}
 				</Button>
 			</form>
 		</SettingsSectionCard>

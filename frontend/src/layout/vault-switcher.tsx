@@ -13,6 +13,8 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { VaultCreateForm } from "@/components/vault-create-form";
+import { useT } from "@/i18n/locale-provider";
+import { displayVaultName } from "@/i18n/vault-name";
 import {
 	LIST_ROW_GAP,
 	LIST_ROW_HEIGHT,
@@ -26,6 +28,7 @@ import { useVaults } from "../api/queries";
 import { vaultPath } from "../routes";
 
 function VaultSwitcher() {
+	const { t } = useT();
 	const { data: vaults, isLoading } = useVaults();
 	const activeId = useActiveVaultId();
 	const qc = useQueryClient();
@@ -40,10 +43,10 @@ function VaultSwitcher() {
 	const searchRef = useRef<HTMLInputElement>(null);
 
 	if (isLoading) {
-		return <p className="px-3 py-2 text-muted-foreground text-xs">Loading vaults…</p>;
+		return <p className="px-3 py-2 text-muted-foreground text-xs">{t("Loading vaults…")}</p>;
 	}
 	if (!vaults || vaults.length === 0) {
-		return <p className="px-3 py-2 text-muted-foreground text-xs">No vaults yet</p>;
+		return <p className="px-3 py-2 text-muted-foreground text-xs">{t("No vaults yet")}</p>;
 	}
 
 	const active = vaults.find((v) => v.id === activeId) ?? vaults[0]!;
@@ -108,10 +111,10 @@ function VaultSwitcher() {
 				<PopoverTrigger className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left outline-none hover:bg-muted aria-expanded:bg-muted">
 					<span className="min-w-0 flex-1">
 						<span className="block font-medium text-[10px] text-muted-foreground uppercase tracking-wide">
-							Vault
+							{t("Vault")}
 						</span>
 						<span className="block truncate font-medium text-foreground text-sm">
-							{active.name}
+							{displayVaultName(active.name, t)}
 						</span>
 					</span>
 					<ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-aria-expanded/dropdown-trigger:rotate-180" />
@@ -120,7 +123,7 @@ function VaultSwitcher() {
 					side="top"
 					align="start"
 					arrow={false}
-					aria-label="Switch vault"
+					aria-label={t("Switch vault")}
 					// Flush against the trigger (no gap) and square, so the panel and the vault
 					// button read as one object; the trigger's own border-t is the seam, so the
 					// panel drops its bottom border rather than doubling it.
@@ -139,7 +142,7 @@ function VaultSwitcher() {
 						<div
 							id={listId}
 							role="listbox"
-							aria-label="Vaults"
+							aria-label={t("Vaults")}
 							className={cn("flex flex-col", listContainer)}
 							style={{ gap: LIST_ROW_GAP }}
 						>
@@ -171,11 +174,11 @@ function VaultSwitcher() {
 										}
 									}}
 								>
-									<span className="truncate">{v.name}</span>
+									<span className="truncate">{displayVaultName(v.name, t)}</span>
 									{v.id === active.id ? <Check className="size-4 shrink-0 text-primary" /> : null}
 								</div>
 							))}
-							{matches.length === 0 ? <p className={listEmpty}>No vaults match</p> : null}
+							{matches.length === 0 ? <p className={listEmpty}>{t("No vaults match")}</p> : null}
 						</div>
 					</ScrollArea>
 					<div className={cn("border-border border-t", listContainer)}>
@@ -189,18 +192,18 @@ function VaultSwitcher() {
 							}}
 						>
 							<Plus className="size-4" />
-							New vault
+							{t("New vault")}
 						</button>
 					</div>
 					<div className="border-border border-t p-2">
 						<SearchField
 							ref={searchRef}
 							role="combobox"
-							aria-label="Search vaults"
+							aria-label={t("Search vaults")}
 							aria-expanded
 							aria-controls={listId}
 							aria-activedescendant={highlighted ? optionId(highlighted.id) : undefined}
-							placeholder="Search vaults…"
+							placeholder={t("Search vaults…")}
 							autoComplete="off"
 							spellCheck={false}
 							value={query}
@@ -217,15 +220,15 @@ function VaultSwitcher() {
 			<Dialog open={createOpen} onOpenChange={setCreateOpen}>
 				<DialogContent className="sm:max-w-md">
 					<DialogHeader>
-						<DialogTitle>New vault</DialogTitle>
+						<DialogTitle>{t("New vault")}</DialogTitle>
 						<DialogDescription>
-							A vault holds its own notes and folders, separate from your other vaults.
+							{t("A vault holds its own notes and folders, separate from your other vaults.")}
 						</DialogDescription>
 					</DialogHeader>
 					<VaultCreateForm
 						autoFocus
 						showCancel
-						submitLabel="Create vault"
+						submitLabel={t("Create vault")}
 						onCancel={() => setCreateOpen(false)}
 						onCreated={(vault) => {
 							setCreateOpen(false);

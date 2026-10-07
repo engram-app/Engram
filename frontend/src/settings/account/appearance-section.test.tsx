@@ -28,4 +28,14 @@ describe("AppearanceSection", () => {
 		fireEvent.click(screen.getByRole("button", { name: /dark/iu }));
 		expect(setTheme).toHaveBeenCalledWith("dark");
 	});
+
+	it("keeps the theme group labelled for screen readers", () => {
+		render(<AppearanceSection />);
+		expect(screen.getByRole("group", { name: "Theme" })).toBeInTheDocument();
+	});
+
+	it("no longer hosts the language picker", () => {
+		render(<AppearanceSection />);
+		expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+	});
 });

@@ -2,6 +2,11 @@ import { Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { useT } from "@/i18n/locale-provider";
+import type { Locale } from "@/i18n/locales";
+import { Trans } from "@/i18n/trans";
+import type { Translate } from "@/i18n/translate";
+import { intlLocale } from "@/lib/intl-locale";
 import {
 	type BillingCadence,
 	type BillingStatus,
@@ -48,6 +53,8 @@ function deriveCurrentCadence(detail: SubscriptionDetail | undefined): BillingCa
 }
 
 function PlanChangePicker({ billing, onClose }: { billing: BillingStatus; onClose: () => void }) {
+	const { t, renderedLocale } = useT();
+
 	const { data: config } = useBillingConfig();
 	const { data: detail } = useBillingSubscriptionDetail(Boolean(billing.subscription));
 	const currentTier = deriveCurrentTier(billing);
@@ -79,8 +86,8 @@ function PlanChangePicker({ billing, onClose }: { billing: BillingStatus; onClos
 
 	if (!config) {
 		return (
-			<section aria-label="Change plan" className="py-2">
-				<p className="text-muted-foreground text-sm">Loading plan options…</p>
+			<section aria-label={t("Change plan")} className="py-2">
+				<p className="text-muted-foreground text-sm">{t("Loading plan options…")}</p>
 			</section>
 		);
 	}
@@ -91,20 +98,21 @@ function PlanChangePicker({ billing, onClose }: { billing: BillingStatus; onClos
 		}
 		try {
 			await confirm.mutateAsync(targetPriceId);
-			toast.success("Plan change confirmed.");
+			toast.success(t("Plan change confirmed."));
 			onClose();
 		} catch {
-			toast.error("Could not change plan. Please try again.");
+			toast.error(t("Could not change plan. Please try again."));
 		}
 	}
 
 	return (
-		<section aria-label="Change plan" className="space-y-5 pt-2">
+		<section aria-label={t("Change plan")} className="space-y-5 pt-2">
 			<header>
-				<h2 className="font-semibold text-base text-foreground">Change your plan</h2>
+				<h2 className="font-semibold text-base text-foreground">{t("Change your plan")}</h2>
 				<p className="mt-2 text-muted-foreground text-sm">
-					Proration applies immediately. The selected card shows what'll be charged or credited
-					before you confirm.
+					{t(
+						"Proration applies immediately. The selected card shows what'll be charged or credited before you confirm.",
+					)}
 				</p>
 			</header>
 
@@ -134,17 +142,19 @@ function PlanChangePicker({ billing, onClose }: { billing: BillingStatus; onClos
 							annualPrice={meta.annualPrice}
 							features={meta.features}
 							tier={tier}
-							onAction={(t) => setSelectedTier(t)}
+							onAction={(picked) => setSelectedTier(picked)}
 							current={isCurrent}
 							selected={isSelected}
-							ctaLabel={isSelected ? "Selected" : "Select"}
+							ctaLabel={isSelected ? t("Selected") : t("Select")}
 							ctaSubLabel={
 								isSelected && preview.isFetching
-									? "Loading proration…"
+									? t("Loading proration…")
 									: isSelected && preview.data
-										? formatProration(preview.data)
+										? formatProration(preview.data, t, renderedLocale)
 										: isSelected && preview.isError
-											? "Could not load proration. You can still confirm — final charge applies on confirm."
+											? t(
+													"Could not load proration. You can still confirm — final charge applies on confirm.",
+												)
 											: undefined
 							}
 						/>
@@ -157,11 +167,13 @@ function PlanChangePicker({ billing, onClose }: { billing: BillingStatus; onClos
 					onClick={onConfirm}
 					disabled={!(selectedTier && targetPriceId) || preview.isFetching || confirm.isPending}
 				>
-					{Boolean(confirm.isPending) && <Loader2 aria-hidden className="size-4 animate-spin" />}
-					{confirm.isPending ? "Applying…" : "Confirm change"}
+					{Boolean(confirm.isPending) && (
+						<Loader2 data-icon="inline-start" aria-hidden className="animate-spin" />
+					)}
+					{confirm.isPending ? t("Applying…") : t("Confirm change")}
 				</Button>
-				<Button variant="ghost" onClick={onClose} disabled={confirm.isPending}>
-					Cancel
+				<Button variant="outline" onClick={onClose} disabled={confirm.isPending}>
+					{t("Cancel")}
 				</Button>
 			</div>
 		</section>
@@ -190,96 +202,117 @@ function TrialNotice({
 	onClose: () => void;
 	onSwitchToCancel: () => void;
 }) {
+	const { t, renderedLocale } = useT();
+	const localeTag = intlLocale(renderedLocale);
 	const { data: detail } = useBillingSubscriptionDetail(Boolean(billing.subscription));
 	const alreadyCanceled = detail?.scheduled_change?.action === "cancel";
 	const cancelAt = detail?.scheduled_change?.effective_at
-		? new Date(detail.scheduled_change.effective_at).toLocaleDateString()
+		? new Date(detail.scheduled_change.effective_at).toLocaleDateString(localeTag)
 		: null;
 	const renewsAt = billing.subscription?.current_period_end
-		? new Date(billing.subscription.current_period_end).toLocaleDateString()
+		? new Date(billing.subscription.current_period_end).toLocaleDateString(localeTag)
 		: null;
 
 	if (alreadyCanceled) {
 		return (
-			<section aria-label="Change plan" className="space-y-4 pt-2">
+			<section aria-label={t("Change plan")} className="space-y-4 pt-2">
 				<header>
-					<h2 className="font-semibold text-base text-foreground">Change your plan</h2>
+					<h2 className="font-semibold text-base text-foreground">{t("Change your plan")}</h2>
 					<p className="mt-2 text-muted-foreground text-sm">
-						Your free trial is already scheduled to cancel
 						{cancelAt ? (
-							<>
-								{" "}
-								on <strong>{cancelAt}</strong>
-							</>
-						) : null}
-						. You won't be charged. You can subscribe to the plan you want once your trial ends.
+							<Trans
+								text="Your free trial is already scheduled to cancel on {date}. You won't be charged. You can subscribe to the plan you want once your trial ends."
+								slots={{ date: <strong>{cancelAt}</strong> }}
+							/>
+						) : (
+							t(
+								"Your free trial is already scheduled to cancel. You won't be charged. You can subscribe to the plan you want once your trial ends.",
+							)
+						)}
 					</p>
 				</header>
 				<div className="rounded-md border border-border bg-muted/40 p-4 text-muted-foreground text-sm">
-					<p className="font-medium text-foreground">Changed your mind?</p>
+					<p className="font-medium text-foreground">{t("Changed your mind?")}</p>
 					<p className="mt-1">
-						Use <strong>Keep my subscription</strong> right below the Current Plan section to
-						reverse the cancellation.
+						<Trans
+							text="Use {action} right below the Current Plan section to reverse the cancellation."
+							slots={{ action: <strong>{t("Keep my subscription")}</strong> }}
+						/>
 					</p>
 				</div>
 				<div className="flex justify-end gap-2">
-					<Button onClick={onClose}>Close</Button>
+					<Button onClick={onClose}>{t("Close")}</Button>
 				</div>
 			</section>
 		);
 	}
 
 	return (
-		<section aria-label="Change plan" className="space-y-4 pt-2">
+		<section aria-label={t("Change plan")} className="space-y-4 pt-2">
 			<header>
-				<h2 className="font-semibold text-base text-foreground">Change your plan</h2>
+				<h2 className="font-semibold text-base text-foreground">{t("Change your plan")}</h2>
 				<p className="mt-2 text-muted-foreground text-sm">
-					You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a
-					subscription is in trial
 					{renewsAt ? (
-						<>
-							{" "}
-							— your trial converts on <strong>{renewsAt}</strong>
-						</>
-					) : null}
-					.
+						<Trans
+							text="You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}."
+							slots={{ date: <strong>{renewsAt}</strong> }}
+						/>
+					) : (
+						t(
+							"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial.",
+						)
+					)}
 				</p>
 			</header>
 			<div className="rounded-md border border-border bg-muted/40 p-4 text-muted-foreground text-sm">
-				<p className="font-medium text-foreground">Want a different plan?</p>
+				<p className="font-medium text-foreground">{t("Want a different plan?")}</p>
 				<p className="mt-1">
-					Cancel the free trial below — you won't be charged. You can subscribe to the plan you want
-					at any time.
+					{t(
+						"Cancel the free trial below — you won't be charged. You can subscribe to the plan you want at any time.",
+					)}
 				</p>
 			</div>
 			<div className="flex gap-2">
 				<Button variant="destructive" onClick={onSwitchToCancel}>
-					Cancel free trial
+					{t("Cancel free trial")}
 				</Button>
-				<Button variant="ghost" onClick={onClose}>
-					Close
+				<Button variant="outline" onClick={onClose}>
+					{t("Close")}
 				</Button>
 			</div>
 		</section>
 	);
 }
 
-function formatProration(data: {
-	immediate_charge_or_credit: number;
-	new_total: number;
-	next_billed_at: string;
-}): string {
-	const renewal = new Date(data.next_billed_at).toLocaleDateString();
+function formatProration(
+	data: {
+		immediate_charge_or_credit: number;
+		new_total: number;
+		next_billed_at: string;
+	},
+	t: Translate,
+	locale: Locale,
+): string {
+	const renewal = new Date(data.next_billed_at).toLocaleDateString(intlLocale(locale));
 	const newTotal = formatCents(data.new_total);
 	// Exact-cadence flips (e.g. monthly→monthly mid-cycle of the same
 	// tier) come back as 0 — "Credited $0.00 today" reads as a billing
 	// mistake. Make the no-op explicit.
 	if (data.immediate_charge_or_credit === 0) {
-		return `No charge today; next bill ${newTotal} on ${renewal}`;
+		return t("No charge today; next bill {total} on {renewal}", { total: newTotal, renewal });
 	}
-	const direction = data.immediate_charge_or_credit > 0 ? "Charged" : "Credited";
 	const amount = formatCents(Math.abs(data.immediate_charge_or_credit));
-	return `${direction} ${amount} today; next bill ${newTotal} on ${renewal}`;
+	return data.immediate_charge_or_credit > 0
+		? t("Charged {amount} today; next bill {total} on {renewal}", {
+				amount,
+				total: newTotal,
+				renewal,
+			})
+		: t("Credited {amount} today; next bill {total} on {renewal}", {
+				amount,
+				total: newTotal,
+				renewal,
+			});
 }
 
 export default function PlanChangePanel({

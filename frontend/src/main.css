@@ -101,6 +101,8 @@
 }
 
 @theme inline {
+	/* The one standard height for single-line controls (Button, Input, Select trigger). */
+	--spacing-control: 2.375rem;
 	--font-heading: var(--font-display);
 	--font-display: "Inter Variable", system-ui, sans-serif;
 	--font-sans: "Inter Variable", system-ui, sans-serif;

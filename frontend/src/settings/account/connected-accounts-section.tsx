@@ -4,6 +4,7 @@ import type { OAuthStrategy } from "@clerk/shared/types";
 import type { ReactNode } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { useT } from "@/i18n/locale-provider";
 import { settingsHash } from "../settings-hash";
 import { DiscordIcon } from "./discord-icon";
 import { SettingsSectionCard } from "./section-card";
@@ -47,6 +48,7 @@ function meta(raw: string) {
 }
 
 export function ConnectedAccountsSection({ providers }: { providers: OAuthStrategy[] }) {
+	const { t } = useT();
 	const { user, isLoaded } = useUser();
 	const disconnect = useReverification((destroy: () => Promise<unknown>) => destroy());
 	// Adding a connection is a reverification-protected action — calling it
@@ -74,12 +76,12 @@ export function ConnectedAccountsSection({ providers }: { providers: OAuthStrate
 		try {
 			await disconnect(destroy);
 			await user!.reload();
-			toast.success("Account disconnected");
+			toast.success(t("Account disconnected"));
 		} catch (e) {
 			if (isReverificationCancelledError(e)) {
 				return;
 			}
-			toast.error("Could not disconnect account");
+			toast.error(t("Could not disconnect account"));
 		}
 	}
 
@@ -97,7 +99,7 @@ export function ConnectedAccountsSection({ providers }: { providers: OAuthStrate
 			if (isReverificationCancelledError(e)) {
 				return;
 			}
-			toast.error("Could not start connection");
+			toast.error(t("Could not start connection"));
 		}
 	}
 
@@ -105,14 +107,14 @@ export function ConnectedAccountsSection({ providers }: { providers: OAuthStrate
 
 	return (
 		<SettingsSectionCard
-			title="Connected accounts"
-			description="Link third-party sign-in providers."
+			title={t("Connected accounts")}
+			description={t("Link third-party sign-in providers.")}
 		>
 			{verifiedAccounts.length > 0 && (
 				<ul className="divide-y divide-border">
 					{verifiedAccounts.map((a) => {
 						const { name, icon } = meta(a.provider);
-						const secondary = a.emailAddress || a.username || "Connected";
+						const secondary = a.emailAddress || a.username || t("Connected");
 						return (
 							<li
 								key={a.id}
@@ -131,10 +133,10 @@ export function ConnectedAccountsSection({ providers }: { providers: OAuthStrate
 									variant="destructive"
 									size="sm"
 									className="shrink-0"
-									aria-label={`Disconnect ${name}`}
+									aria-label={t("Disconnect {name}", { name })}
 									onClick={() => onDisconnect(() => a.destroy())}
 								>
-									Disconnect
+									{t("Disconnect")}
 								</Button>
 							</li>
 						);
@@ -147,15 +149,9 @@ export function ConnectedAccountsSection({ providers }: { providers: OAuthStrate
 					{available.map((p) => {
 						const { name, icon } = meta(p);
 						return (
-							<Button
-								key={p}
-								variant="outline"
-								size="sm"
-								className="gap-2"
-								onClick={() => connect(p)}
-							>
+							<Button key={p} variant="outline" onClick={() => connect(p)}>
 								{icon}
-								Connect {name}
+								{t("Connect {name}", { name })}
 							</Button>
 						);
 					})}

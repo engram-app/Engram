@@ -1,5 +1,6 @@
 import { lazy, Suspense } from "react";
 import { useSearchParams } from "react-router";
+import { useT } from "@/i18n/locale-provider";
 import { useConfig } from "../config-context";
 import AuthLayout from "./auth-layout";
 import { safeReturnTo } from "./safe-return-to";
@@ -12,6 +13,7 @@ const ClerkSignIn = lazy(() => import("./clerk-sign-in"));
 const LocalSignIn = lazy(() => import("./local-sign-in"));
 
 export default function SignInPage() {
+	const { t } = useT();
 	const [searchParams] = useSearchParams();
 	const returnTo = safeReturnTo(searchParams.get("return_to"));
 	const config = useConfig();
@@ -21,7 +23,7 @@ export default function SignInPage() {
 			<AuthLayout>
 				<div className="flex w-full flex-col items-center">
 					<SignupRejectionNotice />
-					<Suspense fallback={<p>Loading...</p>}>
+					<Suspense fallback={<p>{t("Loading...")}</p>}>
 						<ClerkSignIn returnTo={returnTo} />
 					</Suspense>
 				</div>
@@ -30,7 +32,7 @@ export default function SignInPage() {
 	}
 
 	return (
-		<Suspense fallback={<p>Loading...</p>}>
+		<Suspense fallback={<p>{t("Loading...")}</p>}>
 			<LocalSignIn />
 		</Suspense>
 	);

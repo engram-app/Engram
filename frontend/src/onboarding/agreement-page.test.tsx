@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { LocaleProvider } from "@/i18n/locale-provider";
 import { track } from "../analytics/track";
 import AgreementPage from "./agreement-page";
 
@@ -109,5 +110,43 @@ describe("AgreementPage", () => {
 		renderPage();
 		expect(screen.getByRole("alert")).toHaveTextContent(/isn.t available/iu);
 		expect(screen.queryByRole("button", { name: /continue/iu })).toBeNull();
+	});
+});
+
+describe("AgreementPage: consent chrome is translated, the legal body is not", () => {
+	const german = {
+		de: async () => ({
+			default: {
+				"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
+					"Lies die vollständige Vereinbarung unten, bevor du fortfährst. Unsere {privacy} (bei der Anmeldung geprüft) beschreibt, wie wir deine Daten behandeln.",
+				"privacy notice": "Datenschutzhinweis",
+				"I have read and agree to the Terms of Service and Privacy Policy":
+					"Ich habe die Nutzungsbedingungen und die Datenschutzerklärung gelesen und stimme zu",
+				"I have read and agree to the agreement shown above and the privacy notice":
+					"Ich habe die oben gezeigte Vereinbarung und den Datenschutzhinweis gelesen und stimme zu",
+			},
+		}),
+	};
+
+	afterEach(() => window.localStorage.clear());
+
+	it("translates the intro, the privacy link and the checkbox", async () => {
+		window.localStorage.setItem("engram:locale", "de");
+		const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(
+			<LocaleProvider loaders={german}>
+				<QueryClientProvider client={qc}>
+					<MemoryRouter>
+						<AgreementPage />
+					</MemoryRouter>
+				</QueryClientProvider>
+			</LocaleProvider>,
+		);
+		expect(await screen.findByRole("link", { name: "Datenschutzhinweis" })).toBeInTheDocument();
+		expect(screen.getByText(/Lies die vollständige Vereinbarung/u)).toBeInTheDocument();
+		expect(
+			screen.getByRole("checkbox", { name: /Ich habe die Nutzungsbedingungen/u }),
+		).toBeInTheDocument();
+		expect(screen.getByText(/Ich habe die oben gezeigte Vereinbarung/u)).toBeInTheDocument();
 	});
 });

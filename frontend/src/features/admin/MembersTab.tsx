@@ -3,13 +3,14 @@ import { ChevronRight, Loader2 } from "lucide-react";
 import { Fragment, useCallback, useState } from "react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
+import { Button } from "@/components/ui/button";
+import { useT } from "@/i18n/locale-provider";
+import { intlLocale } from "@/lib/intl-locale";
 import { cn } from "@/lib/utils";
 import { type AdminUser, adminApi } from "./api";
 
-// Stable button surface for the row's actions: instant active feedback
-// (active:scale-[0.97]), an inline spinner while the request is in flight,
-// and a destructive red-outline variant. Same width whether busy or not so
-// the layout doesn't shift mid-click.
+// A row action: a small Button with an inline spinner while the request is in
+// flight. `destructive` swaps the outline look for the destructive variant.
 function ActionButton({
 	onClick,
 	disabled,
@@ -26,23 +27,17 @@ function ActionButton({
 	children: React.ReactNode;
 }) {
 	return (
-		<button
+		<Button
 			type="button"
+			variant={variant === "destructive" ? "destructive" : "outline"}
+			size="sm"
 			onClick={onClick}
 			disabled={disabled}
 			title={title}
-			className={cn(
-				"inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-3 py-1.5 font-medium text-xs",
-				"transition-[transform,background-color,opacity] active:scale-[0.97]",
-				"disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100",
-				variant === "destructive"
-					? "border-destructive/40 bg-background text-destructive hover:bg-destructive/10 disabled:border-border disabled:text-muted-foreground disabled:hover:bg-background"
-					: "border-border bg-background hover:bg-accent disabled:hover:bg-background",
-			)}
 		>
-			{Boolean(busy) && <Loader2 aria-hidden className="size-3 animate-spin" />}
+			{Boolean(busy) && <Loader2 data-icon="inline-start" aria-hidden className="animate-spin" />}
 			{children}
-		</button>
+		</Button>
 	);
 }
 
@@ -57,6 +52,8 @@ export default function MembersTab({
 	// the Members card — above it, where it's visually separated.
 	onResetIssued: (url: string) => void;
 }) {
+	const { t, renderedLocale } = useT();
+	const localeTag = intlLocale(renderedLocale);
 	const qc = useQueryClient();
 	const [pendingDelete, setPendingDelete] = useState<string | null>(null);
 	// One open at a time keeps the table calm. null = all collapsed.
@@ -133,8 +130,8 @@ export default function MembersTab({
 			if (snapshot) {
 				qc.setQueryData(USERS_KEY, snapshot);
 			}
-			const raw = e instanceof ApiError ? e.message : "unknown error";
-			const friendly = raw === "last_admin" ? "Can't remove the last admin." : raw;
+			const raw = e instanceof ApiError ? e.message : t("unknown error");
+			const friendly = raw === "last_admin" ? t("Can't remove the last admin.") : raw;
 			toast.error(`${label}: ${friendly}`);
 		} finally {
 			setPending((p) => {
@@ -147,20 +144,20 @@ export default function MembersTab({
 
 	function toggleRole(u: AdminUser) {
 		const next = u.role === "admin" ? "member" : "admin";
-		return optimistic(u.id, "role", "Update role", { role: next }, () =>
+		return optimistic(u.id, "role", t("Update role"), { role: next }, () =>
 			adminApi.updateUser(u.id, { role: next }),
 		);
 	}
 
 	function toggleSuspend(u: AdminUser) {
-		return optimistic(u.id, "suspend", "Update status", { suspended: !u.suspended }, () =>
+		return optimistic(u.id, "suspend", t("Update status"), { suspended: !u.suspended }, () =>
 			adminApi.updateUser(u.id, { suspended: !u.suspended }),
 		);
 	}
 
 	function remove(u: AdminUser) {
 		setPendingDelete(null);
-		return optimistic(u.id, "delete", "Delete user", "remove", () => adminApi.deleteUser(u.id));
+		return optimistic(u.id, "delete", t("Delete user"), "remove", () => adminApi.deleteUser(u.id));
 	}
 
 	async function issueReset(u: AdminUser) {
@@ -169,7 +166,7 @@ export default function MembersTab({
 			const { url } = await adminApi.issueReset(u.id);
 			onResetIssued(url);
 		} catch (e) {
-			toast.error(e instanceof ApiError ? e.message : "Reset link failed");
+			toast.error(e instanceof ApiError ? e.message : t("Reset link failed"));
 		} finally {
 			setPending((p) => {
 				const next = { ...p };
@@ -187,21 +184,23 @@ export default function MembersTab({
 	return (
 		<section>
 			{loading ? (
-				<p className="p-4 text-muted-foreground text-sm">Loading…</p>
+				<p className="p-4 text-muted-foreground text-sm">{t("Loading…")}</p>
 			) : usersQuery.error ? (
 				<p role="alert" className="p-4 text-destructive text-sm">
-					{usersQuery.error instanceof ApiError ? usersQuery.error.message : "Failed to load users"}
+					{usersQuery.error instanceof ApiError
+						? usersQuery.error.message
+						: t("Failed to load users")}
 				</p>
 			) : users.length === 0 ? (
-				<p className="p-4 text-muted-foreground text-sm">No users.</p>
+				<p className="p-4 text-muted-foreground text-sm">{t("No users.")}</p>
 			) : (
 				<table className="w-full text-sm">
 					<thead className="text-left text-muted-foreground text-xs">
 						<tr>
-							<th className="py-3 pr-2 pl-4 font-medium">Email</th>
-							<th className="py-3 pr-2 font-medium">Role</th>
-							<th className="py-3 pr-2 font-medium">Status</th>
-							<th className="py-3 pr-2 font-medium">Last active</th>
+							<th className="py-3 pr-2 pl-4 font-medium">{t("Email")}</th>
+							<th className="py-3 pr-2 font-medium">{t("Role")}</th>
+							<th className="py-3 pr-2 font-medium">{t("Status")}</th>
+							<th className="py-3 pr-2 font-medium">{t("Last active")}</th>
 							<th className="w-10" />
 						</tr>
 					</thead>
@@ -223,16 +222,20 @@ export default function MembersTab({
 											<span className="text-foreground">{u.email}</span>
 											{isSelf && (
 												<span className="ml-2 rounded-sm bg-primary/15 px-1.5 py-0.5 font-medium text-[10px] text-primary uppercase tracking-wider">
-													you
+													{t("you")}
 												</span>
 											)}
 										</td>
-										<td className="py-3 pr-2">{u.role}</td>
+										<td className="py-3 pr-2">{u.role === "admin" ? t("admin") : t("member")}</td>
 										<td className="py-3 pr-2">
-											{u.suspended ? <span className="text-destructive">suspended</span> : "active"}
+											{u.suspended ? (
+												<span className="text-destructive">{t("suspended")}</span>
+											) : (
+												t("active")
+											)}
 										</td>
 										<td className="py-3 pr-2">
-											{u.last_active ? new Date(u.last_active).toLocaleDateString() : "—"}
+											{u.last_active ? new Date(u.last_active).toLocaleDateString(localeTag) : "—"}
 										</td>
 										<td className="py-3 pr-4 pl-2 text-right">
 											<ChevronRight
@@ -251,23 +254,25 @@ export default function MembersTab({
 												{pendingDelete === u.id ? (
 													<div className="flex flex-wrap items-center justify-between gap-3">
 														<span className="text-muted-foreground text-xs">
-															Delete {u.email} + their vault data?
+															{t("Delete {email} + their vault data?", { email: u.email })}
 														</span>
 														<div className="flex items-center gap-2">
-															<button
+															<Button
 																type="button"
+																variant="outline"
+																size="sm"
 																onClick={() => setPendingDelete(null)}
-																className="rounded-md border border-border bg-background px-3 py-1.5 font-medium text-xs hover:bg-accent"
 															>
-																Cancel
-															</button>
-															<button
+																{t("Cancel")}
+															</Button>
+															<Button
 																type="button"
+																variant="destructive"
+																size="sm"
 																onClick={() => remove(u)}
-																className="rounded-md bg-destructive px-3 py-1.5 font-semibold text-white text-xs shadow-sm hover:bg-destructive/90"
 															>
-																Confirm delete
-															</button>
+																{t("Confirm delete")}
+															</Button>
 														</div>
 													</div>
 												) : (
@@ -277,16 +282,16 @@ export default function MembersTab({
 																onClick={() => toggleRole(u)}
 																disabled={isSelf || u.id in pending}
 																busy={pending[u.id] === "role"}
-																title={isSelf ? "Cannot change your own role" : undefined}
+																title={isSelf ? t("Cannot change your own role") : undefined}
 															>
-																{u.role === "admin" ? "Demote to member" : "Promote to admin"}
+																{u.role === "admin" ? t("Demote to member") : t("Promote to admin")}
 															</ActionButton>
 															<ActionButton
 																onClick={() => issueReset(u)}
 																disabled={u.id in pending}
 																busy={pending[u.id] === "reset"}
 															>
-																Reset password
+																{t("Reset password")}
 															</ActionButton>
 														</div>
 														<div className="flex flex-wrap items-center gap-2">
@@ -295,9 +300,9 @@ export default function MembersTab({
 																onClick={() => toggleSuspend(u)}
 																disabled={isSelf || u.id in pending}
 																busy={pending[u.id] === "suspend"}
-																title={isSelf ? "Cannot suspend yourself" : undefined}
+																title={isSelf ? t("Cannot suspend yourself") : undefined}
 															>
-																{u.suspended ? "Unsuspend" : "Suspend"}
+																{u.suspended ? t("Unsuspend") : t("Suspend")}
 															</ActionButton>
 															{!isSelf && (
 																<ActionButton
@@ -305,7 +310,7 @@ export default function MembersTab({
 																	onClick={() => setPendingDelete(u.id)}
 																	disabled={u.id in pending}
 																>
-																	Delete user
+																	{t("Delete user")}
 																</ActionButton>
 															)}
 														</div>

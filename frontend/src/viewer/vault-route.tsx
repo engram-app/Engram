@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { Navigate, Outlet, useParams } from "react-router";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { useStableT, useT } from "@/i18n/locale-provider";
 import { setActiveVaultId, useActiveVaultId } from "../api/active-vault";
 import { useVaults } from "../api/queries";
 import { vaultBySlug } from "../api/vault-slug";
@@ -15,10 +16,12 @@ import LoadingPane from "./loading-pane";
 // picks the vault to land on — the same way a missing note lands on its vault
 // root.
 function UnknownVault({ slug }: { slug: string }) {
+	// Stable: the toast fires once per slug, not again when the language changes.
+	const { t } = useStableT();
 	useEffect(() => {
 		// Fixed id: StrictMode runs this twice in dev, and sonner dedupes by id.
-		toast.error(`No vault named "${slug}".`, { id: `unknown-vault:${slug}` });
-	}, [slug]);
+		toast.error(t("No vault named \u0022{slug}\u0022.", { slug }), { id: `unknown-vault:${slug}` });
+	}, [slug, t]);
 	return <Navigate to={ROUTES.HOME} replace />;
 }
 
@@ -26,6 +29,7 @@ function UnknownVault({ slug }: { slug: string }) {
 // that writes the store from a route; ~30 consumers (queries.ts, use-channel,
 // folder-tree, trace, remote-log) read it unchanged.
 export default function VaultRoute() {
+	const { t } = useT();
 	const { slug } = useParams();
 	const { data: vaults, isPending, isError, refetch } = useVaults();
 	const activeId = useActiveVaultId();
@@ -49,9 +53,9 @@ export default function VaultRoute() {
 	if (isError && !vaults) {
 		return (
 			<section className="flex flex-col items-start gap-3 p-6">
-				<p className="text-destructive">Couldn't load your vaults.</p>
+				<p className="text-destructive">{t("Couldn't load your vaults.")}</p>
 				<Button variant="outline" onClick={() => refetch()}>
-					Try again
+					{t("Try again")}
 				</Button>
 			</section>
 		);

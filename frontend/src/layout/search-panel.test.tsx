@@ -5,30 +5,44 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RailViewProvider, useRailView } from "./rail-view-context";
 import SearchPanel from "./search-panel";
 
+const hit = (id: number) => ({
+	id,
+	path: `n${id}.md`,
+	title: `N${id}`,
+	folder: "",
+	heading_path: "",
+	snippet: "",
+	match_count: 1,
+});
+
 const useSearchSpy = vi.fn((q: string, _filters?: unknown) => ({
 	data:
-		q === "hello"
-			? [
-					{
-						id: 7,
-						path: "note.md",
-						title: "Some H1 Heading",
-						folder: "",
-						heading_path: "",
-						snippet: "hello world",
-						match_count: 1,
-					},
-					{
-						id: 8,
-						path: "Archive/note.md",
-						title: "Another",
-						folder: "Archive",
-						heading_path: "",
-						snippet: "a second hello",
-						match_count: 1,
-					},
-				]
-			: [],
+		q === "one"
+			? [hit(1)]
+			: q === "many"
+				? Array.from({ length: 20 }, (_, i) => hit(i + 1))
+				: q === "hello"
+					? [
+							{
+								id: 7,
+								path: "note.md",
+								title: "Some H1 Heading",
+								folder: "",
+								heading_path: "",
+								snippet: "hello world",
+								match_count: 1,
+							},
+							{
+								id: 8,
+								path: "Archive/note.md",
+								title: "Another",
+								folder: "Archive",
+								heading_path: "",
+								snippet: "a second hello",
+								match_count: 1,
+							},
+						]
+					: [],
 	isLoading: false,
 	error: null,
 }));
@@ -504,6 +518,15 @@ describe("SearchPanel", () => {
 		it("says how many results came back", async () => {
 			await search();
 			expect(screen.getByText(/2 results/iu)).toBeInTheDocument();
+		});
+
+		it("uses the singular for one result and flags a capped page", async () => {
+			renderPanel();
+			const input = screen.getByPlaceholderText(/search your notes/iu);
+			fireEvent.change(input, { target: { value: "one" } });
+			expect(await screen.findByText("1 result")).toBeInTheDocument();
+			fireEvent.change(input, { target: { value: "many" } });
+			expect(await screen.findByText("20 results (first 20)")).toBeInTheDocument();
 		});
 
 		// The API has always returned `folder` and the row never showed it, so two

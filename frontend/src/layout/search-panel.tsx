@@ -12,8 +12,12 @@ import {
 	ComboboxItem,
 	ComboboxList,
 } from "@/components/ui/combobox";
+import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useT } from "@/i18n/locale-provider";
+import { msg } from "@/i18n/msg";
+import { Trans } from "@/i18n/trans";
 import { noteName } from "@/lib/note-name";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 import {
@@ -42,16 +46,16 @@ type DatePreset = "any" | "7d" | "30d" | "year" | "custom";
 type DateField = "updated" | "created";
 
 const DATE_PRESETS: ReadonlyArray<{ id: DatePreset; label: string }> = [
-	{ id: "any", label: "Any time" },
-	{ id: "7d", label: "7 days" },
-	{ id: "30d", label: "30 days" },
-	{ id: "year", label: "This year" },
-	{ id: "custom", label: "Custom…" },
+	{ id: "any", label: msg("Any time") },
+	{ id: "7d", label: msg("7 days") },
+	{ id: "30d", label: msg("30 days") },
+	{ id: "year", label: msg("This year") },
+	{ id: "custom", label: msg("Custom…") },
 ];
 
 const DATE_FIELDS: ReadonlyArray<{ id: DateField; label: string }> = [
-	{ id: "updated", label: "Updated" },
-	{ id: "created", label: "Created" },
+	{ id: "updated", label: msg("Updated") },
+	{ id: "created", label: msg("Created") },
 ];
 
 /**
@@ -167,9 +171,6 @@ function FieldHelp({ question, children }: { question: string; children: ReactNo
 const chipClasses =
 	"inline-block rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground transition-colors peer-checked:border-primary/40 peer-checked:bg-primary/15 peer-checked:text-primary peer-focus-visible:ring-2 peer-focus-visible:ring-ring hover:bg-accent";
 
-const filterInputClasses =
-	"rounded-md border border-border bg-background px-2 py-1 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring";
-
 /**
  * `hideHeader` is for the mobile drawer, which supplies its own titled header
  * and a close button — rendering a second one inside the panel stacked two
@@ -182,6 +183,7 @@ function SearchPanel({
 	hideHeader?: boolean;
 	onNavigate?: () => void;
 }) {
+	const { t, tn, renderedLocale } = useT();
 	const { setView } = useRailView();
 	const location = useLocation();
 	const { data: folders } = useFolders();
@@ -232,7 +234,9 @@ function SearchPanel({
 	// A capped user's un-indexed notes are simply absent from results. Without
 	// this the only signal is an empty result list, which reads as "search is
 	// broken" rather than "this note is not indexed yet".
-	const unsearchable = indexStatus ? unsearchableNotesNotice(indexStatus) : null;
+	const unsearchable = indexStatus
+		? unsearchableNotesNotice(indexStatus, tn, renderedLocale)
+		: null;
 	const [recent, setRecent] = useState<string[]>(() => readRecent());
 
 	const inputRef = useRef<HTMLInputElement>(null);
@@ -253,6 +257,11 @@ function SearchPanel({
 
 	const close = () => setView("files");
 	const resultCount = results?.length ?? 0;
+	// The backend caps at 20, so a bare "20" would read as the whole truth
+	// rather than a page of it.
+	const countText = tn({ one: "{count} result", other: "{count} results" }, resultCount);
+	const resultsLabel =
+		resultCount >= SEARCH_LIMIT ? t("{results} (first 20)", { results: countText }) : countText;
 
 	/**
 	 * Drive the result list from the input, Obsidian-style — without this you
@@ -292,14 +301,14 @@ function SearchPanel({
 			{hideHeader ? null : (
 				<header className="flex shrink-0 items-center justify-between border-border border-b py-1 pr-1 pl-3">
 					<h2 className="font-semibold text-muted-foreground text-xs uppercase tracking-wide">
-						Search
+						{t("Search")}
 					</h2>
 					<div className="flex items-center">
 						<Button
 							variant="ghost"
 							size="icon-sm"
-							aria-label="Close search"
-							title="Return to files"
+							aria-label={t("Close search")}
+							title={t("Return to files")}
 							onClick={close}
 						>
 							<X className="size-4" />
@@ -313,7 +322,7 @@ function SearchPanel({
 					<SearchField
 						className="flex-1"
 						ref={inputRef}
-						placeholder="Search your notes…"
+						placeholder={t("Search your notes…")}
 						value={input}
 						onChange={(e) => {
 							setInput(e.target.value);
@@ -323,22 +332,22 @@ function SearchPanel({
 						}}
 						onKeyDown={onInputKeyDown}
 					/>
-					<button
+					<Button
 						type="button"
+						variant="outline"
+						size="icon"
 						// Icon-only, so the count has to reach a screen reader through the
 						// label — aria-label overrides the badge text for the accessible
 						// name, it does not append to it.
-						aria-label={activeCount > 0 ? `Filters, ${activeCount} active` : "Filters"}
+						aria-label={
+							activeCount > 0 ? t("Filters, {count} active", { count: activeCount }) : t("Filters")
+						}
 						aria-expanded={filtersOpen}
-						title="Filters"
+						title={t("Filters")}
 						onClick={() => setFiltersOpen((open) => !open)}
-						className={`relative shrink-0 rounded-md border p-1.5 transition-colors hover:bg-accent ${
-							activeCount > 0 || filtersOpen
-								? "border-primary/40 bg-primary/10 text-primary"
-								: "border-border text-muted-foreground hover:text-foreground"
-						}`}
+						className="relative"
 					>
-						<SlidersHorizontal className="size-4" />
+						<SlidersHorizontal />
 						{/* The count is what keeps a COLLAPSED panel honest: without it a
 						    filter left on silently narrows every later search. */}
 						{activeCount > 0 ? (
@@ -346,32 +355,37 @@ function SearchPanel({
 								{activeCount}
 							</span>
 						) : null}
-					</button>
+					</Button>
 				</div>
 				{filtersOpen ? (
 					<div className="mt-2 space-y-3">
 						<div className="space-y-1">
 							<div className="flex items-center gap-1.5">
 								<label htmlFor={TYPE_FILTER_ID} className="text-muted-foreground text-xs">
-									Type
+									{t("Type")}
 								</label>
-								<FieldHelp question="What is type?">
-									We index each note&apos;s <code>type</code> separately, so adding one to your
-									notes can improve your searches. Filter to a type here to look only at notes of
-									that kind.
+								<FieldHelp question={t("What is type?")}>
+									<Trans
+										text="We index each note's {type} separately, so adding one to your notes can improve your searches. Filter to a type here to look only at notes of that kind."
+										slots={{ type: <code>type</code> }}
+									/>
 									<br />
 									<br />
-									It is also the one field required by the{" "}
-									<a
-										href="https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf"
-										target="_blank"
-										rel="noreferrer noopener"
-										className="text-primary underline underline-offset-2"
-									>
-										Open Knowledge Format
-									</a>
-									, the open standard Engram follows — so filling it in keeps your notes portable to
-									anything else that reads OKF.
+									<Trans
+										text="It is also the one field required by the {okf}, the open standard Engram follows — so filling it in keeps your notes portable to anything else that reads OKF."
+										slots={{
+											okf: (
+												<a
+													href="https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf"
+													target="_blank"
+													rel="noreferrer noopener"
+													className="text-primary underline underline-offset-2"
+												>
+													{t("Open Knowledge Format")}
+												</a>
+											),
+										}}
+									/>
 								</FieldHelp>
 							</div>
 							{/* `type` is stored encrypted behind an HMAC blind index, which
@@ -394,12 +408,12 @@ function SearchPanel({
 									// Not redundant: Base UI runs the popup's focus manager in modal
 									// mode, which aria-hides the sibling label while the list is OPEN —
 									// so a label-only name vanishes exactly while you are choosing.
-									aria-label="Type"
-									placeholder="Any type"
+									aria-label={t("Type")}
+									placeholder={t("Any type")}
 									showClear={Boolean(type)}
 								/>
 								<ComboboxContent>
-									<ComboboxEmpty>No matching type</ComboboxEmpty>
+									<ComboboxEmpty>{t("No matching type")}</ComboboxEmpty>
 									<ComboboxList>
 										{(item: string) => (
 											<ComboboxItem key={item} value={item}>
@@ -412,7 +426,7 @@ function SearchPanel({
 						</div>
 						<div className="space-y-1">
 							<label htmlFor={FOLDER_FILTER_ID} className="block text-muted-foreground text-xs">
-								Folder
+								{t("Folder")}
 							</label>
 							<Combobox
 								items={folderNames}
@@ -425,12 +439,12 @@ function SearchPanel({
 									// Not redundant: Base UI runs the popup's focus manager in modal
 									// mode, which aria-hides the sibling label while the list is OPEN —
 									// so a label-only name vanishes exactly while you are choosing.
-									aria-label="Folder"
-									placeholder="Any folder"
+									aria-label={t("Folder")}
+									placeholder={t("Any folder")}
 									showClear={Boolean(folder)}
 								/>
 								<ComboboxContent>
-									<ComboboxEmpty>No matching folder</ComboboxEmpty>
+									<ComboboxEmpty>{t("No matching folder")}</ComboboxEmpty>
 									<ComboboxList>
 										{(item: string) => (
 											<ComboboxItem key={item} value={item}>
@@ -443,7 +457,7 @@ function SearchPanel({
 						</div>
 						<div className="space-y-1">
 							<label htmlFor={TAG_FILTER_ID} className="block text-muted-foreground text-xs">
-								Tags
+								{t("Tags")}
 							</label>
 							{/* The SAME ComboboxInput as Type and Folder, deliberately. shadcn
 							    only documents `multiple` with ComboboxChips, but that container
@@ -464,12 +478,12 @@ function SearchPanel({
 									// Not redundant: Base UI runs the popup's focus manager in modal
 									// mode, which aria-hides the sibling label while the list is OPEN —
 									// so a label-only name vanishes exactly while you are choosing.
-									aria-label="Tags"
-									placeholder="Any tags"
+									aria-label={t("Tags")}
+									placeholder={t("Any tags")}
 									showClear={tags.length > 0}
 								/>
 								<ComboboxContent>
-									<ComboboxEmpty>No matching tag</ComboboxEmpty>
+									<ComboboxEmpty>{t("No matching tag")}</ComboboxEmpty>
 									<ComboboxList>
 										{(item: string) => (
 											<ComboboxItem key={item} value={item}>
@@ -487,8 +501,8 @@ function SearchPanel({
 												{tag}
 												<button
 													type="button"
-													aria-label={`Remove ${tag}`}
-													onClick={() => setTags(tags.filter((t) => t !== tag))}
+													aria-label={t("Remove {tag}", { tag })}
+													onClick={() => setTags(tags.filter((other) => other !== tag))}
 													className="rounded-sm opacity-60 hover:opacity-100"
 												>
 													<X className="size-3" />
@@ -505,10 +519,11 @@ function SearchPanel({
 						    buttons with aria-pressed would need a roving tabindex to match. */}
 						<fieldset>
 							<legend className="flex flex-wrap items-center gap-1.5 pb-1 text-muted-foreground text-xs">
-								Modified
-								<FieldHelp question="What does modified mean?">
-									The date recorded inside the note itself, not when the file was last saved — so a
-									note you edited a minute ago only matches if its own date says so.
+								{t("Modified")}
+								<FieldHelp question={t("What does modified mean?")}>
+									{t(
+										"The date recorded inside the note itself, not when the file was last saved — so a note you edited a minute ago only matches if its own date says so.",
+									)}
 								</FieldHelp>
 							</legend>
 							<div className="flex flex-wrap gap-1">
@@ -521,7 +536,7 @@ function SearchPanel({
 											checked={preset === id}
 											onChange={() => setPreset(id)}
 										/>
-										<span className={chipClasses}>{label}</span>
+										<span className={chipClasses}>{t(label)}</span>
 									</label>
 								))}
 							</div>
@@ -529,7 +544,7 @@ function SearchPanel({
 						{preset === "custom" ? (
 							<div className="space-y-2">
 								<fieldset>
-									<legend className="pb-1 text-muted-foreground text-xs">Applies to</legend>
+									<legend className="pb-1 text-muted-foreground text-xs">{t("Applies to")}</legend>
 									<div className="flex gap-1">
 										{DATE_FIELDS.map(({ id, label }) => (
 											<label key={id} className="cursor-pointer">
@@ -540,30 +555,28 @@ function SearchPanel({
 													checked={dateField === id}
 													onChange={() => setDateField(id)}
 												/>
-												<span className={chipClasses}>{label}</span>
+												<span className={chipClasses}>{t(label)}</span>
 											</label>
 										))}
 									</div>
 								</fieldset>
 								<div className="grid grid-cols-2 gap-2">
 									<label className="flex flex-col gap-1 text-muted-foreground text-xs">
-										From
-										<input
+										{t("From")}
+										<Input
 											type="date"
 											// CONTROLLED. Uncontrolled, these kept their text after a
 											// reset and showed a filter that was no longer applied.
 											value={customFrom}
 											onChange={(e) => setCustomFrom(e.target.value)}
-											className={filterInputClasses}
 										/>
 									</label>
 									<label className="flex flex-col gap-1 text-muted-foreground text-xs">
-										To
-										<input
+										{t("To")}
+										<Input
 											type="date"
 											value={customTo}
 											onChange={(e) => setCustomTo(e.target.value)}
-											className={filterInputClasses}
 										/>
 									</label>
 								</div>
@@ -573,13 +586,9 @@ function SearchPanel({
 						    badge says a filter is on, and this is where you come to change
 						    one anyway. */}
 						{activeCount > 0 ? (
-							<button
-								type="button"
-								onClick={clearFilters}
-								className="rounded-md px-1.5 py-1 text-muted-foreground text-xs hover:bg-accent hover:text-foreground"
-							>
-								Clear filters
-							</button>
+							<Button type="button" variant="ghost" size="sm" onClick={clearFilters}>
+								{t("Clear filters")}
+							</Button>
 						) : null}
 					</div>
 				) : null}
@@ -589,13 +598,17 @@ function SearchPanel({
 					<RecentList recent={recent} onPick={(q) => setInput(q)} />
 				)}
 				{Boolean(deferred && isLoading) && (
-					<p className="px-3 py-2 text-muted-foreground text-xs">Searching…</p>
+					<p className="px-3 py-2 text-muted-foreground text-xs">{t("Searching…")}</p>
 				)}
 				{error ? (
-					<p className="px-3 py-2 text-destructive text-xs">Search failed: {error.message}</p>
+					<p className="px-3 py-2 text-destructive text-xs">
+						{t("Search failed: {message}", { message: error.message })}
+					</p>
 				) : null}
 				{deferred && results && results.length === 0 && !isLoading && (
-					<p className="px-3 py-2 text-muted-foreground text-xs">No results for "{deferred}"</p>
+					<p className="px-3 py-2 text-muted-foreground text-xs">
+						{t("No results for \u0022{term}\u0022", { term: deferred })}
+					</p>
 				)}
 				{unsearchable && deferred && !isLoading ? (
 					<p className="px-3 pb-2 text-muted-foreground text-xs">
@@ -608,17 +621,14 @@ function SearchPanel({
 							// opens behind a still-open sheet. ResultRow already does this.
 							onClick={onNavigate}
 						>
-							Upgrade to search everything
+							{t("Upgrade to search everything")}
 						</Link>
 					</p>
 				) : null}
 				{results && results.length > 0 && (
 					<>
 						<p className="px-3 pt-2 text-muted-foreground text-xs" aria-live="polite">
-							{results.length} {results.length === 1 ? "result" : "results"}
-							{/* The backend caps at 20, so a bare "20" would read as the
-							    whole truth rather than a page of it. */}
-							{results.length >= SEARCH_LIMIT ? " (first 20)" : ""}
+							{resultsLabel}
 						</p>
 						<ul className="space-y-1 p-2">
 							{results.map((r, i) => (
@@ -640,10 +650,11 @@ function SearchPanel({
 }
 
 function RecentList({ recent, onPick }: { recent: string[]; onPick: (q: string) => void }) {
+	const { t } = useT();
 	return (
 		<section className="p-2">
 			<p className="px-1 pb-1 font-semibold text-muted-foreground text-xs uppercase tracking-wide">
-				Recent
+				{t("Recent")}
 			</p>
 			<ul className="space-y-0.5">
 				{recent.map((q) => (

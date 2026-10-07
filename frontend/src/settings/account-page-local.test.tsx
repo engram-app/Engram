@@ -8,6 +8,9 @@ vi.mock("./account/profile-section-local", () => ({
 vi.mock("./account/appearance-section", () => ({
 	AppearanceSection: () => <div data-testid="appearance" />,
 }));
+vi.mock("./account/language-section", () => ({
+	LanguageSection: () => <div data-testid="language" />,
+}));
 vi.mock("./account/email-readonly-section", () => ({
 	EmailReadonlySection: () => <div data-testid="email" />,
 }));
@@ -22,7 +25,7 @@ describe("AccountPageLocal", () => {
 	it("renders every section in order", () => {
 		render(<AccountPageLocal />);
 		expect(screen.getByRole("heading", { name: /account/iu })).toBeInTheDocument();
-		for (const id of ["profile", "appearance", "email", "password", "danger"]) {
+		for (const id of ["profile", "appearance", "language", "email", "password", "danger"]) {
 			expect(screen.getByTestId(id)).toBeInTheDocument();
 		}
 	});

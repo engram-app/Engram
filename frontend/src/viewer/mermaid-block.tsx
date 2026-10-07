@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { useT } from "@/i18n/locale-provider";
 import { useTheme } from "../theme/theme-provider";
 import { nextMermaidId, renderMermaid } from "./mermaid-render";
 
 export default function MermaidBlock({ code }: { code: string }) {
+	const { t } = useT();
 	const ref = useRef<HTMLDivElement>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [id] = useState(nextMermaidId);
@@ -41,7 +43,7 @@ export default function MermaidBlock({ code }: { code: string }) {
 		<>
 			{error ? (
 				<pre className="rounded border border-red-300 bg-red-50 p-3 text-red-700 text-xs dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
-					{`Mermaid error: ${error}\n\n${code}`}
+					{t("Mermaid error: {error}\n\n{code}", { error, code })}
 				</pre>
 			) : null}
 			<div ref={ref} className={`mermaid my-4 justify-center ${error ? "hidden" : "flex"}`} />

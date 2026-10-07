@@ -9,6 +9,8 @@ import {
 import { useCallback, useMemo } from "react";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
+import { useT } from "@/i18n/locale-provider";
+import type { Translate } from "@/i18n/translate";
 import { collideBump } from "@/lib/collide-bump";
 import { noteName } from "@/lib/note-name";
 import { encodePathSegments } from "@/lib/path";
@@ -111,27 +113,29 @@ interface CreateNoteContext extends TreeContext {
 // Shared by note rename (CRDT → CrdtOpError) and folder/attachment rename
 // (REST → ApiError). A note's target-occupied conflict surfaces as
 // crdt_create's `create_failed`; the REST paths use HTTP 409/404.
-function renameErrorToast(err: unknown, kind: "file" | "folder") {
-	const noun = kind === "file" ? "note" : "folder";
+function renameErrorToast(err: unknown, kind: "file" | "folder", t: Translate) {
 	const conflict =
 		(err instanceof ApiError && err.status === 409) ||
 		(err instanceof CrdtOpError && err.reason === "create_failed");
 	const gone = err instanceof ApiError && err.status === 404;
 	if (conflict) {
-		toast.error(`A ${noun} with that name already exists.`);
+		toast.error(
+			kind === "file"
+				? t("A note with that name already exists.")
+				: t("A folder with that name already exists."),
+		);
 	} else if (gone) {
-		toast.error(`${noun[0]?.toUpperCase()}${noun.slice(1)} no longer exists.`);
+		toast.error(kind === "file" ? t("Note no longer exists.") : t("Folder no longer exists."));
 	} else {
-		toast.error("Rename failed.");
+		toast.error(t("Rename failed."));
 	}
 }
 
-function deleteErrorToast(err: ApiError, kind: "file" | "folder") {
-	const noun = kind === "file" ? "Note" : "Folder";
+function deleteErrorToast(err: ApiError, kind: "file" | "folder", t: Translate) {
 	if (err.status === 404) {
-		toast.error(`${noun} no longer exists.`);
+		toast.error(kind === "file" ? t("Note no longer exists.") : t("Folder no longer exists."));
 	} else {
-		toast.error("Delete failed.");
+		toast.error(t("Delete failed."));
 	}
 }
 
@@ -821,6 +825,7 @@ export function useUpdateNote() {
 }
 
 export function useCreateNote() {
+	const { t } = useT();
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
 	const navigate = useNavigate();
@@ -882,8 +887,8 @@ export function useCreateNote() {
 				return;
 			}
 			const now = new Date().toISOString();
-			const patched = patchTree(qc, vaultId, (t) =>
-				upsertNote(t, {
+			const patched = patchTree(qc, vaultId, (prev) =>
+				upsertNote(prev, {
 					// The id we're about to send, not a throwaway: the row is
 					// addressable the moment it appears, so clicking it before the ack
 					// opens the right note instead of a dead `optimistic-…` route.
@@ -899,9 +904,9 @@ export function useCreateNote() {
 		onSuccess: ({ id, path }, vars) => {
 			// Settle the pending row onto the confirmed path before the refetch
 			// lands, so the row never flashes out and back.
-			patchTree(qc, vaultId, (t) => {
-				const row = t.notes.find((n) => n.id === id);
-				return row ? upsertNote(t, { ...row, path, pending: false }) : t;
+			patchTree(qc, vaultId, (prev) => {
+				const row = prev.notes.find((n) => n.id === id);
+				return row ? upsertNote(prev, { ...row, path, pending: false }) : prev;
 			});
 			invalidateVaultTree(qc, vaultId);
 			// Keep the path-keyed list fresh for the dashboard folder-browse view.
@@ -929,17 +934,18 @@ export function useCreateNote() {
 		onError: (err, _vars, ctx) => {
 			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
 			if (err instanceof CrdtOpError && err.reason === "notes_cap_reached") {
-				toast.error("You've hit your note limit — upgrade to add more.");
+				toast.error(t("You've hit your note limit — upgrade to add more."));
 			} else if (err instanceof CrdtOpError && err.reason === "disconnected") {
-				toast.error("Reconnecting — can't create notes while offline.");
+				toast.error(t("Reconnecting — can't create notes while offline."));
 			} else {
-				toast.error("Couldn't create the note. Try again.");
+				toast.error(t("Couldn't create the note. Try again."));
 			}
 		},
 	});
 }
 
 export function useCreateFolder() {
+	const { t } = useT();
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
 
@@ -979,11 +985,11 @@ export function useCreateFolder() {
 		},
 		onError: (err) => {
 			if (err instanceof ApiError && err.status === 422) {
-				toast.error("That folder name isn't allowed.");
+				toast.error(t("That folder name isn't allowed."));
 			} else if (err instanceof ApiError && err.status === 403) {
-				toast.error("You don't have permission to create folders here.");
+				toast.error(t("You don't have permission to create folders here."));
 			} else {
-				toast.error("Couldn't create the folder. Try again.");
+				toast.error(t("Couldn't create the folder. Try again."));
 			}
 		},
 	});
@@ -1790,6 +1796,7 @@ export function useConfirmPlanChange() {
 // reconciled.
 
 export function useRenameNote() {
+	const { t } = useT();
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
 	return useMutation<
@@ -1812,12 +1819,14 @@ export function useRenameNote() {
 		// no second cache to write, and no second rollback to keep in step.
 		onMutate: async ({ id, new_path }) => {
 			const tree = await snapshotTree(qc, vaultId);
-			const patched = patchTree(qc, vaultId, (t) => renameNotes(t, [{ id, newPath: new_path }]));
+			const patched = patchTree(qc, vaultId, (prev) =>
+				renameNotes(prev, [{ id, newPath: new_path }]),
+			);
 			return { tree, patched };
 		},
 		onError: (err, _vars, ctx) => {
 			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
-			renameErrorToast(err, "file");
+			renameErrorToast(err, "file", t);
 		},
 		onSettled: () => {
 			invalidateVaultTree(qc, vaultId);
@@ -1828,6 +1837,7 @@ export function useRenameNote() {
 }
 
 export function useRenameFolder() {
+	const { t } = useT();
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
 	return useMutation<
@@ -1850,8 +1860,8 @@ export function useRenameFolder() {
 		// refetched on next expand.
 		onMutate: async ({ old_path, new_path }) => {
 			const tree = await snapshotTree(qc, vaultId);
-			const patched = patchTree(qc, vaultId, (t) =>
-				renameFolders(t, [{ oldPath: old_path, newPath: new_path }]),
+			const patched = patchTree(qc, vaultId, (prev) =>
+				renameFolders(prev, [{ oldPath: old_path, newPath: new_path }]),
 			);
 			// Deliberately NOT re-pathing descendants' `['note', vaultId, id]`
 			// entries: there is no rollback wired for them, so an optimistic flip
@@ -1861,7 +1871,7 @@ export function useRenameFolder() {
 		},
 		onError: (err, _vars, ctx) => {
 			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
-			renameErrorToast(err, "folder");
+			renameErrorToast(err, "folder", t);
 		},
 		onSettled: () => {
 			invalidateVaultTree(qc, vaultId);
@@ -1872,6 +1882,7 @@ export function useRenameFolder() {
 }
 
 export function useDeleteNote() {
+	const { t } = useT();
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
 	return useMutation<
@@ -1894,7 +1905,7 @@ export function useDeleteNote() {
 			await qc.cancelQueries({ queryKey: noteKey });
 			const prevNote = qc.getQueryData<Note>(noteKey);
 
-			const patched = patchTree(qc, vaultId, (t) => removeNotes(t, [id]));
+			const patched = patchTree(qc, vaultId, (prev) => removeNotes(prev, [id]));
 
 			// invalidateQueries, not removeQueries: removeQueries destroys the
 			// cached Query object outright, which orphans any CURRENTLY MOUNTED
@@ -1916,7 +1927,7 @@ export function useDeleteNote() {
 			if (ctx.prevNote !== undefined) {
 				qc.setQueryData(["note", vaultId, ctx.noteId], ctx.prevNote);
 			}
-			deleteErrorToast(err, "file");
+			deleteErrorToast(err, "file", t);
 		},
 		onSettled: () => {
 			invalidateVaultTree(qc, vaultId);
@@ -1926,6 +1937,7 @@ export function useDeleteNote() {
 }
 
 export function useDeleteFolder() {
+	const { t } = useT();
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
 	return useMutation<{ deleted: boolean } | undefined, ApiError, { path: string }, TreeContext>({
@@ -1941,12 +1953,12 @@ export function useDeleteFolder() {
 			// attachments inside them, all go. Attachment-only folders included —
 			// they used to survive the optimistic patch and re-derive themselves
 			// from a stale attachments cache, undoing the delete on screen.
-			const patched = patchTree(qc, vaultId, (t) => removeFolders(t, [path]));
+			const patched = patchTree(qc, vaultId, (prev) => removeFolders(prev, [path]));
 			return { tree, patched };
 		},
 		onError: (err, _vars, ctx) => {
 			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
-			deleteErrorToast(err, "folder");
+			deleteErrorToast(err, "folder", t);
 		},
 		onSettled: () => {
 			invalidateVaultTree(qc, vaultId);
@@ -1968,6 +1980,7 @@ export function useDeleteFolder() {
 // replaced (via onSettled refetch); on error the placeholder is pulled.
 
 export function useDuplicateNote() {
+	const { t } = useT();
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
 	return useMutation<
@@ -1991,8 +2004,8 @@ export function useDuplicateNote() {
 			// onSuccess swaps it for the server-assigned id.
 			const placeholderId = `optimistic-${randomUuid()}`;
 			const now = new Date().toISOString();
-			const patched = patchTree(qc, vaultId, (t) =>
-				upsertNote(t, {
+			const patched = patchTree(qc, vaultId, (prev) =>
+				upsertNote(prev, {
 					id: placeholderId,
 					path: new_path,
 					pending: true,
@@ -2010,8 +2023,8 @@ export function useDuplicateNote() {
 			// `n.id` transitions smoothly (the settle refetch also runs; the swap
 			// avoids a momentary "missing note" flash).
 			const now = new Date().toISOString();
-			patchTree(qc, vaultId, (t) =>
-				upsertNote(removeNotes(t, [ctx.placeholderId]), {
+			patchTree(qc, vaultId, (prev) =>
+				upsertNote(removeNotes(prev, [ctx.placeholderId]), {
 					id: data.id,
 					path: data.path,
 					created_at: now,
@@ -2025,9 +2038,9 @@ export function useDuplicateNote() {
 				(err instanceof ApiError && err.status === 409) ||
 				(err instanceof CrdtOpError && err.reason === "create_failed");
 			if (conflict) {
-				toast.error("A note with that name already exists.");
+				toast.error(t("A note with that name already exists."));
 			} else {
-				toast.error("Failed to duplicate.");
+				toast.error(t("Failed to duplicate."));
 			}
 		},
 		onSettled: () => {
@@ -2054,6 +2067,7 @@ export function useDuplicateNote() {
 // folder-browse screen, which renders tags the tree payload doesn't carry.
 
 export function useBatchDeleteNotes() {
+	const { t } = useT();
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
 	return useMutation<{ deleted: number }, ApiError, { ids: string[] }, TreeContext>({
@@ -2066,7 +2080,7 @@ export function useBatchDeleteNotes() {
 		// selections appear.
 		mutationKey: [TREE_WRITE_KEY, vaultId],
 		meta: {
-			rebase: (t: VaultTree, v: { ids: string[] }) => removeNotes(t, v.ids),
+			rebase: (prev: VaultTree, v: { ids: string[] }) => removeNotes(prev, v.ids),
 		} satisfies TreeWriteMeta,
 		mutationFn: async ({ ids }) => {
 			await Promise.all(ids.map((id) => crdtDeleteNote(id)));
@@ -2074,7 +2088,7 @@ export function useBatchDeleteNotes() {
 		},
 		onMutate: async ({ ids }) => {
 			const tree = await snapshotTree(qc, vaultId);
-			const patched = patchTree(qc, vaultId, (t) => removeNotes(t, ids));
+			const patched = patchTree(qc, vaultId, (prev) => removeNotes(prev, ids));
 			// invalidateQueries, not removeQueries: removeQueries destroys the
 			// cached Query object outright, which orphans any CURRENTLY MOUNTED
 			// useNote(id) observer (e.g. NotePage on the note you just deleted) —
@@ -2087,7 +2101,7 @@ export function useBatchDeleteNotes() {
 		},
 		onError: (_err, _vars, ctx) => {
 			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
-			toast.error("Batch delete failed.");
+			toast.error(t("Batch delete failed."));
 		},
 		onSettled: () => {
 			// Reconcile after success AND partial failure — Promise.all is not
@@ -2099,6 +2113,7 @@ export function useBatchDeleteNotes() {
 }
 
 export function useBatchMoveNotes() {
+	const { t } = useT();
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
 	return useMutation<
@@ -2109,8 +2124,8 @@ export function useBatchMoveNotes() {
 	>({
 		mutationKey: [TREE_WRITE_KEY, vaultId],
 		meta: {
-			rebase: (t: VaultTree, v: { ids: string[]; target_folder: string }) =>
-				moveNotes(t, v.ids, v.target_folder),
+			rebase: (prev: VaultTree, v: { ids: string[]; target_folder: string }) =>
+				moveNotes(prev, v.ids, v.target_folder),
 		} satisfies TreeWriteMeta,
 		// Move = one crdt_create per id at `target_folder/<current basename>` (the
 		// rename-as-move relocate). `paths` (id → current path) MUST be resolved by
@@ -2136,7 +2151,7 @@ export function useBatchMoveNotes() {
 		// had a null id) no longer exist.
 		onMutate: async ({ ids, target_folder }) => {
 			const tree = await snapshotTree(qc, vaultId);
-			const patched = patchTree(qc, vaultId, (t) => moveNotes(t, ids, target_folder));
+			const patched = patchTree(qc, vaultId, (prev) => moveNotes(prev, ids, target_folder));
 			// Deliberately NOT re-pathing the moved notes' `['note', vaultId, id]`
 			// caches: no rollback is wired for them, so an optimistic flip would
 			// show an unconfirmed path if the move fails. The settle refetch
@@ -2145,7 +2160,7 @@ export function useBatchMoveNotes() {
 		},
 		onError: (_err, _vars, ctx) => {
 			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
-			toast.error("Batch move failed.");
+			toast.error(t("Batch move failed."));
 		},
 		onSettled: () => {
 			// crdt_create per id is non-atomic (Promise.all): a mid-batch reject
@@ -2159,6 +2174,7 @@ export function useBatchMoveNotes() {
 }
 
 export function useBatchDeleteFolders() {
+	const { t } = useT();
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
 	return useMutation<{ deleted: number }, ApiError, { ids: string[] }, TreeContext>({
@@ -2169,12 +2185,14 @@ export function useBatchDeleteFolders() {
 			// No descendant collection: `removeFolders` matches by path prefix, so
 			// the server's cascade and ours agree without walking a parent_id
 			// chain through rows whose ids are half null.
-			const patched = patchTree(qc, vaultId, (t) => removeFolders(t, folderPathsForIds(tree, ids)));
+			const patched = patchTree(qc, vaultId, (prev) =>
+				removeFolders(prev, folderPathsForIds(tree, ids)),
+			);
 			return { tree, patched };
 		},
 		onError: (_err, _vars, ctx) => {
 			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
-			toast.error("Batch delete failed.");
+			toast.error(t("Batch delete failed."));
 		},
 		onSettled: () => {
 			// Reconcile on both paths: a lost ack (server committed, client saw a
@@ -2187,6 +2205,7 @@ export function useBatchDeleteFolders() {
 }
 
 export function useBatchMoveFolders() {
+	const { t } = useT();
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
 	return useMutation<
@@ -2213,12 +2232,12 @@ export function useBatchMoveFolders() {
 				// undefined `patched` as exactly that and leaves the cache alone.
 				return { tree, patched: undefined };
 			}
-			const patched = patchTree(qc, vaultId, (t) => moveFolders(t, sources, target_parent));
+			const patched = patchTree(qc, vaultId, (prev) => moveFolders(prev, sources, target_parent));
 			return { tree, patched };
 		},
 		onError: (_err, _vars, ctx) => {
 			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
-			toast.error("Batch move failed.");
+			toast.error(t("Batch move failed."));
 		},
 		onSettled: () => {
 			// Reconcile on both paths: a lost ack (server committed, client saw a
@@ -2251,6 +2270,7 @@ export function useRenameAttachment() {
 }
 
 export function useBatchMoveAttachments() {
+	const { t } = useT();
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
 	return useMutation<{ moved: number }, ApiError, { paths: string[]; target_folder: string }>({
@@ -2270,12 +2290,13 @@ export function useBatchMoveAttachments() {
 		// Batch moves are fire-and-forget (.mutate, no caller .catch) — surface
 		// failures here, matching the note/folder batch hooks.
 		onError: () => {
-			toast.error("Batch move failed.");
+			toast.error(t("Batch move failed."));
 		},
 	});
 }
 
 export function useBatchDeleteAttachments() {
+	const { t } = useT();
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
 	return useMutation<{ deleted: number }, ApiError, { paths: string[] }>({
@@ -2289,7 +2310,7 @@ export function useBatchDeleteAttachments() {
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
 		},
 		onError: () => {
-			toast.error("Batch delete failed.");
+			toast.error(t("Batch delete failed."));
 		},
 	});
 }

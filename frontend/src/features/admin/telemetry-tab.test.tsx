@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { LocaleProvider, useT } from "@/i18n/locale-provider";
 import type { TelemetryState } from "./api";
 import TelemetryTab from "./TelemetryTab";
 
@@ -101,5 +102,34 @@ describe("TelemetryTab", () => {
 
 		await waitFor(() => expect(mockSet).toHaveBeenCalled());
 		expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(true);
+	});
+
+	it("fetches once across a catalog load and a language switch", async () => {
+		window.localStorage.setItem("engram:locale", "de");
+		mockGet.mockResolvedValue(state());
+		function Switch() {
+			const { setLocale } = useT();
+			return (
+				<button type="button" onClick={() => setLocale("fr")}>
+					french
+				</button>
+			);
+		}
+		render(
+			<LocaleProvider
+				loaders={{
+					de: async () => ({ default: { "Save failed": "Speichern fehlgeschlagen" } }),
+					fr: async () => ({ default: { "Save failed": "Échec de l'enregistrement" } }),
+				}}
+			>
+				<Switch />
+				<TelemetryTab />
+			</LocaleProvider>,
+		);
+		await screen.findByRole("checkbox");
+		await waitFor(() => expect(document.documentElement.lang).toBe("de"));
+		fireEvent.click(screen.getByRole("button", { name: "french" }));
+		await waitFor(() => expect(document.documentElement.lang).toBe("fr"));
+		expect(mockGet).toHaveBeenCalledTimes(1);
 	});
 });

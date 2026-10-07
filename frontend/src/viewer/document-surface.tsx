@@ -5,6 +5,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { useT } from "@/i18n/locale-provider";
 import {
 	clampDocumentWidth,
 	DEFAULT_DOCUMENT_WIDTH,
@@ -48,6 +49,7 @@ const HANDLE_SIDE: Record<Side, string> = {
 // note (not-found, etc.) sit on the same surface instead of the bare grid. Its
 // width is user-resizable from either edge (symmetrically, since it is centred).
 export function DocumentSurface({ children }: { children: ReactNode }) {
+	const { t } = useT();
 	const [width, setWidth] = useState(readDocumentWidth);
 	const [dragging, setDragging] = useState<Side | null>(null);
 	const wrapperRef = useRef<HTMLDivElement>(null);
@@ -134,7 +136,9 @@ export function DocumentSurface({ children }: { children: ReactNode }) {
 		<div
 			role="separator"
 			aria-orientation="vertical"
-			aria-label={`Resize document, ${side} edge`}
+			aria-label={
+				side === "left" ? t("Resize document, left edge") : t("Resize document, right edge")
+			}
 			aria-valuenow={Math.round(width)}
 			aria-valuemin={MIN_DOCUMENT_WIDTH}
 			aria-valuemax={MAX_DOCUMENT_WIDTH}

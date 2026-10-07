@@ -8,6 +8,7 @@ import { queryClient } from "./api/query-client";
 import { configPromise, type EngramConfig } from "./config";
 import { ConfigProvider } from "./config-context";
 import ErrorFallback from "./error-fallback";
+import { LocaleProvider } from "./i18n/locale-provider";
 import LoadingScreen from "./layout/loading-screen";
 import { createAppRouter, installAppRouter } from "./router";
 import { captureError } from "./sentry";
@@ -179,12 +180,16 @@ class RootErrorBoundary extends Component<{ children: ReactNode }, RootErrorBoun
 	}
 }
 
+// LocaleProvider is outermost so ErrorFallback and the top-level LoadingScreen
+// translate too. It needs nothing mounted below it (only captureError).
 createRoot(document.getElementById("root")!).render(
-	<RootErrorBoundary>
-		<StrictMode>
-			<Suspense fallback={<LoadingScreen />}>
-				<BootstrapGate />
-			</Suspense>
-		</StrictMode>
-	</RootErrorBoundary>,
+	<LocaleProvider>
+		<RootErrorBoundary>
+			<StrictMode>
+				<Suspense fallback={<LoadingScreen />}>
+					<BootstrapGate />
+				</Suspense>
+			</StrictMode>
+		</RootErrorBoundary>
+	</LocaleProvider>,
 );

@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { LocaleProvider } from "@/i18n/locale-provider";
 import { LIST_ROW_GAP, LIST_ROW_HEIGHT, listContainer, listRowClass } from "@/lib/ui-classes";
 import VaultSwitcher from "./vault-switcher";
 
@@ -299,5 +300,25 @@ describe("VaultSwitcher -- finding a vault among many", () => {
 		expect(
 			screen.getByRole("button", { name: /new vault/i }).closest('[data-slot="scroll-area"]'),
 		).toBeNull();
+	});
+});
+
+describe("VaultSwitcher: default vault name", () => {
+	it("shows the translated default for a vault stored as 'My Vault'", async () => {
+		window.localStorage.setItem("engram:locale", "de");
+		vaults = [{ id: "id-a", slug: "work", is_default: true, name: "My Vault", encrypted: true }];
+		const qc = new QueryClient();
+		render(
+			<LocaleProvider loaders={{ de: async () => ({ default: { "My Vault": "Mein Tresor" } }) }}>
+				<QueryClientProvider client={qc}>
+					<MemoryRouter initialEntries={["/v/work"]}>
+						<VaultSwitcher />
+					</MemoryRouter>
+				</QueryClientProvider>
+			</LocaleProvider>,
+		);
+		expect(await screen.findByText("Mein Tresor")).toBeInTheDocument();
+		vaults = allVaults;
+		window.localStorage.clear();
 	});
 });

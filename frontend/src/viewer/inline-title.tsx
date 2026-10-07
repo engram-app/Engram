@@ -1,3 +1,4 @@
+import { useT } from "@/i18n/locale-provider";
 import { RenameInput } from "./tree-actions/rename-input";
 
 interface Props {
@@ -37,9 +38,10 @@ export function InlineTitle({
 	onCommitRename,
 	onCancelRename,
 }: Props) {
+	const { t } = useT();
 	if (renaming) {
 		return (
-			<section className={FRAME} aria-label="Rename note">
+			<section className={FRAME} aria-label={t("Rename note")}>
 				<RenameInput
 					initial={name}
 					kind="file"
@@ -64,7 +66,7 @@ export function InlineTitle({
 				// which is the point — this should read as a line of text you can
 				// type into, not as a control that happens to look like a title.
 				className="block w-full cursor-text truncate text-left"
-				title="Click to rename"
+				title={t("Click to rename")}
 				onClick={onStartRename}
 			>
 				{name}

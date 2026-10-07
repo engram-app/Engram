@@ -1,6 +1,7 @@
 import { EditorView } from "@codemirror/view";
 import GithubSlugger from "github-slugger";
 import { useMemo } from "react";
+import { useT } from "@/i18n/locale-provider";
 import { useActiveEditor } from "./editor/active-editor-context";
 
 interface Heading {
@@ -46,6 +47,7 @@ function extractHeadings(markdown: string): Heading[] {
 }
 
 export default function NoteToc({ content }: { content: string }) {
+	const { t } = useT();
 	const headings = useMemo(() => extractHeadings(content), [content]);
 	const { getView } = useActiveEditor();
 
@@ -68,10 +70,10 @@ export default function NoteToc({ content }: { content: string }) {
 	}
 
 	return (
-		<nav aria-label="Table of contents" className="text-sm">
+		<nav aria-label={t("Table of contents")} className="text-sm">
 			<header className="border-border border-b px-3 py-2">
 				<p className="font-medium text-[10px] text-muted-foreground uppercase tracking-wide">
-					On this page
+					{t("On this page")}
 				</p>
 			</header>
 			<ul className="space-y-px py-2">

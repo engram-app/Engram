@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useT } from "@/i18n/locale-provider";
 import { cn } from "@/lib/utils";
 import type { PropertyType } from "./property-types";
 
@@ -22,6 +23,7 @@ const inputCls =
 	"w-full rounded-md border-0 bg-transparent py-1 pr-2 text-foreground text-sm outline-none";
 
 function ScalarField({ type, value, onCommit, onFocusChange, label }: FieldProps) {
+	const { t } = useT();
 	const initial = value === null || value === undefined ? "" : String(value);
 	const [draft, setDraft] = useState(initial);
 	const inputRef = useRef<HTMLInputElement>(null);
@@ -52,7 +54,7 @@ function ScalarField({ type, value, onCommit, onFocusChange, label }: FieldProps
 		<input
 			ref={inputRef}
 			type={htmlType}
-			aria-label={label ? `${label} value` : undefined}
+			aria-label={label ? t("{label} value", { label }) : undefined}
 			className={inputCls}
 			value={draft}
 			onChange={(e) => setDraft(e.target.value)}
@@ -93,6 +95,7 @@ interface ListFieldProps {
 }
 
 function ListField({ value, onCommit, onFocusChange, label }: ListFieldProps) {
+	const { t } = useT();
 	const [pending, setPending] = useState("");
 
 	const add = () => {
@@ -115,7 +118,7 @@ function ListField({ value, onCommit, onFocusChange, label }: ListFieldProps) {
 					{item}
 					<button
 						type="button"
-						aria-label={`Remove ${item}`}
+						aria-label={t("Remove {item}", { item })}
 						className="text-muted-foreground hover:text-foreground"
 						onClick={() => onCommit(value.filter((_, j) => j !== i))}
 					>
@@ -124,9 +127,9 @@ function ListField({ value, onCommit, onFocusChange, label }: ListFieldProps) {
 				</span>
 			))}
 			<input
-				aria-label={label ? `${label} value` : undefined}
+				aria-label={label ? t("{label} value", { label }) : undefined}
 				className={cn(inputCls, "w-24 flex-1")}
-				placeholder="Add item..."
+				placeholder={t("Add item...")}
 				value={pending}
 				onChange={(e) => setPending(e.target.value)}
 				onFocus={() => onFocusChange?.(true)}
@@ -143,12 +146,13 @@ function ListField({ value, onCommit, onFocusChange, label }: ListFieldProps) {
 }
 
 export function PropertyField({ type, value, onCommit, onFocusChange, label }: FieldProps) {
+	const { t } = useT();
 	if (type === "checkbox") {
 		return (
 			<Checkbox
 				checked={Boolean(value)}
 				onCheckedChange={(c) => onCommit(c === true)}
-				aria-label={label ? `${label} value` : "Toggle value"}
+				aria-label={label ? t("{label} value", { label }) : t("Toggle value")}
 			/>
 		);
 	}

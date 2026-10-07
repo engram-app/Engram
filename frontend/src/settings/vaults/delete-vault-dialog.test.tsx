@@ -34,6 +34,19 @@ describe("DeleteVaultDialog", () => {
 		expect(screen.getByText(/142/u)).toBeInTheDocument();
 	});
 
+	it("reads the note and attachment counts as one sentence, singular and plural", () => {
+		const { rerender } = render(<DeleteVaultDialog vault={vault} open onOpenChange={() => {}} />);
+		expect(screen.getByText("This vault holds 142 notes and 3 attachments.")).toBeInTheDocument();
+		rerender(
+			<DeleteVaultDialog
+				vault={{ ...vault, note_count: 1, attachment_count: 1 }}
+				open
+				onOpenChange={() => {}}
+			/>,
+		);
+		expect(screen.getByText("This vault holds 1 note and 1 attachment.")).toBeInTheDocument();
+	});
+
 	it("keeps the delete button disabled until the name is typed", async () => {
 		render(<DeleteVaultDialog vault={vault} open onOpenChange={() => {}} />);
 		const confirmBtn = screen.getByRole("button", { name: /delete vault/iu });

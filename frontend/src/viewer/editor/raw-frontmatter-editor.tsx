@@ -4,6 +4,7 @@ import { EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { useEffect, useRef, useState } from "react";
 import type * as Y from "yjs";
+import { useT } from "@/i18n/locale-provider";
 import { parseFrontmatter } from "../../crdt/frontmatter-codec";
 import {
 	applyParsedFrontmatter,
@@ -30,6 +31,7 @@ export function commitYaml(doc: Y.Doc, text: string): "ok" | "invalid" {
 }
 
 export function RawFrontmatterEditor({ doc }: { doc: Y.Doc }) {
+	const { t } = useT();
 	const hostRef = useRef<HTMLDivElement>(null);
 	const viewRef = useRef<EditorView | null>(null);
 	const [invalid, setInvalid] = useState(false);
@@ -96,12 +98,12 @@ export function RawFrontmatterEditor({ doc }: { doc: Y.Doc }) {
 	}, [doc]);
 
 	return (
-		<section aria-label="Frontmatter (raw YAML)">
+		<section aria-label={t("Frontmatter (raw YAML)")}>
 			<div className="select-none px-3 pt-2 font-mono text-muted-foreground text-xs">---</div>
 			<div ref={hostRef} className="px-1" />
 			<div className="select-none px-3 pb-2 font-mono text-muted-foreground text-xs">---</div>
 			{invalid ? (
-				<p className="px-3 pb-1 text-destructive text-xs">Invalid YAML — not saved yet</p>
+				<p className="px-3 pb-1 text-destructive text-xs">{t("Invalid YAML — not saved yet")}</p>
 			) : null}
 		</section>
 	);

@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type React from "react";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { LocaleProvider } from "@/i18n/locale-provider";
 import { track } from "../analytics/track";
 import type { BillingStatus, OnboardingStatus } from "../api/queries";
 // Import after mocks
@@ -252,5 +253,29 @@ describe("OnboardToolsPage: step-completion tracking", () => {
 				expect.objectContaining({ step: "tools" }),
 			),
 		);
+	});
+});
+
+describe("OnboardToolsPage: brand names are not translated", () => {
+	it("keeps the Continue tool's name when the Continue key is translated", async () => {
+		window.localStorage.setItem("engram:locale", "ja");
+		render(
+			wrap(
+				<LocaleProvider
+					loaders={{
+						ja: async () => ({
+							default: { Continue: "続ける", "Another MCP client": "別の MCP クライアント" },
+						}),
+					}}
+				>
+					<OnboardToolsPage />
+				</LocaleProvider>,
+			),
+		);
+		expect(
+			await screen.findByRole("checkbox", { name: "別の MCP クライアント" }),
+		).toBeInTheDocument();
+		expect(screen.getByRole("checkbox", { name: "Continue" })).toBeInTheDocument();
+		window.localStorage.clear();
 	});
 });
