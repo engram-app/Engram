@@ -116,6 +116,9 @@ defmodule EngramWeb.DeviceAuthController do
 
       {:error, :vault_not_found} ->
         conn |> put_status(403) |> json(%{error: "vault not found or not owned by user"})
+
+      {:error, :invalid_label} ->
+        conn |> put_status(422) |> json(%{error: "invalid_label"})
     end
   end
 

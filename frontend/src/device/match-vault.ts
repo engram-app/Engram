@@ -11,5 +11,5 @@ export function findMatchingVault<T extends { name: string }>(
 	}
 	const needle = wanted.toLowerCase();
 	const fits = vaults.filter((v) => v.name.trim().toLowerCase() === needle);
-	return fits.find((v) => v.name === wanted) ?? (fits.length === 1 ? fits[0] : undefined);
+	return fits.find((v) => v.name.trim() === wanted) ?? (fits.length === 1 ? fits[0] : undefined);
 }

@@ -31,8 +31,15 @@ export async function guessDeviceLabel(nav: BrowserInfo = navigator): Promise<st
 		return "iPhone";
 	}
 	if (/android/iu.test(ua)) {
-		const hinted = await nav.userAgentData?.getHighEntropyValues?.(["model"]).catch(() => null);
-		const model = hinted?.model?.trim() || ANDROID_MODEL.exec(ua)?.groups?.model?.trim();
+		// A cosmetic hint must never fail the page, so a throw (not just a
+		// rejection) from Client Hints falls back to the user agent.
+		let hinted: string | undefined;
+		try {
+			hinted = (await nav.userAgentData?.getHighEntropyValues?.(["model"]))?.model;
+		} catch {
+			hinted = undefined;
+		}
+		const model = hinted?.trim() || ANDROID_MODEL.exec(ua)?.groups?.model?.trim();
 		return isModelName(model) ? model : "Android device";
 	}
 	if (/mac os|macintosh/iu.test(ua)) {

@@ -16,6 +16,10 @@ describe("findMatchingVault", () => {
 		expect(findMatchingVault([v("1", "health"), v("2", "Health")], "Health")?.id).toBe("2");
 	});
 
+	it("treats a name with stray whitespace as exact", () => {
+		expect(findMatchingVault([v("1", "Notes "), v("2", "notes")], "Notes")?.id).toBe("1");
+	});
+
 	it("suggests nothing when several vaults fit and none is exact", () => {
 		expect(findMatchingVault([v("1", "health"), v("2", "HEALTH")], "Health")).toBeUndefined();
 	});

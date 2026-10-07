@@ -47,6 +47,18 @@ describe("guessDeviceLabel", () => {
 		expect(label).toBe("Pixel 8");
 	});
 
+	it("falls back when Client Hints throw synchronously", async () => {
+		const label = await guessDeviceLabel({
+			userAgent: UA.pixel,
+			userAgentData: {
+				getHighEntropyValues: () => {
+					throw new Error("insecure context");
+				},
+			},
+		});
+		expect(label).toBe("Pixel 8");
+	});
+
 	it("tells an iPad in desktop mode from a Mac by touch support", async () => {
 		expect(await guessDeviceLabel({ userAgent: UA.mac, maxTouchPoints: 5 })).toBe("iPad");
 		expect(await guessDeviceLabel({ userAgent: UA.mac, maxTouchPoints: 0 })).toBe("Mac");
