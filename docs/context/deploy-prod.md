@@ -149,3 +149,17 @@ A green `deploy-prod.yml` means an engram-infra PR was opened. A green `terrafor
 
 - **Without AWS creds**, query Grafana Prometheus: `count by (role) (up{job="prometheus.scrape.engram_app"})`. A completed rolling replacement doubles each role's target count, then settles (observed `web 2 → 4 → 2`, `worker 1 → 2 → 1`). The worker doubling is what proves the Oban cron tier rolled, not just web; split `by (role)`, a total hides it.
 - **A frozen Loki frontier at night is not a logging outage.** Prod logs only on activity, so after a deploy's burst the newest line can stop for an hour or more. Before calling logs dead, run `query_loki_stats` over a comparable pre-deploy quiet window (same zeroes = normal), confirm the `up{...}` query above is current, and `curl -s https://api.engram.page/api/health` (reports `version` and `build_sha`).
+
+## `create-release-notes` 403 "Resource not accessible by integration"
+
+`GITHUB_TOKEN` with `contents: write` is not always enough to create a
+Release. For some target commits the Releases API accepts only
+`contents=write,workflows=write` (read it in the `X-Accepted-Github-Permissions`
+response header via `gh api -i`), and a workflow token can never hold
+`workflows`. release-v0.43.0 hit this on 2026-10-07: same token, command and
+settings as 0.42.0, yet 403 on its release commit and 201 on 0.42.0's. Which
+commits trip it is GitHub's call; do not guess from the range. The job creates
+the Release with the Engram App installation token (#1894). If it recurs, one
+probe shows the accepted permissions:
+`gh api -i -X POST repos/<repo>/releases -f tag_name=probe -f target_commitish=<sha> -F draft=true`
+(then delete the draft).
