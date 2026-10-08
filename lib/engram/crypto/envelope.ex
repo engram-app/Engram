@@ -2,7 +2,7 @@ defmodule Engram.Crypto.Envelope do
   @moduledoc """
   Stateless AES-256-GCM authenticated encryption with associated data (AAD),
   on the Rust engine (`Engram.Native.envelope_seal/4` / `envelope_open/4`,
-  `native/engram_native/src/envelope.rs`).
+  `native/engram_core/src/envelope.rs`).
 
   Ciphertext layout returned by `encrypt/3` is `ciphertext || tag` (16-byte
   tag suffix). The nonce field is returned separately; callers store it

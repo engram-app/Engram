@@ -23,7 +23,7 @@ use std::ops::DerefMut;
 use zstd::zstd_safe::{self, DCtx, DParameter, InBuffer, OutBuffer, ResetDirective};
 
 pub const TAG: usize = 16;
-const NONCE: usize = 12;
+pub const NONCE: usize = 12;
 const FORMAT_1: u8 = 1;
 const CODEC_RAW: u8 = 0;
 const CODEC_ZSTD: u8 = 1;
@@ -36,6 +36,11 @@ const LEVEL: i32 = 3;
 const WINDOW_LOG_MAX: u32 = 23;
 // :auto compresses a sample first; incompressible media skips the full pass.
 const SAMPLE: usize = 64 * 1024;
+
+/// Seal or open failed: a bad key, an input that does not authenticate or
+/// decode, or a failed allocation. Deliberately says no more than that.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Error;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Mode {
@@ -112,10 +117,10 @@ fn decompress(frame: &[u8]) -> Option<Vec<u8>> {
     })
 }
 
-fn cipher(key: &[u8]) -> Result<LessSafeKey, ()> {
+fn cipher(key: &[u8]) -> Result<LessSafeKey, Error> {
     UnboundKey::new(&AES_256_GCM, key)
         .map(LessSafeKey::new)
-        .map_err(|_| ())
+        .map_err(|_| Error)
 }
 
 fn f1_aad(aad: &[u8]) -> Vec<u8> {
@@ -134,9 +139,9 @@ fn seal_parts<B: DerefMut<Target = [u8]>>(
     head: &[u8],
     body: &[u8],
     alloc: impl FnOnce(usize) -> Option<B>,
-) -> Result<B, ()> {
+) -> Result<B, Error> {
     let n = head.len() + body.len();
-    let mut buf = alloc(n + TAG).ok_or(())?;
+    let mut buf = alloc(n + TAG).ok_or(Error)?;
     buf[..head.len()].copy_from_slice(head);
     buf[head.len()..n].copy_from_slice(body);
     let tag = c
@@ -145,32 +150,23 @@ fn seal_parts<B: DerefMut<Target = [u8]>>(
             Aad::from(aad),
             &mut buf[..n],
         )
-        .map_err(|_| ())?;
+        .map_err(|_| Error)?;
     buf[n..].copy_from_slice(tag.as_ref());
     Ok(buf)
 }
 
 /// `{ct_with_tag, nonce_field}`; `alloc` gives the ciphertext buffer.
+/// `nonce` must be fresh random bytes from the caller (the NIF draws them
+/// from the OS): a repeated nonce under one key breaks AES-GCM. The core
+/// draws no randomness itself, so a wasm32 build imports nothing for it.
 pub fn seal<B: DerefMut<Target = [u8]>>(
-    plain: &[u8],
-    key: &[u8],
-    aad: &[u8],
-    mode: Mode,
-    alloc: impl FnOnce(usize) -> Option<B>,
-) -> Result<(B, Vec<u8>), ()> {
-    let mut nonce = [0u8; NONCE];
-    getrandom::getrandom(&mut nonce).map_err(|_| ())?;
-    seal_with_nonce(plain, key, aad, mode, nonce, alloc)
-}
-
-pub fn seal_with_nonce<B: DerefMut<Target = [u8]>>(
     plain: &[u8],
     key: &[u8],
     aad: &[u8],
     mode: Mode,
     nonce: [u8; NONCE],
     alloc: impl FnOnce(usize) -> Option<B>,
-) -> Result<(B, Vec<u8>), ()> {
+) -> Result<(B, Vec<u8>), Error> {
     let c = cipher(key)?;
     // Empty input stays format 0: revisions' has_content? reads "ct is only a tag".
     if mode == Mode::None || plain.is_empty() {
@@ -214,10 +210,10 @@ pub fn open<B: DerefMut<Target = [u8]>>(
     key: &[u8],
     aad: &[u8],
     alloc: impl FnOnce(usize) -> Option<B>,
-) -> Result<Opened<B>, ()> {
+) -> Result<Opened<B>, Error> {
     let c = cipher(key)?;
     if ct.len() < TAG {
-        return Err(());
+        return Err(Error);
     }
     let (body, tag) = ct.split_at(ct.len() - TAG);
     let (nonce, aad, f1) = match nonce_field.len() {
@@ -225,21 +221,21 @@ pub fn open<B: DerefMut<Target = [u8]>>(
         l if l == NONCE + 1 && nonce_field[0] == FORMAT_1 => {
             (&nonce_field[1..], Cow::Owned(f1_aad(aad)), true)
         }
-        _ => return Err(()),
+        _ => return Err(Error),
     };
-    let nonce = Nonce::try_assume_unique_for_key(nonce).map_err(|_| ())?;
-    let tag = Tag::try_from(tag).map_err(|_| ())?;
-    let mut buf = alloc(body.len()).ok_or(())?;
+    let nonce = Nonce::try_assume_unique_for_key(nonce).map_err(|_| Error)?;
+    let tag = Tag::try_from(tag).map_err(|_| Error)?;
+    let mut buf = alloc(body.len()).ok_or(Error)?;
     buf.copy_from_slice(body);
     c.open_in_place_separate_tag(nonce, Aad::from(&*aad), tag, &mut buf, 0..)
-        .map_err(|_| ())?;
+        .map_err(|_| Error)?;
     if !f1 {
         return Ok(Opened::InPlace(buf, 0));
     }
     match buf.first().copied() {
         Some(CODEC_RAW) => Ok(Opened::InPlace(buf, 1)),
-        Some(CODEC_ZSTD) => decompress(&buf[1..]).map(Opened::Inflated).ok_or(()),
-        _ => Err(()),
+        Some(CODEC_ZSTD) => decompress(&buf[1..]).map(Opened::Inflated).ok_or(Error),
+        _ => Err(Error),
     }
 }
 
@@ -254,8 +250,8 @@ mod tests {
         Some(vec![0; n])
     }
 
-    fn seal(plain: &[u8], key: &[u8], aad: &[u8], mode: Mode) -> Result<(Vec<u8>, Vec<u8>), ()> {
-        super::seal(plain, key, aad, mode, vec)
+    fn seal(plain: &[u8], key: &[u8], aad: &[u8], mode: Mode) -> Result<(Vec<u8>, Vec<u8>), Error> {
+        seal_with_nonce(plain, key, aad, mode, [5; NONCE])
     }
 
     fn seal_with_nonce(
@@ -264,11 +260,22 @@ mod tests {
         aad: &[u8],
         mode: Mode,
         nonce: [u8; NONCE],
-    ) -> Result<(Vec<u8>, Vec<u8>), ()> {
-        super::seal_with_nonce(plain, key, aad, mode, nonce, vec)
+    ) -> Result<(Vec<u8>, Vec<u8>), Error> {
+        super::seal(plain, key, aad, mode, nonce, vec)
     }
 
-    fn open(ct: &[u8], nonce: &[u8], key: &[u8], aad: &[u8]) -> Result<Vec<u8>, ()> {
+    /// Incompressible bytes without an RNG dependency (xorshift64).
+    fn fill_noise(out: &mut [u8]) {
+        let mut x = 0x9e37_79b9_7f4a_7c15u64;
+        for b in out {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            *b = (x >> 24) as u8;
+        }
+    }
+
+    fn open(ct: &[u8], nonce: &[u8], key: &[u8], aad: &[u8]) -> Result<Vec<u8>, Error> {
         match super::open(ct, nonce, key, aad, vec)? {
             Opened::InPlace(buf, skip) => Ok(buf[skip..].to_vec()),
             Opened::Inflated(v) => Ok(v),
@@ -304,7 +311,7 @@ mod tests {
     #[test]
     fn incompressible_auto_stays_raw_but_versioned() {
         let mut noise = vec![0u8; 200_000];
-        getrandom::getrandom(&mut noise).unwrap();
+        fill_noise(&mut noise);
         let (ct, n) = rt(&noise, Mode::Auto);
         assert_eq!(n[0], 1);
         assert_eq!(ct.len(), noise.len() + 1 + TAG);
@@ -399,10 +406,9 @@ mod tests {
 
     #[test]
     fn a_frame_that_lies_about_its_size_fails_without_allocating_it() {
-        use crate::memory;
         let open_body = |frame: &[u8]| {
             let (ct, n) = seal_f1_body(&[&[CODEC_ZSTD][..], frame].concat(), b"a");
-            memory::measured(|| open(&ct, &n, &K, b"a"))
+            crate::peak::measured(|| open(&ct, &n, &K, b"a"))
         };
         // Truthful: the hand-built frame is valid.
         assert_eq!(open_body(&raw_frame(5, b"hello")).0.unwrap(), b"hello");
@@ -442,7 +448,7 @@ mod tests {
         // half random so they do not collapse to a tiny frame.
         for size in [1 << 20, 2 << 20, 3 << 20] {
             let mut plain = vec![0u8; size];
-            getrandom::getrandom(&mut plain[..size / 2]).unwrap();
+            fill_noise(&mut plain[..size / 2]);
             rt(&plain, Mode::Zstd);
         }
     }

@@ -2,7 +2,6 @@
 //! scheduler, and returns BEAM binaries (so its OUTPUT is visible to
 //! `:erlang.memory(:binary)`). See docs/context for the memory standard.
 mod chunker;
-mod envelope;
 mod frontmatter;
 mod json;
 mod links;
@@ -19,6 +18,7 @@ mod yaml;
 #[global_allocator]
 static ALLOCATOR: memory::Counting = memory::Counting;
 
+use engram_core::envelope;
 use hmac::{Hmac, KeyInit, Mac};
 use rustler::{
     Atom, Binary, Encoder, Env, Error, ListIterator, NewBinary, NifResult, OwnedBinary, Term,
@@ -433,15 +433,15 @@ fn envelope_mode(mode: Atom) -> NifResult<envelope::Mode> {
 
 /// `{ct_with_tag, nonce_field}`, or `:error` (bad key, no entropy). The
 /// ciphertext was sealed straight into its BEAM binary.
-fn sealed<'a>(env: Env<'a>, out: Result<(OwnedBinary, Vec<u8>), ()>) -> Term<'a> {
+fn sealed<'a>(env: Env<'a>, out: Result<(OwnedBinary, Vec<u8>), envelope::Error>) -> Term<'a> {
     match out {
         Ok((ct, nonce)) => (ct.release(env), to_binary(env, &nonce)).encode(env),
-        Err(()) => rustler::types::atom::error().encode(env),
+        Err(envelope::Error) => rustler::types::atom::error().encode(env),
     }
 }
 
 /// `Engram.Crypto.Envelope.encrypt/3`'s engine: optional zstd + AES-256-GCM
-/// (see envelope.rs for the formats), and the peak.
+/// (see native/engram_core/src/envelope.rs for the formats), and the peak.
 fn envelope_seal<'a>(
     env: Env<'a>,
     plain: Binary<'a>,
@@ -450,8 +450,12 @@ fn envelope_seal<'a>(
     mode: Atom,
 ) -> NifResult<(Term<'a>, usize)> {
     let mode = envelope_mode(mode)?;
-    let (out, peak) =
-        memory::measured(|| envelope::seal(&plain, &key, &aad, mode, OwnedBinary::new));
+    // The nonce comes from the OS here, at the edge: the core has no RNG.
+    let (out, peak) = memory::measured(|| {
+        let mut nonce = [0u8; envelope::NONCE];
+        getrandom::getrandom(&mut nonce).map_err(|_| envelope::Error)?;
+        envelope::seal(&plain, &key, &aad, mode, nonce, OwnedBinary::new)
+    });
     Ok((sealed(env, out), peak))
 }
 
@@ -470,10 +474,9 @@ fn envelope_seal_with_nonce_nif<'a>(
     nonce: Binary<'a>,
 ) -> NifResult<(Term<'a>, usize)> {
     let mode = envelope_mode(mode)?;
-    let nonce: [u8; 12] = nonce.as_slice().try_into().map_err(|_| Error::BadArg)?;
-    let (out, peak) = memory::measured(|| {
-        envelope::seal_with_nonce(&plain, &key, &aad, mode, nonce, OwnedBinary::new)
-    });
+    let nonce: [u8; envelope::NONCE] = nonce.as_slice().try_into().map_err(|_| Error::BadArg)?;
+    let (out, peak) =
+        memory::measured(|| envelope::seal(&plain, &key, &aad, mode, nonce, OwnedBinary::new));
     Ok((sealed(env, out), peak))
 }
 
@@ -501,7 +504,7 @@ fn envelope_open<'a>(
             }
         }
         Ok(envelope::Opened::Inflated(v)) => to_binary(env, &v).encode(env),
-        Err(()) => error(),
+        Err(envelope::Error) => error(),
     };
     (term, peak)
 }

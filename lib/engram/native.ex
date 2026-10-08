@@ -233,7 +233,7 @@ defmodule Engram.Native do
   @doc """
   `Engram.Crypto.Envelope.encrypt/3`'s engine: `{ct_with_tag, nonce_field}`.
   `mode` `:none` writes format 0 (byte for byte what `:crypto` wrote);
-  `:zstd`/`:auto` write format 1 (see `native/engram_native/src/envelope.rs`).
+  `:zstd`/`:auto` write format 1 (see `native/engram_core/src/envelope.rs`).
   Raises `ArgumentError` on a key that is not 32 bytes (as `:crypto` did) or
   if the OS RNG fails.
   """

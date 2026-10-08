@@ -9,8 +9,8 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 rustler = "0.38"
-ring = "0.17"
-zstd = "0.13"
+# The envelope engine (pure Rust, shared with the wasm clients).
+engram_core = { path = "../engram_core" }
 getrandom = "0.2"
 hmac = "0.13"
 sha2 = "0.11"
@@ -29,7 +29,3 @@ comrak = { version = "=0.55.0", default-features = false }
 [profile.release]
 lto = true
 codegen-units = 1
-
-[dev-dependencies]
-# Only for the ignored AES-GCM microbench (envelope.rs), ring's baseline.
-aes-gcm = "0.10"
