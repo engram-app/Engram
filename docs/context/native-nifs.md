@@ -56,7 +56,7 @@ bump.
 
 ### Envelope engine (`envelope_seal` / `envelope_open`, 2026-10-07, #1872)
 
-`Engram.Crypto.Envelope` runs on `native/engram_native/src/envelope.rs`
+`Engram.Crypto.Envelope` runs on `native/engram_core/src/envelope.rs`
 (AES-256-GCM via `ring` 0.17, zstd level 3). Format 0 is byte for byte what
 `:crypto` wrote (`test/support/crypto_oracle.ex` is the oracle; two KATs in
 envelope.rs pin it too); format 1 adds a codec byte and zstd. Formats and
@@ -67,6 +67,35 @@ always runs dirty, because a zstd body's size does not bound its work (a
 allocation from the declared size) and refuses a frame whose zstd window
 buffer would pass 2^23 (zstd's default allows 2^27; level 3 writes at most
 2^21).
+
+Where it lives: `native/engram_core` is a pure-Rust crate (no rustler, no
+RNG, `forbid(unsafe_code)` outside its tests) holding the engine, its KATs
+and engine tests, and the ignored bench. The plugin and web app will run the
+same crate as wasm32. `native/engram_native` depends on it by path and keeps
+only the NIF edge: atoms to `Mode`, BEAM binaries as the `alloc` buffers, the
+peak, and the nonce. The core's `seal` takes the 12-byte nonce from its
+caller; the NIF draws it from the OS with `getrandom` right before the call.
+Keep it that way: the core drawing its own randomness would make the wasm
+build import an entropy hook from its host. `ring` still links getrandom
+0.2, so engram_core enables getrandom's `custom` feature for
+wasm32-unknown-unknown only (a host hook nothing in the core calls); native
+builds are unaffected. Separate crates, not a Cargo workspace: each has its
+own `rust-toolchain.toml` (same pin) and `Cargo.lock` (same versions;
+Dependabot bumps both in one entry), and rustler needed no change. Rustler
+gathers path dependencies into the NIF module's `@external_resource`s, so a
+content edit under engram_core rebuilds the NIF on `mix compile` (touching a
+file without changing it does not; Mix compares digests).
+
+CI: verify.yml `unit-tests` runs fmt, clippy and `cargo test` for both
+crates, then a wasm guard: `cargo build --release --locked --target
+wasm32-unknown-unknown` for engram_core inside the pinned rust image (ring
+and zstd compile C, which for wasm32 needs clang; the runner user has no
+sudo). It builds the rlib only: no ABI layer, no wasm-bindgen yet. cron.yml
+`cargo audit` covers both lockfiles. Local repro of the guard:
+`docker run --rm -v $PWD/native:/w -w /w/engram_core rust:1.94.1-slim-bookworm
+bash -c 'apt-get update -qq && apt-get install -y -qq clang && rustup target
+add wasm32-unknown-unknown && cargo build --release --locked --target
+wasm32-unknown-unknown'`.
 
 zstd contexts are thread-local: once compression is on, each scheduler
 thread (normal and dirty) that ever sealed or opened a zstd row keeps one
@@ -82,7 +111,7 @@ plaintext as a sub-binary past the codec byte. Only the zstd paths add a copy
 
 Why `ring`, not RustCrypto `aes-gcm` (the first cut): pure-Rust microbench,
 `cargo test --release bench_aes_gcm -- --ignored --nocapture` in
-native/engram_native (2026-10-07, Xeon E5-2650 v2: AES-NI + PCLMUL, AVX, no
+native/engram_core (native/engram_native when measured, 2026-10-07, Xeon E5-2650 v2: AES-NI + PCLMUL, AVX, no
 AVX2/MOVBE; best of 15 x 50; each call copies the input into the work buffer,
 as the NIF does; load 1.1-1.5; microseconds, three runs):
 
