@@ -111,7 +111,7 @@ defmodule Engram.Crypto.CompressionGateTest do
       end
 
       opts = [
-        name: :"gate_#{elem(key, 1)}",
+        name: __MODULE__.Gate,
         key: key,
         monitor: false,
         refresh_ms: :timer.hours(1),
