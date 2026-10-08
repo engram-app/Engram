@@ -299,34 +299,34 @@ Decisions and rationale, including why each number is what it is:
 
 Self-host (no `PADDLE_API_KEY`): free, no billing wiring. See `docs/context/paddle-integration.md`.
 
-## Migration phases — the rule
+## Database changes are autonomous — the rule
 
-Every PR that adds or modifies a file under `priv/repo/migrations/` MUST carry
-exactly one `phase/*` label. CI hard-fails otherwise. Pick by *what the
-migration does*, not by what feels safer.
+Every database change, schema or data, must reach every install with **no
+human step**: no label to pick, no command to run after deploying, no env
+var to set. A SaaS deploy and a self-hoster pulling an image
+get the same result by booting the new release. There are no migration phase
+labels; PRs that touch `priv/repo/migrations/` need nothing but green CI.
 
-| Label | Use when |
-|-------|----------|
-| `phase/expand` | Adding a column (nullable, or with default), creating a table, adding a `CREATE INDEX CONCURRENTLY`. Forward-compatible with current main. |
-| `phase/migrate-data` | Backfilling a new column, dual-writing while reads switch over. No schema breakage. |
-| `phase/contract` | Dropping a column or table that nothing in `lib/` still uses. CI greps to verify. |
-| `phase/single-shot` | Combined expand+contract that requires downtime. Allowed only by explicit reviewer waiver — SaaS deploys WILL break during the rollout. |
+What that means in practice:
 
-## Expand/contract — the workflow
-
-When you need to change a column's name, type, or nullability:
-
-1. **Expand PR (release N).** Add the new shape next to the old shape. Code
-   writes both, reads the old. Label: `phase/expand`.
-2. **Migrate-data PR (release N+1, optional).** Backfill. Flip reads to the
-   new shape. Code writes both, reads the new. Label: `phase/migrate-data`.
-3. **Contract PR (release N+2).** Remove the code that used the old shape,
-   then drop the old shape in the migration. Label: `phase/contract`.
-
-The `contract-phase-references` CI gate enforces step 3: it AST-extracts the
-dropped identifiers from your migration and greps `lib/` for them. If any
-reference survives, the gate fails. Fix it by going back and shipping the
-code removal in an earlier release first.
+1. **Schema changes apply on boot.** The migration runs as part of the release
+   (`Engram.Release`), converges from any older release, and needs nothing
+   from the operator. Prefer additive changes (nullable column, new table,
+   `CREATE INDEX CONCURRENTLY`).
+2. **Backfills self-heal.** Do not ask anyone to run a task. Put the backfill
+   in the migration, or make it a `data_migrations` ledger entry that one
+   hourly runner finishes and then stops running
+   (`docs/context/data-migrations-ledger.md`); index changes use a version
+   stamp plus reconcile.
+3. **Dropping or renaming something code still reads breaks the previous
+   release** while a deploy is rolling. Ship the code that stops using it
+   first, then the migration that removes it. The `migration-gates` CI job
+   enforces this: it extracts what a new migration drops or renames (up
+   direction only) and fails if `lib/` still references it. A raw-SQL
+   `DROP COLUMN|TABLE` in `execute/1` cannot be checked, so use Ecto's
+   `remove`/`drop`, or add a `# safety_assured: "reason"` comment.
+4. **A migration must apply on top of the previous release's schema.** The
+   same job applies new migrations onto the last `release-v*` tag's schema.
 
 ## Data DML in migrations — FORCE RLS trap
 
@@ -338,11 +338,11 @@ binds owners too — dev/CI superusers mask it. Wrap the DML in
 fail-loud rowcount assertion. `migration_rls_lint_test.exs` enforces this;
 full pattern + rationale in `docs/context/migrations-force-rls-data-dml.md`.
 
-## Forbidden in expand-phase migrations
+## Forbidden in migrations
 
 Squawk (run via `priv/repo/lint_migrations.sh`) already hard-fails on:
 
-- `DROP COLUMN`, `DROP TABLE` — use `phase/contract` instead
+- `DROP COLUMN`, `DROP TABLE` — only after a release that stops using it (see the rule above); name the file `*_drops.exs` so Squawk defers the drop rules to the CI reference check
 - `ALTER COLUMN ... TYPE` on a non-trivial change — table rewrite, locks
 - `CREATE INDEX` without `CONCURRENTLY` — blocks writes
 - Adding a `NOT NULL` column without a `DEFAULT` — table rewrite
@@ -362,7 +362,7 @@ multi-phase migrations are now safe in a single migrate:
 - **`UNIQUE NULLS DISTINCT`** — express "this column is unique except where
   it's NULL" directly, instead of partial-unique-index workarounds.
 
-Phase labels still apply for any column-type change or destructive DDL.
+Column-type changes and destructive DDL still follow the rule above.
 
 ## Baseline / `structure.sql` regen requires a wipe at EVERY env
 
@@ -401,9 +401,8 @@ follow the same pattern — see `priv/repo/lint_migrations.sh` and
 
 We ship the same migrations to AWS ECS (rolling, zero-downtime) and to
 self-hosters (Unraid / engram.ax, container-down → migrate → container-up).
-The phase labels exist for SaaS; self-hosters get downtime for free and
-don't need to think about phases. The same source-side gates protect them
-because the unsafe SQL never enters the migration files they pull.
+Self-hosters get downtime for free, and the same source-side gates protect
+them because the unsafe SQL never enters the migration files they pull.
 
 ### Upgrades require zero operator action
 
@@ -417,15 +416,15 @@ command for us. Every change must hold under that:
    does it on boot.
 2. **Skip-release safe.** Any migration must be correct when applied in ONE
    batch together with every migration after it, starting from any older
-   release. Expand/contract spread across releases protects the SaaS rolling
-   deploy, but a self-hoster jumping N -> N+2 runs both halves back to back
-   with no release in between.
+   release. A change split across releases (stop using, then drop) protects
+   the SaaS rolling deploy, but a self-hoster jumping N -> N+2 runs both
+   halves back to back with no release in between.
 3. **Backfills live in migrations, not app runtime.** A backfill done by app
    code in release N+1 never runs for someone who skips N+1. Put it in the
    migration, or make it a self-healing reconcile the app runs on its own
    (version stamp + reconcile, see the index self-heal pattern). The
    completion ledger for this: `docs/context/data-migrations-ledger.md`.
-4. **Contract migrations assert their precondition.** Before dropping or
+4. **Destructive migrations assert their precondition.** Before dropping or
    tightening, check the thing it depends on actually happened (no NULLs
    left, no rows in the old shape) and raise if not. Fail loud on boot,
    never lose data quietly.
@@ -448,7 +447,7 @@ Inside a running container:
 `eval 'Mix.Tasks.Engram.Preflight.run([])'` form raised
 `UndefinedFunctionError` and never worked in a container (#1311).
 
-The output lists pending migrations, their phase tag, whether each is
+The output lists pending migrations, whether each is
 reversible, an estimated lock impact (`:low` / `:medium` / `:high`), and
 a copy-paste rollback command (only emitted when every pending migration
 is reversible). When any pending migration is irreversible, the report
@@ -472,7 +471,7 @@ every destructive change. Adding more tools is Tier 2 work; do not preempt.
 - Lint runner: `priv/repo/lint_migrations.sh`
 - New-migration discovery: `priv/repo/list_new_migrations.sh`
 - AST extractor: `lib/mix/tasks/engram.migration_drops.ex`
-- CI jobs: `.github/workflows/verify.yml` — `phase-label-required`, `contract-phase-references`, `migrations-immutable`, `Lint new migrations (squawk)`, `Test new migrations roll back (ecto.rollback)`
+- CI jobs: `.github/workflows/verify.yml` — `migration-gates` (contract references, N-1 compat), `migrations-immutable`, `Lint new migrations (squawk)`, `Test new migrations roll back (ecto.rollback)`
 
 **Run the squawk gate locally — it is not a CI-only check.** `squawk` is not a
 mix dep, so `lint_migrations.sh` exits "command not found" out of the box and it
@@ -506,7 +505,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - RLS policy set (12 tenant tables, `api_keys_discovery`, `maintenance_all`), DB roles, `with_tenant`/`cross_tenant`/`maintenance()`/`skip_tenant_check` semantics → `docs/context/database-schema-rls.md`
 - Adding a tenant table (needs its own `maintenance_all`), the `MAINTENANCE_DATABASE_URL` credential, why it is not BYPASSRLS → `docs/context/maintenance-db-role.md`
 - `api_keys_discovery` policy (why `api_keys` stays in the tenant set; never roll back 20260918120000) → `docs/context/rls-cutover-breaks-api-key-auth.md`
-- Retiring a column via expand/migrate-data/contract: never switch reads AND stop writes in one release → `docs/context/migrate-data-rollback-trap.md`
+- Retiring a column in stages: never switch reads AND stop writes in one release → `docs/context/migrate-data-rollback-trap.md`
 - Touching `RedactFilter` or logging near a vault path (drop the dep message, never scrub it; a raising primary filter disables ALL redaction node-wide) → `docs/context/log-redaction-boundaries.md`
 - Writing a `use` macro that injects GenServer callbacks (`__before_compile__` defs lose to `defoverridable` defaults, silently) → `docs/context/before-compile-defoverridable-trap.md`
 - Reading `TenancyGuard`'s boot line / re-verifying RLS enforcement on a deploy, or touching the probe (`:savepoint` outermost, sandbox can't test it, `reltuples`, `$1::regclass`) → `docs/context/rls-tenancy-probe-boot-log.md`

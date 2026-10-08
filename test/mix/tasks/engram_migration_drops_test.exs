@@ -92,6 +92,88 @@ defmodule Mix.Tasks.Engram.MigrationDropsTest do
     assert MigrationDrops.extract(path) == %{columns: [], tables: []}
   end
 
+  test "ignores drops that only appear in down/0 (an additive migration's reversal)", %{tmp: tmp} do
+    path =
+      write_migration(tmp, "010.exs", """
+      defmodule M do
+        use Ecto.Migration
+        def up do
+          alter table(:notes) do
+            add :label, :text
+          end
+          create table(:things)
+        end
+        def down do
+          alter table(:notes) do
+            remove :label
+          end
+          drop table(:things)
+        end
+      end
+      """)
+
+    assert MigrationDrops.extract(path) == %{columns: [], tables: []}
+  end
+
+  test "still extracts a remove inside change/0 (an up-direction drop)", %{tmp: tmp} do
+    path =
+      write_migration(tmp, "011.exs", """
+      defmodule M do
+        use Ecto.Migration
+        def change do
+          alter table(:notes) do
+            remove :legacy, :string
+          end
+        end
+      end
+      """)
+
+    assert MigrationDrops.extract(path) == %{columns: [{"notes", "legacy"}], tables: []}
+  end
+
+  test "treats a column rename as dropping the old name", %{tmp: tmp} do
+    path =
+      write_migration(tmp, "012.exs", """
+      defmodule M do
+        use Ecto.Migration
+        def change do
+          rename table(:notes), :title, to: :name
+        end
+      end
+      """)
+
+    assert MigrationDrops.extract(path) == %{columns: [{"notes", "title"}], tables: []}
+  end
+
+  test "treats a table rename as dropping the old table name", %{tmp: tmp} do
+    path =
+      write_migration(tmp, "013.exs", """
+      defmodule M do
+        use Ecto.Migration
+        def change do
+          rename table(:old_things), to: table(:things)
+        end
+      end
+      """)
+
+    assert MigrationDrops.extract(path) == %{columns: [], tables: ["old_things"]}
+  end
+
+  test "raw SQL DROP in execute/1 is reported as unparseable", %{tmp: tmp} do
+    path =
+      write_migration(tmp, "014.exs", """
+      defmodule M do
+        use Ecto.Migration
+        def up do
+          execute("ALTER TABLE notes DROP COLUMN legacy")
+        end
+        def down, do: :ok
+      end
+      """)
+
+    assert MigrationDrops.extract(path) == %{columns: [], tables: [], raw_sql: true}
+  end
+
   test "returns empty maps for migrations with no drops", %{tmp: tmp} do
     path =
       write_migration(tmp, "005.exs", """

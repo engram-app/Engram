@@ -90,19 +90,17 @@ cat "$tmp_sql"
 echo "──────────────────"
 
 # `ban-drop-column` / `ban-drop-table` are ON globally (see .squawk.toml) and
-# should stay on: an unintended DROP in an expand or migrate-data migration is
-# exactly what they exist to catch.
+# should stay on: an unintended DROP in a migration that was not meant to drop
+# is exactly what they exist to catch.
 #
-# But a `*_contract.exs` / `*_single_shot.exs` migration's WHOLE PURPOSE is to drop, and the repo
-# already gates that separately and more precisely: the phase/contract label is
-# mandatory (verify.yml "migration gates"), and its contract-phase-references
-# step greps lib/ to prove nothing still reads the dropped columns/tables. A
-# blanket ban would make the contract phase unshippable — which nobody noticed,
-# because every earlier `remove :` in this tree lives in a `down` block and
-# squawk only ever renders `up`. This is the first real contract migration.
+# But a `*_drops.exs` migration's WHOLE PURPOSE is to drop, and the repo
+# already gates that separately and more precisely: verify.yml "migration
+# gates" extracts what any new migration drops and greps lib/ to prove nothing
+# still reads the dropped columns/tables. A blanket ban would make dropping
+# unshippable.
 #
 # Scoped to the filename convention, NOT to a global config exclusion, so the
-# rules keep gating every other phase.
+# rules keep gating every other migration.
 # squawk's `--exclude` REPLACES `.squawk.toml`'s `excluded_rules` rather than
 # merging with it (verified: passing the drop rules alone brought
 # require-timeout-settings and prefer-robust-stmts back, even with an explicit
@@ -117,11 +115,10 @@ drop_rules_excluded=""
 for v in "${new_versions[@]}"; do
   # `compgen -G`, not `ls`: `ls a b` exits non-zero when EITHER operand is an
   # unmatched glob, so testing both suffixes at once silently never fired.
-  if compgen -G "$MIG_DIR/${v}_*_contract.exs" >/dev/null ||
-       compgen -G "$MIG_DIR/${v}_*_single_shot.exs" >/dev/null; then
+  if compgen -G "$MIG_DIR/${v}_*_drops.exs" >/dev/null; then
     drop_rules_excluded="--exclude=${base_excluded:+$base_excluded,}ban-drop-column,ban-drop-table"
-    echo "squawk: ${v} is a contract / single-shot migration — drop rules" \
-         "deferred to the phase gate's reference check"
+    echo "squawk: ${v} is a *_drops migration - drop rules" \
+         "deferred to the reference check in verify.yml migration gates"
   fi
 done
 

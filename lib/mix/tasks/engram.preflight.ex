@@ -14,10 +14,10 @@ defmodule Mix.Tasks.Engram.Preflight do
 
       docker compose exec engram bin/engram rpc 'Engram.Release.Preflight.run()'
 
-  Output: pending migrations with phase tags, irreversibility flags,
+  Output: pending migrations with irreversibility flags,
   estimated lock impact, and an optional rollback command (only when all
   pending migrations are reversible). See `Engram.Release.Preflight` for the
-  phase tags and the lock-risk heuristic's limitations.
+  lock-risk heuristic's limitations.
   """
 
   use Mix.Task
