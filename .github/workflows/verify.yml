@@ -2552,8 +2552,8 @@ jobs:
         run: |
           export CARGO_TARGET_DIR="$HOME/.cache/engram-native-target"
           cargo fmt --all --check
-          cargo clippy --workspace --release --locked --all-targets -- -D warnings
-          cargo test --workspace --release --locked
+          cargo clippy --workspace --release --locked --all-targets --all-features -- -D warnings
+          cargo test --workspace --release --locked --all-features
 
       - name: engram_core builds for wasm32 (native/)
         # The plugin and web app will run native/engram_core as wasm32, so a

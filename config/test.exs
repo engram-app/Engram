@@ -1,5 +1,13 @@
 import Config
 
+# Builds the NIF with its `test-hooks` NIFs (the fixed-nonce envelope seal,
+# for byte parity with :crypto). Set in dev.exs AND test.exs, never prod.exs:
+# Rustler writes one priv/native/engram_native.so that every MIX_ENV shares
+# (_build/<env>/lib/engram/priv is a symlink to priv/), and a module whose
+# NIF library exports a function it lacks fails to load. So dev and test must
+# build the same exports; only the release build drops them.
+config :engram, Engram.Native, features: ["test-hooks"]
+
 # Raise rate-limit ceiling in tests so auth controller tests don't get 429.
 # All test connections share 127.0.0.1 as remote_ip; a production-level limit
 # of 10 req/min would be exhausted immediately across the full test suite.

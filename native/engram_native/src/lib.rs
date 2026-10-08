@@ -462,8 +462,10 @@ fn envelope_seal<'a>(
 sized_nif!(envelope_seal, envelope_seal_nif, envelope_seal_dirty_nif, <'a>(env, plain: Binary<'a>, key: Binary<'a>, aad: Binary<'a>, mode: Atom) [plain, key, aad, mode] -> NifResult<(Term<'a>, usize)>);
 
 /// Test hook: a seal with a caller-chosen nonce, for byte-for-byte parity
-/// with `:crypto`. Never call it in production: a repeated nonce under one
-/// key breaks AES-GCM.
+/// with `:crypto`. A repeated nonce under one key breaks AES-GCM, so it is
+/// compiled only with the `test-hooks` feature (dev and test configs): the
+/// release NIF does not export it.
+#[cfg(feature = "test-hooks")]
 #[rustler::nif]
 fn envelope_seal_with_nonce_nif<'a>(
     env: Env<'a>,

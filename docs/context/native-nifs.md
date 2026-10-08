@@ -509,6 +509,16 @@ adding callers.
 - Adding a NIF function: add it to the Rust `#[rustler::nif]` list AND the
   stub in `Engram.Native`, route it through `call/4` so it emits telemetry,
   and give it a peak-bound and a leak test.
+- Test-only NIFs (the fixed-nonce `envelope_seal_with_nonce_nif`) sit behind
+  the `engram_native` cargo feature `test-hooks`, which `config/dev.exs` and
+  `config/test.exs` pass through Rustler (`config :engram, Engram.Native,
+  features: [...]`); `Engram.Native` defines their stubs only under the same
+  config. `prod.exs` does not set it, so the release `.so` does not export
+  them. Dev and test must agree: Rustler writes one `priv/native/*.so` that
+  every `MIX_ENV` shares through the `_build/<env>/lib/engram/priv` symlink,
+  and a module whose NIF library exports a function it lacks fails to load.
+  After a local `MIX_ENV=prod mix compile`, `touch lib/engram/native.ex`
+  before the next `mix test` so the test build replaces the prod `.so`.
 - rustler: the crate and the hex package move together (0.38 both). The hex
   dep carries `override: true` because lingua pins an optional
   `rustler ~> 0.37.1` it only uses to force-build; lingua loads its

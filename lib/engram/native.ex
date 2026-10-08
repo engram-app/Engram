@@ -65,13 +65,23 @@ defmodule Engram.Native do
     pack_f32_nif: 1,
     dense_json_nif: 1,
     sparse_json_nif: 2,
-    md_outline_nif: 1,
-    # Test hook (fixed nonce, for :crypto parity). Never in production.
-    envelope_seal_with_nonce_nif: 5
+    md_outline_nif: 1
   ]
 
+  # Test hooks, built only with the crate's `test-hooks` feature, which
+  # config/dev.exs and config/test.exs enable (see there for why both): the
+  # release NIF does not export them, and neither does this module. The
+  # fixed-nonce seal exists for byte parity with :crypto; a repeated nonce
+  # under one key breaks AES-GCM.
+  @test_hooks (if "test-hooks" in Application.compile_env(:engram, [__MODULE__, :features], []) do
+                 [envelope_seal_with_nonce_nif: 5]
+               else
+                 []
+               end)
+
   # Stubs Rustler replaces on load.
-  for {nif, arity} <- @single ++ Enum.flat_map(@sized, fn {_, i, d, a} -> [{i, a}, {d, a}] end) do
+  for {nif, arity} <-
+        @single ++ @test_hooks ++ Enum.flat_map(@sized, fn {_, i, d, a} -> [{i, a}, {d, a}] end) do
     @doc false
     def unquote(nif)(unquote_splicing(List.duplicate(Macro.var(:_, nil), arity))),
       do: :erlang.nif_error(:nif_not_loaded)
