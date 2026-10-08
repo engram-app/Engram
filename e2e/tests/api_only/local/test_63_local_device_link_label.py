@@ -240,7 +240,10 @@ class TestMalformedAuthorize:
 
 class TestConcurrentVaultCreation:
     def test_parallel_first_vaults_all_succeed_with_one_default(self):
-        """Racing first-registrations used to 500 on the one-default-per-user index."""
+        """Racing first-registrations used to 500 on the one-default-per-user index.
+
+        Four creators: the free-tier vault cap in the CI stack is 4.
+        """
         from concurrent.futures import ThreadPoolExecutor
 
         token = _register("race")
@@ -253,10 +256,10 @@ class TestConcurrentVaultCreation:
                 timeout=30,
             ).status_code
 
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            codes = list(pool.map(create, range(8)))
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            codes = list(pool.map(create, range(4)))
 
-        assert codes == [201] * 8, codes
+        assert codes == [201] * 4, codes
         vaults = requests.get(f"{API_URL}/vaults", headers=_auth(token), timeout=TIMEOUT).json()
         listed = vaults["vaults"] if isinstance(vaults, dict) else vaults
         assert sum(1 for v in listed if v.get("is_default")) == 1
