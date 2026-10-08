@@ -18,7 +18,9 @@ defmodule Engram.Crypto.CompressionGate do
 
   Fails closed: `false` until the first evaluation, and on any evaluation
   error. Re-evaluated on `:nodeup`/`:nodedown` and every 30 s. Each verdict
-  change logs once (`:warning` when blocked, `:info` when allowed) and emits
+  change logs once (`:warning` when blocked, `:info` when allowed; the first
+  evaluation after boot is always `:info`, a clustered boot has no peers yet)
+  and emits
   `[:engram, :envelope, :compression_gate]` with `%{allowed: 0 | 1}` and
   `%{reason: atom(), node: node() | nil}`.
 
@@ -139,7 +141,7 @@ defmodule Engram.Crypto.CompressionGate do
     if allowed != :persistent_term.get(state.key, false),
       do: :persistent_term.put(state.key, allowed)
 
-    if allowed != state.allowed, do: report(allowed, reason, node)
+    if allowed != state.allowed, do: report(allowed, reason, node, is_nil(state.allowed))
     %{state | allowed: allowed}
   end
 
@@ -151,23 +153,33 @@ defmodule Engram.Crypto.CompressionGate do
     _kind, _reason -> {:blocked, :evaluation_failed, nil}
   end
 
-  defp report(allowed, reason, node) do
+  defp report(allowed, reason, node, first?) do
     :telemetry.execute(
       [:engram, :envelope, :compression_gate],
       %{allowed: if(allowed, do: 1, else: 0)},
       %{reason: reason, node: node}
     )
 
-    if allowed do
-      Logger.info(
-        "envelope compression allowed: every cluster node reads format 1",
-        Metadata.with_category(:info, :crypto, reason: reason)
-      )
-    else
-      Logger.warning(
-        "envelope compression blocked: writing format 0 until every cluster node reads format 1",
-        Metadata.with_category(:warning, :crypto, reason: reason, peer: inspect(node))
-      )
+    cond do
+      allowed ->
+        Logger.info(
+          "envelope compression allowed: every cluster node reads format 1",
+          Metadata.with_category(:info, :crypto, reason: reason)
+        )
+
+      first? ->
+        # Clustered boot: no peers yet, expected. A block after the gate
+        # was once allowed is the anomaly worth :warning.
+        Logger.info(
+          "envelope compression blocked at boot: writing format 0 until every cluster node reads format 1",
+          Metadata.with_category(:info, :crypto, reason: reason, peer: inspect(node))
+        )
+
+      true ->
+        Logger.warning(
+          "envelope compression blocked: writing format 0 until every cluster node reads format 1",
+          Metadata.with_category(:warning, :crypto, reason: reason, peer: inspect(node))
+        )
     end
   end
 end

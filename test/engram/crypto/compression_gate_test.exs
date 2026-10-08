@@ -170,6 +170,13 @@ defmodule Engram.Crypto.CompressionGateTest do
       refute_received {:gate, _, _}
     end
 
+    test "a block at first evaluation logs :info, not :warning", %{opts: opts} do
+      opts = Keyword.put(opts, :multicall, fn peers -> Enum.map(peers, fn _ -> {:ok, 0} end) end)
+
+      warn = capture_log([level: :warning], fn -> start_supervised!({CompressionGate, opts}) end)
+      refute warn =~ "envelope compression blocked"
+    end
+
     test "an evaluation that raises fails closed", %{opts: opts, key: key} do
       opts = Keyword.put(opts, :multicall, fn _ -> raise "boom" end)
       capture_log(fn -> start_supervised!({CompressionGate, opts}) end)

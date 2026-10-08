@@ -48,7 +48,10 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   With compression off (`Envelope.compression_on?/0`: the kill switch, or a
   cluster node that cannot read format 1), a job cancels itself: re-encoding
   would write format 0 again and NULL `crdt_head` for nothing. The migration
-  is disabled by the same decision and re-enqueues once it is back on.
+  is disabled by the same decision and re-enqueues once it is back on. A
+  deploy blip (Cloud Map still listing a stopped task) trips the gate and
+  cancels in-flight chains the same way; the next hourly pass restarts them
+  (up to ~1 h delay, no lost work).
 
   Not re-encoded: attachments (format 0 and format 1 raw cost the same bytes),
   `note_revisions.pending_*` (verbatim copies of `notes.content`), and the

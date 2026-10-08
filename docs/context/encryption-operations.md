@@ -37,7 +37,13 @@ Every encrypted column is `ct_with_tag` plus a `nonce` field, produced by
   (format 0). The verdict is cached in `:persistent_term` (one lookup per
   encrypt), re-evaluated on `:nodeup`/`:nodedown` and every 30 s, and each
   change logs once (`envelope compression blocked`/`allowed`, with the reason)
-  and emits `[:engram, :envelope, :compression_gate]`. `Envelope.compression_on?/0`
+  and emits `[:engram, :envelope, :compression_gate]` (the first evaluation
+  after boot logs `:info` even when blocked, since a clustered boot has no
+  peers yet; a block after the gate was once allowed is `:warning`).
+  Deploy blips (Cloud Map still listing a stopped task) block the gate and
+  cancel in-flight `ReencodeEnvelopes` chains as `:compression_off`; the next
+  hourly `EnvelopeFormat` pass re-enqueues them, so expect a delay of up to
+  ~1 h, no lost work. `Envelope.compression_on?/0`
   (kill switch AND gate) is the one decision behind the write path, the
   `EnvelopeFormat` migration's `enabled?/0` and the `ReencodeEnvelopes` cancel.
 - Empty plaintext is always format 0, so `has_content?/1` in revisions
@@ -143,13 +149,13 @@ NIFs queue behind that one scheduler. On the worker that includes
 `md_outline_nif`, which always runs dirty (every index job parses the note), so
 the `EnvelopeFormat` re-encode window slows indexing; expect a longer embed
 backlog drain while the migration runs. Watch the PromEx
-`engram_nif_call_duration_milliseconds` histogram (`[:engram, :nif, :call, :stop]`),
+`engram_prom_ex_nif_call_duration_milliseconds` histogram (`[:engram, :nif, :call, :stop]`),
 tagged `nif` and `dirty`, for `nif="envelope_seal"` / `"envelope_open"` with
 `dirty="true"`; a rising p99 there means dirty queueing, and the remedies are a
 bigger task (which raises `+SDcpu`) or `ENVELOPE_COMPRESSION=false`. Inline
 format-0 seals (up to 16 KB) and successful inline opens emit no per-call
 event, so the envelope series hold format-1 seals (`dirty="false"` when small)
-and every dirty call; the polled `engram_nif_envelope_calls` gauge counts all.
+and every dirty call; the polled `engram_prom_ex_nif_envelope_calls` gauge counts all.
 
 ### Before the R2 deploy
 
