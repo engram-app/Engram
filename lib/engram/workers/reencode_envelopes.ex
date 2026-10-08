@@ -64,7 +64,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   # Processed in this order. `aad` = {AAD table, AAD column, field holding the AAD row id}.
   @columns [
     %{
-      name: :notes_content,
+      label: :notes_content,
       schema: Note,
       key: :id,
       ct: :content_ciphertext,
@@ -72,7 +72,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
       aad: {:notes, :content, :id}
     },
     %{
-      name: :notes_crdt_state,
+      label: :notes_crdt_state,
       schema: Note,
       key: :id,
       ct: :crdt_state_ciphertext,
@@ -80,7 +80,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
       aad: {:notes, :crdt_state, :id}
     },
     %{
-      name: :crdt_update_log,
+      label: :crdt_update_log,
       schema: CrdtUpdateLog,
       key: :id,
       ct: :update_ciphertext,
@@ -88,7 +88,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
       aad: {:notes, :crdt_state, :note_id}
     },
     %{
-      name: :vault_index_states,
+      label: :vault_index_states,
       schema: VaultIndexState,
       key: :vault_id,
       ct: :state_ciphertext,
@@ -96,7 +96,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
       aad: {:vault_index_states, :state, :vault_id}
     },
     %{
-      name: :vault_index_update_log,
+      label: :vault_index_update_log,
       schema: VaultIndexUpdateLog,
       key: :id,
       ct: :update_ciphertext,
@@ -116,7 +116,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
       columns =
         Enum.drop_while(
           @columns,
-          &(Atom.to_string(&1.name) != (args["column"] || "notes_content"))
+          &(Atom.to_string(&1.label) != (args["column"] || "notes_content"))
         )
 
       run_columns(user_id, columns, args["after"], deadline)
@@ -136,7 +136,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
            batch_size: setting(:batch_size, @batch_size)
          ) do
       :ok -> run_columns(user_id, rest, nil, deadline)
-      {:halt, last_id} -> hand_off(user_id, column.name, last_id)
+      {:halt, last_id} -> hand_off(user_id, column.label, last_id)
       {:error, :rotation_in_progress} -> {:snooze, 60}
       {:error, :user_not_found} -> {:cancel, :user_not_found}
       {:error, _} = err -> err
@@ -180,7 +180,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   # The done predicate and the worker's selection, one definition. A 16-byte
   # ciphertext is the tag alone (empty plaintext, format 0 by design); a
   # 13-byte nonce is format 1, done whatever its codec.
-  defp legacy(%{name: name, schema: schema, ct: ct, nonce: nonce}) do
+  defp legacy(%{label: name, schema: schema, ct: ct, nonce: nonce}) do
     from(r in schema,
       where: fragment("octet_length(?) = 12", field(r, ^nonce)),
       where: fragment("octet_length(?) > 16", field(r, ^ct))
@@ -194,7 +194,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   defp body_with_bound_aad(query, _name), do: query
 
   defp reencode_batch(user_id, column, ids, deadline) do
-    %{name: name, key: key, ct: ct, nonce: nonce, aad: {_t, _c, aad_id}} = column
+    %{label: name, key: key, ct: ct, nonce: nonce, aad: {_t, _c, aad_id}} = column
 
     :telemetry.execute([:engram, :reencode_envelopes, :batch], %{count: length(ids)}, %{
       column: name
@@ -227,7 +227,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   end
 
   defp reencode_row(
-         %{name: name, aad: {table, col, _}},
+         %{label: name, aad: {table, col, _}},
          %{id: id, ct: ct, nonce: nonce} = row,
          dek
        ) do
@@ -251,7 +251,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   # the user's tenant context. A miss (0 rows) means the row changed since it
   # was read; it is left for the next pass.
   def write_row(name, id, old_ct, new_ct, new_nonce) do
-    %{schema: schema, key: key, ct: ct, nonce: nonce} = Enum.find(@columns, &(&1.name == name))
+    %{schema: schema, key: key, ct: ct, nonce: nonce} = Enum.find(@columns, &(&1.label == name))
 
     from(r in schema, where: field(r, ^key) == ^id and field(r, ^ct) == ^old_ct)
     |> Repo.update_all(set: [{ct, new_ct}, {nonce, new_nonce}])
