@@ -235,11 +235,6 @@ defmodule EngramWeb.TelemetryTest do
              "engram.websocket.socket_bytes must NOT add per-user/per-vault labels (cardinality guard)"
     end
 
-    test "websocket_poll_period/0 is exactly 30s (cadence contract)" do
-      assert EngramWeb.Telemetry.websocket_poll_period() == :timer.seconds(30),
-             "WS gauge cadence is a contract — 30s balances spike-visibility against per-tick cost"
-    end
-
     test "engram.crypto.rotate.dek.snoozed.count carries no per-user label (cardinality guard)" do
       metric =
         Enum.find(

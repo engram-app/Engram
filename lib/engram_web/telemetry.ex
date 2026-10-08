@@ -11,21 +11,10 @@ defmodule EngramWeb.Telemetry do
     children = [
       # Telemetry poller will execute the given period measurements
       # every 10_000ms. Learn more here: https://hexdocs.pm/telemetry_metrics
-      {:telemetry_poller, measurements: periodic_measurements(), period: 10_000},
+      # The WebSocket gauges are polled by Engram.PromEx.WebSocket; those
+      # events also feed the engram.websocket.* metrics below.
+      {:telemetry_poller, measurements: periodic_measurements(), period: 10_000}
 
-      # Dedicated poller for WebSocket gauges. Runs at a slower 30s cadence
-      # — every call is O(n) over Process.list/0 and the distribution
-      # collector emits one event per channel pid, so a 10s cadence on a
-      # many-socket app would be needlessly noisy. See
-      # `Engram.Telemetry.WebSocketPoller` for the gauge definitions and
-      # `metrics/0` below for their Prometheus mapping.
-      Supervisor.child_spec(
-        {:telemetry_poller,
-         measurements: websocket_measurements(),
-         period: websocket_poll_period(),
-         name: :engram_websocket_poller},
-        id: :engram_websocket_poller
-      )
       # Add reporters as children of your supervision tree.
       # {Telemetry.Metrics.ConsoleReporter, metrics: metrics()}
     ]
@@ -350,11 +339,6 @@ defmodule EngramWeb.Telemetry do
     ]
   end
 
-  # Poll cadence: 30s. Faster gets noisy on a many-socket app
-  # (each poll is O(n) over Process.list/0 and emits one event per
-  # channel pid for the distribution histogram); slower misses spikes.
-  @websocket_poll_period :timer.seconds(30)
-
   defp periodic_measurements do
     [
       # A module, function and arguments to be invoked periodically.
@@ -362,13 +346,4 @@ defmodule EngramWeb.Telemetry do
       # {EngramWeb, :count_users, []}
     ]
   end
-
-  defp websocket_measurements do
-    [
-      {Engram.Telemetry.WebSocketPoller, :measure, []}
-    ]
-  end
-
-  @doc false
-  def websocket_poll_period, do: @websocket_poll_period
 end

@@ -1,12 +1,15 @@
 defmodule Engram.Telemetry.WebSocketPoller do
   @moduledoc """
-  Periodic poller that emits the two WebSocket-shape gauges the
-  `observability-coverage` milestone calls for:
+  Periodic poller (driven by `Engram.PromEx.WebSocket`) for the WebSocket-shape
+  gauges:
+
+    * `[:engram, :websocket, :connections]` — live socket connections (one
+      transport process each), by `socket` (`"user"`, `"device"`, `"other"`).
 
     * `[:engram, :websocket, :count]` — live channel count, partitioned
-      by `topic_prefix` (`"sync"`, `"user"`, `"presence"`, plus the
-      synthetic `"total"`). Cheap split — one O(n) pass over the channel
-      pid list.
+      by `topic_prefix` (`"sync"`, `"crdt"`, `"user"`, `"device"`, plus the
+      synthetic `"total"`). One socket hosts several channels, so this is
+      not a connection count.
 
     * `[:engram, :websocket, :socket_bytes]` — per-channel RAM footprint
       (`:erlang.process_info(pid, :memory)`). Emitted once per pid so the
@@ -18,7 +21,9 @@ defmodule Engram.Telemetry.WebSocketPoller do
 
   Phoenix Channels server processes tag themselves with
   `Process.put(:"$process_label", {Phoenix.Channel, channel_mod, topic})`
-  (see `Phoenix.Channel.Server.handle_info({Phoenix.Channel, ...}, _)`).
+  (see `Phoenix.Channel.Server.handle_info({Phoenix.Channel, ...}, _)`), and
+  socket transport processes with `{Phoenix.Socket, handler, id}` (see
+  `Phoenix.Socket.__init__/1`).
   This label is the cheapest correct way to enumerate channel pids
   without hooking the internals of `Phoenix.PubSub`'s registry — and it
   works whether or not the project uses `Phoenix.Presence` on every
@@ -28,28 +33,37 @@ defmodule Engram.Telemetry.WebSocketPoller do
 
   Per the milestone scope: no per-user or per-vault labels. Only
   `topic_prefix` (bounded by the small set of channel definitions in
-  `EngramWeb.UserSocket`) ever escapes as a Prometheus tag.
+  `EngramWeb.UserSocket`) and `socket` ever escape as Prometheus tags.
+
+  Known prefixes and sockets are always emitted, as 0 when idle. These feed
+  `last_value` gauges, which serve their last sample forever: omitting an
+  empty series would freeze its old count.
   """
 
-  require Logger
-
   @count_event [:engram, :websocket, :count]
+  @connections_event [:engram, :websocket, :connections]
   @bytes_event [:engram, :websocket, :socket_bytes]
 
+  @channel_prefixes ~w(sync crdt user device)
+  @sockets %{EngramWeb.UserSocket => "user", EngramWeb.DeviceSocket => "device"}
+
   @doc """
-  Entry point invoked by `:telemetry_poller`. Public so the existing
-  `Telemetry.Metrics` collector in `EngramWeb.Telemetry` can list it
-  in `periodic_measurements/0`.
+  Entry point invoked by the `Engram.PromEx.WebSocket` polling group.
   """
   @spec measure() :: :ok
   def measure do
-    pids = channel_pids()
+    labelled =
+      for pid <- Process.list(),
+          label = :proc_lib.get_label(pid),
+          label != :undefined,
+          do: {pid, label}
 
-    pids
-    |> Enum.frequencies_by(&pid_topic_prefix/1)
-    |> emit_counts()
+    channels = for {pid, {Phoenix.Channel, _, topic}} <- labelled, do: {pid, topic_prefix(topic)}
+    sockets = for {_pid, {Phoenix.Socket, handler, _}} <- labelled, do: socket_name(handler)
 
-    Enum.each(pids, &emit_socket_bytes/1)
+    channels |> Enum.frequencies_by(&elem(&1, 1)) |> emit_counts()
+    sockets |> Enum.frequencies() |> emit_connections()
+    Enum.each(channels, fn {pid, prefix} -> emit_socket_bytes(pid, prefix) end)
 
     :ok
   end
@@ -73,67 +87,36 @@ defmodule Engram.Telemetry.WebSocketPoller do
 
   # ----- internals -----
 
-  defp channel_pids do
-    for pid <- Process.list(),
-        info = safe_process_info(pid),
-        info != nil,
-        match?({Phoenix.Channel, _, _}, label_of(info)),
-        do: pid
-  end
-
-  defp safe_process_info(pid) do
-    # `Process.info/2` with `:dictionary` may return `nil` for processes
-    # that died between Process.list/0 and the lookup — that race is
-    # normal under load. Treat nil as "not a channel."
-    case Process.info(pid, [:dictionary, :memory]) do
-      nil -> nil
-      info -> Map.new(info)
-    end
-  end
-
-  defp label_of(%{dictionary: dict}) when is_list(dict) do
-    Keyword.get(dict, :"$process_label")
-  end
-
-  defp label_of(_), do: nil
-
-  defp pid_topic_prefix(pid) do
-    case Process.info(pid, :dictionary) do
-      {:dictionary, dict} ->
-        case Keyword.get(dict, :"$process_label") do
-          {Phoenix.Channel, _channel, topic} -> topic_prefix(topic)
-          _ -> "unknown"
-        end
-
-      _ ->
-        "unknown"
-    end
-  end
+  defp socket_name(handler), do: Map.get(@sockets, handler, "other")
 
   defp emit_counts(counts_by_prefix) do
     total = counts_by_prefix |> Map.values() |> Enum.sum()
 
-    Enum.each(counts_by_prefix, fn {prefix, count} ->
+    @channel_prefixes
+    |> Map.new(&{&1, 0})
+    |> Map.merge(counts_by_prefix)
+    |> Enum.each(fn {prefix, count} ->
       :telemetry.execute(@count_event, %{count: count}, %{topic_prefix: prefix})
     end)
 
     :telemetry.execute(@count_event, %{count: total}, %{topic_prefix: "total"})
   end
 
-  defp emit_socket_bytes(pid) do
-    case Process.info(pid, [:dictionary, :memory]) do
-      [{:dictionary, dict}, {:memory, bytes}] when is_integer(bytes) and bytes > 0 ->
-        case Keyword.get(dict, :"$process_label") do
-          {Phoenix.Channel, _channel, topic} ->
-            :telemetry.execute(
-              @bytes_event,
-              %{bytes: bytes},
-              %{topic_prefix: topic_prefix(topic)}
-            )
+  defp emit_connections(counts_by_socket) do
+    @sockets
+    |> Map.values()
+    |> Map.new(&{&1, 0})
+    |> Map.merge(counts_by_socket)
+    |> Enum.each(fn {socket, count} ->
+      :telemetry.execute(@connections_event, %{count: count}, %{socket: socket})
+    end)
+  end
 
-          _ ->
-            :ok
-        end
+  defp emit_socket_bytes(pid, prefix) do
+    # nil when the channel exited after the scan; that race is normal.
+    case Process.info(pid, :memory) do
+      {:memory, bytes} when bytes > 0 ->
+        :telemetry.execute(@bytes_event, %{bytes: bytes}, %{topic_prefix: prefix})
 
       _ ->
         :ok

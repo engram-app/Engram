@@ -34,7 +34,8 @@ defmodule Engram.PromEx do
       Engram.PromEx.Installs,
       Engram.PromEx.RateLimiter,
       Engram.PromEx.Profiling,
-      Engram.PromEx.Native
+      Engram.PromEx.Native,
+      Engram.PromEx.WebSocket
     ]
   end
 

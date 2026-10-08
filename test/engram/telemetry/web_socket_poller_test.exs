@@ -21,6 +21,7 @@ defmodule Engram.Telemetry.WebSocketPollerTest do
         handler_id,
         [
           [:engram, :websocket, :count],
+          [:engram, :websocket, :connections],
           [:engram, :websocket, :socket_bytes]
         ],
         fn event, measurements, metadata, _ ->
@@ -61,6 +62,40 @@ defmodule Engram.Telemetry.WebSocketPollerTest do
         assert is_binary(meta.topic_prefix),
                "topic_prefix must be a string (Prometheus tag), got: #{inspect(meta.topic_prefix)}"
       end
+    end
+
+    test "reports 0 for a routed prefix with no live channels (last_value must not freeze)" do
+      # A last_value gauge keeps serving its final sample until it gets a new
+      # one. Omitting an empty prefix would publish its old count forever.
+      WebSocketPoller.measure()
+
+      prefixes =
+        Map.new(collect_count_events(), fn {_, m, meta} -> {meta.topic_prefix, m.count} end)
+
+      for prefix <- ~w(sync crdt user device), do: assert(Map.has_key?(prefixes, prefix))
+    end
+  end
+
+  describe "measure/0 — connection gauge" do
+    test "counts socket transport processes by socket, seeding 0 for idle sockets" do
+      spawn_channel_proc({Phoenix.Socket, EngramWeb.UserSocket, nil})
+      spawn_channel_proc({Phoenix.Socket, EngramWeb.UserSocket, "users_socket:1"})
+
+      WebSocketPoller.measure()
+
+      counts =
+        Stream.repeatedly(fn ->
+          receive do
+            {:telemetry, [:engram, :websocket, :connections], m, meta} -> {meta.socket, m.count}
+          after
+            100 -> nil
+          end
+        end)
+        |> Enum.take_while(&(&1 != nil))
+        |> Map.new()
+
+      assert counts["user"] >= 2
+      assert Map.has_key?(counts, "device")
     end
   end
 
