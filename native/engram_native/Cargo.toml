@@ -25,7 +25,3 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 # Same version and parse options as mdex_native 0.2.9 (the parser Sections
 # used before md_outline), so section boundaries did not move in the port.
 comrak = { version = "=0.55.0", default-features = false }
-
-[profile.release]
-lto = true
-codegen-units = 1

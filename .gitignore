@@ -55,5 +55,7 @@ frontend/e2e/.auth-state.json
 conformance-results/
 
 # Rust NIF build output (rustler compiles native/* into priv/native at mix compile)
+/native/target/
+# Per-crate target dirs from before the Cargo workspace.
 /native/*/target/
 /priv/native/

@@ -1,6 +1,6 @@
 defmodule Engram.Native do
   @moduledoc """
-  In-house Rust NIFs (native/engram_native). Each function is pure; which
+  In-house Rust NIFs (native/engram_native, a Cargo workspace member). Each function is pure; which
   scheduler it runs on is set per NIF (see `@sized` and the Scheduling
   section of docs/context/native-nifs.md).
 
@@ -16,6 +16,13 @@ defmodule Engram.Native do
       (`unaccounted`) is native memory nothing else reports: a third-party
       NIF on its own allocator (y_ex, lingua) shows up only there.
   """
+  # Rustler tracks the crate and its path dependencies (engram_core), not the
+  # Cargo workspace root: without these a lockfile bump, a release-profile
+  # change or a toolchain pin would not rebuild the NIF on `mix compile`.
+  for file <- ~w(Cargo.toml Cargo.lock rust-toolchain.toml) do
+    @external_resource Path.join("native", file)
+  end
+
   use Rustler, otp_app: :engram, crate: "engram_native"
 
   @doc "Keyword query vector: `{indices, values}`, distinct dims, values 1.0."

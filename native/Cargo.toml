@@ -1,0 +1,11 @@
+# One workspace, one lockfile, one toolchain (rust-toolchain.toml here):
+# engram_core is the pure-Rust engine shared with the wasm clients;
+# engram_native is the NIF that wraps it. Rustler builds engram_native as a
+# member; its artifact lands in native/target.
+[workspace]
+members = ["engram_core", "engram_native"]
+resolver = "2"
+
+[profile.release]
+lto = true
+codegen-units = 1
