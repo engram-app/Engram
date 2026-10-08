@@ -629,7 +629,6 @@ export default {
 		"Obsidian プラグインに表示されているコードを入力してください:",
 	"Verifying…": "確認中…",
 	"Checking your code…": "コードを確認中…",
-	upgrade: "アップグレード",
 	"Syncing…": "同期中…",
 	Sync: "同期",
 	"Your vault is linked. Obsidian is waiting for you to start the first sync.":
@@ -661,8 +660,11 @@ export default {
 		"最近デバイスを切り替えました。無料プランでは切り替えは 24 時間に 1 回までです。あと {hours} 時間後に再度切り替えられます。{upgrade}すると、デバイスを好きなだけ接続できます。",
 	"Heads up — your Free plan syncs files between 1 device at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
 		"ご注意ください。無料プランで同時に同期できるデバイスは 1 台です。このデバイスを連携すると {device} の接続が解除され、同期の変更を受け取れなくなります。両方を接続したままにするには{upgrade}してください。",
-	"Your Free plan includes 1 vault — link into the existing one above, or {upgrade} to create more.":
-		"無料プランに含まれる保管庫は 1 つです。上の既存の保管庫に連携するか、{upgrade}して保管庫を増やしてください。",
+	"Vault limit reached: your Free plan includes 1 vault":
+		"保管庫の上限に達しました: 無料プランに含まれる保管庫は 1 つです",
+	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
+		"無料プランでは新しい保管庫を作成できません。上の既存の保管庫と同期するか、プランをアップグレードして追加してください。",
+	"Upgrade plan": "プランをアップグレード",
 	"{count} minutes ago": { other: "{count} 分前" },
 	"{count} hours ago": { other: "{count} 時間前" },
 	"{count} days ago": { other: "{count} 日前" },

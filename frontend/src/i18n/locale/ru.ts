@@ -642,7 +642,6 @@ export default {
 	"Enter the code shown in your Obsidian plugin:": "Введите код, показанный в плагине Obsidian:",
 	"Verifying…": "Проверяем…",
 	"Checking your code…": "Проверяем ваш код…",
-	upgrade: "перейти на платный план",
 	"Syncing…": "Синхронизируем…",
 	Sync: "Синхронизировать",
 	"Your vault is linked. Obsidian is waiting for you to start the first sync.":
@@ -676,8 +675,11 @@ export default {
 		"Вы недавно меняли устройство. Бесплатный план допускает одну смену раз в 24 часа, поменять снова можно через {hours} ч. {upgrade}, чтобы подключать сколько угодно устройств.",
 	"Heads up — your Free plan syncs files between 1 device at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
 		"Обратите внимание: на бесплатном плане файлы синхронизируются только с одним устройством за раз. Привязка этого устройства отключит {device}, и оно перестанет получать изменения. {upgrade}, чтобы оставить оба подключёнными.",
-	"Your Free plan includes 1 vault — link into the existing one above, or {upgrade} to create more.":
-		"Бесплатный план включает 1 хранилище. Привяжите существующее выше. Чтобы создать больше, можно {upgrade}.",
+	"Vault limit reached: your Free plan includes 1 vault":
+		"Достигнут лимит хранилищ: бесплатный план включает 1 хранилище",
+	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
+		"На бесплатном плане нельзя создать новое хранилище. Синхронизируйте существующее хранилище выше или перейдите на платный план, чтобы добавить новые.",
+	"Upgrade plan": "Перейти на платный план",
 	"{count} minutes ago": {
 		one: "{count} минуту назад",
 		few: "{count} минуты назад",

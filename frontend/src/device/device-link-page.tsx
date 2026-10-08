@@ -1,6 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -582,25 +584,26 @@ function DeviceLinkPage() {
 							atVaultCap={atVaultCap}
 						/>
 						{Boolean(atVaultCap) && (
-							<p className="text-muted-foreground text-xs">
-								<Trans
-									text="Your Free plan includes 1 vault — link into the existing one above, or {upgrade} to create more."
-									slots={{
-										upgrade: (
-											<a
-												className="underline underline-offset-4"
-												href={`${location.search}${settingsHash("billing")}`}
-												onClick={(e) => {
-													e.preventDefault();
-													navigate(settingsTo("billing", location.search));
-												}}
-											>
-												{t("upgrade")}
-											</a>
-										),
-									}}
-								/>
-							</p>
+							<Alert className="border-amber-500/40 bg-amber-500/10 p-4 text-foreground">
+								<TriangleAlert aria-hidden="true" className="text-amber-500" />
+								<AlertTitle className="text-base">
+									{t("Vault limit reached: your Free plan includes 1 vault")}
+								</AlertTitle>
+								<AlertDescription className="flex flex-col gap-3 text-foreground">
+									<span>
+										{t(
+											"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.",
+										)}
+									</span>
+									<Button
+										type="button"
+										className="w-full"
+										onClick={() => navigate(settingsTo("billing", location.search))}
+									>
+										{t("Upgrade plan")}
+									</Button>
+								</AlertDescription>
+							</Alert>
 						)}
 
 						{/* The typed-code step IS the phishing defence RFC 8628 §5.4 names,

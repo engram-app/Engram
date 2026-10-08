@@ -49,6 +49,7 @@ interface FakeBilling {
 		obsidian_connections: number | null;
 		mcp_connections: number | null;
 		api_write_enabled: boolean;
+		vaults?: number | null;
 	};
 	current_connections: { obsidian: number; mcp: number };
 	device_swap_cooldown_remaining_hours: number | null;
@@ -375,6 +376,41 @@ describe("DeviceLinkPage", () => {
 		billingPending.current = false;
 		rerender(pageTree("/link?code=ENGR-7X4K", qc));
 		await waitFor(() => expect(get).toHaveBeenCalledWith("/vaults?user_code=ENGR-7X4K"));
+	});
+
+	describe("at the Free vault cap", () => {
+		const atVaultCap = (vaults: number | null) => {
+			billingState.current = {
+				caps: {
+					obsidian_connections: null,
+					mcp_connections: null,
+					api_write_enabled: true,
+					vaults,
+				},
+				current_connections: { obsidian: 0, mcp: 0 },
+				device_swap_cooldown_remaining_hours: null,
+			};
+		};
+
+		it("warns, offers an upgrade, and drops the create rows", async () => {
+			atVaultCap(1);
+			get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
+			renderPage("/link?code=ENGR-7X4K");
+
+			expect(await screen.findByRole("alert")).toHaveTextContent(/vault limit reached/iu);
+			expect(screen.getByRole("button", { name: /upgrade plan/iu })).toBeInTheDocument();
+			expect(screen.getByRole("radio", { name: /personal/iu })).toBeChecked();
+			expect(screen.queryByText("Or create a new vault")).not.toBeInTheDocument();
+		});
+
+		it("shows no warning while the account is under the cap", async () => {
+			atVaultCap(2);
+			get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
+			renderPage("/link?code=ENGR-7X4K");
+
+			await screen.findByRole("radio", { name: /personal/iu });
+			expect(screen.queryByText(/vault limit reached/iu)).not.toBeInTheDocument();
+		});
 	});
 
 	// RFC 8628 §5.4: typing the code IS the anti-phishing beat, and arriving
