@@ -19,9 +19,9 @@ pub unsafe extern "C" fn guard_roundtrip(ptr: *const u8, len: usize, zstd: bool)
     let Ok((ct, nonce)) = seal(plain, &key, b"aad", mode, [1; NONCE], alloc) else {
         return usize::MAX;
     };
-    match open(&ct, &nonce, &key, b"aad", alloc) {
+    match open(&ct, &nonce, &key, b"aad", len, alloc) {
         Ok(Opened::InPlace(buf, skip)) => buf.len() - skip,
         Ok(Opened::Inflated(v)) => v.len(),
-        Err(_) => usize::MAX,
+        Ok(Opened::OverBudget) | Err(_) => usize::MAX,
     }
 }

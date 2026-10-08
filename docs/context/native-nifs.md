@@ -61,12 +61,37 @@ bump.
 `:crypto` wrote (`test/support/crypto_oracle.ex` is the oracle; two KATs in
 envelope.rs pin it too); format 1 adds a codec byte and zstd. Formats and
 policy: `encryption-operations.md` "Envelope formats". Scheduling: seal and
-format-0 open run dirty above 16 KB; a format-1 open (13-byte nonce field)
-always runs dirty, because a zstd body's size does not bound its work (a
-1,568 B ciphertext inflated to 50 MB in 182 ms, measured). Decode streams (no
-allocation from the declared size) and refuses a frame whose zstd window
-buffer would pass 2^23 (zstd's default allows 2^27; level 3 writes at most
-2^21).
+open run dirty above 16 KB of input. A zstd body's size does not bound its
+work (a 1,568 B ciphertext inflated to 50 MB in 182 ms, measured), so an
+inline open (up to 16 KB of ciphertext, any format) inflates a zstd body only
+if its frame header declares at most 16 KB, and otherwise returns
+`:reschedule` without decoding; `Engram.Native.envelope_open/4` then reruns it
+dirty (re-decrypting at most 16 KB, cheap). Raw format 1 and format 0 finish
+inline. Decode streams (no allocation from the declared size), never outputs
+past the declared size (one spare byte, so a frame that decodes further fails
+there instead of growing to its real size first), and refuses a frame whose
+zstd window buffer would pass 2^23 (zstd's default allows 2^27; level 3
+writes at most 2^21). Seal skips zstd below 64 bytes of plaintext and writes
+format 1 raw: zstd's ~13 bytes of frame overhead ate any saving there
+(0 of 300 doc excerpts at 16-64 bytes came out smaller; at 96 bytes a third
+did, by ~4 bytes; from 128 bytes it wins almost always).
+
+Read path under compression (2026-10-08, same Xeon, `notes.content` rows
+sealed `:zstd`, `Native.envelope_open/4` with PromEx's real handlers
+attached, interleaved with `CryptoOracle.decrypt/4`, best of 7 x N, three
+rounds per run, ns per call, ranges over three runs; load 1.2-2.5 before,
+1.7-2.6 after):
+
+| Plaintext | Stored | `:crypto` (format 0) | Before (format 1 always dirty) | After (inline when cheap) |
+|---|---|---|---|---|
+| 40 B (raw) | 57 B | 1,308-1,442 | 14,908-16,988 (dirty) | 1,334-1,513 (inline) |
+| 2 KB | 658 B | 3,943-4,336 | 26,965-30,563 (dirty) | 10,977-11,164 (inline) |
+| 16 KB | 4,196 B | 19,145-20,027 | 61,100-63,695 (dirty) | 44,001-44,596 (inline) |
+| 100 KB | 24,289 B | 108,204-114,679 | 277,809-287,303 (dirty) | 270,378-287,305 (dirty, over 16 KB of ct) |
+
+The before cost was the dirty hop plus the per-call event with PromEx
+(~9 us, "Envelope telemetry" below); a 40-byte read is back level with
+`:crypto`. What remains at 2-16 KB is zstd decode itself.
 
 Where it lives: `native/engram_core` is a pure-Rust crate (no rustler, no
 RNG, `forbid(unsafe_code)` outside its tests) holding the engine, its KATs
@@ -236,8 +261,10 @@ handlers (two distributions, one sum) cost about 9 us, so a 40-byte decrypt
 was 7x `:crypto`. An interleaved check (15 alternating rounds of 100k) put
 the after path at 1,213 ns min / 1,298 median against `:crypto`'s 1,411 /
 1,467. Inline format-0 calls (seal `:none`, open with a 12-byte nonce, up to
-16 KB) now call the inline NIF directly and emit no event; format 1 and every
-dirty call still go through `call/4`. The counts did not go: the NIF counts
+16 KB) now call the inline NIF directly and emit no event; format-1 seals and
+every dirty call still go through `call/4`. Since #1872 PR 3 every inline open
+(format 0 or 1, up to 16 KB of ciphertext) is event-free too; one the inline
+NIF answers `:reschedule` is counted once, by its dirty rerun, which emits. The counts did not go: the NIF counts
 EVERY seal and open (calls, input bytes) in relaxed atomics,
 `Engram.Native.envelope_counts/0`, which `Engram.PromEx.Native` polls as
 `[:engram, :nif, :envelope]` (gauges of cumulative values: read with
@@ -523,9 +550,12 @@ bumping pulldown-cmark: `ENGRAM_FUZZ_CASES=2000000 ENGRAM_FUZZ_SEED=7 cargo test
 EXCEPT small inputs on a hot path. Twelve NIFs export a normal and a
 `_dirty_nif` variant: `link_extract`, `note_title`, `note_meta`, `chunk`,
 `frontmatter_split`, `frontmatter_parse`, `text_diff`, `utf16_offsets`,
-`hmac_hex_many`, `json_decode`, `envelope_seal`, `envelope_open`. `envelope_open`
-also forces dirty for every format-1 ciphertext whatever its size (decompression
-work is not bounded by input size; `sized/4`'s `force_dirty`). `md_outline` does not: comrak takes ~10 ms on 16 KB of
+`hmac_hex_many`, `json_decode`, `envelope_seal`, `envelope_open`. `envelope_open`'s
+inline variant also refuses to inflate a zstd body declaring over 16 KB
+(decompression work is not bounded by input size): it returns `:reschedule`
+and the wrapper reruns the dirty variant (`sized/4`'s `force_dirty`). That
+budget is in the NIF, so the pair is written out in `lib.rs` rather than with
+`sized_nif!`. `md_outline` does not: comrak takes ~10 ms on 16 KB of
 dense markup (tight list, `# h` lines; 0.1 ms on prose), so it is always
 dirty. Up to 16 KB of input (`@inline_max`, well under 1 ms) runs
 on the calling scheduler. A note write must not queue behind a long

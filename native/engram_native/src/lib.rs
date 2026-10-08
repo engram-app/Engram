@@ -421,7 +421,7 @@ fn md_outline_nif(content: &str) -> NifResult<(Option<outline::Outline>, usize)>
     }
 }
 
-rustler::atoms! { none, zstd, auto }
+rustler::atoms! { none, zstd, auto, reschedule }
 
 fn envelope_mode(mode: Atom) -> NifResult<envelope::Mode> {
     match mode {
@@ -443,7 +443,9 @@ fn sealed<'a>(env: Env<'a>, out: Result<(OwnedBinary, Vec<u8>), envelope::Error>
 
 /// Every envelope seal (calls, input bytes at 0, 1) and open (2, 3) since
 /// the library loaded, inline or dirty. `Engram.Native` skips the per-call
-/// telemetry event for inline format-0 calls, so this is their only count.
+/// telemetry event for inline format-0 seals and every inline open, so this
+/// is their only count. An open the inline NIF hands back as `:reschedule`
+/// is counted once, by the dirty call that finishes it.
 /// Relaxed: counters, not synchronisation.
 static ENVELOPE_COUNTS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
 
@@ -509,16 +511,20 @@ fn envelope_seal_with_nonce_nif<'a>(
 
 /// `Engram.Crypto.Envelope.decrypt/4`'s engine: any format; `:error` on
 /// anything that does not authenticate and decode. Never raises on input.
+/// `inflate_max` is the core's budget for a zstd body (see the pair below).
 fn envelope_open<'a>(
     env: Env<'a>,
     ct: Binary<'a>,
     nonce: Binary<'a>,
     key: Binary<'a>,
     aad: Binary<'a>,
+    inflate_max: usize,
 ) -> (Term<'a>, usize) {
-    count_envelope(2, ct.len());
     let (out, peak) =
-        memory::measured(|| envelope::open(&ct, &nonce, &key, &aad, OwnedBinary::new));
+        memory::measured(|| envelope::open(&ct, &nonce, &key, &aad, inflate_max, OwnedBinary::new));
+    if !matches!(out, Ok(envelope::Opened::OverBudget)) {
+        count_envelope(2, ct.len());
+    }
     // Format 0 and raw format 1 decrypt in their BEAM binary; raw skips the
     // codec byte as a sub-binary, not a copy.
     let error = || rustler::types::atom::error().encode(env);
@@ -532,11 +538,43 @@ fn envelope_open<'a>(
             }
         }
         Ok(envelope::Opened::Inflated(v)) => to_binary(env, &v).encode(env),
+        Ok(envelope::Opened::OverBudget) => reschedule().encode(env),
         Err(envelope::Error) => error(),
     };
     (term, peak)
 }
 
-sized_nif!(envelope_open, envelope_open_nif, envelope_open_dirty_nif, <'a>(env, ct: Binary<'a>, nonce: Binary<'a>, key: Binary<'a>, aad: Binary<'a>) [ct, nonce, key, aad] -> (Term<'a>, usize));
+/// `Engram.Native`'s @inline_max: the most a zstd body may inflate to on the
+/// calling scheduler.
+const INLINE_INFLATE_MAX: usize = 16_384;
+
+// The open pair is written out, not `sized_nif!`: the two differ in budget.
+// Inline (the caller keeps the ciphertext to 16 KB): decrypts, and inflates
+// a zstd body only if its frame declares at most INLINE_INFLATE_MAX bytes,
+// else returns `:reschedule` for the dirty variant (decode work is not
+// bounded by ciphertext size: 1.5 KB of zstd inflated to 50 MB). The budget
+// lives here, not in the caller, so no argument can lift it.
+
+#[rustler::nif]
+fn envelope_open_nif<'a>(
+    env: Env<'a>,
+    ct: Binary<'a>,
+    nonce: Binary<'a>,
+    key: Binary<'a>,
+    aad: Binary<'a>,
+) -> (Term<'a>, usize) {
+    envelope_open(env, ct, nonce, key, aad, INLINE_INFLATE_MAX)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn envelope_open_dirty_nif<'a>(
+    env: Env<'a>,
+    ct: Binary<'a>,
+    nonce: Binary<'a>,
+    key: Binary<'a>,
+    aad: Binary<'a>,
+) -> (Term<'a>, usize) {
+    envelope_open(env, ct, nonce, key, aad, usize::MAX)
+}
 
 rustler::init!("Elixir.Engram.Native");

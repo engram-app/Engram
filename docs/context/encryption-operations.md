@@ -37,9 +37,11 @@ Every encrypted column is `ct_with_tag` plus a `nonce` field, produced by
   ciphertext can be tens of MB of plaintext). A frame that needs zstd's own
   window buffer is refused if that window passes 8 MB (2^23; zstd's default is
   128 MB, level 3 writes at most 2^21).
-- Scheduling: seal and format-0 open run on the calling scheduler up to 16 KB
-  and dirty above it. A format-1 open always runs dirty, whatever the
-  ciphertext size, since decompression work is not bounded by it.
+- Scheduling: seal and open run on the calling scheduler up to 16 KB of
+  input and dirty above it. A zstd body inflates inline only if its frame
+  declares at most 16 KB; a bigger one is rerun dirty (decompression work is
+  not bounded by ciphertext size). Plaintexts under 64 bytes are sealed
+  format 1 raw without trying zstd (it never saved bytes there).
 - Anything that fails to authenticate, decode or parse returns `:error`; a key
   that is not 32 bytes raises `FunctionClauseError` from `Envelope`'s guard
   (unchanged).

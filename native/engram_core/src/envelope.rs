@@ -36,6 +36,10 @@ const LEVEL: i32 = 3;
 const WINDOW_LOG_MAX: u32 = 23;
 // :auto compresses a sample first; incompressible media skips the full pass.
 const SAMPLE: usize = 64 * 1024;
+// Plaintexts under this skip zstd: its frame overhead (~13 bytes with the
+// checksum and content size) ate any saving on real text below 64 bytes
+// (measured: 0 of 300 doc excerpts at 16-64 bytes compressed smaller).
+const MIN_ZSTD: usize = 64;
 
 /// Seal or open failed: a bad key, an input that does not authenticate or
 /// decode, or a failed allocation. Deliberately says no more than that.
@@ -68,13 +72,21 @@ fn compress(data: &[u8]) -> Option<Vec<u8>> {
     })
 }
 
+/// A frame's declared content size, from its header (`seal` always writes
+/// one). None if the header is bad or does not declare a size.
+fn declared_size(frame: &[u8]) -> Option<usize> {
+    usize::try_from(zstd_safe::get_frame_content_size(frame).ok()??).ok()
+}
+
 /// One whole frame, or None if it is corrupt, truncated, has trailing
-/// bytes, or needs a window past `WINDOW_LOG_MAX`. The header's content size is checked by zstd at the end of the
-/// frame but never trusted for an allocation: the output grows as bytes
-/// actually decode (from a start sized off the frame), capped by the
-/// declared size, so a lying header cannot force a huge allocation.
+/// bytes, decodes past its declared size, or needs a window past
+/// `WINDOW_LOG_MAX`. The declared size is a ceiling, never an allocation:
+/// the output grows as bytes actually decode (from a start sized off the
+/// frame), up to the declared size and then by one byte, so a frame that
+/// decodes past it fails there, and a lying header cannot force a huge
+/// allocation either way.
 fn decompress(frame: &[u8]) -> Option<Vec<u8>> {
-    let declared = usize::try_from(zstd_safe::get_frame_content_size(frame).ok()??).ok()?;
+    let declared = declared_size(frame)?;
     let start = frame.len().saturating_mul(8).max(64 * 1024);
     let mut out = Vec::with_capacity(declared.min(start));
     DCTX.with(|d| {
@@ -91,21 +103,21 @@ fn decompress(frame: &[u8]) -> Option<Vec<u8>> {
         let mut input = InBuffer::around(frame);
         loop {
             if out.len() == out.capacity() {
-                // Doubling, and while under the declared size never past it
-                // (a truthful frame ends at exactly its size). zstd checks the
-                // size only at the frame's end, so an overrun keeps doubling
-                // until then; that is real decoded data, not a header's claim.
-                let room = out.capacity().max(1);
-                let more = match declared.checked_sub(out.len()) {
-                    Some(gap) if gap > 0 => room.min(gap),
-                    _ => room,
-                };
-                out.reserve_exact(more);
+                // Doubling, never past the declared size plus one spare byte
+                // (a truthful frame ends at exactly its size). The spare byte
+                // is room for zstd to read the checksum in; a byte decoded
+                // into it is an overrun, refused below. zstd itself checks
+                // the size only at the frame's end, after decoding all of it.
+                let gap = declared.saturating_add(1) - out.len();
+                out.reserve_exact(out.capacity().clamp(1, gap));
             }
             let pos = out.len();
             let mut buf = OutBuffer::around_pos(&mut out, pos);
             let left = d.decompress_stream(&mut buf, &mut input).ok()?;
             let full = buf.pos() == buf.capacity();
+            if buf.pos() > declared {
+                return None;
+            }
             if left == 0 {
                 return (input.pos() == frame.len()).then_some(out);
             }
@@ -173,16 +185,19 @@ pub fn seal<B: DerefMut<Target = [u8]>>(
         let ct = seal_parts(&c, nonce, aad, &[], plain, alloc)?;
         return Ok((ct, nonce.to_vec()));
     }
-
-    // :auto keeps zstd only if it saves 10%. Under SAMPLE the sample IS the
-    // input, so its compression is the result: compress once, not twice.
-    let worth = |z: &Vec<u8>, of: usize| z.len() * 10 <= of * 9;
-    let zipped = match mode {
-        Mode::Auto if plain.len() > SAMPLE => compress(&plain[..SAMPLE])
-            .filter(|z| worth(z, SAMPLE))
-            .and_then(|_| compress(plain)),
-        Mode::Auto => compress(plain).filter(|z| worth(z, plain.len())),
-        _ => compress(plain),
+    let zipped = if plain.len() < MIN_ZSTD {
+        None
+    } else {
+        // :auto keeps zstd only if it saves 10%. Under SAMPLE the sample IS
+        // the input, so its compression is the result: compress once, not twice.
+        let worth = |z: &Vec<u8>, of: usize| z.len() * 10 <= of * 9;
+        match mode {
+            Mode::Auto if plain.len() > SAMPLE => compress(&plain[..SAMPLE])
+                .filter(|z| worth(z, SAMPLE))
+                .and_then(|_| compress(plain)),
+            Mode::Auto => compress(plain).filter(|z| worth(z, plain.len())),
+            _ => compress(plain),
+        }
     };
     let (codec, payload) = match &zipped {
         Some(z) if z.len() < plain.len() => (CODEC_ZSTD, z.as_slice()),
@@ -198,17 +213,24 @@ pub fn seal<B: DerefMut<Target = [u8]>>(
 
 /// What `open` decrypted: the plaintext is `buf[skip..]` of the buffer from
 /// `alloc` (format 0 and raw format 1, no further copy), or a zstd frame's
-/// decoded output.
+/// decoded output. `OverBudget`: the row authenticated, but its zstd frame
+/// declares more than `inflate_max` bytes, so it was not decoded.
 pub enum Opened<B> {
     InPlace(B, usize),
     Inflated(Vec<u8>),
+    OverBudget,
 }
 
+/// `inflate_max` bounds a zstd body's declared size (and so its output):
+/// the NIF opens on a normal scheduler with a small budget and reschedules
+/// on `OverBudget`. Format 0 and raw bodies ignore it; their plaintext is
+/// no bigger than the ciphertext. `usize::MAX`: no budget.
 pub fn open<B: DerefMut<Target = [u8]>>(
     ct: &[u8],
     nonce_field: &[u8],
     key: &[u8],
     aad: &[u8],
+    inflate_max: usize,
     alloc: impl FnOnce(usize) -> Option<B>,
 ) -> Result<Opened<B>, Error> {
     let c = cipher(key)?;
@@ -234,7 +256,10 @@ pub fn open<B: DerefMut<Target = [u8]>>(
     }
     match buf.first().copied() {
         Some(CODEC_RAW) => Ok(Opened::InPlace(buf, 1)),
-        Some(CODEC_ZSTD) => decompress(&buf[1..]).map(Opened::Inflated).ok_or(Error),
+        Some(CODEC_ZSTD) => match declared_size(&buf[1..]) {
+            Some(n) if n > inflate_max => Ok(Opened::OverBudget),
+            _ => decompress(&buf[1..]).map(Opened::Inflated).ok_or(Error),
+        },
         _ => Err(Error),
     }
 }
@@ -276,9 +301,10 @@ mod tests {
     }
 
     fn open(ct: &[u8], nonce: &[u8], key: &[u8], aad: &[u8]) -> Result<Vec<u8>, Error> {
-        match super::open(ct, nonce, key, aad, vec)? {
+        match super::open(ct, nonce, key, aad, usize::MAX, vec)? {
             Opened::InPlace(buf, skip) => Ok(buf[skip..].to_vec()),
             Opened::Inflated(v) => Ok(v),
+            Opened::OverBudget => unreachable!("no budget"),
         }
     }
 
@@ -394,14 +420,108 @@ mod tests {
     }
 
     /// A hand-built zstd frame: no checksum, 1 KB window, an 8-byte content
-    /// size of `claimed`, and one raw last block holding `data`.
+    /// size of `claimed`, and `data` as raw blocks of at most the window.
     fn raw_frame(claimed: u64, data: &[u8]) -> Vec<u8> {
         let mut f = vec![0x28, 0xb5, 0x2f, 0xfd, 0b1100_0000, 0x00];
         f.extend_from_slice(&claimed.to_le_bytes());
-        let block = (data.len() as u32) << 3 | 1; // raw, last
-        f.extend_from_slice(&block.to_le_bytes()[..3]);
-        f.extend_from_slice(data);
+        let blocks: Vec<&[u8]> = data.chunks(1024).collect();
+        for (i, b) in blocks.iter().enumerate() {
+            let last = u32::from(i + 1 == blocks.len());
+            let header = (b.len() as u32) << 3 | last; // raw
+            f.extend_from_slice(&header.to_le_bytes()[..3]);
+            f.extend_from_slice(b);
+        }
         f
+    }
+
+    /// Like `raw_frame`, but `blocks` RLE blocks of 1 KB of `b'x'` each:
+    /// 4 bytes of frame per KB of output.
+    fn rle_frame(claimed: u64, blocks: usize) -> Vec<u8> {
+        let mut f = vec![0x28, 0xb5, 0x2f, 0xfd, 0b1100_0000, 0x00];
+        f.extend_from_slice(&claimed.to_le_bytes());
+        for i in 0..blocks {
+            let last = u32::from(i + 1 == blocks);
+            let header = 1024u32 << 3 | 1 << 1 | last; // RLE
+            f.extend_from_slice(&header.to_le_bytes()[..3]);
+            f.push(b'x');
+        }
+        f
+    }
+
+    #[test]
+    fn a_frame_that_overruns_its_declared_size_stops_at_it() {
+        let open_body = |frame: &[u8]| {
+            let (ct, n) = seal_f1_body(&[&[CODEC_ZSTD][..], frame].concat(), b"a");
+            crate::peak::measured(|| open(&ct, &n, &K, b"a"))
+        };
+        // Truthful: 1 MB from a 4 KB frame.
+        assert_eq!(
+            open_body(&rle_frame(1 << 20, 1024)).0.unwrap().len(),
+            1 << 20
+        );
+        // Declares 100 KB, decodes to 1 MB: output stops at the declared
+        // size, not at the frame's real end where zstd checks the size.
+        let (out, peak) = open_body(&rle_frame(100 << 10, 1024));
+        assert!(out.is_err());
+        // The output's last doubling (64 KB -> the declared 100 KB) holds
+        // both buffers at once; 1 MB never exists.
+        assert!(peak < 200 << 10, "peak {peak}");
+        // Declares 100 bytes and holds 1 MB of raw blocks.
+        let (out, peak) = open_body(&raw_frame(100, &vec![b'x'; 1 << 20]));
+        assert!(out.is_err());
+        assert!(peak < (1 << 20) + (64 << 10), "peak {peak}"); // the body itself
+    }
+
+    #[test]
+    fn a_budgeted_open_inflates_only_a_declared_size_within_it() {
+        let plain = b"abc ".repeat(4096); // 16 KB, ~50 bytes of zstd
+        let (ct, n) = seal(&plain, &K, b"a", Mode::Zstd).unwrap();
+        let budgeted = |ct: &[u8], n: &[u8], max| {
+            crate::peak::measured(|| super::open(ct, n, &K, b"a", max, vec))
+        };
+        match budgeted(&ct, &n, plain.len()).0 {
+            Ok(Opened::Inflated(v)) => assert_eq!(v, plain),
+            _ => panic!("at the budget: inflates"),
+        }
+        // A byte under: refused from the header, before any decoding.
+        let (out, peak) = budgeted(&ct, &n, plain.len() - 1);
+        assert!(matches!(out, Ok(Opened::OverBudget)));
+        assert!(peak < 1024, "peak {peak}");
+        // Raw format 1 and format 0 are bounded by their ciphertext: the
+        // budget does not apply.
+        for mode in [Mode::None, Mode::Auto] {
+            let mut noise = vec![0u8; 4096];
+            fill_noise(&mut noise);
+            let (ct, n) = seal(&noise, &K, b"a", mode).unwrap();
+            assert!(matches!(budgeted(&ct, &n, 0).0, Ok(Opened::InPlace(..))));
+        }
+        // Declares 1 KB (inside the budget) and decodes to 1 MB: stops at
+        // the declared size.
+        let (ct, n) = seal_f1_body(&[&[CODEC_ZSTD][..], &rle_frame(1024, 1024)].concat(), b"a");
+        let (out, peak) = budgeted(&ct, &n, 16 << 10);
+        assert!(out.is_err());
+        assert!(peak < 16 << 10, "peak {peak}");
+        // No declared size at all: refused at any budget.
+        let mut z = zstd::bulk::Compressor::new(LEVEL).unwrap();
+        z.include_contentsize(false).unwrap();
+        let frame = z.compress(&plain).unwrap();
+        let (ct, n) = seal_f1_body(&[&[CODEC_ZSTD][..], &frame].concat(), b"a");
+        assert!(budgeted(&ct, &n, usize::MAX).0.is_err());
+    }
+
+    #[test]
+    fn tiny_plaintexts_are_sealed_raw_without_trying_zstd() {
+        // Under MIN_ZSTD bytes zstd's frame overhead (~13 bytes) eats any
+        // saving, so seal writes format 1 raw straight away, even for input
+        // zstd would shrink.
+        for mode in [Mode::Zstd, Mode::Auto] {
+            let small = [b'a'; MIN_ZSTD - 1];
+            let (ct, n) = rt(&small, mode);
+            assert_eq!(n.len(), NONCE + 1);
+            assert_eq!(ct.len(), small.len() + 1 + TAG, "{mode:?}");
+            let (ct, _) = rt(&[b'a'; MIN_ZSTD], mode);
+            assert!(ct.len() < MIN_ZSTD, "{mode:?}");
+        }
     }
 
     #[test]

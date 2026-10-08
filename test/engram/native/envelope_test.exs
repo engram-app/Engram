@@ -122,14 +122,98 @@ defmodule Engram.Native.EnvelopeTest do
       assert_received {_, ^ref, %{input_bytes: 3}, %{nif: :envelope_seal, dirty: false}}
     end
 
-    # A format-1 zstd row inflates far past its ciphertext (1.5 KB -> 50 MB
-    # measured), so its size says nothing about the work: always dirty.
-    test "open: a small format-1 ciphertext still runs dirty" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+    # A format-1 zstd row can inflate far past its ciphertext (1.5 KB ->
+    # 50 MB measured), so its size does not bound the work. The inline NIF
+    # inflates only a frame that declares at most 16 KB; anything bigger
+    # comes back `:reschedule` and reruns dirty.
+    test "open: a small format-1 zstd row runs inline, counted, no event" do
+      plain = String.duplicate("Some markdown with [[links]].\n", 35)
+      {ct, <<1, _::binary-size(12)>> = nonce} = Native.envelope_seal(plain, @key, @aad, :zstd)
+      assert byte_size(ct) < byte_size(plain) + 17
+
+      assert_counted_inline(:envelope_open, byte_size(ct), fn ->
+        assert Native.envelope_open(ct, nonce, @key, @aad) == {:ok, plain}
+      end)
+    end
+
+    test "open: a small format-1 raw row runs inline, counted, no event" do
       {ct, <<1, _::binary-size(12)>> = nonce} = Native.envelope_seal("abc", @key, @aad, :zstd)
-      assert byte_size(ct) < 64
-      assert Native.envelope_open(ct, nonce, @key, @aad) == {:ok, "abc"}
-      assert_received {_, ^ref, _, %{nif: :envelope_open, dirty: true}}
+      assert byte_size(ct) == 3 + 1 + 16
+
+      assert_counted_inline(:envelope_open, byte_size(ct), fn ->
+        assert Native.envelope_open(ct, nonce, @key, @aad) == {:ok, "abc"}
+      end)
+    end
+
+    test "open: a tiny row that inflates to 1 MB reruns dirty, counted once" do
+      plain = String.duplicate("a", 1_000_000)
+      {ct, <<1, _::binary-size(12)>> = nonce} = Native.envelope_seal(plain, @key, @aad, :zstd)
+      assert byte_size(ct) < 200
+      assert {:reschedule, _} = Native.envelope_open_nif(ct, nonce, @key, @aad)
+
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+      before = counts()[:envelope_open]
+      for _ <- 1..@reps, do: assert(Native.envelope_open(ct, nonce, @key, @aad) == {:ok, plain})
+      # Double counting (inline try + dirty rerun) would be 2 x @reps.
+      assert_delta(counts()[:envelope_open], before, {@reps, byte_size(ct) * @reps})
+      size = byte_size(ct)
+      assert_received {_, ^ref, %{input_bytes: ^size}, %{nif: :envelope_open, dirty: true}}
+      :telemetry.detach(ref)
+    end
+
+    test "open: 16 KB of zstd plaintext inflates inline, a byte more reruns dirty" do
+      for {n, dirty} <- [{16_384, false}, {16_385, true}] do
+        plain = String.duplicate("a", n)
+        {ct, nonce} = Native.envelope_seal(plain, @key, @aad, :zstd)
+        assert byte_size(ct) < 100
+        ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+        assert Native.envelope_open(ct, nonce, @key, @aad) == {:ok, plain}
+
+        if dirty,
+          do: assert_received({_, ^ref, _, %{nif: :envelope_open, dirty: true}}),
+          else: refute_received({_, ^ref, _, %{nif: :envelope_open}})
+
+        :telemetry.detach(ref)
+      end
+    end
+
+    test "open: raw format 1 runs inline up to 16 KB of ciphertext, dirty past it" do
+      for {n, dirty} <- [{16_384 - 17, false}, {16_385 - 17, true}] do
+        plain = :crypto.strong_rand_bytes(n)
+        {ct, <<1, _::binary-size(12)>> = nonce} = Native.envelope_seal(plain, @key, @aad, :auto)
+        assert byte_size(ct) == n + 17
+        ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+        assert Native.envelope_open(ct, nonce, @key, @aad) == {:ok, plain}
+
+        if dirty,
+          do: assert_received({_, ^ref, _, %{nif: :envelope_open, dirty: true}}),
+          else: refute_received({_, ^ref, _, %{nif: :envelope_open}})
+
+        :telemetry.detach(ref)
+      end
+    end
+
+    # An authenticated frame (sealed with the real key and the format-1 AAD,
+    # as only a key holder could) that declares 1 KB and decodes to 1 MB of
+    # RLE blocks: the inline call stops at the declared size, never holding
+    # the 1 MB, and so does the dirty one.
+    test "open: a frame lying about its size never inflates past it" do
+      blocks =
+        for i <- 1..1024, into: <<>> do
+          last = if i == 1024, do: 1, else: 0
+          <<Bitwise.bor(Bitwise.bsl(1024, 3), Bitwise.bor(2, last))::little-24, ?x>>
+        end
+
+      frame = <<0x28, 0xB5, 0x2F, 0xFD, 0b1100_0000, 0, 1024::little-64, blocks::binary>>
+      nonce = :crypto.strong_rand_bytes(12)
+      ct = CryptoOracle.encrypt_with_nonce(<<1, frame::binary>>, @key, @aad <> "|f1", nonce)
+
+      for nif <- [:envelope_open_nif, :envelope_open_dirty_nif] do
+        assert {:error, peak} = apply(Native, nif, [ct, <<1, nonce::binary>>, @key, @aad])
+        assert peak < 16_384, "#{nif}: #{peak}"
+      end
+
+      assert Native.envelope_open(ct, <<1, nonce::binary>>, @key, @aad) == :error
     end
 
     test "the inline and dirty variants agree" do
@@ -139,7 +223,9 @@ defmodule Engram.Native.EnvelopeTest do
         {{ct, n}, _} = Native.envelope_seal_with_nonce_nif(@text, @key, @aad, mode, nonce)
         {inline, _} = Native.envelope_open_nif(ct, n, @key, @aad)
         {dirty, _} = Native.envelope_open_dirty_nif(ct, n, @key, @aad)
-        assert inline == @text and dirty == @text
+        # @text is 80 KB: its zstd frame is over the inline budget.
+        assert inline == if(mode == :none, do: @text, else: :reschedule)
+        assert dirty == @text
 
         {{ct1, n1}, _} = Native.envelope_seal_nif(@text, @key, @aad, mode)
         {{ct2, n2}, _} = Native.envelope_seal_dirty_nif(@text, @key, @aad, mode)
@@ -204,10 +290,13 @@ defmodule Engram.Native.EnvelopeTest do
     # NativeLeak warms every scheduler first, so the per-thread zstd
     # contexts exist before the counter is read (they are kept on purpose).
     test "seal + open in every mode leaks nothing" do
+      small = binary_part(@text, 0, 4_000)
+
       Engram.NativeLeak.assert_no_leak(fn ->
-        for mode <- [:none, :zstd, :auto] do
-          {{ct, nonce}, _} = Native.envelope_seal_nif(@text, @key, @aad, mode)
+        for mode <- [:none, :zstd, :auto], plain <- [@text, small] do
+          {{ct, nonce}, _} = Native.envelope_seal_nif(plain, @key, @aad, mode)
           {_, _} = Native.envelope_open_nif(ct, nonce, @key, @aad)
+          {_, _} = Native.envelope_open_dirty_nif(ct, nonce, @key, @aad)
         end
       end)
     end
@@ -247,6 +336,16 @@ defmodule Engram.Native.EnvelopeTest do
     call.(16_385)
     assert_delta(counts()[nif], inline, {1, 16_385})
     assert_receive {_, ^ref, %{input_bytes: 16_385}, %{nif: ^nif, dirty: true}}
+    :telemetry.detach(ref)
+  end
+
+  # `call` runs inline: counted in the NIF @reps times, no per-call event.
+  defp assert_counted_inline(nif, bytes, call) do
+    ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+    before = counts()[nif]
+    for _ <- 1..@reps, do: call.()
+    assert_delta(counts()[nif], before, {@reps, bytes * @reps})
+    refute_received {_, ^ref, _, %{nif: ^nif}}
     :telemetry.detach(ref)
   end
 
