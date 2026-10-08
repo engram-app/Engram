@@ -12,8 +12,11 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   client re-pulls and no checkpoint CAS (on version + seq) conflicts.
 
   One side effect: rewriting `notes.crdt_state_ciphertext` fires the
-  `notes_crdt_head_invalidate` trigger, which NULLs `crdt_head`.
-  `WarmCrdtHeads` re-warms it within the hour; once per note is acceptable.
+  `notes_crdt_head_invalidate` trigger, which NULLs `crdt_head`. Left NULL,
+  every live-bound note re-handshakes on each manifest reconcile (#1341), so
+  when a chain finishes that column it enqueues `BackfillCrdtHead` per vault
+  (`BackfillCrdtHead.enqueue_user/1`, as DEK rotation does) instead of
+  waiting for the hourly `WarmCrdtHeads`.
 
   No `RotationLock`: taking it would make the user's clients get HTTP 503.
   Instead every batch reloads the user and snoozes the job while a DEK
@@ -85,6 +88,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   alias Engram.Logger.Metadata
   alias Engram.Notes.{CrdtUpdateLog, Note, VaultIndexState, VaultIndexUpdateLog}
   alias Engram.Repo
+  alias Engram.Workers.BackfillCrdtHead
 
   require Logger
 
@@ -213,12 +217,24 @@ defmodule Engram.Workers.ReencodeEnvelopes do
            batch_size: setting(:batch_size, @batch_size),
            fun_in_tenant: false
          ) do
-      :ok -> run_columns(user_id, rest, nil, deadline)
-      {:halt, last_id} -> hand_off(user_id, column.label, last_id)
-      {:error, :rotation_in_progress} -> {:snooze, 60}
-      {:error, :compression_off} -> {:cancel, :compression_off}
-      {:error, :user_not_found} -> {:cancel, :user_not_found}
-      {:error, _} = err -> err
+      :ok ->
+        if column.label == :notes_crdt_state, do: :ok = BackfillCrdtHead.enqueue_user(user_id)
+        run_columns(user_id, rest, nil, deadline)
+
+      {:halt, last_id} ->
+        hand_off(user_id, column.label, last_id)
+
+      {:error, :rotation_in_progress} ->
+        {:snooze, 60}
+
+      {:error, :compression_off} ->
+        {:cancel, :compression_off}
+
+      {:error, :user_not_found} ->
+        {:cancel, :user_not_found}
+
+      {:error, _} = err ->
+        err
     end
   end
 

@@ -145,22 +145,7 @@ defmodule Engram.Crypto.UserDekRotation do
   #
   # Best-effort: a failed enqueue must not fail the rotation.
   defp enqueue_crdt_head_rewarm(%User{id: user_id}) do
-    # `vaults` is RLS-scoped, so an unscoped read returns [] and silently
-    # enqueues nothing. The inserts stay OUTSIDE the tenant scope: `oban_jobs`
-    # has no RLS, and `with_tenant/2` drops the connection to `engram_app`.
-    {:ok, vault_ids} =
-      Repo.with_tenant(user_id, fn ->
-        from(v in Engram.Vaults.Vault, where: v.user_id == ^user_id, select: v.id)
-        |> Repo.all(skip_tenant_check: true)
-      end)
-
-    Enum.each(vault_ids, fn vault_id ->
-      %{"user_id" => user_id, "vault_id" => vault_id}
-      |> Engram.Workers.BackfillCrdtHead.new()
-      |> Oban.insert()
-    end)
-
-    :ok
+    Engram.Workers.BackfillCrdtHead.enqueue_user(user_id)
   rescue
     e ->
       Logger.error(

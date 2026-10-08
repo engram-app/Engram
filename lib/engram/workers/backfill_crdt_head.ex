@@ -14,8 +14,8 @@ defmodule Engram.Workers.BackfillCrdtHead do
   `update_v1` or a prior batch), so a retry or a second `enqueue_all/0` never
   re-rebuilds a note.
 
-  Enqueued hourly by `Engram.Workers.WarmCrdtHeads` (and after a DEK rotation),
-  never by hand.
+  Enqueued hourly by `Engram.Workers.WarmCrdtHeads`, and per user after a DEK
+  rotation or an envelope re-encode (`enqueue_user/1`), never by hand.
   """
 
   # No `unique`: a cursor worker re-enqueues its own successor mid-run, which
@@ -82,6 +82,31 @@ defmodule Engram.Workers.BackfillCrdtHead do
     end)
 
     length(pairs)
+  end
+
+  @doc """
+  Enqueue one job per vault of `user_id`, right after a sweep that rewrote
+  every `crdt_state_ciphertext` (DEK rotation, envelope re-encode), so the
+  heads the trigger NULLed do not wait for the hourly run.
+  """
+  @spec enqueue_user(Ecto.UUID.t()) :: :ok
+  def enqueue_user(user_id) do
+    # `vaults` is RLS-scoped, so an unscoped read returns [] and silently
+    # enqueues nothing. The inserts stay OUTSIDE the tenant scope: `oban_jobs`
+    # has no RLS, and `with_tenant/2` drops the connection to `engram_app`.
+    {:ok, vault_ids} =
+      Repo.with_tenant(user_id, fn ->
+        from(v in Vault, where: v.user_id == ^user_id, select: v.id)
+        |> Repo.all(skip_tenant_check: true)
+      end)
+
+    Enum.each(vault_ids, fn vault_id ->
+      %{"user_id" => user_id, "vault_id" => vault_id}
+      |> __MODULE__.new()
+      |> Oban.insert()
+    end)
+
+    :ok
   end
 
   @impl Oban.Worker

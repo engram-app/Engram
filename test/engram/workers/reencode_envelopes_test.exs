@@ -203,6 +203,26 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
       refute ReencodeEnvelopes.legacy_rows?(u.id)
     end
 
+    # The crdt_state rewrite NULLs every head (trigger); rotation re-warms right
+    # after its sweep (#1341), and so does this, instead of waiting for the
+    # hourly WarmCrdtHeads.
+    test "finishing the notes crdt_state column enqueues a head re-warm per vault",
+         %{user: u, vault: v} do
+      other_vault = insert(:vault, user: u)
+      note = legacy_note!(u, v, "a.md", @big)
+      seed_crdt_state!(u, note, @big <> "state")
+      Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.BackfillCrdtHead"))
+
+      assert :ok = run(u)
+
+      for vault <- [v, other_vault],
+          do:
+            assert_enqueued(
+              worker: Engram.Workers.BackfillCrdtHead,
+              args: %{"user_id" => u.id, "vault_id" => vault.id}
+            )
+    end
+
     # The note's CRDT state is never empty (a Yjs doc encodes to bytes), so it
     # is real work; the 16-byte body is not, and survives the pass untouched.
     test "an empty note body stays format 0 and is not work", %{user: u, vault: v} do
