@@ -25,7 +25,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'Origin: https://smithery.ai
 # No Origin -> 401 (correct OAuth challenge)
 curl -s -o /dev/null -w '%{http_code}\n' -X POST https://mcp.engram.page
 ```
-- `EngramWeb.Plugs.McpOriginGuard` 403s any Origin not in `:cors_origin`. The fix adds hardcoded `@gateway_origins` / `@gateway_suffixes` (Smithery: `https://smithery.ai`, `https://<server>--<namespace>.run.tools`).
+- `EngramWeb.Plugs.McpOriginGuard` 403s any Origin not in `:cors_origin`. The fix adds a per-deployment `:mcp_gateway_origins` list, read from the `MCP_GATEWAY_ORIGINS` env var (comma-separated; exact origins or `https://*.domain` subdomain wildcards). Empty by default. Kept separate from `:cors_origin` because that list also opens REST CORS and the WebSocket origin check. Prod sets it in `engram-infra/main/envs/prod/ecs.tf` next to `ENGRAM_SAAS_FRONTEND_ORIGINS`; Smithery needs `https://smithery.ai,https://*.run.tools` (inferred, not observed).
 - Server card is built from `Engram.MCP.Tools.wire_list/0`, so it cannot drift from the real tool list.
 - On `mcp.engram.page` the card path must be listed in `HostRewrite` `@mcp_wellknown_prefixes`, or it 404s. It is pinned in `Plugs.CORS` `@cacheable_exact`.
 

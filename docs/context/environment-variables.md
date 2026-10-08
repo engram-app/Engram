@@ -52,6 +52,7 @@ Live. Covers every var `config/runtime.exs` reads (`Engram.EnvVarDocsTest` fails
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `ENGRAM_SAAS_FRONTEND_ORIGINS` | unset | Extra CORS/WS origins (comma-sep) for the Cloudflare Pages SPA + preview deploys. |
+| `MCP_GATEWAY_ORIGINS` | unset (`[]`) | Hosted MCP gateways whose Worker sends an Origin (comma-sep; exact origin or `https://*.domain` subdomain wildcard), e.g. `https://smithery.ai,https://*.run.tools`. Read only by `McpOriginGuard`, so unlike the CORS list it opens nothing else. |
 | `ENGRAM_HOST_REWRITE_ENABLED` | unset (`false`) | `true` enables `HostRewrite` plug for the dedicated `api.`/`mcp.engram.page` hosts. Self-host leaves unset → strict no-op. The two hosts are hardcoded in runtime.exs (prod only ever set them to their defaults). |
 | `ENGRAM_SAAS_ONLY` | unset | `true` → `reject_unknown_hosts` in HostRewrite. |
 | `ENGRAM_ALLOWED_EXTRA_HOSTS` | unset | Comma-sep extra allowed hosts. |

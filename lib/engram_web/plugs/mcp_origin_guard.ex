@@ -64,17 +64,29 @@ defmodule EngramWeb.Plugs.McpOriginGuard do
   # Hosted MCP gateways proxy every user call from a server-side Worker that
   # still sends its own Origin. A gateway is not a browser on a page we did not
   # serve, so it is outside the threat above, and bearer auth still applies to
-  # every call it forwards. Smithery: `smithery.ai` for its scanner, and
-  # `<server>--<namespace>.run.tools` for its gateway.
+  # every call it forwards.
   #
-  # ponytail: hardcoded, add a config list when a second gateway needs one.
-  @gateway_origins ["https://smithery.ai"]
-  @gateway_suffixes [".run.tools"]
-
+  # Per-deployment config, set from `MCP_GATEWAY_ORIGINS` in runtime.exs; empty
+  # by default, so a deployment that sets nothing behaves exactly as before.
+  # Kept separate from `:cors_origin` on purpose: that list also opens REST CORS
+  # and the WebSocket origin check, and a gateway needs neither.
+  #
+  # An entry is an exact origin (`https://smithery.ai`) or a subdomain wildcard
+  # (`https://*.run.tools`), which matches any subdomain but not the apex.
   defp gateway?(origin) do
-    origin in @gateway_origins or
-      (String.starts_with?(origin, "https://") and
-         Enum.any?(@gateway_suffixes, &String.ends_with?(origin, &1)))
+    :engram
+    |> Application.get_env(:mcp_gateway_origins, [])
+    |> Enum.any?(&gateway_match?(&1, origin))
+  end
+
+  defp gateway_match?(entry, origin) do
+    case String.split(entry, "://*.", parts: 2) do
+      [scheme, domain] ->
+        String.starts_with?(origin, scheme <> "://") and String.ends_with?(origin, "." <> domain)
+
+      [_exact] ->
+        origin == entry
+    end
   end
 
   # `"*"` (the dev/CI default when PHX_HOST is unset) disables the check, so

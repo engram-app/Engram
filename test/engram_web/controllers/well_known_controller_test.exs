@@ -224,10 +224,22 @@ defmodule EngramWeb.WellKnownControllerTest do
     test "carries serverInfo and empty resources and prompts", %{conn: conn} do
       body = conn |> get("/.well-known/mcp/server-card.json") |> json_response(200)
 
-      assert %{"name" => "engram", "version" => version} = body["serverInfo"]
-      assert is_binary(version)
+      # The real build version, the same number /api/health reports. It was a
+      # literal "0.1.0" that no release ever moved.
+      assert body["serverInfo"] == %{
+               "name" => "engram",
+               "version" => to_string(Application.spec(:engram, :vsn))
+             }
+
       assert body["resources"] == []
       assert body["prompts"] == []
+    end
+
+    test "tripwire: the card's empty resources/prompts still match what we serve" do
+      # `resources` and `prompts` are literal empty lists in the card. If MCP
+      # resources or prompts are ever added, this fails and points at
+      # `WellKnownController.mcp_server_card/2`, which must then list them.
+      assert Map.keys(EngramWeb.McpController.capabilities()) == ["tools"]
     end
 
     test "needs no auth and is edge-cacheable", %{conn: conn} do
