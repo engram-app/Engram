@@ -62,6 +62,44 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     assert body(u, v) == before
   end
 
+  # Every write funnels through Notes.upsert_note, so the 10 MB ceiling lives
+  # there; replace_text also sizes its result BEFORE building it (1M hits x a
+  # 1 KB replacement would be a 1 GB string on a web node).
+  test "replace_text refuses a result past the note-size cap, and writes nothing", %{
+    user: u,
+    vault: v
+  } do
+    {:ok, _} =
+      Notes.upsert_note(u, v, %{"path" => "N.md", "content" => String.duplicate("e", 1_000_000)},
+        actor: "api"
+      )
+
+    assert {:error, msg} =
+             Handlers.handle("edit_note", u, v, %{
+               "path" => "N.md",
+               "mode" => "replace_text",
+               "find" => "e",
+               "replace" => "eleven char",
+               "occurrence" => -1
+             })
+
+    assert msg =~ "10MB"
+    assert byte_size(body(u, v)) == 1_000_000
+  end
+
+  test "append past the note-size cap is refused", %{user: u, vault: v} do
+    big = String.duplicate("x", Notes.max_note_bytes() - 10)
+    {:ok, _} = Notes.upsert_note(u, v, %{"path" => "N.md", "content" => big}, actor: "api")
+
+    assert {:error, msg} =
+             Handlers.handle("append_to_note", u, v, %{
+               "path" => "N.md",
+               "text" => String.duplicate("y", 100)
+             })
+
+    assert msg =~ "10MB"
+  end
+
   test "replace_text accepts old_text/new_text aliases", %{user: u, vault: v} do
     assert {:ok, _, %{"replacements" => 1}} =
              Handlers.handle("edit_note", u, v, %{

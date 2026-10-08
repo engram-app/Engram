@@ -61,14 +61,14 @@ defmodule Engram.Native.LinkExtractTest do
             String.duplicate("- item with `code` and [[Link]]\n", 33_000),
             String.duplicate("Prose about [[Topic]] and [l](a.md).\n\n", 25_000)
           ] do
-        {_matches, peak} = Engram.Native.link_extract_dirty_nif(content)
+        {_matches, peak} = Engram.Native.link_extract_dirty_nif(content, 0xFFFF_FFFF_FFFF_FFFF)
         assert peak <= 10 * byte_size(content), "#{peak} for #{binary_part(content, 0, 20)}"
       end
     end
 
     test "repeated calls leak nothing" do
       Engram.NativeLeak.assert_no_leak(fn ->
-        Engram.Native.link_extract_nif("---\na: 1\n---\n[[x]] `y`")
+        Engram.Native.link_extract_nif("---\na: 1\n---\n[[x]] `y`", 100)
       end)
     end
 
@@ -81,10 +81,50 @@ defmodule Engram.Native.LinkExtractTest do
     end
   end
 
+  describe "the stored-link cap" do
+    test "extract keeps the first 20,000 links by position and counts the cut" do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :links, :truncated]])
+      note = String.duplicate("[[a]] ", 20_005)
+
+      links = Parser.extract(note)
+      assert length(links) == 20_000
+      assert List.last(links).position == hd(Parser.extract_all(note)).position + 19_999 * 6
+      assert_receive {[:engram, :links, :truncated], ^ref, %{count: 1}, _}
+
+      assert length(Parser.extract_all(note)) == 20_005
+    end
+
+    # The rename rewrite finds source notes through stored edges: a target
+    # whose only link sits past the cap must still get one, or a rename
+    # leaves it dangling.
+    test "a target first linked past the cap still gets an edge" do
+      note = String.duplicate("[[a]] ", 20_005) <> "[[late]]"
+      links = Parser.extract(note)
+      assert length(links) == 20_001
+      assert List.last(links).target == "late"
+    end
+
+    test "a note under the cap is untouched and emits nothing" do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :links, :truncated]])
+      assert length(Parser.extract(String.duplicate("[[a]] ", 100))) == 100
+      refute_receive {[:engram, :links, :truncated], ^ref, _, _}, 50
+    end
+
+    test "10 MB of links stays small natively (the NIF stops at the limit)" do
+      note = String.duplicate("[[a]] ", div(10_000_000, 6))
+      {{links, _, cut?}, peak} = Engram.Native.link_extract_dirty_nif(note, 20_000)
+      assert length(links) == 20_000 and cut?
+      # Measured 151 MB, uncapped 176 MB: the table of raw matches (48 B per
+      # match, sorted by position) is the floor; only the BEAM terms stop at
+      # the limit (that side was 713 MB for 1.67M links).
+      assert peak < 200_000_000, "#{peak}"
+    end
+  end
+
   test "16 KB runs on the calling scheduler, a byte more dirty" do
     Engram.NativeScheduled.assert_scheduled(
       :link_extract,
-      &Engram.Native.link_extract(String.duplicate("a", &1))
+      &Engram.Native.link_extract(String.duplicate("a", &1), 100)
     )
   end
 end

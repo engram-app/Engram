@@ -21,7 +21,7 @@ defmodule Engram.PromEx.Mcp do
 
   Also subscribes to `[:engram, :mcp, :section_parse, :stop]` (from
   `Engram.MCP.ParseGate`) — `%{duration: native, bytes: integer}`,
-  metadata `%{outcome: :ok | :busy | :timeout | :deadline | :error |
+  metadata `%{outcome: :ok | :too_complex | :busy | :timeout | :deadline | :error |
   :abandoned}` — for `engram_prom_ex_mcp_section_parse_duration_milliseconds`
   and `engram_prom_ex_mcp_section_parse_total`, tagged by `:outcome` only.
 

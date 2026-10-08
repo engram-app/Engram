@@ -92,7 +92,7 @@ defmodule Engram.Links.Rewriter do
 
     occurrences =
       full_text
-      |> Parser.extract()
+      |> Parser.extract_all()
       |> Enum.filter(&(Links.basename_key(&1.target) == old_key))
 
     candidates = if occurrences != [], do: pre_rename_candidates(user, vault, target)

@@ -37,7 +37,7 @@ defmodule Engram.Native do
   # dirty_nif, arity}`. Rust exports both; `sized/3` picks one by size.
   # Spelled out (not built from `name`) so a grep for either NIF lands here.
   @sized [
-    {:link_extract, :link_extract_nif, :link_extract_dirty_nif, 1},
+    {:link_extract, :link_extract_nif, :link_extract_dirty_nif, 2},
     {:note_title, :note_title_nif, :note_title_dirty_nif, 1},
     {:note_meta, :note_meta_nif, :note_meta_dirty_nif, 1},
     {:chunk, :chunk_nif, :chunk_dirty_nif, 3},
@@ -71,10 +71,11 @@ defmodule Engram.Native do
 
   @doc """
   Links for `Engram.Links.Parser`: `{[{position, kind, target_start,
-  target_len, target, alias, anchor}], scrub_count}`, in position order.
+  target_len, target, alias, anchor}], scrub_count, cut?}`, in position
+  order, the first `limit` of them (`cut?`: more were dropped).
   `content` must be valid UTF-8.
   """
-  def link_extract(content), do: sized(:link_extract, content, [content])
+  def link_extract(content, limit), do: sized(:link_extract, content, [content, limit])
 
   @doc """
   Chunks for `Engram.Parsers.Markdown.parse/2`: `[{text, context_text,
@@ -118,11 +119,12 @@ defmodule Engram.Native do
     do: sized(:text_diff, [current, incoming], [current, incoming])
 
   @doc """
-  What `Engram.MCP.Sections` reads from a CommonMark parse (comrak):
-  `{[{line, level, setext, plain_text, raw | nil, span}], explained_lines,
-  safe_line_ranges}`, lines 0-indexed. Text and raw come untrimmed. Valid
-  UTF-8 only. Always on a dirty scheduler: 16 KB of dense markup takes
-  ~10 ms in comrak.
+  What `Engram.MCP.Sections` reads from a CommonMark parse (comrak) of a
+  note as stored (BOM and frontmatter handled here): `{[{line, level, text,
+  raw, span}], explained_lines, safe_line_ranges}`, lines 0-indexed, text
+  and raw trimmed. nil when the note has more than 100,000 of them
+  (outline.rs MAX_ITEMS). Valid UTF-8 only. Always on a dirty scheduler:
+  16 KB of dense markup takes ~10 ms in comrak.
   """
   def md_outline(text) when is_binary(text),
     do: call(:md_outline, text, %{dirty: true}, fn -> md_outline_nif(text) end)

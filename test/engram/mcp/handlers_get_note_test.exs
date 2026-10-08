@@ -54,6 +54,29 @@ defmodule Engram.MCP.HandlersGetNoteTest do
       refute String.contains?(out, "**Tags:**"), "tags live in frontmatter, not injected"
     end
 
+    # `^\s*title` let `\s*` run across newlines from every line start:
+    # quadratic, 5.6 s on 100 KB of blank frontmatter lines, on every read.
+    test "a whitespace-heavy frontmatter is linear to check" do
+      # No key: the miss is what backtracked.
+      content = "---\n" <> String.duplicate(" \n", 100_000) <> "a: 1\n---\nBody."
+
+      {us, out} =
+        :timer.tc(fn -> Handlers.format_get_note(note(title: "T", content: content)) end)
+
+      assert String.starts_with?(out, "# T\n")
+      assert us < 1_000_000, "took #{div(us, 1000)} ms"
+    end
+
+    test "an indented title: key still counts" do
+      content = "---\n  title: T\n---\nBody."
+      assert String.starts_with?(Handlers.format_get_note(note(content: content)), "**Path:**")
+    end
+
+    test "a key split across lines is not a key" do
+      content = "---\ntitle\n: T\n---\nBody."
+      assert Handlers.format_get_note(note(title: "T", content: content)) =~ ~r/\A# T\n/
+    end
+
     test "nil tags and nil folder render without crashing" do
       out = Handlers.format_get_note(note(title: "N", tags: nil, folder: nil, content: "plain"))
 

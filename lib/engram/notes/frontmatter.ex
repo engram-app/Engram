@@ -68,10 +68,21 @@ defmodule Engram.Notes.Frontmatter do
     end
   end
 
+  # YamlElixir costs ~20 ms/KB on the blocks the native rules cannot read
+  # (a 300 KB nested block took 7 s), and parse runs on every save and
+  # checkpoint. Past this the block is not parsed: callers keep it as text
+  # (ingest's lossless whole-text-as-body path) and `invalid_yaml_reason/1`
+  # says why. The engram helpers here (key order, raw spans) are quadratic
+  # in the key count, so the cap bounds them too.
+  @yaml_max_bytes 32 * 1024
+
+  defp read_yaml(block) when byte_size(block) > @yaml_max_bytes, do: :too_large
+  defp read_yaml(block), do: YamlElixir.read_from_string(block)
+
   # YamlElixir path: the reference semantics, and the fallback.
   @doc false
   def parse_yaml(block) when is_binary(block) do
-    case YamlElixir.read_from_string(block) do
+    case read_yaml(block) do
       {:ok, map} when is_map(map) ->
         order = top_level_key_order(block, map)
         {values, bad_keys} = encode_values(map)
@@ -120,6 +131,14 @@ defmodule Engram.Notes.Frontmatter do
   @spec invalid_yaml_reason(String.t()) :: %{
           String.t() => String.t() | %{String.t() => String.t() | pos_integer() | nil}
         }
+  def invalid_yaml_reason(block) when byte_size(block) > @yaml_max_bytes do
+    %{
+      "code" => "frontmatter_too_large",
+      "message" => "The note's frontmatter is too large to read as properties (over 32 KB).",
+      "detail" => %{"key" => nil, "line" => 1, "snippet" => "<frontmatter>"}
+    }
+  end
+
   def invalid_yaml_reason(block) when is_binary(block) do
     # Content-safe: never echo the raw block text. Frontmatter values are
     # encrypted at rest and this reason is persisted PLAINTEXT + shipped on
@@ -165,7 +184,7 @@ defmodule Engram.Notes.Frontmatter do
 
   @doc false
   def parse_for_ingest_yaml(block) when is_binary(block) do
-    case YamlElixir.read_from_string(block) do
+    case read_yaml(block) do
       {:ok, map} when is_map(map) ->
         {values, bad_keys} = encode_values(map)
 

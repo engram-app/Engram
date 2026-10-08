@@ -35,6 +35,35 @@ defmodule Engram.MCP.HandlersPartialReadTest do
 
   defp get(u, v, args), do: Handlers.handle("get_notes", u, v, args)
 
+  # 20 paths x a 10 MB note was ~1 GB on a web node (each note's content is
+  # held a few times: decrypted, formatted, joined, JSON'd twice). The call
+  # returns whole notes until the content budget is spent; the rest answer
+  # with an error and can be fetched in their own call.
+  test "get_notes stops returning content once the call's byte budget is spent", %{
+    user: u,
+    vault: v
+  } do
+    big = String.duplicate("x", div(Handlers.get_notes_budget(), 2) + 1)
+
+    for p <- ["B1.md", "B2.md", "B3.md"] do
+      {:ok, _} =
+        Notes.upsert_note(u, v, %{"path" => p, "content" => big, "mtime" => 1.0}, actor: "api")
+    end
+
+    assert {:ok, text, %{"notes" => [a, b, c]}} =
+             get(u, v, %{"paths" => ["B1.md", "B2.md", "B3.md"]})
+
+    assert a["content"] == big
+    refute Map.has_key?(b, "content")
+    assert b["found"] == true and b["error"] =~ "own call"
+    refute Map.has_key?(c, "content")
+    refute text =~ big <> "\n\n---\n\n" <> big
+
+    # Fetched alone, the same note comes back whole.
+    assert {:ok, _, %{"notes" => [only]}} = get(u, v, %{"paths" => ["B2.md"]})
+    assert only["content"] == big
+  end
+
   # Review Focus 5
   test "section returns only that section, through fences, stopping at the next same-level heading",
        %{user: u, vault: v} do

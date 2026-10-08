@@ -1331,6 +1331,77 @@ defmodule EngramWeb.CrdtChannelTest do
   # notes a way to READ without a room; everything a client wanted to SEND still
   # had to go through `crdt_msg` -> `ensure_room`, which is why a durable-queue
   # drain over a 1.4k-note vault put 314 rooms resident against a cap of 64.
+  # The 10 MB note ceiling on live edits. An update can add at most its own
+  # byte size in UTF-16 units, so a content frame is refused when the doc's
+  # length plus the frame would pass the cap: checked BEFORE the apply, since
+  # an applied Yjs update cannot be taken back.
+  describe "note-size cap on live edits" do
+    setup %{user: user, vault: vault} do
+      at_cap = String.duplicate("a", Notes.max_note_bytes())
+
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/full.md", "content" => at_cap},
+          actor: "api"
+        )
+
+      %{full: note}
+    end
+
+    test "crdt_doc_update past the cap is refused as note_too_large", %{socket: socket, full: n} do
+      frame = delta_frame(socket, n.id, "X")
+      # A resident room, so the apply is timed, not a cold 10 MB room load
+      # (which outruns the 3 s room-free budget in the test env).
+      handshake_room(socket, n.id)
+      ref = push(socket, "crdt_doc_update", %{"doc_id" => n.id, "b64" => Base.encode64(frame)})
+      assert_reply ref, :error, %{reason: "note_too_large"}, 10_000
+    end
+
+    test "crdt_msg past the cap is refused as note_too_large", %{socket: socket, full: n} do
+      frame = delta_frame(socket, n.id, "X")
+
+      capture_log(fn ->
+        ref = push(socket, "crdt_msg", %{"doc_id" => n.id, "b64" => Base.encode64(frame)})
+        assert_reply ref, :error, %{reason: "note_too_large"}, 10_000
+      end)
+    end
+
+    # The cheap bound (doc + update size) refuses this; the update applied to
+    # a copy shrinks the note, so it lands. Refusing it left the client,
+    # which already applied it, out of sync for good (review of #1897).
+    test "a large replace that shrinks a note near the cap is accepted", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} =
+        Notes.upsert_note(
+          user,
+          vault,
+          %{"path" => "Notes/six.md", "content" => String.duplicate("a", 6_000_000)},
+          actor: "api"
+        )
+
+      client = handshake_room(socket, note.id)
+      {:ok, sv} = Yex.encode_state_vector(client)
+      text = Yex.Doc.get_text(client, "content")
+      Yex.Text.delete(text, 0, Yex.Text.length(text))
+      Yex.Text.insert(text, 0, String.duplicate("b", 4_500_000))
+      {:ok, update} = Yex.encode_state_as_update(client, sv)
+      {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_update, update}})
+
+      ref = push(socket, "crdt_doc_update", %{"doc_id" => note.id, "b64" => Base.encode64(frame)})
+      assert_reply ref, :ok, %{}, 15_000
+    end
+
+    test "a handshake step1 on a note at the cap still syncs", %{socket: socket, full: n} do
+      client = CrdtBridge.new_doc()
+      {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(client)
+      {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_step1, sv}})
+      ref = push(socket, "crdt_msg", %{"doc_id" => n.id, "b64" => Base.encode64(frame)})
+      assert_reply ref, :ok, %{}, 10_000
+    end
+  end
+
   describe "crdt_doc_update (room-free write for an idle note)" do
     test "applies the client's update and leaves NO resident room", %{
       socket: socket,
@@ -2850,6 +2921,18 @@ defmodule EngramWeb.CrdtChannelTest do
     {:ok, {:sync, {:sync_step2, update}}} = Yex.Sync.message_decode(Base.decode64!(b64))
     :ok = Yex.apply_update(client, update)
     client
+  end
+
+  # Only the new insert, not the whole doc (which would trip frame_too_large).
+  defp delta_frame(socket, doc_id, prefix) do
+    ref = push(socket, "crdt_doc_state", %{"doc_id" => doc_id})
+    assert_reply ref, :ok, %{b64: b64}, 10_000
+    {:ok, doc} = CrdtBridge.doc_from_state(Base.decode64!(b64))
+    {:ok, sv} = Yex.encode_state_vector(doc)
+    Yex.Text.insert(Yex.Doc.get_text(doc, "content"), 0, prefix)
+    {:ok, update} = Yex.encode_state_as_update(doc, sv)
+    {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_update, update}})
+    frame
   end
 
   defp edit_frame(doc, prefix) do

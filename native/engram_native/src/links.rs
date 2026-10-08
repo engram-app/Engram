@@ -17,6 +17,7 @@
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag};
 use regex::Regex;
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::sync::OnceLock;
 
 /// (position, kind, a_start, a_len, b_start, b_len). kind: 0 wiki, 1 wiki
@@ -93,17 +94,24 @@ pub fn segmented<T>(
     while start < body.len() {
         let base = want.max(FORCE / 2);
         let reach = base.saturating_mul(2);
-        let (end, final_cut) = match next_cut(body, start.saturating_add(want)) {
+        let limit = start.saturating_add(reach);
+        // `at_end`: the segment runs to the end of the body, so a block
+        // still open there is open in the whole document too.
+        let (end, at_end) = match next_cut(body, start.saturating_add(want), limit) {
             Some(c) if c - start <= reach => (c, false),
             None if body.len() - start <= reach => (body.len(), true),
-            _ => (forced_cut(body, start + base), true),
+            _ => (forced_cut(body, start + base), false),
         };
         let mut items = Vec::new();
+        // A forced cut that leaves a fence open is retried longer too:
+        // accepting it split the fence, and what followed parsed as if the
+        // fence never closed (review of #1895). The open block is one node,
+        // so growing the segment over it costs little.
         match visit(&body[start..end], start, &mut items) {
-            Some(open) if !final_cut => {
+            Some(open) if !at_end => {
                 let before = open > 0
                     && end - start > longest
-                    && next_cut(body, start + open) == Some(start + open);
+                    && next_cut(body, start + open, start + open) == Some(start + open);
                 longest = longest.max(end - start);
                 want = if before { open } else { 2 * longest };
             }
@@ -123,9 +131,12 @@ fn forced_cut(body: &str, at: usize) -> usize {
         .rev()
         .find(|&i| body.is_char_boundary(i))
         .unwrap_or(0);
-    match body[at..].find('\n') {
-        Some(i) if i < FORCE / 2 => at + i + 1,
-        _ => at,
+    // Searched only FORCE / 2 ahead: `find` to the end of a one-line note
+    // made every segment rescan the rest of it (30 MB took 7.2 s).
+    let window = &body.as_bytes()[at..body.len().min(at + FORCE / 2)];
+    match window.iter().position(|&c| c == b'\n') {
+        Some(i) => at + i + 1,
+        None => at,
     }
 }
 
@@ -170,22 +181,32 @@ fn segment_code_ranges(s: &str, base: usize, out: &mut Vec<(usize, usize)>) -> O
     }
 }
 
-/// Start of the first line at or after `from` that a cut may precede: one
-/// at column 0 that starts a list item, fence or ATX heading (each ends any
-/// open paragraph), or any column-0 line after a blank line.
-fn next_cut(s: &str, from: usize) -> Option<usize> {
+/// Start of the first line at or after `from`, and at or before `limit`,
+/// that a cut may precede: one at column 0 that starts a list item, fence or
+/// ATX heading (each ends any open paragraph), or any column-0 line after a
+/// blank line. `limit` keeps a note with no cut at all linear: without it,
+/// every forced segment rescanned the rest of the note (10 MB of blank
+/// lines took 10 s).
+fn next_cut(s: &str, from: usize, limit: usize) -> Option<usize> {
     let b = s.as_bytes();
+    // Every scan stops a little past `limit`, so a line longer than a
+    // segment is not read to its end once per segment. A line is judged on
+    // at most its first FORCE bytes (ponytail: a `|` past that is missed).
+    let stop = limit.saturating_add(FORCE).min(b.len());
     let mut pos = match from.checked_sub(1) {
         None => 0,
-        Some(f) => f + b.get(f..)?.iter().position(|&c| c == b'\n')? + 1,
+        Some(f) => f + b.get(f..stop)?.iter().position(|&c| c == b'\n')? + 1,
     };
     let mut prev_blank = false;
-    while pos < b.len() {
-        let eol = b[pos..]
+    while pos < b.len() && pos <= limit {
+        let eol = b[pos..stop.max(pos)]
             .iter()
             .position(|&c| c == b'\n')
-            .map_or(b.len(), |i| pos + i + 1);
+            .map_or(stop.max(pos), |i| pos + i + 1);
         let line = &b[pos..eol];
+        if line.is_empty() {
+            return None;
+        }
         if pos > 0 && (prev_blank && !line[0].is_ascii_whitespace() || starts_block(line)) {
             return Some(pos);
         }
@@ -304,7 +325,13 @@ pub type Link<'a> = (
 /// exists). Returns how many strings needed a UTF-8 scrub: a percent escape
 /// can decode to invalid bytes, and the caller reports those. The rules are
 /// `Links.Parser`'s, ported byte for byte and pinned by its golden set.
-pub fn extract<'a>(s: &'a str, mut emit: impl FnMut(Link<'a>)) -> usize {
+/// `limit` caps how many links are emitted: the first `limit` by
+/// position, then the first occurrence of each target not yet emitted, up
+/// to `limit` more. So every target keeps one edge (the rename rewrite
+/// finds its source notes through stored edges, and backlinks need only
+/// one), and the total stays under 2 x `limit`. Returns the scrub count and
+/// whether any link was dropped.
+pub fn extract<'a>(s: &'a str, limit: usize, mut emit: impl FnMut(Link<'a>)) -> (usize, bool) {
     let mut raw = matches(s);
     // Stable, so a wiki link wins a tie, as the Elixir sort did; ties are
     // resolved after dropping matches with no target. `note_links` is unique
@@ -312,6 +339,8 @@ pub fn extract<'a>(s: &'a str, mut emit: impl FnMut(Link<'a>)) -> usize {
     raw.sort_by_key(|m| m.0);
     let mut scrubs = 0;
     let mut last = None;
+    let mut targets: HashSet<String> = HashSet::new();
+    let (mut emitted, mut extra, mut cut) = (0, 0, false);
     for m in raw {
         if last == Some(m.0) {
             continue;
@@ -323,10 +352,25 @@ pub fn extract<'a>(s: &'a str, mut emit: impl FnMut(Link<'a>)) -> usize {
         };
         if let Some(link) = link {
             last = Some(m.0);
-            emit(link);
+            let new_target = !targets.contains(link.4.as_ref());
+            if emitted < limit || (new_target && extra < limit) {
+                if emitted >= limit {
+                    extra += 1;
+                }
+                if new_target {
+                    targets.insert(link.4.to_string());
+                }
+                emitted += 1;
+                emit(link);
+            } else {
+                cut = true;
+                if extra >= limit {
+                    break;
+                }
+            }
         }
     }
-    scrubs
+    (scrubs, cut)
 }
 
 /// `String.trim/1` and `str::trim` agree: both use Unicode White_Space.
@@ -496,6 +540,42 @@ fn matches_segmented(s: &str, segment: usize) -> Vec<Raw> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Review of #1895: next_cut's first newline search and forced_cut's
+    // `find` still ran to the end of the note, so one huge line rescanned
+    // the rest per 64 KB segment: 30 MB took 7.2 s.
+    #[test]
+    fn one_huge_line_segments_in_linear_time() {
+        let line = "a".repeat(30_000_000);
+        let t = std::time::Instant::now();
+        let mut n = 0;
+        segmented(&line, SEGMENT, |_, _, _: &mut Vec<()>| None, |_| n += 1);
+        assert!(n > 100);
+        assert!(t.elapsed().as_millis() < 1_500, "{:?}", t.elapsed());
+    }
+
+    #[test]
+    fn extract_stops_at_the_limit_and_says_so() {
+        let note = "[[a]] [[b]] [[c]] [[d]]";
+        let run = |limit| {
+            let mut n = 0;
+            let (_, cut) = extract(note, limit, |_| n += 1);
+            (n, cut)
+        };
+        assert_eq!(run(usize::MAX), (4, false));
+        assert_eq!(run(4), (4, false));
+        // Past the limit, each new target still gets one edge (up to limit more).
+        assert_eq!(run(3), (4, false));
+        assert_eq!(run(2), (4, false));
+        assert_eq!(run(1), (2, true));
+        assert_eq!(extract("no links", 0, |_| ()), (0, false));
+        // Repeats of one target past the limit are dropped, a new target is not.
+        let note = format!("{}[[late]]", "[[a]] ".repeat(10));
+        let mut got = Vec::new();
+        let (_, cut) = extract(&note, 3, |l| got.push(l.4.to_string()));
+        assert!(cut);
+        assert_eq!(got, ["a", "a", "a", "late"]);
+    }
 
     #[test]
     fn wiki_and_embed() {

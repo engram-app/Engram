@@ -26,7 +26,7 @@ defmodule Engram.MCP.ParseGate do
   A task that gets its slot after its caller died exits without running the
   work. Every run emits `[:engram, :mcp, :section_parse, :stop]` with
   `%{duration: native, bytes: n}` and metadata `%{outcome: ...}` (`:ok`,
-  `:busy`, `:timeout`, `:deadline`, `:error`, `:abandoned`); `duration` is
+  `:too_complex`, `:busy`, `:timeout`, `:deadline`, `:error`, `:abandoned`); `duration` is
   the caller's wait (slot wait plus parse), so a timed-out parse reports the
   timeout, not its true length. No content or paths.
 
@@ -191,6 +191,9 @@ defmodule Engram.MCP.ParseGate do
   defp cap(timeout, left) when timeout == :infinity or left < timeout, do: {max(left, 0), true}
   defp cap(timeout, _left), do: {timeout, false}
 
+  # Sections' refusal of a note with too many headings (outline.rs MAX_ITEMS)
+  # is a completed run, counted on its own.
+  defp outcome({:ok, {:error, :too_complex}}), do: :too_complex
   defp outcome({:ok, _}), do: :ok
   defp outcome({:error, :parse_timeout}), do: :timeout
   defp outcome({:error, :parse_failed}), do: :error

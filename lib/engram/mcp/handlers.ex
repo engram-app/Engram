@@ -10,6 +10,7 @@ defmodule Engram.MCP.Handlers do
 
   # #1710: every MCP note write is the "mcp" history actor. The
   # HandlersWriteActorTest counts that every upsert_note call passes this.
+  @too_large "note would exceed the maximum size of 10MB"
   @write_opts [actor: "mcp"]
 
   # -- Vault tools --
@@ -313,19 +314,27 @@ defmodule Engram.MCP.Handlers do
         {:error, "section reads one note at a time; pass a single path"}
 
       true ->
-        fetched =
-          Enum.map(paths, fn path ->
-            case Notes.get_note(user, vault, path) do
-              {:ok, note} -> {path, note}
-              {:error, :not_found} -> {path, nil}
-            end
-          end)
+        fetch = fn path ->
+          case Notes.get_note(user, vault, path) do
+            {:ok, note} -> note
+            {:error, :not_found} -> nil
+          end
+        end
 
         # One parse deadline for the whole call, across every path.
         gate = ParseGate.call_opts()
+        links? = args["include_links"] == true
 
-        with {:ok, fetched} <- narrow_to_section(fetched, section, gate) do
-          render_notes(user, fetched, outline?, args["include_links"] == true, gate)
+        if is_binary(section) do
+          # Section reads take one path, so fetching it up front is fine.
+          with {:ok, [{path, note}]} <-
+                 narrow_to_section([{hd(paths), fetch.(hd(paths))}], section, gate),
+               do: render_notes(user, [{path, fn -> note end}], outline?, links?, gate)
+        else
+          # Fetched one at a time as each entry renders, so a note's content
+          # is released once its entry is built (20 x 10 MB held at once was
+          # ~200 MB before the reply was even assembled).
+          render_notes(user, Enum.map(paths, &{&1, fn -> fetch.(&1) end}), outline?, links?, gate)
         end
     end
   end
@@ -838,7 +847,7 @@ defmodule Engram.MCP.Handlers do
   defp section_error(_heading, :busy),
     do: "The server is busy parsing other notes; try again shortly"
 
-  defp section_error(_heading, :parse_timeout) do
+  defp section_error(_heading, reason) when reason in [:parse_timeout, :too_complex] do
     "This note is too complex to parse for section edits or outline; edit with replace_text " <>
       "or read it with get_notes without section/outline"
   end
@@ -899,31 +908,61 @@ defmodule Engram.MCP.Handlers do
   defp do_patch_text(user, vault, path, find, replace, occurrence, expected, op) do
     with {:ok, note} <- Notes.get_note(user, vault, path),
          {:ok, current} <- Notes.authoritative_content(user, note) do
-      if String.contains?(current, find) do
-        {new_content, count} = do_replace(current, find, replace, occurrence)
+      hits = count_matches(current, find, 0, 0)
+      replaced = if occurrence == -1, do: hits, else: min(hits, 1)
+      grown = byte_size(current) + replaced * (byte_size(replace) - byte_size(find))
 
-        # `find` is present but the requested occurrence is past the last one,
-        # so do_replace/4 returns the content untouched. Rewriting the note
-        # with its own bytes and calling that success told the caller the patch
-        # landed. Same rule as the "Text not found" branch below.
-        cond do
-          count == 0 ->
-            {:error, "Occurrence #{occurrence} not found in #{path}"}
-
-          is_integer(expected) and expected != count ->
-            {:error,
-             "expected #{expected} replacement(s), found #{count} in #{path}; nothing was changed"}
-
-          true ->
-            patch_upsert(user, vault, path, note, new_content, count)
-        end
-      else
+      cond do
         # Nothing was replaced, so the patch did not happen. Was `:ok`.
-        {:error, "Text not found in #{path}"}
+        hits == 0 ->
+          {:error, "Text not found in #{path}"}
+
+        grown > Notes.max_note_bytes() ->
+          {:error, @too_large}
+
+        true ->
+          replace_and_write(
+            user,
+            vault,
+            path,
+            note,
+            current,
+            {find, replace, occurrence},
+            expected
+          )
       end
     else
       {:error, :not_found} -> {:error, "Note not found: #{path}"}
       {:error, reason} -> log_and_error(op, reason, "Could not read #{path}; retry")
+    end
+  end
+
+  # Non-overlapping, left to right (String.split/2's count), without building
+  # the parts: the size check runs before anything the size of the result.
+  defp count_matches(content, find, from, n) do
+    case :binary.match(content, find, scope: {from, byte_size(content) - from}) do
+      {at, len} -> count_matches(content, find, at + len, n + 1)
+      :nomatch -> n
+    end
+  end
+
+  defp replace_and_write(user, vault, path, note, current, {find, replace, occurrence}, expected) do
+    {new_content, count} = do_replace(current, find, replace, occurrence)
+
+    # `find` is present but the requested occurrence is past the last one,
+    # so do_replace/4 returns the content untouched. Rewriting the note with
+    # its own bytes and calling that success told the caller the patch
+    # landed. Same rule as the "Text not found" branch above.
+    cond do
+      count == 0 ->
+        {:error, "Occurrence #{occurrence} not found in #{path}"}
+
+      is_integer(expected) and expected != count ->
+        {:error,
+         "expected #{expected} replacement(s), found #{count} in #{path}; nothing was changed"}
+
+      true ->
+        patch_upsert(user, vault, path, note, new_content, count)
     end
   end
 
@@ -1444,10 +1483,8 @@ defmodule Engram.MCP.Handlers do
     end
   end
 
-  defp do_replace(content, find, replace, -1) do
-    count = content |> String.split(find) |> length() |> Kernel.-(1)
-    {String.replace(content, find, replace), count}
-  end
+  defp do_replace(content, find, replace, -1),
+    do: {String.replace(content, find, replace), count_matches(content, find, 0, 0)}
 
   defp do_replace(content, find, replace, occurrence) do
     parts = String.split(content, find)
@@ -1488,6 +1525,7 @@ defmodule Engram.MCP.Handlers do
       {:ok, _note} -> {:ok, msgs[:ok], structured}
       {:error, :version_conflict, _note} -> {:error, msgs[:conflict]}
       {:error, :note_deleted} -> {:error, msgs[:deleted] || msgs[:error]}
+      {:error, :too_large} -> {:error, @too_large}
       {:error, reason} when is_binary(reason) -> {:error, reason}
       {:error, _reason} -> {:error, msgs[:error]}
     end
@@ -1669,7 +1707,9 @@ defmodule Engram.MCP.Handlers do
   end
 
   defp fm_has_key?(nil, _key), do: false
-  defp fm_has_key?(fm, key), do: Regex.match?(~r/^\s*#{key}\s*:/mi, fm)
+  # `[ \t]*`, not `\s*`: `\s` crosses newlines, so a miss backtracked from
+  # every line start (28 s on 200 KB of blank frontmatter lines).
+  defp fm_has_key?(fm, key), do: Regex.match?(~r/^[ \t]*#{key}[ \t]*:/mi, fm)
 
   # A level-1 ATX heading at the top of the body (frontmatter already split
   # off by the caller). `##`+ are subheadings, not the title.
@@ -1758,7 +1798,6 @@ defmodule Engram.MCP.Handlers do
     }
   end
 
-  defp narrow_to_section(fetched, nil, _gate), do: {:ok, fetched}
   defp narrow_to_section([{_path, nil}] = fetched, _section, _gate), do: {:ok, fetched}
 
   defp narrow_to_section([{path, note}], section, gate) do
@@ -1797,33 +1836,61 @@ defmodule Engram.MCP.Handlers do
     end
   end
 
-  defp render_notes(user, fetched, outline?, links?, gate) do
-    {texts, notes} =
-      fetched
-      |> Enum.map(fn
-        {path, nil} ->
-          {"Note not found: #{path}", %{"path" => path, "found" => false}}
+  # Content bytes one get_notes call may return across its notes (an
+  # outline returns no content, so it is never held to it). A client cannot
+  # use 200 MB in one reply either; the first note is always returned whole.
+  @get_notes_budget 4 * 1024 * 1024
 
-        {_path, note} ->
-          {text, payload} =
-            if outline?,
-              do: outline_entry(note, gate),
-              else: {format_get_note(note), note_payload(note)}
+  @doc false
+  def get_notes_budget, do: @get_notes_budget
 
-          payload = Map.put(payload, "found", true)
+  # `entries` is [{path, fetch_fn}]. Each note is fetched, budgeted and
+  # rendered before the next, so at most the kept content plus one note is
+  # alive.
+  defp render_notes(user, entries, outline?, links?, gate) do
+    {rendered, _spent} =
+      Enum.map_reduce(entries, 0, fn {path, fetch}, spent ->
+        case fetch.() do
+          nil ->
+            {{"Note not found: #{path}", %{"path" => path, "found" => false}}, spent}
 
-          # One backlinks + outgoing query pair per note (N+1), not batched.
-          # Fine at get_notes' 20-path cap; revisit only if that cap rises.
-          if links? do
-            {links, truncation} = links_payload(user, note)
-            {text <> "\n\n" <> format_links(links, truncation), Map.merge(payload, links)}
-          else
-            {text, payload}
-          end
+          note ->
+            size = if outline?, do: 0, else: byte_size(note.content || "")
+
+            if spent == 0 or spent + size <= @get_notes_budget,
+              do: {render_note(user, note, outline?, links?, gate), spent + size},
+              else: {over_budget(path), spent}
+        end
       end)
-      |> Enum.unzip()
 
+    {texts, notes} = Enum.unzip(rendered)
     {:ok, Enum.join(texts, "\n\n---\n\n"), %{"notes" => notes}}
+  end
+
+  defp over_budget(path) do
+    msg =
+      "Not returned: this call's content budget (#{div(@get_notes_budget, 1_048_576)} MB) " <>
+        "is spent. Fetch #{path} in its own call."
+
+    {"#{path}: #{msg}", %{"path" => path, "found" => true, "error" => msg}}
+  end
+
+  defp render_note(user, note, outline?, links?, gate) do
+    {text, payload} =
+      if outline?,
+        do: outline_entry(note, gate),
+        else: {format_get_note(note), note_payload(note)}
+
+    payload = Map.put(payload, "found", true)
+
+    # One backlinks + outgoing query pair per note (N+1), not batched.
+    # Fine at get_notes' 20-path cap; revisit only if that cap rises.
+    if links? do
+      {links, truncation} = links_payload(user, note)
+      {text <> "\n\n" <> format_links(links, truncation), Map.merge(payload, links)}
+    else
+      {text, payload}
+    end
   end
 
   # Both reads are user-scoped by the Links context; vault scoping holds

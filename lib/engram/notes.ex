@@ -98,9 +98,10 @@ defmodule Engram.Notes do
   # tombstone older than the window is allowed through as a genuine re-create.
   @delete_tombstone_window_seconds 60
 
-  # Note-size ceiling. Enforced by every transport that accepts a note body —
-  # REST `upsert` answers 413, the MCP `write_note` tool refuses — so it is
-  # declared here once instead of per transport, where the two could drift.
+  # Note-size ceiling, enforced in `upsert_note/4` (`{:error, :too_large}`),
+  # the one write every transport and server-side editor goes through. REST
+  # `upsert` and MCP `write_note` also check it up front, to refuse before
+  # anything else runs.
   @max_note_bytes 10 * 1024 * 1024
 
   # No @spec, deliberately: dialyzer runs with `:underspecs`, so `pos_integer()`
@@ -109,6 +110,9 @@ defmodule Engram.Notes do
   # made for `client_name_max_length/0`.
   @doc "Maximum accepted size of a note body, in bytes."
   def max_note_bytes, do: @max_note_bytes
+
+  defp check_size(content) when byte_size(content) > @max_note_bytes, do: {:error, :too_large}
+  defp check_size(_content), do: :ok
 
   @doc """
   Composable query scope that restricts a `Note` query to kind='note' rows.
@@ -422,7 +426,8 @@ defmodule Engram.Notes do
 
     opts = put_base_hash_opt(opts, attrs)
 
-    with {:ok, user} <- Crypto.ensure_user_dek(user),
+    with :ok <- check_size(content),
+         {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, path} <- validate_path(path),
          {:ok, hash} <- content_hash(user, content) do
       sanitized_path = PathSanitizer.sanitize(path)

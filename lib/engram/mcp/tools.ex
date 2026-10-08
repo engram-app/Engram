@@ -724,9 +724,11 @@ defmodule Engram.MCP.Tools do
                 "error" => %{
                   "type" => "string",
                   "description" =>
-                    "Only with outline: true, when this note's outline could not be computed: " <>
-                      "server busy, the call ran out of time, the note is too complex to parse, " <>
-                      "parsing failed, or the note has invalid UTF-8. Outline omitted"
+                    "Content or outline absent. With outline: true, the outline could not be " <>
+                      "computed: server busy, the call ran out of time, the note is too complex " <>
+                      "to parse, parsing failed, or the note has invalid UTF-8. Otherwise the " <>
+                      "call's 4 MB content budget was spent by earlier notes: fetch this one " <>
+                      "in its own call"
                 },
                 "backlinks" => %{
                   "type" => "array",

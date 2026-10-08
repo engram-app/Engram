@@ -104,13 +104,50 @@ native peak was there too but invisible (mdex_native allocates with malloc):
 At 5 KB the gate's task and the dirty hop dominate, so only the heap
 shrinks (the inline variant, since dropped, ran it in 1.2 ms).
 
-comrak itself is the floor: dense markup (1 MB of `# h` lines, a tight
-list, a setext run) takes 1-2.5 s either way, and its arena keeps every node
-with its raw content, ~100-250x the note (252x on a tight list). That is
-why ParseGate still bounds concurrent parses, and why the first tree is
-dropped before the `%%`/`$$` re-parse (it halved a mixed note's peak).
-Segmenting the parse like `links::segmented` is the upgrade path if a big
-note's peak matters. Parity: a 103,000-note live differential against the
+comrak's arena keeps every node with its raw content, ~100-250x what it
+parses (252x on a tight list), so a whole-note parse of a 10 MB note could
+reach ~2.5 GB. Since #1885 the outline parses in `links::segmented`'s
+~64 KB segments, one tree alive at a time (`outline.rs`,
+`outline_segmented`). Two inputs are document-wide and computed first: the
+`%%`/`$$` masking (from a segmented code-range pass), and the set of
+reference labels the note defines (a `[x]` heading links when `[x]: /u` is
+anywhere), fed to comrak's broken-link callback. A fuzz test (20k cases in
+CI, 4M run locally) holds segmented == whole. Min of 5, 1 MB, native peak
+(2026-10-06; "whole" is the same code with one segment):
+
+| 1 MB of | Whole: time / peak | Segmented: time / peak |
+|---|---|---|
+| tight list `- a` | 458 ms / 253 MB | 295 ms / 18 MB |
+| `# h` lines | 934 ms / 163 MB | 677 ms / 37 MB |
+| dense inline | 427 ms / 249 MB | 175 ms / 15 MB |
+| mixed note (both parses) | 356 ms / 128 MB | 238 ms / 13 MB |
+
+What remains grows with the result (250,000 headings is the 37 MB), so the
+result is capped: past 100,000 headings + explained lines + safe ranges
+(`outline.rs` `MAX_ITEMS`), or 1M code spans in the `%%`/`$$` pass, the NIF
+stops parsing and returns nil; Sections answers `{:error, :too_complex}`
+(counted as `section_parse_total{outcome="too_complex"}`) and the MCP tool
+says to use replace_text. Nothing else about the note is affected. At the
+cap the result is ~10 MB in Rust and ~8 MB as BEAM terms. Line offsets are
+a pre-sized `u32` table (a doubling `Vec<usize>` hit 201 MB on 10 MB of
+blank lines), and `next_cut` stops at the segment's reach (without it, a
+note with no safe cut rescanned the rest per segment: 10.8 s -> 2.2 s).
+Worst native peaks at the 10 MB note cap, after all of it:
+
+| 10 MB of | Time | Native peak |
+|---|---|---|
+| `%% \`a\`` lines (refused) | 1.8 s | 49 MB |
+| blank lines | 2.2 s | 40 MB |
+| `#` lines (refused) | 0.7 s | 33 MB |
+| tight list | 5.8 s | 25 MB |
+| dense inline | 6.3 s | 16 MB |
+
+Prod runs one ParseGate slot, so one of these at a time per node.
+The BOM, frontmatter blanking and heading trims moved into the same call
+(one NIF per outline): Elixir's share on 250,000 headings went from ~3.4 s
+of trims to ~0.5 s of map building. Rust's `str::trim` and `String.trim/1`
+are both Unicode White_Space (tested per code point).
+Parity: a 103,000-note live differential against the
 old scan, then `md_outline_golden.json.gz` (2,508 notes). The only
 divergence was an old bug: two `$$` pairs sharing a CRLF line shifted every
 later line number by one.

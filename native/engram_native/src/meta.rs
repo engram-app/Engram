@@ -123,9 +123,18 @@ fn emit_tags(
     {
         if seen.insert(t) {
             emit(t);
+            if seen.len() == MAX_TAGS {
+                break;
+            }
         }
     }
 }
+
+/// Most distinct tags kept per note (frontmatter first, then inline in
+/// order). Each is stored on the note and copied into every Qdrant point's
+/// payload, so the count, not the note size, sets that cost; the rest of the
+/// note indexes and searches in full.
+pub const MAX_TAGS: usize = 1_000;
 
 /// `#tag` or nested `#area/sub`, after start-of-text or whitespace (so
 /// `word#x` and `https://h/#frag` are not tags), starting with a word char
@@ -226,6 +235,24 @@ fn non_string_scalar(item: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    // Every distinct tag is stored on the note and copied into each Qdrant
+    // point's payload (x64 per upsert batch): 8 MB of unique `#tN` was 1.16M
+    // tags, ~55 MB of filter hashes PER POINT. Real notes have tens.
+    #[test]
+    fn tags_stop_at_the_cap_frontmatter_first() {
+        let body: String = (0..5_000).map(|i| format!("#t{i} ")).collect();
+        let mut got = Vec::new();
+        super::title_and_tags(&format!("---\ntags: [fm]\n---\n{body}"), |t| {
+            got.push(t.to_string())
+        });
+        assert_eq!(got.len(), super::MAX_TAGS);
+        assert_eq!((got[0].as_str(), got[1].as_str()), ("fm", "t0"));
+        // Repeats do not spend the cap.
+        let mut n = 0;
+        super::title_and_tags(&"#same ".repeat(10_000), |_| n += 1);
+        assert_eq!(n, 1);
+    }
+
     // Skipping a heading inside code must not rescan the code ranges from
     // the start: 480 KB of code-fenced `# x` lines took 1.3 s.
     #[test]

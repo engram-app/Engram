@@ -174,22 +174,33 @@ macro_rules! sized_nif {
     };
 }
 
-/// `Links.Parser.extract/1`: `{[{position, kind, target_start, target_len,
-/// target, alias, anchor}], scrub_count}`, and the call's native peak. Each
-/// link is encoded as a term the moment it is built, so the output never
-/// exists as a Rust copy. Linear in the note; no size bound, notes of any
-/// size must index.
-fn link_extract<'a>(env: Env<'a>, content: &str) -> ((Vec<Term<'a>>, usize), usize) {
+/// `Links.Parser.extract/2`: `{[{position, kind, target_start, target_len,
+/// target, alias, anchor}], scrub_count, cut?}`, and the call's native peak.
+/// Each link is encoded as a term the moment it is built, so the output
+/// never exists as a Rust copy. Linear in the note. `limit` keeps the first
+/// N links (usize::MAX: all, for the rename rewrite, which needs every one);
+/// `cut?` says the limit dropped some.
+fn link_extract<'a>(
+    env: Env<'a>,
+    content: &str,
+    limit: usize,
+) -> ((Vec<Term<'a>>, usize, bool), usize) {
     memory::measured(|| {
         let mut terms = Vec::new();
-        let scrubs = links::extract(content, |(pos, kind, ts, tl, target, alias, anchor)| {
-            terms.push((pos, kind, ts, tl, target.as_ref(), alias, anchor.as_deref()).encode(env));
-        });
-        (terms, scrubs)
+        let (scrubs, cut) = links::extract(
+            content,
+            limit,
+            |(pos, kind, ts, tl, target, alias, anchor)| {
+                terms.push(
+                    (pos, kind, ts, tl, target.as_ref(), alias, anchor.as_deref()).encode(env),
+                );
+            },
+        );
+        (terms, scrubs, cut)
     })
 }
 
-sized_nif!(link_extract, link_extract_nif, link_extract_dirty_nif, <'a>(env, content: &str) [content] -> ((Vec<Term<'a>>, usize), usize));
+sized_nif!(link_extract, link_extract_nif, link_extract_dirty_nif, <'a>(env, content: &str, limit: usize) [content, limit] -> ((Vec<Term<'a>>, usize, bool), usize));
 
 /// `Helpers.extract_title/2` without the file-name fallback, and the peak.
 fn note_title(content: &str) -> (Option<String>, usize) {
@@ -389,15 +400,21 @@ fn utf16_offsets(text: &str, at: Vec<usize>) -> NifResult<(Vec<usize>, usize)> {
 
 sized_nif!(utf16_offsets, utf16_offsets_nif, utf16_offsets_dirty_nif, (text: &str, at: Vec<usize>) [text, at] -> NifResult<(Vec<usize>, usize)>);
 
-/// `Engram.MCP.Sections`' view of a note: `{headings, explained_lines,
-/// safe_ranges}` (see outline.rs), and the peak. Raises on a sourcepos
-/// outside the text, as the Elixir version did. Always dirty: comrak takes
-/// ~10 ms on 16 KB of dense markup (a tight list, `# h` lines), far past
-/// what may run on a normal scheduler, and MCP calls do not feel the hop.
+/// `Engram.MCP.Sections`' view of a note, from the note as stored:
+/// `{headings, explained_lines, safe_ranges}` (see outline.rs), or nil when
+/// it has more than `outline::MAX_ITEMS` of them; and the peak. Raises on a
+/// sourcepos outside the text, as the Elixir version did. Always dirty:
+/// comrak takes ~10 ms on 16 KB of dense markup (a tight list, `# h` lines),
+/// far past what may run on a normal scheduler, and MCP calls do not feel
+/// the hop.
 #[rustler::nif(schedule = "DirtyCpu")]
-fn md_outline_nif(content: &str) -> NifResult<(outline::Outline, usize)> {
+fn md_outline_nif(content: &str) -> NifResult<(Option<outline::Outline>, usize)> {
     let (o, peak) = memory::measured(|| outline::outline(content));
-    Ok((o.ok_or(Error::BadArg)?, peak))
+    match o {
+        Ok(o) => Ok((Some(o), peak)),
+        Err(outline::Refused::TooComplex) => Ok((None, peak)),
+        Err(outline::Refused::BadSourcepos) => Err(Error::BadArg),
+    }
 }
 
 rustler::init!("Elixir.Engram.Native");

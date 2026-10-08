@@ -12,7 +12,10 @@ defmodule Engram.MCP.Sections do
   (`> [!note]`) or list item is content of that block, not a section
   boundary. Every parse runs through `Engram.MCP.ParseGate` (bounded
   concurrency; `opts` pass through to it), so any function here can return
-  `{:error, :busy | :parse_timeout | :parse_failed | :deadline}`. Two things CommonMark does not know about are handled before
+  `{:error, :busy | :parse_timeout | :parse_failed | :deadline}`, or
+  `{:error, :too_complex}` for a note past `outline.rs`' MAX_ITEMS headings,
+  thematic breaks and code fences (the result, not the parse, would grow
+  without bound). Two things CommonMark does not know about are handled before
   parsing, both preserving line numbers:
 
     * the frontmatter block (`Engram.Notes.Frontmatter.split/1`, the same
@@ -26,11 +29,8 @@ defmodule Engram.MCP.Sections do
 
   alias Engram.MCP.ParseGate
   alias Engram.Native
-  alias Engram.Notes.Frontmatter
 
   @type heading :: %{line: non_neg_integer(), level: 1..6, text: String.t(), span: pos_integer()}
-
-  @bom "﻿"
 
   # An ATX-heading-shaped line (0-3 spaces, 1-6 `#`, then space/tab/EOL).
   # Anchored with bounded quantifiers: no backtracking blowup.
@@ -40,7 +40,7 @@ defmodule Engram.MCP.Sections do
   # `-`, trailing spaces/tabs). Same bounded, anchored shape.
   @setext_like ~r/^ {0,3}(=+|-+)[ \t\r]*$/
 
-  @type refusal :: :invalid_utf8 | ParseGate.error()
+  @type refusal :: :invalid_utf8 | :too_complex | ParseGate.error()
 
   @doc false
   # The whole analysis, for the golden test (test/engram/native/md_outline_test.exs).
@@ -299,68 +299,43 @@ defmodule Engram.MCP.Sections do
   # small result (never the AST) is copied back.
   defp analyze(content, opts, then) do
     if String.valid?(content) do
-      ParseGate.run(
-        fn ->
-          content |> String.replace_prefix(@bom, "") |> blank_frontmatter() |> scan() |> then.()
-        end,
-        Keyword.put(opts, :bytes, byte_size(content))
-      )
+      fn ->
+        case scan(content) do
+          nil -> {:error, :too_complex}
+          a -> {:done, then.(a)}
+        end
+      end
+      |> ParseGate.run(Keyword.put(opts, :bytes, byte_size(content)))
+      |> case do
+        {:ok, {:done, result}} -> {:ok, result}
+        {:ok, refused} -> refused
+        error -> error
+      end
     else
       {:error, :invalid_utf8}
     end
   end
 
-  # Replaces the frontmatter block with the same number of empty lines.
-  defp blank_frontmatter(text) do
-    case Frontmatter.split(text) do
-      {nil, _body} ->
-        text
-
-      {_block, body} ->
-        prefix = binary_part(text, 0, byte_size(text) - byte_size(body))
-        String.duplicate("\n", length(:binary.matches(prefix, "\n"))) <> body
+  # One NIF call does all of it (`Engram.Native.md_outline/1`,
+  # native/engram_native/src/outline.rs): the BOM and frontmatter, the
+  # parse, the `%%`/`$$` masking, and the headings' trimmed text and raw
+  # source. The rules are documented there. nil: too many headings to
+  # return (see the moduledoc).
+  defp scan(text) do
+    case Native.md_outline(text) do
+      nil -> nil
+      outline -> to_analysis(outline)
     end
   end
 
-  # `text` must already be free of BOM and frontmatter. The parse, the
-  # `%%`/`$$` masking and its re-parse, and the walk over the tree all run
-  # in Rust (`Engram.Native.md_outline/1`, native/engram_native/src/outline.rs),
-  # which returns only what is read here; the rules are documented there.
-  # Trimming stays here: Elixir's whitespace is the definition.
-  defp scan(text) do
-    {headings, explained, safe} = Native.md_outline(text)
-
+  defp to_analysis({headings, explained, safe}) do
     %{
-      headings: Enum.map(headings, &to_heading/1),
+      headings:
+        Enum.map(headings, fn {line, level, text, raw, span} ->
+          %{line: line, level: level, text: text, raw: raw, span: span}
+        end),
       explained: MapSet.new(explained),
       safe_ranges: safe
     }
-  end
-
-  defp to_heading({line, level, setext, text, raw, span}) do
-    %{
-      line: line,
-      level: level,
-      text: String.trim(text),
-      raw: raw_text(raw, setext, level),
-      span: span
-    }
-  end
-
-  # The heading's inline content exactly as written (`**A**`, `a &amp; b`,
-  # `\#x`): from the heading's own start (past the opening `#`s for ATX) to
-  # the last inline node's end, so no closing `#`s. A multi-line setext
-  # heading's lines are trimmed and joined with a space, the same way its
-  # rendered text is.
-  defp raw_text(nil, _setext, _level), do: ""
-
-  defp raw_text(raw, setext, level) do
-    raw = String.trim_leading(raw)
-    raw = if setext, do: raw, else: binary_part(raw, level, byte_size(raw) - level)
-
-    raw
-    |> String.split("\n")
-    |> Enum.map_join(" ", &String.trim/1)
-    |> String.trim()
   end
 end
