@@ -105,14 +105,18 @@ describe("AgreementPage accept-then-redirect flow", () => {
 			</QueryClientProvider>,
 		);
 
-		fireEvent.click(await screen.findByRole("checkbox", { name: /agree/iu }));
+		// 1s testing-library defaults flake on loaded CI runners (the full suite
+		// runs ~8 min); the 20ms/80ms mock delays are the only real time here.
+		fireEvent.click(await screen.findByRole("checkbox", { name: /agree/iu }, { timeout: 10_000 }));
 		fireEvent.click(screen.getByRole("button", { name: /continue/iu }));
 
 		// With the fix, the mutation only resolves after the cache is refreshed,
 		// so OnboardRedirect reads STATUS_AFTER and routes to /onboard/billing.
 		// Without the fix, OnboardRedirect reads STATUS_BEFORE (stale) and routes
 		// back to /onboard/agreement, re-mounting CountingAgreementPage.
-		await waitFor(() => expect(screen.getByTestId("billing-landed")).toBeInTheDocument());
+		await waitFor(() => expect(screen.getByTestId("billing-landed")).toBeInTheDocument(), {
+			timeout: 10_000,
+		});
 
 		expect(screen.getByTestId("path").textContent).toBe("/onboard/billing");
 		expect(agreementMounts).toBe(1);
