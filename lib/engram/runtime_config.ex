@@ -32,6 +32,23 @@ defmodule Engram.RuntimeConfig do
   ]
 
   @doc """
+  `ENVELOPE_COMPRESSION` -> `{:ok, boolean}` or `:unset` (#1872).
+
+  The emergency kill switch for compress-then-encrypt: `false`/`0` returns new
+  writes to format 0 on restart, no release needed. Anything unrecognised
+  raises so a typo cannot silently leave the flag in the wrong state.
+  """
+  @spec envelope_compression((String.t() -> String.t() | nil)) :: {:ok, boolean()} | :unset
+  def envelope_compression(getenv) do
+    case getenv.("ENVELOPE_COMPRESSION") do
+      nil -> :unset
+      v when v in ~w(true 1) -> {:ok, true}
+      v when v in ~w(false 0) -> {:ok, false}
+      other -> raise "ENVELOPE_COMPRESSION must be true/1 or false/0, got: #{inspect(other)}"
+    end
+  end
+
+  @doc """
   The `{env var, application env key}` pairs for every CI-gated rate-limit
   override. See `ci_gated_int_override/2` for the gating rule.
   """

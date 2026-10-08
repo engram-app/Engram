@@ -14,7 +14,7 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
   import Ecto.Query
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
-  alias Engram.Notes.{CrdtBloat, CrdtBridge, CrdtCheckpoint, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, Note}
   alias Engram.Workers.CrdtBloatSweep
 
   setup do
@@ -75,8 +75,6 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
 
     a = noisy(150)
     b = noisy(150)
-    assert byte_size(a) >= CrdtBloat.min_content_bytes()
-    assert byte_size(b) >= CrdtBloat.min_content_bytes()
 
     seeded_note(user, vault, "a.md", a)
     seeded_note(user, vault, "b.md", b)
@@ -117,18 +115,21 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
     seeded_note(user, vault, "new.md", body)
 
     {:ok, rows} =
-      Repo.with_tenant(user.id, fn -> Repo.all(from(n in Note, select: n.content_nonce)) end)
+      Repo.with_tenant(user.id, fn ->
+        Repo.all(from(n in Note, select: {n.content_nonce, n.content_ciphertext}))
+      end)
 
-    assert Enum.sort(Enum.map(rows, &byte_size/1)) == [12, 13]
+    assert [{_, _}, {_, f1_ct}] = Enum.sort_by(rows, fn {nonce, _} -> byte_size(nonce) end)
+    f1_stored = byte_size(f1_ct) - Engram.Crypto.Envelope.tag_bytes()
+    assert f1_stored < byte_size(body), "format 1 row must actually be compressed"
 
     attach()
     assert :ok = perform_job(CrdtBloatSweep, %{})
     assert_receive {:sweep, m, _meta}
 
-    # format 0 row: exactly the text; format 1 row: far smaller than the text.
-    assert m.content_bytes_total == stored_content_bytes(user)
-    assert m.content_bytes_total > byte_size(body)
-    assert m.content_bytes_total < 2 * byte_size(body)
+    # Independent oracle: the format 0 row is exactly the text, the format 1 row
+    # is its own stored length (read above), neither derived by the sweep.
+    assert m.content_bytes_total == byte_size(body) + f1_stored
   end
 
   test "an empty database reports zeroes rather than raising", ctx do
@@ -181,7 +182,6 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
     %{user: user, vault: vault} = ctx
 
     real = noisy(150)
-    assert byte_size(real) >= CrdtBloat.min_content_bytes()
     seeded_note(user, vault, "real.md", real)
 
     tiny = "x"

@@ -55,8 +55,8 @@ config :engram, Engram.PromEx,
 
 # Compress-then-encrypt for large columns (#1872 R2): notes content/crdt_state,
 # vault index state/log, revision blobs (zstd) and attachments (:auto). Format 1
-# rows are readable with this off, so an operator can set it false in an
-# emergency to return NEW writes to format 0 without a release.
+# rows are readable with this off. Kill switch without a release: set the
+# ENVELOPE_COMPRESSION=false env var and restart (config/runtime.exs).
 config :engram, :envelope_compression, true
 
 # Embedder adapter (overridden per environment)

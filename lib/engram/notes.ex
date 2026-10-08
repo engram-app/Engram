@@ -3714,6 +3714,11 @@ defmodule Engram.Notes do
     # memory goes. The probe selects sizes only — no content, no decrypt — so it
     # is a few KB regardless of how fat the page would have been.
     #
+    # The probe bounds the STORED ciphertext read only. Stored size is NOT the
+    # plaintext size (format 1 rows are zstd-compressed, so a few KB can inflate
+    # to tens of MB); the plaintext budget is enforced incrementally while
+    # decrypting, see `decrypt_within_budget/4`.
+    #
     # :meta carries no content, so it has no byte hazard and skips the probe.
     {row_limit, budget_more} =
       case {fields, max_bytes} do
@@ -3731,7 +3736,8 @@ defmodule Engram.Notes do
         {notes, budget_more}
       end
 
-    decrypted = decrypt_or_raise!(page, user)
+    {decrypted, budget_cut} = decrypt_within_budget(page, user, fields, max_bytes)
+    has_more = has_more or budget_cut
 
     # #1339: `notes.content` is a FAÇADE that materializes at checkpoint, so a
     # note with uncheckpointed ops serves a body that lags — and when it lags
@@ -3820,6 +3826,30 @@ defmodule Engram.Notes do
 
   defp trim_to_budget(changes, has_more, _fields, _max_bytes), do: {changes, has_more}
 
+  # Decrypts the page row by row against the PLAINTEXT budget and stops at the
+  # first row that does not fit, so the decrypt peak is the budget plus one row
+  # whatever the stored (possibly compressed) sizes were. Same rule as
+  # count_within_budget: the first row always ships, however large, so one huge
+  # note syncs alone instead of stranding the feed. Returns {decrypted,
+  # cut?}; rows after the cut are never decrypted and are re-served next page.
+  defp decrypt_within_budget(page, user, :all, max_bytes)
+       when is_integer(max_bytes) and max_bytes > 0 do
+    {kept, _used, cut} =
+      Enum.reduce_while(page, {[], 0, false}, fn row, {acc, used, _cut} ->
+        [note] = decrypt_or_raise!([row], user)
+        size = byte_size(note.content || "")
+
+        if acc != [] and used + size > max_bytes,
+          do: {:halt, {acc, used, true}},
+          else: {:cont, {[note | acc], used + size, false}}
+      end)
+
+    {Enum.reverse(kept), cut}
+  end
+
+  defp decrypt_within_budget(page, user, _fields, _max_bytes),
+    do: {decrypt_or_raise!(page, user), false}
+
   # Default ceiling on the note content one catch-up page may carry. 4 MB keeps
   # a typical vault a single page (a 316-note real vault measured 1.5 MB) while
   # holding the worst case to ~4 MB per in-flight page instead of ~5 GB. The
@@ -3835,8 +3865,10 @@ defmodule Engram.Notes do
   # the row limit) is what stopped the page.
   #
   # pg_column_size reads the stored size without detoasting the ciphertext, so
-  # the probe stays cheap even when the rows it is measuring are huge. AES output
-  # is incompressible, so for our data it tracks octet_length closely.
+  # the probe stays cheap even when the rows it is measuring are huge. This is
+  # the STORED size: a bound on the ciphertext read, NOT a proxy for plaintext
+  # (format 1 rows are compressed). The plaintext budget is applied while
+  # decrypting, in `decrypt_within_budget/4`.
   defp byte_budget_limit(base, user, limit, max_bytes) do
     {:ok, sizes} =
       Repo.with_tenant(user.id, fn ->

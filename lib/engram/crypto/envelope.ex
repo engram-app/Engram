@@ -25,9 +25,10 @@ defmodule Engram.Crypto.Envelope do
   update log, and revisions get `:zstd`; attachment content `:auto`
   (sample first, skip already-compressed media); everything else, including
   wrapped DEKs and anything that packs the nonce at a fixed offset, stays
-  format 0. On by default (#1872 R2, `config/config.exs`); setting
-  `config :engram, :envelope_compression` to `false` returns NEW writes to
-  format 0 (rows already in format 1 stay readable).
+  format 0. On by default (#1872 R2, `config/config.exs`). Kill switch with no
+  release: set the `ENVELOPE_COMPRESSION=false` env var and restart
+  (`config/runtime.exs`); NEW writes return to format 0 and rows already in
+  format 1 stay readable.
 
   ## AAD (T3.6 / H1)
 
@@ -107,7 +108,8 @@ defmodule Engram.Crypto.Envelope do
   @doc false
   # The compression mode for a ciphertext, from its AAD's table:column. One
   # place decides, so DEK rotation and AAD rebind re-encrypt with the same
-  # mode as the original write. Off until #1872's R2 (config).
+  # mode as the original write. On by default; `ENVELOPE_COMPRESSION=false`
+  # turns it off.
   def mode_for(aad) do
     if Application.get_env(:engram, :envelope_compression, false),
       do: compression_policy(aad),

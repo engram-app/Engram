@@ -23,9 +23,9 @@ Every encrypted column is `ct_with_tag` plus a `nonce` field, produced by
 - The `"|f1"` AAD suffix binds the format: a format-1 body cannot be replayed as
   format 0 (or the reverse) because the tag will not verify.
 - Policy columns are written in format 1 (R2, #1872 PR 3): `config :engram,
-  :envelope_compression` is `true` in `config/config.exs` for every env. Setting
-  it `false` is the emergency kill switch: new writes return to format 0 with
-  no release. Reading both formats always works.
+  :envelope_compression` is `true` in `config/config.exs` for every env. Kill switch
+  with no release: set `ENVELOPE_COMPRESSION=false` and restart (read in
+  `config/runtime.exs`); new writes return to format 0. Reading both formats always works.
 - Empty plaintext is always format 0, so `has_content?/1` in revisions
   (`byte_size(ct) > tag_bytes()`) keeps its meaning.
 - Anything that packs the nonce at a fixed offset stays format 0 forever
@@ -79,7 +79,7 @@ Compression policy, keyed by the AAD prefix `table <> <<0>> <> column <> <<0>>`
   the revision-content AAD is in the policy so the envelope zstd-compresses
   them. No reader existed and prod recording was off, so no gzip blobs need
   reading (#1711's reader decrypts to plain text).
-- Rollback: set the flag back to `false`. Format-1 rows already written stay
+- Rollback: set `ENVELOPE_COMPRESSION=false` and restart. Format-1 rows already written stay
   readable; there is no downgrade path that rewrites them to format 0, and an
   older release without the engine cannot read them.
 
