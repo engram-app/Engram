@@ -161,7 +161,10 @@ and every dirty call; the polled `engram_nif_envelope_calls` gauge counts all.
    `note_revisions.finalize_failed_at` covers revisions only (not re-encoded),
    and a failed AAD rebind (`aad rebind failed ... reason_label=note:legacy_decrypt_failed`
    in Loki) leaves the note body at `dek_version` 1, which the work set skips
-   (its `crdt_state` is still in it). So check the logs: search Loki for
+   (its `crdt_state` is still in it, opened with the row AAD like DEK rotation
+   does; note that `Crypto.decrypt_crdt_state/2` reads a `dek_version` 1
+   note's state with the EMPTY AAD, so if the count below is non-zero, expect
+   those states to show up as undecryptable). So check the logs: search Loki for
    `aad rebind failed` and, after the deploy, for
    `envelope re-encode: row does not decrypt` (table and row id in the
    metadata). Triage any hit in the first days, before the day-7 page.
