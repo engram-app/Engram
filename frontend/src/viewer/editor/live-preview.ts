@@ -26,11 +26,12 @@ import { bareBulletAsText } from "./bare-bullet";
 import { blockquoteDepthPlugin } from "./blockquote-depth";
 import { calloutDecoration } from "./callout-decoration";
 import { calloutMarker } from "./callout-marker";
+import { commentDecoration } from "./comment-decoration";
 import { completionPopup, NATIVE_POPUP_CLASS } from "./completion-popup";
 import { noParagraphFold } from "./heading-fold";
 import { indentedCodeLines } from "./indented-code";
 import { katexDecoration } from "./katex-decoration";
-import { linkOpenHandler } from "./link-open";
+import { linkOpenHandler, openExternal } from "./link-open";
 import { listRails } from "./list-rails";
 import { mermaidDecoration, mermaidKeymap } from "./mermaid-decoration";
 import { mdLinkCompletionSource, wikiCompletionSource } from "./wiki-completion";
@@ -117,7 +118,20 @@ export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 		// layout/surface colors, not per-token highlighting.
 		atomicMarkdownSyntax,
 		atomicEditorTheme,
-		tables({}),
+		// Table cells are a widget the `wikiLinks()` click handler never sees, so
+		// route their wikilink clicks to openWikiLink. It takes the RAW target and
+		// resolves it itself (NotePage.openWikiLink); resolving here too would
+		// double-resolve and create a note named after the href.
+		tables({
+			onWikiLinkClick: (target) => opts.openWikiLink(target),
+			// Same rule as linkOpenHandler below: in-app if it resolves to a note,
+			// otherwise a new tab (openExternal also filters unsafe schemes).
+			onLinkClick: (url) => {
+				if (!opts.openMarkdownLink(url)) {
+					openExternal(url);
+				}
+			},
+		}),
 		imageBlocks(),
 		// Prec.high so the embed's replace wins over the wikilink widget that would
 		// otherwise claim the `[[...]]` inside `![[...]]`.
@@ -147,6 +161,7 @@ export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 		// was in the decoration set the whole time; it just lost the overlap.
 		Prec.highest(calloutDecoration),
 		katexDecoration,
+		commentDecoration,
 		// Atomic has no mermaid support of its own, so ```mermaid stayed raw text
 		// in the editor while Reading mode drew the diagram. Ours, like the two
 		// above: a view-only widget that reveals its source on cursor entry.

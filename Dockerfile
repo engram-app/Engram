@@ -53,6 +53,8 @@ ENV VITE_SENTRY_DSN=${VITE_SENTRY_DSN} \
 
 WORKDIR /frontend
 COPY frontend/package.json frontend/bun.lock ./
+# `patchedDependencies` in package.json: bun install fails if the patch files are absent.
+COPY frontend/patches ./patches
 # Bun global package cache survives across builds on self-hosted runners.
 RUN --mount=type=cache,target=/root/.bun/install/cache,id=bun-cache \
     bun install --frozen-lockfile

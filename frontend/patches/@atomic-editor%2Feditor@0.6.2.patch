@@ -1,0 +1,2058 @@
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-104a5a9fe8c42ee2 b/.bun-tag-104a5a9fe8c42ee2
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-2fe67c9750ddd3e7 b/.bun-tag-2fe67c9750ddd3e7
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-323e5d0b9178d9b1 b/.bun-tag-323e5d0b9178d9b1
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-35424c37b135c596 b/.bun-tag-35424c37b135c596
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-37638174b35efbde b/.bun-tag-37638174b35efbde
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-4c3cc613907cb629 b/.bun-tag-4c3cc613907cb629
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-4e1f2355cb30592c b/.bun-tag-4e1f2355cb30592c
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-58bb1950cd63cf85 b/.bun-tag-58bb1950cd63cf85
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-6a8e5d47ea10959a b/.bun-tag-6a8e5d47ea10959a
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-8f76e15529f3ab8c b/.bun-tag-8f76e15529f3ab8c
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-91f638c52efbe856 b/.bun-tag-91f638c52efbe856
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-98993e5371c62686 b/.bun-tag-98993e5371c62686
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-9d67fe100061cfe b/.bun-tag-9d67fe100061cfe
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-a1b391e05ee3b70a b/.bun-tag-a1b391e05ee3b70a
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-a39ca7365be6bc1c b/.bun-tag-a39ca7365be6bc1c
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-a86a4f320fa33c4e b/.bun-tag-a86a4f320fa33c4e
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-aaf59be8206d5639 b/.bun-tag-aaf59be8206d5639
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-b67033a3d87fcc61 b/.bun-tag-b67033a3d87fcc61
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-be1b91b2c5913cde b/.bun-tag-be1b91b2c5913cde
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-bfcc84bf3b1ffc3d b/.bun-tag-bfcc84bf3b1ffc3d
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-dd3a78e122bc9c02 b/.bun-tag-dd3a78e122bc9c02
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/dist/styles/inline-preview.css b/dist/styles/inline-preview.css
+index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..7df2b278455bbc3f6cdd75755cc2bc3921adff2f 100644
+--- a/dist/styles/inline-preview.css
++++ b/dist/styles/inline-preview.css
+@@ -464,8 +464,10 @@
+ 
+ .cm-atomic-table table {
+   border-collapse: collapse;
+-  width: max-content;
+-  min-width: 100%;
++  /* Fit the content (like Obsidian) instead of stretching to the page; long
++   * text wraps once the table reaches the container's width. */
++  width: auto;
++  min-width: 0;
+   font-family: var(--atomic-editor-font, system-ui, sans-serif);
+ }
+ 
+@@ -475,7 +477,9 @@
+   padding: 0.35em 0.6em;
+   text-align: left;
+   vertical-align: top;
+-  min-width: 2em;
++  /* Tables shrink-wrap their content, so an empty column (e.g. one just added)
++   * needs a usable width of its own. */
++  min-width: 6em;
+   min-height: 1.5em;
+ }
+ 
+@@ -523,6 +527,8 @@
+ .cm-atomic-table-cell-source .cm-atomic-em-wrap.active > .cm-atomic-mark,
+ .cm-atomic-table-cell-source .cm-atomic-strike-wrap.active > .cm-atomic-mark,
+ .cm-atomic-table-cell-source .cm-atomic-highlight-wrap.active > .cm-atomic-mark,
++.cm-atomic-table-cell-source .cm-atomic-code-wrap.active > .cm-atomic-mark,
++.cm-atomic-table-cell-source .cm-atomic-wikilink-wrap.active > .cm-atomic-mark,
+ .cm-atomic-table-cell-source .cm-atomic-link-wrap.active > .cm-atomic-mark {
+   display: inline;
+   color: var(--atomic-editor-fg-faint, #666);
+@@ -592,43 +598,95 @@
+   cursor: pointer;
+ }
+ 
+-/* Table context menu — right-click a cell to insert / delete rows
+- * and columns. Mounted on document.body so positioning isn't
+- * affected by CM6's overflow scroll. */
++/* Table context menu — right-click a cell. Row / Column / Sort / Align groups
++ * open as flyout sub-menus. Mounted on document.body so positioning isn't
++ * affected by CM6's overflow scroll, which also means it can't inherit the
++ * editor's theme variables: it reads the host app's surface tokens
++ * (--popover, --accent, ...) directly, falling back to the editor's own. */
++.cm-atomic-table-menu,
++.cm-atomic-table-submenu {
++  min-width: 11rem;
++  padding: 0.25rem;
++  background: var(--popover, var(--atomic-editor-bg-panel, #252525));
++  color: var(--popover-foreground, var(--atomic-editor-fg, #dcddde));
++  border-radius: 0.5rem;
++  box-shadow:
++    0 0 0 1px color-mix(in srgb, var(--popover-foreground, #888) 12%, transparent 88%),
++    0 6px 16px rgba(0, 0, 0, 0.14);
++  font-family: var(--atomic-editor-font, system-ui, sans-serif);
++  font-size: 0.82rem;
++}
++
+ .cm-atomic-table-menu {
+   position: fixed;
+   z-index: 1000;
+-  min-width: 170px;
+-  padding: 0.25rem 0;
+-  background: var(--atomic-editor-bg-panel, #252525);
+-  border: 1px solid var(--atomic-editor-border, #3d3d3d);
+-  border-radius: var(--atomic-editor-radius, 6px);
+-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+-  font-family: var(--atomic-editor-font, system-ui, sans-serif);
+-  font-size: 0.82rem;
+-  color: var(--atomic-editor-fg, #dcddde);
++}
++
++.cm-atomic-table-menu-group {
++  position: relative;
++}
++
++.cm-atomic-table-submenu {
++  position: absolute;
++  top: -0.25rem;
++  left: 100%;
++  margin-left: 0.25rem;
++  z-index: 1001;
++}
++
++.cm-atomic-table-submenu[hidden] {
++  display: none;
+ }
+ 
+ .cm-atomic-table-menu-item {
+-  display: block;
++  display: flex;
++  align-items: center;
++  gap: 0.5rem;
+   width: 100%;
+-  text-align: left;
+-  padding: 0.35rem 0.75rem;
+-  background: transparent;
++  padding: 0.35rem 0.5rem;
+   border: 0;
++  border-radius: 0.375rem;
++  background: transparent;
+   color: inherit;
+   font: inherit;
++  text-align: left;
++  white-space: nowrap;
+   cursor: pointer;
+ }
+ 
+-.cm-atomic-table-menu-item:hover {
+-  background: var(--atomic-editor-bg-surface, #2d2d2d);
++.cm-atomic-table-menu-item:hover:not(:disabled),
++.cm-atomic-table-menu-item:focus-visible,
++.cm-atomic-table-menu-item[aria-expanded="true"] {
++  outline: none;
++  background: var(--accent, var(--atomic-editor-bg-surface, #2d2d2d));
++  color: var(--accent-foreground, inherit);
+ }
+ 
+-.cm-atomic-table-menu-sep {
+-  height: 1px;
+-  margin: 0.25rem 0;
+-  background: var(--atomic-editor-border, #3d3d3d);
++.cm-atomic-table-menu-item:disabled {
++  opacity: 0.45;
++  cursor: default;
++}
++
++.cm-atomic-table-menu-icon {
++  display: inline-flex;
++  flex: none;
++  width: 1rem;
++  height: 1rem;
++  color: var(--muted-foreground, var(--atomic-editor-fg-muted, #888));
++}
++
++.cm-atomic-table-menu-icon svg {
++  width: 100%;
++  height: 100%;
++}
++
++.cm-atomic-table-menu-label {
++  flex: 1;
++}
++
++.cm-atomic-table-menu-chevron {
++  width: 0.9rem;
++  height: 0.9rem;
+ }
+ 
+ /* Find-in-document panel — single compact row of input + match
+@@ -828,3 +886,211 @@
+ .cm-atomic-readonly .cm-atomic-table-cell-source {
+   cursor: default;
+ }
++
++/* Drag-selected table cells (box mode): no fill, just an accent outline around
++ * the bounding box. Each boundary cell draws its outer edges as inset
++ * box-shadows, composed from per-side custom properties so a corner cell gets
++ * both. Inner cells carry no edge class and stay unpainted. */
++.cm-atomic-table th.cm-atomic-table-cell-selected,
++.cm-atomic-table td.cm-atomic-table-cell-selected {
++  box-shadow:
++    var(--atomic-sel-top, 0 0 #0000),
++    var(--atomic-sel-right, 0 0 #0000),
++    var(--atomic-sel-bottom, 0 0 #0000),
++    var(--atomic-sel-left, 0 0 #0000);
++}
++
++.cm-atomic-table-cell-sel-top {
++  --atomic-sel-top: inset 0 2px 0 0 var(--atomic-editor-accent, #7c5cff);
++}
++
++.cm-atomic-table-cell-sel-right {
++  --atomic-sel-right: inset -2px 0 0 0 var(--atomic-editor-accent, #7c5cff);
++}
++
++.cm-atomic-table-cell-sel-bottom {
++  --atomic-sel-bottom: inset 0 -2px 0 0 var(--atomic-editor-accent, #7c5cff);
++}
++
++.cm-atomic-table-cell-sel-left {
++  --atomic-sel-left: inset 2px 0 0 0 var(--atomic-editor-accent, #7c5cff);
++}
++
++.cm-atomic-table-cell-selected .cm-atomic-table-cell-source {
++  caret-color: transparent;
++}
++
++.cm-atomic-table-selecting {
++  -webkit-user-select: none;
++  user-select: none;
++}
++
++.cm-atomic-table-has-selection:focus {
++  outline: none;
++}
++
++/* Add column / add row strips. `.cm-atomic-table-body` is the positioning box:
++ * it reserves a gutter (padding) past the table's right and bottom edges, and
++ * the strips live in that gutter, invisible until hovered. Padding, not margin,
++ * so CM6's height measurement stays honest (see .cm-atomic-table). */
++.cm-atomic-table-body {
++  position: relative;
++  width: fit-content;
++  max-width: 100%;
++  box-sizing: border-box;
++  /* Gutters: reorder handles above / left, add strips right / below. */
++  padding: 1rem 1.4rem 1.4rem 1rem;
++}
++
++.cm-atomic-table-add {
++  position: absolute;
++  display: flex;
++  align-items: center;
++  justify-content: center;
++  margin: 0;
++  padding: 0;
++  border: 1px dashed var(--atomic-editor-accent, #7c5cff);
++  border-radius: 0.3rem;
++  background: color-mix(in srgb, var(--atomic-editor-accent, #7c5cff) 8%, transparent 92%);
++  color: var(--atomic-editor-accent, #7c5cff);
++  font: inherit;
++  font-weight: 600;
++  line-height: 1;
++  cursor: pointer;
++  opacity: 0;
++  transition: opacity 120ms ease;
++}
++
++.cm-atomic-table-add:hover,
++.cm-atomic-table-add:focus-visible {
++  opacity: 1;
++  background: color-mix(in srgb, var(--atomic-editor-accent, #7c5cff) 16%, transparent 84%);
++}
++
++.cm-atomic-table-add-col {
++  top: 1rem;
++  right: 0;
++  bottom: 1.4rem;
++  width: 1.2rem;
++}
++
++.cm-atomic-table-add-row {
++  left: 1rem;
++  right: 1.4rem;
++  bottom: 0;
++  height: 1.2rem;
++}
++
++/* Column alignment from the separator row (`:--`, `:-:`, `--:`). */
++.cm-atomic-table th[data-align="left"],
++.cm-atomic-table td[data-align="left"] {
++  text-align: left;
++}
++
++.cm-atomic-table th[data-align="center"],
++.cm-atomic-table td[data-align="center"] {
++  text-align: center;
++}
++
++.cm-atomic-table th[data-align="right"],
++.cm-atomic-table td[data-align="right"] {
++  text-align: right;
++}
++
++/* Reorder handles: strips in the gutter above each column / left of each row,
++ * children of the first-row / first-column cells (hence position: relative). */
++.cm-atomic-table th,
++.cm-atomic-table td {
++  position: relative;
++}
++
++.cm-atomic-table-handle {
++  position: absolute;
++  opacity: 0;
++  cursor: grab;
++  touch-action: none;
++  border-radius: 0.25rem;
++  background-color: color-mix(in srgb, var(--atomic-editor-fg-faint, #767676) 22%, transparent 78%);
++  transition: opacity 120ms ease;
++}
++
++/* Visible only while the pointer is on the handle itself, or for the whole
++ * drag (the pointer leaves the strip as soon as you move). */
++.cm-atomic-table-handle:hover,
++.cm-atomic-table-handle-dragging {
++  opacity: 1;
++}
++
++.cm-atomic-table-handle-dragging {
++  /* Lifted above the cells and moved by an inline transform: no transition on
++   * it, so it tracks the pointer exactly, and it ignores the pointer so the
++   * slot underneath is what gets hit-tested. */
++  z-index: 2;
++  pointer-events: none;
++  cursor: grabbing;
++  background-color: color-mix(in srgb, var(--atomic-editor-fg-faint, #767676) 38%, transparent 62%);
++}
++
++/* Six-dot grip icon, centred: 3 x 2 dots on a column handle, 2 x 3 on a row
++ * handle. A pseudo-element, so the handle carries no text. */
++.cm-atomic-table-handle::after {
++  content: "";
++  position: absolute;
++  top: 50%;
++  left: 50%;
++  transform: translate(-50%, -50%);
++  background: radial-gradient(circle, var(--atomic-editor-fg-muted, #6e6e6e) 1px, transparent 1.4px) 0 0 / 4px 4px;
++}
++
++.cm-atomic-table-handle-col::after {
++  width: 12px;
++  height: 8px;
++}
++
++.cm-atomic-table-handle-row::after {
++  width: 8px;
++  height: 12px;
++}
++
++.cm-atomic-table-dragging,
++.cm-atomic-table-dragging * {
++  cursor: grabbing;
++  -webkit-user-select: none;
++  user-select: none;
++}
++
++.cm-atomic-table-handle-col {
++  top: -0.9rem;
++  left: 0;
++  right: 0;
++  height: 0.7rem;
++}
++
++.cm-atomic-table-handle-row {
++  left: -0.9rem;
++  top: 0;
++  bottom: 0;
++  width: 0.7rem;
++}
++
++/* Drop indicator while dragging: a bar on the side the item will land. */
++.cm-atomic-table-drop-target[data-drop="col-before"] {
++  box-shadow: inset 3px 0 0 var(--atomic-editor-accent, #7c5cff);
++}
++
++.cm-atomic-table-drop-target[data-drop="col-after"] {
++  box-shadow: inset -3px 0 0 var(--atomic-editor-accent, #7c5cff);
++}
++
++.cm-atomic-table-drop-target[data-drop="row-before"] {
++  box-shadow: inset 0 3px 0 var(--atomic-editor-accent, #7c5cff);
++}
++
++.cm-atomic-table-drop-target[data-drop="row-after"] {
++  box-shadow: inset 0 -3px 0 var(--atomic-editor-accent, #7c5cff);
++}
++
++/* A comment (%%…%% or <!-- -->) inside a table cell: shown, greyed. */
++.cm-atomic-comment {
++  color: var(--atomic-editor-fg-faint, #767676);
++}
+diff --git a/dist/table-widget.d.ts b/dist/table-widget.d.ts
+index ff02d57548388e468f73695f3bd45ec58be38160..88878ab850d89e7eae05772c1905fe2fca969878 100644
+--- a/dist/table-widget.d.ts
++++ b/dist/table-widget.d.ts
+@@ -22,6 +22,16 @@ type CellToken = {
+ } | {
+     type: 'highlight';
+     children: CellToken[];
++} | {
++    type: 'comment';
++    text: string;
++} | {
++    type: 'code';
++    text: string;
++} | {
++    type: 'wikilink';
++    rawTarget: string;
++    rawLabel: string | null;
+ } | {
+     type: 'link';
+     textChildren: CellToken[];
+@@ -35,7 +45,13 @@ export interface TablesConfig {
+      * '_blank', 'noopener,noreferrer')`.
+      */
+     onLinkClick?: (url: string) => void;
++    /**
++     * Called when the user clicks a `[[wikilink]]` rendered inside a table
++     * cell, with the raw (unresolved) target. Default: no-op.
++     */
++    onWikiLinkClick?: (target: string) => void;
+ }
++export declare const tableWikiLinkClickFacet: Facet<(target: string) => void, (target: string) => void>;
+ export declare const tableLinkClickFacet: Facet<(url: string) => void, (url: string) => void>;
+ export declare function tables(config?: TablesConfig): Extension;
+ export {};
+diff --git a/dist/table-widget.js b/dist/table-widget.js
+index aee407c4aaa2eea5a46c0fa28831dcc80985c783..3e483501c586b4bdbe6f51b128af75fa8095cf0c 100644
+--- a/dist/table-widget.js
++++ b/dist/table-widget.js
+@@ -42,9 +42,22 @@ export function splitRowCells(line) {
+     cells.push(buf.trim());
+     return cells;
+ }
++// Per-column alignment from the separator row: `:--` left, `:-:` center,
++// `--:` right, `---` none (null).
++function parseAlign(line, columnCount) {
++    const align = splitRowCells(line).map((c) => {
++        const l = c.startsWith(':');
++        const r = c.endsWith(':');
++        return l && r ? 'center' : r ? 'right' : l ? 'left' : null;
++    });
++    while (align.length < columnCount)
++        align.push(null);
++    return align.slice(0, columnCount);
++}
+ function parseTable(state, tableNode) {
+     const header = [];
+     const rows = [];
++    let delimiterLine = '';
+     const cursor = tableNode.cursor();
+     if (!cursor.firstChild())
+         return null;
+@@ -55,11 +68,15 @@ function parseTable(state, tableNode) {
+         else if (cursor.name === 'TableRow') {
+             rows.push(collectCells(state, cursor.node));
+         }
+-        // TableDelimiter (per-row `|` and whole-line `|---|---|`) is ignored.
++        else if (cursor.name === 'TableDelimiter') {
++            // Top-level delimiter = the `|---|:-:|` separator row (the per-row
++            // `|` delimiters are children of their rows, not visited here).
++            delimiterLine = state.doc.lineAt(cursor.from).text;
++        }
+     } while (cursor.nextSibling());
+     if (header.length === 0)
+         return null;
+-    return { header, rows };
++    return { header, rows, align: parseAlign(delimiterLine, header.length) };
+ }
+ // Escape cell content so it can't break the row's GFM structure: an
+ // unescaped `|` would split the cell into two columns, and a stray
+@@ -69,11 +86,14 @@ function parseTable(state, tableNode) {
+ function escapeCell(text) {
+     return text.replace(/\r?\n/g, ' ').replace(/(?<!\\)\|/g, '\\|');
+ }
++function alignSeparator(align) {
++    return align === 'center' ? ':---:' : align === 'right' ? '---:' : align === 'left' ? ':---' : '---';
++}
+ export function serializeTable(model) {
+     const columnCount = model.header.length;
+     const lines = [];
+     lines.push('| ' + model.header.map(escapeCell).join(' | ') + ' |');
+-    lines.push('| ' + model.header.map(() => '---').join(' | ') + ' |');
++    lines.push('| ' + model.header.map((_, i) => alignSeparator(model.align?.[i])).join(' | ') + ' |');
+     for (const row of model.rows) {
+         const padded = [];
+         for (let c = 0; c < columnCount; c++)
+@@ -83,9 +103,11 @@ export function serializeTable(model) {
+     return lines.join('\n');
+ }
+ function readModelFromDom(wrap) {
+-    const header = Array.from(wrap.querySelectorAll('thead th')).map(readCellSource);
++    const ths = Array.from(wrap.querySelectorAll('thead th'));
++    const header = ths.map(readCellSource);
++    const align = ths.map((th) => th.dataset.align || null);
+     const rows = Array.from(wrap.querySelectorAll('tbody tr')).map((tr) => Array.from(tr.querySelectorAll('td')).map(readCellSource));
+-    return { header, rows };
++    return { header, rows, align };
+ }
+ // A cell's raw markdown lives in `dataset.raw` — the source of truth
+ // that `readModelFromDom` reads when serializing the table back to
+@@ -136,9 +158,15 @@ export function parseCellInline(raw) {
+ }
+ function matchCellMarkAt(raw, from) {
+     const rest = raw.slice(from);
++    // Comments (`%%…%%`, `<!-- -->`): opaque and shown greyed. Matched first so
++    // markdown inside a comment is not parsed; an unclosed one stays literal.
++    let m = rest.match(/^(?:%%[^\n]*?%%|<!--[^\n]*?-->)/);
++    if (m) {
++        return { token: { type: 'comment', text: m[0] }, end: from + m[0].length };
++    }
+     // Bold with `**` or `__` — greedy on the outside, lazy on the
+     // content so we catch the nearest closer.
+-    let m = rest.match(/^\*\*([\s\S]+?)\*\*/);
++    m = rest.match(/^\*\*([\s\S]+?)\*\*/);
+     if (m) {
+         return {
+             token: { type: 'strong', delim: '**', children: parseCellInline(m[1]) },
+@@ -172,6 +200,19 @@ function matchCellMarkAt(raw, from) {
+             end: highlight.end,
+         };
+     }
++    // Inline code. Opaque: nothing inside is parsed, so `**x**` stays literal.
++    m = rest.match(/^`([^`\n]+)`/);
++    if (m) {
++        return { token: { type: 'code', text: m[1] }, end: from + m[0].length };
++    }
++    // Wikilink `[[target]]` / `[[target|label]]`. Must precede the `[text](url)` rule.
++    m = rest.match(/^\[\[([^\]\n|\\]+?)(?:\\?\|([^\]\n]*))?\]\]/);
++    if (m && m[1].trim()) {
++        return {
++            token: { type: 'wikilink', rawTarget: m[1], rawLabel: m[2] ?? null },
++            end: from + m[0].length,
++        };
++    }
+     // Link `[text](url)`. Reject empty text / url via `+` quantifiers.
+     // `]` and `)` can't appear unescaped inside their respective fields.
+     m = rest.match(/^\[([^\]\n]+)\]\(([^\s)"'\n]+)\)/);
+@@ -273,6 +314,39 @@ function renderCellToken(tok) {
+         wrap.appendChild(makeCellMark('=='));
+         return wrap;
+     }
++    if (tok.type === 'comment') {
++        const span = document.createElement('span');
++        span.className = 'cm-atomic-comment';
++        span.textContent = tok.text;
++        return span;
++    }
++    if (tok.type === 'code') {
++        const wrap = document.createElement('span');
++        wrap.className = 'cm-atomic-code-wrap';
++        wrap.appendChild(makeCellMark('`'));
++        const inner = document.createElement('span');
++        inner.className = 'cm-atomic-inline-code';
++        inner.textContent = tok.text;
++        wrap.appendChild(inner);
++        wrap.appendChild(makeCellMark('`'));
++        return wrap;
++    }
++    if (tok.type === 'wikilink') {
++        const wrap = document.createElement('span');
++        wrap.className = 'cm-atomic-wikilink-wrap';
++        wrap.appendChild(makeCellMark('[['));
++        if (tok.rawLabel != null) {
++            // Alias form: the target is syntax (revealed on caret entry), the label is the link.
++            wrap.appendChild(makeCellMark(`${tok.rawTarget}|`));
++        }
++        const link = document.createElement('span');
++        link.className = 'cm-atomic-wiki-link cm-atomic-wiki-link-resolved';
++        link.dataset.wikiLinkTarget = tok.rawTarget.trim();
++        link.textContent = tok.rawLabel ?? tok.rawTarget;
++        wrap.appendChild(link);
++        wrap.appendChild(makeCellMark(']]'));
++        return wrap;
++    }
+     // Link. Shape mirrors the outer-editor markup: `.cm-atomic-link` on
+     // the visible text (picks up link color + external-link icon via
+     // `::after`), faint marks for `[`, `]`, `(`, URL, `)`, and highlight
+@@ -386,6 +460,8 @@ const MARK_WRAP_CLASSES = [
+     'cm-atomic-em-wrap',
+     'cm-atomic-strike-wrap',
+     'cm-atomic-link-wrap',
++    'cm-atomic-code-wrap',
++    'cm-atomic-wikilink-wrap',
+ ];
+ function isMarkWrap(el) {
+     for (const c of MARK_WRAP_CLASSES)
+@@ -486,7 +562,29 @@ function refreshCellPreview(cell) {
+ // range. Walk the tree from there to find the enclosing Table node so
+ // our dispatch targets the current range (positions shift as the user
+ // types — we can't rely on the from/to captured at widget creation).
++// Teardowns for document-level listeners a table's DOM owns (box selection, a
++// handle drag, the context menu). `TableWidget.destroy` runs them when CM drops
++// the DOM, so none act on a detached table.
++const teardowns = new WeakMap();
++function onTeardown(wrap, fn) {
++    let set = teardowns.get(wrap);
++    if (!set)
++        teardowns.set(wrap, (set = new Set()));
++    set.add(fn);
++}
++function offTeardown(wrap, fn) {
++    teardowns.get(wrap)?.delete(fn);
++}
++// True when clipboard HTML holds a table of more than one cell. Pages and mail
++// clients wrap ordinary text in a one-cell table, which is not a grid.
++function isHtmlGrid(html) {
++    if (!/<table/i.test(html))
++        return false;
++    return new DOMParser().parseFromString(html, 'text/html').querySelectorAll('td, th').length > 1;
++}
+ function findCurrentTableRange(view, dom) {
++    if (!dom.isConnected)
++        return null;
+     const pos = view.posAtDOM(dom);
+     if (pos < 0)
+         return null;
+@@ -528,10 +626,768 @@ function placeCaretAtEnd(el) {
+ function getAllCells(wrap) {
+     return Array.from(wrap.querySelectorAll('th, td'));
+ }
++// ---- vertical arrow navigation ---------------------------------------
++// The table is an atomic block widget to the outer editor, so ArrowDown/Up
++// on the neighbouring line used to jump straight over it, and inside a cell
++// the arrows never left it. These helpers make the table a normal stop in
++// the vertical caret path. `dir` is -1 (up) or +1 (down).
++function placeCaretAtStart(el) {
++    const range = document.createRange();
++    range.selectNodeContents(el);
++    range.collapse(true);
++    const sel = window.getSelection();
++    if (!sel)
++        return;
++    sel.removeAllRanges();
++    sel.addRange(range);
++}
++// A wrapped cell has several visual lines; only the first/last one may hand
++// the caret to the neighbouring row. No layout (collapsed rect) => assume a
++// single line.
++function caretOnEdgeLine(source, dir) {
++    const sel = source.ownerDocument.defaultView?.getSelection();
++    if (!sel || sel.rangeCount === 0)
++        return true;
++    const range = sel.getRangeAt(0);
++    const caret = range.getClientRects()[0] ?? range.getBoundingClientRect();
++    if (!caret || !caret.height)
++        return true;
++    const box = source.getBoundingClientRect();
++    const slack = caret.height * 0.75;
++    return dir < 0 ? caret.top - box.top < slack : box.bottom - caret.bottom < slack;
++}
++// Arrow pressed inside a cell: move to the cell above/below in the same
++// column, or step out to the line above/below the table. Returns false when
++// the browser should handle the key (cell has more lines in that direction).
++function arrowFromCell(view, cell, dir) {
++    const wrap = cell.closest('.cm-atomic-table');
++    const source = getCellSource(cell);
++    if (!wrap || !source || !caretOnEdgeLine(source, dir))
++        return false;
++    const cells = getAllCells(wrap);
++    const idx = cells.indexOf(cell);
++    if (idx < 0)
++        return false;
++    const cols = wrap.querySelectorAll('thead th').length || 1;
++    const target = cells[idx + dir * cols];
++    if (target) {
++        const offset = getCaretCharOffset(source);
++        const next = getCellSource(target);
++        if (!next)
++            return false;
++        next.focus();
++        placeCaretAtStart(next);
++        if (offset != null)
++            setCaretCharOffset(next, offset);
++        updateActiveMarkForSource(next);
++        return true;
++    }
++    const range = findCurrentTableRange(view, wrap);
++    if (!range)
++        return false;
++    const docLen = view.state.doc.length;
++    // Table flush against the doc edge: nowhere to go, but swallow the key so
++    // the browser doesn't move the caret out of the contenteditable.
++    if (dir < 0 ? range.from === 0 : range.to >= docLen)
++        return true;
++    const pos = dir < 0 ? range.from - 1 : Math.min(range.to + 1, docLen);
++    view.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
++    view.focus();
++    return true;
++}
++// Arrow pressed in the document on the line directly above/below a table:
++// enter it (first cell going down, last row going up).
++function arrowIntoTable(dir) {
++    return (view) => {
++        const { state } = view;
++        if (state.facet(readOnlyFacet))
++            return false;
++        const sel = state.selection.main;
++        if (!sel.empty)
++            return false;
++        const line = state.doc.lineAt(sel.head);
++        // On a soft-wrapped line the arrow moves to the next visual row first;
++        // only the last row hands the caret to the table.
++        const next = view.moveVertically(sel, dir > 0).head;
++        if (next !== sel.head && next >= line.from && next <= line.to)
++            return false;
++        const edge = dir > 0 ? line.to + 1 : line.from - 1;
++        let hit = null;
++        state.field(tableField, false)?.between(edge, edge, (from, to) => {
++            if (dir > 0 ? from === edge : to === edge)
++                hit = { from, to };
++        });
++        if (!hit)
++            return false;
++        const found = hit;
++        const wrap = Array.from(view.contentDOM.querySelectorAll('.cm-atomic-table')).find((w) => {
++            const pos = view.posAtDOM(w);
++            return pos >= found.from && pos <= found.to;
++        });
++        if (!wrap)
++            return false;
++        const cells = getAllCells(wrap);
++        const cols = wrap.querySelectorAll('thead th').length || 1;
++        const source = getCellSource(cells[dir > 0 ? 0 : cells.length - cols]);
++        if (!source)
++            return false;
++        source.focus();
++        placeCaretAtStart(source);
++        updateActiveMarkForSource(source);
++        return true;
++    };
++}
++// ---- drag cell selection ----------------------------------------------
++// Press in one cell and drag into another to select the rectangle of cells
++// between them ("box mode"). The selection is purely visual state on the DOM
++// (`.cm-atomic-table-cell-selected`); the document is untouched. Esc, a press
++// outside the table, a new press in it, or typing clears it. Works read-only.
++const CELL_SELECTED = 'cm-atomic-table-cell-selected';
++const TABLE_HAS_SELECTION = 'cm-atomic-table-has-selection';
++const TABLE_SELECTING = 'cm-atomic-table-selecting';
++function cellOf(target) {
++    return target instanceof Element ? target.closest('th, td') : null;
++}
++// Edge classes mark the box boundary; CSS draws the outline from them.
++const CELL_EDGES = ['top', 'right', 'bottom', 'left'].map((side) => `cm-atomic-table-cell-sel-${side}`);
++function clearCellSelection(wrap) {
++    for (const c of wrap.querySelectorAll('.' + CELL_SELECTED))
++        c.classList.remove(CELL_SELECTED, ...CELL_EDGES);
++    wrap.classList.remove(TABLE_HAS_SELECTION);
++}
++function paintCellBox(wrap, a, b) {
++    const cells = getAllCells(wrap);
++    const cols = wrap.querySelectorAll('thead th').length || 1;
++    const ia = cells.indexOf(a);
++    const ib = cells.indexOf(b);
++    if (ia < 0 || ib < 0)
++        return;
++    const r0 = Math.min(Math.floor(ia / cols), Math.floor(ib / cols));
++    const r1 = Math.max(Math.floor(ia / cols), Math.floor(ib / cols));
++    const c0 = Math.min(ia % cols, ib % cols);
++    const c1 = Math.max(ia % cols, ib % cols);
++    cells.forEach((cell, i) => {
++        const r = Math.floor(i / cols);
++        const c = i % cols;
++        const inside = r >= r0 && r <= r1 && c >= c0 && c <= c1;
++        cell.classList.toggle(CELL_SELECTED, inside);
++        cell.classList.toggle(CELL_EDGES[0], inside && r === r0);
++        cell.classList.toggle(CELL_EDGES[1], inside && c === c1);
++        cell.classList.toggle(CELL_EDGES[2], inside && r === r1);
++        cell.classList.toggle(CELL_EDGES[3], inside && c === c0);
++    });
++    wrap.classList.add(TABLE_HAS_SELECTION);
++}
++// Backspace / Delete on a cell selection. A box covering whole rows or whole
++// columns removes them (the table's structure); any other box just clears the
++// cell contents. The header row can't be removed, so a full-row box that
++// includes it clears the header and drops the body rows. A box covering the
++// whole table is both "full rows" and "full columns": it only clears.
++function selectionInfo(wrap) {
++    const cells = getAllCells(wrap);
++    const cols = wrap.querySelectorAll('thead th').length || 1;
++    const selected = cells.filter((c) => c.classList.contains(CELL_SELECTED));
++    if (selected.length === 0)
++        return null;
++    const idx = selected.map((c) => cells.indexOf(c));
++    const rows = idx.map((i) => Math.floor(i / cols));
++    const cs = idx.map((i) => i % cols);
++    return {
++        cells,
++        cols,
++        selected,
++        r0: Math.min(...rows),
++        r1: Math.max(...rows),
++        c0: Math.min(...cs),
++        c1: Math.max(...cs),
++    };
++}
++// Write a cell's raw markdown and re-render its decorated DOM. The widget's
++// `eq` ignores content, so edits that keep the table's shape must touch the DOM
++// directly and then sync the document with `dispatchModelFromDom`.
++function setCellRaw(cell, text) {
++    cell.dataset.raw = text;
++    const source = getCellSource(cell);
++    if (source)
++        renderCellSourceDecorated(source);
++    refreshCellPreview(cell);
++}
++function clearSelectedCells(view, info) {
++    for (const cell of info.selected)
++        setCellRaw(cell, '');
++    dispatchModelFromDom(view, info.selected[0], 'table.edit');
++}
++function deleteCellSelection(view, wrap) {
++    if (view.state.facet(readOnlyFacet))
++        return false;
++    const info = selectionInfo(wrap);
++    if (!info)
++        return false;
++    const { cells, cols, r0, r1, c0, c1 } = info;
++    const fullRows = c0 === 0 && c1 === cols - 1;
++    const fullCols = r0 === 0 && r1 === cells.length / cols - 1;
++    if (fullRows !== fullCols) {
++        if (fullCols) {
++            const m = readModelFromDom(wrap);
++            m.header.splice(c0, c1 - c0 + 1);
++            m.align.splice(c0, c1 - c0 + 1);
++            for (const r of m.rows)
++                r.splice(c0, c1 - c0 + 1);
++            dispatchModel(view, wrap, m);
++        }
++        else {
++            // Header included: the next remaining row is promoted to header.
++            editRows(view, wrap, (list) => list.splice(r0, r1 - r0 + 1));
++        }
++        view.focus();
++        return true;
++    }
++    clearSelectedCells(view, info);
++    return true;
++}
++// ---- copy / cut / paste on a cell selection ---------------------------
++// Copy and cut put the selected box on the clipboard as TSV (plus an HTML
++// table); cut then clears the contents. Paste fills a grid of TSV from the
++// box's top-left cell: columns past the right edge are clipped, extra rows
++// are appended. A single pasted value fills every selected cell.
++function cellText(cell) {
++    return readCellSource(cell).replace(/\\\|/g, '|');
++}
++function escapeHtml(text) {
++    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
++}
++function writeCellSelectionToClipboard(info, data) {
++    const rows = [];
++    for (let r = info.r0; r <= info.r1; r++) {
++        const row = [];
++        for (let c = info.c0; c <= info.c1; c++)
++            row.push(cellText(info.cells[r * info.cols + c]));
++        rows.push(row);
++    }
++    data.setData('text/plain', rows.map((row) => row.join('\t')).join('\n'));
++    data.setData('text/html', '<table><tbody>' +
++        rows.map((row) => '<tr>' + row.map((t) => `<td>${escapeHtml(t)}</td>`).join('') + '</tr>').join('') +
++        '</tbody></table>');
++}
++function parseClipboardGrid(text) {
++    const t = text.replace(/\r\n?/g, '\n').replace(/\n$/, '');
++    if (t === '')
++        return null;
++    return t.split('\n').map((line) => line.split('\t'));
++}
++function pasteIntoCellSelection(view, wrap, info, grid) {
++    const { cells, cols, r0, c0 } = info;
++    if (grid.length === 1 && grid[0].length === 1 && info.selected.length > 1) {
++        for (const cell of info.selected)
++            setCellRaw(cell, grid[0][0]);
++        dispatchModelFromDom(view, info.selected[0], 'table.edit');
++        return;
++    }
++    const needRows = r0 + grid.length - cells.length / cols;
++    if (needRows > 0) {
++        const m = readModelFromDom(wrap);
++        for (let k = 0; k < needRows; k++)
++            m.rows.push(m.header.map(() => ''));
++        grid.forEach((line, i) => line.forEach((v, j) => {
++            const tr = r0 + i;
++            const tc = c0 + j;
++            if (tc >= cols)
++                return;
++            if (tr === 0)
++                m.header[tc] = v;
++            else
++                m.rows[tr - 1][tc] = v;
++        }));
++        dispatchModel(view, wrap, m);
++        view.focus();
++        return;
++    }
++    let first = null;
++    grid.forEach((line, i) => line.forEach((v, j) => {
++        if (c0 + j >= cols)
++            return;
++        const cell = cells[(r0 + i) * cols + c0 + j];
++        setCellRaw(cell, v);
++        first ??= cell;
++    }));
++    if (!first)
++        return;
++    dispatchModelFromDom(view, first, 'table.edit');
++    const width = Math.max(...grid.map((line) => line.length));
++    // The pasted block's corners, so the caller can select it.
++    return {
++        a: cells[r0 * cols + c0],
++        b: cells[(r0 + grid.length - 1) * cols + Math.min(cols - 1, c0 + width - 1)],
++    };
++}
++// Paste a grid with the caret in a single cell (no box selected): same fill,
++// anchored at that cell. Returns nothing; the caret stays where it was.
++function pasteGridAtCell(view, cell, grid) {
++    const wrap = cell.closest('.cm-atomic-table');
++    if (!wrap)
++        return;
++    const cells = getAllCells(wrap);
++    const cols = wrap.querySelectorAll('thead th').length || 1;
++    const i = cells.indexOf(cell);
++    if (i < 0)
++        return;
++    const r = Math.floor(i / cols);
++    const c = i % cols;
++    pasteIntoCellSelection(view, wrap, { cells, cols, selected: [cell], r0: r, r1: r, c0: c, c1: c }, grid);
++}
++function attachCellSelection(wrap, view) {
++    let anchor = null;
++    let pressed = false; // primary button is down after a press inside the table
++    let boxed = false; // the pointer has left the anchor cell: box mode
++    let watching = false;
++    let selAnchor = null; // fixed corner of the current box
++    let selHead = null; // free corner: moved by Shift-click / Shift+Arrow
++    const show = (a, b) => {
++        selAnchor = a;
++        selHead = b;
++        paintCellBox(wrap, a, b);
++    };
++    // Drop the caret / native text selection and keep keyboard focus on the
++    // table so key handling (copy, clear, Shift+Arrow) has a target.
++    const enterSelection = () => {
++        document.getSelection()?.removeAllRanges();
++        wrap.tabIndex = -1;
++        wrap.focus({ preventScroll: true });
++        watch();
++    };
++    const caretCell = () => {
++        const a = document.getSelection()?.anchorNode;
++        const el = a && (a.nodeType === 1 ? a : a.parentElement);
++        const c = el?.closest('th, td');
++        return c && wrap.contains(c) ? c : null;
++    };
++    const onDocDown = (e) => {
++        if (!wrap.contains(e.target))
++            clear();
++    };
++    const onDocKey = (e) => {
++        if (e.key === 'Escape')
++            clear();
++    };
++    onTeardown(wrap, () => {
++        clear();
++        release();
++    });
++    const watch = () => {
++        if (watching)
++            return;
++        watching = true;
++        document.addEventListener('pointerdown', onDocDown, true);
++        document.addEventListener('keydown', onDocKey, true);
++    };
++    function clear() {
++        selAnchor = null;
++        selHead = null;
++        clearCellSelection(wrap);
++        if (!watching)
++            return;
++        watching = false;
++        document.removeEventListener('pointerdown', onDocDown, true);
++        document.removeEventListener('keydown', onDocKey, true);
++    }
++    const onMove = (e) => {
++        if (!(e.buttons & 1)) {
++            release();
++            return;
++        }
++        const cell = cellOf(e.target);
++        if (!cell || !wrap.contains(cell) || !anchor)
++            return;
++        if (!boxed) {
++            if (cell === anchor)
++                return;
++            boxed = true;
++            wrap.classList.add(TABLE_SELECTING);
++            enterSelection();
++        }
++        show(anchor, cell);
++    };
++    function release() {
++        pressed = false;
++        boxed = false;
++        anchor = null;
++        wrap.classList.remove(TABLE_SELECTING);
++        document.removeEventListener('pointermove', onMove, true);
++        document.removeEventListener('pointerup', release, true);
++        document.removeEventListener('pointercancel', release, true);
++    }
++    // Shift-click: extend the box from its anchor, or start one from the cell
++    // holding the caret.
++    wrap.addEventListener('mousedown', (e) => {
++        if (e.shiftKey && (selAnchor || caretCell()))
++            e.preventDefault();
++    });
++    wrap.addEventListener('pointerdown', (e) => {
++        if (e.button !== 0 || e.altKey || e.ctrlKey || e.metaKey)
++            return;
++        const cell = cellOf(e.target);
++        if (!cell)
++            return;
++        if (e.shiftKey) {
++            const base = selAnchor ?? caretCell();
++            if (!base)
++                return;
++            e.preventDefault();
++            enterSelection();
++            show(base, cell);
++            return;
++        }
++        clear();
++        anchor = cell;
++        pressed = true;
++        boxed = false;
++        document.addEventListener('pointermove', onMove, true);
++        document.addEventListener('pointerup', release, true);
++        document.addEventListener('pointercancel', release, true);
++    });
++    wrap.addEventListener('selectstart', (e) => {
++        if (pressed && boxed)
++            e.preventDefault();
++    });
++    wrap.addEventListener('input', clear);
++    wrap.addEventListener('copy', (e) => {
++        const info = selectionInfo(wrap);
++        if (!info || !e.clipboardData)
++            return;
++        e.preventDefault();
++        writeCellSelectionToClipboard(info, e.clipboardData);
++    });
++    wrap.addEventListener('cut', (e) => {
++        const info = selectionInfo(wrap);
++        if (!info || !e.clipboardData)
++            return;
++        e.preventDefault();
++        writeCellSelectionToClipboard(info, e.clipboardData);
++        if (!view.state.facet(readOnlyFacet))
++            clearSelectedCells(view, info);
++    });
++    wrap.addEventListener('paste', (e) => {
++        const info = selectionInfo(wrap);
++        if (!info || !e.clipboardData || view.state.facet(readOnlyFacet))
++            return;
++        const grid = parseClipboardGrid(e.clipboardData.getData('text/plain'));
++        if (!grid)
++            return;
++        e.preventDefault();
++        const box = pasteIntoCellSelection(view, wrap, info, grid);
++        if (box)
++            show(box.a, box.b);
++    });
++    wrap.addEventListener('keydown', (e) => {
++        if (e.shiftKey && !e.altKey && e.key.startsWith('Arrow') && selAnchor && selHead) {
++            const cells = getAllCells(wrap);
++            const cols = wrap.querySelectorAll('thead th').length || 1;
++            const rowCount = cells.length / cols;
++            const hi = cells.indexOf(selHead);
++            if (hi < 0 || cells.indexOf(selAnchor) < 0)
++                return;
++            let r = Math.floor(hi / cols);
++            let c = hi % cols;
++            const far = e.ctrlKey || e.metaKey; // Ctrl/Cmd+Shift+Arrow: to the edge
++            if (e.key === 'ArrowLeft')
++                c = far ? 0 : Math.max(0, c - 1);
++            else if (e.key === 'ArrowRight')
++                c = far ? cols - 1 : Math.min(cols - 1, c + 1);
++            else if (e.key === 'ArrowUp')
++                r = far ? 0 : Math.max(0, r - 1);
++            else if (e.key === 'ArrowDown')
++                r = far ? rowCount - 1 : Math.min(rowCount - 1, r + 1);
++            else
++                return;
++            e.preventDefault();
++            e.stopPropagation();
++            show(selAnchor, cells[r * cols + c]);
++            return;
++        }
++        if (e.key !== 'Backspace' && e.key !== 'Delete')
++            return;
++        if (!wrap.classList.contains(TABLE_HAS_SELECTION))
++            return;
++        if (deleteCellSelection(view, wrap)) {
++            e.preventDefault();
++            e.stopPropagation();
++        }
++    });
++}
++// ---- add column / add row strips ------------------------------------------
++// Hovering just past the table's right or bottom edge reveals an attached
++// strip (CSS fades it in); clicking it appends a column / row.
++function makeAddStrip(kind, view, wrap) {
++    const btn = document.createElement('button');
++    btn.type = 'button';
++    btn.className = `cm-atomic-table-add cm-atomic-table-add-${kind}`;
++    btn.setAttribute('aria-label', kind === 'row' ? 'Add row' : 'Add column');
++    btn.textContent = '+';
++    // Mouse affordance only: keyboard users get Tab-past-the-last-cell and the
++    // context menu, and a hidden-until-hover button is a confusing tab stop.
++    btn.tabIndex = -1;
++    btn.addEventListener('click', (e) => {
++        e.preventDefault();
++        e.stopPropagation();
++        if (kind === 'row')
++            appendRow(view, wrap);
++        else
++            appendColumn(view, wrap);
++    });
++    return btn;
++}
++function appendColumn(view, wrap) {
++    if (view.state.facet(readOnlyFacet))
++        return;
++    const range = findCurrentTableRange(view, wrap);
++    if (!range)
++        return;
++    const model = readModelFromDom(wrap);
++    model.header.push('');
++    model.align.push(null);
++    for (const r of model.rows)
++        r.push('');
++    view.dispatch({
++        changes: { from: range.from, to: range.to, insert: serializeTable(model) },
++        annotations: Transaction.userEvent.of('table.edit'),
++    });
++    // The column count changed, so the widget is rebuilt and `wrap` is detached.
++    // Find the fresh one by position (double rAF, same as appendRow) and put the
++    // caret in the new header cell.
++    const { from } = range;
++    requestAnimationFrame(() => {
++        requestAnimationFrame(() => {
++            if (view.state.facet(readOnlyFacet))
++                return;
++            for (const el of view.dom.querySelectorAll('.cm-atomic-table')) {
++                try {
++                    if (view.posAtDOM(el) !== from)
++                        continue;
++                }
++                catch {
++                    continue; // posAtDOM throws on detached/transitional DOM
++                }
++                const headers = el.querySelectorAll('thead th');
++                const source = headers.length ? getCellSource(headers[headers.length - 1]) : null;
++                if (source) {
++                    source.focus();
++                    placeCaretAtEnd(source);
++                }
++                return;
++            }
++        });
++    });
++}
++// ---- row / column reorder handles ------------------------------------------
++// A handle strip in the gutter above each column and left of each body row.
++// They live inside the first-row / first-column cells so CSS positions them
++// with the cell, and are rebuilt (`syncHandles`) whenever cells are reordered.
++// Dragging one onto another row / column moves it; the move is done on the DOM
++// (the widget's `eq` ignores content) and then synced to the document.
++function makeHandle(kind, view, wrap) {
++    const h = document.createElement('div');
++    h.className = `cm-atomic-table-handle cm-atomic-table-handle-${kind}`;
++    h.setAttribute('role', 'button');
++    h.setAttribute('aria-label', kind === 'row' ? 'Move row' : 'Move column');
++    h.contentEditable = 'false';
++    h.addEventListener('pointerdown', (e) => {
++        if (e.button !== 0)
++            return;
++        e.preventDefault();
++        e.stopPropagation(); // not a cell press: keep the box-selection handler out
++        startHandleDrag(view, wrap, kind, h, e);
++    });
++    return h;
++}
++function syncHandles(view, wrap) {
++    for (const h of wrap.querySelectorAll('.cm-atomic-table-handle'))
++        h.remove();
++    if (view.state.facet(readOnlyFacet))
++        return;
++    for (const th of wrap.querySelectorAll('thead th'))
++        th.append(makeHandle('col', view, wrap));
++    for (const tr of wrap.querySelectorAll('tr'))
++        tr.querySelector('th, td')?.append(makeHandle('row', view, wrap));
++}
++function clearDropMarks(wrap) {
++    for (const el of wrap.querySelectorAll('.cm-atomic-table-drop-target')) {
++        el.classList.remove('cm-atomic-table-drop-target');
++        delete el.dataset.drop;
++    }
++}
++function markDropTarget(wrap, kind, from, to) {
++    clearDropMarks(wrap);
++    const side = to > from ? 'after' : 'before';
++    const targets = kind === 'col'
++        ? Array.from(wrap.querySelectorAll('tr')).map((tr) => tr.children[to])
++        : Array.from(wrap.querySelectorAll('tr')[to]?.children ?? []);
++    for (const el of targets) {
++        if (!el)
++            continue;
++        el.classList.add('cm-atomic-table-drop-target');
++        el.dataset.drop = `${kind}-${side}`;
++    }
++}
++// Index of a cell's row among ALL rows, header first (the header is row 0).
++function rowAllIndex(cell) {
++    const tr = cell.closest('tr');
++    const wrap = cell.closest('.cm-atomic-table');
++    return tr && wrap ? Array.from(wrap.querySelectorAll('tr')).indexOf(tr) : -1;
++}
++// Edit the table's rows as one list, header first. The header is not special to
++// the user: any row can be inserted around, moved or removed, and whichever row
++// ends up first becomes the header, so the markdown stays valid (a GFM table
++// always has exactly one header row). The widget then rebuilds from the new
++// document because its DOM no longer matches it.
++function editRows(view, wrap, fn) {
++    const m = readModelFromDom(wrap);
++    const list = [m.header, ...m.rows];
++    fn(list);
++    if (list.length === 0)
++        return;
++    m.header = list[0];
++    m.rows = list.slice(1);
++    dispatchModel(view, wrap, m);
++}
++function moveTableLine(view, wrap, kind, from, to) {
++    if (kind === 'col') {
++        for (const tr of wrap.querySelectorAll('tr')) {
++            const cs = Array.from(tr.children);
++            if (!cs[from] || !cs[to])
++                continue;
++            tr.insertBefore(cs[from], to > from ? cs[to].nextSibling : cs[to]);
++        }
++    }
++    else {
++        editRows(view, wrap, (list) => {
++            if (!list[from] || !list[to])
++                return;
++            const [moved] = list.splice(from, 1);
++            list.splice(to, 0, moved);
++        });
++        return;
++    }
++    syncHandles(view, wrap);
++    const any = wrap.querySelector('th, td');
++    if (any)
++        dispatchModelFromDom(view, any, 'table.edit');
++}
++function startHandleDrag(view, wrap, kind, handle, down) {
++    const from = kind === 'col' ? cellColIndex(handle.parentElement) : rowAllIndex(handle.parentElement);
++    if (from < 0)
++        return;
++    let to = from;
++    const horizontal = kind === 'col';
++    const items = () => Array.from(wrap.querySelectorAll(horizontal ? 'thead th' : 'tr'));
++    // The handle slides along its rail (the table's extent on its axis) with the
++    // pointer, unsnapped; the landing slot is marked separately.
++    const startPointer = horizontal ? down.clientX : down.clientY;
++    const startRect = handle.getBoundingClientRect();
++    const railRects = items().map((el) => el.getBoundingClientRect());
++    const hasLayout = railRects.some((r) => r.width > 0 || r.height > 0);
++    const railMin = hasLayout ? (horizontal ? railRects[0].left - startRect.left : railRects[0].top - startRect.top) : -Infinity;
++    const railMax = hasLayout
++        ? horizontal
++            ? railRects[railRects.length - 1].right - startRect.right
++            : railRects[railRects.length - 1].bottom - startRect.bottom
++        : Infinity;
++    const slide = (e) => {
++        const raw = (horizontal ? e.clientX : e.clientY) - startPointer;
++        const d = Math.min(Math.max(raw, railMin), railMax);
++        handle.style.transform = horizontal ? `translateX(${d}px)` : `translateY(${d}px)`;
++    };
++    // The slot under the pointer's position along the rail, wherever the pointer
++    // is across it. Without layout (tests), fall back to the element under it.
++    const slotAt = (e) => {
++        if (hasLayout) {
++            const p = horizontal ? e.clientX : e.clientY;
++            const i = railRects.findIndex((r) => p < (horizontal ? r.right : r.bottom));
++            return i < 0 ? railRects.length - 1 : i;
++        }
++        const cell = cellOf(e.target);
++        if (!cell || !wrap.contains(cell))
++            return -1;
++        return horizontal ? cellColIndex(cell) : rowAllIndex(cell);
++    };
++    // Keep the handle visible for the whole drag, wherever the pointer is
++    // (its hover state only exists while the pointer is over it).
++    handle.classList.add('cm-atomic-table-handle-dragging');
++    wrap.classList.add('cm-atomic-table-dragging');
++    const end = (commit) => {
++        offTeardown(wrap, cancel);
++        handle.classList.remove('cm-atomic-table-handle-dragging');
++        wrap.classList.remove('cm-atomic-table-dragging');
++        handle.style.transform = '';
++        document.removeEventListener('pointermove', onMove, true);
++        document.removeEventListener('pointerup', onUp, true);
++        document.removeEventListener('pointercancel', onCancel, true);
++        clearDropMarks(wrap);
++        if (commit && to !== from) {
++            moveTableLine(view, wrap, kind, from, to);
++            view.focus(); // so Ctrl+Z reaches the editor
++        }
++    };
++    const onUp = () => end(true);
++    const onCancel = () => end(false);
++    const cancel = onCancel;
++    onTeardown(wrap, cancel);
++    const onMove = (e) => {
++        if (!(e.buttons & 1)) {
++            end(false);
++            return;
++        }
++        slide(e);
++        const t = slotAt(e);
++        if (t < 0)
++            return;
++        to = t;
++        markDropTarget(wrap, kind, from, to);
++    };
++    document.addEventListener('pointermove', onMove, true);
++    document.addEventListener('pointerup', onUp, true);
++    document.addEventListener('pointercancel', onCancel, true);
++}
++// ---- undo / redo ------------------------------------------------------
++// Key events inside the widget never reach the editor's keymap (`ignoreEvent`),
++// so Ctrl/Cmd+Z / Shift+Z / Y did nothing in or beside a table. Re-dispatch
++// them on the content DOM, where the host's undo keymap listens; swallow the
++// original only if something handled it.
++function attachUndoForwarding(wrap, view) {
++    wrap.addEventListener('keydown', (e) => {
++        if (!(e.ctrlKey || e.metaKey) || e.altKey || e.isComposing)
++            return;
++        const k = e.key.toLowerCase();
++        if (k !== 'z' && k !== 'y')
++            return;
++        if (view.state.facet(readOnlyFacet))
++            return;
++        const forwarded = new KeyboardEvent('keydown', {
++            key: e.key,
++            code: e.code,
++            keyCode: e.keyCode,
++            ctrlKey: e.ctrlKey,
++            metaKey: e.metaKey,
++            shiftKey: e.shiftKey,
++            bubbles: true,
++            cancelable: true,
++        });
++        view.contentDOM.dispatchEvent(forwarded);
++        if (forwarded.defaultPrevented) {
++            e.preventDefault();
++            e.stopPropagation();
++            view.focus();
++        }
++    });
++}
+ // ---- widget ---------------------------------------------------------
++// CM6 calls `eq` in either direction (old.eq(new) when diffing decorations,
++// new.eq(old) when syncing the view) and, when it reuses the DOM, keeps the NEW
++// widget object. A construction counter tells the two apart.
++let widgetSeq = 0;
+ class TableWidget extends WidgetType {
+     constructor(model, readOnly) {
+         super();
++        this.seq = widgetSeq++;
+         Object.defineProperty(this, "model", {
+             enumerable: true,
+             configurable: true,
+@@ -561,18 +1417,48 @@ class TableWidget extends WidgetType {
+             return false;
+         if (other.model.rows.length !== this.model.rows.length)
+             return false;
++        // Alignment lives in the separator row, not the cells, so a change there
++        // must rebuild the DOM (cells carry it as data-align).
++        if (JSON.stringify(other.model.align) !== JSON.stringify(this.model.align))
++            return false;
++        // Reuse the DOM only if it already shows the incoming content. Typing
++        // updates the DOM first and the document second, so a keystroke matches
++        // (the caret survives); an undo or a remote edit does not (rebuild, or
++        // the cells would keep showing stale text). Compared as serialized
++        // markdown so escaping and trimming are the same on both sides.
++        if (other === this)
++            return true;
++        const [older, newer] = this.seq < other.seq ? [this, other] : [other, this];
++        const dom = older.dom ?? newer.dom;
++        if (dom && serializeTable(readModelFromDom(dom)) !== serializeTable(newer.model))
++            return false;
++        // The newer widget is the one CM6 keeps when it reuses the DOM; hand it
++        // the DOM so the next comparison can still check it.
++        if (dom)
++            newer.dom = dom;
+         return true;
+     }
+     toDOM(view) {
+         const wrap = document.createElement('div');
+         wrap.className = 'cm-atomic-table';
++        // `body` scrolls with the table and anchors the add-column / add-row
++        // strips at its right and bottom edges (see makeAddStrip).
++        const body = document.createElement('div');
++        body.className = 'cm-atomic-table-body';
+         const table = document.createElement('table');
+-        wrap.appendChild(table);
++        body.appendChild(table);
++        wrap.appendChild(body);
+         const thead = document.createElement('thead');
+         const headerRow = document.createElement('tr');
+-        for (const text of this.model.header) {
+-            headerRow.appendChild(makeCell('th', text, view));
+-        }
++        const align = this.model.align ?? [];
++        const aligned = (cell, c) => {
++            if (align[c])
++                cell.dataset.align = align[c];
++            return cell;
++        };
++        this.model.header.forEach((text, c) => {
++            headerRow.appendChild(aligned(makeCell('th', text, view), c));
++        });
+         thead.appendChild(headerRow);
+         table.appendChild(thead);
+         const tbody = document.createElement('tbody');
+@@ -580,11 +1466,18 @@ class TableWidget extends WidgetType {
+         for (const row of this.model.rows) {
+             const tr = document.createElement('tr');
+             for (let c = 0; c < colCount; c++) {
+-                tr.appendChild(makeCell('td', row[c] ?? '', view));
++                tr.appendChild(aligned(makeCell('td', row[c] ?? '', view), c));
+             }
+             tbody.appendChild(tr);
+         }
+         table.appendChild(tbody);
++        if (!this.readOnly) {
++            body.append(makeAddStrip('col', view, wrap), makeAddStrip('row', view, wrap));
++            syncHandles(view, wrap);
++        }
++        attachCellSelection(wrap, view);
++        attachUndoForwarding(wrap, view);
++        this.dom = wrap;
+         return wrap;
+     }
+     // All cell interactions are handled by the listeners we attach in
+@@ -593,6 +1486,12 @@ class TableWidget extends WidgetType {
+     ignoreEvent() {
+         return true;
+     }
++    destroy(dom) {
++        const fns = teardowns.get(dom);
++        teardowns.delete(dom);
++        for (const fn of fns ?? [])
++            fn();
++    }
+ }
+ function makeCell(tag, text, view) {
+     const cell = document.createElement(tag);
+@@ -629,17 +1528,37 @@ function makeCell(tag, text, view) {
+     // opened. We open on `click` (a proper popup-activation gesture, so
+     // `window.open` isn't blocked) and block the caret on `pointerdown`.
+     //
+-    // In read-only mode there's no editable link text to protect, so the
+-    // whole link (`.cm-atomic-link-wrap`) is the open target — matching
+-    // the outer editor. In edit mode the open stays scoped to the
+-    // trailing icon so the text itself remains clickable-to-edit.
++    // The whole link (`.cm-atomic-link-wrap`) is the open target in both
++    // modes, matching the outer editor (the host hides the icon, so an
++    // icon-only hit-zone would leave links unopenable while editing).
+     const openTargetFromEvent = (event) => {
+         const target = event.target;
+         if (!(target instanceof Element))
+             return null;
+-        const selector = readOnly ? '.cm-atomic-link-wrap' : '.cm-atomic-link-icon';
++        const selector = '.cm-atomic-link-wrap';
+         return target.closest(selector);
+     };
++    // Wikilinks open on plain click, like the outer editor. The outer
++    // `wikiLinks()` click handler never sees these (the table widget sets
++    // `ignoreEvent() => true`), so route through `tableWikiLinkClickFacet`.
++    const wikiLinkFromEvent = (event) => {
++        const target = event.target;
++        return target instanceof Element ? target.closest('.cm-atomic-wiki-link') : null;
++    };
++    source.addEventListener('pointerdown', (event) => {
++        if (event.button === 0 && wikiLinkFromEvent(event))
++            event.preventDefault();
++    });
++    source.addEventListener('click', (event) => {
++        if (event.button !== 0 || event.shiftKey || event.altKey)
++            return;
++        const target = wikiLinkFromEvent(event)?.dataset.wikiLinkTarget;
++        if (!target)
++            return;
++        event.preventDefault();
++        event.stopPropagation();
++        view.state.facet(tableWikiLinkClickFacet)(target);
++    });
+     source.addEventListener('pointerdown', (event) => {
+         if (event.button !== 0)
+             return;
+@@ -678,7 +1597,12 @@ function attachCellEditing(view, cell, source) {
+         // textContent (not innerText) so `display: none` delimiters inside
+         // mark wraps are still captured — otherwise a cell containing
+         // `**bold**` would serialize to just `bold` on every keystroke.
+-        const raw = (source.textContent ?? '').replace(/\s+/g, ' ').trim();
++        // One-for-one whitespace normalization (nbsp/newline/tab -> space) with NO
++        // trim or collapse: the DOM is rebuilt from `raw` below, and the caret
++        // offset taken from the live DOM must still index into it. Trimming ate
++        // a just-typed trailing space; `readModelFromDom` already trims on
++        // serialize, so the doc never sees it.
++        const raw = (source.textContent ?? '').replace(/\s/g, ' ');
+         cell.dataset.raw = raw;
+         const offset = getCaretCharOffset(source);
+         renderCellSourceDecorated(source);
+@@ -711,6 +1635,20 @@ function attachCellEditing(view, cell, source) {
+     // and strip markup here, and `escapeCell` neutralizes any literal `|`
+     // on serialize.
+     source.addEventListener('paste', (event) => {
++        // Spreadsheet-style grid (tabs, or a copied HTML table of several cells):
++        // spread it across cells from this one instead of flattening it into a
++        // single cell. Web HTML that wraps its text in a one-cell <table> stays a
++        // plain paste.
++        const data = event.clipboardData;
++        if (data && (/\t/.test(data.getData('text/plain')) || isHtmlGrid(data.getData('text/html')))) {
++            const grid = parseClipboardGrid(data.getData('text/plain'));
++            if (grid && (grid.length > 1 || grid[0].length > 1)) {
++                event.preventDefault();
++                event.stopPropagation();
++                pasteGridAtCell(view, cell, grid);
++                return;
++            }
++        }
+         event.preventDefault();
+         const text = (event.clipboardData?.getData('text/plain') ?? '')
+             .replace(/\s+/g, ' ')
+@@ -737,6 +1675,15 @@ function attachCellEditing(view, cell, source) {
+     // hides all delimiters.
+     source.addEventListener('blur', () => clearActiveMarksInSource(source));
+     source.addEventListener('keydown', (event) => {
++        if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') &&
++            !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey &&
++            !composing && !event.isComposing) {
++            if (arrowFromCell(view, cell, event.key === 'ArrowUp' ? -1 : 1)) {
++                event.preventDefault();
++                event.stopPropagation();
++            }
++            return;
++        }
+         // Enter mirrors Tab — advance to the next cell (appending a row past
+         // the last one) instead of inserting a line break a single-line cell
+         // can't represent. Shift reverses direction for both.
+@@ -802,88 +1749,195 @@ function dispatchModel(view, wrap, nextModel) {
+     const next = serializeTable(nextModel);
+     view.dispatch({
+         changes: { from: range.from, to: range.to, insert: next },
++        annotations: Transaction.userEvent.of('table.edit'),
+     });
+ }
++// Sort the body rows by a column. Numbers compare by value ("2" < "10"), text
++// case-insensitively; empty cells go last in both directions. Stable.
++function sortTableByColumn(view, wrap, col, dir) {
++    const tbody = wrap.querySelector('tbody');
++    if (!tbody)
++        return;
++    const keyed = Array.from(tbody.querySelectorAll('tr')).map((tr, i) => ({
++        tr,
++        i,
++        text: readCellSource(tr.children[col] ?? tr),
++    }));
++    keyed.sort((a, b) => {
++        if (!a.text !== !b.text)
++            return a.text ? -1 : 1;
++        const cmp = a.text.localeCompare(b.text, undefined, { numeric: true, sensitivity: 'base' });
++        return (cmp * dir) || a.i - b.i;
++    });
++    tbody.append(...keyed.map((k) => k.tr));
++    syncHandles(view, wrap);
++    const any = wrap.querySelector('th, td');
++    if (any)
++        dispatchModelFromDom(view, any, 'table.edit');
++}
++// Set one column's alignment (left / center / right) on its cells, then sync
++// the separator row in the document.
++function setColumnAlign(view, wrap, col, align) {
++    for (const tr of wrap.querySelectorAll('tr')) {
++        const cell = tr.children[col];
++        if (cell)
++            cell.dataset.align = align;
++    }
++    const any = wrap.querySelector('th, td');
++    if (any)
++        dispatchModelFromDom(view, any, 'table.edit');
++}
++// 24x24 stroke icons (inner SVG markup) for the context menu.
++const MENU_ICONS = {
++    rows: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18"/><path d="M3 15h18"/>',
++    columns: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/><path d="M15 4v16"/>',
++    sort: '<path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/>',
++    align: '<path d="M21 6H3"/><path d="M15 12H3"/><path d="M17 18H3"/>',
++    chevron: '<path d="m9 6 6 6-6 6"/>',
++    trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
++    up: '<path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>',
++    down: '<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>',
++    left: '<path d="M19 12H5"/><path d="m12 19-7-7 7-7"/>',
++    right: '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
++    insertAbove: '<rect x="3" y="12" width="18" height="9" rx="2"/><path d="M12 3v6"/><path d="M9 6h6"/>',
++    insertBelow: '<rect x="3" y="3" width="18" height="9" rx="2"/><path d="M12 15v6"/><path d="M9 18h6"/>',
++    insertLeft: '<rect x="12" y="3" width="9" height="18" rx="2"/><path d="M3 12h6"/><path d="M6 9v6"/>',
++    insertRight: '<rect x="3" y="3" width="9" height="18" rx="2"/><path d="M15 12h6"/><path d="M18 9v6"/>',
++    sortAsc: '<path d="m3 8 4-4 4 4"/><path d="M7 4v16"/><path d="M11 12h4"/><path d="M11 16h7"/><path d="M11 20h10"/>',
++    sortDesc: '<path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="M11 4h10"/><path d="M11 8h7"/><path d="M11 12h4"/>',
++    alignLeft: '<path d="M21 6H3"/><path d="M15 12H3"/><path d="M17 18H3"/>',
++    alignCenter: '<path d="M21 6H3"/><path d="M17 12H7"/><path d="M19 18H5"/>',
++    alignRight: '<path d="M21 6H3"/><path d="M21 12H9"/><path d="M21 18H7"/>',
++};
++function menuIcon(name) {
++    const span = document.createElement('span');
++    span.className = 'cm-atomic-table-menu-icon';
++    span.setAttribute('aria-hidden', 'true');
++    span.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${MENU_ICONS[name] ?? ''}</svg>`;
++    return span;
++}
+ function openCellMenu(view, cell, x, y) {
+     const wrap = cell.closest('.cm-atomic-table');
+     if (!wrap)
+         return;
+-    const isHeader = cell.tagName === 'TH';
+-    const row = cellRowIndex(cell);
++    const row = rowAllIndex(cell); // header = 0
+     const col = cellColIndex(cell);
++    const rowTotal = wrap.querySelectorAll('tr').length;
++    const colCount = wrap.querySelectorAll('thead th').length;
+     const menu = document.createElement('div');
+     menu.className = 'cm-atomic-table-menu';
++    menu.setAttribute('role', 'menu');
+     menu.style.left = `${x}px`;
+     menu.style.top = `${y}px`;
+-    const items = [];
+-    if (!isHeader) {
+-        items.push({
+-            label: 'Insert row above',
+-            action: () => {
+-                const m = readModelFromDom(wrap);
+-                m.rows.splice(row, 0, m.header.map(() => ''));
+-                dispatchModel(view, wrap, m);
++    const insertColumn = (at) => () => {
++        const m = readModelFromDom(wrap);
++        m.header.splice(at, 0, '');
++        m.align.splice(at, 0, null);
++        for (const r of m.rows)
++            r.splice(at, 0, '');
++        dispatchModel(view, wrap, m);
++    };
++    // Row / Column / Sort / Align sub-menus, like Obsidian's. Every action works
++    // on every row, the header included (see editRows).
++    const blankRow = (list) => list[0].map(() => '');
++    const groups = [];
++    groups.push({
++        label: 'Row',
++        icon: 'rows',
++        items: [
++            {
++                label: 'Insert row above',
++                icon: 'insertAbove',
++                action: () => editRows(view, wrap, (list) => list.splice(row, 0, blankRow(list))),
+             },
+-        });
+-        items.push({
+-            label: 'Insert row below',
+-            action: () => {
+-                const m = readModelFromDom(wrap);
+-                m.rows.splice(row + 1, 0, m.header.map(() => ''));
+-                dispatchModel(view, wrap, m);
++            {
++                label: 'Insert row below',
++                icon: 'insertBelow',
++                action: () => editRows(view, wrap, (list) => list.splice(row + 1, 0, blankRow(list))),
+             },
+-        });
+-        items.push({
+-            label: 'Delete row',
+-            action: () => {
+-                const m = readModelFromDom(wrap);
+-                if (row >= 0 && row < m.rows.length)
+-                    m.rows.splice(row, 1);
+-                dispatchModel(view, wrap, m);
++            {
++                label: 'Move row up',
++                icon: 'up',
++                disabled: row <= 0,
++                action: () => moveTableLine(view, wrap, 'row', row, row - 1),
+             },
+-        });
+-        items.push('separator');
+-    }
+-    items.push({
+-        label: 'Insert column left',
+-        action: () => {
+-            const m = readModelFromDom(wrap);
+-            m.header.splice(col, 0, '');
+-            for (const r of m.rows)
+-                r.splice(col, 0, '');
+-            dispatchModel(view, wrap, m);
+-        },
+-    });
+-    items.push({
+-        label: 'Insert column right',
+-        action: () => {
+-            const m = readModelFromDom(wrap);
+-            m.header.splice(col + 1, 0, '');
+-            for (const r of m.rows)
+-                r.splice(col + 1, 0, '');
+-            dispatchModel(view, wrap, m);
+-        },
++            {
++                label: 'Move row down',
++                icon: 'down',
++                disabled: row >= rowTotal - 1,
++                action: () => moveTableLine(view, wrap, 'row', row, row + 1),
++            },
++            {
++                label: 'Delete row',
++                icon: 'trash',
++                action: () => editRows(view, wrap, (list) => {
++                    // A table needs a header: with only one row left, clear it.
++                    if (list.length <= 1)
++                        list[0] = blankRow(list);
++                    else
++                        list.splice(row, 1);
++                }),
++            },
++        ],
+     });
+-    items.push({
+-        label: 'Delete column',
+-        action: () => {
+-            const m = readModelFromDom(wrap);
+-            // Guard: don't leave the table with zero columns — lezer
+-            // wouldn't re-parse that as a Table and the widget would
+-            // vanish mid-edit. Keeping the last column as the floor.
+-            if (m.header.length <= 1 || col < 0)
+-                return;
+-            m.header.splice(col, 1);
+-            for (const r of m.rows)
+-                r.splice(col, 1);
+-            dispatchModel(view, wrap, m);
+-        },
++    groups.push({
++        label: 'Column',
++        icon: 'columns',
++        items: [
++            { label: 'Insert column left', icon: 'insertLeft', action: insertColumn(col) },
++            { label: 'Insert column right', icon: 'insertRight', action: insertColumn(col + 1) },
++            {
++                label: 'Move column left',
++                icon: 'left',
++                disabled: col <= 0,
++                action: () => moveTableLine(view, wrap, 'col', col, col - 1),
++            },
++            {
++                label: 'Move column right',
++                icon: 'right',
++                disabled: col >= colCount - 1,
++                action: () => moveTableLine(view, wrap, 'col', col, col + 1),
++            },
++            {
++                label: 'Delete column',
++                icon: 'trash',
++                action: () => {
++                    const m = readModelFromDom(wrap);
++                    // Guard: don't leave the table with zero columns — lezer
++                    // wouldn't re-parse that as a Table and the widget would
++                    // vanish mid-edit. Keeping the last column as the floor.
++                    if (m.header.length <= 1 || col < 0)
++                        return;
++                    m.header.splice(col, 1);
++                    m.align.splice(col, 1);
++                    for (const r of m.rows)
++                        r.splice(col, 1);
++                    dispatchModel(view, wrap, m);
++                },
++            },
++        ],
++    }, {
++        label: 'Sort',
++        icon: 'sort',
++        items: [
++            { label: 'Sort ascending', icon: 'sortAsc', action: () => sortTableByColumn(view, wrap, col, 1) },
++            { label: 'Sort descending', icon: 'sortDesc', action: () => sortTableByColumn(view, wrap, col, -1) },
++        ],
++    }, {
++        label: 'Align',
++        icon: 'align',
++        items: ['left', 'center', 'right'].map((align) => ({
++            label: `Align ${align}`,
++            icon: `align${align[0].toUpperCase()}${align.slice(1)}`,
++            action: () => setColumnAlign(view, wrap, col, align),
++        })),
+     });
+     let dismissed = false;
+     const dismiss = () => {
+         if (dismissed)
+             return;
+         dismissed = true;
++        offTeardown(wrap, dismiss);
+         menu.remove();
+         document.removeEventListener('mousedown', onDocDown, true);
+         document.removeEventListener('keydown', onDocKey, true);
+@@ -893,26 +1947,121 @@ function openCellMenu(view, cell, x, y) {
+             return;
+         dismiss();
+     };
+-    const onDocKey = (event) => {
+-        if (event.key === 'Escape')
+-            dismiss();
++    // ---- sub-menu open / close ------------------------------------------
++    const groupEls = [];
++    const closeGroup = (g) => {
++        g.sub.hidden = true;
++        g.btn.setAttribute('aria-expanded', 'false');
+     };
+-    for (const item of items) {
+-        if (item === 'separator') {
+-            const sep = document.createElement('div');
+-            sep.className = 'cm-atomic-table-menu-sep';
+-            menu.appendChild(sep);
+-            continue;
++    const openGroup = (g) => {
++        for (const other of groupEls)
++            if (other !== g)
++                closeGroup(other);
++        g.sub.hidden = false;
++        g.btn.setAttribute('aria-expanded', 'true');
++        // Flip to the left if the flyout would leave the viewport.
++        g.sub.style.left = '';
++        g.sub.style.right = '';
++        const r = g.sub.getBoundingClientRect();
++        if (r.right > window.innerWidth) {
++            g.sub.style.left = 'auto';
++            g.sub.style.right = '100%';
+         }
++    };
++    const openGroupEl = () => groupEls.find((g) => !g.sub.hidden);
++    const enabledItems = (list) => Array.from(list.querySelectorAll(':scope > .cm-atomic-table-menu-item:not(:disabled), :scope > .cm-atomic-table-menu-group > .cm-atomic-table-menu-item')).filter((el) => !el.disabled);
++    const move = (items, from, step) => {
++        if (!items.length)
++            return;
++        const i = items.indexOf(from);
++        const next = i < 0 ? (step > 0 ? 0 : items.length - 1) : (i + step + items.length) % items.length;
++        items[next].focus();
++    };
++    const onDocKey = (event) => {
++        const open = openGroupEl();
++        const active = document.activeElement;
++        const inSub = open && active instanceof Node && open.sub.contains(active);
++        if (event.key === 'Escape') {
++            if (open) {
++                closeGroup(open);
++                open.btn.focus();
++                event.stopPropagation();
++            }
++            else
++                dismiss();
++            return;
++        }
++        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
++            event.preventDefault();
++            // The capture listener runs first; without this the focused cell's own
++            // arrow handler then steals focus back from the menu.
++            event.stopPropagation();
++            const step = event.key === 'ArrowDown' ? 1 : -1;
++            if (inSub)
++                move(enabledItems(open.sub), active, step);
++            else
++                move(groupEls.map((g) => g.btn), active, step);
++        }
++        else if (event.key === 'ArrowRight' && !inSub) {
++            const g = groupEls.find((x) => x.btn === active);
++            if (g) {
++                event.preventDefault();
++                event.stopPropagation();
++                openGroup(g);
++                enabledItems(g.sub)[0]?.focus();
++            }
++        }
++        else if (event.key === 'ArrowLeft' && inSub) {
++            event.preventDefault();
++            event.stopPropagation();
++            closeGroup(open);
++            open.btn.focus();
++        }
++    };
++    for (const group of groups) {
++        const wrapEl = document.createElement('div');
++        wrapEl.className = 'cm-atomic-table-menu-group';
+         const btn = document.createElement('button');
+         btn.type = 'button';
+         btn.className = 'cm-atomic-table-menu-item';
+-        btn.textContent = item.label;
+-        btn.addEventListener('click', () => {
+-            item.action();
+-            dismiss();
+-        });
+-        menu.appendChild(btn);
++        btn.setAttribute('role', 'menuitem');
++        btn.setAttribute('aria-haspopup', 'menu');
++        btn.setAttribute('aria-expanded', 'false');
++        const label = document.createElement('span');
++        label.className = 'cm-atomic-table-menu-label';
++        label.textContent = group.label;
++        const chevron = menuIcon('chevron');
++        chevron.classList.add('cm-atomic-table-menu-chevron');
++        btn.append(menuIcon(group.icon), label, chevron);
++        const sub = document.createElement('div');
++        sub.className = 'cm-atomic-table-submenu';
++        sub.setAttribute('role', 'menu');
++        sub.hidden = true;
++        for (const item of group.items) {
++            const leaf = document.createElement('button');
++            leaf.type = 'button';
++            leaf.className = 'cm-atomic-table-menu-item';
++            leaf.setAttribute('role', 'menuitem');
++            leaf.disabled = !!item.disabled;
++            const text = document.createElement('span');
++            text.className = 'cm-atomic-table-menu-label';
++            text.textContent = item.label;
++            leaf.append(menuIcon(item.icon), text);
++            leaf.addEventListener('click', () => {
++                item.action();
++                dismiss();
++                // The menu button had focus and is now gone; without this, keys
++                // (Ctrl+Z!) would go to the page body, not the editor.
++                view.focus();
++            });
++            sub.appendChild(leaf);
++        }
++        const g = { btn, sub };
++        groupEls.push(g);
++        btn.addEventListener('click', () => (sub.hidden ? openGroup(g) : closeGroup(g)));
++        wrapEl.addEventListener('pointerenter', () => openGroup(g));
++        wrapEl.append(btn, sub);
++        menu.appendChild(wrapEl);
+     }
+     document.body.appendChild(menu);
+     // Clip the menu inside the viewport if it overflows.
+@@ -931,8 +2080,9 @@ function openCellMenu(view, cell, x, y) {
+         document.addEventListener('mousedown', onDocDown, true);
+         document.addEventListener('keydown', onDocKey, true);
+     }, 0);
++    onTeardown(wrap, dismiss);
+ }
+-function dispatchModelFromDom(view, cell) {
++function dispatchModelFromDom(view, cell, userEvent = 'input.type') {
+     if (view.state.facet(readOnlyFacet))
+         return;
+     const wrap = cell.closest('.cm-atomic-table');
+@@ -948,10 +2098,11 @@ function dispatchModelFromDom(view, cell) {
+         return;
+     view.dispatch({
+         changes: { from: range.from, to: range.to, insert: next },
+-        // Tag as typing so CM6's history coalesces consecutive cell edits
+-        // into one undo group instead of one step per keystroke (each of
+-        // which rewrites the whole table range).
+-        annotations: Transaction.userEvent.of('input.type'),
++        // Typing is tagged `input.type` so CM6's history coalesces consecutive
++        // cell edits into one undo group instead of one step per keystroke (each
++        // of which rewrites the whole table range). Structural edits pass their
++        // own event so they never merge into a typing group.
++        annotations: Transaction.userEvent.of(userEvent),
+     });
+ }
+ function moveCellFocus(view, cell, dir) {
+@@ -995,6 +2146,7 @@ function appendRow(view, wrap) {
+     const next = serializeTable(model);
+     view.dispatch({
+         changes: { from: range.from, to: range.to, insert: next },
++        annotations: Transaction.userEvent.of('table.edit'),
+     });
+     // Adding a row changes the widget's row count, so `eq` returns
+     // false and CM6 rebuilds the widget DOM. The old `wrap` reference
+@@ -1191,13 +2343,21 @@ const defaultLinkOpener = (url) => {
+ export const tableLinkClickFacet = Facet.define({
+     combine: (values) => values[0] ?? defaultLinkOpener,
+ });
++export const tableWikiLinkClickFacet = Facet.define({
++    combine: (values) => values[0] ?? (() => { }),
++});
+ export function tables(config = {}) {
+     return [
+         tableField,
+         treeProgressPlugin,
+         ...(config.onLinkClick ? [tableLinkClickFacet.of(config.onLinkClick)] : []),
++        ...(config.onWikiLinkClick ? [tableWikiLinkClickFacet.of(config.onWikiLinkClick)] : []),
+         // Prec.high so we run before the default Backspace binding.
+-        Prec.high(keymap.of([{ key: 'Backspace', run: backspaceAtTableBoundary }])),
++        Prec.high(keymap.of([
++            { key: 'Backspace', run: backspaceAtTableBoundary },
++            { key: 'ArrowDown', run: arrowIntoTable(1) },
++            { key: 'ArrowUp', run: arrowIntoTable(-1) },
++        ])),
+     ];
+ }
+ //# sourceMappingURL=table-widget.js.map
+\ No newline at end of file

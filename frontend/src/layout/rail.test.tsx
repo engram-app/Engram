@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
 import { MemoryRouter, useLocation } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -79,7 +79,10 @@ describe("Rail — right-sidebar tool group", () => {
 		);
 		expect(screen.getByRole("button", { name: "Reference" })).toBeEnabled();
 		// The outline has nothing to show until a page publishes one.
-		expect(screen.getByRole("button", { name: "Outline" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Outline" })).toHaveAttribute(
+			"aria-disabled",
+			"true",
+		);
 	});
 
 	it("enables the Outline tool once a page publishes one", () => {
@@ -147,7 +150,7 @@ describe("Rail — right-sidebar tool group", () => {
 });
 
 describe("Rail", () => {
-	it("renders brand, Files, Search, Settings, Account", () => {
+	it("renders brand, Files, Search and the user menu", () => {
 		render(
 			<Wrap>
 				<Rail />
@@ -156,11 +159,30 @@ describe("Rail", () => {
 		expect(screen.getByRole("link", { name: /home/iu })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Files" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Search" })).toBeInTheDocument();
-		expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute(
-			"href",
-			"/#settings/account",
-		);
 		expect(screen.getByRole("button", { name: "User menu" })).toBeInTheDocument();
+	});
+
+	// Settings lives in the user menu only, as in most products. A second entry
+	// point on the rail (a cog) was redundant.
+	it("has no Settings cog on the rail", () => {
+		render(
+			<Wrap>
+				<Rail />
+			</Wrap>,
+		);
+		expect(screen.queryByRole("link", { name: "Settings" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
+	});
+
+	it("Settings is reachable from the user menu", async () => {
+		render(
+			<Wrap>
+				<Rail />
+			</Wrap>,
+		);
+		fireEvent.keyDown(screen.getByRole("button", { name: "User menu" }), { key: "Enter" });
+		const item = await screen.findByRole("menuitem", { name: "Settings" });
+		expect(item).toHaveAttribute("href", "/#settings/account");
 	});
 
 	it("clicking Files / Search swaps the active view", () => {
@@ -291,5 +313,62 @@ describe("Rail — collapsing the left sidebar", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Files" }));
 		expect(state()).toBe("files:open");
 		expect(screen.getByTestId("loc").textContent).not.toContain("settings");
+	});
+});
+
+// The rail's icon buttons used the browser's native `title` tooltip, which
+// ignores the app theme and looks nothing like the rest of the UI. They use the
+// shared Tooltip component instead.
+describe("Rail — tooltips", () => {
+	const tooltip = () => document.querySelector('[data-slot="tooltip-content"]');
+	const renderRail = () =>
+		render(
+			<Wrap>
+				<Rail />
+			</Wrap>,
+		);
+
+	it("no rail control carries a native title attribute", () => {
+		renderRail();
+		for (const name of ["Files", "Search", "Outline", "Backlinks", "Reference"]) {
+			expect(screen.getByRole("button", { name }), name).not.toHaveAttribute("title");
+		}
+	});
+
+	it("focusing a view button shows the themed tooltip with its label", async () => {
+		renderRail();
+		expect(tooltip()).toBeNull();
+		fireEvent.focus(screen.getByRole("button", { name: "Files" }));
+		await waitFor(() => expect(tooltip()).not.toBeNull());
+		expect(tooltip()).toHaveTextContent("Files");
+	});
+
+	it("the tooltip appears beside the rail (to the right), not over the content below", async () => {
+		renderRail();
+		fireEvent.focus(screen.getByRole("button", { name: "Search" }));
+		await waitFor(() => expect(tooltip()).not.toBeNull());
+		expect(tooltip()).toHaveAttribute("data-side", "right");
+	});
+
+	it("an available right-hand tool shows its label", async () => {
+		renderRail();
+		fireEvent.focus(screen.getByRole("button", { name: "Reference" }));
+		await waitFor(() => expect(tooltip()).toHaveTextContent("Reference"));
+	});
+
+	it("an unavailable tool stays focusable and explains itself: open a note first", async () => {
+		renderRail();
+		const outline = screen.getByRole("button", { name: "Outline" });
+		expect(outline).toHaveAttribute("aria-disabled", "true");
+		expect(outline).not.toBeDisabled();
+		fireEvent.focus(outline);
+		await waitFor(() => expect(tooltip()).toHaveTextContent("Outline (open a note first)"));
+	});
+
+	it("clicking an unavailable tool does nothing", () => {
+		renderRail();
+		const outline = screen.getByRole("button", { name: "Outline" });
+		fireEvent.click(outline);
+		expect(outline).toHaveAttribute("aria-pressed", "false");
 	});
 });

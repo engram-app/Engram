@@ -162,6 +162,26 @@
 	content: none;
 }
 
+/* Table cells render the same icon as a real element (a pseudo-element can't
+   take a click), so the rule above misses it. The whole link opens on click
+   (patches/@atomic-editor), so the icon has no job. */
+.cm-atomic-link-icon {
+	display: none;
+}
+
+/* Table cells are their own contenteditable, so they paint the browser's native
+   selection instead of the editor's. CodeMirror's base theme forces
+   `highlight !important` on every focused element inside .cm-content (dark blue),
+   so only an !important of higher specificity wins. This is the one place the
+   no-!important rule cannot hold. Keep the biome-ignore below: without it,
+   `biome check --write --unsafe` silently strips the !important and cell
+   selection goes back to dark blue. */
+.cm-editor .cm-content .cm-atomic-table-cell-source:focus::selection,
+.cm-editor .cm-content .cm-atomic-table-cell-source:focus ::selection {
+	/* biome-ignore lint/complexity/noImportantStyles: must beat CodeMirror's own !important */
+	background-color: var(--atomic-editor-selection-bg) !important;
+}
+
 /* A link opens on click in edit mode (editor/link-open.ts), so it has to look
    clickable. CodeMirror's content DOM is a text-caret surface by default, and
    an I-beam over the one thing that is NOT a text target reads as "nothing
@@ -324,3 +344,9 @@
    Drawn per line from editor/list-rails.ts (inline background layers, one 1px
    rail under each ancestor's marker, plus the nested-list padding). Nothing to
    style here; `.cm-list-rails` marks the lines. */
+
+/* Comments (%%…%%, <!-- -->) stay visible while editing, just greyed — as in
+   Obsidian's editing view. The reading view hides them. */
+.cm-comment {
+	color: var(--atomic-editor-fg-faint);
+}

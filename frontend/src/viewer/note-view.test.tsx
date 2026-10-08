@@ -352,3 +352,46 @@ describe("NoteView link targets", () => {
 		expect(ref).not.toHaveAttribute("target");
 	});
 });
+
+describe("NoteView: dollar signs", () => {
+	it("two prices in bold stay two bold runs, not a math span that eats the markers", () => {
+		const { container } = renderNote(
+			"You ended at **$175k base at Gala**. Your floor is **$150k base** (confirmed).\n",
+		);
+		const strong = Array.from(container.querySelectorAll("strong")).map((e) => e.textContent);
+		expect(strong).toEqual(["$175k base at Gala", "$150k base"]);
+		expect(container.querySelector(".katex")).toBeNull();
+	});
+
+	it("real inline math still renders", () => {
+		const { container } = renderNote("energy is $E=mc^2$ here\n");
+		expect(container.querySelector(".katex")).not.toBeNull();
+	});
+});
+
+describe("NoteView: comments", () => {
+	it("hides an inline %% comment", () => {
+		const { container } = renderNote("visible %%secret%% text\n");
+		expect(container.textContent).toContain("visible");
+		expect(container.textContent).not.toContain("secret");
+	});
+
+	it("hides a multi-line %% block", () => {
+		const { container } = renderNote("one\n\n%%\nhidden block\nstill hidden\n%%\n\ntwo\n");
+		expect(container.textContent).toContain("one");
+		expect(container.textContent).toContain("two");
+		expect(container.textContent).not.toContain("hidden");
+	});
+
+	it("hides an HTML comment", () => {
+		const { container } = renderNote("shown <!-- not shown --> shown\n");
+		expect(container.textContent).not.toContain("not shown");
+		expect(container.textContent).not.toContain("<!--");
+	});
+
+	it("keeps comment markers that are inside code", () => {
+		const { container } = renderNote("```\n%%kept%%\n```\n\nand `<!-- kept too -->`\n");
+		expect(container.textContent).toContain("%%kept%%");
+		expect(container.textContent).toContain("<!-- kept too -->");
+	});
+});

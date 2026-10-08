@@ -133,5 +133,8 @@
 		"@codemirror/view": "^6.43.12",
 		"@codemirror/state": "^6.7.5",
 		"@clerk/shared": "^4.33.0"
+	},
+	"patchedDependencies": {
+		"@atomic-editor/editor@0.6.2": "patches/@atomic-editor%2Feditor@0.6.2.patch"
 	}
 }

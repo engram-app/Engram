@@ -58,3 +58,37 @@ describe("katexDecoration", () => {
 		expect(view.dom.querySelector(".cm-katex-widget")).toBeNull();
 	});
 });
+
+describe("katexDecoration: dollar signs that are not math", () => {
+	function mount(doc: string) {
+		view = new EditorView({
+			state: EditorState.create({ doc, extensions: [katexDecoration] }),
+			parent: document.body,
+		});
+	}
+
+	test("two prices in bold are not math", () => {
+		mount("You ended at **$175k base at Gala**. Your floor is **$150k base** (confirmed).\n");
+		expect(view.dom.querySelector(".cm-katex-widget")).toBeNull();
+	});
+
+	test("$20 and $30 are not math", () => {
+		mount("It was $20 and then $30 later.\n");
+		expect(view.dom.querySelector(".cm-katex-widget")).toBeNull();
+	});
+
+	test("an escaped dollar does not open math, but a real span after it still renders", () => {
+		mount("pay \\$5 then $x^2$ ok\n");
+		expect(view.dom.querySelectorAll(".cm-katex-widget")).toHaveLength(1);
+	});
+
+	test("whitespace just inside the delimiters is not math", () => {
+		mount("a $ x$ b $y $ c\n");
+		expect(view.dom.querySelector(".cm-katex-widget")).toBeNull();
+	});
+
+	test("a price followed by real math renders only the math", () => {
+		mount("costs $5 and $x$ here\n");
+		expect(view.dom.querySelectorAll(".cm-katex-widget")).toHaveLength(1);
+	});
+});

@@ -1,7 +1,8 @@
-import { FolderTree, Search, Settings } from "lucide-react";
-import { Link, NavLink, useLocation, useNavigate } from "react-router";
+import { FolderTree, Search } from "lucide-react";
+import { NavLink, useLocation, useNavigate } from "react-router";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useT } from "@/i18n/locale-provider";
-import { isSettingsHash, settingsTo } from "../settings/settings-hash";
+import { isSettingsHash } from "../settings/settings-hash";
 import { type RailView, useRailView } from "./rail-view-context";
 import { RIGHT_TOOLS, type RightToolDescriptor, useRightTools } from "./right-tools-context";
 import UserMenu from "./user-menu";
@@ -19,6 +20,18 @@ function railButtonClass(active: boolean): string {
 			? "bg-primary/15 text-primary hover:bg-primary/25"
 			: "text-muted-foreground hover:bg-primary/10 hover:text-primary"
 	}`;
+}
+
+// The shared Tooltip (themed, like the rest of the UI) instead of the browser's
+// native `title` tooltip. It opens to the right: the rail is a narrow column on
+// the left edge, so that is the only side with room.
+function RailTip({ label, children }: { label: string; children: React.ReactNode }) {
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>{children}</TooltipTrigger>
+			<TooltipContent side="right">{label}</TooltipContent>
+		</Tooltip>
+	);
 }
 
 function ViewButton({ id, label, Icon }: { id: RailView; label: string; Icon: typeof Search }) {
@@ -43,16 +56,17 @@ function ViewButton({ id, label, Icon }: { id: RailView; label: string; Icon: ty
 		}
 	};
 	return (
-		<button
-			type="button"
-			aria-label={label}
-			aria-current={active ? "page" : undefined}
-			title={label}
-			onClick={onClick}
-			className={railButtonClass(active)}
-		>
-			<Icon className="size-5" />
-		</button>
+		<RailTip label={label}>
+			<button
+				type="button"
+				aria-label={label}
+				aria-current={active ? "page" : undefined}
+				onClick={onClick}
+				className={railButtonClass(active)}
+			>
+				<Icon className="size-5" />
+			</button>
+		</RailTip>
 	);
 }
 
@@ -61,27 +75,31 @@ function ToolButton({ tool }: { tool: RightToolDescriptor }) {
 	const { resolvedId, toggleActive, isAvailable } = useRightTools();
 	const available = isAvailable(tool.id);
 	const active = resolvedId === tool.id;
+	const label = available
+		? t(tool.label)
+		: t("{label} (open a note first)", { label: t(tool.label) });
 	return (
-		<button
-			type="button"
-			aria-label={t(tool.label)}
-			// aria-pressed, not aria-current: these toggle a panel open and shut,
-			// they do not mark the current location the way the view buttons do.
-			aria-pressed={active}
-			disabled={!available}
-			title={available ? t(tool.label) : t("{label} (open a note first)", { label: t(tool.label) })}
-			onClick={() => toggleActive(tool.id)}
-			className={`${railButtonClass(active)} disabled:pointer-events-none disabled:opacity-40`}
-		>
-			<tool.Icon className="size-5" />
-		</button>
+		<RailTip label={label}>
+			<button
+				type="button"
+				aria-label={t(tool.label)}
+				// aria-pressed, not aria-current: these toggle a panel open and shut,
+				// they do not mark the current location the way the view buttons do.
+				aria-pressed={active}
+				// aria-disabled, not disabled: a disabled button takes neither focus nor
+				// pointer events, so its "open a note first" tooltip would never show.
+				aria-disabled={available ? undefined : true}
+				onClick={available ? () => toggleActive(tool.id) : undefined}
+				className={`${railButtonClass(active)} ${available ? "" : "opacity-40"}`}
+			>
+				<tool.Icon className="size-5" />
+			</button>
+		</RailTip>
 	);
 }
 
 export default function Rail() {
 	const { t } = useT();
-	const location = useLocation();
-	const onSettings = isSettingsHash(location.hash);
 	return (
 		<nav
 			aria-label={t("App navigation")}
@@ -105,15 +123,7 @@ export default function Rail() {
 			))}
 
 			<div className="flex-1" />
-			<Link
-				to={settingsTo("account", location.search)}
-				aria-label={t("Settings")}
-				title={t("Settings")}
-				aria-current={onSettings ? "page" : undefined}
-				className={railButtonClass(onSettings)}
-			>
-				<Settings className="size-5" />
-			</Link>
+			{/* Settings lives in the user menu, not as a second control here. */}
 			<UserMenu />
 		</nav>
 	);

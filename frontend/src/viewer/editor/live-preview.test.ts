@@ -121,4 +121,64 @@ describe("image embeds", () => {
 		const names = [...view.dom.querySelectorAll(".cm-atomic-wiki-link")].map((e) => e.textContent);
 		expect(names).not.toContain("pic.png");
 	});
+
+	test("a wikilink inside a table cell opens through openWikiLink with the raw target", () => {
+		const openWikiLink = vi.fn();
+		view = new EditorView({
+			state: EditorState.create({
+				doc: "| h |\n| --- |\n| see [[Wiki Link]] |\n",
+				extensions: livePreviewExtensions({
+					resolveWikiLink: (n) => `/w/wiki/${n}`,
+					openWikiLink,
+					wikiCompletionPaths: () => [],
+					openMarkdownLink: () => false,
+				}),
+			}),
+			parent: document.body,
+		});
+		const link = view.dom.querySelector(".cm-atomic-table .cm-atomic-wiki-link");
+		expect(link).not.toBeNull();
+		link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+		expect(openWikiLink).toHaveBeenCalledExactlyOnceWith("Wiki Link");
+	});
+
+	describe("a markdown link inside a table cell", () => {
+		function mountLinkCell(openMarkdownLink: (href: string) => boolean) {
+			view = new EditorView({
+				state: EditorState.create({
+					doc: "| h |\n| --- |\n| [engram](https://engram.page) |\n",
+					extensions: livePreviewExtensions({
+						resolveWikiLink: (n) => n,
+						openWikiLink: () => {},
+						wikiCompletionPaths: () => [],
+						openMarkdownLink,
+					}),
+				}),
+				parent: document.body,
+			});
+			view.dom
+				.querySelector(".cm-atomic-table .cm-atomic-link")
+				?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+		}
+
+		test("opens in-app when it resolves to a note", () => {
+			const open = vi.spyOn(window, "open").mockImplementation(() => null);
+			const openMarkdownLink = vi.fn(() => true);
+			mountLinkCell(openMarkdownLink);
+			expect(openMarkdownLink).toHaveBeenCalledExactlyOnceWith("https://engram.page");
+			expect(open).not.toHaveBeenCalled();
+			open.mockRestore();
+		});
+
+		test("opens a new tab otherwise", () => {
+			const open = vi.spyOn(window, "open").mockImplementation(() => null);
+			mountLinkCell(() => false);
+			expect(open).toHaveBeenCalledExactlyOnceWith(
+				"https://engram.page",
+				"_blank",
+				"noopener,noreferrer",
+			);
+			open.mockRestore();
+		});
+	});
 });

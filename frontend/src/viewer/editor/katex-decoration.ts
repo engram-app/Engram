@@ -1,6 +1,7 @@
 import { type EditorState, type Range, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, WidgetType } from "@codemirror/view";
 import katex from "katex";
+import { INLINE_MATH } from "../../lib/math-delimiters";
 import { selectionTouches } from "./decoration-utils";
 import "katex/dist/katex.min.css";
 
@@ -33,8 +34,9 @@ class MathWidget extends WidgetType {
 }
 
 // Match $$...$$ (block) or $...$ (inline, no newline). Minimal, deliberately not
-// a full TeX tokenizer — matches Obsidian's pragmatic $ delimiters.
-const MATH_RE = /\$\$(?<block>[^$]+)\$\$|\$(?<inline>[^$\n]+)\$/g;
+// a full TeX tokenizer. Inline follows pandoc's delimiter rules (lib/math-
+// delimiters.ts) so two prices on a line are not one math span.
+const MATH_RE = new RegExp(String.raw`\$\$(?<block>[^$]+)\$\$|${INLINE_MATH.source}`, "g");
 
 function buildMath(state: EditorState): DecorationSet {
 	const ranges: Range<Decoration>[] = [];
