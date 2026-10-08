@@ -38,12 +38,15 @@ defmodule Engram.Links.Parser do
 
   # The edges stored per note. One link costs ~250 B as BEAM terms and a
   # row: 10 MB of `[[a]]` is 1.75M links and 713 MB. Real notes have
-  # hundreds; past this the first @max_links by position are kept and the
-  # overflow is counted (`[:engram, :links, :truncated]`), never an error:
-  # the note still saves, indexes and searches in full.
+  # hundreds. Past @max_links by position, only the first occurrence of
+  # each target not yet stored is kept (up to @max_links more), so every
+  # target keeps an edge: the rename rewrite finds its source notes through
+  # stored edges, and a link it cannot find stays dangling. Overflow is
+  # counted (`[:engram, :links, :truncated]`), never an error: the note
+  # still saves, indexes and searches in full.
   @max_links 20_000
 
-  @doc "Links of `content`, at most the first #{@max_links} by position."
+  @doc "Links of `content`: the first #{@max_links}, then one per new target."
   @spec extract(String.t()) :: [map()]
   def extract(content) when is_binary(content) do
     {links, cut?} = extract(content, @max_links)

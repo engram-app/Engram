@@ -94,6 +94,16 @@ defmodule Engram.Native.LinkExtractTest do
       assert length(Parser.extract_all(note)) == 20_005
     end
 
+    # The rename rewrite finds source notes through stored edges: a target
+    # whose only link sits past the cap must still get one, or a rename
+    # leaves it dangling.
+    test "a target first linked past the cap still gets an edge" do
+      note = String.duplicate("[[a]] ", 20_005) <> "[[late]]"
+      links = Parser.extract(note)
+      assert length(links) == 20_001
+      assert List.last(links).target == "late"
+    end
+
     test "a note under the cap is untouched and emits nothing" do
       ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :links, :truncated]])
       assert length(Parser.extract(String.duplicate("[[a]] ", 100))) == 100

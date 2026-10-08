@@ -17,6 +17,7 @@
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag};
 use regex::Regex;
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::sync::OnceLock;
 
 /// (position, kind, a_start, a_len, b_start, b_len). kind: 0 wiki, 1 wiki
@@ -304,8 +305,12 @@ pub type Link<'a> = (
 /// exists). Returns how many strings needed a UTF-8 scrub: a percent escape
 /// can decode to invalid bytes, and the caller reports those. The rules are
 /// `Links.Parser`'s, ported byte for byte and pinned by its golden set.
-/// `limit` caps how many links are emitted (first by position); returns
-/// the scrub count and whether the cap cut any off.
+/// `limit` caps how many links are emitted: the first `limit` by
+/// position, then the first occurrence of each target not yet emitted, up
+/// to `limit` more. So every target keeps one edge (the rename rewrite
+/// finds its source notes through stored edges, and backlinks need only
+/// one), and the total stays under 2 x `limit`. Returns the scrub count and
+/// whether any link was dropped.
 pub fn extract<'a>(s: &'a str, limit: usize, mut emit: impl FnMut(Link<'a>)) -> (usize, bool) {
     let mut raw = matches(s);
     // Stable, so a wiki link wins a tie, as the Elixir sort did; ties are
@@ -314,13 +319,11 @@ pub fn extract<'a>(s: &'a str, limit: usize, mut emit: impl FnMut(Link<'a>)) -> 
     raw.sort_by_key(|m| m.0);
     let mut scrubs = 0;
     let mut last = None;
-    let mut emitted = 0;
+    let mut targets: HashSet<String> = HashSet::new();
+    let (mut emitted, mut extra, mut cut) = (0, 0, false);
     for m in raw {
         if last == Some(m.0) {
             continue;
-        }
-        if emitted == limit {
-            return (scrubs, true);
         }
         let link = if m.1 < 2 {
             wiki_link(s, m)
@@ -329,11 +332,25 @@ pub fn extract<'a>(s: &'a str, limit: usize, mut emit: impl FnMut(Link<'a>)) -> 
         };
         if let Some(link) = link {
             last = Some(m.0);
-            emitted += 1;
-            emit(link);
+            let new_target = !targets.contains(link.4.as_ref());
+            if emitted < limit || (new_target && extra < limit) {
+                if emitted >= limit {
+                    extra += 1;
+                }
+                if new_target {
+                    targets.insert(link.4.to_string());
+                }
+                emitted += 1;
+                emit(link);
+            } else {
+                cut = true;
+                if extra >= limit {
+                    break;
+                }
+            }
         }
     }
-    (scrubs, false)
+    (scrubs, cut)
 }
 
 /// `String.trim/1` and `str::trim` agree: both use Unicode White_Space.
@@ -514,9 +531,17 @@ mod tests {
         };
         assert_eq!(run(usize::MAX), (4, false));
         assert_eq!(run(4), (4, false));
-        assert_eq!(run(3), (3, true));
-        assert_eq!(run(0), (0, true));
+        // Past the limit, each new target still gets one edge (up to limit more).
+        assert_eq!(run(3), (4, false));
+        assert_eq!(run(2), (4, false));
+        assert_eq!(run(1), (2, true));
         assert_eq!(extract("no links", 0, |_| ()), (0, false));
+        // Repeats of one target past the limit are dropped, a new target is not.
+        let note = format!("{}[[late]]", "[[a]] ".repeat(10));
+        let mut got = Vec::new();
+        let (_, cut) = extract(&note, 3, |l| got.push(l.4.to_string()));
+        assert!(cut);
+        assert_eq!(got, ["a", "a", "a", "late"]);
     }
 
     #[test]
