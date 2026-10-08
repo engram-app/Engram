@@ -110,7 +110,7 @@ defmodule Engram.MixProject do
       # Yjs CRDT engine (Rust `yrs` via Rustler NIF). Stock Hex release with
       # precompiled binaries — NO fork, NO DirtyCpu (Gate 0 spike proved
       # bounded docs stay under the 1ms NIF budget). v1 wire format only.
-      {:y_ex, "~> 0.11.0"},
+      {:y_ex, "~> 0.12.1"},
 
       # Email template rendering (MJML → responsive HTML, via mrml Rust NIF)
       {:mjml, "~> 6.0"},
@@ -183,7 +183,7 @@ defmodule Engram.MixProject do
       # lingua pins rustler_precompiled ~> 0.8.4 conservatively; mjml pins ~> 0.9.0.
       # The override forces 0.9.x which lingua compiles and runs against fine.
       {:lingua, "~> 0.3.0"},
-      {:rustler_precompiled, "~> 0.9.0", override: true},
+      {:rustler_precompiled, "~> 0.10.0", override: true},
 
       # In-house NIFs (native/engram_native): CPU hot paths ported to Rust.
       # Compiled from source, so the release builder needs a Rust toolchain.
@@ -202,7 +202,7 @@ defmodule Engram.MixProject do
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
-      {:sobelow, "~> 0.15.0", only: [:dev, :test], runtime: false},
+      {:sobelow, "~> 0.16.0", only: [:dev, :test], runtime: false},
 
       # Tidewave MCP — runtime introspection of the running dev app
       # (project_eval, DB queries, logs). Dev-only: it is RCE by design

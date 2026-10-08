@@ -17,7 +17,7 @@ test-hooks = []
 rustler = "0.38"
 # The envelope engine (pure Rust, shared with the wasm clients).
 engram_core = { path = "../engram_core" }
-getrandom = "0.2"
+getrandom = "0.4"
 hmac = "0.13"
 sha2 = "0.11"
 unicode-normalization = "0.1"

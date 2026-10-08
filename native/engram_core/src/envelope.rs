@@ -487,7 +487,7 @@ mod tests {
     #[test]
     #[ignore]
     fn bench_aes_gcm_vs_ring() {
-        use aes_gcm::aead::{AeadInPlace, KeyInit};
+        use aes_gcm::aead::{AeadInOut, KeyInit};
         use aes_gcm::{Aes256Gcm, Nonce as ANonce};
         use std::time::Instant;
         fn best(mut f: impl FnMut()) -> f64 {
@@ -505,6 +505,7 @@ mod tests {
         let aad = b"notes:content:x";
         let nonce = [3u8; NONCE];
         let rc = Aes256Gcm::new_from_slice(&K).unwrap();
+        let an = ANonce::from(nonce);
         let rk = cipher(&K).unwrap();
         println!("size   | aes-gcm seal | aes-gcm open | ring seal | ring open | MB/s open a/r | open speedup | copy only");
         for (label, sz) in [
@@ -517,20 +518,20 @@ mod tests {
             let mut buf = Vec::with_capacity(sz + TAG);
             let mut ct = plain.clone();
             let tag = rc
-                .encrypt_in_place_detached(ANonce::from_slice(&nonce), aad, &mut ct)
+                .encrypt_inout_detached(&an, aad, ct.as_mut_slice().into())
                 .unwrap();
             let a_seal = best(|| {
                 buf.clear();
                 buf.extend_from_slice(&plain);
                 let t = rc
-                    .encrypt_in_place_detached(ANonce::from_slice(&nonce), aad, &mut buf)
+                    .encrypt_inout_detached(&an, aad, buf.as_mut_slice().into())
                     .unwrap();
                 let _ = std::hint::black_box(t);
             });
             let a_open = best(|| {
                 buf.clear();
                 buf.extend_from_slice(&ct);
-                rc.decrypt_in_place_detached(ANonce::from_slice(&nonce), aad, &mut buf, &tag)
+                rc.decrypt_inout_detached(&an, aad, buf.as_mut_slice().into(), &tag)
                     .unwrap();
             });
             let r_seal = best(|| {

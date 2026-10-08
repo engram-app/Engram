@@ -478,7 +478,7 @@ fn envelope_seal<'a>(
     // The nonce comes from the OS here, at the edge: the core has no RNG.
     let (out, peak) = memory::measured(|| {
         let mut nonce = [0u8; envelope::NONCE];
-        getrandom::getrandom(&mut nonce).map_err(|_| envelope::Error)?;
+        getrandom::fill(&mut nonce).map_err(|_| envelope::Error)?;
         envelope::seal(&plain, &key, &aad, mode, nonce, OwnedBinary::new)
     });
     Ok((sealed(env, out), peak))
