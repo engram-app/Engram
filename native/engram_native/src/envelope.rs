@@ -1,4 +1,7 @@
-//! The envelope engine: optional zstd + AES-256-GCM in one call.
+//! The envelope engine: optional zstd + AES-256-GCM in one call. AES-GCM is
+//! `ring` (BoringSSL's assembly, ~1.8x RustCrypto `aes-gcm` here; see the
+//! microbench below and docs/context/native-nifs.md). Its key schedule is not
+//! zeroized on drop; `aes-gcm`'s was.
 //!
 //! Format 0: 12-byte nonce field, AAD as given, body = plaintext. Byte for
 //! byte what OpenSSL `:crypto` wrote before this engine.
@@ -9,9 +12,10 @@
 //! Assumes no caller AAD ends in "|f1". Every AAD is structured
 //! (`table:column:id`, `dek:...`, `qdrant:...`) or the legacy empty one;
 //! otherwise a format-0 AAD `x|f1` would equal format 1's AAD for `x`.
-use aes_gcm::aead::{AeadInPlace, KeyInit};
-use aes_gcm::{Aes256Gcm, Nonce, Tag};
+use ring::aead::{Aad, LessSafeKey, Nonce, Tag, UnboundKey, AES_256_GCM};
+use std::borrow::Cow;
 use std::cell::RefCell;
+use std::ops::DerefMut;
 use zstd::zstd_safe::{self, DCtx, InBuffer, OutBuffer, ResetDirective};
 
 pub const TAG: usize = 16;
@@ -94,8 +98,10 @@ fn decompress(frame: &[u8]) -> Option<Vec<u8>> {
     })
 }
 
-fn cipher(key: &[u8]) -> Result<Aes256Gcm, ()> {
-    Aes256Gcm::new_from_slice(key).map_err(|_| ())
+fn cipher(key: &[u8]) -> Result<LessSafeKey, ()> {
+    UnboundKey::new(&AES_256_GCM, key)
+        .map(LessSafeKey::new)
+        .map_err(|_| ())
 }
 
 fn f1_aad(aad: &[u8]) -> Vec<u8> {
@@ -105,29 +111,57 @@ fn f1_aad(aad: &[u8]) -> Vec<u8> {
     a
 }
 
-pub fn seal(plain: &[u8], key: &[u8], aad: &[u8], mode: Mode) -> Result<(Vec<u8>, Vec<u8>), ()> {
-    let mut nonce = [0u8; NONCE];
-    getrandom::getrandom(&mut nonce).map_err(|_| ())?;
-    seal_with_nonce(plain, key, aad, mode, nonce)
+/// `head ++ body` sealed into ONE buffer from `alloc` (the NIF passes a BEAM
+/// binary): the input is copied once, encrypted in place, the tag appended.
+fn seal_parts<B: DerefMut<Target = [u8]>>(
+    c: &LessSafeKey,
+    nonce: [u8; NONCE],
+    aad: &[u8],
+    head: &[u8],
+    body: &[u8],
+    alloc: impl FnOnce(usize) -> Option<B>,
+) -> Result<B, ()> {
+    let n = head.len() + body.len();
+    let mut buf = alloc(n + TAG).ok_or(())?;
+    buf[..head.len()].copy_from_slice(head);
+    buf[head.len()..n].copy_from_slice(body);
+    let tag = c
+        .seal_in_place_separate_tag(
+            Nonce::assume_unique_for_key(nonce),
+            Aad::from(aad),
+            &mut buf[..n],
+        )
+        .map_err(|_| ())?;
+    buf[n..].copy_from_slice(tag.as_ref());
+    Ok(buf)
 }
 
-pub fn seal_with_nonce(
+/// `{ct_with_tag, nonce_field}`; `alloc` gives the ciphertext buffer.
+pub fn seal<B: DerefMut<Target = [u8]>>(
+    plain: &[u8],
+    key: &[u8],
+    aad: &[u8],
+    mode: Mode,
+    alloc: impl FnOnce(usize) -> Option<B>,
+) -> Result<(B, Vec<u8>), ()> {
+    let mut nonce = [0u8; NONCE];
+    getrandom::getrandom(&mut nonce).map_err(|_| ())?;
+    seal_with_nonce(plain, key, aad, mode, nonce, alloc)
+}
+
+pub fn seal_with_nonce<B: DerefMut<Target = [u8]>>(
     plain: &[u8],
     key: &[u8],
     aad: &[u8],
     mode: Mode,
     nonce: [u8; NONCE],
-) -> Result<(Vec<u8>, Vec<u8>), ()> {
+    alloc: impl FnOnce(usize) -> Option<B>,
+) -> Result<(B, Vec<u8>), ()> {
     let c = cipher(key)?;
     // Empty input stays format 0: revisions' has_content? reads "ct is only a tag".
     if mode == Mode::None || plain.is_empty() {
-        let mut buf = Vec::with_capacity(plain.len() + TAG);
-        buf.extend_from_slice(plain);
-        let tag = c
-            .encrypt_in_place_detached(Nonce::from_slice(&nonce), aad, &mut buf)
-            .map_err(|_| ())?;
-        buf.extend_from_slice(&tag);
-        return Ok((buf, nonce.to_vec()));
+        let ct = seal_parts(&c, nonce, aad, &[], plain, alloc)?;
+        return Ok((ct, nonce.to_vec()));
     }
 
     // :auto keeps zstd only if it saves 10%. Under SAMPLE the sample IS the
@@ -140,57 +174,57 @@ pub fn seal_with_nonce(
         Mode::Auto => compress(plain).filter(|z| worth(z, plain.len())),
         _ => compress(plain),
     };
-    let (codec, payload) = match zipped {
-        Some(z) if z.len() < plain.len() => (CODEC_ZSTD, z),
-        _ => (CODEC_RAW, plain.to_vec()),
+    let (codec, payload) = match &zipped {
+        Some(z) if z.len() < plain.len() => (CODEC_ZSTD, z.as_slice()),
+        _ => (CODEC_RAW, plain),
     };
-
-    let mut buf = Vec::with_capacity(1 + payload.len() + TAG);
-    buf.push(codec);
-    buf.extend_from_slice(&payload);
-    let tag = c
-        .encrypt_in_place_detached(Nonce::from_slice(&nonce), &f1_aad(aad), &mut buf)
-        .map_err(|_| ())?;
-    buf.extend_from_slice(&tag);
+    let ct = seal_parts(&c, nonce, &f1_aad(aad), &[codec], payload, alloc)?;
 
     let mut field = Vec::with_capacity(1 + NONCE);
     field.push(FORMAT_1);
     field.extend_from_slice(&nonce);
-    Ok((buf, field))
+    Ok((ct, field))
 }
 
-pub fn open(ct: &[u8], nonce_field: &[u8], key: &[u8], aad: &[u8]) -> Result<Vec<u8>, ()> {
+/// What `open` decrypted: the plaintext is `buf[skip..]` of the buffer from
+/// `alloc` (format 0 and raw format 1, no further copy), or a zstd frame's
+/// decoded output.
+pub enum Opened<B> {
+    InPlace(B, usize),
+    Inflated(Vec<u8>),
+}
+
+pub fn open<B: DerefMut<Target = [u8]>>(
+    ct: &[u8],
+    nonce_field: &[u8],
+    key: &[u8],
+    aad: &[u8],
+    alloc: impl FnOnce(usize) -> Option<B>,
+) -> Result<Opened<B>, ()> {
     let c = cipher(key)?;
     if ct.len() < TAG {
         return Err(());
     }
     let (body, tag) = ct.split_at(ct.len() - TAG);
-    let mut buf = body.to_vec();
-    match nonce_field.len() {
-        NONCE => {
-            c.decrypt_in_place_detached(
-                Nonce::from_slice(nonce_field),
-                aad,
-                &mut buf,
-                Tag::from_slice(tag),
-            )
-            .map_err(|_| ())?;
-            Ok(buf)
-        }
+    let (nonce, aad, f1) = match nonce_field.len() {
+        NONCE => (nonce_field, Cow::Borrowed(aad), false),
         l if l == NONCE + 1 && nonce_field[0] == FORMAT_1 => {
-            c.decrypt_in_place_detached(
-                Nonce::from_slice(&nonce_field[1..]),
-                &f1_aad(aad),
-                &mut buf,
-                Tag::from_slice(tag),
-            )
-            .map_err(|_| ())?;
-            match buf.split_first() {
-                Some((&CODEC_RAW, rest)) => Ok(rest.to_vec()),
-                Some((&CODEC_ZSTD, rest)) => decompress(rest).ok_or(()),
-                _ => Err(()),
-            }
+            (&nonce_field[1..], Cow::Owned(f1_aad(aad)), true)
         }
+        _ => return Err(()),
+    };
+    let nonce = Nonce::try_assume_unique_for_key(nonce).map_err(|_| ())?;
+    let tag = Tag::try_from(tag).map_err(|_| ())?;
+    let mut buf = alloc(body.len()).ok_or(())?;
+    buf.copy_from_slice(body);
+    c.open_in_place_separate_tag(nonce, Aad::from(&*aad), tag, &mut buf, 0..)
+        .map_err(|_| ())?;
+    if !f1 {
+        return Ok(Opened::InPlace(buf, 0));
+    }
+    match buf.first().copied() {
+        Some(CODEC_RAW) => Ok(Opened::InPlace(buf, 1)),
+        Some(CODEC_ZSTD) => decompress(&buf[1..]).map(Opened::Inflated).ok_or(()),
         _ => Err(()),
     }
 }
@@ -199,6 +233,33 @@ pub fn open(ct: &[u8], nonce_field: &[u8], key: &[u8], aad: &[u8]) -> Result<Vec
 mod tests {
     use super::*;
     const K: [u8; 32] = [7; 32];
+
+    // Vec-backed versions of the engine's API (the NIF passes BEAM binaries).
+    // Local items shadow the glob import above.
+    fn vec(n: usize) -> Option<Vec<u8>> {
+        Some(vec![0; n])
+    }
+
+    fn seal(plain: &[u8], key: &[u8], aad: &[u8], mode: Mode) -> Result<(Vec<u8>, Vec<u8>), ()> {
+        super::seal(plain, key, aad, mode, vec)
+    }
+
+    fn seal_with_nonce(
+        plain: &[u8],
+        key: &[u8],
+        aad: &[u8],
+        mode: Mode,
+        nonce: [u8; NONCE],
+    ) -> Result<(Vec<u8>, Vec<u8>), ()> {
+        super::seal_with_nonce(plain, key, aad, mode, nonce, vec)
+    }
+
+    fn open(ct: &[u8], nonce: &[u8], key: &[u8], aad: &[u8]) -> Result<Vec<u8>, ()> {
+        match super::open(ct, nonce, key, aad, vec)? {
+            Opened::InPlace(buf, skip) => Ok(buf[skip..].to_vec()),
+            Opened::Inflated(v) => Ok(v),
+        }
+    }
 
     fn rt(plain: &[u8], mode: Mode) -> (Vec<u8>, Vec<u8>) {
         let (ct, n) = seal(plain, &K, b"notes:content:x", mode).unwrap();
@@ -281,12 +342,7 @@ mod tests {
     /// cipher and AAD, so `open` gets past authentication.
     fn seal_f1_body(body: &[u8], aad: &[u8]) -> (Vec<u8>, Vec<u8>) {
         let nonce = [9u8; NONCE];
-        let mut buf = body.to_vec();
-        let tag = cipher(&K)
-            .unwrap()
-            .encrypt_in_place_detached(Nonce::from_slice(&nonce), &f1_aad(aad), &mut buf)
-            .unwrap();
-        buf.extend_from_slice(&tag);
+        let buf = seal_parts(&cipher(&K).unwrap(), nonce, &f1_aad(aad), &[], body, vec).unwrap();
         let mut field = vec![FORMAT_1];
         field.extend_from_slice(&nonce);
         (buf, field)
@@ -371,6 +427,93 @@ mod tests {
             let junk: Vec<u8> = (0..len).map(|i| (seed >> (i % 8)) as u8).collect();
             let nlen = [0usize, 11, 12, 13, 14][(seed % 5) as usize];
             let _ = open(&junk, &junk[..nlen.min(junk.len())], &K, b"a");
+        }
+    }
+
+    /// AES-256-GCM microbench, RustCrypto `aes-gcm` vs `ring`, no BEAM:
+    /// `cargo test --release bench_aes_gcm -- --ignored --nocapture`.
+    /// Each iteration copies the input into the work buffer, as the NIF does.
+    #[test]
+    #[ignore]
+    fn bench_aes_gcm_vs_ring() {
+        use aes_gcm::aead::{AeadInPlace, KeyInit};
+        use aes_gcm::{Aes256Gcm, Nonce as ANonce};
+        use std::time::Instant;
+        fn best(mut f: impl FnMut()) -> f64 {
+            let n = 50;
+            (0..15)
+                .map(|_| {
+                    let t = Instant::now();
+                    for _ in 0..n {
+                        f();
+                    }
+                    t.elapsed().as_secs_f64() * 1e6 / n as f64
+                })
+                .fold(f64::MAX, f64::min)
+        }
+        let aad = b"notes:content:x";
+        let nonce = [3u8; NONCE];
+        let rc = Aes256Gcm::new_from_slice(&K).unwrap();
+        let rk = cipher(&K).unwrap();
+        println!("size   | aes-gcm seal | aes-gcm open | ring seal | ring open | MB/s open a/r | open speedup");
+        for (label, sz) in [
+            ("2KB", 2048),
+            ("10KB", 10240),
+            ("100KB", 102_400),
+            ("1MB", 1 << 20),
+        ] {
+            let plain: Vec<u8> = (0..sz).map(|i| (i * 31 % 251) as u8).collect();
+            let mut buf = Vec::with_capacity(sz + TAG);
+            let mut ct = plain.clone();
+            let tag = rc
+                .encrypt_in_place_detached(ANonce::from_slice(&nonce), aad, &mut ct)
+                .unwrap();
+            let a_seal = best(|| {
+                buf.clear();
+                buf.extend_from_slice(&plain);
+                let t = rc
+                    .encrypt_in_place_detached(ANonce::from_slice(&nonce), aad, &mut buf)
+                    .unwrap();
+                let _ = std::hint::black_box(t);
+            });
+            let a_open = best(|| {
+                buf.clear();
+                buf.extend_from_slice(&ct);
+                rc.decrypt_in_place_detached(ANonce::from_slice(&nonce), aad, &mut buf, &tag)
+                    .unwrap();
+            });
+            let r_seal = best(|| {
+                buf.clear();
+                buf.extend_from_slice(&plain);
+                let t = rk
+                    .seal_in_place_separate_tag(
+                        Nonce::assume_unique_for_key(nonce),
+                        Aad::from(aad),
+                        &mut buf,
+                    )
+                    .unwrap();
+                let _ = std::hint::black_box(t);
+            });
+            let r_open = best(|| {
+                buf.clear();
+                buf.extend_from_slice(&ct);
+                buf.extend_from_slice(&tag);
+                let out = rk
+                    .open_in_place(
+                        Nonce::assume_unique_for_key(nonce),
+                        Aad::from(aad),
+                        &mut buf,
+                    )
+                    .unwrap();
+                assert_eq!(out.len(), sz);
+            });
+            let mbs = |us: f64| sz as f64 / us;
+            println!(
+                "{label:6} | {a_seal:12.1} | {a_open:12.1} | {r_seal:9.1} | {r_open:9.1} | {:5.0}/{:5.0} | {:.2}x",
+                mbs(a_open),
+                mbs(r_open),
+                a_open / r_open
+            );
         }
     }
 }

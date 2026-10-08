@@ -20,7 +20,9 @@ mod yaml;
 static ALLOCATOR: memory::Counting = memory::Counting;
 
 use hmac::{Hmac, KeyInit, Mac};
-use rustler::{Atom, Binary, Encoder, Env, Error, ListIterator, NewBinary, NifResult, Term};
+use rustler::{
+    Atom, Binary, Encoder, Env, Error, ListIterator, NewBinary, NifResult, OwnedBinary, Term,
+};
 use sha2::Sha256;
 use std::collections::HashMap;
 
@@ -429,10 +431,11 @@ fn envelope_mode(mode: Atom) -> NifResult<envelope::Mode> {
     }
 }
 
-/// `{ct_with_tag, nonce_field}`, or `:error` (bad key, no entropy).
-fn sealed<'a>(env: Env<'a>, out: Result<(Vec<u8>, Vec<u8>), ()>) -> Term<'a> {
+/// `{ct_with_tag, nonce_field}`, or `:error` (bad key, no entropy). The
+/// ciphertext was sealed straight into its BEAM binary.
+fn sealed<'a>(env: Env<'a>, out: Result<(OwnedBinary, Vec<u8>), ()>) -> Term<'a> {
     match out {
-        Ok((ct, nonce)) => (to_binary(env, &ct), to_binary(env, &nonce)).encode(env),
+        Ok((ct, nonce)) => (ct.release(env), to_binary(env, &nonce)).encode(env),
         Err(()) => rustler::types::atom::error().encode(env),
     }
 }
@@ -447,7 +450,8 @@ fn envelope_seal<'a>(
     mode: Atom,
 ) -> NifResult<(Term<'a>, usize)> {
     let mode = envelope_mode(mode)?;
-    let (out, peak) = memory::measured(|| envelope::seal(&plain, &key, &aad, mode));
+    let (out, peak) =
+        memory::measured(|| envelope::seal(&plain, &key, &aad, mode, OwnedBinary::new));
     Ok((sealed(env, out), peak))
 }
 
@@ -467,8 +471,9 @@ fn envelope_seal_with_nonce_nif<'a>(
 ) -> NifResult<(Term<'a>, usize)> {
     let mode = envelope_mode(mode)?;
     let nonce: [u8; 12] = nonce.as_slice().try_into().map_err(|_| Error::BadArg)?;
-    let (out, peak) =
-        memory::measured(|| envelope::seal_with_nonce(&plain, &key, &aad, mode, nonce));
+    let (out, peak) = memory::measured(|| {
+        envelope::seal_with_nonce(&plain, &key, &aad, mode, nonce, OwnedBinary::new)
+    });
     Ok((sealed(env, out), peak))
 }
 
@@ -481,10 +486,22 @@ fn envelope_open<'a>(
     key: Binary<'a>,
     aad: Binary<'a>,
 ) -> (Term<'a>, usize) {
-    let (out, peak) = memory::measured(|| envelope::open(&ct, &nonce, &key, &aad));
-    let term = match out {
-        Ok(plain) => to_binary(env, &plain).encode(env),
-        Err(()) => rustler::types::atom::error().encode(env),
+    let (out, peak) =
+        memory::measured(|| envelope::open(&ct, &nonce, &key, &aad, OwnedBinary::new));
+    // Format 0 and raw format 1 decrypt in their BEAM binary; raw skips the
+    // codec byte as a sub-binary, not a copy.
+    let plain = match out {
+        Ok(envelope::Opened::InPlace(buf, 0)) => Ok(buf.release(env)),
+        Ok(envelope::Opened::InPlace(buf, skip)) => {
+            let buf = buf.release(env);
+            buf.make_subbinary(skip, buf.len() - skip)
+        }
+        Ok(envelope::Opened::Inflated(v)) => Ok(to_binary(env, &v)),
+        Err(()) => Err(Error::BadArg),
+    };
+    let term = match plain {
+        Ok(b) => b.encode(env),
+        Err(_) => rustler::types::atom::error().encode(env),
     };
     (term, peak)
 }

@@ -9,7 +9,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 rustler = "0.38"
-aes-gcm = { version = "0.10", features = ["zeroize"] }
+ring = "0.17"
 zstd = "0.13"
 getrandom = "0.2"
 hmac = "0.13"
@@ -29,3 +29,7 @@ comrak = { version = "=0.55.0", default-features = false }
 [profile.release]
 lto = true
 codegen-units = 1
+
+[dev-dependencies]
+# Only for the ignored AES-GCM microbench (envelope.rs), ring's baseline.
+aes-gcm = "0.10"

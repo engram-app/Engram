@@ -169,6 +169,16 @@ defmodule Engram.Native.EnvelopeTest do
       end
     end
 
+    # Format 0 copies the input once, into the output BEAM binary, and runs
+    # AES-GCM there: no Rust-side buffer the size of the note.
+    test "format 0 seal and open hold no Rust copy of the data" do
+      plain = :crypto.strong_rand_bytes(1_000_000)
+      {{ct, nonce}, peak} = Native.envelope_seal_dirty_nif(plain, @key, @aad, :none)
+      assert peak < 4096, "seal: #{peak}"
+      {^plain, peak} = Native.envelope_open_dirty_nif(ct, nonce, @key, @aad)
+      assert peak < 4096, "open: #{peak}"
+    end
+
     # NativeLeak warms every scheduler first, so the per-thread zstd
     # contexts exist before the counter is read (they are kept on purpose).
     test "seal + open in every mode leaks nothing" do
