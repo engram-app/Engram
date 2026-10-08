@@ -642,6 +642,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Read-path decrypt perf — parallel_map economics, when it helps vs hurts → `docs/context/read-path-decrypt-perf.md`
 - Perf caches + invalidation contracts (2026-06-12 audit wave) → `docs/context/perf-caching-invalidation.md`
 - Replacing hand-rolled code with a shared helper (consolidating a PARSER silently drops accepted input shapes no test names — CRLF frontmatter read as "no frontmatter"), or a log metadata key built inside a helper that Credo cannot see → `docs/context/consolidation-drops-undocumented-tolerances.md`
+- Adding/reading a WebSocket metric, or a socket panel reads No data (`EngramWeb.Telemetry.metrics/0` never reaches Prometheus; Phoenix encodes a broadcast once per serializer; ChannelTest bypasses the serializer) → `docs/context/websocket-metrics.md`
 
 ## Superpowers spec docs → Engram vault (overrides the skill default)
 
