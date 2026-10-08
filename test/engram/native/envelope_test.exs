@@ -10,6 +10,7 @@ defmodule Engram.Native.EnvelopeTest do
   @key :crypto.strong_rand_bytes(32)
   @aad "notes:content:0b7e2b1c-0000-4000-8000-000000000001"
   @text String.duplicate("Some markdown with [[links]] and #tags.\n", 2_000)
+  @reps 200
 
   describe "format 0 is byte-compatible with :crypto" do
     property "a fixed-nonce seal equals the oracle byte for byte" do
@@ -214,32 +215,50 @@ defmodule Engram.Native.EnvelopeTest do
     test "inline format-0 calls are counted, not emitted" do
       ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
       before = counts()
-      {ct, nonce} = Native.envelope_seal("abc", @key, "", :none)
-      assert {:ok, "abc"} = Native.envelope_open(ct, nonce, @key, "")
+
+      for _ <- 1..@reps do
+        {ct, nonce} = Native.envelope_seal("abc", @key, "", :none)
+        assert {:ok, "abc"} = Native.envelope_open(ct, nonce, @key, "")
+      end
+
       now = counts()
 
-      assert now[:envelope_seal] == add(before[:envelope_seal], {1, 3})
-      assert now[:envelope_open] == add(before[:envelope_open], {1, 19})
+      assert_delta(now[:envelope_seal], before[:envelope_seal], {@reps, 3 * @reps})
+      assert_delta(now[:envelope_open], before[:envelope_open], {@reps, 19 * @reps})
       refute_received {_, ^ref, _, %{nif: :envelope_seal}}
       refute_received {_, ^ref, _, %{nif: :envelope_open}}
     end
   end
 
   # The call at 16 KB runs inline (no event); one byte more emits a dirty
-  # event. Both are counted. Exact deltas: this module is async: false.
+  # event. Both are counted. The counters are node-global, so a stray
+  # background encrypt (a draining CRDT room checkpoint) can add to them:
+  # the inline phase repeats @reps times so the lower bound can only be met
+  # by this test's own calls, and the upper bound (1.5x) stays tight enough
+  # to catch double counting. The dirty call is attributed by its event.
   defp assert_counted_then_dirty(nif, call) do
     ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
     before = counts()[nif]
-    call.(16_384)
-    assert counts()[nif] == add(before, {1, 16_384})
+    for _ <- 1..@reps, do: call.(16_384)
+    inline = counts()[nif]
+    assert_delta(inline, before, {@reps, 16_384 * @reps})
     refute_received {_, ^ref, _, %{nif: ^nif}}
 
     call.(16_385)
-    assert counts()[nif] == add(before, {2, 16_384 + 16_385})
+    assert_delta(counts()[nif], inline, {1, 16_385})
     assert_receive {_, ^ref, %{input_bytes: 16_385}, %{nif: ^nif, dirty: true}}
     :telemetry.detach(ref)
   end
 
+  # now - before must cover this test's own {calls, bytes} and stay within
+  # 1.5x of the calls (see above).
+  defp assert_delta({c1, b1}, {c0, b0}, {calls, bytes}) do
+    assert c1 - c0 >= calls and c1 - c0 <= div(calls * 3, 2) + 5,
+           "calls delta #{c1 - c0}, expected ~#{calls}"
+
+    assert b1 - b0 >= bytes and b1 - b0 <= div(bytes * 3, 2) + 1_000_000,
+           "bytes delta #{b1 - b0}, expected ~#{bytes}"
+  end
+
   defp counts, do: Map.new(Native.envelope_counts(), fn {nif, c, b} -> {nif, {c, b}} end)
-  defp add({c, b}, {dc, db}), do: {c + dc, b + db}
 end
