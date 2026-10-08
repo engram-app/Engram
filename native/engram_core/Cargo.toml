@@ -5,8 +5,8 @@ edition = "2021"
 
 # Pure Rust shared by the NIF (native/engram_native) and, later, the plugin
 # and web app as wasm32. No rustler, no RNG: callers pass the nonce in, so the
-# wasm build imports nothing from its host. CI builds it for
-# wasm32-unknown-unknown to keep it that way.
+# wasm build imports nothing from its host. CI links it into a wasm32 cdylib
+# (native/wasm_guard) and fails on any import, to keep it that way.
 [dependencies]
 ring = "0.17"
 zstd = { version = "0.13", default-features = false }

@@ -2555,16 +2555,21 @@ jobs:
           cargo clippy --workspace --release --locked --all-targets --all-features -- -D warnings
           cargo test --workspace --release --locked --all-features
 
-      - name: engram_core builds for wasm32 (native/)
+      - name: engram_core links for wasm32 with no host imports (native/)
         # The plugin and web app will run native/engram_core as wasm32, so a
-        # dependency or an API that cannot target it must fail here. ring and
-        # zstd compile C, which for wasm32 needs a clang with the wasm
-        # backend; the runner user has no sudo for a distro clang. So: the
-        # pinned wasi-sdk release (clang + llvm-ar), sha256-checked, unpacked
-        # once per VM into the runner home under flock (as rustup above), and
-        # renamed into place only when complete. The wasm32 target comes from
-        # the toolchain step. Not vacuous: the target must be installed, the
-        # clang must run, cargo must build, and the rlib must exist.
+        # dependency or an API that cannot target it must fail here, and so
+        # must one that makes the module import from its host (entropy, WASI,
+        # any `env` function). An rlib has no imports to read, so this links
+        # native/wasm_guard, a CI-only cdylib exporting the envelope seal and
+        # open, and wasm_guard/imports.py fails on any import (and on a
+        # missing export, so the check cannot pass on an empty module).
+        # ring and zstd compile C, which for wasm32 needs a clang with the
+        # wasm backend; the runner user has no sudo for a distro clang. So:
+        # the pinned wasi-sdk release (clang + llvm-ar), sha256-checked,
+        # unpacked once per VM into the runner home under flock (as rustup
+        # above), renamed into place only when complete, and any other
+        # version's copy removed (each is ~0.6 GB). The wasm32 target comes
+        # from the toolchain step.
         env:
           WASI_SDK_VERSION: "34.0"
           WASI_SDK_SHA256: b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4
@@ -2573,15 +2578,19 @@ jobs:
           SDK="$HOME/.cache/engram-wasi-sdk-$WASI_SDK_VERSION"
           mkdir -p "$HOME/.cache"
           flock "$HOME/.cache/.engram-wasi-sdk.lock" sh -ec '
-            [ -x "$0/bin/clang" ] && exit 0
-            f="$RUNNER_TEMP/wasi-sdk.tar.gz"
-            curl --proto "=https" --tlsv1.2 -sSfL -o "$f" \
-              "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION%%.*}/wasi-sdk-$WASI_SDK_VERSION-x86_64-linux.tar.gz"
-            echo "$WASI_SDK_SHA256  $f" | sha256sum -c -
-            rm -rf "$0.partial" && mkdir -p "$0.partial"
-            tar -xzf "$f" -C "$0.partial" --strip-components=1
-            rm -f "$f"
-            mv "$0.partial" "$0"
+            if [ ! -x "$0/bin/clang" ]; then
+              f="$RUNNER_TEMP/wasi-sdk.tar.gz"
+              curl --proto "=https" --tlsv1.2 -sSfL -o "$f" \
+                "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION%%.*}/wasi-sdk-$WASI_SDK_VERSION-x86_64-linux.tar.gz"
+              echo "$WASI_SDK_SHA256  $f" | sha256sum -c -
+              rm -rf "$0.partial" && mkdir -p "$0.partial"
+              tar -xzf "$f" -C "$0.partial" --strip-components=1
+              rm -f "$f"
+              mv "$0.partial" "$0"
+            fi
+            for old in "$HOME"/.cache/engram-wasi-sdk-*; do
+              [ "$old" = "$0" ] || rm -rf "$old"
+            done
           ' "$SDK"
           export CC_wasm32_unknown_unknown="$SDK/bin/clang" AR_wasm32_unknown_unknown="$SDK/bin/llvm-ar"
           "$CC_wasm32_unknown_unknown" --version | head -1
@@ -2589,8 +2598,8 @@ jobs:
           # is really installed for the pinned toolchain.
           rustup target list --installed | grep -qx wasm32-unknown-unknown
           export CARGO_TARGET_DIR="$HOME/.cache/engram-native-target"
-          cargo build --release --locked -p engram_core --target wasm32-unknown-unknown
-          test -s "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/libengram_core.rlib"
+          cargo build --release --locked -p wasm_guard --target wasm32-unknown-unknown
+          python3 wasm_guard/imports.py "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/wasm_guard.wasm"
 
       - name: Fetch deps (if missing or lockfile changed)
         # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`

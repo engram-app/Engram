@@ -79,12 +79,13 @@ Keep it that way: the core drawing its own randomness would make the wasm
 build import an entropy hook from its host. `ring` still links getrandom
 0.2, so engram_core enables getrandom's `custom` feature for
 wasm32-unknown-unknown only (a host hook nothing in the core calls); native
-builds are unaffected. A future wasm cdylib may still import
-`__getrandom_custom` (ring's RNG path) unless dead-code elimination drops it:
-the consumer must check its import list and supply the hook if it is there.
+builds are unaffected. Linked into a cdylib, the seal/open path imports
+nothing (measured: 0 imports), because the linker drops ring's unreachable
+RNG; CI checks that on every run (below), so a change that makes the hook
+reachable fails there instead of in a client.
 
-`native/` is one Cargo workspace (`native/Cargo.toml`): members engram_core
-and engram_native, one `Cargo.lock`, one `rust-toolchain.toml`, the shared
+`native/` is one Cargo workspace (`native/Cargo.toml`): members engram_core,
+engram_native and the CI-only wasm_guard, one `Cargo.lock`, one `rust-toolchain.toml`, the shared
 release profile (LTO, one codegen unit), output in `native/target`. Rustler
 builds the engram_native member as before and gathers it and its path
 dependencies into the NIF module's `@external_resource`s, so a content edit
@@ -94,23 +95,31 @@ root, so `Engram.Native` adds `native/Cargo.toml`, `Cargo.lock` and
 `rust-toolchain.toml` itself; without that a lockfile bump would not rebuild
 the NIF locally.
 
-CI: verify.yml `unit-tests` runs `cargo fmt --all`, `clippy --workspace` and
-`cargo test --workspace` in native/, then a wasm guard: `cargo build
---release --locked -p engram_core --target wasm32-unknown-unknown`. ring and
-zstd compile C, which for wasm32 needs a clang with the wasm backend, and the
+CI: verify.yml `unit-tests` runs `cargo fmt --all`, `clippy --workspace
+--all-features` and `cargo test --workspace --all-features` in native/, then a
+wasm guard. An rlib has no import section (imports exist only once something
+is linked), so the guard links `native/wasm_guard`, a CI-only cdylib that
+exports one function running the envelope seal and open, for
+wasm32-unknown-unknown, and `wasm_guard/imports.py` (stdlib Python, reads the
+module's import and export sections) fails if the module imports anything
+(allow-list: empty) or lacks the export (so a module emptied by the linker
+cannot pass). Proven both ways: the real module has 0 imports; a guard with an
+`extern "C"` host call fails with `[('env', 'host_entropy')]`. ring and zstd
+compile C, which for wasm32 needs a clang with the wasm backend, and the
 runner user has no sudo. So the toolchain step installs the wasm32 target with
 rustup, and the guard unpacks the pinned wasi-sdk release (sha256-checked,
-once per VM, under flock, renamed into place only when complete) and points
+once per VM, under flock, renamed into place only when complete, other
+versions' copies removed) and points
 `CC_wasm32_unknown_unknown`/`AR_wasm32_unknown_unknown` at its clang and
-llvm-ar. Warm runs take about 3 s. The guard checks the target is installed
-and the rlib exists, so a fresh cargo fingerprint cannot hide a missing
-target. It builds the rlib only: no ABI layer, no wasm-bindgen yet. cron.yml
+llvm-ar. The guard also checks the target is installed, so a fresh cargo
+fingerprint cannot hide a missing target. No wasm-bindgen yet. cron.yml
 `cargo audit` reads the one lockfile. Local repro (no system clang needed):
 download and unpack `wasi-sdk-34.0-x86_64-linux.tar.gz`, then in native/:
 `CC_wasm32_unknown_unknown=<sdk>/bin/clang
 AR_wasm32_unknown_unknown=<sdk>/bin/llvm-ar cargo build --release --locked -p
-engram_core --target wasm32-unknown-unknown` (after `rustup target add
-wasm32-unknown-unknown`).
+wasm_guard --target wasm32-unknown-unknown && python3 wasm_guard/imports.py
+target/wasm32-unknown-unknown/release/wasm_guard.wasm` (after `rustup target
+add wasm32-unknown-unknown`).
 
 zstd contexts are thread-local: once compression is on, each scheduler
 thread (normal and dirty) that ever sealed or opened a zstd row keeps one
