@@ -21,7 +21,11 @@ defmodule Engram.Workers.DataMigrationsRunner do
   @realert_after_s 86_400
 
   # Register every Engram.DataMigration here.
-  @migrations [Engram.DataMigrations.IndexVersions, Engram.DataMigrations.CrdtStateSeed]
+  @migrations [
+    Engram.DataMigrations.IndexVersions,
+    Engram.DataMigrations.CrdtStateSeed,
+    Engram.DataMigrations.EnvelopeFormat
+  ]
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(30)

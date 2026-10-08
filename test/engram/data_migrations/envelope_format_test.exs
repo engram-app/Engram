@@ -1,0 +1,93 @@
+defmodule Engram.DataMigrations.EnvelopeFormatTest do
+  use Engram.DataCase, async: false
+  use Oban.Testing, repo: Engram.Repo
+
+  import Ecto.Query
+
+  alias Engram.DataMigrations.EnvelopeFormat
+  alias Engram.Notes
+  alias Engram.Notes.Note
+  alias Engram.Workers.{DataMigrationsRunner, ReencodeEnvelopes}
+
+  @big String.duplicate("a compressible line of note text\n", 40)
+
+  setup do
+    {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
+    vault = insert(:vault, user: user)
+    %{user: user, vault: vault}
+  end
+
+  defp note!(user, vault, path, content, compression) do
+    Application.put_env(:engram, :envelope_compression, compression)
+
+    try do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => path, "content" => content}, actor: "api")
+    after
+      Application.put_env(:engram, :envelope_compression, true)
+    end
+
+    Engram.Fixtures.raw_note_by_path!(user, path)
+  end
+
+  test "registered with the runner" do
+    assert EnvelopeFormat in DataMigrationsRunner.migrations()
+    assert {EnvelopeFormat.name(), EnvelopeFormat.version()} == {"envelope_format", 1}
+  end
+
+  # An empty body is format 0 even with the policy on (16-byte tag only).
+  test "only empty and format 1 rows: done, nothing enqueued", %{user: u, vault: v} do
+    note!(u, v, "empty.md", "", true)
+    note!(u, v, "new.md", @big, true)
+    note!(u, v, "tiny.md", "hi", true)
+    assert byte_size(Engram.Fixtures.raw_note_by_path!(u, "empty.md").content_ciphertext) == 16
+
+    assert EnvelopeFormat.run_pass() == :done
+    refute_enqueued(worker: ReencodeEnvelopes)
+  end
+
+  test "a legacy row: enqueues its user and stays open", %{user: u, vault: v} do
+    note!(u, v, "old.md", @big, false)
+
+    assert EnvelopeFormat.run_pass() == :more
+    assert_enqueued(worker: ReencodeEnvelopes, args: %{"user_id" => u.id})
+  end
+
+  test "jobs in flight: open, enqueues nothing more", %{user: u, vault: v} do
+    note!(u, v, "old.md", @big, false)
+    {:ok, _} = Oban.insert(ReencodeEnvelopes.new(%{"user_id" => u.id}))
+
+    assert EnvelopeFormat.run_pass() == :more
+    assert length(all_enqueued(worker: ReencodeEnvelopes)) == 1
+  end
+
+  test "an undecryptable legacy row keeps the migration open", %{user: u, vault: v} do
+    note = note!(u, v, "bad.md", @big, false)
+
+    {:ok, _} =
+      Repo.with_tenant(u.id, fn ->
+        Repo.update_all(from(n in Note, where: n.id == ^note.id),
+          set: [content_ciphertext: :crypto.strong_rand_bytes(200)]
+        )
+      end)
+
+    assert :ok = perform_job(ReencodeEnvelopes, %{"user_id" => u.id})
+    Repo.delete_all(Oban.Job)
+    assert EnvelopeFormat.run_pass() == :more
+  end
+
+  test "the kill switch keeps it open and enqueues nothing", %{user: u, vault: v} do
+    note!(u, v, "old.md", @big, false)
+    Application.put_env(:engram, :envelope_compression, false)
+    on_exit(fn -> Application.put_env(:engram, :envelope_compression, true) end)
+
+    assert EnvelopeFormat.run_pass() == :more
+    refute_enqueued(worker: ReencodeEnvelopes)
+  end
+
+  test "a full pass then closes it", %{user: u, vault: v} do
+    note!(u, v, "old.md", @big, false)
+    assert :ok = perform_job(ReencodeEnvelopes, %{"user_id" => u.id})
+    assert EnvelopeFormat.run_pass() == :done
+  end
+end

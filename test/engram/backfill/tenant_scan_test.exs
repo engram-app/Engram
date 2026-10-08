@@ -94,7 +94,8 @@ defmodule Engram.Backfill.TenantScanTest do
         {"crdt_state seed", Engram.Workers.BackfillCrdtState, :enqueue_missing},
         {"crdt_head warm", Engram.Workers.BackfillCrdtHead, :enqueue_all},
         # Its discovery is DataMigrations.any_row?/1.
-        {"index versions", Engram.DataMigrations.IndexVersions, :run_pass}
+        {"index versions", Engram.DataMigrations.IndexVersions, :run_pass},
+        {"envelope format", Engram.Workers.ReencodeEnvelopes, :enqueue_missing}
       ] do
     test "#{label} backfill discovery never reads a tenant table cross-tenant", %{
       user: user,

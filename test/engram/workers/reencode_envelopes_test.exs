@@ -1,0 +1,334 @@
+defmodule Engram.Workers.ReencodeEnvelopesTest do
+  # async: false: flips the global :envelope_compression flag to seed format 0
+  # rows, and the RLS describe changes the connection's role.
+  use Engram.DataCase, async: false
+  use Oban.Testing, repo: Engram.Repo
+
+  import Ecto.Query
+  import Engram.RlsCase
+  import ExUnit.CaptureLog
+
+  alias Engram.Accounts.User
+  alias Engram.{Crypto, Notes}
+  alias Engram.Crypto.{Envelope, RotationLock}
+  alias Engram.Notes.{CrdtUpdateLog, Note, VaultIndexState, VaultIndexUpdateLog}
+  alias Engram.Workers.ReencodeEnvelopes
+
+  @big String.duplicate("a compressible line of note text\n", 40)
+
+  setup do
+    {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
+    vault = insert(:vault, user: user)
+    %{user: user, vault: vault}
+  end
+
+  # Writes with the policy off, so every envelope is format 0 (12-byte nonce).
+  defp legacy(fun) do
+    Application.put_env(:engram, :envelope_compression, false)
+
+    try do
+      fun.()
+    after
+      Application.put_env(:engram, :envelope_compression, true)
+    end
+  end
+
+  defp tenant!(user, fun) do
+    {:ok, v} = Repo.with_tenant(user.id, fun)
+    v
+  end
+
+  defp legacy_note!(user, vault, path, content) do
+    legacy(fn ->
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => path, "content" => content}, actor: "api")
+    end)
+
+    Engram.Fixtures.raw_note_by_path!(user, path)
+  end
+
+  defp seed_crdt_state!(user, note, state) do
+    {:ok, {ct, nonce}} = legacy(fn -> Crypto.encrypt_crdt_state(state, user, note.id) end)
+
+    tenant!(user, fn ->
+      Repo.update_all(from(n in Note, where: n.id == ^note.id),
+        set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
+      )
+    end)
+
+    # Separately: the trigger NULLs crdt_head in the same UPDATE as a state write.
+    tenant!(user, fn ->
+      Repo.update_all(from(n in Note, where: n.id == ^note.id), set: [crdt_head: "warm"])
+    end)
+  end
+
+  defp seed_tail!(user, vault, note, update) do
+    {:ok, {ct, nonce}} = legacy(fn -> Crypto.encrypt_crdt_state(update, user, note.id) end)
+
+    tenant!(user, fn ->
+      %CrdtUpdateLog{}
+      |> CrdtUpdateLog.changeset(%{
+        note_id: note.id,
+        user_id: user.id,
+        vault_id: vault.id,
+        update_ciphertext: ct,
+        update_nonce: nonce
+      })
+      |> Repo.insert!()
+    end)
+  end
+
+  defp seed_index_state!(user, vault, state) do
+    {:ok, {ct, nonce}} = legacy(fn -> Crypto.encrypt_index_state(state, user, vault.id) end)
+    now = DateTime.utc_now()
+
+    tenant!(user, fn ->
+      Repo.insert_all(VaultIndexState, [
+        %{
+          vault_id: vault.id,
+          user_id: user.id,
+          state_ciphertext: ct,
+          state_nonce: nonce,
+          inserted_at: now,
+          updated_at: now
+        }
+      ])
+    end)
+  end
+
+  defp seed_index_tail!(user, vault, update) do
+    id = Ecto.UUID.generate()
+    {:ok, {ct, nonce}} = legacy(fn -> Crypto.encrypt_index_update(update, user, id) end)
+
+    tenant!(user, fn ->
+      Repo.insert_all(VaultIndexUpdateLog, [
+        %{
+          id: id,
+          vault_id: vault.id,
+          user_id: user.id,
+          update_ciphertext: ct,
+          update_nonce: nonce,
+          inserted_at: DateTime.utc_now()
+        }
+      ])
+    end)
+
+    id
+  end
+
+  defp reload(schema, clauses),
+    do: Repo.one!(from(r in schema, where: ^clauses), skip_tenant_check: true)
+
+  defp dek(user), do: elem(Crypto.get_dek(Repo.get!(User, user.id)), 1)
+
+  defp open!(ct, nonce, user, aad) do
+    {:ok, pt} = Envelope.decrypt(ct, nonce, dek(user), aad)
+    pt
+  end
+
+  defp run(user), do: perform_job(ReencodeEnvelopes, %{"user_id" => user.id})
+
+  describe "perform/1" do
+    test "re-encodes every legacy column to format 1, same plaintext", %{user: u, vault: v} do
+      note = legacy_note!(u, v, "a.md", @big)
+      seed_crdt_state!(u, note, @big <> "state")
+      seed_tail!(u, v, note, @big <> "tail")
+      seed_index_state!(u, v, @big <> "index")
+      tail_id = seed_index_tail!(u, v, @big <> "index tail")
+
+      before = reload(Note, id: note.id)
+      assert byte_size(before.content_nonce) == 12
+      assert byte_size(before.crdt_state_nonce) == 12
+
+      assert :ok = run(u)
+
+      n = reload(Note, id: note.id)
+      assert byte_size(n.content_nonce) == 13
+      assert byte_size(n.crdt_state_nonce) == 13
+
+      assert open!(
+               n.content_ciphertext,
+               n.content_nonce,
+               u,
+               Crypto.aad_for_row(:notes, :content, n.id)
+             ) == @big
+
+      assert open!(
+               n.crdt_state_ciphertext,
+               n.crdt_state_nonce,
+               u,
+               Crypto.aad_for_row(:notes, :crdt_state, n.id)
+             ) == @big <> "state"
+
+      # Only the envelope columns move. The trigger NULLs crdt_head on a
+      # crdt_state rewrite (WarmCrdtHeads re-warms it); nothing else changes.
+      assert {n.updated_at, n.version, n.seq} == {before.updated_at, before.version, before.seq}
+
+      assert {n.title_ciphertext, n.path_ciphertext, n.dek_version} ==
+               {before.title_ciphertext, before.path_ciphertext, before.dek_version}
+
+      assert before.crdt_head == "warm"
+      assert is_nil(n.crdt_head)
+
+      tail = reload(CrdtUpdateLog, note_id: note.id)
+      assert byte_size(tail.update_nonce) == 13
+
+      assert open!(
+               tail.update_ciphertext,
+               tail.update_nonce,
+               u,
+               Crypto.aad_for_row(:notes, :crdt_state, note.id)
+             ) == @big <> "tail"
+
+      s = reload(VaultIndexState, vault_id: v.id)
+      assert byte_size(s.state_nonce) == 13
+
+      assert open!(
+               s.state_ciphertext,
+               s.state_nonce,
+               u,
+               Crypto.aad_for_row(:vault_index_states, :state, v.id)
+             ) == @big <> "index"
+
+      t = reload(VaultIndexUpdateLog, id: tail_id)
+      assert byte_size(t.update_nonce) == 13
+
+      assert open!(
+               t.update_ciphertext,
+               t.update_nonce,
+               u,
+               Crypto.aad_for_row(:vault_index_update_log, :update, tail_id)
+             ) == @big <> "index tail"
+
+      refute ReencodeEnvelopes.legacy_rows?(u.id)
+    end
+
+    # The note's CRDT state is never empty (a Yjs doc encodes to bytes), so it
+    # is real work; the 16-byte body is not, and survives the pass untouched.
+    test "an empty note body stays format 0 and is not work", %{user: u, vault: v} do
+      note = legacy_note!(u, v, "empty.md", "")
+      n = reload(Note, id: note.id)
+      assert byte_size(n.content_ciphertext) == 16
+
+      assert :ok = run(u)
+      refute ReencodeEnvelopes.legacy_rows?(u.id)
+      after_run = reload(Note, id: note.id)
+
+      assert {after_run.content_ciphertext, after_run.content_nonce} ==
+               {n.content_ciphertext, n.content_nonce}
+    end
+
+    test "a pre-T3.6 (dek_version 1) note body is not work: its empty AAD cannot compress",
+         %{user: u, vault: v} do
+      note = legacy_note!(u, v, "v1.md", @big)
+
+      tenant!(u, fn ->
+        Repo.update_all(from(n in Note, where: n.id == ^note.id),
+          set: [dek_version: 1, crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        )
+      end)
+
+      refute ReencodeEnvelopes.legacy_rows?(u.id)
+    end
+
+    test "a row changed since it was read is not overwritten (CAS)", %{user: u, vault: v} do
+      note = legacy_note!(u, v, "a.md", @big)
+      stale = reload(Note, id: note.id)
+
+      {fresh_ct, fresh_nonce} =
+        Envelope.encrypt("edited", dek(u), Crypto.aad_for_row(:notes, :content, note.id))
+
+      tenant!(u, fn ->
+        Repo.update_all(from(n in Note, where: n.id == ^note.id),
+          set: [content_ciphertext: fresh_ct, content_nonce: fresh_nonce]
+        )
+      end)
+
+      assert {0, _} =
+               tenant!(u, fn ->
+                 ReencodeEnvelopes.write_row(
+                   :notes_content,
+                   note.id,
+                   stale.content_ciphertext,
+                   "x",
+                   "y"
+                 )
+               end)
+
+      assert reload(Note, id: note.id).content_ciphertext == fresh_ct
+    end
+
+    test "a user mid-rotation is snoozed with no writes", %{user: u, vault: v} do
+      note = legacy_note!(u, v, "a.md", @big)
+      before = reload(Note, id: note.id)
+      {:ok, _} = RotationLock.acquire(u.id)
+
+      assert {:snooze, _} = run(u)
+      assert reload(Note, id: note.id) == before
+    end
+
+    test "an undecryptable row is logged, left, and keeps the user listed", %{user: u, vault: v} do
+      note = legacy_note!(u, v, "a.md", @big)
+      ok = legacy_note!(u, v, "b.md", @big)
+      bad = reload(Note, id: note.id)
+      <<head::binary-size(byte_size(bad.content_ciphertext) - 1), last>> = bad.content_ciphertext
+      corrupt = <<head::binary, Bitwise.bxor(last, 0xFF)>>
+
+      tenant!(u, fn ->
+        Repo.update_all(from(n in Note, where: n.id == ^note.id),
+          set: [content_ciphertext: corrupt]
+        )
+      end)
+
+      log = capture_log(fn -> assert :ok = run(u) end)
+
+      assert log =~ "notes_content"
+      assert log =~ note.id
+      assert reload(Note, id: note.id).content_ciphertext == corrupt
+      assert byte_size(reload(Note, id: ok.id).content_nonce) == 13
+      assert ReencodeEnvelopes.legacy_rows?(u.id)
+    end
+  end
+
+  describe "enqueue_missing/0" do
+    test "enqueues only users with legacy rows", %{user: u, vault: v} do
+      {:ok, other} = Engram.Fixtures.user_with_dek_fixture()
+      legacy_note!(u, v, "a.md", @big)
+
+      assert ReencodeEnvelopes.enqueue_missing() == 1
+
+      assert_enqueued(
+        worker: ReencodeEnvelopes,
+        args: %{"user_id" => u.id},
+        queue: :crypto_backfill,
+        priority: 3
+      )
+
+      refute_enqueued(worker: ReencodeEnvelopes, args: %{"user_id" => other.id})
+    end
+  end
+
+  describe "under FORCE RLS" do
+    # CONTROL: without it a green result below is ambiguous between "scoped"
+    # and "the role drop never engaged".
+    test "control: the dropped role with no tenant sees none of the user's notes",
+         %{user: u, vault: v} do
+      legacy_note!(u, v, "a.md", @big)
+
+      assert 0 ==
+               as_prod_role_committing(fn ->
+                 Repo.one(from(n in Note, where: n.user_id == ^u.id, select: count(n.id)),
+                   skip_tenant_check: true
+                 )
+               end)
+    end
+
+    test "discovery finds the user and the worker's writes land", %{user: u, vault: v} do
+      note = legacy_note!(u, v, "a.md", @big)
+
+      assert as_prod_role_committing(fn -> ReencodeEnvelopes.legacy_rows?(u.id) end)
+      assert :ok = as_prod_role_committing(fn -> run(u) end)
+      assert byte_size(reload(Note, id: note.id).content_nonce) == 13
+    end
+  end
+end
