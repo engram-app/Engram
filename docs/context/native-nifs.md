@@ -209,6 +209,48 @@ Findings:
   write-path cost only; the throughput limit is the compressor, not the
   scheduler or the cipher.
 
+#### Envelope telemetry: small fields are counted in the NIF, not emitted
+
+Listings decrypt titles, paths and tags per row, each tens of bytes, so the
+per-call cost of `Envelope.decrypt` on a tiny input matters more than its
+throughput. Measured 2026-10-08 (same Xeon E5-2650 v2, load 2.5-3.7, best of
+7 x 100k calls, ns per call, AAD `notes:title`, mode `:none`; the
+"+ PromEx" rows attach `Engram.PromEx.Native`'s real handlers through
+`TelemetryMetricsPrometheus.Core`, as prod runs; `:crypto` is
+`test/support/crypto_oracle.ex`; ranges are across runs):
+
+| Size | Path | encrypt | decrypt |
+|---|---|---|---|
+| 40 B | `:crypto` (old, `CryptoOracle`) | 4,294-4,770 | 1,344-1,446 |
+| 40 B | raw inline NIF, no wrapper | 2,583-2,598 | 1,168-1,375 |
+| 40 B | Envelope, per-call event, no handlers (before) | 4,284 | 1,946 |
+| 40 B | Envelope, per-call event + PromEx (before, as prod ran it) | 14,494 | 10,387 |
+| 40 B | Envelope + PromEx, inline counted in the NIF (after) | 3,052 | 1,261 |
+| 2 KB | `:crypto` (old) | 7,610-9,441 | 3,995-4,583 |
+| 2 KB | raw inline NIF | 4,832-4,879 | 3,364-3,898 |
+| 2 KB | Envelope, per-call event + PromEx (before) | 21,394 | 17,179 |
+| 2 KB | Envelope + PromEx, inline counted (after) | 5,301 | 3,368 |
+
+Before, the per-call `[:engram, :nif, :call, :stop]` event with PromEx's three
+handlers (two distributions, one sum) cost about 9 us, so a 40-byte decrypt
+was 7x `:crypto`. An interleaved check (15 alternating rounds of 100k) put
+the after path at 1,213 ns min / 1,298 median against `:crypto`'s 1,411 /
+1,467. Inline format-0 calls (seal `:none`, open with a 12-byte nonce, up to
+16 KB) now call the inline NIF directly and emit no event; format 1 and every
+dirty call still go through `call/4`. The counts did not go: the NIF counts
+EVERY seal and open (calls, input bytes) in relaxed atomics,
+`Engram.Native.envelope_counts/0`, which `Engram.PromEx.Native` polls as
+`[:engram, :nif, :envelope]` (gauges of cumulative values: read with
+`rate()`). Counting in Elixir first was too slow: `:persistent_term.get` plus
+two `:counters.add` cost about 300 ns per call, leaving a 40-byte decrypt
+26% behind `:crypto`. Nothing observable is lost: an inline envelope call
+runs in microseconds (the duration histogram's first bucket is 1 ms) and its
+peak is bounded by its input, so per call those histograms only counted it.
+
+No batch decrypt: callers decrypt one field per call (`Crypto.decrypt_*`),
+and with the wrapper at about 0.1 us over the raw NIF, a batch NIF would save
+almost nothing per field.
+
 Measured on the search and upsert NIFs (2026-10-04, dev box, min of 5-7,
 identical output to the Elixir they replaced):
 
@@ -419,6 +461,9 @@ following closes part of it:
 3. **One telemetry shape for every NIF.** `Engram.Native.call/4` emits
    `[:engram, :nif, :call, :stop]` with `duration`, `native_peak_bytes`,
    `input_bytes`, metadata `%{nif: atom}`. `Engram.PromEx.Native` exports it.
+   One exception: inline format-0 envelope calls emit nothing and are counted
+   in the NIF instead (above, "Envelope telemetry"); the event cost 7x the
+   crypto on a 40-byte field.
 4. **Watch what nobody attributes.** `[:engram, :vm, :native_memory]` (polled
    every 15 s) reports `rss - :erlang.memory(:total)` as `unaccounted`. A
    third-party NIF on its own allocator only shows up there. It is tens of
@@ -491,7 +536,8 @@ One rule, one place each side. Rust: declare the pair with
 add `{name, inline_nif, dirty_nif, arity}` to `@sized` in `Engram.Native`
 (it generates the stubs) and call `sized(name, input, args)`; `input` is
 what `call/4` measures (a binary, iolist or byte count). Never write the
-`> @inline_max` check yourself.
+`> @inline_max` check yourself; the one exception is the envelope pair's
+event-free inline path inside `Engram.Native` ("Envelope telemetry").
 Telemetry metadata carries `dirty: true | false`.
 Dirty CPU schedulers cannot be preempted and default to one per normal
 scheduler. **Prod tasks run ONE** (`task_cpu_units = 512` → `BEAM_SCHEDULERS=1`,

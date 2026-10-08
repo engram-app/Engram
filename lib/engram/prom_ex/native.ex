@@ -1,11 +1,16 @@
 defmodule Engram.PromEx.Native do
   @moduledoc """
-  PromEx plugin for native (Rust NIF) code. Two halves of the NIF memory
-  standard (see `Engram.Native`):
+  PromEx plugin for native (Rust NIF) code, the exported half of the NIF
+  memory standard (see `Engram.Native`):
 
     * `[:engram, :nif, :call, :stop]`, per call: duration and NATIVE peak
       bytes, tagged by `:nif`. The peak is the NIF's analogue of a process's
       heap high-water mark, which no BEAM metric can see.
+    * `[:engram, :nif, :envelope]`, polled: envelope seal/open calls and
+      input bytes since the NIF loaded (`Engram.Native.envelope_counts/0`),
+      every call. Inline format-0 calls emit no per-call event, so this is
+      their only count. Cumulative: read with `rate()`/`increase()`; a
+      restart resets them.
     * `[:engram, :vm, :native_memory]`, polled: OS RSS against the BEAM's
       own total. `unaccounted` (RSS minus everything the BEAM's allocators
       know about) is the only signal for native memory held OUTSIDE them:
@@ -21,6 +26,7 @@ defmodule Engram.PromEx.Native do
 
   @call_event [:engram, :nif, :call, :stop]
   @memory_event [:engram, :vm, :native_memory]
+  @envelope_event [:engram, :nif, :envelope]
 
   @impl true
   def event_metrics(opts) do
@@ -58,23 +64,56 @@ defmodule Engram.PromEx.Native do
     prefix = PromEx.metric_prefix(Keyword.fetch!(opts, :otp_app), :native_memory)
     poll_rate = Keyword.get(opts, :native_memory_poll_rate, 15_000)
 
-    Polling.build(
-      :engram_native_memory_polling_metrics,
-      poll_rate,
-      {__MODULE__, :execute_native_memory, []},
-      for {key, description} <- [
-            rss: "OS resident set size of the BEAM process.",
-            erlang_total: "Everything the BEAM's own allocators account for.",
-            nif_live: "Live Rust heap bytes of the in-house NIF library.",
-            unaccounted: "RSS the BEAM cannot attribute: native memory outside its allocators."
-          ] do
-        last_value(prefix ++ [key, :bytes],
-          event_name: @memory_event,
-          measurement: key,
-          description: description
-        )
-      end
-    )
+    envelope = PromEx.metric_prefix(Keyword.fetch!(opts, :otp_app), :nif) ++ [:envelope]
+
+    [
+      Polling.build(
+        :engram_nif_envelope_polling_metrics,
+        poll_rate,
+        {__MODULE__, :execute_envelope_counts, []},
+        [
+          last_value(envelope ++ [:calls],
+            event_name: @envelope_event,
+            measurement: :calls,
+            description: "Envelope NIF calls since boot, inline and dirty.",
+            tags: [:nif]
+          ),
+          last_value(envelope ++ [:input, :bytes],
+            event_name: @envelope_event,
+            measurement: :input_bytes,
+            description: "Bytes handed to envelope NIF calls since boot.",
+            tags: [:nif]
+          )
+        ]
+      ),
+      Polling.build(
+        :engram_native_memory_polling_metrics,
+        poll_rate,
+        {__MODULE__, :execute_native_memory, []},
+        for {key, description} <- [
+              rss: "OS resident set size of the BEAM process.",
+              erlang_total: "Everything the BEAM's own allocators account for.",
+              nif_live: "Live Rust heap bytes of the in-house NIF library.",
+              unaccounted: "RSS the BEAM cannot attribute: native memory outside its allocators."
+            ] do
+          last_value(prefix ++ [key, :bytes],
+            event_name: @memory_event,
+            measurement: key,
+            description: description
+          )
+        end
+      )
+    ]
+  end
+
+  @doc "Polled emitter for `[:engram, :nif, :envelope]`, one event per envelope NIF."
+  @spec execute_envelope_counts() :: :ok
+  def execute_envelope_counts do
+    for {nif, calls, bytes} <- Engram.Native.envelope_counts() do
+      :telemetry.execute(@envelope_event, %{calls: calls, input_bytes: bytes}, %{nif: nif})
+    end
+
+    :ok
   end
 
   @doc "Polled emitter for `[:engram, :vm, :native_memory]`."

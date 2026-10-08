@@ -73,7 +73,8 @@ defmodule Engram.Native do
     pack_f32_nif: 1,
     dense_json_nif: 1,
     sparse_json_nif: 2,
-    md_outline_nif: 1
+    md_outline_nif: 1,
+    envelope_counts_nif: 0
   ]
 
   # Test hooks, built only with the crate's `test-hooks` feature, which
@@ -255,6 +256,26 @@ defmodule Engram.Native do
     ArgumentError -> {:error, :invalid_json}
   end
 
+  # Inline format-0 envelope calls (seal with mode :none, open with a 12-byte
+  # nonce, at most @inline_max bytes) skip call/4: no per-call event. They are
+  # the hottest NIF calls (every title, path and tag a listing decrypts), and
+  # with PromEx's three handlers attached the event made a 40-byte decrypt
+  # 7x :crypto (docs/context/native-nifs.md, "Envelope telemetry"). Nothing is
+  # lost: such a call takes microseconds (the duration histogram starts at
+  # 1 ms) and its peak is bounded by its input, so per call those histograms
+  # only counted it. The counting moved into the NIF: relaxed atomics
+  # (`envelope_counts/0`) that see EVERY seal and open, polled by
+  # `Engram.PromEx.Native`. Format 1 and dirty calls still emit per call.
+
+  @doc """
+  `[{nif, calls, input_bytes}]` for `:envelope_seal` and `:envelope_open`:
+  every call since the NIF loaded, inline or dirty, any format.
+  """
+  def envelope_counts do
+    {seal_calls, seal_bytes, open_calls, open_bytes} = envelope_counts_nif()
+    [{:envelope_seal, seal_calls, seal_bytes}, {:envelope_open, open_calls, open_bytes}]
+  end
+
   @doc """
   `Engram.Crypto.Envelope.encrypt/3`'s engine: `{ct_with_tag, nonce_field}`.
   `mode` `:none` writes format 0 (byte for byte what `:crypto` wrote);
@@ -265,7 +286,12 @@ defmodule Engram.Native do
   def envelope_seal(plain, key, aad, mode)
       when is_binary(plain) and is_binary(key) and is_binary(aad) and
              mode in [:none, :zstd, :auto] do
-    case sized(:envelope_seal, plain, [plain, key, aad, mode]) do
+    sealed =
+      if mode == :none and byte_size(plain) <= @inline_max,
+        do: elem(envelope_seal_nif(plain, key, aad, mode), 0),
+        else: sized(:envelope_seal, plain, [plain, key, aad, mode])
+
+    case sealed do
       {_ct, _nonce} = sealed ->
         sealed
 
@@ -285,7 +311,12 @@ defmodule Engram.Native do
   """
   def envelope_open(ct, nonce, key, aad)
       when is_binary(ct) and is_binary(nonce) and is_binary(key) and is_binary(aad) do
-    case sized(:envelope_open, ct, [ct, nonce, key, aad], byte_size(nonce) == 13) do
+    opened =
+      if byte_size(nonce) == 12 and byte_size(ct) <= @inline_max,
+        do: elem(envelope_open_nif(ct, nonce, key, aad), 0),
+        else: sized(:envelope_open, ct, [ct, nonce, key, aad], byte_size(nonce) == 13)
+
+    case opened do
       :error -> :error
       plain -> {:ok, plain}
     end

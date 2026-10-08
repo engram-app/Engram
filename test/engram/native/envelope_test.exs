@@ -96,18 +96,29 @@ defmodule Engram.Native.EnvelopeTest do
   end
 
   describe "scheduling" do
+    # Inline format-0 calls emit no event; every call is counted in the NIF
+    # (Native.envelope_counts/0), and a dirty one also emits.
     test "seal: 16 KB runs on the calling scheduler, a byte more dirty" do
-      Engram.NativeScheduled.assert_scheduled(
-        :envelope_seal,
-        &Native.envelope_seal(String.duplicate("a", &1), @key, @aad, :none)
-      )
+      assert_counted_then_dirty(:envelope_seal, fn n ->
+        Native.envelope_seal(String.duplicate("a", n), @key, @aad, :none)
+      end)
     end
 
     test "open: 16 KB of ciphertext runs on the calling scheduler, a byte more dirty" do
-      Engram.NativeScheduled.assert_scheduled(:envelope_open, fn n ->
-        {ct, nonce} = Native.envelope_seal(String.duplicate("a", n - 16), @key, @aad, :none)
+      inline = Native.envelope_seal(String.duplicate("a", 16_384 - 16), @key, @aad, :none)
+      dirty = Native.envelope_seal(String.duplicate("a", 16_385 - 16), @key, @aad, :none)
+      sealed = %{16_384 => inline, 16_385 => dirty}
+
+      assert_counted_then_dirty(:envelope_open, fn n ->
+        {ct, nonce} = sealed[n]
         Native.envelope_open(ct, nonce, @key, @aad)
       end)
+    end
+
+    test "a format-1 seal emits per call even inline" do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+      Native.envelope_seal("abc", @key, @aad, :zstd)
+      assert_received {_, ^ref, %{input_bytes: 3}, %{nif: :envelope_seal, dirty: false}}
     end
 
     # A format-1 zstd row inflates far past its ciphertext (1.5 KB -> 50 MB
@@ -200,12 +211,35 @@ defmodule Engram.Native.EnvelopeTest do
       end)
     end
 
-    test "every call emits [:engram, :nif, :call, :stop]" do
+    test "inline format-0 calls are counted, not emitted" do
       ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+      before = counts()
       {ct, nonce} = Native.envelope_seal("abc", @key, "", :none)
-      assert_received {_, ^ref, %{input_bytes: 3}, %{nif: :envelope_seal, dirty: false}}
-      Native.envelope_open(ct, nonce, @key, "")
-      assert_received {_, ^ref, %{input_bytes: 19}, %{nif: :envelope_open, dirty: false}}
+      assert {:ok, "abc"} = Native.envelope_open(ct, nonce, @key, "")
+      now = counts()
+
+      assert now[:envelope_seal] == add(before[:envelope_seal], {1, 3})
+      assert now[:envelope_open] == add(before[:envelope_open], {1, 19})
+      refute_received {_, ^ref, _, %{nif: :envelope_seal}}
+      refute_received {_, ^ref, _, %{nif: :envelope_open}}
     end
   end
+
+  # The call at 16 KB runs inline (no event); one byte more emits a dirty
+  # event. Both are counted. Exact deltas: this module is async: false.
+  defp assert_counted_then_dirty(nif, call) do
+    ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+    before = counts()[nif]
+    call.(16_384)
+    assert counts()[nif] == add(before, {1, 16_384})
+    refute_received {_, ^ref, _, %{nif: ^nif}}
+
+    call.(16_385)
+    assert counts()[nif] == add(before, {2, 16_384 + 16_385})
+    assert_receive {_, ^ref, %{input_bytes: 16_385}, %{nif: ^nif, dirty: true}}
+    :telemetry.detach(ref)
+  end
+
+  defp counts, do: Map.new(Native.envelope_counts(), fn {nif, c, b} -> {nif, {c, b}} end)
+  defp add({c, b}, {dc, db}), do: {c + dc, b + db}
 end

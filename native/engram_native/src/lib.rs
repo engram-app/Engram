@@ -25,6 +25,7 @@ use rustler::{
 };
 use sha2::Sha256;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 const K1: f64 = 1.2;
 const B: f64 = 0.75;
@@ -440,6 +441,29 @@ fn sealed<'a>(env: Env<'a>, out: Result<(OwnedBinary, Vec<u8>), envelope::Error>
     }
 }
 
+/// Every envelope seal (calls, input bytes at 0, 1) and open (2, 3) since
+/// the library loaded, inline or dirty. `Engram.Native` skips the per-call
+/// telemetry event for inline format-0 calls, so this is their only count.
+/// Relaxed: counters, not synchronisation.
+static ENVELOPE_COUNTS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+
+fn count_envelope(i: usize, bytes: usize) {
+    ENVELOPE_COUNTS[i].fetch_add(1, Relaxed);
+    ENVELOPE_COUNTS[i + 1].fetch_add(bytes as u64, Relaxed);
+}
+
+/// `{seal_calls, seal_bytes, open_calls, open_bytes}`.
+#[rustler::nif]
+fn envelope_counts_nif() -> (u64, u64, u64, u64) {
+    let [a, b, c, d] = &ENVELOPE_COUNTS;
+    (
+        a.load(Relaxed),
+        b.load(Relaxed),
+        c.load(Relaxed),
+        d.load(Relaxed),
+    )
+}
+
 /// `Engram.Crypto.Envelope.encrypt/3`'s engine: optional zstd + AES-256-GCM
 /// (see native/engram_core/src/envelope.rs for the formats), and the peak.
 fn envelope_seal<'a>(
@@ -450,6 +474,7 @@ fn envelope_seal<'a>(
     mode: Atom,
 ) -> NifResult<(Term<'a>, usize)> {
     let mode = envelope_mode(mode)?;
+    count_envelope(0, plain.len());
     // The nonce comes from the OS here, at the edge: the core has no RNG.
     let (out, peak) = memory::measured(|| {
         let mut nonce = [0u8; envelope::NONCE];
@@ -491,6 +516,7 @@ fn envelope_open<'a>(
     key: Binary<'a>,
     aad: Binary<'a>,
 ) -> (Term<'a>, usize) {
+    count_envelope(2, ct.len());
     let (out, peak) =
         memory::measured(|| envelope::open(&ct, &nonce, &key, &aad, OwnedBinary::new));
     // Format 0 and raw format 1 decrypt in their BEAM binary; raw skips the
