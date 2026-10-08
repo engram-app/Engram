@@ -79,23 +79,38 @@ Keep it that way: the core drawing its own randomness would make the wasm
 build import an entropy hook from its host. `ring` still links getrandom
 0.2, so engram_core enables getrandom's `custom` feature for
 wasm32-unknown-unknown only (a host hook nothing in the core calls); native
-builds are unaffected. Separate crates, not a Cargo workspace: each has its
-own `rust-toolchain.toml` (same pin) and `Cargo.lock` (same versions;
-Dependabot bumps both in one entry), and rustler needed no change. Rustler
-gathers path dependencies into the NIF module's `@external_resource`s, so a
-content edit under engram_core rebuilds the NIF on `mix compile` (touching a
-file without changing it does not; Mix compares digests).
+builds are unaffected. A future wasm cdylib may still import
+`__getrandom_custom` (ring's RNG path) unless dead-code elimination drops it:
+the consumer must check its import list and supply the hook if it is there.
 
-CI: verify.yml `unit-tests` runs fmt, clippy and `cargo test` for both
-crates, then a wasm guard: `cargo build --release --locked --target
-wasm32-unknown-unknown` for engram_core inside the pinned rust image (ring
-and zstd compile C, which for wasm32 needs clang; the runner user has no
-sudo). It builds the rlib only: no ABI layer, no wasm-bindgen yet. cron.yml
-`cargo audit` covers both lockfiles. Local repro of the guard:
-`docker run --rm -v $PWD/native:/w -w /w/engram_core rust:1.94.1-slim-bookworm
-bash -c 'apt-get update -qq && apt-get install -y -qq clang && rustup target
-add wasm32-unknown-unknown && cargo build --release --locked --target
-wasm32-unknown-unknown'`.
+`native/` is one Cargo workspace (`native/Cargo.toml`): members engram_core
+and engram_native, one `Cargo.lock`, one `rust-toolchain.toml`, the shared
+release profile (LTO, one codegen unit), output in `native/target`. Rustler
+builds the engram_native member as before and gathers it and its path
+dependencies into the NIF module's `@external_resource`s, so a content edit
+under engram_core rebuilds the NIF on `mix compile` (touching a file without
+changing it does not; Mix compares digests). It does not track the workspace
+root, so `Engram.Native` adds `native/Cargo.toml`, `Cargo.lock` and
+`rust-toolchain.toml` itself; without that a lockfile bump would not rebuild
+the NIF locally.
+
+CI: verify.yml `unit-tests` runs `cargo fmt --all`, `clippy --workspace` and
+`cargo test --workspace` in native/, then a wasm guard: `cargo build
+--release --locked -p engram_core --target wasm32-unknown-unknown`. ring and
+zstd compile C, which for wasm32 needs a clang with the wasm backend, and the
+runner user has no sudo. So the toolchain step installs the wasm32 target with
+rustup, and the guard unpacks the pinned wasi-sdk release (sha256-checked,
+once per VM, under flock, renamed into place only when complete) and points
+`CC_wasm32_unknown_unknown`/`AR_wasm32_unknown_unknown` at its clang and
+llvm-ar. Warm runs take about 3 s. The guard checks the target is installed
+and the rlib exists, so a fresh cargo fingerprint cannot hide a missing
+target. It builds the rlib only: no ABI layer, no wasm-bindgen yet. cron.yml
+`cargo audit` reads the one lockfile. Local repro (no system clang needed):
+download and unpack `wasi-sdk-34.0-x86_64-linux.tar.gz`, then in native/:
+`CC_wasm32_unknown_unknown=<sdk>/bin/clang
+AR_wasm32_unknown_unknown=<sdk>/bin/llvm-ar cargo build --release --locked -p
+engram_core --target wasm32-unknown-unknown` (after `rustup target add
+wasm32-unknown-unknown`).
 
 zstd contexts are thread-local: once compression is on, each scheduler
 thread (normal and dirty) that ever sealed or opened a zstd row keeps one
@@ -110,10 +125,11 @@ plaintext as a sub-binary past the codec byte. Only the zstd paths add a copy
 `:erlang.memory(:binary)` like every other NIF's output.
 
 Why `ring`, not RustCrypto `aes-gcm` (the first cut): pure-Rust microbench,
-`cargo test --release bench_aes_gcm -- --ignored --nocapture` in
-native/engram_core (native/engram_native when measured, 2026-10-07, Xeon E5-2650 v2: AES-NI + PCLMUL, AVX, no
-AVX2/MOVBE; best of 15 x 50; each call copies the input into the work buffer,
-as the NIF does; load 1.1-1.5; microseconds, three runs):
+`cargo test --release -p engram_core bench_aes_gcm -- --ignored --nocapture`
+in native/. It lived in native/engram_native when these numbers were taken.
+Setup (2026-10-07, Xeon E5-2650 v2: AES-NI + PCLMUL, AVX, no AVX2/MOVBE; best
+of 15 x 50; each call copies the input into the work buffer, as the NIF does;
+load 1.1-1.5; microseconds, three runs):
 
 | Size | `aes-gcm` seal / open | `ring` seal / open | open MB/s aes-gcm / ring | ring speedup |
 |---|---|---|---|---|
@@ -478,7 +494,7 @@ adding callers.
 
 ## Build
 
-- Toolchain pinned in `native/engram_native/rust-toolchain.toml` and installed
+- Toolchain pinned in `native/rust-toolchain.toml` (the workspace) and installed
   by rustup in the Dockerfile builder stage and CI's mix-builder image (keep
   the three versions in sync). Runner-host jobs install rustup into the
   runner user's home once per VM. The runtime image has no Rust.
