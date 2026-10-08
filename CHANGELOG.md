@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.44.0](https://github.com/engram-app/Engram/compare/0.43.0...0.44.0) (2026-10-08)
+
+
+### Features
+
+* **crypto:** one Rust envelope engine in engram_core (reads compressed format) ([#1904](https://github.com/engram-app/Engram/issues/1904)) ([5d12fe9](https://github.com/engram-app/Engram/commit/5d12fe9e9223dce040a2316130ab3b3d9f6961bc))
+* **frontend:** translate the web app into ten languages ([#1896](https://github.com/engram-app/Engram/issues/1896)) ([7709b19](https://github.com/engram-app/Engram/commit/7709b1909edd6609056566cfc2b64e78e1a6696b))
+* **link:** name a connection and rework the vault picker ([#1893](https://github.com/engram-app/Engram/issues/1893)) ([ae961e7](https://github.com/engram-app/Engram/commit/ae961e735e08831ffe6be8a5e0d8e497a87c6f0a))
+* **link:** warn Free users at the vault cap ([#1901](https://github.com/engram-app/Engram/issues/1901)) ([ada259e](https://github.com/engram-app/Engram/commit/ada259e90e8049b8b489e129f3d8d3de334606c4))
+* **mcp:** server card + configurable gateway origins (unblocks Smithery) ([#1905](https://github.com/engram-app/Engram/issues/1905)) ([bc69197](https://github.com/engram-app/Engram/commit/bc691970269e1c90b99166c36cc8f6bf53c2cf17))
+
+
+### Bug Fixes
+
+* **ci:** create the GitHub Release with the App token ([#1894](https://github.com/engram-app/Engram/issues/1894)) ([b4258df](https://github.com/engram-app/Engram/commit/b4258df44349d3ecbeeaddc291828391f457b85a))
+* **frontend:** Obsidian-style table editing, comments, and currency-safe math ([#1899](https://github.com/engram-app/Engram/issues/1899)) ([3454c59](https://github.com/engram-app/Engram/commit/3454c59e423d839d83da1fa1ff93b44dd1478fe3))
+* **rls:** scope api_keys_discovery to the key-lookup role ([#1903](https://github.com/engram-app/Engram/issues/1903)) ([da6bcf9](https://github.com/engram-app/Engram/commit/da6bcf9ef076c7542aaf3abbd74e5e6e91c1dbc1))
+
+
+### Performance Improvements
+
+* bound what one document can cost (outline segmenting + per-document caps) ([#1897](https://github.com/engram-app/Engram/issues/1897)) ([8b51967](https://github.com/engram-app/Engram/commit/8b51967070a2f853c8b3fcd7c2502f86f666c579))
+* sync + first-sync hot-path audit ([#1877](https://github.com/engram-app/Engram/issues/1877)) ([#1882](https://github.com/engram-app/Engram/issues/1882)) ([96e9664](https://github.com/engram-app/Engram/commit/96e966402c3e498cd3165837db478f0e842d64e1))
+
 ## [0.43.0](https://github.com/engram-app/Engram/compare/0.42.0...0.43.0) (2026-10-07)
 
 
