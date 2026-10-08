@@ -21,12 +21,16 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   the rows this batch wrote and then rewraps them (format 1 under the old DEK
   is readable), and any row it already rewrapped fails the CAS. That gate plus
   the CAS is the safety; sharing `:crypto_backfill` is not (Oban OSS queue
-  limits are per node).
+  limits are per node). A crashed rotation keeps its lock, so after
+  `@max_snoozes` snoozes (about an hour) the job cancels as
+  `:rotation_locked` with a `:warning` naming the user; the next hourly pass
+  re-enqueues it, and other users' chains never wait on it.
 
   Bounded runs: a job works for at most `@budget_ms`, then enqueues its
   successor with its cursor (`column` + `after` id) and returns. The successor
-  is inserted while this job is still `executing`, so
-  `DataMigrations.jobs_in_flight?/1` never sees a gap in the chain.
+  is inserted while this job is still `executing`, so the chain has no gap in
+  which discovery (`enqueue_missing/0`, which skips a user with an executing
+  job) could start a second one.
 
   Reads only the key, the AAD id and the one ciphertext + nonce pair being
   processed, never whole rows (a note carries several ciphertext columns).
@@ -90,6 +94,8 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   # Legacy rows are format 0, so stored is about plaintext size; a chunk peaks
   # near 3x this (ct + plaintext + new ct), well inside the worker's memory.
   @chunk_bytes 8 * 1024 * 1024
+  # Snoozes (60 s each) behind a rotation lock before a job gives up: ~1 h.
+  @max_snoozes 60
 
   # Processed in this order. `aad` = {AAD table, AAD column, field holding the AAD row id}.
   @columns [
@@ -148,9 +154,28 @@ defmodule Engram.Workers.ReencodeEnvelopes do
         {:cancel, :superseded}
 
       true ->
-        run(user_id, args)
+        user_id |> run(args) |> cap_snooze(user_id, job)
     end
   end
+
+  # A crashed rotation keeps its lock on purpose, so a job could snooze behind
+  # it forever. Past the cap it cancels; the next hourly pass re-enqueues the
+  # user (fresh count), so a lock that clears loses at most an hour. Oban
+  # counts snoozes in `meta["snoozed"]`.
+  defp cap_snooze({:snooze, _} = snooze, user_id, %Oban.Job{meta: meta}) do
+    if (meta["snoozed"] || 0) >= @max_snoozes do
+      Logger.warning(
+        "envelope re-encode: rotation lock held past #{@max_snoozes} snoozes, cancelling",
+        Metadata.with_category(:warning, :crypto, user_id: user_id)
+      )
+
+      {:cancel, :rotation_locked}
+    else
+      snooze
+    end
+  end
+
+  defp cap_snooze(result, _user_id, _job), do: result
 
   defp run(user_id, args) do
     deadline = System.monotonic_time(:millisecond) + setting(:budget_ms, @budget_ms)
@@ -219,10 +244,27 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   # octet_length(update_nonce) = 12 (and likewise per column).
   def enqueue_missing do
     user_ids = TenantScan.flat_map_users(fn uid -> if any_legacy?(uid), do: [uid], else: [] end)
+    executing = executing_user_ids()
     # One insert per user, not insert_all: Oban's Basic engine ignores
-    # `unique` in insert_all.
-    Enum.each(user_ids, fn uid -> {:ok, _} = Oban.insert(new(%{"user_id" => uid})) end)
+    # `unique` in insert_all. `unique` drops a user whose job is pending; an
+    # :executing job is not a unique state (a job inserts its own successor),
+    # so that user is skipped here, or a second chain would run beside it.
+    for uid <- user_ids,
+        not MapSet.member?(executing, uid),
+        do: {:ok, _} = Oban.insert(new(%{"user_id" => uid}))
+
     length(user_ids)
+  end
+
+  defp executing_user_ids do
+    worker = inspect(__MODULE__)
+
+    from(j in Oban.Job,
+      where: j.worker == ^worker and j.state == "executing",
+      select: fragment("?->>'user_id'", j.args)
+    )
+    |> Repo.all()
+    |> MapSet.new()
   end
 
   @doc "True while the user still has a row this worker would re-encode."

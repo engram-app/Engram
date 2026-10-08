@@ -2,8 +2,10 @@ defmodule Engram.DataMigrations.EnvelopeFormat do
   @moduledoc """
   Every compressible DB envelope on the current format (#1872 PR 3). Each pass
   enqueues `ReencodeEnvelopes` for every user who still has a legacy row
-  (format 0: 12-byte nonce, more than the 16-byte tag), unless a job is still
-  running. Done when none is left. Bump `version/0` when a new format ships.
+  (format 0: 12-byte nonce, more than the 16-byte tag) and no job running.
+  Per user, not global: one user's job pinned behind a rotation lock must not
+  stall everyone else. Done when none is left. Bump `version/0` when a new
+  format ships.
 
   A legacy row that never decrypts keeps this open (one user's job per hour);
   the stuck-migration alert surfaces it.
@@ -18,7 +20,6 @@ defmodule Engram.DataMigrations.EnvelopeFormat do
   """
   @behaviour Engram.DataMigration
 
-  alias Engram.DataMigrations
   alias Engram.Workers.ReencodeEnvelopes
 
   @impl true
@@ -35,13 +36,8 @@ defmodule Engram.DataMigrations.EnvelopeFormat do
 
   @impl true
   def run_pass do
-    # The worker is unique per user over available/scheduled/retryable, but unique
-    # does not cover :executing; the jobs_in_flight? guard also stops new chains
-    # while a chain's last hop runs.
-    cond do
-      DataMigrations.jobs_in_flight?(ReencodeEnvelopes) -> :more
-      ReencodeEnvelopes.enqueue_missing() == 0 -> :done
-      true -> :more
-    end
+    # Per-user in-flight handling lives in `enqueue_missing/0` (unique for
+    # pending jobs, an explicit skip for :executing ones).
+    if ReencodeEnvelopes.enqueue_missing() == 0, do: :done, else: :more
   end
 end

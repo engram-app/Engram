@@ -62,6 +62,40 @@ defmodule Engram.DataMigrations.EnvelopeFormatTest do
     assert length(all_enqueued(worker: ReencodeEnvelopes)) == 1
   end
 
+  # A job pinned for one user (a stale rotation lock snoozing it) must not
+  # stall discovery for everyone else.
+  test "another user's in-flight job does not stop this user's enqueue", %{user: u, vault: v} do
+    {:ok, other} = Engram.Fixtures.user_with_dek_fixture()
+    other_vault = insert(:vault, user: other)
+    note!(u, v, "old.md", @big, false)
+    note!(other, other_vault, "old.md", @big, false)
+
+    {:ok, _} =
+      Oban.insert(ReencodeEnvelopes.new(%{"user_id" => u.id}, schedule_in: 60))
+
+    assert EnvelopeFormat.run_pass() == :more
+    assert_enqueued(worker: ReencodeEnvelopes, args: %{"user_id" => other.id})
+    assert length(all_enqueued(worker: ReencodeEnvelopes, args: %{"user_id" => u.id})) == 1
+  end
+
+  # `unique` does not cover :executing, so discovery skips that user itself:
+  # a second chain would run beside the first.
+  test "a user whose job is executing gets no second job", %{user: u, vault: v} do
+    note!(u, v, "old.md", @big, false)
+    {:ok, job} = Oban.insert(ReencodeEnvelopes.new(%{"user_id" => u.id}))
+    Repo.update_all(from(j in Oban.Job, where: j.id == ^job.id), set: [state: "executing"])
+
+    assert EnvelopeFormat.run_pass() == :more
+
+    assert [%{state: "executing"}] =
+             Repo.all(
+               from(j in Oban.Job,
+                 where: j.worker == "Engram.Workers.ReencodeEnvelopes",
+                 where: fragment("?->>'user_id' = ?", j.args, ^u.id)
+               )
+             )
+  end
+
   test "an undecryptable legacy row keeps the migration open", %{user: u, vault: v} do
     note = note!(u, v, "bad.md", @big, false)
 

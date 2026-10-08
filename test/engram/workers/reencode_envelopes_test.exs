@@ -267,6 +267,29 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
       assert reload(Note, id: note.id) == before
     end
 
+    # A crashed rotation keeps its lock on purpose; a job snoozing behind it
+    # forever would hold the user's chain. After the cap it cancels and the
+    # next hourly pass re-enqueues once the lock clears.
+    test "a job snoozed past the cap behind a rotation lock cancels with a warning",
+         %{user: u, vault: v} do
+      note = legacy_note!(u, v, "a.md", @big)
+      before = reload(Note, id: note.id)
+      {:ok, _} = RotationLock.acquire(u.id)
+
+      assert {:snooze, _} =
+               perform_job(ReencodeEnvelopes, %{"user_id" => u.id}, meta: %{"snoozed" => 59})
+
+      log =
+        capture_log([level: :warning], fn ->
+          assert {:cancel, :rotation_locked} =
+                   perform_job(ReencodeEnvelopes, %{"user_id" => u.id}, meta: %{"snoozed" => 60})
+        end)
+
+      assert log =~ "rotation lock"
+      assert log =~ u.id
+      assert reload(Note, id: note.id) == before
+    end
+
     test "an undecryptable row is logged, left, and keeps the user listed", %{user: u, vault: v} do
       note = legacy_note!(u, v, "a.md", @big)
       ok = legacy_note!(u, v, "b.md", @big)
@@ -329,8 +352,8 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
 
       assert :ok = run(u)
 
-      # The successor exists as soon as this job returns: run_pass's
-      # jobs_in_flight? never sees a gap in the chain.
+      # The successor exists as soon as this job returns: the chain never
+      # has a gap in which discovery could start a second one.
       assert [job] = all_enqueued(worker: ReencodeEnvelopes)
       assert job.args == %{"user_id" => u.id, "column" => "notes_content", "after" => a}
       assert job.priority == 3
