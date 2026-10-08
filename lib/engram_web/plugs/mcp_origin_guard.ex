@@ -57,7 +57,35 @@ defmodule EngramWeb.Plugs.McpOriginGuard do
         conn
 
       [origin | _] ->
-        if allowed?(origin), do: conn, else: refuse(conn)
+        if allowed?(origin) or gateway?(origin), do: conn, else: refuse(conn)
+    end
+  end
+
+  # Hosted MCP gateways proxy every user call from a server-side Worker that
+  # still sends its own Origin. A gateway is not a browser on a page we did not
+  # serve, so it is outside the threat above, and bearer auth still applies to
+  # every call it forwards.
+  #
+  # Per-deployment config, set from `MCP_GATEWAY_ORIGINS` in runtime.exs; empty
+  # by default, so a deployment that sets nothing behaves exactly as before.
+  # Kept separate from `:cors_origin` on purpose: that list also opens REST CORS
+  # and the WebSocket origin check, and a gateway needs neither.
+  #
+  # An entry is an exact origin (`https://smithery.ai`) or a subdomain wildcard
+  # (`https://*.run.tools`), which matches any subdomain but not the apex.
+  defp gateway?(origin) do
+    :engram
+    |> Application.get_env(:mcp_gateway_origins, [])
+    |> Enum.any?(&gateway_match?(&1, origin))
+  end
+
+  defp gateway_match?(entry, origin) do
+    case String.split(entry, "://*.", parts: 2) do
+      [scheme, domain] ->
+        String.starts_with?(origin, scheme <> "://") and String.ends_with?(origin, "." <> domain)
+
+      [_exact] ->
+        origin == entry
     end
   end
 

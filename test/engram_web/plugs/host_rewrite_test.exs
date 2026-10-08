@@ -110,7 +110,10 @@ defmodule EngramWeb.Plugs.HostRewriteTest do
             "/.well-known/oauth-protected-resource/api/mcp",
             "/.well-known/oauth-authorization-server",
             # OpenAI's plugin portal verifies the MCP domain by fetching this.
-            "/.well-known/openai-apps-challenge"
+            "/.well-known/openai-apps-challenge",
+            # SEP-1649 server card. Smithery and MCPRush read it when they
+            # cannot scan through the OAuth wall.
+            "/.well-known/mcp/server-card.json"
           ] do
         conn =
           conn(:get, path)

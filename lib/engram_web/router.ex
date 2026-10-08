@@ -257,6 +257,10 @@ defmodule EngramWeb.Router do
     # the dedicated MCP host the resource is the bare host (#634), for which the
     # bare form above is already the spec-correct location.
     get "/oauth-protected-resource/api/mcp", WellKnownController, :protected_resource
+
+    # SEP-1649 server card: the tool list for directories (Smithery, MCPRush)
+    # whose scanners cannot get past OAuth to call `tools/list` themselves.
+    get "/mcp/server-card.json", WellKnownController, :mcp_server_card
   end
 
   # OpenAI's plugin portal proves we own the MCP domain by fetching this and
