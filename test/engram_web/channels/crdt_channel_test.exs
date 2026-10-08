@@ -1365,6 +1365,34 @@ defmodule EngramWeb.CrdtChannelTest do
       end)
     end
 
+    # The cheap bound (doc + update size) refuses this; the update applied to
+    # a copy shrinks the note, so it lands. Refusing it left the client,
+    # which already applied it, out of sync for good (review of #1897).
+    test "a large replace that shrinks a note near the cap is accepted", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} =
+        Notes.upsert_note(
+          user,
+          vault,
+          %{"path" => "Notes/six.md", "content" => String.duplicate("a", 6_000_000)},
+          actor: "api"
+        )
+
+      client = handshake_room(socket, note.id)
+      {:ok, sv} = Yex.encode_state_vector(client)
+      text = Yex.Doc.get_text(client, "content")
+      Yex.Text.delete(text, 0, Yex.Text.length(text))
+      Yex.Text.insert(text, 0, String.duplicate("b", 4_500_000))
+      {:ok, update} = Yex.encode_state_as_update(client, sv)
+      {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_update, update}})
+
+      ref = push(socket, "crdt_doc_update", %{"doc_id" => note.id, "b64" => Base.encode64(frame)})
+      assert_reply ref, :ok, %{}, 15_000
+    end
+
     test "a handshake step1 on a note at the cap still syncs", %{socket: socket, full: n} do
       client = CrdtBridge.new_doc()
       {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(client)

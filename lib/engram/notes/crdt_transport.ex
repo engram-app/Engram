@@ -259,7 +259,7 @@ defmodule Engram.Notes.CrdtTransport do
     SharedDoc.update_doc(room, fn doc ->
       result =
         cond do
-          not CrdtBridge.fits?(doc, byte_size(update)) -> {:error, :note_too_large}
+          not CrdtBridge.fits?(doc, update) -> {:error, :note_too_large}
           Yex.apply_update(doc, update) == :ok -> {:ok, head_marker(doc)}
           true -> {:error, :invalid_update}
         end

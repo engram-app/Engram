@@ -2047,10 +2047,14 @@ defmodule EngramWeb.CrdtChannel do
   # sync step 2 or an update. A step 1 (a state vector) or awareness frame
   # adds no text. Asked of the room's doc before the relay, because the
   # relay is a cast and the room applies what it receives.
-  defp guard_size(room, <<0, type, rest::binary>>) when type in [1, 2] do
-    if CrdtBridge.fits?(SharedDoc.get_doc(room), byte_size(rest)),
-      do: :ok,
-      else: {:error, :note_too_large}
+  defp guard_size(room, <<0, type, _::binary>> = frame) when type in [1, 2] do
+    with {:ok, {:sync, {_step2_or_update, update}}} <- Yex.Sync.message_decode(frame),
+         false <- CrdtBridge.fits?(SharedDoc.get_doc(room), update) do
+      {:error, :note_too_large}
+    else
+      # Fits, or not a frame we can read: relay_frame reports it as before.
+      _ -> :ok
+    end
   catch
     # A dead room: let relay_frame report it the way it always has.
     :exit, _ -> :ok

@@ -111,21 +111,40 @@ defmodule Engram.Notes.CrdtBridge do
   def text_of(%Yex.Doc{} = doc), do: project_doc(doc)
 
   @doc """
-  Whether applying an update of `update_bytes` keeps the doc within
-  `Engram.Notes.max_note_bytes/0`. An update stores its inserted text
-  verbatim, so it adds at most `update_bytes` UTF-16 units: checked against
-  the body's length (O(1) in yrs) plus the frontmatter maps, BEFORE the
-  apply, because an applied Yjs update cannot be taken back. The unit is
-  UTF-16, so an all-ASCII note stops at 10 MB and a CJK one at up to 30 MB
-  of UTF-8: this bounds growth, it does not mirror the byte cap exactly.
-  """
-  def fits?(%Yex.Doc{} = doc, update_bytes) do
-    units =
-      Yex.Text.length(Yex.Doc.get_text(doc, @text_name)) +
-        :erlang.external_size(frontmatter_of(doc)) +
-        :erlang.external_size(raw_frontmatter_of(doc))
+  Whether applying `update` (a Yjs v1 update) keeps the doc within
+  `Engram.Notes.max_note_bytes/0`, decided BEFORE the apply because an
+  applied update cannot be taken back. Units are UTF-16 (body length is
+  O(1) in yrs, plus the frontmatter maps), so an all-ASCII note stops at
+  10 MB and a CJK one at up to 30 MB of UTF-8: this bounds growth, it does
+  not mirror the byte cap exactly.
 
-    units + update_bytes <= Engram.Notes.max_note_bytes()
+  An update stores inserted text verbatim, so it adds at most its own size:
+  when the doc plus that still fits, no more work. Otherwise (a note within
+  one update of the cap) the update is applied to a copy and the real
+  length checked, so a large replace that shrinks the note still lands.
+  An update the copy cannot apply is let through for the real apply to
+  refuse as it always has.
+  """
+  @spec fits?(Yex.Doc.t(), binary()) :: boolean()
+  def fits?(%Yex.Doc{} = doc, update) when is_binary(update) do
+    cap = Engram.Notes.max_note_bytes()
+    units(doc) + byte_size(update) <= cap or applied_fits?(doc, update, cap)
+  end
+
+  defp applied_fits?(doc, update, cap) do
+    with {:ok, state} <- Yex.encode_state_as_update(doc),
+         {:ok, copy} <- doc_from_state(state),
+         :ok <- Yex.apply_update(copy, update) do
+      units(copy) <= cap
+    else
+      _ -> true
+    end
+  end
+
+  defp units(doc) do
+    Yex.Text.length(Yex.Doc.get_text(doc, @text_name)) +
+      :erlang.external_size(frontmatter_of(doc)) +
+      :erlang.external_size(raw_frontmatter_of(doc))
   end
 
   @doc "Body-only plaintext (the content Y.Text, no frontmatter)."
