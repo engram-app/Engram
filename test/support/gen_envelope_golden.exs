@@ -1,12 +1,14 @@
 # One-off generator for test/support/fixtures/envelope_golden.json.
-# Encrypts with the :crypto-backed Engram.Crypto.Envelope. Regenerate ONLY
+# Encrypts with Engram.CryptoOracle (test/support/crypto_oracle.ex), the
+# :crypto envelope the Rust engine replaced, never with Envelope: the fixture
+# pins what :crypto wrote, so the engine must not write it. Regenerate ONLY
 # under a deliberate format/version bump; the fixture is the guard that every
 # ciphertext already in the database still opens after an engine swap.
 #
 #   MIX_ENV=test mise exec -- mix run --no-start test/support/gen_envelope_golden.exs \
 #     > test/support/fixtures/envelope_golden.json
 alias Engram.Crypto
-alias Engram.Crypto.Envelope
+alias Engram.CryptoOracle
 
 uuid = fn -> Ecto.UUID.generate() end
 
@@ -42,7 +44,7 @@ b64 = &Base.encode64/1
 cases =
   for aad <- aads, plain <- plaintexts do
     key = :crypto.strong_rand_bytes(32)
-    {ct, nonce} = Envelope.encrypt(plain, key, aad)
+    {ct, nonce} = CryptoOracle.encrypt(plain, key, aad)
 
     %{
       "key" => b64.(key),
