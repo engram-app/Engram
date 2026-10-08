@@ -9,7 +9,13 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   ciphertext and nonce columns, with a compare-and-set on the old ciphertext,
   so a row edited between read and write keeps its edit (the next pass picks
   it up). `updated_at`, `version`, `seq` and `dek_version` never move, so no
-  client re-pulls and no checkpoint CAS (on version + seq) conflicts.
+  client re-pulls.
+
+  The `crdt_state` fences DO see it: `CrdtCheckpoint.snapshot_fence/2` and
+  `Notes.rename_fence/1` compare `crdt_state_nonce`, which a re-encode
+  changes. A checkpoint racing it skips once without pruning (re-done on the
+  next tick); a rename racing it uses its single retry. Neither loses data.
+  A change to those fences must keep the re-encoder in mind.
 
   One side effect: rewriting `notes.crdt_state_ciphertext` fires the
   `notes_crdt_head_invalidate` trigger, which NULLs `crdt_head`. Left NULL,
