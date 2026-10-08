@@ -42,7 +42,17 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   body of a pre-T3.6 note (`dek_version` 1): its empty AAD has no compression
   policy, so a re-encode would write format 0 again.
   """
-  use Oban.Worker, queue: :crypto_backfill, priority: 3, max_attempts: 5
+  # One chain per user. `:executing` is deliberately NOT a unique state: a job
+  # inserts its own successor while still executing, and must not conflict
+  # with itself. So `unique` drops a duplicate enqueue (from `run_pass`) while
+  # a hop is pending; `superseded?/1` covers the case it cannot, a Lifeline
+  # rescue putting a crashed predecessor back to `available` (a state change,
+  # not an insert) after its successor was already inserted.
+  use Oban.Worker,
+    queue: :crypto_backfill,
+    priority: 3,
+    max_attempts: 5,
+    unique: [keys: [:user_id], period: :infinity, states: [:available, :scheduled, :retryable]]
 
   import Ecto.Query
 
@@ -109,21 +119,41 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   def timeout(_job), do: :timer.minutes(30)
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"user_id" => user_id} = args}) when is_binary(user_id) do
-    if Application.get_env(:engram, :envelope_compression, false) do
-      deadline = System.monotonic_time(:millisecond) + setting(:budget_ms, @budget_ms)
+  def perform(%Oban.Job{args: %{"user_id" => user_id} = args} = job) when is_binary(user_id) do
+    cond do
+      not Application.get_env(:engram, :envelope_compression, false) ->
+        {:cancel, :compression_off}
 
-      columns =
-        Enum.drop_while(
-          @columns,
-          &(Atom.to_string(&1.label) != (args["column"] || "notes_content"))
-        )
+      superseded?(job) ->
+        {:cancel, :superseded}
 
-      run_columns(user_id, columns, args["after"], deadline)
-    else
-      {:cancel, :compression_off}
+      true ->
+        run(user_id, args)
     end
   end
+
+  defp run(user_id, args) do
+    deadline = System.monotonic_time(:millisecond) + setting(:budget_ms, @budget_ms)
+    start = args["column"] || "notes_content"
+    columns = Enum.drop_while(@columns, &(Atom.to_string(&1.label) != start))
+    run_columns(user_id, columns, args["after"], deadline)
+  end
+
+  # A newer in-flight job for this user exists: this one is a rescued
+  # predecessor whose successor already took over the chain.
+  defp superseded?(%Oban.Job{id: id, args: %{"user_id" => user_id}}) when is_integer(id) do
+    worker = inspect(__MODULE__)
+
+    Repo.exists?(
+      from(j in Oban.Job,
+        where: j.worker == ^worker and j.id > ^id,
+        where: j.state in ~w(available scheduled executing retryable),
+        where: fragment("?->>'user_id' = ?", j.args, ^user_id)
+      )
+    )
+  end
+
+  defp superseded?(_job), do: false
 
   defp run_columns(_user_id, [], _after, _deadline), do: :ok
 
@@ -163,7 +193,9 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   @spec enqueue_missing() :: non_neg_integer()
   def enqueue_missing do
     user_ids = TenantScan.flat_map_users(fn uid -> if any_legacy?(uid), do: [uid], else: [] end)
-    _ = Oban.insert_all(Enum.map(user_ids, &new(%{"user_id" => &1})))
+    # One insert per user, not insert_all: Oban's Basic engine ignores
+    # `unique` in insert_all.
+    Enum.each(user_ids, fn uid -> {:ok, _} = Oban.insert(new(%{"user_id" => uid})) end)
     length(user_ids)
   end
 

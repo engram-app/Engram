@@ -45,7 +45,8 @@ defmodule Engram.Workers.DataMigrationsRunner do
   # says nothing about the migration's work, so it must not touch the ledger:
   # note_open/2 would reopen a DONE row.
   #
-  # A disabled migration is skipped before anything touches the ledger. A done
+  # A disabled migration runs no pass and is never opened, alerted on or marked
+  # done; only an ALREADY open row has its stuck clock held (see disabled/1). A done
   # one is skipped too, except in the re-verify hour when it opts in: then its
   # pass runs, and `:more` reopens it (note_open/2 clears completed_at).
   @spec run(module(), boolean()) :: :skipped | :done | :more | :error
@@ -53,7 +54,7 @@ defmodule Engram.Workers.DataMigrationsRunner do
     {name, version} = {mod.name(), mod.version()}
 
     cond do
-      not optional(mod, :enabled?, true) -> :skipped
+      not optional(mod, :enabled?, true) -> disabled(name)
       not DataMigrations.done?(name, version) -> pass(mod, name, version)
       reverify and optional(mod, :reverify?, false) -> reverify(mod, name, version)
       true -> :skipped
@@ -71,10 +72,20 @@ defmodule Engram.Workers.DataMigrationsRunner do
     if function_exported?(mod, fun, 0), do: apply(mod, fun, []), else: default
   end
 
+  # Disabled time is not stuck time: an open row's clock is held at "now" on
+  # every disabled run, so re-enabling never pages for the disabled span.
+  defp disabled(name) do
+    :ok = DataMigrations.hold_clock(name)
+    :skipped
+  end
+
   # Done already: only a pass that finds work changes anything.
   defp reverify(mod, name, version) do
     case mod.run_pass() do
+      # Idempotent. Normally a no-op; it closes a row a re-verify reopened
+      # while this node still cached `done?` (another node's reopen).
       :done ->
+        :ok = DataMigrations.mark_done(name, version)
         :done
 
       :more ->

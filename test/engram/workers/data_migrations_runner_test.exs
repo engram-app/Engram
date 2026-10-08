@@ -46,6 +46,22 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
     end
   end
 
+  defmodule Toggled do
+    @behaviour Engram.DataMigration
+    def name, do: "test_toggled"
+    def version, do: 1
+    def enabled?, do: Process.get(:toggled_enabled, true)
+    def run_pass, do: :more
+  end
+
+  defmodule ReverifiedClean do
+    @behaviour Engram.DataMigration
+    def name, do: "test_reverified_clean"
+    def version, do: 1
+    def reverify?, do: true
+    def run_pass, do: :done
+  end
+
   # version/0 fails on its first call in a process (a transient failure before
   # the pass, like a done?/2 DB read timing out) and works after that.
   defmodule FlakyBeforePass do
@@ -104,6 +120,22 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
     assert DataMigrations.done?("test_flaky_before_pass", 1)
   end
 
+  describe "re-verify :done" do
+    alias Engram.DataMigrations.Entry
+
+    # A node whose done? cache is stale (another node reopened the row) must
+    # close it again when its re-verify finds nothing, not leave it NULL.
+    test "marks the row done again" do
+      :ok = DataMigrations.mark_done("test_reverified_clean", 1)
+      :ok = DataMigrations.reopen("test_reverified_clean", 1)
+      :persistent_term.put({DataMigrations, "test_reverified_clean", 1}, true)
+      assert is_nil(Repo.get!(Entry, "test_reverified_clean").completed_at)
+
+      assert DataMigrationsRunner.run(ReverifiedClean, true) == :done
+      refute is_nil(Repo.get!(Entry, "test_reverified_clean").completed_at)
+    end
+  end
+
   describe "stuck migrations" do
     import ExUnit.CaptureLog
 
@@ -116,6 +148,28 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
     end
 
     defp days_ago(n), do: DateTime.add(DateTime.utc_now(), -n * 86_400)
+
+    test "disabled time does not count: re-enabling after > 7 days does not page" do
+      Process.put(:toggled_enabled, true)
+      DataMigrationsRunner.run(Toggled)
+      age("test_toggled", days_ago(8))
+
+      Process.put(:toggled_enabled, false)
+      assert DataMigrationsRunner.run(Toggled) == :skipped
+      entry = Repo.get!(Entry, "test_toggled")
+      assert DateTime.diff(DateTime.utc_now(), entry.opened_at) < 60
+      assert is_nil(entry.completed_at)
+
+      Process.put(:toggled_enabled, true)
+      log = capture_log([level: :error], fn -> DataMigrationsRunner.run(Toggled) end)
+      refute log =~ "data migration stuck"
+    end
+
+    test "a disabled migration with no row gets none" do
+      Process.put(:toggled_enabled, false)
+      assert DataMigrationsRunner.run(Toggled) == :skipped
+      assert is_nil(Repo.get(Entry, "test_toggled"))
+    end
 
     test "an open migration younger than 7 days logs nothing" do
       log = capture_log([level: :error], fn -> DataMigrationsRunner.run(Unfinished) end)

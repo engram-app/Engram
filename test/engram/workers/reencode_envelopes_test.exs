@@ -342,6 +342,43 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
       refute ReencodeEnvelopes.legacy_rows?(u.id)
     end
 
+    test "unique: hand_off is not blocked by its own executing predecessor, and a duplicate enqueue is dropped",
+         %{user: u, vault: v} do
+      legacy_note!(u, v, "a.md", @big)
+      legacy_note!(u, v, "b.md", @big)
+      tune(budget_ms: 0, batch_size: 1)
+
+      # Stand-in for the running predecessor, as Oban holds it while it runs.
+      {:ok, me} = Oban.insert(ReencodeEnvelopes.new(%{"user_id" => u.id}))
+      Repo.update_all(from(j in Oban.Job, where: j.id == ^me.id), set: [state: "executing"])
+
+      assert :ok = ReencodeEnvelopes.perform(me)
+      assert [%{args: %{"column" => "notes_content"}}] = all_enqueued(worker: ReencodeEnvelopes)
+
+      # run_pass racing the chain: dropped by `unique` while the hop is pending.
+      assert ReencodeEnvelopes.enqueue_missing() == 1
+      assert length(all_enqueued(worker: ReencodeEnvelopes)) == 1
+    end
+
+    test "a rescued predecessor whose successor exists cancels without writing",
+         %{user: u, vault: v} do
+      note = legacy_note!(u, v, "a.md", @big)
+      before = reload(Note, id: note.id)
+
+      {:ok, successor} =
+        Oban.insert(
+          ReencodeEnvelopes.new(%{
+            "user_id" => u.id,
+            "column" => "notes_content",
+            "after" => note.id
+          })
+        )
+
+      rescued = %Oban.Job{id: successor.id - 1, args: %{"user_id" => u.id}}
+      assert {:cancel, :superseded} = ReencodeEnvelopes.perform(rescued)
+      assert reload(Note, id: note.id) == before
+    end
+
     test "a rotation locked BETWEEN batches stops further writes", %{user: u, vault: v} do
       [a, b] =
         Enum.sort([legacy_note!(u, v, "a.md", @big).id, legacy_note!(u, v, "b.md", @big).id])

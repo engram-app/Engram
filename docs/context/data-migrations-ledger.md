@@ -23,7 +23,11 @@ others.
 - Optional `enabled?/0` (default `true`). A disabled migration is skipped
   entirely: no pass, and its ledger row is not opened, alerted on or marked
   done. Use it for a kill switch under which the work would be a no-op (a pass
-  that cannot succeed would otherwise page as stuck after 7 days).
+  that cannot succeed would otherwise page as stuck after 7 days). Disabled
+  time is not stuck time: if the row is already open, every disabled run
+  holds its clock (`DataMigrations.hold_clock/1` resets `opened_at` to now and
+  clears `alerted_at`), so re-enabling after a long disable does not page; the
+  7 days count from the last disabled run.
 - Optional `reverify?/0` (default `false`). See "Re-verify" below.
 - `run_pass/0` returns `:done` only when it found no work. Errors, users
   skipped mid DEK rotation and jobs still in flight are `:more`.
@@ -47,8 +51,10 @@ others.
 
 Bump `version/0` to reopen a migration. `DataMigrations.done?/2` treats a stored
 higher version as done, so a rollback to older code does not redo work. Only
-`true` is cached (in `:persistent_term`); a done migration never goes back to
-not-done without a code change, and a code change restarts the node.
+`true` is cached (in `:persistent_term`). A done migration goes back to
+not-done only through a code change (which restarts the node) or a re-verify
+that finds work (`DataMigrations.reopen/2`, below), which drops the cache on
+the node that ran it; other nodes keep their cached `true` until restart.
 
 `IndexVersions` is the exception: its `name/0` embeds the chunker, keyword and
 embed model versions, so bumping any of them is a new, not-done migration.
@@ -60,11 +66,15 @@ older node writing the old format during a rolling deploy or after a rollback,
 or writes while the migration was disabled) are never picked up until a
 version bump. A migration whose `reverify?/0` returns `true` gets its pass
 re-run once a day: the runner job scheduled in the 04:00 UTC hour (the same
-hour `ReconcileEmbeddings` re-checks `IndexVersions`). `:done` changes nothing;
-`:more` calls `DataMigrations.reopen/2` (clears `completed_at`, restarts the
-stuck clock, drops this node's cached `done?`), and the hourly passes take
-over until it closes again. Keep the pass cheap enough to run daily (an
-indexed EXISTS per user, not a full scan). `IndexVersions` predates this and
+hour `ReconcileEmbeddings` re-checks `IndexVersions`). `:done` calls
+`mark_done/2` (idempotent; it re-closes a row another node reopened while this
+node still cached `done?`); `:more` calls `DataMigrations.reopen/2` (clears
+`completed_at`, restarts the stuck clock, drops this node's cached `done?`),
+and the hourly passes take over until it closes again. Keep the pass cheap
+enough to run daily. `EnvelopeFormat`'s is one EXISTS per user per column:
+the `user_id` index narrows to the user's rows, but `octet_length` is not
+indexed, so it reads each of those rows until a match (cheap at prod scale:
+`octet_length` on a TOASTed bytea reads the TOAST pointer, not the value). `IndexVersions` predates this and
 keeps its own check in `ReconcileEmbeddings`.
 
 ## Cross-tenant discovery
@@ -89,7 +99,7 @@ touches `done?` must not be `async: true`, because the cache is node-global.
 | Name | Covers |
 |---|---|
 | `CrdtStateSeed` | Residue of the 2026-07-06 cutover that NULLed every `crdt_state`: each pass enqueues `BackfillCrdtState` for live-vault pairs holding a seedable note (kind note, not deleted, NULL state, no `crdt_update_log` rows) via `BackfillCrdtState.enqueue_missing/0`. A NULL-state note WITH a tail is excluded from both the enqueue and the done check, and the worker never seeds it: its real state is the un-checkpointed tail, and a snapshot seeded from content would be a second Yjs lineage that bind unions with it. Tail replay serves those notes. A selected note whose content never decrypts is a stuck row: it keeps the migration open until fixed. After each seed the worker evicts any resident room for the note (`CrdtRegistry.terminate_room/1`, no checkpoint), because a room bound before the seed holds an empty doc whose next edit would start a second lineage. Eviction is `:global`, so before EACH seed the worker checks every room is reachable (`Cluster.Readiness.rooms_reachable?/1`, after `:global.sync/0`): a single node always; a multi-node fleet only when its connected peers cover every `DNS_CLUSTER_QUERY` A record except its own IP, and an empty lookup (NXDOMAIN, timeout) counts as unreachable (with a role but no query, any peer). The first miss ends the batch with no further writes and no successor job; the migration stays open and the next pass starts over. If a tail row exists right after a kill, it logs `possible second lineage` (warning, with `note_id`). Restoring a soft-deleted vault enqueues `BackfillCrdtState` for it, since this migration may have closed while the vault was excluded. The worker runs on the `:crdt_backfill` queue (concurrency 1). |
-| `EnvelopeFormat` | #1872 PR 3: every compressible DB envelope (`notes.content_ciphertext`, `notes.crdt_state_ciphertext`, `crdt_update_log`, `vault_index_states`, `vault_index_update_log`) off legacy format 0. Each pass enqueues `ReencodeEnvelopes` (`:crypto_backfill`, priority 3) for every user with a legacy row: `octet_length(nonce) = 12 AND octet_length(ct) > 16` (16 = tag only = empty plaintext, legitimately format 0; a 13-byte nonce is done whatever its codec), plus `dek_version >= 2` for the note body (a pre-T3.6 body's empty AAD has no compression policy). No liveness filter: soft-deleted notes and vaults are re-encoded too. The worker decrypts and re-encrypts under the same DEK and AAD, reading only the key, AAD id and the one ciphertext + nonce pair, and writes only ciphertext and nonce, CAS on the old ciphertext, so a concurrent edit wins and `updated_at`/`version`/`seq` never move. A `crdt_state` rewrite NULLs `crdt_head` via the trigger; `WarmCrdtHeads` re-warms it. No `RotationLock` (that 503s clients): each batch reloads the user and snoozes while a rotation holds the lock; that gate plus the CAS is the safety, not the queue (Oban OSS limits are per node). A job works ~30 s, then enqueues its successor with its cursor (column + last id) before returning, so the chain is always in flight. A row that never decrypts is logged (`:warning`, table and row id) and keeps the migration open. `enabled?/0` is false under `ENVELOPE_COMPRESSION=false` (the worker also cancels itself then); `reverify?/0` is true. Attachments and `note_revisions.pending_*` are not re-encoded. |
+| `EnvelopeFormat` | #1872 PR 3: every compressible DB envelope (`notes.content_ciphertext`, `notes.crdt_state_ciphertext`, `crdt_update_log`, `vault_index_states`, `vault_index_update_log`) off legacy format 0. Each pass enqueues `ReencodeEnvelopes` (`:crypto_backfill`, priority 3) for every user with a legacy row: `octet_length(nonce) = 12 AND octet_length(ct) > 16` (16 = tag only = empty plaintext, legitimately format 0; a 13-byte nonce is done whatever its codec), plus `dek_version >= 2` for the note body (a pre-T3.6 body's empty AAD has no compression policy). No liveness filter: soft-deleted notes and vaults are re-encoded too. The worker decrypts and re-encrypts under the same DEK and AAD, reading only the key, AAD id and the one ciphertext + nonce pair, and writes only ciphertext and nonce, CAS on the old ciphertext, so a concurrent edit wins and `updated_at`/`version`/`seq` never move. A `crdt_state` rewrite NULLs `crdt_head` via the trigger; `WarmCrdtHeads` re-warms it. No `RotationLock` (that 503s clients): each batch reloads the user and snoozes while a rotation holds the lock; that gate plus the CAS is the safety, not the queue (Oban OSS limits are per node). A job works ~30 s, then enqueues its successor with its cursor (column + last id) before returning, so the chain is always in flight. One chain per user: `unique` on `user_id` over `available`/`scheduled`/`retryable` (not `executing`, so a job can insert its own successor) drops a duplicate enqueue, and a job that finds a newer in-flight job for its user (a Lifeline-rescued predecessor) cancels itself (`:superseded`). A row that never decrypts is logged (`:warning`, table and row id) and keeps the migration open. `enabled?/0` is false under `ENVELOPE_COMPRESSION=false` (the worker also cancels itself then); `reverify?/0` is true. Attachments and `note_revisions.pending_*` are not re-encoded. |
 | `IndexVersions` | Every content-current note stamped with the current chunker, keyword and embed model versions. `ReconcileEmbeddings` does the rebuild. Once done it drops the version term and skips the keyword scan, except for one hour a day (04:00-04:59 UTC) that re-verifies: a rollback then roll-forward or a restored soft-deleted vault puts stale notes back without reopening it. See `index-version-self-heal.md`. |
 
 ## Pruned (2026-10-06)
