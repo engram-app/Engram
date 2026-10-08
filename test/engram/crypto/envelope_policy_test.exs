@@ -25,30 +25,39 @@ defmodule Engram.Crypto.EnvelopePolicyTest do
   end
 
   describe "compression_policy/1" do
-    test "maps each compressed column prefix to its mode" do
-      for {aad, mode} <- [
-            {"notes:content:1", :zstd},
-            {"notes:crdt_state:1", :zstd},
-            {"vault_index_states:state:1", :zstd},
-            {"vault_index_update_log:update:1", :zstd},
-            {"note_revisions:content:1", :zstd},
-            {"attachments:content:1", :auto}
+    test "maps all six policy entries, built from real aad_for_row/3 AADs" do
+      id = Ecto.UUID.generate()
+
+      for {table, column, mode} <- [
+            {:notes, :content, :zstd},
+            {:notes, :crdt_state, :zstd},
+            {:vault_index_states, :state, :zstd},
+            {:vault_index_update_log, :update, :zstd},
+            {:note_revisions, :content, :zstd},
+            {:attachments, :content, :auto}
           ] do
-        assert Envelope.compression_policy(aad) == mode, aad
+        assert Envelope.compression_policy(Crypto.aad_for_row(table, column, id)) == mode,
+               "#{table}.#{column}"
       end
     end
 
-    test "real NUL-separated row AADs from aad_for_row/3 match too" do
+    test "non-policy columns and non-row AADs are :none" do
       id = Ecto.UUID.generate()
-      assert Envelope.compression_policy(Crypto.aad_for_row(:notes, :content, id)) == :zstd
-      assert Envelope.compression_policy(Crypto.aad_for_row(:notes, :crdt_state, id)) == :zstd
-      assert Envelope.compression_policy(Crypto.aad_for_row(:notes, :title, id)) == :none
-      assert Envelope.compression_policy(Crypto.aad_for_row(:attachments, :content, id)) == :auto
-      assert Envelope.compression_policy(Crypto.aad_for_row(:attachments, :path, id)) == :none
+
+      for {table, column} <- [
+            {:notes, :title},
+            {:notes, :path},
+            {:notes, :tags},
+            {:attachments, :path},
+            {:vaults, :name}
+          ] do
+        assert Envelope.compression_policy(Crypto.aad_for_row(table, column, id)) == :none,
+               "#{table}.#{column}"
+      end
     end
 
     test "everything else is :none" do
-      for aad <- ["", "dek:v1:1", "qdrant:x", "notes:title:1", "attachments:path:1"] do
+      for aad <- ["", "dek:v1:1", "qdrant:x", "notes:content:1"] do
         assert Envelope.compression_policy(aad) == :none, aad
       end
     end
@@ -124,6 +133,68 @@ defmodule Engram.Crypto.EnvelopePolicyTest do
     end
   end
 
+  describe "AadRebind with the policy on" do
+    test "a rebound legacy note ends up format 1 and decrypts" do
+      {:ok, user} = Engram.Fixtures.user_with_dek_fixture(dek_version: 1)
+      {:ok, vault, _} = Engram.Vaults.register_vault(user, "RebindPolicy", Ecto.UUID.generate())
+      {:ok, dek} = Crypto.get_dek(user)
+      {:ok, filter_key} = Crypto.dek_filter_key(user)
+
+      # Legacy row: every column sealed with empty AAD, dek_version 1.
+      enc = fn plain ->
+        {ct, n} = Envelope.encrypt(plain, dek)
+        {ct, n}
+      end
+
+      {content_ct, content_n} = enc.(@body)
+      {title_ct, title_n} = enc.("t")
+      {path_ct, path_n} = enc.("legacy/p.md")
+      {folder_ct, folder_n} = enc.("legacy")
+      {tags_ct, tags_n} = enc.(:erlang.term_to_binary([]))
+
+      legacy =
+        Repo.insert!(
+          %Note{
+            content_hash: "h",
+            seq: 1,
+            mtime: 0.0,
+            user_id: user.id,
+            vault_id: vault.id,
+            content_ciphertext: content_ct,
+            content_nonce: content_n,
+            title_ciphertext: title_ct,
+            title_nonce: title_n,
+            path_ciphertext: path_ct,
+            path_nonce: path_n,
+            path_hmac: Crypto.hmac_field(filter_key, "legacy/p.md"),
+            folder_ciphertext: folder_ct,
+            folder_nonce: folder_n,
+            folder_hmac: Crypto.hmac_field(filter_key, "legacy"),
+            tags_ciphertext: tags_ct,
+            tags_nonce: tags_n,
+            tags_hmac: [],
+            dek_version: 1
+          },
+          skip_tenant_check: true
+        )
+
+      assert byte_size(legacy.content_nonce) == 12
+      assert :ok = Engram.Crypto.AadRebind.rebind_user(user.id)
+
+      row = raw_note(legacy.id)
+      assert byte_size(row.content_nonce) == 13
+      assert byte_size(row.title_nonce) == 12
+
+      assert {:ok, @body} =
+               Envelope.decrypt(
+                 row.content_ciphertext,
+                 row.content_nonce,
+                 dek,
+                 Crypto.aad_for_row(:notes, :content, row.id)
+               )
+    end
+  end
+
   describe "KeyProvider.Local" do
     test "wrap blob size is unchanged by the policy" do
       {:ok, user} = Engram.Fixtures.user_with_dek_fixture(dek_version: 1)
@@ -133,6 +204,7 @@ defmodule Engram.Crypto.EnvelopePolicyTest do
       Application.put_env(:engram, :envelope_compression, false)
       {:ok, off} = Local.wrap_dek(dek, %{user_id: user.id})
 
+      assert byte_size(on) == 62
       assert byte_size(on) == byte_size(off)
       assert {:ok, ^dek} = Local.unwrap_dek(on, %{user_id: user.id})
     end

@@ -20,7 +20,7 @@ defmodule Engram.Crypto.Envelope do
 
   ## Compression policy
 
-  `mode_for/1` picks the mode from the AAD's `table:column:` prefix
+  `mode_for/1` picks the mode from the AAD's `Crypto.aad_prefix/2`
   (`compression_policy/1`): note content, CRDT state, vault index state and
   update log, and revisions get `:zstd`; attachment content `:auto`
   (sample first, skip already-compressed media); everything else, including
@@ -38,7 +38,7 @@ defmodule Engram.Crypto.Envelope do
 
   AAD shape per call site:
 
-    * Relational rows  — `"<table>:<column>:<row_id>"` (e.g. `"notes:content:42"`)
+    * Relational rows  — `Crypto.aad_for_row/3`: `<table> 0 <column> 0 <16-byte uuid>`
     * Qdrant payload   — `"qdrant:<collection>:<qdrant_id>:<field>"`
     * Wrapped DEK      — `"dek:v1:<user_id>"`
 
@@ -90,14 +90,17 @@ defmodule Engram.Crypto.Envelope do
 
   def decrypt(_ct_with_tag, _nonce, <<_::256>>, _aad), do: :error
 
+  # {table, column, mode}; prefixes come from Crypto.aad_prefix/2, the single
+  # definition of the AAD shape, and are built once at compile time.
   @policy [
-    {"notes:content:", :zstd},
-    {"notes:crdt_state:", :zstd},
-    {"vault_index_states:state:", :zstd},
-    {"vault_index_update_log:update:", :zstd},
-    {"note_revisions:content:", :zstd},
-    {"attachments:content:", :auto}
-  ]
+            {:notes, :content, :zstd},
+            {:notes, :crdt_state, :zstd},
+            {:vault_index_states, :state, :zstd},
+            {:vault_index_update_log, :update, :zstd},
+            {:note_revisions, :content, :zstd},
+            {:attachments, :content, :auto}
+          ]
+          |> Enum.map(fn {t, c, mode} -> {Engram.Crypto.aad_prefix(t, c), mode} end)
 
   @doc false
   # The compression mode for a ciphertext, from its AAD's table:column. One
@@ -110,13 +113,7 @@ defmodule Engram.Crypto.Envelope do
   end
 
   @doc false
-  # Real row AADs come from `Crypto.aad_for_row/3` and are NUL-separated
-  # (`table 0 column 0 row_id`); the policy table is written with ":" for
-  # readability, so normalise the separator before matching. Without this no
-  # real AAD ever matched and the policy silently never applied.
   def compression_policy(aad) do
-    aad = :binary.replace(aad, <<0>>, ":", [:global])
-
     Enum.find_value(@policy, :none, fn {prefix, mode} ->
       if String.starts_with?(aad, prefix), do: mode
     end)

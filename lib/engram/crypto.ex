@@ -19,8 +19,9 @@ defmodule Engram.Crypto do
 
   # T3.6 / H1 — per-row encryption format version.
   #   1 = legacy: ciphertext was written with empty AAD (`<<>>`).
-  #   2 = AAD-bound: ciphertext is bound to "<table>:<column>:<row_id>"
-  #       (or "qdrant:<collection>:<qdrant_id>:<field>" for Qdrant payloads).
+  #   2 = AAD-bound: ciphertext is bound to `<table> 0 <column> 0 <16-byte uuid>`
+  #       (NUL-separated, see `aad_for_row/3`; or
+  #       "qdrant:<collection>:<qdrant_id>:<field>" for Qdrant payloads).
   # Writers stamp `:aad_bound` (= 2) on every new row. Reads dispatch on the
   # row's stored value: legacy rows decrypt with empty AAD, AAD-bound rows
   # reconstruct the bind string from the row's identity.
@@ -54,14 +55,21 @@ defmodule Engram.Crypto do
   the schema swap is destructive (no in-place backfill of UUID PKs).
   """
   @spec aad_for_row(atom() | binary(), atom() | binary(), binary()) :: binary()
-  def aad_for_row(table, column, row_id) when is_binary(table) and is_binary(column),
-    do: IO.iodata_to_binary([table, 0, column, 0, encode_row_id(row_id)])
+  def aad_for_row(table, column, row_id),
+    do: aad_prefix(table, column) <> encode_row_id(row_id)
 
-  def aad_for_row(table, column, row_id) when is_atom(table),
-    do: aad_for_row(Atom.to_string(table), column, row_id)
+  @doc """
+  The row-independent head of `aad_for_row/3`: `<table> 0 <column> 0`. The one
+  place the v2 AAD shape is defined; `Envelope`'s compression policy matches on it.
+  """
+  @spec aad_prefix(atom() | binary(), atom() | binary()) :: binary()
+  def aad_prefix(table, column) when is_atom(table), do: aad_prefix(Atom.to_string(table), column)
 
-  def aad_for_row(table, column, row_id) when is_atom(column),
-    do: aad_for_row(table, Atom.to_string(column), row_id)
+  def aad_prefix(table, column) when is_atom(column),
+    do: aad_prefix(table, Atom.to_string(column))
+
+  def aad_prefix(table, column) when is_binary(table) and is_binary(column),
+    do: table <> <<0>> <> column <> <<0>>
 
   defp encode_row_id(row_id) when is_binary(row_id) do
     case Ecto.UUID.dump(row_id) do

@@ -84,20 +84,23 @@ defmodule Engram.Crypto.EnvelopeTest do
 
   describe "compression policy (#1872)" do
     test "maps each compressible table:column, everything else :none" do
-      assert Envelope.compression_policy("notes:content:1") == :zstd
-      assert Envelope.compression_policy("notes:crdt_state:1") == :zstd
-      assert Envelope.compression_policy("vault_index_states:state:1") == :zstd
-      assert Envelope.compression_policy("vault_index_update_log:update:1") == :zstd
-      assert Envelope.compression_policy("note_revisions:content:1") == :zstd
-      assert Envelope.compression_policy("attachments:content:1") == :auto
+      id = Ecto.UUID.generate()
+      aad = &Engram.Crypto.aad_for_row/3
+      assert Envelope.compression_policy(aad.(:notes, :content, id)) == :zstd
+      assert Envelope.compression_policy(aad.(:notes, :crdt_state, id)) == :zstd
+      assert Envelope.compression_policy(aad.(:vault_index_states, :state, id)) == :zstd
+      assert Envelope.compression_policy(aad.(:vault_index_update_log, :update, id)) == :zstd
+      assert Envelope.compression_policy(aad.(:note_revisions, :content, id)) == :zstd
+      assert Envelope.compression_policy(aad.(:attachments, :content, id)) == :auto
 
-      for aad <- ["", "attachments:path:1", "dek:v1:1", "qdrant:engram_notes:1:text"],
-          do: assert(Envelope.compression_policy(aad) == :none)
+      for a <- ["", aad.(:attachments, :path, id), "dek:v1:1", "qdrant:engram_notes:1:text"],
+          do: assert(Envelope.compression_policy(a) == :none)
     end
 
     test "is off by default: every write is format 0" do
-      assert Envelope.mode_for("notes:content:1") == :none
-      {_ct, nonce} = Envelope.encrypt(String.duplicate("abc ", 5_000), @dek, "notes:content:1")
+      aad = Engram.Crypto.aad_for_row(:notes, :content, Ecto.UUID.generate())
+      assert Envelope.mode_for(aad) == :none
+      {_ct, nonce} = Envelope.encrypt(String.duplicate("abc ", 5_000), @dek, aad)
       assert byte_size(nonce) == 12
     end
   end
