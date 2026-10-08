@@ -46,7 +46,9 @@ defmodule Engram.Native do
     {:text_diff, :text_diff_nif, :text_diff_dirty_nif, 2},
     {:utf16_offsets, :utf16_offsets_nif, :utf16_offsets_dirty_nif, 2},
     {:hmac_hex_many, :hmac_hex_many_nif, :hmac_hex_many_dirty_nif, 3},
-    {:json_decode, :json_decode_nif, :json_decode_dirty_nif, 1}
+    {:json_decode, :json_decode_nif, :json_decode_dirty_nif, 1},
+    {:envelope_seal, :envelope_seal_nif, :envelope_seal_dirty_nif, 4},
+    {:envelope_open, :envelope_open_nif, :envelope_open_dirty_nif, 4}
   ]
 
   # NIFs reached only through a wrapper below that fixes their schedule.
@@ -56,7 +58,9 @@ defmodule Engram.Native do
     pack_f32_nif: 1,
     dense_json_nif: 1,
     sparse_json_nif: 2,
-    md_outline_nif: 1
+    md_outline_nif: 1,
+    # Test hook (fixed nonce, for :crypto parity). Never in production.
+    envelope_seal_with_nonce_nif: 5
   ]
 
   # Stubs Rustler replaces on load.
@@ -223,6 +227,34 @@ defmodule Engram.Native do
     {:ok, sized(:json_decode, text, [text])}
   rescue
     ArgumentError -> {:error, :invalid_json}
+  end
+
+  @doc """
+  `Engram.Crypto.Envelope.encrypt/3`'s engine: `{ct_with_tag, nonce_field}`.
+  `mode` `:none` writes format 0 (byte for byte what `:crypto` wrote);
+  `:zstd`/`:auto` write format 1 (see `native/engram_native/src/envelope.rs`).
+  Raises `ArgumentError` on a key that is not 32 bytes, as `:crypto` did.
+  """
+  def envelope_seal(plain, key, aad, mode)
+      when is_binary(plain) and is_binary(key) and is_binary(aad) and
+             mode in [:none, :zstd, :auto] do
+    case sized(:envelope_seal, plain, [plain, key, aad, mode]) do
+      {_ct, _nonce} = sealed -> sealed
+      :error -> raise ArgumentError, "envelope_seal: AES-256-GCM needs a 32-byte key"
+    end
+  end
+
+  @doc """
+  `Engram.Crypto.Envelope.decrypt/4`'s engine: `{:ok, plain}` for any
+  format, `:error` for anything that does not authenticate (wrong key,
+  AAD, nonce, tampered or truncated ciphertext).
+  """
+  def envelope_open(ct, nonce, key, aad)
+      when is_binary(ct) and is_binary(nonce) and is_binary(key) and is_binary(aad) do
+    case sized(:envelope_open, ct, [ct, nonce, key, aad]) do
+      :error -> :error
+      plain -> {:ok, plain}
+    end
   end
 
   # Every NIF entry point goes through here: one event shape for all of them,
