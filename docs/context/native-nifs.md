@@ -54,6 +54,203 @@ deletions: the minimum made each cut depend on where the chunk began.
 `chunker_golden.json.gz` pins v3 output; regenerate it only with a version
 bump.
 
+### Envelope engine (`envelope_seal` / `envelope_open`, 2026-10-07, #1872)
+
+`Engram.Crypto.Envelope` runs on `native/engram_core/src/envelope.rs`
+(AES-256-GCM via `ring` 0.17, zstd level 3). Format 0 is byte for byte what
+`:crypto` wrote (`test/support/crypto_oracle.ex` is the oracle; two KATs in
+envelope.rs pin it too); format 1 adds a codec byte and zstd. Formats and
+policy: `encryption-operations.md` "Envelope formats". Scheduling: seal and
+format-0 open run dirty above 16 KB; a format-1 open (13-byte nonce field)
+always runs dirty, because a zstd body's size does not bound its work (a
+1,568 B ciphertext inflated to 50 MB in 182 ms, measured). Decode streams (no
+allocation from the declared size) and refuses a frame whose zstd window
+buffer would pass 2^23 (zstd's default allows 2^27; level 3 writes at most
+2^21).
+
+Where it lives: `native/engram_core` is a pure-Rust crate (no rustler, no
+RNG, `forbid(unsafe_code)` outside its tests) holding the engine, its KATs
+and engine tests, and the ignored bench. The plugin and web app will run the
+same crate as wasm32. `native/engram_native` depends on it by path and keeps
+only the NIF edge: atoms to `Mode`, BEAM binaries as the `alloc` buffers, the
+peak, and the nonce. The core's `seal` takes the 12-byte nonce from its
+caller; the NIF draws it from the OS with `getrandom` right before the call.
+Keep it that way: the core drawing its own randomness would make the wasm
+build import an entropy hook from its host. `ring` still links getrandom
+0.2, so engram_core enables getrandom's `custom` feature for
+wasm32-unknown-unknown only (a host hook nothing in the core calls); native
+builds are unaffected. Linked into a cdylib, the seal/open path imports
+nothing (measured: 0 imports), because the linker drops ring's unreachable
+RNG; CI checks that on every run (below), so a change that makes the hook
+reachable fails there instead of in a client.
+
+`native/` is one Cargo workspace (`native/Cargo.toml`): members engram_core,
+engram_native and the CI-only wasm_guard, one `Cargo.lock`, one
+`rust-toolchain.toml`, the shared release profile (LTO, one codegen unit), output in `native/target`. Rustler
+builds the engram_native member as before and gathers it and its path
+dependencies into the NIF module's `@external_resource`s, so a content edit
+under engram_core rebuilds the NIF on `mix compile` (touching a file without
+changing it does not; Mix compares digests). It does not track the workspace
+root, so `Engram.Native` adds `native/Cargo.toml`, `Cargo.lock` and
+`rust-toolchain.toml` itself; without that a lockfile bump would not rebuild
+the NIF locally.
+
+CI: verify.yml `unit-tests` runs `cargo fmt --all`, `clippy --workspace
+--all-features` and `cargo test --workspace --all-features` in native/, then a
+wasm guard. An rlib has no import section (imports exist only once something
+is linked), so the guard links `native/wasm_guard`, a CI-only cdylib that
+exports one function running the envelope seal and open, for
+wasm32-unknown-unknown, and `wasm_guard/imports.py` (stdlib Python, reads the
+module's import and export sections) fails if the module imports anything
+(allow-list: empty) or lacks the export (so a module emptied by the linker
+cannot pass). Proven both ways: the real module has 0 imports; a guard with an
+`extern "C"` host call fails with `[('env', 'host_entropy')]`. ring and zstd
+compile C, which for wasm32 needs a clang with the wasm backend, and the
+runner user has no sudo. So the toolchain step installs the wasm32 target with
+rustup, and the guard unpacks the pinned wasi-sdk release (sha256-checked,
+once per VM, under flock, renamed into place only when complete, other
+versions' copies removed) and points
+`CC_wasm32_unknown_unknown`/`AR_wasm32_unknown_unknown` at its clang and
+llvm-ar. The guard also checks the target is installed, so a fresh cargo
+fingerprint cannot hide a missing target. No wasm-bindgen yet. cron.yml
+`cargo audit` reads the one lockfile. Local repro (no system clang needed):
+download and unpack `wasi-sdk-34.0-x86_64-linux.tar.gz`, then in native/:
+`CC_wasm32_unknown_unknown=<sdk>/bin/clang
+AR_wasm32_unknown_unknown=<sdk>/bin/llvm-ar cargo build --release --locked -p
+wasm_guard --target wasm32-unknown-unknown && python3 wasm_guard/imports.py
+target/wasm32-unknown-unknown/release/wasm_guard.wasm` (after `rustup target
+add wasm32-unknown-unknown`).
+
+zstd contexts are thread-local: once compression is on, each scheduler
+thread (normal and dirty) that ever sealed or opened a zstd row keeps one
+compression and one decompression context resident for the life of the node.
+They are reused, not leaked; `NativeLeak` warms them before it counts.
+
+Copies: seal and open allocate the output as a BEAM binary (`OwnedBinary`),
+copy the input into it ONCE and run AES-GCM in place. Raw format 1 returns the
+plaintext as a sub-binary past the codec byte. Only the zstd paths add a copy
+(the compressed or decoded `Vec`). So the reported peak is Rust scratch only
+(about 0 for `:none` and raw); the output binary shows in
+`:erlang.memory(:binary)` like every other NIF's output.
+
+Why `ring`, not RustCrypto `aes-gcm` (the first cut): pure-Rust microbench,
+`cargo test --release -p engram_core bench_aes_gcm -- --ignored --nocapture`
+in native/. It lived in native/engram_native when these numbers were taken.
+Setup (2026-10-07, Xeon E5-2650 v2: AES-NI + PCLMUL, AVX, no AVX2/MOVBE; best
+of 15 x 50; each call copies the input into the work buffer, as the NIF does;
+load 1.1-1.5; microseconds, three runs):
+
+| Size | `aes-gcm` seal / open | `ring` seal / open | open MB/s aes-gcm / ring | ring speedup |
+|---|---|---|---|---|
+| 2 KB | 3.5-9.9 / 3.5-9.8 | 2.1-5.4 / 2.1-5.4 | 210-580 / 383-961 | 1.7-1.8x |
+| 10 KB | 19-50 / 19-49 | 10.5-26.5 / 10.3-26.6 | 208-545 / 385-997 | 1.8x |
+| 100 KB | 193-510 / 180-499 | 103-277 / 104-275 | 205-570 / 372-987 | 1.7-2.8x |
+| 1 MB | 1,950-2,030 / 1,926-2,122 | 1,082-1,139 / 1,095-1,144 | 494-544 / 917-957 | 1.7-1.9x |
+
+`openssl speed -evp aes-256-gcm` on the same box: 724 MB/s at 1 KB, 924 at
+8 KB, 975 at 16 KB, 853 at 1 MB. `ring` (BoringSSL's assembly) reaches
+OpenSSL's throughput; `aes-gcm` 0.10 tops out at about 550 MB/s (runtime
+AES-NI/PCLMUL detection works, but no stitched AES+GHASH loop). The low
+small-size figures in some runs are CPU clock ramp, not the library: the ratio
+held at every size. The rule was "switch if ring is >= 1.3x at 100 KB and
+1 MB"; it was 1.7-2.8x at 100 KB and 1.7-1.9x at 1 MB. On AVX2/VAES prod CPUs both OpenSSL and ring take
+their wider paths; `aes-gcm` 0.10 has none. Costs of the switch: `ring` builds
+C and assembly with `cc` (the Dockerfile builder has build-essential; no perl
+or nasm on x86-64 Linux), and its key schedule is not zeroized on drop
+(`aes-gcm`'s `zeroize` feature did that). The raw key stays in the BEAM
+binary either way. `aes-gcm` stays only as a dev-dependency for the bench.
+
+BEAM-level, interleaved (`Native.envelope_open/4` against
+`CryptoOracle.decrypt/4` in the same loop, best of 40 x 20, three rounds, random
+plaintext, `:none`; load 2.1-2.5; microseconds):
+
+| Size | Oracle enc / dec | Before (aes-gcm, 2 copies) seal / open | After (ring, 1 copy) seal / open |
+|---|---|---|---|
+| 100 KB | 113-131 / 99-109 | 230 / 202-554 | 118-123 / 113-123 |
+| 1 MB | 1,821-2,017 / 1,505-1,557 | 2,683 / 2,428-2,612 | 1,696-1,765 / 1,493-1,569 |
+
+The oracle's seal includes its `ct <> tag` concat, so the engine's seal is
+slightly ahead of it; open is level with OpenSSL.
+
+The original bench script (`Native` cells measured after the oracle's, best of
+15 x 20, seeded markdown; runs on this box vary up to 1.5x between back-to-back
+runs, so read ranges, not cells). After, three runs at load 1.8-2.5:
+
+| Size | Oracle enc / dec | `:none` seal / open | `:zstd` seal / open | zstd ratio |
+|---|---|---|---|---|
+| 2 KB | 8.7-14.2 / 5.0-8.0 | 6.6-10.4 / 4.8-7.8 | 39-60 / 14-22 | 1.7x |
+| 10 KB | 25-39 / 17-28 | 18-32 / 17-28 | 153-245 / 46-68 | 1.95x |
+| 100 KB | 230-332 / 119-192 | 128-377 / 137-334 | 1,057-1,426 / 288-324 | 2.8x |
+| 1 MB | 2,048-2,203 / 1,271-1,439 | 1,688-1,860 / 1,850-1,897 | 10,462-10,873 / 3,268-3,716 | 3.05x |
+
+Before, same script, load 1.3-1.4: 2 KB 15.6 / 12.3, 10 KB 56 / 52, 100 KB
+253 / 229, 1 MB 2,779 / 2,659 (`:none` seal / open).
+The 1 MB open gap to the oracle in this script (1,850 vs 1,300) does not
+reproduce interleaved or with the `Native` cells measured first (1,664 vs
+1,575): it is run order and box noise, not the engine.
+
+Findings:
+
+- With `ring` and one copy, format 0 is level with OpenSSL at every size
+  (before: 1.3-2x slower from 10 KB up). The remaining copy (input into the
+  output binary) is needed: `ring` only works in place and the input binary is
+  immutable. The microbench's `copy only` column times it into a warm
+  buffer: 4.0-4.5 us at 100 KB, 74-194 us at 1 MB (three runs, load 1.5-2.4).
+  A fresh output binary also pays first-touch page faults, as OpenSSL's
+  output does.
+- zstd seal costs 4-6x a plain seal (level 3 compresses at about 100 MB/s, 1 MB
+  in 10.5 ms) but is the cheaper side of the trade: the write is rare, the read
+  is `open` about 2x a plain open at 1 MB (zstd decode, not AES). `:auto` skips
+  the full pass for incompressible blobs after a 64 KB sample.
+- Ratio is data-dependent: 1.7x at 2 KB (short window) to 3x at 1 MB on word
+  salad. Real notes with repeated structure compress better; Markdown with
+  base64 payloads or already-compressed attachments will not.
+- A 1 MB note seals with zstd in about 10.5 ms on a dirty scheduler. That is a
+  write-path cost only; the throughput limit is the compressor, not the
+  scheduler or the cipher.
+
+#### Envelope telemetry: small fields are counted in the NIF, not emitted
+
+Listings decrypt titles, paths and tags per row, each tens of bytes, so the
+per-call cost of `Envelope.decrypt` on a tiny input matters more than its
+throughput. Measured 2026-10-08 (same Xeon E5-2650 v2, load 2.5-3.7, best of
+7 x 100k calls, ns per call, AAD `notes:title`, mode `:none`; the
+"+ PromEx" rows attach `Engram.PromEx.Native`'s real handlers through
+`TelemetryMetricsPrometheus.Core`, as prod runs; `:crypto` is
+`test/support/crypto_oracle.ex`; ranges are across runs):
+
+| Size | Path | encrypt | decrypt |
+|---|---|---|---|
+| 40 B | `:crypto` (old, `CryptoOracle`) | 4,294-4,770 | 1,344-1,446 |
+| 40 B | raw inline NIF, no wrapper | 2,583-2,598 | 1,168-1,375 |
+| 40 B | Envelope, per-call event, no handlers (before) | 4,284 | 1,946 |
+| 40 B | Envelope, per-call event + PromEx (before, as prod ran it) | 14,494 | 10,387 |
+| 40 B | Envelope + PromEx, inline counted in the NIF (after) | 3,052 | 1,261 |
+| 2 KB | `:crypto` (old) | 7,610-9,441 | 3,995-4,583 |
+| 2 KB | raw inline NIF | 4,832-4,879 | 3,364-3,898 |
+| 2 KB | Envelope, per-call event + PromEx (before) | 21,394 | 17,179 |
+| 2 KB | Envelope + PromEx, inline counted (after) | 5,301 | 3,368 |
+
+Before, the per-call `[:engram, :nif, :call, :stop]` event with PromEx's three
+handlers (two distributions, one sum) cost about 9 us, so a 40-byte decrypt
+was 7x `:crypto`. An interleaved check (15 alternating rounds of 100k) put
+the after path at 1,213 ns min / 1,298 median against `:crypto`'s 1,411 /
+1,467. Inline format-0 calls (seal `:none`, open with a 12-byte nonce, up to
+16 KB) now call the inline NIF directly and emit no event; format 1 and every
+dirty call still go through `call/4`. The counts did not go: the NIF counts
+EVERY seal and open (calls, input bytes) in relaxed atomics,
+`Engram.Native.envelope_counts/0`, which `Engram.PromEx.Native` polls as
+`[:engram, :nif, :envelope]` (gauges of cumulative values: read with
+`rate()`). Counting in Elixir first was too slow: `:persistent_term.get` plus
+two `:counters.add` cost about 300 ns per call, leaving a 40-byte decrypt
+26% behind `:crypto`. Nothing observable is lost: an inline envelope call
+runs in microseconds (the duration histogram's first bucket is 1 ms) and its
+peak is bounded by its input, so per call those histograms only counted it.
+
+No batch decrypt: callers decrypt one field per call (`Crypto.decrypt_*`),
+and with the wrapper at about 0.1 us over the raw NIF, a batch NIF would save
+almost nothing per field.
+
 Measured on the search and upsert NIFs (2026-10-04, dev box, min of 5-7,
 identical output to the Elixir they replaced):
 
@@ -264,6 +461,9 @@ following closes part of it:
 3. **One telemetry shape for every NIF.** `Engram.Native.call/4` emits
    `[:engram, :nif, :call, :stop]` with `duration`, `native_peak_bytes`,
    `input_bytes`, metadata `%{nif: atom}`. `Engram.PromEx.Native` exports it.
+   One exception: inline format-0 envelope calls emit nothing and are counted
+   in the NIF instead (above, "Envelope telemetry"); the event cost 7x the
+   crypto on a 40-byte field.
 4. **Watch what nobody attributes.** `[:engram, :vm, :native_memory]` (polled
    every 15 s) reports `rss - :erlang.memory(:total)` as `unaccounted`. A
    third-party NIF on its own allocator only shows up there. It is tens of
@@ -320,10 +520,12 @@ bumping pulldown-cmark: `ENGRAM_FUZZ_CASES=2000000 ENGRAM_FUZZ_SEED=7 cargo test
 ## Scheduling
 
 `schedule = "DirtyCpu"` on everything whose input size the caller controls,
-EXCEPT small inputs on a hot path. Ten NIFs export a normal and a
+EXCEPT small inputs on a hot path. Twelve NIFs export a normal and a
 `_dirty_nif` variant: `link_extract`, `note_title`, `note_meta`, `chunk`,
 `frontmatter_split`, `frontmatter_parse`, `text_diff`, `utf16_offsets`,
-`hmac_hex_many`, `json_decode`. `md_outline` does not: comrak takes ~10 ms on 16 KB of
+`hmac_hex_many`, `json_decode`, `envelope_seal`, `envelope_open`. `envelope_open`
+also forces dirty for every format-1 ciphertext whatever its size (decompression
+work is not bounded by input size; `sized/4`'s `force_dirty`). `md_outline` does not: comrak takes ~10 ms on 16 KB of
 dense markup (tight list, `# h` lines; 0.1 ms on prose), so it is always
 dirty. Up to 16 KB of input (`@inline_max`, well under 1 ms) runs
 on the calling scheduler. A note write must not queue behind a long
@@ -334,7 +536,8 @@ One rule, one place each side. Rust: declare the pair with
 add `{name, inline_nif, dirty_nif, arity}` to `@sized` in `Engram.Native`
 (it generates the stubs) and call `sized(name, input, args)`; `input` is
 what `call/4` measures (a binary, iolist or byte count). Never write the
-`> @inline_max` check yourself.
+`> @inline_max` check yourself; the one exception is the envelope pair's
+event-free inline path inside `Engram.Native` ("Envelope telemetry").
 Telemetry metadata carries `dirty: true | false`.
 Dirty CPU schedulers cannot be preempted and default to one per normal
 scheduler. **Prod tasks run ONE** (`task_cpu_units = 512` → `BEAM_SCHEDULERS=1`,
@@ -346,7 +549,7 @@ adding callers.
 
 ## Build
 
-- Toolchain pinned in `native/engram_native/rust-toolchain.toml` and installed
+- Toolchain pinned in `native/rust-toolchain.toml` (the workspace) and installed
   by rustup in the Dockerfile builder stage and CI's mix-builder image (keep
   the three versions in sync). Runner-host jobs install rustup into the
   runner user's home once per VM. The runtime image has no Rust.
@@ -361,6 +564,18 @@ adding callers.
 - Adding a NIF function: add it to the Rust `#[rustler::nif]` list AND the
   stub in `Engram.Native`, route it through `call/4` so it emits telemetry,
   and give it a peak-bound and a leak test.
+- Test-only NIFs (the fixed-nonce `envelope_seal_with_nonce_nif`) sit behind
+  the `engram_native` cargo feature `test-hooks`, which `config/dev.exs` and
+  `config/test.exs` pass through Rustler (`config :engram, Engram.Native,
+  features: [...]`); `Engram.Native` defines their stubs only under the same
+  config. `prod.exs` does not set it, so the release `.so` does not export
+  them. Dev and test must agree: Rustler writes one `priv/native/*.so` that
+  every `MIX_ENV` shares through the `_build/<env>/lib/engram/priv` symlink,
+  and a module whose NIF library exports a function it lacks fails to load.
+  `Engram.Native` lists that `.so` as an `@external_resource`, so after a
+  local `MIX_ENV=prod mix compile` the next dev/test compile sees its digest
+  change, recompiles the module and rebuilds the env's own library. (Touching
+  `native.ex` would not: Mix compares digests, not mtimes.)
 - rustler: the crate and the hex package move together (0.38 both). The hex
   dep carries `override: true` because lingua pins an optional
   `rustler ~> 0.37.1` it only uses to force-build; lingua loads its

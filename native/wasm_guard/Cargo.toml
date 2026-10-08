@@ -1,0 +1,15 @@
+# CI-only (never shipped): a wasm32 cdylib that exports engram_core's seal
+# and open, so CI can link the wasm the clients will link and read its
+# import section. An rlib cannot answer "what does the module import from
+# its host": imports only exist once something is linked.
+[package]
+name = "wasm_guard"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+engram_core = { path = "../engram_core" }

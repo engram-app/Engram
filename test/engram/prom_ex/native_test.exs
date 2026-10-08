@@ -20,9 +20,21 @@ defmodule Engram.PromEx.NativeTest do
     assert rss > 0 and gap == rss - total and is_integer(live)
   end
 
+  test "the poll emits [:engram, :nif, :envelope] per counted NIF" do
+    ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :envelope]])
+    :ok = Native.execute_envelope_counts()
+
+    for nif <- [:envelope_seal, :envelope_open] do
+      assert_receive {[:engram, :nif, :envelope], ^ref, %{calls: calls, input_bytes: bytes},
+                      %{nif: ^nif}}
+
+      assert is_integer(calls) and is_integer(bytes)
+    end
+  end
+
   test "metric definitions build" do
     opts = [otp_app: :engram]
     assert %Event{} = Native.event_metrics(opts)
-    assert %Polling{} = Native.polling_metrics(opts)
+    assert [%Polling{}, %Polling{}] = Native.polling_metrics(opts)
   end
 end

@@ -97,6 +97,14 @@ env:
   # so every `mix deps.get` (prebuild-mix/unit-tests/lint) and the docker builds
   # pull hex from the LAN instead of WAN. Signatures still verified client-side.
   HEX_MIRROR: "http://10.0.20.214:8090"
+  # Every repo path whose bytes can reach the shipped image: what the
+  # Dockerfile COPYs (native/ is the Rust NIF source, rel/ the release
+  # env.sh) plus .dockerignore, which shapes the build context. ONE
+  # definition, read unquoted (word-split) by the CI image tag hashes and
+  # build-and-publish-image's DEPLOYABLE diff, so a path added to the
+  # Dockerfile cannot reach one list and miss the other. Missing native/
+  # here once meant a native-only merge redeployed the OLD image.
+  DEPLOYABLE_PATHS: "Dockerfile entrypoint.sh .dockerignore rel mix.exs mix.lock config lib priv frontend native"
 
   # Central FastRaid MinIO credentials for the attachment store, at WORKFLOW
   # level for the same reason LOCAL_REGISTRY is: every job that so much as
@@ -232,11 +240,7 @@ jobs:
         # sync deliberately: this job always runs, so its value is the fallback
         # when the prebuild is skipped.
         run: |
-          HASH=$(git ls-tree -r HEAD -- \
-            Dockerfile entrypoint.sh \
-            mix.exs mix.lock \
-            config lib priv frontend \
-            | sha256sum | cut -c1-12)
+          HASH=$(git ls-tree -r HEAD -- $DEPLOYABLE_PATHS | sha256sum | cut -c1-12)
           if [ -n "${LOCAL_REGISTRY:-}" ]; then
             IMAGE="${LOCAL_REGISTRY}/engram-ci:${HASH}"
           else
@@ -325,11 +329,14 @@ jobs:
           # next push hits the cache → `lint` skips → loosened rule rides in
           # without ever being re-validated. `.dockerignore` affects what's
           # in the Docker build context, which can change image bytes.
+          # `rel/` ships in the image (release env.sh); listed explicitly
+          # rather than via DEPLOYABLE_PATHS because that set includes
+          # mix.exs, which is hashed below with its version line stripped.
           BACKEND_HASH=$({
             git ls-tree -r HEAD -- \
-              lib priv config test frontend \
+              lib priv config test frontend native \
               Dockerfile entrypoint.sh .dockerignore \
-              mix.lock \
+              rel mix.lock \
               .formatter.exs .credo.exs .dialyzer_ignore.exs .sobelow-conf .sobelow-skips \
               ci/compose.yml ci/compose.local.yml ci/compose.database.yml \
               .github/workflows/verify.yml
@@ -552,11 +559,7 @@ jobs:
       - name: Compute image tag
         id: tag
         run: |
-          HASH=$(git ls-tree -r HEAD -- \
-            Dockerfile entrypoint.sh \
-            mix.exs mix.lock \
-            config lib priv frontend \
-            | sha256sum | cut -c1-12)
+          HASH=$(git ls-tree -r HEAD -- $DEPLOYABLE_PATHS | sha256sum | cut -c1-12)
           # Registry-qualified ref so any runner can pull it. LOCAL_REGISTRY is
           # hard-set at the workflow level (:5001); guard anyway so a misconfig
           # degrades to the legacy bare tag (same-host-only) instead of
@@ -2522,16 +2525,16 @@ jobs:
 
       - name: Rust toolchain (native/ NIFs)
         # rustup into the runner user's home, once per VM, at the version
-        # native/engram_native/rust-toolchain.toml pins. Under flock: the
-        # runners on one VM share ~/.rustup, and rustup is not safe to run
-        # concurrently.
+        # native/rust-toolchain.toml pins, with the wasm32 target for the
+        # engram_core guard below. Under flock: the runners on one VM share
+        # ~/.rustup, and rustup is not safe to run concurrently.
         run: |
           mkdir -p "$HOME/.cargo"
-          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/engram_native/rust-toolchain.toml)
+          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/rust-toolchain.toml)
           flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
             [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
-            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --component rustfmt --component clippy --no-self-update
+            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --component rustfmt --component clippy --target wasm32-unknown-unknown --no-self-update
           ' "$RUST_VERSION"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
@@ -2539,20 +2542,85 @@ jobs:
         # rustfmt and clippy (-D warnings) gate first, then the Rust-only
         # tests: the segmented-parse fuzz (segmented == whole-document, 20k
         # cases; cron.yml native-deep runs 2M x 3 seeds), the pulldown-cmark
-        # panic guard, linear-time bounds. mix test only loads the NIF, so
-        # without this step they ran nowhere, and Dependabot auto-merges
-        # grouped cargo bumps.
+        # panic guard, linear-time bounds, the envelope engine's KATs. mix
+        # test only loads the NIF, so without this step they ran nowhere,
+        # and Dependabot auto-merges grouped cargo bumps. One Cargo
+        # workspace (native/): engram_core and engram_native.
         # Release for the timing asserts, without LTO (that is for the
         # shipped .so). The target dir persists per VM; cargo locks it.
         env:
           CARGO_PROFILE_RELEASE_LTO: "false"
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
-        working-directory: native/engram_native
+        working-directory: native
         run: |
           export CARGO_TARGET_DIR="$HOME/.cache/engram-native-target"
-          cargo fmt --check
-          cargo clippy --release --locked --all-targets -- -D warnings
-          cargo test --release --locked
+          cargo fmt --all --check
+          # Default features too: `test-hooks` is off in the prod build, so
+          # code that only breaks without it is invisible to --all-features.
+          cargo clippy --workspace --release --locked --all-targets -- -D warnings
+          cargo clippy --workspace --release --locked --all-targets --all-features -- -D warnings
+          cargo test --workspace --release --locked --all-features
+
+      - name: engram_core links for wasm32 with no host imports (native/)
+        # The plugin and web app will run native/engram_core as wasm32, so a
+        # dependency or an API that cannot target it must fail here, and so
+        # must one that makes the module import from its host (entropy, WASI,
+        # any `env` function). An rlib has no imports to read, so this links
+        # native/wasm_guard, a CI-only cdylib exporting the envelope seal and
+        # open, and wasm_guard/imports.py fails on any import (and on a
+        # missing export, so the check cannot pass on an empty module).
+        # ring and zstd compile C, which for wasm32 needs a clang with the
+        # wasm backend; the runner user has no sudo for a distro clang. So:
+        # the pinned wasi-sdk release (clang + llvm-ar), sha256-checked,
+        # unpacked once per VM into the runner home under flock (as rustup
+        # above), renamed into place only when complete, and any other
+        # version's copy removed (each is ~0.6 GB). The wasm32 target comes
+        # from the toolchain step.
+        env:
+          WASI_SDK_VERSION: "34.0"
+          WASI_SDK_SHA256: b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4
+        working-directory: native
+        run: |
+          SDK="$HOME/.cache/engram-wasi-sdk-$WASI_SDK_VERSION"
+          mkdir -p "$HOME/.cache"
+          LOCK="$HOME/.cache/.engram-wasi-sdk.lock"
+          # A fresh cargo fingerprint skips the compile, so check the target
+          # is really installed for the pinned toolchain.
+          rustup target list --installed | grep -qx wasm32-unknown-unknown
+          # Exclusive lock: install + prune. Shared lock: the build, so a job
+          # pinned to another version cannot prune this SDK mid-build. flock
+          # cannot downgrade, so there is a gap between the two; if the SDK
+          # vanished in it the build section exits 99 and we retry. Any other
+          # failure (rc != 99) fails the step.
+          for attempt in 1 2 3; do
+            flock "$LOCK" sh -ec '
+              if [ ! -x "$0/bin/clang" ]; then
+                f="$RUNNER_TEMP/wasi-sdk.tar.gz"
+                curl --proto "=https" --tlsv1.2 -sSfL -o "$f" \
+                  "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION%%.*}/wasi-sdk-$WASI_SDK_VERSION-x86_64-linux.tar.gz"
+                echo "$WASI_SDK_SHA256  $f" | sha256sum -c -
+                rm -rf "$0.partial" && mkdir -p "$0.partial"
+                tar -xzf "$f" -C "$0.partial" --strip-components=1
+                rm -f "$f"
+                mv "$0.partial" "$0"
+              fi
+              for old in "$HOME"/.cache/engram-wasi-sdk-*; do
+                [ "$old" = "$0" ] || rm -rf "$old"
+              done
+            ' "$SDK"
+            rc=0
+            flock -s "$LOCK" sh -ec '
+              [ -x "$0/bin/clang" ] || exit 99
+              export CC_wasm32_unknown_unknown="$0/bin/clang" AR_wasm32_unknown_unknown="$0/bin/llvm-ar"
+              "$CC_wasm32_unknown_unknown" --version | head -1
+              export CARGO_TARGET_DIR="$HOME/.cache/engram-native-target"
+              cargo build --release --locked -p wasm_guard --target wasm32-unknown-unknown
+              python3 wasm_guard/imports.py "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/wasm_guard.wasm"
+            ' "$SDK" || rc=$?
+            [ "$rc" -eq 99 ] || exit "$rc"
+          done
+          # Three attempts all lost the SDK to a concurrent prune.
+          exit 99
 
       - name: Fetch deps (if missing or lockfile changed)
         # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`
@@ -2894,12 +2962,12 @@ jobs:
 
       - name: Rust toolchain (native/ NIFs)
         # rustup into the runner user's home, once per VM, at the version
-        # native/engram_native/rust-toolchain.toml pins. Under flock: the
+        # native/rust-toolchain.toml pins. Under flock: the
         # runners on one VM share ~/.rustup, and rustup is not safe to run
         # concurrently.
         run: |
           mkdir -p "$HOME/.cargo"
-          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/engram_native/rust-toolchain.toml)
+          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/rust-toolchain.toml)
           flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
             [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
@@ -3617,12 +3685,12 @@ jobs:
       - name: Rust toolchain (native/ NIFs)
         if: steps.gate.outputs.proceed == 'true'
         # rustup into the runner user's home, once per VM, at the version
-        # native/engram_native/rust-toolchain.toml pins. Under flock: the
+        # native/rust-toolchain.toml pins. Under flock: the
         # runners on one VM share ~/.rustup, and rustup is not safe to run
         # concurrently.
         run: |
           mkdir -p "$HOME/.cargo"
-          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/engram_native/rust-toolchain.toml)
+          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/rust-toolchain.toml)
           flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
             [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
@@ -3787,7 +3855,7 @@ jobs:
         if: steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         run: |
           mkdir -p "$HOME/.cargo"
-          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/engram_native/rust-toolchain.toml)
+          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/rust-toolchain.toml)
           flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
             [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
@@ -4255,12 +4323,12 @@ jobs:
 
       - name: Rust toolchain (native/ NIFs)
         # rustup into the runner user's home, once per VM, at the version
-        # native/engram_native/rust-toolchain.toml pins. Under flock: the
+        # native/rust-toolchain.toml pins. Under flock: the
         # runners on one VM share ~/.rustup, and rustup is not safe to run
         # concurrently.
         run: |
           mkdir -p "$HOME/.cargo"
-          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/engram_native/rust-toolchain.toml)
+          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/rust-toolchain.toml)
           flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
             [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
@@ -5015,11 +5083,11 @@ jobs:
           # (cache_hit_both=false) while leaving the image byte-identical —
           # the existing tag IS correct and rebuilding would be a no-op, so
           # we still skip in that case. We only note (not error) when a
-          # DEPLOYABLE path actually changed in this merge (same path set
-          # version-check uses); HEAD~1..HEAD = the squash-merge just landed
-          # on main (checkout is fetch-depth: 0).
-          DEPLOYABLE=$(git diff --name-only HEAD~1 HEAD -- \
-            lib priv config frontend Dockerfile entrypoint.sh .dockerignore rel mix.exs mix.lock)
+          # DEPLOYABLE path actually changed in this merge (the workflow-level
+          # DEPLOYABLE_PATHS, the same set the CI image tag hashes);
+          # HEAD~1..HEAD = the squash-merge just landed on main (checkout is
+          # fetch-depth: 0).
+          DEPLOYABLE=$(git diff --name-only HEAD~1 HEAD -- $DEPLOYABLE_PATHS)
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin > /dev/null
           IMAGE_EXISTS=false
           if docker manifest inspect "${GHCR_IMAGE}:${VERSION}" > /dev/null 2>&1; then

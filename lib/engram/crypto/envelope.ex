@@ -1,10 +1,32 @@
 defmodule Engram.Crypto.Envelope do
   @moduledoc """
-  Stateless AES-256-GCM authenticated encryption with associated data (AAD).
+  Stateless AES-256-GCM authenticated encryption with associated data (AAD),
+  on the Rust engine (`Engram.Native.envelope_seal/4` / `envelope_open/4`,
+  `native/engram_core/src/envelope.rs`).
 
   Ciphertext layout returned by `encrypt/3` is `ciphertext || tag` (16-byte
-  tag suffix). The nonce is returned separately; callers store it alongside
-  ciphertext.
+  tag suffix). The nonce field is returned separately; callers store it
+  alongside ciphertext.
+
+  ## Formats
+
+    * Format 0: 12-byte nonce field, AAD as given, body = plaintext. Byte for
+      byte what the OpenSSL `:crypto` envelope wrote before the engine.
+      Empty plaintext is always format 0.
+    * Format 1: 13-byte nonce field `<<1, nonce::12>>`, AAD = caller AAD
+      `<> "|f1"`, body = `<<codec, payload>>` (codec 0 raw, 1 one zstd frame).
+
+  `decrypt/4` opens either, telling them apart by the nonce field's length.
+
+  ## Compression policy
+
+  `mode_for/1` picks the mode from the AAD's `Crypto.aad_prefix/2`
+  (`compression_policy/1`): note content, CRDT state, vault index state and
+  update log, and revisions get `:zstd`; attachment content `:auto`
+  (sample first, skip already-compressed media); everything else, including
+  wrapped DEKs and anything that packs the nonce at a fixed offset, stays
+  format 0. Off until #1872's R2: `config :engram, :envelope_compression`
+  defaults to `false`, so today every write is format 0.
 
   ## AAD (T3.6 / H1)
 
@@ -16,9 +38,9 @@ defmodule Engram.Crypto.Envelope do
 
   AAD shape per call site:
 
-    * Relational rows  — `"<table>:<column>:<row_id>"` (e.g. `"notes:content:42"`)
-    * Qdrant payload   — `"qdrant:<collection>:<qdrant_id>:<field>"`
-    * Wrapped DEK      — `"dek:v1:<user_id>"`
+    * Relational rows: `Crypto.aad_for_row/3`, `<table> 0 <column> 0 <16-byte uuid>`
+    * Qdrant payload: `"qdrant:<collection>:<qdrant_id>:<field>"`
+    * Wrapped DEK: `"dek:v1:<user_id>"`
 
   ## Backwards compatibility
 
@@ -30,8 +52,6 @@ defmodule Engram.Crypto.Envelope do
   decision lives at the caller, not here.
   """
 
-  @cipher :aes_256_gcm
-  @nonce_bytes 12
   @tag_bytes 16
 
   @typedoc "AES-GCM Additional Authenticated Data — bound to ciphertext but not encrypted."
@@ -57,31 +77,45 @@ defmodule Engram.Crypto.Envelope do
 
   @spec encrypt(binary(), <<_::256>>, aad()) :: {binary(), binary()}
   def encrypt(plaintext, <<_::256>> = dek, aad)
-      when is_binary(plaintext) and is_binary(aad) do
-    nonce = :crypto.strong_rand_bytes(@nonce_bytes)
-    {ct, tag} = :crypto.crypto_one_time_aead(@cipher, dek, nonce, plaintext, aad, true)
-    {ct <> tag, nonce}
-  end
+      when is_binary(plaintext) and is_binary(aad),
+      do: Engram.Native.envelope_seal(plaintext, dek, aad, mode_for(aad))
 
   @spec decrypt(binary(), binary(), <<_::256>>) :: {:ok, binary()} | :error
   def decrypt(ct_with_tag, nonce, dek), do: decrypt(ct_with_tag, nonce, dek, <<>>)
 
   @spec decrypt(binary(), binary(), <<_::256>>, aad()) :: {:ok, binary()} | :error
   def decrypt(ct_with_tag, nonce, <<_::256>> = dek, aad)
-      when is_binary(ct_with_tag) and byte_size(nonce) == @nonce_bytes and is_binary(aad) do
-    size = byte_size(ct_with_tag) - @tag_bytes
-
-    if size < 0 do
-      :error
-    else
-      <<ct::binary-size(size), tag::binary-size(@tag_bytes)>> = ct_with_tag
-
-      case :crypto.crypto_one_time_aead(@cipher, dek, nonce, ct, aad, tag, false) do
-        plaintext when is_binary(plaintext) -> {:ok, plaintext}
-        :error -> :error
-      end
-    end
-  end
+      when is_binary(ct_with_tag) and is_binary(nonce) and is_binary(aad),
+      do: Engram.Native.envelope_open(ct_with_tag, nonce, dek, aad)
 
   def decrypt(_ct_with_tag, _nonce, <<_::256>>, _aad), do: :error
+
+  # {table, column, mode}; prefixes come from Crypto.aad_prefix/2, the single
+  # definition of the AAD shape, and are built once at compile time.
+  @policy [
+            {:notes, :content, :zstd},
+            {:notes, :crdt_state, :zstd},
+            {:vault_index_states, :state, :zstd},
+            {:vault_index_update_log, :update, :zstd},
+            {:note_revisions, :content, :zstd},
+            {:attachments, :content, :auto}
+          ]
+          |> Enum.map(fn {t, c, mode} -> {Engram.Crypto.aad_prefix(t, c), mode} end)
+
+  @doc false
+  # The compression mode for a ciphertext, from its AAD's table:column. One
+  # place decides, so DEK rotation and AAD rebind re-encrypt with the same
+  # mode as the original write. Off until #1872's R2 (config).
+  def mode_for(aad) do
+    if Application.get_env(:engram, :envelope_compression, false),
+      do: compression_policy(aad),
+      else: :none
+  end
+
+  @doc false
+  def compression_policy(aad) do
+    Enum.find_value(@policy, :none, fn {prefix, mode} ->
+      if String.starts_with?(aad, prefix), do: mode
+    end)
+  end
 end

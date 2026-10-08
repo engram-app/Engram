@@ -81,4 +81,27 @@ defmodule Engram.Crypto.EnvelopeTest do
       assert {:ok, "legacy"} = Envelope.decrypt(ct, nonce, @dek, <<>>)
     end
   end
+
+  describe "compression policy (#1872)" do
+    test "maps each compressible table:column, everything else :none" do
+      id = Ecto.UUID.generate()
+      aad = &Engram.Crypto.aad_for_row/3
+      assert Envelope.compression_policy(aad.(:notes, :content, id)) == :zstd
+      assert Envelope.compression_policy(aad.(:notes, :crdt_state, id)) == :zstd
+      assert Envelope.compression_policy(aad.(:vault_index_states, :state, id)) == :zstd
+      assert Envelope.compression_policy(aad.(:vault_index_update_log, :update, id)) == :zstd
+      assert Envelope.compression_policy(aad.(:note_revisions, :content, id)) == :zstd
+      assert Envelope.compression_policy(aad.(:attachments, :content, id)) == :auto
+
+      for a <- ["", aad.(:attachments, :path, id), "dek:v1:1", "qdrant:engram_notes:1:text"],
+          do: assert(Envelope.compression_policy(a) == :none)
+    end
+
+    test "is off by default: every write is format 0" do
+      aad = Engram.Crypto.aad_for_row(:notes, :content, Ecto.UUID.generate())
+      assert Envelope.mode_for(aad) == :none
+      {_ct, nonce} = Envelope.encrypt(String.duplicate("abc ", 5_000), @dek, aad)
+      assert byte_size(nonce) == 12
+    end
+  end
 end

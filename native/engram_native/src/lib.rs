@@ -18,10 +18,14 @@ mod yaml;
 #[global_allocator]
 static ALLOCATOR: memory::Counting = memory::Counting;
 
+use engram_core::envelope;
 use hmac::{Hmac, KeyInit, Mac};
-use rustler::{Binary, Encoder, Env, Error, ListIterator, NewBinary, NifResult, Term};
+use rustler::{
+    Atom, Binary, Encoder, Env, Error, ListIterator, NewBinary, NifResult, OwnedBinary, Term,
+};
 use sha2::Sha256;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 const K1: f64 = 1.2;
 const B: f64 = 0.75;
@@ -416,5 +420,123 @@ fn md_outline_nif(content: &str) -> NifResult<(Option<outline::Outline>, usize)>
         Err(outline::Refused::BadSourcepos) => Err(Error::BadArg),
     }
 }
+
+rustler::atoms! { none, zstd, auto }
+
+fn envelope_mode(mode: Atom) -> NifResult<envelope::Mode> {
+    match mode {
+        m if m == none() => Ok(envelope::Mode::None),
+        m if m == zstd() => Ok(envelope::Mode::Zstd),
+        m if m == auto() => Ok(envelope::Mode::Auto),
+        _ => Err(Error::BadArg),
+    }
+}
+
+/// `{ct_with_tag, nonce_field}`, or `:error` (bad key, no entropy). The
+/// ciphertext was sealed straight into its BEAM binary.
+fn sealed<'a>(env: Env<'a>, out: Result<(OwnedBinary, Vec<u8>), envelope::Error>) -> Term<'a> {
+    match out {
+        Ok((ct, nonce)) => (ct.release(env), to_binary(env, &nonce)).encode(env),
+        Err(envelope::Error) => rustler::types::atom::error().encode(env),
+    }
+}
+
+/// Every envelope seal (calls, input bytes at 0, 1) and open (2, 3) since
+/// the library loaded, inline or dirty. `Engram.Native` skips the per-call
+/// telemetry event for inline format-0 calls, so this is their only count.
+/// Relaxed: counters, not synchronisation.
+static ENVELOPE_COUNTS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+
+fn count_envelope(i: usize, bytes: usize) {
+    ENVELOPE_COUNTS[i].fetch_add(1, Relaxed);
+    ENVELOPE_COUNTS[i + 1].fetch_add(bytes as u64, Relaxed);
+}
+
+/// `{seal_calls, seal_bytes, open_calls, open_bytes}`.
+#[rustler::nif]
+fn envelope_counts_nif() -> (u64, u64, u64, u64) {
+    let [a, b, c, d] = &ENVELOPE_COUNTS;
+    (
+        a.load(Relaxed),
+        b.load(Relaxed),
+        c.load(Relaxed),
+        d.load(Relaxed),
+    )
+}
+
+/// `Engram.Crypto.Envelope.encrypt/3`'s engine: optional zstd + AES-256-GCM
+/// (see native/engram_core/src/envelope.rs for the formats), and the peak.
+fn envelope_seal<'a>(
+    env: Env<'a>,
+    plain: Binary<'a>,
+    key: Binary<'a>,
+    aad: Binary<'a>,
+    mode: Atom,
+) -> NifResult<(Term<'a>, usize)> {
+    let mode = envelope_mode(mode)?;
+    count_envelope(0, plain.len());
+    // The nonce comes from the OS here, at the edge: the core has no RNG.
+    let (out, peak) = memory::measured(|| {
+        let mut nonce = [0u8; envelope::NONCE];
+        getrandom::getrandom(&mut nonce).map_err(|_| envelope::Error)?;
+        envelope::seal(&plain, &key, &aad, mode, nonce, OwnedBinary::new)
+    });
+    Ok((sealed(env, out), peak))
+}
+
+sized_nif!(envelope_seal, envelope_seal_nif, envelope_seal_dirty_nif, <'a>(env, plain: Binary<'a>, key: Binary<'a>, aad: Binary<'a>, mode: Atom) [plain, key, aad, mode] -> NifResult<(Term<'a>, usize)>);
+
+/// Test hook: a seal with a caller-chosen nonce, for byte-for-byte parity
+/// with `:crypto`. A repeated nonce under one key breaks AES-GCM, so it is
+/// compiled only with the `test-hooks` feature (dev and test configs): the
+/// release NIF does not export it.
+#[cfg(feature = "test-hooks")]
+#[rustler::nif]
+fn envelope_seal_with_nonce_nif<'a>(
+    env: Env<'a>,
+    plain: Binary<'a>,
+    key: Binary<'a>,
+    aad: Binary<'a>,
+    mode: Atom,
+    nonce: Binary<'a>,
+) -> NifResult<(Term<'a>, usize)> {
+    let mode = envelope_mode(mode)?;
+    let nonce: [u8; envelope::NONCE] = nonce.as_slice().try_into().map_err(|_| Error::BadArg)?;
+    let (out, peak) =
+        memory::measured(|| envelope::seal(&plain, &key, &aad, mode, nonce, OwnedBinary::new));
+    Ok((sealed(env, out), peak))
+}
+
+/// `Engram.Crypto.Envelope.decrypt/4`'s engine: any format; `:error` on
+/// anything that does not authenticate and decode. Never raises on input.
+fn envelope_open<'a>(
+    env: Env<'a>,
+    ct: Binary<'a>,
+    nonce: Binary<'a>,
+    key: Binary<'a>,
+    aad: Binary<'a>,
+) -> (Term<'a>, usize) {
+    count_envelope(2, ct.len());
+    let (out, peak) =
+        memory::measured(|| envelope::open(&ct, &nonce, &key, &aad, OwnedBinary::new));
+    // Format 0 and raw format 1 decrypt in their BEAM binary; raw skips the
+    // codec byte as a sub-binary, not a copy.
+    let error = || rustler::types::atom::error().encode(env);
+    let term = match out {
+        Ok(envelope::Opened::InPlace(buf, 0)) => buf.release(env).encode(env),
+        Ok(envelope::Opened::InPlace(buf, skip)) => {
+            let buf = buf.release(env);
+            match buf.make_subbinary(skip, buf.len() - skip) {
+                Ok(sub) => sub.encode(env),
+                Err(_) => error(),
+            }
+        }
+        Ok(envelope::Opened::Inflated(v)) => to_binary(env, &v).encode(env),
+        Err(envelope::Error) => error(),
+    };
+    (term, peak)
+}
+
+sized_nif!(envelope_open, envelope_open_nif, envelope_open_dirty_nif, <'a>(env, ct: Binary<'a>, nonce: Binary<'a>, key: Binary<'a>, aad: Binary<'a>) [ct, nonce, key, aad] -> (Term<'a>, usize));
 
 rustler::init!("Elixir.Engram.Native");
