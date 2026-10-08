@@ -44,7 +44,9 @@ CREATE POLICY maintenance_all ON <t> TO engram_maintenance USING (true) WITH CHE
 ```
 
 plus, on `api_keys` only, `api_keys_discovery` (FOR SELECT while no tenant is
-set) so key lookup works. See `rls-cutover-breaks-api-key-auth.md` and
+set, `TO engram_key_lookup` since #1867) so key lookup works. Only
+`validate_api_key/1` switches to that role; plain `engram_app` with no tenant
+sees zero keys. See `rls-cutover-breaks-api-key-auth.md` and
 `maintenance-db-role.md`.
 
 `subscriptions` is per-user but NOT yet in the set (#1758 open). Its access is

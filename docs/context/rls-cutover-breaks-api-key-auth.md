@@ -69,6 +69,25 @@ database before shipping.
 Keep `20260918120000` out of any rollback runbook. Its `down/0` restores the
 outage.
 
+
+### #1867: scoped TO engram_key_lookup
+
+The policy above had no `TO` clause, so it applied to every role: any
+unscoped `engram_app` query (e.g. a join from `users` to `api_keys`) returned
+every user's `key_hash`/`name`/`user_id`. Fixed in two releases:
+
+1. Expand (`20261006160000`): NOLOGIN role `engram_key_lookup` with SELECT on
+   `api_keys`; `engram_app` holds it `WITH INHERIT FALSE, SET TRUE`
+   (`prepare_database/0`). `validate_api_key/1` reads the key under
+   `SET LOCAL ROLE engram_key_lookup`, resets the role, then preloads the user.
+2. Contract (`20261008041903`): `ALTER POLICY api_keys_discovery ... TO
+   engram_key_lookup`. Must ship after (1): N-1 code reads as plain
+   `engram_app` and would 401 every API key.
+
+Because the membership is non-inherited, policies `TO engram_key_lookup` do
+not apply to `engram_app` until it explicitly switches role. Pinned by
+`test/engram/accounts_api_key_auth_rls_test.exs`.
+
 ## Rejected: dropping `api_keys` from the policy set
 
 This was attempted first and abandoned after review. Treating `api_keys` as an
