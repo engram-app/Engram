@@ -97,7 +97,7 @@ and only INSERT raises (42501).
   known, use `with_tenant` instead.
 - There is no lexical "is it scoped?" lint, because scoping is often supplied
   by a caller's closure far from the call site (e.g. `user_dek_rotation.ex`
-  `sweep_table_loop`). Instead `test/lint/skip_tenant_check_inventory_test.exs`
+  `TenantSweep.each_batch`). Instead `test/lint/skip_tenant_check_inventory_test.exs`
   is a per-file count ratchet (adding a site fails until the count is updated),
   and `tenant_enumeration_lint_test.exs` covers only the `from(...)`
   enumerate-by-`user_id` shape.

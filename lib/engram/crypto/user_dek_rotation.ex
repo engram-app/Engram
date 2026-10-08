@@ -34,7 +34,7 @@ defmodule Engram.Crypto.UserDekRotation do
   alias Engram.Accounts.User
   alias Engram.Auth.SessionInvalidator
   alias Engram.Crypto
-  alias Engram.Crypto.{DekCache, Envelope, MigrationRunner, RotationLock}
+  alias Engram.Crypto.{DekCache, Envelope, MigrationRunner, RotationLock, TenantSweep}
   alias Engram.Crypto.KeyProvider.Resolver
   alias Engram.Logger.Metadata
   alias Engram.Notes.CrdtUpdateLog
@@ -220,10 +220,9 @@ defmodule Engram.Crypto.UserDekRotation do
   # ---------------------------------------------------------------------------
 
   defp sweep_notes(%User{id: user_id}, old_dek, new_dek, new_filter_key, new_dek_version) do
-    sweep_table_loop(
+    TenantSweep.each_batch(
       user_id,
       Engram.Notes.Note,
-      "00000000-0000-0000-0000-000000000000",
       fn batch_ids ->
         Repo.transaction(fn ->
           notes =
@@ -276,10 +275,9 @@ defmodule Engram.Crypto.UserDekRotation do
   # ---------------------------------------------------------------------------
 
   defp sweep_vaults(%User{id: user_id}, old_dek, new_dek, new_filter_key, new_dek_version) do
-    sweep_table_loop(
+    TenantSweep.each_batch(
       user_id,
       Engram.Vaults.Vault,
-      "00000000-0000-0000-0000-000000000000",
       fn batch_ids ->
         Repo.transaction(fn ->
           vaults =
@@ -773,10 +771,9 @@ defmodule Engram.Crypto.UserDekRotation do
   # ---------------------------------------------------------------------------
 
   defp sweep_note_links(%User{id: user_id}, old_dek, new_dek, new_filter_key, new_dek_version) do
-    sweep_table_loop(
+    TenantSweep.each_batch(
       user_id,
       Engram.Links.NoteLink,
-      "00000000-0000-0000-0000-000000000000",
       fn batch_ids ->
         Repo.transaction(fn ->
           links =
@@ -1106,10 +1103,9 @@ defmodule Engram.Crypto.UserDekRotation do
   # No HMAC and no filter key: the snapshot is one opaque blob with no lookup
   # column, which is why this takes fewer arguments than its siblings.
   defp sweep_vault_index_states(%User{id: user_id}, old_dek, new_dek, new_dek_version) do
-    sweep_table_loop(
+    TenantSweep.each_batch(
       user_id,
       Engram.Notes.VaultIndexState,
-      "00000000-0000-0000-0000-000000000000",
       fn batch_ids ->
         Repo.transaction(fn ->
           rows =
@@ -1176,10 +1172,9 @@ defmodule Engram.Crypto.UserDekRotation do
   #
   # Keyed by the row id (not the vault) because the AAD binds per row.
   defp sweep_vault_index_update_log(%User{id: user_id}, old_dek, new_dek, new_dek_version) do
-    sweep_table_loop(
+    TenantSweep.each_batch(
       user_id,
       Engram.Notes.VaultIndexUpdateLog,
-      "00000000-0000-0000-0000-000000000000",
       fn batch_ids ->
         Repo.transaction(fn ->
           rows =
@@ -1257,72 +1252,6 @@ defmodule Engram.Crypto.UserDekRotation do
             :ok
         end
     end
-  end
-
-  # Every table swept through here carries FORCE ROW LEVEL SECURITY, so the
-  # cursor read and the batch's writes both need `app.current_tenant` set.
-  # `skip_tenant_check: true` only silences Engram's own `prepare_query/3`
-  # guard — it sets nothing in Postgres and does not scope the query. Without
-  # this wrapper the cursor matches zero rows for every user, the `[] -> :ok`
-  # clause below reads that as "nothing left to sweep", and the rotation
-  # reports success having re-encrypted nothing while `final_flip/3` still
-  # lands (`users` has no RLS). Unrecoverable once the old key is retired.
-  #
-  # Wrapped per batch rather than per sweep: `with_tenant/2` opens a
-  # transaction, and one transaction spanning an entire table's re-encryption
-  # would hold every row lock for the duration of the sweep.
-  defp sweep_table_loop(user_id, schema, last_id, fun) do
-    swept =
-      Repo.with_tenant(user_id, fn ->
-        case fetch_batch_ids(user_id, schema, last_id) do
-          [] -> :done
-          ids -> {:batch, ids, fun.(ids)}
-        end
-      end)
-
-    case swept do
-      {:ok, :done} -> :ok
-      {:ok, {:batch, ids, :ok}} -> sweep_table_loop(user_id, schema, List.last(ids), fun)
-      {:ok, {:batch, _ids, {:error, _} = err}} -> err
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  # Notes are scoped via vault.user_id AND directly via user_id; use user_id directly.
-  defp fetch_batch_ids(user_id, Engram.Notes.Note, last_id) do
-    from(n in Engram.Notes.Note,
-      where: n.user_id == ^user_id,
-      where: n.id > ^last_id,
-      order_by: n.id,
-      limit: ^@batch_size,
-      select: n.id
-    )
-    |> Repo.all(skip_tenant_check: true)
-  end
-
-  # Keyed by vault_id, not id — the generic clause below orders by `r.id`, which
-  # this table does not have.
-  defp fetch_batch_ids(user_id, Engram.Notes.VaultIndexState, last_id) do
-    from(s in Engram.Notes.VaultIndexState,
-      where: s.user_id == ^user_id,
-      where: s.vault_id > ^last_id,
-      order_by: s.vault_id,
-      limit: ^@batch_size,
-      select: s.vault_id
-    )
-    |> Repo.all(skip_tenant_check: true)
-  end
-
-  # Default fallback for schemas with a direct user_id column.
-  defp fetch_batch_ids(user_id, schema, last_id) do
-    from(r in schema,
-      where: r.user_id == ^user_id,
-      where: r.id > ^last_id,
-      order_by: r.id,
-      limit: ^@batch_size,
-      select: r.id
-    )
-    |> Repo.all(skip_tenant_check: true)
   end
 
   # Re-encrypt all ciphertext column pairs under the new DEK and recompute
