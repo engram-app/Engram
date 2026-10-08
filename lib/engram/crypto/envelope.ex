@@ -110,7 +110,13 @@ defmodule Engram.Crypto.Envelope do
   end
 
   @doc false
+  # Real row AADs come from `Crypto.aad_for_row/3` and are NUL-separated
+  # (`table 0 column 0 row_id`); the policy table is written with ":" for
+  # readability, so normalise the separator before matching. Without this no
+  # real AAD ever matched and the policy silently never applied.
   def compression_policy(aad) do
+    aad = :binary.replace(aad, <<0>>, ":", [:global])
+
     Enum.find_value(@policy, :none, fn {prefix, mode} ->
       if String.starts_with?(aad, prefix), do: mode
     end)
