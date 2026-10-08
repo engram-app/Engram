@@ -26,6 +26,20 @@ Every encrypted column is `ct_with_tag` plus a `nonce` field, produced by
   :envelope_compression` is `true` in `config/config.exs` for every env. Kill switch
   with no release: set `ENVELOPE_COMPRESSION=false` and restart (read in
   `config/runtime.exs`); new writes return to format 0. Reading both formats always works.
+- Cluster guard (`Engram.Crypto.CompressionGate`): a node writes format 1 only
+  while every cluster node can read it. Each node advertises
+  `Envelope.max_read_format/0` (1 from R2; a pre-R1 node lacks it and counts as
+  0). The gate allows compression only when `Cluster.Readiness.rooms_reachable?/1`
+  sees every expected member connected (every `DNS_CLUSTER_QUERY` A record but
+  its own; a single node with no role and no query is just itself) AND every
+  connected peer answers `>= 1` over `:erpc`. DNS failure, a missing member, an
+  erpc error and the boot window before the first evaluation all fail closed
+  (format 0). The verdict is cached in `:persistent_term` (one lookup per
+  encrypt), re-evaluated on `:nodeup`/`:nodedown` and every 30 s, and each
+  change logs once (`envelope compression blocked`/`allowed`, with the reason)
+  and emits `[:engram, :envelope, :compression_gate]`. `Envelope.compression_on?/0`
+  (kill switch AND gate) is the one decision behind the write path, the
+  `EnvelopeFormat` migration's `enabled?/0` and the `ReencodeEnvelopes` cancel.
 - Empty plaintext is always format 0, so `has_content?/1` in revisions
   (`byte_size(ct) > tag_bytes()`) keeps its meaning.
 - Anything that packs the nonce at a fixed offset stays format 0 forever
@@ -81,13 +95,30 @@ Compression policy, keyed by the AAD prefix `table <> <<0>> <> column <> <<0>>`
   the revision-content AAD is in the policy so the envelope zstd-compresses
   them. No reader existed and prod recording was off, so no gzip blobs need
   reading (#1711's reader decrypts to plain text).
-- Rollback (R2 is live as of #1872 PR 3): the PR 2 release (#1904, R1) reads
-  format 1, so deploying it back keeps every format-1 row readable. A release
-  older than R1 cannot read them. Without a release, set
-  `ENVELOPE_COMPRESSION=false` and restart: new writes return to format 0 and
-  the `EnvelopeFormat` data migration reports itself disabled (the runner skips
-  it, no paging, and `ReencodeEnvelopes` jobs cancel themselves). Format-1 rows
-  already written stay readable; nothing rewrites them back to format 0.
+- Rolling deploy and skipped upgrades (guarded in code, see the cluster guard
+  above). An R2 node joining a fleet that still has pre-R1 nodes writes format
+  0 until the last of them is gone, then switches to format 1 on its own; the
+  `EnvelopeFormat` migration stays disabled (no paging, the stuck clock is
+  held) and starts once the cluster is uniform. A self-hoster going straight
+  from a pre-R1 release to R2 needs no step: a single node is uniform at boot,
+  and a multi-node setup waits for its last old node as above.
+- Rollback: only to R1 (#1904, the PR 2 release) or later. A release older than
+  R1 cannot read format-1 rows, so rolling back to one is UNSAFE (every
+  compressed note body, CRDT state and index state fails to decrypt). On a
+  rollback to R1, cancel the re-encode jobs it would strand (R1 has no
+  `ReencodeEnvelopes` worker, so Oban would retry them as unknown workers):
+
+  ```sql
+  UPDATE oban_jobs SET state = 'cancelled', cancelled_at = now()
+   WHERE worker = 'Engram.Workers.ReencodeEnvelopes'
+     AND state IN ('available', 'scheduled', 'retryable');
+  ```
+
+  Without a release, set `ENVELOPE_COMPRESSION=false` and restart: new writes
+  return to format 0 and the `EnvelopeFormat` data migration reports itself
+  disabled (the runner skips it, no paging, and `ReencodeEnvelopes` jobs cancel
+  themselves). Format-1 rows already written stay readable; nothing rewrites
+  them back to format 0.
 
 ### Length side channel (accepted for now)
 
@@ -108,10 +139,34 @@ the app task at `task_cpu_units = 512` (`engram-infra/main/envs/prod/ecs.tf`,
 both roles), `beam_schedulers = max(1, ceil(512 / 1024)) = 1`, and
 `rel/env.sh.eex` turns that into `+S 1:1 +SDcpu 1:1`: ONE normal and ONE dirty
 CPU scheduler per task. Large seals, large-decode opens and the other dirty
-NIFs queue behind that one scheduler. Watch `[:engram, :nif, :call, :stop]`
-duration for `nif: :envelope_seal` / `:envelope_open` with `dirty: true` (PromEx
-histogram for `Engram.Native`); a rising p99 there means dirty queueing, and the
-remedies are a bigger task (which raises `+SDcpu`) or `ENVELOPE_COMPRESSION=false`.
+NIFs queue behind that one scheduler. On the worker that includes
+`md_outline_nif`, which always runs dirty (every index job parses the note), so
+the `EnvelopeFormat` re-encode window slows indexing; expect a longer embed
+backlog drain while the migration runs. Watch the PromEx
+`engram_nif_call_duration_milliseconds` histogram (`[:engram, :nif, :call, :stop]`),
+tagged `nif` and `dirty`, for `nif="envelope_seal"` / `"envelope_open"` with
+`dirty="true"`; a rising p99 there means dirty queueing, and the remedies are a
+bigger task (which raises `+SDcpu`) or `ENVELOPE_COMPRESSION=false`. Inline
+format-0 seals (up to 16 KB) and successful inline opens emit no per-call
+event, so the envelope series hold format-1 seals (`dirty="false"` when small)
+and every dirty call; the polled `engram_nif_envelope_calls` gauge counts all.
+
+### Before the R2 deploy
+
+1. The fleet need not be on R1 first (the cluster guard handles a mixed
+   fleet), but the rollback target must be R1 or later, see above.
+2. Known-undecryptable rows. One row in the work set that never decrypts keeps
+   `envelope_format` open and pages from day 7 (the stuck-migration alert).
+   Nothing in the schema marks such a row for these columns:
+   `note_revisions.finalize_failed_at` covers revisions only (not re-encoded),
+   and a failed AAD rebind (`aad rebind failed ... reason_label=note:legacy_decrypt_failed`
+   in Loki) leaves the note body at `dek_version` 1, which the work set skips
+   (its `crdt_state` is still in it). So check the logs: search Loki for
+   `aad rebind failed` and, after the deploy, for
+   `envelope re-encode: row does not decrypt` (table and row id in the
+   metadata). Triage any hit in the first days, before the day-7 page.
+   Count of note bodies the re-encode will skip (informational, per tenant as in
+   the bytes query below): `SELECT count(*) FROM notes WHERE dek_version < 2;`
 
 ### After the R2 deploy (checklist)
 
@@ -147,7 +202,7 @@ SELECT relname, n_live_tup FROM pg_stat_user_tables
 COMMIT;
 ```
 
-   Verify the audit role can read `users` (list the ids by hand if not). If the audit role
+   `engram_audit_ro` can SELECT `users` (verified in prod 2026-10-07). If the audit role
    cannot create a temp table, run the `INSERT ... SELECT` per tenant from psql
    and sum client-side. The before/after ratio per column is the number the
    page-cache argument in #1872 needs. `pg_total_relation_size` of the same
