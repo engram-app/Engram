@@ -22,7 +22,11 @@ defmodule Engram.Crypto.CompressionGate do
   evaluation after boot is always `:info`, a clustered boot has no peers yet)
   and emits
   `[:engram, :envelope, :compression_gate]` with `%{allowed: 0 | 1}` and
-  `%{reason: atom(), node: node() | nil}`.
+  `%{reason: atom(), node: node() | nil}`. Each reason change also emits
+  `[:engram, :envelope, :compression_gate, :reason]` once per reason with
+  `%{current: 0 | 1}` (one-hot). `Engram.PromEx.Crypto` exports both as
+  gauges: `engram_prom_ex_crypto_compression_gate_allowed` and
+  `engram_prom_ex_crypto_compression_gate_reason{reason}`.
 
   The `ENVELOPE_COMPRESSION=false` kill switch is applied on top of this, in
   `Envelope.compression_on?/0`.
@@ -46,6 +50,14 @@ defmodule Engram.Crypto.CompressionGate do
           | :peer_unreachable
           | :evaluation_failed
   @type verdict :: {:allowed | :blocked, reason(), node() | nil}
+
+  @reasons [
+    :cluster_reads_format_1,
+    :members_missing,
+    :peer_cannot_read,
+    :peer_unreachable,
+    :evaluation_failed
+  ]
 
   @doc "The cached verdict. `false` before the first evaluation (fail closed)."
   @spec allowed?(term()) :: boolean()
@@ -107,7 +119,8 @@ defmodule Engram.Crypto.CompressionGate do
       opts: opts,
       key: Keyword.get(opts, :key, @key),
       refresh_ms: Keyword.get(opts, :refresh_ms, @refresh_ms),
-      allowed: nil
+      allowed: nil,
+      reason: nil
     }
 
     # Synchronous first evaluation: a single node knows its answer before
@@ -142,7 +155,20 @@ defmodule Engram.Crypto.CompressionGate do
       do: :persistent_term.put(state.key, allowed)
 
     if allowed != state.allowed, do: report(allowed, reason, node, is_nil(state.allowed))
-    %{state | allowed: allowed}
+    if reason != state.reason, do: report_reason(reason)
+    %{state | allowed: allowed, reason: reason}
+  end
+
+  # One-hot over every reason, so the PromEx gauge never keeps a stale 1 on a
+  # reason that no longer holds (a last_value per tag outlives its event).
+  defp report_reason(current) do
+    for reason <- @reasons do
+      :telemetry.execute(
+        [:engram, :envelope, :compression_gate, :reason],
+        %{current: if(reason == current, do: 1, else: 0)},
+        %{reason: reason}
+      )
+    end
   end
 
   defp safe_evaluate(opts) do

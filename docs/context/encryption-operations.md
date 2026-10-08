@@ -40,6 +40,14 @@ Every encrypted column is `ct_with_tag` plus a `nonce` field, produced by
   and emits `[:engram, :envelope, :compression_gate]` (the first evaluation
   after boot logs `:info` even when blocked, since a clustered boot has no
   peers yet; a block after the gate was once allowed is `:warning`).
+  PromEx exports the verdict as `engram_prom_ex_crypto_compression_gate_allowed`
+  (untagged gauge, 1 allowed / 0 blocked) and the reason as
+  `engram_prom_ex_crypto_compression_gate_reason{reason}` (one-hot over the five
+  reasons, so the series at 1 is current; a stale reason reads 0). Alert when
+  `max(engram_prom_ex_crypto_compression_gate_allowed) == 0` for over an hour:
+  compression is off on every node, and while it is, `EnvelopeFormat` is
+  disabled and its stuck clock held, so the stuck-migration alert never fires.
+  The alert rule lives in engram-infra (separate change).
   Deploy blips (Cloud Map still listing a stopped task) block the gate and
   cancel in-flight `ReencodeEnvelopes` chains as `:compression_off`; the next
   hourly `EnvelopeFormat` pass re-enqueues them, so expect a delay of up to

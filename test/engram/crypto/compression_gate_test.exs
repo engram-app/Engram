@@ -9,6 +9,27 @@ defmodule Engram.Crypto.CompressionGateTest do
 
   @peer :"engram@10.0.0.2"
 
+  @reasons [
+    :cluster_reads_format_1,
+    :members_missing,
+    :peer_cannot_read,
+    :peer_unreachable,
+    :evaluation_failed
+  ]
+
+  defp one_hot(current), do: Map.new(@reasons, &{&1, if(&1 == current, do: 1, else: 0)})
+
+  # Every {:reason, r, v} message in the mailbox, as %{r => v}.
+  defp one_hot_reasons(acc \\ %{}) do
+    receive do
+      {:reason, r, v} ->
+        refute Map.has_key?(acc, r), "reason #{r} emitted twice"
+        one_hot_reasons(Map.put(acc, r, v))
+    after
+      0 -> acc
+    end
+  end
+
   defp ok_multicall(format), do: fn peers -> Enum.map(peers, fn _ -> {:ok, format} end) end
 
   describe "evaluate/1" do
@@ -168,6 +189,30 @@ defmodule Engram.Crypto.CompressionGateTest do
       assert CompressionGate.refresh(opts[:name])
       assert_received {:gate, 1, :cluster_reads_format_1}
       refute_received {:gate, _, _}
+    end
+
+    test "every reason change emits the one-hot reason gauge over all reasons",
+         %{opts: opts, format: format} do
+      handler = "gate-reason-#{System.unique_integer([:positive])}"
+      parent = self()
+
+      :telemetry.attach(
+        handler,
+        [:engram, :envelope, :compression_gate, :reason],
+        fn _e, m, meta, _c -> send(parent, {:reason, meta.reason, m.current}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      start_supervised!({CompressionGate, opts})
+      assert one_hot_reasons() == one_hot(:cluster_reads_format_1)
+
+      :atomics.put(format, 1, 0)
+      refute CompressionGate.refresh(opts[:name])
+      refute CompressionGate.refresh(opts[:name])
+      assert one_hot_reasons() == one_hot(:peer_cannot_read)
+      assert one_hot_reasons() == %{}
     end
 
     test "a block at first evaluation logs :info, not :warning", %{opts: opts} do

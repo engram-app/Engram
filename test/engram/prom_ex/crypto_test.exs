@@ -49,6 +49,29 @@ defmodule Engram.PromEx.CryptoTest do
              end)
     end
 
+    # A blocked gate turns compression off fleet-wide with one log line; the
+    # gauge is what an alert can watch. `allowed` is untagged so its last
+    # value is the verdict; the reason is one-hot (the gate emits every
+    # reason), so a stale reason series reads 0, never a stale 1.
+    test "declares the compression gate verdict and reason gauges" do
+      metrics =
+        CryptoPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+
+      assert Enum.any?(metrics, fn m ->
+               match?(%Telemetry.Metrics.LastValue{}, m) and
+                 m.name == [:engram, :prom_ex, :crypto, :compression_gate, :allowed] and
+                 m.event_name == [:engram, :envelope, :compression_gate] and
+                 m.measurement == :allowed and m.tags == []
+             end)
+
+      assert Enum.any?(metrics, fn m ->
+               match?(%Telemetry.Metrics.LastValue{}, m) and
+                 m.name == [:engram, :prom_ex, :crypto, :compression_gate, :reason] and
+                 m.event_name == [:engram, :envelope, :compression_gate, :reason] and
+                 m.measurement == :current and m.tags == [:reason]
+             end)
+    end
+
     test "no per-tenant tags" do
       metrics =
         CryptoPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
