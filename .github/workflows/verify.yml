@@ -97,6 +97,14 @@ env:
   # so every `mix deps.get` (prebuild-mix/unit-tests/lint) and the docker builds
   # pull hex from the LAN instead of WAN. Signatures still verified client-side.
   HEX_MIRROR: "http://10.0.20.214:8090"
+  # Every repo path whose bytes can reach the shipped image: what the
+  # Dockerfile COPYs (native/ is the Rust NIF source, rel/ the release
+  # env.sh) plus .dockerignore, which shapes the build context. ONE
+  # definition, read unquoted (word-split) by the CI image tag hashes and
+  # build-and-publish-image's DEPLOYABLE diff, so a path added to the
+  # Dockerfile cannot reach one list and miss the other. Missing native/
+  # here once meant a native-only merge redeployed the OLD image.
+  DEPLOYABLE_PATHS: "Dockerfile entrypoint.sh .dockerignore rel mix.exs mix.lock config lib priv frontend native"
 
   # Central FastRaid MinIO credentials for the attachment store, at WORKFLOW
   # level for the same reason LOCAL_REGISTRY is: every job that so much as
@@ -232,11 +240,7 @@ jobs:
         # sync deliberately: this job always runs, so its value is the fallback
         # when the prebuild is skipped.
         run: |
-          HASH=$(git ls-tree -r HEAD -- \
-            Dockerfile entrypoint.sh \
-            mix.exs mix.lock \
-            config lib priv frontend native \
-            | sha256sum | cut -c1-12)
+          HASH=$(git ls-tree -r HEAD -- $DEPLOYABLE_PATHS | sha256sum | cut -c1-12)
           if [ -n "${LOCAL_REGISTRY:-}" ]; then
             IMAGE="${LOCAL_REGISTRY}/engram-ci:${HASH}"
           else
@@ -552,11 +556,7 @@ jobs:
       - name: Compute image tag
         id: tag
         run: |
-          HASH=$(git ls-tree -r HEAD -- \
-            Dockerfile entrypoint.sh \
-            mix.exs mix.lock \
-            config lib priv frontend native \
-            | sha256sum | cut -c1-12)
+          HASH=$(git ls-tree -r HEAD -- $DEPLOYABLE_PATHS | sha256sum | cut -c1-12)
           # Registry-qualified ref so any runner can pull it. LOCAL_REGISTRY is
           # hard-set at the workflow level (:5001); guard anyway so a misconfig
           # degrades to the legacy bare tag (same-host-only) instead of
@@ -5053,11 +5053,11 @@ jobs:
           # (cache_hit_both=false) while leaving the image byte-identical —
           # the existing tag IS correct and rebuilding would be a no-op, so
           # we still skip in that case. We only note (not error) when a
-          # DEPLOYABLE path actually changed in this merge (same path set
-          # version-check uses); HEAD~1..HEAD = the squash-merge just landed
-          # on main (checkout is fetch-depth: 0).
-          DEPLOYABLE=$(git diff --name-only HEAD~1 HEAD -- \
-            lib priv config frontend Dockerfile entrypoint.sh .dockerignore rel mix.exs mix.lock)
+          # DEPLOYABLE path actually changed in this merge (the workflow-level
+          # DEPLOYABLE_PATHS, the same set the CI image tag hashes);
+          # HEAD~1..HEAD = the squash-merge just landed on main (checkout is
+          # fetch-depth: 0).
+          DEPLOYABLE=$(git diff --name-only HEAD~1 HEAD -- $DEPLOYABLE_PATHS)
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin > /dev/null
           IMAGE_EXISTS=false
           if docker manifest inspect "${GHCR_IMAGE}:${VERSION}" > /dev/null 2>&1; then
