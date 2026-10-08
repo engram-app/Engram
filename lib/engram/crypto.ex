@@ -736,7 +736,7 @@ defmodule Engram.Crypto do
 
     with {:ok, dek} <- get_dek(user),
          {:ok, name} <- Envelope.decrypt(vault.name_ciphertext, vault.name_nonce, dek, name_aad) do
-      # The slug is not stored (phase/migrate-data of the slug_hmac change):
+      # The slug is not stored (the slug_hmac change):
       # it is derived from the decrypted name here, where every read path
       # already passes.
       {:ok, %{vault | name: name, slug: Engram.Vaults.derive_slug(name, vault)}}

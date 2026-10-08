@@ -1,8 +1,8 @@
 # squawk lints the DDL of migrations new on each branch
 # (see priv/repo/lint_migrations.sh). ban-drop-column / ban-drop-table stay ON
-# here and are excluded per-file for `*_contract.exs` by that script, whose
-# whole purpose is dropping and which the phase/contract reference gate already
-# covers. These two rules structurally conflict
+# here and are excluded per-file for `*_drops.exs` by that script, whose
+# whole purpose is dropping and which the migration-gates reference check
+# already covers. These two rules structurally conflict
 # with Ecto's generated migration SQL, so they're excluded — everything else
 # (ban-drop-column, adding-required-field, renaming-column, changing-column-type,
 # disallowed-unique-constraint, etc.) still gates the build.

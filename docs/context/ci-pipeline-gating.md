@@ -59,7 +59,7 @@ e2e matrix.
 | `e2e-lint` | lint of the e2e harness |
 | `storage-database` | storage + DB-layer tests |
 | `static-checks` | dialyzer / static analysis |
-| `migration-gates` | migration immutability + `phase/*` gates (deploy guardrail) |
+| `migration-gates` | migration immutability + contract-references and N-1 compat gates (deploy guardrail) |
 
 ### Report-only — RUN on PRs but do NOT block merge
 

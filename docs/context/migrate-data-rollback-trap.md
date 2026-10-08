@@ -66,4 +66,4 @@ Also learned:
 - #1797 expand (add `slug_hmac`)
 - #1808 migrate-data 2a (read switch, keep writing)
 - #1818 migrate-data 2b (stop storing plaintext)
-- Related: `rls-enforcement-testing-traps.md`, repo root `AGENTS.md` (phase/* labels)
+- Related: `rls-enforcement-testing-traps.md`, repo root `AGENTS.md` (Database changes are autonomous)
