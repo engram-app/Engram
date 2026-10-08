@@ -223,6 +223,22 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
             )
     end
 
+    test "no head re-warm when no notes crdt_state row was rewritten", %{user: u, vault: v} do
+      note = legacy_note!(u, v, "a.md", @big)
+
+      tenant!(u, fn ->
+        Repo.update_all(from(n in Note, where: n.id == ^note.id),
+          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        )
+      end)
+
+      Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.BackfillCrdtHead"))
+
+      assert :ok = run(u)
+      assert byte_size(reload(Note, id: note.id).content_nonce) == 13
+      refute_enqueued(worker: Engram.Workers.BackfillCrdtHead)
+    end
+
     # The note's CRDT state is never empty (a Yjs doc encodes to bytes), so it
     # is real work; the 16-byte body is not, and survives the pass untouched.
     test "an empty note body stays format 0 and is not work", %{user: u, vault: v} do
@@ -408,6 +424,27 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
 
       assert drain_chain() > 1
       refute ReencodeEnvelopes.legacy_rows?(u.id)
+    end
+
+    # The hop that rewrote crdt_state rows may hand off before the column
+    # ends; the hop that finishes it rewrote nothing itself but must re-warm.
+    test "a head re-warm survives a hand-off inside the crdt_state column",
+         %{user: u, vault: v} do
+      for path <- ["a.md", "b.md"] do
+        note = legacy_note!(u, v, path, @big)
+        seed_crdt_state!(u, note, @big <> path)
+      end
+
+      Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.BackfillCrdtHead"))
+      tune(budget_ms: 0, batch_size: 1)
+
+      assert :ok = run(u)
+      assert drain_chain() > 1
+
+      assert_enqueued(
+        worker: Engram.Workers.BackfillCrdtHead,
+        args: %{"user_id" => u.id, "vault_id" => v.id}
+      )
     end
 
     test "unique: hand_off is not blocked by its own executing predecessor, and a duplicate enqueue is dropped",

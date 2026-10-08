@@ -20,9 +20,9 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   One side effect: rewriting `notes.crdt_state_ciphertext` fires the
   `notes_crdt_head_invalidate` trigger, which NULLs `crdt_head`. Left NULL,
   every live-bound note re-handshakes on each manifest reconcile (#1341), so
-  when a chain finishes that column it enqueues `BackfillCrdtHead` per vault
-  (`BackfillCrdtHead.enqueue_user/1`, as DEK rotation does) instead of
-  waiting for the hourly `WarmCrdtHeads`.
+  when a chain that rewrote a row there finishes that column it enqueues
+  `BackfillCrdtHead` per vault (`BackfillCrdtHead.enqueue_user/1`, as DEK
+  rotation does) instead of waiting for the hourly `WarmCrdtHeads`.
 
   No `RotationLock`: taking it would make the user's clients get HTTP 503.
   Instead every batch reloads the user and snoozes the job while a DEK
@@ -201,7 +201,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
     deadline = System.monotonic_time(:millisecond) + setting(:budget_ms, @budget_ms)
     start = args["column"] || "notes_content"
     columns = Enum.drop_while(@columns, &(Atom.to_string(&1.label) != start))
-    run_columns(user_id, columns, args["after"], deadline)
+    run_columns(user_id, columns, args["after"], deadline, args["rewarm"] == true)
   end
 
   # A newer pending job for this user exists: this one is a rescued
@@ -231,23 +231,33 @@ defmodule Engram.Workers.ReencodeEnvelopes do
     )
   end
 
-  defp run_columns(_user_id, [], _after, _deadline), do: :ok
+  # `rewarm?`: an earlier hop of this chain rewrote a notes crdt_state row
+  # (carried in the hand-off args), so the hop that finishes that column
+  # re-warms the heads even if it rewrote none itself.
+  defp run_columns(_user_id, [], _after, _deadline, _rewarm?), do: :ok
 
-  defp run_columns(user_id, [column | rest], after_id, deadline) do
-    case TenantSweep.each_batch(
-           user_id,
-           column.schema,
-           &reencode_batch(user_id, column, &1, deadline),
-           after: after_id,
-           batch_size: setting(:batch_size, @batch_size),
-           fun_in_tenant: false
-         ) do
+  defp run_columns(user_id, [column | rest], after_id, deadline, rewarm?) do
+    written = :counters.new(1, [])
+
+    result =
+      TenantSweep.each_batch(
+        user_id,
+        column.schema,
+        &reencode_batch(user_id, column, &1, deadline, written),
+        after: after_id,
+        batch_size: setting(:batch_size, @batch_size),
+        fun_in_tenant: false
+      )
+
+    rewarm? = column.label == :notes_crdt_state and (rewarm? or :counters.get(written, 1) > 0)
+
+    case result do
       :ok ->
-        if column.label == :notes_crdt_state, do: :ok = BackfillCrdtHead.enqueue_user(user_id)
-        run_columns(user_id, rest, nil, deadline)
+        if rewarm?, do: :ok = BackfillCrdtHead.enqueue_user(user_id)
+        run_columns(user_id, rest, nil, deadline, false)
 
       {:halt, last_id} ->
-        hand_off(user_id, column.label, last_id)
+        hand_off(user_id, column.label, last_id, rewarm?)
 
       {:error, :rotation_in_progress} ->
         {:snooze, 60}
@@ -263,10 +273,11 @@ defmodule Engram.Workers.ReencodeEnvelopes do
     end
   end
 
-  defp hand_off(user_id, name, last_id) do
-    case Oban.insert(
-           new(%{"user_id" => user_id, "column" => Atom.to_string(name), "after" => last_id})
-         ) do
+  defp hand_off(user_id, name, last_id, rewarm?) do
+    args = %{"user_id" => user_id, "column" => Atom.to_string(name), "after" => last_id}
+    args = if rewarm?, do: Map.put(args, "rewarm", true), else: args
+
+    case Oban.insert(new(args)) do
       {:ok, _} -> :ok
       {:error, _} = err -> err
     end
@@ -343,7 +354,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   # commit each chunk in its own tenant transaction. Bounds both the memory
   # one chunk holds (about ct + plaintext + new ct) and how long its row
   # locks are held.
-  defp reencode_batch(user_id, column, ids, deadline) do
+  defp reencode_batch(user_id, column, ids, deadline, written) do
     :telemetry.execute([:engram, :reencode_envelopes, :batch], %{count: length(ids)}, %{
       column: column.label
     })
@@ -351,7 +362,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
     user_id
     |> Repo.with_tenant!(fn -> stored_sizes(column, ids) end)
     |> chunk_by_bytes(setting(:chunk_bytes, @chunk_bytes))
-    |> reencode_chunks(user_id, column, deadline, List.last(ids))
+    |> reencode_chunks(user_id, column, deadline, List.last(ids), written)
   end
 
   # `octet_length` reads the varlena header (no detoast) and is the
@@ -384,15 +395,17 @@ defmodule Engram.Workers.ReencodeEnvelopes do
     )
   end
 
-  defp reencode_chunks([], _user_id, _column, deadline, last_id),
+  defp reencode_chunks([], _user_id, _column, deadline, last_id, _written),
     do: deadline_check(deadline, last_id)
 
-  defp reencode_chunks([chunk | rest], user_id, column, deadline, last_id) do
-    with :ok <- reencode_chunk(user_id, column, chunk) do
+  defp reencode_chunks([chunk | rest], user_id, column, deadline, last_id, written) do
+    with {:ok, rows} <- reencode_chunk(user_id, column, chunk) do
+      :counters.add(written, 1, rows)
+
       cond do
         rest == [] -> deadline_check(deadline, last_id)
         past?(deadline) -> {:halt, List.last(chunk)}
-        true -> reencode_chunks(rest, user_id, column, deadline, last_id)
+        true -> reencode_chunks(rest, user_id, column, deadline, last_id, written)
       end
     end
   end
@@ -429,12 +442,13 @@ defmodule Engram.Workers.ReencodeEnvelopes do
             nonce: field(r, ^nonce)
           })
           |> Repo.all()
-          |> Enum.each(&reencode_row(column, &1, dek))
+          |> Enum.reduce(0, &(reencode_row(column, &1, dek) + &2))
+          |> then(&{:ok, &1})
         end
       end)
 
     # After the commit, so a handler sees the chunk's transaction closed.
-    if result == :ok,
+    if match?({:ok, _}, result),
       do:
         :telemetry.execute([:engram, :reencode_envelopes, :chunk], %{count: length(ids)}, %{
           column: column.label
@@ -460,13 +474,16 @@ defmodule Engram.Workers.ReencodeEnvelopes do
     case Envelope.decrypt(ct, nonce, dek, aad) do
       {:ok, plaintext} ->
         {new_ct, new_nonce} = Envelope.encrypt(plaintext, dek, aad)
-        write_row(name, id, ct, new_ct, new_nonce)
+        {rows, _} = write_row(name, id, ct, new_ct, new_nonce)
+        rows
 
       :error ->
         Logger.warning(
           "envelope re-encode: row does not decrypt, left as is",
           Metadata.with_category(:warning, :crypto, table: name, row_id: id)
         )
+
+        0
     end
   end
 
