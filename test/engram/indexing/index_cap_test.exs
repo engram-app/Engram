@@ -1,5 +1,7 @@
 defmodule Engram.Indexing.IndexCapTest do
-  use Engram.DataCase, async: true
+  # async: false: one test flips the global :limits_enforced flag, which made
+  # async gate tests (e.g. CrossVaultGateTest) see limits off mid-run.
+  use Engram.DataCase, async: false
 
   import Ecto.Query
   import Engram.Factory
