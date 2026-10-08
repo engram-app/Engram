@@ -235,7 +235,7 @@ jobs:
           HASH=$(git ls-tree -r HEAD -- \
             Dockerfile entrypoint.sh \
             mix.exs mix.lock \
-            config lib priv frontend \
+            config lib priv frontend native \
             | sha256sum | cut -c1-12)
           if [ -n "${LOCAL_REGISTRY:-}" ]; then
             IMAGE="${LOCAL_REGISTRY}/engram-ci:${HASH}"
@@ -327,7 +327,7 @@ jobs:
           # in the Docker build context, which can change image bytes.
           BACKEND_HASH=$({
             git ls-tree -r HEAD -- \
-              lib priv config test frontend \
+              lib priv config test frontend native \
               Dockerfile entrypoint.sh .dockerignore \
               mix.lock \
               .formatter.exs .credo.exs .dialyzer_ignore.exs .sobelow-conf .sobelow-skips \
@@ -555,7 +555,7 @@ jobs:
           HASH=$(git ls-tree -r HEAD -- \
             Dockerfile entrypoint.sh \
             mix.exs mix.lock \
-            config lib priv frontend \
+            config lib priv frontend native \
             | sha256sum | cut -c1-12)
           # Registry-qualified ref so any runner can pull it. LOCAL_REGISTRY is
           # hard-set at the workflow level (:5001); guard anyway so a misconfig
@@ -2547,12 +2547,41 @@ jobs:
         env:
           CARGO_PROFILE_RELEASE_LTO: "false"
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
-        working-directory: native/engram_native
+        # Both crates: engram_core (the envelope engine, shared with the
+        # wasm clients) is its own crate with its own lockfile.
         run: |
           export CARGO_TARGET_DIR="$HOME/.cache/engram-native-target"
-          cargo fmt --check
-          cargo clippy --release --locked --all-targets -- -D warnings
-          cargo test --release --locked
+          for crate in native/engram_core native/engram_native; do
+            echo "::group::$crate"
+            (cd "$crate" \
+              && cargo fmt --check \
+              && cargo clippy --release --locked --all-targets -- -D warnings \
+              && cargo test --release --locked)
+            echo "::endgroup::"
+          done
+
+      - name: engram_core builds for wasm32 (native/)
+        # The plugin and web app will run native/engram_core as wasm32, so a
+        # dependency or an API that cannot target it must fail here. ring and
+        # zstd compile C, which for wasm32 needs clang; the runner user has no
+        # sudo, so the build runs in the pinned rust image (same digest as
+        # the CI image; keep it in step with rust-toolchain.toml). Rootless
+        # docker maps container root to the runner user, so the per-VM cache
+        # dir stays ours; cargo locks it across concurrent runners.
+        run: |
+          CACHE="$HOME/.cache/engram-core-wasm"
+          mkdir -p "$CACHE/registry" "$CACHE/target"
+          docker run --rm \
+            -v "$PWD/native:/w:ro" \
+            -v "$CACHE/registry:/usr/local/cargo/registry" \
+            -v "$CACHE/target:/target" \
+            -e CARGO_TARGET_DIR=/target \
+            -w /w/engram_core \
+            rust:1.94.1-slim-bookworm@sha256:cf9dd0ec73e75f827fe59123fff9dc65af1a1c8363c3c31ee8d7f8ad0b6a5fb2 \
+            bash -c 'apt-get update -qq \
+              && apt-get install -y -qq --no-install-recommends clang >/dev/null \
+              && rustup target add wasm32-unknown-unknown \
+              && cargo build --release --locked --target wasm32-unknown-unknown'
 
       - name: Fetch deps (if missing or lockfile changed)
         # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`
