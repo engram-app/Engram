@@ -143,10 +143,11 @@ defmodule Engram.Native do
     do: sized(:utf16_offsets, text, [text, offsets])
 
   # `input` as for `call/4`; up to @inline_max bytes of it runs `<name>_nif`
-  # on the calling scheduler, more runs `<name>_dirty_nif`.
-  defp sized(name, input, args) do
+  # on the calling scheduler, more runs `<name>_dirty_nif`. `force_dirty`
+  # is for a call whose work its input size does not bound.
+  defp sized(name, input, args, force_dirty \\ false) do
     bytes = if is_integer(input), do: input, else: :erlang.iolist_size(input)
-    dirty = bytes > @inline_max
+    dirty = force_dirty or bytes > @inline_max
     {inline_nif, dirty_nif} = nifs(name)
     nif = if dirty, do: dirty_nif, else: inline_nif
     call(name, bytes, %{dirty: dirty}, fn -> apply(__MODULE__, nif, args) end)
@@ -252,10 +253,14 @@ defmodule Engram.Native do
   `Engram.Crypto.Envelope.decrypt/4`'s engine: `{:ok, plain}` for any
   format, `:error` for anything that does not authenticate (wrong key,
   AAD, nonce, tampered or truncated ciphertext).
+
+  Format 0 (12-byte nonce) runs inline up to 16 KB of ciphertext. Format 1
+  (13-byte nonce field) always runs dirty: a zstd row of a few KB can
+  inflate to tens of MB, so its ciphertext size does not bound the work.
   """
   def envelope_open(ct, nonce, key, aad)
       when is_binary(ct) and is_binary(nonce) and is_binary(key) and is_binary(aad) do
-    case sized(:envelope_open, ct, [ct, nonce, key, aad]) do
+    case sized(:envelope_open, ct, [ct, nonce, key, aad], byte_size(nonce) == 13) do
       :error -> :error
       plain -> {:ok, plain}
     end

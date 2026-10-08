@@ -110,6 +110,16 @@ defmodule Engram.Native.EnvelopeTest do
       end)
     end
 
+    # A format-1 zstd row inflates far past its ciphertext (1.5 KB -> 50 MB
+    # measured), so its size says nothing about the work: always dirty.
+    test "open: a small format-1 ciphertext still runs dirty" do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+      {ct, <<1, _::binary-size(12)>> = nonce} = Native.envelope_seal("abc", @key, @aad, :zstd)
+      assert byte_size(ct) < 64
+      assert Native.envelope_open(ct, nonce, @key, @aad) == {:ok, "abc"}
+      assert_received {_, ^ref, _, %{nif: :envelope_open, dirty: true}}
+    end
+
     test "the inline and dirty variants agree" do
       nonce = :crypto.strong_rand_bytes(12)
 
