@@ -1,10 +1,63 @@
 # Context Doc: Encryption-at-Rest Operations
 
-_Last verified: 2026-10-03_
+_Last verified: 2026-10-07_
 
 Operator runbooks for encryption at rest. Encryption is unconditional: every note, vault, attachment and Qdrant payload is encrypted under a per-user DEK; there is no per-vault toggle. Path/folder/tags/name are HMAC blind indexes plus encrypted display values. The only plaintext frontmatter columns are the dates `notes.fm_timestamp`/`fm_created` (kept plain for range queries); frontmatter `type` is encrypted with a `type_hmac` blind index, `description`/`resource` are encrypted display-only. DEK rotation rewraps all three and re-derives `type_hmac`.
 
 **Which key wraps the DEKs depends on the deploy.** Prod uses AWS KMS (`KEY_PROVIDER=aws_kms`) and sets no `ENCRYPTION_MASTER_KEY` (engram-infra `main/envs/prod/ecs_secrets.tf`). Staging and self-host use the Local provider with `ENCRYPTION_MASTER_KEY`. So the master-key rotation and backup sections apply to staging/self-host only; per-user DEK rotation (T3.7) applies everywhere. KMS traps: `aws-kms-provider-integration.md`.
+
+---
+
+## Envelope formats (format 0 / format 1, #1872)
+
+Every encrypted column is `ct_with_tag` plus a `nonce` field, produced by
+`Engram.Crypto.Envelope` over the Rust engine (`Engram.Native.envelope_seal/4`,
+`envelope_open/4`). The nonce field's length is the format tag:
+
+| Format | Nonce field | AAD to AES-GCM | Body (before the 16-byte tag) |
+|---|---|---|---|
+| 0 | 12 bytes | the caller's AAD, unchanged | the plaintext (byte-identical to `:crypto` AES-256-GCM) |
+| 1 | `<<1, nonce::12>>` (13 bytes) | caller AAD `<>` `"\|f1"` | `<<codec, payload>>`, codec 0 = raw, 1 = zstd (level 3, checksum + content size on) |
+
+- The `"|f1"` AAD suffix binds the format: a format-1 body cannot be replayed as
+  format 0 (or the reverse) because the tag will not verify.
+- Format 0 is the only format written today: `config :engram,
+  :envelope_compression` defaults to `false` in every env. Flipping it on is a
+  behaviour change that needs the follow-ups below first. Reading both formats
+  always works.
+- Empty plaintext is always format 0, so `has_content?/1` in revisions
+  (`byte_size(ct) > tag_bytes()`) keeps its meaning.
+- Anything that packs the nonce at a fixed offset stays format 0 forever
+  (`KeyProvider.Local`'s wrap blob `<<version, alg, nonce::12, ct>>`); their AADs
+  are not in the policy.
+- Decode streams the zstd frame and never trusts the declared size, so a forged
+  frame cannot force a huge allocation. Anything that fails to authenticate,
+  decode or parse returns `:error`; a key that is not 32 bytes raises
+  `FunctionClauseError` from `Envelope`'s guard (unchanged).
+
+Compression policy, keyed by the AAD prefix `table <> <<0>> <> column <> <<0>>`
+(`Crypto.aad_prefix/2`), only when `:envelope_compression` is on:
+
+| Mode | Columns |
+|---|---|
+| `:zstd` | `notes.content`, `notes.crdt_state`, `vault_index_states.state`, `vault_index_update_log.update`, `note_revisions.content` |
+| `:auto` (64 KB sample, skip if it saves under 10%) | `attachments.content` |
+| `:none` | everything else |
+
+`crdt_update_log` rows reuse the `notes.crdt_state` AAD and so follow it.
+
+**Follow-ups before the flag is turned on (R1/R2).**
+
+- R1, DEK rotation and rewrap: rotation decrypts and re-seals through the same
+  engine, so it carries the format along. Verify a rotation on a mixed
+  format-0/format-1 vault before enabling.
+- R2, PR 3 work: `CrdtBloatSweep` size math and the `tag_bytes/0` doc assume
+  `ct = plaintext + tag`, which is wrong for format 1 (the body is compressed and
+  carries one codec byte). Fix both before any format-1 row exists, or the sweep
+  will misreport bloat.
+- Rollback: set the flag back to `false`. Format-1 rows already written stay
+  readable; there is no downgrade path that rewrites them to format 0, and an
+  older release without the engine cannot read them.
 
 ---
 

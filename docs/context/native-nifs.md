@@ -54,6 +54,47 @@ deletions: the minimum made each cut depend on where the chunk began.
 `chunker_golden.json.gz` pins v3 output; regenerate it only with a version
 bump.
 
+### Envelope engine (`envelope_seal` / `envelope_open`, 2026-10-07, #1872)
+
+`Engram.Crypto.Envelope` runs on `native/engram_native/src/envelope.rs`
+(AES-256-GCM via the `aes-gcm` crate, zstd level 3). Format 0 is byte for
+byte what `:crypto` wrote (`test/support/crypto_oracle.ex` is the oracle);
+format 1 adds a codec byte and zstd. Formats and policy:
+`encryption-operations.md` "Envelope formats". Dirty above 16 KB, zstd contexts
+are thread-local per scheduler thread, decode streams (no allocation from the
+declared size).
+
+Measured on the dev box (2026-10-07, best of 15 x 20 calls per cell, microseconds
+per call, load average 1.4-2.1 and rising during the run, so treat single cells
+as +-30%). Input is seeded pseudo-random markdown (headings, wikilink bullets,
+prose from a 1,500-word vocabulary), not a repeated block, which would show a
+useless 700x ratio. Two full runs:
+
+| Size | Oracle enc / dec | `:none` seal / open | `:zstd` seal / open | zstd ratio |
+|---|---|---|---|---|
+| 2 KB | 17-23 / 9-10 | 17 / 14 | 75 / 28 | 1.7x |
+| 10 KB | 44-47 / 31-33 | 59-63 / 56-57 | 286-313 / 90-94 | 1.95x |
+| 100 KB | 153-358 / 110-287 | 356-617 / 360-595 | 1,063-2,765 / 306-333 | 2.8x |
+| 1 MB | 2,005-2,148 / 1,264-1,537 | 2,700-2,900 / 2,922-2,936 | 11,150-11,320 / 3,825-3,849 | 3.05x |
+
+Findings:
+
+- The engine's format 0 is NOT faster than OpenSSL: about 1.0x at 2 KB and
+  1.3-2x slower from 10 KB up. The `aes-gcm` crate on a baseline x86-64 build
+  does not reach OpenSSL's AES-NI/CLMUL throughput (about 350-400 MB/s here
+  against 500+). The win here is the format, not the cipher. A
+  `-C target-cpu` build is off the table (baseline x86-64 rule above); a faster
+  GHASH is a separate question if encrypt ever shows in a profile.
+- zstd seal costs 4-6x a plain seal (level 3 compresses at about 90 MB/s, 1 MB
+  in 11 ms) but is the cheaper side of the trade: the write is rare, the read is
+  `open` 1.3x a plain open. Only seal is slow, and `:auto` skips it for
+  incompressible blobs after a 64 KB sample.
+- Ratio is data-dependent: 1.7x at 2 KB (short window) to 3x at 1 MB on word
+  salad. Real notes with repeated structure compress better; Markdown with
+  base64 payloads or already-compressed attachments will not.
+- A 1 MB note seals in 11 ms on a dirty scheduler. That is a write-path cost
+  only; the throughput limit is the compressor, not the scheduler.
+
 Measured on the search and upsert NIFs (2026-10-04, dev box, min of 5-7,
 identical output to the Elixir they replaced):
 

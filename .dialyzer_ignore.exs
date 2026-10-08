@@ -5,10 +5,11 @@
   # `<<_::N, _::_*8>>` shapes from the literal-string concatenation, but narrowing
   # the spec would leak implementation details to call sites and make any
   # caller-side `binary()` parameter type fail to match.
-  # NOTE: dialyxir 1.4.x line-matches the `@spec` line, not `@doc`. Keep these
-  # in sync if you re-order or add lines above the AAD helpers.
-  {"lib/engram/crypto.ex", :contract_supertype, 86},
-  {"lib/engram/crypto.ex", :contract_supertype, 95},
+  # `aad_prefix/2` (the shared head of the v2 AAD, #1872) is the same case.
+  # NO line numbers: dialyxir line-matches the `@spec`, and the pins at 86/95
+  # broke as soon as `aad_prefix/2` was added above them. Every
+  # `contract_supertype` in this file is an AAD helper, so (file, type) stays narrow.
+  {"lib/engram/crypto.ex", :contract_supertype},
 
   # `identify_from_blob/1` is intentionally specced as `term()` because callers
   # pass values straight from DB columns (which may be nil) or from arbitrary
