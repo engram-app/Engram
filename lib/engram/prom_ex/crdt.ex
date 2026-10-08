@@ -383,7 +383,7 @@ defmodule Engram.PromEx.Crdt do
           event_name: @sweep_event,
           measurement: :state_bytes_total,
           description:
-            "Total decrypted-equivalent bytes of crdt_state across every live note. Paired " <>
+            "Total STORED bytes (after compression, minus the AEAD tag) of crdt_state across every live note. Paired " <>
               "with content_bytes_total this is the reclaimable-storage estimate the history " <>
               "epic (#609) needs before sizing anything. Aggregate with max, never sum."
         ),
@@ -392,7 +392,7 @@ defmodule Engram.PromEx.Crdt do
           event_name: @sweep_event,
           measurement: :content_bytes_total,
           description:
-            "Total decrypted-equivalent bytes of note content across every live note, " <>
+            "Total STORED bytes (after compression, minus the AEAD tag) of note content across every live note, " <>
               "including those carrying no CRDT state. Aggregate with max, never sum."
         ),
         # The WRITE side of the authority the projection metrics below read from.

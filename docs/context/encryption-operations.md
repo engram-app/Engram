@@ -22,10 +22,10 @@ Every encrypted column is `ct_with_tag` plus a `nonce` field, produced by
 
 - The `"|f1"` AAD suffix binds the format: a format-1 body cannot be replayed as
   format 0 (or the reverse) because the tag will not verify.
-- Format 0 is the only format written today: `config :engram,
-  :envelope_compression` defaults to `false` in every env. Flipping it on is a
-  behaviour change that needs the follow-ups below first. Reading both formats
-  always works.
+- Policy columns are written in format 1 (R2, #1872 PR 3): `config :engram,
+  :envelope_compression` is `true` in `config/config.exs` for every env. Setting
+  it `false` is the emergency kill switch: new writes return to format 0 with
+  no release. Reading both formats always works.
 - Empty plaintext is always format 0, so `has_content?/1` in revisions
   (`byte_size(ct) > tag_bytes()`) keeps its meaning.
 - Anything that packs the nonce at a fixed offset stays format 0 forever
@@ -55,17 +55,30 @@ Compression policy, keyed by the AAD prefix `table <> <<0>> <> column <> <<0>>`
 
 `crdt_update_log` rows reuse the `notes.crdt_state` AAD and so follow it.
 
-**Follow-ups before the flag is turned on.** Releases: R1 is this PR (#1872
-PR 2: the engine reads both formats, writes format 0 only); R2 is PR 3
-(compression on, plus re-encoding existing rows).
+**Releases.** R1 was #1872 PR 2 (the engine reads both formats, writes format
+0 only); R2 is PR 3 (compression on, plus re-encoding existing rows).
 
-- Before R2, check DEK rotation and rewrap: rotation decrypts and re-seals
-  through the same engine, so it carries the format along. Verify a rotation
-  on a mixed format-0/format-1 vault before enabling.
-- In R2 (PR 3): `CrdtBloatSweep` size math and the `tag_bytes/0` doc assume
-  `ct = plaintext + tag`, which is wrong for format 1 (the body is compressed and
-  carries one codec byte). Fix both before any format-1 row exists, or the sweep
-  will misreport bloat.
+- DEK rotation and rewrap decrypt and re-seal through the same engine and carry
+  the format along (pinned by `EnvelopePolicyTest`).
+- Size math under compression (done in R2). Format 1 stored bytes are not text
+  size: raw costs plaintext + 1 + 16, zstd costs the compressed size + 1 + 16.
+  `Envelope.tag_bytes/0` is documented accordingly, and
+  `CrdtBloatSweep` now reports STORED bytes (`octet_length(col) - tag_bytes()`);
+  gauge names are unchanged, descriptions say "stored". The `state/content`
+  ratio is only like-for-like once both columns of a note share a format, i.e.
+  after the backfill. The ratio floor (`CrdtBloat.min_content_bytes/0`, 100) now
+  applies to stored bytes, so a highly compressible note under ~100 stored
+  bytes leaves the measured cohort.
+- `Revisions.has_content?/1` (`byte_size(ct) > tag_bytes()`) is unchanged and
+  still right: empty plaintext is always format 0 (a 16-byte ct), a 1-char note
+  is format 1 raw (18 bytes).
+- Attachment quota and `max_file_bytes` use `size_bytes = byte_size(plaintext)`,
+  never the stored size. Existing attachment blobs are not re-encoded (format 0
+  and format 1 raw cost the same bytes).
+- Revision blobs (`FinalizeRevision`) are no longer gzipped before encrypting;
+  the revision-content AAD is in the policy so the envelope zstd-compresses
+  them. No reader existed and prod recording was off, so no gzip blobs need
+  reading (#1711's reader decrypts to plain text).
 - Rollback: set the flag back to `false`. Format-1 rows already written stay
   readable; there is no downgrade path that rewrites them to format 0, and an
   older release without the engine cannot read them.

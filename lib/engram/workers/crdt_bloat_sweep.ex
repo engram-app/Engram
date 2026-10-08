@@ -19,13 +19,24 @@ defmodule Engram.Workers.CrdtBloatSweep do
 
   ## It never decrypts anything
 
-  AES-GCM ciphertext is the same length as its plaintext plus a fixed 16-byte
-  tag (`Engram.Crypto.Envelope.tag_bytes/0`); the nonce lives in its own column.
-  So `octet_length(col) - tag_bytes()` is the exact plaintext size, and the
+  A stored ciphertext is its payload plus a fixed 16-byte tag
+  (`Engram.Crypto.Envelope.tag_bytes/0`); the nonce lives in its own column.
+  So `octet_length(col) - tag_bytes()` is the exact STORED payload size, and the
   whole measurement is column lengths — no DEK lookup, no key material, no
   plaintext in memory, and one aggregate query rather than a walk. The fixed
   overhead cancels in the ratio anyway; it is subtracted so the reported BYTE
-  totals are true sizes rather than sizes plus a per-row constant.
+  totals are true stored sizes rather than sizes plus a per-row constant.
+
+  ## The gauges report STORED bytes (#1872 R2)
+
+  Content and `crdt_state` are compressed before encryption (format 1), so the
+  payload is no longer the text size: a compressed row reports its zstd size, a
+  format 1 raw row its plaintext plus the 1-byte format prefix, a format 0 row
+  its plaintext size. That is what the page cache and disk actually hold, which
+  is what these gauges are for. Metric names are unchanged (dashboards). The
+  `state/content` ratio is only a like-for-like bloat measure once both columns
+  of a note share a format, i.e. after the backfill; until then it mixes
+  compressed and plain rows.
 
   ### `octet_length` does NOT de-TOAST, despite looking like it must
 
