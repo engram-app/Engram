@@ -5,6 +5,10 @@
 //! Format 1: nonce field `<<1, nonce::12>>`, AAD = caller AAD ++ "|f1" (so
 //! the format byte is authenticated), body = `<<codec, payload>>` where
 //! codec 0 = raw, 1 = one zstd frame (content size + checksum on).
+//!
+//! Assumes no caller AAD ends in "|f1". Every AAD is structured
+//! (`table:column:id`, `dek:...`, `qdrant:...`) or the legacy empty one;
+//! otherwise a format-0 AAD `x|f1` would equal format 1's AAD for `x`.
 use aes_gcm::aead::{AeadInPlace, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce, Tag};
 use std::cell::RefCell;
@@ -91,14 +95,17 @@ pub fn seal_with_nonce(
         return Ok((buf, nonce.to_vec()));
     }
 
-    let try_zstd = match mode {
-        Mode::Auto => {
-            let sample = &plain[..plain.len().min(SAMPLE)];
-            matches!(compress(sample), Some(z) if z.len() * 10 <= sample.len() * 9)
-        }
-        _ => true,
+    // :auto keeps zstd only if it saves 10%. Under SAMPLE the sample IS the
+    // input, so its compression is the result: compress once, not twice.
+    let worth = |z: &Vec<u8>, of: usize| z.len() * 10 <= of * 9;
+    let zipped = match mode {
+        Mode::Auto if plain.len() > SAMPLE => compress(&plain[..SAMPLE])
+            .filter(|z| worth(z, SAMPLE))
+            .and_then(|_| compress(plain)),
+        Mode::Auto => compress(plain).filter(|z| worth(z, plain.len())),
+        _ => compress(plain),
     };
-    let (codec, payload) = match try_zstd.then(|| compress(plain)).flatten() {
+    let (codec, payload) = match zipped {
         Some(z) if z.len() < plain.len() => (CODEC_ZSTD, z),
         _ => (CODEC_RAW, plain.to_vec()),
     };
@@ -215,6 +222,63 @@ mod tests {
         // NIST-style KAT: all-zero key and nonce, empty plaintext and AAD.
         let (ct, _) = seal_with_nonce(b"", &[0; 32], b"", Mode::None, [0; 12]).unwrap();
         assert_eq!(hex(&ct), "530f8afbc74536b9a963b4f1c4cb738b");
+    }
+
+    #[test]
+    fn format_zero_matches_known_answer_with_aad() {
+        // From OTP :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, pt, aad, true):
+        // key = 0..=31, iv = 0xa0..=0xab. Pins CTR over a non-empty body and
+        // GHASH over a non-empty AAD.
+        let key: Vec<u8> = (0..32).collect();
+        let iv: [u8; 12] = core::array::from_fn(|i| 0xa0 + i as u8);
+        let pt = b"Engram envelope known-answer vector, non-empty.";
+        let (ct, n) =
+            seal_with_nonce(pt, &key, b"notes:content:0b7e2b1c-kat", Mode::None, iv).unwrap();
+        assert_eq!(n, iv);
+        assert_eq!(
+            hex(&ct),
+            "a3761b5f24a622da0c13e2bf680aa5fe1bc23667fc9a2302ef7943f45fdd1062\
+             a61935d38f4c3c5372f969b87d03adb93135b8b442f9de866b87442e9b456c"
+        );
+    }
+
+    /// A format-1 ciphertext over an arbitrary body, sealed with the real
+    /// cipher and AAD, so `open` gets past authentication.
+    fn seal_f1_body(body: &[u8], aad: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        let nonce = [9u8; NONCE];
+        let mut buf = body.to_vec();
+        let tag = cipher(&K)
+            .unwrap()
+            .encrypt_in_place_detached(Nonce::from_slice(&nonce), &f1_aad(aad), &mut buf)
+            .unwrap();
+        buf.extend_from_slice(&tag);
+        let mut field = vec![FORMAT_1];
+        field.extend_from_slice(&nonce);
+        (buf, field)
+    }
+
+    #[test]
+    fn authenticated_but_malformed_format_one_bodies_fail_closed() {
+        let frame = compress(&b"abc ".repeat(500)).unwrap();
+        let mut junk_frame = frame.clone();
+        let mid = junk_frame.len() / 2;
+        junk_frame[mid] ^= 0xff;
+        let bodies = vec![
+            vec![],                                                  // no codec byte
+            vec![2, 1, 2, 3],                                        // unknown codec
+            vec![CODEC_ZSTD],                                        // empty frame
+            [&[CODEC_ZSTD][..], &frame[..frame.len() / 2]].concat(), // truncated
+            [&[CODEC_ZSTD][..], &junk_frame].concat(),               // corrupt (checksum)
+            [&[CODEC_ZSTD][..], b"not a zstd frame at all"].concat(),
+            [&[CODEC_ZSTD][..], &frame, b"trailing"].concat(),
+        ];
+        for body in bodies {
+            let (ct, n) = seal_f1_body(&body, b"a");
+            assert!(open(&ct, &n, &K, b"a").is_err(), "{body:?}");
+        }
+        // The harness itself is sound: a well-formed body opens.
+        let (ct, n) = seal_f1_body(&[&[CODEC_ZSTD][..], &frame].concat(), b"a");
+        assert_eq!(open(&ct, &n, &K, b"a").unwrap(), b"abc ".repeat(500));
     }
 
     fn hex(b: &[u8]) -> String {
