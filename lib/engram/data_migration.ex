@@ -6,10 +6,12 @@ defmodule Engram.DataMigration do
   `run_pass/0` does (or enqueues) one bounded slice of work and returns
   `:done` ONLY when it found nothing left to do. Anything uncertain (an
   error, a user skipped mid-rotation, jobs still running) is `:more`.
+  `{:more, detail}` is the same, with a keyword list of what it found (e.g.
+  `users: 3`) that the runner adds to its log lines.
   """
   @callback name() :: String.t()
   @callback version() :: pos_integer()
-  @callback run_pass() :: :done | :more
+  @callback run_pass() :: :done | :more | {:more, keyword()}
 
   @doc """
   Optional, default `true`. A disabled migration is skipped entirely by the

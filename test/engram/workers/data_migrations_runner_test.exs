@@ -62,6 +62,14 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
     def run_pass, do: :done
   end
 
+  defmodule ReverifiedDirty do
+    @behaviour Engram.DataMigration
+    def name, do: "test_reverified_dirty"
+    def version, do: 1
+    def reverify?, do: true
+    def run_pass, do: {:more, users: 3}
+  end
+
   # version/0 fails on its first call in a process (a transient failure before
   # the pass, like a done?/2 DB read timing out) and works after that.
   defmodule FlakyBeforePass do
@@ -287,5 +295,40 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
       assert Engram.DataMigration in (mod.module_info(:attributes)[:behaviour] || []),
              "#{inspect(mod)} lacks @behaviour Engram.DataMigration"
     end
+  end
+
+  # Rows written while the gate was blocked in a deploy reopen the migration
+  # most days; at :warning that routine line drowns a real regression.
+  test "a routine re-verify reopen logs at :info with what it found" do
+    import ExUnit.CaptureLog
+    require Logger
+    :ok = DataMigrations.mark_done("test_reverified_dirty", 1)
+
+    warn =
+      capture_log([level: :warning], fn ->
+        assert DataMigrationsRunner.run(ReverifiedDirty, true) == :more
+      end)
+
+    refute warn =~ "reopened"
+    refute DataMigrations.done?("test_reverified_dirty", 1)
+
+    :ok = DataMigrations.mark_done("test_reverified_dirty", 1)
+    DataMigrations.reset_cache()
+    previous_level = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+
+    info =
+      capture_log([level: :info], fn ->
+        assert DataMigrationsRunner.run(ReverifiedDirty, true) == :more
+      end)
+
+    assert info =~ "data migration reopened by re-verify"
+    assert info =~ "users=3"
+  end
+
+  test "a pass returning {:more, detail} keeps it open" do
+    assert DataMigrationsRunner.run(ReverifiedDirty) == :more
+    refute DataMigrations.done?("test_reverified_dirty", 1)
   end
 end

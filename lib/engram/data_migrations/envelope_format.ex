@@ -38,6 +38,9 @@ defmodule Engram.DataMigrations.EnvelopeFormat do
   def run_pass do
     # Per-user in-flight handling lives in `enqueue_missing/0` (unique for
     # pending jobs, an explicit skip for :executing ones).
-    if ReencodeEnvelopes.enqueue_missing() == 0, do: :done, else: :more
+    case ReencodeEnvelopes.enqueue_missing() do
+      0 -> :done
+      users -> {:more, users: users}
+    end
   end
 end

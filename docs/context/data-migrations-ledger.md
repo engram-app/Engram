@@ -30,7 +30,9 @@ others.
   7 days count from the last disabled run.
 - Optional `reverify?/0` (default `false`). See "Re-verify" below.
 - `run_pass/0` returns `:done` only when it found no work. Errors, users
-  skipped mid DEK rotation and jobs still in flight are `:more`.
+  skipped mid DEK rotation and jobs still in flight are `:more`, or
+  `{:more, found}` with a keyword list of what it found (`EnvelopeFormat`
+  returns `users: n`), which the runner adds to its log lines.
 - `:done` means no row the backfill would process still needs work, checked
   against exactly those rows (the same scan and predicate the worker uses).
 - Two kinds of unfixed row, treated oppositely:
@@ -73,7 +75,14 @@ re-verify) is over 25 h old (`DataMigrations.verified_before?/2`). `:done` calls
 `mark_done/2` (idempotent; it re-closes a row another node reopened while this
 node still cached `done?`); `:more` calls `DataMigrations.reopen/2` (clears
 `completed_at`, restarts the stuck clock, drops this node's cached `done?`),
-and the hourly passes take over until it closes again. Keep the pass cheap
+and the hourly passes take over until it closes again. The reopen logs at
+`:info` ("data migration reopened by re-verify: found users=n"), not
+`:warning`: `EnvelopeFormat` reopens most days from rows written while a
+rolling deploy blocked the compression gate, and a daily warning would bury a
+real one. Judge it by the count (a handful of users is a deploy window; most
+of the fleet is an old node writing format 0). The abnormal cases have their
+own signals: a raising pass (`:warning`), the stuck alert, the compression
+gate gauge and the undecryptable-row `:warning`. Keep the pass cheap
 enough to run daily. `EnvelopeFormat`'s is one EXISTS per user per column:
 the `user_id` index narrows to the user's rows, but `octet_length` is not
 indexed, so it reads each of those rows until a match (cheap at prod scale:

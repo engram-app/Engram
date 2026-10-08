@@ -98,29 +98,49 @@ defmodule Engram.Workers.DataMigrationsRunner do
   end
 
   # Done already: only a pass that finds work changes anything.
+  #
+  # A reopen is :info, not :warning: it is routine (EnvelopeFormat reopens
+  # most days from rows written while a rolling deploy blocked the
+  # compression gate), and a daily :warning would hide a real one. The found
+  # count rides along (in the message, so Loki shows it) to tell a few
+  # deploy-window rows from a fleet-wide regression. The abnormal cases have
+  # their own signals: a pass that raises (:warning below), work that never
+  # finishes (the stuck alert), and for EnvelopeFormat the compression gate
+  # gauge and the undecryptable-row :warning.
   defp reverify(mod, name, version) do
-    case mod.run_pass() do
+    case run_pass(mod) do
       # Idempotent. Normally a no-op; it closes a row a re-verify reopened
       # while this node still cached `done?` (another node's reopen).
       :done ->
         :ok = DataMigrations.mark_done(name, version)
         :done
 
-      :more ->
+      {:more, found} ->
         DataMigrations.reopen(name, version)
 
-        Logger.warning(
-          "data migration reopened by re-verify",
-          Metadata.with_category(:warning, :oban, migration: name, version: version)
+        Logger.info(
+          "data migration reopened by re-verify#{describe(found)}",
+          Metadata.with_category(:info, :oban, [migration: name, version: version] ++ found)
         )
 
         :more
     end
   end
 
+  defp run_pass(mod) do
+    case mod.run_pass() do
+      :done -> :done
+      :more -> {:more, []}
+      {:more, found} when is_list(found) -> {:more, found}
+    end
+  end
+
+  defp describe([]), do: ""
+  defp describe(found), do: ": found " <> Enum.map_join(found, " ", fn {k, v} -> "#{k}=#{v}" end)
+
   # The pass ran: :more or a failure both leave the work open.
   defp pass(mod, name, version) do
-    case mod.run_pass() do
+    case run_pass(mod) do
       :done ->
         :ok = DataMigrations.mark_done(name, version)
 
@@ -131,7 +151,7 @@ defmodule Engram.Workers.DataMigrationsRunner do
 
         :done
 
-      :more ->
+      {:more, _found} ->
         flag_if_stuck(name, version)
         :more
     end

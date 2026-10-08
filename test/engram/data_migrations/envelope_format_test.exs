@@ -50,7 +50,7 @@ defmodule Engram.DataMigrations.EnvelopeFormatTest do
   test "a legacy row: enqueues its user and stays open", %{user: u, vault: v} do
     note!(u, v, "old.md", @big, false)
 
-    assert EnvelopeFormat.run_pass() == :more
+    assert EnvelopeFormat.run_pass() == {:more, users: 1}
     assert_enqueued(worker: ReencodeEnvelopes, args: %{"user_id" => u.id})
   end
 
@@ -58,7 +58,7 @@ defmodule Engram.DataMigrations.EnvelopeFormatTest do
     note!(u, v, "old.md", @big, false)
     {:ok, _} = Oban.insert(ReencodeEnvelopes.new(%{"user_id" => u.id}))
 
-    assert EnvelopeFormat.run_pass() == :more
+    assert EnvelopeFormat.run_pass() == {:more, users: 1}
     assert length(all_enqueued(worker: ReencodeEnvelopes)) == 1
   end
 
@@ -73,7 +73,7 @@ defmodule Engram.DataMigrations.EnvelopeFormatTest do
     {:ok, _} =
       Oban.insert(ReencodeEnvelopes.new(%{"user_id" => u.id}, schedule_in: 60))
 
-    assert EnvelopeFormat.run_pass() == :more
+    assert EnvelopeFormat.run_pass() == {:more, users: 2}
     assert_enqueued(worker: ReencodeEnvelopes, args: %{"user_id" => other.id})
     assert length(all_enqueued(worker: ReencodeEnvelopes, args: %{"user_id" => u.id})) == 1
   end
@@ -85,7 +85,7 @@ defmodule Engram.DataMigrations.EnvelopeFormatTest do
     {:ok, job} = Oban.insert(ReencodeEnvelopes.new(%{"user_id" => u.id}))
     Repo.update_all(from(j in Oban.Job, where: j.id == ^job.id), set: [state: "executing"])
 
-    assert EnvelopeFormat.run_pass() == :more
+    assert EnvelopeFormat.run_pass() == {:more, users: 1}
 
     assert [%{state: "executing"}] =
              Repo.all(
@@ -108,7 +108,7 @@ defmodule Engram.DataMigrations.EnvelopeFormatTest do
 
     assert :ok = perform_job(ReencodeEnvelopes, %{"user_id" => u.id})
     Repo.delete_all(Oban.Job)
-    assert EnvelopeFormat.run_pass() == :more
+    assert EnvelopeFormat.run_pass() == {:more, users: 1}
   end
 
   defp ledger(name), do: Repo.get(Engram.DataMigrations.Entry, name)
