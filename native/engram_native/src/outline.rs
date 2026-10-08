@@ -349,15 +349,26 @@ fn defined_labels(text: &str, segment: usize) -> HashSet<String> {
             title: String::new(),
         })
     }));
-    let arena = Arena::new();
-    let doc = parse_document(&arena, &probes(&defined), &opts);
-    doc.children()
-        .filter_map(|p| match &p.first_child()?.data.borrow().value {
-            NodeValue::Link(l) => Some(l.url.clone()),
-            _ => None,
-        })
-        .collect()
+    // In batches, one tree alive at a time: one parse of every label was a
+    // whole note's worth of tree (9.7 MB of `[nN]: /u` peaked at 1.06 GB).
+    let mut out = HashSet::with_capacity(defined.len());
+    for batch in defined.chunks(LABEL_BATCH) {
+        let arena = Arena::new();
+        let doc = parse_document(&arena, &probes(batch), &opts);
+        out.extend(
+            doc.children()
+                .filter_map(|p| match &p.first_child()?.data.borrow().value {
+                    NodeValue::Link(l) => Some(l.url.clone()),
+                    _ => None,
+                }),
+        );
+    }
+    out
 }
+
+/// Labels normalized per comrak parse in `defined_labels`: ~1,000 short
+/// probes is a tree of a few MB.
+const LABEL_BATCH: usize = 1_000;
 
 // "[c]\n\n" per candidate: probe i is the paragraph on line 2i + 1. Line
 // breaks inside a label become spaces (normalization collapses them).
@@ -687,6 +698,33 @@ mod tests {
         // No recursion over the tree: deep nesting cannot overflow a stack.
         let deep = format!("{}# x\n", "> ".repeat(50_000));
         assert!(outline(&deep).is_ok());
+    }
+
+    // Review of #1895: a fence holding a line too long to find a safe cut in
+    // was cut by force and accepted while still open, so `# not heading`
+    // became a heading and the closing fence opened a new one that ate `# B`.
+    #[test]
+    fn a_forced_cut_never_splits_an_open_fence() {
+        let doc = format!(
+            "# A\n\n```\n{}\n# not heading\n```\n\n# B\n",
+            "x".repeat(200_000)
+        );
+        let seg = super::outline_segmented(&doc, super::SEGMENT).unwrap();
+        assert_eq!(seg, super::outline_segmented(&doc, usize::MAX).unwrap());
+        let names: Vec<_> = seg.0.iter().map(|h| h.3.as_str()).collect();
+        assert_eq!(names, ["A", "B"]);
+        assert_eq!(seg.2, vec![(2, 5)]);
+    }
+
+    // Review of #1895: the label normalization parsed every defined label in
+    // one comrak call: 9.7 MB of distinct `[nN]: /u` peaked at 1.06 GB.
+    #[test]
+    fn defined_labels_parse_in_bounded_batches() {
+        let defs: String = (0..150_000).map(|i| format!("[n{i}]: /u\n\n")).collect();
+        let (labels, peak) =
+            crate::memory::measured(|| super::defined_labels(&defs, super::SEGMENT));
+        assert_eq!(labels.len(), 150_000);
+        assert!(peak < 120_000_000, "{peak} for {} B", defs.len());
     }
 
     #[test]
