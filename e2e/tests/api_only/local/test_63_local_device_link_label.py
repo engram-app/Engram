@@ -17,6 +17,8 @@ import uuid
 
 import requests
 
+from helpers.billing import grant_vault_headroom
+
 API_URL = os.environ.get("ENGRAM_API_URL") or "http://localhost:8100/api"
 PASSWORD = "E2eTestPass!99"
 TIMEOUT = 10
@@ -26,11 +28,11 @@ def _email(label: str) -> str:
     return f"e2e-link-{label}-{int(time.time())}-{uuid.uuid4().hex[:8]}@test.com"
 
 
-def _register(label: str) -> str:
+def _register(label: str, email: str | None = None) -> str:
     """Register a local user and return its access token."""
     resp = requests.post(
         f"{API_URL}/auth/register",
-        json={"email": _email(label), "password": PASSWORD},
+        json={"email": email or _email(label), "password": PASSWORD},
         timeout=TIMEOUT,
     )
     assert resp.status_code == 201, f"register failed: {resp.status_code} {resp.text}"
@@ -240,13 +242,12 @@ class TestMalformedAuthorize:
 
 class TestConcurrentVaultCreation:
     def test_parallel_first_vaults_all_succeed_with_one_default(self):
-        """Racing first-registrations used to 500 on the one-default-per-user index.
-
-        Four creators: the free-tier vault cap in the CI stack is 4.
-        """
+        """Racing first-registrations used to 500 on the one-default-per-user index."""
         from concurrent.futures import ThreadPoolExecutor
 
-        token = _register("race")
+        email = _email("race")
+        token = _register("race", email)
+        grant_vault_headroom(email)  # Free allows one vault; the race needs several
 
         def create(i: int) -> int:
             return requests.post(
@@ -256,10 +257,10 @@ class TestConcurrentVaultCreation:
                 timeout=30,
             ).status_code
 
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            codes = list(pool.map(create, range(4)))
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            codes = list(pool.map(create, range(8)))
 
-        assert codes == [201] * 4, codes
+        assert codes == [201] * 8, codes
         vaults = requests.get(f"{API_URL}/vaults", headers=_auth(token), timeout=TIMEOUT).json()
         listed = vaults["vaults"] if isinstance(vaults, dict) else vaults
         assert sum(1 for v in listed if v.get("is_default")) == 1
