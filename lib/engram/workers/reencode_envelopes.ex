@@ -45,8 +45,10 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   discovery inserts are not atomic across users either; a partial pass
   self-heals on the next one.
 
-  With the compression kill switch set, a job cancels itself: re-encoding
-  would write format 0 again and NULL `crdt_head` for nothing.
+  With compression off (`Envelope.compression_on?/0`: the kill switch, or a
+  cluster node that cannot read format 1), a job cancels itself: re-encoding
+  would write format 0 again and NULL `crdt_head` for nothing. The migration
+  is disabled by the same decision and re-enqueues once it is back on.
 
   Not re-encoded: attachments (format 0 and format 1 raw cost the same bytes),
   `note_revisions.pending_*` (verbatim copies of `notes.content`), and the
@@ -136,7 +138,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"user_id" => user_id} = args} = job) when is_binary(user_id) do
     cond do
-      not Application.get_env(:engram, :envelope_compression, false) ->
+      not Envelope.compression_on?() ->
         {:cancel, :compression_off}
 
       superseded?(job) ->

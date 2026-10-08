@@ -8,8 +8,10 @@ defmodule Engram.DataMigrations.EnvelopeFormat do
   A legacy row that never decrypts keeps this open (one user's job per hour);
   the stuck-migration alert surfaces it.
 
-  Disabled (`enabled?/0`) while the compression kill switch is set
-  (`ENVELOPE_COMPRESSION=false`): a re-encode would write format 0 again. Rows
+  Disabled (`enabled?/0`) while compression is off (`Envelope.compression_on?/0`:
+  the `ENVELOPE_COMPRESSION=false` kill switch, or a cluster node that cannot
+  read format 1): a re-encode would write format 0 again. Disabled pauses
+  without paging (the runner holds the stuck clock). Rows
   written in that window (or by an older node after a rollback) are legacy
   again after `:done`, so this opts into the runner's daily re-verify, which
   reopens it when one appears.
@@ -26,7 +28,7 @@ defmodule Engram.DataMigrations.EnvelopeFormat do
   def version, do: 1
 
   @impl true
-  def enabled?, do: Application.get_env(:engram, :envelope_compression, false)
+  def enabled?, do: Engram.Crypto.Envelope.compression_on?()
 
   @impl true
   def reverify?, do: true
