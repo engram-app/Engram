@@ -9,7 +9,7 @@ edition = "2021"
 # (native/wasm_guard) and fails on any import, to keep it that way.
 [dependencies]
 ring = "0.17"
-zstd = { version = "0.13", default-features = false }
+zstd = { version = "0.14", default-features = false }
 
 # ring links getrandom 0.2, which refuses to compile for wasm32-unknown-unknown
 # unless told where entropy comes from. `custom` makes that a host-supplied
@@ -20,4 +20,4 @@ getrandom = { version = "0.2", features = ["custom"] }
 
 [dev-dependencies]
 # Only for the ignored AES-GCM microbench (envelope.rs), ring's baseline.
-aes-gcm = "0.10"
+aes-gcm = "0.11"
