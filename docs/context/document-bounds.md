@@ -19,7 +19,7 @@ and indexing. Notes of any size still save, index and read.
 | Stored links | first 20,000 by position (`Parser.extract/1`), `[:engram, :links, :truncated]` | later edges not stored | 713 MB for 1.67M links |
 | Tags | 1,000 distinct (`meta.rs` `MAX_TAGS`), frontmatter first | later tags not stored | 1.16M tags, ~55 MB of hashes per Qdrant point |
 | Outline (MCP sections) | 100k headings+lines+ranges (`outline.rs`), see `native-nifs.md` | `too_complex` | ~2.5 GB comrak arena |
-| `get_notes` | 4 MB of content per call, first note always whole | later notes answer "fetch in its own call" | 20 x 10 MB ~ 1 GB |
+| `get_notes` | 4 MB of content per call, first note always whole; notes fetched and rendered one at a time | later notes answer "fetch in its own call" | 20 x 10 MB ~ 1 GB |
 
 `Parser.extract_all/1` is uncapped on purpose: the rename rewrite must change
 every occurrence or leave it dangling, and stores nothing.

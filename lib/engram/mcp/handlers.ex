@@ -314,19 +314,27 @@ defmodule Engram.MCP.Handlers do
         {:error, "section reads one note at a time; pass a single path"}
 
       true ->
-        fetched =
-          Enum.map(paths, fn path ->
-            case Notes.get_note(user, vault, path) do
-              {:ok, note} -> {path, note}
-              {:error, :not_found} -> {path, nil}
-            end
-          end)
+        fetch = fn path ->
+          case Notes.get_note(user, vault, path) do
+            {:ok, note} -> note
+            {:error, :not_found} -> nil
+          end
+        end
 
         # One parse deadline for the whole call, across every path.
         gate = ParseGate.call_opts()
+        links? = args["include_links"] == true
 
-        with {:ok, fetched} <- narrow_to_section(fetched, section, gate) do
-          render_notes(user, fetched, outline?, args["include_links"] == true, gate)
+        if is_binary(section) do
+          # Section reads take one path, so fetching it up front is fine.
+          with {:ok, [{path, note}]} <-
+                 narrow_to_section([{hd(paths), fetch.(hd(paths))}], section, gate),
+               do: render_notes(user, [{path, fn -> note end}], outline?, links?, gate)
+        else
+          # Fetched one at a time as each entry renders, so a note's content
+          # is released once its entry is built (20 x 10 MB held at once was
+          # ~200 MB before the reply was even assembled).
+          render_notes(user, Enum.map(paths, &{&1, fn -> fetch.(&1) end}), outline?, links?, gate)
         end
     end
   end
@@ -1790,7 +1798,6 @@ defmodule Engram.MCP.Handlers do
     }
   end
 
-  defp narrow_to_section(fetched, nil, _gate), do: {:ok, fetched}
   defp narrow_to_section([{_path, nil}] = fetched, _section, _gate), do: {:ok, fetched}
 
   defp narrow_to_section([{path, note}], section, gate) do
@@ -1837,61 +1844,53 @@ defmodule Engram.MCP.Handlers do
   @doc false
   def get_notes_budget, do: @get_notes_budget
 
-  # {path, note} | {path, nil} | {path, :over_budget}, in order.
-  defp within_budget(fetched, true), do: fetched
+  # `entries` is [{path, fetch_fn}]. Each note is fetched, budgeted and
+  # rendered before the next, so at most the kept content plus one note is
+  # alive.
+  defp render_notes(user, entries, outline?, links?, gate) do
+    {rendered, _spent} =
+      Enum.map_reduce(entries, 0, fn {path, fetch}, spent ->
+        case fetch.() do
+          nil ->
+            {{"Note not found: #{path}", %{"path" => path, "found" => false}}, spent}
 
-  defp within_budget(fetched, false) do
-    {kept, _spent} =
-      Enum.map_reduce(fetched, 0, fn
-        {path, %{} = note}, spent ->
-          size = byte_size(note.content || "")
+          note ->
+            size = if outline?, do: 0, else: byte_size(note.content || "")
 
-          if spent == 0 or spent + size <= @get_notes_budget,
-            do: {{path, note}, spent + size},
-            else: {{path, :over_budget}, spent}
-
-        other, spent ->
-          {other, spent}
+            if spent == 0 or spent + size <= @get_notes_budget,
+              do: {render_note(user, note, outline?, links?, gate), spent + size},
+              else: {over_budget(path), spent}
+        end
       end)
 
-    kept
+    {texts, notes} = Enum.unzip(rendered)
+    {:ok, Enum.join(texts, "\n\n---\n\n"), %{"notes" => notes}}
   end
 
-  defp render_notes(user, fetched, outline?, links?, gate) do
-    {texts, notes} =
-      fetched
-      |> within_budget(outline?)
-      |> Enum.map(fn
-        {path, nil} ->
-          {"Note not found: #{path}", %{"path" => path, "found" => false}}
+  defp over_budget(path) do
+    msg =
+      "Not returned: this call's content budget (#{div(@get_notes_budget, 1_048_576)} MB) " <>
+        "is spent. Fetch #{path} in its own call."
 
-        {path, :over_budget} ->
-          msg =
-            "Not returned: this call's content budget (#{div(@get_notes_budget, 1_048_576)} MB) " <>
-              "is spent. Fetch #{path} in its own call."
+    {"#{path}: #{msg}", %{"path" => path, "found" => true, "error" => msg}}
+  end
 
-          {"#{path}: #{msg}", %{"path" => path, "found" => true, "error" => msg}}
+  defp render_note(user, note, outline?, links?, gate) do
+    {text, payload} =
+      if outline?,
+        do: outline_entry(note, gate),
+        else: {format_get_note(note), note_payload(note)}
 
-        {_path, note} ->
-          {text, payload} =
-            if outline?,
-              do: outline_entry(note, gate),
-              else: {format_get_note(note), note_payload(note)}
+    payload = Map.put(payload, "found", true)
 
-          payload = Map.put(payload, "found", true)
-
-          # One backlinks + outgoing query pair per note (N+1), not batched.
-          # Fine at get_notes' 20-path cap; revisit only if that cap rises.
-          if links? do
-            {links, truncation} = links_payload(user, note)
-            {text <> "\n\n" <> format_links(links, truncation), Map.merge(payload, links)}
-          else
-            {text, payload}
-          end
-      end)
-      |> Enum.unzip()
-
-    {:ok, Enum.join(texts, "\n\n---\n\n"), %{"notes" => notes}}
+    # One backlinks + outgoing query pair per note (N+1), not batched.
+    # Fine at get_notes' 20-path cap; revisit only if that cap rises.
+    if links? do
+      {links, truncation} = links_payload(user, note)
+      {text <> "\n\n" <> format_links(links, truncation), Map.merge(payload, links)}
+    else
+      {text, payload}
+    end
   end
 
   # Both reads are user-scoped by the Links context; vault scoping holds
