@@ -162,7 +162,7 @@ defmodule Engram.Native.EnvelopeTest do
     end
 
     test "open: 16 KB of zstd plaintext inflates inline, a byte more reruns dirty" do
-      for {n, dirty} <- [{16_384, false}, {16_385, true}] do
+      for {n, dirty} <- [{16_383, false}, {16_384, false}, {16_385, true}] do
         plain = String.duplicate("a", n)
         {ct, nonce} = Native.envelope_seal(plain, @key, @aad, :zstd)
         assert byte_size(ct) < 100
