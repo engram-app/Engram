@@ -60,9 +60,18 @@ bump.
 (AES-256-GCM via `ring` 0.17, zstd level 3). Format 0 is byte for byte what
 `:crypto` wrote (`test/support/crypto_oracle.ex` is the oracle; two KATs in
 envelope.rs pin it too); format 1 adds a codec byte and zstd. Formats and
-policy: `encryption-operations.md` "Envelope formats". Dirty above 16 KB, zstd
-contexts are thread-local per scheduler thread, decode streams (no allocation
-from the declared size).
+policy: `encryption-operations.md` "Envelope formats". Scheduling: seal and
+format-0 open run dirty above 16 KB; a format-1 open (13-byte nonce field)
+always runs dirty, because a zstd body's size does not bound its work (a
+1,568 B ciphertext inflated to 50 MB in 182 ms, measured). Decode streams (no
+allocation from the declared size) and refuses a frame whose zstd window
+buffer would pass 2^23 (zstd's default allows 2^27; level 3 writes at most
+2^21).
+
+zstd contexts are thread-local: once compression is on, each scheduler
+thread (normal and dirty) that ever sealed or opened a zstd row keeps one
+compression and one decompression context resident for the life of the node.
+They are reused, not leaked; `NativeLeak` warms them before it counts.
 
 Copies: seal and open allocate the output as a BEAM binary (`OwnedBinary`),
 copy the input into it ONCE and run AES-GCM in place. Raw format 1 returns the
@@ -415,7 +424,9 @@ bumping pulldown-cmark: `ENGRAM_FUZZ_CASES=2000000 ENGRAM_FUZZ_SEED=7 cargo test
 EXCEPT small inputs on a hot path. Twelve NIFs export a normal and a
 `_dirty_nif` variant: `link_extract`, `note_title`, `note_meta`, `chunk`,
 `frontmatter_split`, `frontmatter_parse`, `text_diff`, `utf16_offsets`,
-`hmac_hex_many`, `json_decode`, `envelope_seal`, `envelope_open`. `md_outline` does not: comrak takes ~10 ms on 16 KB of
+`hmac_hex_many`, `json_decode`, `envelope_seal`, `envelope_open`. `envelope_open`
+also forces dirty for every format-1 ciphertext whatever its size (decompression
+work is not bounded by input size; `sized/4`'s `force_dirty`). `md_outline` does not: comrak takes ~10 ms on 16 KB of
 dense markup (tight list, `# h` lines; 0.1 ms on prose), so it is always
 dirty. Up to 16 KB of input (`@inline_max`, well under 1 ms) runs
 on the calling scheduler. A note write must not queue behind a long

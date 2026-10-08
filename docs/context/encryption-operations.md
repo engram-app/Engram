@@ -31,10 +31,18 @@ Every encrypted column is `ct_with_tag` plus a `nonce` field, produced by
 - Anything that packs the nonce at a fixed offset stays format 0 forever
   (`KeyProvider.Local`'s wrap blob `<<version, alg, nonce::12, ct>>`); their AADs
   are not in the policy.
-- Decode streams the zstd frame and never trusts the declared size, so a forged
-  frame cannot force a huge allocation. Anything that fails to authenticate,
-  decode or parse returns `:error`; a key that is not 32 bytes raises
-  `FunctionClauseError` from `Envelope`'s guard (unchanged).
+- Decode streams the zstd frame and never trusts the declared size, so a frame
+  whose header lies about its size cannot force a huge allocation. A genuine
+  high-ratio frame still allocates its true decompressed size (a few KB of
+  ciphertext can be tens of MB of plaintext). A frame that needs zstd's own
+  window buffer is refused if that window passes 8 MB (2^23; zstd's default is
+  128 MB, level 3 writes at most 2^21).
+- Scheduling: seal and format-0 open run on the calling scheduler up to 16 KB
+  and dirty above it. A format-1 open always runs dirty, whatever the
+  ciphertext size, since decompression work is not bounded by it.
+- Anything that fails to authenticate, decode or parse returns `:error`; a key
+  that is not 32 bytes raises `FunctionClauseError` from `Envelope`'s guard
+  (unchanged).
 
 Compression policy, keyed by the AAD prefix `table <> <<0>> <> column <> <<0>>`
 (`Crypto.aad_prefix/2`), only when `:envelope_compression` is on:
@@ -47,12 +55,14 @@ Compression policy, keyed by the AAD prefix `table <> <<0>> <> column <> <<0>>`
 
 `crdt_update_log` rows reuse the `notes.crdt_state` AAD and so follow it.
 
-**Follow-ups before the flag is turned on (R1/R2).**
+**Follow-ups before the flag is turned on.** Releases: R1 is this PR (#1872
+PR 2: the engine reads both formats, writes format 0 only); R2 is PR 3
+(compression on, plus re-encoding existing rows).
 
-- R1, DEK rotation and rewrap: rotation decrypts and re-seals through the same
-  engine, so it carries the format along. Verify a rotation on a mixed
-  format-0/format-1 vault before enabling.
-- R2, PR 3 work: `CrdtBloatSweep` size math and the `tag_bytes/0` doc assume
+- Before R2, check DEK rotation and rewrap: rotation decrypts and re-seals
+  through the same engine, so it carries the format along. Verify a rotation
+  on a mixed format-0/format-1 vault before enabling.
+- In R2 (PR 3): `CrdtBloatSweep` size math and the `tag_bytes/0` doc assume
   `ct = plaintext + tag`, which is wrong for format 1 (the body is compressed and
   carries one codec byte). Fix both before any format-1 row exists, or the sweep
   will misreport bloat.
