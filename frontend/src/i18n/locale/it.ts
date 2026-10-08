@@ -674,9 +674,9 @@ export default {
 	"Heads up — your Free plan syncs files between 1 device at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
 		"Attenzione: il tuo piano Gratuito sincronizza i file su 1 dispositivo alla volta. Collegare questo dispositivo disconnetterà {device}, che smetterà di ricevere le modifiche sincronizzate. Per tenerli collegati entrambi, {upgrade}.",
 	"Vault limit reached: your Free plan includes 1 vault":
-		"Limite di vault raggiunto: il piano Gratuito include 1 vault",
+		"Limite di archivi raggiunto: il piano Gratuito include 1 archivio",
 	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"Non puoi creare un nuovo vault con il piano Gratuito. Sincronizza con il vault esistente qui sopra oppure passa a un piano superiore.",
+		"Non puoi creare un nuovo archivio con il piano Gratuito. Sincronizza con il tuo archivio esistente qui sopra oppure passa a un piano superiore per aggiungerne altri.",
 	"Upgrade plan": "Passa a un piano superiore",
 	"{count} minutes ago": {
 		one: "{count} minuto fa",

@@ -676,10 +676,10 @@ export default {
 	"Heads up — your Free plan syncs files between 1 device at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
 		"Обратите внимание: на бесплатном плане файлы синхронизируются только с одним устройством за раз. Привязка этого устройства отключит {device}, и оно перестанет получать изменения. {upgrade}, чтобы оставить оба подключёнными.",
 	"Vault limit reached: your Free plan includes 1 vault":
-		"Достигнут лимит хранилищ: в бесплатный тариф входит 1 хранилище",
+		"Достигнут лимит хранилищ: бесплатный план включает 1 хранилище",
 	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"На бесплатном тарифе нельзя создать новое хранилище. Синхронизируйте существующее хранилище выше или перейдите на другой тариф, чтобы добавить больше.",
-	"Upgrade plan": "Улучшить тариф",
+		"На бесплатном плане нельзя создать новое хранилище. Синхронизируйте существующее хранилище выше или перейдите на платный план, чтобы добавить новые.",
+	"Upgrade plan": "Перейти на платный план",
 	"{count} minutes ago": {
 		one: "{count} минуту назад",
 		few: "{count} минуты назад",

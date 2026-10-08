@@ -404,7 +404,7 @@ describe("DeviceLinkPage", () => {
 		});
 
 		it("shows no warning while the account is under the cap", async () => {
-			atVaultCap(null);
+			atVaultCap(2);
 			get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
 			renderPage("/link?code=ENGR-7X4K");
 

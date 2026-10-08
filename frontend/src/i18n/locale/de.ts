@@ -680,10 +680,10 @@ export default {
 	"Heads up — your Free plan syncs files between 1 device at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
 		"Achtung: Mit deinem Tarif Kostenlos synchronisierst du Dateien jeweils zwischen 1 Gerät. Wenn du dieses Gerät verknüpfst, wird {device} getrennt und erhält keine Synchronisierungsänderungen mehr. Mit einem {upgrade} bleiben beide verbunden.",
 	"Vault limit reached: your Free plan includes 1 vault":
-		"Tresorlimit erreicht: Ihr Free-Tarif enthält 1 Tresor",
+		"Vault-Limit erreicht: Dein Tarif Kostenlos enthält 1 Vault",
 	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"Im Free-Tarif können Sie keinen neuen Tresor erstellen. Synchronisieren Sie mit Ihrem vorhandenen Tresor oben oder wechseln Sie auf einen höheren Tarif.",
-	"Upgrade plan": "Tarif upgraden",
+		"Mit dem Tarif Kostenlos kannst du keinen neuen Vault erstellen. Synchronisiere mit deinem vorhandenen Vault oben oder wechsle zu einem höheren Tarif, um weitere hinzuzufügen.",
+	"Upgrade plan": "Zu einem höheren Tarif wechseln",
 	"{count} minutes ago": { one: "vor {count} Minute", other: "vor {count} Minuten" },
 	"{count} hours ago": { one: "vor {count} Stunde", other: "vor {count} Stunden" },
 	"{count} days ago": { one: "vor {count} Tag", other: "vor {count} Tagen" },

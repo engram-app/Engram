@@ -644,10 +644,10 @@ export default {
 	"Heads up — your Free plan syncs files between 1 device at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
 		"참고하세요. 무료 요금제에서는 한 번에 기기 1대만 파일을 동기화합니다. 이 기기를 연결하면 {device}의 연결이 해제되어 더 이상 동기화 변경을 받지 못합니다. {upgrade}하면 두 기기를 모두 연결해 둘 수 있습니다.",
 	"Vault limit reached: your Free plan includes 1 vault":
-		"보관함 한도에 도달했습니다: 무료 플랜에는 보관함 1개가 포함됩니다",
+		"보관함 한도에 도달했습니다: 무료 요금제에는 보관함 1개가 포함됩니다",
 	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"무료 플랜에서는 새 보관함을 만들 수 없습니다. 위의 기존 보관함과 동기화하거나 플랜을 업그레이드해 더 추가하세요.",
-	"Upgrade plan": "플랜 업그레이드",
+		"무료 요금제에서는 새 보관함을 만들 수 없습니다. 위의 기존 보관함과 동기화하거나 업그레이드해 더 추가하세요.",
+	"Upgrade plan": "업그레이드",
 	"{count} minutes ago": { other: "{count}분 전" },
 	"{count} hours ago": { other: "{count}시간 전" },
 	"{count} days ago": { other: "{count}일 전" },

@@ -621,10 +621,10 @@ export default {
 	"Heads up — your Free plan syncs files between 1 device at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
 		"注意：你的免費方案一次只能在 1 台裝置之間同步檔案。連結此裝置會中斷 {device} 的連接，該裝置將不再接收同步變更。{upgrade}即可讓兩者保持連接。",
 	"Vault limit reached: your Free plan includes 1 vault":
-		"已達到保管庫上限：免費方案包含 1 個保管庫",
+		"已達到知識庫上限：免費方案包含 1 個知識庫",
 	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"免費方案無法建立新的保管庫。請與上方現有的保管庫同步，或升級方案以新增更多。",
-	"Upgrade plan": "升級方案",
+		"免費方案無法建立新的知識庫。請與上方現有的知識庫同步，或升級以新增更多。",
+	"Upgrade plan": "升級",
 	"{count} minutes ago": { other: "{count} 分鐘前" },
 	"{count} hours ago": { other: "{count} 小時前" },
 	"{count} days ago": { other: "{count} 天前" },
