@@ -128,6 +128,31 @@ defmodule Engram.Native.EnvelopeTest do
     end
   end
 
+  # Many processes on every scheduler at once, each mode, sizes either side
+  # of the 16 KB inline/dirty boundary: the thread-local zstd contexts and
+  # per-call state must never cross between calls.
+  test "concurrent seals and opens round-trip exactly" do
+    sizes = [0, 1, 100, 16_384, 16_385, 70_000, 300_000]
+
+    jobs =
+      for i <- 1..(2 * System.schedulers_online() * 6),
+          mode <- [:none, :zstd, :auto],
+          do: {i, mode, Enum.at(sizes, rem(i, length(sizes)))}
+
+    jobs
+    |> Task.async_stream(
+      fn {i, mode, size} ->
+        plain = binary_part(String.duplicate("#{i} #{@text}", 10), 0, size)
+        aad = "notes:content:#{i}"
+        {ct, nonce} = Native.envelope_seal(plain, @key, aad, mode)
+        {Native.envelope_open(ct, nonce, @key, aad), plain}
+      end,
+      max_concurrency: 2 * System.schedulers_online(),
+      ordered: false
+    )
+    |> Enum.each(fn {:ok, {opened, plain}} -> assert opened == {:ok, plain} end)
+  end
+
   describe "memory standard" do
     test "native peak stays within 3x a 2 MB input" do
       plain =

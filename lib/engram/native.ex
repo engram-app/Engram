@@ -233,14 +233,18 @@ defmodule Engram.Native do
   `Engram.Crypto.Envelope.encrypt/3`'s engine: `{ct_with_tag, nonce_field}`.
   `mode` `:none` writes format 0 (byte for byte what `:crypto` wrote);
   `:zstd`/`:auto` write format 1 (see `native/engram_native/src/envelope.rs`).
-  Raises `ArgumentError` on a key that is not 32 bytes, as `:crypto` did.
+  Raises `ArgumentError` on a key that is not 32 bytes (as `:crypto` did) or
+  if the OS RNG fails.
   """
   def envelope_seal(plain, key, aad, mode)
       when is_binary(plain) and is_binary(key) and is_binary(aad) and
              mode in [:none, :zstd, :auto] do
     case sized(:envelope_seal, plain, [plain, key, aad, mode]) do
-      {_ct, _nonce} = sealed -> sealed
-      :error -> raise ArgumentError, "envelope_seal: AES-256-GCM needs a 32-byte key"
+      {_ct, _nonce} = sealed ->
+        sealed
+
+      :error ->
+        raise ArgumentError, "envelope_seal failed: key must be 32 bytes, or the RNG failed"
     end
   end
 

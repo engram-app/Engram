@@ -12,6 +12,7 @@
 use aes_gcm::aead::{AeadInPlace, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce, Tag};
 use std::cell::RefCell;
+use zstd::zstd_safe::{self, DCtx, InBuffer, OutBuffer, ResetDirective};
 
 pub const TAG: usize = 16;
 const NONCE: usize = 12;
@@ -32,7 +33,7 @@ pub enum Mode {
 thread_local! {
     // One context per scheduler thread: creating one costs ~0.3 ms (spike).
     static CCTX: RefCell<Option<zstd::bulk::Compressor<'static>>> = const { RefCell::new(None) };
-    static DCTX: RefCell<Option<zstd::bulk::Decompressor<'static>>> = const { RefCell::new(None) };
+    static DCTX: RefCell<Option<DCtx<'static>>> = const { RefCell::new(None) };
 }
 
 fn compress(data: &[u8]) -> Option<Vec<u8>> {
@@ -48,14 +49,48 @@ fn compress(data: &[u8]) -> Option<Vec<u8>> {
     })
 }
 
+/// One whole frame, or None if it is corrupt, truncated, or has trailing
+/// bytes. The header's content size is checked by zstd at the end of the
+/// frame but never trusted for an allocation: the output grows as bytes
+/// actually decode (from a start sized off the frame), capped by the
+/// declared size, so a lying header cannot force a huge allocation.
 fn decompress(frame: &[u8]) -> Option<Vec<u8>> {
-    let size = zstd::zstd_safe::get_frame_content_size(frame).ok()??;
+    let declared = usize::try_from(zstd_safe::get_frame_content_size(frame).ok()??).ok()?;
+    let start = frame.len().saturating_mul(8).max(64 * 1024);
+    let mut out = Vec::with_capacity(declared.min(start));
     DCTX.with(|d| {
         let mut d = d.borrow_mut();
         if d.is_none() {
-            *d = Some(zstd::bulk::Decompressor::new().ok()?);
+            *d = Some(DCtx::try_create()?);
         }
-        d.as_mut()?.decompress(frame, size as usize).ok()
+        let d = d.as_mut()?;
+        d.reset(ResetDirective::SessionOnly).ok()?;
+        let mut input = InBuffer::around(frame);
+        loop {
+            if out.len() == out.capacity() {
+                // Doubling, and while under the declared size never past it
+                // (a truthful frame ends at exactly its size). zstd checks the
+                // size only at the frame's end, so an overrun keeps doubling
+                // until then; that is real decoded data, not a header's claim.
+                let room = out.capacity().max(1);
+                let more = match declared.checked_sub(out.len()) {
+                    Some(gap) if gap > 0 => room.min(gap),
+                    _ => room,
+                };
+                out.reserve_exact(more);
+            }
+            let pos = out.len();
+            let mut buf = OutBuffer::around_pos(&mut out, pos);
+            let left = d.decompress_stream(&mut buf, &mut input).ok()?;
+            let full = buf.pos() == buf.capacity();
+            if left == 0 {
+                return (input.pos() == frame.len()).then_some(out);
+            }
+            // All input read and output room to spare: the frame is cut short.
+            if input.pos() == frame.len() && !full {
+                return None;
+            }
+        }
     })
 }
 
@@ -279,6 +314,46 @@ mod tests {
         // The harness itself is sound: a well-formed body opens.
         let (ct, n) = seal_f1_body(&[&[CODEC_ZSTD][..], &frame].concat(), b"a");
         assert_eq!(open(&ct, &n, &K, b"a").unwrap(), b"abc ".repeat(500));
+    }
+
+    /// A hand-built zstd frame: no checksum, 1 KB window, an 8-byte content
+    /// size of `claimed`, and one raw last block holding `data`.
+    fn raw_frame(claimed: u64, data: &[u8]) -> Vec<u8> {
+        let mut f = vec![0x28, 0xb5, 0x2f, 0xfd, 0b1100_0000, 0x00];
+        f.extend_from_slice(&claimed.to_le_bytes());
+        let block = (data.len() as u32) << 3 | 1; // raw, last
+        f.extend_from_slice(&block.to_le_bytes()[..3]);
+        f.extend_from_slice(data);
+        f
+    }
+
+    #[test]
+    fn a_frame_that_lies_about_its_size_fails_without_allocating_it() {
+        use crate::memory;
+        let open_body = |frame: &[u8]| {
+            let (ct, n) = seal_f1_body(&[&[CODEC_ZSTD][..], frame].concat(), b"a");
+            memory::measured(|| open(&ct, &n, &K, b"a"))
+        };
+        // Truthful: the hand-built frame is valid.
+        assert_eq!(open_body(&raw_frame(5, b"hello")).0.unwrap(), b"hello");
+        // Claims 1 TiB. The bulk decoder reserved the claim up front, which
+        // aborts the node; the stream decodes 5 bytes and zstd rejects it.
+        let (out, peak) = open_body(&raw_frame(1 << 40, b"hello"));
+        assert!(out.is_err());
+        assert!(peak < 1 << 20, "peak {peak}");
+        // Claims less than it holds.
+        assert!(open_body(&raw_frame(2, b"hello")).0.is_err());
+        assert!(open_body(&raw_frame(0, b"hello")).0.is_err());
+    }
+
+    #[test]
+    fn decodes_past_the_starting_buffer() {
+        // Highly compressible, so the output must grow many times over the
+        // frame-sized start: exercises the reserve loop.
+        let plain = vec![b'z'; 3 << 20];
+        let frame = compress(&plain).unwrap();
+        assert!(frame.len() * 8 < plain.len() / 8);
+        assert_eq!(decompress(&frame).unwrap(), plain);
     }
 
     fn hex(b: &[u8]) -> String {
