@@ -1,7 +1,7 @@
 defmodule Engram.Release.Preflight do
   @moduledoc """
   Previews what `Engram.Release.migrate()` is about to do on the next container
-  start: pending migrations with phase tags, irreversibility flags, estimated
+  start: pending migrations with irreversibility flags, estimated
   lock impact, and an optional rollback command.
 
   A plain module rather than a `Mix.Task` — `Mix` is not part of the release
@@ -12,17 +12,6 @@ defmodule Engram.Release.Preflight do
       docker compose exec engram bin/engram rpc 'Engram.Release.Preflight.run()'
 
   Local/dev use: `mix engram.preflight`.
-
-  ## Phase tags
-
-  A migration declares its phase via a top-level comment:
-
-      # phase: expand
-      # phase: migrate-data
-      # phase: contract
-      # phase: single-shot
-
-  If no tag is found, phase is reported as `:unknown`.
 
   ## Lock-risk heuristic limitations
 
@@ -131,20 +120,9 @@ defmodule Engram.Release.Preflight do
       version: version_str,
       name: slug,
       file: path,
-      phase: detect_phase(source),
       irreversible: String.contains?(source, "# rollback-irreversible"),
       lock_risk: detect_lock_risk(source)
     }
-  end
-
-  defp detect_phase(source) do
-    case Regex.run(~r/^\s*#\s*phase:\s*(\w[\w-]*)/m, source) do
-      [_, "expand"] -> :expand
-      [_, "migrate-data"] -> :migrate_data
-      [_, "contract"] -> :contract
-      [_, "single-shot"] -> :single_shot
-      _ -> :unknown
-    end
   end
 
   defp detect_lock_risk(source) do
@@ -200,7 +178,7 @@ defmodule Engram.Release.Preflight do
 
     Enum.each(result.pending, fn m ->
       IO.puts("  #{m.version}  #{m.name}")
-      IO.puts("    phase: #{m.phase}  irreversible: #{m.irreversible}  lock_risk: #{m.lock_risk}")
+      IO.puts("    irreversible: #{m.irreversible}  lock_risk: #{m.lock_risk}")
     end)
 
     IO.puts("")

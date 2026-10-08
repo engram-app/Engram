@@ -75,10 +75,11 @@ echo "$out" | grep -q 'docker compose down' && fail "Test 1: leaked self-host up
 echo "$out" | grep -q 'Engram.Release.rollback' && fail "Test 1: leaked rollback block" || true
 echo "$out" | grep -q 'Schema-impacting PRs' && fail "Test 1: leaked schema PR list" || true
 
-# --- Test 2: schema impact is surfaced as ONE line, not the whole block ---
-echo "$out" | grep -qi 'schema' || fail "Test 2: schema change not flagged at all"
-schema_lines=$(echo "$out" | grep -ci 'schema')
-[ "$schema_lines" -eq 1 ] || fail "Test 2: expected exactly 1 schema line, got $schema_lines"
+# --- Test 2: no upgrade warning is added, even for an old body that has the block ---
+# Database changes need no operator step, so the announcement never says
+# "back up before upgrading".
+echo "$out" | grep -qi 'schema' && fail "Test 2: a schema/backup warning was added" || true
+echo "$out" | grep -qi 'back up' && fail "Test 2: a backup warning was added" || true
 
 # --- Test 3: markdown link noise stripped, PR ref kept ---
 echo "$out" | grep -q '(#1219)' || fail "Test 3: PR number not preserved as plain ref"

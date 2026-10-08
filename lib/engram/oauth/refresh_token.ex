@@ -23,7 +23,7 @@ defmodule Engram.OAuth.RefreshToken do
     # A non-empty list = exactly that set. `vault_id` above is dual-written
     # with the FIRST id of that set (see Engram.OAuth.scalar_vault_id/1) so a
     # rolled-back reader narrows to one vault rather than widening to all,
-    # until the phase/contract release drops it.
+    # until a later release drops it.
     field :vault_ids, {:array, Ecto.UUID}
     # User-typed name for this grant, copied from the authorization code at
     # exchange and carried across every rotation. NULL falls back to the OAuth

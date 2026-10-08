@@ -93,5 +93,5 @@ Compare that deletion date against the ticket's "last seen" date. If they match,
 
 ## References
 
-- `AGENTS.md` — the `Refs` vs `Closes` convention and the `phase/*` migration labels
+- `AGENTS.md` — the `Refs` vs `Closes` convention and the database-change rule
 - `../engram-workspace/docs/context/worktree-hygiene.md` — squash-merge makes `--merged` lie
