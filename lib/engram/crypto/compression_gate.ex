@@ -155,20 +155,20 @@ defmodule Engram.Crypto.CompressionGate do
       do: :persistent_term.put(state.key, allowed)
 
     if allowed != state.allowed, do: report(allowed, reason, node, is_nil(state.allowed))
-    if reason != state.reason, do: report_reason(reason)
+    if reason != state.reason, do: :ok = report_reason(reason)
     %{state | allowed: allowed, reason: reason}
   end
 
   # One-hot over every reason, so the PromEx gauge never keeps a stale 1 on a
   # reason that no longer holds (a last_value per tag outlives its event).
   defp report_reason(current) do
-    for reason <- @reasons do
+    Enum.each(@reasons, fn reason ->
       :telemetry.execute(
         [:engram, :envelope, :compression_gate, :reason],
         %{current: if(reason == current, do: 1, else: 0)},
         %{reason: reason}
       )
-    end
+    end)
   end
 
   defp safe_evaluate(opts) do
