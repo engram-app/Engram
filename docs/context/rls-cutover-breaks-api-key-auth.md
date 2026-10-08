@@ -80,7 +80,7 @@ every user's `key_hash`/`name`/`user_id`. Fixed in two releases:
    `api_keys`; `engram_app` holds it `WITH INHERIT FALSE, SET TRUE`
    (`prepare_database/0`). `validate_api_key/1` reads the key under
    `SET LOCAL ROLE engram_key_lookup`, resets the role, then preloads the user.
-2. Contract (`20261006200000`): `ALTER POLICY api_keys_discovery ... TO
+2. Contract (`20261008041903`): `ALTER POLICY api_keys_discovery ... TO
    engram_key_lookup`. Must ship after (1): N-1 code reads as plain
    `engram_app` and would 401 every API key.
 
