@@ -26,7 +26,7 @@ defmodule EngramWeb.Plugs.CORS do
   # Phoenix's default `private` on the 404 kept a poisoned entry out of the
   # cache, which is incidental protection, not a designed guard.
   @cacheable_prefixes ["/.well-known/oauth-"]
-  @cacheable_exact ["/api/openapi", "/openapi"]
+  @cacheable_exact ["/api/openapi", "/openapi", "/.well-known/mcp/server-card.json"]
 
   def init(opts), do: opts
 

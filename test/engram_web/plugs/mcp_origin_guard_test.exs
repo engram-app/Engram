@@ -94,6 +94,33 @@ defmodule EngramWeb.Plugs.McpOriginGuardTest do
     end
   end
 
+  describe "MCP gateways" do
+    # Hosted gateways (Smithery) proxy every user call from a Worker that sends
+    # its own Origin. They are not browsers on a page we did not serve, which is
+    # the only thing this guard exists to stop.
+    setup do
+      Application.put_env(:engram, :cors_origin, ["https://app.engram.page"])
+      :ok
+    end
+
+    test "Smithery's site Origin is served", %{conn: conn, api_key: key} do
+      assert call_mcp(conn, key, "https://smithery.ai").status == 200
+    end
+
+    test "a Smithery gateway subdomain Origin is served", %{conn: conn, api_key: key} do
+      assert call_mcp(conn, key, "https://memory--engram.run.tools").status == 200
+    end
+
+    test "a look-alike host is still refused", %{conn: conn, api_key: key} do
+      assert call_mcp(conn, key, "https://evilrun.tools").status == 403
+      assert call_mcp(conn, key, "https://smithery.ai.evil.example").status == 403
+    end
+
+    test "plain http on a gateway host is refused", %{conn: conn, api_key: key} do
+      assert call_mcp(conn, key, "http://memory--engram.run.tools").status == 403
+    end
+  end
+
   describe "with cors_origin unset or wildcard" do
     test "any Origin is served, so dev and CI are unaffected", %{conn: conn, api_key: key} do
       Application.put_env(:engram, :cors_origin, "*")

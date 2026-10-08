@@ -57,8 +57,24 @@ defmodule EngramWeb.Plugs.McpOriginGuard do
         conn
 
       [origin | _] ->
-        if allowed?(origin), do: conn, else: refuse(conn)
+        if allowed?(origin) or gateway?(origin), do: conn, else: refuse(conn)
     end
+  end
+
+  # Hosted MCP gateways proxy every user call from a server-side Worker that
+  # still sends its own Origin. A gateway is not a browser on a page we did not
+  # serve, so it is outside the threat above, and bearer auth still applies to
+  # every call it forwards. Smithery: `smithery.ai` for its scanner, and
+  # `<server>--<namespace>.run.tools` for its gateway.
+  #
+  # ponytail: hardcoded, add a config list when a second gateway needs one.
+  @gateway_origins ["https://smithery.ai"]
+  @gateway_suffixes [".run.tools"]
+
+  defp gateway?(origin) do
+    origin in @gateway_origins or
+      (String.starts_with?(origin, "https://") and
+         Enum.any?(@gateway_suffixes, &String.ends_with?(origin, &1)))
   end
 
   # `"*"` (the dev/CI default when PHX_HOST is unset) disables the check, so

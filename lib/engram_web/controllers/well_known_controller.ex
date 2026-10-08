@@ -138,6 +138,21 @@ defmodule EngramWeb.WellKnownController do
   end
 
   @doc """
+  SEP-1649 static server card. Directories read it when their scanner stops at
+  the OAuth wall. `tools` is `Tools.wire_list/0`, the exact `tools/list`
+  payload, so the card cannot drift from what an authed client is served.
+  """
+  def mcp_server_card(conn, _params) do
+    json(conn, %{
+      "serverInfo" => EngramWeb.McpController.server_info(),
+      "authentication" => %{"required" => true, "schemes" => ["oauth2"]},
+      "tools" => Engram.MCP.Tools.wire_list(),
+      "resources" => [],
+      "prompts" => []
+    })
+  end
+
+  @doc """
   OpenAI plugin-directory domain verification. Serves the token from
   `OPENAI_APPS_CHALLENGE` as the bare body; 404 when unset (self-host).
   """

@@ -204,4 +204,37 @@ defmodule EngramWeb.WellKnownControllerTest do
       assert body["client_id_metadata_document_supported"] == true
     end
   end
+
+  describe "GET /.well-known/mcp/server-card.json" do
+    # SEP-1649. Smithery and MCPRush fall back to it when the OAuth wall stops
+    # them scanning `tools/list` themselves.
+    test "lists exactly the tools `tools/list` serves", %{conn: conn} do
+      body = conn |> get("/.well-known/mcp/server-card.json") |> json_response(200)
+
+      assert body["tools"] == Engram.MCP.Tools.wire_list()
+      assert body["tools"] != []
+    end
+
+    test "declares OAuth as required", %{conn: conn} do
+      body = conn |> get("/.well-known/mcp/server-card.json") |> json_response(200)
+
+      assert body["authentication"] == %{"required" => true, "schemes" => ["oauth2"]}
+    end
+
+    test "carries serverInfo and empty resources and prompts", %{conn: conn} do
+      body = conn |> get("/.well-known/mcp/server-card.json") |> json_response(200)
+
+      assert %{"name" => "engram", "version" => version} = body["serverInfo"]
+      assert is_binary(version)
+      assert body["resources"] == []
+      assert body["prompts"] == []
+    end
+
+    test "needs no auth and is edge-cacheable", %{conn: conn} do
+      conn = get(conn, "/.well-known/mcp/server-card.json")
+
+      assert conn.status == 200
+      assert ["public, max-age=300"] = get_resp_header(conn, "cache-control")
+    end
+  end
 end

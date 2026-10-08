@@ -13,6 +13,10 @@ defmodule EngramWeb.McpController do
 
   @server_info %{"name" => "engram", "version" => "0.1.0"}
   @capabilities %{"tools" => %{"listChanged" => false}}
+
+  @doc "The `serverInfo` every handshake reports. Also read by the server card."
+  def server_info, do: @server_info
+
   # Newest first. `2025-06-18` is what makes structured tool output reachable:
   # `outputSchema` / `structuredContent` landed in that revision, so announcing
   # only `2025-03-26` left the whole feature unreadable by a conformant client.
