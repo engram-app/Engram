@@ -590,7 +590,6 @@ export default {
 	"Enter the code shown in your Obsidian plugin:": "請輸入 Obsidian 外掛中顯示的代碼：",
 	"Verifying…": "正在驗證…",
 	"Checking your code…": "正在檢查你的代碼…",
-	upgrade: "升級",
 	"Syncing…": "正在同步…",
 	Sync: "同步",
 	"Your vault is linked. Obsidian is waiting for you to start the first sync.":
@@ -621,8 +620,11 @@ export default {
 		"你最近更換過裝置。免費方案每 24 小時可更換 1 次，你可以在 {hours} 小時後再次更換。{upgrade}即可連接任意數量的裝置。",
 	"Heads up — your Free plan syncs files between 1 device at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
 		"注意：你的免費方案一次只能在 1 台裝置之間同步檔案。連結此裝置會中斷 {device} 的連接，該裝置將不再接收同步變更。{upgrade}即可讓兩者保持連接。",
-	"Your Free plan includes 1 vault — link into the existing one above, or {upgrade} to create more.":
-		"你的免費方案包含 1 個知識庫，請連結到上方現有的知識庫，或{upgrade}以建立更多。",
+	"Vault limit reached: your Free plan includes 1 vault":
+		"已達到保管庫上限：免費方案包含 1 個保管庫",
+	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
+		"免費方案無法建立新的保管庫。請與上方現有的保管庫同步，或升級方案以新增更多。",
+	"Upgrade plan": "升級方案",
 	"{count} minutes ago": { other: "{count} 分鐘前" },
 	"{count} hours ago": { other: "{count} 小時前" },
 	"{count} days ago": { other: "{count} 天前" },

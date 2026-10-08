@@ -647,7 +647,6 @@ export default {
 		"Gib den Code ein, der in deinem Obsidian-Plugin angezeigt wird:",
 	"Verifying…": "Wird überprüft…",
 	"Checking your code…": "Dein Code wird geprüft…",
-	upgrade: "Upgrade",
 	"Syncing…": "Wird synchronisiert…",
 	Sync: "Synchronisieren",
 	"Your vault is linked. Obsidian is waiting for you to start the first sync.":
@@ -680,8 +679,11 @@ export default {
 		"Du hast kürzlich die Geräte gewechselt. Dein Tarif Kostenlos erlaubt 1 Wechsel alle 24 Stunden, du kannst in {hours} Std. erneut wechseln. Mit einem {upgrade} verbindest du beliebig viele Geräte.",
 	"Heads up — your Free plan syncs files between 1 device at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
 		"Achtung: Mit deinem Tarif Kostenlos synchronisierst du Dateien jeweils zwischen 1 Gerät. Wenn du dieses Gerät verknüpfst, wird {device} getrennt und erhält keine Synchronisierungsänderungen mehr. Mit einem {upgrade} bleiben beide verbunden.",
-	"Your Free plan includes 1 vault — link into the existing one above, or {upgrade} to create more.":
-		"Dein Tarif Kostenlos enthält 1 Vault. Verknüpfe mit dem vorhandenen oben oder erstelle mit einem {upgrade} weitere.",
+	"Vault limit reached: your Free plan includes 1 vault":
+		"Tresorlimit erreicht: Ihr Free-Tarif enthält 1 Tresor",
+	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
+		"Im Free-Tarif können Sie keinen neuen Tresor erstellen. Synchronisieren Sie mit Ihrem vorhandenen Tresor oben oder wechseln Sie auf einen höheren Tarif.",
+	"Upgrade plan": "Tarif upgraden",
 	"{count} minutes ago": { one: "vor {count} Minute", other: "vor {count} Minuten" },
 	"{count} hours ago": { one: "vor {count} Stunde", other: "vor {count} Stunden" },
 	"{count} days ago": { one: "vor {count} Tag", other: "vor {count} Tagen" },

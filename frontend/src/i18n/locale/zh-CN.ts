@@ -588,7 +588,6 @@ export default {
 	"Enter the code shown in your Obsidian plugin:": "输入 Obsidian 插件中显示的验证码：",
 	"Verifying…": "正在验证…",
 	"Checking your code…": "正在检查你的验证码…",
-	upgrade: "升级",
 	"Syncing…": "正在同步…",
 	Sync: "同步",
 	"Your vault is linked. Obsidian is waiting for you to start the first sync.":
@@ -619,8 +618,11 @@ export default {
 		"你最近更换过设备。免费版每 24 小时只能更换 1 次，你可以在 {hours} 小时后再次更换。{upgrade}即可连接任意数量的设备。",
 	"Heads up — your Free plan syncs files between 1 device at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
 		"注意：你的免费版一次只能在 1 台设备之间同步文件。关联此设备会断开{device}，它将不再接收同步的更改。{upgrade}即可同时保持两者连接。",
-	"Your Free plan includes 1 vault — link into the existing one above, or {upgrade} to create more.":
-		"你的免费版包含 1 个知识库，请关联到上方的现有知识库，或{upgrade}以创建更多。",
+	"Vault limit reached: your Free plan includes 1 vault":
+		"已达到保管库上限：免费套餐包含 1 个保管库",
+	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
+		"免费套餐无法创建新的保管库。请与上方现有的保管库同步，或升级套餐以添加更多。",
+	"Upgrade plan": "升级套餐",
 	"{count} minutes ago": { other: "{count} 分钟前" },
 	"{count} hours ago": { other: "{count} 小时前" },
 	"{count} days ago": { other: "{count} 天前" },

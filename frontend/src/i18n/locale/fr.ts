@@ -639,7 +639,6 @@ export default {
 		"Saisis le code affiché dans ton plugin Obsidian :",
 	"Verifying…": "Vérification…",
 	"Checking your code…": "Vérification de ton code…",
-	upgrade: "passer à une offre payante",
 	"Syncing…": "Synchronisation…",
 	Sync: "Synchroniser",
 	"Your vault is linked. Obsidian is waiting for you to start the first sync.":
@@ -672,8 +671,11 @@ export default {
 		"Tu as changé d'appareil récemment. Ton offre gratuite autorise 1 changement toutes les 24 heures, tu pourras en refaire un dans {hours} h. Pour connecter autant d'appareils que tu veux, il suffit de {upgrade}.",
 	"Heads up — your Free plan syncs files between 1 device at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
 		"Attention : ton offre gratuite synchronise les fichiers sur 1 appareil à la fois. Relier cet appareil déconnectera {device}, qui ne recevra plus les changements. Pour garder les deux connectés, il suffit de {upgrade}.",
-	"Your Free plan includes 1 vault — link into the existing one above, or {upgrade} to create more.":
-		"Ton offre gratuite inclut 1 coffre : relie-toi à celui qui existe déjà ci-dessus, ou, pour en créer d'autres, {upgrade}.",
+	"Vault limit reached: your Free plan includes 1 vault":
+		"Limite de coffres atteinte : votre forfait Gratuit inclut 1 coffre",
+	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
+		"Vous ne pouvez pas créer de nouveau coffre avec le forfait Gratuit. Synchronisez avec votre coffre existant ci-dessus ou passez à un forfait supérieur.",
+	"Upgrade plan": "Changer de forfait",
 	"{count} minutes ago": {
 		one: "il y a {count} minute",
 		many: "il y a {count} de minutes",
