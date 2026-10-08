@@ -41,7 +41,8 @@ defmodule Engram.Notes.EncryptionTest do
       assert raw.title == nil
       assert is_binary(raw.content_ciphertext)
       assert byte_size(raw.content_ciphertext) > 0
-      assert byte_size(raw.content_nonce) == 12
+      # content is compressed under the policy: format 1, 13-byte nonce (#1872)
+      assert byte_size(raw.content_nonce) == 13
       refute raw.content_ciphertext == "dear diary, I feel seen"
     end
 

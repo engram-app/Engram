@@ -25,8 +25,9 @@ defmodule Engram.Crypto.Envelope do
   update log, and revisions get `:zstd`; attachment content `:auto`
   (sample first, skip already-compressed media); everything else, including
   wrapped DEKs and anything that packs the nonce at a fixed offset, stays
-  format 0. Off until #1872's R2: `config :engram, :envelope_compression`
-  defaults to `false`, so today every write is format 0.
+  format 0. On by default (#1872 R2, `config/config.exs`); setting
+  `config :engram, :envelope_compression` to `false` returns NEW writes to
+  format 0 (rows already in format 1 stay readable).
 
   ## AAD (T3.6 / H1)
 
@@ -60,12 +61,13 @@ defmodule Engram.Crypto.Envelope do
   @doc """
   Bytes of AEAD tag suffixed to every ciphertext by `encrypt/3`.
 
-  AES-GCM ciphertext is the same length as its plaintext, so
-  `octet_length(col) - tag_bytes()` recovers the plaintext size of any encrypted
-  column WITHOUT a DEK. That is what lets `Engram.Workers.CrdtBloatSweep` size
-  every note in the database in one query while touching no key material.
-  Exposed rather than hardcoded at the call site so a cipher change has one
-  place to fail, not two.
+  `octet_length(col) - tag_bytes()` is the STORED payload size of an encrypted
+  column, recoverable WITHOUT a DEK. It is the plaintext size only for a
+  format 0 row; a format 1 row is compressed (or carries a 1-byte format
+  prefix), so it is the stored size. `Engram.Workers.CrdtBloatSweep` uses it to
+  size every note in one query while touching no key material, and reports
+  stored bytes. Exposed rather than hardcoded at the call site so a cipher
+  change has one place to fail, not two.
   """
   # No @spec: the body returns a literal, so any integer type is a dialyzer
   # `contract_supertype` of the success typing. Same reason `Engram.Repo.maintenance/0`
