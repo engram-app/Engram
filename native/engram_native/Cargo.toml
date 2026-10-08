@@ -9,6 +9,9 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 rustler = "0.38"
+aes-gcm = { version = "0.10", features = ["zeroize"] }
+zstd = "0.13"
+getrandom = "0.2"
 hmac = "0.13"
 sha2 = "0.11"
 unicode-normalization = "0.1"

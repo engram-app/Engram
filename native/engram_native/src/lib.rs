@@ -2,6 +2,9 @@
 //! scheduler, and returns BEAM binaries (so its OUTPUT is visible to
 //! `:erlang.memory(:binary)`). See docs/context for the memory standard.
 mod chunker;
+// Task 3 wires the NIF entry points; until then nothing calls it.
+#[allow(dead_code)]
+mod envelope;
 mod frontmatter;
 mod json;
 mod links;
