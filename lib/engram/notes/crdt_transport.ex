@@ -14,7 +14,6 @@ defmodule Engram.Notes.CrdtTransport do
   import Bitwise
   import Ecto.Query
 
-  alias Engram.Notes.CrdtBridge
   alias Engram.{Crypto, Notes, Repo}
   alias Engram.Logger.Metadata
   alias Engram.Notes.{CrdtBridge, CrdtPersistence, CrdtRegistry, CrdtUpdateLog, Note}
