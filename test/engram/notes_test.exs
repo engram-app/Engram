@@ -2663,6 +2663,52 @@ defmodule Engram.NotesTest do
       reloaded = Engram.Repo.get!(Engram.Notes.Note, note.id, skip_tenant_check: true)
       assert reloaded.embed_hash == note.content_hash
     end
+
+    # #1612 — the web app renames/moves every note through crdt_create, so the
+    # live-relocate leg is the PRIMARY rename path and must repath too.
+    test "crdt_create live relocate enqueues RepathNoteIndex under the old path hmac",
+         %{user: user, vault: vault} do
+      note =
+        Engram.Fixtures.insert_note!(user, vault, %{path: "A/Note.md", content: "# x\n\nbody"})
+
+      assert {:ok, moved} = Engram.Notes.genesis_crdt_note(user, vault, note.id, "B/Note.md")
+      assert moved.path == "B/Note.md"
+
+      assert_enqueued(
+        worker: Engram.Workers.RepathNoteIndex,
+        args: %{note_id: note.id, old_path_hmac: path_hmac_b64(user, "A/Note.md")}
+      )
+    end
+
+    test "crdt_create resurrect-rename enqueues RepathNoteIndex under the tombstone path hmac",
+         %{user: user, vault: vault} do
+      note =
+        Engram.Fixtures.insert_note!(user, vault, %{path: "A/Note.md", content: "# x\n\nbody"})
+
+      :ok = Engram.Notes.delete_note(user, vault, "A/Note.md")
+
+      assert {:ok, _} = Engram.Notes.genesis_crdt_note(user, vault, note.id, "B/Note.md")
+
+      assert_enqueued(
+        worker: Engram.Workers.RepathNoteIndex,
+        args: %{note_id: note.id, old_path_hmac: path_hmac_b64(user, "A/Note.md")}
+      )
+    end
+
+    test "crdt_create at the note's own path does not enqueue RepathNoteIndex",
+         %{user: user, vault: vault} do
+      note =
+        Engram.Fixtures.insert_note!(user, vault, %{path: "A/Note.md", content: "# x\n\nbody"})
+
+      assert {:ok, _} = Engram.Notes.genesis_crdt_note(user, vault, note.id, "A/Note.md")
+
+      refute_enqueued(worker: Engram.Workers.RepathNoteIndex)
+    end
+
+    defp path_hmac_b64(user, path) do
+      {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
+      filter_key |> Engram.Crypto.hmac_field(path) |> Base.encode64()
+    end
   end
 
   defp count_messages(msg, acc \\ 0) do

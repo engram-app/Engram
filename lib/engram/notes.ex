@@ -43,6 +43,7 @@ defmodule Engram.Notes do
     FinalizeRevision,
     RebindNoteLinks,
     ReleaseIndexEntries,
+    RepathNoteIndex,
     RewriteNoteLinks
   }
 
@@ -1009,9 +1010,22 @@ defmodule Engram.Notes do
           # post-commit, same as the :announce leg above.
           :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note, [])
 
-          if old_path != note.path do
-            :ok = broadcast_change(user.id, vault.id, "delete", old_path, note.id, [])
-          end
+          _ =
+            if old_path != note.path do
+              :ok = broadcast_change(user.id, vault.id, "delete", old_path, note.id, [])
+
+              # #1612 — same repath rename_note enqueues (#746). Without it the
+              # points keep the old path/folder hmacs and folder-filtered search
+              # misses the moved note. A resurrect-rename usually has no points, so it
+              # re-embeds; if it beat DeleteNoteIndex (#1610), they are patched instead.
+              _ =
+                Enqueue.enqueue(
+                  RepathNoteIndex.new_debounced(note.id, user.id,
+                    old_path_hmac: old_path_hmac_b64!(user, old_path)
+                  ),
+                  "repath_note_index"
+                )
+            end
 
           {:ok, note}
 
@@ -2835,7 +2849,7 @@ defmodule Engram.Notes do
         # points instead of re-embedding through Voyage. T3.2: base64 hmac, never plaintext.
         _ =
           Enqueue.enqueue(
-            Engram.Workers.RepathNoteIndex.new_debounced(note.id, user.id,
+            RepathNoteIndex.new_debounced(note.id, user.id,
               old_path_hmac: old_path_hmac_b64!(user, old_path)
             ),
             "repath_note_index"
@@ -5122,9 +5136,7 @@ defmodule Engram.Notes do
 
               _ =
                 Enqueue.enqueue(
-                  Engram.Workers.RepathNoteIndex.new_debounced(note.id, user.id,
-                    old_path_hmac: old_path_hmac
-                  ),
+                  RepathNoteIndex.new_debounced(note.id, user.id, old_path_hmac: old_path_hmac),
                   "repath_note_index"
                 )
 
