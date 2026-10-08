@@ -117,6 +117,19 @@ defmodule Engram.DataMigrations do
     )
   end
 
+  @doc """
+  Reopens a done migration (a re-verify found work again): `note_open/2`
+  clears `completed_at` and restarts the stuck clock, and this node's cached
+  `done?` is dropped. Another node's cache lasts until it restarts; the runner
+  only runs on the Cron leader, and its next re-verify reopens again.
+  """
+  @spec reopen(String.t(), pos_integer()) :: :ok
+  def reopen(name, version) do
+    _ = note_open(name, version)
+    :persistent_term.erase({__MODULE__, name, version})
+    :ok
+  end
+
   @spec mark_alerted(String.t()) :: :ok
   def mark_alerted(name) do
     now = DateTime.utc_now()

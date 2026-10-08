@@ -10,4 +10,19 @@ defmodule Engram.DataMigration do
   @callback name() :: String.t()
   @callback version() :: pos_integer()
   @callback run_pass() :: :done | :more
+
+  @doc """
+  Optional, default `true`. A disabled migration is skipped entirely by the
+  runner: no pass, its ledger row is neither opened, alerted on nor marked done.
+  """
+  @callback enabled?() :: boolean()
+
+  @doc """
+  Optional, default `false`. When `true`, the runner re-runs this migration's
+  pass once a day even after it is done, and reopens it if the pass finds
+  work again (rows written by an older node, or while it was disabled).
+  """
+  @callback reverify?() :: boolean()
+
+  @optional_callbacks enabled?: 0, reverify?: 0
 end

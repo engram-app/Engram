@@ -61,9 +61,11 @@ defmodule Engram.ObanQueueConfigTest do
 
   # The CRDT backfills run hourly; on crypto_backfill they would hold its single
   # slot and delay a DEK or master-key rotation queued behind them.
-  # ReencodeEnvelopes is the one backfill here: it re-encrypts under the user's
-  # DEK, so it shares the rotations' queue to never run beside one, at priority
-  # 3 so a queued rotation always runs before the next re-encode job.
+  # ReencodeEnvelopes is the one backfill here. Queue limits are per node (Oban
+  # OSS), so sharing the queue does NOT keep it from running beside a rotation;
+  # its per-batch RotationGate check and CAS write do. It is here at priority 3
+  # with ~30 s jobs, so a rotation queued on the same node waits at most one
+  # short job.
   test "crypto_backfill runs only the key-rotation workers and the re-encode" do
     on_crypto =
       for mod <- ObanWorkers.all(), worker_queue(mod) == :crypto_backfill, do: mod

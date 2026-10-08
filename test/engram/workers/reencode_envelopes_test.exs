@@ -290,6 +290,117 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
     end
   end
 
+  describe "bounded runs, kill switch, gate, reads" do
+    setup do
+      on_exit(fn -> Application.delete_env(:engram, ReencodeEnvelopes) end)
+    end
+
+    defp tune(opts), do: Application.put_env(:engram, ReencodeEnvelopes, opts)
+
+    defp drain_chain(count \\ 0) do
+      case all_enqueued(worker: ReencodeEnvelopes) do
+        [] ->
+          count
+
+        [job | _] ->
+          Repo.delete!(job)
+          assert :ok = perform_job(ReencodeEnvelopes, job.args)
+          drain_chain(count + 1)
+      end
+    end
+
+    test "with the kill switch set, an in-flight job cancels and writes nothing",
+         %{user: u, vault: v} do
+      note = legacy_note!(u, v, "a.md", @big)
+      before = reload(Note, id: note.id)
+      Application.put_env(:engram, :envelope_compression, false)
+      on_exit(fn -> Application.put_env(:engram, :envelope_compression, true) end)
+
+      assert {:cancel, :compression_off} = run(u)
+      assert reload(Note, id: note.id) == before
+    end
+
+    test "out of budget: hands off its cursor to a successor while still running",
+         %{user: u, vault: v} do
+      [a, b] =
+        Enum.sort([legacy_note!(u, v, "a.md", @big).id, legacy_note!(u, v, "b.md", @big).id])
+
+      tune(budget_ms: 0, batch_size: 1)
+
+      assert :ok = run(u)
+
+      # The successor exists as soon as this job returns: run_pass's
+      # jobs_in_flight? never sees a gap in the chain.
+      assert [job] = all_enqueued(worker: ReencodeEnvelopes)
+      assert job.args == %{"user_id" => u.id, "column" => "notes_content", "after" => a}
+      assert job.priority == 3
+      assert Engram.DataMigrations.jobs_in_flight?(ReencodeEnvelopes)
+      assert byte_size(reload(Note, id: a).content_nonce) == 13
+      assert byte_size(reload(Note, id: b).content_nonce) == 12
+
+      assert drain_chain() > 1
+      refute ReencodeEnvelopes.legacy_rows?(u.id)
+    end
+
+    test "a rotation locked BETWEEN batches stops further writes", %{user: u, vault: v} do
+      [a, b] =
+        Enum.sort([legacy_note!(u, v, "a.md", @big).id, legacy_note!(u, v, "b.md", @big).id])
+
+      tune(batch_size: 1)
+      handler = "lock-on-second-batch-#{System.unique_integer([:positive])}"
+      seen = :counters.new(1, [])
+
+      :telemetry.attach(
+        handler,
+        [:engram, :reencode_envelopes, :batch],
+        fn _e, _m, _meta, _c ->
+          :counters.add(seen, 1, 1)
+          if :counters.get(seen, 1) == 2, do: {:ok, _} = RotationLock.acquire(u.id)
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert {:snooze, _} = run(u)
+      assert byte_size(reload(Note, id: a).content_nonce) == 13
+      assert byte_size(reload(Note, id: b).content_nonce) == 12
+    end
+
+    test "reads only the key, AAD id and the one ct + nonce pair", %{user: u, vault: v} do
+      legacy_note!(u, v, "a.md", @big)
+      handler = "reencode-sql-#{System.unique_integer([:positive])}"
+      parent = self()
+
+      :telemetry.attach(
+        handler,
+        [:engram, :repo, :query],
+        fn _e, _m, meta, _c -> send(parent, {:sql, meta.query}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+      assert :ok = run(u)
+      :telemetry.detach(handler)
+
+      selects =
+        Stream.repeatedly(fn ->
+          receive do
+            {:sql, q} -> q
+          after
+            0 -> nil
+          end
+        end)
+        |> Enum.take_while(& &1)
+        |> Enum.filter(&(&1 =~ ~r/^SELECT .*content_ciphertext/))
+
+      assert selects != []
+
+      for q <- selects,
+          do: refute(q =~ ~r/title_ciphertext|path_ciphertext|crdt_state_ciphertext/)
+    end
+  end
+
   describe "enqueue_missing/0" do
     test "enqueues only users with legacy rows", %{user: u, vault: v} do
       {:ok, other} = Engram.Fixtures.user_with_dek_fixture()

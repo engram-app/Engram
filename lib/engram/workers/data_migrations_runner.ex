@@ -17,6 +17,9 @@ defmodule Engram.Workers.DataMigrationsRunner do
 
   require Logger
 
+  # The hourly run in this UTC hour also re-runs done migrations that opt in
+  # with `reverify?/0`. Same hour as ReconcileEmbeddings' IndexVersions check.
+  @reverify_hour 4
   @stuck_after_s 7 * 86_400
   @realert_after_s 86_400
 
@@ -33,23 +36,57 @@ defmodule Engram.Workers.DataMigrationsRunner do
   def migrations, do: @migrations
 
   @impl Oban.Worker
-  def perform(_job) do
-    Enum.each(@migrations, &run/1)
+  def perform(%Oban.Job{scheduled_at: scheduled_at}) do
+    reverify = match?(%DateTime{hour: @reverify_hour}, scheduled_at)
+    Enum.each(@migrations, &run(&1, reverify))
   end
 
   # A failure here, before any pass ran (name/0, version/0, the done?/2 read),
   # says nothing about the migration's work, so it must not touch the ledger:
   # note_open/2 would reopen a DONE row.
-  @spec run(module()) :: :skipped | :done | :more | :error
-  def run(mod) do
+  #
+  # A disabled migration is skipped before anything touches the ledger. A done
+  # one is skipped too, except in the re-verify hour when it opts in: then its
+  # pass runs, and `:more` reopens it (note_open/2 clears completed_at).
+  @spec run(module(), boolean()) :: :skipped | :done | :more | :error
+  def run(mod, reverify \\ false) do
     {name, version} = {mod.name(), mod.version()}
-    if DataMigrations.done?(name, version), do: :skipped, else: pass(mod, name, version)
+
+    cond do
+      not optional(mod, :enabled?, true) -> :skipped
+      not DataMigrations.done?(name, version) -> pass(mod, name, version)
+      reverify and optional(mod, :reverify?, false) -> reverify(mod, name, version)
+      true -> :skipped
+    end
   rescue
     e -> failed(mod, e)
   catch
     # An exit (a call or checkout timeout) or a throw must not abort the
     # migrations after this one either.
     _kind, reason -> failed(mod, reason)
+  end
+
+  defp optional(mod, fun, default) do
+    _ = Code.ensure_loaded(mod)
+    if function_exported?(mod, fun, 0), do: apply(mod, fun, []), else: default
+  end
+
+  # Done already: only a pass that finds work changes anything.
+  defp reverify(mod, name, version) do
+    case mod.run_pass() do
+      :done ->
+        :done
+
+      :more ->
+        DataMigrations.reopen(name, version)
+
+        Logger.warning(
+          "data migration reopened by re-verify",
+          Metadata.with_category(:warning, :oban, migration: name, version: version)
+        )
+
+        :more
+    end
   end
 
   # The pass ran: :more or a failure both leave the work open.

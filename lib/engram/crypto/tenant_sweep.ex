@@ -28,15 +28,22 @@ defmodule Engram.Crypto.TenantSweep do
 
   @doc """
   Calls `fun` with each batch of the user's row ids (ascending), inside the
-  user's tenant context. `fun` returns `:ok` to continue or `{:error, _}` to
-  stop; the first error is returned.
-  """
-  def each_batch(user_id, schema, fun), do: loop(user_id, schema, @first_id, fun)
+  user's tenant context. `fun` returns `:ok` to continue, `{:halt, value}` to
+  stop early (returned as is, the batch commits), or `{:error, _}` to stop;
+  the first error is returned.
 
-  defp loop(user_id, schema, last_id, fun) do
+  Options: `:after` resumes after that id (default: from the start),
+  `:batch_size` (default 200).
+  """
+  def each_batch(user_id, schema, fun, opts \\ []) do
+    after_id = Keyword.get(opts, :after) || @first_id
+    loop(user_id, schema, after_id, fun, Keyword.get(opts, :batch_size, @batch_size))
+  end
+
+  defp loop(user_id, schema, last_id, fun, size) do
     swept =
       Repo.with_tenant(user_id, fn ->
-        case fetch_batch_ids(user_id, schema, last_id) do
+        case fetch_batch_ids(user_id, schema, last_id, size) do
           [] -> :done
           ids -> {:batch, ids, fun.(ids)}
         end
@@ -44,19 +51,20 @@ defmodule Engram.Crypto.TenantSweep do
 
     case swept do
       {:ok, :done} -> :ok
-      {:ok, {:batch, ids, :ok}} -> loop(user_id, schema, List.last(ids), fun)
+      {:ok, {:batch, ids, :ok}} -> loop(user_id, schema, List.last(ids), fun, size)
+      {:ok, {:batch, _ids, {:halt, _} = halt}} -> halt
       {:ok, {:batch, _ids, {:error, _} = err}} -> err
       {:error, reason} -> {:error, reason}
     end
   end
 
   # Notes are scoped via vault.user_id AND directly via user_id; use user_id directly.
-  defp fetch_batch_ids(user_id, Engram.Notes.Note, last_id) do
+  defp fetch_batch_ids(user_id, Engram.Notes.Note, last_id, size) do
     from(n in Engram.Notes.Note,
       where: n.user_id == ^user_id,
       where: n.id > ^last_id,
       order_by: n.id,
-      limit: ^@batch_size,
+      limit: ^size,
       select: n.id
     )
     |> Repo.all(skip_tenant_check: true)
@@ -64,24 +72,24 @@ defmodule Engram.Crypto.TenantSweep do
 
   # Keyed by vault_id, not id: the generic clause below orders by `r.id`, which
   # this table does not have.
-  defp fetch_batch_ids(user_id, Engram.Notes.VaultIndexState, last_id) do
+  defp fetch_batch_ids(user_id, Engram.Notes.VaultIndexState, last_id, size) do
     from(s in Engram.Notes.VaultIndexState,
       where: s.user_id == ^user_id,
       where: s.vault_id > ^last_id,
       order_by: s.vault_id,
-      limit: ^@batch_size,
+      limit: ^size,
       select: s.vault_id
     )
     |> Repo.all(skip_tenant_check: true)
   end
 
   # Default fallback for schemas with a direct user_id column.
-  defp fetch_batch_ids(user_id, schema, last_id) do
+  defp fetch_batch_ids(user_id, schema, last_id, size) do
     from(r in schema,
       where: r.user_id == ^user_id,
       where: r.id > ^last_id,
       order_by: r.id,
-      limit: ^@batch_size,
+      limit: ^size,
       select: r.id
     )
     |> Repo.all(skip_tenant_check: true)

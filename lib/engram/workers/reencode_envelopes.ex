@@ -18,11 +18,24 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   No `RotationLock`: taking it would make the user's clients get HTTP 503.
   Instead every batch reloads the user and snoozes the job while a DEK
   rotation holds the lock. A rotation that starts after that check blocks on
-  this batch's row locks and then rewraps what it wrote (format 1 under the
-  old DEK is readable), and any row it already rewrapped fails the CAS.
+  the rows this batch wrote and then rewraps them (format 1 under the old DEK
+  is readable), and any row it already rewrapped fails the CAS. That gate plus
+  the CAS is the safety; sharing `:crypto_backfill` is not (Oban OSS queue
+  limits are per node).
+
+  Bounded runs: a job works for at most `@budget_ms`, then enqueues its
+  successor with its cursor (`column` + `after` id) and returns. The successor
+  is inserted while this job is still `executing`, so
+  `DataMigrations.jobs_in_flight?/1` never sees a gap in the chain.
+
+  Reads only the key, the AAD id and the one ciphertext + nonce pair being
+  processed, never whole rows (a note carries several ciphertext columns).
 
   A row that does not decrypt is logged at `:warning` and left: it keeps the
   migration open and the stuck-migration alert surfaces it.
+
+  With the compression kill switch set, a job cancels itself: re-encoding
+  would write format 0 again and NULL `crdt_head` for nothing.
 
   Not re-encoded: attachments (format 0 and format 1 raw cost the same bytes),
   `note_revisions.pending_*` (verbatim copies of `notes.content`), and the
@@ -43,29 +56,105 @@ defmodule Engram.Workers.ReencodeEnvelopes do
 
   require Logger
 
-  # {name, schema, key, ciphertext column, nonce column}. Same order every pass.
+  # How long one job works before handing off to its successor, so a rotation
+  # queued behind it waits seconds, not minutes.
+  @budget_ms 30_000
+  @batch_size 200
+
+  # Processed in this order. `aad` = {AAD table, AAD column, field holding the AAD row id}.
   @columns [
-    {:notes_content, Note, :id, :content_ciphertext, :content_nonce},
-    {:notes_crdt_state, Note, :id, :crdt_state_ciphertext, :crdt_state_nonce},
-    {:crdt_update_log, CrdtUpdateLog, :id, :update_ciphertext, :update_nonce},
-    {:vault_index_states, VaultIndexState, :vault_id, :state_ciphertext, :state_nonce},
-    {:vault_index_update_log, VaultIndexUpdateLog, :id, :update_ciphertext, :update_nonce}
+    %{
+      name: :notes_content,
+      schema: Note,
+      key: :id,
+      ct: :content_ciphertext,
+      nonce: :content_nonce,
+      aad: {:notes, :content, :id}
+    },
+    %{
+      name: :notes_crdt_state,
+      schema: Note,
+      key: :id,
+      ct: :crdt_state_ciphertext,
+      nonce: :crdt_state_nonce,
+      aad: {:notes, :crdt_state, :id}
+    },
+    %{
+      name: :crdt_update_log,
+      schema: CrdtUpdateLog,
+      key: :id,
+      ct: :update_ciphertext,
+      nonce: :update_nonce,
+      aad: {:notes, :crdt_state, :note_id}
+    },
+    %{
+      name: :vault_index_states,
+      schema: VaultIndexState,
+      key: :vault_id,
+      ct: :state_ciphertext,
+      nonce: :state_nonce,
+      aad: {:vault_index_states, :state, :vault_id}
+    },
+    %{
+      name: :vault_index_update_log,
+      schema: VaultIndexUpdateLog,
+      key: :id,
+      ct: :update_ciphertext,
+      nonce: :update_nonce,
+      aad: {:vault_index_update_log, :update, :id}
+    }
   ]
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(30)
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"user_id" => user_id}}) when is_binary(user_id) do
-    Enum.reduce_while(@columns, :ok, fn column, :ok ->
-      case TenantSweep.each_batch(user_id, elem(column, 1), &reencode_batch(user_id, column, &1)) do
-        :ok -> {:cont, :ok}
-        {:error, :rotation_in_progress} -> {:halt, {:snooze, 60}}
-        {:error, :user_not_found} -> {:halt, {:cancel, :user_not_found}}
-        {:error, _} = err -> {:halt, err}
-      end
-    end)
+  def perform(%Oban.Job{args: %{"user_id" => user_id} = args}) when is_binary(user_id) do
+    if Application.get_env(:engram, :envelope_compression, false) do
+      deadline = System.monotonic_time(:millisecond) + setting(:budget_ms, @budget_ms)
+
+      columns =
+        Enum.drop_while(
+          @columns,
+          &(Atom.to_string(&1.name) != (args["column"] || "notes_content"))
+        )
+
+      run_columns(user_id, columns, args["after"], deadline)
+    else
+      {:cancel, :compression_off}
+    end
   end
+
+  defp run_columns(_user_id, [], _after, _deadline), do: :ok
+
+  defp run_columns(user_id, [column | rest], after_id, deadline) do
+    case TenantSweep.each_batch(
+           user_id,
+           column.schema,
+           &reencode_batch(user_id, column, &1, deadline),
+           after: after_id,
+           batch_size: setting(:batch_size, @batch_size)
+         ) do
+      :ok -> run_columns(user_id, rest, nil, deadline)
+      {:halt, last_id} -> hand_off(user_id, column.name, last_id)
+      {:error, :rotation_in_progress} -> {:snooze, 60}
+      {:error, :user_not_found} -> {:cancel, :user_not_found}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp hand_off(user_id, name, last_id) do
+    case Oban.insert(
+           new(%{"user_id" => user_id, "column" => Atom.to_string(name), "after" => last_id})
+         ) do
+      {:ok, _} -> :ok
+      {:error, _} = err -> err
+    end
+  end
+
+  # Test seam: tests shrink the budget and batch size through app env.
+  defp setting(key, default),
+    do: :engram |> Application.get_env(__MODULE__, []) |> Keyword.get(key, default)
 
   @doc """
   Enqueues one job per user with a legacy row; returns how many. Discovery
@@ -91,7 +180,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   # The done predicate and the worker's selection, one definition. A 16-byte
   # ciphertext is the tag alone (empty plaintext, format 0 by design); a
   # 13-byte nonce is format 1, done whatever its codec.
-  defp legacy({name, schema, _key, ct, nonce}) do
+  defp legacy(%{name: name, schema: schema, ct: ct, nonce: nonce}) do
     from(r in schema,
       where: fragment("octet_length(?) = 12", field(r, ^nonce)),
       where: fragment("octet_length(?) > 16", field(r, ^ct))
@@ -104,31 +193,45 @@ defmodule Engram.Workers.ReencodeEnvelopes do
 
   defp body_with_bound_aad(query, _name), do: query
 
-  defp reencode_batch(user_id, {name, _schema, key, ct, nonce} = column, ids) do
+  defp reencode_batch(user_id, column, ids, deadline) do
+    %{name: name, key: key, ct: ct, nonce: nonce, aad: {_t, _c, aad_id}} = column
+
+    :telemetry.execute([:engram, :reencode_envelopes, :batch], %{count: length(ids)}, %{
+      column: name
+    })
+
+    # Per batch, not per job: a rotation that started (or finished) since the
+    # last batch must stop this one, and a finished one changes the DEK.
     with {:ok, dek} <- current_dek(user_id) do
       column
       |> legacy()
       |> where([r], field(r, ^key) in ^ids)
-      |> select([r], %{id: field(r, ^key), ct: field(r, ^ct), nonce: field(r, ^nonce), row: r})
+      |> select([r], %{
+        id: field(r, ^key),
+        aad_id: field(r, ^aad_id),
+        ct: field(r, ^ct),
+        nonce: field(r, ^nonce)
+      })
       |> Repo.all()
-      |> Enum.each(&reencode_row(name, &1, dek))
+      |> Enum.each(&reencode_row(column, &1, dek))
+
+      if System.monotonic_time(:millisecond) >= deadline, do: {:halt, List.last(ids)}, else: :ok
     end
   end
 
-  # Per batch, not per job: a rotation that started (or finished) since the
-  # last batch must stop this one, and a finished one changes the DEK.
   defp current_dek(user_id) do
     case Repo.get(User, user_id) do
-      nil ->
-        {:error, :user_not_found}
-
-      user ->
-        with :ok <- RotationGate.check_user(user), do: Crypto.get_dek(user)
+      nil -> {:error, :user_not_found}
+      user -> with :ok <- RotationGate.check_user(user), do: Crypto.get_dek(user)
     end
   end
 
-  defp reencode_row(name, %{id: id, ct: ct, nonce: nonce, row: row}, dek) do
-    aad = aad(name, row)
+  defp reencode_row(
+         %{name: name, aad: {table, col, _}},
+         %{id: id, ct: ct, nonce: nonce} = row,
+         dek
+       ) do
+    aad = Crypto.aad_for_row(table, col, row.aad_id)
 
     case Envelope.decrypt(ct, nonce, dek, aad) do
       {:ok, plaintext} ->
@@ -143,22 +246,12 @@ defmodule Engram.Workers.ReencodeEnvelopes do
     end
   end
 
-  defp aad(:notes_content, row), do: Crypto.aad_for_row(:notes, :content, row.id)
-  defp aad(:notes_crdt_state, row), do: Crypto.aad_for_row(:notes, :crdt_state, row.id)
-  defp aad(:crdt_update_log, row), do: Crypto.aad_for_row(:notes, :crdt_state, row.note_id)
-
-  defp aad(:vault_index_states, row),
-    do: Crypto.aad_for_row(:vault_index_states, :state, row.vault_id)
-
-  defp aad(:vault_index_update_log, row),
-    do: Crypto.aad_for_row(:vault_index_update_log, :update, row.id)
-
   @doc false
   # The CAS write. Public as the seam for the stale-read test. Must run in
   # the user's tenant context. A miss (0 rows) means the row changed since it
   # was read; it is left for the next pass.
   def write_row(name, id, old_ct, new_ct, new_nonce) do
-    {^name, schema, key, ct, nonce} = List.keyfind!(@columns, name, 0)
+    %{schema: schema, key: key, ct: ct, nonce: nonce} = Enum.find(@columns, &(&1.name == name))
 
     from(r in schema, where: field(r, ^key) == ^id and field(r, ^ct) == ^old_ct)
     |> Repo.update_all(set: [{ct, new_ct}, {nonce, new_nonce}])

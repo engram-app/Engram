@@ -115,7 +115,11 @@ config :engram, Oban,
     # release ahead of its workers, so a rollback strands nothing
     # (ObanQueueConfigTest @moving_to_events).
     events: 2,
-    # Key rotation only (DEK, master key, provider migration).
+    # Key rotation (DEK, master key, provider migration) plus the bounded
+    # envelope re-encode (ReencodeEnvelopes, priority 3, ~30 s per job). The
+    # limit is PER NODE (Oban OSS), so this is not mutual exclusion: the
+    # re-encode's safety against a rotation is its per-batch RotationGate
+    # check and CAS write, not this queue.
     crypto_backfill: 1,
     # Hourly CRDT representation backfills (BackfillCrdtState, BackfillCrdtHead),
     # off crypto_backfill so they never hold a rotation's slot.
