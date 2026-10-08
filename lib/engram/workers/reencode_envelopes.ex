@@ -50,7 +50,9 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   self-heals on the next one.
 
   With compression off (`Envelope.compression_on?/0`: the kill switch, or a
-  cluster node that cannot read format 1), a job cancels itself: re-encoding
+  cluster node that cannot read format 1), a job cancels itself, checked at
+  job start and before every chunk (so at most one chunk is in flight when
+  it flips; `Envelope.encrypt/3` still decides per row): re-encoding
   would write format 0 again and NULL `crdt_head` for nothing. The migration
   is disabled by the same decision and re-enqueues once it is back on. A
   deploy blip (Cloud Map still listing a stopped task) trips the gate and
@@ -214,6 +216,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
       :ok -> run_columns(user_id, rest, nil, deadline)
       {:halt, last_id} -> hand_off(user_id, column.label, last_id)
       {:error, :rotation_in_progress} -> {:snooze, 60}
+      {:error, :compression_off} -> {:cancel, :compression_off}
       {:error, :user_not_found} -> {:cancel, :user_not_found}
       {:error, _} = err -> err
     end
@@ -359,8 +362,15 @@ defmodule Engram.Workers.ReencodeEnvelopes do
 
   # One transaction per chunk. The DEK and rotation gate are re-checked per
   # chunk: a rotation that started (or finished) since the last one must stop
-  # this, and a finished one changes the DEK.
-  defp reencode_chunk(
+  # this, and a finished one changes the DEK. So is compression: once it is
+  # off, every further write would be format 0 again.
+  defp reencode_chunk(user_id, column, ids) do
+    if Envelope.compression_on?(),
+      do: write_chunk(user_id, column, ids),
+      else: {:error, :compression_off}
+  end
+
+  defp write_chunk(
          user_id,
          %{key: key, ct: ct, nonce: nonce, aad: {_t, _c, aad_id}} = column,
          ids

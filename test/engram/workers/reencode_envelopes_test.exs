@@ -343,6 +343,31 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
       assert reload(Note, id: note.id) == before
     end
 
+    test "compression turning off mid-job stops it before the next chunk",
+         %{user: u, vault: v} do
+      [a, b] =
+        Enum.sort([legacy_note!(u, v, "a.md", @big).id, legacy_note!(u, v, "b.md", @big).id])
+
+      tune(chunk_bytes: 1)
+      handler = "switch-off-after-chunk-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:engram, :reencode_envelopes, :chunk],
+        fn _e, _m, _meta, _c -> Application.put_env(:engram, :envelope_compression, false) end,
+        nil
+      )
+
+      on_exit(fn ->
+        :telemetry.detach(handler)
+        Application.put_env(:engram, :envelope_compression, true)
+      end)
+
+      assert {:cancel, :compression_off} = run(u)
+      assert byte_size(reload(Note, id: a).content_nonce) == 13
+      assert byte_size(reload(Note, id: b).content_nonce) == 12
+    end
+
     test "out of budget: hands off its cursor to a successor while still running",
          %{user: u, vault: v} do
       [a, b] =
