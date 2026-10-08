@@ -2522,16 +2522,16 @@ jobs:
 
       - name: Rust toolchain (native/ NIFs)
         # rustup into the runner user's home, once per VM, at the version
-        # native/engram_native/rust-toolchain.toml pins. Under flock: the
-        # runners on one VM share ~/.rustup, and rustup is not safe to run
-        # concurrently.
+        # native/rust-toolchain.toml pins, with the wasm32 target for the
+        # engram_core guard below. Under flock: the runners on one VM share
+        # ~/.rustup, and rustup is not safe to run concurrently.
         run: |
           mkdir -p "$HOME/.cargo"
-          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/engram_native/rust-toolchain.toml)
+          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/rust-toolchain.toml)
           flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
             [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
-            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --component rustfmt --component clippy --no-self-update
+            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --component rustfmt --component clippy --target wasm32-unknown-unknown --no-self-update
           ' "$RUST_VERSION"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
@@ -2539,49 +2539,58 @@ jobs:
         # rustfmt and clippy (-D warnings) gate first, then the Rust-only
         # tests: the segmented-parse fuzz (segmented == whole-document, 20k
         # cases; cron.yml native-deep runs 2M x 3 seeds), the pulldown-cmark
-        # panic guard, linear-time bounds. mix test only loads the NIF, so
-        # without this step they ran nowhere, and Dependabot auto-merges
-        # grouped cargo bumps.
+        # panic guard, linear-time bounds, the envelope engine's KATs. mix
+        # test only loads the NIF, so without this step they ran nowhere,
+        # and Dependabot auto-merges grouped cargo bumps. One Cargo
+        # workspace (native/): engram_core and engram_native.
         # Release for the timing asserts, without LTO (that is for the
         # shipped .so). The target dir persists per VM; cargo locks it.
         env:
           CARGO_PROFILE_RELEASE_LTO: "false"
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
-        # Both crates: engram_core (the envelope engine, shared with the
-        # wasm clients) is its own crate with its own lockfile.
+        working-directory: native
         run: |
           export CARGO_TARGET_DIR="$HOME/.cache/engram-native-target"
-          for crate in native/engram_core native/engram_native; do
-            echo "::group::$crate"
-            (cd "$crate" \
-              && cargo fmt --check \
-              && cargo clippy --release --locked --all-targets -- -D warnings \
-              && cargo test --release --locked)
-            echo "::endgroup::"
-          done
+          cargo fmt --all --check
+          cargo clippy --workspace --release --locked --all-targets -- -D warnings
+          cargo test --workspace --release --locked
 
       - name: engram_core builds for wasm32 (native/)
         # The plugin and web app will run native/engram_core as wasm32, so a
         # dependency or an API that cannot target it must fail here. ring and
-        # zstd compile C, which for wasm32 needs clang; the runner user has no
-        # sudo, so the build runs in the pinned rust image (same digest as
-        # the CI image; keep it in step with rust-toolchain.toml). Rootless
-        # docker maps container root to the runner user, so the per-VM cache
-        # dir stays ours; cargo locks it across concurrent runners.
+        # zstd compile C, which for wasm32 needs a clang with the wasm
+        # backend; the runner user has no sudo for a distro clang. So: the
+        # pinned wasi-sdk release (clang + llvm-ar), sha256-checked, unpacked
+        # once per VM into the runner home under flock (as rustup above), and
+        # renamed into place only when complete. The wasm32 target comes from
+        # the toolchain step. Not vacuous: the target must be installed, the
+        # clang must run, cargo must build, and the rlib must exist.
+        env:
+          WASI_SDK_VERSION: "34.0"
+          WASI_SDK_SHA256: b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4
+        working-directory: native
         run: |
-          CACHE="$HOME/.cache/engram-core-wasm"
-          mkdir -p "$CACHE/registry" "$CACHE/target"
-          docker run --rm \
-            -v "$PWD/native:/w:ro" \
-            -v "$CACHE/registry:/usr/local/cargo/registry" \
-            -v "$CACHE/target:/target" \
-            -e CARGO_TARGET_DIR=/target \
-            -w /w/engram_core \
-            rust:1.94.1-slim-bookworm@sha256:cf9dd0ec73e75f827fe59123fff9dc65af1a1c8363c3c31ee8d7f8ad0b6a5fb2 \
-            bash -c 'apt-get update -qq \
-              && apt-get install -y -qq --no-install-recommends clang >/dev/null \
-              && rustup target add wasm32-unknown-unknown \
-              && cargo build --release --locked --target wasm32-unknown-unknown'
+          SDK="$HOME/.cache/engram-wasi-sdk-$WASI_SDK_VERSION"
+          mkdir -p "$HOME/.cache"
+          flock "$HOME/.cache/.engram-wasi-sdk.lock" sh -ec '
+            [ -x "$0/bin/clang" ] && exit 0
+            f="$RUNNER_TEMP/wasi-sdk.tar.gz"
+            curl --proto "=https" --tlsv1.2 -sSfL -o "$f" \
+              "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION%%.*}/wasi-sdk-$WASI_SDK_VERSION-x86_64-linux.tar.gz"
+            echo "$WASI_SDK_SHA256  $f" | sha256sum -c -
+            rm -rf "$0.partial" && mkdir -p "$0.partial"
+            tar -xzf "$f" -C "$0.partial" --strip-components=1
+            rm -f "$f"
+            mv "$0.partial" "$0"
+          ' "$SDK"
+          export CC_wasm32_unknown_unknown="$SDK/bin/clang" AR_wasm32_unknown_unknown="$SDK/bin/llvm-ar"
+          "$CC_wasm32_unknown_unknown" --version | head -1
+          # A fresh cargo fingerprint skips the compile, so check the target
+          # is really installed for the pinned toolchain.
+          rustup target list --installed | grep -qx wasm32-unknown-unknown
+          export CARGO_TARGET_DIR="$HOME/.cache/engram-native-target"
+          cargo build --release --locked -p engram_core --target wasm32-unknown-unknown
+          test -s "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/libengram_core.rlib"
 
       - name: Fetch deps (if missing or lockfile changed)
         # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`
@@ -2923,12 +2932,12 @@ jobs:
 
       - name: Rust toolchain (native/ NIFs)
         # rustup into the runner user's home, once per VM, at the version
-        # native/engram_native/rust-toolchain.toml pins. Under flock: the
+        # native/rust-toolchain.toml pins. Under flock: the
         # runners on one VM share ~/.rustup, and rustup is not safe to run
         # concurrently.
         run: |
           mkdir -p "$HOME/.cargo"
-          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/engram_native/rust-toolchain.toml)
+          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/rust-toolchain.toml)
           flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
             [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
@@ -3646,12 +3655,12 @@ jobs:
       - name: Rust toolchain (native/ NIFs)
         if: steps.gate.outputs.proceed == 'true'
         # rustup into the runner user's home, once per VM, at the version
-        # native/engram_native/rust-toolchain.toml pins. Under flock: the
+        # native/rust-toolchain.toml pins. Under flock: the
         # runners on one VM share ~/.rustup, and rustup is not safe to run
         # concurrently.
         run: |
           mkdir -p "$HOME/.cargo"
-          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/engram_native/rust-toolchain.toml)
+          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/rust-toolchain.toml)
           flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
             [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
@@ -3816,7 +3825,7 @@ jobs:
         if: steps.n1-gate.outputs.proceed == 'true' && steps.prev.outputs.proceed == 'true'
         run: |
           mkdir -p "$HOME/.cargo"
-          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/engram_native/rust-toolchain.toml)
+          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/rust-toolchain.toml)
           flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
             [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
@@ -4284,12 +4293,12 @@ jobs:
 
       - name: Rust toolchain (native/ NIFs)
         # rustup into the runner user's home, once per VM, at the version
-        # native/engram_native/rust-toolchain.toml pins. Under flock: the
+        # native/rust-toolchain.toml pins. Under flock: the
         # runners on one VM share ~/.rustup, and rustup is not safe to run
         # concurrently.
         run: |
           mkdir -p "$HOME/.cargo"
-          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/engram_native/rust-toolchain.toml)
+          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/rust-toolchain.toml)
           flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
             [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none

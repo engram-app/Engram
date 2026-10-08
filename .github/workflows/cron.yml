@@ -951,12 +951,12 @@ jobs:
 
       - name: Rust toolchain (native/ NIFs)
         # rustup into the runner user's home, once per VM, at the version
-        # native/engram_native/rust-toolchain.toml pins. Under flock: the
+        # native/rust-toolchain.toml pins. Under flock: the
         # runners on one VM share ~/.rustup, and rustup is not safe to run
         # concurrently.
         run: |
           mkdir -p "$HOME/.cargo"
-          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/engram_native/rust-toolchain.toml)
+          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/rust-toolchain.toml)
           flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
             [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
@@ -1155,7 +1155,7 @@ jobs:
         # once per VM, at the pinned version, under flock.
         run: |
           mkdir -p "$HOME/.cargo"
-          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/engram_native/rust-toolchain.toml)
+          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/rust-toolchain.toml)
           flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
             [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
@@ -1177,7 +1177,8 @@ jobs:
 
       - name: cargo audit (RustSec)
         # The pinned release binary, checksummed: building cargo-audit from
-        # source takes 10+ minutes. Both crates: each has its own lockfile.
+        # source takes 10+ minutes. One lockfile for the native/ workspace.
+        working-directory: native
         run: |
           v=0.22.2
           f="cargo-audit-x86_64-unknown-linux-musl-v$v.tgz"
@@ -1185,9 +1186,7 @@ jobs:
             "https://github.com/rustsec/rustsec/releases/download/cargo-audit%2Fv$v/$f"
           echo "7fb9497f8594b389e5fce5ef9b92db08432996895b2e0c5a0167a69ed445c428  $RUNNER_TEMP/$f" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/$f" -C "$RUNNER_TEMP"
-          for crate in native/engram_core native/engram_native; do
-            (cd "$crate" && "$RUNNER_TEMP/cargo-audit-x86_64-unknown-linux-musl-v$v/cargo-audit" audit --deny warnings)
-          done
+          "$RUNNER_TEMP/cargo-audit-x86_64-unknown-linux-musl-v$v/cargo-audit" audit --deny warnings
 
   alert-cron-failure:
     if: always() && contains(needs.*.result, 'failure')

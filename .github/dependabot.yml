@@ -40,16 +40,14 @@ updates:
         applies-to: version-updates
         update-types: [patch, minor]
 
-  # In-house Rust (native/engram_native, and native/engram_core, the
-  # engine it shares with the wasm clients; one entry so a grouped bump
-  # moves both lockfiles together). On 0.x crates a
+  # In-house Rust: the native/ Cargo workspace (engram_native, the NIF,
+  # and engram_core, the engine it shares with the wasm clients; one
+  # Cargo.lock). On 0.x crates a
   # "minor" bump (pulldown-cmark 0.13 -> 0.14) is semver-breaking, so
   # a grouped (auto-merged) PR can change parsing. verify.yml runs
   # `cargo test` plus the Elixir golden sets on it before merge.
   - package-ecosystem: cargo
-    directories:
-      - /native/engram_native
-      - /native/engram_core
+    directory: /native
     schedule:
       interval: weekly
       day: wednesday
