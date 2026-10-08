@@ -404,6 +404,47 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
       assert byte_size(reload(Note, id: b).content_nonce) == 12
     end
 
+    test "chunk_by_bytes packs by stored bytes, a lone row over budget is its own chunk" do
+      sizes = [{:a, 40}, {:b, 50}, {:c, 500}, {:d, 10}, {:e, 10}]
+
+      assert ReencodeEnvelopes.chunk_by_bytes(sizes, 100) == [[:a, :b], [:c], [:d, :e]]
+      assert ReencodeEnvelopes.chunk_by_bytes(sizes, 1) == [[:a], [:b], [:c], [:d], [:e]]
+      assert ReencodeEnvelopes.chunk_by_bytes([], 100) == []
+    end
+
+    test "a batch is split by the byte budget and each chunk commits on its own",
+         %{user: u, vault: v} do
+      huge = String.duplicate(@big, 50)
+
+      ids =
+        for {path, body} <- [{"a.md", @big}, {"b.md", @big}, {"c.md", huge}],
+            do: legacy_note!(u, v, path, body).id
+
+      # Every row is over a 1-byte budget, so one chunk per row; the huge one
+      # still progresses.
+      tune(chunk_bytes: 1)
+      handler = "reencode-chunks-#{System.unique_integer([:positive])}"
+      parent = self()
+
+      :telemetry.attach(
+        handler,
+        [:engram, :reencode_envelopes, :chunk],
+        fn _e, m, meta, _c ->
+          send(parent, {:chunk, meta.column, m.count, Repo.in_transaction?()})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert :ok = run(u)
+
+      for _ <- ids, do: assert_received({:chunk, :notes_content, 1, false})
+      refute_received {:chunk, :notes_content, _, _}
+
+      for id <- ids, do: assert(byte_size(reload(Note, id: id).content_nonce) == 13)
+    end
+
     test "reads only the key, AAD id and the one ct + nonce pair", %{user: u, vault: v} do
       legacy_note!(u, v, "a.md", @big)
       handler = "reencode-sql-#{System.unique_integer([:positive])}"

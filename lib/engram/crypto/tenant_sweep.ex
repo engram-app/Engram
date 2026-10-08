@@ -33,25 +33,36 @@ defmodule Engram.Crypto.TenantSweep do
   the first error is returned.
 
   Options: `:after` resumes after that id (default: from the start),
-  `:batch_size` (default 200).
+  `:batch_size` (default 200), `:fun_in_tenant` (default `true`). With
+  `false`, only the cursor read runs in the tenant transaction and `fun` runs
+  outside it, owning its own `with_tenant` calls: a caller that commits in
+  smaller pieces than a batch (the re-encoder, byte-bounded) needs that.
   """
   def each_batch(user_id, schema, fun, opts \\ []) do
     after_id = Keyword.get(opts, :after) || @first_id
-    loop(user_id, schema, after_id, fun, Keyword.get(opts, :batch_size, @batch_size))
+    size = Keyword.get(opts, :batch_size, @batch_size)
+    loop(user_id, schema, after_id, fun, size, Keyword.get(opts, :fun_in_tenant, true))
   end
 
-  defp loop(user_id, schema, last_id, fun, size) do
+  defp loop(user_id, schema, last_id, fun, size, fun_in_tenant) do
     swept =
       Repo.with_tenant(user_id, fn ->
         case fetch_batch_ids(user_id, schema, last_id, size) do
           [] -> :done
-          ids -> {:batch, ids, fun.(ids)}
+          ids when fun_in_tenant -> {:batch, ids, fun.(ids)}
+          ids -> {:ids, ids}
         end
       end)
 
+    swept =
+      case swept do
+        {:ok, {:ids, ids}} -> {:ok, {:batch, ids, fun.(ids)}}
+        other -> other
+      end
+
     case swept do
       {:ok, :done} -> :ok
-      {:ok, {:batch, ids, :ok}} -> loop(user_id, schema, List.last(ids), fun, size)
+      {:ok, {:batch, ids, :ok}} -> loop(user_id, schema, List.last(ids), fun, size, fun_in_tenant)
       {:ok, {:batch, _ids, {:halt, _} = halt}} -> halt
       {:ok, {:batch, _ids, {:error, _} = err}} -> err
       {:error, reason} -> {:error, reason}
