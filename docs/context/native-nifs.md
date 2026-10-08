@@ -57,43 +57,91 @@ bump.
 ### Envelope engine (`envelope_seal` / `envelope_open`, 2026-10-07, #1872)
 
 `Engram.Crypto.Envelope` runs on `native/engram_native/src/envelope.rs`
-(AES-256-GCM via the `aes-gcm` crate, zstd level 3). Format 0 is byte for
-byte what `:crypto` wrote (`test/support/crypto_oracle.ex` is the oracle);
-format 1 adds a codec byte and zstd. Formats and policy:
-`encryption-operations.md` "Envelope formats". Dirty above 16 KB, zstd contexts
-are thread-local per scheduler thread, decode streams (no allocation from the
-declared size).
+(AES-256-GCM via `ring` 0.17, zstd level 3). Format 0 is byte for byte what
+`:crypto` wrote (`test/support/crypto_oracle.ex` is the oracle; two KATs in
+envelope.rs pin it too); format 1 adds a codec byte and zstd. Formats and
+policy: `encryption-operations.md` "Envelope formats". Dirty above 16 KB, zstd
+contexts are thread-local per scheduler thread, decode streams (no allocation
+from the declared size).
 
-Measured on the dev box (2026-10-07, best of 15 x 20 calls per cell, microseconds
-per call, load average 1.4-2.1 and rising during the run, so treat single cells
-as +-30%). Input is seeded pseudo-random markdown (headings, wikilink bullets,
-prose from a 1,500-word vocabulary), not a repeated block, which would show a
-useless 700x ratio. Two full runs:
+Copies: seal and open allocate the output as a BEAM binary (`OwnedBinary`),
+copy the input into it ONCE and run AES-GCM in place. Raw format 1 returns the
+plaintext as a sub-binary past the codec byte. Only the zstd paths add a copy
+(the compressed or decoded `Vec`). So the reported peak is Rust scratch only
+(about 0 for `:none` and raw); the output binary shows in
+`:erlang.memory(:binary)` like every other NIF's output.
+
+Why `ring`, not RustCrypto `aes-gcm` (the first cut): pure-Rust microbench,
+`cargo test --release bench_aes_gcm -- --ignored --nocapture` in
+native/engram_native (2026-10-07, Xeon E5-2650 v2: AES-NI + PCLMUL, AVX, no
+AVX2/MOVBE; best of 15 x 50; each call copies the input into the work buffer,
+as the NIF does; load 1.1-1.5; microseconds, three runs):
+
+| Size | `aes-gcm` seal / open | `ring` seal / open | open MB/s aes-gcm / ring | ring speedup |
+|---|---|---|---|---|
+| 2 KB | 3.5-9.9 / 3.5-9.8 | 2.1-5.4 / 2.1-5.4 | 210-580 / 383-961 | 1.7-1.8x |
+| 10 KB | 19-50 / 19-49 | 10.5-26.5 / 10.3-26.6 | 208-545 / 385-997 | 1.8x |
+| 100 KB | 193-510 / 180-499 | 103-277 / 104-275 | 205-570 / 372-987 | 1.7-2.8x |
+| 1 MB | 1,950-2,030 / 1,926-2,122 | 1,082-1,139 / 1,095-1,144 | 494-544 / 917-957 | 1.7-1.9x |
+
+`openssl speed -evp aes-256-gcm` on the same box: 724 MB/s at 1 KB, 924 at
+8 KB, 975 at 16 KB, 853 at 1 MB. `ring` (BoringSSL's assembly) reaches
+OpenSSL's throughput; `aes-gcm` 0.10 tops out at about 550 MB/s (runtime
+AES-NI/PCLMUL detection works, but no stitched AES+GHASH loop). The low
+small-size figures in some runs are CPU clock ramp, not the library: the ratio
+held at every size. The rule was "switch if ring is >= 1.3x at 100 KB and
+1 MB"; it was 1.7-1.9x. On AVX2/VAES prod CPUs both OpenSSL and ring take
+their wider paths; `aes-gcm` 0.10 has none. Costs of the switch: `ring` builds
+C and assembly with `cc` (the Dockerfile builder has build-essential; no perl
+or nasm on x86-64 Linux), and its key schedule is not zeroized on drop
+(`aes-gcm`'s `zeroize` feature did that). The raw key stays in the BEAM
+binary either way. `aes-gcm` stays only as a dev-dependency for the bench.
+
+BEAM-level, interleaved (`Native.envelope_open/4` against
+`CryptoOracle.decrypt/4` in the same loop, best of 40 x 20, three rounds, random
+plaintext, `:none`; load 2.1-2.5; microseconds):
+
+| Size | Oracle enc / dec | Before (aes-gcm, 2 copies) seal / open | After (ring, 1 copy) seal / open |
+|---|---|---|---|
+| 100 KB | 113-131 / 99-109 | 230 / 202-554 | 118-123 / 113-123 |
+| 1 MB | 1,821-2,017 / 1,505-1,557 | 2,683 / 2,428-2,612 | 1,696-1,765 / 1,493-1,569 |
+
+The oracle's seal includes its `ct <> tag` concat, so the engine's seal is
+slightly ahead of it; open is level with OpenSSL.
+
+The original bench script (`Native` cells measured after the oracle's, best of
+15 x 20, seeded markdown; runs on this box vary up to 1.5x between back-to-back
+runs, so read ranges, not cells). After, three runs at load 1.8-2.5:
 
 | Size | Oracle enc / dec | `:none` seal / open | `:zstd` seal / open | zstd ratio |
 |---|---|---|---|---|
-| 2 KB | 17-23 / 9-10 | 17 / 14 | 75 / 28 | 1.7x |
-| 10 KB | 44-47 / 31-33 | 59-63 / 56-57 | 286-313 / 90-94 | 1.95x |
-| 100 KB | 153-358 / 110-287 | 356-617 / 360-595 | 1,063-2,765 / 306-333 | 2.8x |
-| 1 MB | 2,005-2,148 / 1,264-1,537 | 2,700-2,900 / 2,922-2,936 | 11,150-11,320 / 3,825-3,849 | 3.05x |
+| 2 KB | 8.7-14.2 / 5.0-8.0 | 6.6-10.4 / 4.8-7.8 | 39-60 / 14-22 | 1.7x |
+| 10 KB | 25-39 / 17-28 | 18-32 / 17-28 | 153-245 / 46-68 | 1.95x |
+| 100 KB | 230-332 / 119-192 | 128-377 / 137-334 | 1,057-1,426 / 288-324 | 2.8x |
+| 1 MB | 2,048-2,203 / 1,271-1,439 | 1,688-1,860 / 1,850-1,897 | 10,462-10,873 / 3,268-3,716 | 3.05x |
+
+Before, same script, load 1.3-1.4: 2 KB 15.6 / 12.3, 10 KB 56 / 52, 100 KB
+253 / 229, 1 MB 2,779 / 2,659 (`:none` seal / open).
+The 1 MB open gap to the oracle in this script (1,850 vs 1,300) does not
+reproduce interleaved or with the `Native` cells measured first (1,664 vs
+1,575): it is run order and box noise, not the engine.
 
 Findings:
 
-- The engine's format 0 is NOT faster than OpenSSL: about 1.0x at 2 KB and
-  1.3-2x slower from 10 KB up. The `aes-gcm` crate on a baseline x86-64 build
-  does not reach OpenSSL's AES-NI/CLMUL throughput (about 350-400 MB/s here
-  against 500+). The win here is the format, not the cipher. A
-  `-C target-cpu` build is off the table (baseline x86-64 rule above); a faster
-  GHASH is a separate question if encrypt ever shows in a profile.
-- zstd seal costs 4-6x a plain seal (level 3 compresses at about 90 MB/s, 1 MB
-  in 11 ms) but is the cheaper side of the trade: the write is rare, the read is
-  `open` 1.3x a plain open. Only seal is slow, and `:auto` skips it for
-  incompressible blobs after a 64 KB sample.
+- With `ring` and one copy, format 0 is level with OpenSSL at every size
+  (before: 1.3-2x slower from 10 KB up). The remaining copy (input into the
+  output binary) is needed: `ring` only works in place and the input binary is
+  immutable. It costs about 10 us at 100 KB.
+- zstd seal costs 4-6x a plain seal (level 3 compresses at about 100 MB/s, 1 MB
+  in 10.5 ms) but is the cheaper side of the trade: the write is rare, the read
+  is `open` about 2x a plain open at 1 MB (zstd decode, not AES). `:auto` skips
+  the full pass for incompressible blobs after a 64 KB sample.
 - Ratio is data-dependent: 1.7x at 2 KB (short window) to 3x at 1 MB on word
   salad. Real notes with repeated structure compress better; Markdown with
   base64 payloads or already-compressed attachments will not.
-- A 1 MB note seals in 11 ms on a dirty scheduler. That is a write-path cost
-  only; the throughput limit is the compressor, not the scheduler.
+- A 1 MB note seals with zstd in about 10.5 ms on a dirty scheduler. That is a
+  write-path cost only; the throughput limit is the compressor, not the
+  scheduler or the cipher.
 
 Measured on the search and upsert NIFs (2026-10-04, dev box, min of 5-7,
 identical output to the Elixir they replaced):

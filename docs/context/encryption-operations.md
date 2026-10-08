@@ -12,7 +12,8 @@ Operator runbooks for encryption at rest. Encryption is unconditional: every not
 
 Every encrypted column is `ct_with_tag` plus a `nonce` field, produced by
 `Engram.Crypto.Envelope` over the Rust engine (`Engram.Native.envelope_seal/4`,
-`envelope_open/4`). The nonce field's length is the format tag:
+`envelope_open/4`; AES-256-GCM from the `ring` crate, see `native-nifs.md`
+"Envelope engine" for why). The nonce field's length is the format tag:
 
 | Format | Nonce field | AAD to AES-GCM | Body (before the 16-byte tag) |
 |---|---|---|---|
