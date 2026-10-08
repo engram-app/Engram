@@ -94,6 +94,59 @@ defmodule EngramWeb.Plugs.McpOriginGuardTest do
     end
   end
 
+  describe "MCP gateways (:mcp_gateway_origins)" do
+    # Hosted gateways (Smithery) proxy every user call from a Worker that sends
+    # its own Origin. They are not browsers on a page we did not serve, which is
+    # the only thing this guard exists to stop. Configured per deployment by
+    # MCP_GATEWAY_ORIGINS, never compiled in.
+    setup do
+      original = Application.fetch_env(:engram, :mcp_gateway_origins)
+
+      on_exit(fn ->
+        case original do
+          {:ok, value} -> Application.put_env(:engram, :mcp_gateway_origins, value)
+          :error -> Application.delete_env(:engram, :mcp_gateway_origins)
+        end
+      end)
+
+      Application.put_env(:engram, :cors_origin, ["https://app.engram.page"])
+
+      Application.put_env(:engram, :mcp_gateway_origins, [
+        "https://smithery.ai",
+        "https://*.run.tools"
+      ])
+
+      :ok
+    end
+
+    test "an exact configured origin is served", %{conn: conn, api_key: key} do
+      assert call_mcp(conn, key, "https://smithery.ai").status == 200
+    end
+
+    test "a subdomain of a wildcard entry is served", %{conn: conn, api_key: key} do
+      assert call_mcp(conn, key, "https://memory--engram.run.tools").status == 200
+    end
+
+    test "a wildcard does not match its bare apex", %{conn: conn, api_key: key} do
+      assert call_mcp(conn, key, "https://run.tools").status == 403
+    end
+
+    test "a look-alike host is still refused", %{conn: conn, api_key: key} do
+      assert call_mcp(conn, key, "https://evilrun.tools").status == 403
+      assert call_mcp(conn, key, "https://smithery.ai.evil.example").status == 403
+    end
+
+    test "the scheme must match the entry", %{conn: conn, api_key: key} do
+      assert call_mcp(conn, key, "http://memory--engram.run.tools").status == 403
+    end
+
+    test "with nothing configured, a gateway origin is refused", %{conn: conn, api_key: key} do
+      Application.delete_env(:engram, :mcp_gateway_origins)
+
+      assert call_mcp(conn, key, "https://smithery.ai").status == 403
+    end
+  end
+
   describe "with cors_origin unset or wildcard" do
     test "any Origin is served, so dev and CI are unaffected", %{conn: conn, api_key: key} do
       Application.put_env(:engram, :cors_origin, "*")

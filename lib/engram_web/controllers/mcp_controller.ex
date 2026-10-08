@@ -11,8 +11,18 @@ defmodule EngramWeb.McpController do
 
   require Logger
 
-  @server_info %{"name" => "engram", "version" => "0.1.0"}
   @capabilities %{"tools" => %{"listChanged" => false}}
+
+  @doc """
+  The `serverInfo` every handshake reports, and the server card too. The
+  version is the build version, the same number `/api/health` reports.
+  """
+  def server_info,
+    do: %{"name" => "engram", "version" => to_string(Application.spec(:engram, :vsn))}
+
+  @doc "Capabilities every handshake advertises. The server card's tripwire test reads it."
+  def capabilities, do: @capabilities
+
   # Newest first. `2025-06-18` is what makes structured tool output reachable:
   # `outputSchema` / `structuredContent` landed in that revision, so announcing
   # only `2025-03-26` left the whole feature unreadable by a conformant client.
@@ -350,8 +360,8 @@ defmodule EngramWeb.McpController do
   defp modern_result(result, method) when is_non_struct_map(result) do
     result
     |> Map.put_new("resultType", "complete")
-    |> Map.update("_meta", %{@meta_server_info => @server_info}, fn meta ->
-      Map.put_new(meta, @meta_server_info, @server_info)
+    |> Map.update("_meta", %{@meta_server_info => server_info()}, fn meta ->
+      Map.put_new(meta, @meta_server_info, server_info())
     end)
     |> Map.merge(Map.get(@cacheable_results, method, %{}))
   end
@@ -548,7 +558,7 @@ defmodule EngramWeb.McpController do
     {:ok,
      %{
        "protocolVersion" => requested_protocol_version(params) |> negotiate_protocol_version(),
-       "serverInfo" => @server_info,
+       "serverInfo" => server_info(),
        "capabilities" => @capabilities
      }}
   end

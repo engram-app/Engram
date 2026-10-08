@@ -204,4 +204,49 @@ defmodule EngramWeb.WellKnownControllerTest do
       assert body["client_id_metadata_document_supported"] == true
     end
   end
+
+  describe "GET /.well-known/mcp/server-card.json" do
+    # SEP-1649. Smithery and MCPRush fall back to it when the OAuth wall stops
+    # them scanning `tools/list` themselves.
+    test "lists exactly the tools `tools/list` serves", %{conn: conn} do
+      body = conn |> get("/.well-known/mcp/server-card.json") |> json_response(200)
+
+      assert body["tools"] == Engram.MCP.Tools.wire_list()
+      assert body["tools"] != []
+    end
+
+    test "declares OAuth as required", %{conn: conn} do
+      body = conn |> get("/.well-known/mcp/server-card.json") |> json_response(200)
+
+      assert body["authentication"] == %{"required" => true, "schemes" => ["oauth2"]}
+    end
+
+    test "carries serverInfo and empty resources and prompts", %{conn: conn} do
+      body = conn |> get("/.well-known/mcp/server-card.json") |> json_response(200)
+
+      # The real build version, the same number /api/health reports. It was a
+      # literal "0.1.0" that no release ever moved.
+      assert body["serverInfo"] == %{
+               "name" => "engram",
+               "version" => to_string(Application.spec(:engram, :vsn))
+             }
+
+      assert body["resources"] == []
+      assert body["prompts"] == []
+    end
+
+    test "tripwire: the card's empty resources/prompts still match what we serve" do
+      # `resources` and `prompts` are literal empty lists in the card. If MCP
+      # resources or prompts are ever added, this fails and points at
+      # `WellKnownController.mcp_server_card/2`, which must then list them.
+      assert Map.keys(EngramWeb.McpController.capabilities()) == ["tools"]
+    end
+
+    test "needs no auth and is edge-cacheable", %{conn: conn} do
+      conn = get(conn, "/.well-known/mcp/server-card.json")
+
+      assert conn.status == 200
+      assert ["public, max-age=300"] = get_resp_header(conn, "cache-control")
+    end
+  end
 end

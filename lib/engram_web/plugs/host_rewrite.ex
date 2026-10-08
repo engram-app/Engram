@@ -8,7 +8,8 @@ defmodule EngramWeb.Plugs.HostRewrite do
     * `api.engram.page` — prefix `/api` if the path doesn't already start
       with `/api`, `/socket`, `/webhooks`, or `/.well-known`. After rewrite,
       reject anything that would have resolved outside those scopes.
-    * `mcp.engram.page` — pass `/.well-known/oauth-*` through unmodified;
+    * `mcp.engram.page` — pass `/.well-known/oauth-*` and the MCP server card
+      through unmodified;
       otherwise prefix `/api/mcp` if not already prefixed; reject anything
       that would resolve outside `/api/mcp/*` or `/.well-known/oauth-*`.
     * Any other host — passthrough.
@@ -135,7 +136,8 @@ defmodule EngramWeb.Plugs.HostRewrite do
   @mcp_wellknown_prefixes [
     "/.well-known/oauth-protected-resource",
     "/.well-known/oauth-authorization-server",
-    "/.well-known/openai-apps-challenge"
+    "/.well-known/openai-apps-challenge",
+    "/.well-known/mcp/server-card.json"
   ]
 
   defp handle_mcp_host(conn) do

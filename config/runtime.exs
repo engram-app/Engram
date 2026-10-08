@@ -895,6 +895,16 @@ if config_env() == :prod do
     config :engram, :websocket_check_origin, cors_origins
   end
 
+  # Hosted MCP gateways whose Worker sends an Origin, e.g.
+  # `https://smithery.ai,https://*.run.tools`. Read only by McpOriginGuard; see
+  # the comment on `gateway?/1` there. Unset → [] → no change in behavior.
+  config :engram,
+         :mcp_gateway_origins,
+         (System.get_env("MCP_GATEWAY_ORIGINS") || "")
+         |> String.split(",", trim: true)
+         |> Enum.map(&String.trim/1)
+         |> Enum.reject(&(&1 == ""))
+
   # Host-driven path rewrite for the dedicated `api.engram.page` and
   # `mcp.engram.page` saas hosts. Opt-in: selfhost releases (and the
   # current `app.engram.page` host until DNS cutover) leave this unset
