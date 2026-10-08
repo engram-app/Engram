@@ -25,6 +25,14 @@ defmodule Engram.Native do
 
   use Rustler, otp_app: :engram, crate: "engram_native"
 
+  # The built library itself, recorded after `use Rustler` wrote it. Every
+  # MIX_ENV shares this one file (`_build/<env>/lib/engram/priv` links to
+  # priv/), and prod builds it without the `test-hooks` NIFs. Without this,
+  # a `MIX_ENV=prod mix compile` left dev/test loading the prod library
+  # until something else recompiled this module; now the changed digest
+  # recompiles it, and Rustler rebuilds the env's own library.
+  @external_resource "priv/native/engram_native.so"
+
   @doc "Keyword query vector: `{indices, values}`, distinct dims, values 1.0."
   def encode_query_nif(_query, _filter_key, _language), do: :erlang.nif_error(:nif_not_loaded)
 

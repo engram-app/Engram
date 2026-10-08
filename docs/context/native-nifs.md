@@ -526,8 +526,10 @@ adding callers.
   them. Dev and test must agree: Rustler writes one `priv/native/*.so` that
   every `MIX_ENV` shares through the `_build/<env>/lib/engram/priv` symlink,
   and a module whose NIF library exports a function it lacks fails to load.
-  After a local `MIX_ENV=prod mix compile`, `touch lib/engram/native.ex`
-  before the next `mix test` so the test build replaces the prod `.so`.
+  `Engram.Native` lists that `.so` as an `@external_resource`, so after a
+  local `MIX_ENV=prod mix compile` the next dev/test compile sees its digest
+  change, recompiles the module and rebuilds the env's own library. (Touching
+  `native.ex` would not: Mix compares digests, not mtimes.)
 - rustler: the crate and the hex package move together (0.38 both). The hex
   dep carries `override: true` because lingua pins an optional
   `rustler ~> 0.37.1` it only uses to force-build; lingua loads its
