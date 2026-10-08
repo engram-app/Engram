@@ -34,7 +34,8 @@ defmodule Engram.PromEx.NativeTest do
 
   test "metric definitions build" do
     opts = [otp_app: :engram]
-    assert %Event{} = Native.event_metrics(opts)
+    assert %Event{metrics: metrics} = Native.event_metrics(opts)
+    for m <- metrics, do: assert(m.tags == [:nif, :dirty])
     assert [%Polling{}, %Polling{}] = Native.polling_metrics(opts)
   end
 end
