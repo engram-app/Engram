@@ -19,7 +19,11 @@ defmodule Engram.Workers.DataMigrationsRunner do
 
   # The hourly run in this UTC hour also re-runs done migrations that opt in
   # with `reverify?/0`. Same hour as ReconcileEmbeddings' IndexVersions check.
+  # Catch-up: a done row whose last verification (`completed_at`, which every
+  # :done re-verify rewrites) is older than @reverify_stale_s is re-verified
+  # on the next hourly run, so a deduped or failed 04:00 run does not skip a day.
   @reverify_hour 4
+  @reverify_stale_s 25 * 3600
   @stuck_after_s 7 * 86_400
   @realert_after_s 86_400
 
@@ -47,17 +51,25 @@ defmodule Engram.Workers.DataMigrationsRunner do
   #
   # A disabled migration runs no pass and is never opened, alerted on or marked
   # done; only an ALREADY open row has its stuck clock held (see disabled/1). A done
-  # one is skipped too, except in the re-verify hour when it opts in: then its
+  # one is skipped too, except when it opts in and the re-verify is due (04:00
+  # UTC, or its last verification is over 25 h old): then its
   # pass runs, and `:more` reopens it (note_open/2 clears completed_at).
   @spec run(module(), boolean()) :: :skipped | :done | :more | :error
   def run(mod, reverify \\ false) do
     {name, version} = {mod.name(), mod.version()}
 
     cond do
-      not optional(mod, :enabled?, true) -> disabled(name)
-      not DataMigrations.done?(name, version) -> pass(mod, name, version)
-      reverify and optional(mod, :reverify?, false) -> reverify(mod, name, version)
-      true -> :skipped
+      not optional(mod, :enabled?, true) ->
+        disabled(name)
+
+      not DataMigrations.done?(name, version) ->
+        pass(mod, name, version)
+
+      optional(mod, :reverify?, false) and reverify_due?(name, reverify) ->
+        reverify(mod, name, version)
+
+      true ->
+        :skipped
     end
   rescue
     e -> failed(mod, e)
@@ -66,6 +78,12 @@ defmodule Engram.Workers.DataMigrationsRunner do
     # migrations after this one either.
     _kind, reason -> failed(mod, reason)
   end
+
+  defp reverify_due?(_name, true), do: true
+
+  defp reverify_due?(name, false),
+    do:
+      DataMigrations.verified_before?(name, DateTime.add(DateTime.utc_now(), -@reverify_stale_s))
 
   defp optional(mod, fun, default) do
     _ = Code.ensure_loaded(mod)

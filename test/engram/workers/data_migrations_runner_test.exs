@@ -134,6 +134,23 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
       assert DataMigrationsRunner.run(ReverifiedClean, true) == :done
       refute is_nil(Repo.get!(Entry, "test_reverified_clean").completed_at)
     end
+
+    # The 04:00 run was deduped or failed: the next hourly run catches up.
+    test "outside the re-verify hour, a verification older than 25 h re-verifies" do
+      :ok = DataMigrations.mark_done("test_reverified_clean", 1)
+      stale = DateTime.add(DateTime.utc_now(), -26 * 3600)
+
+      Repo.update_all(from(e in Entry, where: e.name == "test_reverified_clean"),
+        set: [completed_at: stale]
+      )
+
+      assert DataMigrationsRunner.run(ReverifiedClean, false) == :done
+      fresh = Repo.get!(Entry, "test_reverified_clean").completed_at
+      assert DateTime.compare(fresh, stale) == :gt
+
+      # Just verified: the next off-hour run skips it.
+      assert DataMigrationsRunner.run(ReverifiedClean, false) == :skipped
+    end
   end
 
   describe "stuck migrations" do

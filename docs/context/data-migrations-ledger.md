@@ -66,7 +66,10 @@ older node writing the old format during a rolling deploy or after a rollback,
 or writes while the migration was disabled) are never picked up until a
 version bump. A migration whose `reverify?/0` returns `true` gets its pass
 re-run once a day: the runner job scheduled in the 04:00 UTC hour (the same
-hour `ReconcileEmbeddings` re-checks `IndexVersions`). `:done` calls
+hour `ReconcileEmbeddings` re-checks `IndexVersions`). If that run is
+deduped or fails, the day is not lost: any hourly run re-verifies a done row
+whose last verification (`completed_at`, rewritten by every `:done`
+re-verify) is over 25 h old (`DataMigrations.verified_before?/2`). `:done` calls
 `mark_done/2` (idempotent; it re-closes a row another node reopened while this
 node still cached `done?`); `:more` calls `DataMigrations.reopen/2` (clears
 `completed_at`, restarts the stuck clock, drops this node's cached `done?`),

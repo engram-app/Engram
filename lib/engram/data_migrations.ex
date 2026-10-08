@@ -119,6 +119,15 @@ defmodule Engram.DataMigrations do
   end
 
   @doc """
+  True when `name` is done and its last verification (`completed_at`, set by
+  every `mark_done/2`) is older than `cutoff`.
+  """
+  @spec verified_before?(String.t(), DateTime.t()) :: boolean()
+  def verified_before?(name, cutoff) do
+    Repo.exists?(from(e in Entry, where: e.name == ^name and e.completed_at < ^cutoff))
+  end
+
+  @doc """
   Reopens a done migration (a re-verify found work again): `note_open/2`
   clears `completed_at` and restarts the stuck clock, and this node's cached
   `done?` is dropped. Another node's cache lasts until it restarts; the runner
