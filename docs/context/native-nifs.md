@@ -90,7 +90,7 @@ OpenSSL's throughput; `aes-gcm` 0.10 tops out at about 550 MB/s (runtime
 AES-NI/PCLMUL detection works, but no stitched AES+GHASH loop). The low
 small-size figures in some runs are CPU clock ramp, not the library: the ratio
 held at every size. The rule was "switch if ring is >= 1.3x at 100 KB and
-1 MB"; it was 1.7-1.9x. On AVX2/VAES prod CPUs both OpenSSL and ring take
+1 MB"; it was 1.7-2.8x at 100 KB and 1.7-1.9x at 1 MB. On AVX2/VAES prod CPUs both OpenSSL and ring take
 their wider paths; `aes-gcm` 0.10 has none. Costs of the switch: `ring` builds
 C and assembly with `cc` (the Dockerfile builder has build-essential; no perl
 or nasm on x86-64 Linux), and its key schedule is not zeroized on drop
@@ -131,7 +131,10 @@ Findings:
 - With `ring` and one copy, format 0 is level with OpenSSL at every size
   (before: 1.3-2x slower from 10 KB up). The remaining copy (input into the
   output binary) is needed: `ring` only works in place and the input binary is
-  immutable. It costs about 10 us at 100 KB.
+  immutable. The microbench's `copy only` column times it into a warm
+  buffer: 4.0-4.5 us at 100 KB, 74-194 us at 1 MB (three runs, load 1.5-2.4).
+  A fresh output binary also pays first-touch page faults, as OpenSSL's
+  output does.
 - zstd seal costs 4-6x a plain seal (level 3 compresses at about 100 MB/s, 1 MB
   in 10.5 ms) but is the cheaper side of the trade: the write is rare, the read
   is `open` about 2x a plain open at 1 MB (zstd decode, not AES). `:auto` skips

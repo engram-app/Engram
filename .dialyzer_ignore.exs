@@ -7,9 +7,15 @@
   # caller-side `binary()` parameter type fail to match.
   # `aad_prefix/2` (the shared head of the v2 AAD, #1872) is the same case.
   # NO line numbers: dialyxir line-matches the `@spec`, and the pins at 86/95
-  # broke as soon as `aad_prefix/2` was added above them. Every
-  # `contract_supertype` in this file is an AAD helper, so (file, type) stays narrow.
-  {"lib/engram/crypto.ex", :contract_supertype},
+  # broke as soon as `aad_prefix/2` was added above them. Instead each entry is
+  # (file, exact short description), which names the function, so a new
+  # `contract_supertype` anywhere else in crypto.ex still fails the gate.
+  {"lib/engram/crypto.ex",
+   "Type specification for aad_prefix is a supertype of the success typing."},
+  {"lib/engram/crypto.ex",
+   "Type specification for aad_for_qdrant is a supertype of the success typing."},
+  {"lib/engram/crypto.ex",
+   "Type specification for aad_for_wrapped_dek is a supertype of the success typing."},
 
   # `identify_from_blob/1` is intentionally specced as `term()` because callers
   # pass values straight from DB columns (which may be nil) or from arbitrary

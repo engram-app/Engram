@@ -455,7 +455,7 @@ mod tests {
         let nonce = [3u8; NONCE];
         let rc = Aes256Gcm::new_from_slice(&K).unwrap();
         let rk = cipher(&K).unwrap();
-        println!("size   | aes-gcm seal | aes-gcm open | ring seal | ring open | MB/s open a/r | open speedup");
+        println!("size   | aes-gcm seal | aes-gcm open | ring seal | ring open | MB/s open a/r | open speedup | copy only");
         for (label, sz) in [
             ("2KB", 2048),
             ("10KB", 10240),
@@ -507,9 +507,15 @@ mod tests {
                     .unwrap();
                 assert_eq!(out.len(), sz);
             });
+            // The one copy the NIF keeps (input into the output binary).
+            let copy = best(|| {
+                buf.clear();
+                buf.extend_from_slice(std::hint::black_box(&ct));
+                std::hint::black_box(&buf);
+            });
             let mbs = |us: f64| sz as f64 / us;
             println!(
-                "{label:6} | {a_seal:12.1} | {a_open:12.1} | {r_seal:9.1} | {r_open:9.1} | {:5.0}/{:5.0} | {:.2}x",
+                "{label:6} | {a_seal:12.1} | {a_open:12.1} | {r_seal:9.1} | {r_open:9.1} | {:5.0}/{:5.0} | {:.2}x | {copy:.1}",
                 mbs(a_open),
                 mbs(r_open),
                 a_open / r_open

@@ -490,18 +490,18 @@ fn envelope_open<'a>(
         memory::measured(|| envelope::open(&ct, &nonce, &key, &aad, OwnedBinary::new));
     // Format 0 and raw format 1 decrypt in their BEAM binary; raw skips the
     // codec byte as a sub-binary, not a copy.
-    let plain = match out {
-        Ok(envelope::Opened::InPlace(buf, 0)) => Ok(buf.release(env)),
+    let error = || rustler::types::atom::error().encode(env);
+    let term = match out {
+        Ok(envelope::Opened::InPlace(buf, 0)) => buf.release(env).encode(env),
         Ok(envelope::Opened::InPlace(buf, skip)) => {
             let buf = buf.release(env);
-            buf.make_subbinary(skip, buf.len() - skip)
+            match buf.make_subbinary(skip, buf.len() - skip) {
+                Ok(sub) => sub.encode(env),
+                Err(_) => error(),
+            }
         }
-        Ok(envelope::Opened::Inflated(v)) => Ok(to_binary(env, &v)),
-        Err(()) => Err(Error::BadArg),
-    };
-    let term = match plain {
-        Ok(b) => b.encode(env),
-        Err(_) => rustler::types::atom::error().encode(env),
+        Ok(envelope::Opened::Inflated(v)) => to_binary(env, &v).encode(env),
+        Err(()) => error(),
     };
     (term, peak)
 }
