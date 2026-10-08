@@ -238,7 +238,7 @@ defmodule Engram.Vaults do
         # `in_failed_sql_transaction` and the caller gets a 500. The savepoint
         # keeps the transaction usable so we can turn the loss into the right
         # answer below.
-        case Repo.insert(Vault.changeset(%Vault{id: vault_id}, attrs), mode: :savepoint) do
+        case insert_racing_default(vault_id, attrs) do
           {:ok, vault} ->
             emit_vault_count(user.id, :created)
             _ = Engram.Onboarding.record_action(user.id, :first_vault_created)
@@ -258,6 +258,24 @@ defmodule Engram.Vaults do
               nil -> {:error, cs}
             end
         end
+    end
+  end
+
+  # `is_default` comes from a COUNT, so two concurrent first-registrations both
+  # compute `true` and the loser trips `vaults_user_id_default_index`. The
+  # loser is by definition not the first vault: retry once as non-default.
+  defp insert_racing_default(vault_id, attrs) do
+    case Repo.insert(Vault.changeset(%Vault{id: vault_id}, attrs), mode: :savepoint) do
+      {:error, %Ecto.Changeset{errors: [{:is_default, {_, opts}} | _]}} = err ->
+        if opts[:constraint] == :unique,
+          do:
+            Repo.insert(Vault.changeset(%Vault{id: vault_id}, %{attrs | is_default: false}),
+              mode: :savepoint
+            ),
+          else: err
+
+      other ->
+        other
     end
   end
 

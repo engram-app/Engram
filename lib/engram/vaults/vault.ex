@@ -69,6 +69,7 @@ defmodule Engram.Vaults.Vault do
     |> validate_encrypted_name()
     |> unique_constraint([:user_id, :slug_hmac], name: :vaults_user_id_slug_hmac_index)
     |> unique_constraint([:user_id, :client_id], name: :vaults_user_id_client_id_index)
+    |> unique_constraint(:is_default, name: :vaults_user_id_default_index)
   end
 
   # Required on insert only: an update must never be blocked by a legacy row

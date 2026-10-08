@@ -236,3 +236,27 @@ class TestMalformedAuthorize:
             resp = _authorize(token, **fields)
             assert resp.status_code == 400, f"{fields}: {resp.status_code} {resp.text}"
             assert resp.json()["error"] == "invalid_request"
+
+
+class TestConcurrentVaultCreation:
+    def test_parallel_first_vaults_all_succeed_with_one_default(self):
+        """Racing first-registrations used to 500 on the one-default-per-user index."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        token = _register("race")
+
+        def create(i: int) -> int:
+            return requests.post(
+                f"{API_URL}/vaults/register",
+                json={"name": f"Race {i}", "client_id": str(uuid.uuid4())},
+                headers=_auth(token),
+                timeout=30,
+            ).status_code
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            codes = list(pool.map(create, range(8)))
+
+        assert codes == [201] * 8, codes
+        vaults = requests.get(f"{API_URL}/vaults", headers=_auth(token), timeout=TIMEOUT).json()
+        listed = vaults["vaults"] if isinstance(vaults, dict) else vaults
+        assert sum(1 for v in listed if v.get("is_default")) == 1
