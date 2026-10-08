@@ -1,6 +1,7 @@
 defmodule Engram.ConnectionsTest do
   use Engram.DataCase, async: true
   import Engram.Factory
+  alias Engram.Auth.DeviceFlow
   alias Engram.Connections
 
   describe "count_active/2" do
@@ -439,6 +440,35 @@ defmodule Engram.ConnectionsTest do
 
       assert [listed] = Connections.list_for_user(user)
       assert listed.name == "Claude Desktop"
+    end
+  end
+
+  describe "list_for_user/1 device label" do
+    test "a device connection shows the label the user chose" do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      {:ok, auth} = DeviceFlow.start_device_flow("client_1")
+
+      {:ok, _} =
+        DeviceFlow.authorize_device(auth.user_code, user, vault.id, "Work laptop")
+
+      {:ok, _} = DeviceFlow.exchange_device_code(auth.device_code)
+
+      assert [row] = Connections.list_for_user(user)
+      assert row.label == "Work laptop"
+      assert row.name == "Work laptop"
+    end
+
+    test "an unlabeled device connection keeps the client name" do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      {:ok, auth} = DeviceFlow.start_device_flow("client_1")
+      {:ok, _} = DeviceFlow.authorize_device(auth.user_code, user, vault.id)
+      {:ok, _} = DeviceFlow.exchange_device_code(auth.device_code)
+
+      assert [row] = Connections.list_for_user(user)
+      assert row.label == nil
+      assert row.name == "Obsidian Vault Sync"
     end
   end
 

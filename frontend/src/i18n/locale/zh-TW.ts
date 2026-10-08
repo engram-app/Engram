@@ -590,11 +590,7 @@ export default {
 	"Enter the code shown in your Obsidian plugin:": "請輸入 Obsidian 外掛中顯示的代碼：",
 	"Verifying…": "正在驗證…",
 	"Checking your code…": "正在檢查你的代碼…",
-	"Pick an existing one, or create a new vault for these notes.":
-		"選擇現有的知識庫，或為這些筆記建立新的知識庫。",
 	upgrade: "升級",
-	"A device asked to sync with your account. Only continue if you started this from Obsidian — the vault name above was supplied by that device.":
-		"有裝置要求與你的帳號同步。只有在你是從 Obsidian 發起時才繼續，上方的知識庫名稱是由該裝置提供的。",
 	"Syncing…": "正在同步…",
 	Sync: "同步",
 	"Your vault is linked. Obsidian is waiting for you to start the first sync.":
@@ -605,9 +601,6 @@ export default {
 		"你的筆記會在同步後顯示在這裡。你可以隨時回來查看。",
 	"Continue to web app": "前往網頁版應用程式",
 	"Open Obsidian": "開啟 Obsidian",
-	"Makes a new vault matching your Obsidian vault name":
-		"建立一個與你的 Obsidian 知識庫同名的新知識庫",
-	"Create a vault with a custom name": "以自訂名稱建立知識庫",
 	"choose a new name": "選擇新名稱",
 	"the device syncing your '{vault}' vault on {os} (last active {since})":
 		"正在 {os} 上同步你的「{vault}」知識庫的裝置（上次使用：{since}）",
@@ -630,10 +623,6 @@ export default {
 		"注意：你的免費方案一次只能在 1 台裝置之間同步檔案。連結此裝置會中斷 {device} 的連接，該裝置將不再接收同步變更。{upgrade}即可讓兩者保持連接。",
 	"Your Free plan includes 1 vault — link into the existing one above, or {upgrade} to create more.":
 		"你的免費方案包含 1 個知識庫，請連結到上方現有的知識庫，或{upgrade}以建立更多。",
-	"Sync into your existing vault · {count} notes": {
-		other: "同步到你現有的知識庫 · {count} 則筆記",
-	},
-	"Sync into this existing vault · {count} notes": { other: "同步到此現有知識庫 · {count} 則筆記" },
 	"{count} minutes ago": { other: "{count} 分鐘前" },
 	"{count} hours ago": { other: "{count} 小時前" },
 	"{count} days ago": { other: "{count} 天前" },
@@ -1283,4 +1272,20 @@ export default {
 		"我已閱讀並同意服務條款與隱私政策",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"我已閱讀並同意上方顯示的協議與隱私聲明",
+	"Name this connection": "為此連線命名",
+	"Shown in your connections list so you can tell your devices apart.":
+		"會顯示在你的連線清單中，方便你區分不同裝置。",
+	"Obsidian Vault Sync": "Obsidian Vault Sync",
+	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
+		"同步後，此裝置將可以存取你的筆記。只有在你自己發起此連結時才繼續。如果是別人讓你來到這裡，請關閉此頁面。",
+	"Selected: {name}": "已選取：{name}",
+	"Creating a new vault": "正在建立新知識庫",
+	"New vault name": "新知識庫名稱",
+	"Where should these notes sync?": "這些筆記要同步到哪裡？",
+	Suggested: "建議",
+	"matches your Obsidian vault": "與你的 Obsidian 知識庫相符",
+	"Or sync with a different vault": "或與其他知識庫同步",
+	"Sync with an existing vault": "與現有知識庫同步",
+	"(choose from {count} vaults)": "（從 {count} 個知識庫中選擇）",
+	"Or create a new vault": "或建立新知識庫",
 } satisfies Catalog;

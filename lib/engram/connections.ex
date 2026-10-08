@@ -456,9 +456,9 @@ defmodule Engram.Connections do
         client_id: rt.family_id,
         family_id: rt.family_id,
         key_id: nil,
-        name: "Obsidian Vault Sync",
-        # Device flow has no consent screen, so no user-chosen label.
-        label: nil,
+        # The user's own label wins, as in `oauth_rows/1`.
+        name: rt.label || "Obsidian Vault Sync",
+        label: rt.label,
         software_id: "engram-vault-sync",
         software_version: nil,
         verified: true,

@@ -40,7 +40,7 @@ export default defineConfig({
 		{
 			name: "local",
 			testMatch:
-				/\/(?:local-auth|dark-mode|mobile|note-live-update|note-properties|tree-ops-sync|wiki-nav|i18n-detection|i18n-onboarding)\.spec\.ts$/u,
+				/\/(?:local-auth|dark-mode|mobile|note-live-update|note-properties|tree-ops-sync|wiki-nav|i18n-detection|i18n-onboarding|device-link)\.spec\.ts$/u,
 			use: {
 				baseURL: `http://localhost:${LOCAL_VITE_PORT}`,
 			},

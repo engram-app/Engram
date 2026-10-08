@@ -2,6 +2,14 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+	countLabel,
+	useVaultSearch,
+	VaultRows,
+	VaultSearchField,
+	VaultSearchToggle,
+} from "@/components/vault-list";
 import { useAutofocus } from "@/hooks/use-autofocus";
 import { useStableT, useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
@@ -31,11 +39,15 @@ import { SyncStatusPill } from "../onboarding/sync-status-pill";
 import { useVaultReadyEvents } from "../onboarding/use-vault-ready-events";
 import { ROUTES } from "../routes";
 import { settingsHash, settingsTo } from "../settings/settings-hash";
+import { guessDeviceLabel, parseUserAgentOs } from "./guess-device-label";
+import { findMatchingVault } from "./match-vault";
 
 interface Vault {
 	id: string;
 	name: string;
 	note_count: number;
+	attachment_count?: number;
+	is_default?: boolean;
 	/** Has a note other than the seeded welcome note, i.e. `vault_populated`
 	 *  has already fired. Absent from backends that predate it. */
 	populated?: boolean;
@@ -108,12 +120,15 @@ function DeviceLinkPage() {
 	const codeRef = useAutofocus<HTMLInputElement>(step === "enter-code");
 	const [userCode, setUserCode] = useState(urlCode);
 	const [vaults, setVaults] = useState<Vault[]>([]);
-	// `selection` is the radio-row value: 'matched' (create new with the
-	// plugin-suggested name), 'custom' (create new with the input below), or
-	// the existing vault id as a string.
-	const [selection, setSelection] = useState<string>("matched");
+	// `selection` is the radio-row value: 'custom' (create new, named by the
+	// input, which starts out as the plugin-suggested name) or the existing
+	// vault id as a string.
+	const [selection, setSelection] = useState<string>("custom");
 	const [suggestedName, setSuggestedName] = useState("");
 	const [customName, setCustomName] = useState("");
+	// Seeded with a guess from the plugin's User-Agent once the code verifies;
+	// the user can edit or clear it, and a blank label is not sent.
+	const [label, setLabel] = useState("");
 	const [linkedVaultId, setLinkedVaultId] = useState<string | null>(null);
 	// Whether the success step has a first-sync milestone to wait for. False when
 	// linking into a vault that already has notes — see handleAuthorize.
@@ -160,6 +175,7 @@ function DeviceLinkPage() {
 				vaults: Vault[];
 				suggested_vault_name?: string | null;
 				user_code_valid?: boolean;
+				suggested_device_name?: string | null;
 			}>(`/vaults?user_code=${encodeURIComponent(formattedCode)}`);
 			// This endpoint answers 200 with the caller's vault list whether or not
 			// the code is real — `user_code_valid` is the only validity signal, and
@@ -181,30 +197,26 @@ function DeviceLinkPage() {
 				return;
 			}
 			setVaults(data.vaults ?? []);
+			// The plugin's own name wins. Without one, guess from this browser,
+			// which assumes it is on the device being linked; editable when not.
+			const suggestedLabel = data.suggested_device_name?.trim() || (await guessDeviceLabel()) || "";
+			// Verifying again (back, fix the code) must not wipe a name already typed.
+			setLabel((typed) => typed || suggestedLabel);
 			const suggested = data.suggested_vault_name?.trim() || "";
 			setSuggestedName(suggested);
 			// Default selection:
 			// - existing vault with the same name → pre-select that vault (link, don't dup)
-			// - suggested name with no existing match → 'matched' (create new with that name)
-			// - no hint at all → 'custom' (force user to type a name)
-			const existing = suggested
-				? (data.vaults ?? []).find((v) => v.name === suggested)
-				: undefined;
+			// - otherwise → 'custom' (create new), seeded with the suggested name
+			//   when there is one; with no hint the user types one
+			const existing = findMatchingVault(data.vaults ?? [], suggested);
 			// If the user is at the Free vault cap, default to the first existing
 			// vault (create-new rows are about to be disabled below).
 			const fallbackExisting =
 				(data.vaults ?? []).length >= (vaultsCap ?? Number.POSITIVE_INFINITY)
 					? (data.vaults?.[0] ?? null)
 					: null;
-			setSelection(
-				existing
-					? existing.id
-					: fallbackExisting
-						? fallbackExisting.id
-						: suggested
-							? "matched"
-							: "custom",
-			);
+			setSelection(existing ? existing.id : fallbackExisting ? fallbackExisting.id : "custom");
+			setCustomName(existing ? "" : suggested);
 			setStep("pick-vault");
 		} catch {
 			setError(tLater(msg("Failed to load vaults. Please try again.")));
@@ -348,10 +360,8 @@ function DeviceLinkPage() {
 		);
 	}
 
-	const isMatched = selection === "matched";
-	const isCustom = selection === "custom";
-	const createNew = isMatched || isCustom;
-	const effectiveNewName = isCustom ? customName.trim() : isMatched ? suggestedName : "";
+	const createNew = selection === "custom";
+	const effectiveNewName = createNew ? customName.trim() : "";
 
 	async function handleAuthorize() {
 		setLoading(true);
@@ -377,9 +387,14 @@ function DeviceLinkPage() {
 				}
 			}
 
-			const body = createNew
-				? { user_code: userCode, vault_id: "new", vault_name: effectiveNewName }
-				: { user_code: userCode, vault_id: selection };
+			const trimmedLabel = label.trim();
+			const body = {
+				user_code: userCode,
+				...(createNew
+					? { vault_id: "new", vault_name: effectiveNewName }
+					: { vault_id: selection }),
+				...(trimmedLabel && { label: trimmedLabel }),
+			};
 
 			try {
 				const { vault_id } = await api.post<{ ok: boolean; vault_id: string }>(
@@ -540,9 +555,22 @@ function DeviceLinkPage() {
 
 				{step === "pick-vault" && (
 					<div className="flex flex-col gap-3">
-						<p className="text-muted-foreground text-sm">
-							{t("Pick an existing one, or create a new vault for these notes.")}
-						</p>
+						<label className="flex flex-col gap-2 rounded-lg border border-border bg-muted/40 p-4">
+							<span className="font-semibold text-base text-foreground">
+								{t("Name this connection")}{" "}
+								<span className="font-normal text-muted-foreground text-sm">{t("(optional)")}</span>
+							</span>
+							<span className="text-muted-foreground text-xs">
+								{t("Shown in your connections list so you can tell your devices apart.")}
+							</span>
+							<Input
+								type="text"
+								maxLength={120}
+								value={label}
+								onChange={(e) => setLabel(e.target.value)}
+								placeholder={t("Obsidian Vault Sync")}
+							/>
+						</label>
 
 						<VaultPickerFieldset
 							vaults={vaults}
@@ -583,7 +611,7 @@ function DeviceLinkPage() {
 						{arrivedWithCode && (
 							<p className="text-muted-foreground text-xs">
 								{t(
-									"A device asked to sync with your account. Only continue if you started this from Obsidian — the vault name above was supplied by that device.",
+									"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.",
 								)}
 							</p>
 						)}
@@ -721,14 +749,46 @@ interface VaultPickerFieldsetProps {
 	atVaultCap: boolean;
 }
 
-// Stacked-radio picker for the /link consent page. Three row variants:
-//   1. Existing vault whose name matches the plugin's suggestion (top, if any)
-//      — selecting it links into that vault, no creation.
-//   2. Each other existing vault — explicit link target.
-//   3. Custom-name row at the bottom with an inline input — focus or type
-//      to auto-select.
-// If no match-by-name exists and the plugin sent a suggestion, slot a
-// "create with matched name" row at the top instead.
+function VaultRadio({
+	vault,
+	active,
+	onSelect,
+	hint,
+}: {
+	vault: Vault;
+	active: boolean;
+	onSelect: (next: string) => void;
+	hint?: string;
+}) {
+	const { t, tn, renderedLocale } = useT();
+	return (
+		<label className={selectableRow(active)}>
+			<input
+				type="radio"
+				name="vault-target"
+				checked={active}
+				onChange={() => onSelect(vault.id)}
+				className="accent-primary"
+			/>
+			<span className="flex min-w-0 flex-1 items-baseline gap-2">
+				<span className="font-medium text-foreground text-sm">{vault.name}</span>
+				{vault.is_default ? (
+					<span className="text-muted-foreground text-xs">{t("default")}</span>
+				) : null}
+				{hint ? <span className="text-muted-foreground text-xs">{hint}</span> : null}
+			</span>
+			<span className="shrink-0 text-muted-foreground text-xs">
+				{countLabel(tn, renderedLocale, vault.note_count, vault.attachment_count)}
+			</span>
+		</label>
+	);
+}
+
+// Picker for the /link consent page, in two blocks:
+//   1. Existing vaults as radio rows (the one matching the plugin's suggested
+//      name first). Selecting one links into it, no creation.
+//   2. A radio row holding a name field that creates a new vault. It starts
+//      out as the plugin-suggested name; focusing or typing in it selects it.
 function VaultPickerFieldset({
 	vaults,
 	suggestedName,
@@ -738,113 +798,112 @@ function VaultPickerFieldset({
 	onCustomChange,
 	atVaultCap,
 }: VaultPickerFieldsetProps) {
-	const { t, tn } = useT();
-	const matchedExisting = suggestedName ? vaults.find((v) => v.name === suggestedName) : undefined;
+	const { t } = useT();
+	const matchedExisting = findMatchingVault(vaults, suggestedName);
 	const otherVaults = matchedExisting ? vaults.filter((v) => v.id !== matchedExisting.id) : vaults;
-	const isMatched = selection === "matched";
 	const isCustom = selection === "custom";
+	const search = useVaultSearch(otherVaults);
+	const hasOthers = otherVaults.length > 0;
+	const sectionTitle = "font-semibold text-base text-foreground";
+	// Filtering hides rows without changing the selection, so say what is still
+	// chosen while the chosen row is out of sight.
+	const selectedVault = vaults.find((v) => v.id === selection);
+	const selectionStatus = selectedVault
+		? t("Selected: {name}", { name: selectedVault.name })
+		: isCustom
+			? t("Creating a new vault")
+			: undefined;
+	const nameInput = (
+		<Input
+			type="text"
+			value={customName}
+			onChange={(e) => {
+				onCustomChange(e.target.value);
+				if (!isCustom) {
+					onSelect("custom");
+				}
+			}}
+			onFocus={() => onSelect("custom")}
+			placeholder={t("choose a new name")}
+			aria-label={t("New vault name")}
+			maxLength={100}
+			className={cn(isCustom && "border-primary")}
+		/>
+	);
 
 	return (
 		<fieldset className="flex flex-col gap-2">
+			<legend className="sr-only">{t("Where should these notes sync?")}</legend>
 			{matchedExisting ? (
-				<label className={selectableRow(selection === matchedExisting.id)}>
-					<input
-						type="radio"
-						name="vault-target"
-						checked={selection === matchedExisting.id}
-						onChange={() => onSelect(matchedExisting.id)}
-						className="accent-primary"
+				<>
+					<p className={sectionTitle}>{t("Suggested")}</p>
+					<VaultRadio
+						vault={matchedExisting}
+						active={selection === matchedExisting.id}
+						onSelect={onSelect}
+						hint={t("matches your Obsidian vault")}
 					/>
-					<span className="flex flex-col">
-						<span className="font-medium text-foreground text-sm">{matchedExisting.name}</span>
-						<span className="text-muted-foreground text-xs">
-							{tn(
-								{
-									one: "Sync into your existing vault · {count} note",
-									other: "Sync into your existing vault · {count} notes",
-								},
-								matchedExisting.note_count,
-							)}
-						</span>
-					</span>
-				</label>
-			) : (
-				suggestedName &&
-				!atVaultCap && (
-					<label className={selectableRow(isMatched)}>
-						<input
-							type="radio"
-							name="vault-target"
-							checked={isMatched}
-							onChange={() => onSelect("matched")}
-							className="accent-primary"
-						/>
-						<span className="flex flex-col">
-							<span className="font-medium text-foreground text-sm">{suggestedName}</span>
-							<span className="text-muted-foreground text-xs">
-								{t("Makes a new vault matching your Obsidian vault name")}
-							</span>
-						</span>
-					</label>
-				)
-			)}
+				</>
+			) : null}
+			{hasOthers ? (
+				<>
+					<header
+						className={cn(
+							"mb-1 flex items-center justify-between gap-2",
+							matchedExisting && "mt-4",
+						)}
+					>
+						<p className={sectionTitle}>
+							{matchedExisting
+								? t("Or sync with a different vault")
+								: t("Sync with an existing vault")}
+							{search.showFilter ? (
+								<span className="ml-2 font-normal text-muted-foreground text-sm">
+									{t("(choose from {count} vaults)", { count: otherVaults.length })}
+								</span>
+							) : null}
+						</p>
+						<VaultSearchToggle search={search} />
+					</header>
+					<VaultSearchField search={search} status={search.needle ? selectionStatus : undefined} />
+					<VaultRows scroll={search.showFilter}>
+						{search.shown.map((v) => (
+							<VaultRadio key={v.id} vault={v} active={selection === v.id} onSelect={onSelect} />
+						))}
+						{search.showFilter && search.needle && search.shown.length === 0 && (
+							<p className="p-3 text-muted-foreground text-sm">
+								{t("No vaults match \u0022{filter}\u0022.", { filter: search.filter })}
+							</p>
+						)}
+					</VaultRows>
+				</>
+			) : null}
 
-			{otherVaults.map((v) => {
-				const active = selection === v.id;
-				return (
-					<label key={v.id} className={selectableRow(active)}>
-						<input
-							type="radio"
-							name="vault-target"
-							checked={active}
-							onChange={() => onSelect(v.id)}
-							className="accent-primary"
-						/>
-						<span className="flex flex-col">
-							<span className="font-medium text-foreground text-sm">{v.name}</span>
-							<span className="text-muted-foreground text-xs">
-								{tn(
-									{
-										one: "Sync into this existing vault · {count} note",
-										other: "Sync into this existing vault · {count} notes",
-									},
-									v.note_count,
-								)}
-							</span>
-						</span>
-					</label>
-				);
-			})}
-
+			{/* Creating is a different decision from linking, so it gets its own
+			    block: a rule and a title, and the custom name is a plain field
+			    rather than a third radio row. Hidden at the vault cap, where
+			    create would 402. */}
 			{!atVaultCap && (
-				<label className={selectableRow(isCustom)}>
-					<input
-						type="radio"
-						name="vault-target"
-						checked={isCustom}
-						onChange={() => onSelect("custom")}
-						className="accent-primary"
-					/>
-					<span className="flex flex-1 flex-col gap-2">
-						<span className="font-medium text-foreground text-sm">
-							{t("Create a vault with a custom name")}
-						</span>
-						<input
-							type="text"
-							value={customName}
-							onChange={(e) => {
-								onCustomChange(e.target.value);
-								if (!isCustom) {
-									onSelect("custom");
-								}
-							}}
-							onFocus={() => onSelect("custom")}
-							placeholder={t("choose a new name")}
-							maxLength={100}
-							className="w-full"
-						/>
-					</span>
-				</label>
+				<>
+					<p className={cn(sectionTitle, vaults.length > 0 && "mt-4")}>
+						{vaults.length > 0 ? t("Or create a new vault") : t("Create your first vault")}
+					</p>
+					{vaults.length > 0 ? (
+						<label className={selectableRow(isCustom)}>
+							<input
+								type="radio"
+								name="vault-target"
+								checked={isCustom}
+								onChange={() => onSelect("custom")}
+								className="accent-primary"
+							/>
+							<span className="flex flex-1 flex-col gap-1.5">{nameInput}</span>
+						</label>
+					) : (
+						// First vault: nothing to choose between, so no radio or card.
+						nameInput
+					)}
+				</>
 			)}
 		</fieldset>
 	);
@@ -890,28 +949,6 @@ function describeObsidianDevice(c: Connection, t: Translate, tn: Tn): string {
 		return t("(last active {since})", { since });
 	}
 	return c.name ?? t("your previous device");
-}
-
-function parseUserAgentOs(ua: string | null): string | null {
-	if (!ua) {
-		return null;
-	}
-	if (/iphone|ipad|ipod/iu.test(ua)) {
-		return "iOS";
-	}
-	if (/android/iu.test(ua)) {
-		return "Android";
-	}
-	if (/mac os|macintosh/iu.test(ua)) {
-		return "macOS";
-	}
-	if (/windows/iu.test(ua)) {
-		return "Windows";
-	}
-	if (/linux/iu.test(ua)) {
-		return "Linux";
-	}
-	return null;
 }
 
 function relativeTime(iso: string | null, tn: Tn, t: Translate): string | null {

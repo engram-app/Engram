@@ -99,6 +99,30 @@ defmodule Engram.Auth.DeviceFlowTest do
     end
   end
 
+  describe "device name hint" do
+    test "is stored trimmed and shown only to the claiming viewer" do
+      viewer = insert(:user)
+      other = insert(:user)
+      {:ok, auth} = DeviceFlow.start_device_flow("c", "Vault", "  todd-laptop ")
+      assert auth.device_name == "todd-laptop"
+
+      assert {:ok, %{vault_name: "Vault", device_name: "todd-laptop"}} =
+               DeviceFlow.view_pending_hints(auth.user_code, viewer.id)
+
+      assert DeviceFlow.view_pending_hints(auth.user_code, other.id) == :error
+    end
+
+    test "a blank, over-long or oversized name is dropped, never fails the link" do
+      for bad <- ["   ", String.duplicate("a", 65), String.duplicate("a", 121)] do
+        assert {:ok, auth} = DeviceFlow.start_device_flow("c", nil, bad)
+        assert auth.device_name == nil
+      end
+
+      assert {:ok, ok} = DeviceFlow.start_device_flow("c", nil, String.duplicate("a", 64))
+      assert ok.device_name == String.duplicate("a", 64)
+    end
+  end
+
   describe "authorize_device/3" do
     test "authorizes a pending device with user and vault" do
       user = insert(:user)
@@ -145,6 +169,55 @@ defmodule Engram.Auth.DeviceFlowTest do
 
       assert {:error, :vault_not_found} =
                DeviceFlow.authorize_device(auth.user_code, user, vault.id)
+    end
+  end
+
+  describe "connection label" do
+    defp link(user, vault, label) do
+      {:ok, auth} = DeviceFlow.start_device_flow("client_1")
+      {:ok, _} = DeviceFlow.authorize_device(auth.user_code, user, vault.id, label)
+      {:ok, tokens} = DeviceFlow.exchange_device_code(auth.device_code)
+      tokens
+    end
+
+    defp labels,
+      do: Repo.all(from(rt in DeviceRefreshToken, select: rt.label), skip_tenant_check: true)
+
+    test "carries the label onto the refresh token" do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      link(user, vault, "Work laptop")
+      assert labels() == ["Work laptop"]
+    end
+
+    test "trims the label; blank stores NULL" do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      link(user, vault, "  Desk  ")
+      link(user, vault, "   ")
+      assert Enum.sort_by(labels(), &(&1 || "")) == [nil, "Desk"]
+    end
+
+    test "an over-long label is refused, not truncated" do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      {:ok, auth} = DeviceFlow.start_device_flow("client_1")
+
+      assert {:error, :invalid_label} =
+               DeviceFlow.authorize_device(
+                 auth.user_code,
+                 user,
+                 vault.id,
+                 String.duplicate("a", 121)
+               )
+    end
+
+    test "rotation keeps the label" do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      tokens = link(user, vault, "Work laptop")
+      {:ok, _} = DeviceFlow.refresh_access_token(tokens.refresh_token)
+      assert labels() == ["Work laptop", "Work laptop"]
     end
   end
 

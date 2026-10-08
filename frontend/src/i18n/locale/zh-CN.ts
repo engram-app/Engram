@@ -588,11 +588,7 @@ export default {
 	"Enter the code shown in your Obsidian plugin:": "输入 Obsidian 插件中显示的验证码：",
 	"Verifying…": "正在验证…",
 	"Checking your code…": "正在检查你的验证码…",
-	"Pick an existing one, or create a new vault for these notes.":
-		"选择一个现有知识库，或为这些笔记新建一个知识库。",
 	upgrade: "升级",
-	"A device asked to sync with your account. Only continue if you started this from Obsidian — the vault name above was supplied by that device.":
-		"有设备请求与你的账号同步。仅当你是在 Obsidian 中发起此操作时才继续，上方的知识库名称由该设备提供。",
 	"Syncing…": "正在同步…",
 	Sync: "同步",
 	"Your vault is linked. Obsidian is waiting for you to start the first sync.":
@@ -603,9 +599,6 @@ export default {
 		"笔记同步后会显示在这里。你可以随时回来查看。",
 	"Continue to web app": "前往网页应用",
 	"Open Obsidian": "打开 Obsidian",
-	"Makes a new vault matching your Obsidian vault name":
-		"新建一个与你的 Obsidian 知识库同名的知识库",
-	"Create a vault with a custom name": "创建自定义名称的知识库",
 	"choose a new name": "选择新名称",
 	"the device syncing your '{vault}' vault on {os} (last active {since})":
 		"在 {os} 上同步你的“{vault}”知识库的设备（最近活跃：{since}）",
@@ -628,10 +621,6 @@ export default {
 		"注意：你的免费版一次只能在 1 台设备之间同步文件。关联此设备会断开{device}，它将不再接收同步的更改。{upgrade}即可同时保持两者连接。",
 	"Your Free plan includes 1 vault — link into the existing one above, or {upgrade} to create more.":
 		"你的免费版包含 1 个知识库，请关联到上方的现有知识库，或{upgrade}以创建更多。",
-	"Sync into your existing vault · {count} notes": {
-		other: "同步到你现有的知识库 · {count} 条笔记",
-	},
-	"Sync into this existing vault · {count} notes": { other: "同步到此现有知识库 · {count} 条笔记" },
 	"{count} minutes ago": { other: "{count} 分钟前" },
 	"{count} hours ago": { other: "{count} 小时前" },
 	"{count} days ago": { other: "{count} 天前" },
@@ -1281,4 +1270,20 @@ export default {
 		"我已阅读并同意服务条款和隐私政策",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"我已阅读并同意上方显示的协议和隐私声明",
+	"Name this connection": "为此连接命名",
+	"Shown in your connections list so you can tell your devices apart.":
+		"会显示在你的连接列表中，方便你区分不同设备。",
+	"Obsidian Vault Sync": "Obsidian Vault Sync",
+	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
+		"同步后，此设备将可以访问你的笔记。只有在你自己发起此链接时才继续。如果是别人让你来到这里，请关闭此页面。",
+	"Selected: {name}": "已选择：{name}",
+	"Creating a new vault": "正在创建新知识库",
+	"New vault name": "新知识库名称",
+	"Where should these notes sync?": "这些笔记要同步到哪里？",
+	Suggested: "推荐",
+	"matches your Obsidian vault": "与你的 Obsidian 知识库匹配",
+	"Or sync with a different vault": "或与其他知识库同步",
+	"Sync with an existing vault": "与现有知识库同步",
+	"(choose from {count} vaults)": "（从 {count} 个知识库中选择）",
+	"Or create a new vault": "或创建新知识库",
 } satisfies Catalog;

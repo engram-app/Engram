@@ -36,6 +36,20 @@ defmodule EngramWeb.DeviceAuthControllerTest do
       assert resp["interval"] == 5
     end
 
+    test "persists the optional device_name hint", %{conn: conn} do
+      conn =
+        post(conn, "/api/auth/device", %{client_id: "test_client", device_name: "todd-laptop"})
+
+      resp = json_response(conn, 200)
+
+      auth =
+        Repo.get_by!(Engram.Auth.DeviceAuthorization, [device_code: resp["device_code"]],
+          skip_tenant_check: true
+        )
+
+      assert auth.device_name == "todd-laptop"
+    end
+
     test "persists optional vault_name on the authorization row", %{conn: conn} do
       reader = insert(:user)
 
@@ -74,6 +88,42 @@ defmodule EngramWeb.DeviceAuthControllerTest do
         post(conn, "/api/auth/device/authorize", %{user_code: auth.user_code, vault_id: vault.id})
 
       assert %{"ok" => true} = json_response(conn, 200)
+    end
+
+    test "a request missing user_code or vault_id is a 400, not a 500", %{authed_conn: conn} do
+      for params <- [%{vault_id: Ecto.UUID.generate()}, %{user_code: "AAAA-BBBB"}, %{label: "x"}] do
+        conn = post(conn, "/api/auth/device/authorize", params)
+        assert %{"error" => "invalid_request"} = json_response(conn, 400)
+      end
+    end
+
+    test "stores the label and rejects an over-long one with 422", %{
+      authed_conn: conn,
+      user: user
+    } do
+      vault = insert(:vault, user: user)
+      {:ok, auth} = DeviceFlow.start_device_flow("client_1")
+
+      bad =
+        post(conn, "/api/auth/device/authorize", %{
+          user_code: auth.user_code,
+          vault_id: vault.id,
+          label: String.duplicate("a", 121)
+        })
+
+      assert %{"error" => "invalid_label"} = json_response(bad, 422)
+
+      ok =
+        post(conn, "/api/auth/device/authorize", %{
+          user_code: auth.user_code,
+          vault_id: vault.id,
+          label: "Work laptop"
+        })
+
+      assert %{"ok" => true} = json_response(ok, 200)
+
+      assert Repo.get!(Engram.Auth.DeviceAuthorization, auth.id, skip_tenant_check: true).label ==
+               "Work laptop"
     end
 
     # The plugin's live path hangs off this broadcast. Asserting it HERE and

@@ -629,11 +629,7 @@ export default {
 		"Obsidian プラグインに表示されているコードを入力してください:",
 	"Verifying…": "確認中…",
 	"Checking your code…": "コードを確認中…",
-	"Pick an existing one, or create a new vault for these notes.":
-		"既存の保管庫を選ぶか、これらのノート用に新しい保管庫を作成してください。",
 	upgrade: "アップグレード",
-	"A device asked to sync with your account. Only continue if you started this from Obsidian — the vault name above was supplied by that device.":
-		"お使いのアカウントとの同期をデバイスが要求しています。Obsidian から開始した場合のみ続行してください。上の保管庫名はそのデバイスが指定したものです。",
 	"Syncing…": "同期中…",
 	Sync: "同期",
 	"Your vault is linked. Obsidian is waiting for you to start the first sync.":
@@ -644,9 +640,6 @@ export default {
 		"ノートは同期されるとここに表示されます。いつでも戻ってこられます。",
 	"Continue to web app": "Web アプリに進む",
 	"Open Obsidian": "Obsidian を開く",
-	"Makes a new vault matching your Obsidian vault name":
-		"Obsidian の保管庫名と同じ名前で新しい保管庫を作成します",
-	"Create a vault with a custom name": "任意の名前で保管庫を作成",
 	"choose a new name": "新しい名前を選ぶ",
 	"the device syncing your '{vault}' vault on {os} (last active {since})":
 		"{os} 上で保管庫「{vault}」を同期しているデバイス (最終アクティブ: {since})",
@@ -670,12 +663,6 @@ export default {
 		"ご注意ください。無料プランで同時に同期できるデバイスは 1 台です。このデバイスを連携すると {device} の接続が解除され、同期の変更を受け取れなくなります。両方を接続したままにするには{upgrade}してください。",
 	"Your Free plan includes 1 vault — link into the existing one above, or {upgrade} to create more.":
 		"無料プランに含まれる保管庫は 1 つです。上の既存の保管庫に連携するか、{upgrade}して保管庫を増やしてください。",
-	"Sync into your existing vault · {count} notes": {
-		other: "既存の保管庫に同期 · ノート {count} 件",
-	},
-	"Sync into this existing vault · {count} notes": {
-		other: "この既存の保管庫に同期 · ノート {count} 件",
-	},
 	"{count} minutes ago": { other: "{count} 分前" },
 	"{count} hours ago": { other: "{count} 時間前" },
 	"{count} days ago": { other: "{count} 日前" },
@@ -1343,4 +1330,20 @@ export default {
 		"利用規約とプライバシーポリシーを読み、同意します",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"上に表示された規約とプライバシー通知を読み、同意します",
+	"Name this connection": "この接続に名前を付ける",
+	"Shown in your connections list so you can tell your devices apart.":
+		"接続の一覧に表示され、デバイスを見分けやすくなります。",
+	"Obsidian Vault Sync": "Obsidian Vault Sync",
+	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
+		"同期すると、このデバイスがあなたのノートにアクセスできるようになります。このリンクを自分で開始した場合のみ続行してください。誰かに案内されてここに来た場合は、このページを閉じてください。",
+	"Selected: {name}": "選択中: {name}",
+	"Creating a new vault": "新しい保管庫を作成中",
+	"New vault name": "新しい保管庫の名前",
+	"Where should these notes sync?": "これらのノートをどこに同期しますか?",
+	Suggested: "おすすめ",
+	"matches your Obsidian vault": "Obsidian の保管庫と一致",
+	"Or sync with a different vault": "または別の保管庫と同期",
+	"Sync with an existing vault": "既存の保管庫と同期",
+	"(choose from {count} vaults)": "({count} 件の保管庫から選択)",
+	"Or create a new vault": "または新しい保管庫を作成",
 } satisfies Catalog;

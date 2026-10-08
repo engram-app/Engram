@@ -634,11 +634,7 @@ export default {
 		"Introduce el código que muestra tu plugin de Obsidian:",
 	"Verifying…": "Verificando…",
 	"Checking your code…": "Comprobando tu código…",
-	"Pick an existing one, or create a new vault for these notes.":
-		"Elige una existente o crea una bóveda nueva para estas notas.",
 	upgrade: "mejora tu plan",
-	"A device asked to sync with your account. Only continue if you started this from Obsidian — the vault name above was supplied by that device.":
-		"Un dispositivo ha solicitado sincronizarse con tu cuenta. Continúa solo si lo iniciaste desde Obsidian: el nombre de la bóveda de arriba lo proporcionó ese dispositivo.",
 	"Syncing…": "Sincronizando…",
 	Sync: "Sincronizar",
 	"Your vault is linked. Obsidian is waiting for you to start the first sync.":
@@ -649,9 +645,6 @@ export default {
 		"Tus notas aparecerán aquí a medida que se sincronicen. Puedes volver cuando quieras.",
 	"Continue to web app": "Continuar a la aplicación web",
 	"Open Obsidian": "Abrir Obsidian",
-	"Makes a new vault matching your Obsidian vault name":
-		"Crea una bóveda nueva con el mismo nombre que tu bóveda de Obsidian",
-	"Create a vault with a custom name": "Crea una bóveda con un nombre personalizado",
 	"choose a new name": "elige un nombre nuevo",
 	"the device syncing your '{vault}' vault on {os} (last active {since})":
 		"el dispositivo que sincroniza tu bóveda «{vault}» en {os} (última actividad {since})",
@@ -675,16 +668,6 @@ export default {
 		"Atención: tu plan Gratuito sincroniza archivos entre 1 dispositivo a la vez. Al vincular este dispositivo se desconectará {device}, que dejará de recibir los cambios de sincronización. Para mantener ambos conectados, {upgrade}.",
 	"Your Free plan includes 1 vault — link into the existing one above, or {upgrade} to create more.":
 		"Tu plan Gratuito incluye 1 bóveda: vincula la que ya existe, arriba, o {upgrade} para crear más.",
-	"Sync into your existing vault · {count} notes": {
-		one: "Sincronizar con tu bóveda existente · {count} nota",
-		many: "Sincronizar con tu bóveda existente · {count} de notas",
-		other: "Sincronizar con tu bóveda existente · {count} notas",
-	},
-	"Sync into this existing vault · {count} notes": {
-		one: "Sincronizar con esta bóveda existente · {count} nota",
-		many: "Sincronizar con esta bóveda existente · {count} de notas",
-		other: "Sincronizar con esta bóveda existente · {count} notas",
-	},
 	"{count} minutes ago": {
 		one: "hace {count} minuto",
 		many: "hace {count} de minutos",
@@ -1413,4 +1396,20 @@ export default {
 		"He leído y acepto los Términos del servicio y la Política de privacidad",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"He leído y acepto el acuerdo mostrado arriba y el aviso de privacidad",
+	"Name this connection": "Ponle nombre a esta conexión",
+	"Shown in your connections list so you can tell your devices apart.":
+		"Se muestra en tu lista de conexiones para que puedas distinguir tus dispositivos.",
+	"Obsidian Vault Sync": "Obsidian Vault Sync",
+	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
+		"Sincronizar da a este dispositivo acceso a tus notas. Continúa solo si iniciaste este enlace tú mismo. Si otra persona te envió aquí, cierra esta página.",
+	"Selected: {name}": "Seleccionada: {name}",
+	"Creating a new vault": "Creando una bóveda nueva",
+	"New vault name": "Nombre de la bóveda nueva",
+	"Where should these notes sync?": "¿Dónde deben sincronizarse estas notas?",
+	Suggested: "Sugerida",
+	"matches your Obsidian vault": "coincide con tu bóveda de Obsidian",
+	"Or sync with a different vault": "O sincroniza con otra bóveda",
+	"Sync with an existing vault": "Sincronizar con una bóveda existente",
+	"(choose from {count} vaults)": "(elige entre {count} bóvedas)",
+	"Or create a new vault": "O crea una bóveda nueva",
 } satisfies Catalog;

@@ -629,11 +629,7 @@ export default {
 		"Informe o código exibido no seu plugin do Obsidian:",
 	"Verifying…": "Verificando…",
 	"Checking your code…": "Conferindo seu código…",
-	"Pick an existing one, or create a new vault for these notes.":
-		"Escolha um existente ou crie um novo cofre para estas notas.",
 	upgrade: "melhore seu plano",
-	"A device asked to sync with your account. Only continue if you started this from Obsidian — the vault name above was supplied by that device.":
-		"Um aparelho pediu para sincronizar com sua conta. Continue só se você iniciou isso pelo Obsidian; o nome do cofre acima foi informado por esse aparelho.",
 	"Syncing…": "Sincronizando…",
 	Sync: "Sincronizar",
 	"Your vault is linked. Obsidian is waiting for you to start the first sync.":
@@ -645,9 +641,6 @@ export default {
 		"Suas notas vão aparecer aqui conforme forem sincronizadas. Você pode voltar quando quiser.",
 	"Continue to web app": "Continuar para o app web",
 	"Open Obsidian": "Abrir o Obsidian",
-	"Makes a new vault matching your Obsidian vault name":
-		"Cria um novo cofre com o mesmo nome do seu cofre do Obsidian",
-	"Create a vault with a custom name": "Crie um cofre com um nome personalizado",
 	"choose a new name": "escolha um novo nome",
 	"the device syncing your '{vault}' vault on {os} (last active {since})":
 		"o aparelho que sincroniza seu cofre '{vault}' em {os} (última atividade {since})",
@@ -671,16 +664,6 @@ export default {
 		"Atenção: seu plano Gratuito sincroniza arquivos em 1 aparelho por vez. Vincular este aparelho vai desconectar {device}, que deixará de receber alterações da sincronização. Para manter os dois conectados, {upgrade}.",
 	"Your Free plan includes 1 vault — link into the existing one above, or {upgrade} to create more.":
 		"Seu plano Gratuito inclui 1 cofre. Vincule ao cofre existente acima ou {upgrade} para criar mais.",
-	"Sync into your existing vault · {count} notes": {
-		one: "Sincronizar com seu cofre existente · {count} nota",
-		many: "Sincronizar com seu cofre existente · {count} de notas",
-		other: "Sincronizar com seu cofre existente · {count} notas",
-	},
-	"Sync into this existing vault · {count} notes": {
-		one: "Sincronizar com este cofre existente · {count} nota",
-		many: "Sincronizar com este cofre existente · {count} de notas",
-		other: "Sincronizar com este cofre existente · {count} notas",
-	},
 	"{count} minutes ago": {
 		one: "há {count} minuto",
 		many: "há {count} de minutos",
@@ -1409,4 +1392,20 @@ export default {
 		"Li e concordo com os Termos de Serviço e a Política de Privacidade",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Li e concordo com o contrato mostrado acima e o aviso de privacidade",
+	"Name this connection": "Dê um nome a esta conexão",
+	"Shown in your connections list so you can tell your devices apart.":
+		"Aparece na sua lista de conexões para você distinguir seus dispositivos.",
+	"Obsidian Vault Sync": "Obsidian Vault Sync",
+	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
+		"Sincronizar dá a este dispositivo acesso às suas notas. Continue apenas se você mesmo iniciou este link. Se outra pessoa enviou você até aqui, feche esta página.",
+	"Selected: {name}": "Selecionado: {name}",
+	"Creating a new vault": "Criando um novo cofre",
+	"New vault name": "Nome do novo cofre",
+	"Where should these notes sync?": "Onde estas notas devem ser sincronizadas?",
+	Suggested: "Sugerido",
+	"matches your Obsidian vault": "corresponde ao seu cofre do Obsidian",
+	"Or sync with a different vault": "Ou sincronize com outro cofre",
+	"Sync with an existing vault": "Sincronizar com um cofre existente",
+	"(choose from {count} vaults)": "(escolha entre {count} cofres)",
+	"Or create a new vault": "Ou crie um novo cofre",
 } satisfies Catalog;

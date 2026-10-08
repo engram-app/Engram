@@ -1018,9 +1018,15 @@ defmodule Engram.OAuth do
   # at 48120 bytes).
   @max_label_bytes 4096
 
-  defp resolve_label(nil), do: {:ok, nil}
+  @doc """
+  Validates a user-typed connection label: trimmed, blank becomes `nil`, and an
+  over-long value is `:error` rather than truncated. Shared with the device
+  flow so both link surfaces enforce the same bound.
+  """
+  @spec resolve_label(term()) :: {:ok, String.t() | nil} | :error
+  def resolve_label(nil), do: {:ok, nil}
 
-  defp resolve_label(label) when is_binary(label) do
+  def resolve_label(label) when is_binary(label) do
     trimmed = String.trim(label)
 
     cond do
@@ -1031,7 +1037,7 @@ defmodule Engram.OAuth do
     end
   end
 
-  defp resolve_label(_), do: :error
+  def resolve_label(_), do: :error
 
   @doc """
   Appends `params` to a redirect URI: drops nil/blank pairs, then picks `&` or

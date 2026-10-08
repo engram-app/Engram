@@ -642,11 +642,7 @@ export default {
 	"Enter the code shown in your Obsidian plugin:": "Введите код, показанный в плагине Obsidian:",
 	"Verifying…": "Проверяем…",
 	"Checking your code…": "Проверяем ваш код…",
-	"Pick an existing one, or create a new vault for these notes.":
-		"Выберите существующее хранилище или создайте новое для этих заметок.",
 	upgrade: "перейти на платный план",
-	"A device asked to sync with your account. Only continue if you started this from Obsidian — the vault name above was supplied by that device.":
-		"Устройство запросило синхронизацию с вашей учётной записью. Продолжайте, только если вы сами запустили это из Obsidian: название хранилища выше передало это устройство.",
 	"Syncing…": "Синхронизируем…",
 	Sync: "Синхронизировать",
 	"Your vault is linked. Obsidian is waiting for you to start the first sync.":
@@ -658,9 +654,6 @@ export default {
 		"Ваши заметки появятся здесь по мере синхронизации. Вы можете вернуться в любой момент.",
 	"Continue to web app": "Перейти в веб-приложение",
 	"Open Obsidian": "Открыть Obsidian",
-	"Makes a new vault matching your Obsidian vault name":
-		"Создаст новое хранилище с названием, как у вашего хранилища Obsidian",
-	"Create a vault with a custom name": "Создать хранилище с собственным названием",
 	"choose a new name": "выберите новое название",
 	"the device syncing your '{vault}' vault on {os} (last active {since})":
 		"устройство, синхронизирующее ваше хранилище «{vault}» на {os} (последняя активность: {since})",
@@ -685,18 +678,6 @@ export default {
 		"Обратите внимание: на бесплатном плане файлы синхронизируются только с одним устройством за раз. Привязка этого устройства отключит {device}, и оно перестанет получать изменения. {upgrade}, чтобы оставить оба подключёнными.",
 	"Your Free plan includes 1 vault — link into the existing one above, or {upgrade} to create more.":
 		"Бесплатный план включает 1 хранилище. Привяжите существующее выше. Чтобы создать больше, можно {upgrade}.",
-	"Sync into your existing vault · {count} notes": {
-		one: "Синхронизировать в существующее хранилище · {count} заметка",
-		few: "Синхронизировать в существующее хранилище · {count} заметки",
-		many: "Синхронизировать в существующее хранилище · {count} заметок",
-		other: "Синхронизировать в существующее хранилище · {count} заметок",
-	},
-	"Sync into this existing vault · {count} notes": {
-		one: "Синхронизировать в это существующее хранилище · {count} заметка",
-		few: "Синхронизировать в это существующее хранилище · {count} заметки",
-		many: "Синхронизировать в это существующее хранилище · {count} заметок",
-		other: "Синхронизировать в это существующее хранилище · {count} заметок",
-	},
 	"{count} minutes ago": {
 		one: "{count} минуту назад",
 		few: "{count} минуты назад",
@@ -1460,4 +1441,20 @@ export default {
 		"Я прочитал(а) Условия использования и Политику конфиденциальности и согласен(на)",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Я прочитал(а) соглашение выше и уведомление о конфиденциальности и согласен(на)",
+	"Name this connection": "Назовите это подключение",
+	"Shown in your connections list so you can tell your devices apart.":
+		"Отображается в списке подключений, чтобы вы могли различать свои устройства.",
+	"Obsidian Vault Sync": "Obsidian Vault Sync",
+	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
+		"Синхронизация даст этому устройству доступ к вашим заметкам. Продолжайте, только если вы сами запустили эту ссылку. Если вас сюда направил кто-то другой, закройте эту страницу.",
+	"Selected: {name}": "Выбрано: {name}",
+	"Creating a new vault": "Создание нового хранилища",
+	"New vault name": "Название нового хранилища",
+	"Where should these notes sync?": "Куда синхронизировать эти заметки?",
+	Suggested: "Рекомендуется",
+	"matches your Obsidian vault": "совпадает с вашим хранилищем Obsidian",
+	"Or sync with a different vault": "Или синхронизировать с другим хранилищем",
+	"Sync with an existing vault": "Синхронизировать с существующим хранилищем",
+	"(choose from {count} vaults)": "(выберите из {count} хранилищ)",
+	"Or create a new vault": "Или создайте новое хранилище",
 } satisfies Catalog;

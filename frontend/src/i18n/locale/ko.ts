@@ -612,11 +612,7 @@ export default {
 	"Enter the code shown in your Obsidian plugin:": "Obsidian 플러그인에 표시된 코드를 입력하세요:",
 	"Verifying…": "확인하는 중…",
 	"Checking your code…": "코드를 확인하는 중…",
-	"Pick an existing one, or create a new vault for these notes.":
-		"기존 보관함을 선택하거나, 이 노트를 위한 새 보관함을 만드세요.",
 	upgrade: "업그레이드",
-	"A device asked to sync with your account. Only continue if you started this from Obsidian — the vault name above was supplied by that device.":
-		"한 기기가 계정과 동기화를 요청했습니다. Obsidian에서 직접 시작한 경우에만 계속하세요. 위의 보관함 이름은 해당 기기가 제공한 것입니다.",
 	"Syncing…": "동기화하는 중…",
 	Sync: "동기화",
 	"Your vault is linked. Obsidian is waiting for you to start the first sync.":
@@ -628,9 +624,6 @@ export default {
 		"노트가 동기화되는 대로 여기에 표시됩니다. 언제든지 다시 돌아오셔도 됩니다.",
 	"Continue to web app": "웹 앱으로 계속",
 	"Open Obsidian": "Obsidian 열기",
-	"Makes a new vault matching your Obsidian vault name":
-		"Obsidian 보관함 이름과 같은 새 보관함을 만듭니다",
-	"Create a vault with a custom name": "원하는 이름으로 보관함 만들기",
 	"choose a new name": "새 이름 선택",
 	"the device syncing your '{vault}' vault on {os} (last active {since})":
 		"{os}에서 '{vault}' 보관함을 동기화하는 기기 (마지막 활동 {since})",
@@ -653,12 +646,6 @@ export default {
 		"참고하세요. 무료 요금제에서는 한 번에 기기 1대만 파일을 동기화합니다. 이 기기를 연결하면 {device}의 연결이 해제되어 더 이상 동기화 변경을 받지 못합니다. {upgrade}하면 두 기기를 모두 연결해 둘 수 있습니다.",
 	"Your Free plan includes 1 vault — link into the existing one above, or {upgrade} to create more.":
 		"무료 요금제에는 보관함 1개가 포함됩니다. 위의 기존 보관함에 연결하거나, {upgrade}해서 더 만드세요.",
-	"Sync into your existing vault · {count} notes": {
-		other: "기존 보관함에 동기화 · 노트 {count}개",
-	},
-	"Sync into this existing vault · {count} notes": {
-		other: "이 기존 보관함에 동기화 · 노트 {count}개",
-	},
 	"{count} minutes ago": { other: "{count}분 전" },
 	"{count} hours ago": { other: "{count}시간 전" },
 	"{count} days ago": { other: "{count}일 전" },
@@ -1322,4 +1309,20 @@ export default {
 		"서비스 약관과 개인정보 처리방침을 읽었으며 이에 동의합니다",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"위에 표시된 약관과 개인정보 처리 안내를 읽었으며 이에 동의합니다",
+	"Name this connection": "이 연결에 이름 붙이기",
+	"Shown in your connections list so you can tell your devices apart.":
+		"연결 목록에 표시되어 기기를 구분할 수 있습니다.",
+	"Obsidian Vault Sync": "Obsidian Vault Sync",
+	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
+		"동기화하면 이 기기가 내 노트에 접근할 수 있게 됩니다. 이 링크를 직접 시작한 경우에만 계속하세요. 다른 사람이 여기로 안내했다면 이 페이지를 닫으세요.",
+	"Selected: {name}": "선택됨: {name}",
+	"Creating a new vault": "새 보관함 만드는 중",
+	"New vault name": "새 보관함 이름",
+	"Where should these notes sync?": "이 노트를 어디에 동기화할까요?",
+	Suggested: "추천",
+	"matches your Obsidian vault": "Obsidian 보관함과 일치",
+	"Or sync with a different vault": "또는 다른 보관함과 동기화",
+	"Sync with an existing vault": "기존 보관함과 동기화",
+	"(choose from {count} vaults)": "(보관함 {count}개 중 선택)",
+	"Or create a new vault": "또는 새 보관함 만들기",
 } satisfies Catalog;

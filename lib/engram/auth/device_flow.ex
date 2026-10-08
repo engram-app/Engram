@@ -24,7 +24,7 @@ defmodule Engram.Auth.DeviceFlow do
   # Characters excluding ambiguous: 0, O, 1, I, L
   @user_code_chars ~c"ABCDEFGHJKMNPQRSTUVWXYZ2345679"
 
-  def start_device_flow(client_id, vault_name \\ nil) do
+  def start_device_flow(client_id, vault_name \\ nil, device_name \\ nil) do
     device_code = Base.encode16(:crypto.strong_rand_bytes(@device_code_bytes), case: :lower)
     user_code = generate_user_code()
 
@@ -40,7 +40,8 @@ defmodule Engram.Auth.DeviceFlow do
       client_id: client_id,
       status: "pending",
       expires_at: expires_at,
-      vault_name: vault_name
+      vault_name: vault_name,
+      device_name: normalize_device_name(device_name)
     })
     |> Repo.insert(skip_tenant_check: true)
   end
@@ -68,6 +69,18 @@ defmodule Engram.Auth.DeviceFlow do
   # `user_id` is set later, at authorize time, and so is unsuitable as a
   # pre-authorize ownership check.
   def view_pending_code(user_code, user_id) when is_binary(user_id) do
+    with {:ok, %{vault_name: vault_name}} <- view_pending_hints(user_code, user_id) do
+      {:ok, vault_name}
+    end
+  end
+
+  @doc """
+  Like `view_pending_code/2`, but returns every hint the plugin sent at start
+  (`vault_name` and `device_name`) from the one read that claims the code.
+  """
+  @spec view_pending_hints(String.t(), String.t()) ::
+          {:ok, %{vault_name: String.t() | nil, device_name: String.t() | nil}} | :error
+  def view_pending_hints(user_code, user_id) when is_binary(user_id) do
     now = DateTime.utc_now()
 
     query =
@@ -79,19 +92,28 @@ defmodule Engram.Auth.DeviceFlow do
             (is_nil(da.viewer_user_id) or da.viewer_user_id == ^user_id)
       )
 
-    case Repo.update_all(query, [set: [viewer_user_id: user_id]], skip_tenant_check: true) do
-      {1, _} ->
-        {:ok,
-         Repo.one(
-           from(da in DeviceAuthorization,
-             where: da.user_code == ^user_code,
-             select: da.vault_name
-           ),
-           skip_tenant_check: true
-         )}
+    # One statement claims the code and returns its hints, so a row that
+    # expires or is cleaned up between a claim and a separate read cannot turn
+    # into `{:ok, nil}`.
+    claim = from(da in query, select: %{vault_name: da.vault_name, device_name: da.device_name})
 
-      _ ->
-        :error
+    case Repo.update_all(claim, [set: [viewer_user_id: user_id]], skip_tenant_check: true) do
+      {1, [hints]} -> {:ok, hints}
+      _ -> :error
+    end
+  end
+
+  # The start endpoint is unauthenticated and the name is only a hint, so a bad
+  # one (over-long, wrong type) is dropped rather than failing the link. Capped
+  # well under the 120-character label limit: it is shown pre-filled on a
+  # signed-in user's page, so a long one only helps an impersonator.
+  @max_device_name_chars 64
+
+  defp normalize_device_name(name) do
+    case Engram.OAuth.resolve_label(name) do
+      {:ok, nil} -> nil
+      {:ok, name} -> if String.length(name) <= @max_device_name_chars, do: name
+      :error -> nil
     end
   end
 
@@ -142,7 +164,14 @@ defmodule Engram.Auth.DeviceFlow do
     end
   end
 
-  def authorize_device(user_code, user, vault_id) do
+  def authorize_device(user_code, user, vault_id, label \\ nil) do
+    case Engram.OAuth.resolve_label(label) do
+      {:ok, label} -> do_authorize_device(user_code, user, vault_id, label)
+      :error -> {:error, :invalid_label}
+    end
+  end
+
+  defp do_authorize_device(user_code, user, vault_id, label) do
     now = DateTime.utc_now()
 
     query =
@@ -175,7 +204,8 @@ defmodule Engram.Auth.DeviceFlow do
             |> DeviceAuthorization.authorize_changeset(%{
               user_id: user.id,
               vault_id: vault_id,
-              status: "authorized"
+              status: "authorized",
+              label: label
             })
             |> Repo.update(skip_tenant_check: true)
         end
@@ -279,7 +309,7 @@ defmodule Engram.Auth.DeviceFlow do
     |> Repo.update!(skip_tenant_check: true)
 
     access_token = Accounts.generate_jwt(auth.user, @device_claims)
-    {raw_refresh, _hash} = create_refresh_token(auth.user_id, auth.vault_id)
+    {raw_refresh, _hash} = create_refresh_token(auth.user_id, auth.vault_id, nil, auth.label)
 
     {:ok,
      %{
@@ -298,7 +328,12 @@ defmodule Engram.Auth.DeviceFlow do
     access_token = Accounts.generate_jwt(old_token.user, @device_claims)
 
     {raw_refresh, _hash} =
-      create_refresh_token(old_token.user_id, old_token.vault_id, old_token.family_id)
+      create_refresh_token(
+        old_token.user_id,
+        old_token.vault_id,
+        old_token.family_id,
+        old_token.label
+      )
 
     {:ok,
      %{
@@ -328,7 +363,7 @@ defmodule Engram.Auth.DeviceFlow do
 
   # A nil family_id starts a new family (fresh login); rotation passes the old
   # token's family_id to keep the lineage together.
-  defp create_refresh_token(user_id, vault_id, family_id \\ nil) do
+  defp create_refresh_token(user_id, vault_id, family_id, label) do
     raw =
       @refresh_token_prefix <>
         Base.url_encode64(:crypto.strong_rand_bytes(@refresh_token_bytes), padding: false)
@@ -346,6 +381,7 @@ defmodule Engram.Auth.DeviceFlow do
       family_id: family_id || Ecto.UUID.generate(),
       user_id: user_id,
       vault_id: vault_id,
+      label: label,
       expires_at: expires_at
     })
     |> Repo.insert!(skip_tenant_check: true)

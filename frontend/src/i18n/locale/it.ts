@@ -640,11 +640,7 @@ export default {
 		"Inserisci il codice mostrato nel plugin di Obsidian:",
 	"Verifying…": "Verifica in corso…",
 	"Checking your code…": "Controllo del codice…",
-	"Pick an existing one, or create a new vault for these notes.":
-		"Scegline uno esistente oppure crea un nuovo archivio per queste note.",
 	upgrade: "passa a un piano superiore",
-	"A device asked to sync with your account. Only continue if you started this from Obsidian — the vault name above was supplied by that device.":
-		"Un dispositivo ha chiesto di sincronizzarsi con il tuo account. Continua solo se l'hai avviato tu da Obsidian: il nome dell'archivio qui sopra è stato fornito da quel dispositivo.",
 	"Syncing…": "Sincronizzazione…",
 	Sync: "Sincronizza",
 	"Your vault is linked. Obsidian is waiting for you to start the first sync.":
@@ -656,9 +652,6 @@ export default {
 		"Le tue note compariranno qui man mano che si sincronizzano. Puoi tornare in qualsiasi momento.",
 	"Continue to web app": "Continua nell'app web",
 	"Open Obsidian": "Apri Obsidian",
-	"Makes a new vault matching your Obsidian vault name":
-		"Crea un nuovo archivio con lo stesso nome del tuo archivio di Obsidian",
-	"Create a vault with a custom name": "Crea un archivio con un nome personalizzato",
 	"choose a new name": "scegli un nuovo nome",
 	"the device syncing your '{vault}' vault on {os} (last active {since})":
 		"il dispositivo che sincronizza il tuo archivio «{vault}» su {os} (ultima attività {since})",
@@ -683,16 +676,6 @@ export default {
 		"Attenzione: il tuo piano Gratuito sincronizza i file su 1 dispositivo alla volta. Collegare questo dispositivo disconnetterà {device}, che smetterà di ricevere le modifiche sincronizzate. Per tenerli collegati entrambi, {upgrade}.",
 	"Your Free plan includes 1 vault — link into the existing one above, or {upgrade} to create more.":
 		"Il tuo piano Gratuito include 1 archivio: collegati a quello esistente qui sopra, oppure {upgrade} per crearne altri.",
-	"Sync into your existing vault · {count} notes": {
-		one: "Sincronizza nel tuo archivio esistente · {count} nota",
-		many: "Sincronizza nel tuo archivio esistente · {count} di note",
-		other: "Sincronizza nel tuo archivio esistente · {count} note",
-	},
-	"Sync into this existing vault · {count} notes": {
-		one: "Sincronizza in questo archivio esistente · {count} nota",
-		many: "Sincronizza in questo archivio esistente · {count} di note",
-		other: "Sincronizza in questo archivio esistente · {count} note",
-	},
 	"{count} minutes ago": {
 		one: "{count} minuto fa",
 		many: "{count} di minuti fa",
@@ -1425,4 +1408,20 @@ export default {
 		"Ho letto e accetto i Termini di servizio e l’Informativa sulla privacy",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Ho letto e accetto l’accordo mostrato sopra e l’informativa sulla privacy",
+	"Name this connection": "Dai un nome a questa connessione",
+	"Shown in your connections list so you can tell your devices apart.":
+		"Mostrato nell'elenco delle connessioni per distinguere i tuoi dispositivi.",
+	"Obsidian Vault Sync": "Obsidian Vault Sync",
+	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
+		"La sincronizzazione dà a questo dispositivo accesso alle tue note. Continua solo se hai avviato tu questo link. Se qualcun altro ti ha mandato qui, chiudi questa pagina.",
+	"Selected: {name}": "Selezionato: {name}",
+	"Creating a new vault": "Creazione di un nuovo archivio",
+	"New vault name": "Nome del nuovo archivio",
+	"Where should these notes sync?": "Dove devono essere sincronizzate queste note?",
+	Suggested: "Suggerito",
+	"matches your Obsidian vault": "corrisponde al tuo archivio Obsidian",
+	"Or sync with a different vault": "Oppure sincronizza con un altro archivio",
+	"Sync with an existing vault": "Sincronizza con un archivio esistente",
+	"(choose from {count} vaults)": "(scegli tra {count} archivi)",
+	"Or create a new vault": "Oppure crea un nuovo archivio",
 } satisfies Catalog;

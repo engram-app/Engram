@@ -137,6 +137,7 @@ function renderPage(entry = "/link") {
 }
 
 afterEach(() => {
+	vi.restoreAllMocks();
 	vi.clearAllMocks();
 	// A handoff is per-tab and survives a render; without this a stash from one
 	// test would be consumed by the next.
@@ -384,7 +385,7 @@ describe("DeviceLinkPage", () => {
 		renderPage("/link?code=ENGR-7X4K");
 
 		expect(
-			await screen.findByText(/only continue if you started this from obsidian/iu),
+			await screen.findByText(/continue only if you started this link yourself/iu),
 		).toBeInTheDocument();
 	});
 
@@ -396,7 +397,9 @@ describe("DeviceLinkPage", () => {
 		fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
 
 		await screen.findByRole("radio", { name: /personal/iu });
-		expect(screen.queryByText(/only continue if you started this/iu)).not.toBeInTheDocument();
+		expect(
+			screen.queryByText(/continue only if you started this link yourself/iu),
+		).not.toBeInTheDocument();
 	});
 
 	it("does not auto-verify when no code was supplied", () => {
@@ -493,6 +496,166 @@ describe("DeviceLinkPage", () => {
 			),
 		);
 		expect(await screen.findByText(/your vault is linked/iu)).toBeInTheDocument();
+	});
+
+	async function reachPicker(vaults: unknown[]) {
+		get.mockResolvedValue({ vaults });
+		post.mockResolvedValue({ ok: true, vault_id: 7 });
+		renderPage();
+		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ENGR7X4K" } });
+		fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+		await screen.findByRole("button", { name: /^sync$/iu });
+	}
+
+	describe("vault picker", () => {
+		it("sends the connection name the user typed", async () => {
+			await reachPicker([{ id: 7, name: "Personal", note_count: 3 }]);
+			fireEvent.click(screen.getByRole("radio", { name: /personal/iu }));
+			fireEvent.change(screen.getByLabelText(/name this connection/iu), {
+				target: { value: "  Work laptop " },
+			});
+			fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
+			await waitFor(() =>
+				expect(post).toHaveBeenCalledWith(
+					"/auth/device/authorize",
+					expect.objectContaining({ vault_id: 7, label: "Work laptop" }),
+				),
+			);
+		});
+
+		it("suggests a label for the device this browser is on", async () => {
+			vi.spyOn(window.navigator, "userAgent", "get").mockReturnValue(
+				"Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130",
+			);
+			await reachPicker([{ id: 7, name: "Personal", note_count: 3 }]);
+			const input = screen.getByLabelText(/name this connection/iu);
+			expect(input).toHaveValue("Windows PC");
+			fireEvent.click(screen.getByRole("radio", { name: /personal/iu }));
+			fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
+			await waitFor(() =>
+				expect(post).toHaveBeenCalledWith(
+					"/auth/device/authorize",
+					expect.objectContaining({ label: "Windows PC" }),
+				),
+			);
+		});
+
+		it("prefers the name the plugin suggested over the browser guess", async () => {
+			vi.spyOn(window.navigator, "userAgent", "get").mockReturnValue(
+				"Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130",
+			);
+			get.mockResolvedValue({
+				vaults: [{ id: 7, name: "Personal", note_count: 3 }],
+				suggested_device_name: "todd-laptop",
+			});
+			post.mockResolvedValue({ ok: true, vault_id: 7 });
+			renderPage();
+			fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), {
+				target: { value: "ENGR7X4K" },
+			});
+			fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+			expect(await screen.findByLabelText(/name this connection/iu)).toHaveValue("todd-laptop");
+		});
+
+		it("seeds the new-vault name with the plugin's suggestion and creates it", async () => {
+			get.mockResolvedValue({
+				vaults: [{ id: 7, name: "Personal", note_count: 3 }],
+				suggested_vault_name: "Brain Dump",
+			});
+			post.mockResolvedValue({ ok: true, vault_id: 8 });
+			renderPage();
+			fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), {
+				target: { value: "ENGR7X4K" },
+			});
+			fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+			expect(await screen.findByLabelText(/new vault name/iu)).toHaveValue("Brain Dump");
+			fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
+			await waitFor(() =>
+				expect(post).toHaveBeenCalledWith(
+					"/auth/device/authorize",
+					expect.objectContaining({ vault_id: "new", vault_name: "Brain Dump" }),
+				),
+			);
+		});
+
+		it("suggests and preselects the existing vault that matches the plugin's name", async () => {
+			get.mockResolvedValue({
+				vaults: [
+					{ id: 7, name: "Personal", note_count: 3 },
+					{ id: 8, name: "Health", note_count: 9 },
+				],
+				suggested_vault_name: "health",
+			});
+			post.mockResolvedValue({ ok: true, vault_id: 8 });
+			renderPage();
+			fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), {
+				target: { value: "ENGR7X4K" },
+			});
+			fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+			expect(await screen.findByText("Suggested")).toBeInTheDocument();
+			expect(screen.getByRole("radio", { name: /health/iu })).toBeChecked();
+			expect(screen.getByLabelText(/new vault name/iu)).toHaveValue("");
+			// Listed once: the suggestion is not repeated in the list below.
+			expect(screen.getAllByRole("radio", { name: /health/iu })).toHaveLength(1);
+			fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
+			await waitFor(() =>
+				expect(post).toHaveBeenCalledWith(
+					"/auth/device/authorize",
+					expect.objectContaining({ vault_id: 8 }),
+				),
+			);
+		});
+
+		it("says what is still selected while a search hides it", async () => {
+			await reachPicker(
+				Array.from({ length: 9 }, (_, i) => ({ id: i + 1, name: `Vault ${i + 1}`, note_count: 0 })),
+			);
+			fireEvent.click(screen.getByRole("radio", { name: /vault 2\b/iu }));
+			fireEvent.click(screen.getByRole("button", { name: /search vaults/iu }));
+			fireEvent.change(screen.getByRole("searchbox", { name: /search vaults/iu }), {
+				target: { value: "zzz" },
+			});
+			expect(screen.getByText("Selected: Vault 2")).toBeInTheDocument();
+		});
+
+		it("shows no suggestion when the name matches nothing", async () => {
+			await reachPicker([{ id: 7, name: "Personal", note_count: 3 }]);
+			expect(screen.queryByText("Suggested")).toBeNull();
+		});
+
+		it("omits the label when the user clears it", async () => {
+			await reachPicker([{ id: 7, name: "Personal", note_count: 3 }]);
+			fireEvent.change(screen.getByLabelText(/name this connection/iu), { target: { value: "" } });
+			fireEvent.click(screen.getByRole("radio", { name: /personal/iu }));
+			fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
+			await waitFor(() => expect(post).toHaveBeenCalled());
+			expect(post.mock.calls[0]?.[1]).not.toHaveProperty("label");
+		});
+
+		it("shows note and file counts and the default tag", async () => {
+			await reachPicker([
+				{ id: 7, name: "Personal", note_count: 1200, attachment_count: 4, is_default: true },
+			]);
+			expect(screen.getByText("1,200 notes · 4 files")).toBeInTheDocument();
+			expect(screen.getByText("default")).toBeInTheDocument();
+		});
+
+		it("offers search only for long vault lists", async () => {
+			await reachPicker([{ id: 1, name: "One", note_count: 0 }]);
+			expect(screen.queryByRole("button", { name: /search vaults/iu })).toBeNull();
+		});
+
+		it("filters a long vault list by name", async () => {
+			await reachPicker(
+				Array.from({ length: 9 }, (_, i) => ({ id: i + 1, name: `Vault ${i + 1}`, note_count: 0 })),
+			);
+			fireEvent.click(screen.getByRole("button", { name: /search vaults/iu }));
+			fireEvent.change(screen.getByRole("searchbox", { name: /search vaults/iu }), {
+				target: { value: "vault 9" },
+			});
+			expect(screen.getByRole("radio", { name: /vault 9/iu })).toBeInTheDocument();
+			expect(screen.queryByRole("radio", { name: /vault 1\b/iu })).toBeNull();
+		});
 	});
 
 	// This is the actual device-link (plugin-connect) flow — the brief's

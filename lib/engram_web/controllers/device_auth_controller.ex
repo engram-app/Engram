@@ -30,7 +30,7 @@ defmodule EngramWeb.DeviceAuthController do
     client_id = Map.get(params, "client_id", "unknown")
     vault_name = params |> Map.get("vault_name") |> normalize_vault_name()
 
-    case DeviceFlow.start_device_flow(client_id, vault_name) do
+    case DeviceFlow.start_device_flow(client_id, vault_name, Map.get(params, "device_name")) do
       {:ok, auth} ->
         base_url = EngramWeb.Endpoint.url()
 
@@ -47,7 +47,21 @@ defmodule EngramWeb.DeviceAuthController do
     end
   end
 
-  def authorize(conn, %{"user_code" => user_code, "vault_id" => "new", "vault_name" => vault_name}) do
+  # An invalid label is refused up front: on the "new" path a late failure
+  # would leave the freshly created vault behind with nothing linked to it.
+  def authorize(conn, %{"label" => label} = params) do
+    case Engram.OAuth.resolve_label(label) do
+      {:ok, _} -> authorize_vault(conn, params)
+      :error -> conn |> put_status(422) |> json(%{error: "invalid_label"})
+    end
+  end
+
+  def authorize(conn, params), do: authorize_vault(conn, params)
+
+  defp authorize_vault(
+         conn,
+         %{"user_code" => user_code, "vault_id" => "new", "vault_name" => vault_name} = params
+       ) do
     user = conn.assigns.current_user
 
     # `user_code` identifies THIS link attempt, so it doubles as the
@@ -59,7 +73,7 @@ defmodule EngramWeb.DeviceAuthController do
         # vault, and re-seeding there would resurrect a note the user deleted.
         if status == :created, do: WelcomeNote.seed(user, vault)
 
-        do_authorize(conn, user_code, user, vault.id)
+        do_authorize(conn, user_code, user, vault.id, params["label"])
 
       {:error, {:vault_limit_reached, limit, current}} ->
         # Free-tier launch §4.5 — standardized 402 shape via LimitResponse.
@@ -76,20 +90,27 @@ defmodule EngramWeb.DeviceAuthController do
     end
   end
 
-  def authorize(conn, %{"user_code" => user_code, "vault_id" => vault_id}) do
+  defp authorize_vault(conn, %{"user_code" => user_code, "vault_id" => vault_id} = params) do
     user = conn.assigns.current_user
 
     case Ecto.UUID.cast(vault_id) do
       {:ok, uuid} ->
-        do_authorize(conn, user_code, user, uuid)
+        do_authorize(conn, user_code, user, uuid, params["label"])
 
       :error ->
         conn |> put_status(400) |> json(%{error: "invalid_vault_id"})
     end
   end
 
-  defp do_authorize(conn, user_code, user, vault_id) do
-    case DeviceFlow.authorize_device(user_code, user, vault_id) do
+  # Anything that is neither "link into a vault" nor "create a vault" (a missing
+  # user_code or vault_id): the action used to have no clause for it, which
+  # Phoenix turned into a 400.
+  defp authorize_vault(conn, _params) do
+    conn |> put_status(400) |> json(%{error: "invalid_request"})
+  end
+
+  defp do_authorize(conn, user_code, user, vault_id, label) do
+    case DeviceFlow.authorize_device(user_code, user, vault_id, label) do
       {:ok, auth} ->
         # Wake the waiting plugin now instead of letting it find out on a poll
         # tick. This is a notification only — the plugin still exchanges the
@@ -102,6 +123,9 @@ defmodule EngramWeb.DeviceAuthController do
 
       {:error, :vault_not_found} ->
         conn |> put_status(403) |> json(%{error: "vault not found or not owned by user"})
+
+      {:error, :invalid_label} ->
+        conn |> put_status(422) |> json(%{error: "invalid_label"})
     end
   end
 

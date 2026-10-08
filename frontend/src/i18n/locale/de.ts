@@ -647,11 +647,7 @@ export default {
 		"Gib den Code ein, der in deinem Obsidian-Plugin angezeigt wird:",
 	"Verifying…": "Wird überprüft…",
 	"Checking your code…": "Dein Code wird geprüft…",
-	"Pick an existing one, or create a new vault for these notes.":
-		"Wähle einen vorhandenen aus oder erstelle einen neuen Vault für diese Notizen.",
 	upgrade: "Upgrade",
-	"A device asked to sync with your account. Only continue if you started this from Obsidian — the vault name above was supplied by that device.":
-		"Ein Gerät möchte sich mit deinem Konto synchronisieren. Fahre nur fort, wenn du das von Obsidian aus gestartet hast. Der Vault-Name oben stammt von diesem Gerät.",
 	"Syncing…": "Wird synchronisiert…",
 	Sync: "Synchronisieren",
 	"Your vault is linked. Obsidian is waiting for you to start the first sync.":
@@ -663,9 +659,6 @@ export default {
 		"Deine Notizen erscheinen hier, sobald sie synchronisiert sind. Du kannst jederzeit zurückkommen.",
 	"Continue to web app": "Weiter zur Web-App",
 	"Open Obsidian": "Obsidian öffnen",
-	"Makes a new vault matching your Obsidian vault name":
-		"Erstellt einen neuen Vault, der zum Namen deines Obsidian-Vaults passt",
-	"Create a vault with a custom name": "Einen Vault mit eigenem Namen erstellen",
 	"choose a new name": "neuen Namen wählen",
 	"the device syncing your '{vault}' vault on {os} (last active {since})":
 		"das Gerät, das deinen Vault '{vault}' auf {os} synchronisiert (zuletzt aktiv {since})",
@@ -689,14 +682,6 @@ export default {
 		"Achtung: Mit deinem Tarif Kostenlos synchronisierst du Dateien jeweils zwischen 1 Gerät. Wenn du dieses Gerät verknüpfst, wird {device} getrennt und erhält keine Synchronisierungsänderungen mehr. Mit einem {upgrade} bleiben beide verbunden.",
 	"Your Free plan includes 1 vault — link into the existing one above, or {upgrade} to create more.":
 		"Dein Tarif Kostenlos enthält 1 Vault. Verknüpfe mit dem vorhandenen oben oder erstelle mit einem {upgrade} weitere.",
-	"Sync into your existing vault · {count} notes": {
-		one: "In deinen vorhandenen Vault synchronisieren · {count} Notiz",
-		other: "In deinen vorhandenen Vault synchronisieren · {count} Notizen",
-	},
-	"Sync into this existing vault · {count} notes": {
-		one: "In diesen vorhandenen Vault synchronisieren · {count} Notiz",
-		other: "In diesen vorhandenen Vault synchronisieren · {count} Notizen",
-	},
 	"{count} minutes ago": { one: "vor {count} Minute", other: "vor {count} Minuten" },
 	"{count} hours ago": { one: "vor {count} Stunde", other: "vor {count} Stunden" },
 	"{count} days ago": { one: "vor {count} Tag", other: "vor {count} Tagen" },
@@ -1381,4 +1366,20 @@ export default {
 		"Ich habe die Nutzungsbedingungen und die Datenschutzerklärung gelesen und stimme zu",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Ich habe die oben gezeigte Vereinbarung und den Datenschutzhinweis gelesen und stimme zu",
+	"Name this connection": "Diese Verbindung benennen",
+	"Shown in your connections list so you can tell your devices apart.":
+		"Wird in deiner Verbindungsliste angezeigt, damit du deine Geräte unterscheiden kannst.",
+	"Obsidian Vault Sync": "Obsidian Vault Sync",
+	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
+		"Die Synchronisierung gibt diesem Gerät Zugriff auf deine Notizen. Fahre nur fort, wenn du diesen Link selbst gestartet hast. Wenn dich jemand anderes hierher geschickt hat, schließe diese Seite.",
+	"Selected: {name}": "Ausgewählt: {name}",
+	"Creating a new vault": "Neuen Vault erstellen",
+	"New vault name": "Name des neuen Vaults",
+	"Where should these notes sync?": "Wohin sollen diese Notizen synchronisiert werden?",
+	Suggested: "Vorgeschlagen",
+	"matches your Obsidian vault": "passt zu deinem Obsidian-Vault",
+	"Or sync with a different vault": "Oder mit einem anderen Vault synchronisieren",
+	"Sync with an existing vault": "Mit einem vorhandenen Vault synchronisieren",
+	"(choose from {count} vaults)": "(Auswahl aus {count} Vaults)",
+	"Or create a new vault": "Oder einen neuen Vault erstellen",
 } satisfies Catalog;
