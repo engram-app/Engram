@@ -51,12 +51,16 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   migration open and the stuck-migration alert surfaces it.
 
   Lifeline rescue: if a crashed predecessor is rescued after its successor was
-  inserted, the rescued job cancels itself as `:superseded`. The hand-off can
-  also hit the unique conflict and insert nothing, so a rescue may leave no
-  chain for that user. The next hourly pass re-enqueues it (up to ~1 h delay;
+  inserted, the rescued job cancels itself as `:superseded` while the
+  successor is still pending (if the successor is already running, both run
+  until the next hand-off merges them; the CAS makes that wasted work only).
+  The hand-off can also hit the unique conflict and insert nothing, so a
+  rescue may leave no chain for that user. The next hourly pass re-enqueues it (up to ~1 h delay;
   no work is lost and the migration is never falsely marked done). Per-user
   discovery inserts are not atomic across users either; a partial pass
-  self-heals on the next one.
+  self-heals on the next one. A job that starts while an older (lower id)
+  job for the same user is executing cancels as `:duplicate`, which closes
+  discovery's race with a job that starts after its executing snapshot.
 
   With compression off (`Envelope.compression_on?/0`: the kill switch, or a
   cluster node that cannot read format 1), a job cancels itself, checked at
@@ -76,9 +80,10 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   # One chain per user. `:executing` is deliberately NOT a unique state: a job
   # inserts its own successor while still executing, and must not conflict
   # with itself. So `unique` drops a duplicate enqueue (from `run_pass`) while
-  # a hop is pending; `superseded?/1` covers the case it cannot, a Lifeline
-  # rescue putting a crashed predecessor back to `available` (a state change,
-  # not an insert) after its successor was already inserted.
+  # a hop is pending; `superseded?/1` covers a Lifeline rescue putting a
+  # crashed predecessor back to `available` (a state change, not an insert)
+  # after its successor was inserted, and `duplicate?/1` covers discovery
+  # inserting while the user's job is executing.
   use Oban.Worker,
     queue: :crypto_backfill,
     priority: 3,
@@ -165,6 +170,9 @@ defmodule Engram.Workers.ReencodeEnvelopes do
       superseded?(job) ->
         {:cancel, :superseded}
 
+      duplicate?(job) ->
+        {:cancel, :duplicate}
+
       true ->
         user_id |> run(args) |> cap_snooze(user_id, job)
     end
@@ -196,21 +204,32 @@ defmodule Engram.Workers.ReencodeEnvelopes do
     run_columns(user_id, columns, args["after"], deadline)
   end
 
-  # A newer in-flight job for this user exists: this one is a rescued
+  # A newer pending job for this user exists: this one is a rescued
   # predecessor whose successor already took over the chain.
-  defp superseded?(%Oban.Job{id: id, args: %{"user_id" => user_id}}) when is_integer(id) do
-    worker = inspect(__MODULE__)
-
-    Repo.exists?(
-      from(j in Oban.Job,
-        where: j.worker == ^worker and j.id > ^id,
-        where: j.state in ~w(available scheduled executing retryable),
-        where: fragment("?->>'user_id' = ?", j.args, ^user_id)
+  defp superseded?(%Oban.Job{id: id} = job) when is_integer(id),
+    do:
+      Repo.exists?(
+        where(user_jobs(job), [j], j.id > ^id and j.state in ~w(available scheduled retryable))
       )
-    )
-  end
 
   defp superseded?(_job), do: false
+
+  # An older job for this user is already running: discovery started a
+  # second chain beside it. Lower id wins, so two simultaneous starters
+  # never both cancel.
+  defp duplicate?(%Oban.Job{id: id} = job) when is_integer(id),
+    do: Repo.exists?(where(user_jobs(job), [j], j.id < ^id and j.state == "executing"))
+
+  defp duplicate?(_job), do: false
+
+  defp user_jobs(%Oban.Job{args: %{"user_id" => user_id}}) do
+    worker = inspect(__MODULE__)
+
+    from(j in Oban.Job,
+      where: j.worker == ^worker,
+      where: fragment("?->>'user_id' = ?", j.args, ^user_id)
+    )
+  end
 
   defp run_columns(_user_id, [], _after, _deadline), do: :ok
 

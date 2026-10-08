@@ -447,6 +447,35 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
       assert reload(Note, id: note.id) == before
     end
 
+    # Discovery can insert a second chain while the first one starts running
+    # (its executing snapshot is taken before the insert). The later starter
+    # yields to the lower-id executing job; ids break a tie, so two
+    # simultaneous starters never both cancel.
+    test "a job with a lower-id executing job for the same user cancels as a duplicate",
+         %{user: u, vault: v} do
+      note = legacy_note!(u, v, "a.md", @big)
+      before = reload(Note, id: note.id)
+
+      {:ok, running} = Oban.insert(ReencodeEnvelopes.new(%{"user_id" => u.id}))
+      Repo.update_all(from(j in Oban.Job, where: j.id == ^running.id), set: [state: "executing"])
+
+      starter = %Oban.Job{id: running.id + 1, args: %{"user_id" => u.id}}
+      assert {:cancel, :duplicate} = ReencodeEnvelopes.perform(starter)
+      assert reload(Note, id: note.id) == before
+    end
+
+    test "a job proceeds when only a higher-id job for the same user is executing",
+         %{user: u, vault: v} do
+      note = legacy_note!(u, v, "a.md", @big)
+
+      {:ok, later} = Oban.insert(ReencodeEnvelopes.new(%{"user_id" => u.id}))
+      Repo.update_all(from(j in Oban.Job, where: j.id == ^later.id), set: [state: "executing"])
+
+      starter = %Oban.Job{id: later.id - 1, args: %{"user_id" => u.id}}
+      assert :ok = ReencodeEnvelopes.perform(starter)
+      assert byte_size(reload(Note, id: note.id).content_nonce) == 13
+    end
+
     test "a rotation locked BETWEEN batches stops further writes", %{user: u, vault: v} do
       [a, b] =
         Enum.sort([legacy_note!(u, v, "a.md", @big).id, legacy_note!(u, v, "b.md", @big).id])
