@@ -1010,21 +1010,22 @@ defmodule Engram.Notes do
           # post-commit, same as the :announce leg above.
           :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note, [])
 
-          if old_path != note.path do
-            :ok = broadcast_change(user.id, vault.id, "delete", old_path, note.id, [])
+          _ =
+            if old_path != note.path do
+              :ok = broadcast_change(user.id, vault.id, "delete", old_path, note.id, [])
 
-            # #1612 — same repath rename_note enqueues (#746). Without it the
-            # points keep the old path/folder hmacs and folder-filtered search
-            # misses the moved note. A resurrect-rename has no points left, so
-            # the worker's count == 0 branch re-embeds it instead.
-            _ =
-              Enqueue.enqueue(
-                RepathNoteIndex.new_debounced(note.id, user.id,
-                  old_path_hmac: old_path_hmac_b64!(user, old_path)
-                ),
-                "repath_note_index"
-              )
-          end
+              # #1612 — same repath rename_note enqueues (#746). Without it the
+              # points keep the old path/folder hmacs and folder-filtered search
+              # misses the moved note. A resurrect-rename has no points left, so
+              # the worker's count == 0 branch re-embeds it instead.
+              _ =
+                Enqueue.enqueue(
+                  RepathNoteIndex.new_debounced(note.id, user.id,
+                    old_path_hmac: old_path_hmac_b64!(user, old_path)
+                  ),
+                  "repath_note_index"
+                )
+            end
 
           {:ok, note}
 
