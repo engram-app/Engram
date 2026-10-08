@@ -9,14 +9,18 @@
 //! the format byte is authenticated), body = `<<codec, payload>>` where
 //! codec 0 = raw, 1 = one zstd frame (content size + checksum on).
 //!
-//! Assumes no caller AAD ends in "|f1". Every AAD is structured
-//! (`table:column:id`, `dek:...`, `qdrant:...`) or the legacy empty one;
-//! otherwise a format-0 AAD `x|f1` would equal format 1's AAD for `x`.
+//! Assumes no caller AAD ends in "|f1", or more exactly that no AAD equals
+//! another one ++ "|f1"; otherwise a format-0 AAD `x|f1` would equal format
+//! 1's AAD for `x`. Row AADs are `table <> 0 <> column <> 0 <> 16 raw uuid
+//! bytes` (`Crypto.aad_prefix/2` ++ the id), fixed length per column, so
+//! one minus its last 3 bytes is never another row's AAD even when the uuid
+//! happens to end in "|f1". The rest are structured (`dek:...`,
+//! `qdrant:...`) or the legacy empty AAD.
 use ring::aead::{Aad, LessSafeKey, Nonce, Tag, UnboundKey, AES_256_GCM};
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::ops::DerefMut;
-use zstd::zstd_safe::{self, DCtx, InBuffer, OutBuffer, ResetDirective};
+use zstd::zstd_safe::{self, DCtx, DParameter, InBuffer, OutBuffer, ResetDirective};
 
 pub const TAG: usize = 16;
 const NONCE: usize = 12;
@@ -24,6 +28,12 @@ const FORMAT_1: u8 = 1;
 const CODEC_RAW: u8 = 0;
 const CODEC_ZSTD: u8 = 1;
 const LEVEL: i32 = 3;
+// Decode refuses frames whose window exceeds 8 MB (zstd's default allows
+// 128 MB). Level 3 writes a window of at most 2^21, so only a crafted frame
+// sealed under a real key could ask for more. The cap bites when zstd
+// buffers (declared size past the output's room); a frame that fits the
+// output decodes straight into it and needs no separate window.
+const WINDOW_LOG_MAX: u32 = 23;
 // :auto compresses a sample first; incompressible media skips the full pass.
 const SAMPLE: usize = 64 * 1024;
 
@@ -53,8 +63,8 @@ fn compress(data: &[u8]) -> Option<Vec<u8>> {
     })
 }
 
-/// One whole frame, or None if it is corrupt, truncated, or has trailing
-/// bytes. The header's content size is checked by zstd at the end of the
+/// One whole frame, or None if it is corrupt, truncated, has trailing
+/// bytes, or needs a window past `WINDOW_LOG_MAX`. The header's content size is checked by zstd at the end of the
 /// frame but never trusted for an allocation: the output grows as bytes
 /// actually decode (from a start sized off the frame), capped by the
 /// declared size, so a lying header cannot force a huge allocation.
@@ -65,7 +75,11 @@ fn decompress(frame: &[u8]) -> Option<Vec<u8>> {
     DCTX.with(|d| {
         let mut d = d.borrow_mut();
         if d.is_none() {
-            *d = Some(DCtx::try_create()?);
+            let mut fresh = DCtx::try_create()?;
+            fresh
+                .set_parameter(DParameter::WindowLogMax(WINDOW_LOG_MAX))
+                .ok()?;
+            *d = Some(fresh);
         }
         let d = d.as_mut()?;
         d.reset(ResetDirective::SessionOnly).ok()?;
@@ -400,6 +414,37 @@ mod tests {
         // Claims less than it holds.
         assert!(open_body(&raw_frame(2, b"hello")).0.is_err());
         assert!(open_body(&raw_frame(0, b"hello")).0.is_err());
+    }
+
+    /// A real frame of `size` zeros compressed with a `2^window_log` window.
+    /// zstd shrinks the window to the source, so `size` must exceed it.
+    fn frame_with_window(window_log: u32, size: usize) -> Vec<u8> {
+        let mut z = zstd::bulk::Compressor::new(LEVEL).unwrap();
+        z.include_contentsize(true).unwrap();
+        z.window_log(window_log).unwrap();
+        z.compress(&vec![0u8; size]).unwrap()
+    }
+
+    #[test]
+    fn a_frame_demanding_a_window_past_the_cap_is_rejected() {
+        let size = 40 << 20;
+        // At the cap: decodes. Past it (and zstd's 2^27 default): refused at
+        // the header, before the window buffer is allocated.
+        let ok = frame_with_window(WINDOW_LOG_MAX, size);
+        assert_eq!(decompress(&ok).unwrap().len(), size);
+        for log in [WINDOW_LOG_MAX + 1, 25] {
+            let frame = frame_with_window(log, size);
+            assert!(decompress(&frame).is_none(), "{log}");
+            let (ct, n) = seal_f1_body(&[&[CODEC_ZSTD][..], &frame].concat(), b"a");
+            assert!(open(&ct, &n, &K, b"a").is_err(), "{log}");
+        }
+        // What `seal` writes at level 3 stays under the cap: 1-3 MB notes,
+        // half random so they do not collapse to a tiny frame.
+        for size in [1 << 20, 2 << 20, 3 << 20] {
+            let mut plain = vec![0u8; size];
+            getrandom::getrandom(&mut plain[..size / 2]).unwrap();
+            rt(&plain, Mode::Zstd);
+        }
     }
 
     #[test]
