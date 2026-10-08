@@ -329,11 +329,14 @@ jobs:
           # next push hits the cache → `lint` skips → loosened rule rides in
           # without ever being re-validated. `.dockerignore` affects what's
           # in the Docker build context, which can change image bytes.
+          # `rel/` ships in the image (release env.sh); listed explicitly
+          # rather than via DEPLOYABLE_PATHS because that set includes
+          # mix.exs, which is hashed below with its version line stripped.
           BACKEND_HASH=$({
             git ls-tree -r HEAD -- \
               lib priv config test frontend native \
               Dockerfile entrypoint.sh .dockerignore \
-              mix.lock \
+              rel mix.lock \
               .formatter.exs .credo.exs .dialyzer_ignore.exs .sobelow-conf .sobelow-skips \
               ci/compose.yml ci/compose.local.yml ci/compose.database.yml \
               .github/workflows/verify.yml
@@ -2552,6 +2555,9 @@ jobs:
         run: |
           export CARGO_TARGET_DIR="$HOME/.cache/engram-native-target"
           cargo fmt --all --check
+          # Default features too: `test-hooks` is off in the prod build, so
+          # code that only breaks without it is invisible to --all-features.
+          cargo clippy --workspace --release --locked --all-targets -- -D warnings
           cargo clippy --workspace --release --locked --all-targets --all-features -- -D warnings
           cargo test --workspace --release --locked --all-features
 
@@ -2577,29 +2583,44 @@ jobs:
         run: |
           SDK="$HOME/.cache/engram-wasi-sdk-$WASI_SDK_VERSION"
           mkdir -p "$HOME/.cache"
-          flock "$HOME/.cache/.engram-wasi-sdk.lock" sh -ec '
-            if [ ! -x "$0/bin/clang" ]; then
-              f="$RUNNER_TEMP/wasi-sdk.tar.gz"
-              curl --proto "=https" --tlsv1.2 -sSfL -o "$f" \
-                "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION%%.*}/wasi-sdk-$WASI_SDK_VERSION-x86_64-linux.tar.gz"
-              echo "$WASI_SDK_SHA256  $f" | sha256sum -c -
-              rm -rf "$0.partial" && mkdir -p "$0.partial"
-              tar -xzf "$f" -C "$0.partial" --strip-components=1
-              rm -f "$f"
-              mv "$0.partial" "$0"
-            fi
-            for old in "$HOME"/.cache/engram-wasi-sdk-*; do
-              [ "$old" = "$0" ] || rm -rf "$old"
-            done
-          ' "$SDK"
-          export CC_wasm32_unknown_unknown="$SDK/bin/clang" AR_wasm32_unknown_unknown="$SDK/bin/llvm-ar"
-          "$CC_wasm32_unknown_unknown" --version | head -1
+          LOCK="$HOME/.cache/.engram-wasi-sdk.lock"
           # A fresh cargo fingerprint skips the compile, so check the target
           # is really installed for the pinned toolchain.
           rustup target list --installed | grep -qx wasm32-unknown-unknown
-          export CARGO_TARGET_DIR="$HOME/.cache/engram-native-target"
-          cargo build --release --locked -p wasm_guard --target wasm32-unknown-unknown
-          python3 wasm_guard/imports.py "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/wasm_guard.wasm"
+          # Exclusive lock: install + prune. Shared lock: the build, so a job
+          # pinned to another version cannot prune this SDK mid-build. flock
+          # cannot downgrade, so there is a gap between the two; if the SDK
+          # vanished in it the build section exits 99 and we retry. Any other
+          # failure (rc != 99) fails the step.
+          for attempt in 1 2 3; do
+            flock "$LOCK" sh -ec '
+              if [ ! -x "$0/bin/clang" ]; then
+                f="$RUNNER_TEMP/wasi-sdk.tar.gz"
+                curl --proto "=https" --tlsv1.2 -sSfL -o "$f" \
+                  "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION%%.*}/wasi-sdk-$WASI_SDK_VERSION-x86_64-linux.tar.gz"
+                echo "$WASI_SDK_SHA256  $f" | sha256sum -c -
+                rm -rf "$0.partial" && mkdir -p "$0.partial"
+                tar -xzf "$f" -C "$0.partial" --strip-components=1
+                rm -f "$f"
+                mv "$0.partial" "$0"
+              fi
+              for old in "$HOME"/.cache/engram-wasi-sdk-*; do
+                [ "$old" = "$0" ] || rm -rf "$old"
+              done
+            ' "$SDK"
+            rc=0
+            flock -s "$LOCK" sh -ec '
+              [ -x "$0/bin/clang" ] || exit 99
+              export CC_wasm32_unknown_unknown="$0/bin/clang" AR_wasm32_unknown_unknown="$0/bin/llvm-ar"
+              "$CC_wasm32_unknown_unknown" --version | head -1
+              export CARGO_TARGET_DIR="$HOME/.cache/engram-native-target"
+              cargo build --release --locked -p wasm_guard --target wasm32-unknown-unknown
+              python3 wasm_guard/imports.py "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/wasm_guard.wasm"
+            ' "$SDK" || rc=$?
+            [ "$rc" -eq 99 ] || exit "$rc"
+          done
+          # Three attempts all lost the SDK to a concurrent prune.
+          exit 99
 
       - name: Fetch deps (if missing or lockfile changed)
         # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`
