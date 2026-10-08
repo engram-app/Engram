@@ -81,9 +81,78 @@ Compression policy, keyed by the AAD prefix `table <> <<0>> <> column <> <<0>>`
   the revision-content AAD is in the policy so the envelope zstd-compresses
   them. No reader existed and prod recording was off, so no gzip blobs need
   reading (#1711's reader decrypts to plain text).
-- Rollback: set `ENVELOPE_COMPRESSION=false` and restart. Format-1 rows already written stay
-  readable; there is no downgrade path that rewrites them to format 0, and an
-  older release without the engine cannot read them.
+- Rollback (R2 is live as of #1872 PR 3): the PR 2 release (#1904, R1) reads
+  format 1, so deploying it back keeps every format-1 row readable. A release
+  older than R1 cannot read them. Without a release, set
+  `ENVELOPE_COMPRESSION=false` and restart: new writes return to format 0 and
+  the `EnvelopeFormat` data migration reports itself disabled (the runner skips
+  it, no paging, and `ReencodeEnvelopes` jobs cancel themselves). Format-1 rows
+  already written stay readable; nothing rewrites them back to format 0.
+
+### Length side channel (accepted for now)
+
+Compress-then-encrypt leaks size: the stored length depends on how well the
+plaintext compresses. That matters only when an attacker can mix text they
+choose with secret text in one compressed unit AND can observe stored sizes
+(the CRIME/BREACH shape). Today it is low: vaults are single-user, no API
+returns stored sizes, and ciphertext at rest is reachable only by the operator.
+Revisit before shared or team notes, or any size-exposing surface. The format
+byte already allows a no-compress mode per data class (`:none` in the policy
+table), so closing it later is a policy change, not a format change.
+
+### Dirty scheduler pressure
+
+Seals above 16 KB, opens above 16 KB of ciphertext, and any zstd frame
+declaring more than 16 KB of plaintext run on a dirty CPU scheduler. Prod runs
+the app task at `task_cpu_units = 512` (`engram-infra/main/envs/prod/ecs.tf`,
+both roles), `beam_schedulers = max(1, ceil(512 / 1024)) = 1`, and
+`rel/env.sh.eex` turns that into `+S 1:1 +SDcpu 1:1`: ONE normal and ONE dirty
+CPU scheduler per task. Large seals, large-decode opens and the other dirty
+NIFs queue behind that one scheduler. Watch `[:engram, :nif, :call, :stop]`
+duration for `nif: :envelope_seal` / `:envelope_open` with `dirty: true` (PromEx
+histogram for `Engram.Native`); a rising p99 there means dirty queueing, and the
+remedies are a bigger task (which raises `+SDcpu`) or `ENVELOPE_COMPRESSION=false`.
+
+### After the R2 deploy (checklist)
+
+1. Migration state: `SELECT * FROM data_migrations WHERE name = 'envelope_format';`
+   Expect it to progress to done; `ReencodeEnvelopes` chains run in
+   `crypto_backfill`. A stuck alert means a row that does not decrypt (warning
+   log with table and row id).
+2. Stored bytes before (take it BEFORE the deploy) and after the migration is
+   done. Read-only, per tenant because the audit role is RLS-bound
+   (`engram_audit_ro`, see `maintenance-db-role.md`):
+
+```sql
+BEGIN;
+CREATE TEMP TABLE envelope_bytes (col text, n bigint, bytes bigint) ON COMMIT DROP;
+DO $$
+DECLARE u record;
+BEGIN
+  FOR u IN SELECT id FROM users LOOP
+    PERFORM set_config('app.current_tenant', u.id::text, true);
+    INSERT INTO envelope_bytes
+      SELECT 'notes.content_ciphertext', count(content_ciphertext), coalesce(sum(octet_length(content_ciphertext)), 0) FROM notes
+      UNION ALL SELECT 'notes.crdt_state_ciphertext', count(crdt_state_ciphertext), coalesce(sum(octet_length(crdt_state_ciphertext)), 0) FROM notes
+      UNION ALL SELECT 'crdt_update_log.update_ciphertext', count(*), coalesce(sum(octet_length(update_ciphertext)), 0) FROM crdt_update_log
+      UNION ALL SELECT 'vault_index_states.state_ciphertext', count(*), coalesce(sum(octet_length(state_ciphertext)), 0) FROM vault_index_states
+      UNION ALL SELECT 'vault_index_update_log.update_ciphertext', count(*), coalesce(sum(octet_length(update_ciphertext)), 0) FROM vault_index_update_log;
+  END LOOP;
+END $$;
+SELECT col, sum(n) AS rows, sum(bytes) AS stored_bytes, pg_size_pretty(sum(bytes)) AS pretty
+  FROM envelope_bytes GROUP BY col ORDER BY col;
+-- Cross-check the row counts (estimates; expect the same order of magnitude)
+SELECT relname, n_live_tup FROM pg_stat_user_tables
+  WHERE relname IN ('notes', 'crdt_update_log', 'vault_index_states', 'vault_index_update_log');
+COMMIT;
+```
+
+   Verify the audit role can read `users` (list the ids by hand if not). If the audit role
+   cannot create a temp table, run the `INSERT ... SELECT` per tenant from psql
+   and sum client-side. The before/after ratio per column is the number the
+   page-cache argument in #1872 needs. `pg_total_relation_size` of the same
+   tables also moves, but only after autovacuum/`VACUUM FULL` (TOAST rewrites
+   leave dead space), so compare `octet_length` sums, not table size.
 
 ---
 

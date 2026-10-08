@@ -34,6 +34,14 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   A row that does not decrypt is logged at `:warning` and left: it keeps the
   migration open and the stuck-migration alert surfaces it.
 
+  Lifeline rescue: if a crashed predecessor is rescued after its successor was
+  inserted, the rescued job cancels itself as `:superseded`. The hand-off can
+  also hit the unique conflict and insert nothing, so a rescue may leave no
+  chain for that user. The next hourly pass re-enqueues it (up to ~1 h delay;
+  no work is lost and the migration is never falsely marked done). Per-user
+  discovery inserts are not atomic across users either; a partial pass
+  self-heals on the next one.
+
   With the compression kill switch set, a job cancels itself: re-encoding
   would write format 0 again and NULL `crdt_head` for nothing.
 

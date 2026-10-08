@@ -264,7 +264,8 @@ the after path at 1,213 ns min / 1,298 median against `:crypto`'s 1,411 /
 16 KB) now call the inline NIF directly and emit no event; format-1 seals and
 every dirty call still go through `call/4`. Since #1872 PR 3 every inline open
 (format 0 or 1, up to 16 KB of ciphertext) is event-free too; one the inline
-NIF answers `:reschedule` is counted once, by its dirty rerun, which emits. The counts did not go: the NIF counts
+NIF answers `:reschedule` is counted once, by its dirty rerun, which emits.
+The counts did not go: the NIF counts
 EVERY seal and open (calls, input bytes) in relaxed atomics,
 `Engram.Native.envelope_counts/0`, which `Engram.PromEx.Native` polls as
 `[:engram, :nif, :envelope]` (gauges of cumulative values: read with
@@ -562,7 +563,8 @@ on the calling scheduler. A note write must not queue behind a long
 keyword encode on the one dirty scheduler, and the hop alone cost ~20 us.
 
 One rule, one place each side. Rust: declare the pair with
-`sized_nif!(f, f_nif, f_dirty_nif, ...)` in `lib.rs`, never by hand. Elixir:
+`sized_nif!(f, f_nif, f_dirty_nif, ...)` in `lib.rs`, never by hand (except
+`envelope_open`; see above). Elixir:
 add `{name, inline_nif, dirty_nif, arity}` to `@sized` in `Engram.Native`
 (it generates the stubs) and call `sized(name, input, args)`; `input` is
 what `call/4` measures (a binary, iolist or byte count). Never write the

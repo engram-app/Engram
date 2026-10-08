@@ -33,7 +33,9 @@ defmodule Engram.DataMigrations.EnvelopeFormat do
 
   @impl true
   def run_pass do
-    # The worker has no `unique`: enqueueing while a chain runs would duplicate it.
+    # The worker is unique per user over available/scheduled/retryable, but unique
+    # does not cover :executing; the jobs_in_flight? guard also stops new chains
+    # while a chain's last hop runs.
     cond do
       DataMigrations.jobs_in_flight?(ReencodeEnvelopes) -> :more
       ReencodeEnvelopes.enqueue_missing() == 0 -> :done
