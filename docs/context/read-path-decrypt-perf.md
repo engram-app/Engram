@@ -14,6 +14,8 @@ _Last verified: 2026-10-03 (first measured in PR #530)_
 
 Why fan-out is cheap on the input side: ciphertexts are refc binaries, so they aren't copied to worker heaps. Workers self-mark `:sensitive` via `get_dek` (T3.3/M9), preserving the DEK-hygiene invariant.
 
+Catch-up pages (`Notes.list_changes_by_seq`) decrypt serially by design: the page is plaintext-budget bounded (~4 MB), so parallel fan-out buys little and would break stop-at-budget. They emit one `decrypt_batch` event per page (`kind: :notes`), like the parallel list callers.
+
 ## Manifest query needs no extra index
 
 The partial unique index `(user_id, vault_id, path_hmac) WHERE deleted_at IS NULL` already serves the manifest access path. `kind = 'note'` is non-selective (~all rows), so an extra `(user_id, vault_id, kind)` index is pure write amplification with zero read win. **Don't re-propose it.** Revisit only if `[:engram, :crypto, :decrypt_batch]` / repo query telemetry shows manifest DB time hot.

@@ -3834,15 +3834,31 @@ defmodule Engram.Notes do
   # cut?}; rows after the cut are never decrypted and are re-served next page.
   defp decrypt_within_budget(page, user, :all, max_bytes)
        when is_integer(max_bytes) and max_bytes > 0 do
+    start = System.monotonic_time(:microsecond)
+
     {kept, _used, cut} =
       Enum.reduce_while(page, {[], 0, false}, fn row, {acc, used, _cut} ->
-        [note] = decrypt_or_raise!([row], user)
+        # Single-struct clause: no per-row telemetry. One event per page below.
+        note = decrypt_or_raise!(row, user)
         size = byte_size(note.content || "")
 
         if acc != [] and used + size > max_bytes,
           do: {:halt, {acc, used, true}},
           else: {:cont, {[note | acc], used + size, false}}
       end)
+
+    # Same event shape as Crypto.measure_decrypt_batch/3 (count = rows actually
+    # decrypted, including the one that overflowed). Skipped for an empty page,
+    # like its count-zero rule.
+    decrypted_count = length(kept) + if(cut, do: 1, else: 0)
+
+    if decrypted_count > 0 do
+      :telemetry.execute(
+        [:engram, :crypto, :decrypt_batch],
+        %{count: decrypted_count, duration_us: System.monotonic_time(:microsecond) - start},
+        %{kind: :notes}
+      )
+    end
 
     {Enum.reverse(kept), cut}
   end

@@ -25,7 +25,7 @@ defmodule Engram.NotesSeqFeedDecryptBudgetTest do
   defp drain_note_decrypts(ref, acc) do
     receive do
       {[:engram, :crypto, :decrypt_batch], ^ref, %{count: c}, %{kind: :notes}} ->
-        drain_note_decrypts(ref, acc + c)
+        drain_note_decrypts(ref, [c | acc])
     after
       0 -> acc
     end
@@ -57,8 +57,12 @@ defmodule Engram.NotesSeqFeedDecryptBudgetTest do
     assert length(page) == 1
     assert more and next
 
-    # The shipped row plus the one that overflowed; rows 3..5 never decrypted.
-    assert drain_note_decrypts(ref, 0) <= 2
+    # ONE event for the page, counting the shipped row plus the one that
+    # overflowed; rows 3..5 never decrypted.
+    assert (case drain_note_decrypts(ref, []) do
+              [c] -> c <= 2
+              _ -> false
+            end)
 
     # Nothing lost: resuming from the cursor yields the other four.
     {last_seq, last_id} = next
