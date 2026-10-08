@@ -85,8 +85,8 @@ RNG; CI checks that on every run (below), so a change that makes the hook
 reachable fails there instead of in a client.
 
 `native/` is one Cargo workspace (`native/Cargo.toml`): members engram_core,
-engram_native and the CI-only wasm_guard, one `Cargo.lock`, one `rust-toolchain.toml`, the shared
-release profile (LTO, one codegen unit), output in `native/target`. Rustler
+engram_native and the CI-only wasm_guard, one `Cargo.lock`, one
+`rust-toolchain.toml`, the shared release profile (LTO, one codegen unit), output in `native/target`. Rustler
 builds the engram_native member as before and gathers it and its path
 dependencies into the NIF module's `@external_resource`s, so a content edit
 under engram_core rebuilds the NIF on `mix compile` (touching a file without

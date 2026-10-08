@@ -38,9 +38,9 @@ defmodule Engram.Crypto.Envelope do
 
   AAD shape per call site:
 
-    * Relational rows  — `Crypto.aad_for_row/3`: `<table> 0 <column> 0 <16-byte uuid>`
-    * Qdrant payload   — `"qdrant:<collection>:<qdrant_id>:<field>"`
-    * Wrapped DEK      — `"dek:v1:<user_id>"`
+    * Relational rows: `Crypto.aad_for_row/3`, `<table> 0 <column> 0 <16-byte uuid>`
+    * Qdrant payload: `"qdrant:<collection>:<qdrant_id>:<field>"`
+    * Wrapped DEK: `"dek:v1:<user_id>"`
 
   ## Backwards compatibility
 

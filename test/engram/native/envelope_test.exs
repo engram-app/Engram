@@ -1,5 +1,5 @@
 defmodule Engram.Native.EnvelopeTest do
-  # async: false — the leak test reads a process-wide counter.
+  # async: false: the leak test reads a process-wide counter.
   use ExUnit.Case, async: false
   use ExUnitProperties
 
