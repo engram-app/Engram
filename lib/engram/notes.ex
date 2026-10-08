@@ -1016,8 +1016,8 @@ defmodule Engram.Notes do
 
               # #1612 — same repath rename_note enqueues (#746). Without it the
               # points keep the old path/folder hmacs and folder-filtered search
-              # misses the moved note. A resurrect-rename has no points left, so
-              # the worker's count == 0 branch re-embeds it instead.
+              # misses the moved note. A resurrect-rename usually has no points, so it
+              # re-embeds; if it beat DeleteNoteIndex (#1610), they are patched instead.
               _ =
                 Enqueue.enqueue(
                   RepathNoteIndex.new_debounced(note.id, user.id,
