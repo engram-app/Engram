@@ -270,6 +270,46 @@ defmodule Engram.Notes.CrdtTransportTest do
       refute CrdtRegistry.lookup(note.id)
     end
 
+    # A delete stops the note's room, so a write to the trashed note (here a
+    # room-free one) finds no room and no live row: nothing is materialized
+    # into the trashed row, no seq bump, no jobs.
+    test "a write after the delete of a note with an open room changes nothing", ctx do
+      %{user: user, vault: vault} = ctx
+
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "T/Open.md", content: "o"}, actor: "api")
+
+      {:ok, room} = CrdtRegistry.ensure_observed(user.id, vault.id, note.id)
+      on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
+      upd = edit(user, vault, note.id, "o edit")
+
+      :ok = Notes.delete_note(user, vault, "T/Open.md")
+      seq = Repo.with_tenant!(user.id, fn -> Repo.get!(Note, note.id).seq end)
+      Repo.delete_all(Oban.Job)
+
+      result =
+        Task.async(fn -> CrdtTransport.apply_update(user, vault, note.id, upd) end)
+        |> Task.await(5_000)
+
+      if Process.alive?(room), do: Yex.Sync.SharedDoc.unobserve(room)
+      ref = Process.monitor(room)
+      assert_receive {:DOWN, ^ref, :process, _, _}, 5_000
+
+      assert result == {:error, :not_found}
+      assert Repo.with_tenant!(user.id, fn -> Repo.get!(Note, note.id).seq end) == seq
+      assert Repo.all(Oban.Job) == []
+    end
+
+    test "a batch delete stops the notes' open rooms", %{user: user, vault: vault} do
+      {:ok, note} = Notes.upsert_note(user, vault, %{path: "T/B.md", content: "b"}, actor: "api")
+      {:ok, room} = CrdtRegistry.ensure_observed(user.id, vault.id, note.id)
+      ref = Process.monitor(room)
+
+      assert {:ok, %{deleted: 1}} = Notes.batch_delete_notes(user, vault, [note.id])
+      assert_receive {:DOWN, ^ref, :process, _, _}, 5_000
+      refute CrdtRegistry.lookup(note.id)
+    end
+
     test "a resident room of another vault → {:error, :not_found}, nothing applied", ctx do
       %{user: user, vault: vault} = ctx
 

@@ -3516,6 +3516,8 @@ defmodule Engram.Notes do
             # Decrement by rows actually transitioned live → deleted, so a
             # concurrent delete (already-nil deleted_at) can't double-count.
             :ok = UsageMeters.dec_notes_count(user.id, updated)
+
+            :ok = stop_rooms_after_commit([note.id])
           end)
 
         # `path` (the caller's own plaintext argument) is in scope here even
@@ -3553,6 +3555,15 @@ defmodule Engram.Notes do
       end
 
     :ok
+  end
+
+  # A room open on a deleted note would keep taking writes and checkpoint them
+  # into the trashed row (content, seq bump, jobs, announce). Stop it once the
+  # tombstone commits; a rolled-back delete leaves it alone. Loss-free: the
+  # tail holds every update the room appended, and a later open of a deleted
+  # note is refused at bind.
+  defp stop_rooms_after_commit(note_ids) do
+    Repo.after_commit(fn -> Enum.each(note_ids, &Engram.Notes.CrdtRegistry.terminate_room/1) end)
   end
 
   @doc """
@@ -3645,6 +3656,7 @@ defmodule Engram.Notes do
                 )
 
               :ok = UsageMeters.dec_notes_count(user.id, updated)
+              :ok = stop_rooms_after_commit(ids)
 
               # Jobs insert inside the txn, so a failure rolls them back with
               # the tombstones. insert_all trades Enqueue.enqueue's per-job
