@@ -9,6 +9,9 @@
  * so they stay pure and unit-testable; `channel.ts` supplies the live singleton.
  */
 
+import { toast } from "sonner";
+import type { Translate } from "@/i18n/translate";
+
 /**
  * `crdt:` join refusals a plain rejoin can never clear (#1430). Phoenix keeps
  * rejoining on any join error, but these come from `EngramWeb.ChannelGate`
@@ -64,6 +67,17 @@ export function isPermanentJoinRefusal(resp: unknown): resp is { reason: string 
 		typeof resp.reason === "string" &&
 		PERMANENT_JOIN_REFUSALS.has(resp.reason)
 	);
+}
+
+/**
+ * The one toast for a permanently refused `crdt:` join (#1430). A refusal
+ * rejects every held op at once, so each mutation's onError routes here and
+ * the shared id collapses them into a single toast instead of one per op.
+ */
+export function toastJoinRefused(t: Translate): void {
+	toast.error(t("Changes can't be saved: your account can't sync right now."), {
+		id: "crdt-join-refused",
+	});
 }
 
 /**

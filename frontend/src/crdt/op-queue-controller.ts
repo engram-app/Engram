@@ -35,7 +35,7 @@ export interface CrdtOpQueueControllerDeps {
 	 *  differs from the minted localId). */
 	remapId: (localId: string, serverId: string) => void;
 	/** An op dropped without delivery — surface it (log + reconcile cache). */
-	onDropSurfaced: (op: CrdtOp, reason: DropReason | "terminal" | "refused") => void;
+	onDropSurfaced: (op: CrdtOp, reason: DropReason | "terminal") => void;
 	/** A transient plan-limit block — surface once (upgrade toast). */
 	onLimitSurfaced: (op: CrdtOp, reason: string) => void;
 	persister: Persister;
@@ -52,7 +52,6 @@ export class CrdtOpQueueController {
 	private readonly mintId: () => string;
 	private readonly now: () => number;
 	private readonly tickMs: number;
-	private readonly onDropSurfaced: CrdtOpQueueControllerDeps["onDropSurfaced"];
 	private tickTimer: ReturnType<typeof setInterval> | null = null;
 	/** Set while the topic is permanently refused (#1430); cleared on a join. */
 	private refusedReason: string | null = null;
@@ -62,7 +61,6 @@ export class CrdtOpQueueController {
 		this.mintId = deps.mintId;
 		this.now = deps.now ?? (() => Date.now());
 		this.tickMs = deps.tickMs ?? TICK_MS;
-		this.onDropSurfaced = deps.onDropSurfaced;
 
 		const hooks: CrdtSendHooks = {
 			channel: deps.channel,
@@ -85,7 +83,9 @@ export class CrdtOpQueueController {
 			now: this.now,
 			options: deps.queueOptions,
 			onDrop: (op, reason) => {
-				this.settleReject(op.docId, new CrdtOpError(reason, opEvent(op)));
+				// A refusal settles callers with the server's reason, not "refused".
+				const settled = reason === "refused" ? (this.refusedReason ?? reason) : reason;
+				this.settleReject(op.docId, new CrdtOpError(settled, opEvent(op)));
 				deps.onDropSurfaced(op, reason);
 			},
 		});
@@ -131,10 +131,7 @@ export class CrdtOpQueueController {
 	 */
 	refuse(reason: string): void {
 		this.refusedReason = reason;
-		for (const op of this.queue.clear()) {
-			this.settleReject(op.docId, new CrdtOpError(reason, opEvent(op)));
-			this.onDropSurfaced(op, "refused");
-		}
+		this.queue.dropAll("refused");
 	}
 
 	/** The join was accepted: hold ops again (the handshake may still be

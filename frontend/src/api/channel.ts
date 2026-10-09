@@ -30,6 +30,7 @@ import {
 	sendCrdtCreate,
 	sendCrdtCreateWithContent,
 	sendCrdtDelete,
+	toastJoinRefused,
 } from "./crdt-ops";
 import { applyVaultTreeEvents, invalidateVaultTree } from "./queries";
 import type { NoteEvent } from "./vault-tree-patch";
@@ -625,7 +626,7 @@ export async function connectChannel({
 				queue.refuse(resp.reason);
 				if (!refusalToasted) {
 					refusalToasted = true;
-					toast.error(t("Changes can't be saved: your account can't sync right now."));
+					toastJoinRefused(t);
 				}
 			}
 		});

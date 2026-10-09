@@ -332,6 +332,17 @@ defmodule EngramWeb.LifecycleGateChannelTest do
                )
     end
 
+    # #1430 review: only the account-terminal refusals log. Transient or
+    # already-logged reasons rejoin every ~10s and would flood Loki.
+    test "a transient refusal is not logged", %{user: user, vault: vault} do
+      log =
+        capture_log(fn ->
+          assert {:error, %{reason: "rotation_in_progress"}} = join_crdt(user, vault)
+        end)
+
+      refute log =~ "channel join refused"
+    end
+
     test "crdt: still reports rotation_in_progress, not a lifecycle reason", %{
       user: user,
       vault: vault

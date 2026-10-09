@@ -140,6 +140,9 @@ defmodule EngramWeb.ChannelGate do
 
   require Logger
 
+  # Refusals `check/3` logs (#1430). See the clause that uses it.
+  @logged_refusals ~w(account_suspended account_deleted)
+
   @doc """
   `:ok`, or `{:error, payload}` where `payload` is the map to return straight
   from `join/3` (always carries a `:reason`).
@@ -161,10 +164,12 @@ defmodule EngramWeb.ChannelGate do
       :ok ->
         :ok
 
-      {:error, %{reason: reason}} = refused ->
-        # #1430: a refusal was silent, so a client stuck behind a permanent one
-        # (the SPA holds writes that never land) left no server-side trace.
-        # Logged per join attempt; clients rejoin on a backoff (~10s steady).
+      {:error, %{reason: reason}} = refused when reason in @logged_refusals ->
+        # #1430: these were silent, so a client stuck behind one (the SPA
+        # holds writes that never land) left no server-side trace. Only the
+        # account-terminal reasons: `onboarding_required` already logs in
+        # `Onboarding`, and the rest are transient or loop by design (see
+        # KNOWN TRADE-OFF), so logging them would flood Loki on every rejoin.
         Logger.warning(
           "channel join refused: #{reason}",
           Metadata.with_category(:warning, :lifecycle,
@@ -173,6 +178,9 @@ defmodule EngramWeb.ChannelGate do
           )
         )
 
+        refused
+
+      refused ->
         refused
     end
   end

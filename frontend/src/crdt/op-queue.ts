@@ -30,7 +30,7 @@ export interface CrdtOp {
 }
 
 /** Why an op was dropped without being acked. */
-export type DropReason = "ttl" | "overflow" | "max-attempts";
+export type DropReason = "ttl" | "overflow" | "max-attempts" | "refused";
 
 /** Result of an outbound send attempt. */
 export type SendResult = "ok" | "error" | "timeout";
@@ -153,13 +153,14 @@ export class CrdtOpQueue {
 		}
 	}
 
-	/** Remove every pending op WITHOUT onDrop, and persist the empty queue.
-	 *  Returns the removed ops so the caller can settle them itself. */
-	clear(): CrdtOp[] {
+	/** Drop every pending op (onDrop with `reason`) and persist the empty queue. */
+	dropAll(reason: DropReason): void {
 		const ops = this.pending();
 		this.entries.clear();
+		for (const op of ops) {
+			this.onDrop?.(op, reason);
+		}
 		this.schedulePersist();
-		return ops;
 	}
 
 	/** Cancel any pending persist timer. Call on teardown / vault switch. */

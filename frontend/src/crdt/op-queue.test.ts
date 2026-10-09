@@ -224,3 +224,22 @@ describe("CrdtOpQueue — persistence", () => {
 		}
 	});
 });
+
+describe("CrdtOpQueue — dropAll (#1430 refusal)", () => {
+	it("drops every pending op through onDrop with the given reason", () => {
+		const dropped: [string, string][] = [];
+		const q = new CrdtOpQueue({
+			send: async () => "ok",
+			now,
+			onDrop: (o, reason) => dropped.push([o.docId, reason]),
+		});
+		q.enqueue(op("a"));
+		q.enqueue(op("b", "delete"));
+		q.dropAll("refused");
+		expect(dropped).toEqual([
+			["a", "refused"],
+			["b", "refused"],
+		]);
+		expect(q.size()).toBe(0);
+	});
+});
