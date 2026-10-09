@@ -1384,4 +1384,6 @@ export default {
 	"Sync with an existing vault": "Mit einem vorhandenen Vault synchronisieren",
 	"(choose from {count} vaults)": "(Auswahl aus {count} Vaults)",
 	"Or create a new vault": "Oder einen neuen Vault erstellen",
+	"Changes can't be saved: your account can't sync right now.":
+		"Änderungen können nicht gespeichert werden: Dein Konto kann gerade nicht synchronisieren.",
 } satisfies Catalog;

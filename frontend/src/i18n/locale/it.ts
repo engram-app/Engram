@@ -1426,4 +1426,6 @@ export default {
 	"Sync with an existing vault": "Sincronizza con un archivio esistente",
 	"(choose from {count} vaults)": "(scegli tra {count} archivi)",
 	"Or create a new vault": "Oppure crea un nuovo archivio",
+	"Changes can't be saved: your account can't sync right now.":
+		"Impossibile salvare le modifiche: al momento il tuo account non può sincronizzarsi.",
 } satisfies Catalog;

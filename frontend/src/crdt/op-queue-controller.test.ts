@@ -171,3 +171,43 @@ describe("CrdtOpQueueController — settlement", () => {
 		ctrl.stop();
 	});
 });
+
+// #1430: a permanently refused crdt: join (onboarding_required, suspended,
+// deleted) never reaches joined(), so held ops would sit pending forever while
+// the UI shows optimistic success. refuse() must fail them loudly instead.
+describe("CrdtOpQueueController — permanent join refusal (#1430)", () => {
+	it("refuse() rejects held creates and deletes with the refusal reason", async () => {
+		const { ctrl } = makeController();
+		const c = ctrl.enqueueCreate("a", "a.md");
+		const d = ctrl.enqueueDelete("b");
+		ctrl.refuse("onboarding_required");
+		await expect(c).rejects.toMatchObject({ reason: "onboarding_required", event: "crdt_create" });
+		await expect(d).rejects.toMatchObject({ reason: "onboarding_required", event: "crdt_delete" });
+		expect(ctrl.size()).toBe(0);
+	});
+
+	it("refuse() drops the persisted ops so a later join cannot resurrect them", async () => {
+		const persister = memPersister();
+		const { ctrl } = makeController({ persister });
+		await ctrl.start();
+		ctrl.enqueueCreate("a", "a.md").catch(() => {});
+		ctrl.refuse("account_suspended");
+		// persist is debounced (PERSIST_DELAY_MS = 1s), hence the wider wait.
+		await vi.waitFor(async () => expect(await persister.load()).toEqual([]), { timeout: 3000 });
+		ctrl.stop();
+	});
+
+	it("rejects an op enqueued while refused, without holding it", async () => {
+		const { ctrl } = makeController();
+		ctrl.refuse("account_deleted");
+		await expect(ctrl.enqueueCreate("a", "a.md")).rejects.toBeInstanceOf(CrdtOpError);
+		expect(ctrl.size()).toBe(0);
+	});
+
+	it("a later successful join clears the refusal", async () => {
+		const { ctrl } = makeController();
+		ctrl.refuse("onboarding_required");
+		await ctrl.joined();
+		await expect(ctrl.enqueueCreate("a", "a.md")).resolves.toBe("a");
+	});
+});

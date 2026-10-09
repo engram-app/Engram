@@ -153,6 +153,15 @@ export class CrdtOpQueue {
 		}
 	}
 
+	/** Remove every pending op WITHOUT onDrop, and persist the empty queue.
+	 *  Returns the removed ops so the caller can settle them itself. */
+	clear(): CrdtOp[] {
+		const ops = this.pending();
+		this.entries.clear();
+		this.schedulePersist();
+		return ops;
+	}
+
 	/** Cancel any pending persist timer. Call on teardown / vault switch. */
 	dispose(): void {
 		if (this.persistTimer !== null) {
