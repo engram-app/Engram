@@ -34,7 +34,7 @@ defmodule Engram.Links do
   decisions.
 
   `with_tenant/2` is re-entrant for the same tenant, so the private helpers
-  (`rebind_edge/6`, `note_path_rows/2`, the candidate fetches) need no
+  (`rebind_edge/6`, `decrypt_note_paths/3`, the candidate fetches) need no
   wrapping of their own, and a caller that already holds the tenant — e.g.
   `RewriteNoteLinks` — pays nothing.
   """
@@ -807,20 +807,16 @@ defmodule Engram.Links do
   def links_for_note(user, note_id) do
     # Both outside the scope: see `resolve_target/4` above. `reload_for_dek/1`
     # reads `users`, which carries no RLS policy, so it does not need the
-    # tenant. This is the hottest of the nine: `note_json/2` calls it on every
+    # tenant. This is the hottest of the nine — `note_json/2` calls it on every
     # single-note response.
-    raw = Repo.with_tenant!(user.id, fn -> raw_links_for_note(user, note_id) end)
-    render_links(user, raw)
+    user = reload_for_dek(user)
+    {:ok, dek} = Crypto.get_dek(user)
+
+    result = Repo.with_tenant!(user.id, fn -> do_links_for_note(user, note_id, dek) end)
+    result
   end
 
-  @doc """
-  The rows `links_for_note/2` renders: the edges and their target notes' path
-  ciphertexts. Reads only, no decrypt. MUST run inside the caller's
-  `Repo.with_tenant/2`, so a write transaction can read them and decrypt them
-  (`render_links/2`) after it commits.
-  """
-  @spec raw_links_for_note(map(), binary()) :: {[NoteLink.t()], [map()]}
-  def raw_links_for_note(user, note_id) do
+  defp do_links_for_note(user, note_id, dek) do
     edges =
       Repo.all(
         from(l in NoteLink,
@@ -830,21 +826,12 @@ defmodule Engram.Links do
         skip_tenant_check: true
       )
 
-    {edges,
-     note_path_rows(user, edges |> Enum.map(& &1.target_note_id) |> Enum.reject(&is_nil/1))}
-  end
-
-  @doc "Decrypts `raw_links_for_note/2`'s rows. No DB access beyond the DEK."
-  @spec render_links(map(), {[NoteLink.t()], [map()]}) :: [map()]
-  def render_links(user, {edges, path_rows}) do
-    user = reload_for_dek(user)
-    {:ok, dek} = Crypto.get_dek(user)
-
     target_paths =
-      Map.new(path_rows, fn n ->
-        {n.id,
-         decrypt_field(n.path_ciphertext, n.path_nonce, dek, n.dek_version, :notes, :path, n.id)}
-      end)
+      decrypt_note_paths(
+        user,
+        dek,
+        edges |> Enum.map(& &1.target_note_id) |> Enum.reject(&is_nil/1)
+      )
 
     Enum.map(edges, fn edge ->
       %{
@@ -1051,9 +1038,9 @@ defmodule Engram.Links do
   defp reload_for_dek(%{encrypted_dek: blob} = user) when is_binary(blob), do: user
   defp reload_for_dek(%{id: id}), do: Engram.Accounts.get_user!(id)
 
-  defp note_path_rows(_user, []), do: []
+  defp decrypt_note_paths(_user, _dek, []), do: %{}
 
-  defp note_path_rows(user, note_ids) do
+  defp decrypt_note_paths(user, dek, note_ids) do
     Repo.all(
       from(n in Note,
         where: n.user_id == ^user.id and n.kind == "note" and n.id in ^note_ids,
@@ -1066,6 +1053,10 @@ defmodule Engram.Links do
       ),
       skip_tenant_check: true
     )
+    |> Map.new(fn n ->
+      {n.id,
+       decrypt_field(n.path_ciphertext, n.path_nonce, dek, n.dek_version, :notes, :path, n.id)}
+    end)
   end
 
   # Mirrors `Engram.Crypto`'s private dek_version dispatch (legacy rows =
