@@ -78,9 +78,13 @@ defmodule Engram.Notes.CrdtTransportTest do
       Engram.CheckpointInterleave.release(:before_tail_append, room)
 
       assert {:ok, _} = Task.await(task, 5_000)
-      # Snapshot + tail, i.e. what survives the room dying right now.
-      {:ok, row} = Notes.get_note_by_id(user, vault, note.id)
-      assert {:ok, "seed ACK"} = Notes.authoritative_content(user, row)
+      # Snapshot + tail, i.e. what survives the room dying right now. One
+      # transaction: the room's exit checkpoint may fold the tail meanwhile.
+      assert {:ok, "seed ACK"} =
+               Repo.with_tenant!(user.id, fn ->
+                 {:ok, row} = Notes.get_note_by_id(user, vault, note.id)
+                 Notes.authoritative_content(user, row)
+               end)
     end
   end
 

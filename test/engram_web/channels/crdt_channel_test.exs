@@ -1419,9 +1419,11 @@ defmodule EngramWeb.CrdtChannelTest do
 
     # Snapshot + tail: what survives the room dying at the moment of the ack.
     defp durable_text(user, vault, note_id) do
-      {:ok, row} = Notes.get_note_by_id(user, vault, note_id)
-      {:ok, text} = Notes.authoritative_content(user, row)
-      text
+      Repo.with_tenant!(user.id, fn ->
+        {:ok, row} = Notes.get_note_by_id(user, vault, note_id)
+        {:ok, text} = Notes.authoritative_content(user, row)
+        text
+      end)
     end
 
     test "crdt_msg acks an edit only after its tail append", ctx do

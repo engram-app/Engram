@@ -117,7 +117,7 @@ defmodule Engram.Notes.CrdtPersistence do
                   raise "CrdtPersistence.bind/3: crdt_state decrypt failed for note #{note_id} (#{inspect(reason)}) — refusing to bind an empty doc over existing state"
               end
 
-            {_applied, tail_echoes} =
+            {applied, tail_echoes} =
               replay_counting(doc, user, note_id, tail_rows(note_id, vault_id))
 
             # y_ex installs the doc's update monitor BEFORE bind/3 runs
@@ -136,7 +136,10 @@ defmodule Engram.Notes.CrdtPersistence do
             #
             # Only a room has the monitor: a direct bind/3 call (tests) posts
             # nothing, and a credit there would swallow its next update_v1.
-            if in_room?(), do: Process.put(:crdt_replay_echoes, snapshot_echoes + tail_echoes)
+            if in_room?() do
+              Process.put(:crdt_replay_echoes, snapshot_echoes + tail_echoes)
+              Process.put(:crdt_tail_ids, applied)
+            end
 
             # NOTE: the server no longer seeds the doc from `notes.content`
             # here. That seed made the SERVER a third writer of note content,
@@ -317,6 +320,14 @@ defmodule Engram.Notes.CrdtPersistence do
   def known_tail_ids, do: Process.get(:crdt_tail_ids, [])
 
   @doc false
+  # A checkpoint pruned these: stop offering them. Runs in the room.
+  @spec forget_tail_ids([Ecto.UUID.t()]) :: :ok
+  def forget_tail_ids(ids) do
+    Process.put(:crdt_tail_ids, known_tail_ids() -- ids)
+    :ok
+  end
+
+  @doc false
   # Whether an append failed since the last call, clearing the flag. Runs in the
   # room (see `CrdtTransport.confirm_appended/2`).
   @spec take_append_failure() :: boolean()
@@ -342,7 +353,11 @@ defmodule Engram.Notes.CrdtPersistence do
     _ =
       if CheckpointGate.acquire() do
         try do
-          Engram.Notes.CrdtCheckpoint.checkpoint(user_id, vault_id, note_id, doc)
+          # Prunes exactly the rows this doc holds (known_tail_ids/0). Rows
+          # it never folded (another writer's, or undecryptable at bind) stay.
+          Engram.Notes.CrdtCheckpoint.checkpoint(user_id, vault_id, note_id, doc,
+            prune_ids: known_tail_ids()
+          )
         after
           CheckpointGate.release()
         end
