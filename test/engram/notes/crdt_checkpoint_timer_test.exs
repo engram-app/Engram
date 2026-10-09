@@ -197,4 +197,20 @@ defmodule Engram.Notes.CrdtCheckpointTimerTest do
       assert delay == 20
     end
   end
+
+  # The room routinely exits between a tick's checkpoint and the follow-up
+  # call that tells it what was pruned. Nothing is lost (it is gone), so that
+  # race must not log as a failure.
+  test "telling an exited room about its checkpoint is quiet" do
+    room = spawn(fn -> :ok end)
+    ref = Process.monitor(room)
+    assert_receive {:DOWN, ^ref, :process, _, _}
+
+    log =
+      ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+        assert :ok = CrdtCheckpointTimer.mark_checkpointed(room, ["x"], 0)
+      end)
+
+    assert log == ""
+  end
 end

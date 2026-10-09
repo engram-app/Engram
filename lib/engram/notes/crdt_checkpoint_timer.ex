@@ -471,10 +471,7 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
       # The snapshot is durable: the room stops offering the pruned rows (rows
       # it appended since stay on its list) and, if every append that failed
       # before the snapshot is in it, acknowledges updates again.
-      :ok =
-        SharedDoc.update_doc(room_pid, fn _doc ->
-          CrdtPersistence.checkpointed(pruned, failures)
-        end)
+      mark_checkpointed(room_pid, pruned, failures)
     end
   rescue
     err -> log_read_failure(state, err)
@@ -488,6 +485,24 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     # checkpointed), so falling through is correct, and the EXIT message right
     # behind this tick shuts us down in order.
     :exit, reason -> log_exit_failure(state, reason)
+  end
+
+  @doc false
+  # Tell `room` its snapshot is durable (see CrdtPersistence.checkpointed/2).
+  # The room routinely exits between the checkpoint and this call; then there
+  # is nothing left to tell (its own unbind checkpointed), so that is not a
+  # failure and logs only at debug.
+  @spec mark_checkpointed(pid(), [Ecto.UUID.t()], non_neg_integer()) :: :ok
+  def mark_checkpointed(room_pid, pruned, failures) do
+    SharedDoc.update_doc(room_pid, fn _doc -> CrdtPersistence.checkpointed(pruned, failures) end)
+  catch
+    :exit, reason ->
+      Logger.debug(
+        "crdt checkpoint: room exited before it heard of the checkpoint",
+        Metadata.with_category(:debug, :sync, reason: Metadata.safe_exit_reason(reason))
+      )
+
+      :ok
   end
 
   # Test-only seam (`Engram.CheckpointInterleave`): nil outside those tests.
