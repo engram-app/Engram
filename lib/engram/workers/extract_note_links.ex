@@ -50,7 +50,7 @@ defmodule Engram.Workers.ExtractNoteLinks do
 
   import Ecto.Query
 
-  alias Engram.Accounts.User
+  alias Engram.Accounts
   alias Engram.Crypto
   alias Engram.Crypto.RotationGate
   alias Engram.Links
@@ -78,17 +78,13 @@ defmodule Engram.Workers.ExtractNoteLinks do
         discard
 
       {:ok, %Note{} = note, tail} ->
-        # One fresh users read serves both the rotation gate and the DEK.
-        # `users` carries no RLS policy.
-        case Repo.cross_tenant(fn -> Repo.get(User, note.user_id) end) do
-          nil ->
-            {:discard, :user_deleted}
+        # One fresh users read serves both the rotation gate and the DEK. A
+        # deleted user cascades their notes, so the fetch above discards first.
+        user = Accounts.get_user!(note.user_id)
 
-          user ->
-            case RotationGate.check_user(user) do
-              {:error, :rotation_in_progress} -> {:snooze, 60}
-              :ok -> extract(note, tail, user)
-            end
+        case RotationGate.check_user(user) do
+          {:error, :rotation_in_progress} -> {:snooze, 60}
+          :ok -> extract(note, tail, user)
         end
     end
   end
