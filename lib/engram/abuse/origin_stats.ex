@@ -47,70 +47,70 @@ defmodule Engram.Abuse.OriginStats do
   def record(user_id, user_agent) when is_binary(user_id) do
     class = OriginClassifier.classify(user_agent) |> Atom.to_string()
     key = {Date.utc_today(), user_id, class}
-    :ets.update_counter(@table, key, 1, {key, 0})
-    :ok
-  rescue
+
     # Table absent (buffer not started yet / restarting): drop the count.
-    ArgumentError -> :ok
+    if :ets.whereis(@table) != :undefined, do: :ets.update_counter(@table, key, 1, {key, 0})
+    :ok
   end
 
   @doc """
   Writes buffered counters to the table and resets them. `:all` (the buffer's
-  timer and shutdown) or one user's id (tests flush only their own, so async
-  tests never write another test's rows).
+  timer and shutdown), or a user id / list of ids (tests flush only their own,
+  so async tests never write another test's rows).
 
   The table has no RLS (see `rls_coverage_test`), so the buffer process can
   write rows for many users without a tenant set. Runs in the caller's process.
-  A failed insert is logged and its counts dropped (a deleted user's FK would
-  otherwise poison every later flush).
+
+  Each chunk is ONE statement that joins the buffered values to `users`, so a
+  deleted user's counts (FK `ON DELETE CASCADE`) are skipped without failing
+  anyone else's. A chunk that still fails (DB down) is logged and dropped.
   """
-  @spec flush(:all | Ecto.UUID.t()) :: :ok
+  @spec flush(:all | Ecto.UUID.t() | [Ecto.UUID.t()]) :: :ok
   def flush(who \\ :all) do
-    pattern = if who == :all, do: :_, else: who
-    counts = :ets.select(@table, [{{{:_, pattern, :_}, :_}, [], [:"$_"]}])
-    # take/2 per key: atomic read-and-delete, so concurrent increments between
-    # the select and the take land in the take or in a fresh counter.
-    rows = for {key, _} <- counts, [{_, n}] <- [:ets.take(@table, key)], do: row(key, n)
+    if :ets.whereis(@table) == :undefined do
+      :ok
+    else
+      keys = for {{_, uid, _} = key, _} <- :ets.tab2list(@table), wanted?(who, uid), do: key
+      # take/2 per key: atomic read-and-delete, so concurrent increments between
+      # the listing and the take land in the take or in a fresh counter.
+      rows = for key <- keys, [{_, n}] <- [:ets.take(@table, key)], do: row(key, n)
 
-    rows
-    |> Enum.chunk_every(@chunk)
-    |> Enum.each(&insert_chunk/1)
-  rescue
-    ArgumentError -> :ok
+      rows
+      |> Enum.chunk_every(@chunk)
+      |> Enum.each(&insert_chunk/1)
+    end
   end
 
-  defp row({day, user_id, class}, n) do
-    now = DateTime.utc_now()
+  defp wanted?(:all, _), do: true
+  defp wanted?(ids, uid) when is_list(ids), do: uid in ids
+  defp wanted?(id, uid), do: id == uid
 
-    %{
-      user_id: user_id,
-      day: day,
-      fingerprint_class: class,
-      request_count: n,
-      created_at: now,
-      updated_at: now
-    }
-  end
+  defp row({day, user_id, class}, n), do: {Ecto.UUID.dump!(user_id), day, class, n}
+
+  @upsert """
+  INSERT INTO client_origin_stats (user_id, day, fingerprint_class, request_count, created_at, updated_at)
+  SELECT v.user_id, v.day, v.class, v.n, $5, $5
+  FROM unnest($1::uuid[], $2::date[], $3::text[], $4::bigint[]) AS v(user_id, day, class, n)
+  JOIN users u ON u.id = v.user_id
+  ON CONFLICT (user_id, day, fingerprint_class)
+  DO UPDATE SET request_count = client_origin_stats.request_count + EXCLUDED.request_count,
+                updated_at = EXCLUDED.updated_at
+  """
 
   defp insert_chunk(rows) do
-    Repo.insert_all(
-      Row,
-      rows,
-      on_conflict:
-        from(r in Row,
-          update: [
-            set: [
-              request_count: fragment("? + EXCLUDED.request_count", r.request_count),
-              updated_at: fragment("EXCLUDED.updated_at")
-            ]
-          ]
-        ),
-      conflict_target: [:user_id, :day, :fingerprint_class],
-      skip_tenant_check: true
-    )
+    uids = Enum.map(rows, &elem(&1, 0))
+    days = Enum.map(rows, &elem(&1, 1))
+    classes = Enum.map(rows, &elem(&1, 2))
+    ns = Enum.map(rows, &elem(&1, 3))
+    now = NaiveDateTime.utc_now()
+    Repo.query!(@upsert, [uids, days, classes, ns, now])
+    :ok
   rescue
     e ->
       Logger.warning("origin stats flush dropped #{length(rows)} rows: #{Exception.message(e)}")
+  catch
+    :exit, reason ->
+      Logger.warning("origin stats flush dropped #{length(rows)} rows: exit #{inspect(reason)}")
   end
 
   @doc false

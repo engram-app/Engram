@@ -30,7 +30,13 @@ defmodule Engram.Abuse.OriginStats.Buffer do
   def handle_info(_, state), do: {:noreply, state}
 
   @impl true
-  def terminate(_reason, _state), do: OriginStats.flush()
+  def terminate(_reason, _state) do
+    # Off in test: the sandbox is gone by VM stop, so the flush is only noise.
+    if Application.get_env(:engram, :origin_stats_flush_on_terminate, true),
+      do: OriginStats.flush()
+
+    :ok
+  end
 
   defp schedule do
     if ms = Application.get_env(:engram, :origin_stats_flush_ms, 30_000) do

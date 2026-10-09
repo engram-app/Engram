@@ -42,4 +42,34 @@ defmodule Engram.Abuse.OriginStatsBufferTest do
       assert qs == []
     end
   end
+
+  test "a deleted user's counts never drop a live user's counts" do
+    live = insert(:user)
+    dead = insert(:user)
+    OriginStats.record(live.id, "curl/7.81")
+    OriginStats.record(live.id, "curl/7.81")
+    OriginStats.record(dead.id, "curl/7.81")
+    Engram.Repo.delete!(dead, skip_tenant_check: true)
+
+    {_, qs} = Engram.QueryRecorder.record(fn -> flush_both(live, dead) end)
+    assert length(qs) == 1
+    assert {2, _} = OriginStats.day_totals(live.id, Date.utc_today())
+  end
+
+  test "different day keys flush to separate rows" do
+    user = insert(:user)
+    OriginStats.record(user.id, "curl/7.81")
+    yesterday = Date.add(Date.utc_today(), -1)
+    key = {yesterday, user.id, "unknown"}
+    :ets.insert(OriginStats.table(), {key, 3})
+    OriginStats.flush(user.id)
+
+    assert {1, _} = OriginStats.day_totals(user.id, Date.utc_today())
+    assert {3, _} = OriginStats.day_totals(user.id, yesterday)
+  end
+
+  # flush/1 is per user in tests; both users' keys go through one :all-style call.
+  defp flush_both(live, dead) do
+    OriginStats.flush([live.id, dead.id])
+  end
 end
