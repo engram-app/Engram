@@ -101,6 +101,29 @@ defmodule Engram.Cache.BootstrapCachesTest do
       assert %{notes: 1} = Vaults.content_counts(user, v.id)
     end
 
+    test "attachment create, move and delete evict them on the writing node", %{
+      user: user,
+      vault: v
+    } do
+      assert %{attachments: 0} = Vaults.content_counts(user, v.id)
+
+      {:ok, _} =
+        Engram.Attachments.upsert_attachment(user, v, %{
+          "path" => "a.png",
+          "content_base64" => Base.encode64("x")
+        })
+
+      assert %{attachments: 1} = Vaults.content_counts(user, v.id)
+
+      {:ok, _} = Engram.Attachments.move_attachment(user, v, "a.png", "b.png")
+      # A move changes no count, but it still drops the cached entry.
+      assert Engram.Cache.get(:note_counts, {user.id, {:content, [v.id]}}) == :miss
+      assert %{attachments: 1} = Vaults.content_counts(user, v.id)
+
+      _ = Engram.Attachments.delete_attachment(user, v, "b.png")
+      assert %{attachments: 0} = Vaults.content_counts(user, v.id)
+    end
+
     test "keyed by owner: another user's counts never answer", %{user: user, vault: v} do
       create!(user, v, "A.md")
       assert %{notes: 1} = Vaults.content_counts(user, v.id)

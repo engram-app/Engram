@@ -269,6 +269,8 @@ defmodule Engram.Attachments do
 
       case existing do
         nil ->
+          :ok = evict_counts(user.id)
+
           %Attachment{id: fallback_id}
           |> Attachment.changeset(changeset_attrs)
           |> Repo.insert()
@@ -421,6 +423,7 @@ defmodule Engram.Attachments do
               )
               |> Repo.update_all(set: [deleted_at: now, updated_at: now, seq: seq])
 
+            if count > 0, do: :ok = evict_counts(user.id)
             {count, List.first(rows)}
           end)
           |> unwrap_tenant()
@@ -610,6 +613,8 @@ defmodule Engram.Attachments do
             # Insert the old-path tombstone (fresh uuid, path encrypted under
             # ITS OWN id-AAD). Sole purpose: surface {old_path, deleted: true}
             # in the change feed so clients trash the old path.
+            :ok = evict_counts(user.id)
+
             Repo.insert!(
               tombstone_changeset(
                 user,
@@ -975,6 +980,7 @@ defmodule Engram.Attachments do
         # batched: one Links.on_attachments_soft_deleted/2 UPDATE for the
         # whole batch, one rebind enqueue per unique basename in the batch.
         :ok = Links.on_attachments_soft_deleted(user.id, deleted_ids)
+        if deleted_ids != [], do: :ok = evict_counts(user.id)
 
         Enum.each(basename_hmacs, fn hmac ->
           _ =
@@ -1576,4 +1582,9 @@ defmodule Engram.Attachments do
   defp unwrap_tenant({:ok, {:error, _} = err}), do: err
   defp unwrap_tenant({:ok, result}), do: {:ok, result}
   defp unwrap_tenant({:error, _} = err), do: err
+
+  # The cached vault content counts (`:note_counts`). The note_counts_changed
+  # trigger evicts every node on commit; this makes the writing node coherent
+  # without waiting for its NOTIFY. Engram.Cache.evict/2 waits for the commit.
+  defp evict_counts(user_id), do: Engram.Cache.evict(:note_counts, user_id)
 end
