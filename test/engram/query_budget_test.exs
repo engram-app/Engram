@@ -24,36 +24,39 @@ defmodule Engram.QueryBudgetTest do
   # one statement (-1).
   # Task 8: OriginStats.record is an ETS counter bumped in memory and flushed
   # by a timer (-1 on every MCP tools/call: the per-call upsert is gone).
+  # Task 10a: a top-level with_tenant is 3 round trips, not 4 (BEGIN,
+  # tenant_enter, COMMIT; the COMMIT resets tenant + role, so tenant_exit is
+  # gone). Every path drops by its number of tenant transactions.
   @budgets %{
-    "mcp get_notes" => 6,
-    "mcp write_note update" => 16,
-    "mcp append_to_note" => 16,
-    "mcp edit_note" => 16,
-    "mcp delete_note" => 14,
-    "GET sync/manifest" => 11,
-    "GET notes/*path" => 11,
-    "POST notes update" => 28,
-    "POST notes create" => 34,
-    "POST notes/append" => 22,
-    "POST notes/rename" => 46,
-    "DELETE notes/*path" => 18,
-    "GET /api/bootstrap" => 22,
-    "GET folders" => 10,
-    "GET tags" => 5,
+    "mcp get_notes" => 5,
+    "mcp write_note update" => 15,
+    "mcp append_to_note" => 15,
+    "mcp edit_note" => 15,
+    "mcp delete_note" => 13,
+    "GET sync/manifest" => 9,
+    "GET notes/*path" => 9,
+    "POST notes update" => 26,
+    "POST notes create" => 31,
+    "POST notes/append" => 20,
+    "POST notes/rename" => 41,
+    "DELETE notes/*path" => 16,
+    "GET /api/bootstrap" => 18,
+    "GET folders" => 8,
+    "GET tags" => 4,
     # Task 7b. The old "crdt_msg update" (40) was a keystroke (7) plus a
     # checkpoint tick (33) that a timer happened to fire inside the window.
     # Split, and the tick is driven by hand so both counts are exact.
     # delta: the one-statement append in its tenant txn.
-    "CRDT delta" => 5,
-    # tick: one checkpoint txn (11: note read, next_seq, note write, tail
-    # prune, revisions read + 2 inserts) plus the dispatcher job insert and
-    # Oban's pg_notify.
-    "CRDT checkpoint tick" => 13,
-    # idle (was 48): bind 6 + delta 5 + the exit checkpoint 13.
-    "CRDT crdt_doc_update idle" => 24,
-    # open (was 25 at bee71923): the channel's note_in_vault? 5 + bind 6 +
-    # the announce's path read 5.
-    "CRDT room open" => 16
+    "CRDT delta" => 4,
+    # tick: one checkpoint txn (10: BEGIN, tenant_enter, note read, next_seq,
+    # note write, tail prune, revisions read + 2 inserts, COMMIT) plus the
+    # dispatcher job insert and Oban's pg_notify.
+    "CRDT checkpoint tick" => 12,
+    # idle (was 48): bind 5 + delta 4 + the exit checkpoint 12.
+    "CRDT crdt_doc_update idle" => 21,
+    # open (was 25 at bee71923): the channel's note_in_vault? 4 + bind 5 +
+    # the announce's path read 4.
+    "CRDT room open" => 13
   }
 
   setup %{conn: conn} do
@@ -92,10 +95,18 @@ defmodule Engram.QueryBudgetTest do
   # itself when `true`), as on a long-lived prod node. The file is async: false,
   # so no other test's setup can clear them between the warm-up and the
   # measurement.
+  #
+  # `tenant_exit_sandbox` is dropped from the count: the sandbox runs every
+  # transaction as a savepoint, so `with_tenant` must reset tenant + role by
+  # hand there, but in prod a top-level block's COMMIT does it for free (Task
+  # 10a, pinned on a real pool by `Engram.Repo.TenantTxnCommitResetTest`). A
+  # `tenant_exit` from a block nested in a plain transaction is real and
+  # still counts.
   defp measure(name, warm, fun) do
     Engram.DataCase.clear_request_caches()
     if warm == true, do: fun.(), else: warm.()
-    {result, qs} = QueryRecorder.record(fun)
+    {result, recorded} = QueryRecorder.record(fun)
+    qs = Enum.reject(recorded, &(&1.source == "tenant_exit_sandbox"))
     budget = Map.fetch!(@budgets, name)
     report = "#{name}: #{length(qs)} queries (budget #{budget})\n" <> QueryRecorder.format(qs)
 
