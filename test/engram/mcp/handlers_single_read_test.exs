@@ -235,8 +235,18 @@ defmodule Engram.MCP.HandlersSingleReadTest do
     :ok =
       Engram.Notes.CrdtCheckpoint.checkpoint(user.id, vault.id, stale.id, base, prune_ids: ids)
 
-    assert {:ok, text} = Engram.Notes.authoritative_content(user, stale)
+    {result, qs} =
+      QueryRecorder.record(fn -> Engram.Notes.authoritative_content(user, stale) end)
+
+    assert {:ok, text} = result
     assert text =~ "FOLDED-", text
+
+    # One statement reads the snapshot and the tail: a re-read split in two
+    # would leave the gap open again.
+    report = QueryRecorder.format(qs)
+    reads = Enum.reject(qs, &(&1.source in ["tenant_txn", "tenant_enter", "tenant_exit"]))
+    assert [%{sql: sql}] = reads, report
+    assert sql =~ ~s(FROM "notes") and sql =~ "crdt_update_log", report
   end
 
   defp snapshot_of(user, note) do

@@ -1492,13 +1492,15 @@ defmodule EngramWeb.CrdtChannelTest do
       failing = delta_frame(socket, note.id, "LOST-")
       fine = delta_frame(other, note.id, "KEPT-")
 
+      # Only the first append fails: `failing`, pushed alone first.
       fail_appends(1)
-      ref_other = push_edit(other, note.id, fine)
       ref = push_edit(socket, note.id, failing)
-
-      refute_reply ref, :ok, _, 1_000
       assert_reply ref, :error, %{reason: "room_unavailable"}, 3000
-      refute_reply ref_other, :ok, _, 200
+
+      # The other socket's own append succeeds, but its confirmation must not
+      # clear the failure: `failing` is still only in the room's memory.
+      ref_other = push_edit(other, note.id, fine)
+      assert_reply ref_other, :error, %{reason: "room_unavailable"}, 3000
     end
 
     test "a retry after a failed append is not acked until a checkpoint commits", ctx do
