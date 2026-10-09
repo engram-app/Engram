@@ -401,6 +401,11 @@ defmodule Engram.Notes do
     * `announce_vault_populated: false` — suppress the `vault_populated`
       broadcast for a write the SERVER originated. See the call site; the
       welcome-note seed is the only caller that passes it.
+    * `locked_note: note`: the row `get_note_for_update/3` locked in this
+      transaction. The write uses it instead of looking the path up again.
+    * `merge_doc: doc`: with `locked_note:`, the tail-replayed doc from
+      `authoritative_doc/2` that the new content was derived from. The merge
+      diffs into it instead of replaying the tail again.
     * `broadcast_from: pid` — emit the `note_changed` broadcast via
       `Endpoint.broadcast_from/4` so the given subscriber (the pushing
       channel process) is excluded. Channel pushes pass `self()`; HTTP
@@ -466,6 +471,7 @@ defmodule Engram.Notes do
           lookup_and_write(
             %{
               query: lookup_query,
+              locked: Keyword.get(opts, :locked_note),
               client_id: client_id,
               vault: vault,
               base: base_attrs,
@@ -474,7 +480,8 @@ defmodule Engram.Notes do
               folder: folder,
               opts: opts
             },
-            1
+            # A locked row cannot move under us, so there is nothing to retry.
+            if(Keyword.has_key?(opts, :locked_note), do: 0, else: 1)
           )
         end)
 
@@ -499,7 +506,7 @@ defmodule Engram.Notes do
           # keep the same hash (e.g. a tags repair) but did persist a change.
           _ =
             if prev_hash != note.content_hash or Keyword.get(opts, :force, false) do
-              :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note, opts)
+              :ok = broadcast_change(user, vault.id, "upsert", note.path, note, opts)
             end
 
           if is_nil(prev_hash) do
@@ -562,7 +569,7 @@ defmodule Engram.Notes do
 
           note = decrypt_or_raise!(note, user)
           maybe_log_path_rewrite(user, vault, path, sanitized_path, note.id)
-          :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note, opts)
+          :ok = broadcast_change(user, vault.id, "upsert", note.path, note, opts)
           {:ok, note}
 
         {:ok, {:conflict, existing}} ->
@@ -1919,6 +1926,7 @@ defmodule Engram.Notes do
       true ->
         do_rewrite_note(existing, base_attrs, user, sanitized_path, folder,
           db_mode: Keyword.get(opts, :db_mode),
+          merge_doc: Keyword.get(opts, :merge_doc),
           actor: Keyword.fetch!(opts, :actor),
           recording: Keyword.fetch!(opts, :recording)
         )
@@ -1969,7 +1977,7 @@ defmodule Engram.Notes do
   # contention, and an unbounded loop against a hot note is a livelock.
   defp lookup_and_write(%{} = w, retries) do
     result =
-      case Repo.one(w.query) do
+      case w.locked || Repo.one(w.query) do
         nil ->
           upsert_pathless(w)
 
@@ -2047,7 +2055,8 @@ defmodule Engram.Notes do
              user,
              existing.id,
              existing.vault_id,
-             sanitized_path
+             sanitized_path,
+             Keyword.get(opts, :merge_doc)
            ) do
       merged_attrs = %{
         base_attrs
@@ -2187,7 +2196,35 @@ defmodule Engram.Notes do
   # Returns the merged text, with its content_hash, title (`path` is the
   # fallback) and tags, all from the MERGED result — the public-API contract
   # is "server merges, never clobbers."
-  defp maybe_merge_crdt(existing, incoming_content, user, note_id, vault_id, path) do
+  defp maybe_merge_crdt(
+         existing,
+         incoming_content,
+         user,
+         note_id,
+         vault_id,
+         path,
+         merge_doc \\ nil
+       )
+
+  # A locked read-modify-write: `merge_doc` is this row's snapshot with the tail
+  # already replayed, and `incoming_content` was derived from its projection.
+  # Diffing two-way into it applies exactly the caller's edit. The three-way
+  # path below would re-insert every tail edit, because the incoming text
+  # already carries them and the snapshot ancestor does not.
+  defp maybe_merge_crdt(
+         %Note{},
+         incoming_content,
+         user,
+         note_id,
+         _vault_id,
+         path,
+         %Yex.Doc{} = doc
+       ) do
+    with {:ok, merged} <- CrdtBridge.merge_plaintext_into_doc(doc, incoming_content),
+         do: crdt_merge_result(merged, user, note_id, path)
+  end
+
+  defp maybe_merge_crdt(existing, incoming_content, user, note_id, vault_id, path, nil) do
     prior_state =
       case existing do
         %Note{} = note ->
@@ -2270,8 +2307,13 @@ defmodule Engram.Notes do
           end
       end
 
-    with {:ok, %{state: new_state, text: merged_text}} <- merge_result,
-         {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(new_state, user, note_id),
+    with {:ok, merged} <- merge_result, do: crdt_merge_result(merged, user, note_id, path)
+  catch
+    {:crdt_decrypt, err} -> err
+  end
+
+  defp crdt_merge_result(%{state: new_state, text: merged_text}, user, note_id, path) do
+    with {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(new_state, user, note_id),
          {:ok, key} <- Crypto.dek_content_hash_key(user) do
       {title, tags} = Helpers.extract_title_and_tags(merged_text, path)
 
@@ -2285,8 +2327,6 @@ defmodule Engram.Notes do
          tags: tags
        }}
     end
-  catch
-    {:crdt_decrypt, err} -> err
   end
 
   @doc """
@@ -2297,6 +2337,42 @@ defmodule Engram.Notes do
     case find_note_by_path(user, vault, path) do
       {:ok, nil} -> {:error, :not_found}
       {:ok, note} -> {:ok, decrypt_or_raise!(note, user)}
+      _ -> {:error, :not_found}
+    end
+  end
+
+  @doc """
+  `get_note/3` for a read-modify-write: the row comes back locked `FOR UPDATE`
+  inside the caller's tenant transaction, so concurrent writers of this note
+  serialize behind it until that transaction commits. Raises outside one.
+
+  The vault row is locked first, in the same statement. Every other note writer
+  takes the vault's seq lock (`Vaults.next_seq!/2`) BEFORE it updates the note
+  row, so taking the note first would deadlock against them. Pass the result to
+  `upsert_note/4` as `locked_note:`.
+  """
+  @spec get_note_for_update(map(), map(), String.t()) :: {:ok, Note.t()} | {:error, :not_found}
+  def get_note_for_update(user, vault, path) do
+    unless Repo.in_transaction?() and Process.get(:engram_tenant) == user.id,
+      do:
+        raise(
+          ArgumentError,
+          "get_note_for_update/3 must run inside the user's tenant transaction"
+        )
+
+    with {:ok, query} <- note_by_path_query(user, vault, path),
+         %Note{} = note <-
+           query
+           |> where(
+             fragment(
+               "EXISTS (SELECT 1 FROM vaults WHERE id = ? FOR NO KEY UPDATE)",
+               type(^vault.id, Ecto.UUID)
+             )
+           )
+           |> lock("FOR UPDATE")
+           |> Repo.one() do
+      {:ok, decrypt_or_raise!(note, user)}
+    else
       _ -> {:error, :not_found}
     end
   end
@@ -2350,9 +2426,22 @@ defmodule Engram.Notes do
   """
   @spec authoritative_content(map(), Note.t()) :: {:ok, String.t()} | {:error, term()}
   def authoritative_content(user, %Note{} = note) do
+    with {:ok, text, _doc} <- authoritative_doc(user, note), do: {:ok, text}
+  end
+
+  @doc """
+  `authoritative_content/2` plus the tail-replayed doc it projected (nil for a
+  row with no `crdt_state`). A read-modify-write on a row it holds locked passes
+  the doc to `upsert_note/4` as `merge_doc:`, so the write merges into the doc
+  the new text was derived from instead of replaying the tail a second time.
+  The doc is consumed by that merge; use it once.
+  """
+  @spec authoritative_doc(map(), Note.t()) ::
+          {:ok, String.t(), Yex.Doc.t() | nil} | {:error, term()}
+  def authoritative_doc(user, %Note{} = note) do
     case Crypto.decrypt_crdt_state(note, user) do
       {:ok, nil} ->
-        {:ok, note.content || ""}
+        {:ok, note.content || "", nil}
 
       {:ok, state} ->
         with {:ok, doc} <- CrdtBridge.doc_from_state(state) do
@@ -2363,7 +2452,7 @@ defmodule Engram.Notes do
             _replayed = CrdtPersistence.replay_tail(doc, user, note.id, note.vault_id)
           end)
 
-          {:ok, CrdtBridge.project_doc(doc)}
+          {:ok, CrdtBridge.project_doc(doc), doc}
         end
 
       {:error, _} = err ->
@@ -5968,7 +6057,7 @@ defmodule Engram.Notes do
   end
 
   @spec broadcast_change(
-          Ecto.UUID.t(),
+          Ecto.UUID.t() | Engram.Accounts.User.t(),
           Ecto.UUID.t(),
           String.t(),
           String.t(),
@@ -6051,7 +6140,7 @@ defmodule Engram.Notes do
     :ok
   end
 
-  defp broadcast_change(user_id, vault_id, "upsert", path, %Note{} = note, opts) do
+  defp broadcast_change(user, vault_id, "upsert", path, %Note{} = note, opts) do
     # Protocol rev — dual-field transition: the payload carries BOTH
     # `content` and `content_hash` for one release. `content` is dropped the
     # release after the plugin min-version floor covers the hash-only
@@ -6086,6 +6175,7 @@ defmodule Engram.Notes do
     base = if is_binary(note.content), do: Map.put(base, "content", note.content), else: base
     payload = Helpers.scrub_broadcast_payload(base)
 
+    user_id = if is_binary(user), do: user, else: user.id
     topic = "sync:#{user_id}:#{vault_id}"
 
     _ =
@@ -6109,8 +6199,15 @@ defmodule Engram.Notes do
     #
     # After commit: the room push is a GenServer.call into a process with its
     # own connection, which would wait on this transaction's row locks.
+    #
+    # A caller holding the user struct (upsert_note) also holds the full row
+    # it just wrote, so deliver-out takes both and reads neither back. Callers
+    # passing an id (rename, folder cascade) may hold a meta-only row whose
+    # crdt_state was never loaded, so deliver-out re-reads it.
+    deliver_note = if is_binary(user), do: note.id, else: note
+
     Repo.after_commit(fn ->
-      CrdtDeliver.deliver_out(user_id, vault_id, path, note.id, note.content || "")
+      CrdtDeliver.deliver_out(user, vault_id, path, deliver_note, note.content || "")
     end)
 
     :ok

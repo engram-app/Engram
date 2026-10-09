@@ -477,4 +477,38 @@ defmodule Engram.Notes.CrdtMergePathTest do
     assert Enum.any?(theirs, &(&1.id == foreign_id)),
            "the row vanished entirely — the filter is excluding its OWN vault too"
   end
+
+  # The diagnostic runs in memory over the one tail read (no count(*) query).
+  test "a note whose tail rows are ALL foreign still logs the #1318 warning", ctx do
+    %{user: user, vault: vault} = ctx
+    {:ok, other_vault, _} = Vaults.register_vault(user, "Elsewhere", Ecto.UUID.generate())
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "hidden.md", "content" => "X"}, actor: "api")
+
+    {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state("foreign_update", user, note.id)
+
+    Repo.with_tenant(user.id, fn ->
+      Repo.insert_all(CrdtUpdateLog, [
+        %{
+          id: Ecto.UUID.generate(),
+          note_id: note.id,
+          user_id: user.id,
+          vault_id: other_vault.id,
+          update_ciphertext: ct,
+          update_nonce: nonce,
+          inserted_at: DateTime.utc_now()
+        }
+      ])
+    end)
+
+    {{:ok, rows}, log} =
+      ExUnit.CaptureLog.with_log(fn ->
+        Repo.with_tenant(user.id, fn -> CrdtPersistence.tail_rows(note.id, vault.id) end)
+      end)
+
+    assert rows == []
+    assert log =~ "ALL belong to another vault"
+    assert log =~ "hidden_rows=1"
+  end
 end

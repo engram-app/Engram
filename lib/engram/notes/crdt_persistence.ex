@@ -341,13 +341,17 @@ defmodule Engram.Notes.CrdtPersistence do
   """
   @spec tail_rows(String.t(), String.t()) :: [struct()]
   def tail_rows(note_id, vault_id) do
-    rows =
+    # Read by note only and split by vault in memory: the foreign-vault check
+    # below then costs no second query. Foreign rows only exist in the #1318
+    # corruption shape, so the extra rows fetched are almost always none.
+    {rows, foreign} =
       CrdtUpdateLog
-      |> where([l], l.note_id == ^note_id and l.vault_id == ^vault_id)
+      |> where([l], l.note_id == ^note_id)
       |> order_by([l], asc: l.inserted_at)
       |> Repo.all()
+      |> Enum.split_with(&(&1.vault_id == vault_id))
 
-    warn_on_foreign_vault_rows(note_id, vault_id, length(rows))
+    warn_on_foreign_vault_rows(note_id, vault_id, rows, length(foreign))
     rows
   end
 
@@ -358,25 +362,19 @@ defmodule Engram.Notes.CrdtPersistence do
   # That is better for correctness and worse for diagnosis, which is only an
   # acceptable trade if the state is detectable — hence this.
   #
-  # Costs one COUNT against the (note_id, inserted_at) index, and only when the
-  # scoped read came back EMPTY, i.e. the case where an invisible row would
-  # otherwise be indistinguishable from "no tail at all". A note with rows is
-  # already proving the filter matches.
-  defp warn_on_foreign_vault_rows(_note_id, _vault_id, n) when n > 0, do: :ok
+  # Only warns when the scoped rows are EMPTY, i.e. the case where an invisible
+  # row would otherwise be indistinguishable from "no tail at all". A note with
+  # rows is already proving the filter matches.
+  defp warn_on_foreign_vault_rows(_note_id, _vault_id, [_ | _], _hidden), do: :ok
+  defp warn_on_foreign_vault_rows(_note_id, _vault_id, [], 0), do: :ok
 
-  defp warn_on_foreign_vault_rows(note_id, vault_id, 0) do
-    case Repo.aggregate(where(CrdtUpdateLog, [l], l.note_id == ^note_id), :count) do
-      0 ->
-        :ok
-
-      hidden ->
-        Logger.warning(
-          "crdt tail rows exist for this note but ALL belong to another vault — " <>
-            "they can neither be folded nor pruned (#1318 corruption shape): " <>
-            "note_id=#{note_id} vault_id=#{vault_id} hidden_rows=#{hidden}",
-          Metadata.with_category(:warning, :sync, note_id: note_id)
-        )
-    end
+  defp warn_on_foreign_vault_rows(note_id, vault_id, [], hidden) do
+    Logger.warning(
+      "crdt tail rows exist for this note but ALL belong to another vault — " <>
+        "they can neither be folded nor pruned (#1318 corruption shape): " <>
+        "note_id=#{note_id} vault_id=#{vault_id} hidden_rows=#{hidden}",
+      Metadata.with_category(:warning, :sync, note_id: note_id)
+    )
   end
 
   @doc """

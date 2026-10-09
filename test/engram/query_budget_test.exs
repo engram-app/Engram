@@ -15,25 +15,27 @@ defmodule Engram.QueryBudgetTest do
   # re-reads the rotation lock from the DB for writes, because the request's
   # user now comes from the :user cache. Task 6: each MCP tool call runs in ONE
   # tenant transaction, so the tool's separate with_tenant blocks merge (4 each)
-  # and Oban's own begin/commit pairs nest into it.
+  # and Oban's own begin/commit pairs nest into it. Task 7: MCP read-modify-
+  # writes read the note once (locked) and replay the tail once; the tail's
+  # count(*) diagnostic and deliver-out's users + notes re-read are gone.
   @budgets %{
     "mcp get_notes" => 7,
-    "mcp write_note update" => 24,
-    "mcp append_to_note" => 28,
-    "mcp edit_note" => 27,
+    "mcp write_note update" => 17,
+    "mcp append_to_note" => 17,
+    "mcp edit_note" => 17,
     "mcp delete_note" => 15,
     "GET sync/manifest" => 11,
     "GET notes/*path" => 11,
-    "POST notes update" => 35,
-    "POST notes create" => 40,
-    "POST notes/append" => 46,
+    "POST notes update" => 28,
+    "POST notes create" => 34,
+    "POST notes/append" => 38,
     "POST notes/rename" => 46,
     "DELETE notes/*path" => 18,
     "GET /api/bootstrap" => 22,
     "GET folders" => 10,
     "GET tags" => 5,
     "CRDT crdt_msg update" => 40,
-    "CRDT crdt_doc_update idle" => 49
+    "CRDT crdt_doc_update idle" => 48
   }
 
   setup %{conn: conn} do
