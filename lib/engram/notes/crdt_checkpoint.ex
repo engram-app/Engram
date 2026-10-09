@@ -287,38 +287,42 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
         case outcome do
           {prev_hash, new_hash, path, embed_priority, finalize?, renamed_title, pruned} ->
-            # Post-commit, like the announce below: the name index learns a
-            # title the checkpoint just re-derived.
-            _ =
-              if renamed_title,
-                do: Engram.Notes.NameIndex.announce(vault_id, note_id, path, renamed_title)
+            :ok =
+              post_commit(note_id, fn ->
+                interleave_hook(:post_commit)
 
-            _ =
-              if prev_hash != new_hash do
-                # One dispatcher job, after the commit (#1710): it enqueues
-                # embed, links and finalize with their own uniqueness.
+                # Post-commit, like the announce below: the name index learns a
+                # title the checkpoint just re-derived.
                 _ =
-                  Enqueue.enqueue(
-                    NoteCommitted.job(note_id, user_id,
-                      embed_priority: embed_priority,
-                      finalize?: finalize?
-                    ),
-                    "note_committed"
-                  )
+                  if renamed_title,
+                    do: Engram.Notes.NameIndex.announce(vault_id, note_id, path, renamed_title)
 
-                # Deliver-out gap: a web-editor edit lands ONLY via this checkpoint,
-                # which (unlike REST/MCP writes) never announced. A client not
-                # actively enrolled in the room — e.g. Obsidian — thus never
-                # discovered the edit, live or on next pull. Announce so it opens a
-                # room and pulls the just-persisted state. Announce-ONLY (not full
-                # deliver_out): live observers already converged via real-time frame
-                # relay, and the room-state push would `GenServer.call` self on the
-                # unbind path (checkpoint runs inside the room process there).
-                # `prev_hash != new_hash` fires only on a committed content change
-                # (compaction and the #902 stale-abort both return equal hashes),
-                # so idle compactions and aborted writes raise no spurious re-pull.
-                CrdtDeliver.announce_ready(user_id, vault_id, path, note_id)
-              end
+                if prev_hash != new_hash do
+                  # One dispatcher job, after the commit (#1710): it enqueues
+                  # embed, links and finalize with their own uniqueness.
+                  _ =
+                    Enqueue.enqueue(
+                      NoteCommitted.job(note_id, user_id,
+                        embed_priority: embed_priority,
+                        finalize?: finalize?
+                      ),
+                      "note_committed"
+                    )
+
+                  # Deliver-out gap: a web-editor edit lands ONLY via this checkpoint,
+                  # which (unlike REST/MCP writes) never announced. A client not
+                  # actively enrolled in the room — e.g. Obsidian — thus never
+                  # discovered the edit, live or on next pull. Announce so it opens a
+                  # room and pulls the just-persisted state. Announce-ONLY (not full
+                  # deliver_out): live observers already converged via real-time frame
+                  # relay, and the room-state push would `GenServer.call` self on the
+                  # unbind path (checkpoint runs inside the room process there).
+                  # `prev_hash != new_hash` fires only on a committed content change
+                  # (compaction and the #902 stale-abort both return equal hashes),
+                  # so idle compactions and aborted writes raise no spurious re-pull.
+                  CrdtDeliver.announce_ready(user_id, vault_id, path, note_id)
+                end
+              end)
 
             if pruned == :not_written, do: :skipped, else: {:written, pruned}
 
@@ -368,6 +372,31 @@ defmodule Engram.Notes.CrdtCheckpoint do
       )
 
       :skipped
+  end
+
+  # The write is committed: a raise or exit in its follow-up work must not
+  # reach do_checkpoint's rescue and report :skipped (the room would keep
+  # refusing acks for a durable state). Logged as a post-commit failure; the
+  # outcome stays written. The reconcile sweeps backstop a lost enqueue.
+  defp post_commit(note_id, fun) do
+    _ = fun.()
+    :ok
+  rescue
+    err ->
+      log_post_commit_failure(note_id, Metadata.safe_reason(err), __STACKTRACE__)
+  catch
+    :exit, reason ->
+      log_post_commit_failure(note_id, Metadata.safe_exit_reason(reason), __STACKTRACE__)
+  end
+
+  defp log_post_commit_failure(note_id, reason, stacktrace) do
+    Logger.error(
+      "crdt checkpoint post-commit work failed; the write is committed note_id=#{note_id} " <>
+        "error=#{reason} at=#{Metadata.format_location(stacktrace)}",
+      Metadata.with_category(:error, :sync, note_id: note_id)
+    )
+
+    :ok
   end
 
   defp live_state(state) when is_binary(state), do: {:ok, state}

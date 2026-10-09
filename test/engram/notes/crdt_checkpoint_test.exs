@@ -135,6 +135,38 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     assert after_run.content_hash == before.content_hash
   end
 
+  # The write is committed before the announce / enqueue run. A raise there
+  # used to reach the function's rescue and report :skipped, which keeps a
+  # room refusing acks for a state that is durable.
+  test "a raise after the commit is logged and the outcome stays written", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    prev = Application.get_env(:engram, :checkpoint_interleave_hook)
+
+    Application.put_env(:engram, :checkpoint_interleave_hook, fn
+      :post_commit -> raise "post-commit boom"
+      _ -> :ok
+    end)
+
+    on_exit(fn ->
+      if prev,
+        do: Application.put_env(:engram, :checkpoint_interleave_hook, prev),
+        else: Application.delete_env(:engram, :checkpoint_interleave_hook)
+    end)
+
+    {:ok, doc} = CrdtBridge.doc_from_state(nil)
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "after")
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:written, _} = CrdtCheckpoint.checkpoint_pruning(user.id, vault.id, note.id, doc)
+      end)
+
+    assert log =~ "post-commit"
+    {:ok, row} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    refute row.content_hash == note.content_hash
+  end
+
   test "checkpoint emits doc bloat telemetry", ctx do
     %{user: user, vault: vault, note: note} = ctx
 
