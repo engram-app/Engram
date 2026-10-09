@@ -35,8 +35,40 @@ defmodule Engram.Onboarding.GateCache do
     end
   end
 
-  # The stored value is the verdict's own deadline, so a caller-chosen ttl_ms
-  # (shorter than the registry TTL) is honoured.
+  @doc """
+  `:ok` on a cached PASS; otherwise runs `derive` (the authoritative slow
+  path). A `:pass` result is returned as `:ok` and stored through
+  `Engram.Cache.fetch/3`'s pending-marker guard, so an eviction that lands
+  while `derive` runs (a cancellation committing after its reads) wins and the
+  PASS is not stored. Any other result is returned as is, uncached.
+  """
+  @spec verdict(Ecto.UUID.t(), (-> :pass | result)) :: :ok | result when result: term()
+  def verdict(user_id, derive) do
+    if passed?(user_id) do
+      :ok
+    else
+      # A PASS past its own deadline (mark_passed/2 with a short ttl) is
+      # still a row, which fetch/3 would serve.
+      if match?({:ok, _}, Cache.get(:onboarding_gate, user_id)),
+        do: :ok = Cache.evict_local(:onboarding_gate, user_id)
+
+      loader = fn ->
+        case derive.() do
+          :pass -> System.monotonic_time(:millisecond) + @ttl_ms
+          other -> Cache.no_store(other)
+        end
+      end
+
+      case Cache.fetch(:onboarding_gate, user_id, loader) do
+        deadline when is_integer(deadline) -> :ok
+        other -> other
+      end
+    end
+  end
+
+  # Seeds a PASS with no race guard (tests). Production stores through
+  # verdict/2. The stored value is the verdict's own deadline, so a
+  # caller-chosen ttl_ms (shorter than the registry TTL) is honoured.
   @spec mark_passed(Ecto.UUID.t(), non_neg_integer()) :: :ok
   def mark_passed(user_id, ttl_ms \\ @ttl_ms) do
     Cache.put(:onboarding_gate, user_id, System.monotonic_time(:millisecond) + ttl_ms)

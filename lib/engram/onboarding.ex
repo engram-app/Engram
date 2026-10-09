@@ -258,9 +258,7 @@ defmodule Engram.Onboarding do
   """
   @spec gate(Engram.Accounts.User.t(), keyword()) :: :ok | {:error, [String.t()], atom()}
   def gate(%{id: user_id} = user, opts \\ []) do
-    if GateCache.passed?(user_id) do
-      :ok
-    else
+    GateCache.verdict(user_id, fn ->
       # Re-read the row. `status/1` derives `subscription_ok` partly from
       # `user.free_tier_accepted_at` on the STRUCT, while every other input
       # (terms, profile, vault, subscription row) is queried fresh. That was
@@ -283,13 +281,11 @@ defmodule Engram.Onboarding do
       # outright before reaching here; this is the belt for any HTTP caller,
       # where `Plugs.Auth` has already 401'd a missing user in practice.
       derive_gate(user, status(user), opts)
-    end
+    end)
   end
 
-  defp derive_gate(user, %{next_step: :done}, _opts) do
-    :ok = GateCache.mark_passed(user.id)
-    :ok
-  end
+  # `:pass` is cached by GateCache.verdict/2; `:ok` is a pass it must not cache.
+  defp derive_gate(_user, %{next_step: :done}, _opts), do: :pass
 
   defp derive_gate(user, status, opts) do
     %{next_step: next_step} = status
@@ -301,8 +297,7 @@ defmodule Engram.Onboarding do
         # yet (e.g. obsidian user mid-flow whose plugin is about to first-sync).
         # Runtime traffic permission and wizard state are intentionally
         # decoupled — see `next_step/5`.
-        :ok = GateCache.mark_passed(user.id)
-        :ok
+        :pass
 
       # Deliberately NOT cached. The cache is shared with the channel joins,
       # which enforce the strict rule — writing a relaxed PASS here would hand
