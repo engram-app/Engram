@@ -668,8 +668,8 @@ defmodule Engram.Accounts do
     #
     # `api_keys_discovery` (the no-tenant read policy) is scoped TO
     # `engram_key_lookup` by the #1867 contract migration, after which plain
-    # engram_app sees no keys without a tenant. The key_hash read alone runs as
-    # that role, so the lookup role needs SELECT on api_keys only.
+    # engram_app sees no keys without a tenant. The key read (with its vault
+    # scope) runs as that role: SELECT on api_keys and api_key_vaults.
     # Cost: one transaction and two extra round trips per API-key MISS; the
     # key is cached by hash (`:api_key`), evicted by the `api_keys_changed`
     # trigger on revoke (row delete) and by `revoke_api_key/2` locally.
@@ -702,9 +702,26 @@ defmodule Engram.Accounts do
             source: "api_key_lookup_enter"
           )
 
-        key =
+        # Key and scope in ONE statement (one snapshot): read apart, a
+        # CleanupVault committing between them (key and mapping rows deleted
+        # together) returned the key with `:all` scope. No mapping rows means
+        # unrestricted.
+        row =
           Repo.cross_tenant(fn ->
-            Repo.one(from(k in ApiKey, where: k.key_hash == ^key_hash))
+            Repo.one(
+              from(k in ApiKey,
+                where: k.key_hash == ^key_hash,
+                select:
+                  {k,
+                   type(
+                     fragment(
+                       "ARRAY(SELECT v.vault_id FROM public.api_key_vaults AS v WHERE v.api_key_id = ?)",
+                       k.id
+                     ),
+                     {:array, Ecto.UUID}
+                   )}
+              )
+            )
           end)
 
         # SET LOCAL survives a savepoint release, so reset inside (see
@@ -714,8 +731,11 @@ defmodule Engram.Accounts do
             source: "api_key_lookup_exit"
           )
 
-        # After the role reset: the lookup role has no grant on api_key_vaults.
-        key && {key, Engram.Vaults.load_key_scope(key.id)}
+        case row do
+          nil -> nil
+          {key, []} -> {key, :all}
+          {key, vault_ids} -> {key, vault_ids}
+        end
       end)
 
     key

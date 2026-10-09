@@ -346,6 +346,50 @@ defmodule Engram.Cache.RequestLookupsTest do
     end
   end
 
+  describe "api key load" do
+    # Two READ COMMITTED statements let a CleanupVault that commits between
+    # them (key and mapping rows deleted together) yield the key with `:all`
+    # scope. One statement reads both from one snapshot.
+    test "the key and its scope come from one statement" do
+      user = vault_user()
+      {:ok, vault, _} = Vaults.register_vault(user, "Test Vault", Ecto.UUID.generate())
+      {:ok, raw, created} = Accounts.create_api_key(user, "one-vault")
+
+      Repo.insert_all("api_key_vaults", [
+        %{api_key_id: Ecto.UUID.dump!(created.id), vault_id: Ecto.UUID.dump!(vault.id)}
+      ])
+
+      Engram.Cache.clear_local(:api_key)
+
+      {_, qs} =
+        queries(fn -> assert {_, [_]} = Accounts.cached_api_key(Engram.Crypto.sha256_hex(raw)) end)
+
+      reads = Enum.filter(qs, &(&1.sql =~ "api_key"))
+      assert [read] = Enum.filter(reads, &(&1.sql =~ ~r/^SELECT/ and &1.sql =~ "key_hash"))
+      assert read.sql =~ "api_key_vaults"
+      refute Enum.any?(qs, &(&1.source == "api_key_vaults"))
+    end
+
+    # The read runs as engram_key_lookup; it needs SELECT on api_key_vaults.
+    test "a one-vault key resolves its scope under the prod role" do
+      user = vault_user()
+      {:ok, vault, _} = Vaults.register_vault(user, "Test Vault", Ecto.UUID.generate())
+      {:ok, raw, created} = Accounts.create_api_key(user, "one-vault")
+
+      Repo.insert_all("api_key_vaults", [
+        %{api_key_id: Ecto.UUID.dump!(created.id), vault_id: Ecto.UUID.dump!(vault.id)}
+      ])
+
+      Engram.Cache.clear_local(:api_key)
+      hash = Engram.Crypto.sha256_hex(raw)
+
+      assert {:returned, {_, [vault_id]}} =
+               Engram.RlsCase.as_prod_role(fn -> Accounts.cached_api_key(hash) end)
+
+      assert vault_id == vault.id
+    end
+  end
+
   describe "vault list caching" do
     test "register_vault of an existing client_id leaves the cache warm" do
       user = vault_user()

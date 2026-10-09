@@ -96,17 +96,17 @@ defmodule Engram.QueryBudgetTest do
     # tenant block (begin, enter, commit), opened unconditionally (fix round 1
     # ruling: bootstrap's DB work runs in ONE block).
     "GET /api/bootstrap" => 3,
-    # Bootstrap target 5; floor 22. Auth plug, before the controller (its own
-    # cached lookups, cold after 60 s): 1-6 API key lookup (BEGIN, lookup role,
-    # key row, role reset needed by 5, key's vault scope, COMMIT), 7 users row,
-    # 8-11 subscription in its tenant block. Controller, one block: 12, 13, 22
-    # begin / enter / commit; 14, 16, 19 vault list, read by has_vault?, the
-    # vault count and the vaults payload (was 20: a load inside a transaction
-    # is now stored only after commit, so the block's later reads miss too);
-    # 15 onboarding actions; 17 indexed_notes_cap override (the cap decides
-    # whether to count at all); 18 live note count; 20, 21 per-vault note and
-    # attachment counts.
-    "GET /api/bootstrap cold" => 22,
+    # Bootstrap target 5; floor 21. Auth plug, before the controller (its own
+    # cached lookups, cold after 60 s): 1-5 API key lookup (BEGIN, lookup role,
+    # key row with its vault scope in one statement, role reset, COMMIT), 6
+    # users row, 7-10 subscription in its tenant block. Controller, one block:
+    # 11, 12, 21 begin / enter / commit; 13, 15, 18 vault list, read by
+    # has_vault?, the vault count and the vaults payload (a load inside a
+    # transaction is stored only after commit, so the block's later reads miss
+    # too); 14 onboarding actions; 16 indexed_notes_cap override (the cap
+    # decides whether to count at all); 17 live note count; 19, 20 per-vault
+    # note and attachment counts.
+    "GET /api/bootstrap cold" => 21,
     "GET folders" => 5,
     "GET tags" => 4,
     # Task 7b. The old "crdt_msg update" (40) was a keystroke (7) plus a

@@ -874,20 +874,6 @@ defmodule Engram.Vaults do
     end
   end
 
-  @doc false
-  # The `:api_key` loader's scope query. No rows means unrestricted.
-  @spec load_key_scope(Ecto.UUID.t()) :: :all | [Ecto.UUID.t()]
-  def load_key_scope(api_key_id) do
-    ids =
-      from(akv in "api_key_vaults",
-        where: akv.api_key_id == type(^api_key_id, Ecto.UUID),
-        select: type(akv.vault_id, Ecto.UUID)
-      )
-      |> Repo.all(skip_tenant_check: true)
-
-    if ids == [], do: :all, else: ids
-  end
-
   # ── Private helpers ─────────────────────────────────────────────────────────
 
   # Phase B.1 — inject HMAC + ciphertext for the vault name.

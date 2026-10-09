@@ -102,7 +102,6 @@ defmodule Engram.SkipTenantCheckInventoryTest do
     "engram/repo/tenancy_guard.ex" => 1,
     "engram/telemetry/install_pings.ex" => 1,
     "engram/usage_meters.ex" => 11,
-    "engram/vaults.ex" => 1,
     "engram/workers/backfill_crdt_head.ex" => 1,
     "engram/workers/cimd_refresh.ex" => 1,
     "engram/workers/cleanup_vault.ex" => 1,
