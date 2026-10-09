@@ -310,6 +310,18 @@ defmodule Engram.Notes.CrdtTransportTest do
       refute CrdtRegistry.lookup(note.id)
     end
 
+    test "a folder delete stops its notes' open rooms", %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "Gone/F.md", content: "f"}, actor: "api")
+
+      {:ok, room} = CrdtRegistry.ensure_observed(user.id, vault.id, note.id)
+      ref = Process.monitor(room)
+
+      assert {:ok, _} = Notes.delete_folder(user, vault, "Gone")
+      assert_receive {:DOWN, ^ref, :process, _, _}, 5_000
+      refute CrdtRegistry.lookup(note.id)
+    end
+
     test "a resident room of another vault → {:error, :not_found}, nothing applied", ctx do
       %{user: user, vault: vault} = ctx
 

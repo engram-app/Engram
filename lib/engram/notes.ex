@@ -5876,6 +5876,7 @@ defmodule Engram.Notes do
             Enum.count(matches, fn r -> r.kind == "note" and MapSet.member?(deleted, r.id) end)
 
           if real_count > 0, do: :ok = UsageMeters.dec_notes_count(user.id, real_count)
+          :ok = stop_rooms_after_commit(MapSet.to_list(deleted))
           deleted
         end)
 
