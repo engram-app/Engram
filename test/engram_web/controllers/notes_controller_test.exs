@@ -602,6 +602,16 @@ defmodule EngramWeb.NotesControllerTest do
       assert body["current"] == 2
     end
 
+    # Append-as-create past the cap used to reach the changeset clause and 500.
+    test "append-as-create past the cap returns 402, not 500", %{conn: conn, user: user} do
+      insert(:user_limit_override, user: user, key: "notes_cap", value: %{"v" => 1})
+      post(conn, "/api/notes", %{path: "A.md", content: "# A", mtime: 1.0})
+
+      body = conn |> post("/api/notes/append", %{path: "New.md", text: "x"}) |> json_response(402)
+      assert body["reason"] == "notes_cap_exceeded"
+      assert body["limit"] == 1
+    end
+
     test "permits updates to existing notes after cap is hit", %{conn: conn, user: user} do
       insert(:user_limit_override, user: user, key: "notes_cap", value: %{"v" => 1})
 

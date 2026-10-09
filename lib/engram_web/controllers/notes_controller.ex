@@ -237,8 +237,30 @@ defmodule EngramWeb.NotesController do
 
   defp append_response(conn, _user, _path, {_, {:error, :too_large}}), do: too_large(conn)
 
-  defp append_response(conn, _user, _path, {_, {:error, changeset}}),
+  # A legacy row's tail kept appearing under the lock: nothing was written and
+  # a retry reads it. Same retryable 409 shape as recently_deleted.
+  defp append_response(conn, _user, _path, {_, {:error, :stale_tail}}),
+    do: conn |> put_status(409) |> json(%{conflict: true, reason: "concurrent_edit"})
+
+  # Append-as-create past the plan's notes cap: upsert/2's 402.
+  defp append_response(conn, _user, _path, {_, {:error, {:notes_cap_reached, limit, current}}}),
+    do: EngramWeb.LimitResponse.halt(conn, "notes_cap_exceeded", :notes_cap, limit, current)
+
+  defp append_response(conn, _user, _path, {_, {:error, %Ecto.Changeset{} = changeset}}),
     do: conn |> put_status(422) |> json(%{errors: format_errors(changeset)})
+
+  # format_errors/1 raises on anything but a changeset; upsert/2's catch-all.
+  defp append_response(conn, user, _path, {_, {:error, reason}}) do
+    Logger.error(
+      "note_append returned unexpected error",
+      Engram.Logger.Metadata.with_category(:error, :sync,
+        reason_label: classify_reason(reason),
+        user_id: user.id
+      )
+    )
+
+    conn |> put_status(500) |> json(%{error: "internal"})
+  end
 
   operation(:show,
     operation_id: "notes-show",
