@@ -535,11 +535,11 @@ defmodule Engram.Notes do
             # Funnel telemetry — emit once per real creation so the funnel
             # doesn't double-count idempotent re-pushes of unchanged notes.
             :ok =
-              PostHog.capture(
-                PostHog.analytics_id(user.email),
-                "note_created",
-                %{vault_id: vault.id}
-              )
+              Repo.after_commit(fn ->
+                PostHog.capture(PostHog.analytics_id(user.email), "note_created", %{
+                  vault_id: vault.id
+                })
+              end)
           end
 
           {:ok, note}
@@ -3287,7 +3287,7 @@ defmodule Engram.Notes do
               # delete though — it's enqueued directly post-commit below,
               # once plaintext paths exist (reusing the broadcast's decrypt).
               jobs = Enum.map(notes, &delete_note_index_job/1)
-              _ = if jobs != [], do: Oban.insert_all(jobs)
+              _ = if jobs != [], do: Repo.after_tenant(fn -> Oban.insert_all(jobs) end)
 
               {:ok, %{deleted: updated, notes: notes}}
 
@@ -6043,11 +6043,9 @@ defmodule Engram.Notes do
 
     _ =
       if length(ids) == 1 do
-        EngramWeb.Endpoint.broadcast(
-          "user:#{user.id}",
-          "vault_populated",
-          %{vault_id: vault.id}
-        )
+        Repo.after_commit(fn ->
+          EngramWeb.Endpoint.broadcast("user:#{user.id}", "vault_populated", %{vault_id: vault.id})
+        end)
       end
 
     :ok
@@ -6108,7 +6106,12 @@ defmodule Engram.Notes do
     # post-commit, best-effort. CRDT-origin writes never reach here (the
     # checkpoint writes the DB directly), so this fires solely for
     # REST/MCP/web/cascade writes — no double-delivery.
-    _ = CrdtDeliver.deliver_out(user_id, vault_id, path, note.id, note.content || "")
+    #
+    # After commit: the room push is a GenServer.call into a process with its
+    # own connection, which would wait on this transaction's row locks.
+    Repo.after_commit(fn ->
+      CrdtDeliver.deliver_out(user_id, vault_id, path, note.id, note.content || "")
+    end)
 
     :ok
   end

@@ -3,6 +3,8 @@ defmodule Engram.Repo do
     otp_app: :engram,
     adapter: Ecto.Adapters.Postgres
 
+  alias Engram.Logger.Metadata
+
   require Logger
 
   # MUST stay in lockstep with the set of tables that have ROW LEVEL SECURITY
@@ -188,7 +190,85 @@ defmodule Engram.Repo do
     end
   end
 
+  @doc """
+  Runs `fun` once the outermost `with_tenant/2` transaction commits.
+
+  Outside a tenant transaction it runs `fun` now. Inside one it queues `fun`;
+  the queue is dropped if that transaction rolls back or raises. Use it for
+  side effects other processes observe (broadcasts, room pushes, cache
+  evictions): fired before commit, a peer can act on, or re-cache, a row that
+  is not visible yet or never will be.
+
+  The callbacks run after commit, so a raise in one is logged (category
+  `:data`) and the rest still run: the write is durable, and failing the
+  caller would report it as lost.
+
+  Limit: a `with_tenant/2` nested in a plain `Repo.transaction` is a savepoint,
+  so its callbacks run at the savepoint release, before the real commit.
+  """
+  @spec after_commit((-> any())) :: :ok
+  def after_commit(fun) when is_function(fun, 0) do
+    case Process.get(:engram_after_commit) do
+      nil ->
+        _ = fun.()
+        :ok
+
+      queue ->
+        Process.put(:engram_after_commit, [fun | queue])
+        :ok
+    end
+  end
+
+  @doc """
+  Runs `fun` inside the current tenant transaction AFTER the tenant role is
+  reset (`tenant_exit`), before commit. Outside a tenant transaction it runs
+  `fun` now.
+
+  For Oban inserts: `engram_app` has no grant on `oban_jobs`, and the job
+  still commits or rolls back with the write. `fun` runs with no tenant in
+  force, so it must not read tenant tables. A raise rolls the transaction
+  back, which is correct: nothing has committed yet.
+  """
+  @spec after_tenant((-> any())) :: :ok
+  def after_tenant(fun) when is_function(fun, 0) do
+    case Process.get(:engram_after_tenant) do
+      nil ->
+        _ = fun.()
+        :ok
+
+      queue ->
+        Process.put(:engram_after_tenant, [fun | queue])
+        :ok
+    end
+  end
+
   defp run_with_tenant(uuid, fun) do
+    # Only the outermost block owns the queues. Re-entrant calls never get
+    # here, so this is false only for a block opened inside a queue owner.
+    owner? = is_nil(Process.get(:engram_after_commit))
+
+    if owner? do
+      Process.put(:engram_after_commit, [])
+      Process.put(:engram_after_tenant, [])
+    end
+
+    {result, callbacks} =
+      try do
+        {tenant_transaction(uuid, fun, owner?), Process.get(:engram_after_commit, [])}
+      after
+        if owner? do
+          Process.delete(:engram_after_commit)
+          Process.delete(:engram_after_tenant)
+        end
+      end
+
+    # The keys are gone, so a callback that opens its own with_tenant gets a
+    # fresh transaction and its own queues.
+    if owner? and match?({:ok, _}, result), do: run_after_commit(callbacks)
+    result
+  end
+
+  defp tenant_transaction(uuid, fun, owner?) do
     Process.put(:engram_tenant, uuid)
 
     try do
@@ -243,6 +323,10 @@ defmodule Engram.Repo do
               source: "tenant_exit"
             )
 
+          # Deleting the key first makes an after_tenant call from inside a
+          # callback run immediately (still in the transaction, role reset).
+          if owner?, do: run_queue(Process.delete(:engram_after_tenant))
+
           result
         end,
         source: "tenant_txn"
@@ -250,6 +334,30 @@ defmodule Engram.Repo do
     after
       Process.delete(:engram_tenant)
     end
+  end
+
+  defp run_queue(queue), do: queue |> Enum.reverse() |> Enum.each(& &1.())
+
+  defp run_after_commit(queue) do
+    queue
+    |> Enum.reverse()
+    |> Enum.each(fn fun ->
+      try do
+        fun.()
+      rescue
+        e -> log_after_commit_failure(Metadata.safe_reason(e))
+      catch
+        kind, reason ->
+          log_after_commit_failure("#{kind}: #{Metadata.safe_exit_reason(reason)}")
+      end
+    end)
+  end
+
+  defp log_after_commit_failure(reason) do
+    Logger.error(
+      "after_commit callback failed; the transaction had already committed",
+      Metadata.with_category(:error, :data, reason: reason)
+    )
   end
 
   @doc """
@@ -287,7 +395,7 @@ defmodule Engram.Repo do
 
           Logger.error(
             "tenant_guard_violation",
-            Engram.Logger.Metadata.with_category(:error, :boot, table: table_of(query))
+            Metadata.with_category(:error, :boot, table: table_of(query))
           )
 
           raise Engram.TenantError,

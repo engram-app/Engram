@@ -1006,9 +1006,19 @@ defmodule EngramWeb.McpController do
     })
   end
 
+  # Every tool call runs in ONE tenant transaction (its with_tenant blocks
+  # nest for free; side effects wait for commit via Repo.after_commit/1). The
+  # response goes out after this returns, so after commit. These tools stay
+  # outside one: a transaction must not hold a connection and row locks across
+  # external I/O (Voyage/Qdrant for search_notes and suggest_folder, S3 deletes
+  # for delete_folder), and a rename claims its path in the vault index room
+  # (`Notes.Identity`), a separate process whose claim must commit before the
+  # row transaction.
+  @no_request_txn ~w(search_notes suggest_folder delete_folder rename_note rename_folder)
+
   @doc false
   def run_tool_handler(tool, user, vault, args) do
-    case tool.handler.(user, vault, args) do
+    case call_handler(tool, user, vault, args) do
       {:ok, text} ->
         text = deprecation_note(tool, text)
         {{:ok, text_result(text)}, :ok, byte_size_safe(text)}
@@ -1054,6 +1064,12 @@ defmodule EngramWeb.McpController do
 
       {error_result(message), :error, byte_size_safe(message)}
   end
+
+  defp call_handler(%{name: name} = tool, user, vault, args) when name in @no_request_txn,
+    do: tool.handler.(user, vault, args)
+
+  defp call_handler(tool, user, vault, args),
+    do: Engram.Repo.with_tenant!(user.id, fn -> tool.handler.(user, vault, args) end)
 
   # Retired tool names (Task 3.1's `deprecated_for`) still work exactly as
   # before — `structuredContent` is untouched — but the text `content` gets

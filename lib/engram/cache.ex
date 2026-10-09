@@ -117,24 +117,32 @@ defmodule Engram.Cache do
   # The local eviction is synchronous, so the broadcast skips this node's
   # server: echoed back, it would land later and drop a value re-cached in
   # between (a fresh read after the write's own eviction).
+  # Both evictions wait for the caller's tenant transaction to commit
+  # (`Engram.Repo.after_commit/1`; immediate outside one). Evicting before
+  # commit lets another process reload the pre-commit row and re-cache it
+  # until TTL.
   @spec evict(atom(), term()) :: :ok
   def evict(cache, key) do
-    :ok = evict_local(cache, key)
+    Engram.Repo.after_commit(fn ->
+      :ok = evict_local(cache, key)
 
-    CacheSync.broadcast_from(
-      Process.whereis(Engram.Cache.Server),
-      {:engram_cache_evict, cache, key}
-    )
+      CacheSync.broadcast_from(
+        Process.whereis(Engram.Cache.Server),
+        {:engram_cache_evict, cache, key}
+      )
+    end)
   end
 
   @spec evict_all(atom()) :: :ok
   def evict_all(cache) do
-    :ok = clear_local(cache)
+    Engram.Repo.after_commit(fn ->
+      :ok = clear_local(cache)
 
-    CacheSync.broadcast_from(
-      Process.whereis(Engram.Cache.Server),
-      {:engram_cache_evict_all, cache}
-    )
+      CacheSync.broadcast_from(
+        Process.whereis(Engram.Cache.Server),
+        {:engram_cache_evict_all, cache}
+      )
+    end)
   end
 
   @spec evict_local(atom(), term()) :: :ok

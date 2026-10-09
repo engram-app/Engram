@@ -13,13 +13,15 @@ defmodule Engram.QueryBudgetTest do
   # spec §7 targets; Task 10 asserts the final numbers. Non-GET paths (MCP is
   # always POST) carry +1 since the Task 5 fix round: RotationLockCheck
   # re-reads the rotation lock from the DB for writes, because the request's
-  # user now comes from the :user cache.
+  # user now comes from the :user cache. Task 6: each MCP tool call runs in ONE
+  # tenant transaction, so the tool's separate with_tenant blocks merge (4 each)
+  # and Oban's own begin/commit pairs nest into it.
   @budgets %{
     "mcp get_notes" => 7,
-    "mcp write_note update" => 30,
-    "mcp append_to_note" => 46,
-    "mcp edit_note" => 41,
-    "mcp delete_note" => 23,
+    "mcp write_note update" => 24,
+    "mcp append_to_note" => 28,
+    "mcp edit_note" => 27,
+    "mcp delete_note" => 15,
     "GET sync/manifest" => 11,
     "GET notes/*path" => 11,
     "POST notes update" => 35,

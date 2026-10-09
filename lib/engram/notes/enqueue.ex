@@ -33,8 +33,21 @@ defmodule Engram.Notes.Enqueue do
   def enqueue(:skip, worker_label, _insert_fn) when is_binary(worker_label),
     do: {:ok, :skipped}
 
+  # Inside a tenant transaction the insert waits for the role reset
+  # (`Engram.Repo.after_tenant/1`): `engram_app` has no grant on `oban_jobs`.
+  # It still commits or rolls back with the write; the caller gets
+  # `{:ok, :deferred}` because the job does not exist yet.
   def enqueue(changeset, worker_label, insert_fn)
       when is_binary(worker_label) and is_function(insert_fn, 1) do
+    if Process.get(:engram_after_tenant) do
+      :ok = Engram.Repo.after_tenant(fn -> do_enqueue(changeset, worker_label, insert_fn) end)
+      {:ok, :deferred}
+    else
+      do_enqueue(changeset, worker_label, insert_fn)
+    end
+  end
+
+  defp do_enqueue(changeset, worker_label, insert_fn) do
     case insert_fn.(changeset) do
       {:ok, _job} = ok ->
         ok
