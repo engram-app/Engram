@@ -102,11 +102,9 @@ defmodule Engram.Repo.TenantTxnCommitResetTest do
 
       assert {:ok, {^t, "engram_app"}} = Repo.with_tenant(t, &inside_state/0)
 
-      sources = drain_sources()
-      assert "tenant_enter" in sources
-
-      refute "tenant_exit" in sources,
-             "top-level block still pays tenant_exit: #{inspect(sources)}"
+      # Exact list: BEGIN, enter, the block's own read (no source), COMMIT.
+      # No reset of either flavor.
+      assert drain_sources() == ["tenant_txn", "tenant_enter", nil, "tenant_txn"]
 
       assert_clean(session_state(), pid)
     end
@@ -153,10 +151,42 @@ defmodule Engram.Repo.TenantTxnCommitResetTest do
       assert {:ok, {:ok, {^t, "engram_app"}}} =
                Repo.with_tenant(t, fn -> Repo.with_tenant(t, &inside_state/0) end)
 
-      sources = drain_sources()
-      assert Enum.count(sources, &(&1 == "tenant_enter")) == 1
-      refute "tenant_exit" in sources
+      assert drain_sources() == ["tenant_txn", "tenant_enter", nil, "tenant_txn"]
 
+      assert_clean(session_state(), pid)
+    end
+  end
+
+  describe "a pool that is not the known prod pool" do
+    # Fail closed: only DBConnection.ConnectionPool is known to give a real
+    # BEGIN for a top-level transaction. Any other pool module keeps the reset.
+    defmodule UnknownPool do
+      @moduledoc false
+      @behaviour DBConnection.Pool
+
+      defdelegate child_spec(arg), to: DBConnection.ConnectionPool
+
+      @impl true
+      defdelegate checkout(pool, callers, opts), to: DBConnection.ConnectionPool
+
+      @impl true
+      defdelegate disconnect_all(pool, interval, opts), to: DBConnection.ConnectionPool
+
+      @impl true
+      defdelegate get_connection_metrics(pool), to: DBConnection.ConnectionPool
+    end
+
+    test "a top-level block keeps tenant_exit", %{tenant: t} do
+      {:ok, probe} =
+        Repo.start_link(name: nil, pool: UnknownPool, pool_size: 1, log: false)
+
+      Repo.put_dynamic_repo(probe)
+      %{pid: pid} = session_state()
+      _ = drain_sources()
+
+      assert {:ok, {^t, "engram_app"}} = Repo.with_tenant(t, &inside_state/0)
+
+      assert drain_sources() == ["tenant_txn", "tenant_enter", nil, "tenant_exit", "tenant_txn"]
       assert_clean(session_state(), pid)
     end
   end

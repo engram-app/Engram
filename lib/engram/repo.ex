@@ -92,8 +92,9 @@ defmodule Engram.Repo do
   Both settings are transaction-scoped, so COMMIT or ROLLBACK resets them and
   the pooled connection goes back clean (pinned on a real pool by
   `Engram.Repo.TenantTxnCommitResetTest`). A block nested in a plain
-  `Repo.transaction/1` is only a savepoint, so it adds a fourth,
-  `tenant_exit`, to clear both before the outer transaction carries on (#1761).
+  `Repo.transaction/1` issues no BEGIN, COMMIT or SAVEPOINT: it joins the
+  outer transaction and costs two, `tenant_enter` and `tenant_exit`, the
+  reset clearing both before the outer transaction carries on (#1761).
 
   Re-entrant: a nested call for the SAME tenant inside an active
   with_tenant transaction runs `fun` directly (the settings are
@@ -288,18 +289,24 @@ defmodule Engram.Repo do
 
           result = fun.()
 
-          # A savepoint does not end the transaction, and a SET LOCAL survives
-          # RELEASE SAVEPOINT until the OUTER transaction ends. So a block
-          # nested in a plain `Repo.transaction` resets both settings itself
-          # (#1761): otherwise the rest of the outer transaction keeps the
-          # tenant scope and the engram_app role while the app believes it is
-          # unscoped. `set_config('role', 'none', true)` == SET LOCAL ROLE
-          # NONE; '' and not NULL for the tenant because the tenant policies
-          # never match '' and `api_keys_discovery` reads
-          # coalesce(..., '') = '' as "no tenant".
+          # A block nested in a plain `Repo.transaction` joins the outer
+          # transaction (no SAVEPOINT; in the test sandbox it is a savepoint,
+          # which a SET LOCAL survives too), so nothing ends here and the
+          # SET LOCALs stay in force until the OUTER transaction ends. Such a
+          # block resets both settings itself (#1761): otherwise the rest of
+          # the outer transaction keeps the tenant scope and the engram_app
+          # role while the app believes it is unscoped.
+          # `set_config('role', 'none', true)` == SET LOCAL ROLE NONE; '' and
+          # not NULL for the tenant because the tenant policies never match ''
+          # and `api_keys_discovery` reads coalesce(..., '') = '' as "no
+          # tenant".
           #
           # A real top-level block skips it: its own COMMIT or ROLLBACK is the
-          # reset.
+          # reset. That means such a block reaches COMMIT still as engram_app
+          # with the tenant set, while in the sandbox it reaches it reset. So
+          # a future DEFERRABLE constraint or deferred (constraint) trigger
+          # would run as the tenant in prod but as the session role in tests,
+          # and the suite would not see the difference. There are none today.
           if exit_source do
             _ =
               query!(
@@ -322,21 +329,24 @@ defmodule Engram.Repo do
   # nil when this block opens the real top-level transaction (COMMIT resets
   # everything, no statement needed); otherwise the span source of the reset.
   #
+  # Fails closed: the reset is skipped only on `DBConnection.ConnectionPool`
+  # (DBConnection's default, and what prod runs), where a top-level
+  # transaction is known to be a real BEGIN. Any other pool keeps it.
+  #
   # The test sandbox (`DBConnection.Ownership`) runs EVERY transaction as a
   # savepoint inside the test's own, so there the reset stays: skipping it
   # would leave engram_app as the role for the rest of the test. It gets its
   # own source so query-budget tests can tell a sandbox-only round trip, which
   # never happens in prod, from a real nested one.
   defp tenant_exit_source do
-    cond do
-      in_transaction?() ->
-        "tenant_exit"
-
-      Ecto.Adapter.lookup_meta(get_dynamic_repo()).opts[:pool] == DBConnection.Ownership ->
-        "tenant_exit_sandbox"
-
-      true ->
-        nil
+    if in_transaction?() do
+      "tenant_exit"
+    else
+      case Ecto.Adapter.lookup_meta(get_dynamic_repo()).opts[:pool] do
+        DBConnection.ConnectionPool -> nil
+        DBConnection.Ownership -> "tenant_exit_sandbox"
+        _unknown -> "tenant_exit"
+      end
     end
   end
 
