@@ -45,24 +45,25 @@ defmodule EngramWeb.NotesController do
       actor = EngramWeb.WriteActor.for_conn(conn)
 
       # One transaction: the write, its job inserts and the response's links
-      # read. Rendered inside it, sent after it commits.
+      # read. The links decrypt and the render run after it commits (no vault
+      # seq lock held across decrypt).
       result =
         in_write_txn(user, fn user ->
           case Notes.upsert_note(user, vault, params, actor: actor) do
-            {:ok, note} -> {:ok, note_json(note, user)}
-            {:error, :version_conflict, server} -> {:conflict, note_json(server, user)}
+            {:ok, note} -> {:ok, read_links(note, user)}
+            {:error, :version_conflict, server} -> {:conflict, read_links(server, user)}
             other -> other
           end
         end)
 
       case result do
-        {:ok, body} ->
-          json(conn, %{note: body})
+        {:ok, read} ->
+          json(conn, %{note: render_read(read)})
 
-        {:conflict, server_note} ->
+        {:conflict, read} ->
           conn
           |> put_status(409)
-          |> json(%{conflict: true, server_note: server_note})
+          |> json(%{conflict: true, server_note: render_read(read)})
 
         {:error, %Ecto.Changeset{}} = error ->
           error
@@ -172,31 +173,32 @@ defmodule EngramWeb.NotesController do
                },
                actor: actor
              )
-             |> render_in_txn(user)}
+             |> read_in_txn(user)}
 
           {upserted, _} ->
-            {:appended, render_in_txn(upserted, user)}
+            {:appended, read_in_txn(upserted, user)}
         end
       end)
 
     append_response(conn, user, path, result)
   end
 
-  # note_json's links read joins the request transaction.
-  defp render_in_txn({:ok, note}, user), do: {:ok, {:rendered, note_json(note, user)}}
+  # note_json's links read joins the request transaction; its decrypt and
+  # render run after the commit (render_read/2).
+  defp read_in_txn({:ok, note}, user), do: {:ok, read_links(note, user)}
 
-  defp render_in_txn({:error, :version_conflict, server}, user),
-    do: {:error, :version_conflict, {:rendered, note_json(server, user)}}
+  defp read_in_txn({:error, :version_conflict, server}, user),
+    do: {:error, :version_conflict, read_links(server, user)}
 
-  defp render_in_txn(other, _user), do: other
+  defp read_in_txn(other, _user), do: other
 
   # The DEK could not be provisioned (in_write_txn/2): nothing was read or
   # written. Same retryable refusal as an unreadable authority.
   defp append_response(conn, user, path, {:error, reason}),
     do: append_response(conn, user, path, {:appended, {:error, {:authority, reason}}})
 
-  defp append_response(conn, _user, path, {kind, {:ok, {:rendered, body}}}),
-    do: json(conn, %{created: kind == :created, path: path, note: body})
+  defp append_response(conn, _user, path, {kind, {:ok, {:read, _, _, _} = read}}),
+    do: json(conn, %{created: kind == :created, path: path, note: render_read(read)})
 
   # Refuse rather than fall back to the facade. Falling back is exactly the bug:
   # it is the path that silently truncates the note. A failed append is
@@ -226,10 +228,15 @@ defmodule EngramWeb.NotesController do
 
   # The 3-tuple: `{:error, changeset}` does not match it. Same body shape
   # upsert/2 returns, so the client has one conflict contract.
-  defp append_response(conn, _user, _path, {_, {:error, :version_conflict, {:rendered, body}}}) do
+  defp append_response(
+         conn,
+         _user,
+         _path,
+         {_, {:error, :version_conflict, {:read, _, _, _} = read}}
+       ) do
     conn
     |> put_status(409)
-    |> json(%{conflict: true, server_note: body})
+    |> json(%{conflict: true, server_note: render_read(read)})
   end
 
   defp append_response(conn, _user, _path, {_, {:error, :note_deleted}}),
@@ -649,7 +656,16 @@ defmodule EngramWeb.NotesController do
     end
   end
 
-  defp note_json(note, user) do
+  # Inside a write transaction: the links rows only (no decrypt). Carries the
+  # transaction's user, whose DEK in_write_txn/2 may have just provisioned.
+  defp read_links(note, user), do: {:read, note, Links.raw_links_for_note(user, note.id), user}
+
+  # After its commit: decrypt and render.
+  defp render_read({:read, note, raw, user}), do: note_body(note, Links.render_links(user, raw))
+
+  defp note_json(note, user), do: note_body(note, Links.links_for_note(user, note.id))
+
+  defp note_body(note, links) do
     %{
       id: note.id,
       path: note.path,
@@ -672,7 +688,7 @@ defmodule EngramWeb.NotesController do
       parse_reason: note.parse_reason,
       # Task 9 — outgoing wikilink/embed edges, resolved. Frontend keys its
       # resolution map off `target_text`.
-      links: Links.links_for_note(user, note.id)
+      links: links
     }
     |> put_content(note.content)
   end

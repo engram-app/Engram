@@ -405,6 +405,9 @@ defmodule Engram.LinksTest do
           %{target: "DekTarget", alias: nil, anchor: nil, link_type: "wikilink", position: 0}
         ])
 
+      raw = Repo.with_tenant!(user.id, fn -> Links.raw_links_for_note(user, source.id) end)
+      assert Links.render_links(user, raw) == Links.links_for_note(user, source.id)
+
       stale = %{user | encrypted_dek: nil}
       assert [%{target_path: "DekTarget.md"}] = Links.links_for_note(stale, source.id)
     end
