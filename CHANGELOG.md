@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.45.0](https://github.com/engram-app/Engram/compare/0.44.0...0.45.0) (2026-10-09)
+
+
+### Features
+
+* **crypto:** compress-then-encrypt on, plus self-healing re-encode ([#1911](https://github.com/engram-app/Engram/issues/1911)) ([510049b](https://github.com/engram-app/Engram/commit/510049b80789f2bace4cd8d76dd6c9d653ef6817))
+* **mcp:** conform server card to the v1 spec ([#1916](https://github.com/engram-app/Engram/issues/1916)) ([b2fbbed](https://github.com/engram-app/Engram/commit/b2fbbedb725a1c4d1788adff9372008b5f5c37b8))
+* **obs:** export WebSocket connections and frame rate ([#1914](https://github.com/engram-app/Engram/issues/1914)) ([619fb76](https://github.com/engram-app/Engram/commit/619fb76e22c1805b92b0440d83c5533598cd2fb2))
+
+
+### Bug Fixes
+
+* **notes:** repath Qdrant points on crdt_create renames ([#1912](https://github.com/engram-app/Engram/issues/1912)) ([7547a3c](https://github.com/engram-app/Engram/commit/7547a3cd2a20cdb448e705a07069b0e1e9ba377d))
+
 ## [0.44.0](https://github.com/engram-app/Engram/compare/0.43.0...0.44.0) (2026-10-08)
 
 
