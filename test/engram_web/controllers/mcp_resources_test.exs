@@ -116,6 +116,49 @@ defmodule EngramWeb.McpResourcesTest do
       assert Enum.any?(uris, &String.ends_with?(&1, "/Plan.md"))
     end
 
+    test "a cursor offset past int8 is Invalid params, not a crash", %{conn: conn, vault: vault} do
+      cursor =
+        Base.url_encode64(~s({"v":"#{vault.id}","o":#{Integer.pow(10, 30)}}), padding: false)
+
+      assert %{"error" => %{"code" => -32_602}} =
+               rpc(conn, "resources/list", %{"cursor" => cursor})
+    end
+
+    test "skips empty vaults instead of returning empty pages", %{conn: conn, user: user} do
+      for n <- 1..3, do: Engram.Vaults.register_vault(user, "Empty #{n}", Ecto.UUID.generate())
+
+      result = rpc(conn, "resources/list")["result"]
+      assert length(result["resources"]) == 3
+      refute Map.has_key?(result, "nextCursor")
+    end
+
+    test "every listed URI resolves on read, odd characters included", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      for p <- ["Odd/hash#tag.md", "Odd/q?mark.md", "Odd/100%.md", "Odd/ünïcödé.md"],
+          do: insert_note!(user, vault, path: p, content: "odd")
+
+      for %{"uri" => uri} <- page_all(conn) do
+        assert %{"result" => %{"contents" => [_]}} = read(conn, uri), "unreadable: #{uri}"
+      end
+    end
+
+    test "deleted notes are neither listed nor readable", %{
+      conn: conn,
+      user: user,
+      vault: vault,
+      slug: slug
+    } do
+      :ok = delete!(user, vault, "Daily/2026-10-09.md")
+
+      refute conn |> page_all() |> Enum.any?(&String.contains?(&1["uri"], "Daily"))
+
+      assert %{"error" => %{"code" => -32_002}} =
+               read(conn, "engram://#{slug}/Daily/2026-10-09.md")
+    end
+
     test "a bad cursor is Invalid params", %{conn: conn} do
       for cursor <- [
             "nope",
@@ -155,6 +198,25 @@ defmodule EngramWeb.McpResourcesTest do
                read(conn, "engram://#{slug}/Ideas/With%20Space.md")["result"]["contents"]
     end
 
+    test "the URI vault is matched by slug, never by display name", %{conn: conn, user: user} do
+      # "Work Notes" takes slug work-notes; a second vault NAMED "work-notes"
+      # gets a suffixed slug. A by-name lookup would read the second vault.
+      {:ok, a, _} = Engram.Vaults.register_vault(user, "Work Notes", Ecto.UUID.generate())
+      {:ok, b, _} = Engram.Vaults.register_vault(user, "work-notes", Ecto.UUID.generate())
+      insert_note!(user, a, path: "Todo.md", content: "FROM-A")
+      insert_note!(user, b, path: "Todo.md", content: "FROM-B")
+
+      assert [%{"text" => "FROM-A"}] =
+               read(conn, "engram://#{slug_of(user, a)}/Todo.md")["result"]["contents"]
+
+      assert [%{"text" => "FROM-B"}] =
+               read(conn, "engram://#{slug_of(user, b)}/Todo.md")["result"]["contents"]
+    end
+
+    test "the scheme is case-insensitive", %{conn: conn, slug: slug} do
+      assert %{"result" => _} = read(conn, "ENGRAM://#{slug}/Projects/Engram.md")
+    end
+
     test "a missing note is resource-not-found", %{conn: conn, slug: slug} do
       assert %{"error" => %{"code" => -32_002}} = read(conn, "engram://#{slug}/Nope.md")
     end
@@ -187,6 +249,20 @@ defmodule EngramWeb.McpResourcesTest do
         refute inspect(body) =~ "VICTIM-SECRET"
         assert %{"error" => _} = body
       end
+    end
+
+    test "out-of-scope and nonexistent vaults get the same error",
+         %{conn: conn, user: user, vault: vault} = ctx do
+      {:ok, other, _} = Engram.Vaults.register_vault(user, "Hidden", Ecto.UUID.generate())
+      insert_note!(user, other, path: "Secret.md", content: "x")
+      restrict_key_to!(ctx.key_row, vault)
+
+      hidden = read(conn, "engram://#{slug_of(user, other)}/Secret.md")["error"]
+      missing = read(conn, "engram://no-such-vault/Secret.md")["error"]
+      assert hidden["code"] == missing["code"]
+
+      assert String.replace(hidden["message"], slug_of(user, other), "X") ==
+               String.replace(missing["message"], "no-such-vault", "X")
     end
 
     test "a restricted key cannot read a vault outside its scope",
@@ -226,6 +302,18 @@ defmodule EngramWeb.McpResourcesTest do
                complete(conn, "path", "victim", %{"vault" => slug_of(victim, vv)})
     end
 
+    test "a restricted key gets no paths for an out-of-scope vault",
+         %{conn: conn, user: user, vault: vault} = ctx do
+      {:ok, other, _} = Engram.Vaults.register_vault(user, "Hidden", Ecto.UUID.generate())
+      insert_note!(user, other, path: "Hidden-Plan.md", content: "x")
+      restrict_key_to!(ctx.key_row, vault)
+
+      assert %{"values" => []} =
+               complete(conn, "path", "hidden", %{"vault" => slug_of(user, other)})
+
+      assert %{"values" => []} = complete(conn, "vault", "hid")
+    end
+
     test "prompt arguments get an empty completion, not an error", %{conn: conn} do
       result =
         rpc(conn, "completion/complete", %{
@@ -238,6 +326,13 @@ defmodule EngramWeb.McpResourcesTest do
 
     test "malformed params are Invalid params", %{conn: conn} do
       assert %{"error" => %{"code" => -32_602}} = rpc(conn, "completion/complete", %{"ref" => 1})
+    end
+  end
+
+  defp delete!(user, vault, path) do
+    case Engram.Notes.delete_note(user, vault, path) do
+      :ok -> :ok
+      {:ok, _} -> :ok
     end
   end
 

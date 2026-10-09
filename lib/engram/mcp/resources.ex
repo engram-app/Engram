@@ -16,6 +16,8 @@ defmodule Engram.MCP.Resources do
   # Pages walk one vault at a time, newest first. Offset paging: a note edited
   # mid-walk can shift by a slot, which a picker tolerates.
   @page_size 50
+  # Far past any real vault, far inside int8. A forged cursor must not 500.
+  @max_offset 10_000_000
   # Spec cap for completion values.
   @max_completions 100
 
@@ -40,35 +42,50 @@ defmodule Engram.MCP.Resources do
   def list(_user, [], nil), do: {:ok, %{"resources" => []}}
 
   def list(user, vaults, cursor) do
-    with {:ok, index, offset} <- decode_cursor(cursor, vaults) do
-      vault = Enum.at(vaults, index)
-      {:ok, notes} = Notes.list_recent_notes(user, vault, @page_size + 1, offset: offset)
-      {page, more?} = Enum.split(notes, @page_size)
-      prefix? = length(vaults) > 1
+    with {:ok, index, offset} <- decode_cursor(cursor, vaults),
+         do: {:ok, page(user, vaults, index, offset)}
+  end
 
-      next =
-        cond do
-          more? != [] -> encode_cursor(vault, offset + @page_size)
-          index + 1 < length(vaults) -> encode_cursor(Enum.at(vaults, index + 1), 0)
-          true -> nil
-        end
+  # An exhausted or empty vault rolls straight into the next one, so a page
+  # is empty only when every remaining vault is.
+  defp page(user, vaults, index, offset) do
+    vault = Enum.at(vaults, index)
+    {:ok, notes} = Notes.list_recent_notes(user, vault, @page_size + 1, offset: offset)
+    {page, more} = Enum.split(notes, @page_size)
+    last_vault? = index + 1 >= length(vaults)
 
-      resources =
-        Enum.map(page, fn note ->
-          %{
-            "uri" => uri(vault, note.path),
-            "name" => if(prefix?, do: "#{vault.name} › #{note.path}", else: note.path),
-            "title" => note.title,
-            "mimeType" => @mime
-          }
-        end)
+    cond do
+      page == [] and not last_vault? ->
+        page(user, vaults, index + 1, 0)
 
-      {:ok,
-       if(next,
-         do: %{"resources" => resources, "nextCursor" => next},
-         else: %{"resources" => resources}
-       )}
+      more != [] ->
+        %{
+          "resources" => entries(vault, page, vaults),
+          "nextCursor" => encode_cursor(vault, offset + @page_size)
+        }
+
+      not last_vault? ->
+        %{
+          "resources" => entries(vault, page, vaults),
+          "nextCursor" => encode_cursor(Enum.at(vaults, index + 1), 0)
+        }
+
+      true ->
+        %{"resources" => entries(vault, page, vaults)}
     end
+  end
+
+  defp entries(vault, notes, vaults) do
+    prefix? = length(vaults) > 1
+
+    Enum.map(notes, fn note ->
+      %{
+        "uri" => uri(vault, note.path),
+        "name" => if(prefix?, do: "#{vault.name} › #{note.path}", else: note.path),
+        "title" => note.title || note.path,
+        "mimeType" => @mime
+      }
+    end)
   end
 
   defp encode_cursor(vault, offset),
@@ -78,7 +95,8 @@ defmodule Engram.MCP.Resources do
 
   defp decode_cursor(cursor, vaults) when is_binary(cursor) do
     with {:ok, json} <- Base.url_decode64(cursor, padding: false),
-         {:ok, %{"v" => id, "o" => offset}} when is_integer(offset) and offset >= 0 <-
+         {:ok, %{"v" => id, "o" => offset}}
+         when is_integer(offset) and offset >= 0 and offset <= @max_offset <-
            Jason.decode(json),
          index when is_integer(index) <- Enum.find_index(vaults, &(&1.id == id)) do
       {:ok, index, offset}
@@ -101,9 +119,13 @@ defmodule Engram.MCP.Resources do
     @scheme <> vault.slug <> "/" <> encoded
   end
 
-  @doc "Splits a note URI into `{vault_ref, path}`. `:error` for anything else."
-  def parse(@scheme <> rest) do
-    with [ref, encoded] when ref != "" and encoded != "" <- String.split(rest, "/", parts: 2),
+  @doc """
+  Splits a note URI into `{vault_slug, path}`. `:error` for anything else.
+  The scheme is case-insensitive (RFC 3986); the slug is matched exactly.
+  """
+  def parse(<<scheme::binary-size(9), rest::binary>>) do
+    with true <- String.downcase(scheme) == @scheme,
+         [ref, encoded] when ref != "" and encoded != "" <- String.split(rest, "/", parts: 2),
          {:ok, path} <- decode(encoded) do
       {:ok, ref, path}
     else
@@ -112,6 +134,19 @@ defmodule Engram.MCP.Resources do
   end
 
   def parse(_uri), do: :error
+
+  @doc """
+  The vault in `vaults` (the credential's accessible set) with this slug.
+  Slug only: a display name can collide with another vault's slug, and a
+  listed URI must read the vault it was listed from. Out of scope and
+  nonexistent are the same `:error`, so no existence oracle.
+  """
+  def find_vault(vaults, slug) do
+    case Enum.find(vaults, &(&1.slug == slug)) do
+      nil -> :error
+      vault -> {:ok, vault}
+    end
+  end
 
   defp decode(encoded) do
     {:ok, URI.decode(encoded)}

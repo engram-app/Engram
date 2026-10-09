@@ -643,21 +643,23 @@ defmodule EngramWeb.McpController do
     end
   end
 
-  # The vault goes through `resolve_requested_vault/3`, the same scope check a
-  # tool call's `vault_id` gets, so a URI can reach nothing a tool call cannot.
-  # Its refusal text is keyed on the credential's scope, never on whether the
-  # vault exists, so -32002 here is not an existence oracle either.
+  # The vault is looked up by slug inside `accessible_vaults/2`, so a URI can
+  # reach nothing a tool call cannot, and an out-of-scope vault, a missing
+  # vault and a missing note all answer the same -32002.
   defp dispatch(conn, "resources/read", %{"uri" => uri}) when is_binary(uri) do
     user = conn.assigns.current_user
 
-    with {:ok, ref, path} <- Resources.parse(uri),
-         {:ok, vault} <- resolve_requested_vault(user, ref, conn),
-         {:ok, note} <- Engram.Notes.get_note(user, vault, path) do
-      {:ok, Resources.contents(uri, note)}
-    else
-      :error -> {:error, -32_602, "Invalid params: uri must look like engram://{vault}/{path}"}
-      {:error, :not_found} -> {:error, -32_002, "Resource not found: #{uri}"}
-      {:error, msg} when is_binary(msg) -> {:error, -32_002, msg}
+    case Resources.parse(uri) do
+      {:ok, slug, path} ->
+        with {:ok, vault} <- Resources.find_vault(accessible_vaults(user, conn), slug),
+             {:ok, note} <- Engram.Notes.get_note(user, vault, path) do
+          {:ok, Resources.contents(uri, note)}
+        else
+          _ -> {:error, -32_002, "Resource not found: #{uri}"}
+        end
+
+      :error ->
+        {:error, -32_602, "Invalid params: uri must look like engram://{vault}/{path}"}
     end
   end
 
@@ -1157,8 +1159,8 @@ defmodule EngramWeb.McpController do
 
   # The vault picked earlier in the same completion, else the credential's
   # only vault. Several vaults and no pick suggests nothing rather than guess.
-  defp completion_vault(user, %{"arguments" => %{"vault" => ref}}, conn) when is_binary(ref),
-    do: resolve_requested_vault(user, ref, conn)
+  defp completion_vault(user, %{"arguments" => %{"vault" => slug}}, conn) when is_binary(slug),
+    do: Resources.find_vault(accessible_vaults(user, conn), slug)
 
   defp completion_vault(user, _context, conn), do: resolve_bare_vault(user, conn)
 
