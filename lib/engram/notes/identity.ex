@@ -206,8 +206,10 @@ defmodule Engram.Notes.Identity do
             result
         end
 
+      # apply_targets/4 gated microseconds ago; only the room-failure
+      # fallbacks above re-gate, since time has passed there.
       :undefined ->
-        via_snapshot(user, vault_id, targets, op)
+        do_via_snapshot(user, vault_id, targets, op)
     end
   end
 

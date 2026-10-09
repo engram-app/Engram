@@ -26,7 +26,7 @@ depend on, and what is left.
 | POST notes update | 51 | 15 |
 | POST notes create | 56 | 19 |
 | POST notes/append | 62 | 15 |
-| POST notes/rename | 62 | 39 |
+| POST notes/rename | 62 | 40 |
 | DELETE notes/*path | 34 | 12 |
 | GET /api/bootstrap (warm) | 44 | 3 |
 | GET /api/bootstrap cold | n/a (44 was the warm pin) | 21 |
@@ -236,7 +236,7 @@ improvement both fail). `tenant_exit_sandbox` rows are excluded.
 
 - **Auth plug cold misses**: the API key lookup is 5 queries (BEGIN, lookup
   role, key row with its scope, role reset, COMMIT); 10 of bootstrap cold's 21.
-- **Rename (39)**: claim validation txn, index room fold, rename txn,
+- **Rename (40)**: claim validation txn, the claim's fresh rotation lock, index room fold, rename txn,
   post-commit jobs, idle-room fanout and links txn are separate transactions.
 - **Delete's two job inserts**: one `insert_all` instead of two inserts and two
   pg_notify.
