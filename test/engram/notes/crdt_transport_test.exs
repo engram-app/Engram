@@ -35,6 +35,55 @@ defmodule Engram.Notes.CrdtTransportTest do
     row.id
   end
 
+  defp wait_for_room(note_id, attempts \\ 100) do
+    case CrdtRegistry.lookup(note_id) do
+      pid when is_pid(pid) -> pid
+      nil when attempts > 0 -> Process.sleep(10) && wait_for_room(note_id, attempts - 1)
+    end
+  end
+
+  describe "apply_update/5 acknowledgement" do
+    # A success is an acknowledgement: the client drops its queued copy. Returned
+    # before the room's own update_v1 ran, a node crash in between lost an
+    # update the client had already let go of.
+    test "returns only after the update is in the tail log", %{user: user, vault: vault} do
+      prev = Application.get_env(:engram, Engram.Notes.CrdtCheckpointTimer, [])
+      on_exit(fn -> Application.put_env(:engram, Engram.Notes.CrdtCheckpointTimer, prev) end)
+
+      Application.put_env(:engram, Engram.Notes.CrdtCheckpointTimer,
+        settle_ms: 600_000,
+        ceiling_ms: 600_000,
+        eager_ms: 600_000
+      )
+
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "Ack/A.md", content: "seed"}, actor: "api")
+
+      on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
+
+      {:ok, %{update: full}} = CrdtTransport.read_delta(user, vault, note.id, nil)
+      client = CrdtBridge.new_doc()
+      :ok = Yex.apply_update(client, full)
+      sv = Yex.encode_state_vector!(client)
+      CrdtBridge.ingest_plaintext(client, "seed ACK")
+      {:ok, upd} = Yex.encode_state_as_update(client, sv)
+
+      # Hold the room's tail append: the call must not return while it is
+      # pending.
+      on_exit(Engram.CheckpointInterleave.arm(:before_tail_append))
+      task = Task.async(fn -> CrdtTransport.apply_update(user, vault, note.id, upd) end)
+      room = wait_for_room(note.id)
+      Engram.CheckpointInterleave.await_parked(:before_tail_append, room)
+      assert Task.yield(task, 200) == nil, "acknowledged before the tail append"
+      Engram.CheckpointInterleave.release(:before_tail_append, room)
+
+      assert {:ok, _} = Task.await(task, 5_000)
+      # Snapshot + tail, i.e. what survives the room dying right now.
+      {:ok, row} = Notes.get_note_by_id(user, vault, note.id)
+      assert {:ok, "seed ACK"} = Notes.authoritative_content(user, row)
+    end
+  end
+
   describe "read_delta/4" do
     test "full state (since=nil) reconstructs the note text on a fresh client doc",
          %{user: user, vault: vault} do

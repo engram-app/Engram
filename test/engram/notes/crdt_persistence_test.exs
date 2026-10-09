@@ -819,4 +819,76 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     # The guard must have prevented the flag from being set.
     assert Process.info(self(), :trap_exit) == {:trap_exit, false}
   end
+
+  # ── a live room: bind does not echo what it loaded ────────────────────────
+
+  describe "a room started on an existing note" do
+    alias Engram.Notes.CrdtRegistry
+
+    setup %{user: user, vault: vault} do
+      prev = Application.get_env(:engram, Engram.Notes.CrdtCheckpointTimer, [])
+      on_exit(fn -> Application.put_env(:engram, Engram.Notes.CrdtCheckpointTimer, prev) end)
+      topic = "sync:#{user.id}:#{vault.id}"
+      EngramWeb.Endpoint.subscribe(topic)
+      %{topic: topic}
+    end
+
+    defp tail_count(user, note_id) do
+      Repo.with_tenant!(user.id, fn ->
+        Repo.aggregate(from(l in CrdtUpdateLog, where: l.note_id == ^note_id), :count)
+      end)
+    end
+
+    defp start_room(user, vault, note) do
+      {:ok, room} = CrdtRegistry.ensure_started(user.id, vault.id, note.id)
+      on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
+      # Every update_v1 bind posted to itself is ahead of this call.
+      _ = :sys.get_state(room)
+      room
+    end
+
+    # The room is a :sensitive process (crypto), so its dictionary is not
+    # readable through Process.info/2. Ask it from inside.
+    defp timer_of(room) do
+      me = self()
+
+      :ok =
+        Yex.Sync.SharedDoc.update_doc(room, fn _ ->
+          send(me, {:timer, Process.get(:crdt_timer_pid)})
+        end)
+
+      assert_receive {:timer, pid} when is_pid(pid)
+      pid
+    end
+
+    test "writes no tail row, pushes nothing and schedules no checkpoint", ctx do
+      %{user: user, vault: vault, note: note} = ctx
+      # A tail row too, so the replay has something to echo as well.
+      {:ok, %{state: upd}} = CrdtBridge.merge_plaintext(nil, "tail edit")
+      st = %{user_id: user.id, vault_id: vault.id, note_id: note.id}
+      _ = CrdtPersistence.update_v1(st, upd, note.id, CrdtBridge.new_doc())
+      assert_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}
+      assert tail_count(user, note.id) == 1
+
+      room = start_room(user, vault, note)
+
+      assert tail_count(user, note.id) == 1
+      refute_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 100
+      assert %{settle_timer: nil, first_dirty_at: nil} = :sys.get_state(timer_of(room))
+    end
+
+    test "still appends a real update after the bind", ctx do
+      %{user: user, vault: vault, note: note} = ctx
+      room = start_room(user, vault, note)
+
+      :ok =
+        Yex.Sync.SharedDoc.update_doc(room, fn doc ->
+          doc |> Yex.Doc.get_text(CrdtBridge.text_name()) |> Yex.Text.insert(0, "X")
+        end)
+
+      _ = :sys.get_state(room)
+      assert tail_count(user, note.id) == 1
+      assert_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}
+    end
+  end
 end

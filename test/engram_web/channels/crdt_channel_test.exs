@@ -1405,6 +1405,43 @@ defmodule EngramWeb.CrdtChannelTest do
     end
   end
 
+  describe "acknowledgement order" do
+    setup do
+      prev = Application.get_env(:engram, Engram.Notes.CrdtCheckpointTimer, [])
+      on_exit(fn -> Application.put_env(:engram, Engram.Notes.CrdtCheckpointTimer, prev) end)
+
+      Application.put_env(:engram, Engram.Notes.CrdtCheckpointTimer,
+        settle_ms: 600_000,
+        ceiling_ms: 600_000,
+        eager_ms: 600_000
+      )
+    end
+
+    # Snapshot + tail: what survives the room dying at the moment of the ack.
+    defp durable_text(user, vault, note_id) do
+      {:ok, row} = Notes.get_note_by_id(user, vault, note_id)
+      {:ok, text} = Notes.authoritative_content(user, row)
+      text
+    end
+
+    test "crdt_msg acks an edit only after its tail append", ctx do
+      %{socket: socket, user: user, vault: vault, note: note} = ctx
+      _ = handshake_room(socket, note.id)
+      frame = delta_frame(socket, note.id, "ACKED-")
+
+      room = CrdtRegistry.lookup(note.id)
+      on_exit(CheckpointInterleave.arm(:before_tail_append))
+
+      ref = push(socket, "crdt_msg", %{"doc_id" => note.id, "b64" => Base.encode64(frame)})
+      CheckpointInterleave.await_parked(:before_tail_append, room)
+      refute_reply ref, :ok, _, 200
+      CheckpointInterleave.release(:before_tail_append, room)
+
+      assert_reply ref, :ok, %{}, 3000
+      assert durable_text(user, vault, note.id) == "ACKED-base"
+    end
+  end
+
   describe "crdt_doc_update (room-free write for an idle note)" do
     test "applies the client's update and leaves NO resident room", %{
       socket: socket,

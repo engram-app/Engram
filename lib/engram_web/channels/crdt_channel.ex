@@ -252,14 +252,17 @@ defmodule EngramWeb.CrdtChannel do
          :ok <- guard_frame(frame),
          {:ok, socket, %{room: room}} <- ensure_room(socket, doc_id, frame_class_b64(b64)),
          :ok <- guard_size(room, frame),
-         :ok <- relay_frame(room, frame) do
+         :ok <- relay_frame(room, frame),
+         :ok <- confirm_appended(room, frame) do
       if frame_class_b64(b64) == :edit, do: note_sync_activity(socket)
 
       # ACK the push. Clients attach reply handlers to distinguish delivery
       # from loss; with no ack every successful push "times out" client-side —
       # the web SPA re-handshook every open note every ~3.5s forever
-      # (2026-07-14). Routed-to-room is the honest ack point: the frame is in
-      # the owner process's mailbox and the room's update_v1 path persists it.
+      # (2026-07-14). A frame carrying updates is acked only once the room's
+      # update_v1 has committed them to the tail log (confirm_appended/2):
+      # acked at routed-to-room, a node crash before the append lost an edit
+      # the client had already let go of.
       {:reply, {:ok, %{}}, socket}
     else
       {:error, :rate_limited} ->
@@ -295,8 +298,9 @@ defmodule EngramWeb.CrdtChannel do
         log_dropped(socket, doc_id, err)
         {:reply, {:error, %{reason: "note_not_found", doc_id: doc_id}}, socket}
 
-      {:error, :room_unavailable} = err ->
-        # The room auto-exited out from under every observe_with_retry attempt.
+      {:error, reason} = err when reason in [:room_unavailable, :append_failed] ->
+        # The room auto-exited out from under every observe_with_retry attempt
+        # (or its tail append failed: same heal, the client resends).
         # This used to fall through to the reply-less clause below, on the
         # reasoning that the sender "has no actionable heal" — defensible when a
         # room only vanished on a crash. The drain (#1152) makes teardown the
@@ -1869,6 +1873,13 @@ defmodule EngramWeb.CrdtChannel do
   catch
     :exit, _ -> {:error, :room_unavailable}
   end
+
+  # Sync step2 (<<0, 1>>) and update (<<0, 2>>) frames change the doc, so the
+  # room appends them; nothing else does.
+  defp confirm_appended(room, <<0, kind, _::binary>>) when kind in [1, 2],
+    do: CrdtTransport.confirm_appended(room)
+
+  defp confirm_appended(_room, _frame), do: :ok
 
   # NOT log_dropped/3: that keys the id as `note_id`, and an index frame has no
   # note. Handing it the vault id filed a VAULT under `note_id:`, silently

@@ -171,7 +171,8 @@ defmodule Engram.Notes.CrdtTransport do
       else
         {:error, :invalid_update} -> {:error, :invalid_update}
         {:error, :note_too_large} -> {:error, :note_too_large}
-        # ensure_started failure, or a room that timed out / died mid-apply.
+        # ensure_started failure, a room that timed out / died mid-apply, or a
+        # tail append that failed.
         {:error, _reason} -> {:error, :room_unavailable}
       end
     else
@@ -188,7 +189,8 @@ defmodule Engram.Notes.CrdtTransport do
   # REPORTS failures instead of swallowing them — this is a write contract, not
   # best-effort delivery.
   @spec apply_in_room(pid(), String.t(), binary()) ::
-          {:ok, String.t()} | {:error, :invalid_update | :note_too_large | :room_unavailable}
+          {:ok, String.t()}
+          | {:error, :invalid_update | :note_too_large | :room_unavailable | :append_failed}
   defp apply_in_room(room, note_id, update) do
     parent = self()
     ref = make_ref()
@@ -199,7 +201,12 @@ defmodule Engram.Notes.CrdtTransport do
     # what silently made that drain impossible to write.
     try do
       apply_in_room_call(room, parent, ref, update)
-      drain_reply(ref)
+
+      # Acknowledge only once the room's tail append committed: a success here
+      # lets the client drop its queued copy.
+      with {:ok, _head} = ok <- drain_reply(ref),
+           :ok <- confirm_appended(room),
+           do: ok
     catch
       :exit, {:noproc, _} ->
         drain_reply(ref)
@@ -267,6 +274,44 @@ defmodule Engram.Notes.CrdtTransport do
       send(parent, {ref, result})
       :ok
     end)
+  end
+
+  @doc """
+  Returns once `room` has appended every update it applied before this call to
+  the tail log, so the caller may acknowledge them.
+
+  The room appends in `CrdtPersistence.update_v1/4`, which y_ex runs inline
+  after a sync-update cast but only as a follow-up message after an
+  `update_doc` call. Either way it is queued ahead of this call, so the call
+  returns after it. `{:error, :append_failed}` means an append in that window
+  failed (logged by the room); `{:error, :room_unavailable}` that the room died
+  or did not answer in `timeout`. Retrying is safe: Yjs updates are idempotent.
+  """
+  @spec confirm_appended(pid(), timeout()) :: :ok | {:error, :append_failed | :room_unavailable}
+  def confirm_appended(room, timeout \\ 5_000) do
+    parent = self()
+    ref = make_ref()
+
+    try do
+      SharedDoc.update_doc(
+        room,
+        fn _doc -> send(parent, {ref, CrdtPersistence.take_append_failure()}) end,
+        timeout
+      )
+
+      drain_confirm(ref)
+    catch
+      :exit, _ -> drain_confirm(ref)
+    end
+  end
+
+  defp drain_confirm(ref) do
+    receive do
+      {^ref, false} -> :ok
+      {^ref, true} -> {:error, :append_failed}
+    after
+      0 -> {:error, :room_unavailable}
+    end
   end
 
   # The in-room fun sends `{ref, result}` BEFORE returning, and gen_server sends

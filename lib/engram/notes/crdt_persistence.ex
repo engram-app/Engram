@@ -80,43 +80,63 @@ defmodule Engram.Notes.CrdtPersistence do
             # empty: nothing here re-seeds it from `notes.content` (see the
             # NOTE below). CrdtCheckpoint guards against that empty doc being
             # materialized back over the body.
-            case Crypto.decrypt_crdt_state(note, user) do
-              {:ok, snapshot} when is_binary(snapshot) ->
-                :ok = Yex.apply_update(doc, snapshot)
+            snapshot_echoes =
+              case Crypto.decrypt_crdt_state(note, user) do
+                {:ok, snapshot} when is_binary(snapshot) ->
+                  if apply_echoing?(doc, snapshot), do: 1, else: 0
 
-              # No snapshot yet (`crdt_state_ciphertext` is nil): legitimate for
-              # a note that has never been checkpointed. The doc stays empty and
-              # `replay_tail/3` below fills it from the log.
-              {:ok, nil} ->
-                :ok
+                # No snapshot yet (`crdt_state_ciphertext` is nil): legitimate for
+                # a note that has never been checkpointed. The doc stays empty and
+                # `replay_tail/3` below fills it from the log.
+                {:ok, nil} ->
+                  0
 
-              # FAIL LOUD. This used to fall into the clause above via a
-              # catch-all `_`, which is the opposite policy from
-              # `Notes.maybe_merge_crdt/4` — that one refuses on the same signal
-              # (`throw {:crdt_decrypt, err}`). bind/3 was the fail-OPEN sibling.
-              #
-              # Continuing here starts a FRESH lineage for a note that already
-              # has state: the tail replays onto an empty doc, the room looks
-              # converged, and the next checkpoint writes that truncated doc back
-              # over the real content. A *transient* decrypt failure (DEK cache
-              # miss, a read mid-DEK-rotation) would become permanent data loss.
-              #
-              # Raising fails the room start instead, so the client's join errors
-              # and retries. A genuinely corrupt snapshot then surfaces as a loud,
-              # repeated failure rather than as silent truncation.
-              {:error, reason} ->
-                Logger.error(
-                  "crdt bind refused: crdt_state decrypt failed for note #{note_id}",
-                  Metadata.with_category(:error, :sync,
-                    note_id: note_id,
-                    reason: Metadata.safe_reason(reason)
+                # FAIL LOUD. This used to fall into the clause above via a
+                # catch-all `_`, which is the opposite policy from
+                # `Notes.maybe_merge_crdt/4` — that one refuses on the same signal
+                # (`throw {:crdt_decrypt, err}`). bind/3 was the fail-OPEN sibling.
+                #
+                # Continuing here starts a FRESH lineage for a note that already
+                # has state: the tail replays onto an empty doc, the room looks
+                # converged, and the next checkpoint writes that truncated doc back
+                # over the real content. A *transient* decrypt failure (DEK cache
+                # miss, a read mid-DEK-rotation) would become permanent data loss.
+                #
+                # Raising fails the room start instead, so the client's join errors
+                # and retries. A genuinely corrupt snapshot then surfaces as a loud,
+                # repeated failure rather than as silent truncation.
+                {:error, reason} ->
+                  Logger.error(
+                    "crdt bind refused: crdt_state decrypt failed for note #{note_id}",
+                    Metadata.with_category(:error, :sync,
+                      note_id: note_id,
+                      reason: Metadata.safe_reason(reason)
+                    )
                   )
-                )
 
-                raise "CrdtPersistence.bind/3: crdt_state decrypt failed for note #{note_id} (#{inspect(reason)}) — refusing to bind an empty doc over existing state"
-            end
+                  raise "CrdtPersistence.bind/3: crdt_state decrypt failed for note #{note_id} (#{inspect(reason)}) — refusing to bind an empty doc over existing state"
+              end
 
-            _applied = replay_tail(doc, user, note_id, vault_id)
+            {_applied, tail_echoes} =
+              replay_counting(doc, user, note_id, tail_rows(note_id, vault_id))
+
+            # y_ex installs the doc's update monitor BEFORE bind/3 runs
+            # (doc_server_worker.ex: monitor_update_v1, then module.init), so
+            # every apply above posted an `{:update_v1, ...}` to this room's own
+            # mailbox. Without a credit, update_v1/4 re-appended the loaded
+            # state to the tail and fanned it out to every device on each room
+            # start. Same fix as `CrdtIndexPersistence` (:index_replay_echoes):
+            # those messages are the next update_v1 calls this process makes
+            # (FIFO, sent before any client frame), so a count is exact.
+            #
+            # It counts CHANGES, not applies: an apply that changed nothing
+            # posts nothing, and a leftover credit would swallow a real client
+            # update's tail append. The normalize below is NOT credited: it
+            # writes new ops, which must be appended.
+            #
+            # Only a room has the monitor: a direct bind/3 call (tests) posts
+            # nothing, and a credit there would swallow its next update_v1.
+            if in_room?(), do: Process.put(:crdt_replay_echoes, snapshot_echoes + tail_echoes)
 
             # NOTE: the server no longer seeds the doc from `notes.content`
             # here. That seed made the SERVER a third writer of note content,
@@ -143,13 +163,26 @@ defmodule Engram.Notes.CrdtPersistence do
   # Uses the user cached by bind/3 when present (the live room path); falls back
   # to a lazy fetch when called with a bare state map (direct unit-test calls).
   @impl true
-  def update_v1(
-        %{user_id: user_id, vault_id: vault_id, note_id: note_id} = state,
-        update,
-        _name,
-        doc
-      ) do
+  def update_v1(state, update, name, doc) do
+    case Process.get(:crdt_replay_echoes, 0) do
+      n when n > 0 ->
+        # bind/3 loading persisted state, already durable: see bind/3.
+        Process.put(:crdt_replay_echoes, n - 1)
+        state
+
+      _ ->
+        append_update(state, update, name, doc)
+    end
+  end
+
+  defp append_update(
+         %{user_id: user_id, vault_id: vault_id, note_id: note_id} = state,
+         update,
+         _name,
+         doc
+       ) do
     user = state[:user] || Accounts.get_user!(user_id)
+    interleave_hook(:before_tail_append)
 
     case Crypto.encrypt_crdt_state(update, user, note_id) do
       {:ok, {ct, nonce}} ->
@@ -255,6 +288,10 @@ defmodule Engram.Notes.CrdtPersistence do
         )
 
       {:error, reason} ->
+        # Read by the next `CrdtTransport.confirm_appended/2`, which refuses
+        # the acknowledgement.
+        Process.put(:crdt_append_failed, true)
+
         Logger.error(
           "crdt_update_log encrypt failed note_id=#{note_id} reason=#{Metadata.safe_reason(reason)}",
           Metadata.with_category(:error, :sync, note_id: note_id)
@@ -271,6 +308,12 @@ defmodule Engram.Notes.CrdtPersistence do
 
     state
   end
+
+  @doc false
+  # Whether an append failed since the last call, clearing the flag. Runs in the
+  # room (see `CrdtTransport.confirm_appended/2`).
+  @spec take_append_failure() :: boolean()
+  def take_append_failure, do: Process.delete(:crdt_append_failed) == true
 
   # Runs on graceful room terminate (SharedDoc `auto_exit: true`). Materializes
   # content/content_hash/seq into the notes row and enqueues a debounced embed.
@@ -391,8 +434,36 @@ defmodule Engram.Notes.CrdtPersistence do
   """
   @spec apply_tail_rows(Yex.Doc.t(), map(), String.t(), [struct()]) :: [Ecto.UUID.t()]
   def apply_tail_rows(doc, user, note_id, rows) do
+    {applied, _echoes} = replay_counting(doc, user, note_id, rows)
+    applied
+  end
+
+  # Test-only seam (`Engram.CheckpointInterleave`): nil outside those tests.
+  defp interleave_hook(point) do
+    case Application.get_env(:engram, :checkpoint_interleave_hook) do
+      nil -> :ok
+      fun when is_function(fun, 1) -> _ = fun.(point)
+    end
+
+    :ok
+  end
+
+  defp in_room?, do: match?({Yex.DocServer.Worker, _, _}, Process.get(:"$initial_call"))
+
+  # Whether applying `update` changed `doc`, i.e. whether it posted an
+  # `{:update_v1, ...}`. The state vector advances iff new items integrated. A
+  # delete-only update can emit without advancing it: that under-counts, which
+  # only re-appends an idempotent row. Over-counting would drop a real update.
+  defp apply_echoing?(doc, update) do
+    before = Yex.encode_state_vector(doc)
+    _ = Yex.apply_update(doc, update)
+    Yex.encode_state_vector(doc) != before
+  end
+
+  # apply_tail_rows/4 plus how many of the applies changed the doc.
+  defp replay_counting(doc, user, note_id, rows) do
     rows
-    |> Enum.reduce([], fn row, applied ->
+    |> Enum.reduce({[], 0}, fn row, {applied, echoes} ->
       shaped = %Note{
         id: note_id,
         dek_version: Crypto.row_version_aad_bound(),
@@ -402,8 +473,7 @@ defmodule Engram.Notes.CrdtPersistence do
 
       case Crypto.decrypt_crdt_state(shaped, user) do
         {:ok, upd} when is_binary(upd) ->
-          _ = Yex.apply_update(doc, upd)
-          [row.id | applied]
+          {[row.id | applied], echoes + if(apply_echoing?(doc, upd), do: 1, else: 0)}
 
         {:error, reason} ->
           Logger.warning(
@@ -414,7 +484,7 @@ defmodule Engram.Notes.CrdtPersistence do
             )
           )
 
-          applied
+          {applied, echoes}
 
         unexpected ->
           Logger.warning(
@@ -425,9 +495,9 @@ defmodule Engram.Notes.CrdtPersistence do
             )
           )
 
-          applied
+          {applied, echoes}
       end
     end)
-    |> Enum.reverse()
+    |> then(fn {applied, echoes} -> {Enum.reverse(applied), echoes} end)
   end
 end
