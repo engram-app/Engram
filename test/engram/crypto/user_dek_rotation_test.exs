@@ -54,6 +54,25 @@ defmodule Engram.Crypto.UserDekRotationTest do
   describe "rotate_user/1 vs the :user cache" do
     test "final_flip evicts the cached user on the writing node", %{user: user} do
       before = Engram.Accounts.get_user(user.id)
+
+      # Re-cache the user mid-rotation (after RotationLock.acquire evicted it,
+      # before final_flip): the Qdrant sweep phase sits between the two, so
+      # its scroll stub reads the user through the cache. Without the flip's
+      # own evict, that pre-flip row would survive the rotation.
+      bypass = Bypass.open()
+      Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
+
+      Bypass.stub(bypass, "POST", "/collections/engram_notes/points/scroll", fn conn ->
+        _ = Engram.Accounts.get_user(user.id)
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{"result" => %{"points" => [], "next_page_offset" => nil}})
+        )
+      end)
+
       assert :ok = UserDekRotation.rotate_user(user.id)
 
       %{encrypted_dek: db_blob} = Repo.get!(Engram.Accounts.User, user.id)

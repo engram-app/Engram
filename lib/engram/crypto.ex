@@ -196,8 +196,9 @@ defmodule Engram.Crypto do
   @doc """
   Reloads a user whose `encrypted_dek` is nil in memory.
 
-  `get_dek/1` reads the field off the STRUCT, so a caller holding a copy taken
-  before provisioning gets `:no_dek` for a user who has a DEK. That is only a
+  `get_dek/1` answers `:no_dek` from the STRUCT when its `encrypted_dek` is
+  nil (only a non-nil blob is re-read from the DB), so a caller holding a copy
+  taken before provisioning gets `:no_dek` for a user who has a DEK. That is only a
   missed cache normally — but a folder-delete guard reads `:no_dek` as "nothing
   encrypted here", so a stale struct could make a full folder look empty.
   """
@@ -219,7 +220,11 @@ defmodule Engram.Crypto do
         {:ok, dek}
 
       :miss ->
-        unwrap_and_cache(user_id, wrapped_dek(user))
+        # Claim BEFORE reading the blob: a flip that commits after the read
+        # invalidates the slot, and put_if_claimed then refuses to store the
+        # retired DEK this call unwrapped.
+        token = DekCache.claim(user_id)
+        unwrap_and_cache(user_id, token, wrapped_dek(user))
     end
   end
 
@@ -238,9 +243,9 @@ defmodule Engram.Crypto do
     end
   end
 
-  defp unwrap_and_cache(_user_id, {nil, _version}), do: {:error, :no_dek}
+  defp unwrap_and_cache(_user_id, _token, {nil, _version}), do: {:error, :no_dek}
 
-  defp unwrap_and_cache(user_id, {blob, dek_version}) do
+  defp unwrap_and_cache(user_id, token, {blob, dek_version}) do
     # Phase 3 — dispatch unwrap by blob tag, not by Resolver.provider/0.
     # Lets mixed-state fleets read seamlessly during Local↔KMS backfill
     # windows. Writes still follow Resolver (see ensure_user_dek/1).
@@ -256,7 +261,7 @@ defmodule Engram.Crypto do
 
         case source_provider.unwrap_dek(blob, ctx) do
           {:ok, dek} ->
-            DekCache.put(user_id, dek)
+            _ = DekCache.put_if_claimed(user_id, token, dek)
             maybe_enqueue_lazy_migration(user_id, source_provider)
             {:ok, dek}
 

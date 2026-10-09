@@ -197,4 +197,37 @@ defmodule Engram.Crypto.DekCacheTest do
       assert true == DekCache.sensitive_flag?()
     end
   end
+
+  # get_dek's miss path: claim the slot, unwrap, store only if the claim is
+  # still there. An invalidate in between (a DEK flip, local or from a peer)
+  # deletes the claim, so a DEK loaded across the flip is never cached.
+  describe "claim / put_if_claimed" do
+    test "a claimed slot reads as a miss, and the claimer's put stores" do
+      token = DekCache.claim(1)
+      assert :miss = DekCache.get(1)
+      assert :ok = DekCache.put_if_claimed(1, token, @dek)
+      assert {:ok, @dek} = DekCache.get(1)
+    end
+
+    test "an invalidate between claim and store leaves the slot a miss" do
+      token = DekCache.claim(1)
+      DekCache.invalidate(1)
+      assert :stale = DekCache.put_if_claimed(1, token, @dek)
+      assert :miss = DekCache.get(1)
+    end
+
+    test "a peer dek_evict between claim and store leaves the slot a miss" do
+      token = DekCache.claim(1)
+      send(DekCache, {:cache_sync, {:dek_evict, 1}})
+      assert :stale = DekCache.put_if_claimed(1, token, @dek)
+      assert :miss = DekCache.get(1)
+    end
+
+    test "a newer claim wins over an older one" do
+      old = DekCache.claim(1)
+      new = DekCache.claim(1)
+      assert :stale = DekCache.put_if_claimed(1, old, @dek)
+      assert :ok = DekCache.put_if_claimed(1, new, @dek)
+    end
+  end
 end

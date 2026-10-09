@@ -181,5 +181,34 @@ defmodule Engram.CacheTest do
       :ok = Listener.notify("users_changed", "u1", state)
       assert_receive {:notification, _, _, "users_changed", "u1"}
     end
+
+    test "a failed LISTEN is logged, not reported as connected, and retried" do
+      Process.register(self(), :listener_probe_err)
+      {:ok, state} = Listener.init(server: :listener_probe_err, retry_ms: 10)
+      {:query, _, state} = Listener.handle_connect(state)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:noreply, state} =
+                   Listener.handle_result(%Postgrex.Error{message: "boom"}, state)
+
+          send(self(), {:state, state})
+        end)
+
+      assert log =~ "cache: failed to LISTEN"
+      refute_received :pg_listen_connected
+      assert_received {:state, state}
+      assert_receive :relisten, 500
+      assert {:query, sql, _} = Listener.handle_info(:relisten, state)
+      assert sql =~ "LISTEN"
+    end
+
+    test "rejects calls it does not handle" do
+      {:ok, state} = Listener.init(:ok)
+      ref = make_ref()
+      # SimpleConnection hands callbacks {caller_pid, gen_statem_from}.
+      {:noreply, _} = Listener.handle_call(:listen, {self(), {self(), ref}}, state)
+      assert_receive {^ref, {:error, :unsupported}}
+    end
   end
 end
