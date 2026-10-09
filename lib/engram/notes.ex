@@ -2158,7 +2158,7 @@ defmodule Engram.Notes do
       #
       # The fence is on `crdt_state_ciphertext`, NOT on `version`. That is the
       # whole point: `crdt` above was merged against `existing.crdt_state`, so
-      # the snapshot is what this write's correctness depends on — and the
+      # the snapshot is what this write's correctness depends on, and the
       # checkpoint branches that cause the loss (compaction, and the
       # structural/.canvas branch) rewrite `crdt_state` and PRUNE THE TAIL
       # while deliberately leaving `version` and `seq` untouched, precisely so

@@ -1,17 +1,18 @@
 defmodule EngramWeb.CrdtCreateQueryBudgetTest do
   # Pins the SQL cost of one first-sync `crdt_create` carrying a genesis body.
   # The channel handles creates inline, so per-create statements bound
-  # first-sync throughput (#1877). Lower these ceilings when a reduction lands;
-  # a rise means a new round trip crept onto the hot path.
+  # first-sync throughput (#1877). Exact counts for the stated cache state
+  # (request caches cleared, then warmed by one create): update them when a
+  # reduction lands; a rise means a new round trip crept onto the hot path.
   use EngramWeb.ChannelCase, async: false
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Engram.{Crypto, Repo, TenantQueryCounter, Vaults}
   alias Engram.Notes.CrdtBridge
 
-  @max_statements 69
-  @max_tenant_txns 9
-  @max_subscription_reads 2
+  @statements 57
+  @tenant_txns 7
+  @subscription_reads 0
 
   defp frame_for_content(content) do
     doc = CrdtBridge.new_doc()
@@ -40,7 +41,9 @@ defmodule EngramWeb.CrdtCreateQueryBudgetTest do
 
     Sandbox.allow(Repo, self(), socket.channel_pid)
 
-    # Warm the vault's first note so the measured create is a steady-state one.
+    # Request caches cleared, then warmed by the vault's first note, so the
+    # measured create is a steady-state one.
+    Engram.DataCase.clear_request_caches()
     create(socket, "warm.md", "# warm\n\nbody")
     %{socket: socket}
   end
@@ -69,8 +72,8 @@ defmodule EngramWeb.CrdtCreateQueryBudgetTest do
     tenant_txns = Enum.count(queries, &(&1 =~ "set_config('app.current_tenant', $1"))
     subscription_reads = Enum.count(queries, &(&1 =~ ~s(FROM "subscriptions")))
 
-    assert length(queries) <= @max_statements, "#{length(queries)} statements"
-    assert tenant_txns <= @max_tenant_txns, "#{tenant_txns} tenant transactions"
-    assert subscription_reads <= @max_subscription_reads, "#{subscription_reads} tier reads"
+    assert length(queries) == @statements, "#{length(queries)} statements"
+    assert tenant_txns == @tenant_txns, "#{tenant_txns} tenant transactions"
+    assert subscription_reads == @subscription_reads, "#{subscription_reads} tier reads"
   end
 end

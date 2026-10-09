@@ -71,15 +71,25 @@ defmodule Engram.QueryBudgetTest do
     %{conn: authed, user: user, vault: vault, notes: notes}
   end
 
-  # One warm-up call (fills caches, as on a long-lived prod node), then the
-  # measured call. Returns the measured call's result after asserting the budget.
-  defp measure(name, warm_up, fun) do
-    if warm_up, do: fun.()
+  # The request-lookup caches (`Engram.Cache`). Every count below is taken with
+  # them in ONE stated state: cleared, then warmed by `warm` (the measured call
+  # itself when `true`), as on a long-lived prod node. The file is async: false,
+  # so no other test's setup can clear them between the warm-up and the
+  # measurement.
+  # The CRDT counts include a checkpoint tick that fires on a timer inside the
+  # measured window, so they are ceilings. Every other count is exact.
+  @ceilings ["CRDT crdt_msg update", "CRDT crdt_doc_update idle"]
+
+  defp measure(name, warm, fun) do
+    Engram.DataCase.clear_request_caches()
+    if warm == true, do: fun.(), else: warm.()
     {result, qs} = QueryRecorder.record(fun)
     budget = Map.fetch!(@budgets, name)
+    report = "#{name}: #{length(qs)} queries (budget #{budget})\n" <> QueryRecorder.format(qs)
 
-    assert length(qs) <= budget,
-           "#{name}: #{length(qs)} queries (budget #{budget})\n" <> QueryRecorder.format(qs)
+    if name in @ceilings,
+      do: assert(length(qs) <= budget, report),
+      else: assert(length(qs) == budget, report)
 
     result
   end
@@ -133,10 +143,11 @@ defmodule Engram.QueryBudgetTest do
 
     test "mcp delete_note", %{conn: conn} do
       call_tool(conn, "write_note", %{"path" => "Work/New.md", "content" => "# New\n"})
-      # Warm-up deletes the note; the measured call is the same path as on a warm node.
-      call_tool(conn, "delete_note", %{"path" => "Work/Other.md"})
 
-      measure("mcp delete_note", false, fn ->
+      # Warm-up deletes another note; the measured call is the same path.
+      warm = fn -> call_tool(conn, "delete_note", %{"path" => "Work/Other.md"}) end
+
+      measure("mcp delete_note", warm, fn ->
         conn |> call_tool("delete_note", %{"path" => "Work/New.md"}) |> tool_ok!()
       end)
     end
@@ -189,9 +200,7 @@ defmodule Engram.QueryBudgetTest do
     end
 
     test "POST notes/rename", %{conn: conn} do
-      get(conn, "/api/sync/manifest")
-
-      measure("POST notes/rename", false, fn ->
+      measure("POST notes/rename", fn -> get(conn, "/api/sync/manifest") end, fn ->
         conn
         |> post("/api/notes/rename", %{old_path: "Home/Third.md", new_path: "Home/Third2.md"})
         |> ok!()
@@ -199,9 +208,7 @@ defmodule Engram.QueryBudgetTest do
     end
 
     test "DELETE notes/*path", %{conn: conn} do
-      get(conn, "/api/sync/manifest")
-
-      measure("DELETE notes/*path", false, fn ->
+      measure("DELETE notes/*path", fn -> get(conn, "/api/sync/manifest") end, fn ->
         conn |> delete("/api/notes/Home/Third.md") |> ok!()
       end)
     end
@@ -250,6 +257,13 @@ defmodule Engram.QueryBudgetTest do
       {doc, frame}
     end
 
+    # The room's own cached lookups, as a resident room on a warm node has them:
+    # the user (bind, checkpoint) and its subscription (the history gate).
+    defp warm_room_lookups(user) do
+      Engram.Accounts.get_user(user.id)
+      Engram.Billing.get_subscription(user)
+    end
+
     test "CRDT crdt_msg update", %{user: user, vault: vault, notes: notes} do
       note = notes["p.md"]
       _ = join(user, vault)
@@ -263,7 +277,7 @@ defmodule Engram.QueryBudgetTest do
       chan_push(socket, "crdt_msg", %{"doc_id" => note.id, "b64" => Base.encode64(step1)})
       assert_push "crdt_msg", %{"doc_id" => _}, 3000
 
-      measure("CRDT crdt_msg update", false, fn ->
+      measure("CRDT crdt_msg update", fn -> warm_room_lookups(user) end, fn ->
         chan_push(socket, "crdt_msg", %{"doc_id" => note.id, "b64" => Base.encode64(frame)})
         Process.sleep(500)
       end)
@@ -275,7 +289,7 @@ defmodule Engram.QueryBudgetTest do
       socket = join(user, vault)
       {_, frame} = delta_frame(socket, idle.id, "B-")
 
-      measure("CRDT crdt_doc_update idle", false, fn ->
+      measure("CRDT crdt_doc_update idle", fn -> warm_room_lookups(user) end, fn ->
         ref =
           chan_push(socket, "crdt_doc_update", %{
             "doc_id" => idle.id,

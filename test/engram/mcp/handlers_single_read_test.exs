@@ -36,6 +36,9 @@ defmodule Engram.MCP.HandlersSingleReadTest do
     conn
   end
 
+  # Counting tests below clear the request caches, then warm them with one
+  # call of the same kind, then measure: the warm state of a long-lived node.
+
   defp selects(qs, source),
     do: Enum.filter(qs, &(&1.source == source and String.starts_with?(&1.sql, "SELECT")))
 
@@ -53,6 +56,7 @@ defmodule Engram.MCP.HandlersSingleReadTest do
   end
 
   test "append reads the note once, then re-reads it locked", %{conn: conn} do
+    Engram.DataCase.clear_request_caches()
     conn |> call_tool("append_to_note", %{"path" => "a.md", "text" => "warm"}) |> tool_ok!()
 
     {_, qs} =
@@ -69,6 +73,7 @@ defmodule Engram.MCP.HandlersSingleReadTest do
         {"insert_section", %{"heading" => "Body", "content" => "inserted"}}
       ] do
     test "edit_note #{mode} reads the note once, then re-reads it locked", %{conn: conn} do
+      Engram.DataCase.clear_request_caches()
       conn |> call_tool("append_to_note", %{"path" => "a.md", "text" => "warm"}) |> tool_ok!()
       args = Map.merge(%{"path" => "a.md", "mode" => unquote(mode)}, unquote(Macro.escape(args)))
 
@@ -97,6 +102,8 @@ defmodule Engram.MCP.HandlersSingleReadTest do
   end
 
   test "fanout does not re-read the note", %{conn: conn, user: user, vault: vault} do
+    Engram.DataCase.clear_request_caches()
+
     conn
     |> call_tool("write_note", %{"path" => "a.md", "content" => "# A\n\nwarm\n"})
     |> tool_ok!()

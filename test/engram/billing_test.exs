@@ -1502,6 +1502,10 @@ defmodule Engram.BillingTest do
   # scope counting to this test's pid — otherwise concurrent async tests
   # (running in their own processes) leak into the count.
   defp with_query_count(source, fun) do
+    # Cold request caches, stated: these counts assume no cached user /
+    # subscription / vaults (the file is async: false, so nothing clears or
+    # fills them concurrently).
+    Engram.DataCase.clear_request_caches()
     test_pid = self()
     {:ok, counter} = Agent.start_link(fn -> 0 end)
     handler_id = {__MODULE__, make_ref()}

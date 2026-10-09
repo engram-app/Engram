@@ -3,8 +3,6 @@ defmodule EngramWeb.SyncControllerTest do
 
   import ExUnit.CaptureLog
 
-  alias Engram.TenantQueryCounter
-
   setup %{conn: conn} do
     user = insert(:user)
     # Free-tier launch §4.5 — attachment uploads now gate on attachments_enabled,
@@ -16,74 +14,6 @@ defmodule EngramWeb.SyncControllerTest do
     grant_api_write!(user)
     authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
     %{conn: authed, user: user, vault: vault}
-  end
-
-  # Counts `with_tenant/2` invocations that actually open a transaction —
-  # see Engram.TenantQueryCounter (#1211 regression guard, shared with
-  # VaultTreeControllerTest and RepoTenantRoundtripsTest).
-  defp count_tenant_enters(fun), do: TenantQueryCounter.count_tenant_enters(fun)
-
-  describe "GET /sync/manifest with_tenant round trips (#1211)" do
-    # The floor here is 2 blocks, not 1: EngramWeb.Plugs.VaultPlug resolves
-    # `current_vault` (Vaults.get_default_vault/1) in its own with_tenant
-    # block before the controller action ever runs — on every authed API
-    # request, not just this one. Collapsing that into the controller's
-    # transaction would mean holding a DB connection open across arbitrary
-    # downstream plug/controller work, the exact anti-pattern #1211's "trap"
-    # section warns against for decrypt. Out of scope here; only the two
-    # *adjacent* blocks inside render_manifest/5 (notes fetch + attachments
-    # fetch) are being collapsed.
-    test "a changed manifest opens at most 4 with_tenant blocks", %{conn: conn} do
-      post(conn, "/api/notes", %{path: "A.md", content: "# A", mtime: 1_000.0})
-
-      post(conn, "/api/attachments", %{
-        path: "img.png",
-        content_base64: Base.encode64("hi"),
-        mtime: 1_000.0
-      })
-
-      enters =
-        count_tenant_enters(fn ->
-          conn |> get("/api/sync/manifest") |> json_response(200)
-        end)
-
-      # VaultPlug's vault resolve + Vaults.current_seq/2 + one combined block
-      # for the notes/attachments fetch. Was 4 (VaultPlug + current_seq +
-      # separate notes block + separate attachments block).
-      # +1 since #1758: EngramWeb.Plugs.Auth preloads the subscription in its
-      # own with_tenant block, required once `subscriptions` carries RLS
-      # (unscoped, a paying user resolves :free). ~0.6ms per block (repo.ex:
-      # 13 blocks = 7.9ms). AuthTest pins that plug at exactly ONE block.
-      assert length(enters) <= 4,
-             "expected at most 4 with_tenant blocks (Auth subscription preload + " <>
-               "VaultPlug + current_seq + one " <>
-               "combined notes/attachments fetch), got #{length(enters)}: #{inspect(enters)}"
-    end
-
-    test "an unchanged manifest still opens exactly 3 with_tenant blocks", %{conn: conn} do
-      post(conn, "/api/notes", %{path: "A.md", content: "# A", mtime: 1_000.0})
-
-      current =
-        conn |> get("/api/sync/manifest") |> json_response(200) |> Map.fetch!("change_seq")
-
-      enters =
-        count_tenant_enters(fn ->
-          conn
-          |> get("/api/sync/manifest?since_seq=#{current}")
-          |> json_response(200)
-        end)
-
-      # VaultPlug's vault resolve + Vaults.current_seq/2. The short-circuit
-      # path was already minimal (skips notes/attachments entirely) — this
-      # just guards it from regressing.
-      # +1 since #1758: EngramWeb.Plugs.Auth preloads the subscription in its
-      # own with_tenant block, required once `subscriptions` carries RLS
-      # (unscoped, a paying user resolves :free). ~0.6ms per block (repo.ex:
-      # 13 blocks = 7.9ms). AuthTest pins that plug at exactly ONE block.
-      assert length(enters) == 3,
-             "short-circuit path must not regress past 3 with_tenant blocks, " <>
-               "got #{length(enters)}: #{inspect(enters)}"
-    end
   end
 
   describe "GET /sync/manifest" do
@@ -292,6 +222,76 @@ defmodule EngramWeb.SyncControllerTest do
         end)
 
       assert log =~ "sync manifest: DEK unavailable"
+    end
+  end
+end
+
+defmodule EngramWeb.SyncControllerTenantBlocksTest do
+  # async: false: these count with_tenant blocks over a request, and the
+  # request-lookup caches they depend on are node-global; an async test's
+  # setup clears them (see Engram.DataCase.clear_request_caches/0).
+  use EngramWeb.ConnCase, async: false
+
+  alias Engram.TenantQueryCounter
+
+  # A real vault (register_vault encrypts its name): the factory's random name
+  # bytes do not decrypt, and an undecryptable vault list is never cached, so
+  # the warm state would not be the one prod runs in.
+  setup %{conn: conn} do
+    user = insert(:user)
+    insert(:subscription, user: user, tier: "pro", status: "active")
+    {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+    {:ok, vault, _} = Engram.Vaults.register_vault(user, "Blocks", Ecto.UUID.generate())
+    {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
+    grant_api_write!(user)
+    authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
+    %{conn: authed, user: user, vault: vault}
+  end
+
+  # Caches cleared, then warmed by one identical request (a long-lived prod
+  # node's steady state), then the measured request.
+  defp warm_then_count(fun) do
+    Engram.DataCase.clear_request_caches()
+    fun.()
+    TenantQueryCounter.count_tenant_enters(fun)
+  end
+
+  defp assert_blocks(enters, n) do
+    assert length(enters) == n, "expected #{n} with_tenant blocks, got #{length(enters)}"
+  end
+
+  describe "GET /sync/manifest with_tenant round trips (#1211)" do
+    # Warm request caches, the steady state of a long-lived node: Auth's
+    # subscription preload (#1758) and VaultPlug's vault resolve are cache hits
+    # and open no block. What remains is the controller's own work.
+    test "with warm request caches, a changed manifest opens exactly 2 with_tenant blocks",
+         %{conn: conn} do
+      post(conn, "/api/notes", %{path: "A.md", content: "# A", mtime: 1_000.0})
+
+      post(conn, "/api/attachments", %{
+        path: "img.png",
+        content_base64: Base.encode64("hi"),
+        mtime: 1_000.0
+      })
+
+      # Vaults.current_seq/2 + one combined notes/attachments fetch (was 4 before
+      # #1211 collapsed the separate notes and attachments blocks).
+      warm_then_count(fn -> conn |> get("/api/sync/manifest") |> json_response(200) end)
+      |> assert_blocks(2)
+    end
+
+    test "with warm request caches, an unchanged manifest opens exactly 1 with_tenant block",
+         %{conn: conn} do
+      post(conn, "/api/notes", %{path: "A.md", content: "# A", mtime: 1_000.0})
+
+      current =
+        conn |> get("/api/sync/manifest") |> json_response(200) |> Map.fetch!("change_seq")
+
+      # Vaults.current_seq/2 only: the short-circuit skips notes/attachments.
+      warm_then_count(fn ->
+        conn |> get("/api/sync/manifest?since_seq=#{current}") |> json_response(200)
+      end)
+      |> assert_blocks(1)
     end
   end
 end

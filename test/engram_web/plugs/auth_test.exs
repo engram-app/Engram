@@ -53,6 +53,9 @@ defmodule EngramWeb.Plugs.AuthTest do
 
     insert(:subscription, user: user, tier: "pro", status: "active")
 
+    # Cold subscription cache, stated: a warm one opens no block at all.
+    Engram.DataCase.clear_request_caches()
+
     enters =
       Engram.TenantQueryCounter.count_tenant_enters(fn ->
         build_conn()

@@ -46,8 +46,7 @@ defmodule Engram.DataCase do
     # entries, but the sandbox never commits: the NOTIFY triggers that evict
     # them in prod never fire. Start each test cold; a test that rewrites a
     # cached row mid-test evicts it by hand, as the trigger would.
-    for c <- [:user, :api_key, :subscription, :vaults],
-        do: Engram.Cache.clear_local(c)
+    clear_request_caches()
 
     # A test may spin up `:global` CrdtDoc rooms (any test exercising the CRDT
     # sync path). A room is a sandbox-using process that is NOT linked to the
@@ -109,6 +108,19 @@ defmodule Engram.DataCase do
       Engram.Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_app")
     end
 
+    :ok
+  end
+
+  @doc """
+  Empties the request-lookup caches (user, api_key, subscription, vaults).
+
+  They are node-global ETS tables, so this clears EVERY test's entries. A test
+  that counts queries or with_tenant blocks over a request must therefore run
+  `async: false` (an async test's setup could clear them between its warm-up
+  and its measurement) and call this to put them in a stated state first.
+  """
+  def clear_request_caches do
+    for c <- [:user, :api_key, :subscription, :vaults], do: Engram.Cache.clear_local(c)
     :ok
   end
 
