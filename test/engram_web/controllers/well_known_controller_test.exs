@@ -221,7 +221,7 @@ defmodule EngramWeb.WellKnownControllerTest do
       assert body["authentication"] == %{"required" => true, "schemes" => ["oauth2"]}
     end
 
-    test "carries serverInfo and empty resources and prompts", %{conn: conn} do
+    test "carries serverInfo, the served prompts and empty resources", %{conn: conn} do
       body = conn |> get("/.well-known/mcp/server-card.json") |> json_response(200)
 
       # The real build version, the same number /api/health reports. It was a
@@ -232,14 +232,17 @@ defmodule EngramWeb.WellKnownControllerTest do
              }
 
       assert body["resources"] == []
-      assert body["prompts"] == []
+      assert body["prompts"] == Engram.MCP.Prompts.wire_list()
     end
 
-    test "tripwire: the card's empty resources/prompts still match what we serve" do
-      # `resources` and `prompts` are literal empty lists in the card. If MCP
-      # resources or prompts are ever added, this fails and points at
+    test "tripwire: the card's empty resources still match what we serve" do
+      # `resources` is a literal empty list in the card. If MCP resources are
+      # ever added, this fails and points at
       # `WellKnownController.mcp_server_card/2`, which must then list them.
-      assert Map.keys(EngramWeb.McpController.capabilities()) == ["tools"]
+      assert Map.keys(EngramWeb.McpController.capabilities()) |> Enum.sort() == [
+               "prompts",
+               "tools"
+             ]
     end
 
     test "needs no auth and is edge-cacheable", %{conn: conn} do

@@ -1,17 +1,22 @@
 defmodule EngramWeb.McpController do
   @moduledoc """
   MCP (Model Context Protocol) server — JSON-RPC 2.0 over HTTP POST.
-  Dispatches initialize, tools/list, and tools/call to the tool registry.
+  Dispatches initialize, tools/list and tools/call to the tool registry, and
+  prompts/list and prompts/get to `Engram.MCP.Prompts`.
   """
   use EngramWeb, :controller
 
   alias Engram.Abuse.OriginStats
+  alias Engram.MCP.Prompts
   alias Engram.MCP.Tools
   alias Engram.Observability.PostHog
 
   require Logger
 
-  @capabilities %{"tools" => %{"listChanged" => false}}
+  @capabilities %{
+    "tools" => %{"listChanged" => false},
+    "prompts" => %{"listChanged" => false}
+  }
 
   @doc """
   The `serverInfo` every handshake reports, and the server card too. The
@@ -94,8 +99,8 @@ defmodule EngramWeb.McpController do
   @modern_removed_methods ~w(initialize ping logging/setLevel notifications/roots/list_changed)
 
   # Cache hints the modern era REQUIRES on `resultType: "complete"` results
-  # from a fixed set of operations. We expose two of them; the rest
-  # (prompts/list, resources/*) we do not serve.
+  # from a fixed set of operations. We expose three of them; the rest
+  # (resources/*) we do not serve.
   #
   # An hour: both results change only on deploy. We advertise
   # `listChanged: false`, so there is no invalidation signal and the TTL is the
@@ -109,9 +114,12 @@ defmodule EngramWeb.McpController do
   # cache serve one caller's response to another ACROSS access tokens, so the
   # day a tool becomes plan- or scope-gated this MUST become `private`.
   # Per-call authorization lives in `tools/call` and does not depend on this.
+  # `prompts/list` is public on the same invariant: `Prompts.wire_list/0` is a
+  # compile-time constant.
   @cacheable_results %{
     "server/discover" => %{"ttlMs" => 3_600_000, "cacheScope" => "public"},
-    "tools/list" => %{"ttlMs" => 3_600_000, "cacheScope" => "public"}
+    "tools/list" => %{"ttlMs" => 3_600_000, "cacheScope" => "public"},
+    "prompts/list" => %{"ttlMs" => 3_600_000, "cacheScope" => "public"}
   }
 
   # `2024-11-05` is on the list for CONTINUITY, not ambition. SDKs released
@@ -596,6 +604,22 @@ defmodule EngramWeb.McpController do
 
   defp dispatch(_conn, "tools/list", _params) do
     {:ok, %{"tools" => Tools.wire_list()}}
+  end
+
+  defp dispatch(_conn, "prompts/list", _params) do
+    {:ok, %{"prompts" => Prompts.wire_list()}}
+  end
+
+  # Unknown name and bad arguments are both -32602, per the prompts spec.
+  defp dispatch(_conn, "prompts/get", params) when is_non_struct_map(params) do
+    case Prompts.get(params["name"], Map.get(params, "arguments") || %{}) do
+      {:ok, result} -> {:ok, result}
+      {:error, msg} -> {:error, -32_602, msg}
+    end
+  end
+
+  defp dispatch(_conn, "prompts/get", _params) do
+    {:error, -32_602, "Invalid params: name required"}
   end
 
   defp dispatch(conn, "tools/call", %{"name" => name, "arguments" => args}) do
