@@ -27,7 +27,7 @@ import type { NoteLinkEdge } from "../viewer/wiki-link";
 import { reconcileActiveVault, useActiveVaultId } from "./active-vault";
 import { crdtCreateNote, crdtCreateNoteWithContent, crdtDeleteNote } from "./channel";
 import { ApiError, api } from "./client";
-import { CrdtOpError } from "./crdt-ops";
+import { CrdtOpError, isPermanentJoinRefusal, toastJoinRefused } from "./crdt-ops";
 import {
 	applyNoteEvents,
 	baseOf,
@@ -108,12 +108,24 @@ interface CreateNoteContext extends TreeContext {
 	id: string;
 }
 
+/** True (and toasts) when `err` is a permanent join refusal. */
+function joinRefused(err: unknown, t: Translate): boolean {
+	if (err instanceof CrdtOpError && isPermanentJoinRefusal(err)) {
+		toastJoinRefused(t);
+		return true;
+	}
+	return false;
+}
+
 // 409/404/etc → human-grade toast copy. Centralised so all four
 // mutations (and the standalone drop handler) speak the same dialect.
 // Shared by note rename (CRDT → CrdtOpError) and folder/attachment rename
 // (REST → ApiError). A note's target-occupied conflict surfaces as
 // crdt_create's `create_failed`; the REST paths use HTTP 409/404.
 function renameErrorToast(err: unknown, kind: "file" | "folder", t: Translate) {
+	if (joinRefused(err, t)) {
+		return;
+	}
 	const conflict =
 		(err instanceof ApiError && err.status === 409) ||
 		(err instanceof CrdtOpError && err.reason === "create_failed");
@@ -132,6 +144,9 @@ function renameErrorToast(err: unknown, kind: "file" | "folder", t: Translate) {
 }
 
 function deleteErrorToast(err: ApiError, kind: "file" | "folder", t: Translate) {
+	if (joinRefused(err, t)) {
+		return;
+	}
 	if (err.status === 404) {
 		toast.error(kind === "file" ? t("Note no longer exists.") : t("Folder no longer exists."));
 	} else {
@@ -933,6 +948,9 @@ export function useCreateNote() {
 		},
 		onError: (err, _vars, ctx) => {
 			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
+			if (joinRefused(err, t)) {
+				return;
+			}
 			if (err instanceof CrdtOpError && err.reason === "notes_cap_reached") {
 				toast.error(t("You've hit your note limit — upgrade to add more."));
 			} else if (err instanceof CrdtOpError && err.reason === "disconnected") {
@@ -2039,7 +2057,7 @@ export function useDuplicateNote() {
 				(err instanceof CrdtOpError && err.reason === "create_failed");
 			if (conflict) {
 				toast.error(t("A note with that name already exists."));
-			} else {
+			} else if (!joinRefused(err, t)) {
 				toast.error(t("Failed to duplicate."));
 			}
 		},
@@ -2099,9 +2117,11 @@ export function useBatchDeleteNotes() {
 			}
 			return { tree, patched };
 		},
-		onError: (_err, _vars, ctx) => {
+		onError: (err, _vars, ctx) => {
 			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
-			toast.error(t("Batch delete failed."));
+			if (!joinRefused(err, t)) {
+				toast.error(t("Batch delete failed."));
+			}
 		},
 		onSettled: () => {
 			// Reconcile after success AND partial failure — Promise.all is not
@@ -2158,9 +2178,11 @@ export function useBatchMoveNotes() {
 			// re-paths them once the server confirms.
 			return { tree, patched };
 		},
-		onError: (_err, _vars, ctx) => {
+		onError: (err, _vars, ctx) => {
 			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
-			toast.error(t("Batch move failed."));
+			if (!joinRefused(err, t)) {
+				toast.error(t("Batch move failed."));
+			}
 		},
 		onSettled: () => {
 			// crdt_create per id is non-atomic (Promise.all): a mid-batch reject
@@ -2190,9 +2212,11 @@ export function useBatchDeleteFolders() {
 			);
 			return { tree, patched };
 		},
-		onError: (_err, _vars, ctx) => {
+		onError: (err, _vars, ctx) => {
 			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
-			toast.error(t("Batch delete failed."));
+			if (!joinRefused(err, t)) {
+				toast.error(t("Batch delete failed."));
+			}
 		},
 		onSettled: () => {
 			// Reconcile on both paths: a lost ack (server committed, client saw a
@@ -2235,9 +2259,11 @@ export function useBatchMoveFolders() {
 			const patched = patchTree(qc, vaultId, (prev) => moveFolders(prev, sources, target_parent));
 			return { tree, patched };
 		},
-		onError: (_err, _vars, ctx) => {
+		onError: (err, _vars, ctx) => {
 			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
-			toast.error(t("Batch move failed."));
+			if (!joinRefused(err, t)) {
+				toast.error(t("Batch move failed."));
+			}
 		},
 		onSettled: () => {
 			// Reconcile on both paths: a lost ack (server committed, client saw a
@@ -2289,8 +2315,10 @@ export function useBatchMoveAttachments() {
 		},
 		// Batch moves are fire-and-forget (.mutate, no caller .catch) — surface
 		// failures here, matching the note/folder batch hooks.
-		onError: () => {
-			toast.error(t("Batch move failed."));
+		onError: (err) => {
+			if (!joinRefused(err, t)) {
+				toast.error(t("Batch move failed."));
+			}
 		},
 	});
 }
@@ -2309,8 +2337,10 @@ export function useBatchDeleteAttachments() {
 			invalidateVaultTree(qc, vaultId);
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
 		},
-		onError: () => {
-			toast.error(t("Batch delete failed."));
+		onError: (err) => {
+			if (!joinRefused(err, t)) {
+				toast.error(t("Batch delete failed."));
+			}
 		},
 	});
 }

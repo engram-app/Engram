@@ -1414,4 +1414,6 @@ export default {
 	"Sync with an existing vault": "Sincronizar con una bóveda existente",
 	"(choose from {count} vaults)": "(elige entre {count} bóvedas)",
 	"Or create a new vault": "O crea una bóveda nueva",
+	"Changes can't be saved: your account can't sync right now.":
+		"No se pueden guardar los cambios: tu cuenta no puede sincronizar en este momento.",
 } satisfies Catalog;

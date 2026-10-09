@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
 	CrdtOpError,
+	isPermanentJoinRefusal,
 	pushRequest,
 	sendCrdtCreate,
 	sendCrdtCreateWithContent,
@@ -101,5 +102,28 @@ describe("sendCrdtCreateWithContent", () => {
 		});
 		const res = await sendCrdtCreateWithContent(channel, "n1", "a.canvas", "AAA");
 		expect(res.genesis).toBe("absent");
+	});
+});
+
+// #1430: which crdt: join refusals can never succeed on a plain rejoin.
+describe("isPermanentJoinRefusal", () => {
+	it.each(["onboarding_required", "account_suspended", "account_deleted"])(
+		"%s is permanent",
+		(reason) => {
+			expect(isPermanentJoinRefusal({ reason })).toBe(true);
+		},
+	);
+
+	it.each(["rotation_in_progress", "rate_limited", "unauthorized", "vault_not_found"])(
+		"%s is not",
+		(reason) => {
+			expect(isPermanentJoinRefusal({ reason })).toBe(false);
+		},
+	);
+
+	it("tolerates a malformed payload", () => {
+		expect(isPermanentJoinRefusal(undefined)).toBe(false);
+		expect(isPermanentJoinRefusal({})).toBe(false);
+		expect(isPermanentJoinRefusal("onboarding_required")).toBe(false);
 	});
 });

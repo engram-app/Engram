@@ -1327,4 +1327,6 @@ export default {
 	"Sync with an existing vault": "기존 보관함과 동기화",
 	"(choose from {count} vaults)": "(보관함 {count}개 중 선택)",
 	"Or create a new vault": "또는 새 보관함 만들기",
+	"Changes can't be saved: your account can't sync right now.":
+		"변경 사항을 저장할 수 없습니다: 지금은 계정을 동기화할 수 없습니다.",
 } satisfies Catalog;

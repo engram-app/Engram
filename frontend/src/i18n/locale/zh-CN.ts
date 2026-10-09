@@ -1287,4 +1287,6 @@ export default {
 	"Sync with an existing vault": "与现有知识库同步",
 	"(choose from {count} vaults)": "（从 {count} 个知识库中选择）",
 	"Or create a new vault": "或创建新知识库",
+	"Changes can't be saved: your account can't sync right now.":
+		"无法保存更改：您的账户当前无法同步。",
 } satisfies Catalog;

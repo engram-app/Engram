@@ -21,7 +21,7 @@ interface Deferred<T> {
 	reject: (e: unknown) => void;
 }
 
-function opEvent(op: CrdtOp): string {
+function opEvent(op: Pick<CrdtOp, "kind">): string {
 	return op.kind === "create" ? "crdt_create" : "crdt_delete";
 }
 
@@ -53,6 +53,8 @@ export class CrdtOpQueueController {
 	private readonly now: () => number;
 	private readonly tickMs: number;
 	private tickTimer: ReturnType<typeof setInterval> | null = null;
+	/** Set while the topic is permanently refused (#1430); cleared on a join. */
+	private refusedReason: string | null = null;
 
 	constructor(deps: CrdtOpQueueControllerDeps) {
 		this.persister = deps.persister;
@@ -81,7 +83,9 @@ export class CrdtOpQueueController {
 			now: this.now,
 			options: deps.queueOptions,
 			onDrop: (op, reason) => {
-				this.settleReject(op.docId, new CrdtOpError(reason, opEvent(op)));
+				// A refusal settles callers with the server's reason, not "refused".
+				const settled = reason === "refused" ? (this.refusedReason ?? reason) : reason;
+				this.settleReject(op.docId, new CrdtOpError(settled, opEvent(op)));
 				deps.onDropSurfaced(op, reason);
 			},
 		});
@@ -91,6 +95,11 @@ export class CrdtOpQueueController {
 	async start(): Promise<void> {
 		this.queue.load(await this.persister.load());
 		this.queue.setPersist((ops) => this.persister.save(ops));
+		// A refusal that landed while the load was in flight cleared an empty
+		// queue; apply it to what the load just restored, now that persist is wired.
+		if (this.refusedReason !== null) {
+			this.refuse(this.refusedReason);
+		}
 		this.tickTimer = setInterval(() => this.kickTick(), this.tickMs);
 	}
 
@@ -103,12 +112,32 @@ export class CrdtOpQueueController {
 
 	/** CRDT topic (re)joined → flush held ops. */
 	joined(): Promise<void> {
+		this.clearRefusal();
 		return this.queue.onJoined();
 	}
 
 	/** CRDT topic dropped → hold sends until the next join. */
 	left(): void {
 		this.queue.onLeft();
+	}
+
+	/**
+	 * CRDT topic PERMANENTLY refused (onboarding_required / suspended /
+	 * deleted, #1430): no join is coming, so holding ops would leave their
+	 * callers pending forever behind an optimistic UI. Reject every held op with
+	 * the refusal reason (the mutations roll back) and reject new ones at once
+	 * until a join succeeds. The ops are discarded, not kept for later: their
+	 * callers already rolled back, so a later delivery would be a ghost write.
+	 */
+	refuse(reason: string): void {
+		this.refusedReason = reason;
+		this.queue.dropAll("refused");
+	}
+
+	/** The join was accepted: hold ops again (the handshake may still be
+	 *  running, so `joined()` can be a while off). */
+	clearRefusal(): void {
+		this.refusedReason = null;
 	}
 
 	/** Number of pending ops (for diagnostics / tests). */
@@ -160,6 +189,9 @@ export class CrdtOpQueueController {
 		spec: Pick<CrdtOp, "kind" | "docId" | "payload">,
 		parse: (v: unknown) => T,
 	): Promise<T> {
+		if (this.refusedReason !== null) {
+			return Promise.reject(new CrdtOpError(this.refusedReason, opEvent(spec)));
+		}
 		// A newer op for the same doc supersedes the queued one — settle the prior
 		// caller so its promise doesn't hang (the note's fate is now the new op's).
 		const prior = this.deferreds.get(spec.docId);

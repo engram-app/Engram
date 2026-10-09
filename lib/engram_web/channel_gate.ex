@@ -140,6 +140,9 @@ defmodule EngramWeb.ChannelGate do
 
   require Logger
 
+  # Refusals `check/3` logs (#1430). See the clause that uses it.
+  @logged_refusals ~w(account_suspended account_deleted)
+
   @doc """
   `:ok`, or `{:error, payload}` where `payload` is the map to return straight
   from `join/3` (always carries a `:reason`).
@@ -156,7 +159,33 @@ defmodule EngramWeb.ChannelGate do
   # `socket.assigns[:plugin_version]`; nil (every client that predates the
   # param, plus the web SPA) is allowed.
   @spec check(Engram.Accounts.User.t(), term(), String.t() | nil) :: :ok | {:error, map()}
-  def check(%Engram.Accounts.User{id: user_id}, api_key, plugin_version) do
+  def check(%Engram.Accounts.User{id: user_id} = user, api_key, plugin_version) do
+    case do_check(user, api_key, plugin_version) do
+      :ok ->
+        :ok
+
+      {:error, %{reason: reason}} = refused when reason in @logged_refusals ->
+        # #1430: these were silent, so a client stuck behind one (the SPA
+        # holds writes that never land) left no server-side trace. Only the
+        # account-terminal reasons: `onboarding_required` already logs in
+        # `Onboarding`, and the rest are transient or loop by design (see
+        # KNOWN TRADE-OFF), so logging them would flood Loki on every rejoin.
+        Logger.warning(
+          "channel join refused: #{reason}",
+          Metadata.with_category(:warning, :lifecycle,
+            user_id: HMAC.hash_user_id(to_string(user_id)),
+            reason: reason
+          )
+        )
+
+        refused
+
+      refused ->
+        refused
+    end
+  end
+
+  defp do_check(%Engram.Accounts.User{id: user_id}, api_key, plugin_version) do
     # One read, shared by both checks — `gate/2` is told not to re-read.
     #
     # No `|| socket_user` fallback: `Accounts.Lifecycle.hard_delete/2` removes
