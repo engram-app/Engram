@@ -335,13 +335,13 @@ defmodule Engram.Application do
       # Bounds concurrent catch-up page builds. Absent, merged_changes_page
       # degrades open rather than failing, so ordering here is not critical.
       Engram.Sync.PageGate,
-      # Dedicated LISTEN/NOTIFY connection — Cache.Server LISTENs on it
-      # so raw-SQL writes (trigger → pg_notify) evict caches on every node.
-      # Must start before Cache.Server.
+      # Dedicated LISTEN/NOTIFY connection (Engram.Cache.Listener) so raw-SQL
+      # writes (trigger -> pg_notify) evict caches on every node. It forwards
+      # to Cache.Server by name, dropping messages while the server is down.
       pg_notifications_child(),
       # Central read-through cache (override, entitlement, gate, jwks, plan,
-      # legal version, ...); subscribes to CacheSync (after PubSub) and LISTENs
-      # on the connection above.
+      # legal version, ...); subscribes to CacheSync (after PubSub) and gets
+      # NOTIFY evictions from the listener above.
       Engram.Cache.Server,
       Engram.Auth.SignupRejections,
       rate_limiter_child(),
@@ -405,10 +405,10 @@ defmodule Engram.Application do
     end
   end
 
-  # One LISTEN/NOTIFY connection per node, shared by caches that subscribe
-  # to Postgres triggers (Engram.Cache.Server today). auto_reconnect re-LISTENs
-  # after a connection blip — Postgrex re-establishes the subscriptions on
-  # reconnect for listeners registered via listen/3.
+  # One LISTEN/NOTIFY connection per node for Engram.Cache's eviction
+  # triggers. auto_reconnect reconnects after a blip; Engram.Cache.Listener
+  # re-LISTENs on connect and has the cache server clear what it may have
+  # missed while down.
   defp pg_notifications_child do
     opts =
       Engram.Repo.config()
@@ -426,7 +426,7 @@ defmodule Engram.Application do
       ])
       |> Keyword.merge(name: Engram.PgNotifications, auto_reconnect: true, sync_connect: false)
 
-    {Postgrex.Notifications, opts}
+    {Engram.Cache.Listener, opts}
   end
 
   # Start the concrete limiter matching the configured backend. Both ETS backends

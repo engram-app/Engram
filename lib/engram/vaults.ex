@@ -193,7 +193,10 @@ defmodule Engram.Vaults do
         end
       end)
       |> unwrap_register_transaction()
-      |> tap(fn _ -> evict_vaults(user.id) end)
+      |> tap(fn
+        {:ok, _vault, :created} -> evict_vaults(user.id)
+        _ -> :ok
+      end)
     end
   end
 
@@ -296,6 +299,10 @@ defmodule Engram.Vaults do
     Engram.Cache.fetch(:vaults, user.id, fn -> load_vaults(fresh_user(user)) end)
   end
 
+  # A row that failed to decrypt (transient KMS / DEK error) is returned
+  # undecrypted as before, but the list is not cached: the next request
+  # retries instead of serving the failure for the TTL.
+
   defp load_vaults(user) do
     {:ok, vaults} =
       Repo.with_tenant(user.id, fn ->
@@ -306,7 +313,12 @@ defmodule Engram.Vaults do
         )
       end)
 
-    Enum.map(vaults, &decrypt_vault_if_needed(&1, user))
+    results = Enum.map(vaults, &decrypt_vault(&1, user))
+    list = Enum.map(results, &elem(&1, 1))
+
+    if Enum.any?(results, &match?({:error, _}, &1)),
+      do: Engram.Cache.no_store(list),
+      else: list
   end
 
   # Local + cluster broadcast, after the write's transaction: the trigger's
@@ -854,19 +866,28 @@ defmodule Engram.Vaults do
   """
   def accessible_vault_ids(nil), do: :all
 
-  # Cached per key id (`:api_key_scope`), evicted on every node by the
-  # `api_key_vaults_changed` trigger.
+  # Read from the key's own `:api_key` cache entry (`Accounts.cached_api_key/1`),
+  # so scope and key are one entry. A key that no longer exists reaches NO
+  # vault: `[]`, never the `:all` its now-empty mapping would read as.
   def accessible_vault_ids(api_key) do
-    Engram.Cache.fetch(:api_key_scope, api_key.id, fn ->
-      ids =
-        from(akv in "api_key_vaults",
-          where: akv.api_key_id == type(^api_key.id, Ecto.UUID),
-          select: type(akv.vault_id, Ecto.UUID)
-        )
-        |> Repo.all(skip_tenant_check: true)
+    case Engram.Accounts.cached_api_key(api_key.key_hash) do
+      {_key, scope} -> scope
+      nil -> []
+    end
+  end
 
-      if ids == [], do: :all, else: ids
-    end)
+  @doc false
+  # The `:api_key` loader's scope query. No rows means unrestricted.
+  @spec load_key_scope(Ecto.UUID.t()) :: :all | [Ecto.UUID.t()]
+  def load_key_scope(api_key_id) do
+    ids =
+      from(akv in "api_key_vaults",
+        where: akv.api_key_id == type(^api_key_id, Ecto.UUID),
+        select: type(akv.vault_id, Ecto.UUID)
+      )
+      |> Repo.all(skip_tenant_check: true)
+
+    if ids == [], do: :all, else: ids
   end
 
   # ── Private helpers ─────────────────────────────────────────────────────────
@@ -1151,10 +1172,13 @@ defmodule Engram.Vaults do
   # Decrypts vault.name from name_ciphertext when populated. On decrypt
   # failure logs and returns the row unchanged — operator visibility without
   # killing the request. Mirrors `decrypt_if_needed` in Notes context.
-  defp decrypt_vault_if_needed(%Vault{} = vault, user) do
+  defp decrypt_vault_if_needed(%Vault{} = vault, user),
+    do: vault |> decrypt_vault(user) |> elem(1)
+
+  defp decrypt_vault(%Vault{} = vault, user) do
     case Engram.Crypto.maybe_decrypt_vault_fields(vault, user) do
       {:ok, decrypted} ->
-        decrypted
+        {:ok, decrypted}
 
       {:error, reason} ->
         require Logger
@@ -1168,7 +1192,7 @@ defmodule Engram.Vaults do
           )
         )
 
-        vault
+        {:error, vault}
     end
   end
 end

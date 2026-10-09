@@ -22,6 +22,7 @@ defmodule Engram.Cache do
   # The key sits in the match head (a bound key is a hash lookup, not a table
   # scan), so keys must not contain the match-spec atoms `:_` or `:"$N"`.
   @pending :engram_cache_pending
+  @no_store :engram_cache_no_store
   # Marker rows are always a miss; this expiry only lets the sweep reap the
   # marker of a loader that raised.
   @pending_ms 60_000
@@ -39,15 +40,29 @@ defmodule Engram.Cache do
       :miss ->
         token = make_ref()
         claim(cache, key, token)
-        value = loader.()
 
-        if value != nil or cache_nil?(cache),
-          do: put_if_claimed(cache, key, token, value),
-          else: release(cache, key, token)
+        case loader.() do
+          {@no_store, value} ->
+            release(cache, key, token)
+            value
 
-        value
+          value ->
+            if value != nil or cache_nil?(cache),
+              do: put_if_claimed(cache, key, token, value),
+              else: release(cache, key, token)
+
+            value
+        end
     end
   end
+
+  @doc """
+  Wrap a loader result to return it from `fetch/3` WITHOUT storing it (a
+  degraded answer, e.g. a row that failed to decrypt, that the next call
+  should retry).
+  """
+  @spec no_store(term()) :: {:engram_cache_no_store, term()}
+  def no_store(value), do: {@no_store, value}
 
   @spec get(atom(), term()) :: {:ok, term()} | :miss
   def get(cache, key) do

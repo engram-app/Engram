@@ -14,6 +14,7 @@ defmodule EngramWeb.Plugs.RotationLockCheck do
   import Plug.Conn
 
   alias Engram.Accounts.User
+  alias Engram.Crypto.RotationGate
   alias EngramWeb.Plugs.Halt
 
   def init(opts), do: opts
@@ -21,12 +22,26 @@ defmodule EngramWeb.Plugs.RotationLockCheck do
   def call(%Plug.Conn{} = conn, _opts) do
     case conn.assigns[:current_user] do
       %User{dek_rotation_locked_at: %DateTime{}} ->
-        conn
-        |> put_resp_header("retry-after", "60")
-        |> Halt.json(503, %{error: "rotation_in_progress"})
+        halt_rotating(conn)
+
+      %User{id: user_id} when conn.method not in ["GET", "HEAD"] ->
+        # `current_user` comes from the `:user` cache, so a lock taken on
+        # another node is visible here only once its eviction lands. A write
+        # encrypts under the user's DEK, so it re-reads the lock (one query);
+        # reads keep the cached answer.
+        case RotationGate.check(user_id) do
+          {:error, :rotation_in_progress} -> halt_rotating(conn)
+          _ -> conn
+        end
 
       _ ->
         conn
     end
+  end
+
+  defp halt_rotating(conn) do
+    conn
+    |> put_resp_header("retry-after", "60")
+    |> Halt.json(503, %{error: "rotation_in_progress"})
   end
 end

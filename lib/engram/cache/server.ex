@@ -5,8 +5,6 @@ defmodule Engram.Cache.Server do
   alias Engram.Cache
   alias Engram.Cache.Registry
 
-  require Logger
-
   @sweep_ms 60_000
 
   def start_link(_opts), do: GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
@@ -27,44 +25,39 @@ defmodule Engram.Cache.Server do
     end
 
     :ok = Engram.Cluster.CacheSync.subscribe()
-    channels = listen_all()
     Process.send_after(self(), :sweep, @sweep_ms)
-    {:ok, %{channels: channels}}
+    {:ok, %{channels: channel_map()}}
   end
 
-  # channel => [cache names]
-  defp listen_all do
-    by_channel =
-      Registry.caches()
-      |> Enum.filter(& &1.pg_channel)
-      |> Enum.group_by(& &1.pg_channel, & &1.name)
-
-    for channel <- Map.keys(by_channel), do: listen(channel)
-    by_channel
-  end
-
-  defp listen(channel) do
-    case Process.whereis(Engram.PgNotifications) do
-      nil ->
-        Logger.warning(
-          "cache: PG notifications not running; TTL-only eviction for #{channel}",
-          Engram.Logger.Metadata.with_category(:warning, :data, [])
-        )
-
-      _pid ->
-        {:ok, _ref} = Postgrex.Notifications.listen(Engram.PgNotifications, channel)
+  # channel => [{cache, :key | :all}]. `Engram.Cache.Listener` owns the LISTEN
+  # connection and forwards notifications here.
+  defp channel_map do
+    for spec <- Registry.caches(),
+        {channel, how} <- [{spec.pg_channel, :key}, {Map.get(spec, :pg_clear_channel), :all}],
+        channel != nil,
+        reduce: %{} do
+      acc -> Map.update(acc, channel, [{spec.name, how}], &[{spec.name, how} | &1])
     end
-  catch
-    kind, reason ->
-      Logger.warning(
-        "cache: failed to LISTEN #{channel} (#{kind}: #{inspect(reason)}); TTL-only eviction",
-        Engram.Logger.Metadata.with_category(:warning, :data, [])
-      )
+  end
+
+  @impl true
+  def handle_info(:pg_listen_connected, state) do
+    # Anything committed while the LISTEN connection was down never notified
+    # this node, so nothing it cached is known fresh.
+    for {_channel, targets} <- state.channels, {cache, _} <- targets, do: Cache.clear_local(cache)
+
+    {:noreply, state}
   end
 
   @impl true
   def handle_info({:notification, _pid, _ref, channel, payload}, state) do
-    for cache <- Map.get(state.channels, channel, []), do: Cache.evict_local(cache, payload)
+    for {cache, how} <- Map.get(state.channels, channel, []) do
+      case how do
+        :key -> Cache.evict_local(cache, payload)
+        :all -> Cache.clear_local(cache)
+      end
+    end
+
     {:noreply, state}
   end
 

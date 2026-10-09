@@ -383,6 +383,15 @@ defmodule Engram.FoldersTest do
       refute match?({:not_empty, _}, reason)
 
       # Nothing was deleted: the note is readable again once the DEK is.
+      # (`get_dek/1` unwraps the blob the DB holds, not the caller's struct,
+      # so the DEK has to actually be repaired.)
+      Engram.Repo.update_all(
+        from(u in Engram.Accounts.User, where: u.id == ^user.id),
+        [set: [encrypted_dek: user.encrypted_dek]],
+        skip_tenant_check: true
+      )
+
+      Engram.Crypto.DekCache.invalidate(user.id)
       assert {:ok, _} = Notes.get_note(user, vault, "Docs/a.md")
     end
 

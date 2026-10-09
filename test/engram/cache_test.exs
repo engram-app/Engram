@@ -150,4 +150,36 @@ defmodule Engram.CacheTest do
     _ = :sys.get_state(Engram.Cache.Server)
     assert Cache.get(:test_cache_forever, :k) == {:ok, 1}
   end
+
+  test "a LISTEN (re)connect clears every NOTIFY-evicted cache, and only those" do
+    Cache.put(:test_cache, "k", 1)
+    Cache.put(:test_cache_forever, :k, 1)
+    send(Engram.Cache.Server, :pg_listen_connected)
+    _ = :sys.get_state(Engram.Cache.Server)
+    assert Cache.get(:test_cache, "k") == :miss
+    assert Cache.get(:test_cache_forever, :k) == {:ok, 1}
+  end
+
+  describe "Engram.Cache.Listener" do
+    alias Engram.Cache.Listener
+
+    test "LISTENs on every registry channel when it connects" do
+      {:ok, state} = Listener.init(:ok)
+      {:query, sql, state} = Listener.handle_connect(state)
+      assert sql =~ ~s(LISTEN "test_cache_changed")
+      assert sql =~ ~s(LISTEN "api_key_vaults_changed")
+      assert state.listening
+    end
+
+    test "tells the server once the LISTEN is in place, then forwards notifications" do
+      Process.register(self(), :listener_probe)
+      {:ok, state} = Listener.init(server: :listener_probe)
+      {:query, _, state} = Listener.handle_connect(state)
+      {:noreply, _} = Listener.handle_result([], state)
+      assert_receive :pg_listen_connected
+
+      :ok = Listener.notify("users_changed", "u1", state)
+      assert_receive {:notification, _, _, "users_changed", "u1"}
+    end
+  end
 end

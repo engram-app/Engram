@@ -675,14 +675,24 @@ defmodule Engram.Accounts do
     # trigger on revoke (row delete) and by `revoke_api_key/2` locally.
     # The user is resolved separately through the cached `get_user/1`, so a
     # user's state change never has to evict the key.
-    with %ApiKey{} = key <-
-           Engram.Cache.fetch(:api_key, key_hash, fn -> lookup_key(key_hash) end),
+    with {%ApiKey{} = key, _scope} <- cached_api_key(key_hash),
          %User{} = user <- get_user(key.user_id) do
       {:ok, user, key}
     else
       nil -> {:error, :invalid_key}
     end
   end
+
+  @doc """
+  `{%ApiKey{}, vault_scope}` for a key hash, or nil for no such key. Cached as
+  ONE `:api_key` entry so the scope (`:all | [vault_id]`, see
+  `Vaults.accessible_vault_ids/1`) can never outlive or reload apart from the
+  key row: a revoked one-vault key whose mapping rows are gone must not come
+  back as unrestricted.
+  """
+  @spec cached_api_key(String.t()) :: {ApiKey.t(), :all | [Ecto.UUID.t()]} | nil
+  def cached_api_key(key_hash),
+    do: Engram.Cache.fetch(:api_key, key_hash, fn -> lookup_key(key_hash) end)
 
   defp lookup_key(key_hash) do
     {:ok, key} =
@@ -704,7 +714,8 @@ defmodule Engram.Accounts do
             source: "api_key_lookup_exit"
           )
 
-        key
+        # After the role reset: the lookup role has no grant on api_key_vaults.
+        key && {key, Engram.Vaults.load_key_scope(key.id)}
       end)
 
     key

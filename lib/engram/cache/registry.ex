@@ -9,6 +9,12 @@ defmodule Engram.Cache.Registry do
       `{id, _}` key for `id` (a per-user cache keyed by `{user_id, x}`).
     * `pg_channel` - Postgres NOTIFY channel whose payload (a string) is the
       key to evict. Fired by AFTER-write triggers, so raw SQL is covered too.
+    * `pg_clear_channel` - optional NOTIFY channel that clears the WHOLE cache
+      (its payload is not this cache's key).
+
+  Every cache with either channel is also cleared whenever the LISTEN
+  connection (re)connects (`Engram.Cache.Listener`): notifications sent
+  while it was down are lost.
   """
 
   @base [
@@ -54,22 +60,18 @@ defmodule Engram.Cache.Registry do
     # users.id => %User{} (subscription NOT loaded). Carries deleted_at,
     # suspended_at, dek_rotation_locked_at, so every users UPDATE evicts.
     %{name: :user, ttl: 60_000, cache_nil: false, evict_match: :key, pg_channel: "users_changed"},
-    # api_keys.key_hash (the hex text the trigger sends) => %ApiKey{} without
-    # :user. Revocation deletes the row; the 30s TTL bounds a lost NOTIFY.
+    # api_keys.key_hash (the hex text the trigger sends) => {%ApiKey{} without
+    # :user, vault scope (:all | [vault_id])}. Key and scope are ONE entry so
+    # the scope can never outlive or reload apart from its key row (a deleted
+    # one-vault key must not come back as :all). A mapping change carries only
+    # the api_key_id, so it clears the whole cache (mapping writes are rare).
     %{
       name: :api_key,
       ttl: 30_000,
       cache_nil: false,
       evict_match: :key,
-      pg_channel: "api_keys_changed"
-    },
-    # api_keys.id => :all | [vault_id] (the key's vault restriction).
-    %{
-      name: :api_key_scope,
-      ttl: 30_000,
-      cache_nil: false,
-      evict_match: :key,
-      pg_channel: "api_key_vaults_changed"
+      pg_channel: "api_keys_changed",
+      pg_clear_channel: "api_key_vaults_changed"
     },
     # users.id => %Subscription{} | nil (nil cached: most users have none).
     %{
@@ -132,6 +134,15 @@ defmodule Engram.Cache.Registry do
 
   @spec caches() :: [map()]
   def caches, do: @base ++ @test_caches
+
+  @doc "Every NOTIFY channel any cache listens on."
+  @spec channels() :: [String.t()]
+  def channels do
+    caches()
+    |> Enum.flat_map(&[&1.pg_channel, Map.get(&1, :pg_clear_channel)])
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
 
   @spec fetch!(atom()) :: map()
   def fetch!(name),

@@ -10,20 +10,23 @@ defmodule Engram.QueryBudgetTest do
   alias Engram.QueryRecorder
 
   # Path => max queries with a warm cache. Lowered by Tasks 5-8 toward the
-  # spec §7 targets; Task 10 asserts the final numbers.
+  # spec §7 targets; Task 10 asserts the final numbers. Non-GET paths (MCP is
+  # always POST) carry +1 since the Task 5 fix round: RotationLockCheck
+  # re-reads the rotation lock from the DB for writes, because the request's
+  # user now comes from the :user cache.
   @budgets %{
-    "mcp get_notes" => 6,
-    "mcp write_note update" => 29,
-    "mcp append_to_note" => 45,
-    "mcp edit_note" => 40,
-    "mcp delete_note" => 22,
+    "mcp get_notes" => 7,
+    "mcp write_note update" => 30,
+    "mcp append_to_note" => 46,
+    "mcp edit_note" => 41,
+    "mcp delete_note" => 23,
     "GET sync/manifest" => 11,
     "GET notes/*path" => 11,
-    "POST notes update" => 34,
-    "POST notes create" => 39,
-    "POST notes/append" => 45,
-    "POST notes/rename" => 45,
-    "DELETE notes/*path" => 17,
+    "POST notes update" => 35,
+    "POST notes create" => 40,
+    "POST notes/append" => 46,
+    "POST notes/rename" => 46,
+    "DELETE notes/*path" => 18,
     "GET /api/bootstrap" => 22,
     "GET folders" => 10,
     "GET tags" => 5,

@@ -46,7 +46,7 @@ defmodule Engram.DataCase do
     # entries, but the sandbox never commits: the NOTIFY triggers that evict
     # them in prod never fire. Start each test cold; a test that rewrites a
     # cached row mid-test evicts it by hand, as the trigger would.
-    for c <- [:user, :api_key, :api_key_scope, :subscription, :vaults],
+    for c <- [:user, :api_key, :subscription, :vaults],
         do: Engram.Cache.clear_local(c)
 
     # A test may spin up `:global` CrdtDoc rooms (any test exercising the CRDT

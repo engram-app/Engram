@@ -70,7 +70,7 @@ defmodule Engram.SkipTenantCheckInventoryTest do
     "engram/billing/plan_cache.ex" => 1,
     "engram/billing/workers/override_expiry_sweep.ex" => 1,
     "engram/connections.ex" => 3,
-    "engram/crypto.ex" => 1,
+    "engram/crypto.ex" => 2,
     "engram/crypto/aad_rebind.ex" => 3,
     "engram/crypto/master_rotation.ex" => 2,
     "engram/crypto/provider_migration.ex" => 4,

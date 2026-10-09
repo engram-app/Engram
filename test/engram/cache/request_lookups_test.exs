@@ -7,7 +7,7 @@ defmodule Engram.Cache.RequestLookupsTest do
   alias Engram.QueryRecorder
   alias Engram.Vaults
 
-  @caches [:user, :api_key, :api_key_scope, :subscription, :vaults]
+  @caches [:user, :api_key, :subscription, :vaults]
 
   setup do
     for c <- @caches, do: Engram.Cache.clear_local(c)
@@ -131,7 +131,7 @@ defmodule Engram.Cache.RequestLookupsTest do
       {:ok, raw, key} = Accounts.create_api_key(user, "k")
       {:ok, _, _} = Accounts.validate_api_key(raw)
 
-      assert {:ok, %Accounts.ApiKey{user: %Ecto.Association.NotLoaded{}}} =
+      assert {:ok, {%Accounts.ApiKey{user: %Ecto.Association.NotLoaded{}}, :all}} =
                Engram.Cache.get(:api_key, key.key_hash)
     end
 
@@ -300,12 +300,14 @@ defmodule Engram.Cache.RequestLookupsTest do
   end
 
   describe "api key scope" do
-    test "accessible_vault_ids/1 caches per key id and reloads after api_key_vaults_changed" do
+    # The scope is cached WITH the key (one entry, one TTL, one eviction), so
+    # it can never outlive or reload apart from the key row it belongs to.
+    test "accessible_vault_ids/1 reads the scope cached with the key" do
       user = vault_user()
       {:ok, vault, _} = Vaults.register_vault(user, "Test Vault", Ecto.UUID.generate())
-      {:ok, _raw, key} = Accounts.create_api_key(user, "k")
+      {:ok, raw, _} = Accounts.create_api_key(user, "k")
+      {:ok, _, key} = Accounts.validate_api_key(raw)
 
-      assert Vaults.accessible_vault_ids(key) == :all
       {_, qs} = queries(fn -> assert Vaults.accessible_vault_ids(key) == :all end)
       assert qs == []
 
@@ -316,6 +318,58 @@ defmodule Engram.Cache.RequestLookupsTest do
       assert Vaults.accessible_vault_ids(key) == :all
       notify("api_key_vaults_changed", key.id)
       assert Vaults.accessible_vault_ids(key) == [vault.id]
+    end
+
+    test "a deleted vault-restricted key never resolves to unrestricted scope" do
+      user = vault_user()
+      {:ok, vault, _} = Vaults.register_vault(user, "Test Vault", Ecto.UUID.generate())
+      {:ok, raw, created} = Accounts.create_api_key(user, "one-vault")
+
+      Repo.insert_all("api_key_vaults", [
+        %{api_key_id: Ecto.UUID.dump!(created.id), vault_id: Ecto.UUID.dump!(vault.id)}
+      ])
+
+      {:ok, _, key} = Accounts.validate_api_key(raw)
+      assert Vaults.accessible_vault_ids(key) == [vault.id]
+
+      # CleanupVault's order: the sole-vault key goes, then the mapping rows.
+      # Only the mapping's NOTIFY arrives here (the api_keys one is lost).
+      {:ok, {1, _}} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.delete_all(from(k in Accounts.ApiKey, where: k.id == ^key.id))
+        end)
+
+      notify("api_key_vaults_changed", key.id)
+
+      refute Vaults.accessible_vault_ids(key) == :all
+      assert Accounts.validate_api_key(raw) == {:error, :invalid_key}
+    end
+  end
+
+  describe "vault list caching" do
+    test "register_vault of an existing client_id leaves the cache warm" do
+      user = vault_user()
+      client_id = Ecto.UUID.generate()
+      {:ok, _, :created} = Vaults.register_vault(user, "Test Vault", client_id)
+      _ = Vaults.list_vaults(user)
+
+      {:ok, _, :existing} = Vaults.register_vault(user, "Test Vault", client_id)
+      {_, qs} = queries(fn -> Vaults.list_vaults(user) end)
+      assert count(qs, "vaults") == 0
+    end
+
+    test "a vault list with a decrypt failure is not cached" do
+      user = vault_user()
+      # Factory ciphertext is random bytes: it cannot decrypt under the DEK.
+      insert(:vault, user: user)
+
+      {_, qs} =
+        queries(fn ->
+          Vaults.list_vaults(user)
+          Vaults.list_vaults(user)
+        end)
+
+      assert count(qs, "vaults") == 2
     end
   end
 end

@@ -48,6 +48,34 @@ defmodule Engram.Crypto.UserDekRotationTest do
   # The failure mode is delayed and silent: the row stays wrapped under the old
   # dek, keeps decrypting for as long as that key is around, and only breaks
   # once it is retired — long after the rotation reported success.
+  # The `:user` cache holds `encrypted_dek`. A user struct cached before the
+  # flip must never put the retired DEK back into DekCache: anything written
+  # under it becomes unreadable once that entry expires.
+  describe "rotate_user/1 vs the :user cache" do
+    test "final_flip evicts the cached user on the writing node", %{user: user} do
+      before = Engram.Accounts.get_user(user.id)
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      %{encrypted_dek: db_blob} = Repo.get!(Engram.Accounts.User, user.id)
+      assert Engram.Accounts.get_user(user.id).encrypted_dek == db_blob
+      refute db_blob == before.encrypted_dek
+    end
+
+    test "a pre-flip user struct does not repopulate DekCache with the retired DEK",
+         %{user: user} do
+      stale = Engram.Accounts.get_user(user.id)
+      {:ok, old_dek} = Crypto.get_dek(stale)
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+      DekCache.invalidate(user.id)
+
+      {:ok, dek} = Crypto.get_dek(stale)
+      refute dek == old_dek
+      {:ok, fresh_dek} = Crypto.get_dek(Repo.get!(Engram.Accounts.User, user.id))
+      assert dek == fresh_dek
+    end
+  end
+
   describe "rotate_user/1 — vault index snapshot (#1151)" do
     setup %{user: user} do
       {:ok, vault, _} =

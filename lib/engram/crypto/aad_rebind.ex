@@ -167,6 +167,7 @@ defmodule Engram.Crypto.AadRebind do
               # wrap so the next get_dek/1 re-derives via the new wrap. The
               # plaintext DEK material is unchanged; only the wrap envelope
               # changed.
+              Engram.Accounts.evict_user(user.id)
               Crypto.DekCache.invalidate(user.id)
               {:ok, true}
 
