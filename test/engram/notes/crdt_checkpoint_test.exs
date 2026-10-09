@@ -116,6 +116,25 @@ defmodule Engram.Notes.CrdtCheckpointTest do
   # the PRE-flatten state on purpose: post-flatten bytes are what the gate
   # already reclaimed, and #1707 has to tune that gate against the bloat it is
   # supposed to catch.
+  # A tick in flight when a delete commits reads the row after the delete's
+  # seq bump, so the seq fence alone matched and the checkpoint materialized
+  # content, bumped seq and enqueued jobs for the trashed note.
+  test "a checkpoint of a deleted note writes nothing", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+    :ok = Notes.delete_note(user, vault, "p.md")
+    {:ok, before} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+
+    {:ok, doc} = CrdtBridge.doc_from_state(nil)
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "revived")
+
+    assert :skipped = CrdtCheckpoint.checkpoint_pruning(user.id, vault.id, note.id, doc)
+
+    {:ok, after_run} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    assert after_run.seq == before.seq
+    assert after_run.crdt_state_ciphertext == before.crdt_state_ciphertext
+    assert after_run.content_hash == before.content_hash
+  end
+
   test "checkpoint emits doc bloat telemetry", ctx do
     %{user: user, vault: vault, note: note} = ctx
 

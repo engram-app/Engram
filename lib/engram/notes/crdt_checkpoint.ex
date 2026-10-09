@@ -900,15 +900,20 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # tail is the only durable copy of anything this doc holds that the newer row
   # does not, so a checkpoint that cannot prove it read the current row must not
   # delete it. The next debounce tick re-reads and checkpoints normally.
+  # `deleted_at IS NULL`: a tick in flight when a delete commits reads the row
+  # AFTER the delete's seq bump, so seq alone matches and the checkpoint would
+  # materialize, bump seq and enqueue jobs for the trashed note.
   defp snapshot_fence(note_id, %Note{crdt_state_nonce: nil, seq: seq}) do
-    from(n in Note, where: n.id == ^note_id and n.kind == "note" and n.seq == ^seq)
+    from(n in Note,
+      where: n.id == ^note_id and n.kind == "note" and n.seq == ^seq and is_nil(n.deleted_at)
+    )
   end
 
   defp snapshot_fence(note_id, %Note{crdt_state_nonce: nonce, seq: seq}) do
     from(n in Note,
       where:
         n.id == ^note_id and n.kind == "note" and n.seq == ^seq and
-          n.crdt_state_nonce == ^nonce
+          n.crdt_state_nonce == ^nonce and is_nil(n.deleted_at)
     )
   end
 
