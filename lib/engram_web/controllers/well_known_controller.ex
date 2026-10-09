@@ -154,7 +154,8 @@ defmodule EngramWeb.WellKnownController do
   def mcp_server_card(conn, _params) do
     card = %{
       "$schema" => "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json",
-      "name" => "page.engram/engram",
+      # Must equal `name` in server.json (the official registry entry).
+      "name" => "io.github.engram-app/engram",
       "title" => "Engram",
       "version" => EngramWeb.McpController.server_info()["version"],
       # Max 100 chars (schema). Claims vetted against market-position-and-gtm.md §5.
