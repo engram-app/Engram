@@ -156,7 +156,28 @@ defmodule EngramWeb.ChannelGate do
   # `socket.assigns[:plugin_version]`; nil (every client that predates the
   # param, plus the web SPA) is allowed.
   @spec check(Engram.Accounts.User.t(), term(), String.t() | nil) :: :ok | {:error, map()}
-  def check(%Engram.Accounts.User{id: user_id}, api_key, plugin_version) do
+  def check(%Engram.Accounts.User{id: user_id} = user, api_key, plugin_version) do
+    case do_check(user, api_key, plugin_version) do
+      :ok ->
+        :ok
+
+      {:error, %{reason: reason}} = refused ->
+        # #1430: a refusal was silent, so a client stuck behind a permanent one
+        # (the SPA holds writes that never land) left no server-side trace.
+        # Logged per join attempt; clients rejoin on a backoff (~10s steady).
+        Logger.warning(
+          "channel join refused: #{reason}",
+          Metadata.with_category(:warning, :lifecycle,
+            user_id: HMAC.hash_user_id(to_string(user_id)),
+            reason: reason
+          )
+        )
+
+        refused
+    end
+  end
+
+  defp do_check(%Engram.Accounts.User{id: user_id}, api_key, plugin_version) do
     # One read, shared by both checks — `gate/2` is told not to re-read.
     #
     # No `|| socket_user` fallback: `Accounts.Lifecycle.hard_delete/2` removes

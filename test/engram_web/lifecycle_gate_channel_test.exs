@@ -9,6 +9,8 @@ defmodule EngramWeb.LifecycleGateChannelTest do
   """
   use EngramWeb.ChannelCase, async: false
 
+  import ExUnit.CaptureLog
+
   alias Ecto.Adapters.SQL.Sandbox
   alias Engram.LegalFixtures
   alias Engram.Onboarding
@@ -134,6 +136,38 @@ defmodule EngramWeb.LifecycleGateChannelTest do
   # allowlisting `/api/billing/*` so a suspended user can pay their way out.
   # Deletion has no such exemption — the deleted clause runs ahead of the
   # allowlist and HTTP is terminal, "410 on every endpoint, no exemptions".
+  # #1430: a gate refusal was silent server-side, so a permanently refused
+  # client (writes held, never landing) left no trace in Loki.
+  describe "refusal logging (#1430)" do
+    test "a refused crdt: join logs its reason, not the raw user id", %{user: user, vault: vault} do
+      user = mark!(user, :suspended_at)
+
+      log =
+        capture_log(fn ->
+          assert {:error, %{reason: "account_suspended"}} = join_crdt(user, vault)
+        end)
+
+      assert log =~ "channel join refused: account_suspended"
+      refute log =~ to_string(user.id)
+    end
+
+    test "a refused sync: join logs its reason", %{user: user, vault: vault} do
+      user = mark!(user, :deleted_at)
+
+      log =
+        capture_log(fn ->
+          assert {:error, %{reason: "account_deleted"}} =
+                   subscribe_and_join(
+                     user_socket(user),
+                     EngramWeb.SyncChannel,
+                     "sync:#{user.id}:#{vault.id}"
+                   )
+        end)
+
+      assert log =~ "channel join refused: account_deleted"
+    end
+  end
+
   describe "user: channel vs deletion (#1435)" do
     test "a deleted account cannot join user:", %{user: user} do
       _deleted = mark!(user, :deleted_at)
