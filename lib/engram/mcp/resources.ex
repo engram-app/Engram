@@ -174,8 +174,8 @@ defmodule Engram.MCP.Resources do
 
   # Fuzzy over path and title in the vault's native name index
   # (`Engram.Notes.NameIndex`): built once per vault, then patched live.
-  def complete_paths(user, vault, value) do
-    case NameIndex.search(user, vault, value, @max_completions) do
+  def complete_paths(user, vault, value, client \\ nil) do
+    case NameIndex.search(user, vault, value, @max_completions, client) do
       {:ok, paths, total} ->
         %{"values" => paths, "total" => total, "hasMore" => total > length(paths)}
 

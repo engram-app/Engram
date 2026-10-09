@@ -580,6 +580,13 @@ defmodule Engram.Notes.CrdtCheckpoint do
             # reaches a checkpoint is the user's own CRDT clients: actor "sync".
             _ = Revisions.record_write(note, "sync", Keyword.fetch!(opts, :recording))
 
+            # A checkpoint re-derives the title and broadcasts nothing, so tell
+            # the name index. In-transaction: a rollback after this leaves a
+            # stale suggestion that the index's max age heals.
+            _ =
+              if title != note.title,
+                do: Engram.Notes.NameIndex.announce(vault_id, note_id, note.path, title)
+
             {prev, content_hash, note.path}
 
           {0, _} ->

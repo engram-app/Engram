@@ -339,12 +339,16 @@ defmodule EngramWeb.McpResourcesTest do
       conn: conn,
       slug: slug
     } do
+      # Build the name index first, so the burst below is all fast searches.
+      complete(conn, "path", "warm", %{"vault" => slug})
       # Starts the burst at the head of a fresh window, so it cannot straddle one.
       EngramWeb.RateLimiter.reset_buckets!()
-      results = for _ <- 1..35, do: complete(conn, "path", "engr", %{"vault" => slug})
+      # 65 > two windows' worth (2 x 30): even if a slow burst crosses one
+      # window edge, at least 5 must be refused.
+      results = for _ <- 1..65, do: complete(conn, "path", "engr", %{"vault" => slug})
 
       assert hd(results)["values"] == ["Projects/Engram.md"]
-      assert List.last(results)["values"] == []
+      assert Enum.count(results, &(&1["values"] == [])) >= 5
     end
   end
 

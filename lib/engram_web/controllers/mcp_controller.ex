@@ -685,7 +685,7 @@ defmodule EngramWeb.McpController do
         {%{"type" => "ref/resource", "uri" => ^template}, "path"} ->
           with {:allow, _} <- path_completion_budget(user),
                {:ok, vault} <- completion_vault(user, params["context"], conn) do
-            Resources.complete_paths(user, vault, value)
+            Resources.complete_paths(user, vault, value, completion_client(conn))
           else
             _ -> Resources.completion([])
           end
@@ -1173,6 +1173,11 @@ defmodule EngramWeb.McpController do
         @path_completions_per_window,
         :mcp_complete
       )
+
+  # Latest-wins is per client, so two agents on one vault never cancel each
+  # other's searches. The credential is the client; hashed, never stored.
+  defp completion_client(conn),
+    do: :erlang.phash2(get_req_header(conn, "authorization"))
 
   # The vault picked earlier in the same completion, else the credential's
   # only vault. Several vaults and no pick suggests nothing rather than guess.

@@ -79,7 +79,8 @@ defmodule Engram.Native do
     name_index_build_nif: 4,
     name_index_search_nif: 3,
     name_index_put_nif: 4,
-    name_index_delete_nif: 3
+    name_index_delete_nif: 3,
+    name_index_bytes_nif: 1
   ]
 
   # Test hooks, built only with the crate's `test-hooks` feature, which
@@ -285,14 +286,42 @@ defmodule Engram.Native do
     end
   end
 
-  @doc "`{paths, total}`: fuzzy matches over path and title, best first."
+  # Search cost is roughly query atoms x names: a 4 KB query of 2,000 atoms
+  # took 4 s over 50k names on the one prod dirty scheduler. Real queries are
+  # a few words; anything past these is cut, never rejected.
+  @name_query_max_bytes 256
+  @name_query_max_atoms 8
+  @name_limit_max 100
+
+  @doc """
+  `{paths, total}`: fuzzy matches over path and title, best first. The query
+  is cut to #{@name_query_max_bytes} bytes and #{@name_query_max_atoms} words,
+  and `limit` to #{@name_limit_max}.
+  """
   def name_index_search(handle, query, limit)
       when is_binary(query) and is_integer(limit) and limit > 0 do
+    query = bound_query(query)
+    limit = min(limit, @name_limit_max)
+
     call(:name_index_search, query, %{dirty: true}, fn ->
       {paths, total, peak} = name_index_search_nif(handle, query, limit)
       {{paths, total}, peak}
     end)
   end
+
+  defp bound_query(query) do
+    query
+    |> binary_part(0, min(byte_size(query), @name_query_max_bytes))
+    |> String.chunk(:valid)
+    |> Enum.filter(&String.valid?/1)
+    |> Enum.join()
+    |> String.split()
+    |> Enum.take(@name_query_max_atoms)
+    |> Enum.join(" ")
+  end
+
+  @doc "Approximate native bytes an index holds now (patches grow it)."
+  def name_index_bytes(handle), do: name_index_bytes_nif(handle)
 
   @doc "Insert or update one note's names. An empty title keeps the current one."
   def name_index_put(handle, raw_id, path, title)

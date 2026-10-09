@@ -680,7 +680,9 @@ fn name_index_search_nif(
     (hits, total, peak)
 }
 
-#[rustler::nif]
+// Patches take the write lock, which waits out any running search. Dirty, so
+// that wait never parks a normal scheduler (prod runs exactly one).
+#[rustler::nif(schedule = "DirtyCpu")]
 fn name_index_put_nif(
     index: ResourceArc<names::NameIndex>,
     id: Binary,
@@ -690,10 +692,15 @@ fn name_index_put_nif(
     index.put(&id, path, title)
 }
 
-#[rustler::nif]
+#[rustler::nif(schedule = "DirtyCpu")]
 fn name_index_delete_nif(index: ResourceArc<names::NameIndex>, id: Binary, path: &str) -> Atom {
     index.delete(&id, path);
     rustler::types::atom::ok()
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn name_index_bytes_nif(index: ResourceArc<names::NameIndex>) -> usize {
+    index.bytes()
 }
 
 rustler::init!("Elixir.Engram.Native");

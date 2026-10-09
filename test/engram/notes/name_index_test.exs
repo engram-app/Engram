@@ -21,6 +21,22 @@ defmodule Engram.Notes.NameIndexTest do
     paths
   end
 
+  defp tree_rows(user, vault),
+    do: Repo.with_tenant!(user.id, fn -> Notes.raw_tree_note_rows(user, vault) end)
+
+  defp put_building(vault, user, builder) do
+    ref = Process.monitor(builder)
+
+    :sys.replace_state(NameIndex, fn state ->
+      put_in(state.building[vault.id], %{
+        builder: {builder, ref},
+        user_id: user.id,
+        waiters: [],
+        events: []
+      })
+    end)
+  end
+
   # Patches arrive as PubSub messages to the owner; give them a moment.
   defp eventually(fun, tries \\ 50) do
     if fun.() or tries == 0,
@@ -104,6 +120,101 @@ defmodule Engram.Notes.NameIndexTest do
     assert paths(other, ov, "engr") == []
   end
 
+  test "a note created in Obsidian (CRDT genesis) reaches the index", %{user: user, vault: vault} do
+    assert paths(user, vault, "obsidian") == []
+
+    {:ok, _} =
+      Notes.genesis_crdt_note(user, vault, Ecto.UUID.generate(), "Inbox/From Obsidian.md")
+
+    eventually(fn -> paths(user, vault, "obsidian") == ["Inbox/From Obsidian.md"] end)
+  end
+
+  test "announce/4 patches a cached index (checkpoint title changes)", %{user: user, vault: vault} do
+    assert paths(user, vault, "renamedtitle") == []
+    [{_, raw, _, _, _, _, _} | _] = tree_rows(user, vault)
+    {:ok, id} = Ecto.UUID.load(raw)
+    {:ok, note} = Notes.get_note_by_id(user, vault, id)
+
+    NameIndex.announce(vault.id, id, note.path, "RenamedTitle")
+    eventually(fn -> paths(user, vault, "renamedtitle") == [note.path] end)
+  end
+
+  test "changes during a build are buffered and replayed", %{user: user, vault: vault} do
+    # Hold the vault mid-build with a stand-in builder, then land a change.
+    builder = spawn(fn -> Process.sleep(:infinity) end)
+    put_building(vault, user, builder)
+    # The stand-in never subscribed the owner, so deliver the event directly.
+    send(NameIndex, {:name_index_put, vault.id, Ecto.UUID.generate(), "Late/Arrival.md", ""})
+    :sys.get_state(NameIndex)
+
+    {:ok, dek} = Engram.Crypto.get_dek(user)
+    bound = Engram.Crypto.row_version_aad_bound()
+
+    rows =
+      for {_, raw, v, ct, nonce, _, _} <- tree_rows(user, vault),
+          do: {raw, v >= bound, ct, nonce, nil, nil}
+
+    {:ok, handle, bytes} =
+      Engram.Native.name_index_build(
+        dek,
+        Engram.Crypto.aad_prefix(:notes, :path),
+        Engram.Crypto.aad_prefix(:notes, :title),
+        rows
+      )
+
+    :ok = GenServer.call(NameIndex, {:built, vault.id, handle, bytes})
+    assert paths(user, vault, "arrival") == ["Late/Arrival.md"]
+    assert paths(user, vault, "engr") == ["Projects/Engram.md"]
+  end
+
+  test "a builder that dies leaves no subscription behind", %{user: user, vault: vault} do
+    owner = Process.whereis(NameIndex)
+    topic = "sync:#{user.id}:#{vault.id}"
+
+    for _ <- 1..3 do
+      {pid, ref} =
+        spawn_monitor(fn -> :build = GenServer.call(NameIndex, {:claim, user.id, vault.id}) end)
+
+      assert_receive {:DOWN, ^ref, :process, ^pid, _}
+      :sys.get_state(NameIndex)
+    end
+
+    refute Enum.any?(Registry.lookup(Engram.PubSub, topic), fn {p, _} -> p == owner end)
+  end
+
+  test "latest-wins is per client: another client is never superseded", %{
+    user: user,
+    vault: vault
+  } do
+    {:ok, _, _} = NameIndex.search(user, vault, "engr", 10, :client_a)
+    assert {:ok, ["Projects/Engram.md"], 1} = NameIndex.search(user, vault, "engr", 10, :client_b)
+  end
+
+  test "an oversized query is cut, not run whole" do
+    me = self()
+    handler = "name-query-bound-#{inspect(me)}"
+
+    :telemetry.attach(
+      handler,
+      [:engram, :nif, :call, :stop],
+      fn
+        _, m, %{nif: :name_index_search}, _ -> send(me, {:searched, m.input_bytes})
+        _, _, _, _ -> :ok
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+    {:ok, h, _} = Engram.Native.name_index_build(:crypto.strong_rand_bytes(32), "", "", [])
+
+    # 2,000 atoms took 4 s at 50k names before the bound. Ends mid-codepoint too.
+    query = String.duplicate("a ", 5_000) <> <<0xE2, 0x82>>
+    {[], 0} = Engram.Native.name_index_search(h, query, 10_000)
+
+    assert_received {:searched, bytes}
+    assert bytes <= 16, "8 one-letter words, got #{bytes} bytes"
+  end
+
   describe "native" do
     test "batch decrypt matches per-row decrypt, and fails whole on a bad row", %{
       user: user,
@@ -130,7 +241,7 @@ defmodule Engram.Notes.NameIndexTest do
 
     test "search and batch decrypt do not leak native memory", %{user: user, vault: vault} do
       {:ok, _, _} = NameIndex.search(user, vault, "engr", 10)
-      [{_, _, handle, _, _}] = :ets.lookup(:engram_name_index, vault.id)
+      [{_, _, handle, _, _, _}] = :ets.lookup(:engram_name_index, vault.id)
 
       Engram.NativeLeak.assert_no_leak(fn ->
         Engram.Native.name_index_search(handle, "eng", 10)

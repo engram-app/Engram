@@ -987,6 +987,8 @@ defmodule Engram.Notes do
         # CrdtDeliver call sites in this module.
         {:ok, {:ok, note, :announce}} ->
           :ok = CrdtDeliver.announce_ready(user.id, vault.id, note.path, note.id)
+          # crdt_doc_ready never reaches the sync topic the name index reads.
+          :ok = Engram.Notes.NameIndex.announce(vault.id, note.id, note.path, note.title)
 
           # The web /link success page waits on this before forwarding the user
           # to their vault. It used to fire only from the REST upsert/batch
