@@ -5,6 +5,7 @@ defmodule EngramWeb.NotesController do
 
   alias Engram.Crypto
   alias Engram.Links
+  alias Engram.Logger.Metadata
   alias Engram.Notes
   alias Engram.Repo
   alias EngramWeb.BatchOps
@@ -108,7 +109,7 @@ defmodule EngramWeb.NotesController do
           # signal without the leak surface.
           Logger.error(
             "upsert_note returned unexpected error",
-            Engram.Logger.Metadata.with_category(:error, :sync,
+            Metadata.with_category(:error, :sync,
               reason_label: classify_reason(reason),
               user_id: user.id,
               vault_id: vault.id
@@ -208,7 +209,7 @@ defmodule EngramWeb.NotesController do
       # decrypted virtual fields, and this file's own T3.0.6 guard
       # (no_inspect_in_json_response_test) exists to stop that leaking into
       # logs. The label keeps the signal.
-      Engram.Logger.Metadata.with_category(:error, :sync,
+      Metadata.with_category(:error, :sync,
         user_id: user.id,
         reason_label: classify_reason(reason)
       )
@@ -253,7 +254,7 @@ defmodule EngramWeb.NotesController do
   defp append_response(conn, user, _path, {_, {:error, reason}}) do
     Logger.error(
       "note_append returned unexpected error",
-      Engram.Logger.Metadata.with_category(:error, :sync,
+      Metadata.with_category(:error, :sync,
         reason_label: classify_reason(reason),
         user_id: user.id
       )
