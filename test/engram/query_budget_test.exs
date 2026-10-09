@@ -22,12 +22,14 @@ defmodule Engram.QueryBudgetTest do
   # re-read before the write: +1), and REST append runs in one transaction.
   # Task 7b fix round: the read-modify-writes read the note and its tail in
   # one statement (-1).
+  # Task 8: OriginStats.record is an ETS counter bumped in memory and flushed
+  # by a timer (-1 on every MCP tools/call: the per-call upsert is gone).
   @budgets %{
-    "mcp get_notes" => 7,
-    "mcp write_note update" => 17,
-    "mcp append_to_note" => 17,
-    "mcp edit_note" => 17,
-    "mcp delete_note" => 15,
+    "mcp get_notes" => 6,
+    "mcp write_note update" => 16,
+    "mcp append_to_note" => 16,
+    "mcp edit_note" => 16,
+    "mcp delete_note" => 14,
     "GET sync/manifest" => 11,
     "GET notes/*path" => 11,
     "POST notes update" => 28,

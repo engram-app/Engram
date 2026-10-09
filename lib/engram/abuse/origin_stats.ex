@@ -17,6 +17,8 @@ defmodule Engram.Abuse.OriginStats do
   alias Engram.Abuse.OriginClassifier
   alias Engram.Repo
 
+  require Logger
+
   defmodule Row do
     use Ecto.Schema
 
@@ -30,41 +32,89 @@ defmodule Engram.Abuse.OriginStats do
     end
   end
 
+  @table __MODULE__.Buffer
+  @chunk 5_000
+
   @doc """
-  Records one request from a user, classifying the user-agent and bumping
-  the per-day per-class counter. Idempotent under concurrency via
-  `on_conflict: [inc:]`.
+  Records one request from a user, classifying the user-agent and bumping an
+  in-memory counter keyed by `{day, user_id, class}`. Makes zero queries; the
+  `OriginStats.Buffer` process flushes the counters to `client_origin_stats`
+  every 30s (readers lag by up to that).
 
   Returns `:ok` always (best-effort instrumentation; never raises).
   """
   @spec record(Ecto.UUID.t(), String.t() | nil) :: :ok
   def record(user_id, user_agent) when is_binary(user_id) do
     class = OriginClassifier.classify(user_agent) |> Atom.to_string()
-    today = Date.utc_today()
-    now = DateTime.utc_now()
-
-    {_, _} =
-      Repo.insert_all(
-        Row,
-        [
-          %{
-            user_id: user_id,
-            day: today,
-            fingerprint_class: class,
-            request_count: 1,
-            created_at: now,
-            updated_at: now
-          }
-        ],
-        on_conflict: [inc: [request_count: 1], set: [updated_at: now]],
-        conflict_target: [:user_id, :day, :fingerprint_class],
-        skip_tenant_check: true
-      )
-
+    key = {Date.utc_today(), user_id, class}
+    :ets.update_counter(@table, key, 1, {key, 0})
     :ok
   rescue
-    _ -> :ok
+    # Table absent (buffer not started yet / restarting): drop the count.
+    ArgumentError -> :ok
   end
+
+  @doc """
+  Writes buffered counters to the table and resets them. `:all` (the buffer's
+  timer and shutdown) or one user's id (tests flush only their own, so async
+  tests never write another test's rows).
+
+  The table has no RLS (see `rls_coverage_test`), so the buffer process can
+  write rows for many users without a tenant set. Runs in the caller's process.
+  A failed insert is logged and its counts dropped (a deleted user's FK would
+  otherwise poison every later flush).
+  """
+  @spec flush(:all | Ecto.UUID.t()) :: :ok
+  def flush(who \\ :all) do
+    pattern = if who == :all, do: :_, else: who
+    counts = :ets.select(@table, [{{{:_, pattern, :_}, :_}, [], [:"$_"]}])
+    # take/2 per key: atomic read-and-delete, so concurrent increments between
+    # the select and the take land in the take or in a fresh counter.
+    rows = for {key, _} <- counts, [{_, n}] <- [:ets.take(@table, key)], do: row(key, n)
+
+    rows
+    |> Enum.chunk_every(@chunk)
+    |> Enum.each(&insert_chunk/1)
+  rescue
+    ArgumentError -> :ok
+  end
+
+  defp row({day, user_id, class}, n) do
+    now = DateTime.utc_now()
+
+    %{
+      user_id: user_id,
+      day: day,
+      fingerprint_class: class,
+      request_count: n,
+      created_at: now,
+      updated_at: now
+    }
+  end
+
+  defp insert_chunk(rows) do
+    Repo.insert_all(
+      Row,
+      rows,
+      on_conflict:
+        from(r in Row,
+          update: [
+            set: [
+              request_count: fragment("? + EXCLUDED.request_count", r.request_count),
+              updated_at: fragment("EXCLUDED.updated_at")
+            ]
+          ]
+        ),
+      conflict_target: [:user_id, :day, :fingerprint_class],
+      skip_tenant_check: true
+    )
+  rescue
+    e ->
+      Logger.warning("origin stats flush dropped #{length(rows)} rows: #{Exception.message(e)}")
+  end
+
+  @doc false
+  def table, do: @table
 
   @doc """
   Returns a list of `{day, class, count}` for the user over the last `days`,

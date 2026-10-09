@@ -344,6 +344,9 @@ defmodule Engram.Application do
       # NOTIFY evictions from the listener above.
       Engram.Cache.Server,
       Engram.Auth.SignupRejections,
+      # Per-request origin counters, flushed in one statement every 30s. After
+      # Repo so the shutdown flush can still write.
+      Engram.Abuse.OriginStats.Buffer,
       rate_limiter_child(),
       {Oban, oban},
       boot_sweep_child(oban),
