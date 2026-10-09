@@ -196,6 +196,8 @@ defmodule Engram.MixProject do
       {:ex_machina, "~> 2.8", only: :test},
       {:mox, "~> 1.1", only: :test},
       {:bypass, "~> 2.1", only: :test},
+      # Validates the MCP server card against the upstream JSON Schema (2020-12).
+      {:jsv, "~> 0.26.0", only: :test},
       {:stream_data, "~> 1.1", only: [:test, :dev]},
 
       # Quality tooling (dev/test only — never loaded in prod release)

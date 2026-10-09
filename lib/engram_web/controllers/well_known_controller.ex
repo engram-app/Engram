@@ -137,19 +137,103 @@ defmodule EngramWeb.WellKnownController do
     )
   end
 
+  @card_type "application/mcp-server-card+json"
+
   @doc """
-  SEP-1649 static server card. Directories read it when their scanner stops at
-  the OAuth wall. `tools` is `Tools.wire_list/0`, the exact `tools/list`
-  payload, so the card cannot drift from what an authed client is served.
+  MCP Server Card, per `modelcontextprotocol/experimental-ext-server-card`
+  (v1 schema). Served at `<streamable-http-url>/server-card`, the location that
+  spec reserves, and at the older `/.well-known/mcp/server-card.json`.
+
+  The v1 fields come first. The SEP-1649 keys after them (`serverInfo`,
+  `authentication`, `tools`, ...) are what Smithery and MCPRush read today when
+  their scanner stops at the OAuth wall. The v1 schema allows extra keys, so one
+  document satisfies both. `tools` is `Tools.wire_list/0`, the exact
+  `tools/list` payload, so the card cannot drift from what an authed client is
+  served. `McpServerCardTest` validates it against the vendored upstream schema.
   """
   def mcp_server_card(conn, _params) do
-    json(conn, %{
+    card = %{
+      "$schema" => "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json",
+      "name" => "page.engram/engram",
+      "title" => "Engram",
+      "version" => EngramWeb.McpController.server_info()["version"],
+      # Max 100 chars (schema). Claims vetted against market-position-and-gtm.md §5.
+      "description" =>
+        "AI memory you can read and edit: notes in your Obsidian vault, searchable by MCP.",
+      "websiteUrl" => "https://engram.page",
+      "icons" => [%{"src" => "https://engram.page/favicon.svg", "mimeType" => "image/svg+xml"}],
+      "remotes" => [
+        %{
+          "type" => "streamable-http",
+          # Same derivation as the RFC 9728 `resource`: bare host on mcp.engram.page,
+          # `/api/mcp` everywhere else. The spec wants the card to agree with runtime.
+          "url" => OAuthMetadata.resource(conn),
+          "supportedProtocolVersions" => EngramWeb.McpController.supported_protocol_versions()
+        }
+      ],
       "serverInfo" => EngramWeb.McpController.server_info(),
       "authentication" => %{"required" => true, "schemes" => ["oauth2"]},
       "tools" => Engram.MCP.Tools.wire_list(),
       "resources" => [],
       "prompts" => []
-    })
+    }
+
+    # The spec says to echo the card media type when the client asks for it.
+    # Everyone else (Smithery, browsers, curl) gets `json/2`'s application/json.
+    conn = if wants_card_type?(conn), do: put_resp_content_type(conn, @card_type), else: conn
+
+    send_cacheable_json(conn, card)
+  end
+
+  @doc """
+  AI Catalog (`/.well-known/ai-catalog.json`), the domain-level discovery
+  document the server-card spec points clients at. One entry: our card.
+  """
+  def ai_catalog(conn, _params) do
+    catalog = %{
+      "specVersion" => "1.0",
+      "entries" => [
+        %{
+          "identifier" => "urn:air:engram.page:mcp:engram",
+          "type" => @card_type,
+          "url" => OAuthMetadata.resource(conn) <> "/server-card"
+        }
+      ]
+    }
+
+    conn
+    |> put_resp_content_type("application/ai-catalog+json")
+    |> send_cacheable_json(catalog)
+  end
+
+  defp wants_card_type?(conn),
+    do: conn |> get_req_header("accept") |> Enum.any?(&String.contains?(&1, @card_type))
+
+  # ETag + If-None-Match -> 304, which the server-card spec asks hosts to honour.
+  # The tag hashes the content type too, so the two representations of the card
+  # never share one. `W/` is accepted because Cloudflare weakens ETags when it
+  # compresses a response.
+  #
+  # Callers set any non-JSON content type with a LITERAL first, and the body goes
+  # out through `json/2`, which keeps a preset content type. Sobelow's XSS checks
+  # flag `put_resp_content_type`/`send_resp` fed a variable, so this shape keeps
+  # them quiet without a `.sobelow-skips` entry.
+  defp send_cacheable_json(conn, doc) do
+    representation = [get_resp_header(conn, "content-type"), Jason.encode!(doc)]
+    hash = :crypto.hash(:sha256, representation) |> Base.url_encode64(padding: false)
+    etag = ~s("#{hash}")
+
+    conn = put_resp_header(conn, "etag", etag)
+
+    if etag_matches?(conn, etag), do: send_resp(conn, 304, ""), else: json(conn, doc)
+  end
+
+  defp etag_matches?(conn, etag) do
+    conn
+    |> get_req_header("if-none-match")
+    |> Enum.flat_map(&String.split(&1, ","))
+    |> Enum.map(&String.trim/1)
+    |> Enum.any?(&(&1 in ["*", etag, "W/" <> etag]))
   end
 
   @doc """
