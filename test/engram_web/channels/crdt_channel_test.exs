@@ -1015,7 +1015,13 @@ defmodule EngramWeb.CrdtChannelTest do
       # room's in-memory doc can hold content the row does not show yet. Reading
       # that as "the server has nothing" is the same data-loss shape as the
       # decline above.
+      #
+      # A room binds only to a note row that exists (bind/3 refuses one that
+      # does not), so the row comes first: the create retried after the note
+      # was opened.
       id = Ecto.UUID.generate()
+      ref0 = push(socket, "crdt_create", %{"doc_id" => id, "path" => "Notes/roombusy.md"})
+      assert_reply ref0, :ok, %{doc_id: ^id}
       {:ok, _room} = CrdtRegistry.ensure_started(user.id, vault.id, id)
       on_exit(fn -> CrdtRegistry.terminate_room(id) end)
 

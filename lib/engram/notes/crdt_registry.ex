@@ -112,6 +112,8 @@ defmodule Engram.Notes.CrdtRegistry do
           {:ok, pid} -> {:ok, pid}
           # Lost the cluster-wide race — another node registered first.
           {:error, {:already_started, pid}} -> {:ok, pid}
+          # bind/3 found no live note for this user and vault.
+          {:error, {:shutdown, :note_not_found}} -> {:error, :not_found}
           {:error, _} = err -> err
         end
     end

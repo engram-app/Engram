@@ -156,27 +156,29 @@ defmodule Engram.Notes.CrdtTransport do
           {:ok, %{head: String.t()}}
           | {:error, :not_found | :invalid_update | :note_too_large | :room_unavailable}
   def apply_update(user, vault, note_id, update, source \\ :unknown) do
-    if Notes.note_in_vault?(user, vault.id, note_id) do
-      # ensure_observed (not ensure_started): registers THIS process (the
-      # per-request caller) as a SharedDoc observer so the room's lifetime is
-      # bounded by ours. auto_exit is :DOWN-driven — a room started via
-      # ensure_started has no observer and never reaps, leaking an immortal
-      # :global room + linked CrdtCheckpointTimer per distinct note_id POSTed
-      # here. With an observer, when this process exits (end of request, or
-      # here in tests, the spawned caller), the room checkpoints and exits
-      # unless a live channel is also observing it.
-      with {:ok, room} <- CrdtRegistry.ensure_observed(user.id, vault.id, note_id, source),
-           {:ok, head} <- apply_in_room(room, note_id, update) do
-        {:ok, %{head: head}}
-      else
-        {:error, :invalid_update} -> {:error, :invalid_update}
-        {:error, :note_too_large} -> {:error, :note_too_large}
-        # ensure_started failure, a room that timed out / died mid-apply, or a
-        # tail append that failed.
-        {:error, _reason} -> {:error, :room_unavailable}
-      end
+    # No separate existence check: a cold room's bind/3 reads the note and
+    # refuses one outside this vault, or deleted ({:error, :not_found}), and a
+    # running room is checked for its owner inside the apply.
+    #
+    # ensure_observed (not ensure_started): registers THIS process (the
+    # per-request caller) as a SharedDoc observer so the room's lifetime is
+    # bounded by ours. auto_exit is :DOWN-driven — a room started via
+    # ensure_started has no observer and never reaps, leaking an immortal
+    # :global room + linked CrdtCheckpointTimer per distinct note_id POSTed
+    # here. With an observer, when this process exits (end of request, or
+    # here in tests, the spawned caller), the room checkpoints and exits
+    # unless a live channel is also observing it.
+    with {:ok, room} <- CrdtRegistry.ensure_observed(user.id, vault.id, note_id, source),
+         {:ok, head} <- apply_in_room(room, {user.id, vault.id}, note_id, update) do
+      {:ok, %{head: head}}
     else
-      {:error, :not_found}
+      {:error, reason} when reason in [:not_found, :invalid_update, :note_too_large] ->
+        {:error, reason}
+
+      # ensure_started failure, a room that timed out / died mid-apply, or a
+      # tail append that failed.
+      {:error, _reason} ->
+        {:error, :room_unavailable}
     end
   end
 
@@ -188,10 +190,11 @@ defmodule Engram.Notes.CrdtTransport do
   # tolerance of CrdtDeliver.room_apply/3 but, unlike that fire-and-forget path,
   # REPORTS failures instead of swallowing them — this is a write contract, not
   # best-effort delivery.
-  @spec apply_in_room(pid(), String.t(), binary()) ::
+  @spec apply_in_room(pid(), {String.t(), String.t()}, String.t(), binary()) ::
           {:ok, String.t()}
-          | {:error, :invalid_update | :note_too_large | :room_unavailable | :append_failed}
-  defp apply_in_room(room, note_id, update) do
+          | {:error,
+             :not_found | :invalid_update | :note_too_large | :room_unavailable | :append_failed}
+  defp apply_in_room(room, owner, note_id, update) do
     parent = self()
     ref = make_ref()
 
@@ -200,7 +203,7 @@ defmodule Engram.Notes.CrdtTransport do
     # sent. The function-level `catch` cannot see body bindings at all, which is
     # what silently made that drain impossible to write.
     try do
-      apply_in_room_call(room, parent, ref, update)
+      apply_in_room_call(room, parent, ref, owner, update)
 
       # Acknowledge only once the room's tail append committed: a success here
       # lets the client drop its queued copy.
@@ -230,7 +233,7 @@ defmodule Engram.Notes.CrdtTransport do
     end
   end
 
-  defp apply_in_room_call(room, parent, ref, update) do
+  defp apply_in_room_call(room, parent, ref, {user_id, vault_id}, update) do
     # SharedDoc.update_doc is a synchronous GenServer.call: the fun runs to
     # completion inside the room before this returns, so the {ref, result}
     # message is already in our mailbox when we receive it.
@@ -266,6 +269,7 @@ defmodule Engram.Notes.CrdtTransport do
     SharedDoc.update_doc(room, fn doc ->
       result =
         cond do
+          not CrdtPersistence.owned_by?(user_id, vault_id) -> {:error, :not_found}
           not CrdtBridge.fits?(doc, update) -> {:error, :note_too_large}
           Yex.apply_update(doc, update) == :ok -> {:ok, head_marker(doc)}
           true -> {:error, :invalid_update}

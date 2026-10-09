@@ -62,9 +62,11 @@ defmodule Engram.Notes.CrdtPersistence do
     # the test, where it would swallow linked-process crashes.
     if Process.get(:"$initial_call") != nil, do: Process.flag(:trap_exit, true)
 
-    user = Accounts.get_user!(user_id)
+    # Cached (Engram.Cache, evicted on any users UPDATE, so a DEK rotation is
+    # seen). A missing user must not get a room: raise, like get_user!/1 did.
+    user = Accounts.get_user(user_id) || raise "CrdtPersistence.bind/3: user #{user_id} not found"
 
-    _ =
+    {:ok, presence} =
       Repo.with_tenant(user_id, fn ->
         # NO lock here, deliberately (#1409). bind/3 runs INLINE inside the one
         # DynamicSupervisor process per node (start_child is a synchronous call
@@ -74,8 +76,12 @@ defmodule Engram.Notes.CrdtPersistence do
         # then terminates whatever room appeared in its window
         # (`EngramWeb.CrdtChannel.evict_racing_room/1`), so the replacement room
         # binds against the committed row.
+        #
+        # This read is also the existence check (it replaced a separate
+        # `Notes.note_in_vault?/3` transaction on the room-free path): a note
+        # outside this user's vault, or deleted, gets no room. See below.
         case Repo.get(Note, note_id) do
-          %Note{} = note ->
+          %Note{user_id: ^user_id, vault_id: ^vault_id, deleted_at: nil} = note ->
             # Hydrate the snapshot when present. Absent one, the doc stays
             # empty: nothing here re-seeds it from `notes.content` (see the
             # NOTE below). CrdtCheckpoint guards against that empty doc being
@@ -153,11 +159,25 @@ defmodule Engram.Notes.CrdtPersistence do
             # checkpoint materializer.
 
             :ok = CrdtBridge.normalize_doc(doc)
+            :present
 
-          nil ->
-            :ok
+          _absent ->
+            :absent
         end
       end)
+
+    if in_room?() do
+      # Refuse the room rather than start one bound to ids that do not own the
+      # note: rooms are keyed by note id alone, so it would be found by the
+      # note's real owner and append their edits under the wrong tenant. A
+      # `{:shutdown, _}` exit fails the start quietly (no crash report);
+      # `CrdtRegistry.ensure_started/4` answers `{:error, :not_found}`.
+      if presence == :absent, do: exit({:shutdown, :note_not_found})
+
+      # Who this room is for. A caller that finds the room already running
+      # checks it (`owned_by?/2`) instead of re-reading the note.
+      Process.put(:crdt_owner, {user_id, vault_id})
+    end
 
     # Cache the resolved user in the threaded state for update_v1/4 and unbind/3.
     Map.put(state, :user, user)
@@ -314,6 +334,12 @@ defmodule Engram.Notes.CrdtPersistence do
   # where the persistence state is out of reach. Never a row that failed to
   # decrypt or a row another writer appended: those stay in the tail.
   defp remember_tail_id(id), do: Process.put(:crdt_tail_ids, [id | known_tail_ids()])
+
+  @doc false
+  # Whether this room was bound for `user_id`'s note in `vault_id`. Runs in the
+  # room.
+  @spec owned_by?(String.t(), String.t()) :: boolean()
+  def owned_by?(user_id, vault_id), do: Process.get(:crdt_owner) == {user_id, vault_id}
 
   @doc false
   @spec known_tail_ids() :: [Ecto.UUID.t()]
