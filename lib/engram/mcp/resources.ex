@@ -13,11 +13,9 @@ defmodule Engram.MCP.Resources do
   @scheme "engram://"
   @template "engram://{vault}/{+path}"
   @mime "text/markdown"
-  # Pages walk one vault at a time, newest first. Offset paging: a note edited
-  # mid-walk can shift by a slot, which a picker tolerates.
+  # Pages walk one vault at a time, newest first, keyset on (updated_at, id).
+  # A note edited mid-walk jumps to the front and is not revisited this walk.
   @page_size 50
-  # Far past any real vault, far inside int8. A forged cursor must not 500.
-  @max_offset 10_000_000
   # Spec cap for completion values.
   @max_completions 100
 
@@ -42,38 +40,30 @@ defmodule Engram.MCP.Resources do
   def list(_user, [], nil), do: {:ok, %{"resources" => []}}
 
   def list(user, vaults, cursor) do
-    with {:ok, index, offset} <- decode_cursor(cursor, vaults),
-         do: {:ok, page(user, vaults, index, offset)}
+    with {:ok, index, before} <- decode_cursor(cursor, vaults),
+         do: {:ok, page(user, vaults, index, before)}
   end
 
-  # An exhausted or empty vault rolls straight into the next one, so a page
-  # is empty only when every remaining vault is.
-  defp page(user, vaults, index, offset) do
+  # A page fills across vaults: an exhausted or empty vault rolls straight
+  # into the next one, so a short page means every remaining vault is done.
+  defp page(user, vaults, index, before, acc \\ []) do
     vault = Enum.at(vaults, index)
-    {:ok, notes} = Notes.list_recent_notes(user, vault, @page_size + 1, offset: offset)
-    {page, more} = Enum.split(notes, @page_size)
-    last_vault? = index + 1 >= length(vaults)
+    room = @page_size - length(acc)
+    {:ok, notes} = Notes.list_recent_notes(user, vault, room + 1, before: before)
+    {taken, more} = Enum.split(notes, room)
+    acc = acc ++ entries(vault, taken, vaults)
+    next_vault = Enum.at(vaults, index + 1)
 
     cond do
-      page == [] and not last_vault? ->
-        page(user, vaults, index + 1, 0)
-
-      more != [] ->
-        %{
-          "resources" => entries(vault, page, vaults),
-          "nextCursor" => encode_cursor(vault, offset + @page_size)
-        }
-
-      not last_vault? ->
-        %{
-          "resources" => entries(vault, page, vaults),
-          "nextCursor" => encode_cursor(Enum.at(vaults, index + 1), 0)
-        }
-
-      true ->
-        %{"resources" => entries(vault, page, vaults)}
+      more != [] -> result(acc, encode_cursor(vault, List.last(taken)))
+      next_vault && length(acc) < @page_size -> page(user, vaults, index + 1, nil, acc)
+      next_vault -> result(acc, encode_cursor(next_vault, nil))
+      true -> result(acc, nil)
     end
   end
+
+  defp result(resources, nil), do: %{"resources" => resources}
+  defp result(resources, cursor), do: %{"resources" => resources, "nextCursor" => cursor}
 
   defp entries(vault, notes, vaults) do
     prefix? = length(vaults) > 1
@@ -88,24 +78,42 @@ defmodule Engram.MCP.Resources do
     end)
   end
 
-  defp encode_cursor(vault, offset),
-    do: Base.url_encode64(Jason.encode!(%{"v" => vault.id, "o" => offset}), padding: false)
+  # `{v}` starts a vault from the top; `{v, u, i}` continues after the note
+  # with that updated_at and id.
+  defp encode_cursor(vault, nil), do: pack(%{"v" => vault.id})
 
-  defp decode_cursor(nil, _vaults), do: {:ok, 0, 0}
+  defp encode_cursor(vault, note),
+    do: pack(%{"v" => vault.id, "u" => DateTime.to_iso8601(note.updated_at), "i" => note.id})
+
+  defp pack(map), do: Base.url_encode64(Jason.encode!(map), padding: false)
+
+  defp decode_cursor(nil, _vaults), do: {:ok, 0, nil}
 
   defp decode_cursor(cursor, vaults) when is_binary(cursor) do
     with {:ok, json} <- Base.url_decode64(cursor, padding: false),
-         {:ok, %{"v" => id, "o" => offset}}
-         when is_integer(offset) and offset >= 0 and offset <= @max_offset <-
-           Jason.decode(json),
-         index when is_integer(index) <- Enum.find_index(vaults, &(&1.id == id)) do
-      {:ok, index, offset}
+         {:ok, %{"v" => vault_id} = fields} <- Jason.decode(json),
+         index when is_integer(index) <- Enum.find_index(vaults, &(&1.id == vault_id)),
+         {:ok, before} <- decode_position(fields) do
+      {:ok, index, before}
     else
       _ -> :error
     end
   end
 
   defp decode_cursor(_cursor, _vaults), do: :error
+
+  defp decode_position(%{"u" => u, "i" => i} = fields)
+       when is_binary(u) and is_binary(i) and map_size(fields) == 3 do
+    with {:ok, updated_at, 0} <- DateTime.from_iso8601(u),
+         {:ok, id} <- Ecto.UUID.cast(i) do
+      {:ok, {updated_at, id}}
+    else
+      _ -> :error
+    end
+  end
+
+  defp decode_position(fields) when map_size(fields) == 1, do: {:ok, nil}
+  defp decode_position(_fields), do: :error
 
   def contents(uri, note),
     do: %{"contents" => [%{"uri" => uri, "mimeType" => @mime, "text" => note.content || ""}]}

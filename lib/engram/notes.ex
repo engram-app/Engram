@@ -4710,24 +4710,33 @@ defmodule Engram.Notes do
   @doc """
   Most recently updated live notes in `vault`, newest first, metadata only.
   Backs `search_notes` with no query ("what changed recently") and pages
-  MCP `resources/list` via `offset:`.
+  MCP `resources/list` via `before: {updated_at, id}` (keyset, so a deep page
+  costs the same as the first). `notes_recent_index` serves both.
   """
   @spec list_recent_notes(map(), map(), pos_integer(), keyword()) :: {:ok, [Note.t()]}
   def list_recent_notes(user, vault, limit, opts \\ []) when is_integer(limit) and limit > 0 do
-    offset = Keyword.get(opts, :offset, 0)
+    query =
+      from(n in scoped_live(user, vault),
+        where: n.kind == "note",
+        order_by: [desc: n.updated_at, desc: n.id],
+        limit: ^limit,
+        select: struct(n, @note_meta_fields)
+      )
 
-    {:ok, notes} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.all(
-          from(n in scoped_live(user, vault),
-            where: n.kind == "note",
-            order_by: [desc: n.updated_at, desc: n.id],
-            limit: ^limit,
-            offset: ^offset,
-            select: struct(n, @note_meta_fields)
+    query =
+      case Keyword.get(opts, :before) do
+        nil ->
+          query
+
+        {updated_at, id} ->
+          where(
+            query,
+            [n],
+            n.updated_at < ^updated_at or (n.updated_at == ^updated_at and n.id < ^id)
           )
-        )
-      end)
+      end
+
+    {:ok, notes} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
 
     {:ok, decrypt_or_raise!(notes, user)}
   end

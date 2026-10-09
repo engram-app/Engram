@@ -116,12 +116,19 @@ defmodule EngramWeb.McpResourcesTest do
       assert Enum.any?(uris, &String.ends_with?(&1, "/Plan.md"))
     end
 
-    test "a cursor offset past int8 is Invalid params, not a crash", %{conn: conn, vault: vault} do
-      cursor =
-        Base.url_encode64(~s({"v":"#{vault.id}","o":#{Integer.pow(10, 30)}}), padding: false)
+    test "a forged keyset cursor is Invalid params, not a crash", %{conn: conn, vault: vault} do
+      for fields <- [
+            ~s("u":"not-a-time","i":"#{Ecto.UUID.generate()}"),
+            ~s("u":"2026-10-09T00:00:00.000000Z","i":"not-a-uuid"),
+            ~s("u":#{Integer.pow(10, 30)},"i":"#{Ecto.UUID.generate()}"),
+            ~s("o":#{Integer.pow(10, 30)})
+          ] do
+        cursor = Base.url_encode64(~s({"v":"#{vault.id}",#{fields}}), padding: false)
 
-      assert %{"error" => %{"code" => -32_602}} =
-               rpc(conn, "resources/list", %{"cursor" => cursor})
+        assert %{"error" => %{"code" => -32_602}} =
+                 rpc(conn, "resources/list", %{"cursor" => cursor}),
+               "accepted #{fields}"
+      end
     end
 
     test "skips empty vaults instead of returning empty pages", %{conn: conn, user: user} do
@@ -326,6 +333,18 @@ defmodule EngramWeb.McpResourcesTest do
 
     test "malformed params are Invalid params", %{conn: conn} do
       assert %{"error" => %{"code" => -32_602}} = rpc(conn, "completion/complete", %{"ref" => 1})
+    end
+
+    test "path completion is rate limited to an empty answer, not an error", %{
+      conn: conn,
+      slug: slug
+    } do
+      # Starts the burst at the head of a fresh window, so it cannot straddle one.
+      EngramWeb.RateLimiter.reset_buckets!()
+      results = for _ <- 1..35, do: complete(conn, "path", "engr", %{"vault" => slug})
+
+      assert hd(results)["values"] == ["Projects/Engram.md"]
+      assert List.last(results)["values"] == []
     end
   end
 

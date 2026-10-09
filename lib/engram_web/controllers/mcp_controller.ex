@@ -683,8 +683,10 @@ defmodule EngramWeb.McpController do
           Resources.complete_vaults(accessible_vaults(user, conn), value)
 
         {%{"type" => "ref/resource", "uri" => ^template}, "path"} ->
-          case completion_vault(user, params["context"], conn) do
-            {:ok, vault} -> Resources.complete_paths(user, vault, value)
+          with {:allow, _} <- path_completion_budget(user),
+               {:ok, vault} <- completion_vault(user, params["context"], conn) do
+            Resources.complete_paths(user, vault, value)
+          else
             _ -> Resources.completion([])
           end
 
@@ -1156,6 +1158,21 @@ defmodule EngramWeb.McpController do
       many -> {:many, many}
     end
   end
+
+  # Path completion decrypts every path in the vault, and OAuth clients skip
+  # `RequireApiRpsBudget`, so only the 10/s pre-auth bucket bounded it. 30 per
+  # 10s covers typing (clients debounce); past it the user sees no suggestions
+  # until the window turns rather than an error. 10s, not 1s: the limiter's
+  # test harness aligns bursts to 10s window edges.
+  @path_completions_per_window 30
+  defp path_completion_budget(user),
+    do:
+      EngramWeb.RateLimiter.hit(
+        "mcp_complete:#{user.id}",
+        10_000,
+        @path_completions_per_window,
+        :mcp_complete
+      )
 
   # The vault picked earlier in the same completion, else the credential's
   # only vault. Several vaults and no pick suggests nothing rather than guess.
