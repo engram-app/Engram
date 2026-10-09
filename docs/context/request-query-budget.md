@@ -33,8 +33,8 @@ depend on, and what is left.
 | GET folders | 27 | 5 |
 | GET tags | 22 | 4 |
 | CRDT keystroke (delta) | 47 (crdt_msg update, included a checkpoint tick) | 4 |
-| CRDT checkpoint tick | in the 47 above | 12 |
-| CRDT crdt_doc_update idle | 55 | 21 |
+| CRDT checkpoint tick | in the 47 above | 13 |
+| CRDT crdt_doc_update idle | 55 | 22 |
 | CRDT room open | not pinned (25 measured mid-branch) | 13 |
 
 Bootstrap cold is 21 because 10 of them are the auth plug's own cache misses
@@ -154,7 +154,13 @@ block (begin, enter, commit) opens even when every loader hits.
 - Bind reads snapshot and tail in ONE statement; no echo of the snapshot is
   appended on room start, so opening a note no longer pushes to every device.
 - A checkpoint tick is one txn plus one dispatcher job (one job per
-  checkpoint fans out the embed, link and revision jobs).
+  checkpoint fans out the embed, link and revision jobs), after one read of
+  the rotation lock.
+- **Rotation gates on room, socket and worker writes read the lock fresh**
+  (`RotationGate.check/1`, one query): the `:user` cache learns of a lock
+  taken on another node only when its eviction lands, and an old-DEK write
+  after the sweep is unreadable forever (#1341). REST and MCP writes get the
+  same read from `RotationLockCheck`.
 - Deleting a note, or a folder cascade, terminates its rooms after commit.
 
 ## Accepted rulings

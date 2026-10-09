@@ -124,6 +124,38 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
     perform_job(ProjectVaultIndex, %{"user_id" => ctx.user.id, "vault_id" => ctx.vault.id})
   end
 
+  # #1341. The `:user` cache learns of a lock taken on another node only when
+  # its eviction lands; these jobs encrypt, so they must read the lock fresh.
+  describe "a rotation lock behind a stale cached user" do
+    setup ctx do
+      Engram.Cache.clear_local(:user)
+      _ = Engram.Accounts.get_user(ctx.user.id)
+
+      {1, _} =
+        Repo.update_all(
+          from(u in Engram.Accounts.User, where: u.id == ^ctx.user.id),
+          set: [dek_rotation_locked_at: DateTime.utc_now()]
+        )
+
+      # Precondition: the cache still says unlocked (no eviction delivered).
+      assert %{dek_rotation_locked_at: nil} = Engram.Accounts.get_user(ctx.user.id)
+      :ok
+    end
+
+    test "ProjectVaultIndex snoozes", ctx do
+      assert {:snooze, 30} = run(ctx)
+    end
+
+    test "ReleaseIndexEntries snoozes", ctx do
+      assert {:snooze, 30} =
+               perform_job(Engram.Workers.ReleaseIndexEntries, %{
+                 "user_id" => ctx.user.id,
+                 "vault_id" => ctx.vault.id,
+                 "note_ids" => []
+               })
+    end
+  end
+
   describe "corrective renames" do
     test "an entry whose path differs from the row moves the note", ctx do
       n = note(ctx, "Old/place.md")

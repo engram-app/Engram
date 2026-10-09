@@ -114,12 +114,14 @@ defmodule Engram.QueryBudgetTest do
     # Split, and the tick is driven by hand so both counts are exact.
     # delta: the one-statement append in its tenant txn.
     "CRDT delta" => 4,
-    # tick: one checkpoint txn (10: BEGIN, tenant_enter, note read, next_seq,
-    # note write, tail prune, revisions read + 2 inserts, COMMIT) plus the
-    # dispatcher job insert and Oban's pg_notify.
-    "CRDT checkpoint tick" => 12,
-    # idle (was 48): bind 5 + delta 4 + the exit checkpoint 12.
-    "CRDT crdt_doc_update idle" => 21,
+    # tick: the rotation lock read (#1341: the cached user may not have seen
+    # another node's lock, and the checkpoint encrypts) plus one checkpoint txn
+    # (10: BEGIN, tenant_enter, note read, next_seq, note write, tail prune,
+    # revisions read + 2 inserts, COMMIT) plus the dispatcher job insert and
+    # Oban's pg_notify.
+    "CRDT checkpoint tick" => 13,
+    # idle (was 48): bind 5 + delta 4 + the exit checkpoint 13.
+    "CRDT crdt_doc_update idle" => 22,
     # open (was 25 at bee71923): the channel's note_in_vault? 4 + bind 5 +
     # the announce's path read 4.
     "CRDT room open" => 13

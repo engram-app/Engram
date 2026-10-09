@@ -12,7 +12,9 @@ defmodule EngramWeb.CrdtCreateQueryBudgetTest do
 
   # 57 -> 50 (Task 7b): the seed's checkpoint inserts one NoteCommitted
   # dispatcher job instead of the embed clamp read plus three unique inserts.
-  @statements 50
+  # 50 -> 51: the seed's checkpoint reads the rotation lock from the DB
+  # (#1341: the cached user may not have seen another node's lock).
+  @statements 51
   @tenant_txns 7
   @subscription_reads 0
 

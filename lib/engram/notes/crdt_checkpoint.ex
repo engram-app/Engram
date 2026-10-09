@@ -135,10 +135,12 @@ defmodule Engram.Notes.CrdtCheckpoint do
         # channel, and the CheckpointNote worker. Gating only the worker leg
         # left the one that actually fires open.
         #
-        # `check_user/1`, not `check/1`: `user` was just read from the DB one
-        # line above, so re-reading buys nothing. Skipping prunes nothing, so
-        # every edit stays in the tail-WAL and replays on the next bind.
-        case RotationGate.check_user(user) do
+        # `check/1`, not `check_user/1`: `user` comes from the `:user` cache,
+        # which learns of a lock taken on another node only when its eviction
+        # lands, so the lock is read from the DB (one query). Skipping prunes
+        # nothing, so every edit stays in the tail-WAL and replays on the next
+        # bind.
+        case RotationGate.check(user.id) do
           {:error, :rotation_in_progress} ->
             Logger.warning(
               "crdt checkpoint skipped — dek rotation in progress note_id=#{note_id}",
@@ -152,8 +154,9 @@ defmodule Engram.Notes.CrdtCheckpoint do
         end
     end
   rescue
-    # The user-resolve above is the ONE DB call outside do_checkpoint's rescue.
-    # Under pool starvation Accounts.get_user raises DBConnection.ConnectionError
+    # The user resolve and the lock read above are the only DB calls outside
+    # do_checkpoint's rescue. Under pool starvation either raises
+    # DBConnection.ConnectionError
     # straight out of terminate/2 (the 2026-07-09 incident frame). Swallow ANY
     # raise here so unbind/checkpoint always degrades to :ok — the tail-WAL is
     # untouched (nothing pruned), so the flush replays on the next room bind.

@@ -95,9 +95,11 @@ defmodule Engram.Workers.ReleaseIndexEntries do
         # The snapshot path encrypts, so it carries #1341. Snoozing rather than
         # skipping is the point of being a job: a skipped release leaves a
         # permanent path reservation, and rotations are exactly when bulk
-        # deletes keep running.
-        case RotationGate.check_user(user) do
+        # deletes keep running. `check/1`: `user` is the cached row, which
+        # may not have seen another node's lock yet.
+        case RotationGate.check(user.id) do
           {:error, :rotation_in_progress} -> {:snooze, 30}
+          {:error, :user_not_found} -> :ok
           :ok -> release(user, vault_id, note_ids)
         end
     end

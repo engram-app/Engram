@@ -126,8 +126,9 @@ defmodule Engram.Workers.ProjectVaultIndex do
 
       user ->
         # Decrypts the index snapshot, so it must not run mid-rotation against a
-        # key the sweep is moving underneath it (#1341).
-        case RotationGate.check_user(user) do
+        # key the sweep is moving underneath it (#1341). `check/1`: `user` is
+        # the cached row, which may not have seen another node's lock yet.
+        case RotationGate.check(user.id) do
           {:error, :rotation_in_progress} ->
             emit(:snoozed_rotation)
             {:snooze, 30}

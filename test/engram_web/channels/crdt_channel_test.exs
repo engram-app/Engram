@@ -3184,6 +3184,29 @@ defmodule EngramWeb.CrdtChannelTest do
                )
     end
 
+    # The `:user` cache learns of a lock taken on another node only when its
+    # eviction lands, so the join's rotation check must read the DB.
+    test "join is refused while the cached user is stale (unlocked)", %{user: user, vault: vault} do
+      Engram.Cache.clear_local(:user)
+      _ = Engram.Accounts.get_user(user.id)
+
+      Repo.update_all(
+        from(u in Engram.Accounts.User, where: u.id == ^user.id),
+        [set: [dek_rotation_locked_at: DateTime.utc_now()]],
+        skip_tenant_check: true
+      )
+
+      assert %{dek_rotation_locked_at: nil} = Engram.Accounts.get_user(user.id)
+
+      assert {:error, %{reason: "rotation_in_progress"}} =
+               subscribe_and_join(
+                 user_socket(user),
+                 EngramWeb.CrdtChannel,
+                 "crdt:#{user.id}:#{vault.id}",
+                 %{"crdt_proto" => 2}
+               )
+    end
+
     test "join is allowed again once the lock clears", %{user: user, vault: vault} do
       # Lock, confirm refusal, then clear — a fresh join must succeed, proving
       # the gate is not sticky.

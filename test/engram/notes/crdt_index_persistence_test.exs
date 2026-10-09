@@ -500,6 +500,32 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
       assert tenant_get(ctx.user, ctx.vault.id).state_ciphertext == before.state_ciphertext,
              "the checkpoint must be SKIPPED mid-rotation — stale index beats an unreadable one"
     end
+
+    # #1341. The `:user` cache learns of a lock taken on another node only when
+    # its eviction lands, so the gate must read the lock from the DB.
+    test "a stale cached user (unlocked) does not open the checkpoint gate", ctx do
+      room = start_index_room(ctx)
+      put_entry(room, "before-stale.md", "note-before")
+      stop_room_and_wait(room)
+
+      before = tenant_get(ctx.user, ctx.vault.id)
+      respun = start_index_room(ctx)
+      Engram.Cache.clear_local(:user)
+      _ = Engram.Accounts.get_user(ctx.user.id)
+
+      {1, _} =
+        Repo.update_all(
+          from(u in Engram.Accounts.User, where: u.id == ^ctx.user.id),
+          set: [dek_rotation_locked_at: DateTime.utc_now()]
+        )
+
+      assert %{dek_rotation_locked_at: nil} = Engram.Accounts.get_user(ctx.user.id)
+
+      put_entry(respun, "during-stale.md", "note-during")
+      stop_room_and_wait(respun)
+
+      assert tenant_get(ctx.user, ctx.vault.id).state_ciphertext == before.state_ciphertext
+    end
   end
 
   # The documented lossy case, asserted rather than merely described. If someone
