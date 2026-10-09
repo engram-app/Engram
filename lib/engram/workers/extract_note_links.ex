@@ -79,7 +79,8 @@ defmodule Engram.Workers.ExtractNoteLinks do
 
       {:ok, %Note{} = note, tail} ->
         # One fresh users read serves both the rotation gate and the DEK.
-        case Repo.get(User, note.user_id, skip_tenant_check: true) do
+        # `users` carries no RLS policy.
+        case Repo.cross_tenant(fn -> Repo.get(User, note.user_id) end) do
           nil ->
             {:discard, :user_deleted}
 
