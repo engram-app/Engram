@@ -1075,20 +1075,20 @@ defmodule EngramWeb.McpController do
   # its own transaction (KMS wrap + users row lock) and a cache miss unwraps
   # through KMS, so neither may run while the request transaction holds a
   # connection, and a rolled-back request must not leave a cached DEK whose
-  # wrap never committed. A DEK failure skips the warm-up: the tool's own
-  # crypto path reports it.
+  # wrap never committed. A provisioning failure is the tool's error (retrying
+  # it inside the transaction would call KMS there). An unwrap failure keeps
+  # the provisioned user and lets the tool's own crypto path report it.
   defp call_handler(tool, user, vault, args) do
     args = Handlers.before_txn(tool.name, user, vault, args)
 
-    user =
-      with {:ok, user} <- Crypto.ensure_user_dek(user),
-           {:ok, _dek} <- Crypto.get_dek(user) do
-        user
-      else
-        _ -> user
-      end
+    case Crypto.ensure_user_dek(user) do
+      {:ok, user} ->
+        _ = Crypto.get_dek(user)
+        Engram.Repo.with_tenant!(user.id, fn -> tool.handler.(user, vault, args) end)
 
-    Engram.Repo.with_tenant!(user.id, fn -> tool.handler.(user, vault, args) end)
+      {:error, reason} ->
+        {:error, "Encryption key unavailable (#{Crypto.format_dek_error(reason)})"}
+    end
   end
 
   # Retired tool names (Task 3.1's `deprecated_for`) still work exactly as
