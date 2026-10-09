@@ -8,6 +8,8 @@ defmodule EngramWeb.McpController do
   use EngramWeb, :controller
 
   alias Engram.Abuse.OriginStats
+  alias Engram.Crypto
+  alias Engram.MCP.Handlers
   alias Engram.MCP.Prompts
   alias Engram.MCP.Resources
   alias Engram.MCP.Tools
@@ -1068,8 +1070,26 @@ defmodule EngramWeb.McpController do
   defp call_handler(%{name: name} = tool, user, vault, args) when name in @no_request_txn,
     do: tool.handler.(user, vault, args)
 
-  defp call_handler(tool, user, vault, args),
-    do: Engram.Repo.with_tenant!(user.id, fn -> tool.handler.(user, vault, args) end)
+  # External work goes first, outside the transaction: create_note's folder
+  # placement (Voyage + Qdrant), and the user's DEK. Provisioning commits in
+  # its own transaction (KMS wrap + users row lock) and a cache miss unwraps
+  # through KMS, so neither may run while the request transaction holds a
+  # connection, and a rolled-back request must not leave a cached DEK whose
+  # wrap never committed. A DEK failure skips the warm-up: the tool's own
+  # crypto path reports it.
+  defp call_handler(tool, user, vault, args) do
+    args = Handlers.before_txn(tool.name, user, vault, args)
+
+    user =
+      with {:ok, user} <- Crypto.ensure_user_dek(user),
+           {:ok, _dek} <- Crypto.get_dek(user) do
+        user
+      else
+        _ -> user
+      end
+
+    Engram.Repo.with_tenant!(user.id, fn -> tool.handler.(user, vault, args) end)
+  end
 
   # Retired tool names (Task 3.1's `deprecated_for`) still work exactly as
   # before — `structuredContent` is untouched — but the text `content` gets

@@ -27,11 +27,11 @@ defmodule Engram.Notes.ContentCommitTest do
     end
   end
 
-  test "after_commit enqueues embed, links and finalize" do
+  test "enqueue_jobs enqueues embed, links and finalize" do
     note_id = Ecto.UUID.generate()
 
     :ok =
-      ContentCommit.after_commit(note_id, Ecto.UUID.generate(),
+      ContentCommit.enqueue_jobs(note_id, Ecto.UUID.generate(),
         embed_priority: 0,
         finalize?: true
       )

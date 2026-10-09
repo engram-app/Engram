@@ -483,7 +483,7 @@ defmodule Engram.Notes do
           _ =
             if prev_hash != note.content_hash do
               :ok =
-                ContentCommit.after_commit(note.id, user.id,
+                ContentCommit.enqueue_jobs(note.id, user.id,
                   embed_priority: EmbedNote.priority_for(note),
                   finalize?: Revisions.finalize?(recording, prev_hash, note.content_hash)
                 )
@@ -554,7 +554,7 @@ defmodule Engram.Notes do
           _ =
             if prev_hash != note.content_hash do
               :ok =
-                ContentCommit.after_commit(note.id, user.id,
+                ContentCommit.enqueue_jobs(note.id, user.id,
                   embed_priority: EmbedNote.priority_for(note),
                   finalize?: Revisions.finalize?(recording, prev_hash, note.content_hash)
                 )
@@ -1051,8 +1051,8 @@ defmodule Engram.Notes do
 
   # #1710: a relocate/resurrect that changed content (uncheckpointed CRDT tail
   # folded in by move_note) may have closed a version. Enqueue its finalize
-  # here, after the transaction committed, the same post-commit position as
-  # ContentCommit.after_commit/3. The flag is Revisions.finalize?/3; strip it
+  # here, after the write's transaction, the same position as
+  # ContentCommit.enqueue_jobs/3. The flag is Revisions.finalize?/3; strip it
   # so the clauses above see the plain 3-tuple.
   defp finalize_moved_revision({:ok, {:ok, note, tag, finalize?}}, user) do
     _ =
@@ -3287,7 +3287,7 @@ defmodule Engram.Notes do
               # delete though — it's enqueued directly post-commit below,
               # once plaintext paths exist (reusing the broadcast's decrypt).
               jobs = Enum.map(notes, &delete_note_index_job/1)
-              _ = if jobs != [], do: Repo.after_tenant(fn -> Oban.insert_all(jobs) end)
+              _ = if jobs != [], do: Oban.insert_all(jobs)
 
               {:ok, %{deleted: updated, notes: notes}}
 

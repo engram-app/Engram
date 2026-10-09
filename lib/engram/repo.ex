@@ -97,6 +97,14 @@ defmodule Engram.Repo do
   shape-compatibility with the transactional path. A nested call for a
   DIFFERENT tenant raises — silently switching RLS identity
   mid-transaction is never legitimate.
+
+  A re-entrant call opens NO savepoint, and neither does a plain
+  `Repo.transaction/1` nested inside one. So `Repo.rollback/1` inside a nested
+  block does not return `{:error, _}` to that block's caller: it unwinds to the
+  OUTERMOST transaction and rolls the whole thing back (an MCP tool call is one
+  outer transaction). A failed statement poisons the outer transaction the same
+  way. Code that can run nested reports a refusal by returning `{:error, _}`,
+  not by rolling back, and must not write before deciding to refuse.
   """
   def with_tenant(tenant_id, fun) when is_binary(tenant_id) do
     case Ecto.UUID.cast(tenant_id) do
@@ -203,8 +211,9 @@ defmodule Engram.Repo do
   `:data`) and the rest still run: the write is durable, and failing the
   caller would report it as lost.
 
-  Limit: a `with_tenant/2` nested in a plain `Repo.transaction` is a savepoint,
-  so its callbacks run at the savepoint release, before the real commit.
+  Limit: a `with_tenant/2` nested in a plain `Repo.transaction` only joins that
+  transaction, so its callbacks run when the block returns, before the real
+  commit.
   """
   @spec after_commit((-> any())) :: :ok
   def after_commit(fun) when is_function(fun, 0) do
@@ -219,47 +228,18 @@ defmodule Engram.Repo do
     end
   end
 
-  @doc """
-  Runs `fun` inside the current tenant transaction AFTER the tenant role is
-  reset (`tenant_exit`), before commit. Outside a tenant transaction it runs
-  `fun` now.
-
-  For Oban inserts: `engram_app` has no grant on `oban_jobs`, and the job
-  still commits or rolls back with the write. `fun` runs with no tenant in
-  force, so it must not read tenant tables. A raise rolls the transaction
-  back, which is correct: nothing has committed yet.
-  """
-  @spec after_tenant((-> any())) :: :ok
-  def after_tenant(fun) when is_function(fun, 0) do
-    case Process.get(:engram_after_tenant) do
-      nil ->
-        _ = fun.()
-        :ok
-
-      queue ->
-        Process.put(:engram_after_tenant, [fun | queue])
-        :ok
-    end
-  end
-
   defp run_with_tenant(uuid, fun) do
     # Only the outermost block owns the queues. Re-entrant calls never get
     # here, so this is false only for a block opened inside a queue owner.
     owner? = is_nil(Process.get(:engram_after_commit))
 
-    if owner? do
-      Process.put(:engram_after_commit, [])
-      Process.put(:engram_after_tenant, [])
-    end
+    if owner?, do: Process.put(:engram_after_commit, [])
 
     {result, callbacks} =
       try do
-        {tenant_transaction(uuid, fun, owner?), Process.get(:engram_after_commit, [])}
+        {tenant_transaction(uuid, fun), Process.get(:engram_after_commit, [])}
       after
-        if owner? do
-          Process.delete(:engram_after_commit)
-          Process.delete(:engram_after_tenant)
-        end
+        if owner?, do: Process.delete(:engram_after_commit)
       end
 
     # The keys are gone, so a callback that opens its own with_tenant gets a
@@ -268,7 +248,7 @@ defmodule Engram.Repo do
     result
   end
 
-  defp tenant_transaction(uuid, fun, owner?) do
+  defp tenant_transaction(uuid, fun) do
     Process.put(:engram_tenant, uuid)
 
     try do
@@ -323,10 +303,6 @@ defmodule Engram.Repo do
               source: "tenant_exit"
             )
 
-          # Deleting the key first makes an after_tenant call from inside a
-          # callback run immediately (still in the transaction, role reset).
-          if owner?, do: run_queue(Process.delete(:engram_after_tenant))
-
           result
         end,
         source: "tenant_txn"
@@ -335,8 +311,6 @@ defmodule Engram.Repo do
       Process.delete(:engram_tenant)
     end
   end
-
-  defp run_queue(queue), do: queue |> Enum.reverse() |> Enum.each(& &1.())
 
   defp run_after_commit(queue) do
     queue

@@ -54,31 +54,10 @@ defmodule Engram.RepoAfterCommitTest do
     refute_received :ran
   end
 
-  test "after_tenant runs inside the transaction with the tenant role reset" do
-    user = insert(:user)
-    parent = self()
-
-    Repo.with_tenant(user.id, fn ->
-      :ok =
-        Repo.after_tenant(fn ->
-          %{rows: [[role, tenant]]} =
-            Repo.query!(
-              "SELECT current_setting('role'), current_setting('app.current_tenant', true)"
-            )
-
-          send(parent, {:after_tenant, role, tenant})
-        end)
-    end)
-
-    assert_received {:after_tenant, "none", ""}
-  end
-
-  test "outside a transaction both hooks run immediately" do
+  test "outside a transaction after_commit runs immediately" do
     parent = self()
     :ok = Repo.after_commit(fn -> send(parent, :now) end)
     assert_received :now
-    :ok = Repo.after_tenant(fn -> send(parent, :tenant_now) end)
-    assert_received :tenant_now
   end
 
   test "a raising after_commit callback is logged, the rest still run, the result stands" do
@@ -133,22 +112,21 @@ defmodule Engram.RepoAfterCommitTest do
     assert Engram.Cache.get(:test_cache_forever, user.id) == :miss
   end
 
-  test "Enqueue.enqueue inside a tenant transaction inserts after the role reset" do
+  test "a job enqueued inside a tenant transaction rolls back with it" do
     user = insert(:user)
-    parent = self()
+    count = fn -> Repo.aggregate(Oban.Job, :count) end
+    before = count.()
 
-    insert_fn = fn _cs ->
-      %{rows: [[role]]} = Repo.query!("SELECT current_setting('role')")
-      send(parent, {:inserted, role})
-      {:ok, :job}
+    assert_raise RuntimeError, fn ->
+      Repo.with_tenant(user.id, fn ->
+        job = Engram.Workers.ExtractNoteLinks.new_debounced(Ecto.UUID.generate(), user.id)
+        assert {:ok, %Oban.Job{}} = Enqueue.enqueue(job, "extract_note_links")
+        assert count.() == before + 1
+        raise "boom"
+      end)
     end
 
-    Repo.with_tenant(user.id, fn ->
-      assert {:ok, _} = Enqueue.enqueue(:changeset, "test_worker", insert_fn)
-      refute_received {:inserted, _}
-    end)
-
-    assert_received {:inserted, "none"}
+    assert count.() == before
   end
 
   test "Sync.Broadcast.emit inside a tenant transaction fires after commit, not on rollback" do

@@ -566,84 +566,77 @@ defmodule Engram.Attachments do
       old_basename_hmac = Crypto.hmac_field(filter_key, Links.basename_key(old_path))
       new_basename_hmac = Crypto.hmac_field(filter_key, Links.basename_key(new_path))
 
-      Repo.transaction(fn ->
-        Repo.with_tenant(user.id, fn ->
-          live = Repo.one(live_by_hmac_query(user, vault, old_hmac))
+      # Errors are returned, never `Repo.rollback`: nothing is written before
+      # a refusal, and a rollback here would poison an enclosing transaction
+      # (an MCP tool call, the folder-rename cascade) instead of reporting.
+      Repo.with_tenant(user.id, fn ->
+        live = Repo.one(live_by_hmac_query(user, vault, old_hmac))
 
-          cond do
-            is_nil(live) ->
-              Repo.rollback(:not_found)
+        cond do
+          is_nil(live) ->
+            {:error, :not_found}
 
-            old_path == new_path ->
-              case Crypto.maybe_decrypt_attachment_fields(live, user) do
-                {:ok, att} -> att
-                {:error, reason} -> Repo.rollback(reason)
-              end
+          old_path == new_path ->
+            Crypto.maybe_decrypt_attachment_fields(live, user)
 
-            Repo.one(live_by_hmac_query(user, vault, new_hmac)) ->
-              Repo.rollback(:conflict)
+          Repo.one(live_by_hmac_query(user, vault, new_hmac)) ->
+            {:error, :conflict}
 
-            true ->
-              # Both writes share ONE seq inside ONE transaction (#614): a cursor
-              # pull must never see the repoint at seq S, advance past S, and miss
-              # the tombstone also at S.
-              seq = Engram.Vaults.next_seq!(vault.id)
+          true ->
+            # Both writes share ONE seq inside ONE transaction (#614): a cursor
+            # pull must never see the repoint at seq S, advance past S, and miss
+            # the tombstone also at S.
+            seq = Engram.Vaults.next_seq!(vault.id)
 
-              # Repoint the live row: re-encrypt path under the SAME id-AAD (id is
-              # unchanged, so the AAD bind is unchanged), recompute path_hmac, bump
-              # updated_at + seq. storage_key + blob untouched.
-              path_aad = Crypto.aad_for_row(:attachments, :path, live.id)
-              {path_ct, path_n} = Envelope.encrypt(new_path, dek, path_aad)
+            # Repoint the live row: re-encrypt path under the SAME id-AAD (id is
+            # unchanged, so the AAD bind is unchanged), recompute path_hmac, bump
+            # updated_at + seq. storage_key + blob untouched.
+            path_aad = Crypto.aad_for_row(:attachments, :path, live.id)
+            {path_ct, path_n} = Envelope.encrypt(new_path, dek, path_aad)
 
-              {1, _} =
-                from(a in Attachment, where: a.id == ^live.id)
-                |> Repo.update_all(
-                  set: [
-                    path_ciphertext: path_ct,
-                    path_nonce: path_n,
-                    path_hmac: new_hmac,
-                    basename_hmac: new_basename_hmac,
-                    updated_at: now,
-                    seq: seq
-                  ]
-                )
-
-              # Insert the old-path tombstone (fresh uuid, path encrypted under
-              # ITS OWN id-AAD). Sole purpose: surface {old_path, deleted: true}
-              # in the change feed so clients trash the old path.
-              Repo.insert!(
-                tombstone_changeset(
-                  user,
-                  vault,
-                  dek,
-                  old_path,
-                  {old_hmac, old_basename_hmac},
-                  live,
-                  seq,
-                  now
-                )
-              )
-
-              %{
-                live
-                | path: new_path,
+            {1, _} =
+              from(a in Attachment, where: a.id == ^live.id)
+              |> Repo.update_all(
+                set: [
                   path_ciphertext: path_ct,
                   path_nonce: path_n,
                   path_hmac: new_hmac,
                   basename_hmac: new_basename_hmac,
                   updated_at: now,
                   seq: seq
-              }
-          end
-        end)
-        |> unwrap_tenant()
-        |> case do
-          {:ok, att} -> att
-          # No current cond branch returns {:error,_} without rolling back itself;
-          # this guards a future branch that returns an error tuple directly.
-          {:error, reason} -> Repo.rollback(reason)
+                ]
+              )
+
+            # Insert the old-path tombstone (fresh uuid, path encrypted under
+            # ITS OWN id-AAD). Sole purpose: surface {old_path, deleted: true}
+            # in the change feed so clients trash the old path.
+            Repo.insert!(
+              tombstone_changeset(
+                user,
+                vault,
+                dek,
+                old_path,
+                {old_hmac, old_basename_hmac},
+                live,
+                seq,
+                now
+              )
+            )
+
+            {:ok,
+             %{
+               live
+               | path: new_path,
+                 path_ciphertext: path_ct,
+                 path_nonce: path_n,
+                 path_hmac: new_hmac,
+                 basename_hmac: new_basename_hmac,
+                 updated_at: now,
+                 seq: seq
+             }}
         end
       end)
+      |> unwrap_tenant()
       |> case do
         {:ok, %Attachment{} = att} ->
           _ =

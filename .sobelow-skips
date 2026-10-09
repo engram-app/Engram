@@ -7,7 +7,7 @@ Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/crypto.ex:615,29E4953
 Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/crypto/user_dek_rotation.ex:1409,3992A82
 Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/notes.ex:4249,20AAE1B
 Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/notes.ex:4624,65EFD84
-SQL.Query: SQL injection,lib/engram/attachments.ex:1074,41475BB
+SQL.Query: SQL injection,lib/engram/attachments.ex:1067,72D3CBF
 SQL.Query: SQL injection,lib/engram/notes.ex:6358,30260BD
 Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram/legal/seeder.ex:84,12C6307
 Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram/release/preflight.ex:117,4094D02

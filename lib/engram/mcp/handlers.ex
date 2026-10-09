@@ -342,16 +342,14 @@ defmodule Engram.MCP.Handlers do
   # -- Write tools --
 
   def handle("create_note", user, vault, args) do
-    title = args["title"] || "Untitled"
+    title = title(args)
     content = args["content"] || ""
-    suggested_folder = args["suggested_folder"]
 
     folder =
-      if suggested_folder && suggested_folder != "" do
-        String.trim_trailing(suggested_folder, "/")
-      else
-        auto_place_folder(user, vault, title, content)
-      end
+      explicit_folder(args) ||
+        Map.get_lazy(args, :placed_folder, fn ->
+          auto_place_folder(user, vault, title, content)
+        end)
 
     filename = String.replace(title, "/", "-") <> ".md"
     path = if folder != "", do: "#{folder}/#{filename}", else: filename
@@ -1640,6 +1638,34 @@ defmodule Engram.MCP.Handlers do
     |> Enum.frequencies()
     |> Enum.sort_by(fn {_f, c} -> -c end)
   end
+
+  @doc """
+  The part of a tool call that does external I/O, run BEFORE the request
+  transaction opens (`EngramWeb.McpController`) so no pooled connection is
+  held across it. `create_note`'s auto-placement is a Voyage embed plus a
+  Qdrant query; its answer rides in `args` under the atom key
+  `:placed_folder`, which JSON arguments can never carry.
+  """
+  @spec before_txn(String.t(), map(), term(), map()) :: map()
+  def before_txn("create_note", user, vault, args) do
+    if explicit_folder(args),
+      do: args,
+      else:
+        Map.put(
+          args,
+          :placed_folder,
+          auto_place_folder(user, vault, title(args), args["content"] || "")
+        )
+  end
+
+  def before_txn(_tool, _user, _vault, args), do: args
+
+  defp title(args), do: args["title"] || "Untitled"
+
+  defp explicit_folder(%{"suggested_folder" => f}) when is_binary(f) and f != "",
+    do: String.trim_trailing(f, "/")
+
+  defp explicit_folder(_args), do: nil
 
   defp auto_place_folder(user, vault, title, content) do
     query =

@@ -1520,6 +1520,131 @@ defmodule EngramWeb.McpControllerTest do
       assert {:error, :not_found} = Engram.Notes.get_note(user, vault, "Rolled/Back.md")
       refute_receive %Phoenix.Socket.Broadcast{}, 100
     end
+
+    test "the DEK is provisioned before the request transaction, so a rollback keeps it", %{
+      vault: vault
+    } do
+      fresh = insert(:user)
+      Engram.Crypto.DekCache.invalidate(fresh.id)
+
+      tool = %{
+        name: "write_note",
+        handler: fn u, _v, _a ->
+          {:ok, _u} = Engram.Crypto.ensure_user_dek(u)
+          raise "after provisioning"
+        end
+      }
+
+      ExUnit.CaptureLog.with_log(fn ->
+        EngramWeb.McpController.run_tool_handler(tool, fresh, vault, %{})
+      end)
+
+      # Any cached DEK must match a wrap that committed.
+      reloaded = Engram.Repo.reload!(fresh)
+      assert is_binary(reloaded.encrypted_dek)
+      assert {:ok, cached} = Engram.Crypto.DekCache.get(fresh.id)
+      assert {:ok, ^cached} = Engram.Crypto.get_dek(reloaded)
+    end
+
+    test "create_note's folder placement runs before the transaction", %{
+      user: user,
+      vault: vault
+    } do
+      parent = self()
+
+      Mox.stub(Engram.MockEmbedder, :embed_texts, fn _texts, _opts ->
+        send(parent, {:embed_tenant, Process.get(:engram_tenant)})
+        {:error, :down}
+      end)
+
+      probe = %{
+        name: "create_note",
+        handler: fn _u, _v, a -> {:ok, inspect(Map.has_key?(a, :placed_folder))} end
+      }
+
+      {{:ok, payload}, :ok, _} =
+        EngramWeb.McpController.run_tool_handler(probe, user, vault, %{"title" => "T"})
+
+      assert hd(payload["content"])["text"] == "true"
+      # The Voyage embed ran with no tenant transaction open.
+      assert_received {:embed_tenant, nil}
+
+      {{:ok, payload}, :ok, _} =
+        EngramWeb.McpController.run_tool_handler(probe, user, vault, %{
+          "title" => "T",
+          "suggested_folder" => "Work"
+        })
+
+      assert hd(payload["content"])["text"] == "false"
+    end
+  end
+
+  describe "error branches through the request transaction" do
+    test "move_attachment reports a missing attachment", %{conn: conn} do
+      text =
+        conn
+        |> call_tool("move_attachment", %{
+          "old_path" => "_attachments/missing.png",
+          "new_path" => "_attachments/b.png"
+        })
+        |> tool_text()
+
+      assert text =~ "Attachment not found: _attachments/missing.png"
+    end
+
+    test "move_attachment reports a taken target", %{conn: conn, user: user, vault: vault} do
+      for name <- ["a.txt", "b.txt"] do
+        {:ok, _} =
+          Engram.Attachments.upsert_attachment(user, vault, %{
+            "path" => "_attachments/#{name}",
+            "content_base64" => Base.encode64("x"),
+            "mime_type" => "text/plain",
+            "mtime" => 1.0
+          })
+      end
+
+      text =
+        conn
+        |> call_tool("move_attachment", %{
+          "old_path" => "_attachments/a.txt",
+          "new_path" => "_attachments/b.txt"
+        })
+        |> tool_text()
+
+      assert text =~ "Attachment already exists at: _attachments/b.txt"
+    end
+
+    test "edit_note reports a missing heading, and the next call still works", %{conn: conn} do
+      text =
+        conn
+        |> call_tool("edit_note", %{
+          "path" => "Health/Exercise.md",
+          "mode" => "insert_section",
+          "heading" => "No Such Heading",
+          "content" => "x"
+        })
+        |> tool_text()
+
+      assert text =~ "No Such Heading"
+
+      assert conn
+             |> call_tool("append_to_note", %{"path" => "Health/Exercise.md", "text" => "ok"})
+             |> tool_text() =~ "Note appended to: Health/Exercise.md"
+    end
+
+    test "append_to_note reports a bad position", %{conn: conn} do
+      text =
+        conn
+        |> call_tool("append_to_note", %{
+          "path" => "Health/Exercise.md",
+          "text" => "x",
+          "position" => "sideways"
+        })
+        |> tool_text()
+
+      assert text =~ "position"
+      refute text =~ "Tool execution failed"
+    end
   end
 
   # =========================================================================

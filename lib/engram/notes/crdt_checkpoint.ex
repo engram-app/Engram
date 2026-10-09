@@ -277,7 +277,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
             _ =
               if prev_hash != new_hash do
                 :ok =
-                  ContentCommit.after_commit(note_id, user_id,
+                  ContentCommit.enqueue_jobs(note_id, user_id,
                     embed_priority: embed_priority,
                     finalize?: finalize?
                   )
