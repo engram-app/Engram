@@ -12,9 +12,24 @@ defmodule Engram.Cache do
   alias Engram.Cache.Registry
   alias Engram.Cluster.CacheSync
 
-  # ponytail: no single-flight on miss; concurrent misses each run the loader.
-  # Misses are rare (warm node, per-user keys). Add a per-key lock if a cold
-  # key under load shows up in traces.
+  # A miss parks a `{@pending, token}` row under the key before running the
+  # loader, and the loaded value replaces that row only if it is still there
+  # (`:ets.select_replace/2` is an atomic compare-and-swap per object). An
+  # eviction or clear that lands while the loader runs deletes the marker, so
+  # the possibly stale value is returned to this caller but never stored.
+  # Without it a revoked API key read just before its NOTIFY stays valid for
+  # the whole TTL. Per key: an eviction of another key does not cost a put.
+  # The key sits in the match head (a bound key is a hash lookup, not a table
+  # scan), so keys must not contain the match-spec atoms `:_` or `:"$N"`.
+  @pending :engram_cache_pending
+  # Marker rows are always a miss; this expiry only lets the sweep reap the
+  # marker of a loader that raised.
+  @pending_ms 60_000
+
+  # ponytail: no single-flight on miss; concurrent misses each run the loader
+  # (and only the last to claim the key stores its value). Misses are rare
+  # (warm node, per-user keys). Add a per-key lock if a cold key under load
+  # shows up in traces.
   @spec fetch(atom(), term(), (-> term())) :: term()
   def fetch(cache, key, loader) when is_function(loader, 0) do
     case get(cache, key) do
@@ -22,8 +37,14 @@ defmodule Engram.Cache do
         value
 
       :miss ->
+        token = make_ref()
+        claim(cache, key, token)
         value = loader.()
-        if value != nil or cache_nil?(cache), do: put(cache, key, value)
+
+        if value != nil or cache_nil?(cache),
+          do: put_if_claimed(cache, key, token, value),
+          else: release(cache, key, token)
+
         value
     end
   end
@@ -31,6 +52,7 @@ defmodule Engram.Cache do
   @spec get(atom(), term()) :: {:ok, term()} | :miss
   def get(cache, key) do
     case :ets.lookup(Registry.table(cache), key) do
+      [{^key, {@pending, _}, _}] -> :miss
       [{^key, value, :infinity}] -> {:ok, value}
       [{^key, value, exp}] -> if now() < exp, do: {:ok, value}, else: :miss
       [] -> :miss
@@ -41,13 +63,37 @@ defmodule Engram.Cache do
 
   @spec put(atom(), term(), term()) :: :ok
   def put(cache, key, value) do
-    exp =
-      case ttl(cache) do
-        :infinity -> :infinity
-        ms -> now() + ms
-      end
+    true = :ets.insert(Registry.table(cache), {key, value, expiry(cache)})
+    :ok
+  rescue
+    ArgumentError -> :ok
+  end
 
-    true = :ets.insert(Registry.table(cache), {key, value, exp})
+  defp claim(cache, key, token) do
+    true = :ets.insert(Registry.table(cache), {key, {@pending, token}, now() + @pending_ms})
+    :ok
+  rescue
+    ArgumentError -> :ok
+  end
+
+  defp put_if_claimed(cache, key, token, value) do
+    _ =
+      :ets.select_replace(Registry.table(cache), [
+        {{key, {@pending, token}, :_}, [], [{{{:const, key}, {:const, value}, expiry(cache)}}]}
+      ])
+
+    :ok
+  rescue
+    ArgumentError -> :ok
+  end
+
+  # Deletes this caller's marker only (a nil result that is not cached).
+  defp release(cache, key, token) do
+    _ =
+      :ets.select_delete(Registry.table(cache), [
+        {{key, {@pending, token}, :_}, [], [true]}
+      ])
+
     :ok
   rescue
     ArgumentError -> :ok
@@ -89,6 +135,13 @@ defmodule Engram.Cache do
   end
 
   defp now, do: System.monotonic_time(:millisecond)
+
+  defp expiry(cache) do
+    case ttl(cache) do
+      :infinity -> :infinity
+      ms -> now() + ms
+    end
+  end
 
   defp ttl(cache), do: spec(cache, :ttl, :infinity)
   defp cache_nil?(cache), do: spec(cache, :cache_nil, false)

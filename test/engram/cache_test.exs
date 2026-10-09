@@ -7,6 +7,7 @@ defmodule Engram.CacheTest do
     Cache.clear_local(:test_cache)
     Cache.clear_local(:test_cache_nil)
     Cache.clear_local(:test_cache_pairs)
+    Cache.clear_local(:test_cache_forever)
     :ok
   end
 
@@ -79,5 +80,67 @@ defmodule Engram.CacheTest do
   test "a missing table degrades to a miss and a no-op put" do
     assert Cache.get(:no_such_cache, :k) == :miss
     assert Cache.fetch(:no_such_cache, :k, fn -> :v end) == :v
+  end
+
+  test "an eviction during the loader leaves the key a miss" do
+    # The loader evicts its own key, standing in for a NOTIFY that lands
+    # between the DB read and the put: the stale value must not be stored.
+    assert Cache.fetch(:test_cache, :k, fn ->
+             :ok = Cache.evict_local(:test_cache, :k)
+             :stale
+           end) == :stale
+
+    assert Cache.get(:test_cache, :k) == :miss
+    assert Cache.fetch(:test_cache, :k, fn -> :fresh end) == :fresh
+    assert Cache.get(:test_cache, :k) == {:ok, :fresh}
+  end
+
+  test "a clear during the loader leaves the key a miss" do
+    Cache.fetch(:test_cache, :k, fn ->
+      :ok = Cache.clear_local(:test_cache)
+      :stale
+    end)
+
+    assert Cache.get(:test_cache, :k) == :miss
+  end
+
+  test "a first_elem eviction during the loader leaves the pair key a miss" do
+    Cache.fetch(:test_cache_pairs, {"u1", :a}, fn ->
+      :ok = Cache.evict_local(:test_cache_pairs, "u1")
+      :stale
+    end)
+
+    assert Cache.get(:test_cache_pairs, {"u1", :a}) == :miss
+  end
+
+  test "evicting another key during the loader still caches" do
+    Cache.fetch(:test_cache, :k, fn ->
+      :ok = Cache.evict_local(:test_cache, :other)
+      :v
+    end)
+
+    assert Cache.get(:test_cache, :k) == {:ok, :v}
+  end
+
+  test "a raising loader leaves the key a miss" do
+    assert_raise RuntimeError, fn -> Cache.fetch(:test_cache, :k, fn -> raise "boom" end) end
+    assert Cache.get(:test_cache, :k) == :miss
+  end
+
+  test "evict_all clears the cache and broadcasts" do
+    :ok = Engram.Cluster.CacheSync.subscribe()
+    Cache.put(:test_cache, :a, 1)
+    Cache.put(:test_cache, :b, 2)
+    :ok = Cache.evict_all(:test_cache)
+    assert Cache.get(:test_cache, :a) == :miss
+    assert Cache.get(:test_cache, :b) == :miss
+    assert_receive {:cache_sync, {:engram_cache_evict_all, :test_cache}}
+  end
+
+  test "an :infinity row survives a sweep" do
+    Cache.put(:test_cache_forever, :k, 1)
+    send(Engram.Cache.Server, :sweep)
+    _ = :sys.get_state(Engram.Cache.Server)
+    assert Cache.get(:test_cache_forever, :k) == {:ok, 1}
   end
 end

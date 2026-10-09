@@ -69,6 +69,13 @@ defmodule Engram.Cache.Registry do
       },
       %{name: :test_cache_nil, ttl: 50, cache_nil: true, evict_match: :key, pg_channel: nil},
       %{
+        name: :test_cache_forever,
+        ttl: :infinity,
+        cache_nil: false,
+        evict_match: :key,
+        pg_channel: nil
+      },
+      %{
         name: :test_cache_pairs,
         ttl: 60_000,
         cache_nil: false,
