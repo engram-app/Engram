@@ -1427,4 +1427,6 @@ export default {
 	"Sync with an existing vault": "Synchroniser avec un coffre existant",
 	"(choose from {count} vaults)": "(choisis parmi {count} coffres)",
 	"Or create a new vault": "Ou créer un nouveau coffre",
+	"Changes can't be saved: your account can't sync right now.":
+		"Impossible d'enregistrer les modifications : votre compte ne peut pas se synchroniser pour le moment.",
 } satisfies Catalog;

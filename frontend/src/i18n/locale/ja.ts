@@ -1348,4 +1348,6 @@ export default {
 	"Sync with an existing vault": "既存の保管庫と同期",
 	"(choose from {count} vaults)": "({count} 件の保管庫から選択)",
 	"Or create a new vault": "または新しい保管庫を作成",
+	"Changes can't be saved: your account can't sync right now.":
+		"変更を保存できません：現在アカウントを同期できません。",
 } satisfies Catalog;

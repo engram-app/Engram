@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type React from "react";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { noteName } from "../lib/note-name";
 import { syntheticFolderId } from "../viewer/tree/synthesize-folders";
@@ -461,6 +462,42 @@ describe("useDeleteNote", () => {
 		await expect(result.current.mutateAsync({ id: "7", path: "gone.md" })).rejects.toMatchObject({
 			reason: "disconnected",
 		});
+	});
+});
+
+// #1430 review: a permanent join refusal rejects every held op. Each one must
+// fold into the single shared refusal toast, not add its own generic error.
+describe("permanent join refusal toasts", () => {
+	const refusalToast = [
+		"Changes can't be saved: your account can't sync right now.",
+		{ id: "crdt-join-refused" },
+	];
+
+	it("a refused delete shows the shared refusal toast, not 'Delete failed.'", async () => {
+		vi.mocked(toast.error).mockClear();
+		crdtDeleteNote.mockRejectedValue(new CrdtOpError("account_suspended", "crdt_delete"));
+
+		const { result } = renderHook(() => useDeleteNote(), { wrapper });
+		await act(async () => {
+			await result.current.mutateAsync({ id: "7", path: "x.md" }).catch(() => {});
+		});
+
+		expect(toast.error).toHaveBeenCalledTimes(1);
+		expect(toast.error).toHaveBeenCalledWith(...refusalToast);
+	});
+
+	it("a refused create shows the shared refusal toast", async () => {
+		vi.mocked(toast.error).mockClear();
+		crdtCreateNote.mockRejectedValue(new CrdtOpError("onboarding_required", "crdt_create"));
+
+		const { result } = renderHook(() => useCreateNote(), { wrapper });
+		seedRawFolders({ folders: [] });
+		await act(async () => {
+			await result.current.mutateAsync({ folder: "", id: MINTED_ID }).catch(() => {});
+		});
+
+		expect(toast.error).toHaveBeenCalledTimes(1);
+		expect(toast.error).toHaveBeenCalledWith(...refusalToast);
 	});
 });
 

@@ -25,10 +25,12 @@ import { beacon, newTraceContext, parseTraceparent, tracingEnabled } from "../ob
 import { getWsBase, joinWsUrl } from "./base";
 import {
 	CrdtOpError,
+	isPermanentJoinRefusal,
 	type PushChannel,
 	sendCrdtCreate,
 	sendCrdtCreateWithContent,
 	sendCrdtDelete,
+	toastJoinRefused,
 } from "./crdt-ops";
 import { applyVaultTreeEvents, invalidateVaultTree } from "./queries";
 import type { NoteEvent } from "./vault-tree-patch";
@@ -500,7 +502,10 @@ export async function connectChannel({
 		.receive("ok", (resp) => {
 			captureServerJitter(resp);
 		})
-		.receive("error", (resp) => console.error("Channel join failed", resp));
+		.receive("error", (resp) => {
+			rlog().error("sync", `sync channel join FAILED: ${JSON.stringify(resp).slice(0, 200)}`);
+			console.error("Channel join failed", resp);
+		});
 
 	// CRDT note-sync channel — rides the same Clerk-authed socket. The session
 	// singleton owns the Y.Doc registry; this channel is just its transport.
@@ -602,9 +607,14 @@ export async function connectChannel({
 	crdtChannel.on("crdt_doc_ready", (p: { doc_id: string }) => {
 		crdtEnrollIfLive(p.doc_id);
 	});
+	// Phoenix rejoins on every join error, so a permanent refusal repeats every
+	// few seconds; toast it once per refused stretch, not per rejoin.
+	let refusalToasted = false;
 	crdtChannel
 		.join()
 		.receive("ok", () => {
+			refusalToasted = false;
+			queue.clearRefusal();
 			rlog().info("crdt", "crdt channel joined — live note sync active");
 			notifyCrdtChannelJoined();
 		})
@@ -612,6 +622,13 @@ export async function connectChannel({
 			rlog().error("crdt", `crdt channel join FAILED: ${JSON.stringify(resp).slice(0, 200)}`);
 			notifyCrdtChannelError();
 			console.error("CRDT channel join failed", resp);
+			if (isPermanentJoinRefusal(resp)) {
+				queue.refuse(resp.reason);
+				if (!refusalToasted) {
+					refusalToasted = true;
+					toastJoinRefused(t);
+				}
+			}
 		});
 }
 

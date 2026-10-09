@@ -1410,4 +1410,6 @@ export default {
 	"Sync with an existing vault": "Sincronizar com um cofre existente",
 	"(choose from {count} vaults)": "(escolha entre {count} cofres)",
 	"Or create a new vault": "Ou crie um novo cofre",
+	"Changes can't be saved: your account can't sync right now.":
+		"Não é possível salvar as alterações: sua conta não pode sincronizar no momento.",
 } satisfies Catalog;

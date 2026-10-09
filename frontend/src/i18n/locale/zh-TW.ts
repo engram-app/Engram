@@ -1290,4 +1290,6 @@ export default {
 	"Sync with an existing vault": "與現有知識庫同步",
 	"(choose from {count} vaults)": "（從 {count} 個知識庫中選擇）",
 	"Or create a new vault": "或建立新知識庫",
+	"Changes can't be saved: your account can't sync right now.":
+		"無法儲存變更：您的帳戶目前無法同步。",
 } satisfies Catalog;

@@ -1459,4 +1459,6 @@ export default {
 	"Sync with an existing vault": "Синхронизировать с существующим хранилищем",
 	"(choose from {count} vaults)": "(выберите из {count} хранилищ)",
 	"Or create a new vault": "Или создайте новое хранилище",
+	"Changes can't be saved: your account can't sync right now.":
+		"Не удаётся сохранить изменения: ваша учётная запись сейчас не может синхронизироваться.",
 } satisfies Catalog;
