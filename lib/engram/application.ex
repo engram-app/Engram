@@ -321,7 +321,13 @@ defmodule Engram.Application do
       # reads format 1. Its persistent_term defaults to blocked, so writes
       # before it starts are format 0 (safe).
       Engram.Crypto.CompressionGate,
-      {Phoenix.PubSub, name: Engram.PubSub},
+      # registry_size: 1 pins what prod already gets (the default is
+      # ceil(schedulers / 4), 1 on our Fargate tasks). EngramWeb.MeteredSerializer
+      # counts broadcast recipients assuming one partition: Registry.dispatch
+      # calls the dispatcher once PER partition, so more partitions would
+      # multiply the frame count. Cost: subscribe/unsubscribe contend on one
+      # registry on many-core self-host boxes.
+      {Phoenix.PubSub, name: Engram.PubSub, registry_size: 1},
       # Subscribes to CacheSync in init, so it must start after PubSub. (Local
       # eviction is synchronous in invalidate_all/0; this subscriber only
       # matters for evictions broadcast by already-clustered peer nodes.)

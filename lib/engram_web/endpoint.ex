@@ -9,6 +9,12 @@ defmodule EngramWeb.Endpoint do
   socket "/socket", EngramWeb.UserSocket,
     websocket: [
       check_origin: {__MODULE__, :check_origin, []},
+      # Frame meter (message rate + wire bytes). V1 kept so old clients still
+      # negotiate, matching Phoenix's default list.
+      serializer: [
+        {Phoenix.Socket.V1.JSONSerializer, "~> 1.0.0"},
+        {EngramWeb.MeteredSerializer, "~> 2.0.0"}
+      ],
       # Transport-level backstop. CrdtChannel already rejects oversize
       # `crdt_msg` payloads (5 MB decoded ≈ 6.67 MB base64) BEFORE decoding,
       # but that check only covers that one event — every other channel could
@@ -30,6 +36,12 @@ defmodule EngramWeb.Endpoint do
   socket "/socket/device", EngramWeb.DeviceSocket,
     websocket: [
       check_origin: {__MODULE__, :check_origin, []},
+      # Frame meter (message rate + wire bytes). V1 kept so old clients still
+      # negotiate, matching Phoenix's default list.
+      serializer: [
+        {Phoenix.Socket.V1.JSONSerializer, "~> 1.0.0"},
+        {EngramWeb.MeteredSerializer, "~> 2.0.0"}
+      ],
       # Phoenix defaults to :infinity. This is the only socket reachable
       # WITHOUT a token, and the frame is buffered before join/3 ever runs,
       # so the default would let anyone stream unbounded bytes into memory
