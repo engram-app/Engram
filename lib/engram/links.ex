@@ -1029,10 +1029,13 @@ defmodule Engram.Links do
   # Read paths (called straight from controllers with `conn.assigns.current_user`)
   # can't trust that struct to carry a DEK: a same-request note write lazily
   # provisions the DEK via `Crypto.ensure_user_dek/1` deep inside `Notes`, but
-  # that only updates the struct held *inside* that call — the controller's
+  # that only updates the struct held *inside* that call; the controller's
   # `current_user` is resolved by auth middleware before the write and never
-  # sees it. Same reload-fresh pattern `Indexing.index_note/2` uses (fetches by
-  # `note.user_id` rather than trusting a passed-in user).
+  # sees it. Such a struct is reloaded fresh (uncached: the `:user` cache entry
+  # may predate the DEK). A struct that already carries a wrapped DEK is used as is (on a request
+  # path it is the cached `current_user`): `Crypto.get_dek/1` reads the DB's
+  # current blob itself on a DekCache miss, so a pre-rotation struct is safe.
+  defp reload_for_dek(%{encrypted_dek: blob} = user) when is_binary(blob), do: user
   defp reload_for_dek(%{id: id}), do: Engram.Accounts.get_user!(id)
 
   defp decrypt_note_paths(_user, _dek, []), do: %{}

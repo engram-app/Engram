@@ -27,6 +27,8 @@ defmodule Engram.QueryBudgetTest do
   # Task 10a: a top-level with_tenant is 3 round trips, not 4 (BEGIN,
   # tenant_enter, COMMIT; the COMMIT resets tenant + role, so tenant_exit is
   # gone). Every path drops by its number of tenant transactions.
+  # Task 10b: note_json's links read uses the request's (cached) user, not a
+  # fresh users row (-1 on every REST path that renders a note).
   @budgets %{
     "mcp get_notes" => 5,
     "mcp write_note update" => 15,
@@ -34,11 +36,11 @@ defmodule Engram.QueryBudgetTest do
     "mcp edit_note" => 15,
     "mcp delete_note" => 13,
     "GET sync/manifest" => 9,
-    "GET notes/*path" => 9,
-    "POST notes update" => 26,
-    "POST notes create" => 31,
-    "POST notes/append" => 20,
-    "POST notes/rename" => 41,
+    "GET notes/*path" => 8,
+    "POST notes update" => 25,
+    "POST notes create" => 30,
+    "POST notes/append" => 19,
+    "POST notes/rename" => 40,
     "DELETE notes/*path" => 16,
     "GET /api/bootstrap" => 18,
     "GET folders" => 8,
