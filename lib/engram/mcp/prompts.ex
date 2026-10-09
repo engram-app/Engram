@@ -74,6 +74,80 @@ defmodule Engram.MCP.Prompts do
       4. List the related notes you found, each with one line on how it connects and the [[wikilink]] I could add.
       5. Do not edit any note. If I ask you to add the links afterwards, use `edit_note`.
       """
+    },
+    %{
+      name: "capture",
+      title: "Capture a thought",
+      description: "Append a quick thought to an inbox note without breaking your flow.",
+      arguments: [
+        %{name: "text", description: "What to capture", required: true},
+        %{
+          name: "note",
+          description: "Note to append to (optional; defaults to Inbox.md at the vault root)",
+          required: false
+        }
+      ],
+      template: """
+      Capture this in my Engram vault: {text}
+
+      Target note: {note}
+
+      1. Call `list_vaults` if you do not know which vault to use.
+      2. If no target note was given, use Inbox.md at the vault root.
+      3. Append it with `append_to_note` as one Markdown list item, starting with today's date (YYYY-MM-DD). Keep my wording; fix only obvious typos.
+      4. Reply with one line confirming where it went. Do not search, summarize or reorganize anything.
+      """
+    },
+    %{
+      name: "project_brief",
+      title: "Brief me on a project",
+      description: "Pull a project's notes into a status summary: done, open, decided.",
+      arguments: [
+        %{name: "project", description: "Project name or folder", required: true}
+      ],
+      template: """
+      Brief me on this project from my Engram vault: {project}
+
+      1. Call `list_vaults` if you do not know which vault to use.
+      2. If it looks like a folder, call `list_folder` on it. Also call `search_notes` for the project name.
+      3. Read the most relevant notes with `get_notes`.
+      4. Write a brief with these sections: what it is (one line), done, open or in progress, decisions made, and open questions. Cite the note path for each point.
+      5. Call out anything that looks stale or contradictory between notes. Do not edit any note.
+      """
+    },
+    %{
+      name: "tidy_tags",
+      title: "Tidy my tags",
+      description:
+        "Find near-duplicate or messy tags and suggest merges, without editing anything.",
+      arguments: [],
+      template: """
+      Review the tags in my Engram vault.
+
+      1. Call `list_vaults` if you do not know which vault to use.
+      2. Call `list_tags` to get every tag with its count.
+      3. Group tags that look like the same idea: different case, singular vs plural, typos, or synonyms.
+      4. For each group, suggest the one tag to keep and the ones to merge into it, with counts. Also list tags used only once that look accidental.
+      5. Do not edit any note. If I approve a merge afterwards, use `search_notes` to find the notes and `edit_note` to change them.
+      """
+    },
+    %{
+      name: "organize_folder",
+      title: "Organize a folder",
+      description:
+        "Review a messy folder and propose a cleaner structure, without moving anything.",
+      arguments: [
+        %{name: "folder", description: "Folder to review, e.g. Inbox", required: true}
+      ],
+      template: """
+      Help me organize this folder in my Engram vault: {folder}
+
+      1. Call `list_vaults` if you do not know which vault to use.
+      2. Call `list_folder` on it. Skim notes whose names do not explain them with `get_notes`.
+      3. Propose a structure: the subfolders to create and which notes go where, plus notes that look like duplicates or belong elsewhere in the vault (use `suggest_folder` for those).
+      4. Present it as a list of moves. Do not move, rename or delete anything.
+      5. If I approve afterwards, use `create_folder` and `rename_note` to carry out only the moves I approved.
+      """
     }
   ]
 

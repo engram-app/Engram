@@ -32,7 +32,8 @@ defmodule EngramWeb.McpPromptsTest do
   test "prompts/list returns every prompt with its arguments", %{conn: conn} do
     prompts = rpc(conn, "prompts/list")["result"]["prompts"]
 
-    assert Enum.map(prompts, & &1["name"]) == ~w(recall save_conversation find_connections)
+    assert Enum.map(prompts, & &1["name"]) ==
+             ~w(recall save_conversation find_connections capture project_brief tidy_tags organize_folder)
 
     for p <- prompts do
       assert is_binary(p["title"]) and is_binary(p["description"])
