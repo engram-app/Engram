@@ -7,6 +7,7 @@ defmodule Engram.MCP.HandlersSingleReadTest do
   alias Engram.Notes.CrdtBridge
   alias Engram.Notes.CrdtRegistry
   alias Engram.QueryRecorder
+  alias Yex.Sync.SharedDoc
 
   setup %{conn: conn} do
     EngramWeb.RateLimiter.reset_buckets!()
@@ -152,7 +153,7 @@ defmodule Engram.MCP.HandlersSingleReadTest do
     on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
 
     :ok =
-      Yex.Sync.SharedDoc.update_doc(room, fn doc ->
+      SharedDoc.update_doc(room, fn doc ->
         text = Yex.Doc.get_text(doc, CrdtBridge.text_name())
         CrdtBridge.diff_into_text(text, edit.(Yex.Text.to_string(text)))
       end)
@@ -261,12 +262,14 @@ defmodule Engram.MCP.HandlersSingleReadConcurrencyTest do
   use ExUnit.Case, async: false
 
   import Engram.Factory
+  import Ecto.Query, only: [from: 2]
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Engram.{CheckpointInterleave, Crypto, Notes, Repo}
   alias Engram.MCP.Tools
   alias Engram.Notes.{CrdtBridge, CrdtRegistry}
   alias EngramWeb.McpController
+  alias Yex.Sync.SharedDoc
 
   @writers 6
 
@@ -454,6 +457,59 @@ defmodule Engram.MCP.HandlersSingleReadConcurrencyTest do
     assert text =~ "FAST" and text =~ "SLOW", text
   end
 
+  # A legacy row (no crdt_state) whose tail is empty at the read: a room that
+  # binds and gets the client's seed plus a keystroke while the rebuild runs
+  # puts both in the tail. Diffing the rebuilt text (which lacks the keystroke)
+  # into that tail would delete the keystroke, so the write must recompute.
+  test "a keystroke on a legacy note during the rebuild survives", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    prev = Application.get_env(:engram, Engram.Notes.CrdtCheckpointTimer, [])
+
+    Application.put_env(:engram, Engram.Notes.CrdtCheckpointTimer,
+      settle_ms: 600_000,
+      ceiling_ms: 600_000,
+      eager_ms: 600_000
+    )
+
+    on_exit(fn -> Application.put_env(:engram, Engram.Notes.CrdtCheckpointTimer, prev) end)
+
+    Repo.with_tenant!(user.id, fn ->
+      Repo.update_all(
+        from(n in Engram.Notes.Note, where: n.id == ^note.id),
+        set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+      )
+    end)
+
+    slow = parked_rmw(user, vault, "c.md", "APPENDED\n")
+    assert_receive {:rebuild_parked, parked}, 15_000
+
+    {:ok, room} = CrdtRegistry.ensure_started(user.id, vault.id, note.id)
+    on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
+
+    # The client's seed of the facade text, then a keystroke on it.
+    :ok =
+      SharedDoc.update_doc(room, fn doc ->
+        CrdtBridge.ingest_plaintext(doc, "# C\n\nbase\n")
+      end)
+
+    :ok =
+      SharedDoc.update_doc(room, fn doc ->
+        doc |> Yex.Doc.get_text(CrdtBridge.text_name()) |> Yex.Text.insert(0, "KEY-")
+      end)
+
+    # Both update_v1 appends are in the room's mailbox ahead of this call.
+    _ = :sys.get_state(room)
+
+    send(parked, :release_rebuild)
+    assert {:ok, _} = Task.await(slow, 30_000)
+
+    text = current_text(user, vault)
+    assert text =~ "KEY-", text
+    assert text =~ "APPENDED", text
+    assert length(String.split(text, "base")) == 2, text
+  end
+
   # REST POST /api/notes/append had no guard at all: a concurrent append
   # committing between its read and write was erased by the merge.
   test "concurrent REST appends all land", %{user: user, vault: vault} do
@@ -498,7 +554,7 @@ defmodule Engram.MCP.HandlersSingleReadConcurrencyTest do
       Task.async(fn ->
         for i <- 1..@writers do
           :ok =
-            Yex.Sync.SharedDoc.update_doc(room, fn doc ->
+            SharedDoc.update_doc(room, fn doc ->
               doc
               |> Yex.Doc.get_text(CrdtBridge.text_name())
               |> Yex.Text.insert(0, "TYPED-#{i}\n")

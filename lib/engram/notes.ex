@@ -2322,6 +2322,23 @@ defmodule Engram.Notes do
          do: crdt_merge_result(merged, user, note_id, path)
   end
 
+  # A read-modify-write of a legacy row (no crdt_state) whose tail was empty
+  # when the new text was derived. A tail that appears since (a room's client
+  # seed plus keystrokes) is text the rebuild never saw, and diffing into it
+  # would delete those keystrokes: refuse, so the caller reads again.
+  defp maybe_merge_crdt(%Note{}, incoming_content, user, note_id, vault_id, path, :empty_tail) do
+    {:ok, doc} = CrdtBridge.doc_from_state(nil)
+
+    case CrdtPersistence.replay_tail(doc, user, note_id, vault_id) do
+      [] ->
+        with {:ok, merged} <- CrdtBridge.merge_plaintext_into_doc(doc, incoming_content),
+             do: crdt_merge_result(merged, user, note_id, path)
+
+      [_ | _] ->
+        {:error, :stale_tail}
+    end
+  end
+
   defp maybe_merge_crdt(existing, incoming_content, user, note_id, vault_id, path, nil) do
     prior_state =
       case existing do
@@ -2462,7 +2479,7 @@ defmodule Engram.Notes do
   def rmw_note(user, vault, path, rebuild, opts) do
     Repo.with_tenant!(user.id, fn ->
       with {:ok, note} <- get_note(user, vault, path),
-           {{:error, :stale_note}, _} <-
+           {{:error, stale}, _} when stale in [:stale_note, :stale_tail] <-
              rmw_attempt(user, vault, path, note, rebuild, [expected_note: note] ++ opts) do
         rmw_locked(user, vault, path, rebuild, opts)
       else
@@ -2474,8 +2491,19 @@ defmodule Engram.Notes do
 
   defp rmw_locked(user, vault, path, rebuild, opts) do
     case get_note_for_update(user, vault, path) do
-      {:ok, note} -> rmw_attempt(user, vault, path, note, rebuild, [locked_note: note] ++ opts)
-      {:error, :not_found} = missing -> {missing, nil}
+      {:ok, note} ->
+        locked = [locked_note: note] ++ opts
+
+        # The row lock does not block tail appends, so a legacy row's tail can
+        # still appear after this read. Read once more: it replays now, and
+        # nothing can prune it while we hold the row.
+        case rmw_attempt(user, vault, path, note, rebuild, locked) do
+          {{:error, :stale_tail}, _} -> rmw_attempt(user, vault, path, note, rebuild, locked)
+          done -> done
+        end
+
+      {:error, :not_found} = missing ->
+        {missing, nil}
     end
   end
 
@@ -2488,7 +2516,8 @@ defmodule Engram.Notes do
           path,
           note,
           rebuild.(current),
-          opts ++ [merge_doc: doc, current_text: current]
+          # No doc means a legacy row whose tail was empty at this read.
+          opts ++ [merge_doc: doc || :empty_tail, current_text: current]
         )
 
       {:error, reason} ->
@@ -2513,8 +2542,8 @@ defmodule Engram.Notes do
   defp rebuild_result({:error, _} = refused), do: refused
 
   @doc """
-  `get_note/3` for a read-modify-write: the row comes back locked `FOR UPDATE`
-  inside the caller's tenant transaction, so concurrent writers of this note
+  `get_note/3` for a read-modify-write: the row comes back locked `FOR NO KEY
+  UPDATE` inside the caller's tenant transaction, so concurrent writers of this note
   serialize behind it until that transaction commits. Raises outside one.
 
   The vault row is locked first, in the same statement. Every other note writer
