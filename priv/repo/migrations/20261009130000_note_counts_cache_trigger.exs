@@ -6,7 +6,7 @@ defmodule Engram.Repo.Migrations.NoteCountsCacheTrigger do
   enters or leaves what the `:note_counts` cache counts (Engram.Cache.Registry),
   so every node evicts that user's counts on commit, for EVERY writer
   including raw SQL. Same pattern as 20261009120000_cache_eviction_triggers.
-  phase/expand: purely additive.
+  Purely additive, and re-runnable (CREATE OR REPLACE).
 
   Content writes (version, seq, content, crdt state) do NOT notify: every
   keystroke checkpoint updates a notes row, and none of them changes a count.
@@ -36,13 +36,13 @@ defmodule Engram.Repo.Migrations.NoteCountsCacheTrigger do
       changed = Enum.map_join(cols, " OR ", &"OLD.#{&1} IS DISTINCT FROM NEW.#{&1}")
 
       execute("""
-      CREATE TRIGGER #{table}_note_counts_notify_0
+      CREATE OR REPLACE TRIGGER #{table}_note_counts_notify_0
       AFTER INSERT OR DELETE ON #{table}
       FOR EACH ROW EXECUTE FUNCTION notify_note_counts_changed();
       """)
 
       execute("""
-      CREATE TRIGGER #{table}_note_counts_notify_1
+      CREATE OR REPLACE TRIGGER #{table}_note_counts_notify_1
       AFTER UPDATE ON #{table}
       FOR EACH ROW WHEN (#{changed})
       EXECUTE FUNCTION notify_note_counts_changed();
