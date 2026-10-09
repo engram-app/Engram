@@ -2456,6 +2456,58 @@ defmodule Engram.Notes do
     end
   end
 
+  # get_note/3 plus the note's tail rows, from the same statement (see
+  # with_tail/1).
+  defp get_note_with_tail(user, vault, path) do
+    with {:ok, query} <- note_by_path_query(user, vault, path),
+         {:ok, {%Note{} = note, tail}} <-
+           Repo.with_tenant(user.id, fn -> query |> with_tail() |> Repo.one() |> tail_result() end) do
+      {:ok, decrypt_or_raise!(note, user), tail}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  # Selects the note row together with its tail (`crdt_update_log`, oldest
+  # first) in ONE statement, so both come from one snapshot. Read in two, a
+  # checkpoint committing in between (it rewrites crdt_state AND prunes the
+  # rows it folded) gives the old snapshot with no tail: edits vanish. Three
+  # array subqueries, aligned by the same total order.
+  defp with_tail(query) do
+    from(n in query,
+      select:
+        {n,
+         fragment(
+           "ARRAY(SELECT l.id FROM crdt_update_log l WHERE l.note_id = ? AND l.vault_id = ? ORDER BY l.inserted_at, l.id)",
+           n.id,
+           n.vault_id
+         ),
+         fragment(
+           "ARRAY(SELECT l.update_ciphertext FROM crdt_update_log l WHERE l.note_id = ? AND l.vault_id = ? ORDER BY l.inserted_at, l.id)",
+           n.id,
+           n.vault_id
+         ),
+         fragment(
+           "ARRAY(SELECT l.update_nonce FROM crdt_update_log l WHERE l.note_id = ? AND l.vault_id = ? ORDER BY l.inserted_at, l.id)",
+           n.id,
+           n.vault_id
+         )}
+    )
+  end
+
+  defp tail_result(nil), do: nil
+
+  defp tail_result({note, ids, cts, nonces}) do
+    rows =
+      [ids, cts, nonces]
+      |> Enum.zip()
+      |> Enum.map(fn {id, ct, nonce} ->
+        %{id: Ecto.UUID.load!(id), update_ciphertext: ct, update_nonce: nonce}
+      end)
+
+    {note, rows}
+  end
+
   @doc """
   Read-modify-write of the note at `path`: `rebuild` gets its current text from
   the authority (`authoritative_doc/2`, #1159) and returns the new text, `{text,
@@ -2478,9 +2530,9 @@ defmodule Engram.Notes do
           {term(), term()}
   def rmw_note(user, vault, path, rebuild, opts) do
     Repo.with_tenant!(user.id, fn ->
-      with {:ok, note} <- get_note(user, vault, path),
+      with {:ok, note, tail} <- get_note_with_tail(user, vault, path),
            {{:error, stale}, _} when stale in [:stale_note, :stale_tail] <-
-             rmw_attempt(user, vault, path, note, rebuild, [expected_note: note] ++ opts) do
+             rmw_attempt(user, vault, path, {note, tail}, rebuild, [expected_note: note] ++ opts) do
         rmw_locked(user, vault, path, rebuild, opts)
       else
         {:error, :not_found} -> rmw_locked(user, vault, path, rebuild, opts)
@@ -2497,9 +2549,14 @@ defmodule Engram.Notes do
         # The row lock does not block tail appends, so a legacy row's tail can
         # still appear after this read. Read once more: it replays now, and
         # nothing can prune it while we hold the row.
-        case rmw_attempt(user, vault, path, note, rebuild, locked) do
-          {{:error, :stale_tail}, _} -> rmw_attempt(user, vault, path, note, rebuild, locked)
-          done -> done
+        # The tail is read in its own statement here: nothing can prune it
+        # while we hold the row.
+        case rmw_attempt(user, vault, path, {note, :read}, rebuild, locked) do
+          {{:error, :stale_tail}, _} ->
+            rmw_attempt(user, vault, path, {note, :read}, rebuild, locked)
+
+          done ->
+            done
         end
 
       {:error, :not_found} = missing ->
@@ -2507,8 +2564,13 @@ defmodule Engram.Notes do
     end
   end
 
-  defp rmw_attempt(user, vault, path, note, rebuild, opts) do
-    case authoritative_doc(user, note) do
+  defp rmw_attempt(user, vault, path, {note, tail}, rebuild, opts) do
+    tail =
+      if tail == :read,
+        do: CrdtPersistence.tail_rows(note.id, note.vault_id),
+        else: tail
+
+    case authority(user, note, tail) do
       {:ok, current, doc} ->
         rmw_write(
           user,
@@ -2642,19 +2704,27 @@ defmodule Engram.Notes do
   @spec authoritative_doc(map(), Note.t()) ::
           {:ok, String.t(), Yex.Doc.t() | nil} | {:error, term()}
   def authoritative_doc(user, %Note{} = note) do
+    # The caller's row may predate a checkpoint, so read the snapshot again,
+    # with the tail, in one statement (with_tail/1).
+    query = from(n in Note, where: n.id == ^note.id and n.vault_id == ^note.vault_id)
+
+    case Repo.with_tenant(user.id, fn -> query |> with_tail() |> Repo.one() |> tail_result() end) do
+      {:ok, {%Note{} = fresh, tail}} -> authority(user, decrypt_or_raise!(fresh, user), tail)
+      {:ok, nil} -> {:error, :not_found}
+      {:error, _} = err -> err
+    end
+  end
+
+  # The authoritative text and doc of `note` given its tail rows, which must
+  # come from the same statement as `note` (or be read while it is locked).
+  defp authority(user, note, tail) do
     case Crypto.decrypt_crdt_state(note, user) do
       {:ok, nil} ->
-        legacy_authority(user, note)
+        legacy_authority(user, note, tail)
 
       {:ok, state} ->
         with {:ok, doc} <- CrdtBridge.doc_from_state(state) do
-          # replay_tail reads crdt_update_log, which is tenant-scoped. Callers
-          # reach this from a controller rather than from inside upsert_note's
-          # transaction, so establish the tenant here.
-          Repo.with_tenant(user.id, fn ->
-            _replayed = CrdtPersistence.replay_tail(doc, user, note.id, note.vault_id)
-          end)
-
+          _replayed = CrdtPersistence.apply_tail_rows(doc, user, note.id, tail)
           {:ok, CrdtBridge.project_doc(doc), doc}
         end
 
@@ -2667,15 +2737,10 @@ defmodule Engram.Notes do
   # (bind seeds the full text into the tail before the first checkpoint). Then
   # the tail IS the newer text, exactly as maybe_merge_crdt's nil-snapshot
   # branch replays it, and the doc goes back so the merge diffs into it.
-  defp legacy_authority(user, note) do
+  defp legacy_authority(user, note, tail) do
     {:ok, doc} = CrdtBridge.doc_from_state(nil)
 
-    {:ok, applied} =
-      Repo.with_tenant(user.id, fn ->
-        CrdtPersistence.replay_tail(doc, user, note.id, note.vault_id)
-      end)
-
-    if applied == [],
+    if CrdtPersistence.apply_tail_rows(doc, user, note.id, tail) == [],
       do: {:ok, note.content || "", nil},
       else: {:ok, CrdtBridge.project_doc(doc), doc}
   end

@@ -20,17 +20,19 @@ defmodule Engram.QueryBudgetTest do
   # count(*) diagnostic and deliver-out's users + notes re-read are gone.
   # Fix round 1: read-modify-writes are optimistic (unlocked read, locked
   # re-read before the write: +1), and REST append runs in one transaction.
+  # Task 7b fix round: the read-modify-writes read the note and its tail in
+  # one statement (-1).
   @budgets %{
     "mcp get_notes" => 7,
     "mcp write_note update" => 17,
-    "mcp append_to_note" => 18,
-    "mcp edit_note" => 18,
+    "mcp append_to_note" => 17,
+    "mcp edit_note" => 17,
     "mcp delete_note" => 15,
     "GET sync/manifest" => 11,
     "GET notes/*path" => 11,
     "POST notes update" => 28,
     "POST notes create" => 34,
-    "POST notes/append" => 23,
+    "POST notes/append" => 22,
     "POST notes/rename" => 46,
     "DELETE notes/*path" => 18,
     "GET /api/bootstrap" => 22,

@@ -211,6 +211,39 @@ defmodule Engram.MCP.HandlersSingleReadTest do
     assert count(text, "TAILEDIT") == 0, inspect(text)
   end
 
+  # The snapshot and the tail must come from one statement. Read in two, a
+  # checkpoint that folds the tail into a new snapshot and prunes it in
+  # between gave the OLD snapshot with NO tail: the edit vanished.
+  test "authoritative text survives a checkpoint between its reads", ctx do
+    %{user: user, vault: vault} = ctx
+    {:ok, stale} = Engram.Notes.get_note(user, vault, "a.md")
+    {:ok, base} = CrdtBridge.doc_from_state(snapshot_of(user, stale))
+    {:ok, sv} = Yex.encode_state_vector(base)
+    Yex.Text.insert(Yex.Doc.get_text(base, CrdtBridge.text_name()), 0, "FOLDED-")
+    {:ok, upd} = Yex.encode_state_as_update(base, sv)
+
+    st = %{user_id: user.id, vault_id: vault.id, note_id: stale.id}
+    _ = Engram.Notes.CrdtPersistence.update_v1(st, upd, stale.id, base)
+
+    ids =
+      Engram.Repo.with_tenant!(user.id, fn ->
+        Engram.Repo.all(
+          from(l in Engram.Notes.CrdtUpdateLog, where: l.note_id == ^stale.id, select: l.id)
+        )
+      end)
+
+    :ok =
+      Engram.Notes.CrdtCheckpoint.checkpoint(user.id, vault.id, stale.id, base, prune_ids: ids)
+
+    assert {:ok, text} = Engram.Notes.authoritative_content(user, stale)
+    assert text =~ "FOLDED-", text
+  end
+
+  defp snapshot_of(user, note) do
+    {:ok, state} = Engram.Crypto.decrypt_crdt_state(note, user)
+    state
+  end
+
   # A row with no crdt_state whose bind seeded the full text into the tail, plus
   # an edit after it: the tail is the newer text, so a rebuild must start there.
   test "a legacy note's pending tail edits are part of its text", ctx do
