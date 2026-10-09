@@ -987,6 +987,8 @@ defmodule Engram.Notes do
         # CrdtDeliver call sites in this module.
         {:ok, {:ok, note, :announce}} ->
           :ok = CrdtDeliver.announce_ready(user.id, vault.id, note.path, note.id)
+          # crdt_doc_ready never reaches the sync topic the name index reads.
+          :ok = Engram.Notes.NameIndex.announce(vault.id, note.id, note.path, note.title)
 
           # The web /link success page waits on this before forwarding the user
           # to their vault. It used to fire only from the REST upsert/batch
@@ -4516,7 +4518,11 @@ defmodule Engram.Notes do
     Repo.all(
       from(n in scoped_live(user, vault),
         where: n.kind == "note",
-        select: {n.id, n.dek_version, n.path_ciphertext, n.path_nonce, n.created_at, n.updated_at}
+        # uuid_send: the raw 16 bytes the AAD binds, so no per-row
+        # Ecto.UUID.dump (a third of the old decrypt pass at 50k rows).
+        select:
+          {n.id, fragment("uuid_send(?)", n.id), n.dek_version, n.path_ciphertext, n.path_nonce,
+           n.created_at, n.updated_at}
       )
     )
   end
@@ -4524,19 +4530,15 @@ defmodule Engram.Notes do
   @doc "Decrypts `raw_tree_note_rows/2`'s rows. Pure — no DB access."
   @spec decrypt_tree_note_rows([tuple()], binary()) :: [map()]
   def decrypt_tree_note_rows(rows, dek) do
-    # Sequential on purpose — SyncController measured path-sized decrypts at
-    # ~4µs each (10k in ~43ms) and found chunked parallel SLOWER, because
-    # copying results back to the caller's heap rivals the AES-GCM work.
+    # One native call for the whole column (one key schedule, AAD built in
+    # Rust). Parallel was measured SLOWER: copying results back to the
+    # caller's heap rivals the AES-GCM work.
     Crypto.measure_decrypt_batch(:vault_tree_notes, length(rows), fn ->
-      Enum.map(rows, fn {id, dek_version, path_ct, path_nonce, created, updated} ->
-        aad = PathCrypto.aad(:notes, id, dek_version)
+      fields = Enum.map(rows, fn {_, raw_id, v, ct, nonce, _, _} -> {raw_id, v, ct, nonce} end)
 
-        %{
-          id: id,
-          path: PathCrypto.decrypt!(path_ct, path_nonce, dek, aad),
-          created_at: created,
-          updated_at: updated
-        }
+      Enum.zip_with(rows, PathCrypto.decrypt_many!(:notes, fields, dek), fn
+        {id, _, _, _, _, created, updated}, path ->
+          %{id: id, path: path, created_at: created, updated_at: updated}
       end)
     end)
   end
@@ -4709,21 +4711,34 @@ defmodule Engram.Notes do
 
   @doc """
   Most recently updated live notes in `vault`, newest first, metadata only.
-  Backs `search_notes` with no query ("what changed recently").
+  Backs `search_notes` with no query ("what changed recently") and pages
+  MCP `resources/list` via `before: {updated_at, id}` (keyset, so a deep page
+  costs the same as the first). `notes_recent_index` serves both.
   """
-  @spec list_recent_notes(map(), map(), pos_integer()) :: {:ok, [Note.t()]}
-  def list_recent_notes(user, vault, limit) when is_integer(limit) and limit > 0 do
-    {:ok, notes} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.all(
-          from(n in scoped_live(user, vault),
-            where: n.kind == "note",
-            order_by: [desc: n.updated_at, desc: n.id],
-            limit: ^limit,
-            select: struct(n, @note_meta_fields)
+  @spec list_recent_notes(map(), map(), pos_integer(), keyword()) :: {:ok, [Note.t()]}
+  def list_recent_notes(user, vault, limit, opts \\ []) when is_integer(limit) and limit > 0 do
+    query =
+      from(n in scoped_live(user, vault),
+        where: n.kind == "note",
+        order_by: [desc: n.updated_at, desc: n.id],
+        limit: ^limit,
+        select: struct(n, @note_meta_fields)
+      )
+
+    query =
+      case Keyword.get(opts, :before) do
+        nil ->
+          query
+
+        {updated_at, id} ->
+          where(
+            query,
+            [n],
+            n.updated_at < ^updated_at or (n.updated_at == ^updated_at and n.id < ^id)
           )
-        )
-      end)
+      end
+
+    {:ok, notes} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
 
     {:ok, decrypt_or_raise!(notes, user)}
   end

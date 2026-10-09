@@ -26,6 +26,8 @@ regex = "1"
 snowball_stemmers_rs = "1.0.1"
 pulldown-cmark = { version = "0.13", default-features = false }
 ryu = "1"
+# Fuzzy name search for the vault name index (names.rs); helix's matcher.
+nucleo-matcher = "0.3"
 serde = "1"
 serde_json = { version = "1", features = ["float_roundtrip"] }
 # Same version and parse options as mdex_native 0.2.9 (the parser Sections

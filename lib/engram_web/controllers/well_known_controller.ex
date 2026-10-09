@@ -175,7 +175,7 @@ defmodule EngramWeb.WellKnownController do
       "serverInfo" => EngramWeb.McpController.server_info(),
       "authentication" => %{"required" => true, "schemes" => ["oauth2"]},
       "tools" => Engram.MCP.Tools.wire_list(),
-      "resources" => [],
+      "resources" => [Engram.MCP.Resources.template()],
       "prompts" => Engram.MCP.Prompts.wire_list()
     }
 

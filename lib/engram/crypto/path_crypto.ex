@@ -19,6 +19,26 @@ defmodule Engram.Crypto.PathCrypto do
 
   def aad(_table, _id, _v), do: <<>>
 
+  @doc """
+  Batch `decrypt!/4` over `[{raw_id, dek_version, ct, nonce}]`, same AAD
+  rule as `aad/3`, one native call. Raises like `decrypt!/4`.
+  """
+  @spec decrypt_many!(atom(), [{<<_::128>>, integer() | nil, binary(), binary()}], <<_::256>>) ::
+          [binary()]
+  def decrypt_many!(table, rows, dek) do
+    bound = Crypto.row_version_aad_bound()
+
+    fields =
+      Enum.map(rows, fn {raw_id, v, ct, nonce} ->
+        {raw_id, is_integer(v) and v >= bound, ct, nonce}
+      end)
+
+    case Envelope.decrypt_many(dek, Crypto.aad_prefix(table, :path), fields) do
+      {:ok, paths} -> paths
+      :error -> raise "path decrypt failed — possible data corruption"
+    end
+  end
+
   @spec decrypt!(binary(), binary(), <<_::256>>, binary()) :: binary()
   def decrypt!(ciphertext, nonce, dek, aad) do
     case Envelope.decrypt(ciphertext, nonce, dek, aad) do

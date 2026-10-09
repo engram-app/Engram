@@ -4,7 +4,7 @@ defmodule Mix.Tasks.Engram.Mcp.ToolsJson do
   @moduledoc """
   Snapshots the exact `tools/list` payload (`Engram.MCP.Tools.wire_list/0`)
   so CI can lint it with TDQS without starting the app or a database. The
-  `prompts/list` payload rides along so the LobeHub publish workflow can build
+  `prompts/list` payload and the resource template ride along so the LobeHub publish workflow can build
   its manifest from the tagged commit.
 
   Usage: `mix engram.mcp.tools_json [path]` (default `mcp-tools.json`).
@@ -23,7 +23,11 @@ defmodule Mix.Tasks.Engram.Mcp.ToolsJson do
 
     json =
       Jason.encode!(
-        %{"tools" => Engram.MCP.Tools.wire_list(), "prompts" => Engram.MCP.Prompts.wire_list()},
+        %{
+          "tools" => Engram.MCP.Tools.wire_list(),
+          "prompts" => Engram.MCP.Prompts.wire_list(),
+          "resources" => [Engram.MCP.Resources.template()]
+        },
         pretty: true
       )
 

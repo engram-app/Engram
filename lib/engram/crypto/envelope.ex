@@ -116,6 +116,18 @@ defmodule Engram.Crypto.Envelope do
 
   def decrypt(_ct_with_tag, _nonce, <<_::256>>, _aad), do: :error
 
+  @doc """
+  `decrypt/4` for one column across many rows, under one key schedule:
+  `{:ok, [plaintext]}` in row order or `:error` if any row fails. Rows are
+  `{raw_id, bind?, ct, nonce}`; the AAD is `prefix <> raw_id` when `bind?`
+  (`Crypto.aad_for_row/3`'s shape, `prefix` from `Crypto.aad_prefix/2`),
+  else empty (legacy rows). For listings that decrypt a column vault-wide.
+  """
+  @spec decrypt_many(<<_::256>>, binary(), [{<<_::128>>, boolean(), binary(), binary()}]) ::
+          {:ok, [binary()]} | :error
+  def decrypt_many(<<_::256>> = dek, prefix, rows) when is_binary(prefix) and is_list(rows),
+    do: Engram.Native.envelope_open_many(dek, prefix, rows)
+
   # {table, column, mode}; prefixes come from Crypto.aad_prefix/2, the single
   # definition of the AAD shape, and are built once at compile time.
   @policy [
