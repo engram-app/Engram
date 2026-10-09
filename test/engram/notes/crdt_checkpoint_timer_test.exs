@@ -214,4 +214,15 @@ defmodule Engram.Notes.CrdtCheckpointTimerTest do
     # This module is async, so other tests' logs land here too: look for ours.
     refute log =~ "crdt checkpoint", log
   end
+
+  # Only a late room_snapshot/1 reply is dropped; any other ref-tagged message
+  # is not this timer's and must not vanish silently.
+  test "drops a late snapshot reply, and only that shape" do
+    ref = make_ref()
+    assert {:noreply, :st} = CrdtCheckpointTimer.handle_info({ref, {:ok, "s"}, [], 0}, :st)
+
+    assert_raise FunctionClauseError, fn ->
+      CrdtCheckpointTimer.handle_info({ref, :unrelated}, :st)
+    end
+  end
 end

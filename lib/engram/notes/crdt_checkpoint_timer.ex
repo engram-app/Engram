@@ -303,10 +303,12 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     {:stop, :normal, state}
   end
 
-  # A late reply to a room call that timed out (room_snapshot/1). Dropped: a
-  # crash here would take the linked room down with it.
-  def handle_info(reply, state) when is_tuple(reply) and is_reference(elem(reply, 0)),
-    do: {:noreply, state}
+  # A late room_snapshot/1 reply (its call timed out). Dropped: a crash here
+  # would take the linked room down with it. Exactly that shape, so nothing
+  # else ref-tagged disappears silently.
+  def handle_info({ref, _snapshot, ids, failures}, state)
+      when is_reference(ref) and is_list(ids) and is_integer(failures),
+      do: {:noreply, state}
 
   # Only drain-ENABLED rooms are tracked for eviction, so a room with the drain
   # explicitly off can never be LRU-evicted either. Since the drain now defaults
