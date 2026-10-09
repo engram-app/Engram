@@ -186,63 +186,15 @@ defmodule Engram.Notes.CrdtPersistence do
 
     case Crypto.encrypt_crdt_state(update, user, note_id) do
       {:ok, {ct, nonce}} ->
+        row_id = UUIDv7.generate()
+
         {:ok, seq} =
-          Repo.with_tenant(user_id, fn ->
-            %CrdtUpdateLog{}
-            |> CrdtUpdateLog.changeset(%{
-              note_id: note_id,
-              user_id: user_id,
-              vault_id: vault_id,
-              update_ciphertext: ct,
-              update_nonce: nonce
-            })
-            |> Repo.insert!()
+          Repo.with_tenant(user_id, fn -> append_row(row_id, state, ct, nonce) end)
 
-            # Invalidate the cached head in the SAME txn as the tail append: this
-            # update advanced the doc, so any stored crdt_head is now stale.
-            # The BackfillCrdtHead worker re-warms the NULL by rebuilding once
-            # (snapshot + full tail = authoritative), so we never trust an
-            # off-by-one head. Guard on
-            # not-nil so an already-invalidated hot note skips the write. Sets ONLY
-            # crdt_head — no updated_at/version/seq churn (checkpoint owns those).
-            #
-            # The note's current vault-global change seq (Vaults.next_seq!-
-            # assigned at the last write/checkpoint, the same field
-            # `list_changes_by_seq` orders by), carried on the fan-out payload
-            # below for gap-heal (spec §3 Phase D2), rides this SAME update_all
-            # via a `select` on the query (update_all/delete_all have no
-            # `:returning` option — Ecto only returns a second element when the
-            # query itself carries a `select`) — this is the hot per-delta path
-            # (moduledoc: "cheap, frequent... O(append)", prior pool-exhaustion
-            # incident history), so a second unconditional Repo.get here would
-            # double the query cost of every keystroke. The guard skips rows
-            # whose crdt_head is already nil, so `rows` is empty in that case
-            # and we fall back to a select-only read. KNOWN COST: crdt_head
-            # starts nil and is only repopulated by another device's
-            # head-read, so a SOLO typing burst takes the fallback on every
-            # delta — a seq-only point-SELECT inside the already-open
-            # transaction (NOT a full Note load — the Note row carries
-            # crdt_state_ciphertext, the encrypted CRDT snapshot, KBs-MBs,
-            # which a per-keystroke fallback must not drag across the
-            # connection). Accepted: seq is heal-trigger-only (staleness
-            # fine), and avoiding the read entirely would need per-room seq
-            # caching or a no-op UPDATE (MVCC/WAL churn), both worse than a
-            # select-only read.
-            {_count, rows} =
-              from(n in Note,
-                where: n.id == ^note_id and n.kind == "note" and not is_nil(n.crdt_head),
-                select: n.seq
-              )
-              |> Repo.update_all(set: [crdt_head: nil])
-
-            case rows do
-              [seq | _] ->
-                seq
-
-              [] ->
-                Repo.one(from(n in Note, where: n.id == ^note_id, select: n.seq))
-            end
-          end)
+        # The id is now in the room's doc AND durably in the tail, so a
+        # checkpoint of this room may prune it (see known_tail_ids/0). Only a
+        # room: a direct call's `doc` is whatever the caller passed.
+        if in_room?(), do: remember_tail_id(row_id)
 
         # Fan out the update to every device on this vault over the single
         # per-vault sync channel (the `document.updated` model). This is
@@ -308,6 +260,61 @@ defmodule Engram.Notes.CrdtPersistence do
 
     state
   end
+
+  # ONE statement per keystroke (this is the hot path): the tail insert, the
+  # crdt_head reset and the seq read for the fanout below.
+  #
+  # crdt_head: this update advanced the doc, so a stored head is stale. NULL it
+  # in the same transaction (the BackfillCrdtHead worker re-warms it from
+  # snapshot + full tail), guarded on not-NULL so an already-invalidated note
+  # skips the write, and setting ONLY crdt_head (checkpoint owns
+  # version/seq/updated_at).
+  #
+  # seq: the note's current vault-global change seq, carried on the fanout for
+  # gap-heal (spec §3 Phase D2). Read by the outer SELECT, which sees the row as
+  # of the statement start: the CTE changes only crdt_head, so that is the
+  # current seq. Never a full Note load (crdt_state is KBs to MBs). An absent
+  # row (deleted concurrently) reads as nil, which the fanout omits.
+  #
+  # A data-modifying CTE runs to completion whether or not the outer query
+  # reads it.
+  @append_sql """
+  WITH appended AS (
+    INSERT INTO crdt_update_log (id, note_id, user_id, vault_id, update_ciphertext, update_nonce)
+    VALUES ($1, $2, $3, $4, $5, $6)
+  ), head_reset AS (
+    UPDATE notes SET crdt_head = NULL
+    WHERE id = $2 AND kind = 'note' AND crdt_head IS NOT NULL
+  )
+  SELECT seq FROM notes WHERE id = $2
+  """
+
+  defp append_row(row_id, %{user_id: user_id, vault_id: vault_id, note_id: note_id}, ct, nonce) do
+    params = [
+      Ecto.UUID.dump!(row_id),
+      Ecto.UUID.dump!(note_id),
+      Ecto.UUID.dump!(user_id),
+      Ecto.UUID.dump!(vault_id),
+      ct,
+      nonce
+    ]
+
+    case Repo.query!(@append_sql, params) do
+      %{rows: [[seq]]} -> seq
+      %{rows: []} -> nil
+    end
+  end
+
+  # The tail row ids this room's doc holds: the rows bind/3 replayed and the
+  # rows this room appended. In the room's process dictionary, because the
+  # checkpoint timer reads them from inside the room (`SharedDoc.update_doc`),
+  # where the persistence state is out of reach. Never a row that failed to
+  # decrypt or a row another writer appended: those stay in the tail.
+  defp remember_tail_id(id), do: Process.put(:crdt_tail_ids, [id | known_tail_ids()])
+
+  @doc false
+  @spec known_tail_ids() :: [Ecto.UUID.t()]
+  def known_tail_ids, do: Process.get(:crdt_tail_ids, [])
 
   @doc false
   # Whether an append failed since the last call, clearing the flag. Runs in the

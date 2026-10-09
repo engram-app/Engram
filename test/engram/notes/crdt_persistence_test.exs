@@ -820,6 +820,21 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     assert Process.info(self(), :trap_exit) == {:trap_exit, false}
   end
 
+  # One keystroke is one statement: the tail insert, the crdt_head reset and
+  # the seq read, plus with_tenant's begin/enter/exit/commit.
+  test "update_v1/4 appends in one statement", ctx do
+    %{user: user, note: note} = ctx
+    st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id, user: user}
+    {:ok, %{state: upd}} = CrdtBridge.merge_plaintext(nil, "one statement")
+    doc = CrdtBridge.new_doc()
+    :ok = Yex.apply_update(doc, upd)
+
+    {_, qs} =
+      Engram.QueryRecorder.record(fn -> CrdtPersistence.update_v1(st, upd, note.id, doc) end)
+
+    assert length(qs) == 5, Engram.QueryRecorder.format(qs)
+  end
+
   # ── a live room: bind does not echo what it loaded ────────────────────────
 
   describe "a room started on an existing note" do
