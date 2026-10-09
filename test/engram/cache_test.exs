@@ -129,6 +129,46 @@ defmodule Engram.CacheTest do
     assert Cache.get(:test_cache, :k) == {:ok, :v}
   end
 
+  describe "a load inside a tenant transaction" do
+    setup do
+      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Engram.Repo)
+      %{tenant: Ecto.UUID.generate()}
+    end
+
+    # The loader may have read the transaction's own uncommitted rows.
+    test "is not cached when the transaction rolls back", %{tenant: tenant} do
+      assert {:error, :boom} =
+               Engram.Repo.with_tenant(tenant, fn ->
+                 assert Cache.fetch(:test_cache, :k, fn -> :uncommitted end) == :uncommitted
+                 Engram.Repo.rollback(:boom)
+               end)
+
+      assert Cache.get(:test_cache, :k) == :miss
+    end
+
+    test "is stored only once the transaction commits", %{tenant: tenant} do
+      {:ok, :ok} =
+        Engram.Repo.with_tenant(tenant, fn ->
+          assert Cache.fetch(:test_cache, :k, fn -> :v end) == :v
+          assert Cache.get(:test_cache, :k) == :miss
+          :ok
+        end)
+
+      assert Cache.get(:test_cache, :k) == {:ok, :v}
+    end
+
+    test "an eviction queued after the load still wins", %{tenant: tenant} do
+      {:ok, :ok} =
+        Engram.Repo.with_tenant(tenant, fn ->
+          Cache.fetch(:test_cache, :k, fn -> :pre_write end)
+          Cache.evict(:test_cache, :k)
+          :ok
+        end)
+
+      assert Cache.get(:test_cache, :k) == :miss
+    end
+  end
+
   test "a raising loader leaves the key a miss" do
     assert_raise RuntimeError, fn -> Cache.fetch(:test_cache, :k, fn -> raise "boom" end) end
     assert Cache.get(:test_cache, :k) == :miss

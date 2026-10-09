@@ -29,7 +29,7 @@ depend on, and what is left.
 | POST notes/rename | 62 | 39 |
 | DELETE notes/*path | 34 | 12 |
 | GET /api/bootstrap (warm) | 44 | 3 |
-| GET /api/bootstrap cold | n/a (44 was the warm pin) | 20 |
+| GET /api/bootstrap cold | n/a (44 was the warm pin) | 22 |
 | GET folders | 27 | 5 |
 | GET tags | 22 | 4 |
 | CRDT keystroke (delta) | 47 (crdt_msg update, included a checkpoint tick) | 4 |
@@ -37,7 +37,7 @@ depend on, and what is left.
 | CRDT crdt_doc_update idle | 55 | 21 |
 | CRDT room open | not pinned (25 measured mid-branch) | 13 |
 
-Bootstrap cold is 20 because 11 of them are the auth plug's own cache misses
+Bootstrap cold is 22 because 11 of them are the auth plug's own cache misses
 (API key lookup alone is 6); warm is 3 because the controller's one tenant
 block (begin, enter, commit) opens even when every loader hits.
 
@@ -74,6 +74,10 @@ block (begin, enter, commit) opens even when every loader hits.
   to that caller but never stored. Without it, a revoked API key read just
   before its NOTIFY stayed valid for the whole TTL. There is no single-flight:
   concurrent misses each run the loader.
+- **Stored after commit.** A miss inside a tenant transaction stores its value
+  through `Repo.after_commit/1`: the loader can see the transaction's own
+  uncommitted rows, and a rollback must cache nothing. Cost: a key read twice
+  in one cold transaction loads twice (bootstrap cold's vault list).
 - **RLS data is cached only when keyed by owner.** The loader runs in the
   caller's process, under the caller's tenant, so the cache never widens what a
   query sees. Never key a tenant-scoped value by something other than its
@@ -198,7 +202,7 @@ improvement both fail). `tenant_exit_sandbox` rows are excluded.
 ## Next targets
 
 - **Auth plug cold misses**: the API key lookup is 6 queries (BEGIN, lookup
-  role, key row, role reset, vault scope, COMMIT); 11 of bootstrap cold's 20.
+  role, key row, role reset, vault scope, COMMIT); 11 of bootstrap cold's 22.
 - **Rename (39)**: claim validation txn, index room fold, rename txn,
   post-commit jobs, idle-room fanout and links txn are separate transactions.
 - **Delete's two job inserts**: one `insert_all` instead of two inserts and two

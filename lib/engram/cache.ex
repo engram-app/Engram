@@ -47,8 +47,13 @@ defmodule Engram.Cache do
             value
 
           value ->
+            # Stored only once the caller's tenant transaction commits
+            # (immediately outside one): the loader may have read that
+            # transaction's own uncommitted rows. A rollback drops the store
+            # and leaves the marker, a miss until the sweep. An eviction
+            # queued after this store runs after it and still wins.
             if value != nil or cache_nil?(cache),
-              do: put_if_claimed(cache, key, token, value),
+              do: Engram.Repo.after_commit(fn -> put_if_claimed(cache, key, token, value) end),
               else: release(cache, key, token)
 
             value
