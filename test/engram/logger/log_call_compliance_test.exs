@@ -257,6 +257,8 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/aws/",
     "lib/engram/aws_kms.ex",
     "lib/engram/aws_kms/",
+    # Generic ETS read-through cache: no Logger call, stores caller-supplied terms opaquely.
+    "lib/engram/cache.ex",
     "lib/engram/cache/",
     "lib/engram/cluster/",
     "lib/engram/drainer.ex",

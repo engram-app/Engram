@@ -353,6 +353,8 @@ defmodule Engram.Application do
       # so raw-SQL override writes (trigger → pg_notify) evict caches on
       # every node. Must start before OverrideCache.
       pg_notifications_child(),
+      # Central read-through cache; LISTENs on the connection above.
+      Engram.Cache.Server,
       Engram.Billing.OverrideCache,
       # Resolved-entitlement cache (tier + full LimitKeys matrix), keyed by
       # user. Also LISTENs on user_limit_overrides_changed, so it must start
