@@ -211,6 +211,7 @@ defmodule Engram.Notes.CrdtCheckpointTimerTest do
         assert :ok = CrdtCheckpointTimer.mark_checkpointed(room, ["x"], 0)
       end)
 
-    assert log == ""
+    # This module is async, so other tests' logs land here too: look for ours.
+    refute log =~ "crdt checkpoint", log
   end
 end
