@@ -149,7 +149,7 @@ pre-gate and re-uploads whatever is parked.
   Verify the finding COUNT is unchanged, then
   `rm -f .sobelow-skips && mix sobelow --mark-skip-all`. Full detail in
   `sobelow-silent-no-op-and-fingerprint-skips.md`.
-- **`EntitlementCache` is `NodeLocalEts`** with an 86,400,000ms TTL, which
+- **`EntitlementCache` is the `:billing_entitlement` `Engram.Cache` entry** with an 86,400,000ms TTL, which
   would be long enough to serve pre-rename key names. It does not survive a
   deploy (the BEAM restarts), so a key rename needs no cache migration.
 

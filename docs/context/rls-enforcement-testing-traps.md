@@ -180,8 +180,9 @@ picking the first one makes the harness **structurally unable to enforce
 anything** against code that calls `Repo.with_tenant/2`.
 
 `test/support/rls_case.ex` dropped the connection with `SET LOCAL ROLE
-engram_app` in both helpers. `Repo.with_tenant/2` exits by running
-`set_config('role', 'none', true)`, which reverts to `session_user`. Under
+engram_app` in both helpers. `Repo.with_tenant/2` drops back to `session_user` by running
+`set_config('role', 'none', true)` (its own `tenant_exit` in a nested or
+sandboxed block; COMMIT does the same reset for a top-level block). Under
 `SET ROLE` that is the suite's superuser `engram`, which bypasses RLS even under
 `FORCE ROW LEVEL SECURITY` (trap 4). So the **first** `with_tenant` call
 anywhere beneath the code under test silently handed the connection back to the

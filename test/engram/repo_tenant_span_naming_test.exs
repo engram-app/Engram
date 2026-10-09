@@ -99,7 +99,7 @@ defmodule Engram.RepoTenantSpanNamingTest do
       sources = ref |> drain() |> Enum.map(&elem(&1, 0))
 
       # Re-entrancy is what makes collapsing call sites cheap — if this ever
-      # regresses, every nested call starts paying four round trips again.
+      # regresses, every nested call starts paying its own enter / exit pair.
       assert Enum.count(sources, &(&1 == "tenant_enter")) == 1
       assert Enum.count(sources, &(&1 == "tenant_exit_sandbox")) == 1
     end

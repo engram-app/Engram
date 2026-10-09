@@ -2,7 +2,7 @@
 
 _Last verified: 2026-10-03_
 
-Discovered building `Engram.Cache.NodeLocalEts` (PR #1203), the shared `use` macro for the node-local ETS caches.
+Discovered building `Engram.Cache.NodeLocalEts` (PR #1203), the shared `use` macro for the node-local ETS caches. That macro was deleted on 2026-10-09 when the caches moved to the registry-driven `Engram.Cache` (see `request-query-budget.md`); the trap is general to any `use` macro that injects GenServer callbacks, and the snippets below name the deleted module only as the worked example.
 
 ## The trap
 

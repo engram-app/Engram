@@ -86,8 +86,10 @@ defmodule Engram.DataCase do
   # `SET LOCAL SESSION AUTHORIZATION` is the specific primitive, and both
   # obvious alternatives are wrong:
   #
-  #   * `SET ROLE` — `Repo.with_tenant/2` ends every block with
-  #     `set_config('role', 'none', true)`, which reverts to `session_user`.
+  #   * `SET ROLE` — `Repo.with_tenant/2` resets the role with
+  #     `set_config('role', 'none', true)` (its own `tenant_exit` here in the
+  #     sandbox; a top-level prod block gets it from COMMIT), which reverts to
+  #     `session_user`.
   #     Under `SET ROLE` that is the superuser, so every statement after the
   #     first scoped call runs UNENFORCED and the suite proves nothing.
   #   * session-level `SET SESSION AUTHORIZATION` — the sandbox returns

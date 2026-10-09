@@ -33,7 +33,8 @@ defmodule Engram.RlsCase do
 
   Both helpers used `SET LOCAL ROLE engram_app` and were **structurally unable
   to enforce anything** against code that calls `Engram.Repo.with_tenant/2`.
-  That function exits with `set_config('role', 'none', true)`, which reverts to
+  That function resets the role with `set_config('role', 'none', true)` (a
+  nested or sandboxed block, and COMMIT at top level), which reverts to
   `session_user` — under `SET ROLE` that is the suite's superuser. So the first
   `with_tenant` anywhere beneath the code under test handed the connection back
   to a role that bypasses RLS, and every statement after it ran unenforced.
