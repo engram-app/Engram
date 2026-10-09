@@ -45,6 +45,13 @@ defmodule Engram.CacheTest do
     assert_receive {:cache_sync, {:engram_cache_evict, :test_cache, :k}}
   end
 
+  test "evict does not echo back and drop a value re-cached after it" do
+    :ok = Cache.evict(:test_cache_forever, :k)
+    Cache.put(:test_cache_forever, :k, :fresh)
+    _ = :sys.get_state(Engram.Cache.Server)
+    assert Cache.get(:test_cache_forever, :k) == {:ok, :fresh}
+  end
+
   test "a cache_sync eviction from a peer clears the local row" do
     Cache.put(:test_cache, :k, 1)
     send(Engram.Cache.Server, {:cache_sync, {:engram_cache_evict, :test_cache, :k}})

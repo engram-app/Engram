@@ -193,6 +193,7 @@ defmodule Engram.Vaults do
         end
       end)
       |> unwrap_register_transaction()
+      |> tap(fn _ -> evict_vaults(user.id) end)
     end
   end
 
@@ -284,9 +285,18 @@ defmodule Engram.Vaults do
   @doc """
   Returns all non-deleted vaults for a user, ordered by inserted_at ascending.
   """
+  #
+  # Cached per user (`:vaults`), so `get_vault/2`, `get_default_vault/1`,
+  # `get_vault_by_ref/2` and `has_vault?/1` filter it in memory (a user has a
+  # handful of vaults). Evicted on every node by the `vaults_changed` trigger
+  # and locally after each write here. The trigger skips change_seq /
+  # updated_at-only updates, so `change_seq` on these structs is stale by
+  # design: read the seq with `current_seq/2`.
   def list_vaults(user) do
-    user = fresh_user(user)
+    Engram.Cache.fetch(:vaults, user.id, fn -> load_vaults(fresh_user(user)) end)
+  end
 
+  defp load_vaults(user) do
     {:ok, vaults} =
       Repo.with_tenant(user.id, fn ->
         Repo.all(
@@ -298,6 +308,11 @@ defmodule Engram.Vaults do
 
     Enum.map(vaults, &decrypt_vault_if_needed(&1, user))
   end
+
+  # Local + cluster broadcast, after the write's transaction: the trigger's
+  # NOTIFY covers every node on commit; this makes the writing node coherent
+  # for the rest of its own request without waiting for that round trip.
+  defp evict_vaults(user_id), do: Engram.Cache.evict(:vaults, user_id)
 
   @doc """
   Returns all soft-deleted vaults for a user, newest-deleted first.
@@ -543,72 +558,46 @@ defmodule Engram.Vaults do
   # caller can give, so it wins; two vaults sharing a name is genuinely
   # ambiguous and refuses rather than guessing. A ref that names no vault falls
   # through to the slug lookup, which is unique by construction.
+  #
+  # Both matches run over the cached `list_vaults/1` rows, comparing the same
+  # `name_hmac` / `slug_hmac` columns the SQL used to filter on.
   defp resolve_name_ref(user, ref) do
-    case vaults_named(user, ref) do
-      [vault] -> {:ok, decrypt_vault_if_needed(vault, user)}
+    vaults = list_vaults(user)
+
+    case vaults_named(user, vaults, ref) do
+      [vault] -> {:ok, vault}
       [_ | _] = many -> {:error, {:ambiguous_ref, Enum.map(many, &to_string(&1.id))}}
-      [] -> get_vault_by_slug(user, ref)
+      [] -> get_vault_by_slug(user, vaults, ref)
     end
   end
 
   # Returns [] rather than raising when the user has no usable DEK: this is a
   # read path, and a crypto failure here must degrade to the slug lookup rather
   # than take down every vault-scoped MCP call.
-  defp vaults_named(user, ref) do
+  defp vaults_named(user, vaults, ref) do
     with {:ok, filter_key} <- Engram.Crypto.dek_filter_key(user),
-         hmac when is_binary(hmac) <- Engram.Crypto.hmac_field(filter_key, ref),
-         {:ok, rows} <-
-           Repo.with_tenant(user.id, fn ->
-             Repo.all(from(v in active(scoped(user)), where: v.name_hmac == ^hmac))
-           end) do
-      rows
+         hmac when is_binary(hmac) <- Engram.Crypto.hmac_field(filter_key, ref) do
+      Enum.filter(vaults, &(&1.name_hmac == hmac))
     else
       _ -> []
     end
   end
 
-  defp get_vault_by_slug(user, ref) do
-    case slugify_ref(ref) do
-      :error -> {:error, :not_found}
-      {:ok, slug} -> fetch_vault_id_by_slug(user, slug)
-    end
-  end
-
-  defp fetch_vault_id_by_slug(user, slug) do
-    user = fresh_user(user)
-
-    result =
-      with {:ok, filter_key} <- Engram.Crypto.dek_filter_key(user) do
-        slug_hmac = Engram.Crypto.hmac_field(filter_key, slug)
-
-        Repo.with_tenant(user.id, fn ->
-          Repo.one(
-            from(v in active(scoped(user)), where: v.slug_hmac == ^slug_hmac, select: v.id)
-          )
-        end)
-      end
-
-    case result do
-      # ponytail: second query, so name resolution reuses get_vault/2's
-      # decryption and scoping rather than duplicating them. Only runs for
-      # non-UUID refs; fold it into one query if that path ever gets hot.
-      {:ok, vault_id} when is_binary(vault_id) -> get_vault(user, vault_id)
+  defp get_vault_by_slug(user, vaults, ref) do
+    with {:ok, slug} <- slugify_ref(ref),
+         {:ok, filter_key} <- Engram.Crypto.dek_filter_key(fresh_user(user)),
+         slug_hmac = Engram.Crypto.hmac_field(filter_key, slug),
+         %Vault{} = vault <- Enum.find(vaults, &(&1.slug_hmac == slug_hmac)) do
+      {:ok, vault}
+    else
       _ -> {:error, :not_found}
     end
   end
 
   defp fetch_vault(user, vault_id) do
-    user = fresh_user(user)
-
-    result =
-      Repo.with_tenant(user.id, fn ->
-        Repo.one(from(v in active(scoped(user)), where: v.id == ^vault_id))
-      end)
-
-    case result do
-      {:ok, nil} -> {:error, :not_found}
-      {:ok, vault} -> {:ok, decrypt_vault_if_needed(vault, user)}
-      _ -> {:error, :not_found}
+    case Enum.find(list_vaults(user), &(&1.id == vault_id)) do
+      nil -> {:error, :not_found}
+      vault -> {:ok, vault}
     end
   end
 
@@ -616,17 +605,9 @@ defmodule Engram.Vaults do
   Returns {:ok, vault} for the user's default vault, or {:error, :no_default_vault}.
   """
   def get_default_vault(user) do
-    user = fresh_user(user)
-
-    result =
-      Repo.with_tenant(user.id, fn ->
-        Repo.one(from(v in active(scoped(user)), where: v.is_default == true))
-      end)
-
-    case result do
-      {:ok, nil} -> {:error, :no_default_vault}
-      {:ok, vault} -> {:ok, decrypt_vault_if_needed(vault, user)}
-      _ -> {:error, :no_default_vault}
+    case Enum.find(list_vaults(user), & &1.is_default) do
+      nil -> {:error, :no_default_vault}
+      vault -> {:ok, vault}
     end
   end
 
@@ -663,6 +644,7 @@ defmodule Engram.Vaults do
         end
       end)
       |> unwrap_transaction()
+      |> tap(fn _ -> evict_vaults(user.id) end)
     end
   end
 
@@ -762,6 +744,7 @@ defmodule Engram.Vaults do
       end
     end)
     |> unwrap_transaction()
+    |> tap(fn _ -> evict_vaults(user.id) end)
     |> tap(fn
       {:ok, deleted} ->
         # Rooms must not outlive the vault (#954): orphaned rooms kept ticking
@@ -832,6 +815,7 @@ defmodule Engram.Vaults do
       end
     end)
     |> unwrap_transaction()
+    |> tap(fn _ -> evict_vaults(user.id) end)
   end
 
   @doc """
@@ -870,15 +854,19 @@ defmodule Engram.Vaults do
   """
   def accessible_vault_ids(nil), do: :all
 
+  # Cached per key id (`:api_key_scope`), evicted on every node by the
+  # `api_key_vaults_changed` trigger.
   def accessible_vault_ids(api_key) do
-    ids =
-      from(akv in "api_key_vaults",
-        where: akv.api_key_id == type(^api_key.id, Ecto.UUID),
-        select: type(akv.vault_id, Ecto.UUID)
-      )
-      |> Repo.all(skip_tenant_check: true)
+    Engram.Cache.fetch(:api_key_scope, api_key.id, fn ->
+      ids =
+        from(akv in "api_key_vaults",
+          where: akv.api_key_id == type(^api_key.id, Ecto.UUID),
+          select: type(akv.vault_id, Ecto.UUID)
+        )
+        |> Repo.all(skip_tenant_check: true)
 
-    if ids == [], do: :all, else: ids
+      if ids == [], do: :all, else: ids
+    end)
   end
 
   # ── Private helpers ─────────────────────────────────────────────────────────
@@ -919,14 +907,7 @@ defmodule Engram.Vaults do
   onboarding gate to decide whether to surface the `/onboard/vault` step.
   Tenant-scoped per the Vaults RLS policy.
   """
-  def has_vault?(user) do
-    {:ok, exists} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.exists?(active(scoped(user)))
-      end)
-
-    exists
-  end
+  def has_vault?(user), do: list_vaults(user) != []
 
   defp fetch_active(user_id, vault_id) do
     Repo.one(from(v in active(scoped(user_id)), where: v.id == ^vault_id))

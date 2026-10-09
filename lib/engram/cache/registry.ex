@@ -48,6 +48,47 @@ defmodule Engram.Cache.Registry do
     %{name: :activity, ttl: :infinity, cache_nil: false, evict_match: :key, pg_channel: nil},
     # Plan limits maps by plan id; plan rows are static at runtime.
     %{name: :plan, ttl: :infinity, cache_nil: true, evict_match: :key, pg_channel: nil},
+    # Per-request auth and tenancy lookups. Freshness comes from the
+    # AFTER-write NOTIFY triggers (migration 20261009120000), which fire for
+    # every writer including raw SQL; the TTL is only a backstop.
+    # users.id => %User{} (subscription NOT loaded). Carries deleted_at,
+    # suspended_at, dek_rotation_locked_at, so every users UPDATE evicts.
+    %{name: :user, ttl: 60_000, cache_nil: false, evict_match: :key, pg_channel: "users_changed"},
+    # api_keys.key_hash (the hex text the trigger sends) => %ApiKey{} without
+    # :user. Revocation deletes the row; the 30s TTL bounds a lost NOTIFY.
+    %{
+      name: :api_key,
+      ttl: 30_000,
+      cache_nil: false,
+      evict_match: :key,
+      pg_channel: "api_keys_changed"
+    },
+    # api_keys.id => :all | [vault_id] (the key's vault restriction).
+    %{
+      name: :api_key_scope,
+      ttl: 30_000,
+      cache_nil: false,
+      evict_match: :key,
+      pg_channel: "api_key_vaults_changed"
+    },
+    # users.id => %Subscription{} | nil (nil cached: most users have none).
+    %{
+      name: :subscription,
+      ttl: 60_000,
+      cache_nil: true,
+      evict_match: :key,
+      pg_channel: "subscriptions_changed"
+    },
+    # users.id => active vaults, decrypted. The trigger ignores change_seq /
+    # updated_at-only updates (every note write bumps them), so never read the
+    # seq off these structs: use Vaults.current_seq/2.
+    %{
+      name: :vaults,
+      ttl: 60_000,
+      cache_nil: false,
+      evict_match: :key,
+      pg_channel: "vaults_changed"
+    },
     # Legal floor / current version / hash per document; evicted on publish.
     %{
       name: :legal_version,

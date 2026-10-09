@@ -32,6 +32,18 @@ defmodule Engram.Cluster.CacheSync do
     :ok
   end
 
+  @doc """
+  `broadcast/1` that skips `from` (a local subscriber that has already
+  applied the payload synchronously). Remote subscribers still receive it.
+  """
+  @spec broadcast_from(pid() | nil, term()) :: :ok
+  def broadcast_from(nil, payload), do: broadcast(payload)
+
+  def broadcast_from(from, payload) do
+    _ = Phoenix.PubSub.broadcast_from(Engram.PubSub, from, @topic, {:cache_sync, payload})
+    :ok
+  end
+
   @spec topic() :: String.t()
   def topic, do: @topic
 end

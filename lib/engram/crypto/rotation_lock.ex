@@ -70,6 +70,12 @@ defmodule Engram.Crypto.RotationLock do
           end
       end
     end)
+    |> tap(fn
+      # Post-commit: room checkpoints on this node gate on the cached user's
+      # lock (RotationGate.check_user/1) and must not wait for the NOTIFY.
+      {:ok, _} -> Engram.Accounts.evict_user(user_id)
+      _ -> :ok
+    end)
   end
 
   @spec release(Ecto.UUID.t()) :: :ok
@@ -77,7 +83,7 @@ defmodule Engram.Crypto.RotationLock do
     case from(u in User, where: u.id == ^user_id)
          |> Repo.update_all([set: [dek_rotation_locked_at: nil]], skip_tenant_check: true) do
       {1, _} ->
-        :ok
+        Engram.Accounts.evict_user(user_id)
 
       {0, _} ->
         require Logger

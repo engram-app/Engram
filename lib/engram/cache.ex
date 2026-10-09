@@ -99,16 +99,27 @@ defmodule Engram.Cache do
     ArgumentError -> :ok
   end
 
+  # The local eviction is synchronous, so the broadcast skips this node's
+  # server: echoed back, it would land later and drop a value re-cached in
+  # between (a fresh read after the write's own eviction).
   @spec evict(atom(), term()) :: :ok
   def evict(cache, key) do
     :ok = evict_local(cache, key)
-    CacheSync.broadcast({:engram_cache_evict, cache, key})
+
+    CacheSync.broadcast_from(
+      Process.whereis(Engram.Cache.Server),
+      {:engram_cache_evict, cache, key}
+    )
   end
 
   @spec evict_all(atom()) :: :ok
   def evict_all(cache) do
     :ok = clear_local(cache)
-    CacheSync.broadcast({:engram_cache_evict_all, cache})
+
+    CacheSync.broadcast_from(
+      Process.whereis(Engram.Cache.Server),
+      {:engram_cache_evict_all, cache}
+    )
   end
 
   @spec evict_local(atom(), term()) :: :ok

@@ -12,23 +12,23 @@ defmodule Engram.QueryBudgetTest do
   # Path => max queries with a warm cache. Lowered by Tasks 5-8 toward the
   # spec §7 targets; Task 10 asserts the final numbers.
   @budgets %{
-    "mcp get_notes" => 23,
-    "mcp write_note update" => 46,
-    "mcp append_to_note" => 62,
-    "mcp edit_note" => 57,
-    "mcp delete_note" => 39,
-    "GET sync/manifest" => 28,
-    "GET notes/*path" => 28,
-    "POST notes update" => 51,
-    "POST notes create" => 56,
-    "POST notes/append" => 62,
-    "POST notes/rename" => 62,
-    "DELETE notes/*path" => 34,
-    "GET /api/bootstrap" => 44,
-    "GET folders" => 27,
-    "GET tags" => 22,
-    "CRDT crdt_msg update" => 47,
-    "CRDT crdt_doc_update idle" => 55
+    "mcp get_notes" => 6,
+    "mcp write_note update" => 29,
+    "mcp append_to_note" => 45,
+    "mcp edit_note" => 40,
+    "mcp delete_note" => 22,
+    "GET sync/manifest" => 11,
+    "GET notes/*path" => 11,
+    "POST notes update" => 34,
+    "POST notes create" => 39,
+    "POST notes/append" => 45,
+    "POST notes/rename" => 45,
+    "DELETE notes/*path" => 17,
+    "GET /api/bootstrap" => 22,
+    "GET folders" => 10,
+    "GET tags" => 5,
+    "CRDT crdt_msg update" => 40,
+    "CRDT crdt_doc_update idle" => 49
   }
 
   setup %{conn: conn} do

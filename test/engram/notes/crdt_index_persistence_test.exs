@@ -490,6 +490,9 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
           set: [dek_rotation_locked_at: DateTime.utc_now()]
         )
 
+      # Mirrors the users_changed trigger (the sandbox never commits).
+      Engram.Accounts.evict_user(ctx.user.id)
+
       respun = start_index_room(ctx)
       put_entry(respun, "during-rotation.md", "note-during")
       stop_room_and_wait(respun)
@@ -572,6 +575,9 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
           set: [encrypted_dek: <<0, 1, 2, 3>>]
         )
 
+      # Mirrors the users_changed trigger (the sandbox never commits).
+      Engram.Accounts.evict_user(ctx.user.id)
+
       Engram.Crypto.DekCache.invalidate(ctx.user.id)
 
       stop_room_and_wait(room)
@@ -624,6 +630,10 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
           from(u in Engram.Accounts.User, where: u.id == ^ctx.user.id),
           set: [dek_rotation_locked_at: DateTime.utc_now()]
         )
+
+      # Mirrors the users_changed trigger (the sandbox never commits).
+
+      Engram.Accounts.evict_user(ctx.user.id)
 
       stop_room_and_wait(room)
 

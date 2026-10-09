@@ -66,6 +66,10 @@ defmodule Engram.Billing.CapabilitiesTest do
     # A raw subscription insert does NOT route through the eviction chokepoint
     # (broadcast_subscription_activated/2), so the cached Free snapshot stands.
     insert(:subscription, user: user, tier: "pro", status: "active")
+    # The row-level :subscription cache IS evicted by the subscriptions_changed
+    # trigger on commit (the sandbox never commits, so mirror it here); the
+    # entitlement snapshot is what this test pins.
+    Engram.Cache.evict(:subscription, user.id)
     assert %{tier: "free"} = Billing.capabilities(user)
 
     # Explicit eviction (what the chokepoint and override sweep call) forces a

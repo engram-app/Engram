@@ -473,8 +473,12 @@ defmodule Engram.Onboarding do
         |> tap(fn
           # uses_obsidian flips can re-arm the vault gate for a passed
           # user — drop the cached verdict so the plug re-derives.
-          {:ok, _} -> Engram.Onboarding.GateCache.evict(user.id)
-          _ -> :ok
+          {:ok, _} ->
+            Engram.Onboarding.GateCache.evict(user.id)
+            evict_user(user.id)
+
+          _ ->
+            :ok
         end)
     end
   end
@@ -620,7 +624,17 @@ defmodule Engram.Onboarding do
     user
     |> Ecto.Changeset.change(free_tier_accepted_at: DateTime.utc_now())
     |> Repo.update()
+    |> tap(fn
+      {:ok, _} -> evict_user(user.id)
+      _ -> :ok
+    end)
   end
+
+  # The wizard's very next request (or socket rejoin) reads the cached user and
+  # must see the step it just completed. The users trigger evicts every node on
+  # commit, but its NOTIFY lands asynchronously; this makes the writing node
+  # coherent before the response goes out.
+  defp evict_user(user_id), do: Accounts.evict_user(user_id)
 
   @doc """
   Record an onboarding milestone for `user_id`. Idempotent — re-recording the

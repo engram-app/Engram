@@ -16,7 +16,14 @@ defmodule Engram.Accounts do
 
   def get_user!(id), do: Repo.get!(User, id, skip_tenant_check: true)
 
-  def get_user(id), do: Repo.get(User, id, skip_tenant_check: true)
+  @doc """
+  Cached (`:user`, evicted by the `users_changed` trigger on any UPDATE or
+  DELETE). The struct carries the enforcement fields the auth plugs read
+  (`deleted_at`, `suspended_at`, `dek_rotation_locked_at`); `subscription` is
+  never loaded on it. A missing user is not cached.
+  """
+  def get_user(id),
+    do: Engram.Cache.fetch(:user, id, fn -> Repo.get(User, id, skip_tenant_check: true) end)
 
   @doc """
   Load a user with `:subscription` already populated, in ONE query.
@@ -582,7 +589,24 @@ defmodule Engram.Accounts do
     |> Ecto.Changeset.cast(attrs, [:encrypted_dek, :dek_version, :key_provider])
     |> Ecto.Changeset.validate_required([:encrypted_dek, :dek_version, :key_provider])
     |> Repo.update(skip_tenant_check: true)
+    |> tap(&evict_user_on_ok(&1, user.id))
   end
+
+  @doc """
+  Drops the cached `get_user/1` row on this node and broadcasts to peers.
+
+  The `users_changed` trigger already evicts every node on commit, but its
+  NOTIFY lands asynchronously. Writers of the fields the request gates read
+  (`deleted_at`, `suspended_at`, `dek_rotation_locked_at`, `encrypted_dek`,
+  onboarding state) call this after commit so a read on the writing node right
+  after the write cannot see the old row. Calling it inside a transaction is
+  pointless: a concurrent read can re-cache the pre-commit row.
+  """
+  @spec evict_user(Ecto.UUID.t()) :: :ok
+  def evict_user(user_id), do: Engram.Cache.evict(:user, user_id)
+
+  defp evict_user_on_ok({:ok, _}, user_id), do: evict_user(user_id)
+  defp evict_user_on_ok(_, _), do: :ok
 
   # ── JWT ─────────────────────────────────────────────────────────
 
@@ -644,10 +668,24 @@ defmodule Engram.Accounts do
     #
     # `api_keys_discovery` (the no-tenant read policy) is scoped TO
     # `engram_key_lookup` by the #1867 contract migration, after which plain
-    # engram_app sees no keys without a tenant. The key_hash read alone runs as that role; the role is reset
-    # before the user preload so the lookup role needs SELECT on api_keys only.
-    # Cost: one transaction and two extra round trips per API-key request.
-    {:ok, lookup} =
+    # engram_app sees no keys without a tenant. The key_hash read alone runs as
+    # that role, so the lookup role needs SELECT on api_keys only.
+    # Cost: one transaction and two extra round trips per API-key MISS; the
+    # key is cached by hash (`:api_key`), evicted by the `api_keys_changed`
+    # trigger on revoke (row delete) and by `revoke_api_key/2` locally.
+    # The user is resolved separately through the cached `get_user/1`, so a
+    # user's state change never has to evict the key.
+    with %ApiKey{} = key <-
+           Engram.Cache.fetch(:api_key, key_hash, fn -> lookup_key(key_hash) end),
+         %User{} = user <- get_user(key.user_id) do
+      {:ok, user, key}
+    else
+      nil -> {:error, :invalid_key}
+    end
+  end
+
+  defp lookup_key(key_hash) do
+    {:ok, key} =
       Repo.transaction(fn ->
         _ =
           Repo.query!("SELECT set_config('role', 'engram_key_lookup', true)", [],
@@ -666,13 +704,10 @@ defmodule Engram.Accounts do
             source: "api_key_lookup_exit"
           )
 
-        key && Repo.cross_tenant(fn -> Repo.preload(key, :user) end)
+        key
       end)
 
-    case lookup do
-      nil -> {:error, :invalid_key}
-      api_key -> {:ok, api_key.user, api_key}
-    end
+    key
   end
 
   def list_api_keys(user) do
@@ -694,7 +729,10 @@ defmodule Engram.Accounts do
       end)
 
     case result do
-      {:ok, {:ok, _}} ->
+      {:ok, {:ok, key}} ->
+        # The trigger evicts every node on commit; this closes the window on
+        # the writing node without waiting for the NOTIFY round trip.
+        Engram.Cache.evict(:api_key, key.key_hash)
         SessionInvalidator.disconnect_user(user.id)
         :ok
 
@@ -780,6 +818,7 @@ defmodule Engram.Accounts do
     user
     |> Ecto.Changeset.change(suspended_at: nil)
     |> Repo.update(skip_tenant_check: true)
+    |> tap(&evict_user_on_ok(&1, user.id))
   end
 
   @doc "Soft-deletes a user. Refuses the last active admin."
@@ -806,6 +845,7 @@ defmodule Engram.Accounts do
   # Fire SessionInvalidator only after the admin-lock transaction COMMITS so
   # a rolled-back suspend/soft-delete does not spuriously kick live sockets.
   defp disconnect_on_commit({:ok, %User{id: user_id}} = ok) do
+    evict_user(user_id)
     SessionInvalidator.disconnect_user(user_id)
     ok
   end

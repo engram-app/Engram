@@ -67,6 +67,10 @@ defmodule EngramWeb.LifecycleGateChannelTest do
       |> Ecto.Changeset.change([{field, DateTime.utc_now()}])
       |> Repo.update()
 
+    # Unlike GateCache below, the users-row cache IS evicted: in prod the
+    # users_changed trigger does it on commit, and the sandbox never commits.
+    Engram.Accounts.evict_user(user.id)
+
     # Deliberately NOT evicting GateCache here. Lifecycle is never cached by
     # design, so eviction is not needed for these tests to pass — but a warm
     # PASS entry (left by an earlier successful join in the same test) is the

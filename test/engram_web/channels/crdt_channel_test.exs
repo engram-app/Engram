@@ -756,6 +756,9 @@ defmodule EngramWeb.CrdtChannelTest do
         |> Ecto.Changeset.change(dek_rotation_locked_at: DateTime.utc_now())
         |> Repo.update()
 
+      # Mirrors the users_changed trigger (the sandbox never commits).
+      Engram.Accounts.evict_user(user.id)
+
       ref =
         push(socket, "crdt_create", %{
           "doc_id" => id,
@@ -3039,6 +3042,10 @@ defmodule EngramWeb.CrdtChannelTest do
         skip_tenant_check: true
       )
 
+      # Mirrors the users_changed trigger (the sandbox never commits).
+
+      Engram.Accounts.evict_user(user.id)
+
       assert {:error, %{reason: "rotation_in_progress"}} =
                subscribe_and_join(
                  socket,
@@ -3057,6 +3064,9 @@ defmodule EngramWeb.CrdtChannelTest do
         skip_tenant_check: true
       )
 
+      # Mirrors the users_changed trigger (the sandbox never commits).
+      Engram.Accounts.evict_user(user.id)
+
       assert {:error, %{reason: "rotation_in_progress"}} =
                subscribe_and_join(
                  user_socket(user),
@@ -3070,6 +3080,10 @@ defmodule EngramWeb.CrdtChannelTest do
         [set: [dek_rotation_locked_at: nil]],
         skip_tenant_check: true
       )
+
+      # Mirrors the users_changed trigger (the sandbox never commits).
+
+      Engram.Accounts.evict_user(user.id)
 
       assert {:ok, _, joined} =
                subscribe_and_join(
