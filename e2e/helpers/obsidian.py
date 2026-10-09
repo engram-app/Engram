@@ -202,8 +202,24 @@ class ObsidianInstance:
         persisted state (e.g. waiting for syncCursor to appear) rather than
         rewrite it.
         """
+        return self._read_data_json_resilient()[0]
+
+    def _read_data_json_resilient(self) -> tuple[dict, Path]:
+        """Read data.json the way the plugin does (plugin-data-io.ts): primary,
+        then .bak, then .tmp. Its atomic write stages .tmp, demotes the live
+        file to .bak, then renames .tmp over the primary; an instance stopped
+        between the last two steps leaves NO primary, and a primary-only read
+        raised FileNotFoundError on a perfectly recoverable state.
+        """
         p = self.vault_path / ".obsidian" / "plugins" / "engram-vault-sync" / "data.json"
-        return json.loads(p.read_text(encoding="utf-8"))
+        for candidate in (p, p.with_name("data.json.bak"), p.with_name("data.json.tmp")):
+            try:
+                text = candidate.read_text(encoding="utf-8")
+                if text.strip():
+                    return json.loads(text), p
+            except (FileNotFoundError, json.JSONDecodeError):
+                continue
+        raise FileNotFoundError(f"no readable data.json, .bak or .tmp under {p.parent}")
 
     def mutate_data_json(self, mutator) -> None:
         """Stop-state helper: rewrite the plugin's persisted data.json.
@@ -212,9 +228,9 @@ class ObsidianInstance:
         dict and mutates in place (e.g. wipe noteIds, keep syncCursor) so tests
         can construct RESUMED-device states no fresh boot produces.
         """
-        p = self.vault_path / ".obsidian" / "plugins" / "engram-vault-sync" / "data.json"
-        data = json.loads(p.read_text(encoding="utf-8"))
+        data, p = self._read_data_json_resilient()
         mutator(data)
+        # Writing the primary makes it authoritative again; the plugin reads it first.
         p.write_text(json.dumps(data), encoding="utf-8")
 
     def _prepare_vault(self) -> None:
