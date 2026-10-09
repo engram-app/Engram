@@ -204,6 +204,49 @@ describe("CrdtOpQueueController — permanent join refusal (#1430)", () => {
 		expect(ctrl.size()).toBe(0);
 	});
 
+	it("refuse() surfaces every discarded op, including a reloaded one with no caller", async () => {
+		const persister = memPersister();
+		await persister.save([
+			{ id: "op-x", kind: "delete", docId: "x", payload: {}, enqueuedAt: 1000, attempts: 0 },
+		]);
+		const { ctrl, onDropSurfaced } = makeController({ persister });
+		await ctrl.start();
+		ctrl.refuse("account_suspended");
+		expect(onDropSurfaced).toHaveBeenCalledWith(expect.objectContaining({ docId: "x" }), "refused");
+		ctrl.stop();
+	});
+
+	it("ops persisted before a refusal are not restored by a start() that resolves after it", async () => {
+		const persister = memPersister();
+		await persister.save([
+			{
+				id: "op-x",
+				kind: "create",
+				docId: "x",
+				payload: { path: "x.md" },
+				enqueuedAt: 1000,
+				attempts: 0,
+			},
+		]);
+		const { ctrl, onDropSurfaced } = makeController({ persister });
+		const started = ctrl.start(); // IndexedDB load still in flight
+		ctrl.refuse("account_deleted");
+		await started;
+		expect(ctrl.size()).toBe(0);
+		expect(onDropSurfaced).toHaveBeenCalledWith(expect.objectContaining({ docId: "x" }), "refused");
+		ctrl.stop();
+	});
+
+	it("clearRefusal() accepts ops again before the handshake reaches joined()", async () => {
+		const { ctrl } = makeController();
+		ctrl.refuse("onboarding_required");
+		ctrl.clearRefusal(); // join replied ok; status still "syncing"
+		const p = ctrl.enqueueCreate("a", "a.md");
+		expect(ctrl.size()).toBe(1); // held, not rejected
+		await ctrl.joined();
+		await expect(p).resolves.toBe("a");
+	});
+
 	it("a later successful join clears the refusal", async () => {
 		const { ctrl } = makeController();
 		ctrl.refuse("onboarding_required");

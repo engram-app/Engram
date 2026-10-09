@@ -35,7 +35,7 @@ export interface CrdtOpQueueControllerDeps {
 	 *  differs from the minted localId). */
 	remapId: (localId: string, serverId: string) => void;
 	/** An op dropped without delivery — surface it (log + reconcile cache). */
-	onDropSurfaced: (op: CrdtOp, reason: DropReason | "terminal") => void;
+	onDropSurfaced: (op: CrdtOp, reason: DropReason | "terminal" | "refused") => void;
 	/** A transient plan-limit block — surface once (upgrade toast). */
 	onLimitSurfaced: (op: CrdtOp, reason: string) => void;
 	persister: Persister;
@@ -52,6 +52,7 @@ export class CrdtOpQueueController {
 	private readonly mintId: () => string;
 	private readonly now: () => number;
 	private readonly tickMs: number;
+	private readonly onDropSurfaced: CrdtOpQueueControllerDeps["onDropSurfaced"];
 	private tickTimer: ReturnType<typeof setInterval> | null = null;
 	/** Set while the topic is permanently refused (#1430); cleared on a join. */
 	private refusedReason: string | null = null;
@@ -61,6 +62,7 @@ export class CrdtOpQueueController {
 		this.mintId = deps.mintId;
 		this.now = deps.now ?? (() => Date.now());
 		this.tickMs = deps.tickMs ?? TICK_MS;
+		this.onDropSurfaced = deps.onDropSurfaced;
 
 		const hooks: CrdtSendHooks = {
 			channel: deps.channel,
@@ -93,6 +95,11 @@ export class CrdtOpQueueController {
 	async start(): Promise<void> {
 		this.queue.load(await this.persister.load());
 		this.queue.setPersist((ops) => this.persister.save(ops));
+		// A refusal that landed while the load was in flight cleared an empty
+		// queue; apply it to what the load just restored, now that persist is wired.
+		if (this.refusedReason !== null) {
+			this.refuse(this.refusedReason);
+		}
 		this.tickTimer = setInterval(() => this.kickTick(), this.tickMs);
 	}
 
@@ -105,7 +112,7 @@ export class CrdtOpQueueController {
 
 	/** CRDT topic (re)joined → flush held ops. */
 	joined(): Promise<void> {
-		this.refusedReason = null;
+		this.clearRefusal();
 		return this.queue.onJoined();
 	}
 
@@ -126,7 +133,14 @@ export class CrdtOpQueueController {
 		this.refusedReason = reason;
 		for (const op of this.queue.clear()) {
 			this.settleReject(op.docId, new CrdtOpError(reason, opEvent(op)));
+			this.onDropSurfaced(op, "refused");
 		}
+	}
+
+	/** The join was accepted: hold ops again (the handshake may still be
+	 *  running, so `joined()` can be a while off). */
+	clearRefusal(): void {
+		this.refusedReason = null;
 	}
 
 	/** Number of pending ops (for diagnostics / tests). */

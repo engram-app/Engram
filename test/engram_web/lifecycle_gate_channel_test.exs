@@ -132,10 +132,6 @@ defmodule EngramWeb.LifecycleGateChannelTest do
     end
   end
 
-  # The `user:` carve-out is SUSPENSION-specific: it mirrors AccountLifecycle
-  # allowlisting `/api/billing/*` so a suspended user can pay their way out.
-  # Deletion has no such exemption — the deleted clause runs ahead of the
-  # allowlist and HTTP is terminal, "410 on every endpoint, no exemptions".
   # #1430: a gate refusal was silent server-side, so a permanently refused
   # client (writes held, never landing) left no trace in Loki.
   describe "refusal logging (#1430)" do
@@ -168,6 +164,10 @@ defmodule EngramWeb.LifecycleGateChannelTest do
     end
   end
 
+  # The `user:` carve-out is SUSPENSION-specific: it mirrors AccountLifecycle
+  # allowlisting `/api/billing/*` so a suspended user can pay their way out.
+  # Deletion has no such exemption — the deleted clause runs ahead of the
+  # allowlist and HTTP is terminal, "410 on every endpoint, no exemptions".
   describe "user: channel vs deletion (#1435)" do
     test "a deleted account cannot join user:", %{user: user} do
       _deleted = mark!(user, :deleted_at)

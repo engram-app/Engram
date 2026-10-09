@@ -613,6 +613,7 @@ export async function connectChannel({
 		.join()
 		.receive("ok", () => {
 			refusalToasted = false;
+			queue.clearRefusal();
 			rlog().info("crdt", "crdt channel joined — live note sync active");
 			notifyCrdtChannelJoined();
 		})
