@@ -91,6 +91,27 @@ defmodule Engram.Cache.Registry do
       evict_match: :key,
       pg_channel: "vaults_changed"
     },
+    # users.id => recorded onboarding action names. Its only writers
+    # (Onboarding.record_action/2, Onboarding.Backfill) evict it.
+    %{
+      name: :onboarding_actions,
+      ttl: 60_000,
+      cache_nil: false,
+      evict_match: :key,
+      pg_channel: nil
+    },
+    # {users.id, what} => the user's live note count (IndexCap) or per-vault
+    # content counts (Vaults). Evicted per user by the note_counts_changed
+    # trigger (a notes/attachments row entering or leaving the counted set,
+    # migration 20261009130000) and, on the writing node, by UsageMeters' note
+    # counter, so a create or delete is visible to the writer's next read.
+    %{
+      name: :note_counts,
+      ttl: 60_000,
+      cache_nil: false,
+      evict_match: :first_elem,
+      pg_channel: "note_counts_changed"
+    },
     # Legal floor / current version / hash per document; evicted on publish.
     %{
       name: :legal_version,

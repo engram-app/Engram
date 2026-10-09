@@ -385,23 +385,14 @@ defmodule Engram.Vaults do
   end
 
   @doc """
-  Count of non-deleted vaults owned by `user`. Runs INSIDE `Repo.with_tenant/2`
-  (#1354): `vaults` is FORCE-RLS, so the unscoped form counted 0 for every user
-  on prod. The explicit `user_id == ^user_id` clause is a second belt and MUST
-  stay, but it is not what does the scoping.
+  Count of non-deleted vaults owned by `user`, off the cached vault list.
   """
   @spec count_for(Engram.Accounts.User.t()) :: non_neg_integer()
-  def count_for(%Engram.Accounts.User{id: user_id}) do
-    # Inside with_tenant, matching has_vault?/1 twenty lines down (#1354).
-    # `vaults` is FORCE-RLS, so the unscoped form counted 0 for every user on
-    # prod even though `scoped(user_id)` makes the app-level predicate correct
-    # — RLS filters first. "The query looks right" is not evidence here.
-    {:ok, count} =
-      Repo.with_tenant(user_id, fn ->
-        Repo.aggregate(active(scoped(user_id)), :count, :id)
-      end)
-
-    count
+  def count_for(%Engram.Accounts.User{} = user) do
+    # The cached active-vault list (list_vaults/1, loaded under the user's
+    # tenant: #1354) keeps every active vault, undecryptable ones included, so
+    # its length is the count.
+    length(list_vaults(user))
   end
 
   # ── Content counts ───────────────────────────────────────────────────────
@@ -442,7 +433,14 @@ defmodule Engram.Vaults do
 
   defp do_content_counts(_user, []), do: %{}
 
+  # Cached per owner (:note_counts, keyed {user_id, _} and evicted per user).
   defp do_content_counts(%Engram.Accounts.User{id: user_id} = user, ids) do
+    Engram.Cache.fetch(:note_counts, {user_id, {:content, ids}}, fn ->
+      load_content_counts(user, ids)
+    end)
+  end
+
+  defp load_content_counts(%Engram.Accounts.User{id: user_id} = user, ids) do
     # `populated`: a live note other than the seeded welcome note. The same
     # predicate as `Notes`' vault_populated probe, so a client can tell whether
     # that event is still to come. `note_count` keeps counting the welcome note.

@@ -7,7 +7,7 @@ defmodule Engram.CacheEvictionTriggersTest do
   alias Ecto.Adapters.SQL.Sandbox
   alias Engram.Repo
 
-  @channels ~w(users_changed subscriptions_changed api_keys_changed api_key_vaults_changed vaults_changed)
+  @channels ~w(users_changed subscriptions_changed api_keys_changed api_key_vaults_changed vaults_changed note_counts_changed)
 
   setup do
     {:ok, pid} = Postgrex.Notifications.start_link(Repo.config())
@@ -15,7 +15,7 @@ defmodule Engram.CacheEvictionTriggersTest do
     :ok
   end
 
-  defp sql(query, params \\ []), do: Repo.query!(query, params)
+  defp sql(query, params), do: Repo.query!(query, params)
 
   defp uuid(bin), do: Ecto.UUID.load!(bin)
 
@@ -87,6 +87,79 @@ defmodule Engram.CacheEvictionTriggersTest do
       flush()
       sql("DELETE FROM vaults WHERE id = $1", [Ecto.UUID.dump!(vault_id)])
       assert_receive {:notification, _, _, "vaults_changed", ^user_id}, 1_000
+    end)
+  end
+
+  defp insert_note(user_id, vault_id) do
+    %{rows: [[id]]} =
+      sql(
+        """
+        INSERT INTO notes (user_id, vault_id, path_hmac, mtime, created_at, updated_at, seq,
+                           folder_ciphertext, folder_nonce, folder_hmac, content_ciphertext,
+                           title_ciphertext, tags_ciphertext)
+        VALUES ($1, $2, $3, 1.0, now(), now(), 1, '\\x00', '\\x00', '\\x00', '\\x00', '\\x00',
+                '\\x00')
+        RETURNING id
+        """,
+        [Ecto.UUID.dump!(user_id), Ecto.UUID.dump!(vault_id), :crypto.strong_rand_bytes(32)]
+      )
+
+    id
+  end
+
+  test "notes: insert, soft delete and kind/vault/path_hmac changes notify note_counts_changed; a content write is silent" do
+    with_user(fn user_id ->
+      vault_id = insert_vault(user_id)
+      note_id = insert_note(user_id, vault_id)
+      assert_receive {:notification, _, _, "note_counts_changed", ^user_id}, 1_000
+      flush()
+
+      sql("UPDATE notes SET version = version + 1, seq = seq + 1, mtime = 2.0 WHERE id = $1", [
+        note_id
+      ])
+
+      refute_receive {:notification, _, _, "note_counts_changed", _}, 300
+
+      other_vault = Ecto.UUID.dump!(insert_vault(user_id))
+      flush()
+
+      for {set, params} <- [
+            {"path_hmac = $2", [:crypto.strong_rand_bytes(32)]},
+            {"vault_id = $2", [other_vault]},
+            {"kind = 'folder', path_hmac = NULL, content_ciphertext = NULL, " <>
+               "title_ciphertext = NULL, tags_ciphertext = NULL", []},
+            {"deleted_at = now()", []}
+          ] do
+        sql("UPDATE notes SET #{set} WHERE id = $1", [note_id | params])
+        assert_receive {:notification, _, _, "note_counts_changed", ^user_id}, 1_000
+        flush()
+      end
+
+      sql("DELETE FROM notes WHERE id = $1", [note_id])
+      assert_receive {:notification, _, _, "note_counts_changed", ^user_id}, 1_000
+    end)
+  end
+
+  test "attachments: insert and soft delete notify note_counts_changed" do
+    with_user(fn user_id ->
+      vault_id = insert_vault(user_id)
+
+      %{rows: [[id]]} =
+        sql(
+          """
+          INSERT INTO attachments (user_id, vault_id, path_hmac, mime_type, size_bytes, created_at,
+                                   updated_at, seq, path_ciphertext, path_nonce)
+          VALUES ($1, $2, $3, 'image/png', 1, now(), now(), 1, '\\x00', '\\x00') RETURNING id
+          """,
+          [Ecto.UUID.dump!(user_id), Ecto.UUID.dump!(vault_id), :crypto.strong_rand_bytes(32)]
+        )
+
+      assert_receive {:notification, _, _, "note_counts_changed", ^user_id}, 1_000
+      flush()
+      sql("UPDATE attachments SET deleted_at = now() WHERE id = $1", [id])
+      assert_receive {:notification, _, _, "note_counts_changed", ^user_id}, 1_000
+      # attachments.user_id does not cascade: with_user's cleanup needs it gone.
+      sql("DELETE FROM attachments WHERE id = $1", [id])
     end)
   end
 

@@ -177,7 +177,7 @@ defmodule Engram.UsageMeters do
         skip_tenant_check: true
       )
 
-    :ok
+    evict_note_counts(user_id)
   end
 
   @doc """
@@ -204,8 +204,13 @@ defmodule Engram.UsageMeters do
       )
       |> Repo.update_all([], skip_tenant_check: true)
 
-    :ok
+    evict_note_counts(user_id)
   end
+
+  # The cached counts (`:note_counts`) the bootstrap reads. The trigger's NOTIFY
+  # evicts every node on commit; this makes the writing node coherent without
+  # waiting for it. Engram.Cache.evict/2 itself waits for the commit.
+  defp evict_note_counts(user_id), do: Engram.Cache.evict(:note_counts, user_id)
 
   @doc """
   Recomputes the live-note count from the notes table and upserts it. Repair

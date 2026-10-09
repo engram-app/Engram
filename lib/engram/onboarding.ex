@@ -203,6 +203,9 @@ defmodule Engram.Onboarding do
         Engram.Billing.tier(user) in [:starter, :pro] or
         not is_nil(user.free_tier_accepted_at)
 
+    # The cached users row, not a fresh read: set_profile/2 evicts the :user
+    # cache after commit, so this sees the saved profile even when the caller
+    # holds a struct from before the save.
     profile = current_profile(user)
     profile_complete = profile_complete?(profile)
     has_vault = Vaults.has_vault?(user)
@@ -458,7 +461,7 @@ defmodule Engram.Onboarding do
         {:error, :invalid_uses_obsidian}
 
       true ->
-        existing = current_profile(user) || %{}
+        existing = fresh_profile(user) || %{}
 
         merged =
           existing
@@ -505,10 +508,9 @@ defmodule Engram.Onboarding do
     end
   end
 
-  # Re-read the column rather than trusting the caller's struct — callers that
-  # just ran `set_profile/2` and then `status/1` would otherwise see a stale
-  # `nil` and the gate would stick on `:vault` even after a successful save.
-  defp current_profile(user) do
+  # The read-modify-write in set_profile/2 merges into the DB's row, not a
+  # cached one another node may have outdated.
+  defp fresh_profile(user) do
     import Ecto.Query
 
     from(u in Engram.Accounts.User,
@@ -516,6 +518,16 @@ defmodule Engram.Onboarding do
       select: u.onboarding_profile
     )
     |> Repo.one(skip_tenant_check: true)
+  end
+
+  # The cached row, not the caller's struct: callers that just ran
+  # `set_profile/2` and then `status/1` would otherwise see a stale `nil` and
+  # the gate would stick on `:vault` even after a successful save.
+  defp current_profile(user) do
+    case Engram.Accounts.get_user(user.id) do
+      %{onboarding_profile: profile} -> profile
+      nil -> nil
+    end
   end
 
   defp profile_complete?(%{"completed_at" => ts}) when is_binary(ts), do: true
@@ -657,7 +669,7 @@ defmodule Engram.Onboarding do
       |> Action.changeset(%{user_id: user_id, action: action})
       |> Repo.insert(on_conflict: :nothing, conflict_target: [:user_id, :action])
       |> case do
-        {:ok, _} -> :ok
+        {:ok, _} -> evict_actions(user_id)
         {:error, %Ecto.Changeset{} = cs} -> {:error, cs}
       end
     end)
@@ -677,13 +689,17 @@ defmodule Engram.Onboarding do
     # Inside with_tenant (#1354): the unscoped form returned [] for EVERY user
     # on prod under FORCE RLS, so the onboarding wizard showed nobody's
     # completed steps. Locally it looked fine — dev/CI connect as a superuser,
-    # which bypasses RLS regardless of FORCE.
-    {:ok, actions} =
-      Repo.with_tenant(user_id, fn ->
+    # which bypasses RLS regardless of FORCE. Cached per owner (:onboarding_actions).
+    Engram.Cache.fetch(:onboarding_actions, user_id, fn ->
+      Repo.with_tenant!(user_id, fn ->
         from(a in Action, where: a.user_id == ^user_id, select: a.action)
         |> Repo.all()
       end)
-
-    actions
+    end)
   end
+
+  @doc false
+  # After commit (Engram.Cache.evict/2 waits for it), on every node.
+  @spec evict_actions(Ecto.UUID.t()) :: :ok
+  def evict_actions(user_id), do: Engram.Cache.evict(:onboarding_actions, user_id)
 end

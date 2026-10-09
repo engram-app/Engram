@@ -38,7 +38,9 @@ defmodule Engram.QueryBudgetTest do
   # EmbedNote's max-wait clamp reads the burst start off the job Oban's
   # unique check returns, not a SELECT of its own (-1 per content write).
   # A read-only MCP tool trusts the cached user's rotation lock, as a GET
-  # does (-1).
+  # does (-1). Bootstrap answers from caches: the onboarding profile off the
+  # cached user, the vault count off the cached vault list, and new caches for
+  # onboarding actions, the live note count and vault content counts (-18).
   @budgets %{
     "mcp get_notes" => 4,
     "mcp write_note update" => 14,
@@ -52,7 +54,7 @@ defmodule Engram.QueryBudgetTest do
     "POST notes/append" => 15,
     "POST notes/rename" => 40,
     "DELETE notes/*path" => 13,
-    "GET /api/bootstrap" => 18,
+    "GET /api/bootstrap" => 0,
     "GET folders" => 5,
     "GET tags" => 4,
     # Task 7b. The old "crdt_msg update" (40) was a keystroke (7) plus a

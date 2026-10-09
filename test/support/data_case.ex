@@ -112,7 +112,8 @@ defmodule Engram.DataCase do
   end
 
   @doc """
-  Empties the request-lookup caches (user, api_key, subscription, vaults).
+  Empties the request-lookup caches (user, api_key, subscription, vaults,
+  onboarding actions, note counts).
 
   They are node-global ETS tables, so this clears EVERY test's entries. A test
   that counts queries or with_tenant blocks over a request must therefore run
@@ -120,7 +121,9 @@ defmodule Engram.DataCase do
   and its measurement) and call this to put them in a stated state first.
   """
   def clear_request_caches do
-    for c <- [:user, :api_key, :subscription, :vaults], do: Engram.Cache.clear_local(c)
+    for c <- [:user, :api_key, :subscription, :vaults, :onboarding_actions, :note_counts],
+        do: Engram.Cache.clear_local(c)
+
     :ok
   end
 
