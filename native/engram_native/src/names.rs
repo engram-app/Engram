@@ -110,6 +110,18 @@ impl NameIndex {
         true
     }
 
+    /// Applies `(is_put, id, path, title)` events in order under ONE write
+    /// lock, so a burst of changes costs one lock and one NIF call.
+    pub fn patch(&self, events: &[(bool, &[u8], &str, &str)]) {
+        for (is_put, id, path, title) in events {
+            if *is_put {
+                self.put(id, path, title);
+            } else {
+                self.delete(id, path);
+            }
+        }
+    }
+
     /// Removes the entry only while it still holds `path`: a rename
     /// broadcasts an upsert of the new path, then a delete of the old path
     /// under the SAME id, and that delete must not drop the renamed entry.

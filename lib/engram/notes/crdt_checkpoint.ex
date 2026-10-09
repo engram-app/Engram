@@ -262,22 +262,18 @@ defmodule Engram.Notes.CrdtCheckpoint do
                 # #1710: the finalize decision rides out the same way. A
                 # CRDT-created row holds the hash of empty text, not nil, so its
                 # first checkpoint is the create and has no old text to finalize.
-                case result do
-                  {prev_hash, new_hash, path} ->
-                    finalize? =
-                      note.content not in [nil, ""] and
-                        Revisions.finalize?(recording, prev_hash, new_hash)
-
-                    {prev_hash, new_hash, path, EmbedNote.priority_for(note), finalize?}
-
-                  other ->
-                    other
-                end
+                carry_out(result, note, recording)
             end
           end)
 
         case outcome do
-          {prev_hash, new_hash, path, embed_priority, finalize?} ->
+          {prev_hash, new_hash, path, embed_priority, finalize?, renamed_title} ->
+            # Post-commit, like the announce below: the name index learns a
+            # title the checkpoint just re-derived.
+            _ =
+              if renamed_title,
+                do: Engram.Notes.NameIndex.announce(vault_id, note_id, path, renamed_title)
+
             _ =
               if prev_hash != new_hash do
                 :ok =
@@ -359,6 +355,25 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # content/content_hash/title/tags, bump version/seq on a real change, else
   # degrade to a snapshot-compaction write. Returns the same {prev, new, path}
   # outcome tuple the caller's `case outcome` matches on.
+  # What a written checkpoint carries out of the transaction: the hashes and
+  # path, the PRE-write embed priority, the finalize decision, and the title
+  # the checkpoint re-derived when it differs from the stored one (for the
+  # post-commit name-index announce). Anything else passes through.
+  defp carry_out({prev_hash, new_hash, path, title}, note, recording) do
+    {prev_hash, new_hash, path, EmbedNote.priority_for(note),
+     finalize?(note, recording, prev_hash, new_hash), if(title != note.title, do: title)}
+  end
+
+  defp carry_out({prev_hash, new_hash, path}, note, recording) do
+    {prev_hash, new_hash, path, EmbedNote.priority_for(note),
+     finalize?(note, recording, prev_hash, new_hash), nil}
+  end
+
+  defp carry_out(other, _note, _recording), do: other
+
+  defp finalize?(note, recording, prev_hash, new_hash),
+    do: note.content not in [nil, ""] and Revisions.finalize?(recording, prev_hash, new_hash)
+
   defp do_markdown_checkpoint(note, vault_id, note_id, live_state, prune, opts, user) do
     with {:ok, union_doc} <- union_with_row_state(note, live_state, user),
          text = CrdtBridge.text_of(union_doc),
@@ -580,14 +595,9 @@ defmodule Engram.Notes.CrdtCheckpoint do
             # reaches a checkpoint is the user's own CRDT clients: actor "sync".
             _ = Revisions.record_write(note, "sync", Keyword.fetch!(opts, :recording))
 
-            # A checkpoint re-derives the title and broadcasts nothing, so tell
-            # the name index. In-transaction: a rollback after this leaves a
-            # stale suggestion that the index's max age heals.
-            _ =
-              if title != note.title,
-                do: Engram.Notes.NameIndex.announce(vault_id, note_id, note.path, title)
-
-            {prev, content_hash, note.path}
+            # The re-derived title rides out for the post-commit name-index
+            # announce (a checkpoint broadcasts nothing else that carries it).
+            {prev, content_hash, note.path, title}
 
           {0, _} ->
             # The row advanced since our snapshot — a newer write is already

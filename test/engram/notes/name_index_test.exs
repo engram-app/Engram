@@ -24,7 +24,7 @@ defmodule Engram.Notes.NameIndexTest do
   defp tree_rows(user, vault),
     do: Repo.with_tenant!(user.id, fn -> Notes.raw_tree_note_rows(user, vault) end)
 
-  defp put_building(vault, user, builder) do
+  defp put_building(vault, user, builder, started \\ System.monotonic_time(:millisecond)) do
     ref = Process.monitor(builder)
 
     :sys.replace_state(NameIndex, fn state ->
@@ -32,7 +32,8 @@ defmodule Engram.Notes.NameIndexTest do
         builder: {builder, ref},
         user_id: user.id,
         waiters: [],
-        events: []
+        events: [],
+        started: started
       })
     end)
   end
@@ -176,10 +177,13 @@ defmodule Engram.Notes.NameIndexTest do
         spawn_monitor(fn -> :build = GenServer.call(NameIndex, {:claim, user.id, vault.id}) end)
 
       assert_receive {:DOWN, ^ref, :process, ^pid, _}
-      :sys.get_state(NameIndex)
     end
 
-    refute Enum.any?(Registry.lookup(Engram.PubSub, topic), fn {p, _} -> p == owner end)
+    # The owner's own DOWN races our messages (different senders): poll.
+    eventually(fn ->
+      not Enum.any?(Registry.lookup(Engram.PubSub, topic), fn {p, _} -> p == owner end) and
+        :sys.get_state(NameIndex).building == %{}
+    end)
   end
 
   test "latest-wins is per client: another client is never superseded", %{
@@ -213,6 +217,77 @@ defmodule Engram.Notes.NameIndexTest do
 
     assert_received {:searched, bytes}
     assert bytes <= 16, "8 one-letter words, got #{bytes} bytes"
+  end
+
+  test "a claim that timed out is withdrawn, so the vault is not wedged", %{
+    user: user,
+    vault: vault
+  } do
+    me = self()
+    :sys.suspend(NameIndex)
+
+    # A caller that stays alive (a keep-alive connection) and gives up early.
+    caller =
+      spawn(fn ->
+        try do
+          GenServer.call(NameIndex, {:claim, user.id, vault.id}, 50)
+        catch
+          :exit, {:timeout, _} -> GenServer.cast(NameIndex, {:cancel, vault.id, self()})
+        end
+
+        send(me, :gave_up)
+        Process.sleep(:infinity)
+      end)
+
+    assert_receive :gave_up, 1_000
+    :sys.resume(NameIndex)
+    :sys.get_state(NameIndex)
+
+    assert paths(user, vault, "engr") == ["Projects/Engram.md"]
+    Process.exit(caller, :kill)
+  end
+
+  test "a builder stuck past the timeout is replaced", %{user: user, vault: vault} do
+    stuck = spawn(fn -> Process.sleep(:infinity) end)
+    put_building(vault, user, stuck, System.monotonic_time(:millisecond) - 31_000)
+
+    assert paths(user, vault, "engr") == ["Projects/Engram.md"]
+    Process.exit(stuck, :kill)
+  end
+
+  test "the cached index keeps answering while a rebuild runs", %{user: user, vault: vault} do
+    assert paths(user, vault, "engr") == ["Projects/Engram.md"]
+    rebuilding = spawn(fn -> Process.sleep(:infinity) end)
+    put_building(vault, user, rebuilding)
+
+    # Would block for the 30 s build timeout if it waited on the rebuild.
+    {micros, result} = :timer.tc(fn -> NameIndex.search(user, vault, "engr", 10) end)
+    assert {:ok, ["Projects/Engram.md"], 1} = result
+    assert micros < 5_000_000
+    Process.exit(rebuilding, :kill)
+  end
+
+  test "a checkpoint that changes the title announces it after commit", %{
+    user: user,
+    vault: vault
+  } do
+    Phoenix.PubSub.subscribe(Engram.PubSub, "name_index:#{vault.id}")
+
+    # No heading: the title is the filename until the merged edit adds one.
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "Ck/Note.md", "content" => "plain body\n"},
+        actor: "api"
+      )
+
+    doc = Engram.Notes.CrdtBridge.new_doc()
+    text = Yex.Doc.get_text(doc, Engram.Notes.CrdtBridge.text_name())
+    Yex.Text.insert(text, 0, "# After Heading\nbody")
+
+    :ok = Engram.Notes.CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    note_id = note.id
+    assert_receive {:name_index_put, _, ^note_id, "Ck/Note.md", title}, 2_000
+    assert title =~ "After"
   end
 
   describe "native" do

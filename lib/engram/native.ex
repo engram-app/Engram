@@ -80,7 +80,8 @@ defmodule Engram.Native do
     name_index_search_nif: 3,
     name_index_put_nif: 4,
     name_index_delete_nif: 3,
-    name_index_bytes_nif: 1
+    name_index_bytes_nif: 1,
+    name_index_patch_nif: 2
   ]
 
   # Test hooks, built only with the crate's `test-hooks` feature, which
@@ -318,6 +319,20 @@ defmodule Engram.Native do
     |> String.split()
     |> Enum.take(@name_query_max_atoms)
     |> Enum.join(" ")
+  end
+
+  @doc """
+  Applies ordered events in one call: `{:put, raw_id, path, title}` or
+  `{:delete, raw_id, path}` (a delete only removes an entry still at `path`).
+  """
+  def name_index_patch(handle, events) when is_list(events) do
+    name_index_patch_nif(
+      handle,
+      Enum.map(events, fn
+        {:put, raw, path, title} -> {true, raw, path, title}
+        {:delete, raw, path} -> {false, raw, path, ""}
+      end)
+    )
   end
 
   @doc "Approximate native bytes an index holds now (patches grow it)."

@@ -19,9 +19,10 @@ defmodule Engram.Notes.NameIndex do
     * `announce/5` covers the writes that never reach that topic: CRDT
       genesis (every note created in Obsidian) and a checkpoint that
       changes a title;
-    * every index is rebuilt after `@max_age_ms` regardless of use, so
-      anything still missed (cross-node reordering, a rolled-back write)
-      heals within minutes.
+    * an index older than `@max_age_ms` is rebuilt on its next search,
+      regardless of use, so anything still missed (cross-node reordering, a
+      rolled-back write) heals within minutes. The old index keeps
+      answering while its replacement builds.
 
   A stale entry only means a stale suggestion: every read still resolves
   through the database and the credential's scope.
@@ -110,8 +111,11 @@ defmodule Engram.Notes.NameIndex do
       :build -> build(user, vault)
     end
   catch
-    # A build slower than the timeout: answer empty rather than crash the request.
-    :exit, {:timeout, _} -> :error
+    # The owner was too busy to answer. Withdraw the claim, so a reply it
+    # sends later cannot make this departed caller the vault's builder.
+    :exit, {:timeout, _} ->
+      GenServer.cast(__MODULE__, {:cancel, vault.id, self()})
+      :error
   end
 
   defp build(user, vault) do
@@ -169,26 +173,28 @@ defmodule Engram.Notes.NameIndex do
 
   @impl true
   def handle_call({:claim, user_id, vault_id}, {pid, _} = from, state) do
+    state = expire_stuck_build(state, vault_id)
     cached = :ets.lookup(@table, vault_id)
 
     case {cached, state.building[vault_id]} do
-      {[{_, ^user_id, handle, _, _, built}], nil} ->
-        if fresh?(built) do
-          {:reply, {:ready, handle}, state}
-        else
-          drop(vault_id, user_id)
-          start_build(state, pid, user_id, vault_id)
-        end
+      # Fresh, or stale with its rebuild already running: serve what we have.
+      {[{_, ^user_id, handle, _, _, built}], b} when b == nil or b.user_id == user_id ->
+        if fresh?(built) or b != nil,
+          do: {:reply, {:ready, handle}, state},
+          else: start_build(state, pid, user_id, vault_id, false)
 
-      {_, %{user_id: ^user_id} = b} ->
+      {[], %{user_id: ^user_id} = b} ->
         {:noreply, put_in(state.building[vault_id], %{b | waiters: [from | b.waiters]})}
 
-      # Defense in depth: never hand one user's build to another.
+      # Defense in depth: never hand one user's index or build to another.
       {_, %{}} ->
         {:reply, :error, state}
 
-      _ ->
-        start_build(state, pid, user_id, vault_id)
+      {[{_, _other_user, _, _, _, _}], nil} ->
+        {:reply, :error, state}
+
+      {[], nil} ->
+        start_build(state, pid, user_id, vault_id, true)
     end
   end
 
@@ -199,7 +205,7 @@ defmodule Engram.Notes.NameIndex do
 
       {b, state} ->
         # Changes that landed while the builder read and decrypted.
-        b.events |> Enum.reverse() |> Enum.each(&apply_event(handle, &1))
+        _ = Native.name_index_patch(handle, Enum.reverse(b.events))
         :ets.insert(@table, {vault_id, b.user_id, handle, bytes, now(), now()})
         finish(b, {:ready, handle})
         enforce_cap()
@@ -216,15 +222,39 @@ defmodule Engram.Notes.NameIndex do
     {:reply, :ok, state}
   end
 
-  defp start_build(state, pid, user_id, vault_id) do
-    # Subscribe BEFORE the builder reads rows; events until :built are buffered.
-    :ok = Phoenix.PubSub.subscribe(Engram.PubSub, topic(user_id, vault_id))
-    :ok = Phoenix.PubSub.subscribe(Engram.PubSub, announce_topic(vault_id))
+  # Subscribe BEFORE the builder reads rows; events until :built are
+  # buffered. A rebuild of a cached vault is already subscribed.
+  defp start_build(state, pid, user_id, vault_id, subscribe?) do
+    if subscribe? do
+      :ok = Phoenix.PubSub.subscribe(Engram.PubSub, topic(user_id, vault_id))
+      :ok = Phoenix.PubSub.subscribe(Engram.PubSub, announce_topic(vault_id))
+    end
+
     ref = Process.monitor(pid)
-    b = %{builder: {pid, ref}, user_id: user_id, waiters: [], events: []}
+
+    b = %{
+      builder: {pid, ref},
+      user_id: user_id,
+      waiters: [],
+      events: [],
+      started: now()
+    }
+
     {:reply, :build, put_in(state.building[vault_id], b)}
   end
 
+  # A builder alive past the build timeout is not coming back with a result
+  # anyone still waits for (its own claim may have timed out): re-elect.
+  defp expire_stuck_build(state, vault_id) do
+    deadline = now() - @build_timeout
+
+    case state.building[vault_id] do
+      %{started: started} when started < deadline -> abandon(state, vault_id)
+      _ -> state
+    end
+  end
+
+  # Keeps the subscriptions while a cached (stale) index still uses them.
   defp abandon(state, vault_id) do
     case pop_in(state.building[vault_id]) do
       {nil, state} ->
@@ -232,7 +262,7 @@ defmodule Engram.Notes.NameIndex do
 
       {b, state} ->
         finish(b, :error)
-        unsubscribe(b.user_id, vault_id)
+        if :ets.lookup(@table, vault_id) == [], do: unsubscribe(b.user_id, vault_id)
         state
     end
   end
@@ -243,6 +273,13 @@ defmodule Engram.Notes.NameIndex do
   end
 
   @impl true
+  def handle_cast({:cancel, vault_id, pid}, state) do
+    case state.building[vault_id] do
+      %{builder: {^pid, _}} -> {:noreply, abandon(state, vault_id)}
+      _ -> {:noreply, state}
+    end
+  end
+
   def handle_cast({:touch, vault_id}, state) do
     _ = :ets.update_element(@table, vault_id, {5, now()})
     {:noreply, state}
@@ -250,11 +287,11 @@ defmodule Engram.Notes.NameIndex do
 
   @impl true
   def handle_info(%Phoenix.Socket.Broadcast{event: "note_changed", payload: payload}, state) do
-    {:noreply, route(event_of(payload), state)}
+    {:noreply, route_burst([event_of(payload)], state)}
   end
 
   def handle_info({:name_index_put, vault_id, id, path, title}, state) do
-    {:noreply, route(put_event(vault_id, id, path, title), state)}
+    {:noreply, route_burst([put_event(vault_id, id, path, title)], state)}
   end
 
   def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
@@ -267,8 +304,9 @@ defmodule Engram.Notes.NameIndex do
   def handle_info(:sweep, state) do
     idle = now() - @idle_ms
 
-    for {vault_id, user_id, _, _, used, built} <- :ets.tab2list(@table),
-        used < idle or not fresh?(built),
+    # Idle only: a stale index in use is replaced by its next search.
+    for {vault_id, user_id, _, _, used, _} <- :ets.tab2list(@table),
+        used < idle and not Map.has_key?(state.building, vault_id),
         do: drop(vault_id, user_id)
 
     # Patches grow an index past its build-time size; re-measure, then cap.
@@ -303,27 +341,45 @@ defmodule Engram.Notes.NameIndex do
     end
   end
 
-  # Patch a cached index, buffer for one being built, else drop.
-  defp route(nil, state), do: state
+  # Patches are a dirty NIF call each, queued behind every other dirty NIF on
+  # prod's one dirty scheduler. Drain whatever else is already queued and
+  # apply each vault's events in ONE call, so a bulk import cannot back the
+  # owner up. ponytail: capped at 500 per drain; the rest drains next turn.
+  defp route_burst(first, state) do
+    events = Enum.reject(first ++ drain_queued(500), &is_nil/1)
 
-  defp route({vault_id, event}, state) do
-    case {:ets.lookup(@table, vault_id), state.building[vault_id]} do
-      {_, %{} = b} ->
-        put_in(state.building[vault_id], %{b | events: [event | b.events]})
+    events
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+    |> Enum.reduce(state, fn {vault_id, vault_events}, state ->
+      route(vault_id, vault_events, state)
+    end)
+  end
 
-      {[{_, _, handle, _, _, _}], nil} ->
-        apply_event(handle, event)
-        state
+  defp drain_queued(0), do: []
 
-      _ ->
-        state
+  defp drain_queued(n) do
+    receive do
+      %Phoenix.Socket.Broadcast{event: "note_changed", payload: p} ->
+        [event_of(p) | drain_queued(n - 1)]
+
+      {:name_index_put, vault_id, id, path, title} ->
+        [put_event(vault_id, id, path, title) | drain_queued(n - 1)]
+    after
+      0 -> []
     end
   end
 
-  defp apply_event(handle, {:put, raw, path, title}),
-    do: Native.name_index_put(handle, raw, path, title)
+  # Patch a cached index (still serving during a rebuild), and buffer for one
+  # being built; else drop. `events` are in arrival order.
+  defp route(vault_id, events, state) do
+    cached = :ets.lookup(@table, vault_id)
+    _ = with [{_, _, handle, _, _, _}] <- cached, do: Native.name_index_patch(handle, events)
 
-  defp apply_event(handle, {:delete, raw, path}), do: Native.name_index_delete(handle, raw, path)
+    case state.building[vault_id] do
+      %{} = b -> put_in(state.building[vault_id], %{b | events: Enum.reverse(events, b.events)})
+      nil -> state
+    end
+  end
 
   # LRU down to the cap.
   defp enforce_cap do

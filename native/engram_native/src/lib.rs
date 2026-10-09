@@ -698,6 +698,20 @@ fn name_index_delete_nif(index: ResourceArc<names::NameIndex>, id: Binary, path:
     rustler::types::atom::ok()
 }
 
+/// Ordered `{put?, raw_id, path, title}` events; one call per drained burst.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn name_index_patch_nif(
+    index: ResourceArc<names::NameIndex>,
+    events: Vec<(bool, Binary, String, String)>,
+) -> Atom {
+    let events: Vec<(bool, &[u8], &str, &str)> = events
+        .iter()
+        .map(|(p, id, path, title)| (*p, id.as_slice(), path.as_str(), title.as_str()))
+        .collect();
+    index.patch(&events);
+    rustler::types::atom::ok()
+}
+
 #[rustler::nif(schedule = "DirtyCpu")]
 fn name_index_bytes_nif(index: ResourceArc<names::NameIndex>) -> usize {
     index.bytes()
