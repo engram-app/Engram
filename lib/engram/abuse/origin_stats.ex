@@ -48,9 +48,13 @@ defmodule Engram.Abuse.OriginStats do
     class = OriginClassifier.classify(user_agent) |> Atom.to_string()
     key = {Date.utc_today(), user_id, class}
 
-    # Table absent (buffer not started yet / restarting): drop the count.
-    if :ets.whereis(@table) != :undefined, do: :ets.update_counter(@table, key, 1, {key, 0})
+    :ets.update_counter(@table, key, 1, {key, 0})
     :ok
+  rescue
+    # Table absent (buffer not started yet / restarting): drop the count rather
+    # than fail the caller's MCP request. A rescue, not a whereis check, so a
+    # buffer dying between check and update can't raise into the request.
+    ArgumentError -> :ok
   end
 
   @doc """

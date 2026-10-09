@@ -60,7 +60,7 @@ defmodule Engram.SkipTenantCheckInventoryTest do
   # an actual audit of what moved — regenerating it to make the test pass is
   # the one use that defeats the point.
   @inventory %{
-    "engram/abuse/origin_stats.ex" => 4,
+    "engram/abuse/origin_stats.ex" => 3,
     "engram/accounts.ex" => 33,
     "engram/accounts/lifecycle.ex" => 3,
     "engram/accounts/password_reset.ex" => 5,

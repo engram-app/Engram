@@ -36,6 +36,14 @@ defmodule Engram.Abuse.OriginStatsBufferTest do
       assert {2, _} = OriginStats.day_totals(user.id, Date.utc_today())
     end
 
+    test "record/2 drops the count instead of raising when the buffer is down" do
+      user = insert(:user)
+      :ok = Supervisor.terminate_child(Engram.Supervisor, OriginStats.Buffer)
+      on_exit(fn -> Supervisor.restart_child(Engram.Supervisor, OriginStats.Buffer) end)
+
+      assert :ok = OriginStats.record(user.id, "curl/7.81")
+    end
+
     test "flush with no counters issues zero queries" do
       user = insert(:user)
       {_, qs} = Engram.QueryRecorder.record(fn -> OriginStats.flush(user.id) end)
