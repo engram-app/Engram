@@ -150,12 +150,28 @@ defmodule EngramWeb.Endpoint do
   @doc "Largest request body any route will read, parsed or raw."
   def max_body_bytes, do: @max_body_bytes
 
+  # Bandit's HTTP/1 body read is a passive recv of `read_length` bytes under a
+  # single `read_timeout` (Bandit.HTTP1.Socket.read_exactly!/5, bandit 1.12.5),
+  # so the timeout bounds the time to receive a whole `read_length`, not the
+  # time between bytes. At Plug's 1 MB default with the 15 s timeout, an uplink
+  # under ~70 KB/s could never send a body over 1 MB. At 64 KB the floor is
+  # ~4 KB/s, while a client that stops sending still times out in 15 s.
+  @body_read_length 65_536
+
+  @doc "Socket read options for every request-body read."
+  def body_read_opts,
+    do: [
+      read_length: @body_read_length,
+      read_timeout: Application.get_env(:engram, :body_read_timeout, 15_000)
+    ]
+
   plug Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
     body_reader: {EngramWeb.Plugs.CacheRawBody, :read_body, []},
     json_decoder: Phoenix.json_library(),
-    length: @max_body_bytes
+    length: @max_body_bytes,
+    read_length: @body_read_length
 
   # Sentry context: attaches conn metadata (request_id, method, route,
   # status) to any exception reported by PlugCapture above. Placed after
