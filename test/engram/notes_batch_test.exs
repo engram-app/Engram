@@ -264,7 +264,9 @@ defmodule Engram.NotesBatchTest do
           handler,
           [:engram, :repo, :query],
           fn _, _, %{query: q}, _ ->
-            if q == "commit", do: send(test, {:commit, Process.alive?(room)})
+            # The handler is global: count only this test's own commits.
+            if q == "commit" and self() == test,
+              do: send(test, {:commit, Process.alive?(room)})
           end,
           nil
         )
