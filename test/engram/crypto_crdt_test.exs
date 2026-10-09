@@ -16,7 +16,8 @@ defmodule Engram.CryptoCrdtTest do
 
     {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(state, user, note_id)
     assert is_binary(ct) and is_binary(nonce)
-    assert byte_size(nonce) == 12
+    # crdt_state is in the compression policy: format 1 nonce is 13 bytes (#1872)
+    assert byte_size(nonce) == 13
     refute ct == state
 
     note = %Note{

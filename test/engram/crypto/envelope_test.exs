@@ -97,11 +97,11 @@ defmodule Engram.Crypto.EnvelopeTest do
           do: assert(Envelope.compression_policy(a) == :none)
     end
 
-    test "is off by default: every write is format 0" do
+    test "is on by default: policy columns are format 1" do
       aad = Engram.Crypto.aad_for_row(:notes, :content, Ecto.UUID.generate())
-      assert Envelope.mode_for(aad) == :none
+      assert Envelope.mode_for(aad) == :zstd
       {_ct, nonce} = Envelope.encrypt(String.duplicate("abc ", 5_000), @dek, aad)
-      assert byte_size(nonce) == 12
+      assert byte_size(nonce) == 13
     end
   end
 end

@@ -21,8 +21,9 @@ defmodule Engram.DataMigrations do
 
   @spec done?(String.t(), pos_integer()) :: boolean()
   def done?(name, version) do
-    # Only `true` is cached: a migration never goes from done back to
-    # not-done without a code change, and a code change restarts the node.
+    # Only `true` is cached: done goes back to not-done only through a code
+    # change (which restarts the node) or `reopen/2` (which drops this node's
+    # entry; other nodes keep theirs until restart).
     case :persistent_term.get({__MODULE__, name, version}, false) do
       true ->
         true
@@ -115,6 +116,47 @@ defmodule Engram.DataMigrations do
       conflict_target: :name,
       returning: true
     )
+  end
+
+  @doc """
+  True when `name` is done and its last verification (`completed_at`, set by
+  every `mark_done/2`) is older than `cutoff`.
+  """
+  @spec verified_before?(String.t(), DateTime.t()) :: boolean()
+  def verified_before?(name, cutoff) do
+    Repo.exists?(from(e in Entry, where: e.name == ^name and e.completed_at < ^cutoff))
+  end
+
+  @doc """
+  Reopens a done migration (a re-verify found work again): `note_open/2`
+  clears `completed_at` and restarts the stuck clock, and this node's cached
+  `done?` is dropped. Another node's cache lasts until it restarts; the runner
+  only runs on the Cron leader, and its next re-verify reopens again.
+  """
+  @spec reopen(String.t(), pos_integer()) :: :ok
+  def reopen(name, version) do
+    _ = note_open(name, version)
+    :persistent_term.erase({__MODULE__, name, version})
+    :ok
+  end
+
+  @doc """
+  Holds an OPEN row's stuck clock while its migration is disabled: resets
+  `opened_at` to now and clears `alerted_at`. Never creates a row and never
+  touches a done one.
+  """
+  @spec hold_clock(String.t()) :: :ok
+  def hold_clock(name) do
+    now = DateTime.utc_now()
+
+    Repo.update_all(
+      from(e in Entry,
+        where: e.name == ^name and is_nil(e.completed_at) and not is_nil(e.opened_at)
+      ),
+      set: [opened_at: now, alerted_at: nil, updated_at: now]
+    )
+
+    :ok
   end
 
   @spec mark_alerted(String.t()) :: :ok

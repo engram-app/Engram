@@ -68,15 +68,12 @@ defmodule Engram.Workers.FinalizeRevisionTest do
     {:ok, blob} = Storage.adapter().get(rev.storage_key)
     {:ok, dek} = Crypto.get_dek(user)
 
-    case Envelope.decrypt(
-           blob,
-           rev.blob_nonce,
-           dek,
-           Crypto.aad_for_row(:note_revisions, :content, aad_id)
-         ) do
-      {:ok, gz} -> {:ok, :zlib.gunzip(gz)}
-      :error -> :error
-    end
+    Envelope.decrypt(
+      blob,
+      rev.blob_nonce,
+      dek,
+      Crypto.aad_for_row(:note_revisions, :content, aad_id)
+    )
   end
 
   test "moves the copy into storage and clears it", %{user: u, note: n, baseline: b} do

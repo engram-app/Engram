@@ -46,6 +46,30 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
     end
   end
 
+  defmodule Toggled do
+    @behaviour Engram.DataMigration
+    def name, do: "test_toggled"
+    def version, do: 1
+    def enabled?, do: Process.get(:toggled_enabled, true)
+    def run_pass, do: :more
+  end
+
+  defmodule ReverifiedClean do
+    @behaviour Engram.DataMigration
+    def name, do: "test_reverified_clean"
+    def version, do: 1
+    def reverify?, do: true
+    def run_pass, do: :done
+  end
+
+  defmodule ReverifiedDirty do
+    @behaviour Engram.DataMigration
+    def name, do: "test_reverified_dirty"
+    def version, do: 1
+    def reverify?, do: true
+    def run_pass, do: {:more, users: 3}
+  end
+
   # version/0 fails on its first call in a process (a transient failure before
   # the pass, like a done?/2 DB read timing out) and works after that.
   defmodule FlakyBeforePass do
@@ -104,6 +128,39 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
     assert DataMigrations.done?("test_flaky_before_pass", 1)
   end
 
+  describe "re-verify :done" do
+    alias Engram.DataMigrations.Entry
+
+    # A node whose done? cache is stale (another node reopened the row) must
+    # close it again when its re-verify finds nothing, not leave it NULL.
+    test "marks the row done again" do
+      :ok = DataMigrations.mark_done("test_reverified_clean", 1)
+      :ok = DataMigrations.reopen("test_reverified_clean", 1)
+      :persistent_term.put({DataMigrations, "test_reverified_clean", 1}, true)
+      assert is_nil(Repo.get!(Entry, "test_reverified_clean").completed_at)
+
+      assert DataMigrationsRunner.run(ReverifiedClean, true) == :done
+      refute is_nil(Repo.get!(Entry, "test_reverified_clean").completed_at)
+    end
+
+    # The 04:00 run was deduped or failed: the next hourly run catches up.
+    test "outside the re-verify hour, a verification older than 25 h re-verifies" do
+      :ok = DataMigrations.mark_done("test_reverified_clean", 1)
+      stale = DateTime.add(DateTime.utc_now(), -26 * 3600)
+
+      Repo.update_all(from(e in Entry, where: e.name == "test_reverified_clean"),
+        set: [completed_at: stale]
+      )
+
+      assert DataMigrationsRunner.run(ReverifiedClean, false) == :done
+      fresh = Repo.get!(Entry, "test_reverified_clean").completed_at
+      assert DateTime.compare(fresh, stale) == :gt
+
+      # Just verified: the next off-hour run skips it.
+      assert DataMigrationsRunner.run(ReverifiedClean, false) == :skipped
+    end
+  end
+
   describe "stuck migrations" do
     import ExUnit.CaptureLog
 
@@ -116,6 +173,28 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
     end
 
     defp days_ago(n), do: DateTime.add(DateTime.utc_now(), -n * 86_400)
+
+    test "disabled time does not count: re-enabling after > 7 days does not page" do
+      Process.put(:toggled_enabled, true)
+      DataMigrationsRunner.run(Toggled)
+      age("test_toggled", days_ago(8))
+
+      Process.put(:toggled_enabled, false)
+      assert DataMigrationsRunner.run(Toggled) == :skipped
+      entry = Repo.get!(Entry, "test_toggled")
+      assert DateTime.diff(DateTime.utc_now(), entry.opened_at) < 60
+      assert is_nil(entry.completed_at)
+
+      Process.put(:toggled_enabled, true)
+      log = capture_log([level: :error], fn -> DataMigrationsRunner.run(Toggled) end)
+      refute log =~ "data migration stuck"
+    end
+
+    test "a disabled migration with no row gets none" do
+      Process.put(:toggled_enabled, false)
+      assert DataMigrationsRunner.run(Toggled) == :skipped
+      assert is_nil(Repo.get(Entry, "test_toggled"))
+    end
 
     test "an open migration younger than 7 days logs nothing" do
       log = capture_log([level: :error], fn -> DataMigrationsRunner.run(Unfinished) end)
@@ -216,5 +295,40 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
       assert Engram.DataMigration in (mod.module_info(:attributes)[:behaviour] || []),
              "#{inspect(mod)} lacks @behaviour Engram.DataMigration"
     end
+  end
+
+  # Rows written while the gate was blocked in a deploy reopen the migration
+  # most days; at :warning that routine line drowns a real regression.
+  test "a routine re-verify reopen logs at :info with what it found" do
+    import ExUnit.CaptureLog
+    require Logger
+    :ok = DataMigrations.mark_done("test_reverified_dirty", 1)
+
+    warn =
+      capture_log([level: :warning], fn ->
+        assert DataMigrationsRunner.run(ReverifiedDirty, true) == :more
+      end)
+
+    refute warn =~ "reopened"
+    refute DataMigrations.done?("test_reverified_dirty", 1)
+
+    :ok = DataMigrations.mark_done("test_reverified_dirty", 1)
+    DataMigrations.reset_cache()
+    previous_level = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+
+    info =
+      capture_log([level: :info], fn ->
+        assert DataMigrationsRunner.run(ReverifiedDirty, true) == :more
+      end)
+
+    assert info =~ "data migration reopened by re-verify"
+    assert info =~ "users=3"
+  end
+
+  test "a pass returning {:more, detail} keeps it open" do
+    assert DataMigrationsRunner.run(ReverifiedDirty) == :more
+    refute DataMigrations.done?("test_reverified_dirty", 1)
   end
 end

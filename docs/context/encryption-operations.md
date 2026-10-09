@@ -22,10 +22,38 @@ Every encrypted column is `ct_with_tag` plus a `nonce` field, produced by
 
 - The `"|f1"` AAD suffix binds the format: a format-1 body cannot be replayed as
   format 0 (or the reverse) because the tag will not verify.
-- Format 0 is the only format written today: `config :engram,
-  :envelope_compression` defaults to `false` in every env. Flipping it on is a
-  behaviour change that needs the follow-ups below first. Reading both formats
-  always works.
+- Policy columns are written in format 1 (R2, #1872 PR 3): `config :engram,
+  :envelope_compression` is `true` in `config/config.exs` for every env. Kill switch
+  with no release: set `ENVELOPE_COMPRESSION=false` and restart (read in
+  `config/runtime.exs`); new writes return to format 0. Reading both formats always works.
+- Cluster guard (`Engram.Crypto.CompressionGate`): a node writes format 1 only
+  while every cluster node can read it. Each node advertises
+  `Envelope.max_read_format/0` (1 from R2; a pre-R1 node lacks it and counts as
+  0). The gate allows compression only when `Cluster.Readiness.rooms_reachable?/1`
+  sees every expected member connected (every `DNS_CLUSTER_QUERY` A record but
+  its own; a single node with no role and no query is just itself) AND every
+  connected peer answers `>= 1` over `:erpc`. DNS failure, a missing member, an
+  erpc error and the boot window before the first evaluation all fail closed
+  (format 0). The verdict is cached in `:persistent_term` (one lookup per
+  encrypt), re-evaluated on `:nodeup`/`:nodedown` and every 30 s, and each
+  change logs once (`envelope compression blocked`/`allowed`, with the reason)
+  and emits `[:engram, :envelope, :compression_gate]` (the first evaluation
+  after boot logs `:info` even when blocked, since a clustered boot has no
+  peers yet; a block after the gate was once allowed is `:warning`).
+  PromEx exports the verdict as `engram_prom_ex_crypto_compression_gate_allowed`
+  (untagged gauge, 1 allowed / 0 blocked) and the reason as
+  `engram_prom_ex_crypto_compression_gate_reason{reason}` (one-hot over the five
+  reasons, so the series at 1 is current; a stale reason reads 0). Alert when
+  `max(engram_prom_ex_crypto_compression_gate_allowed) == 0` for over an hour:
+  compression is off on every node, and while it is, `EnvelopeFormat` is
+  disabled and its stuck clock held, so the stuck-migration alert never fires.
+  The alert rule lives in engram-infra (separate change).
+  Deploy blips (Cloud Map still listing a stopped task) block the gate and
+  cancel in-flight `ReencodeEnvelopes` chains as `:compression_off`; the next
+  hourly `EnvelopeFormat` pass re-enqueues them, so expect a delay of up to
+  ~1 h, no lost work. `Envelope.compression_on?/0`
+  (kill switch AND gate) is the one decision behind the write path, the
+  `EnvelopeFormat` migration's `enabled?/0` and the `ReencodeEnvelopes` cancel.
 - Empty plaintext is always format 0, so `has_content?/1` in revisions
   (`byte_size(ct) > tag_bytes()`) keeps its meaning.
 - Anything that packs the nonce at a fixed offset stays format 0 forever
@@ -37,9 +65,11 @@ Every encrypted column is `ct_with_tag` plus a `nonce` field, produced by
   ciphertext can be tens of MB of plaintext). A frame that needs zstd's own
   window buffer is refused if that window passes 8 MB (2^23; zstd's default is
   128 MB, level 3 writes at most 2^21).
-- Scheduling: seal and format-0 open run on the calling scheduler up to 16 KB
-  and dirty above it. A format-1 open always runs dirty, whatever the
-  ciphertext size, since decompression work is not bounded by it.
+- Scheduling: seal and open run on the calling scheduler up to 16 KB of
+  input and dirty above it. A zstd body inflates inline only if its frame
+  declares at most 16 KB; a bigger one is rerun dirty (decompression work is
+  not bounded by ciphertext size). Plaintexts under 64 bytes are sealed
+  format 1 raw without trying zstd (it never saved bytes there).
 - Anything that fails to authenticate, decode or parse returns `:error`; a key
   that is not 32 bytes raises `FunctionClauseError` from `Envelope`'s guard
   (unchanged).
@@ -55,20 +85,146 @@ Compression policy, keyed by the AAD prefix `table <> <<0>> <> column <> <<0>>`
 
 `crdt_update_log` rows reuse the `notes.crdt_state` AAD and so follow it.
 
-**Follow-ups before the flag is turned on.** Releases: R1 is this PR (#1872
-PR 2: the engine reads both formats, writes format 0 only); R2 is PR 3
-(compression on, plus re-encoding existing rows).
+**Releases.** R1 was #1872 PR 2 (the engine reads both formats, writes format
+0 only); R2 is PR 3 (compression on, plus re-encoding existing rows).
 
-- Before R2, check DEK rotation and rewrap: rotation decrypts and re-seals
-  through the same engine, so it carries the format along. Verify a rotation
-  on a mixed format-0/format-1 vault before enabling.
-- In R2 (PR 3): `CrdtBloatSweep` size math and the `tag_bytes/0` doc assume
-  `ct = plaintext + tag`, which is wrong for format 1 (the body is compressed and
-  carries one codec byte). Fix both before any format-1 row exists, or the sweep
-  will misreport bloat.
-- Rollback: set the flag back to `false`. Format-1 rows already written stay
-  readable; there is no downgrade path that rewrites them to format 0, and an
-  older release without the engine cannot read them.
+- DEK rotation and rewrap decrypt and re-seal through the same engine and carry
+  the format along (pinned by `EnvelopePolicyTest`).
+- Size math under compression (done in R2). Format 1 stored bytes are not text
+  size: raw costs plaintext + 1 + 16, zstd costs the compressed size + 1 + 16.
+  `Envelope.tag_bytes/0` is documented accordingly, and
+  `CrdtBloatSweep` now reports STORED bytes (`octet_length(col) - tag_bytes()`);
+  gauge names are unchanged, descriptions say "stored". The `state/content`
+  ratio is only like-for-like once both columns of a note share a format, i.e.
+  after the backfill. The ratio floor (`CrdtBloat.min_content_bytes/0`, 100) now
+  applies to stored bytes, so a highly compressible note under ~100 stored
+  bytes leaves the measured cohort.
+- `Revisions.has_content?/1` (`byte_size(ct) > tag_bytes()`) is unchanged and
+  still right: empty plaintext is always format 0 (a 16-byte ct), a 1-char note
+  is format 1 raw (18 bytes).
+- Attachment quota and `max_file_bytes` use `size_bytes = byte_size(plaintext)`,
+  never the stored size. Existing attachment blobs are not re-encoded (format 0
+  and format 1 raw cost the same bytes).
+- Revision blobs (`FinalizeRevision`) are no longer gzipped before encrypting;
+  the revision-content AAD is in the policy so the envelope zstd-compresses
+  them. No reader existed and prod recording was off, so no gzip blobs need
+  reading (#1711's reader decrypts to plain text).
+- Rolling deploy and skipped upgrades (guarded in code, see the cluster guard
+  above). An R2 node joining a fleet that still has pre-R1 nodes writes format
+  0 until the last of them is gone, then switches to format 1 on its own; the
+  `EnvelopeFormat` migration stays disabled (no paging, the stuck clock is
+  held) and starts once the cluster is uniform. A self-hoster going straight
+  from a pre-R1 release to R2 needs no step: a single node is uniform at boot,
+  and a multi-node setup waits for its last old node as above.
+- Rollback: only to R1 (#1904, the PR 2 release) or later. A release older than
+  R1 cannot read format-1 rows, so rolling back to one is UNSAFE (every
+  compressed note body, CRDT state and index state fails to decrypt). On a
+  rollback to R1, cancel the re-encode jobs it would strand (R1 has no
+  `ReencodeEnvelopes` worker, so Oban would retry them as unknown workers):
+
+  ```sql
+  UPDATE oban_jobs SET state = 'cancelled', cancelled_at = now()
+   WHERE worker = 'Engram.Workers.ReencodeEnvelopes'
+     AND state IN ('available', 'scheduled', 'retryable');
+  ```
+
+  Without a release, set `ENVELOPE_COMPRESSION=false` and restart: new writes
+  return to format 0 and the `EnvelopeFormat` data migration reports itself
+  disabled (the runner skips it, no paging, and `ReencodeEnvelopes` jobs cancel
+  themselves). Format-1 rows already written stay readable; nothing rewrites
+  them back to format 0.
+
+### Length side channel (accepted for now)
+
+Compress-then-encrypt leaks size: the stored length depends on how well the
+plaintext compresses. That matters only when an attacker can mix text they
+choose with secret text in one compressed unit AND can observe stored sizes
+(the CRIME/BREACH shape). Today it is low: vaults are single-user, no API
+returns stored sizes, and ciphertext at rest is reachable only by the operator.
+Revisit before shared or team notes, or any size-exposing surface. The format
+byte already allows a no-compress mode per data class (`:none` in the policy
+table), so closing it later is a policy change, not a format change.
+
+### Dirty scheduler pressure
+
+Seals above 16 KB, opens above 16 KB of ciphertext, and any zstd frame
+declaring more than 16 KB of plaintext run on a dirty CPU scheduler. Prod runs
+the app task at `task_cpu_units = 512` (`engram-infra/main/envs/prod/ecs.tf`,
+both roles), `beam_schedulers = max(1, ceil(512 / 1024)) = 1`, and
+`rel/env.sh.eex` turns that into `+S 1:1 +SDcpu 1:1`: ONE normal and ONE dirty
+CPU scheduler per task. Large seals, large-decode opens and the other dirty
+NIFs queue behind that one scheduler. On the worker that includes
+`md_outline_nif`, which always runs dirty (every index job parses the note), so
+the `EnvelopeFormat` re-encode window slows indexing; expect a longer embed
+backlog drain while the migration runs. Watch the PromEx
+`engram_prom_ex_nif_call_duration_milliseconds` histogram (`[:engram, :nif, :call, :stop]`),
+tagged `nif` and `dirty`, for `nif="envelope_seal"` / `"envelope_open"` with
+`dirty="true"`; a rising p99 there means dirty queueing, and the remedies are a
+bigger task (which raises `+SDcpu`) or `ENVELOPE_COMPRESSION=false`. Inline
+format-0 seals (up to 16 KB) and successful inline opens emit no per-call
+event, so the envelope series hold format-1 seals (`dirty="false"` when small)
+and every dirty call; the polled `engram_prom_ex_nif_envelope_calls` gauge counts all.
+
+### Before the R2 deploy
+
+1. The fleet need not be on R1 first (the cluster guard handles a mixed
+   fleet), but the rollback target must be R1 or later, see above.
+2. Known-undecryptable rows. One row in the work set that never decrypts keeps
+   `envelope_format` open and pages from day 7 (the stuck-migration alert).
+   Nothing in the schema marks such a row for these columns:
+   `note_revisions.finalize_failed_at` covers revisions only (not re-encoded),
+   and a failed AAD rebind (`aad rebind failed ... reason_label=note:legacy_decrypt_failed`
+   in Loki) leaves the note body at `dek_version` 1, which the work set skips
+   (its `crdt_state` is still in it, opened with the row AAD like DEK rotation
+   does; note that `Crypto.decrypt_crdt_state/2` reads a `dek_version` 1
+   note's state with the EMPTY AAD, so if the count below is non-zero, expect
+   those states to show up as undecryptable). So check the logs: search Loki for
+   `aad rebind failed` and, after the deploy, for
+   `envelope re-encode: row does not decrypt` (table and row id in the
+   metadata). Triage any hit in the first days, before the day-7 page.
+   Count of note bodies the re-encode will skip (informational, per tenant as in
+   the bytes query below): `SELECT count(*) FROM notes WHERE dek_version < 2;`
+
+### After the R2 deploy (checklist)
+
+1. Migration state: `SELECT * FROM data_migrations WHERE name = 'envelope_format';`
+   Expect it to progress to done; `ReencodeEnvelopes` chains run in
+   `crypto_backfill`. A stuck alert means a row that does not decrypt (warning
+   log with table and row id).
+2. Stored bytes before (take it BEFORE the deploy) and after the migration is
+   done. Read-only, per tenant because the audit role is RLS-bound
+   (`engram_audit_ro`, see `maintenance-db-role.md`):
+
+```sql
+BEGIN;
+CREATE TEMP TABLE envelope_bytes (col text, n bigint, bytes bigint) ON COMMIT DROP;
+DO $$
+DECLARE u record;
+BEGIN
+  FOR u IN SELECT id FROM users LOOP
+    PERFORM set_config('app.current_tenant', u.id::text, true);
+    INSERT INTO envelope_bytes
+      SELECT 'notes.content_ciphertext', count(content_ciphertext), coalesce(sum(octet_length(content_ciphertext)), 0) FROM notes
+      UNION ALL SELECT 'notes.crdt_state_ciphertext', count(crdt_state_ciphertext), coalesce(sum(octet_length(crdt_state_ciphertext)), 0) FROM notes
+      UNION ALL SELECT 'crdt_update_log.update_ciphertext', count(*), coalesce(sum(octet_length(update_ciphertext)), 0) FROM crdt_update_log
+      UNION ALL SELECT 'vault_index_states.state_ciphertext', count(*), coalesce(sum(octet_length(state_ciphertext)), 0) FROM vault_index_states
+      UNION ALL SELECT 'vault_index_update_log.update_ciphertext', count(*), coalesce(sum(octet_length(update_ciphertext)), 0) FROM vault_index_update_log;
+  END LOOP;
+END $$;
+SELECT col, sum(n) AS rows, sum(bytes) AS stored_bytes, pg_size_pretty(sum(bytes)) AS pretty
+  FROM envelope_bytes GROUP BY col ORDER BY col;
+-- Cross-check the row counts (estimates; expect the same order of magnitude)
+SELECT relname, n_live_tup FROM pg_stat_user_tables
+  WHERE relname IN ('notes', 'crdt_update_log', 'vault_index_states', 'vault_index_update_log');
+COMMIT;
+```
+
+   `engram_audit_ro` can SELECT `users` (verified in prod 2026-10-07). If the audit role
+   cannot create a temp table, run the `INSERT ... SELECT` per tenant from psql
+   and sum client-side. The before/after ratio per column is the number the
+   page-cache argument in #1872 needs. `pg_total_relation_size` of the same
+   tables also moves, but only after autovacuum/`VACUUM FULL` (TOAST rewrites
+   leave dead space), so compare `octet_length` sums, not table size.
 
 ---
 

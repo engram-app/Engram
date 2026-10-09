@@ -5,6 +5,25 @@ defmodule Engram.RuntimeConfigTest do
 
   defp getenv(map), do: fn key -> Map.get(map, key) end
 
+  describe "envelope_compression/1" do
+    test "unset leaves the config.exs default alone" do
+      assert RuntimeConfig.envelope_compression(getenv(%{})) == :unset
+    end
+
+    test "false and 0 turn it off, true and 1 on" do
+      for {v, want} <- [{"false", false}, {"0", false}, {"true", true}, {"1", true}] do
+        assert RuntimeConfig.envelope_compression(getenv(%{"ENVELOPE_COMPRESSION" => v})) ==
+                 {:ok, want}
+      end
+    end
+
+    test "anything else fails loud" do
+      assert_raise RuntimeError, ~r/ENVELOPE_COMPRESSION/, fn ->
+        RuntimeConfig.envelope_compression(getenv(%{"ENVELOPE_COMPRESSION" => "off"}))
+      end
+    end
+  end
+
   describe "rate_limit_overrides/0" do
     # Pins the exact env var names + application env keys. A typo in either half
     # is a silent regression: the CI stack stops being able to loosen a limiter,

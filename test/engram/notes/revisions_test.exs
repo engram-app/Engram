@@ -53,6 +53,29 @@ defmodule Engram.Notes.RevisionsTest do
     assert length(revs) == 2
   end
 
+  describe "has_content? under the compression policy (#1872)" do
+    test "an empty note is a bare 16-byte tag in format 0 and gets no baseline",
+         %{user: u, vault: v} do
+      existing = create(u, v, "empty-fmt.md", "")
+
+      assert byte_size(existing.content_ciphertext) == 16
+      assert byte_size(existing.content_nonce) == 12
+
+      assert :ok = record(u, existing, "sync", DateTime.utc_now())
+      refute Enum.any?(revisions(u, existing.id), &(&1.origin == "baseline"))
+    end
+
+    test "a 1-char note (format 1 raw, 18 bytes) gets a baseline", %{user: u, vault: v} do
+      existing = create(u, v, "one-char.md", "x")
+
+      assert byte_size(existing.content_nonce) == 13
+      assert byte_size(existing.content_ciphertext) > 16
+
+      assert :ok = record(u, existing, "sync", DateTime.utc_now())
+      assert Enum.any?(revisions(u, existing.id), &(&1.origin == "baseline"))
+    end
+  end
+
   test "an empty note gets no baseline", %{user: u, vault: v} do
     existing = create(u, v, "empty.md", "")
 

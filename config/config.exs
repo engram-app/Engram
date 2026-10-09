@@ -53,6 +53,12 @@ config :engram, Engram.PromEx,
   grafana: :disabled,
   metrics_server: :disabled
 
+# Compress-then-encrypt for large columns (#1872 R2): notes content/crdt_state,
+# vault index state/log, revision blobs (zstd) and attachments (:auto). Format 1
+# rows are readable with this off. Kill switch without a release: set the
+# ENVELOPE_COMPRESSION=false env var and restart (config/runtime.exs).
+config :engram, :envelope_compression, true
+
 # Embedder adapter (overridden per environment)
 config :engram, :embedder, Engram.Embedders.Voyage
 
@@ -109,7 +115,11 @@ config :engram, Oban,
     # release ahead of its workers, so a rollback strands nothing
     # (ObanQueueConfigTest @moving_to_events).
     events: 2,
-    # Key rotation only (DEK, master key, provider migration).
+    # Key rotation (DEK, master key, provider migration) plus the bounded
+    # envelope re-encode (ReencodeEnvelopes, priority 3, ~30 s per job). The
+    # limit is PER NODE (Oban OSS), so this is not mutual exclusion: the
+    # re-encode's safety against a rotation is its per-batch RotationGate
+    # check and CAS write, not this queue.
     crypto_backfill: 1,
     # Hourly CRDT representation backfills (BackfillCrdtState, BackfillCrdtHead),
     # off crypto_backfill so they never hold a rotation's slot.

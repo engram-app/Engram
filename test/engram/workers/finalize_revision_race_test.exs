@@ -65,7 +65,7 @@ defmodule Engram.Workers.FinalizeRevisionRaceTest do
     {:ok, blob} = Storage.adapter().get(rev.storage_key)
     {:ok, dek} = Crypto.get_dek(user)
 
-    assert {:ok, gz} =
+    assert {:ok, text} =
              Envelope.decrypt(
                blob,
                rev.blob_nonce,
@@ -73,6 +73,6 @@ defmodule Engram.Workers.FinalizeRevisionRaceTest do
                Crypto.aad_for_row(:note_revisions, :content, rev.id)
              )
 
-    assert :zlib.gunzip(gz) == "race me"
+    assert text == "race me"
   end
 end

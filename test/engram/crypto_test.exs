@@ -141,7 +141,8 @@ defmodule Engram.CryptoTest do
       # Phase B.3+: tags are produced by phase_b_keyword_for only.
       refute Map.has_key?(out, :tags_ciphertext)
       assert is_binary(out.content_ciphertext)
-      assert byte_size(out.content_nonce) == 12
+      # content is in the compression policy (format 1, 13-byte nonce); title is not
+      assert byte_size(out.content_nonce) == 13
       assert is_binary(out.title_ciphertext)
       assert byte_size(out.title_nonce) == 12
       # T3.6 — encrypt stamps the AAD-bound row version + propagates :id so

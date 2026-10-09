@@ -317,6 +317,10 @@ defmodule Engram.Application do
       boot_canary_guard(),
       tenancy_guard(),
       {DNSCluster, query: Application.get_env(:engram, :dns_cluster_query) || :ignore},
+      # Cluster guard for envelope compression: format 0 until every node
+      # reads format 1. Its persistent_term defaults to blocked, so writes
+      # before it starts are format 0 (safe).
+      Engram.Crypto.CompressionGate,
       {Phoenix.PubSub, name: Engram.PubSub},
       # Subscribes to CacheSync in init, so it must start after PubSub. (Local
       # eviction is synchronous in invalidate_all/0; this subscriber only

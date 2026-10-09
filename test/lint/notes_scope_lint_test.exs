@@ -28,6 +28,9 @@ defmodule Engram.NotesScopeLintTest do
     # ciphertext. Restricting to `kind == "note"` would skip markers and leave
     # them wrapped under the old DEK, breaking rotation correctness.
     "engram/crypto/user_dek_rotation.ex",
+    # The per-user id cursor DEK rotation and the envelope re-encode share
+    # (extracted from user_dek_rotation.ex): kind-agnostic for the same reason.
+    "engram/crypto/tenant_sweep.ex",
     # `stamp_embed_hash` is a point-update by primary key on a Note already
     # selected upstream by the embed pipeline (which excludes markers via
     # notes_only/0); the query itself is kind-agnostic by design.

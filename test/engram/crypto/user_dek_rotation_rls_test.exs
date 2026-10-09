@@ -6,7 +6,7 @@ defmodule Engram.Crypto.UserDekRotationRlsTest do
   ## The failure this pins
 
   `run_phases/2` is a single `with` chain: nine sweeps, then `final_flip/3`.
-  Each sweep drives `sweep_table_loop/4`, whose cursor reads
+  Each sweep drives `TenantSweep.each_batch/3`, whose cursor reads
 
       Repo.all(query, skip_tenant_check: true)
 
@@ -16,7 +16,7 @@ defmodule Engram.Crypto.UserDekRotationRlsTest do
   LEVEL SECURITY, so with no tenant the policy compares against NULL and
   filters every row.
 
-  `sweep_table_loop/4` then does:
+  `TenantSweep.each_batch/3` then does:
 
       case ids do
         [] -> :ok
@@ -72,7 +72,7 @@ defmodule Engram.Crypto.UserDekRotationRlsTest do
   #
   # KNOWN COVERAGE LIMIT, and the comment here previously asserted the
   # opposite. `user_dek_rotation.ex` contains EIGHT `with_tenant` calls, and
-  # the first one `rotate_user/1` reaches is `sweep_table_loop/4`. Its exit runs
+  # the first one `rotate_user/1` reaches is `TenantSweep.each_batch/3`. Its exit runs
   # `set_config('role', 'none', true)`, which under the sandbox leaks forward
   # into the enclosing transaction and reverts the role to the superuser. So
   # only the FIRST sweep runs enforced; `sweep_vaults`, the vault-index sweeps,

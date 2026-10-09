@@ -96,6 +96,8 @@ defmodule EngramWeb.HealthControllerTest do
         :persistent_term.erase(log_once_key)
         Application.delete_env(:engram, :dns_cluster_query)
         Application.delete_env(:engram, :cluster_readiness_opts)
+        # The gate's 30 s tick may have read the env above; re-evaluate clean.
+        Engram.Crypto.CompressionGate.refresh()
       end)
     end
 

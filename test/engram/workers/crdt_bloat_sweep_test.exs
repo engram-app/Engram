@@ -1,11 +1,12 @@
 defmodule Engram.Workers.CrdtBloatSweepTest do
   @moduledoc """
-  The sweep's whole premise is that column lengths alone recover plaintext sizes
-  (#1706): AES-GCM ciphertext is plaintext-length plus a fixed tag, so no DEK is
-  needed to size the database. If that arithmetic is wrong the gauges are wrong
-  by a constant per row and nothing else notices — the numbers stay plausible.
-  So these tests assert the byte totals EXACTLY against known inputs rather than
-  checking they are merely non-zero.
+  The sweep's whole premise is that column lengths alone recover STORED sizes
+  (#1706): a ciphertext is its payload plus a fixed tag, so no DEK is needed to
+  size the database. Since #1872 R2 the payload may be compressed (format 1), so
+  the gauges report stored bytes, not text size. If the arithmetic is wrong the
+  gauges are wrong by a constant per row and nothing else notices — the numbers
+  stay plausible. So these tests assert the byte totals EXACTLY against the
+  stored ciphertext lengths rather than checking they are merely non-zero.
   """
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
@@ -13,7 +14,7 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
   import Ecto.Query
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
-  alias Engram.Notes.{CrdtBloat, CrdtBridge, CrdtCheckpoint, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, Note}
   alias Engram.Workers.CrdtBloatSweep
 
   setup do
@@ -39,6 +40,22 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
     note
   end
 
+  # Stored payload bytes (ciphertext minus the tag) of every live note's content,
+  # read straight from the rows: what the sweep must report, in any format mix.
+  defp stored_content_bytes(user) do
+    {:ok, lens} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.all(from(n in Note, where: is_nil(n.deleted_at), select: n.content_ciphertext))
+      end)
+
+    lens |> Enum.map(&(byte_size(&1) - Engram.Crypto.Envelope.tag_bytes())) |> Enum.sum()
+  end
+
+  # Incompressible-ish text. The ratio floor (CrdtBloat.min_content_bytes/0) is
+  # applied to STORED bytes, so a repetitive body that zstd shrinks below it
+  # would silently leave the measured cohort.
+  defp noisy(bytes), do: Base.encode64(:crypto.strong_rand_bytes(bytes))
+
   defp attach do
     test_pid = self()
     id = "bloat-sweep-#{System.unique_integer([:positive])}"
@@ -56,10 +73,8 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
   test "sizes every stored note from column lengths alone", ctx do
     %{user: user, vault: vault} = ctx
 
-    a = String.duplicate("alpha content here ", 8)
-    b = String.duplicate("beta ", 40)
-    assert byte_size(a) >= CrdtBloat.min_content_bytes()
-    assert byte_size(b) >= CrdtBloat.min_content_bytes()
+    a = noisy(150)
+    b = noisy(150)
 
     seeded_note(user, vault, "a.md", a)
     seeded_note(user, vault, "b.md", b)
@@ -77,13 +92,44 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
     assert_in_delta m.measured_at_unix, System.system_time(:second), 60
 
     # The load-bearing assertion. Off-by-the-tag would still look reasonable.
-    assert m.content_bytes_total == byte_size(a) + byte_size(b)
+    # Stored bytes, not text size.
+    assert m.content_bytes_total == stored_content_bytes(user)
 
     assert m.state_bytes_total > 0
     assert m.bloat_ratio_p50 > 0
     assert m.bloat_ratio_max >= m.bloat_ratio_p99
     assert m.bloat_ratio_p99 >= m.bloat_ratio_p50
     assert is_integer(m.notes_over_threshold)
+  end
+
+  test "sizes a mix of format 0 and format 1 rows as stored ciphertext minus tag", ctx do
+    %{user: user, vault: vault} = ctx
+    body = String.duplicate("mixed format body ", 20)
+
+    prev = Application.get_env(:engram, :envelope_compression)
+    on_exit(fn -> Application.put_env(:engram, :envelope_compression, prev) end)
+
+    Application.put_env(:engram, :envelope_compression, false)
+    seeded_note(user, vault, "old.md", body)
+    Application.put_env(:engram, :envelope_compression, true)
+    seeded_note(user, vault, "new.md", body)
+
+    {:ok, rows} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.all(from(n in Note, select: {n.content_nonce, n.content_ciphertext}))
+      end)
+
+    assert [{_, _}, {_, f1_ct}] = Enum.sort_by(rows, fn {nonce, _} -> byte_size(nonce) end)
+    f1_stored = byte_size(f1_ct) - Engram.Crypto.Envelope.tag_bytes()
+    assert f1_stored < byte_size(body), "format 1 row must actually be compressed"
+
+    attach()
+    assert :ok = perform_job(CrdtBloatSweep, %{})
+    assert_receive {:sweep, m, _meta}
+
+    # Independent oracle: the format 0 row is exactly the text, the format 1 row
+    # is its own stored length (read above), neither derived by the sweep.
+    assert m.content_bytes_total == byte_size(body) + f1_stored
   end
 
   test "an empty database reports zeroes rather than raising", ctx do
@@ -106,7 +152,7 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
   test "soft-deleted notes are excluded", ctx do
     %{user: user, vault: vault} = ctx
 
-    kept = String.duplicate("kept content ", 10)
+    kept = noisy(100)
     seeded_note(user, vault, "kept.md", kept)
     gone = seeded_note(user, vault, "gone.md", "tombstoned content")
 
@@ -124,7 +170,7 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
 
     assert_receive {:sweep, m, _meta}
     assert m.notes == 1
-    assert m.content_bytes_total == byte_size(kept)
+    assert m.content_bytes_total == stored_content_bytes(user)
   end
 
   # The defect staging caught (2026-09-18): 1,932 of 5,277 notes held under 100
@@ -135,8 +181,7 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
   test "tiny notes are excluded from percentiles but counted in byte totals", ctx do
     %{user: user, vault: vault} = ctx
 
-    real = String.duplicate("a real note body ", 12)
-    assert byte_size(real) >= CrdtBloat.min_content_bytes()
+    real = noisy(150)
     seeded_note(user, vault, "real.md", real)
 
     tiny = "x"
@@ -151,8 +196,10 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
     assert m.notes_with_state == 6
     assert m.notes_measured == 1, "only the real note is eligible for a ratio"
 
-    # Every note's bytes still count toward storage.
-    assert m.content_bytes_total == byte_size(real) + 5 * byte_size(tiny)
+    # Every note's bytes still count toward storage. A 1-char note is format 1
+    # raw: its stored payload is the char plus the 1-byte format prefix.
+    assert m.content_bytes_total == stored_content_bytes(user)
+    assert m.content_bytes_total >= 5 * (byte_size(tiny) + 1)
 
     # With the tiny docs excluded the percentiles collapse onto the one real
     # note — if they leaked in, p90/p99 would be pulled far above p50.
@@ -168,11 +215,11 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
   test "notes with no CRDT state still count toward content bytes", ctx do
     %{user: user, vault: vault} = ctx
 
-    with_state = String.duplicate("has a crdt snapshot ", 8)
+    with_state = noisy(120)
     seeded_note(user, vault, "stateful.md", with_state)
 
     # upsert_note without a checkpoint leaves crdt_state unset on this row.
-    stateless = String.duplicate("never checkpointed ", 8)
+    stateless = noisy(120)
 
     {:ok, note} =
       Notes.upsert_note(user, vault, %{"path" => "bare.md", "content" => stateless}, actor: "api")
@@ -194,7 +241,7 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
     assert m.notes_with_state == 1, "only one row carries a snapshot"
 
     # The load-bearing part: the stateless note's bytes are still on disk.
-    assert m.content_bytes_total == byte_size(with_state) + byte_size(stateless)
+    assert m.content_bytes_total == stored_content_bytes(user)
   end
 
   # The guard used to live in `perform/1`, which left the hand-invocation route

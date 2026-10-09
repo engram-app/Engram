@@ -25,8 +25,12 @@ defmodule Engram.Crypto.Envelope do
   update log, and revisions get `:zstd`; attachment content `:auto`
   (sample first, skip already-compressed media); everything else, including
   wrapped DEKs and anything that packs the nonce at a fixed offset, stays
-  format 0. Off until #1872's R2: `config :engram, :envelope_compression`
-  defaults to `false`, so today every write is format 0.
+  format 0. On by default (#1872 R2, `config/config.exs`). Kill switch with no
+  release: set the `ENVELOPE_COMPRESSION=false` env var and restart
+  (`config/runtime.exs`); NEW writes return to format 0 and rows already in
+  format 1 stay readable. Also off, automatically, while any cluster node
+  cannot read format 1 (`Engram.Crypto.CompressionGate`); see
+  `compression_on?/0`.
 
   ## AAD (T3.6 / H1)
 
@@ -60,17 +64,39 @@ defmodule Engram.Crypto.Envelope do
   @doc """
   Bytes of AEAD tag suffixed to every ciphertext by `encrypt/3`.
 
-  AES-GCM ciphertext is the same length as its plaintext, so
-  `octet_length(col) - tag_bytes()` recovers the plaintext size of any encrypted
-  column WITHOUT a DEK. That is what lets `Engram.Workers.CrdtBloatSweep` size
-  every note in the database in one query while touching no key material.
-  Exposed rather than hardcoded at the call site so a cipher change has one
-  place to fail, not two.
+  `octet_length(col) - tag_bytes()` is the STORED payload size of an encrypted
+  column, recoverable WITHOUT a DEK. It is the plaintext size only for a
+  format 0 row; a format 1 row is compressed (or carries a 1-byte format
+  prefix), so it is the stored size. `Engram.Workers.CrdtBloatSweep` uses it to
+  size every note in one query while touching no key material, and reports
+  stored bytes. Exposed rather than hardcoded at the call site so a cipher
+  change has one place to fail, not two.
   """
   # No @spec: the body returns a literal, so any integer type is a dialyzer
   # `contract_supertype` of the success typing. Same reason `Engram.Repo.maintenance/0`
   # carries none.
   def tag_bytes, do: @tag_bytes
+
+  @doc """
+  The highest envelope format this node can open. Peers call it over `:erpc`
+  (`Engram.Crypto.CompressionGate`); a node without it predates format 1 and
+  counts as 0. Raise it only in the release AFTER the one that can read the
+  new format, never in the same one.
+  """
+  # No @spec: literal body, see tag_bytes/0.
+  def max_read_format, do: 1
+
+  @doc """
+  The effective compression switch: the `ENVELOPE_COMPRESSION` kill switch
+  AND the cluster guard (`CompressionGate.allowed?/0`, a persistent_term
+  read). The write path, the `EnvelopeFormat` migration and the re-encode
+  worker all read this one decision.
+  """
+  @spec compression_on?() :: boolean()
+  def compression_on?,
+    do:
+      Application.get_env(:engram, :envelope_compression, false) == true and
+        Engram.Crypto.CompressionGate.allowed?()
 
   @spec encrypt(binary(), <<_::256>>) :: {binary(), binary()}
   def encrypt(plaintext, dek), do: encrypt(plaintext, dek, <<>>)
@@ -105,9 +131,10 @@ defmodule Engram.Crypto.Envelope do
   @doc false
   # The compression mode for a ciphertext, from its AAD's table:column. One
   # place decides, so DEK rotation and AAD rebind re-encrypt with the same
-  # mode as the original write. Off until #1872's R2 (config).
+  # mode as the original write. On by default; `ENVELOPE_COMPRESSION=false`
+  # or a cluster node that cannot read format 1 turns it off.
   def mode_for(aad) do
-    if Application.get_env(:engram, :envelope_compression, false),
+    if compression_on?(),
       do: compression_policy(aad),
       else: :none
   end

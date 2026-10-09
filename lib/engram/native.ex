@@ -256,16 +256,17 @@ defmodule Engram.Native do
     ArgumentError -> {:error, :invalid_json}
   end
 
-  # Inline format-0 envelope calls (seal with mode :none, open with a 12-byte
-  # nonce, at most @inline_max bytes) skip call/4: no per-call event. They are
+  # Inline envelope calls (seal with mode :none, and every open of at most
+  # @inline_max bytes of ciphertext) skip call/4: no per-call event. They are
   # the hottest NIF calls (every title, path and tag a listing decrypts), and
   # with PromEx's three handlers attached the event made a 40-byte decrypt
   # 7x :crypto (docs/context/native-nifs.md, "Envelope telemetry"). Nothing is
   # lost: such a call takes microseconds (the duration histogram starts at
-  # 1 ms) and its peak is bounded by its input, so per call those histograms
-  # only counted it. The counting moved into the NIF: relaxed atomics
-  # (`envelope_counts/0`) that see EVERY seal and open, polled by
-  # `Engram.PromEx.Native`. Format 1 and dirty calls still emit per call.
+  # 1 ms) and its peak is bounded by its input (an inline open inflates at
+  # most 16 KB), so per call those histograms only counted it. The counting
+  # moved into the NIF: relaxed atomics (`envelope_counts/0`) that see EVERY
+  # seal and open, polled by `Engram.PromEx.Native`. Format-1 seals and
+  # dirty calls still emit per call.
 
   @doc """
   `[{nif, calls, input_bytes}]` for `:envelope_seal` and `:envelope_open`:
@@ -305,16 +306,25 @@ defmodule Engram.Native do
   format, `:error` for anything that does not authenticate (wrong key,
   AAD, nonce, tampered or truncated ciphertext).
 
-  Format 0 (12-byte nonce) runs inline up to 16 KB of ciphertext. Format 1
-  (13-byte nonce field) always runs dirty: a zstd row of a few KB can
-  inflate to tens of MB, so its ciphertext size does not bound the work.
+  Up to 16 KB of ciphertext runs inline, any format. A zstd row there
+  inflates inline only if its frame declares at most 16 KB (the NIF holds it
+  to that); otherwise the NIF answers `:reschedule` without decoding and the
+  open reruns dirty: a zstd row of a few KB can inflate to tens of MB, so
+  its ciphertext size does not bound the work. More ciphertext runs dirty.
   """
   def envelope_open(ct, nonce, key, aad)
       when is_binary(ct) and is_binary(nonce) and is_binary(key) and is_binary(aad) do
+    args = [ct, nonce, key, aad]
+
     opened =
-      if byte_size(nonce) == 12 and byte_size(ct) <= @inline_max,
-        do: elem(envelope_open_nif(ct, nonce, key, aad), 0),
-        else: sized(:envelope_open, ct, [ct, nonce, key, aad], byte_size(nonce) == 13)
+      if byte_size(ct) <= @inline_max do
+        case envelope_open_nif(ct, nonce, key, aad) do
+          {:reschedule, _peak} -> sized(:envelope_open, ct, args, true)
+          {opened, _peak} -> opened
+        end
+      else
+        sized(:envelope_open, ct, args)
+      end
 
     case opened do
       :error -> :error

@@ -229,6 +229,14 @@ auth_provider =
 
 config :engram, :auth_provider, auth_provider
 
+# Compress-then-encrypt kill switch (#1872). Default (config.exs) is on; set
+# ENVELOPE_COMPRESSION=false and restart to return new writes to format 0.
+# Existing format-1 rows stay readable.
+case Engram.RuntimeConfig.envelope_compression(&System.get_env/1) do
+  {:ok, flag} -> config :engram, :envelope_compression, flag
+  :unset -> :ok
+end
+
 # Self-host registration mode default (Engram.Instance.registration_mode/0).
 # Production default is "invite_only" — the spec's safety posture. CI/dev can
 # pin "open" so fixtures that register many users don't need to seed the gate.

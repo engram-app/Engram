@@ -657,8 +657,8 @@ defmodule Engram.AttachmentsTest do
 
       assert_receive {:put_bytes, stored}, 500
       refute stored == plaintext
-      # AES-GCM ciphertext: plaintext bytes + 16-byte authentication tag
-      assert byte_size(stored) == byte_size(plaintext) + 16
+      # Format 1 (policy on): plaintext + 1-byte format prefix + 16-byte tag
+      assert byte_size(stored) == byte_size(plaintext) + 1 + 16
     end
 
     test "get_attachment locates row via path_hmac" do

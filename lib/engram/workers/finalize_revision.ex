@@ -4,8 +4,18 @@ defmodule Engram.Workers.FinalizeRevision do
 
   `Engram.Notes.Revisions.record_write/4` closes a version by copying the
   note's old content ciphertext into the row (`pending_*`). This decrypts that
-  copy with the notes AAD, gzips it, re-encrypts it bound to the revision id,
-  stores it through `Engram.Storage`, and clears the copy.
+  copy with the notes AAD, re-encrypts it bound to the revision id, stores it
+  through `Engram.Storage`, and clears the copy.
+
+  ## Compression
+
+  The blob is encrypted as plain text: the revision-content AAD is in the
+  `Engram.Crypto.Envelope` compression policy, so `Envelope.encrypt/3`
+  zstd-compresses it (format 1) when `:envelope_compression` is on. Blobs
+  written before #1872 R2 were gzipped inside the envelope. No reader of
+  revision blobs exists yet (#1711 builds one) and prod recording is off, so no
+  gzip blobs are in the wild and none needs reading; the #1711 reader decrypts
+  and uses the plaintext as is.
 
   One job per note, not per revision: it finalizes every pending copy the note
   holds. That keeps enqueueing free of return-value plumbing out of the write
@@ -111,7 +121,7 @@ defmodule Engram.Workers.FinalizeRevision do
     with {:ok, text} <- Revisions.decrypt_pending(rev, user),
          {:ok, dek} <- Crypto.get_dek(user) do
       aad = Crypto.aad_for_row(:note_revisions, :content, rev.id)
-      {ct, nonce} = Envelope.encrypt(:zlib.gzip(text), dek, aad)
+      {ct, nonce} = Envelope.encrypt(text, dek, aad)
       key = Storage.revision_key(rev.user_id, rev.vault_id, rev.note_id, rev.id)
 
       with :ok <- Storage.adapter().put(key, ct, content_type: "application/octet-stream") do

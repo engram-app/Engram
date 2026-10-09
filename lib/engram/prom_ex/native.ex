@@ -4,8 +4,12 @@ defmodule Engram.PromEx.Native do
   memory standard (see `Engram.Native`):
 
     * `[:engram, :nif, :call, :stop]`, per call: duration and NATIVE peak
-      bytes, tagged by `:nif`. The peak is the NIF's analogue of a process's
-      heap high-water mark, which no BEAM metric can see.
+      bytes, tagged by `:nif` and `:dirty` (which scheduler ran it). The peak
+      is the NIF's analogue of a process's heap high-water mark, which no
+      BEAM metric can see. Envelope calls that stay inline and write or read
+      format 0 (seal `:none` up to 16 KB, a successful inline open) emit no
+      event, so the envelope series cover format-1 seals (`dirty="false"`
+      for small inline ones) and every dirty seal or open.
     * `[:engram, :nif, :envelope]`, polled: envelope seal/open calls and
       input bytes since the NIF loaded (`Engram.Native.envelope_counts/0`),
       every call. Inline format-0 calls emit no per-call event, so this is
@@ -20,7 +24,7 @@ defmodule Engram.PromEx.Native do
       because the BEAM counts allocated memory the OS has not made resident.
 
   Cardinality contract: `:nif` is a closed set of atoms named in
-  `Engram.Native`. Never tag with user, vault or note ids.
+  `Engram.Native`, `:dirty` a boolean. Never tag with user, vault or note ids.
   """
   use PromEx.Plugin
 
@@ -37,7 +41,7 @@ defmodule Engram.PromEx.Native do
         event_name: @call_event,
         measurement: :duration,
         description: "NIF call wall time.",
-        tags: [:nif],
+        tags: [:nif, :dirty],
         unit: {:native, :millisecond},
         reporter_options: [buckets: [1, 5, 25, 100, 250, 1_000, 5_000]]
       ),
@@ -45,7 +49,7 @@ defmodule Engram.PromEx.Native do
         event_name: @call_event,
         measurement: :native_peak_bytes,
         description: "Peak Rust heap bytes allocated during one NIF call.",
-        tags: [:nif],
+        tags: [:nif, :dirty],
         reporter_options: [
           buckets: [65_536, 1_048_576, 8_388_608, 33_554_432, 134_217_728, 536_870_912]
         ]
@@ -54,7 +58,7 @@ defmodule Engram.PromEx.Native do
         event_name: @call_event,
         measurement: :input_bytes,
         description: "Bytes handed to NIFs.",
-        tags: [:nif]
+        tags: [:nif, :dirty]
       )
     ])
   end

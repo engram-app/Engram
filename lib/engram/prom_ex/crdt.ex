@@ -338,25 +338,29 @@ defmodule Engram.PromEx.Crdt do
               "keeps out of the percentiles. It is NOT purely empty notes: structural " <>
               "(.canvas) rows keep their data in Y.Maps and leave `content` untouched, so a " <>
               "fully populated board also lands in that gap. The sweep reads column lengths " <>
-              "and cannot tell the two apart."
+              "and cannot tell the two apart. The content floor is applied to STORED bytes " <>
+              "(after compression), so a highly compressible note can fall under it."
         ),
         last_value(
           metric_prefix ++ [:state_sweep, :bloat_ratio_p50],
           event_name: @sweep_event,
           measurement: :bloat_ratio_p50,
-          description: "Median state/content ratio across every stored note."
+          description:
+            "Median state/content ratio across every stored note. Ratio and floor are on STORED bytes (after compression), not the projected plaintext the checkpoint-stream bloat_ratio uses, so the two differ."
         ),
         last_value(
           metric_prefix ++ [:state_sweep, :bloat_ratio_p90],
           event_name: @sweep_event,
           measurement: :bloat_ratio_p90,
-          description: "p90 state/content ratio across every stored note."
+          description:
+            "p90 state/content ratio across every stored note. Ratio and floor are on STORED bytes (after compression), not the projected plaintext the checkpoint-stream bloat_ratio uses, so the two differ."
         ),
         last_value(
           metric_prefix ++ [:state_sweep, :bloat_ratio_p99],
           event_name: @sweep_event,
           measurement: :bloat_ratio_p99,
-          description: "p99 state/content ratio across every stored note."
+          description:
+            "p99 state/content ratio across every stored note. Ratio and floor are on STORED bytes (after compression), not the projected plaintext the checkpoint-stream bloat_ratio uses, so the two differ."
         ),
         last_value(
           metric_prefix ++ [:state_sweep, :bloat_ratio_max],
@@ -366,7 +370,9 @@ defmodule Engram.PromEx.Crdt do
             "Worst state/content ratio among notes above the 100-byte content floor. NOT " <>
               "the worst ratio in the database — a fully emptied note scores higher and is " <>
               "excluded by that floor, deliberately, because its ratio is Yjs framing over " <>
-              "nothing rather than tombstone accumulation."
+              "nothing rather than tombstone accumulation. Ratio and floor are on STORED bytes " <>
+              "(after compression), unlike the checkpoint-stream bloat_ratio, which is " <>
+              "projected plaintext."
         ),
         last_value(
           metric_prefix ++ [:state_sweep, :notes_over_threshold],
@@ -376,14 +382,15 @@ defmodule Engram.PromEx.Crdt do
             "Notes whose state exceeds 5x their content — the #1707 tuning target. Counted " <>
               "over `notes_measured`, so notes under the 100-byte content floor are NOT " <>
               "included: a note written then fully emptied has tiny content and large " <>
-              "tombstone state, and lands in the excluded cohort rather than here."
+              "tombstone state, and lands in the excluded cohort rather than here. Sizes are " <>
+              "STORED bytes (after compression), unlike the checkpoint-stream ratio."
         ),
         last_value(
           metric_prefix ++ [:state_sweep, :state_bytes_total],
           event_name: @sweep_event,
           measurement: :state_bytes_total,
           description:
-            "Total decrypted-equivalent bytes of crdt_state across every live note. Paired " <>
+            "Total STORED bytes (after compression, minus the AEAD tag) of crdt_state across every live note. Paired " <>
               "with content_bytes_total this is the reclaimable-storage estimate the history " <>
               "epic (#609) needs before sizing anything. Aggregate with max, never sum."
         ),
@@ -392,7 +399,7 @@ defmodule Engram.PromEx.Crdt do
           event_name: @sweep_event,
           measurement: :content_bytes_total,
           description:
-            "Total decrypted-equivalent bytes of note content across every live note, " <>
+            "Total STORED bytes (after compression, minus the AEAD tag) of note content across every live note, " <>
               "including those carrying no CRDT state. Aggregate with max, never sum."
         ),
         # The WRITE side of the authority the projection metrics below read from.

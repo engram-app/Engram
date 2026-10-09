@@ -613,9 +613,9 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     # The raw ciphertext must not equal the plaintext update binary
     refute row.update_ciphertext == upd
 
-    # A nonce must be present (12 bytes for AES-GCM)
+    # A nonce must be present (13 bytes: format-1 prefix + 12-byte AES-GCM nonce)
     assert is_binary(row.update_nonce)
-    assert byte_size(row.update_nonce) == 12
+    assert byte_size(row.update_nonce) == 13
   end
 
   # ── unbind/3 writes snapshot ───────────────────────────────────────────────
