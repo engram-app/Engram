@@ -15,7 +15,7 @@ defmodule Engram.Abuse.OriginStats.Buffer do
   @impl true
   def init(_opts) do
     Process.flag(:trap_exit, true)
-    :ets.new(OriginStats.table(), [:named_table, :public, write_concurrency: true])
+    _ = :ets.new(OriginStats.table(), [:named_table, :public, write_concurrency: true])
     schedule()
     {:ok, %{}}
   end
@@ -39,8 +39,11 @@ defmodule Engram.Abuse.OriginStats.Buffer do
   end
 
   defp schedule do
-    if ms = Application.get_env(:engram, :origin_stats_flush_ms, 30_000) do
-      Process.send_after(self(), :flush, ms)
-    end
+    _ =
+      if ms = Application.get_env(:engram, :origin_stats_flush_ms, 30_000) do
+        Process.send_after(self(), :flush, ms)
+      end
+
+    :ok
   end
 end

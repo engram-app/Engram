@@ -307,15 +307,15 @@ defmodule Engram.Repo do
           # a future DEFERRABLE constraint or deferred (constraint) trigger
           # would run as the tenant in prod but as the session role in tests,
           # and the suite would not see the difference. There are none today.
-          if exit_source do
-            _ =
+          _ =
+            if exit_source do
               query!(
                 "SELECT set_config('role', 'none', true), " <>
                   "set_config('app.current_tenant', '', true)",
                 [],
                 source: exit_source
               )
-          end
+            end
 
           result
         end,

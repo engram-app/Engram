@@ -2854,7 +2854,7 @@ defmodule Engram.Notes do
         with {:ok, note} <- classify_worker_note(note_id, note), do: {:ok, note, tail}
 
       nil ->
-        classify_worker_note(note_id, nil)
+        {:discard, "note #{note_id} not found"}
     end
   end
 
@@ -3512,7 +3512,7 @@ defmodule Engram.Notes do
       X-Device-Id header), stamped into the `note_changed` broadcast so the
       originating device can drop its own echo (#970).
   """
-  @spec delete_note(map(), map(), String.t(), keyword()) :: :ok
+  @spec delete_note(Engram.Accounts.User.t(), map(), String.t(), keyword()) :: :ok
   def delete_note(user, vault, path, opts \\ []) do
     _ = delete_note_reporting(user, vault, path, opts)
     :ok

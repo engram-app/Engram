@@ -15,13 +15,14 @@ defmodule Engram.Cache.Server do
     _ = Process.flag(:sensitive, true)
 
     for %{name: name} <- Registry.caches() do
-      :ets.new(Registry.table(name), [
-        :named_table,
-        :public,
-        :set,
-        read_concurrency: true,
-        write_concurrency: true
-      ])
+      _ =
+        :ets.new(Registry.table(name), [
+          :named_table,
+          :public,
+          :set,
+          read_concurrency: true,
+          write_concurrency: true
+        ])
     end
 
     :ok = Engram.Cluster.CacheSync.subscribe()

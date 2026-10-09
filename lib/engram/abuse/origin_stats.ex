@@ -48,7 +48,7 @@ defmodule Engram.Abuse.OriginStats do
     class = OriginClassifier.classify(user_agent) |> Atom.to_string()
     key = {Date.utc_today(), user_id, class}
 
-    :ets.update_counter(@table, key, 1, {key, 0})
+    _ = :ets.update_counter(@table, key, 1, {key, 0})
     :ok
   rescue
     # Table absent (buffer not started yet / restarting): drop the count rather
@@ -107,7 +107,7 @@ defmodule Engram.Abuse.OriginStats do
     classes = Enum.map(rows, &elem(&1, 2))
     ns = Enum.map(rows, &elem(&1, 3))
     now = NaiveDateTime.utc_now()
-    Repo.query!(@upsert, [uids, days, classes, ns, now])
+    _ = Repo.query!(@upsert, [uids, days, classes, ns, now])
     :ok
   rescue
     e ->

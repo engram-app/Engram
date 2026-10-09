@@ -153,7 +153,8 @@ defmodule Engram.Cache.Registry do
 
   @tables Map.new(@base ++ @test_caches, &{&1.name, :"engram_cache_#{&1.name}"})
 
-  @spec caches() :: [map()]
+  # No @spec: the precise map type is inferred, and `[map()]` is a supertype
+  # that fails dialyzer's :underspecs.
   def caches, do: @base ++ @test_caches
 
   @doc "Every NOTIFY channel any cache listens on."
