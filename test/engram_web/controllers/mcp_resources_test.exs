@@ -44,6 +44,17 @@ defmodule EngramWeb.McpResourcesTest do
     |> json_response(200)
   end
 
+  defp page_all(conn, cursor \\ nil, acc \\ []) do
+    params = if cursor, do: %{"cursor" => cursor}, else: %{}
+    result = rpc(conn, "resources/list", params)["result"]
+    acc = acc ++ result["resources"]
+
+    case result["nextCursor"] do
+      nil -> acc
+      next -> page_all(conn, next, acc)
+    end
+  end
+
   defp read(conn, uri), do: rpc(conn, "resources/read", %{"uri" => uri})
 
   defp complete(conn, name, value, context \\ nil) do
@@ -83,9 +94,39 @@ defmodule EngramWeb.McpResourcesTest do
       {:ok, other, _} = Engram.Vaults.register_vault(user, "Work", Ecto.UUID.generate())
       insert_note!(user, other, path: "Plan.md", content: "plan")
 
-      names = rpc(conn, "resources/list")["result"]["resources"] |> Enum.map(& &1["name"])
+      names = conn |> page_all() |> Enum.map(& &1["name"])
       assert "Work › Plan.md" in names
       assert "Test Vault › Projects/Engram.md" in names
+    end
+
+    test "pages through every note with nextCursor", %{conn: conn, user: user, vault: vault} do
+      for i <- 1..60, do: insert_note!(user, vault, path: "Bulk/n#{i}.md", content: "x")
+
+      uris = conn |> page_all() |> Enum.map(& &1["uri"])
+      assert length(uris) == 63
+      assert uris == Enum.uniq(uris)
+    end
+
+    test "pages into the next vault once one is exhausted", %{conn: conn, user: user} do
+      {:ok, other, _} = Engram.Vaults.register_vault(user, "Work", Ecto.UUID.generate())
+      insert_note!(user, other, path: "Plan.md", content: "plan")
+
+      uris = conn |> page_all() |> Enum.map(& &1["uri"])
+      assert length(uris) == 4
+      assert Enum.any?(uris, &String.ends_with?(&1, "/Plan.md"))
+    end
+
+    test "a bad cursor is Invalid params", %{conn: conn} do
+      for cursor <- [
+            "nope",
+            Base.url_encode64("{}"),
+            Base.url_encode64(~s({"v":"#{Ecto.UUID.generate()}","o":0})),
+            5
+          ] do
+        assert %{"error" => %{"code" => -32_602}} =
+                 rpc(conn, "resources/list", %{"cursor" => cursor}),
+               "accepted #{inspect(cursor)}"
+      end
     end
 
     test "omits vaults a restricted key cannot reach",
@@ -94,7 +135,7 @@ defmodule EngramWeb.McpResourcesTest do
       insert_note!(user, other, path: "Hidden.md", content: "x")
       restrict_key_to!(ctx.key_row, vault)
 
-      uris = rpc(conn, "resources/list")["result"]["resources"] |> Enum.map(& &1["uri"])
+      uris = conn |> page_all() |> Enum.map(& &1["uri"])
       refute Enum.any?(uris, &String.contains?(&1, "Hidden"))
     end
   end

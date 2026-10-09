@@ -633,9 +633,14 @@ defmodule EngramWeb.McpController do
     {:ok, %{"resourceTemplates" => [Resources.template()]}}
   end
 
-  defp dispatch(conn, "resources/list", _params) do
+  defp dispatch(conn, "resources/list", params) do
     user = conn.assigns.current_user
-    {:ok, %{"resources" => Resources.list(user, accessible_vaults(user, conn))}}
+    cursor = if is_non_struct_map(params), do: params["cursor"]
+
+    case Resources.list(user, accessible_vaults(user, conn), cursor) do
+      {:ok, result} -> {:ok, result}
+      :error -> {:error, -32_602, "Invalid params: unknown cursor"}
+    end
   end
 
   # The vault goes through `resolve_requested_vault/3`, the same scope check a

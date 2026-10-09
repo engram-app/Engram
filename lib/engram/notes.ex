@@ -4709,10 +4709,13 @@ defmodule Engram.Notes do
 
   @doc """
   Most recently updated live notes in `vault`, newest first, metadata only.
-  Backs `search_notes` with no query ("what changed recently").
+  Backs `search_notes` with no query ("what changed recently") and pages
+  MCP `resources/list` via `offset:`.
   """
-  @spec list_recent_notes(map(), map(), pos_integer()) :: {:ok, [Note.t()]}
-  def list_recent_notes(user, vault, limit) when is_integer(limit) and limit > 0 do
+  @spec list_recent_notes(map(), map(), pos_integer(), keyword()) :: {:ok, [Note.t()]}
+  def list_recent_notes(user, vault, limit, opts \\ []) when is_integer(limit) and limit > 0 do
+    offset = Keyword.get(opts, :offset, 0)
+
     {:ok, notes} =
       Repo.with_tenant(user.id, fn ->
         Repo.all(
@@ -4720,6 +4723,7 @@ defmodule Engram.Notes do
             where: n.kind == "note",
             order_by: [desc: n.updated_at, desc: n.id],
             limit: ^limit,
+            offset: ^offset,
             select: struct(n, @note_meta_fields)
           )
         )
