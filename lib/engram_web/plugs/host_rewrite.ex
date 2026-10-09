@@ -8,8 +8,9 @@ defmodule EngramWeb.Plugs.HostRewrite do
     * `api.engram.page` — prefix `/api` if the path doesn't already start
       with `/api`, `/socket`, `/webhooks`, or `/.well-known`. After rewrite,
       reject anything that would have resolved outside those scopes.
-    * `mcp.engram.page` — pass `/.well-known/oauth-*` and the MCP server card
-      through unmodified;
+    * `mcp.engram.page` — pass `/.well-known/oauth-*`, the MCP server card and
+      the AI catalog through unmodified; map `/server-card` to
+      `/api/mcp/server-card`;
       otherwise prefix `/api/mcp` if not already prefixed; reject anything
       that would resolve outside `/api/mcp/*` or `/.well-known/oauth-*`.
     * Any other host — passthrough.
@@ -137,7 +138,8 @@ defmodule EngramWeb.Plugs.HostRewrite do
     "/.well-known/oauth-protected-resource",
     "/.well-known/oauth-authorization-server",
     "/.well-known/openai-apps-challenge",
-    "/.well-known/mcp/server-card.json"
+    "/.well-known/mcp/server-card.json",
+    "/.well-known/ai-catalog.json"
   ]
 
   defp handle_mcp_host(conn) do
@@ -152,6 +154,9 @@ defmodule EngramWeb.Plugs.HostRewrite do
       # without this they 404 and no client can pair on the dedicated host.
       String.starts_with?(path, "/oauth") -> conn
       path == "/" or path == "" -> rewrite_path(conn, "/api/mcp/")
+      # The resource here is the bare host, so `<streamable-http-url>/server-card`
+      # (the server-card spec's reserved location) is `/server-card`.
+      path == "/server-card" -> rewrite_path(conn, "/api/mcp/server-card")
       true -> reject(conn)
     end
   end

@@ -257,10 +257,26 @@ defmodule EngramWeb.Router do
     # the dedicated MCP host the resource is the bare host (#634), for which the
     # bare form above is already the spec-correct location.
     get "/oauth-protected-resource/api/mcp", WellKnownController, :protected_resource
+  end
 
-    # SEP-1649 server card: the tool list for directories (Smithery, MCPRush)
-    # whose scanners cannot get past OAuth to call `tools/list` themselves.
+  # MCP Server Card + AI Catalog (experimental-ext-server-card). Directories
+  # (Smithery, MCPRush) read the card when their scanners cannot get past OAuth
+  # to call `tools/list` themselves. `:api_any_accept`, NOT `:api`: the spec has
+  # clients send `Accept: application/mcp-server-card+json`, which
+  # `plug :accepts, ["json"]` would 406.
+  scope "/.well-known", EngramWeb do
+    pipe_through [:api_any_accept, :public_cacheable]
+
     get "/mcp/server-card.json", WellKnownController, :mcp_server_card
+    get "/ai-catalog.json", WellKnownController, :ai_catalog
+  end
+
+  # `<streamable-http-url>/server-card`, the location the spec reserves. On
+  # mcp.engram.page, HostRewrite maps `/server-card` here.
+  scope "/api", EngramWeb do
+    pipe_through [:api_any_accept, :public_cacheable]
+
+    get "/mcp/server-card", WellKnownController, :mcp_server_card
   end
 
   # OpenAI's plugin portal proves we own the MCP domain by fetching this and

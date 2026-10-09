@@ -26,7 +26,13 @@ defmodule EngramWeb.Plugs.CORS do
   # Phoenix's default `private` on the 404 kept a poisoned entry out of the
   # cache, which is incidental protection, not a designed guard.
   @cacheable_prefixes ["/.well-known/oauth-"]
-  @cacheable_exact ["/api/openapi", "/openapi", "/.well-known/mcp/server-card.json"]
+  @cacheable_exact [
+    "/api/openapi",
+    "/openapi",
+    "/.well-known/mcp/server-card.json",
+    "/api/mcp/server-card",
+    "/.well-known/ai-catalog.json"
+  ]
 
   def init(opts), do: opts
 
@@ -48,9 +54,18 @@ defmodule EngramWeb.Plugs.CORS do
     |> put_resp_header("access-control-allow-methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
     |> put_resp_header(
       "access-control-allow-headers",
-      "authorization, content-type, x-vault-id, x-device-id, traceparent"
+      "authorization, content-type, x-vault-id, x-device-id, traceparent, if-none-match"
     )
     |> put_resp_header("access-control-max-age", "86400")
+    |> expose_etag()
+  end
+
+  # The server-card spec has browsers revalidate with the ETag, which they can
+  # only read if it is exposed. Only the cacheable documents send one.
+  defp expose_etag(%Plug.Conn{request_path: path} = conn) do
+    if cacheable_path?(path),
+      do: put_resp_header(conn, "access-control-expose-headers", "etag"),
+      else: conn
   end
 
   # `*` on the edge-cached documents, and this is a CORRECTNESS REQUIREMENT of
