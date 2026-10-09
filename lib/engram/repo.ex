@@ -218,7 +218,7 @@ defmodule Engram.Repo do
 
   Limit: a `with_tenant/2` nested in a plain `Repo.transaction` only joins that
   transaction, so its callbacks run when the block returns, before the real
-  commit.
+  commit. Open such a transaction with `transaction_after_commit/1` instead.
   """
   @spec after_commit((-> any())) :: :ok
   def after_commit(fun) when is_function(fun, 0) do
@@ -233,22 +233,34 @@ defmodule Engram.Repo do
     end
   end
 
-  defp run_with_tenant(uuid, fun) do
-    # Only the outermost block owns the queues. Re-entrant calls never get
-    # here, so this is false only for a block opened inside a queue owner.
+  @doc """
+  A plain `transaction/1` (no tenant) that owns the `after_commit/1` queue,
+  for a caller composing several `with_tenant/2` legs atomically: the legs'
+  callbacks run once THIS transaction commits, not when each leg returns.
+  """
+  @spec transaction_after_commit((-> any())) :: {:ok, any()} | {:error, any()}
+  def transaction_after_commit(fun) when is_function(fun, 0),
+    do: owning_after_commit(fn -> transaction(fun) end)
+
+  defp run_with_tenant(uuid, fun),
+    do: owning_after_commit(fn -> tenant_transaction(uuid, fun) end)
+
+  # Only the outermost transaction owns the queue. Re-entrant with_tenant calls
+  # never get here, so this is false only for one opened inside a queue owner.
+  defp owning_after_commit(txn) do
     owner? = is_nil(Process.get(:engram_after_commit))
 
     if owner?, do: Process.put(:engram_after_commit, [])
 
     {result, callbacks} =
       try do
-        {tenant_transaction(uuid, fun), Process.get(:engram_after_commit, [])}
+        {txn.(), Process.get(:engram_after_commit, [])}
       after
         if owner?, do: Process.delete(:engram_after_commit)
       end
 
-    # The keys are gone, so a callback that opens its own with_tenant gets a
-    # fresh transaction and its own queues.
+    # The key is gone, so a callback that opens its own with_tenant gets a
+    # fresh transaction and its own queue.
     if owner? and match?({:ok, _}, result), do: run_after_commit(callbacks)
     result
   end

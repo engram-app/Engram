@@ -68,8 +68,10 @@ defmodule Engram.Folders do
     # closes the phantom-event window where an inner leg's broadcast fired as
     # its savepoint released, before a later attachment conflict rolled the data
     # back, leaving clients with delete/upsert events that never persisted.
+    # `transaction_after_commit`: the legs' after_commit work (a delete's room
+    # stops) waits for THIS commit, not each leg's nested block.
     Broadcast.deferred(fn ->
-      Repo.transaction(fn ->
+      Repo.transaction_after_commit(fn ->
         case fun.() do
           {:ok, result} -> result
           {:error, reason} -> Repo.rollback(reason)

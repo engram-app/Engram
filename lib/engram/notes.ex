@@ -6101,7 +6101,10 @@ defmodule Engram.Notes do
   def batch_delete_folders(_user, _vault, []), do: {:ok, %{deleted: 0}}
 
   def batch_delete_folders(user, vault, marker_ids) when is_list(marker_ids) do
-    Repo.transaction(fn ->
+    # Owns the after_commit queue: the cascade stops the deleted notes' rooms
+    # only once this transaction really commits (a room stopped earlier can be
+    # re-bound to the still-live row and survive the delete).
+    Repo.transaction_after_commit(fn ->
       with {:ok, user} <- Crypto.ensure_user_dek(user),
            {:ok, dek} <- Crypto.get_dek(user) do
         # Resolve every marker first (cheap indexed lookups), then run ONE

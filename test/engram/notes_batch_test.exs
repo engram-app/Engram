@@ -242,6 +242,46 @@ defmodule Engram.NotesBatchTest do
       assert "Foreign" in Enum.map(folders, & &1.folder)
     end
 
+    # A room stopped before the REAL commit can be re-bound while the tombstone
+    # is still uncommitted and survive on a deleted note. The stop must wait
+    # for the outermost commit, for this entry point and Folders' (its caller).
+    test "stops the deleted notes' rooms only after the outer commit", ctx do
+      %{user: user, vault: vault} = ctx
+
+      for {entry, folder} <- [
+            {&Notes.batch_delete_folders/3, "R1"},
+            {&Engram.Folders.batch_delete/3, "R2"}
+          ] do
+        {:ok, marker} = Notes.create_folder_marker(user, vault, folder)
+        {:ok, note} = Notes.upsert_note(user, vault, %{path: "#{folder}/n.md"}, actor: "api")
+
+        room = spawn(fn -> Process.sleep(:infinity) end)
+        :yes = :global.register_name({:crdt_doc, note.id}, room)
+        test = self()
+        handler = {__MODULE__, folder}
+
+        :telemetry.attach(
+          handler,
+          [:engram, :repo, :query],
+          fn _, _, %{query: q}, _ ->
+            if q == "commit", do: send(test, {:commit, Process.alive?(room)})
+          end,
+          nil
+        )
+
+        try do
+          assert {:ok, _} = entry.(user, vault, [marker.id])
+        after
+          :telemetry.detach(handler)
+        end
+
+        commits = for {:commit, alive?} <- flush_commits(), do: alive?
+        assert commits != []
+        assert Enum.all?(commits), "#{folder}: room stopped before a commit #{inspect(commits)}"
+        refute Process.alive?(room)
+      end
+    end
+
     test "empty list → {:ok, %{deleted: 0}}", %{user: user, vault: vault} do
       assert {:ok, %{deleted: 0}} = Notes.batch_delete_folders(user, vault, [])
     end
@@ -519,6 +559,14 @@ defmodule Engram.NotesBatchTest do
     after
       :telemetry.detach(handler_id)
       Agent.stop(counter)
+    end
+  end
+
+  defp flush_commits(acc \\ []) do
+    receive do
+      {:commit, _} = m -> flush_commits([m | acc])
+    after
+      0 -> Enum.reverse(acc)
     end
   end
 end

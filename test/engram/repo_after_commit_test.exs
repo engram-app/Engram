@@ -54,6 +54,32 @@ defmodule Engram.RepoAfterCommitTest do
     refute_received :ran
   end
 
+  test "transaction_after_commit owns the queue for its with_tenant legs" do
+    user = insert(:user)
+    parent = self()
+
+    {:ok, :done} =
+      Repo.transaction_after_commit(fn ->
+        {:ok, :ok} =
+          Repo.with_tenant(user.id, fn -> Repo.after_commit(fn -> send(parent, :ran) end) end)
+
+        refute_received :ran
+        :done
+      end)
+
+    assert_received :ran
+
+    {:error, :undo} =
+      Repo.transaction_after_commit(fn ->
+        {:ok, :ok} =
+          Repo.with_tenant(user.id, fn -> Repo.after_commit(fn -> send(parent, :ran) end) end)
+
+        Repo.rollback(:undo)
+      end)
+
+    refute_received :ran
+  end
+
   test "outside a transaction after_commit runs immediately" do
     parent = self()
     :ok = Repo.after_commit(fn -> send(parent, :now) end)

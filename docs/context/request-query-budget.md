@@ -126,6 +126,10 @@ block (begin, enter, commit) opens even when every loader hits.
   process observes: broadcasts, room pushes, cache evictions.
 - A raise in a callback is logged and the rest still run (the write is
   durable).
+- A plain `Repo.transaction` does not own the queue, so `with_tenant` legs
+  nested in one run their callbacks when each leg returns, before the real
+  commit. Compose legs with `Repo.transaction_after_commit/1` (Folders ops,
+  `batch_delete_folders`).
 - **No external I/O inside a tenant transaction** (Voyage, Qdrant, KMS, HTTP).
   The transaction holds a pooled connection. Resolve it before opening the
   transaction (create_note resolves folder placement first; the DEK is
