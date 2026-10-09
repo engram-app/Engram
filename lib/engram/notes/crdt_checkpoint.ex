@@ -23,17 +23,17 @@ defmodule Engram.Notes.CrdtCheckpoint do
   alias Engram.Logger.Metadata
 
   alias Engram.Notes.{
-    ContentCommit,
     CrdtBloat,
     CrdtBridge,
     CrdtDeliver,
     CrdtUpdateLog,
+    Enqueue,
     Helpers,
     Note,
     Revisions
   }
 
-  alias Engram.Workers.EmbedNote
+  alias Engram.Workers.{EmbedNote, NoteCommitted}
 
   require Logger
 
@@ -291,10 +291,15 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
             _ =
               if prev_hash != new_hash do
-                :ok =
-                  ContentCommit.enqueue_jobs(note_id, user_id,
-                    embed_priority: embed_priority,
-                    finalize?: finalize?
+                # One dispatcher job, after the commit (#1710): it enqueues
+                # embed, links and finalize with their own uniqueness.
+                _ =
+                  Enqueue.enqueue(
+                    NoteCommitted.job(note_id, user_id,
+                      embed_priority: embed_priority,
+                      finalize?: finalize?
+                    ),
+                    "note_committed"
                   )
 
                 # Deliver-out gap: a web-editor edit lands ONLY via this checkpoint,

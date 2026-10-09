@@ -10,7 +10,9 @@ defmodule EngramWeb.CrdtCreateQueryBudgetTest do
   alias Engram.{Crypto, Repo, TenantQueryCounter, Vaults}
   alias Engram.Notes.CrdtBridge
 
-  @statements 57
+  # 57 -> 50 (Task 7b): the seed's checkpoint inserts one NoteCommitted
+  # dispatcher job instead of the embed clamp read plus three unique inserts.
+  @statements 50
   @tenant_txns 7
   @subscription_reads 0
 

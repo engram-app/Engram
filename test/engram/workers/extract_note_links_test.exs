@@ -106,6 +106,10 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
 
       :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
 
+      # Through the checkpoint's one dispatcher job.
+      assert [job] = all_enqueued(worker: Engram.Workers.NoteCommitted)
+      :ok = perform_job(Engram.Workers.NoteCommitted, job.args)
+
       assert [%{args: %{"note_id" => id}}] = all_enqueued(worker: ExtractNoteLinks)
       assert id == note.id
     end

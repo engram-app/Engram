@@ -2,9 +2,9 @@ defmodule Engram.Notes.ContentCommit do
   @moduledoc """
   The jobs every note CONTENT change needs, in one place.
 
-  Called by the single-note write sites (the CRDT checkpoint, and both
-  content branches of `Notes.upsert_note/4`) only when the content hash
-  actually changed. The call may run inside an enclosing tenant transaction
+  Called by the single-note write sites (the CRDT checkpoint, through the
+  `Engram.Workers.NoteCommitted` job it inserts, and both content branches of
+  `Notes.upsert_note/4`) only when the content hash actually changed. The call may run inside an enclosing tenant transaction
   (an MCP tool call is one), and that is fine: the jobs then commit or roll
   back atomically with the write (`engram_app` may insert into `oban_jobs`).
 
