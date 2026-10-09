@@ -3,6 +3,7 @@ defmodule EngramWeb.NotesController do
   use OpenApiSpex.ControllerSpecs
   alias EngramWeb.Schemas
 
+  alias Engram.Crypto
   alias Engram.Links
   alias Engram.Notes
   alias Engram.Repo
@@ -41,15 +42,27 @@ defmodule EngramWeb.NotesController do
     else
       user = conn.assigns.current_user
       vault = conn.assigns.current_vault
+      actor = EngramWeb.WriteActor.for_conn(conn)
 
-      case Notes.upsert_note(user, vault, params, actor: EngramWeb.WriteActor.for_conn(conn)) do
-        {:ok, note} ->
-          json(conn, %{note: note_json(note, user)})
+      # One transaction: the write, its job inserts and the response's links
+      # read. Rendered inside it, sent after it commits.
+      result =
+        in_write_txn(user, fn user ->
+          case Notes.upsert_note(user, vault, params, actor: actor) do
+            {:ok, note} -> {:ok, note_json(note, user)}
+            {:error, :version_conflict, server} -> {:conflict, note_json(server, user)}
+            other -> other
+          end
+        end)
 
-        {:error, :version_conflict, server_note} ->
+      case result do
+        {:ok, body} ->
+          json(conn, %{note: body})
+
+        {:conflict, server_note} ->
           conn
           |> put_status(409)
-          |> json(%{conflict: true, server_note: note_json(server_note, user)})
+          |> json(%{conflict: true, server_note: server_note})
 
         {:error, %Ecto.Changeset{}} = error ->
           error
@@ -142,7 +155,7 @@ defmodule EngramWeb.NotesController do
     rebuild = fn base -> String.trim_trailing(base, "\n") <> "\n" <> text end
 
     result =
-      Repo.with_tenant!(user.id, fn ->
+      in_write_txn(user, fn user ->
         case Notes.rmw_note(user, vault, path, rebuild, actor: actor) do
           {{:error, :not_found}, _} ->
             # Create new note with heading from filename + appended text
@@ -158,18 +171,32 @@ defmodule EngramWeb.NotesController do
                  "mtime" => System.os_time(:second) * 1.0
                },
                actor: actor
-             )}
+             )
+             |> render_in_txn(user)}
 
           {upserted, _} ->
-            {:appended, upserted}
+            {:appended, render_in_txn(upserted, user)}
         end
       end)
 
     append_response(conn, user, path, result)
   end
 
-  defp append_response(conn, user, path, {kind, {:ok, note}}),
-    do: json(conn, %{created: kind == :created, path: path, note: note_json(note, user)})
+  # note_json's links read joins the request transaction.
+  defp render_in_txn({:ok, note}, user), do: {:ok, {:rendered, note_json(note, user)}}
+
+  defp render_in_txn({:error, :version_conflict, server}, user),
+    do: {:error, :version_conflict, {:rendered, note_json(server, user)}}
+
+  defp render_in_txn(other, _user), do: other
+
+  # The DEK could not be provisioned (in_write_txn/2): nothing was read or
+  # written. Same retryable refusal as an unreadable authority.
+  defp append_response(conn, user, path, {:error, reason}),
+    do: append_response(conn, user, path, {:appended, {:error, {:authority, reason}}})
+
+  defp append_response(conn, _user, path, {kind, {:ok, {:rendered, body}}}),
+    do: json(conn, %{created: kind == :created, path: path, note: body})
 
   # Refuse rather than fall back to the facade. Falling back is exactly the bug:
   # it is the path that silently truncates the note. A failed append is
@@ -199,10 +226,10 @@ defmodule EngramWeb.NotesController do
 
   # The 3-tuple: `{:error, changeset}` does not match it. Same body shape
   # upsert/2 returns, so the client has one conflict contract.
-  defp append_response(conn, user, _path, {_, {:error, :version_conflict, server_note}}) do
+  defp append_response(conn, _user, _path, {_, {:error, :version_conflict, {:rendered, body}}}) do
     conn
     |> put_status(409)
-    |> json(%{conflict: true, server_note: note_json(server_note, user)})
+    |> json(%{conflict: true, server_note: body})
   end
 
   defp append_response(conn, _user, _path, {_, {:error, :note_deleted}}),
@@ -234,8 +261,17 @@ defmodule EngramWeb.NotesController do
     vault = conn.assigns.current_vault
     path = Enum.join(List.wrap(path_parts), "/")
 
-    case Notes.get_note(user, vault, path) do
-      {:ok, note} -> json(conn, note_json(note, user))
+    # One transaction for the note and its links. The DEK is warmed first: a
+    # DekCache miss unwraps through KMS, which must not run inside it.
+    _ = Crypto.get_dek(user)
+
+    result =
+      Repo.with_tenant!(user.id, fn ->
+        with {:ok, note} <- Notes.get_note(user, vault, path), do: {:ok, note_json(note, user)}
+      end)
+
+    case result do
+      {:ok, body} -> json(conn, body)
       {:error, :not_found} -> conn |> put_status(404) |> json(%{error: "not found"})
     end
   end
@@ -597,6 +633,21 @@ defmodule EngramWeb.NotesController do
   # ---------------------------------------------------------------------------
   # Private
   # ---------------------------------------------------------------------------
+
+  # A REST write's one tenant transaction, as the MCP controller runs a tool:
+  # the DEK is provisioned and warmed BEFORE it (both can call KMS, which must
+  # not run while the transaction holds a connection). A provisioning failure
+  # is returned as is; the write's own error handling reports it.
+  defp in_write_txn(user, fun) do
+    case Crypto.ensure_user_dek(user) do
+      {:ok, user} ->
+        _ = Crypto.get_dek(user)
+        Repo.with_tenant!(user.id, fn -> fun.(user) end)
+
+      {:error, _} = error ->
+        error
+    end
+  end
 
   defp note_json(note, user) do
     %{

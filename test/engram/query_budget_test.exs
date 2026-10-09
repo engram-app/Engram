@@ -28,7 +28,10 @@ defmodule Engram.QueryBudgetTest do
   # tenant_enter, COMMIT; the COMMIT resets tenant + role, so tenant_exit is
   # gone). Every path drops by its number of tenant transactions.
   # Task 10b: note_json's links read uses the request's (cached) user, not a
-  # fresh users row (-1 on every REST path that renders a note).
+  # fresh users row (-1 on every REST path that renders a note). GET, upsert
+  # and append run their DB work and note_json's links read in ONE tenant
+  # transaction, so upsert's job inserts nest in it instead of each opening
+  # its own (update -9, create -10, append -3, GET -3).
   @budgets %{
     "mcp get_notes" => 5,
     "mcp write_note update" => 15,
@@ -36,10 +39,10 @@ defmodule Engram.QueryBudgetTest do
     "mcp edit_note" => 15,
     "mcp delete_note" => 13,
     "GET sync/manifest" => 9,
-    "GET notes/*path" => 8,
-    "POST notes update" => 25,
-    "POST notes create" => 30,
-    "POST notes/append" => 19,
+    "GET notes/*path" => 5,
+    "POST notes update" => 16,
+    "POST notes create" => 20,
+    "POST notes/append" => 16,
     "POST notes/rename" => 40,
     "DELETE notes/*path" => 16,
     "GET /api/bootstrap" => 18,
