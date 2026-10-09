@@ -1,4 +1,94 @@
 {
+  "prompts": [
+    {
+      "arguments": [
+        {
+          "description": "What to look up",
+          "name": "topic",
+          "required": true
+        }
+      ],
+      "description": "Search the vault for a topic and summarize what your notes say, with sources.",
+      "name": "recall",
+      "title": "Recall what I know"
+    },
+    {
+      "arguments": [
+        {
+          "description": "Note title (optional; one is proposed if omitted)",
+          "name": "title",
+          "required": false
+        },
+        {
+          "description": "Folder to save into (optional; one is suggested if omitted)",
+          "name": "folder",
+          "required": false
+        }
+      ],
+      "description": "Write the key points of the current conversation into a new vault note.",
+      "name": "save_conversation",
+      "title": "Save this conversation as a note"
+    },
+    {
+      "arguments": [
+        {
+          "description": "Path of the note, e.g. Projects/Engram.md",
+          "name": "path",
+          "required": true
+        }
+      ],
+      "description": "Find related notes and suggest [[wikilinks]] to add, without editing anything.",
+      "name": "find_connections",
+      "title": "Find connections for a note"
+    },
+    {
+      "arguments": [
+        {
+          "description": "What to capture",
+          "name": "text",
+          "required": true
+        },
+        {
+          "description": "Note to append to (optional; defaults to Inbox.md at the vault root)",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "description": "Append a quick thought to an inbox note without breaking your flow.",
+      "name": "capture",
+      "title": "Capture a thought"
+    },
+    {
+      "arguments": [
+        {
+          "description": "Project name or folder",
+          "name": "project",
+          "required": true
+        }
+      ],
+      "description": "Pull a project's notes into a status summary: done, open, decided.",
+      "name": "project_brief",
+      "title": "Brief me on a project"
+    },
+    {
+      "arguments": [],
+      "description": "Find near-duplicate or messy tags and suggest merges, without editing anything.",
+      "name": "tidy_tags",
+      "title": "Tidy my tags"
+    },
+    {
+      "arguments": [
+        {
+          "description": "Folder to review, e.g. Inbox",
+          "name": "folder",
+          "required": true
+        }
+      ],
+      "description": "Review a messy folder and propose a cleaner structure, without moving anything.",
+      "name": "organize_folder",
+      "title": "Organize a folder"
+    }
+  ],
   "tools": [
     {
       "annotations": {

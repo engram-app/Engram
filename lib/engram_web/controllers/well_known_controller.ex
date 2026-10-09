@@ -176,7 +176,7 @@ defmodule EngramWeb.WellKnownController do
       "authentication" => %{"required" => true, "schemes" => ["oauth2"]},
       "tools" => Engram.MCP.Tools.wire_list(),
       "resources" => [],
-      "prompts" => []
+      "prompts" => Engram.MCP.Prompts.wire_list()
     }
 
     # The spec says to echo the card media type when the client asks for it.

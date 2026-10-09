@@ -1,9 +1,11 @@
 defmodule Mix.Tasks.Engram.Mcp.ToolsJson do
-  @shortdoc "Writes the MCP tools/list payload to mcp-tools.json"
+  @shortdoc "Writes the MCP tools/list and prompts/list payloads to mcp-tools.json"
 
   @moduledoc """
   Snapshots the exact `tools/list` payload (`Engram.MCP.Tools.wire_list/0`)
-  so CI can lint it with TDQS without starting the app or a database.
+  so CI can lint it with TDQS without starting the app or a database. The
+  `prompts/list` payload rides along so the LobeHub publish workflow can build
+  its manifest from the tagged commit.
 
   Usage: `mix engram.mcp.tools_json [path]` (default `mcp-tools.json`).
   Regenerate and commit whenever a tool definition changes; CI fails when the
@@ -18,7 +20,13 @@ defmodule Mix.Tasks.Engram.Mcp.ToolsJson do
   def run(argv) do
     Mix.Task.run("compile")
     path = List.first(argv) || @default_path
-    json = Jason.encode!(%{"tools" => Engram.MCP.Tools.wire_list()}, pretty: true)
+
+    json =
+      Jason.encode!(
+        %{"tools" => Engram.MCP.Tools.wire_list(), "prompts" => Engram.MCP.Prompts.wire_list()},
+        pretty: true
+      )
+
     File.write!(path, json <> "\n")
     Mix.shell().info("wrote #{path}")
   end

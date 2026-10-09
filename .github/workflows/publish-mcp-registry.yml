@@ -5,6 +5,9 @@ name: Publish MCP Registry
 # `release-v*` tag, so the listing's version tracks the release. Glama,
 # PulseMCP, VS Code and GitHub's MCP list all read from that registry.
 #
+# The `lobehub` job pushes the same release to LobeHub, which has no registry
+# import for OAuth-gated servers.
+#
 # Auth is GitHub OIDC, not a personal login: a workflow in an engram-app repo
 # is allowed to publish `io.github.engram-app/*`. A personal `mcp-publisher
 # login github` only grants `io.github.<user>/*` when the org restricts
@@ -61,3 +64,75 @@ jobs:
 
       - name: Publish
         run: ./mcp-publisher publish server.json
+
+  # LobeHub's crawler cannot get past OAuth, so it learns tools and prompts
+  # only from the manifest the owner pushes with `lhm plugin update`. Built
+  # from the tagged commit (mcp-tools.json is CI-gated fresh), not the live
+  # card: the tag fires before prod deploys.
+  #
+  # Auth is the owner's `lhm login` session, stored whole as the
+  # LOBEHUB_CREDENTIALS secret. LobeHub ROTATES the refresh token on every
+  # refresh, so the job writes the new credentials back, even when the update
+  # itself fails after refreshing. If this job fails with "Session expired",
+  # run `npx @lobehub/market-cli@0.0.41 login` locally and
+  # `gh secret set LOBEHUB_CREDENTIALS < ~/.lobehub-market/user-credentials.json`.
+  lobehub:
+    runs-on: [self-hosted, linux, x64, isolated]
+    timeout-minutes: 10
+    env:
+      LHM_VERSION: '0.0.41'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Build lhm.plugin.json
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/lhm"
+          jq -s '.[0] + {
+                   version: .[1].version,
+                   tools: [.[2].tools[] | {name, description, inputSchema}],
+                   prompts: .[2].prompts
+                 }' .github/lobehub/lhm.plugin.base.json server.json mcp-tools.json \
+            > "$RUNNER_TEMP/lhm/lhm.plugin.json"
+          jq '{version, tools: (.tools | length), prompts: (.prompts | length)}' "$RUNNER_TEMP/lhm/lhm.plugin.json"
+
+      - name: Restore LobeHub session
+        env:
+          LOBEHUB_CREDENTIALS: ${{ secrets.LOBEHUB_CREDENTIALS }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$RUNNER_TEMP/home/.lobehub-market"
+          printf '%s' "$LOBEHUB_CREDENTIALS" > "$RUNNER_TEMP/home/.lobehub-market/user-credentials.json"
+          sha256sum "$RUNNER_TEMP/home/.lobehub-market/user-credentials.json" | cut -d' ' -f1 > "$RUNNER_TEMP/creds.sha"
+
+      - name: Update LobeHub listing
+        env:
+          HOME: ${{ runner.temp }}/home
+          npm_config_cache: ${{ runner.temp }}/.npm
+        run: npx -y "@lobehub/market-cli@${LHM_VERSION}" plugin update --dir "$RUNNER_TEMP/lhm"
+
+      - uses: actions/create-github-app-token@v3
+        if: always()
+        id: app-token
+        with:
+          client-id: ${{ vars.GH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
+      - name: Save rotated LobeHub session
+        if: always()
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          creds="$RUNNER_TEMP/home/.lobehub-market/user-credentials.json"
+          [ -f "$creds" ] || exit 0
+          if [ "$(sha256sum "$creds" | cut -d' ' -f1)" != "$(cat "$RUNNER_TEMP/creds.sha")" ]; then
+            gh secret set LOBEHUB_CREDENTIALS -R "$GITHUB_REPOSITORY" < "$creds"
+            echo "saved rotated session"
+          fi
+          rm -rf "$RUNNER_TEMP/home"

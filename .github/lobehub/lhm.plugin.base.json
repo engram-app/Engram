@@ -1,0 +1,18 @@
+{
+  "identifier": "engram-app-engram",
+  "name": "Engram",
+  "author": "Engram",
+  "authorUrl": "https://github.com/engram-app",
+  "category": "productivity",
+  "homepage": "https://engram.page",
+  "cloudEndpoint": "https://mcp.engram.page",
+  "icon": "https://engram.page/favicon.svg",
+  "description": "AI memory you can read and edit: your Obsidian vault, searchable by Claude, ChatGPT and any MCP client. Works with Obsidian closed, on your phone or from the web app.",
+  "tags": [
+    "memory",
+    "obsidian",
+    "notes",
+    "knowledge-base",
+    "search"
+  ]
+}
