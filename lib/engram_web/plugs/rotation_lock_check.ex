@@ -47,7 +47,10 @@ defmodule EngramWeb.Plugs.RotationLockCheck do
 
   # Fails closed: only a known read-only tool or a method that runs no tool.
   # A batch, an unknown method or an unknown tool name is a write.
-  @mcp_read_methods ~w(initialize ping server/discover tools/list)
+  # Every non-tool method EngramWeb.MCPController dispatches is a read.
+  @mcp_read_methods ~w(initialize ping server/discover tools/list prompts/list prompts/get
+                       resources/list resources/read resources/templates/list
+                       completion/complete)
 
   defp mcp_read?(%Plug.Conn{path_info: ["api", "mcp"], body_params: body}) do
     case body do

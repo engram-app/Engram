@@ -59,7 +59,11 @@ defmodule EngramWeb.Plugs.RotationLockCheckCacheTest do
       }
 
     test "an MCP read-only tool trusts the cached user (no query)", %{conn: conn, user: user} do
-      for body <- [tool_call("get_notes"), %{"method" => "tools/list"}] do
+      read_methods =
+        ~w(tools/list prompts/list prompts/get resources/list resources/read
+           resources/templates/list completion/complete)
+
+      for body <- [tool_call("get_notes") | Enum.map(read_methods, &%{"method" => &1})] do
         {conn, qs} =
           Engram.QueryRecorder.record(fn ->
             conn |> mcp_post(user, body) |> RotationLockCheck.call([])
