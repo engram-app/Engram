@@ -205,6 +205,11 @@ async def _cleanup_bulk_residue(vault_a, cdp_a, api_sync) -> None:
         for start in range(0, len(ids), 500):
             api_sync.batch_delete_notes(ids[start : start + 500])
 
+        # Drop the 1,000 deletes the closed gate journaled (plugin #247 replays
+        # gated deletes on reopen). The server copies are already batch-deleted
+        # above; replaying them would fan out the exact storm the closed gate is
+        # here to prevent. `?.` keeps pre-#247 plugin builds working.
+        await cdp_a.evaluate(ENGINE + ".discardGateJournal?.()")
         # Re-open the gate so subsequent tests sync normally.
         await cdp_a.evaluate(SET_BLOCKED.format("false"))
     except Exception:  # teardown is strictly best-effort — never mask the real failure
