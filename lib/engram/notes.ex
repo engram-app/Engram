@@ -2695,6 +2695,16 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  `authoritative_content/2` for a DECRYPTED note whose tail rows were read in
+  the same statement as the row (`fetch_note_with_tail_for_worker/2`), so the
+  row is not read a second time.
+  """
+  @spec authoritative_content(map(), Note.t(), [map()]) :: {:ok, String.t()} | {:error, term()}
+  def authoritative_content(user, %Note{} = note, tail) when is_list(tail) do
+    with {:ok, text, _doc} <- authority(user, note, tail), do: {:ok, text}
+  end
+
+  @doc """
   `authoritative_content/2` plus the tail-replayed doc it projected (nil for a
   row with no `crdt_state`). A read-modify-write on a row it holds locked passes
   the doc to `upsert_note/4` as `merge_doc:`, so the write merges into the doc
@@ -2825,6 +2835,27 @@ defmodule Engram.Notes do
   def fetch_note_for_worker(note_id, user_id) when is_binary(user_id) do
     result = Repo.with_tenant!(user_id, fn -> Repo.get(Note, note_id) end)
     classify_worker_note(note_id, result)
+  end
+
+  @doc """
+  `fetch_note_for_worker/2` plus the note's tail rows, from one statement (for
+  `authoritative_content/3`).
+  """
+  @spec fetch_note_with_tail_for_worker(String.t(), String.t()) ::
+          {:ok, Note.t(), [map()]} | {:discard, String.t()}
+  def fetch_note_with_tail_for_worker(note_id, user_id) when is_binary(user_id) do
+    query = from(n in Note, where: n.id == ^note_id)
+
+    row =
+      Repo.with_tenant!(user_id, fn -> query |> with_tail() |> Repo.one() |> tail_result() end)
+
+    case row do
+      {note, tail} ->
+        with {:ok, note} <- classify_worker_note(note_id, note), do: {:ok, note, tail}
+
+      nil ->
+        classify_worker_note(note_id, nil)
+    end
   end
 
   @doc """

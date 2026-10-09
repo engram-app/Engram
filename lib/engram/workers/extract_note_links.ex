@@ -50,7 +50,7 @@ defmodule Engram.Workers.ExtractNoteLinks do
 
   import Ecto.Query
 
-  alias Engram.Accounts
+  alias Engram.Accounts.User
   alias Engram.Crypto
   alias Engram.Crypto.RotationGate
   alias Engram.Links
@@ -73,22 +73,42 @@ defmodule Engram.Workers.ExtractNoteLinks do
   def perform(%Oban.Job{args: args}) do
     :ok = BackgroundPriority.demote()
 
-    case Engram.Notes.fetch_note_for_worker_job(args) do
+    case fetch(args) do
       {:discard, _reason} = discard ->
         discard
 
-      {:ok, %Note{} = note} ->
-        case RotationGate.check(note.user_id) do
-          {:error, :rotation_in_progress} -> {:snooze, 60}
-          {:error, :user_not_found} -> {:discard, :user_deleted}
-          :ok -> extract(note)
+      {:ok, %Note{} = note, tail} ->
+        # One fresh users read serves both the rotation gate and the DEK.
+        case Repo.get(User, note.user_id, skip_tenant_check: true) do
+          nil ->
+            {:discard, :user_deleted}
+
+          user ->
+            case RotationGate.check_user(user) do
+              {:error, :rotation_in_progress} -> {:snooze, 60}
+              :ok -> extract(note, tail, user)
+            end
         end
     end
   end
 
-  defp extract(note) do
-    user = Accounts.get_user!(note.user_id)
+  # With a tenant in the args, the row and its tail come from one statement
+  # (authoritative_content/3 then does not read the row again). A legacy job
+  # has no tenant: tail nil, and authoritative_content/2 reads it.
+  defp fetch(%{"user_id" => user_id, "note_id" => note_id}) when is_binary(user_id),
+    do: Engram.Notes.fetch_note_with_tail_for_worker(note_id, user_id)
 
+  defp fetch(args) do
+    with {:ok, note} <- Engram.Notes.fetch_note_for_worker_job(args), do: {:ok, note, nil}
+  end
+
+  defp authoritative(user, decrypted, nil),
+    do: Engram.Notes.authoritative_content(user, decrypted)
+
+  defp authoritative(user, decrypted, tail),
+    do: Engram.Notes.authoritative_content(user, decrypted, tail)
+
+  defp extract(note, tail, user) do
     # Missing vault = orphaned note (same rule as EmbedNote): nothing to do.
     #
     # Tenant-scoped: `vaults` carries FORCE ROW LEVEL SECURITY, so unscoped
@@ -113,7 +133,7 @@ defmodule Engram.Workers.ExtractNoteLinks do
         # a legacy/no-crdt-state row's plaintext as the fallback base), then
         # resolve through the authority.
         with {:ok, decrypted} <- Crypto.maybe_decrypt_note_fields(note, user),
-             {:ok, content} <- Engram.Notes.authoritative_content(user, decrypted) do
+             {:ok, content} <- authoritative(user, decrypted, tail) do
           :ok = Links.replace_links(user, vault, note.id, Parser.extract(content))
           :ok = repair_rename_danglers(user, vault, note.id)
           :ok

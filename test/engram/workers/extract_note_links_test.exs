@@ -44,6 +44,24 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
     assert [] == Links.links_for_note(user, note.id)
   end
 
+  test "reads the note row once: the fetch carries the tail", %{user: user, vault: vault} do
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "One.md", "content" => "see [[Z]]"},
+        actor: "api"
+      )
+
+    {result, qs} =
+      Engram.QueryRecorder.record(fn ->
+        perform_job(ExtractNoteLinks, %{note_id: note.id, user_id: user.id})
+      end)
+
+    assert result == :ok
+
+    by_id = Enum.filter(qs, &(&1.source == "notes" and &1.sql =~ ~s{n0."id" = $1}))
+    assert length(by_id) == 1, Engram.QueryRecorder.format(qs)
+    assert [_] = Links.links_for_note(user, note.id)
+  end
+
   test "missing note discards", %{user: _user} do
     assert {:discard, _} = perform_job(ExtractNoteLinks, %{note_id: Ecto.UUID.generate()})
   end
