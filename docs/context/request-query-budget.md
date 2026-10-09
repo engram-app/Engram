@@ -209,7 +209,30 @@ improvement both fail). `tenant_exit_sandbox` rows are excluded.
 - The CRDT checkpoint tick is driven by hand (`send(timer, :tick)`) so the
   CRDT counts are exact, not ceilings.
 
+## Known limits
+
+- **`first_elem` eviction scans the table.** `:note_counts` and
+  `:billing_override` evict `{user_id, _}` keys with `ets:match_delete`, a
+  full scan in `Cache.Server`, once per note create/delete/rename on every
+  node. Negligible at today's user count; a per-user index table or a
+  user-keyed map value fixes it.
+- **Oban unique locks last until the request commits.** `insert_unique` takes
+  `pg_try_advisory_xact_lock`, held to the outer commit. A dispatcher that
+  collides with an open REST/MCP txn gets `conflict?: true` and is not
+  retried; if that txn then rolls back, neither job exists until the
+  reconcile and hourly sweeps.
+- **MCP resources are unbudgeted.** `resources/read` (3 txn trips plus the
+  read) and `resources/list` (3 per vault it spills into) have no case in the
+  budget test (see next targets).
+- **A skipped checkpoint after an append failure is not retried.** The room
+  refuses acks until a checkpoint commits; if the prompt tick and the settle
+  tick both skip (rotation, stale snapshot, legacy row needing a rebind), an
+  idle note waits for its next edit or for room exit, which checkpoints.
+
 ## Next targets
+
+- **MCP resources budget**: add `resources/read` and `resources/list` cases
+  to the budget test before cutting them.
 
 - **Auth plug cold misses**: the API key lookup is 5 queries (BEGIN, lookup
   role, key row with its scope, role reset, COMMIT); 10 of bootstrap cold's 21.
