@@ -473,7 +473,8 @@ defmodule Engram.Notes.CrdtCheckpoint do
              ]
            ) do
         {1, _} ->
-          {note.content_hash, note.content_hash, note.path, prune_tail(note_id, vault_id, prune)}
+          {note.content_hash, note.content_hash, note.path, nil,
+           prune_tail(note_id, vault_id, prune)}
 
         {0, _} ->
           {:skip, :stale_snapshot}

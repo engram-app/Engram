@@ -334,7 +334,9 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     Yex.Map.set(Yex.Doc.get_map(doc, "nodes"), "n1", "hi")
 
     seq0 = Vaults.current_seq(user.id, vault.id)
-    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+    # `checkpoint_pruning`, not `checkpoint/5`: the latter discards the outcome,
+    # so a canvas result the post-commit match can't read would pass unseen.
+    assert {:written, _} = CrdtCheckpoint.checkpoint_pruning(user.id, vault.id, note.id, doc)
 
     # content preserved verbatim — NOT projected to "" from the empty content Y.Text.
     {:ok, fresh} = Notes.get_note(user, vault, "board.canvas")
