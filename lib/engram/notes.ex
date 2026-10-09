@@ -4516,7 +4516,11 @@ defmodule Engram.Notes do
     Repo.all(
       from(n in scoped_live(user, vault),
         where: n.kind == "note",
-        select: {n.id, n.dek_version, n.path_ciphertext, n.path_nonce, n.created_at, n.updated_at}
+        # uuid_send: the raw 16 bytes the AAD binds, so no per-row
+        # Ecto.UUID.dump (a third of the old decrypt pass at 50k rows).
+        select:
+          {n.id, fragment("uuid_send(?)", n.id), n.dek_version, n.path_ciphertext, n.path_nonce,
+           n.created_at, n.updated_at}
       )
     )
   end
@@ -4524,19 +4528,15 @@ defmodule Engram.Notes do
   @doc "Decrypts `raw_tree_note_rows/2`'s rows. Pure — no DB access."
   @spec decrypt_tree_note_rows([tuple()], binary()) :: [map()]
   def decrypt_tree_note_rows(rows, dek) do
-    # Sequential on purpose — SyncController measured path-sized decrypts at
-    # ~4µs each (10k in ~43ms) and found chunked parallel SLOWER, because
-    # copying results back to the caller's heap rivals the AES-GCM work.
+    # One native call for the whole column (one key schedule, AAD built in
+    # Rust). Parallel was measured SLOWER: copying results back to the
+    # caller's heap rivals the AES-GCM work.
     Crypto.measure_decrypt_batch(:vault_tree_notes, length(rows), fn ->
-      Enum.map(rows, fn {id, dek_version, path_ct, path_nonce, created, updated} ->
-        aad = PathCrypto.aad(:notes, id, dek_version)
+      fields = Enum.map(rows, fn {_, raw_id, v, ct, nonce, _, _} -> {raw_id, v, ct, nonce} end)
 
-        %{
-          id: id,
-          path: PathCrypto.decrypt!(path_ct, path_nonce, dek, aad),
-          created_at: created,
-          updated_at: updated
-        }
+      Enum.zip_with(rows, PathCrypto.decrypt_many!(:notes, fields, dek), fn
+        {id, _, _, _, _, created, updated}, path ->
+          %{id: id, path: path, created_at: created, updated_at: updated}
       end)
     end)
   end

@@ -126,8 +126,8 @@ defmodule EngramWeb.SyncController do
                 n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
                   n.kind == "note",
               select:
-                {n.id, n.dek_version, n.path_ciphertext, n.path_nonce, n.content_hash, n.seq,
-                 n.crdt_head}
+                {n.id, fragment("uuid_send(?)", n.id), n.dek_version, n.path_ciphertext,
+                 n.path_nonce, n.content_hash, n.seq, n.crdt_head}
             )
           )
 
@@ -136,33 +136,37 @@ defmodule EngramWeb.SyncController do
             from(a in Attachment,
               where: a.user_id == ^user.id and a.vault_id == ^vault.id and is_nil(a.deleted_at),
               select:
-                {a.id, a.dek_version, a.path_ciphertext, a.path_nonce, a.content_hash, a.seq}
+                {a.id, fragment("uuid_send(?)", a.id), a.dek_version, a.path_ciphertext,
+                 a.path_nonce, a.content_hash, a.seq}
             )
           )
 
         {notes, attachments}
       end)
 
-    # Path-sized payloads decrypt in ~4µs each — measured 10k sequential at
-    # ~43ms while chunked parallel came out *slower* (result copy-back to the
-    # caller's heap rivals the AES-GCM work). Keep these loops sequential;
-    # the batch telemetry tells us if a real-world vault disagrees.
+    # One batch native call per column (`PathCrypto.decrypt_many!/3`): one key
+    # schedule, AAD built in Rust from the raw ids selected above. Measured
+    # 2-5x the per-row loop (docs/context/native-nifs.md). Parallel was
+    # slower: copying results back rivals the AES-GCM work.
     notes =
       Crypto.measure_decrypt_batch(:manifest_notes, length(note_rows), fn ->
-        Enum.map(note_rows, fn {id, dek_version, path_ct, path_nonce, hash, seq, crdt_head} ->
-          aad = PathCrypto.aad(:notes, id, dek_version)
-          path = PathCrypto.decrypt!(path_ct, path_nonce, dek, aad)
-          %{id: id, path: path, content_hash: hash, seq: seq, crdt_head: crdt_head}
+        fields =
+          Enum.map(note_rows, fn {_, raw, v, ct, nonce, _, _, _} -> {raw, v, ct, nonce} end)
+
+        Enum.zip_with(note_rows, PathCrypto.decrypt_many!(:notes, fields, dek), fn
+          {id, _, _, _, _, hash, seq, crdt_head}, path ->
+            %{id: id, path: path, content_hash: hash, seq: seq, crdt_head: crdt_head}
         end)
       end)
       |> Enum.sort_by(& &1.path)
 
     attachments =
       Crypto.measure_decrypt_batch(:manifest_attachments, length(attachment_rows), fn ->
-        Enum.map(attachment_rows, fn {id, dek_version, path_ct, path_nonce, hash, seq} ->
-          aad = PathCrypto.aad(:attachments, id, dek_version)
-          path = PathCrypto.decrypt!(path_ct, path_nonce, dek, aad)
-          %{id: id, path: path, content_hash: hash, seq: seq}
+        fields =
+          Enum.map(attachment_rows, fn {_, raw, v, ct, nonce, _, _} -> {raw, v, ct, nonce} end)
+
+        Enum.zip_with(attachment_rows, PathCrypto.decrypt_many!(:attachments, fields, dek), fn
+          {id, _, _, _, _, hash, seq}, path -> %{id: id, path: path, content_hash: hash, seq: seq}
         end)
       end)
       |> Enum.sort_by(& &1.path)

@@ -63,7 +63,8 @@ defmodule Engram.Native do
     {:hmac_hex_many, :hmac_hex_many_nif, :hmac_hex_many_dirty_nif, 3},
     {:json_decode, :json_decode_nif, :json_decode_dirty_nif, 1},
     {:envelope_seal, :envelope_seal_nif, :envelope_seal_dirty_nif, 4},
-    {:envelope_open, :envelope_open_nif, :envelope_open_dirty_nif, 4}
+    {:envelope_open, :envelope_open_nif, :envelope_open_dirty_nif, 4},
+    {:envelope_open_many, :envelope_open_many_nif, :envelope_open_many_dirty_nif, 3}
   ]
 
   # NIFs reached only through a wrapper below that fixes their schedule.
@@ -74,7 +75,11 @@ defmodule Engram.Native do
     dense_json_nif: 1,
     sparse_json_nif: 2,
     md_outline_nif: 1,
-    envelope_counts_nif: 0
+    envelope_counts_nif: 0,
+    name_index_build_nif: 4,
+    name_index_search_nif: 3,
+    name_index_put_nif: 4,
+    name_index_delete_nif: 3
   ]
 
   # Test hooks, built only with the crate's `test-hooks` feature, which
@@ -242,6 +247,61 @@ defmodule Engram.Native do
     bytes = :erlang.iolist_size(texts) + length(texts) * byte_size(prefix)
     sized(:hmac_hex_many, bytes, [key, prefix, texts])
   end
+
+  @doc """
+  Batch `envelope_open/4` for one column across many rows under one key:
+  `{:ok, [plaintext]}` in row order, or `:error` if any row fails (the
+  per-row path raises on the same rows). Each row is `{raw_id, bind?, ct,
+  nonce}`; the AAD is `prefix <> raw_id` when `bind?`, else empty, which is
+  `Crypto.aad_for_row/3` / the legacy rule built in one place. `prefix`
+  comes from `Crypto.aad_prefix/2`, so the AAD shape keeps one definition.
+  """
+  def envelope_open_many(key, prefix, rows)
+      when byte_size(key) == 32 and is_binary(prefix) and is_list(rows) do
+    bytes = Enum.reduce(rows, 0, fn {_, _, ct, _}, acc -> acc + byte_size(ct) end)
+
+    case sized(:envelope_open_many, bytes, [key, prefix, rows]) do
+      nil -> :error
+      plain -> {:ok, plain}
+    end
+  end
+
+  @doc """
+  Builds a vault's name index (`native/engram_native/src/names.rs`):
+  `{:ok, handle, approx_bytes}` or `:error`. Rows are `{raw_id, bind?,
+  path_ct, path_nonce, title_ct | nil, title_nonce | nil}`; the AAD rule is
+  `envelope_open_many/3`'s. Decrypted names stay in native memory; the
+  handle is an opaque reference.
+  """
+  def name_index_build(key, path_prefix, title_prefix, rows)
+      when byte_size(key) == 32 and is_list(rows) do
+    bytes = Enum.reduce(rows, 0, fn row, acc -> acc + byte_size(elem(row, 2)) end)
+
+    case call(:name_index_build, bytes, %{dirty: true}, fn ->
+           name_index_build_nif(key, path_prefix, title_prefix, rows)
+         end) do
+      {handle, approx_bytes} -> {:ok, handle, approx_bytes}
+      nil -> :error
+    end
+  end
+
+  @doc "`{paths, total}`: fuzzy matches over path and title, best first."
+  def name_index_search(handle, query, limit)
+      when is_binary(query) and is_integer(limit) and limit > 0 do
+    call(:name_index_search, query, %{dirty: true}, fn ->
+      {paths, total, peak} = name_index_search_nif(handle, query, limit)
+      {{paths, total}, peak}
+    end)
+  end
+
+  @doc "Insert or update one note's names. An empty title keeps the current one."
+  def name_index_put(handle, raw_id, path, title)
+      when byte_size(raw_id) == 16 and is_binary(path) and is_binary(title),
+      do: name_index_put_nif(handle, raw_id, path, title)
+
+  @doc "Removes one note's names, but only while its indexed path is still `path`."
+  def name_index_delete(handle, raw_id, path) when byte_size(raw_id) == 16 and is_binary(path),
+    do: name_index_delete_nif(handle, raw_id, path)
 
   @doc """
   `Jason.decode/1`'s result, in Rust: string keys, the first of a repeated

@@ -9,6 +9,7 @@ defmodule Engram.MCP.Resources do
   """
 
   alias Engram.Notes
+  alias Engram.Notes.NameIndex
 
   @scheme "engram://"
   @template "engram://{vault}/{+path}"
@@ -171,18 +172,16 @@ defmodule Engram.MCP.Resources do
     |> completion()
   end
 
-  # ponytail: paths are encrypted at rest, so this decrypts every path in the
-  # vault per keystroke (~4µs each, 10k ≈ 40ms). Deliberately uncached: a
-  # cache would hold decrypted paths in node memory for every active user.
+  # Fuzzy over path and title in the vault's native name index
+  # (`Engram.Notes.NameIndex`): built once per vault, then patched live.
   def complete_paths(user, vault, value) do
-    needle = String.downcase(value)
-    {:ok, notes} = Notes.list_tree_notes(user, vault)
+    case NameIndex.search(user, vault, value, @max_completions) do
+      {:ok, paths, total} ->
+        %{"values" => paths, "total" => total, "hasMore" => total > length(paths)}
 
-    notes
-    |> Enum.map(& &1.path)
-    |> Enum.filter(&String.contains?(String.downcase(&1), needle))
-    |> Enum.sort()
-    |> completion()
+      _superseded_or_error ->
+        completion([])
+    end
   end
 
   def completion(values) do

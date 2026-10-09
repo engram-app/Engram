@@ -472,6 +472,27 @@ scrub REPORT stays in Elixir (`Helpers.report_scrub/1`): Rust counts the
 percent escapes that decoded to invalid UTF-8, and Elixir emits the
 telemetry and log for each.
 
+### Batch open and the vault name index (2026-10-09, #1924)
+
+`envelope_open_many` (`Engram.Crypto.Envelope.decrypt_many/3`) opens one
+column across many rows under ONE key schedule (`engram_core`'s `OpenKey`)
+and builds each AAD (`prefix <> raw id`, or empty for legacy rows) in Rust.
+Per-row `envelope_open` rebuilt the AES key schedule every call (~45% of a
+16-byte open) and the Elixir side spent a third of a 50k-row pass in
+`Ecto.UUID.dump` for the AAD; listings now select `uuid_send(id)` and pass raw
+ids. Use it, via `PathCrypto.decrypt_many!/3`, for any vault-wide column
+decrypt (the vault tree does). Do not add a second decrypt path.
+
+The name index (`names.rs`, `Engram.Notes.NameIndex`) holds a vault's
+decrypted paths and titles in a `ResourceArc`, so partial search never turns
+plaintext names into Elixir terms (no heap copies per keystroke, nothing in
+ETS or crash dumps). Fuzzy matching is `nucleo-matcher` (helix's). Built once
+per vault on a dirty scheduler, patched from the `sync:<user>:<vault>`
+broadcasts, dropped after 10 min idle, LRU-capped at 128 MB per node. Measured
+in `cargo test --release` on the loaded dev box: 50k names, 64 ms per search.
+Why not a prefix blind index: see #1925 (leaks prefix structure, no fuzzy,
+truncation guidance makes it decrypt most of the vault anyway).
+
 ## The memory standard
 
 BEAM tooling (`:erlang.memory/0`, `max_heap_size`, recon_alloc) cannot see a
@@ -551,7 +572,7 @@ bumping pulldown-cmark: `ENGRAM_FUZZ_CASES=2000000 ENGRAM_FUZZ_SEED=7 cargo test
 EXCEPT small inputs on a hot path. Twelve NIFs export a normal and a
 `_dirty_nif` variant: `link_extract`, `note_title`, `note_meta`, `chunk`,
 `frontmatter_split`, `frontmatter_parse`, `text_diff`, `utf16_offsets`,
-`hmac_hex_many`, `json_decode`, `envelope_seal`, `envelope_open`. `envelope_open`'s
+`hmac_hex_many`, `json_decode`, `envelope_seal`, `envelope_open`, `envelope_open_many`. `envelope_open`'s
 inline variant also refuses to inflate a zstd body declaring over 16 KB
 (decompression work is not bounded by input size): it returns `:reschedule`
 and the wrapper reruns the dirty variant (`sized/4`'s `force_dirty`). That

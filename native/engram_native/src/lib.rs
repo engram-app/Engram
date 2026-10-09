@@ -8,6 +8,7 @@ mod links;
 mod memory;
 mod meta;
 mod mmr;
+mod names;
 mod outline;
 mod text_diff;
 mod tokenizer;
@@ -21,7 +22,8 @@ static ALLOCATOR: memory::Counting = memory::Counting;
 use engram_core::envelope;
 use hmac::{Hmac, KeyInit, Mac};
 use rustler::{
-    Atom, Binary, Encoder, Env, Error, ListIterator, NewBinary, NifResult, OwnedBinary, Term,
+    Atom, Binary, Encoder, Env, Error, ListIterator, NewBinary, NifResult, OwnedBinary,
+    ResourceArc, Term,
 };
 use sha2::Sha256;
 use std::collections::HashMap;
@@ -575,6 +577,123 @@ fn envelope_open_dirty_nif<'a>(
     aad: Binary<'a>,
 ) -> (Term<'a>, usize) {
     envelope_open(env, ct, nonce, key, aad, usize::MAX)
+}
+
+// One encrypted field per row: raw 16-byte id, whether its AAD binds the id
+// (`dek_version >= 2`), ciphertext, nonce field.
+type FieldRow<'a> = (Binary<'a>, bool, Binary<'a>, Binary<'a>);
+
+/// Batch `envelope_open` for one column across many rows under one key: the
+/// key schedule is built once, and the AAD (`prefix <> raw id`, or empty for
+/// legacy rows) is assembled here instead of per row in Elixir. `None` if
+/// any row fails, matching the per-row path, which raises.
+fn envelope_open_many<'a>(
+    env: Env<'a>,
+    key: Binary<'a>,
+    prefix: Binary<'a>,
+    rows: Vec<FieldRow<'a>>,
+) -> (Option<Vec<Binary<'a>>>, usize) {
+    let n = rows.len() as u64;
+    let (out, peak) = memory::measured(|| {
+        let k = envelope::OpenKey::new(&key).ok()?;
+        let mut aad = Vec::with_capacity(prefix.len() + 16);
+        rows.iter()
+            .map(|(id, bind, ct, nonce)| {
+                aad.clear();
+                if *bind {
+                    aad.extend_from_slice(&prefix);
+                    aad.extend_from_slice(id);
+                }
+                match k.open(ct, nonce, &aad, usize::MAX, OwnedBinary::new).ok()? {
+                    envelope::Opened::InPlace(buf, skip) => {
+                        let buf = buf.release(env);
+                        buf.make_subbinary(skip, buf.len() - skip).ok()
+                    }
+                    envelope::Opened::Inflated(v) => {
+                        let mut b = NewBinary::new(env, v.len());
+                        b.as_mut_slice().copy_from_slice(&v);
+                        Some(b.into())
+                    }
+                    envelope::Opened::OverBudget => None,
+                }
+            })
+            .collect::<Option<Vec<_>>>()
+    });
+    ENVELOPE_COUNTS[2].fetch_add(n, Relaxed);
+    (out, peak)
+}
+
+sized_nif!(envelope_open_many, envelope_open_many_nif, envelope_open_many_dirty_nif, <'a>(env, key: Binary<'a>, prefix: Binary<'a>, rows: Vec<FieldRow<'a>>) [key, prefix, rows] -> (Option<Vec<Binary<'a>>>, usize));
+
+#[rustler::resource_impl]
+impl rustler::Resource for names::NameIndex {}
+
+// A row for the name index: the path field plus an optional title field.
+type NameRow<'a> = (
+    Binary<'a>,
+    bool,
+    Binary<'a>,
+    Binary<'a>,
+    Option<Binary<'a>>,
+    Option<Binary<'a>>,
+);
+
+/// Builds a vault's name index; `{handle, approx_bytes}` or nil. Always
+/// dirty: it decrypts the whole vault's names.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn name_index_build_nif<'a>(
+    key: Binary<'a>,
+    path_prefix: Binary<'a>,
+    title_prefix: Binary<'a>,
+    rows: Vec<NameRow<'a>>,
+) -> (Option<(ResourceArc<names::NameIndex>, usize)>, usize) {
+    let (out, peak) = memory::measured(|| {
+        let rows: Vec<names::Row> = rows
+            .iter()
+            .map(|(id, bind, pc, pn, tc, tn)| names::Row {
+                id,
+                bind: *bind,
+                path: (pc, pn),
+                title: match (tc, tn) {
+                    (Some(c), Some(n)) => Some((c.as_slice(), n.as_slice())),
+                    _ => None,
+                },
+            })
+            .collect();
+        names::NameIndex::build(&key, &path_prefix, &title_prefix, &rows).map(|i| {
+            let bytes = i.bytes();
+            (ResourceArc::new(i), bytes)
+        })
+    });
+    (out, peak)
+}
+
+/// `{paths, total, peak}`. Dirty: a fuzzy pass over a large vault takes
+/// milliseconds.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn name_index_search_nif(
+    index: ResourceArc<names::NameIndex>,
+    query: &str,
+    limit: usize,
+) -> (Vec<String>, usize, usize) {
+    let ((hits, total), peak) = memory::measured(|| index.search(query, limit));
+    (hits, total, peak)
+}
+
+#[rustler::nif]
+fn name_index_put_nif(
+    index: ResourceArc<names::NameIndex>,
+    id: Binary,
+    path: &str,
+    title: &str,
+) -> bool {
+    index.put(&id, path, title)
+}
+
+#[rustler::nif]
+fn name_index_delete_nif(index: ResourceArc<names::NameIndex>, id: Binary, path: &str) -> Atom {
+    index.delete(&id, path);
+    rustler::types::atom::ok()
 }
 
 rustler::init!("Elixir.Engram.Native");

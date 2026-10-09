@@ -334,6 +334,8 @@ defmodule Engram.Application do
       Engram.Legal.VersionCache.Invalidator,
       EngramWeb.Presence,
       Engram.Crypto.DekCache,
+      # Subscribes to per-vault sync topics → after PubSub.
+      Engram.Notes.NameIndex,
       Engram.UsageMeters.ActivityCache,
       Engram.KeywordIndex.Stats.Cache,
       # Published signing keys for CIMD clients that authenticate with

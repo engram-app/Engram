@@ -233,7 +233,40 @@ pub fn open<B: DerefMut<Target = [u8]>>(
     inflate_max: usize,
     alloc: impl FnOnce(usize) -> Option<B>,
 ) -> Result<Opened<B>, Error> {
-    let c = cipher(key)?;
+    open_with(&cipher(key)?, ct, nonce_field, aad, inflate_max, alloc)
+}
+
+/// A key set up once for many opens under it (a vault's names). `open`
+/// rebuilds the AES key schedule per call, which measured about 45% of a
+/// 16-byte open.
+pub struct OpenKey(LessSafeKey);
+
+impl OpenKey {
+    pub fn new(key: &[u8]) -> Result<Self, Error> {
+        cipher(key).map(Self)
+    }
+
+    /// `open` under this key: same formats, same budget, same result.
+    pub fn open<B: DerefMut<Target = [u8]>>(
+        &self,
+        ct: &[u8],
+        nonce_field: &[u8],
+        aad: &[u8],
+        inflate_max: usize,
+        alloc: impl FnOnce(usize) -> Option<B>,
+    ) -> Result<Opened<B>, Error> {
+        open_with(&self.0, ct, nonce_field, aad, inflate_max, alloc)
+    }
+}
+
+fn open_with<B: DerefMut<Target = [u8]>>(
+    c: &LessSafeKey,
+    ct: &[u8],
+    nonce_field: &[u8],
+    aad: &[u8],
+    inflate_max: usize,
+    alloc: impl FnOnce(usize) -> Option<B>,
+) -> Result<Opened<B>, Error> {
     if ct.len() < TAG {
         return Err(Error);
     }
@@ -312,6 +345,25 @@ mod tests {
         let (ct, n) = seal(plain, &K, b"notes:content:x", mode).unwrap();
         assert_eq!(open(&ct, &n, &K, b"notes:content:x").unwrap(), plain);
         (ct, n)
+    }
+
+    #[test]
+    fn open_key_matches_open() {
+        let text = "Some markdown with [[links]] and #tags.\n".repeat(50);
+        let k = OpenKey::new(&K).unwrap();
+        for p in [&b""[..], b"Projects/Engram.md", text.as_bytes()] {
+            for m in [Mode::None, Mode::Zstd, Mode::Auto] {
+                let (ct, n) = seal(p, &K, b"notes\0path\0", m).unwrap();
+                let got = match k.open(&ct, &n, b"notes\0path\0", usize::MAX, vec).unwrap() {
+                    Opened::InPlace(buf, skip) => buf[skip..].to_vec(),
+                    Opened::Inflated(v) => v,
+                    Opened::OverBudget => unreachable!(),
+                };
+                assert_eq!(got, p);
+                assert!(k.open(&ct, &n, b"other", usize::MAX, vec).is_err());
+            }
+        }
+        assert!(OpenKey::new(&[1; 16]).is_err());
     }
 
     #[test]
