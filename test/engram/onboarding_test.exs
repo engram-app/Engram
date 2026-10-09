@@ -4,7 +4,6 @@ defmodule Engram.OnboardingTest do
   alias Engram.LegalFixtures
   alias Engram.Onboarding
   alias Engram.Onboarding.Agreement
-  alias Engram.Onboarding.TermsCache
 
   describe "accept_terms/3" do
     test "inserts an agreement row for the user and version" do
@@ -340,14 +339,14 @@ defmodule Engram.OnboardingTest do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
 
-      # Drop the cache owner (and its table). accepted_version/2 must report
-      # nothing cached (nil) rather than raise, put_accepted/3 must be a no-op,
-      # and status/1 must still read the DB and work.
-      :ok = Supervisor.terminate_child(Engram.Supervisor, TermsCache)
-      on_exit(fn -> Supervisor.restart_child(Engram.Supervisor, TermsCache) end)
+      # Drop the cache owner (and its tables). get/2 must report a miss rather
+      # than raise, put/3 must be a no-op, and status/1 must still read the DB
+      # and work.
+      :ok = Supervisor.terminate_child(Engram.Supervisor, Engram.Cache.Server)
+      on_exit(fn -> Supervisor.restart_child(Engram.Supervisor, Engram.Cache.Server) end)
 
-      assert TermsCache.accepted_version(user.id, "terms_of_service") == nil
-      assert :ok = TermsCache.put_accepted(user.id, "terms_of_service", "2026-05-15")
+      assert Engram.Cache.get(:terms, {user.id, "terms_of_service"}) == :miss
+      assert :ok = Engram.Cache.put(:terms, {user.id, "terms_of_service"}, "2026-05-15")
       assert %{terms_ok: true} = Onboarding.status(user)
     end
   end

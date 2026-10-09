@@ -18,7 +18,6 @@ defmodule EngramWeb.OAuthTokenAssertionTest do
   alias Engram.OAuth
   alias Engram.OAuth.Cimd.FetcherMock
   alias Engram.OAuth.Cimd.Jwks
-  alias Engram.OAuth.Cimd.JwksCache
   alias Engram.OAuth.Client
   alias Engram.Repo
 
@@ -26,7 +25,7 @@ defmodule EngramWeb.OAuthTokenAssertionTest do
 
   setup do
     EngramWeb.RateLimiter.reset_buckets!()
-    JwksCache.clear_local()
+    Engram.Cache.clear_local(:jwks)
     :ok
   end
 

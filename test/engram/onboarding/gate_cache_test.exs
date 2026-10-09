@@ -11,7 +11,7 @@ defmodule Engram.Onboarding.GateCacheTest do
 
   # Processing of PubSub messages is async; a synchronous call to the cache
   # GenServer flushes everything ahead of it in the mailbox.
-  defp sync, do: :sys.get_state(GateCache)
+  defp sync, do: :sys.get_state(Engram.Cache.Server)
 
   describe "core verdict cache" do
     test "passed?/1 is false for an unknown user" do
@@ -44,7 +44,7 @@ defmodule Engram.Onboarding.GateCacheTest do
       :ok = GateCache.mark_passed(id)
 
       # Simulate the message arriving from a peer node.
-      CacheSync.broadcast({:onboarding_gate_evict, id})
+      CacheSync.broadcast({:engram_cache_evict, :onboarding_gate, id})
       sync()
 
       refute GateCache.passed?(id)
@@ -56,7 +56,7 @@ defmodule Engram.Onboarding.GateCacheTest do
       id = Ecto.UUID.generate()
       :ok = GateCache.mark_passed(id)
 
-      CacheSync.broadcast(:version_evict_all)
+      CacheSync.broadcast({:engram_cache_evict_all, :onboarding_gate})
       sync()
 
       refute GateCache.passed?(id)

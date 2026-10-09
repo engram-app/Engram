@@ -1,23 +1,20 @@
 defmodule Engram.Billing.PlanCache do
   @moduledoc """
-  Caches each plan's `limits` map in `:persistent_term`, keyed by plan id.
+  Caches each plan's `limits` map (`:plan` in `Engram.Cache.Registry`, no TTL), keyed by plan id.
 
   Plan rows are seeded and effectively static at runtime (no code path writes
   them), so the per-request `plan_lookup` query in `Engram.Billing` is pure
-  repetition for API-key traffic. `:persistent_term` is the right store for
-  rarely-changing global data: reads are lock-free with zero copying, and the
-  expensive global rebuild on write only happens on a cold miss (a handful of
-  plans over the node's lifetime).
+  repetition for API-key traffic. Entries never expire; only `invalidate/1` and
+  `invalidate_all/0` drop them (cluster-wide).
 
   If plans are ever edited at runtime (e.g. an admin/catalog task), call
   `invalidate/1` for the changed plan id (or `invalidate_all/0`) so the next
   read reloads from the DB.
   """
 
-  use Engram.Cache.PersistentTerm
-
   import Ecto.Query
   alias Engram.Billing.Plan
+  alias Engram.Cache
   alias Engram.Repo
 
   @doc """
@@ -25,10 +22,10 @@ defmodule Engram.Billing.PlanCache do
   miss. An unknown plan id resolves to an empty map (no limits).
   """
   @spec limits(plan_id :: Ecto.UUID.t()) :: map()
-  def limits(plan_id), do: pt_fetch(plan_id, fn -> load(plan_id) end)
+  def limits(plan_id), do: Cache.fetch(:plan, plan_id, fn -> load(plan_id) end)
 
   @spec invalidate(plan_id :: Ecto.UUID.t()) :: :ok
-  def invalidate(plan_id), do: pt_erase(plan_id)
+  def invalidate(plan_id), do: Cache.evict(:plan, plan_id)
 
   @doc """
   Drops every cached plan. Call after a bulk plan-limit change (e.g. re-running
@@ -36,7 +33,7 @@ defmodule Engram.Billing.PlanCache do
   cold cache, so this is only needed when limits change without a restart.
   """
   @spec invalidate_all() :: :ok
-  def invalidate_all, do: pt_erase_all()
+  def invalidate_all, do: Cache.evict_all(:plan)
 
   defp load(plan_id) do
     case Repo.one(

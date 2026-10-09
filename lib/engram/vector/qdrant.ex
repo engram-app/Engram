@@ -8,8 +8,6 @@ defmodule Engram.Vector.Qdrant do
   - QDRANT_API_KEY env var — API key for Qdrant Cloud (optional for local)
   """
 
-  use Engram.Cache.PersistentTerm
-
   alias Engram.ServiceConfig
 
   @default_url "http://localhost:6333"
@@ -150,13 +148,13 @@ defmodule Engram.Vector.Qdrant do
     # retries — otherwise one transient Qdrant blip would be cached for the
     # life of the node and every subsequent index would fail against a
     # collection that was fine.
-    # Deliberately NOT `pt_fetch/2`: that helper is read-through and caches
-    # whatever the loader returns, so an error would be written and only then
-    # erased. In the window between those two steps a concurrent caller reads
-    # the cached error and fails WITHOUT attempting the network — turning one
-    # transient Qdrant blip into several. Writing only on success closes that
-    # window rather than cleaning up after it. Same `{__MODULE__, key}`
-    # namespace, so `pt_erase_all/0` still finds these.
+    # Deliberately NOT a read-through helper: that would cache whatever the
+    # loader returns, so an error would be written and only then erased. In the
+    # window between those two steps a concurrent caller reads the cached error
+    # and fails WITHOUT attempting the network — turning one transient Qdrant
+    # blip into several. Writing only on success closes that window rather than
+    # cleaning up after it. Keys live under `{__MODULE__, key}`, which
+    # `forget_collection_memo/0` erases.
     if memo_enabled?() do
       case :persistent_term.get({__MODULE__, key}, :__miss__) do
         :ok ->
@@ -200,7 +198,11 @@ defmodule Engram.Vector.Qdrant do
   drop/recreate is a deliberate operator action, and this is the deliberate
   counterpart.
   """
-  def forget_collection_memo, do: pt_erase_all()
+  def forget_collection_memo do
+    for {{__MODULE__, _} = k, _v} <- :persistent_term.get(), do: :persistent_term.erase(k)
+
+    :ok
+  end
 
   defp do_ensure_collection(col, dims) do
     case create_collection(col, dims) do

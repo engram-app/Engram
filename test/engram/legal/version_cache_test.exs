@@ -29,12 +29,12 @@ defmodule Engram.Legal.VersionCacheTest do
 
   describe "cross-node invalidation (PubSub round-trip)" do
     alias Engram.Cluster.CacheSync
-    alias Engram.Legal.VersionCache.Invalidator
 
-    test "invalidate_all/0 broadcasts the documented evict-all message" do
+    test "invalidate_all/0 broadcasts the documented evict-all messages" do
       CacheSync.subscribe()
       VersionCache.invalidate_all()
-      assert_receive {:cache_sync, :version_evict_all}
+      assert_receive {:cache_sync, {:engram_cache_evict_all, :legal_version}}
+      assert_receive {:cache_sync, {:engram_cache_evict_all, :onboarding_gate}}
     end
 
     test "a peer evict message clears the local cache (next read reloads)" do
@@ -45,20 +45,20 @@ defmodule Engram.Legal.VersionCacheTest do
       # Still memoized at the old floor until an eviction lands.
       assert VersionCache.required_floor("terms_of_service") == "2026-05-19"
 
-      CacheSync.broadcast(:version_evict_all)
-      # Barrier: sync the Invalidator so its handle_info has run.
-      _ = :sys.get_state(Invalidator)
+      CacheSync.broadcast({:engram_cache_evict_all, :legal_version})
+      # Barrier: sync the Server so its handle_info has run.
+      _ = :sys.get_state(Engram.Cache.Server)
 
       assert VersionCache.required_floor("terms_of_service") == "2026-06-01"
     end
 
-    test "Invalidator ignores a foreign cache_sync message (DekCache's) without crashing" do
-      pid = Process.whereis(Invalidator)
+    test "Cache.Server ignores a foreign cache_sync message (DekCache's) without crashing" do
+      pid = Process.whereis(Engram.Cache.Server)
       insert_version(version: "2026-05-19", material: true, effective_date: nil)
       assert VersionCache.required_floor("terms_of_service") == "2026-05-19"
 
       CacheSync.broadcast({:dek_evict, 1})
-      _ = :sys.get_state(Invalidator)
+      _ = :sys.get_state(Engram.Cache.Server)
 
       assert Process.alive?(pid)
       # foreign message must NOT have erased the cache

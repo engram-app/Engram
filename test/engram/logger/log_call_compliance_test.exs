@@ -207,13 +207,11 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/billing/workers/",
     "lib/engram/legal.ex",
     "lib/engram/legal/",
-    "lib/engram/legal/version_cache/",
     "lib/engram/onboarding.ex",
     "lib/engram/onboarding/",
     "lib/engram/paddle/",
     "lib/engram/paddle/client/",
     "lib/engram/usage_meters.ex",
-    "lib/engram/usage_meters/",
 
     # Web plumbing — routing, plugs, schemas, sockets. Request PATHS are handled
     # in `request_logger.ex`, which IS in scope.

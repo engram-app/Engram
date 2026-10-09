@@ -8,7 +8,6 @@ defmodule Engram.OAuth.Cimd.JwksTest do
 
   alias Engram.OAuth.Cimd.FetcherMock
   alias Engram.OAuth.Cimd.Jwks
-  alias Engram.OAuth.Cimd.JwksCache
   alias Engram.OAuth.Client
 
   setup :verify_on_exit!
@@ -19,7 +18,7 @@ defmodule Engram.OAuth.Cimd.JwksTest do
     # the second test to use @jwks_uri gets a cache hit, the fetcher is never
     # called, and Mox fails the expectation for a reason that has nothing to do
     # with what the test is asserting.
-    JwksCache.clear_local()
+    Engram.Cache.clear_local(:jwks)
     :ok
   end
 

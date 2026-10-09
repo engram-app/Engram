@@ -17,7 +17,6 @@ defmodule EngramWeb.LifecycleGateChannelTest do
   alias Engram.Onboarding.GateCache
   alias Engram.Repo
   alias Engram.UsageMeters
-  alias Engram.UsageMeters.ActivityCache
   alias Engram.Vaults
 
   setup do
@@ -253,7 +252,7 @@ defmodule EngramWeb.LifecycleGateChannelTest do
     # Porting the enforcement half of the pipeline without the liveness half
     # is what turns a latent mis-classification into user-visible data loss.
     test "a crdt: join stamps last_active_at", %{user: user, vault: vault} do
-      ActivityCache.clear_local()
+      Engram.Cache.clear_local(:activity)
 
       assert {:ok, _, joined} = join_crdt(user, vault)
       Sandbox.allow(Repo, self(), joined.channel_pid)
@@ -262,7 +261,7 @@ defmodule EngramWeb.LifecycleGateChannelTest do
     end
 
     test "a sync: join stamps last_active_at", %{user: user, vault: vault} do
-      ActivityCache.clear_local()
+      Engram.Cache.clear_local(:activity)
 
       assert {:ok, _, _} =
                subscribe_and_join(
@@ -277,7 +276,7 @@ defmodule EngramWeb.LifecycleGateChannelTest do
     # An ACCOUNT-refused join is not activity: a suspended or deleted client
     # retrying forever must not keep its own account looking alive.
     test "an account-gate refusal does not stamp", %{user: user, vault: vault} do
-      ActivityCache.clear_local()
+      Engram.Cache.clear_local(:activity)
       user = mark!(user, :suspended_at)
 
       assert {:error, %{reason: "account_suspended"}} = join_crdt(user, vault)
@@ -291,7 +290,7 @@ defmodule EngramWeb.LifecycleGateChannelTest do
     # transports. Stamping after the entitlement gate instead would let
     # InactivityCleanup soft-delete an account generating daily traffic.
     test "an ENTITLEMENT refusal still stamps", %{user: user, vault: vault} do
-      ActivityCache.clear_local()
+      Engram.Cache.clear_local(:activity)
       {:ok, _raw, api_key} = Engram.Accounts.create_api_key(user, "no-entitlement")
 
       assert {:error, %{reason: "api_access_not_available"}} =

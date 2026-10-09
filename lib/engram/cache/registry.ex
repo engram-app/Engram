@@ -12,7 +12,50 @@ defmodule Engram.Cache.Registry do
   """
 
   @base [
-    # entries are added by later tasks
+    # Hits AND misses of user_limit_overrides, keyed {user_id, limit_key};
+    # evicted per user (Postgres NOTIFY payload is the user id).
+    %{
+      name: :billing_override,
+      ttl: 60_000,
+      cache_nil: true,
+      evict_match: :first_elem,
+      pg_channel: "user_limit_overrides_changed"
+    },
+    # Fully resolved capability map per user. Freshness is explicit eviction;
+    # the 24h TTL is only a backstop.
+    %{
+      name: :billing_entitlement,
+      ttl: 86_400_000,
+      cache_nil: false,
+      evict_match: :key,
+      pg_channel: "user_limit_overrides_changed"
+    },
+    # Per-vault avgdl (BM25 length normalizer); a soft value, TTL-only.
+    %{name: :avgdl, ttl: 600_000, cache_nil: false, evict_match: :key, pg_channel: nil},
+    # CIMD client signing keys by jwks_uri; public keys, TTL-only.
+    %{name: :jwks, ttl: 3_600_000, cache_nil: false, evict_match: :key, pg_channel: nil},
+    # RequireOnboarding PASS verdict per user (value is the expiry deadline).
+    %{
+      name: :onboarding_gate,
+      ttl: 60_000,
+      cache_nil: false,
+      evict_match: :key,
+      pg_channel: nil
+    },
+    # Latest accepted terms version per {user_id, document}; monotonic.
+    %{name: :terms, ttl: :infinity, cache_nil: false, evict_match: :key, pg_channel: nil},
+    # Last usage_meters.last_active_at stamp per user (debounce).
+    %{name: :activity, ttl: :infinity, cache_nil: false, evict_match: :key, pg_channel: nil},
+    # Plan limits maps by plan id; plan rows are static at runtime.
+    %{name: :plan, ttl: :infinity, cache_nil: true, evict_match: :key, pg_channel: nil},
+    # Legal floor / current version / hash per document; evicted on publish.
+    %{
+      name: :legal_version,
+      ttl: :infinity,
+      cache_nil: true,
+      evict_match: :key,
+      pg_channel: nil
+    }
   ]
 
   if Mix.env() == :test do

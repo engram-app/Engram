@@ -11,13 +11,13 @@ defmodule Engram.Onboarding do
   """
 
   alias Engram.Accounts
+  alias Engram.Cache
   alias Engram.Legal
   alias Engram.Legal.VersionCache
   alias Engram.Logger.Metadata
   alias Engram.Onboarding.Action
   alias Engram.Onboarding.Agreement
   alias Engram.Onboarding.GateCache
-  alias Engram.Onboarding.TermsCache
   alias Engram.Repo
   alias Engram.Vaults
 
@@ -97,8 +97,8 @@ defmodule Engram.Onboarding do
 
     case result do
       {:ok, tos_row} ->
-        TermsCache.put_accepted(user.id, @terms_document, tos_version)
-        TermsCache.put_accepted(user.id, @privacy_document, privacy_version)
+        Cache.put(:terms, {user.id, @terms_document}, tos_version)
+        Cache.put(:terms, {user.id, @privacy_document}, privacy_version)
         {:ok, tos_row}
 
       other ->
@@ -519,14 +519,14 @@ defmodule Engram.Onboarding do
 
   # Cache-first read of the user's latest accepted version for a document.
   defp accepted_version(user, document) do
-    case TermsCache.accepted_version(user.id, document) do
-      nil ->
-        v = query_accepted_version(user, document)
-        if v, do: TermsCache.put_accepted(user.id, document, v)
-        v
-
-      cached ->
+    case Cache.get(:terms, {user.id, document}) do
+      {:ok, cached} ->
         cached
+
+      :miss ->
+        v = query_accepted_version(user, document)
+        if v, do: Cache.put(:terms, {user.id, document}, v)
+        v
     end
   end
 

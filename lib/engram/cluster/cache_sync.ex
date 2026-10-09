@@ -5,7 +5,7 @@ defmodule Engram.Cluster.CacheSync do
   cluster-wide when one node mutates shared state:
 
     * `Engram.Crypto.DekCache`     — after a DEK rotation / AAD rebind
-    * `Engram.Legal.VersionCache`  — after a terms/privacy (re)seed or publish
+    * `Engram.Cache`               — every registry cache, via `Engram.Cache.evict/2`
 
   Pattern: the mutating node clears its OWN cache synchronously, then calls
   `broadcast/1` so peers evict. Each cache subscribes via `subscribe/0` from a
@@ -14,7 +14,8 @@ defmodule Engram.Cluster.CacheSync do
   there is no loop.
 
   Message shape: `{:cache_sync, payload}` where payload is one of
-  `{:dek_evict, user_id}`, `:dek_evict_all`, `:version_evict_all`. Each
+  `{:dek_evict, user_id}`, `:dek_evict_all`, `{:engram_cache_evict, cache, key}`,
+  `{:engram_cache_evict_all, cache}`. Each
   subscriber pattern-matches only its own payloads and ignores the rest.
   """
 
