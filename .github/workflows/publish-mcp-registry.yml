@@ -95,7 +95,8 @@ jobs:
           jq -s '.[0] + {
                    version: .[1].version,
                    tools: [.[2].tools[] | {name, description, inputSchema}],
-                   prompts: .[2].prompts
+                   prompts: .[2].prompts,
+                   resources: .[2].resources
                  }' .github/lobehub/lhm.plugin.base.json server.json mcp-tools.json \
             > "$RUNNER_TEMP/lhm/lhm.plugin.json"
           jq '{version, tools: (.tools | length), prompts: (.prompts | length)}' "$RUNNER_TEMP/lhm/lhm.plugin.json"

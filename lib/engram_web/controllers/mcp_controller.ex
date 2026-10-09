@@ -2,12 +2,14 @@ defmodule EngramWeb.McpController do
   @moduledoc """
   MCP (Model Context Protocol) server — JSON-RPC 2.0 over HTTP POST.
   Dispatches initialize, tools/list and tools/call to the tool registry, and
-  prompts/list and prompts/get to `Engram.MCP.Prompts`.
+  prompts/list and prompts/get to `Engram.MCP.Prompts`, and resources/* and
+  completion/complete to `Engram.MCP.Resources`.
   """
   use EngramWeb, :controller
 
   alias Engram.Abuse.OriginStats
   alias Engram.MCP.Prompts
+  alias Engram.MCP.Resources
   alias Engram.MCP.Tools
   alias Engram.Observability.PostHog
 
@@ -15,7 +17,9 @@ defmodule EngramWeb.McpController do
 
   @capabilities %{
     "tools" => %{"listChanged" => false},
-    "prompts" => %{"listChanged" => false}
+    "prompts" => %{"listChanged" => false},
+    "resources" => %{"listChanged" => false, "subscribe" => false},
+    "completions" => %{}
   }
 
   @doc """
@@ -99,8 +103,7 @@ defmodule EngramWeb.McpController do
   @modern_removed_methods ~w(initialize ping logging/setLevel notifications/roots/list_changed)
 
   # Cache hints the modern era REQUIRES on `resultType: "complete"` results
-  # from a fixed set of operations. We expose three of them; the rest
-  # (resources/*) we do not serve.
+  # from a fixed set of operations. We expose all of them.
   #
   # An hour: both results change only on deploy. We advertise
   # `listChanged: false`, so there is no invalidation signal and the TTL is the
@@ -119,7 +122,11 @@ defmodule EngramWeb.McpController do
   @cacheable_results %{
     "server/discover" => %{"ttlMs" => 3_600_000, "cacheScope" => "public"},
     "tools/list" => %{"ttlMs" => 3_600_000, "cacheScope" => "public"},
-    "prompts/list" => %{"ttlMs" => 3_600_000, "cacheScope" => "public"}
+    "prompts/list" => %{"ttlMs" => 3_600_000, "cacheScope" => "public"},
+    "resources/templates/list" => %{"ttlMs" => 3_600_000, "cacheScope" => "public"},
+    # Per user and per credential scope, and notes change constantly.
+    "resources/list" => %{"ttlMs" => 60_000, "cacheScope" => "private"},
+    "resources/read" => %{"ttlMs" => 0, "cacheScope" => "private"}
   }
 
   # `2024-11-05` is on the list for CONTINUITY, not ambition. SDKs released
@@ -622,6 +629,70 @@ defmodule EngramWeb.McpController do
     {:error, -32_602, "Invalid params: name required"}
   end
 
+  defp dispatch(_conn, "resources/templates/list", _params) do
+    {:ok, %{"resourceTemplates" => [Resources.template()]}}
+  end
+
+  defp dispatch(conn, "resources/list", _params) do
+    user = conn.assigns.current_user
+    {:ok, %{"resources" => Resources.list(user, accessible_vaults(user, conn))}}
+  end
+
+  # The vault goes through `resolve_requested_vault/3`, the same scope check a
+  # tool call's `vault_id` gets, so a URI can reach nothing a tool call cannot.
+  # Its refusal text is keyed on the credential's scope, never on whether the
+  # vault exists, so -32002 here is not an existence oracle either.
+  defp dispatch(conn, "resources/read", %{"uri" => uri}) when is_binary(uri) do
+    user = conn.assigns.current_user
+
+    with {:ok, ref, path} <- Resources.parse(uri),
+         {:ok, vault} <- resolve_requested_vault(user, ref, conn),
+         {:ok, note} <- Engram.Notes.get_note(user, vault, path) do
+      {:ok, Resources.contents(uri, note)}
+    else
+      :error -> {:error, -32_602, "Invalid params: uri must look like engram://{vault}/{path}"}
+      {:error, :not_found} -> {:error, -32_002, "Resource not found: #{uri}"}
+      {:error, msg} when is_binary(msg) -> {:error, -32_002, msg}
+    end
+  end
+
+  defp dispatch(_conn, "resources/read", _params) do
+    {:error, -32_602, "Invalid params: uri required"}
+  end
+
+  defp dispatch(
+         conn,
+         "completion/complete",
+         %{"ref" => %{"type" => _} = ref, "argument" => %{"name" => name, "value" => value}} =
+           params
+       )
+       when is_binary(name) and is_binary(value) do
+    user = conn.assigns.current_user
+    template = Resources.template_uri()
+
+    completion =
+      case {ref, name} do
+        {%{"type" => "ref/resource", "uri" => ^template}, "vault"} ->
+          Resources.complete_vaults(accessible_vaults(user, conn), value)
+
+        {%{"type" => "ref/resource", "uri" => ^template}, "path"} ->
+          case completion_vault(user, params["context"], conn) do
+            {:ok, vault} -> Resources.complete_paths(user, vault, value)
+            _ -> Resources.completion([])
+          end
+
+        # Prompt arguments are free text; nothing to suggest.
+        _ ->
+          Resources.completion([])
+      end
+
+    {:ok, %{"completion" => completion}}
+  end
+
+  defp dispatch(_conn, "completion/complete", _params) do
+    {:error, -32_602, "Invalid params: ref and argument required"}
+  end
+
   defp dispatch(conn, "tools/call", %{"name" => name, "arguments" => args}) do
     start_mono = System.monotonic_time()
 
@@ -1078,6 +1149,13 @@ defmodule EngramWeb.McpController do
       many -> {:many, many}
     end
   end
+
+  # The vault picked earlier in the same completion, else the credential's
+  # only vault. Several vaults and no pick suggests nothing rather than guess.
+  defp completion_vault(user, %{"arguments" => %{"vault" => ref}}, conn) when is_binary(ref),
+    do: resolve_requested_vault(user, ref, conn)
+
+  defp completion_vault(user, _context, conn), do: resolve_bare_vault(user, conn)
 
   defp text_result(text),
     do: %{"content" => [%{"type" => "text", "text" => text}], "isError" => false}

@@ -89,6 +89,15 @@
       "title": "Organize a folder"
     }
   ],
+  "resources": [
+    {
+      "description": "A note from one of your vaults. Pick the vault, then search by path.",
+      "mimeType": "text/markdown",
+      "name": "note",
+      "title": "Vault note",
+      "uriTemplate": "engram://{vault}/{+path}"
+    }
+  ],
   "tools": [
     {
       "annotations": {

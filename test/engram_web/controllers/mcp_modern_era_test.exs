@@ -181,8 +181,14 @@ defmodule EngramWeb.McpModernEraTest do
   describe "cache hints on cacheable results" do
     # Servers MUST include them on `resultType: "complete"` results from
     # server/discover, tools/list, prompts/list, resources/list,
-    # resources/templates/list and resources/read. We expose the first three.
-    for method <- ["server/discover", "tools/list", "prompts/list"] do
+    # resources/templates/list and resources/read. We expose all of them.
+    for method <- [
+          "server/discover",
+          "tools/list",
+          "prompts/list",
+          "resources/list",
+          "resources/templates/list"
+        ] do
       test "#{method} carries ttlMs and cacheScope", %{conn: conn} do
         result = json_response(post_modern(conn, unquote(method)), 200)["result"]
 
