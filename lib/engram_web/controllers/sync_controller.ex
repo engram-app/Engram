@@ -133,8 +133,8 @@ defmodule EngramWeb.SyncController do
             n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
               n.kind == "note",
           select:
-            {n.id, fragment("uuid_send(?)", n.id), n.dek_version, n.path_ciphertext,
-             n.path_nonce, n.content_hash, n.seq, n.crdt_head}
+            {n.id, fragment("uuid_send(?)", n.id), n.dek_version, n.path_ciphertext, n.path_nonce,
+             n.content_hash, n.seq, n.crdt_head}
         )
       )
 
@@ -143,8 +143,8 @@ defmodule EngramWeb.SyncController do
         from(a in Attachment,
           where: a.user_id == ^user.id and a.vault_id == ^vault.id and is_nil(a.deleted_at),
           select:
-            {a.id, fragment("uuid_send(?)", a.id), a.dek_version, a.path_ciphertext,
-             a.path_nonce, a.content_hash, a.seq}
+            {a.id, fragment("uuid_send(?)", a.id), a.dek_version, a.path_ciphertext, a.path_nonce,
+             a.content_hash, a.seq}
         )
       )
 
