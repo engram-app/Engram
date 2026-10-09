@@ -108,6 +108,20 @@ defmodule Engram.Notes.ContentCommitTest do
 
   # The dispatcher is the only durable carrier of the three jobs, so a failed
   # insert must fail the job (Oban retries it; uniqueness keeps that safe).
+  # Every checkpoint passes through :events now; without a priority an
+  # interactive edit's jobs queue behind a whole first-sync flood.
+  test "the dispatcher runs at the embed priority" do
+    for p <- [0, 3] do
+      job =
+        NoteCommitted.job(Ecto.UUID.generate(), Ecto.UUID.generate(),
+          embed_priority: p,
+          finalize?: false
+        )
+
+      assert Ecto.Changeset.get_field(job, :priority) == p
+    end
+  end
+
   test "the dispatcher fails when a downstream insert fails, and its retry dedupes" do
     note_id = Ecto.UUID.generate()
     args = %{note_id: note_id, user_id: Ecto.UUID.generate(), finalize: false}

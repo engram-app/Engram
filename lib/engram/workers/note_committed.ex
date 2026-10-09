@@ -22,12 +22,20 @@ defmodule Engram.Workers.NoteCommitted do
   @doc "The dispatcher job for a checkpoint of `note_id` that changed its content."
   @spec job(String.t(), String.t(), keyword()) :: Oban.Job.changeset()
   def job(note_id, user_id, opts) when is_binary(note_id) and is_binary(user_id) do
-    new(%{
-      note_id: note_id,
-      user_id: user_id,
-      embed_priority: Keyword.fetch!(opts, :embed_priority),
-      finalize: Keyword.fetch!(opts, :finalize?)
-    })
+    priority = Keyword.fetch!(opts, :embed_priority)
+
+    # At the embed's own rank: every content checkpoint passes through this
+    # queue, so an interactive edit must not wait FIFO behind a first-sync
+    # flood's dispatchers (EmbedNote.priority_for/1).
+    new(
+      %{
+        note_id: note_id,
+        user_id: user_id,
+        embed_priority: priority,
+        finalize: Keyword.fetch!(opts, :finalize?)
+      },
+      priority: priority
+    )
   end
 
   # Three inserts; finite so a stuck one cannot pin an events slot (#1496).
