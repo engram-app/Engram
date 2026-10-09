@@ -43,7 +43,9 @@ defmodule Engram.QueryBudgetTest do
   # onboarding actions, the live note count and vault content counts (-18).
   # DELETE and rename now warm up with a delete / rename of another note, so
   # the per-user plan-limit lookup they make is warm as in prod (-1 each: a
-  # measurement fix, no code change).
+  # measurement fix, no code change). Task 10b fix round 1: bootstrap runs
+  # its DB work in one tenant block (cold 29 -> 20, warm 0 -> 3: the block
+  # opens even when every loader hits).
   @budgets %{
     # Read target 5. begin, tenant_enter, the note, commit.
     "mcp get_notes" => 4,
@@ -90,7 +92,19 @@ defmodule Engram.QueryBudgetTest do
     # rotation lock, begin, enter, the note row, seq bump, tombstone,
     # usage_meters, two job inserts + their pg_notify, commit.
     "DELETE notes/*path" => 12,
-    "GET /api/bootstrap" => 0,
+    # Warm: every loader is a cache hit; what remains is the controller's one
+    # tenant block (begin, enter, commit), opened unconditionally (fix round 1
+    # ruling: bootstrap's DB work runs in ONE block).
+    "GET /api/bootstrap" => 3,
+    # Bootstrap target 5; floor 20. Auth plug, before the controller (its own
+    # cached lookups, cold after 60 s): 1-6 API key lookup (BEGIN, lookup role,
+    # key row, role reset needed by 5, key's vault scope, COMMIT), 7 users row,
+    # 8-11 subscription in its tenant block. Controller, one block: 12, 13, 20
+    # begin / enter / commit; 14 vault list (has_vault?, vault count, vaults
+    # payload); 15 onboarding actions; 16 indexed_notes_cap override (the cap
+    # decides whether to count at all); 17 live note count; 18, 19 per-vault
+    # note and attachment counts.
+    "GET /api/bootstrap cold" => 20,
     "GET folders" => 5,
     "GET tags" => 4,
     # Task 7b. The old "crdt_msg update" (40) was a keystroke (7) plus a
@@ -154,7 +168,19 @@ defmodule Engram.QueryBudgetTest do
   # still counts.
   defp measure(name, warm, fun) do
     Engram.DataCase.clear_request_caches()
-    if warm == true, do: fun.(), else: warm.()
+
+    cond do
+      warm == :cold ->
+        fun.()
+        clear_short_ttl_caches()
+
+      warm == true ->
+        fun.()
+
+      true ->
+        warm.()
+    end
+
     {result, recorded} = QueryRecorder.record(fun)
     qs = Enum.reject(recorded, &(&1.source == "tenant_exit_sandbox"))
     budget = Map.fetch!(@budgets, name)
@@ -162,6 +188,14 @@ defmodule Engram.QueryBudgetTest do
 
     assert length(qs) == budget, report
     result
+  end
+
+  # Every cache with a TTL of 60 s or less: what a page load more than 60 s
+  # after the last one finds empty on a long-lived node. The hour-plus caches
+  # (DEK, plan, entitlement, terms, legal) stay warm, as they would be.
+  defp clear_short_ttl_caches do
+    Engram.DataCase.clear_request_caches()
+    for c <- [:billing_override, :onboarding_gate], do: Engram.Cache.clear_local(c)
   end
 
   defp tool_ok!(conn) do
@@ -292,6 +326,12 @@ defmodule Engram.QueryBudgetTest do
 
     test "GET /api/bootstrap", %{conn: conn} do
       measure("GET /api/bootstrap", true, fn -> conn |> get("/api/bootstrap") |> ok!() end)
+    end
+
+    # Warmed once, then every 60 s-TTL cache cleared: the same user's next
+    # page load more than 60 s later (see clear_short_ttl_caches/0).
+    test "GET /api/bootstrap cold", %{conn: conn} do
+      measure("GET /api/bootstrap cold", :cold, fn -> conn |> get("/api/bootstrap") |> ok!() end)
     end
 
     test "GET folders", %{conn: conn} do
