@@ -305,7 +305,8 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
 
   # A late reply to a room call that timed out (room_snapshot/1). Dropped: a
   # crash here would take the linked room down with it.
-  def handle_info({ref, _, _}, state) when is_reference(ref), do: {:noreply, state}
+  def handle_info(reply, state) when is_tuple(reply) and is_reference(elem(reply, 0)),
+    do: {:noreply, state}
 
   # Only drain-ENABLED rooms are tracked for eviction, so a room with the drain
   # explicitly off can never be LRU-evicted either. Since the drain now defaults
@@ -457,18 +458,22 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     # Prune EXACTLY those (#1146 spec 0a). A row anyone else appended after the
     # room bound, or one that failed to decrypt at bind, is in no snapshot and
     # is not in the list, so it stays. Same rule #1391 set for the index room.
-    with {:ok, encoded, ids} <- room_snapshot(room_pid) do
-      {:ok, pruned} =
-        CrdtCheckpoint.checkpoint_pruning(state.user_id, state.vault_id, state.room_key, encoded,
-          prune_ids: ids
-        )
-
-      # Gone from the tail, so the room stops offering them. Rows it appended
-      # since the snapshot stay on its list.
-      if pruned != [] do
-        :ok =
-          SharedDoc.update_doc(room_pid, fn _doc -> CrdtPersistence.forget_tail_ids(pruned) end)
-      end
+    with {:ok, encoded, ids, failures} <- room_snapshot(room_pid),
+         {:written, pruned} <-
+           CrdtCheckpoint.checkpoint_pruning(
+             state.user_id,
+             state.vault_id,
+             state.room_key,
+             encoded,
+             prune_ids: ids
+           ) do
+      # The snapshot is durable: the room stops offering the pruned rows (rows
+      # it appended since stay on its list) and, if every append that failed
+      # before the snapshot is in it, acknowledges updates again.
+      :ok =
+        SharedDoc.update_doc(room_pid, fn _doc ->
+          CrdtPersistence.checkpointed(pruned, failures)
+        end)
     end
   rescue
     err -> log_read_failure(state, err)
@@ -490,12 +495,16 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
 
     :ok =
       SharedDoc.update_doc(room_pid, fn doc ->
-        send(parent, {ref, Yex.encode_state_as_update(doc), CrdtPersistence.known_tail_ids()})
+        send(
+          parent,
+          {ref, Yex.encode_state_as_update(doc), CrdtPersistence.known_tail_ids(),
+           CrdtPersistence.append_failures()}
+        )
       end)
 
     receive do
-      {^ref, {:ok, encoded}, ids} -> {:ok, encoded, ids}
-      {^ref, error, _ids} -> error
+      {^ref, {:ok, encoded}, ids, failures} -> {:ok, encoded, ids, failures}
+      {^ref, error, _ids, _failures} -> error
     after
       0 -> {:error, :no_snapshot}
     end

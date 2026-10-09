@@ -207,65 +207,74 @@ defmodule Engram.Notes.CrdtPersistence do
     user = state[:user] || Accounts.get_user!(user_id)
     interleave_hook(:before_tail_append)
 
-    case Crypto.encrypt_crdt_state(update, user, note_id) do
-      {:ok, {ct, nonce}} ->
-        row_id = UUIDv7.generate()
+    with :ok <- append_fault(),
+         {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(update, user, note_id) do
+      row_id = UUIDv7.generate()
 
-        {:ok, seq} =
-          Repo.with_tenant(user_id, fn -> append_row(row_id, state, ct, nonce) end)
+      {:ok, seq} =
+        Repo.with_tenant(user_id, fn -> append_row(row_id, state, ct, nonce) end)
 
-        # The id is now in the room's doc AND durably in the tail, so a
-        # checkpoint of this room may prune it (see known_tail_ids/0). Only a
-        # room: a direct call's `doc` is whatever the caller passed.
-        if in_room?(), do: remember_tail_id(row_id)
+      # The id is now in the room's doc AND durably in the tail, so a
+      # checkpoint of this room may prune it (see known_tail_ids/0). Only a
+      # room: a direct call's `doc` is whatever the caller passed.
+      if in_room?(), do: remember_tail_id(row_id)
 
-        # Fan out the update to every device on this vault over the single
-        # per-vault sync channel (the `document.updated` model). This is
-        # what lets an IDLE note (one the client never STEP1-enrolled) converge
-        # without opening its own CRDT room: the client applies these pushed
-        # bytes straight to the note's Y.Doc. Fires on EVERY update source
-        # (channel, REST /updates, deliver-out) because they all funnel here.
-        # base64 because the JSON serializer can't carry raw binary; `head` lets
-        # the client advance its per-note watermark without a REST round-trip.
-        # Self-echo is harmless: the client applies with REMOTE_ORIGIN (no
-        # re-broadcast) and Yjs re-apply is a no-op.
-        #
-        # NOTE — `b64` here is the DELTA (this single update), paired with the
-        # FULL post-apply `head`. `CrdtDeliver.fanout_idle` sends FULL state under
-        # the same contract. A device behind the delta's causal deps (it never
-        # STEP1-enrolled and missed an earlier update) PENDS the delta in Yjs, so
-        # it does NOT actually reach `head`. The client MUST NOT blind-trust `head`
-        # in that case: `applyPushedNoteUpdate` checks `hasPendingGap` post-apply
-        # and, on a gap, pulls the full delta from its real state vector and
-        # advances the watermark only to the head it truly reached (plugin
-        # `e2304ed`). Without that client guard, the cheap cold-reconcile hash gate
-        # would skip a silently-partial note.
-        # GUARANTEE BOUNDARY (review 2026-07-22): this seq does not advance per
-        # socket delta (checkpoint owns it), so a same-note burst of live deltas
-        # shares ONE seq — the plugin's behind-detector cannot see a loss WITHIN
-        # such a burst; those heal via checkpoint/announce instead. Seq gap-heal
-        # covers seq-BUMPING edits (REST/MCP/checkpoint-driven). And a nil seq
-        # (row deleted concurrently, the Repo.get fallback) is no signal at all:
-        # omit the key rather than ship "seq" => nil to the behind-detector.
-        payload = %{
-          "note_id" => note_id,
-          "b64" => Base.encode64(update),
-          "head" => CrdtTransport.head_marker(doc)
-        }
+      # Fan out the update to every device on this vault over the single
+      # per-vault sync channel (the `document.updated` model). This is
+      # what lets an IDLE note (one the client never STEP1-enrolled) converge
+      # without opening its own CRDT room: the client applies these pushed
+      # bytes straight to the note's Y.Doc. Fires on EVERY update source
+      # (channel, REST /updates, deliver-out) because they all funnel here.
+      # base64 because the JSON serializer can't carry raw binary; `head` lets
+      # the client advance its per-note watermark without a REST round-trip.
+      # Self-echo is harmless: the client applies with REMOTE_ORIGIN (no
+      # re-broadcast) and Yjs re-apply is a no-op.
+      #
+      # NOTE — `b64` here is the DELTA (this single update), paired with the
+      # FULL post-apply `head`. `CrdtDeliver.fanout_idle` sends FULL state under
+      # the same contract. A device behind the delta's causal deps (it never
+      # STEP1-enrolled and missed an earlier update) PENDS the delta in Yjs, so
+      # it does NOT actually reach `head`. The client MUST NOT blind-trust `head`
+      # in that case: `applyPushedNoteUpdate` checks `hasPendingGap` post-apply
+      # and, on a gap, pulls the full delta from its real state vector and
+      # advances the watermark only to the head it truly reached (plugin
+      # `e2304ed`). Without that client guard, the cheap cold-reconcile hash gate
+      # would skip a silently-partial note.
+      # GUARANTEE BOUNDARY (review 2026-07-22): this seq does not advance per
+      # socket delta (checkpoint owns it), so a same-note burst of live deltas
+      # shares ONE seq — the plugin's behind-detector cannot see a loss WITHIN
+      # such a burst; those heal via checkpoint/announce instead. Seq gap-heal
+      # covers seq-BUMPING edits (REST/MCP/checkpoint-driven). And a nil seq
+      # (row deleted concurrently, the Repo.get fallback) is no signal at all:
+      # omit the key rather than ship "seq" => nil to the behind-detector.
+      payload = %{
+        "note_id" => note_id,
+        "b64" => Base.encode64(update),
+        "head" => CrdtTransport.head_marker(doc)
+      }
 
-        payload = if is_integer(seq), do: Map.put(payload, "seq", seq), else: payload
+      payload = if is_integer(seq), do: Map.put(payload, "seq", seq), else: payload
 
-        Engram.Notes.FanoutPacer.emit(
-          "sync:#{user_id}:#{vault_id}",
-          "note_yjs_update",
-          payload,
-          note_id
-        )
-
+      Engram.Notes.FanoutPacer.emit(
+        "sync:#{user_id}:#{vault_id}",
+        "note_yjs_update",
+        payload,
+        note_id
+      )
+    else
       {:error, reason} ->
-        # Read by the next `CrdtTransport.confirm_appended/2`, which refuses
-        # the acknowledgement.
-        Process.put(:crdt_append_failed, true)
+        # The update is in the doc but in no durable row. Every acknowledgement
+        # (`CrdtTransport.confirm_appended/2`) is refused until a checkpoint of
+        # this room commits the doc, so clients keep retrying; a retry is a
+        # no-op apply and appends nothing, so clearing on the next confirm
+        # would ack it while it is still only in memory. Check point now
+        # rather than after the settle delay.
+        Process.put(:crdt_append_failures, append_failures() + 1)
+
+        case Process.get(:crdt_timer_pid) do
+          pid when is_pid(pid) -> send(pid, :tick)
+          _ -> :ok
+        end
 
         Logger.error(
           "crdt_update_log encrypt failed note_id=#{note_id} reason=#{Metadata.safe_reason(reason)}",
@@ -354,10 +363,28 @@ defmodule Engram.Notes.CrdtPersistence do
   end
 
   @doc false
-  # Whether an append failed since the last call, clearing the flag. Runs in the
-  # room (see `CrdtTransport.confirm_appended/2`).
-  @spec take_append_failure() :: boolean()
-  def take_append_failure, do: Process.delete(:crdt_append_failed) == true
+  # Appends that failed since the last committed checkpoint of this room. Runs
+  # in the room (see `CrdtTransport.confirm_appended/2`).
+  @spec append_failures() :: non_neg_integer()
+  def append_failures, do: Process.get(:crdt_append_failures, 0)
+
+  @doc false
+  # A checkpoint of a snapshot taken when `append_failures/0` was `seen`
+  # committed: those failed updates are durable now, and its pruned rows are
+  # gone. A failure after the snapshot keeps the count. Runs in the room.
+  @spec checkpointed([Ecto.UUID.t()], non_neg_integer()) :: :ok
+  def checkpointed(pruned, seen) do
+    if append_failures() == seen, do: Process.put(:crdt_append_failures, 0)
+    forget_tail_ids(pruned)
+  end
+
+  # Test-only fault seam: nil outside tests.
+  defp append_fault do
+    case Application.get_env(:engram, :crdt_tail_append_fault) do
+      nil -> :ok
+      fun when is_function(fun, 0) -> fun.()
+    end
+  end
 
   # Runs on graceful room terminate (SharedDoc `auto_exit: true`). Materializes
   # content/content_hash/seq into the notes row and enqueues a debounced embed.

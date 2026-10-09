@@ -93,19 +93,20 @@ defmodule Engram.Notes.CrdtCheckpoint do
   """
   @spec checkpoint(String.t(), String.t(), String.t(), Yex.Doc.t() | binary(), keyword()) :: :ok
   def checkpoint(user_id, vault_id, note_id, live, opts \\ []) do
-    {:ok, _pruned} = checkpoint_pruning(user_id, vault_id, note_id, live, opts)
+    _ = checkpoint_pruning(user_id, vault_id, note_id, live, opts)
     :ok
   end
 
   @doc """
-  `checkpoint/5`, returning the ids of the tail rows it pruned (`[]` when it
-  skipped, aborted, or pruned by `:watermark`). `live` is the doc or its
-  already-encoded state, so a caller that encoded the doc inside its room (the
-  checkpoint timer) need not rebuild one. A room uses the ids to stop offering
-  rows that are gone.
+  `checkpoint/5`, telling the caller whether the doc's state was committed:
+  `{:written, pruned_ids}` (the tail rows it pruned, `[]` for a `:watermark`
+  prune) or `:skipped` (skipped, aborted, or lost the snapshot fence). `live`
+  is the doc or its already-encoded state, so a caller that encoded the doc
+  inside its room (the checkpoint timer) need not rebuild one. A room uses the
+  answer to stop offering pruned rows and to learn its doc is durable.
   """
   @spec checkpoint_pruning(String.t(), String.t(), String.t(), Yex.Doc.t() | binary(), keyword()) ::
-          {:ok, [Ecto.UUID.t()]}
+          {:written, [Ecto.UUID.t()]} | :skipped
   def checkpoint_pruning(user_id, vault_id, note_id, live, opts \\ [])
       when is_binary(live) or is_struct(live, Yex.Doc) do
     # Deleted user/note are EXPECTED lifecycle states here (vault force-purge
@@ -119,7 +120,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
           Metadata.with_category(:warning, :sync, note_id: note_id)
         )
 
-        {:ok, []}
+        :skipped
 
       user ->
         # #1341. A checkpoint encrypts crdt_state with the user's CURRENT DEK.
@@ -144,7 +145,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
               Metadata.with_category(:warning, :sync, note_id: note_id)
             )
 
-            {:ok, []}
+            :skipped
 
           _ ->
             do_checkpoint(user, user_id, vault_id, note_id, live, opts)
@@ -175,7 +176,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
         Metadata.with_category(:error, :sync, note_id: note_id)
       )
 
-      {:ok, []}
+      :skipped
   end
 
   defp do_checkpoint(user, user_id, vault_id, note_id, live, opts) do
@@ -316,7 +317,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
                 CrdtDeliver.announce_ready(user_id, vault_id, path, note_id)
               end
 
-            {:ok, pruned}
+            if pruned == :not_written, do: :skipped, else: {:written, pruned}
 
           {:skip, reason} ->
             Logger.warning(
@@ -324,7 +325,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
               Metadata.with_category(:warning, :sync, note_id: note_id)
             )
 
-            {:ok, []}
+            :skipped
 
           # The tag arrives NESTED, and only nested. `union_with_row_state`
           # returns `{:error, {:row_state_unreadable, _}}`, and both callers'
@@ -333,7 +334,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
           # which is exactly the indistinguishability this removes.
           {:abort, {:error, {:row_state_unreadable, _}} = err} ->
             report_unreadable_state(user_id, note_id, err)
-            {:ok, []}
+            :skipped
 
           {:abort, err} ->
             :telemetry.execute(@abort_event, %{count: 1}, %{phase: :other})
@@ -343,7 +344,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
               Metadata.with_category(:error, :sync, note_id: note_id)
             )
 
-            {:ok, []}
+            :skipped
         end
 
       err ->
@@ -352,7 +353,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
           Metadata.with_category(:error, :sync, note_id: note_id)
         )
 
-        {:ok, []}
+        :skipped
     end
   rescue
     err ->
@@ -363,7 +364,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
         Metadata.with_category(:error, :sync, note_id: note_id)
       )
 
-      {:ok, []}
+      :skipped
   end
 
   defp live_state(state) when is_binary(state), do: {:ok, state}
@@ -627,7 +628,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
               Metadata.with_category(:info, :sync, note_id: note_id)
             )
 
-            {content_hash, content_hash, note.path, nil, []}
+            {content_hash, content_hash, note.path, nil, :not_written}
         end
     end
   end

@@ -287,9 +287,10 @@ defmodule Engram.Notes.CrdtTransport do
   The room appends in `CrdtPersistence.update_v1/4`, which y_ex runs inline
   after a sync-update cast but only as a follow-up message after an
   `update_doc` call. Either way it is queued ahead of this call, so the call
-  returns after it. `{:error, :append_failed}` means an append in that window
-  failed (logged by the room); `{:error, :room_unavailable}` that the room died
-  or did not answer in `timeout`. Retrying is safe: Yjs updates are idempotent.
+  returns after it. `{:error, :append_failed}` means an append of this room
+  failed and no checkpoint has committed the doc since, so this update may not
+  be durable; `{:error, :room_unavailable}` that the room died or did not
+  answer in `timeout`. Retrying is safe: Yjs updates are idempotent.
   """
   @spec confirm_appended(pid(), timeout()) :: :ok | {:error, :append_failed | :room_unavailable}
   def confirm_appended(room, timeout \\ 5_000) do
@@ -299,7 +300,7 @@ defmodule Engram.Notes.CrdtTransport do
     try do
       SharedDoc.update_doc(
         room,
-        fn _doc -> send(parent, {ref, CrdtPersistence.take_append_failure()}) end,
+        fn _doc -> send(parent, {ref, CrdtPersistence.append_failures() > 0}) end,
         timeout
       )
 

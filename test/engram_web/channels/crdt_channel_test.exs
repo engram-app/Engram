@@ -1448,6 +1448,88 @@ defmodule EngramWeb.CrdtChannelTest do
       assert_reply ref, :ok, %{}, 3000
       assert durable_text(user, vault, note.id) == "ACKED-base"
     end
+
+    # Fail the room's next `n` tail appends (test-only seam in update_v1).
+    defp fail_appends(n) do
+      left = :counters.new(1, [])
+      :counters.put(left, 1, n)
+
+      Application.put_env(:engram, :crdt_tail_append_fault, fn ->
+        if :counters.get(left, 1) > 0 do
+          :counters.sub(left, 1, 1)
+          {:error, :injected}
+        else
+          :ok
+        end
+      end)
+
+      on_exit(fn -> Application.delete_env(:engram, :crdt_tail_append_fault) end)
+    end
+
+    defp join_second(user, vault) do
+      {:ok, _, s2} =
+        subscribe_and_join(
+          user_socket(user),
+          EngramWeb.CrdtChannel,
+          "crdt:#{user.id}:#{vault.id}",
+          %{
+            "crdt_proto" => 2
+          }
+        )
+
+      Sandbox.allow(Repo, self(), s2.channel_pid)
+      s2
+    end
+
+    defp push_edit(socket, note_id, frame) do
+      push(socket, "crdt_msg", %{"doc_id" => note_id, "b64" => Base.encode64(frame)})
+    end
+
+    test "a failed append is not acked, whichever socket confirms first", ctx do
+      %{socket: socket, user: user, vault: vault, note: note} = ctx
+      other = join_second(user, vault)
+      _ = handshake_room(socket, note.id)
+      failing = delta_frame(socket, note.id, "LOST-")
+      fine = delta_frame(other, note.id, "KEPT-")
+
+      fail_appends(1)
+      ref_other = push_edit(other, note.id, fine)
+      ref = push_edit(socket, note.id, failing)
+
+      refute_reply ref, :ok, _, 1_000
+      assert_reply ref, :error, %{reason: "room_unavailable"}, 3000
+      refute_reply ref_other, :ok, _, 200
+    end
+
+    test "a retry after a failed append is not acked until a checkpoint commits", ctx do
+      %{socket: socket, note: note} = ctx
+      _ = handshake_room(socket, note.id)
+      frame = delta_frame(socket, note.id, "RETRY-")
+
+      room = CrdtRegistry.lookup(note.id)
+      me = self()
+
+      :ok =
+        SharedDoc.update_doc(room, fn _ -> send(me, {:timer, Process.get(:crdt_timer_pid)}) end)
+
+      assert_receive {:timer, timer}
+
+      # The failure schedules a checkpoint at once; hold it mid-transaction.
+      on_exit(CheckpointInterleave.arm(:after_row_read))
+      fail_appends(1)
+      assert_reply push_edit(socket, note.id, frame), :error, %{reason: "room_unavailable"}, 3000
+      parked = CheckpointInterleave.await_parked(:after_row_read, timer)
+
+      # The retry applies nothing new, so it appends nothing: still not durable.
+      assert_reply push_edit(socket, note.id, frame), :error, %{reason: "room_unavailable"}, 3000
+
+      CheckpointInterleave.release(:after_row_read, parked)
+      _ = :sys.get_state(timer)
+
+      assert_reply push_edit(socket, note.id, frame), :ok, %{}, 3000
+      {:ok, fresh} = Notes.get_note(ctx.user, ctx.vault, note.path || "p.md")
+      assert fresh.content == "RETRY-base"
+    end
   end
 
   describe "crdt_doc_update (room-free write for an idle note)" do
