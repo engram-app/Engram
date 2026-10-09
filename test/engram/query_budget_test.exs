@@ -41,19 +41,55 @@ defmodule Engram.QueryBudgetTest do
   # does (-1). Bootstrap answers from caches: the onboarding profile off the
   # cached user, the vault count off the cached vault list, and new caches for
   # onboarding actions, the live note count and vault content counts (-18).
+  # DELETE and rename now warm up with a delete / rename of another note, so
+  # the per-user plan-limit lookup they make is warm as in prod (-1 each: a
+  # measurement fix, no code change).
   @budgets %{
+    # Read target 5. begin, tenant_enter, the note, commit.
     "mcp get_notes" => 4,
+    # Write target 12; floor 14, each kept query required:
+    #  1 rotation lock: a write reads it fresh from the DB (RotationGate).
+    #  2, 3, 14 begin / tenant_enter / commit: the one tenant txn (RLS).
+    #  4 note row: the write's base. 5 crdt tail: the merge replays it.
+    #  6 vault change_seq bump: the seq the write is stamped with.
+    #  7 note UPDATE: the write itself.
+    #  8, 9 open revision read + touch: the revision row (history).
+    #  10, 11 EmbedNote unique check + scheduled_at replace: the debounce.
+    #  12, 13 ExtractNoteLinks / FinalizeRevision unique checks: Oban dedup.
     "mcp write_note update" => 14,
+    # As write_note, with 4 the unlocked read and 5 the locked re-read of the
+    # optimistic read-modify-write (Task 7 ruling F1) instead of the tail read
+    # (the tail rides in the read statement).
     "mcp append_to_note" => 14,
     "mcp edit_note" => 14,
+    # rotation lock, begin, enter, the note row (found once), seq bump,
+    # tombstone, usage_meters, two job inserts + their pg_notify, commit.
     "mcp delete_note" => 12,
+    # Read target 5; floor 6: begin, enter, change_seq (it decides whether the
+    # rows are read at all), notes rows, attachments rows, commit.
     "GET sync/manifest" => 6,
     "GET notes/*path" => 5,
+    # As "mcp write_note update" (1-13), plus the response's note_links read.
     "POST notes update" => 15,
+    # Write target 12; floor 19: rotation lock, begin, enter, path lookup,
+    # notes cap (usage_meters), path-collision probe, seq bump, INSERT, the
+    # inserted row's re-read, usage_meters increment, EmbedNote and
+    # ExtractNoteLinks unique check + insert (4), RebindNoteLinks insert +
+    # pg_notify, the vault_populated probe, the response's links read, commit.
     "POST notes create" => 19,
+    # As "mcp append_to_note" (1-13), plus the response's note_links read.
     "POST notes/append" => 15,
-    "POST notes/rename" => 40,
-    "DELETE notes/*path" => 13,
+    # Not consolidated in Task 10b (no query-classify item; a rename claims its
+    # path in the vault index room, which must commit before the row txn):
+    #  1 rotation lock. 2-5 claim validation txn (note ids at the paths).
+    #  6-12 index room fold (snapshot, tail, tail ids, snapshot upsert).
+    #  13-24 rename txn (2 note reads, seq, UPDATE, tombstone INSERT, two job
+    #  inserts + pg_notify). 25-30 post-commit jobs (one unique, own txn).
+    #  31-35 idle-room fanout (fresh users row + note read). 36-39 links txn.
+    "POST notes/rename" => 39,
+    # rotation lock, begin, enter, the note row, seq bump, tombstone,
+    # usage_meters, two job inserts + their pg_notify, commit.
+    "DELETE notes/*path" => 12,
     "GET /api/bootstrap" => 0,
     "GET folders" => 5,
     "GET tags" => 4,
@@ -234,7 +270,13 @@ defmodule Engram.QueryBudgetTest do
     end
 
     test "POST notes/rename", %{conn: conn} do
-      measure("POST notes/rename", fn -> get(conn, "/api/sync/manifest") end, fn ->
+      # Warm-up renames another note: the request's per-user lookups (e.g. the
+      # plan limit the rename checks) are then warm, as on a long-lived node.
+      warm = fn ->
+        post(conn, "/api/notes/rename", %{old_path: "Work/Other.md", new_path: "Work/Other2.md"})
+      end
+
+      measure("POST notes/rename", warm, fn ->
         conn
         |> post("/api/notes/rename", %{old_path: "Home/Third.md", new_path: "Home/Third2.md"})
         |> ok!()
@@ -242,7 +284,8 @@ defmodule Engram.QueryBudgetTest do
     end
 
     test "DELETE notes/*path", %{conn: conn} do
-      measure("DELETE notes/*path", fn -> get(conn, "/api/sync/manifest") end, fn ->
+      # Warm-up deletes another note (see the rename test).
+      measure("DELETE notes/*path", fn -> delete(conn, "/api/notes/Work/Other.md") end, fn ->
         conn |> delete("/api/notes/Home/Third.md") |> ok!()
       end)
     end
