@@ -36,8 +36,20 @@ defmodule Engram.QueryBudgetTest do
     "GET /api/bootstrap" => 22,
     "GET folders" => 10,
     "GET tags" => 5,
-    "CRDT crdt_msg update" => 40,
-    "CRDT crdt_doc_update idle" => 48
+    # Task 7b. The old "crdt_msg update" (40) was a keystroke (7) plus a
+    # checkpoint tick (33) that a timer happened to fire inside the window.
+    # Split, and the tick is driven by hand so both counts are exact.
+    # delta: the one-statement append in its tenant txn.
+    "CRDT delta" => 5,
+    # tick: one checkpoint txn (11: note read, next_seq, note write, tail
+    # prune, revisions read + 2 inserts) plus the dispatcher job insert and
+    # Oban's pg_notify.
+    "CRDT checkpoint tick" => 13,
+    # idle (was 48): bind 6 + delta 5 + the exit checkpoint 13.
+    "CRDT crdt_doc_update idle" => 24,
+    # open (was 25 at bee71923): the channel's note_in_vault? 5 + bind 6 +
+    # the announce's path read 5.
+    "CRDT room open" => 16
   }
 
   setup %{conn: conn} do
@@ -76,10 +88,6 @@ defmodule Engram.QueryBudgetTest do
   # itself when `true`), as on a long-lived prod node. The file is async: false,
   # so no other test's setup can clear them between the warm-up and the
   # measurement.
-  # The CRDT counts include a checkpoint tick that fires on a timer inside the
-  # measured window, so they are ceilings. Every other count is exact.
-  @ceilings ["CRDT crdt_msg update", "CRDT crdt_doc_update idle"]
-
   defp measure(name, warm, fun) do
     Engram.DataCase.clear_request_caches()
     if warm == true, do: fun.(), else: warm.()
@@ -87,10 +95,7 @@ defmodule Engram.QueryBudgetTest do
     budget = Map.fetch!(@budgets, name)
     report = "#{name}: #{length(qs)} queries (budget #{budget})\n" <> QueryRecorder.format(qs)
 
-    if name in @ceilings,
-      do: assert(length(qs) <= budget, report),
-      else: assert(length(qs) == budget, report)
-
+    assert length(qs) == budget, report
     result
   end
 
@@ -264,25 +269,88 @@ defmodule Engram.QueryBudgetTest do
       Engram.Billing.get_subscription(user)
     end
 
-    test "CRDT crdt_msg update", %{user: user, vault: vault, notes: notes} do
+    # No timer-driven checkpoint lands in a measured window: the tick test
+    # fires it by hand. Read by the timer at room start.
+    setup do
+      prev = Application.get_env(:engram, Engram.Notes.CrdtCheckpointTimer, [])
+      on_exit(fn -> Application.put_env(:engram, Engram.Notes.CrdtCheckpointTimer, prev) end)
+
+      Application.put_env(:engram, Engram.Notes.CrdtCheckpointTimer,
+        settle_ms: 600_000,
+        ceiling_ms: 600_000,
+        eager_ms: 600_000
+      )
+    end
+
+    defp step1(socket, doc_id) do
+      {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(CrdtBridge.new_doc())
+      {:ok, step1} = Yex.Sync.message_encode({:sync, {:sync_step1, sv}})
+      chan_push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => Base.encode64(step1)})
+      assert_push "crdt_msg", %{"doc_id" => _}, 3000
+    end
+
+    defp timer_of(room) do
+      me = self()
+
+      :ok =
+        Yex.Sync.SharedDoc.update_doc(room, fn _ ->
+          send(me, {:timer, Process.get(:crdt_timer_pid)})
+        end)
+
+      assert_receive {:timer, pid} when is_pid(pid)
+      pid
+    end
+
+    defp await_no_room(note_id, attempts \\ 300) do
+      cond do
+        is_nil(Engram.Notes.CrdtRegistry.lookup(note_id)) -> :ok
+        attempts == 0 -> flunk("room never exited")
+        true -> Process.sleep(10) && await_no_room(note_id, attempts - 1)
+      end
+    end
+
+    # A keystroke on a resident room: the room's tail append, acked after it.
+    test "CRDT delta", %{user: user, vault: vault, notes: notes} do
+      note = notes["p.md"]
+      _ = join(user, vault)
+      socket = join(user, vault)
+      {_, warm_frame} = delta_frame(socket, note.id, "W-")
+      {_, frame} = delta_frame(socket, note.id, "A-")
+      step1(socket, note.id)
+
+      warm = fn ->
+        warm_room_lookups(user)
+
+        ref =
+          chan_push(socket, "crdt_msg", %{"doc_id" => note.id, "b64" => Base.encode64(warm_frame)})
+
+        assert_reply ref, :ok, _, 3000
+      end
+
+      measure("CRDT delta", warm, fn ->
+        ref = chan_push(socket, "crdt_msg", %{"doc_id" => note.id, "b64" => Base.encode64(frame)})
+        assert_reply ref, :ok, _, 3000
+      end)
+    end
+
+    # The room's debounced checkpoint, fired by hand after an edit.
+    test "CRDT checkpoint tick", %{user: user, vault: vault, notes: notes} do
       note = notes["p.md"]
       _ = join(user, vault)
       socket = join(user, vault)
       {_, frame} = delta_frame(socket, note.id, "A-")
+      step1(socket, note.id)
+      ref = chan_push(socket, "crdt_msg", %{"doc_id" => note.id, "b64" => Base.encode64(frame)})
+      assert_reply ref, :ok, _, 3000
+      timer = timer_of(Engram.Notes.CrdtRegistry.lookup(note.id))
 
-      # Handshake first so the room is resident, as in prod.
-      client = CrdtBridge.new_doc()
-      {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(client)
-      {:ok, step1} = Yex.Sync.message_encode({:sync, {:sync_step1, sv}})
-      chan_push(socket, "crdt_msg", %{"doc_id" => note.id, "b64" => Base.encode64(step1)})
-      assert_push "crdt_msg", %{"doc_id" => _}, 3000
-
-      measure("CRDT crdt_msg update", fn -> warm_room_lookups(user) end, fn ->
-        chan_push(socket, "crdt_msg", %{"doc_id" => note.id, "b64" => Base.encode64(frame)})
-        Process.sleep(500)
+      measure("CRDT checkpoint tick", fn -> warm_room_lookups(user) end, fn ->
+        send(timer, :tick)
+        :sys.get_state(timer)
       end)
     end
 
+    # A room-free write: a room starts for it, appends, checkpoints and exits.
     test "CRDT crdt_doc_update idle", %{user: user, vault: vault, notes: notes} do
       idle = notes["idle.md"]
       _ = join(user, vault)
@@ -297,7 +365,17 @@ defmodule Engram.QueryBudgetTest do
           })
 
         assert_reply ref, :ok, _, 3000
-        Process.sleep(500)
+        await_no_room(idle.id)
+      end)
+    end
+
+    # A read-only open: the handshake that starts a room on an existing note.
+    test "CRDT room open", %{user: user, vault: vault, notes: notes} do
+      _ = join(user, vault)
+      socket = join(user, vault)
+
+      measure("CRDT room open", fn -> warm_room_lookups(user) end, fn ->
+        step1(socket, notes["Work/Other.md"].id)
       end)
     end
   end
