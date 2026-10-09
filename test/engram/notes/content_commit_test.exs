@@ -106,6 +106,22 @@ defmodule Engram.Notes.ContentCommitTest do
     end
   end
 
+  # The dispatcher is the only durable carrier of the three jobs, so a failed
+  # insert must fail the job (Oban retries it; uniqueness keeps that safe).
+  test "the dispatcher fails when a downstream insert fails, and its retry dedupes" do
+    note_id = Ecto.UUID.generate()
+    args = %{note_id: note_id, user_id: Ecto.UUID.generate(), finalize: false}
+
+    # An out-of-range priority makes the EmbedNote insert invalid.
+    assert {:error, _} = perform_job(NoteCommitted, Map.put(args, :embed_priority, 42))
+    assert {:error, _} = perform_job(NoteCommitted, Map.put(args, :embed_priority, 42))
+    assert [_] = all_enqueued(worker: ExtractNoteLinks, args: %{note_id: note_id})
+
+    assert :ok = perform_job(NoteCommitted, Map.put(args, :embed_priority, 0))
+    assert [_] = all_enqueued(worker: EmbedNote, args: %{note_id: note_id})
+    assert [_] = all_enqueued(worker: ExtractNoteLinks, args: %{note_id: note_id})
+  end
+
   test "the first checkpoint of a CRDT-created note enqueues no finalize",
        %{user: u, vault: v} do
     id = UUIDv7.generate()

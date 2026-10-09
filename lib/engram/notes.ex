@@ -493,7 +493,7 @@ defmodule Engram.Notes do
         {:ok, {:ok, {prev_hash, note, _merged_text, _content_hash}}} ->
           _ =
             if prev_hash != note.content_hash do
-              :ok =
+              _ =
                 ContentCommit.enqueue_jobs(note.id, user.id,
                   embed_priority: EmbedNote.priority_for(note),
                   finalize?: Revisions.finalize?(recording, prev_hash, note.content_hash)
@@ -564,7 +564,7 @@ defmodule Engram.Notes do
           # new-path upsert until they next pull.
           _ =
             if prev_hash != note.content_hash do
-              :ok =
+              _ =
                 ContentCommit.enqueue_jobs(note.id, user.id,
                   embed_priority: EmbedNote.priority_for(note),
                   finalize?: Revisions.finalize?(recording, prev_hash, note.content_hash)
