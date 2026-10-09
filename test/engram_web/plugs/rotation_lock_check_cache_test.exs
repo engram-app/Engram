@@ -44,5 +44,50 @@ defmodule EngramWeb.Plugs.RotationLockCheckCacheTest do
       refute conn.halted
       assert Enum.filter(qs, &(&1.caller =~ "RotationLockCheck")) == []
     end
+
+    defp mcp_post(conn, user, body) do
+      %{conn | method: "POST", path_info: ["api", "mcp"], body_params: body}
+      |> assign(:current_user, user)
+    end
+
+    defp tool_call(name),
+      do: %{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "method" => "tools/call",
+        "params" => %{"name" => name}
+      }
+
+    test "an MCP read-only tool trusts the cached user (no query)", %{conn: conn, user: user} do
+      for body <- [tool_call("get_notes"), %{"method" => "tools/list"}] do
+        {conn, qs} =
+          Engram.QueryRecorder.record(fn ->
+            conn |> mcp_post(user, body) |> RotationLockCheck.call([])
+          end)
+
+        refute conn.halted
+        assert Enum.filter(qs, &(&1.caller =~ "RotationLockCheck")) == []
+      end
+    end
+
+    test "an MCP write tool, unknown tool or batch re-reads the lock and halts", %{
+      conn: conn,
+      user: user
+    } do
+      for body <- [tool_call("write_note"), tool_call("no_such_tool"), %{"_json" => []}] do
+        conn = conn |> mcp_post(user, body) |> RotationLockCheck.call([])
+        assert conn.halted
+        assert conn.status == 503
+      end
+    end
+
+    test "a read-only tool name on another POST route still re-reads", %{conn: conn, user: user} do
+      conn =
+        %{conn | method: "POST", path_info: ["api", "notes"], body_params: tool_call("get_notes")}
+        |> assign(:current_user, user)
+        |> RotationLockCheck.call([])
+
+      assert conn.halted
+    end
   end
 end

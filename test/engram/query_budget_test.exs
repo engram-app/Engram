@@ -37,8 +37,10 @@ defmodule Engram.QueryBudgetTest do
   # and reports whether it existed, so MCP no longer probes first (-1).
   # EmbedNote's max-wait clamp reads the burst start off the job Oban's
   # unique check returns, not a SELECT of its own (-1 per content write).
+  # A read-only MCP tool trusts the cached user's rotation lock, as a GET
+  # does (-1).
   @budgets %{
-    "mcp get_notes" => 5,
+    "mcp get_notes" => 4,
     "mcp write_note update" => 14,
     "mcp append_to_note" => 14,
     "mcp edit_note" => 14,
