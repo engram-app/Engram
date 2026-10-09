@@ -35,17 +35,19 @@ defmodule Engram.QueryBudgetTest do
   # change_seq read and GET folders' two reads share one transaction (-3).
   # delete_note finds and tombstones the note in one transaction (REST -3)
   # and reports whether it existed, so MCP no longer probes first (-1).
+  # EmbedNote's max-wait clamp reads the burst start off the job Oban's
+  # unique check returns, not a SELECT of its own (-1 per content write).
   @budgets %{
     "mcp get_notes" => 5,
-    "mcp write_note update" => 15,
-    "mcp append_to_note" => 15,
-    "mcp edit_note" => 15,
+    "mcp write_note update" => 14,
+    "mcp append_to_note" => 14,
+    "mcp edit_note" => 14,
     "mcp delete_note" => 12,
     "GET sync/manifest" => 6,
     "GET notes/*path" => 5,
-    "POST notes update" => 16,
-    "POST notes create" => 20,
-    "POST notes/append" => 16,
+    "POST notes update" => 15,
+    "POST notes create" => 19,
+    "POST notes/append" => 15,
     "POST notes/rename" => 40,
     "DELETE notes/*path" => 13,
     "GET /api/bootstrap" => 18,

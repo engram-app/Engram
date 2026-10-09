@@ -24,9 +24,8 @@ defmodule Engram.Notes.ContentCommit do
   @spec enqueue_jobs(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def enqueue_jobs(note_id, user_id, opts \\ []) when is_binary(note_id) and is_binary(user_id) do
     [
-      Enqueue.enqueue(
-        EmbedNote.new_debounced(note_id, user_id, priority: Keyword.get(opts, :embed_priority, 0)),
-        "embed_note"
+      EmbedNote.insert_debounced(note_id, user_id,
+        priority: Keyword.get(opts, :embed_priority, 0)
       ),
       # #648 lever 1: cheap edge extraction must not ride the embed debounce
       # (30s) or the embed budget gate; ~2s leading edge.

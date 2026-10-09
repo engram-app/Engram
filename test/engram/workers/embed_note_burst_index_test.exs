@@ -1,18 +1,16 @@
 defmodule Engram.Workers.EmbedNoteBurstIndexTest do
   @moduledoc """
-  `EmbedNote.existing_burst_start/1` runs on every content-changing upsert
-  (`clamp: true` default) and filters `oban_jobs` by worker + `args->>'note_id'`
-  + state. Without a supporting index that's a scan of the embed backlog —
-  write latency degrades exactly when the queue is already stressed (positive
-  feedback under a Voyage outage or an onboarding wave).
+  The per-note EmbedNote lookup by worker + `args->>'note_id'` + state (once
+  `existing_burst_start/1`, run on every content-changing upsert; the clamp
+  now reads Oban's unique-check result instead). Without a supporting index
+  such a lookup is a scan of the embed backlog.
 
-  Asserts the partial expression index exists and its predicate covers the
-  same worker + state set the query uses (drift here silently reverts to
-  scans — keep in sync with `existing_burst_start/1`).
+  Asserts the partial expression index exists and its predicate covers that
+  worker + state set (drift here silently reverts to scans).
   """
   use Engram.DataCase, async: true
 
-  # Mirror of the state list in EmbedNote.existing_burst_start/1.
+  # The pending-or-running EmbedNote states.
   @query_states ~w(scheduled available executing retryable)
 
   test "partial expression index backs the burst-start lookup" do
@@ -32,7 +30,7 @@ defmodule Engram.Workers.EmbedNoteBurstIndexTest do
 
     for state <- @query_states do
       assert indexdef =~ state,
-             "index predicate must cover state '#{state}' (used by existing_burst_start/1)"
+             "index predicate must cover state '#{state}'"
     end
   end
 end

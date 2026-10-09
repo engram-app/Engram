@@ -208,7 +208,7 @@ defmodule Engram.Workers.ExtractNoteLinks do
   # included) inside the window whose old_basename_hmac matches. One query for
   # all danglers (first sync makes most links dangling; this was one query
   # each, #1877). oban_jobs is not a tenant table; user/vault are filtered as
-  # args. JSONB ->> precedent: EmbedNote.existing_burst_start/1. `= ANY` on
+  # args (JSONB ->>, as Engram.Jobs.reject_pending/3 does). `= ANY` on
   # the hmac expression still uses
   # oban_jobs_rewrite_note_links_old_basename_hmac_index.
   defp recent_rename_job_args([], _user_id, _vault_id), do: []

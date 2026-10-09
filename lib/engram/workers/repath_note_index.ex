@@ -32,7 +32,6 @@ defmodule Engram.Workers.RepathNoteIndex do
 
   alias Engram.Indexing
   alias Engram.Logger.Metadata
-  alias Engram.Notes.Enqueue
   alias Engram.Notes.Note
   alias Engram.Workers.EmbedNote
 
@@ -96,7 +95,7 @@ defmodule Engram.Workers.RepathNoteIndex do
   # (embed it fresh under the new path), or it claims to be embedded but its
   # points vanished (a real inconsistency we surface, not silently swallow).
   defp handle_no_points(%Note{content_hash: ch, embed_hash: eh} = note) when ch != eh do
-    _ = Enqueue.enqueue(EmbedNote.new_debounced(note.id, note.user_id), "embed_note")
+    _ = EmbedNote.insert_debounced(note.id, note.user_id)
     :ok
   end
 
@@ -115,11 +114,7 @@ defmodule Engram.Workers.RepathNoteIndex do
   # points ever strand under a stale path_hmac after all retries are exhausted.
   defp maybe_fallback(%Oban.Job{attempt: a, max_attempts: m} = _job, note, old_path_hmac, _err)
        when a >= m do
-    _ =
-      Enqueue.enqueue(
-        EmbedNote.new_debounced(note.id, note.user_id, old_path_hmac: old_path_hmac),
-        "embed_note"
-      )
+    _ = EmbedNote.insert_debounced(note.id, note.user_id, old_path_hmac: old_path_hmac)
 
     Logger.warning(
       "repath exhausted #{m} attempts for note #{note.id}; falling back to EmbedNote",
