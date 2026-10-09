@@ -595,6 +595,64 @@ defmodule Engram.MCP.HandlersSingleReadConcurrencyTest do
     assert length(String.split(text, "base")) == 2, text
   end
 
+  # The same keystroke landing AFTER the rebuild's replay but before its row
+  # lock. Tail appends do not touch the notes row, so the row-state compare
+  # cannot see them; the lock read must refuse a tail that is no longer empty.
+  test "a keystroke on a legacy note after the rebuild's replay survives", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    prev = Application.get_env(:engram, Engram.Notes.CrdtCheckpointTimer, [])
+
+    Application.put_env(:engram, Engram.Notes.CrdtCheckpointTimer,
+      settle_ms: 600_000,
+      ceiling_ms: 600_000,
+      eager_ms: 600_000
+    )
+
+    on_exit(fn -> Application.put_env(:engram, Engram.Notes.CrdtCheckpointTimer, prev) end)
+
+    Repo.with_tenant!(user.id, fn ->
+      Repo.update_all(
+        from(n in Engram.Notes.Note, where: n.id == ^note.id),
+        set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+      )
+    end)
+
+    on_exit(CheckpointInterleave.arm(:before_expected_lock))
+
+    task =
+      Task.async(fn ->
+        Repo.with_tenant!(user.id, fn ->
+          Engram.MCP.Handlers.rmw_upsert(user, vault, "c.md", &(&1 <> "APPENDED\n"))
+        end)
+      end)
+
+    parked = CheckpointInterleave.await_parked(:before_expected_lock, task.pid)
+
+    {:ok, room} = CrdtRegistry.ensure_started(user.id, vault.id, note.id)
+    on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
+
+    :ok =
+      SharedDoc.update_doc(room, fn doc ->
+        CrdtBridge.ingest_plaintext(doc, "# C\n\nbase\n")
+      end)
+
+    :ok =
+      SharedDoc.update_doc(room, fn doc ->
+        doc |> Yex.Doc.get_text(CrdtBridge.text_name()) |> Yex.Text.insert(0, "KEY-")
+      end)
+
+    _ = :sys.get_state(room)
+
+    CheckpointInterleave.release(:before_expected_lock, parked)
+    assert {:ok, _} = Task.await(task, 30_000)
+
+    text = current_text(user, vault)
+    assert text =~ "KEY-", text
+    assert text =~ "APPENDED", text
+    assert length(String.split(text, "base")) == 2, text
+  end
+
   # REST POST /api/notes/append had no guard at all: a concurrent append
   # committing between its read and write was erased by the merge.
   test "concurrent REST appends all land", %{user: user, vault: vault} do

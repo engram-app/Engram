@@ -2000,7 +2000,13 @@ defmodule Engram.Notes do
     # The optimistic half of a read-modify-write: the merge and encryption ran
     # before any lock against `expected`. Lock the row now (vault first, like
     # every writer) and write only if it is still that row.
-    case Repo.one(lock_for_write(w.query, w.vault.id)) do
+    interleave_hook(:before_expected_lock)
+
+    case Repo.one(
+           w.query
+           |> no_tail_since_replay(w.opts[:merge_doc])
+           |> lock_for_write(w.vault.id)
+         ) do
       %Note{} = existing ->
         if same_row_state?(existing, expected) do
           interleave_hook(:after_note_read)
@@ -2064,6 +2070,23 @@ defmodule Engram.Notes do
         other
     end
   end
+
+  # A legacy row (no crdt_state) whose tail was empty at the unlocked replay. A
+  # tail that appeared since (a room's seed plus keystrokes) does not touch the
+  # notes row, so same_row_state?/2 cannot see it, and writing the fresh
+  # lineage would duplicate the text on the next replay. Require the tail still
+  # empty; otherwise the row reads as moved and rmw_note recomputes under the
+  # lock. Appends committing after this read are the locked path's accepted
+  # window too (replay to COMMIT).
+  defp no_tail_since_replay(query, :empty_tail) do
+    where(
+      query,
+      [n],
+      fragment("NOT EXISTS (SELECT 1 FROM crdt_update_log AS t WHERE t.note_id = ?)", n.id)
+    )
+  end
+
+  defp no_tail_since_replay(query, _merge_doc), do: query
 
   # A locked row cannot move under us, so there is nothing to retry; an
   # expected row that moved is the caller's to recompute (rmw_note/5).
