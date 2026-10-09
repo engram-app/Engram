@@ -2,6 +2,8 @@ defmodule Engram.MCP.HandlersSingleReadTest do
   # Not async: QueryRecorder's telemetry handler is global.
   use EngramWeb.ConnCase, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   alias Engram.Notes.CrdtBridge
   alias Engram.Notes.CrdtRegistry
   alias Engram.QueryRecorder
@@ -37,16 +39,20 @@ defmodule Engram.MCP.HandlersSingleReadTest do
   defp selects(qs, source),
     do: Enum.filter(qs, &(&1.source == source and String.starts_with?(&1.sql, "SELECT")))
 
+  # Optimistic read-modify-write: one unlocked read (the rebuild runs on it),
+  # then one locked re-read right before the write. Nothing else reads the row.
   defp assert_single_read(qs) do
     report = QueryRecorder.format(qs)
-    assert length(selects(qs, "notes")) == 1, "notes read more than once:\n" <> report
+    reads = selects(qs, "notes")
+    assert length(reads) == 2, "expected one unlocked + one locked note read:\n" <> report
+    assert [_] = Enum.filter(reads, &(&1.sql =~ "FOR NO KEY UPDATE")), report
     assert length(selects(qs, "crdt_update_log")) <= 1, "tail read more than once:\n" <> report
 
     refute Enum.any?(qs, &(&1.sql =~ ~s/SELECT count(*) FROM "crdt_update_log"/)),
            "tail count(*) diagnostic still runs:\n" <> report
   end
 
-  test "append reads the note once", %{conn: conn} do
+  test "append reads the note once, then re-reads it locked", %{conn: conn} do
     conn |> call_tool("append_to_note", %{"path" => "a.md", "text" => "warm"}) |> tool_ok!()
 
     {_, qs} =
@@ -62,7 +68,7 @@ defmodule Engram.MCP.HandlersSingleReadTest do
         {"replace_section", %{"heading" => "Body", "content" => "replaced"}},
         {"insert_section", %{"heading" => "Body", "content" => "inserted"}}
       ] do
-    test "edit_note #{mode} reads the note once", %{conn: conn} do
+    test "edit_note #{mode} reads the note once, then re-reads it locked", %{conn: conn} do
       conn |> call_tool("append_to_note", %{"path" => "a.md", "text" => "warm"}) |> tool_ok!()
       args = Map.merge(%{"path" => "a.md", "mode" => unquote(mode)}, unquote(Macro.escape(args)))
 
@@ -122,11 +128,10 @@ defmodule Engram.MCP.HandlersSingleReadTest do
     assert CrdtBridge.project_doc(doc) =~ "fanned"
   end
 
-  # The append's rebuild runs on the tail-inclusive text, so the merge must not
-  # treat the tail's edits as new inserts relative to the older snapshot.
-  test "append keeps an unfolded tail edit exactly once", %{conn: conn, user: user, vault: vault} do
+  # A room on a.md that never checkpoints, with `edit` typed into it, so the
+  # edit exists only in the tail. Killed at exit (no unbind checkpoint).
+  defp type_into_room(user, vault, edit) do
     {:ok, note} = Engram.Notes.get_note(user, vault, "a.md")
-
     prev = Application.get_env(:engram, Engram.Notes.CrdtCheckpointTimer, [])
 
     Application.put_env(:engram, Engram.Notes.CrdtCheckpointTimer,
@@ -136,21 +141,105 @@ defmodule Engram.MCP.HandlersSingleReadTest do
     )
 
     on_exit(fn -> Application.put_env(:engram, Engram.Notes.CrdtCheckpointTimer, prev) end)
-
     {:ok, room} = CrdtRegistry.ensure_started(user.id, vault.id, note.id)
+    on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
 
     :ok =
       Yex.Sync.SharedDoc.update_doc(room, fn doc ->
         text = Yex.Doc.get_text(doc, CrdtBridge.text_name())
-        CrdtBridge.diff_into_text(text, Yex.Text.to_string(text) <> "TAILEDIT\n")
+        CrdtBridge.diff_into_text(text, edit.(Yex.Text.to_string(text)))
       end)
+  end
+
+  defp text_of(user, vault, path) do
+    {:ok, fresh} = Engram.Notes.get_note(user, vault, path)
+    {:ok, text} = Engram.Notes.authoritative_content(user, fresh)
+    text
+  end
+
+  defp count(text, part), do: length(String.split(text, part)) - 1
+
+  # The append's rebuild runs on the tail-inclusive text, so the merge must not
+  # treat the tail's edits as new inserts relative to the older snapshot.
+  test "append keeps an unfolded tail edit exactly once", %{conn: conn, user: user, vault: vault} do
+    type_into_room(user, vault, &(&1 <> "TAILEDIT\n"))
 
     conn |> call_tool("append_to_note", %{"path" => "a.md", "text" => "APPENDED"}) |> tool_ok!()
 
-    {:ok, fresh} = Engram.Notes.get_note(user, vault, "a.md")
-    {:ok, text} = Engram.Notes.authoritative_content(user, fresh)
-    assert length(String.split(text, "TAILEDIT")) == 2, inspect(text)
-    assert length(String.split(text, "APPENDED")) == 2, inspect(text)
+    text = text_of(user, vault, "a.md")
+    assert count(text, "TAILEDIT") == 1, inspect(text)
+    assert count(text, "APPENDED") == 1, inspect(text)
+  end
+
+  test "REST append keeps an unfolded tail edit exactly once", ctx do
+    %{conn: conn, user: user, vault: vault} = ctx
+    type_into_room(user, vault, &(&1 <> "TAILEDIT\n"))
+
+    conn = post(conn, "/api/notes/append", %{path: "a.md", text: "APPENDED"})
+    assert %{"created" => false} = json_response(conn, 200)
+
+    text = text_of(user, vault, "a.md")
+    assert count(text, "TAILEDIT") == 1, inspect(text)
+    assert count(text, "APPENDED") == 1, inspect(text)
+  end
+
+  # The no-op shortcut compared the result with the FACADE hash, which lags an
+  # un-checkpointed tail edit. Reverting that edit produces exactly the facade
+  # text, so the write was skipped while the tool reported success.
+  test "an edit that reverts an unfolded tail edit is written", ctx do
+    %{conn: conn, user: user, vault: vault} = ctx
+    type_into_room(user, vault, &(&1 <> "TAILEDIT\n"))
+
+    conn
+    |> call_tool("edit_note", %{
+      "path" => "a.md",
+      "mode" => "replace_text",
+      "find" => "TAILEDIT\n",
+      "replace" => ""
+    })
+    |> tool_ok!()
+
+    text = text_of(user, vault, "a.md")
+    assert count(text, "TAILEDIT") == 0, inspect(text)
+  end
+
+  # A row with no crdt_state whose bind seeded the full text into the tail, plus
+  # an edit after it: the tail is the newer text, so a rebuild must start there.
+  test "a legacy note's pending tail edits are part of its text", ctx do
+    %{conn: conn, user: user, vault: vault} = ctx
+    {:ok, note} = Engram.Notes.get_note(user, vault, "a.md")
+
+    {:ok, doc} = CrdtBridge.doc_from_state(nil)
+    :ok = CrdtBridge.ingest_plaintext(doc, note.content <> "TAILEDIT\n")
+    {:ok, update} = Yex.encode_state_as_update(doc)
+    {:ok, {ct, nonce}} = Engram.Crypto.encrypt_crdt_state(update, user, note.id)
+
+    Engram.Repo.with_tenant!(user.id, fn ->
+      Engram.Repo.update_all(
+        from(n in Engram.Notes.Note, where: n.id == ^note.id),
+        set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+      )
+
+      Engram.Repo.insert_all(Engram.Notes.CrdtUpdateLog, [
+        %{
+          id: Ecto.UUID.generate(),
+          note_id: note.id,
+          user_id: user.id,
+          vault_id: vault.id,
+          update_ciphertext: ct,
+          update_nonce: nonce,
+          inserted_at: DateTime.utc_now()
+        }
+      ])
+    end)
+
+    assert count(text_of(user, vault, "a.md"), "TAILEDIT") == 1
+
+    conn |> call_tool("append_to_note", %{"path" => "a.md", "text" => "APPENDED"}) |> tool_ok!()
+
+    text = text_of(user, vault, "a.md")
+    assert count(text, "TAILEDIT") == 1, inspect(text)
+    assert count(text, "APPENDED") == 1, inspect(text)
   end
 end
 
@@ -200,16 +289,55 @@ defmodule Engram.MCP.HandlersSingleReadConcurrencyTest do
     %{user: user, vault: vault, note: note, tool: tool}
   end
 
-  defp append_task(tool, user, vault, text) do
+  defp append_task(tool, user, vault, text, path \\ "c.md") do
     Task.async(fn ->
-      McpController.run_tool_handler(tool, user, vault, %{"path" => "c.md", "text" => text})
+      McpController.run_tool_handler(tool, user, vault, %{"path" => path, "text" => text})
     end)
   end
 
-  defp current_text(user, vault) do
-    {:ok, note} = Notes.get_note(user, vault, "c.md")
+  defp current_text(user, vault, path \\ "c.md") do
+    {:ok, note} = Notes.get_note(user, vault, path)
     {:ok, text} = Notes.authoritative_content(user, note)
     text
+  end
+
+  # Waits until some backend of this database is blocked on a lock (not a
+  # sleep: a test that releases before the waiter got there proves nothing).
+  defp await_lock_wait do
+    assert eventually(fn ->
+             %{rows: [[n]]} =
+               Repo.query!(
+                 "SELECT count(*) FROM pg_stat_activity " <>
+                   "WHERE datname = current_database() AND wait_event_type = 'Lock'",
+                 []
+               )
+
+             n > 0
+           end),
+           "no backend ever waited on a lock"
+  end
+
+  # An MCP-shaped read-modify-write in its own request transaction whose rebuild
+  # parks on its FIRST call until released, reporting every text it saw.
+  defp parked_rmw(user, vault, path, suffix) do
+    test = self()
+    calls = :counters.new(1, [:atomics])
+
+    Task.async(fn ->
+      Repo.with_tenant!(user.id, fn ->
+        Engram.MCP.Handlers.rmw_upsert(user, vault, path, fn current ->
+          send(test, {:rebuild_saw, current})
+          :counters.add(calls, 1, 1)
+
+          if :counters.get(calls, 1) == 1 do
+            send(test, {:rebuild_parked, self()})
+            assert_receive :release_rebuild, 15_000
+          end
+
+          current <> suffix
+        end)
+      end)
+    end)
   end
 
   defp eventually(fun, attempts \\ 100) do
@@ -256,12 +384,85 @@ defmodule Engram.MCP.HandlersSingleReadConcurrencyTest do
         )
       end)
 
-    # Long enough for the REST write to reach its first lock wait.
-    Process.sleep(300)
+    await_lock_wait()
     CheckpointInterleave.release(:after_note_read, parked)
 
     assert_all_ok([Task.await(append, 30_000)])
     assert {:ok, _} = Task.await(rest, 30_000)
+  end
+
+  test "concurrent appends to a missing note all land", %{user: user, vault: vault, tool: tool} do
+    results =
+      1..@writers
+      |> Enum.map(&append_task(tool, user, vault, "LINE-#{&1}", "missing.md"))
+      |> Task.await_many(30_000)
+
+    assert_all_ok(results)
+    text = current_text(user, vault, "missing.md")
+    for i <- 1..@writers, do: assert(text =~ "LINE-#{i}", text)
+  end
+
+  # The rebuild (a section parse can take up to 20 s) runs before any lock, so
+  # it does not hold the vault's seq lock against every other writer.
+  test "a slow rebuild on one note does not block a write to another note", ctx do
+    %{user: user, vault: vault} = ctx
+
+    {:ok, _} =
+      Notes.upsert_note(user, vault, %{"path" => "other.md", "content" => "x"}, actor: "api")
+
+    slow = parked_rmw(user, vault, "c.md", "SLOW\n")
+    assert_receive {:rebuild_parked, parked}, 15_000
+
+    other =
+      Task.async(fn ->
+        Notes.upsert_note(user, vault, %{"path" => "other.md", "content" => "y"}, actor: "api")
+      end)
+
+    assert {:ok, {:ok, _}} = Task.yield(other, 5_000),
+           "a write to another note waited on the slow rebuild"
+
+    send(parked, :release_rebuild)
+    assert {:ok, _} = Task.await(slow, 30_000)
+    assert current_text(user, vault) =~ "SLOW"
+  end
+
+  # A write that commits while the rebuild runs: the optimistic write must not
+  # land over it, and the recompute under the lock must see it.
+  test "the rebuild sees the current text after a concurrent write", ctx do
+    %{user: user, vault: vault, tool: tool} = ctx
+
+    slow = parked_rmw(user, vault, "c.md", "SLOW\n")
+    assert_receive {:rebuild_saw, first}, 15_000
+    assert_receive {:rebuild_parked, parked}, 15_000
+    refute first =~ "FAST"
+
+    assert_all_ok([Task.await(append_task(tool, user, vault, "FAST"), 30_000)])
+
+    send(parked, :release_rebuild)
+    assert {:ok, _} = Task.await(slow, 30_000)
+
+    assert_receive {:rebuild_saw, second}, 1_000
+    assert second =~ "FAST"
+    text = current_text(user, vault)
+    assert text =~ "FAST" and text =~ "SLOW", text
+  end
+
+  # REST POST /api/notes/append had no guard at all: a concurrent append
+  # committing between its read and write was erased by the merge.
+  test "concurrent REST appends all land", %{user: user, vault: vault} do
+    for i <- 1..@writers do
+      Task.async(fn ->
+        Phoenix.ConnTest.build_conn()
+        |> Plug.Conn.assign(:current_user, user)
+        |> Plug.Conn.assign(:current_vault, vault)
+        |> EngramWeb.NotesController.append(%{"path" => "c.md", "text" => "REST-#{i}"})
+      end)
+    end
+    |> Task.await_many(30_000)
+    |> Enum.each(&assert(&1.status == 200, &1.resp_body))
+
+    text = current_text(user, vault)
+    for i <- 1..@writers, do: assert(text =~ "REST-#{i}", text)
   end
 
   test "concurrent appends land with a live room typing on the note", ctx do

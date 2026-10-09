@@ -19,14 +19,12 @@ defmodule Engram.MCP.HandlersTest do
   end
 
   describe "rmw_upsert/4: locked read-modify-write" do
-    # MCP write tools are read-modify-write: read → rebuild → upsert. A write
+    # MCP write tools are read-modify-write: read -> rebuild -> upsert. A write
     # landing between the read and the upsert used to be silently deleted by
-    # the full-content merge (2026-07-07: MCP appends erased). The read now
-    # locks the row, so another transaction waits instead (see
-    # HandlersSingleReadConcurrencyTest). A write from INSIDE the rebuild runs
-    # in the same transaction and so is not blocked; the snapshot fence must
-    # still refuse to overwrite it.
-    test "a write landing inside the rebuild is refused, not overwritten", ctx do
+    # the full-content merge (2026-07-07: MCP appends erased). The write now
+    # re-reads the row locked; if it moved, the rebuild runs again on the
+    # locked row, so the concurrent write is kept and built upon.
+    test "a write landing inside the rebuild is kept and rebuilt upon", ctx do
       %{user: user, vault: vault} = ctx
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
@@ -35,7 +33,7 @@ defmodule Engram.MCP.HandlersTest do
           actor: "api"
         )
 
-      assert {:error, :version_conflict, _} =
+      assert {:ok, _} =
                Handlers.rmw_upsert(user, vault, "r.md", fn content ->
                  {:ok, _} =
                    Notes.upsert_note(
@@ -49,7 +47,7 @@ defmodule Engram.MCP.HandlersTest do
                end)
 
       {:ok, note} = Notes.get_note(user, vault, "r.md")
-      assert {:ok, "base\nconcurrent"} = Notes.authoritative_content(user, note)
+      assert {:ok, "base\nconcurrent\nappended"} = Notes.authoritative_content(user, note)
     end
 
     # append_to_note's position: start guard runs INSIDE the rebuild function
