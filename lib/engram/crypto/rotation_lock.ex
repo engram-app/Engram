@@ -71,8 +71,8 @@ defmodule Engram.Crypto.RotationLock do
       end
     end)
     |> tap(fn
-      # Post-commit: room checkpoints on this node gate on the cached user's
-      # lock (RotationGate.check_user/1) and must not wait for the NOTIFY.
+      # Post-commit: evict now so cached-user readers on this node do not wait
+      # for the NOTIFY. Write gates read the lock fresh (RotationGate.check/1).
       {:ok, _} -> Engram.Accounts.evict_user(user_id)
       _ -> :ok
     end)

@@ -69,6 +69,7 @@ defmodule Engram.Onboarding.GateCache do
   # Seeds a PASS with no race guard (tests). Production stores through
   # verdict/2. The stored value is the verdict's own deadline, so a
   # caller-chosen ttl_ms (shorter than the registry TTL) is honoured.
+  @doc false
   @spec mark_passed(Ecto.UUID.t(), non_neg_integer()) :: :ok
   def mark_passed(user_id, ttl_ms \\ @ttl_ms) do
     Cache.put(:onboarding_gate, user_id, System.monotonic_time(:millisecond) + ttl_ms)

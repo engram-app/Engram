@@ -397,6 +397,26 @@ defmodule Engram.Notes.IdentityTest do
       assert index_entries(ctx)["rot.md"]["note_id"] == n.id
     end
 
+    # A socket's user is read at connect time. A rotation that starts later
+    # must still refuse the snapshot route, so the gate reads the lock fresh.
+    test "a user struct read before the lock still refuses the snapshot route", ctx do
+      n = note(ctx, "rot-stale.md")
+      seed_index(ctx, [{"rot-stale.md", entry_for(n.id)}])
+
+      stale_user = Repo.get!(Engram.Accounts.User, ctx.user.id)
+
+      {1, _} =
+        Repo.update_all(
+          from(u in Engram.Accounts.User, where: u.id == ^ctx.user.id),
+          set: [dek_rotation_locked_at: DateTime.utc_now()]
+        )
+
+      assert {:error, :rotation_in_progress} =
+               Notes.rename_note(stale_user, ctx.vault, "rot-stale.md", "moved-stale.md")
+
+      assert path_of(ctx, n.id) == "rot-stale.md"
+    end
+
     # The test above has NO live room, so it only ever exercised the snapshot
     # route. The room route was deliberately ungated on the reasoning that it
     # "only mutates memory, and the room's own checkpoint is already gated" —

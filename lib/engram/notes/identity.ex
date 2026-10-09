@@ -275,13 +275,17 @@ defmodule Engram.Notes.Identity do
     end
   end
 
-  # `RotationGate.check_user/1` only has clauses for `%User{}`, while every
-  # caller's published spec here says `map()`. Anything else FAILS CLOSED rather
-  # than crashing or, worse, proceeding: this gate stands between a write and
-  # permanent unreadability, so "I cannot tell whether a rotation is running"
-  # must mean "do not write".
-  defp rotation_gate(user) when is_struct(user, Engram.Accounts.User),
-    do: RotationGate.check_user(user)
+  # Reads the lock fresh: a socket's user struct is from connect time and
+  # predates any rotation that started since. Anything that is not a `%User{}`
+  # FAILS CLOSED rather than crashing or, worse, proceeding: this gate stands
+  # between a write and permanent unreadability, so "I cannot tell whether a
+  # rotation is running" must mean "do not write".
+  defp rotation_gate(user) when is_struct(user, Engram.Accounts.User) do
+    case RotationGate.check(user.id) do
+      :ok -> :ok
+      {:error, _} -> {:error, :rotation_in_progress}
+    end
+  end
 
   defp rotation_gate(_other), do: {:error, :rotation_in_progress}
 
