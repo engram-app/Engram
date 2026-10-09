@@ -56,7 +56,7 @@ defmodule Engram.Cache.Registry do
     # Plan limits maps by plan id; plan rows are static at runtime.
     %{name: :plan, ttl: :infinity, cache_nil: true, evict_match: :key, pg_channel: nil},
     # Per-request auth and tenancy lookups. Freshness comes from the
-    # AFTER-write NOTIFY triggers (migration 20261009120000), which fire for
+    # AFTER-write NOTIFY triggers (migration 20261009120001), which fire for
     # every writer including raw SQL; the TTL is only a backstop.
     # users.id => %User{} (subscription NOT loaded). Carries deleted_at,
     # suspended_at, dek_rotation_locked_at, so every users UPDATE evicts.

@@ -5,7 +5,7 @@ defmodule Engram.Repo.Migrations.NoteCountsCacheTrigger do
   pg_notify('note_counts_changed', user_id) when a notes or attachments row
   enters or leaves what the `:note_counts` cache counts (Engram.Cache.Registry),
   so every node evicts that user's counts on commit, for EVERY writer
-  including raw SQL. Same pattern as 20261009120000_cache_eviction_triggers.
+  including raw SQL. Same pattern as 20261009120001_cache_eviction_triggers.
   Purely additive, and re-runnable (CREATE OR REPLACE).
 
   Content writes (version, seq, content, crdt state) do NOT notify: every
