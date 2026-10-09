@@ -277,7 +277,36 @@ peak is bounded by its input, so per call those histograms only counted it.
 
 No batch decrypt: callers decrypt one field per call (`Crypto.decrypt_*`),
 and with the wrapper at about 0.1 us over the raw NIF, a batch NIF would save
-almost nothing per field.
+almost nothing per field. Built and measured anyway (2026-10-09, branch
+`perf/mcp-write-query-count`, task 9), then reverted: `envelope_open_many`
+opened a list of `{ct, nonce, aad}` under one key in ONE dirty call
+(per-item results identical to `decrypt/4`, StreamData-checked over mixed
+formats and tampered items). Bar to keep it: 20% faster on 20 notes x
+(content `:zstd` + title, path, folder, tags, type `:none`) = 120 opens.
+Same Xeon, load 1.3-2.3, `MIX_ENV=test mix run --no-start`, us per 20-note
+batch, each sample one batch, the two paths interleaved sample by sample,
+min over 5 runs of each run's median (1,000 samples), global min in
+parentheses; "+ PromEx" attaches `Engram.PromEx.Native`'s handlers:
+
+| Content (ct) | Per item (`decrypt/4` x 120) | One dirty batch | Change |
+|---|---|---|---|
+| ~1.9 KB plain (492 B) | 442-962 (280-777) | 621-1,176 (315-505) | 22-40% slower |
+| ~1.9 KB, + PromEx | 910-967 (297-755) | 1,217-1,238 (384-905) | 26-36% slower |
+| ~9 KB plain (1,843 B) | 1,804-1,887 (574-1,475) | 1,930-2,042 (636-1,745) | 7-12% slower |
+| ~9 KB, + PromEx | 1,681-1,733 (1,332-1,451) | 2,066-2,147 (864-1,758) | 19-26% slower |
+
+Ranges are across invocations (four without PromEx, three with). A
+throwaway INLINE batch (no dirty hop; never shippable, 120 opens on a
+normal scheduler) was 13-17% faster (1.9 KB: 311-316 -> 257-268 us; 9 KB:
+630-648 -> 549-559 us), still under the bar. In that run the per-item path
+measured 311-316 us, against 442-962 when interleaved with dirty batches:
+alternating with dirty calls slowed the normal-scheduler path too. An
+earlier non-interleaved run (average of 500 batches per run, min of 5)
+read 423-504 us before and 403-433 after, inside this box's run-to-run
+noise. So batching saves about 0.4-0.7 us per open (the inline batch's
+50-90 us over 120), and the dirty hop plus running the whole list on the
+one dirty scheduler gives that back and more. Not worth retrying unless
+the per-open fixed cost grows.
 
 Measured on the search and upsert NIFs (2026-10-04, dev box, min of 5-7,
 identical output to the Elixir they replaced):
