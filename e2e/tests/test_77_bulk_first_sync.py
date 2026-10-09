@@ -208,7 +208,17 @@ async def _cleanup_bulk_residue(vault_a, cdp_a, api_sync) -> None:
         # Drop the 1,000 deletes the closed gate journaled (plugin #247 replays
         # gated deletes on reopen). The server copies are already batch-deleted
         # above; replaying them would fan out the exact storm the closed gate is
-        # here to prevent. `?.` keeps pre-#247 plugin builds working.
+        # here to prevent. The watcher delivers rmtree's deletes asynchronously,
+        # so wait (bounded) until Obsidian has seen them all, or late ones land
+        # after the discard. `?.` keeps pre-#247 plugin builds working.
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            left = await cdp_a.evaluate(
+                "app.vault.getFiles().filter(f => f.path.startsWith('Bulk/')).length"
+            )
+            if left == 0:
+                break
+            await asyncio.sleep(0.5)
         await cdp_a.evaluate(ENGINE + ".discardGateJournal?.()")
         # Re-open the gate so subsequent tests sync normally.
         await cdp_a.evaluate(SET_BLOCKED.format("false"))
