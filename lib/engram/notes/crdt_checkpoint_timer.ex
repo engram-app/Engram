@@ -459,6 +459,7 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     # room bound, or one that failed to decrypt at bind, is in no snapshot and
     # is not in the list, so it stays. Same rule #1391 set for the index room.
     with {:ok, encoded, ids, failures} <- room_snapshot(room_pid),
+         :ok <- interleave_hook(:after_room_snapshot),
          {:written, pruned} <-
            CrdtCheckpoint.checkpoint_pruning(
              state.user_id,
@@ -487,6 +488,16 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     # checkpointed), so falling through is correct, and the EXIT message right
     # behind this tick shuts us down in order.
     :exit, reason -> log_exit_failure(state, reason)
+  end
+
+  # Test-only seam (`Engram.CheckpointInterleave`): nil outside those tests.
+  defp interleave_hook(point) do
+    case Application.get_env(:engram, :checkpoint_interleave_hook) do
+      nil -> :ok
+      fun when is_function(fun, 1) -> _ = fun.(point)
+    end
+
+    :ok
   end
 
   defp room_snapshot(room_pid) do

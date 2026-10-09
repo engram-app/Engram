@@ -928,6 +928,46 @@ defmodule Engram.Notes.CrdtPersistenceTest do
       assert fresh.content == "T-base"
     end
 
+    # The tick has no version pre-read: a write committing between the room
+    # snapshot and the checkpoint's row read must survive, through the
+    # union with the row's stored state (and the seq fence after the read).
+    test "a write committed between the tick's snapshot and its row read survives", ctx do
+      %{user: user, vault: vault, note: note} = ctx
+
+      Application.put_env(:engram, Engram.Notes.CrdtCheckpointTimer,
+        settle_ms: 600_000,
+        ceiling_ms: 600_000,
+        eager_ms: 600_000
+      )
+
+      room = start_room(user, vault, note)
+      timer = timer_of(room)
+
+      :ok =
+        SharedDoc.update_doc(room, fn doc ->
+          doc |> Yex.Doc.get_text(CrdtBridge.text_name()) |> Yex.Text.insert(0, "ROOM-")
+        end)
+
+      _ = :sys.get_state(room)
+
+      on_exit(Engram.CheckpointInterleave.arm(:after_room_snapshot))
+      send(timer, :tick)
+      parked = Engram.CheckpointInterleave.await_parked(:after_room_snapshot, timer)
+
+      # Written against the facade ("base"); the room's edit is in its tail.
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "base REST"},
+          actor: "api"
+        )
+
+      Engram.CheckpointInterleave.release(:after_room_snapshot, parked)
+      _ = :sys.get_state(timer)
+
+      {:ok, fresh} = Notes.get_note(user, vault, "p.md")
+      assert {:ok, "ROOM-base REST"} = Notes.authoritative_content(user, fresh)
+      assert fresh.content == "ROOM-base REST"
+    end
+
     test "still appends a real update after the bind", ctx do
       %{user: user, vault: vault, note: note} = ctx
       room = start_room(user, vault, note)
