@@ -135,6 +135,7 @@ defmodule Engram.Embedders.Voyage do
             headers: [{"authorization", "Bearer #{api_key}"}]
           ] ++ Keyword.merge(request_defaults(purpose), req_opts)
         )
+        |> Engram.Observability.Otel.mark_http_result()
       end
 
     case result do

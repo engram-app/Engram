@@ -881,6 +881,7 @@ defmodule Engram.Vector.Qdrant do
     resp =
       Tracer.with_span "qdrant.query" do
         Req.post("#{base_url()}/collections/#{col}/points/query", opts ++ [decode_body: false])
+        |> Engram.Observability.Otel.mark_http_result()
       end
 
     case resp do

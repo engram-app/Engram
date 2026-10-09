@@ -50,4 +50,39 @@ defmodule Engram.Observability.SearchSpansTest do
     assert {:ok, []} = Qdrant.search("c1", [0.1], user_id: "u1", limit: 5)
     assert_receive {:span, span(name: "qdrant.query")}, 2_000
   end
+
+  test "a non-2xx Voyage reply marks the span as an error", %{bypass: bypass} do
+    ServiceConfig.put_override(:voyage_url, "http://localhost:#{bypass.port}")
+    ServiceConfig.put_override(:voyage_api_key, "test-key")
+
+    Bypass.expect(bypass, "POST", "/v1/embeddings", fn conn ->
+      Plug.Conn.send_resp(conn, 400, ~s({"detail":"bad"}))
+    end)
+
+    assert {:error, _} = Voyage.embed_texts(["q"], purpose: :query)
+    assert_receive {:span, span(name: "voyage.embed", status: {:status, :error, msg})}, 2_000
+    assert msg == "http 400"
+  end
+
+  test "a 2xx Qdrant reply leaves the span unset; a transport error marks it", %{
+    bypass: bypass
+  } do
+    ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+    ServiceConfig.put_override(:qdrant_search_timeout, 30_000)
+
+    Bypass.expect_once(bypass, "POST", "/collections/c1/points/query", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, ~s({"result":{"points":[]}}))
+    end)
+
+    assert {:ok, []} = Qdrant.search("c1", [0.1], user_id: "u1", limit: 5)
+    assert_receive {:span, span(name: "qdrant.query", status: status)}, 2_000
+    refute match?({:status, :error, _}, status)
+
+    Bypass.down(bypass)
+    assert {:error, _} = Qdrant.search("c1", [0.1], user_id: "u1", limit: 5)
+    assert_receive {:span, span(name: "qdrant.query", status: {:status, :error, msg})}, 2_000
+    assert msg =~ "transport"
+  end
 end
