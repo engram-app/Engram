@@ -264,7 +264,7 @@ defmodule EngramWeb.SyncControllerTenantBlocksTest do
     # Warm request caches, the steady state of a long-lived node: Auth's
     # subscription preload (#1758) and VaultPlug's vault resolve are cache hits
     # and open no block. What remains is the controller's own work.
-    test "with warm request caches, a changed manifest opens exactly 2 with_tenant blocks",
+    test "with warm request caches, a changed manifest opens exactly 1 with_tenant block",
          %{conn: conn} do
       post(conn, "/api/notes", %{path: "A.md", content: "# A", mtime: 1_000.0})
 
@@ -274,10 +274,11 @@ defmodule EngramWeb.SyncControllerTenantBlocksTest do
         mtime: 1_000.0
       })
 
-      # Vaults.current_seq/2 + one combined notes/attachments fetch (was 4 before
-      # #1211 collapsed the separate notes and attachments blocks).
+      # The seq read and the notes/attachments fetch share one block (was 4
+      # before #1211 collapsed the notes and attachments blocks, 2 before
+      # Task 10b folded the seq read in).
       warm_then_count(fn -> conn |> get("/api/sync/manifest") |> json_response(200) end)
-      |> assert_blocks(2)
+      |> assert_blocks(1)
     end
 
     test "with warm request caches, an unchanged manifest opens exactly 1 with_tenant block",
@@ -287,7 +288,7 @@ defmodule EngramWeb.SyncControllerTenantBlocksTest do
       current =
         conn |> get("/api/sync/manifest") |> json_response(200) |> Map.fetch!("change_seq")
 
-      # Vaults.current_seq/2 only: the short-circuit skips notes/attachments.
+      # The seq read only: the short-circuit skips notes/attachments.
       warm_then_count(fn ->
         conn |> get("/api/sync/manifest?since_seq=#{current}") |> json_response(200)
       end)

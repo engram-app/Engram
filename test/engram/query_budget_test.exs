@@ -31,14 +31,15 @@ defmodule Engram.QueryBudgetTest do
   # fresh users row (-1 on every REST path that renders a note). GET, upsert
   # and append run their DB work and note_json's links read in ONE tenant
   # transaction, so upsert's job inserts nest in it instead of each opening
-  # its own (update -9, create -10, append -3, GET -3).
+  # its own (update -9, create -10, append -3, GET -3). The manifest's
+  # change_seq read and GET folders' two reads share one transaction (-3).
   @budgets %{
     "mcp get_notes" => 5,
     "mcp write_note update" => 15,
     "mcp append_to_note" => 15,
     "mcp edit_note" => 15,
     "mcp delete_note" => 13,
-    "GET sync/manifest" => 9,
+    "GET sync/manifest" => 6,
     "GET notes/*path" => 5,
     "POST notes update" => 16,
     "POST notes create" => 20,
@@ -46,7 +47,7 @@ defmodule Engram.QueryBudgetTest do
     "POST notes/rename" => 40,
     "DELETE notes/*path" => 16,
     "GET /api/bootstrap" => 18,
-    "GET folders" => 8,
+    "GET folders" => 5,
     "GET tags" => 4,
     # Task 7b. The old "crdt_msg update" (40) was a keystroke (7) plus a
     # checkpoint tick (33) that a timer happened to fire inside the window.

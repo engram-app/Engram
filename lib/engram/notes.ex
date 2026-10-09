@@ -4839,9 +4839,23 @@ defmodule Engram.Notes do
   """
   @spec folders_payload(Engram.Accounts.User.t(), map()) :: [map()]
   def folders_payload(user, vault) do
-    {:ok, folders} = list_folders_with_counts(user, vault)
-    markers = list_folder_markers(user, vault)
-    combine_folders_payload(folders, markers)
+    # One transaction for both reads; decrypt after it (no connection held
+    # across CPU work). No DEK means no notes, as in list_folders_with_counts/2.
+    case Crypto.get_dek(user) do
+      {:ok, dek} ->
+        {counts, markers} =
+          Repo.with_tenant!(user.id, fn ->
+            {raw_folder_count_rows(user, vault), raw_folder_marker_rows(user, vault)}
+          end)
+
+        combine_folders_payload(
+          decrypt_folder_count_rows(counts, dek),
+          decrypt_folder_marker_rows(markers, dek)
+        )
+
+      {:error, :no_dek} ->
+        []
+    end
   end
 
   @doc """
