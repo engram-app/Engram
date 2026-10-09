@@ -244,7 +244,10 @@ defmodule Engram.MCP.HandlersSingleReadTest do
     # One statement reads the snapshot and the tail: a re-read split in two
     # would leave the gap open again.
     report = QueryRecorder.format(qs)
-    reads = Enum.reject(qs, &(&1.source in ["tenant_txn", "tenant_enter", "tenant_exit"]))
+
+    reads =
+      Enum.reject(qs, &(&1.source in ~w(tenant_txn tenant_enter tenant_exit tenant_exit_sandbox)))
+
     assert [%{sql: sql}] = reads, report
     assert sql =~ ~s(FROM "notes") and sql =~ "crdt_update_log", report
   end

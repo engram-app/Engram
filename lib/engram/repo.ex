@@ -87,9 +87,13 @@ defmodule Engram.Repo do
   so the bind value is the lower-case hyphenated UUID string.
 
   Wire shape: tenant + role drop are applied in ONE parameterized
-  `SELECT set_config(...)` (`set_config(..., true)` is exactly SET LOCAL)
-  and reset in one — hot requests open several tenant blocks, and the old
-  three-utility-statement shape was pure fixed overhead per block.
+  `SELECT set_config(...)` (`set_config(..., true)` is exactly SET LOCAL).
+  A top-level block costs three round trips: BEGIN, `tenant_enter`, COMMIT.
+  Both settings are transaction-scoped, so COMMIT or ROLLBACK resets them and
+  the pooled connection goes back clean (pinned on a real pool by
+  `Engram.Repo.TenantTxnCommitResetTest`). A block nested in a plain
+  `Repo.transaction/1` is only a savepoint, so it adds a fourth,
+  `tenant_exit`, to clear both before the outer transaction carries on (#1761).
 
   Re-entrant: a nested call for the SAME tenant inside an active
   with_tenant transaction runs `fun` directly (the settings are
@@ -249,6 +253,9 @@ defmodule Engram.Repo do
   end
 
   defp tenant_transaction(uuid, fun) do
+    # Decided before the transaction opens: inside it, in_transaction? is
+    # always true.
+    exit_source = tenant_exit_source()
     Process.put(:engram_tenant, uuid)
 
     try do
@@ -280,28 +287,28 @@ defmodule Engram.Repo do
             )
 
           result = fun.()
-          # In Ecto Sandbox (tests), this transaction runs as a savepoint.
-          # PostgreSQL's transaction-local settings span the full outer
-          # transaction, so RELEASE SAVEPOINT would leak `engram_app` into
-          # the sandbox transaction. Resetting the role INSIDE the
-          # transaction (`set_config('role', 'none', true)` == SET LOCAL
-          # ROLE NONE) ensures the last local setting that persists is the
-          # default. The same holds in production whenever this block is
-          # nested inside a plain `Repo.transaction`.
-          #
-          # The tenant is cleared in the same round trip (#1761). Nested in a
-          # plain transaction this block is a savepoint too, and a SET LOCAL
-          # tenant would otherwise stay in force for the rest of the OUTER
-          # transaction while the app believes it is unscoped. '' and not NULL:
-          # the tenant policies never match '', and `api_keys_discovery` reads
+
+          # A savepoint does not end the transaction, and a SET LOCAL survives
+          # RELEASE SAVEPOINT until the OUTER transaction ends. So a block
+          # nested in a plain `Repo.transaction` resets both settings itself
+          # (#1761): otherwise the rest of the outer transaction keeps the
+          # tenant scope and the engram_app role while the app believes it is
+          # unscoped. `set_config('role', 'none', true)` == SET LOCAL ROLE
+          # NONE; '' and not NULL for the tenant because the tenant policies
+          # never match '' and `api_keys_discovery` reads
           # coalesce(..., '') = '' as "no tenant".
-          _ =
-            query!(
-              "SELECT set_config('role', 'none', true), " <>
-                "set_config('app.current_tenant', '', true)",
-              [],
-              source: "tenant_exit"
-            )
+          #
+          # A real top-level block skips it: its own COMMIT or ROLLBACK is the
+          # reset.
+          if exit_source do
+            _ =
+              query!(
+                "SELECT set_config('role', 'none', true), " <>
+                  "set_config('app.current_tenant', '', true)",
+                [],
+                source: exit_source
+              )
+          end
 
           result
         end,
@@ -309,6 +316,27 @@ defmodule Engram.Repo do
       )
     after
       Process.delete(:engram_tenant)
+    end
+  end
+
+  # nil when this block opens the real top-level transaction (COMMIT resets
+  # everything, no statement needed); otherwise the span source of the reset.
+  #
+  # The test sandbox (`DBConnection.Ownership`) runs EVERY transaction as a
+  # savepoint inside the test's own, so there the reset stays: skipping it
+  # would leave engram_app as the role for the rest of the test. It gets its
+  # own source so query-budget tests can tell a sandbox-only round trip, which
+  # never happens in prod, from a real nested one.
+  defp tenant_exit_source do
+    cond do
+      in_transaction?() ->
+        "tenant_exit"
+
+      Ecto.Adapter.lookup_meta(get_dynamic_repo()).opts[:pool] == DBConnection.Ownership ->
+        "tenant_exit_sandbox"
+
+      true ->
+        nil
     end
   end
 
