@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.46.0](https://github.com/engram-app/Engram/compare/0.45.0...0.46.0) (2026-10-09)
+
+
+### Features
+
+* **mcp:** serve prompts as slash commands, auto-publish to LobeHub ([#1921](https://github.com/engram-app/Engram/issues/1921)) ([d4bd3e5](https://github.com/engram-app/Engram/commit/d4bd3e506e0d0de0759843627f62eef3a88083ad))
+
+
+### Bug Fixes
+
+* **ci:** cache squawk and retry release downloads ([#1920](https://github.com/engram-app/Engram/issues/1920)) ([b9e1c3e](https://github.com/engram-app/Engram/commit/b9e1c3ed2b5f7124297e6e74c30a37e7377e860c))
+* **mcp:** match server card name to the registry entry ([#1917](https://github.com/engram-app/Engram/issues/1917)) ([588eced](https://github.com/engram-app/Engram/commit/588eced87f03d1c126735cfe7fa8b74ce3c74e1d))
+
 ## [0.45.0](https://github.com/engram-app/Engram/compare/0.44.0...0.45.0) (2026-10-09)
 
 
