@@ -28,6 +28,8 @@ defmodule Engram.Embedders.Voyage do
 
   alias Engram.ServiceConfig
 
+  require OpenTelemetry.Tracer, as: Tracer
+
   # Compile-time gate: the test-only `:voyage_throttle_key` config override
   # (used to give async test cases unique bucket keys) must be structurally
   # absent in non-test builds. Mirrors `EngramWeb.Plugs.RateLimit`'s
@@ -121,14 +123,19 @@ defmodule Engram.Embedders.Voyage do
       |> maybe_put_output_dimension()
       |> maybe_put_packed_encoding(purpose)
 
+    # The span carries the purpose only: never the texts.
     result =
-      Req.post(
-        "#{url}/v1/embeddings",
-        [
-          json: body,
-          headers: [{"authorization", "Bearer #{api_key}"}]
-        ] ++ Keyword.merge(request_defaults(purpose), req_opts)
-      )
+      Tracer.with_span "voyage.embed", %{
+        attributes: %{"engram.embed.purpose" => to_string(purpose)}
+      } do
+        Req.post(
+          "#{url}/v1/embeddings",
+          [
+            json: body,
+            headers: [{"authorization", "Bearer #{api_key}"}]
+          ] ++ Keyword.merge(request_defaults(purpose), req_opts)
+        )
+      end
 
     case result do
       {:ok, %{status: 200, body: %{"data" => data} = body}} ->

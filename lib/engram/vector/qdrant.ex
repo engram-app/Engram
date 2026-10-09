@@ -10,6 +10,8 @@ defmodule Engram.Vector.Qdrant do
 
   alias Engram.ServiceConfig
 
+  require OpenTelemetry.Tracer, as: Tracer
+
   @default_url "http://localhost:6333"
   @default_collection "obsidian_notes"
 
@@ -873,8 +875,15 @@ defmodule Engram.Vector.Qdrant do
   # The body is decoded in Rust (`Engram.Native.json_decode/1`): with vectors
   # requested it is ~200 x 1024 floats, 2.3 MB of JSON that took Jason ~290 ms
   # per search, ten times the MMR pass that consumes it.
+  # The `qdrant.query` span covers the HTTP call only, with no attributes
+  # (the body holds the query vector and tenant filter).
   defp do_search(col, opts) do
-    case Req.post("#{base_url()}/collections/#{col}/points/query", opts ++ [decode_body: false]) do
+    resp =
+      Tracer.with_span "qdrant.query" do
+        Req.post("#{base_url()}/collections/#{col}/points/query", opts ++ [decode_body: false])
+      end
+
+    case resp do
       {:ok, %{status: 200, body: raw}} when is_binary(raw) ->
         case Engram.Native.json_decode(raw) do
           {:ok, %{"result" => result}} -> {:ok, search_results(result)}
