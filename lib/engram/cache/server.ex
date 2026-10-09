@@ -7,6 +7,18 @@ defmodule Engram.Cache.Server do
 
   @sweep_ms 60_000
 
+  @legacy_evict %{
+    billing_entitlement_evict: :billing_entitlement,
+    billing_override_evict: :billing_override,
+    onboarding_gate_evict: :onboarding_gate
+  }
+  # The old GateCache also cleared on :version_evict_all (a raised floor).
+  @legacy_evict_all %{
+    billing_entitlement_evict_all: [:billing_entitlement],
+    billing_override_evict_all: [:billing_override],
+    version_evict_all: [:legal_version, :onboarding_gate]
+  }
+
   def start_link(_opts), do: GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
 
   @impl true
@@ -69,6 +81,20 @@ defmodule Engram.Cache.Server do
 
   def handle_info({:cache_sync, {:engram_cache_evict_all, cache}}, state) do
     :ok = Cache.clear_local(cache)
+    {:noreply, state}
+  end
+
+  # Shapes the pre-Engram.Cache caches broadcast. A node still on that
+  # release sends them during a rolling deploy; dropped, a Paddle webhook
+  # handled there left the new nodes' entitlement stale for up to 24 h.
+  # ponytail: delete once no node runs the release before this branch.
+  def handle_info({:cache_sync, {tag, user_id}}, state) when is_map_key(@legacy_evict, tag) do
+    :ok = Cache.evict_local(Map.fetch!(@legacy_evict, tag), user_id)
+    {:noreply, state}
+  end
+
+  def handle_info({:cache_sync, tag}, state) when is_map_key(@legacy_evict_all, tag) do
+    for cache <- Map.fetch!(@legacy_evict_all, tag), do: :ok = Cache.clear_local(cache)
     {:noreply, state}
   end
 

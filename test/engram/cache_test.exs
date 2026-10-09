@@ -59,6 +59,51 @@ defmodule Engram.CacheTest do
     assert Cache.get(:test_cache, :k) == :miss
   end
 
+  # Pre-Engram.Cache nodes broadcast these during a rolling deploy (one
+  # release); dropping them kept e.g. a cancelled plan's entitlement for 24 h.
+  describe "legacy cache_sync shapes" do
+    setup do
+      for c <- [:billing_entitlement, :billing_override, :onboarding_gate, :legal_version],
+          do: Cache.clear_local(c)
+
+      on_exit(fn ->
+        for c <- [:billing_entitlement, :billing_override, :onboarding_gate, :legal_version],
+            do: Cache.clear_local(c)
+      end)
+    end
+
+    defp legacy(msg) do
+      send(Engram.Cache.Server, {:cache_sync, msg})
+      _ = :sys.get_state(Engram.Cache.Server)
+    end
+
+    test "per-user evictions" do
+      for {tag, cache, key} <- [
+            {:billing_entitlement_evict, :billing_entitlement, "u1"},
+            {:billing_override_evict, :billing_override, {"u1", "notes_cap"}},
+            {:onboarding_gate_evict, :onboarding_gate, "u1"}
+          ] do
+        Cache.put(cache, key, 1)
+        Cache.put(cache, :other, 2)
+        legacy({tag, "u1"})
+        assert Cache.get(cache, key) == :miss, "#{tag} did not evict"
+        assert Cache.get(cache, :other) == {:ok, 2}
+      end
+    end
+
+    test "evict-all tags" do
+      for {tag, caches} <- [
+            {:billing_entitlement_evict_all, [:billing_entitlement]},
+            {:billing_override_evict_all, [:billing_override]},
+            {:version_evict_all, [:legal_version, :onboarding_gate]}
+          ] do
+        for c <- caches, do: Cache.put(c, :k, 1)
+        legacy(tag)
+        for c <- caches, do: assert(Cache.get(c, :k) == :miss, "#{tag} kept #{c}")
+      end
+    end
+  end
+
   test "a Postgres notification on a cache's channel evicts the payload key" do
     Cache.put(:test_cache, "abc", 1)
     send(Engram.Cache.Server, {:notification, self(), make_ref(), "test_cache_changed", "abc"})
