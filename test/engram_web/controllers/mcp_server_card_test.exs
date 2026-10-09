@@ -72,7 +72,11 @@ defmodule EngramWeb.McpServerCardTest do
     test "identity", %{conn: conn} do
       body = card(conn, "/api/mcp/server-card")
 
-      assert body["name"] == "page.engram/engram"
+      # Same identity the official registry lists (server.json, published by
+      # publish-mcp-registry.yml), so directories can join the two.
+      assert body["name"] ==
+               "server.json" |> File.read!() |> Jason.decode!() |> Map.fetch!("name")
+
       assert body["version"] == to_string(Application.spec(:engram, :vsn))
       assert body["title"] == "Engram"
       assert body["websiteUrl"] == "https://engram.page"
