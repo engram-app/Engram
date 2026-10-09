@@ -25,9 +25,13 @@ defmodule Engram.Notes.NameIndexTest do
     do: Repo.with_tenant!(user.id, fn -> Notes.raw_tree_note_rows(user, vault) end)
 
   defp put_building(vault, user, builder, started \\ System.monotonic_time(:millisecond)) do
-    ref = Process.monitor(builder)
-
     :sys.replace_state(NameIndex, fn state ->
+      # Monitored from INSIDE the owner, as start_build does: a ref owned by
+      # the test process never delivers the builder's DOWN to NameIndex, so
+      # the fake build outlived its test and failed the global
+      # `building == %{}` check of a later one (order-dependent).
+      ref = Process.monitor(builder)
+
       put_in(state.building[vault.id], %{
         builder: {builder, ref},
         user_id: user.id,
