@@ -89,7 +89,8 @@ defmodule Engram.Notes.CrdtPersistence do
             snapshot_echoes =
               case Crypto.decrypt_crdt_state(note, user) do
                 {:ok, snapshot} when is_binary(snapshot) ->
-                  if apply_echoing?(doc, snapshot), do: 1, else: 0
+                  {:ok, changed?} = apply_echoing(doc, snapshot)
+                  if changed?, do: 1, else: 0
 
                 # No snapshot yet (`crdt_state_ciphertext` is nil): legitimate for
                 # a note that has never been checkpointed. The doc stays empty and
@@ -529,10 +530,13 @@ defmodule Engram.Notes.CrdtPersistence do
   # `{:update_v1, ...}`. The state vector advances iff new items integrated. A
   # delete-only update can emit without advancing it: that under-counts, which
   # only re-appends an idempotent row. Over-counting would drop a real update.
-  defp apply_echoing?(doc, update) do
+  #
+  # Returns the apply's own result too: only an update that applied is in the
+  # doc, so only its row may be pruned by this room's checkpoints.
+  defp apply_echoing(doc, update) do
     before = Yex.encode_state_vector(doc)
-    _ = Yex.apply_update(doc, update)
-    Yex.encode_state_vector(doc) != before
+    result = Yex.apply_update(doc, update)
+    {result, Yex.encode_state_vector(doc) != before}
   end
 
   # apply_tail_rows/4 plus how many of the applies changed the doc.
@@ -548,7 +552,21 @@ defmodule Engram.Notes.CrdtPersistence do
 
       case Crypto.decrypt_crdt_state(shaped, user) do
         {:ok, upd} when is_binary(upd) ->
-          {[row.id | applied], echoes + if(apply_echoing?(doc, upd), do: 1, else: 0)}
+          {result, changed?} = apply_echoing(doc, upd)
+          echoes = echoes + if(changed?, do: 1, else: 0)
+
+          if result == :ok do
+            {[row.id | applied], echoes}
+          else
+            # Decrypted but did not apply: not in the doc, so never "held".
+            # It stays in the tail for a later replay to retry.
+            Logger.warning(
+              "crdt replay_tail apply failed note_id=#{note_id}",
+              Metadata.with_category(:warning, :sync, note_id: note_id, reason: "apply_failed")
+            )
+
+            {applied, echoes}
+          end
 
         {:error, reason} ->
           Logger.warning(

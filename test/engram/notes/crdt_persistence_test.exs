@@ -1026,6 +1026,17 @@ defmodule Engram.Notes.CrdtPersistenceTest do
       assert fresh.content == "base 3"
     end
 
+    test "keeps a row that decrypts but does not apply", ctx do
+      %{user: user, vault: vault, note: note} = ctx
+      st = %{user_id: user.id, vault_id: vault.id, note_id: note.id}
+      _ = CrdtPersistence.update_v1(st, <<255, 254, 253, 0, 1, 2>>, note.id, CrdtBridge.new_doc())
+      [garbage] = tail_ids(user, note.id)
+
+      idle_update(user, vault, note.id, "base edited")
+
+      assert tail_ids(user, note.id) == [garbage]
+    end
+
     test "keeps rows it never folded", %{user: user, vault: vault, note: note} do
       # Undecryptable at bind, so not in the doc.
       bad =
