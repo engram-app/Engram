@@ -893,6 +893,41 @@ defmodule Engram.Notes.CrdtPersistenceTest do
       assert %{settle_timer: nil, first_dirty_at: nil} = :sys.get_state(timer_of(room))
     end
 
+    # The #902 fence is the row the checkpoint transaction reads (plus the
+    # snapshot fence on its write), so a tick reads the note once and opens one
+    # transaction.
+    test "a checkpoint tick reads the note once, in one transaction", ctx do
+      %{user: user, vault: vault, note: note} = ctx
+
+      Application.put_env(:engram, Engram.Notes.CrdtCheckpointTimer,
+        settle_ms: 600_000,
+        ceiling_ms: 600_000,
+        eager_ms: 600_000
+      )
+
+      room = start_room(user, vault, note)
+      timer = timer_of(room)
+
+      :ok =
+        SharedDoc.update_doc(room, fn doc ->
+          doc |> Yex.Doc.get_text(CrdtBridge.text_name()) |> Yex.Text.insert(0, "T-")
+        end)
+
+      _ = :sys.get_state(room)
+
+      {_, qs} =
+        Engram.QueryRecorder.record(fn ->
+          send(timer, :tick)
+          :sys.get_state(timer)
+        end)
+
+      report = Engram.QueryRecorder.format(qs)
+      assert [_] = Enum.filter(qs, &(&1.source == "notes" and &1.sql =~ ~r/^SELECT/)), report
+      assert [_] = Enum.filter(qs, &(&1.source == "tenant_txn" and &1.sql == "begin")), report
+      {:ok, fresh} = Notes.get_note(user, vault, "p.md")
+      assert fresh.content == "T-base"
+    end
+
     test "still appends a real update after the bind", ctx do
       %{user: user, vault: vault, note: note} = ctx
       room = start_room(user, vault, note)

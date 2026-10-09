@@ -731,8 +731,10 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
   @doc """
   Read the current `notes.version` for a note (tenant-scoped), or nil on any
-  failure. Captured by `CrdtCheckpointTimer` BEFORE it snapshots the live doc so
-  the value fences the subsequent checkpoint write (`:captured_version`).
+  failure. Captured by the channel's detached genesis seed BEFORE it builds its
+  doc, so the value fences the subsequent checkpoint write
+  (`:captured_version`). The room timer no longer needs it: see
+  `CrdtCheckpointTimer.do_checkpoint/1`.
 
   Capturing version before the snapshot closes the dominant snapshot-then-commit
   gap: a commit landing after the read bumps the version, so the CAS aborts. It

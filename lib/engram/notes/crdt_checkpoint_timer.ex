@@ -438,16 +438,17 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   defp do_checkpoint(%{mode: :index}), do: :ok
 
   defp do_checkpoint(%{room_pid: room_pid} = state) do
-    # Capture the row version BEFORE snapshotting the doc so it never exceeds the
-    # version the snapshot reflects (#902 fence). A REST/MCP write committing
-    # after this read bumps the version, so the fenced checkpoint write aborts
-    # instead of reverting the committed content.
-    #
-    # nil on read failure is NOT an unfenced write (it was, before #1360). The
-    # version CAS is layered ON TOP of `snapshot_fence/2`, which applies to every
-    # checkpoint write path unconditionally. nil just drops the extra layer.
-    captured_version = CrdtCheckpoint.current_version(state.user_id, state.room_key)
-
+    # No separate version read before the snapshot (it was the #902 fence, and
+    # cost its own transaction). The checkpoint transaction's row read is the
+    # fence now, and it is safe AFTER the snapshot because of what the
+    # checkpoint already does with that row:
+    #   * a REST/MCP write committed before the read is in the row's stored
+    #     crdt_state, which the checkpoint unions into what it writes (Phase 0
+    #     monotonicity), so a room doc that missed it cannot revert it;
+    #   * one committing between the read and the write bumps seq, which
+    #     `snapshot_fence/2` matches on, so the write aborts.
+    # No row lock either: this must never hold one across a call into the room
+    # (the room's own crdt_head update would deadlock against it).
     # The doc's state and the tail rows it holds, from ONE call into the room,
     # so the two are a consistent pair: every id is folded into that state.
     # The room knows them (the rows bind replayed plus the rows it appended
@@ -459,7 +460,6 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     with {:ok, encoded, ids} <- room_snapshot(room_pid) do
       {:ok, pruned} =
         CrdtCheckpoint.checkpoint_pruning(state.user_id, state.vault_id, state.room_key, encoded,
-          captured_version: captured_version,
           prune_ids: ids
         )
 
