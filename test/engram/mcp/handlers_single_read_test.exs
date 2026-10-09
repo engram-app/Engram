@@ -447,6 +447,45 @@ defmodule Engram.MCP.HandlersSingleReadConcurrencyTest do
     assert {:ok, _} = Task.await(rest, 30_000)
   end
 
+  # The losing delete read the note live (unlocked), then waited on the
+  # winner's vault seq lock; its tombstone UPDATE then matches no live row. It
+  # must report :absent and enqueue / announce nothing.
+  test "a delete that loses to a concurrent delete reports :absent", %{
+    user: user,
+    vault: vault,
+    note: note
+  } do
+    test = self()
+
+    winner =
+      Task.async(fn ->
+        Repo.with_tenant!(user.id, fn ->
+          result = Notes.delete_note_reporting(user, vault, "c.md")
+          send(test, :winner_deleted)
+          assert_receive :commit, 15_000
+          result
+        end)
+      end)
+
+    assert_receive :winner_deleted, 15_000
+    loser = Task.async(fn -> Notes.delete_note_reporting(user, vault, "c.md") end)
+    await_lock_wait()
+    send(winner.pid, :commit)
+
+    assert Task.await(winner, 30_000) == :deleted
+    assert Task.await(loser, 30_000) == :absent
+
+    jobs =
+      Repo.all(
+        from(j in Oban.Job,
+          where: fragment("? ->> 'note_id' = ?", j.args, ^note.id),
+          where: j.worker == "Engram.Workers.DeleteNoteIndex"
+        )
+      )
+
+    assert length(jobs) == 1
+  end
+
   test "concurrent appends to a missing note all land", %{user: user, vault: vault, tool: tool} do
     results =
       1..@writers

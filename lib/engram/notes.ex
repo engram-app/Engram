@@ -3561,9 +3561,16 @@ defmodule Engram.Notes do
         ]
       )
 
-    # Decrement by rows actually transitioned live → deleted, so a
-    # concurrent delete (already-nil deleted_at) can't double-count.
-    :ok = UsageMeters.dec_notes_count(user.id, updated)
+    # 0 rows: a concurrent delete won between our unlocked read and this
+    # UPDATE. Nothing changed here, so nothing is counted, enqueued or
+    # announced, and the caller hears :absent.
+    if updated == 0,
+      do: :absent,
+      else: finish_tombstone(user, vault, path, note, basename_hmac, opts)
+  end
+
+  defp finish_tombstone(user, vault, path, note, basename_hmac, opts) do
+    :ok = UsageMeters.dec_notes_count(user.id, 1)
 
     :ok = stop_rooms_after_commit([note.id])
 
