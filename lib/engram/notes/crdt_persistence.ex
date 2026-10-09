@@ -89,8 +89,24 @@ defmodule Engram.Notes.CrdtPersistence do
             snapshot_echoes =
               case Crypto.decrypt_crdt_state(note, user) do
                 {:ok, snapshot} when is_binary(snapshot) ->
-                  {:ok, changed?} = apply_echoing(doc, snapshot)
-                  if changed?, do: 1, else: 0
+                  case apply_echoing(doc, snapshot) do
+                    {:ok, changed?} ->
+                      if changed?, do: 1, else: 0
+
+                    # FAIL LOUD, same policy as a decrypt failure below: a
+                    # snapshot we cannot load must not become an empty doc
+                    # that a later checkpoint writes back over the body.
+                    {error, _changed?} ->
+                      Logger.error(
+                        "crdt bind refused: crdt_state snapshot does not apply for note #{note_id}",
+                        Metadata.with_category(:error, :sync,
+                          note_id: note_id,
+                          reason: Metadata.safe_reason(error)
+                        )
+                      )
+
+                      raise "CrdtPersistence.bind/3: crdt_state snapshot does not apply for note #{note_id} — refusing to bind an empty doc over existing state"
+                  end
 
                 # No snapshot yet (`crdt_state_ciphertext` is nil): legitimate for
                 # a note that has never been checkpointed. The doc stays empty and

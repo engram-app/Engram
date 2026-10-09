@@ -110,6 +110,27 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     assert CrdtBridge.text_of(doc) == ""
   end
 
+  # Same policy one step later: a snapshot that decrypts but is not a Yjs
+  # update must fail the room start loudly, never bind an empty doc that a
+  # later checkpoint would write back over the body.
+  test "bind/3 REFUSES to bind when the snapshot decrypts but does not apply", ctx do
+    %{user: user, note: note} = ctx
+    {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(<<255, 254, 253, 0, 1, 2>>, user, note.id)
+
+    Repo.with_tenant(user.id, fn ->
+      from(n in Note, where: n.id == ^note.id)
+      |> Repo.update_all(set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce])
+    end)
+
+    st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}
+
+    capture_log(fn ->
+      assert_raise RuntimeError, ~r/snapshot does not apply/, fn ->
+        CrdtPersistence.bind(st, note.id, CrdtBridge.new_doc())
+      end
+    end)
+  end
+
   # The legitimate half of the same branch must keep working: a note that has
   # never been checkpointed has no snapshot at all, and that is not an error.
   test "bind/3 still binds a note with no snapshot (nil ciphertext)", ctx do
