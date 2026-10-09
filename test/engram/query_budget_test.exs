@@ -33,19 +33,21 @@ defmodule Engram.QueryBudgetTest do
   # transaction, so upsert's job inserts nest in it instead of each opening
   # its own (update -9, create -10, append -3, GET -3). The manifest's
   # change_seq read and GET folders' two reads share one transaction (-3).
+  # delete_note finds and tombstones the note in one transaction (REST -3)
+  # and reports whether it existed, so MCP no longer probes first (-1).
   @budgets %{
     "mcp get_notes" => 5,
     "mcp write_note update" => 15,
     "mcp append_to_note" => 15,
     "mcp edit_note" => 15,
-    "mcp delete_note" => 13,
+    "mcp delete_note" => 12,
     "GET sync/manifest" => 6,
     "GET notes/*path" => 5,
     "POST notes update" => 16,
     "POST notes create" => 20,
     "POST notes/append" => 16,
     "POST notes/rename" => 40,
-    "DELETE notes/*path" => 16,
+    "DELETE notes/*path" => 13,
     "GET /api/bootstrap" => 18,
     "GET folders" => 5,
     "GET tags" => 4,

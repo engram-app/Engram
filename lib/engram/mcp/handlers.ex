@@ -529,18 +529,11 @@ defmodule Engram.MCP.Handlers do
   def handle("delete_note", user, vault, args) do
     path = args["path"] || ""
 
-    # `delete_note/4` is idempotent and always returns :ok, so it cannot tell
-    # us whether anything was there. The handler used to discard its result and
-    # announce "Note deleted" either way. Probe first so the payload can say
-    # which it was — the call still succeeds on a no-op, since an idempotent
-    # delete of an absent note is not a failure.
-    #
-    # `note_exists?/3`, NOT `get_note/3`: the latter decrypts and raises on a
-    # corrupt note, which would make a damaged note undeletable — the one case
-    # where you most want the delete to work. `delete_note/4` itself never
-    # decrypts, so the probe must not either.
-    existed? = Notes.note_exists?(user, vault, path)
-    :ok = Notes.delete_note(user, vault, path)
+    # The payload says whether anything was there; the call still succeeds on
+    # a no-op, since an idempotent delete of an absent note is not a failure.
+    # `delete_note_reporting/3` never decrypts, so a damaged note stays
+    # deletable (the one case where you most want the delete to work).
+    existed? = Notes.delete_note_reporting(user, vault, path) == :deleted
 
     text = if existed?, do: "Note deleted: #{path}", else: "No note at: #{path}"
     {:ok, text, %{"path" => path, "deleted" => existed?}}

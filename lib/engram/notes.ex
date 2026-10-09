@@ -2915,8 +2915,7 @@ defmodule Engram.Notes do
 
   `get_note/3` decrypts via `decrypt_or_raise!`, so probing existence with it
   raises on a note whose content is corrupt. Callers that only need the yes/no
-  — and especially `delete_note/4`, which itself never decrypts — use this so a
-  damaged note stays cleanable (#1660 follow-up).
+  use this so a damaged note stays cleanable (#1660 follow-up).
   """
   @spec note_exists?(Engram.Accounts.User.t(), map(), String.t()) :: boolean()
   def note_exists?(user, vault, path) do
@@ -3484,77 +3483,86 @@ defmodule Engram.Notes do
   """
   @spec delete_note(map(), map(), String.t(), keyword()) :: :ok
   def delete_note(user, vault, path, opts \\ []) do
-    now = DateTime.utc_now()
-
-    note =
-      case find_note_by_path(user, vault, path) do
-        {:ok, note} -> note
-        _ -> nil
-      end
-
-    # No-op deletes (unknown / already-deleted path) announce nothing (#971):
-    # nothing changed, and the empty-id delete events they used to fan out
-    # were pure noise at best (mirrors do_delete_attachment's `if deleted?`).
-    _ =
-      if note do
-        _ =
-          Repo.with_tenant(user.id, fn ->
-            seq = Engram.Vaults.next_seq!(vault.id)
-
-            {updated, _} =
-              from(n in Note, where: n.id == ^note.id and is_nil(n.deleted_at))
-              |> Repo.update_all(
-                set: [
-                  deleted_at: now,
-                  updated_at: now,
-                  seq: seq,
-                  embed_hash: nil,
-                  dense_indexed_hash: nil
-                ]
-              )
-
-            # Decrement by rows actually transitioned live → deleted, so a
-            # concurrent delete (already-nil deleted_at) can't double-count.
-            :ok = UsageMeters.dec_notes_count(user.id, updated)
-
-            :ok = stop_rooms_after_commit([note.id])
-          end)
-
-        # `path` (the caller's own plaintext argument) is in scope here even
-        # though `note` itself is the raw undecrypted row — no extra decrypt
-        # needed to compute the basename hmac for DeleteNoteIndex's chained
-        # rebind (#591).
-        _ =
-          Enqueue.enqueue(
-            delete_note_index_job(note, Links.basename_hmac(user, Links.basename_key(path))),
-            "delete_note_index"
-          )
-
-        # Release the note's claim on its path. Projection never resurrects a
-        # deleted note (get_note_by_id is scoped_live, so the entry reads as an
-        # unknown note) — but a stale entry then warns and counts as
-        # `unresolved` on every checkpoint forever, which is how a real
-        # disagreement gets lost in noise.
-        #
-        # After the row is gone, not before: releasing is not a commit the way
-        # claiming is. A release that lands while the delete then fails would
-        # strand a LIVE note with no entry in the authority — and projection
-        # never acts on absence, so it would stay unclaimed forever.
-        #
-        # A job rather than an inline call, uniformly with the bulk paths: the
-        # enqueue joins whatever transaction the caller may have opened, so the
-        # release cannot outrun the delete, and a failure retries instead of
-        # being discarded. See ReleaseIndexEntries.
-        _ =
-          Enqueue.enqueue(
-            ReleaseIndexEntries.new_for(user.id, vault.id, [note.id]),
-            "release_index_entries"
-          )
-
-        broadcast_change(user.id, vault.id, "delete", path, note.id, opts)
-      end
-
+    _ = delete_note_reporting(user, vault, path, opts)
     :ok
+  end
+
+  @doc """
+  `delete_note/4`, reporting whether a live note was there: `:deleted` or
+  `:absent`. The find and the tombstone share one tenant transaction, so a
+  caller that needs the answer does not probe first.
+  """
+  @spec delete_note_reporting(map(), map(), String.t(), keyword()) :: :deleted | :absent
+  def delete_note_reporting(user, vault, path, opts \\ []) do
+    # Both HMACs before the transaction: a DekCache miss unwraps through KMS.
+    case note_by_path_query(user, vault, path) do
+      {:ok, query} ->
+        basename_hmac = Links.basename_hmac(user, Links.basename_key(path))
+
+        Repo.with_tenant!(user.id, fn ->
+          case Repo.one(query) do
+            %Note{} = note -> tombstone_note(user, vault, path, note, basename_hmac, opts)
+            nil -> :absent
+          end
+        end)
+
+      {:error, _} ->
+        :absent
+    end
+  end
+
+  # No-op deletes (unknown / already-deleted path) announce nothing (#971):
+  # nothing changed, and the empty-id delete events they used to fan out
+  # were pure noise at best (mirrors do_delete_attachment's `if deleted?`).
+  defp tombstone_note(user, vault, path, note, basename_hmac, opts) do
+    now = DateTime.utc_now()
+    seq = Engram.Vaults.next_seq!(vault.id)
+
+    {updated, _} =
+      from(n in Note, where: n.id == ^note.id and is_nil(n.deleted_at))
+      |> Repo.update_all(
+        set: [
+          deleted_at: now,
+          updated_at: now,
+          seq: seq,
+          embed_hash: nil,
+          dense_indexed_hash: nil
+        ]
+      )
+
+    # Decrement by rows actually transitioned live → deleted, so a
+    # concurrent delete (already-nil deleted_at) can't double-count.
+    :ok = UsageMeters.dec_notes_count(user.id, updated)
+
+    :ok = stop_rooms_after_commit([note.id])
+
+    # `path` (the caller's own plaintext argument) gives the basename hmac for
+    # DeleteNoteIndex's chained rebind (#591) without decrypting the row.
+    _ = Enqueue.enqueue(delete_note_index_job(note, basename_hmac), "delete_note_index")
+
+    # Release the note's claim on its path. Projection never resurrects a
+    # deleted note (get_note_by_id is scoped_live, so the entry reads as an
+    # unknown note): but a stale entry then warns and counts as
+    # `unresolved` on every checkpoint forever, which is how a real
+    # disagreement gets lost in noise.
+    #
+    # After the row is gone, not before: releasing is not a commit the way
+    # claiming is. A release that lands while the delete then fails would
+    # strand a LIVE note with no entry in the authority, and projection
+    # never acts on absence, so it would stay unclaimed forever.
+    #
+    # A job rather than an inline call, uniformly with the bulk paths: the
+    # enqueue joins this transaction, so the release cannot outrun the
+    # delete, and a failure retries instead of being discarded. See
+    # ReleaseIndexEntries.
+    _ =
+      Enqueue.enqueue(
+        ReleaseIndexEntries.new_for(user.id, vault.id, [note.id]),
+        "release_index_entries"
+      )
+
+    broadcast_change(user.id, vault.id, "delete", path, note.id, opts)
+    :deleted
   end
 
   # A room open on a deleted note would keep taking writes and checkpoint them
