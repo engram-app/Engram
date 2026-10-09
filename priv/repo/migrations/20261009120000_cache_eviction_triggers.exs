@@ -56,7 +56,7 @@ defmodule Engram.Repo.Migrations.CacheEvictionTriggers do
         when_sql = if when_clause, do: "WHEN (#{when_clause})", else: ""
 
         execute("""
-        CREATE TRIGGER #{table}_cache_notify_#{i}
+        CREATE OR REPLACE TRIGGER #{table}_cache_notify_#{i}
         #{event} ON #{table}
         FOR EACH ROW #{when_sql}
         EXECUTE FUNCTION notify_#{channel}();
