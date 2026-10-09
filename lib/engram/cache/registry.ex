@@ -48,8 +48,9 @@ defmodule Engram.Cache.Registry do
       evict_match: :key,
       pg_channel: nil
     },
-    # Latest accepted terms version per {user_id, document}; monotonic.
-    %{name: :terms, ttl: :infinity, cache_nil: false, evict_match: :key, pg_channel: nil},
+    # Latest accepted terms version per {user_id, document}. Accepting evicts
+    # it cluster-wide; the TTL bounds a lost eviction.
+    %{name: :terms, ttl: 300_000, cache_nil: false, evict_match: :key, pg_channel: nil},
     # Last usage_meters.last_active_at stamp per user (debounce).
     %{name: :activity, ttl: :infinity, cache_nil: false, evict_match: :key, pg_channel: nil},
     # Plan limits maps by plan id; plan rows are static at runtime.

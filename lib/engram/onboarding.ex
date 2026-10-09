@@ -97,8 +97,10 @@ defmodule Engram.Onboarding do
 
     case result do
       {:ok, tos_row} ->
-        Cache.put(:terms, {user.id, @terms_document}, tos_version)
-        Cache.put(:terms, {user.id, @privacy_document}, privacy_version)
+        # Evict, not put: a peer node may hold the old version, and a put
+        # could land over a newer one a concurrent read just stored.
+        :ok = Cache.evict(:terms, {user.id, @terms_document})
+        :ok = Cache.evict(:terms, {user.id, @privacy_document})
         {:ok, tos_row}
 
       other ->
@@ -112,14 +114,18 @@ defmodule Engram.Onboarding do
   controller is migrated to the 6-arity form. Delegates to `insert_agreement/1`.
   """
   def accept_terms(user, version, meta) when is_binary(version) do
-    insert_agreement(%{
-      user_id: user.id,
-      document: @terms_document,
-      version: version,
-      accepted_at: DateTime.utc_now(:second),
-      ip_address: Map.get(meta, :ip_address),
-      user_agent: Map.get(meta, :user_agent)
-    })
+    result =
+      insert_agreement(%{
+        user_id: user.id,
+        document: @terms_document,
+        version: version,
+        accepted_at: DateTime.utc_now(:second),
+        ip_address: Map.get(meta, :ip_address),
+        user_agent: Map.get(meta, :user_agent)
+      })
+
+    with {:ok, _} <- result, do: :ok = Cache.evict(:terms, {user.id, @terms_document})
+    result
   end
 
   # Upsert on (user_id, document, version) so re-accepts of the same version
@@ -529,16 +535,9 @@ defmodule Engram.Onboarding do
   defp profile_complete?(_), do: false
 
   # Cache-first read of the user's latest accepted version for a document.
+  # Through fetch/3, so an accept's eviction that lands mid-read wins.
   defp accepted_version(user, document) do
-    case Cache.get(:terms, {user.id, document}) do
-      {:ok, cached} ->
-        cached
-
-      :miss ->
-        v = query_accepted_version(user, document)
-        if v, do: Cache.put(:terms, {user.id, document}, v)
-        v
-    end
+    Cache.fetch(:terms, {user.id, document}, fn -> query_accepted_version(user, document) end)
   end
 
   defp accepted_satisfies?(nil, _floor), do: false
