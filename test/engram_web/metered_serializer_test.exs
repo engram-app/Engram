@@ -106,6 +106,40 @@ defmodule EngramWeb.MeteredSerializerTest do
     assert bytes == 2 * IO.iodata_length(data)
   end
 
+  test "fastlane!/1 does not count the sender on broadcast_from" do
+    # broadcast_from!(socket, ...) dispatches in the sending channel's own
+    # process, and dispatch/3 skips that pid, so it receives nothing.
+    topic = "crdt:#{System.unique_integer([:positive])}"
+    test_pid = self()
+
+    spawn(fn ->
+      Phoenix.PubSub.subscribe(Engram.PubSub, topic,
+        metadata: {:fastlane, self(), MeteredSerializer, []}
+      )
+
+      send(test_pid, :subscribed)
+      Process.sleep(5_000)
+    end)
+
+    assert_receive :subscribed
+
+    Phoenix.PubSub.subscribe(Engram.PubSub, topic,
+      metadata: {:fastlane, self(), MeteredSerializer, []}
+    )
+
+    MeteredSerializer.fastlane!(%Broadcast{topic: topic, event: "crdt_doc_ready", payload: %{}})
+
+    assert_receive {:frame, %{count: 1}, %{kind: :broadcast}}
+  end
+
+  test "Engram.PubSub runs one registry partition (the recipient count assumes it)" do
+    # dispatch/3 runs once PER PARTITION, each call re-encoding via fastlane!/1,
+    # while the recipient count walks ALL partitions. With pool_size > 1 the
+    # broadcast count would multiply by the partitions touched. Raising
+    # pool_size means moving the count first.
+    assert {:duplicate, 1, _} = :ets.lookup_element(Engram.PubSub, -2, 2)
+  end
+
   test "is the v2 serializer on both channel sockets, with v1 still accepted" do
     for path <- ["/socket", "/socket/device"] do
       {^path, _handler, opts} = List.keyfind(EngramWeb.Endpoint.__sockets__(), path, 0)

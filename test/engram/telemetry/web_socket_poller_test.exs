@@ -72,7 +72,9 @@ defmodule Engram.Telemetry.WebSocketPollerTest do
       prefixes =
         Map.new(collect_count_events(), fn {_, m, meta} -> {meta.topic_prefix, m.count} end)
 
-      for prefix <- ~w(sync crdt user device), do: assert(Map.has_key?(prefixes, prefix))
+      # No test spawns crdt/device channels, so these are idle.
+      assert prefixes["crdt"] == 0
+      assert prefixes["device"] == 0
     end
   end
 
@@ -95,7 +97,10 @@ defmodule Engram.Telemetry.WebSocketPollerTest do
         |> Map.new()
 
       assert counts["user"] >= 2
-      assert Map.has_key?(counts, "device")
+      assert counts["device"] == 0
+      # Unmapped sockets (OriginProbeSocket) land in "other", which must also
+      # be seeded or it freezes at the last probe's count.
+      assert counts["other"] == 0
     end
   end
 

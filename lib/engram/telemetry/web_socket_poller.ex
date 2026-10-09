@@ -4,7 +4,8 @@ defmodule Engram.Telemetry.WebSocketPoller do
   gauges:
 
     * `[:engram, :websocket, :connections]` — live socket connections (one
-      transport process each), by `socket` (`"user"`, `"device"`, `"other"`).
+      transport process each), by `socket` (`"user"`, `"device"`, `"other"`;
+      `"other"` is mostly the origin-probe smoke socket).
 
     * `[:engram, :websocket, :count]` — live channel count, partitioned
       by `topic_prefix` (`"sync"`, `"crdt"`, `"user"`, `"device"`, plus the
@@ -46,6 +47,15 @@ defmodule Engram.Telemetry.WebSocketPoller do
 
   @channel_prefixes ~w(sync crdt user device)
   @sockets %{EngramWeb.UserSocket => "user", EngramWeb.DeviceSocket => "device"}
+
+  @doc """
+  Topic prefixes of every routed channel (`EngramWeb.UserSocket`,
+  `EngramWeb.DeviceSocket`). The one list of bounded `topic_prefix` values;
+  `EngramWeb.MeteredSerializer` builds on it. Add a prefix here when adding a
+  channel route.
+  """
+  @spec channel_prefixes() :: [String.t()]
+  def channel_prefixes, do: @channel_prefixes
 
   @doc """
   Entry point invoked by the `Engram.PromEx.WebSocket` polling group.
@@ -103,8 +113,7 @@ defmodule Engram.Telemetry.WebSocketPoller do
   end
 
   defp emit_connections(counts_by_socket) do
-    @sockets
-    |> Map.values()
+    ["other" | Map.values(@sockets)]
     |> Map.new(&{&1, 0})
     |> Map.merge(counts_by_socket)
     |> Enum.each(fn {socket, count} ->

@@ -67,6 +67,9 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/links/",
     "lib/engram/rerankers/",
     "lib/engram_web/channels/",
+    # Every WebSocket frame payload (note content, CRDT updates) passes
+    # through it. No log calls today; in scope so a future one is scanned.
+    "lib/engram_web/metered_serializer.ex",
     # Added after review: each of these has note content, a path, a title or a
     # search query in scope, and each was outside the first list purely because
     # the list was written from the files that session had open. A scope list
