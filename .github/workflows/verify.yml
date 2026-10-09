@@ -2596,7 +2596,7 @@ jobs:
             flock "$LOCK" sh -ec '
               if [ ! -x "$0/bin/clang" ]; then
                 f="$RUNNER_TEMP/wasi-sdk.tar.gz"
-                curl --proto "=https" --tlsv1.2 -sSfL --retry 5 --retry-all-errors -o "$f" \
+                curl --proto "=https" --tlsv1.2 -sSfL --connect-timeout 15 --speed-limit 1024 --speed-time 30 --retry 5 --retry-all-errors -o "$f" \
                   "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION%%.*}/wasi-sdk-$WASI_SDK_VERSION-x86_64-linux.tar.gz"
                 echo "$WASI_SDK_SHA256  $f" | sha256sum -c -
                 rm -rf "$0.partial" && mkdir -p "$0.partial"
@@ -2737,15 +2737,17 @@ jobs:
           # Need origin/main locally to detect which migrations are new.
           git fetch -q --depth=1 origin main || true
           # squawk (Rust, baseline x86-64), pinned and checksummed. Kept in the
-          # runner's $HOME/.cache (like the wasi-sdk) so a GitHub blip cannot
-          # fail a passed suite (#1874); a cold cache retries the download.
+          # runner's $HOME/.cache (like the wasi-sdk) so a GitHub blip only
+          # matters on a cold cache (#1874), where the download retries.
           SQUAWK_VERSION=2.54.0
           SQUAWK_SHA256=9514d1acc4893a81eed196002e208f18a9668d77a879ce44782816b9caed5940
           SQUAWK="$HOME/.cache/engram-squawk-$SQUAWK_VERSION"
           if ! echo "$SQUAWK_SHA256  $SQUAWK" | sha256sum -c --status - 2>/dev/null; then
             mkdir -p "$HOME/.cache"
             tmp="$(mktemp "$SQUAWK.XXXXXX")"
-            curl --proto "=https" --tlsv1.2 -sSfL --retry 5 --retry-all-errors -o "$tmp" \
+            # The home dir persists across jobs: never leave a failed download behind.
+            trap 'rm -f "$tmp"' EXIT
+            curl --proto "=https" --tlsv1.2 -sSfL --connect-timeout 15 --speed-limit 1024 --speed-time 30 --retry 5 --retry-all-errors -o "$tmp" \
               "https://github.com/sbdchd/squawk/releases/download/v$SQUAWK_VERSION/squawk-linux-x64"
             echo "$SQUAWK_SHA256  $tmp" | sha256sum -c -
             chmod +x "$tmp"

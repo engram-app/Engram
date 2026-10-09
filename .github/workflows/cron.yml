@@ -1182,7 +1182,7 @@ jobs:
         run: |
           v=0.22.2
           f="cargo-audit-x86_64-unknown-linux-musl-v$v.tgz"
-          curl --proto "=https" --tlsv1.2 -sSfL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/$f" \
+          curl --proto "=https" --tlsv1.2 -sSfL --connect-timeout 15 --speed-limit 1024 --speed-time 30 --retry 5 --retry-all-errors -o "$RUNNER_TEMP/$f" \
             "https://github.com/rustsec/rustsec/releases/download/cargo-audit%2Fv$v/$f"
           echo "7fb9497f8594b389e5fce5ef9b92db08432996895b2e0c5a0167a69ed445c428  $RUNNER_TEMP/$f" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/$f" -C "$RUNNER_TEMP"
