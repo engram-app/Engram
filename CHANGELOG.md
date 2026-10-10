@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.47.1](https://github.com/engram-app/Engram/compare/0.47.0...0.47.1) (2026-10-10)
+
+
+### Performance Improvements
+
+* central read-through cache and per-request query budgets ([#1927](https://github.com/engram-app/Engram/issues/1927)) ([44e8b20](https://github.com/engram-app/Engram/commit/44e8b200345ffa922b73c120536d54ef72d728c1))
+
 ## [0.47.0](https://github.com/engram-app/Engram/compare/0.46.0...0.47.0) (2026-10-10)
 
 
