@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.47.0](https://github.com/engram-app/Engram/compare/0.46.0...0.47.0) (2026-10-10)
+
+
+### Features
+
+* **mcp:** serve notes as resources with path completion ([#1924](https://github.com/engram-app/Engram/issues/1924)) ([e6f19ed](https://github.com/engram-app/Engram/commit/e6f19ed85a18292fc50faf572f7c5fdbde1ee6f0))
+
+
+### Bug Fixes
+
+* fail queued crdt ops on permanent join refusal ([#1922](https://github.com/engram-app/Engram/issues/1922)) ([3609379](https://github.com/engram-app/Engram/commit/3609379a1b2484d62329647b149a15230c77fdd4))
+* read request bodies in 64 KB socket reads ([#1926](https://github.com/engram-app/Engram/issues/1926)) ([08c1cd4](https://github.com/engram-app/Engram/commit/08c1cd431e81e48c03e1757e2bd5bf2f07aad59a))
+
 ## [0.46.0](https://github.com/engram-app/Engram/compare/0.45.0...0.46.0) (2026-10-09)
 
 
