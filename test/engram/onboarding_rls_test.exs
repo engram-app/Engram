@@ -89,7 +89,7 @@ defmodule Engram.OnboardingRlsTest do
   # Seeds an acceptance WITHOUT going through `accept_terms/3`.
   #
   # Load-bearing: the private `accepted_version/2` is cache-first, and
-  # `accept_terms/6` warms `TermsCache` for exactly the `{user_id, document}`
+  # `accept_terms/6` warms the `:terms` cache for exactly the `{user_id, document}`
   # key the `status/1` test reads back. Seeding through that API would let the
   # assertion pass out of ETS without touching the row under test.
   #
@@ -97,8 +97,8 @@ defmodule Engram.OnboardingRlsTest do
   # FRESH user, so the cache key cannot be warm from this file or a prior one.
   # That property is load-bearing and easy to destroy: a refactor to a shared
   # setup user would make the `status/1` assertion vacuous, silently.
-  # (`TermsCache` does expose `delete_local/1` and `clear_local/0` via
-  # `Engram.Cache.NodeLocalEts` if a future test needs explicit eviction;
+  # (`Engram.Cache.evict_local(:terms, key)` and `clear_local(:terms)` exist if
+  # a future test needs explicit eviction;
   # `LegalFixtures.reset_version_cache/0` resets `VersionCache` only.)
   defp seed_acceptance!(user, document) do
     {:ok, _} =

@@ -1550,7 +1550,12 @@ defmodule Engram.Crypto.UserDekRotation do
 
     case txn_result do
       {:ok, :ok} ->
-        # Only invalidate cache after the txn commits successfully.
+        # Only invalidate caches after the txn commits successfully. The
+        # cached user (which carries `encrypted_dek`) goes FIRST: a DekCache
+        # miss between the two would otherwise unwrap the retired blob off it.
+        # (Crypto.get_dek/1 also re-reads the blob from the DB on a miss, which
+        # covers peers whose :user eviction has not landed yet.)
+        Engram.Accounts.evict_user(user.id)
         DekCache.invalidate(user.id)
         :ok
 

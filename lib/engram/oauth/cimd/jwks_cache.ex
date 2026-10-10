@@ -1,6 +1,6 @@
 defmodule Engram.OAuth.Cimd.JwksCache do
   @moduledoc """
-  Node-local cache of the signing keys a CIMD client publishes at its `jwks_uri`.
+  Node-local cache (`:jwks` in `Engram.Cache.Registry`, 1h TTL) of the signing keys a CIMD client publishes at its `jwks_uri`.
 
   ## Why this has to exist
 
@@ -33,10 +33,7 @@ defmodule Engram.OAuth.Cimd.JwksCache do
   the worst case is one refetch per node.
   """
 
-  use Engram.Cache.NodeLocalEts,
-    table: :engram_cimd_jwks_cache,
-    ttl: :timer.hours(1)
-
+  alias Engram.Cache
   alias Engram.OAuth
   alias Engram.OAuth.Cimd
   alias Engram.OAuth.Cimd.Fetcher
@@ -59,9 +56,9 @@ defmodule Engram.OAuth.Cimd.JwksCache do
   """
   @spec keys(String.t()) :: {:ok, [map()]} | {:error, reason()}
   def keys(jwks_uri) when is_binary(jwks_uri) do
-    case cache_lookup(jwks_uri) do
+    case Cache.get(:jwks, jwks_uri) do
       {:ok, keys} -> {:ok, keys}
-      :stale -> fetch_and_store(jwks_uri, "cimd:jwks:miss:", @miss_limit)
+      :miss -> fetch_and_store(jwks_uri, "cimd:jwks:miss:", @miss_limit)
     end
   end
 
@@ -79,7 +76,7 @@ defmodule Engram.OAuth.Cimd.JwksCache do
   defp fetch_and_store(jwks_uri, bucket_prefix, limit) do
     with :ok <- rate_limit(jwks_uri, bucket_prefix, limit),
          {:ok, keys} <- fetch(jwks_uri) do
-      cache_put(jwks_uri, keys)
+      Cache.put(:jwks, jwks_uri, keys)
       {:ok, keys}
     end
   end

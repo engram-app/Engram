@@ -323,8 +323,9 @@ defmodule Engram.Indexing.IndexCap do
     # Same FORCE RLS reasoning as rank_below_cap?/2. A tenant-less read returns
     # 0, and `/bootstrap` then renders "0 of 0 notes indexed" to a user whose
     # vault is full — the exact support ticket the cap banner exists to avoid.
-    {:ok, count} =
-      Repo.with_tenant(user_id, fn ->
+    # Cached per owner (:note_counts, evicted per user on create/delete).
+    Engram.Cache.fetch(:note_counts, {user_id, :live}, fn ->
+      Repo.with_tenant!(user_id, fn ->
         Repo.one(
           from(n in Note,
             where: n.user_id == ^user_id and n.kind == "note" and is_nil(n.deleted_at),
@@ -332,7 +333,6 @@ defmodule Engram.Indexing.IndexCap do
           )
         ) || 0
       end)
-
-    count
+    end)
   end
 end

@@ -47,7 +47,18 @@ defmodule EngramWeb.BootstrapController do
 
   def show(conn, _params) do
     user = conn.assigns.current_user
+    scope = Engram.Permissions.vault_scope(conn)
 
+    # Every DB read below runs in ONE tenant transaction (each cache loader's
+    # own with_tenant nests in it for free), so a cold page load pays one
+    # BEGIN/enter/COMMIT instead of one per loader. The DEK is warmed first:
+    # a DekCache miss unwraps through KMS, which must not run inside it.
+    _ = Engram.Crypto.get_dek(user)
+    payload = Engram.Repo.with_tenant!(user.id, fn -> payload(user, scope) end)
+    json(conn, payload)
+  end
+
+  defp payload(user, scope) do
     payload = %{
       onboarding: OnboardingController.status_payload(user),
       capabilities: Billing.capabilities(user),
@@ -57,16 +68,11 @@ defmodule EngramWeb.BootstrapController do
       # that silently returns nothing is the support ticket the cap exists to
       # avoid.
       index_status: IndexCap.counts(user),
-      vaults: VaultsController.index_payload(user, Engram.Permissions.vault_scope(conn))
+      vaults: VaultsController.index_payload(user, scope)
     }
 
-    payload =
-      if Application.get_env(:engram, :billing_enabled, false) do
-        Map.put(payload, :billing, BillingController.status_payload(user))
-      else
-        payload
-      end
-
-    json(conn, payload)
+    if Application.get_env(:engram, :billing_enabled, false),
+      do: Map.put(payload, :billing, BillingController.status_payload(user)),
+      else: payload
   end
 end

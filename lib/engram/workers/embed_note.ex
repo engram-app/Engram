@@ -639,20 +639,19 @@ defmodule Engram.Workers.EmbedNote do
   settles.
 
   Max-wait ceiling: a note edited continuously would otherwise never embed (the
-  timer keeps resetting). We clamp `scheduled_at` to `burst_start + max_wait`
-  (default 5m, `EMBED_SETTLE_MAX_WAIT_SECONDS`), where `burst_start` is the
-  surviving job's `inserted_at` (unchanged by `replace`). The unique `period` is
-  widened to span the whole window so dedup holds until the ceiling fires.
+  timer keeps resetting). `insert_debounced/3` clamps `scheduled_at` to
+  `burst_start + max_wait` (default 5m, `EMBED_SETTLE_MAX_WAIT_SECONDS`), where
+  `burst_start` is the surviving job's `inserted_at` (unchanged by `replace`).
+  The unique `period` is widened to span the whole window so dedup holds until
+  the ceiling fires. Inserting this changeset directly skips the clamp.
 
   Pass `old_path_hmac:` (base64) when the note was renamed — the worker will
   delete old-path Qdrant points before re-indexing under the new path. T3.2:
   HMAC bytes (not plaintext path) are what survives in `oban_jobs.args` JSONB.
 
-  Pass `clamp: false` from bulk callers that enqueue via `Oban.insert_all`
-  (batch upsert, reconcile sweep). `insert_all` ignores `unique`/`replace`, so
-  the ceiling is meaningless there — `clamp: false` skips the per-note
-  `existing_burst_start` SELECT that would otherwise run once per note for
-  nothing (a 1,000-note reconcile page = 1,000 wasted queries).
+  Bulk callers enqueue this via `Oban.insert_all`, which ignores
+  `unique`/`replace`, so the ceiling is meaningless there and building the
+  changeset reads nothing.
   """
   # `user_id` REQUIRED and positional — see the note on
   # `Engram.Workers.ExtractNoteLinks.new_debounced/2`.
@@ -662,12 +661,7 @@ defmodule Engram.Workers.EmbedNote do
   # LIST into `args.user_id`, which then fails the `is_binary` check in
   # `fetch_note_for_worker_job/1` and silently takes the unscoped legacy path.
   def new_debounced(note_id, user_id, opts \\ []) when is_binary(user_id) do
-    quiet_at = DateTime.add(DateTime.utc_now(), settle_seconds(), :second)
-
-    scheduled_at =
-      if Keyword.get(opts, :clamp, true),
-        do: clamp_to_ceiling(note_id, quiet_at),
-        else: quiet_at
+    scheduled_at = DateTime.add(DateTime.utc_now(), settle_seconds(), :second)
 
     args = %{note_id: note_id, user_id: user_id}
 
@@ -710,8 +704,7 @@ defmodule Engram.Workers.EmbedNote do
 
   The lookup is `Engram.Jobs.reject_pending/3`, shared by every bulk
   enqueue site: chunked, index-backed, one query per 50 ids. Still far cheaper
-  than the per-note `existing_burst_start/1` SELECT that `clamp: false` exists
-  to avoid.
+  than one lookup per note.
 
   Suppressing a more urgent enqueue would invert `priority_for/1`, which is the
   whole fairness mechanism: during an import every note holds a pending
@@ -779,39 +772,50 @@ defmodule Engram.Workers.EmbedNote do
   defp settle_max_wait_seconds,
     do: Application.get_env(:engram, :embed_settle_max_wait_seconds, 300)
 
-  # Clamp the trailing-debounce target to burst_start + max_wait so a
-  # continuously-edited note still embeds. nil burst_start = no pending job =
-  # fresh burst, use the full settle window.
-  #
-  # Race note: existing_burst_start reads outside the advisory lock that Oban's
-  # insert_unique takes. A concurrent enqueue for the same note can make us miss
-  # an in-flight job and replace scheduled_at with an un-clamped quiet_at — but
-  # that only pushes the embed at most one settle interval past the ceiling
-  # (never earlier, never duplicate), and the next edit self-corrects. Bounded
-  # extra staleness, not a correctness bug — not worth locking the read path.
-  defp clamp_to_ceiling(note_id, quiet_at) do
-    case existing_burst_start(note_id) do
-      nil ->
-        quiet_at
+  @doc """
+  Inserts `new_debounced/3` through `Engram.Notes.Enqueue`, clamped to the
+  max-wait ceiling.
 
-      burst_start ->
-        ceiling = DateTime.add(burst_start, settle_max_wait_seconds(), :second)
-        if DateTime.compare(quiet_at, ceiling) == :gt, do: ceiling, else: quiet_at
+  The burst start is read off the job Oban's own unique check returns (the
+  surviving job, `conflict?: true`, after its `replace`), so the clamp costs no
+  extra read. Only when the replaced `scheduled_at` overshoots the ceiling does
+  one UPDATE pull it back: a continuously-edited note, once per edit past the
+  5-minute mark.
+
+  Race: a concurrent enqueue for the same note can replace `scheduled_at`
+  between Oban's update and this one. That only moves the embed by at most one
+  settle interval (never earlier than the ceiling, never a duplicate), and the
+  next edit self-corrects. Bounded extra staleness, not a correctness bug.
+  """
+  @spec insert_debounced(Ecto.UUID.t(), Ecto.UUID.t(), keyword()) ::
+          {:ok, Oban.Job.t()} | {:error, term()}
+  def insert_debounced(note_id, user_id, opts \\ []) do
+    note_id
+    |> new_debounced(user_id, opts)
+    |> Engram.Notes.Enqueue.enqueue("embed_note", &insert_clamped/1)
+  end
+
+  defp insert_clamped(changeset) do
+    case Oban.insert(changeset) do
+      # `id` is nil when Oban could not take the unique lock and returned the
+      # unsaved changeset as the conflict: nothing to clamp.
+      {:ok, %Oban.Job{conflict?: true, id: id, inserted_at: %DateTime{} = start} = job}
+      when is_integer(id) ->
+        {:ok, clamp_to_ceiling(job, DateTime.add(start, settle_max_wait_seconds(), :second))}
+
+      other ->
+        other
     end
   end
 
-  # inserted_at of the in-flight EmbedNote job for this note — the burst start,
-  # preserved across `replace: [:scheduled_at]` re-inserts. oban_jobs is not a
-  # tenant-scoped table, so no skip_tenant_check needed.
-  defp existing_burst_start(note_id) do
-    from(j in Oban.Job,
-      where: j.worker == "Engram.Workers.EmbedNote",
-      where: fragment("? ->> 'note_id' = ?", j.args, ^to_string(note_id)),
-      where: j.state in ["scheduled", "available", "executing", "retryable"],
-      order_by: [asc: j.inserted_at],
-      limit: 1,
-      select: j.inserted_at
-    )
-    |> Repo.one()
+  defp clamp_to_ceiling(%Oban.Job{id: id, scheduled_at: at} = job, ceiling) do
+    if DateTime.compare(at, ceiling) == :gt do
+      {_, _} =
+        Repo.update_all(from(j in Oban.Job, where: j.id == ^id), set: [scheduled_at: ceiling])
+
+      %{job | scheduled_at: ceiling}
+    else
+      job
+    end
   end
 end

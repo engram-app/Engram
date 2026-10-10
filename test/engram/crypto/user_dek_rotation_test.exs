@@ -48,6 +48,53 @@ defmodule Engram.Crypto.UserDekRotationTest do
   # The failure mode is delayed and silent: the row stays wrapped under the old
   # dek, keeps decrypting for as long as that key is around, and only breaks
   # once it is retired — long after the rotation reported success.
+  # The `:user` cache holds `encrypted_dek`. A user struct cached before the
+  # flip must never put the retired DEK back into DekCache: anything written
+  # under it becomes unreadable once that entry expires.
+  describe "rotate_user/1 vs the :user cache" do
+    test "final_flip evicts the cached user on the writing node", %{user: user} do
+      before = Engram.Accounts.get_user(user.id)
+
+      # Re-cache the user mid-rotation (after RotationLock.acquire evicted it,
+      # before final_flip): the Qdrant sweep phase sits between the two, so
+      # its scroll stub reads the user through the cache. Without the flip's
+      # own evict, that pre-flip row would survive the rotation.
+      bypass = Bypass.open()
+      Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
+
+      Bypass.stub(bypass, "POST", "/collections/engram_notes/points/scroll", fn conn ->
+        _ = Engram.Accounts.get_user(user.id)
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{"result" => %{"points" => [], "next_page_offset" => nil}})
+        )
+      end)
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      %{encrypted_dek: db_blob} = Repo.get!(Engram.Accounts.User, user.id)
+      assert Engram.Accounts.get_user(user.id).encrypted_dek == db_blob
+      refute db_blob == before.encrypted_dek
+    end
+
+    test "a pre-flip user struct does not repopulate DekCache with the retired DEK",
+         %{user: user} do
+      stale = Engram.Accounts.get_user(user.id)
+      {:ok, old_dek} = Crypto.get_dek(stale)
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+      DekCache.invalidate(user.id)
+
+      {:ok, dek} = Crypto.get_dek(stale)
+      refute dek == old_dek
+      {:ok, fresh_dek} = Crypto.get_dek(Repo.get!(Engram.Accounts.User, user.id))
+      assert dek == fresh_dek
+    end
+  end
+
   describe "rotate_user/1 — vault index snapshot (#1151)" do
     setup %{user: user} do
       {:ok, vault, _} =

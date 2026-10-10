@@ -116,6 +116,57 @@ defmodule Engram.Notes.CrdtCheckpointTest do
   # the PRE-flatten state on purpose: post-flatten bytes are what the gate
   # already reclaimed, and #1707 has to tune that gate against the bloat it is
   # supposed to catch.
+  # A tick in flight when a delete commits reads the row after the delete's
+  # seq bump, so the seq fence alone matched and the checkpoint materialized
+  # content, bumped seq and enqueued jobs for the trashed note.
+  test "a checkpoint of a deleted note writes nothing", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+    :ok = Notes.delete_note(user, vault, "p.md")
+    {:ok, before} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+
+    {:ok, doc} = CrdtBridge.doc_from_state(nil)
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "revived")
+
+    assert :skipped = CrdtCheckpoint.checkpoint_pruning(user.id, vault.id, note.id, doc)
+
+    {:ok, after_run} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    assert after_run.seq == before.seq
+    assert after_run.crdt_state_ciphertext == before.crdt_state_ciphertext
+    assert after_run.content_hash == before.content_hash
+  end
+
+  # The write is committed before the announce / enqueue run. A raise there
+  # used to reach the function's rescue and report :skipped, which keeps a
+  # room refusing acks for a state that is durable.
+  test "a raise after the commit is logged and the outcome stays written", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    prev = Application.get_env(:engram, :checkpoint_interleave_hook)
+
+    Application.put_env(:engram, :checkpoint_interleave_hook, fn
+      :post_commit -> raise "post-commit boom"
+      _ -> :ok
+    end)
+
+    on_exit(fn ->
+      if prev,
+        do: Application.put_env(:engram, :checkpoint_interleave_hook, prev),
+        else: Application.delete_env(:engram, :checkpoint_interleave_hook)
+    end)
+
+    {:ok, doc} = CrdtBridge.doc_from_state(nil)
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "after")
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:written, _} = CrdtCheckpoint.checkpoint_pruning(user.id, vault.id, note.id, doc)
+      end)
+
+    assert log =~ "post-commit"
+    {:ok, row} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    refute row.content_hash == note.content_hash
+  end
+
   test "checkpoint emits doc bloat telemetry", ctx do
     %{user: user, vault: vault, note: note} = ctx
 
@@ -334,7 +385,9 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     Yex.Map.set(Yex.Doc.get_map(doc, "nodes"), "n1", "hi")
 
     seq0 = Vaults.current_seq(user.id, vault.id)
-    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+    # `checkpoint_pruning`, not `checkpoint/5`: the latter discards the outcome,
+    # so a canvas result the post-commit match can't read would pass unseen.
+    assert {:written, _} = CrdtCheckpoint.checkpoint_pruning(user.id, vault.id, note.id, doc)
 
     # content preserved verbatim — NOT projected to "" from the empty content Y.Text.
     {:ok, fresh} = Notes.get_note(user, vault, "board.canvas")

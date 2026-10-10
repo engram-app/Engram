@@ -4,7 +4,6 @@ defmodule EngramWeb.Plugs.BumpActivityTest do
   import Ecto.Query
   alias Engram.Repo
   alias Engram.UsageMeters
-  alias Engram.UsageMeters.ActivityCache
   alias Engram.UsageMeters.Meter
   alias EngramWeb.Plugs.BumpActivity
 
@@ -77,7 +76,7 @@ defmodule EngramWeb.Plugs.BumpActivityTest do
 
       # Force both the cache and the DB to look stale (> 1h).
       two_hours_ago = DateTime.utc_now() |> DateTime.add(-7200, :second)
-      ActivityCache.put(user.id, two_hours_ago)
+      Engram.Cache.put(:activity, user.id, two_hours_ago)
 
       Repo.update_all(
         from(m in Meter, where: m.user_id == ^user.id),
@@ -91,20 +90,20 @@ defmodule EngramWeb.Plugs.BumpActivityTest do
       assert DateTime.diff(bumped, two_hours_ago, :second) > 7000
 
       # Cache must be re-warmed to ~now so the next request short-circuits.
-      assert {:ok, cached} = ActivityCache.get(user.id)
+      assert {:ok, cached} = Engram.Cache.get(:activity, user.id)
       assert DateTime.diff(DateTime.utc_now(), cached, :second) < 60
     end
 
     test "degrades to the DB path when the cache table is unavailable", %{conn: conn} do
       user = insert(:user)
 
-      # Drop the cache owner (and its table). With the degrade in place this must
+      # Drop the cache owner (and its tables). With the degrade in place this must
       # NOT 500 the request — it falls back to the authoritative meter read.
-      :ok = Supervisor.terminate_child(Engram.Supervisor, ActivityCache)
-      on_exit(fn -> Supervisor.restart_child(Engram.Supervisor, ActivityCache) end)
+      :ok = Supervisor.terminate_child(Engram.Supervisor, Engram.Cache.Server)
+      on_exit(fn -> Supervisor.restart_child(Engram.Supervisor, Engram.Cache.Server) end)
 
-      assert ActivityCache.get(user.id) == :miss
-      assert ActivityCache.put(user.id, DateTime.utc_now()) == :ok
+      assert Engram.Cache.get(:activity, user.id) == :miss
+      assert Engram.Cache.put(:activity, user.id, DateTime.utc_now()) == :ok
 
       conn |> Plug.Conn.assign(:current_user, user) |> BumpActivity.call([])
       assert %DateTime{} = UsageMeters.last_active_at(user.id)

@@ -8,9 +8,9 @@ defmodule Engram.Vector.Qdrant do
   - QDRANT_API_KEY env var — API key for Qdrant Cloud (optional for local)
   """
 
-  use Engram.Cache.PersistentTerm
-
   alias Engram.ServiceConfig
+
+  require OpenTelemetry.Tracer, as: Tracer
 
   @default_url "http://localhost:6333"
   @default_collection "obsidian_notes"
@@ -150,13 +150,13 @@ defmodule Engram.Vector.Qdrant do
     # retries — otherwise one transient Qdrant blip would be cached for the
     # life of the node and every subsequent index would fail against a
     # collection that was fine.
-    # Deliberately NOT `pt_fetch/2`: that helper is read-through and caches
-    # whatever the loader returns, so an error would be written and only then
-    # erased. In the window between those two steps a concurrent caller reads
-    # the cached error and fails WITHOUT attempting the network — turning one
-    # transient Qdrant blip into several. Writing only on success closes that
-    # window rather than cleaning up after it. Same `{__MODULE__, key}`
-    # namespace, so `pt_erase_all/0` still finds these.
+    # Deliberately NOT a read-through helper: that would cache whatever the
+    # loader returns, so an error would be written and only then erased. In the
+    # window between those two steps a concurrent caller reads the cached error
+    # and fails WITHOUT attempting the network — turning one transient Qdrant
+    # blip into several. Writing only on success closes that window rather than
+    # cleaning up after it. Keys live under `{__MODULE__, key}`, which
+    # `forget_collection_memo/0` erases.
     if memo_enabled?() do
       case :persistent_term.get({__MODULE__, key}, :__miss__) do
         :ok ->
@@ -200,7 +200,11 @@ defmodule Engram.Vector.Qdrant do
   drop/recreate is a deliberate operator action, and this is the deliberate
   counterpart.
   """
-  def forget_collection_memo, do: pt_erase_all()
+  def forget_collection_memo do
+    for {{__MODULE__, _} = k, _v} <- :persistent_term.get(), do: :persistent_term.erase(k)
+
+    :ok
+  end
 
   defp do_ensure_collection(col, dims) do
     case create_collection(col, dims) do
@@ -871,8 +875,16 @@ defmodule Engram.Vector.Qdrant do
   # The body is decoded in Rust (`Engram.Native.json_decode/1`): with vectors
   # requested it is ~200 x 1024 floats, 2.3 MB of JSON that took Jason ~290 ms
   # per search, ten times the MMR pass that consumes it.
+  # The `qdrant.query` span covers the HTTP call only, with no attributes
+  # (the body holds the query vector and tenant filter).
   defp do_search(col, opts) do
-    case Req.post("#{base_url()}/collections/#{col}/points/query", opts ++ [decode_body: false]) do
+    resp =
+      Tracer.with_span "qdrant.query" do
+        Req.post("#{base_url()}/collections/#{col}/points/query", opts ++ [decode_body: false])
+        |> Engram.Observability.Otel.mark_http_result()
+      end
+
+    case resp do
       {:ok, %{status: 200, body: raw}} when is_binary(raw) ->
         case Engram.Native.json_decode(raw) do
           {:ok, %{"result" => result}} -> {:ok, search_results(result)}

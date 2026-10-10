@@ -931,6 +931,17 @@ defmodule Engram.NotesTest do
       assert {:error, :not_found} = Notes.get_note(user, vault, "Test/Bye.md")
     end
 
+    test "delete_note_reporting says whether a live note was there", %{user: user, vault: vault} do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "R.md", "content" => "# R", "mtime" => 1.0},
+          actor: "api"
+        )
+
+      assert Notes.delete_note_reporting(user, vault, "R.md") == :deleted
+      assert Notes.delete_note_reporting(user, vault, "R.md") == :absent
+      assert Notes.delete_note_reporting(user, vault, "Never.md") == :absent
+    end
+
     test "is idempotent for nonexistent note", %{user: user, vault: vault} do
       assert :ok = Notes.delete_note(user, vault, "Fake/Note.md")
     end

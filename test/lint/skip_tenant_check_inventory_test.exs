@@ -60,7 +60,7 @@ defmodule Engram.SkipTenantCheckInventoryTest do
   # an actual audit of what moved — regenerating it to make the test pass is
   # the one use that defeats the point.
   @inventory %{
-    "engram/abuse/origin_stats.ex" => 4,
+    "engram/abuse/origin_stats.ex" => 3,
     "engram/accounts.ex" => 33,
     "engram/accounts/lifecycle.ex" => 3,
     "engram/accounts/password_reset.ex" => 5,
@@ -70,7 +70,7 @@ defmodule Engram.SkipTenantCheckInventoryTest do
     "engram/billing/plan_cache.ex" => 1,
     "engram/billing/workers/override_expiry_sweep.ex" => 1,
     "engram/connections.ex" => 3,
-    "engram/crypto.ex" => 1,
+    "engram/crypto.ex" => 2,
     "engram/crypto/aad_rebind.ex" => 3,
     "engram/crypto/master_rotation.ex" => 2,
     "engram/crypto/provider_migration.ex" => 4,
@@ -102,7 +102,6 @@ defmodule Engram.SkipTenantCheckInventoryTest do
     "engram/repo/tenancy_guard.ex" => 1,
     "engram/telemetry/install_pings.ex" => 1,
     "engram/usage_meters.ex" => 11,
-    "engram/vaults.ex" => 1,
     "engram/workers/backfill_crdt_head.ex" => 1,
     "engram/workers/cimd_refresh.ex" => 1,
     "engram/workers/cleanup_vault.ex" => 1,

@@ -6,6 +6,7 @@ defmodule Engram.Notes.CrdtPersistenceTest do
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
   alias Engram.Notes.{CrdtBridge, CrdtPersistence, CrdtUpdateLog, Note}
+  alias Yex.Sync.SharedDoc
 
   setup do
     user = insert(:user)
@@ -107,6 +108,27 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     # that empty-but-plausible doc is the thing a later checkpoint would
     # have written back over the note body.
     assert CrdtBridge.text_of(doc) == ""
+  end
+
+  # Same policy one step later: a snapshot that decrypts but is not a Yjs
+  # update must fail the room start loudly, never bind an empty doc that a
+  # later checkpoint would write back over the body.
+  test "bind/3 REFUSES to bind when the snapshot decrypts but does not apply", ctx do
+    %{user: user, note: note} = ctx
+    {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(<<255, 254, 253, 0, 1, 2>>, user, note.id)
+
+    Repo.with_tenant(user.id, fn ->
+      from(n in Note, where: n.id == ^note.id)
+      |> Repo.update_all(set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce])
+    end)
+
+    st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}
+
+    capture_log(fn ->
+      assert_raise RuntimeError, ~r/snapshot does not apply/, fn ->
+        CrdtPersistence.bind(st, note.id, CrdtBridge.new_doc())
+      end
+    end)
   end
 
   # The legitimate half of the same branch must keep working: a note that has
@@ -818,5 +840,255 @@ defmodule Engram.Notes.CrdtPersistenceTest do
 
     # The guard must have prevented the flag from being set.
     assert Process.info(self(), :trap_exit) == {:trap_exit, false}
+  end
+
+  # One keystroke is one statement: the tail insert, the crdt_head reset and
+  # the seq read, plus with_tenant's begin/enter/exit/commit.
+  test "update_v1/4 appends in one statement", ctx do
+    %{user: user, note: note} = ctx
+    st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id, user: user}
+    {:ok, %{state: upd}} = CrdtBridge.merge_plaintext(nil, "one statement")
+    doc = CrdtBridge.new_doc()
+    :ok = Yex.apply_update(doc, upd)
+
+    {_, qs} =
+      Engram.QueryRecorder.record(fn -> CrdtPersistence.update_v1(st, upd, note.id, doc) end)
+
+    assert length(qs) == 5, Engram.QueryRecorder.format(qs)
+  end
+
+  # ── a live room: bind does not echo what it loaded ────────────────────────
+
+  describe "a room started on an existing note" do
+    alias Engram.Notes.CrdtRegistry
+
+    setup %{user: user, vault: vault} do
+      prev = Application.get_env(:engram, Engram.Notes.CrdtCheckpointTimer, [])
+      on_exit(fn -> Application.put_env(:engram, Engram.Notes.CrdtCheckpointTimer, prev) end)
+      topic = "sync:#{user.id}:#{vault.id}"
+      EngramWeb.Endpoint.subscribe(topic)
+      %{topic: topic}
+    end
+
+    defp tail_count(user, note_id) do
+      Repo.with_tenant!(user.id, fn ->
+        Repo.aggregate(from(l in CrdtUpdateLog, where: l.note_id == ^note_id), :count)
+      end)
+    end
+
+    defp start_room(user, vault, note) do
+      {:ok, room} = CrdtRegistry.ensure_started(user.id, vault.id, note.id)
+      on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
+      # Every update_v1 bind posted to itself is ahead of this call.
+      _ = :sys.get_state(room)
+      room
+    end
+
+    # The room is a :sensitive process (crypto), so its dictionary is not
+    # readable through Process.info/2. Ask it from inside.
+    defp timer_of(room) do
+      me = self()
+
+      :ok =
+        SharedDoc.update_doc(room, fn _ ->
+          send(me, {:timer, Process.get(:crdt_timer_pid)})
+        end)
+
+      assert_receive {:timer, pid} when is_pid(pid)
+      pid
+    end
+
+    test "writes no tail row, pushes nothing and schedules no checkpoint", ctx do
+      %{user: user, vault: vault, note: note} = ctx
+      # A tail row too, so the replay has something to echo as well.
+      {:ok, %{state: upd}} = CrdtBridge.merge_plaintext(nil, "tail edit")
+      st = %{user_id: user.id, vault_id: vault.id, note_id: note.id}
+      _ = CrdtPersistence.update_v1(st, upd, note.id, CrdtBridge.new_doc())
+      assert_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}
+      assert tail_count(user, note.id) == 1
+
+      room = start_room(user, vault, note)
+
+      assert tail_count(user, note.id) == 1
+      refute_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 100
+      assert %{settle_timer: nil, first_dirty_at: nil} = :sys.get_state(timer_of(room))
+    end
+
+    # The #902 fence is the row the checkpoint transaction reads (plus the
+    # snapshot fence on its write), so a tick reads the note once and opens one
+    # transaction.
+    test "a checkpoint tick reads the note once, in one transaction", ctx do
+      %{user: user, vault: vault, note: note} = ctx
+
+      Application.put_env(:engram, Engram.Notes.CrdtCheckpointTimer,
+        settle_ms: 600_000,
+        ceiling_ms: 600_000,
+        eager_ms: 600_000
+      )
+
+      room = start_room(user, vault, note)
+      timer = timer_of(room)
+
+      :ok =
+        SharedDoc.update_doc(room, fn doc ->
+          doc |> Yex.Doc.get_text(CrdtBridge.text_name()) |> Yex.Text.insert(0, "T-")
+        end)
+
+      _ = :sys.get_state(room)
+
+      {_, qs} =
+        Engram.QueryRecorder.record(fn ->
+          send(timer, :tick)
+          :sys.get_state(timer)
+        end)
+
+      report = Engram.QueryRecorder.format(qs)
+      assert [_] = Enum.filter(qs, &(&1.source == "notes" and &1.sql =~ ~r/^SELECT/)), report
+      assert [_] = Enum.filter(qs, &(&1.source == "tenant_txn" and &1.sql == "begin")), report
+      {:ok, fresh} = Notes.get_note(user, vault, "p.md")
+      assert fresh.content == "T-base"
+    end
+
+    # The tick has no version pre-read: a write committing between the room
+    # snapshot and the checkpoint's row read must survive, through the
+    # union with the row's stored state (and the seq fence after the read).
+    test "a write committed between the tick's snapshot and its row read survives", ctx do
+      %{user: user, vault: vault, note: note} = ctx
+
+      Application.put_env(:engram, Engram.Notes.CrdtCheckpointTimer,
+        settle_ms: 600_000,
+        ceiling_ms: 600_000,
+        eager_ms: 600_000
+      )
+
+      room = start_room(user, vault, note)
+      timer = timer_of(room)
+
+      :ok =
+        SharedDoc.update_doc(room, fn doc ->
+          doc |> Yex.Doc.get_text(CrdtBridge.text_name()) |> Yex.Text.insert(0, "ROOM-")
+        end)
+
+      _ = :sys.get_state(room)
+
+      on_exit(Engram.CheckpointInterleave.arm(:after_room_snapshot))
+      send(timer, :tick)
+      parked = Engram.CheckpointInterleave.await_parked(:after_room_snapshot, timer)
+
+      # Written against the facade ("base"); the room's edit is in its tail.
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => "base REST"},
+          actor: "api"
+        )
+
+      Engram.CheckpointInterleave.release(:after_room_snapshot, parked)
+      _ = :sys.get_state(timer)
+
+      {:ok, fresh} = Notes.get_note(user, vault, "p.md")
+      assert {:ok, "ROOM-base REST"} = Notes.authoritative_content(user, fresh)
+      assert fresh.content == "ROOM-base REST"
+    end
+
+    test "still appends a real update after the bind", ctx do
+      %{user: user, vault: vault, note: note} = ctx
+      room = start_room(user, vault, note)
+
+      :ok =
+        SharedDoc.update_doc(room, fn doc ->
+          doc |> Yex.Doc.get_text(CrdtBridge.text_name()) |> Yex.Text.insert(0, "X")
+        end)
+
+      _ = :sys.get_state(room)
+      assert tail_count(user, note.id) == 1
+      assert_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}
+    end
+  end
+
+  # ── short-lived rooms compact the tail they hold ───────────────────────────
+
+  describe "a room that stops" do
+    alias Engram.Notes.{CrdtRegistry, CrdtTransport}
+
+    defp tail_ids(user, note_id) do
+      Repo.with_tenant!(user.id, fn ->
+        Repo.all(from(l in CrdtUpdateLog, where: l.note_id == ^note_id, select: l.id))
+      end)
+    end
+
+    defp gone?(note_id, attempts \\ 200) do
+      cond do
+        is_nil(CrdtRegistry.lookup(note_id)) -> true
+        attempts == 0 -> false
+        true -> Process.sleep(10) && gone?(note_id, attempts - 1)
+      end
+    end
+
+    # One room-free write: the room lives as long as the applying task.
+    defp idle_update(user, vault, note_id, text) do
+      {:ok, %{update: full}} = CrdtTransport.read_delta(user, vault, note_id, nil)
+      client = CrdtBridge.new_doc()
+      :ok = Yex.apply_update(client, full)
+      sv = Yex.encode_state_vector!(client)
+      CrdtBridge.ingest_plaintext(client, text)
+      {:ok, upd} = Yex.encode_state_as_update(client, sv)
+
+      assert {:ok, _} =
+               Task.async(fn -> CrdtTransport.apply_update(user, vault, note_id, upd) end)
+               |> Task.await(5_000)
+
+      assert gone?(note_id)
+    end
+
+    test "prunes every tail row its doc holds", %{user: user, vault: vault, note: note} do
+      for i <- 1..3, do: idle_update(user, vault, note.id, "base #{i}")
+
+      assert tail_ids(user, note.id) == []
+      {:ok, fresh} = Notes.get_note(user, vault, "p.md")
+      assert fresh.content == "base 3"
+    end
+
+    test "keeps a row that decrypts but does not apply", ctx do
+      %{user: user, vault: vault, note: note} = ctx
+      st = %{user_id: user.id, vault_id: vault.id, note_id: note.id}
+      _ = CrdtPersistence.update_v1(st, <<255, 254, 253, 0, 1, 2>>, note.id, CrdtBridge.new_doc())
+      [garbage] = tail_ids(user, note.id)
+
+      idle_update(user, vault, note.id, "base edited")
+
+      assert tail_ids(user, note.id) == [garbage]
+    end
+
+    test "keeps rows it never folded", %{user: user, vault: vault, note: note} do
+      # Undecryptable at bind, so not in the doc.
+      bad =
+        Repo.with_tenant!(user.id, fn ->
+          Repo.insert!(%CrdtUpdateLog{
+            note_id: note.id,
+            user_id: user.id,
+            vault_id: vault.id,
+            update_ciphertext: <<1, 2, 3>>,
+            update_nonce: <<0::96>>
+          })
+        end)
+
+      # Appended by another writer while the room is up, so not in the doc.
+      {:ok, room} = CrdtRegistry.ensure_observed(user.id, vault.id, note.id)
+      {:ok, %{state: foreign_upd}} = CrdtBridge.merge_plaintext(nil, "foreign")
+      st = %{user_id: user.id, vault_id: vault.id, note_id: note.id}
+      _ = CrdtPersistence.update_v1(st, foreign_upd, note.id, CrdtBridge.new_doc())
+      [foreign] = tail_ids(user, note.id) -- [bad.id]
+
+      :ok =
+        SharedDoc.update_doc(room, fn doc ->
+          doc |> Yex.Doc.get_text(CrdtBridge.text_name()) |> Yex.Text.insert(0, "X")
+        end)
+
+      :ok = CrdtTransport.confirm_appended(room)
+      ref = Process.monitor(room)
+      SharedDoc.unobserve(room)
+      assert_receive {:DOWN, ^ref, :process, _, _}, 5_000
+
+      assert Enum.sort(tail_ids(user, note.id)) == Enum.sort([bad.id, foreign])
+    end
   end
 end

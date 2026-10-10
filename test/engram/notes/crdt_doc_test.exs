@@ -100,6 +100,9 @@ defmodule Engram.Notes.CrdtDocTest do
         |> CrdtBridge.diff_into_text("before AND TICKED")
       end)
 
+    # update_v1 is the room's own follow-up message; this call queues behind it.
+    _ = :sys.get_state(room)
+
     tail_count = fn ->
       {:ok, n} =
         Repo.with_tenant(user.id, fn ->

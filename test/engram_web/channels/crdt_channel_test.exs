@@ -756,6 +756,9 @@ defmodule EngramWeb.CrdtChannelTest do
         |> Ecto.Changeset.change(dek_rotation_locked_at: DateTime.utc_now())
         |> Repo.update()
 
+      # Mirrors the users_changed trigger (the sandbox never commits).
+      Engram.Accounts.evict_user(user.id)
+
       ref =
         push(socket, "crdt_create", %{
           "doc_id" => id,
@@ -1012,7 +1015,13 @@ defmodule EngramWeb.CrdtChannelTest do
       # room's in-memory doc can hold content the row does not show yet. Reading
       # that as "the server has nothing" is the same data-loss shape as the
       # decline above.
+      #
+      # A room binds only to a note row that exists (bind/3 refuses one that
+      # does not), so the row comes first: the create retried after the note
+      # was opened.
       id = Ecto.UUID.generate()
+      ref0 = push(socket, "crdt_create", %{"doc_id" => id, "path" => "Notes/roombusy.md"})
+      assert_reply ref0, :ok, %{doc_id: ^id}
       {:ok, _room} = CrdtRegistry.ensure_started(user.id, vault.id, id)
       on_exit(fn -> CrdtRegistry.terminate_room(id) end)
 
@@ -1399,6 +1408,129 @@ defmodule EngramWeb.CrdtChannelTest do
       {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_step1, sv}})
       ref = push(socket, "crdt_msg", %{"doc_id" => n.id, "b64" => Base.encode64(frame)})
       assert_reply ref, :ok, %{}, 10_000
+    end
+  end
+
+  describe "acknowledgement order" do
+    setup do
+      prev = Application.get_env(:engram, Engram.Notes.CrdtCheckpointTimer, [])
+      on_exit(fn -> Application.put_env(:engram, Engram.Notes.CrdtCheckpointTimer, prev) end)
+
+      Application.put_env(:engram, Engram.Notes.CrdtCheckpointTimer,
+        settle_ms: 600_000,
+        ceiling_ms: 600_000,
+        eager_ms: 600_000
+      )
+    end
+
+    # Snapshot + tail: what survives the room dying at the moment of the ack.
+    defp durable_text(user, vault, note_id) do
+      Repo.with_tenant!(user.id, fn ->
+        {:ok, row} = Notes.get_note_by_id(user, vault, note_id)
+        {:ok, text} = Notes.authoritative_content(user, row)
+        text
+      end)
+    end
+
+    test "crdt_msg acks an edit only after its tail append", ctx do
+      %{socket: socket, user: user, vault: vault, note: note} = ctx
+      _ = handshake_room(socket, note.id)
+      frame = delta_frame(socket, note.id, "ACKED-")
+
+      room = CrdtRegistry.lookup(note.id)
+      on_exit(CheckpointInterleave.arm(:before_tail_append))
+
+      ref = push(socket, "crdt_msg", %{"doc_id" => note.id, "b64" => Base.encode64(frame)})
+      CheckpointInterleave.await_parked(:before_tail_append, room)
+      refute_reply ref, :ok, _, 200
+      CheckpointInterleave.release(:before_tail_append, room)
+
+      assert_reply ref, :ok, %{}, 3000
+      assert durable_text(user, vault, note.id) == "ACKED-base"
+    end
+
+    # Fail the room's next `n` tail appends (test-only seam in update_v1).
+    defp fail_appends(n) do
+      left = :counters.new(1, [])
+      :counters.put(left, 1, n)
+
+      Application.put_env(:engram, :crdt_tail_append_fault, fn ->
+        if :counters.get(left, 1) > 0 do
+          :counters.sub(left, 1, 1)
+          {:error, :injected}
+        else
+          :ok
+        end
+      end)
+
+      on_exit(fn -> Application.delete_env(:engram, :crdt_tail_append_fault) end)
+    end
+
+    defp join_second(user, vault) do
+      {:ok, _, s2} =
+        subscribe_and_join(
+          user_socket(user),
+          EngramWeb.CrdtChannel,
+          "crdt:#{user.id}:#{vault.id}",
+          %{
+            "crdt_proto" => 2
+          }
+        )
+
+      Sandbox.allow(Repo, self(), s2.channel_pid)
+      s2
+    end
+
+    defp push_edit(socket, note_id, frame) do
+      push(socket, "crdt_msg", %{"doc_id" => note_id, "b64" => Base.encode64(frame)})
+    end
+
+    test "a failed append is not acked, whichever socket confirms first", ctx do
+      %{socket: socket, user: user, vault: vault, note: note} = ctx
+      other = join_second(user, vault)
+      _ = handshake_room(socket, note.id)
+      failing = delta_frame(socket, note.id, "LOST-")
+      fine = delta_frame(other, note.id, "KEPT-")
+
+      # Only the first append fails: `failing`, pushed alone first.
+      fail_appends(1)
+      ref = push_edit(socket, note.id, failing)
+      assert_reply ref, :error, %{reason: "room_unavailable"}, 3000
+
+      # The other socket's own append succeeds, but its confirmation must not
+      # clear the failure: `failing` is still only in the room's memory.
+      ref_other = push_edit(other, note.id, fine)
+      assert_reply ref_other, :error, %{reason: "room_unavailable"}, 3000
+    end
+
+    test "a retry after a failed append is not acked until a checkpoint commits", ctx do
+      %{socket: socket, note: note} = ctx
+      _ = handshake_room(socket, note.id)
+      frame = delta_frame(socket, note.id, "RETRY-")
+
+      room = CrdtRegistry.lookup(note.id)
+      me = self()
+
+      :ok =
+        SharedDoc.update_doc(room, fn _ -> send(me, {:timer, Process.get(:crdt_timer_pid)}) end)
+
+      assert_receive {:timer, timer}
+
+      # The failure schedules a checkpoint at once; hold it mid-transaction.
+      on_exit(CheckpointInterleave.arm(:after_row_read))
+      fail_appends(1)
+      assert_reply push_edit(socket, note.id, frame), :error, %{reason: "room_unavailable"}, 3000
+      parked = CheckpointInterleave.await_parked(:after_row_read, timer)
+
+      # The retry applies nothing new, so it appends nothing: still not durable.
+      assert_reply push_edit(socket, note.id, frame), :error, %{reason: "room_unavailable"}, 3000
+
+      CheckpointInterleave.release(:after_row_read, parked)
+      _ = :sys.get_state(timer)
+
+      assert_reply push_edit(socket, note.id, frame), :ok, %{}, 3000
+      {:ok, fresh} = Notes.get_note(ctx.user, ctx.vault, note.path || "p.md")
+      assert fresh.content == "RETRY-base"
     end
   end
 
@@ -3039,9 +3171,36 @@ defmodule EngramWeb.CrdtChannelTest do
         skip_tenant_check: true
       )
 
+      # Mirrors the users_changed trigger (the sandbox never commits).
+
+      Engram.Accounts.evict_user(user.id)
+
       assert {:error, %{reason: "rotation_in_progress"}} =
                subscribe_and_join(
                  socket,
+                 EngramWeb.CrdtChannel,
+                 "crdt:#{user.id}:#{vault.id}",
+                 %{"crdt_proto" => 2}
+               )
+    end
+
+    # The `:user` cache learns of a lock taken on another node only when its
+    # eviction lands, so the join's rotation check must read the DB.
+    test "join is refused while the cached user is stale (unlocked)", %{user: user, vault: vault} do
+      Engram.Cache.clear_local(:user)
+      _ = Engram.Accounts.get_user(user.id)
+
+      Repo.update_all(
+        from(u in Engram.Accounts.User, where: u.id == ^user.id),
+        [set: [dek_rotation_locked_at: DateTime.utc_now()]],
+        skip_tenant_check: true
+      )
+
+      assert %{dek_rotation_locked_at: nil} = Engram.Accounts.get_user(user.id)
+
+      assert {:error, %{reason: "rotation_in_progress"}} =
+               subscribe_and_join(
+                 user_socket(user),
                  EngramWeb.CrdtChannel,
                  "crdt:#{user.id}:#{vault.id}",
                  %{"crdt_proto" => 2}
@@ -3057,6 +3216,9 @@ defmodule EngramWeb.CrdtChannelTest do
         skip_tenant_check: true
       )
 
+      # Mirrors the users_changed trigger (the sandbox never commits).
+      Engram.Accounts.evict_user(user.id)
+
       assert {:error, %{reason: "rotation_in_progress"}} =
                subscribe_and_join(
                  user_socket(user),
@@ -3070,6 +3232,10 @@ defmodule EngramWeb.CrdtChannelTest do
         [set: [dek_rotation_locked_at: nil]],
         skip_tenant_check: true
       )
+
+      # Mirrors the users_changed trigger (the sandbox never commits).
+
+      Engram.Accounts.evict_user(user.id)
 
       assert {:ok, _, joined} =
                subscribe_and_join(

@@ -5,9 +5,10 @@ defmodule Engram.RepoTenantSpanNamingTest do
   `opentelemetry_ecto` builds the span name as
   `span_prefix <> if(source, do: ":\#{source}", else: "")` — there is no
   per-query naming hook, so an absent `:source` yields a bare
-  `engram.repo.query` span. The RLS block issues four such statements per
-  invocation (begin, set tenant+role, reset role, commit), none of which is
-  schema-backed, so before this they were all anonymous.
+  `engram.repo.query` span. The RLS block issues three such statements per
+  invocation (begin, set tenant+role, commit), plus a reset when nested or in
+  the test sandbox, none of which is schema-backed, so before this they were
+  all anonymous.
 
   That mattered in practice: a 2026-08-02 trace audit found 3,069 of 5,389
   repo.query spans unnamed over 23h, and reading them as "Oban noise" was the
@@ -77,11 +78,12 @@ defmodule Engram.RepoTenantSpanNamingTest do
       sources = ref |> drain() |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
 
       # Sandbox runs the block as a savepoint, so begin/commit may surface as
-      # savepoint statements or be absent entirely — assert on the two
-      # set_config statements we always issue ourselves, and that whatever
-      # else fires is still named.
+      # savepoint statements or be absent entirely, and the reset that a real
+      # top-level COMMIT makes free is issued as `tenant_exit_sandbox`. Assert
+      # on the two set_config statements, and that whatever else fires is
+      # still named.
       assert "tenant_enter" in sources
-      assert "tenant_exit" in sources
+      assert "tenant_exit_sandbox" in sources
       refute nil in sources
     end
 
@@ -97,9 +99,9 @@ defmodule Engram.RepoTenantSpanNamingTest do
       sources = ref |> drain() |> Enum.map(&elem(&1, 0))
 
       # Re-entrancy is what makes collapsing call sites cheap — if this ever
-      # regresses, every nested call starts paying four round trips again.
+      # regresses, every nested call starts paying its own enter / exit pair.
       assert Enum.count(sources, &(&1 == "tenant_enter")) == 1
-      assert Enum.count(sources, &(&1 == "tenant_exit")) == 1
+      assert Enum.count(sources, &(&1 == "tenant_exit_sandbox")) == 1
     end
   end
 end

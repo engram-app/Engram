@@ -2,8 +2,9 @@ defmodule Engram.Workers.FinalizeRevisionSweep do
   @moduledoc """
   Hourly backstop for note-version outbox copies left without a job (#1710).
 
-  `ContentCommit.after_commit/3` enqueues `FinalizeRevision` after the write's
-  transaction commits. A process that dies in between leaves the copy in
+  `ContentCommit.enqueue_jobs/3` enqueues `FinalizeRevision` after the write's
+  own transaction commits (or inside an enclosing one, atomically with the
+  write, for an MCP tool call). A process that dies in between leaves the copy in
   `note_revisions.pending_*` with nothing coming for it. This finds copies older
   than ten minutes (well past any live job's 5s schedule plus retries) and
   enqueues them again. Re-enqueueing is safe: `FinalizeRevision` takes a lock

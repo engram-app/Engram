@@ -72,6 +72,28 @@ defmodule Engram.Notes.CrdtCheckpointRotationFenceTest do
     assert after_run.version == before.version
   end
 
+  # #1341. The `:user` cache learns of a lock taken on another node only when
+  # its eviction lands, so the gate must read the lock from the DB.
+  test "a stale cached user (unlocked) does not open the gate", ctx do
+    %{user: user, vault: vault} = ctx
+
+    {:ok, note} =
+      Engram.Notes.upsert_note(user, vault, %{"path" => "fence/s.md", "content" => "body"},
+        actor: "api"
+      )
+
+    before = reload(user, note.id)
+    Engram.Cache.clear_local(:user)
+    _ = Engram.Accounts.get_user(user.id)
+    lock!(user.id)
+    assert %{dek_rotation_locked_at: nil} = Engram.Accounts.get_user(user.id)
+
+    assert :skipped =
+             CrdtCheckpoint.checkpoint_pruning(user.id, vault.id, note.id, doc_with("more"))
+
+    assert reload(user, note.id).crdt_state_ciphertext == before.crdt_state_ciphertext
+  end
+
   test "a checkpoint on an unlocked user still writes", ctx do
     %{user: user, vault: vault} = ctx
 

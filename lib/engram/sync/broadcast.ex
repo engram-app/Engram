@@ -54,9 +54,10 @@ defmodule Engram.Sync.Broadcast do
     payload = stamp_traceparent(payload)
 
     case Process.get(@buffer_key) do
+      # Inside a tenant transaction this waits for commit (an MCP tool call is
+      # one transaction); outside one it fires now.
       nil ->
-        broadcast_now(topic, event, payload)
-        :ok
+        Engram.Repo.after_commit(fn -> broadcast_now(topic, event, payload) end)
 
       buffered when is_list(buffered) ->
         Process.put(@buffer_key, [{topic, event, payload} | buffered])
@@ -116,21 +117,23 @@ defmodule Engram.Sync.Broadcast do
   socket), via `Endpoint.broadcast_from/4`.
 
   This is the socket-origin delivery leg (a REST/CRDT push echoing to a note's
-  other live peers). It is never subject to the deferral buffer — `broadcast_from`
-  is only ever called with a live socket pid, outside the folder cascade — so it
-  logs and broadcasts directly, mirroring `broadcast_now/3`'s breadcrumb with
-  `mode=from`.
+  other live peers). Like `emit/3` it waits for an enclosing tenant
+  transaction to commit (`Engram.Repo.after_commit/1`). It is never subject to
+  the deferral buffer: `broadcast_from` is only ever called with a live socket
+  pid, outside the folder cascade, so it logs and broadcasts directly,
+  mirroring `broadcast_now/3`'s breadcrumb with `mode=from`.
   """
   @spec emit_from(pid(), String.t(), String.t(), map()) :: :ok
   def emit_from(pid, topic, event, payload) when is_pid(pid) do
     payload = stamp_traceparent(payload)
-    log_emit(topic, event, payload, "from")
 
-    Tracer.with_span "sync.fanout", %{attributes: %{"engram.event_type" => event}} do
-      _ = EngramWeb.Endpoint.broadcast_from(pid, topic, event, payload)
-    end
+    Engram.Repo.after_commit(fn ->
+      log_emit(topic, event, payload, "from")
 
-    :ok
+      Tracer.with_span "sync.fanout", %{attributes: %{"engram.event_type" => event}} do
+        _ = EngramWeb.Endpoint.broadcast_from(pid, topic, event, payload)
+      end
+    end)
   end
 
   # Single point where a fanout sync event actually hits PubSub. Emits a

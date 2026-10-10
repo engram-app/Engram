@@ -6,15 +6,15 @@ defmodule Engram.LegalFixtures do
 
   @doc """
   Reset the version cache for a test and wait for any in-flight broadcast to
-  drain. `VersionCache.invalidate_all/0` clears `:persistent_term` synchronously
-  AND fires an async PubSub broadcast; the local `Invalidator` GenServer
+  drain. `VersionCache.invalidate_all/0` clears the local tables synchronously
+  AND fires an async PubSub broadcast; the local `Engram.Cache.Server`
   receives that broadcast and clears again. Without the barrier, the loopback
   can land mid-test and erase cache rows the test just wrote, surfacing as
   intermittent failures of memoization assertions.
   """
   def reset_version_cache do
     VersionCache.invalidate_all()
-    _ = :sys.get_state(VersionCache.Invalidator)
+    _ = :sys.get_state(Engram.Cache.Server)
     :ok
   end
 

@@ -288,9 +288,6 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     rebuilt = enqueue_rebuilds(rebuild_rows)
     user_by_note = Map.new(embed_rows, &{&1.id, &1.user_id})
 
-    # clamp: false — insert_all ignores unique/replace, so the settle ceiling
-    # is moot; skip the per-note burst-start SELECT.
-    #
     # reject_already_queued/2 is what keeps this worker from being a ratchet.
     # The eligibility query filters on content/cooldown and NOT on "is a job
     # already pending" — insert_all disables `unique`. So a note whose job was
@@ -310,7 +307,6 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         Enum.map(
           fresh,
           &EmbedNote.new_debounced(&1, Map.fetch!(user_by_note, &1),
-            clamp: false,
             priority: EmbedNote.backfill_priority()
           )
         )

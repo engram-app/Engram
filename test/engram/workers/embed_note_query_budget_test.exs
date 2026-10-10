@@ -114,6 +114,10 @@ defmodule Engram.Workers.EmbedNoteQueryBudgetTest do
   # field the prod `sum by (source) (rate(ecto_..._count))` measurement uses, so
   # this test and the dashboard count the same thing.
   defp count_queries(source, fun) do
+    # Cold request caches, stated: these counts assume no cached user /
+    # subscription / vaults (the file is async: false, so nothing clears or
+    # fills them concurrently).
+    Engram.DataCase.clear_request_caches()
     ref = make_ref()
     test_pid = self()
     handler_id = {__MODULE__, ref}

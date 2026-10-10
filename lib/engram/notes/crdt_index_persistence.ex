@@ -159,7 +159,10 @@ defmodule Engram.Notes.CrdtIndexPersistence do
     # Skipping costs the claim only until the next checkpoint, which is gated
     # too and therefore leaves it in memory to be written afterwards. Writing an
     # old-dek row loses it forever.
-    case RotationGate.check_user(user) do
+    #
+    # `check/1`: `user` comes from the `:user` cache, which learns of a lock
+    # taken on another node only when its eviction lands.
+    case RotationGate.check(user.id) do
       {:error, :rotation_in_progress} ->
         emit_tail(:skipped_rotation)
         :ok
@@ -281,10 +284,10 @@ defmodule Engram.Notes.CrdtIndexPersistence do
     # and raising turned that into a per-room error storm during a purge
     # (#954, 2026-07-07). Skip quietly.
     #
-    # Re-read rather than caching from bind/3: a room can outlive a DEK
-    # rotation, and a stale struct carries the OLD wrapped dek
-    # (crdt_checkpoint.ex:59 re-reads for the same reason). No hot path here to
-    # protect — there is no update_v1/4 — so the read costs nothing.
+    # Resolved here rather than kept from bind/3: a room can outlive a DEK
+    # rotation, and a stale struct carries the OLD wrapped dek. This is the
+    # cached `get_user/1`; the rotation lock itself is read from the DB in
+    # checkpoint/5.
     case Accounts.get_user(user_id) do
       nil ->
         :ok
@@ -342,7 +345,10 @@ defmodule Engram.Notes.CrdtIndexPersistence do
     # Skipping is right: the tail still holds everything since the last
     # checkpoint, so a skipped checkpoint costs a replay on the next bind rather
     # than the claims themselves. Writing an old-dek snapshot loses them outright.
-    case RotationGate.check_user(user) do
+    #
+    # `check/1`: `user` comes from the `:user` cache, which learns of a lock
+    # taken on another node only when its eviction lands.
+    case RotationGate.check(user.id) do
       {:error, :rotation_in_progress} ->
         emit_checkpoint(:skipped_rotation)
 

@@ -23,17 +23,17 @@ defmodule Engram.Notes.CrdtCheckpoint do
   alias Engram.Logger.Metadata
 
   alias Engram.Notes.{
-    ContentCommit,
     CrdtBloat,
     CrdtBridge,
     CrdtDeliver,
     CrdtUpdateLog,
+    Enqueue,
     Helpers,
     Note,
     Revisions
   }
 
-  alias Engram.Workers.EmbedNote
+  alias Engram.Workers.{EmbedNote, NoteCommitted}
 
   require Logger
 
@@ -91,8 +91,24 @@ defmodule Engram.Notes.CrdtCheckpoint do
   and by `CrdtPersistence.unbind/3` on room exit. Never raises: any internal
   failure is logged and returns `:ok` (safe in the room's terminate path).
   """
-  @spec checkpoint(String.t(), String.t(), String.t(), Yex.Doc.t(), keyword()) :: :ok
-  def checkpoint(user_id, vault_id, note_id, %Yex.Doc{} = doc, opts \\ []) do
+  @spec checkpoint(String.t(), String.t(), String.t(), Yex.Doc.t() | binary(), keyword()) :: :ok
+  def checkpoint(user_id, vault_id, note_id, live, opts \\ []) do
+    _ = checkpoint_pruning(user_id, vault_id, note_id, live, opts)
+    :ok
+  end
+
+  @doc """
+  `checkpoint/5`, telling the caller whether the doc's state was committed:
+  `{:written, pruned_ids}` (the tail rows it pruned, `[]` for a `:watermark`
+  prune) or `:skipped` (skipped, aborted, or lost the snapshot fence). `live`
+  is the doc or its already-encoded state, so a caller that encoded the doc
+  inside its room (the checkpoint timer) need not rebuild one. A room uses the
+  answer to stop offering pruned rows and to learn its doc is durable.
+  """
+  @spec checkpoint_pruning(String.t(), String.t(), String.t(), Yex.Doc.t() | binary(), keyword()) ::
+          {:written, [Ecto.UUID.t()]} | :skipped
+  def checkpoint_pruning(user_id, vault_id, note_id, live, opts \\ [])
+      when is_binary(live) or is_struct(live, Yex.Doc) do
     # Deleted user/note are EXPECTED lifecycle states here (vault force-purge
     # deletes rows while rooms are still exiting) — skip quietly at :warning,
     # never raise. Raising turned every room tick during a purge into a
@@ -104,7 +120,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
           Metadata.with_category(:warning, :sync, note_id: note_id)
         )
 
-        :ok
+        :skipped
 
       user ->
         # #1341. A checkpoint encrypts crdt_state with the user's CURRENT DEK.
@@ -119,25 +135,28 @@ defmodule Engram.Notes.CrdtCheckpoint do
         # channel, and the CheckpointNote worker. Gating only the worker leg
         # left the one that actually fires open.
         #
-        # `check_user/1`, not `check/1`: `user` was just read from the DB one
-        # line above, so re-reading buys nothing. Skipping prunes nothing, so
-        # every edit stays in the tail-WAL and replays on the next bind.
-        case RotationGate.check_user(user) do
+        # `check/1`, not `check_user/1`: `user` comes from the `:user` cache,
+        # which learns of a lock taken on another node only when its eviction
+        # lands, so the lock is read from the DB (one query). Skipping prunes
+        # nothing, so every edit stays in the tail-WAL and replays on the next
+        # bind.
+        case RotationGate.check(user.id) do
           {:error, :rotation_in_progress} ->
             Logger.warning(
               "crdt checkpoint skipped — dek rotation in progress note_id=#{note_id}",
               Metadata.with_category(:warning, :sync, note_id: note_id)
             )
 
-            :ok
+            :skipped
 
           _ ->
-            do_checkpoint(user, user_id, vault_id, note_id, doc, opts)
+            do_checkpoint(user, user_id, vault_id, note_id, live, opts)
         end
     end
   rescue
-    # The user-resolve above is the ONE DB call outside do_checkpoint's rescue.
-    # Under pool starvation Accounts.get_user raises DBConnection.ConnectionError
+    # The user resolve and the lock read above are the only DB calls outside
+    # do_checkpoint's rescue. Under pool starvation either raises
+    # DBConnection.ConnectionError
     # straight out of terminate/2 (the 2026-07-09 incident frame). Swallow ANY
     # raise here so unbind/checkpoint always degrades to :ok — the tail-WAL is
     # untouched (nothing pruned), so the flush replays on the next room bind.
@@ -160,10 +179,10 @@ defmodule Engram.Notes.CrdtCheckpoint do
         Metadata.with_category(:error, :sync, note_id: note_id)
       )
 
-      :ok
+      :skipped
   end
 
-  defp do_checkpoint(user, user_id, vault_id, note_id, doc, opts) do
+  defp do_checkpoint(user, user_id, vault_id, note_id, live, opts) do
     # Determine the prune boundary. `:prune_ids` is the exact set of rows this
     # caller FOLDED into `doc`, and it is the only boundary that is safe on its
     # own terms: a row nobody folded is never in the set, so it survives.
@@ -214,7 +233,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
     # With the union the persisted state only ever grows; deletions still win
     # (causally newer ops), and the version CAS below still guards the
     # mid-checkpoint race window.
-    case encode(doc) do
+    case live_state(live) do
       {:ok, live_state} ->
         # with_tenant wraps the fun's return in {:ok, _} (Ecto transaction). The
         # fun returns {prev_hash, path} on a write (prev_hash drives the
@@ -267,36 +286,45 @@ defmodule Engram.Notes.CrdtCheckpoint do
           end)
 
         case outcome do
-          {prev_hash, new_hash, path, embed_priority, finalize?, renamed_title} ->
-            # Post-commit, like the announce below: the name index learns a
-            # title the checkpoint just re-derived.
-            _ =
-              if renamed_title,
-                do: Engram.Notes.NameIndex.announce(vault_id, note_id, path, renamed_title)
+          {prev_hash, new_hash, path, embed_priority, finalize?, renamed_title, pruned} ->
+            :ok =
+              post_commit(note_id, fn ->
+                interleave_hook(:post_commit)
 
-            _ =
-              if prev_hash != new_hash do
-                :ok =
-                  ContentCommit.after_commit(note_id, user_id,
-                    embed_priority: embed_priority,
-                    finalize?: finalize?
-                  )
+                # Post-commit, like the announce below: the name index learns a
+                # title the checkpoint just re-derived.
+                _ =
+                  if renamed_title,
+                    do: Engram.Notes.NameIndex.announce(vault_id, note_id, path, renamed_title)
 
-                # Deliver-out gap: a web-editor edit lands ONLY via this checkpoint,
-                # which (unlike REST/MCP writes) never announced. A client not
-                # actively enrolled in the room — e.g. Obsidian — thus never
-                # discovered the edit, live or on next pull. Announce so it opens a
-                # room and pulls the just-persisted state. Announce-ONLY (not full
-                # deliver_out): live observers already converged via real-time frame
-                # relay, and the room-state push would `GenServer.call` self on the
-                # unbind path (checkpoint runs inside the room process there).
-                # `prev_hash != new_hash` fires only on a committed content change
-                # (compaction and the #902 stale-abort both return equal hashes),
-                # so idle compactions and aborted writes raise no spurious re-pull.
-                CrdtDeliver.announce_ready(user_id, vault_id, path, note_id)
-              end
+                if prev_hash != new_hash do
+                  # One dispatcher job, after the commit (#1710): it enqueues
+                  # embed, links and finalize with their own uniqueness.
+                  _ =
+                    Enqueue.enqueue(
+                      NoteCommitted.job(note_id, user_id,
+                        embed_priority: embed_priority,
+                        finalize?: finalize?
+                      ),
+                      "note_committed"
+                    )
 
-            :ok
+                  # Deliver-out gap: a web-editor edit lands ONLY via this checkpoint,
+                  # which (unlike REST/MCP writes) never announced. A client not
+                  # actively enrolled in the room — e.g. Obsidian — thus never
+                  # discovered the edit, live or on next pull. Announce so it opens a
+                  # room and pulls the just-persisted state. Announce-ONLY (not full
+                  # deliver_out): live observers already converged via real-time frame
+                  # relay, and the room-state push would `GenServer.call` self on the
+                  # unbind path (checkpoint runs inside the room process there).
+                  # `prev_hash != new_hash` fires only on a committed content change
+                  # (compaction and the #902 stale-abort both return equal hashes),
+                  # so idle compactions and aborted writes raise no spurious re-pull.
+                  CrdtDeliver.announce_ready(user_id, vault_id, path, note_id)
+                end
+              end)
+
+            if pruned == :not_written, do: :skipped, else: {:written, pruned}
 
           {:skip, reason} ->
             Logger.warning(
@@ -304,7 +332,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
               Metadata.with_category(:warning, :sync, note_id: note_id)
             )
 
-            :ok
+            :skipped
 
           # The tag arrives NESTED, and only nested. `union_with_row_state`
           # returns `{:error, {:row_state_unreadable, _}}`, and both callers'
@@ -313,7 +341,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
           # which is exactly the indistinguishability this removes.
           {:abort, {:error, {:row_state_unreadable, _}} = err} ->
             report_unreadable_state(user_id, note_id, err)
-            :ok
+            :skipped
 
           {:abort, err} ->
             :telemetry.execute(@abort_event, %{count: 1}, %{phase: :other})
@@ -323,7 +351,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
               Metadata.with_category(:error, :sync, note_id: note_id)
             )
 
-            :ok
+            :skipped
         end
 
       err ->
@@ -332,7 +360,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
           Metadata.with_category(:error, :sync, note_id: note_id)
         )
 
-        :ok
+        :skipped
     end
   rescue
     err ->
@@ -343,8 +371,36 @@ defmodule Engram.Notes.CrdtCheckpoint do
         Metadata.with_category(:error, :sync, note_id: note_id)
       )
 
-      :ok
+      :skipped
   end
+
+  # The write is committed: a raise or exit in its follow-up work must not
+  # reach do_checkpoint's rescue and report :skipped (the room would keep
+  # refusing acks for a durable state). Logged as a post-commit failure; the
+  # outcome stays written. The reconcile sweeps backstop a lost enqueue.
+  defp post_commit(note_id, fun) do
+    _ = fun.()
+    :ok
+  rescue
+    err ->
+      log_post_commit_failure(note_id, Metadata.safe_reason(err), __STACKTRACE__)
+  catch
+    :exit, reason ->
+      log_post_commit_failure(note_id, Metadata.safe_exit_reason(reason), __STACKTRACE__)
+  end
+
+  defp log_post_commit_failure(note_id, reason, stacktrace) do
+    Logger.error(
+      "crdt checkpoint post-commit work failed; the write is committed note_id=#{note_id} " <>
+        "error=#{reason} at=#{Metadata.format_location(stacktrace)}",
+      Metadata.with_category(:error, :sync, note_id: note_id)
+    )
+
+    :ok
+  end
+
+  defp live_state(state) when is_binary(state), do: {:ok, state}
+  defp live_state(%Yex.Doc{} = doc), do: encode(doc)
 
   # A CRDT room only ever holds a markdown (`.md`) doc or a structural doc
   # (`.canvas`). Only markdown projects to/from `notes.content`. Mirrors
@@ -359,14 +415,10 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # path, the PRE-write embed priority, the finalize decision, and the title
   # the checkpoint re-derived when it differs from the stored one (for the
   # post-commit name-index announce). Anything else passes through.
-  defp carry_out({prev_hash, new_hash, path, title}, note, recording) do
+  defp carry_out({prev_hash, new_hash, path, title, pruned}, note, recording) do
     {prev_hash, new_hash, path, EmbedNote.priority_for(note),
-     finalize?(note, recording, prev_hash, new_hash), if(title != note.title, do: title)}
-  end
-
-  defp carry_out({prev_hash, new_hash, path}, note, recording) do
-    {prev_hash, new_hash, path, EmbedNote.priority_for(note),
-     finalize?(note, recording, prev_hash, new_hash), nil}
+     finalize?(note, recording, prev_hash, new_hash), if(title && title != note.title, do: title),
+     pruned}
   end
 
   defp carry_out(other, _note, _recording), do: other
@@ -453,8 +505,8 @@ defmodule Engram.Notes.CrdtCheckpoint do
              ]
            ) do
         {1, _} ->
-          prune_tail(note_id, vault_id, prune)
-          {note.content_hash, note.content_hash, note.path}
+          {note.content_hash, note.content_hash, note.path, nil,
+           prune_tail(note_id, vault_id, prune)}
 
         {0, _} ->
           {:skip, :stale_snapshot}
@@ -489,7 +541,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
   # The two persistence branches (compaction vs. materialize), unchanged in
   # behavior except that they now persist the UNION doc's text/state. Runs
-  # inside the caller's tenant txn; returns {prev_hash, new_hash, path} —
+  # inside the caller's tenant txn; returns {prev_hash, new_hash, path, title, pruned} —
   # equal hashes mean "no content change committed" (compaction / stale abort),
   # which suppresses the caller's embed + announce.
   defp checkpoint_write(note, vault_id, note_id, prune, opts, m) do
@@ -516,8 +568,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
                ]
              ) do
           {1, _} ->
-            prune_tail(note_id, vault_id, prune)
-            {prev, content_hash, note.path}
+            {prev, content_hash, note.path, nil, prune_tail(note_id, vault_id, prune)}
 
           {0, _} ->
             {:skip, :stale_snapshot}
@@ -585,7 +636,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
         case Repo.update_all(fenced_query, set: set) do
           {1, _} ->
-            prune_tail(note_id, vault_id, prune)
+            pruned = prune_tail(note_id, vault_id, prune)
 
             # #1710. AFTER the fenced write, in the same transaction: the {0, _}
             # arm below commits the transaction too, so a history step placed
@@ -597,7 +648,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
             # The re-derived title rides out for the post-commit name-index
             # announce (a checkpoint broadcasts nothing else that carries it).
-            {prev, content_hash, note.path, title}
+            {prev, content_hash, note.path, title, pruned}
 
           {0, _} ->
             # The row advanced since our snapshot — a newer write is already
@@ -610,7 +661,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
               Metadata.with_category(:info, :sync, note_id: note_id)
             )
 
-            {content_hash, content_hash, note.path}
+            {content_hash, content_hash, note.path, nil, :not_written}
         end
     end
   end
@@ -719,8 +770,10 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
   @doc """
   Read the current `notes.version` for a note (tenant-scoped), or nil on any
-  failure. Captured by `CrdtCheckpointTimer` BEFORE it snapshots the live doc so
-  the value fences the subsequent checkpoint write (`:captured_version`).
+  failure. Captured by the channel's detached genesis seed BEFORE it builds its
+  doc, so the value fences the subsequent checkpoint write
+  (`:captured_version`). The room timer no longer needs it: see
+  `CrdtCheckpointTimer.do_checkpoint/1`.
 
   Capturing version before the snapshot closes the dominant snapshot-then-commit
   gap: a commit landing after the read bumps the version, so the CAS aborts. It
@@ -876,15 +929,20 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # tail is the only durable copy of anything this doc holds that the newer row
   # does not, so a checkpoint that cannot prove it read the current row must not
   # delete it. The next debounce tick re-reads and checkpoints normally.
+  # `deleted_at IS NULL`: a tick in flight when a delete commits reads the row
+  # AFTER the delete's seq bump, so seq alone matches and the checkpoint would
+  # materialize, bump seq and enqueue jobs for the trashed note.
   defp snapshot_fence(note_id, %Note{crdt_state_nonce: nil, seq: seq}) do
-    from(n in Note, where: n.id == ^note_id and n.kind == "note" and n.seq == ^seq)
+    from(n in Note,
+      where: n.id == ^note_id and n.kind == "note" and n.seq == ^seq and is_nil(n.deleted_at)
+    )
   end
 
   defp snapshot_fence(note_id, %Note{crdt_state_nonce: nonce, seq: seq}) do
     from(n in Note,
       where:
         n.id == ^note_id and n.kind == "note" and n.seq == ^seq and
-          n.crdt_state_nonce == ^nonce
+          n.crdt_state_nonce == ^nonce and is_nil(n.deleted_at)
     )
   end
 
@@ -926,16 +984,22 @@ defmodule Engram.Notes.CrdtCheckpoint do
   #     a no-op (nothing folded yet).
   #
   # Runs inside the same `Repo.with_tenant` transaction as the notes UPDATE for
-  # atomicity.
-  defp prune_tail(_note_id, _vault_id, {:ids, []}), do: :ok
+  # atomicity. Returns the ids it was asked to prune (`[]` for a watermark).
+  # Chunked: a room that could not checkpoint for a long session holds one id
+  # per keystroke, and Postgres caps a statement at 65_535 parameters.
+  defp prune_tail(_note_id, _vault_id, {:ids, []}), do: []
 
   defp prune_tail(note_id, vault_id, {:ids, ids}) do
-    CrdtUpdateLog
-    |> where([l], l.note_id == ^note_id and l.vault_id == ^vault_id and l.id in ^ids)
-    |> Repo.delete_all()
+    for chunk <- Enum.chunk_every(ids, 10_000) do
+      CrdtUpdateLog
+      |> where([l], l.note_id == ^note_id and l.vault_id == ^vault_id and l.id in ^chunk)
+      |> Repo.delete_all()
+    end
+
+    ids
   end
 
-  defp prune_tail(_note_id, _vault_id, {:watermark, nil}), do: :ok
+  defp prune_tail(_note_id, _vault_id, {:watermark, nil}), do: []
 
   defp prune_tail(note_id, vault_id, {:watermark, watermark}) do
     CrdtUpdateLog
@@ -944,5 +1008,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
       l.note_id == ^note_id and l.vault_id == ^vault_id and l.inserted_at <= ^watermark
     )
     |> Repo.delete_all()
+
+    []
   end
 end

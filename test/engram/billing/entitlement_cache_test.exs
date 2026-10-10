@@ -8,7 +8,7 @@ defmodule Engram.Billing.EntitlementCacheTest do
     # previous test's on_exit can leave a queued "clear everything" message.
     # Unprocessed, it wipes entries this test caches the moment anything
     # (like the :sys.get_state below) makes the GenServer run. Drain it first.
-    :sys.get_state(EntitlementCache)
+    :sys.get_state(Engram.Cache.Server)
     on_exit(fn -> EntitlementCache.evict_all() end)
     :ok
   end
@@ -61,12 +61,12 @@ defmodule Engram.Billing.EntitlementCacheTest do
     assert :other = EntitlementCache.fetch(other_id, fn -> :other end)
 
     send(
-      Process.whereis(EntitlementCache),
+      Process.whereis(Engram.Cache.Server),
       {:notification, self(), make_ref(), "user_limit_overrides_changed", user_id}
     )
 
     # Force the GenServer to process the message before asserting.
-    :sys.get_state(EntitlementCache)
+    :sys.get_state(Engram.Cache.Server)
 
     assert :rederived = EntitlementCache.fetch(user_id, fn -> :rederived end)
     assert :other = EntitlementCache.fetch(other_id, fn -> raise "should not run" end)

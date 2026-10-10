@@ -57,6 +57,7 @@ defmodule Engram.Accounts.Lifecycle do
     |> Ecto.Changeset.change(%{deleted_at: DateTime.utc_now()})
     |> Repo.update!(skip_tenant_check: true)
 
+    Accounts.evict_user(user.id)
     Accounts.revoke_all_user_tokens(user)
     _ = Mailer.send_account_deleted_notice(user, reason)
 
@@ -214,6 +215,8 @@ defmodule Engram.Accounts.Lifecycle do
            end
          ) do
       {:ok, _} ->
+        Accounts.evict_user(user.id)
+
         :telemetry.execute(
           [:engram, :account, :deleted],
           %{count: 1},

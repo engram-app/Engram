@@ -196,8 +196,9 @@ defmodule Engram.Crypto do
   @doc """
   Reloads a user whose `encrypted_dek` is nil in memory.
 
-  `get_dek/1` reads the field off the STRUCT, so a caller holding a copy taken
-  before provisioning gets `:no_dek` for a user who has a DEK. That is only a
+  `get_dek/1` answers `:no_dek` from the STRUCT when its `encrypted_dek` is
+  nil (only a non-nil blob is re-read from the DB), so a caller holding a copy
+  taken before provisioning gets `:no_dek` for a user who has a DEK. That is only a
   missed cache normally — but a folder-delete guard reads `:no_dek` as "nothing
   encrypted here", so a stale struct could make a full folder look empty.
   """
@@ -211,7 +212,7 @@ defmodule Engram.Crypto do
   @spec get_dek(User.t()) :: {:ok, <<_::256>>} | {:error, term()}
   def get_dek(%User{encrypted_dek: nil}), do: {:error, :no_dek}
 
-  def get_dek(%User{id: user_id, encrypted_dek: blob, dek_version: dek_version}) do
+  def get_dek(%User{id: user_id} = user) do
     mark_sensitive()
 
     case DekCache.get(user_id) do
@@ -219,32 +220,57 @@ defmodule Engram.Crypto do
         {:ok, dek}
 
       :miss ->
-        # Phase 3 — dispatch unwrap by blob tag, not by Resolver.provider/0.
-        # Lets mixed-state fleets read seamlessly during Local↔KMS backfill
-        # windows. Writes still follow Resolver (see ensure_user_dek/1).
-        case KeyProvider.identify_from_blob(blob) do
-          {:ok, source_provider} ->
-            # T3.5 / M4 — pass user.dek_version + master_key_version so the
-            # provider can gate the `_PREVIOUS` fallback (audit M4).
-            ctx = %{
-              user_id: user_id,
-              dek_version: dek_version,
-              master_key_version: Engram.Crypto.Config.master_key_version()
-            }
+        # Claim BEFORE reading the blob: a flip that commits after the read
+        # invalidates the slot, and put_if_claimed then refuses to store the
+        # retired DEK this call unwrapped.
+        token = DekCache.claim(user_id)
+        unwrap_and_cache(user_id, token, wrapped_dek(user))
+    end
+  end
 
-            case source_provider.unwrap_dek(blob, ctx) do
-              {:ok, dek} ->
-                DekCache.put(user_id, dek)
-                maybe_enqueue_lazy_migration(user_id, source_provider)
-                {:ok, dek}
+  # The wrapped DEK as the DB holds it NOW, not as the caller's struct does:
+  # the struct may come from the `:user` cache and predate a DEK rotation's
+  # final flip, and unwrapping that retired blob would put the old DEK back
+  # into DekCache for its whole TTL. One query per DekCache miss (hourly).
+  # A struct with no row (built, never inserted) keeps its own blob.
+  defp wrapped_dek(%User{id: user_id, encrypted_dek: blob, dek_version: version}) do
+    case Engram.Repo.one(
+           from(u in User, where: u.id == ^user_id, select: {u.encrypted_dek, u.dek_version}),
+           skip_tenant_check: true
+         ) do
+      nil -> {blob, version}
+      fresh -> fresh
+    end
+  end
 
-              {:error, _} = err ->
-                err
-            end
+  defp unwrap_and_cache(_user_id, _token, {nil, _version}), do: {:error, :no_dek}
 
-          {:error, :unrecognised_blob} ->
-            {:error, :unrecognised_blob}
+  defp unwrap_and_cache(user_id, token, {blob, dek_version}) do
+    # Phase 3 — dispatch unwrap by blob tag, not by Resolver.provider/0.
+    # Lets mixed-state fleets read seamlessly during Local↔KMS backfill
+    # windows. Writes still follow Resolver (see ensure_user_dek/1).
+    case KeyProvider.identify_from_blob(blob) do
+      {:ok, source_provider} ->
+        # T3.5 / M4 — pass user.dek_version + master_key_version so the
+        # provider can gate the `_PREVIOUS` fallback (audit M4).
+        ctx = %{
+          user_id: user_id,
+          dek_version: dek_version,
+          master_key_version: Engram.Crypto.Config.master_key_version()
+        }
+
+        case source_provider.unwrap_dek(blob, ctx) do
+          {:ok, dek} ->
+            _ = DekCache.put_if_claimed(user_id, token, dek)
+            maybe_enqueue_lazy_migration(user_id, source_provider)
+            {:ok, dek}
+
+          {:error, _} = err ->
+            err
         end
+
+      {:error, :unrecognised_blob} ->
+        {:error, :unrecognised_blob}
     end
   end
 

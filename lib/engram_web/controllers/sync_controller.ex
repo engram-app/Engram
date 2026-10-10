@@ -39,13 +39,23 @@ defmodule EngramWeb.SyncController do
   def manifest(conn, params) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
-    current = Engram.Vaults.current_seq(user.id, vault.id)
+    since = parse_since_seq(params["since_seq"])
 
     # Phase E1 (#1065): when the client's last-validated watermark still equals
     # the vault's change_seq, nothing in the vault has changed — skip the
     # decrypt-heavy full render entirely. Invalid/absent since_seq falls
-    # through to the full manifest, never errors.
-    if parse_since_seq(params["since_seq"]) == current do
+    # through to the full manifest, never errors. One transaction reads the
+    # seq and, only when it moved, the rows (see manifest_rows/2).
+    {current, rows} =
+      Repo.with_tenant!(user.id, fn ->
+        current = Engram.Vaults.raw_current_seq(vault.id)
+
+        if since == current,
+          do: {current, :unchanged},
+          else: {current, manifest_rows(user, vault)}
+      end)
+
+    if rows == :unchanged do
       json(conn, %{unchanged: true, change_seq: current})
     else
       # Phase B.3: paths live only as ciphertext. Project ONLY the columns we
@@ -59,7 +69,7 @@ defmodule EngramWeb.SyncController do
       # to an empty manifest instead of crashing on `{:ok, dek}` match.
       case Crypto.get_dek(user) do
         {:ok, dek} ->
-          render_manifest(conn, user, vault, dek, current)
+          render_manifest(conn, rows, dek, current)
 
         {:error, :no_dek} ->
           render_empty_manifest(conn, current)
@@ -105,45 +115,43 @@ defmodule EngramWeb.SyncController do
     })
   end
 
-  defp render_manifest(conn, user, vault, dek, current_seq) do
+  # MUST run inside the caller's with_tenant block.
+  defp manifest_rows(user, vault) do
     # T3.6 — project `id` and `dek_version` so AAD-bound rows (v ≥ 2) can
     # reconstruct the bind string ("notes:path:<id>" / "attachments:path:<id>")
     # at decrypt time. Legacy rows (v = 1) decrypt with empty AAD.
     #
-    # #1211: one with_tenant block for both fetches — they're adjacent,
-    # DB-only reads with nothing CPU-bound between them, so with_tenant's
-    # re-entrancy (a nested call for the SAME tenant inside an active
-    # transaction runs directly, no new BEGIN/set_config/COMMIT round trips)
-    # collapses what was 2 blocks into 1. Decrypt below stays OUTSIDE this
-    # block on purpose: holding a DB connection across CPU-bound decrypt work
-    # is the shape behind the 2026-07-09 CRDT pool-exhaustion incident.
-    {:ok, {note_rows, attachment_rows}} =
-      Repo.with_tenant(user.id, fn ->
-        notes =
-          Repo.all(
-            from(n in Note,
-              where:
-                n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
-                  n.kind == "note",
-              select:
-                {n.id, fragment("uuid_send(?)", n.id), n.dek_version, n.path_ciphertext,
-                 n.path_nonce, n.content_hash, n.seq, n.crdt_head}
-            )
-          )
+    # #1211: both fetches share the caller's with_tenant block (with the seq
+    # read): they are adjacent, DB-only reads with nothing CPU-bound between
+    # them. Decrypt (render_manifest/4) stays OUTSIDE the block on purpose:
+    # holding a DB connection across CPU-bound decrypt work is the shape
+    # behind the 2026-07-09 CRDT pool-exhaustion incident.
+    notes =
+      Repo.all(
+        from(n in Note,
+          where:
+            n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
+              n.kind == "note",
+          select:
+            {n.id, fragment("uuid_send(?)", n.id), n.dek_version, n.path_ciphertext, n.path_nonce,
+             n.content_hash, n.seq, n.crdt_head}
+        )
+      )
 
-        attachments =
-          Repo.all(
-            from(a in Attachment,
-              where: a.user_id == ^user.id and a.vault_id == ^vault.id and is_nil(a.deleted_at),
-              select:
-                {a.id, fragment("uuid_send(?)", a.id), a.dek_version, a.path_ciphertext,
-                 a.path_nonce, a.content_hash, a.seq}
-            )
-          )
+    attachments =
+      Repo.all(
+        from(a in Attachment,
+          where: a.user_id == ^user.id and a.vault_id == ^vault.id and is_nil(a.deleted_at),
+          select:
+            {a.id, fragment("uuid_send(?)", a.id), a.dek_version, a.path_ciphertext, a.path_nonce,
+             a.content_hash, a.seq}
+        )
+      )
 
-        {notes, attachments}
-      end)
+    {notes, attachments}
+  end
 
+  defp render_manifest(conn, {note_rows, attachment_rows}, dek, current_seq) do
     # One batch native call per column (`PathCrypto.decrypt_many!/3`): one key
     # schedule, AAD built in Rust from the raw ids selected above. Measured
     # 2-5x the per-row loop (docs/context/native-nifs.md). Parallel was

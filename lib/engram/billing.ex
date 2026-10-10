@@ -422,10 +422,13 @@ defmodule Engram.Billing do
 
   # Scoped to the user's own tenant (#1758): under an enforced `subscriptions`
   # policy an unscoped read returns nil, and `tier/1` would quietly answer
-  # `:free` for a paying user.
+  # `:free` for a paying user. Cached per user (`:subscription`, nil included),
+  # evicted on every node by the `subscriptions_changed` trigger.
   def get_subscription(user) do
-    Repo.with_tenant!(user.id, fn ->
-      Repo.one(from(s in Subscription, where: s.user_id == ^user.id))
+    Engram.Cache.fetch(:subscription, user.id, fn ->
+      Repo.with_tenant!(user.id, fn ->
+        Repo.one(from(s in Subscription, where: s.user_id == ^user.id))
+      end)
     end)
   end
 
@@ -1035,8 +1038,17 @@ defmodule Engram.Billing do
   # vault_created broadcast in Engram.Vaults. Fire-and-forget: if nobody
   # is listening, Phoenix.PubSub drops it.
   defp broadcast_subscription_activated(user_id, %Subscription{} = sub) do
-    # Chokepoint for every subscription mutation (created/updated/canceled):
-    # tier/status flips can change the onboarding gate's subscription_ok,
+    # Chokepoint for every subscription mutation (created/updated/canceled),
+    # called after the write commits. The row caches go FIRST: everything
+    # below re-derives the tier through `get_subscription/1`. The triggers
+    # evict every node on commit too, but asynchronously; this keeps the
+    # writing node coherent for the reads right after (the plan snapshot
+    # below, the frontend's re-fetch of /onboarding/status). `:user` because
+    # cancellation stamps `free_tier_accepted_at`.
+    :ok = Engram.Cache.evict(:subscription, user_id)
+    :ok = Engram.Accounts.evict_user(user_id)
+
+    # Tier/status flips can change the onboarding gate's subscription_ok,
     # so the cached pass verdict must re-derive.
     :ok = Engram.Onboarding.GateCache.evict(user_id)
 

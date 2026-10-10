@@ -1,14 +1,19 @@
 defmodule Engram.Notes.ContentCommit do
   @moduledoc """
-  The post-commit work every committed note CONTENT change needs, in one place.
+  The jobs every note CONTENT change needs, in one place.
 
-  Called by the single-note write sites (the CRDT checkpoint, and both
-  content branches of `Notes.upsert_note/4`) after the write's transaction
-  commits, only when the content hash actually changed.
+  Called by the single-note write sites (the CRDT checkpoint, through the
+  `Engram.Workers.NoteCommitted` job it inserts, and both content branches of
+  `Notes.upsert_note/4`) only when the content hash actually changed. The call may run inside an enclosing tenant transaction
+  (an MCP tool call is one), and that is fine: the jobs then commit or roll
+  back atomically with the write (`engram_app` may insert into `oban_jobs`).
 
   `:finalize?` is required: `Engram.Notes.Revisions.finalize?/3` for the
   write, so a create or a write history did not record enqueues no
   `FinalizeRevision`.
+
+  Returns the first failed insert, if any; the inline write sites ignore it
+  (Enqueue logs it), the dispatcher job fails on it so Oban retries.
 
   Site-specific work stays at the site: the checkpoint's announce, upsert's
   broadcast and link rebind.
@@ -16,23 +21,24 @@ defmodule Engram.Notes.ContentCommit do
   alias Engram.Notes.Enqueue
   alias Engram.Workers.{EmbedNote, ExtractNoteLinks, FinalizeRevision}
 
-  @spec after_commit(String.t(), String.t(), keyword()) :: :ok
-  def after_commit(note_id, user_id, opts \\ []) when is_binary(note_id) and is_binary(user_id) do
-    _ =
-      Enqueue.enqueue(
-        EmbedNote.new_debounced(note_id, user_id, priority: Keyword.get(opts, :embed_priority, 0)),
-        "embed_note"
+  @spec enqueue_jobs(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  def enqueue_jobs(note_id, user_id, opts \\ []) when is_binary(note_id) and is_binary(user_id) do
+    [
+      EmbedNote.insert_debounced(note_id, user_id,
+        priority: Keyword.get(opts, :embed_priority, 0)
+      ),
+      # #648 lever 1: cheap edge extraction must not ride the embed debounce
+      # (30s) or the embed budget gate; ~2s leading edge.
+      Enqueue.enqueue(ExtractNoteLinks.new_debounced(note_id, user_id), "extract_note_links"),
+      # #1710: move any version copy this write's transaction left behind.
+      if(Keyword.fetch!(opts, :finalize?),
+        do: Enqueue.enqueue(FinalizeRevision.job(note_id, user_id), "finalize_revision"),
+        else: {:ok, :skipped}
       )
-
-    # #648 lever 1: cheap edge extraction must not ride the embed debounce
-    # (30s) or the embed budget gate; ~2s leading edge.
-    _ = Enqueue.enqueue(ExtractNoteLinks.new_debounced(note_id, user_id), "extract_note_links")
-
-    # #1710: move any version copy this write's transaction left behind.
-    _ =
-      if Keyword.fetch!(opts, :finalize?),
-        do: Enqueue.enqueue(FinalizeRevision.job(note_id, user_id), "finalize_revision")
-
-    :ok
+    ]
+    # Every insert is attempted; the first failure is returned (already
+    # logged by Enqueue). Each job is unique, so a caller that retries the
+    # whole set (Workers.NoteCommitted) does not duplicate the ones that landed.
+    |> Enum.find(:ok, &match?({:error, _}, &1))
   end
 end
