@@ -38,6 +38,8 @@ DRIFTING_SHAPES = {
     "aliases-flow-wikilinks": '---\naliases: ["[[Alpha]]", "[[Beta]]"]\n---\n',
     "tilde-null": "---\nstatus: ~\n---\n",
     "yes-string": '---\nanswer: "yes"\n---\n',
+    # Obsidian's own default layout for an empty list property.
+    "obsidian-cssclasses": "---\ncssclasses: \n---\n",
 }
 
 
