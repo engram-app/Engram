@@ -13,7 +13,7 @@ MCP-native · semantic + keyword search · real-time sync · self-hostable · so
 [![Sponsor](https://img.shields.io/github/sponsors/engram-app?label=Sponsor&logo=GitHub&color=ea4aaa)](https://github.com/sponsors/engram-app)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Buy_a_coffee-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/engrams_sync)
 
-[Quickstart](#self-host-docker-compose) · [Self-host](https://engram.page/docs/self-host/) · [MCP](https://engram.page/docs/mcp/) · [API](https://engram.page/docs/api/) · [Architecture](https://engram.page/docs/self-host/architecture/) · [Plugin](https://github.com/engram-app/Engram-obsidian) · [Discord](https://discord.gg/NG9Vn9VcPS)
+[Connect](#connect) · [Quickstart](#self-host-docker-compose) · [Self-host](https://engram.page/docs/self-host/) · [MCP](https://engram.page/docs/mcp/) · [API](https://engram.page/docs/api/) · [Architecture](https://engram.page/docs/self-host/architecture/) · [Plugin](https://github.com/engram-app/Engram-obsidian) · [Discord](https://discord.gg/NG9Vn9VcPS)
 
 </div>
 
@@ -21,6 +21,22 @@ Your notes stay plain markdown that you and your AI assistants both read and
 write. Pairs with the
 [Engram Obsidian Sync](https://github.com/engram-app/Engram-obsidian) plugin to
 sync your whole vault.
+
+## Connect
+
+Nothing to install. Point any MCP client at the hosted server and sign in when
+prompted (OAuth):
+
+```
+https://mcp.engram.page
+```
+
+- **Claude Code:** `claude mcp add --transport http engram https://mcp.engram.page`
+- **Claude.ai / ChatGPT:** add a custom connector with the URL above.
+- **Cursor:** `{"mcpServers": {"engram": {"url": "https://mcp.engram.page"}}}` in `~/.cursor/mcp.json`
+- **VS Code:** `{"servers": {"engram": {"type": "http", "url": "https://mcp.engram.page"}}}` in `.vscode/mcp.json`
+
+More clients: [MCP docs](https://engram.page/docs/mcp/).
 
 ## Self-Host (Docker Compose)
 
