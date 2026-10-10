@@ -45,13 +45,22 @@ defmodule Engram.Notes.CrdtDeliver do
   require Logger
 
   @doc """
-  Propagate a committed plaintext write for `note_id` to CRDT clients on
+  Propagate a committed plaintext write for a note to CRDT clients on
   `vault_id`. `content` is the post-merge plaintext (the note's materialized
   body); `path` is the note's vault-relative path. Returns `:ok` regardless of
   per-step outcome.
+
+  Takes ids, or the writer's `%User{}` and the full `%Note{}` row it just
+  committed, which then is not read back.
   """
-  @spec deliver_out(String.t(), String.t(), String.t(), String.t(), String.t()) :: :ok
-  def deliver_out(user_id, vault_id, path, note_id, content)
+  @spec deliver_out(
+          String.t() | Accounts.User.t(),
+          String.t(),
+          String.t(),
+          String.t() | Note.t(),
+          String.t()
+        ) :: :ok
+  def deliver_out(user, vault_id, path, note, content)
       when is_binary(content) do
     # CRDT manages MARKDOWN content only — the plugin's routeModify enrolls only
     # `.md` into Yjs (the doc sync type is "markdown"; canvas and other types
@@ -61,7 +70,7 @@ defmodule Engram.Notes.CrdtDeliver do
     # the user's next real edit as an echo — silently dropping the write. Those
     # files sync via the legacy push path, so only deliver/announce for `.md`.
     if String.ends_with?(path, ".md") do
-      push_to_live_room(user_id, note_id, content)
+      push_to_live_room(user, note, content)
       # fanout_idle ALWAYS runs, even when a live room exists. It is NOT redundant
       # with the room's `update_v1`: `update_v1` broadcasts a DELTA (converges a
       # device that already holds the note, via gap-heal), while `fanout_idle`
@@ -72,8 +81,8 @@ defmodule Engram.Notes.CrdtDeliver do
       # (e2e test_concurrent_edits_both_survive). The two broadcasts serve
       # different device populations; the double-delivery for a device that has
       # both is an idempotent Yjs re-apply.
-      fanout_idle(user_id, vault_id, note_id)
-      announce(user_id, vault_id, path, note_id)
+      fanout_idle(user, vault_id, note)
+      announce(id_of(user), vault_id, path, id_of(note))
     end
 
     :ok
@@ -178,7 +187,9 @@ defmodule Engram.Notes.CrdtDeliver do
   # the doubling corruption this module exists to prevent, and the announce
   # (step 2) still fires so enrolled clients re-pull. Every skip is logged at
   # :error (Sentry-visible) — a sustained fallback rate must be loud.
-  defp push_to_live_room(user_id, note_id, content) do
+  defp push_to_live_room(user, note, content) do
+    note_id = id_of(note)
+
     case CrdtRegistry.lookup(note_id) do
       nil ->
         # Nothing to push: `upsert_note` has ALREADY merged this content into
@@ -187,7 +198,7 @@ defmodule Engram.Notes.CrdtDeliver do
         :ok
 
       room ->
-        case load_merged_state(user_id, note_id) do
+        case load_merged_state(user, note) do
           {:ok, state, _seq} when is_binary(state) ->
             # The apply runs inside the room process (update_doc discards the
             # fun's return), so failure is signalled back by message. The
@@ -362,7 +373,8 @@ defmodule Engram.Notes.CrdtDeliver do
     with {:ok, user} <- Crypto.ensure_user_dek(user), do: merged_state_of(note, user)
   end
 
-  defp read_merged_state(user_id, note_id) do
+  defp read_merged_state(user, note) do
+    {user_id, note_id} = {id_of(user), id_of(note)}
     user = Accounts.get_user!(user_id)
 
     result =

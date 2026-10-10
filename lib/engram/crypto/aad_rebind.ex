@@ -167,7 +167,10 @@ defmodule Engram.Crypto.AadRebind do
               # wrap so the next get_dek/1 re-derives via the new wrap. The
               # plaintext DEK material is unchanged; only the wrap envelope
               # changed.
-              Crypto.DekCache.invalidate(user.id)
+              # After commit: this runs inside the rebind's with_tenant, and a
+              # pre-commit invalidate lets a reader re-cache the old wrap.
+              Engram.Accounts.evict_user(user.id)
+              :ok = Repo.after_commit(fn -> Crypto.DekCache.invalidate(user.id) end)
               {:ok, true}
 
             {:error, changeset} ->

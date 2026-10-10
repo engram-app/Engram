@@ -3,8 +3,11 @@ defmodule EngramWeb.NotesController do
   use OpenApiSpex.ControllerSpecs
   alias EngramWeb.Schemas
 
+  alias Engram.Crypto
   alias Engram.Links
+  alias Engram.Logger.Metadata
   alias Engram.Notes
+  alias Engram.Repo
   alias EngramWeb.BatchOps
 
   action_fallback EngramWeb.FallbackController
@@ -40,15 +43,27 @@ defmodule EngramWeb.NotesController do
     else
       user = conn.assigns.current_user
       vault = conn.assigns.current_vault
+      actor = EngramWeb.WriteActor.for_conn(conn)
 
-      case Notes.upsert_note(user, vault, params, actor: EngramWeb.WriteActor.for_conn(conn)) do
-        {:ok, note} ->
-          json(conn, %{note: note_json(note, user)})
+      # One transaction: the write, its job inserts and the response's links
+      # read. Rendered inside it, sent after it commits.
+      result =
+        in_write_txn(user, fn user ->
+          case Notes.upsert_note(user, vault, params, actor: actor) do
+            {:ok, note} -> {:ok, note_json(note, user)}
+            {:error, :version_conflict, server} -> {:conflict, note_json(server, user)}
+            other -> other
+          end
+        end)
 
-        {:error, :version_conflict, server_note} ->
+      case result do
+        {:ok, body} ->
+          json(conn, %{note: body})
+
+        {:conflict, server_note} ->
           conn
           |> put_status(409)
-          |> json(%{conflict: true, server_note: note_json(server_note, user)})
+          |> json(%{conflict: true, server_note: server_note})
 
         {:error, %Ecto.Changeset{}} = error ->
           error
@@ -94,7 +109,7 @@ defmodule EngramWeb.NotesController do
           # signal without the leak surface.
           Logger.error(
             "upsert_note returned unexpected error",
-            Engram.Logger.Metadata.with_category(:error, :sync,
+            Metadata.with_category(:error, :sync,
               reason_label: classify_reason(reason),
               user_id: user.id,
               vault_id: vault.id
@@ -124,126 +139,128 @@ defmodule EngramWeb.NotesController do
   def append(conn, %{"path" => path, "text" => text}) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
+    actor = EngramWeb.WriteActor.for_conn(conn)
 
-    case Notes.get_note(user, vault, path) do
-      {:ok, note} ->
-        # Append is a read-modify-write, so it must read the AUTHORITY, not the
-        # `notes.content` façade. It reads the authority UNCONDITIONALLY — do
-        # not "optimise" this with the feed's tail-presence check (#1339): a
-        # read-modify-write derives the new body from this value, so trusting a
-        # façade that is stale for any reason the tail does not witness
-        # truncates the note. The regression tests below construct exactly that
-        # state. The façade is materialized from the CRDT doc
-        # at checkpoint, so it lags a doc write; deriving the new full content
-        # from a stale (blank) base makes `upsert_note/4`'s merge compute a diff
-        # that deletes the body. That is #1159, seen in prod CI as a note
-        # arriving on the other device as just the appended fragment.
-        case Notes.authoritative_content(user, note) do
-          {:ok, base} ->
-            content = String.trim_trailing(base, "\n") <> "\n" <> text
+    # Append is a read-modify-write, so it reads the AUTHORITY, not the
+    # `notes.content` facade, UNCONDITIONALLY. Do not "optimise" this with the
+    # feed's tail-presence check (#1339): deriving the new body from a facade
+    # that is stale for any reason the tail does not witness truncates the note
+    # (#1159, seen in prod CI as a note arriving on the other device as just the
+    # appended fragment). `Notes.rmw_note/5` also serializes concurrent appends
+    # (a second append used to erase the first) and merges into the exact doc
+    # the new body was derived from (it used to duplicate un-checkpointed edits).
+    #
+    # One transaction: a miss comes back holding the vault lock, so the create
+    # below cannot race another append's create. The response is rendered after
+    # it commits.
+    rebuild = fn base -> String.trim_trailing(base, "\n") <> "\n" <> text end
 
-            case Notes.upsert_note(
-                   user,
-                   vault,
-                   %{
-                     "path" => path,
-                     "content" => content,
-                     "mtime" => note.mtime
-                   },
-                   actor: EngramWeb.WriteActor.for_conn(conn)
-                 ) do
-              {:ok, updated} ->
-                json(conn, %{created: false, path: path, note: note_json(updated, user)})
+    result =
+      in_write_txn(user, fn user ->
+        case Notes.rmw_note(user, vault, path, rebuild, actor: actor) do
+          {{:error, :not_found}, _} ->
+            # Create new note with heading from filename + appended text
+            filename = path |> Path.basename(".md")
 
-              # 3-tuple — `{:error, changeset}` does not match it. #1335 made
-              # this reachable for callers that declare no base_hash, and append
-              # is one, so without this clause a contended append raises
-              # CaseClauseError and 500s instead of handing back a 409 the
-              # client can reconcile.
-              # Same body shape upsert/2 returns for this, so the client has one
-              # conflict contract to implement rather than two.
-              {:error, :version_conflict, server_note} ->
-                conn
-                |> put_status(409)
-                |> json(%{conflict: true, server_note: note_json(server_note, user)})
-
-              {:error, :note_deleted} ->
-                conn |> put_status(404) |> json(%{error: "not_found"})
-
-              {:error, :too_large} ->
-                too_large(conn)
-
-              {:error, changeset} ->
-                conn |> put_status(422) |> json(%{errors: format_errors(changeset)})
-            end
-
-          # Refuse rather than fall back to the façade. Falling back is exactly
-          # the bug: it is the path that silently truncates the note. A failed
-          # append is recoverable; a destroyed note is not.
-          {:error, reason} ->
-            Logger.error(
-              "note_append_authority_unavailable",
-              # classify_reason/1, not inspect/1: the reason can carry a
-              # %Note{} with decrypted virtual fields, and this file's own
-              # T3.0.6 guard (no_inspect_in_json_response_test) exists to stop
-              # that leaking into logs. The label keeps the signal.
-              Engram.Logger.Metadata.with_category(:error, :sync,
-                note_id: note.id,
-                user_id: user.id,
-                reason_label: classify_reason(reason)
-              )
-            )
-
-            conn
-            |> put_status(503)
-            |> json(%{error: "append_unavailable", reason: "could not read current note content"})
-        end
-
-      {:error, :not_found} ->
-        # Create new note with heading from filename + appended text
-        filename = path |> Path.basename(".md")
-        content = "# #{filename}\n\n#{text}"
-        mtime = System.os_time(:second) * 1.0
-
-        case Notes.upsert_note(
+            {:created,
+             Notes.upsert_note(
                user,
                vault,
                %{
                  "path" => path,
-                 "content" => content,
-                 "mtime" => mtime
+                 "content" => "# #{filename}\n\n#{text}",
+                 "mtime" => System.os_time(:second) * 1.0
                },
-               actor: EngramWeb.WriteActor.for_conn(conn)
-             ) do
-          {:ok, note} ->
-            json(conn, %{created: true, path: path, note: note_json(note, user)})
+               actor: actor
+             )
+             |> render_in_txn(user)}
 
-          {:error, :recently_deleted} ->
-            # Delete-wins: append-as-create races an explicit delete of the same
-            # path. Refuse cleanly (409) — never fall through to format_errors/1,
-            # which crashes on the :recently_deleted atom (it expects a changeset).
-            conn |> put_status(409) |> json(%{conflict: true, reason: "recently_deleted"})
-
-          # Two clients appending to the same missing path: one loses the insert
-          # race and upsert_note answers the 3-TUPLE, which matches neither
-          # clause below. The update branch above already handles this; without
-          # the same clause here the create branch raises CaseClauseError and
-          # 500s. #1335 widened when this is reachable.
-          {:error, :version_conflict, server_note} ->
-            conn
-            |> put_status(409)
-            |> json(%{conflict: true, server_note: note_json(server_note, user)})
-
-          {:error, :note_deleted} ->
-            conn |> put_status(404) |> json(%{error: "not_found"})
-
-          {:error, :too_large} ->
-            too_large(conn)
-
-          {:error, changeset} ->
-            conn |> put_status(422) |> json(%{errors: format_errors(changeset)})
+          {upserted, _} ->
+            {:appended, render_in_txn(upserted, user)}
         end
-    end
+      end)
+
+    append_response(conn, user, path, result)
+  end
+
+  # note_json's links read joins the request transaction.
+  defp render_in_txn({:ok, note}, user), do: {:ok, {:rendered, note_json(note, user)}}
+
+  defp render_in_txn({:error, :version_conflict, server}, user),
+    do: {:error, :version_conflict, {:rendered, note_json(server, user)}}
+
+  defp render_in_txn(other, _user), do: other
+
+  # The DEK could not be provisioned (in_write_txn/2): nothing was read or
+  # written. Same retryable refusal as an unreadable authority.
+  defp append_response(conn, user, path, {:error, reason}),
+    do: append_response(conn, user, path, {:appended, {:error, {:authority, reason}}})
+
+  defp append_response(conn, _user, path, {kind, {:ok, {:rendered, body}}}),
+    do: json(conn, %{created: kind == :created, path: path, note: body})
+
+  # Refuse rather than fall back to the facade. Falling back is exactly the bug:
+  # it is the path that silently truncates the note. A failed append is
+  # recoverable; a destroyed note is not.
+  defp append_response(conn, user, _path, {:appended, {:error, {:authority, reason}}}) do
+    Logger.error(
+      "note_append_authority_unavailable",
+      # classify_reason/1, not inspect/1: the reason can carry a %Note{} with
+      # decrypted virtual fields, and this file's own T3.0.6 guard
+      # (no_inspect_in_json_response_test) exists to stop that leaking into
+      # logs. The label keeps the signal.
+      Metadata.with_category(:error, :sync,
+        user_id: user.id,
+        reason_label: classify_reason(reason)
+      )
+    )
+
+    conn
+    |> put_status(503)
+    |> json(%{error: "append_unavailable", reason: "could not read current note content"})
+  end
+
+  # Delete-wins: append-as-create races an explicit delete of the same path.
+  # Refuse cleanly (409); format_errors/1 expects a changeset.
+  defp append_response(conn, _user, _path, {_, {:error, :recently_deleted}}),
+    do: conn |> put_status(409) |> json(%{conflict: true, reason: "recently_deleted"})
+
+  # The 3-tuple: `{:error, changeset}` does not match it. Same body shape
+  # upsert/2 returns, so the client has one conflict contract.
+  defp append_response(conn, _user, _path, {_, {:error, :version_conflict, {:rendered, body}}}) do
+    conn
+    |> put_status(409)
+    |> json(%{conflict: true, server_note: body})
+  end
+
+  defp append_response(conn, _user, _path, {_, {:error, :note_deleted}}),
+    do: conn |> put_status(404) |> json(%{error: "not_found"})
+
+  defp append_response(conn, _user, _path, {_, {:error, :too_large}}), do: too_large(conn)
+
+  # A legacy row's tail kept appearing under the lock: nothing was written and
+  # a retry reads it. Same retryable 409 shape as recently_deleted.
+  defp append_response(conn, _user, _path, {_, {:error, :stale_tail}}),
+    do: conn |> put_status(409) |> json(%{conflict: true, reason: "concurrent_edit"})
+
+  # Append-as-create past the plan's notes cap: upsert/2's 402.
+  defp append_response(conn, _user, _path, {_, {:error, {:notes_cap_reached, limit, current}}}),
+    do: EngramWeb.LimitResponse.halt(conn, "notes_cap_exceeded", :notes_cap, limit, current)
+
+  defp append_response(conn, _user, _path, {_, {:error, %Ecto.Changeset{} = changeset}}),
+    do: conn |> put_status(422) |> json(%{errors: format_errors(changeset)})
+
+  # format_errors/1 raises on anything but a changeset; upsert/2's catch-all.
+  defp append_response(conn, user, _path, {_, {:error, reason}}) do
+    Logger.error(
+      "note_append returned unexpected error",
+      Metadata.with_category(:error, :sync,
+        reason_label: classify_reason(reason),
+        user_id: user.id
+      )
+    )
+
+    conn |> put_status(500) |> json(%{error: "internal"})
   end
 
   operation(:show,
@@ -267,8 +284,17 @@ defmodule EngramWeb.NotesController do
     vault = conn.assigns.current_vault
     path = Enum.join(List.wrap(path_parts), "/")
 
-    case Notes.get_note(user, vault, path) do
-      {:ok, note} -> json(conn, note_json(note, user))
+    # One transaction for the note and its links. The DEK is warmed first: a
+    # DekCache miss unwraps through KMS, which must not run inside it.
+    _ = Crypto.get_dek(user)
+
+    result =
+      Repo.with_tenant!(user.id, fn ->
+        with {:ok, note} <- Notes.get_note(user, vault, path), do: {:ok, note_json(note, user)}
+      end)
+
+    case result do
+      {:ok, body} -> json(conn, body)
       {:error, :not_found} -> conn |> put_status(404) |> json(%{error: "not found"})
     end
   end
@@ -630,6 +656,21 @@ defmodule EngramWeb.NotesController do
   # ---------------------------------------------------------------------------
   # Private
   # ---------------------------------------------------------------------------
+
+  # A REST write's one tenant transaction, as the MCP controller runs a tool:
+  # the DEK is provisioned and warmed BEFORE it (both can call KMS, which must
+  # not run while the transaction holds a connection). A provisioning failure
+  # is returned as is; the write's own error handling reports it.
+  defp in_write_txn(user, fun) do
+    case Crypto.ensure_user_dek(user) do
+      {:ok, user} ->
+        _ = Crypto.get_dek(user)
+        Repo.with_tenant!(user.id, fn -> fun.(user) end)
+
+      {:error, _} = error ->
+        error
+    end
+  end
 
   defp note_json(note, user) do
     %{

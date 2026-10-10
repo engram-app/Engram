@@ -209,6 +209,9 @@ defmodule EngramWeb.LogsControllerTest do
     test "a credential for vault A cannot see vault B's log lines", %{conn: conn, user: user} do
       vault_a = insert(:vault, user: user)
       vault_b = insert(:vault, user: user)
+      # The describe setup's seed request cached the vault list; mirror the
+      # vaults_changed trigger (the sandbox never commits).
+      Engram.Cache.evict(:vaults, user.id)
 
       for {vault, msg} <- [{vault_a, "from-a"}, {vault_b, "from-b"}] do
         conn
@@ -240,6 +243,9 @@ defmodule EngramWeb.LogsControllerTest do
 
     test "an unrestricted key only reads the vault it addresses", %{conn: conn, user: user} do
       vault_b = insert(:vault, user: user)
+      # The describe setup's seed request cached the vault list; mirror the
+      # vaults_changed trigger (the sandbox never commits).
+      Engram.Cache.evict(:vaults, user.id)
 
       conn
       |> put_req_header("x-vault-id", to_string(vault_b.id))

@@ -42,7 +42,7 @@ backstop is `Engram.Workers.FinalizeRevisionSweep` (`35 * * * *`).
   `Notes.move_note` (id-keyed move/resurrect, only when the content hash
   changed; actor `sync` for the CRDT-socket relocate/resurrect callers, else
   the upsert opts). The finalize enqueue comes from
-  `ContentCommit.after_commit/3` for the checkpoint and both upsert branches
+  `ContentCommit.enqueue_jobs/3` for the checkpoint and both upsert branches
   (the `:moved` one included), and, for the CRDT relocate/resurrect legs of
   `genesis_crdt_note/5`, from `finalize_moved_revision/2` after the
   transaction (enqueue only, no embed or link extraction). Each is gated on

@@ -15,7 +15,7 @@ defmodule Engram.KeywordIndex.Stats do
 
   import Ecto.Query
 
-  alias Engram.KeywordIndex.Stats.Cache
+  alias Engram.Cache
   alias Engram.Notes.Chunk
   alias Engram.Repo
 
@@ -25,7 +25,7 @@ defmodule Engram.KeywordIndex.Stats do
   Per-vault avgdl, cached per node (#861): every EmbedNote job reads this,
   and the uncached AVG over the vault's whole chunk set made initial
   indexing O(N^2) in DB row visits. Staleness inside the cache TTL is
-  harmless — see `Engram.KeywordIndex.Stats.Cache`.
+  harmless. Cached in `Engram.Cache` as `:avgdl` (10 min TTL, per node).
 
   Takes `user_id` as well as `vault_id` because the underlying `chunks` read
   has to run inside `Repo.with_tenant/2`, and nothing in this module can derive
@@ -33,15 +33,7 @@ defmodule Engram.KeywordIndex.Stats do
   """
   @spec avgdl(Ecto.UUID.t(), Ecto.UUID.t()) :: float()
   def avgdl(user_id, vault_id) do
-    case Cache.get(vault_id) do
-      {:ok, value} ->
-        value
-
-      :miss ->
-        value = compute_avgdl(user_id, vault_id)
-        :ok = Cache.put(vault_id, value)
-        value
-    end
+    Cache.fetch(:avgdl, vault_id, fn -> compute_avgdl(user_id, vault_id) end)
   end
 
   # Scoped HERE rather than around `avgdl/2` so a cache hit still costs no

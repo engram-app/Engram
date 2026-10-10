@@ -219,6 +219,14 @@ defmodule Engram.CheckpointInterleave do
     # exactly when a mid-setup raise makes cleanup matter most. Reading the ids
     # back from `notes` covers whatever actually got committed.
     #
+    # Inside the tenant: `vaults` is under FORCE ROW LEVEL SECURITY (see above).
+    {:ok, %{rows: vault_rows}} =
+      Repo.with_tenant(user_id, fn ->
+        SQL.query!(Repo, "SELECT id::text FROM vaults WHERE user_id = $1", [uuid])
+      end)
+
+    vault_ids = List.flatten(vault_rows)
+
     # Runs BEFORE the notes are deleted, or the subquery finds nothing.
     SQL.query!(
       Repo,
@@ -239,6 +247,19 @@ defmodule Engram.CheckpointInterleave do
 
     # `users` is not tenant-scoped, so it goes outside the tenant block.
     SQL.query!(Repo, "DELETE FROM users WHERE id = $1", [uuid])
+
+    # A committed job that names this user or its vaults and survived the
+    # delete is a leak: sandboxed suites asserting on the queue see it.
+    # Fail here, at its source, rather than in whichever suite runs next.
+    %{rows: [[left]]} =
+      SQL.query!(
+        Repo,
+        "SELECT count(*) FROM oban_jobs " <>
+          "WHERE args->>'user_id' = $1 OR args->>'vault_id' = ANY($2)",
+        [user_id, vault_ids]
+      )
+
+    if left > 0, do: raise("#{left} oban_jobs still reference user #{user_id} after cleanup")
     :ok
   end
 end

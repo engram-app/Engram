@@ -3,8 +3,8 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   Per-room debounced checkpoint timer.
 
   Linked to the room's `Yex.Sync.SharedDoc` process (dies when the room
-  exits). On each `:tick`, reads the live doc via `Yex.Sync.SharedDoc.get_doc/1`
-  and calls `CrdtCheckpoint.checkpoint/4`. The timer resets on `:activity`
+  exits). On each `:tick`, takes the doc's encoded state and the tail ids it
+  holds from the room in one call and checkpoints them (`CrdtCheckpoint`). The timer resets on `:activity`
   (sent by the room on every `update_v1` callback) — snapshots only fire after
   the note has been quiet for `settle_ms` milliseconds, bounded by a
   `ceiling_ms` hard cap so a continuously-edited note still gets flushed.
@@ -82,9 +82,9 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   """
   use GenServer
 
-  alias Engram.{Accounts, Repo}
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtPersistence, CrdtRegistry, CrdtRoomLru}
+  alias Engram.Notes.{CrdtCheckpoint, CrdtPersistence, CrdtRegistry, CrdtRoomLru}
+  alias Yex.Sync.SharedDoc
 
   require Logger
 
@@ -303,6 +303,13 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     {:stop, :normal, state}
   end
 
+  # A late room_snapshot/1 reply (its call timed out). Dropped: a crash here
+  # would take the linked room down with it. Exactly that shape, so nothing
+  # else ref-tagged disappears silently.
+  def handle_info({ref, _snapshot, ids, failures}, state)
+      when is_reference(ref) and is_list(ids) and is_integer(failures),
+      do: {:noreply, state}
+
   # Only drain-ENABLED rooms are tracked for eviction, so a room with the drain
   # explicitly off can never be LRU-evicted either. Since the drain now defaults
   # ON, that is the opt-out case — it is NOT prod, where every note room is
@@ -434,134 +441,100 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   defp do_checkpoint(%{mode: :index}), do: :ok
 
   defp do_checkpoint(%{room_pid: room_pid} = state) do
-    # Capture the row version BEFORE snapshotting the doc so it never exceeds the
-    # version the snapshot reflects (#902 fence). A REST/MCP write committing
-    # after this read bumps the version, so the fenced checkpoint write aborts
-    # instead of reverting the committed content.
+    # No separate version read before the snapshot (it was the #902 fence, and
+    # cost its own transaction). The checkpoint transaction's row read is the
+    # fence now, and it is safe AFTER the snapshot because of what the
+    # checkpoint already does with that row:
+    #   * a REST/MCP write committed before the read is in the row's stored
+    #     crdt_state, which the checkpoint unions into what it writes (Phase 0
+    #     monotonicity), so a room doc that missed it cannot revert it;
+    #   * one committing between the read and the write bumps seq, which
+    #     `snapshot_fence/2` matches on, so the write aborts.
+    # No row lock either: this must never hold one across a call into the room
+    # (the room's own crdt_head update would deadlock against it).
+    # The doc's state and the tail rows it holds, from ONE call into the room,
+    # so the two are a consistent pair: every id is folded into that state.
+    # The room knows them (the rows bind replayed plus the rows it appended
+    # itself), so nothing reads the tail here.
     #
-    # nil on read failure is NOT an unfenced write (it was, before #1360). The
-    # version CAS is layered ON TOP of `snapshot_fence/2`, which applies to every
-    # checkpoint write path unconditionally. nil just drops the extra layer.
-    #
-    # This read stays FIRST even though the fold below now adds DB work between
-    # it and the write, widening the CAS window. Moving it after the fold would
-    # invert the fence: the version could then post-date the doc state we
-    # encoded, so a REST write landing in the gap would MATCH on version while
-    # the snapshot lacks it, and the CAS would let a clobber through. A wider
-    # window only costs extra aborts, which are safe and retried on the next
-    # tick. Wrong order costs content.
-    captured_version = CrdtCheckpoint.current_version(state.user_id, state.room_key)
-    doc = Yex.Sync.SharedDoc.get_doc(room_pid)
-
-    # Prune EXACTLY what this snapshot folded (#1146 spec 0a).
-    #
-    # Passing no `:prune_ids` takes the WATERMARK branch, which deletes every
-    # tail row at or below the watermark whether or not the snapshotted doc
-    # folded it. That is safe only while the room is the SOLE tail writer, so
-    # its doc provably reflects every row that exists — a property of who may
-    # append, not of the checkpoint. A row appended by anyone else after the
-    # room bound is in no snapshot and would be deleted unfolded: gone from the
-    # tail AND absent from crdt_state.
-    #
-    # This is the rule #1391 already established for the index room ("a
-    # checkpoint that prunes without that list deletes exactly the claims the
-    # tail log exists to protect"), which sidesteps it by never checkpointing
-    # from a tick. A note room ticks, so it has to fold instead.
-    #
-    # Fold the durable tail into a transient doc seeded from the room's ENCODED
-    # STATE, never from its projected text: a doc rebuilt from text is a
-    # different Yjs lineage and unions into a duplicated body. The room's own
-    # doc is a NIF resource owned by the room process, so it is never mutated
-    # from here.
-    # A deleted user is an expected lifecycle state (vault purge), not an error —
-    # same call and same verdict as `Workers.CheckpointNote.rebuild_detached/3`.
-    # `get_user!/1` would raise into the rescue below and log a "read failure"
-    # that never happened.
-    case Accounts.get_user(state.user_id) do
-      nil ->
-        :ok
-
-      user ->
-        # Find out whether there IS a tail before paying to materialize a doc to
-        # fold it into. In a bulk import almost every note has an EMPTY tail
-        # (staging 2026-08-20: 24 rows across 1,516 notes), and the encode +
-        # rebuild below is a full doc round-trip per room per tick. Doing it
-        # unconditionally put that cost in exactly the window where hundreds of
-        # rooms are live.
-        case fetch_tail_rows(state) do
-          [] ->
-            # Nothing folded, so nothing may be pruned. Checkpoint the room's
-            # own doc directly: the pre-fold path, minus the watermark prune
-            # that 0a removed.
-            CrdtCheckpoint.checkpoint(state.user_id, state.vault_id, state.room_key, doc,
-              captured_version: captured_version,
-              prune_ids: []
-            )
-
-          rows ->
-            fold_and_checkpoint(state, doc, user, rows, captured_version)
-        end
+    # Prune EXACTLY those (#1146 spec 0a). A row anyone else appended after the
+    # room bound, or one that failed to decrypt at bind, is in no snapshot and
+    # is not in the list, so it stays. Same rule #1391 set for the index room.
+    with {:ok, encoded, ids, failures} <- room_snapshot(room_pid),
+         :ok <- interleave_hook(:after_room_snapshot),
+         {:written, pruned} <-
+           CrdtCheckpoint.checkpoint_pruning(
+             state.user_id,
+             state.vault_id,
+             state.room_key,
+             encoded,
+             prune_ids: ids
+           ) do
+      # The snapshot is durable: the room stops offering the pruned rows (rows
+      # it appended since stay on its list) and, if every append that failed
+      # before the snapshot is in it, acknowledges updates again.
+      mark_checkpointed(room_pid, pruned, failures)
     end
   rescue
     err -> log_read_failure(state, err)
   catch
-    # `get_doc/1` is a GenServer.call, and a call to a process that terminates
-    # mid-call EXITS rather than raising — `rescue` never sees it, so the timer
-    # died here instead of degrading the way the comment above intends.
+    # A call into a room that terminates mid-call EXITS rather than raising, so
+    # `rescue` never sees it.
     #
     # The race is routine: the room stops with a `:tick` already in our mailbox,
     # and the `{:EXIT, room_pid, _}` that stops us cleanly is queued behind it.
-    # There is nothing to checkpoint once the room is gone — the doc it held is
-    # what we were trying to read — so falling through is the correct outcome,
-    # and the EXIT message right behind this tick shuts us down in order.
+    # There is nothing to checkpoint once the room is gone (its own unbind
+    # checkpointed), so falling through is correct, and the EXIT message right
+    # behind this tick shuts us down in order.
     :exit, reason -> log_exit_failure(state, reason)
   end
 
-  # Materialize the union of the room's doc and its durable tail, then prune
-  # exactly the rows folded. Only reached when the tail is non-empty.
-  defp fold_and_checkpoint(state, doc, user, rows, captured_version) do
-    {:ok, encoded} = Yex.encode_state_as_update(doc)
-    {:ok, folded} = CrdtBridge.doc_from_state(encoded)
+  @doc false
+  # Tell `room` its snapshot is durable (see CrdtPersistence.checkpointed/2).
+  # The room routinely exits between the checkpoint and this call; then there
+  # is nothing left to tell (its own unbind checkpointed), so that is not a
+  # failure and logs only at debug.
+  @spec mark_checkpointed(pid(), [Ecto.UUID.t()], non_neg_integer()) :: :ok
+  def mark_checkpointed(room_pid, pruned, failures) do
+    SharedDoc.update_doc(room_pid, fn _doc -> CrdtPersistence.checkpointed(pruned, failures) end)
+  catch
+    :exit, reason ->
+      Logger.debug(
+        "crdt checkpoint: room exited before it heard of the checkpoint",
+        Metadata.with_category(:debug, :sync, reason: Metadata.safe_exit_reason(reason))
+      )
 
-    # `replay_tail/3` issues a BARE `Repo.all` — it sets no tenant of its
-    # own. Every other caller supplies one (`bind/3`,
-    # `CheckpointNote.rebuild_detached/3`, `CrdtChannel.fold_row_and_tail/4`
-    # all run it under `with_tenant`). Without one, RLS returns no rows,
-    # `prune_ids` comes back empty, and compaction silently stops — the
-    # tail grows forever and nothing reports it.
-    # Degrade, never abort. `with_tenant/2` does not always return
-    # `{:ok, _}` — `CrdtCheckpoint` has carried a catch-all arm for its own
-    # call since the watermark days. A hard match here would raise into the
-    # rescue below and skip the checkpoint ENTIRELY, so a transient tenant
-    # failure would also stop `notes.content` materializing. That is the one
-    # thing this timer exists to do promptly (see "Eager first flush").
-    # Folding nothing costs a delayed compaction; not checkpointing costs
-    # every non-CRDT reader a stale note.
-    prune_ids = CrdtPersistence.apply_tail_rows(folded, user, state.room_key, rows)
-
-    CrdtCheckpoint.checkpoint(state.user_id, state.vault_id, state.room_key, folded,
-      captured_version: captured_version,
-      prune_ids: prune_ids
-    )
+      :ok
   end
 
-  # Degrade, never abort. `with_tenant/2` does not always return `{:ok, _}` —
-  # `CrdtCheckpoint` has carried a catch-all arm for its own call since the
-  # watermark days. Raising here would skip the checkpoint ENTIRELY, so a
-  # transient tenant failure would also stop `notes.content` materializing,
-  # which is the one thing this timer exists to do promptly ("Eager first
-  # flush"). An empty list costs a delayed compaction; no checkpoint costs every
-  # non-CRDT reader a stale note.
-  #
-  # `tail_rows/1` issues a BARE `Repo.all` and sets no tenant of its own, like
-  # the rest of that module's reads — without one, RLS returns nothing and
-  # compaction silently stops.
-  defp fetch_tail_rows(state) do
-    case Repo.with_tenant(state.user_id, fn ->
-           CrdtPersistence.tail_rows(state.room_key, state.vault_id)
-         end) do
-      {:ok, rows} when is_list(rows) -> rows
-      _ -> []
+  # Test-only seam (`Engram.CheckpointInterleave`): nil outside those tests.
+  defp interleave_hook(point) do
+    case Application.get_env(:engram, :checkpoint_interleave_hook) do
+      nil -> :ok
+      fun when is_function(fun, 1) -> _ = fun.(point)
+    end
+
+    :ok
+  end
+
+  defp room_snapshot(room_pid) do
+    parent = self()
+    ref = make_ref()
+
+    :ok =
+      SharedDoc.update_doc(room_pid, fn doc ->
+        send(
+          parent,
+          {ref, Yex.encode_state_as_update(doc), CrdtPersistence.known_tail_ids(),
+           CrdtPersistence.append_failures()}
+        )
+      end)
+
+    receive do
+      {^ref, {:ok, encoded}, ids, failures} -> {:ok, encoded, ids, failures}
+      {^ref, error, _ids, _failures} -> error
+    after
+      0 -> {:error, :no_snapshot}
     end
   end
 

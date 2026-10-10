@@ -8,6 +8,34 @@ defmodule Engram.Observability.Otel do
   """
 
   require Logger
+  require OpenTelemetry.Tracer, as: Tracer
+
+  @doc """
+  Marks the current span as an error when an HTTP call (a `Req` result) failed:
+  `{:error, _}` or a non-2xx status. Returns the result unchanged. The message
+  is low-cardinality (`"http 503"`, `"transport timeout"`), never a body.
+  """
+  @spec mark_http_result(result) :: result when result: term()
+  def mark_http_result(result) do
+    case result do
+      {:ok, %{status: status}} when status in 200..299 ->
+        :ok
+
+      {:ok, %{status: status}} ->
+        Tracer.set_status(OpenTelemetry.status(:error, "http #{status}"))
+
+      {:error, %{reason: reason}} when is_atom(reason) ->
+        Tracer.set_status(OpenTelemetry.status(:error, "transport #{reason}"))
+
+      {:error, _} ->
+        Tracer.set_status(OpenTelemetry.status(:error, "transport error"))
+
+      _ ->
+        :ok
+    end
+
+    result
+  end
 
   @doc "True when the OTLP exporter endpoint is configured."
   @spec enabled?() :: boolean()

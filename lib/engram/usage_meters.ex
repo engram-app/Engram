@@ -11,8 +11,11 @@ defmodule Engram.UsageMeters do
 
   import Ecto.Query
 
+  alias Engram.Cache
   alias Engram.Repo
-  alias Engram.UsageMeters.ActivityCache
+
+  # Activity-stamp debounce window; the `:activity` cache holds the last stamp.
+  @debounce_seconds 3600
 
   defmodule Meter do
     use Ecto.Schema
@@ -174,7 +177,7 @@ defmodule Engram.UsageMeters do
         skip_tenant_check: true
       )
 
-    :ok
+    evict_note_counts(user_id)
   end
 
   @doc """
@@ -201,8 +204,13 @@ defmodule Engram.UsageMeters do
       )
       |> Repo.update_all([], skip_tenant_check: true)
 
-    :ok
+    evict_note_counts(user_id)
   end
+
+  # The cached counts (`:note_counts`) the bootstrap reads. The trigger's NOTIFY
+  # evicts every node on commit; this makes the writing node coherent without
+  # waiting for it. Engram.Cache.evict/2 itself waits for the commit.
+  defp evict_note_counts(user_id), do: Engram.Cache.evict(:note_counts, user_id)
 
   @doc """
   Recomputes the live-note count from the notes table and upserts it. Repair
@@ -261,7 +269,7 @@ defmodule Engram.UsageMeters do
 
   @doc """
   Debounced liveness stamp: writes `last_active_at` only when the stored value
-  is stale by more than the `ActivityCache` debounce window, so a busy client
+  is stale by more than the activity debounce window, so a busy client
   does not hammer the meter row. A warm cache inside the window touches no DB
   at all.
 
@@ -275,8 +283,8 @@ defmodule Engram.UsageMeters do
   """
   @spec touch_active(Ecto.UUID.t()) :: :ok
   def touch_active(user_id) when is_binary(user_id) do
-    case ActivityCache.get(user_id) do
-      {:ok, ts} ->
+    case Cache.get(:activity, user_id) do
+      {:ok, %DateTime{} = ts} ->
         if stale?(ts), do: do_touch(user_id), else: :ok
 
       :miss ->
@@ -285,7 +293,7 @@ defmodule Engram.UsageMeters do
         if stale?(last) do
           do_touch(user_id)
         else
-          ActivityCache.put(user_id, last)
+          Cache.put(:activity, user_id, last)
           :ok
         end
     end
@@ -294,14 +302,14 @@ defmodule Engram.UsageMeters do
   defp do_touch(user_id) do
     now = DateTime.utc_now()
     :ok = bump_last_active(user_id)
-    ActivityCache.put(user_id, now)
+    Cache.put(:activity, user_id, now)
     :ok
   end
 
   defp stale?(nil), do: true
 
   defp stale?(%DateTime{} = ts) do
-    DateTime.diff(DateTime.utc_now(), ts, :second) > ActivityCache.debounce_seconds()
+    DateTime.diff(DateTime.utc_now(), ts, :second) > @debounce_seconds
   end
 
   @doc """

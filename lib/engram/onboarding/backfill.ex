@@ -60,8 +60,12 @@ defmodule Engram.Onboarding.Backfill do
                on_conflict: :nothing,
                conflict_target: [:user_id, :action]
              ) do
-          {0, _} -> []
-          {_inserted, _} -> [user_id]
+          {0, _} ->
+            []
+
+          {_inserted, _} ->
+            :ok = Engram.Onboarding.evict_actions(user_id)
+            [user_id]
         end
       else
         []

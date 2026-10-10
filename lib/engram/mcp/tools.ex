@@ -79,6 +79,10 @@ defmodule Engram.MCP.Tools do
     "get_attachment_upload_target" => {"Get Attachment Upload Target", true, false, true}
   }
 
+  @doc "Whether `name` is a tool annotated `readOnlyHint`. Unknown names are not."
+  @spec read_only?(term()) :: boolean()
+  def read_only?(name), do: match?({_, true, _, _}, Map.get(@annotations, name))
+
   @spec list() :: [tool_def()]
   def list do
     [

@@ -392,6 +392,24 @@ defmodule Engram.LinksTest do
     end
   end
 
+  describe "links_for_note/2, the passed user" do
+    test "a struct without a DEK still decrypts (DEK provisioned after auth)", %{
+      user: user,
+      vault: vault
+    } do
+      _target = Engram.Fixtures.insert_note!(user, vault, %{path: "DekTarget.md"})
+      source = Engram.Fixtures.insert_note!(user, vault, %{path: "DekSource.md"})
+
+      :ok =
+        Links.replace_links(user, vault, source.id, [
+          %{target: "DekTarget", alias: nil, anchor: nil, link_type: "wikilink", position: 0}
+        ])
+
+      stale = %{user | encrypted_dek: nil}
+      assert [%{target_path: "DekTarget.md"}] = Links.links_for_note(stale, source.id)
+    end
+  end
+
   describe "backlinks_for_note/2" do
     test "returns sources with decrypted path/title", %{user: user, vault: vault} do
       a = Engram.Fixtures.insert_note!(user, vault, %{path: "A.md", title: "Note A"})

@@ -238,7 +238,7 @@ defmodule Engram.Workers.EmbedNoteBulkDedupTest do
         note_id
         |> List.wrap()
         |> EmbedNote.reject_already_queued()
-        |> Enum.map(&EmbedNote.new_debounced(&1, user_id, clamp: false))
+        |> Enum.map(&EmbedNote.new_debounced(&1, user_id))
         |> case do
           [] -> :ok
           changesets -> Oban.insert_all(changesets)

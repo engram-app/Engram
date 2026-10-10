@@ -8,6 +8,7 @@ defmodule Engram.Abuse.OriginStatsTest do
       user = insert(:user)
 
       :ok = OriginStats.record(user.id, "Engram-Obsidian/0.5.0")
+      OriginStats.flush(user.id)
 
       {total, by_class} = OriginStats.day_totals(user.id, Date.utc_today())
       assert total == 1
@@ -18,6 +19,7 @@ defmodule Engram.Abuse.OriginStatsTest do
       user = insert(:user)
 
       for _ <- 1..5, do: OriginStats.record(user.id, "Engram-Obsidian/0.5.0")
+      OriginStats.flush(user.id)
 
       {total, by_class} = OriginStats.day_totals(user.id, Date.utc_today())
       assert total == 5
@@ -31,6 +33,7 @@ defmodule Engram.Abuse.OriginStatsTest do
       OriginStats.record(user.id, "Engram-Web/0.5.155")
       OriginStats.record(user.id, "Engram-Obsidian/0.5.0")
       OriginStats.record(user.id, "curl/7.81")
+      OriginStats.flush(user.id)
 
       {total, by_class} = OriginStats.day_totals(user.id, Date.utc_today())
       assert total == 4
@@ -42,6 +45,7 @@ defmodule Engram.Abuse.OriginStatsTest do
     test "nil user-agent classifies as :unknown" do
       user = insert(:user)
       :ok = OriginStats.record(user.id, nil)
+      OriginStats.flush(user.id)
 
       {1, %{"unknown" => 1}} = OriginStats.day_totals(user.id, Date.utc_today())
     end
@@ -53,6 +57,7 @@ defmodule Engram.Abuse.OriginStatsTest do
       OriginStats.record(user.id, "Engram-Obsidian/0.5.0")
       OriginStats.record(user.id, "Engram-Obsidian/0.5.0")
       OriginStats.record(user.id, "Engram-Web/0.5.155")
+      OriginStats.flush(user.id)
 
       rows = OriginStats.summary(user.id, 7)
 
@@ -84,6 +89,8 @@ defmodule Engram.Abuse.OriginStatsTest do
         ],
         skip_tenant_check: true
       )
+
+      OriginStats.flush(user.id)
 
       assert length(OriginStats.summary(user.id, 7)) == 1
       assert length(OriginStats.summary(user.id, 60)) == 2

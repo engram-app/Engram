@@ -35,6 +35,70 @@ defmodule Engram.Notes.CrdtTransportTest do
     row.id
   end
 
+  defp wait_for_room(note_id, attempts \\ 100) do
+    case CrdtRegistry.lookup(note_id) do
+      pid when is_pid(pid) -> pid
+      nil when attempts > 0 -> Process.sleep(10) && wait_for_room(note_id, attempts - 1)
+    end
+  end
+
+  # A client update turning the note's text into `text`.
+  defp edit(user, vault, note_id, text) do
+    {:ok, %{update: full}} = CrdtTransport.read_delta(user, vault, note_id, nil)
+    client = CrdtBridge.new_doc()
+    :ok = Yex.apply_update(client, full)
+    sv = Yex.encode_state_vector!(client)
+    CrdtBridge.ingest_plaintext(client, text)
+    {:ok, upd} = Yex.encode_state_as_update(client, sv)
+    upd
+  end
+
+  describe "apply_update/5 acknowledgement" do
+    # A success is an acknowledgement: the client drops its queued copy. Returned
+    # before the room's own update_v1 ran, a node crash in between lost an
+    # update the client had already let go of.
+    test "returns only after the update is in the tail log", %{user: user, vault: vault} do
+      prev = Application.get_env(:engram, Engram.Notes.CrdtCheckpointTimer, [])
+      on_exit(fn -> Application.put_env(:engram, Engram.Notes.CrdtCheckpointTimer, prev) end)
+
+      Application.put_env(:engram, Engram.Notes.CrdtCheckpointTimer,
+        settle_ms: 600_000,
+        ceiling_ms: 600_000,
+        eager_ms: 600_000
+      )
+
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "Ack/A.md", content: "seed"}, actor: "api")
+
+      on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
+
+      {:ok, %{update: full}} = CrdtTransport.read_delta(user, vault, note.id, nil)
+      client = CrdtBridge.new_doc()
+      :ok = Yex.apply_update(client, full)
+      sv = Yex.encode_state_vector!(client)
+      CrdtBridge.ingest_plaintext(client, "seed ACK")
+      {:ok, upd} = Yex.encode_state_as_update(client, sv)
+
+      # Hold the room's tail append: the call must not return while it is
+      # pending.
+      on_exit(Engram.CheckpointInterleave.arm(:before_tail_append))
+      task = Task.async(fn -> CrdtTransport.apply_update(user, vault, note.id, upd) end)
+      room = wait_for_room(note.id)
+      Engram.CheckpointInterleave.await_parked(:before_tail_append, room)
+      assert Task.yield(task, 200) == nil, "acknowledged before the tail append"
+      Engram.CheckpointInterleave.release(:before_tail_append, room)
+
+      assert {:ok, _} = Task.await(task, 5_000)
+      # Snapshot + tail, i.e. what survives the room dying right now. One
+      # transaction: the room's exit checkpoint may fold the tail meanwhile.
+      assert {:ok, "seed ACK"} =
+               Repo.with_tenant!(user.id, fn ->
+                 {:ok, row} = Notes.get_note_by_id(user, vault, note.id)
+                 Notes.authoritative_content(user, row)
+               end)
+    end
+  end
+
   describe "read_delta/4" do
     test "full state (since=nil) reconstructs the note text on a fresh client doc",
          %{user: user, vault: vault} do
@@ -171,6 +235,106 @@ defmodule Engram.Notes.CrdtTransportTest do
     test "note in another vault → {:error, :not_found}", %{user: user, vault: vault} do
       assert {:error, :not_found} =
                CrdtTransport.apply_update(user, vault, Ecto.UUID.generate(), <<0, 0>>)
+    end
+
+    # The existence check is bind's own note read: no separate transaction,
+    # and no users read (the user comes from Engram.Cache).
+    test "a cold apply reads the note once and the user from the cache", ctx do
+      %{user: user, vault: vault} = ctx
+      {:ok, note} = Notes.upsert_note(user, vault, %{path: "T/Q.md", content: "q"}, actor: "api")
+      on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
+      upd = edit(user, vault, note.id, "q edit")
+      Engram.Accounts.get_user(user.id)
+
+      {result, qs} =
+        Engram.QueryRecorder.record(fn ->
+          CrdtTransport.apply_update(user, vault, note.id, upd)
+        end)
+
+      assert {:ok, _} = result
+      report = Engram.QueryRecorder.format(qs)
+      assert [_] = Enum.filter(qs, &(&1.source == "notes" and &1.sql =~ ~r/^SELECT/)), report
+      refute Enum.any?(qs, &(&1.source == "users")), report
+    end
+
+    test "a deleted note → {:error, :not_found}, and no room is left", ctx do
+      %{user: user, vault: vault} = ctx
+
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "T/Del.md", content: "d"}, actor: "api")
+
+      upd = edit(user, vault, note.id, "d edit")
+      :ok = Notes.delete_note(user, vault, "T/Del.md")
+
+      assert {:error, :not_found} = CrdtTransport.apply_update(user, vault, note.id, upd)
+      refute CrdtRegistry.lookup(note.id)
+    end
+
+    # A delete stops the note's room, so a write to the trashed note (here a
+    # room-free one) finds no room and no live row: nothing is materialized
+    # into the trashed row, no seq bump, no jobs.
+    test "a write after the delete of a note with an open room changes nothing", ctx do
+      %{user: user, vault: vault} = ctx
+
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "T/Open.md", content: "o"}, actor: "api")
+
+      {:ok, room} = CrdtRegistry.ensure_observed(user.id, vault.id, note.id)
+      on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
+      upd = edit(user, vault, note.id, "o edit")
+
+      :ok = Notes.delete_note(user, vault, "T/Open.md")
+      seq = Repo.with_tenant!(user.id, fn -> Repo.get!(Note, note.id).seq end)
+      Repo.delete_all(Oban.Job)
+
+      result =
+        Task.async(fn -> CrdtTransport.apply_update(user, vault, note.id, upd) end)
+        |> Task.await(5_000)
+
+      if Process.alive?(room), do: Yex.Sync.SharedDoc.unobserve(room)
+      ref = Process.monitor(room)
+      assert_receive {:DOWN, ^ref, :process, _, _}, 5_000
+
+      assert result == {:error, :not_found}
+      assert Repo.with_tenant!(user.id, fn -> Repo.get!(Note, note.id).seq end) == seq
+      assert Repo.all(Oban.Job) == []
+    end
+
+    test "a batch delete stops the notes' open rooms", %{user: user, vault: vault} do
+      {:ok, note} = Notes.upsert_note(user, vault, %{path: "T/B.md", content: "b"}, actor: "api")
+      {:ok, room} = CrdtRegistry.ensure_observed(user.id, vault.id, note.id)
+      ref = Process.monitor(room)
+
+      assert {:ok, %{deleted: 1}} = Notes.batch_delete_notes(user, vault, [note.id])
+      assert_receive {:DOWN, ^ref, :process, _, _}, 5_000
+      refute CrdtRegistry.lookup(note.id)
+    end
+
+    test "a folder delete stops its notes' open rooms", %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "Gone/F.md", content: "f"}, actor: "api")
+
+      {:ok, room} = CrdtRegistry.ensure_observed(user.id, vault.id, note.id)
+      ref = Process.monitor(room)
+
+      assert {:ok, _} = Notes.delete_folder(user, vault, "Gone")
+      assert_receive {:DOWN, ^ref, :process, _, _}, 5_000
+      refute CrdtRegistry.lookup(note.id)
+    end
+
+    test "a resident room of another vault → {:error, :not_found}, nothing applied", ctx do
+      %{user: user, vault: vault} = ctx
+
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "T/Own.md", content: "own"}, actor: "api")
+
+      {:ok, other, _} = Engram.Vaults.register_vault(user, "Other", Ecto.UUID.generate())
+      {:ok, room} = CrdtRegistry.ensure_observed(user.id, vault.id, note.id)
+      on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
+      upd = edit(user, vault, note.id, "own edit")
+
+      assert {:error, :not_found} = CrdtTransport.apply_update(user, other, note.id, upd)
+      assert CrdtBridge.text_of(Yex.Sync.SharedDoc.get_doc(room)) == "own"
     end
 
     test "apply_update observes so the room reaps when the caller exits (no immortal-room leak)",

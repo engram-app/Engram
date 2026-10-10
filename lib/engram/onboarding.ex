@@ -11,13 +11,13 @@ defmodule Engram.Onboarding do
   """
 
   alias Engram.Accounts
+  alias Engram.Cache
   alias Engram.Legal
   alias Engram.Legal.VersionCache
   alias Engram.Logger.Metadata
   alias Engram.Onboarding.Action
   alias Engram.Onboarding.Agreement
   alias Engram.Onboarding.GateCache
-  alias Engram.Onboarding.TermsCache
   alias Engram.Repo
   alias Engram.Vaults
 
@@ -97,8 +97,10 @@ defmodule Engram.Onboarding do
 
     case result do
       {:ok, tos_row} ->
-        TermsCache.put_accepted(user.id, @terms_document, tos_version)
-        TermsCache.put_accepted(user.id, @privacy_document, privacy_version)
+        # Evict, not put: a peer node may hold the old version, and a put
+        # could land over a newer one a concurrent read just stored.
+        :ok = Cache.evict(:terms, {user.id, @terms_document})
+        :ok = Cache.evict(:terms, {user.id, @privacy_document})
         {:ok, tos_row}
 
       other ->
@@ -112,14 +114,18 @@ defmodule Engram.Onboarding do
   controller is migrated to the 6-arity form. Delegates to `insert_agreement/1`.
   """
   def accept_terms(user, version, meta) when is_binary(version) do
-    insert_agreement(%{
-      user_id: user.id,
-      document: @terms_document,
-      version: version,
-      accepted_at: DateTime.utc_now(:second),
-      ip_address: Map.get(meta, :ip_address),
-      user_agent: Map.get(meta, :user_agent)
-    })
+    result =
+      insert_agreement(%{
+        user_id: user.id,
+        document: @terms_document,
+        version: version,
+        accepted_at: DateTime.utc_now(:second),
+        ip_address: Map.get(meta, :ip_address),
+        user_agent: Map.get(meta, :user_agent)
+      })
+
+    with {:ok, _} <- result, do: :ok = Cache.evict(:terms, {user.id, @terms_document})
+    result
   end
 
   # Upsert on (user_id, document, version) so re-accepts of the same version
@@ -203,6 +209,9 @@ defmodule Engram.Onboarding do
         Engram.Billing.tier(user) in [:starter, :pro] or
         not is_nil(user.free_tier_accepted_at)
 
+    # The cached users row, not a fresh read: set_profile/2 evicts the :user
+    # cache after commit, so this sees the saved profile even when the caller
+    # holds a struct from before the save.
     profile = current_profile(user)
     profile_complete = profile_complete?(profile)
     has_vault = Vaults.has_vault?(user)
@@ -255,9 +264,7 @@ defmodule Engram.Onboarding do
   """
   @spec gate(Engram.Accounts.User.t(), keyword()) :: :ok | {:error, [String.t()], atom()}
   def gate(%{id: user_id} = user, opts \\ []) do
-    if GateCache.passed?(user_id) do
-      :ok
-    else
+    GateCache.verdict(user_id, fn ->
       # Re-read the row. `status/1` derives `subscription_ok` partly from
       # `user.free_tier_accepted_at` on the STRUCT, while every other input
       # (terms, profile, vault, subscription row) is queried fresh. That was
@@ -280,13 +287,11 @@ defmodule Engram.Onboarding do
       # outright before reaching here; this is the belt for any HTTP caller,
       # where `Plugs.Auth` has already 401'd a missing user in practice.
       derive_gate(user, status(user), opts)
-    end
+    end)
   end
 
-  defp derive_gate(user, %{next_step: :done}, _opts) do
-    :ok = GateCache.mark_passed(user.id)
-    :ok
-  end
+  # `:pass` is cached by GateCache.verdict/2; `:ok` is a pass it must not cache.
+  defp derive_gate(_user, %{next_step: :done}, _opts), do: :pass
 
   defp derive_gate(user, status, opts) do
     %{next_step: next_step} = status
@@ -298,8 +303,7 @@ defmodule Engram.Onboarding do
         # yet (e.g. obsidian user mid-flow whose plugin is about to first-sync).
         # Runtime traffic permission and wizard state are intentionally
         # decoupled — see `next_step/5`.
-        :ok = GateCache.mark_passed(user.id)
-        :ok
+        :pass
 
       # Deliberately NOT cached. The cache is shared with the channel joins,
       # which enforce the strict rule — writing a relaxed PASS here would hand
@@ -458,7 +462,7 @@ defmodule Engram.Onboarding do
         {:error, :invalid_uses_obsidian}
 
       true ->
-        existing = current_profile(user) || %{}
+        existing = fresh_profile(user) || %{}
 
         merged =
           existing
@@ -473,8 +477,12 @@ defmodule Engram.Onboarding do
         |> tap(fn
           # uses_obsidian flips can re-arm the vault gate for a passed
           # user — drop the cached verdict so the plug re-derives.
-          {:ok, _} -> Engram.Onboarding.GateCache.evict(user.id)
-          _ -> :ok
+          {:ok, _} ->
+            Engram.Onboarding.GateCache.evict(user.id)
+            evict_user(user.id)
+
+          _ ->
+            :ok
         end)
     end
   end
@@ -501,10 +509,9 @@ defmodule Engram.Onboarding do
     end
   end
 
-  # Re-read the column rather than trusting the caller's struct — callers that
-  # just ran `set_profile/2` and then `status/1` would otherwise see a stale
-  # `nil` and the gate would stick on `:vault` even after a successful save.
-  defp current_profile(user) do
+  # The read-modify-write in set_profile/2 merges into the DB's row, not a
+  # cached one another node may have outdated.
+  defp fresh_profile(user) do
     import Ecto.Query
 
     from(u in Engram.Accounts.User,
@@ -514,20 +521,23 @@ defmodule Engram.Onboarding do
     |> Repo.one(skip_tenant_check: true)
   end
 
+  # The cached row, not the caller's struct: callers that just ran
+  # `set_profile/2` and then `status/1` would otherwise see a stale `nil` and
+  # the gate would stick on `:vault` even after a successful save.
+  defp current_profile(user) do
+    case Engram.Accounts.get_user(user.id) do
+      %{onboarding_profile: profile} -> profile
+      nil -> nil
+    end
+  end
+
   defp profile_complete?(%{"completed_at" => ts}) when is_binary(ts), do: true
   defp profile_complete?(_), do: false
 
   # Cache-first read of the user's latest accepted version for a document.
+  # Through fetch/3, so an accept's eviction that lands mid-read wins.
   defp accepted_version(user, document) do
-    case TermsCache.accepted_version(user.id, document) do
-      nil ->
-        v = query_accepted_version(user, document)
-        if v, do: TermsCache.put_accepted(user.id, document, v)
-        v
-
-      cached ->
-        cached
-    end
+    Cache.fetch(:terms, {user.id, document}, fn -> query_accepted_version(user, document) end)
   end
 
   defp accepted_satisfies?(nil, _floor), do: false
@@ -620,7 +630,17 @@ defmodule Engram.Onboarding do
     user
     |> Ecto.Changeset.change(free_tier_accepted_at: DateTime.utc_now())
     |> Repo.update()
+    |> tap(fn
+      {:ok, _} -> evict_user(user.id)
+      _ -> :ok
+    end)
   end
+
+  # The wizard's very next request (or socket rejoin) reads the cached user and
+  # must see the step it just completed. The users trigger evicts every node on
+  # commit, but its NOTIFY lands asynchronously; this makes the writing node
+  # coherent before the response goes out.
+  defp evict_user(user_id), do: Accounts.evict_user(user_id)
 
   @doc """
   Record an onboarding milestone for `user_id`. Idempotent — re-recording the
@@ -643,7 +663,7 @@ defmodule Engram.Onboarding do
       |> Action.changeset(%{user_id: user_id, action: action})
       |> Repo.insert(on_conflict: :nothing, conflict_target: [:user_id, :action])
       |> case do
-        {:ok, _} -> :ok
+        {:ok, _} -> evict_actions(user_id)
         {:error, %Ecto.Changeset{} = cs} -> {:error, cs}
       end
     end)
@@ -663,13 +683,17 @@ defmodule Engram.Onboarding do
     # Inside with_tenant (#1354): the unscoped form returned [] for EVERY user
     # on prod under FORCE RLS, so the onboarding wizard showed nobody's
     # completed steps. Locally it looked fine — dev/CI connect as a superuser,
-    # which bypasses RLS regardless of FORCE.
-    {:ok, actions} =
-      Repo.with_tenant(user_id, fn ->
+    # which bypasses RLS regardless of FORCE. Cached per owner (:onboarding_actions).
+    Engram.Cache.fetch(:onboarding_actions, user_id, fn ->
+      Repo.with_tenant!(user_id, fn ->
         from(a in Action, where: a.user_id == ^user_id, select: a.action)
         |> Repo.all()
       end)
-
-    actions
+    end)
   end
+
+  @doc false
+  # After commit (Engram.Cache.evict/2 waits for it), on every node.
+  @spec evict_actions(Ecto.UUID.t()) :: :ok
+  def evict_actions(user_id), do: Engram.Cache.evict(:onboarding_actions, user_id)
 end

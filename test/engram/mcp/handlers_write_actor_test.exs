@@ -33,10 +33,10 @@ defmodule Engram.MCP.HandlersWriteActorTest do
   end
 
   # A new MCP write tool that forgets the actor would silently default to
-  # "api". Every upsert call in the handlers module must carry @write_opts.
+  # "api". Every upsert/rmw call in the handlers module must carry @write_opts.
   test "every upsert_note call in Handlers passes the mcp actor" do
     source = File.read!("lib/engram/mcp/handlers.ex")
-    calls = length(Regex.scan(~r/Notes\.upsert_note\(/, source))
+    calls = length(Regex.scan(~r/Notes\.(upsert_note|rmw_note)\(/, source))
     with_actor = length(Regex.scan(~r/@write_opts\s*\)/, source))
 
     assert calls > 0

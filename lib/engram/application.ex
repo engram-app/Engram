@@ -328,37 +328,25 @@ defmodule Engram.Application do
       # multiply the frame count. Cost: subscribe/unsubscribe contend on one
       # registry on many-core self-host boxes.
       {Phoenix.PubSub, name: Engram.PubSub, registry_size: 1},
-      # Subscribes to CacheSync in init, so it must start after PubSub. (Local
-      # eviction is synchronous in invalidate_all/0; this subscriber only
-      # matters for evictions broadcast by already-clustered peer nodes.)
-      Engram.Legal.VersionCache.Invalidator,
       EngramWeb.Presence,
       Engram.Crypto.DekCache,
       # Subscribes to per-vault sync topics → after PubSub.
       Engram.Notes.NameIndex,
-      Engram.UsageMeters.ActivityCache,
-      Engram.KeywordIndex.Stats.Cache,
-      # Published signing keys for CIMD clients that authenticate with
-      # private_key_jwt. Without it the token path refetches per request and
-      # the fetch limiter becomes a hard ceiling on token exchanges per
-      # vendor. No cache_sync/LISTEN deps, so ordering here is loose.
-      Engram.OAuth.Cimd.JwksCache,
-      Engram.Onboarding.TermsCache,
-      # Subscribe to CacheSync in init → must start after PubSub.
-      Engram.Onboarding.GateCache,
       # Bounds concurrent catch-up page builds. Absent, merged_changes_page
       # degrades open rather than failing, so ordering here is not critical.
       Engram.Sync.PageGate,
-      # Dedicated LISTEN/NOTIFY connection — OverrideCache LISTENs on it
-      # so raw-SQL override writes (trigger → pg_notify) evict caches on
-      # every node. Must start before OverrideCache.
+      # Dedicated LISTEN/NOTIFY connection (Engram.Cache.Listener) so raw-SQL
+      # writes (trigger -> pg_notify) evict caches on every node. It forwards
+      # to Cache.Server by name, dropping messages while the server is down.
       pg_notifications_child(),
-      Engram.Billing.OverrideCache,
-      # Resolved-entitlement cache (tier + full LimitKeys matrix), keyed by
-      # user. Also LISTENs on user_limit_overrides_changed, so it must start
-      # after pg_notifications_child like OverrideCache.
-      Engram.Billing.EntitlementCache,
+      # Central read-through cache (override, entitlement, gate, jwks, plan,
+      # legal version, ...); subscribes to CacheSync (after PubSub) and gets
+      # NOTIFY evictions from the listener above.
+      Engram.Cache.Server,
       Engram.Auth.SignupRejections,
+      # Per-request origin counters, flushed in one statement every 30s. After
+      # Repo so the shutdown flush can still write.
+      Engram.Abuse.OriginStats.Buffer,
       rate_limiter_child(),
       {Oban, oban},
       boot_sweep_child(oban),
@@ -420,10 +408,10 @@ defmodule Engram.Application do
     end
   end
 
-  # One LISTEN/NOTIFY connection per node, shared by caches that subscribe
-  # to Postgres triggers (OverrideCache today). auto_reconnect re-LISTENs
-  # after a connection blip — Postgrex re-establishes the subscriptions on
-  # reconnect for listeners registered via listen/3.
+  # One LISTEN/NOTIFY connection per node for Engram.Cache's eviction
+  # triggers. auto_reconnect reconnects after a blip; Engram.Cache.Listener
+  # re-LISTENs on connect and has the cache server clear what it may have
+  # missed while down.
   defp pg_notifications_child do
     opts =
       Engram.Repo.config()
@@ -441,7 +429,7 @@ defmodule Engram.Application do
       ])
       |> Keyword.merge(name: Engram.PgNotifications, auto_reconnect: true, sync_connect: false)
 
-    {Postgrex.Notifications, opts}
+    {Engram.Cache.Listener, opts}
   end
 
   # Start the concrete limiter matching the configured backend. Both ETS backends

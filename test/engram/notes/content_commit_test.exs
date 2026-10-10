@@ -11,7 +11,7 @@ defmodule Engram.Notes.ContentCommitTest do
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
   alias Engram.Notes.{ContentCommit, CrdtBridge, CrdtCheckpoint, Note}
-  alias Engram.Workers.{EmbedNote, ExtractNoteLinks, FinalizeRevision}
+  alias Engram.Workers.{EmbedNote, ExtractNoteLinks, FinalizeRevision, NoteCommitted}
 
   setup do
     user = insert(:user)
@@ -27,11 +27,11 @@ defmodule Engram.Notes.ContentCommitTest do
     end
   end
 
-  test "after_commit enqueues embed, links and finalize" do
+  test "enqueue_jobs enqueues embed, links and finalize" do
     note_id = Ecto.UUID.generate()
 
     :ok =
-      ContentCommit.after_commit(note_id, Ecto.UUID.generate(),
+      ContentCommit.enqueue_jobs(note_id, Ecto.UUID.generate(),
         embed_priority: 0,
         finalize?: true
       )
@@ -62,19 +62,78 @@ defmodule Engram.Notes.ContentCommitTest do
     refute_enqueued(worker: FinalizeRevision, args: %{note_id: note.id})
   end
 
+  # The checkpoint inserts ONE dispatcher job after it commits (not under the
+  # vault seq lock, #1710); the dispatcher enqueues the three.
+  defp run_dispatchers do
+    for job <- all_enqueued(worker: NoteCommitted), do: :ok = perform_job(NoteCommitted, job.args)
+  end
+
+  defp checkpoint_text(u, v, note_id, text) do
+    {:ok, raw} = Repo.with_tenant(u.id, fn -> Repo.get!(Note, note_id) end)
+    {:ok, state} = Crypto.decrypt_crdt_state(raw, u)
+    {:ok, doc} = CrdtBridge.doc_from_state(state)
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), text)
+    :ok = CrdtCheckpoint.checkpoint(u.id, v.id, note_id, doc)
+  end
+
   test "a content-changing checkpoint runs it", %{user: u, vault: v} do
     {:ok, note} =
       Notes.upsert_note(u, v, %{"path" => "c.md", "content" => "before"}, actor: "api")
 
     drop_jobs()
-    {:ok, raw} = Repo.with_tenant(u.id, fn -> Repo.get!(Note, note.id) end)
-    {:ok, state} = Crypto.decrypt_crdt_state(raw, u)
-    {:ok, doc} = CrdtBridge.doc_from_state(state)
-    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "after")
+    checkpoint_text(u, v, note.id, "after")
 
-    :ok = CrdtCheckpoint.checkpoint(u.id, v.id, note.id, doc)
+    assert [_] = all_enqueued(worker: NoteCommitted, args: %{note_id: note.id})
+    refute_enqueued(worker: EmbedNote, args: %{note_id: note.id})
 
-    assert_enqueued(worker: FinalizeRevision, args: %{note_id: note.id})
+    run_dispatchers()
+    assert_all_enqueued(note.id)
+  end
+
+  test "two checkpoints still leave one embed and one link job", %{user: u, vault: v} do
+    {:ok, note} =
+      Notes.upsert_note(u, v, %{"path" => "d.md", "content" => "before"}, actor: "api")
+
+    drop_jobs()
+    checkpoint_text(u, v, note.id, "after one")
+    checkpoint_text(u, v, note.id, "after two")
+    assert [_, _] = all_enqueued(worker: NoteCommitted, args: %{note_id: note.id})
+
+    run_dispatchers()
+
+    for worker <- [EmbedNote, ExtractNoteLinks, FinalizeRevision] do
+      assert [_] = all_enqueued(worker: worker, args: %{note_id: note.id}), inspect(worker)
+    end
+  end
+
+  # The dispatcher is the only durable carrier of the three jobs, so a failed
+  # insert must fail the job (Oban retries it; uniqueness keeps that safe).
+  # Every checkpoint passes through :events now; without a priority an
+  # interactive edit's jobs queue behind a whole first-sync flood.
+  test "the dispatcher runs at the embed priority" do
+    for p <- [0, 3] do
+      job =
+        NoteCommitted.job(Ecto.UUID.generate(), Ecto.UUID.generate(),
+          embed_priority: p,
+          finalize?: false
+        )
+
+      assert Ecto.Changeset.get_field(job, :priority) == p
+    end
+  end
+
+  test "the dispatcher fails when a downstream insert fails, and its retry dedupes" do
+    note_id = Ecto.UUID.generate()
+    args = %{note_id: note_id, user_id: Ecto.UUID.generate(), finalize: false}
+
+    # An out-of-range priority makes the EmbedNote insert invalid.
+    assert {:error, _} = perform_job(NoteCommitted, Map.put(args, :embed_priority, 42))
+    assert {:error, _} = perform_job(NoteCommitted, Map.put(args, :embed_priority, 42))
+    assert [_] = all_enqueued(worker: ExtractNoteLinks, args: %{note_id: note_id})
+
+    assert :ok = perform_job(NoteCommitted, Map.put(args, :embed_priority, 0))
+    assert [_] = all_enqueued(worker: EmbedNote, args: %{note_id: note_id})
+    assert [_] = all_enqueued(worker: ExtractNoteLinks, args: %{note_id: note_id})
   end
 
   test "the first checkpoint of a CRDT-created note enqueues no finalize",
@@ -85,6 +144,7 @@ defmodule Engram.Notes.ContentCommitTest do
     :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "first")
 
     :ok = CrdtCheckpoint.checkpoint(u.id, v.id, id, doc)
+    run_dispatchers()
 
     assert_enqueued(worker: EmbedNote, args: %{note_id: id})
     refute_enqueued(worker: FinalizeRevision, args: %{note_id: id})

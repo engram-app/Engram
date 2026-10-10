@@ -48,7 +48,7 @@ defmodule Engram.TenantScopeLintTest do
     # many vaults in one query, skip_tenant_check for performance) — the
     # single-vault `vault_id == ^` shape of Notes/Attachments.scoped/2
     # cannot express the IN-list.
-    {"engram/vaults.ex", "defp do_content_counts("},
+    {"engram/vaults.ex", "defp load_content_counts("},
     # Account-wide storage usage across ALL vaults (billing cap check) —
     # intentionally vault-agnostic, so the vault_id clause is absent.
     {"engram/attachments.ex", "def storage_usage(user) do"}

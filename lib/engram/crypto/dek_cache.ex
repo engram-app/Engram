@@ -24,6 +24,10 @@ defmodule Engram.Crypto.DekCache do
   alias Engram.Cluster.CacheSync
 
   @table :engram_dek_cache
+  @pending :engram_dek_pending
+  # A claim is always a miss; this expiry only lets the sweep reap the claim of
+  # a loader that crashed.
+  @pending_ms 60_000
   @sweep_interval_ms :timer.minutes(5)
 
   ## Public API
@@ -35,6 +39,10 @@ defmodule Engram.Crypto.DekCache do
   @spec get(user_id :: String.t()) :: {:ok, <<_::256>>} | :miss
   def get(user_id) do
     case :ets.lookup(@table, user_id) do
+      [{^user_id, {@pending, _token}, _}] ->
+        emit_lookup(:miss)
+        :miss
+
       [{^user_id, dek, expires_at}] ->
         if :erlang.system_time(:millisecond) < expires_at do
           emit_lookup(:hit)
@@ -71,6 +79,35 @@ defmodule Engram.Crypto.DekCache do
     # are rare," but cache-miss is paired with a network unwrap or DB
     # round-trip that already cost ms — one extra GenServer hop is noise.
     GenServer.call(__MODULE__, {:put, user_id, dek, expires_at})
+  end
+
+  @doc """
+  Claims `user_id`'s slot before a miss loads the DEK (`Crypto.get_dek/1`).
+  The slot reads as a miss until `put_if_claimed/3`. Any invalidate, local or
+  a peer's `dek_evict`, deletes the claim, so a DEK unwrapped from a blob read
+  before a rotation's flip is never stored over it. The returned token
+  identifies this claim; a later claim replaces it.
+  """
+  @spec claim(user_id :: String.t()) :: reference()
+  def claim(user_id) do
+    token = make_ref()
+    expires_at = :erlang.system_time(:millisecond) + @pending_ms
+    :ok = GenServer.call(__MODULE__, {:put, user_id, {@pending, token}, expires_at})
+    token
+  end
+
+  @doc """
+  Stores `dek` only if `token`'s claim is still in the slot. `:stale` means an
+  invalidate (or a newer claim) landed meanwhile: the caller may use the DEK
+  it loaded for its own operation, but it is not cached. Provisioning
+  (`ensure_user_dek/1`) has no race and keeps the unconditional `put/3`.
+  """
+  @spec put_if_claimed(String.t(), reference(), <<_::256>>, non_neg_integer() | nil) ::
+          :ok | :stale
+  def put_if_claimed(user_id, token, <<_::256>> = dek, ttl_ms \\ nil) do
+    ttl = ttl_ms || Application.get_env(:engram, :dek_cache_ttl_ms, 3_600_000)
+    expires_at = :erlang.system_time(:millisecond) + ttl
+    GenServer.call(__MODULE__, {:put_if_claimed, user_id, token, dek, expires_at})
   end
 
   @spec invalidate(user_id :: String.t()) :: :ok
@@ -128,6 +165,20 @@ defmodule Engram.Crypto.DekCache do
   def handle_call({:put, user_id, dek, expires_at}, _from, state) do
     :ets.insert(@table, {user_id, dek, expires_at})
     {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_call({:put_if_claimed, user_id, token, dek, expires_at}, _from, state) do
+    # Check-and-insert in the owner, which serializes it against every
+    # invalidate (calls and peer dek_evict messages alike).
+    case :ets.lookup(@table, user_id) do
+      [{^user_id, {@pending, ^token}, _}] ->
+        :ets.insert(@table, {user_id, dek, expires_at})
+        {:reply, :ok, state}
+
+      _ ->
+        {:reply, :stale, state}
+    end
   end
 
   @impl true

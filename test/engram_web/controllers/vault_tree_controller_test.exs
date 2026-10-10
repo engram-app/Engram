@@ -5,7 +5,6 @@ defmodule EngramWeb.VaultTreeControllerTest do
   import ExUnit.CaptureLog
 
   alias Engram.Attachments.Attachment
-  alias Engram.TenantQueryCounter
 
   setup %{conn: conn} do
     user = insert(:user)
@@ -15,43 +14,6 @@ defmodule EngramWeb.VaultTreeControllerTest do
     grant_api_write!(user)
     authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
     %{conn: authed, user: user, vault: vault}
-  end
-
-  # Counts `with_tenant/2` invocations that actually open a transaction —
-  # see Engram.TenantQueryCounter (#1211 regression guard, shared with
-  # SyncControllerTest and RepoTenantRoundtripsTest).
-  defp count_tenant_enters(fun), do: TenantQueryCounter.count_tenant_enters(fun)
-
-  describe "GET /vault/tree with_tenant round trips" do
-    # Floor is 2, not 1: EngramWeb.Plugs.VaultPlug resolves `current_vault`
-    # (Vaults.get_default_vault/1) in its own with_tenant block before the
-    # controller action runs, on every authed API request — same reasoning
-    # as SyncControllerTest's equivalent guard for #1211. Only the
-    # controller-owned blocks (current_seq + notes + folder counts + folder
-    # markers + attachments — 5 of them) are being collapsed, into 1.
-    test "a populated tree opens at most 3 with_tenant blocks", %{conn: conn} do
-      post(conn, "/api/notes", %{path: "Test/A.md", content: "# A", mtime: 1_000.0})
-
-      post(conn, "/api/attachments", %{
-        path: "img.png",
-        content_base64: Base.encode64("hi"),
-        mtime: 1_000.0
-      })
-
-      enters =
-        count_tenant_enters(fn ->
-          conn |> get("/api/vault/tree") |> json_response(200)
-        end)
-
-      # +1 since #1758: EngramWeb.Plugs.Auth preloads the subscription in its
-      # own with_tenant block, required once `subscriptions` carries RLS
-      # (unscoped, a paying user resolves :free). ~0.6ms per block (repo.ex:
-      # 13 blocks = 7.9ms). AuthTest pins that plug at exactly ONE block.
-      assert length(enters) <= 3,
-             "expected at most 3 with_tenant blocks (Auth subscription preload + " <>
-               "VaultPlug + one combined " <>
-               "seq/notes/folders/attachments fetch), got #{length(enters)}: #{inspect(enters)}"
-    end
   end
 
   describe "GET /vault/tree" do
@@ -281,5 +243,48 @@ defmodule EngramWeb.VaultTreeControllerTest do
 
       assert log =~ "vault tree: DEK unavailable"
     end
+  end
+end
+
+defmodule EngramWeb.VaultTreeTenantBlocksTest do
+  # async: false: counts with_tenant blocks over a request, and the
+  # request-lookup caches it depends on are node-global; an async test's setup
+  # clears them (see Engram.DataCase.clear_request_caches/0).
+  use EngramWeb.ConnCase, async: false
+
+  alias Engram.TenantQueryCounter
+
+  # A real vault (register_vault encrypts its name): an undecryptable factory
+  # vault list is never cached, so the warm state would not be prod's.
+  setup %{conn: conn} do
+    user = insert(:user)
+    insert(:subscription, user: user, tier: "pro", status: "active")
+    {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+    {:ok, _vault, _} = Engram.Vaults.register_vault(user, "Blocks", Ecto.UUID.generate())
+    {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
+    grant_api_write!(user)
+    %{conn: put_req_header(conn, "authorization", "Bearer #{api_key}")}
+  end
+
+  # Warm request caches (cleared, then one identical request): Auth's
+  # subscription preload and VaultPlug's vault resolve are cache hits. What
+  # remains is the controller's one combined seq/notes/folders/attachments
+  # block (#1211 collapsed 5 into 1).
+  test "with warm request caches, a populated tree opens exactly 1 with_tenant block",
+       %{conn: conn} do
+    post(conn, "/api/notes", %{path: "Test/A.md", content: "# A", mtime: 1_000.0})
+
+    post(conn, "/api/attachments", %{
+      path: "img.png",
+      content_base64: Base.encode64("hi"),
+      mtime: 1_000.0
+    })
+
+    fun = fn -> conn |> get("/api/vault/tree") |> json_response(200) end
+    Engram.DataCase.clear_request_caches()
+    fun.()
+    enters = TenantQueryCounter.count_tenant_enters(fun)
+
+    assert length(enters) == 1, "expected 1 with_tenant block, got #{length(enters)}"
   end
 end

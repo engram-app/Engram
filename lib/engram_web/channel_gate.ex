@@ -203,8 +203,8 @@ defmodule EngramWeb.ChannelGate do
         # AccountDeleted -> RotationLockCheck -> RequireOnboarding ->
         # RequireActiveSubscription. Suspension therefore comes AFTER
         # onboarding, so an account suspended mid-signup reports the same
-        # reason on both transports. Rotation reuses the row already loaded
-        # here via `check_user/1`, so it costs no extra query.
+        # reason on both transports. Rotation re-reads the lock (see
+        # rotation/1).
         # `RequirePluginVersion` is NOT here — it sits after the liveness
         # stamp below, mirroring router.ex:65. See the note there.
         with :ok <- deleted(fresh),
@@ -369,13 +369,15 @@ defmodule EngramWeb.ChannelGate do
     end
   end
 
-  # `check_user/1`, not `check/1` — the row is already loaded, so this costs
-  # no query. `CrdtChannel` used to open-code `RotationGate.check/1`, which
-  # re-read the same row; `SyncChannel` had no check at all (#1434).
+  # `check/1`, not `check_user/1` (#1341): the row above comes from the
+  # `:user` cache, which learns of a lock taken on another node only when its
+  # eviction lands, and a joined socket encrypts. One query per join.
+  # `SyncChannel` had no check at all before this gate (#1434).
   defp rotation(user) do
-    case RotationGate.check_user(user) do
+    case RotationGate.check(user.id) do
       :ok -> :ok
       {:error, :rotation_in_progress} -> {:error, %{reason: "rotation_in_progress"}}
+      {:error, :user_not_found} -> {:error, %{reason: "account_deleted"}}
     end
   end
 

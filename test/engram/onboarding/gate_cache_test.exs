@@ -11,7 +11,7 @@ defmodule Engram.Onboarding.GateCacheTest do
 
   # Processing of PubSub messages is async; a synchronous call to the cache
   # GenServer flushes everything ahead of it in the mailbox.
-  defp sync, do: :sys.get_state(GateCache)
+  defp sync, do: :sys.get_state(Engram.Cache.Server)
 
   describe "core verdict cache" do
     test "passed?/1 is false for an unknown user" do
@@ -38,13 +38,52 @@ defmodule Engram.Onboarding.GateCacheTest do
     end
   end
 
+  describe "verdict/2" do
+    test "caches a PASS and returns :ok" do
+      id = Ecto.UUID.generate()
+      assert GateCache.verdict(id, fn -> :pass end) == :ok
+      assert GateCache.passed?(id)
+      assert GateCache.verdict(id, fn -> flunk("a cached PASS re-derived") end) == :ok
+    end
+
+    test "returns any other verdict uncached" do
+      id = Ecto.UUID.generate()
+
+      assert GateCache.verdict(id, fn -> {:error, ["terms"], :terms} end) ==
+               {:error, ["terms"], :terms}
+
+      assert GateCache.verdict(id, fn -> :ok end) == :ok
+      refute GateCache.passed?(id)
+    end
+
+    # A cancellation that commits after the derivation's reads evicts the
+    # gate; the PASS derived from the stale reads must not land after it.
+    test "an eviction during the derivation wins" do
+      id = Ecto.UUID.generate()
+
+      assert GateCache.verdict(id, fn ->
+               :ok = GateCache.evict(id)
+               :pass
+             end) == :ok
+
+      refute GateCache.passed?(id)
+    end
+
+    test "re-derives once a PASS is past its own deadline" do
+      id = Ecto.UUID.generate()
+      :ok = GateCache.mark_passed(id, 0)
+      assert GateCache.verdict(id, fn -> :pass end) == :ok
+      assert GateCache.passed?(id)
+    end
+  end
+
   describe "cluster invalidation" do
     test "evict on one node clears peers via cache_sync broadcast" do
       id = Ecto.UUID.generate()
       :ok = GateCache.mark_passed(id)
 
       # Simulate the message arriving from a peer node.
-      CacheSync.broadcast({:onboarding_gate_evict, id})
+      CacheSync.broadcast({:engram_cache_evict, :onboarding_gate, id})
       sync()
 
       refute GateCache.passed?(id)
@@ -56,7 +95,7 @@ defmodule Engram.Onboarding.GateCacheTest do
       id = Ecto.UUID.generate()
       :ok = GateCache.mark_passed(id)
 
-      CacheSync.broadcast(:version_evict_all)
+      CacheSync.broadcast({:engram_cache_evict_all, :onboarding_gate})
       sync()
 
       refute GateCache.passed?(id)

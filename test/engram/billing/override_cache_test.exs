@@ -8,14 +8,14 @@ defmodule Engram.Billing.OverrideCacheTest do
       OverrideCache.evict_all()
 
       # evict_all/0 clears this node's ETS synchronously but ALSO broadcasts, and
-      # the GenServer applies that broadcast in a later handle_info. Left
+      # Engram.Cache.Server applies that broadcast in a later handle_info. Left
       # undrained, the clear can land *after* the next test has populated the
       # cache and silently wipe its fixtures — which is a cross-test flake, not
       # a production bug: eviction being eventually-applied is the design.
       #
       # :sys.get_state/1 is a call, so it queues behind whatever is already in
       # the mailbox and returning proves the broadcast was handled.
-      _ = :sys.get_state(OverrideCache)
+      _ = :sys.get_state(Engram.Cache.Server)
     end)
 
     :ok
@@ -42,11 +42,11 @@ defmodule Engram.Billing.OverrideCacheTest do
     assert :miss = OverrideCache.fetch(other_id, "vaults_cap", fn -> :miss end)
 
     send(
-      Process.whereis(OverrideCache),
+      Process.whereis(Engram.Cache.Server),
       {:notification, self(), make_ref(), "user_limit_overrides_changed", user_id}
     )
 
-    :sys.get_state(OverrideCache)
+    :sys.get_state(Engram.Cache.Server)
 
     # Evicted user re-runs the fun; unrelated user stays cached.
     assert {:hit, 42} = OverrideCache.fetch(user_id, "vaults_cap", fn -> {:hit, 42} end)

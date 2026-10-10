@@ -115,6 +115,10 @@ defmodule Engram.IndexingIdentityResolutionTest do
   defp count_user_queries(fun), do: count_queries("users", fun)
 
   defp count_queries(source, fun) do
+    # Cold request caches, stated: these counts assume no cached user /
+    # subscription / vaults (the file is async: false, so nothing clears or
+    # fills them concurrently).
+    Engram.DataCase.clear_request_caches()
     ref = make_ref()
     test_pid = self()
     handler_id = {__MODULE__, ref}

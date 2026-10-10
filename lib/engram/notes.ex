@@ -401,6 +401,11 @@ defmodule Engram.Notes do
     * `announce_vault_populated: false` — suppress the `vault_populated`
       broadcast for a write the SERVER originated. See the call site; the
       welcome-note seed is the only caller that passes it.
+    * `locked_note: note`: the row `get_note_for_update/3` locked in this
+      transaction. The write uses it instead of looking the path up again.
+    * `merge_doc: doc`: with `locked_note:`, the tail-replayed doc from
+      `authoritative_doc/2` that the new content was derived from. The merge
+      diffs into it instead of replaying the tail again.
     * `broadcast_from: pid` — emit the `note_changed` broadcast via
       `Endpoint.broadcast_from/4` so the given subscriber (the pushing
       channel process) is excluded. Channel pushes pass `self()`; HTTP
@@ -460,12 +465,15 @@ defmodule Engram.Notes do
       }
 
       {:ok, lookup_query} = note_by_path_query(user, vault, sanitized_path)
+      opts = prepare_expected(opts, base_attrs, user, sanitized_path, folder)
 
       result =
         Repo.with_tenant(user.id, fn ->
           lookup_and_write(
             %{
               query: lookup_query,
+              locked: Keyword.get(opts, :locked_note),
+              expected: Keyword.get(opts, :expected_note),
               client_id: client_id,
               vault: vault,
               base: base_attrs,
@@ -474,16 +482,19 @@ defmodule Engram.Notes do
               folder: folder,
               opts: opts
             },
-            1
+            write_retries(opts)
           )
         end)
 
       case result do
+        {:ok, :stale_expected} ->
+          {:error, :stale_note}
+
         {:ok, {:ok, {prev_hash, note, _merged_text, _content_hash}}} ->
           _ =
             if prev_hash != note.content_hash do
-              :ok =
-                ContentCommit.after_commit(note.id, user.id,
+              _ =
+                ContentCommit.enqueue_jobs(note.id, user.id,
                   embed_priority: EmbedNote.priority_for(note),
                   finalize?: Revisions.finalize?(recording, prev_hash, note.content_hash)
                 )
@@ -499,7 +510,7 @@ defmodule Engram.Notes do
           # keep the same hash (e.g. a tags repair) but did persist a change.
           _ =
             if prev_hash != note.content_hash or Keyword.get(opts, :force, false) do
-              :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note, opts)
+              :ok = broadcast_change(user, vault.id, "upsert", note.path, note, opts)
             end
 
           if is_nil(prev_hash) do
@@ -535,11 +546,11 @@ defmodule Engram.Notes do
             # Funnel telemetry — emit once per real creation so the funnel
             # doesn't double-count idempotent re-pushes of unchanged notes.
             :ok =
-              PostHog.capture(
-                PostHog.analytics_id(user.email),
-                "note_created",
-                %{vault_id: vault.id}
-              )
+              Repo.after_commit(fn ->
+                PostHog.capture(PostHog.analytics_id(user.email), "note_created", %{
+                  vault_id: vault.id
+                })
+              end)
           end
 
           {:ok, note}
@@ -553,8 +564,8 @@ defmodule Engram.Notes do
           # new-path upsert until they next pull.
           _ =
             if prev_hash != note.content_hash do
-              :ok =
-                ContentCommit.after_commit(note.id, user.id,
+              _ =
+                ContentCommit.enqueue_jobs(note.id, user.id,
                   embed_priority: EmbedNote.priority_for(note),
                   finalize?: Revisions.finalize?(recording, prev_hash, note.content_hash)
                 )
@@ -562,7 +573,7 @@ defmodule Engram.Notes do
 
           note = decrypt_or_raise!(note, user)
           maybe_log_path_rewrite(user, vault, path, sanitized_path, note.id)
-          :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note, opts)
+          :ok = broadcast_change(user, vault.id, "upsert", note.path, note, opts)
           {:ok, note}
 
         {:ok, {:conflict, existing}} ->
@@ -1051,8 +1062,8 @@ defmodule Engram.Notes do
 
   # #1710: a relocate/resurrect that changed content (uncheckpointed CRDT tail
   # folded in by move_note) may have closed a version. Enqueue its finalize
-  # here, after the transaction committed, the same post-commit position as
-  # ContentCommit.after_commit/3. The flag is Revisions.finalize?/3; strip it
+  # here, after the write's transaction, the same position as
+  # ContentCommit.enqueue_jobs/3. The flag is Revisions.finalize?/3; strip it
   # so the clauses above see the plain 3-tuple.
   defp finalize_moved_revision({:ok, {:ok, note, tag, finalize?}}, user) do
     _ =
@@ -1902,7 +1913,18 @@ defmodule Engram.Notes do
   defp do_update_note(existing, base_attrs, user, sanitized_path, folder, opts) do
     base_hash = Keyword.get(opts, :base_hash)
 
+    current_text = Keyword.get(opts, :current_text)
+
     cond do
+      # A read-modify-write knows the authoritative text it rebuilt from, so a
+      # no-op is "the result IS that text". The facade hash below can lag the
+      # authority (an un-checkpointed tail edit), and comparing against it
+      # skipped real edits, e.g. one that reverts a tail edit back to the facade.
+      is_binary(current_text) ->
+        if base_attrs.content == current_text and not Keyword.get(opts, :force, false),
+          do: idempotent_repush(existing, base_attrs),
+          else: rewrite(existing, base_attrs, user, sanitized_path, folder, opts)
+
       is_binary(existing.content_hash) and
         existing.content_hash == base_attrs.content_hash and
           not Keyword.get(opts, :force, false) ->
@@ -1917,12 +1939,19 @@ defmodule Engram.Notes do
         {:stale_base, existing}
 
       true ->
-        do_rewrite_note(existing, base_attrs, user, sanitized_path, folder,
-          db_mode: Keyword.get(opts, :db_mode),
-          actor: Keyword.fetch!(opts, :actor),
-          recording: Keyword.fetch!(opts, :recording)
-        )
+        rewrite(existing, base_attrs, user, sanitized_path, folder, opts)
     end
+  end
+
+  defp rewrite(existing, base_attrs, user, sanitized_path, folder, opts) do
+    do_rewrite_note(
+      existing,
+      base_attrs,
+      user,
+      sanitized_path,
+      folder,
+      Keyword.take(opts, [:db_mode, :merge_doc, :prepared, :actor, :recording])
+    )
   end
 
   # Idempotent re-push (plugin retry, offline-queue replay, MCP re-write):
@@ -1967,9 +1996,33 @@ defmodule Engram.Notes do
   #
   # ONE retry. The interleave is a genuine race, so a second loss means real
   # contention, and an unbounded loop against a hot note is a livelock.
+  defp lookup_and_write(%{expected: %Note{} = expected} = w, _retries) do
+    # The optimistic half of a read-modify-write: the merge and encryption ran
+    # before any lock against `expected`. Lock the row now (vault first, like
+    # every writer) and write only if it is still that row.
+    interleave_hook(:before_expected_lock)
+
+    case Repo.one(
+           w.query
+           |> no_tail_since_replay(w.opts[:merge_doc])
+           |> lock_for_write(w.vault.id)
+         ) do
+      %Note{} = existing ->
+        if same_row_state?(existing, expected) do
+          interleave_hook(:after_note_read)
+          do_update_note(existing, w.base, w.user, w.path, w.folder, w.opts)
+        else
+          :stale_expected
+        end
+
+      nil ->
+        :stale_expected
+    end
+  end
+
   defp lookup_and_write(%{} = w, retries) do
     result =
-      case Repo.one(w.query) do
+      case w.locked || Repo.one(w.query) do
         nil ->
           upsert_pathless(w)
 
@@ -2018,6 +2071,76 @@ defmodule Engram.Notes do
     end
   end
 
+  # A legacy row (no crdt_state) whose tail was empty at the unlocked replay. A
+  # tail that appeared since (a room's seed plus keystrokes) does not touch the
+  # notes row, so same_row_state?/2 cannot see it, and writing the fresh
+  # lineage would duplicate the text on the next replay. Require the tail still
+  # empty; otherwise the row reads as moved and rmw_note recomputes under the
+  # lock. Appends committing after this read are the locked path's accepted
+  # window too (replay to COMMIT).
+  defp no_tail_since_replay(query, :empty_tail) do
+    where(
+      query,
+      [n],
+      fragment("NOT EXISTS (SELECT 1 FROM crdt_update_log AS t WHERE t.note_id = ?)", n.id)
+    )
+  end
+
+  defp no_tail_since_replay(query, _merge_doc), do: query
+
+  # A locked row cannot move under us, so there is nothing to retry; an
+  # expected row that moved is the caller's to recompute (rmw_note/5).
+  defp write_retries(opts) do
+    if Keyword.has_key?(opts, :locked_note) or Keyword.has_key?(opts, :expected_note),
+      do: 0,
+      else: 1
+  end
+
+  # The snapshot fence's fields (see snapshot_fenced/2) plus the content: equal
+  # means a merge computed against `expected` is still a merge against `row`.
+  defp same_row_state?(%Note{} = row, %Note{} = expected) do
+    row.id == expected.id and row.seq == expected.seq and
+      row.crdt_state_ciphertext == expected.crdt_state_ciphertext and
+      row.content_hash == expected.content_hash
+  end
+
+  # Runs the merge and encryption for `expected_note:` BEFORE upsert_note opens
+  # its transaction, so the row lock taken in lookup_and_write covers only the
+  # write. A no-op (incoming == current text) has nothing to prepare.
+  defp prepare_expected(opts, base_attrs, user, sanitized_path, folder) do
+    case Keyword.get(opts, :expected_note) do
+      %Note{} = expected ->
+        if base_attrs.content == Keyword.get(opts, :current_text) do
+          opts
+        else
+          prepared =
+            prepare_rewrite(expected, base_attrs, user, sanitized_path, folder, opts[:merge_doc])
+
+          Keyword.put(opts, :prepared, prepared)
+        end
+
+      nil ->
+        opts
+    end
+  end
+
+  # `query` plus the write locks, in the order every note writer takes them:
+  # the vault's seq row first (an uncorrelated EXISTS, which Postgres runs as an
+  # InitPlan before the notes scan), then the note row. FOR NO KEY UPDATE on
+  # both: it serializes against every UPDATE of the row but not against the
+  # FK KEY SHARE locks that crdt_update_log inserts take, so a live room's
+  # keystroke appends are not blocked by it.
+  defp lock_for_write(query, vault_id) do
+    query
+    |> where(
+      fragment(
+        "EXISTS (SELECT 1 FROM vaults WHERE id = ? FOR NO KEY UPDATE)",
+        type(^vault_id, Ecto.UUID)
+      )
+    )
+    |> lock("FOR NO KEY UPDATE")
+  end
+
   defp interleave_hook(point) do
     case Application.get_env(:engram, :checkpoint_interleave_hook) do
       nil -> :ok
@@ -2040,6 +2163,67 @@ defmodule Engram.Notes do
         mode -> [mode: mode]
       end
 
+    prepared =
+      Keyword.get_lazy(opts, :prepared, fn ->
+        prepare_rewrite(existing, base_attrs, user, sanitized_path, folder, opts[:merge_doc])
+      end)
+
+    with {:ok, {crdt, phase_b}} <- prepared do
+      seq = Engram.Vaults.next_seq!(existing.vault_id, db_opts)
+
+      changeset =
+        existing
+        |> Note.changeset(Map.put(phase_b, :version, existing.version + 1))
+        |> Ecto.Changeset.put_change(:seq, seq)
+
+      # #1335. The WHERE was the primary key ALONE, so this write landed on
+      # top of anything that committed after `existing` was read.
+      #
+      # The fence is on `crdt_state_ciphertext`, NOT on `version`. That is the
+      # whole point: `crdt` above was merged against `existing.crdt_state`, so
+      # the snapshot is what this write's correctness depends on, and the
+      # checkpoint branches that cause the loss (compaction, and the
+      # structural/.canvas branch) rewrite `crdt_state` and PRUNE THE TAIL
+      # while deliberately leaving `version` and `seq` untouched, precisely so
+      # legacy /changes pullers see no phantom edit. A version fence is blind
+      # to exactly the writer it needs to catch: replay_tail finds the pruned
+      # rows gone, the merge silently uses the stale snapshot, the version
+      # still matches, and the checkpoint's ops are destroyed.
+      case fenced_update(snapshot_fenced(changeset, existing), db_opts) do
+        # Thread crdt.content_hash (HMAC of projection) alongside merged_text
+        # so callers can include the stored hash in broadcast digests without
+        # re-deriving it.
+        {:ok, updated} ->
+          # #1710. AFTER the fenced write, in the same transaction:
+          # `lookup_and_write` retries a lost fence INSIDE this transaction,
+          # so a history step placed before the write would commit a version
+          # for the losing attempt. `existing` is the PRE-write row. The
+          # hash check keeps a write that rewrote no text out of history.
+          _ =
+            if existing.content_hash != crdt.content_hash,
+              do:
+                Revisions.record_write(
+                  existing,
+                  Keyword.fetch!(opts, :actor),
+                  Keyword.fetch!(opts, :recording)
+                )
+
+          {:ok, {existing.content_hash, updated, crdt.merged_text, crdt.content_hash}}
+
+        {:error, changeset} ->
+          {:error, changeset}
+
+        :stale_snapshot ->
+          :stale_snapshot
+      end
+    end
+  end
+
+  # The merge, field encryption and Phase B/frontmatter derivation of a rewrite:
+  # everything that depends only on the pre-image row and the incoming text. Split
+  # out so a read-modify-write can run it BEFORE taking the row lock
+  # (`expected_note:` in upsert_note/4).
+  defp prepare_rewrite(existing, base_attrs, user, sanitized_path, folder, merge_doc) do
     with {:ok, crdt} <-
            maybe_merge_crdt(
              existing,
@@ -2047,78 +2231,24 @@ defmodule Engram.Notes do
              user,
              existing.id,
              existing.vault_id,
-             sanitized_path
-           ) do
-      merged_attrs = %{
-        base_attrs
-        | content: crdt.merged_text,
-          title: crdt.title,
-          tags: crdt.tags,
-          content_hash: crdt.content_hash
-      }
+             sanitized_path,
+             merge_doc
+           ),
+         merged_attrs = %{
+           base_attrs
+           | content: crdt.merged_text,
+             title: crdt.title,
+             tags: crdt.tags,
+             content_hash: crdt.content_hash
+         },
+         {:ok, encrypted} <- Crypto.encrypt_note_fields(merged_attrs, user, existing.id) do
+      phase_b =
+        inject_phase_b_fields(encrypted, user, existing.id, sanitized_path, folder, crdt.tags)
+        |> inject_frontmatter_fields(user, existing.id, crdt.merged_text)
+        |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
+        |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
 
-      with {:ok, encrypted} <- Crypto.encrypt_note_fields(merged_attrs, user, existing.id) do
-        phase_b =
-          inject_phase_b_fields(
-            encrypted,
-            user,
-            existing.id,
-            sanitized_path,
-            folder,
-            crdt.tags
-          )
-          |> inject_frontmatter_fields(user, existing.id, crdt.merged_text)
-          |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
-          |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
-
-        seq = Engram.Vaults.next_seq!(existing.vault_id, db_opts)
-
-        changeset =
-          existing
-          |> Note.changeset(Map.put(phase_b, :version, existing.version + 1))
-          |> Ecto.Changeset.put_change(:seq, seq)
-
-        # #1335. The WHERE was the primary key ALONE, so this write landed on
-        # top of anything that committed after `existing` was read.
-        #
-        # The fence is on `crdt_state_ciphertext`, NOT on `version`. That is the
-        # whole point: `crdt` above was merged against `existing.crdt_state`, so
-        # the snapshot is what this write's correctness depends on — and the
-        # checkpoint branches that cause the loss (compaction, and the
-        # structural/.canvas branch) rewrite `crdt_state` and PRUNE THE TAIL
-        # while deliberately leaving `version` and `seq` untouched, precisely so
-        # legacy /changes pullers see no phantom edit. A version fence is blind
-        # to exactly the writer it needs to catch: replay_tail finds the pruned
-        # rows gone, the merge silently uses the stale snapshot, the version
-        # still matches, and the checkpoint's ops are destroyed.
-        case fenced_update(snapshot_fenced(changeset, existing), db_opts) do
-          # Thread crdt.content_hash (HMAC of projection) alongside merged_text
-          # so callers can include the stored hash in broadcast digests without
-          # re-deriving it.
-          {:ok, updated} ->
-            # #1710. AFTER the fenced write, in the same transaction:
-            # `lookup_and_write` retries a lost fence INSIDE this transaction,
-            # so a history step placed before the write would commit a version
-            # for the losing attempt. `existing` is the PRE-write row. The
-            # hash check keeps a write that rewrote no text out of history.
-            _ =
-              if existing.content_hash != crdt.content_hash,
-                do:
-                  Revisions.record_write(
-                    existing,
-                    Keyword.fetch!(opts, :actor),
-                    Keyword.fetch!(opts, :recording)
-                  )
-
-            {:ok, {existing.content_hash, updated, crdt.merged_text, crdt.content_hash}}
-
-          {:error, changeset} ->
-            {:error, changeset}
-
-          :stale_snapshot ->
-            :stale_snapshot
-        end
-      end
+      {:ok, {crdt, phase_b}}
     end
   end
 
@@ -2187,7 +2317,52 @@ defmodule Engram.Notes do
   # Returns the merged text, with its content_hash, title (`path` is the
   # fallback) and tags, all from the MERGED result — the public-API contract
   # is "server merges, never clobbers."
-  defp maybe_merge_crdt(existing, incoming_content, user, note_id, vault_id, path) do
+  defp maybe_merge_crdt(
+         existing,
+         incoming_content,
+         user,
+         note_id,
+         vault_id,
+         path,
+         merge_doc \\ nil
+       )
+
+  # A locked read-modify-write: `merge_doc` is this row's snapshot with the tail
+  # already replayed, and `incoming_content` was derived from its projection.
+  # Diffing two-way into it applies exactly the caller's edit. The three-way
+  # path below would re-insert every tail edit, because the incoming text
+  # already carries them and the snapshot ancestor does not.
+  defp maybe_merge_crdt(
+         %Note{},
+         incoming_content,
+         user,
+         note_id,
+         _vault_id,
+         path,
+         %Yex.Doc{} = doc
+       ) do
+    with {:ok, merged} <- CrdtBridge.merge_plaintext_into_doc(doc, incoming_content),
+         do: crdt_merge_result(merged, user, note_id, path)
+  end
+
+  # A read-modify-write of a legacy row (no crdt_state) whose tail was empty
+  # when the new text was derived. A tail that appears since (a room's client
+  # seed plus keystrokes) is text the rebuild never saw, and diffing into it
+  # would delete those keystrokes: refuse, so the caller reads again.
+  defp maybe_merge_crdt(%Note{}, incoming_content, user, note_id, vault_id, path, :empty_tail) do
+    {:ok, doc} = CrdtBridge.doc_from_state(nil)
+
+    case CrdtPersistence.replay_tail(doc, user, note_id, vault_id) do
+      [] ->
+        with {:ok, merged} <- CrdtBridge.merge_plaintext_into_doc(doc, incoming_content),
+             do: crdt_merge_result(merged, user, note_id, path)
+
+      [_ | _] ->
+        {:error, :stale_tail}
+    end
+  end
+
+  defp maybe_merge_crdt(existing, incoming_content, user, note_id, vault_id, path, nil) do
     prior_state =
       case existing do
         %Note{} = note ->
@@ -2270,8 +2445,13 @@ defmodule Engram.Notes do
           end
       end
 
-    with {:ok, %{state: new_state, text: merged_text}} <- merge_result,
-         {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(new_state, user, note_id),
+    with {:ok, merged} <- merge_result, do: crdt_merge_result(merged, user, note_id, path)
+  catch
+    {:crdt_decrypt, err} -> err
+  end
+
+  defp crdt_merge_result(%{state: new_state, text: merged_text}, user, note_id, path) do
+    with {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(new_state, user, note_id),
          {:ok, key} <- Crypto.dek_content_hash_key(user) do
       {title, tags} = Helpers.extract_title_and_tags(merged_text, path)
 
@@ -2285,8 +2465,6 @@ defmodule Engram.Notes do
          tags: tags
        }}
     end
-  catch
-    {:crdt_decrypt, err} -> err
   end
 
   @doc """
@@ -2298,6 +2476,192 @@ defmodule Engram.Notes do
       {:ok, nil} -> {:error, :not_found}
       {:ok, note} -> {:ok, decrypt_or_raise!(note, user)}
       _ -> {:error, :not_found}
+    end
+  end
+
+  # get_note/3 plus the note's tail rows, from the same statement (see
+  # with_tail/1).
+  defp get_note_with_tail(user, vault, path) do
+    with {:ok, query} <- note_by_path_query(user, vault, path),
+         {:ok, {%Note{} = note, tail}} <-
+           Repo.with_tenant(user.id, fn -> query |> with_tail() |> Repo.one() |> tail_result() end) do
+      {:ok, decrypt_or_raise!(note, user), tail}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  # Selects the note row together with its tail (`crdt_update_log`, oldest
+  # first) in ONE statement, so both come from one snapshot. Read in two, a
+  # checkpoint committing in between (it rewrites crdt_state AND prunes the
+  # rows it folded) gives the old snapshot with no tail: edits vanish. Three
+  # array subqueries, aligned by the same total order.
+  defp with_tail(query) do
+    from(n in query,
+      select:
+        {n,
+         fragment(
+           "ARRAY(SELECT l.id FROM crdt_update_log l WHERE l.note_id = ? AND l.vault_id = ? ORDER BY l.inserted_at, l.id)",
+           n.id,
+           n.vault_id
+         ),
+         fragment(
+           "ARRAY(SELECT l.update_ciphertext FROM crdt_update_log l WHERE l.note_id = ? AND l.vault_id = ? ORDER BY l.inserted_at, l.id)",
+           n.id,
+           n.vault_id
+         ),
+         fragment(
+           "ARRAY(SELECT l.update_nonce FROM crdt_update_log l WHERE l.note_id = ? AND l.vault_id = ? ORDER BY l.inserted_at, l.id)",
+           n.id,
+           n.vault_id
+         )}
+    )
+  end
+
+  defp tail_result(nil), do: nil
+
+  defp tail_result({note, ids, cts, nonces}) do
+    rows =
+      [ids, cts, nonces]
+      |> Enum.zip()
+      |> Enum.map(fn {id, ct, nonce} ->
+        %{id: Ecto.UUID.load!(id), update_ciphertext: ct, update_nonce: nonce}
+      end)
+
+    {note, rows}
+  end
+
+  @doc """
+  Read-modify-write of the note at `path`: `rebuild` gets its current text from
+  the authority (`authoritative_doc/2`, #1159) and returns the new text, `{text,
+  meta}`, or `{:error, reason}` to refuse (nothing is written). Returns
+  `{result, meta}`, where `result` is `upsert_note/4`'s result,
+  `{:error, :not_found}`, `{:error, {:authority, reason}}` or the refusal.
+
+  Optimistic first: the read takes no lock, and the rebuild (a section parse
+  can take seconds), merge and encryption run unlocked. The write then re-reads
+  the row locked and writes only if it has not moved. If it moved, the read and
+  rebuild run again on the row locked by `get_note_for_update/3`, so a
+  concurrent writer of this note is never overwritten and never retried
+  against. A missing note returns `{:error, :not_found}` with the vault lock
+  held, so a caller that creates the note in the same transaction cannot race
+  another creator.
+
+  `opts` are `upsert_note/4`'s; `mtime:` defaults to the note's own.
+  """
+  @spec rmw_note(map(), map(), String.t(), (String.t() -> term()), keyword()) ::
+          {term(), term()}
+  def rmw_note(user, vault, path, rebuild, opts) do
+    Repo.with_tenant!(user.id, fn ->
+      with {:ok, note, tail} <- get_note_with_tail(user, vault, path),
+           {{:error, stale}, _} when stale in [:stale_note, :stale_tail] <-
+             rmw_attempt(user, vault, path, {note, tail}, rebuild, [expected_note: note] ++ opts) do
+        rmw_locked(user, vault, path, rebuild, opts)
+      else
+        {:error, :not_found} -> rmw_locked(user, vault, path, rebuild, opts)
+        done -> done
+      end
+    end)
+  end
+
+  defp rmw_locked(user, vault, path, rebuild, opts) do
+    case get_note_for_update(user, vault, path) do
+      {:ok, note} ->
+        locked = [locked_note: note] ++ opts
+
+        # The row lock does not block tail appends, so a legacy row's tail can
+        # still appear after this read. Read once more: it replays now, and
+        # nothing can prune it while we hold the row.
+        # The tail is read in its own statement here: nothing can prune it
+        # while we hold the row.
+        case rmw_attempt(user, vault, path, {note, :read}, rebuild, locked) do
+          {{:error, :stale_tail}, _} ->
+            rmw_attempt(user, vault, path, {note, :read}, rebuild, locked)
+
+          done ->
+            done
+        end
+
+      {:error, :not_found} = missing ->
+        {missing, nil}
+    end
+  end
+
+  defp rmw_attempt(user, vault, path, {note, tail}, rebuild, opts) do
+    tail =
+      if tail == :read,
+        do: CrdtPersistence.tail_rows(note.id, note.vault_id),
+        else: tail
+
+    case authority(user, note, tail) do
+      {:ok, current, doc} ->
+        rmw_write(
+          user,
+          vault,
+          path,
+          note,
+          rebuild.(current),
+          # No doc means a legacy row whose tail was empty at this read.
+          opts ++ [merge_doc: doc || :empty_tail, current_text: current]
+        )
+
+      {:error, reason} ->
+        {{:error, {:authority, reason}}, nil}
+    end
+  end
+
+  defp rmw_write(user, vault, path, note, rebuilt, opts) do
+    case rebuild_result(rebuilt) do
+      {:ok, content, meta} ->
+        {mtime, opts} = Keyword.pop(opts, :mtime)
+        attrs = %{"path" => path, "content" => content, "mtime" => mtime || note.mtime}
+        {upsert_note(user, vault, attrs, opts), meta}
+
+      {:error, _} = refused ->
+        {refused, nil}
+    end
+  end
+
+  defp rebuild_result(content) when is_binary(content), do: {:ok, content, nil}
+  defp rebuild_result({content, meta}) when is_binary(content), do: {:ok, content, meta}
+  defp rebuild_result({:error, _} = refused), do: refused
+
+  @doc """
+  `get_note/3` for a read-modify-write: the row comes back locked `FOR NO KEY
+  UPDATE` inside the caller's tenant transaction, so concurrent writers of this note
+  serialize behind it until that transaction commits. Raises outside one.
+
+  The vault row is locked first, in the same statement. Every other note writer
+  takes the vault's seq lock (`Vaults.next_seq!/2`) BEFORE it updates the note
+  row, so taking the note first would deadlock against them. Pass the result to
+  `upsert_note/4` as `locked_note:`.
+  """
+  @spec get_note_for_update(map(), map(), String.t()) :: {:ok, Note.t()} | {:error, :not_found}
+  def get_note_for_update(user, vault, path) do
+    unless Repo.in_transaction?() and Process.get(:engram_tenant) == user.id,
+      do:
+        raise(
+          ArgumentError,
+          "get_note_for_update/3 must run inside the user's tenant transaction"
+        )
+
+    with {:ok, query} <- note_by_path_query(user, vault, path),
+         locked = lock_for_write(query, vault.id),
+         # A miss is read again once. The statement's snapshot predates its
+         # wait on the vault lock, so a note another writer created while we
+         # waited is invisible to it. A fresh statement, with the vault lock
+         # now held, sees it, and nobody else can create the path after that.
+         %Note{} = note <- one_or_reread(locked) do
+      {:ok, decrypt_or_raise!(note, user)}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp one_or_reread(query) do
+    case Repo.one(query) do
+      nil -> Repo.one(query)
+      %Note{} = note -> note
     end
   end
 
@@ -2350,25 +2714,68 @@ defmodule Engram.Notes do
   """
   @spec authoritative_content(map(), Note.t()) :: {:ok, String.t()} | {:error, term()}
   def authoritative_content(user, %Note{} = note) do
+    with {:ok, text, _doc} <- authoritative_doc(user, note), do: {:ok, text}
+  end
+
+  @doc """
+  `authoritative_content/2` for a DECRYPTED note whose tail rows were read in
+  the same statement as the row (`fetch_note_with_tail_for_worker/2`), so the
+  row is not read a second time.
+  """
+  @spec authoritative_content(map(), Note.t(), [map()]) :: {:ok, String.t()} | {:error, term()}
+  def authoritative_content(user, %Note{} = note, tail) when is_list(tail) do
+    with {:ok, text, _doc} <- authority(user, note, tail), do: {:ok, text}
+  end
+
+  @doc """
+  `authoritative_content/2` plus the tail-replayed doc it projected (nil for a
+  row with no `crdt_state`). A read-modify-write on a row it holds locked passes
+  the doc to `upsert_note/4` as `merge_doc:`, so the write merges into the doc
+  the new text was derived from instead of replaying the tail a second time.
+  The doc is consumed by that merge; use it once.
+  """
+  @spec authoritative_doc(map(), Note.t()) ::
+          {:ok, String.t(), Yex.Doc.t() | nil} | {:error, term()}
+  def authoritative_doc(user, %Note{} = note) do
+    # The caller's row may predate a checkpoint, so read the snapshot again,
+    # with the tail, in one statement (with_tail/1).
+    query = from(n in Note, where: n.id == ^note.id and n.vault_id == ^note.vault_id)
+
+    case Repo.with_tenant(user.id, fn -> query |> with_tail() |> Repo.one() |> tail_result() end) do
+      {:ok, {%Note{} = fresh, tail}} -> authority(user, decrypt_or_raise!(fresh, user), tail)
+      {:ok, nil} -> {:error, :not_found}
+      {:error, _} = err -> err
+    end
+  end
+
+  # The authoritative text and doc of `note` given its tail rows, which must
+  # come from the same statement as `note` (or be read while it is locked).
+  defp authority(user, note, tail) do
     case Crypto.decrypt_crdt_state(note, user) do
       {:ok, nil} ->
-        {:ok, note.content || ""}
+        legacy_authority(user, note, tail)
 
       {:ok, state} ->
         with {:ok, doc} <- CrdtBridge.doc_from_state(state) do
-          # replay_tail reads crdt_update_log, which is tenant-scoped. Callers
-          # reach this from a controller rather than from inside upsert_note's
-          # transaction, so establish the tenant here.
-          Repo.with_tenant(user.id, fn ->
-            _replayed = CrdtPersistence.replay_tail(doc, user, note.id, note.vault_id)
-          end)
-
-          {:ok, CrdtBridge.project_doc(doc)}
+          _replayed = CrdtPersistence.apply_tail_rows(doc, user, note.id, tail)
+          {:ok, CrdtBridge.project_doc(doc), doc}
         end
 
       {:error, _} = err ->
         err
     end
+  end
+
+  # A row with no crdt_state: the facade is the text unless tail rows exist
+  # (bind seeds the full text into the tail before the first checkpoint). Then
+  # the tail IS the newer text, exactly as maybe_merge_crdt's nil-snapshot
+  # branch replays it, and the doc goes back so the merge diffs into it.
+  defp legacy_authority(user, note, tail) do
+    {:ok, doc} = CrdtBridge.doc_from_state(nil)
+
+    if CrdtPersistence.apply_tail_rows(doc, user, note.id, tail) == [],
+      do: {:ok, note.content || "", nil},
+      else: {:ok, CrdtBridge.project_doc(doc), doc}
   end
 
   @doc """
@@ -2451,6 +2858,27 @@ defmodule Engram.Notes do
   def fetch_note_for_worker(note_id, user_id) when is_binary(user_id) do
     result = Repo.with_tenant!(user_id, fn -> Repo.get(Note, note_id) end)
     classify_worker_note(note_id, result)
+  end
+
+  @doc """
+  `fetch_note_for_worker/2` plus the note's tail rows, from one statement (for
+  `authoritative_content/3`).
+  """
+  @spec fetch_note_with_tail_for_worker(String.t(), String.t()) ::
+          {:ok, Note.t(), [map()]} | {:discard, String.t()}
+  def fetch_note_with_tail_for_worker(note_id, user_id) when is_binary(user_id) do
+    query = from(n in Note, where: n.id == ^note_id)
+
+    row =
+      Repo.with_tenant!(user_id, fn -> query |> with_tail() |> Repo.one() |> tail_result() end)
+
+    case row do
+      {note, tail} ->
+        with {:ok, note} <- classify_worker_note(note_id, note), do: {:ok, note, tail}
+
+      nil ->
+        {:discard, "note #{note_id} not found"}
+    end
   end
 
   @doc """
@@ -2541,8 +2969,7 @@ defmodule Engram.Notes do
 
   `get_note/3` decrypts via `decrypt_or_raise!`, so probing existence with it
   raises on a note whose content is corrupt. Callers that only need the yes/no
-  — and especially `delete_note/4`, which itself never decrypts — use this so a
-  damaged note stays cleanable (#1660 follow-up).
+  use this so a damaged note stays cleanable (#1660 follow-up).
   """
   @spec note_exists?(Engram.Accounts.User.t(), map(), String.t()) :: boolean()
   def note_exists?(user, vault, path) do
@@ -3108,77 +3535,104 @@ defmodule Engram.Notes do
       X-Device-Id header), stamped into the `note_changed` broadcast so the
       originating device can drop its own echo (#970).
   """
-  @spec delete_note(map(), map(), String.t(), keyword()) :: :ok
+  @spec delete_note(Engram.Accounts.User.t(), map(), String.t(), keyword()) :: :ok
   def delete_note(user, vault, path, opts \\ []) do
-    now = DateTime.utc_now()
-
-    note =
-      case find_note_by_path(user, vault, path) do
-        {:ok, note} -> note
-        _ -> nil
-      end
-
-    # No-op deletes (unknown / already-deleted path) announce nothing (#971):
-    # nothing changed, and the empty-id delete events they used to fan out
-    # were pure noise at best (mirrors do_delete_attachment's `if deleted?`).
-    _ =
-      if note do
-        _ =
-          Repo.with_tenant(user.id, fn ->
-            seq = Engram.Vaults.next_seq!(vault.id)
-
-            {updated, _} =
-              from(n in Note, where: n.id == ^note.id and is_nil(n.deleted_at))
-              |> Repo.update_all(
-                set: [
-                  deleted_at: now,
-                  updated_at: now,
-                  seq: seq,
-                  embed_hash: nil,
-                  dense_indexed_hash: nil
-                ]
-              )
-
-            # Decrement by rows actually transitioned live → deleted, so a
-            # concurrent delete (already-nil deleted_at) can't double-count.
-            :ok = UsageMeters.dec_notes_count(user.id, updated)
-          end)
-
-        # `path` (the caller's own plaintext argument) is in scope here even
-        # though `note` itself is the raw undecrypted row — no extra decrypt
-        # needed to compute the basename hmac for DeleteNoteIndex's chained
-        # rebind (#591).
-        _ =
-          Enqueue.enqueue(
-            delete_note_index_job(note, Links.basename_hmac(user, Links.basename_key(path))),
-            "delete_note_index"
-          )
-
-        # Release the note's claim on its path. Projection never resurrects a
-        # deleted note (get_note_by_id is scoped_live, so the entry reads as an
-        # unknown note) — but a stale entry then warns and counts as
-        # `unresolved` on every checkpoint forever, which is how a real
-        # disagreement gets lost in noise.
-        #
-        # After the row is gone, not before: releasing is not a commit the way
-        # claiming is. A release that lands while the delete then fails would
-        # strand a LIVE note with no entry in the authority — and projection
-        # never acts on absence, so it would stay unclaimed forever.
-        #
-        # A job rather than an inline call, uniformly with the bulk paths: the
-        # enqueue joins whatever transaction the caller may have opened, so the
-        # release cannot outrun the delete, and a failure retries instead of
-        # being discarded. See ReleaseIndexEntries.
-        _ =
-          Enqueue.enqueue(
-            ReleaseIndexEntries.new_for(user.id, vault.id, [note.id]),
-            "release_index_entries"
-          )
-
-        broadcast_change(user.id, vault.id, "delete", path, note.id, opts)
-      end
-
+    _ = delete_note_reporting(user, vault, path, opts)
     :ok
+  end
+
+  @doc """
+  `delete_note/4`, reporting whether a live note was there: `:deleted` or
+  `:absent`. The find and the tombstone share one tenant transaction, so a
+  caller that needs the answer does not probe first.
+  """
+  @spec delete_note_reporting(map(), map(), String.t(), keyword()) :: :deleted | :absent
+  def delete_note_reporting(user, vault, path, opts \\ []) do
+    # Both HMACs before the transaction: a DekCache miss unwraps through KMS.
+    case note_by_path_query(user, vault, path) do
+      {:ok, query} ->
+        basename_hmac = Links.basename_hmac(user, Links.basename_key(path))
+
+        Repo.with_tenant!(user.id, fn ->
+          case Repo.one(query) do
+            %Note{} = note -> tombstone_note(user, vault, path, note, basename_hmac, opts)
+            nil -> :absent
+          end
+        end)
+
+      {:error, _} ->
+        :absent
+    end
+  end
+
+  # No-op deletes (unknown / already-deleted path) announce nothing (#971):
+  # nothing changed, and the empty-id delete events they used to fan out
+  # were pure noise at best (mirrors do_delete_attachment's `if deleted?`).
+  defp tombstone_note(user, vault, path, note, basename_hmac, opts) do
+    now = DateTime.utc_now()
+    seq = Engram.Vaults.next_seq!(vault.id)
+
+    {updated, _} =
+      from(n in Note, where: n.id == ^note.id and is_nil(n.deleted_at))
+      |> Repo.update_all(
+        set: [
+          deleted_at: now,
+          updated_at: now,
+          seq: seq,
+          embed_hash: nil,
+          dense_indexed_hash: nil
+        ]
+      )
+
+    # 0 rows: a concurrent delete won between our unlocked read and this
+    # UPDATE. Nothing changed here, so nothing is counted, enqueued or
+    # announced, and the caller hears :absent.
+    if updated == 0,
+      do: :absent,
+      else: finish_tombstone(user, vault, path, note, basename_hmac, opts)
+  end
+
+  defp finish_tombstone(user, vault, path, note, basename_hmac, opts) do
+    :ok = UsageMeters.dec_notes_count(user.id, 1)
+
+    :ok = stop_rooms_after_commit([note.id])
+
+    # `path` (the caller's own plaintext argument) gives the basename hmac for
+    # DeleteNoteIndex's chained rebind (#591) without decrypting the row.
+    _ = Enqueue.enqueue(delete_note_index_job(note, basename_hmac), "delete_note_index")
+
+    # Release the note's claim on its path. Projection never resurrects a
+    # deleted note (get_note_by_id is scoped_live, so the entry reads as an
+    # unknown note): but a stale entry then warns and counts as
+    # `unresolved` on every checkpoint forever, which is how a real
+    # disagreement gets lost in noise.
+    #
+    # After the row is gone, not before: releasing is not a commit the way
+    # claiming is. A release that lands while the delete then fails would
+    # strand a LIVE note with no entry in the authority, and projection
+    # never acts on absence, so it would stay unclaimed forever.
+    #
+    # A job rather than an inline call, uniformly with the bulk paths: the
+    # enqueue joins this transaction, so the release cannot outrun the
+    # delete, and a failure retries instead of being discarded. See
+    # ReleaseIndexEntries.
+    _ =
+      Enqueue.enqueue(
+        ReleaseIndexEntries.new_for(user.id, vault.id, [note.id]),
+        "release_index_entries"
+      )
+
+    broadcast_change(user.id, vault.id, "delete", path, note.id, opts)
+    :deleted
+  end
+
+  # A room open on a deleted note would keep taking writes and checkpoint them
+  # into the trashed row (content, seq bump, jobs, announce). Stop it once the
+  # tombstone commits; a rolled-back delete leaves it alone. Loss-free: the
+  # tail holds every update the room appended, and a later open of a deleted
+  # note is refused at bind.
+  defp stop_rooms_after_commit(note_ids) do
+    Repo.after_commit(fn -> Enum.each(note_ids, &Engram.Notes.CrdtRegistry.terminate_room/1) end)
   end
 
   @doc """
@@ -3271,6 +3725,7 @@ defmodule Engram.Notes do
                 )
 
               :ok = UsageMeters.dec_notes_count(user.id, updated)
+              :ok = stop_rooms_after_commit(ids)
 
               # Jobs insert inside the txn, so a failure rolls them back with
               # the tombstones. insert_all trades Enqueue.enqueue's per-job
@@ -4453,9 +4908,23 @@ defmodule Engram.Notes do
   """
   @spec folders_payload(Engram.Accounts.User.t(), map()) :: [map()]
   def folders_payload(user, vault) do
-    {:ok, folders} = list_folders_with_counts(user, vault)
-    markers = list_folder_markers(user, vault)
-    combine_folders_payload(folders, markers)
+    # One transaction for both reads; decrypt after it (no connection held
+    # across CPU work). No DEK means no notes, as in list_folders_with_counts/2.
+    case Crypto.get_dek(user) do
+      {:ok, dek} ->
+        {counts, markers} =
+          Repo.with_tenant!(user.id, fn ->
+            {raw_folder_count_rows(user, vault), raw_folder_marker_rows(user, vault)}
+          end)
+
+        combine_folders_payload(
+          decrypt_folder_count_rows(counts, dek),
+          decrypt_folder_marker_rows(markers, dek)
+        )
+
+      {:error, :no_dek} ->
+        []
+    end
   end
 
   @doc """
@@ -5490,6 +5959,7 @@ defmodule Engram.Notes do
             Enum.count(matches, fn r -> r.kind == "note" and MapSet.member?(deleted, r.id) end)
 
           if real_count > 0, do: :ok = UsageMeters.dec_notes_count(user.id, real_count)
+          :ok = stop_rooms_after_commit(MapSet.to_list(deleted))
           deleted
         end)
 
@@ -5631,7 +6101,10 @@ defmodule Engram.Notes do
   def batch_delete_folders(_user, _vault, []), do: {:ok, %{deleted: 0}}
 
   def batch_delete_folders(user, vault, marker_ids) when is_list(marker_ids) do
-    Repo.transaction(fn ->
+    # Owns the after_commit queue: the cascade stops the deleted notes' rooms
+    # only once this transaction really commits (a room stopped earlier can be
+    # re-bound to the still-live row and survive the delete).
+    Repo.transaction_after_commit(fn ->
       with {:ok, user} <- Crypto.ensure_user_dek(user),
            {:ok, dek} <- Crypto.get_dek(user) do
         # Resolve every marker first (cheap indexed lookups), then run ONE
@@ -5968,7 +6441,7 @@ defmodule Engram.Notes do
   end
 
   @spec broadcast_change(
-          Ecto.UUID.t(),
+          Ecto.UUID.t() | Engram.Accounts.User.t(),
           Ecto.UUID.t(),
           String.t(),
           String.t(),
@@ -6043,17 +6516,15 @@ defmodule Engram.Notes do
 
     _ =
       if length(ids) == 1 do
-        EngramWeb.Endpoint.broadcast(
-          "user:#{user.id}",
-          "vault_populated",
-          %{vault_id: vault.id}
-        )
+        Repo.after_commit(fn ->
+          EngramWeb.Endpoint.broadcast("user:#{user.id}", "vault_populated", %{vault_id: vault.id})
+        end)
       end
 
     :ok
   end
 
-  defp broadcast_change(user_id, vault_id, "upsert", path, %Note{} = note, opts) do
+  defp broadcast_change(user, vault_id, "upsert", path, %Note{} = note, opts) do
     # Protocol rev — dual-field transition: the payload carries BOTH
     # `content` and `content_hash` for one release. `content` is dropped the
     # release after the plugin min-version floor covers the hash-only
@@ -6088,6 +6559,7 @@ defmodule Engram.Notes do
     base = if is_binary(note.content), do: Map.put(base, "content", note.content), else: base
     payload = Helpers.scrub_broadcast_payload(base)
 
+    user_id = if is_binary(user), do: user, else: user.id
     topic = "sync:#{user_id}:#{vault_id}"
 
     _ =
@@ -6108,7 +6580,19 @@ defmodule Engram.Notes do
     # post-commit, best-effort. CRDT-origin writes never reach here (the
     # checkpoint writes the DB directly), so this fires solely for
     # REST/MCP/web/cascade writes — no double-delivery.
-    _ = CrdtDeliver.deliver_out(user_id, vault_id, path, note.id, note.content || "")
+    #
+    # After commit: the room push is a GenServer.call into a process with its
+    # own connection, which would wait on this transaction's row locks.
+    #
+    # A caller holding the user struct (upsert_note) also holds the full row
+    # it just wrote, so deliver-out takes both and reads neither back. Callers
+    # passing an id (rename, folder cascade) may hold a meta-only row whose
+    # crdt_state was never loaded, so deliver-out re-reads it.
+    deliver_note = if is_binary(user), do: note.id, else: note
+
+    Repo.after_commit(fn ->
+      CrdtDeliver.deliver_out(user, vault_id, path, deliver_note, note.content || "")
+    end)
 
     :ok
   end

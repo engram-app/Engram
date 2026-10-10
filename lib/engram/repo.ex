@@ -3,6 +3,8 @@ defmodule Engram.Repo do
     otp_app: :engram,
     adapter: Ecto.Adapters.Postgres
 
+  alias Engram.Logger.Metadata
+
   require Logger
 
   # MUST stay in lockstep with the set of tables that have ROW LEVEL SECURITY
@@ -85,9 +87,14 @@ defmodule Engram.Repo do
   so the bind value is the lower-case hyphenated UUID string.
 
   Wire shape: tenant + role drop are applied in ONE parameterized
-  `SELECT set_config(...)` (`set_config(..., true)` is exactly SET LOCAL)
-  and reset in one — hot requests open several tenant blocks, and the old
-  three-utility-statement shape was pure fixed overhead per block.
+  `SELECT set_config(...)` (`set_config(..., true)` is exactly SET LOCAL).
+  A top-level block costs three round trips: BEGIN, `tenant_enter`, COMMIT.
+  Both settings are transaction-scoped, so COMMIT or ROLLBACK resets them and
+  the pooled connection goes back clean (pinned on a real pool by
+  `Engram.Repo.TenantTxnCommitResetTest`). A block nested in a plain
+  `Repo.transaction/1` issues no BEGIN, COMMIT or SAVEPOINT: it joins the
+  outer transaction and costs two, `tenant_enter` and `tenant_exit`, the
+  reset clearing both before the outer transaction carries on (#1761).
 
   Re-entrant: a nested call for the SAME tenant inside an active
   with_tenant transaction runs `fun` directly (the settings are
@@ -95,6 +102,14 @@ defmodule Engram.Repo do
   shape-compatibility with the transactional path. A nested call for a
   DIFFERENT tenant raises — silently switching RLS identity
   mid-transaction is never legitimate.
+
+  A re-entrant call opens NO savepoint, and neither does a plain
+  `Repo.transaction/1` nested inside one. So `Repo.rollback/1` inside a nested
+  block does not return `{:error, _}` to that block's caller: it unwinds to the
+  OUTERMOST transaction and rolls the whole thing back (an MCP tool call is one
+  outer transaction). A failed statement poisons the outer transaction the same
+  way. Code that can run nested reports a refusal by returning `{:error, _}`,
+  not by rolling back, and must not write before deciding to refuse.
   """
   def with_tenant(tenant_id, fun) when is_binary(tenant_id) do
     case Ecto.UUID.cast(tenant_id) do
@@ -188,7 +203,72 @@ defmodule Engram.Repo do
     end
   end
 
-  defp run_with_tenant(uuid, fun) do
+  @doc """
+  Runs `fun` once the outermost `with_tenant/2` transaction commits.
+
+  Outside a tenant transaction it runs `fun` now. Inside one it queues `fun`;
+  the queue is dropped if that transaction rolls back or raises. Use it for
+  side effects other processes observe (broadcasts, room pushes, cache
+  evictions): fired before commit, a peer can act on, or re-cache, a row that
+  is not visible yet or never will be.
+
+  The callbacks run after commit, so a raise in one is logged (category
+  `:data`) and the rest still run: the write is durable, and failing the
+  caller would report it as lost.
+
+  Limit: a `with_tenant/2` nested in a plain `Repo.transaction` only joins that
+  transaction, so its callbacks run when the block returns, before the real
+  commit. Open such a transaction with `transaction_after_commit/1` instead.
+  """
+  @spec after_commit((-> any())) :: :ok
+  def after_commit(fun) when is_function(fun, 0) do
+    case Process.get(:engram_after_commit) do
+      nil ->
+        _ = fun.()
+        :ok
+
+      queue ->
+        Process.put(:engram_after_commit, [fun | queue])
+        :ok
+    end
+  end
+
+  @doc """
+  A plain `transaction/1` (no tenant) that owns the `after_commit/1` queue,
+  for a caller composing several `with_tenant/2` legs atomically: the legs'
+  callbacks run once THIS transaction commits, not when each leg returns.
+  """
+  @spec transaction_after_commit((-> any())) :: {:ok, any()} | {:error, any()}
+  def transaction_after_commit(fun) when is_function(fun, 0),
+    do: owning_after_commit(fn -> transaction(fun) end)
+
+  defp run_with_tenant(uuid, fun),
+    do: owning_after_commit(fn -> tenant_transaction(uuid, fun) end)
+
+  # Only the outermost transaction owns the queue. Re-entrant with_tenant calls
+  # never get here, so this is false only for one opened inside a queue owner.
+  defp owning_after_commit(txn) do
+    owner? = is_nil(Process.get(:engram_after_commit))
+
+    if owner?, do: Process.put(:engram_after_commit, [])
+
+    {result, callbacks} =
+      try do
+        {txn.(), Process.get(:engram_after_commit, [])}
+      after
+        if owner?, do: Process.delete(:engram_after_commit)
+      end
+
+    # The key is gone, so a callback that opens its own with_tenant gets a
+    # fresh transaction and its own queue.
+    if owner? and match?({:ok, _}, result), do: run_after_commit(callbacks)
+    result
+  end
+
+  defp tenant_transaction(uuid, fun) do
+    # Decided before the transaction opens: inside it, in_transaction? is
+    # always true.
+    exit_source = tenant_exit_source()
     Process.put(:engram_tenant, uuid)
 
     try do
@@ -220,28 +300,34 @@ defmodule Engram.Repo do
             )
 
           result = fun.()
-          # In Ecto Sandbox (tests), this transaction runs as a savepoint.
-          # PostgreSQL's transaction-local settings span the full outer
-          # transaction, so RELEASE SAVEPOINT would leak `engram_app` into
-          # the sandbox transaction. Resetting the role INSIDE the
-          # transaction (`set_config('role', 'none', true)` == SET LOCAL
-          # ROLE NONE) ensures the last local setting that persists is the
-          # default. The same holds in production whenever this block is
-          # nested inside a plain `Repo.transaction`.
+
+          # A block nested in a plain `Repo.transaction` joins the outer
+          # transaction (no SAVEPOINT; in the test sandbox it is a savepoint,
+          # which a SET LOCAL survives too), so nothing ends here and the
+          # SET LOCALs stay in force until the OUTER transaction ends. Such a
+          # block resets both settings itself (#1761): otherwise the rest of
+          # the outer transaction keeps the tenant scope and the engram_app
+          # role while the app believes it is unscoped.
+          # `set_config('role', 'none', true)` == SET LOCAL ROLE NONE; '' and
+          # not NULL for the tenant because the tenant policies never match ''
+          # and `api_keys_discovery` reads coalesce(..., '') = '' as "no
+          # tenant".
           #
-          # The tenant is cleared in the same round trip (#1761). Nested in a
-          # plain transaction this block is a savepoint too, and a SET LOCAL
-          # tenant would otherwise stay in force for the rest of the OUTER
-          # transaction while the app believes it is unscoped. '' and not NULL:
-          # the tenant policies never match '', and `api_keys_discovery` reads
-          # coalesce(..., '') = '' as "no tenant".
+          # A real top-level block skips it: its own COMMIT or ROLLBACK is the
+          # reset. That means such a block reaches COMMIT still as engram_app
+          # with the tenant set, while in the sandbox it reaches it reset. So
+          # a future DEFERRABLE constraint or deferred (constraint) trigger
+          # would run as the tenant in prod but as the session role in tests,
+          # and the suite would not see the difference. There are none today.
           _ =
-            query!(
-              "SELECT set_config('role', 'none', true), " <>
-                "set_config('app.current_tenant', '', true)",
-              [],
-              source: "tenant_exit"
-            )
+            if exit_source do
+              query!(
+                "SELECT set_config('role', 'none', true), " <>
+                  "set_config('app.current_tenant', '', true)",
+                [],
+                source: exit_source
+              )
+            end
 
           result
         end,
@@ -250,6 +336,52 @@ defmodule Engram.Repo do
     after
       Process.delete(:engram_tenant)
     end
+  end
+
+  # nil when this block opens the real top-level transaction (COMMIT resets
+  # everything, no statement needed); otherwise the span source of the reset.
+  #
+  # Fails closed: the reset is skipped only on `DBConnection.ConnectionPool`
+  # (DBConnection's default, and what prod runs), where a top-level
+  # transaction is known to be a real BEGIN. Any other pool keeps it.
+  #
+  # The test sandbox (`DBConnection.Ownership`) runs EVERY transaction as a
+  # savepoint inside the test's own, so there the reset stays: skipping it
+  # would leave engram_app as the role for the rest of the test. It gets its
+  # own source so query-budget tests can tell a sandbox-only round trip, which
+  # never happens in prod, from a real nested one.
+  defp tenant_exit_source do
+    if in_transaction?() do
+      "tenant_exit"
+    else
+      case Ecto.Adapter.lookup_meta(get_dynamic_repo()).opts[:pool] do
+        DBConnection.ConnectionPool -> nil
+        DBConnection.Ownership -> "tenant_exit_sandbox"
+        _unknown -> "tenant_exit"
+      end
+    end
+  end
+
+  defp run_after_commit(queue) do
+    queue
+    |> Enum.reverse()
+    |> Enum.each(fn fun ->
+      try do
+        fun.()
+      rescue
+        e -> log_after_commit_failure(Metadata.safe_reason(e))
+      catch
+        kind, reason ->
+          log_after_commit_failure("#{kind}: #{Metadata.safe_exit_reason(reason)}")
+      end
+    end)
+  end
+
+  defp log_after_commit_failure(reason) do
+    Logger.error(
+      "after_commit callback failed; the transaction had already committed",
+      Metadata.with_category(:error, :data, reason: reason)
+    )
   end
 
   @doc """
@@ -287,7 +419,7 @@ defmodule Engram.Repo do
 
           Logger.error(
             "tenant_guard_violation",
-            Engram.Logger.Metadata.with_category(:error, :boot, table: table_of(query))
+            Metadata.with_category(:error, :boot, table: table_of(query))
           )
 
           raise Engram.TenantError,

@@ -35,7 +35,6 @@ defmodule Engram.Workers.EmbedPriorityTest do
     test "carries an explicit priority through to the job" do
       changeset =
         EmbedNote.new_debounced(Ecto.UUID.generate(), Ecto.UUID.generate(),
-          clamp: false,
           priority: EmbedNote.backfill_priority()
         )
 
@@ -45,7 +44,6 @@ defmodule Engram.Workers.EmbedPriorityTest do
     test "a backfill-priority job is still a valid Oban changeset" do
       changeset =
         EmbedNote.new_debounced(Ecto.UUID.generate(), Ecto.UUID.generate(),
-          clamp: false,
           priority: EmbedNote.backfill_priority()
         )
 

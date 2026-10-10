@@ -5,7 +5,7 @@ defmodule Engram.MCP.Handlers do
   """
 
   alias Engram.MCP.{ParseGate, Sections}
-  alias Engram.{Notes, Search}
+  alias Engram.{Notes, Repo, Search}
   alias Engram.Notes.Frontmatter
 
   # #1710: every MCP note write is the "mcp" history actor. The
@@ -342,16 +342,14 @@ defmodule Engram.MCP.Handlers do
   # -- Write tools --
 
   def handle("create_note", user, vault, args) do
-    title = args["title"] || "Untitled"
+    title = title(args)
     content = args["content"] || ""
-    suggested_folder = args["suggested_folder"]
 
     folder =
-      if suggested_folder && suggested_folder != "" do
-        String.trim_trailing(suggested_folder, "/")
-      else
-        auto_place_folder(user, vault, title, content)
-      end
+      explicit_folder(args) ||
+        Map.get_lazy(args, :placed_folder, fn ->
+          auto_place_folder(user, vault, title, content)
+        end)
 
     filename = String.replace(title, "/", "-") <> ".md"
     path = if folder != "", do: "#{folder}/#{filename}", else: filename
@@ -425,52 +423,18 @@ defmodule Engram.MCP.Handlers do
     text = args["text"] || ""
 
     with {:ok, position} <- resolve_append_position(args["position"]) do
-      case Notes.get_note(user, vault, path) do
-        {:ok, _note} ->
-          # Read-modify-write via the CAS helper: a write landing between the
-          # read and the upsert must trigger a re-read + rebuild, not be
-          # deleted by the full-content merge (2026-07-07: MCP appends
-          # erased). The frontmatter-misparse guard runs INSIDE rebuild (not
-          # here) so it checks the content rmw_upsert actually rebuilds from
-          # on every attempt, including the post-conflict retry.
-          rmw_upsert(user, vault, path, fn content ->
-            case guard_start_frontmatter_safety(position, content, text) do
-              :ok -> place_text(content, text, position)
-              {:error, _msg} = error -> error
-            end
-          end)
-          |> upsert_reply(
-            [
-              ok: "Note appended to: #{path}",
-              conflict: "Note changed concurrently; retry: #{path}",
-              error: "Failed to append to note: #{path}"
-            ],
-            %{"path" => path, "created" => false}
-          )
-
-        {:error, :not_found} ->
-          content = "# #{Path.basename(path, ".md")}\n\n#{text}"
-
-          Notes.upsert_note(
-            user,
-            vault,
-            %{
-              "path" => path,
-              "content" => content,
-              "mtime" => now()
-            },
-            @write_opts
-          )
-          |> upsert_reply(
-            [
-              ok: "Note created: #{path}",
-              conflict: "Note changed on the server, retry: #{path}",
-              deleted: "Note was deleted: #{path}",
-              error: "Failed to create note: #{path}"
-            ],
-            %{"path" => path, "created" => true}
-          )
+      # The frontmatter-misparse guard runs INSIDE rebuild, so it checks the
+      # content rmw_upsert actually rebuilds from (the locked row's).
+      rebuild = fn content ->
+        case guard_start_frontmatter_safety(position, content, text) do
+          :ok -> place_text(content, text, position)
+          {:error, _msg} = error -> error
+        end
       end
+
+      # One transaction (re-entrant inside the MCP request's): a miss returns
+      # with the vault lock held, so the create below cannot race another.
+      Repo.with_tenant!(user.id, fn -> append_or_create(user, vault, path, text, rebuild) end)
     end
   end
 
@@ -565,18 +529,11 @@ defmodule Engram.MCP.Handlers do
   def handle("delete_note", user, vault, args) do
     path = args["path"] || ""
 
-    # `delete_note/4` is idempotent and always returns :ok, so it cannot tell
-    # us whether anything was there. The handler used to discard its result and
-    # announce "Note deleted" either way. Probe first so the payload can say
-    # which it was — the call still succeeds on a no-op, since an idempotent
-    # delete of an absent note is not a failure.
-    #
-    # `note_exists?/3`, NOT `get_note/3`: the latter decrypts and raises on a
-    # corrupt note, which would make a damaged note undeletable — the one case
-    # where you most want the delete to work. `delete_note/4` itself never
-    # decrypts, so the probe must not either.
-    existed? = Notes.note_exists?(user, vault, path)
-    :ok = Notes.delete_note(user, vault, path)
+    # The payload says whether anything was there; the call still succeeds on
+    # a no-op, since an idempotent delete of an absent note is not a failure.
+    # `delete_note_reporting/3` never decrypts, so a damaged note stays
+    # deletable (the one case where you most want the delete to work).
+    existed? = Notes.delete_note_reporting(user, vault, path) == :deleted
 
     text = if existed?, do: "Note deleted: #{path}", else: "No note at: #{path}"
     {:ok, text, %{"path" => path, "deleted" => existed?}}
@@ -796,9 +753,8 @@ defmodule Engram.MCP.Handlers do
   defp resolve_insert_position(p) when p in ["start", "end"], do: {:ok, p}
   defp resolve_insert_position(_), do: {:error, "position must be start or end"}
 
-  # Through rmw_upsert: the rebuild runs against the authority (#1159) on every
-  # attempt, and a missing heading refuses inside it, so nothing is written.
-  # One parse deadline for the whole call, retry included.
+  # Through rmw_upsert: the rebuild runs against the authority (#1159) of the
+  # locked row, and a missing heading refuses inside it, so nothing is written.
   defp insert_section(user, vault, path, heading, level, position, text) do
     gate = ParseGate.call_opts()
 
@@ -906,36 +862,67 @@ defmodule Engram.MCP.Handlers do
   end
 
   defp do_patch_text(user, vault, path, find, replace, occurrence, expected, op) do
-    with {:ok, note} <- Notes.get_note(user, vault, path),
-         {:ok, current} <- Notes.authoritative_content(user, note) do
-      hits = count_matches(current, find, 0, 0)
-      replaced = if occurrence == -1, do: hits, else: min(hits, 1)
-      grown = byte_size(current) + replaced * (byte_size(replace) - byte_size(find))
+    rebuild = fn current -> patched_text(current, path, {find, replace, occurrence}, expected) end
 
-      cond do
-        # Nothing was replaced, so the patch did not happen. Was `:ok`.
-        hits == 0 ->
-          {:error, "Text not found in #{path}"}
+    case rmw(user, vault, path, rebuild) do
+      {{:error, :not_found} = e, _} ->
+        read_error(e, op, path)
 
-        grown > Notes.max_note_bytes() ->
-          {:error, @too_large}
+      {{:error, {:authority, reason}}, _} ->
+        read_error({:error, reason}, op, path)
 
-        true ->
-          replace_and_write(
-            user,
-            vault,
-            path,
-            note,
-            current,
-            {find, replace, occurrence},
-            expected
-          )
-      end
-    else
-      {:error, :not_found} -> {:error, "Note not found: #{path}"}
-      {:error, reason} -> log_and_error(op, reason, "Could not read #{path}; retry")
+      {result, count} ->
+        upsert_reply(
+          result,
+          [
+            ok: "Replaced #{count} occurrence(s) in #{path}",
+            conflict: "Note changed concurrently; retry: #{path}",
+            error: "Failed to patch note: #{path}"
+          ],
+          %{"path" => path, "replacements" => count}
+        )
     end
   end
+
+  # The patch as a rebuild: `{new_text, count}` or `{:error, message}`.
+  defp patched_text(current, path, {find, replace, occurrence}, expected) do
+    hits = count_matches(current, find, 0, 0)
+    replaced = if occurrence == -1, do: hits, else: min(hits, 1)
+    grown = byte_size(current) + replaced * (byte_size(replace) - byte_size(find))
+
+    cond do
+      # Nothing was replaced, so the patch did not happen. Was `:ok`.
+      hits == 0 ->
+        {:error, "Text not found in #{path}"}
+
+      grown > Notes.max_note_bytes() ->
+        {:error, @too_large}
+
+      true ->
+        {new_content, count} = do_replace(current, find, replace, occurrence)
+
+        # `find` is present but the requested occurrence is past the last one,
+        # so do_replace/4 returns the content untouched. Rewriting the note with
+        # its own bytes and calling that success told the caller the patch
+        # landed. Same rule as the "Text not found" branch above.
+        cond do
+          count == 0 ->
+            {:error, "Occurrence #{occurrence} not found in #{path}"}
+
+          is_integer(expected) and expected != count ->
+            {:error,
+             "expected #{expected} replacement(s), found #{count} in #{path}; nothing was changed"}
+
+          true ->
+            {new_content, count}
+        end
+    end
+  end
+
+  defp read_error({:error, :not_found}, _op, path), do: {:error, "Note not found: #{path}"}
+
+  defp read_error({:error, reason}, op, path),
+    do: log_and_error(op, reason, "Could not read #{path}; retry")
 
   # Non-overlapping, left to right (String.split/2's count), without building
   # the parts: the size check runs before anything the size of the result.
@@ -943,26 +930,6 @@ defmodule Engram.MCP.Handlers do
     case :binary.match(content, find, scope: {from, byte_size(content) - from}) do
       {at, len} -> count_matches(content, find, at + len, n + 1)
       :nomatch -> n
-    end
-  end
-
-  defp replace_and_write(user, vault, path, note, current, {find, replace, occurrence}, expected) do
-    {new_content, count} = do_replace(current, find, replace, occurrence)
-
-    # `find` is present but the requested occurrence is past the last one,
-    # so do_replace/4 returns the content untouched. Rewriting the note with
-    # its own bytes and calling that success told the caller the patch
-    # landed. Same rule as the "Text not found" branch above.
-    cond do
-      count == 0 ->
-        {:error, "Occurrence #{occurrence} not found in #{path}"}
-
-      is_integer(expected) and expected != count ->
-        {:error,
-         "expected #{expected} replacement(s), found #{count} in #{path}; nothing was changed"}
-
-      true ->
-        patch_upsert(user, vault, path, note, new_content, count)
     end
   end
 
@@ -985,63 +952,63 @@ defmodule Engram.MCP.Handlers do
   end
 
   defp replace_section(user, vault, path, heading, new_content, level, op) do
-    with {:ok, note} <- Notes.get_note(user, vault, path),
-         {:ok, current} <- Notes.authoritative_content(user, note) do
-      case Sections.find(current, heading, level, ParseGate.call_opts()) do
-        :error ->
-          # The section was not updated, so this is not a success. Was `:ok`.
-          {:error, "Heading not found: #{String.duplicate("#", level)} #{heading}"}
+    rebuild = fn current -> replaced_section(current, heading, new_content, level) end
 
-        {:error, reason} ->
-          {:error, section_error(heading, reason)}
+    case rmw(user, vault, path, rebuild) do
+      {{:error, :not_found} = e, _} ->
+        read_error(e, op, path)
 
-        # Defense in depth: a heading-shaped line inside the section is not a
-        # heading in the parse (an unclosed block or %% comment hid it), so
-        # `stop` may not be a real section boundary. Replacing through it
-        # could silently delete what was hidden. Refuse; write nothing.
-        {:ok, %{hidden_heading_at: line}} when is_integer(line) ->
-          {:error, section_error(heading, {:hidden_heading, line})}
+      {{:error, {:authority, reason}}, _} ->
+        read_error({:error, reason}, op, path)
 
-        {:ok, %{start: s, stop: e, span: span}} ->
-          lines = String.split(current, "\n")
-          replacement = String.trim_trailing(new_content, "\n")
+      {result, _} ->
+        upsert_reply(
+          result,
+          [
+            ok: "Section '#{heading}' updated in #{path}",
+            conflict: "Note changed concurrently; retry: #{path}",
+            error: "Failed to update section in #{path}"
+          ],
+          %{"path" => path, "heading" => heading}
+        )
+    end
+  end
 
-          # `s + span` keeps the whole heading: span is 2+ for a setext
-          # heading (every paragraph line plus the underline), 1 for ATX.
-          # splice_eol/5 keeps the CRLF conversion LOCAL to `replacement`
-          # (and the one boundary line next to it, if replacing lands at end
-          # of file with no trailing newline) -- it never touches any other
-          # line in the note.
-          {lines, replacement} = Sections.splice_eol(lines, s + span, e, replacement, current)
+  # The section replacement as a rebuild: the new text or `{:error, message}`.
+  defp replaced_section(current, heading, new_content, level) do
+    case Sections.find(current, heading, level, ParseGate.call_opts()) do
+      :error ->
+        # The section was not updated, so this is not a success. Was `:ok`.
+        {:error, "Heading not found: #{String.duplicate("#", level)} #{heading}"}
 
-          final_content =
-            (Enum.slice(lines, 0, s + span) ++
-               [replacement] ++ Enum.drop(lines, e))
-            |> Enum.join("\n")
+      {:error, reason} ->
+        {:error, section_error(heading, reason)}
 
-          Notes.upsert_note(
-            user,
-            vault,
-            %{
-              "path" => path,
-              "content" => final_content,
-              "mtime" => now(),
-              "base_hash" => note.content_hash
-            },
-            @write_opts
-          )
-          |> upsert_reply(
-            [
-              ok: "Section '#{heading}' updated in #{path}",
-              conflict: "Note changed concurrently; retry: #{path}",
-              error: "Failed to update section in #{path}"
-            ],
-            %{"path" => path, "heading" => heading}
-          )
-      end
-    else
-      {:error, :not_found} -> {:error, "Note not found: #{path}"}
-      {:error, reason} -> log_and_error(op, reason, "Could not read #{path}; retry")
+      # Defense in depth: a heading-shaped line inside the section is not a
+      # heading in the parse (an unclosed block or %% comment hid it), so
+      # `stop` may not be a real section boundary. Replacing through it
+      # could silently delete what was hidden. Refuse; write nothing.
+      {:ok, %{hidden_heading_at: line}} when is_integer(line) ->
+        {:error, section_error(heading, {:hidden_heading, line})}
+
+      {:ok, %{start: s, stop: e, span: span}} ->
+        lines = String.split(current, "\n")
+        replacement = String.trim_trailing(new_content, "\n")
+
+        # `s + span` keeps the whole heading: span is 2+ for a setext
+        # heading (every paragraph line plus the underline), 1 for ATX.
+        # splice_eol/5 keeps the CRLF conversion LOCAL to `replacement`
+        # (and the one boundary line next to it, if replacing lands at end
+        # of file with no trailing newline) -- it never touches any other
+        # line in the note.
+        {lines, replacement} = Sections.splice_eol(lines, s + span, e, replacement, current)
+
+        final_content =
+          (Enum.slice(lines, 0, s + span) ++
+             [replacement] ++ Enum.drop(lines, e))
+          |> Enum.join("\n")
+
+        final_content
     end
   end
 
@@ -1091,51 +1058,60 @@ defmodule Engram.MCP.Handlers do
 
   # -- Private helpers --
 
-  @doc false
-  # Read-modify-write with compare-and-swap (Phase 0, identity-as-CRDT).
-  # Declares the read row's content_hash as `base_hash` so a write landing
-  # between the read and the upsert 409s instead of being deleted by the
-  # full-content merge, then retries ONCE on a fresh read. `rebuild` receives
-  # the current content and returns the new content (a binary), OR
-  # `{:error, reason}` to refuse the write entirely: rmw_upsert returns that
-  # error as-is and writes nothing. Because `rebuild` is invoked fresh on
-  # every attempt (including the retry, against the RE-READ content), any
-  # check a caller puts inside `rebuild` runs against the content actually
-  # being rebuilt from every time, not a snapshot read before rmw_upsert was
-  # called, which a concurrent write could have moved past. A guard failure
-  # is not a version conflict, so it never triggers the retry. Public (doc:
-  # false) so the CAS interleaving is unit-testable with a racing rebuild fun.
-  def rmw_upsert(user, vault, path, rebuild, attempt \\ 0) do
-    with {:ok, note} <- Notes.get_note(user, vault, path),
-         # Rebuild from the AUTHORITY, not the `notes.content` façade. The façade
-         # is materialized at checkpoint and lags a doc write, so rebuilding from
-         # it can commit a shorter or older body (#1159). base_hash still guards
-         # the concurrent-REST-write race, but it cannot detect façade lag:
-         # content and content_hash go stale together.
-         {:ok, current} <- Notes.authoritative_content(user, note),
-         {:ok, new_content} <- rebuild_or_refuse(rebuild.(current)) do
-      case Notes.upsert_note(
-             user,
-             vault,
-             %{
-               "path" => path,
-               "content" => new_content,
-               "mtime" => now(),
-               "base_hash" => note.content_hash
-             },
-             @write_opts
-           ) do
-        {:error, :version_conflict, _} when attempt == 0 ->
-          rmw_upsert(user, vault, path, rebuild, 1)
+  defp append_or_create(user, vault, path, text, rebuild) do
+    case rmw_upsert(user, vault, path, rebuild) do
+      {:error, :not_found} ->
+        content = "# #{Path.basename(path, ".md")}\n\n#{text}"
 
-        other ->
-          other
-      end
+        Notes.upsert_note(
+          user,
+          vault,
+          %{
+            "path" => path,
+            "content" => content,
+            "mtime" => now()
+          },
+          @write_opts
+        )
+        |> upsert_reply(
+          [
+            ok: "Note created: #{path}",
+            conflict: "Note changed on the server, retry: #{path}",
+            deleted: "Note was deleted: #{path}",
+            error: "Failed to create note: #{path}"
+          ],
+          %{"path" => path, "created" => true}
+        )
+
+      result ->
+        upsert_reply(
+          result,
+          [
+            ok: "Note appended to: #{path}",
+            conflict: "Note changed concurrently; retry: #{path}",
+            error: "Failed to append to note: #{path}"
+          ],
+          %{"path" => path, "created" => false}
+        )
     end
   end
 
-  defp rebuild_or_refuse(content) when is_binary(content), do: {:ok, content}
-  defp rebuild_or_refuse({:error, _reason} = error), do: error
+  @doc false
+  # Read-modify-write through `Notes.rmw_note/5` (optimistic unlocked rebuild,
+  # then a locked recompute if the row moved). `rebuild` receives the current
+  # content and returns the new content (a binary), OR `{:error, reason}` to
+  # refuse the write entirely: rmw_upsert returns that error as-is and writes
+  # nothing. Returns `{:error, :not_found}` for a missing note, with the vault
+  # lock held until the caller's transaction ends. Public (doc: false) for tests.
+  def rmw_upsert(user, vault, path, rebuild) do
+    case rmw(user, vault, path, rebuild) do
+      {{:error, {:authority, reason}}, _} -> {:error, reason}
+      {result, _meta} -> result
+    end
+  end
+
+  defp rmw(user, vault, path, rebuild),
+    do: Notes.rmw_note(user, vault, path, rebuild, [mtime: now()] ++ @write_opts)
 
   @doc false
   # Render Search.search/4 output for the search_notes tool. `names` maps
@@ -1593,28 +1569,6 @@ defmodule Engram.MCP.Handlers do
     end
   end
 
-  defp patch_upsert(user, vault, path, note, new_content, count) do
-    Notes.upsert_note(
-      user,
-      vault,
-      %{
-        "path" => path,
-        "content" => new_content,
-        "mtime" => now(),
-        "base_hash" => note.content_hash
-      },
-      @write_opts
-    )
-    |> upsert_reply(
-      [
-        ok: "Replaced #{count} occurrence(s) in #{path}",
-        conflict: "Note changed concurrently; retry: #{path}",
-        error: "Failed to patch note: #{path}"
-      ],
-      %{"path" => path, "replacements" => count}
-    )
-  end
-
   # A reason from deep in Notes/Folders/Attachments can carry decrypted struct
   # fields, so it is logged with a low-cardinality label and never rendered
   # into the response. Replaces four `inspect(reason)`-into-the-body sites.
@@ -1640,6 +1594,34 @@ defmodule Engram.MCP.Handlers do
     |> Enum.frequencies()
     |> Enum.sort_by(fn {_f, c} -> -c end)
   end
+
+  @doc """
+  The part of a tool call that does external I/O, run BEFORE the request
+  transaction opens (`EngramWeb.McpController`) so no pooled connection is
+  held across it. `create_note`'s auto-placement is a Voyage embed plus a
+  Qdrant query; its answer rides in `args` under the atom key
+  `:placed_folder`, which JSON arguments can never carry.
+  """
+  @spec before_txn(String.t(), map(), term(), map()) :: map()
+  def before_txn("create_note", user, vault, args) do
+    if explicit_folder(args),
+      do: args,
+      else:
+        Map.put(
+          args,
+          :placed_folder,
+          auto_place_folder(user, vault, title(args), args["content"] || "")
+        )
+  end
+
+  def before_txn(_tool, _user, _vault, args), do: args
+
+  defp title(args), do: args["title"] || "Untitled"
+
+  defp explicit_folder(%{"suggested_folder" => f}) when is_binary(f) and f != "",
+    do: String.trim_trailing(f, "/")
+
+  defp explicit_folder(_args), do: nil
 
   defp auto_place_folder(user, vault, title, content) do
     query =
