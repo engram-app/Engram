@@ -17,7 +17,7 @@ defmodule EngramWeb.Plugs.SettleUnreadBody do
 
   Considered and rejected: reading the raw body before auth, as Plug.Parsers
   does for JSON. It would buffer up to the ceiling per unauthenticated request
-  and bypass the plan's per-file read cap; draining discards in 1 MB reads.
+  and bypass the plan's per-file read cap; draining discards it in 64 KB reads.
 
   A declared length past the ceiling is never drained: the response is marked
   `connection: close` (HTTP/1; illegal in HTTP/2, RFC 9113 8.2.2) before
@@ -34,13 +34,12 @@ defmodule EngramWeb.Plugs.SettleUnreadBody do
 
   import Plug.Conn
 
-  @read 1_048_576
-
   # Wall-clock cap on the drain. 30 s carries the 11 MB ceiling at ~3 Mbit/s,
   # a slow but honest uplink. Past it Bandit's own cleanup (8 MB, 15 s per read)
   # takes over exactly as it would without this plug, so a slow client can hold
   # the connection at most 30 s longer than bare Bandit allows. The check runs
-  # between reads; a single 1 MB read is bounded only by Bandit's read timeout.
+  # between reads of one `read_length` (64 KB) each, so it is never stuck
+  # behind more than one read timeout.
   @drain_ms 30_000
 
   # Bandit's post-response cleanup reads up to this much more on its own
@@ -123,9 +122,9 @@ defmodule EngramWeb.Plugs.SettleUnreadBody do
   defp drain(conn, budget, _deadline) when budget <= 0, do: conn
 
   defp drain(conn, budget, deadline) do
-    read = min(budget, @read)
+    opts = EngramWeb.Endpoint.body_read_opts()
 
-    case read_body(conn, length: read, read_length: read) do
+    case read_body(conn, [length: min(budget, opts[:read_length])] ++ opts) do
       {:more, discard, conn} ->
         if System.monotonic_time(:millisecond) < deadline,
           do: drain(conn, budget - byte_size(discard), deadline),

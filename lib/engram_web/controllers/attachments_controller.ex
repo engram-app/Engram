@@ -170,7 +170,7 @@ defmodule EngramWeb.AttachmentsController do
   # arrived (deps/bandit/lib/bandit/http2/stream.ex:283). So `:more` with at
   # most `limit` bytes is a stalled client, not an oversized file.
   defp read_raw(conn, user, vault, params, limit, bound_by) do
-    case read_body(conn, length: limit + 1, read_length: 1_048_576) do
+    case read_raw_body(conn, limit + 1) do
       {_, body, conn} when byte_size(body) > limit ->
         conn |> too_large(limit, bound_by)
 
@@ -189,6 +189,19 @@ defmodule EngramWeb.AttachmentsController do
         |> put_status(400)
         |> json(%{error: "could not read request body"})
     end
+  end
+
+  # HTTP/1 Bandit raises on a read timeout instead of returning `:more`. A
+  # client that stops sending is a client condition, answered with the same
+  # 408 as the HTTP/2 `:more` case rather than surfacing as a crash. Any other
+  # Bandit error (a malformed chunk, a client that hung up) still raises.
+  defp read_raw_body(conn, length) do
+    read_body(conn, [length: length] ++ EngramWeb.Endpoint.body_read_opts())
+  rescue
+    e in Bandit.HTTPError ->
+      if e.plug_status == :request_timeout,
+        do: {:more, "", conn},
+        else: reraise(e, __STACKTRACE__)
   end
 
   defp too_large(conn, limit, :plan),
