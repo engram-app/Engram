@@ -44,6 +44,8 @@ defmodule Engram.Feedback do
         where: u.id == ^user.id,
         update: [set: [onboarding_profile: fragment("? || ?", u.onboarding_profile, ^stamped)]]
       )
+      # Same as Onboarding.set_profile/2: `users` is the tenant root, not a
+      # tenant-scoped table, and the write is keyed to the caller's own id.
       |> Repo.update_all([], skip_tenant_check: true)
 
       # Onboarding.status/1 reads the cached user row; without this the wizard

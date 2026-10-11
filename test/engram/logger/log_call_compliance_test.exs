@@ -42,6 +42,9 @@ defmodule Engram.Logger.LogCallComplianceTest do
   # flags 84 sites to protect 40 gets switched off. Widen this list rather than
   # adding exceptions to it.
   @content_paths [
+    # Carries user-written free text (survey detail, cancel note, feedback
+    # message), which can hold anything a note can.
+    "lib/engram/feedback.ex",
     # Egress sinks for exceptions raised over content (request params, job
     # args, decrypted notes). Their own log call renders an exception, so the
     # scan must see it go through SafeException.
