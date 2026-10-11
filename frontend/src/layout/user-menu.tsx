@@ -1,4 +1,5 @@
-import { LogOut, Monitor, Moon, Settings, Sun } from "lucide-react";
+import { LogOut, MessageSquare, Monitor, Moon, Settings, Sun } from "lucide-react";
+import { useState } from "react";
 import { Link, useLocation } from "react-router";
 import {
 	DropdownMenu,
@@ -13,6 +14,7 @@ import {
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
+import { FeedbackDialog } from "../feedback/feedback-dialog";
 import { isMember } from "../lib/is-member";
 import { settingsTo } from "../settings/settings-hash";
 import type { ThemeChoice } from "../theme/storage";
@@ -39,62 +41,77 @@ export default function UserMenu() {
 	const { theme, setTheme } = useTheme();
 	const location = useLocation();
 	const initial = user?.email?.[0]?.toUpperCase() ?? "?";
+	const [feedbackOpen, setFeedbackOpen] = useState(false);
 
 	return (
-		<DropdownMenu>
-			<DropdownMenuTrigger
-				aria-label={t("User menu")}
-				className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-			>
-				{user?.imageUrl ? (
-					<img src={user.imageUrl} alt="" className="size-9 rounded-full object-cover" />
-				) : (
-					<span className="flex size-9 items-center justify-center rounded-full bg-primary font-medium text-primary-foreground text-xs">
-						{initial}
-					</span>
-				)}
-			</DropdownMenuTrigger>
-			<DropdownMenuContent align="end" side="right" className="w-64 p-1.5">
-				<DropdownMenuLabel className="truncate px-3 py-2 font-normal text-muted-foreground text-sm">
-					{user?.email}
-				</DropdownMenuLabel>
-				<DropdownMenuSeparator />
-				<DropdownMenuItem asChild className="gap-2.5 px-3 py-2.5 text-sm">
-					<Link to={settingsTo("account", location.search)}>
-						<Settings className="size-4" />
-						{t("Settings")}
-					</Link>
-				</DropdownMenuItem>
-				<DropdownMenuSeparator />
-				<DropdownMenuLabel className="px-3 pt-2 pb-1 text-muted-foreground text-xs uppercase tracking-wide">
-					{t("Theme")}
-				</DropdownMenuLabel>
-				<DropdownMenuRadioGroup
-					value={theme}
-					onValueChange={(v) => {
-						if (isMember(THEME_KEYS, v)) {
-							setTheme(v);
-						}
-					}}
+		<>
+			<DropdownMenu>
+				<DropdownMenuTrigger
+					aria-label={t("User menu")}
+					className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
 				>
-					{THEME_OPTIONS.map(({ value, label, Icon }) => (
-						<DropdownMenuRadioItem key={value} value={value} className="gap-2.5 px-3 py-2 text-sm">
-							<Icon className="size-4" />
-							{t(label)}
-						</DropdownMenuRadioItem>
-					))}
-				</DropdownMenuRadioGroup>
-				<DropdownMenuSeparator />
-				<DropdownMenuItem
-					className="gap-2.5 px-3 py-2.5 text-sm"
-					onSelect={() => {
-						logout();
-					}}
-				>
-					<LogOut className="size-4" />
-					{t("Sign out")}
-				</DropdownMenuItem>
-			</DropdownMenuContent>
-		</DropdownMenu>
+					{user?.imageUrl ? (
+						<img src={user.imageUrl} alt="" className="size-9 rounded-full object-cover" />
+					) : (
+						<span className="flex size-9 items-center justify-center rounded-full bg-primary font-medium text-primary-foreground text-xs">
+							{initial}
+						</span>
+					)}
+				</DropdownMenuTrigger>
+				<DropdownMenuContent align="end" side="right" className="w-64 p-1.5">
+					<DropdownMenuLabel className="truncate px-3 py-2 font-normal text-muted-foreground text-sm">
+						{user?.email}
+					</DropdownMenuLabel>
+					<DropdownMenuSeparator />
+					<DropdownMenuItem asChild className="gap-2.5 px-3 py-2.5 text-sm">
+						<Link to={settingsTo("account", location.search)}>
+							<Settings className="size-4" />
+							{t("Settings")}
+						</Link>
+					</DropdownMenuItem>
+					<DropdownMenuItem
+						className="gap-2.5 px-3 py-2.5 text-sm"
+						onSelect={() => setFeedbackOpen(true)}
+					>
+						<MessageSquare className="size-4" />
+						{t("Send feedback")}
+					</DropdownMenuItem>
+					<DropdownMenuSeparator />
+					<DropdownMenuLabel className="px-3 pt-2 pb-1 text-muted-foreground text-xs uppercase tracking-wide">
+						{t("Theme")}
+					</DropdownMenuLabel>
+					<DropdownMenuRadioGroup
+						value={theme}
+						onValueChange={(v) => {
+							if (isMember(THEME_KEYS, v)) {
+								setTheme(v);
+							}
+						}}
+					>
+						{THEME_OPTIONS.map(({ value, label, Icon }) => (
+							<DropdownMenuRadioItem
+								key={value}
+								value={value}
+								className="gap-2.5 px-3 py-2 text-sm"
+							>
+								<Icon className="size-4" />
+								{t(label)}
+							</DropdownMenuRadioItem>
+						))}
+					</DropdownMenuRadioGroup>
+					<DropdownMenuSeparator />
+					<DropdownMenuItem
+						className="gap-2.5 px-3 py-2.5 text-sm"
+						onSelect={() => {
+							logout();
+						}}
+					>
+						<LogOut className="size-4" />
+						{t("Sign out")}
+					</DropdownMenuItem>
+				</DropdownMenuContent>
+			</DropdownMenu>
+			<FeedbackDialog open={feedbackOpen} onOpenChange={setFeedbackOpen} />
+		</>
 	);
 }
