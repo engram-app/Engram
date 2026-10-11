@@ -56,8 +56,10 @@ defmodule Engram.Feedback do
         capture(
           user,
           "onboarding_survey_answered",
+          # The slugs ride on the event as well as in $set: PostHog applies
+          # $set to the person and drops it from the stored event.
           fields
-          |> Map.take(["use_cases_detail", "heard_from_detail"])
+          |> Map.take(["heard_from", "use_cases", "use_cases_detail", "heard_from_detail"])
           |> Map.put("$set", Map.take(fields, ["heard_from", "use_cases"]))
         )
       end

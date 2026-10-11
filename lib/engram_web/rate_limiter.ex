@@ -33,6 +33,7 @@ defmodule EngramWeb.RateLimiter do
           | :ai_search
           | :mcp_complete
           | :analytics_activity
+          | :feedback
           | :other
 
   @doc """

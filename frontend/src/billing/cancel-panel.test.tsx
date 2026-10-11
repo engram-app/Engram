@@ -84,7 +84,7 @@ describe("CancelPanel", () => {
 		).toBeInTheDocument();
 	});
 
-	it("sends the picked reason before canceling", async () => {
+	it("sends the reason once the cancel succeeds", async () => {
 		post.mockResolvedValue({});
 		const onClose = vi.fn();
 		render(<CancelPanel detail={detail()} tier="pro" onClose={onClose} />, { wrapper: Wrapper });
@@ -121,6 +121,23 @@ describe("CancelPanel", () => {
 
 		fireEvent.change(box, { target: { value: "too pricey for me" } });
 		expect(cancelButton).toBeEnabled();
+	});
+
+	it("sends no reason when the cancel itself fails", async () => {
+		post.mockImplementation((path: string) =>
+			path === "/billing/cancel-subscription"
+				? Promise.reject(new Error("paddle down"))
+				: Promise.resolve({}),
+		);
+		render(<CancelPanel detail={detail()} tier="pro" onClose={vi.fn()} />, { wrapper: Wrapper });
+
+		fireEvent.click(screen.getByRole("radio", { name: /too expensive/iu }));
+		fireEvent.change(screen.getByLabelText(/tell us more/iu), { target: { value: "x" } });
+		fireEvent.click(screen.getByRole("button", { name: /cancel at period end/iu }));
+
+		await waitFor(() => expect(post).toHaveBeenCalledWith("/billing/cancel-subscription"));
+		await new Promise((r) => setTimeout(r, 0));
+		expect(post).not.toHaveBeenCalledWith("/feedback", expect.anything());
 	});
 
 	it("still cancels when the feedback call fails", async () => {

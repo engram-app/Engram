@@ -25,6 +25,17 @@ defmodule EngramWeb.FeedbackControllerTest do
     assert json_response(conn, 422)["error"] == "invalid_reason"
   end
 
+  test "429 once a user passes the hourly budget", %{conn: conn} do
+    for _ <- 1..20 do
+      assert conn
+             |> post("/api/feedback", %{"kind" => "general", "message" => "hi"})
+             |> json_response(200)
+    end
+
+    conn = post(conn, "/api/feedback", %{"kind" => "general", "message" => "hi"})
+    assert json_response(conn, 429) == %{"error" => "rate_limited"}
+  end
+
   test "401 without auth" do
     conn = post(build_conn(), "/api/feedback", %{"kind" => "general", "message" => "hi"})
     assert conn.status == 401

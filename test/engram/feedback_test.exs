@@ -58,6 +58,10 @@ defmodule Engram.FeedbackTest do
                "use_cases" => ["ai_memory", "other"]
              }
 
+      # On the event too, not only in $set: PostHog drops $set from the stored
+      # event, so event breakdowns would read null without these.
+      assert props["heard_from"] == "reddit"
+      assert props["use_cases"] == ["ai_memory", "other"]
       assert props["use_cases_detail"] == "a shared team wiki"
       assert props["heard_from_detail"] == "r/ObsidianMD thread"
     end

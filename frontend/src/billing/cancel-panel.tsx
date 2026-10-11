@@ -54,10 +54,12 @@ export default function CancelPanel({ detail, tier, onClose }: CancelPanelProps)
 		if (!canCancel) {
 			return;
 		}
-		// Fire-and-forget: a failed feedback call must never block the cancel.
-		submitFeedback.mutate({ kind: "cancel", reason, detail: text });
 		try {
 			await cancel.mutateAsync();
+			// Only once the cancel landed, so a failed or retried cancel never
+			// files a reason. Fire-and-forget: a React Query mutation outlives
+			// the panel unmounting below.
+			submitFeedback.mutate({ kind: "cancel", reason, detail: text });
 			toast.success(t("Subscription scheduled to cancel."));
 			onClose();
 		} catch {
