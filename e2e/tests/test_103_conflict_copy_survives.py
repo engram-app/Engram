@@ -6,7 +6,7 @@ plugin saves the local edit as a `(conflict ...)` sibling. It stamped that copy
 next manifest reconcile trashed it as server-deleted. The local edit, the
 thing keep-both exists to protect, ended up in the trash.
 
-Scenario: the note is edited while outgoing sync is paused, then deleted on
+Scenario: the note is edited with its modify event dropped, then deleted on
 the server. The live tombstone meets the unpushed edit and forces keep-both.
 """
 
@@ -51,11 +51,16 @@ async def test_conflict_copy_is_pushed_not_trashed(vault_a, cdp_a, api_sync):
         "window.__c103 = []; "
         "window.__c103Ref = app.vault.on('create', f => window.__c103.push(f.path)); true"
     )
-    # vault_write fires the modify event synchronously, so the paused handler
-    # drops it. The server delete lands inside the same pause, before any
-    # periodic scan can push the edit (a pause-then-resume-then-delete order
-    # let a scan push it under full-suite load, so no conflict formed).
-    await cdp_a.pause_outgoing_sync()
+    # Drop modify events for the ORIGINAL only, so its edit never pushes while
+    # the copy's own create event still reaches the real handler (the path
+    # users hit). vault_write fires the event synchronously, inside the stub,
+    # and the server delete lands before any periodic scan can push the edit.
+    p = json.dumps(path)
+    await cdp_a.evaluate(
+        f"(() => {{ const se = {se}; se.__orig103 = se.handleModify; "
+        f"se.handleModify = function (f) {{ if (f?.path !== {p}) return se.__orig103.call(this, f); }}; "
+        "return true; })()"
+    )
     try:
         await cdp_a.vault_write(path, edited)
         assert api_sync.delete_note(path) in (200, 204)
@@ -71,20 +76,24 @@ async def test_conflict_copy_is_pushed_not_trashed(vault_a, cdp_a, api_sync):
             )
             await asyncio.sleep(0.3)
     finally:
-        await cdp_a.resume_outgoing_sync()
-        await cdp_a.evaluate("app.vault.offref(window.__c103Ref); true")
+        await cdp_a.evaluate(
+            f"(() => {{ const se = {se}; if (se.__orig103) se.handleModify = se.__orig103; "
+            "delete se.__orig103; app.vault.offref(window.__c103Ref); return true; })()"
+        )
 
     # Vacuous-pass guard: without a copy this run never reached keep-both.
     assert copy, "server delete over an unpushed edit wrote no keep-both copy"
 
-    # A full sync runs the manifest reconcile that trashed the copy in #1931,
-    # and the push scan that must upload it.
-    await cdp_a.trigger_full_sync()
-    await asyncio.sleep(3)
-
-    assert (vault_a / copy).exists(), (
-        f"keep-both copy {copy} was removed from disk; the unpushed local edit "
-        "is now only in the trash (engram-app/Engram#1931)"
-    )
-    assert read_note(vault_a, copy) == edited
-    api_sync.wait_for_note(copy, timeout=30)
+    try:
+        # Uploaded by its own create event: catch-up never pushes.
+        api_sync.wait_for_note(copy, timeout=30)
+        # Catch-up runs the manifest reconcile that trashed the copy in #1931.
+        await cdp_a.trigger_catch_up()
+        assert (vault_a / copy).exists(), (
+            f"keep-both copy {copy} was removed from disk; the unpushed local edit "
+            "is now only in the trash (engram-app/Engram#1931)"
+        )
+        assert read_note(vault_a, copy) == edited
+    finally:
+        # The e2e vault is shared by the whole session; leave no stray copy.
+        api_sync.delete_note(copy)
