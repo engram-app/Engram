@@ -67,7 +67,7 @@
 					"a11y": {
 						"noLabelWithoutControl": {
 							"level": "error",
-							"options": { "inputComponents": ["Checkbox", "Input"] }
+							"options": { "inputComponents": ["Checkbox", "Input", "RadioGroupItem", "Textarea"] }
 						}
 					},
 					"complexity": {

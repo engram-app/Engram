@@ -8,6 +8,10 @@ vi.mock("../auth/use-auth-adapter", () => ({
 	useAuthAdapter: () => ({ user: { email: "todd@example.com" }, logout: vi.fn() }),
 }));
 
+vi.mock("../feedback/feedback-dialog", () => ({
+	FeedbackDialog: ({ open }: { open: boolean }) => (open ? <p>feedback dialog open</p> : null),
+}));
+
 function renderUserMenu() {
 	return render(
 		<ThemeProvider>
@@ -51,5 +55,14 @@ describe("UserMenu — theme row", () => {
 			"aria-checked",
 			"true",
 		);
+	});
+});
+
+describe("UserMenu — feedback", () => {
+	it("opens the feedback dialog from the menu", () => {
+		renderUserMenu();
+		openMenu();
+		fireEvent.click(screen.getByRole("menuitem", { name: /send feedback/iu }));
+		expect(screen.getByText("feedback dialog open")).toBeInTheDocument();
 	});
 });

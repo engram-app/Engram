@@ -1471,6 +1471,19 @@ export function useSetOnboardingProfile() {
 	});
 }
 
+export type FeedbackBody =
+	| { kind: "onboarding"; heard_from?: string; use_cases?: string[]; detail?: string }
+	| { kind: "cancel"; reason: string; detail?: string }
+	| { kind: "general"; message: string };
+
+// User-voice answers -> backend -> PostHog (server-side, so ad blockers can't
+// drop them). Callers treat failure as non-fatal: an answer never blocks flow.
+export function useSubmitFeedback() {
+	return useMutation({
+		mutationFn: (body: FeedbackBody) => api.post<{ status: "ok" }>("/feedback", body),
+	});
+}
+
 // API key result shape — created by useCreatePat below; kept as a named
 // type because the reveal modal in settings/connections-page.tsx imports it.
 
