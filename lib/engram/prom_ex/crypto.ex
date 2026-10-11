@@ -20,7 +20,8 @@ defmodule Engram.PromEx.Crypto do
       every reason change.
     * `[:ex_aws, :request, :stop]`: ExAws's own span, one per HTTP attempt,
       metadata `%{service: atom(), operation: String.t(), result: :ok |
-      :error}`. Kept only for `service: :kms`.
+      :error, error: term()}`. Kept only for `service: :kms` attempts that
+      got an HTTP response (`:ok`, or `error` is the response body).
     * `[:engram, :crypto, :kms, :failure]`: `%{count: 1}`, metadata
       `%{op: atom(), error_class: atom()}`, from `Engram.AwsKms.ExAws`.
 
@@ -38,10 +39,14 @@ defmodule Engram.PromEx.Crypto do
       (five atoms); the series at 1 is the current reason.
     * `engram_prom_ex_crypto_kms_requests_total`: tags `[:operation,
       :result]`. KMS bills per request (free tier 20k/month), so alert on
-      its 30d run rate (#1871). Per attempt, so ExAws's 5xx retries count.
+      its 30d run rate (#1871). Per attempt, so ExAws's 5xx retries count;
+      transport failures (refused, DNS, TLS) never reached AWS and do not.
       Counts only the app's own calls; ECS secret decrypts and terraform
       refreshes are invisible here (CloudTrail).
     * `engram_prom_ex_crypto_kms_failures_total`: tags `[:op, :error_class]`.
+      Per `Engram.AwsKms.ExAws` call, not per attempt, so do not divide it
+      by `kms_requests_total`. `error_class: :exception` includes raises
+      before any request (missing key id).
 
   The `:engram` events are also declared in `EngramWeb.Telemetry.metrics/0`
   (KMS excepted), but that list feeds LiveDashboard only — this plugin is what gets
@@ -113,16 +118,22 @@ defmodule Engram.PromEx.Crypto do
           metric_prefix ++ [:kms, :requests, :total],
           event_name: @kms_attempt_event,
           description: "KMS HTTP requests (billed attempts) by operation and result.",
-          keep: &(&1[:service] == :kms),
+          keep: &billed_kms_attempt?/1,
           tags: [:operation, :result]
         ),
         counter(
           metric_prefix ++ [:kms, :failures, :total],
           event_name: @kms_failure_event,
-          description: "Failed KMS calls by op and error class.",
+          description: "Failed KmsExAws calls (not attempts) by op and error class.",
           tags: [:op, :error_class]
         )
       ]
     )
   end
+
+  # ExAws puts the response body (a binary) in `error` when AWS answered
+  # with a 4xx/5xx, and the transport error otherwise.
+  defp billed_kms_attempt?(%{service: :kms, result: :ok}), do: true
+  defp billed_kms_attempt?(%{service: :kms, error: body}) when is_binary(body), do: true
+  defp billed_kms_attempt?(_meta), do: false
 end

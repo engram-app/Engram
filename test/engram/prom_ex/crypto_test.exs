@@ -75,7 +75,8 @@ defmodule Engram.PromEx.CryptoTest do
     # KMS bills per HTTP request; without this counter the first signal of a
     # free-tier overrun was an AWS billing email (#1871). It hangs off
     # ExAws's per-attempt span, not our per-call event, so server-error
-    # retries count and calls that never reached AWS do not.
+    # retries count. Attempts with no HTTP response (refused, DNS, TLS)
+    # are not billed and are filtered out.
     test "declares a KMS-only per-attempt request counter on [:ex_aws, :request, :stop]" do
       metrics =
         CryptoPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
@@ -88,8 +89,10 @@ defmodule Engram.PromEx.CryptoTest do
       assert %Telemetry.Metrics.Counter{} = m
       assert m.event_name == [:ex_aws, :request, :stop]
       assert m.tags == [:operation, :result]
-      assert m.keep.(%{service: :kms})
-      refute m.keep.(%{service: :s3})
+      assert m.keep.(%{service: :kms, result: :ok})
+      assert m.keep.(%{service: :kms, result: :error, error: ~s({"__type":"X"})})
+      refute m.keep.(%{service: :kms, result: :error, error: %{reason: :econnrefused}})
+      refute m.keep.(%{service: :s3, result: :ok})
     end
 
     test "declares an op/error_class-tagged counter on [:engram, :crypto, :kms, :failure]" do
