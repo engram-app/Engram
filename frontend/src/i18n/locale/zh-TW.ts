@@ -1293,6 +1293,7 @@ export default {
 	"Changes can't be saved: your account can't sync right now.":
 		"無法儲存變更：您的帳戶目前無法同步。",
 	"Why are you canceling?": "你為什麼要取消？",
+	"Why are you deleting your account?": "你為什麼要刪除帳號？",
 	"Send feedback": "傳送意見回饋",
 	"What will you use Engram for?": "你打算用 Engram 做什麼？",
 	"How did you hear about Engram?": "你是如何得知 Engram 的？",

@@ -1330,6 +1330,7 @@ export default {
 	"Changes can't be saved: your account can't sync right now.":
 		"변경 사항을 저장할 수 없습니다: 지금은 계정을 동기화할 수 없습니다.",
 	"Why are you canceling?": "해지하시는 이유가 무엇인가요?",
+	"Why are you deleting your account?": "계정을 삭제하시는 이유가 무엇인가요?",
 	"Send feedback": "피드백 보내기",
 	"What will you use Engram for?": "Engram을 어디에 사용하실 건가요?",
 	"How did you hear about Engram?": "Engram을 어떻게 알게 되셨나요?",

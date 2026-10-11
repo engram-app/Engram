@@ -1290,6 +1290,7 @@ export default {
 	"Changes can't be saved: your account can't sync right now.":
 		"无法保存更改：您的账户当前无法同步。",
 	"Why are you canceling?": "你为什么要取消？",
+	"Why are you deleting your account?": "你为什么要删除账号？",
 	"Send feedback": "发送反馈",
 	"What will you use Engram for?": "你打算用 Engram 做什么？",
 	"How did you hear about Engram?": "你是如何了解到 Engram 的？",

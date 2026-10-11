@@ -121,6 +121,38 @@ defmodule Engram.FeedbackTest do
     end
   end
 
+  describe "delete_account" do
+    test "captures the reason anonymously so account erasure does not delete it",
+         %{user: user} do
+      assert :ok =
+               Feedback.submit(user, "delete_account", %{
+                 "reason" => "switched_tool",
+                 "detail" => " went back to plain Obsidian "
+               })
+
+      assert_receive {:posthog,
+                      %{
+                        "event" => "account_delete_reason",
+                        "distinct_id" => distinct_id,
+                        "properties" => props
+                      }},
+                     1_000
+
+      refute distinct_id == Engram.Observability.PostHog.analytics_id(user.email)
+      assert props["reason"] == "switched_tool"
+      assert props["detail"] == "went back to plain Obsidian"
+      assert props["$process_person_profile"] == false
+      refute Map.has_key?(props, "$set")
+    end
+
+    test "requires a known reason", %{user: user} do
+      assert {:error, :invalid_reason} = Feedback.submit(user, "delete_account", %{})
+
+      assert {:error, :invalid_reason} =
+               Feedback.submit(user, "delete_account", %{"reason" => "meh"})
+    end
+  end
+
   describe "general" do
     test "captures the message", %{user: user} do
       assert :ok = Feedback.submit(user, "general", %{"message" => "  search misses tags  "})

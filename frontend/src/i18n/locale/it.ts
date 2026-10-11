@@ -1429,6 +1429,7 @@ export default {
 	"Changes can't be saved: your account can't sync right now.":
 		"Impossibile salvare le modifiche: al momento il tuo account non può sincronizzarsi.",
 	"Why are you canceling?": "Perché stai annullando?",
+	"Why are you deleting your account?": "Perché stai eliminando il tuo account?",
 	"Send feedback": "Invia un feedback",
 	"What will you use Engram for?": "Per cosa userai Engram?",
 	"How did you hear about Engram?": "Come hai conosciuto Engram?",

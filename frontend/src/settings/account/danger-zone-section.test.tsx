@@ -17,6 +17,20 @@ vi.mock("@clerk/react/errors", () => ({
 	isReverificationCancelledError: vi.fn(() => false),
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+const submitFeedback = vi.fn().mockResolvedValue({ status: "ok" });
+vi.mock("../../api/queries", () => ({
+	useSubmitFeedback: () => ({ mutateAsync: submitFeedback, isPending: false }),
+}));
+
+function fillForm({ reason = true, detail = "too slow on my phone" } = {}) {
+	if (reason) {
+		fireEvent.click(screen.getByRole("radio", { name: /switched to another tool/iu }));
+	}
+	fireEvent.change(screen.getByLabelText(/tell us more/iu), { target: { value: detail } });
+	fireEvent.change(screen.getByLabelText(/type .*delete my account/iu), {
+		target: { value: "delete my account" },
+	});
+}
 
 describe("DangerZoneSection", () => {
 	beforeEach(() => {
@@ -29,29 +43,51 @@ describe("DangerZoneSection", () => {
 		render(<DangerZoneSection />);
 		const btn = screen.getByRole("button", { name: /delete my account/iu });
 		expect(btn).toBeDisabled();
-		fireEvent.change(screen.getByLabelText(/type .*delete my account/iu), {
-			target: { value: "delete my account" },
-		});
+		fillForm();
 		expect(btn).toBeEnabled();
 	});
 
-	it("calls user.delete then signs out when confirmed", async () => {
+	it("keeps delete disabled without a reason", () => {
 		render(<DangerZoneSection />);
-		fireEvent.change(screen.getByLabelText(/type .*delete my account/iu), {
-			target: { value: "delete my account" },
-		});
+		fillForm({ reason: false });
+		expect(screen.getByRole("button", { name: /delete my account/iu })).toBeDisabled();
+	});
+
+	it("keeps delete disabled when the detail is only whitespace", () => {
+		render(<DangerZoneSection />);
+		fillForm({ detail: "   " });
+		expect(screen.getByRole("button", { name: /delete my account/iu })).toBeDisabled();
+	});
+
+	it("sends the reason before deleting, then signs out", async () => {
+		render(<DangerZoneSection />);
+		fillForm({ detail: "  too slow on my phone  " });
 		fireEvent.click(screen.getByRole("button", { name: /delete my account/iu }));
 		await waitFor(() => expect(user.delete).toHaveBeenCalled());
+		expect(submitFeedback).toHaveBeenCalledWith({
+			kind: "delete_account",
+			reason: "switched_tool",
+			detail: "too slow on my phone",
+		});
+		expect(submitFeedback.mock.invocationCallOrder[0]).toBeLessThan(
+			vi.mocked(user.delete).mock.invocationCallOrder[0] ?? 0,
+		);
 		await waitFor(() => expect(signOut).toHaveBeenCalledWith({ redirectUrl: "/sign-in" }));
+	});
+
+	it("still deletes when sending the reason fails", async () => {
+		submitFeedback.mockRejectedValueOnce(new Error("offline"));
+		render(<DangerZoneSection />);
+		fillForm();
+		fireEvent.click(screen.getByRole("button", { name: /delete my account/iu }));
+		await waitFor(() => expect(user.delete).toHaveBeenCalled());
 	});
 
 	it("does not toast an error when reverification is cancelled", async () => {
 		user = makeUser({ delete: vi.fn().mockRejectedValue(new Error("cancelled")) });
 		vi.mocked(isReverificationCancelledError).mockReturnValue(true);
 		render(<DangerZoneSection />);
-		fireEvent.change(screen.getByLabelText(/type .*delete my account/iu), {
-			target: { value: "delete my account" },
-		});
+		fillForm();
 		fireEvent.click(screen.getByRole("button", { name: /delete my account/iu }));
 		await waitFor(() => expect(user.delete).toHaveBeenCalled());
 		expect(toast.error).not.toHaveBeenCalled();

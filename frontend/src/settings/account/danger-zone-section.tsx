@@ -4,8 +4,10 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { EMPTY_REASON, ReasonFields, reasonComplete } from "@/feedback/reason-fields";
 import { useT } from "@/i18n/locale-provider";
 import { ROUTES } from "@/routes";
+import { useSubmitFeedback } from "../../api/queries";
 
 const CONFIRM = "delete my account";
 export function DangerZoneSection() {
@@ -13,6 +15,8 @@ export function DangerZoneSection() {
 	const { user, isLoaded } = useUser();
 	const clerk = useClerk();
 	const [phrase, setPhrase] = useState("");
+	const [answer, setAnswer] = useState(EMPTY_REASON);
+	const submitFeedback = useSubmitFeedback();
 	const remove = useReverification(() => user!.delete());
 
 	if (!(isLoaded && user)) {
@@ -20,6 +24,18 @@ export function DangerZoneSection() {
 	}
 
 	async function onDelete() {
+		if (!answer.reason) {
+			return;
+		}
+		// Before the delete: once the account is gone there is no session to
+		// send it with. A failed send must not block the delete.
+		await submitFeedback
+			.mutateAsync({
+				kind: "delete_account",
+				reason: answer.reason,
+				detail: answer.detail.trim(),
+			})
+			.catch(() => undefined);
 		try {
 			await remove();
 			await clerk.signOut({ redirectUrl: ROUTES.SIGN_IN });
@@ -40,11 +56,17 @@ export function DangerZoneSection() {
 				</p>
 			</header>
 			<form
+				className="space-y-4"
 				onSubmit={(e) => {
 					e.preventDefault();
 					onDelete();
 				}}
 			>
+				<ReasonFields
+					legend={t("Why are you deleting your account?")}
+					value={answer}
+					onChange={setAnswer}
+				/>
 				<label className="block font-medium text-foreground text-sm">
 					{t("Type \u0022{phrase}\u0022 to confirm", { phrase: CONFIRM })}
 					<Input
@@ -53,9 +75,15 @@ export function DangerZoneSection() {
 						onChange={(e) => setPhrase(e.target.value)}
 					/>
 				</label>
-				<Button className="mt-4" type="submit" variant="destructive" disabled={phrase !== CONFIRM}>
-					{t("Delete my account")}
-				</Button>
+				<footer className="flex justify-end">
+					<Button
+						type="submit"
+						variant="destructive"
+						disabled={phrase !== CONFIRM || !reasonComplete(answer) || submitFeedback.isPending}
+					>
+						{t("Delete my account")}
+					</Button>
+				</footer>
 			</form>
 		</section>
 	);

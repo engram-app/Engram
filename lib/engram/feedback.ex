@@ -1,7 +1,8 @@
 defmodule Engram.Feedback do
   @moduledoc """
   User-voice answers: how a signup heard about us and what they want Engram for
-  (asked on `/onboard/tools`), why a subscriber cancels, and free-form feedback.
+  (asked on `/onboard/about`), why a subscriber cancels or deletes their account,
+  and free-form feedback.
 
   Every answer goes to PostHog server-side (ad blockers cannot drop it), with
   the slugs also set as person properties so dashboards can break funnels down
@@ -77,6 +78,27 @@ defmodule Engram.Feedback do
   end
 
   def submit(_user, "cancel", _params), do: {:error, :invalid_reason}
+
+  # Anonymous on purpose: account erasure deletes the person AND their events
+  # from PostHog, which would take this answer with it. A fresh distinct_id
+  # with no person profile keeps the reason and drops who gave it.
+  def submit(_user, "delete_account", %{"reason" => reason} = params)
+      when reason in @cancel_reasons do
+    PostHog.capture(
+      Ecto.UUID.generate(),
+      "account_delete_reason",
+      Map.reject(
+        %{
+          "reason" => reason,
+          "detail" => text(params["detail"]),
+          "$process_person_profile" => false
+        },
+        fn {_k, v} -> is_nil(v) end
+      )
+    )
+  end
+
+  def submit(_user, "delete_account", _params), do: {:error, :invalid_reason}
 
   def submit(user, "general", params) do
     case text(params["message"]) do
