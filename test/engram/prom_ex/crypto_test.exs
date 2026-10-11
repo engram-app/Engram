@@ -72,6 +72,20 @@ defmodule Engram.PromEx.CryptoTest do
              end)
     end
 
+    # KMS bills per request; without this counter the first signal of a
+    # free-tier overrun was an AWS billing email (#1871).
+    test "declares an op/status-tagged counter on [:engram, :crypto, :kms, :request]" do
+      metrics =
+        CryptoPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+
+      assert Enum.any?(metrics, fn m ->
+               match?(%Telemetry.Metrics.Counter{}, m) and
+                 m.name == [:engram, :prom_ex, :crypto, :kms, :requests, :total] and
+                 m.event_name == [:engram, :crypto, :kms, :request] and
+                 m.tags == [:op, :status]
+             end)
+    end
+
     test "no per-tenant tags" do
       metrics =
         CryptoPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
