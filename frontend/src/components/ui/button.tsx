@@ -14,8 +14,10 @@ const buttonVariants = cva(
 					"border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
 				ghost:
 					"hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:hover:bg-muted/50",
+				// Outline-shaped like its neighbours; the red border alone carries
+				// "dangerous". Red text on a red tint read as muddy on dark.
 				destructive:
-					"bg-destructive/10 text-destructive hover:bg-destructive/20 focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40",
+					"border-destructive/60 bg-background text-foreground hover:bg-destructive/15 focus-visible:border-destructive focus-visible:ring-destructive/20 dark:bg-input/30 dark:hover:bg-destructive/25 dark:focus-visible:ring-destructive/40",
 				link: "text-primary underline-offset-4 hover:underline",
 			},
 			size: {
