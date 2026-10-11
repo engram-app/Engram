@@ -85,7 +85,7 @@ export default function CancelPanel({ detail, tier, onClose }: CancelPanelProps)
 				<li>{t("You can reverse this any time before the effective date.")}</li>
 			</ul>
 			<ReasonFields legend={t("Why are you canceling?")} value={answer} onChange={setAnswer} />
-			<footer className="flex justify-end gap-2">
+			<footer className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
 				<Button variant="outline" onClick={onClose} disabled={cancel.isPending}>
 					{t("Keep my subscription")}
 				</Button>
