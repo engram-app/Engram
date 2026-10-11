@@ -20,10 +20,10 @@ export const HEARD_FROM: FeedbackOption[] = [
 ];
 
 export const USE_CASES: FeedbackOption[] = [
-	{ slug: "ai_memory", label: msg("Give my AI tools memory of my notes") },
+	{ slug: "ai_memory", label: msg("AI memory") },
 	{ slug: "obsidian_sync", label: msg("Sync Obsidian across devices") },
 	{ slug: "web_access", label: msg("Read and edit notes in a browser") },
-	{ slug: "search", label: msg("Search my notes by meaning") },
+	{ slug: "search", label: msg("Better Obsidian search") },
 	{ slug: "backup", label: msg("Back up my vault") },
 	{ slug: "sharing", label: msg("Share notes with others") },
 	{ slug: "other", label: msg("Something else") },

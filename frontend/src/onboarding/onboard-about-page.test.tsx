@@ -63,8 +63,10 @@ describe("OnboardAboutPage", () => {
 			target: { value: "a team wiki" },
 		});
 		fireEvent.click(screen.getByRole("radio", { name: /somewhere else/iu }));
-		const [, heardBox] = screen.getAllByLabelText(/tell us more/iu);
-		fireEvent.change(heardBox, { target: { value: "a podcast" } });
+		const heard = screen.getByRole("group", { name: /hear about engram/iu });
+		fireEvent.change(within(heard).getByLabelText(/tell us more/iu), {
+			target: { value: "a podcast" },
+		});
 		fireEvent.click(screen.getByRole("button", { name: /continue/iu }));
 
 		await waitFor(() =>
@@ -106,6 +108,16 @@ describe("OnboardAboutPage", () => {
 
 		expect(await screen.findByRole("alert")).toBeInTheDocument();
 		expect(mockNavigate).not.toHaveBeenCalled();
+	});
+
+	it("leads with the heard-from question as the page heading, radios first", () => {
+		render(wrap(<OnboardAboutPage />));
+		expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+			"How did you hear about Engram?",
+		);
+		const radio = screen.getByRole("radio", { name: /reddit/iu });
+		const checkbox = screen.getByRole("checkbox", { name: /something else/iu });
+		expect(radio.compareDocumentPosition(checkbox) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
 
 	it("gives each question its own detail box, shown once its Other is picked", () => {

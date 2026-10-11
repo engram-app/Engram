@@ -15,11 +15,14 @@ interface AboutYou {
 interface AboutYouFieldsProps {
 	value: AboutYou;
 	onChange: (next: AboutYou) => void;
+	// The page heading IS the heard-from question, so that group borrows it
+	// as its accessible name instead of repeating it in a legend.
+	headingId: string;
 }
 
-// Optional "about you" questions on the tools step. Nothing here gates
+// Optional user-voice questions on the about step. Nothing here gates
 // Continue; answers go to POST /feedback (kind: onboarding).
-function AboutYouFields({ value, onChange }: AboutYouFieldsProps) {
+function AboutYouFields({ value, onChange, headingId }: AboutYouFieldsProps) {
 	const { t } = useT();
 
 	function toggleGoal(slug: string) {
@@ -31,30 +34,7 @@ function AboutYouFields({ value, onChange }: AboutYouFieldsProps) {
 
 	return (
 		<>
-			<fieldset className="flex flex-col gap-2">
-				<legend className={legend}>{t("What will you use Engram for? (optional)")}</legend>
-				<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-					{USE_CASES.map((opt) => (
-						<label key={opt.slug} className={selectableRow(value.goals.includes(opt.slug), true)}>
-							<Checkbox
-								checked={value.goals.includes(opt.slug)}
-								onCheckedChange={() => toggleGoal(opt.slug)}
-								aria-label={t(opt.label)}
-							/>
-							<span className="text-sm">{t(opt.label)}</span>
-						</label>
-					))}
-				</div>
-				{value.goals.includes("other") ? (
-					<DetailInput
-						value={value.goalsDetail}
-						onChange={(goalsDetail) => onChange({ ...value, goalsDetail })}
-					/>
-				) : null}
-			</fieldset>
-
-			<fieldset className="flex flex-col gap-2">
-				<legend className={legend}>{t("How did you hear about Engram? (optional)")}</legend>
+			<fieldset aria-labelledby={headingId} className="flex flex-col gap-2">
 				<RadioGroup
 					value={value.heardFrom ?? ""}
 					onValueChange={(heardFrom) => onChange({ ...value, heardFrom })}
@@ -74,6 +54,28 @@ function AboutYouFields({ value, onChange }: AboutYouFieldsProps) {
 					/>
 				) : null}
 			</fieldset>
+
+			<fieldset className="flex flex-col gap-2">
+				<legend className={legend}>{t("What will you use Engram for?")}</legend>
+				<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+					{USE_CASES.map((opt) => (
+						<label key={opt.slug} className={selectableRow(value.goals.includes(opt.slug), true)}>
+							<Checkbox
+								checked={value.goals.includes(opt.slug)}
+								onCheckedChange={() => toggleGoal(opt.slug)}
+								aria-label={t(opt.label)}
+							/>
+							<span className="text-sm">{t(opt.label)}</span>
+						</label>
+					))}
+				</div>
+				{value.goals.includes("other") ? (
+					<DetailInput
+						value={value.goalsDetail}
+						onChange={(goalsDetail) => onChange({ ...value, goalsDetail })}
+					/>
+				) : null}
+			</fieldset>
 		</>
 	);
 }
@@ -85,7 +87,7 @@ function DetailInput({ value, onChange }: { value: string; onChange: (next: stri
 	const { t } = useT();
 	return (
 		<label className="mt-1 flex flex-col gap-1.5 text-sm">
-			<span className="text-muted-foreground">{t("Tell us more (optional)")}</span>
+			<span className="text-muted-foreground">{t("Tell us more")}</span>
 			<Input value={value} maxLength={2000} onChange={(e) => onChange(e.target.value)} />
 		</label>
 	);

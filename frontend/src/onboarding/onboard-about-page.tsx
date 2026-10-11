@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Navigate, useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
@@ -19,6 +19,7 @@ export default function OnboardAboutPage() {
 	const submitFeedback = useSubmitFeedback();
 	const [aboutYou, setAboutYou] = useState<AboutYou>(EMPTY_ABOUT_YOU);
 	const [mountedAt] = useState(() => Date.now());
+	const headingId = useId();
 
 	if (isLoading || !status) {
 		return <LoadingScreen />;
@@ -45,14 +46,11 @@ export default function OnboardAboutPage() {
 
 	return (
 		<AuthPanel className="flex flex-col gap-5">
-			<header className="flex flex-col gap-2">
-				<h1 className={heading}>{t("A bit about you")}</h1>
-				<p className="text-base text-foreground">
-					{t("Both questions are optional. Your answers help us decide what to build next.")}
-				</p>
-			</header>
+			<h1 id={headingId} className={heading}>
+				{t("How did you hear about Engram?")}
+			</h1>
 
-			<AboutYouFields value={aboutYou} onChange={setAboutYou} />
+			<AboutYouFields value={aboutYou} onChange={setAboutYou} headingId={headingId} />
 
 			{submitFeedback.isError ? (
 				<p role="alert" className="text-destructive text-sm">
