@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.49.0](https://github.com/engram-app/Engram/compare/0.48.0...0.49.0) (2026-10-11)
+
+
+### Features
+
+* **metrics:** count KMS requests for free-tier alert ([#1938](https://github.com/engram-app/Engram/issues/1938)) ([32ebdac](https://github.com/engram-app/Engram/commit/32ebdac5a150eeddcc0073402ec8056c4881eb3e))
+
 ## [0.48.0](https://github.com/engram-app/Engram/compare/0.47.1...0.48.0) (2026-10-11)
 
 
