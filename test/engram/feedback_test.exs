@@ -36,15 +36,17 @@ defmodule Engram.FeedbackTest do
       assert :ok =
                Feedback.submit(user, "onboarding", %{
                  "heard_from" => "reddit",
-                 "use_cases" => ["ai_memory", "obsidian_sync"],
-                 "detail" => "r/ObsidianMD thread"
+                 "use_cases" => ["ai_memory", "other"],
+                 "use_cases_detail" => "  a shared team wiki  ",
+                 "heard_from_detail" => "r/ObsidianMD thread"
                })
 
       assert %{
                "tools" => ["claude"],
                "heard_from" => "reddit",
-               "use_cases" => ["ai_memory", "obsidian_sync"],
-               "survey_detail" => "r/ObsidianMD thread"
+               "use_cases" => ["ai_memory", "other"],
+               "use_cases_detail" => "a shared team wiki",
+               "heard_from_detail" => "r/ObsidianMD thread"
              } = profile(user)
 
       assert_receive {:posthog,
@@ -53,10 +55,11 @@ defmodule Engram.FeedbackTest do
 
       assert props["$set"] == %{
                "heard_from" => "reddit",
-               "use_cases" => ["ai_memory", "obsidian_sync"]
+               "use_cases" => ["ai_memory", "other"]
              }
 
-      assert props["detail"] == "r/ObsidianMD thread"
+      assert props["use_cases_detail"] == "a shared team wiki"
+      assert props["heard_from_detail"] == "r/ObsidianMD thread"
     end
 
     test "accepts heard_from alone", %{user: user} do
@@ -65,9 +68,16 @@ defmodule Engram.FeedbackTest do
       refute Map.has_key?(profile(user), "use_cases")
     end
 
-    test "rejects an empty submission", %{user: user} do
-      assert {:error, :nothing_to_set} = Feedback.submit(user, "onboarding", %{})
-      assert {:error, :nothing_to_set} = Feedback.submit(user, "onboarding", %{"use_cases" => []})
+    test "stamps survey_done_at when answered", %{user: user} do
+      assert :ok = Feedback.submit(user, "onboarding", %{"heard_from" => "friend"})
+      assert is_binary(profile(user)["survey_done_at"])
+    end
+
+    test "an empty submission is a skip: stamps survey_done_at, sends nothing", %{user: user} do
+      assert :ok = Feedback.submit(user, "onboarding", %{"use_cases" => []})
+      assert %{"tools" => ["claude"], "survey_done_at" => ts} = profile(user)
+      assert is_binary(ts)
+      refute_receive {:posthog, _}, 200
     end
 
     test "rejects unknown slugs", %{user: user} do

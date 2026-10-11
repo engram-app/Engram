@@ -1435,6 +1435,10 @@ export default {
 	"What will you use Engram for? (optional)": "À quoi vas-tu utiliser Engram ? (facultatif)",
 	"How did you hear about Engram? (optional)": "Comment as-tu découvert Engram ? (facultatif)",
 	"Tell us more (optional)": "Dis-nous en plus (facultatif)",
+	"A bit about you": "Un peu sur vous",
+	"Both questions are optional. Your answers help us decide what to build next.":
+		"Les deux questions sont facultatives. Vos réponses nous aident à choisir ce que nous développerons ensuite.",
+	Skip: "Passer",
 	"Search engine": "Moteur de recherche",
 	Reddit: "Reddit",
 	YouTube: "YouTube",

@@ -8,7 +8,8 @@ import { selectableRow } from "@/lib/ui-classes";
 interface AboutYou {
 	heardFrom: string | null;
 	goals: string[];
-	detail: string;
+	goalsDetail: string;
+	heardFromDetail: string;
 }
 
 interface AboutYouFieldsProps {
@@ -20,7 +21,6 @@ interface AboutYouFieldsProps {
 // Continue; answers go to POST /feedback (kind: onboarding).
 function AboutYouFields({ value, onChange }: AboutYouFieldsProps) {
 	const { t } = useT();
-	const pickedOther = value.heardFrom === "other" || value.goals.includes("other");
 
 	function toggleGoal(slug: string) {
 		const goals = value.goals.includes(slug)
@@ -32,9 +32,7 @@ function AboutYouFields({ value, onChange }: AboutYouFieldsProps) {
 	return (
 		<>
 			<fieldset className="flex flex-col gap-2">
-				<legend className="mb-2 font-medium text-foreground text-sm">
-					{t("What will you use Engram for? (optional)")}
-				</legend>
+				<legend className={legend}>{t("What will you use Engram for? (optional)")}</legend>
 				<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
 					{USE_CASES.map((opt) => (
 						<label key={opt.slug} className={selectableRow(value.goals.includes(opt.slug), true)}>
@@ -47,12 +45,16 @@ function AboutYouFields({ value, onChange }: AboutYouFieldsProps) {
 						</label>
 					))}
 				</div>
+				{value.goals.includes("other") ? (
+					<DetailInput
+						value={value.goalsDetail}
+						onChange={(goalsDetail) => onChange({ ...value, goalsDetail })}
+					/>
+				) : null}
 			</fieldset>
 
 			<fieldset className="flex flex-col gap-2">
-				<legend className="mb-2 font-medium text-foreground text-sm">
-					{t("How did you hear about Engram? (optional)")}
-				</legend>
+				<legend className={legend}>{t("How did you hear about Engram? (optional)")}</legend>
 				<RadioGroup
 					value={value.heardFrom ?? ""}
 					onValueChange={(heardFrom) => onChange({ ...value, heardFrom })}
@@ -65,35 +67,51 @@ function AboutYouFields({ value, onChange }: AboutYouFieldsProps) {
 						</label>
 					))}
 				</RadioGroup>
-			</fieldset>
-
-			{pickedOther ? (
-				<label className="flex flex-col gap-1.5 text-sm">
-					<span className="font-medium text-foreground">{t("Tell us more (optional)")}</span>
-					<Input
-						value={value.detail}
-						maxLength={2000}
-						onChange={(e) => onChange({ ...value, detail: e.target.value })}
+				{value.heardFrom === "other" ? (
+					<DetailInput
+						value={value.heardFromDetail}
+						onChange={(heardFromDetail) => onChange({ ...value, heardFromDetail })}
 					/>
-				</label>
-			) : null}
+				) : null}
+			</fieldset>
 		</>
 	);
 }
 
-const EMPTY_ABOUT_YOU: AboutYou = { heardFrom: null, goals: [], detail: "" };
+const legend = "mb-3 font-semibold text-base text-foreground";
+
+// The free-text follow-up shown under a question once its "Other" is picked.
+function DetailInput({ value, onChange }: { value: string; onChange: (next: string) => void }) {
+	const { t } = useT();
+	return (
+		<label className="mt-1 flex flex-col gap-1.5 text-sm">
+			<span className="text-muted-foreground">{t("Tell us more (optional)")}</span>
+			<Input value={value} maxLength={2000} onChange={(e) => onChange(e.target.value)} />
+		</label>
+	);
+}
+
+const EMPTY_ABOUT_YOU: AboutYou = {
+	heardFrom: null,
+	goals: [],
+	goalsDetail: "",
+	heardFromDetail: "",
+};
 
 // The POST body for these answers, or null when the user skipped them all.
 function aboutYouBody(value: AboutYou) {
 	if (value.heardFrom === null && value.goals.length === 0) {
 		return null;
 	}
-	const detail = value.detail.trim();
+	// A follow-up only counts while its "Other" is still picked.
+	const goalsDetail = value.goals.includes("other") ? value.goalsDetail.trim() : "";
+	const heardFromDetail = value.heardFrom === "other" ? value.heardFromDetail.trim() : "";
 	return {
 		kind: "onboarding" as const,
 		...(value.heardFrom ? { heard_from: value.heardFrom } : {}),
 		...(value.goals.length > 0 ? { use_cases: value.goals } : {}),
-		...(detail ? { detail } : {}),
+		...(goalsDetail ? { use_cases_detail: goalsDetail } : {}),
+		...(heardFromDetail ? { heard_from_detail: heardFromDetail } : {}),
 	};
 }
 

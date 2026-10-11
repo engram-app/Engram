@@ -61,6 +61,7 @@ const LegacySettingsRedirect = lazy(() => import("./settings/legacy-settings-red
 const AgreementPage = lazy(() => import("./onboarding/agreement-page"));
 const OnboardBillingPage = lazy(() => import("./onboarding/onboard-billing-page"));
 const OnboardToolsPage = lazy(() => import("./onboarding/onboard-tools-page"));
+const OnboardAboutPage = lazy(() => import("./onboarding/onboard-about-page"));
 const OnboardVaultPage = lazy(() => import("./onboarding/onboard-vault-page"));
 
 const routeFallback = <LoadingPane />;
@@ -163,6 +164,7 @@ export function createAppRouter(_config: EngramConfig): AppRouter {
 										{ path: "agreement", element: suspended(<AgreementPage />) },
 										{ path: "billing", element: suspended(<OnboardBillingPage />) },
 										{ path: "tools", element: suspended(<OnboardToolsPage />) },
+										{ path: "about", element: suspended(<OnboardAboutPage />) },
 										{ path: "vault", element: suspended(<OnboardVaultPage />) },
 									],
 								},

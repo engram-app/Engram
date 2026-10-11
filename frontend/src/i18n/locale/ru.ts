@@ -1468,6 +1468,10 @@ export default {
 		"Для чего вы будете использовать Engram? (необязательно)",
 	"How did you hear about Engram? (optional)": "Как вы узнали об Engram? (необязательно)",
 	"Tell us more (optional)": "Расскажите подробнее (необязательно)",
+	"A bit about you": "Немного о вас",
+	"Both questions are optional. Your answers help us decide what to build next.":
+		"Оба вопроса необязательны. Ваши ответы помогают нам решить, что делать дальше.",
+	Skip: "Пропустить",
 	"Search engine": "Поисковик",
 	Reddit: "Reddit",
 	YouTube: "YouTube",

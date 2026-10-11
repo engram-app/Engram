@@ -1298,6 +1298,10 @@ export default {
 	"What will you use Engram for? (optional)": "你打算用 Engram 做什麼？（選填）",
 	"How did you hear about Engram? (optional)": "你是如何得知 Engram 的？（選填）",
 	"Tell us more (optional)": "多告訴我們一些（選填）",
+	"A bit about you": "簡單介紹一下你",
+	"Both questions are optional. Your answers help us decide what to build next.":
+		"兩個問題都是選填。你的回答能幫助我們決定接下來要做什麼。",
+	Skip: "略過",
 	"Search engine": "搜尋引擎",
 	Reddit: "Reddit",
 	YouTube: "YouTube",

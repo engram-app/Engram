@@ -1335,6 +1335,10 @@ export default {
 	"What will you use Engram for? (optional)": "Engram을 어디에 사용하실 건가요? (선택)",
 	"How did you hear about Engram? (optional)": "Engram을 어떻게 알게 되셨나요? (선택)",
 	"Tell us more (optional)": "자세히 알려주세요 (선택)",
+	"A bit about you": "간단한 소개",
+	"Both questions are optional. Your answers help us decide what to build next.":
+		"두 질문 모두 선택 사항입니다. 답변은 다음에 무엇을 만들지 정하는 데 도움이 됩니다.",
+	Skip: "건너뛰기",
 	"Search engine": "검색 엔진",
 	Reddit: "Reddit",
 	YouTube: "YouTube",

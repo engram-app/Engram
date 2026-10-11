@@ -1285,7 +1285,7 @@ export interface OnboardingStatus {
 	vault_count: number;
 }
 
-export type OnboardingStep = "agreement" | "billing" | "tools" | "vault";
+export type OnboardingStep = "agreement" | "billing" | "tools" | "about" | "vault";
 
 // Partial mid-flow: the `:tools` step POSTs `tools` first, the `:vault`
 // step POSTs `uses_obsidian` after. `completed_at` only stamps once both
@@ -1472,15 +1472,28 @@ export function useSetOnboardingProfile() {
 }
 
 export type FeedbackBody =
-	| { kind: "onboarding"; heard_from?: string; use_cases?: string[]; detail?: string }
+	| {
+			kind: "onboarding";
+			heard_from?: string;
+			use_cases?: string[];
+			use_cases_detail?: string;
+			heard_from_detail?: string;
+	  }
 	| { kind: "cancel"; reason: string; detail?: string }
 	| { kind: "general"; message: string };
 
 // User-voice answers -> backend -> PostHog (server-side, so ad blockers can't
-// drop them). Callers treat failure as non-fatal: an answer never blocks flow.
+// drop them). An onboarding submit (answer or skip) also completes the wizard's
+// :about step, so it awaits the status refetch like useSetOnboardingProfile.
 export function useSubmitFeedback() {
+	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: (body: FeedbackBody) => api.post<{ status: "ok" }>("/feedback", body),
+		onSuccess: async (_data, body) => {
+			if (body.kind === "onboarding") {
+				await qc.invalidateQueries({ queryKey: ["onboarding", "status"] });
+			}
+		},
 	});
 }
 

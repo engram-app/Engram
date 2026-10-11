@@ -13,7 +13,6 @@ vi.mock("../analytics/track", () => ({ track: vi.fn() }));
 const mockTrack = vi.mocked(track);
 
 const mutateAsync = vi.fn().mockResolvedValue({});
-const submitFeedback = vi.fn();
 const mockNavigate = vi.fn();
 
 vi.mock("react-router", async () => {
@@ -53,7 +52,6 @@ vi.mock("../api/queries", async () => {
 			isError: false,
 		}),
 		useBillingStatus: () => billingStatus,
-		useSubmitFeedback: () => ({ mutate: submitFeedback }),
 	};
 });
 
@@ -76,7 +74,6 @@ function wrap(ui: React.ReactNode) {
 
 beforeEach(() => {
 	mutateAsync.mockClear();
-	submitFeedback.mockReset();
 	mockNavigate.mockClear();
 	mockTrack.mockClear();
 	onboardingStatus = {
@@ -290,44 +287,39 @@ describe("OnboardToolsPage: brand names are not translated", () => {
 	});
 });
 
-describe("OnboardToolsPage: about-you survey", () => {
-	it("sends the optional answers alongside the tools", async () => {
+describe("OnboardToolsPage: next step", () => {
+	it("goes to the about step when the chain has it", async () => {
+		onboardingStatus.data = {
+			...onboardingStatus.data,
+			steps: ["tools", "about", "vault"],
+		} as OnboardingStatus;
 		render(wrap(<OnboardToolsPage />));
 
 		fireEvent.click(screen.getByLabelText(/^Claude$/iu));
-		fireEvent.click(screen.getByRole("radio", { name: /reddit/iu }));
-		fireEvent.click(screen.getByRole("checkbox", { name: /sync obsidian across devices/iu }));
-		fireEvent.click(screen.getByRole("checkbox", { name: /something else/iu }));
-		fireEvent.change(screen.getByLabelText(/tell us more/iu), {
-			target: { value: "a thread about MCP" },
-		});
+		fireEvent.click(screen.getByRole("button", { name: /continue/iu }));
+
+		await waitFor(() =>
+			expect(mockNavigate).toHaveBeenCalledWith("/onboard/about", { replace: true }),
+		);
+	});
+
+	it("goes straight to vault when the chain has no about step (self-host)", async () => {
+		onboardingStatus.data = {
+			...onboardingStatus.data,
+			steps: ["tools", "vault"],
+		} as OnboardingStatus;
+		render(wrap(<OnboardToolsPage />));
+
+		fireEvent.click(screen.getByLabelText(/^Claude$/iu));
 		fireEvent.click(screen.getByRole("button", { name: /continue/iu }));
 
 		await waitFor(() =>
 			expect(mockNavigate).toHaveBeenCalledWith("/onboard/vault", { replace: true }),
 		);
-		expect(submitFeedback).toHaveBeenCalledWith({
-			kind: "onboarding",
-			heard_from: "reddit",
-			use_cases: ["obsidian_sync", "other"],
-			detail: "a thread about MCP",
-		});
 	});
 
-	it("skips the survey call when nothing was answered", async () => {
+	it("does not ask the survey questions itself", () => {
 		render(wrap(<OnboardToolsPage />));
-
-		fireEvent.click(screen.getByLabelText(/^Claude$/iu));
-		fireEvent.click(screen.getByRole("button", { name: /continue/iu }));
-
-		await waitFor(() => expect(mockNavigate).toHaveBeenCalled());
-		expect(submitFeedback).not.toHaveBeenCalled();
-	});
-
-	it("hides the detail box until Other is picked", () => {
-		render(wrap(<OnboardToolsPage />));
-		expect(screen.queryByLabelText(/tell us more/iu)).toBeNull();
-		fireEvent.click(screen.getByRole("radio", { name: /somewhere else/iu }));
-		expect(screen.getByLabelText(/tell us more/iu)).toBeInTheDocument();
+		expect(screen.queryByRole("radio", { name: /reddit/iu })).toBeNull();
 	});
 });

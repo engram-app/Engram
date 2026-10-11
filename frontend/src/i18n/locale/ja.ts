@@ -1356,6 +1356,10 @@ export default {
 	"What will you use Engram for? (optional)": "Engram を何に使いますか？（任意）",
 	"How did you hear about Engram? (optional)": "Engram をどこで知りましたか？（任意）",
 	"Tell us more (optional)": "詳しく教えてください（任意）",
+	"A bit about you": "あなたについて少し",
+	"Both questions are optional. Your answers help us decide what to build next.":
+		"どちらの質問も任意です。回答は次に何を作るかを決める参考になります。",
+	Skip: "スキップ",
 	"Search engine": "検索エンジン",
 	Reddit: "Reddit",
 	YouTube: "YouTube",

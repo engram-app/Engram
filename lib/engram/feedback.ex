@@ -7,7 +7,9 @@ defmodule Engram.Feedback do
   the slugs also set as person properties so dashboards can break funnels down
   by them. The onboarding answers are also merged into
   `users.onboarding_profile`, so they survive a PostHog outage and self-host.
-  Answering is always optional: nothing gates on these fields.
+  Answering is always optional. An empty onboarding submission is the Skip
+  button: it stamps `survey_done_at` (as an answer does), which is the only
+  thing the wizard's `:about` step waits on.
   """
 
   import Ecto.Query
@@ -27,7 +29,6 @@ defmodule Engram.Feedback do
 
   @type error ::
           :invalid_kind
-          | :nothing_to_set
           | :invalid_heard_from
           | :invalid_use_cases
           | :invalid_reason
@@ -36,16 +37,30 @@ defmodule Engram.Feedback do
   @spec submit(User.t(), String.t(), map()) :: :ok | {:error, error()}
   def submit(user, "onboarding", params) do
     with {:ok, fields} <- onboarding_fields(params) do
+      stamped =
+        Map.put(fields, "survey_done_at", DateTime.utc_now(:second) |> DateTime.to_iso8601())
+
       from(u in User,
         where: u.id == ^user.id,
-        update: [set: [onboarding_profile: fragment("? || ?", u.onboarding_profile, ^fields)]]
+        update: [set: [onboarding_profile: fragment("? || ?", u.onboarding_profile, ^stamped)]]
       )
       |> Repo.update_all([], skip_tenant_check: true)
 
-      capture(user, "onboarding_survey_answered", %{
-        "detail" => fields["survey_detail"],
-        "$set" => Map.take(fields, ["heard_from", "use_cases"])
-      })
+      # Onboarding.status/1 reads the cached user row; without this the wizard
+      # keeps answering `:about` after the stamp lands.
+      Engram.Accounts.evict_user(user.id)
+
+      if fields == %{} do
+        :ok
+      else
+        capture(
+          user,
+          "onboarding_survey_answered",
+          fields
+          |> Map.take(["use_cases_detail", "heard_from_detail"])
+          |> Map.put("$set", Map.take(fields, ["heard_from", "use_cases"]))
+        )
+      end
     end
   end
 
@@ -79,15 +94,13 @@ defmodule Engram.Feedback do
       not (is_nil(use_cases) or (is_list(use_cases) and Enum.all?(use_cases, &(&1 in @use_cases)))) ->
         {:error, :invalid_use_cases}
 
-      is_nil(heard_from) and use_cases in [nil, []] ->
-        {:error, :nothing_to_set}
-
       true ->
         fields =
           %{
             "heard_from" => heard_from,
             "use_cases" => if(use_cases in [nil, []], do: nil, else: Enum.uniq(use_cases)),
-            "survey_detail" => text(params["detail"])
+            "use_cases_detail" => text(params["use_cases_detail"]),
+            "heard_from_detail" => text(params["heard_from_detail"])
           }
           |> Map.reject(fn {_k, v} -> is_nil(v) end)
 
