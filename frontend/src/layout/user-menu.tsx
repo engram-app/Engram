@@ -111,7 +111,8 @@ export default function UserMenu() {
 					</DropdownMenuItem>
 				</DropdownMenuContent>
 			</DropdownMenu>
-			<FeedbackDialog open={feedbackOpen} onOpenChange={setFeedbackOpen} />
+			{/* Mounted only while open: no idle mutation hook on every page. */}
+			{feedbackOpen ? <FeedbackDialog open onOpenChange={setFeedbackOpen} /> : null}
 		</>
 	);
 }
