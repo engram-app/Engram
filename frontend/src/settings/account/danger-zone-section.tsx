@@ -76,7 +76,7 @@ export function DangerZoneSection() {
 							{t("Delete account")}
 						</Button>
 					</DialogTrigger>
-					<DialogContent>
+					<DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
 						<DialogHeader>
 							<DialogTitle>{t("Delete your account?")}</DialogTitle>
 							<DialogDescription>
