@@ -329,4 +329,49 @@ defmodule Engram.AwsKms.ExAwsTest do
       end
     end
   end
+
+  # The billing counter must see every attempt AWS receives: ExAws retries
+  # 5xx inside one KmsExAws call, and each retry is a billed request.
+  test "kms_requests_total counts each server-error retry as a request", %{bypass: bypass} do
+    {:ok, hits} = Agent.start_link(fn -> 0 end)
+
+    Bypass.expect(bypass, "POST", "/", fn conn ->
+      n = Agent.get_and_update(hits, &{&1 + 1, &1 + 1})
+
+      if n < 3,
+        do: Plug.Conn.resp(conn, 500, ~s({"__type":"KMSInternalException"})),
+        else: Plug.Conn.resp(conn, 200, ~s({"KeyMetadata":{}}))
+    end)
+
+    metric =
+      Engram.PromEx.Crypto.event_metrics(otp_app: :engram)
+      |> List.wrap()
+      |> Enum.flat_map(& &1.metrics)
+      |> Enum.find(&(&1.name == [:engram, :prom_ex, :crypto, :kms, :requests, :total]))
+
+    test_pid = self()
+    handler = "kms-requests-#{inspect(make_ref())}"
+
+    :telemetry.attach(
+      handler,
+      metric.event_name,
+      fn _event, _meas, meta, _ ->
+        if metric.keep.(meta), do: send(test_pid, {:counted, Map.take(meta, metric.tags)})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    # Two 500s, then a 200: one call, three billed requests.
+    assert :ok = KmsExAws.describe_key()
+
+    for _ <- 1..2 do
+      assert_received {:counted, %{operation: "TrentService.DescribeKey", result: :error}}
+    end
+
+    assert_received {:counted, %{operation: "TrentService.DescribeKey", result: :ok}}
+
+    refute_received {:counted, _}
+  end
 end
