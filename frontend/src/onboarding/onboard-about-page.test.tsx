@@ -105,9 +105,10 @@ describe("OnboardAboutPage", () => {
 		expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
 			"How did you hear about Engram?",
 		);
-		const radio = screen.getByRole("radio", { name: /reddit/iu });
-		const checkbox = screen.getByRole("checkbox", { name: /something else/iu });
-		expect(radio.compareDocumentPosition(checkbox) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		const heard = screen.getByRole("group", { name: /hear about engram/iu });
+		const useCases = screen.getByRole("group", { name: /use engram for/iu });
+		expect(within(heard).getAllByRole("radio").length).toBeGreaterThan(0);
+		expect(heard.compareDocumentPosition(useCases)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
 	});
 
 	it("gives each question its own detail box, shown once its Other is picked", () => {
