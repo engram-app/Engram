@@ -226,17 +226,17 @@ defmodule Engram.OnboardingTest do
              } = Onboarding.status(user)
     end
 
-    test "steps fresh hosted user = [:agreement, :billing, :tools, :vault]" do
+    test "steps fresh hosted user = [:agreement, :billing, :tools, :about, :vault]" do
       user = insert(:user, onboarding_profile: %{})
-      assert %{steps: [:agreement, :billing, :tools, :vault]} = Onboarding.status(user)
+      assert %{steps: [:agreement, :billing, :tools, :about, :vault]} = Onboarding.status(user)
     end
 
-    test "steps stays [:agreement, :billing, :tools, :vault] regardless of profile.uses_obsidian" do
+    test "steps stays [:agreement, :billing, :tools, :about, :vault] regardless of profile.uses_obsidian" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
       insert(:subscription, user: user, status: "active")
       {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true})
-      assert %{steps: [:agreement, :billing, :tools, :vault]} = Onboarding.status(user)
+      assert %{steps: [:agreement, :billing, :tools, :about, :vault]} = Onboarding.status(user)
     end
 
     # The MCP-first path answers `tools` from the OAuth client before the
@@ -250,18 +250,18 @@ defmodule Engram.OnboardingTest do
       {:ok, _} =
         Onboarding.set_profile(user, %{tools: ["antigravity"], tools_prefilled: true})
 
-      assert %{steps: [:agreement, :billing, :vault]} = Onboarding.status(user)
+      assert %{steps: [:agreement, :billing, :about, :vault]} = Onboarding.status(user)
     end
 
     # The SaaS counterpart of the self-host case above: a user who answers the
-    # questionnaire in the wizard keeps their 4-step chain.
+    # questionnaire in the wizard keeps their 5-step chain.
     test "steps keeps :tools when the user answers it themselves" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
       insert(:subscription, user: user, status: "active")
       {:ok, _} = Onboarding.set_profile(user, %{tools: ["antigravity"]})
 
-      assert %{steps: [:agreement, :billing, :tools, :vault]} = Onboarding.status(user)
+      assert %{steps: [:agreement, :billing, :tools, :about, :vault]} = Onboarding.status(user)
     end
 
     test "next_step=billing when terms accepted but no subscription" do
@@ -808,7 +808,7 @@ defmodule Engram.OnboardingTest do
              } = Onboarding.status(user)
     end
 
-    test "next_step :vault once tools are POSTed but uses_obsidian still missing" do
+    test "next_step :about once tools are POSTed, before the survey is answered" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
       insert(:subscription, user: user, status: "active")
@@ -818,8 +818,28 @@ defmodule Engram.OnboardingTest do
                terms_ok: true,
                subscription_ok: true,
                profile_complete: false,
-               next_step: :vault
+               next_step: :about
              } = Onboarding.status(user)
+    end
+
+    test "next_step :vault once the survey is answered" do
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+      insert(:subscription, user: user, status: "active")
+      {:ok, _} = Onboarding.set_profile(user, %{tools: ["claude"]})
+      :ok = Engram.Feedback.submit(user, "onboarding", %{"heard_from" => "reddit"})
+
+      assert %{profile_complete: false, next_step: :vault} = Onboarding.status(user)
+    end
+
+    test "next_step :vault once the survey is skipped" do
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+      insert(:subscription, user: user, status: "active")
+      {:ok, _} = Onboarding.set_profile(user, %{tools: ["claude"]})
+      :ok = Engram.Feedback.submit(user, "onboarding", %{})
+
+      assert %{profile_complete: false, next_step: :vault} = Onboarding.status(user)
     end
 
     test "next_step :vault for obsidian user with no vault yet (wizard waits for plugin first sync)" do

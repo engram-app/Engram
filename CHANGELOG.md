@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.48.0](https://github.com/engram-app/Engram/compare/0.47.1...0.48.0) (2026-10-11)
+
+
+### Features
+
+* user-voice survey step, cancel reason and feedback box ([#1935](https://github.com/engram-app/Engram/issues/1935)) ([6f348e7](https://github.com/engram-app/Engram/commit/6f348e7730bd4965e23be7734613b534edd8b93c))
+
 ## [0.47.1](https://github.com/engram-app/Engram/compare/0.47.0...0.47.1) (2026-10-10)
 
 

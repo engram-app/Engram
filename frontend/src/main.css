@@ -125,6 +125,7 @@
 	--color-input: var(--input);
 	--color-border: var(--border);
 	--color-destructive: var(--destructive);
+	--color-destructive-foreground: var(--destructive-foreground);
 	--color-row-selected: var(--row-selected);
 	--color-row-selected-foreground: var(--row-selected-foreground);
 	--color-row-multi-selected: var(--row-multi-selected);
@@ -183,6 +184,7 @@
 	--accent: oklch(96.74% 0.0013 286.37);
 	--accent-foreground: oklch(21.03% 0.0059 285.89);
 	--destructive: oklch(55% 0.235 27.33);
+	--destructive-foreground: oklch(100.00% 0 0);
 	/* Selected row in the file tree: a solid neutral chip, deliberately hueless
 	   so it can't read as "blue on blue" against the cyan primary. Hover owns
 	   `accent` (near-white here), so the two can't be confused. */
@@ -237,6 +239,9 @@
 	--accent: oklch(28.58% 0.0036 286.17);
 	--accent-foreground: oklch(91.37% 0.0059 333.99);
 	--destructive: oklch(72% 0.19 26.76);
+	/* Dark text on the bright dark-mode red, mirroring --primary-foreground:
+	   white on this red is ~2.5:1. */
+	--destructive-foreground: oklch(25% 0.07 26.76);
 	/* Still a dark neutral, but lifted well clear of both the background
 	   (18.76%) and the hover `accent` (28.58%) so selection stays legible as a
 	   distinct third step rather than a slightly-darker smudge. */

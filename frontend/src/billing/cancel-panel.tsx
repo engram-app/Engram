@@ -1,12 +1,17 @@
 import { Loader2 } from "lucide-react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Textarea } from "@/components/ui/textarea";
+import { CANCEL_REASONS } from "@/feedback/options";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import { Trans } from "@/i18n/trans";
 import { intlLocale } from "@/lib/intl-locale";
+import { selectableRow } from "@/lib/ui-classes";
 import type { SubscriptionDetail } from "../api/queries";
-import { type BillingStatus, useCancelSubscription } from "../api/queries";
+import { type BillingStatus, useCancelSubscription, useSubmitFeedback } from "../api/queries";
 
 const TIER_LABELS: Partial<Record<BillingStatus["tier"], string>> = {
 	starter: msg("Starter"),
@@ -23,6 +28,9 @@ export default function CancelPanel({ detail, tier, onClose }: CancelPanelProps)
 	const { t, renderedLocale } = useT();
 	const localeTag = intlLocale(renderedLocale);
 	const cancel = useCancelSubscription();
+	const submitFeedback = useSubmitFeedback();
+	const [reason, setReason] = useState<string | null>(null);
+	const [comment, setComment] = useState("");
 
 	// next_billed_at is the natural cancel-effective date when canceling
 	// at-period-end. Falls back to a generic line if the backend has not yet
@@ -37,9 +45,21 @@ export default function CancelPanel({ detail, tier, onClose }: CancelPanelProps)
 	const tierKey = TIER_LABELS[tier];
 	const tierLabel = tierKey ? t(tierKey) : t("paid");
 
+	// A reason AND a sentence are the price of the cancel: it is the one
+	// signal we get from someone leaving.
+	const text = comment.trim();
+	const canCancel = reason !== null && text !== "";
+
 	async function confirm() {
+		if (!canCancel) {
+			return;
+		}
 		try {
 			await cancel.mutateAsync();
+			// Only once the cancel landed, so a failed or retried cancel never
+			// files a reason. Fire-and-forget: a React Query mutation outlives
+			// the panel unmounting below.
+			submitFeedback.mutate({ kind: "cancel", reason, detail: text });
 			toast.success(t("Subscription scheduled to cancel."));
 			onClose();
 		} catch {
@@ -67,17 +87,34 @@ export default function CancelPanel({ detail, tier, onClose }: CancelPanelProps)
 				<li>{t("Vaults or notes that exceed Free limits become read-only.")}</li>
 				<li>{t("You can reverse this any time before the effective date.")}</li>
 			</ul>
-			<div className="flex gap-2">
-				<Button variant="destructive" onClick={confirm} disabled={cancel.isPending}>
+			<fieldset className="flex flex-col gap-2">
+				<legend className="mb-2 font-medium text-foreground text-sm">
+					{t("Why are you canceling?")}
+				</legend>
+				<RadioGroup value={reason ?? ""} onValueChange={setReason} className="sm:grid-cols-2">
+					{CANCEL_REASONS.map((opt) => (
+						<label key={opt.slug} className={selectableRow(reason === opt.slug, true)}>
+							<RadioGroupItem value={opt.slug} aria-label={t(opt.label)} />
+							<span className="text-sm">{t(opt.label)}</span>
+						</label>
+					))}
+				</RadioGroup>
+			</fieldset>
+			<label className="flex flex-col gap-1.5 text-sm">
+				<span className="font-medium text-foreground">{t("Tell us more")}</span>
+				<Textarea value={comment} maxLength={2000} onChange={(e) => setComment(e.target.value)} />
+			</label>
+			<footer className="flex justify-end gap-2">
+				<Button variant="outline" onClick={onClose} disabled={cancel.isPending}>
+					{t("Keep my subscription")}
+				</Button>
+				<Button variant="destructive" onClick={confirm} disabled={!canCancel || cancel.isPending}>
 					{Boolean(cancel.isPending) && (
 						<Loader2 data-icon="inline-start" aria-hidden className="animate-spin" />
 					)}
 					{cancel.isPending ? t("Canceling…") : t("Cancel at period end")}
 				</Button>
-				<Button variant="outline" onClick={onClose} disabled={cancel.isPending}>
-					{t("Keep my subscription")}
-				</Button>
-			</div>
+			</footer>
 		</section>
 	);
 }
