@@ -18,6 +18,12 @@ defmodule Engram.PromEx.Crypto do
     * `[:engram, :envelope, :compression_gate, :reason]`: `%{current: 0 | 1}`,
       metadata `%{reason: atom()}`, one-hot over the gate's five reasons on
       every reason change.
+    * `[:ex_aws, :request, :stop]`: ExAws's own span, one per HTTP attempt,
+      metadata `%{service: atom(), operation: String.t(), result: :ok |
+      :error, error: term()}`. Kept only for `service: :kms` attempts that
+      got an HTTP response (`:ok`, or `error` is the response body).
+    * `[:engram, :crypto, :kms, :failure]`: `%{count: 1}`, metadata
+      `%{op: atom(), error_class: atom()}`, from `Engram.AwsKms.ExAws`.
 
   Metrics:
 
@@ -31,9 +37,19 @@ defmodule Engram.PromEx.Crypto do
       hour means compression is off fleet-wide (alert on it).
     * `engram_prom_ex_crypto_compression_gate_reason`: tags `[:reason]`
       (five atoms); the series at 1 is the current reason.
+    * `engram_prom_ex_crypto_kms_requests_total`: tags `[:operation,
+      :result]`. KMS bills per request (free tier 20k/month), so alert on
+      its 30d run rate (#1871). Per attempt, so ExAws's 5xx retries count;
+      transport failures (refused, DNS, TLS) never reached AWS and do not.
+      Counts only the app's own calls; ECS secret decrypts and terraform
+      refreshes are invisible here (CloudTrail).
+    * `engram_prom_ex_crypto_kms_failures_total`: tags `[:op, :error_class]`.
+      Per `Engram.AwsKms.ExAws` call, not per attempt, so do not divide it
+      by `kms_requests_total`. `error_class: :exception` includes raises
+      before any request (missing key id).
 
-  These events are also declared in `EngramWeb.Telemetry.metrics/0`,
-  but that list feeds LiveDashboard only — this plugin is what gets
+  The `:engram` events are also declared in `EngramWeb.Telemetry.metrics/0`
+  (KMS excepted), but that list feeds LiveDashboard only — this plugin is what gets
   them onto the scraped `/metrics` endpoint.
 
   Cardinality contract: only the atoms above. NEVER add user_id,
@@ -46,6 +62,8 @@ defmodule Engram.PromEx.Crypto do
   @decrypt_batch_event [:engram, :crypto, :decrypt_batch]
   @gate_event [:engram, :envelope, :compression_gate]
   @gate_reason_event [:engram, :envelope, :compression_gate, :reason]
+  @kms_attempt_event [:ex_aws, :request, :stop]
+  @kms_failure_event [:engram, :crypto, :kms, :failure]
 
   @impl true
   def event_metrics(opts) do
@@ -93,8 +111,29 @@ defmodule Engram.PromEx.Crypto do
           measurement: :current,
           description: "Compression gate reason, one-hot: 1 on the current reason.",
           tags: [:reason]
+        ),
+        # ponytail: an exit mid-request (pool timeout) emits :exception, not
+        # :stop, so it is uncounted; add an :exception counter if it shows up.
+        counter(
+          metric_prefix ++ [:kms, :requests, :total],
+          event_name: @kms_attempt_event,
+          description: "KMS HTTP requests (billed attempts) by operation and result.",
+          keep: &billed_kms_attempt?/1,
+          tags: [:operation, :result]
+        ),
+        counter(
+          metric_prefix ++ [:kms, :failures, :total],
+          event_name: @kms_failure_event,
+          description: "Failed KmsExAws calls (not attempts) by op and error class.",
+          tags: [:op, :error_class]
         )
       ]
     )
   end
+
+  # ExAws puts the response body (a binary) in `error` when AWS answered
+  # with a 4xx/5xx, and the transport error otherwise.
+  defp billed_kms_attempt?(%{service: :kms, result: :ok}), do: true
+  defp billed_kms_attempt?(%{service: :kms, error: body}) when is_binary(body), do: true
+  defp billed_kms_attempt?(_meta), do: false
 end
