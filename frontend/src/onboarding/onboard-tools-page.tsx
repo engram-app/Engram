@@ -8,9 +8,10 @@ import { Trans } from "@/i18n/trans";
 import AuthPanel from "@/layout/auth-panel";
 import { heading, selectableRow } from "@/lib/ui-classes";
 import { track } from "../analytics/track";
-import { useOnboardingStatus, useSetOnboardingProfile } from "../api/queries";
+import { useOnboardingStatus, useSetOnboardingProfile, useSubmitFeedback } from "../api/queries";
 import { useIsFreeTier } from "../billing/use-is-free-tier";
 import LoadingScreen from "../layout/loading-screen";
+import { type AboutYou, AboutYouFields, aboutYouBody, EMPTY_ABOUT_YOU } from "./about-you-fields";
 import { onboardingDoneTarget } from "./onboarding-next";
 import { NO_AI_TOOL, TOOL_ASSISTANTS, TOOL_CODING, type ToolOption } from "./onboarding-tools";
 import { ToolBadge } from "./tool-icon";
@@ -20,7 +21,7 @@ interface ToolsFormProps {
 	isPending: boolean;
 	hasError: boolean;
 	isFree: boolean;
-	onSubmit: (tools: string[]) => Promise<void>;
+	onSubmit: (tools: string[], aboutYou: AboutYou) => Promise<void>;
 }
 
 function ToolsForm({ initialTools, isPending, hasError, isFree, onSubmit }: ToolsFormProps) {
@@ -34,6 +35,7 @@ function ToolsForm({ initialTools, isPending, hasError, isFree, onSubmit }: Tool
 		}
 		return new Set(initialTools);
 	});
+	const [aboutYou, setAboutYou] = useState<AboutYou>(EMPTY_ABOUT_YOU);
 
 	function toggleTool(slug: string) {
 		setTools((prev) => {
@@ -68,7 +70,7 @@ function ToolsForm({ initialTools, isPending, hasError, isFree, onSubmit }: Tool
 		if (tools.size === 0 || isPending) {
 			return;
 		}
-		await onSubmit(Array.from(tools));
+		await onSubmit(Array.from(tools), aboutYou);
 	}
 
 	const canContinue = tools.size > 0 && !isPending;
@@ -139,6 +141,8 @@ function ToolsForm({ initialTools, isPending, hasError, isFree, onSubmit }: Tool
 					slots={{ client: <strong>{t("Another MCP client")}</strong> }}
 				/>
 			</p>
+
+			<AboutYouFields value={aboutYou} onChange={setAboutYou} />
 
 			{hasError ? (
 				<p role="alert" className="text-destructive text-sm">
@@ -219,6 +223,7 @@ export default function OnboardToolsPage() {
 	const navigate = useNavigate();
 	const { data: status, isLoading } = useOnboardingStatus();
 	const setProfile = useSetOnboardingProfile();
+	const submitFeedback = useSubmitFeedback();
 	const isFree = useIsFreeTier();
 	const [mountedAt] = useState(() => Date.now());
 
@@ -243,8 +248,13 @@ export default function OnboardToolsPage() {
 			isPending={setProfile.isPending}
 			hasError={setProfile.isError}
 			isFree={isFree}
-			onSubmit={async (tools) => {
+			onSubmit={async (tools, aboutYou) => {
 				await setProfile.mutateAsync({ tools });
+				// Fire-and-forget: the survey is optional and must never block the wizard.
+				const survey = aboutYouBody(aboutYou);
+				if (survey) {
+					submitFeedback.mutate(survey);
+				}
 				track("onboarding_step_completed", {
 					step: "tools",
 					duration_ms: Date.now() - mountedAt,
