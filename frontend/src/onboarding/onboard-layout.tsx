@@ -15,7 +15,7 @@ import {
 	pendingCancelUrl,
 } from "../oauth/pending-authorization";
 
-const STEP_PATHS: OnboardingStep[] = ["agreement", "billing", "tools", "vault"];
+const STEP_PATHS: OnboardingStep[] = ["agreement", "billing", "tools", "about", "vault"];
 
 function stepFromPath(pathname: string): OnboardingStep | null {
 	const last = pathname.split("/").pop() ?? "";

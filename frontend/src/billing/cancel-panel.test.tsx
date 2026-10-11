@@ -57,6 +57,8 @@ describe("CancelPanel", () => {
 		const onClose = vi.fn();
 
 		render(<CancelPanel detail={detail()} tier="pro" onClose={onClose} />, { wrapper: Wrapper });
+		fireEvent.click(screen.getByRole("radio", { name: /switched to another tool/iu }));
+		fireEvent.change(screen.getByLabelText(/tell us more/iu), { target: { value: "Notion" } });
 		fireEvent.click(screen.getByRole("button", { name: /cancel at period end/iu }));
 
 		await waitFor(() => expect(onClose).toHaveBeenCalled());
@@ -80,5 +82,76 @@ describe("CancelPanel", () => {
 		expect(
 			screen.getByText(/keep paid access through the end of your current billing period/iu),
 		).toBeInTheDocument();
+	});
+
+	it("sends the reason once the cancel succeeds", async () => {
+		post.mockResolvedValue({});
+		const onClose = vi.fn();
+		render(<CancelPanel detail={detail()} tier="pro" onClose={onClose} />, { wrapper: Wrapper });
+
+		fireEvent.click(screen.getByRole("radio", { name: /too expensive/iu }));
+		fireEvent.change(screen.getByLabelText(/tell us more/iu), {
+			target: { value: "  half the price  " },
+		});
+		fireEvent.click(screen.getByRole("button", { name: /cancel at period end/iu }));
+
+		await waitFor(() => expect(onClose).toHaveBeenCalled());
+		expect(post).toHaveBeenCalledWith("/feedback", {
+			kind: "cancel",
+			reason: "too_expensive",
+			detail: "half the price",
+		});
+		expect(post).toHaveBeenCalledWith("/billing/cancel-subscription");
+	});
+
+	it("keeps Cancel disabled until a reason is picked and text is written", () => {
+		render(<CancelPanel detail={detail()} tier="pro" onClose={vi.fn()} />, { wrapper: Wrapper });
+		const cancelButton = screen.getByRole("button", { name: /cancel at period end/iu });
+
+		expect(cancelButton).toBeDisabled();
+		fireEvent.click(cancelButton);
+		expect(post).not.toHaveBeenCalled();
+
+		fireEvent.click(screen.getByRole("radio", { name: /too expensive/iu }));
+		expect(cancelButton).toBeDisabled();
+
+		const box = screen.getByLabelText(/tell us more/iu);
+		fireEvent.change(box, { target: { value: "   " } });
+		expect(cancelButton).toBeDisabled();
+
+		fireEvent.change(box, { target: { value: "too pricey for me" } });
+		expect(cancelButton).toBeEnabled();
+	});
+
+	it("sends no reason when the cancel itself fails", async () => {
+		post.mockImplementation((path: string) =>
+			path === "/billing/cancel-subscription"
+				? Promise.reject(new Error("paddle down"))
+				: Promise.resolve({}),
+		);
+		render(<CancelPanel detail={detail()} tier="pro" onClose={vi.fn()} />, { wrapper: Wrapper });
+
+		fireEvent.click(screen.getByRole("radio", { name: /too expensive/iu }));
+		fireEvent.change(screen.getByLabelText(/tell us more/iu), { target: { value: "x" } });
+		fireEvent.click(screen.getByRole("button", { name: /cancel at period end/iu }));
+
+		await waitFor(() => expect(post).toHaveBeenCalledWith("/billing/cancel-subscription"));
+		await new Promise((r) => setTimeout(r, 0));
+		expect(post).not.toHaveBeenCalledWith("/feedback", expect.anything());
+	});
+
+	it("still cancels when the feedback call fails", async () => {
+		post.mockImplementation((path: string) =>
+			path === "/feedback" ? Promise.reject(new Error("boom")) : Promise.resolve({}),
+		);
+		const onClose = vi.fn();
+		render(<CancelPanel detail={detail()} tier="pro" onClose={onClose} />, { wrapper: Wrapper });
+
+		fireEvent.click(screen.getByRole("radio", { name: /not using it enough/iu }));
+		fireEvent.change(screen.getByLabelText(/tell us more/iu), { target: { value: "busy" } });
+		fireEvent.click(screen.getByRole("button", { name: /cancel at period end/iu }));
+
+		await waitFor(() => expect(onClose).toHaveBeenCalled());
+		expect(post).toHaveBeenCalledWith("/billing/cancel-subscription");
 	});
 });

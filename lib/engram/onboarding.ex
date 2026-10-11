@@ -173,7 +173,7 @@ defmodule Engram.Onboarding do
     * `:terms_notice` — metadata for the newest published ToS version the user
       has not yet accepted (version/effective_date/material/changelog/accept_url),
       or `nil` when the user is already on the current version
-    * `:next_step` — one of `:agreement | :billing | :tools | :vault | :done`
+    * `:next_step` — one of `:agreement | :billing | :tools | :about | :vault | :done`
 
   The gate is computed from the `terms_versions` table via
   `Engram.Legal.VersionCache`: `terms_ok` compares the user's latest accepted
@@ -215,7 +215,10 @@ defmodule Engram.Onboarding do
     profile = current_profile(user)
     profile_complete = profile_complete?(profile)
     has_vault = Vaults.has_vault?(user)
-    next = next_step(terms_ok, subscription_ok, profile_complete, profile, has_vault)
+
+    next =
+      next_step(terms_ok, subscription_ok, profile_complete, profile, has_vault, billing_active)
+
     steps = build_steps(billing_active, profile)
 
     base = %{
@@ -394,8 +397,11 @@ defmodule Engram.Onboarding do
   defp build_steps(billing_active, profile) do
     hosted = if billing_active, do: [:agreement, :billing], else: []
     tools = if tools_prefilled?(profile), do: [], else: [:tools]
+    # The user-voice survey is hosted-only: a self-hoster's answers have no
+    # PostHog to land in, so the step would be friction with no reader.
+    about = if billing_active, do: [:about], else: []
 
-    hosted ++ tools ++ [:vault]
+    hosted ++ tools ++ about ++ [:vault]
   end
 
   defp tools_prefilled?(%{"tools_prefilled" => true}), do: true
@@ -592,19 +598,27 @@ defmodule Engram.Onboarding do
     version
   end
 
-  defp next_step(false, _, _, _, _), do: :agreement
-  defp next_step(true, false, _, _, _), do: :billing
+  defp next_step(false, _, _, _, _, _), do: :agreement
+  defp next_step(true, false, _, _, _, _), do: :billing
 
   # Profile incomplete: chain through :tools then :vault. `:tools` step is
   # complete when the user has POSTed `tools`; `:vault` step is complete when
   # they've POSTed `uses_obsidian` (and, for fresh-path users, a vault row
   # exists). Both POSTs land via `set_profile/2`; once the second arrives,
   # `maybe_stamp_completed_at/1` latches `profile_complete?: true`.
-  defp next_step(true, true, false, profile, _) do
-    if profile_has_tools?(profile), do: :vault, else: :tools
+  #
+  # `:about` (hosted only) sits between them and is optional: answering OR
+  # skipping it stamps `survey_done_at` (`Engram.Feedback.submit/3`), which is
+  # all it waits on. It never gates runtime traffic, only wizard navigation.
+  defp next_step(true, true, false, profile, _, ask_survey) do
+    cond do
+      not profile_has_tools?(profile) -> :tools
+      ask_survey and not survey_done?(profile) -> :about
+      true -> :vault
+    end
   end
 
-  defp next_step(true, true, true, _profile, has_vault) do
+  defp next_step(true, true, true, _profile, has_vault, _ask_survey) do
     # Wizard navigation requires an actual vault row regardless of source —
     # Obsidian-path users wait here until the plugin's first sync creates one
     # (the `vault_populated` channel broadcast then unblocks the wizard). Note
@@ -617,6 +631,9 @@ defmodule Engram.Onboarding do
 
   defp profile_has_tools?(%{"tools" => [_ | _]}), do: true
   defp profile_has_tools?(_), do: false
+
+  defp survey_done?(%{"survey_done_at" => ts}) when is_binary(ts), do: true
+  defp survey_done?(_), do: false
 
   @doc """
   Mark the user as having chosen the Free tier during onboarding. Idempotent:

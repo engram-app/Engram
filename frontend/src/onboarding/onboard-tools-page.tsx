@@ -227,10 +227,11 @@ export default function OnboardToolsPage() {
 	}
 
 	// Honor backend ordering. Agreement/billing must come first; :done means
-	// we shouldn't be in the wizard. :tools (own step) and :vault (re-edit
-	// allowed for users who already picked tools and want to revise) both
-	// render this page.
-	if (status.next_step !== "tools" && status.next_step !== "vault" && status.next_step !== "done") {
+	// we shouldn't be in the wizard. :tools (own step) plus :about and :vault
+	// (re-edit allowed for users who already picked tools and want to revise)
+	// all render this page.
+	const later = ["tools", "about", "vault", "done"];
+	if (!later.includes(status.next_step)) {
 		return <Navigate to={`/onboard/${status.next_step}`} replace />;
 	}
 	if (status.next_step === "done") {
@@ -249,7 +250,10 @@ export default function OnboardToolsPage() {
 					step: "tools",
 					duration_ms: Date.now() - mountedAt,
 				});
-				navigate("/onboard/vault", { replace: true });
+				// Self-host has no :about step (no PostHog to read the answers).
+				navigate(status.steps.includes("about") ? "/onboard/about" : "/onboard/vault", {
+					replace: true,
+				});
 			}}
 		/>
 	);

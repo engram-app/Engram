@@ -13,6 +13,12 @@ vi.mock("../analytics/track", () => ({ track: vi.fn() }));
 const mockTrack = vi.mocked(track);
 
 const mutateAsync = vi.fn().mockResolvedValue({});
+const mockNavigate = vi.fn();
+
+vi.mock("react-router", async () => {
+	const actual = await vi.importActual<typeof import("react-router")>("react-router");
+	return { ...actual, useNavigate: () => mockNavigate };
+});
 
 let onboardingStatus: { data: OnboardingStatus | undefined; isLoading: boolean } = {
 	data: {
@@ -68,6 +74,7 @@ function wrap(ui: React.ReactNode) {
 
 beforeEach(() => {
 	mutateAsync.mockClear();
+	mockNavigate.mockClear();
 	mockTrack.mockClear();
 	onboardingStatus = {
 		data: {
@@ -277,5 +284,42 @@ describe("OnboardToolsPage: brand names are not translated", () => {
 		).toBeInTheDocument();
 		expect(screen.getByRole("checkbox", { name: "Continue" })).toBeInTheDocument();
 		window.localStorage.clear();
+	});
+});
+
+describe("OnboardToolsPage: next step", () => {
+	it("goes to the about step when the chain has it", async () => {
+		onboardingStatus.data = {
+			...onboardingStatus.data,
+			steps: ["tools", "about", "vault"],
+		} as OnboardingStatus;
+		render(wrap(<OnboardToolsPage />));
+
+		fireEvent.click(screen.getByLabelText(/^Claude$/iu));
+		fireEvent.click(screen.getByRole("button", { name: /continue/iu }));
+
+		await waitFor(() =>
+			expect(mockNavigate).toHaveBeenCalledWith("/onboard/about", { replace: true }),
+		);
+	});
+
+	it("goes straight to vault when the chain has no about step (self-host)", async () => {
+		onboardingStatus.data = {
+			...onboardingStatus.data,
+			steps: ["tools", "vault"],
+		} as OnboardingStatus;
+		render(wrap(<OnboardToolsPage />));
+
+		fireEvent.click(screen.getByLabelText(/^Claude$/iu));
+		fireEvent.click(screen.getByRole("button", { name: /continue/iu }));
+
+		await waitFor(() =>
+			expect(mockNavigate).toHaveBeenCalledWith("/onboard/vault", { replace: true }),
+		);
+	});
+
+	it("does not ask the survey questions itself", () => {
+		render(wrap(<OnboardToolsPage />));
+		expect(screen.queryByRole("radio", { name: /reddit/iu })).toBeNull();
 	});
 });
