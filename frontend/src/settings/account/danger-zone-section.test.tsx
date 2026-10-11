@@ -22,7 +22,12 @@ vi.mock("../../api/queries", () => ({
 	useSubmitFeedback: () => ({ mutateAsync: submitFeedback, isPending: false }),
 }));
 
+function openDialog() {
+	fireEvent.click(screen.getByRole("button", { name: /^delete account$/iu }));
+}
+
 function fillForm({ reason = true, detail = "too slow on my phone" } = {}) {
+	openDialog();
 	if (reason) {
 		fireEvent.click(screen.getByRole("radio", { name: /switched to another tool/iu }));
 	}
@@ -39,11 +44,25 @@ describe("DangerZoneSection", () => {
 		vi.mocked(isReverificationCancelledError).mockReturnValue(false);
 	});
 
+	it("keeps the reason form in a dialog until Delete account is clicked", () => {
+		render(<DangerZoneSection />);
+		expect(screen.queryByLabelText(/tell us more/iu)).not.toBeInTheDocument();
+		openDialog();
+		expect(screen.getByRole("dialog", { name: /delete your account/iu })).toBeInTheDocument();
+		expect(screen.getByLabelText(/tell us more/iu)).toBeInTheDocument();
+	});
+
 	it("keeps delete disabled until the confirmation phrase matches", () => {
 		render(<DangerZoneSection />);
+		openDialog();
 		const btn = screen.getByRole("button", { name: /delete my account/iu });
 		expect(btn).toBeDisabled();
-		fillForm();
+		fireEvent.click(screen.getByRole("radio", { name: /switched to another tool/iu }));
+		fireEvent.change(screen.getByLabelText(/tell us more/iu), { target: { value: "slow" } });
+		expect(btn).toBeDisabled();
+		fireEvent.change(screen.getByLabelText(/type .*delete my account/iu), {
+			target: { value: "delete my account" },
+		});
 		expect(btn).toBeEnabled();
 	});
 
