@@ -544,6 +544,9 @@ defmodule EngramWeb.Router do
       post "/onboarding/accept_free_tier", OnboardingController, :accept_free_tier
       # FTUX questionnaire — PATCH (frontend api client has no PUT helper).
       patch "/onboarding/profile", OnboardingController, :set_profile
+      # User-voice answers (onboarding survey, cancel reason, feedback box).
+      # Here, not the vault scope: the survey is answered mid-wizard.
+      post "/feedback", FeedbackController, :create
     end
 
     post "/onboarding/actions", OnboardingController, :record
