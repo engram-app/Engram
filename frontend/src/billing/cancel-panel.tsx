@@ -2,6 +2,14 @@ import { Loader2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
 import { EMPTY_REASON, ReasonFields, reasonComplete } from "@/feedback/reason-fields";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
@@ -65,37 +73,46 @@ export default function CancelPanel({ detail, tier, onClose }: CancelPanelProps)
 	}
 
 	return (
-		<section aria-label={t("Cancel subscription")} className="space-y-4 pt-2">
-			<header>
-				<h2 className="font-semibold text-base text-foreground">{t("Cancel subscription")}</h2>
-				<p className="mt-2 text-muted-foreground text-sm">
-					{effective ? (
-						<Trans
-							text="You'll keep your {tier} plan until {date}, then drop to Free."
-							slots={{ tier: tierLabel, date: <strong>{effective}</strong> }}
-						/>
-					) : (
-						t("You'll keep paid access through the end of your current billing period.")
-					)}
-				</p>
-			</header>
-			<ul className="list-disc space-y-1 pl-5 text-muted-foreground text-sm">
-				<li>{t("Your notes stay. Sync still works for vaults within Free limits.")}</li>
-				<li>{t("Vaults or notes that exceed Free limits become read-only.")}</li>
-				<li>{t("You can reverse this any time before the effective date.")}</li>
-			</ul>
-			<ReasonFields legend={t("Why are you canceling?")} value={answer} onChange={setAnswer} />
-			<footer className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-				<Button variant="outline" onClick={onClose} disabled={cancel.isPending}>
-					{t("Keep my subscription")}
-				</Button>
-				<Button variant="destructive" onClick={confirm} disabled={!canCancel || cancel.isPending}>
-					{Boolean(cancel.isPending) && (
-						<Loader2 data-icon="inline-start" aria-hidden className="animate-spin" />
-					)}
-					{cancel.isPending ? t("Canceling…") : t("Cancel at period end")}
-				</Button>
-			</footer>
-		</section>
+		<Dialog
+			open
+			onOpenChange={(open) => {
+				if (!(open || cancel.isPending)) {
+					onClose();
+				}
+			}}
+		>
+			<DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
+				<DialogHeader>
+					<DialogTitle>{t("Cancel subscription")}</DialogTitle>
+					<DialogDescription>
+						{effective ? (
+							<Trans
+								text="You'll keep your {tier} plan until {date}, then drop to Free."
+								slots={{ tier: tierLabel, date: <strong>{effective}</strong> }}
+							/>
+						) : (
+							t("You'll keep paid access through the end of your current billing period.")
+						)}
+					</DialogDescription>
+				</DialogHeader>
+				<ul className="list-disc space-y-1 pl-5 text-muted-foreground text-sm">
+					<li>{t("Your notes stay. Sync still works for vaults within Free limits.")}</li>
+					<li>{t("Vaults or notes that exceed Free limits become read-only.")}</li>
+					<li>{t("You can reverse this any time before the effective date.")}</li>
+				</ul>
+				<ReasonFields legend={t("Why are you canceling?")} value={answer} onChange={setAnswer} />
+				<DialogFooter>
+					<Button variant="outline" onClick={onClose} disabled={cancel.isPending}>
+						{t("Keep my subscription")}
+					</Button>
+					<Button variant="destructive" onClick={confirm} disabled={!canCancel || cancel.isPending}>
+						{Boolean(cancel.isPending) && (
+							<Loader2 data-icon="inline-start" aria-hidden className="animate-spin" />
+						)}
+						{cancel.isPending ? t("Canceling…") : t("Cancel at period end")}
+					</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
 	);
 }
