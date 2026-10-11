@@ -9,6 +9,8 @@ export interface FeedbackOption {
 }
 
 export const HEARD_FROM: FeedbackOption[] = [
+	// First: the community plugin listing is the likeliest source.
+	{ slug: "obsidian_plugins", label: msg("Obsidian plugins") },
 	{ slug: "search", label: msg("Search engine") },
 	{ slug: "reddit", label: msg("Reddit") },
 	{ slug: "youtube", label: msg("YouTube") },

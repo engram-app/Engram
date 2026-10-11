@@ -63,8 +63,8 @@ defmodule Engram.FeedbackTest do
     end
 
     test "accepts heard_from alone", %{user: user} do
-      assert :ok = Feedback.submit(user, "onboarding", %{"heard_from" => "friend"})
-      assert profile(user)["heard_from"] == "friend"
+      assert :ok = Feedback.submit(user, "onboarding", %{"heard_from" => "obsidian_plugins"})
+      assert profile(user)["heard_from"] == "obsidian_plugins"
       refute Map.has_key?(profile(user), "use_cases")
     end
 

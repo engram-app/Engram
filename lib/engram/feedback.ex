@@ -7,8 +7,8 @@ defmodule Engram.Feedback do
   the slugs also set as person properties so dashboards can break funnels down
   by them. The onboarding answers are also merged into
   `users.onboarding_profile`, so they survive a PostHog outage and self-host.
-  Answering is always optional. An empty onboarding submission is the Skip
-  button: it stamps `survey_done_at` (as an answer does), which is the only
+  Answering is always optional. An empty onboarding submission (Continue with
+  nothing picked) is a skip: it stamps `survey_done_at` (as an answer does), which is the only
   thing the wizard's `:about` step waits on.
   """
 
@@ -18,7 +18,7 @@ defmodule Engram.Feedback do
   alias Engram.Observability.PostHog
   alias Engram.Repo
 
-  @heard_from ~w(search reddit youtube obsidian_community friend ai_assistant social other)
+  @heard_from ~w(search reddit youtube obsidian_community obsidian_plugins friend ai_assistant social other)
   @use_cases ~w(ai_memory obsidian_sync web_access search backup sharing other)
   @cancel_reasons ~w(too_expensive missing_feature sync_issues switched_tool not_using other)
   @max_text 2_000

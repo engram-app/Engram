@@ -10,7 +10,7 @@ import LoadingScreen from "../layout/loading-screen";
 import { type AboutYou, AboutYouFields, aboutYouBody, EMPTY_ABOUT_YOU } from "./about-you-fields";
 import { onboardingDoneTarget } from "./onboarding-next";
 
-// Optional user-voice step (hosted only). Answering or skipping both POST
+// Optional user-voice step (hosted only). Continue always POSTs
 // /feedback, which stamps survey_done_at and lets the wizard move on to :vault.
 export default function OnboardAboutPage() {
 	const { t } = useT();
@@ -32,10 +32,11 @@ export default function OnboardAboutPage() {
 		return <Navigate to={`/onboard/${status.next_step}`} replace />;
 	}
 
-	async function finish(skipped: boolean) {
-		const body = skipped ? null : aboutYouBody(aboutYou);
+	// Continue with nothing picked is the skip: the empty body still stamps
+	// survey_done_at so the wizard moves on.
+	async function finish() {
 		try {
-			await submitFeedback.mutateAsync(body ?? { kind: "onboarding" });
+			await submitFeedback.mutateAsync(aboutYouBody(aboutYou) ?? { kind: "onboarding" });
 		} catch {
 			// isError renders the alert; stay on the step so they can retry.
 			return;
@@ -58,15 +59,7 @@ export default function OnboardAboutPage() {
 				</p>
 			) : null}
 			<footer className="flex items-center justify-end gap-2">
-				<Button
-					type="button"
-					variant="ghost"
-					onClick={() => finish(true)}
-					disabled={submitFeedback.isPending}
-				>
-					{t("Skip")}
-				</Button>
-				<Button type="button" onClick={() => finish(false)} disabled={submitFeedback.isPending}>
+				<Button type="button" onClick={finish} disabled={submitFeedback.isPending}>
 					{submitFeedback.isPending ? t("Saving…") : t("Continue")}
 				</Button>
 			</footer>

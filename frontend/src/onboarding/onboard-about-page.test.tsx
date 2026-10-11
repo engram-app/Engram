@@ -81,19 +81,9 @@ describe("OnboardAboutPage", () => {
 		});
 	});
 
-	it("Skip records an empty answer, then moves on", async () => {
-		render(wrap(<OnboardAboutPage />));
-		fireEvent.click(screen.getByRole("radio", { name: /reddit/iu }));
-		fireEvent.click(screen.getByRole("button", { name: /skip/iu }));
-
-		await waitFor(() =>
-			expect(mockNavigate).toHaveBeenCalledWith("/onboard/vault", { replace: true }),
-		);
-		expect(mutateAsync).toHaveBeenCalledWith({ kind: "onboarding" });
-	});
-
 	it("Continue with nothing picked counts as a skip", async () => {
 		render(wrap(<OnboardAboutPage />));
+		expect(screen.queryByRole("button", { name: /skip/iu })).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: /continue/iu }));
 
 		await waitFor(() => expect(mockNavigate).toHaveBeenCalled());
@@ -104,7 +94,7 @@ describe("OnboardAboutPage", () => {
 		mutateAsync.mockRejectedValue(new Error("boom"));
 		isError = true;
 		render(wrap(<OnboardAboutPage />));
-		fireEvent.click(screen.getByRole("button", { name: /skip/iu }));
+		fireEvent.click(screen.getByRole("button", { name: /continue/iu }));
 
 		expect(await screen.findByRole("alert")).toBeInTheDocument();
 		expect(mockNavigate).not.toHaveBeenCalled();
