@@ -1461,8 +1461,7 @@ export default {
 	"Or create a new vault": "Или создайте новое хранилище",
 	"Changes can't be saved: your account can't sync right now.":
 		"Не удаётся сохранить изменения: ваша учётная запись сейчас не может синхронизироваться.",
-	"Why are you canceling? (optional)": "Почему вы отменяете подписку? (необязательно)",
-	"What could we have done better? (optional)": "Что мы могли бы сделать лучше? (необязательно)",
+	"Why are you canceling?": "Почему вы отменяете подписку?",
 	"Send feedback": "Отправить отзыв",
 	"What will you use Engram for?": "Для чего вы будете использовать Engram?",
 	"How did you hear about Engram?": "Как вы узнали об Engram?",

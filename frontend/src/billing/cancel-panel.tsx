@@ -45,17 +45,17 @@ export default function CancelPanel({ detail, tier, onClose }: CancelPanelProps)
 	const tierKey = TIER_LABELS[tier];
 	const tierLabel = tierKey ? t(tierKey) : t("paid");
 
+	// A reason AND a sentence are the price of the cancel: it is the one
+	// signal we get from someone leaving.
+	const text = comment.trim();
+	const canCancel = reason !== null && text !== "";
+
 	async function confirm() {
-		// Optional and fire-and-forget: a reason must never block a cancel.
-		// Typed text with no picked reason still counts, filed as "other".
-		const text = comment.trim();
-		if (reason || text) {
-			submitFeedback.mutate({
-				kind: "cancel",
-				reason: reason ?? "other",
-				...(text ? { detail: text } : {}),
-			});
+		if (!canCancel) {
+			return;
 		}
+		// Fire-and-forget: a failed feedback call must never block the cancel.
+		submitFeedback.mutate({ kind: "cancel", reason, detail: text });
 		try {
 			await cancel.mutateAsync();
 			toast.success(t("Subscription scheduled to cancel."));
@@ -87,7 +87,7 @@ export default function CancelPanel({ detail, tier, onClose }: CancelPanelProps)
 			</ul>
 			<fieldset className="flex flex-col gap-2">
 				<legend className="mb-2 font-medium text-foreground text-sm">
-					{t("Why are you canceling? (optional)")}
+					{t("Why are you canceling?")}
 				</legend>
 				<RadioGroup value={reason ?? ""} onValueChange={setReason} className="sm:grid-cols-2">
 					{CANCEL_REASONS.map((opt) => (
@@ -99,22 +99,20 @@ export default function CancelPanel({ detail, tier, onClose }: CancelPanelProps)
 				</RadioGroup>
 			</fieldset>
 			<label className="flex flex-col gap-1.5 text-sm">
-				<span className="font-medium text-foreground">
-					{t("What could we have done better? (optional)")}
-				</span>
+				<span className="font-medium text-foreground">{t("Tell us more")}</span>
 				<Textarea value={comment} maxLength={2000} onChange={(e) => setComment(e.target.value)} />
 			</label>
-			<div className="flex gap-2">
-				<Button variant="destructive" onClick={confirm} disabled={cancel.isPending}>
+			<footer className="flex justify-end gap-2">
+				<Button variant="outline" onClick={onClose} disabled={cancel.isPending}>
+					{t("Keep my subscription")}
+				</Button>
+				<Button variant="destructive" onClick={confirm} disabled={!canCancel || cancel.isPending}>
 					{Boolean(cancel.isPending) && (
 						<Loader2 data-icon="inline-start" aria-hidden className="animate-spin" />
 					)}
 					{cancel.isPending ? t("Canceling…") : t("Cancel at period end")}
 				</Button>
-				<Button variant="outline" onClick={onClose} disabled={cancel.isPending}>
-					{t("Keep my subscription")}
-				</Button>
-			</div>
+			</footer>
 		</section>
 	);
 }

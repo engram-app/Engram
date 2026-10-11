@@ -1289,8 +1289,7 @@ export default {
 	"Or create a new vault": "或创建新知识库",
 	"Changes can't be saved: your account can't sync right now.":
 		"无法保存更改：您的账户当前无法同步。",
-	"Why are you canceling? (optional)": "你为什么要取消？（可选）",
-	"What could we have done better? (optional)": "我们哪里可以做得更好？（可选）",
+	"Why are you canceling?": "你为什么要取消？",
 	"Send feedback": "发送反馈",
 	"What will you use Engram for?": "你打算用 Engram 做什么？",
 	"How did you hear about Engram?": "你是如何了解到 Engram 的？",

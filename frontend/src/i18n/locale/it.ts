@@ -1428,8 +1428,7 @@ export default {
 	"Or create a new vault": "Oppure crea un nuovo archivio",
 	"Changes can't be saved: your account can't sync right now.":
 		"Impossibile salvare le modifiche: al momento il tuo account non può sincronizzarsi.",
-	"Why are you canceling? (optional)": "Perché stai annullando? (facoltativo)",
-	"What could we have done better? (optional)": "Cosa avremmo potuto fare meglio? (facoltativo)",
+	"Why are you canceling?": "Perché stai annullando?",
 	"Send feedback": "Invia un feedback",
 	"What will you use Engram for?": "Per cosa userai Engram?",
 	"How did you hear about Engram?": "Come hai conosciuto Engram?",

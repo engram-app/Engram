@@ -57,6 +57,8 @@ describe("CancelPanel", () => {
 		const onClose = vi.fn();
 
 		render(<CancelPanel detail={detail()} tier="pro" onClose={onClose} />, { wrapper: Wrapper });
+		fireEvent.click(screen.getByRole("radio", { name: /switched to another tool/iu }));
+		fireEvent.change(screen.getByLabelText(/tell us more/iu), { target: { value: "Notion" } });
 		fireEvent.click(screen.getByRole("button", { name: /cancel at period end/iu }));
 
 		await waitFor(() => expect(onClose).toHaveBeenCalled());
@@ -88,7 +90,7 @@ describe("CancelPanel", () => {
 		render(<CancelPanel detail={detail()} tier="pro" onClose={onClose} />, { wrapper: Wrapper });
 
 		fireEvent.click(screen.getByRole("radio", { name: /too expensive/iu }));
-		fireEvent.change(screen.getByLabelText(/what could we have done better/iu), {
+		fireEvent.change(screen.getByLabelText(/tell us more/iu), {
 			target: { value: "  half the price  " },
 		});
 		fireEvent.click(screen.getByRole("button", { name: /cancel at period end/iu }));
@@ -102,16 +104,23 @@ describe("CancelPanel", () => {
 		expect(post).toHaveBeenCalledWith("/billing/cancel-subscription");
 	});
 
-	it("cancels without a reason and sends no feedback", async () => {
-		post.mockResolvedValue({});
-		const onClose = vi.fn();
-		render(<CancelPanel detail={detail()} tier="pro" onClose={onClose} />, { wrapper: Wrapper });
+	it("keeps Cancel disabled until a reason is picked and text is written", () => {
+		render(<CancelPanel detail={detail()} tier="pro" onClose={vi.fn()} />, { wrapper: Wrapper });
+		const cancelButton = screen.getByRole("button", { name: /cancel at period end/iu });
 
-		fireEvent.click(screen.getByRole("button", { name: /cancel at period end/iu }));
+		expect(cancelButton).toBeDisabled();
+		fireEvent.click(cancelButton);
+		expect(post).not.toHaveBeenCalled();
 
-		await waitFor(() => expect(onClose).toHaveBeenCalled());
-		expect(post).toHaveBeenCalledTimes(1);
-		expect(post).toHaveBeenCalledWith("/billing/cancel-subscription");
+		fireEvent.click(screen.getByRole("radio", { name: /too expensive/iu }));
+		expect(cancelButton).toBeDisabled();
+
+		const box = screen.getByLabelText(/tell us more/iu);
+		fireEvent.change(box, { target: { value: "   " } });
+		expect(cancelButton).toBeDisabled();
+
+		fireEvent.change(box, { target: { value: "too pricey for me" } });
+		expect(cancelButton).toBeEnabled();
 	});
 
 	it("still cancels when the feedback call fails", async () => {
@@ -122,6 +131,7 @@ describe("CancelPanel", () => {
 		render(<CancelPanel detail={detail()} tier="pro" onClose={onClose} />, { wrapper: Wrapper });
 
 		fireEvent.click(screen.getByRole("radio", { name: /not using it enough/iu }));
+		fireEvent.change(screen.getByLabelText(/tell us more/iu), { target: { value: "busy" } });
 		fireEvent.click(screen.getByRole("button", { name: /cancel at period end/iu }));
 
 		await waitFor(() => expect(onClose).toHaveBeenCalled());

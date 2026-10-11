@@ -1350,8 +1350,7 @@ export default {
 	"Or create a new vault": "または新しい保管庫を作成",
 	"Changes can't be saved: your account can't sync right now.":
 		"変更を保存できません：現在アカウントを同期できません。",
-	"Why are you canceling? (optional)": "解約の理由を教えてください（任意）",
-	"What could we have done better? (optional)": "改善できた点はありますか？（任意）",
+	"Why are you canceling?": "解約の理由を教えてください",
 	"Send feedback": "フィードバックを送信",
 	"What will you use Engram for?": "Engram を何に使いますか？",
 	"How did you hear about Engram?": "Engram をどこで知りましたか？",

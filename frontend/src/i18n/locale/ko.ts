@@ -1329,8 +1329,7 @@ export default {
 	"Or create a new vault": "또는 새 보관함 만들기",
 	"Changes can't be saved: your account can't sync right now.":
 		"변경 사항을 저장할 수 없습니다: 지금은 계정을 동기화할 수 없습니다.",
-	"Why are you canceling? (optional)": "해지하시는 이유가 무엇인가요? (선택)",
-	"What could we have done better? (optional)": "저희가 무엇을 더 잘할 수 있었을까요? (선택)",
+	"Why are you canceling?": "해지하시는 이유가 무엇인가요?",
 	"Send feedback": "피드백 보내기",
 	"What will you use Engram for?": "Engram을 어디에 사용하실 건가요?",
 	"How did you hear about Engram?": "Engram을 어떻게 알게 되셨나요?",
