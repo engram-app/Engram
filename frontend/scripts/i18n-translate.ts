@@ -207,11 +207,23 @@ function isPlural(entry: Entry | undefined): boolean {
 }
 
 const byKey = new Map(entries.map((e) => [e.key, e]));
+// Each file is formatted as soon as it is written: a run killed mid-way (CI step
+// timeout) must still leave catalogs that pass `biome ci`.
+function format(file: string): void {
+	// `bun run`, not the raw bin: its node shebang fails on runners without node.
+	const fmt = spawnSync(process.execPath, ["run", "biome", "format", "--write", file], {
+		cwd: join(import.meta.dir, ".."),
+		stdio: "inherit",
+	});
+	if (fmt.status !== 0) {
+		throw new Error(`biome format failed with status ${fmt.status}`);
+	}
+}
+
 const stateFile = join(localeDir, "state.json");
 const state: Partial<Record<Target, LocaleState>> = existsSync(stateFile)
 	? JSON.parse(readFileSync(stateFile, "utf8"))
 	: {};
-const written: string[] = [stateFile];
 for (const code of targets) {
 	const old = await loadCatalog(code);
 	const fresh: Catalog = {};
@@ -228,24 +240,14 @@ for (const code of targets) {
 	}
 	await pool(code, tasks);
 	const merged = mergeCatalog(entries, old, fresh);
-	written.push(writeCatalog(code, merged));
+	format(writeCatalog(code, merged));
 	// Written per locale, so a killed run resumes: an unstamped locale is redone.
 	state[code] = nextLocaleState(todo, fresh);
 	writeFileSync(stateFile, `${JSON.stringify(state, null, "\t")}\n`);
+	format(stateFile);
 	const failed = todo.filter((k) => !(k in fresh));
 	const dropped = Object.keys(old).filter((k) => !(k in merged));
 	console.log(
 		`${code}: ${todo.length - failed.length}/${todo.length} translated, ${failed.filter((k) => k in old).length} kept old, ${failed.filter((k) => !(k in old)).length} still English, ${dropped.length} orphans dropped`,
 	);
-}
-
-if (targets.length > 0) {
-	// `bun run`, not the raw bin: its node shebang fails on runners without node.
-	const fmt = spawnSync(process.execPath, ["run", "biome", "format", "--write", ...written], {
-		cwd: join(import.meta.dir, ".."),
-		stdio: "inherit",
-	});
-	if (fmt.status !== 0) {
-		throw new Error(`biome format failed with status ${fmt.status}`);
-	}
 }

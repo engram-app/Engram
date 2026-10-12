@@ -70,8 +70,29 @@ jobs:
         working-directory: frontend
         run: bun install --frozen-lockfile --registry http://10.0.20.214:4873
 
+      # Progress lives on the bot branch until its PR merges. Start from it, so a
+      # redo that hit the timeout resumes and an unmerged PR is not redone.
+      # Orphans in it are dropped by the merge, so an older base is fine.
+      - name: Resume from the open bot PR
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --heads origin bot/i18n-translate >/dev/null; then
+            git fetch --depth=1 origin bot/i18n-translate
+            git checkout FETCH_HEAD -- frontend/src/i18n/locale/
+            echo "Resumed catalogs from bot/i18n-translate."
+          else
+            echo "No open bot PR; starting from main."
+          fi
+
+      # Step timeout below the job's, so finished locales (each written, with its
+      # state stamp, the moment it completes) still reach the PR. A timed-out
+      # step fails, so continue-on-error lets the PR steps run; the parity step
+      # still gates a genuinely broken catalog.
       - name: Translate
+        id: translate
         working-directory: frontend
+        timeout-minutes: 300
+        continue-on-error: true
         env:
           I18N_OLLAMA_URL: http://10.0.20.214:11434
           ALL: ${{ inputs.all && '--all' || '' }}
@@ -134,3 +155,10 @@ jobs:
           labels: |
             automated
             i18n
+
+      # continue-on-error above must not turn an outage or a timeout green.
+      - name: Fail if translation did not finish
+        if: steps.translate.outcome == 'failure'
+        run: |
+          echo "::error::i18n:translate failed or hit its timeout. Finished locales are in the bot PR; the next run (push or nightly) resumes from it."
+          exit 1
