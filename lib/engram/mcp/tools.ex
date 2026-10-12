@@ -1233,8 +1233,9 @@ defmodule Engram.MCP.Tools do
     %{
       name: "delete_attachment",
       description:
-        "Delete a single attachment (image, PDF, or other binary file) by path. " <>
-          "Syncs the delete to all connected Obsidian devices. Deleting a path " <>
+        "Permanently delete a single attachment (image, PDF, or other binary file) by " <>
+          "path; the stored file is removed and cannot be restored. Syncs the delete to " <>
+          "all connected Obsidian devices. Deleting a path " <>
           "with no attachment succeeds and reports deleted: false. For notes use " <>
           "delete_note; to remove a whole folder use delete_folder.",
       inputSchema: %{

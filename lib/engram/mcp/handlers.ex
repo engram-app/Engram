@@ -595,17 +595,27 @@ defmodule Engram.MCP.Handlers do
   end
 
   def handle("delete_attachment", user, vault, args) do
-    case args["path"] || "" do
+    raw = args["path"] || ""
+
+    # Report the path the delete acts on (and the broadcast carries), not the
+    # raw argument; "/" or ".." sanitize to the vault root and are refused.
+    case Notes.PathSanitizer.sanitize(raw) do
       "" ->
         {:error, "path is required"}
 
       path ->
         # Same contract as delete_note: an absent path is a successful no-op,
         # and the payload says whether anything was there.
-        existed? = Engram.Attachments.delete_attachment_reporting(user, vault, path) == :deleted
+        case Engram.Attachments.delete_attachment_reporting(user, vault, raw) do
+          :deleted ->
+            {:ok, "Attachment deleted: #{path}", %{"path" => path, "deleted" => true}}
 
-        text = if existed?, do: "Attachment deleted: #{path}", else: "No attachment at: #{path}"
-        {:ok, text, %{"path" => path, "deleted" => existed?}}
+          :absent ->
+            {:ok, "No attachment at: #{path}", %{"path" => path, "deleted" => false}}
+
+          {:error, reason} ->
+            log_and_error("delete_attachment", reason, "Could not delete attachment: #{path}")
+        end
     end
   end
 

@@ -182,8 +182,63 @@ defmodule Engram.MCP.HandlersTest do
       assert msg =~ "No attachment at: nope.png"
     end
 
-    test "an empty path is refused", %{user: user, vault: vault} do
-      assert {:error, _} = Handlers.handle("delete_attachment", user, vault, %{})
+    test "removes the stored blob", %{user: user, vault: vault} do
+      {:ok, att} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "b.png",
+          "content_base64" => Base.encode64("x")
+        })
+
+      test_pid = self()
+
+      Mox.stub(Engram.MockStorage, :delete, fn key ->
+        send(test_pid, {:blob_deleted, key})
+        :ok
+      end)
+
+      assert {:ok, _, %{"deleted" => true}} =
+               Handlers.handle("delete_attachment", user, vault, %{"path" => "b.png"})
+
+      storage_key = att.storage_key
+      assert_receive {:blob_deleted, ^storage_key}
+    end
+
+    test "reports the sanitized path that was deleted", %{user: user, vault: vault} do
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "img/c.png",
+          "content_base64" => Base.encode64("x")
+        })
+
+      assert {:ok, msg, %{"path" => "img/c.png", "deleted" => true}} =
+               Handlers.handle("delete_attachment", user, vault, %{"path" => "/img/c.png"})
+
+      assert msg =~ "Attachment deleted: img/c.png"
+    end
+
+    test "an empty path, or one that sanitizes to empty, is refused", %{user: user, vault: vault} do
+      for args <- [%{}, %{"path" => ""}, %{"path" => "/"}, %{"path" => ".."}] do
+        assert {:error, "path is required"} =
+                 Handlers.handle("delete_attachment", user, vault, args)
+      end
+    end
+
+    test "a crypto failure is an error, not a reported no-op", %{user: user, vault: vault} do
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "d.png",
+          "content_base64" => Base.encode64("x")
+        })
+
+      Engram.Crypto.DekCache.invalidate(user.id)
+      corrupt = user |> Ecto.Changeset.change(encrypted_dek: :crypto.strong_rand_bytes(32))
+      {:ok, corrupt_user} = Engram.Repo.update(corrupt, skip_tenant_check: true)
+
+      assert {:error, msg} =
+               Handlers.handle("delete_attachment", corrupt_user, vault, %{"path" => "d.png"})
+
+      assert msg =~ "Could not delete attachment"
+      refute msg =~ "unrecognised_blob"
     end
   end
 

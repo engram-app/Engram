@@ -387,28 +387,34 @@ defmodule Engram.Attachments do
   end
 
   @doc """
-  Soft-deletes an attachment. Idempotent — returns :ok even if already deleted or nonexistent.
+  Soft-deletes an attachment. Idempotent — returns :ok even if already deleted or nonexistent;
+  `{:error, reason}` only when the delete could not run (DEK unwrap or tenant transaction failed).
 
   Ordering: soft-delete the DB row first (reversible), then delete the blob (permanent).
   If the blob delete fails, the row stays deleted and we log a warning — a zombie blob
   wastes storage but doesn't cause data loss, unlike the reverse (ghost row pointing to nothing).
   """
+  @spec delete_attachment(map(), map(), String.t(), keyword()) :: :ok | {:error, term()}
   def delete_attachment(user, vault, path, opts \\ []) do
-    _ = delete_attachment_reporting(user, vault, path, opts)
-    :ok
+    case delete_attachment_reporting(user, vault, path, opts) do
+      {:error, _} = err -> err
+      _ -> :ok
+    end
   end
 
   @doc """
   `delete_attachment/4`, reporting whether a live attachment was there:
   `:deleted` or `:absent`.
   """
-  @spec delete_attachment_reporting(map(), map(), String.t(), keyword()) :: :deleted | :absent
+  @spec delete_attachment_reporting(map(), map(), String.t(), keyword()) ::
+          :deleted | :absent | {:error, term()}
   def delete_attachment_reporting(user, vault, path, opts \\ []) do
-    if do_delete_attachment(fresh_user(user), vault, path, opts), do: :deleted, else: :absent
+    do_delete_attachment(fresh_user(user), vault, path, opts)
   end
 
-  # Soft-deletes one attachment and returns whether a live row actually
-  # transitioned to deleted (`false` for an absent/already-deleted path).
+  # Soft-deletes one attachment: `:deleted` when a live row transitioned,
+  # `:absent` for an absent/already-deleted path, `{:error, reason}` when the
+  # delete could not run.
   # Single-delete path only — `batch_delete/3` has its own one-transaction
   # implementation with the same broadcast payload + blob-cleanup contract.
   # opts[:origin_device_id] is stamped into the delete broadcast (#970) so the
@@ -440,11 +446,11 @@ defmodule Engram.Attachments do
         # Best-effort blob cleanup — row is already soft-deleted so safe to retry.
         # `edge_hook` carries {attachment_id, basename_hmac} for the #591
         # edge-flip + sibling-rebind below, nil when no live row matched.
-        {deleted?, edge_hook} =
+        {status, edge_hook} =
           case result do
             {:ok, {count, {id, key, basename_hmac}}} when count > 0 ->
               if is_binary(key), do: delete_external(key)
-              {true, {id, basename_hmac}}
+              {:deleted, {id, basename_hmac}}
 
             # {count, nil}: count is always 0 here — the select always returns
             # the {id, storage_key, basename_hmac} 3-tuple (storage_key may
@@ -452,8 +458,8 @@ defmodule Engram.Attachments do
             # first branch above and unpacks fine). List.first(rows) is only
             # nil when rows == [], i.e. no live row matched path_hmac
             # (absent or already-deleted path).
-            {:ok, {count, _}} ->
-              {count > 0, nil}
+            {:ok, {0, _}} ->
+              {:absent, nil}
 
             {:error, reason} ->
               require Logger
@@ -463,7 +469,7 @@ defmodule Engram.Attachments do
                 Metadata.with_category(:warning, :sync, reason: Metadata.safe_reason(reason))
               )
 
-              {false, nil}
+              {{:error, reason}, nil}
           end
 
         # #591 — the attachment is gone: flip any incoming edges back to
@@ -487,7 +493,7 @@ defmodule Engram.Attachments do
         # are gone post-delete, so only the discriminators the plugin needs to
         # trash are sent.
         _ =
-          if deleted? do
+          if status == :deleted do
             payload = %{
               "event_type" => "delete",
               "kind" => "attachment",
@@ -506,11 +512,15 @@ defmodule Engram.Attachments do
             Broadcast.emit("sync:#{user.id}:#{vault.id}", "note_changed", payload)
           end
 
-        deleted?
+        status
 
       {:error, :no_dek} ->
         # No DEK = no attachments to delete; mirror get_attachment's defensive empty.
-        false
+        :absent
+
+      # DEK unwrap failed (KMS outage, unrecognised blob). Nothing was deleted.
+      {:error, _} = err ->
+        err
     end
   end
 
