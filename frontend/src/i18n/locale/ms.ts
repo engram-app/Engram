@@ -95,7 +95,7 @@ export default {
 	"Renews on": "Diperbaharui pada",
 	"Current Plan": "Pelan semasa",
 	Free: "Percuma",
-	Starter: "Permulaan",
+	Starter: "Starter",
 	Pro: "Pro",
 	"{count} days remaining in your free trial.": {
 		other: "{count} hari lagi untuk tempoh percubaan percuma anda.",

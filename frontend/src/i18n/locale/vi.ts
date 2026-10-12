@@ -93,8 +93,8 @@ export default {
 	"Renews on": "Tự động gia hạn vào ngày",
 	"Current Plan": "Gói hiện tại",
 	Free: "Miễn phí",
-	Starter: "Bản tiêu chuẩn",
-	Pro: "Bản chuyên nghiệp",
+	Starter: "Starter",
+	Pro: "Pro",
 	"{count} days remaining in your free trial.": {
 		other: "Còn {count} ngày trong thời gian dùng thử miễn phí của bạn.",
 	},

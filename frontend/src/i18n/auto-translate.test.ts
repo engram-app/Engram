@@ -5,6 +5,8 @@ import {
 	cleanOutput,
 	fromSample,
 	HttpError,
+	invalidKeys,
+	isBrandOnly,
 	isValid,
 	maskPlaceholders,
 	mergeCatalog,
@@ -70,6 +72,19 @@ describe("isValid", () => {
 		expect(isValid("Open Obsidian", "Öffne die App", "de")).toBe(false);
 	});
 
+	it("keeps plan names untranslated, matching whole words only", () => {
+		expect(problems("Upgrade to Pro", "Actualiza a Profesional", "es")).toEqual(["brand"]);
+		expect(problems("Starter plan", "Plan Básico", "es")).toEqual(["brand"]);
+		expect(problems("Upgrade to Pro", "Actualiza a Pro", "es")).toEqual([]);
+		expect(problems("Pro", "Pro版", "zh-CN")).toEqual([]);
+		// "Pro" inside "Profile" is not the plan.
+		expect(problems("Edit profile", "Editar perfil", "es")).toEqual([]);
+		expect(problems("Profile", "Perfil", "es")).toEqual([]);
+		// A translation may inflect a brand ("Obsidians Stil"), not replace it.
+		expect(problems("Obsidian's flavour", "Obsidians Stil", "de")).toEqual([]);
+		expect(problems("Obsidian's flavour", "Die Variante von Obsidian’s", "de")).toEqual([]);
+	});
+
 	it("rejects a runaway answer", () => {
 		expect(isValid("Sync", "Synchronisieren ".repeat(5), "de")).toBe(false);
 	});
@@ -85,6 +100,14 @@ describe("isValid", () => {
 		expect(
 			isValid("Open a note to insert", "Open the note to insert", "ja", "挿入するノートを開く"),
 		).toBe(false);
+	});
+
+	it("accepts a brand-only string kept as-is, even over an old translation", () => {
+		expect(isValid("Pro", "Pro", "es", "Profesional")).toBe(true);
+		expect(isValid("Starter", "Starter", "zh-CN", "基础版")).toBe(true);
+		expect(isBrandOnly("Pro")).toBe(true);
+		expect(isBrandOnly("{plan} Pro")).toBe(true);
+		expect(isBrandOnly("Upgrade to Pro")).toBe(false);
 	});
 
 	it("rejects untranslated English when the old catalog had a translation", () => {
@@ -163,6 +186,23 @@ describe("pluralSamples / fromSample", () => {
 	it("refuses when the number is missing or repeated", () => {
 		expect(fromSample("файлов", "5")).toBeNull();
 		expect(fromSample("5 из 5", "5")).toBeNull();
+	});
+});
+
+describe("invalidKeys", () => {
+	it("lists entries that fail a current check, so a new rule heals old violations", () => {
+		const catalog = {
+			"Upgrade to Pro": "Actualiza a Profesional",
+			Save: "Guardar",
+			"{count} files": { one: "1 archivo", other: "{count} archivos" },
+		};
+		expect(invalidKeys(catalog, "es")).toEqual(["Upgrade to Pro"]);
+	});
+
+	it("allows a plural one-form to drop {count}", () => {
+		expect(
+			invalidKeys({ "{count} files": { one: "un archivo", other: "{count} archivos" } }, "es"),
+		).toEqual([]);
 	});
 });
 
@@ -272,6 +312,20 @@ describe("maskPlaceholders / unmaskPlaceholders", () => {
 			masked: "Vaults ({0} / {1})",
 			names: ["{used}", "{cap}"],
 		});
+	});
+
+	it("masks brand and plan names too, so the model cannot translate them", () => {
+		expect(maskPlaceholders("Choose Starter")).toEqual({
+			masked: "Choose {0}",
+			names: ["Starter"],
+		});
+		expect(maskPlaceholders("Open {path} in Obsidian")).toEqual({
+			masked: "Open {0} in {1}",
+			names: ["{path}", "Obsidian"],
+		});
+		// Whole words only: "Profile" is not the Pro plan.
+		expect(maskPlaceholders("Edit profile").masked).toBe("Edit profile");
+		expect(unmaskPlaceholders("选择{0}", ["Starter"])).toBe("选择Starter");
 	});
 
 	it("reuses one token for a repeated name", () => {

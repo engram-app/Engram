@@ -94,8 +94,8 @@ export default {
 	"Renews on": "Se renueva el",
 	"Current Plan": "Plan actual",
 	Free: "Gratuito",
-	Starter: "Básico",
-	Pro: "Profesional",
+	Starter: "Starter",
+	Pro: "Pro",
 	"{count} days remaining in your free trial.": {
 		one: "Te queda {count} día en tu prueba gratuita.",
 		many: "Te quedan {count} días en tu prueba gratuita.",

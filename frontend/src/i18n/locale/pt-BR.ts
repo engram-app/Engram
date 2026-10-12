@@ -95,8 +95,8 @@ export default {
 	"Renews on": "Renova em",
 	"Current Plan": "Plano atual",
 	Free: "Gratuito",
-	Starter: "Básico",
-	Pro: "Profissional",
+	Starter: "Starter",
+	Pro: "Pro",
 	"{count} days remaining in your free trial.": {
 		one: "{count} dia restante no seu período de teste gratuito.",
 		many: "Restam {count} dias do seu período de teste gratuito.",
@@ -991,7 +991,7 @@ export default {
 	Value: "Valor",
 	"Add property": "Adicionar propriedade",
 	"Properties are the note's {frontmatter}: a block at the very top of the file, fenced by {fence}. Obsidian shows the same block as Properties, so a note edited in either place reads the same in both.":
-		"As propriedades são o {frontmatter} da nota: um bloco no topo do arquivo, delimitado por {fence}. O Obsidian mostra esse mesmo bloco como Propriedades, então uma nota editada em qualquer um dos dois lugares aparece igual nos dois.",
+		"As {frontmatter} são as propriedades da nota: um bloco no topo do arquivo, delimitado por {fence}. O Obsidian mostra o mesmo bloco como Propriedades, então uma nota editada em qualquer lugar terá a mesma aparência em ambos.",
 	"Any property you add is stored and synced. These are the ones Engram also {reads} — it indexes them into their own columns and search uses them, so filling them in does more than record a note about the note:":
 		"Qualquer propriedade que você adicionar é armazenada e sincronizada. Estas são as propriedades que o Engram também {reads} — ele as indexa em colunas separadas e a busca as utiliza, então preenchê-las faz mais do que apenas registrar informações sobre a nota:",
 	"These field names come from the {okf}, the open standard Engram follows — so using them keeps your notes portable to anything else that reads OKF. Any other name is yours to invent; it syncs like everything else.":

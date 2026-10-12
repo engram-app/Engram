@@ -98,7 +98,6 @@
 		"failed": [
 			"per {interval}",
 			"{count} minutes ago",
-			"{count} results",
 			"{hidden} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search."
 		],
 		"one": {
@@ -110,6 +109,7 @@
 			"{count} months ago": "{count} month ago",
 			"{count} years ago": "{count} year ago",
 			"{count} days left in your trial.": "{count} day left in your trial.",
+			"{count} results": "{count} result",
 			"{count} days": "{count} day",
 			"{count} weeks": "{count} week",
 			"{count} months": "{count} month",
@@ -225,10 +225,7 @@
 	},
 	"pt-BR": {
 		"version": 2,
-		"failed": [
-			"Properties are the note's {frontmatter}: a block at the very top of the file, fenced by {fence}. Obsidian shows the same block as Properties, so a note edited in either place reads the same in both.",
-			"{count} results"
-		],
+		"failed": ["{count} results"],
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"{hidden} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.": "{hidden} of your notes isn't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",
@@ -321,7 +318,7 @@
 	},
 	"zh-CN": {
 		"version": 2,
-		"failed": ["{status}: {message}"],
+		"failed": [],
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"{hidden} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.": "{hidden} of your notes isn't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",
@@ -353,7 +350,7 @@
 	},
 	"zh-TW": {
 		"version": 2,
-		"failed": ["{status}: {message}"],
+		"failed": [],
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"{hidden} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.": "{hidden} of your notes isn't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",

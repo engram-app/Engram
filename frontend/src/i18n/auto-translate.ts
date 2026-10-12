@@ -82,7 +82,32 @@ const GLOSSARY_KEYS = [
 	"Search",
 	"Manage your profile, password, and account.",
 ];
-const BRANDS = ["Engram", "Obsidian", "MCP", "Paddle", "Clerk", "GitHub", "Claude", "ChatGPT"];
+// Product and plan names: never translated. Plan names match invoices and Paddle
+// checkout (its catalog is English); "Free" describes the price, so it is translated.
+const BRANDS = [
+	"Engram",
+	"Obsidian",
+	"MCP",
+	"Paddle",
+	"Clerk",
+	"GitHub",
+	"Claude",
+	"ChatGPT",
+	"Starter",
+	"Pro",
+];
+
+// Whole word on the Latin side only, so "Pro" is not "Profile" yet "Pro版" counts.
+// `inflected` lets a translation add a possessive or plural s ("Obsidians Stil").
+const MASKABLE = new RegExp(
+	`\\{[^{}]+\\}|(?<![A-Za-z0-9])(?:${BRANDS.join("|")})(?![A-Za-z0-9])`,
+	"gu",
+);
+
+function hasBrand(s: string, brand: string, inflected = false): boolean {
+	const suffix = inflected ? "(?:s|'s|’s)?" : "";
+	return new RegExp(`(?<![A-Za-z0-9])${brand}${suffix}(?![A-Za-z0-9])`, "u").test(s);
+}
 const NEWLINE = "⏎";
 const PLACEHOLDER = /\{[^{}]+\}/gu;
 const LITERAL = /`[^`]+`|https?:\/\/\S+|[\w.+-]+@[\w-]+\.[\w.]+/gu;
@@ -169,7 +194,7 @@ function problems(src: string, out: string, code: Target, old?: string): string[
 		placeholders: placeholders(out).join() !== placeholders(src).join(),
 		newlines: out.split("\n").length !== src.split("\n").length,
 		literal: !(src.match(LITERAL) ?? []).every((lit) => out.includes(lit)),
-		brand: !BRANDS.every((b) => !src.includes(b) || out.includes(b)),
+		brand: !BRANDS.every((b) => !hasBrand(src, b) || hasBrand(out, b, true)),
 		// Both ways: a label keeps its emoji, and a sentence does not gain one.
 		symbols: symbols(src) !== symbols(out),
 		length: out.length > lengthCap,
@@ -181,20 +206,45 @@ function problems(src: string, out: string, code: Target, old?: string): string[
 				!script.test(out) &&
 				!(old !== undefined && !script.test(old)),
 		),
-		untranslated: out === src && old !== undefined && old !== src,
+		untranslated: out === src && old !== undefined && old !== src && !isBrandOnly(src),
 	};
 	return Object.keys(failed).filter((name) => failed[name]);
+}
+
+// Nothing to translate: only brand names, placeholders and punctuation ("Pro",
+// "{plan} Pro"). The right answer is the source itself, so no model call.
+function isBrandOnly(src: string): boolean {
+	let rest = src.replace(PLACEHOLDER, " ");
+	for (const brand of BRANDS) {
+		rest = rest.replace(new RegExp(`(?<![A-Za-z0-9])${brand}(?![A-Za-z0-9])`, "gu"), " ");
+	}
+	return !/\p{L}/u.test(rest);
+}
+
+// Entries already in a catalog that fail a check as it stands today. The script
+// retranslates them, so a new rule (a brand, a register) heals old violations on
+// the next run with no TRANSLATOR_VERSION bump. A plural one-form may drop {count}.
+function invalidKeys(catalog: Catalog, code: Target): string[] {
+	return Object.entries(catalog)
+		.filter(([key, value]) =>
+			(typeof value === "string" ? [value] : Object.values(value)).some((form) => {
+				const src = form.includes("{count}") ? key : key.replaceAll("{count}", "");
+				return problems(src, form, code).length > 0;
+			}),
+		)
+		.map(([key]) => key);
 }
 
 function isValid(src: string, out: string, code: Target, old?: string): boolean {
 	return problems(src, out, code, old).length === 0;
 }
 
-// The model translates placeholder names that are words ({used} -> {digunakan});
-// numbered tokens survive, so names are swapped out before sending.
+// The model translates placeholder names that are words ({used} -> {digunakan})
+// and plan names even when told not to ("Choose Starter" -> "选择入门版"); numbered
+// tokens survive, so both are swapped out before sending.
 function maskPlaceholders(src: string): { masked: string; names: string[] } {
 	const names: string[] = [];
-	const masked = src.replace(PLACEHOLDER, (name) => {
+	const masked = src.replace(MASKABLE, (name) => {
 		const known = names.indexOf(name);
 		const index = known === -1 ? names.push(name) - 1 : known;
 		return `{${index}}`;
@@ -354,6 +404,8 @@ export {
 	fromSample,
 	GLOSSARY_KEYS,
 	HttpError,
+	invalidKeys,
+	isBrandOnly,
 	isValid,
 	maskPlaceholders,
 	mergeCatalog,

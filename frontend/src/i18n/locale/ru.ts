@@ -96,8 +96,8 @@ export default {
 	"Renews on": "Продление",
 	"Current Plan": "Текущий план",
 	Free: "Бесплатно",
-	Starter: "Базовый",
-	Pro: "Продвинутый",
+	Starter: "Starter",
+	Pro: "Pro",
 	"{count} days remaining in your free trial.": {
 		one: "До конца бесплатного пробного периода остался {count} день.",
 		few: "До конца бесплатного пробного периода осталось {count} дня.",
