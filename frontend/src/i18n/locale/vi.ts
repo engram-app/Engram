@@ -36,6 +36,7 @@ export default {
 	"This account is suspended. Contact an admin to restore access.":
 		"Tài khoản này đã bị khóa. Liên hệ với quản trị viên để khôi phục quyền truy cập.",
 	"Incorrect email or password.": "Địa chỉ email hoặc mật khẩu không chính xác.",
+	"Too many requests. Try again in a moment.": "Quá nhiều yêu cầu. Thử lại sau một lát.",
 	"Login not available for this auth provider":
 		"Đăng nhập không khả dụng cho nhà cung cấp xác thực này",
 	"Login failed": "Đăng nhập không thành công",
@@ -651,7 +652,6 @@ export default {
 		"Kiểm tra nhãn mục đích và thời hạn của lời mời, sau đó thử lại.",
 	"Incorrect password.": "Mật khẩu không chính xác.",
 	"You don't have permission to do that.": "Bạn không có quyền thực hiện việc đó.",
-	"Too many requests. Try again in a moment.": "Quá nhiều yêu cầu. Thử lại sau một lát.",
 	"Invalid authorization request": "Yêu cầu xác thực không hợp lệ",
 	"Missing required OAuth parameters:": "Thiếu các tham số OAuth bắt buộc:",
 	"This page should be opened via an OAuth client redirect, not directly.":

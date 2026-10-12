@@ -1,4 +1,4 @@
-// i18n-core 3c0f8d50
+// i18n-core 877f2298
 // The translategemma pipeline shared by the web app, the Obsidian plugin and the
 // marketing site: prompts, the checks an answer must pass, and catalog state.
 // Canonical copy: engram-app/Engram frontend/src/i18n/core/. The other repos
@@ -60,6 +60,9 @@ const CJK_STOP = /(?<stop>[。！？])\s+/gu;
 // Labels lead with an emoji or a mark ("🔄 Sync Center", "✓ {count} synced"); the
 // model sometimes drops one, or pastes a glossary term's emoji into a sentence.
 const SYMBOL = /\p{Extended_Pictographic}|[✓✕✔✖•]/gu;
+// A middle dot that separates joined parts ("{count} files · 12 MB"), not one
+// inside a word ("en·gram", which a language may spell "engrama").
+const SEPARATOR_DOT = /(?:^|[^\p{L}])·|·(?:[^\p{L}]|$)/u;
 const LEAD = /^[ \t]*/u;
 const TRAIL = /[ \t]*$/u;
 
@@ -76,7 +79,8 @@ function trail(s: string): string {
 }
 
 function symbols(s: string): string {
-	return [...new Set(s.match(SYMBOL) ?? [])].sort().join();
+	const found = s.match(SYMBOL) ?? [];
+	return [...new Set(SEPARATOR_DOT.test(s) ? [...found, "·"] : found)].sort().join();
 }
 
 // A set, not a count: repeating {name} renders fine; dropping or inventing one does not.
@@ -84,9 +88,11 @@ function placeholders(s: string): string[] {
 	return [...new Set(s.match(PLACEHOLDER) ?? [])].sort();
 }
 
-// Every tag, counted, closing slash of a self-closing tag ignored.
+// Every tag, counted, closing slash of a self-closing tag ignored. Any name, not
+// only lowercase ASCII: the model invents "<Engram>" and "<보유한>", which a page
+// shows as broken text or swallows as an element.
 function tags(s: string): string {
-	return [...s.matchAll(/<\/?(?<tag>[a-z]+)\b[^>]*>/gu)]
+	return [...s.matchAll(/<\/?(?<tag>[^\s<>/]+)[^<>]*>/gu)]
 		.map((m) => m[0].replace(/\s*\/?>$/u, ">"))
 		.sort()
 		.join();
@@ -235,9 +241,10 @@ function translator<T extends string>(profile: Profile<T>) {
 		let out = raw.trim();
 		// slice, not at(): the plugin compiles against ES2021.
 		const first = out.slice(0, 1);
+		const close: Record<string, string> = { "«": "»", "»": "«" };
 		if (
 			out.length > 1 &&
-			out.endsWith(first) &&
+			out.endsWith(close[first] ?? first) &&
 			`"'«»`.includes(first) &&
 			!`"'`.includes(src.trim().slice(0, 1))
 		) {
@@ -250,6 +257,8 @@ function translator<T extends string>(profile: Profile<T>) {
 		// too ("Getting Started" -> "<0>Erste Schritte</0>"). Untagged source, no tags.
 		if (!/<[a-zA-Z]/u.test(src)) {
 			out = out.replace(/<\/?\d+\s*\/?>/gu, "").trim();
+			// "<Claude>", "<보유한>": brackets around a word in copy that has no tags.
+			out = out.replace(/<(?<word>[^<>/\s][^<>]{0,40})>/gu, "$<word>");
 		}
 		if (!/[.!?…:。]\s*$/u.test(src)) {
 			out = out.replace(/[.。．]$/u, "");
@@ -567,6 +576,13 @@ function upgradeState(
 	return { translator: stamp, failed, one: s.one, glossary: s.glossary };
 }
 
+// Plurals whose English `one` form changed since the catalog was built.
+function oneChangedKeys(entries: readonly Entry[], state: LocaleState | undefined): string[] {
+	return entries
+		.filter((e) => e.plural?.one !== undefined && state?.one?.[e.key] !== e.plural.one)
+		.map((e) => e.key);
+}
+
 function todoKeys(
 	entries: readonly Entry[],
 	catalog: Catalog,
@@ -577,11 +593,7 @@ function todoKeys(
 	const stale = all || !state || state.translator !== fingerprint;
 	const failed = state?.failed ?? {};
 	const keys = [...new Set(entries.map((e) => e.key))];
-	const oneChanged = new Set(
-		entries
-			.filter((e) => e.plural?.one !== undefined && state?.one?.[e.key] !== e.plural.one)
-			.map((e) => e.key),
-	);
+	const oneChanged = new Set(oneChangedKeys(entries, state));
 	return keys.filter((k) => stale || !(k in catalog) || k in failed || oneChanged.has(k));
 }
 
@@ -697,6 +709,7 @@ export {
 	hash,
 	mergeCatalog,
 	nextLocaleState,
+	oneChangedKeys,
 	parseBatch,
 	pluralCategories,
 	pluralSamples,

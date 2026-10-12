@@ -37,6 +37,7 @@ export default {
 	"This account is suspended. Contact an admin to restore access.":
 		"Akaun ini telah ditangguhkan. Hubungi pentadbir untuk memulihkan akses.",
 	"Incorrect email or password.": "Emel atau kata laluan tidak betul.",
+	"Too many requests. Try again in a moment.": "Terlalu banyak permintaan. Cuba lagi sebentar.",
 	"Login not available for this auth provider":
 		"Log masuk tidak tersedia untuk penyedia pengesahan ini",
 	"Login failed": "Log masuk gagal",
@@ -655,7 +656,6 @@ export default {
 		"Semak label, kegunaan dan tempoh tamat pautan jemputan, kemudian cuba lagi.",
 	"Incorrect password.": "Kata laluan tidak betul.",
 	"You don't have permission to do that.": "Anda tidak mempunyai kebenaran untuk melakukan itu.",
-	"Too many requests. Try again in a moment.": "Terlalu banyak permintaan. Cuba lagi sebentar.",
 	"Invalid authorization request": "Permintaan pengesahan tidak sah",
 	"Missing required OAuth parameters:": "Parameter OAuth yang diperlukan hilang:",
 	"This page should be opened via an OAuth client redirect, not directly.":

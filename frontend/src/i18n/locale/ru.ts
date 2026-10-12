@@ -37,6 +37,8 @@ export default {
 	"This account is suspended. Contact an admin to restore access.":
 		"Эта учетная запись заблокирована. Обратитесь к администратору для восстановления доступа.",
 	"Incorrect email or password.": "Неверный адрес электронной почты или пароль.",
+	"Too many requests. Try again in a moment.":
+		"Слишком много запросов. Попробуйте повторить позже.",
 	"Login not available for this auth provider":
 		"Вход не доступен для этого провайдера аутентификации",
 	"Login failed": "Не удалось войти",
@@ -732,8 +734,6 @@ export default {
 		"Проверьте метку, использование и срок действия приглашения, затем попробуйте снова.",
 	"Incorrect password.": "Неверный пароль.",
 	"You don't have permission to do that.": "У вас нет разрешения на это.",
-	"Too many requests. Try again in a moment.":
-		"Слишком много запросов. Попробуйте повторить позже.",
 	"Invalid authorization request": "Неверный запрос авторизации",
 	"Missing required OAuth parameters:": "Отсутствуют необходимые параметры OAuth:",
 	"This page should be opened via an OAuth client redirect, not directly.":

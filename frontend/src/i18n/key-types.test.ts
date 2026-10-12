@@ -20,6 +20,9 @@ it("rejects a widened string key and accepts literals and msg() keys", () => {
 	tn(forms, 2);
 	// @ts-expect-error marking a variable makes a key no catalog holds
 	msg(dynamic);
+	const pick = dynamic.length > 3;
+	// @ts-expect-error a union of literals reaches the scanner as neither
+	t(pick ? "Foo" : "Bar");
 
 	expect(t("Save")).toBe("Save");
 	expect(t(msg("Save"))).toBe("Save");

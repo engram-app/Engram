@@ -39,6 +39,7 @@ export default {
 	"This account is suspended. Contact an admin to restore access.":
 		"Dieses Konto ist gesperrt. Kontaktiere einen Administrator, um den Zugriff wiederherzustellen.",
 	"Incorrect email or password.": "Falsche E-Mail-Adresse oder Passwort.",
+	"Too many requests. Try again in a moment.": "Zu viele Anfragen. Versuche es später noch einmal.",
 	"Login not available for this auth provider":
 		"Anmeldung nicht verfügbar für diesen Anmeldeanbieter",
 	"Login failed": "Anmeldung fehlgeschlagen",
@@ -667,7 +668,6 @@ export default {
 		"Überprüfe die Bezeichnung, die Nutzung und das Ablaufdatum der Einladung und versuche es erneut.",
 	"Incorrect password.": "Falsches Passwort.",
 	"You don't have permission to do that.": "Du hast keine Berechtigung dafür.",
-	"Too many requests. Try again in a moment.": "Zu viele Anfragen. Versuche es später noch einmal.",
 	"Invalid authorization request": "Ungültige Autorisierungsanfrage",
 	"Missing required OAuth parameters:": "Fehlende erforderliche OAuth-Parameter:",
 	"This page should be opened via an OAuth client redirect, not directly.":

@@ -38,6 +38,8 @@ export default {
 	"This account is suspended. Contact an admin to restore access.":
 		"このアカウントは停止されています。アクセスを回復するには、管理者にお問い合わせください。",
 	"Incorrect email or password.": "メールアドレスまたはパスワードが正しくありません。",
+	"Too many requests. Try again in a moment.":
+		"リクエストが多すぎます。しばらくしてから再度お試しください。",
 	"Login not available for this auth provider": "この認証プロバイダでのログインは利用できません",
 	"Login failed": "ログインに失敗しました",
 	"Sign-ups require an invite link. Contact your admin to request one.":
@@ -652,8 +654,6 @@ export default {
 		"招待のラベル、利用状況、有効期限を確認し、再度お試しください。",
 	"Incorrect password.": "パスワードが正しくありません。",
 	"You don't have permission to do that.": "その操作を行う権限がありません。",
-	"Too many requests. Try again in a moment.":
-		"リクエストが多すぎます。しばらくしてから再度お試しください。",
 	"Invalid authorization request": "無効な認証リクエスト",
 	"Missing required OAuth parameters:": "必須のOAuthパラメータがありません:",
 	"This page should be opened via an OAuth client redirect, not directly.":

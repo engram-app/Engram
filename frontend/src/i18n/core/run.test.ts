@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Catalog, Entry, Profile, StoredState } from "./core";
+import { type Catalog, type Entry, HttpError, type Profile, type StoredState } from "./core";
 import { type RunIo, type RunOptions, run } from "./run";
 
 type Code = "de" | "fr" | "vi" | "ru";
@@ -242,6 +242,48 @@ describe("run", () => {
 			other: "Скопировано {count} вики-ссылки",
 		});
 		expect(h.state().ru?.failed).toEqual({});
+	});
+
+	it("does not reuse a bot entry that only carried main's old value over", async () => {
+		const v1 = [{ key: "{count} files", plural: { one: "{count} doc" } }];
+		const h = harness({ de: {} });
+		DE["1 doc"] = "1 Dok";
+		await run(opts(v1, h.io));
+		const carried = JSON.parse(JSON.stringify(h.files.de));
+		h.io.resume = { loadCatalog: () => Promise.resolve(carried), state: h.state() };
+		await run(opts([{ key: "{count} files", plural: { one: "{count} file" } }], h.io));
+		expect(h.files.de?.["{count} files"]).toEqual({
+			one: "{count} Datei",
+			other: "{count} Dateien",
+		});
+	});
+
+	it("tracks a content redo that failed as failed, so it is retried", async () => {
+		const h = harness({ de: {} });
+		await run(opts([{ key: "{count} files", plural: { one: "{count} file" } }], h.io));
+		// The English singular changes to one the model answers with nothing.
+		DE["1 broken file"] = "";
+		await run(opts([{ key: "{count} files", plural: { one: "{count} broken file" } }], h.io));
+		expect(Object.keys(h.state().de?.failed ?? {})).toEqual(["{count} files"]);
+	});
+
+	it("writes the open bot PR's entries for every locale before translating any", async () => {
+		const entries = [{ key: "Save" }, { key: "Open the vault" }];
+		const h = harness({ de: { Save: "Speichern" }, fr: { Save: "Enregistrer" } });
+		await run(opts([{ key: "Save" }], h.io, { targets: ["de", "fr"] }));
+		const bot: Record<string, Catalog> = {
+			de: { Save: "Speichern", "Open the vault": "Bot-Tresor öffnen" },
+			fr: { Save: "Enregistrer", "Open the vault": "Ouvre le coffre" },
+		};
+		h.io.resume = { loadCatalog: (c) => Promise.resolve(bot[c] ?? {}), state: h.state() };
+		// de translates fine; fr's model call dies, as on a CI timeout.
+		const base = h.io.fetch;
+		h.io.fetch = (url, init) =>
+			init.body?.includes("French") ? Promise.reject(new HttpError(400, "boom")) : base(url, init);
+		await expect(
+			run(opts([...entries, { key: "Delete this note now" }], h.io, { targets: ["de", "fr"] })),
+		).rejects.toThrow();
+		expect(h.files.fr?.["Open the vault"]).toBe("Ouvre le coffre");
 	});
 
 	it("retranslates sentences that use a glossary term whose translation changed", async () => {

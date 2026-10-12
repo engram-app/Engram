@@ -22,6 +22,8 @@ function loginErrorMessage(code: string, t: Translate): string {
 			return t("This account is suspended. Contact an admin to restore access.");
 		case "invalid_credentials":
 			return t("Incorrect email or password.");
+		case "rate_limited":
+			return t("Too many requests. Try again in a moment.");
 		case "Login not available for this auth provider":
 			return t("Login not available for this auth provider");
 		default:

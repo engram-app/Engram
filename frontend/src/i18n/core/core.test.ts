@@ -121,6 +121,10 @@ describe("problems", () => {
 		expect(tr.problems("🔄 Sync Center", "Sync-Zentrale", "de")).toEqual(["symbols"]);
 		expect(tr.problems("Open sync center", "Buka 🔄 Pusat Sync", "ms")).toEqual(["symbols"]);
 		expect(tr.problems("✓ Saved", "✓ Gespeichert", "de")).toEqual([]);
+		expect(tr.problems("12 notes · 3 files", "12 Notizen, 3 Dateien", "de")).toEqual(["symbols"]);
+		expect(tr.problems("en·gram: a memory unit", "engrama: uma unidade de memória", "es")).toEqual(
+			[],
+		);
 	});
 
 	it("requires the locale's script in a sentence, not in a short label", () => {
@@ -168,6 +172,21 @@ describe("problems", () => {
 		expect(tr.problems("3-way merge", "трёхстороннее слияние", "ru")).toEqual([]);
 		expect(tr.problems("A CodeMirror 6 editor", "Ein CodeMirror 6-Editor", "de")).toEqual([]);
 		expect(tr.problems("2,000 notes", "2 000 notes", "fr")).not.toContain("numbers");
+	});
+
+	it("sees tags with capital or non-Latin names the model invented", () => {
+		// Live on the marketing site: "<Engram> 对比", "<보유한> 폴더".
+		expect(tr.problems("Engram vs Relay", "<Engram> 对比 Relay", "zh")).toContain("tags");
+		expect(tr.problems("Your folders", "<보유한> 폴더", "ja")).toContain("tags");
+	});
+
+	it("unwraps angle brackets the model put around words in untagged copy", () => {
+		expect(tr.cleanOutput("Claude today", "今天使用 <Claude>", "zh")).toBe("今天使用 Claude");
+		expect(tr.cleanOutput("Read <b>this</b>", "Lies <b>das</b>", "de")).toBe("Lies <b>das</b>");
+	});
+
+	it("strips wrapping guillemets the source lacks", () => {
+		expect(tr.cleanOutput("Save", "«Enregistrer»", "fr")).toBe("Enregistrer");
 	});
 
 	it("keeps tags and rejects numbered tokens the model invented", () => {

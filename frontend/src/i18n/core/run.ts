@@ -1,4 +1,4 @@
-// i18n-core 35032c38
+// i18n-core bee71125
 // The translategemma run loop shared by every repo's `scripts/i18n-translate.ts`.
 // Diff-only: per locale it fills keys the catalog lacks, retries failed keys, heals
 // entries that fail a current check, and redoes everything when the fingerprint
@@ -15,8 +15,10 @@ import {
 	glossaryStale,
 	HttpError,
 	hash,
+	type LocaleState,
 	mergeCatalog,
 	nextLocaleState,
+	oneChangedKeys,
 	type PluralForms,
 	type Profile,
 	parseBatch,
@@ -283,7 +285,8 @@ async function run<T extends string>(opts: RunOptions<T>): Promise<LocaleResult[
 	): Promise<Record<string, string>> {
 		const terms: Record<string, string> = {};
 		for (const key of tr.glossary.filter((k) => used.has(k))) {
-			const known = old[key];
+			// A repaired or resumed value beats the raw old one.
+			const known = fresh[key] ?? old[key];
 			const term = typeof known === "string" ? known : await translateOne(code, terms, key);
 			if (term) {
 				terms[key] = term;
@@ -297,6 +300,18 @@ async function run<T extends string>(opts: RunOptions<T>): Promise<LocaleResult[
 	// Locales this run does not touch are written back as they were.
 	const state: Record<string, StoredState> = { ...raw };
 	const results: LocaleResult[] = [];
+	// Phase 1, before any model call: plan every locale and write the open bot PR's
+	// reusable entries. A run that dies later (timeout, Ollama outage) then still
+	// leaves the PR's work in the tree, so the bot PR is not reset to main.
+	const plans: {
+		code: T;
+		fingerprint: string;
+		prev: LocaleState | undefined;
+		stale: boolean;
+		old: Catalog;
+		fresh: Catalog;
+		todo: Set<string>;
+	}[] = [];
 	for (const code of opts.targets) {
 		const fingerprint = hash(`${tr.fingerprintSource(code)}|${opts.model}|${digest}`);
 		const prev = upgradeState(raw[code], fingerprint, opts.legacyVersion, opts.today);
@@ -309,6 +324,8 @@ async function run<T extends string>(opts: RunOptions<T>): Promise<LocaleResult[
 		]);
 		// Reuse the open bot PR's work for keys this run would redo anyway, if the same
 		// translator built it. Never its entries for other keys: main may have moved.
+		// An entry equal to main's old value was carried over, not translated, and a
+		// plural built from another English `one` form is stale.
 		if (io.resume) {
 			const theirs = upgradeState(io.resume.state[code], "", undefined, opts.today);
 			if (theirs?.translator === fingerprint) {
@@ -320,6 +337,8 @@ async function run<T extends string>(opts: RunOptions<T>): Promise<LocaleResult[
 						v !== undefined &&
 						e &&
 						!(k in theirs.failed) &&
+						JSON.stringify(v) !== JSON.stringify(old[k]) &&
+						(!e.plural || theirs.one?.[k] === e.plural.one) &&
 						tr.entryProblems(e, v, code).length === 0
 					) {
 						fresh[k] = v;
@@ -327,6 +346,13 @@ async function run<T extends string>(opts: RunOptions<T>): Promise<LocaleResult[
 				}
 			}
 		}
+		if (Object.keys(fresh).length > 0) {
+			io.writeCatalog(code, mergeCatalog(entries, old, fresh));
+		}
+		plans.push({ code, fingerprint, prev, stale, old, fresh, todo });
+	}
+
+	for (const { code, fingerprint, prev, stale, old, fresh, todo } of plans) {
 		// An entry a current check rejects but cleanOutput repairs (trimmed edge
 		// spaces, bled <0> tokens) needs no model call.
 		for (const k of todo) {
@@ -340,6 +366,12 @@ async function run<T extends string>(opts: RunOptions<T>): Promise<LocaleResult[
 			}
 		}
 		const terms = await glossaryFor(code, old, fresh);
+		// Content redos: the English or a pinned term changed, so the old entry has the
+		// old meaning even though it passes every check. Not redone = failed.
+		const redo = new Set([
+			...oneChangedKeys(entries, prev),
+			...glossaryStale(entries, prev?.glossary, terms),
+		]);
 		for (const k of glossaryStale(entries, prev?.glossary, terms)) {
 			todo.add(k);
 			delete fresh[k];
@@ -366,12 +398,17 @@ async function run<T extends string>(opts: RunOptions<T>): Promise<LocaleResult[
 		const merged = mergeCatalog(entries, old, fresh);
 		io.writeCatalog(code, merged);
 		const list = [...todo];
-		// Failed: still missing or invalid. A redo that could not beat a valid old
-		// entry is not a failure; that entry passes every check.
+		// Failed: still missing or invalid, or a content redo that did not land. A
+		// fingerprint redo that could not beat a valid old entry is not a failure.
 		const failed = list.filter((k) => {
 			const v = merged[k];
 			const e = byKey.get(k);
-			return v === undefined || !e || tr.entryProblems(e, v, code).length > 0;
+			return (
+				v === undefined ||
+				!e ||
+				tr.entryProblems(e, v, code).length > 0 ||
+				(redo.has(k) && !(k in fresh))
+			);
 		});
 		const next = nextLocaleState(failed, entries, prev, fingerprint, terms, opts.today);
 		state[code] = next;

@@ -34,6 +34,7 @@ export default {
 	"This account is suspended. Contact an admin to restore access.":
 		"账号已禁用。联系管理员恢复访问。",
 	"Incorrect email or password.": "邮箱或密码错误。",
+	"Too many requests. Try again in a moment.": "请求过多。请稍后再试。",
 	"Login not available for this auth provider": "无法使用此认证方式登录",
 	"Login failed": "登录失败",
 	"Sign-ups require an invite link. Contact your admin to request one.":
@@ -621,7 +622,6 @@ export default {
 		"检查邀请的标签、用途和有效期，然后重试。",
 	"Incorrect password.": "密码错误。",
 	"You don't have permission to do that.": "你没有权限执行此操作。",
-	"Too many requests. Try again in a moment.": "请求过多。请稍后再试。",
 	"Invalid authorization request": "无效的授权请求",
 	"Missing required OAuth parameters:": "缺少必需的 OAuth 参数：",
 	"This page should be opened via an OAuth client redirect, not directly.":

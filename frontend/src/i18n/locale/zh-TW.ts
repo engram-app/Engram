@@ -34,6 +34,7 @@ export default {
 	"This account is suspended. Contact an admin to restore access.":
 		"該帳戶已停用。請聯繫管理員以恢復存取權。",
 	"Incorrect email or password.": "電子郵件或密碼錯誤。",
+	"Too many requests. Try again in a moment.": "請求次數過多。請稍後再試。",
 	"Login not available for this auth provider": "此認證提供者無法登入",
 	"Login failed": "登入失敗",
 	"Sign-ups require an invite link. Contact your admin to request one.":
@@ -623,7 +624,6 @@ export default {
 		"檢查邀請的標籤、用途和有效期限，然後再試。",
 	"Incorrect password.": "密碼錯誤。",
 	"You don't have permission to do that.": "您沒有權限執行此操作。",
-	"Too many requests. Try again in a moment.": "請求次數過多。請稍後再試。",
 	"Invalid authorization request": "無效的授權請求",
 	"Missing required OAuth parameters:": "缺少必要的 OAuth 參數：",
 	"This page should be opened via an OAuth client redirect, not directly.":

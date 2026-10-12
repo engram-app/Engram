@@ -36,6 +36,7 @@ export default {
 	"This account is suspended. Contact an admin to restore access.":
 		"이 계정은 정지되었습니다. 접근 권한을 복구하려면 관리자에게 문의하세요.",
 	"Incorrect email or password.": "이메일 또는 비밀번호가 올바르지 않습니다.",
+	"Too many requests. Try again in a moment.": "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
 	"Login not available for this auth provider": "이 인증 방식을 사용할 수 없습니다",
 	"Login failed": "로그인에 실패했습니다",
 	"Sign-ups require an invite link. Contact your admin to request one.":
@@ -642,7 +643,6 @@ export default {
 		"초대 링크의 정보(라벨, 사용 횟수, 만료일)를 확인한 후 다시 시도해 주세요.",
 	"Incorrect password.": "비밀번호가 올바르지 않습니다.",
 	"You don't have permission to do that.": "해당 작업을 수행할 권한이 없습니다.",
-	"Too many requests. Try again in a moment.": "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
 	"Invalid authorization request": "잘못된 인증 요청",
 	"Missing required OAuth parameters:": "필수 OAuth 매개변수가 누락되었습니다:",
 	"This page should be opened via an OAuth client redirect, not directly.":

@@ -117,8 +117,21 @@ jobs:
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
+      # A failed run that wrote nothing (Ollama down before any locale) leaves the
+      # tree equal to main; create-pull-request would then CLOSE the bot PR and
+      # delete its branch, losing its unmerged translations. Skip the PR steps then.
+      - name: Did the run change any catalog
+        id: changed
+        run: |
+          if [ -n "$(git status --porcelain -- frontend/src/i18n/locale)" ]; then
+            echo "any=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "any=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Generate App token
         id: app-token
+        if: steps.translate.outcome == 'success' || steps.changed.outputs.any == 'true'
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ vars.GH_APP_CLIENT_ID }}
@@ -127,6 +140,7 @@ jobs:
           repositories: Engram
 
       - name: Open / update PR
+        if: steps.translate.outcome == 'success' || steps.changed.outputs.any == 'true'
         uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ steps.app-token.outputs.token }}
