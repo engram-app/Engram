@@ -773,12 +773,14 @@ function VaultRadio({
 				onChange={() => onSelect(vault.id)}
 				className="accent-primary"
 			/>
-			<span className="flex min-w-0 flex-1 items-baseline gap-2">
-				<span className="font-medium text-foreground text-sm">{vault.name}</span>
+			{/* The hint takes its own line: beside the name it squeezes both into
+			    wrapped fragments on a phone. */}
+			<span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+				<span className="break-words font-medium text-foreground text-sm">{vault.name}</span>
 				{vault.is_default ? (
 					<span className="text-muted-foreground text-xs">{t("default")}</span>
 				) : null}
-				{hint ? <span className="text-muted-foreground text-xs">{hint}</span> : null}
+				{hint ? <span className="basis-full text-muted-foreground text-xs">{hint}</span> : null}
 			</span>
 			<span className="shrink-0 text-muted-foreground text-xs">
 				{countLabel(tn, renderedLocale, vault.note_count, vault.attachment_count)}
@@ -861,7 +863,7 @@ function VaultPickerFieldset({
 								? t("Or sync with a different vault")
 								: t("Sync with an existing vault")}
 							{search.showFilter ? (
-								<span className="ml-2 font-normal text-muted-foreground text-sm">
+								<span className="block font-normal text-muted-foreground text-sm sm:ml-2 sm:inline">
 									{t("(choose from {count} vaults)", { count: otherVaults.length })}
 								</span>
 							) : null}

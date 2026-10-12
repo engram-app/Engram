@@ -63,9 +63,10 @@ export function countLabel(tn: Tn, locale: Locale, notes?: number, files?: numbe
 // and a half rows for the same reason, so the fifth is visibly cut off.
 export function VaultRows({ scroll, children }: { scroll: boolean; children: React.ReactNode }) {
 	// Unscrolled, the rows are direct children of the caller's flex column, so
-	// they need no wrapper of their own.
+	// they need no wrapper of their own. Phones get no fixed height: a scroll
+	// box inside a scrolling page traps the thumb, and search still narrows it.
 	return scroll ? (
-		<ScrollArea type="always" className="-me-3 h-[18rem]">
+		<ScrollArea type="always" className="-me-3 sm:h-[18rem]">
 			<div className="flex flex-col gap-2 pe-3">{children}</div>
 		</ScrollArea>
 	) : (
