@@ -1,6 +1,5 @@
 import type { Catalog } from "../translate";
 
-// Filled in per surface (slice 4). Empty falls through to English.
 export default {
 	"Page not found": "找不到页面",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { GLOSSARY_KEYS } from "./auto-translate";
 import { findProblems, hiddenCalls, usedEntries, usedKeys } from "./keys-scan";
 import { LOCALES } from "./locales";
 import type { Catalog } from "./translate";
@@ -159,6 +160,12 @@ describe("repo catalogs", () => {
 			].map((m) => m.groups?.text ?? m.groups?.title ?? ""),
 		);
 		expect(raw).toEqual([]);
+	});
+	// A glossary term that is not a real key is never looked up, so its translation
+	// floats: "Notes" (not a key) let ja render "note" as both ノート and メモ.
+	it("pins only glossary terms that are real keys", () => {
+		const used = usedKeys(sources);
+		expect(GLOSSARY_KEYS.filter((k) => !used.has(k))).toEqual([]);
 	});
 	it("has no orphan keys, dropped placeholders, or cross-locale gaps", () => {
 		expect(findProblems(usedKeys(sources), catalogs)).toEqual([]);

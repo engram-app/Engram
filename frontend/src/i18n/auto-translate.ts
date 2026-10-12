@@ -67,10 +67,17 @@ const SPECS: Record<Target, Spec> = {
 
 // Terms held fixed across every batch so "vault" is not three different words.
 const GLOSSARY_KEYS = [
+	"Note",
+	"Vault",
 	"Vaults",
-	"Notes",
+	"Sync",
 	"Attachments",
 	"Folder",
+	"Tags",
+	"Backlinks",
+	"Properties",
+	"Wikilink",
+	"Connections",
 	"Settings",
 	"Search",
 	"Manage your profile, password, and account.",
@@ -236,7 +243,7 @@ function uniqueKeys(entries: readonly Entry[]): string[] {
 
 // Bump when the prompt, a check or the model changes: every catalog built by an
 // older translator is redone on the next run, so a fix reaches old entries too.
-const TRANSLATOR_VERSION = 1;
+const TRANSLATOR_VERSION = 2;
 
 // Per locale, in `locale/state.json`: the translator that built the catalog, the
 // keys whose answers failed every check (they keep the old entry, or stay English),
