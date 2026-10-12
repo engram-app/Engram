@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.50.0](https://github.com/engram-app/Engram/compare/0.49.0...0.50.0) (2026-10-12)
+
+
+### Features
+
+* ask why on account deletion, cancel + delete as dialogs ([#1940](https://github.com/engram-app/Engram/issues/1940)) ([b0954ed](https://github.com/engram-app/Engram/commit/b0954edcd130398abb2d32c20e3f781c7e543a17))
+* feedback categories, mood, reply consent, MCP send_feedback ([#1946](https://github.com/engram-app/Engram/issues/1946)) ([92ef0a2](https://github.com/engram-app/Engram/commit/92ef0a20a48528b0ba1e3fee4df7e6d4e338581c))
+* **i18n:** translategemma pipeline, typed UI text, vi and ms ([#1945](https://github.com/engram-app/Engram/issues/1945)) ([e8bff81](https://github.com/engram-app/Engram/commit/e8bff8131a7e8744321d0982b278592afca16afb))
+* **mcp:** add delete_attachment tool ([#1942](https://github.com/engram-app/Engram/issues/1942)) ([ff06c77](https://github.com/engram-app/Engram/commit/ff06c7758026a914820e9b634543d938222eadb2))
+
 ## [0.49.0](https://github.com/engram-app/Engram/compare/0.48.0...0.49.0) (2026-10-11)
 
 
