@@ -217,17 +217,17 @@ describe("KeyboardBar", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Bullet list" }));
 		expect(view.state.doc.toString()).toBe("- hello");
 
-		fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+		fireEvent.click(screen.getByRole("button", { name: "Undo edit" }));
 		expect(view.state.doc.toString()).toBe("hello");
 	});
 
 	it("redoes what it undid", () => {
 		mount("hello");
 		fireEvent.click(screen.getByRole("button", { name: "Bullet list" }));
-		fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+		fireEvent.click(screen.getByRole("button", { name: "Undo edit" }));
 		expect(view.state.doc.toString()).toBe("hello");
 
-		fireEvent.click(screen.getByRole("button", { name: "Redo" }));
+		fireEvent.click(screen.getByRole("button", { name: "Redo edit" }));
 		expect(view.state.doc.toString()).toBe("- hello");
 	});
 
@@ -301,8 +301,8 @@ describe("KeyboardBar", () => {
 			...screen.getByRole("region", { name: "Editor commands" }).querySelectorAll("button"),
 		].map((b) => b.getAttribute("aria-label"));
 		expect(labels).toEqual([
-			"Undo",
-			"Redo",
+			"Undo edit",
+			"Redo edit",
 			"Bold",
 			"Italic",
 			"Strikethrough",

@@ -1,4 +1,4 @@
-// i18n-core 877f2298
+// i18n-core 62628e94
 // The translategemma pipeline shared by the web app, the Obsidian plugin and the
 // marketing site: prompts, the checks an answer must pass, and catalog state.
 // Canonical copy: engram-app/Engram frontend/src/i18n/core/. The other repos
@@ -108,6 +108,147 @@ function numbers(s: string, source = false): string[] {
 		"$<d>",
 	);
 	return [...new Set(digits.match(/\d+/gu) ?? [])].filter((n) => n !== "1");
+}
+
+// Terms a language's own software leaves in English, by base language, so an
+// echo of one is a translation and not a miss. Each comes from Obsidian's or VS
+// Code's translations for that language; add one only with such a source.
+// Lowercase, letters only, brands already removed ("💬 Feedback" is "feedback").
+const LOANWORDS: Record<string, readonly string[]> = {
+	// Names every language keeps, for profiles that do not list them as brands.
+	"*": ["docker compose", "docker compose up", "mcp", "reddit", "relay", "youtube"],
+	de: [
+		"alternative",
+		"backend",
+		"browser",
+		"cloud",
+		"code",
+		"community",
+		"downloads",
+		"faq",
+		"feedback",
+		"frontmatter",
+		"link",
+		"links",
+		"markdown",
+		"name",
+		"offline",
+		"optional",
+		"self host",
+		"sponsors",
+		"status",
+		"support",
+		"system",
+		"tag",
+		"tags",
+		"text",
+		"token",
+		"upgrade",
+		"uploads",
+		"vault",
+		"vaults",
+		"version",
+		"web",
+	],
+	es: ["error", "idea", "legal", "markdown", "popular", "sponsors", "subtotal", "total", "web"],
+	fr: [
+		"actions",
+		"administration",
+		"alternative",
+		"clients",
+		"code",
+		"concepts",
+		"date",
+		"diagnostics",
+		"documentation",
+		"exact",
+		"faq",
+		"markdown",
+		"mobile",
+		"note",
+		"notes",
+		"source",
+		"sponsors",
+		"structure",
+		"support",
+		"total",
+		"type",
+		"web",
+	],
+	it: [
+		"account",
+		"backend",
+		"browser",
+		"bug",
+		"cloud",
+		"community",
+		"email",
+		"feedback",
+		"file",
+		"frontmatter",
+		"idea",
+		"markdown",
+		"mobile",
+		"offline",
+		"password",
+		"privacy",
+		"self host",
+		"self hosted",
+		"sponsors",
+		"tag",
+		"token",
+		"uploads",
+		"user agent",
+		"web",
+	],
+	ja: ["linux pc", "markdown", "web", "windows pc"],
+	ko: ["linux pc", "url", "windows pc"],
+	ms: [
+		"edit",
+		"folder",
+		"frontmatter",
+		"idea",
+		"label",
+		"markdown",
+		"popular",
+		"sponsors",
+		"status",
+		"token",
+	],
+	pt: [
+		"backend",
+		"bug",
+		"cloud",
+		"docs",
+		"downloads",
+		"feedback",
+		"frontmatter",
+		"legal",
+		"link",
+		"links",
+		"markdown",
+		"offline",
+		"popular",
+		"sponsors",
+		"status",
+		"subtotal",
+		"tag",
+		"tags",
+		"token",
+		"total",
+		"uploads",
+		"web",
+	],
+	ru: ["markdown"],
+	vi: ["backend", "cloud", "email", "frontmatter", "markdown", "sponsors", "token"],
+	zh: ["bug", "markdown"],
+};
+
+// `text` is a source with its tokens and brands removed (see prose()).
+function isLoanword(code: string, text: string): boolean {
+	const phrase = (text.toLowerCase().match(/\p{L}+/gu) ?? []).join(" ");
+	const kept = [...(LOANWORDS["*"] ?? []), ...(LOANWORDS[code.split("-")[0] ?? code] ?? [])];
+	return kept.includes(phrase);
 }
 
 function words(s: string): number {
@@ -299,12 +440,12 @@ function translator<T extends string>(profile: Profile<T>) {
 			register: Boolean(formal?.test(out)),
 			// Only sentences: "ID:", "A → Z" or a bare "{status}: {message}" may stay Latin.
 			script: Boolean(script && words(prose(src)) > 3 && !script.test(out)),
-			// English echoed back. A phrase is never the same in another language; a
-			// single word may be ("Status"), unless it replaces a real translation.
+			// English echoed back. Only a language's loanwords may stay ("Status" in
+			// German), and never over a real translation.
 			untranslated:
 				out === src &&
 				!isBrandOnly(src) &&
-				(words(prose(src)) > 2 || (old !== undefined && old !== src)),
+				(!isLoanword(code, prose(src)) || (old !== undefined && old !== src)),
 		};
 		return Object.keys(failed).filter((name) => failed[name]);
 	}
