@@ -52,7 +52,7 @@ export default function CancelPanel({ detail, tier, onClose }: CancelPanelProps)
 	const canCancel = reasonComplete(answer);
 
 	async function confirm() {
-		if (!(canCancel && answer.reason)) {
+		if (!reasonComplete(answer)) {
 			return;
 		}
 		try {

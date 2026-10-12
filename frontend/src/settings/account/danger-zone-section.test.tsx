@@ -66,16 +66,43 @@ describe("DangerZoneSection", () => {
 		expect(btn).toBeEnabled();
 	});
 
-	it("keeps delete disabled without a reason", () => {
+	it("deletes with no answer and sends no feedback", async () => {
 		render(<DangerZoneSection />);
-		fillForm({ reason: false });
-		expect(screen.getByRole("button", { name: /delete my account/iu })).toBeDisabled();
+		openDialog();
+		fireEvent.change(screen.getByLabelText(/type .*delete my account/iu), {
+			target: { value: "delete my account" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: /delete my account/iu }));
+		await waitFor(() => expect(user.delete).toHaveBeenCalled());
+		expect(submitFeedback).not.toHaveBeenCalled();
 	});
 
-	it("keeps delete disabled when the detail is only whitespace", () => {
+	it("sends the text alone when no reason is picked", async () => {
 		render(<DangerZoneSection />);
-		fillForm({ detail: "   " });
-		expect(screen.getByRole("button", { name: /delete my account/iu })).toBeDisabled();
+		fillForm({ reason: false, detail: " moving on " });
+		fireEvent.click(screen.getByRole("button", { name: /delete my account/iu }));
+		await waitFor(() => expect(user.delete).toHaveBeenCalled());
+		expect(submitFeedback).toHaveBeenCalledWith({ kind: "delete_account", detail: "moving on" });
+	});
+
+	it("does not wait on a hung feedback request", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		submitFeedback.mockReturnValueOnce(new Promise(() => undefined));
+		render(<DangerZoneSection />);
+		fillForm();
+		fireEvent.click(screen.getByRole("button", { name: /delete my account/iu }));
+		await vi.advanceTimersByTimeAsync(3000);
+		await waitFor(() => expect(user.delete).toHaveBeenCalled());
+		vi.useRealTimers();
+	});
+
+	it("disables Delete account while a delete is in flight", async () => {
+		user = makeUser({ delete: vi.fn(() => new Promise(() => undefined)) });
+		render(<DangerZoneSection />);
+		fillForm();
+		fireEvent.click(screen.getByRole("button", { name: /delete my account/iu }));
+		await waitFor(() => expect(user.delete).toHaveBeenCalled());
+		expect(screen.getByRole("button", { name: /^delete account$/iu })).toBeDisabled();
 	});
 
 	it("sends the reason before deleting, then signs out", async () => {

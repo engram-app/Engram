@@ -1351,6 +1351,8 @@ export default {
 		"変更を保存できません：現在アカウントを同期できません。",
 	"Why are you canceling?": "解約の理由を教えてください",
 	"Why are you deleting your account?": "アカウントを削除する理由を教えてください",
+	"Your answer is kept after your account is deleted, without your name or email.":
+		"回答はアカウント削除後も、名前やメールアドレスなしで保存されます。",
 	"Send feedback": "フィードバックを送信",
 	"What will you use Engram for?": "Engram を何に使いますか？",
 	"How did you hear about Engram?": "Engram をどこで知りましたか？",

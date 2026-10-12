@@ -1293,6 +1293,8 @@ export default {
 		"無法儲存變更：您的帳戶目前無法同步。",
 	"Why are you canceling?": "你為什麼要取消？",
 	"Why are you deleting your account?": "你為什麼要刪除帳號？",
+	"Your answer is kept after your account is deleted, without your name or email.":
+		"刪除帳號後，你的回答會被保留，但不包含你的姓名或電子郵件。",
 	"Send feedback": "傳送意見回饋",
 	"What will you use Engram for?": "你打算用 Engram 做什麼？",
 	"How did you hear about Engram?": "你是如何得知 Engram 的？",

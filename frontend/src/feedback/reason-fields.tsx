@@ -17,10 +17,10 @@ export interface Reason {
 
 export const EMPTY_REASON: Reason = { reason: null, detail: "" };
 
-// A reason AND a sentence are the price of leaving: it is the one signal we
-// get from someone on the way out.
-export function reasonComplete({ reason, detail }: Reason): boolean {
-	return reason !== null && detail.trim() !== "";
+// A reason AND a sentence: the cancel flow requires both. Account deletion
+// does not, since erasure must never be gated on giving feedback.
+export function reasonComplete(answer: Reason): answer is Reason & { reason: string } {
+	return answer.reason !== null && answer.detail.trim() !== "";
 }
 
 // Shared by the subscription cancel panel and account deletion.

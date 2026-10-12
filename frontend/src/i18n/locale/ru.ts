@@ -1462,6 +1462,8 @@ export default {
 		"Не удаётся сохранить изменения: ваша учётная запись сейчас не может синхронизироваться.",
 	"Why are you canceling?": "Почему вы отменяете подписку?",
 	"Why are you deleting your account?": "Почему вы удаляете аккаунт?",
+	"Your answer is kept after your account is deleted, without your name or email.":
+		"Ваш ответ сохраняется после удаления аккаунта, без вашего имени и адреса электронной почты.",
 	"Send feedback": "Отправить отзыв",
 	"What will you use Engram for?": "Для чего вы будете использовать Engram?",
 	"How did you hear about Engram?": "Как вы узнали об Engram?",

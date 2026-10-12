@@ -1417,6 +1417,8 @@ export default {
 		"No se pueden guardar los cambios: tu cuenta no puede sincronizar en este momento.",
 	"Why are you canceling?": "¿Por qué cancelas?",
 	"Why are you deleting your account?": "¿Por qué eliminas tu cuenta?",
+	"Your answer is kept after your account is deleted, without your name or email.":
+		"Tu respuesta se conserva después de eliminar tu cuenta, sin tu nombre ni tu correo electrónico.",
 	"Send feedback": "Enviar comentarios",
 	"What will you use Engram for?": "¿Para qué usarás Engram?",
 	"How did you hear about Engram?": "¿Cómo conociste Engram?",

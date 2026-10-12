@@ -122,12 +122,44 @@ defmodule Engram.FeedbackTest do
   end
 
   describe "delete_account" do
-    test "captures the reason anonymously so account erasure does not delete it",
-         %{user: user} do
+    test "stashes the answer on the user row and sends nothing yet", %{user: user} do
       assert :ok =
                Feedback.submit(user, "delete_account", %{
                  "reason" => "switched_tool",
-                 "detail" => " went back to plain Obsidian "
+                 "detail" => " went back to Obsidian, mail me at jane.doe@example.com "
+               })
+
+      assert %{
+               "tools" => ["claude"],
+               "delete_reason" => "switched_tool",
+               "delete_detail" => "went back to Obsidian, mail me at [email]"
+             } = profile(user)
+
+      refute_receive {:posthog, _}, 200
+    end
+
+    test "a second submit replaces the first", %{user: user} do
+      assert :ok = Feedback.submit(user, "delete_account", %{"reason" => "too_expensive"})
+      assert :ok = Feedback.submit(user, "delete_account", %{"detail" => "just leaving"})
+
+      assert %{"delete_reason" => nil, "delete_detail" => "just leaving"} = profile(user)
+    end
+
+    test "rejects an unknown reason and an empty answer", %{user: user} do
+      assert {:error, :invalid_reason} =
+               Feedback.submit(user, "delete_account", %{"reason" => "meh"})
+
+      assert {:error, :empty_message} =
+               Feedback.submit(user, "delete_account", %{"detail" => "   "})
+    end
+  end
+
+  describe "capture_delete_reason/1" do
+    test "sends the stashed answer anonymously" do
+      assert :ok =
+               Feedback.capture_delete_reason(%{
+                 "delete_reason" => "switched_tool",
+                 "delete_detail" => "went back to Obsidian"
                })
 
       assert_receive {:posthog,
@@ -138,18 +170,16 @@ defmodule Engram.FeedbackTest do
                       }},
                      1_000
 
-      refute distinct_id == Engram.Observability.PostHog.analytics_id(user.email)
+      assert {:ok, _} = Ecto.UUID.cast(distinct_id)
       assert props["reason"] == "switched_tool"
-      assert props["detail"] == "went back to plain Obsidian"
+      assert props["detail"] == "went back to Obsidian"
       assert props["$process_person_profile"] == false
-      refute Map.has_key?(props, "$set")
     end
 
-    test "requires a known reason", %{user: user} do
-      assert {:error, :invalid_reason} = Feedback.submit(user, "delete_account", %{})
-
-      assert {:error, :invalid_reason} =
-               Feedback.submit(user, "delete_account", %{"reason" => "meh"})
+    test "sends nothing when no answer was given" do
+      assert :ok = Feedback.capture_delete_reason(%{"tools" => ["claude"]})
+      assert :ok = Feedback.capture_delete_reason(nil)
+      refute_receive {:posthog, _}, 200
     end
   end
 

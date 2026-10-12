@@ -1330,6 +1330,8 @@ export default {
 		"변경 사항을 저장할 수 없습니다: 지금은 계정을 동기화할 수 없습니다.",
 	"Why are you canceling?": "해지하시는 이유가 무엇인가요?",
 	"Why are you deleting your account?": "계정을 삭제하시는 이유가 무엇인가요?",
+	"Your answer is kept after your account is deleted, without your name or email.":
+		"답변은 계정이 삭제된 후에도 이름이나 이메일 없이 보관됩니다.",
 	"Send feedback": "피드백 보내기",
 	"What will you use Engram for?": "Engram을 어디에 사용하실 건가요?",
 	"How did you hear about Engram?": "Engram을 어떻게 알게 되셨나요?",
