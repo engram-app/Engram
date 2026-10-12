@@ -234,6 +234,33 @@ defmodule Engram.FeedbackTest do
       refute Map.has_key?(props, "mood")
     end
 
+    test "accepts MCP fields and rejects a bad initiated_by or tool_name", %{user: user} do
+      assert :ok =
+               Feedback.submit(user, "general", %{
+                 "message" => "hi",
+                 "source" => "mcp",
+                 "category" => "missing_capability",
+                 "initiated_by" => "model",
+                 "tool_name" => "search_notes"
+               })
+
+      assert_receive {:posthog, %{"properties" => props}}, 1_000
+      assert props["initiated_by"] == "model"
+      assert props["tool_name"] == "search_notes"
+
+      base = %{"message" => "hi", "source" => "mcp"}
+
+      assert {:error, :invalid_initiated_by} =
+               Feedback.submit(user, "general", Map.put(base, "initiated_by", "bot"))
+
+      # A tool name that is not a plain identifier is dropped, not stored.
+      assert :ok =
+               Feedback.submit(user, "general", Map.put(base, "tool_name", "Diary.md secret"))
+
+      assert_receive {:posthog, %{"properties" => props}}, 1_000
+      refute Map.has_key?(props, "tool_name")
+    end
+
     test "rejects an unknown category, mood or source", %{user: user} do
       base = %{"message" => "hi"}
 

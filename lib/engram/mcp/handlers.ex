@@ -154,6 +154,20 @@ defmodule Engram.MCP.Handlers do
     end
   end
 
+  # Account-wide (vault-exempt): `_vaults` is the credential's vault list.
+  # Shares the web/plugin hourly budget and the `user_feedback` event.
+  def handle("send_feedback", user, _vaults, args) do
+    if Engram.Feedback.allow?(user) do
+      case Engram.Feedback.submit(user, "general", Map.put(args, "source", "mcp")) do
+        :ok -> {:ok, "Feedback sent. Thank you.", %{"status" => "sent"}}
+        {:error, :empty_message} -> {:error, "message must not be blank"}
+        {:error, reason} -> {:error, "Invalid feedback: #{reason}"}
+      end
+    else
+      {:error, "Feedback limit reached for this hour. Try again later."}
+    end
+  end
+
   def handle("list_tags", user, vault, _args) do
     {:ok, tags} = Notes.list_tags_with_counts(user, vault)
 

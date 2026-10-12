@@ -23,14 +23,19 @@ defmodule Engram.Feedback do
   @heard_from ~w(search reddit youtube obsidian_community obsidian_plugins friend ai_assistant social other)
   @use_cases ~w(ai_memory obsidian_sync web_access search backup sharing other)
   @cancel_reasons ~w(too_expensive missing_feature sync_issues switched_tool not_using other)
-  @categories ~w(bug idea confusing love)
-  @sources ~w(web plugin)
+  @categories ~w(bug idea confusing love missing_capability)
+  @sources ~w(web plugin mcp)
+  @initiators ~w(user model)
+  # Each submit is a billed PostHog event with up to 2,000 chars of free text,
+  # shared by every surface (web, plugin, MCP), so one budget covers them all.
+  @hourly_limit 20
   @max_text 2_000
 
   # Client context must be a plain token: anything else (a newline, an email,
   # free text) is dropped rather than stored as an analytics property.
   @version_format ~r/\A[\w.+-]{1,40}\z/u
   @area_format ~r/\A[\w.\/-]{1,80}\z/u
+  @tool_name_format ~r/\A[a-z_]{1,64}\z/
 
   def heard_from_options, do: @heard_from
   def use_case_options, do: @use_cases
@@ -45,6 +50,16 @@ defmodule Engram.Feedback do
           | :invalid_category
           | :invalid_mood
           | :invalid_source
+          | :invalid_initiated_by
+
+  @doc "Spend one unit of the user's hourly feedback budget."
+  @spec allow?(User.t()) :: boolean()
+  def allow?(user) do
+    match?(
+      {:allow, _},
+      EngramWeb.RateLimiter.hit("feedback:#{user.id}", :timer.hours(1), @hourly_limit, :feedback)
+    )
+  end
 
   @spec submit(User.t(), String.t(), map()) :: :ok | {:error, error()}
   def submit(user, "onboarding", params) do
@@ -196,6 +211,7 @@ defmodule Engram.Feedback do
     category = params["category"]
     mood = params["mood"]
     source = params["source"] || "web"
+    initiated_by = params["initiated_by"]
 
     cond do
       not (is_nil(category) or category in @categories) ->
@@ -207,6 +223,9 @@ defmodule Engram.Feedback do
       source not in @sources ->
         {:error, :invalid_source}
 
+      not (is_nil(initiated_by) or initiated_by in @initiators) ->
+        {:error, :invalid_initiated_by}
+
       true ->
         props =
           %{
@@ -216,6 +235,9 @@ defmodule Engram.Feedback do
             # Only with consent: the one place a reply address is stored.
             "contact_email" => if(params["contact_ok"] == true, do: user.email),
             "source" => source,
+            # MCP only: whether the user asked, or the model filed it unasked.
+            "initiated_by" => initiated_by,
+            "tool_name" => token(params["tool_name"], @tool_name_format),
             "app_version" => token(params["app_version"], @version_format),
             "area" => token(params["area"], @area_format),
             "user_agent" => text(params["user_agent"], 300),
