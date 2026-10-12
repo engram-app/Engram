@@ -53,4 +53,10 @@ defmodule Engram.AttachmentsSeqTest do
     assert after_.deleted_at != nil
     assert after_.seq > before
   end
+
+  test "deleting an absent path does not consume a seq", %{user: user, vault: vault} do
+    before = Vaults.current_seq(user.id, vault.id)
+    :ok = Attachments.delete_attachment(user, vault, "img/never.png")
+    assert Vaults.current_seq(user.id, vault.id) == before
+  end
 end

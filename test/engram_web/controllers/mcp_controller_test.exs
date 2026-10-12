@@ -92,15 +92,16 @@ defmodule EngramWeb.McpControllerTest do
       assert resp["result"]["capabilities"]["tools"]
     end
 
-    test "tools/list returns 17 tools", %{conn: conn} do
+    test "tools/list returns 18 tools", %{conn: conn} do
       conn = jsonrpc(conn, "tools/list")
       resp = json_response(conn, 200)
 
       tools = resp["result"]["tools"]
-      assert length(tools) == 17
+      assert length(tools) == 18
 
       names = Enum.map(tools, & &1["name"])
       assert "list_vaults" in names
+      assert "delete_attachment" in names
       assert "search_notes" in names
       assert "get_notes" in names
       assert "write_note" in names
@@ -1159,6 +1160,25 @@ defmodule EngramWeb.McpControllerTest do
       assert json_response(conn, 200)["result"]["isError"] == true
       assert text =~ "Error:"
       assert text =~ "restricted to a subset of your vaults"
+    end
+
+    test "restricted key cannot delete an attachment in an unauthorized vault",
+         %{conn: conn, user: user, vault_b: vault_b} do
+      {:ok, _} =
+        Engram.Attachments.upsert_attachment(user, vault_b, %{
+          "path" => "Secret/a.png",
+          "content_base64" => Base.encode64("x")
+        })
+
+      conn =
+        call_tool(conn, "delete_attachment", %{
+          "path" => "Secret/a.png",
+          "vault_id" => vault_b.id
+        })
+
+      assert json_response(conn, 200)["result"]["isError"] == true
+      assert tool_text(conn) =~ "restricted to a subset of your vaults"
+      assert {:ok, [%{path: "Secret/a.png"}]} = Engram.Attachments.list_attachments(user, vault_b)
     end
 
     test "restricted key can use its authorized vault via tool arguments",

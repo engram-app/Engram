@@ -607,7 +607,10 @@ defmodule EngramWeb.AttachmentsController do
         "with the path, and is not billing-gated so downgraded users can still remove files.",
     tags: ["Attachments"],
     parameters: [path: [in: :path, type: :string, required: true, description: "Attachment path"]],
-    responses: [ok: {"Deleted", "application/json", Schemas.AttachmentDeleted}]
+    responses: [
+      ok: {"Deleted", "application/json", Schemas.AttachmentDeleted},
+      internal_server_error: {"Delete failed", "application/json", Schemas.MessageError}
+    ]
   )
 
   def delete(conn, %{"path" => path_parts}) do
@@ -615,11 +618,12 @@ defmodule EngramWeb.AttachmentsController do
     vault = conn.assigns.current_vault
     path = Path.join(path_parts)
 
-    Attachments.delete_attachment(user, vault, path,
-      origin_device_id: EngramWeb.OriginDevice.from_conn(conn)
-    )
-
-    json(conn, %{deleted: true, path: path})
+    case Attachments.delete_attachment(user, vault, path,
+           origin_device_id: EngramWeb.OriginDevice.from_conn(conn)
+         ) do
+      :ok -> json(conn, %{deleted: true, path: path})
+      {:error, _} -> conn |> put_status(500) |> json(%{error: "failed to delete attachment"})
+    end
   end
 
   operation(:changes,
