@@ -1,4 +1,4 @@
-// i18n-core c0dc8502
+// i18n-core 12ccb44a
 // The translategemma pipeline shared by the web app, the Obsidian plugin and the
 // marketing site: prompts, the checks an answer must pass, and catalog state.
 // Canonical copy: engram-app/Engram frontend/src/i18n/core/. The other repos
@@ -186,6 +186,7 @@ const LOANWORDS: Record<string, readonly string[]> = {
 		"support",
 		"total",
 		"type",
+		"types",
 		"web",
 	],
 	it: [
@@ -764,7 +765,7 @@ function descriptionChangedKeys(
 	descriptions: Readonly<Record<string, string>>,
 ): string[] {
 	return entries
-		.filter((e) => (state?.descriptions ?? {})[e.key] !== descriptions[e.key])
+		.filter((e) => state?.descriptions?.[e.key] !== descriptions[e.key])
 		.map((e) => e.key);
 }
 
