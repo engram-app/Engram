@@ -15,6 +15,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { useT } from "@/i18n/locale-provider";
 import { useSubmitFeedback } from "../api/queries";
+import { parseSettingsHash } from "../settings/settings-hash";
 import { FEEDBACK_CATEGORIES, MOOD_FACES } from "./options";
 
 const chip =
@@ -26,11 +27,12 @@ interface FeedbackDialogProps {
 }
 
 // Where the user was, coarsely. The vault slug, the note path and a heading
-// anchor are all user data, so only the settings section survives verbatim.
+// anchor are all user data, so only a known settings section survives, and a
+// heading slug that merely starts with "settings" must not pass for one.
 export function feedbackArea(pathname: string, hash: string): string {
-	const section = hash.replace(/^#/u, "").split("/").slice(0, 2).join("/");
-	if (section.startsWith("settings")) {
-		return section;
+	const section = parseSettingsHash(hash);
+	if (section) {
+		return `settings/${section}`;
 	}
 	const vault = /^\/v\/[^/]+(?<rest>\/.+)?$/u.exec(pathname);
 	if (vault) {

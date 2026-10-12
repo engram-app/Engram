@@ -129,6 +129,27 @@ defmodule EngramWeb.Plugs.RequireSessionTest do
       end
     end
 
+    # The plugin's own feedback modal posts with this token. Feedback is a
+    # rate-limited event, not a credential or account write, so it is the one
+    # session-scoped route the plugin may reach.
+    test "POST /api/feedback accepts it", %{conn: conn, user: user} do
+      conn =
+        conn
+        |> device_authed(user)
+        |> post("/api/feedback", %{"kind" => "general", "message" => "from Obsidian"})
+
+      assert json_response(conn, 200) == %{"status" => "ok"}
+    end
+
+    test "POST /api/feedback still rejects a third-party OAuth grant", %{conn: conn, user: user} do
+      conn =
+        conn
+        |> oauth_authed(user, %{"scope" => "mcp"})
+        |> post("/api/feedback", %{"kind" => "general", "message" => "hi"})
+
+      assert %{"error" => "oauth_grant_not_allowed"} = json_response(conn, 403)
+    end
+
     test "nothing is minted on the rejected POST /api-keys", %{conn: conn, user: user} do
       _ = conn |> device_authed(user) |> post("/api/api-keys", %{name: "escalated"})
       assert Engram.Repo.all(Engram.Accounts.ApiKey, skip_tenant_check: true) == []

@@ -40,6 +40,11 @@ defmodule Engram.Feedback do
   }
   @mood_faces %{1 => "😡", 2 => "🙁", 3 => "😐", 4 => "🙂", 5 => "😍"}
   @discord_limit 2_000
+  # Client context lands in Discord outside the quoted message, so anything
+  # that is not a plain token is dropped: no newline, backtick or email can
+  # forge a line or leak an address there.
+  @version_format ~r/\A[\w.+-]{1,40}\z/u
+  @area_format ~r/\A[\w.\/-]{1,80}\z/u
 
   def heard_from_options, do: @heard_from
   def use_case_options, do: @use_cases
@@ -225,9 +230,9 @@ defmodule Engram.Feedback do
             "mood" => mood,
             "contact_ok" => params["contact_ok"] == true,
             "source" => source,
-            "app_version" => text(params["app_version"], 40),
-            "area" => text(params["area"], 80),
-            "user_agent" => text(params["user_agent"], 300),
+            "app_version" => token(params["app_version"], @version_format),
+            "area" => token(params["area"], @area_format),
+            "user_agent" => params["user_agent"] |> text(300) |> strip_backticks(),
             "plan" => user |> Billing.tier() |> Atom.to_string(),
             "server_version" => server_version()
           }
@@ -287,6 +292,16 @@ defmodule Engram.Feedback do
 
     String.slice("**#{head}**\n#{meta}\n#{quoted}", 0, @discord_limit)
   end
+
+  defp token(value, format) when is_binary(value) do
+    trimmed = String.trim(value)
+    if Regex.match?(format, trimmed), do: trimmed
+  end
+
+  defp token(_, _), do: nil
+
+  defp strip_backticks(nil), do: nil
+  defp strip_backticks(value), do: String.replace(value, "`", "")
 
   # Free text is trimmed and capped; blank means absent.
   defp text(value, max \\ @max_text)

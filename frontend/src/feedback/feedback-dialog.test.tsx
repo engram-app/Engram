@@ -92,12 +92,13 @@ describe("FeedbackDialog", () => {
 describe("feedbackArea", () => {
 	it("keeps the settings section", () => {
 		expect(feedbackArea("/v/my-vault", "#settings/billing")).toBe("settings/billing");
-		expect(feedbackArea("/v/my-vault", "#settings/account/extra")).toBe("settings/account");
+		expect(feedbackArea("/v/my-vault", "#settings")).toBe("settings/account");
 	});
 
 	it("never sends the vault slug, the note path or a heading anchor", () => {
 		expect(feedbackArea("/v/secret-vault", "")).toBe("vault");
 		expect(feedbackArea("/v/secret-vault/Private/Diary.md", "#my-heading")).toBe("note");
+		expect(feedbackArea("/v/journal/Therapy.md", "#settings-for-dr-smith")).toBe("note");
 	});
 
 	it("names other pages by their first segment", () => {

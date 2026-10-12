@@ -249,7 +249,7 @@ defmodule Engram.FeedbackTest do
                Feedback.submit(user, "general", Map.put(base, "source", "ios"))
     end
 
-    test "caps client context strings", %{user: user} do
+    test "drops overlong client tokens and caps the user agent", %{user: user} do
       assert :ok =
                Feedback.submit(user, "general", %{
                  "message" => "hi",
@@ -259,8 +259,9 @@ defmodule Engram.FeedbackTest do
                })
 
       assert_receive {:posthog, %{"properties" => props}}, 1_000
-      assert String.length(props["app_version"]) == 40
-      assert String.length(props["area"]) == 80
+      # Overlong tokens are dropped, not truncated: a cut value is a wrong one.
+      refute Map.has_key?(props, "app_version")
+      refute Map.has_key?(props, "area")
       assert String.length(props["user_agent"]) == 300
     end
   end
@@ -344,6 +345,27 @@ defmodule Engram.FeedbackTest do
 
       assert_receive {:discord, %{"content" => content}, _}, 1_000
       assert String.length(content) <= 2_000
+    end
+
+    test "drops a client area or version that is not a plain token", %{user: user} do
+      assert :ok =
+               Feedback.submit(user, "general", %{
+                 "message" => "hi",
+                 "area" => "x`\nuser `forged` · reply OK: a@b.com",
+                 "app_version" => "1.0 a@b.com"
+               })
+
+      assert_receive {:discord, %{"content" => content}, _}, 1_000
+      refute content =~ "forged"
+      refute content =~ "a@b.com"
+    end
+
+    test "strips backticks from the user agent", %{user: user} do
+      assert :ok =
+               Feedback.submit(user, "general", %{"message" => "hi", "user_agent" => "UA`x"})
+
+      assert_receive {:discord, %{"content" => content}, _}, 1_000
+      assert content =~ "ua `UAx`"
     end
 
     test "does not ping on a rejected submission", %{user: user} do
