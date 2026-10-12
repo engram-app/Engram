@@ -12,8 +12,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
-	countLabel,
 	useVaultSearch,
+	VaultOption,
 	VaultRows,
 	VaultSearchField,
 	VaultSearchToggle,
@@ -105,7 +105,7 @@ function buildCancelUrl(redirectUri: string, state: string): string {
 }
 
 export default function OAuthAuthorizePage() {
-	const { t, tn, renderedLocale } = useT();
+	const { t } = useT();
 	const [searchParams] = useSearchParams();
 	const { values, resource, missing } = readParams(searchParams);
 
@@ -546,7 +546,7 @@ export default function OAuthAuthorizePage() {
 											})
 								}
 							/>
-							{/* Caps at roughly five rows, then scrolls. "All vaults" is
+							{/* Caps at roughly three rows, then scrolls. "All vaults" is
 							    deliberately outside this box: it is the choice the list is
 							    an alternative to, and it must stay reachable without
 							    scrolling past every vault. `pe-3` keeps the row borders clear
@@ -564,23 +564,13 @@ export default function OAuthAuthorizePage() {
 									const id = String(v.id);
 									const active = selected === null || selected.has(id);
 									return (
-										<label key={id} className={selectableRow(active)}>
-											<input
-												type="checkbox"
-												checked={active}
-												onChange={() => toggle(id)}
-												className="accent-primary"
-											/>
-											<span className="flex min-w-0 flex-1 items-baseline gap-2">
-												<span className="font-medium text-foreground text-sm">{v.name}</span>
-												{v.is_default ? (
-													<span className="text-muted-foreground text-xs">{t("default")}</span>
-												) : null}
-											</span>
-											<span className="shrink-0 text-muted-foreground text-xs">
-												{countLabel(tn, renderedLocale, v.note_count, v.attachment_count)}
-											</span>
-										</label>
+										<VaultOption
+											key={id}
+											vault={v}
+											type="checkbox"
+											checked={active}
+											onChange={() => toggle(id)}
+										/>
 									);
 								})}
 								{showFilter && needle && shown.length === 0 && (

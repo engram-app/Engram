@@ -62,7 +62,7 @@ defmodule Engram.SkipTenantCheckInventoryTest do
   @inventory %{
     "engram/abuse/origin_stats.ex" => 3,
     "engram/accounts.ex" => 33,
-    "engram/accounts/lifecycle.ex" => 3,
+    "engram/accounts/lifecycle.ex" => 4,
     "engram/accounts/password_reset.ex" => 5,
     "engram/auth/clerk/webhook.ex" => 2,
     "engram/auth/device_flow.ex" => 13,
@@ -78,7 +78,7 @@ defmodule Engram.SkipTenantCheckInventoryTest do
     "engram/crypto/rotation_lock.ex" => 4,
     "engram/crypto/tenant_sweep.ex" => 3,
     "engram/crypto/user_dek_rotation.ex" => 19,
-    "engram/feedback.ex" => 1,
+    "engram/feedback.ex" => 2,
     "engram/idempotency.ex" => 1,
     "engram/indexing.ex" => 2,
     "engram/indexing/index_cap.ex" => 2,

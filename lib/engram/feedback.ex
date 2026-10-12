@@ -1,7 +1,8 @@
 defmodule Engram.Feedback do
   @moduledoc """
   User-voice answers: how a signup heard about us and what they want Engram for
-  (asked on `/onboard/tools`), why a subscriber cancels, and free-form feedback.
+  (asked on `/onboard/about`), why a subscriber cancels or deletes their account,
+  and free-form feedback.
 
   Every answer goes to PostHog server-side (ad blockers cannot drop it), with
   the slugs also set as person properties so dashboards can break funnels down
@@ -78,6 +79,37 @@ defmodule Engram.Feedback do
 
   def submit(_user, "cancel", _params), do: {:error, :invalid_reason}
 
+  # Stashed on the user row, not sent: the browser sends this BEFORE the
+  # delete (afterwards there is no session to send it with), so sending now
+  # would record reasons for deletes that are cancelled or retried. Erasure
+  # sends it via `capture_delete_reason/1` once the account is really gone. A
+  # second submit overwrites the first. The reason is optional here: erasure
+  # must never be gated on giving feedback.
+  def submit(user, "delete_account", params) do
+    reason = params["reason"]
+    detail = params["detail"] |> text() |> scrub_emails()
+
+    cond do
+      not (is_nil(reason) or reason in @cancel_reasons) ->
+        {:error, :invalid_reason}
+
+      is_nil(reason) and is_nil(detail) ->
+        {:error, :empty_message}
+
+      true ->
+        stash = %{"delete_reason" => reason, "delete_detail" => detail}
+
+        from(u in User,
+          where: u.id == ^user.id,
+          update: [set: [onboarding_profile: fragment("? || ?", u.onboarding_profile, ^stash)]]
+        )
+        # Keyed to the caller's own id; see the onboarding clause above.
+        |> Repo.update_all([], skip_tenant_check: true)
+
+        :ok
+    end
+  end
+
   def submit(user, "general", params) do
     case text(params["message"]) do
       nil -> {:error, :empty_message}
@@ -86,6 +118,33 @@ defmodule Engram.Feedback do
   end
 
   def submit(_user, _kind, _params), do: {:error, :invalid_kind}
+
+  @doc """
+  Send the answer stashed by a `delete_account` submit, given the user's
+  `onboarding_profile` read before the row was deleted. Anonymous on purpose:
+  erasure deletes the person AND their events from PostHog, which would take a
+  person-keyed answer with it. A fresh distinct_id with no person profile keeps
+  the reason and drops who gave it.
+  """
+  @spec capture_delete_reason(map() | nil) :: :ok
+  def capture_delete_reason(%{} = profile) do
+    case {profile["delete_reason"], profile["delete_detail"]} do
+      {nil, nil} ->
+        :ok
+
+      {reason, detail} ->
+        PostHog.capture(
+          Ecto.UUID.generate(),
+          "account_delete_reason",
+          Map.reject(
+            %{"reason" => reason, "detail" => detail, "$process_person_profile" => false},
+            fn {_k, v} -> is_nil(v) end
+          )
+        )
+    end
+  end
+
+  def capture_delete_reason(_profile), do: :ok
 
   defp onboarding_fields(params) do
     heard_from = params["heard_from"]
@@ -121,6 +180,14 @@ defmodule Engram.Feedback do
   end
 
   defp text(_), do: nil
+
+  # The delete answer outlives the account with no link back to it, so an email
+  # typed into it could never be found or erased later. Possessive quantifiers:
+  # no backtracking on long input.
+  defp scrub_emails(nil), do: nil
+
+  defp scrub_emails(text),
+    do: Regex.replace(~r/[^\s@]++@[^\s@.]++(?:\.[^\s@.]++)+/u, text, "[email]")
 
   # A user with no email has no analytics id; their answer still lands in the
   # profile (onboarding) but has nowhere to go in PostHog.

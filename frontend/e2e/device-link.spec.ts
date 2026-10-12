@@ -106,7 +106,7 @@ test.describe("/link vault picker", () => {
 
 			await signInAndOpenLink(page, user, flow.user_code);
 
-			await expect(page.getByText("Suggested", { exact: true })).toBeVisible();
+			await expect(page.getByText("Sync with your matching vault", { exact: true })).toBeVisible();
 			await expect(page.getByRole("radio", { name: /^Health/u })).toBeChecked();
 			// The plugin's device name seeds the connection name; the new-vault field stays empty
 			// so the page does not suggest creating a duplicate.
@@ -141,7 +141,7 @@ test.describe("/link vault picker", () => {
 
 			await signInAndOpenLink(page, user, flow.user_code);
 
-			await expect(page.getByText("Suggested", { exact: true })).toHaveCount(0);
+			await expect(page.getByText("Sync with your matching vault", { exact: true })).toHaveCount(0);
 			const name = page.getByLabel("New vault name");
 			await expect(name).toHaveValue("Brain Dump");
 			// The one checked radio is the new-vault row, not an existing vault.
