@@ -8,6 +8,8 @@ defmodule Engram.Notifications.Discord do
   each of these payload fields is here.
   """
 
+  alias Engram.Logger.Metadata
+
   require Logger
 
   # Cloudflare in front of Discord 403s default library user agents.
@@ -38,7 +40,7 @@ defmodule Engram.Notifications.Discord do
       {:ok, %{status: s}} when s in 200..299 -> :ok
       # The URL carries the webhook token, so it is never logged.
       {:ok, %{status: s}} -> Logger.warning("discord webhook non-2xx: #{s}")
-      {:error, err} -> Logger.warning("discord webhook failed: #{Exception.message(err)}")
+      {:error, err} -> Logger.warning("discord webhook failed: #{Metadata.safe_reason(err)}")
     end
   end
 end
