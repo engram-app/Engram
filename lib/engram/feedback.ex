@@ -29,6 +29,7 @@ defmodule Engram.Feedback do
   # Each submit is a billed PostHog event with up to 2,000 chars of free text,
   # shared by every surface (web, plugin, MCP), so one budget covers them all.
   @hourly_limit 20
+  @model_hourly_limit 5
   @max_text 2_000
 
   # Client context must be a plain token: anything else (a newline, an email,
@@ -52,14 +53,23 @@ defmodule Engram.Feedback do
           | :invalid_source
           | :invalid_initiated_by
 
-  @doc "Spend one unit of the user's hourly feedback budget."
-  @spec allow?(User.t()) :: boolean()
-  def allow?(user) do
-    match?(
-      {:allow, _},
-      EngramWeb.RateLimiter.hit("feedback:#{user.id}", :timer.hours(1), @hourly_limit, :feedback)
-    )
-  end
+  @doc """
+  Spend one unit of the user's hourly feedback budget. Feedback a model sends
+  unasked (MCP `initiated_by: "model"`) draws on its own smaller budget, so a
+  session of failing tools cannot use up the user's own.
+  """
+  @spec allow?(User.t(), :user | :model) :: boolean()
+  def allow?(user, by \\ :user)
+
+  def allow?(user, :user), do: hit("feedback:#{user.id}", @hourly_limit)
+  def allow?(user, :model), do: hit("feedback:model:#{user.id}", @model_hourly_limit)
+
+  defp hit(key, limit),
+    do: match?({:allow, _}, EngramWeb.RateLimiter.hit(key, :timer.hours(1), limit, :feedback))
+
+  @doc "Whether feedback reaches anyone: false on self-host, where analytics is off."
+  @spec collected?() :: boolean()
+  def collected?, do: PostHog.enabled?()
 
   @spec submit(User.t(), String.t(), map()) :: :ok | {:error, error()}
   def submit(user, "onboarding", params) do

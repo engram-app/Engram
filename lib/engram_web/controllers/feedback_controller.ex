@@ -5,6 +5,13 @@ defmodule EngramWeb.FeedbackController do
 
   # This scope skips the API RPS budget, so feedback carries its own hourly
   # cap (`Feedback.allow?/1`), shared with the MCP send_feedback tool.
+  # The plugin's device token is admitted for the feedback box only, not the
+  # survey, cancel or delete answers (see :require_session_allow_plugin).
+  def create(%{assigns: %{device_token: token}} = conn, %{"kind" => kind})
+      when not is_nil(token) and kind != "general" do
+    conn |> put_status(403) |> json(%{error: "device_token_not_allowed"})
+  end
+
   def create(conn, %{"kind" => kind} = params) when is_binary(kind) do
     user = conn.assigns.current_user
     # Server-stamped, so a client cannot send a misleading one.

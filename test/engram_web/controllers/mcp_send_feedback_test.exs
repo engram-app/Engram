@@ -103,4 +103,32 @@ defmodule EngramWeb.McpSendFeedbackTest do
 
     refute_receive {:posthog, %{"event" => "user_feedback"}}, 200
   end
+
+  test "model-sent feedback has its own smaller budget, so it cannot starve the user's",
+       %{conn: conn} do
+    model = %{"message" => "tool failed", "initiated_by" => "model"}
+
+    for _ <- 1..5 do
+      refute json_response(call_tool(conn, "send_feedback", model), 200)["result"]["isError"]
+    end
+
+    over = json_response(call_tool(conn, "send_feedback", model), 200)["result"]
+    assert over["isError"] == true
+
+    user_sent = %{"message" => "please add X", "initiated_by" => "user"}
+    refute json_response(call_tool(conn, "send_feedback", user_sent), 200)["result"]["isError"]
+  end
+
+  test "a self-hosted server (no analytics) says feedback is not collected", %{conn: conn} do
+    Application.put_env(:engram, :posthog_key, nil)
+
+    result =
+      conn
+      |> call_tool("send_feedback", %{"message" => "hi", "initiated_by" => "user"})
+      |> json_response(200)
+      |> Map.fetch!("result")
+
+    assert result["isError"] == true
+    assert hd(result["content"])["text"] =~ "github.com/engram-app"
+  end
 end

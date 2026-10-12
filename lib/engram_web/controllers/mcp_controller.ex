@@ -1128,6 +1128,13 @@ defmodule EngramWeb.McpController do
 
   # -- Tool dispatch (vault context) --
 
+  # Feedback names the client the way the web form does: from the request's
+  # user agent, stamped here so the model cannot set it.
+  defp dispatch_tool(%{name: "send_feedback"} = tool, user, args, conn) do
+    ua = conn |> get_req_header("user-agent") |> List.first()
+    call_tool(tool, user, [], Map.put(args, "user_agent", ua))
+  end
+
   # `list_vaults` and `set_vault` don't operate on a single vault's contents, so
   # they aren't blocked by the controller's own vault resolution — `list_vaults`
   # is the discovery call a client uses to pick a vault in a multi-vault account,
@@ -1140,13 +1147,6 @@ defmodule EngramWeb.McpController do
   # set_vault only validates + echoes, but it MUST respect the credential's
   # scope — it sees the same accessible set as list_vaults, so a bound token
   # can't confirm the name/existence of a vault it was scoped away from (#729).
-  # Feedback names the client the way the web form does: from the request's
-  # user agent, stamped here so the model cannot set it.
-  defp dispatch_tool(%{name: "send_feedback"} = tool, user, args, conn) do
-    ua = conn |> get_req_header("user-agent") |> List.first()
-    call_tool(tool, user, [], Map.put(args, "user_agent", ua))
-  end
-
   defp dispatch_tool(%{name: name} = tool, user, args, conn) when name in @vault_exempt do
     call_tool(tool, user, accessible_vaults(user, conn), args)
   end

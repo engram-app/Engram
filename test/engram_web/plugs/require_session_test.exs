@@ -141,6 +141,16 @@ defmodule EngramWeb.Plugs.RequireSessionTest do
       assert json_response(conn, 200) == %{"status" => "ok"}
     end
 
+    test "POST /api/feedback with the device token is limited to the feedback box",
+         %{conn: conn, user: user} do
+      conn =
+        conn
+        |> device_authed(user)
+        |> post("/api/feedback", %{"kind" => "onboarding", "heard_from" => "reddit"})
+
+      assert %{"error" => "device_token_not_allowed"} = json_response(conn, 403)
+    end
+
     test "POST /api/feedback still rejects a third-party OAuth grant", %{conn: conn, user: user} do
       conn =
         conn

@@ -12,6 +12,13 @@ function LocationProbe() {
 	return <output data-testid="loc">{`${loc.pathname}${loc.hash}`}</output>;
 }
 
+vi.mock("../config-context", async () => {
+	const actual = await vi.importActual<typeof import("../config-context")>("../config-context");
+	return {
+		...actual,
+		useConfig: () => ({ billingEnabled: true }) as ReturnType<typeof actual.useConfig>,
+	};
+});
 vi.mock("../auth/use-auth-adapter", () => ({
 	useAuthAdapter: () => ({ user: { email: "todd@example.com" }, logout: vi.fn() }),
 }));
