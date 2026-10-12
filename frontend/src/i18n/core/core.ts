@@ -1,4 +1,4 @@
-// i18n-core 62628e94
+// i18n-core 00e133e9
 // The translategemma pipeline shared by the web app, the Obsidian plugin and the
 // marketing site: prompts, the checks an answer must pass, and catalog state.
 // Canonical copy: engram-app/Engram frontend/src/i18n/core/. The other repos
@@ -116,7 +116,7 @@ function numbers(s: string, source = false): string[] {
 // Lowercase, letters only, brands already removed ("💬 Feedback" is "feedback").
 const LOANWORDS: Record<string, readonly string[]> = {
 	// Names every language keeps, for profiles that do not list them as brands.
-	"*": ["docker compose", "docker compose up", "mcp", "reddit", "relay", "youtube"],
+	"*": ["docker compose", "docker compose up", "mcp", "reddit", "relay", "sponsors", "youtube"],
 	de: [
 		"alternative",
 		"backend",
@@ -135,7 +135,6 @@ const LOANWORDS: Record<string, readonly string[]> = {
 		"offline",
 		"optional",
 		"self host",
-		"sponsors",
 		"status",
 		"support",
 		"system",
@@ -150,7 +149,7 @@ const LOANWORDS: Record<string, readonly string[]> = {
 		"version",
 		"web",
 	],
-	es: ["error", "idea", "legal", "markdown", "popular", "sponsors", "subtotal", "total", "web"],
+	es: ["error", "idea", "legal", "markdown", "popular", "subtotal", "token", "total", "web"],
 	fr: [
 		"actions",
 		"administration",
@@ -168,7 +167,6 @@ const LOANWORDS: Record<string, readonly string[]> = {
 		"note",
 		"notes",
 		"source",
-		"sponsors",
 		"structure",
 		"support",
 		"total",
@@ -194,7 +192,6 @@ const LOANWORDS: Record<string, readonly string[]> = {
 		"privacy",
 		"self host",
 		"self hosted",
-		"sponsors",
 		"tag",
 		"token",
 		"uploads",
@@ -203,18 +200,7 @@ const LOANWORDS: Record<string, readonly string[]> = {
 	],
 	ja: ["linux pc", "markdown", "web", "windows pc"],
 	ko: ["linux pc", "url", "windows pc"],
-	ms: [
-		"edit",
-		"folder",
-		"frontmatter",
-		"idea",
-		"label",
-		"markdown",
-		"popular",
-		"sponsors",
-		"status",
-		"token",
-	],
+	ms: ["edit", "folder", "frontmatter", "idea", "label", "markdown", "popular", "status", "token"],
 	pt: [
 		"backend",
 		"bug",
@@ -229,7 +215,6 @@ const LOANWORDS: Record<string, readonly string[]> = {
 		"markdown",
 		"offline",
 		"popular",
-		"sponsors",
 		"status",
 		"subtotal",
 		"tag",
@@ -240,7 +225,7 @@ const LOANWORDS: Record<string, readonly string[]> = {
 		"web",
 	],
 	ru: ["markdown"],
-	vi: ["backend", "cloud", "email", "frontmatter", "markdown", "sponsors", "token"],
+	vi: ["backend", "cloud", "email", "frontmatter", "markdown", "token"],
 	zh: ["bug", "markdown"],
 };
 
