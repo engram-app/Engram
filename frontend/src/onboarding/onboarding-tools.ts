@@ -1,4 +1,5 @@
 import { msg } from "@/i18n/msg";
+import { type MsgKey, type UIText, untranslated } from "@/i18n/ui-text";
 
 // FTUX questionnaire tool catalog. Mirrors the backend `@valid_tools` list
 // in lib/engram/onboarding.ex, rename a slug here and the backend will
@@ -7,10 +8,10 @@ import { msg } from "@/i18n/msg";
 
 export interface ToolOption {
 	slug: string;
-	label: string;
+	label: MsgKey | UIText;
 	/** Set on labels written with `msg()`. Brand names stay as written, even when one equals a catalog key. */
 	translate?: true;
-	hint?: string;
+	hint?: MsgKey;
 	/**
 	 * Set when the tool cannot connect to Engram for a reason outside our
 	 * control. Renders the row greyed and unselectable with this string as the
@@ -21,19 +22,19 @@ export interface ToolOption {
 }
 
 export const TOOL_ASSISTANTS: ToolOption[] = [
-	{ slug: "claude", label: "Claude" },
-	{ slug: "chatgpt", label: "ChatGPT" },
-	{ slug: "grok", label: "Grok" },
-	{ slug: "mistral", label: "Mistral" },
-	{ slug: "open_webui", label: "Open WebUI" },
-	{ slug: "lobechat", label: "LobeChat" },
+	{ slug: "claude", label: untranslated("Claude") },
+	{ slug: "chatgpt", label: untranslated("ChatGPT") },
+	{ slug: "grok", label: untranslated("Grok") },
+	{ slug: "mistral", label: untranslated("Mistral") },
+	{ slug: "open_webui", label: untranslated("Open WebUI") },
+	{ slug: "lobechat", label: untranslated("LobeChat") },
 	// Listed-but-disabled on purpose: people look for Gemini, and a silent
 	// absence reads as an Engram gap. The Gemini app has no custom-MCP-connector
 	// UI (that is Gemini Enterprise / Antigravity), so we say so and point at the
 	// path that works.
 	{
 		slug: "gemini",
-		label: "Gemini",
+		label: untranslated("Gemini"),
 		unavailable: msg(
 			"The Gemini app can't add custom MCP connectors. Antigravity, Google's Gemini-powered coding tool, can. Pick it under Coding tools.",
 		),
@@ -41,22 +42,22 @@ export const TOOL_ASSISTANTS: ToolOption[] = [
 ];
 
 export const TOOL_CODING: ToolOption[] = [
-	{ slug: "claude_code", label: "Claude Code" },
-	{ slug: "cursor", label: "Cursor" },
-	{ slug: "devin", label: "Devin" },
+	{ slug: "claude_code", label: untranslated("Claude Code") },
+	{ slug: "cursor", label: untranslated("Cursor") },
+	{ slug: "devin", label: untranslated("Devin") },
 	// Cognition acquired Windsurf in 2025 and renamed this IDE "Devin Desktop"
 	// on 2026-06-02. The slug stays `windsurf` because profiles, the doc URL and
 	// the brand mark all key on it; only the label reflects the current name.
-	{ slug: "windsurf", label: "Devin Desktop (Windsurf)" },
-	{ slug: "cline", label: "Cline" },
-	{ slug: "continue", label: "Continue" },
-	{ slug: "opencode", label: "OpenCode" },
-	{ slug: "github_copilot", label: "GitHub Copilot" },
+	{ slug: "windsurf", label: untranslated("Devin Desktop (Windsurf)") },
+	{ slug: "cline", label: untranslated("Cline") },
+	{ slug: "continue", label: untranslated("Continue") },
+	{ slug: "opencode", label: untranslated("OpenCode") },
+	{ slug: "github_copilot", label: untranslated("GitHub Copilot") },
 	// Google's supported MCP path. Deliberately no consumer "Gemini" entry, the
 	// Gemini app can't add a custom remote MCP server, so that row could never
 	// be completed. Antigravity replaced Gemini CLI for Pro/Ultra/free tiers on
 	// 2026-06-18.
-	{ slug: "antigravity", label: "Antigravity" },
+	{ slug: "antigravity", label: untranslated("Antigravity") },
 	// Lives with the named clients rather than in a group of its own: it answers
 	// the same question they do ("which client?"), just without naming one.
 	{ slug: "other_mcp", label: msg("Another MCP client"), translate: true },

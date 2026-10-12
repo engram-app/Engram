@@ -1,9 +1,10 @@
 import type { ReactNode } from "react";
+import type { UIText } from "@/i18n/ui-text";
 import { cn } from "@/lib/utils";
 
 interface Props {
-	title: string;
-	description?: string;
+	title: UIText;
+	description?: UIText;
 	headerAction?: ReactNode;
 	// Settings-style row: the action is a form control that lines up with the
 	// title block and, once wrapped below it, fills the row (below sm).

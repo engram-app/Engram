@@ -21,5 +21,22 @@ function brands(_text: string): _text is UIText {
 	return true;
 }
 
-export type { UIText };
-export { untranslated };
+// A catalog key marked by msg() in a module-scope constant, not yet translated:
+// render it with t(). Fields that hold one take MsgKey, so a raw literal there
+// (invisible to the key scanner, so never translated) is a tsc error too.
+declare const msgKey: unique symbol;
+type MsgKey = string & { readonly [msgKey]: true };
+
+function asMsgKey(en: string): MsgKey {
+	if (marks(en)) {
+		return en;
+	}
+	throw new Error("unreachable: marks() always narrows");
+}
+
+function marks(_en: string): _en is MsgKey {
+	return true;
+}
+
+export type { MsgKey, UIText };
+export { asMsgKey, untranslated };

@@ -4,6 +4,7 @@ import { Fragment, useCallback, useState } from "react";
 import { ApiError } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
+import type { UIText } from "@/i18n/ui-text";
 import { untranslated } from "@/i18n/ui-text";
 import { intlLocale } from "@/lib/intl-locale";
 import { notify } from "@/lib/notify";
@@ -24,7 +25,7 @@ function ActionButton({
 	disabled?: boolean;
 	busy?: boolean;
 	variant?: "default" | "destructive";
-	title?: string;
+	title?: UIText;
 	children: React.ReactNode;
 }) {
 	return (
@@ -112,7 +113,7 @@ export default function MembersTab({
 	async function optimistic<T>(
 		id: string,
 		kind: "role" | "suspend" | "reset" | "delete",
-		label: string,
+		label: UIText,
 		patch: Partial<AdminUser> | "remove",
 		fn: () => Promise<T>,
 	) {

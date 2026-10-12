@@ -15,6 +15,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { uuid7 } from "@/crdt/uuid7";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
+import type { MsgKey } from "@/i18n/ui-text";
 import { isMember } from "../lib/is-member";
 import { useAttachmentUpload } from "../viewer/attachment-upload/provider";
 import { type SortKey, useFolderTreeState } from "./folder-tree-context";
@@ -22,7 +23,7 @@ import { type SortKey, useFolderTreeState } from "./folder-tree-context";
 const ICON = "size-5";
 
 interface SortSection {
-	label: string;
+	label: MsgKey;
 	options: ReadonlyArray<{ value: SortKey; label: string }>;
 }
 

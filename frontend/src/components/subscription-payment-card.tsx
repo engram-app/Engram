@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useT } from "@/i18n/locale-provider";
+import type { UIText } from "@/i18n/ui-text";
 import { intlLocale } from "@/lib/intl-locale";
 import { formatDate, formatMoney } from "@/lib/paddle-format";
 import { getPaymentMethodDisplay } from "@/lib/paddle-payment-method-display";
@@ -20,7 +21,7 @@ function PaymentInfoRow({
 	children,
 }: {
 	icon: React.ElementType;
-	label: string;
+	label: UIText;
 	children: React.ReactNode;
 }) {
 	return (

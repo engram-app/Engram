@@ -15,6 +15,7 @@ import {
 import type { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import { englishT, englishTn } from "@/i18n/translate";
+import type { MsgKey, UIText } from "@/i18n/ui-text";
 
 // Keyed by id rather than carried on each Action — the three lists below repeat
 // the same ids, so one map keeps a single icon per action instead of three.
@@ -87,7 +88,10 @@ export type ActionId =
 
 export interface Action {
 	id: ActionId;
-	label: string;
+	// A msg() key for the fixed menus; selectionActions() builds counted labels
+	// already translated (UIText). Menus render both through t(): on a translated
+	// label that lookup misses and returns it unchanged.
+	label: MsgKey | UIText;
 	destructive?: boolean;
 	/** Set by `noteMenuActions` for the current view mode. The tree omits it. */
 	active?: boolean;

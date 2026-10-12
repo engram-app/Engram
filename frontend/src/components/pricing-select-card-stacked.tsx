@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useT } from "@/i18n/locale-provider";
+import type { UIText } from "@/i18n/ui-text";
 import type { PriceData } from "@/lib/paddle-types";
 import { cn } from "@/lib/utils";
 
@@ -13,7 +14,7 @@ export interface PricingSelectCardStackedProps {
 	priceId: string;
 	name: string;
 	priceData?: PriceData;
-	description?: string;
+	description?: UIText;
 	badge?: string;
 	badgePosition?: "left" | "center" | "right";
 	icon?: React.ReactNode;

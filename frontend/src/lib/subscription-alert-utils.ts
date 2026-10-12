@@ -1,5 +1,6 @@
 import type { Locale } from "@/i18n/locales";
 import type { Translate } from "@/i18n/translate";
+import type { UIText } from "@/i18n/ui-text";
 import { intlLocale } from "@/lib/intl-locale";
 import { formatDate } from "@/lib/paddle-format";
 import type { SubscriptionAlertData } from "@/lib/paddle-types";
@@ -49,7 +50,7 @@ export type DerivedAlert = {
 	 */
 	reason: AlertReason;
 	/** Message already translated through the `t` passed to deriveSubscriptionAlert. */
-	message: string;
+	message: UIText;
 	actionLabel?: string;
 	actionUrl?: string;
 } | null;

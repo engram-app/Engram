@@ -1,4 +1,5 @@
 import { msg } from "@/i18n/msg";
+import type { MsgKey } from "@/i18n/ui-text";
 
 const TABLE: Record<LimitReason, LimitCopy> = {
 	notes_cap_exceeded: {
@@ -86,8 +87,8 @@ type LimitReason =
 	| "no_tier";
 
 interface LimitCopy {
-	title: string;
-	body: string;
+	title: MsgKey;
+	body: MsgKey;
 }
 
 // `reason` arrives off the wire, so it is a plain string; TABLE's own keys are

@@ -20,6 +20,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
+import type { UIText } from "@/i18n/ui-text";
 import { intlLocale } from "@/lib/intl-locale";
 import { formatBillingCycle, formatDate, formatMoney } from "@/lib/paddle-format";
 import type { SubscriptionStatusData } from "@/lib/paddle-types";
@@ -198,7 +199,7 @@ function SubscriptionStatusCardSkeleton({ className }: { className?: string }) {
 export interface SubscriptionStatusCardProps {
 	subscription?: SubscriptionStatusData;
 	/** Override the card title. Defaults to the first item's product name (single-item) or "Subscription" (multi-item). */
-	title?: string;
+	title?: UIText;
 	/** Position of the status badge: "inline" next to name, or "end" aligned to card end */
 	statusBadgePosition?: "inline" | "end";
 	/**

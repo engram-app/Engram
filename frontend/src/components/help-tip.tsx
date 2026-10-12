@@ -1,6 +1,7 @@
 import { CircleHelp } from "lucide-react";
 import type { ReactNode } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import type { UIText } from "@/i18n/ui-text";
 
 /**
  * The `?` affordance: a quiet icon beside a control that explains it on click.
@@ -26,7 +27,7 @@ export function HelpTip({
 	className = "",
 	align = "end",
 }: {
-	label: string;
+	label: UIText;
 	children: ReactNode;
 	className?: string;
 	align?: "start" | "center" | "end";

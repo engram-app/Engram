@@ -17,6 +17,7 @@ import { useStableT, useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import { Trans } from "@/i18n/trans";
 import type { Tn, Translate } from "@/i18n/translate";
+import type { UIText } from "@/i18n/ui-text";
 import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { track } from "../analytics/track";
@@ -761,7 +762,7 @@ function VaultRadio({
 	vault: Vault;
 	active: boolean;
 	onSelect: (next: string) => void;
-	hint?: string;
+	hint?: UIText;
 }) {
 	const { t, tn, renderedLocale } = useT();
 	return (

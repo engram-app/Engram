@@ -1,3 +1,4 @@
+import type { UIText } from "@/i18n/ui-text";
 import { parseAmount } from "@/lib/paddle-format";
 import type { SubscriptionStatusData } from "@/lib/paddle-types";
 
@@ -10,7 +11,7 @@ import type { SubscriptionStatusData } from "@/lib/paddle-types";
 interface SubscriptionItem {
 	product: {
 		name: string;
-		description?: string | null;
+		description?: UIText | null;
 		imageUrl?: string | null;
 	};
 	price?: {
@@ -40,7 +41,7 @@ type SubscriptionDiscountField = {
 // Full Discount catalog entity — fetched separately via paddle.discounts.get(id)
 interface PaddleDiscount {
 	id: string;
-	description: string;
+	description: UIText;
 	code?: string | null;
 	type: "flat" | "flat_per_seat" | "percentage";
 	amount: string;

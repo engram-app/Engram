@@ -1,7 +1,7 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { msg } from "./msg";
 import { englishT, englishTn, interpolate, type Translate } from "./translate";
-import { type UIText, untranslated } from "./ui-text";
+import { type MsgKey, type UIText, untranslated } from "./ui-text";
 
 describe("UIText", () => {
 	it("is not assignable from a plain string, so raw copy fails tsc", () => {
@@ -24,6 +24,13 @@ describe("UIText", () => {
 
 	it("is not what msg() returns: a marked key is not translated yet", () => {
 		expectTypeOf(msg("Settings")).not.toMatchTypeOf<UIText>();
+	});
+
+	it("msg() returns a MsgKey, which a raw literal is not", () => {
+		expectTypeOf(msg("Settings")).toEqualTypeOf<MsgKey>();
+		expectTypeOf<"Settings">().not.toMatchTypeOf<MsgKey>();
+		expectTypeOf<MsgKey>().not.toMatchTypeOf<UIText>();
+		expectTypeOf<MsgKey>().toMatchTypeOf<string>();
 	});
 });
 

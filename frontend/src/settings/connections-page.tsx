@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { useAutofocus } from "@/hooks/use-autofocus";
 import { useT } from "@/i18n/locale-provider";
 import type { Translate } from "@/i18n/translate";
+import type { UIText } from "@/i18n/ui-text";
 import { copyToClipboard } from "@/lib/clipboard";
 import { formatDate } from "@/lib/format-date";
 import { intlLocale } from "@/lib/intl-locale";
@@ -62,7 +63,7 @@ function useTierCaps() {
 
 interface PendingRevoke {
 	name: string;
-	description: string;
+	description: UIText;
 	onConfirm: () => Promise<unknown>;
 }
 
@@ -575,7 +576,7 @@ function ConfirmRevokeModal({
 	onClose,
 }: {
 	name: string;
-	description: string;
+	description: UIText;
 	onConfirm: () => Promise<unknown>;
 	onClose: () => void;
 }) {
@@ -643,7 +644,7 @@ function ModalShell({
 	onClose,
 	children,
 }: {
-	title: string;
+	title: UIText;
 	onClose: () => void;
 	children: React.ReactNode;
 }) {
