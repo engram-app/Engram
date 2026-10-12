@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { makeUser } from "./account/section-test-helpers";
@@ -21,7 +22,11 @@ vi.mock("@/theme/theme-provider", () => ({
 
 describe("AccountPage", () => {
 	it("renders the section stack with no embedded Clerk UserProfile", () => {
-		render(<AccountPage />);
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<AccountPage />
+			</QueryClientProvider>,
+		);
 		expect(screen.getByRole("heading", { name: "Account", level: 1 })).toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: "Profile photo" })).toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: "Appearance" })).toBeInTheDocument();

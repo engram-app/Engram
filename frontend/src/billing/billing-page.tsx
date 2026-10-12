@@ -687,7 +687,7 @@ export default function BillingPage({
 
 			{!hideHeading && (
 				<CurrentPlanCard billing={billing} indexStatus={indexStatus}>
-					{billing.subscription && panel === null && (
+					{billing.subscription && panel !== "change" && (
 						<div className="flex flex-wrap justify-end gap-3">
 							<Button onClick={() => setPanel("change")}>{t("Change plan")}</Button>
 							{/* Hide Cancel when (a) the subscription is already canceled,
